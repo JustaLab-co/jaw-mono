@@ -113,6 +113,7 @@ For the full setup (native modules, crypto polyfill, domain linking, and persist
 import { Account } from '@jaw.id/core';
 import { Passkey } from 'react-native-passkey';
 import type { NativePasskeyGetFn } from '@jaw.id/core';
+import { storage } from './storage'; // your SyncStorage, see the React Native guide
 
 const account = await Account.import({
   chainId: 8453,
