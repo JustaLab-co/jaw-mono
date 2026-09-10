@@ -1,0 +1,358 @@
+# React Native (Expo)
+
+Build passkey-authenticated smart accounts into a native iOS or Android app. The headless `Account` class from `@jaw.id/core` runs on React Native: passkey prompts come from the platform's native passkey UI through [`react-native-passkey`](https://github.com/f-23/react-native-passkey), and every signature is produced on the device.
+
+**What you can do:**
+
+- **Create Accounts** - Users create a smart account with Face ID, Touch ID, or the Android biometric prompt
+- **Sign & Send** - Sign messages and typed data, send single or batched transactions
+- **Sponsor Gas** - Use any EIP-7677 paymaster, or let users pay gas in USDC
+- **Sync Across Devices** - Passkeys sync through iCloud Keychain and Google Password Manager
+
+:::info[What's supported on React Native]
+React Native support covers the **headless `Account` class** in `@jaw.id/core`. The built-in dialogs (`@jaw.id/ui`), the wagmi connector (`@jaw.id/wagmi`), and CrossPlatform mode (keys.jaw.id) are web-only — they depend on React DOM, popups, and iframes. In a native app you build your own screens and call `Account` directly.
+:::
+
+## How It Works
+
+In a browser, JAW uses `navigator.credentials` for WebAuthn. React Native has no `navigator.credentials`, so you hand JAW two functions from `react-native-passkey` in `AccountConfig`:
+
+- `nativeCreateFn` (`Passkey.create`) - called once by `Account.create()` to register a new passkey
+- `nativeGetFn` (`Passkey.get`) - called on login and for every signature afterwards
+
+JAW generates the WebAuthn challenges, converts between base64url and binary, and extracts the public key from the attestation. Passkeys are bound to a domain you control (the `rpId`), and iOS and Android verify that binding through the app-association files you host in step 3.
+
+## Prerequisites
+
+| Requirement                                | Notes                                                                      |
+| ------------------------------------------ | -------------------------------------------------------------------------- |
+| Expo development build or React Native CLI | Expo Go is not supported - the native modules below require a custom build |
+| React Native 0.76+                         | Minimum for `react-native-mmkv` v4                                         |
+| iOS 15+ / Android 9+ (API 28)              | Minimum for `react-native-passkey`                                         |
+| An HTTPS domain you control                | Used as `rpId` and to host the iOS and Android app-association files       |
+| Apple Team ID and Android signing keystore | Referenced by those association files                                      |
+
+Get your API key at **[dashboard.jaw.id](https://dashboard.jaw.id/)**.
+
+## 1. Install
+
+Install the SDK and viem:
+
+:::code-group
+
+```bash [npm]
+npm install @jaw.id/core viem
+```
+
+```bash [pnpm]
+pnpm add @jaw.id/core viem
+```
+
+```bash [yarn]
+yarn add @jaw.id/core viem
+```
+
+```bash [bun]
+bun add @jaw.id/core viem
+```
+
+:::
+
+Then install the native modules. `npx expo install` picks versions compatible with your Expo SDK:
+
+```bash
+npx expo install react-native-passkey react-native-quick-crypto react-native-quick-base64 react-native-nitro-modules react-native-mmkv
+```
+
+| Package                                                   | Purpose                                                                  |
+| --------------------------------------------------------- | ------------------------------------------------------------------------ |
+| `react-native-passkey`                                    | Native iOS / Android passkey APIs                                        |
+| `react-native-quick-crypto`                               | Provides the `crypto` global that viem and ox expect                     |
+| `react-native-nitro-modules`, `react-native-quick-base64` | Peer dependencies of `react-native-quick-crypto` and `react-native-mmkv` |
+| `react-native-mmkv`                                       | Fast synchronous storage for passkey metadata and session state          |
+
+:::info
+On a React Native CLI project, install the same packages with your package manager and run `pod install` in `ios/`.
+:::
+
+## 2. Install the Crypto Polyfill
+
+viem and ox use the Web Crypto API, which Hermes does not ship. Install the polyfill in your entry file, before anything imports `@jaw.id/core`:
+
+```javascript
+// index.js
+import { install } from 'react-native-quick-crypto';
+
+install(); // sets global.crypto and global.Buffer
+
+import 'expo-router/entry'; // or your app's root component
+```
+
+Point `package.json` at that file:
+
+```json
+{
+  "main": "index.js"
+}
+```
+
+## 3. Link Your Domain
+
+Passkeys are scoped to an `rpId`. Before the OS lets your app create or use passkeys for that domain, it fetches a file from the domain that names your app. Host both files below on the domain you pass as `rpId`.
+
+### iOS - Associated Domains
+
+Add the domain to `app.json`:
+
+```json
+{
+  "expo": {
+    "ios": {
+      "bundleIdentifier": "com.example.app",
+      "associatedDomains": ["webcredentials:example.com"]
+    }
+  }
+}
+```
+
+Serve `https://example.com/.well-known/apple-app-site-association` as `application/json`, over HTTPS, without redirects:
+
+```json
+{
+  "webcredentials": {
+    "apps": ["TEAMID.com.example.app"]
+  }
+}
+```
+
+`TEAMID` is your Apple Developer Team ID.
+
+:::tip
+While developing, use `webcredentials:example.com?mode=developer` and enable **Associated Domains Development** in the device's Developer settings. The device then fetches the file directly instead of through Apple's CDN, so changes apply immediately.
+:::
+
+### Android - Digital Asset Links
+
+Set the package name in `app.json`:
+
+```json
+{
+  "expo": {
+    "android": {
+      "package": "com.example.app"
+    }
+  }
+}
+```
+
+Serve `https://example.com/.well-known/assetlinks.json`:
+
+```json
+[
+  {
+    "relation": ["delegate_permission/common.get_login_creds"],
+    "target": {
+      "namespace": "android_app",
+      "package_name": "com.example.app",
+      "sha256_cert_fingerprints": ["AB:CD:EF:..."]
+    }
+  }
+]
+```
+
+The fingerprint must belong to the keystore that signs the build. Debug and release builds are signed by different keystores, so register one entry per keystore you use:
+
+```bash
+# Debug builds (keystore generated by expo prebuild)
+keytool -list -v -keystore android/app/debug.keystore -alias androiddebugkey -storepass android -keypass android
+
+# EAS builds
+eas credentials
+```
+
+:::warning
+Each developer's default debug keystore has its own fingerprint. If several people build debug versions, either share one debug keystore or register every fingerprint in `assetlinks.json` — a build signed by an unregistered keystore fails the passkey call silently.
+:::
+
+### Build
+
+```bash
+npx expo prebuild --clean
+npx expo run:ios
+npx expo run:android
+```
+
+Rerun `prebuild --clean` whenever you change native dependencies or the `ios` / `android` sections of `app.json`. JavaScript-only changes need `npx expo start --clear`.
+
+## 4. Persist Storage
+
+JAW keeps passkey metadata (credential IDs, public keys, addresses) and the current session in a `SyncStorage`. On the web that is `localStorage`. React Native has no default: without `storage`, JAW falls back to an in-memory map that is wiped on every app restart, and users would have to import their passkey again. Back it with MMKV:
+
+```typescript
+// lib/storage.ts
+import { createMMKV } from 'react-native-mmkv';
+import type { SyncStorage } from '@jaw.id/core';
+
+const mmkv = createMMKV({ id: 'jaw' });
+
+export const storage: SyncStorage = {
+  getItem: <T>(key: string): T | null => {
+    const value = mmkv.getString(key);
+    if (value === undefined) return null;
+    try {
+      return JSON.parse(value) as T;
+    } catch {
+      return value as T;
+    }
+  },
+  setItem: (key, value) => {
+    mmkv.set(key, typeof value === 'string' ? value : JSON.stringify(value));
+  },
+  removeItem: (key) => {
+    mmkv.remove(key);
+  },
+};
+```
+
+## 5. Configure the Account
+
+Build one `AccountConfig` and reuse it for every call. The React Native options live in the config next to `chainId` and `apiKey`:
+
+```typescript
+// lib/jaw.ts
+import { Passkey } from 'react-native-passkey';
+import type { AccountConfig, NativePasskeyCreateFn, NativePasskeyGetFn } from '@jaw.id/core';
+import { storage } from './storage';
+
+export const config: AccountConfig = {
+  chainId: 8453, // Base
+  apiKey: process.env.EXPO_PUBLIC_JAW_API_KEY!,
+  storage,
+  rpId: 'example.com', // the domain you linked in step 3
+  rpName: 'My App', // shown in the passkey prompt
+  nativeGetFn: Passkey.get as NativePasskeyGetFn,
+  nativeCreateFn: Passkey.create as NativePasskeyCreateFn,
+};
+```
+
+:::note
+`react-native-passkey` types some request fields as literal strings (for example `type: 'public-key'`) where JAW's adapter types accept any string, so TypeScript needs the two casts. The runtime shapes are identical.
+:::
+
+| Option           | Type                    | Required               | Description                                                                             |
+| ---------------- | ----------------------- | ---------------------- | --------------------------------------------------------------------------------------- |
+| `storage`        | `SyncStorage`           | No                     | Persistent storage. Without it JAW uses an in-memory store that resets on every restart |
+| `nativeGetFn`    | `NativePasskeyGetFn`    | Yes                    | `Passkey.get` - used for login and for every signature                                  |
+| `nativeCreateFn` | `NativePasskeyCreateFn` | For `Account.create()` | `Passkey.create` - used to register a new passkey                                       |
+| `rpId`           | `string`                | Yes                    | Domain the passkeys are bound to. Must match the association files from step 3          |
+| `rpName`         | `string`                | No                     | Name shown in the passkey prompt. Defaults to `JAW`                                     |
+
+## 6. Create an Account
+
+```typescript
+import { Account } from '@jaw.id/core';
+import { config } from './lib/jaw';
+
+const account = await Account.create(config, { username: 'alice' });
+console.log(account.address);
+```
+
+`Account.create()` opens the native passkey prompt, registers the passkey metadata with JAW, derives the smart account address, and saves the account and session to your `storage`. The smart account itself is deployed with its first transaction.
+
+You don't need to persist anything yourself. `Account.getStoredAccounts(config.apiKey, config.storage)` lists every account created or imported on the device.
+
+## 7. Sign In
+
+:::code-group
+
+```typescript [Restore Session]
+// No passkey prompt - restores the last session from storage
+const account = await Account.get(config);
+```
+
+```typescript [Pick an Account]
+// Native passkey prompt for the selected credential
+const accounts = Account.getStoredAccounts(config.apiKey, config.storage);
+const account = await Account.get(config, accounts[0].credentialId);
+```
+
+```typescript [Import from Cloud]
+// OS passkey picker listing the passkeys synced to this device for your rpId
+const account = await Account.import(config);
+```
+
+:::
+
+`Account.import()` is how a user signs in on a new device. It shows the passkeys synced to the device for your `rpId` and looks the selected one up in JAW's passkey registry, so the passkey must have been registered through JAW - by another install of your app, or by your web app running in [AppSpecific mode](/configuration/mode/app-specific) on the same domain. Because the smart account address is derived from the passkey's public key, the user lands in the same account.
+
+Check the sign-in state and log out:
+
+```typescript
+const address = Account.getAuthenticatedAddress(config.apiKey, config.storage); // null when signed out
+
+Account.logout(config.apiKey, config.storage);
+```
+
+## 8. Sign and Send
+
+Every signature triggers the native passkey prompt through `nativeGetFn`.
+
+```typescript
+const signature = await account.signMessage('Hello from mobile');
+```
+
+```typescript
+import { parseEther } from 'viem';
+
+// Waits for the receipt and returns the transaction hash
+const hash = await account.sendTransaction([{ to: '0xRecipient...', value: parseEther('0.01') }]);
+```
+
+```typescript
+// Submit a batch and poll for its status
+const { id } = await account.sendCalls([
+  { to: '0xContractA...', data: '0x...' },
+  { to: '0xContractB...', data: '0x...' },
+]);
+
+const status = await account.getCallStatus(id);
+// status.status: 100 pending, 200 completed, 400 offchain failure, 500 onchain revert
+```
+
+## 9. Pay for Gas
+
+A new smart account is deployed with its first transaction. Sponsor gas or let users pay in USDC so they never need to hold ETH.
+
+Set `paymasterUrl` in `AccountConfig` to sponsor every transaction with an [EIP-7677 paymaster](/guides/gas-sponsoring):
+
+```typescript
+export const config: AccountConfig = {
+  // ...
+  paymasterUrl: 'https://api.pimlico.io/v2/8453/rpc?apikey=YOUR_PIMLICO_KEY',
+};
+```
+
+To pay gas in USDC instead, pass JAW's ERC-20 paymaster per call as shown in [Embed Stablecoin Payments](/guides/embed-stablecoin-payments).
+
+## Troubleshooting
+
+| Symptom                                                                        | Cause                                                          | Fix                                                                                                                                            |
+| ------------------------------------------------------------------------------ | -------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------- |
+| `Property 'crypto' doesn't exist`                                              | Polyfill not installed before `@jaw.id/core` loaded            | Call `install()` from `react-native-quick-crypto` in `index.js` and set `"main": "index.js"`                                                   |
+| Nitro module errors on launch                                                  | Running in Expo Go                                             | Build a development client with `npx expo run:ios` or `npx expo run:android`                                                                   |
+| `rpId is required in non-browser environments`                                 | `rpId` missing from `AccountConfig`                            | Set `rpId` to the domain you linked in step 3                                                                                                  |
+| iOS: `AuthorizationError Code=1004`, or the prompt closes without a credential | AASA not reachable or missing your Team ID + bundle identifier | `curl https://<rpId>/.well-known/apple-app-site-association`, confirm `TEAMID.bundleId` is listed, rerun `prebuild --clean`, reinstall the app |
+| Android: passkey call fails silently                                           | `assetlinks.json` missing or wrong fingerprint                 | `curl https://<rpId>/.well-known/assetlinks.json` and confirm the fingerprint of the keystore that signed the build                            |
+| Accounts disappear after restart                                               | No `storage` in `AccountConfig`                                | Pass the MMKV-backed `SyncStorage` from step 4                                                                                                 |
+| Passkey not yet visible in Google Password Manager after creation              | Cloud sync lag                                                 | Wait a moment - sign-in already works on the device                                                                                            |
+| `AA13 initCode failed or OOG` on the first transaction                         | The first transaction deploys the account and needs gas        | Configure a paymaster (step 9)                                                                                                                 |
+
+## Related
+
+- [Account Overview](/account) - Full `Account` class reference
+- [Account.create()](/account/create) - Create a new account with a passkey
+- [Account.get()](/account/get) - Restore a session or log in with a credential
+- [Account.import()](/account/import) - Sign in with a synced passkey
+- [Gas Sponsoring](/guides/gas-sponsoring) - Paymaster setup
+- [Embed Stablecoin Payments](/guides/embed-stablecoin-payments) - Pay gas in USDC with the `Account` class
+- [Passkeys & WebAuthn](/concepts/passkeys) - How passkeys work

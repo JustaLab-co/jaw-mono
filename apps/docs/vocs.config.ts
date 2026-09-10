@@ -99,6 +99,7 @@ export default defineConfig({
         collapsed: false,
         items: [
           { text: 'Quickstart', link: '/guides/quickstart' },
+          { text: 'React Native (Expo)', link: '/guides/react-native' },
           {
             text: 'Upgrade EOA to Smart Account (EIP-7702)',
             link: '/guides/eip7702-upgrade',

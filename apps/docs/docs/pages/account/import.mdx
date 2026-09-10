@@ -105,17 +105,20 @@ The import flow allows users to access their JAW account on any device where the
 
 ## React Native Usage
 
-Pass `Passkey.get` from [`react-native-passkey`](https://github.com/f-23/react-native-passkey) as `nativeGetFn` and an explicit `rpId` in `config`. JAW handles all base64url ↔ ArrayBuffer conversion internally.
+Pass `Passkey.get` from [`react-native-passkey`](https://github.com/f-23/react-native-passkey) as `nativeGetFn` and an explicit `rpId` in `config`. JAW handles all base64url ↔ ArrayBuffer conversion internally. The cast bridges `react-native-passkey`'s literal string types to JAW's adapter type; the runtime shapes match.
+
+For the full setup (native modules, crypto polyfill, domain linking, and persistent storage), follow the [React Native guide](/guides/react-native).
 
 ```typescript
 import { Account } from '@jaw.id/core';
 import { Passkey } from 'react-native-passkey';
+import type { NativePasskeyGetFn } from '@jaw.id/core';
 
 const account = await Account.import({
   chainId: 8453,
   apiKey: 'your-api-key',
   storage,
-  nativeGetFn: Passkey.get,
+  nativeGetFn: Passkey.get as NativePasskeyGetFn,
   rpId: 'myapp.com',
 });
 ```

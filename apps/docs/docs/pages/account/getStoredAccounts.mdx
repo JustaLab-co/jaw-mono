@@ -7,16 +7,22 @@ Get all stored passkey accounts.
 ## Signature
 
 ```typescript
-static getStoredAccounts(apiKey: string): PasskeyAccount[]
+static getStoredAccounts(apiKey?: string, storage?: SyncStorage): PasskeyAccount[]
 ```
 
 ## Parameters
 
 ### apiKey
 
-Type: `string`
+Type: `string | undefined`
 
 API key for JAW services. Used to scope the storage lookup.
+
+### storage
+
+Type: `SyncStorage | undefined`
+
+Optional custom storage. Defaults to `localStorage` in the browser and to an in-memory store elsewhere. Pass a persistent store in [React Native](/guides/react-native).
 
 ## Returns
 
