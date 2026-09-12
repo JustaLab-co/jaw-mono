@@ -10,7 +10,7 @@
 import * as fs from 'node:fs';
 import * as crypto from 'node:crypto';
 import { PATHS } from './paths.js';
-import { loadConfig } from './config.js';
+import { loadConfig, saveConfig } from './config.js';
 import { WSBridge } from './ws-bridge.js';
 import { isValidKeysUrl, isValidRelayUrl } from './validation.js';
 import { generateKeyPair, exportKeyToHex } from './crypto.js';
@@ -156,7 +156,25 @@ async function connectBridge(
     }
   );
 
+  keepInjectedApiKey(bridge.injectedApiKey);
+
   return bridge;
+}
+
+/**
+ * Store an api key the browser supplied, so the commands that never open one
+ * have it too.
+ *
+ * `jaw x402 pay` runs unattended and reads the key off the config file, so a key
+ * that lived only for this process would leave the paying half of the product
+ * without one. A key already in the file is never replaced: it is the user's,
+ * they chose it, and it is what carries their own attribution.
+ */
+function keepInjectedApiKey(injected: string | null): void {
+  if (!injected) return;
+  const config = loadConfig();
+  if (config.apiKey) return;
+  saveConfig({ ...config, apiKey: injected });
 }
 
 function buildBridgeUrl(keysUrl: string, session: string, relayUrl: string, cliPublicKeyHex: string): string {
