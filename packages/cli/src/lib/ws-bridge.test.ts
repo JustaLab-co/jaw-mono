@@ -59,3 +59,19 @@ describe('readInjectedApiKey', () => {
     expect(readInjectedApiKey({ type: 'ready', apiKey: 42 })).toBeNull();
   });
 });
+
+// A machine connecting for the first time has no key, and the browser fills one
+// in. The field's absence is what asks for that, so an empty string must not be
+// what crosses instead: the browser would then have to read two things as the
+// same request.
+describe('buildInitPayload without a key', () => {
+  it('omits the field rather than sending it empty', () => {
+    const payload = buildInitPayload({ chainId: 8453 });
+
+    expect('apiKey' in payload).toBe(false);
+  });
+
+  it('sends it when there is one', () => {
+    expect(buildInitPayload({ apiKey: 'mine', chainId: 8453 })).toMatchObject({ apiKey: 'mine' });
+  });
+});

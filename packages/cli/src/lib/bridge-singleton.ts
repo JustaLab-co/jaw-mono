@@ -12,7 +12,7 @@ import * as crypto from 'node:crypto';
 import { PATHS } from './paths.js';
 import { loadConfig, saveConfig } from './config.js';
 import { WSBridge } from './ws-bridge.js';
-import { isValidKeysUrl, isValidRelayUrl } from './validation.js';
+import { isValidKeysUrl, isValidRelayUrl, isSafeApiKey } from './validation.js';
 import { generateKeyPair, exportKeyToHex } from './crypto.js';
 import { type RelaySession, loadRelaySession, saveRelaySession, deleteRelaySession } from './relay-session.js';
 
@@ -22,7 +22,8 @@ const DEFAULT_RELAY_URL = 'wss://relay.jaw.id';
 export interface BridgeOptions {
   keysUrl?: string;
   relayUrl?: string;
-  apiKey: string;
+  /** Absent on a first connect from a machine that has none. */
+  apiKey?: string;
   chainId?: number;
   ens?: string;
   timeout?: number;
@@ -120,7 +121,12 @@ async function connectBridge(
     timeout: options.timeout,
     connectTimeout: options.connectTimeout,
     config: {
-      apiKey: options.apiKey,
+      // Only a key the user chose is asserted to the browser. One the bridge
+      // handed us arrives here through the same option, and sending it back
+      // would have the deployment echo it and stop consulting its own, which
+      // freezes the key of every install that ever connected and leaves a
+      // rotation with nowhere to land.
+      apiKey: options.apiKey === config.workspaceApiKey ? undefined : options.apiKey,
       chainId,
       ens: options.ens ?? config.ens,
       paymasterUrl: paymaster?.url,
@@ -167,14 +173,25 @@ async function connectBridge(
  *
  * `jaw x402 pay` runs unattended and reads the key off the config file, so a key
  * that lived only for this process would leave the paying half of the product
- * without one. A key already in the file is never replaced: it is the user's,
- * they chose it, and it is what carries their own attribution.
+ * without one.
+ *
+ * Written to its own field and replaced every time, which is what keeps a
+ * rotation reachable: the deployment answers with the current key on each
+ * connect and this takes it. `apiKey` is the user's and is never touched here.
  */
 function keepInjectedApiKey(injected: string | null): void {
   if (!injected) return;
+  // What arrives here is whatever presented itself as the browser on this relay
+  // session, and it lands in a file every later command reads. Before this it
+  // died with the process. Every consumer concatenates it into a query string
+  // without encoding, so one carrying an `&` would rewrite the URL around it.
+  if (!isSafeApiKey(injected)) {
+    console.warn('[jaw] Ignoring an API key from the browser that is not safe to use in a URL.');
+    return;
+  }
   const config = loadConfig();
-  if (config.apiKey) return;
-  saveConfig({ ...config, apiKey: injected });
+  if (config.workspaceApiKey === injected) return;
+  saveConfig({ ...config, workspaceApiKey: injected });
 }
 
 function buildBridgeUrl(keysUrl: string, session: string, relayUrl: string, cliPublicKeyHex: string): string {

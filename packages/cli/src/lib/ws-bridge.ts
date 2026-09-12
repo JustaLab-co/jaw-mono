@@ -19,7 +19,8 @@ import {
 type CKey = webcrypto.CryptoKey;
 
 export interface WSBridgeConfig {
-  apiKey: string;
+  /** Absent on a first connect from a machine that has none. */
+  apiKey?: string;
   chainId: number;
   ens?: string;
   paymasterUrl?: string;
@@ -55,7 +56,10 @@ export interface WSBridgeOptions {
 export function buildInitPayload(config: WSBridgeConfig): Record<string, unknown> {
   return {
     type: 'init',
-    apiKey: config.apiKey,
+    // Omitted rather than empty when there is none: the browser reads the
+    // field's absence as "fill one in", and an empty string would have to mean
+    // the same thing in a second place.
+    ...(config.apiKey ? { apiKey: config.apiKey } : {}),
     chainId: config.chainId,
     ens: config.ens,
     paymasterUrl: config.paymasterUrl,
