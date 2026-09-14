@@ -51,9 +51,11 @@ Two consequences follow, and both surprise people.
 
 **The caps measure the ceiling, not the expected charge.** No cap can be enforced against a number the server has not picked yet, and until settlement the signature is worth its ceiling to whoever holds it. So an endpoint advertising a 5 USDC ceiling is refused under the default 1 USDC per payment cap even if it would have charged a hundredth of a cent. The refusal says `up to 5000000` to make clear which number it is talking about. Raise the cap deliberately, or leave the endpoint unpayable.
 
-**A failed `upto` payment costs its whole ceiling against your caps.** Once signed and sent, the authorization stays spendable up to the ceiling until it expires, and nothing yet proves it went unused. Counting the charge instead would let a run of failures spend far past the cap, so the caps hold the ceiling. It is deliberately pessimistic: repeated failures eat budget faster than repeated successes.
+**An `upto` payment costs its whole ceiling until the chain confirms what it cost.** Once signed and sent, the authorization stays spendable up to the ceiling, and the receipt is the server's own claim about how much of it was taken. So the caps hold the ceiling for a failed payment and for a successful one nobody has checked yet. It is deliberately pessimistic: a run of failures would otherwise spend far past the cap.
 
-`jaw x402 log` reports the same figure the caps enforce, so a failed row shows what is held rather than what was attempted.
+The check happens on your next payment, and on `jaw x402 status`. It looks up the transaction the receipt named and reads the transfer in it, so the figure comes down to what actually moved. A slow node costs nothing: the row keeps its ceiling and is tried again.
+
+`jaw x402 log` reports the same figure the caps enforce, so a row shows what is held rather than what was claimed.
 
 ### The One-Time Approval
 

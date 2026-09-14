@@ -4,7 +4,9 @@ import * as path from 'node:path';
 import * as os from 'node:os';
 import { fileURLToPath } from 'node:url';
 import { Config } from '@oclif/core';
-import { hashDomain } from 'viem';
+import { encodeEventTopics, encodeAbiParameters, parseAbiItem, hashDomain } from 'viem';
+
+const TRANSFER_EVENT = parseAbiItem('event Transfer(address indexed from, address indexed to, uint256 value)');
 
 const EIP712_DOMAIN_TYPE = {
   EIP712Domain: [
@@ -35,6 +37,7 @@ const h = vi.hoisted(() => {
   const anchor = new Date(Date.now() - 60 * 60 * 1000).toISOString();
   return {
     payer: '0x1111111111111111111111111111111111111111' as const,
+    getTransactionReceipt: vi.fn(),
     readContract: vi.fn(),
     // Mutable, because `~/.jaw/config.json` is read with `JSON.parse` and a
     // cast: what it can carry is part of what this command has to survive.
@@ -107,6 +110,7 @@ vi.mock('../../x402/balance.js', () => ({
   // hash, which quietly moved the liveness these five other cases report from
   // `unknown` to `mismatch`.
   publicClientFor: () => ({
+    getTransactionReceipt: h.getTransactionReceipt,
     readContract: (args: { functionName: string }) =>
       args.functionName === 'DOMAIN_SEPARATOR'
         ? h.readContract(args)
@@ -114,7 +118,7 @@ vi.mock('../../x402/balance.js', () => ({
   }),
 }));
 
-const { appendX402Log } = await import('../../x402/ledger.js');
+const { appendX402Log, readX402Log, spendFigureOf } = await import('../../x402/ledger.js');
 const { default: X402Status } = await import('./status.js');
 
 let oclifConfig: Config;
@@ -138,6 +142,7 @@ beforeEach(() => {
   delete process.env.JAW_OUTPUT;
   delete process.env.JAW_CHAIN_ID;
   delete process.env.JAW_API_KEY;
+  h.getTransactionReceipt.mockReset();
   // Agreeing by default, so only the case that is about drift sees drift.
   h.readContract.mockReset();
   h.readContract.mockResolvedValue(
@@ -247,6 +252,53 @@ describe('jaw x402 status', () => {
     expect(lines).not.toMatch(/all of them apply/);
     const report = JSON.parse((await runStatus(['--output', 'json'])).join('\n'));
     expect(report.policy.perPeriod).toHaveLength(1);
+  });
+
+  /**
+   * The command has to actually run the reconciliation, not merely be able to.
+   * This file already exists because of a wiring regression, and ENGR-1258 was
+   * filed over a capability that was accepted, forwarded, typed and dropped
+   * with nothing reporting it. A row costing its ceiling forever is that shape.
+   */
+  it('reconciles an unchecked payment before reporting against it', async () => {
+    const payTo = '0x3333333333333333333333333333333333333333';
+    appendX402Log({
+      at: new Date().toISOString(),
+      url: 'https://api.example.com/tool',
+      payer: h.payer,
+      status: 'paid',
+      amount: '1',
+      authorized: '1000000',
+      scheme: 'upto',
+      asset: '0x036CbD53842c5426634e7929541eC2318f3dCF7e',
+      network: 'eip155:84532',
+      payTo,
+      nonce: '0xfeed',
+      txHash: `0x${'ab'.repeat(32)}`,
+      deadline: String(Math.floor(Date.now() / 1000) + 3600),
+      settlement: 'unverified',
+    });
+    h.getTransactionReceipt.mockResolvedValue({
+      status: 'success',
+      logs: [
+        {
+          address: '0x036CbD53842c5426634e7929541eC2318f3dCF7e',
+          topics: encodeEventTopics({
+            abi: [TRANSFER_EVENT],
+            eventName: 'Transfer',
+            args: { from: h.payer, to: payTo as `0x${string}` },
+          }),
+          data: encodeAbiParameters([{ type: 'uint256' }], [400000n]),
+        },
+      ],
+    });
+
+    await runStatus(['--output', 'json']);
+
+    const row = readX402Log().find((e) => e.nonce === '0xfeed');
+    if (!row) throw new Error('the payment row went missing');
+    expect(row.settlement).toBe('verified');
+    expect(spendFigureOf(row)).toBe(400000n);
   });
 
   /**

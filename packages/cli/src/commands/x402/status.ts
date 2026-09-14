@@ -5,6 +5,7 @@ import { isLegacySession, liveOrphans, tryLoadSessionConfig } from '../../lib/se
 import { sessionPayerAddress } from '../../x402/payer.js';
 import { usdcBalance } from '../../x402/balance.js';
 import { readX402Log, sumSpentSince } from '../../x402/ledger.js';
+import { reconcileSettlements } from '../../x402/settlement.js';
 import { resolveSessionX402Policy, sameLimit, tightestLimit } from '../../x402/policy.js';
 import { currentLimitUsageOnChain } from '../../x402/spend-window.js';
 import { describePeriod } from '../../x402/period.js';
@@ -99,7 +100,11 @@ export default class X402Status extends BaseCommand {
 
     // One read for the whole report: the session total and every limit below
     // are counted against the same rows.
-    const ledger = readX402Log();
+    //
+    // Reconciled here too, and not only on the pay paths: an agent that pays
+    // once and stops would otherwise leave that row costing its ceiling for
+    // good, and this is the surface it still reaches.
+    const ledger = await reconcileSettlements(readX402Log());
     // The session total, so payer only. The per-period figures below come from
     // `currentLimitUsage`, which scopes to the permission because those mirror
     // the chain.

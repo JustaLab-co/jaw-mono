@@ -177,16 +177,19 @@ export function settledAmountOf(receipt: X402SettleResponse | null, scheme: stri
   // a receipt that claims success and names something shaped like a
   // transaction; anything else is read as the whole ceiling.
   //
-  // Shaped like one is all it is. The hash is never looked up, so this raises
-  // the price of under-reporting to fabricating 64 hex characters and does not
-  // prove a settlement happened. A server willing to do that reports one base
-  // unit against a thousand-unit ceiling, leaves the Permit2 nonce unconsumed,
-  // and holds a live authorization for the full ceiling until the deadline
-  // while the caps counted one. What still bounds that is the on-chain
-  // permission's per-period allowance, which is where the payer's funds come
-  // from; what is defeated is this local accounting. Closing it means checking
-  // the amount against the transaction the receipt names, which is what the
-  // nonce and hash on every ledger row are stored for.
+  // Shaped like one is all this checks. Looking it up here would mean waiting
+  // on a node inside the payment lock, on every payment, to catch the ones that
+  // lie. Often it would answer: measured against a facilitator replying the
+  // instant it broadcast, the receipt was there 194ms later. Often is the
+  // problem, since the rest of the time the honest payment pays the wait.
+  // Fabricating 64 hex characters therefore still buys a lower figure than the
+  // server took, for one payment.
+  //
+  // Only for one. The row is written `unverified` and costs its whole ceiling
+  // until `reconcileSettlements` finds the transfer in the transaction the
+  // receipt named, which the next payment does before it reads the caps. So
+  // what this function returns is the server's claim, and what the caps count
+  // is the ceiling until that claim is checked.
   if (receipt?.success !== true || !settledTxHash(receipt)) return authorized;
   const reported = parseBigInt(receipt.amount ?? '');
   if (reported === null || reported < 0n) return authorized;

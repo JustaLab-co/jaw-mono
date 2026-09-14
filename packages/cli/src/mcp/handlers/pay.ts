@@ -6,6 +6,7 @@ import { loadConfig } from '../../lib/config.js';
 import { Eip3009EoaPayer, sessionPayerAddress } from '../../x402/payer.js';
 import { payAndFetch } from '../../x402/http.js';
 import { appendX402Log, readX402Log, sumSpentSince } from '../../x402/ledger.js';
+import { reconcileSettlements } from '../../x402/settlement.js';
 import { withPaymentLock } from '../../lib/payment-lock.js';
 import { usdcBalance } from '../../x402/balance.js';
 import { resolveSessionX402Policy, topUpCeiling } from '../../x402/policy.js';
@@ -88,7 +89,11 @@ export function registerPayTool(server: McpServer): void {
             // have spent, and a stale total waves through a payment the cap
             // should have stopped. Nothing can append while we hold it, so the
             // session total and every period window count against the same rows.
-            const ledger = readX402Log();
+            //
+            // Reconciled first because an unverified row costs its ceiling, and
+            // this is where that figure comes down to what the chain shows
+            // actually moved.
+            const ledger = await reconcileSettlements(readX402Log());
 
             // Scoped to the session so a new grant starts a fresh budget; the
             // payer's whole history when there is no session to scope by.
@@ -148,15 +153,17 @@ export function registerPayTool(server: McpServer): void {
             const isPaymentEvent =
               result.paid || !!result.attemptedPayment || (result.status === 402 && !!result.refusedReason);
             if (isPaymentEvent) {
+              const status = result.paid ? 'paid' : result.attemptedPayment ? 'failed' : 'refused';
               appendX402Log({
                 at: new Date().toISOString(),
                 url: params.url,
                 payer: result.payer,
                 permissionId: session?.permissionId,
-                status: result.paid ? 'paid' : result.attemptedPayment ? 'failed' : 'refused',
+                status,
                 amount: settled?.amount,
                 authorized: settled?.authorized,
                 deadline: settled?.deadline,
+                scheme: settled?.scheme,
                 asset: settled?.asset,
                 network: settled?.network,
                 payTo: settled?.payTo,
@@ -166,6 +173,9 @@ export function registerPayTool(server: McpServer): void {
                 topUpBatchId: result.topUp?.batchId,
                 approvalBatchId: result.permit2Approval?.batchId,
                 reason: result.refusedReason,
+                // A signed authorization is worth its ceiling to whoever holds
+                // it until the chain says otherwise. A refusal signed nothing.
+                settlement: status === 'refused' ? undefined : 'unverified',
               });
             }
 

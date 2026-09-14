@@ -274,4 +274,62 @@ describe('the rows a sum is handed', () => {
     expect(sumSpentSince(snapshot, of(PAYER))).toBe(1000n);
     expect(spentBy(of(PAYER))).toBe(5000n);
   });
+
+  it('a row written before the field keeps counting the amount it reported', () => {
+    // History. Re-reading these as ceilings would jam every cap that is live today.
+    appendX402Log({
+      at: '2026-07-16T00:00:00.000Z',
+      url: 'https://a',
+      payer: PAYER,
+      status: 'paid',
+      amount: '5',
+      authorized: '1000',
+    });
+
+    expect(spentBy(of(PAYER))).toBe(5n);
+  });
+
+  it('an unchecked payment costs its ceiling, the same as a failed one', () => {
+    appendX402Log({
+      at: '2026-07-16T00:00:00.000Z',
+      url: 'https://a',
+      payer: PAYER,
+      status: 'paid',
+      amount: '5',
+      authorized: '1000',
+      settlement: 'unverified',
+    });
+
+    expect(spentBy(of(PAYER))).toBe(1000n);
+  });
+
+  it('an authorization that expired unspent costs nothing', () => {
+    appendX402Log({
+      at: '2026-07-16T00:00:00.000Z',
+      url: 'https://a',
+      payer: PAYER,
+      status: 'failed',
+      amount: '0',
+      authorized: '1000',
+      settlement: 'expired',
+    });
+
+    expect(spentBy(of(PAYER))).toBe(0n);
+  });
+
+  it('a settlement value it does not recognise lands on the ceiling', () => {
+    // A typo, a torn write, a hand edit. Named states only, so an unreadable
+    // one cannot shrink an enforced cap.
+    appendX402Log({
+      at: '2026-07-16T00:00:00.000Z',
+      url: 'https://a',
+      payer: PAYER,
+      status: 'paid',
+      amount: '5',
+      authorized: '1000',
+      settlement: 'unverifed' as never,
+    });
+
+    expect(spentBy(of(PAYER))).toBe(1000n);
+  });
 });
