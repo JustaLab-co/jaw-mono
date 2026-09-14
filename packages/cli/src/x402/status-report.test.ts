@@ -17,8 +17,8 @@ describe('formatUsdc', () => {
     expect(formatUsdc('not-a-number', 6)).toBe('not-a-number (invalid)');
   });
 
-  // Amounts reach here from the ledger and from config, both editable files,
-  // and the invalid branch used to echo whatever it was handed.
+  // Amounts reach here from the ledger and from config, both editable files, so
+  // the invalid branch cannot echo back whatever it was handed.
   it('disarms a malformed cap rather than printing it back raw', () => {
     const ESC = String.fromCharCode(0x1b);
     const out = formatUsdc(`9${ESC}[2K${ESC}[32m FAKE`, 6);
@@ -180,6 +180,17 @@ describe('diagnose', () => {
     expect(diagnose({ ...healthy, periodCap: 5_000_000n, periodSpent: 1_000_000n, periodLabel: 'day' })).toEqual([]);
   });
 
+  /**
+   * The limit that binds is the one with the least room, and an allowance the
+   * command cannot read has none: `checkPolicy` refuses every payment on it.
+   * Reported ready, it sends an agent to a command that cannot pay.
+   */
+  it('flags a binding allowance it cannot read', () => {
+    const problems = diagnose({ ...healthy, periodCap: null, periodSpent: null, periodLabel: 'day' });
+    expect(problems).toHaveLength(1);
+    expect(problems[0]).toMatch(/granted allowance for this day cannot be read/i);
+  });
+
   it('reports the period cap before the session cap when both are exhausted', () => {
     const problems = diagnose({
       ...healthy,
@@ -224,7 +235,7 @@ describe('diagnose as a readiness verdict', () => {
   });
 
   it('is non-empty for a setup that pays but bypasses the permission', () => {
-    // The case that used to report ready:true while warning in the same breath.
+    // The case that must not report ready:true while warning in the same breath.
     expect(diagnose({ ...healthy, ownerBalance: '0', payerBalance: '16.98' }).length).toBeGreaterThan(0);
   });
 });

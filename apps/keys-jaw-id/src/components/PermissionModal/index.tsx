@@ -27,7 +27,7 @@ import {
   buildRevokePermissionCall,
   buildErc20PaymasterContext,
   standardErrorCodes,
-  JAW_PAYMASTER_URL,
+  jawPaymasterUrl,
   JAW_RPC_URL,
   SUPPORTED_CHAINS,
   handleGetCapabilitiesRequest,
@@ -325,9 +325,12 @@ export const PermissionModal = ({
     // If already sponsored via capabilities or config, use that
     if (effectivePaymasterUrl) return effectivePaymasterUrl;
 
-    // If user selected an ERC-20 token (non-native), use ERC-20 paymaster
-    if (selectedFeeToken && !selectedFeeToken.isNative) {
-      return `${JAW_PAYMASTER_URL}?chainId=${chain?.id || 1}${extractedApiKey ? `&api-key=${extractedApiKey}` : ''}`;
+    // If user selected an ERC-20 token (non-native), use ERC-20 paymaster.
+    // No chain is no paymaster. Every reader of this value guards on `chain`
+    // first, so the check states the requirement rather than handling a case
+    // that fires; the two modals disagreed about it while it was implicit.
+    if (selectedFeeToken && !selectedFeeToken.isNative && chain?.id !== undefined) {
+      return jawPaymasterUrl(chain.id, extractedApiKey);
     }
 
     // Native ETH - no paymaster needed

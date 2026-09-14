@@ -183,17 +183,14 @@ export function appendX402Correction(correction: X402SettlementCorrection): void
 /**
  * What one row contributes to a spend cap.
  *
- * The single definition of the rule, exported because more than one place needs
- * it and the three copies that existed before this had already drifted apart by
- * hand. `jaw x402 log` reports against it, and the caps enforce against it, so
- * the number a user reads and the number that refuses their next payment are
- * the same number.
+ * Exported because two readers need the same answer: `jaw x402 log` reports
+ * against it, and the caps enforce against it, so the number a user reads and
+ * the number that refuses their next payment are the same number.
  *
  * A settled payment costs what settled. A failed one costs the ceiling it
  * authorized, because an authorization that was signed and sent stays spendable
  * up to that ceiling until its nonce is consumed or its deadline passes, and
- * nothing yet proves either. Under `exact` the two figures are equal and this
- * is the rule that has always applied.
+ * nothing yet proves either. Under `exact` the two figures are equal.
  *
  * A paid row nobody has checked costs its ceiling for that same reason. The
  * receipt is the server's own claim about how much of its own authorization it

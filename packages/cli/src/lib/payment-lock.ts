@@ -45,13 +45,13 @@ interface LockFile {
  * How long a lock may go without a heartbeat before it counts as abandoned.
  *
  * The holder rewrites `at` every `HEARTBEAT_INTERVAL_MS` while its work runs, so
- * this asks whether the holder is still making progress. It used to ask a
- * different question: how long a payment could possibly take, answered by summing
- * the timeouts on the payment path. `upto` then added two 90s `awaitCall`s and
- * pushed the bounded worst case to 249s, near enough to the old 300s that a
- * second payer arriving mid-payment could break a live lock and land in the
- * critical section beside it, both having read the same ledger total. A number
- * derived from a sum has to be re-derived every time a step is added, and was not.
+ * this asks whether the holder is still making progress, not how long a payment
+ * could possibly take. Answering the second question means summing the timeouts
+ * on the payment path, and `upto` alone puts two 90s `awaitCall`s on it for a
+ * bounded worst case of 249s: close enough to a 300s threshold that a second
+ * payer arriving mid-payment breaks a live lock and lands in the critical
+ * section beside it, both having read the same ledger total. A number derived
+ * from a sum has to be re-derived every time a step is added.
  *
  * Three missed beats, so a momentarily busy event loop does not cost the lock.
  */

@@ -535,9 +535,7 @@ async function grantPermit2Allowance(
 
   // Confirmed by the bundler is not the same as visible to the node the payer
   // reads from, and the payer re-reads this allowance immediately afterwards,
-  // right before signing. That read used to have a whole top-up between it and
-  // the approval; now the approval is the last thing that happens, so the gap
-  // is as small as it gets. A node a block behind would refuse a payment whose
+  // right before signing. A node a block behind would refuse a payment whose
   // approval had already landed, after the user paid for both it and the
   // top-up. Same client the payer will use, so seeing it here is what makes
   // that read safe.

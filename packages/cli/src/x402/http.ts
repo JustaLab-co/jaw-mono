@@ -107,8 +107,8 @@ export interface PayAndFetchResult {
   /**
    * Present when the payer granted Permit2 its allowance as part of this
    * payment. No principal moves, but it is a userOp charged to the payer's
-   * USDC, so it is surfaced and logged rather than left invisible: without it
-   * an approval that ran with no top-up beside it reached neither the CLI
+   * USDC, so it is surfaced and logged rather than left invisible: an approval
+   * that runs with no top-up beside it would otherwise reach neither the CLI
    * output nor the ledger.
    */
   permit2Approval?: { batchId: string };

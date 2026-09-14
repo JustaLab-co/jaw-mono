@@ -97,11 +97,19 @@ export async function buildExactPayment(
   // is the source of truth, and the two are now known to be the same address.
   const verifyingContract = asset.address;
 
-  // Prefer the server-advertised EIP-712 domain name/version (extra), else the
-  // registry's known values for this USDC deployment.
-  const name = typeof requirement.extra?.['name'] === 'string' ? (requirement.extra['name'] as string) : asset.usdcName;
-  const version =
-    typeof requirement.extra?.['version'] === 'string' ? (requirement.extra['version'] as string) : asset.usdcVersion;
+  // The registry's, and never `extra.name`/`extra.version`, which this used to
+  // prefer.
+  //
+  // `extra` is server-controlled (`z.record(z.unknown())` in http.ts), and for
+  // a token the registry knows the server's claim can only be equal, in which
+  // case it adds nothing, or different, in which case it is a signature the
+  // token rejects. That reads back as a failed payment and reserves its whole
+  // ceiling against the caps, once per call, while `x402 status` still reports
+  // ready because it measures the registry rather than what was signed.
+  //
+  // The registry cannot be wrong quietly either: `whyEip712DomainDisagrees`
+  // compares it against the separator the token verifies against, in
+  // `x402 status`, which is where a network read belongs and this is not.
 
   const nowSec = opts.now ?? Math.floor(Date.now() / 1000);
   const validAfter = '0';
@@ -126,7 +134,7 @@ export async function buildExactPayment(
   };
 
   const signature = await sign({
-    domain: { name, version, chainId: asset.chainId, verifyingContract },
+    domain: { name: asset.usdcName, version: asset.usdcVersion, chainId: asset.chainId, verifyingContract },
     types: TRANSFER_WITH_AUTHORIZATION_TYPES,
     primaryType: 'TransferWithAuthorization',
     message: {

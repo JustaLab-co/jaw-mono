@@ -371,9 +371,9 @@ describe('jaw_x402_balance', () => {
     expect(usdcBalanceMock.mock.calls[0][0]).toBe('eip155:84532');
   });
 
-  // The tool's description says it needs a session, and it used to answer
-  // anyway: no session file fell through to config's `allowedNetworks` and then
-  // to Base, so an agent got a confident balance for a chain nobody named.
+  // The tool's description says it needs a session, so it has to refuse without
+  // one. Falling through to config's `allowedNetworks` and then to Base would
+  // hand an agent a confident balance for a chain nobody named.
   it('refuses to guess a network when there is no session', async () => {
     const { saveKeystore } = await import('../lib/keystore.js');
     saveKeystore('0x59c6995e998f97a5a0044966f0945389dc9e86dae88c7a8412f4603b6b78690d', '0xSessionAddr');

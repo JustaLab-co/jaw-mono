@@ -33,12 +33,11 @@ vi.mock('./relay-session.js', () => ({
 import { getBridge } from './bridge-singleton.js';
 import { loadConfig } from './config.js';
 
-// Every command used to look up `config.paymasters[chainId]` itself and forward
-// only `.url` to getBridge, which then looked the same entry up again as a
-// fallback. The context had no field to travel in and was dropped at the first
-// hop. Resolving the entry once here is what keeps the pair together — splitting
-// it across an option and a fallback is the same divergence the SDK-side
-// resolution closes, one layer up.
+// `getBridge` resolves `config.paymasters[chainId]` once, which is what keeps
+// the url and the context together. Split across a caller-passed option and a
+// fallback lookup here, the context has no field to travel in and is dropped at
+// the first hop: the same divergence the SDK-side resolution closes, one layer
+// up.
 describe('getBridge — paymaster threading', () => {
   const paymasterOf = () => constructed[0].config;
 

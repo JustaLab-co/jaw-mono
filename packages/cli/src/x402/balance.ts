@@ -10,9 +10,9 @@ const JAW_RPC_URL = 'https://api.justaname.id/proxy/v1/rpc';
 
 // Keyed on the registry's own chain ids, so this map and USDC_BY_NETWORK cannot
 // drift: a registry entry with no viem chain here fails to compile, and a viem
-// chain the registry does not carry fails the same way. This used to be a loop
-// that threw at import time, which caught only the first of those two and only
-// once the process was already running.
+// chain the registry does not carry fails the same way. A loop throwing at
+// import time catches only the first of those two, and only once the process is
+// already running.
 const CHAINS: Record<UsdcChainId, Chain> = {
   [base.id]: base,
   [baseSepolia.id]: baseSepolia,

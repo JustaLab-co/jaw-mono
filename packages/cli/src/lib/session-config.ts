@@ -37,8 +37,7 @@ export interface GrantedPermission {
   spender: string;
   /**
    * Unix seconds the permission starts at. Also the anchor the contract steps
-   * its period windows from, and what the local policy anchors on. A summary
-   * field used to hold an approximation of it taken from the local clock.
+   * its period windows from, and what the local policy anchors on.
    */
   start: number;
   /** Unix seconds the permission ends at. */
@@ -136,8 +135,9 @@ export function isLegacySession(config: Pick<SessionConfig, 'mode'>): boolean {
  * and `--yes` never revokes at all. The session key is reused by default, so
  * the address the session signs with then holds two live grants while the
  * config names one. Its real authority is the sum of both, `x402 status`
- * reports only the new one, and `session revoke` could not reach the old one
- * at all, because the id lived in the file that was overwritten.
+ * reports only the new one, and without the id kept here `session revoke`
+ * cannot reach the old one at all, since it lives only in the file setup
+ * overwrites.
  *
  * Keeping the id is what makes it reachable again. Nothing here revokes on its
  * own: setup already asked.
@@ -165,13 +165,13 @@ export interface SessionConfig {
    * Whether the permission this session names has already been revoked, while
    * something else it holds has not.
    *
-   * Its own field rather than a rewritten `expiry`, which is what this was
-   * first. `expiry` means when the permission ends, and the recovered-struct
-   * check compares it against the permission's own `end` to know the relay
-   * answered about this session: overwriting it made that comparison fail
-   * forever, so a partly revoked session could never recover its struct and
-   * went back to reporting "cannot tell", which is the state recovery exists to
-   * end. A field that says one thing cannot be borrowed to say another.
+   * Its own field rather than a rewritten `expiry`. `expiry` means when the
+   * permission ends, and the recovered-struct check compares it against the
+   * permission's own `end` to know the relay answered about this session:
+   * overwriting it makes that comparison fail forever, so a partly revoked
+   * session can never recover its struct and stays on "cannot tell", which is
+   * the state recovery exists to end. A field that says one thing cannot be
+   * borrowed to say another.
    */
   permissionRevoked?: boolean;
 }
@@ -218,11 +218,11 @@ export function saveSessionConfig(
  * Written to a temporary file and renamed over the real one, which is atomic on
  * the same filesystem, so a reader never sees a half-written config.
  *
- * It matters more than it did: recovering the permission struct made two
- * commands that only ever read (`x402 status`, `session status`) into writers,
- * and the MCP server runs alongside a terminal, so two processes writing at
- * once is ordinary rather than exotic. A torn file loses the permission id,
- * which is exactly the stranding the orphan list exists to prevent.
+ * Recovering the permission struct turns two commands that otherwise only read
+ * (`x402 status`, `session status`) into writers, and the MCP server runs
+ * alongside a terminal, so two processes writing at once is ordinary rather than
+ * exotic. A torn file loses the permission id, which is exactly the stranding
+ * the orphan list exists to prevent.
  */
 function writeSessionConfig(config: SessionConfig): void {
   ensureDir(PATHS.root);
@@ -264,11 +264,10 @@ export function saveRecoveredPermission(config: SessionConfig, permission: Grant
  * that is gone therefore costs a browser round trip that can only fail, which
  * is why what succeeded has to come out of the file as it succeeds.
  *
- * `ownPermissionRevoked` is recorded on its own field. Borrowing `expiry` for
- * it, which is what this did first, made that field mean two things at once and
- * broke the recovered-struct check that compares it against the permission's
- * own `end`. What it is for is unchanged: stopping the next revoke from
- * attempting an id the relay no longer has.
+ * `ownPermissionRevoked` is recorded on its own field. Borrowing `expiry` for it
+ * would make that field mean two things at once and break the recovered-struct
+ * check that compares it against the permission's own `end`. What it is for:
+ * stopping the next revoke from attempting an id the relay no longer has.
  *
  * Separate from `saveSessionConfig` because that one stamps a fresh
  * `createdAt`, and `createdAt` is what the session total is counted from

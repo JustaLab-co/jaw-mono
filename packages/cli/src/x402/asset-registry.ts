@@ -59,9 +59,9 @@ export const USDC_BY_NETWORK = {
  * The chains the registry carries, derived rather than written again.
  *
  * `balance.ts` needs a viem chain for each, and `permit2.ts` allows a subset for
- * `upto`. Both used to state their key set by hand, so the registry and the viem
- * map were kept in step by a loop that threw at import time, and only in one
- * direction. This makes the compiler hold both directions instead.
+ * `upto`. Stating their key sets by hand leaves the registry and the viem map in
+ * step only by a loop that throws at import time, and only in one direction.
+ * Deriving makes the compiler hold both directions instead.
  */
 type RegisteredAsset = (typeof USDC_BY_NETWORK)[keyof typeof USDC_BY_NETWORK];
 export type UsdcChainId = RegisteredAsset['chainId'];
