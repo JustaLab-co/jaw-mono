@@ -6,7 +6,7 @@ import { usdcForNetwork } from '../x402/asset-registry.js';
 import { whyFeeTokenDisagrees } from '../x402/fee-token.js';
 import { PERMIT2_ADDRESS } from '../x402/permit2.js';
 
-// JAW's ERC-20 paymaster, mirrored from core's JAW_PAYMASTER_URL. Kept as a
+// JAW's ERC-20 paymaster, mirrored from core's `jawPaymasterUrl`. Kept as a
 // local literal rather than an import because `@jaw.id/core` is lazy-loaded in
 // the CLI (a static import would pull it into startup); keep in sync if core's
 // URL moves. The core SDK recognises this exact base URL and adds the USDC

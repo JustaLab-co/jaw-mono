@@ -3,6 +3,7 @@ export {
     JAW_BASE_URL,
     JAW_RPC_URL,
     JAW_PAYMASTER_URL,
+    jawPaymasterUrl,
     JAW_WALLET_ICON,
     JAW_WALLET_NAME,
     JAW_WALLET_ID,

@@ -15,7 +15,8 @@ import type { Address } from 'viem';
 
 vi.mock('@jaw.id/core', () => ({
   estimateErc20PaymasterCosts: vi.fn(),
-  JAW_PAYMASTER_URL: 'https://paymaster.test',
+  jawPaymasterUrl: (chainId: number, apiKey?: string) =>
+    `https://paymaster.test?chainId=${chainId}${apiKey ? `&api-key=${apiKey}` : ''}`,
 }));
 
 import { estimateErc20PaymasterCosts } from '@jaw.id/core';
