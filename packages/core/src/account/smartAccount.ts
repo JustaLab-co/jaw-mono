@@ -14,6 +14,7 @@ import {
     LocalAccount,
     encodeFunctionData,
     decodeFunctionResult,
+    defineChain,
 } from 'viem';
 import { call, getCode, getGasPrice, multicall, readContract } from 'viem/actions';
 import {
@@ -55,6 +56,7 @@ import {
     arcTestnet,
     robinhood,
     soneium,
+    unichain,
 } from 'viem/chains';
 import { PERMISSIONS_MANAGER_ADDRESS, FACTORY_ADDRESS } from '../constants.js';
 import { standardErrors } from '../errors/errors.js';
@@ -93,6 +95,55 @@ export type BundledTransactionResult = {
 };
 
 /**
+ * HyveChain (7847). Defined here rather than imported because viem has no
+ * definition for it (checked against 2.55.16); wevm/viem#5063 adds one but is
+ * still open. Everything this list is read for is deployed at its canonical
+ * address: the factory, the permissions manager, EntryPoint v0.8, and
+ * Multicall3. The ERC-20 paymaster is not, so ERC-20 gas is simply absent on
+ * this chain rather than broken — that path is driven by per-chain config.
+ *
+ * Every field below is kept byte-identical to #5063 so that adopting viem's
+ * definition later is a pure import swap, with one deliberate exception:
+ * blockTime, which that PR omits. It is measured, not assumed — blocks
+ * alternate 3s/4s, so 3500ms keeps the receipt poll in step instead of
+ * dropping to viem's 12s L1 default (which clamps to a 4s poll and adds dead
+ * time after inclusion). Whoever swaps in viem's export must re-add blockTime
+ * on top of it, or fast receipts silently regress.
+ *
+ * Multicall3's blockCreated is verified against the chain, not copied: 4090845
+ * holds no code at that address and 4090846 holds the deployment. It matters
+ * more here than
+ * on most chains because createClientForChain only carries `contracts` over for
+ * chains this list knows, and `batch.multicall` degrades silently to one
+ * request per eth_call without it (see store/chain-clients/utils.ts).
+ *
+ * Note for anyone extending this: the public RPC is a Cosmos-SDK EVM node and
+ * does not implement eth_simulateV1, so simulation-backed paths fall back.
+ */
+const hyveChain = /*#__PURE__*/ defineChain({
+    id: 7847,
+    name: 'HyveChain',
+    nativeCurrency: { name: 'HYVE', symbol: 'HYVE', decimals: 18 },
+    blockTime: 3500,
+    rpcUrls: {
+        default: {
+            http: ['https://rpc.hyvechain.com'],
+            webSocket: ['wss://ws.hyvechain.com'],
+        },
+    },
+    blockExplorers: {
+        default: { name: 'HyveChain Explorer', url: 'https://explorer.hyvechain.com' },
+    },
+    contracts: {
+        multicall3: {
+            address: '0xcA11bde05977b3631167028862bE2a173976CA11',
+            blockCreated: 4090846,
+        },
+    },
+    testnet: false,
+});
+
+/**
  * The chain lists are annotated rather than inferred on purpose. Without the
  * annotation TypeScript keeps the full literal type of every viem chain, down
  * to each explorer URL, which is not a contract we want to publish: it made the
@@ -118,6 +169,8 @@ export const MAINNET_CHAINS: readonly ViemChain[] = [
     gnosis,
     robinhood,
     soneium,
+    hyveChain,
+    unichain,
 ];
 
 export const TESTNET_CHAINS: readonly ViemChain[] = [
