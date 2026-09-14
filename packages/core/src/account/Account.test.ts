@@ -1,7 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { createPublicClient, decodeFunctionData, encodeFunctionData, erc20Abi } from 'viem';
 import { Account } from './Account.js';
-import { JAW_PAYMASTER_URL, ERC20_PAYMASTER_ADDRESS } from '../constants.js';
+import { ERC20_PAYMASTER_ADDRESS, jawPaymasterUrl } from '../constants.js';
 
 // Mock dependencies
 vi.mock('../passkey-manager/index.js', async (importOriginal) => {
@@ -1341,7 +1341,7 @@ describe('Account — paymaster context from config', () => {
 // receives.
 describe('Account — ERC-20 paymaster approval', () => {
     const USDC = '0x036CbD53842c5426634e7929541eC2318f3dCF7e';
-    const PAYMASTER_URL = `${JAW_PAYMASTER_URL}?chainId=1&api-key=test`;
+    const PAYMASTER_URL = jawPaymasterUrl(1, 'test');
     const PERMISSION_ID = '0xabc123def456789012345678901234567890123456789012345678901234567890' as `0x${string}`;
     const RECIPIENT = '0x1234567890123456789012345678901234567890' as `0x${string}`;
     // What `buildPermissionManagerCall` is mocked to return: the wrapper the

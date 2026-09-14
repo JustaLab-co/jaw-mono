@@ -692,6 +692,9 @@ export type JawBorderRadius = 'sm' | 'md' | 'lg';
 // @public
 export type JawFontStack = 'system' | 'rounded' | 'mono';
 
+// @public
+export function jawPaymasterUrl(chainId: number, apiKey?: string): string;
+
 // Warning: (ae-forgotten-export) The symbol "ProviderEventEmitter" needs to be exported by the entry point index.d.ts
 //
 // @public (undocumented)
