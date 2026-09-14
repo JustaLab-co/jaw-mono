@@ -5,19 +5,9 @@ import { getBridge } from '../../lib/bridge-singleton.js';
 import { SessionBridge } from '../../lib/session-bridge.js';
 import { supportsSessionMode } from '../../lib/rpc-classifier.js';
 import { loadConfig } from '../../lib/config.js';
+import { apiKeyFor } from '../../lib/api-key.js';
 import { tryLoadSessionConfig } from '../../lib/session-config.js';
 import type { JawConfig } from '../../lib/types.js';
-
-/**
- * The api key to operate under, or undefined when there is none yet.
- *
- * Bridge mode opens a browser that fills one in, so it no longer needs one up
- * front. Session mode signs locally and refuses below, the same rule `rpc call`
- * applies to the same two modes.
- */
-function resolveApiKey(config: JawConfig): string | undefined {
-  return process.env['JAW_API_KEY'] ?? config.apiKey;
-}
 
 function resolveChainId(paramChainId: number | undefined, config: JawConfig): number {
   if (paramChainId) return paramChainId;
@@ -81,7 +71,10 @@ export function registerRpcTool(server: McpServer): void {
     async (params) => {
       try {
         const config = loadConfig();
-        const apiKey = resolveApiKey(config);
+        // Bridge mode opens a browser that fills a key in, so it no longer needs
+        // one up front. Session mode signs locally and refuses below, the same
+        // rule `rpc call` applies to the same two modes.
+        const apiKey = apiKeyFor(config);
         const useSession = params.session ?? envSessionEnabled();
         // In session mode the session's own chain is the only one that can
         // work: `SessionBridge` refuses any other, and an agent that never

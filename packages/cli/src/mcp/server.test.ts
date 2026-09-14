@@ -548,6 +548,59 @@ describe('jaw_pay_and_fetch', () => {
     }
   });
 
+  it('tops up with the workspace key the browser handed us when the user set none', async () => {
+    const { saveKeystore } = await import('../lib/keystore.js');
+    const { saveSessionConfig } = await import('../lib/session-config.js');
+    saveKeystore(PK, '0xSmartAccount');
+    // The shape of every install where nobody pasted a key: only what the
+    // browser filled in on connect, and no environment override either.
+    delete process.env['JAW_API_KEY'];
+    saveConfig({ workspaceApiKey: 'workspace-key' });
+    saveSessionConfig({
+      mode: 'eip7702',
+      ownerAddress: '0xOwner',
+      sessionAddress: '0xSmartAccount',
+      permissionId: '0xperm1',
+      chainId: 84532,
+      expiry: Math.floor(Date.now() / 1000) + 3600,
+    });
+
+    const balance = (raw: string) => ({
+      network: 'eip155:84532',
+      asset: '0x036CbD53842c5426634e7929541eC2318f3dCF7e',
+      raw,
+      formatted: raw,
+    });
+    usdcBalanceMock.mockResolvedValueOnce(balance('0')).mockResolvedValue(balance('10000000'));
+    sessionRequestMock.mockImplementation(async (method: string) => {
+      if (method === 'wallet_sendCalls') return { id: '0xtopupbatch', chainId: 84532 };
+      if (method === 'wallet_getCallsStatus') return { status: 200 };
+      throw new Error(`unexpected ${method}`);
+    });
+
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(mkRes(402, { 'PAYMENT-REQUIRED': CHALLENGE }, '{}'))
+      .mockResolvedValueOnce(mkRes(200, { 'PAYMENT-RESPONSE': RECEIPT }, JSON.stringify({ data: 'ok' })));
+    vi.stubGlobal('fetch', fetchMock);
+    try {
+      const client = await connectClient();
+      const parsed = payResult(
+        await client.callTool({ name: 'jaw_pay_and_fetch', arguments: { url: 'https://api.example.com/paid' } })
+      );
+
+      expect(parsed.paid).toBe(true);
+      expect(parsed.topUp).toEqual({ amount: '101000', batchId: '0xtopupbatch' });
+      // The bridge that sent the refill operates under the injected key, which
+      // is what the paymaster url is built from.
+      expect(sessionBridgeCtorMock).toHaveBeenCalledWith(expect.objectContaining({ apiKey: 'workspace-key' }));
+    } finally {
+      vi.unstubAllGlobals();
+      sessionRequestMock.mockReset();
+      usdcBalanceMock.mockReset();
+    }
+  });
+
   it('pays a 402 with the real session-key payer and returns a receipt', async () => {
     const { saveKeystore } = await import('../lib/keystore.js');
     saveKeystore(PK, '0xSmartAccount');

@@ -3,6 +3,7 @@ import { payAndFetchSchema, x402LogSchema, x402BalanceSchema } from '../tools.js
 import { mcpError, mcpResult, mcpPaymentResult } from '../helpers.js';
 import { parseNonNegativeBigInt } from '../../x402/amount.js';
 import { loadConfig } from '../../lib/config.js';
+import { apiKeyFor } from '../../lib/api-key.js';
 import { Eip3009EoaPayer, sessionPayerAddress } from '../../x402/payer.js';
 import { payAndFetch } from '../../x402/http.js';
 import { appendX402Log, compactX402Log, readX402Log, sumSpentSince } from '../../x402/ledger.js';
@@ -111,8 +112,12 @@ export function registerPayTool(server: McpServer): void {
             // Funds stay in the user's account until the moment a payment needs
             // them; JustaPermissionManager caps every refill on-chain.
             let ensureFunds;
-            if (session && config.apiKey) {
-              const bridge = new SessionBridge({ apiKey: config.apiKey, chainId: session.chainId });
+            // The user's own key when there is one, the workspace key the
+            // browser handed us otherwise: the refill's own gas is charged
+            // through the paymaster this key builds a url for.
+            const apiKey = apiKeyFor(config);
+            if (session && apiKey) {
+              const bridge = new SessionBridge({ apiKey, chainId: session.chainId });
               // Defensive: a hand-edited, non-numeric amount must degrade to "no
               // float / no bound", never throw and take down every payment.
               const floatTarget = parseNonNegativeBigInt(config.x402?.topUpFloat);

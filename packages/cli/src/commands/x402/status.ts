@@ -81,7 +81,7 @@ export default class X402Status extends BaseCommand {
       ),
       // Recovered first for a session written before the struct was stored,
       // which is otherwise stuck reporting "cannot tell" forever.
-      recoverPermission(session, config.apiKey),
+      recoverPermission(session, this.resolveApiKey(flags)),
     ]);
     const [ownerBalance, payerBalance] = balances;
     // Threaded through the rest of the command, not just the liveness read.

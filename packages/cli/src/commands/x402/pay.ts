@@ -60,6 +60,10 @@ export default class X402Pay extends BaseCommand {
     const { args, flags } = await this.parse(X402Pay);
     const format = flags.output as OutputFormat;
     const config = loadConfig();
+    // The user's own key when there is one, the workspace key the browser
+    // handed us otherwise. Without either there is no paymaster to charge a
+    // refill's gas to, which is what makes this the top-up's precondition.
+    const apiKey = this.resolveApiKey(flags);
 
     // Throws a clear "run jaw session setup" when there is no session key.
     const payer = Eip3009EoaPayer.fromSessionKey();
@@ -75,14 +79,14 @@ export default class X402Pay extends BaseCommand {
     // would hand back the same clean slate through the other door.
     const scope = { payer: payer.address };
 
-    if (flags.pay && (!session || !config.apiKey)) {
+    if (flags.pay && (!session || !apiKey)) {
       // Without a session there is no permission to pull through, so the payer
       // spends whatever it already holds. Worth saying: the failure otherwise
       // arrives later as a bare insufficient-balance error with no hint that a
       // top-up was never on the table.
       this.warn(
         session
-          ? 'No apiKey configured, so a short payer cannot be topped up. Paying from its own balance.'
+          ? 'No API key, so a short payer cannot be topped up. Paying from its own balance.'
           : 'No session, so a short payer cannot be topped up through a permission. Paying from its own balance.'
       );
     }
@@ -111,8 +115,8 @@ export default class X402Pay extends BaseCommand {
       let ensureFunds:
         | ((requirement: X402PaymentRequirement, payerAddress: `0x${string}`) => ReturnType<typeof ensurePayerFunds>)
         | undefined;
-      if (flags.pay && session && config.apiKey) {
-        const bridge = new SessionBridge({ apiKey: config.apiKey, chainId: session.chainId });
+      if (flags.pay && session && apiKey) {
+        const bridge = new SessionBridge({ apiKey, chainId: session.chainId });
         const floatTarget = parseNonNegativeBigInt(config.x402?.topUpFloat);
         const maxTopUp = topUpCeiling(policy, { periodUsage, spentThisSession });
         ensureFunds = (requirement: X402PaymentRequirement, payerAddress: `0x${string}`) =>

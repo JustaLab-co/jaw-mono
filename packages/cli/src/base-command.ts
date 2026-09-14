@@ -1,6 +1,7 @@
 import { Command, Flags } from '@oclif/core';
 import type { OutputFormat } from './lib/types.js';
 import { loadConfig } from './lib/config.js';
+import { apiKeyFor } from './lib/api-key.js';
 import { formatOutput } from './lib/output.js';
 
 export abstract class BaseCommand extends Command {
@@ -42,8 +43,7 @@ export abstract class BaseCommand extends Command {
    * itself, which is the only place that knows what the absence costs it.
    */
   protected resolveApiKey(flags: { 'api-key'?: string }): string | undefined {
-    const config = loadConfig();
-    return flags['api-key'] ?? config.apiKey ?? config.workspaceApiKey;
+    return apiKeyFor(loadConfig(), flags['api-key']);
   }
 
   protected resolveChainId(flags: { chain?: number }): number {
