@@ -98,23 +98,65 @@ describe('getBridge — keeping the key the browser filled in', () => {
     vi.mocked(loadConfig).mockReturnValue({});
   });
 
-  it('stores one the config did not have', async () => {
+  it('stores one the config did not have, in its own field', async () => {
     injectedApiKey = 'workspace-key';
 
-    await getBridge({ apiKey: '', chainId: 8453 });
+    await getBridge({ apiKey: undefined, chainId: 8453 });
 
-    expect(vi.mocked(saveConfig)).toHaveBeenCalledWith({ apiKey: 'workspace-key' });
+    expect(vi.mocked(saveConfig)).toHaveBeenCalledWith({ workspaceApiKey: 'workspace-key' });
   });
 
   // The user chose theirs and it is what carries their own attribution. This is
   // the one that must not regress.
-  it('never replaces a key already in the config', async () => {
+  it('never touches the key the user chose', async () => {
     injectedApiKey = 'workspace-key';
     vi.mocked(loadConfig).mockReturnValue({ apiKey: 'mine', defaultChain: 8453 });
 
     await getBridge({ apiKey: 'mine', chainId: 8453 });
 
+    expect(vi.mocked(saveConfig)).toHaveBeenCalledWith({
+      apiKey: 'mine',
+      defaultChain: 8453,
+      workspaceApiKey: 'workspace-key',
+    });
+  });
+
+  // The deployment answers with the current key on every connect, and taking it
+  // is the only way a rotation reaches an install that already has one.
+  it('replaces a workspace key that changed', async () => {
+    injectedApiKey = 'rotated';
+    vi.mocked(loadConfig).mockReturnValue({ workspaceApiKey: 'old' });
+
+    await getBridge({ apiKey: 'old', chainId: 8453 });
+
+    expect(vi.mocked(saveConfig)).toHaveBeenCalledWith({ workspaceApiKey: 'rotated' });
+  });
+
+  it('writes nothing when the same workspace key comes back', async () => {
+    injectedApiKey = 'same';
+    vi.mocked(loadConfig).mockReturnValue({ workspaceApiKey: 'same' });
+
+    await getBridge({ apiKey: 'same', chainId: 8453 });
+
     expect(vi.mocked(saveConfig)).not.toHaveBeenCalled();
+  });
+
+  // The whole point: a key we were handed is not asserted back, or the
+  // deployment echoes it and never consults its own again.
+  it('does not send a workspace key back to the browser', async () => {
+    vi.mocked(loadConfig).mockReturnValue({ workspaceApiKey: 'ours' });
+
+    await getBridge({ apiKey: 'ours', chainId: 8453 });
+
+    expect(constructed[0].config.apiKey).toBeUndefined();
+  });
+
+  it('does send the key the user chose', async () => {
+    vi.mocked(loadConfig).mockReturnValue({ apiKey: 'mine' });
+
+    await getBridge({ apiKey: 'mine', chainId: 8453 });
+
+    expect(constructed[0].config.apiKey).toBe('mine');
   });
 
   it('writes nothing when the browser filled in nothing', async () => {

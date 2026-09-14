@@ -237,26 +237,6 @@ export default class SessionSetup extends BaseCommand {
       const { privateKeyToAccount } = await import('viem/accounts');
       const localAccount = privateKeyToAccount(privateKeyHex);
 
-      const { Account } = await import('@jaw.id/core');
-      const pm = config.paymasters?.[chainId];
-      // EIP-7702 keeps the session address equal to the session key EOA, with
-      // the delegation riding the first userOp. That is what lets the account
-      // holding the USDC be the same one the ERC-20 paymaster charges for the
-      // ops it sends; the factory's counterfactual address was a second one
-      // that never held anything.
-      const mode = 'eip7702' as const;
-      const account = await Account.fromLocalAccount(
-        {
-          chainId,
-          apiKey,
-          paymasterUrl: pm?.url,
-          paymasterContext: pm?.context,
-        },
-        localAccount,
-        { eip7702: true }
-      );
-      const sessionAddress = account.address;
-
       // 6. Open browser bridge to grant permissions
       if (!flags.quiet) {
         if (flags.x402) {
@@ -277,6 +257,39 @@ export default class SessionSetup extends BaseCommand {
         chainId,
         ens: config.ens,
       });
+
+      // Built after the bridge, not before, because the bridge is what supplies
+      // a key to a machine that had none. Ahead of it the account would cache an
+      // rpcUrl with no key for the rest of the process, and its issuance would be
+      // logged against nobody, which is exactly the first run this path exists
+      // for.
+      const resolvedApiKey = apiKey ?? loadConfig().apiKey;
+      if (!resolvedApiKey) {
+        this.error(
+          'Connected, but no API key came back and none is configured. ' +
+            'Set one with `jaw config set apiKey <key>` and run this again.'
+        );
+      }
+
+      const { Account } = await import('@jaw.id/core');
+      const pm = config.paymasters?.[chainId];
+      // EIP-7702 keeps the session address equal to the session key EOA, with
+      // the delegation riding the first userOp. That is what lets the account
+      // holding the USDC be the same one the ERC-20 paymaster charges for the
+      // ops it sends; the factory's counterfactual address was a second one
+      // that never held anything.
+      const mode = 'eip7702' as const;
+      const account = await Account.fromLocalAccount(
+        {
+          chainId,
+          apiKey: resolvedApiKey,
+          paymasterUrl: pm?.url,
+          paymasterContext: pm?.context,
+        },
+        localAccount,
+        { eip7702: true }
+      );
+      const sessionAddress = account.address;
 
       // Kept whole rather than narrowed on the way in. The response carries the
       // permission as the contract stores it, and every view on the permission

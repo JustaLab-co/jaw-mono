@@ -59,6 +59,10 @@ export function redactConfig(config: JawConfig): Record<string, unknown> {
   return {
     ...config,
     apiKey: config.apiKey ? `${config.apiKey.slice(0, 8)}...` : undefined,
+    // Public by construction, since anything the browser app carries is in its
+    // bundle. Truncated anyway: it reads as a credential in `config show` and in
+    // the MCP tool's output, and treating it as one costs nothing here.
+    workspaceApiKey: config.workspaceApiKey ? `${config.workspaceApiKey.slice(0, 8)}...` : undefined,
     ...(config.paymasters && {
       paymasters: Object.fromEntries(
         Object.entries(config.paymasters).map(([chainId, pm]) => [
