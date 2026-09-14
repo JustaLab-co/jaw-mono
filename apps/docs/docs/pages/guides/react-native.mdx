@@ -278,9 +278,13 @@ const account = await Account.get(config);
 ```
 
 ```typescript [Pick an Account]
-// Native passkey prompt for the selected credential
+// Native passkey prompt for the selected credential. The list is empty on a
+// fresh install, where Account.import() is the way in.
 const accounts = Account.getStoredAccounts(config.apiKey, config.storage);
-const account = await Account.get(config, accounts[0].credentialId);
+
+if (accounts.length > 0) {
+  const account = await Account.get(config, accounts[0].credentialId);
+}
 ```
 
 ```typescript [Import from Cloud]

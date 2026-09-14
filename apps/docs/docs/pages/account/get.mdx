@@ -109,13 +109,22 @@ const config = {
   nativeGetFn: Passkey.get as NativePasskeyGetFn,
   rpId: 'myapp.com',
 };
+```
 
-// Restore existing session (no passkey prompt)
+Restore an existing session, without a passkey prompt:
+
+```typescript
 const account = await Account.get(config);
+```
 
-// Login with specific credential (triggers native passkey prompt)
+Log in with a specific credential, which triggers the native passkey prompt:
+
+```typescript
 const stored = Account.getStoredAccounts('your-api-key', storage);
-const account = await Account.get(config, stored[0].credentialId);
+
+if (stored.length > 0) {
+  const account = await Account.get(config, stored[0].credentialId);
+}
 ```
 
 ## Related
