@@ -11,6 +11,7 @@ import { describePeriod } from '../../x402/period.js';
 import { parseBigInt, parseNonNegativeBigInt } from '../../x402/amount.js';
 import { USDC_BY_NETWORK } from '../../x402/asset-registry.js';
 import { gasReserve } from '../../x402/gas-reserve.js';
+import { whyEip712DomainDisagrees } from '../../x402/eip712-domain.js';
 import { formatUsdc, formatRemaining, diagnose } from '../../x402/status-report.js';
 import { readLiveness, type PermissionLiveness } from '../../x402/permission-onchain.js';
 import { recoverPermission } from '../../x402/permission-recovery.js';
@@ -165,6 +166,14 @@ export default class X402Status extends BaseCommand {
       // is a tenth of a token, six decimals at most.
       payerReserve: asset ? Number(gasReserve(asset)) / 10 ** asset.decimals : 0,
     });
+
+    // Checked here and not on the signing path: the domain only matters when a
+    // challenge does not advertise its own, and a payment may not wait on a
+    // node to find out. This command is the one whose job is saying what is
+    // wrong, so a registry entry that has drifted becomes loud here instead of
+    // arriving as a payment the token rejected.
+    const domainDrift = asset ? await whyEip712DomainDisagrees(asset) : null;
+    if (domainDrift) problems.push(domainDrift);
 
     if (format === 'json') {
       this.outputResult(

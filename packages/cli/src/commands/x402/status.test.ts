@@ -4,6 +4,16 @@ import * as path from 'node:path';
 import * as os from 'node:os';
 import { fileURLToPath } from 'node:url';
 import { Config } from '@oclif/core';
+import { hashDomain } from 'viem';
+
+const EIP712_DOMAIN_TYPE = {
+  EIP712Domain: [
+    { name: 'name', type: 'string' },
+    { name: 'version', type: 'string' },
+    { name: 'chainId', type: 'uint256' },
+    { name: 'verifyingContract', type: 'address' },
+  ],
+} as const;
 
 /**
  * Pins the wiring between the ledger's two meters and what `jaw x402 status`
@@ -25,6 +35,7 @@ const h = vi.hoisted(() => {
   const anchor = new Date(Date.now() - 60 * 60 * 1000).toISOString();
   return {
     payer: '0x1111111111111111111111111111111111111111' as const,
+    readContract: vi.fn(),
     // Mutable, because `~/.jaw/config.json` is read with `JSON.parse` and a
     // cast: what it can carry is part of what this command has to survive.
     config: { x402: { topUpFloat: '5000000' } as Record<string, unknown> },
@@ -85,7 +96,23 @@ vi.mock('../../x402/payer.js', () => ({ sessionPayerAddress: () => h.payer }));
 
 // Both balances funded and readable: the only problem left for `diagnose` to
 // find is the one this file exists to pin.
-vi.mock('../../x402/balance.js', () => ({ usdcBalance: async () => ({ formatted: '20' }) }));
+vi.mock('../../x402/balance.js', () => ({
+  usdcBalance: async () => ({ formatted: '20' }),
+  // The domain drift check reads the token's separator through this. Without it
+  // the check would swallow a TypeError and report nothing, which is exactly the
+  // shape of a wiring that looks connected and is not.
+  //
+  // Narrowed to that one read: `permission-onchain.ts` reads through the same
+  // client, and a catch-all here answered its `getHash` with the separator
+  // hash, which quietly moved the liveness these five other cases report from
+  // `unknown` to `mismatch`.
+  publicClientFor: () => ({
+    readContract: (args: { functionName: string }) =>
+      args.functionName === 'DOMAIN_SEPARATOR'
+        ? h.readContract(args)
+        : Promise.reject(new Error(`unexpected read in this suite: ${args.functionName}`)),
+  }),
+}));
 
 const { appendX402Log } = await import('../../x402/ledger.js');
 const { default: X402Status } = await import('./status.js');
@@ -111,6 +138,19 @@ beforeEach(() => {
   delete process.env.JAW_OUTPUT;
   delete process.env.JAW_CHAIN_ID;
   delete process.env.JAW_API_KEY;
+  // Agreeing by default, so only the case that is about drift sees drift.
+  h.readContract.mockReset();
+  h.readContract.mockResolvedValue(
+    hashDomain({
+      domain: {
+        name: 'USDC',
+        version: '2',
+        chainId: 84532n,
+        verifyingContract: '0x036CbD53842c5426634e7929541eC2318f3dCF7e',
+      },
+      types: EIP712_DOMAIN_TYPE,
+    })
+  );
   if (fs.existsSync(TEST_ROOT)) fs.rmSync(TEST_ROOT, { recursive: true });
   fs.mkdirSync(TEST_ROOT, { recursive: true });
   appendX402Log({
@@ -207,5 +247,29 @@ describe('jaw x402 status', () => {
     expect(lines).not.toMatch(/all of them apply/);
     const report = JSON.parse((await runStatus(['--output', 'json'])).join('\n'));
     expect(report.policy.perPeriod).toHaveLength(1);
+  });
+
+  /**
+   * The command has to run the check, not merely be able to. This file already
+   * exists because of a wiring regression, and a check whose failure path is
+   * "return null" is invisible when it is not called at all.
+   */
+  it('reports a registry whose EIP-712 domain no longer matches the token', async () => {
+    h.readContract.mockResolvedValue(
+      hashDomain({
+        domain: {
+          name: 'USD Coin',
+          version: '2',
+          chainId: 84532n,
+          verifyingContract: '0x036CbD53842c5426634e7929541eC2318f3dCF7e',
+        },
+        types: EIP712_DOMAIN_TYPE,
+      })
+    );
+
+    const result = JSON.parse((await runStatus(['--output', 'json'])).join('\n'));
+
+    expect(result.problems.some((p: string) => /EIP-712 domain/.test(p))).toBe(true);
+    expect(result.ready).toBe(false);
   });
 });

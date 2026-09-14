@@ -1,5 +1,6 @@
 import { errorMessage } from '../lib/errors.js';
 import type { UsdcAsset } from './asset-registry.js';
+import { within } from '../lib/within.js';
 
 /**
  * Check the token the CLI names in the paymaster context against what the wallet
@@ -31,17 +32,6 @@ import type { UsdcAsset } from './asset-registry.js';
  */
 const CAPABILITIES_TIMEOUT_MS = 3_000;
 
-function within<T>(work: Promise<T>): Promise<T> {
-  let timer: ReturnType<typeof setTimeout> | undefined;
-  const expired = new Promise<never>((_, reject) => {
-    timer = setTimeout(
-      () => reject(new Error(`timed out after ${CAPABILITIES_TIMEOUT_MS}ms`)),
-      CAPABILITIES_TIMEOUT_MS
-    );
-  });
-  return Promise.race([work, expired]).finally(() => clearTimeout(timer));
-}
-
 /**
  * What is wrong, or null when the wallet and the registry agree.
  *
@@ -63,7 +53,8 @@ export async function whyFeeTokenDisagrees(asset: UsdcAsset, apiKey: string): Pr
         { method: 'wallet_getCapabilities', params: [] },
         apiKey,
         true // testnets: a session on Base Sepolia needs its fee token too
-      )
+      ),
+      CAPABILITIES_TIMEOUT_MS
     );
     const feeToken = capabilities[`0x${asset.chainId.toString(16)}`]?.feeToken;
     accepted = feeToken?.supported ? feeToken.tokens.filter((token) => token.feeToken) : [];
