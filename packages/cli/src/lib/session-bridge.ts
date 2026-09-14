@@ -6,7 +6,7 @@ import { usdcForNetwork } from '../x402/asset-registry.js';
 import { whyFeeTokenDisagrees } from '../x402/fee-token.js';
 import { PERMIT2_ADDRESS } from '../x402/permit2.js';
 
-// JAW's ERC-20 paymaster, mirrored from core's JAW_PAYMASTER_URL. Kept as a
+// JAW's ERC-20 paymaster, mirrored from core's `jawPaymasterUrl`. Kept as a
 // local literal rather than an import because `@jaw.id/core` is lazy-loaded in
 // the CLI (a static import would pull it into startup); keep in sync if core's
 // URL moves. The core SDK recognises this exact base URL and adds the USDC
@@ -87,8 +87,8 @@ async function warnOnFeeTokenDrift(options: SessionBridgeOptions): Promise<void>
  * The one way the send still breaks once nothing is sponsored: the ERC-20
  * paymaster charges the account the userOp is sent from, and an account with no
  * USDC cannot be charged, so sizing its approval fails. Core's error names the
- * token and the chain and nothing about the account, which is what made this
- * hard to read the first time it happened.
+ * token and the chain and nothing about the account, so the error alone does not
+ * say what to fix.
  *
  * A session normally receives its gas in the grant, so an empty one means that
  * transfer did not happen: the wallet that approved the permission does not

@@ -5,12 +5,14 @@ import { isLegacySession, liveOrphans, tryLoadSessionConfig } from '../../lib/se
 import { sessionPayerAddress } from '../../x402/payer.js';
 import { usdcBalance } from '../../x402/balance.js';
 import { readX402Log, sumSpentSince } from '../../x402/ledger.js';
-import { resolveSessionX402Policy, sameLimit } from '../../x402/policy.js';
+import { reconcileSettlements } from '../../x402/settlement.js';
+import { resolveSessionX402Policy, sameLimit, tightestLimit } from '../../x402/policy.js';
 import { currentLimitUsageOnChain } from '../../x402/spend-window.js';
 import { describePeriod } from '../../x402/period.js';
-import { parseBigInt } from '../../x402/amount.js';
+import { parseBigInt, parseNonNegativeBigInt } from '../../x402/amount.js';
 import { USDC_BY_NETWORK } from '../../x402/asset-registry.js';
 import { gasReserve } from '../../x402/gas-reserve.js';
+import { whyEip712DomainDisagrees } from '../../x402/eip712-domain.js';
 import { formatUsdc, formatRemaining, diagnose } from '../../x402/status-report.js';
 import { readLiveness, type PermissionLiveness } from '../../x402/permission-onchain.js';
 import { recoverPermission } from '../../x402/permission-recovery.js';
@@ -98,7 +100,11 @@ export default class X402Status extends BaseCommand {
 
     // One read for the whole report: the session total and every limit below
     // are counted against the same rows.
-    const ledger = readX402Log();
+    //
+    // Reconciled here too, and not only on the pay paths: an agent that pays
+    // once and stops would otherwise leave that row costing its ceiling for
+    // good, and this is the surface it still reaches.
+    const ledger = await reconcileSettlements(readX402Log());
     // The session total, so payer only. The per-period figures below come from
     // `currentLimitUsage`, which scopes to the permission because those mirror
     // the chain.
@@ -108,15 +114,15 @@ export default class X402Status extends BaseCommand {
     const decimals = asset?.decimals ?? 6;
 
     // The cap that actually mirrors the permission, and what is left of it right
-    // now. Without this the report was silent about the only cap a grant-seeded
-    // session enforces. Asked of the chain first, which knows about pulls this
-    // CLI's ledger never saw.
+    // now. Without it the report would be silent about the only cap a
+    // grant-seeded session enforces. Asked of the chain first, which knows about
+    // pulls this CLI's ledger never saw.
     // Every limit on the payment token, each with its own window and its own
-    // usage. Reducing them to one was reporting a month's budget as a day's.
+    // usage. Reducing them to one would report a month's budget as a day's.
     const usage = await currentLimitUsageOnChain(ledger, policy, payer, current);
     // Joined onto the limits the policy holds, not read off the usage list. A
     // limit whose usage could not be computed is still enforced by
-    // `checkPolicy`, and reporting only what has usage made it invisible here:
+    // `checkPolicy`, and reporting only what has usage makes it invisible here:
     // no line, no json entry, and a `ready: true` for a session whose grant is
     // the thing bounding it.
     const limits = (policy.perPeriod ?? []).map((limit) => {
@@ -131,29 +137,13 @@ export default class X402Status extends BaseCommand {
         }
       );
     });
-    // The one with the least room left, which is what the verdict is about.
-    // Picking the smallest allowance instead said `ready: true` for a session
-    // whose month was drained, because today's counter was still at zero, right
-    // under a printed line reading 100 of 100 USDC used this month.
-    //
-    // Unparseable allowances are skipped rather than thrown on: they reach here
-    // from a config file someone can edit, and the rest of this command reports
-    // a bad value instead of dying on it.
-    const remaining = (limit: (typeof limits)[number]) => {
-      const cap = parseBigInt(limit.allowance);
-      if (cap === null) return null;
-      return cap > limit.toppedUp ? cap - limit.toppedUp : 0n;
-    };
-    const tightest = limits.reduce<(typeof limits)[number] | null>((a, b) => {
-      const left = remaining(b);
-      if (left === null) return a;
-      const best = a === null ? null : remaining(a);
-      return best === null || left < best ? b : a;
-    }, null);
+    // The one with the least room left, which is what the verdict is about, and
+    // the same reduction `topUpCeiling` sizes a pull with. These limits already
+    // carry their own usage, so there is no second list to pass.
+    const tightest = tightestLimit(limits);
 
-    // One verdict for both renderers. `ready` used to be its own expression and
-    // drifted from the warnings: a setup whose owner was empty printed a loud
-    // "the cap is not applying" and still reported ready:true to a script.
+    // One verdict for both renderers, so a setup that prints a loud "the cap is
+    // not applying" cannot also report ready:true to a script.
     const problems = diagnose({
       expired,
       liveness,
@@ -163,7 +153,11 @@ export default class X402Status extends BaseCommand {
       hasAsset: asset !== undefined,
       spent,
       sessionCap,
-      periodCap: tightest ? parseBigInt(tightest.allowance) : null,
+      // The same parse rule the ranking uses. Read with `parseBigInt`, a
+      // negative allowance comes back as a negative cap: the "cannot be read"
+      // warning never fires, and beside an unreadable usage nothing is reported
+      // at all, while `checkPolicy` refuses every payment against it.
+      periodCap: tightest ? (parseNonNegativeBigInt(tightest.allowance) ?? null) : null,
       // Top-ups, not payments: the period cap mirrors the on-chain allowance
       // and the top-up is what draws it down, exactly as `topUpCeiling`
       // measures it. Payments lag by whatever float the payer still holds,
@@ -177,6 +171,14 @@ export default class X402Status extends BaseCommand {
       // is a tenth of a token, six decimals at most.
       payerReserve: asset ? Number(gasReserve(asset)) / 10 ** asset.decimals : 0,
     });
+
+    // Checked here and not on the signing path: the domain only matters when a
+    // challenge does not advertise its own, and a payment may not wait on a
+    // node to find out. This command is the one whose job is saying what is
+    // wrong, so a registry entry that has drifted becomes loud here instead of
+    // arriving as a payment the token rejected.
+    const domainDrift = asset ? await whyEip712DomainDisagrees(asset) : null;
+    if (domainDrift) problems.push(domainDrift);
 
     if (format === 'json') {
       this.outputResult(
@@ -231,8 +233,8 @@ export default class X402Status extends BaseCommand {
       );
     }
     this.log(`  caps    ${formatUsdc(policy.maxAmountPerPayment, decimals)} per payment`);
-    // Every limit, each with its own window and reset. One of them used to
-    // stand for all, which is how a 100-a-month cap was reported as 50 a day.
+    // Every limit, each with its own window and reset: one of them standing for
+    // all would report a 100-a-month cap as 50 a day.
     for (const limit of limits) {
       const floor = limit.source === 'chain' ? '' : 'at least ';
       // A limit with no window is one whose usage could not be computed. It

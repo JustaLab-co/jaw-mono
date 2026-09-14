@@ -111,8 +111,8 @@ async function connectBridge(
 ): Promise<WSBridge> {
   const config = loadConfig();
   // Read as one entry, so the url and the context cannot come from different
-  // paymasters. Every caller used to look this up and forward the url alone,
-  // which is how a configured `context` was lost before it reached the browser.
+  // paymasters. Looking it up per caller and forwarding the url alone loses a
+  // configured `context` before it reaches the browser.
   const paymaster = config.paymasters?.[chainId];
   const bridge = new WSBridge({
     relayUrl,

@@ -386,10 +386,10 @@ describe('discoverServices — what it declines to advertise', () => {
 });
 
 /**
- * The cap arrives as free text a model wrote, and both ways of getting it wrong
- * used to fail quietly in opposite directions: an empty string filtered
- * everything away, a currency symbol disabled the filter while the caller
- * believed one was applied.
+ * The cap arrives as free text a model wrote, and the two ways of getting it
+ * wrong fail quietly in opposite directions unless they are refused: an empty
+ * string filters everything away, a currency symbol disables the filter while
+ * the caller believes one is applied.
  */
 describe('discoverServices — the price cap is a number or an error', () => {
   it('refuses an empty cap instead of reading it as zero', async () => {

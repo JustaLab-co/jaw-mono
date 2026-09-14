@@ -288,4 +288,35 @@ describe('x402 ledger compaction', () => {
 
     expect(() => sumSpentSince(readX402Log(), { payer: PAYER_A })).toThrow(/unreadable checkpoint covering 812 rows/);
   });
+
+  // A reconciliation answers a payment on a line of its own, and the rewrite is
+  // where both lines stop existing. The checkpoint has to carry the figure the
+  // answer settled on, not the ceiling the payment was counting before it.
+  it('folds the figure a settlement correction settled on', () => {
+    const bulk = filler();
+    const paid = row({
+      permissionId: PERM_A,
+      amount: '1500',
+      authorized: '9000',
+      nonce: '0xfeed',
+      settlement: 'unverified',
+    });
+    const cut = new Date(clock + 1000).toISOString();
+    writeLedger([...bulk, paid, ...tail()]);
+    fs.appendFileSync(
+      PATHS.x402Log,
+      '\n' + JSON.stringify({ at: at(), corrects: '0xfeed', settlement: 'verified', amount: '400' })
+    );
+
+    const scope = { permissionId: PERM_A, payer: PAYER_A };
+    // 400 from the corrected payment, plus the 1 each row in the tail carries.
+    const before = figures(scope, [undefined]);
+    expect(before).toEqual([['620', '0']]);
+
+    compactX402Log([cut]);
+
+    expect(figures(scope, [undefined])).toEqual(before);
+    expect(readX402Log().some((entry) => entry.nonce === '0xfeed')).toBe(false);
+    expect(fs.readFileSync(PATHS.x402Log, 'utf-8')).not.toContain('corrects');
+  });
 });

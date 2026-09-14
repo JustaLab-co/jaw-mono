@@ -6,6 +6,7 @@ import { loadConfig } from '../../lib/config.js';
 import { Eip3009EoaPayer, sessionPayerAddress } from '../../x402/payer.js';
 import { payAndFetch } from '../../x402/http.js';
 import { appendX402Log, compactX402Log, readX402Log, sumSpentSince } from '../../x402/ledger.js';
+import { reconcileSettlements } from '../../x402/settlement.js';
 import { withPaymentLock } from '../../lib/payment-lock.js';
 import { usdcBalance } from '../../x402/balance.js';
 import { resolveSessionX402Policy, topUpCeiling } from '../../x402/policy.js';
@@ -88,7 +89,11 @@ export function registerPayTool(server: McpServer): void {
             // have spent, and a stale total waves through a payment the cap
             // should have stopped. Nothing can append while we hold it, so the
             // session total and every period window count against the same rows.
-            const ledger = readX402Log();
+            //
+            // Reconciled first because an unverified row costs its ceiling, and
+            // this is where that figure comes down to what the chain shows
+            // actually moved.
+            const ledger = await reconcileSettlements(readX402Log());
 
             // Scoped to the session so a new grant starts a fresh budget; the
             // payer's whole history when there is no session to scope by.
@@ -138,26 +143,27 @@ export function registerPayTool(server: McpServer): void {
               network: params.network,
             });
 
-            // What this payment costs the cap is not accumulated here. It used
-            // to be, and nothing read it: `sessionSpent` is re-read from the
-            // ledger at the top of every call, which is what makes the cap
-            // survive a restart. Keeping a second running total in memory only
-            // invited it to disagree with the one that enforces.
+            // What this payment costs the cap is not accumulated here:
+            // `sessionSpent` is read from the ledger at the top of every call,
+            // which is what makes the cap survive a restart. A second running
+            // total in memory could only disagree with the one that enforces.
 
             // Record payment attempts (not free passthroughs) to the audit ledger.
             const settled = result.payment ?? result.attemptedPayment;
             const isPaymentEvent =
               result.paid || !!result.attemptedPayment || (result.status === 402 && !!result.refusedReason);
             if (isPaymentEvent) {
+              const status = result.paid ? 'paid' : result.attemptedPayment ? 'failed' : 'refused';
               appendX402Log({
                 at: new Date().toISOString(),
                 url: params.url,
                 payer: result.payer,
                 permissionId: session?.permissionId,
-                status: result.paid ? 'paid' : result.attemptedPayment ? 'failed' : 'refused',
+                status,
                 amount: settled?.amount,
                 authorized: settled?.authorized,
                 deadline: settled?.deadline,
+                scheme: settled?.scheme,
                 asset: settled?.asset,
                 network: settled?.network,
                 payTo: settled?.payTo,
@@ -167,6 +173,9 @@ export function registerPayTool(server: McpServer): void {
                 topUpBatchId: result.topUp?.batchId,
                 approvalBatchId: result.permit2Approval?.batchId,
                 reason: result.refusedReason,
+                // A signed authorization is worth its ceiling to whoever holds
+                // it until the chain says otherwise. A refusal signed nothing.
+                settlement: status === 'refused' ? undefined : 'unverified',
               });
 
               // Same as the CLI path: fold the ledger down while the lock is
@@ -236,18 +245,15 @@ export function registerPayTool(server: McpServer): void {
         const payer = sessionPayerAddress();
         const session = tryLoadSessionConfig();
         // The payer's float lives where the session does: a top-up refuses to
-        // run on any other chain, so a default read off config answered for
-        // Base mainnet on a Base Sepolia session and reported a funded payer as
-        // empty.
+        // run on any other chain, so a network read off config would answer for
+        // the wrong chain and report a funded payer as empty.
         //
         // With no session there is nothing to default to, and this tool's own
-        // description says it needs one. The fallback that used to sit here
-        // walked `allowedNetworks` and then Base, which reads a payment
-        // allowlist as if it named a home chain, and that reading is what
-        // produced the Base answer in the first place. So it refuses and says
-        // which two ways forward exist. An explicit `network` still answers,
-        // which is what a key still holding a balance after its session went
-        // away needs.
+        // description says it needs one, so it refuses and says which two ways
+        // forward exist. Falling back to `allowedNetworks` would read a payment
+        // allowlist as if it named a home chain. An explicit `network` still
+        // answers, which is what a key still holding a balance after its session
+        // went away needs.
         const network = params.network ?? (session ? `eip155:${session.chainId}` : undefined);
         if (!network) {
           throw new Error(

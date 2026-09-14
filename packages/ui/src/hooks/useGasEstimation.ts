@@ -1,7 +1,7 @@
 import { useState, useEffect, useCallback, useRef, useMemo } from 'react';
 import type { Address, Hex } from 'viem';
 import type { Account, TokenEstimate, TransactionCall } from '@jaw.id/core';
-import { estimateErc20PaymasterCosts, JAW_PAYMASTER_URL } from '@jaw.id/core';
+import { estimateErc20PaymasterCosts, jawPaymasterUrl } from '@jaw.id/core';
 import type { FeeTokenOption } from '../components/FeeTokenSelector';
 import { classifyRevert, INSUFFICIENT_FUNDS_ERROR } from '../utils/transactionFailure';
 
@@ -101,14 +101,6 @@ const PREFUND_ERRORS = [
 function isPrefundError(error: unknown): boolean {
   if (!(error instanceof Error)) return false;
   return PREFUND_ERRORS.some((msg) => error.message.toLowerCase().includes(msg.toLowerCase()));
-}
-
-/**
- * Build paymaster URL with chain ID and API key
- */
-function buildPaymasterUrl(chainId: number, apiKey?: string): string {
-  const baseUrl = `${JAW_PAYMASTER_URL}?chainId=${chainId}`;
-  return apiKey ? `${baseUrl}&api-key=${apiKey}` : baseUrl;
 }
 
 // ============================================================================
@@ -277,7 +269,7 @@ export function useGasEstimation({
       const erc20Tokens = currentFeeTokens.filter((t) => !t.isNative);
       // Filter tokens with balance > 0 for estimation (paymaster can't validate with 0 balance)
       const erc20TokensWithBalance = erc20Tokens.filter((t) => t.balance > 0n);
-      const paymasterUrl = buildPaymasterUrl(chainId, apiKey);
+      const paymasterUrl = jawPaymasterUrl(chainId, apiKey);
 
       // Convert effectiveCalls to ensure value is bigint for estimateErc20PaymasterCosts
       const callsWithBigIntValue = effectiveCalls.map((call) => ({

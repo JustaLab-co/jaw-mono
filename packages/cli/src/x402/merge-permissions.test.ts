@@ -146,9 +146,9 @@ describe('describeMerge', () => {
   });
 
   /**
-   * `parsePermissionsConfig` rejects a defined-but-empty `spends`, so a
-   * calls-only session merged with a calls-only addition threw after the browser
-   * had already been opened.
+   * `parsePermissionsConfig` rejects a defined-but-empty `spends`, so emitting
+   * one for a calls-only session merged with a calls-only addition throws after
+   * the browser is open.
    */
   it('leaves an empty spends out rather than sending an empty array', () => {
     const merged = mergePermissions(EXISTING, { calls: [{ target: NFT, selector: '0xdeadbeef' }] });

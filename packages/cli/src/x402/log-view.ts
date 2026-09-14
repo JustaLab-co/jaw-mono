@@ -81,11 +81,10 @@ export function renderSummary(entries: X402LogEntry[]): string {
     // payment would understate what happened by however many it absorbed.
     if (entry.kind === 'checkpoint') folded += entry.folded ?? 0;
     else {
-      // An unrecognised status used to land on `counts` as a stray key and vanish
-      // from the tally, so a malformed row silently shrank the reported total.
       // Own keys only: `in` walks the prototype, so a row saying `constructor`
-      // took the counted branch, landed on a key nothing reads, and disappeared
-      // from both tallies.
+      // would take the counted branch, land on a key nothing reads, and disappear
+      // from both tallies. Anything unrecognised counts as unknown rather than
+      // being dropped, so a malformed row cannot shrink the reported total.
       if (Object.hasOwn(counts, entry.status)) counts[entry.status] += 1;
       else unknown += 1;
     }

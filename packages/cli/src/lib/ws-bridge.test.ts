@@ -3,10 +3,10 @@ import { describe, it, expect } from 'vitest';
 import { buildInitPayload } from './ws-bridge.js';
 
 // The init envelope is the only thing the CLI tells the browser about the
-// paymaster, and it used to carry the url alone. A configured
-// `paymasters[chainId].context` — a Pimlico `sponsorshipPolicyId`, say — was
-// dropped here, so a userOp signed through the browser went out unsponsored
-// while the same config sponsored fine in session mode.
+// paymaster, so it has to carry the context and not the url alone. Dropping a
+// configured `paymasters[chainId].context`, a Pimlico `sponsorshipPolicyId` for
+// instance, sends a userOp signed through the browser out unsponsored while the
+// same config sponsors fine in session mode.
 describe('buildInitPayload', () => {
   const BASE = { apiKey: 'key-123', chainId: 8453 };
 

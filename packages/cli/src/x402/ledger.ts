@@ -35,12 +35,13 @@ export interface X402LogEntry {
    */
   authorized?: string;
   /**
-   * When the authorization expires. Recorded but not yet read: reconciling a
-   * failed payment means proving its nonce was never consumed and its deadline
-   * has passed, and that check cannot be written against entries that never
-   * stored the deadline.
+   * When the authorization expires. Read by `reconcileSettlements`, which
+   * proves a payment moved nothing by finding its deadline past and its nonce
+   * unconsumed, and cannot say that about entries that never stored it.
    */
   deadline?: string;
+  /** Which scheme signed this, so a reconciliation knows where its nonce lives. */
+  scheme?: string;
   asset?: string;
   network?: string;
   payTo?: string;
@@ -67,6 +68,41 @@ export interface X402LogEntry {
   kind?: 'checkpoint';
   /** How many rows a checkpoint absorbed. */
   folded?: number;
+  /**
+   * Whether anything outside the receipt has confirmed what settled.
+   *
+   * Absent on rows written before the field, which keep counting the amount
+   * they reported: those are history, and re-reading them as ceilings would
+   * jam every cap that is live today.
+   */
+  settlement?: SettlementState;
+}
+
+/**
+ * `unverified` is every signed attempt until the chain says otherwise.
+ * `verified` means a transfer of that amount was found in the transaction the
+ * receipt named. `expired` means the deadline passed with the nonce
+ * unconsumed, so the authorization died without moving anything.
+ */
+export type SettlementState = 'unverified' | 'verified' | 'expired';
+
+/**
+ * A later answer about a row that was already written.
+ *
+ * The ledger is append-only, so a reconciliation cannot edit the payment it is
+ * about. It appends this instead, keyed by the nonce that identifies the
+ * attempt on chain, and `readX402Log` folds it back on before anyone sees the
+ * row. Every reader goes through there, so nothing downstream learns that
+ * corrections exist.
+ */
+export interface X402SettlementCorrection {
+  at: string;
+  /** The `nonce` of the payment row this answers. Payment rows never carry it. */
+  corrects: string;
+  settlement: SettlementState;
+  /** What the chain says moved, when it says. */
+  amount?: string;
+  txHash?: string;
 }
 
 /**
@@ -102,34 +138,77 @@ export function readX402Log(limit?: number): X402LogEntry[] {
   } catch {
     return [];
   }
-  const entries = raw
-    .split('\n')
-    .filter((line) => line.trim().length > 0)
-    .map((line) => {
-      try {
-        return JSON.parse(line) as X402LogEntry;
-      } catch {
-        return null;
-      }
-    })
-    .filter((e): e is X402LogEntry => e !== null);
-  return limit && limit > 0 ? entries.slice(-limit) : entries;
+
+  const payments: X402LogEntry[] = [];
+  const corrections = new Map<string, X402SettlementCorrection>();
+  for (const line of raw.split('\n')) {
+    if (line.trim().length === 0) continue;
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(line);
+    } catch {
+      continue;
+    }
+    // A line that parses to `null`, a number or a string is valid JSON and not
+    // a record. `'corrects' in null` throws, and this runs on the payment path
+    // where nothing catches it, so one such line broke every x402 command.
+    if (typeof parsed !== 'object' || parsed === null) continue;
+    // Last answer about a nonce wins: a row can go unverified, then verified,
+    // and the file keeps both.
+    if ('corrects' in parsed)
+      corrections.set((parsed as X402SettlementCorrection).corrects, parsed as X402SettlementCorrection);
+    else payments.push(parsed as X402LogEntry);
+  }
+
+  const folded = payments.map((entry) => {
+    const answer = entry.nonce ? corrections.get(entry.nonce) : undefined;
+    if (!answer) return entry;
+    return {
+      ...entry,
+      settlement: answer.settlement,
+      amount: answer.amount ?? entry.amount,
+      txHash: answer.txHash ?? entry.txHash,
+    };
+  });
+  // The limit counts payments, not lines: corrections are not events a user
+  // asked to see.
+  return limit && limit > 0 ? folded.slice(-limit) : folded;
+}
+
+/** Record a later answer about a payment already on file. Never throws, like the append above. */
+export function appendX402Correction(correction: X402SettlementCorrection): void {
+  try {
+    ensureDir(PATHS.root);
+    fs.appendFileSync(PATHS.x402Log, '\n' + JSON.stringify(correction), { encoding: 'utf-8', mode: 0o600 });
+  } catch (err) {
+    const msg = errorMessage(err);
+    process.stderr.write(
+      `[jaw] warning: failed to record a settlement (${msg}); the payment keeps costing its ceiling\n`
+    );
+  }
 }
 
 /**
  * What one row contributes to a spend cap.
  *
- * The single definition of the rule, exported because more than one place needs
- * it and the three copies that existed before this had already drifted apart by
- * hand. `jaw x402 log` reports against it, and the caps enforce against it, so
- * the number a user reads and the number that refuses their next payment are
- * the same number.
+ * Exported because two readers need the same answer: `jaw x402 log` reports
+ * against it, and the caps enforce against it, so the number a user reads and
+ * the number that refuses their next payment are the same number.
  *
  * A settled payment costs what settled. A failed one costs the ceiling it
  * authorized, because an authorization that was signed and sent stays spendable
  * up to that ceiling until its nonce is consumed or its deadline passes, and
- * nothing yet proves either. Under `exact` the two figures are equal and this
- * is the rule that has always applied.
+ * nothing yet proves either. Under `exact` the two figures are equal.
+ *
+ * A paid row nobody has checked costs its ceiling for that same reason. The
+ * receipt is the server's own claim about how much of its own authorization it
+ * took, and a claim is not evidence of itself: a fabricated hash with one base
+ * unit against a thousand-unit ceiling would otherwise buy a live authorization
+ * for the difference while the caps counted one. `reconcileSettlements` brings
+ * the figure down to what the chain shows, one payment later.
+ *
+ * A row reconciled to `expired` costs nothing. Its deadline passed with its
+ * nonce unconsumed, so the authorization died where it stood.
  *
  * Every parse failure reads as zero and the failed case takes the larger of the
  * two, so one unparseable field cannot shrink an enforced cap: a torn write or a
@@ -148,7 +227,12 @@ export function spendFigureOf(entry: X402LogEntry): bigint {
       return 0n;
     }
   };
-  if (entry.status === 'paid') return parse(entry.amount);
+  if (entry.settlement === 'expired') return 0n;
+  // Named, not "anything but unverified". A value this does not recognise, from
+  // a torn write or a hand edit, has to land on the ceiling below with every
+  // other unreadable field, or a one-character typo turns the cap loose.
+  const checked = entry.settlement === undefined || entry.settlement === 'verified';
+  if (entry.status === 'paid' && checked) return parse(entry.amount);
   const ceiling = parse(entry.authorized);
   const charge = parse(entry.amount);
   return ceiling > charge ? ceiling : charge;

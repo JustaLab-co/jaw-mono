@@ -51,11 +51,10 @@ export function registerRpcTool(server: McpServer): void {
     recentSends.push(now);
   }
 
-  // Same explicit signature the other tools use. This one carried a
-  // `@ts-expect-error` on the handler instead, which stopped covering anything
-  // once the error moved to the schema argument: the directive then reports
-  // itself as unused, which is the failure mode that made the cast the house
-  // pattern in the first place.
+  // Same explicit signature the other tools use. A `@ts-expect-error` on the
+  // handler stops covering anything once the error moves to the schema argument:
+  // the directive then reports itself as unused, which is the failure mode the
+  // cast is the house pattern against.
   type RegisterRpc = (
     name: string,
     config: { description: string; inputSchema: typeof rpcMethodSchema },

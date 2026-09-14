@@ -47,9 +47,9 @@ describe('jaw config set', () => {
     expect(written.x402.maxAmountPerPayment).toBe('50000');
   });
 
-  // The setter rejects a non-integer amount by throwing, and the x402 branch
-  // used to call it outside the guard its neighbour has: the user got a stack
-  // trace where the same mistake on `defaultChain` prints one line.
+  // The setter rejects a non-integer amount by throwing, so the x402 branch has
+  // to call it inside the same guard its neighbour has. Outside it, the user
+  // gets a stack trace where the same mistake on `defaultChain` prints one line.
   it('reports a rejected x402 amount the way the rest of the command does', async () => {
     const err = (await runSet(['x402.maxAmountPerPayment=abc']).catch((e) => e)) as Error & {
       oclif?: { exit?: number };

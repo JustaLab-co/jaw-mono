@@ -29,10 +29,7 @@ export function formatRemaining(seconds: number): string {
 
 export interface StatusFacts {
   expired: boolean;
-  /**
-   * Defaults to `unknown`, which reports exactly what every session reported
-   * before this could be read: the local file, and nothing more.
-   */
+  /** Defaults to `unknown`, which reports off the local file and nothing more. */
   liveness?: PermissionLiveness;
   /**
    * True for a session an older CLI created, whose permission was granted to an
@@ -151,6 +148,18 @@ export function diagnose(facts: StatusFacts): string[] {
     problems.push(
       `The granted allowance for this ${facts.periodLabel ?? 'period'} is used up. It resets at the end of ` +
         'the window, or grant a new permission with `jaw session setup --x402`.'
+    );
+  }
+
+  // A limit that binds and cannot be read. `checkPolicy` refuses every payment
+  // on that input, so a session reported ready over it would send an agent to a
+  // command that cannot pay. Keyed on the label, which the caller
+  // fills from the limit it found: a cap that is null beside a label that is
+  // not is a limit that binds and whose figure nobody could parse.
+  if (facts.periodLabel != null && facts.periodCap === null) {
+    problems.push(
+      `The granted allowance for this ${facts.periodLabel} cannot be read, so every payment is refused. ` +
+        'Run `jaw session setup --x402` to grant a new permission.'
     );
   }
 

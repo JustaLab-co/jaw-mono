@@ -276,9 +276,9 @@ describe('jaw session revoke', () => {
   /**
    * An earlier run got the session's own permission revoked and then failed on
    * something else. Revoking is not idempotent, so attempting it again spends a
-   * browser round trip that can only fail, and the flag is what stops it. It
-   * used to be a rewritten `expiry`, which made that field mean two things and
-   * broke the recovered-struct check that reads it.
+   * browser round trip that can only fail, and the flag is what stops it. A
+   * flag of its own rather than a rewritten `expiry`, which would make that
+   * field mean two things and break the recovered-struct check that reads it.
    */
   it('skips a permission an earlier run already revoked', async () => {
     h.session.permissionRevoked = true;
