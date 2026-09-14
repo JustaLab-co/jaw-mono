@@ -11,8 +11,8 @@ import type { UsdcAsset } from './asset-registry.js';
  *
  * The grant seeds the session too, but it prices its own amount off the
  * paymaster's rate for the token (`account/spenderPrefund.ts` in @jaw.id/core),
- * so this is no longer a copy of that number and the two do not have to match.
- * All that is asked of either is that it covers an operation.
+ * so this is not a copy of that number and the two do not have to match. All
+ * that is asked of either is that it covers an operation.
  *
  * It costs the granted allowance 0.10 once per session and not once per refill:
  * a refill fills the payer to price plus reserve, the payment takes the price,

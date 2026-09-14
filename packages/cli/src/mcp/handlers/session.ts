@@ -45,10 +45,9 @@ export function registerSessionTools(server: McpServer): void {
         // The local file cannot know about a revoke made from keys.jaw.id or
         // from another machine, and an agent reading `expired: false` off it
         // would go on to spend against a permission that no longer exists.
-        // Recovered here too. Wiring this into the three commands and not the
-        // tool left an agent, which is the consumer this whole path exists for,
-        // reading `unknown` forever on a session created before the struct was
-        // stored, while the same user got it recovered at a terminal.
+        // Recovered here and not only in the commands: an agent is the consumer
+        // this whole path exists for, and a session created before the struct
+        // was stored would otherwise read `unknown` forever.
         const permission = await recoverPermission(config, loadConfig().apiKey);
         const current = permission ? { ...config, permission } : config;
         const permissionOnChain = await readLiveness(current);

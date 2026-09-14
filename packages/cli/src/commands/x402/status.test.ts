@@ -36,6 +36,9 @@ const h = vi.hoisted(() => {
   return {
     payer: '0x1111111111111111111111111111111111111111' as const,
     readContract: vi.fn(),
+    // Mutable, because `~/.jaw/config.json` is read with `JSON.parse` and a
+    // cast: what it can carry is part of what this command has to survive.
+    config: { x402: { topUpFloat: '5000000' } as Record<string, unknown> },
     session: {
       ownerAddress: '0x2222222222222222222222222222222222222222',
       sessionAddress: '0x1111111111111111111111111111111111111111',
@@ -44,9 +47,8 @@ const h = vi.hoisted(() => {
       expiry: Math.floor(Date.now() / 1000) + 6 * 86400,
       createdAt: anchor,
       mode: 'eip7702' as const,
-      // The policy is derived from this on read. It used to be summarised into
-      // a second `grantedSpend` field written at grant time, and the two could
-      // describe different budgets.
+      // The policy is derived from this on read, rather than from a summary
+      // written beside it at grant time that could describe a different budget.
       permission: {
         account: '0x2222222222222222222222222222222222222222',
         spender: '0x1111111111111111111111111111111111111111',
@@ -78,7 +80,7 @@ vi.mock('../../lib/paths.js', () => {
 vi.mock('../../lib/keystore.js', () => ({ keystoreExists: () => true }));
 
 vi.mock('../../lib/config.js', () => ({
-  loadConfig: () => ({ x402: { topUpFloat: '5000000' } }),
+  loadConfig: () => h.config,
   ensureDir: (dir: string) => {
     require('node:fs').mkdirSync(dir, { recursive: true });
   },
@@ -130,6 +132,7 @@ beforeEach(() => {
   // The fixture is shared and hoisted, so a test that widens the permission
   // must not leak into the next one.
   h.session.permission.spends = ONE_LIMIT.map((s) => ({ ...s }));
+  h.config.x402 = { topUpFloat: '5000000' };
   // The base flags read these, and an inherited value would override the argv
   // the tests pass.
   delete process.env.JAW_OUTPUT;
@@ -220,6 +223,23 @@ describe('jaw x402 status', () => {
 
     const report = JSON.parse((await runStatus(['--output', 'json'])).join('\n'));
     expect(report.policy.perPeriod.map((l: { allowance: string }) => l.allowance)).toEqual(['5000000', '100000000']);
+  });
+
+  /**
+   * A config-set limit wins over the grant's, and the config file is read with
+   * `JSON.parse` and a cast, so it can carry an allowance nobody can read.
+   * `checkPolicy` refuses every payment on that input, which makes it the limit
+   * that binds; ranking it out of the reduction would report the next limit's
+   * healthy figure and `ready: true` for a session that cannot pay at all.
+   */
+  it('flags a binding allowance it cannot read instead of reporting ready', async () => {
+    h.config.x402 = {
+      perPeriod: [{ allowance: 'not-a-number', unit: 'day', multiplier: 1, anchor: h.session.createdAt }],
+    };
+
+    const result = JSON.parse((await runStatus(['--output', 'json'])).join('\n'));
+    expect(result.ready).toBe(false);
+    expect(result.problems).toContainEqual(expect.stringMatching(/granted allowance for this day cannot be read/));
   });
 
   it('says nothing extra when the token has a single limit', async () => {

@@ -296,8 +296,8 @@ describe('jaw session add', () => {
 
   /**
    * The example printed in the command's own help. `parsePermissionsConfig`
-   * rejects a defined-but-empty `spends`, so a calls-only session taking a
-   * calls-only addition threw after the browser had already been opened.
+   * rejects a defined-but-empty `spends`, so sending one for a calls-only
+   * session taking a calls-only addition throws after the browser is open.
    */
   it('adds a call to a session that spends nothing', async () => {
     const lines = await runAdd(['--permissions', JSON.stringify({ calls: [{ target: NFT, selector: '0xdeadbeef' }] })]);

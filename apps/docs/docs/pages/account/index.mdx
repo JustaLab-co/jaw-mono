@@ -118,12 +118,14 @@ Utility methods:
 
 Configuration for creating or loading an account. React Native options (`nativeGetFn`, `nativeCreateFn`, `rpId`) are configured once here and shared across all static methods.
 
+`apiKey` is optional on the type because whether a request is served is the backend's decision rather than the SDK's. Which methods work without one is a separate question, answered per method: the passkey flows are refused without a key, and `fromLocalAccount` is not. Each method's own page says which.
+
 ```typescript
 interface AccountConfig {
   /** Chain ID for the account */
   chainId: number;
-  /** API key for JAW services (required) */
-  apiKey: string;
+  /** API key for JAW services. Absent leaves the decision to serve to the backend. */
+  apiKey?: string;
   /** Custom paymaster URL for gas sponsorship */
   paymasterUrl?: string;
   /** Custom paymaster context for gas sponsorship */

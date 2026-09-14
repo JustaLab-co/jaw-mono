@@ -20,7 +20,7 @@ import {
   Account,
   SUPPORTED_CHAINS,
   JAW_RPC_URL,
-  JAW_PAYMASTER_URL,
+  jawPaymasterUrl,
   SubnameTextRecordCapabilityRequest,
   handleGetCapabilitiesRequest,
   buildGrantPermissionCall,
@@ -1534,7 +1534,7 @@ function TransactionDialogWrapper({
 
     // If user selected an ERC-20 token (non-native), use ERC-20 paymaster
     if (selectedFeeToken && !selectedFeeToken.isNative) {
-      return `${JAW_PAYMASTER_URL}?chainId=${chainId}${apiKey ? `&api-key=${apiKey}` : ''}`;
+      return jawPaymasterUrl(chainId, apiKey);
     }
 
     // Native ETH - no paymaster needed
@@ -1895,7 +1895,7 @@ function SendTransactionDialogWrapper({
 
     // If user selected an ERC-20 token (non-native), use ERC-20 paymaster
     if (selectedFeeToken && !selectedFeeToken.isNative) {
-      return `${JAW_PAYMASTER_URL}?chainId=${chainId}${apiKey ? `&api-key=${apiKey}` : ''}`;
+      return jawPaymasterUrl(chainId, apiKey);
     }
 
     // Native ETH - no paymaster needed
@@ -2239,7 +2239,7 @@ function PermissionDialogWrapper({
 
     // If user selected an ERC-20 token (non-native), use ERC-20 paymaster
     if (selectedFeeToken && !selectedFeeToken.isNative) {
-      return `${JAW_PAYMASTER_URL}?chainId=${chainId}${apiKey ? `&api-key=${apiKey}` : ''}`;
+      return jawPaymasterUrl(chainId, apiKey);
     }
 
     // Native ETH - no paymaster needed
@@ -2882,7 +2882,7 @@ function RevokePermissionDialogWrapper({
 
     // If user selected an ERC-20 token (non-native), use ERC-20 paymaster
     if (selectedFeeToken && !selectedFeeToken.isNative) {
-      return `${JAW_PAYMASTER_URL}?chainId=${chainId}${apiKey ? `&api-key=${apiKey}` : ''}`;
+      return jawPaymasterUrl(chainId, apiKey);
     }
 
     // Native ETH - no paymaster needed

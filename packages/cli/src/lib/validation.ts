@@ -4,8 +4,8 @@ const ADDRESS_RE = /^0x[0-9a-fA-F]{40}$/;
 const SELECTOR_RE = /^0x[0-9a-fA-F]{8}$/;
 // The SDK hands `allowance` straight to BigInt(), which takes decimal and hex
 // alike, and the permissions doc shows the decimal form
-// (parseUnits('100', 6).toString()). Accepting only hex here made the CLI
-// stricter than the SDK it wraps, so the documented example failed validation.
+// (parseUnits('100', 6).toString()). Accepting only hex here would make the CLI
+// stricter than the SDK it wraps, and the documented example would not validate.
 const ALLOWANCE_RE = /^(0x[0-9a-fA-F]+|[0-9]+)$/;
 const VALID_SPEND_UNITS = new Set(['minute', 'hour', 'day', 'week', 'month', 'year', 'forever']);
 

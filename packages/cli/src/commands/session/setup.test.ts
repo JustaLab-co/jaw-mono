@@ -4,11 +4,10 @@ import { fileURLToPath } from 'node:url';
 import { Config } from '@oclif/core';
 
 /**
- * `session setup` had no tests at all, which is how the ordering below went
- * unnoticed: the grant ceiling is a local refusal, and it used to run after the
- * block that revokes the existing permission on chain. A `--limit` over the
- * ceiling therefore cost the user the permission they already had and left them
- * with none, since the revoke had happened and the new grant never would.
+ * The grant ceiling is a local refusal, and it has to run before the block that
+ * revokes the existing permission on chain. The other way round, a `--limit`
+ * over the ceiling costs the user the permission they already had and leaves
+ * them with none: the revoke has happened and the new grant never will.
  *
  * That is the property worth pinning, and it is invisible to a diff: nothing
  * about either line is wrong, only which one comes first.
