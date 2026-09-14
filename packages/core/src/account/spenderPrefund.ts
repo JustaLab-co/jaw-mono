@@ -18,25 +18,32 @@ import type { PermissionsDetail } from '../rpc/permissions.js';
  */
 
 /**
- * The gas a session's first operation is left able to pay for.
+ * What a session's first operation takes, which is the most expensive one it
+ * sends: it carries the EIP-7702 authorization and bootstraps the permission
+ * manager as a co-owner. Under a million of gas in limits, and measured at
+ * 0.0094 USDC on Base Sepolia, the figure `cli/x402/gas-reserve.ts` also holds.
  *
- * Gas rather than an amount of token: a tenth of a token is $0.10 in USDC and
- * three hundred in WETH, and the permission's spend token is whatever the
- * requester wrote. The paymaster's exchange rate turns this into that token.
+ * Gas rather than an amount of token, because a tenth of a token is $0.10 in
+ * USDC and three hundred in WETH and the permission's spend token is whatever
+ * the requester wrote. The paymaster's exchange rate turns this into that token.
  *
- * Sized against that first op, the most expensive one a session sends, since it
- * carries the EIP-7702 authorization and bootstraps the permission manager as a
- * co-owner: something under a million of gas in limits, so this is roughly three
- * times it. That covers the market moving between this grant and that op, and
- * covers the paymaster charging at `maxFeePerGas` while this prices at the
- * current one.
- *
- * Not less than roughly that, because the op has to land. After it does, the
- * spender is topped up by refills rather than by this. What keeps it from being
- * too much on a chain where gas is expensive is the ceiling below, not this
- * number.
+ * This is the bar the permission has to clear. Below it there is nothing a
+ * transfer can do for the session.
  */
-const PREFUND_GAS = 2_000_000n;
+const FIRST_OP_GAS = 1_000_000n;
+
+/**
+ * What the prefund sends when the permission leaves room for it: an operation
+ * plus as much again. The buffer covers the market moving between this grant and
+ * that op, and covers the paymaster charging at `maxFeePerGas` while this prices
+ * at the current one.
+ *
+ * Kept apart from `FIRST_OP_GAS` because the two answer different questions, and
+ * conflating them is how the buffer ended up deciding whether a session got
+ * seeded at all. What this costs is what the transfer would like to be. What an
+ * operation costs is what the permission has to cover.
+ */
+const PREFUND_GAS = 2n * FIRST_OP_GAS;
 
 /**
  * The ceiling on what the prefund may move, and the reason it is the
@@ -65,10 +72,8 @@ const PREFUND_GAS = 2_000_000n;
  * one to matter. Taking the minimum keeps the result independent of the order
  * the requester happened to write them in.
  *
- * A clamped prefund can be too small to cover the first operation on an
- * expensive chain. That operation is then sponsored, which is what happened for
- * every session before this transfer existed, so the failure mode is the old
- * behaviour rather than a broken grant.
+ * A permission too tight to cover one operation is refused outright by the
+ * caller rather than trimmed to, which is what used to move all of it.
  */
 function ceilingFor(permissions: PermissionsDetail, token: Address): bigint | null {
     let tightest: bigint | null = null;
@@ -132,7 +137,7 @@ export interface PrefundArgs {
 
 /**
  * The transfer that funds the spender's first operation, or null when it is not
- * needed or not affordable.
+ * needed, not affordable, or larger than the permission allows.
  *
  * Null rather than a throw for every one of those: the grant is what the user
  * came to do, and none of these are reasons to fail it.
@@ -148,11 +153,32 @@ export async function buildSpenderPrefundCall(
     const ceiling = ceilingFor(args.permissions, token);
     if (ceiling === null) return null;
 
-    // `exchangeRate` is wei to the token's smallest unit, so this reads as
-    // "what PREFUND_GAS costs, in this token, at this moment, on this chain".
+    // `exchangeRate` is wei to the token's smallest unit, which is what turns
+    // an amount of gas into an amount of this token on this chain right now.
     const exchangeRate = await args.read.exchangeRate(token);
     if (exchangeRate === null) return null;
-    const priced = (PREFUND_GAS * (await args.read.gasPrice()) * exchangeRate) / 10n ** 18n;
+    const gasPrice = await args.read.gasPrice();
+    // Multiplied before dividing, every time: the rate is wei to the token's
+    // smallest unit, so a per-gas price rounds to zero on a cheap chain.
+    const priceOf = (gas: bigint) => (gas * gasPrice * exchangeRate) / 10n ** 18n;
+
+    // A permission that cannot cover one operation is one no transfer can fix:
+    // the spender would hold the whole allowance, outside the permission where
+    // nothing meters it, and still not land an op. Refused rather than trimmed
+    // to the allowance, which is what sent all of it.
+    if (priceOf(FIRST_OP_GAS) > ceiling) {
+        // The one decline of these that a person can act on, by granting more.
+        // Silent, it reaches them as a session that cannot pay for anything.
+        console.warn(
+            `Permission allows ${ceiling} of ${token} per period, under the ${priceOf(FIRST_OP_GAS)} ` +
+                'one operation costs here, so the spender was not funded.'
+        );
+        return null;
+    }
+
+    // It can cover an operation, so ask for the buffer and settle for the
+    // allowance. Trimming here funds a session that runs.
+    const priced = priceOf(PREFUND_GAS);
     const amount = priced < ceiling ? priced : ceiling;
     if (amount === 0n) return null;
 
