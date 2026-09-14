@@ -1,3 +1,13 @@
+## 1.3.1 (2026-09-14)
+
+### 🩹 Fixes
+
+- add support for Unichain and Hyvechain ([#336](https://github.com/JustaName-id/jaw-mono/pull/336))
+
+### ❤️ Thank You
+
+- Ghadi @Ghadi8
+
 ## 1.3.0 (2026-09-03)
 
 ### 🚀 Features
