@@ -801,7 +801,7 @@ export function logAccountIssuance(params: LogAccountIssuanceParams): void;
 // @public
 export interface LogAccountIssuanceParams {
     address: Address_2;
-    apiKey: string;
+    apiKey?: string;
     type: IssuanceType;
 }
 
@@ -811,7 +811,7 @@ export function logSignature(params: LogSignatureParams): void;
 // @public
 export interface LogSignatureParams {
     address: Address_2;
-    apiKey: string;
+    apiKey?: string;
 }
 
 // @public

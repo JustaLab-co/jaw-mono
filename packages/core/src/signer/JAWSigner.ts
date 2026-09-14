@@ -171,12 +171,13 @@ export abstract class JAWSigner implements Signer {
         // `.at(0)` (unlike `[0]`) is typed Address | undefined: the accounts
         // array is empty when signing is reached unauthenticated. An
         // unauthenticated wallet_sign without an address param therefore
-        // goes unreported on purpose — without an address there is no
+        // goes unreported on purpose. Without an address there is no
         // meaningful per-wallet metric to record.
         const address = this.extractSignerAddress(request) ?? this.accounts.at(0);
-        const apiKey = store.getState().config.apiKey;
-        if (!address || !apiKey) return;
-        logSignature({ address, apiKey });
+        if (!address) return;
+        // The key travels when there is one. A keyless caller is attributed from the
+        // dApp origin instead, so dropping the report here would lose the metric.
+        logSignature({ address, apiKey: store.getState().config.apiKey });
     }
 
     /**
@@ -190,7 +191,7 @@ export abstract class JAWSigner implements Signer {
     protected reportSiweSignatures(response: WalletConnectResponse | null | undefined): void {
         try {
             const apiKey = store.getState().config.apiKey;
-            if (!apiKey || !response?.accounts) return;
+            if (!response?.accounts) return;
             for (const account of response.accounts) {
                 const siwe = account.capabilities?.signInWithEthereum;
                 if (siwe && 'signature' in siwe && account.address) {

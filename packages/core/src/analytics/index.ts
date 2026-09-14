@@ -13,8 +13,8 @@ export interface LogAccountIssuanceParams {
     address: Address;
     /** The type of account creation */
     type: IssuanceType;
-    /** API key for authentication */
-    apiKey: string;
+    /** API key for authentication, if the caller has one */
+    apiKey?: string;
 }
 
 /**
@@ -37,7 +37,7 @@ export function logAccountIssuance(params: LogAccountIssuanceParams): void {
                 type,
                 timestamp: Date.now(),
             },
-            { 'x-api-key': apiKey }
+            apiKey ? { 'x-api-key': apiKey } : {}
         ).catch(() => {
             // Silently swallow async errors
         });
@@ -52,8 +52,8 @@ export function logAccountIssuance(params: LogAccountIssuanceParams): void {
 export interface LogSignatureParams {
     /** The address that produced the signature */
     address: Address;
-    /** API key for authentication */
-    apiKey: string;
+    /** API key for authentication, if the caller has one */
+    apiKey?: string;
 }
 
 /**
@@ -68,7 +68,7 @@ export function logSignature(params: LogSignatureParams): void {
     try {
         const { address, apiKey } = params;
 
-        restCall('LOG_SIGNATURE', 'POST', { address }, { 'x-api-key': apiKey }).catch(() => {
+        restCall('LOG_SIGNATURE', 'POST', { address }, apiKey ? { 'x-api-key': apiKey } : {}).catch(() => {
             // Silently swallow async errors
         });
     } catch {
