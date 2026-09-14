@@ -22,7 +22,7 @@ Type: `AccountConfig`
 | Property           | Type                      | Required | Description                                                                                         |
 | ------------------ | ------------------------- | -------- | --------------------------------------------------------------------------------------------------- |
 | `chainId`          | `number`                  | Yes      | Chain ID for the account                                                                            |
-| `apiKey`           | `string`                  | Yes      | API key for JAW services                                                                            |
+| `apiKey`           | `string`                  | Yes      | API key for JAW services. Optional on the type, and refused by the backend without one              |
 | `paymasterUrl`     | `string`                  | No       | Custom paymaster URL for gas sponsorship                                                            |
 | `paymasterContext` | `Record<string, unknown>` | No       | Custom paymaster context for gas sponsorship                                                        |
 | `storage`          | `SyncStorage`             | No       | Custom storage implementation (defaults to localStorage on web, in-memory fallback in React Native) |

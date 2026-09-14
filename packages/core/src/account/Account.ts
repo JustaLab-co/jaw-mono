@@ -56,8 +56,8 @@ import { logAccountIssuance } from '../analytics/index.js';
 export interface AccountConfig {
     /** Chain ID for the account */
     chainId: number;
-    /** API key for JAW services (required) */
-    apiKey: string;
+    /** API key for JAW services. Absent leaves the decision to serve to the backend. */
+    apiKey?: string;
     /** Custom paymaster URL for gas sponsorship */
     paymasterUrl?: string;
     /** Custom paymaster context for gas sponsorship */
@@ -157,14 +157,20 @@ export class Account {
     private constructor(
         smartAccount: SmartAccount,
         chain: Chain,
-        apiKey: string,
+        apiKey: string | undefined,
         passkeyAccount?: PasskeyAccount,
         localAccount?: LocalAccount
     ) {
         this._smartAccount = smartAccount;
         this._chain = chain;
         this._passkeyAccount = passkeyAccount ?? null;
-        this._apiKey = apiKey;
+        // Empty rather than undefined, because empty and absent are the same
+        // answer at the boundary: the api guards reject a falsy `x-api-key`
+        // before any of them validates its shape, and the one URL builder this
+        // field reaches drops the query parameter rather than emptying it.
+        // Several relay calls do send the header empty, and that is why it is
+        // the guard rather than the header that this relies on.
+        this._apiKey = apiKey ?? '';
         this._localAccount = localAccount ?? null;
     }
 

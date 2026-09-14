@@ -1637,6 +1637,47 @@ describe('Account — ERC-20 paymaster approval', () => {
 // paymaster charges the sender, so without help its first one has no fee source.
 // The grant is the transaction the owner already signs, so it is where the
 // spender gets what that op costs.
+// The CLI opens a session before it has a key, so the door has to be open.
+// What core does with the absence is unchanged: the query parameter is dropped
+// rather than sent empty, which the proxy rejects before considering anything
+// else.
+describe('Account — building one without a key', () => {
+    beforeEach(() => {
+        vi.clearAllMocks();
+    });
+
+    async function chainFor(apiKey?: string) {
+        const { createSmartAccount } = await import('./smartAccount.js');
+        vi.mocked(createSmartAccount).mockResolvedValue({
+            address: '0x1234567890123456789012345678901234567890',
+            getAddress: vi.fn().mockResolvedValue('0x1234567890123456789012345678901234567890'),
+        } as never);
+
+        // Not cast: the config is the type under test here, so the compiler
+        // seeing it is half the point. A cast would leave `api-check` as the
+        // only thing standing between this and a revert.
+        const account = await Account.fromLocalAccount({ chainId: 1, apiKey }, {
+            address: '0xabcdef1234567890abcdef1234567890abcdef12',
+            type: 'local',
+            sign: vi.fn(),
+        } as never);
+        return account.getChain();
+    }
+
+    it('drops the api-key parameter rather than sending it empty', async () => {
+        const chain = await chainFor();
+
+        expect(chain.rpcUrl).not.toContain('api-key');
+        expect(chain.rpcUrl).toContain('chainId=1');
+    });
+
+    it('still carries the key when one was given', async () => {
+        const chain = await chainFor('test');
+
+        expect(chain.rpcUrl).toContain('api-key=test');
+    });
+});
+
 describe('Account — prefunding the spender in the grant', () => {
     // Not the JAW ERC-20 paymaster, so the approval sizing short-circuits and
     // what is under test is the call array, not the quoting.

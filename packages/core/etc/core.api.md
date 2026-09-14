@@ -69,7 +69,7 @@ export class Account {
 
 // @public
 export interface AccountConfig {
-    apiKey: string;
+    apiKey?: string;
     chainId: number;
     nativeCreateFn?: NativePasskeyCreateFn;
     nativeGetFn?: NativePasskeyGetFn;
@@ -811,7 +811,7 @@ export function logAccountIssuance(params: LogAccountIssuanceParams): void;
 // @public
 export interface LogAccountIssuanceParams {
     address: Address_2;
-    apiKey: string;
+    apiKey?: string;
     type: IssuanceType;
 }
 

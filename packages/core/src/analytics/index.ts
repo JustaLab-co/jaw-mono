@@ -13,8 +13,8 @@ export interface LogAccountIssuanceParams {
     address: Address;
     /** The type of account creation */
     type: IssuanceType;
-    /** API key for authentication */
-    apiKey: string;
+    /** API key for authentication. Absent means there is nobody to attribute to. */
+    apiKey?: string;
 }
 
 /**
@@ -28,6 +28,9 @@ export interface LogAccountIssuanceParams {
 export function logAccountIssuance(params: LogAccountIssuanceParams): void {
     try {
         const { address, type, apiKey } = params;
+        // The endpoint authenticates on this header and the record is for
+        // billing, so an issuance with no key has nothing to attribute it to.
+        if (!apiKey) return;
 
         restCall(
             'LOG_ACCOUNT_ISSUANCE',
