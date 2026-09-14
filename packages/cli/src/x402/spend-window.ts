@@ -49,6 +49,7 @@ export function currentLimitUsage(
       ...limit,
       spent: sumSpentSince(entries, scope, since),
       toppedUp: sumToppedUpSince(entries, scope, since),
+      startedAt: new Date(window.start * 1000),
       endsAt: new Date(window.end * 1000),
       source: 'ledger',
     });
@@ -123,8 +124,27 @@ export async function currentLimitUsageOnChain(
       ...limit,
       spent: sumSpentSince(entries, scope, since),
       toppedUp: metered ? match.period.spend : fromLedger,
+      startedAt: new Date(match.period.start * 1000),
       endsAt: new Date(match.period.end * 1000),
       source: metered ? 'chain' : 'ledger',
     };
   });
+}
+
+/**
+ * Every instant a live cap counts from, which is what a compaction has to cut
+ * against.
+ *
+ * Taken from the usage list the payment just measured with, never recomputed:
+ * `currentLimitUsageOnChain` may have taken a window start from the contract
+ * rather than from `currentPeriodWindow`, and cutting against a second opinion
+ * is how a live cap loses rows it was still counting.
+ *
+ * A session with no `createdAt` contributes nothing. Its total is summed with
+ * no `since` at all, so it counts every row and every checkpoint alike.
+ */
+export function capWindowStarts(usage: LimitUsage[], sessionCreatedAt: string | undefined): string[] {
+  const starts = usage.map((limit) => limit.startedAt.toISOString());
+  if (sessionCreatedAt) starts.push(sessionCreatedAt);
+  return starts;
 }

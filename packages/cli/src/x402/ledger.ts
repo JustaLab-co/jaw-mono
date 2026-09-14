@@ -61,6 +61,14 @@ export interface X402LogEntry {
   /** Reason for a refused/failed attempt. */
   reason?: string;
   /**
+   * Set on a row that stands in for older rows a compaction folded away. It
+   * carries their totals and is counted like the paid row it is; `folded` says
+   * how many it replaced. Rendering reads this, the sums do not.
+   */
+  kind?: 'checkpoint';
+  /** How many rows a checkpoint absorbed. */
+  folded?: number;
+  /**
    * Whether anything outside the receipt has confirmed what settled.
    *
    * Absent on rows written before the field, which keep counting the amount
@@ -291,8 +299,30 @@ export function sumSpentSince(entries: X402LogEntry[], scope: SpendScope, since?
   return entries.reduce((total, entry) => {
     if (!countsIn(entry, scope)) return total;
     if (since && entry.at < since) return total;
+    if (entry.kind === 'checkpoint') assertCheckpointReadable(entry);
     return total + spendFigureOf(entry);
   }, 0n);
+}
+
+/**
+ * Stop a payment rather than let it spend against a total known to be short.
+ *
+ * Everywhere else in this file an unreadable field costs one payment and reads
+ * as zero, which can only leave a cap where it was or higher. A checkpoint
+ * breaks that: it is worth every row it absorbed, so one that will not parse
+ * takes the cap down by the whole fold, and down is the direction that hands an
+ * agent budget it already spent.
+ *
+ * Only the spend figure. A checkpoint with no `topUpAmount` is ordinary, so
+ * there is no unreadable case to tell apart there, and that meter is a floor by
+ * construction with the chain as its authority.
+ */
+function assertCheckpointReadable(entry: X402LogEntry): void {
+  if (checkpointFigureReadable(entry)) return;
+  throw new Error(
+    `x402 ledger has an unreadable checkpoint covering ${entry.folded ?? 'an unknown number of'} rows. ` +
+      `Refusing to spend against a short total. The rows it replaced are in ${PATHS.x402LogArchive}.`
+  );
 }
 
 /**
@@ -312,13 +342,202 @@ export function sumSpentSince(entries: X402LogEntry[], scope: SpendScope, since?
  */
 export function sumToppedUpSince(entries: X402LogEntry[], scope: SpendScope, since?: string): bigint {
   return entries.reduce((total, entry) => {
-    if (!entry.topUpAmount) return total;
     if (!countsIn(entry, scope)) return total;
     if (since && entry.at < since) return total;
-    try {
-      return total + BigInt(entry.topUpAmount);
-    } catch {
-      return total; // a hand-edited amount must not take the cap down
-    }
+    return total + toppedUpFigureOf(entry);
   }, 0n);
+}
+
+/**
+ * What one row contributes to a top-up total.
+ *
+ * The other meter's `spendFigureOf`, and split out for the same reason: a
+ * checkpoint has to fold rows by exactly the rule that later reads them back,
+ * and two copies of that rule is how they come apart. A hand-edited amount
+ * reads as zero rather than taking the cap down.
+ */
+export function toppedUpFigureOf(entry: X402LogEntry): bigint {
+  if (!entry.topUpAmount) return 0n;
+  try {
+    return BigInt(entry.topUpAmount);
+  } catch {
+    return 0n;
+  }
+}
+
+/**
+ * Bytes of ledger that pile up before a payment pays to tidy it. Roughly three
+ * thousand rows.
+ *
+ * Not a config key. There is no second case asking for one, and a threshold a
+ * user can lower is a way to make every payment rewrite the file.
+ */
+const COMPACT_AT_BYTES = 2 * 1024 * 1024;
+
+/** Rows left alone at the end, so `jaw x402 log` still opens on real history. */
+const KEEP_TAIL = 200;
+
+/** Rows a fold has to be worth before it earns a rewrite of the whole file. */
+const FOLD_AT_LEAST = 500;
+
+/**
+ * Fold the rows below `bound` into one checkpoint per scope, and move the
+ * originals to the archive.
+ *
+ * The file is what makes a spend cap survive a restart, so it cannot be
+ * truncated: an agent that relaunched into a shorter ledger would get its
+ * budget back. Folding keeps every enforced total to the base unit while the
+ * row count stops following the payment count, which is what costs a payment,
+ * since the whole file is read inside the lock before anything is signed.
+ *
+ * `capStarts` is every instant a live cap counts from, from `capWindowStarts`.
+ * The cut is the earliest of them later than the oldest row on file, so that no
+ * cap's `since` falls strictly inside what gets absorbed: below that instant
+ * every cap either counts all of the absorbed rows or none of them, and the
+ * checkpoint standing in for them lands on the same side of the same test. When
+ * none is later than the oldest row, every cap counts the whole file and
+ * everything but the tail folds.
+ *
+ * Runs after the append and inside the payment lock, so nothing is writing
+ * beside it. Never throws: a ledger that could not be tidied must not fail the
+ * payment that just succeeded.
+ */
+export function compactX402Log(capStarts: string[]): void {
+  try {
+    const sizeBefore = fs.statSync(PATHS.x402Log).size;
+    if (sizeBefore < COMPACT_AT_BYTES) return;
+
+    const entries = readX402Log();
+    // The oldest stamp, not the first row: a clock that stepped backwards
+    // between two payments leaves the file out of time order, and taking the
+    // cut from the wrong end moves it past a `since` that is still counting.
+    const oldest = entries.reduce<string | undefined>((earliest, entry) => {
+      if (!absorbable(entry, undefined)) return earliest;
+      return earliest === undefined || entry.at < earliest ? entry.at : earliest;
+    }, undefined);
+    const bound = oldest === undefined ? undefined : cutAbove(capStarts, oldest);
+    const tailFrom = Math.max(entries.length - KEEP_TAIL, 0);
+    const absorbed: X402LogEntry[] = [];
+    const kept: X402LogEntry[] = [];
+    entries.forEach((entry, index) => {
+      if (index < tailFrom && absorbable(entry, bound)) absorbed.push(entry);
+      else kept.push(entry);
+    });
+    // Above the threshold the absorbable set does not grow again until a window
+    // rolls, so a ledger that can only shed a handful of rows would pay for a
+    // full read and rewrite on every payment and stay over the threshold anyway.
+    if (absorbed.length < FOLD_AT_LEAST) return;
+
+    // Archive before the ledger is rewritten. A crash between the two leaves
+    // rows in both files, which nothing sums; the other order loses them.
+    fs.appendFileSync(PATHS.x402LogArchive, serializeEntries(absorbed), { encoding: 'utf-8', mode: 0o600 });
+
+    const temp = `${PATHS.x402Log}.${process.pid}.tmp`;
+    fs.writeFileSync(temp, serializeEntries([...checkpointsFor(absorbed), ...kept]), { encoding: 'utf-8' });
+    // Mode on the temp, before it takes the real name: `writeFileSync` only
+    // applies one on create, and the file must never exist readable.
+    fs.chmodSync(temp, 0o600);
+
+    // The lock can be broken as stale while a payment is still running. Anything
+    // appended since the read is missing from what was just built, so drop the
+    // rewrite rather than lose that row.
+    if (fs.statSync(PATHS.x402Log).size !== sizeBefore) {
+      fs.rmSync(temp, { force: true });
+      return;
+    }
+    fs.renameSync(temp, PATHS.x402Log);
+  } catch (err) {
+    process.stderr.write(`[jaw] warning: failed to compact x402 ledger (${errorMessage(err)})\n`);
+  }
+}
+
+/** Whether a checkpoint's spend figure can be read back at all. */
+function checkpointFigureReadable(entry: X402LogEntry): boolean {
+  if (!entry.amount) return false;
+  try {
+    return BigInt(entry.amount) >= 0n;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Whether a row can be folded away.
+ *
+ * A row with no usable timestamp cannot be, whatever the bound. `entry.at <
+ * since` is false when `at` is missing, so such a row counts against every
+ * window today, and folding it under a real timestamp would let a later window
+ * drop it.
+ *
+ * Neither can a checkpoint nobody can read. Folding one reads its figure as
+ * zero and buries everything it stood for, quietly, in a fold that no longer
+ * looks broken. Left where it is, it keeps stopping the payments it should.
+ */
+function absorbable(entry: X402LogEntry, bound: string | undefined): boolean {
+  if (typeof entry.at !== 'string' || entry.at === '') return false;
+  if (entry.kind === 'checkpoint' && !checkpointFigureReadable(entry)) return false;
+  return bound === undefined || entry.at < bound;
+}
+
+/** The earliest instant later than `oldest`, or undefined when none is. */
+function cutAbove(instants: string[], oldest: string): string | undefined {
+  let cut: string | undefined;
+  for (const instant of instants) {
+    if (instant <= oldest) continue;
+    if (cut === undefined || instant < cut) cut = instant;
+  }
+  return cut;
+}
+
+/**
+ * One checkpoint per group of rows the reads can tell apart.
+ *
+ * `countsIn` routes a row by its permission and falls back to its payer, and
+ * `renderSummary` totals by the decimals of its network, so rows differing in
+ * any of the three cannot share a stand-in. Both figures are carried because
+ * the two caps read different fields off the same row.
+ *
+ * `status: 'paid'` so `spendFigureOf` counts `amount` with no branch of its
+ * own. `at` is the newest row absorbed and never now: a later stamp would push
+ * the spend forward past a window boundary, out of the window that counted it.
+ */
+function checkpointsFor(absorbed: X402LogEntry[]): X402LogEntry[] {
+  const groups = new Map<string, X402LogEntry[]>();
+  for (const entry of absorbed) {
+    const key = `${entry.permissionId ?? ''}|${entry.payer ?? ''}|${entry.network ?? ''}`;
+    const group = groups.get(key);
+    if (group) group.push(entry);
+    else groups.set(key, [entry]);
+  }
+
+  return [...groups.values()].map((rows) => {
+    let spent = 0n;
+    let toppedUp = 0n;
+    let at = rows[0].at;
+    for (const row of rows) {
+      spent += spendFigureOf(row);
+      toppedUp += toppedUpFigureOf(row);
+      if (row.at > at) at = row.at;
+    }
+    return {
+      at,
+      url: 'jaw:compacted',
+      payer: rows[0].payer,
+      permissionId: rows[0].permissionId,
+      network: rows[0].network,
+      status: 'paid' as const,
+      kind: 'checkpoint' as const,
+      folded: rows.length,
+      amount: spent.toString(),
+      topUpAmount: toppedUp === 0n ? undefined : toppedUp.toString(),
+    };
+  });
+}
+
+/**
+ * Lines the way `appendX402Log` writes them: newline first, none trailing, so a
+ * torn write still costs only its own record.
+ */
+function serializeEntries(entries: X402LogEntry[]): string {
+  return entries.map((entry) => '\n' + JSON.stringify(entry)).join('');
 }

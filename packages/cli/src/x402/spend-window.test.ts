@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 import type { SessionConfig } from '../lib/session-config.js';
-import type { X402Policy } from './policy.js';
+import type { LimitUsage, X402Policy } from './policy.js';
 
 /**
  * What `topUpCeiling` sizes refills from, and what `jaw x402 status` prints as
@@ -45,7 +45,7 @@ vi.mock('./permission-onchain.js', () => ({
   },
 }));
 
-const { currentLimitUsage, currentLimitUsageOnChain } = await import('./spend-window.js');
+const { currentLimitUsage, currentLimitUsageOnChain, capWindowStarts } = await import('./spend-window.js');
 
 // The caller's snapshot of the ledger. Its contents do not matter here: the
 // sums are mocked, and what these tests are about is the windows.
@@ -197,5 +197,23 @@ describe('the ledger is asked about the session permission', () => {
     for (const scope of h.scopes) {
       expect(scope).toEqual({ permissionId: undefined, payer: PAYER });
     }
+  });
+});
+
+describe('capWindowStarts', () => {
+  const limit = (startedAt: string) => ({ startedAt: new Date(startedAt) }) as LimitUsage;
+
+  it('offers one instant per live limit plus the session start', () => {
+    const starts = capWindowStarts(
+      [limit('2026-07-01T00:00:00.000Z'), limit('2026-07-15T00:00:00.000Z')],
+      '2026-06-01T00:00:00.000Z'
+    );
+    expect(starts).toEqual(['2026-07-01T00:00:00.000Z', '2026-07-15T00:00:00.000Z', '2026-06-01T00:00:00.000Z']);
+  });
+
+  it('offers nothing for a session with no createdAt', () => {
+    // That total is summed with no `since` at all, so it counts every row and
+    // every checkpoint alike and imposes no cut.
+    expect(capWindowStarts([], undefined)).toEqual([]);
   });
 });

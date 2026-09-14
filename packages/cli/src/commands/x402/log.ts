@@ -45,7 +45,9 @@ export default class X402Log extends BaseCommand {
     // Filter before limiting, so `--limit 5 --status failed` means the last five
     // failures rather than the failures among the last five entries.
     let entries = readX402Log();
-    if (flags.status) entries = entries.filter((e) => e.status === flags.status);
+    // A checkpoint carries `paid` so the sums count it with no branch of their
+    // own, but it is not an outcome and has no business in a list of them.
+    if (flags.status) entries = entries.filter((e) => e.kind !== 'checkpoint' && e.status === flags.status);
     if (flags.limit !== undefined) entries = entries.slice(-flags.limit);
 
     if (format === 'json') {

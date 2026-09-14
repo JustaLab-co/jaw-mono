@@ -5,12 +5,12 @@ import { parseNonNegativeBigInt } from '../../x402/amount.js';
 import { loadConfig } from '../../lib/config.js';
 import { Eip3009EoaPayer, sessionPayerAddress } from '../../x402/payer.js';
 import { payAndFetch } from '../../x402/http.js';
-import { appendX402Log, readX402Log, sumSpentSince } from '../../x402/ledger.js';
+import { appendX402Log, compactX402Log, readX402Log, sumSpentSince } from '../../x402/ledger.js';
 import { reconcileSettlements } from '../../x402/settlement.js';
 import { withPaymentLock } from '../../lib/payment-lock.js';
 import { usdcBalance } from '../../x402/balance.js';
 import { resolveSessionX402Policy, topUpCeiling } from '../../x402/policy.js';
-import { currentLimitUsageOnChain } from '../../x402/spend-window.js';
+import { capWindowStarts, currentLimitUsageOnChain } from '../../x402/spend-window.js';
 import { ensurePayerFunds } from '../../x402/topup.js';
 import { SessionBridge } from '../../lib/session-bridge.js';
 import { tryLoadSessionConfig } from '../../lib/session-config.js';
@@ -177,6 +177,10 @@ export function registerPayTool(server: McpServer): void {
                 // it until the chain says otherwise. A refusal signed nothing.
                 settlement: status === 'refused' ? undefined : 'unverified',
               });
+
+              // Same as the CLI path: fold the ledger down while the lock is
+              // still held and this payment's windows are in hand.
+              compactX402Log(capWindowStarts(periodUsage, session?.createdAt));
             }
 
             // Untrusted server free-text (body, refusedReason) is fenced off

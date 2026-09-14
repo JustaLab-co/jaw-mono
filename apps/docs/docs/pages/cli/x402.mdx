@@ -241,6 +241,8 @@ jaw x402 log --output json
 
 The ledger is also what `maxTotalPerSession` counts against, so it is the record of truth for the session cap, not a convenience log.
 
+Once it passes a couple of megabytes, a payment folds its oldest rows into a single checkpoint row carrying their totals and moves the originals to `~/.jaw/x402-log.archive.jsonl`. Every figure the caps enforce comes out the same afterwards, because a fold only covers rows that every live cap either counts in full or ignores in full. A checkpoint shows here as its own line saying how many payments it stands in for, and status filters skip it. The archive is never read while paying: it is where a row goes to stay readable, not to keep being counted.
+
 The amount on a row is what the caps counted for it, which for a settled payment is what was charged and for a failed one is the ceiling it still holds. Under `exact` those are the same number, so only an `upto` row can show them apart.
 
 ## For AI Agents

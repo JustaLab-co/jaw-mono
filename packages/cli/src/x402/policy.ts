@@ -36,6 +36,13 @@ export interface LimitUsage extends GrantedPeriodLimit {
   spent: bigint;
   /** Pulled through the permission inside this window, which is what the allowance loses. */
   toppedUp: bigint;
+  /**
+   * When this limit's current window started, which is the instant `spent` and
+   * `toppedUp` were counted from. Carried rather than recomputed: the on-chain
+   * branch takes it from the contract, and compaction has to cut against the
+   * same instant the caps were measured with.
+   */
+  startedAt: Date;
   /** When this limit's current window ends. */
   endsAt: Date;
   /**

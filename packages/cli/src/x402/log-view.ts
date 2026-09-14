@@ -26,6 +26,15 @@ export function renderEntry(entry: X402LogEntry): string {
   // Everything here is read back from a file, so nothing is trusted for being
   // ours originally: a tampered ledger must not be able to paint a row either.
   const when = sanitizeLine(String(entry.at).replace('T', ' ').slice(0, 19), 19);
+  // A checkpoint is not a payment and must not read as one. Its own line, in the
+  // same columns, saying what it stands in for.
+  if (entry.kind === 'checkpoint') {
+    const total = formatUsdc(spendFigureOf(entry).toString(), decimalsOf(entry));
+    // `folded` is typed a number and read off disk, so it is whatever the file
+    // says. Same treatment as every other field rendered here.
+    const rows = sanitizeLine(String(entry.folded ?? 0), 12);
+    return `  ${when}  ${'folded'.padEnd(7)}  ${total.padStart(12)}  ${rows} earlier payments`;
+  }
   // What the caps counted for this row, not what the server charged: on a
   // failed attempt those differ, and the figure a user needs to see is the one
   // that will refuse their next payment.
@@ -65,13 +74,20 @@ export function renderSummary(entries: X402LogEntry[]): string {
   // today, so this is a single group in practice and the guard costs nothing.
   const spentByScale = new Map<number, bigint>();
   let unknown = 0;
+  let folded = 0;
   for (const entry of entries) {
-    // Own keys only: `in` walks the prototype, so a row saying `constructor`
-    // would take the counted branch, land on a key nothing reads, and disappear
-    // from both tallies. Anything unrecognised counts as unknown rather than
-    // being dropped, so a malformed row cannot shrink the reported total.
-    if (Object.hasOwn(counts, entry.status)) counts[entry.status] += 1;
-    else unknown += 1;
+    // A checkpoint's figure is money that left, so it belongs in the total. Its
+    // outcome does not: it stands in for many rows and counting it as one paid
+    // payment would understate what happened by however many it absorbed.
+    if (entry.kind === 'checkpoint') folded += entry.folded ?? 0;
+    else {
+      // Own keys only: `in` walks the prototype, so a row saying `constructor`
+      // would take the counted branch, land on a key nothing reads, and disappear
+      // from both tallies. Anything unrecognised counts as unknown rather than
+      // being dropped, so a malformed row cannot shrink the reported total.
+      if (Object.hasOwn(counts, entry.status)) counts[entry.status] += 1;
+      else unknown += 1;
+    }
     const counted = spendFigureOf(entry);
     if (counted > 0n) {
       try {
@@ -86,6 +102,7 @@ export function renderSummary(entries: X402LogEntry[]): string {
   const parts = [`${counts.paid} paid`];
   if (counts.failed > 0) parts.push(`${counts.failed} failed`);
   if (counts.refused > 0) parts.push(`${counts.refused} refused`);
+  if (folded > 0) parts.push(`${folded} folded away`);
   if (unknown > 0) parts.push(`${unknown} unreadable`);
 
   const totals =

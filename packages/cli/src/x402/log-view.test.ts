@@ -207,3 +207,35 @@ describe('log view against the enforced spend rule', () => {
     expect(renderEntry(entry({ status: 'paid', amount: '40', authorized: '5000000' }))).toContain('0.00004 USDC');
   });
 });
+
+describe('log view of a compaction checkpoint', () => {
+  const checkpoint = entry({
+    kind: 'checkpoint',
+    folded: 812,
+    url: 'jaw:compacted',
+    amount: '3200000',
+  });
+
+  it('reads as a fold rather than as a payment', () => {
+    const line = renderEntry(checkpoint);
+    expect(line).toContain('folded');
+    expect(line).toContain('812 earlier payments');
+    expect(line).toContain('3.2 USDC');
+    expect(line).not.toContain('paid');
+  });
+
+  it('counts its figure in the total but not as one paid payment', () => {
+    const summary = renderSummary([entry({ amount: '1000' }), checkpoint]);
+    expect(summary).toContain('1 paid');
+    expect(summary).toContain('812 folded away');
+    expect(summary).toContain('3.201 USDC out');
+  });
+});
+
+describe('a tampered checkpoint cannot paint the terminal', () => {
+  it('sanitizes the folded count like every other field', () => {
+    const escape = String.fromCharCode(27);
+    const painted = entry({ kind: 'checkpoint', folded: `${escape}[31mred` as unknown as number });
+    expect(renderEntry(painted)).not.toContain(escape);
+  });
+});

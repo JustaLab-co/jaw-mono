@@ -5,10 +5,10 @@ import { tryLoadSessionConfig } from '../../lib/session-config.js';
 import { SessionBridge } from '../../lib/session-bridge.js';
 import { Eip3009EoaPayer } from '../../x402/payer.js';
 import { payAndFetch } from '../../x402/http.js';
-import { appendX402Log, readX402Log, sumSpentSince } from '../../x402/ledger.js';
+import { appendX402Log, compactX402Log, readX402Log, sumSpentSince } from '../../x402/ledger.js';
 import { reconcileSettlements } from '../../x402/settlement.js';
 import { resolveSessionX402Policy, topUpCeiling } from '../../x402/policy.js';
-import { currentLimitUsageOnChain } from '../../x402/spend-window.js';
+import { capWindowStarts, currentLimitUsageOnChain } from '../../x402/spend-window.js';
 import { ensurePayerFunds } from '../../x402/topup.js';
 import { parseNonNegativeBigInt } from '../../x402/amount.js';
 import { usdcForNetwork, USDC_BY_NETWORK } from '../../x402/asset-registry.js';
@@ -168,6 +168,11 @@ export default class X402Pay extends BaseCommand {
             // until the chain says otherwise. A refusal signed nothing.
             settlement: status === 'refused' ? undefined : 'unverified',
           });
+
+          // Fold the ledger down while the lock is still held and the windows
+          // this payment measured against are in hand. Below the threshold it
+          // is one `stat` and nothing else.
+          compactX402Log(capWindowStarts(periodUsage, session?.createdAt));
         }
       }
 
