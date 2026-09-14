@@ -1,7 +1,6 @@
-import { backendInstance, controlledAxiosPromise } from './axiosController.js';
+import { backendInstance, controlledAxiosPromise, getBaseUrl } from './axiosController.js';
 import { Routes, ROUTES } from './routes/index.js';
 import { store } from '../store/index.js';
-import { JAW_PROXY_URL } from '../constants.js';
 import qs from 'qs';
 
 /**
@@ -50,10 +49,12 @@ export const restCall = <
     // POST/DELETE: request goes to data
     const params = method === 'GET' ? request : method === 'PATCH' && queryParams ? queryParams : undefined;
 
-    // Only on the proxy, which is where a caller with no key has to be identified.
-    // `x-dapp-origin` is not CORS-safelisted, so sending it to the wallet API would
-    // make every passkey and analytics call depend on that service allowing it too.
-    const dappOrigin = serverUrl?.startsWith(JAW_PROXY_URL) ? store.config.get().dappOrigin : undefined;
+    // Any backend of ours is told, whichever host it runs on: the proxy, the wallet
+    // API, staging. Analytics lives on the wallet API, and a keyless caller has no
+    // key there for its workspace to be credited with. The one url that may belong
+    // to somebody else is a `serverUrl` an app-specific dApp points at its own server.
+    const serverIsOurs = !serverUrl || serverUrl.startsWith(getBaseUrl()) || serverUrl.startsWith(getBaseUrl(true));
+    const dappOrigin = serverIsOurs ? store.config.get().dappOrigin : undefined;
 
     return controlledAxiosPromise<ROUTES[T]['response']>(
         backendInstance(dev, serverUrl).request({

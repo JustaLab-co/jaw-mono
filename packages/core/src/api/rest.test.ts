@@ -14,9 +14,9 @@ vi.mock('./axiosController.js', async () => {
     };
 });
 
-// The relay calls are made from the keys origin too — grantPermissions writes
-// through here — so without the header a keyless dApp's permission is refused on
-// the relay write, after the transaction has already been signed and sent.
+// The relay calls are made from the keys origin too, since grantPermissions writes
+// through here. Without the header a keyless dApp's permission is refused on the
+// relay write, after the transaction has already been signed and sent.
 describe('restCall and the calling dApp', () => {
     afterEach(() => {
         setDappOrigin(undefined);
@@ -54,15 +54,34 @@ describe('restCall and the calling dApp', () => {
         expect(headersSent()).toEqual({ 'x-api-key': 'k1' });
     });
 
-    // `x-dapp-origin` is not CORS-safelisted, so a route whose service does not list
-    // it in Access-Control-Allow-Headers would fail preflight and never leave the
-    // browser. The proxy is the only one that has to identify a keyless caller.
-    it('sends no dApp header to the wallet API', async () => {
+    // Analytics is the wallet API, not the proxy, and a keyless caller has no key
+    // for it to bill the signature to. Its service lists `x-dapp-origin` in
+    // Access-Control-Allow-Headers, so the preflight passes.
+    it('names the dApp on the wallet API too', async () => {
         setDappOrigin('https://dapp.example');
         request.mockResolvedValue({ data: { result: { data: {} } } });
 
-        await restCall('LOG_SIGNATURE', 'POST', { address: '0xabc' }, { 'x-api-key': 'k1' });
+        await restCall('LOG_SIGNATURE', 'POST', { address: '0xabc' });
 
-        expect(headersSent()).toEqual({ 'x-api-key': 'k1' });
+        expect(headersSent()).toEqual({ 'x-dapp-origin': 'https://dapp.example' });
+    });
+
+    // A server the dApp runs itself, which app-specific mode allows. Which dApp the
+    // user is on is ours to know and not theirs to be told.
+    it('sends no dApp header to a server the dApp pointed us at', async () => {
+        setDappOrigin('https://dapp.example');
+        request.mockResolvedValue({ data: { result: { data: {} } } });
+
+        await restCall(
+            'LOOKUP_PASSKEYS',
+            'GET',
+            { credentialIds: ['abc'] },
+            undefined,
+            undefined,
+            undefined,
+            'https://passkeys.dapp.example'
+        );
+
+        expect(headersSent()).toEqual({});
     });
 });
