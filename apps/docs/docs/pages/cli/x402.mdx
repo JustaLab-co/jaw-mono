@@ -173,9 +173,10 @@ USDC deployments the CLI knows about:
 | Base         | `eip155:8453`  | 8453     |
 | Base Sepolia | `eip155:84532` | 84532    |
 | Polygon      | `eip155:137`   | 137      |
-| Polygon Amoy | `eip155:80002` | 80002    |
 
 A server asking for any other asset is refused, so a lookalike token cannot be paid by mistake.
+
+USDC existing on a chain is not enough to list it. The permission manager has to be deployed there too, because a session pays through a permission and there is nothing to grant against otherwise. Polygon Amoy was listed on the token alone and has no manager, so it came off.
 
 `upto` needs its settlement proxy deployed, which is verified on Base and Base Sepolia. A `upto` challenge on any other network is refused before anything is signed, since a permit whose settlement contract is not there could never be honoured and would still hold its ceiling against your caps.
 
