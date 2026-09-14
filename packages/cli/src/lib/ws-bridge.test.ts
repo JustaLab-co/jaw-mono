@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
 
-import { buildInitPayload } from './ws-bridge.js';
+import { buildInitPayload, readInjectedApiKey } from './ws-bridge.js';
 
 // The init envelope is the only thing the CLI tells the browser about the
 // paymaster, so it has to carry the context and not the url alone. Dropping a
@@ -40,5 +40,38 @@ describe('buildInitPayload', () => {
 
     expect(payload.paymasterUrl).toBe('https://configured.example/rpc');
     expect(payload).not.toHaveProperty('paymasterContext');
+  });
+});
+
+// The browser fills in a key when the CLI arrived without one, and says so on
+// `ready`. Read here rather than in the socket handler so the two absences can
+// be asserted without a relay.
+describe('readInjectedApiKey', () => {
+  it('takes the key the browser filled in', () => {
+    expect(readInjectedApiKey({ type: 'ready', chainId: 8453, apiKey: 'workspace-key' })).toBe('workspace-key');
+  });
+
+  it('is null when the browser sent none, which is every other case', () => {
+    // A current browser omits it when the CLI carried its own key.
+    expect(readInjectedApiKey({ type: 'ready', chainId: 8453 })).toBeNull();
+    // An older one cannot send it at all, and an empty one is not a key.
+    expect(readInjectedApiKey({ type: 'ready', apiKey: '' })).toBeNull();
+    expect(readInjectedApiKey({ type: 'ready', apiKey: 42 })).toBeNull();
+  });
+});
+
+// A machine connecting for the first time has no key, and the browser fills one
+// in. The field's absence is what asks for that, so an empty string must not be
+// what crosses instead: the browser would then have to read two things as the
+// same request.
+describe('buildInitPayload without a key', () => {
+  it('omits the field rather than sending it empty', () => {
+    const payload = buildInitPayload({ chainId: 8453 });
+
+    expect('apiKey' in payload).toBe(false);
+  });
+
+  it('sends it when there is one', () => {
+    expect(buildInitPayload({ apiKey: 'mine', chainId: 8453 })).toMatchObject({ apiKey: 'mine' });
   });
 });

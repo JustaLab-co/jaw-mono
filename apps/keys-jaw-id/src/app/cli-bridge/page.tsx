@@ -215,7 +215,8 @@ function CLIBridgeContent() {
                   // nothing about their setup changes. Only the empty case is
                   // filled in, and it is filled in from the CLI's own workspace
                   // rather than this app's, which bills something else.
-                  const apiKey = await resolveBridgeApiKey(inner.apiKey);
+                  const sentApiKey = typeof inner.apiKey === 'string' ? inner.apiKey : '';
+                  const apiKey = await resolveBridgeApiKey(sentApiKey);
                   if (!apiKey) {
                     setState('error');
                     setError('No API key: the CLI sent none and this deployment has none configured for it.');
@@ -246,10 +247,14 @@ function CLIBridgeContent() {
                     });
                   }
 
-                  // Send encrypted ready
+                  // Send encrypted ready, carrying the key back only when we
+                  // are the ones who supplied it. Echoing a key the CLI already
+                  // has would hand it something to store that it did not need,
+                  // and this way it only ever persists what it lacked.
                   const readyEnvelope = await encryptAndSerialize(sharedSecretRef.current!, {
                     type: 'ready',
                     chainId,
+                    ...(sentApiKey ? {} : { apiKey }),
                   });
                   ws!.send(JSON.stringify(readyEnvelope));
                   break;

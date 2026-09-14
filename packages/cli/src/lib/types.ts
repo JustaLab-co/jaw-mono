@@ -21,7 +21,17 @@ export interface PermissionsConfig {
 }
 
 export interface JawConfig {
+  /** The key the user chose, by flag or by `config set`. Never written by us. */
   apiKey?: string;
+  /**
+   * The key the browser bridge handed us, belonging to a workspace created for
+   * the CLI. Kept apart from the user's so it can be replaced on every connect:
+   * a rotated key on the deployment has to reach installs that already have one,
+   * and it cannot if we treat what we were handed as the user's own choice.
+   *
+   * Not settable, and never asserted to the browser.
+   */
+  workspaceApiKey?: string;
   defaultChain?: number;
   keysUrl?: string;
   ens?: string;

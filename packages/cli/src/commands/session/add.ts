@@ -99,6 +99,15 @@ export default class SessionAdd extends BaseCommand {
     // so an older session can be added to rather than told to start over.
     const existing = await recoverPermission(session, apiKey);
     if (!existing) {
+      // Two causes, and only one of them is the session's fault. Recovery reads
+      // the relay, which needs a key, so with none the honest answer is to get
+      // one rather than to recreate a live permission.
+      if (!session.permission && !apiKey) {
+        this.error(
+          'Reading what this session already allows needs an API key, and there is none configured. ' +
+            'Set one with `jaw config set apiKey <key>`, then run this again.'
+        );
+      }
       this.error(
         'This session does not carry the permission it was granted, so what it already allows cannot be read. ' +
           'Run `jaw session setup` to recreate it, and adding will work from then on.'

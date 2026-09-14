@@ -19,7 +19,8 @@ import {
 type CKey = webcrypto.CryptoKey;
 
 export interface WSBridgeConfig {
-  apiKey: string;
+  /** Absent on a first connect from a machine that has none. */
+  apiKey?: string;
   chainId: number;
   ens?: string;
   paymasterUrl?: string;
@@ -55,12 +56,32 @@ export interface WSBridgeOptions {
 export function buildInitPayload(config: WSBridgeConfig): Record<string, unknown> {
   return {
     type: 'init',
-    apiKey: config.apiKey,
+    // Omitted rather than empty when there is none: the browser reads the
+    // field's absence as "fill one in", and an empty string would have to mean
+    // the same thing in a second place.
+    ...(config.apiKey ? { apiKey: config.apiKey } : {}),
     chainId: config.chainId,
     ens: config.ens,
     paymasterUrl: config.paymasterUrl,
     ...(config.paymasterUrl && config.paymasterContext ? { paymasterContext: config.paymasterContext } : {}),
   };
+}
+
+/**
+ * The api key the browser filled in, off the `ready` it answers with.
+ *
+ * A function rather than a read inside the socket handler, for the same reason
+ * `buildInitPayload` is one: what crosses the bridge can then be asserted
+ * without standing up a relay.
+ *
+ * Null covers both absences, and neither is an error. An older browser does not
+ * send the field at all, and a current one omits it whenever the CLI arrived
+ * with a key of its own, since echoing that back would hand the CLI something
+ * to store that it already had.
+ */
+export function readInjectedApiKey(inner: Record<string, unknown>): string | null {
+  const apiKey = inner['apiKey'];
+  return typeof apiKey === 'string' && apiKey.length > 0 ? apiKey : null;
 }
 
 const DEFAULT_TIMEOUT_MS = 120_000;
@@ -101,6 +122,12 @@ export class WSBridge {
   private readonly config: WSBridgeConfig;
   private readonly privateKeyHex: string;
   readonly publicKeyHex: string;
+  /**
+   * The api key the browser supplied on `ready`, present only when it filled in
+   * one the CLI did not have. Read after `connect` resolves; the caller owns
+   * whether to keep it, because this class does not touch the config file.
+   */
+  injectedApiKey: string | null = null;
   private peerPublicKeyHex: string | null;
   private sharedSecret: CKey | null = null;
   private ws: WebSocket | null = null;
@@ -197,6 +224,8 @@ export class WSBridge {
                 clearTimeout(readyTimer);
                 ws.off('message', onMsg);
                 this.reconnectAttempts = 0; // Reset on successful connect
+                const injected = readInjectedApiKey(inner as Record<string, unknown>);
+                if (injected) this.injectedApiKey = injected;
                 resolve();
               }
             } catch {

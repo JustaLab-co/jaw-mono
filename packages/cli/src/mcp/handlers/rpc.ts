@@ -8,12 +8,15 @@ import { loadConfig } from '../../lib/config.js';
 import { tryLoadSessionConfig } from '../../lib/session-config.js';
 import type { JawConfig } from '../../lib/types.js';
 
-function resolveApiKey(config: JawConfig): string {
-  const apiKey = process.env['JAW_API_KEY'] ?? config.apiKey;
-  if (!apiKey) {
-    throw new Error('API key required. Set JAW_API_KEY env var or run: jaw config set apiKey <key>');
-  }
-  return apiKey;
+/**
+ * The api key to operate under, or undefined when there is none yet.
+ *
+ * Bridge mode opens a browser that fills one in, so it no longer needs one up
+ * front. Session mode signs locally and refuses below, the same rule `rpc call`
+ * applies to the same two modes.
+ */
+function resolveApiKey(config: JawConfig): string | undefined {
+  return process.env['JAW_API_KEY'] ?? config.apiKey;
 }
 
 function resolveChainId(paramChainId: number | undefined, config: JawConfig): number {
@@ -97,6 +100,17 @@ export function registerRpcTool(server: McpServer): void {
             throw new Error(
               `Method ${params.method} is not supported in session mode. ` +
                 'Call again with session: false to route through the browser bridge.'
+            );
+          }
+          // Ahead of the rate limit, which counts as well as checks: a refusal
+          // below it would spend a slot of the window on a call that sends
+          // nothing, and enough of those lock out the sends that would have
+          // worked. Local refusals first, counters after, the order `rpc call`
+          // already follows.
+          if (!apiKey) {
+            throw new Error(
+              'Session mode needs an API key, and there is no browser in this path to get one. ' +
+                'Run `jaw session setup` to have one issued, set JAW_API_KEY, or call again with session: false.'
             );
           }
           if (RATE_LIMITED_SESSION_METHODS.includes(params.method)) {
