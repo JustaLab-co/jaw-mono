@@ -1783,7 +1783,7 @@ describe('Account — prefunding the spender in the grant', () => {
 
         expect(prepended).toHaveLength(1);
         for (const call of vi.mocked(fetchTokenQuotes).mock.calls) {
-            expect(call[0]).toBe(`${JAW_PAYMASTER_URL}?chainId=1&api-key=test`);
+            expect(call[0]).toBe(jawPaymasterUrl(1, 'test'));
         }
         expect(vi.mocked(fetchTokenQuotes)).toHaveBeenCalled();
     });
