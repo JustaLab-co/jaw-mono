@@ -5,10 +5,10 @@ import { isLegacySession, liveOrphans, tryLoadSessionConfig } from '../../lib/se
 import { sessionPayerAddress } from '../../x402/payer.js';
 import { usdcBalance } from '../../x402/balance.js';
 import { readX402Log, sumSpentSince } from '../../x402/ledger.js';
-import { resolveSessionX402Policy, sameLimit } from '../../x402/policy.js';
+import { resolveSessionX402Policy, sameLimit, tightestLimit } from '../../x402/policy.js';
 import { currentLimitUsageOnChain } from '../../x402/spend-window.js';
 import { describePeriod } from '../../x402/period.js';
-import { parseBigInt } from '../../x402/amount.js';
+import { parseBigInt, parseNonNegativeBigInt } from '../../x402/amount.js';
 import { USDC_BY_NETWORK } from '../../x402/asset-registry.js';
 import { gasReserve } from '../../x402/gas-reserve.js';
 import { formatUsdc, formatRemaining, diagnose } from '../../x402/status-report.js';
@@ -131,25 +131,10 @@ export default class X402Status extends BaseCommand {
         }
       );
     });
-    // The one with the least room left, which is what the verdict is about.
-    // Picking the smallest allowance instead said `ready: true` for a session
-    // whose month was drained, because today's counter was still at zero, right
-    // under a printed line reading 100 of 100 USDC used this month.
-    //
-    // Unparseable allowances are skipped rather than thrown on: they reach here
-    // from a config file someone can edit, and the rest of this command reports
-    // a bad value instead of dying on it.
-    const remaining = (limit: (typeof limits)[number]) => {
-      const cap = parseBigInt(limit.allowance);
-      if (cap === null) return null;
-      return cap > limit.toppedUp ? cap - limit.toppedUp : 0n;
-    };
-    const tightest = limits.reduce<(typeof limits)[number] | null>((a, b) => {
-      const left = remaining(b);
-      if (left === null) return a;
-      const best = a === null ? null : remaining(a);
-      return best === null || left < best ? b : a;
-    }, null);
+    // The one with the least room left, which is what the verdict is about, and
+    // the same reduction `topUpCeiling` sizes a pull with. These limits already
+    // carry their own usage, so there is no second list to pass.
+    const tightest = tightestLimit(limits);
 
     // One verdict for both renderers. `ready` used to be its own expression and
     // drifted from the warnings: a setup whose owner was empty printed a loud
@@ -163,7 +148,11 @@ export default class X402Status extends BaseCommand {
       hasAsset: asset !== undefined,
       spent,
       sessionCap,
-      periodCap: tightest ? parseBigInt(tightest.allowance) : null,
+      // The same parse rule the ranking uses. Read with `parseBigInt`, a
+      // negative allowance comes back as a negative cap: the "cannot be read"
+      // warning never fires, and beside an unreadable usage nothing is reported
+      // at all, while `checkPolicy` refuses every payment against it.
+      periodCap: tightest ? (parseNonNegativeBigInt(tightest.allowance) ?? null) : null,
       // Top-ups, not payments: the period cap mirrors the on-chain allowance
       // and the top-up is what draws it down, exactly as `topUpCeiling`
       // measures it. Payments lag by whatever float the payer still holds,

@@ -72,6 +72,16 @@ const PREFUND_GAS = 2n * FIRST_OP_GAS;
  * one to matter. Taking the minimum keeps the result independent of the order
  * the requester happened to write them in.
  *
+ * `@jaw.id/cli` encodes that same rule a second time, in `policyFromPermission`
+ * (`x402/policy.ts`), keeping every matching limit rather than reducing them
+ * because it has to report which one refuses. One fact, two encodings, either
+ * side of a boundary the CLI deliberately does not cross at startup. A change to
+ * what the contract charges lands in both.
+ *
+ * They fail differently, and on purpose. An unreadable allowance is null here
+ * and no prefund goes out; the CLI skips that entry and keeps enforcing the
+ * rest. This is the side that is about to move funds.
+ *
  * A permission too tight to cover one operation is refused outright by the
  * caller rather than trimmed to, which is what used to move all of it.
  */

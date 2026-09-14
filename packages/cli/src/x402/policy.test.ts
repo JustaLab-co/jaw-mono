@@ -53,6 +53,7 @@ import {
   X402_SCALAR_KEYS,
   resolveSessionX402Policy,
   topUpCeiling,
+  tightestLimit,
 } from './policy.js';
 import { USDC_BY_NETWORK } from './asset-registry.js';
 import type { X402PaymentRequirement } from './types.js';
@@ -315,6 +316,24 @@ describe('policyFromPermission', () => {
     );
   });
 
+  /**
+   * The permission reaches here off `loadSessionConfig`, which parses the file
+   * and casts: `parseGrantedPermission` runs when a session is written, not when
+   * one is read. So a hand-edited token carries whatever space someone left, and
+   * dropping the entry over it deletes the grant's cap and drops the session
+   * back to the defaults. `isSameToken` in `@jaw.id/core` reads the same field
+   * the same way for the prefund.
+   */
+  it('matches a token the session file left space around', () => {
+    const policy = policyFromPermission(
+      permissionWith([{ allowance: '5000000', unit: 'day', token: ` ${BASE_USDC} ` }]),
+      BASE
+    );
+    expect(policy.perPeriod).toEqual([
+      { allowance: '5000000', unit: 'day', multiplier: 1, anchor: '2026-01-01T00:00:00.000Z' },
+    ]);
+  });
+
   it('returns an empty policy on a chain with no registry USDC', () => {
     expect(policyFromPermission(permissionWith([{ allowance: '5000000', unit: 'day' }]), 1)).toEqual({});
   });
@@ -443,6 +462,45 @@ describe('topUpCeiling', () => {
   });
 });
 
+describe('tightestLimit', () => {
+  /**
+   * Sizing a top-up and reporting the verdict ask the same question. Answered
+   * apart, `jaw x402 status` says ready for a session whose month is drained,
+   * because today's counter is still at zero.
+   */
+  it('takes the limit with the least room left, not the smallest allowance', () => {
+    const day = limit('1000000');
+    const month = limit('100000000', 'month');
+    expect(tightestLimit([day, month], [usage('100000000', 99_500_000n, 'month')])).toBe(month);
+  });
+
+  /**
+   * `checkPolicy` refuses every payment on an allowance it cannot read, so a
+   * limit ranked out of this would report the next one's healthy figure for a
+   * session where nothing can go through.
+   */
+  it('counts an unreadable allowance as no room rather than dropping it', () => {
+    const unreadable = limit('abc');
+    expect(tightestLimit([limit('1000000'), unreadable])).toBe(unreadable);
+  });
+
+  it('has nothing to report when the policy holds no limit', () => {
+    expect(tightestLimit([])).toBeNull();
+  });
+
+  /**
+   * `jaw x402 status` joins usage onto its limits before ranking them, so the
+   * limits it passes already carry `toppedUp`. Read only out of the second
+   * argument, a caller with nothing to pass there would get every limit's full
+   * width back, and the ranking would fall through to the smallest allowance.
+   */
+  it('reads the usage a joined limit already carries', () => {
+    const day = usage('1000000');
+    const month = usage('100000000', 99_500_000n, 'month');
+    expect(tightestLimit([day, month])).toBe(month);
+  });
+});
+
 describe('topUpFloat as a settable policy key', () => {
   it('Given topUpFloat, When validated as a config key, Then it is accepted as a scalar', () => {
     expect(isX402PolicyKey('topUpFloat')).toBe(true);
@@ -563,7 +621,19 @@ describe('per-period cap', () => {
   it('refuses rather than passing an allowance it cannot read', () => {
     const result = checkPolicy(oneUsdc, { ...policy, perPeriod: [limit('abc')] }, {});
     expect(result.ok).toBe(false);
-    expect(result.reason).toContain('invalid allowance from grant');
+    expect(result.reason).toContain('invalid spend allowance');
+  });
+
+  /**
+   * A negative allowance is unreadable, not a limit that was overrun. Read with
+   * `parseBigInt` it becomes a negative cap, every amount exceeds it, and the
+   * refusal quotes it as if it were the figure the user granted.
+   */
+  it('names a negative allowance as unreadable rather than as an overrun limit', () => {
+    const result = checkPolicy(oneUsdc, { ...policy, perPeriod: [limit('-5000000')] }, {});
+    expect(result.ok).toBe(false);
+    expect(result.reason).toContain('invalid spend allowance');
+    expect(result.reason).not.toContain('would exceed');
   });
 
   /**

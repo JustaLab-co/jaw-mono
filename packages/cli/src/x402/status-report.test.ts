@@ -180,6 +180,17 @@ describe('diagnose', () => {
     expect(diagnose({ ...healthy, periodCap: 5_000_000n, periodSpent: 1_000_000n, periodLabel: 'day' })).toEqual([]);
   });
 
+  /**
+   * The limit that binds is the one with the least room, and an allowance the
+   * command cannot read has none: `checkPolicy` refuses every payment on it.
+   * Reported ready, it sends an agent to a command that cannot pay.
+   */
+  it('flags a binding allowance it cannot read', () => {
+    const problems = diagnose({ ...healthy, periodCap: null, periodSpent: null, periodLabel: 'day' });
+    expect(problems).toHaveLength(1);
+    expect(problems[0]).toMatch(/granted allowance for this day cannot be read/i);
+  });
+
   it('reports the period cap before the session cap when both are exhausted', () => {
     const problems = diagnose({
       ...healthy,
