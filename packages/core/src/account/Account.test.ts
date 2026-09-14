@@ -1645,7 +1645,22 @@ describe('Account — prefunding the spender in the grant', () => {
     const SPENDER = '0x2222222222222222222222222222222222222222' as `0x${string}`;
     const PERMISSIONS = { spends: [{ token: TOKEN, allowance: '10000000', unit: 'day' }] };
 
-    async function grant(options?: { prefundSpender?: boolean }, balance = 5_000_000n, paymasterUrlOverride?: string) {
+    async function grant({
+        prefundSpender,
+        balance = 5_000_000n,
+        requesterPaymasterUrl,
+        walletPaymasterUrl = PAYMASTER_URL,
+    }: {
+        prefundSpender?: boolean;
+        balance?: bigint;
+        /** What the request named through `paymasterService`. */
+        requesterPaymasterUrl?: string;
+        /**
+         * The chain's paymaster, which arrives on the request from the dapp's
+         * own config. Null is the CLI bridge, which sends none.
+         */
+        walletPaymasterUrl?: string | null;
+    } = {}) {
         const { createSmartAccount } = await import('./smartAccount.js');
         const { grantPermissions } = await import('../rpc/permissions.js');
         const { fetchTokenQuotes } = await import('./erc20Paymaster.js');
@@ -1671,7 +1686,7 @@ describe('Account — prefunding the spender in the grant', () => {
         vi.mocked(grantPermissions).mockResolvedValue({ permissionId: '0xperm' } as never);
 
         const account = await Account.fromLocalAccount(
-            { chainId: 1, apiKey: 'test', paymasterUrl: PAYMASTER_URL } as never,
+            { chainId: 1, apiKey: 'test', paymasterUrl: walletPaymasterUrl ?? undefined } as never,
             { address: '0xabcdef1234567890abcdef1234567890abcdef12', type: 'local', sign: vi.fn() } as never
         );
 
@@ -1679,10 +1694,10 @@ describe('Account — prefunding the spender in the grant', () => {
             9999999999,
             SPENDER,
             PERMISSIONS as never,
-            paymasterUrlOverride,
+            requesterPaymasterUrl,
             undefined,
             undefined,
-            options
+            { prefundSpender }
         );
         const prepended = vi.mocked(grantPermissions).mock.calls.at(-1)?.[8] ?? [];
         // The parameter also takes a lone call, which this path never sends.
@@ -1710,23 +1725,42 @@ describe('Account — prefunding the spender in the grant', () => {
         expect(decoded.args).toEqual([SPENDER, 6_000n]);
     });
 
-    // The rate decides how much leaves the account, and `paymasterService` lets
-    // the requester name the server that answers with it. The destination and
-    // the token are already the wallet's to choose; so is the amount.
-    it('prices the transfer against its own paymaster, not the one the request named', async () => {
+    // The rate decides how much leaves the account, to a spender the requester
+    // chose. Neither URL the requester can reach is allowed to answer with it:
+    // `paymasterService` is theirs by definition, and the chain's own paymaster
+    // rides in on the request from the dapp's `paymasters` config, which keys
+    // then builds the account from. An inflated rate clamps the transfer to the
+    // whole allowance and lands it outside the permission.
+    it('prices the transfer against JAW, never a paymaster the request carried', async () => {
         const { fetchTokenQuotes } = await import('./erc20Paymaster.js');
 
-        await grant({ prefundSpender: true }, 5_000_000n, 'https://paymaster.the-requester-chose');
+        const prepended = await grant({
+            prefundSpender: true,
+            walletPaymasterUrl: 'https://paymaster.the-request-carried',
+            requesterPaymasterUrl: 'https://paymaster.the-requester-chose',
+        });
 
+        expect(prepended).toHaveLength(1);
         for (const call of vi.mocked(fetchTokenQuotes).mock.calls) {
-            expect(call[0]).toBe(PAYMASTER_URL);
+            expect(call[0]).toBe(`${JAW_PAYMASTER_URL}?chainId=1&api-key=test`);
         }
         expect(vi.mocked(fetchTokenQuotes)).toHaveBeenCalled();
+    });
+
+    // The CLI bridge creates the SDK with no paymaster at all, so reading one
+    // off the chain declined every session created that way while the grant
+    // itself went through: charged, and seeded with nothing.
+    it('still prices the transfer when the request carried no paymaster', async () => {
+        const prepended = await grant({ prefundSpender: true, walletPaymasterUrl: null });
+
+        expect(prepended).toHaveLength(1);
+        const decoded = decodeFunctionData({ abi: erc20Abi, data: prepended[0].data as `0x${string}` });
+        expect(decoded.args).toEqual([SPENDER, 6_000n]);
     });
 
     // Losing the grant to a reverted transfer is worse than the sponsored op it
     // was meant to replace.
     it('leaves the grant alone when the account cannot cover the transfer', async () => {
-        expect(await grant({ prefundSpender: true }, 1n)).toEqual([]);
+        expect(await grant({ prefundSpender: true, balance: 1n })).toEqual([]);
     });
 });
