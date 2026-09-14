@@ -151,11 +151,11 @@ describe('withPaymentLock', () => {
 });
 
 describe('withPaymentLock heartbeat', () => {
-  // The reason the heartbeat exists. `at` used to be written once, so the
-  // threshold had to predict how long a payment could take: it was a sum of the
-  // timeouts on the payment path, `upto` added two 90s waits to that path, and a
-  // second payer arriving mid-payment could break a live lock and end up in the
-  // critical section beside the first, both having read the same ledger total.
+  // The reason the heartbeat exists. Written once, `at` makes the threshold
+  // predict how long a payment could take, which is a sum of the timeouts on the
+  // payment path: `upto` puts two 90s waits on it, and a second payer arriving
+  // mid-payment breaks a live lock and ends up in the critical section beside
+  // the first, both having read the same ledger total.
   it('does not let a beating holder be broken as stale', async () => {
     const holder = withPaymentLock(async () => new Promise((r) => setTimeout(r, 400)), { heartbeatMs: 25 });
     await new Promise((r) => setTimeout(r, 40));
@@ -275,8 +275,8 @@ describe('withPaymentLock heartbeat', () => {
     await expect(withPaymentLock(async () => 'x', { timeoutMs: 100 })).rejects.toThrow(/running for 8s/);
   });
 
-  // The catch used to swallow every failure and report the beat as landed, so a
-  // heartbeat that could never land looked exactly like one momentary miss. A
+  // A catch that swallows every failure and reports the beat as landed makes a
+  // heartbeat that can never land look exactly like one momentary miss. A
   // read-only home is the reachable version: `at` freezes and the next payer
   // breaks a live lock, with nothing anywhere saying why.
   // Skipped as root, where a read-only directory stops nothing.

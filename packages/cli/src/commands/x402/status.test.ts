@@ -36,9 +36,8 @@ const h = vi.hoisted(() => {
       expiry: Math.floor(Date.now() / 1000) + 6 * 86400,
       createdAt: anchor,
       mode: 'eip7702' as const,
-      // The policy is derived from this on read. It used to be summarised into
-      // a second `grantedSpend` field written at grant time, and the two could
-      // describe different budgets.
+      // The policy is derived from this on read, rather than from a summary
+      // written beside it at grant time that could describe a different budget.
       permission: {
         account: '0x2222222222222222222222222222222222222222',
         spender: '0x1111111111111111111111111111111111111111',

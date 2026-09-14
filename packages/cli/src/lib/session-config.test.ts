@@ -214,7 +214,8 @@ describe('parseGrantedPermission', () => {
 /**
  * Permissions the key still holds that the session no longer names. They exist
  * because `session setup` replaces a session without always revoking what it
- * replaces, and the id used to be lost with the overwritten config.
+ * replaces, so the id has to be carried across rather than left behind in the
+ * config that gets overwritten.
  */
 describe('liveOrphans', () => {
   const now = 1_756_000_000;

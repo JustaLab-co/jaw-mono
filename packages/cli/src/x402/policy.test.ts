@@ -23,9 +23,9 @@ const BASE = 8453;
 const BASE_USDC = '0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913';
 
 /**
- * A granted permission, which is now the only place a policy is derived from.
- * The session used to also carry a `grantedSpend` summary of one limit, and the
- * two could describe different budgets; deriving on read removes the question.
+ * A granted permission, the only place a policy is derived from. A summary of
+ * one limit written beside it could describe a different budget; deriving on
+ * read removes the question.
  */
 function permissionWith(spends: Array<{ allowance: string; unit: string; multiplier?: number; token?: string }>) {
   return {
@@ -103,8 +103,8 @@ describe('checkPolicy', () => {
 
   /**
    * The settlement proxy is only deployed on two of the four chains the asset
-   * registry carries, and the check used to live in the signer, downstream of
-   * the top-up. Refusing here means the option is skipped during selection: a
+   * registry carries, and the check belongs here rather than in the signer,
+   * downstream of the top-up. Refusing here skips the option during selection: a
    * dry run tells the truth, and nothing has been spent when it does.
    */
   it('refuses an upto option on a chain the settlement proxy was never verified on', () => {
@@ -354,9 +354,9 @@ describe('resolveX402Policy — grant layer', () => {
     expect(policy.maxTotalPerSession).toBe('50000000');
   });
 
-  // The session cap used to be pinned to the grant. That clamp only existed
-  // because a per-period allowance was written into a session-wide field, and
-  // it silently rewrote whatever the user configured.
+  // Pinning the session cap to the grant would only make sense if a per-period
+  // allowance belonged in a session-wide field, and it silently rewrites
+  // whatever the user configured.
   it('does not rewrite a config session cap from the per-period allowance', () => {
     const policy = resolveX402Policy({ maxTotalPerSession: '50000000' }, seeded());
     expect(policy.maxTotalPerSession).toBe('50000000');

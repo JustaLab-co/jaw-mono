@@ -17,8 +17,8 @@ describe('formatUsdc', () => {
     expect(formatUsdc('not-a-number', 6)).toBe('not-a-number (invalid)');
   });
 
-  // Amounts reach here from the ledger and from config, both editable files,
-  // and the invalid branch used to echo whatever it was handed.
+  // Amounts reach here from the ledger and from config, both editable files, so
+  // the invalid branch cannot echo back whatever it was handed.
   it('disarms a malformed cap rather than printing it back raw', () => {
     const ESC = String.fromCharCode(0x1b);
     const out = formatUsdc(`9${ESC}[2K${ESC}[32m FAKE`, 6);
@@ -235,7 +235,7 @@ describe('diagnose as a readiness verdict', () => {
   });
 
   it('is non-empty for a setup that pays but bypasses the permission', () => {
-    // The case that used to report ready:true while warning in the same breath.
+    // The case that must not report ready:true while warning in the same breath.
     expect(diagnose({ ...healthy, ownerBalance: '0', payerBalance: '16.98' }).length).toBeGreaterThan(0);
   });
 });

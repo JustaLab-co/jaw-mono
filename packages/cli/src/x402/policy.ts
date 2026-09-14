@@ -13,7 +13,7 @@ import type { GrantedPermission } from '../lib/session-config.js';
  * `_checkAndIncrementSpend` charges every limit whose token matches and does
  * not stop at the first. Which one refuses depends on the amount and on the
  * moment, so a single pair cannot answer it, and picking one on the caller's
- * behalf is what reported a month's budget as a day's.
+ * behalf would report a month's budget as a day's.
  */
 export interface GrantedPeriodLimit {
   /** Base units, decimal string. */
@@ -115,13 +115,10 @@ const eqAddr = (a: string, b: string) => a.trim().toLowerCase() === b.trim().toL
 /**
  * The x402 policy a granted permission implies.
  *
- * Derived on read rather than stored beside the permission. The session used to
- * carry both: the struct, and a `grantedSpend` summary of one USDC limit
- * written at grant time. Two shapes for one fact, at different fidelities, and
- * every consumer had to know which one it was reading. Each of the bugs in this
- * area was a version of the two disagreeing, and the reconciliation between
- * them was itself a source of them. A value that cannot be stored out of date
- * cannot go out of date.
+ * Derived on read rather than stored beside the permission, so there is one
+ * shape for the fact instead of a summary written at grant time beside the
+ * struct it summarises. A value that cannot be stored out of date cannot go out
+ * of date.
  *
  * Every limit is carried, not reduced to one: the contract charges each of
  * them, so which refuses depends on the amount and the moment, and a single
@@ -200,10 +197,10 @@ export function resolveX402Policy(configPolicy?: X402Policy, grantPolicy?: X402P
 /**
  * Resolve the policy for a live session. Every front end goes through this, so
  * `jaw x402 pay`, `jaw x402 status` and the MCP tool all enforce and report the
- * same caps. Resolving from config alone is what let them drift: the CLI paid
+ * same caps. Resolving from config alone lets them drift: the CLI would pay
  * under the 10-USDC defaults on every registry network while the MCP tool
- * refused at the granted per-period allowance, and status printed a session cap
- * that the grant had already deleted.
+ * refused at the granted per-period allowance, and status would print a session
+ * cap the grant deletes.
  */
 export function resolveSessionX402Policy(
   configPolicy?: X402Policy,
@@ -284,9 +281,9 @@ export function tightestLimit<T extends MeteredLimit>(limits: T[], usage?: Limit
 
 /**
  * The most a single top-up may move into the payer: the smallest cap that
- * actually binds, never a preferred one. Preferring the per-period cap let a
- * 5-USDC/day grant pre-fund 5 USDC into a session the user had explicitly capped
- * at 1, which is the idle-funds-at-risk case `TopUpOptions.maxTopUp` exists to
+ * actually binds, never a preferred one. Preferring the per-period cap would let
+ * a 5-USDC/day grant pre-fund 5 USDC into a session the user explicitly capped at
+ * 1, which is the idle-funds-at-risk case `TopUpOptions.maxTopUp` exists to
  * prevent. Undefined when neither cap is set, meaning the on-chain permission is
  * the only bound.
  *
@@ -299,8 +296,8 @@ export function tightestLimit<T extends MeteredLimit>(limits: T[], usage?: Limit
  * meter for both. A per-period cap mirrors the on-chain allowance, and what draws
  * that down is the top-up itself, so it counts top-ups. `maxTotalPerSession` is
  * the user's own ceiling on what the session may spend, so it counts payments.
- * Reading the period cap off payments made it lag by whatever float the payer
- * still held, and the pull that overshot was refused on chain.
+ * Reading the period cap off payments instead lags by whatever float the payer
+ * still holds, and the pull that overshoots is refused on chain.
  */
 export function topUpCeiling(
   policy: X402Policy,
@@ -487,11 +484,11 @@ export function checkPolicy(
   // permission, so when both would refuse, the reason the chain would give is
   // the more useful one to report.
   // Driven by the limits the policy holds, with usage looked up per limit and
-  // absent usage read as zero. Iterating the caller's list instead made a cap
+  // absent usage read as zero. Iterating the caller's list instead makes a cap
   // exist only when someone managed to build an entry for it: a limit dropped
-  // while computing usage, which happens on an unparseable anchor, silently
-  // stopped being enforced, and since a seeded grant deletes the session
-  // default there was then nothing bounding a pull at all.
+  // while computing usage, which happens on an unparseable anchor, would stop
+  // being enforced, and since a seeded grant deletes the session default there
+  // would be nothing bounding a pull at all.
   const exceeded: Array<{ limit: GrantedPeriodLimit; usage?: LimitUsage }> = [];
   for (const limit of policy.perPeriod ?? []) {
     // The rule `remainingOnLimit` ranks by. Read with `parseBigInt`, a negative

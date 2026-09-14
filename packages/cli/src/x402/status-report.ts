@@ -29,10 +29,7 @@ export function formatRemaining(seconds: number): string {
 
 export interface StatusFacts {
   expired: boolean;
-  /**
-   * Defaults to `unknown`, which reports exactly what every session reported
-   * before this could be read: the local file, and nothing more.
-   */
+  /** Defaults to `unknown`, which reports off the local file and nothing more. */
   liveness?: PermissionLiveness;
   /**
    * True for a session an older CLI created, whose permission was granted to an

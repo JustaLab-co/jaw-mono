@@ -12,9 +12,8 @@ import type { GrantedPermission } from '../lib/session-config.js';
  *
  * Recovered once and written back, so this costs one GET on the first command
  * that needs it and nothing afterwards. Anything that goes wrong leaves the
- * session exactly as it was, which is the behaviour every such session had
- * before this existed: a failed recovery must not turn a working command into
- * an error.
+ * session exactly as it was: a failed recovery must not turn a working command
+ * into an error.
  */
 
 const RECOVERY_TIMEOUT_MS = 5_000;
@@ -59,7 +58,7 @@ export async function recoverPermission(
     if (
       permission.account.toLowerCase() !== session.ownerAddress.toLowerCase() ||
       permission.spender.toLowerCase() !== session.sessionAddress.toLowerCase() ||
-      permission.end !== session.expiry // safe now that nothing else rewrites expiry
+      permission.end !== session.expiry // nothing else rewrites expiry
     ) {
       return undefined;
     }
