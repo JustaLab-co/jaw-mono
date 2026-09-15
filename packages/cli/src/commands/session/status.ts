@@ -26,7 +26,7 @@ export default class SessionStatus extends BaseCommand {
     const config = loadSessionConfig();
     const now = Date.now() / 1000;
     const endsAt = expiryInstant(config.expiry);
-    const isExpired = !endsAt || config.expiry <= now;
+    const isExpired = !endsAt || endsAt.getTime() / 1000 <= now;
     // The one fact no local file can hold. Expiry is already on disk, so it
     // needs no read; a revoke made from keys.jaw.id or from another machine
     // leaves this file saying the session is fine. Fails soft to 'unknown',
@@ -63,7 +63,7 @@ export default class SessionStatus extends BaseCommand {
     if (isExpired) {
       // `endsAt` is null when the file does not say, which lands here because a
       // report answers the way the paying path does.
-      const ago = endsAt ? Math.floor((now - config.expiry) / 86400) : null;
+      const ago = endsAt ? Math.floor((now - endsAt.getTime() / 1000) / 86400) : null;
       this.log('Session expired.\n');
       this.log(`  Session address:  ${config.sessionAddress}`);
       this.log(`  Owner address:    ${config.ownerAddress}`);
@@ -77,7 +77,8 @@ export default class SessionStatus extends BaseCommand {
       if (stillLive.length > 0) this.log(stillLiveLine(stillLive.length));
       this.log('\nRun `jaw session setup` to create a new session.');
     } else {
-      const remaining = Math.floor((config.expiry - now) / 86400);
+      // `endsAt` is set on this branch: `isExpired` is true without it.
+       const remaining = Math.floor((endsAt!.getTime() / 1000 - now) / 86400);
       this.log('Session active.\n');
       this.log(`  Session address:  ${config.sessionAddress}`);
       if (isLegacySession(config)) {

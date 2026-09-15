@@ -56,7 +56,7 @@ export default class X402Status extends BaseCommand {
     // Unreadable reads as expired in a report, the way the paying path answers
     // it: this page exists to say whether a payment can happen.
     const endsAt = expiryInstant(session.expiry);
-    const expired = !endsAt || session.expiry <= now;
+    const expired = !endsAt || endsAt.getTime() / 1000 <= now;
 
     const asset = Object.values(USDC_BY_NETWORK).find((a) => a.chainId === session.chainId);
     const payer = sessionPayerAddress();
@@ -273,7 +273,7 @@ export default class X402Status extends BaseCommand {
     }
     this.log(
       endsAt
-        ? `  expires ${endsAt.toISOString()}${expired ? '' : ` (${formatRemaining(session.expiry - now)})`}`
+        ? `  expires ${endsAt.toISOString()}${expired ? '' : ` (${formatRemaining(endsAt.getTime() / 1000 - now)})`}`
         : '  expires unknown, the session file does not say'
     );
 

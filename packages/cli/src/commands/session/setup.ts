@@ -220,7 +220,7 @@ export default class SessionSetup extends BaseCommand {
         this.logToStderr(
           `Warning: overwriting active session without revoking. ` +
             `Old permission ${existing.permissionId} on chain ${existing.chainId} ` +
-            `remains live until ${new Date(existing.expiry * 1000).toISOString()}. ` +
+            `remains live ${expiryInstant(existing.expiry) ? `until ${expiryInstant(existing.expiry)!.toISOString()}` : 'for an unknown time: the file does not say when it ends'}. ` +
             `Recorded on the new session, so \`jaw session revoke\` will revoke it too.`
         );
       }
@@ -454,6 +454,6 @@ export default class SessionSetup extends BaseCommand {
 }
 
 /** The part of a replaced session worth keeping: enough to revoke it later. */
-function orphanOf(session: { permissionId: string; chainId: number; expiry: number }): OrphanedPermission {
+function orphanOf(session: { permissionId: string; chainId: number; expiry: number | null }): OrphanedPermission {
   return { id: session.permissionId, chainId: session.chainId, expiry: session.expiry };
 }

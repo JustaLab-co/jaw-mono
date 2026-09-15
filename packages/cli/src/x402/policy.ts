@@ -43,8 +43,14 @@ export interface LimitUsage extends GrantedPeriodLimit {
    * same instant the caps were measured with.
    */
   startedAt: Date;
-  /** When this limit's current window ends. */
-  endsAt: Date;
+  /**
+   * When this limit's current window ends, or null when nothing can say.
+   *
+   * A window is clamped by the permission's own end, and a session file that
+   * does not state one leaves the end open. Null rather than a far date, so a
+   * refusal does not promise a reset it invented.
+   */
+  endsAt: Date | null;
   /**
    * Where `toppedUp` came from. From the ledger it is a floor, since the ledger
    * only sees what went through `payAndFetch`; from the chain it is what the
@@ -521,7 +527,7 @@ export function checkPolicy(
     );
     const others = exceeded.length - 1;
     const window = describePeriod(latest.limit.unit, latest.limit.multiplier);
-    const resets = latest.usage ? `, which resets ${latest.usage.endsAt.toISOString()}` : '';
+    const resets = latest.usage?.endsAt ? `, which resets ${latest.usage.endsAt.toISOString()}` : '';
     return {
       ok: false,
       reason:

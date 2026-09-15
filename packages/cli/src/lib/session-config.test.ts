@@ -28,6 +28,7 @@ const {
   liveOrphans,
   saveRevokeProgress,
   sessionLives,
+  sessionUsable,
 } = await import('./session-config.js');
 const { PATHS } = await import('./paths.js');
 
@@ -379,5 +380,41 @@ describe('a session file that was edited', () => {
     const now = 1_000_000;
     expect(sessionLives(now + 10, now)).toBe(true);
     expect(sessionLives(now - 10, now)).toBe(false);
+  });
+});
+
+describe('the two sides of an expiry the file cannot state', () => {
+  const write = (config: unknown) => {
+    fs.mkdirSync(TEST_ROOT, { recursive: true });
+    fs.writeFileSync(PATHS.sessionConfig, JSON.stringify(config), { mode: 0o600 });
+  };
+
+  it('narrows an unreadable expiry to null rather than carrying a value nobody can use', () => {
+    write({ ...SAMPLE_CONFIG, expiry: 'whenever' });
+
+    expect(loadSessionConfig().expiry).toBeNull();
+  });
+
+  // The whole point of the pair: the same unknown, answered opposite ways.
+  it('is not usable and is still live', () => {
+    expect(sessionUsable(null)).toBe(false);
+    expect(sessionLives(null)).toBe(true);
+  });
+
+  it('agrees with itself on an expiry that reads', () => {
+    const now = 1_000_000;
+    expect(sessionUsable(now + 10, now)).toBe(true);
+    expect(sessionLives(now + 10, now)).toBe(true);
+    expect(sessionUsable(now - 10, now)).toBe(false);
+    expect(sessionLives(now - 10, now)).toBe(false);
+  });
+
+  it('keeps an orphan whose expiry cannot be read', () => {
+    const orphans = [
+      { id: '0xa', chainId: 8453, expiry: null },
+      { id: '0xb', chainId: 8453, expiry: 1 },
+    ];
+
+    expect(liveOrphans(orphans, 1_000_000).map((o) => o.id)).toEqual(['0xa']);
   });
 });

@@ -5,12 +5,14 @@ import { loadConfig } from '../../lib/config.js';
 import { getBridge } from '../../lib/bridge-singleton.js';
 import { keystoreExists } from '../../lib/keystore.js';
 import {
+  expiryInstant,
   isLegacySession,
   liveOrphans,
   loadSessionConfig,
   parseGrantedPermission,
   saveRevokeProgress,
   saveSessionConfig,
+  sessionUsable,
 } from '../../lib/session-config.js';
 import type { OutputFormat, PermissionsConfig } from '../../lib/types.js';
 import { parsePermissionsConfig } from '../../lib/validation.js';
@@ -82,7 +84,9 @@ export default class SessionAdd extends BaseCommand {
     }
 
     const session = loadSessionConfig();
-    if (session.expiry <= Date.now() / 1000) {
+    // `sessionUsable` rather than a comparison: this grants on chain, so an
+    // expiry nobody can read has to stop it the way it stops a payment.
+    if (!sessionUsable(session.expiry)) {
       this.error('The session expired, so there is nothing to add to. Run `jaw session setup` to create a new one.');
     }
     if (isLegacySession(session)) {
@@ -306,7 +310,8 @@ export default class SessionAdd extends BaseCommand {
     this.log(`  Session address:  ${session.sessionAddress}`);
     this.log(`  Permission ID:    ${response.permissionId}`);
     this.log(`  Chain:            ${session.chainId}`);
-    this.log(`  Expires:          ${new Date(session.expiry * 1000).toISOString()}`);
+    const ends = expiryInstant(session.expiry);
+    this.log(`  Expires:          ${ends ? ends.toISOString() : 'unknown'}`);
   }
 
   private resolveAddition(

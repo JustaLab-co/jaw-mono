@@ -145,8 +145,12 @@ export function isLegacySession(config: Pick<SessionConfig, 'mode'>): boolean {
 export interface OrphanedPermission {
   id: string;
   chainId: number;
-  /** Unix seconds. */
-  expiry: number;
+  /**
+   * Unix seconds, or null when the session it came from did not say. Carried
+   * rather than dropped: `liveOrphans` keeps an orphan whose expiry cannot be
+   * read, since dropping it is how the grant it names stops being reachable.
+   */
+  expiry: number | null;
 }
 
 export interface SessionConfig {
@@ -154,8 +158,28 @@ export interface SessionConfig {
   sessionAddress: string;
   permissionId: string;
   chainId: number;
-  expiry: number;
-  createdAt: string;
+  /**
+   * When the permission ends, or null when the file does not say.
+   *
+   * Nullable because this is read off a file a person can edit and a crash can
+   * truncate, and the old type said `number` while the value could be anything.
+   * That silence is the bug: `expiry <= now` is false for a `NaN`, so an
+   * unreadable field turned the expiry check off instead of failing it, and the
+   * compiler could not point at the places that would have to decide.
+   *
+   * Every reader answers it for itself, because the safe answer differs by
+   * question: see `sessionLives` for the cleanup side and `SessionBridge` for
+   * the spending side.
+   */
+  expiry: number | null;
+  /**
+   * When the session began, or undefined on a session written before the field.
+   *
+   * Optional for the same reason, and the absent case was always supported:
+   * `sumSpentSince` takes the instant as optional and counts the payer's whole
+   * history without it, which is the conservative direction.
+   */
+  createdAt?: string;
   mode?: SessionMode;
   /** The struct the on-chain reads need. Absent on older sessions; see the type. */
   permission?: GrantedPermission;
@@ -315,10 +339,23 @@ export function isReadableInstant(value: unknown): value is string {
  * report it, which is the command someone runs precisely because something is
  * wrong.
  */
-export function expiryInstant(expiry: unknown): Date | null {
+export function expiryInstant(expiry: number | null | undefined): Date | null {
   if (typeof expiry !== 'number' || !Number.isFinite(expiry)) return null;
   const instant = new Date(expiry * 1000);
   return Number.isNaN(instant.getTime()) ? null : instant;
+}
+
+/**
+ * Whether a session may still be used to act.
+ *
+ * The spending side of the same question `sessionLives` answers for cleanup, and
+ * it answers the opposite way when the file cannot say: an expiry nobody can
+ * read is not a licence to sign, and it is not a reason to skip a revoke either.
+ * Both are exported so the two sides are readable next to each other rather than
+ * being two comparisons that happen to differ.
+ */
+export function sessionUsable(expiry: number | null | undefined, now: number = Date.now() / 1000): boolean {
+  return typeof expiry === 'number' && Number.isFinite(expiry) && expiry > now;
 }
 
 /**
@@ -360,7 +397,8 @@ function whySessionConfigIsUnusable(config: SessionConfig): string | null {
 }
 
 /**
- * Drop what cannot be read rather than refusing the file for it.
+ * Narrow what cannot be read to the type that says so, rather than refusing the
+ * file for it or leaving a value no reader can trust.
  *
  * `createdAt` is the instant the session total counts from. Absent is already a
  * supported state, and the safe one: `sumSpentSince` takes `since` as optional
@@ -371,11 +409,12 @@ function whySessionConfigIsUnusable(config: SessionConfig): string | null {
  * is a valid date in 2024 rather than a rejection.
  */
 function normalizeSessionConfig(config: SessionConfig): SessionConfig {
-  if (config.createdAt !== undefined && !isReadableInstant(config.createdAt)) {
-    const { createdAt: _unreadable, ...rest } = config;
-    return rest as SessionConfig;
-  }
-  return config;
+  const expiry = typeof config.expiry === 'number' && Number.isFinite(config.expiry) ? config.expiry : null;
+  // Absent rather than a value nothing can read, which is what the type now
+  // says and what `sumSpentSince` already handled: no instant means count the
+  // payer's whole history, so the cap binds sooner rather than later.
+  const createdAt = isReadableInstant(config.createdAt) ? config.createdAt : undefined;
+  return { ...config, expiry, createdAt };
 }
 
 export function loadSessionConfig(): SessionConfig {

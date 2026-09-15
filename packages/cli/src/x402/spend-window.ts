@@ -25,7 +25,7 @@ export function currentLimitUsage(
   entries: X402LogEntry[],
   policy: X402Policy,
   payerAddress: string,
-  session: { expiry: number; permissionId?: string } | null | undefined,
+  session: { expiry: number | null; permissionId?: string } | null | undefined,
   now: Date = new Date()
 ): LimitUsage[] {
   if (!session || !policy.perPeriod) return [];
@@ -42,7 +42,10 @@ export function currentLimitUsage(
       unit: limit.unit,
       multiplier: limit.multiplier,
       now: Math.floor(now.getTime() / 1000),
-      permissionEnd: session.expiry,
+      // No end we can state means no clamp: `permissionEnd` only shortens the
+      // window's end, never its start, so leaving it open keeps the same rows
+      // counted and only stops the report claiming a reset date it cannot know.
+      permissionEnd: session.expiry ?? Number.POSITIVE_INFINITY,
     });
     const since = new Date(window.start * 1000).toISOString();
     usage.push({
@@ -50,7 +53,7 @@ export function currentLimitUsage(
       spent: sumSpentSince(entries, scope, since),
       toppedUp: sumToppedUpSince(entries, scope, since),
       startedAt: new Date(window.start * 1000),
-      endsAt: new Date(window.end * 1000),
+      endsAt: Number.isFinite(window.end) ? new Date(window.end * 1000) : null,
       source: 'ledger',
     });
   }
