@@ -207,6 +207,14 @@ export interface SessionConfig {
  * accumulating in the file for the life of the machine. Dropping it is the same
  * decision `session revoke` makes when it skips the browser for an expired
  * session.
+ *
+ * One kind is never dropped: an orphan whose expiry cannot be read. The file
+ * does not say whether that grant is over, and dropping it is how the grant
+ * stops being reachable, so it is kept and `session revoke` will try it. The
+ * cost is that those do not self-prune the way expired ones do, and each one
+ * revoke reaches for is a transaction the user approves. It is the same trade
+ * `sessionLives` makes everywhere else: a permission that may still be live is
+ * worth more than a shorter file.
  */
 export function liveOrphans(
   orphans: OrphanedPermission[] | undefined,
