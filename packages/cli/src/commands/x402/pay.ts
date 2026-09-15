@@ -138,8 +138,12 @@ export default class X402Pay extends BaseCommand {
         dryRun: !flags.pay,
       });
 
-      // Only a real run touches the ledger. Recording dry runs would corrupt the
-      // spend totals that both this command and the agent read back.
+      // No payment row for a dry run: recording one would corrupt the spend
+      // totals that both this command and the agent read back. The reconcile
+      // above does write, and deliberately, though a dry run holds no lock. What
+      // it writes are corrections, which only ever bring a ceiling down to what
+      // the chain says moved, and a rehearsal that skipped them would measure
+      // against ceilings the real run would not have.
       if (flags.pay) {
         const settled = outcome.payment ?? outcome.attemptedPayment;
         const isPaymentEvent =
