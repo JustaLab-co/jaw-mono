@@ -78,7 +78,7 @@ export default class SessionStatus extends BaseCommand {
       this.log('\nRun `jaw session setup` to create a new session.');
     } else {
       // `endsAt` is set on this branch: `isExpired` is true without it.
-       const remaining = Math.floor((endsAt!.getTime() / 1000 - now) / 86400);
+      const remaining = Math.floor((endsAt!.getTime() / 1000 - now) / 86400);
       this.log('Session active.\n');
       this.log(`  Session address:  ${config.sessionAddress}`);
       if (isLegacySession(config)) {
