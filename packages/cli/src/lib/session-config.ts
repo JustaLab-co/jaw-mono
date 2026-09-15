@@ -294,16 +294,63 @@ export function sessionConfigExists(): boolean {
   return fs.existsSync(PATHS.sessionConfig);
 }
 
+/**
+ * Why a field is wrong, or nothing when the file can be trusted.
+ *
+ * `saveSessionConfig` is checked by the compiler and nothing checks the file
+ * afterwards, which is the gap: this is a file on disk that a person can edit
+ * and a crash can truncate, and `JSON.parse(raw) as SessionConfig` asserts a
+ * shape rather than establishing one.
+ *
+ * Three fields are worth refusing over, and they are the ones whose wrongness is
+ * silent rather than loud. `expiry` is read as `expiry <= now`, and every
+ * comparison against a `NaN` is false, so an unreadable one turns the expiry
+ * check off instead of failing it. `createdAt` is the instant the session total
+ * counts from, so a string that does not parse moves that window without saying
+ * so and can hand back budget already spent. `chainId` decides which chain every
+ * read below asks about.
+ *
+ * The addresses are deliberately not checked here. `SessionBridge` re-derives
+ * the session address and refuses on a mismatch, which is a better answer than a
+ * regex would give: it catches a key that drifted as well as a field that was
+ * edited, and its message says which.
+ */
+function whySessionConfigIsUnusable(config: SessionConfig): string | null {
+  if (typeof config !== 'object' || config === null) return 'it is not an object';
+  if (typeof config.permissionId !== 'string' || config.permissionId === '') return '`permissionId` is missing';
+  if (!Number.isInteger(config.chainId) || config.chainId <= 0) return '`chainId` is not a chain id';
+  if (typeof config.expiry !== 'number' || !Number.isFinite(config.expiry)) {
+    return '`expiry` is not a number, so nothing could tell whether the session has ended';
+  }
+  // Absent is fine and means a session written before the field: `sumSpentSince`
+  // takes `since` as optional and counts the payer's whole history without it.
+  // Present and unreadable is not, because that is the case that moves a window
+  // rather than widening it.
+  if (config.createdAt !== undefined && !Number.isFinite(Date.parse(config.createdAt))) {
+    return '`createdAt` is not a readable instant, so the session total would be counted from the wrong point';
+  }
+  return null;
+}
+
 export function loadSessionConfig(): SessionConfig {
   if (!fs.existsSync(PATHS.sessionConfig)) {
     throw new Error('No session configured. Run `jaw session setup` first.');
   }
   const raw = fs.readFileSync(PATHS.sessionConfig, 'utf-8');
+  let parsed: SessionConfig;
   try {
-    return JSON.parse(raw) as SessionConfig;
+    parsed = JSON.parse(raw) as SessionConfig;
   } catch {
     throw new Error(`Session config at ${PATHS.sessionConfig} is corrupted. Run \`jaw session setup\` to recreate it.`);
   }
+
+  const wrong = whySessionConfigIsUnusable(parsed);
+  if (wrong) {
+    throw new Error(
+      `Session config at ${PATHS.sessionConfig} cannot be used: ${wrong}. ` + 'Run `jaw session setup` to recreate it.'
+    );
+  }
+  return parsed;
 }
 
 /**

@@ -325,3 +325,50 @@ describe('writing the session config', () => {
     expect(fs.statSync(PATHS.sessionConfig).mode & 0o777).toBe(0o600);
   });
 });
+
+describe('loadSessionConfig, a file that was edited', () => {
+  const write = (config: unknown) => {
+    fs.mkdirSync(TEST_ROOT, { recursive: true });
+    fs.writeFileSync(PATHS.sessionConfig, JSON.stringify(config), { mode: 0o600 });
+  };
+
+  /**
+   * The one that matters most: `expiry <= now` is false for a NaN, so an
+   * unreadable expiry turns the check off rather than failing it, and the
+   * session reads as live for good.
+   */
+  it('refuses an expiry that is not a number instead of reading it as live', () => {
+    write({ ...SAMPLE_CONFIG, expiry: 'whenever' });
+
+    expect(() => loadSessionConfig()).toThrow(/`expiry` is not a number/);
+    expect(tryLoadSessionConfig()).toBeNull();
+  });
+
+  it('refuses a createdAt that does not parse, which would move the session total', () => {
+    write({ ...SAMPLE_CONFIG, createdAt: 'last tuesday' });
+
+    expect(() => loadSessionConfig()).toThrow(/`createdAt` is not a readable instant/);
+  });
+
+  it('refuses a chainId that is not one', () => {
+    write({ ...SAMPLE_CONFIG, chainId: '8453' });
+
+    expect(() => loadSessionConfig()).toThrow(/`chainId` is not a chain id/);
+  });
+
+  it('refuses a missing permissionId', () => {
+    const { permissionId: _dropped, ...withoutPermission } = SAMPLE_CONFIG;
+    write(withoutPermission);
+
+    expect(() => loadSessionConfig()).toThrow(/`permissionId` is missing/);
+  });
+
+  // A session written before `createdAt` existed is readable, and the spend sums
+  // already take the instant as optional.
+  it('reads a file that never carried a createdAt', () => {
+    const { createdAt: _dropped, ...older } = SAMPLE_CONFIG;
+    write(older);
+
+    expect(loadSessionConfig().permissionId).toBe(SAMPLE_CONFIG.permissionId);
+  });
+});
