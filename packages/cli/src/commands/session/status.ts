@@ -1,6 +1,6 @@
 import { BaseCommand } from '../../base-command.js';
 import { keystoreExists } from '../../lib/keystore.js';
-import { isLegacySession, liveOrphans, loadSessionConfig } from '../../lib/session-config.js';
+import { expiryInstant, isLegacySession, liveOrphans, loadSessionConfig } from '../../lib/session-config.js';
 import { loadConfig } from '../../lib/config.js';
 import { apiKeyFor } from '../../lib/api-key.js';
 import { readLiveness, type PermissionLiveness } from '../../x402/permission-onchain.js';
@@ -25,7 +25,8 @@ export default class SessionStatus extends BaseCommand {
 
     const config = loadSessionConfig();
     const now = Date.now() / 1000;
-    const isExpired = config.expiry <= now;
+    const endsAt = expiryInstant(config.expiry);
+    const isExpired = !endsAt || config.expiry <= now;
     // The one fact no local file can hold. Expiry is already on disk, so it
     // needs no read; a revoke made from keys.jaw.id or from another machine
     // leaves this file saying the session is fine. Fails soft to 'unknown',
@@ -60,13 +61,19 @@ export default class SessionStatus extends BaseCommand {
     }
 
     if (isExpired) {
-      const ago = Math.floor((now - config.expiry) / 86400);
+      // `endsAt` is null when the file does not say, which lands here because a
+      // report answers the way the paying path does.
+      const ago = endsAt ? Math.floor((now - config.expiry) / 86400) : null;
       this.log('Session expired.\n');
       this.log(`  Session address:  ${config.sessionAddress}`);
       this.log(`  Owner address:    ${config.ownerAddress}`);
       this.log(`  Permission ID:    ${config.permissionId}${onChainNote(liveness)}`);
       this.log(`  Chain:            ${config.chainId}`);
-      this.log(`  Expired:          ${new Date(config.expiry * 1000).toISOString()} (${ago} days ago)`);
+      this.log(
+        endsAt
+          ? `  Expired:          ${endsAt.toISOString()} (${ago} days ago)`
+          : '  Expired:          unknown, the session file does not say when it ends'
+      );
       if (stillLive.length > 0) this.log(stillLiveLine(stillLive.length));
       this.log('\nRun `jaw session setup` to create a new session.');
     } else {
@@ -83,7 +90,7 @@ export default class SessionStatus extends BaseCommand {
       this.log(`  Owner address:    ${config.ownerAddress}`);
       this.log(`  Permission ID:    ${config.permissionId}${onChainNote(liveness)}`);
       this.log(`  Chain:            ${config.chainId}`);
-      this.log(`  Expires:          ${new Date(config.expiry * 1000).toISOString()}`);
+      this.log(`  Expires:          ${endsAt ? endsAt.toISOString() : 'unknown'}`);
       // Revoked outranks the local expiry: the session has time left on paper
       // and can no longer pull anything through the permission.
       this.log(

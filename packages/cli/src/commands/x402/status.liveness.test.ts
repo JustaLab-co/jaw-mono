@@ -47,6 +47,8 @@ vi.mock('../../lib/config.js', () => ({
   },
 }));
 vi.mock('../../lib/session-config.js', () => ({
+  expiryInstant: (expiry: unknown) =>
+    typeof expiry === 'number' && Number.isFinite(expiry) ? new Date(expiry * 1000) : null,
   tryLoadSessionConfig: () => h.session,
   isLegacySession: () => false,
   liveOrphans: () => [],

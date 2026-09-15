@@ -50,6 +50,8 @@ vi.mock('../../lib/paths.js', () => {
 vi.mock('../../lib/keystore.js', () => ({ keystoreExists: () => true }));
 vi.mock('../../lib/config.js', () => ({ loadConfig: () => ({}), ensureDir: () => undefined }));
 vi.mock('../../lib/session-config.js', () => ({
+  expiryInstant: (expiry: unknown) =>
+    typeof expiry === 'number' && Number.isFinite(expiry) ? new Date(expiry * 1000) : null,
   tryLoadSessionConfig: () => h.session,
   isLegacySession: () => false,
   liveOrphans: () => [],

@@ -188,7 +188,10 @@ export function liveOrphans(
   orphans: OrphanedPermission[] | undefined,
   now: number = Date.now() / 1000
 ): OrphanedPermission[] {
-  return (orphans ?? []).filter((orphan) => orphan.expiry > now);
+  // `sessionLives` rather than a comparison, for the reason it carries: an
+  // orphan whose expiry will not read is the one that most needs to be kept,
+  // since dropping it is how the grant it names stops being reachable.
+  return (orphans ?? []).filter((orphan) => sessionLives(orphan.expiry, now));
 }
 
 /**
@@ -302,6 +305,20 @@ export function sessionConfigExists(): boolean {
  */
 export function isReadableInstant(value: unknown): value is string {
   return typeof value === 'string' && Number.isFinite(Date.parse(value));
+}
+
+/**
+ * The expiry as an instant, or null when the file does not say.
+ *
+ * Every caller that prints one goes through here. `new Date(NaN).toISOString()`
+ * throws, so a field that will not read took down the command that was trying to
+ * report it, which is the command someone runs precisely because something is
+ * wrong.
+ */
+export function expiryInstant(expiry: unknown): Date | null {
+  if (typeof expiry !== 'number' || !Number.isFinite(expiry)) return null;
+  const instant = new Date(expiry * 1000);
+  return Number.isNaN(instant.getTime()) ? null : instant;
 }
 
 /**

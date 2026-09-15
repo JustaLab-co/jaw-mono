@@ -14,6 +14,7 @@ import {
 import {
   liveOrphans,
   parseGrantedPermission,
+  expiryInstant,
   saveSessionConfig,
   sessionLives,
   tryLoadSessionConfig,
@@ -145,13 +146,18 @@ export default class SessionSetup extends BaseCommand {
             reuseKey = loadSessionKey();
           }
         } else if (isActive) {
-          const remaining = Math.floor((existing.expiry - Date.now() / 1000) / 86400);
+          // `isActive` is true for an expiry nobody can read, by design, so the
+          // line below cannot assume there is a date to print.
+          const ends = expiryInstant(existing.expiry);
+          const remaining = ends ? Math.floor((ends.getTime() / 1000 - Date.now() / 1000) / 86400) : null;
           this.log('Active session found:\n');
           this.log(`  Session address:  ${existing.sessionAddress}`);
           this.log(`  Permission ID:    ${existing.permissionId}`);
           this.log(`  Chain:            ${existing.chainId}`);
           this.log(
-            `  Expires:          ${new Date(existing.expiry * 1000).toISOString()} (${remaining} days remaining)`
+            ends
+              ? `  Expires:          ${ends.toISOString()} (${remaining} days remaining)`
+              : '  Expires:          unknown, the session file does not say'
           );
           this.log('\nThe old on-chain permission will NOT be revoked automatically.');
           this.log('Anyone with the old session key can still use it until expiry.\n');
