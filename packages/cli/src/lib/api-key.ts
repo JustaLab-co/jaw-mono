@@ -17,3 +17,25 @@ import type { JawConfig } from './types.js';
 export function apiKeyFor(config: JawConfig, chosen?: string): string | undefined {
   return chosen ?? process.env['JAW_API_KEY'] ?? config.apiKey ?? config.workspaceApiKey;
 }
+
+/**
+ * Whether an error is the proxy refusing the key it was given.
+ *
+ * Every proxy route answers a bad key with a 403 whose body names
+ * `ApiKeyInvalidException`. Core's REST client keeps that text as the message.
+ * viem's transport drops the body and keeps only the status, so a bare 403 is
+ * taken as the same refusal: the key only ever goes to the proxy, and a 403
+ * from anywhere else costs one refresh before the error surfaces unchanged.
+ * Either can arrive wrapped by whatever was running, hence the walk down
+ * `cause`.
+ */
+export function isRejectedApiKey(err: unknown): boolean {
+  let node: unknown = err;
+  while (node instanceof Error) {
+    if (node.message.includes('ApiKeyInvalidException')) return true;
+    const { status, cause } = node as { status?: unknown; cause?: unknown };
+    if (status === 403) return true;
+    node = cause;
+  }
+  return false;
+}

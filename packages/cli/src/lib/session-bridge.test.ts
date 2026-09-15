@@ -33,6 +33,12 @@ vi.mock('./config.js', () => ({
   loadConfig: vi.fn().mockReturnValue({}),
 }));
 
+// The browser reconnect a rotated key triggers. Never reached unless a test
+// hands the bridge the workspace key and refuses it.
+vi.mock('./bridge-singleton.js', () => ({
+  refreshWorkspaceApiKey: vi.fn(),
+}));
+
 // Mock viem
 vi.mock('viem/accounts', () => ({
   privateKeyToAccount: vi.fn().mockReturnValue({ address: '0xRawEOA' }),
@@ -394,5 +400,65 @@ describe('approvePermit2', () => {
     await expect(bridge.approvePermit2('0x1234567890123456789012345678901234567890')).rejects.toThrow(
       /only the registry USDC/i
     );
+  });
+});
+
+describe('SessionBridge, a rotated workspace key', () => {
+  const rejected = () => Object.assign(new Error('ApiKeyInvalidException: Invalid Api Key'), { status: 403 });
+
+  beforeEach(async () => {
+    mockAccountAddress = '0xSession';
+    mockExpiry = FUTURE_EXPIRY;
+    mockMode = 'eip7702';
+    vi.clearAllMocks();
+    const { loadConfig } = await import('./config.js');
+    vi.mocked(loadConfig).mockReturnValue({ workspaceApiKey: 'old-key' });
+  });
+
+  it('fetches a fresh key from the browser and sends again under it', async () => {
+    const { refreshWorkspaceApiKey } = await import('./bridge-singleton.js');
+    vi.mocked(refreshWorkspaceApiKey).mockResolvedValue('new-key');
+    mockSendCalls.mockRejectedValueOnce(rejected()).mockResolvedValueOnce({ id: '0xAfter', chainId: 84532 });
+    const bridge = new SessionBridge({ apiKey: 'old-key', chainId: 84532 });
+
+    const result = await bridge.request('wallet_sendCalls', [{ calls: [] }]);
+
+    expect(result).toEqual({ id: '0xAfter', chainId: 84532 });
+    expect(refreshWorkspaceApiKey).toHaveBeenCalledTimes(1);
+    // The account is built again under the new key, paymaster url included:
+    // the old one carried the refused key in its query string.
+    expect(Account.fromLocalAccount).toHaveBeenLastCalledWith(
+      expect.objectContaining({ apiKey: 'new-key', paymasterUrl: expect.stringContaining('api-key=new-key') }),
+      expect.anything(),
+      expect.anything()
+    );
+  });
+
+  it('leaves a key the user set alone', async () => {
+    const { refreshWorkspaceApiKey } = await import('./bridge-singleton.js');
+    mockSendCalls.mockRejectedValueOnce(rejected());
+    const bridge = new SessionBridge({ apiKey: 'mine', chainId: 84532 });
+
+    await expect(bridge.request('wallet_sendCalls', [{ calls: [] }])).rejects.toThrow(/ApiKeyInvalidException/);
+    expect(refreshWorkspaceApiKey).not.toHaveBeenCalled();
+  });
+
+  it('gives up when the browser hands back the same key', async () => {
+    const { refreshWorkspaceApiKey } = await import('./bridge-singleton.js');
+    vi.mocked(refreshWorkspaceApiKey).mockResolvedValue('old-key');
+    mockSendCalls.mockRejectedValueOnce(rejected());
+    const bridge = new SessionBridge({ apiKey: 'old-key', chainId: 84532 });
+
+    await expect(bridge.request('wallet_sendCalls', [{ calls: [] }])).rejects.toThrow(/ApiKeyInvalidException/);
+    expect(mockSendCalls).toHaveBeenCalledTimes(1);
+  });
+
+  it('does not touch the key on any other failure', async () => {
+    const { refreshWorkspaceApiKey } = await import('./bridge-singleton.js');
+    mockSendCalls.mockRejectedValueOnce(new Error('bundler is down'));
+    const bridge = new SessionBridge({ apiKey: 'old-key', chainId: 84532 });
+
+    await expect(bridge.request('wallet_sendCalls', [{ calls: [] }])).rejects.toThrow(/bundler is down/);
+    expect(refreshWorkspaceApiKey).not.toHaveBeenCalled();
   });
 });

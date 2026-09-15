@@ -1,5 +1,29 @@
 import { describe, it, expect, afterEach } from 'vitest';
-import { apiKeyFor } from './api-key.js';
+import { apiKeyFor, isRejectedApiKey } from './api-key.js';
+
+describe('isRejectedApiKey', () => {
+  it('recognises the refusal as the REST client reports it', () => {
+    const err = Object.assign(new Error('ApiKeyInvalidException: Invalid Api Key'), { status: 403 });
+    expect(isRejectedApiKey(err)).toBe(true);
+  });
+
+  /**
+   * viem keeps the status and drops the body, and the transport error arrives
+   * inside whatever action was running, so the status has to be found down the
+   * chain rather than on the error that surfaces.
+   */
+  it('recognises a 403 wrapped by the action that hit it', () => {
+    const transport = Object.assign(new Error('HTTP request failed.'), { status: 403 });
+    const action = new Error('sendUserOperation failed', { cause: transport });
+    expect(isRejectedApiKey(action)).toBe(true);
+  });
+
+  it('leaves every other failure alone', () => {
+    expect(isRejectedApiKey(new Error('bundler is down'))).toBe(false);
+    expect(isRejectedApiKey(Object.assign(new Error('rate limited'), { status: 429 }))).toBe(false);
+    expect(isRejectedApiKey('not even an error')).toBe(false);
+  });
+});
 
 describe('apiKeyFor', () => {
   afterEach(() => {

@@ -1,6 +1,7 @@
 import { loadSessionKey } from './keystore.js';
 import { isLegacySession, loadSessionConfig, type SessionConfig } from './session-config.js';
 import { loadConfig } from './config.js';
+import { isRejectedApiKey } from './api-key.js';
 import { encodeFunctionData, erc20Abi, maxUint256 } from 'viem';
 import { usdcForNetwork } from '../x402/asset-registry.js';
 import { whyFeeTokenDisagrees } from '../x402/fee-token.js';
@@ -123,11 +124,40 @@ interface InitializedSession {
 }
 
 export class SessionBridge {
-  private readonly options: SessionBridgeOptions;
+  /** As given, so the paymaster can be resolved again under a fresh key. */
+  private readonly given: SessionBridgeOptions;
+  private options: SessionBridgeOptions;
   private session: InitializedSession | null = null;
 
   constructor(options: SessionBridgeOptions) {
+    this.given = options;
     this.options = { ...options, ...resolvePaymaster(options) };
+  }
+
+  /**
+   * Run an operation, and once more under a fresh key if the proxy refused the
+   * one the browser handed us.
+   *
+   * Only that key. The deployment rotates it, and every install keeps sending
+   * the old one until told otherwise, so a refusal here is how an install
+   * learns. A key the user set is theirs, and a refusal of it surfaces as is.
+   */
+  private async underCurrentKey<T>(op: () => Promise<T>): Promise<T> {
+    try {
+      return await op();
+    } catch (err) {
+      if (!isRejectedApiKey(err) || this.options.apiKey !== loadConfig().workspaceApiKey) throw err;
+      // Lazy for the same reason core is: the browser bridge pulls in the
+      // websocket client, and a payment that never needs it should not load it.
+      const { refreshWorkspaceApiKey } = await import('./bridge-singleton.js');
+      const fresh = await refreshWorkspaceApiKey();
+      if (!fresh || fresh === this.options.apiKey) throw err;
+      const given = { ...this.given, apiKey: fresh };
+      this.options = { ...given, ...resolvePaymaster(given) };
+      // The account holds the paymaster url with the old key in it.
+      this.session = null;
+      return await op();
+    }
   }
 
   private async getSession(): Promise<InitializedSession> {
@@ -226,7 +256,11 @@ export class SessionBridge {
    * that turns this into an arbitrary transfer, which matters because an agent
    * reaches the tools that reach this.
    */
-  async approvePermit2(token: `0x${string}`): Promise<string> {
+  approvePermit2(token: `0x${string}`): Promise<string> {
+    return this.underCurrentKey(() => this.approvePermit2Now(token));
+  }
+
+  private async approvePermit2Now(token: `0x${string}`): Promise<string> {
     const { account, config } = await this.getSession();
     const usdc = usdcForNetwork(`eip155:${config.chainId}`);
     if (!usdc || token.toLowerCase() !== usdc.address.toLowerCase()) {
@@ -254,7 +288,11 @@ export class SessionBridge {
     }
   }
 
-  async request(method: string, params?: unknown): Promise<unknown> {
+  request(method: string, params?: unknown): Promise<unknown> {
+    return this.underCurrentKey(() => this.dispatch(method, params));
+  }
+
+  private async dispatch(method: string, params?: unknown): Promise<unknown> {
     const { account, config } = await this.getSession();
 
     switch (method) {

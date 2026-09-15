@@ -194,6 +194,22 @@ function keepInjectedApiKey(injected: string | null): void {
   saveConfig({ ...config, workspaceApiKey: injected });
 }
 
+/**
+ * Drop the workspace key the proxy just refused and connect once, so the browser
+ * hands over the current one.
+ *
+ * Dropped before connecting rather than after: a connect that fails must not
+ * leave the dead key in place to be sent again. Sending no key is also what has
+ * the deployment answer with its own, which `keepInjectedApiKey` stores.
+ */
+export async function refreshWorkspaceApiKey(): Promise<string | undefined> {
+  const config = loadConfig();
+  saveConfig({ ...config, workspaceApiKey: undefined });
+  const bridge = await getBridge({ keysUrl: config.keysUrl, chainId: config.defaultChain, ens: config.ens });
+  bridge.close();
+  return loadConfig().workspaceApiKey;
+}
+
 function buildBridgeUrl(keysUrl: string, session: string, relayUrl: string, cliPublicKeyHex: string): string {
   const url = new URL('/cli-bridge', keysUrl);
   url.searchParams.set('session', session);
