@@ -16,6 +16,7 @@ import {
   SendTransactionUIRequest,
   PermissionUIRequest,
   RevokePermissionUIRequest,
+  AddFundsUIRequest,
   WalletSignUIRequest,
   Account,
   SUPPORTED_CHAINS,
@@ -48,6 +49,7 @@ import { TransactionDialog } from '../components/TransactionDialog';
 import { PermissionDialog } from '../components/PermissionDialog';
 import { isWildcard } from '../components/PermissionDialog/Sections';
 import { ConnectDialog } from '../components/ConnectDialog';
+import { AddFundsDialog } from '../components/AddFundsDialog';
 import { ResponsiveDialogAnchor } from '../components/DialogPresentation';
 import { type FeeTokenOption } from '../components/FeeTokenSelector';
 import { type LocalStorageAccount, type CreatedAccountData } from '../components/OnboardingDialog/types';
@@ -429,6 +431,7 @@ export class ReactUIHandler implements UIHandler {
       'wallet_grantPermissions',
       'wallet_revokePermissions',
       'wallet_sign',
+      'wallet_addFunds',
     ].includes(request.type);
   }
 
@@ -673,6 +676,18 @@ export class ReactUIHandler implements UIHandler {
             apiKey={this.config.apiKey}
             defaultChainId={this.config.defaultChainId}
             paymasters={this.config.paymasters}
+            appName={this.config.appName}
+            appLogoUrl={this.config.appLogoUrl}
+          />
+        );
+
+      case 'wallet_addFunds':
+        return (
+          <AddFundsDialogWrapper
+            key={request.id}
+            request={request as AddFundsUIRequest}
+            onApprove={onApprove}
+            apiKey={this.config.apiKey}
             appName={this.config.appName}
             appLogoUrl={this.config.appLogoUrl}
           />
@@ -2753,6 +2768,49 @@ function SiweDialogWrapper({
       siweStatus={siweStatus}
       canSign={!isProcessing}
       warningMessage={warningMessage}
+    />
+  );
+}
+
+// AddFundsDialogWrapper - handles wallet_addFunds
+//
+// The thinnest wrapper of the set: the screen shows an address and closes. It
+// takes no onReject, because there is nothing to reject — deposits land off-app,
+// so the user closing is the normal finish and the request resolves null.
+function AddFundsDialogWrapper({
+  request,
+  onApprove,
+  apiKey,
+  appName,
+  appLogoUrl,
+}: {
+  request: AddFundsUIRequest;
+  onApprove: (data: unknown) => void;
+  apiKey?: string;
+  appName?: string;
+  appLogoUrl?: string | null;
+}) {
+  const [open, setOpen] = useState(true);
+
+  const finish = () => {
+    setOpen(false);
+    onApprove(null);
+  };
+
+  return (
+    <AddFundsDialog
+      open={open}
+      onOpenChange={(next) => {
+        if (!next) finish();
+      }}
+      address={request.data.address}
+      chainId={request.data.chainId}
+      mainnetRpcUrl={getMainnetRpcUrl(apiKey)}
+      apiKey={apiKey}
+      appName={appName}
+      appLogoUrl={appLogoUrl}
+      origin={typeof window !== 'undefined' ? window.location.origin : ''}
+      onDone={finish}
     />
   );
 }

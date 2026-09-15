@@ -17,7 +17,8 @@ export type UIRequestType =
     | 'wallet_revokePermissions'
     | 'personal_sign'
     | 'eth_signTypedData_v4'
-    | 'wallet_sign';
+    | 'wallet_sign'
+    | 'wallet_addFunds';
 
 /**
  * Base structure for all UI requests
@@ -197,6 +198,29 @@ export interface WalletSignUIRequest extends BaseUIRequest {
 }
 
 /**
+ * Add Funds request (wallet_addFunds). The screen is receive-only: the chains
+ * the address works on, an EIP-681 QR, and the address itself.
+ *
+ * `address` is the destination resolved by the wallet via `resolveDestination`,
+ * never anything the dapp supplied.
+ *
+ * Deliberately carries no chain list. Which chains the stack shows is a display
+ * decision the dialog makes from the active chain, so putting a list here would
+ * mean the two hosts could hand the same screen different answers.
+ *
+ * Resolves when the user closes: deposits land off-app, so there is no outcome
+ * to report and closing is a normal finish rather than a rejection.
+ */
+export interface AddFundsUIRequest extends BaseUIRequest {
+    type: 'wallet_addFunds';
+    data: {
+        address: Address;
+        /** Chain the QR pins via EIP-681. */
+        chainId: number;
+    };
+}
+
+/**
  * Discriminated union of all UI request types
  */
 export type UIRequest =
@@ -207,7 +231,8 @@ export type UIRequest =
     | SendTransactionUIRequest
     | PermissionUIRequest
     | RevokePermissionUIRequest
-    | WalletSignUIRequest;
+    | WalletSignUIRequest
+    | AddFundsUIRequest;
 
 /**
  * UI response structure

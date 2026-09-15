@@ -93,6 +93,17 @@ export interface AccountMetadata {
     username: string;
 }
 
+// @public
+export interface AddFundsUIRequest extends BaseUIRequest {
+    // (undocumented)
+    data: {
+        address: Address;
+        chainId: number;
+    };
+    // (undocumented)
+    type: 'wallet_addFunds';
+}
+
 // @public (undocumented)
 export type Address = `0x${string}`;
 
@@ -862,6 +873,14 @@ export type NativePasskeyCreateFn = (options: NativePasskeyCreateOptions) => Pro
 // @public
 export type NativePasskeyGetFn = (options: NativePasskeyGetOptions) => Promise<NativePasskeyGetResponse>;
 
+// @public
+export function normalizeAddFundsParams(params: unknown): NormalizedAddFundsParams;
+
+// @public
+export interface NormalizedAddFundsParams {
+    chainId?: `0x${string}`;
+}
+
 // @public (undocumented)
 export interface PasskeyAccount {
     // (undocumented)
@@ -1061,6 +1080,9 @@ export type RequestCapabilities = {
 
 // @public
 export function requiresInteraction(method: string): boolean;
+
+// @public
+export function resolveDestination(accounts: readonly Address[]): Address;
 
 // @public
 export type RevokePermissionApiResponse = {
@@ -1492,10 +1514,10 @@ export interface UIHandlerOptions {
 }
 
 // @public
-export type UIRequest = ConnectUIRequest | SignatureUIRequest | TypedDataUIRequest | TransactionUIRequest | SendTransactionUIRequest | PermissionUIRequest | RevokePermissionUIRequest | WalletSignUIRequest;
+export type UIRequest = ConnectUIRequest | SignatureUIRequest | TypedDataUIRequest | TransactionUIRequest | SendTransactionUIRequest | PermissionUIRequest | RevokePermissionUIRequest | WalletSignUIRequest | AddFundsUIRequest;
 
 // @public
-export type UIRequestType = 'wallet_connect' | 'wallet_sendCalls' | 'eth_sendTransaction' | 'wallet_grantPermissions' | 'wallet_revokePermissions' | 'personal_sign' | 'eth_signTypedData_v4' | 'wallet_sign';
+export type UIRequestType = 'wallet_connect' | 'wallet_sendCalls' | 'eth_sendTransaction' | 'wallet_grantPermissions' | 'wallet_revokePermissions' | 'personal_sign' | 'eth_signTypedData_v4' | 'wallet_sign' | 'wallet_addFunds';
 
 // @public
 export interface UIResponse<T = unknown> {

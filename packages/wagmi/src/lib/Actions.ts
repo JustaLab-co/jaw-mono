@@ -8,4 +8,5 @@ export {
   getCapabilities,
   sign,
   getCallsHistory,
+  addFunds,
 } from './internal/core.js';

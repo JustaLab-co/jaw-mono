@@ -35,6 +35,7 @@ export {
   useCapabilities,
   useSign,
   useGetCallsHistory,
+  useAddFunds,
 } from './lib/Hooks.js';
 
 // Also export individual actions for convenience
@@ -48,6 +49,7 @@ export {
   getCapabilities,
   sign,
   getCallsHistory,
+  addFunds,
 } from './lib/Actions.js';
 
 // Also export query keys for convenience

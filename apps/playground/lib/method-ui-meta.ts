@@ -28,6 +28,7 @@ export const DIALOG_METHODS: ReadonlySet<string> = new Set([
   'wallet_sign',
   'wallet_grantPermissions',
   'wallet_revokePermissions',
+  'wallet_addFunds',
 ]);
 
 /** Methods whose dialog only appears while disconnected. */

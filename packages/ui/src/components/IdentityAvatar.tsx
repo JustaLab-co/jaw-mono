@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import type { ReactNode } from 'react';
+import type { CSSProperties, ReactNode } from 'react';
 import { WalletIcon } from '../icons';
 import { cn } from '../lib/utils';
 
@@ -11,6 +11,8 @@ interface IdentityAvatarProps {
   className?: string;
   /** Accessible name. Empty (decorative) by default, as identity avatars sit beside their label. */
   alt?: string;
+  /** Inline styles for the image, for sizes that aren't in the class scale (e.g. a px-computed overlay). */
+  style?: CSSProperties;
 }
 
 const defaultFallback = <WalletIcon className="h-3 w-3 flex-shrink-0" stroke="currentColor" />;
@@ -21,6 +23,7 @@ export const IdentityAvatar = ({
   fallback = defaultFallback,
   className = 'size-5 rounded-full',
   alt = '',
+  style,
 }: IdentityAvatarProps) => {
   const [erroredSrc, setErroredSrc] = useState<string>();
   if (!src || erroredSrc === src) return <>{fallback}</>;
@@ -32,6 +35,7 @@ export const IdentityAvatar = ({
       referrerPolicy="no-referrer"
       onError={() => setErroredSrc(src)}
       className={cn('flex-shrink-0 object-cover', className)}
+      style={style}
     />
   );
 };

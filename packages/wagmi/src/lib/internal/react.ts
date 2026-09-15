@@ -15,6 +15,7 @@ import {
   getCapabilities,
   sign,
   getCallsHistory,
+  addFunds,
 } from './core.js';
 import {
   getPermissionsQueryKey,
@@ -832,4 +833,53 @@ export function useGetCallsHistory<
     queryKey,
     staleTime: 30_000, // Cache for 30 seconds
   }) as useGetCallsHistory.ReturnType<selectData>;
+}
+
+// ============================================================================
+// useAddFunds
+// ============================================================================
+
+export namespace useAddFunds {
+  export type Parameters<config extends Config = Config, context = unknown> = {
+    config?: config;
+    mutation?:
+      | UseMutationParameters<addFunds.ReturnType, addFunds.ErrorType, addFunds.Parameters<config>, context>
+      | undefined;
+  };
+
+  export type ReturnType<config extends Config = Config, context = unknown> = UseMutationResult<
+    addFunds.ReturnType,
+    addFunds.ErrorType,
+    addFunds.Parameters<config>,
+    context
+  >;
+}
+
+/**
+ * Hook to open the wallet's receive screen.
+ *
+ * Resolves null when the user closes it. There is no success outcome to branch
+ * on: deposits land off-app, so a `mutate` that resolves only means the screen
+ * was shown and dismissed.
+ *
+ * @example
+ * ```tsx
+ * const { mutate, isPending } = useAddFunds();
+ *
+ * mutate({});
+ * ```
+ */
+export function useAddFunds<config extends Config = ResolvedRegister['config'], context = unknown>(
+  parameters: useAddFunds.Parameters<config, context> = {}
+): useAddFunds.ReturnType<config, context> {
+  const { mutation } = parameters;
+  const config = useConfig(parameters as { config?: Config });
+
+  return useMutation({
+    ...mutation,
+    mutationFn: async (variables) => {
+      return addFunds(config, variables);
+    },
+    mutationKey: ['addFunds'],
+  }) as useAddFunds.ReturnType<config, context>;
 }
