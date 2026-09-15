@@ -225,20 +225,44 @@ export function liveOrphans(
  * `SessionBridge` as if an old CLI had made it, so the compiler holds the
  * invariant rather than a test having to.
  */
-export function saveSessionConfig(
-  input: Omit<SessionConfig, 'createdAt' | 'mode'> & {
-    mode: 'eip7702';
-    /**
-     * Carried over when a session is being replaced in place rather than
-     * started, which `session add` does. `createdAt` is what the session total
-     * is counted from (`sumSpentSince(payer, session.createdAt)`), so stamping a
-     * fresh one there would hand the session cap a clean slate as a side effect
-     * of adding a capability.
-     */
-    createdAt?: string;
-  }
-): void {
-  writeSessionConfig({ ...input, createdAt: input.createdAt ?? new Date().toISOString() });
+type WritableSession = Omit<SessionConfig, 'createdAt' | 'mode' | 'expiry'> & {
+  mode: 'eip7702';
+  /**
+   * Required here while the field it lands in is nullable, and the asymmetry is
+   * the point: a session we write always knows when it ends, and only a file we
+   * did not write can fail to state one. Widening the read without holding the
+   * write would have let a value nobody can read be persisted by us, which is a
+   * different problem from the one this file is about.
+   */
+  expiry: number;
+};
+
+/**
+ * Write a session that starts now.
+ *
+ * `createdAt` is stamped here and nowhere else, because starting is the only
+ * time it is true.
+ */
+export function saveSessionConfig(input: WritableSession): void {
+  writeSessionConfig({ ...input, createdAt: new Date().toISOString() });
+}
+
+/**
+ * Write a session that replaces one already on disk, keeping when it began.
+ *
+ * Separate from starting one, because the difference is in the caller's intent
+ * and not in the value: `session add` carries `createdAt` forward, and a session
+ * written before the field existed, or whose field could not be read, carries
+ * nothing. An optional argument could not tell those apart from "start now", so
+ * the absent case silently stamped the present instead, and `sumSpentSince`
+ * counts the session total from that instant: adding a capability handed the cap
+ * a clean slate.
+ *
+ * Absent stays absent here. The sums already take the instant as optional and
+ * count the payer's whole history without it, which is the conservative reading.
+ */
+export function replaceSessionConfig(input: WritableSession & { createdAt: string | undefined }): void {
+  writeSessionConfig(input);
 }
 
 /**
@@ -349,7 +373,7 @@ export function expiryInstant(expiry: number | null | undefined): Date | null {
  * Both are exported so the two sides are readable next to each other rather than
  * being two comparisons that happen to differ.
  */
-export function sessionUsable(expiry: number | null | undefined, now: number = Date.now() / 1000): boolean {
+export function sessionUsable(expiry: number | null | undefined, now: number = Date.now() / 1000): expiry is number {
   return typeof expiry === 'number' && Number.isFinite(expiry) && expiry > now;
 }
 

@@ -26,6 +26,7 @@ const {
   deleteSessionConfig,
   parseGrantedPermission,
   liveOrphans,
+  replaceSessionConfig,
   saveRevokeProgress,
   sessionLives,
   sessionUsable,
@@ -416,5 +417,40 @@ describe('the two sides of an expiry the file cannot state', () => {
     ];
 
     expect(liveOrphans(orphans, 1_000_000).map((o) => o.id)).toEqual(['0xa']);
+  });
+});
+
+describe('starting a session and replacing one are different writes', () => {
+  const base = {
+    ownerAddress: '0xOwner' as const,
+    sessionAddress: '0xSession' as const,
+    permissionId: '0xPerm' as const,
+    chainId: 84532,
+    expiry: Math.floor(Date.now() / 1000) + 86400,
+    mode: 'eip7702' as const,
+  };
+
+  it('stamps when a session starts', () => {
+    saveSessionConfig(base);
+
+    expect(loadSessionConfig().createdAt).toBeDefined();
+  });
+
+  /**
+   * The case an optional argument could not tell apart from "start now": a
+   * session written before the field existed, or one whose field could not be
+   * read, carries nothing forward. Stamping it here counts the session total
+   * from the present, which hands the cap a clean slate for adding a capability.
+   */
+  it('leaves a replacement without a start instant rather than stamping the present', () => {
+    replaceSessionConfig({ ...base, createdAt: undefined });
+
+    expect(loadSessionConfig().createdAt).toBeUndefined();
+  });
+
+  it('carries a known start instant through a replacement', () => {
+    replaceSessionConfig({ ...base, createdAt: '2026-01-01T00:00:00.000Z' });
+
+    expect(loadSessionConfig().createdAt).toBe('2026-01-01T00:00:00.000Z');
   });
 });

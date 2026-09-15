@@ -10,8 +10,8 @@ import {
   liveOrphans,
   loadSessionConfig,
   parseGrantedPermission,
+  replaceSessionConfig,
   saveRevokeProgress,
-  saveSessionConfig,
   sessionUsable,
 } from '../../lib/session-config.js';
 import type { OutputFormat, PermissionsConfig } from '../../lib/types.js';
@@ -252,7 +252,7 @@ export default class SessionAdd extends BaseCommand {
       ...(permission ? { permission } : {}),
       orphanedPermissions: [{ id: session.permissionId, chainId: session.chainId, expiry: session.expiry }, ...orphans],
     };
-    saveSessionConfig(updated);
+    replaceSessionConfig(updated);
 
     let revoked = false;
     try {
