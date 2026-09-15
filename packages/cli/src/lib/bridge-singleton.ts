@@ -24,6 +24,15 @@ export interface BridgeOptions {
   relayUrl?: string;
   /** Absent on a first connect from a machine that has none. */
   apiKey?: string;
+  /**
+   * Use a browser that is already paired, and refuse rather than open one.
+   *
+   * For callers that are not a person at a terminal: a payment holds the
+   * payment lock while it runs, so falling through to a fresh session would
+   * open a browser nobody is watching and block every other payer on the
+   * machine until the approval times out.
+   */
+  reuseOnly?: boolean;
   chainId?: number;
   ens?: string;
   timeout?: number;
@@ -70,18 +79,22 @@ export async function getBridge(options: BridgeOptions): Promise<WSBridge> {
       // that out leaves the command silent for as long as someone will stare at
       // it, having just told them a browser was opening.
       return await connectBridge({ ...options, timeout }, relaySession, chainId, keysUrl, relayUrl, false);
-    } catch {
-      // Connection failed — stale session or relay restarted.
+    } catch (err) {
+      // Connection failed: stale session or relay restarted.
       // Delete and fall through to create a new one.
       deleteRelaySession();
       relaySession = null;
+      if (options.reuseOnly) throw err;
     }
   } else if (relaySession) {
     // Incomplete session (no peer key) — discard
     deleteRelaySession();
   }
 
-  // New session — this is the only path that opens a browser
+  // New session: this is the only path that opens a browser
+  if (options.reuseOnly) {
+    throw new Error('No browser is paired with this machine, and this caller may not open one.');
+  }
   const session = await createNewSession(relayUrl);
   saveRelaySession(session);
   return await connectBridge({ ...options, timeout, connectTimeout }, session, chainId, keysUrl, relayUrl, true);
@@ -195,19 +208,31 @@ function keepInjectedApiKey(injected: string | null): void {
 }
 
 /**
- * Drop the workspace key the proxy just refused and connect once, so the browser
- * hands over the current one.
+ * Ask a paired browser for the key it is handing out now.
  *
- * Dropped before connecting rather than after: a connect that fails must not
- * leave the dead key in place to be sent again. Sending no key is also what has
- * the deployment answer with its own, which `keepInjectedApiKey` stores.
+ * Nothing is dropped on the way in. The stored key is only ever replaced by
+ * `keepInjectedApiKey`, once a browser has actually answered with one: clearing
+ * it first and then failing to connect, which is the normal case for an agent
+ * with no browser, would leave the install with no key at all and no way to get
+ * one back short of `jaw session setup`.
+ *
+ * Nothing is sent either, so the deployment answers with its own: `connectBridge`
+ * already withholds a key that came from the bridge, and this passes none.
+ *
+ * `reuseOnly` because the caller is a payment holding the payment lock.
  */
 export async function refreshWorkspaceApiKey(): Promise<string | undefined> {
   const config = loadConfig();
-  saveConfig({ ...config, workspaceApiKey: undefined });
-  const bridge = await getBridge({ keysUrl: config.keysUrl, chainId: config.defaultChain, ens: config.ens });
+  const before = config.workspaceApiKey;
+  const bridge = await getBridge({
+    keysUrl: config.keysUrl,
+    chainId: config.defaultChain,
+    ens: config.ens,
+    reuseOnly: true,
+  });
   bridge.close();
-  return loadConfig().workspaceApiKey;
+  const after = loadConfig().workspaceApiKey;
+  return after === before ? undefined : after;
 }
 
 function buildBridgeUrl(keysUrl: string, session: string, relayUrl: string, cliPublicKeyHex: string): string {

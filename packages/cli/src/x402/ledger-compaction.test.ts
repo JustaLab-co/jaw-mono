@@ -338,3 +338,20 @@ describe('compactX402Log, rows the chain has not answered', () => {
     expect(after.some((entry) => entry.kind === 'checkpoint')).toBe(true);
   });
 });
+
+describe('compactX402Log, a checkpoint folded into a later one', () => {
+  it('carries the rows it already stood in for', () => {
+    writeLedger([...filler(), ...Array.from({ length: 600 }, () => row())]);
+    compactX402Log([]);
+    const first = readX402Log().find((entry) => entry.kind === 'checkpoint');
+    expect(first?.folded).toBeGreaterThan(1);
+
+    // A second pass folds that checkpoint in with everything after it.
+    appendX402Log(row());
+    fs.appendFileSync(PATHS.x402Log, serialize(filler()));
+    compactX402Log([]);
+
+    const second = readX402Log().find((entry) => entry.kind === 'checkpoint');
+    expect(second?.folded).toBeGreaterThanOrEqual(first?.folded ?? 0);
+  });
+});

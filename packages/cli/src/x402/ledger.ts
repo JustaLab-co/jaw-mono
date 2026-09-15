@@ -433,10 +433,16 @@ export function compactX402Log(capStarts: string[]): void {
     fs.appendFileSync(PATHS.x402LogArchive, serializeEntries(absorbed), { encoding: 'utf-8', mode: 0o600 });
 
     const temp = `${PATHS.x402Log}.${process.pid}.tmp`;
-    fs.writeFileSync(temp, serializeEntries([...checkpointsFor(absorbed), ...kept]), { encoding: 'utf-8' });
-    // Mode on the temp, before it takes the real name: `writeFileSync` only
-    // applies one on create, and the file must never exist readable.
-    fs.chmodSync(temp, 0o600);
+    // Cleared first so the write below is a create, which is the only time
+    // `mode` applies: a leftover from an earlier crash would otherwise keep its
+    // own mode and carry it onto the ledger through the rename. Created 0o600
+    // rather than chmod'ed afterwards, which leaves the whole payment history
+    // readable to any local user for the width of that gap.
+    fs.rmSync(temp, { force: true, recursive: true });
+    fs.writeFileSync(temp, serializeEntries([...checkpointsFor(absorbed), ...kept]), {
+      encoding: 'utf-8',
+      mode: 0o600,
+    });
 
     // The lock can be broken as stale while a payment is still running. Anything
     // appended since the read is missing from what was just built, so drop the
@@ -462,6 +468,12 @@ export function compactX402Log(capStarts: string[]): void {
 export function checkpointFigureReadable(entry: X402LogEntry): boolean {
   if (!entry.amount) return false;
   try {
+    // `topUpAmount` as well, and for the same reason: a checkpoint carries the
+    // whole fold's pulls, so one that will not parse reads as zero and hands a
+    // period allowance back. The chain is the authority on that meter only
+    // while it can be reached, and `currentLimitUsageOnChain` falls back to
+    // this figure when it cannot.
+    if (entry.topUpAmount !== undefined && BigInt(entry.topUpAmount) < 0n) return false;
     return BigInt(entry.amount) >= 0n;
   } catch {
     return false;
@@ -538,7 +550,10 @@ function checkpointsFor(absorbed: X402LogEntry[]): X402LogEntry[] {
       network: rows[0].network,
       status: 'paid' as const,
       kind: 'checkpoint' as const,
-      folded: rows.length,
+      // A checkpoint folded into a later one brings its own count with it.
+      // Read as one row, a stand-in for three thousand payments reports itself
+      // as a stand-in for one, which is what an agent auditing the ledger reads.
+      folded: rows.reduce((total, entry) => total + (entry.kind === 'checkpoint' ? (entry.folded ?? 1) : 1), 0),
       amount: spent.toString(),
       topUpAmount: toppedUp === 0n ? undefined : toppedUp.toString(),
     };

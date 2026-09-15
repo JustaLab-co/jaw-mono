@@ -60,7 +60,7 @@ export interface StatusFacts {
    * at all, and checking only that one stayed quiet while the cap that
    * actually binds was exhausted.
    */
-  periodCap?: bigint | null;
+  periodCap: bigint | null;
   periodSpent?: bigint | null;
   /** How the window reads in a sentence, e.g. "day" or "2 weeks". */
   periodLabel?: string | null;

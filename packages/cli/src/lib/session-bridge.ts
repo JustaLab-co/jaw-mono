@@ -150,7 +150,14 @@ export class SessionBridge {
       // Lazy for the same reason core is: the browser bridge pulls in the
       // websocket client, and a payment that never needs it should not load it.
       const { refreshWorkspaceApiKey } = await import('./bridge-singleton.js');
-      const fresh = await refreshWorkspaceApiKey();
+      let fresh: string | undefined;
+      try {
+        fresh = await refreshWorkspaceApiKey();
+      } catch {
+        // No browser paired, or it did not answer. The proxy's own refusal is
+        // the useful error here, not ours about the browser we went looking for.
+        throw err;
+      }
       if (!fresh || fresh === this.options.apiKey) throw err;
       const given = { ...this.given, apiKey: fresh };
       this.options = { ...given, ...resolvePaymaster(given) };

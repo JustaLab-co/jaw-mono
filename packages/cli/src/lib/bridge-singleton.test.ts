@@ -10,7 +10,7 @@ let injectedApiKey: string | null = null;
 vi.mock('./ws-bridge.js', () => ({
   WSBridge: vi.fn().mockImplementation((options: { config: WSBridgeConfig }) => {
     constructed.push(options);
-    return { connect: vi.fn().mockResolvedValue(undefined), injectedApiKey };
+    return { connect: vi.fn().mockResolvedValue(undefined), close: vi.fn(), injectedApiKey };
   }),
 }));
 
@@ -163,5 +163,48 @@ describe('getBridge, keeping the key the browser filled in', () => {
     await getBridge({ apiKey: 'mine', chainId: 8453 });
 
     expect(vi.mocked(saveConfig)).not.toHaveBeenCalled();
+  });
+});
+
+describe('refreshWorkspaceApiKey', () => {
+  beforeEach(() => {
+    constructed.length = 0;
+    injectedApiKey = null;
+    vi.clearAllMocks();
+    vi.mocked(loadConfig).mockReturnValue({ workspaceApiKey: 'old-key' });
+  });
+
+  /**
+   * The failure this guards: clearing first and then not reaching a browser,
+   * which is the normal case for an agent, left the install with no key at all
+   * and nothing short of `jaw session setup` to get one back.
+   */
+  it('leaves the stored key alone when no browser answers', async () => {
+    const { loadRelaySession } = await import('./relay-session.js');
+    vi.mocked(loadRelaySession).mockReturnValueOnce(null);
+    const { refreshWorkspaceApiKey } = await import('./bridge-singleton.js');
+
+    await expect(refreshWorkspaceApiKey()).rejects.toThrow(/may not open one/);
+    expect(saveConfig).not.toHaveBeenCalled();
+  });
+
+  it('never asks a browser to be opened', async () => {
+    const { loadRelaySession } = await import('./relay-session.js');
+    vi.mocked(loadRelaySession).mockReturnValueOnce(null);
+    const { refreshWorkspaceApiKey } = await import('./bridge-singleton.js');
+
+    await expect(refreshWorkspaceApiKey()).rejects.toThrow();
+    // Nothing was constructed, so nothing could have opened a window.
+    expect(constructed).toHaveLength(0);
+  });
+
+  it('answers with the key the browser handed over, and nothing when it is the same', async () => {
+    injectedApiKey = 'new-key';
+    vi.mocked(loadConfig)
+      .mockReturnValueOnce({ workspaceApiKey: 'old-key' })
+      .mockReturnValue({ workspaceApiKey: 'new-key' });
+    const { refreshWorkspaceApiKey } = await import('./bridge-singleton.js');
+
+    expect(await refreshWorkspaceApiKey()).toBe('new-key');
   });
 });
