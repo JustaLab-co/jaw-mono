@@ -1,21 +1,17 @@
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { payAndFetchSchema, x402LogSchema, x402BalanceSchema } from '../tools.js';
 import { mcpError, mcpResult, mcpPaymentResult } from '../helpers.js';
-import { parseNonNegativeBigInt } from '../../x402/amount.js';
 import { loadConfig } from '../../lib/config.js';
 import { apiKeyFor } from '../../lib/api-key.js';
 import { Eip3009EoaPayer, sessionPayerAddress } from '../../x402/payer.js';
 import { payAndFetch } from '../../x402/http.js';
-import { appendX402Log, compactX402Log, readX402Log, sumSpentSince } from '../../x402/ledger.js';
-import { reconcileSettlements } from '../../x402/settlement.js';
+import { appendX402Log, compactX402Log, readX402Log } from '../../x402/ledger.js';
 import { withPaymentLock } from '../../lib/payment-lock.js';
 import { usdcBalance } from '../../x402/balance.js';
-import { resolveSessionX402Policy, topUpCeiling } from '../../x402/policy.js';
-import { capWindowStarts, currentLimitUsageOnChain } from '../../x402/spend-window.js';
-import { ensurePayerFunds } from '../../x402/topup.js';
-import { SessionBridge } from '../../lib/session-bridge.js';
+import { resolveSessionX402Policy } from '../../x402/policy.js';
+import { capWindowStarts } from '../../x402/spend-window.js';
+import { openPaymentWindow } from '../../x402/payment-window.js';
 import { tryLoadSessionConfig } from '../../lib/session-config.js';
-import type { X402PaymentRequirement } from '../../x402/types.js';
 
 interface PayAndFetchParams {
   url: string;
@@ -34,7 +30,7 @@ export function registerPayTool(server: McpServer): void {
   // lock its own process holds. The file lock then covers everything the queue
   // cannot see, namely other processes.
   //
-  // Serialize the read-check-pay-write of sessionSpent. The MCP SDK dispatches
+  // Serialize the read-check-pay-write of the session spend total. The MCP SDK dispatches
   // tool calls concurrently, and payAndFetch awaits network I/O between reading
   // the cap and writing the new total — so a burst of concurrent calls would
   // otherwise each read the same pre-payment total, all pass the cumulative
@@ -86,54 +82,26 @@ export function registerPayTool(server: McpServer): void {
             // allowlists agree with what the user approved); config still wins.
             const policy = resolveSessionX402Policy(config.x402, session);
             // One read for the whole payment, taken inside the lock and never
-            // cached across payments: a process that held the lock before us may
-            // have spent, and a stale total waves through a payment the cap
-            // should have stopped. Nothing can append while we hold it, so the
-            // session total and every period window count against the same rows.
+            // cached across payments, and the same assembly the `x402 pay`
+            // command runs so the two cannot enforce different caps for the
+            // same session. `openPaymentWindow` says why each piece is read
+            // where it is.
             //
-            // Reconciled first because an unverified row costs its ceiling, and
-            // this is where that figure comes down to what the chain shows
-            // actually moved.
-            const ledger = await reconcileSettlements(readX402Log());
-
-            // Scoped to the session so a new grant starts a fresh budget; the
-            // payer's whole history when there is no session to scope by.
-            // Payer only: the session total is the user's ceiling and spans
-            // permissions. See the same scope in `commands/x402/pay.ts`.
-            const scope = { payer: payer.address };
-            const sessionSpent = sumSpentSince(ledger, scope, session?.createdAt);
-
-            // Locate the grant period containing now, and count spend inside it.
-            // Recomputed per payment because the window moves on its own.
-            const periodUsage = await currentLimitUsageOnChain(ledger, policy, payer.address, session);
-
-            // Flow 2b: when a session (and its on-chain permission) exists, refill
-            // the payer EOA through the permission whenever it can't cover a price.
-            // Funds stay in the user's account until the moment a payment needs
-            // them; JustaPermissionManager caps every refill on-chain.
-            let ensureFunds;
-            // The user's own key when there is one, the workspace key the
-            // browser handed us otherwise: the refill's own gas is charged
-            // through the paymaster this key builds a url for.
-            const apiKey = apiKeyFor(config);
-            if (session && apiKey) {
-              const bridge = new SessionBridge({ apiKey, chainId: session.chainId });
-              // Defensive: a hand-edited, non-numeric amount must degrade to "no
-              // float / no bound", never throw and take down every payment.
-              const floatTarget = parseNonNegativeBigInt(config.x402?.topUpFloat);
-              // Bound the top-up by whatever is left of the tightest resolved cap,
-              // so a float pre-fund is clamped too and not just the payment itself.
-              const maxTopUp = topUpCeiling(policy, {
-                periodUsage,
-                spentThisSession: sessionSpent,
-              });
-              ensureFunds = (requirement: X402PaymentRequirement, payerAddress: `0x${string}`) =>
-                ensurePayerFunds(requirement, payerAddress, bridge, {
-                  floatTarget,
-                  maxTopUp,
-                  sessionChainId: session.chainId,
-                });
-            }
+            // Flow 2b: with a session (and its on-chain permission) the window
+            // also hands back a hook that refills the payer EOA whenever it
+            // cannot cover a price. Funds stay in the user's account until the
+            // moment a payment needs them, and JustaPermissionManager caps every
+            // refill on-chain.
+            const { spentThisSession, periodUsage, ensureFunds } = await openPaymentWindow({
+              config,
+              session,
+              policy,
+              payerAddress: payer.address,
+              // The user's own key when there is one, the workspace key the
+              // browser handed us otherwise: the refill's own gas is charged
+              // through the paymaster this key builds a url for.
+              apiKey: apiKeyFor(config),
+            });
 
             const result = await payAndFetch(params.url, payer, {
               method: params.method,
@@ -141,7 +109,7 @@ export function registerPayTool(server: McpServer): void {
               body: params.body,
               policy,
               ensureFunds,
-              spentThisSession: sessionSpent,
+              spentThisSession,
               periodUsage,
               maxAmount: params.maxAmount,
               asset: params.asset,
@@ -149,9 +117,10 @@ export function registerPayTool(server: McpServer): void {
             });
 
             // What this payment costs the cap is not accumulated here:
-            // `sessionSpent` is read from the ledger at the top of every call,
-            // which is what makes the cap survive a restart. A second running
-            // total in memory could only disagree with the one that enforces.
+            // `spentThisSession` is read from the ledger at the top of every
+            // call, which is what makes the cap survive a restart. A second
+            // running total in memory could only disagree with the one that
+            // enforces.
 
             // Record payment attempts (not free passthroughs) to the audit ledger.
             const settled = result.payment ?? result.attemptedPayment;
