@@ -83,8 +83,14 @@ export interface X402LogEntry {
  * `verified` means a transfer of that amount was found in the transaction the
  * receipt named. `expired` means the deadline passed with the nonce
  * unconsumed, so the authorization died without moving anything.
+ *
+ * `abandoned` is the one that says nothing about money: the chain was asked for
+ * long enough and never answered, so we stopped asking. The row keeps costing
+ * its ceiling, which is what it costs while nobody knows, and it stops holding
+ * a slot in every later reconciliation. `expired` would claim the authorization
+ * died with nothing moving, and that is a claim about funds this cannot make.
  */
-export type SettlementState = 'unverified' | 'verified' | 'expired';
+export type SettlementState = 'unverified' | 'verified' | 'expired' | 'abandoned';
 
 /**
  * A later answer about a row that was already written.
@@ -231,6 +237,8 @@ export function spendFigureOf(entry: X402LogEntry): bigint {
   // Named, not "anything but unverified". A value this does not recognise, from
   // a torn write or a hand edit, has to land on the ceiling below with every
   // other unreadable field, or a one-character typo turns the cap loose.
+  // `abandoned` belongs on that ceiling deliberately and not by omission: it
+  // means nobody ever learned what moved.
   const checked = entry.settlement === undefined || entry.settlement === 'verified';
   if (entry.status === 'paid' && checked) return parse(entry.amount);
   const ceiling = parse(entry.authorized);

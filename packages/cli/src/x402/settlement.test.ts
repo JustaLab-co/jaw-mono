@@ -261,3 +261,37 @@ describe('reconcileSettlements, a batch that cannot answer', () => {
     expect(figureFor('11')).toBe(1n);
   });
 });
+
+describe('reconcileSettlements, a row the chain never answers', () => {
+  const WEEK_AGO = new Date(Date.now() - 8 * 24 * 60 * 60 * 1000).toISOString();
+
+  it('gives up after a week, keeping the ceiling and freeing the slot', async () => {
+    // Mined, successful, and carrying no transfer of ours: the facilitator
+    // routed it through an intermediary, so nothing here can ever answer it.
+    appendX402Log(underReported({ nonce: 'stuck', at: WEEK_AGO }));
+    getTransactionReceipt.mockResolvedValue({ status: 'success', logs: [] });
+    readContract.mockResolvedValue(0n);
+
+    await reconcileSettlements(readX402Log());
+
+    const row = readX402Log().find((e) => e.nonce === 'stuck');
+    expect(row?.settlement).toBe('abandoned');
+    // Still worth its ceiling: nobody found out what moved.
+    expect(figureFor('stuck')).toBe(1000n);
+
+    // And no longer asked about.
+    getTransactionReceipt.mockClear();
+    await reconcileSettlements(readX402Log());
+    expect(getTransactionReceipt).not.toHaveBeenCalled();
+  });
+
+  it('keeps asking about a row that is still young', async () => {
+    appendX402Log(underReported({ nonce: 'fresh' }));
+    getTransactionReceipt.mockResolvedValue({ status: 'success', logs: [] });
+    readContract.mockResolvedValue(0n);
+
+    await reconcileSettlements(readX402Log());
+
+    expect(readX402Log().find((e) => e.nonce === 'fresh')?.settlement).toBe('unverified');
+  });
+});

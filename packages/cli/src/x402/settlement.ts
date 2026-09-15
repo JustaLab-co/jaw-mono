@@ -42,6 +42,22 @@ import {
  */
 const RECONCILE_BATCH = 8;
 
+/**
+ * How long a row is asked about before it is given up on.
+ *
+ * An authorization is good for minutes, and a settlement that was ever going to
+ * land has landed long before this. What is left after a week is a row the chain
+ * cannot answer: a receipt that is mined but carries no transfer between this
+ * payer and this recipient, because the facilitator routed it through an
+ * intermediary, or a network the client can no longer reach. Those stay
+ * answerable for good, hold a slot in every batch, and cost a receipt read on
+ * every payment forever.
+ *
+ * Long enough that a laptop closed over a holiday still reconciles its own rows
+ * when it comes back.
+ */
+const GIVE_UP_AFTER_MS = 7 * 24 * 60 * 60 * 1000;
+
 const TRANSFER_EVENT = parseAbiItem('event Transfer(address indexed from, address indexed to, uint256 value)');
 
 const NONCE_BITMAP_ABI = [
@@ -75,7 +91,7 @@ export async function reconcileSettlements(entries: X402LogEntry[]): Promise<X40
   const answered = await Promise.all(
     pending.map(async (entry) => {
       try {
-        return await answerFor(entry);
+        return (await answerFor(entry)) ?? abandonedIfOld(entry);
       } catch (err) {
         // A row is a line in a file a user can edit, and nothing here may fail
         // the payment waiting on it. The row keeps costing its ceiling.
@@ -128,6 +144,29 @@ function answerable(entry: X402LogEntry): boolean {
 function deadlinePassed(entry: X402LogEntry): boolean {
   const seconds = Number(entry.deadline);
   return Number.isFinite(seconds) && seconds * 1000 <= Date.now();
+}
+
+/**
+ * Stop asking about a row the chain has had long enough to answer.
+ *
+ * Only the asking stops. The ceiling stands, because nothing here found out
+ * what moved, and a row nobody can answer is worth what its signature was worth
+ * until something does. What this buys is the two places that filter on
+ * `unverified`: the row leaves the reconcile batch, so the rows a live cap is
+ * still counting are reached, and compaction may fold it away, which it must
+ * never do while an answer could still arrive and find it by nonce.
+ */
+function abandonedIfOld(entry: X402LogEntry): X402SettlementCorrection | null {
+  const written = Date.parse(entry.at);
+  if (!Number.isFinite(written) || Date.now() - written < GIVE_UP_AFTER_MS) return null;
+  return {
+    at: new Date().toISOString(),
+    corrects: entry.nonce as string,
+    settlement: 'abandoned',
+    // No amount: the overlay keeps the row's own, and `spendFigureOf` reads
+    // that against the ceiling exactly as it did while this was unverified.
+    txHash: entry.txHash,
+  };
 }
 
 /** What the chain says about one row, or nothing when it has not said yet. */

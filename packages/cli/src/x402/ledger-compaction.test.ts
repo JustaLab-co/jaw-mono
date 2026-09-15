@@ -355,3 +355,20 @@ describe('compactX402Log, a checkpoint folded into a later one', () => {
     expect(second?.folded).toBeGreaterThanOrEqual(first?.folded ?? 0);
   });
 });
+
+describe('compactX402Log, a row that was given up on', () => {
+  /**
+   * The other half of abandoning a row: an unverified one is kept out of the
+   * fold because a correction finds it by nonce and a checkpoint has none. Once
+   * nothing is going to ask again, that reason is gone and the row may be
+   * folded like any other.
+   */
+  it('folds an abandoned row away', () => {
+    const stuck = row({ nonce: '0xstuck', settlement: 'abandoned', amount: '5000' });
+    writeLedger([...filler(), stuck, ...Array.from({ length: 600 }, () => row())]);
+
+    compactX402Log([]);
+
+    expect(readX402Log().some((entry) => entry.nonce === '0xstuck')).toBe(false);
+  });
+});
