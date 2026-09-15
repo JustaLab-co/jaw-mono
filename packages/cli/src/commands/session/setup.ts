@@ -15,6 +15,7 @@ import {
   liveOrphans,
   parseGrantedPermission,
   saveSessionConfig,
+  sessionLives,
   tryLoadSessionConfig,
   type OrphanedPermission,
 } from '../../lib/session-config.js';
@@ -102,7 +103,11 @@ export default class SessionSetup extends BaseCommand {
       // `jaw session setup` first", leaving no way out but deleting the keystore
       // by hand, which strands the key while its on-chain permission stays live.
       const existing = tryLoadSessionConfig();
-      const isActive = existing !== null && existing.expiry > Date.now() / 1000;
+      // `sessionLives` rather than a comparison: an expiry that will not read
+      // has to count as live here, or the permission it names is never carried
+      // forward as an orphan and the grant stays on chain with nothing pointing
+      // at it.
+      const isActive = existing !== null && sessionLives(existing.expiry);
       orphaned = liveOrphans(existing?.orphanedPermissions);
 
       // The prompt path uses readline against process.stdin. With non-TTY stdin

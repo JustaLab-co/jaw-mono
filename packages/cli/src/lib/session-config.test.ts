@@ -27,6 +27,7 @@ const {
   parseGrantedPermission,
   liveOrphans,
   saveRevokeProgress,
+  sessionLives,
 } = await import('./session-config.js');
 const { PATHS } = await import('./paths.js');
 
@@ -326,49 +327,57 @@ describe('writing the session config', () => {
   });
 });
 
-describe('loadSessionConfig, a file that was edited', () => {
+describe('a session file that was edited', () => {
   const write = (config: unknown) => {
     fs.mkdirSync(TEST_ROOT, { recursive: true });
     fs.writeFileSync(PATHS.sessionConfig, JSON.stringify(config), { mode: 0o600 });
   };
 
-  /**
-   * The one that matters most: `expiry <= now` is false for a NaN, so an
-   * unreadable expiry turns the check off rather than failing it, and the
-   * session reads as live for good.
-   */
-  it('refuses an expiry that is not a number instead of reading it as live', () => {
-    write({ ...SAMPLE_CONFIG, expiry: 'whenever' });
-
-    expect(() => loadSessionConfig()).toThrow(/`expiry` is not a number/);
-    expect(tryLoadSessionConfig()).toBeNull();
-  });
-
-  it('refuses a createdAt that does not parse, which would move the session total', () => {
-    write({ ...SAMPLE_CONFIG, createdAt: 'last tuesday' });
-
-    expect(() => loadSessionConfig()).toThrow(/`createdAt` is not a readable instant/);
-  });
-
-  it('refuses a chainId that is not one', () => {
-    write({ ...SAMPLE_CONFIG, chainId: '8453' });
-
-    expect(() => loadSessionConfig()).toThrow(/`chainId` is not a chain id/);
-  });
-
-  it('refuses a missing permissionId', () => {
+  it('refuses only when there is nothing to spend against or clean up', () => {
     const { permissionId: _dropped, ...withoutPermission } = SAMPLE_CONFIG;
     write(withoutPermission);
 
     expect(() => loadSessionConfig()).toThrow(/`permissionId` is missing/);
   });
 
-  // A session written before `createdAt` existed is readable, and the spend sums
-  // already take the instant as optional.
-  it('reads a file that never carried a createdAt', () => {
-    const { createdAt: _dropped, ...older } = SAMPLE_CONFIG;
-    write(older);
+  /**
+   * Dropped rather than refused. Absent is a supported state and the safe one:
+   * the spend sums take the instant as optional and count the payer's whole
+   * history without it, which counts more rather than less.
+   */
+  it('drops a createdAt that cannot be read, keeping the rest of the file', () => {
+    write({ ...SAMPLE_CONFIG, createdAt: 'last tuesday' });
 
-    expect(loadSessionConfig().permissionId).toBe(SAMPLE_CONFIG.permissionId);
+    const loaded = loadSessionConfig();
+    expect(loaded.createdAt).toBeUndefined();
+    expect(loaded.permissionId).toBe(SAMPLE_CONFIG.permissionId);
+  });
+
+  // `Date.parse` coerces, so a number reads as a valid date in that year and
+  // would reach the spend window as a number where a string is expected.
+  it('drops a numeric createdAt, which Date.parse would otherwise accept', () => {
+    write({ ...SAMPLE_CONFIG, createdAt: 2024 });
+
+    expect(loadSessionConfig().createdAt).toBeUndefined();
+  });
+
+  it('keeps a createdAt that reads', () => {
+    write({ ...SAMPLE_CONFIG, createdAt: '2026-09-01T00:00:00.000Z' });
+
+    expect(loadSessionConfig().createdAt).toBe('2026-09-01T00:00:00.000Z');
+  });
+
+  // An expiry nobody can read is a question the file cannot answer, and the two
+  // sides want opposite defaults. This is the cleanup side.
+  it('treats an unreadable expiry as still holding something on chain', () => {
+    expect(sessionLives(undefined)).toBe(true);
+    expect(sessionLives('soon')).toBe(true);
+    expect(sessionLives(Number.NaN)).toBe(true);
+  });
+
+  it('still answers a readable expiry on its own terms', () => {
+    const now = 1_000_000;
+    expect(sessionLives(now + 10, now)).toBe(true);
+    expect(sessionLives(now - 10, now)).toBe(false);
   });
 });

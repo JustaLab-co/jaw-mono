@@ -462,3 +462,24 @@ describe('SessionBridge, a rotated workspace key', () => {
     expect(refreshWorkspaceApiKey).not.toHaveBeenCalled();
   });
 });
+
+describe('SessionBridge, an expiry that cannot be read', () => {
+  beforeEach(() => {
+    mockAccountAddress = '0xSession';
+    mockMode = 'eip7702';
+    vi.clearAllMocks();
+  });
+
+  /**
+   * The spending side of the same question the cleanup paths answer the other
+   * way: `expiry <= now` is false for a NaN, so without this an unreadable
+   * expiry waves the session through instead of stopping it.
+   */
+  it('refuses to sign rather than reading an unreadable expiry as live', async () => {
+    mockExpiry = Number.NaN;
+    const bridge = new SessionBridge({ apiKey: 'test', chainId: 84532 });
+
+    await expect(bridge.request('wallet_sendCalls', [{ calls: [] }])).rejects.toThrow(/does not say when it ends/);
+    expect(mockSendCalls).not.toHaveBeenCalled();
+  });
+});

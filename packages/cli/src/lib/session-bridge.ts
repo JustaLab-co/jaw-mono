@@ -239,6 +239,16 @@ export class SessionBridge {
   }
 
   private checkExpiry(config: SessionConfig): void {
+    // Unreadable counts as expired here, and only here. Every comparison
+    // against a NaN is false, so `expiry <= now` on a hand-edited field would
+    // wave the session through rather than stop it. The cleanup paths answer
+    // this the other way on purpose: see `sessionLives`.
+    if (!Number.isFinite(config.expiry)) {
+      throw new Error(
+        'Session expired: the session file does not say when it ends, so nothing here can tell that it has not. ' +
+          'Run `jaw session setup` to create a new session, or `jaw session revoke` to end the one on chain.'
+      );
+    }
     if (config.expiry <= Date.now() / 1000) {
       const expiryDate = new Date(config.expiry * 1000).toISOString();
       throw new Error(`Session expired on ${expiryDate}. Run \`jaw session setup\` to create a new session.`);

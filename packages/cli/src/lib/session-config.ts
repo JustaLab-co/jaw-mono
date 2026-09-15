@@ -295,41 +295,70 @@ export function sessionConfigExists(): boolean {
 }
 
 /**
- * Why a field is wrong, or nothing when the file can be trusted.
+ * Whether an instant can be read back at all.
  *
- * `saveSessionConfig` is checked by the compiler and nothing checks the file
- * afterwards, which is the gap: this is a file on disk that a person can edit
- * and a crash can truncate, and `JSON.parse(raw) as SessionConfig` asserts a
- * shape rather than establishing one.
+ * Exported because the answer to "this field is unreadable" is not the same at
+ * every call site, which is the whole shape of this problem: see `sessionLives`.
+ */
+export function isReadableInstant(value: unknown): value is string {
+  return typeof value === 'string' && Number.isFinite(Date.parse(value));
+}
+
+/**
+ * Whether a session should be treated as still holding something on chain.
  *
- * Three fields are worth refusing over, and they are the ones whose wrongness is
- * silent rather than loud. `expiry` is read as `expiry <= now`, and every
- * comparison against a `NaN` is false, so an unreadable one turns the expiry
- * check off instead of failing it. `createdAt` is the instant the session total
- * counts from, so a string that does not parse moves that window without saying
- * so and can hand back budget already spent. `chainId` decides which chain every
- * read below asks about.
+ * Separate from asking whether it may spend, and deliberately answers the
+ * opposite way when the file cannot say. An `expiry` that will not read is a
+ * question nobody can answer locally, and the two callers that ask it want
+ * opposite defaults: a payment must not go out under an unknown expiry, and a
+ * revoke must not skip a permission that may still be live. Answering "expired"
+ * everywhere is the quiet version of stranding the grant, since `session revoke`
+ * skips the chain for an expired session and deletes the local record, and
+ * `session setup` only carries an orphan forward from a session it considers
+ * active.
  *
- * The addresses are deliberately not checked here. `SessionBridge` re-derives
- * the session address and refuses on a mismatch, which is a better answer than a
- * regex would give: it catches a key that drifted as well as a field that was
- * edited, and its message says which.
+ * So this one answers for the cleanup side: unknown means assume there is
+ * something there. `SessionBridge` answers the other side for itself.
+ */
+export function sessionLives(expiry: unknown, now: number = Date.now() / 1000): boolean {
+  if (typeof expiry !== 'number' || !Number.isFinite(expiry)) return true;
+  return expiry > now;
+}
+
+/**
+ * Why the file cannot be used at all, or nothing when it can.
+ *
+ * Only `permissionId`, and on purpose. Without it there is nothing to spend
+ * against and nothing to clean up, so refusing costs the caller nothing it had.
+ * Every other field is handled where it is read, because refusing the whole file
+ * over one of them takes the recovery paths down with it: `session revoke` and
+ * `session setup` reach the permission id through this same load, and a file
+ * they cannot open is a grant that stays live on chain with no local record of
+ * its id.
  */
 function whySessionConfigIsUnusable(config: SessionConfig): string | null {
   if (typeof config !== 'object' || config === null) return 'it is not an object';
   if (typeof config.permissionId !== 'string' || config.permissionId === '') return '`permissionId` is missing';
-  if (!Number.isInteger(config.chainId) || config.chainId <= 0) return '`chainId` is not a chain id';
-  if (typeof config.expiry !== 'number' || !Number.isFinite(config.expiry)) {
-    return '`expiry` is not a number, so nothing could tell whether the session has ended';
-  }
-  // Absent is fine and means a session written before the field: `sumSpentSince`
-  // takes `since` as optional and counts the payer's whole history without it.
-  // Present and unreadable is not, because that is the case that moves a window
-  // rather than widening it.
-  if (config.createdAt !== undefined && !Number.isFinite(Date.parse(config.createdAt))) {
-    return '`createdAt` is not a readable instant, so the session total would be counted from the wrong point';
-  }
   return null;
+}
+
+/**
+ * Drop what cannot be read rather than refusing the file for it.
+ *
+ * `createdAt` is the instant the session total counts from. Absent is already a
+ * supported state, and the safe one: `sumSpentSince` takes `since` as optional
+ * and sums the payer's whole history without it, which counts more spend rather
+ * than less. A value that does not parse would instead move that window
+ * silently, and the direction it moves is the one that hands back budget already
+ * spent. `Date.parse` is not enough on its own, since it coerces: `Date.parse(2024)`
+ * is a valid date in 2024 rather than a rejection.
+ */
+function normalizeSessionConfig(config: SessionConfig): SessionConfig {
+  if (config.createdAt !== undefined && !isReadableInstant(config.createdAt)) {
+    const { createdAt: _unreadable, ...rest } = config;
+    return rest as SessionConfig;
+  }
+  return config;
 }
 
 export function loadSessionConfig(): SessionConfig {
@@ -350,7 +379,7 @@ export function loadSessionConfig(): SessionConfig {
       `Session config at ${PATHS.sessionConfig} cannot be used: ${wrong}. ` + 'Run `jaw session setup` to recreate it.'
     );
   }
-  return parsed;
+  return normalizeSessionConfig(parsed);
 }
 
 /**

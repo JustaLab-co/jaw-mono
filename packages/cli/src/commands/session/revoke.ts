@@ -8,6 +8,7 @@ import {
   deleteSessionConfig,
   liveOrphans,
   saveRevokeProgress,
+  sessionLives,
   type OrphanedPermission,
 } from '../../lib/session-config.js';
 import { sanitizeLine } from '../../lib/terminal.js';
@@ -50,7 +51,10 @@ export default class SessionRevoke extends BaseCommand {
       // `permissionRevoked` is set by an earlier run that got this far and then
       // failed on something else. Revoking is not idempotent, so attempting it
       // again spends a browser round trip that can only fail.
-      !sessionConfig.permissionRevoked && sessionConfig.expiry > now
+      // Live unless the file says otherwise, for the same reason as in setup:
+      // skipping the chain here also deletes the local record, so an expiry
+      // nobody can read must send us to the chain rather than past it.
+      !sessionConfig.permissionRevoked && sessionLives(sessionConfig.expiry, now)
         ? { id: sessionConfig.permissionId, chainId: sessionConfig.chainId, expiry: sessionConfig.expiry }
         : null;
     const total = orphans.length + (own ? 1 : 0);
