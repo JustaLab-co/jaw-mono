@@ -44,6 +44,12 @@ export interface StatusFacts {
   /** False when the session's chain has no USDC in the registry. */
   hasAsset: boolean;
   spent: bigint;
+  /**
+   * Checkpoints whose spend figure could not be read, and so were left out of
+   * `spent`. Every figure derived from the ledger is a floor while this is
+   * above zero, and a payment refuses outright rather than spending against it.
+   */
+  unreadableCheckpoints?: number;
   sessionCap: bigint | null;
   /**
    * The granted per-period cap and what has gone against it in the current
@@ -76,6 +82,15 @@ export interface StatusFacts {
  */
 export function diagnose(facts: StatusFacts): string[] {
   const problems: string[] = [];
+
+  // First, because it is the reason every figure below is a floor.
+  if (facts.unreadableCheckpoints) {
+    problems.push(
+      `${facts.unreadableCheckpoints} checkpoint row(s) in the ledger have an unreadable amount, so ` +
+        'the spend figures here are lower than what was really spent, and a payment will refuse ' +
+        'rather than spend against them. The rows they replaced are in the archive beside the ledger.'
+    );
+  }
 
   if (facts.expired) {
     problems.push('The session expired. Run `jaw session setup --x402`.');

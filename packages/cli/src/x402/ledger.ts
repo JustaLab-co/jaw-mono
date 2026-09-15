@@ -451,8 +451,15 @@ export function compactX402Log(capStarts: string[]): void {
   }
 }
 
-/** Whether a checkpoint's spend figure can be read back at all. */
-function checkpointFigureReadable(entry: X402LogEntry): boolean {
+/**
+ * Whether a checkpoint's spend figure can be read back at all.
+ *
+ * Exported because `sumSpentSince` refuses to total a ledger holding one that
+ * cannot, which is right in front of a payment and wrong in front of a report:
+ * `x402 status` is what a user runs to find out what is wrong, and it has to be
+ * able to say so rather than fail with it.
+ */
+export function checkpointFigureReadable(entry: X402LogEntry): boolean {
   if (!entry.amount) return false;
   try {
     return BigInt(entry.amount) >= 0n;
@@ -476,6 +483,10 @@ function checkpointFigureReadable(entry: X402LogEntry): boolean {
 function absorbable(entry: X402LogEntry, bound: string | undefined): boolean {
   if (typeof entry.at !== 'string' || entry.at === '') return false;
   if (entry.kind === 'checkpoint' && !checkpointFigureReadable(entry)) return false;
+  // A row the chain has not answered yet keeps its ceiling, and a correction
+  // finds it by nonce. A checkpoint carries no nonce, so folding one away makes
+  // that ceiling permanent: the answer still arrives and lands on nothing.
+  if (entry.settlement === 'unverified' && entry.nonce) return false;
   return bound === undefined || entry.at < bound;
 }
 

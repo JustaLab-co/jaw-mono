@@ -320,3 +320,21 @@ describe('x402 ledger compaction', () => {
     expect(fs.readFileSync(PATHS.x402Log, 'utf-8')).not.toContain('corrects');
   });
 });
+
+describe('compactX402Log, rows the chain has not answered', () => {
+  /**
+   * A correction finds its row by nonce, and a checkpoint carries none. Folding
+   * an unverified row away makes the ceiling it is holding permanent: the answer
+   * still arrives and lands on nothing.
+   */
+  it('leaves an unverified row in the ledger and folds the rest', () => {
+    const pending = row({ nonce: '0xpending', settlement: 'unverified', amount: '5000', scheme: 'upto' });
+    writeLedger([...filler(), pending, ...Array.from({ length: 600 }, () => row())]);
+
+    compactX402Log([]);
+
+    const after = readX402Log();
+    expect(after.some((entry) => entry.nonce === '0xpending')).toBe(true);
+    expect(after.some((entry) => entry.kind === 'checkpoint')).toBe(true);
+  });
+});

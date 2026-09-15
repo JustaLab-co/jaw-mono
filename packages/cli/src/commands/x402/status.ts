@@ -4,7 +4,7 @@ import { loadConfig } from '../../lib/config.js';
 import { isLegacySession, liveOrphans, tryLoadSessionConfig } from '../../lib/session-config.js';
 import { sessionPayerAddress } from '../../x402/payer.js';
 import { usdcBalance } from '../../x402/balance.js';
-import { readX402Log, sumSpentSince } from '../../x402/ledger.js';
+import { readX402Log, sumSpentSince, checkpointFigureReadable } from '../../x402/ledger.js';
 import { reconcileSettlements } from '../../x402/settlement.js';
 import { resolveSessionX402Policy, sameLimit, tightestLimit } from '../../x402/policy.js';
 import { currentLimitUsageOnChain } from '../../x402/spend-window.js';
@@ -105,10 +105,17 @@ export default class X402Status extends BaseCommand {
     // once and stops would otherwise leave that row costing its ceiling for
     // good, and this is the surface it still reaches.
     const ledger = await reconcileSettlements(readX402Log());
+    // A checkpoint whose figure will not parse stops `sumSpentSince`, which is
+    // what keeps a payment from spending against a total known to be short. This
+    // command spends nothing and is the one a user runs to find out what is
+    // wrong, so the unreadable rows come out of the sums and are named in the
+    // verdict instead: a floor, and a problem, rather than no report at all.
+    const unreadable = ledger.filter((entry) => entry.kind === 'checkpoint' && !checkpointFigureReadable(entry));
+    const countable = unreadable.length === 0 ? ledger : ledger.filter((entry) => !unreadable.includes(entry));
     // The session total, so payer only. The per-period figures below come from
     // `currentLimitUsage`, which scopes to the permission because those mirror
     // the chain.
-    const spent = sumSpentSince(ledger, { payer }, session.createdAt);
+    const spent = sumSpentSince(countable, { payer }, session.createdAt);
 
     const sessionCap = parseBigInt(policy.maxTotalPerSession);
     const decimals = asset?.decimals ?? 6;
@@ -119,7 +126,7 @@ export default class X402Status extends BaseCommand {
     // pulls this CLI's ledger never saw.
     // Every limit on the payment token, each with its own window and its own
     // usage. Reducing them to one would report a month's budget as a day's.
-    const usage = await currentLimitUsageOnChain(ledger, policy, payer, current);
+    const usage = await currentLimitUsageOnChain(countable, policy, payer, current);
     // Joined onto the limits the policy holds, not read off the usage list. A
     // limit whose usage could not be computed is still enforced by
     // `checkPolicy`, and reporting only what has usage makes it invisible here:
@@ -151,6 +158,7 @@ export default class X402Status extends BaseCommand {
       ownerBalance,
       payerBalance,
       hasAsset: asset !== undefined,
+      unreadableCheckpoints: unreadable.length,
       spent,
       sessionCap,
       // The same parse rule the ranking uses. Read with `parseBigInt`, a

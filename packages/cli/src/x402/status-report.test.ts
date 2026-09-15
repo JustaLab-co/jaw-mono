@@ -239,3 +239,28 @@ describe('diagnose as a readiness verdict', () => {
     expect(diagnose({ ...healthy, ownerBalance: '0', payerBalance: '16.98' }).length).toBeGreaterThan(0);
   });
 });
+
+describe('diagnose, an unreadable checkpoint', () => {
+  const facts = (over: Partial<StatusFacts> = {}): StatusFacts =>
+    ({
+      expired: false,
+      liveness: 'active',
+      ownerAddress: '0x0000000000000000000000000000000000000001',
+      ownerBalance: '10',
+      payerBalance: '0',
+      hasAsset: true,
+      spent: 0n,
+      sessionCap: 10_000_000n,
+      periodCap: null,
+      ...over,
+    }) as StatusFacts;
+
+  it('says the figures are a floor rather than reporting ready', () => {
+    const problems = diagnose(facts({ unreadableCheckpoints: 2 }));
+    expect(problems.some((p) => p.includes('2 checkpoint row(s)'))).toBe(true);
+  });
+
+  it('says nothing when every checkpoint reads back', () => {
+    expect(diagnose(facts({ unreadableCheckpoints: 0 }))).toEqual([]);
+  });
+});

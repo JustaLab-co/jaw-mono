@@ -56,7 +56,16 @@ const NONCE_BITMAP_ABI = [
  * against those same rows.
  */
 export async function reconcileSettlements(entries: X402LogEntry[]): Promise<X402LogEntry[]> {
-  const pending = entries.filter(answerable).slice(0, RECONCILE_BATCH);
+  // Half from each end rather than the oldest eight. A row can be answerable
+  // and still never answer: a node that will not serve its receipt, a chain the
+  // client cannot reach. Taken from one end, those rows hold every slot on every
+  // payment, and the rows the live caps are still counting are never reached.
+  const answerableRows = entries.filter(answerable);
+  const fromOldest = Math.ceil(RECONCILE_BATCH / 2);
+  const pending =
+    answerableRows.length <= RECONCILE_BATCH
+      ? answerableRows
+      : [...answerableRows.slice(0, fromOldest), ...answerableRows.slice(-(RECONCILE_BATCH - fromOldest))];
   if (pending.length === 0) return entries;
 
   // Together, not one after the other. The reads are independent and this holds

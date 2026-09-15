@@ -231,3 +231,33 @@ describe('reconcileSettlements', () => {
     expect(figureFor('7')).toBe(1000n);
   });
 });
+
+describe('reconcileSettlements, a batch that cannot answer', () => {
+  /**
+   * The failure this split exists for: rows that stay answerable and never
+   * answer. Taken from one end they hold every slot on every payment, and the
+   * newest row, which is the one a live cap is still counting, is never asked
+   * about.
+   */
+  it('reaches the newest row while older ones keep failing', async () => {
+    for (let i = 0; i < 12; i++) {
+      appendX402Log(underReported({ nonce: String(i), at: `2026-09-10T00:00:${String(i).padStart(2, '0')}.000Z` }));
+    }
+    // Every receipt read fails except the newest row's, which settles at 1.
+    getTransactionReceipt.mockImplementation(async () => {
+      throw new Error('node did not answer');
+    });
+    const newest = readX402Log().at(-1);
+    getTransactionReceipt.mockImplementation(async ({ hash }: { hash: string }) => {
+      if (hash !== newest?.txHash) throw new Error('node did not answer');
+      return {
+        status: 'success',
+        logs: [transferLog(PAYER, PAY_TO, 1n)],
+      };
+    });
+
+    await reconcileSettlements(readX402Log());
+
+    expect(figureFor('11')).toBe(1n);
+  });
+});

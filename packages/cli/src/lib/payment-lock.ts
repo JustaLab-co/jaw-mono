@@ -90,6 +90,16 @@ interface Held {
   lock: LockFile;
   /** Beats in a row that did not land. Reset by one that does. */
   missed: number;
+  /**
+   * Why this payment stopped holding the lock, when it did.
+   *
+   * A process that is paused rather than dead stops beating: a laptop that
+   * slept, a debugger, a SIGSTOP. Its lock ages out, another payer breaks it
+   * and both run, and the second one read a total that does not include what
+   * the first is about to spend. The lock cannot prevent that, so what it owes
+   * the user is to say it happened.
+   */
+  lost?: string;
 }
 
 const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
@@ -253,6 +263,13 @@ export async function withPaymentLock<T>(fn: () => Promise<T>, options: LockOpti
     clearInterval(heartbeat);
     process.removeListener('exit', releaseOnExit);
     release(token);
+    if (held.lost) {
+      process.stderr.write(
+        `[jaw] warning: the payment lock was not held for this whole payment (${held.lost}). ` +
+          `Another payment may have run beside it and counted the same budget. ` +
+          `Check \`jaw x402 log\`.\n`
+      );
+    }
   }
 }
 
@@ -278,12 +295,18 @@ function beat(held: Held, staleAfterMs: number): boolean {
   // worse, since the file may already belong to a payer that just created it,
   // so skip this beat and keep the interval alive for the next one.
   if (!current) return missedBeat(held, 'the lock cannot be read');
-  if (current.token !== held.lock.token) return false;
+  if (current.token !== held.lock.token) {
+    held.lost = 'another payment took the lock';
+    return false;
+  }
   // Already breakable: a payer that reads the lock right now is entitled to
   // unlink it and take the file. Beating would put our timestamp back over a
   // lock we no longer have a claim to, and our own `release` would then delete
   // theirs mid-payment.
-  if (Date.now() - current.at > staleAfterMs) return false;
+  if (Date.now() - current.at > staleAfterMs) {
+    held.lost = 'this payment stopped beating long enough to be broken as stale';
+    return false;
+  }
   // Named by pid, not by token: a crash between the write and the rename leaves
   // this behind, and nothing in the CLI ever reads that directory to clean it. A
   // token is fresh per acquisition, so that would litter one file per crash; a
