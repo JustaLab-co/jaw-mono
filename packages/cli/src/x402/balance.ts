@@ -2,6 +2,7 @@ import { createPublicClient, http, erc20Abi, formatUnits, type Chain, type Publi
 import { base, baseSepolia, polygon } from 'viem/chains';
 import { usdcForNetwork, type UsdcAsset, type UsdcChainId } from './asset-registry.js';
 import { loadConfig } from '../lib/config.js';
+import { apiKeyFor } from '../lib/api-key.js';
 
 // The JAW proxy RPC endpoint, mirrored from core's JAW_RPC_URL. Kept as a local
 // literal rather than an import because `@jaw.id/core` is lazy-loaded in the CLI
@@ -71,7 +72,7 @@ export function publicClientFor(chainId: number): PublicClient {
   // file. The throw below is what narrows it.
   const chain = (CHAINS as Record<number, Chain | undefined>)[chainId];
   if (!chain) throw new Error(`x402: no viem chain configured for chainId ${chainId}`);
-  const apiKey = loadConfig().apiKey;
+  const apiKey = apiKeyFor(loadConfig());
   const key = `${chainId}:${apiKey ?? ''}`;
   let client = clients.get(key);
   if (!client) {

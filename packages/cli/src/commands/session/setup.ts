@@ -2,6 +2,7 @@ import { Flags } from '@oclif/core';
 import * as fs from 'node:fs';
 import { BaseCommand } from '../../base-command.js';
 import { loadConfig } from '../../lib/config.js';
+import { apiKeyFor } from '../../lib/api-key.js';
 import { getBridge } from '../../lib/bridge-singleton.js';
 import {
   generateSessionKey,
@@ -263,7 +264,7 @@ export default class SessionSetup extends BaseCommand {
       // rpcUrl with no key for the rest of the process, and its issuance would be
       // logged against nobody, which is exactly the first run this path exists
       // for.
-      const resolvedApiKey = apiKey ?? loadConfig().apiKey;
+      const resolvedApiKey = apiKey ?? apiKeyFor(loadConfig());
       if (!resolvedApiKey) {
         this.error(
           'Connected, but no API key came back and none is configured. ' +

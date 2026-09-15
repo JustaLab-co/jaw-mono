@@ -2,6 +2,7 @@ import { BaseCommand } from '../../base-command.js';
 import { keystoreExists } from '../../lib/keystore.js';
 import { isLegacySession, liveOrphans, loadSessionConfig } from '../../lib/session-config.js';
 import { loadConfig } from '../../lib/config.js';
+import { apiKeyFor } from '../../lib/api-key.js';
 import { readLiveness, type PermissionLiveness } from '../../x402/permission-onchain.js';
 import { recoverPermission } from '../../x402/permission-recovery.js';
 import type { OutputFormat } from '../../lib/types.js';
@@ -32,7 +33,7 @@ export default class SessionStatus extends BaseCommand {
     // Best-effort, and quiet without an API key: this command has never needed
     // one, and a session written before the struct existed should not start
     // demanding a key to report what it always reported.
-    const permission = await recoverPermission(config, loadConfig().apiKey);
+    const permission = await recoverPermission(config, apiKeyFor(loadConfig()));
     // Carried into everything below, including the json, so the run that
     // recovers the struct reports it rather than the next one.
     const current = permission ? { ...config, permission } : config;

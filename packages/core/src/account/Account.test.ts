@@ -1641,7 +1641,7 @@ describe('Account — ERC-20 paymaster approval', () => {
 // What core does with the absence is unchanged: the query parameter is dropped
 // rather than sent empty, which the proxy rejects before considering anything
 // else.
-describe('Account — building one without a key', () => {
+describe('Account, building one without a key', () => {
     beforeEach(() => {
         vi.clearAllMocks();
     });

@@ -46,7 +46,7 @@ import {
     type CallPermissionDetail,
     type SpendPermissionDetail,
 } from '../rpc/permissions.js';
-import { JAW_RPC_URL, JAW_PAYMASTER_URL, ERC20_PAYMASTER_ADDRESS } from '../constants.js';
+import { JAW_RPC_URL, JAW_PAYMASTER_URL, jawPaymasterUrl, ERC20_PAYMASTER_ADDRESS } from '../constants.js';
 import { type Chain, chains as chainStore } from '../store/index.js';
 import { logAccountIssuance } from '../analytics/index.js';
 
@@ -1213,9 +1213,7 @@ export class Account {
                 // is the requester's too: it rides in on the request from the
                 // dapp's own `paymasters` config, and keys builds the account
                 // from it.
-                const url = `${JAW_PAYMASTER_URL}?chainId=${this._chain.id}${
-                    this._apiKey ? `&api-key=${this._apiKey}` : ''
-                }`;
+                const url = jawPaymasterUrl(this._chain.id, this._apiKey);
                 try {
                     const { fetchTokenQuotes } = await import('./erc20Paymaster.js');
                     const quotes = await fetchTokenQuotes(url, this._chain.id, [token]);

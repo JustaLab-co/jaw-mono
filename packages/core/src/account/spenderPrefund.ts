@@ -83,7 +83,7 @@ const PREFUND_GAS = 2n * FIRST_OP_GAS;
  * rest. This is the side that is about to move funds.
  *
  * A permission too tight to cover one operation is refused outright by the
- * caller rather than trimmed to, which is what used to move all of it.
+ * caller rather than trimmed to it.
  */
 function ceilingFor(permissions: PermissionsDetail, token: Address): bigint | null {
     let tightest: bigint | null = null;

@@ -217,14 +217,31 @@ export function registerPayTool(server: McpServer): void {
     {
       description:
         'Read the local x402 payment ledger — every jaw_pay_and_fetch attempt (paid, failed, or ' +
-        'refused) with amount, asset, network, payTo, nonce, and txHash. Use it to audit spend or ' +
+        'refused) with amount, asset, network, payTo, nonce, and txHash. Rows with kind "checkpoint" are ' +
+        'not payments: each stands in for older rows folded away, and carries their total. Use it to audit spend or ' +
         'reconcile an ambiguous settlement by nonce. Pass limit to get only the most recent entries.',
       inputSchema: x402LogSchema,
       annotations: { readOnlyHint: true },
     },
     async (params: { limit?: number }) => {
       try {
-        return mcpResult(readX402Log(params.limit));
+        // A checkpoint carries `status: 'paid'` so the spend sums count it with
+        // no branch of their own, and an agent handed that row reports a payment
+        // that never happened, to a host and a nonce it will not find. Said in
+        // the shape here, the way `x402 log` gives it its own line.
+        const entries = readX402Log(params.limit).map((entry) =>
+          entry.kind === 'checkpoint'
+            ? {
+                kind: 'checkpoint' as const,
+                at: entry.at,
+                amount: entry.amount,
+                network: entry.network,
+                folded: entry.folded ?? 0,
+                stands_in_for: `${entry.folded ?? 0} earlier payments, folded and moved to the archive`,
+              }
+            : entry
+        );
+        return mcpResult(entries);
       } catch (err) {
         return mcpError(err);
       }

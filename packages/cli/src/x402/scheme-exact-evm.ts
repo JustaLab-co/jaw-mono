@@ -97,8 +97,7 @@ export async function buildExactPayment(
   // is the source of truth, and the two are now known to be the same address.
   const verifyingContract = asset.address;
 
-  // The registry's, and never `extra.name`/`extra.version`, which this used to
-  // prefer.
+  // The registry's, and never `extra.name`/`extra.version`.
   //
   // `extra` is server-controlled (`z.record(z.unknown())` in http.ts), and for
   // a token the registry knows the server's claim can only be equal, in which

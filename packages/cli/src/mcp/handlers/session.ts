@@ -6,6 +6,7 @@ import { sessionPayerAddress } from '../../x402/payer.js';
 import { readLiveness } from '../../x402/permission-onchain.js';
 import { recoverPermission } from '../../x402/permission-recovery.js';
 import { loadConfig } from '../../lib/config.js';
+import { apiKeyFor } from '../../lib/api-key.js';
 
 export function registerSessionTools(server: McpServer): void {
   server.registerTool(
@@ -48,7 +49,7 @@ export function registerSessionTools(server: McpServer): void {
         // Recovered here and not only in the commands: an agent is the consumer
         // this whole path exists for, and a session created before the struct
         // was stored would otherwise read `unknown` forever.
-        const permission = await recoverPermission(config, loadConfig().apiKey);
+        const permission = await recoverPermission(config, apiKeyFor(loadConfig()));
         const current = permission ? { ...config, permission } : config;
         const permissionOnChain = await readLiveness(current);
         return mcpResult({

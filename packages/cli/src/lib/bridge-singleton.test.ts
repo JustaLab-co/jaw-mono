@@ -90,7 +90,7 @@ describe('getBridge — paymaster threading', () => {
 // `jaw x402 pay` runs unattended and reads the key off the config file, so a key
 // that lived only for the connecting process would leave the paying half of the
 // product without one.
-describe('getBridge — keeping the key the browser filled in', () => {
+describe('getBridge, keeping the key the browser filled in', () => {
   beforeEach(() => {
     constructed.length = 0;
     injectedApiKey = null;
