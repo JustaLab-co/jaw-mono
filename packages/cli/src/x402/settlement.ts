@@ -2,7 +2,7 @@ import { parseAbiItem, decodeEventLog } from 'viem';
 import { publicClientFor } from './balance.js';
 import { parseBigInt } from './amount.js';
 import { errorMessage } from '../lib/errors.js';
-import { usdcForNetwork } from './asset-registry.js';
+import { usdcForNetwork, type UsdcAsset } from './asset-registry.js';
 import { PERMIT2_ADDRESS } from './permit2.js';
 import {
   appendX402Correction,
@@ -36,9 +36,13 @@ import {
 /**
  * Rows attempted per run, oldest first.
  *
- * This runs inside the payment lock, so the bound is on how long an agent that
- * has been offline for a week can hold it: without one, its first payment back
- * opens a chain read for every unverified row it accumulated.
+ * A real payment runs this inside the payment lock, so the bound is on how long
+ * an agent that has been offline for a week can hold it: without one, its first
+ * payment back opens a chain read for every unverified row it accumulated.
+ *
+ * `x402 status` and a dry run reach it too, and neither holds the lock. What
+ * they can collide with is a compaction, which notices the file changed under
+ * it and drops its rewrite, so the cost is a fold deferred to the next payment.
  */
 const RECONCILE_BATCH = 8;
 
@@ -82,7 +86,14 @@ export async function reconcileSettlements(entries: X402LogEntry[]): Promise<X40
     answerableRows.length <= RECONCILE_BATCH
       ? answerableRows
       : [...answerableRows.slice(0, fromOldest), ...answerableRows.slice(-(RECONCILE_BATCH - fromOldest))];
-  if (pending.length === 0) return entries;
+  // Retired without a chain read, because there is no read to make: these are
+  // the rows no batch can reach. Not bounded like the batch either, for the same
+  // reason.
+  const retired = entries
+    .filter(unanswerable)
+    .map(abandonedIfOld)
+    .filter((answer): answer is X402SettlementCorrection => answer !== null);
+  if (pending.length === 0 && retired.length === 0) return entries;
 
   // Together, not one after the other. The reads are independent and this holds
   // the payment lock while they run: eight of them at 200ms each measured 1.6s
@@ -102,7 +113,7 @@ export async function reconcileSettlements(entries: X402LogEntry[]): Promise<X40
   );
 
   const answers = new Map<string, X402SettlementCorrection>();
-  for (const answer of answered) {
+  for (const answer of [...answered, ...retired]) {
     if (!answer) continue;
     appendX402Correction(answer);
     answers.set(answer.corrects, answer);
@@ -111,7 +122,16 @@ export async function reconcileSettlements(entries: X402LogEntry[]): Promise<X40
 
   return entries.map((entry) => {
     const answer = entry.nonce ? answers.get(entry.nonce) : undefined;
-    return answer ? { ...entry, settlement: answer.settlement, amount: answer.amount ?? entry.amount } : entry;
+    // Every field `readX402Log` folds, so what this hands back and what the next
+    // read produces cannot come apart.
+    return answer
+      ? {
+          ...entry,
+          settlement: answer.settlement,
+          amount: answer.amount ?? entry.amount,
+          txHash: answer.txHash ?? entry.txHash,
+        }
+      : entry;
   });
 }
 
@@ -147,6 +167,20 @@ function deadlinePassed(entry: X402LogEntry): boolean {
 }
 
 /**
+ * Whether there is no question to put about this row, ever.
+ *
+ * `answerable` needs a transaction to look up or a Permit2 bitmap to read. An
+ * `exact` attempt that failed before a receipt has neither: it carries a nonce
+ * and no hash, and only `upto` signs against Permit2. Nothing moves those rows
+ * off `unverified` on its own, so they are charged at their ceiling for the life
+ * of the session total and, since the fold protects rows an answer could still
+ * find by nonce, they pin every later compaction.
+ */
+function unanswerable(entry: X402LogEntry): boolean {
+  return entry.settlement === 'unverified' && Boolean(entry.nonce) && !answerable(entry);
+}
+
+/**
  * Stop asking about a row the chain has had long enough to answer.
  *
  * Only the asking stops. The ceiling stands, because nothing here found out
@@ -177,7 +211,7 @@ async function answerFor(entry: X402LogEntry): Promise<X402SettlementCorrection 
   if (!asset || !entry.nonce) return null;
 
   if (entry.txHash) {
-    const moved = await transferredIn(entry, asset.chainId);
+    const moved = await transferredIn(entry, asset);
     if (moved !== null) return correction(entry, 'verified', moved);
   }
 
@@ -193,10 +227,10 @@ async function answerFor(entry: X402LogEntry): Promise<X402SettlementCorrection 
  * transfer has to be there for the payment to have happened at all, and the
  * three fields that identify it are on every ledger row already.
  */
-async function transferredIn(entry: X402LogEntry, chainId: number): Promise<bigint | null> {
+async function transferredIn(entry: X402LogEntry, asset: UsdcAsset): Promise<bigint | null> {
   let receipt;
   try {
-    receipt = await publicClientFor(chainId).getTransactionReceipt({ hash: entry.txHash as `0x${string}` });
+    receipt = await publicClientFor(asset.chainId).getTransactionReceipt({ hash: entry.txHash as `0x${string}` });
   } catch {
     // Not mined yet, or the node did not answer. Both mean "ask again", and
     // neither may cost the payment that is waiting on this.
@@ -206,7 +240,10 @@ async function transferredIn(entry: X402LogEntry, chainId: number): Promise<bigi
 
   let moved: bigint | null = null;
   for (const log of receipt.logs) {
-    if (log.address.toLowerCase() !== entry.asset?.toLowerCase()) continue;
+    // The registry's address when the row carries none: comparing against
+    // `undefined` skipped every log, so a mined transaction that did move funds
+    // read as "the chain has not said yet" and the row kept its ceiling.
+    if (log.address.toLowerCase() !== (entry.asset ?? asset.address).toLowerCase()) continue;
     let event;
     try {
       event = decodeEventLog({ abi: [TRANSFER_EVENT], data: log.data, topics: log.topics });

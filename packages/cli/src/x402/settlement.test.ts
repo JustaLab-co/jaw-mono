@@ -295,3 +295,50 @@ describe('reconcileSettlements, a row the chain never answers', () => {
     expect(readX402Log().find((e) => e.nonce === 'fresh')?.settlement).toBe('unverified');
   });
 });
+
+describe('reconcileSettlements, rows nothing can ask about', () => {
+  const WEEK_AGO = new Date(Date.now() - 8 * 24 * 60 * 60 * 1000).toISOString();
+
+  /**
+   * An `exact` attempt that failed before a receipt: a nonce, no transaction to
+   * look up, and no bitmap, since only `upto` signs against Permit2. No batch
+   * ever reaches it, so without a sweep it holds its ceiling for the life of the
+   * session total and keeps every compaction from folding it away.
+   */
+  it('retires a failed exact attempt once it is old enough', async () => {
+    appendX402Log(
+      underReported({ nonce: 'exact-fail', at: WEEK_AGO, scheme: 'exact', status: 'failed', txHash: undefined })
+    );
+
+    await reconcileSettlements(readX402Log());
+
+    const row = readX402Log().find((e) => e.nonce === 'exact-fail');
+    expect(row?.settlement).toBe('abandoned');
+    // Still its ceiling: nobody ever found out whether it moved.
+    expect(figureFor('exact-fail')).toBe(1000n);
+    // And no chain read was made for it, because there is none to make.
+    expect(getTransactionReceipt).not.toHaveBeenCalled();
+  });
+
+  it('leaves the same row alone while it is young', async () => {
+    appendX402Log(underReported({ nonce: 'young', scheme: 'exact', status: 'failed', txHash: undefined }));
+
+    await reconcileSettlements(readX402Log());
+
+    expect(readX402Log().find((e) => e.nonce === 'young')?.settlement).toBe('unverified');
+  });
+
+  // A row written before `asset` was recorded matched no log at all, so a mined
+  // transaction that did move funds read as "the chain has not said yet".
+  it('finds the transfer on a row that carries no asset', async () => {
+    appendX402Log(underReported({ nonce: 'no-asset', asset: undefined }));
+    getTransactionReceipt.mockResolvedValue({
+      status: 'success',
+      logs: [transferLog(PAYER, PAY_TO, 7n)],
+    });
+
+    await reconcileSettlements(readX402Log());
+
+    expect(figureFor('no-asset')).toBe(7n);
+  });
+});
