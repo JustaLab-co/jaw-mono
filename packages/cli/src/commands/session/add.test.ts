@@ -39,6 +39,12 @@ vi.mock('../../lib/session-config.js', async (importOriginal) => ({
     h.saved = config;
     h.onSave?.();
   },
+  // What `add` writes: a replacement keeps the instant the session began,
+  // including not knowing it, where starting one stamps the present.
+  replaceSessionConfig: (config: Record<string, unknown>) => {
+    h.saved = config;
+    h.onSave?.();
+  },
   saveRevokeProgress: (_config: unknown, progress: unknown) => {
     h.progress.push(progress);
   },
