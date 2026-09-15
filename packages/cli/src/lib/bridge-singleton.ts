@@ -80,11 +80,15 @@ export async function getBridge(options: BridgeOptions): Promise<WSBridge> {
       // it, having just told them a browser was opening.
       return await connectBridge({ ...options, timeout }, relaySession, chainId, keysUrl, relayUrl, false);
     } catch (err) {
+      // Before the delete, not after it. A caller that may not open a browser is
+      // not going to replace this pairing, so dropping it here only costs the
+      // person their next command opening a window, for a failure that may have
+      // been the relay hiccuping.
+      if (options.reuseOnly) throw err;
       // Connection failed: stale session or relay restarted.
       // Delete and fall through to create a new one.
       deleteRelaySession();
       relaySession = null;
-      if (options.reuseOnly) throw err;
     }
   } else if (relaySession) {
     // Incomplete session (no peer key) — discard

@@ -208,3 +208,28 @@ describe('refreshWorkspaceApiKey', () => {
     expect(await refreshWorkspaceApiKey()).toBe('new-key');
   });
 });
+
+describe('getBridge, reuseOnly', () => {
+  beforeEach(() => {
+    constructed.length = 0;
+    injectedApiKey = null;
+    vi.clearAllMocks();
+    vi.mocked(loadConfig).mockReturnValue({});
+  });
+
+  /**
+   * An unattended payment is the only caller, and it cannot replace a pairing it
+   * drops. Deleting one here costs the person a browser window on their next
+   * command, for a relay that may just have hiccupped.
+   */
+  it('keeps the pairing when the connect fails', async () => {
+    const { WSBridge } = await import('./ws-bridge.js');
+    vi.mocked(WSBridge).mockImplementationOnce(
+      () => ({ connect: vi.fn().mockRejectedValue(new Error('relay down')), close: vi.fn() }) as never
+    );
+    const { deleteRelaySession } = await import('./relay-session.js');
+
+    await expect(getBridge({ reuseOnly: true, chainId: 8453 })).rejects.toThrow(/relay down/);
+    expect(deleteRelaySession).not.toHaveBeenCalled();
+  });
+});
