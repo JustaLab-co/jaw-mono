@@ -1,6 +1,6 @@
 # useAddFunds
 
-Hook to open the receive screen: the chains the account's address works on, a QR code, and the address itself.
+Hook to open the receive screen: the chains the account accepts deposits on, a QR code, and the address itself.
 
 **Type:** `hook`
 
@@ -56,7 +56,15 @@ When calling `mutate()`, you can optionally pass an object with the following pr
 
 Type: `number`
 
-Chain the QR code pins via EIP-681. Defaults to the connected chain. Nothing is sent, so the connector does not need to be on this chain.
+Chain the QR code pins via EIP-681. Defaults to the first entry of `chains`, then the connected chain. Nothing is sent, so the connector does not need to be on this chain.
+
+### chains (optional)
+
+Type: `number[]`
+
+Chains your app accepts deposits on. The chain row on the screen shows exactly these instead of every chain the address works on.
+
+Worth sending whenever your app only credits deposits on certain networks: the default is true of a smart account, but it invites a deposit your app will not see. Order it with your primary chain first — that is the one the QR code pins when no `chainId` comes with it. An empty array is rejected rather than read as "no preference".
 
 ### address (optional)
 
@@ -105,6 +113,27 @@ function FundOnBase() {
 }
 ```
 
+### Narrow the Chains You Accept
+
+```tsx
+import { useAddFunds } from '@jaw.id/wagmi';
+import { base, optimism } from 'viem/chains';
+
+function FundOnBaseOnly() {
+  const { mutate: addFunds } = useAddFunds();
+
+  // One chain: the row shows Base alone, and the QR code pins it.
+  return <button onClick={() => addFunds({ chains: [base.id] })}>Add funds</button>;
+}
+
+function FundOnEither() {
+  const { mutate: addFunds } = useAddFunds();
+
+  // Several: the row shows exactly these two, Base first and pinned.
+  return <button onClick={() => addFunds({ chains: [base.id, optimism.id] })}>Add funds</button>;
+}
+```
+
 ### With Callbacks
 
 ```tsx
@@ -128,7 +157,7 @@ function FundAndRefresh() {
 
 ## Behavior
 
-- Opens the receive screen: the address, its ENS name and avatar when they resolve, and the mainnet chains the address works on
+- Opens the receive screen: the address, its ENS name and avatar when they resolve, and the chains it accepts deposits on — the ones in `chains`, or every mainnet the address works on when you send none
 - The QR code encodes an [EIP-681](https://eips.ethereum.org/EIPS/eip-681) payment request, `ethereum:<address>@<chainId>`, so a scanner selects the network itself
 - Resolves when the user closes the screen. Closing is a normal finish, not a rejection
 - Reads no balances and polls for nothing

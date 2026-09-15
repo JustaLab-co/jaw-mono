@@ -4,6 +4,10 @@
  */
 
 import { SUPPORTED_CHAINS } from '@jaw.id/core';
+// The example list and its parser live in rpc-methods so both registries offer
+// the same demo — the two registries duplicate their chain OPTIONS because the
+// sentinels differ, but this pair has no such split.
+import { DEPOSIT_CHAINS_EXAMPLE, parseDepositChains } from './rpc-methods';
 
 /**
  * Chains for a parameter that names ONE chain, where omitting it falls back to
@@ -152,15 +156,35 @@ export const WAGMI_METHODS: WagmiMethod[] = [
         name: 'chainId',
         type: 'select',
         label: 'Chain',
-        description: 'Chain the QR pins via EIP-681. Defaults to the connected chain.',
+        description: 'Chain the QR pins via EIP-681. Defaults to the first entry of Chains, then the connected chain.',
         required: false,
         defaultValue: 'default',
         options: CHAIN_DEFAULT_OPTIONS,
+      },
+      {
+        name: 'narrowChains',
+        type: 'toggle',
+        label: 'Restrict deposit chains',
+        description:
+          'Off, the screen offers every chain the address works on. On, it offers only the ones you list — what an app that credits deposits on specific networks should send.',
+        required: false,
+        defaultValue: 'false',
+      },
+      {
+        name: 'chains',
+        type: 'json',
+        label: 'Chains (JSON array)',
+        description: 'Decimal chain IDs, primary first — that is the one the QR pins when no Chain is selected above.',
+        required: false,
+        defaultValue: DEPOSIT_CHAINS_EXAMPLE,
+        showWhen: { param: 'narrowChains', value: 'true' },
       },
     ],
     getCodeSnippet: (params) => {
       const args: string[] = [];
       if (params.chainId && params.chainId !== 'default') args.push(`chainId: ${parseInt(params.chainId, 16)}`);
+      const chains = params.narrowChains === 'true' ? parseDepositChains(params.chains) : undefined;
+      if (chains) args.push(`chains: [${chains.join(', ')}]`);
       return `const { mutateAsync: addFunds } = useAddFunds();
 
 // Resolves null when the user closes the screen.
@@ -169,6 +193,10 @@ await addFunds({${args.length ? ` ${args.join(', ')} ` : ''}});`;
     buildParams: (params) => {
       const built: Record<string, unknown> = {};
       if (params.chainId && params.chainId !== 'default') built.chainId = parseInt(params.chainId, 16);
+      if (params.narrowChains === 'true') {
+        const chains = parseDepositChains(params.chains);
+        if (chains) built.chains = chains;
+      }
       return built;
     },
   },

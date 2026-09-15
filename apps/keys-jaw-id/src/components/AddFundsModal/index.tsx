@@ -96,7 +96,22 @@ export const AddFundsModal = ({
   // happens to list mainnets first, so reordering it would silently make this
   // fall back to a testnet. The stack shows mainnets, so the code this backstops
   // should name one too.
-  const candidate = addFunds.chainId ? ensureIntNumber(addFunds.chainId) : chain?.id;
+  //
+  // `chains` is filtered rather than fallen back on, because the two failures
+  // differ: an unsupported QR chain leaves the screen with nothing to encode, so
+  // it needs a default, while an unsupported entry in the stack is one icon to
+  // leave out of a list that still has the rest. An entirely unsupported list
+  // collapses to undefined, which reads as "the dapp named none" and restores
+  // the full stack — the honest answer once nothing it asked for can be drawn.
+  const chains = useMemo(() => {
+    const requested = addFunds.chains?.map(ensureIntNumber).filter((id) => SUPPORTED_CHAINS.some((c) => c.id === id));
+    return requested && requested.length > 0 ? requested : undefined;
+  }, [addFunds.chains]);
+
+  // `chains[0]` before the connected chain, matching AppSpecificSigner: a dapp
+  // that sent only `chains` still needs one chain for the QR, and the session's
+  // chain may be one it just said it does not accept.
+  const candidate = addFunds.chainId ? ensureIntNumber(addFunds.chainId) : (chains?.[0] ?? chain?.id);
   const chainId =
     candidate !== undefined && SUPPORTED_CHAINS.some((c) => c.id === candidate) ? candidate : MAINNET_CHAINS[0]!.id;
 
@@ -141,6 +156,7 @@ export const AddFundsModal = ({
       // address is swapped in there rather than in each host.
       address={resolveDestination([sessionAccount as Address])}
       chainId={chainId}
+      chains={chains}
       mainnetRpcUrl={mainnetRpcUrl}
       apiKey={prodApiKey}
       origin={origin}

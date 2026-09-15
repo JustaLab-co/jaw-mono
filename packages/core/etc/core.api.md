@@ -99,6 +99,7 @@ export interface AddFundsUIRequest extends BaseUIRequest {
     data: {
         address: Address;
         chainId: number;
+        chains?: number[];
     };
     // (undocumented)
     type: 'wallet_addFunds';
@@ -879,6 +880,7 @@ export function normalizeAddFundsParams(params: unknown): NormalizedAddFundsPara
 // @public
 export interface NormalizedAddFundsParams {
     chainId?: `0x${string}`;
+    chains?: `0x${string}`[];
 }
 
 // @public (undocumented)

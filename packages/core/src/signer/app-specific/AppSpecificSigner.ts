@@ -430,8 +430,16 @@ export class AppSpecificSigner extends JAWSigner {
                 // Already validated and hex-normalized by `validateSigningRequest`,
                 // like the other normalized methods, so there is no second parse
                 // here and no second chance for the two to disagree.
-                const requested = normalized?.method === 'wallet_addFunds' ? normalized.params.chainId : undefined;
+                const addFunds = normalized?.method === 'wallet_addFunds' ? normalized.params : undefined;
+
+                // The QR pins one chain, so a dapp that sent only `chains` still
+                // needs one chosen. The first entry, because a list is ordered
+                // and the dapp put its primary chain first; falling back to the
+                // connected chain there would point the QR at a chain the dapp
+                // just said it does not accept.
+                const requested = addFunds?.chainId ?? addFunds?.chains?.[0];
                 const chainId = requested ? ensureIntNumber(requested) : this.chain.id;
+                const chains = addFunds?.chains?.map(ensureIntNumber);
 
                 const uiRequest: AddFundsUIRequest = {
                     id: crypto.randomUUID(),
@@ -444,6 +452,7 @@ export class AppSpecificSigner extends JAWSigner {
                         // address the user does not own.
                         address: resolveDestination(this.accounts),
                         chainId,
+                        chains,
                     },
                 };
 

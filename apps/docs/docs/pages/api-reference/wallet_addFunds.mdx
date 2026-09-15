@@ -1,6 +1,6 @@
 # wallet_addFunds
 
-Show the receive screen: the chains the account's address works on, a QR code, and the address itself.
+Show the receive screen: the chains the account accepts deposits on, a QR code, and the address itself.
 
 **Authentication Required:** No (uses an ephemeral signer if not authenticated)
 
@@ -12,6 +12,7 @@ await jaw.provider.request({
   params: [
     {
       chainId: 8453, // Chain the QR code pins
+      chains: [8453, 10], // Chains the screen offers to deposit on
     },
   ],
 });
@@ -19,11 +20,20 @@ await jaw.provider.request({
 
 ### Parameters
 
-| Name      | Type     | Required | Description                                                          |
-| --------- | -------- | -------- | -------------------------------------------------------------------- |
-| `chainId` | `number` | No       | Chain the QR code pins via EIP-681. Defaults to the connected chain. |
+| Name      | Type       | Required | Description                                                                                                        |
+| --------- | ---------- | -------- | ------------------------------------------------------------------------------------------------------------------ |
+| `chainId` | `number`   | No       | Chain the QR code pins via EIP-681. Defaults to the first entry of `chains`, then the connected chain.             |
+| `chains`  | `number[]` | No       | Chains your app accepts deposits on. Narrows the chain row to these. Defaults to every chain the address works on. |
 
-`chainId` is decimal (`8453`), matching the chain IDs in your SDK config. A hex quantity (`'0x2105'`) is also accepted.
+Both are decimal (`8453`), matching the chain IDs in your SDK config. Hex quantities (`'0x2105'`) are also accepted.
+
+The two answer different questions and can be sent together: `chainId` is where the QR code points, which [EIP-681](https://eips.ethereum.org/EIPS/eip-681) allows only one of, while `chains` is the set the screen presents. Send `chains` alone and the QR code pins its first entry, so order it with your primary chain first.
+
+:::tip
+Send `chains` whenever your app only credits deposits on certain networks. With no `chains`, the screen shows every chain the address works on, which is true of a smart account but invites a deposit your app will not see. `chains: [8453]` is a single-chain app; `chains: [8453, 10]` is a multichain one.
+:::
+
+An empty `chains: []` is rejected with `-32602` rather than read as "no preference": it usually means a filter in your app matched nothing, and showing every chain would be the opposite of what you asked for.
 
 :::warning
 There is no `address` parameter, and an `address` key in the params object is ignored. The destination is always the connected account, resolved by the wallet from the session — a dApp that could name the destination could point the QR code at an address the user does not own.
@@ -34,7 +44,8 @@ There is no `address` parameter, and an `address` key in the params object is ig
 ```json
 [
   {
-    "chainId": 8453
+    "chainId": 8453,
+    "chains": [8453, 10]
   }
 ]
 ```
@@ -53,7 +64,7 @@ null
 
 ## Behavior
 
-- Opens the receive screen: the address, its ENS name and avatar when they resolve, and the mainnet chains the address works on
+- Opens the receive screen: the address, its ENS name and avatar when they resolve, and the chains it accepts deposits on — the ones in `chains`, or every mainnet the address works on when you send none
 - The QR code encodes an [EIP-681](https://eips.ethereum.org/EIPS/eip-681) payment request, `ethereum:<address>@<chainId>`, so a scanner selects the network itself instead of leaving the sender to notice a label
 - Resolves when the user closes the screen. Deposits land off-app, so closing is a normal finish, not a rejection
 - Reads no balances and polls for nothing
@@ -66,12 +77,12 @@ A resolved call means the screen was shown and closed, **not** that funds arrive
 
 ## Errors
 
-| Code   | Description                                                          |
-| ------ | -------------------------------------------------------------------- |
-| 4100   | Unauthorized (no connected account to receive funds at)              |
-| 5710   | The chain isn't configured (testnets need `preference.showTestnets`) |
-| -32602 | Invalid params (chainId is not a positive integer or hex quantity)   |
-| -32603 | The wallet could not resolve an address to receive at                |
+| Code   | Description                                                                                                |
+| ------ | ---------------------------------------------------------------------------------------------------------- |
+| 4100   | Unauthorized (no connected account to receive funds at)                                                    |
+| 5710   | A chain in `chainId` or `chains` isn't configured (testnets need `preference.showTestnets`)                |
+| -32602 | Invalid params (a chainId is not a positive integer or hex quantity, or `chains` is empty or not an array) |
+| -32603 | The wallet could not resolve an address to receive at                                                      |
 
 ## Example
 
@@ -87,6 +98,26 @@ await jaw.provider.request({
   params: [
     {
       chainId: 8453,
+    },
+  ],
+});
+
+// A single-chain app: only Base is offered, and the QR code pins it.
+await jaw.provider.request({
+  method: 'wallet_addFunds',
+  params: [
+    {
+      chains: [8453],
+    },
+  ],
+});
+
+// A multichain app: the row shows exactly these, with Base led and pinned.
+await jaw.provider.request({
+  method: 'wallet_addFunds',
+  params: [
+    {
+      chains: [8453, 10, 42161],
     },
   ],
 });

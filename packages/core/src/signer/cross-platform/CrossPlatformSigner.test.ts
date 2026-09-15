@@ -569,6 +569,43 @@ describe('CrossPlatformSigner', () => {
             expect(sent.action.params).toEqual([{ chainId: '0x2105' }]);
         });
 
+        // The list has to ride in the params, not in the UI request: the popup
+        // never sees an `AddFundsUIRequest`, it re-derives everything from these
+        // params. If `chains` did not survive this encode, the CrossPlatform
+        // stack would silently keep showing every chain while the AppSpecific
+        // one narrowed — the exact host drift the old design avoided by
+        // refusing to plumb a list at all.
+        it('forwards chains to the popup for wallet_addFunds', async () => {
+            vi.spyOn(store, 'getState').mockReturnValue({
+                account: {
+                    accounts: ['0x1234567890123456789012345678901234567890'],
+                    chain: { id: 8453 },
+                    capabilities: undefined,
+                },
+                chains: [{ id: 8453, rpcUrl: 'https://base-mainnet.rpc.com' }],
+                config: { metadata: mockMetadata, version: '1.0.0' },
+                keys: {},
+                callStatuses: {},
+            } as never);
+
+            mockCommunicator.postRequestAndWaitForResponse.mockResolvedValue({
+                id: mockMessageId,
+                requestId: mockMessageId,
+                correlationId: mockCorrelationId,
+                sender: 'peer-public-key-hex',
+                content: { encrypted: mockEncryptedData },
+                timestamp: new Date(),
+            } as RPCResponseMessage);
+            (decryptContent as Mock).mockResolvedValue({ result: { value: null } } as RPCResponse);
+
+            await signer.request({ method: 'wallet_addFunds', params: [{ chains: [8453] }] });
+
+            const sent = (encryptContent as Mock).mock.calls.at(-1)?.[0] as {
+                action: { method: string; params: unknown[] };
+            };
+            expect(sent.action.params).toEqual([{ chains: ['0x2105'] }]);
+        });
+
         // `optionalChainId` only proves the shape. Without this the QR pinned a
         // chain the wallet knows nothing about and where the account is not
         // deployed, while wallet_sendCalls refused the same value.
@@ -579,6 +616,17 @@ describe('CrossPlatformSigner', () => {
         it('refuses an unconfigured chainId before the popup opens', async () => {
             await expect(
                 signer.request({ method: 'wallet_addFunds', params: [{ chainId: 1337 }] })
+            ).rejects.toMatchObject({ code: standardErrorCodes.eip5792.unsupportedChainId });
+
+            expect(mockCommunicator.postRequestAndWaitForResponse).not.toHaveBeenCalled();
+        });
+
+        // Same check, same code, for every entry in the list: an unsupported id
+        // there would draw a slot in the stack for a chain the wallet cannot
+        // even name.
+        it('refuses an unconfigured chain inside chains before the popup opens', async () => {
+            await expect(
+                signer.request({ method: 'wallet_addFunds', params: [{ chains: [1337] }] })
             ).rejects.toMatchObject({ code: standardErrorCodes.eip5792.unsupportedChainId });
 
             expect(mockCommunicator.postRequestAndWaitForResponse).not.toHaveBeenCalled();

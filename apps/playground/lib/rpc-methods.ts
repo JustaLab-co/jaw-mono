@@ -1,4 +1,4 @@
-import { SUPPORTED_CHAINS } from '@jaw.id/core';
+import { MAINNET_CHAINS, SUPPORTED_CHAINS } from '@jaw.id/core';
 import { parseEther } from 'viem';
 
 export type ParameterType = 'address' | 'hex' | 'number' | 'string' | 'json' | 'select' | 'toggle';
@@ -82,6 +82,37 @@ export function parseValueToWei(value?: string): bigint {
     // parseEther rejects forms parseFloat accepts (e.g. "1e18") — keep them working.
     const parsed = parseFloat(trimmed);
     return Number.isFinite(parsed) && parsed > 0 ? BigInt(Math.floor(parsed * 1e18)) : 0n;
+  }
+}
+
+/**
+ * The prefilled `chains` list for the Add Funds demo.
+ *
+ * Mainnets, and only two of them, so the field shows what a real multichain app
+ * sends rather than a list long enough to look like the default. Derived rather
+ * than hardcoded because the wallet refuses a chain it does not carry with 5710
+ * — a literal `[8453, 10]` would make the demo error out wherever Base is not
+ * configured. Testnets are left out for the same reason: they need
+ * `preference.showTestnets`, so they would fail for most people trying this.
+ */
+export const DEPOSIT_CHAINS_EXAMPLE = JSON.stringify(MAINNET_CHAINS.slice(0, 2).map((c) => c.id));
+
+/**
+ * Parses the `chains` field, which is free-form JSON the user can mistype.
+ *
+ * Returns undefined for anything that is not a non-empty array of positive
+ * integers, which is exactly the shape the RPC accepts — the alternative is
+ * sending a malformed list and showing the user a -32602 they cannot act on.
+ */
+export function parseDepositChains(value: string | undefined): number[] | undefined {
+  if (!value?.trim()) return undefined;
+  try {
+    const parsed: unknown = JSON.parse(value);
+    if (!Array.isArray(parsed) || parsed.length === 0) return undefined;
+    if (!parsed.every((id) => typeof id === 'number' && Number.isSafeInteger(id) && id > 0)) return undefined;
+    return parsed as number[];
+  } catch {
+    return undefined;
   }
 }
 
@@ -773,15 +804,35 @@ console.log('Connected accounts:', result.accounts);`;
         name: 'chainId',
         type: 'select',
         label: 'Chain',
-        description: 'Chain the QR pins via EIP-681. Defaults to the connected chain.',
+        description: 'Chain the QR pins via EIP-681. Defaults to the first entry of Chains, then the connected chain.',
         required: false,
         defaultValue: 'default',
         options: CHAIN_OPTIONS,
+      },
+      {
+        name: 'narrowChains',
+        type: 'toggle',
+        label: 'Restrict deposit chains',
+        description:
+          'Off, the screen offers every chain the address works on. On, it offers only the ones you list — what an app that credits deposits on specific networks should send.',
+        required: false,
+        defaultValue: 'false',
+      },
+      {
+        name: 'chains',
+        type: 'json',
+        label: 'Chains (JSON array)',
+        description: 'Decimal chain IDs, primary first — that is the one the QR pins when no Chain is selected above.',
+        required: false,
+        defaultValue: DEPOSIT_CHAINS_EXAMPLE,
+        showWhen: { param: 'narrowChains', value: 'true' },
       },
     ],
     getCodeSnippet: (params) => {
       const args: string[] = [];
       if (params.chainId && params.chainId !== 'default') args.push(`chainId: ${parseInt(params.chainId, 16)}`);
+      const chains = params.narrowChains === 'true' ? parseDepositChains(params.chains) : undefined;
+      if (chains) args.push(`chains: [${chains.join(', ')}]`);
       return `// Resolves null when the user closes — deposits land off-app,
 // so there is no outcome to report.
 await jaw.provider.request({
@@ -790,8 +841,12 @@ await jaw.provider.request({
 });`;
     },
     buildParams: (params) => {
-      const addFunds: { chainId?: number } = {};
+      const addFunds: { chainId?: number; chains?: number[] } = {};
       if (params.chainId && params.chainId !== 'default') addFunds.chainId = parseInt(params.chainId, 16);
+      if (params.narrowChains === 'true') {
+        const chains = parseDepositChains(params.chains);
+        if (chains) addFunds.chains = chains;
+      }
       return [addFunds];
     },
   },
