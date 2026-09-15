@@ -145,8 +145,12 @@ export function isLegacySession(config: Pick<SessionConfig, 'mode'>): boolean {
 export interface OrphanedPermission {
   id: string;
   chainId: number;
-  /** Unix seconds. */
-  expiry: number;
+  /**
+   * Unix seconds, or null when the session it came from did not say. Carried
+   * rather than dropped: `liveOrphans` keeps an orphan whose expiry cannot be
+   * read, since dropping it is how the grant it names stops being reachable.
+   */
+  expiry: number | null;
 }
 
 export interface SessionConfig {
@@ -154,8 +158,28 @@ export interface SessionConfig {
   sessionAddress: string;
   permissionId: string;
   chainId: number;
-  expiry: number;
-  createdAt: string;
+  /**
+   * When the permission ends, or null when the file does not say.
+   *
+   * Nullable because this is read off a file a person can edit and a crash can
+   * truncate, and the old type said `number` while the value could be anything.
+   * That silence is the bug: `expiry <= now` is false for a `NaN`, so an
+   * unreadable field turned the expiry check off instead of failing it, and the
+   * compiler could not point at the places that would have to decide.
+   *
+   * Every reader answers it for itself, because the safe answer differs by
+   * question: see `sessionLives` for the cleanup side and `SessionBridge` for
+   * the spending side.
+   */
+  expiry: number | null;
+  /**
+   * When the session began, or undefined on a session written before the field.
+   *
+   * Optional for the same reason, and the absent case was always supported:
+   * `sumSpentSince` takes the instant as optional and counts the payer's whole
+   * history without it, which is the conservative direction.
+   */
+  createdAt?: string;
   mode?: SessionMode;
   /** The struct the on-chain reads need. Absent on older sessions; see the type. */
   permission?: GrantedPermission;
@@ -183,12 +207,23 @@ export interface SessionConfig {
  * accumulating in the file for the life of the machine. Dropping it is the same
  * decision `session revoke` makes when it skips the browser for an expired
  * session.
+ *
+ * One kind is never dropped: an orphan whose expiry cannot be read. The file
+ * does not say whether that grant is over, and dropping it is how the grant
+ * stops being reachable, so it is kept and `session revoke` will try it. The
+ * cost is that those do not self-prune the way expired ones do, and each one
+ * revoke reaches for is a transaction the user approves. It is the same trade
+ * `sessionLives` makes everywhere else: a permission that may still be live is
+ * worth more than a shorter file.
  */
 export function liveOrphans(
   orphans: OrphanedPermission[] | undefined,
   now: number = Date.now() / 1000
 ): OrphanedPermission[] {
-  return (orphans ?? []).filter((orphan) => orphan.expiry > now);
+  // `sessionLives` rather than a comparison, for the reason it carries: an
+  // orphan whose expiry will not read is the one that most needs to be kept,
+  // since dropping it is how the grant it names stops being reachable.
+  return (orphans ?? []).filter((orphan) => sessionLives(orphan.expiry, now));
 }
 
 /**
@@ -198,20 +233,44 @@ export function liveOrphans(
  * `SessionBridge` as if an old CLI had made it, so the compiler holds the
  * invariant rather than a test having to.
  */
-export function saveSessionConfig(
-  input: Omit<SessionConfig, 'createdAt' | 'mode'> & {
-    mode: 'eip7702';
-    /**
-     * Carried over when a session is being replaced in place rather than
-     * started, which `session add` does. `createdAt` is what the session total
-     * is counted from (`sumSpentSince(payer, session.createdAt)`), so stamping a
-     * fresh one there would hand the session cap a clean slate as a side effect
-     * of adding a capability.
-     */
-    createdAt?: string;
-  }
-): void {
-  writeSessionConfig({ ...input, createdAt: input.createdAt ?? new Date().toISOString() });
+type WritableSession = Omit<SessionConfig, 'createdAt' | 'mode' | 'expiry'> & {
+  mode: 'eip7702';
+  /**
+   * Required here while the field it lands in is nullable, and the asymmetry is
+   * the point: a session we write always knows when it ends, and only a file we
+   * did not write can fail to state one. Widening the read without holding the
+   * write would have let a value nobody can read be persisted by us, which is a
+   * different problem from the one this file is about.
+   */
+  expiry: number;
+};
+
+/**
+ * Write a session that starts now.
+ *
+ * `createdAt` is stamped here and nowhere else, because starting is the only
+ * time it is true.
+ */
+export function saveSessionConfig(input: WritableSession): void {
+  writeSessionConfig({ ...input, createdAt: new Date().toISOString() });
+}
+
+/**
+ * Write a session that replaces one already on disk, keeping when it began.
+ *
+ * Separate from starting one, because the difference is in the caller's intent
+ * and not in the value: `session add` carries `createdAt` forward, and a session
+ * written before the field existed, or whose field could not be read, carries
+ * nothing. An optional argument could not tell those apart from "start now", so
+ * the absent case silently stamped the present instead, and `sumSpentSince`
+ * counts the session total from that instant: adding a capability handed the cap
+ * a clean slate.
+ *
+ * Absent stays absent here. The sums already take the instant as optional and
+ * count the payer's whole history without it, which is the conservative reading.
+ */
+export function replaceSessionConfig(input: WritableSession & { createdAt: string | undefined }): void {
+  writeSessionConfig(input);
 }
 
 /**
@@ -294,16 +353,116 @@ export function sessionConfigExists(): boolean {
   return fs.existsSync(PATHS.sessionConfig);
 }
 
+/** Whether an instant can be read back at all. */
+function isReadableInstant(value: unknown): value is string {
+  return typeof value === 'string' && Number.isFinite(Date.parse(value));
+}
+
+/**
+ * The expiry as an instant, or null when the file does not say.
+ *
+ * Every caller that prints one goes through here. `new Date(NaN).toISOString()`
+ * throws, so a field that will not read took down the command that was trying to
+ * report it, which is the command someone runs precisely because something is
+ * wrong.
+ */
+export function expiryInstant(expiry: number | null | undefined): Date | null {
+  if (typeof expiry !== 'number' || !Number.isFinite(expiry)) return null;
+  const instant = new Date(expiry * 1000);
+  return Number.isNaN(instant.getTime()) ? null : instant;
+}
+
+/**
+ * Whether a session may still be used to act.
+ *
+ * The spending side of the same question `sessionLives` answers for cleanup, and
+ * it answers the opposite way when the file cannot say: an expiry nobody can
+ * read is not a licence to sign, and it is not a reason to skip a revoke either.
+ * Both are exported so the two sides are readable next to each other rather than
+ * being two comparisons that happen to differ.
+ */
+export function sessionUsable(expiry: number | null | undefined, now: number = Date.now() / 1000): expiry is number {
+  return typeof expiry === 'number' && Number.isFinite(expiry) && expiry > now;
+}
+
+/**
+ * Whether a session should be treated as still holding something on chain.
+ *
+ * Separate from asking whether it may spend, and deliberately answers the
+ * opposite way when the file cannot say. An `expiry` that will not read is a
+ * question nobody can answer locally, and the two callers that ask it want
+ * opposite defaults: a payment must not go out under an unknown expiry, and a
+ * revoke must not skip a permission that may still be live. Answering "expired"
+ * everywhere is the quiet version of stranding the grant, since `session revoke`
+ * skips the chain for an expired session and deletes the local record, and
+ * `session setup` only carries an orphan forward from a session it considers
+ * active.
+ *
+ * So this one answers for the cleanup side: unknown means assume there is
+ * something there. `SessionBridge` answers the other side for itself.
+ */
+export function sessionLives(expiry: unknown, now: number = Date.now() / 1000): boolean {
+  if (typeof expiry !== 'number' || !Number.isFinite(expiry)) return true;
+  return expiry > now;
+}
+
+/**
+ * Why the file cannot be used at all, or nothing when it can.
+ *
+ * Only `permissionId`, and on purpose. Without it there is nothing to spend
+ * against and nothing to clean up, so refusing costs the caller nothing it had.
+ * Every other field is handled where it is read, because refusing the whole file
+ * over one of them takes the recovery paths down with it: `session revoke` and
+ * `session setup` reach the permission id through this same load, and a file
+ * they cannot open is a grant that stays live on chain with no local record of
+ * its id.
+ */
+function whySessionConfigIsUnusable(config: SessionConfig): string | null {
+  if (typeof config !== 'object' || config === null) return 'it is not an object';
+  if (typeof config.permissionId !== 'string' || config.permissionId === '') return '`permissionId` is missing';
+  return null;
+}
+
+/**
+ * Narrow what cannot be read to the type that says so, rather than refusing the
+ * file for it or leaving a value no reader can trust.
+ *
+ * `createdAt` is the instant the session total counts from. Absent is already a
+ * supported state, and the safe one: `sumSpentSince` takes `since` as optional
+ * and sums the payer's whole history without it, which counts more spend rather
+ * than less. A value that does not parse would instead move that window
+ * silently, and the direction it moves is the one that hands back budget already
+ * spent. `Date.parse` is not enough on its own, since it coerces: `Date.parse(2024)`
+ * is a valid date in 2024 rather than a rejection.
+ */
+function normalizeSessionConfig(config: SessionConfig): SessionConfig {
+  const expiry = typeof config.expiry === 'number' && Number.isFinite(config.expiry) ? config.expiry : null;
+  // Absent rather than a value nothing can read, which is what the type now
+  // says and what `sumSpentSince` already handled: no instant means count the
+  // payer's whole history, so the cap binds sooner rather than later.
+  const createdAt = isReadableInstant(config.createdAt) ? config.createdAt : undefined;
+  return { ...config, expiry, createdAt };
+}
+
 export function loadSessionConfig(): SessionConfig {
   if (!fs.existsSync(PATHS.sessionConfig)) {
     throw new Error('No session configured. Run `jaw session setup` first.');
   }
   const raw = fs.readFileSync(PATHS.sessionConfig, 'utf-8');
+  let parsed: SessionConfig;
   try {
-    return JSON.parse(raw) as SessionConfig;
+    parsed = JSON.parse(raw) as SessionConfig;
   } catch {
     throw new Error(`Session config at ${PATHS.sessionConfig} is corrupted. Run \`jaw session setup\` to recreate it.`);
   }
+
+  const wrong = whySessionConfigIsUnusable(parsed);
+  if (wrong) {
+    throw new Error(
+      `Session config at ${PATHS.sessionConfig} cannot be used: ${wrong}. ` + 'Run `jaw session setup` to recreate it.'
+    );
+  }
+  return normalizeSessionConfig(parsed);
 }
 
 /**

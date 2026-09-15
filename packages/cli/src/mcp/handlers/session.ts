@@ -1,7 +1,7 @@
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { mcpError, mcpResult } from '../helpers.js';
 import { keystoreExists } from '../../lib/keystore.js';
-import { loadSessionConfig } from '../../lib/session-config.js';
+import { loadSessionConfig, sessionUsable } from '../../lib/session-config.js';
 import { sessionPayerAddress } from '../../x402/payer.js';
 import { readLiveness } from '../../x402/permission-onchain.js';
 import { recoverPermission } from '../../x402/permission-recovery.js';
@@ -55,7 +55,10 @@ export function registerSessionTools(server: McpServer): void {
         return mcpResult({
           exists: true,
           ...current,
-          expired: config.expiry <= Date.now() / 1000,
+          // Reported the way the paying path answers it, not the way the
+          // cleanup paths do: an agent reads this to decide whether to try, and
+          // `SessionBridge` refuses to sign under an expiry it cannot read.
+          expired: !sessionUsable(config.expiry),
           permissionOnChain,
           ...(payerAddress ? { payerAddress } : {}),
         });

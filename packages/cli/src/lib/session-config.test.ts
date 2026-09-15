@@ -26,7 +26,10 @@ const {
   deleteSessionConfig,
   parseGrantedPermission,
   liveOrphans,
+  replaceSessionConfig,
   saveRevokeProgress,
+  sessionLives,
+  sessionUsable,
 } = await import('./session-config.js');
 const { PATHS } = await import('./paths.js');
 
@@ -323,5 +326,131 @@ describe('writing the session config', () => {
   it('still lands at 0o600 through the rename', () => {
     saveSessionConfig(SAMPLE_CONFIG);
     expect(fs.statSync(PATHS.sessionConfig).mode & 0o777).toBe(0o600);
+  });
+});
+
+describe('a session file that was edited', () => {
+  const write = (config: unknown) => {
+    fs.mkdirSync(TEST_ROOT, { recursive: true });
+    fs.writeFileSync(PATHS.sessionConfig, JSON.stringify(config), { mode: 0o600 });
+  };
+
+  it('refuses only when there is nothing to spend against or clean up', () => {
+    const { permissionId: _dropped, ...withoutPermission } = SAMPLE_CONFIG;
+    write(withoutPermission);
+
+    expect(() => loadSessionConfig()).toThrow(/`permissionId` is missing/);
+  });
+
+  /**
+   * Dropped rather than refused. Absent is a supported state and the safe one:
+   * the spend sums take the instant as optional and count the payer's whole
+   * history without it, which counts more rather than less.
+   */
+  it('drops a createdAt that cannot be read, keeping the rest of the file', () => {
+    write({ ...SAMPLE_CONFIG, createdAt: 'last tuesday' });
+
+    const loaded = loadSessionConfig();
+    expect(loaded.createdAt).toBeUndefined();
+    expect(loaded.permissionId).toBe(SAMPLE_CONFIG.permissionId);
+  });
+
+  // `Date.parse` coerces, so a number reads as a valid date in that year and
+  // would reach the spend window as a number where a string is expected.
+  it('drops a numeric createdAt, which Date.parse would otherwise accept', () => {
+    write({ ...SAMPLE_CONFIG, createdAt: 2024 });
+
+    expect(loadSessionConfig().createdAt).toBeUndefined();
+  });
+
+  it('keeps a createdAt that reads', () => {
+    write({ ...SAMPLE_CONFIG, createdAt: '2026-09-01T00:00:00.000Z' });
+
+    expect(loadSessionConfig().createdAt).toBe('2026-09-01T00:00:00.000Z');
+  });
+
+  // An expiry nobody can read is a question the file cannot answer, and the two
+  // sides want opposite defaults. This is the cleanup side.
+  it('treats an unreadable expiry as still holding something on chain', () => {
+    expect(sessionLives(undefined)).toBe(true);
+    expect(sessionLives('soon')).toBe(true);
+    expect(sessionLives(Number.NaN)).toBe(true);
+  });
+
+  it('still answers a readable expiry on its own terms', () => {
+    const now = 1_000_000;
+    expect(sessionLives(now + 10, now)).toBe(true);
+    expect(sessionLives(now - 10, now)).toBe(false);
+  });
+});
+
+describe('the two sides of an expiry the file cannot state', () => {
+  const write = (config: unknown) => {
+    fs.mkdirSync(TEST_ROOT, { recursive: true });
+    fs.writeFileSync(PATHS.sessionConfig, JSON.stringify(config), { mode: 0o600 });
+  };
+
+  it('narrows an unreadable expiry to null rather than carrying a value nobody can use', () => {
+    write({ ...SAMPLE_CONFIG, expiry: 'whenever' });
+
+    expect(loadSessionConfig().expiry).toBeNull();
+  });
+
+  // The whole point of the pair: the same unknown, answered opposite ways.
+  it('is not usable and is still live', () => {
+    expect(sessionUsable(null)).toBe(false);
+    expect(sessionLives(null)).toBe(true);
+  });
+
+  it('agrees with itself on an expiry that reads', () => {
+    const now = 1_000_000;
+    expect(sessionUsable(now + 10, now)).toBe(true);
+    expect(sessionLives(now + 10, now)).toBe(true);
+    expect(sessionUsable(now - 10, now)).toBe(false);
+    expect(sessionLives(now - 10, now)).toBe(false);
+  });
+
+  it('keeps an orphan whose expiry cannot be read', () => {
+    const orphans = [
+      { id: '0xa', chainId: 8453, expiry: null },
+      { id: '0xb', chainId: 8453, expiry: 1 },
+    ];
+
+    expect(liveOrphans(orphans, 1_000_000).map((o) => o.id)).toEqual(['0xa']);
+  });
+});
+
+describe('starting a session and replacing one are different writes', () => {
+  const base = {
+    ownerAddress: '0xOwner' as const,
+    sessionAddress: '0xSession' as const,
+    permissionId: '0xPerm' as const,
+    chainId: 84532,
+    expiry: Math.floor(Date.now() / 1000) + 86400,
+    mode: 'eip7702' as const,
+  };
+
+  it('stamps when a session starts', () => {
+    saveSessionConfig(base);
+
+    expect(loadSessionConfig().createdAt).toBeDefined();
+  });
+
+  /**
+   * The case an optional argument could not tell apart from "start now": a
+   * session written before the field existed, or one whose field could not be
+   * read, carries nothing forward. Stamping it here counts the session total
+   * from the present, which hands the cap a clean slate for adding a capability.
+   */
+  it('leaves a replacement without a start instant rather than stamping the present', () => {
+    replaceSessionConfig({ ...base, createdAt: undefined });
+
+    expect(loadSessionConfig().createdAt).toBeUndefined();
+  });
+
+  it('carries a known start instant through a replacement', () => {
+    replaceSessionConfig({ ...base, createdAt: '2026-01-01T00:00:00.000Z' });
+
+    expect(loadSessionConfig().createdAt).toBe('2026-01-01T00:00:00.000Z');
   });
 });

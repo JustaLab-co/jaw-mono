@@ -1,5 +1,11 @@
 import { loadSessionKey } from './keystore.js';
-import { isLegacySession, loadSessionConfig, type SessionConfig } from './session-config.js';
+import {
+  expiryInstant,
+  isLegacySession,
+  loadSessionConfig,
+  sessionUsable,
+  type SessionConfig,
+} from './session-config.js';
 import { loadConfig } from './config.js';
 import { isRejectedApiKey } from './api-key.js';
 import { encodeFunctionData, erc20Abi, maxUint256 } from 'viem';
@@ -239,10 +245,19 @@ export class SessionBridge {
   }
 
   private checkExpiry(config: SessionConfig): void {
-    if (config.expiry <= Date.now() / 1000) {
-      const expiryDate = new Date(config.expiry * 1000).toISOString();
-      throw new Error(`Session expired on ${expiryDate}. Run \`jaw session setup\` to create a new session.`);
-    }
+    // `sessionUsable` is the rule, and it answers no for an expiry the file
+    // cannot state: every comparison against a NaN is false, so a hand-edited
+    // field would otherwise wave the session through rather than stop it. The
+    // cleanup paths ask `sessionLives` and get the opposite answer on purpose.
+    if (sessionUsable(config.expiry)) return;
+
+    const ends = expiryInstant(config.expiry);
+    throw new Error(
+      ends
+        ? `Session expired on ${ends.toISOString()}. Run \`jaw session setup\` to create a new session.`
+        : 'Session expired: the session file does not say when it ends, so nothing here can tell that it has not. ' +
+          'Run `jaw session setup` to create a new session, or `jaw session revoke` to end the one on chain.'
+    );
   }
 
   /**

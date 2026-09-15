@@ -14,7 +14,9 @@ import {
 import {
   liveOrphans,
   parseGrantedPermission,
+  expiryInstant,
   saveSessionConfig,
+  sessionLives,
   tryLoadSessionConfig,
   type OrphanedPermission,
 } from '../../lib/session-config.js';
@@ -102,7 +104,11 @@ export default class SessionSetup extends BaseCommand {
       // `jaw session setup` first", leaving no way out but deleting the keystore
       // by hand, which strands the key while its on-chain permission stays live.
       const existing = tryLoadSessionConfig();
-      const isActive = existing !== null && existing.expiry > Date.now() / 1000;
+      // `sessionLives` rather than a comparison: an expiry that will not read
+      // has to count as live here, or the permission it names is never carried
+      // forward as an orphan and the grant stays on chain with nothing pointing
+      // at it.
+      const isActive = existing !== null && sessionLives(existing.expiry);
       orphaned = liveOrphans(existing?.orphanedPermissions);
 
       // The prompt path uses readline against process.stdin. With non-TTY stdin
@@ -140,13 +146,18 @@ export default class SessionSetup extends BaseCommand {
             reuseKey = loadSessionKey();
           }
         } else if (isActive) {
-          const remaining = Math.floor((existing.expiry - Date.now() / 1000) / 86400);
+          // `isActive` is true for an expiry nobody can read, by design, so the
+          // line below cannot assume there is a date to print.
+          const ends = expiryInstant(existing.expiry);
+          const remaining = ends ? Math.floor((ends.getTime() / 1000 - Date.now() / 1000) / 86400) : null;
           this.log('Active session found:\n');
           this.log(`  Session address:  ${existing.sessionAddress}`);
           this.log(`  Permission ID:    ${existing.permissionId}`);
           this.log(`  Chain:            ${existing.chainId}`);
           this.log(
-            `  Expires:          ${new Date(existing.expiry * 1000).toISOString()} (${remaining} days remaining)`
+            ends
+              ? `  Expires:          ${ends.toISOString()} (${remaining} days remaining)`
+              : '  Expires:          unknown, the session file does not say'
           );
           this.log('\nThe old on-chain permission will NOT be revoked automatically.');
           this.log('Anyone with the old session key can still use it until expiry.\n');
@@ -209,7 +220,7 @@ export default class SessionSetup extends BaseCommand {
         this.logToStderr(
           `Warning: overwriting active session without revoking. ` +
             `Old permission ${existing.permissionId} on chain ${existing.chainId} ` +
-            `remains live until ${new Date(existing.expiry * 1000).toISOString()}. ` +
+            `remains live ${expiryInstant(existing.expiry) ? `until ${expiryInstant(existing.expiry)!.toISOString()}` : 'for an unknown time: the file does not say when it ends'}. ` +
             `Recorded on the new session, so \`jaw session revoke\` will revoke it too.`
         );
       }
@@ -443,6 +454,6 @@ export default class SessionSetup extends BaseCommand {
 }
 
 /** The part of a replaced session worth keeping: enough to revoke it later. */
-function orphanOf(session: { permissionId: string; chainId: number; expiry: number }): OrphanedPermission {
+function orphanOf(session: { permissionId: string; chainId: number; expiry: number | null }): OrphanedPermission {
   return { id: session.permissionId, chainId: session.chainId, expiry: session.expiry };
 }
