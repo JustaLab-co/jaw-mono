@@ -1,7 +1,13 @@
 import { BaseCommand } from '../../base-command.js';
 import { keystoreExists } from '../../lib/keystore.js';
 import { loadConfig } from '../../lib/config.js';
-import { expiryInstant, isLegacySession, liveOrphans, tryLoadSessionConfig } from '../../lib/session-config.js';
+import {
+  expiryInstant,
+  isLegacySession,
+  liveOrphans,
+  sessionUsable,
+  tryLoadSessionConfig,
+} from '../../lib/session-config.js';
 import { sessionPayerAddress } from '../../x402/payer.js';
 import { usdcBalance } from '../../x402/balance.js';
 import { readX402Log, sumSpentSince, checkpointFigureReadable } from '../../x402/ledger.js';
@@ -56,7 +62,7 @@ export default class X402Status extends BaseCommand {
     // Unreadable reads as expired in a report, the way the paying path answers
     // it: this page exists to say whether a payment can happen.
     const endsAt = expiryInstant(session.expiry);
-    const expired = !endsAt || endsAt.getTime() / 1000 <= now;
+    const expired = !sessionUsable(session.expiry, now);
 
     const asset = Object.values(USDC_BY_NETWORK).find((a) => a.chainId === session.chainId);
     const payer = sessionPayerAddress();

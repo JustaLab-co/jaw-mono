@@ -1,6 +1,12 @@
 import { BaseCommand } from '../../base-command.js';
 import { keystoreExists } from '../../lib/keystore.js';
-import { expiryInstant, isLegacySession, liveOrphans, loadSessionConfig } from '../../lib/session-config.js';
+import {
+  expiryInstant,
+  isLegacySession,
+  liveOrphans,
+  loadSessionConfig,
+  sessionUsable,
+} from '../../lib/session-config.js';
 import { loadConfig } from '../../lib/config.js';
 import { apiKeyFor } from '../../lib/api-key.js';
 import { readLiveness, type PermissionLiveness } from '../../x402/permission-onchain.js';
@@ -26,7 +32,7 @@ export default class SessionStatus extends BaseCommand {
     const config = loadSessionConfig();
     const now = Date.now() / 1000;
     const endsAt = expiryInstant(config.expiry);
-    const isExpired = !endsAt || endsAt.getTime() / 1000 <= now;
+    const isExpired = !sessionUsable(config.expiry, now);
     // The one fact no local file can hold. Expiry is already on disk, so it
     // needs no read; a revoke made from keys.jaw.id or from another machine
     // leaves this file saying the session is fine. Fails soft to 'unknown',

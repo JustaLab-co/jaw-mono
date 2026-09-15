@@ -321,13 +321,8 @@ export function sessionConfigExists(): boolean {
   return fs.existsSync(PATHS.sessionConfig);
 }
 
-/**
- * Whether an instant can be read back at all.
- *
- * Exported because the answer to "this field is unreadable" is not the same at
- * every call site, which is the whole shape of this problem: see `sessionLives`.
- */
-export function isReadableInstant(value: unknown): value is string {
+/** Whether an instant can be read back at all. */
+function isReadableInstant(value: unknown): value is string {
   return typeof value === 'string' && Number.isFinite(Date.parse(value));
 }
 
