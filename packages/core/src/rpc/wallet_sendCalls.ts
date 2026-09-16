@@ -237,15 +237,14 @@ export async function waitForReceiptInBackground(userOpHash: string, chainId: nu
             receiptStatus === 1 ||
             (receiptStatus === undefined && actualReceipt.transactionHash !== undefined);
 
-        // Fire-and-forget notification to proxy
-        if (apiKey) {
-            notifyReceiptReceived({
-                userOpHash: userOpHash as `0x${string}`,
-                transactionHash: actualReceipt.transactionHash,
-                success: isSuccess,
-                apiKey,
-            });
-        }
+        // Fire-and-forget notification to proxy. A keyless caller is attributed by
+        // the forwarded origin, so the receipt is reported either way.
+        notifyReceiptReceived({
+            userOpHash: userOpHash as `0x${string}`,
+            transactionHash: actualReceipt.transactionHash,
+            success: isSuccess,
+            apiKey,
+        });
 
         if (isSuccess) {
             // Transaction succeeded - mark as completed

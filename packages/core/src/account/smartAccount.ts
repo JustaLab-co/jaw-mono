@@ -414,27 +414,25 @@ export async function sendTransaction(
         hash: userOpHash,
     });
 
-    // Fire-and-forget notification to proxy
-    if (apiKey) {
-        // Extract the actual receipt - same logic as wallet_sendCalls.ts
-        const actualReceipt = (receipt as any).receipt || receipt;
-        const receiptStatus = actualReceipt.status;
+    // Extract the actual receipt - same logic as wallet_sendCalls.ts
+    const actualReceipt = (receipt as any).receipt || receipt;
+    const receiptStatus = actualReceipt.status;
 
-        // Determine if transaction succeeded:
-        // - status === '0x1' or 1 means success
-        // - If status is undefined but transactionHash exists, assume success (included on-chain)
-        const isSuccess =
-            receiptStatus === '0x1' ||
-            receiptStatus === 1 ||
-            (receiptStatus === undefined && actualReceipt.transactionHash !== undefined);
+    // Determine if transaction succeeded:
+    // - status === '0x1' or 1 means success
+    // - If status is undefined but transactionHash exists, assume success (included on-chain)
+    const isSuccess =
+        receiptStatus === '0x1' ||
+        receiptStatus === 1 ||
+        (receiptStatus === undefined && actualReceipt.transactionHash !== undefined);
 
-        notifyReceiptReceived({
-            userOpHash,
-            transactionHash: actualReceipt.transactionHash,
-            success: isSuccess,
-            apiKey,
-        });
-    }
+    // Fire-and-forget notification to proxy, keyless callers included.
+    notifyReceiptReceived({
+        userOpHash,
+        transactionHash: actualReceipt.transactionHash,
+        success: isSuccess,
+        apiKey,
+    });
 
     return receipt.receipt.transactionHash;
 }

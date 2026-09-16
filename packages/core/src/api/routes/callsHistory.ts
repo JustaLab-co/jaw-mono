@@ -60,7 +60,7 @@ export interface CallsHistoryRoutes {
         response: void;
         headers?: Record<string, string>;
         pathParams: { id: string };
-        queryParams: { 'api-key': string };
+        queryParams: { 'api-key'?: string };
     };
     GET_CALLS_HISTORY: {
         request: GetCallsHistoryRequest;
