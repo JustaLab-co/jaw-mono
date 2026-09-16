@@ -2,7 +2,6 @@ import { Flags } from '@oclif/core';
 import * as fs from 'node:fs';
 import { BaseCommand } from '../../base-command.js';
 import { loadConfig } from '../../lib/config.js';
-import { apiKeyFor } from '../../lib/api-key.js';
 import { getBridge } from '../../lib/bridge-singleton.js';
 import {
   generateSessionKey,
@@ -289,12 +288,13 @@ export default class SessionSetup extends BaseCommand {
       // CLI unable to ask the chain anything about its own permission.
       let granted: unknown;
       try {
-        // Built after the bridge, not before, because the bridge is what supplies
-        // a key to a machine that had none. Ahead of it the account would cache an
-        // rpcUrl with no key for the rest of the process, and its issuance would be
-        // logged against nobody, which is exactly the first run this path exists
-        // for.
-        const resolvedApiKey = apiKey ?? apiKeyFor(loadConfig());
+        // Read off disk after the bridge rather than reused from the snapshot
+        // taken before it. The bridge is what fills in a key on a machine that
+        // had none, and what replaces one the deployment has rotated since;
+        // reusing the snapshot would leave the account building its rpcUrl and
+        // paymaster url from a key that is no longer the right one, and logging
+        // its issuance against it.
+        const resolvedApiKey = this.resolveApiKey(flags);
         if (!resolvedApiKey) {
           this.error(
             'Connected, but no API key came back and none is configured. ' +

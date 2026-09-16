@@ -25,6 +25,10 @@ const h = vi.hoisted(() => ({
   requests: [] as string[],
   stderr: [] as string[],
   answers: [] as string[],
+  // What the browser hands back through the bridge, which `keepInjectedApiKey`
+  // writes to config before the grant runs.
+  injected: null as string | null,
+  accountApiKey: undefined as string | undefined,
 }));
 
 vi.mock('../../lib/config.js', () => ({ loadConfig: () => h.config }));
@@ -62,6 +66,7 @@ vi.mock('../../lib/session-config.js', async (importOriginal) => ({
 vi.mock('../../lib/bridge-singleton.js', () => ({
   getBridge: async () => {
     h.bridges += 1;
+    if (h.injected) h.config.workspaceApiKey = h.injected;
     return {
       request: async (method: string) => {
         h.requests.push(method);
@@ -95,7 +100,10 @@ vi.mock('../../x402/funded-owner.js', () => ({
 
 vi.mock('@jaw.id/core', () => ({
   Account: {
-    fromLocalAccount: async () => ({ address: '0x2222222222222222222222222222222222222222' }),
+    fromLocalAccount: async (options: { apiKey?: string }) => {
+      h.accountApiKey = options.apiKey;
+      return { address: '0x2222222222222222222222222222222222222222' };
+    },
   },
 }));
 
@@ -121,6 +129,8 @@ beforeEach(() => {
   h.requests = [];
   h.stderr = [];
   h.answers = [];
+  h.injected = null;
+  h.accountApiKey = undefined;
   Object.defineProperty(process.stdin, 'isTTY', { value: true, configurable: true });
 });
 
@@ -189,6 +199,21 @@ describe('jaw session setup', () => {
     h.config = { apiKey: 'k', grantCeiling: '5/day' };
     await expect(runSetup(['--x402', '--limit', '50/day', '--chain', '84532'])).rejects.toThrow(/ceiling/);
     expect(h.bridges).toBe(0);
+  });
+
+  it('builds the account with the key the bridge just wrote, not the one read before it', async () => {
+    // A deployment that rotated its workspace key: the run starts on the stale
+    // one, the browser answers with the live one and it is on disk before the
+    // grant. Carrying the pre-connect reading forward from here spends the rest
+    // of the run on a key the proxy has revoked, with the right one two lines
+    // away.
+    delete process.env.JAW_API_KEY;
+    h.config = { workspaceApiKey: 'W_old' };
+    h.injected = 'W_new';
+
+    await runSetup(['--x402', '--chain', '84532', '--quiet']);
+
+    expect(h.accountApiKey).toBe('W_new');
   });
 
   it('grants when the limit is within the ceiling', async () => {
