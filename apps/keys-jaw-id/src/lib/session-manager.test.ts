@@ -175,6 +175,16 @@ describe('two SessionManagers over one storage', () => {
     return new SessionManager();
   }
 
+  // jsdom's StorageEvent constructor only accepts its own Storage in
+  // `storageArea`, and on Node 25 the shared setup puts an in-memory stub in
+  // that slot (see vitest.setup.localstorage.ts). Attaching the area to the
+  // instance sends the same event the listener reads, whichever one is live.
+  function dispatchStorageEvent(key: string | null) {
+    const event = new StorageEvent('storage', { key });
+    Object.defineProperty(event, 'storageArea', { value: window.localStorage });
+    window.dispatchEvent(event);
+  }
+
   it('does not erase the other document’s session when creating one', async () => {
     const docA = secondDocument();
     const docB = secondDocument();
@@ -243,7 +253,7 @@ describe('two SessionManagers over one storage', () => {
     // Another document deletes it. jsdom does not raise `storage` across
     // SessionManagers (same window), so dispatch what a real browser would.
     await new SessionManager().deleteSession(ORIGIN);
-    window.dispatchEvent(new StorageEvent('storage', { key: 'jaw:sessions:apps', storageArea: localStorage }));
+    dispatchStorageEvent('jaw:sessions:apps');
 
     expect(await reader.isAuthenticated(ORIGIN)).toBe(false);
   });
@@ -252,7 +262,7 @@ describe('two SessionManagers over one storage', () => {
     const reader = secondDocument();
     await reader.createSession({ origin: ORIGIN, peerPublicKey: '04aabbccdd', account: AUTH });
 
-    window.dispatchEvent(new StorageEvent('storage', { key: 'unrelated:key', storageArea: localStorage }));
+    dispatchStorageEvent('unrelated:key');
 
     expect(await reader.isAuthenticated(ORIGIN)).toBe(true);
   });
