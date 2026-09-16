@@ -2,7 +2,7 @@
 // The chain icon comes from wallet_getCapabilities, which the proxy now serves to a
 // dApp registered by origin. Refusing to fetch without a key left keyless dApps with
 // the '?' placeholder on the confirm screen.
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { createElement } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { act } from 'react';
@@ -14,7 +14,7 @@ vi.mock('@jaw.id/core', () => ({
 }));
 
 import { handleGetCapabilitiesRequest } from '@jaw.id/core';
-import { clearChainIconCache, useChainIconURI } from './useChainIconURI';
+import { useChainIconURI } from './useChainIconURI';
 
 const capabilitiesMock = vi.mocked(handleGetCapabilitiesRequest);
 
@@ -35,10 +35,6 @@ async function mount(chainId: number, apiKey?: string) {
   });
   await act(() => Promise.resolve());
 }
-
-beforeEach(() => {
-  clearChainIconCache();
-});
 
 afterEach(() => {
   if (root) act(() => root!.unmount());
@@ -65,19 +61,18 @@ describe('useChainIconURI', () => {
     expect(container.querySelector('img')?.getAttribute('src')).toBe(ICON);
   });
 
-  // The two spellings of "no key" are the same caller, so they share an entry.
-  it('serves the cached icon whichever way the missing key is spelled', async () => {
+  // The response is cached a layer below, in handleGetCapabilitiesRequest, which
+  // is also where concurrent callers are merged into one request.
+  it('asks on every mount', async () => {
     capabilitiesMock.mockResolvedValue({ '0x1': { chainMetadata: { icon: ICON } } } as never);
-    await mount(1, '');
+    await mount(1, 'test-key');
     if (root) act(() => root.unmount());
-    await mount(1, undefined);
+    await mount(1, 'test-key');
 
-    expect(capabilitiesMock).toHaveBeenCalledTimes(1);
+    expect(capabilitiesMock).toHaveBeenCalledTimes(2);
     expect(container.querySelector('img')?.getAttribute('src')).toBe(ICON);
   });
 
-  // A refused lookup used to be cached, which pinned the '?' placeholder for the
-  // rest of the page over one offline moment.
   it('tries again after a failed lookup', async () => {
     capabilitiesMock.mockRejectedValueOnce(new Error('offline'));
     await mount(1, 'test-key');
@@ -91,14 +86,10 @@ describe('useChainIconURI', () => {
     expect(container.querySelector('img')?.getAttribute('src')).toBe(ICON);
   });
 
-  // A chain the backend knows nothing about is an answer, and it is cached.
-  it('asks once for a chain that has no icon', async () => {
+  it('falls back for a chain the backend has no icon for', async () => {
     capabilitiesMock.mockResolvedValue({ '0x1': {} } as never);
     await mount(1, 'test-key');
-    if (root) act(() => root.unmount());
-    await mount(1, 'test-key');
 
-    expect(capabilitiesMock).toHaveBeenCalledTimes(1);
     expect(container.querySelector('img')).toBeNull();
   });
 

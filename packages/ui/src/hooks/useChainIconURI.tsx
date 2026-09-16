@@ -1,17 +1,12 @@
 import { JSX, useState, useEffect, useMemo } from 'react';
 import { handleGetCapabilitiesRequest, type ChainMetadataCapability } from '@jaw.id/core';
 
-// Simple in-memory cache for chain icons to avoid redundant API calls
-const chainIconCache = new Map<string, string | null>();
-
-/** Drops the cached icons. For tests, which would otherwise share them. */
-export function clearChainIconCache(): void {
-  chainIconCache.clear();
-}
-
 /**
  * Hook to fetch chain icon from wallet_getCapabilities chainMetadata
  * Returns a JSX element (img or fallback) similar to useChainIcon
+ *
+ * The response is cached by `handleGetCapabilitiesRequest`, which also shares one
+ * request between callers that mount together, so this asks on every mount.
  *
  * @param chainId - The chain ID to get the icon for
  * @param apiKey - The API key for authentication, if the caller has one
@@ -20,23 +15,12 @@ export function clearChainIconCache(): void {
  */
 export const useChainIconURI = (chainId: number, apiKey?: string, size?: number): JSX.Element => {
   const iconSize = size ?? 24;
-  const cacheKey = `${chainId}-${apiKey ?? ''}`;
 
-  const [iconURI, setIconURI] = useState<string | null>(() => {
-    // Check cache first
-    return chainIconCache.get(cacheKey) ?? null;
-  });
-  const [isLoading, setIsLoading] = useState(!chainIconCache.has(cacheKey));
+  const [iconURI, setIconURI] = useState<string | null>(null);
+  const [isLoading, setIsLoading] = useState(true);
 
   useEffect(() => {
     if (!chainId) {
-      setIsLoading(false);
-      return;
-    }
-
-    // If already cached, don't refetch
-    if (chainIconCache.has(cacheKey)) {
-      setIconURI(chainIconCache.get(cacheKey) ?? null);
       setIsLoading(false);
       return;
     }
@@ -59,19 +43,12 @@ export const useChainIconURI = (chainId: number, apiKey?: string, size?: number)
         if (isMounted) {
           const chainCapabilities = capabilities[chainIdHex];
           const chainMetadata = chainCapabilities?.chainMetadata as ChainMetadataCapability | undefined;
-          const icon = chainMetadata?.icon ?? null;
-
-          // Cache the result
-          chainIconCache.set(cacheKey, icon);
-          setIconURI(icon);
+          setIconURI(chainMetadata?.icon ?? null);
           setIsLoading(false);
         }
       } catch (error) {
         console.warn(`Failed to fetch capabilities for chain ${chainId}:`, error);
         if (isMounted) {
-          // A failed lookup is not an answer. Caching it would pin the '?' for
-          // the rest of the page's life over one offline moment; leaving it out
-          // costs one request the next time a dialog opens.
           setIconURI(null);
           setIsLoading(false);
         }
@@ -83,7 +60,7 @@ export const useChainIconURI = (chainId: number, apiKey?: string, size?: number)
     return () => {
       isMounted = false;
     };
-  }, [chainId, apiKey, cacheKey]);
+  }, [chainId, apiKey]);
 
   // Memoize the JSX to prevent unnecessary re-renders
   const icon = useMemo(() => {
