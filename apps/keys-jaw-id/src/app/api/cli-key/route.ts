@@ -11,11 +11,23 @@
  * is then an environment change instead of a rebuild, and it stays out of a
  * bundle anyone can grep.
  *
- * It is not a secret. Anyone can open this route, and nothing here can tell a
- * CLI from a curl, so the key attributes and authorises nothing. What bounds it
- * is the limit on what a caller holding it may read. Same origin only for that
- * reason: the exposure we accept is somebody who loads keys.jaw.id, not any
- * page on the web harvesting it from its own JavaScript.
+ * It is not a secret, and nothing bounds it yet. Anyone can open this route and
+ * nothing here can tell a CLI from a curl, so the key attributes nobody. What it
+ * authorises is everything its workspace can do: an api key carries no scope and
+ * no quota, and the one check that exists, the allowed-domain list, is matched
+ * against an `Origin` the CLI does not send. So this key's workspace has to be
+ * allowlisted with `*`, which is the value that turns that check off. Anyone
+ * narrowing that list will find the CLI stops working.
+ *
+ * Bounding those reads is tracked on its own and was deferred on purpose: a read
+ * limit, a quota and a billing plan are three answers to one question about what
+ * a caller is entitled to, and settling it here would decide it for the other
+ * two. Until then the cost of a scraper is that workspace's quota, shared by
+ * every CLI install.
+ *
+ * Same origin only, for the little it buys: the exposure we accept is somebody
+ * who loads keys.jaw.id, not any page on the web harvesting it from its own
+ * JavaScript.
  */
 export const dynamic = 'force-dynamic';
 
