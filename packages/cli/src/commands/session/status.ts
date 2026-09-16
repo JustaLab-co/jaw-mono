@@ -83,8 +83,13 @@ export default class SessionStatus extends BaseCommand {
       if (stillLive.length > 0) this.log(stillLiveLine(stillLive.length));
       this.log('\nRun `jaw session setup` to create a new session.');
     } else {
-      // `endsAt` is set on this branch: `isExpired` is true without it.
-      const remaining = Math.floor((endsAt!.getTime() / 1000 - now) / 86400);
+      // Null here too, and not only on the expired branch: `sessionUsable`
+      // takes any finite expiry past now, while `expiryInstant` also refuses
+      // one past what a Date can hold. A hand-edited 99999999999999 clears the
+      // first and not the second, which is the same value `policyFromPermission`
+      // guards against. Reporting is the job here, so a field that will not read
+      // is said rather than dereferenced.
+      const remaining = endsAt ? Math.floor((endsAt.getTime() / 1000 - now) / 86400) : null;
       this.log('Session active.\n');
       this.log(`  Session address:  ${config.sessionAddress}`);
       if (isLegacySession(config)) {
@@ -98,12 +103,15 @@ export default class SessionStatus extends BaseCommand {
       this.log(`  Permission ID:    ${config.permissionId}${onChainNote(liveness)}`);
       this.log(`  Chain:            ${config.chainId}`);
       this.log(`  Expires:          ${endsAt ? endsAt.toISOString() : 'unknown'}`);
+      // Same fallback as the Expires line above.
+      const valid =
+        remaining === null ? 'Valid, for how long the file does not say' : `Valid (${remaining} days remaining)`;
       // Revoked outranks the local expiry: the session has time left on paper
       // and can no longer pull anything through the permission.
       this.log(
         liveness === 'revoked'
           ? '  Status:           Revoked on chain. Run `jaw session setup` to create a new session.'
-          : `  Status:           Valid (${remaining} days remaining)`
+          : `  Status:           ${valid}`
       );
       if (stillLive.length > 0) this.log(stillLiveLine(stillLive.length));
     }
