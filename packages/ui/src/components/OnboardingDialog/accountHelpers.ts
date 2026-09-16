@@ -17,6 +17,9 @@ export function getStoredLocalAccounts(apiKey?: string): LocalStorageAccount[] {
   return Account.getStoredAccounts(apiKey).map(toLocalStorageAccount);
 }
 
+/** Chain + key pairs whose derivation came back with nothing. */
+const resolvedNothing = new Set<string>();
+
 /**
  * Derive + persist addresses for stored records that predate address
  * persistence (ceremony-free factory derivation), returning credentialId →
@@ -26,6 +29,9 @@ export async function backfillLocalAccountAddresses(params: {
   chainId?: number;
   apiKey?: string;
 }): Promise<Record<string, string>> {
+  const attempt = `${params.chainId ?? 1}-${params.apiKey ?? ''}`;
+  if (resolvedNothing.has(attempt)) return {};
+
   const accounts = await Account.backfillStoredAccountAddresses({
     chainId: params.chainId ?? 1,
     apiKey: params.apiKey ?? '',
@@ -34,6 +40,10 @@ export async function backfillLocalAccountAddresses(params: {
   for (const account of accounts) {
     if (account.credentialId && account.address) byCredentialId[account.credentialId] = account.address;
   }
+  // Every derivation failed, so the rpc refused them all (an origin the proxy
+  // does not know, or no network). The dialog reopens often; retrying the same
+  // call per credential on each open buys nothing until the page reloads.
+  if (Object.keys(byCredentialId).length === 0) resolvedNothing.add(attempt);
   return byCredentialId;
 }
 
