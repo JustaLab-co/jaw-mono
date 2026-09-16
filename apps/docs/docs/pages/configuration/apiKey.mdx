@@ -5,7 +5,7 @@ Your JAW API key for authentication with JAW services.
 **Type:** `string`
 **Required:** In [app-specific mode](/configuration/mode/app-specific). Optional in cross-platform mode, which is the default.
 
-In cross-platform mode the SDK sends whatever it has and the backend decides whether to answer. With a key, the request is attributed to the project that key belongs to. Without one, the caller is identified by the domain it runs on, so that domain has to be on the allowed list described below.
+In cross-platform mode the SDK sends whatever it has and the backend decides whether to answer. With a key, the request is attributed to the project that key belongs to, and the allowed domains below are what the key is checked against. Without a key, the caller is identified by the origin the request comes from, and only origins registered with JustaName are served, so ask the team to register yours before dropping the option.
 
 App-specific mode always needs a key, because it hands one to the UI handler your application implements. `JAW.create()` rejects an app-specific configuration without one.
 
@@ -37,7 +37,7 @@ const jaw = JAW.create({
 const connector = jaw({ appName: 'My DApp' });
 ```
 
-Requests then carry no `api-key` parameter, and the domain your application runs on is what names it.
+Requests then carry no `api-key` parameter, and the origin your application runs on is what names it. An origin nobody registered is refused.
 
 ## How to Get an API Key
 
@@ -57,7 +57,7 @@ For security, you must configure which domains are allowed to use your API key:
    - `yourdomain.com` for production
    - `staging.yourdomain.com` for staging environments
 
-Requests from domains not in your allowed list will be rejected. The list is also what identifies a request that carries no key at all.
+Requests from domains not in your allowed list will be rejected.
 
 ## Related Configuration
 
