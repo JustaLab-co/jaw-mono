@@ -395,7 +395,7 @@ export function OnboardingDialog({
   const [backfillInFlight, setBackfillInFlight] = useState(false);
   const hasAddressGaps = accounts.some((a) => !a.address && a.credentialId);
   useEffect(() => {
-    if (!hasAddressGaps || !apiKey) return;
+    if (!hasAddressGaps) return;
     let cancelled = false;
     setBackfillInFlight(true);
     backfillLocalAccountAddresses({ chainId, apiKey })

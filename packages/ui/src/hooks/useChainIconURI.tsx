@@ -9,7 +9,7 @@ const chainIconCache = new Map<string, string | null>();
  * Returns a JSX element (img or fallback) similar to useChainIcon
  *
  * @param chainId - The chain ID to get the icon for
- * @param apiKey - The API key for authentication
+ * @param apiKey - The API key for authentication, if the caller has one
  * @param size - The size of the icon in pixels (default: 24)
  * @returns JSX.Element - The chain icon or a fallback element
  */
@@ -24,7 +24,7 @@ export const useChainIconURI = (chainId: number, apiKey?: string, size?: number)
   const [isLoading, setIsLoading] = useState(!chainIconCache.has(cacheKey));
 
   useEffect(() => {
-    if (!apiKey || !chainId) {
+    if (!chainId) {
       setIsLoading(false);
       return;
     }
