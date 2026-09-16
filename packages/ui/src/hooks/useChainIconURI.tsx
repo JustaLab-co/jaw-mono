@@ -4,6 +4,11 @@ import { handleGetCapabilitiesRequest, type ChainMetadataCapability } from '@jaw
 // Simple in-memory cache for chain icons to avoid redundant API calls
 const chainIconCache = new Map<string, string | null>();
 
+/** Drops the cached icons. For tests, which would otherwise share them. */
+export function clearChainIconCache(): void {
+  chainIconCache.clear();
+}
+
 /**
  * Hook to fetch chain icon from wallet_getCapabilities chainMetadata
  * Returns a JSX element (img or fallback) similar to useChainIcon
@@ -15,7 +20,7 @@ const chainIconCache = new Map<string, string | null>();
  */
 export const useChainIconURI = (chainId: number, apiKey?: string, size?: number): JSX.Element => {
   const iconSize = size ?? 24;
-  const cacheKey = `${chainId}-${apiKey}`;
+  const cacheKey = `${chainId}-${apiKey ?? ''}`;
 
   const [iconURI, setIconURI] = useState<string | null>(() => {
     // Check cache first
@@ -64,8 +69,9 @@ export const useChainIconURI = (chainId: number, apiKey?: string, size?: number)
       } catch (error) {
         console.warn(`Failed to fetch capabilities for chain ${chainId}:`, error);
         if (isMounted) {
-          // Cache null to prevent repeated failed requests
-          chainIconCache.set(cacheKey, null);
+          // A failed lookup is not an answer. Caching it would pin the '?' for
+          // the rest of the page's life over one offline moment; leaving it out
+          // costs one request the next time a dialog opens.
           setIconURI(null);
           setIsLoading(false);
         }
