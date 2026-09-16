@@ -145,9 +145,19 @@ export async function currentLimitUsageOnChain(
  *
  * A session with no `createdAt` contributes nothing. Its total is summed with
  * no `since` at all, so it counts every row and every checkpoint alike.
+ *
+ * `undefined` when a window start cannot be read, which forbids the fold rather
+ * than describing it with one cap missing: the cut is taken from the earliest
+ * start later than the oldest row, so leaving one out moves the cut later and
+ * absorbs rows that cap is still counting. A chain that answered with a period
+ * the `Date` cannot hold is all that takes.
  */
-export function capWindowStarts(usage: LimitUsage[], sessionCreatedAt: string | undefined): string[] {
-  const starts = usage.map((limit) => limit.startedAt.toISOString());
+export function capWindowStarts(usage: LimitUsage[], sessionCreatedAt: string | undefined): string[] | undefined {
+  const starts: string[] = [];
+  for (const limit of usage) {
+    if (Number.isNaN(limit.startedAt.getTime())) return undefined;
+    starts.push(limit.startedAt.toISOString());
+  }
   if (sessionCreatedAt) starts.push(sessionCreatedAt);
   return starts;
 }

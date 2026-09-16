@@ -216,4 +216,15 @@ describe('capWindowStarts', () => {
     // every checkpoint alike and imposes no cut.
     expect(capWindowStarts([], undefined)).toEqual([]);
   });
+
+  it('forbids the fold when a window start cannot be read', () => {
+    // A `uint48` period start the `Date` cannot hold. Dropping that cap from
+    // the list would move the cut later and absorb rows it still counts, so the
+    // whole list is withheld instead.
+    const starts = capWindowStarts(
+      [limit('2026-07-01T00:00:00.000Z'), { startedAt: new Date(8.64e15 + 1) } as LimitUsage],
+      '2026-06-01T00:00:00.000Z'
+    );
+    expect(starts).toBeUndefined();
+  });
 });

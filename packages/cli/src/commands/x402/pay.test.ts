@@ -34,7 +34,7 @@ const h = vi.hoisted(() => ({
   payOpts: [] as Record<string, unknown>[],
   outcome: {} as Record<string, unknown>,
   appended: [] as Record<string, unknown>[],
-  compactions: [] as string[][],
+  compactions: [] as (string[] | undefined)[],
   locked: 0,
 }));
 
@@ -67,7 +67,7 @@ vi.mock('../../x402/http.js', () => ({
 
 vi.mock('../../x402/ledger.js', () => ({
   appendX402Log: (entry: Record<string, unknown>) => h.appended.push(entry),
-  compactX402Log: (starts: string[]) => h.compactions.push(starts),
+  compactX402Log: (starts: string[] | undefined) => h.compactions.push(starts),
 }));
 
 vi.mock('../../lib/payment-lock.js', () => ({
@@ -211,6 +211,26 @@ describe('jaw x402 pay', () => {
     // The live cap's own start plus the session's, which are the instants a
     // compaction must not cut across.
     expect(h.compactions[0]).toEqual(['2026-09-10T00:00:00.000Z', '2026-09-01T00:00:00.000Z']);
+  });
+
+  it('still reports a payment whose window start the chain returned unreadable', async () => {
+    // The fold is an optimization that runs after the row is on file. Reading
+    // the instants it cuts against used to happen outside the tidy-up's own
+    // guard, so a period the `Date` cannot hold failed a payment that went
+    // through, and told an MCP agent to try it again.
+    h.periodUsage = [{ ...limit('2026-09-10T00:00:00.000Z'), startedAt: new Date(8.64e15 + 1) }];
+    h.outcome = {
+      paid: true,
+      payment: { amount: '100000', network: 'eip155:84532', payTo: '0x3', authorized: '100000' },
+    };
+
+    const result = await runPay(['https://api.example.com/tool', '--pay']);
+
+    // No exit at all is the success path here; the throw used to come out of
+    // `run()` after the row was already appended.
+    expect(result.exitCode).toBeUndefined();
+    expect(h.appended).toHaveLength(1);
+    expect(h.compactions[0]).toBeUndefined();
   });
 
   it('records a refusal and fails the scripting path with it', async () => {

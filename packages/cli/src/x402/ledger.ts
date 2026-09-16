@@ -419,8 +419,14 @@ const FOLD_AT_LEAST = 500;
  * beside it. Never throws: a ledger that could not be tidied must not fail the
  * payment that just succeeded.
  */
-export function compactX402Log(capStarts: string[], payer: string | undefined): void {
+export function compactX402Log(capStarts: string[] | undefined, payer: string | undefined): void {
   try {
+    // No `capStarts` means a live window could not be read, so there is no
+    // instant to cut against that is known to be early enough. Folding on a
+    // partial list hands back budget; a larger file until the next window rolls
+    // costs nothing but the read.
+    if (capStarts === undefined) return;
+
     const sizeBefore = fs.statSync(PATHS.x402Log).size;
     if (sizeBefore < COMPACT_AT_BYTES) return;
 

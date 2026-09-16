@@ -180,6 +180,19 @@ describe('x402 ledger compaction', () => {
     expect(after.filter((entry) => entry.kind !== 'checkpoint')).toHaveLength(200);
   });
 
+  it('folds nothing when no cap start could be read', () => {
+    // `capWindowStarts` withholds the whole list when one window start is
+    // unreadable. An empty list is the opposite instruction, so the two must not
+    // be confused: here the file is left exactly as it was.
+    writeLedger([...filler(), row({ amount: '1200' }), ...tail()]);
+    const before = fs.readFileSync(PATHS.x402Log);
+
+    compactX402Log(undefined, PAYER_A);
+
+    expect(fs.readFileSync(PATHS.x402Log).equals(before)).toBe(true);
+    expect(fs.existsSync(PATHS.x402LogArchive)).toBe(false);
+  });
+
   it('stamps the checkpoint at the newest row it absorbed, not at now', () => {
     const bulk = filler();
     const last = row({ amount: '200' });
