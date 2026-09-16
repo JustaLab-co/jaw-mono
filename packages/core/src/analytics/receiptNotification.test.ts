@@ -18,8 +18,11 @@ const receipt = {
     success: true,
 };
 
-function queryParamsOfLastCall() {
-    return restCallMock.mock.calls.at(-1)?.[7];
+/** The last restCall, by parameter name: the function takes eight positionals. */
+function lastCall() {
+    const [route, method, body, headers, pathParams, dev, serverUrl, queryParams] =
+        restCallMock.mock.calls.at(-1) ?? [];
+    return { route, method, body, headers, pathParams, dev, serverUrl, queryParams };
 }
 
 describe('notifyReceiptReceived', () => {
@@ -31,7 +34,7 @@ describe('notifyReceiptReceived', () => {
         notifyReceiptReceived({ ...receipt, apiKey: 'real-key' });
 
         expect(restCallMock).toHaveBeenCalledTimes(1);
-        expect(queryParamsOfLastCall()).toEqual({ 'api-key': 'real-key' });
+        expect(lastCall().queryParams).toEqual({ 'api-key': 'real-key' });
     });
 
     // Keys builds the account with `preference?.apiKey || ''`, so a keyless dApp
@@ -40,12 +43,12 @@ describe('notifyReceiptReceived', () => {
         notifyReceiptReceived({ ...receipt, apiKey });
 
         expect(restCallMock).toHaveBeenCalledTimes(1);
-        expect(queryParamsOfLastCall()).toBeUndefined();
+        expect(lastCall().queryParams).toBeUndefined();
     });
 
     it('reports a revert as status 500', () => {
         notifyReceiptReceived({ ...receipt, success: false });
 
-        expect(restCallMock.mock.calls[0][2]).toMatchObject({ status: 500 });
+        expect(lastCall().body).toMatchObject({ status: 500 });
     });
 });
