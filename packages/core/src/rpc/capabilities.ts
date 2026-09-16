@@ -85,8 +85,10 @@ export async function handleGetCapabilitiesRequest(
     // Key on the *effective* params, after the chain filter above is injected — two
     // callers that differ only in `showTestnets` resolve to different requests.
     // The dApp is part of the key: with no api-key the proxy answers on the origin
-    // we name instead, so two of them would otherwise share the `undefined|...` entry.
-    const cacheKey = `${apiKey}|${store.config.get().dappOrigin ?? ''}|${JSON.stringify(requestArgs.params ?? [])}`;
+    // we name instead, so two of them would otherwise share the keyless entry.
+    // A caller with no key reaches this as '' from keys and as undefined from the
+    // SDK, and both mean the same request, so they share one entry.
+    const cacheKey = `${apiKey ?? ''}|${store.config.get().dappOrigin ?? ''}|${JSON.stringify(requestArgs.params ?? [])}`;
 
     // Every exit hands back a copy, never the cache entry itself. `JAWProvider` forwards
     // this result straight to the dApp, and the internal UI call sites all key on the same

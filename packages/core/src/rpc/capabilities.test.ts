@@ -61,6 +61,17 @@ describe('handleGetCapabilitiesRequest caching', () => {
         expect(results).toEqual([CAPS, CAPS, CAPS]);
     });
 
+    // Keys reads the key out of the rpc url and gets '' for a dApp that has none,
+    // while the SDK passes undefined. Both are the same caller.
+    it('treats an empty key and no key as one caller', async () => {
+        const fetchSpy = stubFetch();
+
+        await handleGetCapabilitiesRequest(request, undefined, true);
+        await handleGetCapabilitiesRequest(request, '', true);
+
+        expect(fetchSpy).toHaveBeenCalledTimes(1);
+    });
+
     it('keys the cache separately per api key', async () => {
         const fetchSpy = stubFetch();
 
