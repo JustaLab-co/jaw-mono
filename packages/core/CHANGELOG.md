@@ -1,3 +1,13 @@
+## 1.4.1 (2026-09-16)
+
+### 🩹 Fixes
+
+- add support for arc mainnet ([#341](https://github.com/JustaName-id/jaw-mono/pull/341))
+
+### ❤️ Thank You
+
+- Ghadi @Ghadi8
+
 ## 1.4.0 (2026-09-15)
 
 ### 🚀 Features

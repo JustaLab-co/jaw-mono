@@ -1,7 +1,7 @@
 {
   "name": "@jaw.id/core",
   "description": "Core SDK - EIP-1193 provider, smart account operations, passkey management",
-  "version": "1.4.0",
+  "version": "1.4.1",
   "license": "Apache-2.0",
   "type": "module",
   "main": "./dist/cjs/index.cjs",
