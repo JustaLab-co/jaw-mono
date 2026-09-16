@@ -110,7 +110,7 @@ describe('x402 ledger compaction', () => {
     writeLedger([row(), row(), row()]);
     const before = fs.readFileSync(PATHS.x402Log);
 
-    compactX402Log([new Date(clock + 60_000).toISOString()]);
+    compactX402Log([new Date(clock + 60_000).toISOString()], PAYER_A);
 
     expect(fs.readFileSync(PATHS.x402Log).equals(before)).toBe(true);
     expect(fs.existsSync(PATHS.x402LogArchive)).toBe(false);
@@ -141,10 +141,30 @@ describe('x402 ledger compaction', () => {
     ];
     const before = scopes.map((scope) => figures(scope, sinces));
 
-    compactX402Log([cut]);
+    compactX402Log([cut], PAYER_A);
 
     expect(scopes.map((scope) => figures(scope, sinces))).toEqual(before);
     expect(readX402Log().some((entry) => entry.kind === 'checkpoint')).toBe(true);
+  });
+
+  it("leaves another payer's rows alone, since its windows are not in capStarts", () => {
+    // `capStarts` describes the windows of the payer that is paying. A second
+    // key on one machine, which `session setup` makes whenever it does not reuse
+    // one, has windows nobody passed in, and one of them lands inside the range
+    // this fold would absorb.
+    const bulk = filler();
+    const beforeWindow = row({ payer: PAYER_B, amount: '700' });
+    const windowStart = new Date(clock + 500).toISOString();
+    const insideWindow = row({ payer: PAYER_B, amount: '300' });
+    const cut = new Date(clock + 1000).toISOString();
+    writeLedger([...bulk, beforeWindow, insideWindow, ...tail()]);
+
+    compactX402Log([cut], PAYER_A);
+
+    // Folded, the two would come back as one checkpoint stamped after B's
+    // window started, so B would read 1000 spent inside it and refuse payments
+    // its cap still allows.
+    expect(sumSpentSince(readX402Log(), { payer: PAYER_B }, windowStart)).toBe(300n);
   });
 
   it('folds with no cap start above the oldest row, keeping the tail', () => {
@@ -152,7 +172,7 @@ describe('x402 ledger compaction', () => {
     const before = figures({ payer: PAYER_A }, [undefined]);
     const rowsBefore = readX402Log().length;
 
-    compactX402Log([]);
+    compactX402Log([], PAYER_A);
 
     const after = readX402Log();
     expect(figures({ payer: PAYER_A }, [undefined])).toEqual(before);
@@ -166,7 +186,7 @@ describe('x402 ledger compaction', () => {
     const cut = new Date(clock + 1000).toISOString();
     writeLedger([...bulk, last, ...tail()]);
 
-    compactX402Log([cut]);
+    compactX402Log([cut], PAYER_A);
 
     const checkpoint = readX402Log().find((entry) => entry.kind === 'checkpoint');
     expect(checkpoint?.at).toBe(last.at);
@@ -184,7 +204,7 @@ describe('x402 ledger compaction', () => {
     writeLedger([...bulk, late, early, ...tail()]);
 
     const before = figures({ payer: PAYER_A }, [capStart]);
-    compactX402Log([capStart]);
+    compactX402Log([capStart], PAYER_A);
 
     expect(figures({ payer: PAYER_A }, [capStart])).toEqual(before);
   });
@@ -197,7 +217,7 @@ describe('x402 ledger compaction', () => {
     const cut = new Date(clock + 1000).toISOString();
     writeLedger([...bulk, undated, ...tail()]);
 
-    compactX402Log([cut]);
+    compactX402Log([cut], PAYER_A);
 
     expect(readX402Log().some((entry) => entry.amount === '4200' && entry.kind === undefined)).toBe(true);
     expect(sumSpentSince(readX402Log(), { payer: PAYER_A }, cut)).toBeGreaterThanOrEqual(4200n);
@@ -211,7 +231,7 @@ describe('x402 ledger compaction', () => {
     const cut = new Date(clock + 1000).toISOString();
     writeLedger([...bulk, broken, ...tail()]);
 
-    compactX402Log([cut]);
+    compactX402Log([cut], PAYER_A);
 
     expect(() => sumSpentSince(readX402Log(), { payer: PAYER_B })).toThrow(/unreadable checkpoint covering 900 rows/);
   });
@@ -223,7 +243,7 @@ describe('x402 ledger compaction', () => {
     writeLedger([...bulk, ...tail()]);
     const cut = bulk[1].at;
 
-    compactX402Log([cut]);
+    compactX402Log([cut], PAYER_A);
 
     expect(fs.existsSync(PATHS.x402LogArchive)).toBe(false);
     expect(readX402Log().some((entry) => entry.kind === 'checkpoint')).toBe(false);
@@ -235,7 +255,7 @@ describe('x402 ledger compaction', () => {
     const cut = new Date(clock + 1000).toISOString();
     writeLedger([...bulk, absorbed, ...tail()]);
 
-    compactX402Log([cut]);
+    compactX402Log([cut], PAYER_A);
 
     expect(readX402Log().some((entry) => entry.url === 'https://absorbed.example')).toBe(false);
     const archived = fs.readFileSync(PATHS.x402LogArchive, 'utf-8');
@@ -248,7 +268,7 @@ describe('x402 ledger compaction', () => {
     const cut = new Date(clock + 1000).toISOString();
     writeLedger([...bulk, ...tail()]);
 
-    compactX402Log([cut]);
+    compactX402Log([cut], PAYER_A);
 
     const raw = fs.readFileSync(PATHS.x402Log, 'utf-8');
     expect(fs.statSync(PATHS.x402Log).mode & 0o777).toBe(0o600);
@@ -271,13 +291,28 @@ describe('x402 ledger compaction', () => {
       fs.appendFileSync(PATHS.x402Log, '\n' + JSON.stringify(row({ url: 'https://raced.example' })));
     };
 
-    compactX402Log([cut]);
+    compactX402Log([cut], PAYER_A);
 
     const after = readX402Log();
     expect(after.some((entry) => entry.url === 'https://raced.example')).toBe(true);
     expect(after.some((entry) => entry.kind === 'checkpoint')).toBe(false);
     expect(after.length).toBe(rowsBefore + 1);
     expect(fs.readdirSync(TEST_ROOT).some((name) => name.endsWith('.tmp'))).toBe(false);
+  });
+
+  it('archives nothing when it drops the rewrite', () => {
+    const bulk = filler();
+    const cut = new Date(clock + 1000).toISOString();
+    writeLedger([...bulk, ...tail()]);
+    hooks.afterWrite = () => {
+      fs.appendFileSync(PATHS.x402Log, '\n' + JSON.stringify(row({ url: 'https://raced.example' })));
+    };
+
+    compactX402Log([cut], PAYER_A);
+
+    // The rows are still in the ledger, so an archive copy stands for nothing
+    // and the next fold that goes through would write them a second time.
+    expect(fs.existsSync(PATHS.x402LogArchive)).toBe(false);
   });
 
   it('refuses to spend against a checkpoint whose figure will not parse', () => {
@@ -313,7 +348,7 @@ describe('x402 ledger compaction', () => {
     const before = figures(scope, [undefined]);
     expect(before).toEqual([['620', '0']]);
 
-    compactX402Log([cut]);
+    compactX402Log([cut], PAYER_A);
 
     expect(figures(scope, [undefined])).toEqual(before);
     expect(readX402Log().some((entry) => entry.nonce === '0xfeed')).toBe(false);
@@ -331,7 +366,7 @@ describe('compactX402Log, rows the chain has not answered', () => {
     const pending = row({ nonce: '0xpending', settlement: 'unverified', amount: '5000', scheme: 'upto' });
     writeLedger([...filler(), pending, ...Array.from({ length: 600 }, () => row())]);
 
-    compactX402Log([]);
+    compactX402Log([], PAYER_A);
 
     const after = readX402Log();
     expect(after.some((entry) => entry.nonce === '0xpending')).toBe(true);
@@ -342,14 +377,14 @@ describe('compactX402Log, rows the chain has not answered', () => {
 describe('compactX402Log, a checkpoint folded into a later one', () => {
   it('carries the rows it already stood in for', () => {
     writeLedger([...filler(), ...Array.from({ length: 600 }, () => row())]);
-    compactX402Log([]);
+    compactX402Log([], PAYER_A);
     const first = readX402Log().find((entry) => entry.kind === 'checkpoint');
     expect(first?.folded).toBeGreaterThan(1);
 
     // A second pass folds that checkpoint in with everything after it.
     appendX402Log(row());
     fs.appendFileSync(PATHS.x402Log, serialize(filler()));
-    compactX402Log([]);
+    compactX402Log([], PAYER_A);
 
     const second = readX402Log().find((entry) => entry.kind === 'checkpoint');
     expect(second?.folded).toBeGreaterThanOrEqual(first?.folded ?? 0);
@@ -367,7 +402,7 @@ describe('compactX402Log, a row that was given up on', () => {
     const stuck = row({ nonce: '0xstuck', settlement: 'abandoned', amount: '5000' });
     writeLedger([...filler(), stuck, ...Array.from({ length: 600 }, () => row())]);
 
-    compactX402Log([]);
+    compactX402Log([], PAYER_A);
 
     expect(readX402Log().some((entry) => entry.nonce === '0xstuck')).toBe(false);
   });

@@ -21,6 +21,7 @@ const h = vi.hoisted(() => ({
   hasKeystore: false,
   saved: null as Record<string, unknown> | null,
   bridges: 0,
+  closes: 0,
   requests: [] as string[],
   stderr: [] as string[],
   answers: [] as string[],
@@ -80,7 +81,9 @@ vi.mock('../../lib/bridge-singleton.js', () => ({
         }
         return {};
       },
-      close: () => undefined,
+      close: () => {
+        h.closes += 1;
+      },
     };
   },
 }));
@@ -112,6 +115,7 @@ beforeEach(() => {
   h.config = { apiKey: 'k' };
   h.existing = null;
   h.hasKeystore = false;
+  h.closes = 0;
   h.saved = null;
   h.bridges = 0;
   h.requests = [];
@@ -226,5 +230,24 @@ describe('jaw session setup', () => {
   it('refuses --limit without --x402, which would silently do nothing', async () => {
     await expect(runSetup(['--limit', '10/day', '--chain', '84532'])).rejects.toThrow(/only applies to --x402/);
     expect(h.bridges).toBe(0);
+  });
+
+  it('closes the bridge when it gives up between opening it and the grant', async () => {
+    // The refusal when no key came back, which is the first thing that runs
+    // after the bridge is open. Anything that throws in there used to leave the
+    // socket up and the browser showing a page that believes it is paired.
+    delete process.env.JAW_API_KEY;
+    h.config = {};
+
+    await expect(runSetup(['--x402', '--chain', '84532', '--quiet'])).rejects.toThrow(/no API key came back/);
+
+    expect(h.bridges).toBe(1);
+    expect(h.closes).toBe(1);
+  });
+
+  it('closes the bridge on the way out of a run that worked', async () => {
+    await runSetup(['--x402', '--chain', '84532', '--quiet']);
+
+    expect(h.closes).toBe(1);
   });
 });

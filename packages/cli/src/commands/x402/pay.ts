@@ -153,7 +153,7 @@ export default class X402Pay extends BaseCommand {
           // Fold the ledger down while the lock is still held and the windows
           // this payment measured against are in hand. Below the threshold it
           // is one `stat` and nothing else.
-          compactX402Log(capWindowStarts(periodUsage, session?.createdAt));
+          compactX402Log(capWindowStarts(periodUsage, session?.createdAt), payer.address);
         }
       }
 

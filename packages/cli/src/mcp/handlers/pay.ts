@@ -155,7 +155,7 @@ export function registerPayTool(server: McpServer): void {
 
               // Same as the CLI path: fold the ledger down while the lock is
               // still held and this payment's windows are in hand.
-              compactX402Log(capWindowStarts(periodUsage, session?.createdAt));
+              compactX402Log(capWindowStarts(periodUsage, session?.createdAt), payer.address);
             }
 
             // Untrusted server free-text (body, refusedReason) is fenced off

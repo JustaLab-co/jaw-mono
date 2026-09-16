@@ -406,11 +406,20 @@ const FOLD_AT_LEAST = 500;
  * none is later than the oldest row, every cap counts the whole file and
  * everything but the tail folds.
  *
+ * `payer` is whose rows may be folded, and it is what makes the paragraph above
+ * true rather than nearly true. `capStarts` describes the windows of the payer
+ * that is paying and of nobody else, so another payer's live window can sit
+ * strictly inside the absorbed range: its rows from before it started would come
+ * back as one checkpoint stamped after it, and that payer would read spend it
+ * never made and refuse payments it should allow. A second key on one machine is
+ * all that takes, which `session setup` produces whenever it does not reuse one.
+ * Rows of any other payer are left alone until that payer folds its own.
+ *
  * Runs after the append and inside the payment lock, so nothing is writing
  * beside it. Never throws: a ledger that could not be tidied must not fail the
  * payment that just succeeded.
  */
-export function compactX402Log(capStarts: string[]): void {
+export function compactX402Log(capStarts: string[], payer: string | undefined): void {
   try {
     const sizeBefore = fs.statSync(PATHS.x402Log).size;
     if (sizeBefore < COMPACT_AT_BYTES) return;
@@ -419,8 +428,10 @@ export function compactX402Log(capStarts: string[]): void {
     // The oldest stamp, not the first row: a clock that stepped backwards
     // between two payments leaves the file out of time order, and taking the
     // cut from the wrong end moves it past a `since` that is still counting.
+    const mine = (entry: X402LogEntry) =>
+      payer !== undefined && typeof entry.payer === 'string' && entry.payer.toLowerCase() === payer.toLowerCase();
     const oldest = entries.reduce<string | undefined>((earliest, entry) => {
-      if (!absorbable(entry, undefined)) return earliest;
+      if (!mine(entry) || !absorbable(entry, undefined)) return earliest;
       return earliest === undefined || entry.at < earliest ? entry.at : earliest;
     }, undefined);
     const bound = oldest === undefined ? undefined : cutAbove(capStarts, oldest);
@@ -428,17 +439,13 @@ export function compactX402Log(capStarts: string[]): void {
     const absorbed: X402LogEntry[] = [];
     const kept: X402LogEntry[] = [];
     entries.forEach((entry, index) => {
-      if (index < tailFrom && absorbable(entry, bound)) absorbed.push(entry);
+      if (index < tailFrom && mine(entry) && absorbable(entry, bound)) absorbed.push(entry);
       else kept.push(entry);
     });
     // Above the threshold the absorbable set does not grow again until a window
     // rolls, so a ledger that can only shed a handful of rows would pay for a
     // full read and rewrite on every payment and stay over the threshold anyway.
     if (absorbed.length < FOLD_AT_LEAST) return;
-
-    // Archive before the ledger is rewritten. A crash between the two leaves
-    // rows in both files, which nothing sums; the other order loses them.
-    fs.appendFileSync(PATHS.x402LogArchive, serializeEntries(absorbed), { encoding: 'utf-8', mode: 0o600 });
 
     const temp = `${PATHS.x402Log}.${process.pid}.tmp`;
     // Cleared first so the write below is a create, which is the only time
@@ -454,11 +461,19 @@ export function compactX402Log(capStarts: string[]): void {
 
     // The lock can be broken as stale while a payment is still running. Anything
     // appended since the read is missing from what was just built, so drop the
-    // rewrite rather than lose that row.
+    // rewrite rather than lose that row. Checked before the archive and not only
+    // before the rename: giving up after archiving leaves those rows in the
+    // archive with the ledger still holding them, and the next fold that does
+    // go through writes them a second time.
     if (fs.statSync(PATHS.x402Log).size !== sizeBefore) {
       fs.rmSync(temp, { force: true });
       return;
     }
+
+    // Archive before the ledger is rewritten. A crash between the two leaves
+    // rows in both files, which nothing sums; the other order loses them.
+    fs.appendFileSync(PATHS.x402LogArchive, serializeEntries(absorbed), { encoding: 'utf-8', mode: 0o600 });
+
     fs.renameSync(temp, PATHS.x402Log);
   } catch (err) {
     process.stderr.write(`[jaw] warning: failed to compact x402 ledger (${errorMessage(err)})\n`);
