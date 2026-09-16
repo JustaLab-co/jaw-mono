@@ -1,7 +1,6 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 import type { SessionConfig } from '../lib/session-config.js';
 import type { GrantedPeriodLimit, LimitUsage, X402Policy } from './policy.js';
-import type { JawConfig } from '../lib/types.js';
 
 /**
  * The assembly both x402 front ends run before they spend. It used to live
@@ -99,8 +98,6 @@ const policy = (over: Partial<X402Policy> = {}): X402Policy => ({
   ...over,
 });
 
-const config = (topUpFloat?: string): JawConfig => ({ x402: { topUpFloat } }) as JawConfig;
-
 const requirement = { network: 'eip155:8453', maxAmountRequired: '1000' } as never;
 
 beforeEach(() => {
@@ -119,11 +116,11 @@ describe('openPaymentWindow', () => {
     h.usage = [limit()];
 
     const window = await openPaymentWindow({
-      config: config(),
       session,
       policy: policy(),
       payerAddress: PAYER,
       apiKey: 'key',
+      topUpFloat: undefined,
     });
 
     expect(h.ledgerReads).toBe(1);
@@ -135,11 +132,11 @@ describe('openPaymentWindow', () => {
 
   it('counts the session total by payer since the session began', async () => {
     await openPaymentWindow({
-      config: config(),
       session,
       policy: policy(),
       payerAddress: PAYER,
       apiKey: 'key',
+      topUpFloat: undefined,
     });
 
     // Payer and not permission: the total is the user's own ceiling and spans
@@ -150,10 +147,10 @@ describe('openPaymentWindow', () => {
 
   it('builds no bridge for a dry run', async () => {
     const window = await openPaymentWindow({
-      config: config(),
       session,
       policy: policy(),
       payerAddress: PAYER,
+      topUpFloat: undefined,
       apiKey: 'key',
       dryRun: true,
     });
@@ -167,9 +164,9 @@ describe('openPaymentWindow', () => {
     ['no api key', { session, apiKey: undefined }],
   ])('hands back no funding hook with %s', async (_label, over) => {
     const window = await openPaymentWindow({
-      config: config(),
       policy: policy(),
       payerAddress: PAYER,
+      topUpFloat: undefined,
       ...over,
     });
 
@@ -183,11 +180,11 @@ describe('openPaymentWindow', () => {
     h.spent = 3_000_000n;
 
     const window = await openPaymentWindow({
-      config: config('2000000'),
       session,
       policy: policy({ perPeriod: [granted()] }),
       payerAddress: PAYER,
       apiKey: 'key',
+      topUpFloat: '2000000',
     });
 
     await window.ensureFunds?.(requirement, PAYER);
@@ -201,11 +198,11 @@ describe('openPaymentWindow', () => {
 
   it('degrades a hand-edited float to no float instead of throwing', async () => {
     const window = await openPaymentWindow({
-      config: config('not-a-number'),
       session,
       policy: policy(),
       payerAddress: PAYER,
       apiKey: 'key',
+      topUpFloat: 'not-a-number',
     });
 
     await window.ensureFunds?.(requirement, PAYER);
@@ -215,11 +212,11 @@ describe('openPaymentWindow', () => {
 
   it('opens one bridge however many times the hook runs', async () => {
     const window = await openPaymentWindow({
-      config: config(),
       session,
       policy: policy(),
       payerAddress: PAYER,
       apiKey: 'key',
+      topUpFloat: undefined,
     });
 
     await window.ensureFunds?.(requirement, PAYER);

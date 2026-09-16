@@ -6,7 +6,6 @@ import { topUpCeiling, type LimitUsage, type X402Policy } from './policy.js';
 import { ensurePayerFunds } from './topup.js';
 import { SessionBridge } from '../lib/session-bridge.js';
 import type { SessionConfig } from '../lib/session-config.js';
-import type { JawConfig } from '../lib/types.js';
 import type { X402PaymentRequirement } from './types.js';
 
 /** The funding hook `payAndFetch` runs once a requirement has passed the policy. */
@@ -20,12 +19,16 @@ export interface PaymentWindow {
   spentThisSession: bigint;
   /** Every limit on the payment token, with what the window containing now has already lost. */
   periodUsage: LimitUsage[];
-  /** Absent on a dry run, and whenever there is no permission to pull through. */
+  /**
+   * Absent on a dry run, which signs nothing, and whenever a refill could not
+   * be made anyway: no session to pull through, or no api key to charge its gas
+   * to. The callers say which of the two it was, since the two are fixed
+   * differently.
+   */
   ensureFunds?: EnsureFunds;
 }
 
 export interface PaymentWindowInput {
-  config: JawConfig;
   session: SessionConfig | null;
   policy: X402Policy;
   payerAddress: `0x${string}`;
@@ -35,6 +38,8 @@ export interface PaymentWindowInput {
    * charge a refill's gas to, which is what makes it the top-up's precondition.
    */
   apiKey: string | undefined;
+  /** Refill target in base units, straight off config. Parsed here, not by the caller. */
+  topUpFloat: string | undefined;
   /** A dry run signs nothing, so it never reaches the funding hook. */
   dryRun?: boolean;
 }
@@ -61,18 +66,19 @@ export interface PaymentWindowInput {
  * ceilings the real run would not have.
  */
 export async function openPaymentWindow({
-  config,
   session,
   policy,
   payerAddress,
   apiKey,
+  topUpFloat,
   dryRun,
 }: PaymentWindowInput): Promise<PaymentWindow> {
   const ledger = await reconcileSettlements(readX402Log());
   const periodUsage = await currentLimitUsageOnChain(ledger, policy, payerAddress, session);
-  // Payer, deliberately, with no permission: `session add` preserves `createdAt`
-  // so that adding a capability cannot reset the total, and scoping to the new
-  // permission would hand back the same clean slate through the other door.
+  // Payer, deliberately, with no permission: `session add` preserves
+  // `createdAt` so that adding a capability cannot reset the total, and scoping
+  // to the new permission would hand back the same clean slate through the
+  // other door.
   const spentThisSession = sumSpentSince(ledger, { payer: payerAddress }, session?.createdAt);
 
   if (dryRun || !session || !apiKey) return { spentThisSession, periodUsage };
@@ -80,7 +86,7 @@ export async function openPaymentWindow({
   const bridge = new SessionBridge({ apiKey, chainId: session.chainId });
   // Defensive: a hand-edited, non-numeric amount must degrade to "no float",
   // never throw and take down every payment.
-  const floatTarget = parseNonNegativeBigInt(config.x402?.topUpFloat);
+  const floatTarget = parseNonNegativeBigInt(topUpFloat);
   // Whatever is left of the tightest resolved cap at this moment, not the full
   // width of the caps, so a float pre-fund is clamped too and not just the
   // payment itself.

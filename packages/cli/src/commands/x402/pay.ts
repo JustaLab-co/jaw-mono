@@ -55,6 +55,11 @@ export default class X402Pay extends BaseCommand {
   async run(): Promise<void> {
     const { args, flags } = await this.parse(X402Pay);
     const format = flags.output as OutputFormat;
+    // Read once and passed everywhere it is needed. The window and the payment
+    // have to agree on it: a window opened dry while the payment goes through
+    // builds no funding hook, so a short payer fails on a bare
+    // insufficient-balance error with no warning that a top-up was never on.
+    const dryRun = !flags.pay;
     const config = loadConfig();
     // The user's own key when there is one, the workspace key the browser
     // handed us otherwise. Without either there is no paymaster to charge a
@@ -89,12 +94,12 @@ export default class X402Pay extends BaseCommand {
       // the same assembly the MCP tool runs so the two cannot enforce different
       // caps for the same session.
       const { spentThisSession, periodUsage, ensureFunds } = await openPaymentWindow({
-        config,
         session,
         policy,
         payerAddress: payer.address,
         apiKey,
-        dryRun: !flags.pay,
+        topUpFloat: config.x402?.topUpFloat,
+        dryRun,
       });
 
       const outcome = await payAndFetch(args.url, payer, {
@@ -105,7 +110,7 @@ export default class X402Pay extends BaseCommand {
         spentThisSession,
         periodUsage,
         maxAmount: flags['max-amount'],
-        dryRun: !flags.pay,
+        dryRun,
       });
 
       // No payment row for a dry run: recording one would corrupt the spend

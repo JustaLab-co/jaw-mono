@@ -30,14 +30,15 @@ export function registerPayTool(server: McpServer): void {
   // lock its own process holds. The file lock then covers everything the queue
   // cannot see, namely other processes.
   //
-  // Serialize the read-check-pay-write of the session spend total. The MCP SDK dispatches
-  // tool calls concurrently, and payAndFetch awaits network I/O between reading
-  // the cap and writing the new total — so a burst of concurrent calls would
-  // otherwise each read the same pre-payment total, all pass the cumulative
-  // cap, and all pay, blowing past maxTotalPerSession by the concurrency
-  // factor. A promise-chain mutex makes each payment observe the previous one's
-  // spend. Payments are inherently sequential for cap safety; this is the
-  // correct trade, not a bottleneck worth optimizing around.
+  // Serialize the read-check-pay-write of the session spend total. The MCP
+  // SDK dispatches tool calls concurrently, and payAndFetch awaits network
+  // I/O between reading the cap and writing the new total — so a burst of
+  // concurrent calls would otherwise each read the same pre-payment total,
+  // all pass the cumulative cap, and all pay, blowing past
+  // maxTotalPerSession by the concurrency factor. A promise-chain mutex makes
+  // each payment observe the previous one's spend. Payments are inherently
+  // sequential for cap safety; this is the correct trade, not a bottleneck
+  // worth optimizing around.
   let paymentQueue: Promise<unknown> = Promise.resolve();
   const serialize = <T>(fn: () => Promise<T>): Promise<T> => {
     const run = paymentQueue.then(fn, fn);
@@ -93,7 +94,6 @@ export function registerPayTool(server: McpServer): void {
             // moment a payment needs them, and JustaPermissionManager caps every
             // refill on-chain.
             const { spentThisSession, periodUsage, ensureFunds } = await openPaymentWindow({
-              config,
               session,
               policy,
               payerAddress: payer.address,
@@ -101,6 +101,7 @@ export function registerPayTool(server: McpServer): void {
               // browser handed us otherwise: the refill's own gas is charged
               // through the paymaster this key builds a url for.
               apiKey: apiKeyFor(config),
+              topUpFloat: config.x402?.topUpFloat,
             });
 
             const result = await payAndFetch(params.url, payer, {
