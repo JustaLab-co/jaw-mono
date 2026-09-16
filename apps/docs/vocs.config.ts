@@ -99,7 +99,6 @@ export default defineConfig({
         collapsed: false,
         items: [
           { text: 'Quickstart', link: '/guides/quickstart' },
-          { text: 'React Native (Expo)', link: '/guides/react-native' },
           {
             text: 'Upgrade EOA to Smart Account (EIP-7702)',
             link: '/guides/eip7702-upgrade',
@@ -113,6 +112,7 @@ export default defineConfig({
           { text: 'Sign-In With Ethereum', link: '/guides/siwe' },
           { text: 'Subscription Payments', link: '/guides/subscription' },
           { text: 'Reown AppKit', link: '/guides/reown-appkit' },
+          { text: 'React Native (Expo)', link: '/guides/react-native' },
         ],
       },
       {
