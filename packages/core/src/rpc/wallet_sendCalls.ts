@@ -202,14 +202,34 @@ export function getCallStatusEIP5792(batchId: string): CallStatusResponse | unde
     };
 }
 
+/** The waiters running right now, by userOpHash. */
+const receiptWaiters = new Map<string, Promise<void>>();
+
 /**
  * Starts a background task to wait for user operation receipt
  * This function does NOT await - it runs in the background
+ *
+ * One waiter per hash: `wallet_getCallsStatus` re-triggers this on every poll
+ * while the status is pending, so a dApp polling a twelve-second transaction
+ * once a second would otherwise run a dozen waiters that each report the same
+ * receipt. A waiter that times out leaves the map, so the next poll retries.
+ *
  * @param userOpHash - The user operation hash to wait for
  * @param chainId - The chain ID where the operation was submitted
  * @param apiKey - Optional API key for notifying the proxy when receipt is received
  */
-export async function waitForReceiptInBackground(userOpHash: string, chainId: number, apiKey?: string): Promise<void> {
+export function waitForReceiptInBackground(userOpHash: string, chainId: number, apiKey?: string): Promise<void> {
+    const running = receiptWaiters.get(userOpHash);
+    if (running) return running;
+
+    const waiter = pollForReceipt(userOpHash, chainId, apiKey).finally(() => {
+        receiptWaiters.delete(userOpHash);
+    });
+    receiptWaiters.set(userOpHash, waiter);
+    return waiter;
+}
+
+async function pollForReceipt(userOpHash: string, chainId: number, apiKey?: string): Promise<void> {
     try {
         // Get bundler client for the chain
         const bundlerClient = getBundlerClient(chainId);

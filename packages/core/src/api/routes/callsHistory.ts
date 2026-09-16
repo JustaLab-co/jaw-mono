@@ -67,6 +67,6 @@ export interface CallsHistoryRoutes {
         response: CallsHistoryItem[];
         headers?: Record<string, string>;
         pathParams?: never;
-        queryParams: { 'api-key': string };
+        queryParams: { 'api-key'?: string };
     };
 }
