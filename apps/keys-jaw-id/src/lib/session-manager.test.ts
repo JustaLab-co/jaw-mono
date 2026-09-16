@@ -179,9 +179,9 @@ describe('two SessionManagers over one storage', () => {
   // `storageArea`, and on Node 25 the shared setup puts an in-memory stub in
   // that slot (see vitest.setup.localstorage.ts). Attaching the area to the
   // instance sends the same event the listener reads, whichever one is live.
-  function dispatchStorageEvent(key: string | null) {
+  function dispatchStorageEvent(key: string | null, storageArea: unknown = window.localStorage) {
     const event = new StorageEvent('storage', { key });
-    Object.defineProperty(event, 'storageArea', { value: window.localStorage });
+    Object.defineProperty(event, 'storageArea', { value: storageArea });
     window.dispatchEvent(event);
   }
 
@@ -265,5 +265,27 @@ describe('two SessionManagers over one storage', () => {
     dispatchStorageEvent('unrelated:key');
 
     expect(await reader.isAuthenticated(ORIGIN)).toBe(true);
+  });
+
+  it('ignores an event from another storage area', async () => {
+    // sessionStorage raises the same event type under our own key.
+    const reader = secondDocument();
+    await reader.createSession({ origin: ORIGIN, peerPublicKey: '04aabbccdd', account: AUTH });
+    await new SessionManager().deleteSession(ORIGIN);
+
+    dispatchStorageEvent('jaw:sessions:apps', {});
+
+    expect(await reader.isAuthenticated(ORIGIN)).toBe(true);
+  });
+
+  it('drops its cache when the whole storage is cleared', async () => {
+    // A `clear()` carries a null key and takes our key with it.
+    const reader = secondDocument();
+    await reader.createSession({ origin: ORIGIN, peerPublicKey: '04aabbccdd', account: AUTH });
+    await new SessionManager().deleteSession(ORIGIN);
+
+    dispatchStorageEvent(null);
+
+    expect(await reader.isAuthenticated(ORIGIN)).toBe(false);
   });
 });
