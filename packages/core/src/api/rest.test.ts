@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { restCall } from './rest.js';
+import { notifyReceiptReceived } from '../analytics/receiptNotification.js';
 import { setDappOrigin } from '../dappOrigin.js';
 import { JAW_PROXY_URL } from '../constants.js';
 
@@ -64,6 +65,39 @@ describe('restCall and the calling dApp', () => {
         await restCall('LOG_SIGNATURE', 'POST', { address: '0xabc' });
 
         expect(headersSent()).toEqual({ 'x-dapp-origin': 'https://dapp.example' });
+    });
+
+    // The patch that reports a landed transaction is the one call a keyless dApp
+    // cannot be identified on any other way: it leaves after the popup is gone.
+    describe('the receipt patch', () => {
+        const receipt = {
+            userOpHash: `0xaaa1${'0'.repeat(60)}` as `0x${string}`,
+            transactionHash: `0xbbb2${'0'.repeat(60)}` as `0x${string}`,
+            success: true,
+        };
+
+        function paramsSent() {
+            return request.mock.calls[0][0].params;
+        }
+
+        it('names the dApp and sends no empty key', () => {
+            setDappOrigin('https://dapp.example');
+            request.mockResolvedValue({ data: { result: { data: {} } } });
+
+            notifyReceiptReceived(receipt);
+
+            expect(headersSent()).toEqual({ 'x-dapp-origin': 'https://dapp.example' });
+            expect(paramsSent()).toBeUndefined();
+        });
+
+        it('sends the key as a query param when the caller has one', () => {
+            setDappOrigin('https://dapp.example');
+            request.mockResolvedValue({ data: { result: { data: {} } } });
+
+            notifyReceiptReceived({ ...receipt, apiKey: 'k1' });
+
+            expect(paramsSent()).toEqual({ 'api-key': 'k1' });
+        });
     });
 
     // A server the dApp runs itself, which app-specific mode allows. Which dApp the
