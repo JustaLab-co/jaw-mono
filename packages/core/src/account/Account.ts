@@ -57,8 +57,8 @@ import { logAccountIssuance } from '../analytics/index.js';
 export interface AccountConfig {
     /** Chain ID for the account */
     chainId: number;
-    /** API key for JAW services (required) */
-    apiKey: string;
+    /** API key for JAW services, if the caller has one */
+    apiKey?: string;
     /** Custom paymaster URL for gas sponsorship */
     paymasterUrl?: string;
     /** Custom paymaster context for gas sponsorship */
@@ -149,7 +149,7 @@ export class Account {
     private readonly _smartAccount: SmartAccount;
     private readonly _chain: Chain;
     private readonly _passkeyAccount: PasskeyAccount | null;
-    private readonly _apiKey: string;
+    private readonly _apiKey?: string;
     private readonly _localAccount: LocalAccount | null;
 
     /**
@@ -158,7 +158,7 @@ export class Account {
     private constructor(
         smartAccount: SmartAccount,
         chain: Chain,
-        apiKey: string,
+        apiKey: string | undefined,
         passkeyAccount?: PasskeyAccount,
         localAccount?: LocalAccount
     ) {

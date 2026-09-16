@@ -34,7 +34,7 @@ export async function backfillLocalAccountAddresses(params: {
 
   const accounts = await Account.backfillStoredAccountAddresses({
     chainId: params.chainId ?? 1,
-    apiKey: params.apiKey ?? '',
+    apiKey: params.apiKey,
   });
   const byCredentialId: Record<string, string> = {};
   for (const account of accounts) {

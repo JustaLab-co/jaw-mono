@@ -352,7 +352,7 @@ export async function grantPermissions(
     spender: Address,
     permissions: PermissionsDetail,
     chain: Chain,
-    apiKey: string,
+    apiKey: string | undefined,
     paymasterUrlOverride?: string,
     paymasterContextOverride?: Record<string, unknown>,
     prependCalls?: { to: Address; value?: bigint; data?: Hex } | Array<{ to: Address; value?: bigint; data?: Hex }>
@@ -431,7 +431,7 @@ export async function revokePermission(
     smartAccount: SmartAccount,
     permissionId: Hex,
     chain: Chain,
-    apiKey: string,
+    apiKey: string | undefined,
     paymasterUrlOverride?: string,
     paymasterContextOverride?: Record<string, unknown>,
     erc20ApprovalCall?: { to: Address; value?: bigint; data: Hex }

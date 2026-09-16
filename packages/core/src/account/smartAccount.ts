@@ -530,7 +530,7 @@ export async function sendCallsWithPermission(
     }>,
     chain: Chain,
     permissionId: Hex,
-    apiKey: string,
+    apiKey: string | undefined,
     paymasterUrlOverride?: string,
     paymasterContextOverride?: Record<string, unknown>,
     localAccount?: LocalAccount,
@@ -625,7 +625,7 @@ export async function estimateUserOpGasWithPermission(
     }>,
     chain: Chain,
     permissionId: Hex,
-    apiKey: string
+    apiKey?: string
 ): Promise<bigint> {
     // Built the same way the send builds it, so what is estimated stays the shape
     // that goes out.

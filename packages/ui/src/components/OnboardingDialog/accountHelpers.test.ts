@@ -29,7 +29,7 @@ describe('backfillLocalAccountAddresses', () => {
 
     const byCredentialId = await backfillLocalAccountAddresses({ chainId: 1 });
 
-    expect(backfillMock).toHaveBeenCalledWith({ chainId: 1, apiKey: '' });
+    expect(backfillMock).toHaveBeenCalledWith({ chainId: 1, apiKey: undefined });
     expect(byCredentialId).toEqual({ 'cred-1': WITH_ADDRESS[0].address });
   });
 

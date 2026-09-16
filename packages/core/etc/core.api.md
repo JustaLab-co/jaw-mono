@@ -69,7 +69,7 @@ export class Account {
 
 // @public
 export interface AccountConfig {
-    apiKey: string;
+    apiKey?: string;
     chainId: number;
     nativeCreateFn?: NativePasskeyCreateFn;
     nativeGetFn?: NativePasskeyGetFn;
