@@ -29,6 +29,7 @@ const writeLock = (o: Record<string, unknown>) =>
  * sleep turns that into a flake.
  */
 const isNotLanding = (line: string) => line.includes('heartbeat is not landing');
+const isLostLock = (line: string) => line.includes('not held for this whole payment');
 
 const waitFor = async (done: () => boolean, timeoutMs = 2_000) => {
   const deadline = Date.now() + timeoutMs;
@@ -331,6 +332,69 @@ describe('withPaymentLock heartbeat', () => {
     const notLanding = warnings.filter(isNotLanding);
     expect(notLanding).toHaveLength(1);
     expect(notLanding[0]).toMatch(/the lock cannot be read/);
+  });
+
+  /**
+   * The lock ending up in someone else's hands is survivable; nobody being told
+   * is not. This warning is the only thing that says two payments may have
+   * counted the same budget, and it names which door it went out of, because
+   * one is another payer and the other is a machine that stopped writing.
+   */
+  const capture = async (work: () => Promise<void>, options: Parameters<typeof withPaymentLock>[1]) => {
+    const warnings: string[] = [];
+    const written = vi.spyOn(process.stderr, 'write').mockImplementation(((line: unknown) => {
+      warnings.push(String(line));
+      return true;
+    }) as typeof process.stderr.write);
+    try {
+      await withPaymentLock(work, options);
+    } finally {
+      written.mockRestore();
+    }
+    return warnings;
+  };
+
+  it('says the lock was lost when another payment took it', async () => {
+    const warnings = await capture(
+      async () => {
+        const mine = JSON.parse(fs.readFileSync(PATHS.paymentLock, 'utf-8'));
+        fs.writeFileSync(PATHS.paymentLock, JSON.stringify({ ...mine, token: 'someone-else' }));
+        await waitFor(() => false, 80);
+      },
+      { heartbeatMs: 20 }
+    );
+
+    const lost = warnings.filter(isLostLock);
+    expect(lost).toHaveLength(1);
+    expect(lost[0]).toMatch(/another payment took the lock[\s\S]*jaw x402 log/);
+  });
+
+  it('says so when our own beats stopped long enough for the lock to be taken', async () => {
+    const warnings = await capture(
+      async () => {
+        const mine = JSON.parse(fs.readFileSync(PATHS.paymentLock, 'utf-8'));
+        fs.writeFileSync(PATHS.paymentLock, JSON.stringify({ ...mine, at: Date.now() - 500 }));
+        await waitFor(() => false, 80);
+      },
+      { heartbeatMs: 20, staleAfterMs: 100 }
+    );
+
+    // The other door to the same place, and it has to read differently: nobody
+    // took anything, this machine stopped writing.
+    const lost = warnings.filter(isLostLock);
+    expect(lost).toHaveLength(1);
+    expect(lost[0]).toMatch(/stopped beating long enough to be broken as stale/);
+  });
+
+  it('stays quiet about a payment that held the lock the whole way', async () => {
+    const warnings = await capture(
+      async () => {
+        await waitFor(() => false, 80);
+      },
+      { heartbeatMs: 20 }
+    );
+
+    expect(warnings.filter(isLostLock)).toEqual([]);
   });
 
   it('leaves no staging file behind', async () => {
