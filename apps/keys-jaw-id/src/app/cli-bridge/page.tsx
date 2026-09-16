@@ -80,6 +80,8 @@ function CLIBridgeContent() {
   const [error, setError] = useState('');
   const [lastMethod, setLastMethod] = useState<string | null>(null);
   const sdkRef = useRef<ReturnType<typeof JAW.create> | null>(null);
+  /** What `sdkRef` was built from, so a second init can tell whether it still fits. */
+  const sdkSignatureRef = useRef<string | null>(null);
   const wsRef = useRef<WebSocket | null>(null);
   const sharedSecretRef = useRef<CryptoKey | null>(null);
 
@@ -218,12 +220,30 @@ function CLIBridgeContent() {
                   const sentApiKey = typeof inner.apiKey === 'string' ? inner.apiKey : '';
                   const apiKey = await resolveBridgeApiKey(sentApiKey);
                   if (!apiKey) {
+                    const reason = 'No API key: the CLI sent none and this deployment has none configured for it.';
                     setState('error');
-                    setError('No API key: the CLI sent none and this deployment has none configured for it.');
+                    setError(reason);
+                    // Said across the channel as well, because this page is not
+                    // where the person is looking. Without it the CLI learns
+                    // nothing for fifteen seconds and then reports a slow SDK,
+                    // which names neither the missing key nor this deployment.
+                    const failure = await encryptAndSerialize(sharedSecretRef.current!, {
+                      type: 'error',
+                      reason,
+                    });
+                    ws!.send(JSON.stringify(failure));
                     return;
                   }
 
-                  if (!sdkRef.current) {
+                  // Rebuilt when the init it was built from changed, not only
+                  // when there is none. A CLI re-sends init on reconnect, and
+                  // the page it reconnects to is the one still open: keeping the
+                  // first SDK meant the browser kept signing under the key, the
+                  // chain and the paymaster of the previous run while the CLI
+                  // recorded the new ones, and neither side could see the gap.
+                  const signature = JSON.stringify({ chainId, ens, paymasterUrl, paymasterContext, apiKey });
+                  if (!sdkRef.current || sdkSignatureRef.current !== signature) {
+                    sdkSignatureRef.current = signature;
                     sdkRef.current = JAW.create({
                       appName: 'JAW CLI',
                       defaultChainId: chainId,

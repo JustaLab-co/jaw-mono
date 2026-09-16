@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
 
-import { buildInitPayload, readInjectedApiKey } from './ws-bridge.js';
+import { buildInitPayload, readBridgeFailure, readInjectedApiKey } from './ws-bridge.js';
 
 // The init envelope is the only thing the CLI tells the browser about the
 // paymaster, so it has to carry the context and not the url alone. Dropping a
@@ -73,5 +73,40 @@ describe('buildInitPayload without a key', () => {
 
   it('sends it when there is one', () => {
     expect(buildInitPayload({ apiKey: 'mine', chainId: 8453 })).toMatchObject({ apiKey: 'mine' });
+  });
+});
+
+/**
+ * The browser answers `ready` or it says why it will not. Before it could say,
+ * a deployment missing the CLI's key looked from the terminal like a slow SDK:
+ * fifteen seconds of nothing and then a timeout naming neither the key nor the
+ * deployment.
+ */
+describe('readBridgeFailure', () => {
+  it('takes the reason the browser refused with', () => {
+    const reason = 'No API key: the CLI sent none and this deployment has none configured for it.';
+
+    expect(readBridgeFailure({ type: 'error', reason })).toBe(reason);
+  });
+
+  it('still refuses when the browser named no reason', () => {
+    // The refusal is the load-bearing part; a blank one must not read as
+    // success and fall through to the timeout.
+    expect(readBridgeFailure({ type: 'error' })).toBe('no reason given');
+    expect(readBridgeFailure({ type: 'error', reason: '' })).toBe('no reason given');
+  });
+
+  it.each([
+    ['a ready', { type: 'ready', chainId: 8453 }],
+    ['an rpc response', { type: 'rpc_response', id: '1' }],
+  ])('is null for %s, which is not a refusal', (_label, inner) => {
+    expect(readBridgeFailure(inner)).toBeNull();
+  });
+
+  it('strips control characters before the reason reaches a terminal', () => {
+    const hostile = readBridgeFailure({ type: 'error', reason: 'refused\u001b[31m\nSUCCESS' });
+
+    expect(hostile).not.toContain('\u001b');
+    expect(hostile).not.toContain('\n');
   });
 });

@@ -15,6 +15,7 @@ import {
   importKeyFromHex,
   type EncryptedEnvelope,
 } from './crypto.js';
+import { sanitizeLine } from './terminal.js';
 
 type CKey = webcrypto.CryptoKey;
 
@@ -82,6 +83,24 @@ export function buildInitPayload(config: WSBridgeConfig): Record<string, unknown
 export function readInjectedApiKey(inner: Record<string, unknown>): string | null {
   const apiKey = inner['apiKey'];
   return typeof apiKey === 'string' && apiKey.length > 0 ? apiKey : null;
+}
+
+/**
+ * Why the browser will not come up, off the envelope it sends instead of
+ * `ready`, or null when this is not that envelope.
+ *
+ * Extracted for the reason the two above are: what crosses the bridge can then
+ * be asserted without standing up a relay.
+ *
+ * Sanitized here rather than at the print. The text is written by our own page
+ * and arrives under the shared secret, so nothing else can produce it, but it
+ * ends up on a terminal and this is the last place that knows it came off a
+ * socket.
+ */
+export function readBridgeFailure(inner: Record<string, unknown>): string | null {
+  if (inner['type'] !== 'error') return null;
+  const reason = inner['reason'];
+  return sanitizeLine(typeof reason === 'string' && reason.length > 0 ? reason : 'no reason given', 300);
 }
 
 const DEFAULT_TIMEOUT_MS = 120_000;
@@ -227,6 +246,16 @@ export class WSBridge {
                 const injected = readInjectedApiKey(inner as Record<string, unknown>);
                 if (injected) this.injectedApiKey = injected;
                 resolve();
+              }
+              // The browser saying why it will not come up. Without this the
+              // only outcome is the timeout below, which blames a slow SDK for
+              // a deployment that is missing a key.
+              const failure = readBridgeFailure(inner as Record<string, unknown>);
+              if (failure) {
+                clearTimeout(readyTimer);
+                ws.off('message', onMsg);
+                ws.close();
+                reject(new Error(`Browser refused to start the session: ${failure}`));
               }
             } catch {
               // Not a valid encrypted message for us, ignore
