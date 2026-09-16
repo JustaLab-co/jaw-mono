@@ -1,3 +1,29 @@
+## 0.3.0 (2026-09-15)
+
+### 🚀 Features
+
+- add funds ([#303](https://github.com/JustaName-id/jaw-mono/pull/303))
+
+### 🧱 Updated Dependencies
+
+- Updated @jaw.id/core to 1.4.0
+
+### ❤️ Thank You
+
+- Leo Franklin @LeoFranklin015
+
+## 0.2.2 (2026-09-14)
+
+### 🧱 Updated Dependencies
+
+- Updated @jaw.id/core to 1.3.2
+
+## 0.2.1 (2026-09-14)
+
+### 🧱 Updated Dependencies
+
+- Updated @jaw.id/core to 1.3.1
+
 ## 0.2.0 (2026-09-03)
 
 ### 🚀 Features
