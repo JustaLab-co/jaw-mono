@@ -561,15 +561,14 @@ function KeysJawIdAppContent({
       }
 
       // Get origin and set it as current context
-      const dappOrigin = communicator.getOrigin() ?? undefined;
-      const origin = dappOrigin ?? '';
+      const origin = communicator.getOrigin() ?? '';
       setCurrentOrigin(origin);
       cryptoHandler.setOrigin(origin);
       // Our own Origin is the same whichever dApp opened us, so the backend
-      // cannot tell which one a call belongs to unless we say. Passed through
-      // unknown rather than as '': a keyless call the backend cannot attribute
-      // is refused, and an empty header would read as us calling for ourselves.
-      setDappOrigin(dappOrigin);
+      // cannot tell which one a call belongs to unless we say. An unknown origin
+      // goes through as unset rather than as '': it clears whatever the last
+      // request left behind, so a call is never credited to the wrong dApp.
+      setDappOrigin(origin || undefined);
 
       const peerPublicKey = request.sender;
       const method = request.content.handshake.method;
@@ -727,15 +726,14 @@ function KeysJawIdAppContent({
 
     try {
       // Load session for this origin
-      const dappOrigin = communicator.getOrigin() ?? undefined;
-      const origin = dappOrigin ?? '';
+      const origin = communicator.getOrigin() ?? '';
 
       // Update React state with current origin (needed for useAuth hook)
       setCurrentOrigin(origin);
       // Set again rather than relying on the handshake having run in this
       // document: the origin the backend is told comes from the request being
       // served, not from an earlier one.
-      setDappOrigin(dappOrigin);
+      setDappOrigin(origin || undefined);
 
       // Reply to the SDK with a reconnect-required sentinel (tied to this
       // request id, carries no secret) so it re-establishes a session against
