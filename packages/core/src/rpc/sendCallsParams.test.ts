@@ -211,4 +211,26 @@ describe('normalizeSendCallsParams', () => {
             expect(normalizeSendCallsParams([{ ...viemV2Params, capabilities }]).capabilities).toEqual(capabilities);
         });
     });
+
+    // `optionalHexQuantity` echoed the rejected value through a bare
+    // `JSON.stringify`, which raises on a circular object — so building the
+    // -32602 message threw a TypeError and the dapp got that instead, with no
+    // RPC code on it. The same trap `optionalChainId` had.
+    it('refuses an unserializable value with -32602 rather than a TypeError', () => {
+        const circular: Record<string, unknown> = {};
+        circular.self = circular;
+
+        const message = expectInvalidParams(() =>
+            normalizeSendCallsParams([
+                {
+                    version: '2.0.0',
+                    calls: [{ to: '0x0987654321098765432109876543210987654321', value: circular }],
+                },
+            ])
+        );
+
+        // The describeValue fallback, proving the message was built rather than
+        // the stringify having thrown on the way to it.
+        expect(message).toContain('[object Object]');
+    });
 });

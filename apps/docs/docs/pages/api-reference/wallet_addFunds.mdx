@@ -29,6 +29,8 @@ Both are decimal (`8453`), matching the chain IDs in your SDK config. Hex quanti
 
 The two answer different questions and can be sent together: `chainId` is where the QR code points, which [EIP-681](https://eips.ethereum.org/EIPS/eip-681) allows only one of, while `chains` is the set the screen presents. Send `chains` alone and the QR code pins its first entry, so order it with your primary chain first.
 
+If you send both, `chainId` must be one of `chains`. A `chainId` outside your own list is rejected with `-32602` rather than resolved silently: the QR code would pin a chain the same request says you do not accept, so the code and the row beneath it would contradict each other.
+
 :::tip
 Send `chains` whenever your app only credits deposits on certain networks. With no `chains`, the screen shows every chain the address works on, which is true of a smart account but invites a deposit your app will not see. `chains: [8453]` is a single-chain app; `chains: [8453, 10]` is a multichain one.
 :::
@@ -77,12 +79,12 @@ A resolved call means the screen was shown and closed, **not** that funds arrive
 
 ## Errors
 
-| Code   | Description                                                                                                |
-| ------ | ---------------------------------------------------------------------------------------------------------- |
-| 4100   | Unauthorized (no connected account to receive funds at)                                                    |
-| 5710   | A chain in `chainId` or `chains` isn't configured (testnets need `preference.showTestnets`)                |
-| -32602 | Invalid params (a chainId is not a positive integer or hex quantity, or `chains` is empty or not an array) |
-| -32603 | The wallet could not resolve an address to receive at                                                      |
+| Code   | Description                                                                                                                                  |
+| ------ | -------------------------------------------------------------------------------------------------------------------------------------------- |
+| 4100   | Unauthorized (no connected account to receive funds at)                                                                                      |
+| 5710   | A chain in `chainId` or `chains` isn't configured (testnets need `preference.showTestnets`)                                                  |
+| -32602 | Invalid params (a chainId is not a positive integer or hex quantity, `chains` is empty or not an array, or `chainId` is not one of `chains`) |
+| -32603 | The wallet could not resolve an address to receive at                                                                                        |
 
 ## Example
 

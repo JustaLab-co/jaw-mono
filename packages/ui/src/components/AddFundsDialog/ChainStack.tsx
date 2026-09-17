@@ -59,16 +59,9 @@ export function ChainStack({ activeChainId, chains, apiKey }: ChainStackProps) {
   // open, one per mainnet, because the capabilities cache keys on the params.
   const icons = useChainIcons(apiKey);
 
-  // Not memoized: it is a filter over ~14 ids, and `chains` arrives as a fresh
-  // array on every render of the dialog above, so memoizing on its identity
-  // would memoize nothing anyway.
-  //
-  // With a dapp list the list wins and is shown exactly as sent — no mainnet
-  // filter. Every entry already passed `resolveChain` in the signer, so a
-  // testnet here is one the dapp deliberately named, and dropping it would
-  // leave the user staring at a row that contradicts the chain the QR encodes.
-  // Either way the active chain leads when it is in the set, so the chain the
-  // QR pins is the first icon read.
+  // Not memoized: it is a filter over a handful of ids, and `chains` arrives as
+  // a fresh array on every render of the dialog above, so memoizing on its
+  // identity would memoize nothing anyway.
   const ordered = orderChains(activeChainId, chains);
 
   const shown = ordered.slice(0, MAX_SHOWN);
@@ -92,6 +85,11 @@ export function ChainStack({ activeChainId, chains, apiKey }: ChainStackProps) {
               already names every chain, so nothing is lost for screen readers. */}
           <TooltipTrigger asChild>
             <span
+              // A stable hook for tests to count icons by. Matching on the
+              // class list instead looks equivalent and is not: the repo runs
+              // `prettier-plugin-tailwindcss`, which reorders these, so adding
+              // one utility silently turns a class-based count into zero.
+              data-testid="chain-icon"
               // White plate, not a themed one: these logos are brand SVGs with
               // transparent grounds, drawn for light backgrounds. On the dark
               // dialog the transparency let the surface through and the marks
@@ -131,6 +129,20 @@ export function ChainStack({ activeChainId, chains, apiKey }: ChainStackProps) {
 
 /**
  * The chains the stack draws, in the order it draws them.
+ *
+ * With a dapp list the list wins and is shown exactly as sent — no mainnet
+ * filter. Every entry already passed `resolveChain` in the signer, so a testnet
+ * here is one the dapp deliberately named, and dropping it would leave the user
+ * staring at a row that contradicts the chain the QR encodes.
+ *
+ * The active chain leads only when the list already contains it. A list that
+ * omits it is shown untouched, so the chain the QR pins is then absent from the
+ * row entirely. That is deliberate: the dapp's list is the set it accepts
+ * deposits on, and adding a chain it never named would invite a deposit it does
+ * not credit. The SDK refuses that combination outright (`normalizeAddFundsParams`
+ * rejects a `chainId` outside `chains`), but this is still reachable — the keys
+ * host drops unsupported entries from the list and falls back on the QR chain
+ * independently, so the two can end up disagreeing after validation.
  *
  * Module-private: the behaviour is asserted by rendering `ChainStack`, which is
  * the seam a caller actually has, so this needs no export of its own.

@@ -52,8 +52,23 @@ export function normalizeAddFundsParams(params: unknown): NormalizedAddFundsPara
         throw standardErrors.rpc.invalidParams(`${METHOD}: expected a single object parameter`);
     }
 
-    return {
-        chainId: optionalChainId(params[0].chainId, METHOD),
-        chains: optionalChainIdList(params[0].chains, METHOD, 'chains'),
-    };
+    const chainId = optionalChainId(params[0].chainId, METHOD);
+    const chains = optionalChainIdList(params[0].chains, METHOD, 'chains');
+
+    // A `chainId` outside the dapp's own `chains` is incoherent: the QR would
+    // pin a chain the same request says it does not accept, so the code and the
+    // row under it would contradict each other. Refused for the same reason an
+    // empty list is — it is a dapp bug, and resolving it silently (by dropping
+    // either half) would hide it while showing the user something wrong.
+    //
+    // Here rather than in the signer so both hosts inherit it: the popup never
+    // sees a validated request, it re-runs this function on the raw params.
+    //
+    // Compared as BigInt because the two fields can spell one chain
+    // differently — `0x01` against `0x1` is the same chain.
+    if (chainId !== undefined && chains && !chains.some((c) => BigInt(c) === BigInt(chainId))) {
+        throw standardErrors.rpc.invalidParams(`${METHOD}: chainId ${chainId} is not in chains [${chains.join(', ')}]`);
+    }
+
+    return { chainId, chains };
 }

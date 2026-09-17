@@ -112,8 +112,18 @@ export const AddFundsModal = ({
   // that sent only `chains` still needs one chain for the QR, and the session's
   // chain may be one it just said it does not accept.
   const candidate = addFunds.chainId ? ensureIntNumber(addFunds.chainId) : (chains?.[0] ?? chain?.id);
+  // `chains[0]` before the generic backstop, so the QR and the row cannot
+  // disagree. The SDK refuses a `chainId` outside `chains` outright, but this
+  // host can still manufacture that pair on its own: `{ chainId: 1337, chains:
+  // [1337, 8453] }` is coherent on arrival, then the filter above drops 1337
+  // from the list while this line drops it from the QR — leaving a code pinned
+  // to Ethereum above a row reading "Accepted on Base". Falling back inside the
+  // list keeps the two halves of the screen telling one story. `chains` is
+  // already filtered to supported ids, so its first entry is always drawable.
   const chainId =
-    candidate !== undefined && SUPPORTED_CHAINS.some((c) => c.id === candidate) ? candidate : MAINNET_CHAINS[0]!.id;
+    candidate !== undefined && SUPPORTED_CHAINS.some((c) => c.id === candidate)
+      ? candidate
+      : (chains?.[0] ?? MAINNET_CHAINS[0]!.id);
 
   // The session hands back a plain string, so the shape is checked before it
   // becomes a destination: an unchecked cast would let a truncated or malformed

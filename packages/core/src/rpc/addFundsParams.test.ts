@@ -125,4 +125,36 @@ describe('normalizeAddFundsParams', () => {
         expect(() => normalizeAddFundsParams([{ chains: [8453, 0] }])).toThrowError(invalidParams);
         expect(() => normalizeAddFundsParams([{ chains: ['base'] }])).toThrowError(invalidParams);
     });
+
+    // A `chainId` outside the dapp's own `chains` would pin the QR to a chain
+    // the same request says it does not accept, so the code and the row under
+    // it would contradict each other.
+    it('refuses a chainId that is not in chains', () => {
+        expect(() => normalizeAddFundsParams([{ chainId: 11155111, chains: [1] }])).toThrowError(invalidParams);
+        expect(() => normalizeAddFundsParams([{ chainId: 10, chains: [8453] }])).toThrowError(invalidParams);
+    });
+
+    // The two fields can spell one chain differently, so the check compares
+    // values — refusing `0x01` against `0x1` would reject a coherent request.
+    it('accepts a chainId in chains across hex spellings', () => {
+        expect(normalizeAddFundsParams([{ chainId: '0x01', chains: ['0x1', 8453] }])).toEqual({
+            chainId: '0x01',
+            chains: ['0x1', '0x2105'],
+        });
+    });
+
+    // Either alone is still fine: the contradiction needs both to be present.
+    it('does not refuse chainId or chains sent on their own', () => {
+        expect(() => normalizeAddFundsParams([{ chainId: 11155111 }])).not.toThrow();
+        expect(() => normalizeAddFundsParams([{ chains: [11155111] }])).not.toThrow();
+    });
+
+    // '0x0' satisfied the hex-quantity shape, so it passed while `0` and `0n`
+    // were refused. It then failed downstream as 5710 "set preference.showTestnets
+    // to true", pointing the integrator at a setting that cannot help.
+    it('refuses a zero chainId in every accepted shape', () => {
+        expect(() => normalizeAddFundsParams([{ chainId: '0x0' }])).toThrowError(invalidParams);
+        expect(() => normalizeAddFundsParams([{ chainId: '0x00' }])).toThrowError(invalidParams);
+        expect(() => normalizeAddFundsParams([{ chains: ['0x0'] }])).toThrowError(invalidParams);
+    });
 });

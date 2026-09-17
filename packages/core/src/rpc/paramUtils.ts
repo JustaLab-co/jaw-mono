@@ -109,7 +109,7 @@ export function optionalHexQuantity(value: unknown, method: string, field: strin
         return numberToHex(value);
     }
 
-    throw standardErrors.rpc.invalidParams(`${method}: ${field} must be a hex quantity, got ${JSON.stringify(value)}`);
+    throw standardErrors.rpc.invalidParams(`${method}: ${field} must be a hex quantity, got ${describeValue(value)}`);
 }
 
 export function optionalHexData(value: unknown, method: string, field: string): `0x${string}` | undefined {
@@ -139,10 +139,16 @@ function describeValue(value: unknown): string {
 /** Accepts a hex chainId (what viem sends), a number, or a bigint, and returns hex. */
 export function optionalChainId(chainId: unknown, method: string): `0x${string}` | undefined {
     if (chainId === undefined || chainId === null) return undefined;
+
+    // Written once and shared by all three shapes. The positivity rule has to be
+    // identical across them — it was not, and `'0x0'` passed while `0` and `0n`
+    // were refused, so a zero chainId failed downstream as 5710 "If this is a
+    // testnet, set preference.showTestnets to true", pointing the integrator at
+    // a setting that cannot help. Three copies of the message is how that drifts.
+    const invalidChainId = () => standardErrors.rpc.invalidParams(`${method}: invalid chainId ${chainId}`);
+
     if (typeof chainId === 'number') {
-        if (!Number.isSafeInteger(chainId) || chainId <= 0) {
-            throw standardErrors.rpc.invalidParams(`${method}: invalid chainId ${chainId}`);
-        }
+        if (!Number.isSafeInteger(chainId) || chainId <= 0) throw invalidChainId();
         return numberToHex(chainId);
     }
     // A bigint is a legitimate way to hold a chain id, and `optionalHexQuantity`
@@ -152,12 +158,16 @@ export function optionalChainId(chainId: unknown, method: string): `0x${string}`
     // reached the dapp as an untyped TypeError instead of -32602, in
     // wallet_sendCalls and wallet_sendTransaction as well as here.
     if (typeof chainId === 'bigint') {
-        if (chainId <= 0n) {
-            throw standardErrors.rpc.invalidParams(`${method}: invalid chainId ${chainId}`);
-        }
+        if (chainId <= 0n) throw invalidChainId();
         return numberToHex(chainId);
     }
-    if (isHexQuantity(chainId)) return chainId;
+    // Compared as a BigInt rather than by string, so `'0x0'` and `'0x00'` are
+    // both caught. `isHexQuantity` guarantees at least one digit, so `BigInt`
+    // cannot throw here.
+    if (isHexQuantity(chainId)) {
+        if (BigInt(chainId) <= 0n) throw invalidChainId();
+        return chainId;
+    }
     throw standardErrors.rpc.invalidParams(
         `${method}: chainId must be a hex string (e.g. '0x66eee') or a number, got ${describeValue(chainId)}`
     );
