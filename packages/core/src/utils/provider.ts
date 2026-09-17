@@ -68,8 +68,9 @@ export async function fetchRPCRequest(request: RequestArguments, rpcUrl: string)
     if (rpcError) throw rpcError;
 
     // A 2xx whose body is not an envelope is the same silence as a refusal: returning
-    // undefined here is what wallet_getCapabilities would memoize for a minute.
-    if (!envelope) {
+    // undefined here is what wallet_getCapabilities would memoize for a minute. `{}`
+    // and `[]` parse as objects and carry no `result`, so the key is what decides.
+    if (!envelope || !('result' in envelope)) {
         throw standardErrors.rpc.internal(
             `JAW RPC request returned a body that is not a JSON-RPC response${body ? `: ${body.slice(0, 200)}` : ''}`
         );

@@ -91,6 +91,28 @@ describe('fetchRPCRequest', () => {
         );
     });
 
+    // `{}` and `[]` are objects too, so a guard on the type alone lets them through
+    // and hands the caller the same undefined an HTML body used to.
+    it.each([
+        ['an empty object', '{}'],
+        ['an array', '[]'],
+    ])('fails on a 2xx whose body is %s', async (_label, body) => {
+        stubResponse(200, body);
+
+        await expect(fetchRPCRequest({ method: 'wallet_getCapabilities' }, 'https://rpc.example')).rejects.toThrow(
+            /not a JSON-RPC response/
+        );
+    });
+
+    // A method that answers with null answered: the envelope carries `result`.
+    it('returns a null result', async () => {
+        stubResponse(200, JSON.stringify({ jsonrpc: '2.0', id: 1, result: null }));
+
+        await expect(
+            fetchRPCRequest({ method: 'eth_getTransactionReceipt' }, 'https://rpc.example')
+        ).resolves.toBeNull();
+    });
+
     it('still fails when the rejection body cannot be read', async () => {
         vi.stubGlobal(
             'fetch',
