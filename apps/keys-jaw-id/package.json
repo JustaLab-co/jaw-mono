@@ -19,6 +19,6 @@
     "react": "19.2.6",
     "react-dom": "19.2.6",
     "tailwindcss-animate": "^1.0.7",
-    "viem": "^2.55.16"
+    "viem": "^2.56.7"
   }
 }

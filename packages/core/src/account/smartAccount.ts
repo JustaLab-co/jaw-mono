@@ -54,6 +54,8 @@ import {
     ink,
     gnosis,
     arcTestnet,
+    arc as arcBase,
+    hyveChain as hyveChainBase,
     robinhood,
     soneium,
     unichain,
@@ -96,123 +98,16 @@ export type BundledTransactionResult = {
 };
 
 /**
- * HyveChain (7847). Defined here rather than imported because viem has no
- * definition for it (checked against 2.55.16); wevm/viem#5063 adds one but is
- * still open. Everything this list is read for is deployed at its canonical
- * address: the factory, the permissions manager, EntryPoint v0.8, and
- * Multicall3. The ERC-20 paymaster is not, so ERC-20 gas is simply absent on
- * this chain rather than broken — that path is driven by per-chain config.
- *
- * Every field below is kept byte-identical to #5063 so that adopting viem's
- * definition later is a pure import swap, with one deliberate exception:
- * blockTime, which that PR omits. It is measured, not assumed — blocks
- * alternate 3s/4s, so 3500ms keeps the receipt poll in step instead of
- * dropping to viem's 12s L1 default (which clamps to a 4s poll and adds dead
- * time after inclusion). Whoever swaps in viem's export must re-add blockTime
- * on top of it, or fast receipts silently regress.
- *
- * Multicall3's blockCreated is verified against the chain, not copied: 4090845
- * holds no code at that address and 4090846 holds the deployment. It matters
- * more here than
- * on most chains because createClientForChain only carries `contracts` over for
- * chains this list knows, and `batch.multicall` degrades silently to one
- * request per eth_call without it (see store/chain-clients/utils.ts).
- *
- * Note for anyone extending this: the public RPC is a Cosmos-SDK EVM node and
- * does not implement eth_simulateV1, so simulation-backed paths fall back.
+ * HyveChain (7847) and Arc (5042) come from viem like every other chain here,
+ * with one field put back on top: neither export carries `blockTime`, so viem
+ * assumes 12s and clamps the receipt poll to 4s. createClientForChain reads
+ * blockTime off SUPPORTED_CHAINS to set that interval (see
+ * store/chain-clients/utils.ts), so without these wrappers fast receipts
+ * silently regress. Both values are measured: HyveChain alternates
+ * 3s/4s blocks and Arc is flat at 500ms.
  */
-const hyveChain = /*#__PURE__*/ defineChain({
-    id: 7847,
-    name: 'HyveChain',
-    nativeCurrency: { name: 'HYVE', symbol: 'HYVE', decimals: 18 },
-    blockTime: 3500,
-    rpcUrls: {
-        default: {
-            http: ['https://rpc.hyvechain.com'],
-            webSocket: ['wss://ws.hyvechain.com'],
-        },
-    },
-    blockExplorers: {
-        default: { name: 'HyveChain Explorer', url: 'https://explorer.hyvechain.com' },
-    },
-    contracts: {
-        multicall3: {
-            address: '0xcA11bde05977b3631167028862bE2a173976CA11',
-            blockCreated: 4090846,
-        },
-    },
-    testnet: false,
-});
-
-/**
- * Arc mainnet (5042). Unlike HyveChain this one is not missing from viem — it
- * is worse than missing. viem 2.55.16 (and 2.56.5, the latest release as of
- * 2026-09-16) exports `arc`, but only as a stub: `rpcUrls.default.http` is an
- * empty array, with no block explorer and no Multicall3. Importing it compiles
- * and then resolves to no transport, and createClientForChain would find no
- * `contracts` to carry over, silently dropping `batch.multicall` back to one
- * request per eth_call. So this shadows the export deliberately rather than
- * filling a gap, and the usual "is it in viem yet?" check is not enough here:
- * the swap is only safe once the released `arc` carries rpcUrls, which is what
- * the still-unreleased `.changeset/add-arc-mainnet.md` on wevm/viem main adds.
- *
- * Fields are byte-identical to that pending changeset so the swap stays a pure
- * import, with the same deliberate exception made for HyveChain above:
- * blockTime, which viem omits. Measured, not assumed, and the measurement is
- * unusually flat — 506ms over 1k blocks, 507ms over 100k, 509ms over 1M and
- * 508ms over 5M — so the target is plainly 500ms. It matters more here than
- * anywhere else in this list: without it viem assumes 12s and clamps the
- * receipt poll to 4s, which is eight block times of dead air on a 500ms chain.
- * Whoever swaps in viem's export must re-add blockTime on top of it.
- *
- * Multicall3's blockCreated of 0 is exact, not a lower bound: it is a genesis
- * predeploy, and eth_getCode against an archive node returns its full runtime
- * at block 0. Reading that needs an archive provider — the arc.io endpoint
- * below prunes ("state at block #1 is pruned") and the explorer sits behind
- * Cloudflare Access, so neither can confirm it.
- *
- * KNOWN GAP, read before trusting this entry: JustanAccount's factory and the
- * permissions manager are not deployed on 5042. eth_getCode returned 0x for
- * both on 2026-09-16, confirmed against two independent providers, while
- * EntryPoint v0.7/v0.8, Multicall3 and the ERC-20 paymaster are all present at
- * their canonical addresses. Every other chain in MAINNET_CHAINS has the
- * factory; this one does not, so listing it here makes Arc selectable before an
- * account can be created on it. Deploy both before this reaches users, then
- * delete this paragraph.
- *
- * Note for anyone extending this: eth_simulateV1 is a property of the provider
- * here, not of the chain. The arc.io endpoint below rejects it with -32014
- * "requested data not available", which drops the simulation-backed tokenCost
- * in erc20Paymaster to summed gas limits, but the node software does support
- * it — https://arc.drpc.org serves it, unconditionally, with no stateOverride
- * needed (unlike Monad). Point SDK config at a provider that answers it if the
- * realistic-fee path matters, since createClientForChain builds its client from
- * that config rather than from the rpcUrls below.
- */
-const arc = /*#__PURE__*/ defineChain({
-    id: 5042,
-    name: 'Arc',
-    nativeCurrency: { name: 'USDC', symbol: 'USDC', decimals: 18 },
-    blockTime: 500,
-    rpcUrls: {
-        default: {
-            http: ['https://rpc.mainnet.arc.io'],
-        },
-    },
-    blockExplorers: {
-        default: {
-            name: 'Arc Explorer',
-            url: 'https://explorer.arc.io',
-            apiUrl: 'https://explorer.arc.io/api/v2',
-        },
-    },
-    contracts: {
-        multicall3: {
-            address: '0xcA11bde05977b3631167028862bE2a173976CA11',
-            blockCreated: 0,
-        },
-    },
-});
+const hyveChain = /*#__PURE__*/ defineChain({ ...hyveChainBase, blockTime: 3500 });
+const arc = /*#__PURE__*/ defineChain({ ...arcBase, blockTime: 500 });
 
 /**
  * The chain lists are annotated rather than inferred on purpose. Without the
