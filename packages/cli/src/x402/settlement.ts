@@ -68,6 +68,10 @@ const NONCE_BITMAP_ABI = [
   parseAbiItem('function nonceBitmap(address owner, uint256 wordPos) view returns (uint256)'),
 ] as const;
 
+const AUTHORIZATION_STATE_ABI = [
+  parseAbiItem('function authorizationState(address authorizer, bytes32 nonce) view returns (bool)'),
+] as const;
+
 /**
  * Fold every answer the chain has for the unverified rows in `entries`.
  *
@@ -138,11 +142,11 @@ export async function reconcileSettlements(entries: X402LogEntry[]): Promise<X40
 /**
  * Whether the chain can be asked about this row at all.
  *
- * A row that named a transaction can be looked up, and an `upto` authorization
- * past its deadline has a Permit2 bitmap to read. Anything else has no question
- * to put: a `failed` row carries no hash, since the pay paths record
- * `outcome.payment?.txHash` and a failure has no payment, and only `upto` signs
- * against Permit2.
+ * A row that named a transaction can be looked up, and an authorization past its
+ * deadline carries a consumption flag: Permit2's bitmap under `upto`, the
+ * token's own `authorizationState` under `exact`. What has no question to put is
+ * an attempt still inside its deadline, where an unconsumed nonce proves
+ * nothing because the settlement can still land.
  *
  * The filter is what keeps those from taking a slot in the batch below. Eight
  * of them, and the oldest-first slice never reached a row that could be
@@ -151,7 +155,8 @@ export async function reconcileSettlements(entries: X402LogEntry[]): Promise<X40
  */
 function answerable(entry: X402LogEntry): boolean {
   if (entry.settlement !== 'unverified' || !entry.nonce) return false;
-  return Boolean(entry.txHash) || (entry.scheme === 'upto' && deadlinePassed(entry));
+  if (entry.txHash) return true;
+  return (entry.scheme === 'upto' || entry.scheme === 'exact') && deadlinePassed(entry);
 }
 
 /**
@@ -167,14 +172,16 @@ function deadlinePassed(entry: X402LogEntry): boolean {
 }
 
 /**
- * Whether there is no question to put about this row, ever.
+ * Whether there is no question to put about this row right now.
  *
- * `answerable` needs a transaction to look up or a Permit2 bitmap to read. An
- * `exact` attempt that failed before a receipt has neither: it carries a nonce
- * and no hash, and only `upto` signs against Permit2. Nothing moves those rows
- * off `unverified` on its own, so they are charged at their ceiling for the life
- * of the session total and, since the fold protects rows an answer could still
- * find by nonce, they pin every later compaction.
+ * `answerable` needs a transaction to look up, or a deadline behind us under a
+ * scheme whose consumption flag this can read. An attempt whose authorization is
+ * still live has neither, and it is answerable minutes later when the deadline
+ * passes. A row from before the ledger carried `scheme` never is, and it is
+ * those the sweep below exists for: nothing moves them off `unverified` on their
+ * own, so they are charged at their ceiling for the life of the session total
+ * and, since the fold protects rows an answer could still find by nonce, they
+ * pin every later compaction.
  */
 function unanswerable(entry: X402LogEntry): boolean {
   return entry.settlement === 'unverified' && Boolean(entry.nonce) && !answerable(entry);
@@ -215,7 +222,22 @@ async function answerFor(entry: X402LogEntry): Promise<X402SettlementCorrection 
     if (moved !== null) return correction(entry, 'verified', moved);
   }
 
-  return (await authorizationDied(entry, asset.chainId)) ? correction(entry, 'expired', 0n) : null;
+  if (!deadlinePassed(entry)) return null;
+  if (entry.scheme === 'upto') {
+    return (await permit2NonceFree(entry, asset.chainId)) ? correction(entry, 'expired', 0n) : null;
+  }
+  if (entry.scheme !== 'exact') return null;
+
+  const used = await eip3009NonceUsed(entry, asset);
+  if (used === null) return null;
+  if (!used) return correction(entry, 'expired', 0n);
+  // A consumed `exact` nonce can only have moved what was signed: the value and
+  // the recipient are in the signature, and the one other way to spend a nonce is
+  // `cancelAuthorization`, which only the authorizer can send and this never
+  // sends. So a server that answered 400 while its facilitator settled anyway
+  // does not get to leave the row in doubt, and the price is what moved.
+  const ceiling = parseBigInt(entry.authorized);
+  return ceiling === null ? null : correction(entry, 'verified', ceiling);
 }
 
 /**
@@ -264,19 +286,14 @@ async function transferredIn(entry: X402LogEntry, asset: UsdcAsset): Promise<big
 }
 
 /**
- * Whether the authorization expired without ever being spent.
+ * Whether the Permit2 nonce an `upto` authorization signed against is still
+ * unspent, so its deadline passed without moving anything.
  *
- * Two things have to be true: the deadline is behind us, and the nonce was
- * never consumed. The deadline alone proves nothing, since a settlement we
- * failed to find is indistinguishable from one that never happened.
- *
- * Only `upto` signs against Permit2, so only `upto` has a bitmap to read. An
- * `exact` row is left where it is, and costs the same as it did before this
- * function existed.
+ * The deadline alone proves nothing, since a settlement we failed to find is
+ * indistinguishable from one that never happened. An unreadable nonce and a node
+ * that will not answer both read as spent, which leaves the row at its ceiling.
  */
-async function authorizationDied(entry: X402LogEntry, chainId: number): Promise<boolean> {
-  if (entry.scheme !== 'upto' || !deadlinePassed(entry)) return false;
-
+async function permit2NonceFree(entry: X402LogEntry, chainId: number): Promise<boolean> {
   let nonce: bigint;
   try {
     nonce = BigInt(entry.nonce as string);
@@ -294,6 +311,31 @@ async function authorizationDied(entry: X402LogEntry, chainId: number): Promise<
     return ((word >> (nonce & 0xffn)) & 1n) === 0n;
   } catch {
     return false;
+  }
+}
+
+/**
+ * Whether the token has consumed this `exact` authorization, or `null` when the
+ * question could not be put: the nonce is not the 32 bytes EIP-3009 takes, or
+ * the node did not answer.
+ *
+ * Asks the registry's USDC and not the row's `asset`: the ledger is a file a
+ * user can edit, and a hand-written address would send this read to whatever
+ * contract it names.
+ */
+async function eip3009NonceUsed(entry: X402LogEntry, asset: UsdcAsset): Promise<boolean | null> {
+  const nonce = entry.nonce as string;
+  if (!/^0x[0-9a-f]{64}$/i.test(nonce)) return null;
+
+  try {
+    return await publicClientFor(asset.chainId).readContract({
+      address: asset.address,
+      abi: AUTHORIZATION_STATE_ABI,
+      functionName: 'authorizationState',
+      args: [entry.payer as `0x${string}`, nonce as `0x${string}`],
+    });
+  } catch {
+    return null;
   }
 }
 

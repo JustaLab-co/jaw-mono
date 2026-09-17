@@ -55,6 +55,12 @@ export function renderEntry(entry: X402LogEntry): string {
   // A failed settlement may still have been broadcast: the nonce is what makes
   // it reconcilable on chain, so surface it exactly where it is ambiguous.
   if (entry.status === 'failed' && entry.nonce) detail.push(`nonce ${sanitizeLine(entry.nonce, 80)}`);
+  // Reconciliation found the nonce consumed on a row the server reported as
+  // failed: the money left and the resource never came back. The one line here
+  // a user has to act on, so it is never left to the amount column to imply.
+  if (entry.status === 'failed' && entry.settlement === 'verified') {
+    detail.push('settled on chain; the resource never arrived');
+  }
   // Stored server text: an endpoint that got refused once would
   // otherwise repaint this line on every later `x402 log`.
   if (entry.reason) detail.push(sanitizeLine(entry.reason, 200));

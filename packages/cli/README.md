@@ -357,7 +357,7 @@ Runtime state lives in `~/.jaw/`, all of it mode 0600:
 | `x402-log.jsonl`      | The payment ledger. Append-only, and what the local spend caps count   |
 | `x402-payment.lock`   | Held while a payment runs, so two of them cannot spend the same budget |
 
-A payment row is not final when it is written. Under `upto` the amount is the server's claim until the chain is asked about the transaction it named, and `jaw x402 log` reports what the caps counted rather than what was claimed. A row the chain never answers, an attempt that failed before any receipt for instance, is given up on after a week: it keeps costing its ceiling, because nobody ever found out what moved, and it stops being asked about.
+A payment row is not final when it is written. Under `upto` the amount is the server's claim until the chain is asked about the transaction it named, and `jaw x402 log` reports what the caps counted rather than what was claimed. A failed attempt is asked about once its authorization expires, because the token records whether the nonce was ever consumed: one that moved nothing stops costing anything, and one the facilitator settled after answering that it had not is marked settled and keeps costing the price. A row the chain never answers, on a network this CLI can no longer reach for instance, is given up on after a week: it keeps costing its ceiling, because nobody ever found out what moved, and it stops being asked about.
 
 Two of those are worth knowing about. `keystore.json` is a key that signs payments without a passkey prompt, so treat it as one; what bounds it is the on-chain permission, not the file. And `x402-log.jsonl` is not a log: the spend caps are counted from it, so deleting it hands an agent back budget it already spent.
 

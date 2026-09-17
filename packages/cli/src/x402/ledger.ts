@@ -80,9 +80,11 @@ export interface X402LogEntry {
 
 /**
  * `unverified` is every signed attempt until the chain says otherwise.
- * `verified` means a transfer of that amount was found in the transaction the
- * receipt named. `expired` means the deadline passed with the nonce
- * unconsumed, so the authorization died without moving anything.
+ * `verified` means the chain confirmed the money: a transfer of that amount in
+ * the transaction the receipt named, or, on an `exact` attempt the server
+ * reported as failed, a nonce the token had consumed, which can only be the
+ * transfer the signature fixed. `expired` means the deadline passed with the
+ * nonce unconsumed, so the authorization died without moving anything.
  *
  * `abandoned` is the one that says nothing about money: the chain was asked for
  * long enough and never answered, so we stopped asking. The row keeps costing

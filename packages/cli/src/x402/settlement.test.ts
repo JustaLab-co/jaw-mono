@@ -197,7 +197,8 @@ describe('reconcileSettlements', () => {
   });
 
   it('rows nobody can ask about do not take a slot in the batch', async () => {
-    // Eight failed `exact` attempts: no hash to look up and no Permit2 bitmap.
+    // Eight failed `exact` attempts: no hash to look up, and their
+    // authorizations are still live, so no consumption flag settles them yet.
     for (let i = 0; i < 8; i++) {
       appendX402Log(
         underReported({
@@ -205,7 +206,7 @@ describe('reconcileSettlements', () => {
           status: 'failed',
           scheme: 'exact',
           txHash: undefined,
-          deadline: String(Math.floor(Date.now() / 1000) - 999),
+          deadline: String(Math.floor(Date.now() / 1000) + 999),
         })
       );
     }
@@ -346,5 +347,95 @@ describe('reconcileSettlements, rows nothing can ask about', () => {
     await reconcileSettlements(readX402Log());
 
     expect(figureFor('no-asset')).toBe(7n);
+  });
+});
+
+describe('reconcileSettlements, an exact attempt the server reported as failed', () => {
+  const NONCE = ('0x' + 'cd'.repeat(32)) as `0x${string}`;
+
+  /** A failed `exact` attempt: signed and sent, no receipt, so no hash to look up. */
+  const exactFailure = (over: Record<string, unknown> = {}) =>
+    underReported({
+      status: 'failed' as const,
+      scheme: 'exact',
+      amount: '1000',
+      authorized: '1000',
+      nonce: NONCE,
+      txHash: undefined,
+      deadline: String(Math.floor(Date.now() / 1000) - 60),
+      ...over,
+    });
+
+  it('frees the ceiling of an authorization the token never consumed', async () => {
+    appendX402Log(exactFailure());
+    readContract.mockResolvedValue(false);
+
+    await reconcileSettlements(readX402Log());
+
+    expect(readX402Log().find((e) => e.nonce === NONCE)?.settlement).toBe('expired');
+    expect(figureFor(NONCE)).toBe(0n);
+  });
+
+  it('records the payment the facilitator settled after answering that it had not', async () => {
+    appendX402Log(exactFailure({ reason: 'settlement failed with status 400' }));
+    // The nonce is spent: under `exact` that can only be the transfer the
+    // signature fixed, whatever the server answered.
+    readContract.mockResolvedValue(true);
+
+    await reconcileSettlements(readX402Log());
+
+    const row = readX402Log().find((e) => e.nonce === NONCE);
+    expect(row?.settlement).toBe('verified');
+    expect(row?.amount).toBe('1000');
+    expect(figureFor(NONCE)).toBe(1000n);
+  });
+
+  it('never reads a figure above what the signature authorized', async () => {
+    appendX402Log(exactFailure({ amount: '9999' }));
+    readContract.mockResolvedValue(true);
+
+    await reconcileSettlements(readX402Log());
+
+    expect(figureFor(NONCE)).toBe(1000n);
+  });
+
+  it('asks nothing while the authorization is still live', async () => {
+    appendX402Log(exactFailure({ deadline: String(Math.floor(Date.now() / 1000) + 600) }));
+
+    await reconcileSettlements(readX402Log());
+
+    expect(readContract).not.toHaveBeenCalled();
+    expect(figureFor(NONCE)).toBe(1000n);
+  });
+
+  it('keeps the ceiling when the node does not answer, and asks again next time', async () => {
+    appendX402Log(exactFailure());
+    readContract.mockRejectedValue(new Error('rpc down'));
+
+    await reconcileSettlements(readX402Log());
+    expect(readX402Log().find((e) => e.nonce === NONCE)?.settlement).toBe('unverified');
+    expect(figureFor(NONCE)).toBe(1000n);
+
+    readContract.mockResolvedValue(false);
+    await reconcileSettlements(readX402Log());
+    expect(figureFor(NONCE)).toBe(0n);
+  });
+
+  it('puts no question to the token about a nonce EIP-3009 could not hold', async () => {
+    appendX402Log(exactFailure({ nonce: 'hand-written' }));
+
+    await reconcileSettlements(readX402Log());
+
+    expect(readContract).not.toHaveBeenCalled();
+    expect(figureFor('hand-written')).toBe(1000n);
+  });
+
+  it('leaves a row from before the ledger carried a scheme where it is', async () => {
+    appendX402Log(exactFailure({ scheme: undefined }));
+
+    await reconcileSettlements(readX402Log());
+
+    expect(readContract).not.toHaveBeenCalled();
+    expect(figureFor(NONCE)).toBe(1000n);
   });
 });

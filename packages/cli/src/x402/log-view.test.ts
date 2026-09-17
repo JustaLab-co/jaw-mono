@@ -33,6 +33,21 @@ describe('renderEntry', () => {
     expect(renderEntry(entry({ status: 'failed', nonce: '0xdeadbeef' }))).toContain('nonce 0xdeadbeef');
   });
 
+  // The row the diagnosis exists for: the server answered that settlement failed
+  // and the facilitator settled anyway, so the money left with nothing to show.
+  it('says so when the chain settled a row the server reported as failed', () => {
+    const line = renderEntry(
+      entry({ status: 'failed', nonce: '0xdeadbeef', settlement: 'verified', authorized: '5000', amount: '5000' })
+    );
+    expect(line).toContain('settled on chain; the resource never arrived');
+    expect(line).toContain('0.005 USDC');
+  });
+
+  it('says nothing of the sort about an attempt that moved nothing', () => {
+    const line = renderEntry(entry({ status: 'failed', nonce: '0xdeadbeef', settlement: 'expired', amount: '0' }));
+    expect(line).not.toContain('settled on chain');
+  });
+
   it('does not clutter a settled payment with the nonce', () => {
     expect(renderEntry(entry({ nonce: '0xdeadbeef' }))).not.toContain('nonce');
   });
