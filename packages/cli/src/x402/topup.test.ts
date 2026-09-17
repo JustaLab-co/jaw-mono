@@ -634,6 +634,26 @@ describe('Permit2 approval for upto', () => {
     expect(outcome.amount).toBeUndefined();
   });
 
+  // Both userOps were charged to the payer here, and naming the refill alone
+  // sends the operator to raise a cap that is not what left it short.
+  test('names the approval too when both ran and the payer is still short', async () => {
+    const { executor, opts } = approving(0n);
+    let call = 0;
+
+    const outcome = await ensurePayerFunds(uptoRequirement('1000000'), PAYER, executor, {
+      ...opts,
+      // Nothing to start, so the refill runs, and the two fees leave it under.
+      balanceReader: async () => (++call === 1 ? 0n : 999_999n),
+    });
+
+    expect(outcome.ok).toBe(false);
+    expect(outcome.reason).toContain('after the refill and the Permit2 approval');
+    expect(outcome.reason).not.toContain('the cap allows');
+    expect(outcome.approvalBatchId).toBe('0xapproval1');
+    // The transfer landed, so the caps have to hear about it whatever happens next.
+    expect(outcome.amount).toBeDefined();
+  });
+
   test('warns about the approval rather than a refill when the balance cannot be re-read', async () => {
     const { executor, opts } = approving(0n);
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);

@@ -356,7 +356,10 @@ export async function ensurePayerFunds(
     permit2Allowance = granted.allowance;
   }
 
-  const short = await payerStillShort(asset, payerAddress, price, requirement.network, balance, opts, AFTER_REFILL);
+  // Two userOps when the approval ran here, and blaming the refill alone sends
+  // the operator to raise a cap that is not what left the payer short.
+  const charged = approvalBatchId ? AFTER_REFILL_AND_APPROVAL : AFTER_REFILL;
+  const short = await payerStillShort(asset, payerAddress, price, requirement.network, balance, opts, charged);
   if (short) return { ok: false, reason: short, amount: amount.toString(), batchId, approvalBatchId };
 
   return { ok: true, amount: amount.toString(), batchId, approvalBatchId, permit2Allowance };
@@ -403,6 +406,13 @@ const AFTER_REFILL: ChargedFor = {
   cause:
     'the fee it was charged for the refill came to more than the headroom left for it. Retry once the cap allows ' +
     'a larger one.',
+};
+
+const AFTER_REFILL_AND_APPROVAL: ChargedFor = {
+  moment: 'the refill and the Permit2 approval',
+  cause:
+    'the fees for those two came to more than the headroom left for them. Retry the payment: the approval is ' +
+    'granted now, so the next attempt pays for the refill alone.',
 };
 
 const AFTER_APPROVAL: ChargedFor = {
