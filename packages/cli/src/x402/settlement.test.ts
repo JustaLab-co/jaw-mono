@@ -40,9 +40,15 @@ const transferLog = (from: string, to: string, value: bigint, token = USDC) => (
   data: encodeAbiParameters([{ type: 'uint256' }], [value]),
 });
 
-/** A paid row that reported one base unit against a thousand-unit ceiling. */
+/**
+ * A paid row that reported one base unit against a thousand-unit ceiling.
+ *
+ * Written now, not on a fixed date: rows are given up on a week after `at`, so a
+ * literal turned the whole suite red once the clock passed it. The cases that
+ * need an old row pass their own `at`.
+ */
 const underReported = (over: Record<string, unknown> = {}) => ({
-  at: '2026-09-10T00:00:00.000Z',
+  at: new Date().toISOString(),
   url: 'https://api.example.com/x',
   payer: PAYER,
   status: 'paid' as const,
