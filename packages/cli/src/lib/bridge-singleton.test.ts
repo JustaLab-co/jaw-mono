@@ -2,7 +2,7 @@ import { describe, it, expect, beforeEach, vi } from 'vitest';
 
 import type { WSBridgeConfig } from './ws-bridge.js';
 
-const constructed: Array<{ config: WSBridgeConfig }> = [];
+const constructed: Array<{ config: WSBridgeConfig; connectTimeout?: number }> = [];
 
 /** What the browser filled in, set per test before `getBridge` runs. */
 let injectedApiKey: string | null = null;
@@ -196,6 +196,23 @@ describe('refreshWorkspaceApiKey', () => {
     await expect(refreshWorkspaceApiKey()).rejects.toThrow();
     // Nothing was constructed, so nothing could have opened a window.
     expect(constructed).toHaveLength(0);
+  });
+
+  /**
+   * Behind a payment holding the lock, with nobody being waited on. The default
+   * connect wait is sized for a person opening a window, and spending it here
+   * buys half a minute of silence for a 403 that was never about the key.
+   */
+  it('gives the paired browser a short wait, not the human-sized one', async () => {
+    injectedApiKey = 'new-key';
+    vi.mocked(loadConfig)
+      .mockReturnValueOnce({ workspaceApiKey: 'old-key' })
+      .mockReturnValue({ workspaceApiKey: 'new-key' });
+    const { refreshWorkspaceApiKey } = await import('./bridge-singleton.js');
+
+    await refreshWorkspaceApiKey();
+
+    expect(constructed[0].connectTimeout).toBeLessThanOrEqual(5_000);
   });
 
   it('answers with the key the browser handed over, and nothing when it is the same', async () => {

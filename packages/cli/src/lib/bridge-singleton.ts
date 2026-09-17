@@ -40,6 +40,13 @@ export interface BridgeOptions {
 }
 
 /**
+ * How long a caller that will not open a browser waits for the one already
+ * paired. Long enough for a round trip to the relay, short enough that a
+ * pairing that is gone is not mistaken for a slow one.
+ */
+const REUSE_PROBE_TIMEOUT_MS = 5_000;
+
+/**
  * Get or create a relay bridge connection.
  */
 export async function getBridge(options: BridgeOptions): Promise<WSBridge> {
@@ -233,6 +240,11 @@ export async function refreshWorkspaceApiKey(): Promise<string | undefined> {
     chainId: config.defaultChain,
     ens: config.ens,
     reuseOnly: true,
+    // Short, because nobody is being waited on: this asks a browser that is
+    // already paired whether it is still there, behind a payment holding the
+    // lock. The default is sized for a person opening a window, and spending it
+    // here buys half a minute of silence for a 403 that was never about the key.
+    connectTimeout: REUSE_PROBE_TIMEOUT_MS,
   });
   bridge.close();
   const after = loadConfig().workspaceApiKey;
