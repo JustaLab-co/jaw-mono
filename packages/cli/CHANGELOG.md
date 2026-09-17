@@ -1,3 +1,17 @@
+## 0.3.2 (2026-09-17)
+
+### 🩹 Fixes
+
+- **deps:** bump viem to 2.56.7, drop local arc/hyveChain definitions ([#343](https://github.com/JustaName-id/jaw-mono/pull/343))
+
+### 🧱 Updated Dependencies
+
+- Updated @jaw.id/core to 1.4.2
+
+### ❤️ Thank You
+
+- Ghadi @Ghadi8
+
 ## 0.3.1 (2026-09-16)
 
 ### 🧱 Updated Dependencies
