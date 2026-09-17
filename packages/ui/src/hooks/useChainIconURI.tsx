@@ -25,6 +25,11 @@ export const useChainIconURI = (chainId: number, apiKey?: string, size?: number)
       return;
     }
 
+    // The icon on screen belongs to the chain we were rendering before, and a
+    // mounted dialog can switch chain: drop it rather than keep it up through
+    // the lookup.
+    setIconURI(null);
+
     let isMounted = true;
 
     const fetchCapabilities = async () => {

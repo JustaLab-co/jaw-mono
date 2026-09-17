@@ -19,6 +19,7 @@ import { useChainIconURI } from './useChainIconURI';
 const capabilitiesMock = vi.mocked(handleGetCapabilitiesRequest);
 
 const ICON = 'https://icons.example/base.png';
+const OTHER_ICON = 'https://icons.example/optimism.png';
 
 function Probe({ chainId, apiKey }: { chainId: number; apiKey?: string }) {
   return useChainIconURI(chainId, apiKey, 24);
@@ -91,6 +92,27 @@ describe('useChainIconURI', () => {
     await mount(1, 'test-key');
 
     expect(container.querySelector('img')).toBeNull();
+  });
+
+  // The dialog stays mounted when the user switches chain, and the icon it is
+  // showing is the old one until the new lookup lands.
+  it('drops the previous chain icon while the next one loads', async () => {
+    capabilitiesMock.mockResolvedValue({ '0x1': { chainMetadata: { icon: ICON } } } as never);
+    await mount(1, 'test-key');
+    expect(container.querySelector('img')?.getAttribute('src')).toBe(ICON);
+
+    let resolveSecond: (value: unknown) => void = () => undefined;
+    capabilitiesMock.mockReturnValue(new Promise((resolve) => (resolveSecond = resolve)) as never);
+    await act(async () => {
+      root!.render(createElement(Probe, { chainId: 10, apiKey: 'test-key' }));
+    });
+
+    expect(container.querySelector('img')).toBeNull();
+
+    await act(async () => {
+      resolveSecond({ '0xa': { chainMetadata: { icon: OTHER_ICON } } });
+    });
+    expect(container.querySelector('img')?.getAttribute('src')).toBe(OTHER_ICON);
   });
 
   it('does not fetch without a chain', async () => {
