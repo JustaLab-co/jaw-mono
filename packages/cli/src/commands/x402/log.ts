@@ -2,7 +2,7 @@ import { Flags } from '@oclif/core';
 import { BaseCommand } from '../../base-command.js';
 import { readX402Log } from '../../x402/ledger.js';
 import { reconcileSettlements } from '../../x402/settlement.js';
-import { renderEntry, renderSummary } from '../../x402/log-view.js';
+import { renderEntry, renderSummary, machineEntry } from '../../x402/log-view.js';
 import type { OutputFormat } from '../../lib/types.js';
 
 /**
@@ -56,7 +56,7 @@ export default class X402Log extends BaseCommand {
     if (flags.limit !== undefined) entries = entries.slice(-flags.limit);
 
     if (format === 'json') {
-      this.outputResult(entries, format);
+      this.outputResult(entries.map(machineEntry), format);
       return;
     }
 

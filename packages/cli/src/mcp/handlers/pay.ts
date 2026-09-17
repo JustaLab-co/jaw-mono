@@ -4,6 +4,7 @@ import { mcpError, mcpResult, mcpPaymentResult } from '../helpers.js';
 import { loadConfig } from '../../lib/config.js';
 import { apiKeyFor } from '../../lib/api-key.js';
 import { Eip3009EoaPayer, sessionPayerAddress } from '../../x402/payer.js';
+import { machineEntry } from '../../x402/log-view.js';
 import { payAndFetch } from '../../x402/http.js';
 import { appendX402Log, compactX402Log, readX402Log } from '../../x402/ledger.js';
 import { withPaymentLock } from '../../lib/payment-lock.js';
@@ -195,22 +196,10 @@ export function registerPayTool(server: McpServer): void {
     },
     async (params: { limit?: number }) => {
       try {
-        // A checkpoint carries `status: 'paid'` so the spend sums count it with
-        // no branch of their own, and an agent handed that row reports a payment
-        // that never happened, to a host and a nonce it will not find. Said in
-        // the shape here, the way `x402 log` gives it its own line.
-        const entries = readX402Log(params.limit).map((entry) =>
-          entry.kind === 'checkpoint'
-            ? {
-                kind: 'checkpoint' as const,
-                at: entry.at,
-                amount: entry.amount,
-                network: entry.network,
-                folded: entry.folded ?? 0,
-                stands_in_for: `${entry.folded ?? 0} earlier payments, folded and moved to the archive`,
-              }
-            : entry
-        );
+        // Shared with `x402 log --output json`: both hand a row to something
+        // that reads it rather than to a person, and a checkpoint dressed as a
+        // payment misleads either one the same way.
+        const entries = readX402Log(params.limit).map(machineEntry);
         return mcpResult(entries);
       } catch (err) {
         return mcpError(err);

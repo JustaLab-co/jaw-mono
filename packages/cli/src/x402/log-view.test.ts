@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { renderEntry, renderSummary, hostOf, decimalsOf } from './log-view.js';
+import { renderEntry, renderSummary, hostOf, decimalsOf, machineEntry } from './log-view.js';
 import type { X402LogEntry } from './ledger.js';
 
 const entry = (o: Partial<X402LogEntry> = {}): X402LogEntry => ({
@@ -244,6 +244,26 @@ describe('log view of a compaction checkpoint', () => {
     expect(summary).toContain('1 paid');
     expect(summary).toContain('812 folded away');
     expect(summary).toContain('3.201 USDC out');
+  });
+
+  // The same row handed to something that reads rather than renders: a script
+  // counting `paid` rows or chasing a nonce is misled by the fields the sums
+  // need.
+  it('says what it is when it goes to a machine', () => {
+    const row = machineEntry(checkpoint) as Record<string, unknown>;
+
+    expect(row['kind']).toBe('checkpoint');
+    expect(row['status']).toBeUndefined();
+    expect(row['url']).toBeUndefined();
+    expect(row['nonce']).toBeUndefined();
+    expect(row['folded']).toBe(812);
+    expect(row['stands_in_for']).toContain('812 earlier payments');
+    expect(row['amount']).toBe('3200000');
+  });
+
+  it('hands a payment row over untouched', () => {
+    const paid = entry({ amount: '1000' });
+    expect(machineEntry(paid)).toBe(paid);
   });
 });
 

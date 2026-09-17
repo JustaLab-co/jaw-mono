@@ -22,6 +22,26 @@ export function hostOf(url: string): string {
   }
 }
 
+/**
+ * A ledger row in the shape a machine reads.
+ *
+ * A checkpoint carries `status: 'paid'` so the spend sums count it with no
+ * branch of their own, and handed over as it stands it reports a payment that
+ * never happened, to a host and a nonce nothing will find. Said here in the
+ * shape the human renderer gives it its own line for.
+ */
+export function machineEntry(entry: X402LogEntry): X402LogEntry | Record<string, unknown> {
+  if (entry.kind !== 'checkpoint') return entry;
+  return {
+    kind: 'checkpoint' as const,
+    at: entry.at,
+    amount: entry.amount,
+    network: entry.network,
+    folded: entry.folded ?? 0,
+    stands_in_for: `${entry.folded ?? 0} earlier payments, folded and moved to the archive`,
+  };
+}
+
 export function renderEntry(entry: X402LogEntry): string {
   // Everything here is read back from a file, so nothing is trusted for being
   // ours originally: a tampered ledger must not be able to paint a row either.
