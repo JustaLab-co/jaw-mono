@@ -123,12 +123,19 @@ export async function currentLimitUsageOnChain(
     const since = new Date(match.period.start * 1000).toISOString();
     const fromLedger = sumToppedUpSince(entries, scope, since);
     const metered = match.period.spend >= fromLedger;
+    // Null for an end the `Date` cannot hold, the way the ledger branch treats
+    // one it cannot state. Every reader checks for null and none for an invalid
+    // date, so an end kept here reaches `toISOString` and throws: on `x402
+    // status`, which is what someone runs when something is already wrong, and
+    // on the refusal `checkPolicy` builds, which would stop being a refusal and
+    // become a thrown error mid-payment.
+    const end = new Date(match.period.end * 1000);
     return {
       ...limit,
       spent: sumSpentSince(entries, scope, since),
       toppedUp: metered ? match.period.spend : fromLedger,
       startedAt: new Date(match.period.start * 1000),
-      endsAt: new Date(match.period.end * 1000),
+      endsAt: Number.isNaN(end.getTime()) ? null : end,
       source: metered ? 'chain' : 'ledger',
     };
   });

@@ -118,6 +118,20 @@ describe('currentLimitUsageOnChain', () => {
   });
 
   /**
+   * A permission whose period end is the contract's way of spelling "no end".
+   * Kept as an Invalid Date it passes every `endsAt === null` guard downstream
+   * and throws on `toISOString`, taking down `x402 status` and turning a policy
+   * refusal into an exception mid-payment.
+   */
+  it('reports no end for a period the Date cannot hold', async () => {
+    h.toppedUp = 0n;
+    h.onChain = { status: 'ok', start: CHAIN_WINDOW.start, end: 281_474_976_710_655, spend: 0n };
+
+    const [period] = await currentLimitUsageOnChain(LEDGER, POLICY, PAYER, SESSION, NOW);
+    expect(period.endsAt).toBeNull();
+  });
+
+  /**
    * The other direction, and the reason the two are combined rather than one
    * replacing the other: our own top-up is signed and not yet mined, so the
    * chain has not lost it yet and is about to.
