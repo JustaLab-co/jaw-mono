@@ -123,7 +123,6 @@ export async function handleGetCapabilitiesRequest(
         try {
             const result = (await fetchRPCRequest(requestArgs, rpcUrl)) as CapabilitiesResult;
             capabilitiesCache.set(cacheKey, { at: Date.now(), value: result });
-            capabilitiesFailures.delete(cacheKey);
             return result;
         } catch (error) {
             // The rejection propagates to every sharer, and the next caller within the
