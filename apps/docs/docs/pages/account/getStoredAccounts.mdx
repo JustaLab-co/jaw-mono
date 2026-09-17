@@ -7,16 +7,22 @@ Get all stored passkey accounts.
 ## Signature
 
 ```typescript
-static getStoredAccounts(apiKey: string): PasskeyAccount[]
+static getStoredAccounts(apiKey?: string, storage?: SyncStorage): PasskeyAccount[]
 ```
 
 ## Parameters
 
 ### apiKey
 
-Type: `string`
+Type: `string | undefined`
 
-API key for JAW services. Used to scope the storage lookup.
+API key for JAW services. This method only reads local storage, so the key is optional here.
+
+### storage
+
+Type: `SyncStorage | undefined`
+
+Optional custom storage. Defaults to `localStorage` in the browser and to an in-memory store elsewhere. Pass a persistent store in [React Native](/guides/react-native).
 
 ## Returns
 
@@ -45,7 +51,7 @@ interface PasskeyAccount {
 
 This is a synchronous method that retrieves all passkey accounts stored locally:
 
-1. Reads from localStorage
+1. Reads from the configured storage (`localStorage` by default)
 2. Returns all stored accounts regardless of authentication state
 3. Returns an empty array if no accounts are stored
 

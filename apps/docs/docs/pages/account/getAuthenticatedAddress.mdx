@@ -7,16 +7,22 @@ Get the authenticated account address without fully loading the account.
 ## Signature
 
 ```typescript
-static getAuthenticatedAddress(apiKey: string): Address | null
+static getAuthenticatedAddress(apiKey?: string, storage?: SyncStorage): Address | null
 ```
 
 ## Parameters
 
 ### apiKey
 
-Type: `string`
+Type: `string | undefined`
 
-API key for JAW services. Used to scope the storage lookup.
+API key for JAW services. This method only reads local storage, so the key is optional here.
+
+### storage
+
+Type: `SyncStorage | undefined`
+
+Optional custom storage. Defaults to `localStorage` in the browser and to an in-memory store elsewhere. Pass a persistent store in [React Native](/guides/react-native).
 
 ## Returns
 
@@ -26,7 +32,7 @@ API key for JAW services. Used to scope the storage lookup.
 
 This is a synchronous method that checks the authentication state stored locally:
 
-1. Checks localStorage for stored authentication state
+1. Checks the configured storage (`localStorage` by default) for stored authentication state
 2. Returns the address if found and valid
 3. Returns `null` if not authenticated
 

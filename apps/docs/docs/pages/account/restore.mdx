@@ -95,18 +95,22 @@ async function handleSignRequest(credentialId: string, publicKey: `0x${string}`)
 
 ## React Native Usage
 
-Pass `Passkey.get` from [`react-native-passkey`](https://github.com/f-23/react-native-passkey) as `nativeGetFn` and an explicit `rpId` in `config` so signing operations use the native passkey prompt. JAW handles all base64url ↔ ArrayBuffer conversion internally.
+Pass `Passkey.get` from [`react-native-passkey`](https://github.com/f-23/react-native-passkey) as `nativeGetFn` and an explicit `rpId` in `config` so signing operations use the native passkey prompt. JAW handles all base64url ↔ ArrayBuffer conversion internally. The cast bridges `react-native-passkey`'s literal string types to JAW's adapter type; the runtime shapes match.
+
+For the full setup (native modules, crypto polyfill, domain linking, and persistent storage), follow the [React Native guide](/guides/react-native).
 
 ```typescript
 import { Account } from '@jaw.id/core';
 import { Passkey } from 'react-native-passkey';
+import type { NativePasskeyGetFn } from '@jaw.id/core';
+import { storage } from './storage'; // your SyncStorage, see the React Native guide
 
 const account = await Account.restore(
   {
     chainId: 8453,
     apiKey: 'your-api-key',
     storage,
-    nativeGetFn: Passkey.get,
+    nativeGetFn: Passkey.get as NativePasskeyGetFn,
     rpId: 'myapp.com',
   },
   credentialId,

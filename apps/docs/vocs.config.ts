@@ -112,6 +112,7 @@ export default defineConfig({
           { text: 'Sign-In With Ethereum', link: '/guides/siwe' },
           { text: 'Subscription Payments', link: '/guides/subscription' },
           { text: 'Reown AppKit', link: '/guides/reown-appkit' },
+          { text: 'React Native (Expo)', link: '/guides/react-native' },
         ],
       },
       {
