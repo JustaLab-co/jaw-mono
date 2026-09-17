@@ -160,9 +160,10 @@ export default class X402Pay extends BaseCommand {
       return outcome;
     };
 
-    // Only a real payment takes the lock. A dry run spends nothing and writes
-    // nothing, so making it queue behind an agent mid-payment would be friction
-    // for no safety.
+    // Only a real payment takes the lock. A dry run signs and sends nothing, and
+    // the settlement corrections `openPaymentWindow` appends on its way are one
+    // idempotent line each, folded by nonce when the ledger is read, so making
+    // it queue behind an agent mid-payment would be friction for no safety.
     const result = flags.pay
       ? await withPaymentLock(run, {
           onWait: (pid) => this.warn(`Waiting for another payment to finish (pid ${pid})...`),
