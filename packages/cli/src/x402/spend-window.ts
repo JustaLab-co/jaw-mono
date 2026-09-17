@@ -7,6 +7,21 @@ import type { LimitUsage, X402Policy } from './policy.js';
 import type { SessionConfig } from '../lib/session-config.js';
 
 /**
+ * A period boundary as an instant, or null when the seconds it was given are
+ * past what `Date` can hold.
+ *
+ * `Number.isFinite` is not that test. `type(uint48).max`, which is what a
+ * permission granted with no end leaves in `end`, is finite and a thousand times
+ * past the range, so it survives the finite check and becomes an Invalid Date:
+ * non-null, so every `endsAt === null` guard downstream lets it through, and
+ * then `toISOString` throws on the report and inside a cap refusal.
+ */
+function statableInstant(seconds: number): Date | null {
+  const at = new Date(seconds * 1000);
+  return Number.isNaN(at.getTime()) ? null : at;
+}
+
+/**
  * What every limit on the payment token has already lost, in the window each of
  * them is currently in.
  *
@@ -47,13 +62,19 @@ export function currentLimitUsage(
       // counted and only stops the report claiming a reset date it cannot know.
       permissionEnd: session.expiry ?? Number.POSITIVE_INFINITY,
     });
-    const since = new Date(window.start * 1000).toISOString();
+    const startedAt = new Date(window.start * 1000);
+    // No `since` at all for a start the `Date` cannot hold: the sums then count
+    // every row, which overstates the window and so refuses early rather than
+    // overspending, and the Invalid Date is what `capWindowStarts` refuses the
+    // fold on. Taking `toISOString` of it instead would throw here, which is
+    // what made that guard unreachable.
+    const since = Number.isNaN(startedAt.getTime()) ? undefined : startedAt.toISOString();
     usage.push({
       ...limit,
       spent: sumSpentSince(entries, scope, since),
       toppedUp: sumToppedUpSince(entries, scope, since),
-      startedAt: new Date(window.start * 1000),
-      endsAt: Number.isFinite(window.end) ? new Date(window.end * 1000) : null,
+      startedAt,
+      endsAt: statableInstant(window.end),
       source: 'ledger',
     });
   }
@@ -120,22 +141,16 @@ export async function currentLimitUsageOnChain(
     });
     if (!match || match.period.status !== 'ok') return limit;
 
-    const since = new Date(match.period.start * 1000).toISOString();
+    const startedAt = new Date(match.period.start * 1000);
+    const since = Number.isNaN(startedAt.getTime()) ? undefined : startedAt.toISOString();
     const fromLedger = sumToppedUpSince(entries, scope, since);
     const metered = match.period.spend >= fromLedger;
-    // Null for an end the `Date` cannot hold, the way the ledger branch treats
-    // one it cannot state. Every reader checks for null and none for an invalid
-    // date, so an end kept here reaches `toISOString` and throws: on `x402
-    // status`, which is what someone runs when something is already wrong, and
-    // on the refusal `checkPolicy` builds, which would stop being a refusal and
-    // become a thrown error mid-payment.
-    const end = new Date(match.period.end * 1000);
     return {
       ...limit,
       spent: sumSpentSince(entries, scope, since),
       toppedUp: metered ? match.period.spend : fromLedger,
-      startedAt: new Date(match.period.start * 1000),
-      endsAt: Number.isNaN(end.getTime()) ? null : end,
+      startedAt,
+      endsAt: statableInstant(match.period.end),
       source: metered ? 'chain' : 'ledger',
     };
   });

@@ -103,6 +103,40 @@ describe('currentLimitUsage', () => {
   });
 });
 
+/**
+ * `Number.isFinite` passes `type(uint48).max`, which is what a permission
+ * granted with no end leaves in the window: finite, and a thousand times past
+ * what `Date` holds. Kept as an Invalid Date it passes every `endsAt === null`
+ * guard downstream and throws on `toISOString`.
+ */
+describe('a window the Date cannot hold', () => {
+  // `forever` is the case: its window ends where the permission does, so an
+  // expiry of `type(uint48).max` lands in `end` verbatim.
+  const FOREVER: X402Policy = {
+    perPeriod: [{ allowance: '5000000', unit: 'forever', multiplier: 1, anchor: ANCHOR.toISOString() }],
+  };
+
+  it('reports no end from the ledger branch, without throwing', async () => {
+    const [period] = currentLimitUsage(LEDGER, FOREVER, PAYER, { ...SESSION, expiry: 281_474_976_710_655 }, NOW);
+
+    expect(period.endsAt).toBeNull();
+  });
+
+  // Same rule on the way in: an unreadable start leaves the sums with no window
+  // to count over, and they count everything, which refuses early rather than
+  // overspending. The fold is refused on the same Date.
+  it('counts from no window at all when the start cannot be read', async () => {
+    h.onChain = { status: 'ok', start: 281_474_976_710_655, end: 281_474_976_710_655, spend: 0n };
+
+    const [period] = await currentLimitUsageOnChain(LEDGER, POLICY, PAYER, SESSION, NOW);
+
+    expect(Number.isNaN(period.startedAt.getTime())).toBe(true);
+    expect(capWindowStarts([period], SESSION.createdAt)).toBeUndefined();
+    // The sums were asked for every row, not for a window.
+    expect(h.scopes.length).toBeGreaterThan(0);
+  });
+});
+
 describe('currentLimitUsageOnChain', () => {
   /**
    * The case the review named: a pull the ledger never saw. Reporting the
