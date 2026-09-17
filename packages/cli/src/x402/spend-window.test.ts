@@ -21,17 +21,20 @@ const h = vi.hoisted(() => ({
   reads: 0,
   summed: [] as unknown[],
   scopes: [] as unknown[],
+  sinces: [] as unknown[],
 }));
 
 vi.mock('./ledger.js', () => ({
-  sumToppedUpSince: (entries: unknown, scope: unknown) => {
+  sumToppedUpSince: (entries: unknown, scope: unknown, since: unknown) => {
     h.summed.push(entries);
     h.scopes.push(scope);
+    h.sinces.push(since);
     return h.toppedUp;
   },
-  sumSpentSince: (entries: unknown, scope: unknown) => {
+  sumSpentSince: (entries: unknown, scope: unknown, since: unknown) => {
     h.summed.push(entries);
     h.scopes.push(scope);
+    h.sinces.push(since);
     return h.spent;
   },
 }));
@@ -79,6 +82,7 @@ beforeEach(() => {
   h.reads = 0;
   h.summed = [];
   h.scopes = [];
+  h.sinces = [];
 });
 
 describe('currentLimitUsage', () => {
@@ -132,8 +136,12 @@ describe('a window the Date cannot hold', () => {
 
     expect(Number.isNaN(period.startedAt.getTime())).toBe(true);
     expect(capWindowStarts([period], SESSION.createdAt)).toBeUndefined();
-    // The sums were asked for every row, not for a window.
-    expect(h.scopes.length).toBeGreaterThan(0);
+    // Every row, not a window: a `since` of 'Invalid Date' would compare as a
+    // string against the timestamps and drop every row, which reads as a cap
+    // nobody has touched.
+    // The ledger pass underneath ran with its own readable window, so what this
+    // pins is that the chain branch asked for every row rather than for one.
+    expect(h.sinces).toContain(undefined);
   });
 });
 

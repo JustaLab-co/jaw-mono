@@ -62,13 +62,11 @@ export function currentLimitUsage(
       // counted and only stops the report claiming a reset date it cannot know.
       permissionEnd: session.expiry ?? Number.POSITIVE_INFINITY,
     });
+    // Always readable here, unlike the chain's own start below: this one is the
+    // anchor, or the anchor plus whole periods up to `now`, and the anchor came
+    // through `Date.parse`.
     const startedAt = new Date(window.start * 1000);
-    // No `since` at all for a start the `Date` cannot hold: the sums then count
-    // every row, which overstates the window and so refuses early rather than
-    // overspending, and the Invalid Date is what `capWindowStarts` refuses the
-    // fold on. Taking `toISOString` of it instead would throw here, which is
-    // what made that guard unreachable.
-    const since = Number.isNaN(startedAt.getTime()) ? undefined : startedAt.toISOString();
+    const since = startedAt.toISOString();
     usage.push({
       ...limit,
       spent: sumSpentSince(entries, scope, since),
@@ -142,6 +140,11 @@ export async function currentLimitUsageOnChain(
     if (!match || match.period.status !== 'ok') return limit;
 
     const startedAt = new Date(match.period.start * 1000);
+    // No `since` at all for a start the `Date` cannot hold: the sums then count
+    // every row, which overstates the window and so refuses early rather than
+    // overspending, and the Invalid Date is what `capWindowStarts` refuses the
+    // fold on. Taking `toISOString` of it instead would throw here, which is
+    // what made that guard unreachable.
     const since = Number.isNaN(startedAt.getTime()) ? undefined : startedAt.toISOString();
     const fromLedger = sumToppedUpSince(entries, scope, since);
     const metered = match.period.spend >= fromLedger;
