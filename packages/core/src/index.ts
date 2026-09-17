@@ -127,7 +127,6 @@ export * from './utils/index.js';
 
 /** Store exports **/
 export { type Chain, type FeeToken, type FeeTokenCapability } from './store/index.js';
-export { setDappOrigin } from './dappOrigin.js';
 
 /** Analytics exports **/
 export {
