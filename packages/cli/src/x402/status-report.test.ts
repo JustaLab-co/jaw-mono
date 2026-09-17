@@ -170,14 +170,16 @@ describe('diagnose', () => {
       sessionCap: null,
       periodCap: 5_000_000n,
       periodSpent: 5_000_000n,
-      periodLabel: 'day',
+      periodLabel: 'this day',
     });
     expect(problems).toHaveLength(1);
     expect(problems[0]).toMatch(/granted allowance for this day is used up/i);
   });
 
   it('stays quiet while the period allowance still has room', () => {
-    expect(diagnose({ ...healthy, periodCap: 5_000_000n, periodSpent: 1_000_000n, periodLabel: 'day' })).toEqual([]);
+    expect(diagnose({ ...healthy, periodCap: 5_000_000n, periodSpent: 1_000_000n, periodLabel: 'this day' })).toEqual(
+      []
+    );
   });
 
   /**
@@ -186,7 +188,7 @@ describe('diagnose', () => {
    * Reported ready, it sends an agent to a command that cannot pay.
    */
   it('flags a binding allowance it cannot read', () => {
-    const problems = diagnose({ ...healthy, periodCap: null, periodSpent: null, periodLabel: 'day' });
+    const problems = diagnose({ ...healthy, periodCap: null, periodSpent: null, periodLabel: 'this day' });
     expect(problems).toHaveLength(1);
     expect(problems[0]).toMatch(/granted allowance for this day cannot be read/i);
   });
@@ -197,7 +199,7 @@ describe('diagnose', () => {
       spent: 10_000_000n,
       periodCap: 5_000_000n,
       periodSpent: 5_000_000n,
-      periodLabel: 'day',
+      periodLabel: 'this day',
     });
     expect(problems).toHaveLength(2);
     expect(problems[0]).toMatch(/granted allowance/i);

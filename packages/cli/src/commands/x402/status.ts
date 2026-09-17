@@ -14,7 +14,7 @@ import { readX402Log, sumSpentSince, checkpointFigureReadable } from '../../x402
 import { reconcileSettlements } from '../../x402/settlement.js';
 import { resolveSessionX402Policy, sameLimit, tightestLimit } from '../../x402/policy.js';
 import { currentLimitUsageOnChain } from '../../x402/spend-window.js';
-import { describePeriod } from '../../x402/period.js';
+import { describePeriodPhrase } from '../../x402/period.js';
 import { parseBigInt, parseNonNegativeBigInt } from '../../x402/amount.js';
 import { USDC_BY_NETWORK } from '../../x402/asset-registry.js';
 import { gasReserve } from '../../x402/gas-reserve.js';
@@ -198,7 +198,10 @@ export default class X402Status extends BaseCommand {
       // Null, not the zero an unmeasured limit carries: `diagnose` compares it
       // against the cap, and a figure nobody read is not a measurement of zero.
       periodSpent: tightest && windowKnown(tightest.startedAt) ? tightest.toppedUp : null,
-      periodLabel: tightest ? describePeriod(tightest.unit, tightest.multiplier) : null,
+      periodLabel: tightest ? describePeriodPhrase(tightest.unit, tightest.multiplier) : null,
+      // A cap over the whole permission has no end of window to wait for, so the
+      // advice must not send someone to wait for one.
+      periodResets: tightest ? tightest.unit !== 'forever' : undefined,
       outdated: isLegacySession(session),
       // Same units as the formatted balances. Exact in a double: the reserve
       // is a tenth of a token, six decimals at most.
@@ -279,8 +282,8 @@ export default class X402Status extends BaseCommand {
       const window = windowKnown(limit.startedAt) ? resets : ' (usage unknown)';
       const used = windowKnown(limit.startedAt) ? `${floor}${formatUsdc(limit.toppedUp.toString(), decimals)}` : '?';
       this.log(
-        `          ${used} of ${formatUsdc(limit.allowance, decimals)} used this ` +
-          `${describePeriod(limit.unit, limit.multiplier)}${window}`
+        `          ${used} of ${formatUsdc(limit.allowance, decimals)} used ` +
+          `${describePeriodPhrase(limit.unit, limit.multiplier)}${window}`
       );
     }
     if (limits.length > 1) {

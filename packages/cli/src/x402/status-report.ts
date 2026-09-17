@@ -64,6 +64,8 @@ export interface StatusFacts {
   periodSpent?: bigint | null;
   /** How the window reads in a sentence, e.g. "day" or "2 weeks". */
   periodLabel?: string | null;
+  /** False for a cap over the whole permission, which never comes back on its own. */
+  periodResets?: boolean;
   /**
    * The gas reserve refills leave in the payer, in the same formatted units as
    * the balances. A payer holding no more than this is holding what the CLI put
@@ -161,8 +163,10 @@ export function diagnose(facts: StatusFacts): string[] {
   // own rather than needing a config change.
   if (facts.periodCap != null && facts.periodSpent != null && facts.periodSpent >= facts.periodCap) {
     problems.push(
-      `The granted allowance for this ${facts.periodLabel ?? 'period'} is used up. It resets at the end of ` +
-        'the window, or grant a new permission with `jaw session setup --x402`.'
+      `The granted allowance for ${facts.periodLabel ?? 'this period'} is used up. ` +
+        (facts.periodResets === false
+          ? 'It does not reset: grant a new permission with `jaw session setup --x402`.'
+          : 'It resets at the end of the window, or grant a new permission with `jaw session setup --x402`.')
     );
   }
 
@@ -173,7 +177,7 @@ export function diagnose(facts: StatusFacts): string[] {
   // not is a limit that binds and whose figure nobody could parse.
   if (facts.periodLabel != null && facts.periodCap === null) {
     problems.push(
-      `The granted allowance for this ${facts.periodLabel} cannot be read, so every payment is refused. ` +
+      `The granted allowance for ${facts.periodLabel} cannot be read, so every payment is refused. ` +
         'Run `jaw session setup --x402` to grant a new permission.'
     );
   }

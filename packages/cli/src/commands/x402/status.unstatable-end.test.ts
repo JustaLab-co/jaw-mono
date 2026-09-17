@@ -31,7 +31,7 @@ const h = vi.hoisted(() => {
         end: Math.floor(Date.now() / 1000) + 6 * 86400,
         salt: '0xabc',
         calls: [{ target: USDC, selector: '0xa9059cbb' }],
-        spends: [{ token: USDC, allowance: '5000000', unit: 'day', multiplier: 1 }],
+        spends: [{ token: USDC, allowance: '5000000', unit: 'forever', multiplier: 1 }],
       },
     },
   };
@@ -62,7 +62,9 @@ vi.mock('../../x402/spend-window.js', () => ({
   currentLimitUsageOnChain: async () => [
     {
       allowance: '5000000',
-      unit: 'day',
+      // `forever` is the only unit whose window ends where the permission does,
+      // so it is the only one that can reach this with no end to name.
+      unit: 'forever',
       multiplier: 1,
       anchor: new Date().toISOString(),
       spent: 5_000_000n,
@@ -101,7 +103,7 @@ describe('jaw x402 status, a limit whose window has no end to name', () => {
     const report = JSON.parse((await runStatus(['--output', 'json'])).join('\n'));
 
     expect(report.policy.perPeriod).toEqual([
-      { allowance: '5000000', unit: 'day', multiplier: 1, used: '5000000', usedFrom: 'chain', resetsAt: null },
+      { allowance: '5000000', unit: 'forever', multiplier: 1, used: '5000000', usedFrom: 'chain', resetsAt: null },
     ]);
   });
 
@@ -111,13 +113,15 @@ describe('jaw x402 status, a limit whose window has no end to name', () => {
     const report = JSON.parse((await runStatus(['--output', 'json'])).join('\n'));
 
     expect(report.ready).toBe(false);
-    expect(report.problems.join(' ')).toMatch(/allowance for this day is used up/);
+    expect(report.problems.join(' ')).toMatch(/allowance for the whole permission is used up/);
+    // It never resets, so nothing may tell the reader to wait for a window.
+    expect(report.problems.join(' ')).not.toMatch(/resets at the end/);
   });
 
   it('prints the figure with no reset date instead of a question mark', async () => {
     const lines = (await runStatus([])).join('\n');
 
-    expect(lines).toMatch(/5 USDC of 5 USDC used this day/);
+    expect(lines).toMatch(/5 USDC of 5 USDC used the whole permission/);
     expect(lines).not.toMatch(/usage unknown/);
   });
 });
