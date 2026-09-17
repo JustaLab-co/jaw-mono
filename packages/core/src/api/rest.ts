@@ -3,6 +3,8 @@ import { Routes, ROUTES } from './routes/index.js';
 import { store } from '../store/index.js';
 import qs from 'qs';
 
+const OUR_ORIGINS = [getBaseUrl(), getBaseUrl(true)].map((url) => new URL(url).origin);
+
 /**
  * Whether a url points at a backend of ours: the wallet API or staging.
  *
@@ -11,8 +13,7 @@ import qs from 'qs';
  */
 function isOurHost(serverUrl: string): boolean {
     try {
-        const { origin } = new URL(serverUrl);
-        return origin === new URL(getBaseUrl()).origin || origin === new URL(getBaseUrl(true)).origin;
+        return OUR_ORIGINS.includes(new URL(serverUrl).origin);
     } catch {
         return false;
     }
