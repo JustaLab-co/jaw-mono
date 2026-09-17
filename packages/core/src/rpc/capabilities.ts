@@ -26,13 +26,25 @@ export type CapabilitiesResult = Record<`0x${string}`, Record<string, unknown>>;
  */
 const CAPABILITIES_TTL_MS = 60_000;
 
+/**
+ * How long a failed lookup keeps the next caller from repeating it.
+ *
+ * Short, because most failures here are transient and pinning one for a minute would
+ * leave a dialog without its fee row for that long. Not zero, because the keyless
+ * path fails persistently when the origin is not registered: the icon hook asks per
+ * chain, so a chain picker re-fires one refused request per chain on every mount.
+ */
+const CAPABILITIES_FAILURE_TTL_MS = 30_000;
+
 const capabilitiesCache = new Map<string, { at: number; value: CapabilitiesResult }>();
+const capabilitiesFailures = new Map<string, { at: number; error: unknown }>();
 /** Requests in flight, so concurrent callers share one fetch instead of racing duplicates. */
 const capabilitiesInflight = new Map<string, Promise<CapabilitiesResult>>();
 
 /** Drop every cached capabilities response. Exposed for tests and for callers that need a forced refresh. */
 export function clearCapabilitiesCache(): void {
     capabilitiesCache.clear();
+    capabilitiesFailures.clear();
     capabilitiesInflight.clear();
 }
 
@@ -49,7 +61,9 @@ export function clearCapabilitiesCache(): void {
  * Responses are memoized per (api key, effective params) for `CAPABILITIES_TTL_MS`,
  * and concurrent callers for the same key share a single request — the dialogs ask for
  * this on mount from several places at once, and it gates the fee-token chain.
- * Failures are never cached, and every caller gets its own copy of the response.
+ * A failure is held for `CAPABILITIES_FAILURE_TTL_MS` and rethrown, so a persistent
+ * refusal is asked about once per window instead of once per mount. Every caller gets
+ * its own copy of the response.
  *
  * @param request - The wallet_getCapabilities request
  * @param apiKey - API key for authentication, if the caller has one
@@ -99,15 +113,24 @@ export async function handleGetCapabilitiesRequest(
         return structuredClone(cached.value);
     }
 
+    const failed = capabilitiesFailures.get(cacheKey);
+    if (failed && Date.now() - failed.at < CAPABILITIES_FAILURE_TTL_MS) throw failed.error;
+
     const inflight = capabilitiesInflight.get(cacheKey);
     if (inflight) return structuredClone(await inflight);
 
     const pending = (async () => {
-        const result = (await fetchRPCRequest(requestArgs, rpcUrl)) as CapabilitiesResult;
-        // Only a fulfilled response is cached; a rejection propagates to every sharer
-        // and leaves the next caller free to retry.
-        capabilitiesCache.set(cacheKey, { at: Date.now(), value: result });
-        return result;
+        try {
+            const result = (await fetchRPCRequest(requestArgs, rpcUrl)) as CapabilitiesResult;
+            capabilitiesCache.set(cacheKey, { at: Date.now(), value: result });
+            capabilitiesFailures.delete(cacheKey);
+            return result;
+        } catch (error) {
+            // The rejection propagates to every sharer, and the next caller within the
+            // window gets it back without a second request.
+            capabilitiesFailures.set(cacheKey, { at: Date.now(), error });
+            throw error;
+        }
     })();
 
     capabilitiesInflight.set(cacheKey, pending);

@@ -91,7 +91,21 @@ describe('handleGetCapabilitiesRequest caching', () => {
         expect(fetchSpy).toHaveBeenCalledTimes(2);
     });
 
-    it('does not cache failures, so the next caller retries', async () => {
+    // Failing on an unregistered origin is persistent, and the icon hook asks per
+    // chain: without this, a chain picker re-fires one refused request per chain on
+    // every mount.
+    it('holds a failure for its window instead of asking again', async () => {
+        const fetchSpy = vi.fn(async () => {
+            throw new Error('network down');
+        });
+        vi.stubGlobal('fetch', fetchSpy);
+
+        await expect(handleGetCapabilitiesRequest(request, 'key', true)).rejects.toThrow('network down');
+        await expect(handleGetCapabilitiesRequest(request, 'key', true)).rejects.toThrow('network down');
+        expect(fetchSpy).toHaveBeenCalledTimes(1);
+    });
+
+    it('retries once the failure goes stale', async () => {
         let calls = 0;
         const fetchSpy = vi.fn(async () => {
             calls++;
@@ -104,6 +118,10 @@ describe('handleGetCapabilitiesRequest caching', () => {
         vi.stubGlobal('fetch', fetchSpy);
 
         await expect(handleGetCapabilitiesRequest(request, 'key', true)).rejects.toThrow('network down');
+        // The failure window is 30s; jump past it.
+        const realNow = Date.now;
+        vi.spyOn(Date, 'now').mockImplementation(() => realNow() + 31_000);
+
         await expect(handleGetCapabilitiesRequest(request, 'key', true)).resolves.toEqual(CAPS);
         expect(fetchSpy).toHaveBeenCalledTimes(2);
     });
