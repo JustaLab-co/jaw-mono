@@ -3,7 +3,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { restCall } from './rest.js';
 import { notifyReceiptReceived } from '../analytics/receiptNotification.js';
 import { setDappOrigin } from '../dappOrigin.js';
-import { JAW_PROXY_URL } from '../constants.js';
+import { JAW_BASE_URL, JAW_PROXY_URL } from '../constants.js';
 
 const request = vi.fn();
 
@@ -114,6 +114,25 @@ describe('restCall and the calling dApp', () => {
             undefined,
             undefined,
             'https://passkeys.dapp.example'
+        );
+
+        expect(headersSent()).toEqual({});
+    });
+
+    // `https://api.justaname.id.evil.com` starts with our base url and is a host of
+    // theirs, so the match is on the origin.
+    it('sends no dApp header to a host that only looks like ours', async () => {
+        setDappOrigin('https://dapp.example');
+        request.mockResolvedValue({ data: { result: { data: {} } } });
+
+        await restCall(
+            'LOOKUP_PASSKEYS',
+            'GET',
+            { credentialIds: ['abc'] },
+            undefined,
+            undefined,
+            undefined,
+            `${JAW_BASE_URL}.evil.com/wallet/v2/passkeys`
         );
 
         expect(headersSent()).toEqual({});

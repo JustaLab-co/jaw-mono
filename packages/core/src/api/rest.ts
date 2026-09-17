@@ -4,6 +4,21 @@ import { store } from '../store/index.js';
 import qs from 'qs';
 
 /**
+ * Whether a url points at a backend of ours: the wallet API or staging.
+ *
+ * Compared by origin, not by prefix: `https://api.justaname.id.evil.com` starts with
+ * ours and is somebody else's host.
+ */
+function isOurHost(serverUrl: string): boolean {
+    try {
+        const { origin } = new URL(serverUrl);
+        return origin === new URL(getBaseUrl()).origin || origin === new URL(getBaseUrl(true)).origin;
+    } catch {
+        return false;
+    }
+}
+
+/**
  * Makes a REST call to the Backend API.
  * @typeparam T - The type of the route.
  * @param route - The route of the API.
@@ -53,7 +68,7 @@ export const restCall = <
     // API, staging. Analytics lives on the wallet API, and a keyless caller has no
     // key there for its workspace to be credited with. The one url that may belong
     // to somebody else is a `serverUrl` an app-specific dApp points at its own server.
-    const serverIsOurs = !serverUrl || serverUrl.startsWith(getBaseUrl()) || serverUrl.startsWith(getBaseUrl(true));
+    const serverIsOurs = !serverUrl || isOurHost(serverUrl);
     const dappOrigin = serverIsOurs ? store.config.get().dappOrigin : undefined;
 
     return controlledAxiosPromise<ROUTES[T]['response']>(
