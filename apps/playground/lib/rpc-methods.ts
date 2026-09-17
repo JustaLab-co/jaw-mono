@@ -822,7 +822,8 @@ console.log('Connected accounts:', result.accounts);`;
         name: 'chains',
         type: 'json',
         label: 'Chains (JSON array)',
-        description: 'Decimal chain IDs, primary first — that is the one the QR pins when no Chain is selected above.',
+        description:
+          'Decimal chain IDs, primary first — that is the one the QR pins when no Chain is selected above. Pick a Chain above only from this list: the wallet rejects a chainId outside it with -32602.',
         required: false,
         defaultValue: DEPOSIT_CHAINS_EXAMPLE,
         showWhen: { param: 'narrowChains', value: 'true' },
