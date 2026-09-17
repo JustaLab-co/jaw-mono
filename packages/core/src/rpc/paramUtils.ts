@@ -127,7 +127,7 @@ export function optionalHexData(value: unknown, method: string, field: string): 
  * value straight into a `-32602` message can replace that typed RPC error with
  * an untyped `TypeError` — the very failure the message exists to describe.
  */
-function describeValue(value: unknown): string {
+export function describeValue(value: unknown): string {
     if (typeof value === 'bigint') return `${value}n`;
     try {
         return JSON.stringify(value) ?? String(value);

@@ -105,6 +105,18 @@ describe('normalizeSendCallsParams', () => {
         expect(message).toContain('2.0.0');
     });
 
+    // The rejected version was echoed through a bare `JSON.stringify`, which
+    // raises on a circular object, so the -32602 message threw on the way to
+    // being built and the dapp got an untyped TypeError instead.
+    it('rejects an unserializable version with -32602 rather than a TypeError', () => {
+        const circular: Record<string, unknown> = {};
+        circular.self = circular;
+
+        const message = expectInvalidParams(() => normalizeSendCallsParams([{ ...viemV2Params, version: circular }]));
+
+        expect(message).toContain('[object Object]');
+    });
+
     it('rejects a missing params object with -32602', () => {
         expectInvalidParams(() => normalizeSendCallsParams([]));
         expectInvalidParams(() => normalizeSendCallsParams(undefined));
