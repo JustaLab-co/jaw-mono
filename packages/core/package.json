@@ -19,9 +19,7 @@
     "./internal": {
       "@jaw-mono/source": "./src/internal.ts",
       "types": "./dist/internal.d.ts",
-      "import": "./dist/internal.js",
-      "require": "./dist/cjs/internal.cjs",
-      "default": "./dist/internal.js"
+      "import": "./dist/internal.js"
     }
   },
   "repository": {
