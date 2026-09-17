@@ -196,6 +196,37 @@ describe('openPaymentWindow', () => {
     });
   });
 
+  // The refill pulls from the owner, so its balance is the other bound on the
+  // amount, beside the caps. Without the address the funder sizes against the
+  // caps alone and sends a transfer the account cannot cover.
+  it('hands the funder the account the permission draws from', async () => {
+    const window = await openPaymentWindow({
+      session,
+      policy: policy(),
+      payerAddress: PAYER,
+      apiKey: 'key',
+      topUpFloat: undefined,
+    });
+
+    await window.ensureFunds?.(requirement, PAYER);
+
+    expect((h.topUps[0] as { opts: { funderAddress?: string } }).opts.funderAddress).toBe(session.ownerAddress);
+  });
+
+  it('leaves the funder without an owner it could not use anyway', async () => {
+    const window = await openPaymentWindow({
+      session: { ...session, ownerAddress: 'not-an-address' },
+      policy: policy(),
+      payerAddress: PAYER,
+      apiKey: 'key',
+      topUpFloat: undefined,
+    });
+
+    await window.ensureFunds?.(requirement, PAYER);
+
+    expect((h.topUps[0] as { opts: { funderAddress?: string } }).opts.funderAddress).toBeUndefined();
+  });
+
   it('degrades a hand-edited float to no float instead of throwing', async () => {
     const window = await openPaymentWindow({
       session,

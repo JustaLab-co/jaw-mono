@@ -83,6 +83,14 @@ export interface TopUpOptions {
    * transfer that would fit is one the payment cannot be made out of.
    */
   maxTopUp?: bigint;
+  /**
+   * The account the permission draws from. When set, a refill is never asked
+   * for more than it holds: the transfer would revert inside the userOp, and
+   * what the user sees then is core failing to size the paymaster approval,
+   * which names the token and the chain and sends them to the wrong account.
+   * Absent, the refill is sized against the caps alone, as it was.
+   */
+  funderAddress?: `0x${string}`;
   /** Poll interval for the call status, ms. */
   pollMs?: number;
   /** Give up waiting for confirmation after this long, ms. */
@@ -263,6 +271,30 @@ export async function ensurePayerFunds(
   // fee, so what this cuts is float and never the payment.
   if (opts.maxTopUp !== undefined && amount > opts.maxTopUp) {
     amount = opts.maxTopUp;
+  }
+
+  // The same two branches the caps get, against the funds behind the
+  // permission: refuse while nothing has moved when they cannot cover the
+  // payment and the fee for the refill itself, and otherwise cut the reserve
+  // down to what is there. Read here rather than beside the payer balance
+  // above, so a payment the payer can already cover asks nothing.
+  if (opts.funderAddress) {
+    const funder = opts.funderAddress;
+    const funds = read ? await read(asset, funder) : BigInt((await usdcBalance(requirement.network, funder)).raw);
+    if (funds < shortfall + headroom) {
+      return {
+        ok: false,
+        reason:
+          `the account behind the permission, ${funder}, holds ${funds} base units and this payment needs ` +
+          `${shortfall + headroom} topped up: ${shortfall} short, plus ${headroom} of headroom for the fee the ` +
+          'payer is charged for the refill itself. Send USDC to that account.',
+      };
+    }
+    // Short of the reserve, pull what this payment needs and leave the rest
+    // where it is. Cutting to the balance instead would move the whole account
+    // into a key on this machine, which is what the permission exists to avoid,
+    // and the reserve is float: float is what a bound cuts.
+    if (amount > funds) amount = shortfall + headroom;
   }
 
   const data = encodeFunctionData({

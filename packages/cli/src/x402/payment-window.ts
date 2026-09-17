@@ -1,4 +1,5 @@
 import { parseNonNegativeBigInt } from './amount.js';
+import { isPayableAddress } from './address.js';
 import { readX402Log, sumSpentSince } from './ledger.js';
 import { reconcileSettlements } from './settlement.js';
 import { currentLimitUsageOnChain } from './spend-window.js';
@@ -91,8 +92,17 @@ export async function openPaymentWindow({
   // width of the caps, so a float pre-fund is clamped too and not just the
   // payment itself.
   const maxTopUp = topUpCeiling(policy, { periodUsage, spentThisSession });
+  // Only when the file's spelling of it is one a contract call can carry: the
+  // session file is editable, and an unreadable owner leaves the refill sized
+  // against the caps alone rather than failing the payment over a typo.
+  const funderAddress = isPayableAddress(session.ownerAddress) ? session.ownerAddress : undefined;
   const ensureFunds: EnsureFunds = (requirement, payer) =>
-    ensurePayerFunds(requirement, payer, bridge, { floatTarget, maxTopUp, sessionChainId: session.chainId });
+    ensurePayerFunds(requirement, payer, bridge, {
+      floatTarget,
+      maxTopUp,
+      funderAddress,
+      sessionChainId: session.chainId,
+    });
 
   return { spentThisSession, periodUsage, ensureFunds };
 }

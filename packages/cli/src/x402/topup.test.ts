@@ -1,6 +1,7 @@
 import { describe, expect, test, vi } from 'vitest';
 import { decodeFunctionData, erc20Abi } from 'viem';
 import { ensurePayerFunds, type TopUpExecutor } from './topup.js';
+import type { BalanceReader } from './balance.js';
 import type { X402PaymentRequirement } from './types.js';
 
 const PAYER = '0x1111111111111111111111111111111111111111' as const;
@@ -789,4 +790,92 @@ test('Given the post-refill read fails, When it proceeds anyway, Then it says th
   expect(out.ok).toBe(true);
   expect(warn).toHaveBeenCalledWith(expect.stringContaining('Could not re-read the payer balance'));
   warn.mockRestore();
+});
+
+describe('ensurePayerFunds against the funds behind the permission', () => {
+  const FUNDER = '0x3333333333333333333333333333333333333333' as const;
+
+  /**
+   * A chain where the payer and the account the permission draws from hold
+   * different balances, which `payerHolding` alone cannot express: its reader
+   * answers the same figure whoever is asked about.
+   */
+  function fakeChainWithFunder(payerInitial: bigint, funderHolds: bigint) {
+    const wired = fakeChain(payerInitial);
+    const asked: string[] = [];
+    const balanceReader: BalanceReader = async (_asset, owner) => {
+      asked.push(owner.toLowerCase());
+      return owner.toLowerCase() === FUNDER.toLowerCase() ? funderHolds : wired.balanceReader();
+    };
+    return { ...wired, balanceReader, asked };
+  }
+
+  const amountSent = (requests: Array<{ method: string; params: unknown }>) => {
+    const send = requests.find((r) => r.method === 'wallet_sendCalls');
+    const call = (send?.params as Array<{ calls: Array<{ data: `0x${string}` }> }>)[0].calls[0];
+    const decoded = decodeFunctionData({ abi: erc20Abi, data: call.data });
+    return decoded.args[1];
+  };
+
+  // The refill used to be sized against the caps alone, so a short account sent
+  // a transfer that reverted inside the userOp, and the error the user got was
+  // core failing to size the paymaster approval for a token on a chain.
+  test('Given the account cannot cover the payment and the fee, When ensuring funds, Then it refuses with nothing sent', async () => {
+    // 0.75 short plus a cent of fee is 760000, and the account holds less.
+    const { executor, requests, balanceReader } = fakeChainWithFunder(250_000n, 700_000n);
+
+    const out = await ensurePayerFunds(requirement('1000000'), PAYER, executor, {
+      balanceReader,
+      funderAddress: FUNDER,
+      ...instantly,
+    });
+
+    expect(out.ok).toBe(false);
+    expect(out.reason).toContain(FUNDER);
+    expect(out.reason).toContain('700000');
+    expect(out.reason).toContain('760000');
+    expect(requests).toHaveLength(0);
+  });
+
+  test('Given the account covers the payment but not the reserve, When ensuring funds, Then it pulls what the payment needs and leaves the rest', async () => {
+    // The reserve asks for 850000 and the account holds 800000. Pulling all of
+    // it would empty the account into the session key; 760000 is the payment
+    // and the fee for the refill that carries it.
+    const { executor, requests, balanceReader } = fakeChainWithFunder(250_000n, 800_000n);
+
+    const out = await ensurePayerFunds(requirement('1000000'), PAYER, executor, {
+      balanceReader,
+      funderAddress: FUNDER,
+      ...instantly,
+    });
+
+    expect(out.ok).toBe(true);
+    expect(out.amount).toBe('760000');
+    expect(amountSent(requests)).toBe(760_000n);
+  });
+
+  test('Given the payer already covers the price, When ensuring funds, Then the account is never asked about', async () => {
+    const { executor, balanceReader, asked } = fakeChainWithFunder(2_000_000n, 0n);
+
+    const out = await ensurePayerFunds(requirement('1000000'), PAYER, executor, {
+      balanceReader,
+      funderAddress: FUNDER,
+      ...instantly,
+    });
+
+    expect(out).toEqual({ ok: true, skipped: true });
+    expect(asked).not.toContain(FUNDER.toLowerCase());
+  });
+
+  test('Given no account to read, When ensuring funds, Then the refill is sized against the caps as before', async () => {
+    const { executor, requests, balanceReader } = fakeChainWithFunder(250_000n, 0n);
+
+    const out = await ensurePayerFunds(requirement('1000000'), PAYER, executor, {
+      balanceReader,
+      ...instantly,
+    });
+
+    expect(out.amount).toBe('850000');
+    expect(amountSent(requests)).toBe(850_000n);
+  });
 });
