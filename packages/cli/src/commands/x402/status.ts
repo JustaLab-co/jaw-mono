@@ -25,6 +25,18 @@ import { recoverPermission } from '../../x402/permission-recovery.js';
 import type { OutputFormat } from '../../lib/types.js';
 
 /**
+ * Whether the figure a limit carries was counted over a window we can state.
+ *
+ * Not the end: an end nobody can name still leaves a known start, and the sums
+ * are counted from the start. What makes the figure meaningless is a start the
+ * `Date` cannot hold, which leaves the sums counting every row ever, and a limit
+ * the usage list never measured at all, which carries no start.
+ */
+function windowKnown(startedAt: Date | undefined): boolean {
+  return startedAt !== undefined && !Number.isNaN(startedAt.getTime());
+}
+
+/**
  * Answer "is my x402 setup right?" without spending anything.
  *
  * The three things that break a setup are invisible until a payment fails:
@@ -148,6 +160,10 @@ export default class X402Status extends BaseCommand {
           ...limit,
           spent: 0n,
           toppedUp: 0n,
+          // Nothing measured it, so it has no window and no figure: said out
+          // loud, so the readers below can tell it from a limit whose usage was
+          // counted over a window that has no end to name.
+          startedAt: undefined,
           endsAt: null,
           source: 'unmeasured' as const,
         }
@@ -181,7 +197,7 @@ export default class X402Status extends BaseCommand {
       // which kept this check quiet while the grant was already drained.
       // Null, not the zero an unmeasured limit carries: `diagnose` compares it
       // against the cap, and a figure nobody read is not a measurement of zero.
-      periodSpent: tightest && tightest.endsAt !== null ? tightest.toppedUp : null,
+      periodSpent: tightest && windowKnown(tightest.startedAt) ? tightest.toppedUp : null,
       periodLabel: tightest ? describePeriod(tightest.unit, tightest.multiplier) : null,
       outdated: isLegacySession(session),
       // Same units as the formatted balances. Exact in a double: the reserve
@@ -216,7 +232,7 @@ export default class X402Status extends BaseCommand {
               allowance: limit.allowance,
               unit: limit.unit,
               multiplier: limit.multiplier,
-              used: limit.endsAt === null ? null : limit.toppedUp.toString(),
+              used: windowKnown(limit.startedAt) ? limit.toppedUp.toString() : null,
               usedFrom: limit.source,
               resetsAt: limit.endsAt === null ? null : limit.endsAt.toISOString(),
             })),
@@ -254,11 +270,14 @@ export default class X402Status extends BaseCommand {
     // all would report a 100-a-month cap as 50 a day.
     for (const limit of limits) {
       const floor = limit.source === 'chain' ? '' : 'at least ';
-      // A limit with no window is one whose usage could not be computed. It
-      // still binds, so it is reported, and the missing figure is named as
-      // missing rather than printed as a zero.
-      const window = limit.endsAt === null ? ' (usage unknown)' : ` (resets ${limit.endsAt.toISOString()})`;
-      const used = limit.endsAt === null ? '?' : `${floor}${formatUsdc(limit.toppedUp.toString(), decimals)}`;
+      // A limit whose window could not be stated is one whose usage could not be
+      // computed. It still binds, so it is reported, and the missing figure is
+      // named as missing rather than printed as a zero. An end nobody can name
+      // is a different thing: the figure is counted from a start that is known,
+      // so it is reported without a reset date.
+      const resets = limit.endsAt === null ? '' : ` (resets ${limit.endsAt.toISOString()})`;
+      const window = windowKnown(limit.startedAt) ? resets : ' (usage unknown)';
+      const used = windowKnown(limit.startedAt) ? `${floor}${formatUsdc(limit.toppedUp.toString(), decimals)}` : '?';
       this.log(
         `          ${used} of ${formatUsdc(limit.allowance, decimals)} used this ` +
           `${describePeriod(limit.unit, limit.multiplier)}${window}`
