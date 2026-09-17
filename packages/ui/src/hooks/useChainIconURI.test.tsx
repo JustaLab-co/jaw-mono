@@ -115,6 +115,21 @@ describe('useChainIconURI', () => {
     expect(container.querySelector('img')?.getAttribute('src')).toBe(OTHER_ICON);
   });
 
+  // `chainId ?? 0` is what a dialog passes when the request names no chain, and
+  // the icon left on screen would read as that request's chain.
+  it('clears the icon when the chain goes away', async () => {
+    capabilitiesMock.mockResolvedValue({ '0x1': { chainMetadata: { icon: ICON } } } as never);
+    await mount(1, 'test-key');
+    expect(container.querySelector('img')?.getAttribute('src')).toBe(ICON);
+
+    await act(async () => {
+      root!.render(createElement(Probe, { chainId: 0, apiKey: 'test-key' }));
+    });
+
+    expect(container.querySelector('img')).toBeNull();
+    expect(capabilitiesMock).toHaveBeenCalledTimes(1);
+  });
+
   it('does not fetch without a chain', async () => {
     await mount(0, 'test-key');
 

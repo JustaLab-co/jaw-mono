@@ -20,15 +20,15 @@ export const useChainIconURI = (chainId: number, apiKey?: string, size?: number)
   const [isLoading, setIsLoading] = useState(true);
 
   useEffect(() => {
+    // The icon on screen belongs to the chain we were rendering before, and a
+    // mounted dialog can switch chain: drop it rather than keep it up, both
+    // through the lookup and when the new chain is one we cannot ask about.
+    setIconURI(null);
+
     if (!chainId) {
       setIsLoading(false);
       return;
     }
-
-    // The icon on screen belongs to the chain we were rendering before, and a
-    // mounted dialog can switch chain: drop it rather than keep it up through
-    // the lookup.
-    setIconURI(null);
 
     let isMounted = true;
 
