@@ -17,7 +17,9 @@ const METHOD = 'wallet_addFunds';
  * `chainId` and `chains` answer two different questions and are both kept:
  * `chainId` is where the QR points (EIP-681 pins exactly one chain), `chains` is
  * the set the screen offers to deposit on. A dapp that accepts funds on several
- * chains sends `chains`; one that wants a specific chain led sends both.
+ * chains sends `chains`; one that takes them on a single chain can send just
+ * `chainId`, which the signers read as a one-entry list so the screen offers
+ * that chain alone.
  */
 export interface NormalizedAddFundsParams {
     /** Hex chainId, or undefined when the dapp left the chain to the wallet. */

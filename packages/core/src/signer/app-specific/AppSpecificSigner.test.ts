@@ -716,12 +716,24 @@ describe('AppSpecificSigner', () => {
             });
 
             // Absent is not an empty list: with no preference the dialog decides,
-            // which is still every chain the account works on.
+            // which is still every chain the account works on. The session's own
+            // chain must not leak in here as a one-entry list — that would
+            // narrow the no-params case, which is meant to show everything.
             it('leaves chains undefined when the dapp names none', async () => {
                 await signer.request({ method: 'wallet_addFunds' });
 
                 expect(mockUIHandler.request).toHaveBeenCalledWith(
                     expect.objectContaining({ data: expect.objectContaining({ chains: undefined }) })
+                );
+            });
+
+            // A dapp naming Base is saying where it takes deposits, so the row
+            // shows Base alone rather than Base plus sixteen it will not credit.
+            it('treats a lone chainId as a one-entry chains list', async () => {
+                await signer.request({ method: 'wallet_addFunds', params: [{ chainId: 1 }] });
+
+                expect(mockUIHandler.request).toHaveBeenCalledWith(
+                    expect.objectContaining({ data: expect.objectContaining({ chainId: 1, chains: [1] }) })
                 );
             });
 

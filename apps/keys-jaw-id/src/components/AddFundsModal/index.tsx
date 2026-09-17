@@ -103,15 +103,28 @@ export const AddFundsModal = ({
   // leave out of a list that still has the rest. An entirely unsupported list
   // collapses to undefined, which reads as "the dapp named none" and restores
   // the full stack — the honest answer once nothing it asked for can be drawn.
+  // Only the dapp's own chainId, never the session's. The distinction is the
+  // whole point below: a chain the dapp named narrows the row, a chain the
+  // wallet defaulted to does not.
+  const requestedChainId = addFunds.chainId ? ensureIntNumber(addFunds.chainId) : undefined;
+
   const chains = useMemo(() => {
     const requested = addFunds.chains?.map(ensureIntNumber).filter((id) => SUPPORTED_CHAINS.some((c) => c.id === id));
-    return requested && requested.length > 0 ? requested : undefined;
-  }, [addFunds.chains]);
+    if (requested && requested.length > 0) return requested;
+
+    // A lone `chainId` is a one-entry list: a dapp naming Base is saying where
+    // it takes deposits, and offering the other sixteen invites one it will not
+    // credit. Mirrors AppSpecificSigner so both hosts narrow alike.
+    if (requestedChainId !== undefined && SUPPORTED_CHAINS.some((c) => c.id === requestedChainId)) {
+      return [requestedChainId];
+    }
+    return undefined;
+  }, [addFunds.chains, requestedChainId]);
 
   // `chains[0]` before the connected chain, matching AppSpecificSigner: a dapp
   // that sent only `chains` still needs one chain for the QR, and the session's
   // chain may be one it just said it does not accept.
-  const candidate = addFunds.chainId ? ensureIntNumber(addFunds.chainId) : (chains?.[0] ?? chain?.id);
+  const candidate = requestedChainId ?? chains?.[0] ?? chain?.id;
   // `chains[0]` before the generic backstop, so the QR and the row cannot
   // disagree. The SDK refuses a `chainId` outside `chains` outright, but this
   // host can still manufacture that pair on its own: `{ chainId: 1337, chains:

@@ -20,10 +20,10 @@ await jaw.provider.request({
 
 ### Parameters
 
-| Name      | Type       | Required | Description                                                                                                        |
-| --------- | ---------- | -------- | ------------------------------------------------------------------------------------------------------------------ |
-| `chainId` | `number`   | No       | Chain the QR code pins via EIP-681. Defaults to the first entry of `chains`, then the connected chain.             |
-| `chains`  | `number[]` | No       | Chains your app accepts deposits on. Narrows the chain row to these. Defaults to every chain the address works on. |
+| Name      | Type       | Required | Description                                                                                                                                     |
+| --------- | ---------- | -------- | ----------------------------------------------------------------------------------------------------------------------------------------------- |
+| `chainId` | `number`   | No       | Chain the QR code pins via EIP-681, and on its own the only chain offered. Defaults to the first entry of `chains`, then the connected chain.   |
+| `chains`  | `number[]` | No       | Chains your app accepts deposits on, when there is more than one. Narrows the chain row to these. Defaults to every chain the address works on. |
 
 Both are decimal (`8453`), matching the chain IDs in your SDK config. Hex quantities (`'0x2105'`) are also accepted.
 
@@ -32,7 +32,9 @@ The two answer different questions and can be sent together: `chainId` is where 
 If you send both, `chainId` must be one of `chains`. A `chainId` outside your own list is rejected with `-32602` rather than resolved silently: the QR code would pin a chain the same request says you do not accept, so the code and the row beneath it would contradict each other.
 
 :::tip
-Send `chains` whenever your app only credits deposits on certain networks. With no `chains`, the screen shows every chain the address works on, which is true of a smart account but invites a deposit your app will not see. `chains: [8453]` is a single-chain app; `chains: [8453, 10]` is a multichain one.
+Name your chains whenever your app only credits deposits on certain networks. Sending neither field shows every chain the address works on, which is true of a smart account but invites a deposit your app will not see.
+
+A lone `chainId` counts as naming one: `chainId: 8453` offers Base and nothing else. Use `chains` for more than one — `chains: [8453, 10]` is a multichain app.
 :::
 
 An empty `chains: []` is rejected with `-32602` rather than read as "no preference": it usually means a filter in your app matched nothing, and showing every chain would be the opposite of what you asked for.

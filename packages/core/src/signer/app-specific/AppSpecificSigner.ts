@@ -439,7 +439,19 @@ export class AppSpecificSigner extends JAWSigner {
                 // just said it does not accept.
                 const requested = addFunds?.chainId ?? addFunds?.chains?.[0];
                 const chainId = requested ? ensureIntNumber(requested) : this.chain.id;
-                const chains = addFunds?.chains?.map(ensureIntNumber);
+
+                // A lone `chainId` narrows the row to that one chain: a dapp
+                // naming Base is telling us where it takes deposits, and
+                // offering the other sixteen invites one it will not credit.
+                //
+                // Derived here rather than in the dialog because only this side
+                // can tell the two apart — `data.chainId` is always populated,
+                // with the dapp's chain if it sent one and the session's if it
+                // did not, so by the time the dialog sees it "the dapp asked for
+                // Base" and "the wallet defaulted to Base" look identical. Doing
+                // it there would have narrowed the no-params case too, which is
+                // meant to keep showing every chain the address works on.
+                const chains = addFunds?.chains?.map(ensureIntNumber) ?? (addFunds?.chainId ? [chainId] : undefined);
 
                 const uiRequest: AddFundsUIRequest = {
                     id: crypto.randomUUID(),
