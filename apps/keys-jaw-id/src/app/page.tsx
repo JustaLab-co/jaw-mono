@@ -823,6 +823,8 @@ function KeysJawIdAppContent({
         requestType = SDKRequestType.GRANT_PERMISSIONS;
       } else if (method === 'wallet_revokePermissions') {
         requestType = SDKRequestType.REVOKE_PERMISSIONS;
+      } else if (method === 'wallet_addFunds') {
+        requestType = SDKRequestType.ADD_FUNDS;
       } else if (method === 'wallet_connect') {
         requestType = SDKRequestType.CONNECT;
       } else {

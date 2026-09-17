@@ -112,6 +112,7 @@ export default defineConfig({
           { text: 'Sign-In With Ethereum', link: '/guides/siwe' },
           { text: 'Subscription Payments', link: '/guides/subscription' },
           { text: 'Reown AppKit', link: '/guides/reown-appkit' },
+          { text: 'React Native (Expo)', link: '/guides/react-native' },
         ],
       },
       {
@@ -128,6 +129,7 @@ export default defineConfig({
                 text: 'useGetCallsHistory()',
                 link: '/wagmi/useGetCallsHistory',
               },
+              { text: 'useAddFunds()', link: '/wagmi/useAddFunds' },
               { text: 'useCapabilities()', link: '/wagmi/useCapabilities' },
               { text: 'useConnect()', link: '/wagmi/useConnect' },
               { text: 'useDisconnect()', link: '/wagmi/useDisconnect' },
@@ -193,6 +195,7 @@ export default defineConfig({
             text: 'wallet_revokePermissions',
             link: '/api-reference/wallet_revokePermissions',
           },
+          { text: 'wallet_addFunds', link: '/api-reference/wallet_addFunds' },
           { text: 'wallet_getAssets', link: '/api-reference/wallet_getAssets' },
           {
             text: 'wallet_getCallsStatus',

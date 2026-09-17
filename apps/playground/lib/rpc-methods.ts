@@ -760,6 +760,42 @@ console.log('Connected accounts:', result.accounts);`;
     },
   },
   {
+    id: 'wallet_addFunds',
+    name: 'wallet_addFunds',
+    method: 'wallet_addFunds',
+    category: 'wallet',
+    description: 'Show the receive screen: chains, QR, and the account address',
+    // Auto-connects like the signing methods: the screen has no address to show
+    // without an account.
+    requiresConnection: false,
+    parameters: [
+      {
+        name: 'chainId',
+        type: 'select',
+        label: 'Chain',
+        description: 'Chain the QR pins via EIP-681. Defaults to the connected chain.',
+        required: false,
+        defaultValue: 'default',
+        options: CHAIN_OPTIONS,
+      },
+    ],
+    getCodeSnippet: (params) => {
+      const args: string[] = [];
+      if (params.chainId && params.chainId !== 'default') args.push(`chainId: ${parseInt(params.chainId, 16)}`);
+      return `// Resolves null when the user closes — deposits land off-app,
+// so there is no outcome to report.
+await jaw.provider.request({
+  method: 'wallet_addFunds',
+  params: [{${args.length ? ` ${args.join(', ')} ` : ''}}],
+});`;
+    },
+    buildParams: (params) => {
+      const addFunds: { chainId?: number } = {};
+      if (params.chainId && params.chainId !== 'default') addFunds.chainId = parseInt(params.chainId, 16);
+      return [addFunds];
+    },
+  },
+  {
     id: 'wallet_disconnect',
     name: 'wallet_disconnect',
     method: 'wallet_disconnect',

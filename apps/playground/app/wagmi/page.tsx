@@ -33,6 +33,7 @@ import {
   useDisconnect,
   useGrantPermissions,
   useRevokePermissions,
+  useAddFunds,
   usePermissions,
   useGetAssets,
   useCapabilities,
@@ -98,6 +99,7 @@ function WagmiPageContent({
   // handleExecute, which runMethod already brackets with runningMethodId.
   const { mutateAsync: grantPermissions } = useGrantPermissions();
   const { mutateAsync: revokePermissions } = useRevokePermissions();
+  const { mutateAsync: addFunds } = useAddFunds();
   const { mutateAsync: sign } = useSign();
 
   // State for query addresses (allows querying for arbitrary addresses)
@@ -293,6 +295,11 @@ function WagmiPageContent({
             result = await revokePermissions({
               id: params.id as `0x${string}`,
             });
+            break;
+
+          case 'useAddFunds':
+            // Resolves null: the screen closing is the whole outcome.
+            result = await addFunds({ chainId: params.chainId as number | undefined });
             break;
 
           case 'usePermissions': {

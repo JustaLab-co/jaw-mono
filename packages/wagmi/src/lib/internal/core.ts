@@ -580,3 +580,63 @@ export async function getCallsHistory<config extends Config>(
 
   return result as getCallsHistory.ReturnType;
 }
+
+// ============================================================================
+// addFunds
+// ============================================================================
+
+export namespace addFunds {
+  export type Parameters<config extends Config = Config> = {
+    address?: Address;
+    connector?: Connector;
+    /**
+     * Chain the receive QR pins via EIP-681. Defaults to the connected chain.
+     * Not a routing target: nothing is sent, so the connector does not have to
+     * be on it.
+     */
+    chainId?: number;
+  };
+
+  /**
+   * Always null. Deposits land off-app, so the wallet has no outcome to report
+   * and the user closing the screen is the normal finish.
+   */
+  export type ReturnType = null;
+  export type ErrorType = Error;
+}
+
+/**
+ * Opens the wallet's receive screen: the chains the account's address works on,
+ * an EIP-681 QR, and the address itself.
+ *
+ * The destination is always the connected account, resolved by the wallet. It
+ * cannot be passed in — `address` here selects which connected account to act
+ * as, exactly as in the other actions.
+ *
+ * @example
+ * ```ts
+ * await Actions.addFunds(config);
+ * ```
+ */
+export async function addFunds<config extends Config>(
+  config: config,
+  parameters: addFunds.Parameters<config> = {}
+): Promise<addFunds.ReturnType> {
+  const { address, chainId, connector } = parameters;
+
+  // chainId picks which chain the QR names, so the connector does not need to
+  // be on it — the address is the same on every chain either way.
+  const client = await getConnectorClient(config, {
+    account: address,
+    chainId,
+    connector,
+    assertChainId: false,
+  });
+
+  await client.request({
+    method: 'wallet_addFunds' as never,
+    params: [{ chainId }] as never,
+  });
+
+  return null;
+}

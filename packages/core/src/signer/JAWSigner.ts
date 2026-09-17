@@ -10,6 +10,7 @@ import {
     isSessionExpired,
 } from './SignerUtils.js';
 import { storeCallStatus, waitForReceiptInBackground } from '../rpc/wallet_sendCalls.js';
+import { normalizeAddFundsParams, type NormalizedAddFundsParams } from '../rpc/addFundsParams.js';
 import { normalizeSendCallsParams, type NormalizedSendCallsParams } from '../rpc/sendCallsParams.js';
 import { normalizeSendTransactionParams, type NormalizedSendTransactionParams } from '../rpc/sendTransactionParams.js';
 import { normalizeRevokePermissionsParams, type NormalizedRevokePermissionsParams } from '../rpc/permissions.js';
@@ -18,7 +19,7 @@ import { handleGetAssetsRequest } from '../rpc/wallet_getAssets.js';
 import { handleGetCallsHistoryRequest } from '../rpc/wallet_getCallsHistory.js';
 
 import { logSignature } from '../analytics/index.js';
-import { standardErrors } from '../errors/index.js';
+import { standardErrors, standardErrorCodes } from '../errors/index.js';
 import { RPCResponse } from '../messages/index.js';
 import { AppMetadata, ProviderEventCallback, RequestArguments } from '../provider/index.js';
 import { SDKChain, correlationIds, store } from '../store/index.js';
@@ -50,7 +51,8 @@ type ConstructorOptions = {
 export type NormalizedSigningParams =
     | { method: 'wallet_sendCalls'; params: NormalizedSendCallsParams }
     | { method: 'eth_sendTransaction'; params: NormalizedSendTransactionParams }
-    | { method: 'wallet_revokePermissions'; params: NormalizedRevokePermissionsParams };
+    | { method: 'wallet_revokePermissions'; params: NormalizedRevokePermissionsParams }
+    | { method: 'wallet_addFunds'; params: NormalizedAddFundsParams };
 
 /**
  * Abstract base class for all JAW signers.
@@ -125,6 +127,39 @@ export abstract class JAWSigner implements Signer {
         return result;
     }
 
+    /**
+     * `wallet_addFunds`, whose only outcome is "the user is done".
+     *
+     * The screen has no reject action: the keys host never calls `onReject` for
+     * it, and the AppSpecific handler ignores approval and resolves null. So a
+     * 4001 reaching here cannot be a rejection — it is the popup-close backstop
+     * in `Communicator.awaitResponseOrClosed`, which rejects any in-flight
+     * request when the window dies. Without this, closing the popup window gave
+     * the dapp an error while pressing Done gave it null, for the same intent.
+     *
+     * Scoped to the request, which covers less than it sounds. `JAWProvider`
+     * runs `handshake({ method: 'handshake' })` first, but in CrossPlatform that
+     * is the DH key exchange only — the account ceremony happens inside THIS
+     * request, because an unconnected origin resolves to the sign-in screen
+     * (`selectScreen` returns `onboarding` when `isAuthenticated` is false). So
+     * a user who abandons sign-in and closes the popup also lands here and gets
+     * null, reported as a finish for a flow that never showed an address.
+     *
+     * Left as-is because `ReturnType` is literally `null`: there is nothing for
+     * a dapp to branch on, so the wrong answer costs nothing today. Telling the
+     * two apart needs a signal that the receive screen actually went up, which
+     * the SDK side cannot see.
+     */
+    private async dispatchAddFundsRequest(request: RequestArguments): Promise<unknown> {
+        try {
+            return await this.dispatchSigningRequest(request);
+        } catch (error) {
+            const code = (error as { code?: number } | null)?.code;
+            if (code === standardErrorCodes.provider.userRejectedRequest) return null;
+            throw error;
+        }
+    }
+
     private validateSigningRequest(request: RequestArguments): NormalizedSigningParams | undefined {
         switch (request.method) {
             case 'eth_signTypedData_v4':
@@ -154,6 +189,36 @@ export abstract class JAWSigner implements Signer {
                     method: 'wallet_revokePermissions',
                     params: normalizeRevokePermissionsParams(request.params),
                 };
+
+            // Runs before the screen opens, so a malformed chainId is refused
+            // with -32602 in BOTH modes. Validating in the AppSpecific handler
+            // alone left CrossPlatform unchecked: it has no per-method case of
+            // its own, so a bad value reached keys, where it was swallowed and
+            // the screen opened on the connected chain instead.
+            case 'wallet_addFunds': {
+                const addFunds = normalizeAddFundsParams(request.params);
+
+                // `optionalChainId` only proves "positive integer or hex", and
+                // nothing downstream checks the value: addFunds is absent from
+                // CrossPlatformSigner.resolveChainFromRequest, so `resolveChain`
+                // is never reached, and AppSpecific just converts it.
+                // `{ chainId: 1337 }` therefore drew a screen headed
+                // "Chain 1337" with a QR encoding `@1337` — a chain the wallet
+                // knows nothing about and where the account is not deployed —
+                // while wallet_sendCalls refuses the same value.
+                //
+                // `resolveChain` IS that check, so it is reused rather than
+                // rewritten: it throws 5710 with the showTestnets hint for
+                // exactly this condition. Its chain is dropped because this
+                // method needs the id alone. 4902 would be wrong here even
+                // though wallet_switchEthereumChain uses it: that is the
+                // EIP-3326 code whose whole point is telling a library to offer
+                // `wallet_addEthereumChain`, which this wallet does not
+                // implement, so it would point at a dead end.
+                if (addFunds.chainId !== undefined) this.resolveChain(addFunds.chainId);
+
+                return { method: 'wallet_addFunds', params: addFunds };
+            }
 
             default:
                 return undefined;
@@ -211,6 +276,7 @@ export abstract class JAWSigner implements Signer {
                 return (params as [Address, string] | undefined)?.[0];
             case 'wallet_sign':
                 return (params as [{ address?: Address }] | undefined)?.[0]?.address;
+
             default:
                 return undefined;
         }
@@ -270,12 +336,18 @@ export abstract class JAWSigner implements Signer {
                 return this.handleWalletConnectUnauthenticated(request);
             }
 
+            // addFunds is in this group because the receive screen shows the
+            // connected account's address: it needs the same account resolution
+            // as the signing methods even though it signs nothing.
             case 'wallet_sendCalls':
             case 'wallet_sign':
             case 'wallet_grantPermissions':
             case 'wallet_revokePermissions': {
                 return this.dispatchSigningRequest(request);
             }
+
+            case 'wallet_addFunds':
+                return this.dispatchAddFundsRequest(request);
 
             default:
                 throw standardErrors.provider.unauthorized();
@@ -382,6 +454,9 @@ export abstract class JAWSigner implements Signer {
             case 'wallet_grantPermissions':
             case 'wallet_revokePermissions':
                 return this.dispatchSigningRequest(request);
+
+            case 'wallet_addFunds':
+                return this.dispatchAddFundsRequest(request);
 
             case 'eth_sign':
             case 'eth_ecRecover':

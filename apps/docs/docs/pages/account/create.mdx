@@ -110,7 +110,9 @@ class MyUIHandler implements UIHandler {
 
 ## React Native Usage
 
-In React Native, `window` and `navigator.credentials` are unavailable. Pass `Passkey.get` and `Passkey.create` from [`react-native-passkey`](https://github.com/f-23/react-native-passkey) directly in `config` — JAW handles all format conversion, challenge generation, and public key extraction internally.
+In React Native, `window` and `navigator.credentials` are unavailable. Pass `Passkey.get` and `Passkey.create` from [`react-native-passkey`](https://github.com/f-23/react-native-passkey) in `config` — JAW handles all format conversion, challenge generation, and public key extraction internally. The casts bridge `react-native-passkey`'s literal string types to JAW's adapter types; the runtime shapes match.
+
+For the full setup (native modules, crypto polyfill, domain linking, and persistent storage), follow the [React Native guide](/guides/react-native).
 
 :::warning[Storage in React Native]
 Without a custom `storage`, JAW falls back to an in-memory store that does **not** persist across app restarts. Pass a `SyncStorage` implementation backed by MMKV or similar for durable persistence.
@@ -119,7 +121,7 @@ Without a custom `storage`, JAW falls back to an in-memory store that does **not
 ```typescript
 import { Account } from '@jaw.id/core';
 import { Passkey } from 'react-native-passkey';
-import type { SyncStorage } from '@jaw.id/core';
+import type { SyncStorage, NativePasskeyGetFn, NativePasskeyCreateFn } from '@jaw.id/core';
 
 // Your SyncStorage backed by MMKV or similar
 const storage: SyncStorage = {
@@ -131,8 +133,8 @@ const config = {
   chainId: 8453,
   apiKey: 'your-api-key',
   storage,
-  nativeGetFn: Passkey.get,
-  nativeCreateFn: Passkey.create,
+  nativeGetFn: Passkey.get as NativePasskeyGetFn,
+  nativeCreateFn: Passkey.create as NativePasskeyCreateFn,
   rpId: 'myapp.com',
   rpName: 'My App',
 };

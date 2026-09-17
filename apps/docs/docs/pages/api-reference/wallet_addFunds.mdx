@@ -1,0 +1,105 @@
+# wallet_addFunds
+
+Show the receive screen: the chains the account's address works on, a QR code, and the address itself.
+
+**Authentication Required:** No (uses an ephemeral signer if not authenticated)
+
+## Request
+
+```typescript
+await jaw.provider.request({
+  method: 'wallet_addFunds',
+  params: [
+    {
+      chainId: 8453, // Chain the QR code pins
+    },
+  ],
+});
+```
+
+### Parameters
+
+| Name      | Type     | Required | Description                                                          |
+| --------- | -------- | -------- | -------------------------------------------------------------------- |
+| `chainId` | `number` | No       | Chain the QR code pins via EIP-681. Defaults to the connected chain. |
+
+`chainId` is decimal (`8453`), matching the chain IDs in your SDK config. A hex quantity (`'0x2105'`) is also accepted.
+
+:::warning
+There is no `address` parameter, and an `address` key in the params object is ignored. The destination is always the connected account, resolved by the wallet from the session — a dApp that could name the destination could point the QR code at an address the user does not own.
+:::
+
+### Example
+
+```json
+[
+  {
+    "chainId": 8453
+  }
+]
+```
+
+Calling with no parameters is the common case, and means "show the connected account on the connected chain".
+
+## Response
+
+Returns `null`.
+
+### Example
+
+```json
+null
+```
+
+## Behavior
+
+- Opens the receive screen: the address, its ENS name and avatar when they resolve, and the mainnet chains the address works on
+- The QR code encodes an [EIP-681](https://eips.ethereum.org/EIPS/eip-681) payment request, `ethereum:<address>@<chainId>`, so a scanner selects the network itself instead of leaving the sender to notice a label
+- Resolves when the user closes the screen. Deposits land off-app, so closing is a normal finish, not a rejection
+- Reads no balances and polls for nothing
+- Renders the same screen in both CrossPlatform and AppSpecific modes
+- Params are validated before the screen opens, so a malformed request is refused rather than surfacing inside an open dialog
+
+:::info
+A resolved call means the screen was shown and closed, **not** that funds arrived. Receiving has no completion event: the money usually arrives after the user has closed the screen, and an inbound transfer cannot be attributed to a particular request. Use [wallet_getAssets](/api-reference/wallet_getAssets) to read balances afterwards.
+:::
+
+## Errors
+
+| Code   | Description                                                          |
+| ------ | -------------------------------------------------------------------- |
+| 4100   | Unauthorized (no connected account to receive funds at)              |
+| 5710   | The chain isn't configured (testnets need `preference.showTestnets`) |
+| -32602 | Invalid params (chainId is not a positive integer or hex quantity)   |
+| -32603 | The wallet could not resolve an address to receive at                |
+
+## Example
+
+```typescript
+// The connected account on the connected chain.
+await jaw.provider.request({
+  method: 'wallet_addFunds',
+});
+
+// Pin the QR code to a specific chain.
+await jaw.provider.request({
+  method: 'wallet_addFunds',
+  params: [
+    {
+      chainId: 8453,
+    },
+  ],
+});
+
+// The screen closing tells you the user is done, not that funds arrived.
+const assets = await jaw.provider.request({
+  method: 'wallet_getAssets',
+  params: [{ account: address }],
+});
+```
+
+## Related Methods
+
+- [wallet_getAssets](/api-reference/wallet_getAssets) - Read token balances after funding
+- [wallet_getCapabilities](/api-reference/wallet_getCapabilities) - Chains and their metadata
+- [wallet_connect](/api-reference/wallet_connect) - Connect before funding

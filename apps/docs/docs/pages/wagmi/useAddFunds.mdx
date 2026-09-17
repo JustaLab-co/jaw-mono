@@ -1,0 +1,150 @@
+# useAddFunds
+
+Hook to open the receive screen: the chains the account's address works on, a QR code, and the address itself.
+
+**Type:** `hook`
+
+## Import
+
+```typescript
+import { useAddFunds } from '@jaw.id/wagmi';
+```
+
+## Signature
+
+```typescript
+function useAddFunds(parameters?: { config?: Config; mutation?: UseMutationParameters }): UseMutationResult;
+```
+
+## Parameters
+
+### config
+
+Type: `Config` (optional)
+
+Wagmi config. If not provided, uses the config from `WagmiProvider`.
+
+### mutation
+
+Type: `UseMutationParameters` (optional)
+
+TanStack React Query mutation options.
+
+## Returns
+
+Returns a TanStack React Query mutation result:
+
+| Property      | Type       | Description                                |
+| ------------- | ---------- | ------------------------------------------ |
+| `mutate`      | `function` | Function to open the receive screen        |
+| `mutateAsync` | `function` | Async version of mutate                    |
+| `data`        | `null`     | Always null — see below                    |
+| `isPending`   | `boolean`  | Whether the screen is open                 |
+| `isSuccess`   | `boolean`  | Whether the screen was shown and dismissed |
+| `isError`     | `boolean`  | Whether the request failed                 |
+| `error`       | `Error`    | Error if the request failed                |
+
+### data
+
+Always `null`. Deposits land off-app, so the wallet has no outcome to report: a resolved mutation means the screen was shown and closed, not that funds arrived.
+
+## Mutation Variables
+
+When calling `mutate()`, you can optionally pass an object with the following properties:
+
+### chainId (optional)
+
+Type: `number`
+
+Chain the QR code pins via EIP-681. Defaults to the connected chain. Nothing is sent, so the connector does not need to be on this chain.
+
+### address (optional)
+
+Type: `Address`
+
+Which connected account to act as, as in the other actions. This is **not** a destination: the address funds are received at is always the connected account, resolved by the wallet from the session.
+
+### connector (optional)
+
+Type: `Connector`
+
+Specific connector to use. If omitted, uses the active connector.
+
+## Examples
+
+### Basic Usage
+
+```tsx
+import { useAccount } from 'wagmi';
+import { useAddFunds } from '@jaw.id/wagmi';
+
+function AddFundsButton() {
+  const { isConnected } = useAccount();
+  const { mutate: addFunds, isPending } = useAddFunds();
+
+  if (!isConnected) return null;
+
+  return (
+    <button onClick={() => addFunds({})} disabled={isPending}>
+      Add funds
+    </button>
+  );
+}
+```
+
+### Pin the QR Code to a Chain
+
+```tsx
+import { useAddFunds } from '@jaw.id/wagmi';
+import { base } from 'viem/chains';
+
+function FundOnBase() {
+  const { mutate: addFunds } = useAddFunds();
+
+  return <button onClick={() => addFunds({ chainId: base.id })}>Add funds on Base</button>;
+}
+```
+
+### With Callbacks
+
+```tsx
+import { useAccount } from 'wagmi';
+import { useAddFunds, useGetAssets } from '@jaw.id/wagmi';
+
+function FundAndRefresh() {
+  const { address } = useAccount();
+  const { refetch } = useGetAssets({ account: address });
+
+  const { mutate: addFunds } = useAddFunds({
+    mutation: {
+      // Fires when the screen closes, which is not the same as funds landing.
+      onSuccess: () => refetch(),
+    },
+  });
+
+  return <button onClick={() => addFunds({})}>Add funds</button>;
+}
+```
+
+## Behavior
+
+- Opens the receive screen: the address, its ENS name and avatar when they resolve, and the mainnet chains the address works on
+- The QR code encodes an [EIP-681](https://eips.ethereum.org/EIPS/eip-681) payment request, `ethereum:<address>@<chainId>`, so a scanner selects the network itself
+- Resolves when the user closes the screen. Closing is a normal finish, not a rejection
+- Reads no balances and polls for nothing
+
+## Important Notes
+
+:::info
+**No arrival signal**: receiving has no completion event. The money usually arrives after the user has closed the screen and gone to an exchange, and an inbound transfer cannot be attributed to a particular request. Refetch balances with [useGetAssets](/wagmi/useGetAssets) rather than treating `onSuccess` as an arrival.
+:::
+
+:::warning
+**The destination cannot be passed in**: funds are always received at the connected account, resolved by the wallet. The `address` variable selects which connected account to act as, and is never a destination the caller can name.
+:::
+
+## Related
+
+- [useGetAssets](/wagmi/useGetAssets) - Read token balances after funding
+- [useCapabilities](/wagmi/useCapabilities) - Chains and their metadata
+- [wallet_addFunds](/api-reference/wallet_addFunds) - RPC method reference

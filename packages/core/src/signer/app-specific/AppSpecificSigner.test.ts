@@ -606,6 +606,84 @@ describe('AppSpecificSigner', () => {
             );
         });
 
+        describe('wallet_addFunds', () => {
+            const ACCOUNT = '0x1234567890123456789012345678901234567890';
+
+            beforeEach(() => {
+                (mockUIHandler.request as Mock).mockResolvedValue({ id: 'r', approved: true });
+            });
+
+            it('opens the receive screen for the session account', async () => {
+                // Chain 1 because this file's store mock configures 1 and
+                // 11155111: `validateSigningRequest` refuses a chainId the
+                // wallet does not carry.
+                const result = await signer.request({ method: 'wallet_addFunds', params: [{ chainId: 1 }] });
+
+                expect(result).toBeNull();
+                expect(mockUIHandler.request).toHaveBeenCalledWith(
+                    expect.objectContaining({
+                        type: 'wallet_addFunds',
+                        data: expect.objectContaining({
+                            address: ACCOUNT,
+                            chainId: 1,
+                        }),
+                    })
+                );
+            });
+
+            it('falls back to the connected chain when the dapp names none', async () => {
+                await signer.request({ method: 'wallet_addFunds' });
+
+                expect(mockUIHandler.request).toHaveBeenCalledWith(
+                    expect.objectContaining({ data: expect.objectContaining({ chainId: 1 }) })
+                );
+            });
+
+            // A dapp naming the destination could point the QR at an address the
+            // user does not own, while they are looking at wallet chrome.
+            it('ignores a dapp-supplied address and uses the session account', async () => {
+                await signer.request({
+                    method: 'wallet_addFunds',
+                    params: [{ address: '0x9999999999999999999999999999999999999999' }],
+                });
+
+                expect(mockUIHandler.request).toHaveBeenCalledWith(
+                    expect.objectContaining({ data: expect.objectContaining({ address: ACCOUNT }) })
+                );
+            });
+
+            // Deposits land off-app, so a close is the normal finish. The
+            // handler throws 4001 like its siblings and `dispatchAddFundsRequest`
+            // maps it back to null, so the dapp still sees a plain finish.
+            it('resolves null when the user closes without approving', async () => {
+                (mockUIHandler.request as Mock).mockResolvedValue({ id: 'r', approved: false });
+
+                await expect(signer.request({ method: 'wallet_addFunds' })).resolves.toBeNull();
+            });
+
+            // `ReactUIHandler.handleReject` RESOLVES with `{ approved: false }`,
+            // and its error boundary routes a render crash through it. Discarding
+            // the response told the dapp "screen shown and closed" for a screen
+            // that never rendered. A crash carries no 4001, so it must surface.
+            it('surfaces a dialog crash instead of reporting a finish', async () => {
+                (mockUIHandler.request as Mock).mockResolvedValue({
+                    id: 'r',
+                    approved: false,
+                    error: new Error('The wallet could not display this request: boom'),
+                });
+
+                await expect(signer.request({ method: 'wallet_addFunds' })).rejects.toThrow(/could not display/);
+            });
+
+            it('refuses a malformed chainId before any screen opens', async () => {
+                await expect(
+                    signer.request({ method: 'wallet_addFunds', params: [{ chainId: 'base' }] })
+                ).rejects.toThrow();
+
+                expect(mockUIHandler.request).not.toHaveBeenCalled();
+            });
+        });
+
         it('should throw error when permission not found in relay', async () => {
             // Arrange
             const revokeData = {

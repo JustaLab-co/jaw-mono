@@ -20,6 +20,9 @@ describe('method-policy', () => {
             'eth_sendTransaction',
             'wallet_grantPermissions',
             'wallet_revokePermissions',
+            // Shows the account's own address on a wallet surface. Serving it
+            // headlessly would let a page read the address with no user gesture.
+            'wallet_addFunds',
         ]) {
             expect(isSilentMethod(method)).toBe(false);
             expect(requiresInteraction(method)).toBe(true);

@@ -6,6 +6,14 @@ import { getChainLabel } from '../utils/resolveChainLabel';
 export interface ReverseIdentity {
   /** Reverse-resolved primary ENS name (suffixed `@chainlabel` off-mainnet), or null. */
   name: string | null;
+  /**
+   * The same name without the `@chainlabel` suffix, or null.
+   *
+   * `name` is for showing, this is for anything acted on: the suffix says which
+   * chain the name was read on, and `alice.eth@base` resolves nowhere, so
+   * copying or resolving it hands the user a string no wallet accepts.
+   */
+  plainName: string | null;
   /** ENS avatar URL, or null. */
   avatar: string | null;
 }
@@ -23,10 +31,12 @@ export function useReverseIdentity(
   mainnetRpcUrl: string
 ): ReverseIdentity {
   const [name, setName] = useState<string | null>(null);
+  const [plainName, setPlainName] = useState<string | null>(null);
   const [avatar, setAvatar] = useState<string | null>(null);
 
   useEffect(() => {
     setName(null);
+    setPlainName(null);
     setAvatar(null);
     if (!address || !chainId) return;
     let cancelled = false;
@@ -38,6 +48,7 @@ export function useReverseIdentity(
           const label = await getChainLabel(chainId, mainnetRpcUrl);
           if (cancelled) return;
           setName(label ? `${identity.name}@${label}` : identity.name);
+          setPlainName(identity.name);
           setAvatar(identity.avatar ?? null);
         }
       })
@@ -49,5 +60,5 @@ export function useReverseIdentity(
     };
   }, [address, chainId, mainnetRpcUrl]);
 
-  return { name, avatar };
+  return { name, plainName, avatar };
 }

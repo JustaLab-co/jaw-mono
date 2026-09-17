@@ -12,6 +12,7 @@ import {
     PermissionUIRequest,
     RevokePermissionUIRequest,
     WalletSignUIRequest,
+    AddFundsUIRequest,
     PersonalSignRequestData,
     TypedDataRequestData,
     PaymasterConfig,
@@ -27,6 +28,8 @@ import {
     normalizeSendTransactionParams,
 } from '../../rpc/index.js';
 import { store, SDKChain } from '../../store/index.js';
+import { ensureIntNumber } from '../../utils/index.js';
+import { resolveDestination } from '../../addFunds/destination.js';
 import { standardErrors } from '../../errors/index.js';
 import type { JawTheme } from '../../ui/theme.js';
 
@@ -421,6 +424,47 @@ export class AppSpecificSigner extends JAWSigner {
                 }
 
                 return response.data;
+            }
+
+            case 'wallet_addFunds': {
+                // Already validated and hex-normalized by `validateSigningRequest`,
+                // like the other normalized methods, so there is no second parse
+                // here and no second chance for the two to disagree.
+                const requested = normalized?.method === 'wallet_addFunds' ? normalized.params.chainId : undefined;
+                const chainId = requested ? ensureIntNumber(requested) : this.chain.id;
+
+                const uiRequest: AddFundsUIRequest = {
+                    id: crypto.randomUUID(),
+                    type: 'wallet_addFunds',
+                    timestamp: Date.now(),
+                    correlationId,
+                    data: {
+                        // From the session, never from the params: a dapp that
+                        // could name the destination could point the QR at an
+                        // address the user does not own.
+                        address: resolveDestination(this.accounts),
+                        chainId,
+                    },
+                };
+
+                const response = await this.uiHandler.request(uiRequest);
+
+                // Checked like every sibling, because a non-approval here is not
+                // always a rejection: `ReactUIHandler.handleReject` *resolves*
+                // with `{ approved: false }`, and its error boundary routes a
+                // render crash through it. Discarding the response reported
+                // "screen shown and closed" for a screen that never rendered.
+                //
+                // A dismissal still reaches the dapp as null: the wrapper's Done
+                // path approves with null, and a bare rejection carries 4001,
+                // which `dispatchAddFundsRequest` maps back to null. A crash
+                // carries no code, so it surfaces.
+                if (!response.approved) {
+                    throw response.error || UIError.userRejected();
+                }
+
+                // Deposits land off-app, so there is no outcome to report.
+                return null;
             }
 
             default:

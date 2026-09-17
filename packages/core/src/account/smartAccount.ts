@@ -14,6 +14,7 @@ import {
     LocalAccount,
     encodeFunctionData,
     decodeFunctionResult,
+    defineChain,
 } from 'viem';
 import { call, getCode, getGasPrice, multicall, readContract } from 'viem/actions';
 import {
@@ -53,8 +54,12 @@ import {
     ink,
     gnosis,
     arcTestnet,
+    arc as arcBase,
+    hyveChain as hyveChainBase,
     robinhood,
     soneium,
+    unichain,
+    monad,
 } from 'viem/chains';
 import { PERMISSIONS_MANAGER_ADDRESS, FACTORY_ADDRESS } from '../constants.js';
 import { standardErrors } from '../errors/errors.js';
@@ -93,6 +98,18 @@ export type BundledTransactionResult = {
 };
 
 /**
+ * HyveChain (7847) and Arc (5042) come from viem like every other chain here,
+ * with one field put back on top: neither export carries `blockTime`, so viem
+ * assumes 12s and clamps the receipt poll to 4s. createClientForChain reads
+ * blockTime off SUPPORTED_CHAINS to set that interval (see
+ * store/chain-clients/utils.ts), so without these wrappers fast receipts
+ * silently regress. Both values are measured: HyveChain alternates
+ * 3s/4s blocks and Arc is flat at 500ms.
+ */
+const hyveChain = /*#__PURE__*/ defineChain({ ...hyveChainBase, blockTime: 3500 });
+const arc = /*#__PURE__*/ defineChain({ ...arcBase, blockTime: 500 });
+
+/**
  * The chain lists are annotated rather than inferred on purpose. Without the
  * annotation TypeScript keeps the full literal type of every viem chain, down
  * to each explorer URL, which is not a contract we want to publish: it made the
@@ -118,6 +135,10 @@ export const MAINNET_CHAINS: readonly ViemChain[] = [
     gnosis,
     robinhood,
     soneium,
+    hyveChain,
+    arc,
+    unichain,
+    monad,
 ];
 
 export const TESTNET_CHAINS: readonly ViemChain[] = [
