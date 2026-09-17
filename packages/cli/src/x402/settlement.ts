@@ -40,7 +40,7 @@ import {
  * an agent that has been offline for a week can hold it: without one, its first
  * payment back opens a chain read for every unverified row it accumulated.
  *
- * `x402 status` and a dry run reach it too, and neither holds the lock. What
+ * `x402 status`, `x402 log` and a dry run reach it too, and none holds the lock. What
  * they can collide with is a compaction, which notices the file changed under
  * it and drops its rewrite, so the cost is a fold deferred to the next payment.
  */
