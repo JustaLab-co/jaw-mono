@@ -682,6 +682,76 @@ describe('AppSpecificSigner', () => {
 
                 expect(mockUIHandler.request).not.toHaveBeenCalled();
             });
+
+            // The whole point of the feature: a dapp that names its chains gets
+            // a stack of those chains, not of every chain the account works on.
+            it('forwards the dapp chains to the screen as numbers', async () => {
+                await signer.request({ method: 'wallet_addFunds', params: [{ chains: [1, 11155111] }] });
+
+                expect(mockUIHandler.request).toHaveBeenCalledWith(
+                    expect.objectContaining({ data: expect.objectContaining({ chains: [1, 11155111] }) })
+                );
+            });
+
+            // The QR pins one chain, and the connected chain may be one the dapp
+            // just said it does not accept — so the list leads, not the session.
+            it('pins the QR to the first chain when only chains is sent', async () => {
+                await signer.request({ method: 'wallet_addFunds', params: [{ chains: [11155111, 1] }] });
+
+                expect(mockUIHandler.request).toHaveBeenCalledWith(
+                    expect.objectContaining({ data: expect.objectContaining({ chainId: 11155111 }) })
+                );
+            });
+
+            // Both keys together: chainId says where the QR points, chains says
+            // what the stack offers, so an explicit chainId is not overridden.
+            it('keeps an explicit chainId alongside chains', async () => {
+                await signer.request({ method: 'wallet_addFunds', params: [{ chainId: 1, chains: [11155111, 1] }] });
+
+                expect(mockUIHandler.request).toHaveBeenCalledWith(
+                    expect.objectContaining({
+                        data: expect.objectContaining({ chainId: 1, chains: [11155111, 1] }),
+                    })
+                );
+            });
+
+            // Absent is not an empty list: with no preference the dialog decides,
+            // which is still every chain the account works on. The session's own
+            // chain must not leak in here as a one-entry list — that would
+            // narrow the no-params case, which is meant to show everything.
+            it('leaves chains undefined when the dapp names none', async () => {
+                await signer.request({ method: 'wallet_addFunds' });
+
+                expect(mockUIHandler.request).toHaveBeenCalledWith(
+                    expect.objectContaining({ data: expect.objectContaining({ chains: undefined }) })
+                );
+            });
+
+            // A dapp naming Base is saying where it takes deposits, so the row
+            // shows Base alone rather than Base plus sixteen it will not credit.
+            it('treats a lone chainId as a one-entry chains list', async () => {
+                await signer.request({ method: 'wallet_addFunds', params: [{ chainId: 1 }] });
+
+                expect(mockUIHandler.request).toHaveBeenCalledWith(
+                    expect.objectContaining({ data: expect.objectContaining({ chainId: 1, chains: [1] }) })
+                );
+            });
+
+            // An unsupported id in the list would draw an icon-less slot labelled
+            // "chain 1337", which reads as a network the user could deposit on.
+            it('refuses an unconfigured chain inside chains before any screen opens', async () => {
+                await expect(
+                    signer.request({ method: 'wallet_addFunds', params: [{ chains: [1, 1337] }] })
+                ).rejects.toThrow();
+
+                expect(mockUIHandler.request).not.toHaveBeenCalled();
+            });
+
+            it('refuses an empty chains list before any screen opens', async () => {
+                await expect(signer.request({ method: 'wallet_addFunds', params: [{ chains: [] }] })).rejects.toThrow();
+
+                expect(mockUIHandler.request).not.toHaveBeenCalled();
+            });
         });
 
         it('should throw error when permission not found in relay', async () => {
