@@ -1,5 +1,7 @@
 import type { Address } from 'viem';
 import { restCall } from '../api/index.js';
+// By path: `paramUtils` is not part of the package's public surface.
+import { isHexAddress } from '../rpc/paramUtils.js';
 import type { IssuanceType } from '../api/routes/index.js';
 
 export type { IssuanceType } from '../api/routes/index.js';
@@ -28,6 +30,10 @@ export interface LogAccountIssuanceParams {
 export function logAccountIssuance(params: LogAccountIssuanceParams): void {
     try {
         const { address, type, apiKey } = params;
+        // Both calls here are fire and forget, so nothing downstream ever rejects
+        // what they send and a value that is not an address lands in the table as
+        // a row nothing can join. Shape, not checksum: a lowercase one is an address.
+        if (!isHexAddress(address)) return;
 
         restCall(
             'LOG_ACCOUNT_ISSUANCE',
@@ -67,6 +73,7 @@ export interface LogSignatureParams {
 export function logSignature(params: LogSignatureParams): void {
     try {
         const { address, apiKey } = params;
+        if (!isHexAddress(address)) return;
 
         restCall('LOG_SIGNATURE', 'POST', { address }, apiKey ? { 'x-api-key': apiKey } : {}).catch(() => {
             // Silently swallow async errors
