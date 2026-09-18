@@ -11,7 +11,7 @@ import { TransactionDialogProps } from './types';
 import { useChainIconURI, useFeeTokenPrice } from '../../hooks';
 import { useDecodedCalldata } from '../../hooks/useDecodedCalldata';
 import { caip10, getDefaultDescriptorSource } from '../../utils/clearSigning';
-import { reverseResolveWithAvatars, getDisplayAddress, getChainLabel } from '../../utils';
+import { reverseResolveWithAvatars, getDisplayAddress, getChainLabel, identityKey } from '../../utils';
 import { formatNativeValue, subscriptDecimal } from '../../utils/displayFormat';
 import { IdentityAvatar } from '../IdentityAvatar';
 import { AppAvatar } from '../AppAvatar';
@@ -113,7 +113,7 @@ export const TransactionDialog = ({
         const next: Record<string, string> = {};
         const avatarByAddress: Record<string, string> = {};
         for (const { address, chainId } of inputs) {
-          const identity = resolved[address.toLowerCase()];
+          const identity = resolved[identityKey(address, chainId)];
           if (!identity) continue;
           const label = await getChainLabel(chainId, mainnetRpcUrl);
           next[address] = label ? `${identity.name}@${label}` : identity.name;
