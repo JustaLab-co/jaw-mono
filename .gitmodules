@@ -1,6 +1,6 @@
 [submodule "contracts/justanaccount"]
 	path = contracts/justanaccount
-	url = https://github.com/JustaName-id/justanaccount
+	url = https://github.com/JustaLab-co/justanaccount
 [submodule "contracts/permissions"]
 	path = contracts/permissions
-	url = https://github.com/JustaName-id/permissions
+	url = https://github.com/JustaLab-co/permissions
