@@ -1,6 +1,6 @@
 import { describe, it, expect, afterEach, vi } from 'vitest';
 
-import { buildHandleJawRpcUrl, fetchRPCRequest } from './provider.js';
+import { buildHandleJawRpcUrl, fetchRPCRequest, isBackendRefusal } from './provider.js';
 import { setDappOrigin } from '../dappOrigin.js';
 
 describe('buildHandleJawRpcUrl', () => {
@@ -174,5 +174,53 @@ describe('fetchRPCRequest and the calling dApp', () => {
         await fetchRPCRequest({ method: 'eth_chainId' }, 'https://rpc.example');
 
         expect(headers()).not.toHaveProperty('x-dapp-origin');
+    });
+});
+
+// The marker the capabilities cache reads. It stays out of the error itself:
+// `JAWProvider` serialises what it catches straight to the dApp.
+describe('a refusal is marked without being announced', () => {
+    afterEach(() => vi.unstubAllGlobals());
+
+    function stubResponse(status: number, body: string) {
+        vi.stubGlobal(
+            'fetch',
+            vi.fn().mockResolvedValue({
+                ok: status >= 200 && status < 300,
+                status,
+                json: async () => JSON.parse(body),
+                text: async () => body,
+            })
+        );
+    }
+
+    it.each([401, 403])('marks a %s, whatever the body was', async (status) => {
+        stubResponse(status, 'no');
+
+        const error = await fetchRPCRequest({ method: 'wallet_getCapabilities' }, 'https://rpc.example').catch(
+            (e) => e
+        );
+
+        expect(isBackendRefusal(error)).toBe(true);
+        expect(Object.keys(error as object)).not.toContain('refused');
+    });
+
+    it('marks a refusal that came wrapped in an envelope', async () => {
+        stubResponse(403, JSON.stringify({ error: { code: -32001, message: 'origin not registered' } }));
+
+        const error = await fetchRPCRequest({ method: 'wallet_getCapabilities' }, 'https://rpc.example').catch(
+            (e) => e
+        );
+
+        expect(error).toMatchObject({ code: -32001 });
+        expect(isBackendRefusal(error)).toBe(true);
+    });
+
+    it('leaves a server error unmarked, since asking again can answer it', async () => {
+        stubResponse(502, 'Bad Gateway');
+
+        const error = await fetchRPCRequest({ method: 'wallet_getAssets' }, 'https://rpc.example').catch((e) => e);
+
+        expect(isBackendRefusal(error)).toBe(false);
     });
 });

@@ -14,6 +14,26 @@ export function buildHandleJawRpcUrl(baseUrl: string, apiKey?: string): string {
     return apiKey ? `${baseUrl}/handle?api-key=${apiKey}` : `${baseUrl}/handle`;
 }
 
+/**
+ * The errors this module threw because the backend turned the caller down.
+ *
+ * Held beside the error rather than on it: `JAWProvider` serialises what it
+ * catches straight to the dApp, and a marker for our own caching would become a
+ * field of the public error nobody documented.
+ */
+const refusals = new WeakSet<object>();
+
+/** Whether this error is the backend refusing the caller, which asking again cannot change. */
+export function isBackendRefusal(error: unknown): boolean {
+    return typeof error === 'object' && error !== null && refusals.has(error);
+}
+
+/** Marks and returns the error, so a thrower can stay a one-liner. */
+function refusal<T>(error: T): T {
+    if (typeof error === 'object' && error !== null) refusals.add(error);
+    return error;
+}
+
 export async function fetchRPCRequest(request: RequestArguments, rpcUrl: string) {
     const requestBody = {
         ...request,
@@ -48,16 +68,16 @@ export async function fetchRPCRequest(request: RequestArguments, rpcUrl: string)
     }
 
     // Whether the backend turned this caller down, which is the one failure that
-    // answering again cannot change. Carried on the error rather than left to be
-    // read off its code: a refusal that arrives inside a JSON-RPC envelope keeps
-    // that envelope's own code, so a caller matching on the code alone would see
-    // the same refusal as a blip depending on what the backend wrapped it in.
+    // answering again cannot change. Taken from the status, not from the error's
+    // code: a refusal that arrives inside a JSON-RPC envelope keeps that
+    // envelope's own code, so a caller matching on the code alone would read the
+    // same refusal as a blip depending on what the backend wrapped it in.
     const refused = res.status === 401 || res.status === 403;
 
     // A well-formed JSON-RPC error is the answer whatever the status says.
     const rpcError = envelope?.error;
     if (rpcError && typeof rpcError.code === 'number' && typeof rpcError.message === 'string') {
-        throw refused ? Object.assign(rpcError, { refused }) : rpcError;
+        throw refused ? refusal(rpcError) : rpcError;
     }
 
     // A refusal from the proxy is not a JSON-RPC envelope, so destructuring it
@@ -66,9 +86,7 @@ export async function fetchRPCRequest(request: RequestArguments, rpcUrl: string)
     // is how a rejected wallet_getCapabilities reads as "no capabilities".
     if (!res.ok) {
         const message = `JAW RPC request failed with ${res.status}${body ? `: ${body.slice(0, 200)}` : ''}`;
-        throw refused
-            ? Object.assign(standardErrors.provider.unauthorized(message), { refused })
-            : standardErrors.rpc.internal(message);
+        throw refused ? refusal(standardErrors.provider.unauthorized(message)) : standardErrors.rpc.internal(message);
     }
 
     // On a 2xx, anything sitting in `error` is still a failure, however malformed.

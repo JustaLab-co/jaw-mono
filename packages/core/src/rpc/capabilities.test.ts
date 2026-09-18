@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 
-import { handleGetCapabilitiesRequest, clearCapabilitiesCache } from './capabilities.js';
+import { handleGetCapabilitiesRequest, clearCapabilitiesCache, peekCapabilities } from './capabilities.js';
 
 const CAPS = { '0x2105': { feeToken: { supported: true } } };
 
@@ -209,5 +209,42 @@ describe('handleGetCapabilitiesRequest caching', () => {
 
         expect(a).not.toBe(b);
         expect(a).toEqual(b);
+    });
+});
+
+// The synchronous read the chain icon seeds itself from. It has to answer for the
+// same entry the async path fills and age with it, or the two disagree on screen.
+describe('peekCapabilities', () => {
+    it('says nothing before anything was asked', () => {
+        expect(peekCapabilities(request, 'key', true)).toBeUndefined();
+    });
+
+    it('answers with what the async call cached, for the same key', async () => {
+        stubFetch();
+        await handleGetCapabilitiesRequest(request, 'key', true);
+
+        expect(peekCapabilities(request, 'key', true)).toEqual(CAPS);
+        // A different effective request is a different entry, not a near miss.
+        expect(peekCapabilities(request, 'key', false)).toBeUndefined();
+        expect(peekCapabilities(request, 'other-key', true)).toBeUndefined();
+    });
+
+    it('stops answering once the entry goes stale', async () => {
+        stubFetch();
+        await handleGetCapabilitiesRequest(request, 'key', true);
+        const realNow = Date.now;
+        vi.spyOn(Date, 'now').mockImplementation(() => realNow() + 61_000);
+
+        expect(peekCapabilities(request, 'key', true)).toBeUndefined();
+    });
+
+    it('hands back a copy, so a reader cannot corrupt what the next one gets', async () => {
+        stubFetch();
+        await handleGetCapabilitiesRequest(request, 'key', true);
+
+        const peeked = peekCapabilities(request, 'key', true) as Record<string, { evil?: boolean }>;
+        peeked['0x2105'].evil = true;
+
+        expect(peekCapabilities(request, 'key', true)).toEqual(CAPS);
     });
 });

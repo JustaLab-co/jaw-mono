@@ -2,6 +2,8 @@ import { type Address } from 'viem';
 import type { RequestArguments } from '../provider/index.js';
 import { JAW_RPC_URL } from '../constants.js';
 import { buildHandleJawRpcUrl, fetchRPCRequest, hexStringFromNumber } from '../utils/index.js';
+// By path, not through the barrel: this one is ours to read and not the dApp's.
+import { isBackendRefusal } from '../utils/provider.js';
 import { MAINNET_CHAINS } from '../account/smartAccount.js';
 import { store } from '../store/index.js';
 
@@ -36,11 +38,6 @@ const CAPABILITIES_TTL_MS = 60_000;
  * for the window with nothing on the way to clear it, since no caller here retries.
  */
 const CAPABILITIES_REFUSAL_TTL_MS = 30_000;
-
-/** Whether the backend turned this caller down, rather than failing to answer. */
-function isRefusal(error: unknown): boolean {
-    return (error as { refused?: unknown } | null)?.refused === true;
-}
 
 const capabilitiesCache = new Map<string, { at: number; value: CapabilitiesResult }>();
 const capabilitiesRefusals = new Map<string, { at: number; error: unknown }>();
@@ -168,7 +165,7 @@ export async function handleGetCapabilitiesRequest(
         } catch (error) {
             // The rejection propagates to every sharer either way. Only a refusal is
             // kept, and only it is handed to the callers that follow inside the window.
-            if (isRefusal(error)) capabilitiesRefusals.set(cacheKey, { at: Date.now(), error });
+            if (isBackendRefusal(error)) capabilitiesRefusals.set(cacheKey, { at: Date.now(), error });
             throw error;
         }
     })();
