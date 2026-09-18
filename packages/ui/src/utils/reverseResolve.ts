@@ -1,5 +1,6 @@
-const REVERSE_ENDPOINT = 'https://api.justaname.id/ens/v2/reverse';
-const MAX_BATCH = 50;
+import { createPublicClient, http, toCoinType, type Address, type PublicClient } from 'viem';
+import { mainnet } from 'viem/chains';
+
 // ENS metadata service: a valid-cert proxy that resolves a name's avatar record server-side and
 // streams the bytes. We render this instead of the raw avatar URL so the signing/permission page
 // never connects directly to an attacker-controlled host — a host with a TLS cert error there
@@ -21,55 +22,44 @@ export interface ResolvedIdentity {
   avatar?: string;
 }
 
-interface ReverseText {
-  key: string;
-  value: string;
-}
+/**
+ * The mainnet client each rpc url resolves over, kept per url.
+ *
+ * `batch.multicall` is what keeps this one round trip rather than one per address:
+ * viem folds the universal resolver calls issued in the same tick into a single
+ * multicall, which is the property the service hop used to provide.
+ */
+const clients = new Map<string, PublicClient>();
 
-interface ReverseSlot {
-  address: string;
-  name: string | null;
-  // With `records=true`, records are attached in /v2/resolve's shape — note the nested `records.records`.
-  records?: { records?: { texts?: ReverseText[] | null } | null } | null;
-}
-
-interface ReverseResponse {
-  result?: { data?: ReverseSlot | ReverseSlot[] | null };
-}
-
-async function fetchReverseBatch(
-  batch: ReverseInput[],
-  rpcUrl: string,
-  withRecords: boolean
-): Promise<Record<string, ResolvedIdentity>> {
-  const url = new URL(REVERSE_ENDPOINT);
-  // Per-address `@eip155:<chainId>` suffix scopes each address to its chain; the API echoes it back lowercased and stripped.
-  batch.forEach(({ address, chainId }) => url.searchParams.append('address', `${address}@eip155:${chainId}`));
-  url.searchParams.set('rpcUrl', rpcUrl);
-  // records=true returns each name's records inline, so the avatar needs no separate forward resolution.
-  if (withRecords) url.searchParams.set('records', 'true');
-
-  const res = await fetch(url.toString());
-  if (!res.ok) return {};
-
-  const body = (await res.json()) as ReverseResponse;
-  const data = body.result?.data;
-  if (!data) return {};
-
-  const slots = Array.isArray(data) ? data : [data];
-  const resolved: Record<string, ResolvedIdentity> = {};
-  for (const slot of slots) {
-    if (!slot?.name) continue;
-    const identity: ResolvedIdentity = { name: slot.name };
-    if (withRecords) {
-      // Gate on record presence only; the ENS metadata proxy resolves the record's value
-      // (https/ipfs/data/eip155 NFT) itself, so we don't parse it here.
-      const hasAvatar = !!slot.records?.records?.texts?.find((t) => t.key === 'avatar')?.value;
-      if (hasAvatar) identity.avatar = ensMetadataAvatarUrl(slot.name);
-    }
-    resolved[slot.address.toLowerCase()] = identity;
+function clientFor(rpcUrl: string): PublicClient {
+  let client = clients.get(rpcUrl);
+  if (!client) {
+    client = createPublicClient({ chain: mainnet, transport: http(rpcUrl), batch: { multicall: true } });
+    clients.set(rpcUrl, client);
   }
-  return resolved;
+  return client;
+}
+
+/**
+ * The name an address reverses to, or null.
+ *
+ * A chain other than mainnet is asked under its own coin type first, which is the
+ * name the owner set for that chain, and falls back to the default record. The
+ * fallback is what keeps this from showing fewer names than the service did: most
+ * addresses have only the default one.
+ */
+async function nameOf(client: PublicClient, address: Address, chainId: number): Promise<string | null> {
+  if (chainId !== mainnet.id) {
+    const scoped = await client.getEnsName({ address, coinType: toCoinType(chainId) }).catch(() => null);
+    if (scoped) return scoped;
+  }
+  return client.getEnsName({ address }).catch(() => null);
+}
+
+/** Whether the name carries an avatar record. The value is never read here: the metadata proxy resolves it. */
+async function hasAvatar(client: PublicClient, name: string): Promise<boolean> {
+  const record = await client.getEnsText({ name, key: 'avatar' }).catch(() => null);
+  return !!record;
 }
 
 async function reverseResolve(
@@ -80,18 +70,31 @@ async function reverseResolve(
   const unique = Array.from(new Map(inputs.map((i) => [`${i.address.toLowerCase()}:${i.chainId}`, i])).values());
   if (unique.length === 0) return {};
 
-  const batches: ReverseInput[][] = [];
-  for (let i = 0; i < unique.length; i += MAX_BATCH) {
-    batches.push(unique.slice(i, i + MAX_BATCH));
-  }
+  const client = clientFor(rpcUrl);
+  const resolved: Record<string, ResolvedIdentity> = {};
 
-  const results = await Promise.all(
-    batches.map((batch) => fetchReverseBatch(batch, rpcUrl, withRecords).catch(() => ({})))
+  const named = await Promise.all(
+    unique.map(async (input) => ({
+      input,
+      name: await nameOf(client, input.address as Address, input.chainId),
+    }))
   );
-  return Object.assign({}, ...results);
+
+  const avatars = withRecords
+    ? await Promise.all(named.map(({ name }) => (name ? hasAvatar(client, name) : Promise.resolve(false))))
+    : [];
+
+  named.forEach(({ input, name }, i) => {
+    if (!name) return;
+    const identity: ResolvedIdentity = { name };
+    if (withRecords && avatars[i]) identity.avatar = ensMetadataAvatarUrl(name);
+    resolved[input.address.toLowerCase()] = identity;
+  });
+
+  return resolved;
 }
 
-/** Reverse-resolve addresses to ENS names in one batched request (deduped, chunked at 50, parallel). Never rejects; unresolved addresses are omitted. Returns lowercased address -> name. */
+/** Reverse-resolve addresses to ENS names over the chain, deduped and folded into one multicall. Never rejects; unresolved addresses are omitted. Returns lowercased address -> name. */
 export async function reverseResolveAddresses(inputs: ReverseInput[], rpcUrl: string): Promise<Record<string, string>> {
   const identities = await reverseResolve(inputs, rpcUrl, false);
   const names: Record<string, string> = {};
@@ -101,7 +104,7 @@ export async function reverseResolveAddresses(inputs: ReverseInput[], rpcUrl: st
   return names;
 }
 
-/** Like {@link reverseResolveAddresses} but with `records=true`, so each name's avatar comes back in the same request. Returns lowercased address -> { name, avatar? }. */
+/** Like {@link reverseResolveAddresses} but also reports which names carry an avatar record. Returns lowercased address -> { name, avatar? }. */
 export async function reverseResolveWithAvatars(
   inputs: ReverseInput[],
   rpcUrl: string
