@@ -91,21 +91,22 @@ describe('handleGetCapabilitiesRequest caching', () => {
         expect(fetchSpy).toHaveBeenCalledTimes(2);
     });
 
-    // Failing on an unregistered origin is persistent, and the icon hook asks per
-    // chain: without this, a chain picker re-fires one refused request per chain on
-    // every mount.
-    it('holds a failure for its window instead of asking again', async () => {
-        const fetchSpy = vi.fn(async () => {
-            throw new Error('network down');
-        });
+    // An origin the backend will not serve answers the same way every time, and the
+    // icon hook asks per chain: without this a chain picker re-fires one refused
+    // request per chain on every mount.
+    it('holds a refusal for its window instead of asking again', async () => {
+        const fetchSpy = vi.fn(async () => new Response('no', { status: 403 }));
         vi.stubGlobal('fetch', fetchSpy);
 
-        await expect(handleGetCapabilitiesRequest(request, 'key', true)).rejects.toThrow('network down');
-        await expect(handleGetCapabilitiesRequest(request, 'key', true)).rejects.toThrow('network down');
+        await expect(handleGetCapabilitiesRequest(request, 'key', true)).rejects.toMatchObject({ code: 4100 });
+        await expect(handleGetCapabilitiesRequest(request, 'key', true)).rejects.toMatchObject({ code: 4100 });
         expect(fetchSpy).toHaveBeenCalledTimes(1);
     });
 
-    it('retries once the failure goes stale', async () => {
+    // The other half of the rule: a blip is not an answer, and nothing here retries
+    // on its own, so holding one would leave a dialog without its fee row for the
+    // whole window over a failure that was already gone.
+    it('lets the next caller retry after a transient failure', async () => {
         let calls = 0;
         const fetchSpy = vi.fn(async () => {
             calls++;
@@ -118,7 +119,24 @@ describe('handleGetCapabilitiesRequest caching', () => {
         vi.stubGlobal('fetch', fetchSpy);
 
         await expect(handleGetCapabilitiesRequest(request, 'key', true)).rejects.toThrow('network down');
-        // The failure window is 30s; jump past it.
+        await expect(handleGetCapabilitiesRequest(request, 'key', true)).resolves.toEqual(CAPS);
+        expect(fetchSpy).toHaveBeenCalledTimes(2);
+    });
+
+    it('retries once the refusal goes stale', async () => {
+        let calls = 0;
+        const fetchSpy = vi.fn(async () => {
+            calls++;
+            if (calls === 1) return new Response('no', { status: 403 });
+            return new Response(JSON.stringify({ jsonrpc: '2.0', id: 1, result: CAPS }), {
+                status: 200,
+                headers: { 'Content-Type': 'application/json' },
+            });
+        });
+        vi.stubGlobal('fetch', fetchSpy);
+
+        await expect(handleGetCapabilitiesRequest(request, 'key', true)).rejects.toMatchObject({ code: 4100 });
+        // The refusal window is 30s; jump past it.
         const realNow = Date.now;
         vi.spyOn(Date, 'now').mockImplementation(() => realNow() + 31_000);
 
