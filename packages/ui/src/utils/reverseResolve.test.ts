@@ -49,14 +49,27 @@ describe('names read over the chain', () => {
     expect(JSON.stringify(result)).not.toContain('cdn.justaname.id');
   });
 
-  it('asks a non-mainnet chain under its own coin type, then the default record', async () => {
-    getEnsName.mockResolvedValueOnce(null).mockResolvedValueOnce('fallback.eth');
+  // Both records at once, since a second round trip inside a two second budget
+  // for the rarer answer is the wrong trade.
+  it('asks a non-mainnet chain for its own record and the default together, and prefers its own', async () => {
+    getEnsName.mockImplementation(({ coinType }: { coinType?: bigint }) =>
+      Promise.resolve(coinType ? 'base-name.eth' : 'default.eth')
+    );
 
     const names = await reverseResolveAddresses([{ address: ADDRESS, chainId: 8453 }], KEYED);
 
-    expect(getEnsName.mock.calls[0][0]).toMatchObject({ coinType: expect.anything() });
-    expect(getEnsName.mock.calls[1][0]).toEqual({ address: ADDRESS });
-    expect(names[identityKey(ADDRESS, 8453)]).toBe('fallback.eth');
+    expect(getEnsName).toHaveBeenCalledTimes(2);
+    expect(names[identityKey(ADDRESS, 8453)]).toBe('base-name.eth');
+  });
+
+  it('falls back to the default record when the chain has none of its own', async () => {
+    getEnsName.mockImplementation(({ coinType }: { coinType?: bigint }) =>
+      Promise.resolve(coinType ? null : 'default.eth')
+    );
+
+    const names = await reverseResolveAddresses([{ address: ADDRESS, chainId: 8453 }], KEYED);
+
+    expect(names[identityKey(ADDRESS, 8453)]).toBe('default.eth');
   });
 
   // The same address can carry a different name per chain, and the row that shows
@@ -79,8 +92,12 @@ describe('names read over the chain', () => {
     expect(names[identityKey(ADDRESS, 1)]).toBe('main-name.eth');
   });
 
-  it('leaves out a chain whose coin type cannot be expressed, and keeps the rest', async () => {
-    getEnsName.mockResolvedValue('kept.eth');
+  // A chain id ENSIP-9 cannot express still gets the default record: what must not
+  // happen is the throw taking down every other name asked for in the same batch.
+  it('gives a chain whose coin type cannot be expressed the default name, and keeps the rest', async () => {
+    getEnsName.mockImplementation(({ coinType }: { coinType?: bigint }) =>
+      Promise.resolve(coinType ? 'scoped.eth' : 'default.eth')
+    );
 
     const names = await reverseResolveAddresses(
       [
@@ -90,13 +107,26 @@ describe('names read over the chain', () => {
       KEYED
     );
 
-    expect(names[identityKey(OTHER, 1)]).toBe('kept.eth');
+    expect(names[identityKey(ADDRESS, 11297108109)]).toBe('default.eth');
+    expect(names[identityKey(OTHER, 1)]).toBe('default.eth');
   });
 
   it('omits an address the chain could not answer for, and never rejects', async () => {
     getEnsName.mockRejectedValue(new Error('rpc down'));
 
     await expect(reverseResolveWithAvatars([{ address: ADDRESS, chainId: 1 }], KEYED)).resolves.toEqual({});
+  });
+
+  // A node that did not answer is not an answer. With the multicall batching on,
+  // one 5xx rejects every caller in the batch, so remembering it as "no name"
+  // would put hex on the whole dialog for the window.
+  it('does not remember a node that failed to answer', async () => {
+    getEnsName.mockRejectedValueOnce(new Error('rpc down')).mockResolvedValue('arrived.eth');
+
+    await reverseResolveAddresses([{ address: ADDRESS, chainId: 1 }], KEYED);
+    const names = await reverseResolveAddresses([{ address: ADDRESS, chainId: 1 }], KEYED);
+
+    expect(names[identityKey(ADDRESS, 1)]).toBe('arrived.eth');
   });
 });
 
@@ -176,6 +206,32 @@ describe('what is remembered', () => {
   });
 });
 
+describe('what the memory is keyed on', () => {
+  // A different url is a different backend and, keyless, a different answer: the
+  // offchain names it refuses must not be inherited by a call that carries a key.
+  it('does not serve one rpc url the answer another one got', async () => {
+    getEnsName.mockRejectedValue(offchainLookup);
+    stubFetch(serviceBody(ADDRESS, 'offchain.justan.id'));
+
+    await reverseResolveWithAvatars([{ address: ADDRESS, chainId: 1 }], KEYLESS);
+    const result = await reverseResolveWithAvatars([{ address: ADDRESS, chainId: 1 }], KEYED);
+
+    expect(result[identityKey(ADDRESS, 1)]).toEqual({ name: 'offchain.justan.id' });
+  });
+
+  // A name remembered without its avatar would otherwise be handed to a caller
+  // that asked for one.
+  it('does not serve a caller asking for an avatar the answer that had none', async () => {
+    getEnsName.mockResolvedValue('withavatar.eth');
+    getEnsText.mockResolvedValue('https://cdn.example/a.png');
+
+    await reverseResolveAddresses([{ address: ADDRESS, chainId: 1 }], KEYED);
+    const result = await reverseResolveWithAvatars([{ address: ADDRESS, chainId: 1 }], KEYED);
+
+    expect(result[identityKey(ADDRESS, 1)]?.avatar).toBe(ensMetadataAvatarUrl('withavatar.eth'));
+  });
+});
+
 describe('the time it is given', () => {
   // Names are decoration: what has not arrived by the deadline is left out and the
   // address renders as hex, and nothing is remembered, so the next dialog asks again.
@@ -192,5 +248,52 @@ describe('the time it is given', () => {
     getEnsName.mockResolvedValue('arrived.eth');
     const names = await reverseResolveAddresses([{ address: ADDRESS, chainId: 1 }], KEYED);
     expect(names[identityKey(ADDRESS, 1)]).toBe('arrived.eth');
+  });
+});
+
+// The service echoes the address alone, with the chain suffix stripped, so two
+// chains asked in one request would collapse onto the same slot and one of them
+// would take the other's name.
+describe('offchain names across two chains', () => {
+  it('asks once per chain and keeps each name on its own', async () => {
+    getEnsName.mockRejectedValue(offchainLookup);
+    const fetchMock = vi.fn(async (url: string) => ({
+      ok: true,
+      json: async () =>
+        serviceBody(
+          ADDRESS,
+          url.includes('eip155%3A1&') || url.includes('eip155:1&') ? 'main.justan.id' : 'base.justan.id'
+        ),
+    }));
+    vi.stubGlobal('fetch', fetchMock);
+
+    const result = await reverseResolveWithAvatars(
+      [
+        { address: ADDRESS, chainId: 1 },
+        { address: ADDRESS, chainId: 8453 },
+      ],
+      KEYED
+    );
+
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    expect(result[identityKey(ADDRESS, 1)]?.name).toBe('main.justan.id');
+    expect(result[identityKey(ADDRESS, 8453)]?.name).toBe('base.justan.id');
+  });
+
+  // Everything in that answer is off the wire, so a slot without an address
+  // leaves itself out rather than taking the batch down with it.
+  it('keeps the batch when the service answers with a malformed slot', async () => {
+    getEnsName.mockRejectedValue(offchainLookup);
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async () => ({
+        ok: true,
+        json: async () => ({ result: { data: [null, { address: ADDRESS, name: 'fine.justan.id' }] } }),
+      }))
+    );
+
+    const result = await reverseResolveWithAvatars([{ address: ADDRESS, chainId: 1 }], KEYED);
+
+    expect(result[identityKey(ADDRESS, 1)]?.name).toBe('fine.justan.id');
   });
 });

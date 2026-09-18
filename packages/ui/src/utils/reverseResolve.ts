@@ -19,12 +19,14 @@ export function ensMetadataAvatarUrl(name: string): string {
 const REVERSE_ENDPOINT = 'https://api.justaname.id/ens/v2/reverse';
 
 /**
- * How long a resolution is remembered, per address, chain and rpc url.
+ * How long an answer is remembered, per address, chain, rpc url and whether the
+ * avatar was asked for.
  *
  * Names change rarely and the dialogs re-render often, so without this a screen
- * asks again on every paint. Failures are remembered too: a name that does not
- * exist will not start existing within the window. A timeout is not, since what
- * it reports is the network of the moment rather than an answer.
+ * asks again on every paint. An answer is what gets remembered, including the
+ * answer that there is no name: that one will not change within the window. A
+ * node that did not answer is not an answer, and neither is a timeout: both
+ * report the network of the moment, and both are asked again.
  */
 const MEMORY_MS = 60_000;
 
@@ -42,6 +44,14 @@ export interface ReverseInput {
   chainId: number;
 }
 
+/** One slot of the name service's answer. Everything in it is off the wire, so nothing is assumed present. */
+interface ReverseSlot {
+  address?: string;
+  name?: string | null;
+  // With `records=true` the records arrive in /v2/resolve's shape, nested twice.
+  records?: { records?: { texts?: { key: string }[] | null } | null } | null;
+}
+
 export interface ResolvedIdentity {
   name: string;
   avatar?: string;
@@ -53,13 +63,19 @@ export function identityKey(address: string, chainId: number): string {
 }
 
 type EnsClient = ReturnType<typeof getPublicClient>;
-type Outcome = { identity: ResolvedIdentity | null } | 'offchain' | 'timeout';
+/** An answer, or one of the two things that are not one. */
+type Outcome = { identity: ResolvedIdentity | null } | 'offchain' | 'unanswered';
 
 const memory = new Map<string, { at: number; identity: ResolvedIdentity | null }>();
 
 /** Drops what was remembered. For tests, which would otherwise share it. */
 export function clearIdentityMemory(): void {
   memory.clear();
+}
+
+/** What an answer is filed under. The url and the avatar are part of it: a key changes who answers, and a name remembered without its avatar would be served to a caller that asked for one. */
+function memoryKey(input: ReverseInput, rpcUrl: string, withAvatar: boolean): string {
+  return `${identityKey(input.address, input.chainId)}|${rpcUrl}|${withAvatar ? 'avatar' : 'name'}`;
 }
 
 function remembered(key: string): { identity: ResolvedIdentity | null } | undefined {
@@ -88,23 +104,28 @@ function isOffchainLookup(error: unknown): boolean {
 /**
  * The name an address reverses to over the chain.
  *
- * A chain other than mainnet is asked under its own coin type first, which is the
- * name the owner set for that chain, and falls back to the default record: most
- * addresses have only that one. `toCoinType` throws for a chain id ENSIP-9 cannot
- * express, and it is called inside the promise so one odd chain leaves its own
- * name out instead of rejecting the batch every other name is in.
+ * Off mainnet both records are asked at once and the chain's own wins: it is the
+ * name the owner set for that chain, and the default is what almost everyone has.
+ * Asking in sequence would put a second round trip inside a two second budget for
+ * the sake of the rarer answer.
+ *
+ * `toCoinType` throws for a chain id ENSIP-9 cannot express. That is caught here,
+ * so such a chain still gets the default name rather than rejecting the batch
+ * every other name is in.
  */
 async function nameOnChain(client: EnsClient, address: Address, chainId: number): Promise<string | null> {
-  if (chainId !== mainnet.id) {
-    const scoped = await Promise.resolve()
-      .then(() => client.getEnsName({ address, coinType: toCoinType(chainId) }))
-      .catch((error) => {
-        if (isOffchainLookup(error)) throw error;
-        return null;
-      });
-    if (scoped) return scoped;
-  }
-  return client.getEnsName({ address });
+  const fallback = client.getEnsName({ address });
+  if (chainId === mainnet.id) return fallback;
+
+  const scoped = await Promise.resolve()
+    .then(() => client.getEnsName({ address, coinType: toCoinType(chainId) }))
+    .catch((error) => {
+      // An offchain resolver is the server's to follow, and the name it holds is
+      // the one this address answers with, so it decides for both reads.
+      if (isOffchainLookup(error)) throw error;
+      return null;
+    });
+  return scoped ?? (await fallback);
 }
 
 /** Whether the name carries an avatar record. The value is never read: the metadata proxy resolves it. */
@@ -124,11 +145,13 @@ async function resolveOnChain(
     const avatar = withAvatar ? await avatarOf(client, name) : undefined;
     return { identity: avatar ? { name, avatar } : { name } };
   } catch (error) {
-    // Only this one goes to the server. Anything else is a node that did not
-    // answer, and sending it on would turn a blip of ours into a second request
-    // that fails the same way.
+    // Only the offchain lookup goes to the server. Anything else is a node that
+    // did not answer: sending it on would turn a blip of ours into a second
+    // request that fails the same way, and filing it as "no name" would put hex
+    // on the screen for the whole window. With the multicall batching on, one
+    // 5xx rejects every caller in the batch, so that would be the whole dialog.
     if (isOffchainLookup(error)) return 'offchain';
-    return { identity: null };
+    return 'unanswered';
   }
 }
 
@@ -141,7 +164,7 @@ function carriesApiKey(rpcUrl: string): boolean {
   }
 }
 
-/** The offchain names, resolved by the server that may follow their gateways. One request for the batch. */
+/** The offchain names, resolved by the server that may follow their gateways. One request per chain, since the service echoes the address alone and two chains would collapse onto it. */
 async function resolveOffchain(
   inputs: ReverseInput[],
   rpcUrl: string,
@@ -155,44 +178,43 @@ async function resolveOffchain(
     return answers;
   }
 
-  const url = new URL(REVERSE_ENDPOINT);
-  inputs.forEach(({ address, chainId }) => url.searchParams.append('address', `${address}@eip155:${chainId}`));
-  url.searchParams.set('rpcUrl', rpcUrl);
-  if (withAvatar) url.searchParams.set('records', 'true');
-
-  const res = await fetch(url.toString());
-  if (!res.ok) return answers;
-
-  const body = (await res.json()) as {
-    result?: {
-      data?:
-        | {
-            address: string;
-            name: string | null;
-            records?: { records?: { texts?: { key: string }[] | null } | null } | null;
-          }
-        | {
-            address: string;
-            name: string | null;
-            records?: { records?: { texts?: { key: string }[] | null } | null } | null;
-          }[]
-        | null;
-    };
-  };
-  const data = body.result?.data;
-  if (!data) return answers;
-
-  for (const slot of Array.isArray(data) ? data : [data]) {
-    const input = inputs.find((i) => i.address.toLowerCase() === slot.address.toLowerCase());
-    if (!input) continue;
-    const key = identityKey(slot.address, input.chainId);
-    if (!slot.name) {
-      answers.set(key, null);
-      continue;
-    }
-    const hasAvatar = withAvatar && !!slot.records?.records?.texts?.some((t) => t.key === 'avatar');
-    answers.set(key, hasAvatar ? { name: slot.name, avatar: ensMetadataAvatarUrl(slot.name) } : { name: slot.name });
+  const byChain = new Map<number, ReverseInput[]>();
+  for (const input of inputs) {
+    const group = byChain.get(input.chainId);
+    if (group) group.push(input);
+    else byChain.set(input.chainId, [input]);
   }
+
+  await Promise.all(
+    Array.from(byChain, async ([chainId, group]) => {
+      const url = new URL(REVERSE_ENDPOINT);
+      group.forEach(({ address }) => url.searchParams.append('address', `${address}@eip155:${chainId}`));
+      url.searchParams.set('rpcUrl', rpcUrl);
+      if (withAvatar) url.searchParams.set('records', 'true');
+
+      const res = await fetch(url.toString());
+      if (!res.ok) return;
+
+      const body = (await res.json()) as { result?: { data?: ReverseSlot | ReverseSlot[] | null } };
+      const data = body.result?.data;
+      if (!data) return;
+
+      for (const slot of Array.isArray(data) ? data : [data]) {
+        // Read back from the wire, so nothing here is assumed to be there.
+        if (!slot?.address) continue;
+        const key = identityKey(slot.address, chainId);
+        if (!slot.name) {
+          answers.set(key, null);
+          continue;
+        }
+        const hasAvatar = withAvatar && !!slot.records?.records?.texts?.some((t) => t.key === 'avatar');
+        answers.set(
+          key,
+          hasAvatar ? { name: slot.name, avatar: ensMetadataAvatarUrl(slot.name) } : { name: slot.name }
+        );
+      }
+    })
+  );
   return answers;
 }
 
@@ -208,53 +230,59 @@ async function reverseResolve(
   const ask: ReverseInput[] = [];
 
   for (const input of unique) {
-    const key = identityKey(input.address, input.chainId);
-    const known = remembered(key);
+    const known = remembered(memoryKey(input, rpcUrl, withAvatar));
     if (!known) {
       ask.push(input);
       continue;
     }
-    if (known.identity) resolved[key] = known.identity;
+    if (known.identity) resolved[identityKey(input.address, input.chainId)] = known.identity;
   }
   if (ask.length === 0) return resolved;
 
   const client = getPublicClient(mainnet.id, rpcUrl);
-  // One budget for the whole thing. A timeout leaves nothing remembered, so the
-  // next dialog asks again rather than inheriting a verdict the network gave.
-  let expired = false;
-  const budget = new Promise<'timeout'>((resolve) =>
-    setTimeout(() => {
-      expired = true;
-      resolve('timeout');
-    }, BUDGET_MS)
-  );
+  // One budget for the whole thing, cleared as soon as the work is done rather
+  // than left to fire into an empty room. Nothing is remembered when it expires,
+  // so the next dialog asks again instead of inheriting the network of a moment.
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const budget = new Promise<'timeout'>((resolve) => {
+    timer = setTimeout(() => resolve('timeout'), BUDGET_MS);
+  });
 
-  const onChain = await Promise.race([
-    Promise.all(ask.map(async (input) => ({ input, outcome: await resolveOnChain(client, input, withAvatar) }))),
-    budget,
-  ]);
-  if (onChain === 'timeout') return resolved;
+  try {
+    const onChain = await Promise.race([
+      Promise.all(ask.map(async (input) => ({ input, outcome: await resolveOnChain(client, input, withAvatar) }))),
+      budget,
+    ]);
+    if (onChain === 'timeout') return resolved;
 
-  const offchain: ReverseInput[] = [];
-  for (const { input, outcome } of onChain) {
-    const key = identityKey(input.address, input.chainId);
-    if (outcome === 'offchain') {
-      offchain.push(input);
-      continue;
+    const offchain: ReverseInput[] = [];
+    for (const { input, outcome } of onChain) {
+      const key = identityKey(input.address, input.chainId);
+      // A node that did not answer is asked again by whoever renders next.
+      if (outcome === 'unanswered') continue;
+      if (outcome === 'offchain') {
+        offchain.push(input);
+        continue;
+      }
+      memory.set(memoryKey(input, rpcUrl, withAvatar), { at: Date.now(), identity: outcome.identity });
+      if (outcome.identity) resolved[key] = outcome.identity;
     }
-    memory.set(key, { at: Date.now(), identity: outcome.identity });
-    if (outcome.identity) resolved[key] = outcome.identity;
-  }
-  if (offchain.length === 0) return resolved;
+    if (offchain.length === 0) return resolved;
 
-  const answers = await Promise.race([resolveOffchain(offchain, rpcUrl, withAvatar).catch(() => null), budget]);
-  if (answers === 'timeout' || !answers || expired) return resolved;
+    const answers = await Promise.race([resolveOffchain(offchain, rpcUrl, withAvatar).catch(() => null), budget]);
+    if (answers === 'timeout' || !answers) return resolved;
 
-  for (const [key, identity] of answers) {
-    memory.set(key, { at: Date.now(), identity });
-    if (identity) resolved[key] = identity;
+    for (const input of offchain) {
+      const key = identityKey(input.address, input.chainId);
+      if (!answers.has(key)) continue;
+      const identity = answers.get(key) ?? null;
+      memory.set(memoryKey(input, rpcUrl, withAvatar), { at: Date.now(), identity });
+      if (identity) resolved[key] = identity;
+    }
+    return resolved;
+  } finally {
+    clearTimeout(timer);
   }
-  return resolved;
 }
 
 /** Reverse-resolve addresses to ENS names over the chain. Never rejects; unresolved addresses are omitted. Keyed by {@link identityKey}. */
