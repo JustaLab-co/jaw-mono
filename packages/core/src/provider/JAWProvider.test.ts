@@ -1255,6 +1255,28 @@ describe('JAWProvider', () => {
             expect(disconnectSpy).toHaveBeenCalled();
         });
 
+        // The same code, from the proxy turning the caller down rather than from a
+        // session that died. It arrives on read-only calls, so an unregistered
+        // dApp asking for capabilities would be logged out of a working wallet.
+        it('stays connected when the backend refused the caller', async () => {
+            // The real transport, since the marker is what this is about and the
+            // mock above cannot carry it.
+            const transport = await vi.importActual<typeof import('../utils/provider.js')>('../utils/provider.js');
+            vi.stubGlobal('fetch', vi.fn().mockResolvedValue({ ok: false, status: 403, text: async () => 'no' }));
+            const refusal = await transport
+                .fetchRPCRequest({ method: 'wallet_getCapabilities' }, 'https://rpc.example')
+                .catch((e) => e);
+            vi.unstubAllGlobals();
+            (mockSigner.request as Mock).mockRejectedValue(refusal);
+            const disconnectSpy = vi.spyOn(provider, 'disconnect');
+
+            await expect(provider.request({ method: 'eth_accounts' })).rejects.toMatchObject({
+                code: standardErrorCodes.provider.unauthorized,
+            });
+
+            expect(disconnectSpy).not.toHaveBeenCalled();
+        });
+
         it('should not disconnect on non-unauthorized errors', async () => {
             // Arrange
             const request: RequestArguments = {
