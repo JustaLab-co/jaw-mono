@@ -357,6 +357,24 @@ export async function grantPermissions(
     paymasterContextOverride?: Record<string, unknown>,
     prependCalls?: { to: Address; value?: bigint; data?: Hex } | Array<{ to: Address; value?: bigint; data?: Hex }>
 ): Promise<WalletGrantPermissionsResponse> {
+    // Refused here, before anything reaches the chain, because a grant has two
+    // legs that fail in opposite directions. The approval goes out first and the
+    // relay stores it second, so a relay call refused for want of a key leaves a
+    // permission approved on chain and absent from the record every reader goes
+    // through: `getPermission`, and every session resolving what it may spend.
+    // The chain says approved, the product says nothing exists, and only a
+    // revoke the user does not know to make would clear it.
+    //
+    // Unreachable while a caller with no key cannot reach the proxy at all,
+    // since the first leg fails first. It becomes reachable the moment requests
+    // are served without one.
+    if (!apiKey) {
+        throw new Error(
+            'apiKey is required to grant a permission. The approval is sent on chain before the relay stores it, ' +
+                'so granting without one would leave a permission approved and unreadable.'
+        );
+    }
+
     // Derive address and chainId from smart account and chain
     const account = smartAccount.address;
     const chainId = `0x${chain.id.toString(16)}` as Hex;
@@ -457,6 +475,14 @@ export async function revokePermission(
  * Get permission from the relay using typed REST API call with path params
  */
 export async function getPermissionFromRelay(permissionHash: Hex, apiKey: string): Promise<StorePermissionApiResponse> {
+    // Named rather than left to the proxy, which answers an authorization error
+    // that says nothing a caller can act on. This is the one door every read of
+    // a stored permission goes through, `revokePermission` included, so the
+    // message is written once here.
+    if (!apiKey) {
+        throw new Error('apiKey is required to read a permission from the relay');
+    }
+
     const permissionsBaseUrl = JAW_PROXY_URL;
 
     return await restCall(

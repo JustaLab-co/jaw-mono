@@ -1,6 +1,7 @@
 import { Command, Flags } from '@oclif/core';
 import type { OutputFormat } from './lib/types.js';
 import { loadConfig } from './lib/config.js';
+import { apiKeyFor } from './lib/api-key.js';
 import { formatOutput } from './lib/output.js';
 
 export abstract class BaseCommand extends Command {
@@ -33,12 +34,16 @@ export abstract class BaseCommand extends Command {
     }),
   };
 
-  protected resolveApiKey(flags: { 'api-key'?: string }): string {
-    const apiKey = flags['api-key'] ?? loadConfig().apiKey;
-    if (!apiKey) {
-      this.error('API key required. Set via --api-key, JAW_API_KEY env, or `jaw config set apiKey <key>`');
-    }
-    return apiKey;
+  /**
+   * The api key to operate under, or undefined when there is none yet.
+   *
+   * It resolves rather than requires, because a command that opens the browser
+   * no longer needs one up front: the bridge fills one in and the CLI keeps it.
+   * A command that signs locally has nobody to fill it in and refuses for
+   * itself, which is the only place that knows what the absence costs it.
+   */
+  protected resolveApiKey(flags: { 'api-key'?: string }): string | undefined {
+    return apiKeyFor(loadConfig(), flags['api-key']);
   }
 
   protected resolveChainId(flags: { chain?: number }): number {

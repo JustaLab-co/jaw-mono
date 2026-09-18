@@ -29,10 +29,7 @@ export function formatRemaining(seconds: number): string {
 
 export interface StatusFacts {
   expired: boolean;
-  /**
-   * Defaults to `unknown`, which reports exactly what every session reported
-   * before this could be read: the local file, and nothing more.
-   */
+  /** Defaults to `unknown`, which reports off the local file and nothing more. */
   liveness?: PermissionLiveness;
   /**
    * True for a session an older CLI created, whose permission was granted to an
@@ -47,6 +44,12 @@ export interface StatusFacts {
   /** False when the session's chain has no USDC in the registry. */
   hasAsset: boolean;
   spent: bigint;
+  /**
+   * Checkpoints whose spend figure could not be read, and so were left out of
+   * `spent`. Every figure derived from the ledger is a floor while this is
+   * above zero, and a payment refuses outright rather than spending against it.
+   */
+  unreadableCheckpoints?: number;
   sessionCap: bigint | null;
   /**
    * The granted per-period cap and what has gone against it in the current
@@ -57,10 +60,12 @@ export interface StatusFacts {
    * at all, and checking only that one stayed quiet while the cap that
    * actually binds was exhausted.
    */
-  periodCap?: bigint | null;
+  periodCap: bigint | null;
   periodSpent?: bigint | null;
   /** How the window reads in a sentence, e.g. "day" or "2 weeks". */
   periodLabel?: string | null;
+  /** False for a cap over the whole permission, which never comes back on its own. */
+  periodResets?: boolean;
   /**
    * The gas reserve refills leave in the payer, in the same formatted units as
    * the balances. A payer holding no more than this is holding what the CLI put
@@ -79,6 +84,15 @@ export interface StatusFacts {
  */
 export function diagnose(facts: StatusFacts): string[] {
   const problems: string[] = [];
+
+  // First, because it is the reason every figure below is a floor.
+  if (facts.unreadableCheckpoints) {
+    problems.push(
+      `${facts.unreadableCheckpoints} checkpoint row(s) in the ledger have an unreadable amount, so ` +
+        'the spend figures here are lower than what was really spent, and a payment will refuse ' +
+        'rather than spend against them. The rows they replaced are in the archive beside the ledger.'
+    );
+  }
 
   if (facts.expired) {
     problems.push('The session expired. Run `jaw session setup --x402`.');
@@ -149,8 +163,22 @@ export function diagnose(facts: StatusFacts): string[] {
   // own rather than needing a config change.
   if (facts.periodCap != null && facts.periodSpent != null && facts.periodSpent >= facts.periodCap) {
     problems.push(
-      `The granted allowance for this ${facts.periodLabel ?? 'period'} is used up. It resets at the end of ` +
-        'the window, or grant a new permission with `jaw session setup --x402`.'
+      `The granted allowance for ${facts.periodLabel ?? 'this period'} is used up. ` +
+        (facts.periodResets === false
+          ? 'It does not reset: grant a new permission with `jaw session setup --x402`.'
+          : 'It resets at the end of the window, or grant a new permission with `jaw session setup --x402`.')
+    );
+  }
+
+  // A limit that binds and cannot be read. `checkPolicy` refuses every payment
+  // on that input, so a session reported ready over it would send an agent to a
+  // command that cannot pay. Keyed on the label, which the caller
+  // fills from the limit it found: a cap that is null beside a label that is
+  // not is a limit that binds and whose figure nobody could parse.
+  if (facts.periodLabel != null && facts.periodCap === null) {
+    problems.push(
+      `The granted allowance for ${facts.periodLabel} cannot be read, so every payment is refused. ` +
+        'Run `jaw session setup --x402` to grant a new permission.'
     );
   }
 

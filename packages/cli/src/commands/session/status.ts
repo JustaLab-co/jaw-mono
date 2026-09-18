@@ -1,7 +1,14 @@
 import { BaseCommand } from '../../base-command.js';
 import { keystoreExists } from '../../lib/keystore.js';
-import { isLegacySession, liveOrphans, loadSessionConfig } from '../../lib/session-config.js';
+import {
+  expiryInstant,
+  isLegacySession,
+  liveOrphans,
+  loadSessionConfig,
+  sessionUsable,
+} from '../../lib/session-config.js';
 import { loadConfig } from '../../lib/config.js';
+import { apiKeyFor } from '../../lib/api-key.js';
 import { readLiveness, type PermissionLiveness } from '../../x402/permission-onchain.js';
 import { recoverPermission } from '../../x402/permission-recovery.js';
 import type { OutputFormat } from '../../lib/types.js';
@@ -24,7 +31,8 @@ export default class SessionStatus extends BaseCommand {
 
     const config = loadSessionConfig();
     const now = Date.now() / 1000;
-    const isExpired = config.expiry <= now;
+    const endsAt = expiryInstant(config.expiry);
+    const isExpired = !sessionUsable(config.expiry, now);
     // The one fact no local file can hold. Expiry is already on disk, so it
     // needs no read; a revoke made from keys.jaw.id or from another machine
     // leaves this file saying the session is fine. Fails soft to 'unknown',
@@ -32,7 +40,7 @@ export default class SessionStatus extends BaseCommand {
     // Best-effort, and quiet without an API key: this command has never needed
     // one, and a session written before the struct existed should not start
     // demanding a key to report what it always reported.
-    const permission = await recoverPermission(config, loadConfig().apiKey);
+    const permission = await recoverPermission(config, apiKeyFor(loadConfig()));
     // Carried into everything below, including the json, so the run that
     // recovers the struct reports it rather than the next one.
     const current = permission ? { ...config, permission } : config;
@@ -59,17 +67,29 @@ export default class SessionStatus extends BaseCommand {
     }
 
     if (isExpired) {
-      const ago = Math.floor((now - config.expiry) / 86400);
+      // `endsAt` is null when the file does not say, which lands here because a
+      // report answers the way the paying path does.
+      const ago = endsAt ? Math.floor((now - endsAt.getTime() / 1000) / 86400) : null;
       this.log('Session expired.\n');
       this.log(`  Session address:  ${config.sessionAddress}`);
       this.log(`  Owner address:    ${config.ownerAddress}`);
       this.log(`  Permission ID:    ${config.permissionId}${onChainNote(liveness)}`);
       this.log(`  Chain:            ${config.chainId}`);
-      this.log(`  Expired:          ${new Date(config.expiry * 1000).toISOString()} (${ago} days ago)`);
+      this.log(
+        endsAt
+          ? `  Expired:          ${endsAt.toISOString()} (${ago} days ago)`
+          : '  Expired:          unknown, the session file does not say when it ends'
+      );
       if (stillLive.length > 0) this.log(stillLiveLine(stillLive.length));
       this.log('\nRun `jaw session setup` to create a new session.');
     } else {
-      const remaining = Math.floor((config.expiry - now) / 86400);
+      // Null here too, and not only on the expired branch: `sessionUsable`
+      // takes any finite expiry past now, while `expiryInstant` also refuses
+      // one past what a Date can hold. A hand-edited 99999999999999 clears the
+      // first and not the second, which is the same value `policyFromPermission`
+      // guards against. Reporting is the job here, so a field that will not read
+      // is said rather than dereferenced.
+      const remaining = endsAt ? Math.floor((endsAt.getTime() / 1000 - now) / 86400) : null;
       this.log('Session active.\n');
       this.log(`  Session address:  ${config.sessionAddress}`);
       if (isLegacySession(config)) {
@@ -82,13 +102,16 @@ export default class SessionStatus extends BaseCommand {
       this.log(`  Owner address:    ${config.ownerAddress}`);
       this.log(`  Permission ID:    ${config.permissionId}${onChainNote(liveness)}`);
       this.log(`  Chain:            ${config.chainId}`);
-      this.log(`  Expires:          ${new Date(config.expiry * 1000).toISOString()}`);
+      this.log(`  Expires:          ${endsAt ? endsAt.toISOString() : 'unknown'}`);
+      // Same fallback as the Expires line above.
+      const valid =
+        remaining === null ? 'Valid, for how long the file does not say' : `Valid (${remaining} days remaining)`;
       // Revoked outranks the local expiry: the session has time left on paper
       // and can no longer pull anything through the permission.
       this.log(
         liveness === 'revoked'
           ? '  Status:           Revoked on chain. Run `jaw session setup` to create a new session.'
-          : `  Status:           Valid (${remaining} days remaining)`
+          : `  Status:           ${valid}`
       );
       if (stillLive.length > 0) this.log(stillLiveLine(stillLive.length));
     }

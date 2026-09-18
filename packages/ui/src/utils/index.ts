@@ -10,6 +10,7 @@ export * from './siwe';
 export * from './sanitize';
 export * from './safeUrl';
 export * from './displayFormat';
+export * from './spendExposure';
 export * from './functionSignature';
 export * from './transactionFailure';
 export * from './permissionExecution';

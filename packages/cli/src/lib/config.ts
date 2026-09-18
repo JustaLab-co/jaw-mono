@@ -34,12 +34,29 @@ export function loadConfig(): JawConfig {
   }
 }
 
+/**
+ * Written to a temporary file and renamed over the real one, which is atomic on
+ * the same filesystem, so a reader never sees a half-written config.
+ *
+ * The bridge writes this file now: a connect that is handed a first or rotated
+ * workspace key keeps it, and the MCP server runs alongside a terminal, so two
+ * processes touching it at once is ordinary rather than exotic. A plain write
+ * truncates first, and a reader landing in that window gets "not valid JSON" on
+ * a file that still holds the api key, the paymasters and the x402 caps. Same
+ * reasoning, and the same shape, as `writeSessionConfig`.
+ *
+ * The pid in the temp name keeps two writers from sharing one scratch file.
+ */
 export function saveConfig(config: JawConfig): void {
   ensureDir(PATHS.root);
-  fs.writeFileSync(PATHS.config, JSON.stringify(config, null, 2) + '\n', {
+  const temp = `${PATHS.config}.${process.pid}.tmp`;
+  fs.writeFileSync(temp, JSON.stringify(config, null, 2) + '\n', {
     encoding: 'utf-8',
     mode: 0o600,
   });
+  // `mode` on create is masked by the umask; this is what actually pins it.
+  fs.chmodSync(temp, 0o600);
+  fs.renameSync(temp, PATHS.config);
 }
 
 /** Paymaster URLs embed provider API keys as query params (e.g. Pimlico's ?apikey=...). */
@@ -59,6 +76,10 @@ export function redactConfig(config: JawConfig): Record<string, unknown> {
   return {
     ...config,
     apiKey: config.apiKey ? `${config.apiKey.slice(0, 8)}...` : undefined,
+    // Public by construction, since anything the browser app carries is in its
+    // bundle. Truncated anyway: it reads as a credential in `config show` and in
+    // the MCP tool's output, and treating it as one costs nothing here.
+    workspaceApiKey: config.workspaceApiKey ? `${config.workspaceApiKey.slice(0, 8)}...` : undefined,
     ...(config.paymasters && {
       paymasters: Object.fromEntries(
         Object.entries(config.paymasters).map(([chainId, pm]) => [

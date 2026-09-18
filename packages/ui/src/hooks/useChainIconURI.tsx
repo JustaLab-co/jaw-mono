@@ -1,5 +1,5 @@
 import { JSX, useState, useEffect, useMemo } from 'react';
-import { handleGetCapabilitiesRequest, type ChainMetadataCapability } from '@jaw.id/core';
+import { handleGetCapabilitiesRequest } from '@jaw.id/core';
 
 // Simple in-memory cache for chain icons to avoid redundant API calls
 const chainIconCache = new Map<string, string | null>();
@@ -53,7 +53,7 @@ export const useChainIconURI = (chainId: number, apiKey?: string, size?: number)
 
         if (isMounted) {
           const chainCapabilities = capabilities[chainIdHex];
-          const chainMetadata = chainCapabilities?.chainMetadata as ChainMetadataCapability | undefined;
+          const chainMetadata = chainCapabilities?.chainMetadata;
           const icon = chainMetadata?.icon ?? null;
 
           // Cache the result

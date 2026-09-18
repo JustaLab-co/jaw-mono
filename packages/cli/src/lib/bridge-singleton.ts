@@ -10,9 +10,9 @@
 import * as fs from 'node:fs';
 import * as crypto from 'node:crypto';
 import { PATHS } from './paths.js';
-import { loadConfig } from './config.js';
+import { loadConfig, saveConfig } from './config.js';
 import { WSBridge } from './ws-bridge.js';
-import { isValidKeysUrl, isValidRelayUrl } from './validation.js';
+import { isValidKeysUrl, isValidRelayUrl, isSafeApiKey } from './validation.js';
 import { generateKeyPair, exportKeyToHex } from './crypto.js';
 import { type RelaySession, loadRelaySession, saveRelaySession, deleteRelaySession } from './relay-session.js';
 
@@ -22,12 +22,29 @@ const DEFAULT_RELAY_URL = 'wss://relay.jaw.id';
 export interface BridgeOptions {
   keysUrl?: string;
   relayUrl?: string;
-  apiKey: string;
+  /** Absent on a first connect from a machine that has none. */
+  apiKey?: string;
+  /**
+   * Use a browser that is already paired, and refuse rather than open one.
+   *
+   * For callers that are not a person at a terminal: a payment holds the
+   * payment lock while it runs, so falling through to a fresh session would
+   * open a browser nobody is watching and block every other payer on the
+   * machine until the approval times out.
+   */
+  reuseOnly?: boolean;
   chainId?: number;
   ens?: string;
   timeout?: number;
   connectTimeout?: number;
 }
+
+/**
+ * How long a caller that will not open a browser waits for the one already
+ * paired. Long enough for a round trip to the relay, short enough that a
+ * pairing that is gone is not mistaken for a slow one.
+ */
+const REUSE_PROBE_TIMEOUT_MS = 5_000;
 
 /**
  * Get or create a relay bridge connection.
@@ -69,8 +86,13 @@ export async function getBridge(options: BridgeOptions): Promise<WSBridge> {
       // that out leaves the command silent for as long as someone will stare at
       // it, having just told them a browser was opening.
       return await connectBridge({ ...options, timeout }, relaySession, chainId, keysUrl, relayUrl, false);
-    } catch {
-      // Connection failed — stale session or relay restarted.
+    } catch (err) {
+      // Before the delete, not after it. A caller that may not open a browser is
+      // not going to replace this pairing, so dropping it here only costs the
+      // person their next command opening a window, for a failure that may have
+      // been the relay hiccuping.
+      if (options.reuseOnly) throw err;
+      // Connection failed: stale session or relay restarted.
       // Delete and fall through to create a new one.
       deleteRelaySession();
       relaySession = null;
@@ -80,7 +102,10 @@ export async function getBridge(options: BridgeOptions): Promise<WSBridge> {
     deleteRelaySession();
   }
 
-  // New session — this is the only path that opens a browser
+  // New session: this is the only path that opens a browser
+  if (options.reuseOnly) {
+    throw new Error('No browser is paired with this machine, and this caller may not open one.');
+  }
   const session = await createNewSession(relayUrl);
   saveRelaySession(session);
   return await connectBridge({ ...options, timeout, connectTimeout }, session, chainId, keysUrl, relayUrl, true);
@@ -111,8 +136,8 @@ async function connectBridge(
 ): Promise<WSBridge> {
   const config = loadConfig();
   // Read as one entry, so the url and the context cannot come from different
-  // paymasters. Every caller used to look this up and forward the url alone,
-  // which is how a configured `context` was lost before it reached the browser.
+  // paymasters. Looking it up per caller and forwarding the url alone loses a
+  // configured `context` before it reaches the browser.
   const paymaster = config.paymasters?.[chainId];
   const bridge = new WSBridge({
     relayUrl,
@@ -120,7 +145,12 @@ async function connectBridge(
     timeout: options.timeout,
     connectTimeout: options.connectTimeout,
     config: {
-      apiKey: options.apiKey,
+      // Only a key the user chose is asserted to the browser. One the bridge
+      // handed us arrives here through the same option, and sending it back
+      // would have the deployment echo it and stop consulting its own, which
+      // freezes the key of every install that ever connected and leaves a
+      // rotation with nowhere to land.
+      apiKey: options.apiKey === config.workspaceApiKey ? undefined : options.apiKey,
       chainId,
       ens: options.ens ?? config.ens,
       paymasterUrl: paymaster?.url,
@@ -156,7 +186,69 @@ async function connectBridge(
     }
   );
 
+  keepInjectedApiKey(bridge.injectedApiKey);
+
   return bridge;
+}
+
+/**
+ * Store an api key the browser supplied, so the commands that never open one
+ * have it too.
+ *
+ * `jaw x402 pay` runs unattended and reads the key off the config file, so a key
+ * that lived only for this process would leave the paying half of the product
+ * without one.
+ *
+ * Written to its own field and replaced every time, which is what keeps a
+ * rotation reachable: the deployment answers with the current key on each
+ * connect and this takes it. `apiKey` is the user's and is never touched here.
+ */
+function keepInjectedApiKey(injected: string | null): void {
+  if (!injected) return;
+  // What arrives here is whatever presented itself as the browser on this relay
+  // session, and it lands in a file every later command reads. Before this it
+  // died with the process. Every consumer concatenates it into a query string
+  // without encoding, so one carrying an `&` would rewrite the URL around it.
+  if (!isSafeApiKey(injected)) {
+    console.warn('[jaw] Ignoring an API key from the browser that is not safe to use in a URL.');
+    return;
+  }
+  const config = loadConfig();
+  if (config.workspaceApiKey === injected) return;
+  saveConfig({ ...config, workspaceApiKey: injected });
+}
+
+/**
+ * Ask a paired browser for the key it is handing out now.
+ *
+ * Nothing is dropped on the way in. The stored key is only ever replaced by
+ * `keepInjectedApiKey`, once a browser has actually answered with one: clearing
+ * it first and then failing to connect, which is the normal case for an agent
+ * with no browser, would leave the install with no key at all and no way to get
+ * one back short of `jaw session setup`.
+ *
+ * Nothing is sent either, so the deployment answers with its own: `connectBridge`
+ * already withholds a key that came from the bridge, and this passes none.
+ *
+ * `reuseOnly` because the caller is a payment holding the payment lock.
+ */
+export async function refreshWorkspaceApiKey(): Promise<string | undefined> {
+  const config = loadConfig();
+  const before = config.workspaceApiKey;
+  const bridge = await getBridge({
+    keysUrl: config.keysUrl,
+    chainId: config.defaultChain,
+    ens: config.ens,
+    reuseOnly: true,
+    // Short, because nobody is being waited on: this asks a browser that is
+    // already paired whether it is still there, behind a payment holding the
+    // lock. The default is sized for a person opening a window, and spending it
+    // here buys half a minute of silence for a 403 that was never about the key.
+    connectTimeout: REUSE_PROBE_TIMEOUT_MS,
+  });
+  bridge.close();
+  const after = loadConfig().workspaceApiKey;
+  return after === before ? undefined : after;
 }
 
 function buildBridgeUrl(keysUrl: string, session: string, relayUrl: string, cliPublicKeyHex: string): string {

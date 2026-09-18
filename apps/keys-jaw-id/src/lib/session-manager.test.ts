@@ -242,8 +242,13 @@ describe('two SessionManagers over one storage', () => {
 
     // Another document deletes it. jsdom does not raise `storage` across
     // SessionManagers (same window), so dispatch what a real browser would.
+    //
+    // No `storageArea`: on Node 25+ the global is the in-memory stub from
+    // vitest.setup.localstorage.ts, and jsdom's StorageEvent only accepts a real
+    // Storage there. The listener guards with `event.storageArea && ...`, so a
+    // missing one is a path it handles and this still exercises the cache drop.
     await new SessionManager().deleteSession(ORIGIN);
-    window.dispatchEvent(new StorageEvent('storage', { key: 'jaw:sessions:apps', storageArea: localStorage }));
+    window.dispatchEvent(new StorageEvent('storage', { key: 'jaw:sessions:apps' }));
 
     expect(await reader.isAuthenticated(ORIGIN)).toBe(false);
   });
@@ -252,7 +257,7 @@ describe('two SessionManagers over one storage', () => {
     const reader = secondDocument();
     await reader.createSession({ origin: ORIGIN, peerPublicKey: '04aabbccdd', account: AUTH });
 
-    window.dispatchEvent(new StorageEvent('storage', { key: 'unrelated:key', storageArea: localStorage }));
+    window.dispatchEvent(new StorageEvent('storage', { key: 'unrelated:key' }));
 
     expect(await reader.isAuthenticated(ORIGIN)).toBe(true);
   });

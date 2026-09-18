@@ -22,10 +22,39 @@ export function hostOf(url: string): string {
   }
 }
 
+/**
+ * A ledger row in the shape a machine reads.
+ *
+ * A checkpoint carries `status: 'paid'` so the spend sums count it with no
+ * branch of their own, and handed over as it stands it reports a payment that
+ * never happened, to a host and a nonce nothing will find. Said here in the
+ * shape the human renderer gives it its own line for.
+ */
+export function machineEntry(entry: X402LogEntry): X402LogEntry | Record<string, unknown> {
+  if (entry.kind !== 'checkpoint') return entry;
+  return {
+    kind: 'checkpoint' as const,
+    at: entry.at,
+    amount: entry.amount,
+    network: entry.network,
+    folded: entry.folded ?? 0,
+    stands_in_for: `${entry.folded ?? 0} earlier payments, folded and moved to the archive`,
+  };
+}
+
 export function renderEntry(entry: X402LogEntry): string {
   // Everything here is read back from a file, so nothing is trusted for being
   // ours originally: a tampered ledger must not be able to paint a row either.
   const when = sanitizeLine(String(entry.at).replace('T', ' ').slice(0, 19), 19);
+  // A checkpoint is not a payment and must not read as one. Its own line, in the
+  // same columns, saying what it stands in for.
+  if (entry.kind === 'checkpoint') {
+    const total = formatUsdc(spendFigureOf(entry).toString(), decimalsOf(entry));
+    // `folded` is typed a number and read off disk, so it is whatever the file
+    // says. Same treatment as every other field rendered here.
+    const rows = sanitizeLine(String(entry.folded ?? 0), 12);
+    return `  ${when}  ${'folded'.padEnd(7)}  ${total.padStart(12)}  ${rows} earlier payments`;
+  }
   // What the caps counted for this row, not what the server charged: on a
   // failed attempt those differ, and the figure a user needs to see is the one
   // that will refuse their next payment.
@@ -46,6 +75,12 @@ export function renderEntry(entry: X402LogEntry): string {
   // A failed settlement may still have been broadcast: the nonce is what makes
   // it reconcilable on chain, so surface it exactly where it is ambiguous.
   if (entry.status === 'failed' && entry.nonce) detail.push(`nonce ${sanitizeLine(entry.nonce, 80)}`);
+  // Reconciliation found the nonce consumed on a row the server reported as
+  // failed: the money left and the resource never came back. The one line here
+  // a user has to act on, so it is never left to the amount column to imply.
+  if (entry.status === 'failed' && entry.settlement === 'verified') {
+    detail.push('settled on chain; the resource never arrived');
+  }
   // Stored server text: an endpoint that got refused once would
   // otherwise repaint this line on every later `x402 log`.
   if (entry.reason) detail.push(sanitizeLine(entry.reason, 200));
@@ -65,14 +100,20 @@ export function renderSummary(entries: X402LogEntry[]): string {
   // today, so this is a single group in practice and the guard costs nothing.
   const spentByScale = new Map<number, bigint>();
   let unknown = 0;
+  let folded = 0;
   for (const entry of entries) {
-    // An unrecognised status used to land on `counts` as a stray key and vanish
-    // from the tally, so a malformed row silently shrank the reported total.
-    // Own keys only: `in` walks the prototype, so a row saying `constructor`
-    // took the counted branch, landed on a key nothing reads, and disappeared
-    // from both tallies.
-    if (Object.hasOwn(counts, entry.status)) counts[entry.status] += 1;
-    else unknown += 1;
+    // A checkpoint's figure is money that left, so it belongs in the total. Its
+    // outcome does not: it stands in for many rows and counting it as one paid
+    // payment would understate what happened by however many it absorbed.
+    if (entry.kind === 'checkpoint') folded += entry.folded ?? 0;
+    else {
+      // Own keys only: `in` walks the prototype, so a row saying `constructor`
+      // would take the counted branch, land on a key nothing reads, and disappear
+      // from both tallies. Anything unrecognised counts as unknown rather than
+      // being dropped, so a malformed row cannot shrink the reported total.
+      if (Object.hasOwn(counts, entry.status)) counts[entry.status] += 1;
+      else unknown += 1;
+    }
     const counted = spendFigureOf(entry);
     if (counted > 0n) {
       try {
@@ -87,6 +128,7 @@ export function renderSummary(entries: X402LogEntry[]): string {
   const parts = [`${counts.paid} paid`];
   if (counts.failed > 0) parts.push(`${counts.failed} failed`);
   if (counts.refused > 0) parts.push(`${counts.refused} refused`);
+  if (folded > 0) parts.push(`${folded} folded away`);
   if (unknown > 0) parts.push(`${unknown} unreadable`);
 
   const totals =

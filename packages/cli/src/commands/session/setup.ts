@@ -13,7 +13,9 @@ import {
 import {
   liveOrphans,
   parseGrantedPermission,
+  expiryInstant,
   saveSessionConfig,
+  sessionLives,
   tryLoadSessionConfig,
   type OrphanedPermission,
 } from '../../lib/session-config.js';
@@ -91,17 +93,21 @@ export default class SessionSetup extends BaseCommand {
     let oldPermissionRevoked = false;
     // Permissions this key still holds that the new session will not name.
     // Carried across the overwrite so `session revoke` can still reach them:
-    // the id used to live only in the file being replaced.
+    // the id otherwise lives only in the file being replaced.
     let orphaned: OrphanedPermission[] = [];
 
     if (keystoreExists()) {
       // A keystore can outlive its session-config: setup interrupted between the
       // grant and the config write, a manual delete, a half-restored backup.
-      // Throwing here made `session setup` fail with "No session configured. Run
-      // `jaw session setup` first", so the only way out was deleting the keystore
+      // Throwing here fails `session setup` with "No session configured. Run
+      // `jaw session setup` first", leaving no way out but deleting the keystore
       // by hand, which strands the key while its on-chain permission stays live.
       const existing = tryLoadSessionConfig();
-      const isActive = existing !== null && existing.expiry > Date.now() / 1000;
+      // `sessionLives` rather than a comparison: an expiry that will not read
+      // has to count as live here, or the permission it names is never carried
+      // forward as an orphan and the grant stays on chain with nothing pointing
+      // at it.
+      const isActive = existing !== null && sessionLives(existing.expiry);
       orphaned = liveOrphans(existing?.orphanedPermissions);
 
       // The prompt path uses readline against process.stdin. With non-TTY stdin
@@ -139,13 +145,18 @@ export default class SessionSetup extends BaseCommand {
             reuseKey = loadSessionKey();
           }
         } else if (isActive) {
-          const remaining = Math.floor((existing.expiry - Date.now() / 1000) / 86400);
+          // `isActive` is true for an expiry nobody can read, by design, so the
+          // line below cannot assume there is a date to print.
+          const ends = expiryInstant(existing.expiry);
+          const remaining = ends ? Math.floor((ends.getTime() / 1000 - Date.now() / 1000) / 86400) : null;
           this.log('Active session found:\n');
           this.log(`  Session address:  ${existing.sessionAddress}`);
           this.log(`  Permission ID:    ${existing.permissionId}`);
           this.log(`  Chain:            ${existing.chainId}`);
           this.log(
-            `  Expires:          ${new Date(existing.expiry * 1000).toISOString()} (${remaining} days remaining)`
+            ends
+              ? `  Expires:          ${ends.toISOString()} (${remaining} days remaining)`
+              : '  Expires:          unknown, the session file does not say'
           );
           this.log('\nThe old on-chain permission will NOT be revoked automatically.');
           this.log('Anyone with the old session key can still use it until expiry.\n');
@@ -202,13 +213,13 @@ export default class SessionSetup extends BaseCommand {
         // after this one is granted. The key that could use it does not survive
         // here (this path always generates a fresh one, and `saveKeystore`
         // overwrites), but the grant does, and it is the grant that has to be
-        // revocable. Before this, the warning below was the only trace and the
-        // id went away with the overwritten config.
+        // revocable, so its id is carried onto the new session rather than
+        // going away with the config this overwrites.
         orphaned = [orphanOf(existing), ...orphaned];
         this.logToStderr(
           `Warning: overwriting active session without revoking. ` +
             `Old permission ${existing.permissionId} on chain ${existing.chainId} ` +
-            `remains live until ${new Date(existing.expiry * 1000).toISOString()}. ` +
+            `remains live ${expiryInstant(existing.expiry) ? `until ${expiryInstant(existing.expiry)!.toISOString()}` : 'for an unknown time: the file does not say when it ends'}. ` +
             `Recorded on the new session, so \`jaw session revoke\` will revoke it too.`
         );
       }
@@ -237,26 +248,6 @@ export default class SessionSetup extends BaseCommand {
       const { privateKeyToAccount } = await import('viem/accounts');
       const localAccount = privateKeyToAccount(privateKeyHex);
 
-      const { Account } = await import('@jaw.id/core');
-      const pm = config.paymasters?.[chainId];
-      // EIP-7702 keeps the session address equal to the session key EOA, with
-      // the delegation riding the first userOp. That is what lets the account
-      // holding the USDC be the same one the ERC-20 paymaster charges for the
-      // ops it sends; the factory's counterfactual address was a second one
-      // that never held anything.
-      const mode = 'eip7702' as const;
-      const account = await Account.fromLocalAccount(
-        {
-          chainId,
-          apiKey,
-          paymasterUrl: pm?.url,
-          paymasterContext: pm?.context,
-        },
-        localAccount,
-        { eip7702: true }
-      );
-      const sessionAddress = account.address;
-
       // 6. Open browser bridge to grant permissions
       if (!flags.quiet) {
         if (flags.x402) {
@@ -271,6 +262,13 @@ export default class SessionSetup extends BaseCommand {
         this.log('Opening browser to approve permissions...');
       }
 
+      // EIP-7702 keeps the session address equal to the session key EOA, with
+      // the delegation riding the first userOp. That is what lets the account
+      // holding the USDC be the same one the ERC-20 paymaster charges for the
+      // ops it sends; the factory's counterfactual address was a second one
+      // that never held anything.
+      const mode = 'eip7702' as const;
+
       const bridge = await getBridge({
         keysUrl: config.keysUrl,
         apiKey,
@@ -278,12 +276,46 @@ export default class SessionSetup extends BaseCommand {
         ens: config.ens,
       });
 
+      // Everything from here to the grant is inside the block that closes the
+      // bridge. It used to start further down, and the two steps above it can
+      // both throw: the refusal when no key came back, and building the account.
+      // Either one left the socket open and the browser still showing a paired
+      // page, with nothing to tell it otherwise.
+      let sessionAddress: `0x${string}`;
       // Kept whole rather than narrowed on the way in. The response carries the
       // permission as the contract stores it, and every view on the permission
       // manager takes that struct: narrowing to the id here was what left the
       // CLI unable to ask the chain anything about its own permission.
       let granted: unknown;
       try {
+        // Read off disk after the bridge rather than reused from the snapshot
+        // taken before it. The bridge is what fills in a key on a machine that
+        // had none, and what replaces one the deployment has rotated since;
+        // reusing the snapshot would leave the account building its rpcUrl and
+        // paymaster url from a key that is no longer the right one, and logging
+        // its issuance against it.
+        const resolvedApiKey = this.resolveApiKey(flags);
+        if (!resolvedApiKey) {
+          this.error(
+            'Connected, but no API key came back and none is configured. ' +
+              'Set one with `jaw config set apiKey <key>` and run this again.'
+          );
+        }
+
+        const { Account } = await import('@jaw.id/core');
+        const pm = config.paymasters?.[chainId];
+        const account = await Account.fromLocalAccount(
+          {
+            chainId,
+            apiKey: resolvedApiKey,
+            paymasterUrl: pm?.url,
+            paymasterContext: pm?.context,
+          },
+          localAccount,
+          { eip7702: true }
+        );
+        sessionAddress = account.address;
+
         if (flags.x402) {
           const blocked = await whyOwnerCannotFundSession({ chainId, request: (m, p) => bridge.request(m, p) });
           if (blocked) this.error(blocked);
@@ -307,8 +339,9 @@ export default class SessionSetup extends BaseCommand {
       }
 
       const grantResponse = granted as { permissionId: string; account: string };
-      // Undefined from a wallet whose response does not carry the struct, which
-      // leaves the session behaving exactly as sessions did before this field.
+      // Undefined from a wallet whose response does not carry the struct. The
+      // session is then saved without it, and its policy falls back to the
+      // config defaults instead of the grant's own caps.
       const permission = parseGrantedPermission(granted);
 
       // 7. Save keystore
@@ -428,6 +461,6 @@ export default class SessionSetup extends BaseCommand {
 }
 
 /** The part of a replaced session worth keeping: enough to revoke it later. */
-function orphanOf(session: { permissionId: string; chainId: number; expiry: number }): OrphanedPermission {
+function orphanOf(session: { permissionId: string; chainId: number; expiry: number | null }): OrphanedPermission {
   return { id: session.permissionId, chainId: session.chainId, expiry: session.expiry };
 }

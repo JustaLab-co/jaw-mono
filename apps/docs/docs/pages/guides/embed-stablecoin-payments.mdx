@@ -53,7 +53,7 @@ Get your API key at **[dashboard.jaw.id](https://dashboard.jaw.id/)**.
 Set up your account configuration with the ERC-20 paymaster for USDC gas payments:
 
 ```typescript
-import { Account, JAW_PAYMASTER_URL } from '@jaw.id/core';
+import { Account, jawPaymasterUrl } from '@jaw.id/core';
 
 const USDC_ADDRESS = '0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913'; // USDC on Base
 
@@ -62,7 +62,7 @@ const config = {
   apiKey: 'YOUR_API_KEY',
 };
 
-const paymasterUrl = `${JAW_PAYMASTER_URL}?chainId=8453&api-key=YOUR_API_KEY`;
+const paymasterUrl = jawPaymasterUrl(8453, 'YOUR_API_KEY');
 ```
 
 ## Account Management

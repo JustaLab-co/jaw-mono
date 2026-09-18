@@ -11,6 +11,7 @@ import {
   isNativeToken,
   isWildcard,
   usePermissionRevocation,
+  spendExposure,
 } from '@jaw.id/ui';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { formatUnits, erc20Abi, type Address } from 'viem';
@@ -26,11 +27,10 @@ import {
   buildRevokePermissionCall,
   buildErc20PaymasterContext,
   standardErrorCodes,
-  JAW_PAYMASTER_URL,
+  jawPaymasterUrl,
   JAW_RPC_URL,
   SUPPORTED_CHAINS,
   handleGetCapabilitiesRequest,
-  type FeeTokenCapability,
 } from '@jaw.id/core';
 
 // Known function selectors mapping
@@ -325,9 +325,12 @@ export const PermissionModal = ({
     // If already sponsored via capabilities or config, use that
     if (effectivePaymasterUrl) return effectivePaymasterUrl;
 
-    // If user selected an ERC-20 token (non-native), use ERC-20 paymaster
-    if (selectedFeeToken && !selectedFeeToken.isNative) {
-      return `${JAW_PAYMASTER_URL}?chainId=${chain?.id || 1}${extractedApiKey ? `&api-key=${extractedApiKey}` : ''}`;
+    // If user selected an ERC-20 token (non-native), use ERC-20 paymaster.
+    // No chain is no paymaster. Every reader of this value guards on `chain`
+    // first, so the check states the requirement rather than handling a case
+    // that fires; the two modals disagreed about it while it was implicit.
+    if (selectedFeeToken && !selectedFeeToken.isNative && chain?.id !== undefined) {
+      return jawPaymasterUrl(chain.id, extractedApiKey);
     }
 
     // Native ETH - no paymaster needed
@@ -373,6 +376,13 @@ export const PermissionModal = ({
     return [];
   }, [mode, fetchedPermissionData, permissionDetails]);
 
+  /** Unix seconds the permission being granted ends at, which is what a total is measured to. */
+  const grantExpiry = useMemo(() => {
+    if (mode !== 'grant' || !permissionDetails || !('expiry' in permissionDetails)) return undefined;
+    const expiry = Number(permissionDetails.expiry);
+    return Number.isFinite(expiry) && expiry > 0 ? expiry : undefined;
+  }, [mode, permissionDetails]);
+
   // Get calls array based on mode
   const callsData = useMemo(() => {
     if (mode === 'revoke' && fetchedPermissionData?.calls) {
@@ -397,16 +407,37 @@ export const PermissionModal = ({
 
       // allowance is a hex string from the relay, a decimal string from a grant request; BigInt
       // reads both. Only the duration formatting differs by mode.
-      const { amount, decimalsUnknown } = formatSpendAmount(BigInt(spend.allowance), tokenInfo.decimals);
+      const allowance = BigInt(spend.allowance);
+      const { amount, decimalsUnknown } = formatSpendAmount(allowance, tokenInfo.decimals);
       const limit = decimalsUnknown ? `${amount} base units` : `${amount} ${tokenInfo.symbol}`;
       const duration =
         mode === 'revoke'
           ? formatDurationFromRelay(spend.unit, spend.multiplier ?? 1)
           : formatDuration(spend.unit as SpendPeriod, spend.multiplier ?? 1);
 
+      // Grant only: what approving this rate costs by the time the permission
+      // expires. The row leads with the rate, and the rate is not what is being
+      // approved, which is how a permission asking for a million rendered as
+      // tidily as one asking for ten. A revoke is about a permission that already
+      // exists, so its remaining exposure is a different question.
+      const exposure =
+        mode === 'grant' && grantExpiry
+          ? spendExposure({
+              allowance,
+              unit: spend.unit,
+              multiplier: spend.multiplier ?? 1,
+              expiry: grantExpiry,
+              now: Math.floor(Date.now() / 1000),
+            })
+          : null;
+
       return {
         amount,
         decimalsUnknown,
+        // Nothing to add when the total only repeats the rate, as a single-window
+        // grant and a `forever` limit both do.
+        total:
+          exposure && exposure.periods > 1 ? formatSpendAmount(exposure.total, tokenInfo.decimals).amount : undefined,
         token: isNativeToken(tokenAddress)
           ? 'Native (ETH)'
           : tokenInfo.symbol === tokenAddress
@@ -417,7 +448,7 @@ export const PermissionModal = ({
         limit,
       };
     });
-  }, [spendsData, tokenInfoMap, mode]);
+  }, [spendsData, tokenInfoMap, mode, grantExpiry]);
 
   // Format call permissions
   // Signatures resolve asynchronously — an unresolved selector renders as raw hex, then upgrades.
@@ -509,7 +540,7 @@ export const PermissionModal = ({
         );
 
         const chainIdHex = `0x${(chain?.id || 1).toString(16)}` as `0x${string}`;
-        const feeTokenCap = capabilities?.[chainIdHex]?.feeToken as FeeTokenCapability | undefined;
+        const feeTokenCap = capabilities?.[chainIdHex]?.feeToken;
 
         if (!feeTokenCap?.supported || !feeTokenCap?.tokens?.length) {
           if (isMounted) setFeeTokensLoading(false);
