@@ -47,10 +47,17 @@ export async function fetchRPCRequest(request: RequestArguments, rpcUrl: string)
         // Not JSON at all. Either the status below explains it, or the envelope check does.
     }
 
+    // Whether the backend turned this caller down, which is the one failure that
+    // answering again cannot change. Carried on the error rather than left to be
+    // read off its code: a refusal that arrives inside a JSON-RPC envelope keeps
+    // that envelope's own code, so a caller matching on the code alone would see
+    // the same refusal as a blip depending on what the backend wrapped it in.
+    const refused = res.status === 401 || res.status === 403;
+
     // A well-formed JSON-RPC error is the answer whatever the status says.
     const rpcError = envelope?.error;
     if (rpcError && typeof rpcError.code === 'number' && typeof rpcError.message === 'string') {
-        throw rpcError;
+        throw refused ? Object.assign(rpcError, { refused }) : rpcError;
     }
 
     // A refusal from the proxy is not a JSON-RPC envelope, so destructuring it
@@ -59,8 +66,8 @@ export async function fetchRPCRequest(request: RequestArguments, rpcUrl: string)
     // is how a rejected wallet_getCapabilities reads as "no capabilities".
     if (!res.ok) {
         const message = `JAW RPC request failed with ${res.status}${body ? `: ${body.slice(0, 200)}` : ''}`;
-        throw res.status === 401 || res.status === 403
-            ? standardErrors.provider.unauthorized(message)
+        throw refused
+            ? Object.assign(standardErrors.provider.unauthorized(message), { refused })
             : standardErrors.rpc.internal(message);
     }
 

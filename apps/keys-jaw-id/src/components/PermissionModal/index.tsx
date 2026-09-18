@@ -32,6 +32,7 @@ import {
   handleGetCapabilitiesRequest,
   type FeeTokenCapability,
 } from '@jaw.id/core';
+import { apiKeyFromChain } from '../../lib/api-key';
 
 // Known function selectors mapping
 // Permission request data
@@ -149,22 +150,7 @@ export const PermissionModal = ({
   const [feeTokens, setFeeTokens] = useState<FeeTokenOption[]>([]);
   const [feeTokensLoading, setFeeTokensLoading] = useState<boolean>(true);
 
-  // Extract API key from rpcUrl if not provided as prop
-  const extractedApiKey = useMemo(() => {
-    if (apiKey) return apiKey;
-
-    if (chain?.rpcUrl) {
-      try {
-        const url = new URL(chain.rpcUrl);
-        return url.searchParams.get('api-key') || '';
-      } catch (error) {
-        console.error('Failed to parse rpcUrl:', error);
-        return '';
-      }
-    }
-
-    return '';
-  }, [apiKey, chain?.rpcUrl]);
+  const extractedApiKey = useMemo(() => apiKeyFromChain(apiKey, chain?.rpcUrl), [apiKey, chain?.rpcUrl]);
 
   // Note: Account initialization is handled by useSessionAccount hook
 
@@ -504,7 +490,7 @@ export const PermissionModal = ({
         // Fetch capabilities from JAW RPC
         const capabilities = await handleGetCapabilitiesRequest(
           { method: 'wallet_getCapabilities', params: [] },
-          extractedApiKey || '',
+          extractedApiKey,
           true // showTestnets
         );
 

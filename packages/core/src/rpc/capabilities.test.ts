@@ -123,6 +123,31 @@ describe('handleGetCapabilitiesRequest caching', () => {
         expect(fetchSpy).toHaveBeenCalledTimes(2);
     });
 
+    // The refusal the proxy sends today is not a JSON-RPC envelope, so it arrives
+    // as a 4100. One wrapped in an envelope keeps that envelope's code and is the
+    // same answer: asking again cannot change it.
+    it('holds a refusal that arrives inside a JSON-RPC envelope', async () => {
+        const fetchSpy = vi.fn(
+            async () =>
+                new Response(
+                    JSON.stringify({
+                        jsonrpc: '2.0',
+                        id: 1,
+                        error: { code: -32001, message: 'origin not registered' },
+                    }),
+                    {
+                        status: 403,
+                        headers: { 'Content-Type': 'application/json' },
+                    }
+                )
+        );
+        vi.stubGlobal('fetch', fetchSpy);
+
+        await expect(handleGetCapabilitiesRequest(request, 'key', true)).rejects.toMatchObject({ code: -32001 });
+        await expect(handleGetCapabilitiesRequest(request, 'key', true)).rejects.toMatchObject({ code: -32001 });
+        expect(fetchSpy).toHaveBeenCalledTimes(1);
+    });
+
     it('retries once the refusal goes stale', async () => {
         let calls = 0;
         const fetchSpy = vi.fn(async () => {

@@ -292,7 +292,7 @@ export const TransactionModal = ({
         // Fetch capabilities from JAW RPC
         const capabilities = await handleGetCapabilitiesRequest(
           { method: 'wallet_getCapabilities', params: [] },
-          effectiveApiKey || '',
+          effectiveApiKey,
           true // showTestnets
         );
 

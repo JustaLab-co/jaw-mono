@@ -1,20 +1,6 @@
 import { JSX, useState, useEffect, useMemo } from 'react';
 import { handleGetCapabilitiesRequest, peekCapabilities, type ChainMetadataCapability } from '@jaw.id/core';
 
-/**
- * Hook to fetch chain icon from wallet_getCapabilities chainMetadata
- * Returns a JSX element (img or fallback) similar to useChainIcon
- *
- * The response is cached by `handleGetCapabilitiesRequest`, which also shares one
- * request between callers that mount together. A mount that the cache can already
- * answer reads it synchronously and asks nothing: awaiting a warm entry still
- * paints the placeholder for a frame, on every dialog that shows a chain.
- *
- * @param chainId - The chain ID to get the icon for
- * @param apiKey - The API key for authentication, if the caller has one
- * @param size - The size of the icon in pixels (default: 24)
- * @returns JSX.Element - The chain icon or a fallback element
- */
 /** The icon the cache can answer with, or undefined when it cannot answer at all. */
 function cachedIcon(chainId: number, apiKey?: string): { icon: string | null } | undefined {
   if (!chainId) return undefined;
@@ -29,11 +15,28 @@ function cachedIcon(chainId: number, apiKey?: string): { icon: string | null } |
   return { icon: metadata?.icon ?? null };
 }
 
+/**
+ * Hook to fetch chain icon from wallet_getCapabilities chainMetadata
+ * Returns a JSX element (img or fallback) similar to useChainIcon
+ *
+ * The response is cached by `handleGetCapabilitiesRequest`, which also shares one
+ * request between callers that mount together. A mount that the cache can already
+ * answer reads it synchronously and asks nothing: awaiting a warm entry still
+ * paints the placeholder for a frame, on every dialog that shows a chain.
+ *
+ * @param chainId - The chain ID to get the icon for
+ * @param apiKey - The API key for authentication, if the caller has one
+ * @param size - The size of the icon in pixels (default: 24)
+ * @returns JSX.Element - The chain icon or a fallback element
+ */
 export const useChainIconURI = (chainId: number, apiKey?: string, size?: number): JSX.Element => {
   const iconSize = size ?? 24;
 
-  const [iconURI, setIconURI] = useState<string | null>(() => cachedIcon(chainId, apiKey)?.icon ?? null);
-  const [isLoading, setIsLoading] = useState(() => !cachedIcon(chainId, apiKey));
+  // Read once: every read clones the cached response, and the two states below
+  // and StrictMode would otherwise ask for the same answer four times a mount.
+  const [seeded] = useState(() => cachedIcon(chainId, apiKey));
+  const [iconURI, setIconURI] = useState<string | null>(seeded?.icon ?? null);
+  const [isLoading, setIsLoading] = useState(!seeded);
 
   useEffect(() => {
     // Whatever the cache says about this chain, which is nothing at all when it

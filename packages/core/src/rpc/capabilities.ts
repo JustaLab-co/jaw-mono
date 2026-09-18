@@ -4,7 +4,6 @@ import { JAW_RPC_URL } from '../constants.js';
 import { buildHandleJawRpcUrl, fetchRPCRequest, hexStringFromNumber } from '../utils/index.js';
 import { MAINNET_CHAINS } from '../account/smartAccount.js';
 import { store } from '../store/index.js';
-import { standardErrorCodes } from '../errors/index.js';
 
 /**
  * Chain metadata capability returned by wallet_getCapabilities
@@ -40,7 +39,7 @@ const CAPABILITIES_REFUSAL_TTL_MS = 30_000;
 
 /** Whether the backend turned this caller down, rather than failing to answer. */
 function isRefusal(error: unknown): boolean {
-    return (error as { code?: unknown } | null)?.code === standardErrorCodes.provider.unauthorized;
+    return (error as { refused?: unknown } | null)?.refused === true;
 }
 
 const capabilitiesCache = new Map<string, { at: number; value: CapabilitiesResult }>();
@@ -55,29 +54,6 @@ export function clearCapabilitiesCache(): void {
     capabilitiesInflight.clear();
 }
 
-/**
- * Handle wallet_getCapabilities request (EIP-5792)
- *
- * Returns the wallet's capabilities for all supported chains or filtered by chain IDs.
- * Fetches capabilities from the proxy service.
- *
- * If no chain filter is provided in params:
- * - If showTestnets is true: fetches capabilities for all chains
- * - If showTestnets is false: fetches capabilities only for mainnet chains
- *
- * Responses are memoized per (api key, effective params) for `CAPABILITIES_TTL_MS`,
- * and concurrent callers for the same key share a single request — the dialogs ask for
- * this on mount from several places at once, and it gates the fee-token chain.
- * A refusal is held for `CAPABILITIES_REFUSAL_TTL_MS` and rethrown, so an origin the
- * backend will not serve is asked about once per window instead of once per mount.
- * Anything else is retried by the next caller. Every caller gets its own copy of the
- * response.
- *
- * @param request - The wallet_getCapabilities request
- * @param apiKey - API key for authentication, if the caller has one
- * @param showTestnets - Whether to include testnet chains (default: false)
- * @returns Capabilities for all or filtered chains
- */
 /**
  * The request as it goes on the wire, with the chain filter `showTestnets` implies,
  * and the entry it is cached under. One function so a reader of the cache and the
@@ -138,6 +114,29 @@ export function peekCapabilities(
     return structuredClone(cached.value);
 }
 
+/**
+ * Handle wallet_getCapabilities request (EIP-5792)
+ *
+ * Returns the wallet's capabilities for all supported chains or filtered by chain IDs.
+ * Fetches capabilities from the proxy service.
+ *
+ * If no chain filter is provided in params:
+ * - If showTestnets is true: fetches capabilities for all chains
+ * - If showTestnets is false: fetches capabilities only for mainnet chains
+ *
+ * Responses are memoized per (api key, effective params) for `CAPABILITIES_TTL_MS`,
+ * and concurrent callers for the same key share a single request — the dialogs ask for
+ * this on mount from several places at once, and it gates the fee-token chain.
+ * A refusal is held for `CAPABILITIES_REFUSAL_TTL_MS` and rethrown, so an origin the
+ * backend will not serve is asked about once per window instead of once per mount.
+ * Anything else is retried by the next caller. Every caller gets its own copy of the
+ * response.
+ *
+ * @param request - The wallet_getCapabilities request
+ * @param apiKey - API key for authentication, if the caller has one
+ * @param showTestnets - Whether to include testnet chains (default: false)
+ * @returns Capabilities for all or filtered chains
+ */
 export async function handleGetCapabilitiesRequest(
     request: RequestArguments,
     apiKey: string | undefined,

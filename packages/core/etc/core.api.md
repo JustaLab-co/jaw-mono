@@ -587,7 +587,7 @@ export function handleGetAssetsRequest(request: RequestArguments, apiKey: string
 // @public
 export function handleGetCallsHistoryRequest(request: RequestArguments, apiKey: string | undefined, connectedAddress?: Address_2): Promise<WalletGetCallsHistoryResponse>;
 
-// @public (undocumented)
+// @public
 export function handleGetCapabilitiesRequest(request: RequestArguments, apiKey: string | undefined, showTestnets?: boolean): Promise<CapabilitiesResult>;
 
 // @public
