@@ -1,3 +1,33 @@
+## 1.4.2 (2026-09-17)
+
+### 🩹 Fixes
+
+- **deps:** bump viem to 2.56.7, drop local arc/hyveChain definitions ([#343](https://github.com/JustaName-id/jaw-mono/pull/343))
+
+### ❤️ Thank You
+
+- Ghadi @Ghadi8
+
+## 1.4.1 (2026-09-16)
+
+### 🩹 Fixes
+
+- add support for arc mainnet ([#341](https://github.com/JustaName-id/jaw-mono/pull/341))
+
+### ❤️ Thank You
+
+- Ghadi @Ghadi8
+
+## 1.4.0 (2026-09-15)
+
+### 🚀 Features
+
+- add funds ([#303](https://github.com/JustaName-id/jaw-mono/pull/303))
+
+### ❤️ Thank You
+
+- Leo Franklin @LeoFranklin015
+
 ## 1.3.2 (2026-09-14)
 
 ### 🩹 Fixes

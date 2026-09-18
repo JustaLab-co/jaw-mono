@@ -17,6 +17,9 @@ const BROWSER_REQUIRED_METHODS = new Set([
   // Permissions
   'wallet_grantPermissions',
   'wallet_revokePermissions',
+  // Funding. No signature, but it still opens a screen and waits for the user
+  // to close it, so the terminal has to say a browser is needed.
+  'wallet_addFunds',
 ]);
 
 export function requiresBrowser(method: string): boolean {

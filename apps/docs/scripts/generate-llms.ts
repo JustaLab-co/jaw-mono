@@ -107,7 +107,8 @@ const accounts = await provider.request({ method: 'eth_requestAccounts' });`,
   },
   account: {
     title: 'JAW Account API',
-    description: 'Direct smart account operations including signing, transactions, and permission management.',
+    description:
+      'Direct smart account operations including signing, transactions, and permission management. The same API is used on React Native.',
     dirs: ['account'],
     includes: [],
     packageName: '@jaw.id/core',
@@ -125,10 +126,11 @@ const hash = await account.sendTransaction({
   },
   quickstart: {
     title: 'JAW Quickstart & Guides',
-    description: 'Getting started with JAW smart accounts - setup, tutorials, and common use cases.',
+    description:
+      'Getting started with JAW smart accounts - setup, tutorials, and common use cases, including React Native (Expo) apps.',
     dirs: ['guides'],
     includes: ['index.mdx', 'supported-networks.mdx'],
-    packageName: '@jaw.id/wagmi (React) or @jaw.id/core (vanilla JS)',
+    packageName: '@jaw.id/wagmi (React) or @jaw.id/core (vanilla JS, React Native)',
     installCommand: 'npm install @jaw.id/wagmi wagmi @tanstack/react-query',
     quickExample: `// 1. Get API key at https://dashboard.jaw.id
 // 2. Install packages
@@ -384,10 +386,11 @@ This file is a **routing index only**. To help users with JAW:
 **URL:** ${BASE_URL}/llms-account.txt
 
 ### llms-quickstart.txt — Getting Started & Guides
-**Use this when:** User is new to JAW, setting up for the first time, or following a tutorial
+**Use this when:** User is new to JAW, setting up for the first time, following a tutorial, or building a React Native / Expo app
 **Example questions:**
 - "How do I get started with JAW?"
 - "How do I install JAW?"
+- "How do I use JAW in a React Native or Expo app?"
 - "How do I implement Sign-In with Ethereum?"
 - "How do I set up recurring payments/subscriptions?"
 - "What networks does JAW support?"

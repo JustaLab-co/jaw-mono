@@ -179,10 +179,15 @@ export class JAWProvider extends ProviderEventEmitter implements ProviderInterfa
                         await this.disconnect();
                         return null as T;
                     }
+                    // addFunds joins this group because the receive screen has
+                    // nothing to show without an account, so it resolves one the
+                    // same way the signing methods do rather than rendering an
+                    // empty state.
                     case 'wallet_sendCalls':
                     case 'wallet_sign':
                     case 'wallet_grantPermissions':
-                    case 'wallet_revokePermissions': {
+                    case 'wallet_revokePermissions':
+                    case 'wallet_addFunds': {
                         const ephemeralSigner = this.initSigner(signerType);
 
                         if (signerType === 'appSpecific') {

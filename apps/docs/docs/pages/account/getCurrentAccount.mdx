@@ -7,7 +7,7 @@ Get the currently authenticated account data.
 ## Signature
 
 ```typescript
-static getCurrentAccount(apiKey?: string): PasskeyAccount | null
+static getCurrentAccount(apiKey?: string, storage?: SyncStorage): PasskeyAccount | null
 ```
 
 ## Parameters
@@ -16,7 +16,13 @@ static getCurrentAccount(apiKey?: string): PasskeyAccount | null
 
 Type: `string | undefined`
 
-Optional API key for JAW services.
+API key for JAW services. This method only reads local storage, so the key is optional here.
+
+### storage
+
+Type: `SyncStorage | undefined`
+
+Optional custom storage. Defaults to `localStorage` in the browser and to an in-memory store elsewhere. Pass a persistent store in [React Native](/guides/react-native).
 
 ## Returns
 

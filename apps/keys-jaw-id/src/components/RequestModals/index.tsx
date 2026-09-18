@@ -9,6 +9,7 @@ import { SiweModal } from '../SiweModal';
 import { isSiweMessage, getSiweOriginWarningFromMessage } from '@jaw.id/ui';
 import { Eip712Modal } from '../Eip712Modal';
 import { PermissionModal, type PermissionRequestData } from '../PermissionModal';
+import { AddFundsModal } from '../AddFundsModal';
 import type { WalletSendCallsReturn, EthSendTransactionReturn } from '../../lib/tx-handler';
 import { SDKRequestType } from '../../lib/sdk-types';
 import { debugLog } from '../../lib/debug-log';
@@ -385,5 +386,56 @@ export function RequestModals({
       />
     );
   }
+  if (pendingRequest.type === SDKRequestType.ADD_FUNDS) {
+    return (
+      // Keyed by request — see TransactionModal above.
+      <AddFundsModal
+        key={pendingRequest.requestId}
+        params={pendingRequest.params}
+        chain={pendingRequest.chain as chain}
+        apiKey={apiKey}
+        // `currentOrigin`, like every other modal here. This screen feeds its
+        // origin to `useAuth`, and the page holds that query under
+        // `currentOrigin` — a different string is a different query key, so a
+        // per-request origin meant a cold cache and a null address on the first
+        // render of every request.
+        origin={currentOrigin || undefined}
+        appName={pendingRequest.metadata?.appName}
+        appLogoUrl={pendingRequest.metadata?.appLogoUrl}
+        // The only failure this screen has: it cannot show an address at all.
+        // Everything else is a plain finish, since nothing was asked for approval.
+        onError={async (error, errorCode) => {
+          try {
+            await pendingRequest.onReject(error.message, errorCode ?? standardErrorCodes.rpc.internal);
+          } catch (err) {
+            console.error('❌ Failed to reject add funds:', err);
+          }
+          communicator.requestClose();
+        }}
+        onDone={async () => {
+          try {
+            await pendingRequest.onApprove(null);
+            debugLog('✅ Add funds screen closed');
+            // `scheduleClose`, not a bare `requestClose`: it is the only close
+            // that also runs `clearScreen`. `onApprove` already released the
+            // flow lock, so the DialogVisibility backstop is gated off and the
+            // shell-X path is not taken — nothing else would clear this. The
+            // receive screen stayed mounted and flashed for a frame on the next
+            // request, which is what `clearScreen` exists to prevent.
+            //
+            // No delivered-tick beat though: nothing was signed, so a success
+            // flourish would claim something happened. Pressing Done is the
+            // whole outcome, and 'done' is what makes the screen terminal.
+            setPhase('done');
+            scheduleClose(closeDelayMs);
+          } catch (err) {
+            console.error('❌ Failed to resolve add funds:', err);
+            communicator.requestClose();
+          }
+        }}
+      />
+    );
+  }
+
   return null;
 }

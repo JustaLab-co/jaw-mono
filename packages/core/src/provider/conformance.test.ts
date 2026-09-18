@@ -99,6 +99,9 @@ const WITHOUT_SESSION: Record<string, NoSessionOutcome> = {
     wallet_sign: { kind: 'ephemeral' },
     wallet_grantPermissions: { kind: 'ephemeral' },
     wallet_revokePermissions: { kind: 'ephemeral' },
+    // Signs nothing, but the receive screen has no address to show without an
+    // account, so it resolves one through the same throwaway signer.
+    wallet_addFunds: { kind: 'ephemeral' },
 
     // Refused outright, before the session is even consulted: eth_sign is blind
     // signing, and 4200 says "this wallet does not offer it" rather than

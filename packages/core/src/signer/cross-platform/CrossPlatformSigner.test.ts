@@ -10,6 +10,7 @@ import { fetchRPCRequest } from '../../utils/index.js';
 import { correlationIds } from '../../store/correlation-ids/store.js';
 import { getCallStatus, getCallStatusEIP5792 } from '../../rpc/wallet_sendCalls.js';
 import { RECONNECT_REQUIRED } from '../../messages/index.js';
+import { standardErrors, standardErrorCodes } from '../../errors/index.js';
 
 // Mock dependencies
 vi.mock('../../communicator/index.js', () => ({
@@ -484,6 +485,131 @@ describe('CrossPlatformSigner', () => {
             // Encrypted envelope → method-less ready, matching send-time routing.
             expect(mockCommunicator.waitForPopupLoaded).toHaveBeenCalledWith();
             expect(mockCommunicator.postRequestAndWaitForResponse).toHaveBeenCalled();
+        });
+
+        // addFunds signs nothing, so it has no per-method code here: it routes
+        // like the signing methods and keys owns the screen. This pins that,
+        // because a method missing from the routing switch fails as a 4200
+        // unsupportedMethod rather than as a visible bug.
+        it('routes wallet_addFunds to the popup and resolves what the popup returns', async () => {
+            // Base configured, the way a dapp asking for Base would have it:
+            // `validateSigningRequest` refuses a chainId the wallet does not
+            // carry, and this file's default mock has `chains: []`.
+            vi.spyOn(store, 'getState').mockReturnValue({
+                account: {
+                    accounts: ['0x1234567890123456789012345678901234567890'],
+                    chain: { id: 8453 },
+                    capabilities: undefined,
+                },
+                chains: [{ id: 8453, rpcUrl: 'https://base-mainnet.rpc.com' }],
+                config: { metadata: mockMetadata, version: '1.0.0' },
+                keys: {},
+                callStatuses: {},
+            } as never);
+
+            const request: RequestArguments = { method: 'wallet_addFunds', params: [{ chainId: 8453 }] };
+
+            mockCommunicator.postRequestAndWaitForResponse.mockResolvedValue({
+                id: mockMessageId,
+                requestId: mockMessageId,
+                correlationId: mockCorrelationId,
+                sender: 'peer-public-key-hex',
+                content: { encrypted: mockEncryptedData },
+                timestamp: new Date(),
+            } as RPCResponseMessage);
+
+            // Deposits land off-app, so the popup answers null rather than an order.
+            (decryptContent as Mock).mockResolvedValue({ result: { value: null } } as RPCResponse);
+
+            await expect(signer.request(request)).resolves.toBeNull();
+            expect(mockCommunicator.postRequestAndWaitForResponse).toHaveBeenCalled();
+        });
+
+        // The dapp's raw envelope must not cross to keys: `validateSigningRequest`
+        // normalizes addFunds now, and `handleSigningRequest` forwards the
+        // normalized params, so unknown keys are dropped at the boundary. A
+        // dapp-supplied `address` surviving this would be the whole point of
+        // `resolveDestination` defeated, and nothing else pins it.
+        it('forwards only the normalized envelope for wallet_addFunds, dropping a dapp-supplied address', async () => {
+            // Base configured, the way a dapp asking for Base would have it:
+            // `validateSigningRequest` refuses a chainId the wallet does not
+            // carry, and this file's default mock has `chains: []`.
+            vi.spyOn(store, 'getState').mockReturnValue({
+                account: {
+                    accounts: ['0x1234567890123456789012345678901234567890'],
+                    chain: { id: 8453 },
+                    capabilities: undefined,
+                },
+                chains: [{ id: 8453, rpcUrl: 'https://base-mainnet.rpc.com' }],
+                config: { metadata: mockMetadata, version: '1.0.0' },
+                keys: {},
+                callStatuses: {},
+            } as never);
+
+            mockCommunicator.postRequestAndWaitForResponse.mockResolvedValue({
+                id: mockMessageId,
+                requestId: mockMessageId,
+                correlationId: mockCorrelationId,
+                sender: 'peer-public-key-hex',
+                content: { encrypted: mockEncryptedData },
+                timestamp: new Date(),
+            } as RPCResponseMessage);
+            (decryptContent as Mock).mockResolvedValue({ result: { value: null } } as RPCResponse);
+
+            await signer.request({
+                method: 'wallet_addFunds',
+                params: [{ chainId: 8453, address: '0x9999999999999999999999999999999999999999' }],
+            });
+
+            const sent = (encryptContent as Mock).mock.calls.at(-1)?.[0] as {
+                action: { method: string; params: unknown[] };
+            };
+            expect(sent.action.method).toBe('wallet_addFunds');
+            // Decimal in, hex out, and nothing else carried over.
+            expect(sent.action.params).toEqual([{ chainId: '0x2105' }]);
+        });
+
+        // `optionalChainId` only proves the shape. Without this the QR pinned a
+        // chain the wallet knows nothing about and where the account is not
+        // deployed, while wallet_sendCalls refused the same value.
+        //
+        // 5710, from `resolveChain`: the same code and message every other
+        // method gives for an unconfigured chain, rather than one written for
+        // this method alone.
+        it('refuses an unconfigured chainId before the popup opens', async () => {
+            await expect(
+                signer.request({ method: 'wallet_addFunds', params: [{ chainId: 1337 }] })
+            ).rejects.toMatchObject({ code: standardErrorCodes.eip5792.unsupportedChainId });
+
+            expect(mockCommunicator.postRequestAndWaitForResponse).not.toHaveBeenCalled();
+        });
+
+        // Closing the popup window rejects every in-flight request with 4001
+        // (Communicator.awaitResponseOrClosed). addFunds has no reject action at
+        // all — keys never calls onReject for it — so that 4001 is the window
+        // dying, not a refusal, and the dapp should see the same null a Done
+        // press gives rather than an error for the same intent.
+        it('resolves null when the popup window closes during wallet_addFunds', async () => {
+            mockCommunicator.postRequestAndWaitForResponse.mockRejectedValue(
+                standardErrors.provider.userRejectedRequest('Request rejected')
+            );
+
+            await expect(signer.request({ method: 'wallet_addFunds' })).resolves.toBeNull();
+        });
+
+        // The same 4001 on a method that does have a reject action still throws,
+        // so the mapping above is scoped rather than a blanket swallow.
+        it('still rejects a signing method when the popup window closes', async () => {
+            mockCommunicator.postRequestAndWaitForResponse.mockRejectedValue(
+                standardErrors.provider.userRejectedRequest('Request rejected')
+            );
+
+            await expect(
+                signer.request({
+                    method: 'personal_sign',
+                    params: ['0x48656c6c6f', '0x1234567890123456789012345678901234567890'],
+                })
+            ).rejects.toMatchObject({ code: standardErrorCodes.provider.userRejectedRequest });
         });
 
         it('should make eth_sendTransaction request to popup', async () => {

@@ -55,13 +55,20 @@ export interface SelectScreenInput {
   isAuthenticated: boolean;
 }
 
-/** Request types that are answered by a signing modal. */
+/**
+ * Request types answered by a modal.
+ *
+ * ADD_FUNDS signs nothing, but it is still a modal request: it puts a screen up
+ * and stays there until the user is done, which is the same shape the others
+ * have.
+ */
 const MODAL_REQUESTS: ReadonlySet<SDKRequestType> = new Set([
   SDKRequestType.SIGN_MESSAGE,
   SDKRequestType.SIGN_TYPED_DATA,
   SDKRequestType.SEND_TRANSACTION,
   SDKRequestType.GRANT_PERMISSIONS,
   SDKRequestType.REVOKE_PERMISSIONS,
+  SDKRequestType.ADD_FUNDS,
 ]);
 
 /** Phases where the flow has finished; its modal must not come back. */

@@ -15,6 +15,9 @@ const MODAL_REQUESTS = [
   SDKRequestType.SEND_TRANSACTION,
   SDKRequestType.GRANT_PERMISSIONS,
   SDKRequestType.REVOKE_PERMISSIONS,
+  // Signs nothing, but it puts a screen up and holds it until the user is done,
+  // which is the shape this set is about.
+  SDKRequestType.ADD_FUNDS,
 ];
 
 const ALL_PHASES: Phase[] = [
@@ -100,6 +103,20 @@ describe('selectScreen', () => {
         });
       }
     );
+  });
+
+  describe('add funds', () => {
+    it('needs auth like the others: the screen has no address to show without one', () => {
+      expect(
+        selectScreen({ requestType: SDKRequestType.ADD_FUNDS, phase: 'choosing-account', isAuthenticated: false })
+      ).toEqual({ kind: 'onboarding' });
+    });
+
+    it('does not reopen once the user is done', () => {
+      expect(selectScreen({ requestType: SDKRequestType.ADD_FUNDS, phase: 'done', isAuthenticated: true })).toEqual({
+        kind: 'receipt',
+      });
+    });
   });
 
   describe('phase alone, with nothing pending', () => {

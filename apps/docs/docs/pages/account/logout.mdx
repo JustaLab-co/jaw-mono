@@ -7,16 +7,22 @@ Clear authentication state (logout).
 ## Signature
 
 ```typescript
-static logout(apiKey: string): void
+static logout(apiKey?: string, storage?: SyncStorage): void
 ```
 
 ## Parameters
 
 ### apiKey
 
-Type: `string`
+Type: `string | undefined`
 
-API key for JAW services. Used to scope the storage operation.
+API key for JAW services. This method only clears local storage, so the key is optional here.
+
+### storage
+
+Type: `SyncStorage | undefined`
+
+Optional custom storage. Defaults to `localStorage` in the browser and to an in-memory store elsewhere. Pass a persistent store in [React Native](/guides/react-native).
 
 ## Returns
 
