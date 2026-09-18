@@ -23,12 +23,12 @@ export default defineConfig({
   topNav: [
     { text: 'SDK', link: '/', match: '/' },
     { text: 'CLI', link: '/cli', match: '/cli' },
-    { text: 'GitHub', link: 'https://github.com/JustaName-id/jaw-mono' },
+    { text: 'GitHub', link: 'https://github.com/JustaLab-co/jaw-mono' },
   ],
   socials: [
     {
       icon: 'github',
-      link: 'https://github.com/JustaName-id/jaw-mono',
+      link: 'https://github.com/JustaLab-co/jaw-mono',
     },
     {
       icon: 'x',
@@ -327,7 +327,7 @@ export default defineConfig({
     ],
   },
   editLink: {
-    pattern: 'https://github.com/JustaName-id/jaw-mono/edit/main/apps/docs/docs/pages/:path',
+    pattern: 'https://github.com/JustaLab-co/jaw-mono/edit/main/apps/docs/docs/pages/:path',
     text: 'Edit on GitHub',
   },
 });

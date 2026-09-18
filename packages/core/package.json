@@ -19,7 +19,7 @@
   },
   "repository": {
     "type": "git",
-    "url": "https://github.com/JustaName-id/jaw-mono.git",
+    "url": "https://github.com/JustaLab-co/jaw-mono.git",
     "directory": "packages/core"
   },
   "publishConfig": {
