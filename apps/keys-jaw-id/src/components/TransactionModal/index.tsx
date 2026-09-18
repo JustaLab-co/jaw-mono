@@ -25,6 +25,7 @@ import {
   JAW_RPC_URL,
   type FeeTokenCapability,
 } from '@jaw.id/core';
+import { apiKeyFromChain } from '../../lib/api-key';
 
 // Transaction execution result
 export interface TransactionResult {
@@ -103,18 +104,7 @@ export const TransactionModal = ({
   const [feeTokensLoading, setFeeTokensLoading] = useState(false);
 
   // Extract API key from rpcUrl if not provided as prop
-  const effectiveApiKey = useMemo(() => {
-    if (apiKey) return apiKey;
-    if (chain?.rpcUrl) {
-      try {
-        const url = new URL(chain.rpcUrl);
-        return url.searchParams.get('api-key') || '';
-      } catch {
-        return '';
-      }
-    }
-    return '';
-  }, [apiKey, chain?.rpcUrl]);
+  const effectiveApiKey = useMemo(() => apiKeyFromChain(apiKey, chain?.rpcUrl), [apiKey, chain?.rpcUrl]);
 
   // Determine if sponsored based on transactionRequest or prop
   const isSponsored = useMemo(() => {

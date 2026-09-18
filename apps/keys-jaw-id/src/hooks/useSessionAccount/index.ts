@@ -9,6 +9,7 @@ import { useEffect, useRef, useState, useMemo } from 'react';
 import { Account } from '@jaw.id/core';
 import { useAuth } from '../useAuth';
 import { usePasskeys } from '../usePasskeys';
+import { apiKeyFromChain } from '../../lib/api-key';
 import type { chain } from '../../lib/sdk-types';
 
 export interface UseSessionAccountOptions {
@@ -69,20 +70,7 @@ export function useSessionAccount(options: UseSessionAccountOptions = {}): UseSe
   const supersededRef = useRef(false);
   const [restarts, setRestarts] = useState(0);
 
-  // The key from `chain.rpcUrl` when there is one, undefined when there is not.
-  // A keyless session has no key anywhere, and the restore below takes it
-  // optional.
-  const effectiveApiKey = useMemo(() => {
-    if (apiKey) return apiKey;
-    if (chain?.rpcUrl) {
-      try {
-        return new URL(chain.rpcUrl).searchParams.get('api-key') ?? undefined;
-      } catch {
-        return undefined;
-      }
-    }
-    return undefined;
-  }, [apiKey, chain?.rpcUrl]);
+  const effectiveApiKey = useMemo(() => apiKeyFromChain(apiKey, chain?.rpcUrl), [apiKey, chain?.rpcUrl]);
 
   // Create a key to track what we're initializing for
   const initKey = useMemo(() => {

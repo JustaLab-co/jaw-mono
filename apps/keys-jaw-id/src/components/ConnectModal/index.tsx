@@ -6,6 +6,7 @@ import { useMemo, useState } from 'react';
 import type { chain } from '../../lib/sdk-types';
 import { getChainNameFromId } from '../../lib/chain-handlers';
 import { standardErrorCodes, JAW_RPC_URL } from '@jaw.id/core';
+import { apiKeyFromChain } from '../../lib/api-key';
 
 export interface ConnectModalProps {
   origin: string;
@@ -33,18 +34,7 @@ export const ConnectModal = ({
   const [isProcessing, setIsProcessing] = useState<boolean>(false);
 
   // Extract API key from rpcUrl if not provided as prop
-  const effectiveApiKey = useMemo(() => {
-    if (apiKey) return apiKey;
-    if (chain?.rpcUrl) {
-      try {
-        const url = new URL(chain.rpcUrl);
-        return url.searchParams.get('api-key') || '';
-      } catch {
-        return '';
-      }
-    }
-    return '';
-  }, [apiKey, chain?.rpcUrl]);
+  const effectiveApiKey = useMemo(() => apiKeyFromChain(apiKey, chain?.rpcUrl), [apiKey, chain?.rpcUrl]);
 
   // Get chain name and icon
   const chainName = useMemo(() => (chain ? getChainNameFromId(chain.id) : undefined), [chain]);
