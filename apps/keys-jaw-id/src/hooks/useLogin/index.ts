@@ -15,20 +15,14 @@ export const useLogin = () => {
   return useMutation({
     mutationFn: async ({ chainId, credentialId, apiKey }: LoginParams) => {
       try {
-        // Use apiKey from params, fallback to env var
-        const effectiveApiKey = apiKey;
-
-        if (!effectiveApiKey) {
-          throw new Error(
-            'API key is required. Provide it via apiKey parameter or NEXT_PUBLIC_API_KEY environment variable.'
-          );
-        }
-
-        // Use Account.get which handles WebAuthn auth and smart account creation
+        // Keyless has no key to require: first-time users come through
+        // `useCreatePasskey`, and this is the path every later visit takes.
+        // Refusing here is what made the second visit fail where the first
+        // worked.
         const account = await Account.get(
           {
             chainId: chainId.id,
-            apiKey: effectiveApiKey,
+            apiKey,
             paymasterUrl: chainId.paymaster?.url,
           },
           credentialId

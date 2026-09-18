@@ -37,12 +37,9 @@ export const usePasskeys = (options?: UsePasskeysOptions) => {
    */
   const getAccount = useCallback(
     async (chain: chain, credentialId: string, overrideApiKey?: string) => {
-      const effectiveApiKey = overrideApiKey || apiKey;
-      if (!effectiveApiKey) {
-        throw new Error(
-          'API key is required. Provide it via apiKey parameter or NEXT_PUBLIC_API_KEY environment variable.'
-        );
-      }
+      // No key is a caller too: keyless, the proxy answers on the origin keys
+      // forwards, and `Account` has taken the key as optional since.
+      const effectiveApiKey = overrideApiKey || apiKey || undefined;
       if (!credentialId) {
         throw new Error('credentialId is required to get an account');
       }
@@ -66,12 +63,7 @@ export const usePasskeys = (options?: UsePasskeysOptions) => {
    */
   const restoreAccount = useCallback(
     async (chain: chain, credentialId: string, publicKey: `0x${string}`, overrideApiKey?: string) => {
-      const effectiveApiKey = overrideApiKey || apiKey;
-      if (!effectiveApiKey) {
-        throw new Error(
-          'API key is required. Provide it via apiKey parameter or NEXT_PUBLIC_API_KEY environment variable.'
-        );
-      }
+      const effectiveApiKey = overrideApiKey || apiKey || undefined;
       if (!credentialId || !publicKey) {
         throw new Error('credentialId and publicKey are required to restore an account');
       }

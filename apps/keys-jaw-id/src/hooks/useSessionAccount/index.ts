@@ -65,29 +65,31 @@ export function useSessionAccount(options: UseSessionAccountOptions = {}): UseSe
   const isInitializingRef = useRef(false);
   const lastInitKeyRef = useRef<string>('');
 
-  // Extract API key from chain.rpcUrl if not provided
+  // Extract API key from chain.rpcUrl if there is one to extract. Undefined
+  // rather than '': a keyless session has no key anywhere, and treating that as
+  // missing data is what left `account` null for the whole session, so every
+  // dialog answered "Account not initialized" on Confirm.
   const effectiveApiKey = useMemo(() => {
     if (apiKey) return apiKey;
     if (chain?.rpcUrl) {
       try {
-        const url = new URL(chain.rpcUrl);
-        return url.searchParams.get('api-key') || '';
+        return new URL(chain.rpcUrl).searchParams.get('api-key') ?? undefined;
       } catch {
-        return '';
+        return undefined;
       }
     }
-    return '';
+    return undefined;
   }, [apiKey, chain?.rpcUrl]);
 
   // Create a key to track what we're initializing for
   const initKey = useMemo(() => {
-    if (!chain || !credentialId || !publicKey || !effectiveApiKey) return '';
-    return `${chain.id}-${credentialId}-${effectiveApiKey}`;
+    if (!chain || !credentialId || !publicKey) return '';
+    return `${chain.id}-${credentialId}-${effectiveApiKey ?? ''}`;
   }, [chain, credentialId, publicKey, effectiveApiKey]);
 
   useEffect(() => {
-    // Skip if missing required data
-    if (!chain || !credentialId || !publicKey || !effectiveApiKey) {
+    // Skip if missing required data. The key is not part of it.
+    if (!chain || !credentialId || !publicKey) {
       setIsLoading(false);
       return;
     }
