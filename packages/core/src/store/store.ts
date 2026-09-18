@@ -123,11 +123,17 @@ export const sdkstore = createStore(
                     {} as Record<string, CallStatus>
                 );
 
+                // dappOrigin is per-flow, not per-install: keys.jaw.id is one origin
+                // shared by every dApp in popup mode, so a persisted value would greet
+                // the next dApp holding the previous one's origin.
+                const config = { ...state.config };
+                delete config.dappOrigin;
+
                 return {
                     chains: state.chains,
                     keys: state.keys,
                     account: state.account,
-                    config: state.config,
+                    config,
                     callStatuses: serializedCallStatuses,
                 } as StoreState;
             },

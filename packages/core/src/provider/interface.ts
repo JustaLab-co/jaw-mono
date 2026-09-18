@@ -100,7 +100,7 @@ export type PaymasterConfig = {
 export interface ConstructorOptions {
     metadata: AppMetadata;
     preference: JawProviderPreference;
-    apiKey: string;
+    apiKey?: string;
     /** Mapping of chain IDs to paymaster configuration */
     paymasters?: Record<number, PaymasterConfig>;
     /** Theme configuration for UI appearance */

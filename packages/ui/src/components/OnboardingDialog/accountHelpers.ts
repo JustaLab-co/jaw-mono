@@ -26,9 +26,6 @@ export async function backfillLocalAccountAddresses(params: {
   chainId?: number;
   apiKey?: string;
 }): Promise<Record<string, string>> {
-  // Derivation is an authenticated RPC call; without a key every record would
-  // just fail-and-retry, so don't bother.
-  if (!params.apiKey) return {};
   const accounts = await Account.backfillStoredAccountAddresses({
     chainId: params.chainId ?? 1,
     apiKey: params.apiKey,

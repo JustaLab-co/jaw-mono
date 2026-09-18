@@ -226,8 +226,8 @@ describe('JAWSigner signature analytics reporting', () => {
         expect(logSignature).not.toHaveBeenCalled();
     });
 
-    it('skips reporting silently when no API key is configured', async () => {
-        // Given an authenticated session without an API key
+    it('reports without a key, which the backend resolves from the dApp origin', async () => {
+        // Given an authenticated session with no API key
         seedAuthenticatedSession(undefined);
         const signer = makeSigningSigner();
 
@@ -237,9 +237,12 @@ describe('JAWSigner signature analytics reporting', () => {
             params: ['0xdeadbeef', SIGNER_ADDRESS],
         });
 
-        // Then signing still succeeds and nothing is reported
+        // Then the signature is still reported, with no key to send
         expect(result).toBe('0xsignature');
-        expect(logSignature).not.toHaveBeenCalled();
+        expect(logSignature).toHaveBeenCalledExactlyOnceWith({
+            address: SIGNER_ADDRESS,
+            apiKey: undefined,
+        });
     });
 
     it('still returns the signature when reporting itself throws synchronously', async () => {
@@ -335,7 +338,7 @@ describe('JAWSigner SIWE signature reporting (wallet_connect)', () => {
         expect(logSignature).not.toHaveBeenCalled();
     });
 
-    it('skips reporting silently when no API key is configured', async () => {
+    it('reports without a key, which the backend resolves from the dApp origin', async () => {
         // Given no API key and a connect with a successful SIWE capability
         seedConfig(undefined);
         const signer = makeConnectSigner();
@@ -345,9 +348,9 @@ describe('JAWSigner SIWE signature reporting (wallet_connect)', () => {
             accounts: [{ address: ACCOUNT, capabilities: { signInWithEthereum: SIWE_SUCCESS } }],
         });
 
-        // Then the connect still succeeds and nothing is reported
+        // Then the connect succeeds and the SIWE signature is still reported
         expect(result).toBeDefined();
-        expect(logSignature).not.toHaveBeenCalled();
+        expect(logSignature).toHaveBeenCalledExactlyOnceWith({ address: ACCOUNT, apiKey: undefined });
     });
 });
 

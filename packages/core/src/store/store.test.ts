@@ -511,6 +511,21 @@ describe('store', () => {
         });
     });
 
+    // keys.jaw.id is one origin shared by every dApp in popup mode, and the config
+    // slice is persisted wholesale. A dappOrigin surviving there would greet the
+    // next dApp's document holding the previous one's origin.
+    describe('what the config slice persists', () => {
+        it('leaves the calling dApp out of storage', () => {
+            store.config.set({ apiKey: 'k1', dappOrigin: 'https://dapp.example' });
+
+            const persisted = sdkstore.persist.getOptions().partialize?.(sdkstore.getState());
+
+            expect(persisted?.config.apiKey).toBe('k1');
+            expect(persisted?.config).not.toHaveProperty('dappOrigin');
+            expect(store.config.get().dappOrigin).toBe('https://dapp.example');
+        });
+    });
+
     describe('state isolation', () => {
         it('should not affect other slices when updating one', () => {
             chains.set([{ id: 1 }]);

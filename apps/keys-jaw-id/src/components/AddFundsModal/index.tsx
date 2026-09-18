@@ -16,6 +16,7 @@ import {
   type Address,
 } from '@jaw.id/core';
 import { useAuth } from '../../hooks';
+import { apiKeyFromChain } from '../../lib/api-key';
 
 export interface AddFundsModalProps {
   /** The dapp's raw params, validated here before anything renders. */
@@ -67,17 +68,7 @@ export const AddFundsModal = ({
     }
   }, [params]);
 
-  const prodApiKey = useMemo(() => {
-    if (apiKey) return apiKey;
-    if (chain?.rpcUrl) {
-      try {
-        return new URL(chain.rpcUrl).searchParams.get('api-key') || '';
-      } catch {
-        return '';
-      }
-    }
-    return '';
-  }, [apiKey, chain?.rpcUrl]);
+  const prodApiKey = useMemo(() => apiKeyFromChain(apiKey, chain?.rpcUrl), [apiKey, chain?.rpcUrl]);
 
   const mainnetRpcUrl = prodApiKey ? `${JAW_RPC_URL}?chainId=1&api-key=${prodApiKey}` : `${JAW_RPC_URL}?chainId=1`;
 

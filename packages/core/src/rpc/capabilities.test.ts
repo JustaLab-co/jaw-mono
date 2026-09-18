@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 
-import { handleGetCapabilitiesRequest, clearCapabilitiesCache } from './capabilities.js';
+import { handleGetCapabilitiesRequest, clearCapabilitiesCache, peekCapabilities } from './capabilities.js';
 
 const CAPS = { '0x2105': { feeToken: { supported: true } } };
 
@@ -61,6 +61,17 @@ describe('handleGetCapabilitiesRequest caching', () => {
         expect(results).toEqual([CAPS, CAPS, CAPS]);
     });
 
+    // Keys reads the key out of the rpc url and gets '' for a dApp that has none,
+    // while the SDK passes undefined. Both are the same caller.
+    it('treats an empty key and no key as one caller', async () => {
+        const fetchSpy = stubFetch();
+
+        await handleGetCapabilitiesRequest(request, undefined, true);
+        await handleGetCapabilitiesRequest(request, '', true);
+
+        expect(fetchSpy).toHaveBeenCalledTimes(1);
+    });
+
     it('keys the cache separately per api key', async () => {
         const fetchSpy = stubFetch();
 
@@ -80,7 +91,22 @@ describe('handleGetCapabilitiesRequest caching', () => {
         expect(fetchSpy).toHaveBeenCalledTimes(2);
     });
 
-    it('does not cache failures, so the next caller retries', async () => {
+    // An origin the backend will not serve answers the same way every time, and the
+    // icon hook asks per chain: without this a chain picker re-fires one refused
+    // request per chain on every mount.
+    it('holds a refusal for its window instead of asking again', async () => {
+        const fetchSpy = vi.fn(async () => new Response('no', { status: 403 }));
+        vi.stubGlobal('fetch', fetchSpy);
+
+        await expect(handleGetCapabilitiesRequest(request, 'key', true)).rejects.toMatchObject({ code: 4100 });
+        await expect(handleGetCapabilitiesRequest(request, 'key', true)).rejects.toMatchObject({ code: 4100 });
+        expect(fetchSpy).toHaveBeenCalledTimes(1);
+    });
+
+    // The other half of the rule: a blip is not an answer, and nothing here retries
+    // on its own, so holding one would leave a dialog without its fee row for the
+    // whole window over a failure that was already gone.
+    it('lets the next caller retry after a transient failure', async () => {
         let calls = 0;
         const fetchSpy = vi.fn(async () => {
             calls++;
@@ -93,6 +119,52 @@ describe('handleGetCapabilitiesRequest caching', () => {
         vi.stubGlobal('fetch', fetchSpy);
 
         await expect(handleGetCapabilitiesRequest(request, 'key', true)).rejects.toThrow('network down');
+        await expect(handleGetCapabilitiesRequest(request, 'key', true)).resolves.toEqual(CAPS);
+        expect(fetchSpy).toHaveBeenCalledTimes(2);
+    });
+
+    // The refusal the proxy sends today is not a JSON-RPC envelope, so it arrives
+    // as a 4100. One wrapped in an envelope keeps that envelope's code and is the
+    // same answer: asking again cannot change it.
+    it('holds a refusal that arrives inside a JSON-RPC envelope', async () => {
+        const fetchSpy = vi.fn(
+            async () =>
+                new Response(
+                    JSON.stringify({
+                        jsonrpc: '2.0',
+                        id: 1,
+                        error: { code: -32001, message: 'origin not registered' },
+                    }),
+                    {
+                        status: 403,
+                        headers: { 'Content-Type': 'application/json' },
+                    }
+                )
+        );
+        vi.stubGlobal('fetch', fetchSpy);
+
+        await expect(handleGetCapabilitiesRequest(request, 'key', true)).rejects.toMatchObject({ code: -32001 });
+        await expect(handleGetCapabilitiesRequest(request, 'key', true)).rejects.toMatchObject({ code: -32001 });
+        expect(fetchSpy).toHaveBeenCalledTimes(1);
+    });
+
+    it('retries once the refusal goes stale', async () => {
+        let calls = 0;
+        const fetchSpy = vi.fn(async () => {
+            calls++;
+            if (calls === 1) return new Response('no', { status: 403 });
+            return new Response(JSON.stringify({ jsonrpc: '2.0', id: 1, result: CAPS }), {
+                status: 200,
+                headers: { 'Content-Type': 'application/json' },
+            });
+        });
+        vi.stubGlobal('fetch', fetchSpy);
+
+        await expect(handleGetCapabilitiesRequest(request, 'key', true)).rejects.toMatchObject({ code: 4100 });
+        // The refusal window is 30s; jump past it.
+        const realNow = Date.now;
+        vi.spyOn(Date, 'now').mockImplementation(() => realNow() + 31_000);
+
         await expect(handleGetCapabilitiesRequest(request, 'key', true)).resolves.toEqual(CAPS);
         expect(fetchSpy).toHaveBeenCalledTimes(2);
     });
@@ -137,5 +209,42 @@ describe('handleGetCapabilitiesRequest caching', () => {
 
         expect(a).not.toBe(b);
         expect(a).toEqual(b);
+    });
+});
+
+// The synchronous read the chain icon seeds itself from. It has to answer for the
+// same entry the async path fills and age with it, or the two disagree on screen.
+describe('peekCapabilities', () => {
+    it('says nothing before anything was asked', () => {
+        expect(peekCapabilities(request, 'key', true)).toBeUndefined();
+    });
+
+    it('answers with what the async call cached, for the same key', async () => {
+        stubFetch();
+        await handleGetCapabilitiesRequest(request, 'key', true);
+
+        expect(peekCapabilities(request, 'key', true)).toEqual(CAPS);
+        // A different effective request is a different entry, not a near miss.
+        expect(peekCapabilities(request, 'key', false)).toBeUndefined();
+        expect(peekCapabilities(request, 'other-key', true)).toBeUndefined();
+    });
+
+    it('stops answering once the entry goes stale', async () => {
+        stubFetch();
+        await handleGetCapabilitiesRequest(request, 'key', true);
+        const realNow = Date.now;
+        vi.spyOn(Date, 'now').mockImplementation(() => realNow() + 61_000);
+
+        expect(peekCapabilities(request, 'key', true)).toBeUndefined();
+    });
+
+    it('hands back a copy, so a reader cannot corrupt what the next one gets', async () => {
+        stubFetch();
+        await handleGetCapabilitiesRequest(request, 'key', true);
+
+        const peeked = peekCapabilities(request, 'key', true) as Record<string, { evil?: boolean }>;
+        peeked['0x2105'].evil = true;
+
+        expect(peekCapabilities(request, 'key', true)).toEqual(CAPS);
     });
 });

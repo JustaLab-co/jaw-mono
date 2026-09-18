@@ -352,7 +352,7 @@ export async function grantPermissions(
     spender: Address,
     permissions: PermissionsDetail,
     chain: Chain,
-    apiKey: string,
+    apiKey: string | undefined,
     paymasterUrlOverride?: string,
     paymasterContextOverride?: Record<string, unknown>,
     prependCalls?: { to: Address; value?: bigint; data?: Hex } | Array<{ to: Address; value?: bigint; data?: Hex }>
@@ -431,7 +431,7 @@ export async function revokePermission(
     smartAccount: SmartAccount,
     permissionId: Hex,
     chain: Chain,
-    apiKey: string,
+    apiKey: string | undefined,
     paymasterUrlOverride?: string,
     paymasterContextOverride?: Record<string, unknown>,
     erc20ApprovalCall?: { to: Address; value?: bigint; data: Hex }
@@ -456,14 +456,17 @@ export async function revokePermission(
 /**
  * Get permission from the relay using typed REST API call with path params
  */
-export async function getPermissionFromRelay(permissionHash: Hex, apiKey: string): Promise<StorePermissionApiResponse> {
+export async function getPermissionFromRelay(
+    permissionHash: Hex,
+    apiKey?: string
+): Promise<StorePermissionApiResponse> {
     const permissionsBaseUrl = JAW_PROXY_URL;
 
     return await restCall(
         'GET_PERMISSION',
         'GET',
         {},
-        { 'x-api-key': apiKey },
+        apiKey ? { 'x-api-key': apiKey } : {},
         { hash: permissionHash },
         undefined,
         permissionsBaseUrl
@@ -506,13 +509,13 @@ export function relayPermissionToPermission(relayPermission: StorePermissionApiR
  * 2. Calls the relay API to fetch permissions for that address
  *
  * @param request - The wallet_getPermissions request
- * @param apiKey - API key for relay authentication
+ * @param apiKey - API key for relay authentication, if the caller has one
  * @param connectedAddress - Optional connected account address to inject if no address in params
  * @returns Permissions for the specified address
  */
 export async function handleGetPermissionsRequest(
     request: RequestArguments,
-    apiKey: string,
+    apiKey: string | undefined,
     connectedAddress?: Address
 ): Promise<unknown> {
     const params = request.params as Array<{ address?: Address; chainId?: string }> | undefined;
@@ -612,7 +615,7 @@ async function storePermissionInRelay(
     permissionHash: Hex,
     permission: Permission,
     chainId: string,
-    apiKey: string
+    apiKey?: string
 ): Promise<StorePermissionApiResponse> {
     const requestData: StorePermissionApiRequest = {
         permissionId: permissionHash,
@@ -641,7 +644,7 @@ async function storePermissionInRelay(
         'STORE_PERMISSION',
         'POST',
         requestData,
-        { 'x-api-key': apiKey },
+        apiKey ? { 'x-api-key': apiKey } : {},
         undefined,
         undefined,
         permissionsBaseUrl
@@ -651,14 +654,14 @@ async function storePermissionInRelay(
 /**
  * Delete permission from the relay using typed REST API call with path params
  */
-async function deletePermissionFromRelay(permissionHash: Hex, apiKey: string): Promise<RevokePermissionApiResponse> {
+async function deletePermissionFromRelay(permissionHash: Hex, apiKey?: string): Promise<RevokePermissionApiResponse> {
     const permissionsBaseUrl = JAW_PROXY_URL;
 
     return await restCall(
         'DELETE_PERMISSION',
         'DELETE',
         {},
-        { 'x-api-key': apiKey },
+        apiKey ? { 'x-api-key': apiKey } : {},
         { hash: permissionHash },
         undefined,
         permissionsBaseUrl

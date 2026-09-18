@@ -3,10 +3,11 @@ import { BundlerClient, createBundlerClient, createPaymasterClient } from 'viem/
 
 import { ChainClients } from './store.js';
 import { RPCResponseNativeCurrency } from '../../messages/rpcMessage.js';
-import { JAW_RPC_URL } from '../../constants.js';
+import { JAW_PROXY_URL, JAW_RPC_URL } from '../../constants.js';
 import { getSupportedChains, SUPPORTED_CHAINS } from '../../account/smartAccount.js';
 import { createPaymasterFunctions } from '../../account/paymaster.js';
 import { store } from '../store.js';
+import { jawHttp } from '../../utils/jawHttp.js';
 
 /**
  * Paymaster configuration for a chain
@@ -69,7 +70,7 @@ function createClientForChain(chain: SDKChain): { client: PublicClient; bundlerC
 
     const client = createPublicClient({
         chain: viemchain,
-        transport: http(chain.rpcUrl),
+        transport: jawHttp(chain.rpcUrl),
         // Fold eth_calls issued in the same tick into a single Multicall3
         // aggregate3 — callers that fan out over N tokens (balances, decimals,
         // symbols) pay one round-trip instead of N. aggregate3 sets
@@ -93,21 +94,25 @@ function createClientForChain(chain: SDKChain): { client: PublicClient; bundlerC
         const bundlerClient = createBundlerClient({
             chain: viemchain,
             client,
-            transport: http(chain.rpcUrl),
+            transport: jawHttp(chain.rpcUrl),
         });
         return { client, bundlerClient };
     }
 
     // Create paymaster client and wrap with custom functions that handle gas price fetching and v0.8 gas limits
     const paymasterClient = createPaymasterClient({
-        transport: http(chain.paymaster.url),
+        // A paymaster can be another company's server, and which dApp the user is
+        // on is not theirs to learn. Ours is the only one told.
+        transport: chain.paymaster.url.startsWith(JAW_PROXY_URL)
+            ? jawHttp(chain.paymaster.url)
+            : http(chain.paymaster.url),
     });
 
     const bundlerClient = createBundlerClient({
         chain: viemchain,
         client,
         paymaster: createPaymasterFunctions(client, paymasterClient, chain.id, chain.paymaster.context),
-        transport: http(chain.rpcUrl),
+        transport: jawHttp(chain.rpcUrl),
     });
 
     return { client, bundlerClient };
@@ -198,9 +203,10 @@ export function getBundlerClient(chainId: number): BundlerClient | undefined {
 
 /**
  * Creates initial chains with RPC URLs for all supported chains.
- * RPC URLs are constructed as: {JAW_RPC_URL}?chainId={chainId}&api-key={apiKey}
+ * RPC URLs are constructed as: {JAW_RPC_URL}?chainId={chainId}&api-key={apiKey},
+ * dropping the parameter when there is no key rather than sending it empty.
  *
- * @param apiKey - API key for authentication
+ * @param apiKey - API key for authentication, if the caller has one
  * @param paymasters - Optional mapping of chain IDs to paymaster configuration
  * @param showTestnets - Whether to include testnet chains (default: false)
  * @returns Array of SDKChain objects with constructed RPC URLs for supported chains
@@ -220,14 +226,14 @@ export function getBundlerClient(chainId: number): BundlerClient | undefined {
  * ```
  */
 export function createInitialChains(
-    apiKey: string,
+    apiKey?: string,
     paymasters?: Record<number, PaymasterConfig>,
     showTestnets = false
 ): SDKChain[] {
     const chains = getSupportedChains(showTestnets);
     return chains.map((chain) => ({
         id: chain.id,
-        rpcUrl: `${JAW_RPC_URL}?chainId=${chain.id}&api-key=${apiKey}`,
+        rpcUrl: apiKey ? `${JAW_RPC_URL}?chainId=${chain.id}&api-key=${apiKey}` : `${JAW_RPC_URL}?chainId=${chain.id}`,
         ...(paymasters?.[chain.id] ? { paymaster: paymasters[chain.id] } : {}),
     }));
 }

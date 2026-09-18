@@ -9,6 +9,7 @@ import { useEffect, useRef, useState, useMemo } from 'react';
 import { Account } from '@jaw.id/core';
 import { useAuth } from '../useAuth';
 import { usePasskeys } from '../usePasskeys';
+import { apiKeyFromChain } from '../../lib/api-key';
 import type { chain } from '../../lib/sdk-types';
 
 export interface UseSessionAccountOptions {
@@ -64,36 +65,33 @@ export function useSessionAccount(options: UseSessionAccountOptions = {}): UseSe
   // Prevent double initialization
   const isInitializingRef = useRef(false);
   const lastInitKeyRef = useRef<string>('');
+  // A run skipped because another was in flight, and the counter that brings it
+  // back: the deps that asked for it will not change again on their own.
+  const supersededRef = useRef(false);
+  const [restarts, setRestarts] = useState(0);
 
-  // Extract API key from chain.rpcUrl if not provided
-  const effectiveApiKey = useMemo(() => {
-    if (apiKey) return apiKey;
-    if (chain?.rpcUrl) {
-      try {
-        const url = new URL(chain.rpcUrl);
-        return url.searchParams.get('api-key') || '';
-      } catch {
-        return '';
-      }
-    }
-    return '';
-  }, [apiKey, chain?.rpcUrl]);
+  const effectiveApiKey = useMemo(() => apiKeyFromChain(apiKey, chain?.rpcUrl), [apiKey, chain?.rpcUrl]);
 
   // Create a key to track what we're initializing for
   const initKey = useMemo(() => {
-    if (!chain || !credentialId || !publicKey || !effectiveApiKey) return '';
-    return `${chain.id}-${credentialId}-${effectiveApiKey}`;
+    if (!chain || !credentialId || !publicKey) return '';
+    return `${chain.id}-${credentialId}-${effectiveApiKey ?? ''}`;
   }, [chain, credentialId, publicKey, effectiveApiKey]);
 
   useEffect(() => {
-    // Skip if missing required data
-    if (!chain || !credentialId || !publicKey || !effectiveApiKey) {
+    // Skip if missing required data. The key is not part of it.
+    if (!chain || !credentialId || !publicKey) {
       setIsLoading(false);
       return;
     }
 
-    // Skip if already initializing or already initialized with same params
-    if (isInitializingRef.current || lastInitKeyRef.current === initKey) {
+    if (lastInitKeyRef.current === initKey) return;
+
+    // Already restoring something else. The key can arrive after a keyless
+    // restore has started, so this run is remembered and made again once that
+    // one is done, rather than dropped.
+    if (isInitializingRef.current) {
+      supersededRef.current = true;
       return;
     }
 
@@ -118,11 +116,15 @@ export function useSessionAccount(options: UseSessionAccountOptions = {}): UseSe
       } finally {
         setIsLoading(false);
         isInitializingRef.current = false;
+        if (supersededRef.current) {
+          supersededRef.current = false;
+          setRestarts((n) => n + 1);
+        }
       }
     };
 
     initAccount();
-  }, [chain, credentialId, publicKey, effectiveApiKey, restoreAccount, initKey]);
+  }, [chain, credentialId, publicKey, effectiveApiKey, restoreAccount, initKey, restarts]);
 
   // Reset when origin changes (different session)
   useEffect(() => {

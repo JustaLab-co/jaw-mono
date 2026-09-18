@@ -1,8 +1,10 @@
-import { describe, it, expect, beforeEach } from 'vitest';
+import { describe, it, expect, afterEach, beforeEach, vi } from 'vitest';
 import { sepolia, optimismSepolia, arbitrumSepolia } from 'viem/chains';
 
 import { ChainClients } from './store.js';
-import { createClients, getClient, getBundlerClient } from './utils.js';
+import { createClients, createInitialChains, getClient, getBundlerClient } from './utils.js';
+import { JAW_RPC_URL } from '../../constants.js';
+import { setDappOrigin } from '../../dappOrigin.js';
 
 describe('chain-clients/utils', () => {
     beforeEach(() => {
@@ -295,5 +297,85 @@ describe('chain-clients/utils', () => {
         // Should still only have one chain in state
         const state = ChainClients.getState();
         expect(Object.keys(state).length).toBe(1);
+    });
+});
+
+describe('createInitialChains api-key in the rpc url', () => {
+    it('appends the api-key when the caller has one', () => {
+        const chains = createInitialChains('a1b2c3d4e5f6g7h8i9j0k1l2m3n4o5p6');
+
+        expect(chains.length).toBeGreaterThan(0);
+        for (const chain of chains) {
+            expect(chain.rpcUrl).toBe(`${JAW_RPC_URL}?chainId=${chain.id}&api-key=a1b2c3d4e5f6g7h8i9j0k1l2m3n4o5p6`);
+        }
+    });
+
+    // Dropped rather than sent empty, which would read as a malformed key
+    // instead of as no key at all.
+    it('omits the parameter entirely when there is no key', () => {
+        const chains = createInitialChains();
+
+        expect(chains.length).toBeGreaterThan(0);
+        for (const chain of chains) {
+            expect(chain.rpcUrl).toBe(`${JAW_RPC_URL}?chainId=${chain.id}`);
+            expect(chain.rpcUrl).not.toContain('api-key');
+        }
+    });
+});
+
+describe('naming the calling dApp on the wire', () => {
+    afterEach(() => {
+        setDappOrigin(undefined);
+        vi.unstubAllGlobals();
+        ChainClients.setState({}, true);
+    });
+
+    function stubFetch() {
+        const fetchMock = vi.fn().mockResolvedValue(
+            new Response(JSON.stringify({ jsonrpc: '2.0', id: 1, result: '0x1' }), {
+                status: 200,
+                headers: { 'Content-Type': 'application/json' },
+            })
+        );
+        vi.stubGlobal('fetch', fetchMock);
+        return () => new Headers(fetchMock.mock.calls[0][1].headers);
+    }
+
+    async function callThrough(rpcUrl: string) {
+        ChainClients.setState({}, true);
+        createClients([{ id: 1, rpcUrl }]);
+        await getClient(1)?.getChainId();
+    }
+
+    // A dApp's own page never names one, and the browser is already putting the
+    // right Origin on the request.
+    it('sends no dApp header when this instance was told nothing', async () => {
+        const headers = stubFetch();
+
+        await callThrough(`${JAW_RPC_URL}?chainId=1`);
+
+        expect(headers().has('x-dapp-origin')).toBe(false);
+    });
+
+    it('names the dApp on our own proxy', async () => {
+        const headers = stubFetch();
+        setDappOrigin('https://dapp.example');
+
+        await callThrough(`${JAW_RPC_URL}?chainId=1`);
+
+        expect(headers().get('x-dapp-origin')).toBe('https://dapp.example');
+    });
+
+    // The rpc url is ours whatever host it points at, so the header cannot hang off
+    // matching the production one: a staging or local backend would silently stop
+    // being told which dApp is calling. The one url that may belong to somebody
+    // else is the paymaster's, and that is where the check lives.
+    it('names the dApp on a backend that is not the production one', async () => {
+        const headers = stubFetch();
+        setDappOrigin('https://dapp.example');
+
+        await callThrough('http://localhost:3013/proxy/v1/rpc?chainId=1');
+
+        expect(headers().get('x-dapp-origin')).toBe('https://dapp.example');
     });
 });

@@ -1,7 +1,9 @@
 export * from './useIsMobile';
 export * from './useDialogMobileFullScreen';
 export * from './useChainIconURI';
-export * from './useChainIcons';
+// Named, not `export *`: the cache clear beside it is for this package's own
+// tests, and a consumer that called it would empty the icons of the whole app.
+export { useChainIcons, type ChainIconMap } from './useChainIcons';
 export * from './useReverseIdentity';
 export * from './useFeeTokenPrice';
 export * from './useGasEstimation';

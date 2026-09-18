@@ -11,6 +11,7 @@ import type { TransactionRequestData } from '../components/TransactionModal';
 import { useAuth, usePasskeys } from '../hooks';
 import { SignInScreen, type AuthenticatedAccount } from '../components/OnboardingSection';
 import { PasskeyManager, type PasskeyAccount } from '@jaw.id/core';
+import { setDappOrigin } from '@jaw.id/core/internal';
 import { SiweModal } from '../components/SiweModal';
 import { ensureIntNumber, type SignInWithEthereumCapabilityRequest } from '@jaw.id/core';
 import { ConnectModal } from '../components/ConnectModal';
@@ -560,9 +561,14 @@ function KeysJawIdAppContent({
       }
 
       // Get origin and set it as current context
-      const origin = communicator.getOrigin() || '';
+      const origin = communicator.getOrigin() ?? '';
       setCurrentOrigin(origin);
       cryptoHandler.setOrigin(origin);
+      // Our own Origin is the same whichever dApp opened us, so the backend
+      // cannot tell which one a call belongs to unless we say. An unknown origin
+      // goes through as unset rather than as '': it clears whatever the last
+      // request left behind, so a call is never credited to the wrong dApp.
+      setDappOrigin(origin || undefined);
 
       const peerPublicKey = request.sender;
       const method = request.content.handshake.method;
@@ -720,10 +726,14 @@ function KeysJawIdAppContent({
 
     try {
       // Load session for this origin
-      const origin = communicator.getOrigin() || '';
+      const origin = communicator.getOrigin() ?? '';
 
       // Update React state with current origin (needed for useAuth hook)
       setCurrentOrigin(origin);
+      // Set again rather than relying on the handshake having run in this
+      // document: the origin the backend is told comes from the request being
+      // served, not from an earlier one.
+      setDappOrigin(origin || undefined);
 
       // Reply to the SDK with a reconnect-required sentinel (tied to this
       // request id, carries no secret) so it re-establishes a session against
