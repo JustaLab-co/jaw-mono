@@ -1,31 +1,49 @@
 import { JSX, useState, useEffect, useMemo } from 'react';
-import { handleGetCapabilitiesRequest, type ChainMetadataCapability } from '@jaw.id/core';
+import { handleGetCapabilitiesRequest, peekCapabilities, type ChainMetadataCapability } from '@jaw.id/core';
 
 /**
  * Hook to fetch chain icon from wallet_getCapabilities chainMetadata
  * Returns a JSX element (img or fallback) similar to useChainIcon
  *
  * The response is cached by `handleGetCapabilitiesRequest`, which also shares one
- * request between callers that mount together, so this asks on every mount.
+ * request between callers that mount together. A mount that the cache can already
+ * answer reads it synchronously and asks nothing: awaiting a warm entry still
+ * paints the placeholder for a frame, on every dialog that shows a chain.
  *
  * @param chainId - The chain ID to get the icon for
  * @param apiKey - The API key for authentication, if the caller has one
  * @param size - The size of the icon in pixels (default: 24)
  * @returns JSX.Element - The chain icon or a fallback element
  */
+/** The icon the cache can answer with, or undefined when it cannot answer at all. */
+function cachedIcon(chainId: number, apiKey?: string): { icon: string | null } | undefined {
+  if (!chainId) return undefined;
+  const chainIdHex = `0x${chainId.toString(16)}` as `0x${string}`;
+  const capabilities = peekCapabilities(
+    { method: 'wallet_getCapabilities', params: [undefined, [chainIdHex]] },
+    apiKey,
+    true
+  );
+  if (!capabilities) return undefined;
+  const metadata = capabilities[chainIdHex]?.chainMetadata as ChainMetadataCapability | undefined;
+  return { icon: metadata?.icon ?? null };
+}
+
 export const useChainIconURI = (chainId: number, apiKey?: string, size?: number): JSX.Element => {
   const iconSize = size ?? 24;
 
-  const [iconURI, setIconURI] = useState<string | null>(null);
-  const [isLoading, setIsLoading] = useState(true);
+  const [iconURI, setIconURI] = useState<string | null>(() => cachedIcon(chainId, apiKey)?.icon ?? null);
+  const [isLoading, setIsLoading] = useState(() => !cachedIcon(chainId, apiKey));
 
   useEffect(() => {
-    // The icon on screen belongs to the chain we were rendering before, and a
-    // mounted dialog can switch chain: drop it rather than keep it up, both
-    // through the lookup and when the new chain is one we cannot ask about.
-    setIconURI(null);
+    // Whatever the cache says about this chain, which is nothing at all when it
+    // has not been asked yet. Either way the icon of the chain we were rendering
+    // before comes off: a mounted dialog can switch chain, and keeping it up
+    // would put the wrong one on the screen for the length of the lookup.
+    const cached = cachedIcon(chainId, apiKey);
+    setIconURI(cached?.icon ?? null);
 
-    if (!chainId) {
+    if (cached || !chainId) {
       setIsLoading(false);
       return;
     }

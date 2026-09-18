@@ -587,7 +587,7 @@ export function handleGetAssetsRequest(request: RequestArguments, apiKey: string
 // @public
 export function handleGetCallsHistoryRequest(request: RequestArguments, apiKey: string | undefined, connectedAddress?: Address_2): Promise<WalletGetCallsHistoryResponse>;
 
-// @public
+// @public (undocumented)
 export function handleGetCapabilitiesRequest(request: RequestArguments, apiKey: string | undefined, showTestnets?: boolean): Promise<CapabilitiesResult>;
 
 // @public
@@ -962,6 +962,9 @@ export type PaymasterServiceCapability = {
     context?: Record<string, unknown>;
     optional?: boolean;
 };
+
+// @public
+export function peekCapabilities(request: RequestArguments, apiKey: string | undefined, showTestnets?: boolean): CapabilitiesResult | undefined;
 
 // @public
 export type Permission = {

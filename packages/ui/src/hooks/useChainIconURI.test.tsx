@@ -2,7 +2,7 @@
 // The chain icon comes from wallet_getCapabilities, which the proxy now serves to a
 // dApp registered by origin. Refusing to fetch without a key left keyless dApps with
 // the '?' placeholder on the confirm screen.
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { createElement } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { act } from 'react';
@@ -11,12 +11,14 @@ import { act } from 'react';
 
 vi.mock('@jaw.id/core', () => ({
   handleGetCapabilitiesRequest: vi.fn(),
+  peekCapabilities: vi.fn(),
 }));
 
-import { handleGetCapabilitiesRequest } from '@jaw.id/core';
+import { handleGetCapabilitiesRequest, peekCapabilities } from '@jaw.id/core';
 import { useChainIconURI } from './useChainIconURI';
 
 const capabilitiesMock = vi.mocked(handleGetCapabilitiesRequest);
+const peekMock = vi.mocked(peekCapabilities);
 
 const ICON = 'https://icons.example/base.png';
 const OTHER_ICON = 'https://icons.example/optimism.png';
@@ -36,6 +38,11 @@ async function mount(chainId: number, apiKey?: string) {
   });
   await act(() => Promise.resolve());
 }
+
+beforeEach(() => {
+  // Cold by default: what the cache can answer is its own test below.
+  peekMock.mockReturnValue(undefined);
+});
 
 afterEach(() => {
   if (root) act(() => root!.unmount());
@@ -128,6 +135,22 @@ describe('useChainIconURI', () => {
 
     expect(container.querySelector('img')).toBeNull();
     expect(capabilitiesMock).toHaveBeenCalledTimes(1);
+  });
+
+  // The measured cost of awaiting a warm cache: one committed frame with the
+  // placeholder on every mount, on eleven call sites including the confirm screen.
+  it('paints the icon on the first frame when the cache already has it', async () => {
+    peekMock.mockReturnValue({ '0x1': { chainMetadata: { icon: ICON } } } as never);
+
+    container = document.createElement('div');
+    root = createRoot(container);
+    // No flush: this is the first painted frame, before any promise resolves.
+    act(() => {
+      root!.render(createElement(Probe, { chainId: 1, apiKey: 'test-key' }));
+    });
+
+    expect(container.querySelector('img')?.getAttribute('src')).toBe(ICON);
+    expect(capabilitiesMock).not.toHaveBeenCalled();
   });
 
   it('does not fetch without a chain', async () => {

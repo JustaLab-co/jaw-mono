@@ -78,13 +78,16 @@ export function clearCapabilitiesCache(): void {
  * @param showTestnets - Whether to include testnet chains (default: false)
  * @returns Capabilities for all or filtered chains
  */
-export async function handleGetCapabilitiesRequest(
+/**
+ * The request as it goes on the wire, with the chain filter `showTestnets` implies,
+ * and the entry it is cached under. One function so a reader of the cache and the
+ * caller that fills it cannot derive the key two different ways.
+ */
+function resolveRequest(
     request: RequestArguments,
     apiKey: string | undefined,
-    showTestnets = false
-): Promise<CapabilitiesResult> {
-    const rpcUrl = buildHandleJawRpcUrl(JAW_RPC_URL, apiKey);
-
+    showTestnets: boolean
+): { requestArgs: RequestArguments; cacheKey: string } {
     // EIP-5792 format: params[0] is account address, params[1] is optional array of chain IDs to filter by
     const params = request.params as [Address?, `0x${string}`[]?] | undefined;
     const filterChainIds = params?.[1];
@@ -111,6 +114,37 @@ export async function handleGetCapabilitiesRequest(
     // A caller with no key reaches this as '' from keys and as undefined from the
     // SDK, and both mean the same request, so they share one entry.
     const cacheKey = `${apiKey ?? ''}|${store.config.get().dappOrigin ?? ''}|${JSON.stringify(requestArgs.params ?? [])}`;
+
+    return { requestArgs, cacheKey };
+}
+
+/**
+ * The cached answer for this request, or undefined when there is none to give
+ * without asking for it.
+ *
+ * For callers that have to decide what to paint before they can await: the chain
+ * icon resolves on a microtask otherwise, so a warm cache still costs a frame of
+ * placeholder on every mount, on eleven call sites including the confirm screen.
+ * Same entry and same freshness as the async path, so the two cannot disagree.
+ */
+export function peekCapabilities(
+    request: RequestArguments,
+    apiKey: string | undefined,
+    showTestnets = false
+): CapabilitiesResult | undefined {
+    const { cacheKey } = resolveRequest(request, apiKey, showTestnets);
+    const cached = capabilitiesCache.get(cacheKey);
+    if (!cached || Date.now() - cached.at >= CAPABILITIES_TTL_MS) return undefined;
+    return structuredClone(cached.value);
+}
+
+export async function handleGetCapabilitiesRequest(
+    request: RequestArguments,
+    apiKey: string | undefined,
+    showTestnets = false
+): Promise<CapabilitiesResult> {
+    const rpcUrl = buildHandleJawRpcUrl(JAW_RPC_URL, apiKey);
+    const { requestArgs, cacheKey } = resolveRequest(request, apiKey, showTestnets);
 
     // Every exit hands back a copy, never the cache entry itself. `JAWProvider` forwards
     // this result straight to the dApp, and the internal UI call sites all key on the same
