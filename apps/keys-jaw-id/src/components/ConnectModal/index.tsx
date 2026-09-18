@@ -40,12 +40,12 @@ export const ConnectModal = ({
   const chainName = useMemo(() => (chain ? getChainNameFromId(chain.id) : undefined), [chain]);
   const chainIcon = useChainIconURI(chain?.id || 1, effectiveApiKey, 24);
 
-  // Mainnet, for ENS, under whatever key this request carries. The prop is left
-  // out on purpose: the other modals build this from the url's key alone.
-  const mainnetRpcUrl = useMemo(() => {
-    const key = apiKeyFromChain(undefined, chain?.rpcUrl);
-    return key ? `${JAW_RPC_URL}?chainId=1&api-key=${key}` : `${JAW_RPC_URL}?chainId=1`;
-  }, [chain?.rpcUrl]);
+  // Mainnet, for ENS, under whatever key this request carries: the same one the
+  // chain icon above resolves with, so the two cannot disagree about who is asking.
+  const mainnetRpcUrl = useMemo(
+    () => (effectiveApiKey ? `${JAW_RPC_URL}?chainId=1&api-key=${effectiveApiKey}` : `${JAW_RPC_URL}?chainId=1`),
+    [effectiveApiKey]
+  );
 
   const handleConnect = async () => {
     try {

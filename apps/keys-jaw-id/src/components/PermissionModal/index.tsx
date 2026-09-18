@@ -479,7 +479,10 @@ export const PermissionModal = ({
     let isMounted = true;
 
     const fetchFeeTokensData = async () => {
-      if (!viemChain || !extractedApiKey) {
+      // The chain, and nothing else: keyless the capabilities come back on the
+      // origin, and gating on the key here left this dialog without its fee row
+      // while the transaction dialog of the same session showed one.
+      if (!viemChain) {
         setFeeTokensLoading(false);
         return;
       }
