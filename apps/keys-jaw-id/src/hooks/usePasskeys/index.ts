@@ -32,31 +32,6 @@ export const usePasskeys = (options?: UsePasskeysOptions) => {
   });
 
   /**
-   * Get account with WebAuthn authentication (triggers passkey prompt)
-   * Use this for initial login/authentication
-   */
-  const getAccount = useCallback(
-    async (chain: chain, credentialId: string, overrideApiKey?: string) => {
-      // No key is a caller too: the proxy answers it on the origin keys
-      // forwards, and `Account` takes the key as optional.
-      const effectiveApiKey = overrideApiKey || apiKey || undefined;
-      if (!credentialId) {
-        throw new Error('credentialId is required to get an account');
-      }
-      const account = await Account.get(
-        {
-          chainId: chain.id,
-          apiKey: effectiveApiKey,
-          paymasterUrl: chain.paymaster?.url,
-        },
-        credentialId
-      );
-      return account;
-    },
-    [apiKey]
-  );
-
-  /**
    * Restore account WITHOUT triggering WebAuthn (no passkey prompt)
    * Use this when user has already authenticated and you just need the Account instance
    * The actual signing operation will trigger its own WebAuthn prompt
@@ -81,21 +56,10 @@ export const usePasskeys = (options?: UsePasskeysOptions) => {
     [apiKey]
   );
 
-  // Legacy method - returns underlying smart account for backwards compatibility
-  const getSmartAccount = useCallback(
-    async (chain: chain, credentialId: string, overrideApiKey?: string) => {
-      const account = await getAccount(chain, credentialId, overrideApiKey);
-      return account.getSmartAccount();
-    },
-    [getAccount]
-  );
-
   return {
     accounts: query.data || [],
     accountsLoading: query.isLoading,
     refetchAccounts: query.refetch,
-    getAccount,
     restoreAccount,
-    getSmartAccount,
   };
 };
