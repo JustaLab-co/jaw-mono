@@ -1,13 +1,10 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 const getEnsName = vi.fn();
 const getEnsText = vi.fn();
-const createPublicClient = vi.fn(() => ({ getEnsName, getEnsText }));
+const getPublicClient = vi.fn(() => ({ getEnsName, getEnsText }));
 
-vi.mock('viem', async (importOriginal) => ({
-  ...(await importOriginal<typeof import('viem')>()),
-  createPublicClient: (...args: unknown[]) => createPublicClient(...(args as [])),
-}));
+vi.mock('./publicClient', () => ({ getPublicClient: (...args: unknown[]) => getPublicClient(...(args as [])) }));
 
 const { reverseResolveWithAvatars, reverseResolveAddresses, ensMetadataAvatarUrl } = await import('./reverseResolve');
 
@@ -17,11 +14,7 @@ const LOWER = ADDRESS.toLowerCase();
 beforeEach(() => {
   getEnsName.mockReset();
   getEnsText.mockReset();
-  createPublicClient.mockClear();
-});
-
-afterEach(() => {
-  vi.unstubAllGlobals();
+  getPublicClient.mockClear();
 });
 
 describe('reverseResolveWithAvatars', () => {
@@ -99,12 +92,30 @@ describe('reverse resolution over the chain', () => {
     await expect(reverseResolveWithAvatars([{ address: ADDRESS, chainId: 1 }], 'http://rpc.test')).resolves.toEqual({});
   });
 
-  it('keeps one client per rpc url', async () => {
-    getEnsName.mockResolvedValue('cached.eth');
+  // Through the cache the rest of the dialogs use, so these reads can join the
+  // same batch and inherit its guard against an empty url.
+  it('resolves over the shared mainnet client for that rpc url', async () => {
+    getEnsName.mockResolvedValue('shared.eth');
 
-    await reverseResolveAddresses([{ address: ADDRESS, chainId: 1 }], 'http://rpc.one');
-    await reverseResolveAddresses([{ address: ADDRESS, chainId: 1 }], 'http://rpc.one');
+    await reverseResolveAddresses([{ address: ADDRESS, chainId: 8453 }], 'http://rpc.test');
 
-    expect(createPublicClient).toHaveBeenCalledTimes(1);
+    expect(getPublicClient).toHaveBeenCalledWith(1, 'http://rpc.test');
+  });
+
+  // `toCoinType` throws for a chain id ENSIP-9 cannot express, and it used to
+  // throw where no catch could see it, so one odd chain lost every other name in
+  // the same dialog.
+  it('leaves out a chain whose coin type cannot be expressed, and keeps the rest', async () => {
+    getEnsName.mockResolvedValue('kept.eth');
+
+    const names = await reverseResolveAddresses(
+      [
+        { address: ADDRESS, chainId: 11297108109 },
+        { address: '0x1111111111111111111111111111111111111111', chainId: 1 },
+      ],
+      'http://rpc.test'
+    );
+
+    expect(names['0x1111111111111111111111111111111111111111']).toBe('kept.eth');
   });
 });
