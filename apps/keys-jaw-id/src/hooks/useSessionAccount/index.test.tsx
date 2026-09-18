@@ -43,6 +43,13 @@ async function mount(chain: typeof CHAIN, apiKey?: string) {
   await act(() => Promise.resolve());
 }
 
+async function rerender(chain: typeof CHAIN, apiKey?: string) {
+  await act(async () => {
+    root!.render(createElement(Probe, { chain, apiKey }));
+  });
+  await act(() => Promise.resolve());
+}
+
 beforeEach(() => {
   restoreAccount.mockReset();
   restoreAccount.mockResolvedValue({ address: '0xabc' });
@@ -66,6 +73,25 @@ describe('useSessionAccount', () => {
     await mount({ ...CHAIN, rpcUrl: `${CHAIN.rpcUrl}?api-key=k1` });
 
     expect(restoreAccount.mock.calls[0][3]).toBe('k1');
+  });
+
+  // keys learns the key from the handshake and again from each request, so it
+  // can arrive after a keyless restore has already started.
+  it('restores again when the key arrives mid-flight', async () => {
+    let release: (value: unknown) => void = () => undefined;
+    restoreAccount.mockReturnValueOnce(new Promise((resolve) => (release = resolve)));
+    await mount(CHAIN);
+
+    await rerender(CHAIN, 'k1');
+    expect(restoreAccount).toHaveBeenCalledTimes(1);
+
+    await act(async () => {
+      release({ address: '0xabc' });
+    });
+    await act(() => Promise.resolve());
+
+    expect(restoreAccount).toHaveBeenCalledTimes(2);
+    expect(restoreAccount.mock.calls[1][3]).toBe('k1');
   });
 
   it('prefers the key it was handed over the one in the url', async () => {

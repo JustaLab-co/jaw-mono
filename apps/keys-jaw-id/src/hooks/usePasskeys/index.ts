@@ -37,8 +37,8 @@ export const usePasskeys = (options?: UsePasskeysOptions) => {
    */
   const getAccount = useCallback(
     async (chain: chain, credentialId: string, overrideApiKey?: string) => {
-      // No key is a caller too: keyless, the proxy answers on the origin keys
-      // forwards, and `Account` has taken the key as optional since.
+      // No key is a caller too: the proxy answers it on the origin keys
+      // forwards, and `Account` takes the key as optional.
       const effectiveApiKey = overrideApiKey || apiKey || undefined;
       if (!credentialId) {
         throw new Error('credentialId is required to get an account');

@@ -64,11 +64,14 @@ export function useSessionAccount(options: UseSessionAccountOptions = {}): UseSe
   // Prevent double initialization
   const isInitializingRef = useRef(false);
   const lastInitKeyRef = useRef<string>('');
+  // A run skipped because another was in flight, and the counter that brings it
+  // back: the deps that asked for it will not change again on their own.
+  const supersededRef = useRef(false);
+  const [restarts, setRestarts] = useState(0);
 
-  // Extract API key from chain.rpcUrl if there is one to extract. Undefined
-  // rather than '': a keyless session has no key anywhere, and treating that as
-  // missing data is what left `account` null for the whole session, so every
-  // dialog answered "Account not initialized" on Confirm.
+  // The key from `chain.rpcUrl` when there is one, undefined when there is not.
+  // A keyless session has no key anywhere, and the restore below takes it
+  // optional.
   const effectiveApiKey = useMemo(() => {
     if (apiKey) return apiKey;
     if (chain?.rpcUrl) {
@@ -94,8 +97,13 @@ export function useSessionAccount(options: UseSessionAccountOptions = {}): UseSe
       return;
     }
 
-    // Skip if already initializing or already initialized with same params
-    if (isInitializingRef.current || lastInitKeyRef.current === initKey) {
+    if (lastInitKeyRef.current === initKey) return;
+
+    // Already restoring something else. The key can arrive after a keyless
+    // restore has started, so this run is remembered and made again once that
+    // one is done, rather than dropped.
+    if (isInitializingRef.current) {
+      supersededRef.current = true;
       return;
     }
 
@@ -120,11 +128,15 @@ export function useSessionAccount(options: UseSessionAccountOptions = {}): UseSe
       } finally {
         setIsLoading(false);
         isInitializingRef.current = false;
+        if (supersededRef.current) {
+          supersededRef.current = false;
+          setRestarts((n) => n + 1);
+        }
       }
     };
 
     initAccount();
-  }, [chain, credentialId, publicKey, effectiveApiKey, restoreAccount, initKey]);
+  }, [chain, credentialId, publicKey, effectiveApiKey, restoreAccount, initKey, restarts]);
 
   // Reset when origin changes (different session)
   useEffect(() => {

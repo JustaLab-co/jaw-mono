@@ -15,10 +15,8 @@ export const useLogin = () => {
   return useMutation({
     mutationFn: async ({ chainId, credentialId, apiKey }: LoginParams) => {
       try {
-        // Keyless has no key to require: first-time users come through
-        // `useCreatePasskey`, and this is the path every later visit takes.
-        // Refusing here is what made the second visit fail where the first
-        // worked.
+        // The key is optional: with none, the proxy answers on the origin keys
+        // forwards on the caller's behalf.
         const account = await Account.get(
           {
             chainId: chainId.id,
