@@ -91,9 +91,7 @@ export const TransactionDialog = ({
   }, [isProcessing, transactions]);
 
   // Resolve wallet + transaction 'to' addresses to ENS names in one batched request.
-  // A dialog shows one chain, the same one the icon, the network name and the fees
-  // come from, so the names are read on that chain and filed by address alone, which
-  // is how the rows here and the child sections look them up.
+  // A dialog shows one chain, so every address is read on it and filed by address alone.
   useEffect(() => {
     const chainId = currentTransaction?.chainId;
     if (!chainId) return;

@@ -2,41 +2,22 @@ import { toCoinType, type Address } from 'viem';
 import { mainnet } from 'viem/chains';
 import { getPublicClient } from './publicClient';
 
-// ENS metadata service: a valid-cert proxy that resolves a name's avatar record server-side and
-// streams the bytes. We render this instead of the raw avatar URL so the signing/permission page
-// never connects directly to an attacker-controlled host — a host with a TLS cert error there
-// taints the page and blocks the WebAuthn (passkey) ceremony in strict browsers (e.g. Brave).
+// The avatar record is an arbitrary url. We render it through this proxy so a signing
+// page never connects to a host the name's owner chose.
 const ENS_METADATA_AVATAR_BASE = 'https://metadata.ens.domains/mainnet/avatar/';
 
-/** The ENS metadata proxy URL for a name's avatar. */
 export function ensMetadataAvatarUrl(name: string): string {
   return ENS_METADATA_AVATAR_BASE + encodeURIComponent(name);
 }
 
-// The name service, kept for one case only: a name whose resolver is offchain.
-// Following that lookup from here would mean fetching a host the resolver names,
-// which the signing page must not do, so a server that can does it instead.
+// Kept for one case: a name whose resolver is offchain, which needs a CCIP gateway
+// call that this page must not make itself.
 const REVERSE_ENDPOINT = 'https://api.justaname.id/ens/v2/reverse';
 
-/**
- * How long an answer is remembered, per address, chain, rpc url and whether the
- * avatar was asked for.
- *
- * Names change rarely and the dialogs re-render often, so without this a screen
- * asks again on every paint. An answer is what gets remembered, including the
- * answer that there is no name: that one will not change within the window. A
- * node that did not answer is not an answer, and neither is a timeout: both
- * report the network of the moment, and both are asked again.
- */
+/** How long an answer is remembered. "No name" counts as one; a node that did not answer does not. */
 const MEMORY_MS = 60_000;
 
-/**
- * How long the whole resolution may take, the fallback included.
- *
- * Names are decoration on a signing screen: the address and the amounts do not
- * wait for them. Whatever has not arrived by here is left out and the address
- * renders as hex, which is what already happens when a node will not answer.
- */
+/** Budget for the whole resolution. Past it the address renders as hex. */
 const BUDGET_MS = 2_000;
 
 export interface ReverseInput {
@@ -63,7 +44,6 @@ export function identityKey(address: string, chainId: number): string {
 }
 
 type EnsClient = ReturnType<typeof getPublicClient>;
-/** An answer, or one of the two things that are not one. */
 type Outcome = { identity: ResolvedIdentity | null } | 'offchain' | 'unanswered';
 
 const memory = new Map<string, { at: number; identity: ResolvedIdentity | null }>();
@@ -73,7 +53,8 @@ export function clearIdentityMemory(): void {
   memory.clear();
 }
 
-/** What an answer is filed under. The url and the avatar are part of it: a key changes who answers, and a name remembered without its avatar would be served to a caller that asked for one. */
+// The url and the avatar flag are part of the key: a different key changes who answers,
+// and a name remembered without its avatar would be served to a caller that asked for one.
 function memoryKey(input: ReverseInput, rpcUrl: string, withAvatar: boolean): string {
   return `${identityKey(input.address, input.chainId)}|${rpcUrl}|${withAvatar ? 'avatar' : 'name'}`;
 }
@@ -88,7 +69,7 @@ function remembered(key: string): { identity: ResolvedIdentity | null } | undefi
   return { identity: entry.identity };
 }
 
-/** The ENSIP-10 revert this client refuses to follow, which is how an offchain name announces itself. */
+/** The ENSIP-10 revert an offchain name announces itself with, which this client refuses to follow. */
 const OFFCHAIN_LOOKUP_SELECTOR = '0x556f1830';
 
 function isOffchainLookup(error: unknown): boolean {
@@ -104,28 +85,21 @@ function isOffchainLookup(error: unknown): boolean {
 /**
  * The name an address reverses to over the chain.
  *
- * Off mainnet both records are asked at once and the chain's own wins: it is the
- * name the owner set for that chain, and the default is what almost everyone has.
- * Asking in sequence would put a second round trip inside a two second budget for
- * the sake of the rarer answer.
- *
- * `toCoinType` throws for a chain id ENSIP-9 cannot express. That is caught here,
- * so such a chain still gets the default name rather than rejecting the batch
- * every other name is in.
+ * Off mainnet both records are asked at once and the chain's own wins, to keep a second
+ * round trip out of the budget. `toCoinType` throws for a chain id ENSIP-9 cannot
+ * express, so such a chain falls back to the default name.
  */
 async function nameOnChain(client: EnsClient, address: Address, chainId: number): Promise<string | null> {
   const fallback = client.getEnsName({ address });
   if (chainId === mainnet.id) return fallback;
-  // The default record is read up front but awaited only when the chain's own has
-  // no name, and an offchain resolver reverts on both. This marks it handled so the
-  // read nobody waits for does not surface as an unhandled rejection on the page.
+  // Marks the default read handled: on the paths that drop it, its rejection would
+  // otherwise surface as unhandled on the signing page.
   void fallback.catch(() => undefined);
 
   const scoped = await Promise.resolve()
     .then(() => client.getEnsName({ address, coinType: toCoinType(chainId) }))
     .catch((error) => {
-      // An offchain resolver is the server's to follow, and the name it holds is
-      // the one this address answers with, so it decides for both reads.
+      // An offchain resolver holds the name for both reads, so it decides for both.
       if (isOffchainLookup(error)) throw error;
       return null;
     });
@@ -149,11 +123,8 @@ async function resolveOnChain(
     const avatar = withAvatar ? await avatarOf(client, name) : undefined;
     return { identity: avatar ? { name, avatar } : { name } };
   } catch (error) {
-    // Only the offchain lookup goes to the server. Anything else is a node that
-    // did not answer: sending it on would turn a blip of ours into a second
-    // request that fails the same way, and filing it as "no name" would put hex
-    // on the screen for the whole window. With the multicall batching on, one
-    // 5xx rejects every caller in the batch, so that would be the whole dialog.
+    // Only the offchain lookup goes to the server. Anything else is a node that did not
+    // answer, and filing that as "no name" would put hex on the screen for the whole window.
     if (isOffchainLookup(error)) return 'offchain';
     return 'unanswered';
   }
@@ -168,7 +139,7 @@ function carriesApiKey(rpcUrl: string): boolean {
   }
 }
 
-/** The offchain names, resolved by the server that may follow their gateways. One request per chain, since the service echoes the address alone and two chains would collapse onto it. */
+/** The offchain names, resolved by the server. One request per chain: the service echoes the address alone, so two chains would collapse onto it. */
 async function resolveOffchain(
   inputs: ReverseInput[],
   rpcUrl: string,
@@ -196,8 +167,8 @@ async function resolveOffchain(
       url.searchParams.set('rpcUrl', rpcUrl);
       if (withAvatar) url.searchParams.set('records', 'true');
 
-      // Caught per chain: a request that fails leaves its own addresses unanswered,
-      // to be asked again, rather than discarding the names another chain returned.
+      // Caught per chain, so a failed request leaves its own addresses unanswered instead
+      // of discarding the names another chain returned.
       try {
         const res = await fetch(url.toString());
         if (!res.ok) return;
@@ -207,7 +178,6 @@ async function resolveOffchain(
         if (!data) return;
 
         for (const slot of Array.isArray(data) ? data : [data]) {
-          // Read back from the wire, so nothing here is assumed to be there.
           if (!slot?.address) continue;
           const key = identityKey(slot.address, chainId);
           if (!slot.name) {
@@ -250,9 +220,7 @@ async function reverseResolve(
   if (ask.length === 0) return resolved;
 
   const client = getPublicClient(mainnet.id, rpcUrl);
-  // One budget for the whole thing, cleared as soon as the work is done rather
-  // than left to fire into an empty room. Nothing is remembered when it expires,
-  // so the next dialog asks again instead of inheriting the network of a moment.
+  // One budget for the whole thing. Nothing is remembered when it expires.
   let timer: ReturnType<typeof setTimeout> | undefined;
   const budget = new Promise<'timeout'>((resolve) => {
     timer = setTimeout(() => resolve('timeout'), BUDGET_MS);

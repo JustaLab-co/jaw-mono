@@ -13,12 +13,8 @@ export function jawRpcUrl(chainId: number, apiKey?: string): string {
 // object — formatters included — is still what gets passed at runtime.
 function createClient(chainId: number, rpcUrl: string) {
   const chain: Chain | undefined = SUPPORTED_CHAINS.find((c) => c.id === chainId);
-  // `ccipRead: false` because these clients read for a signing screen. Following
-  // an offchain lookup means fetching the urls a resolver revert names, and a
-  // resolver is set by whoever owns the name or the address: a `to` in a call the
-  // user is about to sign can point the page at a host of its choosing, and a
-  // certificate error there taints the page and blocks the passkey ceremony in
-  // strict browsers. What needs offchain resolution asks a server to do it.
+  // `ccipRead: false`: an offchain lookup fetches urls a resolver names, and a `to`
+  // in a call the user is about to sign chooses that resolver. A server follows those.
   return createPublicClient({ chain, transport: http(rpcUrl), batch: { multicall: true }, ccipRead: false });
 }
 
