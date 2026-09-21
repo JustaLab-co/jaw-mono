@@ -39,7 +39,7 @@ const txHash = await jaw.provider.request({
 Add JAW.id skills to your AI coding agent:
 
 ```bash
-npx skills add JustaName-id/jaw-skills
+npx skills add JustaLab-co/jaw-skills
 ```
 
 ## License

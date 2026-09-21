@@ -1,3 +1,17 @@
+## 1.1.3 (2026-09-18)
+
+### 🩹 Fixes
+
+- add funds section ([#340](https://github.com/JustaLab-co/jaw-mono/pull/340))
+
+### 🧱 Updated Dependencies
+
+- Updated @jaw.id/core to 1.4.3
+
+### ❤️ Thank You
+
+- Leo Franklin @LeoFranklin015
+
 ## 1.1.2 (2026-09-17)
 
 ### 🩹 Fixes

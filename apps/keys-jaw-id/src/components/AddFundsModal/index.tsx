@@ -87,9 +87,47 @@ export const AddFundsModal = ({
   // happens to list mainnets first, so reordering it would silently make this
   // fall back to a testnet. The stack shows mainnets, so the code this backstops
   // should name one too.
-  const candidate = addFunds.chainId ? ensureIntNumber(addFunds.chainId) : chain?.id;
+  //
+  // `chains` is filtered rather than fallen back on, because the two failures
+  // differ: an unsupported QR chain leaves the screen with nothing to encode, so
+  // it needs a default, while an unsupported entry in the stack is one icon to
+  // leave out of a list that still has the rest. An entirely unsupported list
+  // collapses to undefined, which reads as "the dapp named none" and restores
+  // the full stack — the honest answer once nothing it asked for can be drawn.
+  // Only the dapp's own chainId, never the session's. The distinction is the
+  // whole point below: a chain the dapp named narrows the row, a chain the
+  // wallet defaulted to does not.
+  const requestedChainId = addFunds.chainId ? ensureIntNumber(addFunds.chainId) : undefined;
+
+  const chains = useMemo(() => {
+    const requested = addFunds.chains?.map(ensureIntNumber).filter((id) => SUPPORTED_CHAINS.some((c) => c.id === id));
+    if (requested && requested.length > 0) return requested;
+
+    // A lone `chainId` is a one-entry list: a dapp naming Base is saying where
+    // it takes deposits, and offering the other sixteen invites one it will not
+    // credit. Mirrors AppSpecificSigner so both hosts narrow alike.
+    if (requestedChainId !== undefined && SUPPORTED_CHAINS.some((c) => c.id === requestedChainId)) {
+      return [requestedChainId];
+    }
+    return undefined;
+  }, [addFunds.chains, requestedChainId]);
+
+  // `chains[0]` before the connected chain, matching AppSpecificSigner: a dapp
+  // that sent only `chains` still needs one chain for the QR, and the session's
+  // chain may be one it just said it does not accept.
+  const candidate = requestedChainId ?? chains?.[0] ?? chain?.id;
+  // `chains[0]` before the generic backstop, so the QR and the row cannot
+  // disagree. The SDK refuses a `chainId` outside `chains` outright, but this
+  // host can still manufacture that pair on its own: `{ chainId: 1337, chains:
+  // [1337, 8453] }` is coherent on arrival, then the filter above drops 1337
+  // from the list while this line drops it from the QR — leaving a code pinned
+  // to Ethereum above a row reading "Accepted on Base". Falling back inside the
+  // list keeps the two halves of the screen telling one story. `chains` is
+  // already filtered to supported ids, so its first entry is always drawable.
   const chainId =
-    candidate !== undefined && SUPPORTED_CHAINS.some((c) => c.id === candidate) ? candidate : MAINNET_CHAINS[0]!.id;
+    candidate !== undefined && SUPPORTED_CHAINS.some((c) => c.id === candidate)
+      ? candidate
+      : (chains?.[0] ?? MAINNET_CHAINS[0]!.id);
 
   // The session hands back a plain string, so the shape is checked before it
   // becomes a destination: an unchecked cast would let a truncated or malformed
@@ -132,6 +170,7 @@ export const AddFundsModal = ({
       // address is swapped in there rather than in each host.
       address={resolveDestination([sessionAccount as Address])}
       chainId={chainId}
+      chains={chains}
       mainnetRpcUrl={mainnetRpcUrl}
       apiKey={prodApiKey}
       origin={origin}

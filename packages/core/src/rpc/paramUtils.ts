@@ -117,7 +117,7 @@ export function optionalHexQuantity(value: unknown, method: string, field: strin
         return numberToHex(value);
     }
 
-    throw standardErrors.rpc.invalidParams(`${method}: ${field} must be a hex quantity, got ${JSON.stringify(value)}`);
+    throw standardErrors.rpc.invalidParams(`${method}: ${field} must be a hex quantity, got ${describeValue(value)}`);
 }
 
 export function optionalHexData(value: unknown, method: string, field: string): `0x${string}` | undefined {
@@ -128,17 +128,97 @@ export function optionalHexData(value: unknown, method: string, field: string): 
     return value;
 }
 
-/** Accepts a hex chainId (what viem sends) or a number, and returns hex. */
+/**
+ * Renders a rejected value for an error message without being able to throw.
+ *
+ * `JSON.stringify` raises on a BigInt and on a circular object, so echoing a
+ * value straight into a `-32602` message can replace that typed RPC error with
+ * an untyped `TypeError` — the very failure the message exists to describe.
+ */
+export function describeValue(value: unknown): string {
+    if (typeof value === 'bigint') return `${value}n`;
+    try {
+        return JSON.stringify(value) ?? String(value);
+    } catch {
+        return Object.prototype.toString.call(value);
+    }
+}
+
+/** Accepts a hex chainId (what viem sends), a number, or a bigint, and returns hex. */
 export function optionalChainId(chainId: unknown, method: string): `0x${string}` | undefined {
     if (chainId === undefined || chainId === null) return undefined;
+
+    // Written once and shared by all three shapes. The positivity rule has to be
+    // identical across them — it was not, and `'0x0'` passed while `0` and `0n`
+    // were refused, so a zero chainId failed downstream as 5710 "If this is a
+    // testnet, set preference.showTestnets to true", pointing the integrator at
+    // a setting that cannot help. Three copies of the message is how that drifts.
+    const invalidChainId = () => standardErrors.rpc.invalidParams(`${method}: invalid chainId ${chainId}`);
+
     if (typeof chainId === 'number') {
-        if (!Number.isSafeInteger(chainId) || chainId <= 0) {
-            throw standardErrors.rpc.invalidParams(`${method}: invalid chainId ${chainId}`);
-        }
+        if (!Number.isSafeInteger(chainId) || chainId <= 0) throw invalidChainId();
         return numberToHex(chainId);
     }
-    if (isHexQuantity(chainId)) return chainId;
+    // A bigint is a legitimate way to hold a chain id, and `optionalHexQuantity`
+    // has always accepted one for the other quantities. Without this branch it
+    // fell through to the throw below, where `JSON.stringify` raised
+    // `TypeError: Do not know how to serialize a BigInt` — so `{ chainId: 8453n }`
+    // reached the dapp as an untyped TypeError instead of -32602, in
+    // wallet_sendCalls and wallet_sendTransaction as well as here.
+    if (typeof chainId === 'bigint') {
+        if (chainId <= 0n) throw invalidChainId();
+        return numberToHex(chainId);
+    }
+    // Compared as a BigInt rather than by string, so `'0x0'` and `'0x00'` are
+    // both caught. `isHexQuantity` guarantees at least one digit, so `BigInt`
+    // cannot throw here.
+    if (isHexQuantity(chainId)) {
+        if (BigInt(chainId) <= 0n) throw invalidChainId();
+        return chainId;
+    }
     throw standardErrors.rpc.invalidParams(
-        `${method}: chainId must be a hex string (e.g. '0x66eee') or a number, got ${JSON.stringify(chainId)}`
+        `${method}: chainId must be a hex string (e.g. '0x66eee') or a number, got ${describeValue(chainId)}`
     );
+}
+
+/**
+ * A list of chainIds, each accepted in the same shapes as `optionalChainId`.
+ *
+ * An empty array is refused rather than read as "no preference". A caller that
+ * sends one has computed it — `chains: supported.filter(...)` that matched
+ * nothing — and answering that with the wallet's own default would show the
+ * user every chain at the exact moment the dapp meant none. -32602 surfaces the
+ * empty filter to the dapp instead of hiding it behind a plausible screen.
+ *
+ * Deduplicated in order, so a repeated id cannot draw the same icon twice.
+ */
+export function optionalChainIdList(value: unknown, method: string, field: string): `0x${string}`[] | undefined {
+    if (value === undefined || value === null) return undefined;
+    if (!Array.isArray(value)) {
+        throw standardErrors.rpc.invalidParams(`${method}: ${field} must be an array of chainIds`);
+    }
+    if (value.length === 0) {
+        throw standardErrors.rpc.invalidParams(`${method}: ${field} must not be empty`);
+    }
+
+    const seen = new Set<string>();
+    const chains: `0x${string}`[] = [];
+    for (const entry of value) {
+        // `optionalChainId` answers undefined for a null or undefined entry.
+        // At the top level that means "omitted", but a hole inside an explicit
+        // list is a malformed entry, so it is refused here rather than skipped
+        // — and checking the result rather than the input gives `hex` its
+        // non-undefined type without an assertion.
+        const hex = optionalChainId(entry, method);
+        if (hex === undefined) {
+            throw standardErrors.rpc.invalidParams(`${method}: ${field} must not contain empty entries`);
+        }
+        // Compared as BigInt, not as the hex string: '0x1' and '0x01' are the
+        // same chain, and viem's own encoders disagree about leading zeros.
+        const key = BigInt(hex).toString();
+        if (seen.has(key)) continue;
+        seen.add(key);
+        chains.push(hex);
+    }
+    return chains;
 }
