@@ -136,6 +136,21 @@ export function createClients(chains: SDKChain[]) {
 }
 
 /**
+ * Forgets the cached clients for a chain, so the next `getClient` or
+ * `getBundlerClient` rebuilds them from whatever the store holds now.
+ *
+ * Both getters return the cached client before they ever read the store, so
+ * replacing a chain's entry is invisible for the lifetime of the document
+ * without this: the transport built from the old entry keeps being handed out.
+ */
+export function dropChainClients(chainId: number): void {
+    const { [chainId]: dropped, ...rest } = ChainClients.getState();
+    if (!dropped) return;
+    // `replace` is required: a merging setState cannot take a key away.
+    ChainClients.setState(rest, true);
+}
+
+/**
  * Gets or creates a PublicClient for a chain.
  * If the client doesn't exist, it will be created lazily from the chain config in the store.
  *

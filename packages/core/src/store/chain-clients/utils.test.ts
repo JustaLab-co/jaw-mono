@@ -2,7 +2,8 @@ import { describe, it, expect, afterEach, beforeEach, vi } from 'vitest';
 import { sepolia, optimismSepolia, arbitrumSepolia } from 'viem/chains';
 
 import { ChainClients } from './store.js';
-import { createClients, createInitialChains, getClient, getBundlerClient } from './utils.js';
+import { createClients, createInitialChains, dropChainClients, getClient, getBundlerClient } from './utils.js';
+import { store } from '../store.js';
 import { JAW_RPC_URL } from '../../constants.js';
 import { setDappOrigin } from '../../dappOrigin.js';
 
@@ -377,5 +378,59 @@ describe('naming the calling dApp on the wire', () => {
         await callThrough('http://localhost:3013/proxy/v1/rpc?chainId=1');
 
         expect(headers().get('x-dapp-origin')).toBe('https://dapp.example');
+    });
+});
+
+// The two lazy getters return a cached client before they ever read the store, so a
+// replaced chain entry is invisible for the lifetime of the document without this.
+describe('dropChainClients', () => {
+    beforeEach(() => {
+        ChainClients.setState({}, true);
+        store.chains.set([]);
+    });
+
+    it('makes the next getter rebuild from the entry the store holds now', () => {
+        const keyless = `${JAW_RPC_URL}?chainId=${sepolia.id}`;
+        const keyed = `${keyless}&api-key=k1`;
+
+        store.chains.set([{ id: sepolia.id, rpcUrl: keyless }]);
+        const first = getClient(sepolia.id);
+        expect(first?.transport.url).toBe(keyless);
+
+        store.chains.set([{ id: sepolia.id, rpcUrl: keyed }]);
+        // Without the drop the cached client is handed back and the new url never applies.
+        expect(getClient(sepolia.id)?.transport.url).toBe(keyless);
+
+        dropChainClients(sepolia.id);
+        expect(getClient(sepolia.id)?.transport.url).toBe(keyed);
+    });
+
+    it('drops the bundler client alongside the public one', () => {
+        store.chains.set([{ id: sepolia.id, rpcUrl: `${JAW_RPC_URL}?chainId=${sepolia.id}` }]);
+        getClient(sepolia.id);
+        getBundlerClient(sepolia.id);
+        expect(ChainClients.getState()[sepolia.id]).toBeDefined();
+
+        dropChainClients(sepolia.id);
+
+        expect(ChainClients.getState()[sepolia.id]).toBeUndefined();
+    });
+
+    it('leaves the other chains alone', () => {
+        store.chains.set([
+            { id: sepolia.id, rpcUrl: `${JAW_RPC_URL}?chainId=${sepolia.id}` },
+            { id: optimismSepolia.id, rpcUrl: `${JAW_RPC_URL}?chainId=${optimismSepolia.id}` },
+        ]);
+        getClient(sepolia.id);
+        const other = getClient(optimismSepolia.id);
+
+        dropChainClients(sepolia.id);
+
+        expect(getClient(optimismSepolia.id)).toBe(other);
+    });
+
+    it('is a no-op for a chain with nothing cached', () => {
+        expect(() => dropChainClients(sepolia.id)).not.toThrow();
+        expect(ChainClients.getState()).toEqual({});
     });
 });

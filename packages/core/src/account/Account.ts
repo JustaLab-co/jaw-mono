@@ -48,7 +48,7 @@ import {
     type SpendPermissionDetail,
 } from '../rpc/permissions.js';
 import { JAW_RPC_URL, JAW_PAYMASTER_URL, ERC20_PAYMASTER_ADDRESS } from '../constants.js';
-import { type Chain, chains as chainStore } from '../store/index.js';
+import { type Chain, chains as chainStore, dropChainClients } from '../store/index.js';
 import { logAccountIssuance } from '../analytics/index.js';
 
 /**
@@ -1433,8 +1433,22 @@ export class Account {
         };
 
         const existingChains = chainStore.get() ?? [];
-        if (!existingChains.some((c) => c.id === chain.id)) {
+        const stored = existingChains.find((c) => c.id === chain.id);
+
+        // Last write wins. `chains` is persisted, and on keys.jaw.id that one origin is
+        // shared by every dApp the user opens, so first-write-wins let an entry outlive
+        // the session that wrote it and serve every later one. With the api key optional
+        // that entry can carry a url with no key in it, which turns the old
+        // mis-attribution into an outright refusal on the next keyed session.
+        if (!stored) {
             chainStore.set([...existingChains, chain]);
+        } else if (JSON.stringify(stored) !== JSON.stringify(chain)) {
+            chainStore.set(existingChains.map((c) => (c.id === chain.id ? chain : c)));
+            // Every field of the entry is baked into the clients, url and paymaster and
+            // native currency alike, so any difference means the cached pair is wrong.
+            // Compared whole rather than field by field so a new field cannot be
+            // forgotten here; two entries that differ only in key order cost one rebuild.
+            dropChainClients(chain.id);
         }
 
         return chain;
