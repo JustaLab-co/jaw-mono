@@ -97,12 +97,12 @@ export const ClearSignedView = ({ display, chainId, mainnetRpcUrl }: ClearSigned
       .map((r) => (r.rawValue as string).toLowerCase());
     // Keyed by chain: the @chainlabel suffix baked into a resolved name is chain-specific,
     // so a chainId change must re-resolve rather than reuse the stale label.
-    const unique = [...new Set(addresses)].filter((a) => !attemptedRef.current.has(`${chainId}:${a}`));
+    const unique = [...new Set(addresses)].filter((a) => !attemptedRef.current.has(identityKey(a, chainId)));
     if (unique.length === 0) return;
 
     // An attempt only "counts" once it lands — the cleanup un-marks anything still in flight.
-    unique.forEach((a) => attemptedRef.current.add(`${chainId}:${a}`));
-    const unmark = () => unique.forEach((a) => attemptedRef.current.delete(`${chainId}:${a}`));
+    unique.forEach((a) => attemptedRef.current.add(identityKey(a, chainId)));
+    const unmark = () => unique.forEach((a) => attemptedRef.current.delete(identityKey(a, chainId)));
 
     let cancelled = false;
     // Set once this run's result has landed. After that the attempt "counts" — including
