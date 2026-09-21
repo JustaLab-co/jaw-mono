@@ -47,7 +47,13 @@ export function identityKey(address: string, chainId: number): string {
   return `${address.toLowerCase()}:${chainId}`;
 }
 
-/** The coinType the service echoes for a chain, or undefined for a chain id ENSIP-11 cannot express. */
+/**
+ * The coinType the service echoes for a chain.
+ *
+ * Undefined for a chain id ENSIP-11 cannot express, which is reachable: the chain comes off
+ * the transaction the dApp asked to sign, not off our own list, and `toCoinType` throws at
+ * or above 2^31. Without this one bad id would take the whole batch down with it.
+ */
 function coinTypeOf(chainId: number): number | undefined {
   try {
     return Number(toCoinType(chainId));

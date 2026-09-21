@@ -1,8 +1,8 @@
 // @vitest-environment jsdom
 // Addresses inside decoded calldata are marked "attempted" before their reverse-resolve
 // request lands, while the effect cleanup cancels the write. A second effect run without
-// a remount (StrictMode's double-invoke, a chainId/rpcUrl change) then filters every
-// address out as already-tried and resolution is blocked for good. These pin the retry.
+// a remount (StrictMode's double-invoke, an rpcUrl change) then filters every address out
+// as already-tried and resolution is blocked for good. These pin the retry.
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { createElement, act, StrictMode } from 'react';
 import { createRoot, type Root } from 'react-dom/client';

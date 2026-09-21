@@ -176,9 +176,11 @@ export const DecodedCalldataView = ({
       .catch(unmark);
     return () => {
       cancelled = true;
-      // If this run never wrote its result, its "attempted" marks must not outlive it —
-      // otherwise the next run (a StrictMode re-invoke, or a chainId change) filters
-      // every address out as already-tried and resolution is blocked for good.
+      // If this run never wrote its result, its "attempted" marks must not outlive it:
+      // the next run, which a StrictMode re-invoke or an rpcUrl change causes without a
+      // remount, would filter every address out as already-tried and block resolution for
+      // good. A chainId change is not one of those runs, since it rebuilds `decoded` and
+      // the reset above drops the marks with it.
       if (!wrote) unmark();
     };
   }, [decoded, mainnetRpcUrl, chainId]);
