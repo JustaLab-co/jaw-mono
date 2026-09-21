@@ -91,35 +91,37 @@ export const TransactionDialog = ({
   }, [isProcessing, transactions]);
 
   // Resolve wallet + transaction 'to' addresses to ENS names in one batched request.
+  // A dialog shows one chain, the same one the icon, the network name and the fees
+  // come from, so the names are read on that chain and filed by address alone, which
+  // is how the rows here and the child sections look them up.
   useEffect(() => {
-    const inputs: { address: string; chainId: number }[] = [];
-    if (walletAddress && currentTransaction?.chainId) {
-      inputs.push({ address: walletAddress, chainId: currentTransaction.chainId });
-    }
-    if (onBehalfOf && currentTransaction?.chainId) {
-      inputs.push({ address: onBehalfOf, chainId: currentTransaction.chainId });
-    }
+    const chainId = currentTransaction?.chainId;
+    if (!chainId) return;
+    const addresses = new Set<string>();
+    if (walletAddress) addresses.add(walletAddress);
+    if (onBehalfOf) addresses.add(onBehalfOf);
     transactions.forEach((transaction) => {
-      if (transaction.to && transaction.chainId) {
-        inputs.push({ address: transaction.to, chainId: transaction.chainId });
-      }
+      if (transaction.to) addresses.add(transaction.to);
     });
-    if (inputs.length === 0) return;
+    if (addresses.size === 0) return;
 
     let cancelled = false;
-    reverseResolveWithAvatars(inputs, mainnetRpcUrl)
+    reverseResolveWithAvatars(
+      [...addresses].map((address) => ({ address, chainId })),
+      mainnetRpcUrl
+    )
       .then(async (resolved) => {
+        if (cancelled) return;
+        const label = await getChainLabel(chainId, mainnetRpcUrl);
         if (cancelled) return;
         const next: Record<string, string> = {};
         const avatarByAddress: Record<string, string> = {};
-        for (const { address, chainId } of inputs) {
+        for (const address of addresses) {
           const identity = resolved[identityKey(address, chainId)];
           if (!identity) continue;
-          const label = await getChainLabel(chainId, mainnetRpcUrl);
           next[address] = label ? `${identity.name}@${label}` : identity.name;
           if (identity.avatar) avatarByAddress[address] = identity.avatar;
         }
-        if (cancelled) return;
         if (Object.keys(next).length > 0) {
           setResolvedAddresses((prev) => ({ ...prev, ...next }));
         }
