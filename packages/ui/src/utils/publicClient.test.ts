@@ -1,5 +1,12 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { decodeFunctionData, encodeFunctionResult, erc20Abi, toFunctionSelector, type Hex } from 'viem';
+import {
+  decodeFunctionData,
+  encodeErrorResult,
+  encodeFunctionResult,
+  erc20Abi,
+  toFunctionSelector,
+  type Hex,
+} from 'viem';
 
 import { getJawPublicClient, getPublicClient, jawRpcUrl } from './publicClient';
 import { fetchTokenBalance } from './tokenBalance';
@@ -174,6 +181,100 @@ describe('getPublicClient', () => {
   // route wallet traffic to the chain's public node instead of the proxy.
   it('refuses an empty RPC URL rather than falling back to the chain public node', () => {
     expect(() => getPublicClient(CHAIN_WITH_MULTICALL, '')).toThrow(/No RPC URL configured/);
+  });
+});
+
+// The EIP-3668 revert a resolver uses to name the urls a client should fetch
+// instead of answering on chain.
+const offchainLookupAbi = [
+  {
+    type: 'error',
+    name: 'OffchainLookup',
+    inputs: [
+      { name: 'sender', type: 'address' },
+      { name: 'urls', type: 'string[]' },
+      { name: 'callData', type: 'bytes' },
+      { name: 'callbackFunction', type: 'bytes4' },
+      { name: 'extraData', type: 'bytes' },
+    ],
+  },
+] as const;
+
+const GATEWAY_URL = 'https://gateway.test/{sender}/{data}.json';
+const OFFCHAIN_TARGET = '0x50c5725949A6F0c72E6C4a641F24049A917DB0Cb';
+const NODE_URL = 'https://rpc.test/offchain-lookup';
+
+/**
+ * Stub a node whose `decimals()` call reverts with OffchainLookup, answered both
+ * plain and as an `aggregate3` entry. Returns every url fetched that is not the
+ * node, which is what following the lookup would look like.
+ */
+function stubOffchainLookupRevert() {
+  const offNode: string[] = [];
+  const revert = encodeErrorResult({
+    abi: offchainLookupAbi,
+    errorName: 'OffchainLookup',
+    args: [OFFCHAIN_TARGET, [GATEWAY_URL], '0xdeadbeef', '0x11223344', '0x'],
+  });
+
+  vi.stubGlobal(
+    'fetch',
+    vi.fn(async (url: string, init: RequestInit) => {
+      if (String(url) !== NODE_URL) {
+        offNode.push(String(url));
+        return new Response('{}', { status: 200, headers: { 'Content-Type': 'application/json' } });
+      }
+
+      const body = JSON.parse(String(init.body)) as { id: number; params: [{ to?: string; data?: Hex }] };
+      const { to, data } = body.params[0];
+
+      if (to?.toLowerCase() === MULTICALL3) {
+        const { args } = decodeFunctionData({ abi: aggregate3Abi, data: data as Hex });
+        const calls = args[0] as readonly { target: string; callData: Hex }[];
+        return json(
+          body.id,
+          encodeFunctionResult({
+            abi: aggregate3Abi,
+            functionName: 'aggregate3',
+            result: calls.map(() => ({ success: false, returnData: revert })),
+          }) as Hex
+        );
+      }
+
+      return new Response(
+        JSON.stringify({ jsonrpc: '2.0', id: body.id, error: { code: 3, message: 'reverted', data: revert } }),
+        { status: 200, headers: { 'Content-Type': 'application/json' } }
+      );
+    })
+  );
+
+  return offNode;
+}
+
+// The counterparty of a call the user is about to sign picks the resolver, so it
+// picks the host. Following the lookup lets it choose what the signing page
+// connects to, and a cert error there blocks the passkey ceremony.
+describe('offchain lookups', () => {
+  it('refuses to follow one that arrives as an aggregate3 entry', async () => {
+    const offNode = stubOffchainLookupRevert();
+    const client = getPublicClient(CHAIN_WITH_MULTICALL, NODE_URL);
+
+    await expect(
+      client.readContract({ address: OFFCHAIN_TARGET, abi: erc20Abi, functionName: 'decimals' })
+    ).rejects.toThrow();
+
+    expect(offNode).toEqual([]);
+  });
+
+  it('refuses to follow one that arrives as a plain eth_call revert', async () => {
+    const offNode = stubOffchainLookupRevert();
+    const client = getPublicClient(CHAIN_WITHOUT_MULTICALL, NODE_URL);
+
+    await expect(
+      client.readContract({ address: OFFCHAIN_TARGET, abi: erc20Abi, functionName: 'decimals' })
+    ).rejects.toThrow();
+
+    expect(offNode).toEqual([]);
   });
 });
 
