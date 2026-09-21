@@ -12,15 +12,18 @@ import { createRoot, type Root } from 'react-dom/client';
 const RECIPIENT = '0xd8dA6BF26964aF9D7eEd9e03E53415D37aA96045';
 const ENS_NAME = 'vitalik.eth';
 
-const reverseResolveWithAvatars = vi.fn(async (inputs: { address: string }[]) => {
+const identityKey = (address: string, chainId: number) => `${address.toLowerCase()}:${chainId}`;
+
+const reverseResolveWithAvatars = vi.fn(async (inputs: { address: string; chainId: number }[]) => {
   const out: Record<string, { name: string }> = {};
-  for (const { address } of inputs) out[address.toLowerCase()] = { name: ENS_NAME };
+  for (const { address, chainId } of inputs) out[identityKey(address, chainId)] = { name: ENS_NAME };
   return out;
 });
 
 vi.mock('../../utils', () => ({
   reverseResolveWithAvatars: (...args: unknown[]) =>
     (reverseResolveWithAvatars as unknown as (...a: unknown[]) => unknown)(...args),
+  identityKey: (address: string, chainId: number) => `${address.toLowerCase()}:${chainId}`,
   getChainLabel: async () => null,
   formatAddress: (a: string) => `${a.slice(0, 6)}...${a.slice(-4)}`,
 }));

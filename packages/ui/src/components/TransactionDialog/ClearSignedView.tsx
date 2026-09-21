@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { ethAddress } from 'viem';
 import type { ClearSigningDisplay, DisplayRow } from '../../utils/clearSigning';
-import { reverseResolveWithAvatars, formatAddress, getChainLabel } from '../../utils';
+import { reverseResolveWithAvatars, formatAddress, getChainLabel, identityKey } from '../../utils';
 import { dateTone, formatUnixDate, groupNumber, isUnlimitedAmount } from '../../utils/displayFormat';
 import { TriangleAlert } from 'lucide-react';
 import { IdentityAvatar } from '../IdentityAvatar';
@@ -121,7 +121,7 @@ export const ClearSignedView = ({ display, chainId, mainnetRpcUrl }: ClearSigned
         const nextResolved: Record<string, string> = {};
         const nextAvatars: Record<string, string> = {};
         for (const address of unique) {
-          const identity = resolved[address];
+          const identity = resolved[identityKey(address, chainId)];
           if (!identity) continue;
           nextResolved[address] = label ? `${identity.name}@${label}` : identity.name;
           if (identity.avatar) nextAvatars[address] = identity.avatar;

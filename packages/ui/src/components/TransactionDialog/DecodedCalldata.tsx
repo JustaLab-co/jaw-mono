@@ -3,7 +3,7 @@ import type { Hex } from 'viem';
 import type { DecodeResult } from '../../hooks/useDecodedCalldata';
 import { Spinner } from '../ui/spinner';
 import { TriangleAlert } from 'lucide-react';
-import { reverseResolveWithAvatars, formatAddress, getChainLabel } from '../../utils';
+import { reverseResolveWithAvatars, formatAddress, getChainLabel, identityKey } from '../../utils';
 import { isUnlimitedAmount } from '../../utils/displayFormat';
 import { computeCalldataDigest } from '../../utils/erc8213';
 import { IdentityAvatar } from '../IdentityAvatar';
@@ -161,7 +161,7 @@ export const DecodedCalldataView = ({
         const next: Record<string, string> = {};
         const avatarByAddress: Record<string, string> = {};
         for (const address of unique) {
-          const identity = resolved[address.toLowerCase()];
+          const identity = resolved[identityKey(address, chainId)];
           if (!identity) continue;
           next[address.toLowerCase()] = label ? `${identity.name}@${label}` : identity.name;
           if (identity.avatar) avatarByAddress[address.toLowerCase()] = identity.avatar;
