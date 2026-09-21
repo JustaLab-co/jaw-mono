@@ -318,6 +318,11 @@ function KeysJawIdAppContent({
         if (message.data.apiKey) {
           setApiKey(message.data.apiKey);
         }
+        // The keyless counterpart of that bootstrap. Without a key the origin is the only
+        // thing that names the dApp, and the account screen below reads addresses over the
+        // proxy before any handshake runs. The message that triggered this handler is what
+        // locked the origin, so it is already available here.
+        setDappOrigin(communicator.getOrigin() || undefined);
 
         // Apply the dApp's theme tokens so the embedded dialog matches its
         // look & feel (accent color, border radius, light/dark), translated
