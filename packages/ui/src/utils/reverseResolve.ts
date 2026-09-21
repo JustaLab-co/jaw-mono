@@ -116,6 +116,10 @@ function isOffchainLookup(error: unknown): boolean {
 async function nameOnChain(client: EnsClient, address: Address, chainId: number): Promise<string | null> {
   const fallback = client.getEnsName({ address });
   if (chainId === mainnet.id) return fallback;
+  // The default record is read up front but awaited only when the chain's own has
+  // no name, and an offchain resolver reverts on both. This marks it handled so the
+  // read nobody waits for does not surface as an unhandled rejection on the page.
+  void fallback.catch(() => undefined);
 
   const scoped = await Promise.resolve()
     .then(() => client.getEnsName({ address, coinType: toCoinType(chainId) }))
@@ -192,26 +196,32 @@ async function resolveOffchain(
       url.searchParams.set('rpcUrl', rpcUrl);
       if (withAvatar) url.searchParams.set('records', 'true');
 
-      const res = await fetch(url.toString());
-      if (!res.ok) return;
+      // Caught per chain: a request that fails leaves its own addresses unanswered,
+      // to be asked again, rather than discarding the names another chain returned.
+      try {
+        const res = await fetch(url.toString());
+        if (!res.ok) return;
 
-      const body = (await res.json()) as { result?: { data?: ReverseSlot | ReverseSlot[] | null } };
-      const data = body.result?.data;
-      if (!data) return;
+        const body = (await res.json()) as { result?: { data?: ReverseSlot | ReverseSlot[] | null } };
+        const data = body.result?.data;
+        if (!data) return;
 
-      for (const slot of Array.isArray(data) ? data : [data]) {
-        // Read back from the wire, so nothing here is assumed to be there.
-        if (!slot?.address) continue;
-        const key = identityKey(slot.address, chainId);
-        if (!slot.name) {
-          answers.set(key, null);
-          continue;
+        for (const slot of Array.isArray(data) ? data : [data]) {
+          // Read back from the wire, so nothing here is assumed to be there.
+          if (!slot?.address) continue;
+          const key = identityKey(slot.address, chainId);
+          if (!slot.name) {
+            answers.set(key, null);
+            continue;
+          }
+          const hasAvatar = withAvatar && !!slot.records?.records?.texts?.some((t) => t.key === 'avatar');
+          answers.set(
+            key,
+            hasAvatar ? { name: slot.name, avatar: ensMetadataAvatarUrl(slot.name) } : { name: slot.name }
+          );
         }
-        const hasAvatar = withAvatar && !!slot.records?.records?.texts?.some((t) => t.key === 'avatar');
-        answers.set(
-          key,
-          hasAvatar ? { name: slot.name, avatar: ensMetadataAvatarUrl(slot.name) } : { name: slot.name }
-        );
+      } catch {
+        return;
       }
     })
   );
@@ -269,8 +279,8 @@ async function reverseResolve(
     }
     if (offchain.length === 0) return resolved;
 
-    const answers = await Promise.race([resolveOffchain(offchain, rpcUrl, withAvatar).catch(() => null), budget]);
-    if (answers === 'timeout' || !answers) return resolved;
+    const answers = await Promise.race([resolveOffchain(offchain, rpcUrl, withAvatar), budget]);
+    if (answers === 'timeout') return resolved;
 
     for (const input of offchain) {
       const key = identityKey(input.address, input.chainId);

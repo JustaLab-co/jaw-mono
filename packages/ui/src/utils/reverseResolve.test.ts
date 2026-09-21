@@ -17,6 +17,27 @@ const KEYLESS = 'https://api.justaname.id/proxy/v1/rpc?chainId=1';
 /** What viem throws for an offchain resolver when the client refuses to follow the lookup. */
 const offchainLookup = Object.assign(new Error('reverted'), { cause: { data: '0x556f1830deadbeef' } });
 
+/**
+ * A client whose reads are plain functions. A `vi.fn` hooks every promise it hands
+ * back, which marks a dropped rejection as handled and hides what these tests watch for.
+ */
+function plainClient(getEnsName: (args: { address: string; coinType?: bigint }) => Promise<string | null>) {
+  getPublicClient.mockReturnValueOnce({ getEnsName, getEnsText: async () => null } as unknown as ReturnType<
+    typeof getPublicClient
+  >);
+}
+
+/** The rejections nobody handled while `run` was in flight. */
+async function unhandledDuring(run: () => Promise<unknown>): Promise<string[]> {
+  const seen: string[] = [];
+  const record = (reason: unknown) => seen.push(String(reason));
+  process.on('unhandledRejection', record);
+  await run();
+  await new Promise((resolve) => setTimeout(resolve, 20));
+  process.off('unhandledRejection', record);
+  return seen;
+}
+
 function stubFetch(body: unknown, ok = true) {
   const fetchMock = vi.fn().mockResolvedValue({ ok, json: async () => body });
   vi.stubGlobal('fetch', fetchMock);
@@ -127,6 +148,40 @@ describe('names read over the chain', () => {
     const names = await reverseResolveAddresses([{ address: ADDRESS, chainId: 1 }], KEYED);
 
     expect(names[identityKey(ADDRESS, 1)]).toBe('arrived.eth');
+  });
+});
+
+// Off mainnet the default record is read up front and only awaited when the chain's
+// own has none, so on the paths that drop it its rejection has to stay handled.
+describe('the default record read nobody waits for', () => {
+  it('keeps its rejection handled when the chain-scoped record answers', async () => {
+    plainClient(({ coinType }) =>
+      coinType ? Promise.resolve('base-name.eth') : Promise.reject(new Error('rpc down'))
+    );
+
+    let names: Record<string, string> = {};
+    const unhandled = await unhandledDuring(async () => {
+      names = await reverseResolveAddresses([{ address: ADDRESS, chainId: 8453 }], KEYED);
+    });
+
+    expect(names[identityKey(ADDRESS, 8453)]).toBe('base-name.eth');
+    expect(unhandled).toEqual([]);
+  });
+
+  // The normal path for an offchain name off mainnet: both records revert, the
+  // scoped one is rethrown for the service and the default one is left behind.
+  it('keeps it handled when both records revert offchain', async () => {
+    plainClient(() => Promise.reject(offchainLookup));
+    const fetchMock = stubFetch(serviceBody(ADDRESS, 'offchain.justan.id'));
+
+    let result: Record<string, { name: string }> = {};
+    const unhandled = await unhandledDuring(async () => {
+      result = await reverseResolveWithAvatars([{ address: ADDRESS, chainId: 8453 }], KEYED);
+    });
+
+    expect(unhandled).toEqual([]);
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(result[identityKey(ADDRESS, 8453)]?.name).toBe('offchain.justan.id');
   });
 });
 
@@ -278,6 +333,30 @@ describe('offchain names across two chains', () => {
     expect(fetchMock).toHaveBeenCalledTimes(2);
     expect(result[identityKey(ADDRESS, 1)]?.name).toBe('main.justan.id');
     expect(result[identityKey(ADDRESS, 8453)]?.name).toBe('base.justan.id');
+  });
+
+  // One request per chain means one failure per chain: the name that did arrive is
+  // kept, and the addresses of the chain that failed are asked again.
+  it('keeps the chain that answered when another chain request fails', async () => {
+    getEnsName.mockRejectedValue(offchainLookup);
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (url: string) => {
+        if (url.includes('eip155%3A1&')) throw new Error('network down');
+        return { ok: true, json: async () => serviceBody(ADDRESS, 'base.justan.id') };
+      })
+    );
+
+    const result = await reverseResolveWithAvatars(
+      [
+        { address: ADDRESS, chainId: 1 },
+        { address: ADDRESS, chainId: 8453 },
+      ],
+      KEYED
+    );
+
+    expect(result[identityKey(ADDRESS, 8453)]?.name).toBe('base.justan.id');
+    expect(result[identityKey(ADDRESS, 1)]).toBeUndefined();
   });
 
   // Everything in that answer is off the wire, so a slot without an address
