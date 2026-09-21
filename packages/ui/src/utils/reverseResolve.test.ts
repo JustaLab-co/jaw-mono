@@ -45,7 +45,7 @@ describe('reverseResolveWithAvatars', () => {
   });
 
   it('omits avatar when the name has no avatar record', async () => {
-    stubFetch(slot(ADDRESS, 'ghadi20.justan.id', 1, [{ key: 'email', value: 'ghadi@justalab.co' }]));
+    stubFetch(slot(ADDRESS, 'ghadi20.justan.id', 1, [{ key: 'email', value: 'someone@example.test' }]));
 
     const result = await reverseResolveWithAvatars([{ address: ADDRESS, chainId: 1 }], RPC_URL);
 
