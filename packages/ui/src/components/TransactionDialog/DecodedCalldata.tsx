@@ -52,17 +52,6 @@ const CalldataDigest = ({ data }: { data: string }) => {
   );
 };
 
-/** Merge parent-resolved and locally-resolved maps, normalizing all keys to lowercase. */
-function mergeLowercased(
-  parent: Record<string, string> | undefined,
-  local: Record<string, string>
-): Record<string, string> {
-  const out: Record<string, string> = {};
-  for (const [key, value] of Object.entries(parent ?? {})) out[key.toLowerCase()] = value;
-  for (const [key, value] of Object.entries(local)) out[key.toLowerCase()] = value;
-  return out;
-}
-
 /** ERC-7730 intent, else the decoded function name, else the caller's fallback. */
 export function callLabel(decode: DecodeResult, fallback: string): string {
   if (decode.clearSigned?.intent) return decode.clearSigned.intent;
@@ -112,11 +101,10 @@ export const DecodedCalldataView = ({
     }
   }, [decoded]);
 
-  const allResolved = useMemo(
-    () => mergeLowercased(resolvedAddresses, localResolved),
-    [resolvedAddresses, localResolved]
-  );
-  const allAvatars = useMemo(() => mergeLowercased(resolvedAvatars, localAvatars), [resolvedAvatars, localAvatars]);
+  // Both sides are filed by {@link identityKey}, which lowercases the address, so a plain
+  // merge is enough and the local answer wins over the one the dialog passed down.
+  const allResolved = useMemo(() => ({ ...resolvedAddresses, ...localResolved }), [resolvedAddresses, localResolved]);
+  const allAvatars = useMemo(() => ({ ...resolvedAvatars, ...localAvatars }), [resolvedAvatars, localAvatars]);
 
   // Keep a ref to allResolved so the effect can read it without re-triggering
   const allResolvedRef = useRef(allResolved);
@@ -132,7 +120,9 @@ export const DecodedCalldataView = ({
       .map((p) => p.rawValue!)
       .filter((addr) => {
         const lower = addr.toLowerCase();
-        return lower !== ZERO_ADDRESS && !currentResolved[lower] && !attemptedRef.current.has(lower);
+        return (
+          lower !== ZERO_ADDRESS && !currentResolved[identityKey(lower, chainId)] && !attemptedRef.current.has(lower)
+        );
       });
 
     // Deduplicate
@@ -163,8 +153,9 @@ export const DecodedCalldataView = ({
         for (const address of unique) {
           const identity = resolved[identityKey(address, chainId)];
           if (!identity) continue;
-          next[address.toLowerCase()] = label ? `${identity.name}@${label}` : identity.name;
-          if (identity.avatar) avatarByAddress[address.toLowerCase()] = identity.avatar;
+          const key = identityKey(address, chainId);
+          next[key] = label ? `${identity.name}@${label}` : identity.name;
+          if (identity.avatar) avatarByAddress[key] = identity.avatar;
         }
         if (Object.keys(next).length > 0) {
           setLocalResolved((prev) => ({ ...prev, ...next }));
@@ -265,8 +256,9 @@ export const DecodedCalldataView = ({
       <div className="bg-secondary rounded-chip flex flex-col gap-1 p-2">
         {decoded.params.length === 0 && <p className="text-muted-foreground text-xs">No parameters</p>}
         {decoded.params.map((param, i) => {
-          const resolvedName = param.rawValue ? allResolved[param.rawValue.toLowerCase()] : undefined;
-          const resolvedAvatar = param.rawValue ? allAvatars[param.rawValue.toLowerCase()] : undefined;
+          const paramKey = param.rawValue ? identityKey(param.rawValue, chainId) : undefined;
+          const resolvedName = paramKey ? allResolved[paramKey] : undefined;
+          const resolvedAvatar = paramKey ? allAvatars[paramKey] : undefined;
           const unlimitedApproval = approveShape && i === 1 && isUnlimitedAmount(param.value);
           return (
             <div key={i} className="flex flex-col gap-1">

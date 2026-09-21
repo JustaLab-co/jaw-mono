@@ -138,3 +138,53 @@ describe('DecodedCalldataView address resolution under StrictMode', () => {
     expect(countNames()).toBe(2);
   });
 });
+
+// The dialog hands the same map down to every row, and a batch can carry the same address
+// on rows the dialog draws for different chains. Filed by address alone, whichever answer
+// landed last was rendered on both rows, one of them under the other chain's label.
+describe('DecodedCalldataView reads the map on its own chain', () => {
+  const MAINNET_NAME = 'vitalik.eth@mainnet';
+  const BASE_NAME = 'vitalik.eth@base';
+
+  const parentMap = {
+    [identityKey(RECIPIENT, 1)]: MAINNET_NAME,
+    [identityKey(RECIPIENT, 8453)]: BASE_NAME,
+  };
+
+  it('shows the name filed for its chain, not the other one', async () => {
+    await act(async () => {
+      root.render(createElement(DecodedCalldataView, { ...props, chainId: 1, resolvedAddresses: parentMap }));
+    });
+    await settle();
+
+    expect(container.textContent).toContain(MAINNET_NAME);
+    expect(container.textContent).not.toContain(BASE_NAME);
+  });
+
+  it('renders one row per chain from the same map', async () => {
+    await act(async () => {
+      root.render(
+        createElement(
+          'div',
+          null,
+          createElement(DecodedCalldataView, {
+            ...props,
+            key: 'mainnet',
+            chainId: 1,
+            resolvedAddresses: parentMap,
+          }),
+          createElement(DecodedCalldataView, {
+            ...props,
+            key: 'base',
+            chainId: 8453,
+            resolvedAddresses: parentMap,
+          })
+        )
+      );
+    });
+    await settle();
+
+    expect(container.textContent).toContain(MAINNET_NAME);
+    expect(container.textContent).toContain(BASE_NAME);
+  });
+});
