@@ -258,10 +258,15 @@ describe('two SessionManagers over one storage', () => {
     expect(await reader.isAuthenticated(ORIGIN)).toBe(false);
   });
 
+  // The test above with an unrelated key, so the cache has to survive: the reader keeps
+  // serving a session storage no longer holds. Asserting on a session still on disk would
+  // pass either way, because dropping the cache just reads the same answer back.
   it('ignores storage events for other keys', async () => {
     const reader = secondDocument();
     await reader.createSession({ origin: ORIGIN, peerPublicKey: '04aabbccdd', account: AUTH });
+    expect(await reader.isAuthenticated(ORIGIN)).toBe(true);
 
+    await new SessionManager().deleteSession(ORIGIN);
     dispatchStorageEvent('unrelated:key');
 
     expect(await reader.isAuthenticated(ORIGIN)).toBe(true);
