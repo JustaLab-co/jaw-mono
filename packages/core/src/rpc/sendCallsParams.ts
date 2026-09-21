@@ -2,6 +2,7 @@ import type { Address } from '../provider/interface.js';
 import { standardErrors } from '../errors/index.js';
 import type { RequestCapabilities } from './permissions.js';
 import {
+    describeValue,
     isRecord,
     optionalChainId,
     optionalHexAddress,
@@ -105,7 +106,7 @@ export function normalizeSendCallsParams(params: unknown): NormalizedSendCallsPa
     const version = envelope.version ?? '1.0';
     if (!SUPPORTED_SEND_CALLS_VERSIONS.includes(version as SendCallsVersion)) {
         throw standardErrors.rpc.invalidParams(
-            `${METHOD}: unsupported version ${JSON.stringify(version)}. Supported versions: ${SUPPORTED_SEND_CALLS_VERSIONS.join(', ')}`
+            `${METHOD}: unsupported version ${describeValue(version)}. Supported versions: ${SUPPORTED_SEND_CALLS_VERSIONS.join(', ')}`
         );
     }
 

@@ -217,6 +217,15 @@ export abstract class JAWSigner implements Signer {
                 // implement, so it would point at a dead end.
                 if (addFunds.chainId !== undefined) this.resolveChain(addFunds.chainId);
 
+                // Every entry in `chains` gets the same check, for the same
+                // reason: an unsupported id there would draw an icon-less slot
+                // in the stack labelled "chain 1337", which reads as a network
+                // the user could deposit on. Refusing the whole request beats
+                // dropping the bad entry — a silently shortened list is a dapp
+                // bug the dapp never finds out about, and the user is told they
+                // can deposit somewhere the dapp never named.
+                addFunds.chains?.forEach((chainId) => this.resolveChain(chainId));
+
                 return { method: 'wallet_addFunds', params: addFunds };
             }
 

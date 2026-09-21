@@ -446,7 +446,7 @@ This file is a **routing index only**. To help users with JAW:
 
 - **Dashboard (get API key):** https://dashboard.jaw.id
 - **Documentation:** https://docs.jaw.id
-- **GitHub:** https://github.com/JustaName-id/jaw-mono
+- **GitHub:** https://github.com/JustaLab-co/jaw-mono
 - **Developers Chat:** https://t.me/+RsFLPfky7-YxZjVk
 `;
 }

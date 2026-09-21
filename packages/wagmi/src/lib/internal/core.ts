@@ -590,11 +590,21 @@ export namespace addFunds {
     address?: Address;
     connector?: Connector;
     /**
-     * Chain the receive QR pins via EIP-681. Defaults to the connected chain.
-     * Not a routing target: nothing is sent, so the connector does not have to
-     * be on it.
+     * Chain the receive QR pins via EIP-681. Defaults to the first entry of
+     * `chains`, then the connected chain. Not a routing target: nothing is
+     * sent, so the connector does not have to be on it.
      */
     chainId?: number;
+    /**
+     * Chains your app accepts deposits on, narrowing the chain row on the
+     * screen to these. Defaults to every chain the address works on.
+     *
+     * Worth sending whenever your app only credits deposits on certain
+     * networks: the default is true of a smart account, but it invites a
+     * deposit your app will not see. Order it with your primary chain first —
+     * that is the one the QR pins when no `chainId` comes with it.
+     */
+    chains?: number[];
   };
 
   /**
@@ -606,7 +616,7 @@ export namespace addFunds {
 }
 
 /**
- * Opens the wallet's receive screen: the chains the account's address works on,
+ * Opens the wallet's receive screen: the chains the account accepts deposits on,
  * an EIP-681 QR, and the address itself.
  *
  * The destination is always the connected account, resolved by the wallet. It
@@ -622,12 +632,15 @@ export async function addFunds<config extends Config>(
   config: config,
   parameters: addFunds.Parameters<config> = {}
 ): Promise<addFunds.ReturnType> {
-  const { address, chainId, connector } = parameters;
+  const { address, chainId, chains, connector } = parameters;
 
   // chainId picks which chain the QR names, so the connector does not need to
   // be on it — the address is the same on every chain either way.
   const client = await getConnectorClient(config, {
     account: address,
+    // Not `chainId ?? chains?.[0]`: this selects the client, and `chains` names
+    // where deposits are accepted, not where to act. The wallet picks the QR's
+    // chain from the list itself.
     chainId,
     connector,
     assertChainId: false,
@@ -635,7 +648,7 @@ export async function addFunds<config extends Config>(
 
   await client.request({
     method: 'wallet_addFunds' as never,
-    params: [{ chainId }] as never,
+    params: [{ chainId, chains }] as never,
   });
 
   return null;

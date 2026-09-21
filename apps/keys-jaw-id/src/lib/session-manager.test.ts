@@ -175,6 +175,16 @@ describe('two SessionManagers over one storage', () => {
     return new SessionManager();
   }
 
+  // jsdom's StorageEvent constructor only accepts its own Storage in
+  // `storageArea`, and on Node 25 the shared setup puts an in-memory stub in
+  // that slot (see vitest.setup.localstorage.ts). Attaching the area to the
+  // instance sends the same event the listener reads, whichever one is live.
+  function dispatchStorageEvent(key: string | null) {
+    const event = new StorageEvent('storage', { key });
+    Object.defineProperty(event, 'storageArea', { value: window.localStorage });
+    window.dispatchEvent(event);
+  }
+
   it('does not erase the other document’s session when creating one', async () => {
     const docA = secondDocument();
     const docB = secondDocument();
@@ -242,22 +252,22 @@ describe('two SessionManagers over one storage', () => {
 
     // Another document deletes it. jsdom does not raise `storage` across
     // SessionManagers (same window), so dispatch what a real browser would.
-    //
-    // No `storageArea`: on Node 25+ the global is the in-memory stub from
-    // vitest.setup.localstorage.ts, and jsdom's StorageEvent only accepts a real
-    // Storage there. The listener guards with `event.storageArea && ...`, so a
-    // missing one is a path it handles and this still exercises the cache drop.
     await new SessionManager().deleteSession(ORIGIN);
-    window.dispatchEvent(new StorageEvent('storage', { key: 'jaw:sessions:apps' }));
+    dispatchStorageEvent('jaw:sessions:apps');
 
     expect(await reader.isAuthenticated(ORIGIN)).toBe(false);
   });
 
+  // The test above with an unrelated key, so the cache has to survive: the reader keeps
+  // serving a session storage no longer holds. Asserting on a session still on disk would
+  // pass either way, because dropping the cache just reads the same answer back.
   it('ignores storage events for other keys', async () => {
     const reader = secondDocument();
     await reader.createSession({ origin: ORIGIN, peerPublicKey: '04aabbccdd', account: AUTH });
+    expect(await reader.isAuthenticated(ORIGIN)).toBe(true);
 
-    window.dispatchEvent(new StorageEvent('storage', { key: 'unrelated:key' }));
+    await new SessionManager().deleteSession(ORIGIN);
+    dispatchStorageEvent('unrelated:key');
 
     expect(await reader.isAuthenticated(ORIGIN)).toBe(true);
   });

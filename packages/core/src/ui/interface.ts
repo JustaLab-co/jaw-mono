@@ -204,9 +204,12 @@ export interface WalletSignUIRequest extends BaseUIRequest {
  * `address` is the destination resolved by the wallet via `resolveDestination`,
  * never anything the dapp supplied.
  *
- * Deliberately carries no chain list. Which chains the stack shows is a display
- * decision the dialog makes from the active chain, so putting a list here would
- * mean the two hosts could hand the same screen different answers.
+ * `chains` carries the dapp's own list when it sent one, and is absent
+ * otherwise. It is safe to plumb — and does not let the two hosts drift — only
+ * because it travels in the dapp's params: the CrossPlatform popup re-derives it
+ * from the same `chains` key rather than from anything this request adds, so
+ * both hosts read one source. Anything the dialog invented per-host would drift,
+ * which is why the default (no list at all) is still decided in the dialog.
  *
  * Resolves when the user closes: deposits land off-app, so there is no outcome
  * to report and closing is a normal finish rather than a rejection.
@@ -217,6 +220,11 @@ export interface AddFundsUIRequest extends BaseUIRequest {
         address: Address;
         /** Chain the QR pins via EIP-681. */
         chainId: number;
+        /**
+         * Chains the dapp accepts deposits on, or undefined when it named none
+         * and the wallet shows every chain the account works on.
+         */
+        chains?: number[];
     };
 }
 

@@ -105,6 +105,18 @@ describe('normalizeSendCallsParams', () => {
         expect(message).toContain('2.0.0');
     });
 
+    // The rejected version was echoed through a bare `JSON.stringify`, which
+    // raises on a circular object, so the -32602 message threw on the way to
+    // being built and the dapp got an untyped TypeError instead.
+    it('rejects an unserializable version with -32602 rather than a TypeError', () => {
+        const circular: Record<string, unknown> = {};
+        circular.self = circular;
+
+        const message = expectInvalidParams(() => normalizeSendCallsParams([{ ...viemV2Params, version: circular }]));
+
+        expect(message).toContain('[object Object]');
+    });
+
     it('rejects a missing params object with -32602', () => {
         expectInvalidParams(() => normalizeSendCallsParams([]));
         expectInvalidParams(() => normalizeSendCallsParams(undefined));
@@ -210,5 +222,27 @@ describe('normalizeSendCallsParams', () => {
             const capabilities = { dataSuffix: { value: '0xabcd', optional: true } };
             expect(normalizeSendCallsParams([{ ...viemV2Params, capabilities }]).capabilities).toEqual(capabilities);
         });
+    });
+
+    // `optionalHexQuantity` echoed the rejected value through a bare
+    // `JSON.stringify`, which raises on a circular object — so building the
+    // -32602 message threw a TypeError and the dapp got that instead, with no
+    // RPC code on it. The same trap `optionalChainId` had.
+    it('refuses an unserializable value with -32602 rather than a TypeError', () => {
+        const circular: Record<string, unknown> = {};
+        circular.self = circular;
+
+        const message = expectInvalidParams(() =>
+            normalizeSendCallsParams([
+                {
+                    version: '2.0.0',
+                    calls: [{ to: '0x0987654321098765432109876543210987654321', value: circular }],
+                },
+            ])
+        );
+
+        // The describeValue fallback, proving the message was built rather than
+        // the stringify having thrown on the way to it.
+        expect(message).toContain('[object Object]');
     });
 });
