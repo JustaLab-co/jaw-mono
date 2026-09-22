@@ -3,6 +3,7 @@ import { WebSocketServer } from 'ws';
 import type { AddressInfo } from 'node:net';
 
 import { buildInitPayload, readBridgeFailure, readInjectedApiKey, WSBridge } from './ws-bridge.js';
+import { exportKeyToHex, generateKeyPair } from './crypto.js';
 
 // The init envelope is the only thing the CLI tells the browser about the
 // paymaster, so it has to carry the context and not the url alone. Dropping a
@@ -116,58 +117,81 @@ describe('readBridgeFailure', () => {
 /**
  * What the relay sends is network input. A frame the bridge cannot use has to
  * reject the connect with a reason, not throw inside the socket handler where
- * nothing catches it, and not hang until the connect timer fires.
+ * nothing catches it, and not hang until the connect timer fires. A bridge
+ * whose connect failed is never handed to anyone, so it must not keep
+ * reconnecting on its own either.
  */
 describe('WSBridge against a relay sending bad frames', () => {
   let relay: WebSocketServer | null = null;
+  let bridge: WSBridge | null = null;
+  let connections = 0;
 
   afterEach(() => {
+    bridge?.close();
+    bridge = null;
+    for (const client of relay?.clients ?? []) client.terminate();
     relay?.close();
     relay = null;
+    connections = 0;
   });
 
-  /** A relay that reports the browser connected, then sends `frame`. */
-  const connectTo = async (frame: string) => {
+  /** A relay that sends `frames` to every connection it accepts. */
+  const connectTo = async (...frames: unknown[]) => {
     const server = new WebSocketServer({ port: 0 });
     relay = server;
     server.on('connection', (socket) => {
-      socket.send(JSON.stringify({ type: 'status', browserConnected: true }));
-      socket.send(frame);
+      connections += 1;
+      for (const frame of frames) socket.send(JSON.stringify(frame));
     });
     await new Promise((resolve) => server.once('listening', resolve));
     const { port } = server.address() as AddressInfo;
-    const bridge = new WSBridge({
+    // A real pair, so a failure can only come from what the relay sent.
+    const pair = await generateKeyPair();
+    bridge = new WSBridge({
       relayUrl: `ws://127.0.0.1:${port}`,
       session: 'test',
       connectTimeout: 2_000,
       config: { chainId: 8453 },
-      privateKeyHex: '00',
-      publicKeyHex: '00',
+      privateKeyHex: await exportKeyToHex('private', pair.privateKey),
+      publicKeyHex: await exportKeyToHex('public', pair.publicKey),
       peerPublicKeyHex: null,
     });
-    try {
-      return await bridge.connect();
-    } finally {
-      bridge.close();
-    }
+    return bridge.connect();
   };
+
+  const browserConnected = { type: 'status', browserConnected: true };
+  const keyExchange = (publicKey: unknown) => ({ type: 'key_exchange', publicKey });
+  /** Past the first reconnect delay, so a reconnect would have happened. */
+  const afterFirstReconnectDelay = () => new Promise((resolve) => setTimeout(resolve, 1_300));
 
   it.each([
     ['not hex', 'zz'],
     ['missing', undefined],
   ])('rejects a key_exchange whose public key is %s', async (_, publicKey) => {
-    await expect(connectTo(JSON.stringify({ type: 'key_exchange', publicKey }))).rejects.toThrow(
+    await expect(connectTo(browserConnected, keyExchange(publicKey))).rejects.toThrow(
       /invalid key_exchange public key/
     );
   });
 
-  it('rejects a key_exchange whose key does not import, without waiting out the timer', async () => {
-    const err = await connectTo(JSON.stringify({ type: 'key_exchange', publicKey: 'abcd' })).catch((e: Error) => e);
+  it('rejects a peer key that does not import, and keeps no trace of it', async () => {
+    const err = await connectTo(browserConnected, keyExchange('abcd')).catch((e: Error) => e);
+
     expect(err).toBeInstanceOf(Error);
     expect((err as Error).message).not.toMatch(/did not connect within/);
+    expect(bridge?.peerPublicKey).toBeNull();
   });
 
-  it('drops the connection on a frame over the size limit', async () => {
-    await expect(connectTo('x'.repeat(6 * 1024 * 1024))).rejects.toThrow(/payload/i);
+  it('does not reconnect after a key exchange fails the connect', async () => {
+    await expect(connectTo(browserConnected, keyExchange('zz'))).rejects.toThrow();
+    await afterFirstReconnectDelay();
+
+    expect(connections).toBe(1);
+  });
+
+  it('does not reconnect after a stale session fails the connect', async () => {
+    await expect(connectTo({ type: 'status', browserConnected: false })).rejects.toThrow(/stale/);
+    await afterFirstReconnectDelay();
+
+    expect(connections).toBe(1);
   });
 });

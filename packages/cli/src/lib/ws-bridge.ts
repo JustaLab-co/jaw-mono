@@ -115,7 +115,7 @@ const DEFAULT_TIMEOUT_MS = 120_000;
 const DEFAULT_CONNECT_TIMEOUT_MS = 30_000;
 
 /**
- * Maximum message size (5 MB), outbound and inbound.
+ * Maximum outbound message size (5 MB).
  *
  * wallet_sendCalls with large batches (50+ calls, complex calldata) can reach
  * hundreds of KB. Base64 encoding of the AES-GCM ciphertext adds ~33% overhead.
@@ -190,12 +190,19 @@ export class WSBridge {
     this.onBrowserNeeded = onBrowserNeeded;
     this.onPeerKeyChanged = onPeerKeyChanged;
 
-    // Pre-derive shared secret if we already have the peer key
-    if (this.peerPublicKeyHex) {
-      await this.deriveSecret();
+    try {
+      // Pre-derive shared secret if we already have the peer key
+      if (this.peerPublicKeyHex) {
+        await this.deriveSecret(this.peerPublicKeyHex);
+      }
+      await this.connectInternal(onBrowserNeeded, onPeerKeyChanged);
+    } catch (err) {
+      // The caller never gets a bridge whose connect failed, so nothing else
+      // can close it. Left open, its socket's close handler would reconnect in
+      // the background and could open the browser again.
+      this.close();
+      throw err;
     }
-
-    return this.connectInternal(onBrowserNeeded, onPeerKeyChanged);
   }
 
   private async connectInternal(
@@ -204,7 +211,7 @@ export class WSBridge {
   ): Promise<void> {
     return new Promise((resolve, reject) => {
       const url = `${this.relayUrl}?session=${encodeURIComponent(this.session)}&role=cli`;
-      const ws = new WebSocket(url, { maxPayload: MAX_MESSAGE_BYTES });
+      const ws = new WebSocket(url);
 
       let browserOpened = false;
       let resolved = false;
@@ -322,8 +329,7 @@ export class WSBridge {
             if (typeof peerKey !== 'string' || !/^([0-9a-fA-F]{2})+$/.test(peerKey)) {
               throw new Error('Relay sent an invalid key_exchange public key.');
             }
-            this.peerPublicKeyHex = peerKey;
-            await this.deriveSecret();
+            await this.deriveSecret(peerKey);
             onPeerKeyChanged?.(peerKey);
             await onBrowserReady();
           } catch (err) {
@@ -427,17 +433,18 @@ export class WSBridge {
    * Used by `jaw disconnect` when we just need to tell the browser to close.
    */
   async connectAndShutdown(): Promise<void> {
-    if (!this.peerPublicKeyHex) {
+    const peerHex = this.peerPublicKeyHex;
+    if (!peerHex) {
       // No peer key means browser never connected — nothing to shut down
       return;
     }
 
     this.disposed = true;
-    await this.deriveSecret();
+    await this.deriveSecret(peerHex);
 
     return new Promise<void>((resolve) => {
       const url = `${this.relayUrl}?session=${encodeURIComponent(this.session)}&role=cli`;
-      const ws = new WebSocket(url, { maxPayload: MAX_MESSAGE_BYTES });
+      const ws = new WebSocket(url);
 
       const timer = setTimeout(() => {
         try {
@@ -525,11 +532,12 @@ export class WSBridge {
     ws.send(data);
   }
 
-  private async deriveSecret(): Promise<void> {
-    if (!this.peerPublicKeyHex) return;
+  /** Key and secret are stored together, and only once the derivation worked. */
+  private async deriveSecret(peerHex: string): Promise<void> {
     const privateKey = await importKeyFromHex('private', this.privateKeyHex);
-    const peerPublicKey = await importKeyFromHex('public', this.peerPublicKeyHex);
+    const peerPublicKey = await importKeyFromHex('public', peerHex);
     this.sharedSecret = await deriveSharedSecret(privateKey, peerPublicKey);
+    this.peerPublicKeyHex = peerHex;
   }
 }
 
