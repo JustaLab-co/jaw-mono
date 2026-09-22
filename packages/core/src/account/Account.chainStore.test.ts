@@ -1,9 +1,10 @@
-import { describe, it, expect, beforeEach } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { sepolia } from 'viem/chains';
 
 import { Account } from './Account.js';
 import { store, ChainClients, getClient, type Chain } from '../store/index.js';
 import { JAW_RPC_URL } from '../constants.js';
+import { createMemoryStorage } from '../storage-manager/index.js';
 
 // `buildChainConfig` is private and writes the shared chain store as a side effect,
 // which is the behaviour under test here.
@@ -31,6 +32,10 @@ describe('buildChainConfig and the stored chain entry', () => {
     beforeEach(() => {
         store.chains.set([]);
         ChainClients.setState({}, true);
+    });
+
+    afterEach(() => {
+        vi.unstubAllGlobals();
     });
 
     it('adds a chain that is not stored yet', () => {
@@ -92,5 +97,33 @@ describe('buildChainConfig and the stored chain entry', () => {
 
         expect(store.chains.get()?.[0].paymaster?.url).toBe('https://paymaster.test/b');
         expect(getClient(sepolia.id)).not.toBe(client);
+    });
+
+    // Last write wins, so a caller that leaves the context out strips the one the
+    // entry already carried.
+    it('keeps the paymaster context when backfilling addresses', async () => {
+        vi.stubGlobal('fetch', vi.fn().mockRejectedValue(new Error('offline')));
+        const storage = createMemoryStorage();
+        storage.setItem('accounts', [
+            {
+                creationDate: '2026-09-22',
+                credentialId: 'cred-1',
+                isImported: false,
+                username: 'alice',
+                publicKey: '0x00',
+            },
+        ]);
+        const paymaster = { url: 'https://paymaster.test/a', context: { sponsorshipPolicyId: 'sp_1' } };
+        buildChainConfig(sepolia.id, 'k1', paymaster.url, paymaster.context);
+
+        await Account.backfillStoredAccountAddresses({
+            chainId: sepolia.id,
+            apiKey: 'k1',
+            paymasterUrl: paymaster.url,
+            paymasterContext: paymaster.context,
+            storage,
+        });
+
+        expect(store.chains.get()?.[0].paymaster).toEqual(paymaster);
     });
 });

@@ -184,13 +184,13 @@ export class Account {
      * the next call.
      */
     static async backfillStoredAccountAddresses(config: AccountConfig): Promise<PasskeyAccount[]> {
-        const { chainId, apiKey, paymasterUrl } = config;
+        const { chainId, apiKey, paymasterUrl, paymasterContext } = config;
         const passkeyManager = new PasskeyManager(config.storage, undefined, apiKey);
         const accounts = passkeyManager.fetchAccounts();
         const missing = accounts.filter((account) => !account.address);
         if (missing.length === 0) return accounts;
 
-        const chain = Account.buildChainConfig(chainId, apiKey, paymasterUrl);
+        const chain = Account.buildChainConfig(chainId, apiKey, paymasterUrl, paymasterContext);
         const bundlerClient = getBundlerClient(chain);
 
         const derived = await Promise.all(
