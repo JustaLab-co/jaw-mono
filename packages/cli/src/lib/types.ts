@@ -54,7 +54,8 @@ export interface JawConfig {
 }
 
 /**
- * Config keys settable from a plain string value (`jaw config set`, jaw_config_set).
+ * Config keys settable from a plain string value with `jaw config set`. The
+ * MCP tool takes a narrower set; see `configSetSchema`.
  * Excludes structured fields like `x402`/`paymasters`/`permissions`. Kept as a
  * narrow union rather than `keyof JawConfig` so it stays independent of those
  * object fields (which otherwise blow up the MCP SDK's tool-handler inference).

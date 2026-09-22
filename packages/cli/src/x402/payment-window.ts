@@ -109,12 +109,8 @@ export async function openPaymentWindow({
 }
 
 /**
- * Write a payment's outcome to the ledger and fold the ledger down, both while
- * the lock is still held. Releasing first leaves a window where the next payer
- * reads a total that does not include this payment.
- *
- * Free resources write nothing. Both front ends call this, because each reads
- * the other's rows back for the session total.
+ * Record a payment's outcome in the ledger and compact it. Call it inside the
+ * payment lock; free resources write nothing.
  */
 export function recordPaymentOutcome(
   url: string,

@@ -197,9 +197,8 @@ export class WSBridge {
       }
       await this.connectInternal(onBrowserNeeded, onPeerKeyChanged);
     } catch (err) {
-      // The caller never gets a bridge whose connect failed, so nothing else
-      // can close it. Left open, its socket's close handler would reconnect in
-      // the background and could open the browser again.
+      // Nobody receives a bridge whose connect failed, so close it here or it
+      // keeps reconnecting on its own.
       this.close();
       throw err;
     }

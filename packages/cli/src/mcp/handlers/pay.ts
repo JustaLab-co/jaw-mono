@@ -117,12 +117,8 @@ export function registerPayTool(server: McpServer): void {
               network: params.network,
             });
 
-            // What this payment costs the cap is not accumulated here:
-            // `spentThisSession` is read from the ledger at the top of every
-            // call, which is what makes the cap survive a restart. A second
-            // running total in memory could only disagree with the one that
-            // enforces.
-
+            // The cap is not tracked in memory: the next call reads it back
+            // from the ledger this writes to.
             recordPaymentOutcome(params.url, result, session, periodUsage);
 
             // Untrusted server free-text (body, refusedReason) is fenced off
