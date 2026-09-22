@@ -134,7 +134,8 @@ export const TransactionDialog = ({
     };
   }, [walletAddress, onBehalfOf, transactions, currentTransaction?.chainId]);
 
-  // Resolve ERC-7730 `metadata.contractName` for every unique `to` in the batch.
+  // Resolve ERC-7730 `metadata.contractName` for every unique chain + `to` in the batch,
+  // filed under the same CAIP-10 key the registry index uses.
   const [contractNames, setContractNames] = useState<Record<string, string>>({});
   const txSignature = transactions
     .filter((t) => !!t.to)
@@ -154,12 +155,15 @@ export const TransactionDialog = ({
         return;
       }
 
+      // Keyed by chain and address, like the index itself: the same address is a
+      // different contract on every chain, so a descriptor found for one chain must not
+      // be reused as another chain's name.
       const lookups = new Map<string, string>();
       for (const t of transactions) {
         if (!t.to) continue;
-        const key = t.to.toLowerCase();
+        const key = caip10(t.chainId, t.to);
         if (lookups.has(key)) continue;
-        const path = index[caip10(t.chainId, t.to)];
+        const path = index[key];
         if (path) lookups.set(key, path);
       }
 
@@ -201,7 +205,7 @@ export const TransactionDialog = ({
     if (!address) return '';
     const ens = nameFor(address, chainId);
     if (ens) return ens;
-    const cn = contractNames[address.toLowerCase()];
+    const cn = chainId === undefined ? undefined : contractNames[caip10(chainId, address)];
     if (cn) return cn;
     return getDisplayAddress(undefined, address);
   };
