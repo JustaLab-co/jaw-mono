@@ -22,7 +22,12 @@ export function jawRpcUrl(chainId: number, apiKey?: string): string {
 // object — formatters included — is still what gets passed at runtime.
 function createClient(chainId: number, rpcUrl: string) {
   const chain: Chain | undefined = SUPPORTED_CHAINS.find((c) => c.id === chainId);
-  return createPublicClient({ chain, transport: rpcTransport(rpcUrl), batch: { multicall: true } });
+  // `ccipRead: false`: an OffchainLookup revert names the urls to fetch, and the
+  // contracts read on this client come from the call the user is about to sign, so
+  // the counterparty picks the host. A cert error on it taints the page and blocks
+  // the passkey ceremony in strict browsers. A server can follow those urls; a
+  // signing page must not.
+  return createPublicClient({ chain, transport: rpcTransport(rpcUrl), batch: { multicall: true }, ccipRead: false });
 }
 
 const clientCache = new Map<string, ReturnType<typeof createClient>>();

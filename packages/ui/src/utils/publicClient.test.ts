@@ -1,5 +1,12 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { decodeFunctionData, encodeFunctionResult, erc20Abi, toFunctionSelector, type Hex } from 'viem';
+import {
+  decodeFunctionData,
+  encodeErrorResult,
+  encodeFunctionResult,
+  erc20Abi,
+  toFunctionSelector,
+  type Hex,
+} from 'viem';
 
 import { setDappOrigin } from '@jaw.id/core/internal';
 
@@ -242,6 +249,101 @@ describe('x-dapp-origin', () => {
   });
 });
 
+// The EIP-3668 revert a resolver uses to name the urls a client should fetch
+// instead of answering on chain.
+const offchainLookupAbi = [
+  {
+    type: 'error',
+    name: 'OffchainLookup',
+    inputs: [
+      { name: 'sender', type: 'address' },
+      { name: 'urls', type: 'string[]' },
+      { name: 'callData', type: 'bytes' },
+      { name: 'callbackFunction', type: 'bytes4' },
+      { name: 'extraData', type: 'bytes' },
+    ],
+  },
+] as const;
+
+const GATEWAY_HOST = 'https://gateway.test/';
+const GATEWAY_URL = `${GATEWAY_HOST}{sender}/{data}.json`;
+const OFFCHAIN_TARGET = '0x50c5725949A6F0c72E6C4a641F24049A917DB0Cb';
+const NODE_URL = 'https://rpc.test/offchain-lookup';
+
+/**
+ * Stub a node that answers every `eth_call` with an OffchainLookup revert, both plain
+ * and as an `aggregate3` entry. Returns the gateway urls fetched, which is what
+ * following the lookup would look like.
+ */
+function stubOffchainLookupRevert() {
+  const gatewayHits: string[] = [];
+  const revert = encodeErrorResult({
+    abi: offchainLookupAbi,
+    errorName: 'OffchainLookup',
+    args: [OFFCHAIN_TARGET, [GATEWAY_URL], '0xdeadbeef', '0x11223344', '0x'],
+  });
+
+  vi.stubGlobal(
+    'fetch',
+    vi.fn(async (url: string, init: RequestInit) => {
+      if (String(url).startsWith(GATEWAY_HOST)) {
+        gatewayHits.push(String(url));
+        return new Response('{}', { status: 200, headers: { 'Content-Type': 'application/json' } });
+      }
+
+      const body = JSON.parse(String(init.body)) as { id: number; params: [{ to?: string; data?: Hex }] };
+      const { to, data } = body.params[0];
+
+      if (to?.toLowerCase() === MULTICALL3) {
+        const { args } = decodeFunctionData({ abi: aggregate3Abi, data: data as Hex });
+        const calls = args[0] as readonly { target: string; callData: Hex }[];
+        return json(
+          body.id,
+          encodeFunctionResult({
+            abi: aggregate3Abi,
+            functionName: 'aggregate3',
+            result: calls.map(() => ({ success: false, returnData: revert })),
+          }) as Hex
+        );
+      }
+
+      return new Response(
+        JSON.stringify({ jsonrpc: '2.0', id: body.id, error: { code: 3, message: 'reverted', data: revert } }),
+        { status: 200, headers: { 'Content-Type': 'application/json' } }
+      );
+    })
+  );
+
+  return gatewayHits;
+}
+
+// The counterparty of a call the user is about to sign picks the resolver, so it
+// picks the host. Following the lookup lets it choose what the signing page
+// connects to, and a cert error there blocks the passkey ceremony.
+describe('offchain lookups', () => {
+  it('refuses to follow one that arrives as an aggregate3 entry', async () => {
+    const gatewayHits = stubOffchainLookupRevert();
+    const client = getPublicClient(CHAIN_WITH_MULTICALL, NODE_URL);
+
+    await expect(
+      client.readContract({ address: OFFCHAIN_TARGET, abi: erc20Abi, functionName: 'decimals' })
+    ).rejects.toThrow();
+
+    expect(gatewayHits).toEqual([]);
+  });
+
+  it('refuses to follow one that arrives as a plain eth_call revert', async () => {
+    const gatewayHits = stubOffchainLookupRevert();
+    const client = getPublicClient(CHAIN_WITHOUT_MULTICALL, NODE_URL);
+
+    await expect(
+      client.readContract({ address: OFFCHAIN_TARGET, abi: erc20Abi, functionName: 'decimals' })
+    ).rejects.toThrow();
+
+    expect(gatewayHits).toEqual([]);
+  });
+});
+
 describe('fetchTokenBalance batching', () => {
   it('folds a concurrent ERC-20 fan-out into one Multicall3 request', async () => {
     const bodies = stubRpc();
@@ -342,5 +444,25 @@ describe('createTokenResolver batching', () => {
     const bodies = stubRpc();
     expect(await createTokenResolver(chainId, 'key-revert')(token)).toBeNull();
     expect(bodies).toHaveLength(0);
+  });
+
+  // `ccipRead: false` turns a gateway-backed read into a revert, and a revert is what the
+  // negative cache treats as proof of no code. The cache has no TTL, so filing it would
+  // blank the token for the rest of the session on a refusal, not on an answer.
+  it('does not negative-cache a token whose metadata is behind a gateway', async () => {
+    const chainId = CHAIN_WITH_MULTICALL;
+    const token = '0x3333333333333333333333333333333333333333';
+
+    stubOffchainLookupRevert();
+    expect(await createTokenResolver(chainId, 'key-gateway')(token)).toBeNull();
+
+    vi.unstubAllGlobals();
+    const bodies = stubRpc();
+    expect(await createTokenResolver(chainId, 'key-gateway')(token)).toEqual({
+      address: token,
+      decimals: 6,
+      symbol: 'TKN',
+    });
+    expect(bodies).not.toHaveLength(0);
   });
 });

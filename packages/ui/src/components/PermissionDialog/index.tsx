@@ -11,7 +11,7 @@ import { AppAvatar } from '../AppAvatar';
 import { AccountAvatar } from '../AccountAvatar';
 import { CopyButton } from '../CopyButton';
 import { useChainIconURI, useFeeTokenPrice } from '../../hooks';
-import { reverseResolveWithAvatars } from '../../utils/reverseResolve';
+import { reverseResolveWithAvatars, identityKey } from '../../utils/reverseResolve';
 import { getChainLabel } from '../../utils/resolveChainLabel';
 import { getDisplayAddress } from '../../utils';
 import { resolveBlockReason } from '../../utils/transactionFailure';
@@ -102,7 +102,7 @@ export const PermissionDialog = ({
         const names: Record<string, string> = {};
         const avatars: Record<string, string> = {};
         for (const address of targets) {
-          const identity = resolved[address.toLowerCase()];
+          const identity = resolved[identityKey(address, chainId)];
           if (!identity) continue;
           names[address] = label ? `${identity.name}@${label}` : identity.name;
           if (identity.avatar) avatars[address] = identity.avatar;

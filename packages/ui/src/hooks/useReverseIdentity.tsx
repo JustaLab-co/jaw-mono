@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react';
 
-import { reverseResolveWithAvatars } from '../utils/reverseResolve';
+import { reverseResolveWithAvatars, identityKey } from '../utils/reverseResolve';
 import { getChainLabel } from '../utils/resolveChainLabel';
 
 export interface ReverseIdentity {
@@ -43,7 +43,7 @@ export function useReverseIdentity(
     reverseResolveWithAvatars([{ address, chainId }], mainnetRpcUrl)
       .then(async (resolved) => {
         if (cancelled) return;
-        const identity = resolved[address.toLowerCase()];
+        const identity = resolved[identityKey(address, chainId)];
         if (identity) {
           const label = await getChainLabel(chainId, mainnetRpcUrl);
           if (cancelled) return;

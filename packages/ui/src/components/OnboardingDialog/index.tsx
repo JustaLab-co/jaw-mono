@@ -12,7 +12,7 @@ import { selectDefaultAccount } from './selectDefaultAccount';
 import { backfillLocalAccountAddresses } from './accountHelpers';
 import { useState, useEffect, useMemo, useRef } from 'react';
 import { getJustaNameInstance } from '../../utils/justaNameInstance';
-import { reverseResolveWithAvatars } from '../../utils/reverseResolve';
+import { reverseResolveWithAvatars, identityKey } from '../../utils/reverseResolve';
 import { cn } from '../../lib/utils';
 import { toCoinType } from 'viem';
 
@@ -436,7 +436,7 @@ export function OnboardingDialog({
         if (cancelled) return;
         const next: Record<string, { name: string; avatar?: string }> = {};
         for (const address of unique) {
-          const identity = resolved[address];
+          const identity = resolved[identityKey(address, 1)];
           if (identity?.name) next[address] = { name: identity.name, avatar: identity.avatar };
         }
         if (Object.keys(next).length > 0) {

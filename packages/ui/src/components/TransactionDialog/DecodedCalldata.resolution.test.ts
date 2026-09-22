@@ -1,8 +1,8 @@
 // @vitest-environment jsdom
 // Addresses inside decoded calldata are marked "attempted" before their reverse-resolve
 // request lands, while the effect cleanup cancels the write. A second effect run without
-// a remount (StrictMode's double-invoke, a chainId/rpcUrl change) then filters every
-// address out as already-tried and resolution is blocked for good. These pin the retry.
+// a remount (StrictMode's double-invoke, an rpcUrl change) then filters every address out
+// as already-tried and resolution is blocked for good. These pin the retry.
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { createElement, act, StrictMode } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
@@ -12,15 +12,18 @@ import { createRoot, type Root } from 'react-dom/client';
 const RECIPIENT = '0xd8dA6BF26964aF9D7eEd9e03E53415D37aA96045';
 const ENS_NAME = 'vitalik.eth';
 
-const reverseResolveWithAvatars = vi.fn(async (inputs: { address: string }[]) => {
+const identityKey = (address: string, chainId: number) => `${address.toLowerCase()}:${chainId}`;
+
+const reverseResolveWithAvatars = vi.fn(async (inputs: { address: string; chainId: number }[]) => {
   const out: Record<string, { name: string }> = {};
-  for (const { address } of inputs) out[address.toLowerCase()] = { name: ENS_NAME };
+  for (const { address, chainId } of inputs) out[identityKey(address, chainId)] = { name: ENS_NAME };
   return out;
 });
 
 vi.mock('../../utils', () => ({
   reverseResolveWithAvatars: (...args: unknown[]) =>
     (reverseResolveWithAvatars as unknown as (...a: unknown[]) => unknown)(...args),
+  identityKey: (address: string, chainId: number) => `${address.toLowerCase()}:${chainId}`,
   getChainLabel: async () => null,
   formatAddress: (a: string) => `${a.slice(0, 6)}...${a.slice(-4)}`,
 }));
@@ -133,5 +136,55 @@ describe('DecodedCalldataView address resolution under StrictMode', () => {
     await settle();
 
     expect(countNames()).toBe(2);
+  });
+});
+
+// The dialog hands the same map down to every row, and a batch can carry the same address
+// on rows the dialog draws for different chains. Filed by address alone, whichever answer
+// landed last was rendered on both rows, one of them under the other chain's label.
+describe('DecodedCalldataView reads the map on its own chain', () => {
+  const MAINNET_NAME = 'vitalik.eth@mainnet';
+  const BASE_NAME = 'vitalik.eth@base';
+
+  const parentMap = {
+    [identityKey(RECIPIENT, 1)]: MAINNET_NAME,
+    [identityKey(RECIPIENT, 8453)]: BASE_NAME,
+  };
+
+  it('shows the name filed for its chain, not the other one', async () => {
+    await act(async () => {
+      root.render(createElement(DecodedCalldataView, { ...props, chainId: 1, resolvedAddresses: parentMap }));
+    });
+    await settle();
+
+    expect(container.textContent).toContain(MAINNET_NAME);
+    expect(container.textContent).not.toContain(BASE_NAME);
+  });
+
+  it('renders one row per chain from the same map', async () => {
+    await act(async () => {
+      root.render(
+        createElement(
+          'div',
+          null,
+          createElement(DecodedCalldataView, {
+            ...props,
+            key: 'mainnet',
+            chainId: 1,
+            resolvedAddresses: parentMap,
+          }),
+          createElement(DecodedCalldataView, {
+            ...props,
+            key: 'base',
+            chainId: 8453,
+            resolvedAddresses: parentMap,
+          })
+        )
+      );
+    });
+    await settle();
+
+    expect(container.textContent).toContain(MAINNET_NAME);
+    expect(container.textContent).toContain(BASE_NAME);
   });
 });

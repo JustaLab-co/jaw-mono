@@ -351,6 +351,9 @@ export async function applyFormat(
 
 const tokenCache = new Map<string, TokenInfo | null>();
 
+/** The EIP-3668 `OffchainLookup` selector, as it arrives in a revert this client will not follow. */
+const OFFCHAIN_LOOKUP_SELECTOR = '0x556f1830';
+
 /**
  * Whether a failed `decimals()`/`symbol()` read proves the address is not an ERC-20,
  * as opposed to the RPC merely being unavailable.
@@ -367,11 +370,20 @@ const tokenCache = new Map<string, TokenInfo | null>();
  * an unbatched read of an address with no code decodes empty data into
  * `ContractFunctionZeroDataError`. Transport failures (`HttpRequestError`, `TimeoutError`)
  * match neither.
+ *
+ * One revert is excluded: the client refuses offchain lookups, so a token whose metadata
+ * lives behind a CCIP-Read gateway reverts with `OffchainLookup` and arrives in the same
+ * shape as a plain revert. That says the read was refused, not that the address has no
+ * code, and caching it would blank the token for the rest of the session.
  */
 function isNotAToken(err: unknown): boolean {
-  return (
-    err instanceof BaseError &&
-    Boolean(err.walk((e) => e instanceof ContractFunctionRevertedError || e instanceof ContractFunctionZeroDataError))
+  if (!(err instanceof BaseError)) return false;
+  const reverted = err.walk((e) => e instanceof ContractFunctionRevertedError);
+  if (reverted instanceof ContractFunctionRevertedError && reverted.raw?.startsWith(OFFCHAIN_LOOKUP_SELECTOR)) {
+    return false;
+  }
+  return Boolean(
+    err.walk((e) => e instanceof ContractFunctionRevertedError || e instanceof ContractFunctionZeroDataError)
   );
 }
 
