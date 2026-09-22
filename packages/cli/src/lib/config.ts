@@ -3,7 +3,7 @@ import * as path from 'node:path';
 import { PATHS } from './paths.js';
 import type { JawConfig, SettableConfigKey } from './types.js';
 import type { X402Policy, X402PolicyKey } from '../x402/policy.js';
-import { isValidKeysUrl, isValidRelayUrl } from './validation.js';
+import { isSafeApiKey, isValidKeysUrl, isValidRelayUrl } from './validation.js';
 
 export function ensureDir(dir: string): void {
   fs.mkdirSync(dir, { recursive: true, mode: 0o700 });
@@ -11,10 +11,8 @@ export function ensureDir(dir: string): void {
 }
 
 /**
- * Write `value` as JSON to a temporary file and rename it over `file`. The
- * rename is atomic on the same filesystem, so a reader, or a crash mid-write,
- * never leaves a half-written file behind. The pid in the temp name keeps two
- * writers from sharing one scratch file.
+ * Write JSON to a temp file and rename it over `file`, so no reader or crash
+ * ever sees it half-written. The pid keeps two writers off one temp file.
  */
 export function writeJsonAtomic(file: string, value: unknown): void {
   ensureDir(path.dirname(file));
@@ -129,6 +127,9 @@ export function setConfigValue(key: SettableConfigKey, value: string | number): 
   }
   if (key === 'relayUrl' && typeof value === 'string' && !isValidRelayUrl(value)) {
     throw new Error(`Untrusted relayUrl: ${value}. Must be wss://*.jaw.id or ws://localhost.`);
+  }
+  if (key === 'apiKey' && typeof value === 'string' && !isSafeApiKey(value)) {
+    throw new Error('Invalid apiKey: it may not contain characters that change a URL, such as & # or spaces.');
   }
   // Numeric keys: coerce + validate here so EVERY caller is safe. The MCP tool
   // passes raw strings (its schema types value as a string), so without this a

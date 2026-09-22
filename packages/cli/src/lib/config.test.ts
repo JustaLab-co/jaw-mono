@@ -45,6 +45,12 @@ describe('config', () => {
     expect(saved.defaultChain).toBe(8453);
   });
 
+  it('setConfigValue rejects an api key that would rewrite the URL it is put in', () => {
+    setConfigValue('apiKey', 'good-key');
+    expect(() => setConfigValue('apiKey', 'x&chainId=1')).toThrow(/apiKey/);
+    expect(loadConfig().apiKey).toBe('good-key');
+  });
+
   it('setConfigValue creates directory and merges with existing config', () => {
     setConfigValue('apiKey', 'first');
     setConfigValue('defaultChain', 1);
