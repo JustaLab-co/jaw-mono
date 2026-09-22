@@ -1,3 +1,13 @@
+## 1.4.5 (2026-09-22)
+
+### 🩹 Fixes
+
+- **ui:** key reverse answers by address and chain ([#349](https://github.com/JustaLab-co/jaw-mono/pull/349))
+
+### ❤️ Thank You
+
+- Mariano Aguero @mariano-aguero
+
 ## 1.4.4 (2026-09-22)
 
 ### 🩹 Fixes
