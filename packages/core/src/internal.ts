@@ -10,3 +10,7 @@
  * missing with nothing failing. A `require` of this path fails loudly instead.
  */
 export { setDappOrigin } from './dappOrigin.js';
+
+// Also used by @jaw.id/ui, which runs on dApp pages in app-specific mode. There it
+// adds nothing: only keys sets the origin it reads.
+export { jawHttp } from './utils/jawHttp.js';
