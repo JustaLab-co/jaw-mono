@@ -1,3 +1,13 @@
+## 1.4.4 (2026-09-22)
+
+### 🩹 Fixes
+
+- **ui:** refuse offchain lookups on the shared public client ([#348](https://github.com/JustaLab-co/jaw-mono/pull/348))
+
+### ❤️ Thank You
+
+- Mariano Aguero @mariano-aguero
+
 ## 1.4.3 (2026-09-18)
 
 ### 🩹 Fixes
