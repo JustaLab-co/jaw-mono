@@ -1,13 +1,14 @@
 import { parseNonNegativeBigInt } from './amount.js';
 import { isPayableAddress } from './address.js';
-import { readX402Log, sumSpentSince } from './ledger.js';
+import { appendX402Log, compactX402Log, readX402Log, sumSpentSince } from './ledger.js';
 import { reconcileSettlements } from './settlement.js';
-import { currentLimitUsageOnChain } from './spend-window.js';
+import { capWindowStarts, currentLimitUsageOnChain } from './spend-window.js';
 import { topUpCeiling, type LimitUsage, type X402Policy } from './policy.js';
 import { ensurePayerFunds } from './topup.js';
 import { SessionBridge } from '../lib/session-bridge.js';
 import type { SessionConfig } from '../lib/session-config.js';
 import type { X402PaymentRequirement } from './types.js';
+import type { PayAndFetchResult } from './http.js';
 
 /** The funding hook `payAndFetch` runs once a requirement has passed the policy. */
 export type EnsureFunds = (
@@ -105,4 +106,52 @@ export async function openPaymentWindow({
     });
 
   return { spentThisSession, periodUsage, ensureFunds };
+}
+
+/**
+ * Write a payment's outcome to the ledger and fold the ledger down, both while
+ * the lock is still held. Releasing first leaves a window where the next payer
+ * reads a total that does not include this payment.
+ *
+ * Free resources write nothing. Both front ends call this, because each reads
+ * the other's rows back for the session total.
+ */
+export function recordPaymentOutcome(
+  url: string,
+  outcome: PayAndFetchResult,
+  session: SessionConfig | null,
+  periodUsage: LimitUsage[]
+): void {
+  const attempted = !!outcome.attemptedPayment;
+  const refused = outcome.status === 402 && !!outcome.refusedReason;
+  if (!outcome.paid && !attempted && !refused) return;
+
+  const status = outcome.paid ? 'paid' : attempted ? 'failed' : 'refused';
+  const settled = outcome.payment ?? outcome.attemptedPayment;
+  appendX402Log({
+    at: new Date().toISOString(),
+    url,
+    payer: outcome.payer,
+    permissionId: session?.permissionId,
+    status,
+    amount: settled?.amount,
+    authorized: settled?.authorized,
+    deadline: settled?.deadline,
+    scheme: settled?.scheme,
+    asset: settled?.asset,
+    network: settled?.network,
+    payTo: settled?.payTo,
+    nonce: settled?.nonce,
+    txHash: outcome.payment?.txHash,
+    topUpAmount: outcome.topUp?.amount,
+    topUpBatchId: outcome.topUp?.batchId,
+    approvalBatchId: outcome.permit2Approval?.batchId,
+    reason: outcome.refusedReason,
+    // A signed authorization is worth its ceiling to whoever holds it until the
+    // chain says otherwise. A refusal signed nothing.
+    settlement: status === 'refused' ? undefined : 'unverified',
+  });
+
+  // Below the size threshold this is one `stat` and nothing else.
+  compactX402Log(capWindowStarts(periodUsage, session?.createdAt), outcome.payer);
 }

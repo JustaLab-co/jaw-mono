@@ -6,12 +6,11 @@ import { apiKeyFor } from '../../lib/api-key.js';
 import { Eip3009EoaPayer, sessionPayerAddress } from '../../x402/payer.js';
 import { machineEntry } from '../../x402/log-view.js';
 import { payAndFetch } from '../../x402/http.js';
-import { appendX402Log, compactX402Log, readX402Log } from '../../x402/ledger.js';
+import { readX402Log } from '../../x402/ledger.js';
 import { withPaymentLock } from '../../lib/payment-lock.js';
 import { usdcBalance } from '../../x402/balance.js';
 import { resolveSessionX402Policy } from '../../x402/policy.js';
-import { capWindowStarts } from '../../x402/spend-window.js';
-import { openPaymentWindow } from '../../x402/payment-window.js';
+import { openPaymentWindow, recordPaymentOutcome } from '../../x402/payment-window.js';
 import { tryLoadSessionConfig } from '../../lib/session-config.js';
 
 interface PayAndFetchParams {
@@ -124,40 +123,7 @@ export function registerPayTool(server: McpServer): void {
             // running total in memory could only disagree with the one that
             // enforces.
 
-            // Record payment attempts (not free passthroughs) to the audit ledger.
-            const settled = result.payment ?? result.attemptedPayment;
-            const isPaymentEvent =
-              result.paid || !!result.attemptedPayment || (result.status === 402 && !!result.refusedReason);
-            if (isPaymentEvent) {
-              const status = result.paid ? 'paid' : result.attemptedPayment ? 'failed' : 'refused';
-              appendX402Log({
-                at: new Date().toISOString(),
-                url: params.url,
-                payer: result.payer,
-                permissionId: session?.permissionId,
-                status,
-                amount: settled?.amount,
-                authorized: settled?.authorized,
-                deadline: settled?.deadline,
-                scheme: settled?.scheme,
-                asset: settled?.asset,
-                network: settled?.network,
-                payTo: settled?.payTo,
-                nonce: settled?.nonce,
-                txHash: result.payment?.txHash,
-                topUpAmount: result.topUp?.amount,
-                topUpBatchId: result.topUp?.batchId,
-                approvalBatchId: result.permit2Approval?.batchId,
-                reason: result.refusedReason,
-                // A signed authorization is worth its ceiling to whoever holds
-                // it until the chain says otherwise. A refusal signed nothing.
-                settlement: status === 'refused' ? undefined : 'unverified',
-              });
-
-              // Same as the CLI path: fold the ledger down while the lock is
-              // still held and this payment's windows are in hand.
-              compactX402Log(capWindowStarts(periodUsage, session?.createdAt), payer.address);
-            }
+            recordPaymentOutcome(params.url, result, session, periodUsage);
 
             // Untrusted server free-text (body, refusedReason) is fenced off
             // from the trusted payment metadata to blunt prompt injection.

@@ -45,7 +45,9 @@ vi.mock('../../x402/payer.js', () => ({
   Eip3009EoaPayer: { fromSessionKey: () => ({ address: h.payer }) },
 }));
 
-vi.mock('../../x402/payment-window.js', () => ({
+vi.mock('../../x402/payment-window.js', async (importOriginal) => ({
+  // The real recorder, so the ledger assertions below still see what it writes.
+  recordPaymentOutcome: (await importOriginal<typeof import('../../x402/payment-window.js')>()).recordPaymentOutcome,
   openPaymentWindow: async (input: Record<string, unknown>) => {
     h.windowInputs.push(input);
     return {

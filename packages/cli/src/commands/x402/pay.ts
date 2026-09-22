@@ -4,10 +4,8 @@ import { loadConfig } from '../../lib/config.js';
 import { tryLoadSessionConfig } from '../../lib/session-config.js';
 import { Eip3009EoaPayer } from '../../x402/payer.js';
 import { payAndFetch } from '../../x402/http.js';
-import { appendX402Log, compactX402Log } from '../../x402/ledger.js';
 import { resolveSessionX402Policy } from '../../x402/policy.js';
-import { capWindowStarts } from '../../x402/spend-window.js';
-import { openPaymentWindow } from '../../x402/payment-window.js';
+import { openPaymentWindow, recordPaymentOutcome } from '../../x402/payment-window.js';
 import { usdcForNetwork, USDC_BY_NETWORK } from '../../x402/asset-registry.js';
 import { formatUsdc } from '../../x402/status-report.js';
 import { sanitizeLine, sanitizeBlock } from '../../lib/terminal.js';
@@ -117,45 +115,7 @@ export default class X402Pay extends BaseCommand {
       // totals that both this command and the agent read back. Opening the
       // window does write, and deliberately, though a dry run holds no lock;
       // `openPaymentWindow` says why.
-      if (flags.pay) {
-        const settled = outcome.payment ?? outcome.attemptedPayment;
-        const isPaymentEvent =
-          outcome.paid || !!outcome.attemptedPayment || (outcome.status === 402 && !!outcome.refusedReason);
-        if (isPaymentEvent) {
-          const status = outcome.paid ? 'paid' : outcome.attemptedPayment ? 'failed' : 'refused';
-          // Field for field what the MCP handler writes: both read each other's
-          // entries back for the session spend total, so a divergence here would
-          // make the two disagree about what has been spent.
-          appendX402Log({
-            at: new Date().toISOString(),
-            url: args.url,
-            payer: outcome.payer,
-            permissionId: session?.permissionId,
-            status,
-            amount: settled?.amount,
-            authorized: settled?.authorized,
-            deadline: settled?.deadline,
-            scheme: settled?.scheme,
-            asset: settled?.asset,
-            network: settled?.network,
-            payTo: settled?.payTo,
-            nonce: settled?.nonce,
-            txHash: outcome.payment?.txHash,
-            topUpAmount: outcome.topUp?.amount,
-            topUpBatchId: outcome.topUp?.batchId,
-            approvalBatchId: outcome.permit2Approval?.batchId,
-            reason: outcome.refusedReason,
-            // A signed authorization is worth its ceiling to whoever holds it
-            // until the chain says otherwise. A refusal signed nothing.
-            settlement: status === 'refused' ? undefined : 'unverified',
-          });
-
-          // Fold the ledger down while the lock is still held and the windows
-          // this payment measured against are in hand. Below the threshold it
-          // is one `stat` and nothing else.
-          compactX402Log(capWindowStarts(periodUsage, session?.createdAt), payer.address);
-        }
-      }
+      if (flags.pay) recordPaymentOutcome(args.url, outcome, session, periodUsage);
 
       return outcome;
     };

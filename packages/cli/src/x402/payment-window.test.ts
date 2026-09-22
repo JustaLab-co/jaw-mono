@@ -18,6 +18,8 @@ const h = vi.hoisted(() => ({
   bridges: [] as unknown[],
   sums: [] as { entries: unknown; scope: unknown; since: unknown }[],
   topUps: [] as unknown[],
+  appended: [] as Record<string, unknown>[],
+  compactions: [] as unknown[][],
 }));
 
 vi.mock('./ledger.js', () => ({
@@ -28,6 +30,12 @@ vi.mock('./ledger.js', () => ({
   sumSpentSince: (entries: unknown, scope: unknown, since: unknown) => {
     h.sums.push({ entries, scope, since });
     return h.spent;
+  },
+  appendX402Log: (entry: Record<string, unknown>) => {
+    h.appended.push(entry);
+  },
+  compactX402Log: (...args: unknown[]) => {
+    h.compactions.push(args);
   },
 }));
 
@@ -41,6 +49,7 @@ vi.mock('./settlement.js', () => ({
 
 vi.mock('./spend-window.js', () => ({
   currentLimitUsageOnChain: async () => h.usage,
+  capWindowStarts: () => ['2026-08-01T00:00:00.000Z'],
 }));
 
 vi.mock('./topup.js', () => ({
@@ -58,7 +67,7 @@ vi.mock('../lib/session-bridge.js', () => ({
   },
 }));
 
-const { openPaymentWindow } = await import('./payment-window.js');
+const { openPaymentWindow, recordPaymentOutcome } = await import('./payment-window.js');
 
 const PAYER = '0x00000000000000000000000000000000000000aa' as const;
 
@@ -108,6 +117,8 @@ beforeEach(() => {
   h.ledgerReads = 0;
   h.bridges = [];
   h.sums = [];
+  h.appended = [];
+  h.compactions = [];
   h.topUps = [];
 });
 
@@ -254,5 +265,58 @@ describe('openPaymentWindow', () => {
     await window.ensureFunds?.(requirement, PAYER);
 
     expect(h.bridges).toEqual([{ apiKey: 'key', chainId: 8453 }]);
+  });
+});
+
+describe('recordPaymentOutcome', () => {
+  const URL = 'https://api.example/paid';
+  const details = {
+    scheme: 'exact',
+    amount: '1000',
+    authorized: '1000',
+    asset: '0x00000000000000000000000000000000000000cc',
+    network: 'eip155:8453',
+    payTo: '0x00000000000000000000000000000000000000dd',
+    nonce: '0x01',
+    deadline: 1_900_000_000,
+  };
+  const record = (outcome: Record<string, unknown>) =>
+    recordPaymentOutcome(URL, { status: 200, body: null, paid: false, payer: PAYER, ...outcome } as never, session, []);
+
+  it('records a paid outcome as unverified, with its tx hash, and compacts', () => {
+    record({ paid: true, payment: { ...details, txHash: '0xhash' } });
+
+    expect(h.appended).toHaveLength(1);
+    expect(h.appended[0]).toMatchObject({
+      url: URL,
+      payer: PAYER,
+      permissionId: '0xperm',
+      status: 'paid',
+      amount: '1000',
+      txHash: '0xhash',
+      settlement: 'unverified',
+    });
+    expect(h.compactions).toEqual([[['2026-08-01T00:00:00.000Z'], PAYER]]);
+  });
+
+  it('records a signed payment that did not settle as failed, still unverified', () => {
+    record({ status: 402, attemptedPayment: details });
+
+    expect(h.appended[0]).toMatchObject({ status: 'failed', nonce: '0x01', settlement: 'unverified' });
+    expect(h.appended[0].txHash).toBeUndefined();
+  });
+
+  it('records a refusal with no settlement, since nothing was signed', () => {
+    record({ status: 402, refusedReason: 'amount exceeds maxAmount' });
+
+    expect(h.appended[0]).toMatchObject({ status: 'refused', reason: 'amount exceeds maxAmount' });
+    expect(h.appended[0].settlement).toBeUndefined();
+  });
+
+  it('writes nothing for a free resource', () => {
+    record({ status: 200 });
+
+    expect(h.appended).toEqual([]);
+    expect(h.compactions).toEqual([]);
   });
 });
