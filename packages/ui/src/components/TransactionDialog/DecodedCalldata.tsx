@@ -3,7 +3,7 @@ import type { Hex } from 'viem';
 import type { DecodeResult } from '../../hooks/useDecodedCalldata';
 import { Spinner } from '../ui/spinner';
 import { TriangleAlert } from 'lucide-react';
-import { reverseResolveWithAvatars, formatAddress, getChainLabel } from '../../utils';
+import { reverseResolveWithAvatars, formatAddress, getChainLabel, identityKey } from '../../utils';
 import { isUnlimitedAmount } from '../../utils/displayFormat';
 import { computeCalldataDigest } from '../../utils/erc8213';
 import { IdentityAvatar } from '../IdentityAvatar';
@@ -51,17 +51,6 @@ const CalldataDigest = ({ data }: { data: string }) => {
     </details>
   );
 };
-
-/** Merge parent-resolved and locally-resolved maps, normalizing all keys to lowercase. */
-function mergeLowercased(
-  parent: Record<string, string> | undefined,
-  local: Record<string, string>
-): Record<string, string> {
-  const out: Record<string, string> = {};
-  for (const [key, value] of Object.entries(parent ?? {})) out[key.toLowerCase()] = value;
-  for (const [key, value] of Object.entries(local)) out[key.toLowerCase()] = value;
-  return out;
-}
 
 /** ERC-7730 intent, else the decoded function name, else the caller's fallback. */
 export function callLabel(decode: DecodeResult, fallback: string): string {
@@ -112,11 +101,10 @@ export const DecodedCalldataView = ({
     }
   }, [decoded]);
 
-  const allResolved = useMemo(
-    () => mergeLowercased(resolvedAddresses, localResolved),
-    [resolvedAddresses, localResolved]
-  );
-  const allAvatars = useMemo(() => mergeLowercased(resolvedAvatars, localAvatars), [resolvedAvatars, localAvatars]);
+  // Both sides are filed by {@link identityKey}, which lowercases the address, so a plain
+  // merge is enough and the local answer wins over the one the dialog passed down.
+  const allResolved = useMemo(() => ({ ...resolvedAddresses, ...localResolved }), [resolvedAddresses, localResolved]);
+  const allAvatars = useMemo(() => ({ ...resolvedAvatars, ...localAvatars }), [resolvedAvatars, localAvatars]);
 
   // Keep a ref to allResolved so the effect can read it without re-triggering
   const allResolvedRef = useRef(allResolved);
@@ -132,7 +120,9 @@ export const DecodedCalldataView = ({
       .map((p) => p.rawValue!)
       .filter((addr) => {
         const lower = addr.toLowerCase();
-        return lower !== ZERO_ADDRESS && !currentResolved[lower] && !attemptedRef.current.has(lower);
+        return (
+          lower !== ZERO_ADDRESS && !currentResolved[identityKey(lower, chainId)] && !attemptedRef.current.has(lower)
+        );
       });
 
     // Deduplicate
@@ -161,10 +151,11 @@ export const DecodedCalldataView = ({
         const next: Record<string, string> = {};
         const avatarByAddress: Record<string, string> = {};
         for (const address of unique) {
-          const identity = resolved[address.toLowerCase()];
+          const identity = resolved[identityKey(address, chainId)];
           if (!identity) continue;
-          next[address.toLowerCase()] = label ? `${identity.name}@${label}` : identity.name;
-          if (identity.avatar) avatarByAddress[address.toLowerCase()] = identity.avatar;
+          const key = identityKey(address, chainId);
+          next[key] = label ? `${identity.name}@${label}` : identity.name;
+          if (identity.avatar) avatarByAddress[key] = identity.avatar;
         }
         if (Object.keys(next).length > 0) {
           setLocalResolved((prev) => ({ ...prev, ...next }));
@@ -176,9 +167,11 @@ export const DecodedCalldataView = ({
       .catch(unmark);
     return () => {
       cancelled = true;
-      // If this run never wrote its result, its "attempted" marks must not outlive it —
-      // otherwise the next run (a StrictMode re-invoke, or a chainId change) filters
-      // every address out as already-tried and resolution is blocked for good.
+      // If this run never wrote its result, its "attempted" marks must not outlive it:
+      // the next run, which a StrictMode re-invoke or an rpcUrl change causes without a
+      // remount, would filter every address out as already-tried and block resolution for
+      // good. A chainId change is not one of those runs, since it rebuilds `decoded` and
+      // the reset above drops the marks with it.
       if (!wrote) unmark();
     };
   }, [decoded, mainnetRpcUrl, chainId]);
@@ -263,8 +256,9 @@ export const DecodedCalldataView = ({
       <div className="bg-secondary rounded-chip flex flex-col gap-1 p-2">
         {decoded.params.length === 0 && <p className="text-muted-foreground text-xs">No parameters</p>}
         {decoded.params.map((param, i) => {
-          const resolvedName = param.rawValue ? allResolved[param.rawValue.toLowerCase()] : undefined;
-          const resolvedAvatar = param.rawValue ? allAvatars[param.rawValue.toLowerCase()] : undefined;
+          const paramKey = param.rawValue ? identityKey(param.rawValue, chainId) : undefined;
+          const resolvedName = paramKey ? allResolved[paramKey] : undefined;
+          const resolvedAvatar = paramKey ? allAvatars[paramKey] : undefined;
           const unlimitedApproval = approveShape && i === 1 && isUnlimitedAmount(param.value);
           return (
             <div key={i} className="flex flex-col gap-1">

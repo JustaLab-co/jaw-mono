@@ -7,6 +7,7 @@ import { Eyebrow, PartyRow, Row, ValueAmount } from '../primitives';
 import { useDecodedCalldata, type DecodeResult } from '../../hooks/useDecodedCalldata';
 import { formatNativeValue } from '../../utils/displayFormat';
 import { DecodedCalldataView, callLabel } from './DecodedCalldata';
+import { identityKey } from '../../utils';
 import type { TransactionData } from './types';
 
 /**
@@ -71,7 +72,7 @@ export function BatchStep({
   index: number;
   nativeSymbol: string;
   nativeTokenPrice: number;
-  displayContractAddress: (address: string | undefined) => string;
+  displayContractAddress: (address: string | undefined, chainId: number | undefined) => string;
 }) {
   const decode = useDecodedCalldata(transaction.to, transaction.data, transaction.chainId, ctx.apiKey);
   const value = formatNativeValue(transaction.value);
@@ -101,9 +102,11 @@ export function BatchStep({
           <div className="border-border rounded-box border p-3">
             <PartyRow
               label="Interacting with"
-              value={displayContractAddress(transaction.to)}
+              value={displayContractAddress(transaction.to, transaction.chainId)}
               address={transaction.to}
-              avatarUrl={transaction.to ? ctx.resolvedAvatars?.[transaction.to] : undefined}
+              avatarUrl={
+                transaction.to ? ctx.resolvedAvatars?.[identityKey(transaction.to, transaction.chainId)] : undefined
+              }
             />
           </div>
 

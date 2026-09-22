@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { ethAddress } from 'viem';
 import type { ClearSigningDisplay, DisplayRow } from '../../utils/clearSigning';
-import { reverseResolveWithAvatars, formatAddress, getChainLabel } from '../../utils';
+import { reverseResolveWithAvatars, formatAddress, getChainLabel, identityKey } from '../../utils';
 import { dateTone, formatUnixDate, groupNumber, isUnlimitedAmount } from '../../utils/displayFormat';
 import { TriangleAlert } from 'lucide-react';
 import { IdentityAvatar } from '../IdentityAvatar';
@@ -97,12 +97,12 @@ export const ClearSignedView = ({ display, chainId, mainnetRpcUrl }: ClearSigned
       .map((r) => (r.rawValue as string).toLowerCase());
     // Keyed by chain: the @chainlabel suffix baked into a resolved name is chain-specific,
     // so a chainId change must re-resolve rather than reuse the stale label.
-    const unique = [...new Set(addresses)].filter((a) => !attemptedRef.current.has(`${chainId}:${a}`));
+    const unique = [...new Set(addresses)].filter((a) => !attemptedRef.current.has(identityKey(a, chainId)));
     if (unique.length === 0) return;
 
     // An attempt only "counts" once it lands — the cleanup un-marks anything still in flight.
-    unique.forEach((a) => attemptedRef.current.add(`${chainId}:${a}`));
-    const unmark = () => unique.forEach((a) => attemptedRef.current.delete(`${chainId}:${a}`));
+    unique.forEach((a) => attemptedRef.current.add(identityKey(a, chainId)));
+    const unmark = () => unique.forEach((a) => attemptedRef.current.delete(identityKey(a, chainId)));
 
     let cancelled = false;
     // Set once this run's result has landed. After that the attempt "counts" — including
@@ -121,7 +121,7 @@ export const ClearSignedView = ({ display, chainId, mainnetRpcUrl }: ClearSigned
         const nextResolved: Record<string, string> = {};
         const nextAvatars: Record<string, string> = {};
         for (const address of unique) {
-          const identity = resolved[address];
+          const identity = resolved[identityKey(address, chainId)];
           if (!identity) continue;
           nextResolved[address] = label ? `${identity.name}@${label}` : identity.name;
           if (identity.avatar) nextAvatars[address] = identity.avatar;
