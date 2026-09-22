@@ -1064,6 +1064,25 @@ describe('jaw_config_set', () => {
     const result = await client.callTool({ name: 'jaw_config_set', arguments: { key: 'defaultChain', value: 'nope' } });
     expect(result.isError).toBe(true);
   });
+
+  it('rejects a defaultChain with trailing garbage, as the CLI does', async () => {
+    const { loadConfig } = await import('../lib/config.js');
+    const before = loadConfig().defaultChain;
+    const client = await connectClient();
+    const result = await client.callTool({
+      name: 'jaw_config_set',
+      arguments: { key: 'defaultChain', value: '14abc' },
+    });
+    expect(result.isError).toBe(true);
+    expect(loadConfig().defaultChain).toBe(before);
+  });
+
+  it.each(['keysUrl', 'relayUrl'])('does not let an agent change %s', async (key) => {
+    const client = await connectClient();
+    const value = key === 'keysUrl' ? 'https://keys.jaw.id' : 'wss://relay.jaw.id';
+    const result = await client.callTool({ name: 'jaw_config_set', arguments: { key, value } });
+    expect(result.isError).toBe(true);
+  });
 });
 
 describe('jaw://x402 resource', () => {

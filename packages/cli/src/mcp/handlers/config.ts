@@ -32,20 +32,12 @@ export function registerConfigTools(server: McpServer): void {
   (server.registerTool as unknown as RegisterConfigSet)(
     'jaw_config_set',
     {
-      description: 'Set a CLI configuration value (apiKey, defaultChain, keysUrl, ens, relayUrl, sessionExpiry).',
+      description: 'Set a CLI configuration value (apiKey, defaultChain, ens, sessionExpiry).',
       inputSchema: configSetSchema,
     },
     async (params) => {
       try {
-        if (params.key === 'defaultChain' || params.key === 'sessionExpiry') {
-          const num = parseInt(params.value, 10);
-          if (isNaN(num) || num <= 0) {
-            throw new Error(`Invalid number for ${params.key}: ${params.value}`);
-          }
-          setConfigValue(params.key, num);
-        } else {
-          setConfigValue(params.key, params.value);
-        }
+        setConfigValue(params.key, params.value);
         return {
           content: [
             {
