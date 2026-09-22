@@ -1,6 +1,8 @@
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, afterEach } from 'vitest';
+import { WebSocketServer } from 'ws';
+import type { AddressInfo } from 'node:net';
 
-import { buildInitPayload, readBridgeFailure, readInjectedApiKey } from './ws-bridge.js';
+import { buildInitPayload, readBridgeFailure, readInjectedApiKey, WSBridge } from './ws-bridge.js';
 
 // The init envelope is the only thing the CLI tells the browser about the
 // paymaster, so it has to carry the context and not the url alone. Dropping a
@@ -108,5 +110,64 @@ describe('readBridgeFailure', () => {
 
     expect(hostile).not.toContain('\u001b');
     expect(hostile).not.toContain('\n');
+  });
+});
+
+/**
+ * What the relay sends is network input. A frame the bridge cannot use has to
+ * reject the connect with a reason, not throw inside the socket handler where
+ * nothing catches it, and not hang until the connect timer fires.
+ */
+describe('WSBridge against a relay sending bad frames', () => {
+  let relay: WebSocketServer | null = null;
+
+  afterEach(() => {
+    relay?.close();
+    relay = null;
+  });
+
+  /** A relay that reports the browser connected, then sends `frame`. */
+  const connectTo = async (frame: string) => {
+    const server = new WebSocketServer({ port: 0 });
+    relay = server;
+    server.on('connection', (socket) => {
+      socket.send(JSON.stringify({ type: 'status', browserConnected: true }));
+      socket.send(frame);
+    });
+    await new Promise((resolve) => server.once('listening', resolve));
+    const { port } = server.address() as AddressInfo;
+    const bridge = new WSBridge({
+      relayUrl: `ws://127.0.0.1:${port}`,
+      session: 'test',
+      connectTimeout: 2_000,
+      config: { chainId: 8453 },
+      privateKeyHex: '00',
+      publicKeyHex: '00',
+      peerPublicKeyHex: null,
+    });
+    try {
+      return await bridge.connect();
+    } finally {
+      bridge.close();
+    }
+  };
+
+  it.each([
+    ['not hex', 'zz'],
+    ['missing', undefined],
+  ])('rejects a key_exchange whose public key is %s', async (_, publicKey) => {
+    await expect(connectTo(JSON.stringify({ type: 'key_exchange', publicKey }))).rejects.toThrow(
+      /invalid key_exchange public key/
+    );
+  });
+
+  it('rejects a key_exchange whose key does not import, without waiting out the timer', async () => {
+    const err = await connectTo(JSON.stringify({ type: 'key_exchange', publicKey: 'abcd' })).catch((e: Error) => e);
+    expect(err).toBeInstanceOf(Error);
+    expect((err as Error).message).not.toMatch(/did not connect within/);
+  });
+
+  it('drops the connection on a frame over the size limit', async () => {
+    await expect(connectTo('x'.repeat(6 * 1024 * 1024))).rejects.toThrow(/payload/i);
   });
 });

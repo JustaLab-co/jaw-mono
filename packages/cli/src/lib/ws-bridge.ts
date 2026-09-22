@@ -115,7 +115,7 @@ const DEFAULT_TIMEOUT_MS = 120_000;
 const DEFAULT_CONNECT_TIMEOUT_MS = 30_000;
 
 /**
- * Maximum outbound message size (5 MB).
+ * Maximum message size (5 MB), outbound and inbound.
  *
  * wallet_sendCalls with large batches (50+ calls, complex calldata) can reach
  * hundreds of KB. Base64 encoding of the AES-GCM ciphertext adds ~33% overhead.
@@ -204,7 +204,7 @@ export class WSBridge {
   ): Promise<void> {
     return new Promise((resolve, reject) => {
       const url = `${this.relayUrl}?session=${encodeURIComponent(this.session)}&role=cli`;
-      const ws = new WebSocket(url);
+      const ws = new WebSocket(url, { maxPayload: MAX_MESSAGE_BYTES });
 
       let browserOpened = false;
       let resolved = false;
@@ -315,11 +315,22 @@ export class WSBridge {
           this.handleBrowserDisconnect();
         } else if (msg.type === 'key_exchange' && expectingKeyExchange) {
           expectingKeyExchange = false;
-          const peerKey = msg.publicKey as string;
-          this.peerPublicKeyHex = peerKey;
-          await this.deriveSecret();
-          onPeerKeyChanged?.(peerKey);
-          await onBrowserReady();
+          // The key comes off the network. One that cannot be used rejects the
+          // connect here, rather than throwing in a handler nothing awaits.
+          try {
+            const peerKey = msg.publicKey;
+            if (typeof peerKey !== 'string' || !/^([0-9a-fA-F]{2})+$/.test(peerKey)) {
+              throw new Error('Relay sent an invalid key_exchange public key.');
+            }
+            this.peerPublicKeyHex = peerKey;
+            await this.deriveSecret();
+            onPeerKeyChanged?.(peerKey);
+            await onBrowserReady();
+          } catch (err) {
+            clearTimeout(timer);
+            ws.close();
+            reject(err);
+          }
         }
       });
 
@@ -426,7 +437,7 @@ export class WSBridge {
 
     return new Promise<void>((resolve) => {
       const url = `${this.relayUrl}?session=${encodeURIComponent(this.session)}&role=cli`;
-      const ws = new WebSocket(url);
+      const ws = new WebSocket(url, { maxPayload: MAX_MESSAGE_BYTES });
 
       const timer = setTimeout(() => {
         try {
