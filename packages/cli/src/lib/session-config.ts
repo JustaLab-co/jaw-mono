@@ -1,6 +1,6 @@
 import * as fs from 'node:fs';
 import { PATHS } from './paths.js';
-import { ensureDir } from './config.js';
+import { writeJsonAtomic } from './config.js';
 
 /**
  * How the session account address is derived, as it appears on disk.
@@ -274,8 +274,7 @@ export function replaceSessionConfig(input: WritableSession & { createdAt: strin
 }
 
 /**
- * Written to a temporary file and renamed over the real one, which is atomic on
- * the same filesystem, so a reader never sees a half-written config.
+ * Written atomically, so a reader never sees a half-written config.
  *
  * Recovering the permission struct turns two commands that otherwise only read
  * (`x402 status`, `session status`) into writers, and the MCP server runs
@@ -284,11 +283,7 @@ export function replaceSessionConfig(input: WritableSession & { createdAt: strin
  * the orphan list exists to prevent.
  */
 function writeSessionConfig(config: SessionConfig): void {
-  ensureDir(PATHS.root);
-  const temp = `${PATHS.sessionConfig}.${process.pid}.tmp`;
-  fs.writeFileSync(temp, JSON.stringify(config, null, 2) + '\n', { encoding: 'utf-8', mode: 0o600 });
-  fs.chmodSync(temp, 0o600);
-  fs.renameSync(temp, PATHS.sessionConfig);
+  writeJsonAtomic(PATHS.sessionConfig, config);
 }
 
 /**

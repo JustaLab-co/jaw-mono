@@ -5,6 +5,25 @@ import * as os from 'node:os';
 
 const TEST_ROOT = path.join(os.tmpdir(), 'jaw-keystore-test');
 
+/**
+ * When set, the next `writeFileSync` writes half its data and throws, the way a
+ * full disk or a killed process leaves a file. `vi.spyOn` cannot reach an ESM
+ * export, so the module is wrapped instead.
+ */
+const hooks = vi.hoisted(() => ({ tornWrite: false }));
+
+vi.mock('node:fs', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('node:fs')>();
+  const writeFileSync = (...args: Parameters<typeof actual.writeFileSync>) => {
+    if (!hooks.tornWrite) return actual.writeFileSync(...args);
+    hooks.tornWrite = false;
+    const [file, data] = args;
+    actual.writeFileSync(file, String(data).slice(0, String(data).length / 2));
+    throw Object.assign(new Error('ENOSPC: no space left on device'), { code: 'ENOSPC' });
+  };
+  return { ...actual, default: { ...actual, writeFileSync }, writeFileSync };
+});
+
 vi.mock('./paths.js', () => {
   const p = require('node:path');
   const o = require('node:os');
@@ -83,6 +102,16 @@ describe('keystore', () => {
     expect(fs.statSync(PATHS.keystore).mode & 0o777).toBe(0o644);
     saveKeystore(generateSessionKey(), '0xdef456');
     expect(fs.statSync(PATHS.keystore).mode & 0o777).toBe(0o600);
+  });
+
+  it('a write that fails partway leaves the previous key readable', () => {
+    const key = generateSessionKey();
+    saveKeystore(key, '0xabc123');
+
+    hooks.tornWrite = true;
+    expect(() => saveKeystore(generateSessionKey(), '0xdef456')).toThrow(/ENOSPC/);
+
+    expect(loadSessionKey()).toBe(key);
   });
 
   it('tryLoadKeystoreAddress returns the stored address', () => {
