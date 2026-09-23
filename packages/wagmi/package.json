@@ -37,6 +37,19 @@
       "test": {
         "dependsOn": [
           "^generate-sdk-info"
+        ],
+        "inputs": [
+          "default",
+          "^production",
+          "{workspaceRoot}/vitest.setup.localstorage.ts",
+          {
+            "externalDependencies": [
+              "vitest"
+            ]
+          },
+          {
+            "env": "CI"
+          }
         ]
       }
     }
