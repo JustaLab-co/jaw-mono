@@ -32,7 +32,7 @@ import {
     handleGetCapabilitiesRequest,
     handleGetCallsHistoryRequest,
 } from '../rpc/index.js';
-import type { ConstructorOptions } from './interface.js';
+import { Mode, type ConstructorOptions, type ModeType } from './interface.js';
 
 vi.mock('../communicator/index.js');
 vi.mock('../signer/index.js', () => ({
@@ -53,11 +53,24 @@ vi.mock('../rpc/index.js', async (importOriginal) => ({
     handleGetCallsHistoryRequest: vi.fn(),
 }));
 
-const OPTIONS: ConstructorOptions = {
-    metadata: { appName: 'Conformance', appLogoUrl: 'https://test.example/logo.png', defaultChainId: 8453 },
-    preference: { keysUrl: 'https://keys.test.example', mode: 'CrossPlatform' },
-    apiKey: 'test-api-key',
-};
+function options(mode: ModeType): ConstructorOptions {
+    return {
+        metadata: { appName: 'Conformance', appLogoUrl: 'https://test.example/logo.png', defaultChainId: 8453 },
+        preference: { keysUrl: 'https://keys.test.example', mode },
+        apiKey: 'test-api-key',
+    };
+}
+
+// The provider branches on mode in the no-session paths: which signer type it
+// persists and restores, and how the throwaway signer authenticates.
+const MODES = [
+    { mode: Mode.CrossPlatform, signerType: 'crossPlatform', ephemeralHandshake: { method: 'handshake' } },
+    {
+        mode: Mode.AppSpecific,
+        signerType: 'appSpecific',
+        ephemeralHandshake: { method: 'wallet_connect', params: [{ silent: true }] },
+    },
+] as const;
 
 /** What a method does when the provider has no session yet. */
 type NoSessionOutcome =
@@ -130,14 +143,15 @@ function casesOf<K extends NoSessionOutcome['kind']>(kind: K) {
 
 let signer: Signer;
 
-function newProvider(): JAWProvider {
-    return new JAWProvider(OPTIONS);
+function newProvider(mode: ModeType = Mode.CrossPlatform): JAWProvider {
+    return new JAWProvider(options(mode));
 }
 
 /** A provider with a live session, so requests route through the signer. */
-function connectedProvider(): JAWProvider {
-    (loadSignerType as Mock).mockReturnValue('crossPlatform');
-    return new JAWProvider(OPTIONS);
+function connectedProvider(mode: ModeType = Mode.CrossPlatform): JAWProvider {
+    const signerType = MODES.find((m) => m.mode === mode)!.signerType;
+    (loadSignerType as Mock).mockReturnValue(signerType);
+    return new JAWProvider(options(mode));
 }
 
 beforeEach(() => {
@@ -155,105 +169,110 @@ describe('EIP-1193 conformance', () => {
         });
     });
 
-    describe('without a session', () => {
-        it.each(casesOf('rejects'))('%s rejects with its documented code', async (method, outcome) => {
-            await expect(newProvider().request({ method })).rejects.toMatchObject({ code: outcome.code });
+    describe.each(MODES)('in $mode mode', ({ mode, signerType, ephemeralHandshake }) => {
+        describe('without a session', () => {
+            it.each(casesOf('rejects'))('%s rejects with its documented code', async (method, outcome) => {
+                await expect(newProvider(mode).request({ method })).rejects.toMatchObject({ code: outcome.code });
+            });
+
+            it.each(casesOf('answers'))('%s answers from local state', async (method, outcome) => {
+                const result = await newProvider(mode).request({ method });
+                outcome.expect(result);
+                expect(createSigner).not.toHaveBeenCalled();
+            });
+
+            it.each(casesOf('delegates'))('%s routes to its read handler', async (method, outcome) => {
+                const handler = outcome.handler();
+                handler.mockResolvedValue('ok');
+
+                await expect(newProvider(mode).request({ method })).resolves.toBe('ok');
+                expect(handler).toHaveBeenCalled();
+                expect(createSigner).not.toHaveBeenCalled();
+            });
+
+            it.each(casesOf('connects'))('%s leaves the provider connected', async (method) => {
+                (signer.request as Mock).mockResolvedValue('connected');
+                const provider = newProvider(mode);
+
+                await expect(provider.request({ method })).resolves.toBe('connected');
+                expect(signer.handshake).toHaveBeenCalled();
+
+                // Persisted, not just live in memory. This is what lets the next
+                // page load restore the signer instead of running a fresh ceremony,
+                // so dropping it would cost the user a biometric on every reload
+                // while everything else here stayed green.
+                expect(storeSignerType).toHaveBeenCalledWith(signerType);
+
+                // The session stuck: the next silent read goes through the signer
+                // rather than being answered with the not-connected default.
+                (signer.request as Mock).mockResolvedValue(['0xabc']);
+                await expect(provider.request({ method: 'eth_accounts' })).resolves.toEqual(['0xabc']);
+            });
+
+            it.each(casesOf('ephemeral'))('%s signs through a throwaway signer', async (method) => {
+                (signer.request as Mock).mockResolvedValue('signed');
+                const provider = newProvider(mode);
+
+                await expect(provider.request({ method })).resolves.toBe('signed');
+                expect(signer.handshake).toHaveBeenCalledWith(ephemeralHandshake);
+                expect(signer.cleanup).toHaveBeenCalled();
+
+                // Throwaway means throwaway: signing this way must not leave the
+                // ephemeral signer installed, or every later read would route
+                // through a session the user never agreed to keep. Asserted on the
+                // same provider instance, since a fresh one would answer `[]` no
+                // matter what this one did.
+                await expect(provider.request({ method: 'eth_accounts' })).resolves.toEqual([]);
+            });
         });
 
-        it.each(casesOf('answers'))('%s answers from local state', async (method, outcome) => {
-            const result = await newProvider().request({ method });
-            outcome.expect(result);
-            expect(createSigner).not.toHaveBeenCalled();
-        });
+        describe('connection lifecycle events', () => {
+            function recordEvents(provider: JAWProvider): string[] {
+                const events: string[] = [];
+                provider.on('accountsChanged', () => events.push('accountsChanged'));
+                provider.on('disconnect', () => events.push('disconnect'));
+                return events;
+            }
 
-        it.each(casesOf('delegates'))('%s routes to its read handler', async (method, outcome) => {
-            const handler = outcome.handler();
-            handler.mockResolvedValue('ok');
+            // Driven off the table so all four methods that refuse with 4100 stay
+            // honest, rather than personal_sign standing in for the rest.
+            const refusesUnauthorized = casesOf('rejects').filter(
+                ([, outcome]) => outcome.code === standardErrorCodes.provider.unauthorized
+            );
 
-            await expect(newProvider().request({ method })).resolves.toBe('ok');
-            expect(handler).toHaveBeenCalled();
-            expect(createSigner).not.toHaveBeenCalled();
-        });
+            // vitest registers no tests at all for an empty it.each, so a table
+            // change that empties the filter would delete the assertion below
+            // without reddening anything.
+            it('the table still lists four methods that refuse with 4100', () => {
+                expect(refusesUnauthorized).toHaveLength(4);
+            });
 
-        it.each(casesOf('connects'))('%s leaves the provider connected', async (method) => {
-            (signer.request as Mock).mockResolvedValue('connected');
-            const provider = newProvider();
+            it.each(refusesUnauthorized)(
+                'stays quiet when %s is refused on a never-connected provider',
+                async (method) => {
+                    const provider = newProvider(mode);
+                    const events = recordEvents(provider);
 
-            await expect(provider.request({ method })).resolves.toBe('connected');
-            expect(signer.handshake).toHaveBeenCalled();
+                    await expect(provider.request({ method })).rejects.toMatchObject({ code: 4100 });
 
-            // Persisted, not just live in memory. This is what lets the next
-            // page load restore the signer instead of running a fresh ceremony,
-            // so dropping it would cost the user a biometric on every reload
-            // while everything else here stayed green.
-            expect(storeSignerType).toHaveBeenCalledWith('crossPlatform');
+                    // "Connect first" is not a disconnection. A dapp that probes before
+                    // connecting must not see a lifecycle event for a session it never
+                    // had.
+                    expect(events).toEqual([]);
+                }
+            );
 
-            // The session stuck: the next silent read goes through the signer
-            // rather than being answered with the not-connected default.
-            (signer.request as Mock).mockResolvedValue(['0xabc']);
-            await expect(provider.request({ method: 'eth_accounts' })).resolves.toEqual(['0xabc']);
-        });
+            it('disconnects when a live session comes back unauthorized', async () => {
+                const provider = connectedProvider(mode);
+                const events = recordEvents(provider);
+                (signer.request as Mock).mockRejectedValue({ code: 4100, message: 'session expired' });
 
-        it.each(casesOf('ephemeral'))('%s signs through a throwaway signer', async (method) => {
-            (signer.request as Mock).mockResolvedValue('signed');
-            const provider = newProvider();
+                await expect(provider.request({ method: 'wallet_sign' })).rejects.toMatchObject({ code: 4100 });
 
-            await expect(provider.request({ method })).resolves.toBe('signed');
-            expect(signer.handshake).toHaveBeenCalled();
-            expect(signer.cleanup).toHaveBeenCalled();
-
-            // Throwaway means throwaway: signing this way must not leave the
-            // ephemeral signer installed, or every later read would route
-            // through a session the user never agreed to keep. Asserted on the
-            // same provider instance, since a fresh one would answer `[]` no
-            // matter what this one did.
-            await expect(provider.request({ method: 'eth_accounts' })).resolves.toEqual([]);
-        });
-    });
-
-    describe('connection lifecycle events', () => {
-        function recordEvents(provider: JAWProvider): string[] {
-            const events: string[] = [];
-            provider.on('accountsChanged', () => events.push('accountsChanged'));
-            provider.on('disconnect', () => events.push('disconnect'));
-            return events;
-        }
-
-        // Driven off the table so all four methods that refuse with 4100 stay
-        // honest, rather than personal_sign standing in for the rest.
-        const refusesUnauthorized = casesOf('rejects').filter(
-            ([, outcome]) => outcome.code === standardErrorCodes.provider.unauthorized
-        );
-
-        // vitest registers no tests at all for an empty it.each, so a table
-        // change that empties the filter would delete the assertion below
-        // without reddening anything.
-        it('the table still lists four methods that refuse with 4100', () => {
-            expect(refusesUnauthorized).toHaveLength(4);
-        });
-
-        it.each(refusesUnauthorized)('stays quiet when %s is refused on a never-connected provider', async (method) => {
-            const provider = newProvider();
-            const events = recordEvents(provider);
-
-            await expect(provider.request({ method })).rejects.toMatchObject({ code: 4100 });
-
-            // "Connect first" is not a disconnection. A dapp that probes before
-            // connecting must not see a lifecycle event for a session it never
-            // had.
-            expect(events).toEqual([]);
-        });
-
-        it('disconnects when a live session comes back unauthorized', async () => {
-            const provider = connectedProvider();
-            const events = recordEvents(provider);
-            (signer.request as Mock).mockRejectedValue({ code: 4100, message: 'session expired' });
-
-            await expect(provider.request({ method: 'wallet_sign' })).rejects.toMatchObject({ code: 4100 });
-
-            // Same code, opposite meaning: the session died, so tearing it down
-            // locally and telling the dapp is right.
-            expect(events).toEqual(['accountsChanged', 'disconnect']);
+                // Same code, opposite meaning: the session died, so tearing it down
+                // locally and telling the dapp is right.
+                expect(events).toEqual(['accountsChanged', 'disconnect']);
+            });
         });
     });
 
