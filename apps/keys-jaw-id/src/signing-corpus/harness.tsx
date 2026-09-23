@@ -37,11 +37,19 @@ export async function corpusAccount() {
     }),
   });
   const smart = await toJustanAccount({ client, owners: [owner], address: ACCOUNT });
-  // Mirrors Account.signMessage / signTypedData: with no address override they
-  // delegate straight to the smart account.
+  // Mirrors Account.resolveSmartAccount: an override equal to the account, or none,
+  // signs with it. Any other address would need an on-chain owner scan, so it fails
+  // loudly instead of silently signing as the wrong account.
+  const resolve = (options?: { address?: Address }) => {
+    if (options?.address && options.address.toLowerCase() !== ACCOUNT.toLowerCase()) {
+      throw new Error(`corpus harness cannot sign for ${options.address}`);
+    }
+    return smart;
+  };
   const account = {
-    signMessage: (message: string) => smart.signMessage({ message }),
-    signTypedData: (typedData: Parameters<typeof smart.signTypedData>[0]) => smart.signTypedData(typedData),
+    signMessage: (message: string, options?: { address?: Address }) => resolve(options).signMessage({ message }),
+    signTypedData: (typedData: Parameters<typeof smart.signTypedData>[0], options?: { address?: Address }) =>
+      resolve(options).signTypedData(typedData),
   };
   return { account, passkey };
 }
