@@ -11,6 +11,11 @@
  * Descriptions are left out on purpose: they change often and do not widen
  * what a client can request. `tools.test.ts` covers the parts of them that
  * steer a client.
+ *
+ * The table holds what JSON Schema can carry: types, enums, numeric and length
+ * bounds, formats, and the value type of a record. A zod `refine` or
+ * `transform` does not reach the advertised schema, so the http(s)-only rule on
+ * `jaw_pay_and_fetch.url` is held by `tools.test.ts` and the fuzz test instead.
  */
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js';
@@ -18,14 +23,20 @@ import { describe, it, expect } from 'vitest';
 
 import { createMcpServer } from './server.js';
 
-type Arg = { type?: string; enum?: string[] };
+const BOUNDS = ['enum', 'minimum', 'maximum', 'exclusiveMinimum', 'maxLength', 'format'] as const;
+type Arg = { type?: string; values?: string } & Partial<Record<(typeof BOUNDS)[number], unknown>>;
 type ToolContract = { args: Record<string, Arg>; required: string[]; readOnly: boolean };
 
 const CONTRACT: Record<string, ToolContract> = {
   jaw_rpc: {
     // `params` is untyped on purpose: the method decides its shape, and what
     // may run without a browser is decided by `supportsSessionMode`, not here.
-    args: { method: { type: 'string' }, params: {}, chainId: { type: 'integer' }, session: { type: 'boolean' } },
+    args: {
+      method: { type: 'string' },
+      params: {},
+      chainId: { type: 'integer', exclusiveMinimum: 0 },
+      session: { type: 'boolean' },
+    },
     required: ['method'],
     readOnly: false,
   },
@@ -45,9 +56,9 @@ const CONTRACT: Record<string, ToolContract> = {
   jaw_session_status: { args: {}, required: [], readOnly: true },
   jaw_pay_and_fetch: {
     args: {
-      url: { type: 'string' },
+      url: { type: 'string', format: 'uri' },
       method: { type: 'string' },
-      headers: { type: 'object' },
+      headers: { type: 'object', values: 'string' },
       body: { type: 'string' },
       maxAmount: { type: 'string' },
       asset: { type: 'string' },
@@ -60,11 +71,11 @@ const CONTRACT: Record<string, ToolContract> = {
   jaw_x402_balance: { args: { network: { type: 'string' } }, required: [], readOnly: true },
   jaw_discover: {
     args: {
-      query: { type: 'string' },
+      query: { type: 'string', maxLength: 400 },
       network: { type: 'string' },
       maxUsdPrice: { type: 'string' },
       curatedOnly: { type: 'boolean' },
-      limit: { type: 'integer' },
+      limit: { type: 'integer', minimum: 1, maximum: 20 },
       payTo: { type: 'string' },
     },
     required: [],
@@ -83,18 +94,24 @@ async function connect() {
   return client;
 }
 
+type AdvertisedArg = Record<string, unknown> & { type?: string; additionalProperties?: { type?: string } };
+
 type Advertised = {
-  inputSchema: { properties?: Record<string, { type?: string; enum?: string[] }>; required?: string[] };
+  inputSchema: { properties?: Record<string, AdvertisedArg>; required?: string[] };
   annotations?: { readOnlyHint?: boolean };
 };
 
+function argOf(schema: AdvertisedArg): Arg {
+  const arg: Arg = {};
+  if (schema.type) arg.type = schema.type;
+  if (schema.additionalProperties?.type) arg.values = schema.additionalProperties.type;
+  for (const bound of BOUNDS) if (schema[bound] !== undefined) arg[bound] = schema[bound];
+  return arg;
+}
+
 function contractOf(tool: Advertised): ToolContract {
-  const args = Object.fromEntries(
-    Object.entries(tool.inputSchema.properties ?? {}).map(([name, schema]) => [
-      name,
-      { ...(schema.type ? { type: schema.type } : {}), ...(schema.enum ? { enum: schema.enum } : {}) },
-    ])
-  );
+  const properties = Object.entries(tool.inputSchema.properties ?? {});
+  const args = Object.fromEntries(properties.map(([name, schema]) => [name, argOf(schema)]));
   return {
     args,
     required: [...(tool.inputSchema.required ?? [])].sort(),
