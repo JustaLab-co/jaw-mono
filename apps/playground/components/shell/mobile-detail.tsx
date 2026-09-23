@@ -40,15 +40,15 @@ export function MobileBackButton({ onClick }: { onClick: () => void }) {
     <button
       type="button"
       onClick={onClick}
-      className="text-shell-ink-2 hover:text-shell-ink -ml-1.5 mr-auto inline-flex cursor-pointer items-center gap-1.5 rounded-full border-0 bg-transparent px-1.5 py-1 text-[13.5px] font-medium md:hidden"
+      className="border-shell-line-2 bg-shell-raise text-shell-ink hover:bg-shell-raise-2 mr-auto inline-flex min-h-[44px] cursor-pointer items-center gap-2 rounded-full border py-2 pl-3 pr-4 text-base font-semibold tracking-[-0.01em] transition-colors md:hidden"
     >
       <svg
-        width="15"
-        height="15"
+        width="20"
+        height="20"
         viewBox="0 0 24 24"
         fill="none"
         stroke="currentColor"
-        strokeWidth={1.8}
+        strokeWidth={2.2}
         strokeLinecap="round"
         strokeLinejoin="round"
         aria-hidden="true"
