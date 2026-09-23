@@ -8,6 +8,7 @@ import { ReactUIHandler } from '@jaw.id/ui';
 import { ThemeStudioControls, DialogPreviews } from '../../components/shell/theme-studio';
 import { ShellHeader } from '../../components/shell/header';
 import { ShellSidebar, type ShellView } from '../../components/shell/sidebar';
+import { useMobileDetail, MobileBackButton } from '../../components/shell/mobile-detail';
 import { ConfigCard } from '../../components/shell/config-card';
 import { MethodList } from '../../components/shell/method-list';
 
@@ -71,6 +72,10 @@ function CorePageContent({ mode, transportMode }: { mode: ModeType; transportMod
   const [runningMethodId, setRunningMethodId] = useState<string | null>(null);
   // v2 shell UI state: sidebar view and highlighted method.
   const [view, setView] = useState<ShellView>('playground');
+  // Below md: method list and method detail take turns; the theme view stacks both.
+  const { showDetail, openDetail, closeDetail } = useMobileDetail();
+  const mobileSidebarHidden = view === 'playground' && showDetail;
+  const mobileMainHidden = view === 'playground' && !showDetail;
   // wallet_connect is the default selection — the natural first step of a session.
   const [activeMethodId, setActiveMethodId] = useState<string | null>('wallet_connect');
 
@@ -302,7 +307,7 @@ function CorePageContent({ mode, transportMode }: { mode: ModeType; transportMod
   };
 
   return (
-    <div className="bg-shell-canvas text-shell-ink grid h-screen grid-rows-[auto_1fr] overflow-hidden">
+    <div className="bg-shell-canvas text-shell-ink flex min-h-dvh flex-col md:grid md:h-screen md:min-h-0 md:grid-rows-[auto_1fr] md:overflow-hidden">
       <ShellHeader
         sdk="core"
         isConnected={isConnected}
@@ -312,8 +317,14 @@ function CorePageContent({ mode, transportMode }: { mode: ModeType; transportMod
         chainId={chainId}
       />
 
-      <div className="grid min-h-0 grid-cols-[334px_minmax(0,1fr)]">
-        <ShellSidebar view={view} onViewChange={setView} themeMeta={themeMeta} methodCount={RPC_METHODS.length}>
+      <div className="flex flex-1 flex-col md:grid md:min-h-0 md:grid-cols-[334px_minmax(0,1fr)]">
+        <ShellSidebar
+          view={view}
+          onViewChange={setView}
+          themeMeta={themeMeta}
+          mobileHidden={mobileSidebarHidden}
+          methodCount={RPC_METHODS.length}
+        >
           {view === 'playground' ? (
             <>
               <ConfigCard
@@ -325,7 +336,10 @@ function CorePageContent({ mode, transportMode }: { mode: ModeType; transportMod
               <MethodList
                 methods={RPC_METHODS}
                 selectedId={activeMethod?.id ?? null}
-                onSelect={(m) => setActiveMethodId(m.id)}
+                onSelect={(m) => {
+                  setActiveMethodId(m.id);
+                  openDetail();
+                }}
                 isConnected={isConnected}
                 transport={surface}
               />
@@ -342,14 +356,17 @@ function CorePageContent({ mode, transportMode }: { mode: ModeType; transportMod
           )}
         </ShellSidebar>
 
-        <main className="flex min-h-0 flex-col overflow-y-auto">
+        <main
+          className={`flex min-h-0 flex-col overflow-y-auto max-md:flex-1 ${mobileMainHidden ? 'max-md:hidden' : ''}`}
+        >
           <div className="flex flex-1 flex-col gap-6 px-6 py-6 md:px-9 md:py-[30px]">
             {view === 'theme' ? (
               <DialogPreviews theme={draftTheme} />
             ) : activeMethod ? (
               <>
                 {/* Interim: ConfigSnippet moves to its shell home in a later step. */}
-                <div className="flex justify-end">
+                <div className="flex items-center justify-end gap-3">
+                  <MobileBackButton onClick={closeDetail} />
                   <ConfigSnippet
                     type="core"
                     mode={mode}

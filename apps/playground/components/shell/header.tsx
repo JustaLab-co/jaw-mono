@@ -40,7 +40,7 @@ export function ShellHeader({
   const withQuery = (href: string) => (query ? `${href}?${query}` : href);
 
   return (
-    <header className="border-shell-line bg-shell-panel flex min-h-[62px] flex-none flex-wrap items-center gap-x-[22px] gap-y-3.5 border-b px-5 py-[11px]">
+    <header className="border-shell-line bg-shell-panel flex min-h-[62px] flex-none flex-wrap items-center gap-x-[22px] gap-y-3.5 border-b px-5 py-[11px] max-md:px-4">
       {/* Brand → entry */}
       <div className="flex flex-none items-center gap-3">
         <Link
@@ -62,10 +62,14 @@ export function ShellHeader({
 
       {/* SDK switch */}
       <div className="relative flex flex-none items-center gap-[9px]">
-        <span className="text-shell-ink-3 text-[13px]">SDK</span>
+        <span className="text-shell-ink-3 text-[13px] max-sm:hidden">SDK</span>
         <SegGroup label="SDK">
           {SDKS.map((s) => (
-            <Link key={s.key} href={withQuery(s.href)} className={segClass(sdk === s.key, 'font-mono text-[11.5px]')}>
+            <Link
+              key={s.key}
+              href={withQuery(s.href)}
+              className={segClass(sdk === s.key, 'font-mono text-[11.5px] max-sm:px-2.5')}
+            >
               {s.label}
             </Link>
           ))}

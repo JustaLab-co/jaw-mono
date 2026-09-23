@@ -50,7 +50,9 @@ export function MethodDetail({
     <section className="flex min-w-0 flex-col gap-[18px]">
       <div>
         <div className="flex flex-wrap items-center gap-3">
-          <h1 className="m-0 break-words font-mono text-[27px] font-semibold tracking-[-0.025em]">{method.name}</h1>
+          <h1 className="m-0 break-words font-mono text-[27px] font-semibold tracking-[-0.025em] max-md:min-w-0 max-md:text-[22px] max-md:[overflow-wrap:anywhere]">
+            {method.name}
+          </h1>
           <span className="border-shell-line-2 text-shell-ink-3 whitespace-nowrap rounded-full border px-[11px] py-[5px] text-[12.5px] capitalize">
             {method.category}
           </span>
