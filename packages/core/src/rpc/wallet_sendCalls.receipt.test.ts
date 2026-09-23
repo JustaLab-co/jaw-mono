@@ -144,6 +144,16 @@ describe('waitForReceiptInBackground when the bundler returns no receipt', () =>
         expect(notifyMock.mock.calls[0][0]).toMatchObject({ transactionHash: TX_HASH, success: true });
     });
 
+    it('searches from genesis on a chain younger than the lookup window', async () => {
+        chain.getBlockNumber.mockResolvedValue(50n);
+        chain.getLogs.mockResolvedValue([{ transactionHash: TX_HASH, args: { success: true } }]);
+
+        await waitForReceiptInBackground(USER_OP_HASH, 1);
+
+        expect(chain.getLogs).toHaveBeenCalledWith(expect.objectContaining({ fromBlock: 0n }));
+        expect(getCallStatus(USER_OP_HASH)).toMatchObject({ status: 'completed' });
+    });
+
     it('fails an operation the EntryPoint reports as reverted', async () => {
         chain.getLogs.mockResolvedValue([{ transactionHash: TX_HASH, args: { success: false } }]);
 

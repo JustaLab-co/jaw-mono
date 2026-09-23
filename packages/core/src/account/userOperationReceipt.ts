@@ -13,8 +13,10 @@ export type OperationReceipt = Pick<UserOperationReceipt, 'success' | 'receipt'>
 // 3 seconds apart.
 const CHAIN_LOOKUP_ATTEMPTS = 20;
 const CHAIN_LOOKUP_INTERVAL_MS = 3_000;
-// Covers the time between sending and the bundler's refusal. RPC providers cap
-// the eth_getLogs range, some at 500 blocks, and the range grows while polling.
+// How far behind the head the search starts. It has to cover the time between
+// sending and the bundler's refusal, which assumes the bundler refuses right
+// away, as Etherspot does, rather than after polling on its own. RPC providers
+// cap the eth_getLogs range, some at 500 blocks, and the range grows while polling.
 const CHAIN_LOOKUP_BLOCKS = 100n;
 
 const userOperationEvent = getAbiItem({ abi: entryPoint08Abi, name: 'UserOperationEvent' });
@@ -43,7 +45,9 @@ export async function waitForOperationReceipt(
     if (!client) return undefined;
 
     try {
-        const fromBlock = (await getBlockNumber(client)) - CHAIN_LOOKUP_BLOCKS;
+        const head = await getBlockNumber(client);
+        // A chain younger than the window, a local node or a new testnet, starts at genesis.
+        const fromBlock = head > CHAIN_LOOKUP_BLOCKS ? head - CHAIN_LOOKUP_BLOCKS : 0n;
         for (let attempt = 1; attempt <= CHAIN_LOOKUP_ATTEMPTS; attempt++) {
             const [event] = await getLogs(client, {
                 address: entryPoint08Address,
