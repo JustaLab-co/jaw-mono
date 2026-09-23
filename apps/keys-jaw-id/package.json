@@ -18,6 +18,21 @@
           "cwd": "{projectRoot}",
           "command": "bunx stryker run"
         }
+      },
+      "test": {
+        "inputs": [
+          "default",
+          "^production",
+          {
+            "externalDependencies": [
+              "vitest"
+            ]
+          },
+          {
+            "env": "CI"
+          },
+          "{workspaceRoot}/vitest.setup.localstorage.ts"
+        ]
       }
     }
   },
