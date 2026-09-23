@@ -1,7 +1,7 @@
 import { store } from '../store/index.js';
-import { getBundlerClient } from '../store/chain-clients/utils.js';
-import type { BundlerClient } from 'viem/account-abstraction';
-import { numberToHex } from 'viem';
+import { getBundlerClient, getClient } from '../store/chain-clients/utils.js';
+import { entryPoint08Abi, entryPoint08Address, type UserOperationReceipt } from 'viem/account-abstraction';
+import { getAbiItem, numberToHex, type Hex } from 'viem';
 import { notifyReceiptReceived } from '../analytics/index.js';
 
 /**
@@ -229,60 +229,101 @@ export function waitForReceiptInBackground(userOpHash: string, chainId: number, 
     return waiter;
 }
 
+type OperationReceipt = Pick<UserOperationReceipt, 'success' | 'receipt'>;
+
+// How long the chain is read once the bundler has failed to answer: 20 reads,
+// 3 seconds apart.
+const CHAIN_LOOKUP_ATTEMPTS = 20;
+const CHAIN_LOOKUP_INTERVAL_MS = 3_000;
+// Covers the time between sending and the bundler's refusal, and stays under the
+// 5000-block range RPC providers cap eth_getLogs at.
+const CHAIN_LOOKUP_BLOCKS = 1_000n;
+
+const userOperationEvent = getAbiItem({ abi: entryPoint08Abi, name: 'UserOperationEvent' });
+
 async function pollForReceipt(userOpHash: string, chainId: number, apiKey?: string): Promise<void> {
+    const bundlerClient = getBundlerClient(chainId);
+    if (!bundlerClient) {
+        updateCallStatusToFailed(userOpHash, new Error(`No bundler client found for chain ${chainId}`));
+        return;
+    }
+
+    let receipt: OperationReceipt | undefined;
     try {
-        // Get bundler client for the chain
-        const bundlerClient = getBundlerClient(chainId);
-        if (!bundlerClient) {
-            const error = new Error(`No bundler client found for chain ${chainId}`);
-            updateCallStatusToFailed(userOpHash, error);
-            return;
-        }
         // Status remains 'pending' while waiting
-        const receipt = await (bundlerClient as BundlerClient).waitForUserOperationReceipt({
-            hash: userOpHash as `0x${string}`,
-        });
-
-        // `success` is whether the user operation itself went through. The
-        // transaction status under it only says the bundle was mined, and viem
-        // hands it over as 'success' or 'reverted', never as '0x1'.
-        const isSuccess = receipt.success;
-        const actualReceipt = receipt.receipt;
-
-        // Fire-and-forget notification to proxy. A keyless caller is attributed by
-        // the forwarded origin, so the receipt is reported either way.
-        notifyReceiptReceived({
-            userOpHash: userOpHash as `0x${string}`,
-            transactionHash: actualReceipt.transactionHash,
-            success: isSuccess,
-            apiKey,
-        });
-
-        if (isSuccess) {
-            // Transaction succeeded - mark as completed
-            updateCallStatusToCompleted(userOpHash, [receipt]);
-        } else {
-            // Transaction failed/reverted - mark as failed but still store receipt
-            // This allows wallet_getCallsStatus to return the receipt with status 0x0
-            updateCallStatusToFailed(userOpHash, new Error('Transaction reverted'));
-            // Still store the receipt so it can be returned in EIP-5792 format
-            // This will result in status code 500 (onchain revert) instead of 400 (offchain failure)
-            store.callStatuses.update(userOpHash, {
-                receipts: [receipt],
-            });
-        }
+        receipt = await bundlerClient.waitForUserOperationReceipt({ hash: userOpHash as Hex });
     } catch (error) {
-        // Check if this is a timeout error
-        const isTimeoutError = error instanceof Error && error.name === 'WaitForUserOperationReceiptTimeoutError';
-
-        if (isTimeoutError) {
+        if (error instanceof Error && error.name === 'WaitForUserOperationReceiptTimeoutError') {
             // Timeout doesn't mean failure - operation may still be pending on-chain
             // Keep status as 'pending' so user can check again later via wallet_getCallsStatus
             console.warn(`Receipt polling timed out for ${userOpHash}, keeping status as pending`);
-        } else {
-            // For other errors, mark as failed
-            console.error(`Error waiting for receipt for ${userOpHash}:`, error);
-            updateCallStatusToFailed(userOpHash, error as Error);
+            return;
+        }
+        // Some bundlers fail the lookup for an operation they did bundle: Etherspot
+        // answers "Missing/invalid userOpHash" for EntryPoint v0.8. The EntryPoint's
+        // own event carries the same result, so the chain answers instead.
+        console.warn(`The bundler returned no receipt for ${userOpHash}, reading it from the chain:`, error);
+        try {
+            receipt = await findReceiptOnChain(userOpHash as Hex, chainId);
+        } catch (lookupError) {
+            console.warn(`Reading the receipt for ${userOpHash} from the chain failed:`, lookupError);
         }
     }
+
+    // Unanswered is not failed: the operation was accepted and may still land.
+    if (!receipt) {
+        console.warn(`No receipt for ${userOpHash} yet, keeping status as pending`);
+        return;
+    }
+
+    // `success` is whether the user operation itself went through. The
+    // transaction status under it only says the bundle was mined, and viem
+    // hands it over as 'success' or 'reverted', never as '0x1'.
+    const isSuccess = receipt.success;
+
+    // Fire-and-forget notification to proxy. A keyless caller is attributed by
+    // the forwarded origin, so the receipt is reported either way.
+    notifyReceiptReceived({
+        userOpHash: userOpHash as Hex,
+        transactionHash: receipt.receipt.transactionHash,
+        success: isSuccess,
+        apiKey,
+    });
+
+    if (isSuccess) {
+        updateCallStatusToCompleted(userOpHash, [receipt]);
+        return;
+    }
+    // Transaction failed/reverted - mark as failed but still store receipt
+    // This allows wallet_getCallsStatus to return the receipt with status 0x0
+    updateCallStatusToFailed(userOpHash, new Error('Transaction reverted'));
+    // Still store the receipt so it can be returned in EIP-5792 format
+    // This will result in status code 500 (onchain revert) instead of 400 (offchain failure)
+    store.callStatuses.update(userOpHash, {
+        receipts: [receipt],
+    });
+}
+
+async function findReceiptOnChain(userOpHash: Hex, chainId: number): Promise<OperationReceipt | undefined> {
+    const client = getClient(chainId);
+    if (!client) return undefined;
+
+    const fromBlock = (await client.getBlockNumber()) - CHAIN_LOOKUP_BLOCKS;
+    for (let attempt = 1; attempt <= CHAIN_LOOKUP_ATTEMPTS; attempt++) {
+        const [event] = await client.getLogs({
+            address: entryPoint08Address,
+            event: userOperationEvent,
+            args: { userOpHash },
+            fromBlock,
+            strict: true,
+        });
+        if (event) {
+            const receipt = await client.getTransactionReceipt({ hash: event.transactionHash });
+            return { success: event.args.success, receipt };
+        }
+        if (attempt < CHAIN_LOOKUP_ATTEMPTS) {
+            await new Promise((resolve) => setTimeout(resolve, CHAIN_LOOKUP_INTERVAL_MS));
+        }
+    }
+    return undefined;
 }
