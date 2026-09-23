@@ -1502,7 +1502,7 @@ export interface UIHandler {
 
 // @public
 export interface UIHandlerConfig {
-    apiKey: string;
+    apiKey?: string;
     appLogoUrl?: string | null;
     appName?: string;
     defaultChainId?: number;
