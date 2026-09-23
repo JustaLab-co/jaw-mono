@@ -12,6 +12,7 @@ import { decodeFunctionData, erc20Abi } from 'viem';
 import { describe, it, expect } from 'vitest';
 
 import { USDC_BY_NETWORK } from './asset-registry.js';
+import { firstOperationCost, gasReserve } from './gas-reserve.js';
 import { ensurePayerFunds, type TopUpExecutor } from './topup.js';
 import type { X402PaymentRequirement } from './types.js';
 
@@ -100,9 +101,29 @@ describe('topping up the payer', () => {
         expect(functionName).toBe('transfer');
         const [to, amount] = args as [string, bigint];
         expect(to).toBe(PAYER);
-        expect(amount).toBeGreaterThanOrEqual(s.price - s.balance);
+        // Enough to pay, plus the fee the payer is charged for the refill itself,
+        // and the gas reserve on top whenever no cap cuts it.
+        const shortfall = s.price - s.balance;
+        expect(amount).toBeGreaterThanOrEqual(shortfall + firstOperationCost(s.usdc));
+        if (s.maxTopUp === undefined) expect(amount).toBeGreaterThanOrEqual(shortfall + gasReserve(s.usdc));
         if (s.maxTopUp !== undefined) expect(amount).toBeLessThanOrEqual(s.maxTopUp);
       })
     );
+  });
+
+  it('refuses when what is left of the cap covers the shortfall but not the refill fee', async () => {
+    const usdc = USDC_BY_NETWORK['eip155:84532'];
+    const { executor, sends } = recordingExecutor();
+    const shortfall = 1_000_000n;
+
+    const outcome = await ensurePayerFunds(
+      { scheme: 'exact', network: 'eip155:84532', amount: String(shortfall), asset: usdc.address, payTo: OTHER_TOKEN },
+      PAYER,
+      executor,
+      { balanceReader: async () => 0n, maxTopUp: shortfall + firstOperationCost(usdc) - 1n, pollMs: 0 }
+    );
+
+    expect(outcome.ok).toBe(false);
+    expect(sends).toEqual([]);
   });
 });
