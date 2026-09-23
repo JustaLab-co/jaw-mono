@@ -14,15 +14,17 @@ vi.mock('../analytics/index.js', () => ({
 }));
 
 import { notifyReceiptReceived } from '../analytics/index.js';
-import { waitForReceiptInBackground } from './wallet_sendCalls.js';
+import { getCallStatus, storeCallStatus, waitForReceiptInBackground } from './wallet_sendCalls.js';
 
 const notifyMock = vi.mocked(notifyReceiptReceived);
 
 const USER_OP_HASH = '0xaaa1'.padEnd(66, '0');
 const TX_HASH = '0xbbb2'.padEnd(66, '0');
 
+// The shape viem's waitForUserOperationReceipt resolves to: the transaction
+// status is already formatted, and `success` is the user operation's own result.
 function succeedingReceipt() {
-    return { receipt: { status: '0x1', transactionHash: TX_HASH } };
+    return { success: true, receipt: { status: 'success', transactionHash: TX_HASH } };
 }
 
 describe('waitForReceiptInBackground', () => {
@@ -45,12 +47,23 @@ describe('waitForReceiptInBackground', () => {
         });
     });
 
-    it('reports a reverted receipt as unsuccessful', async () => {
-        waitForUserOperationReceipt.mockResolvedValue({ receipt: { status: '0x0', transactionHash: TX_HASH } });
+    it('reports a reverted user operation as unsuccessful, though its bundle was mined', async () => {
+        waitForUserOperationReceipt.mockResolvedValue({
+            success: false,
+            receipt: { status: 'success', transactionHash: TX_HASH },
+        });
 
         await waitForReceiptInBackground(USER_OP_HASH, 1);
 
         expect(notifyMock.mock.calls[0][0]).toMatchObject({ success: false });
+    });
+
+    it('marks a successful user operation as completed', async () => {
+        storeCallStatus(USER_OP_HASH, 1);
+
+        await waitForReceiptInBackground(USER_OP_HASH, 1);
+
+        expect(getCallStatus(USER_OP_HASH)?.status).toBe('completed');
     });
 
     it('runs one waiter per hash while the first is still polling', async () => {

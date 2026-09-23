@@ -243,19 +243,11 @@ async function pollForReceipt(userOpHash: string, chainId: number, apiKey?: stri
             hash: userOpHash as `0x${string}`,
         });
 
-        // Check receipt status to determine if transaction succeeded or failed
-        // The receipt from waitForUserOperationReceipt has a receipt field with status
-        const actualReceipt = (receipt as any).receipt || receipt;
-        const receiptStatus = actualReceipt.status;
-
-        // Determine if transaction succeeded:
-        // - status === '0x1' or 1 means success
-        // - status === '0x0' or 0 means failure (reverted)
-        // - If status is undefined but receipt exists, assume success (included on-chain)
-        const isSuccess =
-            receiptStatus === '0x1' ||
-            receiptStatus === 1 ||
-            (receiptStatus === undefined && actualReceipt.transactionHash !== undefined);
+        // `success` is whether the user operation itself went through. The
+        // transaction status under it only says the bundle was mined, and viem
+        // hands it over as 'success' or 'reverted', never as '0x1'.
+        const isSuccess = receipt.success;
+        const actualReceipt = receipt.receipt;
 
         // Fire-and-forget notification to proxy. A keyless caller is attributed by
         // the forwarded origin, so the receipt is reported either way.
