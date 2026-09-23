@@ -28,8 +28,10 @@ const POOL = [
   '0x3c44cdddb6a900fa2b585dd299e03d12fa4293bc',
   '0x70997970c51812dc3a010c7d01b50e0d17dc79c8',
 ] as const;
-const NETWORKS = ['eip155:8453', 'eip155:84532', 'eip155:1', 'eip155:137'];
-const HOSTS = ['api.example.com', 'evil.example.com'];
+// Pairs where one id or host is a prefix or a suffix of another, so a
+// partial match cannot pass for an exact one.
+const NETWORKS = ['eip155:8453', 'eip155:84532', 'eip155:1', 'eip155:10', 'eip155:137'];
+const HOSTS = ['api.example.com', 'evilapi.example.com', 'api.example.com.evil'];
 
 /** Where `upto` settles, per the proxy deployments. A new chain is a scope change, so it edits this line. */
 const UPTO_NETWORKS = ['eip155:8453', 'eip155:84532'];
@@ -102,7 +104,7 @@ function scenarioFor(req: X402PaymentRequirement) {
         'api.example.com',
         'api.example.com',
         'api.example.com',
-        'evil.example.com',
+        'evilapi.example.com',
         undefined
       ),
       spentThisSession: spent,
@@ -170,6 +172,47 @@ describe('what a session may pay', () => {
     const allowed = fc.sample(scenario, 1000).filter(([req, p, ctx]) => allowedByRule(req, p, ctx)).length;
     expect(allowed).toBeGreaterThan(50);
     expect(allowed).toBeLessThan(950);
+  });
+
+  const payable: X402PaymentRequirement = {
+    scheme: 'exact',
+    network: 'eip155:1',
+    amount: '200',
+    asset: POOL[0],
+    payTo: POOL[2],
+  };
+
+  it.each([
+    ['eip155:1', 'eip155:10'],
+    ['eip155:1', 'eip155:137'],
+    ['eip155:8453', 'eip155:84532'],
+  ])('an allowlisted %s does not admit %s', (listed, asked) => {
+    expect(checkPolicy({ ...payable, network: asked }, { allowedNetworks: [listed] }).ok).toBe(false);
+  });
+
+  it.each([
+    ['api.example.com', 'evilapi.example.com'],
+    ['api.example.com', 'api.example.com.evil'],
+  ])('an allowlisted host %s does not admit %s', (listed, host) => {
+    expect(checkPolicy(payable, { allowedHosts: [listed] }, { host }).ok).toBe(false);
+  });
+
+  it('meters each period limit against its own usage, not another with the same window', () => {
+    const limit = (allowance: string) => ({ allowance, unit: 'day' as const, multiplier: 1, anchor: '2026-01-01' });
+    const used = (allowance: string, spent: bigint): LimitUsage => ({
+      ...limit(allowance),
+      spent,
+      toppedUp: 0n,
+      endsAt: new Date('2026-01-02'),
+      source: 'ledger',
+    });
+
+    const verdict = checkPolicy(
+      payable,
+      { perPeriod: [limit('1000'), limit('5000')] },
+      { periodUsage: [used('1000', 0n), used('5000', 4900n)] }
+    );
+    expect(verdict.ok).toBe(false);
   });
 
   it('always says why when it refuses', () => {
