@@ -12,8 +12,6 @@
  * or a bidi control back to whoever renders it.
  */
 import * as fs from 'node:fs';
-import * as os from 'node:os';
-import * as path from 'node:path';
 import fc from 'fast-check';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js';
@@ -21,25 +19,27 @@ import { describe, it, expect, beforeAll, afterAll, vi } from 'vitest';
 
 fc.configureGlobal({ seed: 0xf022, numRuns: 1000 });
 
-const ROOT = path.join(os.tmpdir(), 'jaw-mcp-fuzz');
-
-vi.mock('../lib/paths.js', () => {
-  const p = require('node:path');
-  const o = require('node:os');
-  const root = p.join(o.tmpdir(), 'jaw-mcp-fuzz');
+// Hoisted with the mocks, so the paths mock can read it. A fresh directory per
+// run keeps parallel runs on a shared tmpdir from writing into each other.
+const PATHS = await vi.hoisted(async () => {
+  const { mkdtempSync } = await import('node:fs');
+  const { tmpdir } = await import('node:os');
+  const { join } = await import('node:path');
+  const root = mkdtempSync(join(tmpdir(), 'jaw-mcp-fuzz-'));
   return {
-    PATHS: {
-      root,
-      config: p.join(root, 'config.json'),
-      session: p.join(root, 'session.json'),
-      relay: p.join(root, 'relay.json'),
-      keystore: p.join(root, 'keystore.json'),
-      sessionConfig: p.join(root, 'session-config.json'),
-      x402Log: p.join(root, 'x402-log.jsonl'),
-      paymentLock: p.join(root, 'x402-payment.lock'),
-    },
+    root,
+    config: join(root, 'config.json'),
+    session: join(root, 'session.json'),
+    relay: join(root, 'relay.json'),
+    keystore: join(root, 'keystore.json'),
+    sessionConfig: join(root, 'session-config.json'),
+    x402Log: join(root, 'x402-log.jsonl'),
+    paymentLock: join(root, 'x402-payment.lock'),
   };
 });
+const ROOT = PATHS.root;
+
+vi.mock('../lib/paths.js', () => ({ PATHS }));
 
 const browserRequests: string[] = [];
 vi.mock('../lib/bridge-singleton.js', () => ({
@@ -85,7 +85,6 @@ const fetched: string[] = [];
 let client: Client;
 
 beforeAll(async () => {
-  fs.rmSync(ROOT, { recursive: true, force: true });
   process.env['JAW_API_KEY'] = 'fuzz-key';
   saveConfig({ x402: X402, paymasters: PAYMASTERS } as Parameters<typeof saveConfig>[0]);
   // A session key, so the payment path gets as far as fetching.
