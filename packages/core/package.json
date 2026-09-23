@@ -96,6 +96,9 @@
         }
       },
       "test": {
+        "dependsOn": [
+          "generate-sdk-info"
+        ],
         "cache": true,
         "inputs": [
           "default",

@@ -15,6 +15,11 @@
     ],
     "sharedGlobals": ["{workspaceRoot}/.github/workflows/ci.yml", "{workspaceRoot}/vitest.setup.localstorage.ts"]
   },
+  "targetDefaults": {
+    "test": {
+      "dependsOn": ["^generate-sdk-info"]
+    }
+  },
   "plugins": [
     {
       "plugin": "@nx/js/typescript",
