@@ -224,6 +224,39 @@ describe('EIP-1193 conformance', () => {
                 // matter what this one did.
                 await expect(provider.request({ method: 'eth_accounts' })).resolves.toEqual([]);
             });
+
+            // Declining is the common way out of a signing dialog, and the
+            // handshake left state behind: session keys in CrossPlatform, the
+            // persisted account in AppSpecific. It must not outlive the request.
+            it.each(casesOf('ephemeral'))('%s cleans up the throwaway signer when the user rejects', async (method) => {
+                (signer.request as Mock).mockRejectedValue(standardErrors.provider.userRejectedRequest());
+
+                await expect(newProvider(mode).request({ method })).rejects.toMatchObject({
+                    code: standardErrorCodes.provider.userRejectedRequest,
+                });
+                expect(signer.cleanup).toHaveBeenCalled();
+            });
+
+            it('cleans up the throwaway signer when the handshake is rejected', async () => {
+                (signer.handshake as Mock).mockRejectedValue(standardErrors.provider.userRejectedRequest());
+
+                await expect(newProvider(mode).request({ method: 'wallet_sendCalls' })).rejects.toMatchObject({
+                    code: standardErrorCodes.provider.userRejectedRequest,
+                });
+                expect(signer.request).not.toHaveBeenCalled();
+                expect(signer.cleanup).toHaveBeenCalled();
+            });
+
+            it('reports the rejection, not a failure of the cleanup after it', async () => {
+                (signer.request as Mock).mockRejectedValue(standardErrors.provider.userRejectedRequest());
+                (signer.cleanup as Mock).mockRejectedValue(new Error('storage unavailable'));
+                const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+
+                await expect(newProvider(mode).request({ method: 'wallet_sendCalls' })).rejects.toMatchObject({
+                    code: standardErrorCodes.provider.userRejectedRequest,
+                });
+                warn.mockRestore();
+            });
         });
 
         describe('connection lifecycle events', () => {

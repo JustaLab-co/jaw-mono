@@ -191,32 +191,24 @@ export class JAWProvider extends ProviderEventEmitter implements ProviderInterfa
                     case 'wallet_revokePermissions':
                     case 'wallet_addFunds': {
                         const ephemeralSigner = this.initSigner(signerType);
+                        // AppSpecific authenticates silently so the signing UI is the
+                        // only dialog. CrossPlatform exchanges Diffie-Hellman session keys.
+                        const handshake =
+                            signerType === 'appSpecific'
+                                ? { method: 'wallet_connect', params: [{ silent: true }] }
+                                : { method: 'handshake' };
 
-                        if (signerType === 'appSpecific') {
-                            // Silent handshake: authenticate/create account without showing connect dialog.
-                            // The signing UI will be shown immediately after.
-                            await ephemeralSigner.handshake({
-                                method: 'wallet_connect',
-                                params: [{ silent: true }],
-                            });
-                            const result = await ephemeralSigner.request(args);
+                        try {
+                            await ephemeralSigner.handshake(handshake);
+                            return (await ephemeralSigner.request(args)) as T;
+                        } finally {
+                            // Also on rejection: the handshake left session keys
+                            // (CrossPlatform) or a persisted account (AppSpecific) behind.
                             try {
                                 await ephemeralSigner.cleanup();
                             } catch (cleanupError) {
                                 console.warn('Ephemeral signer cleanup failed:', cleanupError);
                             }
-                            return result as T;
-                        } else {
-                            // CrossPlatform uses Diffie-Hellman key exchange
-                            await ephemeralSigner.handshake({ method: 'handshake' }); // exchange session keys
-                            const result = await ephemeralSigner.request(args); // send diffie-hellman encrypted request
-                            try {
-                                await ephemeralSigner.cleanup(); // clean up (rotate) the ephemeral session keys
-                            } catch (cleanupError) {
-                                // Log cleanup error but don't fail the request
-                                console.warn('Ephemeral signer cleanup failed:', cleanupError);
-                            }
-                            return result as T;
                         }
                     }
                     case 'wallet_getAssets': {
