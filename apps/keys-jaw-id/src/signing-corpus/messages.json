@@ -1,0 +1,219 @@
+[
+  {
+    "id": "siwe-same-origin",
+    "attack": "None. Baseline sign-in from the requesting origin.",
+    "message": "app.example wants you to sign in with your Ethereum account:\n0x9fD37D2cF1b32b3f7dBae480bbd44BE3De2A9e0F\n\nSign in to Example.\n\nURI: https://app.example\nVersion: 1\nChain ID: 8453\nNonce: abcdef123456\nIssued At: 2026-01-01T00:00:00.000Z",
+    "expect": {
+      "decision": "sign",
+      "shows": ["Sign in to Example."],
+      "siwe": {
+        "domain": "app.example",
+        "uri": "https://app.example",
+        "chainId": "8453",
+        "nonce": "abcdef123456"
+      }
+    }
+  },
+  {
+    "id": "siwe-cross-origin",
+    "attack": "The message names another domain than the site asking for it.",
+    "message": "evil.example wants you to sign in with your Ethereum account:\n0x9fD37D2cF1b32b3f7dBae480bbd44BE3De2A9e0F\n\nSign in to Example.\n\nURI: https://evil.example\nVersion: 1\nChain ID: 8453\nNonce: abcdef123456\nIssued At: 2026-01-01T00:00:00.000Z",
+    "expect": {
+      "decision": "ack",
+      "shows": ["This sign-in request is for \"evil.example\" but the requesting site is \"app.example\""],
+      "siwe": {
+        "domain": "evil.example",
+        "uri": "https://evil.example",
+        "chainId": "8453",
+        "nonce": "abcdef123456"
+      }
+    }
+  },
+  {
+    "id": "siwe-lookalike-prefix",
+    "attack": "A domain that starts with the real one.",
+    "message": "app.example.attacker.io wants you to sign in with your Ethereum account:\n0x9fD37D2cF1b32b3f7dBae480bbd44BE3De2A9e0F\n\nSign in to Example.\n\nURI: https://app.example.attacker.io\nVersion: 1\nChain ID: 8453\nNonce: abcdef123456\nIssued At: 2026-01-01T00:00:00.000Z",
+    "expect": {
+      "decision": "ack",
+      "shows": ["\"app.example.attacker.io\""]
+    }
+  },
+  {
+    "id": "siwe-homoglyph-domain",
+    "attack": "The domain spelled with a Cyrillic а (U+0430). The warning must name it in punycode.",
+    "message": "аpp.example wants you to sign in with your Ethereum account:\n0x9fD37D2cF1b32b3f7dBae480bbd44BE3De2A9e0F\n\nSign in to Example.\n\nURI: https://аpp.example\nVersion: 1\nChain ID: 8453\nNonce: abcdef123456\nIssued At: 2026-01-01T00:00:00.000Z",
+    "expect": {
+      "decision": "ack",
+      "shows": ["xn--pp-"]
+    }
+  },
+  {
+    "id": "siwe-uri-on-attacker-host",
+    "attack": "The right domain with a URI on attacker infrastructure.",
+    "message": "app.example wants you to sign in with your Ethereum account:\n0x9fD37D2cF1b32b3f7dBae480bbd44BE3De2A9e0F\n\nSign in to Example.\n\nURI: https://evil.example/login\nVersion: 1\nChain ID: 8453\nNonce: abcdef123456\nIssued At: 2026-01-01T00:00:00.000Z",
+    "expect": {
+      "decision": "sign",
+      "shows": ["https://evil.example/login"]
+    },
+    "gap": {
+      "note": "getSiweOriginWarning compares the domain first and only falls back to the URI, so a mismatched URI never warns.",
+      "expect": {
+        "decision": "ack"
+      }
+    }
+  },
+  {
+    "id": "siwe-statement-vs-resources",
+    "attack": "A reassuring statement next to resources that grant more than it says.",
+    "message": "app.example wants you to sign in with your Ethereum account:\n0x9fD37D2cF1b32b3f7dBae480bbd44BE3De2A9e0F\n\nRead-only access. Nothing will be moved.\n\nURI: https://app.example\nVersion: 1\nChain ID: 8453\nNonce: abcdef123456\nIssued At: 2026-01-01T00:00:00.000Z\nResources:\n- https://app.example/grants/transfer-all",
+    "expect": {
+      "decision": "sign",
+      "shows": ["Read-only access. Nothing will be moved.", "https://app.example/grants/transfer-all"]
+    }
+  },
+  {
+    "id": "siwe-expired",
+    "attack": "An expiration time already in the past.",
+    "message": "app.example wants you to sign in with your Ethereum account:\n0x9fD37D2cF1b32b3f7dBae480bbd44BE3De2A9e0F\n\nSign in to Example.\n\nURI: https://app.example\nVersion: 1\nChain ID: 8453\nNonce: abcdef123456\nIssued At: 2026-01-01T00:00:00.000Z\nExpiration Time: 2020-01-01T00:00:00.000Z",
+    "expect": {
+      "decision": "sign",
+      "shows": ["already expired"]
+    }
+  },
+  {
+    "id": "siwe-far-future-expiry",
+    "attack": "An expiration time 70 years out. Deliberately not flagged: replay protection is the nonce.",
+    "message": "app.example wants you to sign in with your Ethereum account:\n0x9fD37D2cF1b32b3f7dBae480bbd44BE3De2A9e0F\n\nSign in to Example.\n\nURI: https://app.example\nVersion: 1\nChain ID: 8453\nNonce: abcdef123456\nIssued At: 2026-01-01T00:00:00.000Z\nExpiration Time: 2096-01-01T00:00:00.000Z",
+    "expect": {
+      "decision": "sign",
+      "shows": ["2096-01-01T00:00:00.000Z"],
+      "hides": ["already expired"]
+    }
+  },
+  {
+    "id": "siwe-weak-nonce",
+    "attack": "A three-character nonce, trivially reused.",
+    "message": "app.example wants you to sign in with your Ethereum account:\n0x9fD37D2cF1b32b3f7dBae480bbd44BE3De2A9e0F\n\nSign in to Example.\n\nURI: https://app.example\nVersion: 1\nChain ID: 8453\nNonce: abc\nIssued At: 2026-01-01T00:00:00.000Z",
+    "expect": {
+      "decision": "sign",
+      "shows": ["Short nonce (3 chars)"]
+    }
+  },
+  {
+    "id": "siwe-other-account",
+    "attack": "The message names an account other than the one signing.",
+    "message": "app.example wants you to sign in with your Ethereum account:\n0x1111111111111111111111111111111111111111\n\nSign in to Example.\n\nURI: https://app.example\nVersion: 1\nChain ID: 8453\nNonce: abcdef123456\nIssued At: 2026-01-01T00:00:00.000Z",
+    "expect": {
+      "decision": "sign",
+      "shows": ["names a different account"]
+    }
+  },
+  {
+    "id": "siwe-chain-mismatch",
+    "attack": "Chain ID 1 while the wallet sits on Base. The chain shown must be the message's.",
+    "message": "app.example wants you to sign in with your Ethereum account:\n0x9fD37D2cF1b32b3f7dBae480bbd44BE3De2A9e0F\n\nSign in to Example.\n\nURI: https://app.example\nVersion: 1\nChain ID: 1\nNonce: abcdef123456\nIssued At: 2026-01-01T00:00:00.000Z",
+    "expect": {
+      "decision": "sign",
+      "shows": ["1 · Ethereum"]
+    }
+  },
+  {
+    "id": "siwe-shadow-field-block",
+    "attack": "A second field block hidden in the statement, so a naive parser picks the wrong one.",
+    "message": "evil.example wants you to sign in with your Ethereum account:\n0x9fD37D2cF1b32b3f7dBae480bbd44BE3De2A9e0F\n\nURI: https://app.example\nVersion: 1\nChain ID: 8453\nNonce: shadow123456\nIssued At: 2026-01-01T00:00:00.000Z\n\nURI: https://evil.example\nVersion: 1\nChain ID: 8453\nNonce: abcdef123456\nIssued At: 2026-01-01T00:00:00.000Z",
+    "expect": {
+      "decision": "ack",
+      "shows": ["We couldn't read the full sign-in request", "\"evil.example\""]
+    }
+  },
+  {
+    "id": "siwe-tab-after-colon",
+    "attack": "Detects as SIWE but does not parse, which used to switch off the origin check.",
+    "message": "evil.example wants you to sign in with your Ethereum account:\n0x9fD37D2cF1b32b3f7dBae480bbd44BE3De2A9e0F\n\nSign in to Example.\n\nURI:\thttps://evil.example\nVersion: 1\nChain ID: 8453\nNonce: abcdef123456\nIssued At: 2026-01-01T00:00:00.000Z",
+    "expect": {
+      "decision": "ack",
+      "shows": ["\"evil.example\""]
+    }
+  },
+  {
+    "id": "siwe-hex-encoded",
+    "attack": "The baseline sign-in hex-encoded, sent straight to keys without the SDK decoding it first.",
+    "message": "0x6170702e6578616d706c652077616e747320796f7520746f207369676e20696e207769746820796f757220457468657265756d206163636f756e743a0a3078396644333744326346316233326233663764426165343830626264343442453344653241396530460a0a5369676e20696e20746f204578616d706c652e0a0a5552493a2068747470733a2f2f6170702e6578616d706c650a56657273696f6e3a20310a436861696e2049443a20383435330a4e6f6e63653a206162636465663132333435360a4973737565642041743a20323032362d30312d30315430303a30303a30302e3030305a",
+    "expect": {
+      "decision": "sign",
+      "integrity": false,
+      "siwe": {
+        "domain": "app.example",
+        "uri": "https://app.example",
+        "chainId": "8453",
+        "nonce": "abcdef123456"
+      }
+    },
+    "gap": {
+      "note": "The screen shows the decoded message; account.signMessage signs the \"0x...\" string as UTF-8 text.",
+      "expect": {
+        "integrity": true,
+        "signedText": "app.example wants you to sign in with your Ethereum account:\n0x9fD37D2cF1b32b3f7dBae480bbd44BE3De2A9e0F\n\nSign in to Example.\n\nURI: https://app.example\nVersion: 1\nChain ID: 8453\nNonce: abcdef123456\nIssued At: 2026-01-01T00:00:00.000Z"
+      }
+    }
+  },
+  {
+    "id": "personal-hello-anchor",
+    "attack": "None. Baseline message whose challenge was computed outside TypeScript with cast (see README).",
+    "message": "hello",
+    "expect": {
+      "decision": "sign",
+      "shows": ["hello"],
+      "challenge": "0xe00999f5e65e3e331330febc5a777acef248a4acdef93d50d2cc663c64b92053"
+    }
+  },
+  {
+    "id": "personal-wallet-sign-envelope",
+    "attack": "None. The same message through the ERC-7871 wallet_sign envelope.",
+    "method": "wallet_sign",
+    "params": [
+      {
+        "request": {
+          "type": "0x45",
+          "data": {
+            "message": "hello"
+          }
+        },
+        "address": "0x9fD37D2cF1b32b3f7dBae480bbd44BE3De2A9e0F"
+      }
+    ],
+    "expect": {
+      "decision": "sign",
+      "shows": ["hello"],
+      "challenge": "0xe00999f5e65e3e331330febc5a777acef248a4acdef93d50d2cc663c64b92053"
+    }
+  },
+  {
+    "id": "personal-hex-literal",
+    "attack": "A hex string that is not SIWE. Shown as hex and signed as the same text, so the two agree.",
+    "message": "0x68656c6c6f",
+    "expect": {
+      "decision": "sign",
+      "shows": ["0x68656c6c6f"]
+    }
+  },
+  {
+    "id": "personal-missing-params",
+    "attack": "Malformed: personal_sign with no params.",
+    "method": "personal_sign",
+    "params": [],
+    "expect": {
+      "decision": "blocked",
+      "shows": ["No message provided"]
+    }
+  },
+  {
+    "id": "personal-empty-message",
+    "attack": "Malformed: an empty message.",
+    "message": "",
+    "expect": {
+      "decision": "blocked",
+      "shows": ["No message provided"]
+    }
+  }
+]
