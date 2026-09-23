@@ -229,6 +229,23 @@ describe('what the relay can forge', () => {
   });
 });
 
+describe('malformed frames', () => {
+  it('a key exchange carrying a key that does not import is dropped, and the session keeps working', async () => {
+    const { relay, bridge } = await connected(async (socket, request) => {
+      socket.send(
+        await seal(relay.browserSecret, { type: 'rpc_response', id: request.id, success: true, data: '0xstill' })
+      );
+    });
+    for (const publicKey of ['zz', 42, null]) {
+      relay.push(JSON.stringify({ type: 'browser_connected' }));
+      relay.push(JSON.stringify({ type: 'key_exchange', publicKey }));
+    }
+    await pause(100);
+
+    await expect(bridge.request('personal_sign', ['0x1'])).resolves.toBe('0xstill');
+  });
+});
+
 describe('timeouts and dropped connections', () => {
   it('a request that times out closes the bridge, and a late answer resolves nothing', async () => {
     const { relay, bridge } = await connected(async (socket, request) => {
