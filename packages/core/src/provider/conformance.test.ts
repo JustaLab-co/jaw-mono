@@ -26,6 +26,7 @@ import { SILENT_METHODS, INTERACTIVE_METHODS } from '../method-policy.js';
 import { standardErrorCodes, standardErrors, errorValues } from '../errors/index.js';
 import { createSigner, loadSignerType, storeSignerType, clearSignerType, type Signer } from '../signer/index.js';
 import { store } from '../store/index.js';
+import { Communicator } from '../communicator/index.js';
 import { PasskeyManager } from '../passkey-manager/index.js';
 import type { RequestArguments } from './interface.js';
 import { handleGetCallsStatusRequest } from '../rpc/wallet_getCallStatus.js';
@@ -380,11 +381,13 @@ describe('EIP-1193 conformance', () => {
 
                     await expect(provider.request({ method: 'eth_accounts' })).resolves.toEqual([]);
                     await expect(provider.request({ method: 'eth_accounts' })).resolves.toEqual([]);
+                    expect(vi.mocked(Communicator).prototype.disconnect).not.toHaveBeenCalled();
                 });
 
-                // No accounts means not connected, so the refusal is "connect
-                // first" and the passkey stays logged in for the reconnect.
-                it('refuses personal_sign without tearing anything down', async () => {
+                // No accounts means not connected. The dapp is told the session
+                // is gone, but the passkey stays logged in for the reconnect and
+                // the transport stays up.
+                it('refuses personal_sign and reports the session gone without logging out', async () => {
                     const provider = expiredVisitor();
                     const events = recordEvents(provider);
                     new PasskeyManager().storeAuthState(ACCOUNT, 'credential-id');
@@ -393,9 +396,23 @@ describe('EIP-1193 conformance', () => {
                     await expect(provider.request({ method: 'personal_sign' })).rejects.toMatchObject({
                         code: standardErrorCodes.provider.unauthorized,
                     });
-                    expect(events).toEqual([]);
+                    expect(events).toEqual(['accountsChanged', 'disconnect']);
                     expect(new PasskeyManager().fetchActiveCredentialId()).toBe('credential-id');
                     expect(clearSignerType).toHaveBeenCalled();
+                    expect(vi.mocked(Communicator).prototype.disconnect).not.toHaveBeenCalled();
+                });
+
+                // AppSpecificSigner stores whatever list the UI returned, so an
+                // empty one is a real state and must read as not connected.
+                it('treats a stored empty account list as not connected', async () => {
+                    const provider = connectedProvider(mode, signerType);
+                    store.account.set({ accounts: [] });
+                    (signer.request as Mock).mockResolvedValue('from the restored signer');
+
+                    await expect(provider.request({ method: 'personal_sign' })).rejects.toMatchObject({
+                        code: standardErrorCodes.provider.unauthorized,
+                    });
+                    expect(signer.request).not.toHaveBeenCalled();
                 });
 
                 it('still signs through a throwaway signer', async () => {

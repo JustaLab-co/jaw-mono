@@ -143,15 +143,22 @@ export class JAWProvider extends ProviderEventEmitter implements ProviderInterfa
 
         try {
             checkErrorForInvalidRequestArgs(args);
-            // No accounts means not connected. A signer restored from an earlier
-            // visit whose session has since expired is dropped here, quietly: no
-            // events, no passkey logout, no transport teardown. The request is
-            // then answered as it would be for a first-time visitor.
+            // No accounts means not connected. The signer's own expiry checks
+            // clear the stored account, so a signer found without one belongs
+            // to a session that has ended: drop it and tell the dapp, which may
+            // still be showing the account. The passkey stays logged in and the
+            // transport stays up, so reconnecting costs no extra ceremony. The
+            // request is then answered as it would be for a first-time visitor.
             if (this.signer && !store.account.get().accounts?.length) {
                 this.signer = null;
                 clearSignerType();
+                this.emit('accountsChanged', []);
+                this.emit('disconnect', standardErrors.provider.disconnected('Session expired'));
             }
-            if (!this.signer) {
+            // Held locally: a parallel request can drop this.signer while this
+            // one awaits.
+            const signer = this.signer;
+            if (!signer) {
                 switch (args.method) {
                     case 'eth_requestAccounts': {
                         const signer = this.initSigner(signerType);
@@ -313,22 +320,21 @@ export class JAWProvider extends ProviderEventEmitter implements ProviderInterfa
                 isSafari() &&
                 (await this.communicator.willRouteToIframe(args.method))
             ) {
-                await this.signer.handshake(args);
+                await signer.handshake(args);
             }
 
             // Handle requests when signer exists
-            const result = await this.signer.request(args);
+            const result = await signer.request(args);
 
             return result as T;
         } catch (error) {
             const { code } = error as { code?: number };
             // 4100 means three different things here. From a signer holding
             // accounts it means the session died, and tearing it down is right.
-            // From the no-session branch above, which is also where an expired
-            // session lands, it just means "connect first", and there is nothing
-            // to tear down: disconnecting would emit accountsChanged and
-            // disconnect for a session the dapp already sees as gone, log the
-            // passkey out, and drop the iframe.
+            // From the no-session branch above it just means "connect first":
+            // either there was never a session, or the guard above already
+            // reported the expired one. Disconnecting again would log the
+            // passkey out and drop the iframe for nothing.
             //
             // The third is the backend turning the caller down, over an origin it
             // does not serve or a key it will not take. That says nothing about
