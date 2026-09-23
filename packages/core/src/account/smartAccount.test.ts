@@ -7,6 +7,9 @@ vi.mock('viem/actions', () => ({
     multicall: vi.fn(),
     getGasPrice: vi.fn(),
     call: vi.fn(),
+    getBlockNumber: vi.fn(),
+    getLogs: vi.fn(),
+    getTransactionReceipt: vi.fn(),
 }));
 
 vi.mock('./toJustanAccount.js', () => ({
@@ -76,13 +79,14 @@ vi.mock('viem', async () => {
     };
 });
 
-vi.mock('viem/account-abstraction', () => ({
+vi.mock('viem/account-abstraction', async (importOriginal) => ({
+    ...(await importOriginal<typeof import('viem/account-abstraction')>()),
     createBundlerClient: vi.fn(),
     createPaymasterClient: vi.fn(),
     toWebAuthnAccount: vi.fn(),
 }));
 
-import { getCode, multicall, readContract } from 'viem/actions';
+import { getBlockNumber, getCode, getLogs, getTransactionReceipt, multicall, readContract } from 'viem/actions';
 import { http } from 'viem';
 import { createBundlerClient, createPaymasterClient } from 'viem/account-abstraction';
 import { toJustanAccount } from './toJustanAccount.js';
@@ -399,7 +403,8 @@ describe('sendTransaction — receipt reporting', () => {
         vi.mocked(createBundlerClient).mockReturnValue({
             sendUserOperation: vi.fn().mockResolvedValue('0xuserophash'),
             waitForUserOperationReceipt: vi.fn().mockResolvedValue({
-                receipt: { status: '0x1', transactionHash: TX_HASH },
+                success: true,
+                receipt: { status: 'success', transactionHash: TX_HASH },
             }),
         } as never);
     });
@@ -416,6 +421,23 @@ describe('sendTransaction — receipt reporting', () => {
             success: true,
             apiKey,
         });
+    });
+
+    // A permission grant goes through here and waits for the receipt. Etherspot
+    // fails that lookup for EntryPoint v0.8, which failed a grant that had landed.
+    it('returns the transaction hash from the chain when the bundler has no receipt', async () => {
+        vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+        vi.mocked(createBundlerClient).mockReturnValue({
+            client: {},
+            sendUserOperation: vi.fn().mockResolvedValue('0xuserophash'),
+            waitForUserOperationReceipt: vi.fn().mockRejectedValue(new Error('Missing/invalid userOpHash')),
+        } as never);
+        vi.mocked(getBlockNumber).mockResolvedValue(5_000n);
+        vi.mocked(getLogs).mockResolvedValue([{ transactionHash: TX_HASH, args: { success: true } }] as never);
+        vi.mocked(getTransactionReceipt).mockResolvedValue({ status: 'success', transactionHash: TX_HASH } as never);
+
+        await expect(sendTransaction({} as never, CALLS, CHAIN)).resolves.toBe(TX_HASH);
+        expect(vi.mocked(notifyReceiptReceived).mock.calls[0][0]).toMatchObject({ success: true });
     });
 });
 

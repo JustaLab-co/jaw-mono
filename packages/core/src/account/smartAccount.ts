@@ -25,6 +25,7 @@ import {
     type ToJustanAccountReturnType,
 } from './toJustanAccount.js';
 import { isDelegatedToImplementation } from './delegation.js';
+import { waitForOperationReceipt } from './userOperationReceipt.js';
 import { createPaymasterFunctions } from './paymaster.js';
 import {
     BundlerClient,
@@ -375,28 +376,16 @@ export async function sendTransaction(
         ...(authorization ? { authorization } : {}),
     });
 
-    // Wait for the transaction receipt and get the actual transaction hash
-    const receipt = await bundlerClient.waitForUserOperationReceipt({
-        hash: userOpHash,
-    });
-
-    // Extract the actual receipt - same logic as wallet_sendCalls.ts
-    const actualReceipt = (receipt as any).receipt || receipt;
-    const receiptStatus = actualReceipt.status;
-
-    // Determine if transaction succeeded:
-    // - status === '0x1' or 1 means success
-    // - If status is undefined but transactionHash exists, assume success (included on-chain)
-    const isSuccess =
-        receiptStatus === '0x1' ||
-        receiptStatus === 1 ||
-        (receiptStatus === undefined && actualReceipt.transactionHash !== undefined);
+    const receipt = await waitForOperationReceipt(bundlerClient, userOpHash);
+    if (!receipt) {
+        throw new Error(`User operation ${userOpHash} was sent but is not on chain yet`);
+    }
 
     // Fire-and-forget notification to proxy, keyless callers included.
     notifyReceiptReceived({
         userOpHash,
-        transactionHash: actualReceipt.transactionHash,
-        success: isSuccess,
+        transactionHash: receipt.receipt.transactionHash,
+        success: receipt.success,
         apiKey,
     });
 

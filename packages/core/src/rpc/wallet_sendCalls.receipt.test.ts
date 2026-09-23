@@ -11,8 +11,14 @@ const chain = {
 };
 
 vi.mock('../store/chain-clients/utils.js', () => ({
-    getBundlerClient: vi.fn(() => ({ waitForUserOperationReceipt })),
-    getClient: vi.fn(() => chain),
+    getBundlerClient: vi.fn(() => ({ waitForUserOperationReceipt, client: {} })),
+}));
+
+vi.mock('viem/actions', async (importOriginal) => ({
+    ...(await importOriginal<typeof import('viem/actions')>()),
+    getBlockNumber: () => chain.getBlockNumber(),
+    getLogs: (_client: unknown, args: unknown) => chain.getLogs(args),
+    getTransactionReceipt: (_client: unknown, args: unknown) => chain.getTransactionReceipt(args),
 }));
 
 vi.mock('../analytics/index.js', () => ({
@@ -132,7 +138,7 @@ describe('waitForReceiptInBackground when the bundler returns no receipt', () =>
         await waitForReceiptInBackground(USER_OP_HASH, 1);
 
         expect(chain.getLogs).toHaveBeenCalledWith(
-            expect.objectContaining({ args: { userOpHash: USER_OP_HASH }, fromBlock: 4_000n })
+            expect.objectContaining({ args: { userOpHash: USER_OP_HASH }, fromBlock: 4_900n })
         );
         expect(getCallStatus(USER_OP_HASH)).toMatchObject({ status: 'completed' });
         expect(notifyMock.mock.calls[0][0]).toMatchObject({ transactionHash: TX_HASH, success: true });

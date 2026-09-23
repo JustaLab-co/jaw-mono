@@ -1,7 +1,7 @@
 import { store } from '../store/index.js';
-import { getBundlerClient, getClient } from '../store/chain-clients/utils.js';
-import { entryPoint08Abi, entryPoint08Address, type UserOperationReceipt } from 'viem/account-abstraction';
-import { getAbiItem, numberToHex, type Hex } from 'viem';
+import { getBundlerClient } from '../store/chain-clients/utils.js';
+import { numberToHex, type Hex } from 'viem';
+import { waitForOperationReceipt, type OperationReceipt } from '../account/userOperationReceipt.js';
 import { notifyReceiptReceived } from '../analytics/index.js';
 
 /**
@@ -229,18 +229,6 @@ export function waitForReceiptInBackground(userOpHash: string, chainId: number, 
     return waiter;
 }
 
-type OperationReceipt = Pick<UserOperationReceipt, 'success' | 'receipt'>;
-
-// How long the chain is read once the bundler has failed to answer: 20 reads,
-// 3 seconds apart.
-const CHAIN_LOOKUP_ATTEMPTS = 20;
-const CHAIN_LOOKUP_INTERVAL_MS = 3_000;
-// Covers the time between sending and the bundler's refusal, and stays under the
-// 5000-block range RPC providers cap eth_getLogs at.
-const CHAIN_LOOKUP_BLOCKS = 1_000n;
-
-const userOperationEvent = getAbiItem({ abi: entryPoint08Abi, name: 'UserOperationEvent' });
-
 async function pollForReceipt(userOpHash: string, chainId: number, apiKey?: string): Promise<void> {
     const bundlerClient = getBundlerClient(chainId);
     if (!bundlerClient) {
@@ -251,23 +239,12 @@ async function pollForReceipt(userOpHash: string, chainId: number, apiKey?: stri
     let receipt: OperationReceipt | undefined;
     try {
         // Status remains 'pending' while waiting
-        receipt = await bundlerClient.waitForUserOperationReceipt({ hash: userOpHash as Hex });
-    } catch (error) {
-        if (error instanceof Error && error.name === 'WaitForUserOperationReceiptTimeoutError') {
-            // Timeout doesn't mean failure - operation may still be pending on-chain
-            // Keep status as 'pending' so user can check again later via wallet_getCallsStatus
-            console.warn(`Receipt polling timed out for ${userOpHash}, keeping status as pending`);
-            return;
-        }
-        // Some bundlers fail the lookup for an operation they did bundle: Etherspot
-        // answers "Missing/invalid userOpHash" for EntryPoint v0.8. The EntryPoint's
-        // own event carries the same result, so the chain answers instead.
-        console.warn(`The bundler returned no receipt for ${userOpHash}, reading it from the chain:`, error);
-        try {
-            receipt = await findReceiptOnChain(userOpHash as Hex, chainId);
-        } catch (lookupError) {
-            console.warn(`Reading the receipt for ${userOpHash} from the chain failed:`, lookupError);
-        }
+        receipt = await waitForOperationReceipt(bundlerClient, userOpHash as Hex);
+    } catch {
+        // Timeout doesn't mean failure - operation may still be pending on-chain
+        // Keep status as 'pending' so user can check again later via wallet_getCallsStatus
+        console.warn(`Receipt polling timed out for ${userOpHash}, keeping status as pending`);
+        return;
     }
 
     // Unanswered is not failed: the operation was accepted and may still land.
@@ -302,28 +279,4 @@ async function pollForReceipt(userOpHash: string, chainId: number, apiKey?: stri
     store.callStatuses.update(userOpHash, {
         receipts: [receipt],
     });
-}
-
-async function findReceiptOnChain(userOpHash: Hex, chainId: number): Promise<OperationReceipt | undefined> {
-    const client = getClient(chainId);
-    if (!client) return undefined;
-
-    const fromBlock = (await client.getBlockNumber()) - CHAIN_LOOKUP_BLOCKS;
-    for (let attempt = 1; attempt <= CHAIN_LOOKUP_ATTEMPTS; attempt++) {
-        const [event] = await client.getLogs({
-            address: entryPoint08Address,
-            event: userOperationEvent,
-            args: { userOpHash },
-            fromBlock,
-            strict: true,
-        });
-        if (event) {
-            const receipt = await client.getTransactionReceipt({ hash: event.transactionHash });
-            return { success: event.args.success, receipt };
-        }
-        if (attempt < CHAIN_LOOKUP_ATTEMPTS) {
-            await new Promise((resolve) => setTimeout(resolve, CHAIN_LOOKUP_INTERVAL_MS));
-        }
-    }
-    return undefined;
 }
