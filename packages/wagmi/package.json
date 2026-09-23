@@ -32,6 +32,15 @@
     "cjs-error.cjs",
     "!**/*.tsbuildinfo"
   ],
+  "nx": {
+    "targets": {
+      "test": {
+        "dependsOn": [
+          "^generate-sdk-info"
+        ]
+      }
+    }
+  },
   "dependencies": {
     "@jaw.id/core": "1.5.0",
     "@wagmi/core": "^3.0.0",
