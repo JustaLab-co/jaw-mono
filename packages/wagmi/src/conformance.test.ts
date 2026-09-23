@@ -15,7 +15,7 @@
  * the code: EIP-1193 events and error codes (4001, 4200), EIP-3326 for an
  * unknown chain (4902), and wagmi's connection state.
  */
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { Mode, type UIRequest, type UIResponse } from '@jaw.id/core';
 import { getAddress, UserRejectedRequestError } from 'viem';
 import { base, mainnet, sepolia } from 'viem/chains';
@@ -107,10 +107,6 @@ beforeEach(() => {
   user.answer = signInAs(ALICE);
 });
 
-afterEach(() => {
-  vi.useRealTimers();
-});
-
 describe('wagmi conformance against a real core', () => {
   describe('connect', () => {
     it('puts wagmi and core on the same account and chain', async () => {
@@ -168,11 +164,15 @@ describe('wagmi conformance against a real core', () => {
 
     async function reloadExpired() {
       vi.useFakeTimers({ toFake: ['Date'] });
-      await connected({ authTTL: 60 });
-      vi.setSystemTime(Date.now() + 61_000);
-      const reloaded = await openPage({ authTTL: 60 });
-      await reloaded.wagmi.reconnect(reloaded.config);
-      return reloaded;
+      try {
+        await connected({ authTTL: 60 });
+        vi.setSystemTime(Date.now() + 61_000);
+        const reloaded = await openPage({ authTTL: 60 });
+        await reloaded.wagmi.reconnect(reloaded.config);
+        return reloaded;
+      } finally {
+        vi.useRealTimers();
+      }
     }
 
     it('reloads an expired session as disconnected, still without asking', async () => {

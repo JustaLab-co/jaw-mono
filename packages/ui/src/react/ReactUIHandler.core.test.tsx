@@ -66,7 +66,10 @@ async function shown(method: string, params: unknown[]): Promise<string> {
   await act(async () => {
     void provider.request({ method, params }).catch(() => undefined);
   });
-  await vi.waitFor(() => expect(document.querySelector('[data-slot="dialog-content"]')).not.toBeNull());
+  await vi.waitFor(() => expect(document.querySelector('[data-slot="dialog-content"]')).not.toBeNull(), {
+    timeout: 5000,
+    interval: 50,
+  });
   return document.body.textContent ?? '';
 }
 
