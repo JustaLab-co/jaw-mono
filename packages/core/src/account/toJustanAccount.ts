@@ -20,9 +20,6 @@ import {
     isAddressEqual,
     type Client,
     hashTypedData,
-    hashDomain,
-    hashStruct,
-    getTypesForEIP712Domain,
 } from 'viem';
 import { readContract, getChainId, getTransactionCount } from 'viem/actions';
 import { hashAuthorization } from 'viem/utils';
@@ -486,10 +483,11 @@ export function wrapSignature(parameters: { ownerIndex?: number | undefined; sig
  * that is implicit mode, which every Solady version reads. Otherwise it needs
  * explicit mode: the sorted types, then the primary type's name. The app domain
  * is hashed with the declared `EIP712Domain`, if any, as the signed hash is.
+ * Every piece comes from ox, so the type string and the hashes cannot disagree.
  */
 function wrapTypedDataSignature(parameters: TypedDataDefinition<Record<string, unknown>, string> & { signature: Hex }) {
     const { domain = {}, message, primaryType, signature } = parameters;
-    const types = { EIP712Domain: getTypesForEIP712Domain({ domain }), ...parameters.types } as TypedData;
+    const types = parameters.types as TypedData;
 
     const contentsType = TypedDataOx.encodeType({ primaryType, types });
     const sorted = contentsType
@@ -502,8 +500,8 @@ function wrapTypedDataSignature(parameters: TypedDataDefinition<Record<string, u
         ['bytes', 'bytes32', 'bytes32', 'bytes', 'uint16'],
         [
             signature,
-            hashDomain({ domain, types }),
-            hashStruct({ data: message, primaryType, types }),
+            TypedDataOx.hashDomain({ domain, types }),
+            TypedDataOx.hashStruct({ data: message, primaryType, types }),
             contentsDescription,
             size(contentsDescription),
         ]
