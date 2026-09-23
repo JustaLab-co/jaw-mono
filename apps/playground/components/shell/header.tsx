@@ -40,32 +40,42 @@ export function ShellHeader({
   const withQuery = (href: string) => (query ? `${href}?${query}` : href);
 
   return (
-    <header className="border-shell-line bg-shell-panel flex min-h-[62px] flex-none flex-wrap items-center gap-x-[22px] gap-y-3.5 border-b px-5 py-[11px]">
+    <header className="border-shell-line bg-shell-panel flex min-h-[62px] flex-none flex-wrap items-center gap-x-[22px] gap-y-3.5 border-b px-5 py-[11px] max-md:gap-x-3 max-md:px-4">
       {/* Brand → entry */}
-      <div className="flex flex-none items-center gap-3">
+      <div className="flex flex-none items-center gap-3 max-sm:gap-2">
         <Link
           href="/"
           title="Back to overview"
           aria-label="Back to overview"
-          className="hover:bg-shell-raise-2 -mx-[7px] -my-[5px] flex items-center gap-3 rounded-[10px] px-[7px] py-[5px] transition-colors"
+          className="hover:bg-shell-raise-2 -mx-[7px] -my-[5px] flex items-center gap-3 rounded-[10px] px-[7px] py-[5px] transition-colors max-sm:gap-2"
         >
-          <Image src="/jaw-logo.png" alt="" width={24} height={26} className="block dark:brightness-0 dark:invert" />
-          <span className="text-shell-ink text-[21px] font-semibold tracking-[-0.03em]">
+          <Image
+            src="/jaw-logo.png"
+            alt=""
+            width={24}
+            height={26}
+            className="block max-sm:h-auto max-sm:w-5 dark:brightness-0 dark:invert"
+          />
+          <span className="text-shell-ink text-[21px] font-semibold tracking-[-0.03em] max-sm:text-[17px]">
             JAW<span className="text-shell-ink-3">.id</span>
           </span>
         </Link>
         <span className="bg-shell-line-2 h-[22px] w-px" />
-        <span className="text-shell-ink text-[21px] font-medium tracking-[-0.03em]">Playground</span>
+        <span className="text-shell-ink text-[21px] font-medium tracking-[-0.03em] max-sm:text-[17px]">Playground</span>
       </div>
 
-      <div className="flex-1" />
+      <div className="flex-1 max-md:hidden" />
 
       {/* SDK switch */}
-      <div className="relative flex flex-none items-center gap-[9px]">
-        <span className="text-shell-ink-3 text-[13px]">SDK</span>
+      <div className="relative flex flex-none items-center gap-[9px] max-md:order-2 max-md:basis-full">
+        <span className="text-shell-ink-3 text-[13px] max-sm:hidden">SDK</span>
         <SegGroup label="SDK">
           {SDKS.map((s) => (
-            <Link key={s.key} href={withQuery(s.href)} className={segClass(sdk === s.key, 'font-mono text-[11.5px]')}>
+            <Link
+              key={s.key}
+              href={withQuery(s.href)}
+              className={segClass(sdk === s.key, 'font-mono text-[11.5px] max-sm:px-2.5')}
+            >
               {s.label}
             </Link>
           ))}
@@ -89,41 +99,37 @@ export function ShellHeader({
         </InfoPopover>
       </div>
 
-      <div className="flex-1" />
+      <div className="flex-1 max-md:hidden" />
 
-      {/* Connection status + actions */}
-      <div className="flex flex-none flex-wrap items-center gap-[11px]">
-        {isConnected && (ensName || address) && (
-          <CopyChip
-            text={ensName ?? address ?? ''}
-            display={ensName ?? (address ? `${address.slice(0, 6)}…${address.slice(-4)}` : '')}
-          />
-        )}
-        {isConnected && balance && (
-          <span className="text-shell-ink-3 whitespace-nowrap font-mono text-xs">{balance}</span>
-        )}
-        {isConnected && chainId !== undefined && <CopyChip text={String(chainId)} />}
-        <span className="inline-flex items-center gap-2">
+      {/* Account chips — on mobile they drop to the row below the SDK switch. */}
+      {isConnected && (
+        <div className="flex flex-none flex-wrap items-center gap-[11px] max-md:order-3">
+          {(ensName || address) && (
+            <CopyChip
+              text={ensName ?? address ?? ''}
+              display={ensName ?? (address ? `${address.slice(0, 6)}…${address.slice(-4)}` : '')}
+            />
+          )}
+          {balance && <span className="text-shell-ink-3 whitespace-nowrap font-mono text-xs">{balance}</span>}
+          {chainId !== undefined && <CopyChip text={String(chainId)} />}
+        </div>
+      )}
+
+      {/* Connect + theme — on mobile they share the brand row. */}
+      <div className="flex flex-none items-center gap-2.5 max-md:order-1 max-md:ml-auto max-md:gap-2">
+        <button
+          type="button"
+          onClick={onToggleConnect}
+          className={`text-shell-ink inline-flex flex-none cursor-pointer items-center gap-2 whitespace-nowrap rounded-full border bg-transparent px-3.5 py-[7px] text-[12.5px] font-medium tracking-[-0.005em] transition-colors ${
+            isConnected ? 'border-shell-line-2' : 'border-shell-ink-4 hover:border-shell-ink-3'
+          }`}
+        >
           <span
+            aria-hidden="true"
             className={`h-[7px] w-[7px] flex-none rounded-full ${
               isConnected ? 'animate-pulse-dot bg-shell-ok' : 'bg-shell-err'
             }`}
           />
-          <span
-            className={`whitespace-nowrap text-[13px] font-medium tracking-[-0.01em] ${
-              isConnected ? 'text-shell-ok-ink' : 'text-shell-ink-3'
-            }`}
-          >
-            {isConnected ? 'Connected' : 'Disconnected'}
-          </span>
-        </span>
-        <button
-          type="button"
-          onClick={onToggleConnect}
-          className={`text-shell-ink flex-none cursor-pointer rounded-full border bg-transparent px-3.5 py-[7px] text-[12.5px] font-medium tracking-[-0.005em] transition-colors ${
-            isConnected ? 'border-shell-line-2' : 'border-shell-ink-4 hover:border-shell-ink-3'
-          }`}
-        >
           {isConnected ? 'Disconnect' : 'Connect'}
         </button>
         <ThemeToggle />

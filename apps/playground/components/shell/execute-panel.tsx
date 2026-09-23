@@ -169,7 +169,7 @@ export function ExecutePanel({
     <div className="border-shell-line bg-shell-raise rounded-2xl border">
       <div className="border-shell-line bg-shell-raise flex flex-wrap items-center justify-between gap-4 rounded-t-2xl border-b px-6 py-4">
         <span className="text-shell-ink-3 text-[13px]">{dispatchNote}</span>
-        <div className="flex flex-col items-end gap-1.5">
+        <div className="flex flex-col items-end gap-1.5 max-md:items-start">
           <button
             type="button"
             onClick={handleRun}
