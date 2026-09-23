@@ -35,6 +35,8 @@
 /apps/keys-jaw-id/src/lib/popup-communicator.ts       @Ghadi8 @mariano-aguero
 /apps/keys-jaw-id/src/lib/crypto-handler.ts           @Ghadi8 @mariano-aguero
 /apps/keys-jaw-id/src/middleware.ts                   @Ghadi8 @mariano-aguero
+/apps/keys-jaw-id/src/app/cli-bridge/page.tsx         @Ghadi8 @mariano-aguero
+/apps/keys-jaw-id/src/lib/handshake-route.ts          @Ghadi8 @mariano-aguero
 
 # CLI session keys
 /packages/cli/src/lib/rpc-classifier.ts     @Ghadi8 @mariano-aguero
