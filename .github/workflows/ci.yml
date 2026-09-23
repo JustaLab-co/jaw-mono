@@ -16,9 +16,10 @@ jobs:
         with:
           fetch-depth: 0
 
+      # check.mjs in published-e2e uses module.registerHooks (stable since 22.13).
       - uses: actions/setup-node@v4
         with:
-          node-version: 22
+          node-version: '>=22.13'
 
       - uses: oven-sh/setup-bun@v2
         with:

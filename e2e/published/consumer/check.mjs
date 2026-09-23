@@ -1,3 +1,6 @@
+// Needs Node >= 22.13 for module.registerHooks (stable). CI pins that version;
+// the type check uses the workspace's tsc because the consumer installs no
+// devDependencies, so its TS version follows the monorepo.
 import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
 import { registerHooks, createRequire } from 'node:module';

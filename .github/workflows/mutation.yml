@@ -11,6 +11,10 @@ on:
     - cron: '0 6 1 * *'
   workflow_dispatch:
 
+concurrency:
+  group: mutation-${{ github.ref }}
+  cancel-in-progress: true
+
 permissions:
   contents: read
 
@@ -31,7 +35,7 @@ jobs:
 
       - uses: actions/setup-node@v4
         with:
-          node-version: 22
+          node-version: '>=22.13'
 
       - uses: oven-sh/setup-bun@v2
         with:
