@@ -59,7 +59,8 @@
       "note": "getSiweOriginWarning compares the domain first and only falls back to the URI, so a mismatched URI never warns.",
       "expect": {
         "decision": "ack"
-      }
+      },
+      "fails": "decision: expected 'sign' to be 'ack'"
     }
   },
   {
@@ -77,7 +78,7 @@
     "message": "app.example wants you to sign in with your Ethereum account:\n0x9fD37D2cF1b32b3f7dBae480bbd44BE3De2A9e0F\n\nSign in to Example.\n\nURI: https://app.example\nVersion: 1\nChain ID: 8453\nNonce: abcdef123456\nIssued At: 2026-01-01T00:00:00.000Z\nExpiration Time: 2020-01-01T00:00:00.000Z",
     "expect": {
       "decision": "sign",
-      "shows": ["already expired"]
+      "hovers": ["already expired"]
     }
   },
   {
@@ -96,7 +97,7 @@
     "message": "app.example wants you to sign in with your Ethereum account:\n0x9fD37D2cF1b32b3f7dBae480bbd44BE3De2A9e0F\n\nSign in to Example.\n\nURI: https://app.example\nVersion: 1\nChain ID: 8453\nNonce: abc\nIssued At: 2026-01-01T00:00:00.000Z",
     "expect": {
       "decision": "sign",
-      "shows": ["Short nonce (3 chars)"]
+      "hovers": ["Short nonce (3 chars)"]
     }
   },
   {
@@ -105,7 +106,7 @@
     "message": "app.example wants you to sign in with your Ethereum account:\n0x1111111111111111111111111111111111111111\n\nSign in to Example.\n\nURI: https://app.example\nVersion: 1\nChain ID: 8453\nNonce: abcdef123456\nIssued At: 2026-01-01T00:00:00.000Z",
     "expect": {
       "decision": "sign",
-      "shows": ["names a different account"]
+      "hovers": ["names a different account"]
     }
   },
   {
@@ -154,7 +155,8 @@
       "expect": {
         "integrity": true,
         "signedText": "app.example wants you to sign in with your Ethereum account:\n0x9fD37D2cF1b32b3f7dBae480bbd44BE3De2A9e0F\n\nSign in to Example.\n\nURI: https://app.example\nVersion: 1\nChain ID: 8453\nNonce: abcdef123456\nIssued At: 2026-01-01T00:00:00.000Z"
-      }
+      },
+      "fails": "integrity: "
     }
   },
   {
@@ -214,6 +216,58 @@
     "expect": {
       "decision": "blocked",
       "shows": ["No message provided"]
+    }
+  },
+  {
+    "id": "personal-surrounding-whitespace",
+    "attack": "Leading and trailing whitespace, which a trim on either side would drop from what is shown or signed.",
+    "message": "  hello  \n",
+    "expect": {
+      "decision": "sign",
+      "shows": ["  hello  \n"]
+    }
+  },
+  {
+    "id": "personal-crlf",
+    "attack": "CRLF line endings, which a newline normalization would rewrite.",
+    "message": "line one\r\nline two",
+    "expect": {
+      "decision": "sign",
+      "shows": ["line one\r\nline two"]
+    }
+  },
+  {
+    "id": "personal-nfc",
+    "attack": "\"café\" with a precomposed é (U+00E9). The signed bytes must be these, not a normalized form.",
+    "message": "café",
+    "expect": {
+      "decision": "sign",
+      "shows": ["café"]
+    }
+  },
+  {
+    "id": "personal-nfd",
+    "attack": "\"café\" as e plus a combining acute (U+0301). Looks identical to the NFC form and signs different bytes.",
+    "message": "café",
+    "expect": {
+      "decision": "sign",
+      "shows": ["café"]
+    }
+  },
+  {
+    "id": "personal-zero-width",
+    "attack": "A zero-width space (U+200B) inside the message: signed, but invisible on screen.",
+    "message": "hel​lo",
+    "expect": {
+      "decision": "sign",
+      "shows": ["hel​lo"]
+    },
+    "gap": {
+      "note": "The invisible character is rendered as is; nothing tells the user the message holds more than it shows.",
+      "expect": {
+        "hides": ["​"]
+      },
+      "fails": "hides ​"
     }
   }
 ]

@@ -57,8 +57,12 @@ export async function corpusAccount() {
 export type Decision = 'sign' | 'ack' | 'blocked';
 
 export interface Rendered {
-  /** Text a user sees without expanding anything, plus tooltip labels. */
+  /** Text a user sees without expanding or hovering anything. */
   visible: string;
+  /** Text that appears only on hover: tooltip triggers and icon labels. */
+  hovers: string;
+  /** True when a label on screen sits in the same row as the value. */
+  pair: (label: string, value: string) => boolean;
   /** Everything in the dialog, collapsed sections included. */
   all: string;
   decision: Decision;
@@ -120,8 +124,15 @@ export async function renderRequest(method: string, params: unknown[]): Promise<
   let decision: Decision = 'sign';
   if (!signButton || signButton.disabled) decision = riskBox ? 'ack' : 'blocked';
 
+  const shown = visibleCopy();
   return {
-    visible: visibleText(),
+    visible: shown.textContent ?? '',
+    hovers: [...shown.querySelectorAll('[aria-label]')].map((el) => el.getAttribute('aria-label')).join('\n'),
+    // A label is a leaf element with exactly that text; its row is its parent.
+    pair: (label, value) =>
+      [...shown.querySelectorAll('*')].some(
+        (el) => el.children.length === 0 && el.textContent === label && el.parentElement?.textContent?.includes(value)
+      ),
     all: document.body.textContent ?? '',
     decision,
     sign: async () => {
@@ -139,14 +150,13 @@ export async function cleanup() {
   document.body.innerHTML = '';
 }
 
-function visibleText(): string {
+function visibleCopy(): HTMLElement {
   const copy = document.body.cloneNode(true) as HTMLElement;
   // A closed <details> shows only its summary.
   copy.querySelectorAll('details:not([open])').forEach((d) => {
     [...d.children].forEach((c) => c.tagName !== 'SUMMARY' && c.remove());
   });
-  const labels = [...copy.querySelectorAll('[aria-label]')].map((el) => el.getAttribute('aria-label'));
-  return [copy.textContent, ...labels].join('\n');
+  return copy;
 }
 
 /** The ERC-8213 digests the EIP-712 screen shows under "Digests data". */

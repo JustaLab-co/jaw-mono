@@ -17,6 +17,10 @@ interface Expect {
   decision?: Decision;
   shows?: string[];
   hides?: string[];
+  /** Shown only on hover, never counted as on screen. */
+  hovers?: string[];
+  /** [label, value]: the value sits in the same row as its label. */
+  pairs?: [string, string][];
   /** Pinned from outside TypeScript, see README.md. */
   challenge?: string;
   /** False when what is shown is known not to be what is signed; only a gap may say so. */
@@ -36,7 +40,8 @@ interface Fixture {
   typedData?: { types: Record<string, { name: string; type: string }[]>; primaryType: string };
   message?: string;
   expect: Expect;
-  gap?: { note: string; expect: Expect };
+  /** `fails` is the start of the assertion message the gap must fail with today. */
+  gap?: { note: string; expect: Expect; fails: string };
 }
 
 const session = vi.hoisted(() => ({ account: null as unknown }));
@@ -94,9 +99,12 @@ async function check(f: Fixture, e: Expect) {
   const { method, params } = request(f);
   const screen = await renderRequest(method, params);
 
-  if (e.decision) expect(screen.decision).toBe(e.decision);
-  for (const text of e.shows ?? []) expect(screen.visible).toContain(text);
-  for (const text of e.hides ?? []) expect(screen.visible).not.toContain(text);
+  // Every assertion is labelled so a gap can name the one it fails on.
+  if (e.decision) expect(screen.decision, 'decision').toBe(e.decision);
+  for (const text of e.shows ?? []) expect(screen.visible, `shows ${text}`).toContain(text);
+  for (const text of e.hides ?? []) expect(screen.visible, `hides ${text}`).not.toContain(text);
+  for (const text of e.hovers ?? []) expect(screen.hovers, `hovers ${text}`).toContain(text);
+  for (const [label, value] of e.pairs ?? []) expect(screen.pair(label, value), `pair ${label}: ${value}`).toBe(true);
 
   if (e.siwe) {
     expect(screen.visible).toContain(e.siwe.uri);
@@ -106,7 +114,7 @@ async function check(f: Fixture, e: Expect) {
 
   if (screen.decision === 'blocked') {
     await screen.sign();
-    expect(passkey.challenge).toBeUndefined();
+    expect(passkey.challenge, 'prompts').toBeUndefined();
     return;
   }
 
@@ -115,25 +123,27 @@ async function check(f: Fixture, e: Expect) {
   await vi.waitFor(() => expect(screen.rejection()).toBeDefined());
 
   if (e.prompts === false) {
-    expect(passkey.challenge).toBeUndefined();
+    expect(passkey.challenge, 'prompts').toBeUndefined();
     return;
   }
-  expect(passkey.challenge).toBeDefined();
-  if (e.challenge) expect(passkey.challenge).toBe(e.challenge);
+  expect(passkey.challenge, 'prompts').toBeDefined();
+  if (e.challenge) expect(passkey.challenge, 'challenge').toBe(e.challenge);
   if (e.integrity === false) return;
 
   const typed = typedPayload(f);
   if (typed) {
     const { domainHash, messageHash, digest } = shownDigests(screen.all);
     if (!domainHash || !messageHash) throw new Error('the screen shows no digests to compare');
-    expect(digest).toBe(keccak256(concat(['0x1901', domainHash, messageHash])));
-    expect(passkey.challenge).toBe(typedDataSignChallenge({ domainHash, messageHash }, typed, CHAIN.id, ACCOUNT));
+    expect(digest, 'digest').toBe(keccak256(concat(['0x1901', domainHash, messageHash])));
+    expect(passkey.challenge, 'integrity').toBe(
+      typedDataSignChallenge({ domainHash, messageHash }, typed, CHAIN.id, ACCOUNT)
+    );
     return;
   }
 
   const raw = messageParam(f);
   const signedText = e.signedText ?? raw;
-  expect(passkey.challenge).toBe(personalSignChallenge(stringToBytes(signedText), CHAIN.id, ACCOUNT));
+  expect(passkey.challenge, 'integrity').toBe(personalSignChallenge(stringToBytes(signedText), CHAIN.id, ACCOUNT));
   if (e.siwe) {
     // Each field on screen is the one in the bytes the passkey signed.
     const lines = signedText.split('\n');
@@ -160,6 +170,11 @@ describe.each(corpus)('signing corpus: %s', (_kind, fixtures) => {
     for (const f of fixtures) expect(f.attack.length).toBeGreaterThan(0);
   });
 
+  it('names the failing assertion for every gap', () => {
+    for (const f of fixtures)
+      if (f.gap) expect(f.gap.fails, f.id).toMatch(/^(decision|shows|hides|hovers|pair|integrity)\b/);
+  });
+
   it('only lets a gap waive integrity', () => {
     for (const f of fixtures) {
       if (f.expect.integrity === false) expect(f.gap, f.id).toBeDefined();
@@ -168,10 +183,13 @@ describe.each(corpus)('signing corpus: %s', (_kind, fixtures) => {
 
   for (const f of fixtures) {
     it(f.id, () => check(f, f.expect));
-    // A known hole: this fails today. When a fix lands it passes, `it.fails` turns
-    // red, and the gap's expectation moves into `expect`.
+    // A known hole: it must fail today, on the assertion the gap names. When a fix
+    // lands the check passes, this turns red, and the gap moves into `expect`.
     const gap = f.gap;
-    if (gap) it.fails(`${f.id} [gap] ${gap.note}`, () => check(f, { ...f.expect, ...gap.expect }));
+    if (gap)
+      it(`${f.id} [gap] ${gap.note}`, async () => {
+        await expect(check(f, { ...f.expect, ...gap.expect })).rejects.toThrow(gap.fails);
+      });
   }
 });
 
@@ -186,10 +204,13 @@ describe('passkey cancellation', () => {
   // The modals map a cancelled prompt to 4001 by checking error.name, but ox wraps
   // whatever the credential request throws in Authentication.SignFailedError and the
   // NotAllowedError ends up in `cause`. The dapp receives -32603 instead.
-  it.fails('[gap] reaches the dapp as 4001, not -32603', async () => {
+  it('[gap] reaches the dapp as 4001, not -32603', async () => {
     const screen = await renderRequest('personal_sign', ['hello', ACCOUNT]);
     await screen.sign();
     await vi.waitFor(() => expect(screen.rejection()).toBeDefined());
-    expect(screen.rejection()?.code).toBe(4001);
+    // Flip to `.toBe(4001)` without the wrapper when the modals unwrap the cause.
+    expect(() => expect(screen.rejection()?.code, 'rejection code').toBe(4001)).toThrow(
+      'rejection code: expected -32603 to be 4001'
+    );
   });
 });
