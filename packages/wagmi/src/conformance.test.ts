@@ -15,7 +15,7 @@
  * the code: EIP-1193 events and error codes (4001, 4200), EIP-3326 for an
  * unknown chain (4902), and wagmi's connection state.
  */
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { Mode, type UIRequest, type UIResponse } from '@jaw.id/core';
 import { getAddress, UserRejectedRequestError } from 'viem';
 import { base, mainnet, sepolia } from 'viem/chains';
@@ -40,7 +40,10 @@ function signInAs(address: string): Answer {
 
 const refuse: Answer = (request) => ({ id: request.id, approved: false });
 
-type Provider = { request(args: { method: string; params?: unknown }): Promise<unknown> };
+type Provider = {
+  request(args: { method: string; params?: unknown }): Promise<unknown>;
+  on(event: string, listener: (payload: unknown) => void): void;
+};
 
 /**
  * A fresh page load: new module instances, so core only knows what it
@@ -105,6 +108,13 @@ beforeEach(() => {
   localStorage.clear();
   user.seen = [];
   user.answer = signInAs(ALICE);
+  // The provider builds a Communicator even in AppSpecific, and it fetches the
+  // trusted hosts list. Nothing here depends on it, and CI must stay offline.
+  vi.stubGlobal('fetch', () => Promise.reject(new Error('offline')));
+});
+
+afterEach(() => {
+  vi.unstubAllGlobals();
 });
 
 describe('wagmi conformance against a real core', () => {
@@ -220,6 +230,23 @@ describe('wagmi conformance against a real core', () => {
 
       expect(chain.id).toBe(mainnet.id);
       await expectInSync(page, ALICE, mainnet.id);
+    });
+
+    it('speaks hex chain ids on the wire, both ways', async () => {
+      const page = await connected();
+      // Pass-through spy: core still answers, the test only reads the request.
+      const request = vi.spyOn(page.provider, 'request');
+      const emitted: unknown[] = [];
+      page.provider.on('chainChanged', (chainId) => emitted.push(chainId));
+
+      await page.wagmi.switchChain(page.config, { chainId: mainnet.id });
+
+      // EIP-3326 takes a hex chainId; core also accepts a number, so only the
+      // request itself shows what the connector sent.
+      expect(request).toHaveBeenCalledWith({ method: 'wallet_switchEthereumChain', params: [{ chainId: '0x1' }] });
+      // EIP-1193 chainChanged carries a hex string. The connector's Number()
+      // would hide a number here, other dapps reading the provider would not.
+      expect(emitted).toEqual(['0x1']);
     });
 
     it('refuses a chain core does not support with 4902, and nothing moves', async () => {
