@@ -118,8 +118,10 @@ const arc = /*#__PURE__*/ defineChain({ ...arcBase, blockTime: 500 });
  * any viem minor that edits chain metadata rewrote thousands of report lines on
  * a PR that changed nothing here.
  *
- * `readonly` because these are module-level constants shared by every consumer.
- * Mutating one in place would corrupt chain resolution process-wide.
+ * `readonly` because these are module-level constants shared by every consumer,
+ * so pushing to or splicing a list would corrupt chain resolution process-wide.
+ * It is shallow: the chain objects inside are typed as viem's Chain, and a field
+ * such as `chain.name` or `chain.rpcUrls.default` still compiles as assignable.
  */
 export const MAINNET_CHAINS: readonly ViemChain[] = [
     mainnet,

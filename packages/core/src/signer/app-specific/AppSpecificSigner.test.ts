@@ -1036,6 +1036,15 @@ describe('AppSpecificSigner', () => {
             expect(store.account.clear).toHaveBeenCalled();
         });
 
+        // The account the handshake persisted must go even when the host UI
+        // fails to tear down.
+        it('clears the signer state when uiHandler.cleanup throws', async () => {
+            (mockUIHandler.cleanup as Mock).mockRejectedValue(new Error('unmount failed'));
+
+            await expect(signer.cleanup()).rejects.toThrow('unmount failed');
+            expect(store.account.clear).toHaveBeenCalled();
+        });
+
         it('should handle cleanup when uiHandler.cleanup is undefined', async () => {
             // Arrange
             const handlerWithoutCleanup: UIHandler = {

@@ -20,7 +20,7 @@ import type { JawTheme } from '../ui/theme.js';
 import { hexStringFromNumber, checkErrorForInvalidRequestArgs } from '../utils/index.js';
 import { isSafari } from '../utils/user-agent.js';
 
-import { correlationIds } from '../store/index.js';
+import { correlationIds, store } from '../store/index.js';
 
 import { handleGetCallsStatusRequest } from '../rpc/wallet_getCallStatus.js';
 import { handleGetAssetsRequest } from '../rpc/wallet_getAssets.js';
@@ -44,6 +44,9 @@ export class JAWProvider extends ProviderEventEmitter implements ProviderInterfa
     private theme?: JawTheme;
 
     private signer: Signer | null = null;
+    // The signer the expiry guard dropped. Only a reconnect through it may put
+    // it back, and an explicit disconnect forgets it.
+    private expiredSigner: Signer | null = null;
 
     constructor({ metadata, preference, apiKey, paymasters, theme }: Readonly<ConstructorOptions>) {
         super();
@@ -115,7 +118,7 @@ export class JAWProvider extends ProviderEventEmitter implements ProviderInterfa
 
     async disconnect() {
         try {
-            await this.signer?.cleanup();
+            await (this.signer ?? this.expiredSigner)?.cleanup();
         } catch (cleanupError) {
             // Log cleanup error but continue with disconnection
             console.warn('Signer cleanup failed during disconnect:', cleanupError);
@@ -133,6 +136,7 @@ export class JAWProvider extends ProviderEventEmitter implements ProviderInterfa
         this.communicator.disconnect();
 
         this.signer = null;
+        this.expiredSigner = null;
         correlationIds.clear();
         this.emit('accountsChanged', []);
         this.emit('disconnect', standardErrors.provider.disconnected('User initiated disconnection'));
@@ -140,13 +144,31 @@ export class JAWProvider extends ProviderEventEmitter implements ProviderInterfa
 
     private async _request<T>(args: RequestArguments): Promise<T> {
         const signerType = this.preference.mode === Mode.AppSpecific ? 'appSpecific' : 'crossPlatform';
+        // The signer this request goes through, held locally: a parallel
+        // request can replace or drop this.signer while this one awaits.
+        let signer: Signer | null = null;
 
         try {
             checkErrorForInvalidRequestArgs(args);
-            if (!this.signer) {
+            // No accounts means not connected. The signer's own expiry checks
+            // clear the stored account, so a signer found without one belongs
+            // to a session that has ended: drop it and tell the dapp, which may
+            // still be showing the account. The passkey stays logged in and the
+            // transport stays up, so reconnecting costs no extra ceremony. The
+            // request is then answered as it would be for a first-time visitor.
+            // wallet_disconnect skips this and reports the session itself.
+            if (this.signer && args.method !== 'wallet_disconnect' && !store.account.get().accounts?.length) {
+                this.expiredSigner = this.signer;
+                this.signer = null;
+                clearSignerType();
+                this.emit('accountsChanged', []);
+                this.emit('disconnect', standardErrors.provider.disconnected('Session expired'));
+            }
+            signer = this.signer;
+            if (!signer) {
                 switch (args.method) {
                     case 'eth_requestAccounts': {
-                        const signer = this.initSigner(signerType);
+                        signer = this.initSigner(signerType);
                         await signer.handshake(args);
 
                         this.signer = signer;
@@ -165,7 +187,7 @@ export class JAWProvider extends ProviderEventEmitter implements ProviderInterfa
                         return result as T;
                     }
                     case 'wallet_connect': {
-                        const signer = this.initSigner(signerType);
+                        signer = this.initSigner(signerType);
                         // For both modes, pass full args to handshake so the complete
                         // wallet_connect flow happens in a single roundtrip.
                         // This avoids race conditions with popup closure in cross-platform mode.
@@ -191,32 +213,27 @@ export class JAWProvider extends ProviderEventEmitter implements ProviderInterfa
                     case 'wallet_revokePermissions':
                     case 'wallet_addFunds': {
                         const ephemeralSigner = this.initSigner(signerType);
+                        // AppSpecific authenticates silently so the signing UI is the
+                        // only dialog. CrossPlatform exchanges Diffie-Hellman session keys.
+                        const handshake =
+                            signerType === 'appSpecific'
+                                ? { method: 'wallet_connect', params: [{ silent: true }] }
+                                : { method: 'handshake' };
 
-                        if (signerType === 'appSpecific') {
-                            // Silent handshake: authenticate/create account without showing connect dialog.
-                            // The signing UI will be shown immediately after.
-                            await ephemeralSigner.handshake({
-                                method: 'wallet_connect',
-                                params: [{ silent: true }],
-                            });
-                            const result = await ephemeralSigner.request(args);
+                        try {
+                            await ephemeralSigner.handshake(handshake);
+                            return (await ephemeralSigner.request(args)) as T;
+                        } finally {
+                            // Also on rejection: the handshake left session keys
+                            // (CrossPlatform) or a persisted account (AppSpecific) behind.
+                            // Skipped when a connect finished meanwhile: that session
+                            // now owns the stored account, signer type and keys, and
+                            // the cleanup would wipe them page-wide.
                             try {
-                                await ephemeralSigner.cleanup();
+                                if (!this.signer) await ephemeralSigner.cleanup();
                             } catch (cleanupError) {
                                 console.warn('Ephemeral signer cleanup failed:', cleanupError);
                             }
-                            return result as T;
-                        } else {
-                            // CrossPlatform uses Diffie-Hellman key exchange
-                            await ephemeralSigner.handshake({ method: 'handshake' }); // exchange session keys
-                            const result = await ephemeralSigner.request(args); // send diffie-hellman encrypted request
-                            try {
-                                await ephemeralSigner.cleanup(); // clean up (rotate) the ephemeral session keys
-                            } catch (cleanupError) {
-                                // Log cleanup error but don't fail the request
-                                console.warn('Ephemeral signer cleanup failed:', cleanupError);
-                            }
-                            return result as T;
                         }
                     }
                     case 'wallet_getAssets': {
@@ -313,29 +330,47 @@ export class JAWProvider extends ProviderEventEmitter implements ProviderInterfa
                 isSafari() &&
                 (await this.communicator.willRouteToIframe(args.method))
             ) {
-                await this.signer.handshake(args);
+                await signer.handshake(args);
             }
 
             // Handle requests when signer exists
-            const result = await this.signer.request(args);
+            const result = await signer.request(args);
+
+            // A reconnect dialog clears the stored account while it is open, so
+            // a read issued meanwhile drops the signer. The approved connect
+            // puts it back, unless the dapp disconnected or connected anew.
+            const connected = args.method === 'eth_requestAccounts' || args.method === 'wallet_connect';
+            if (connected && this.signer === null && this.expiredSigner === signer) {
+                this.signer = signer;
+                this.expiredSigner = null;
+                storeSignerType(signerType);
+                const chainId = await signer.request<string>({ method: 'eth_chainId' });
+                this.emit('connect', { chainId });
+            }
 
             return result as T;
         } catch (error) {
             const { code } = error as { code?: number };
-            // 4100 means three different things here. From a live signer it means
-            // the session died, and tearing it down locally is right. From the
-            // no-session branch above it just means "connect first", and there
-            // is nothing to tear down: disconnecting would emit accountsChanged
-            // and disconnect on a provider that was never connected, log the
-            // passkey session out, and drop the iframe. A dapp that probes with
-            // personal_sign before connecting would pay for it.
+            // 4100 means three different things here. From a signer holding
+            // accounts it means the session died, and tearing it down is right.
+            // From the no-session branch above it just means "connect first":
+            // either there was never a session, or the guard above already
+            // reported the expired one. Disconnecting again would log the
+            // passkey out and drop the iframe for nothing. Either way it only
+            // speaks for the signer this request went through, not for one a
+            // parallel connect installed meanwhile.
             //
             // The third is the backend turning the caller down, over an origin it
             // does not serve or a key it will not take. That says nothing about
             // the session, and it arrives from read-only calls: an unregistered
             // dApp asking for capabilities would be logged out of a wallet that
             // is working.
-            if (code === standardErrorCodes.provider.unauthorized && this.signer && !isBackendRefusal(error)) {
+            if (
+                code === standardErrorCodes.provider.unauthorized &&
+                signer &&
+                signer === this.signer &&
+                !isBackendRefusal(error)
+            ) {
                 await this.disconnect();
             }
             return Promise.reject(serializeError(error));
