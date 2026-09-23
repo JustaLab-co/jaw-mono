@@ -24,8 +24,7 @@ function approve(request: UIRequest) {
     if (request.type === 'wallet_connect') {
         return { id: request.id, approved: true, data: { accounts: [{ address: ACCOUNT }] } };
     }
-    if (request.type === 'personal_sign') return { id: request.id, approved: true, data: '0x5167' };
-    throw new Error(`unexpected ${request.type}`);
+    return { id: request.id, approved: true, data: '0x5167' };
 }
 
 let uiHandler: UIHandler & { request: ReturnType<typeof vi.fn>; cleanup: ReturnType<typeof vi.fn> };
@@ -277,5 +276,38 @@ describe('backend refusals', () => {
         expect(events).toEqual([['accountsChanged', []], ['disconnect']]);
         expect(new PasskeyManager().fetchActiveCredentialId()).toBe('credential-id');
         expect(vi.mocked(Communicator).prototype.disconnect).not.toHaveBeenCalled();
+    });
+});
+
+describe('a throwaway signer settling after a real connect', () => {
+    // The throwaway signer's cleanup clears the stored account and signer type
+    // for the whole page. A connect that finished while its dialog was open
+    // owns those now, and must still be connected afterwards.
+    it.each([
+        ['approved', undefined],
+        ['refused', UIError.userRejected()],
+    ])('keeps the new session when the signature is %s', async (_outcome, refusal) => {
+        const provider = newProvider();
+        const events = recordEvents(provider);
+        const dialogs = holdDialogs();
+
+        const signing = provider.request({
+            method: 'wallet_sign',
+            params: [{ request: { type: '0x45', data: { message: 'hi' } } }],
+        });
+        await vi.waitFor(() => expect(dialogs).toHaveLength(1));
+        dialogs[0]();
+        await vi.waitFor(() => expect(dialogs).toHaveLength(2));
+
+        const connect = provider.request({ method: 'eth_requestAccounts' });
+        await vi.waitFor(() => expect(dialogs).toHaveLength(3));
+        dialogs[2]();
+        await connect;
+        dialogs[1](refusal);
+        await signing.catch(() => undefined);
+
+        await expect(provider.request({ method: 'eth_accounts' })).resolves.toEqual([ACCOUNT]);
+        expect(loadSignerType()).toBe('appSpecific');
+        expect(events.filter(([name]) => name === 'disconnect')).toEqual([]);
     });
 });

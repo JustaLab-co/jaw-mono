@@ -226,8 +226,11 @@ export class JAWProvider extends ProviderEventEmitter implements ProviderInterfa
                         } finally {
                             // Also on rejection: the handshake left session keys
                             // (CrossPlatform) or a persisted account (AppSpecific) behind.
+                            // Skipped when a connect finished meanwhile: that session
+                            // now owns the stored account, signer type and keys, and
+                            // the cleanup would wipe them page-wide.
                             try {
-                                await ephemeralSigner.cleanup();
+                                if (!this.signer) await ephemeralSigner.cleanup();
                             } catch (cleanupError) {
                                 console.warn('Ephemeral signer cleanup failed:', cleanupError);
                             }
