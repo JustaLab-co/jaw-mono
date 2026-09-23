@@ -17,7 +17,7 @@ import { getAddress } from 'viem';
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 
 import { payAndFetch, type PayAndFetchOptions } from './http.js';
-import { checkPolicy, type X402Policy } from './policy.js';
+import { checkPolicy, type LimitUsage, type X402Policy } from './policy.js';
 import type { Payer } from './payer.js';
 import type { X402PaymentRequirement } from './types.js';
 
@@ -61,6 +61,16 @@ const entry = fc.oneof(
   { weight: 1, arbitrary: malformed.map((m) => ({ wellFormed: false as const, value: m })) }
 );
 
+// Spend already counted against the caps, so a price that fits alone does not.
+const DAY_LIMIT = { allowance: '260000', unit: 'day' as const, multiplier: 1, anchor: '2026-01-01T00:00:00.000Z' };
+const DAY_USED: LimitUsage = {
+  ...DAY_LIMIT,
+  spent: 20_000n,
+  toppedUp: 0n,
+  endsAt: new Date('2026-01-02'),
+  source: 'ledger',
+};
+
 const policy: fc.Arbitrary<X402Policy> = fc.oneof(
   { weight: 2, arbitrary: fc.constant({}) },
   {
@@ -70,13 +80,17 @@ const policy: fc.Arbitrary<X402Policy> = fc.oneof(
         maxAmountPerPayment: fc.constantFrom('1000', '300000', '5000000'),
         allowedNetworks: fc.constant<string[]>(['eip155:8453', 'eip155:84532']),
         allowedPayTo: fc.constant<string[]>([POOL[0], POOL[1]]),
+        maxTotalPerSession: fc.constant('300000'),
+        perPeriod: fc.constant([DAY_LIMIT]),
       },
       { requiredKeys: [] }
     ),
   }
 );
 
-const callerOptions: fc.Arbitrary<Pick<PayAndFetchOptions, 'maxAmount' | 'asset' | 'network'>> = fc.oneof(
+type Opts = Pick<PayAndFetchOptions, 'maxAmount' | 'asset' | 'network' | 'spentThisSession' | 'periodUsage'>;
+
+const callerOptions: fc.Arbitrary<Opts> = fc.oneof(
   { weight: 2, arbitrary: fc.constant({}) },
   {
     weight: 1,
@@ -85,19 +99,23 @@ const callerOptions: fc.Arbitrary<Pick<PayAndFetchOptions, 'maxAmount' | 'asset'
         maxAmount: fc.constantFrom('1000', '250000', '5000000'),
         asset: fc.constantFrom(...POOL),
         network: fc.constantFrom('eip155:8453', 'eip155:84532'),
+        spentThisSession: fc.constantFrom(0n, 100_000n),
+        periodUsage: fc.constantFrom<LimitUsage[]>([], [DAY_USED]),
       },
       { requiredKeys: [] }
     ),
   }
 );
 
-type Opts = Pick<PayAndFetchOptions, 'maxAmount' | 'asset' | 'network'>;
-
 function eligible(o: X402PaymentRequirement, p: X402Policy, opts: Opts): boolean {
   if (opts.network && o.network !== opts.network) return false;
   if (opts.asset && o.asset.toLowerCase() !== opts.asset.toLowerCase()) return false;
   if (opts.maxAmount && BigInt(o.amount) > BigInt(opts.maxAmount)) return false;
-  return checkPolicy(o, p, { host: 'api.example.com' }).ok;
+  return checkPolicy(o, p, {
+    host: 'api.example.com',
+    spentThisSession: opts.spentThisSession,
+    periodUsage: opts.periodUsage,
+  }).ok;
 }
 
 let fetchMock: ReturnType<typeof vi.fn>;
@@ -182,6 +200,34 @@ describe('choosing what to pay from a 402 challenge', () => {
       return new Set(prices).size >= 2;
     }).length;
     expect(contested).toBeGreaterThan(100);
+  });
+
+  it('judges the host the 402 came from after redirects, not the one asked for', async () => {
+    const payable = { ...fc.sample(option, 1)[0], scheme: 'exact' as const, network: 'eip155:8453' };
+    challengeWith([payable]);
+    fetchMock.mockResolvedValue({ ...(await fetchMock()), url: 'https://evil.example.com/paid' });
+    const { signed, payer, ensureFunds } = traps();
+
+    const result = await payAndFetch(URL_UNDER_TEST, payer, {
+      policy: { allowedHosts: ['api.example.com'] },
+      ensureFunds,
+    });
+
+    expect(signed).toEqual([]);
+    expect(result.refusedReason).toMatch(/host not allowed: evil\.example\.com/);
+  });
+
+  it.each([
+    ['the session total', { policy: { maxTotalPerSession: '300000' }, spentThisSession: 100_000n }],
+    ['the period limit', { policy: { perPeriod: [DAY_LIMIT] }, periodUsage: [DAY_USED] }],
+  ])('counts what %s has already spent before choosing', async (_name, spend) => {
+    const option250k = { ...fc.sample(option, 1)[0], scheme: 'exact' as const, amount: '250000' };
+    challengeWith([option250k]);
+    const { signed, payer, ensureFunds } = traps();
+
+    await payAndFetch(URL_UNDER_TEST, payer, { ...spend, ensureFunds });
+
+    expect(signed).toEqual([]);
   });
 
   it('a dry run never funds or signs, whatever the challenge says', async () => {
