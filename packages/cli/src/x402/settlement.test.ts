@@ -75,6 +75,9 @@ beforeEach(() => {
   if (fs.existsSync(TEST_ROOT)) fs.rmSync(TEST_ROOT, { recursive: true });
   getTransactionReceipt.mockReset();
   readContract.mockReset();
+  // Every Permit2 nonce spent, which is what a settled payment leaves behind.
+  // The cases about unspent nonces set their own.
+  readContract.mockResolvedValue(2n ** 256n - 1n);
 });
 afterEach(() => {
   if (fs.existsSync(TEST_ROOT)) fs.rmSync(TEST_ROOT, { recursive: true });
@@ -185,6 +188,29 @@ describe('reconcileSettlements', () => {
     expect(readX402Log().find((e) => e.nonce === '7')?.settlement).toBe('unverified');
   });
 
+  it("does not count a transfer while the row's own nonce is unspent", async () => {
+    appendX402Log(underReported());
+    getTransactionReceipt.mockResolvedValue({ status: 'success', logs: [transferLog(PAYER, PAY_TO, 1n)] });
+    // The named transaction settled some other authorization to the same recipient.
+    readContract.mockResolvedValue(0n);
+
+    await reconcileSettlements(readX402Log());
+
+    expect(figureFor('7')).toBe(1000n);
+    expect(readX402Log().find((e) => e.nonce === '7')?.settlement).toBe('unverified');
+  });
+
+  it("does not let a later payment borrow an earlier settlement's transaction", async () => {
+    appendX402Log(underReported({ nonce: '6', settlement: 'verified' }));
+    appendX402Log(underReported());
+    getTransactionReceipt.mockResolvedValue({ status: 'success', logs: [transferLog(PAYER, PAY_TO, 1n)] });
+
+    await reconcileSettlements(readX402Log());
+
+    expect(figureFor('7')).toBe(1000n);
+    expect(getTransactionReceipt).not.toHaveBeenCalled();
+  });
+
   it('never counts more than the signature authorized', async () => {
     appendX402Log(underReported());
     getTransactionReceipt.mockResolvedValue({ status: 'success', logs: [transferLog(PAYER, PAY_TO, 9000n)] });
@@ -248,7 +274,13 @@ describe('reconcileSettlements, a batch that cannot answer', () => {
    */
   it('reaches the newest row while older ones keep failing', async () => {
     for (let i = 0; i < 12; i++) {
-      appendX402Log(underReported({ nonce: String(i), at: `2026-09-10T00:00:${String(i).padStart(2, '0')}.000Z` }));
+      appendX402Log(
+        underReported({
+          nonce: String(i),
+          at: `2026-09-10T00:00:${String(i).padStart(2, '0')}.000Z`,
+          txHash: `0x${i.toString(16).padStart(64, '0')}`,
+        })
+      );
     }
     // Every receipt read fails except the newest row's, which settles at 1.
     getTransactionReceipt.mockImplementation(async () => {
@@ -338,7 +370,7 @@ describe('reconcileSettlements, rows nothing can ask about', () => {
   // A row written before `asset` was recorded matched no log at all, so a mined
   // transaction that did move funds read as "the chain has not said yet".
   it('finds the transfer on a row that carries no asset', async () => {
-    appendX402Log(underReported({ nonce: 'no-asset', asset: undefined }));
+    appendX402Log(underReported({ nonce: '9', asset: undefined }));
     getTransactionReceipt.mockResolvedValue({
       status: 'success',
       logs: [transferLog(PAYER, PAY_TO, 7n)],
@@ -346,7 +378,7 @@ describe('reconcileSettlements, rows nothing can ask about', () => {
 
     await reconcileSettlements(readX402Log());
 
-    expect(figureFor('no-asset')).toBe(7n);
+    expect(figureFor('9')).toBe(7n);
   });
 });
 
@@ -428,6 +460,16 @@ describe('reconcileSettlements, an exact attempt the server reported as failed',
 
     expect(readContract).not.toHaveBeenCalled();
     expect(figureFor('hand-written')).toBe(1000n);
+  });
+
+  it('prices a consumed authorization at what was signed, whatever the named transaction moved', async () => {
+    appendX402Log(exactFailure({ status: 'paid', amount: '1', txHash: TX }));
+    getTransactionReceipt.mockResolvedValue({ status: 'success', logs: [transferLog(PAYER, PAY_TO, 1n)] });
+    readContract.mockResolvedValue(true);
+
+    await reconcileSettlements(readX402Log());
+
+    expect(figureFor(NONCE)).toBe(1000n);
   });
 
   it('leaves a row from before the ledger carried a scheme where it is', async () => {

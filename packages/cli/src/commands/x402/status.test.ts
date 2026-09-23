@@ -115,10 +115,12 @@ vi.mock('../../x402/balance.js', () => ({
   // `unknown` to `mismatch`.
   publicClientFor: () => ({
     getTransactionReceipt: h.getTransactionReceipt,
-    readContract: (args: { functionName: string }) =>
-      args.functionName === 'DOMAIN_SEPARATOR'
-        ? h.readContract(args)
-        : Promise.reject(new Error(`unexpected read in this suite: ${args.functionName}`)),
+    readContract: (args: { functionName: string }) => {
+      if (args.functionName === 'DOMAIN_SEPARATOR') return h.readContract(args);
+      // Every Permit2 nonce spent, so a settled payment reconciles.
+      if (args.functionName === 'nonceBitmap') return Promise.resolve(2n ** 256n - 1n);
+      return Promise.reject(new Error(`unexpected read in this suite: ${args.functionName}`));
+    },
   }),
 }));
 

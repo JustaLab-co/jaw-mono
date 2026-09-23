@@ -103,10 +103,11 @@ export async function reconcileSettlements(entries: X402LogEntry[]): Promise<X40
   // the payment lock while they run: eight of them at 200ms each measured 1.6s
   // sequentially, which is the wait this module exists to keep off the payment
   // path in the first place.
+  const shared = sharedTxHashes(entries);
   const answered = await Promise.all(
     pending.map(async (entry) => {
       try {
-        return (await answerFor(entry)) ?? abandonedIfOld(entry);
+        return (await answerFor(entry, shared)) ?? abandonedIfOld(entry);
       } catch (err) {
         // A row is a line in a file a user can edit, and nothing here may fail
         // the payment waiting on it. The row keeps costing its ceiling.
@@ -210,34 +211,58 @@ function abandonedIfOld(entry: X402LogEntry): X402SettlementCorrection | null {
   };
 }
 
+/**
+ * Transaction hashes more than one row names.
+ *
+ * A server can answer a later payment with the hash of an earlier settlement to
+ * the same recipient, and the transfer in it looks like ours to both rows. None
+ * of them is taken as evidence, which leaves each at its ceiling.
+ */
+function sharedTxHashes(entries: X402LogEntry[]): Set<string> {
+  const seen = new Set<string>();
+  const shared = new Set<string>();
+  for (const entry of entries) {
+    const hash = entry.txHash?.toLowerCase();
+    if (!hash) continue;
+    if (seen.has(hash)) shared.add(hash);
+    seen.add(hash);
+  }
+  return shared;
+}
+
 /** What the chain says about one row, or nothing when it has not said yet. */
-async function answerFor(entry: X402LogEntry): Promise<X402SettlementCorrection | null> {
+async function answerFor(entry: X402LogEntry, sharedTx: Set<string>): Promise<X402SettlementCorrection | null> {
   const asset = entry.network ? usdcForNetwork(entry.network) : undefined;
   // A row on a network the registry does not carry has no client to ask and no
   // token to price. Left alone, which keeps it at its ceiling.
   if (!asset || !entry.nonce) return null;
 
-  if (entry.txHash) {
-    const moved = await transferredIn(entry, asset);
-    if (moved !== null) return correction(entry, 'verified', moved);
+  if (entry.scheme === 'exact') {
+    const used = await eip3009NonceUsed(entry, asset);
+    // A consumed `exact` nonce can only have moved what was signed: the value and
+    // the recipient are in the signature, and the one other way to spend a nonce is
+    // `cancelAuthorization`, which only the authorizer can send and this never
+    // sends. So the transaction the receipt named adds nothing, and the price is
+    // what the signature fixed.
+    if (used) {
+      const ceiling = parseBigInt(entry.authorized);
+      return ceiling === null ? null : correction(entry, 'verified', ceiling);
+    }
+    return used === false && deadlinePassed(entry) ? correction(entry, 'expired', 0n) : null;
   }
+  if (entry.scheme !== 'upto') return null;
 
-  if (!deadlinePassed(entry)) return null;
-  if (entry.scheme === 'upto') {
-    return (await permit2NonceFree(entry, asset.chainId)) ? correction(entry, 'expired', 0n) : null;
-  }
-  if (entry.scheme !== 'exact') return null;
+  // The transfer only counts once this row's own nonce is spent: a transaction
+  // that moved funds from this payer to this recipient may be settling a
+  // different authorization.
+  const named = entry.txHash && !sharedTx.has(entry.txHash.toLowerCase());
+  const moved = named ? await transferredIn(entry, asset) : null;
+  if (moved === null && !deadlinePassed(entry)) return null;
 
-  const used = await eip3009NonceUsed(entry, asset);
-  if (used === null) return null;
-  if (!used) return correction(entry, 'expired', 0n);
-  // A consumed `exact` nonce can only have moved what was signed: the value and
-  // the recipient are in the signature, and the one other way to spend a nonce is
-  // `cancelAuthorization`, which only the authorizer can send and this never
-  // sends. So a server that answered 400 while its facilitator settled anyway
-  // does not get to leave the row in doubt, and the price is what moved.
-  const ceiling = parseBigInt(entry.authorized);
-  return ceiling === null ? null : correction(entry, 'verified', ceiling);
+  const used = await permit2NonceUsed(entry, asset.chainId);
+  if (used && moved !== null) return correction(entry, 'verified', moved);
+  if (used === false && deadlinePassed(entry)) return correction(entry, 'expired', 0n);
+  return null;
 }
 
 /**
@@ -286,19 +311,16 @@ async function transferredIn(entry: X402LogEntry, asset: UsdcAsset): Promise<big
 }
 
 /**
- * Whether the Permit2 nonce an `upto` authorization signed against is still
- * unspent, so its deadline passed without moving anything.
- *
- * The deadline alone proves nothing, since a settlement we failed to find is
- * indistinguishable from one that never happened. An unreadable nonce and a node
- * that will not answer both read as spent, which leaves the row at its ceiling.
+ * Whether Permit2 has spent the nonce an `upto` authorization signed against,
+ * or `null` when the question could not be put: the nonce is unreadable or the
+ * node did not answer. Either way the row stays at its ceiling.
  */
-async function permit2NonceFree(entry: X402LogEntry, chainId: number): Promise<boolean> {
+async function permit2NonceUsed(entry: X402LogEntry, chainId: number): Promise<boolean | null> {
   let nonce: bigint;
   try {
     nonce = BigInt(entry.nonce as string);
   } catch {
-    return false;
+    return null;
   }
 
   try {
@@ -308,9 +330,9 @@ async function permit2NonceFree(entry: X402LogEntry, chainId: number): Promise<b
       functionName: 'nonceBitmap',
       args: [entry.payer as `0x${string}`, nonce >> 8n],
     });
-    return ((word >> (nonce & 0xffn)) & 1n) === 0n;
+    return ((word >> (nonce & 0xffn)) & 1n) === 1n;
   } catch {
-    return false;
+    return null;
   }
 }
 
