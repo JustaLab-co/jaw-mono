@@ -186,8 +186,10 @@ For a `permission-calls.json` entry, drop the leading four bytes first, or use
 `typed-data-sign.json` is the whole `signTypedData` output: the owner tuple, then
 the ERC-7739 envelope Solady reads in `ERC1271.sol:_erc1271IsValidSignatureViaNestedEIP712`,
 `appDomainSeparator ‖ contents ‖ contentsDescription ‖ uint16(len)`. The
-description is in explicit mode: every contents type sorted by name, as EIP-712
-encodes them inside `TypedDataSign`, then the primary type's name. The owner is
+description is every contents type sorted by name, as EIP-712 encodes them
+inside `TypedDataSign`. When the primary type sorts first that alone is the
+description (implicit mode, the bytes viem produces). When a dependency sorts
+before it, the primary type's name follows (explicit mode). The owner is
 anvil's second default key, the account `0xf470E70a46414C7aCb92aD6771da22b611C97303`
 on chain 31337, and ECDSA signing is deterministic, so `cast wallet sign` gives
 the same bytes. Every entry was also accepted by `isValidSignature` on a
@@ -198,13 +200,13 @@ PK=0x59c6995e998f97a5a0044966f0945389dc9e86dae88c7a8412f4603b6b78690d
 ACCOUNT=0xf470E70a46414C7aCb92aD6771da22b611C97303
 ZERO=0x0000000000000000000000000000000000000000000000000000000000000000
 
-# wrap <appDomainSeparator> <contentsStructHash> <sortedContentsType> <contentsName>
+# wrap <appDomainSeparator> <contentsStructHash> <sortedContentsType> <contentsName> [explicit]
 wrap() {
   local tds=$(cast keccak $(cast abi-encode "f(bytes32,bytes32,bytes32,bytes32,uint256,address,bytes32)" \
     $(cast keccak "TypedDataSign($4 contents,string name,string version,uint256 chainId,address verifyingContract,bytes32 salt)$3") \
     $2 $(cast keccak "JustanAccount") $(cast keccak "1") 31337 $ACCOUNT $ZERO))
   local sig=$(cast wallet sign --no-hash $(cast keccak $(cast concat-hex 0x1901 $1 $tds)) --private-key $PK)
-  local desc=$(cast from-utf8 "$3$4")
+  local desc=$(cast from-utf8 "$3$([ "${5:-}" = explicit ] && echo "$4")")
   cast concat-hex $(cast abi-encode "f((uint256,bytes))" "(0,$sig)") $1 $2 $desc \
     $(printf '0x%04x' $(( (${#desc} - 2) / 2 )))
 }
@@ -222,11 +224,12 @@ VAULT=$(cast keccak $(cast abi-encode "f(bytes32,bytes32,bytes32,uint256,address
   $(cast keccak "EIP712Domain(string name,string version,uint256 chainId,address verifyingContract)") \
   $(cast keccak "Vault") $(cast keccak "1") 8453 0x1111111111111111111111111111111111111111))
 
-wrap $VAULT $ORDER "Asset(address token,uint256 id)Order(Asset asset,string memo,uint256 amount)" Order
+wrap $VAULT $ORDER "Asset(address token,uint256 id)Order(Asset asset,string memo,uint256 amount)" Order explicit
 ```
 
 The other entries follow the same steps with their own domain and struct hashes.
-`PermitSingle` takes the sorted type
+The `Mail` entries sort `Mail` before `Person`, so they leave out `explicit`.
+`PermitSingle` takes `explicit`, the sorted type
 `PermitDetails(address token,uint160 amount,uint48 expiration,uint48 nonce)PermitSingle(PermitDetails details,address spender,uint256 sigDeadline)`
 and the Permit2 domain `EIP712Domain(string name,uint256 chainId,address verifyingContract)`.
 The fourth entry hashes its domain with the declared
@@ -240,11 +243,12 @@ The fifth entry is EIP-7702: the owner EOA is the account, so set
 still required: without it the contract takes the `PersonalSign` path and
 rejects the signature.
 
-Two ways to derive something that looks right and is not: listing the primary
-type first in the description (viem's implicit mode, which Solady turns into a
-different `TypedDataSign` typehash whenever a dependency sorts before the primary
-type), and hashing the app domain with the fields present in the domain object
-instead of the declared `EIP712Domain`.
+Three ways to derive something that looks right and is not. Listing the primary
+type first when a dependency sorts before it, which Solady turns into a different
+`TypedDataSign` typehash. Using explicit mode when the primary type already sorts
+first: it validates on current Solady, but the bytes differ from what deployed
+accounts built on an older Solady accept. And hashing the app domain with the
+fields present in the domain object instead of the declared `EIP712Domain`.
 
 ## Two things worth knowing
 

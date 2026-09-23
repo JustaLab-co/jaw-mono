@@ -480,20 +480,23 @@ export function wrapSignature(parameters: { ownerIndex?: number | undefined; sig
     );
 }
 /**
- * ERC-7739 `TypedDataSign` signature in Solady's explicit mode: the contents
- * types sorted as EIP-712 encodes them inside `TypedDataSign`, then the primary
- * type's name. The app domain is hashed with the declared `EIP712Domain`, if
- * any, as the signed hash is.
+ * ERC-7739 `TypedDataSign` signature. The contract rebuilds the signed type as
+ * `TypedDataSign(...)` plus the contents type we send, so the contents types
+ * must go in the order EIP-712 sorts them. When the primary type sorts first
+ * that is implicit mode, which every Solady version reads. Otherwise it needs
+ * explicit mode: the sorted types, then the primary type's name. The app domain
+ * is hashed with the declared `EIP712Domain`, if any, as the signed hash is.
  */
 function wrapTypedDataSignature(parameters: TypedDataDefinition<Record<string, unknown>, string> & { signature: Hex }) {
     const { domain = {}, message, primaryType, signature } = parameters;
     const types = { EIP712Domain: getTypesForEIP712Domain({ domain }), ...parameters.types } as TypedData;
 
-    const contentsType = TypedDataOx.encodeType({ primaryType, types })
+    const contentsType = TypedDataOx.encodeType({ primaryType, types });
+    const sorted = contentsType
         .split(/(?<=\))/)
         .sort()
         .join('');
-    const contentsDescription = stringToHex(contentsType + primaryType);
+    const contentsDescription = stringToHex(sorted === contentsType ? contentsType : sorted + primaryType);
 
     return encodePacked(
         ['bytes', 'bytes32', 'bytes32', 'bytes', 'uint16'],

@@ -41,23 +41,39 @@ const MOCK_TYPED_DATA = {
     primaryType: 'Test' as const,
     message: { value: 'test' },
 };
-// What ERC-7739 appends to the signature for MOCK_TYPED_DATA: the app domain,
-// the contents hash, then the contents type and its name, and their length.
-const MOCK_DESCRIPTION = viem.stringToHex('Test(string value)Test');
-const MOCK_TYPED_DATA_ENVELOPE = viem.concat([
-    viem.hashDomain({
-        domain: MOCK_TYPED_DATA.domain,
-        types: {
-            EIP712Domain: [
-                { name: 'name', type: 'string' },
-                { name: 'version', type: 'string' },
-            ],
-        },
-    }),
-    viem.hashStruct({ ...MOCK_TYPED_DATA, data: MOCK_TYPED_DATA.message }),
-    MOCK_DESCRIPTION,
-    viem.numberToHex(viem.size(MOCK_DESCRIPTION), { size: 2 }),
-]);
+// Mail/Person with the full domain declared: the primary type sorts first, so
+// this validated before and its bytes must not move.
+const MAIL_TYPED_DATA = {
+    domain: {
+        name: 'Ether Mail',
+        version: '1',
+        chainId: 1,
+        verifyingContract: '0xCcCCccccCCCCcCCCCCCcCcCccCcCCCcCcccccccC',
+    },
+    types: {
+        EIP712Domain: [
+            { name: 'name', type: 'string' },
+            { name: 'version', type: 'string' },
+            { name: 'chainId', type: 'uint256' },
+            { name: 'verifyingContract', type: 'address' },
+        ],
+        Person: [
+            { name: 'name', type: 'string' },
+            { name: 'wallet', type: 'address' },
+        ],
+        Mail: [
+            { name: 'from', type: 'Person' },
+            { name: 'to', type: 'Person' },
+            { name: 'contents', type: 'string' },
+        ],
+    },
+    primaryType: 'Mail' as const,
+    message: {
+        from: { name: 'Cow', wallet: '0xCD2a3d9F938E13CD947Ec05AbC7FE734Df8DD826' },
+        to: { name: 'Bob', wallet: '0xbBbBBBBbbBBBbbbBbbBbbbbBBbBbbbbBbBbbBBbB' },
+        contents: 'Hello, Bob!',
+    },
+} as const;
 
 describe('toJustanAccount unit tests', () => {
     beforeEach(() => {
@@ -739,10 +755,14 @@ describe('toJustanAccount unit tests', () => {
                 const signature = await account.signTypedData(MOCK_TYPED_DATA);
 
                 expect(mockEOA.sign).toHaveBeenCalled();
-                expect(signature).toBe(viem.concat([MOCK_SIGNATURE, MOCK_TYPED_DATA_ENVELOPE]));
+                const { wrapTypedDataSignature } = await import('viem/experimental/erc7739');
+                expect(signature).toBe(wrapTypedDataSignature({ ...MOCK_TYPED_DATA, signature: MOCK_SIGNATURE }));
             });
 
-            it('should return wrapped typed data signature in non-EIP-7702 mode', async () => {
+            it.each([
+                ['a primary type with no dependencies', MOCK_TYPED_DATA],
+                ['Mail/Person with a declared domain', MAIL_TYPED_DATA],
+            ])('should wrap typed data byte for byte as viem does for %s', async (_, typedData) => {
                 const mockOwner = {
                     type: 'local' as const,
                     address: MOCK_ADDRESS,
@@ -762,7 +782,7 @@ describe('toJustanAccount unit tests', () => {
                     factoryAddress: MOCK_FACTORY_ADDRESS,
                 });
 
-                const signature = await account.signTypedData(MOCK_TYPED_DATA);
+                const signature = await account.signTypedData(typedData as never);
 
                 expect(mockOwner.sign).toHaveBeenCalled();
                 // The ERC-7739 envelope carries the domain the verifier checks.
@@ -771,12 +791,14 @@ describe('toJustanAccount unit tests', () => {
                 // The envelope goes around the owner tuple, not inside it, so
                 // decoding the tuple off the front reads right past it. Assert
                 // the whole value: the inner tuple built from the shape written
-                // out above, then the app domain, the contents hash and the
-                // explicit-mode description (contents type, then its name).
+                // out above, wrapped by viem's own helper. When the primary type
+                // sorts first, deployed accounts already accept these bytes, so
+                // they must stay identical.
+                const { wrapTypedDataSignature } = await import('viem/experimental/erc7739');
                 const inner = viem.encodeAbiParameters(WRAPPED_SIGNATURE, [
                     { ownerIndex: 0n, signatureData: MOCK_SIGNATURE },
                 ]);
-                expect(signature).toBe(viem.concat([inner, MOCK_TYPED_DATA_ENVELOPE]));
+                expect(signature).toBe(wrapTypedDataSignature({ ...typedData, signature: inner } as never));
             });
 
             it('should throw error for address-type owner', async () => {
