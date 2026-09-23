@@ -34,12 +34,9 @@ import {
 } from 'viem/account-abstraction';
 import type { SignAuthorizationReturnType } from 'viem/accounts';
 import * as Signature from 'ox/Signature';
+import * as TypedDataOx from 'ox/TypedData';
 import type * as WebAuthnP256 from 'ox/WebAuthnP256';
-import {
-    hashMessage as erc7739HashMessage,
-    hashTypedData as erc7739HashTypedData,
-    wrapTypedDataSignature,
-} from 'viem/experimental/erc7739';
+import { hashMessage as erc7739HashMessage, hashTypedData as erc7739HashTypedData } from 'viem/experimental/erc7739';
 import { CONTRACT_NAME, CONTRACT_VERSION, FACTORY_ADDRESS } from '../constants.js';
 
 export type JustanAccountImplementation = SmartAccountImplementation<
@@ -270,21 +267,13 @@ export async function toJustanAccount(parameters: ToJustanAccountParameters): Pr
 
             const signature = await sign({ owner, hash: nestedHash });
 
-            if (isEip7702) {
-                return signature;
-            }
-
-            const wrappedWithOwner = wrapSignature({
-                ownerIndex,
-                signature,
-            });
-
             return wrapTypedDataSignature({
                 domain,
                 types,
                 primaryType,
                 message,
-                signature: wrappedWithOwner,
+                // A delegated EOA is its own signer, so there is no owner tuple.
+                signature: isEip7702 ? signature : wrapSignature({ ownerIndex, signature }),
             });
         },
         async signUserOperation(parameters) {
@@ -487,6 +476,38 @@ export function wrapSignature(parameters: { ownerIndex?: number | undefined; sig
         ]
     );
 }
+/**
+ * ERC-7739 `TypedDataSign` signature. The contract rebuilds the signed type as
+ * `TypedDataSign(...)` plus the contents type we send, so the contents types
+ * must go in the order EIP-712 sorts them. When the primary type sorts first
+ * that is implicit mode, which every Solady version reads. Otherwise it needs
+ * explicit mode: the sorted types, then the primary type's name. The app domain
+ * is hashed with the declared `EIP712Domain`, if any, as the signed hash is.
+ * Every piece comes from ox, so the type string and the hashes cannot disagree.
+ */
+function wrapTypedDataSignature(parameters: TypedDataDefinition<Record<string, unknown>, string> & { signature: Hex }) {
+    const { domain = {}, message, primaryType, signature } = parameters;
+    const types = parameters.types as TypedData;
+
+    const contentsType = TypedDataOx.encodeType({ primaryType, types });
+    const sorted = contentsType
+        .split(/(?<=\))/)
+        .sort()
+        .join('');
+    const contentsDescription = stringToHex(sorted === contentsType ? contentsType : sorted + primaryType);
+
+    return encodePacked(
+        ['bytes', 'bytes32', 'bytes32', 'bytes', 'uint16'],
+        [
+            signature,
+            TypedDataOx.hashDomain({ domain, types }),
+            TypedDataOx.hashStruct({ data: message, primaryType, types }),
+            contentsDescription,
+            size(contentsDescription),
+        ]
+    );
+}
+
 /////////////////////////////////////////////////////////////////////////////////////////////
 // Constants
 
