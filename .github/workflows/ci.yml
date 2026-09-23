@@ -38,4 +38,5 @@ jobs:
 
       - uses: nrwl/nx-set-shas@v4
 
-      - run: bunx nx affected -t lint test typecheck build api-check
+      # e2e is published-e2e: the SDK packages installed from a local registry.
+      - run: bunx nx affected -t lint test typecheck build api-check e2e

@@ -1,0 +1,12 @@
+[install]
+# Same seven day window as the workspace, with two exceptions. The @jaw.id
+# packages were published a moment ago to the local registry. run.sh pins viem
+# to the version the workspace lockfile already admitted, and viem pins ox to
+# an exact version, so both follow the lockfile instead of the window.
+minimumReleaseAge = 604800
+minimumReleaseAgeExcludes = ["@jaw.id/core", "@jaw.id/wagmi", "@jaw.id/ui", "@jaw.id/cli", "viem", "ox"]
+
+# Only the packages under test come from the local registry. Everything else
+# goes straight to npm rather than through the proxy, which is much slower.
+[install.scopes]
+"@jaw.id" = "http://localhost:4873/"

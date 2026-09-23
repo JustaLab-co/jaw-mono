@@ -3,6 +3,30 @@
 Two scripts, neither part of `nx test`: both need something the test suite
 deliberately does not have, a running dev server or a live chain.
 
+## published (installed packages, runs in CI)
+
+Publishes core, wagmi, ui and cli to a Verdaccio registry on `localhost:4873`,
+installs them into a project outside the workspace and checks what an
+integrator gets. Inside the workspace every import resolves to `src/` through
+the `@jaw-mono/source` condition, so the unit tests never see the tarballs, the
+exports map or the CJS build.
+
+It checks that each package imports under Node, that core's CJS build exports
+the same names as its ESM one, that wagmi and ui refuse `require` with their
+ESM-only message, that the types resolve for a bundler-style consumer, and that
+the `jaw` binary runs and lists its commands. It also compares each installed
+`dist/index.js` with the local build, so a copy of the same version from npm
+cannot pass for it.
+
+```bash
+bunx nx run published-e2e:e2e   # builds the four packages first
+```
+
+CI runs it through `nx affected`, whenever one of the four packages changes. The
+registry storage is wiped on every run and `@jaw.id/*` is never proxied to npm.
+Nothing leaves the machine: the publish uses its own npm userconfig, pointed at
+the local registry.
+
 ## permission-onchain (real chain)
 
 Asks the deployed `JustaPermissionManager` on the session's chain whether the

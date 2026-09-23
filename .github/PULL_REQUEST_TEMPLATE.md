@@ -26,6 +26,6 @@ bunx nx build <project>
 ## Checklist
 
 - [ ] The title is a conventional commit and reads as the subject it becomes on squash. `nx release` takes the version bump from its type
-- [ ] `bunx prettier --check .` and `bunx nx affected -t lint test typecheck build api-check` pass, which is what CI runs
+- [ ] `bunx prettier --check .` and `bunx nx affected -t lint test typecheck build api-check e2e` pass, which is what CI runs
 - [ ] `@jaw.id/core`'s public API is unchanged, or `bunx nx api-update @jaw.id/core` ran and the report diff is part of this PR
 - [ ] Docs updated, if this changes behaviour somebody integrates against
