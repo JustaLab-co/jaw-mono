@@ -1,3 +1,13 @@
+## 1.5.0 (2026-09-23)
+
+### 🚀 Features
+
+- **core:** let the backend decide whether a request is served ([#321](https://github.com/JustaLab-co/jaw-mono/pull/321))
+
+### ❤️ Thank You
+
+- Mariano Aguero @mariano-aguero
+
 ## 1.4.3 (2026-09-18)
 
 ### 🩹 Fixes
