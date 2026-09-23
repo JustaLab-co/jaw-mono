@@ -4,7 +4,13 @@ name: Mutation testing
 # changes the code and checks that some test fails. Too slow to gate PRs, so it
 # runs once a month on core and on the keys signing path. The break threshold
 # in each stryker.config.json sits below the measured score, so a drop fails
-# the run. Core has none yet: it gets one from its first full run.
+# the run. Core has none yet ("break": null), so its run never fails on score
+# until its first full run sets a floor.
+#
+# Keys runs in place, because its vitest config reaches ../../ paths that a
+# sandbox copy would break. Run locally and killed midway, the mutated files
+# stay in apps/keys-jaw-id/src: `git restore apps/keys-jaw-id/src`, or copy
+# them back from apps/keys-jaw-id/.stryker-tmp/backup-*.
 
 on:
   schedule:
@@ -13,7 +19,7 @@ on:
 
 concurrency:
   group: mutation-${{ github.ref }}
-  cancel-in-progress: true
+  cancel-in-progress: false
 
 permissions:
   contents: read
@@ -35,7 +41,7 @@ jobs:
 
       - uses: actions/setup-node@v4
         with:
-          node-version: '>=22.13'
+          node-version: 22
 
       - uses: oven-sh/setup-bun@v2
         with:

@@ -11,15 +11,16 @@ permissions:
 jobs:
   validate:
     runs-on: ubuntu-latest
+    timeout-minutes: 45
     steps:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
 
-      # check.mjs in published-e2e uses module.registerHooks (stable since 22.13).
+      # 22 resolves to the latest 22.x; check.mjs in published-e2e needs >= 22.13.
       - uses: actions/setup-node@v4
         with:
-          node-version: '>=22.13'
+          node-version: 22
 
       - uses: oven-sh/setup-bun@v2
         with:
