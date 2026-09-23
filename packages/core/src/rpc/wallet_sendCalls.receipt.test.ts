@@ -26,7 +26,12 @@ vi.mock('../analytics/index.js', () => ({
 }));
 
 import { notifyReceiptReceived } from '../analytics/index.js';
-import { getCallStatus, storeCallStatus, waitForReceiptInBackground } from './wallet_sendCalls.js';
+import {
+    getCallStatus,
+    storeCallStatus,
+    transformReceiptsToEIP5792,
+    waitForReceiptInBackground,
+} from './wallet_sendCalls.js';
 
 const notifyMock = vi.mocked(notifyReceiptReceived);
 
@@ -173,5 +178,29 @@ describe('waitForReceiptInBackground when the bundler returns no receipt', () =>
         expect(chain.getLogs).toHaveBeenCalledTimes(20);
         expect(getCallStatus(USER_OP_HASH)).toMatchObject({ status: 'pending' });
         expect(notifyMock).not.toHaveBeenCalled();
+    });
+});
+
+describe('transformReceiptsToEIP5792', () => {
+    const MINED = { transactionHash: TX_HASH, blockHash: TX_HASH, blockNumber: 1n, gasUsed: 1n, logs: [] };
+
+    // A reverted user operation sits in a transaction that was mined fine.
+    it('reports a reverted operation as failed, whatever the transaction status says', () => {
+        const [receipt] = transformReceiptsToEIP5792([{ success: false, receipt: { ...MINED, status: '0x1' } }]);
+
+        expect(receipt.status).toBe('0x0');
+    });
+
+    it('reports a successful operation from its viem receipt', () => {
+        const [receipt] = transformReceiptsToEIP5792([{ success: true, receipt: { ...MINED, status: 'success' } }]);
+
+        expect(receipt.status).toBe('0x1');
+    });
+
+    // Receipts persisted without `success` are still read by their transaction status.
+    it('falls back to the transaction status when there is no success field', () => {
+        const [receipt] = transformReceiptsToEIP5792([{ receipt: { ...MINED, status: '0x1' } }]);
+
+        expect(receipt.status).toBe('0x1');
     });
 });

@@ -110,14 +110,17 @@ export function transformReceiptsToEIP5792(receipts: unknown[]): CallReceipt[] {
             topics: (log.topics || []) as `0x${string}`[],
         }));
 
-        // Determine status: 0x1 for success, 0x0 for failure
-        // Check receipt.status, receipt.success, or actualReceipt.status
+        // `success` is whether the user operation went through. The transaction
+        // status under it only says the bundle was mined, so a reverted operation
+        // can sit in a successful transaction. The status is read only for a
+        // receipt that carries no `success`.
+        const reported = receipt.success ?? actualReceipt.success;
         const success =
-            actualReceipt.status === '0x1' ||
-            actualReceipt.status === 1 ||
-            receipt.success === true ||
-            actualReceipt.success === true ||
-            (actualReceipt.status === undefined && actualReceipt.transactionHash !== undefined);
+            typeof reported === 'boolean'
+                ? reported
+                : actualReceipt.status === '0x1' ||
+                  actualReceipt.status === 1 ||
+                  (actualReceipt.status === undefined && actualReceipt.transactionHash !== undefined);
         const status = success ? ('0x1' as `0x${string}`) : ('0x0' as `0x${string}`);
 
         // Extract required fields - prefer actualReceipt, fallback to top-level receipt
