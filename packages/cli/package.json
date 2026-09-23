@@ -125,6 +125,7 @@
     "@oclif/test": "^4.1.0",
     "@types/node": "^20.19.9",
     "@types/ws": "^8.18.1",
+    "fast-check": "^4.9.0",
     "vitest": "^3.0.0"
   }
 }
