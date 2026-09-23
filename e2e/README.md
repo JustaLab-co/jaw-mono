@@ -5,27 +5,36 @@ deliberately does not have, a running dev server or a live chain.
 
 ## published (installed packages, runs in CI)
 
-Publishes core, wagmi, ui and cli to a Verdaccio registry on `localhost:4873`,
-installs them into a project outside the workspace and checks what an
-integrator gets. Inside the workspace every import resolves to `src/` through
-the `@jaw-mono/source` condition, so the unit tests never see the tarballs, the
-exports map or the CJS build.
+Packs core, wagmi, ui and cli, publishes them to a Verdaccio registry on
+`localhost:4873` under a prerelease version made for the run
+(`<version>-e2e.<timestamp>`), installs them into projects outside the workspace
+and checks what an integrator gets. Inside the workspace every import resolves
+to `src/` through the `@jaw-mono/source` condition, so the unit tests never see
+the tarballs, the exports map or the CJS build.
 
-It checks that each package imports under Node, that core's CJS build exports
-the same names as its ESM one, that wagmi and ui refuse `require` with their
-ESM-only message, that the types resolve for a bundler-style consumer, and that
-the `jaw` binary runs and lists its commands. It also compares each installed
-`dist/index.js` with the local build, so a copy of the same version from npm
-cannot pass for it.
+The run version cannot exist on npm, and every installed `@jaw.id` package must
+report it, so a copy of the same release from npm cannot pass for the local
+build. The released tarballs have the same bytes, so comparing files would not
+tell them apart.
+
+Core and cli are each installed alone first, so a runtime dependency that only
+resolves because a sibling package installs it fails there. Then all four go
+into one project, which checks that each package imports under Node, that
+core's CJS build exports the same names as its ESM one, that wagmi and ui refuse
+`require` with their ESM-only message, that every relative path in the
+published declarations exists, that the types resolve for a bundler-style
+consumer, and that the `jaw` binary runs, ships its oclif manifest and lists
+its commands.
 
 ```bash
 bunx nx run published-e2e:e2e   # builds the four packages first
 ```
 
-CI runs it through `nx affected`, whenever one of the four packages changes. The
-registry storage is wiped on every run and `@jaw.id/*` is never proxied to npm.
-Nothing leaves the machine: the publish uses its own npm userconfig, pointed at
-the local registry.
+CI runs it through `nx affected`, whenever one of the four packages or
+`.verdaccio/config.yml` changes. Each run gets its own registry storage, and
+`@jaw.id/*` is never proxied to npm. Nothing leaves the machine: publish and
+installs run with their own home directory and npm userconfig, so `~/.npmrc`
+and any registry override in it are never read.
 
 ## permission-onchain (real chain)
 

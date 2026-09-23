@@ -8,7 +8,8 @@
       "dependsOn": ["^build"],
       "options": {
         "command": "bash e2e/published/run.sh"
-      }
+      },
+      "inputs": ["{projectRoot}/**/*", "{workspaceRoot}/.verdaccio/config.yml", "^production"]
     }
   }
 }

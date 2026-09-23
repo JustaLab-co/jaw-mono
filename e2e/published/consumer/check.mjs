@@ -1,4 +1,4 @@
-// Needs Node >= 22.13 for module.registerHooks (stable). CI pins that version;
+// Needs Node >= 22.13 for module.registerHooks. CI uses the latest 22.x;
 // the type check uses the workspace's tsc because the consumer installs no
 // devDependencies, so its TS version follows the monorepo.
 import assert from 'node:assert/strict';
@@ -15,7 +15,8 @@ registerHooks({
 
 const core = await import('@jaw.id/core');
 assert.equal(typeof core.create, 'function');
-assert.equal(core.SDK_VERSION, require('@jaw.id/core/package.json').version);
+// run.sh publishes under <version>-e2e.<n>; SDK_VERSION is set at build time.
+assert.equal(core.SDK_VERSION, require('@jaw.id/core/package.json').version.split('-e2e.')[0]);
 
 const wagmi = await import('@jaw.id/wagmi');
 assert.equal(typeof wagmi.jaw, 'function');
