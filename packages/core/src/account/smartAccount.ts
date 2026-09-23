@@ -120,7 +120,7 @@ const arc = /*#__PURE__*/ defineChain({ ...arcBase, blockTime: 500 });
  *
  * `readonly` because these are module-level constants shared by every consumer,
  * so pushing to or splicing a list would corrupt chain resolution process-wide.
- * It is shallow: the chain objects inside are viem's own, and a top-level field
+ * It is shallow: the chain objects inside are typed as viem's Chain, and a field
  * such as `chain.name` or `chain.rpcUrls.default` still compiles as assignable.
  */
 export const MAINNET_CHAINS: readonly ViemChain[] = [
