@@ -17,6 +17,8 @@ vi.mock('@jaw.id/core', () => ({
   ANY_TARGET: '0x3232323232323232323232323232323232323232',
   ANY_FN_SEL: '0x32323232',
   EMPTY_CALLDATA_FN_SEL: '0xe0e0e0e0',
+  // Same reason: the chain icon hook reads the capabilities cache on render.
+  peekCapabilities: () => undefined,
 }));
 vi.mock('../../hooks/useReverseIdentity', () => ({
   useReverseIdentity: () => ({ name: undefined, avatar: undefined }),

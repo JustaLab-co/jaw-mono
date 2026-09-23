@@ -49,13 +49,6 @@ export function usePermissionExecution({
     setPermission(null);
     setUnresolved(null);
     if (!permissionId) return;
-    // No key means no way to reach the relay. Terminal, not pending — otherwise the screen
-    // renders as an ordinary transaction and never says whose funds are moving. A failed lookup,
-    // not a revocation: the permission itself may be perfectly valid.
-    if (!apiKey) {
-      setUnresolved('lookup-failed');
-      return;
-    }
 
     let cancelled = false;
     getPermissionFromRelay(permissionId, apiKey)

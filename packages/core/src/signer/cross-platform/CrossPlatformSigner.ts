@@ -137,12 +137,8 @@ export class CrossPlatformSigner extends JAWSigner {
         if (processedRequest.method === 'wallet_revokePermissions') {
             const params = processedRequest.params as [{ id: `0x${string}` }];
             const permissionId = params[0].id;
-            const apiKey = store.config.get().apiKey;
-            if (!apiKey) {
-                throw standardErrors.rpc.internal('No API key configured');
-            }
             try {
-                const relayPermission = await getPermissionFromRelay(permissionId, apiKey);
+                const relayPermission = await getPermissionFromRelay(permissionId, store.config.get().apiKey);
                 resolvedChain = this.resolveChain(relayPermission.chainId);
             } catch {
                 throw standardErrors.rpc.invalidParams(

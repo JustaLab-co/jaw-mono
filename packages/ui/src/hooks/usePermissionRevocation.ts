@@ -64,15 +64,10 @@ export function usePermissionRevocation({
     setPermission(null);
     setUnresolved(null);
     if (!enabled) return;
-    // Both are terminal, not pending. A revocation is *about* a permission, so an absent id is a
-    // malformed request rather than an absence — and without a key the relay is unreachable, so the
-    // record this revocation is built from can never arrive.
+    // Terminal, not pending: a revocation is *about* a permission, so an absent id is a
+    // malformed request rather than an absence.
     if (!permissionId) {
       setUnresolved('missing-id');
-      return;
-    }
-    if (!apiKey) {
-      setUnresolved('lookup-failed');
       return;
     }
 

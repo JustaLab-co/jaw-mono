@@ -33,13 +33,13 @@ export type WalletGetCallsHistoryResponse = CallsHistoryItem[];
  * Fetches the call history for a given address from the RPC server.
  *
  * @param request - The RPC request arguments
- * @param apiKey - The API key for authentication
+ * @param apiKey - The API key for authentication, if the caller has one
  * @param connectedAddress - Optional connected account address to inject if no address in params
  * @returns Array of call history items
  */
 export async function handleGetCallsHistoryRequest(
     request: RequestArguments,
-    apiKey: string,
+    apiKey: string | undefined,
     connectedAddress?: Address
 ): Promise<WalletGetCallsHistoryResponse> {
     const params = request.params as Array<{ address?: Address }> | undefined;

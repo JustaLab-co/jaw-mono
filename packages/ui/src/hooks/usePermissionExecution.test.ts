@@ -109,10 +109,13 @@ describe('usePermissionExecution lookup outcomes', () => {
     expect(hook.problem).toBe('lookup-failed');
   });
 
-  it('a missing apiKey is a failed lookup — the permission itself may be fine', async () => {
+  // A dApp registered by origin has no key, and the relay resolves it from the
+  // origin instead. Refusing here left the screen unable to say whose funds move.
+  it('looks the permission up with no api key', async () => {
+    relayMock.mockResolvedValue(relayPermission as never);
     await mount(undefined);
 
-    expect(relayMock).not.toHaveBeenCalled();
-    expect(hook.problem).toBe('lookup-failed');
+    expect(relayMock).toHaveBeenCalledWith(PERMISSION_ID, undefined);
+    expect(hook.problem).toBeNull();
   });
 });

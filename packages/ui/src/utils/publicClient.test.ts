@@ -8,7 +8,10 @@ import {
   type Hex,
 } from 'viem';
 
+import { setDappOrigin } from '@jaw.id/core/internal';
+
 import { getJawPublicClient, getPublicClient, jawRpcUrl } from './publicClient';
+import { getChainLabel } from './resolveChainLabel';
 import { fetchTokenBalance } from './tokenBalance';
 import { createTokenResolver } from './clearSigning';
 
@@ -95,14 +98,14 @@ const json = (id: number, result: Hex) =>
  * `allowFailure` isolation claim rests on.
  */
 function stubRpc(options: { revertFor?: string[]; unavailable?: boolean } = {}) {
-  const bodies: { method: string; to?: string; data?: Hex }[] = [];
+  const bodies: { method: string; to?: string; data?: Hex; dappOrigin: string | null }[] = [];
   const reverts = new Set((options.revertFor ?? []).map((a) => a.toLowerCase()));
 
   vi.stubGlobal(
     'fetch',
     vi.fn(async (_url: string, init: RequestInit) => {
       if (options.unavailable) {
-        bodies.push({ method: 'unavailable' });
+        bodies.push({ method: 'unavailable', dappOrigin: null });
         return new Response('service unavailable', { status: 503 });
       }
       const body = JSON.parse(String(init.body)) as {
@@ -110,7 +113,12 @@ function stubRpc(options: { revertFor?: string[]; unavailable?: boolean } = {}) 
         method: string;
         params: [{ to?: string; data?: Hex }];
       };
-      bodies.push({ method: body.method, to: body.params?.[0]?.to, data: body.params?.[0]?.data });
+      bodies.push({
+        method: body.method,
+        to: body.params?.[0]?.to,
+        data: body.params?.[0]?.data,
+        dappOrigin: new Headers(init.headers).get('x-dapp-origin'),
+      });
 
       const { to, data } = body.params[0];
 
@@ -147,6 +155,7 @@ function stubRpc(options: { revertFor?: string[]; unavailable?: boolean } = {}) 
 
 afterEach(() => {
   vi.unstubAllGlobals();
+  setDappOrigin(undefined);
 });
 
 describe('getPublicClient', () => {
@@ -181,6 +190,62 @@ describe('getPublicClient', () => {
   // route wallet traffic to the chain's public node instead of the proxy.
   it('refuses an empty RPC URL rather than falling back to the chain public node', () => {
     expect(() => getPublicClient(CHAIN_WITH_MULTICALL, '')).toThrow(/No RPC URL configured/);
+  });
+});
+
+// keys.jaw.id mounts these dialogs, so a keyless read leaves with keys' Origin and
+// the backend needs the header to know which dApp it serves.
+describe('x-dapp-origin', () => {
+  const DAPP = 'https://dapp.example';
+  const THIRD_PARTY_RPC = 'https://rpc.third-party.test';
+
+  it('names the dApp on a JAW RPC url', async () => {
+    const bodies = stubRpc();
+    setDappOrigin(DAPP);
+
+    await fetchTokenBalance(TOKENS[0], HOLDER, jawRpcUrl(CHAIN_WITHOUT_MULTICALL), CHAIN_WITHOUT_MULTICALL);
+
+    expect(bodies[0].dappOrigin).toBe(DAPP);
+  });
+
+  it('sends nothing when no dApp was set', async () => {
+    const bodies = stubRpc();
+
+    await fetchTokenBalance(TOKENS[0], HOLDER, jawRpcUrl(CHAIN_WITHOUT_MULTICALL), CHAIN_WITHOUT_MULTICALL);
+
+    expect(bodies[0].dappOrigin).toBeNull();
+  });
+
+  it('never tells a third-party RPC which dApp the user is on', async () => {
+    const bodies = stubRpc();
+    setDappOrigin(DAPP);
+
+    await fetchTokenBalance(TOKENS[0], HOLDER, THIRD_PARTY_RPC, CHAIN_WITHOUT_MULTICALL);
+
+    expect(bodies[0].dappOrigin).toBeNull();
+  });
+
+  // What lets clientCache stay keyed on (chainId, rpcUrl): the dApp arrives after
+  // the client exists.
+  it('picks up a dApp set after the client was cached', async () => {
+    const bodies = stubRpc();
+    const rpcUrl = jawRpcUrl(CHAIN_WITH_MULTICALL, 'key-late-origin');
+    const client = getPublicClient(CHAIN_WITH_MULTICALL, rpcUrl);
+
+    setDappOrigin(DAPP);
+    await fetchTokenBalance(TOKENS[0], HOLDER, rpcUrl, CHAIN_WITH_MULTICALL);
+
+    expect(getPublicClient(CHAIN_WITH_MULTICALL, rpcUrl)).toBe(client);
+    expect(bodies[0].dappOrigin).toBe(DAPP);
+  });
+
+  it('names the dApp on the chain label lookup', async () => {
+    const bodies = stubRpc();
+    setDappOrigin(DAPP);
+
+    await getChainLabel(42161, jawRpcUrl(1));
+
+    expect(bodies[0].dappOrigin).toBe(DAPP);
   });
 });
 

@@ -1,5 +1,5 @@
 import type { Address, Hash, Hex, TypedDataDefinition, TypedData, LocalAccount } from 'viem';
-import { isHex, encodeFunctionData, erc20Abi, createPublicClient, http, numberToHex } from 'viem';
+import { isHex, encodeFunctionData, erc20Abi, createPublicClient, numberToHex } from 'viem';
 import { toWebAuthnAccount, type SmartAccount } from 'viem/account-abstraction';
 import {
     createSmartAccount,
@@ -23,6 +23,7 @@ import {
     type CallStatusResponse,
 } from '../rpc/wallet_sendCalls.js';
 import type { JustanAccountImplementation } from './toJustanAccount.js';
+import { jawHttp } from '../utils/jawHttp.js';
 import {
     PasskeyManager,
     type PasskeyAccount,
@@ -47,7 +48,7 @@ import {
     type SpendPermissionDetail,
 } from '../rpc/permissions.js';
 import { JAW_RPC_URL, JAW_PAYMASTER_URL, ERC20_PAYMASTER_ADDRESS } from '../constants.js';
-import { type Chain, chains as chainStore } from '../store/index.js';
+import { type Chain, chains as chainStore, dropChainClients } from '../store/index.js';
 import { logAccountIssuance } from '../analytics/index.js';
 
 /**
@@ -56,8 +57,8 @@ import { logAccountIssuance } from '../analytics/index.js';
 export interface AccountConfig {
     /** Chain ID for the account */
     chainId: number;
-    /** API key for JAW services (required) */
-    apiKey: string;
+    /** API key for JAW services, if the caller has one */
+    apiKey?: string;
     /** Custom paymaster URL for gas sponsorship */
     paymasterUrl?: string;
     /** Custom paymaster context for gas sponsorship */
@@ -148,7 +149,7 @@ export class Account {
     private readonly _smartAccount: SmartAccount;
     private readonly _chain: Chain;
     private readonly _passkeyAccount: PasskeyAccount | null;
-    private readonly _apiKey: string;
+    private readonly _apiKey?: string;
     private readonly _localAccount: LocalAccount | null;
 
     /**
@@ -157,7 +158,7 @@ export class Account {
     private constructor(
         smartAccount: SmartAccount,
         chain: Chain,
-        apiKey: string,
+        apiKey: string | undefined,
         passkeyAccount?: PasskeyAccount,
         localAccount?: LocalAccount
     ) {
@@ -183,13 +184,13 @@ export class Account {
      * the next call.
      */
     static async backfillStoredAccountAddresses(config: AccountConfig): Promise<PasskeyAccount[]> {
-        const { chainId, apiKey, paymasterUrl } = config;
+        const { chainId, apiKey, paymasterUrl, paymasterContext } = config;
         const passkeyManager = new PasskeyManager(config.storage, undefined, apiKey);
         const accounts = passkeyManager.fetchAccounts();
         const missing = accounts.filter((account) => !account.address);
         if (missing.length === 0) return accounts;
 
-        const chain = Account.buildChainConfig(chainId, apiKey, paymasterUrl);
+        const chain = Account.buildChainConfig(chainId, apiKey, paymasterUrl, paymasterContext);
         const bundlerClient = getBundlerClient(chain);
 
         const derived = await Promise.all(
@@ -1192,7 +1193,7 @@ export class Account {
     ): Promise<{ to: Address; value: bigint; data: Hex } | null> {
         const publicClient = createPublicClient({
             chain: { id: this._chain.id } as Parameters<typeof createPublicClient>[0]['chain'],
-            transport: http(this._chain.rpcUrl),
+            transport: jawHttp(this._chain.rpcUrl),
         });
 
         const read = {
@@ -1432,8 +1433,22 @@ export class Account {
         };
 
         const existingChains = chainStore.get() ?? [];
-        if (!existingChains.some((c) => c.id === chain.id)) {
+        const stored = existingChains.find((c) => c.id === chain.id);
+
+        // Last write wins. `chains` is persisted, and on keys.jaw.id that one origin is
+        // shared by every dApp the user opens, so first-write-wins let an entry outlive
+        // the session that wrote it and serve every later one. With the api key optional
+        // that entry can carry a url with no key in it, which turns the old
+        // mis-attribution into an outright refusal on the next keyed session.
+        if (!stored) {
             chainStore.set([...existingChains, chain]);
+        } else if (JSON.stringify(stored) !== JSON.stringify(chain)) {
+            chainStore.set(existingChains.map((c) => (c.id === chain.id ? chain : c)));
+            // Every field of the entry is baked into the clients, url and paymaster and
+            // native currency alike, so any difference means the cached pair is wrong.
+            // Compared whole rather than field by field so a new field cannot be
+            // forgotten here; two entries that differ only in key order cost one rebuild.
+            dropChainClients(chain.id);
         }
 
         return chain;
@@ -1640,7 +1655,7 @@ export class Account {
         // Check current allowance
         const publicClient = createPublicClient({
             chain: { id: this._chain.id } as Parameters<typeof createPublicClient>[0]['chain'],
-            transport: http(this._chain.rpcUrl),
+            transport: jawHttp(this._chain.rpcUrl),
         });
 
         const currentAllowance = await publicClient.readContract({

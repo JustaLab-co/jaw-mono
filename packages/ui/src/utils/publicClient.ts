@@ -1,5 +1,14 @@
 import { createPublicClient, http, type Chain } from 'viem';
 import { JAW_RPC_URL, SUPPORTED_CHAINS } from '@jaw.id/core';
+import { jawHttp } from '@jaw.id/core/internal';
+
+/**
+ * Transport for an RPC url. Ours get `jawHttp`, which names the dApp keys is acting
+ * for; a third-party node must never learn that, so it gets plain `http`.
+ */
+export function rpcTransport(rpcUrl: string) {
+  return rpcUrl.startsWith(JAW_RPC_URL) ? jawHttp(rpcUrl) : http(rpcUrl);
+}
 
 /** JAW RPC proxy URL for a chain, with the dApp's API key when one is available. */
 export function jawRpcUrl(chainId: number, apiKey?: string): string {
@@ -18,7 +27,7 @@ function createClient(chainId: number, rpcUrl: string) {
   // the counterparty picks the host. A cert error on it taints the page and blocks
   // the passkey ceremony in strict browsers. A server can follow those urls; a
   // signing page must not.
-  return createPublicClient({ chain, transport: http(rpcUrl), batch: { multicall: true }, ccipRead: false });
+  return createPublicClient({ chain, transport: rpcTransport(rpcUrl), batch: { multicall: true }, ccipRead: false });
 }
 
 const clientCache = new Map<string, ReturnType<typeof createClient>>();

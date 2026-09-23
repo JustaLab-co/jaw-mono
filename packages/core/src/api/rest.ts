@@ -1,6 +1,23 @@
-import { backendInstance, controlledAxiosPromise } from './axiosController.js';
+import { backendInstance, controlledAxiosPromise, getBaseUrl } from './axiosController.js';
 import { Routes, ROUTES } from './routes/index.js';
+import { store } from '../store/index.js';
 import qs from 'qs';
+
+const OUR_ORIGINS = [getBaseUrl(), getBaseUrl(true)].map((url) => new URL(url).origin);
+
+/**
+ * Whether a url points at a backend of ours: the wallet API or staging.
+ *
+ * Compared by origin, not by prefix: `https://api.justaname.id.evil.com` starts with
+ * ours and is somebody else's host.
+ */
+function isOurHost(serverUrl: string): boolean {
+    try {
+        return OUR_ORIGINS.includes(new URL(serverUrl).origin);
+    } catch {
+        return false;
+    }
+}
 
 /**
  * Makes a REST call to the Backend API.
@@ -48,6 +65,13 @@ export const restCall = <
     // POST/DELETE: request goes to data
     const params = method === 'GET' ? request : method === 'PATCH' && queryParams ? queryParams : undefined;
 
+    // Any backend of ours is told, whichever host it runs on: the proxy, the wallet
+    // API, staging. Analytics lives on the wallet API, and a keyless caller has no
+    // key there for its workspace to be credited with. The one url that may belong
+    // to somebody else is a `serverUrl` an app-specific dApp points at its own server.
+    const serverIsOurs = !serverUrl || isOurHost(serverUrl);
+    const dappOrigin = serverIsOurs ? store.config.get().dappOrigin : undefined;
+
     return controlledAxiosPromise<ROUTES[T]['response']>(
         backendInstance(dev, serverUrl).request({
             url,
@@ -57,7 +81,9 @@ export const restCall = <
                 return qs.stringify(params, { arrayFormat: 'repeat' });
             },
             data: method === 'POST' || method === 'PATCH' ? request : undefined,
-            headers: headers || {},
+            // Calls made from the keys origin all carry the same `Origin`, so the
+            // caller they act on behalf of travels alongside instead of in it.
+            headers: { ...(headers ?? {}), ...(dappOrigin ? { 'x-dapp-origin': dappOrigin } : {}) },
         })
     );
 };

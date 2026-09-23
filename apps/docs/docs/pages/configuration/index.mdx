@@ -117,7 +117,7 @@ await jaw.disconnect();
 
 ## Minimal Configuration
 
-The only required option is `apiKey`:
+Every option is optional in cross-platform mode, the default. A request without an [apiKey](/configuration/apiKey) is identified by the origin it comes from, which JustaName has to have registered beforehand.
 
 ```typescript
 // Wagmi
@@ -126,6 +126,8 @@ const connector = jaw({ apiKey: 'your-api-key' });
 // Provider
 const jaw = JAW.create({ apiKey: 'your-api-key' });
 ```
+
+[App-specific mode](/configuration/mode/app-specific) is the exception: it requires `apiKey` and a `uiHandler`.
 
 ## Related
 

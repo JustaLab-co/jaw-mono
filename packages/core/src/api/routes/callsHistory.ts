@@ -60,13 +60,13 @@ export interface CallsHistoryRoutes {
         response: void;
         headers?: Record<string, string>;
         pathParams: { id: string };
-        queryParams: { 'api-key': string };
+        queryParams: { 'api-key'?: string };
     };
     GET_CALLS_HISTORY: {
         request: GetCallsHistoryRequest;
         response: CallsHistoryItem[];
         headers?: Record<string, string>;
         pathParams?: never;
-        queryParams: { 'api-key': string };
+        queryParams: { 'api-key'?: string };
     };
 }

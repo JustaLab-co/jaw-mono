@@ -15,6 +15,12 @@
       "import": "./dist/index.js",
       "require": "./dist/cjs/index.cjs",
       "default": "./dist/index.js"
+    },
+    "./internal": {
+      "@jaw-mono/source": "./src/internal.ts",
+      "types": "./dist/internal.d.ts",
+      "import": "./dist/internal.js",
+      "require": "./cjs-error-internal.cjs"
     }
   },
   "repository": {
@@ -27,6 +33,7 @@
   },
   "files": [
     "dist",
+    "cjs-error-internal.cjs",
     "LICENSE",
     "NOTICE",
     "!**/*.tsbuildinfo"
