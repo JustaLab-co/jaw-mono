@@ -148,8 +148,10 @@ function newProvider(mode: ModeType = Mode.CrossPlatform): JAWProvider {
 }
 
 /** A provider with a live session, so requests route through the signer. */
-function connectedProvider(mode: ModeType = Mode.CrossPlatform): JAWProvider {
-    const signerType = MODES.find((m) => m.mode === mode)!.signerType;
+function connectedProvider(
+    mode: ModeType = Mode.CrossPlatform,
+    signerType: (typeof MODES)[number]['signerType'] = 'crossPlatform'
+): JAWProvider {
     (loadSignerType as Mock).mockReturnValue(signerType);
     return new JAWProvider(options(mode));
 }
@@ -296,7 +298,7 @@ describe('EIP-1193 conformance', () => {
             );
 
             it('disconnects when a live session comes back unauthorized', async () => {
-                const provider = connectedProvider(mode);
+                const provider = connectedProvider(mode, signerType);
                 const events = recordEvents(provider);
                 (signer.request as Mock).mockRejectedValue({ code: 4100, message: 'session expired' });
 
