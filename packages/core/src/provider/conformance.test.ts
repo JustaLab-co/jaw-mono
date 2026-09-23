@@ -232,21 +232,58 @@ describe('EIP-1193 conformance', () => {
             // persisted account in AppSpecific. It must not outlive the request.
             it.each(casesOf('ephemeral'))('%s cleans up the throwaway signer when the user rejects', async (method) => {
                 (signer.request as Mock).mockRejectedValue(standardErrors.provider.userRejectedRequest());
+                const provider = newProvider(mode);
 
-                await expect(newProvider(mode).request({ method })).rejects.toMatchObject({
+                await expect(provider.request({ method })).rejects.toMatchObject({
                     code: standardErrorCodes.provider.userRejectedRequest,
                 });
                 expect(signer.cleanup).toHaveBeenCalled();
+                await expect(provider.request({ method: 'eth_accounts' })).resolves.toEqual([]);
+            });
+
+            // Cleanup rotates the CrossPlatform session keys, so running it
+            // before the request would leave the request nothing to encrypt with.
+            it('cleans up only after the request has settled', async () => {
+                let cleanupDone = false;
+                (signer.cleanup as Mock).mockImplementation(async () => {
+                    await Promise.resolve();
+                    cleanupDone = true;
+                });
+                (signer.request as Mock).mockRejectedValue(standardErrors.provider.userRejectedRequest());
+
+                await expect(newProvider(mode).request({ method: 'wallet_sendCalls' })).rejects.toBeDefined();
+
+                const [handshakeAt] = (signer.handshake as Mock).mock.invocationCallOrder;
+                const [requestAt] = (signer.request as Mock).mock.invocationCallOrder;
+                const [cleanupAt] = (signer.cleanup as Mock).mock.invocationCallOrder;
+                expect(handshakeAt).toBeLessThan(requestAt);
+                expect(requestAt).toBeLessThan(cleanupAt);
+                expect(cleanupDone).toBe(true);
             });
 
             it('cleans up the throwaway signer when the handshake is rejected', async () => {
                 (signer.handshake as Mock).mockRejectedValue(standardErrors.provider.userRejectedRequest());
+                const provider = newProvider(mode);
 
-                await expect(newProvider(mode).request({ method: 'wallet_sendCalls' })).rejects.toMatchObject({
+                await expect(provider.request({ method: 'wallet_sendCalls' })).rejects.toMatchObject({
                     code: standardErrorCodes.provider.userRejectedRequest,
                 });
                 expect(signer.request).not.toHaveBeenCalled();
                 expect(signer.cleanup).toHaveBeenCalled();
+                await expect(provider.request({ method: 'eth_accounts' })).resolves.toEqual([]);
+            });
+
+            it('passes a wallet error through with its code, message and data', async () => {
+                const walletError = {
+                    code: standardErrorCodes.rpc.transactionRejected,
+                    message: 'paymaster refused',
+                    data: { reason: 'quota' },
+                };
+                (signer.request as Mock).mockRejectedValue(walletError);
+
+                await expect(newProvider(mode).request({ method: 'wallet_sendCalls' })).rejects.toMatchObject(
+                    walletError
+                );
             });
 
             it('reports the rejection, not a failure of the cleanup after it', async () => {
@@ -257,6 +294,7 @@ describe('EIP-1193 conformance', () => {
                 await expect(newProvider(mode).request({ method: 'wallet_sendCalls' })).rejects.toMatchObject({
                     code: standardErrorCodes.provider.userRejectedRequest,
                 });
+                expect(warn).toHaveBeenCalled();
                 warn.mockRestore();
             });
         });
