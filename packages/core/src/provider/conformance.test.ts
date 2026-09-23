@@ -24,7 +24,10 @@ import { describe, it, expect, vi, beforeEach, Mock } from 'vitest';
 import { JAWProvider } from './JAWProvider.js';
 import { SILENT_METHODS, INTERACTIVE_METHODS } from '../method-policy.js';
 import { standardErrorCodes, standardErrors, errorValues } from '../errors/index.js';
-import { createSigner, loadSignerType, storeSignerType, type Signer } from '../signer/index.js';
+import { createSigner, loadSignerType, storeSignerType, clearSignerType, type Signer } from '../signer/index.js';
+import { store } from '../store/index.js';
+import { PasskeyManager } from '../passkey-manager/index.js';
+import type { RequestArguments } from './interface.js';
 import { handleGetCallsStatusRequest } from '../rpc/wallet_getCallStatus.js';
 import { handleGetAssetsRequest } from '../rpc/wallet_getAssets.js';
 import {
@@ -143,6 +146,8 @@ function casesOf<K extends NoSessionOutcome['kind']>(kind: K) {
 
 let signer: Signer;
 
+const ACCOUNT = '0x1234567890123456789012345678901234567890';
+
 function newProvider(mode: ModeType = Mode.CrossPlatform): JAWProvider {
     return new JAWProvider(options(mode));
 }
@@ -153,6 +158,7 @@ function connectedProvider(
     signerType: (typeof MODES)[number]['signerType'] = 'crossPlatform'
 ): JAWProvider {
     (loadSignerType as Mock).mockReturnValue(signerType);
+    store.account.set({ accounts: [ACCOUNT] });
     return new JAWProvider(options(mode));
 }
 
@@ -161,6 +167,8 @@ beforeEach(() => {
     signer = { request: vi.fn(), handshake: vi.fn(), cleanup: vi.fn() } as unknown as Signer;
     (createSigner as Mock).mockReturnValue(signer);
     (loadSignerType as Mock).mockReturnValue(null);
+    store.account.clear();
+    new PasskeyManager().logout();
 });
 
 describe('EIP-1193 conformance', () => {
@@ -194,6 +202,8 @@ describe('EIP-1193 conformance', () => {
 
             it.each(casesOf('connects'))('%s leaves the provider connected', async (method) => {
                 (signer.request as Mock).mockResolvedValue('connected');
+                // The real handshake stores the connected account in both modes.
+                (signer.handshake as Mock).mockImplementation(async () => store.account.set({ accounts: [ACCOUNT] }));
                 const provider = newProvider(mode);
 
                 await expect(provider.request({ method })).resolves.toBe('connected');
@@ -338,6 +348,7 @@ describe('EIP-1193 conformance', () => {
             it('disconnects when a live session comes back unauthorized', async () => {
                 const provider = connectedProvider(mode, signerType);
                 const events = recordEvents(provider);
+                new PasskeyManager().storeAuthState(ACCOUNT, 'credential-id');
                 (signer.request as Mock).mockRejectedValue({ code: 4100, message: 'session expired' });
 
                 await expect(provider.request({ method: 'wallet_sign' })).rejects.toMatchObject({ code: 4100 });
@@ -345,6 +356,56 @@ describe('EIP-1193 conformance', () => {
                 // Same code, opposite meaning: the session died, so tearing it down
                 // locally and telling the dapp is right.
                 expect(events).toEqual(['accountsChanged', 'disconnect']);
+                expect(new PasskeyManager().fetchActiveCredentialId()).toBeNull();
+            });
+
+            describe('returning visitor whose session expired', () => {
+                // Mirrors JAWSigner past its TTL: eth_accounts notices the expiry,
+                // drops the stored account and answers []. A signer left holding
+                // no accounts refuses everything else with 4100.
+                function expiredVisitor(): JAWProvider {
+                    const provider = connectedProvider(mode, signerType);
+                    (signer.request as Mock).mockImplementation(async ({ method }: RequestArguments) => {
+                        if (method === 'eth_accounts' && store.account.get().accounts?.length) {
+                            store.account.clear();
+                            return [];
+                        }
+                        throw standardErrors.provider.unauthorized();
+                    });
+                    return provider;
+                }
+
+                it('keeps answering eth_accounts with an empty list', async () => {
+                    const provider = expiredVisitor();
+
+                    await expect(provider.request({ method: 'eth_accounts' })).resolves.toEqual([]);
+                    await expect(provider.request({ method: 'eth_accounts' })).resolves.toEqual([]);
+                });
+
+                // No accounts means not connected, so the refusal is "connect
+                // first" and the passkey stays logged in for the reconnect.
+                it('refuses personal_sign without tearing anything down', async () => {
+                    const provider = expiredVisitor();
+                    const events = recordEvents(provider);
+                    new PasskeyManager().storeAuthState(ACCOUNT, 'credential-id');
+                    await provider.request({ method: 'eth_accounts' });
+
+                    await expect(provider.request({ method: 'personal_sign' })).rejects.toMatchObject({
+                        code: standardErrorCodes.provider.unauthorized,
+                    });
+                    expect(events).toEqual([]);
+                    expect(new PasskeyManager().fetchActiveCredentialId()).toBe('credential-id');
+                    expect(clearSignerType).toHaveBeenCalled();
+                });
+
+                it('still signs through a throwaway signer', async () => {
+                    const provider = expiredVisitor();
+                    await provider.request({ method: 'eth_accounts' });
+                    (signer.request as Mock).mockResolvedValue('signed');
+
+                    await expect(provider.request({ method: 'wallet_sendCalls' })).resolves.toBe('signed');
+                    expect(signer.handshake).toHaveBeenCalledWith(ephemeralHandshake);
+                });
             });
         });
     });

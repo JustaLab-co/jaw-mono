@@ -73,8 +73,10 @@ vi.mock('../store/index.js', async (importOriginal) => {
             clear: vi.fn(),
         },
         store: {
+            // A connected account, so a signer installed by a test counts as a
+            // live session rather than one the provider drops as expired.
             account: {
-                get: vi.fn(() => ({ chain: { id: 1 } })),
+                get: vi.fn(() => ({ accounts: ['0x1234567890123456789012345678901234567890'], chain: { id: 1 } })),
             },
             config: {
                 get: vi.fn(() => ({ apiKey: 'test-api-key' })),

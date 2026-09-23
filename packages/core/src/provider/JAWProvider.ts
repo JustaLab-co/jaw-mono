@@ -20,7 +20,7 @@ import type { JawTheme } from '../ui/theme.js';
 import { hexStringFromNumber, checkErrorForInvalidRequestArgs } from '../utils/index.js';
 import { isSafari } from '../utils/user-agent.js';
 
-import { correlationIds } from '../store/index.js';
+import { correlationIds, store } from '../store/index.js';
 
 import { handleGetCallsStatusRequest } from '../rpc/wallet_getCallStatus.js';
 import { handleGetAssetsRequest } from '../rpc/wallet_getAssets.js';
@@ -143,6 +143,14 @@ export class JAWProvider extends ProviderEventEmitter implements ProviderInterfa
 
         try {
             checkErrorForInvalidRequestArgs(args);
+            // No accounts means not connected. A signer restored from an earlier
+            // visit whose session has since expired is dropped here, quietly: no
+            // events, no passkey logout, no transport teardown. The request is
+            // then answered as it would be for a first-time visitor.
+            if (this.signer && !store.account.get().accounts?.length) {
+                this.signer = null;
+                clearSignerType();
+            }
             if (!this.signer) {
                 switch (args.method) {
                     case 'eth_requestAccounts': {
@@ -314,13 +322,13 @@ export class JAWProvider extends ProviderEventEmitter implements ProviderInterfa
             return result as T;
         } catch (error) {
             const { code } = error as { code?: number };
-            // 4100 means three different things here. From a live signer it means
-            // the session died, and tearing it down locally is right. From the
-            // no-session branch above it just means "connect first", and there
-            // is nothing to tear down: disconnecting would emit accountsChanged
-            // and disconnect on a provider that was never connected, log the
-            // passkey session out, and drop the iframe. A dapp that probes with
-            // personal_sign before connecting would pay for it.
+            // 4100 means three different things here. From a signer holding
+            // accounts it means the session died, and tearing it down is right.
+            // From the no-session branch above, which is also where an expired
+            // session lands, it just means "connect first", and there is nothing
+            // to tear down: disconnecting would emit accountsChanged and
+            // disconnect for a session the dapp already sees as gone, log the
+            // passkey out, and drop the iframe.
             //
             // The third is the backend turning the caller down, over an origin it
             // does not serve or a key it will not take. That says nothing about
