@@ -234,3 +234,48 @@ describe('session expiry inside a page', () => {
         expect(new PasskeyManager().fetchActiveCredentialId()).toBe('credential-id');
     });
 });
+
+describe('backend refusals', () => {
+    afterEach(() => {
+        vi.unstubAllGlobals();
+    });
+
+    function refuseFetch() {
+        vi.stubGlobal('fetch', vi.fn().mockResolvedValue({ status: 403, ok: false, text: async () => 'no' }));
+    }
+
+    // The refusal travels through the real signer, so this fails if anything
+    // on the way wraps the error and loses the marker.
+    it('keeps a live session when the backend refuses a read', async () => {
+        const provider = newProvider();
+        await provider.request({ method: 'eth_requestAccounts' });
+        const events = recordEvents(provider);
+        refuseFetch();
+
+        await expect(provider.request({ method: 'wallet_getCapabilities', params: [ACCOUNT] })).rejects.toMatchObject({
+            code: standardErrorCodes.provider.unauthorized,
+        });
+
+        expect(events).toEqual([]);
+        await expect(provider.request({ method: 'eth_accounts' })).resolves.toEqual([ACCOUNT]);
+    });
+
+    // A refused read does not check expiry, so the session it went through
+    // looks live to the catch. Tearing it down there would log the passkey out;
+    // the expiry has to be left for the next request to report.
+    it('leaves an expired session to the expiry report when the backend refuses a read', async () => {
+        const provider = await expiredSession();
+        const events = recordEvents(provider);
+        refuseFetch();
+
+        await expect(provider.request({ method: 'wallet_getCapabilities', params: [] })).rejects.toMatchObject({
+            code: standardErrorCodes.provider.unauthorized,
+        });
+        await expect(provider.request({ method: 'eth_accounts' })).resolves.toEqual([]);
+        await provider.request({ method: 'eth_chainId' });
+
+        expect(events).toEqual([['accountsChanged', []], ['disconnect']]);
+        expect(new PasskeyManager().fetchActiveCredentialId()).toBe('credential-id');
+        expect(vi.mocked(Communicator).prototype.disconnect).not.toHaveBeenCalled();
+    });
+});
