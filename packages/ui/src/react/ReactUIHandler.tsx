@@ -2364,7 +2364,7 @@ function PermissionDialogWrapper({
     let isMounted = true;
 
     const fetchFeeTokensData = async () => {
-      if (!viemChain || !apiKey) {
+      if (!viemChain) {
         setFeeTokensLoading(false);
         return;
       }
