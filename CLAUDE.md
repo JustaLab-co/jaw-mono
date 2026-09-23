@@ -54,6 +54,21 @@ bunx nx graph
 bunx nx release
 ```
 
+## Testing invariants
+
+These hold for every change, however small. A diff that needs to break one is a decision for a person to make in the PR description, not something to route around.
+
+- **Golden vectors never move to match the code.** The `expected` bytes in `packages/core/vectors/` come from `cast abi-encode` against the Solidity structs, not from this codebase (see its README). When a vector test fails, the encoder changed: fix the encoder. Never regenerate a vector from the current output. A PR that does change one says why in its description.
+- **The API report changes only on purpose.** `packages/core/etc/core.api.md` records everything `@jaw.id/core` exports, and `api-check` fails CI on any drift. Run `bunx nx api-update @jaw.id/core` only for an intended API change and commit the report diff with it.
+- **Tests assert behavior, not the implementation.** Do not mock `viem` or `ox` in `packages/core/src/account` or `src/signer` tests; ESLint rejects it. Write a test from what the issue or PR says should happen, not from what the code currently does, and never loosen an assertion or an expected value so a failing test passes.
+- **A known-bug test flips with its fix.** A test marked `it.fails` is converted to `it` in the same change that fixes the bug, never deleted.
+- **What the user sees is what gets signed.** In `apps/keys-jaw-id`, a screen signs the same request object it renders. Do not add a step that rebuilds, normalizes or fills in the signed payload after it has been shown.
+- **Session key scope is never widened to make something work.** `SESSION_SUPPORTED_METHODS` in `packages/cli/src/lib/rpc-classifier.ts` is everything a session key may do with no human present, and signing is deliberately absent (the comment there says why). `checkPolicy` in `packages/cli/src/x402/policy.ts` is not relaxed to let a payment through.
+- **Paths in `.github/CODEOWNERS` get their own small PR.** They are the vectors, the API report, the EIP-1193 provider, the keys signing screens and the CLI session code. Keep changes there separate from unrelated work so the review stays readable.
+- **Packaging changes run the published test.** After touching `exports`, `files`, `bin` or a build config of a package in `packages/`, run `bunx nx run published-e2e:e2e`, which installs the four packages from a local registry the way an integrator would.
+
+CI runs `bunx nx affected -t lint test typecheck build api-check e2e`, so a change to core also runs the tests of everything that depends on it.
+
 ## Architecture
 
 ### Publishable Packages (`packages/`)
