@@ -20,6 +20,9 @@ import {
     isAddressEqual,
     type Client,
     hashTypedData,
+    hashDomain,
+    hashStruct,
+    getTypesForEIP712Domain,
 } from 'viem';
 import { readContract, getChainId, getTransactionCount } from 'viem/actions';
 import { hashAuthorization } from 'viem/utils';
@@ -34,12 +37,9 @@ import {
 } from 'viem/account-abstraction';
 import type { SignAuthorizationReturnType } from 'viem/accounts';
 import * as Signature from 'ox/Signature';
+import * as TypedDataOx from 'ox/TypedData';
 import type * as WebAuthnP256 from 'ox/WebAuthnP256';
-import {
-    hashMessage as erc7739HashMessage,
-    hashTypedData as erc7739HashTypedData,
-    wrapTypedDataSignature,
-} from 'viem/experimental/erc7739';
+import { hashMessage as erc7739HashMessage, hashTypedData as erc7739HashTypedData } from 'viem/experimental/erc7739';
 import { CONTRACT_NAME, CONTRACT_VERSION, FACTORY_ADDRESS } from '../constants.js';
 
 export type JustanAccountImplementation = SmartAccountImplementation<
@@ -487,6 +487,34 @@ export function wrapSignature(parameters: { ownerIndex?: number | undefined; sig
         ]
     );
 }
+/**
+ * ERC-7739 `TypedDataSign` signature in Solady's explicit mode: the contents
+ * types sorted as EIP-712 encodes them inside `TypedDataSign`, then the primary
+ * type's name. The app domain is hashed with the declared `EIP712Domain`, if
+ * any, as the signed hash is.
+ */
+function wrapTypedDataSignature(parameters: TypedDataDefinition<Record<string, unknown>, string> & { signature: Hex }) {
+    const { domain = {}, message, primaryType, signature } = parameters;
+    const types = { EIP712Domain: getTypesForEIP712Domain({ domain }), ...parameters.types } as TypedData;
+
+    const contentsType = TypedDataOx.encodeType({ primaryType, types })
+        .split(/(?<=\))/)
+        .sort()
+        .join('');
+    const contentsDescription = stringToHex(contentsType + primaryType);
+
+    return encodePacked(
+        ['bytes', 'bytes32', 'bytes32', 'bytes', 'uint16'],
+        [
+            signature,
+            hashDomain({ domain, types }),
+            hashStruct({ data: message, primaryType, types }),
+            contentsDescription,
+            size(contentsDescription),
+        ]
+    );
+}
+
 /////////////////////////////////////////////////////////////////////////////////////////////
 // Constants
 

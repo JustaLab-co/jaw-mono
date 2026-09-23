@@ -754,12 +754,29 @@ describe('toJustanAccount unit tests', () => {
                 // The envelope goes around the owner tuple, not inside it, so
                 // decoding the tuple off the front reads right past it. Assert
                 // the whole value: the inner tuple built from the shape written
-                // out above, wrapped by viem's own helper.
-                const { wrapTypedDataSignature } = await import('viem/experimental/erc7739');
+                // out above, then the app domain, the contents hash and the
+                // explicit-mode description (contents type, then its name).
                 const inner = viem.encodeAbiParameters(WRAPPED_SIGNATURE, [
                     { ownerIndex: 0n, signatureData: MOCK_SIGNATURE },
                 ]);
-                expect(signature).toBe(wrapTypedDataSignature({ ...MOCK_TYPED_DATA, signature: inner }));
+                const description = viem.stringToHex('Test(string value)Test');
+                expect(signature).toBe(
+                    viem.concat([
+                        inner,
+                        viem.hashDomain({
+                            domain: MOCK_TYPED_DATA.domain,
+                            types: {
+                                EIP712Domain: [
+                                    { name: 'name', type: 'string' },
+                                    { name: 'version', type: 'string' },
+                                ],
+                            },
+                        }),
+                        viem.hashStruct({ ...MOCK_TYPED_DATA, data: MOCK_TYPED_DATA.message }),
+                        description,
+                        viem.numberToHex(viem.size(description), { size: 2 }),
+                    ])
+                );
             });
 
             it('should throw error for address-type owner', async () => {

@@ -183,6 +183,63 @@ cast abi-decode --input "f((uint256,bytes))" 0x<expected>
 For a `permission-calls.json` entry, drop the leading four bytes first, or use
 `cast 4byte-decode`.
 
+`typed-data-sign.json` is the whole `signTypedData` output: the owner tuple, then
+the ERC-7739 envelope Solady reads in `ERC1271.sol:_erc1271IsValidSignatureViaNestedEIP712`,
+`appDomainSeparator ‖ contents ‖ contentsDescription ‖ uint16(len)`. The
+description is in explicit mode: every contents type sorted by name, as EIP-712
+encodes them inside `TypedDataSign`, then the primary type's name. The owner is
+anvil's second default key, the account `0xf470E70a46414C7aCb92aD6771da22b611C97303`
+on chain 31337, and ECDSA signing is deterministic, so `cast wallet sign` gives
+the same bytes. Every entry was also accepted by `isValidSignature` on a
+`JustanAccount` deployed in forge with that owner.
+
+```bash
+PK=0x59c6995e998f97a5a0044966f0945389dc9e86dae88c7a8412f4603b6b78690d
+ACCOUNT=0xf470E70a46414C7aCb92aD6771da22b611C97303
+ZERO=0x0000000000000000000000000000000000000000000000000000000000000000
+
+# wrap <appDomainSeparator> <contentsStructHash> <sortedContentsType> <contentsName>
+wrap() {
+  local tds=$(cast keccak $(cast abi-encode "f(bytes32,bytes32,bytes32,bytes32,uint256,address,bytes32)" \
+    $(cast keccak "TypedDataSign($4 contents,string name,string version,uint256 chainId,address verifyingContract,bytes32 salt)$3") \
+    $2 $(cast keccak "JustanAccount") $(cast keccak "1") 31337 $ACCOUNT $ZERO))
+  local sig=$(cast wallet sign --no-hash $(cast keccak $(cast concat-hex 0x1901 $1 $tds)) --private-key $PK)
+  local desc=$(cast from-utf8 "$3$4")
+  cast concat-hex $(cast abi-encode "f((uint256,bytes))" "(0,$sig)") $1 $2 $desc \
+    $(printf '0x%04x' $(( (${#desc} - 2) / 2 )))
+}
+```
+
+Third entry, `Order`, whose `Asset` dependency sorts before it:
+
+```bash
+ASSET=$(cast keccak $(cast abi-encode "f(bytes32,address,uint256)" \
+  $(cast keccak "Asset(address token,uint256 id)") 0x3333333333333333333333333333333333333333 7))
+ORDER=$(cast keccak $(cast abi-encode "f(bytes32,bytes32,bytes32,uint256)" \
+  $(cast keccak "Order(Asset asset,string memo,uint256 amount)Asset(address token,uint256 id)") \
+  $ASSET $(cast keccak "hi") 42))
+VAULT=$(cast keccak $(cast abi-encode "f(bytes32,bytes32,bytes32,uint256,address)" \
+  $(cast keccak "EIP712Domain(string name,string version,uint256 chainId,address verifyingContract)") \
+  $(cast keccak "Vault") $(cast keccak "1") 8453 0x1111111111111111111111111111111111111111))
+
+wrap $VAULT $ORDER "Asset(address token,uint256 id)Order(Asset asset,string memo,uint256 amount)" Order
+```
+
+The other entries follow the same steps with their own domain and struct hashes.
+`PermitSingle` takes the sorted type
+`PermitDetails(address token,uint160 amount,uint48 expiration,uint48 nonce)PermitSingle(PermitDetails details,address spender,uint256 sigDeadline)`
+and the Permit2 domain `EIP712Domain(string name,uint256 chainId,address verifyingContract)`.
+The fourth entry hashes its domain with the declared
+`EIP712Domain(string name,string version,address verifyingContract)`, leaving
+out the `chainId` the domain object carries, which is what the app contract
+verifies against.
+
+Two ways to derive something that looks right and is not: listing the primary
+type first in the description (viem's implicit mode, which Solady turns into a
+different `TypedDataSign` typehash whenever a dependency sorts before the primary
+type), and hashing the app domain with the fields present in the domain object
+instead of the declared `EIP712Domain`.
+
 ## Two things worth knowing
 
 **The offsets point at the keys.** Solady's `WebAuthn.verify` compares the 21
