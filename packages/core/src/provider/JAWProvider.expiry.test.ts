@@ -10,7 +10,7 @@ import { JAWProvider } from './JAWProvider.js';
 import { Communicator } from '../communicator/index.js';
 import { Mode } from './interface.js';
 import { store } from '../store/index.js';
-import { clearSignerType } from '../signer/index.js';
+import { loadSignerType, clearSignerType } from '../signer/index.js';
 import { PasskeyManager } from '../passkey-manager/index.js';
 import { standardErrorCodes } from '../errors/index.js';
 import { UIError, type UIHandler, type UIRequest } from '../ui/interface.js';
@@ -94,5 +94,24 @@ describe('session expiry inside a page', () => {
 
         expect(events).toEqual([['accountsChanged', []], ['disconnect']]);
         expect(new PasskeyManager().fetchActiveCredentialId()).toBe('credential-id');
+    });
+
+    // The reconnect dialog clears the stored account while it is open, so a
+    // read issued meanwhile drops the signer. Approving must reinstate it.
+    it('keeps the session a reconnect established while a parallel read ran', async () => {
+        const provider = await expiredSession();
+        let approve: () => void = () => undefined;
+        uiHandler.request.mockImplementationOnce(
+            (request: UIRequest) => new Promise((resolve) => (approve = () => resolve(approveConnect(request))))
+        );
+
+        const reconnect = provider.request({ method: 'eth_requestAccounts' });
+        await vi.waitFor(() => expect(uiHandler.request).toHaveBeenCalledTimes(2));
+        await provider.request({ method: 'eth_chainId' });
+        approve();
+
+        await expect(reconnect).resolves.toEqual([ACCOUNT]);
+        await expect(provider.request({ method: 'eth_accounts' })).resolves.toEqual([ACCOUNT]);
+        expect(loadSignerType()).toBe('appSpecific');
     });
 });

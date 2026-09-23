@@ -326,6 +326,15 @@ export class JAWProvider extends ProviderEventEmitter implements ProviderInterfa
             // Handle requests when signer exists
             const result = await signer.request(args);
 
+            // A reconnect dialog clears the stored account while it is open, so
+            // a read issued meanwhile drops the signer. The approved connect
+            // puts it back.
+            const connected = args.method === 'eth_requestAccounts' || args.method === 'wallet_connect';
+            if (connected && this.signer === null) {
+                this.signer = signer;
+                storeSignerType(signerType);
+            }
+
             return result as T;
         } catch (error) {
             const { code } = error as { code?: number };
