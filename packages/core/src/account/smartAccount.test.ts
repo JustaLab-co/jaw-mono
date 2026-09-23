@@ -439,6 +439,27 @@ describe('sendTransaction — receipt reporting', () => {
         await expect(sendTransaction({} as never, CALLS, CHAIN)).resolves.toBe(TX_HASH);
         expect(vi.mocked(notifyReceiptReceived).mock.calls[0][0]).toMatchObject({ success: true });
     });
+
+    it('fails with the hash when the operation never shows up on chain', async () => {
+        vi.useFakeTimers();
+        vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+        vi.mocked(createBundlerClient).mockReturnValue({
+            client: {},
+            sendUserOperation: vi.fn().mockResolvedValue('0xuserophash'),
+            waitForUserOperationReceipt: vi.fn().mockRejectedValue(new Error('Missing/invalid userOpHash')),
+        } as never);
+        vi.mocked(getBlockNumber).mockResolvedValue(5_000n);
+        vi.mocked(getLogs).mockResolvedValue([]);
+
+        const sending = expect(sendTransaction({} as never, CALLS, CHAIN)).rejects.toThrow(
+            'User operation 0xuserophash was sent but is not on chain yet'
+        );
+        await vi.runAllTimersAsync();
+        await sending;
+
+        expect(notifyReceiptReceived).not.toHaveBeenCalled();
+        vi.useRealTimers();
+    });
 });
 
 describe('findOwnerIndex', () => {
