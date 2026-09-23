@@ -217,6 +217,148 @@
     "expected": "0x0000000000000000000000000000000000000000000000000000000000000020000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000400000000000000000000000000000000000000000000000000000000000000041e3144e34d2a88c9f6e516f136cae2588cc33b834cd93ab2b4116478348a5ce3d769a31b1cd91ca33cd54f635b7462a71a34fd5f9f9b75831c15c59842d9ab60f1c0000000000000000000000000000000000000000000000000000000000000090ff64e3f1b37929070019d005a22cc7fff531b757333b8792f107ced731a142c52c0ee5d84264471806290a3f2c4cecfc5490626bf912d01f240d7a274b371e4d61696c28506572736f6e2066726f6d2c506572736f6e20746f2c737472696e6720636f6e74656e747329506572736f6e28737472696e67206e616d652c616464726573732077616c6c657429004d"
   },
   {
+    "description": "declared EIP712Domain with salt, fields out of canonical order",
+    "typedData": {
+      "domain": {
+        "name": "Ether Mail",
+        "version": "1",
+        "chainId": 31337,
+        "verifyingContract": "0xCcCCccccCCCCcCCCCCCcCcCccCcCCCcCcccccccC",
+        "salt": "0xabababababababababababababababababababababababababababababababab"
+      },
+      "types": {
+        "EIP712Domain": [
+          {
+            "name": "salt",
+            "type": "bytes32"
+          },
+          {
+            "name": "name",
+            "type": "string"
+          },
+          {
+            "name": "version",
+            "type": "string"
+          },
+          {
+            "name": "chainId",
+            "type": "uint256"
+          },
+          {
+            "name": "verifyingContract",
+            "type": "address"
+          }
+        ],
+        "Person": [
+          {
+            "name": "name",
+            "type": "string"
+          },
+          {
+            "name": "wallet",
+            "type": "address"
+          }
+        ],
+        "Mail": [
+          {
+            "name": "from",
+            "type": "Person"
+          },
+          {
+            "name": "to",
+            "type": "Person"
+          },
+          {
+            "name": "contents",
+            "type": "string"
+          }
+        ]
+      },
+      "primaryType": "Mail",
+      "message": {
+        "from": {
+          "name": "Cow",
+          "wallet": "0xCD2a3d9F938E13CD947Ec05AbC7FE734Df8DD826"
+        },
+        "to": {
+          "name": "Bob",
+          "wallet": "0xbBbBBBBbbBBBbbbBbbBbbbbBBbBbbbbBbBbbBBbB"
+        },
+        "contents": "Hello, Bob!"
+      }
+    },
+    "expected": "0x0000000000000000000000000000000000000000000000000000000000000020000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000400000000000000000000000000000000000000000000000000000000000000041cd1f8eba286d97bc76cb3201d65bf64afb3ce7a76553047c15a91f423b8ddeb4236830523140bc5da770011caf9158a55b85735308515fc5dd4c1ca910f072081b00000000000000000000000000000000000000000000000000000000000000408fb9d6a9ae3e8e9df1b92c0aaa77bf923b847d88c2204504408efb216c7e67c52c0ee5d84264471806290a3f2c4cecfc5490626bf912d01f240d7a274b371e4d61696c28506572736f6e2066726f6d2c506572736f6e20746f2c737472696e6720636f6e74656e747329506572736f6e28737472696e67206e616d652c616464726573732077616c6c657429004d"
+  },
+  {
+    "description": "domain object with a salt the declared EIP712Domain leaves out",
+    "typedData": {
+      "domain": {
+        "name": "Ether Mail",
+        "version": "1",
+        "chainId": 31337,
+        "verifyingContract": "0xCcCCccccCCCCcCCCCCCcCcCccCcCCCcCcccccccC",
+        "salt": "0xabababababababababababababababababababababababababababababababab"
+      },
+      "types": {
+        "EIP712Domain": [
+          {
+            "name": "name",
+            "type": "string"
+          },
+          {
+            "name": "version",
+            "type": "string"
+          },
+          {
+            "name": "chainId",
+            "type": "uint256"
+          },
+          {
+            "name": "verifyingContract",
+            "type": "address"
+          }
+        ],
+        "Person": [
+          {
+            "name": "name",
+            "type": "string"
+          },
+          {
+            "name": "wallet",
+            "type": "address"
+          }
+        ],
+        "Mail": [
+          {
+            "name": "from",
+            "type": "Person"
+          },
+          {
+            "name": "to",
+            "type": "Person"
+          },
+          {
+            "name": "contents",
+            "type": "string"
+          }
+        ]
+      },
+      "primaryType": "Mail",
+      "message": {
+        "from": {
+          "name": "Cow",
+          "wallet": "0xCD2a3d9F938E13CD947Ec05AbC7FE734Df8DD826"
+        },
+        "to": {
+          "name": "Bob",
+          "wallet": "0xbBbBBBBbbBBBbbbBbbBbbbbBBbBbbbbBbBbbBBbB"
+        },
+        "contents": "Hello, Bob!"
+      }
+    },
+    "expected": "0x00000000000000000000000000000000000000000000000000000000000000200000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000004000000000000000000000000000000000000000000000000000000000000000410935144c21a8a0b44f697f1996615e8f3b101424d5b0c799fcb92fc39dea23e863491b0ba607e0afd1b71f538bb6f73cbc03ea56764b4a477b3738962b5f7adb1c00000000000000000000000000000000000000000000000000000000000000da43c2527a0755963bd03362c529887b708c4fd92676e333d97f92bd5a273ee3c52c0ee5d84264471806290a3f2c4cecfc5490626bf912d01f240d7a274b371e4d61696c28506572736f6e2066726f6d2c506572736f6e20746f2c737472696e6720636f6e74656e747329506572736f6e28737472696e67206e616d652c616464726573732077616c6c657429004d"
+  },
+  {
     "description": "EIP-7702, the envelope around the raw signature",
     "eip7702": true,
     "typedData": {

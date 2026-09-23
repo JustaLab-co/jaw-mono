@@ -237,7 +237,23 @@ The fourth entry hashes its domain with the declared
 out the `chainId` the domain object carries, which is what the app contract
 verifies against.
 
-The fifth entry is EIP-7702: the owner EOA is the account, so set
+The fifth and sixth entries give the domain object a salt,
+`0xabab...ab` (32 bytes). The fifth declares it first,
+`EIP712Domain(bytes32 salt,string name,string version,uint256 chainId,address verifyingContract)`,
+out of the canonical order a domain object alone would produce. The sixth
+declares the usual four fields and leaves the salt out, so its domain separator
+is the same as the first entry's. Together with the fourth, these are the
+entries that fail if the app domain is hashed from the domain object instead of
+the declared type:
+
+```bash
+SALT=0xabababababababababababababababababababababababababababababababab
+cast keccak $(cast abi-encode "f(bytes32,bytes32,bytes32,bytes32,uint256,address)" \
+  $(cast keccak "EIP712Domain(bytes32 salt,string name,string version,uint256 chainId,address verifyingContract)") \
+  $SALT $(cast keccak "Ether Mail") $(cast keccak "1") 31337 0xCcCCccccCCCCcCCCCCCcCcCccCcCCCcCcccccccC)
+```
+
+The seventh entry is EIP-7702: the owner EOA is the account, so set
 `ACCOUNT=0x70997970C51812dc3A010C7d01b50e0d17dc79C8` and use the raw
 `cast wallet sign` output where `wrap` puts the owner tuple. The envelope is
 still required: without it the contract takes the `PersonalSign` path and
