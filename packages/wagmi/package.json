@@ -32,6 +32,28 @@
     "cjs-error.cjs",
     "!**/*.tsbuildinfo"
   ],
+  "nx": {
+    "targets": {
+      "test": {
+        "dependsOn": [
+          "^generate-sdk-info"
+        ],
+        "inputs": [
+          "default",
+          "^production",
+          "{workspaceRoot}/vitest.setup.localstorage.ts",
+          {
+            "externalDependencies": [
+              "vitest"
+            ]
+          },
+          {
+            "env": "CI"
+          }
+        ]
+      }
+    }
+  },
   "dependencies": {
     "@jaw.id/core": "1.5.0",
     "@wagmi/core": "^3.0.0",
