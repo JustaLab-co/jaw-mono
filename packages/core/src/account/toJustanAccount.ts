@@ -270,21 +270,13 @@ export async function toJustanAccount(parameters: ToJustanAccountParameters): Pr
 
             const signature = await sign({ owner, hash: nestedHash });
 
-            if (isEip7702) {
-                return signature;
-            }
-
-            const wrappedWithOwner = wrapSignature({
-                ownerIndex,
-                signature,
-            });
-
             return wrapTypedDataSignature({
                 domain,
                 types,
                 primaryType,
                 message,
-                signature: wrappedWithOwner,
+                // A delegated EOA is its own signer, so there is no owner tuple.
+                signature: isEip7702 ? signature : wrapSignature({ ownerIndex, signature }),
             });
         },
         async signUserOperation(parameters) {

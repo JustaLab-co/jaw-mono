@@ -234,6 +234,12 @@ The fourth entry hashes its domain with the declared
 out the `chainId` the domain object carries, which is what the app contract
 verifies against.
 
+The fifth entry is EIP-7702: the owner EOA is the account, so set
+`ACCOUNT=0x70997970C51812dc3A010C7d01b50e0d17dc79C8` and use the raw
+`cast wallet sign` output where `wrap` puts the owner tuple. The envelope is
+still required: without it the contract takes the `PersonalSign` path and
+rejects the signature.
+
 Two ways to derive something that looks right and is not: listing the primary
 type first in the description (viem's implicit mode, which Solady turns into a
 different `TypedDataSign` typehash whenever a dependency sorts before the primary

@@ -41,6 +41,23 @@ const MOCK_TYPED_DATA = {
     primaryType: 'Test' as const,
     message: { value: 'test' },
 };
+// What ERC-7739 appends to the signature for MOCK_TYPED_DATA: the app domain,
+// the contents hash, then the contents type and its name, and their length.
+const MOCK_DESCRIPTION = viem.stringToHex('Test(string value)Test');
+const MOCK_TYPED_DATA_ENVELOPE = viem.concat([
+    viem.hashDomain({
+        domain: MOCK_TYPED_DATA.domain,
+        types: {
+            EIP712Domain: [
+                { name: 'name', type: 'string' },
+                { name: 'version', type: 'string' },
+            ],
+        },
+    }),
+    viem.hashStruct({ ...MOCK_TYPED_DATA, data: MOCK_TYPED_DATA.message }),
+    MOCK_DESCRIPTION,
+    viem.numberToHex(viem.size(MOCK_DESCRIPTION), { size: 2 }),
+]);
 
 describe('toJustanAccount unit tests', () => {
     beforeEach(() => {
@@ -697,7 +714,7 @@ describe('toJustanAccount unit tests', () => {
         });
 
         describe('signTypedData()', () => {
-            it('should return raw signature in EIP-7702 mode', async () => {
+            it('should wrap the raw signature in EIP-7702 mode', async () => {
                 const mockEOA = {
                     type: 'local' as const,
                     address: MOCK_ADDRESS,
@@ -722,7 +739,7 @@ describe('toJustanAccount unit tests', () => {
                 const signature = await account.signTypedData(MOCK_TYPED_DATA);
 
                 expect(mockEOA.sign).toHaveBeenCalled();
-                expect(signature).toBe(MOCK_SIGNATURE);
+                expect(signature).toBe(viem.concat([MOCK_SIGNATURE, MOCK_TYPED_DATA_ENVELOPE]));
             });
 
             it('should return wrapped typed data signature in non-EIP-7702 mode', async () => {
@@ -759,24 +776,7 @@ describe('toJustanAccount unit tests', () => {
                 const inner = viem.encodeAbiParameters(WRAPPED_SIGNATURE, [
                     { ownerIndex: 0n, signatureData: MOCK_SIGNATURE },
                 ]);
-                const description = viem.stringToHex('Test(string value)Test');
-                expect(signature).toBe(
-                    viem.concat([
-                        inner,
-                        viem.hashDomain({
-                            domain: MOCK_TYPED_DATA.domain,
-                            types: {
-                                EIP712Domain: [
-                                    { name: 'name', type: 'string' },
-                                    { name: 'version', type: 'string' },
-                                ],
-                            },
-                        }),
-                        viem.hashStruct({ ...MOCK_TYPED_DATA, data: MOCK_TYPED_DATA.message }),
-                        description,
-                        viem.numberToHex(viem.size(description), { size: 2 }),
-                    ])
-                );
+                expect(signature).toBe(viem.concat([inner, MOCK_TYPED_DATA_ENVELOPE]));
             });
 
             it('should throw error for address-type owner', async () => {
