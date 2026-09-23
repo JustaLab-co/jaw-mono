@@ -152,6 +152,31 @@ describe('one request, one ceremony', () => {
 
     await expect(bridge.request('personal_sign', ['0x1'])).resolves.toBe('0x01');
   });
+
+  it('a refusal in the browser rejects the request with its code', async () => {
+    const { relay, bridge } = await connected(async (socket, request) => {
+      socket.send(
+        await seal(relay.browserSecret, {
+          type: 'rpc_response',
+          id: request.id,
+          success: false,
+          error: { code: 4001, message: 'User rejected the request.' },
+        })
+      );
+    });
+
+    await expect(bridge.request('personal_sign', ['0x1'])).rejects.toThrow('[4001] User rejected the request.');
+  });
+
+  it('an answered request leaves no timer behind to close the bridge later', async () => {
+    const { relay, bridge } = await connected(async (socket, request) => {
+      socket.send(await seal(relay.browserSecret, { type: 'rpc_response', id: request.id, success: true, data: 'ok' }));
+    }, 300);
+
+    await expect(bridge.request('eth_accounts')).resolves.toBe('ok');
+    await pause(500);
+    await expect(bridge.request('eth_accounts')).resolves.toBe('ok');
+  });
 });
 
 describe('what the relay can replay', () => {
