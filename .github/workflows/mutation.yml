@@ -1,0 +1,70 @@
+name: Mutation testing
+
+# Coverage says a line ran, not that a test would notice it changing. Stryker
+# changes the code and checks that some test fails. Too slow to gate PRs, so it
+# runs once a month on core and on the keys signing path. The break threshold
+# in each stryker.config.json sits below the measured score, so a drop fails
+# the run. Core has none yet: it gets one from its first full run.
+
+on:
+  schedule:
+    - cron: '0 6 1 * *'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  mutation:
+    runs-on: ubuntu-latest
+    timeout-minutes: 300
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - project: '@jaw.id/core'
+            root: packages/core
+          - project: '@jaw-mono/keys-jaw-id'
+            root: apps/keys-jaw-id
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+
+      - name: Cache bun dependencies
+        uses: actions/cache@v4
+        with:
+          path: ~/.bun/install/cache
+          key: bun-${{ runner.os }}-${{ hashFiles('bun.lock') }}
+          restore-keys: bun-${{ runner.os }}-
+
+      - run: bun install --frozen-lockfile
+
+      # `shell: bash` turns on pipefail, so tee does not hide a failed run.
+      - name: Run Stryker
+        shell: bash
+        run: bunx nx run ${{ matrix.project }}:mutation --outputStyle=static | tee stryker.log
+
+      - name: Write the score to the summary
+        if: always()
+        shell: bash
+        run: |
+          {
+            echo "### ${{ matrix.project }}"
+            echo '```'
+            grep -E '% Mutation score|# killed|All files' stryker.log || echo 'no score, see the log'
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: mutation-${{ strategy.job-index }}
+          path: ${{ matrix.root }}/reports/mutation/
+          retention-days: 90

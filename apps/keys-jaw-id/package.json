@@ -8,6 +8,16 @@
         "dependsOn": [
           "^build"
         ]
+      },
+      "mutation": {
+        "dependsOn": [
+          "^generate-sdk-info"
+        ],
+        "executor": "nx:run-commands",
+        "options": {
+          "cwd": "{projectRoot}",
+          "command": "bunx stryker run"
+        }
       }
     }
   },
