@@ -20,12 +20,24 @@ vi.mock('../communicator/index.js');
 const ACCOUNT = '0x1234567890123456789012345678901234567890';
 const PAST_TTL_MS = 2 * 86400 * 1000;
 
-function approveConnect(request: UIRequest) {
-    if (request.type !== 'wallet_connect') throw new Error(`unexpected ${request.type}`);
-    return { id: request.id, approved: true, data: { accounts: [{ address: ACCOUNT }] } };
+function approve(request: UIRequest) {
+    if (request.type === 'wallet_connect') {
+        return { id: request.id, approved: true, data: { accounts: [{ address: ACCOUNT }] } };
+    }
+    if (request.type === 'personal_sign') return { id: request.id, approved: true, data: '0x5167' };
+    throw new Error(`unexpected ${request.type}`);
 }
 
-let uiHandler: UIHandler & { request: ReturnType<typeof vi.fn> };
+let uiHandler: UIHandler & { request: ReturnType<typeof vi.fn>; cleanup: ReturnType<typeof vi.fn> };
+
+/** Keeps every later dialog open until the test approves it, in any order. */
+function holdDialogs(): Array<() => void> {
+    const open: Array<() => void> = [];
+    uiHandler.request.mockImplementation(
+        (request: UIRequest) => new Promise((resolve) => open.push(() => resolve(approve(request))))
+    );
+    return open;
+}
 
 function newProvider(): JAWProvider {
     return new JAWProvider({
@@ -42,6 +54,12 @@ function recordEvents(provider: JAWProvider): unknown[][] {
     return events;
 }
 
+function countConnects(provider: JAWProvider): () => number {
+    let count = 0;
+    provider.on('connect', () => count++);
+    return () => count;
+}
+
 /** Connects, then moves the clock past the default auth TTL. */
 async function expiredSession(): Promise<JAWProvider> {
     const provider = newProvider();
@@ -56,7 +74,7 @@ beforeEach(() => {
     store.account.clear();
     clearSignerType();
     new PasskeyManager().storeAuthState(ACCOUNT, 'credential-id');
-    uiHandler = { request: vi.fn(async (request: UIRequest) => approveConnect(request)) } as never;
+    uiHandler = { request: vi.fn(async (request: UIRequest) => approve(request)), cleanup: vi.fn() } as never;
 });
 
 afterEach(() => {
@@ -97,21 +115,99 @@ describe('session expiry inside a page', () => {
     });
 
     // The reconnect dialog clears the stored account while it is open, so a
-    // read issued meanwhile drops the signer. Approving must reinstate it.
-    it('keeps the session a reconnect established while a parallel read ran', async () => {
+    // read issued meanwhile drops the signer. Approving must reinstate it and
+    // tell the dapp, whose listeners went away with the earlier disconnect.
+    it.each(['eth_requestAccounts', 'wallet_connect'])(
+        'keeps the session a %s reconnect established while a parallel read ran',
+        async (method) => {
+            const provider = await expiredSession();
+            const dialogs = holdDialogs();
+
+            const reconnect = provider.request({ method, params: method === 'wallet_connect' ? [{}] : undefined });
+            await vi.waitFor(() => expect(dialogs).toHaveLength(1));
+            await provider.request({ method: 'eth_chainId' });
+            const connects = countConnects(provider);
+            dialogs[0]();
+
+            await expect(reconnect).resolves.toBeDefined();
+            expect(connects()).toBe(1);
+            await expect(provider.request({ method: 'eth_accounts' })).resolves.toEqual([ACCOUNT]);
+            expect(loadSignerType()).toBe('appSpecific');
+        }
+    );
+
+    // A disconnect is the user's call, and a dialog that outlived it must not
+    // bring the session back.
+    it.each([
+        ['disconnect()', (provider: JAWProvider) => provider.disconnect()],
+        ['wallet_disconnect', (provider: JAWProvider) => provider.request({ method: 'wallet_disconnect' })],
+    ])('stays disconnected after %s during the reconnect dialog', async (_name, disconnect) => {
         const provider = await expiredSession();
-        let approve: () => void = () => undefined;
-        uiHandler.request.mockImplementationOnce(
-            (request: UIRequest) => new Promise((resolve) => (approve = () => resolve(approveConnect(request))))
-        );
+        const dialogs = holdDialogs();
 
         const reconnect = provider.request({ method: 'eth_requestAccounts' });
-        await vi.waitFor(() => expect(uiHandler.request).toHaveBeenCalledTimes(2));
+        await vi.waitFor(() => expect(dialogs).toHaveLength(1));
         await provider.request({ method: 'eth_chainId' });
-        approve();
+        await disconnect(provider);
+        dialogs[0]();
+        await reconnect;
 
-        await expect(reconnect).resolves.toEqual([ACCOUNT]);
-        await expect(provider.request({ method: 'eth_accounts' })).resolves.toEqual([ACCOUNT]);
-        expect(loadSignerType()).toBe('appSpecific');
+        await expect(provider.request({ method: 'eth_accounts' })).resolves.toEqual([]);
+        expect(loadSignerType()).toBeNull();
+    });
+
+    it('reports an expired session once when the dapp disconnects', async () => {
+        const provider = await expiredSession();
+        await provider.request({ method: 'eth_accounts' });
+        const events = recordEvents(provider);
+
+        await provider.request({ method: 'wallet_disconnect' });
+
+        expect(events).toEqual([['accountsChanged', []], ['disconnect']]);
+    });
+
+    it('cleans up the dropped signer on disconnect', async () => {
+        const provider = await expiredSession();
+        await provider.request({ method: 'eth_accounts' });
+        await provider.request({ method: 'eth_chainId' });
+
+        await provider.disconnect();
+
+        expect(uiHandler.cleanup).toHaveBeenCalled();
+    });
+
+    // Only a connect re-establishes a session. A signature that completes after
+    // the expiry was reported must not quietly reconnect the dapp.
+    it('does not reinstate the session when a signing request outlives the expiry', async () => {
+        const provider = await expiredSession();
+        const dialogs = holdDialogs();
+
+        const signing = provider.request({ method: 'personal_sign', params: ['0x68', ACCOUNT] });
+        await vi.waitFor(() => expect(dialogs).toHaveLength(1));
+        await provider.request({ method: 'eth_accounts' });
+        await provider.request({ method: 'eth_chainId' });
+        dialogs[0]();
+
+        await expect(signing).resolves.toBe('0x5167');
+        await expect(provider.request({ method: 'eth_accounts' })).resolves.toEqual([]);
+    });
+
+    // A second connect that finished first owns the session. The older dialog
+    // approving afterwards must not replace it or announce it again.
+    it('does not overwrite a newer session with the dropped signer', async () => {
+        const provider = await expiredSession();
+        const dialogs = holdDialogs();
+
+        const stale = provider.request({ method: 'eth_requestAccounts' });
+        await vi.waitFor(() => expect(dialogs).toHaveLength(1));
+        const fresh = provider.request({ method: 'eth_requestAccounts' });
+        await vi.waitFor(() => expect(dialogs).toHaveLength(2));
+        dialogs[1]();
+        await fresh;
+        const connects = countConnects(provider);
+        dialogs[0]();
+        await stale;
+
+        expect(connects()).toBe(0);
     });
 });

@@ -44,6 +44,9 @@ export class JAWProvider extends ProviderEventEmitter implements ProviderInterfa
     private theme?: JawTheme;
 
     private signer: Signer | null = null;
+    // The signer the expiry guard dropped. Only a reconnect through it may put
+    // it back, and an explicit disconnect forgets it.
+    private expiredSigner: Signer | null = null;
 
     constructor({ metadata, preference, apiKey, paymasters, theme }: Readonly<ConstructorOptions>) {
         super();
@@ -115,7 +118,7 @@ export class JAWProvider extends ProviderEventEmitter implements ProviderInterfa
 
     async disconnect() {
         try {
-            await this.signer?.cleanup();
+            await (this.signer ?? this.expiredSigner)?.cleanup();
         } catch (cleanupError) {
             // Log cleanup error but continue with disconnection
             console.warn('Signer cleanup failed during disconnect:', cleanupError);
@@ -133,6 +136,7 @@ export class JAWProvider extends ProviderEventEmitter implements ProviderInterfa
         this.communicator.disconnect();
 
         this.signer = null;
+        this.expiredSigner = null;
         correlationIds.clear();
         this.emit('accountsChanged', []);
         this.emit('disconnect', standardErrors.provider.disconnected('User initiated disconnection'));
@@ -140,6 +144,9 @@ export class JAWProvider extends ProviderEventEmitter implements ProviderInterfa
 
     private async _request<T>(args: RequestArguments): Promise<T> {
         const signerType = this.preference.mode === Mode.AppSpecific ? 'appSpecific' : 'crossPlatform';
+        // The signer this request goes through, held locally: a parallel
+        // request can replace or drop this.signer while this one awaits.
+        let signer: Signer | null = null;
 
         try {
             checkErrorForInvalidRequestArgs(args);
@@ -149,19 +156,19 @@ export class JAWProvider extends ProviderEventEmitter implements ProviderInterfa
             // still be showing the account. The passkey stays logged in and the
             // transport stays up, so reconnecting costs no extra ceremony. The
             // request is then answered as it would be for a first-time visitor.
-            if (this.signer && !store.account.get().accounts?.length) {
+            // wallet_disconnect skips this and reports the session itself.
+            if (this.signer && args.method !== 'wallet_disconnect' && !store.account.get().accounts?.length) {
+                this.expiredSigner = this.signer;
                 this.signer = null;
                 clearSignerType();
                 this.emit('accountsChanged', []);
                 this.emit('disconnect', standardErrors.provider.disconnected('Session expired'));
             }
-            // Held locally: a parallel request can drop this.signer while this
-            // one awaits.
-            const signer = this.signer;
+            signer = this.signer;
             if (!signer) {
                 switch (args.method) {
                     case 'eth_requestAccounts': {
-                        const signer = this.initSigner(signerType);
+                        signer = this.initSigner(signerType);
                         await signer.handshake(args);
 
                         this.signer = signer;
@@ -180,7 +187,7 @@ export class JAWProvider extends ProviderEventEmitter implements ProviderInterfa
                         return result as T;
                     }
                     case 'wallet_connect': {
-                        const signer = this.initSigner(signerType);
+                        signer = this.initSigner(signerType);
                         // For both modes, pass full args to handshake so the complete
                         // wallet_connect flow happens in a single roundtrip.
                         // This avoids race conditions with popup closure in cross-platform mode.
@@ -328,11 +335,14 @@ export class JAWProvider extends ProviderEventEmitter implements ProviderInterfa
 
             // A reconnect dialog clears the stored account while it is open, so
             // a read issued meanwhile drops the signer. The approved connect
-            // puts it back.
+            // puts it back, unless the dapp disconnected or connected anew.
             const connected = args.method === 'eth_requestAccounts' || args.method === 'wallet_connect';
-            if (connected && this.signer === null) {
+            if (connected && this.signer === null && this.expiredSigner === signer) {
                 this.signer = signer;
+                this.expiredSigner = null;
                 storeSignerType(signerType);
+                const chainId = await signer.request<string>({ method: 'eth_chainId' });
+                this.emit('connect', { chainId });
             }
 
             return result as T;
