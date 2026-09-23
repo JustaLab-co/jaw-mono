@@ -353,14 +353,21 @@ export class JAWProvider extends ProviderEventEmitter implements ProviderInterfa
             // From the no-session branch above it just means "connect first":
             // either there was never a session, or the guard above already
             // reported the expired one. Disconnecting again would log the
-            // passkey out and drop the iframe for nothing.
+            // passkey out and drop the iframe for nothing. Either way it only
+            // speaks for the signer this request went through, not for one a
+            // parallel connect installed meanwhile.
             //
             // The third is the backend turning the caller down, over an origin it
             // does not serve or a key it will not take. That says nothing about
             // the session, and it arrives from read-only calls: an unregistered
             // dApp asking for capabilities would be logged out of a wallet that
             // is working.
-            if (code === standardErrorCodes.provider.unauthorized && this.signer && !isBackendRefusal(error)) {
+            if (
+                code === standardErrorCodes.provider.unauthorized &&
+                signer &&
+                signer === this.signer &&
+                !isBackendRefusal(error)
+            ) {
                 await this.disconnect();
             }
             return Promise.reject(serializeError(error));

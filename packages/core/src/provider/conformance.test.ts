@@ -360,6 +360,29 @@ describe('EIP-1193 conformance', () => {
                 expect(new PasskeyManager().fetchActiveCredentialId()).toBeNull();
             });
 
+            // A refusal answers for the signer that request went through. A
+            // throwaway signer refused after a parallel connect installed a new
+            // session must leave that session alone.
+            it('keeps a session a parallel connect installed when a throwaway signer is refused', async () => {
+                const ephemeral = { request: vi.fn(), handshake: vi.fn(), cleanup: vi.fn() } as unknown as Signer;
+                let refuse: (error: unknown) => void = () => undefined;
+                (ephemeral.request as Mock).mockReturnValue(new Promise((_, reject) => (refuse = reject)));
+                (signer.handshake as Mock).mockImplementation(async () => store.account.set({ accounts: [ACCOUNT] }));
+                (signer.request as Mock).mockResolvedValue([ACCOUNT]);
+                (createSigner as Mock).mockReturnValueOnce(ephemeral).mockReturnValueOnce(signer);
+                const provider = newProvider(mode);
+                const events = recordEvents(provider);
+
+                const signing = provider.request({ method: 'wallet_sendCalls' });
+                await vi.waitFor(() => expect(ephemeral.request).toHaveBeenCalled());
+                await provider.request({ method: 'eth_requestAccounts' });
+                refuse(standardErrors.provider.unauthorized());
+
+                await expect(signing).rejects.toMatchObject({ code: standardErrorCodes.provider.unauthorized });
+                expect(events).not.toContain('disconnect');
+                await expect(provider.request({ method: 'eth_accounts' })).resolves.toEqual([ACCOUNT]);
+            });
+
             describe('returning visitor whose session expired', () => {
                 // Mirrors JAWSigner past its TTL: eth_accounts notices the expiry,
                 // drops the stored account and answers []. A signer left holding
