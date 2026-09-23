@@ -12,7 +12,7 @@ import { Mode } from './interface.js';
 import { store } from '../store/index.js';
 import { loadSignerType, clearSignerType } from '../signer/index.js';
 import { PasskeyManager } from '../passkey-manager/index.js';
-import { standardErrorCodes } from '../errors/index.js';
+import { standardErrorCodes, standardErrors } from '../errors/index.js';
 import { UIError, type UIHandler, type UIRequest } from '../ui/interface.js';
 
 vi.mock('../communicator/index.js');
@@ -30,11 +30,15 @@ function approve(request: UIRequest) {
 
 let uiHandler: UIHandler & { request: ReturnType<typeof vi.fn>; cleanup: ReturnType<typeof vi.fn> };
 
-/** Keeps every later dialog open until the test approves it, in any order. */
-function holdDialogs(): Array<() => void> {
-    const open: Array<() => void> = [];
+/** Keeps every later dialog open until the test answers it, in any order.
+ *  Called with an error, the dialog refuses with it instead of approving. */
+function holdDialogs(): Array<(error?: unknown) => void> {
+    const open: Array<(error?: unknown) => void> = [];
     uiHandler.request.mockImplementation(
-        (request: UIRequest) => new Promise((resolve) => open.push(() => resolve(approve(request))))
+        (request: UIRequest) =>
+            new Promise((resolve) =>
+                open.push((error) => resolve(error ? { id: request.id, approved: false, error } : approve(request)))
+            )
     );
     return open;
 }
@@ -209,5 +213,24 @@ describe('session expiry inside a page', () => {
         await stale;
 
         expect(connects()).toBe(0);
+    });
+
+    // The signature was asked for on the signer the guard has since dropped
+    // and reported. Its late 4100 speaks for that dead session, not for the
+    // provider's current state, so it must not log out or report again.
+    it('ignores a late 4100 from a request on the dropped signer', async () => {
+        const provider = await expiredSession();
+        const dialogs = holdDialogs();
+        const events = recordEvents(provider);
+
+        const signing = provider.request({ method: 'personal_sign', params: ['0x68', ACCOUNT] });
+        await vi.waitFor(() => expect(dialogs).toHaveLength(1));
+        await provider.request({ method: 'eth_accounts' });
+        await provider.request({ method: 'eth_chainId' });
+        dialogs[0](standardErrors.provider.unauthorized());
+
+        await expect(signing).rejects.toMatchObject({ code: standardErrorCodes.provider.unauthorized });
+        expect(events).toEqual([['accountsChanged', []], ['disconnect']]);
+        expect(new PasskeyManager().fetchActiveCredentialId()).toBe('credential-id');
     });
 });
