@@ -128,21 +128,43 @@ describe('autonomous sends', () => {
   });
 
   it('a method outside the session set never reaches the account', async () => {
+    // Real wallet method names first: a random string almost never lands next
+    // to one of the four, and that is where a loosened check would let one in.
     const method = fc.oneof(
-      fc.string(),
-      fc.constantFrom(
-        'personal_sign',
-        'eth_signTypedData_v4',
-        'eth_sendTransaction',
-        'wallet_sign',
-        'wallet_grantPermissions',
-        'wallet_revokePermissions',
-        'eth_sendRawTransaction',
-        'WALLET_SENDCALLS',
-        'wallet_sendCalls ',
-        '__proto__',
-        'constructor'
-      )
+      { weight: 1, arbitrary: fc.string() },
+      {
+        weight: 3,
+        arbitrary: fc.constantFrom(
+          'wallet_sendCallsSync',
+          'wallet_getCallsStatusV2',
+          'wallet_showCallsStatus',
+          'wallet_getCapabilities',
+          'wallet_switchEthereumChain',
+          'wallet_addEthereumChain',
+          'wallet_watchAsset',
+          'wallet_connect',
+          'wallet_disconnect',
+          'wallet_getAssets',
+          'wallet_getPermissions',
+          'wallet_requestPermissions',
+          'eth_signTransaction',
+          'eth_sign',
+          'eth_chainId',
+          'eth_call',
+          'eth_accounts_',
+          'personal_sign',
+          'eth_signTypedData_v4',
+          'eth_sendTransaction',
+          'wallet_sign',
+          'wallet_grantPermissions',
+          'wallet_revokePermissions',
+          'eth_sendRawTransaction',
+          'WALLET_SENDCALLS',
+          'wallet_sendCalls ',
+          '__proto__',
+          'constructor'
+        ),
+      }
     );
     await fc.assert(
       fc.asyncProperty(method, fc.anything(), async (m, params) => {
@@ -155,6 +177,21 @@ describe('autonomous sends', () => {
         expect(statusAsked).toEqual([]);
       })
     );
+  });
+
+  it('send in the last second before the expiry and not at it', async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date('2026-06-01T00:00:00Z'));
+    expiry = Math.floor(Date.now() / 1000) + 60;
+    const bridge = newBridge();
+
+    vi.setSystemTime((expiry - 1) * 1000);
+    await bridge.request('wallet_sendCalls', [{ calls: [] }]);
+    expect(sent).toHaveLength(1);
+
+    vi.setSystemTime(expiry * 1000);
+    await expect(bridge.request('wallet_sendCalls', [{ calls: [] }])).rejects.toThrow(/expired/);
+    expect(sent).toHaveLength(1);
   });
 
   it('stop at the expiry even when the session is already loaded', async () => {
