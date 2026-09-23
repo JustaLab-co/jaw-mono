@@ -70,3 +70,7 @@ ios/
 .expo-shared/
 expo-env.d.ts
 *.tsbuildinfo
+
+# Stryker
+.stryker-tmp
+**/reports/mutation

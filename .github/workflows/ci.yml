@@ -11,11 +11,13 @@ permissions:
 jobs:
   validate:
     runs-on: ubuntu-latest
+    timeout-minutes: 45
     steps:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
 
+      # 22 resolves to the latest 22.x; check.mjs in published-e2e needs >= 22.13.
       - uses: actions/setup-node@v4
         with:
           node-version: 22
@@ -38,4 +40,5 @@ jobs:
 
       - uses: nrwl/nx-set-shas@v4
 
-      - run: bunx nx affected -t lint test typecheck build api-check
+      # e2e is published-e2e: the SDK packages installed from a local registry.
+      - run: bunx nx affected -t lint test typecheck build api-check e2e

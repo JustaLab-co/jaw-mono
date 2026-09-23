@@ -5,6 +5,11 @@
 # publishes. A diff in either is either a deliberate decision or a bug, never
 # noise, so neither should merge without one of us reading it.
 #
+# The rest are the code that decides what a user is asked to approve and what
+# gets signed without one: the EIP-1193 provider and the error codes dapps
+# branch on, the keys screens that render a request next to the call that signs
+# it, and the CLI logic that lets a session key act with nobody watching.
+#
 # This file only auto-requests reviewers. It becomes a gate once `main` has a
 # ruleset with "Require review from Code Owners", which the repo does not have
 # today: the branch has neither classic protection nor a ruleset. Until then,
@@ -12,3 +17,32 @@
 
 /packages/core/vectors/    @Ghadi8 @mariano-aguero
 /packages/core/etc/        @Ghadi8 @mariano-aguero
+
+# EIP-1193 provider
+/packages/core/src/provider/         @Ghadi8 @mariano-aguero
+/packages/core/src/errors/           @Ghadi8 @mariano-aguero
+/packages/core/src/method-policy.ts  @Ghadi8 @mariano-aguero
+
+# keys.jaw.id signing path
+/apps/keys-jaw-id/src/app/page.tsx                    @Ghadi8 @mariano-aguero
+/apps/keys-jaw-id/src/components/RequestModals/       @Ghadi8 @mariano-aguero
+/apps/keys-jaw-id/src/components/SignatureModal/      @Ghadi8 @mariano-aguero
+/apps/keys-jaw-id/src/components/Eip712Modal/         @Ghadi8 @mariano-aguero
+/apps/keys-jaw-id/src/components/SiweModal/           @Ghadi8 @mariano-aguero
+/apps/keys-jaw-id/src/components/TransactionModal/    @Ghadi8 @mariano-aguero
+/apps/keys-jaw-id/src/components/PermissionModal/     @Ghadi8 @mariano-aguero
+/apps/keys-jaw-id/src/lib/tx-handler.ts               @Ghadi8 @mariano-aguero
+/apps/keys-jaw-id/src/lib/popup-communicator.ts       @Ghadi8 @mariano-aguero
+/apps/keys-jaw-id/src/lib/crypto-handler.ts           @Ghadi8 @mariano-aguero
+/apps/keys-jaw-id/src/middleware.ts                   @Ghadi8 @mariano-aguero
+/apps/keys-jaw-id/src/app/cli-bridge/page.tsx         @Ghadi8 @mariano-aguero
+/apps/keys-jaw-id/src/lib/handshake-route.ts          @Ghadi8 @mariano-aguero
+
+# CLI session keys
+/packages/cli/src/lib/rpc-classifier.ts     @Ghadi8 @mariano-aguero
+/packages/cli/src/lib/session-bridge.ts     @Ghadi8 @mariano-aguero
+/packages/cli/src/lib/session-config.ts     @Ghadi8 @mariano-aguero
+/packages/cli/src/lib/keystore.ts           @Ghadi8 @mariano-aguero
+/packages/cli/src/x402/policy.ts            @Ghadi8 @mariano-aguero
+/packages/cli/src/commands/session/         @Ghadi8 @mariano-aguero
+/packages/cli/src/mcp/handlers/session.ts   @Ghadi8 @mariano-aguero
