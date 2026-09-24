@@ -246,7 +246,7 @@ export interface CallStatusResponse {
 }
 
 // @public (undocumented)
-export type CapabilitiesResult = Record<`0x${string}`, Record<string, unknown>>;
+export type CapabilitiesResult = Record<`0x${string}`, ChainCapabilities>;
 
 // @public (undocumented)
 export type Chain = {
@@ -259,6 +259,16 @@ export type Chain = {
     };
     paymaster?: PaymasterConfig;
 };
+
+// @public
+export interface ChainCapabilities {
+    // (undocumented)
+    [capability: string]: unknown;
+    // (undocumented)
+    chainMetadata?: ChainMetadataCapability;
+    // (undocumented)
+    feeToken?: FeeTokenCapability;
+}
 
 // @public
 export interface ChainMetadataCapability {
@@ -693,6 +703,9 @@ export type JawBorderRadius = 'sm' | 'md' | 'lg';
 
 // @public
 export type JawFontStack = 'system' | 'rounded' | 'mono';
+
+// @public
+export function jawPaymasterUrl(chainId: number, apiKey?: string): string;
 
 // Warning: (ae-forgotten-export) The symbol "ProviderEventEmitter" needs to be exported by the entry point index.d.ts
 //

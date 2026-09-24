@@ -48,6 +48,7 @@ export {
     handleGetCapabilitiesRequest,
     clearCapabilitiesCache,
     type CapabilitiesResult,
+    type ChainCapabilities,
     type ChainMetadataCapability,
     peekCapabilities,
 } from './capabilities.js';

@@ -15,6 +15,15 @@ export interface SpendPermission {
    * a guessed 18 would render a 100 USDC cap as "0.0000000001".
    */
   decimalsUnknown?: boolean;
+  /**
+   * The most this limit can move over the whole life of the permission, scaled the
+   * same way `amount` is. `amount` is a rate, and the rate is not what is being
+   * approved: 10 a day on a 30-day grant is 300, and that figure appeared nowhere.
+   *
+   * Absent when it cannot be sized (a unit we do not recognise, an expiry already
+   * past) or when it would only repeat `amount`, as a `forever` limit does.
+   */
+  total?: string;
 }
 
 export interface CallPermission {

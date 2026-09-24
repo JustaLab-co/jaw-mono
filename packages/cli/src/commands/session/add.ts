@@ -5,12 +5,14 @@ import { loadConfig } from '../../lib/config.js';
 import { getBridge } from '../../lib/bridge-singleton.js';
 import { keystoreExists } from '../../lib/keystore.js';
 import {
+  expiryInstant,
   isLegacySession,
   liveOrphans,
   loadSessionConfig,
   parseGrantedPermission,
+  replaceSessionConfig,
   saveRevokeProgress,
-  saveSessionConfig,
+  sessionUsable,
 } from '../../lib/session-config.js';
 import type { OutputFormat, PermissionsConfig } from '../../lib/types.js';
 import { parsePermissionsConfig } from '../../lib/validation.js';
@@ -82,7 +84,9 @@ export default class SessionAdd extends BaseCommand {
     }
 
     const session = loadSessionConfig();
-    if (session.expiry <= Date.now() / 1000) {
+    // `sessionUsable` rather than a comparison: this grants on chain, so an
+    // expiry nobody can read has to stop it the way it stops a payment.
+    if (!sessionUsable(session.expiry)) {
       this.error('The session expired, so there is nothing to add to. Run `jaw session setup` to create a new one.');
     }
     if (isLegacySession(session)) {
@@ -99,6 +103,15 @@ export default class SessionAdd extends BaseCommand {
     // so an older session can be added to rather than told to start over.
     const existing = await recoverPermission(session, apiKey);
     if (!existing) {
+      // Two causes, and only one of them is the session's fault. Recovery reads
+      // the relay, which needs a key, so with none the honest answer is to get
+      // one rather than to recreate a live permission.
+      if (!session.permission && !apiKey) {
+        this.error(
+          'Reading what this session already allows needs an API key, and there is none configured. ' +
+            'Set one with `jaw config set apiKey <key>`, then run this again.'
+        );
+      }
       this.error(
         'This session does not carry the permission it was granted, so what it already allows cannot be read. ' +
           'Run `jaw session setup` to recreate it, and adding will work from then on.'
@@ -239,7 +252,7 @@ export default class SessionAdd extends BaseCommand {
       ...(permission ? { permission } : {}),
       orphanedPermissions: [{ id: session.permissionId, chainId: session.chainId, expiry: session.expiry }, ...orphans],
     };
-    saveSessionConfig(updated);
+    replaceSessionConfig(updated);
 
     let revoked = false;
     try {
@@ -297,7 +310,8 @@ export default class SessionAdd extends BaseCommand {
     this.log(`  Session address:  ${session.sessionAddress}`);
     this.log(`  Permission ID:    ${response.permissionId}`);
     this.log(`  Chain:            ${session.chainId}`);
-    this.log(`  Expires:          ${new Date(session.expiry * 1000).toISOString()}`);
+    const ends = expiryInstant(session.expiry);
+    this.log(`  Expires:          ${ends ? ends.toISOString() : 'unknown'}`);
   }
 
   private resolveAddition(

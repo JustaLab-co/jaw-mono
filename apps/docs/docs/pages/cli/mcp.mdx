@@ -85,9 +85,9 @@ Set `JAW_SESSION=true` in the MCP server's `env` block to make session mode the 
 }
 ```
 
-Valid keys: `apiKey`, `defaultChain`, `keysUrl`, `ens`, `relayUrl`, `sessionExpiry`
+Valid keys: `apiKey`, `defaultChain`, `ens`, `sessionExpiry`
 
-The `x402` spending limits are **not** settable here. An agent must not be able to raise its own caps, so those keys are only writable by a human at the terminal. See [Paying for APIs](/cli/x402#configuring-the-policy).
+The `x402` spending limits are **not** settable here. An agent must not be able to raise its own caps, so those keys are only writable by a human at the terminal. The same goes for `keysUrl` and `relayUrl`, which decide where signing requests are sent: set them with `jaw config set`. See [Paying for APIs](/cli/x402#configuring-the-policy).
 
 ### jaw_pay_and_fetch
 

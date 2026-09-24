@@ -5,7 +5,7 @@
 
 import * as fs from 'node:fs';
 import { PATHS } from './paths.js';
-import { ensureDir } from './config.js';
+import { writeJsonAtomic } from './config.js';
 
 export interface RelaySession {
   session: string;
@@ -32,11 +32,7 @@ export function loadRelaySession(): RelaySession | null {
 }
 
 export function saveRelaySession(info: RelaySession): void {
-  ensureDir(PATHS.root);
-  fs.writeFileSync(PATHS.relay, JSON.stringify(info, null, 2) + '\n', {
-    encoding: 'utf-8',
-    mode: 0o600,
-  });
+  writeJsonAtomic(PATHS.relay, info);
 }
 
 export function deleteRelaySession(): void {

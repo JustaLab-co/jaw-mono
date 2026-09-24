@@ -1,31 +1,24 @@
 import { createPublicClient, http, erc20Abi, formatUnits, type Chain, type PublicClient } from 'viem';
-import { base, baseSepolia, polygon, polygonAmoy } from 'viem/chains';
-import { usdcForNetwork, USDC_BY_NETWORK, type UsdcAsset } from './asset-registry.js';
+import { base, baseSepolia, polygon } from 'viem/chains';
+import { usdcForNetwork, type UsdcAsset, type UsdcChainId } from './asset-registry.js';
 import { loadConfig } from '../lib/config.js';
+import { apiKeyFor } from '../lib/api-key.js';
 
 // The JAW proxy RPC endpoint, mirrored from core's JAW_RPC_URL. Kept as a local
 // literal rather than an import because `@jaw.id/core` is lazy-loaded in the CLI
 // (a static import would pull it into startup); keep in sync if core's URL moves.
 const JAW_RPC_URL = 'https://api.justaname.id/proxy/v1/rpc';
 
-const CHAINS: Record<number, Chain> = {
+// Keyed on the registry's own chain ids, so this map and USDC_BY_NETWORK cannot
+// drift: a registry entry with no viem chain here fails to compile, and a viem
+// chain the registry does not carry fails the same way. A loop throwing at
+// import time catches only the first of those two, and only once the process is
+// already running.
+const CHAINS: Record<UsdcChainId, Chain> = {
   [base.id]: base,
   [baseSepolia.id]: baseSepolia,
   [polygon.id]: polygon,
-  [polygonAmoy.id]: polygonAmoy,
 };
-
-// The viem chains here and USDC_BY_NETWORK in asset-registry are two lists that
-// must cover the same chain ids. Assert it at load so adding a USDC entry
-// without its viem chain fails loudly here instead of silently building a
-// client with `chain: undefined` (wrong gas/explorer defaults) at read time.
-for (const chainId of Object.values(USDC_BY_NETWORK).map((a) => a.chainId)) {
-  if (!CHAINS[chainId]) {
-    throw new Error(
-      `x402 balance: USDC registry has chain ${chainId} but no viem chain is mapped for it in balance.ts`
-    );
-  }
-}
 
 // One client per (chain, apiKey) across the process — a fresh transport per read
 // is wasted setup once balance checks run more than once per payment. Keying on
@@ -36,6 +29,30 @@ for (const chainId of Object.values(USDC_BY_NETWORK).map((a) => a.chainId)) {
 const clients = new Map<string, PublicClient>();
 
 /**
+ * Every read through this transport runs inside the payment lock, so one that
+ * hangs wedges every payment on the machine and not just its own. viem's
+ * defaults are 10s per request across four attempts, roughly 41s before a read
+ * gives up, and a payment makes at least four of them: the Permit2 allowance,
+ * the payer balance, the delegation probe and the account's EIP-712 domain.
+ *
+ * The rest of this path is bounded on purpose too (`FETCH_TIMEOUT_MS` in http.ts,
+ * the race in `awaitCall`). These reads were the ones left out of that rule.
+ */
+
+/**
+ * Per attempt, not per read: `RPC_RETRY_COUNT` attempts of this each.
+ *
+ * The same 5000 appears as `DEFAULT_TIMEOUT_MS` in `permission-onchain.ts`, which
+ * bounds a whole read including its retries through `within()`. The two are
+ * complementary and the shared number is a coincidence, not one knob: a transport
+ * timeout cannot stop three attempts from adding up, which is what `within()` is
+ * there for. `permission-onchain.ts` reads through this transport too, so it has
+ * both, and neither is redundant.
+ */
+const RPC_TIMEOUT_MS = 5_000;
+const RPC_RETRY_COUNT = 2;
+
+/**
  * Route reads through the same JAW proxy core uses, so the x402 modules see the
  * same node/state core does and don't depend on viem's public RPC fallback
  * (rate-limited and flaky). This matters for the delegation probe in payer.ts:
@@ -43,15 +60,19 @@ const clients = new Map<string, PublicClient>();
  * needed. Falls back to the public RPC when no apiKey is configured (e.g. tests).
  */
 function rpcTransport(chainId: number, apiKey?: string) {
-  if (!apiKey) return http();
-  return http(`${JAW_RPC_URL}?chainId=${chainId}&api-key=${apiKey}`);
+  const options = { timeout: RPC_TIMEOUT_MS, retryCount: RPC_RETRY_COUNT };
+  if (!apiKey) return http(undefined, options);
+  return http(`${JAW_RPC_URL}?chainId=${chainId}&api-key=${apiKey}`, options);
 }
 
 /** Shared per-(chain, apiKey) public client for the x402 modules (reads only). */
 export function publicClientFor(chainId: number): PublicClient {
-  const chain = CHAINS[chainId];
+  // Widened because a caller may hold any chain id: `permission-onchain.ts` reads
+  // for whatever chain the session was made on, which is a number off a config
+  // file. The throw below is what narrows it.
+  const chain = (CHAINS as Record<number, Chain | undefined>)[chainId];
   if (!chain) throw new Error(`x402: no viem chain configured for chainId ${chainId}`);
-  const apiKey = loadConfig().apiKey;
+  const apiKey = apiKeyFor(loadConfig());
   const key = `${chainId}:${apiKey ?? ''}`;
   let client = clients.get(key);
   if (!client) {

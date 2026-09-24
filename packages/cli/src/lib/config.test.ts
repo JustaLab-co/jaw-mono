@@ -45,6 +45,12 @@ describe('config', () => {
     expect(saved.defaultChain).toBe(8453);
   });
 
+  it('setConfigValue rejects an api key that would rewrite the URL it is put in', () => {
+    setConfigValue('apiKey', 'good-key');
+    expect(() => setConfigValue('apiKey', 'x&chainId=1')).toThrow(/apiKey/);
+    expect(loadConfig().apiKey).toBe('good-key');
+  });
+
   it('setConfigValue creates directory and merges with existing config', () => {
     setConfigValue('apiKey', 'first');
     setConfigValue('defaultChain', 1);
@@ -75,6 +81,54 @@ describe('config', () => {
     expect(() => setConfigValue('defaultChain', '0x10')).toThrow(/positive integer/);
     expect(() => setConfigValue('defaultChain', '-1')).toThrow(/positive integer/);
     expect(() => setConfigValue('sessionExpiry', '1.5')).toThrow(/positive integer/);
+  });
+});
+
+describe('saveConfig writes atomically', () => {
+  /**
+   * The bridge writes this file on connect now, and the MCP server runs beside
+   * a terminal, so a reader landing mid-write is ordinary rather than exotic. A
+   * truncating write reads back as "not valid JSON" and costs the api key, the
+   * paymasters and the x402 caps.
+   */
+
+  const previous: JawConfig = { apiKey: 'old-key', defaultChain: 8453 };
+
+  it('never truncates the file a reader is already holding', () => {
+    saveConfig(previous);
+    // A second hard link to the same inode stands in for the open handle a
+    // reader has: a write in place would empty it, a rename leaves it whole.
+    const held = path.join(TEST_ROOT, 'held.json');
+    fs.linkSync(PATHS.config, held);
+
+    saveConfig({ apiKey: 'new-key' });
+
+    expect(JSON.parse(fs.readFileSync(held, 'utf-8'))).toEqual(previous);
+    expect(loadConfig()).toEqual({ apiKey: 'new-key' });
+  });
+
+  it('leaves the config untouched when the write itself fails', () => {
+    saveConfig(previous);
+    // Nothing can be written at the scratch path, so the save dies before the
+    // swap. The real file must not have been opened at all.
+    fs.mkdirSync(`${PATHS.config}.${process.pid}.tmp`);
+
+    expect(() => saveConfig({ apiKey: 'new-key' })).toThrow();
+    expect(loadConfig()).toEqual(previous);
+  });
+
+  it('leaves no scratch file behind', () => {
+    saveConfig(previous);
+
+    expect(fs.readdirSync(TEST_ROOT).filter((name) => name.endsWith('.tmp'))).toEqual([]);
+  });
+
+  it('keeps the file readable by its owner only', () => {
+    saveConfig(previous);
+
+    // The rename carries the temp file's mode across, so pinning it on the
+    // temp is what pins it here.
+    expect(fs.statSync(PATHS.config).mode & 0o777).toBe(0o600);
   });
 });
 

@@ -20,11 +20,11 @@ static async fromLocalAccount(
 
 Type: `AccountConfig`
 
-| Property       | Type     | Required | Description                              |
-| -------------- | -------- | -------- | ---------------------------------------- |
-| `chainId`      | `number` | Yes      | Chain ID for the account                 |
-| `apiKey`       | `string` | Yes      | API key for JAW services                 |
-| `paymasterUrl` | `string` | No       | Custom paymaster URL for gas sponsorship |
+| Property       | Type     | Required | Description                                                                          |
+| -------------- | -------- | -------- | ------------------------------------------------------------------------------------ |
+| `chainId`      | `number` | Yes      | Chain ID for the account                                                             |
+| `apiKey`       | `string` | No       | API key for JAW services. Without one the proxy decides whether to serve the request |
+| `paymasterUrl` | `string` | No       | Custom paymaster URL for gas sponsorship                                             |
 
 ### localAccount
 

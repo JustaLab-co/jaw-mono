@@ -16,6 +16,15 @@ const GAS_PRICE = 1_000_000n;
 const RATE = 3_000_000_000n;
 const PREFUND = 6_000n;
 
+/**
+ * At this gas price one operation costs 6 USDC and the buffered transfer 12, so
+ * an allowance can sit under the first (refused), between them (trimmed), or
+ * above both (sent whole). The ceiling tests pick one of the three.
+ */
+const TWO_GWEI = 2_000_000_000n;
+const ONE_OP = 6_000_000n;
+const BUFFERED = 12_000_000n;
+
 const usdcSpend: PermissionsDetail = {
     spends: [{ token: USDC, allowance: '10000000', unit: 'day' as never }],
 };
@@ -64,10 +73,10 @@ describe('buildSpenderPrefundCall', () => {
         expect(decoded.args).toEqual([SPENDER, 2_000_000n * GAS_PRICE]);
     });
 
-    // On an expensive chain the gas price alone puts the priced amount far above
-    // anything the session could spend with the authority it was granted. What
-    // it does not spend sits on the session address, outside the permission.
-    it('never sends more than the permission lets the session spend in a period', async () => {
+    // Trimming to the allowance sent all of it to the session address, outside
+    // the permission, in the one case where the session could not have run on it
+    // anyway.
+    it('sends nothing when one operation costs more than the permission allows', async () => {
         const mainnetGas = 30_000_000_000n; // 30 gwei
         const call = await buildSpenderPrefundCall({
             account: ACCOUNT,
@@ -76,10 +85,39 @@ describe('buildSpenderPrefundCall', () => {
             read: reader({ [ACCOUNT]: 10n ** 12n }, { gasPrice: async () => mainnetGas }),
         });
 
-        const priced = (2_000_000n * mainnetGas * RATE) / 10n ** 18n;
-        expect(priced).toBeGreaterThan(10_000_000n); // the clamp is doing work
-        const decoded = decodeFunctionData({ abi: erc20Abi, data: call!.data });
-        expect(decoded.args).toEqual([SPENDER, 10_000_000n]);
+        expect((2_000_000n * mainnetGas * RATE) / 10n ** 18n).toBeGreaterThan(10_000_000n);
+        expect(call).toBeNull();
+    });
+
+    // The boundary belongs to the transfer: an allowance that covers an
+    // operation exactly is an allowance that covers it.
+    it('sends the transfer when the allowance matches one operation exactly', async () => {
+        const call = await buildSpenderPrefundCall({
+            account: ACCOUNT,
+            spender: SPENDER,
+            permissions: { spends: [{ token: USDC, allowance: String(ONE_OP), unit: 'day' as never }] },
+            read: reader({ [ACCOUNT]: 10n ** 12n }, { gasPrice: async () => TWO_GWEI }),
+        });
+
+        expect(decodeFunctionData({ abi: erc20Abi, data: call!.data }).args).toEqual([SPENDER, ONE_OP]);
+    });
+
+    // The buffer is what the transfer would like, not what the permission has to
+    // cover. An allowance between the two funds a session that runs, so trimming
+    // to it beats refusing: the alternative here is a session that cannot pay.
+    it('trims to the allowance when it covers an operation but not the buffer', async () => {
+        const between = 8_000_000n;
+        expect(between).toBeGreaterThan(ONE_OP);
+        expect(between).toBeLessThan(BUFFERED);
+
+        const call = await buildSpenderPrefundCall({
+            account: ACCOUNT,
+            spender: SPENDER,
+            permissions: { spends: [{ token: USDC, allowance: String(between), unit: 'day' as never }] },
+            read: reader({ [ACCOUNT]: 10n ** 12n }, { gasPrice: async () => TWO_GWEI }),
+        });
+
+        expect(decodeFunctionData({ abi: erc20Abi, data: call!.data }).args).toEqual([SPENDER, between]);
     });
 
     it('leaves the amount alone when the allowance is above it', async () => {
@@ -98,33 +136,26 @@ describe('buildSpenderPrefundCall', () => {
     // cap is their intersection: the tightest entry is the one that binds. The
     // ceiling must not depend on which of them the requester wrote first.
     it('takes the tightest allowance when a token carries several periods', async () => {
-        const mainnetGas = 30_000_000_000n;
-        const tightFirst: PermissionsDetail = {
-            spends: [
-                { token: USDC, allowance: '1000000', unit: 'minute' as never },
-                { token: USDC, allowance: '50000000', unit: 'day' as never },
-            ],
-        };
-        const looseFirst: PermissionsDetail = {
-            spends: [
-                { token: USDC, allowance: '50000000', unit: 'day' as never },
-                { token: USDC, allowance: '1000000', unit: 'minute' as never },
-            ],
-        };
-        const read = reader({ [ACCOUNT]: 10n ** 12n }, { gasPrice: async () => mainnetGas });
+        const tight = { token: USDC, allowance: '1000000', unit: 'minute' as never };
+        const loose = { token: USDC, allowance: '50000000', unit: 'day' as never };
+        const read = reader({ [ACCOUNT]: 10n ** 12n }, { gasPrice: async () => TWO_GWEI });
+        const callFor = (spends: PermissionsDetail['spends']) =>
+            buildSpenderPrefundCall({ account: ACCOUNT, spender: SPENDER, permissions: { spends }, read });
 
-        const a = await buildSpenderPrefundCall({ account: ACCOUNT, spender: SPENDER, permissions: tightFirst, read });
-        const b = await buildSpenderPrefundCall({ account: ACCOUNT, spender: SPENDER, permissions: looseFirst, read });
+        expect(await callFor([tight, loose])).toBeNull();
+        expect(await callFor([loose, tight])).toBeNull();
 
-        expect(decodeFunctionData({ abi: erc20Abi, data: a!.data }).args).toEqual([SPENDER, 1_000_000n]);
-        expect(a!.data).toEqual(b!.data);
+        // The loose entry on its own clears an operation, which is what makes the
+        // two nulls the tight entry's doing rather than the price's.
+        const looseOnly = await callFor([loose]);
+        expect(decodeFunctionData({ abi: erc20Abi, data: looseOnly!.data }).args).toEqual([SPENDER, BUFFERED]);
     });
 
     // A `forever` entry never renews, so no window is long enough for a wider
     // periodic one to matter: 5 USDC forever is all this permission authorises,
-    // and the prefund must not deliver more than that up front.
+    // and one operation costs 6. The 50 USDC daily entry beside it would have
+    // allowed the transfer.
     it('holds a forever allowance as the ceiling over a wider periodic one', async () => {
-        const mainnetGas = 30_000_000_000n;
         const call = await buildSpenderPrefundCall({
             account: ACCOUNT,
             spender: SPENDER,
@@ -134,10 +165,10 @@ describe('buildSpenderPrefundCall', () => {
                     { token: USDC, allowance: '5000000', unit: 'forever' as never },
                 ],
             },
-            read: reader({ [ACCOUNT]: 10n ** 12n }, { gasPrice: async () => mainnetGas }),
+            read: reader({ [ACCOUNT]: 10n ** 12n }, { gasPrice: async () => TWO_GWEI }),
         });
 
-        expect(decodeFunctionData({ abi: erc20Abi, data: call!.data }).args).toEqual([SPENDER, 5_000_000n]);
+        expect(call).toBeNull();
     });
 
     // Skipping only the unreadable entry would widen the ceiling to whatever the

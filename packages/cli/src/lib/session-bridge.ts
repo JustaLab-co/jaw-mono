@@ -1,11 +1,19 @@
 import { loadSessionKey } from './keystore.js';
-import { isLegacySession, loadSessionConfig, type SessionConfig } from './session-config.js';
+import {
+  expiryInstant,
+  isLegacySession,
+  loadSessionConfig,
+  sessionUsable,
+  type SessionConfig,
+} from './session-config.js';
 import { loadConfig } from './config.js';
+import { isRejectedApiKey } from './api-key.js';
 import { encodeFunctionData, erc20Abi, maxUint256 } from 'viem';
 import { usdcForNetwork } from '../x402/asset-registry.js';
+import { whyFeeTokenDisagrees } from '../x402/fee-token.js';
 import { PERMIT2_ADDRESS } from '../x402/permit2.js';
 
-// JAW's ERC-20 paymaster, mirrored from core's JAW_PAYMASTER_URL. Kept as a
+// JAW's ERC-20 paymaster, mirrored from core's `jawPaymasterUrl`. Kept as a
 // local literal rather than an import because `@jaw.id/core` is lazy-loaded in
 // the CLI (a static import would pull it into startup); keep in sync if core's
 // URL moves. The core SDK recognises this exact base URL and adds the USDC
@@ -69,11 +77,25 @@ function resolvePaymaster(
 }
 
 /**
+ * Say so when the token this session names is not one the paymaster takes.
+ *
+ * Only for JAW's own paymaster: a user who brought their own url owns that
+ * relationship, and the capabilities response describes ours.
+ */
+async function warnOnFeeTokenDrift(options: SessionBridgeOptions): Promise<void> {
+  if (options.paymasterUrl && !options.paymasterUrl.startsWith(JAW_ERC20_PAYMASTER_URL)) return;
+  const asset = usdcForNetwork(`eip155:${options.chainId}`);
+  if (!asset || !options.apiKey) return;
+  const warning = await whyFeeTokenDisagrees(asset, options.apiKey);
+  if (warning) console.warn(`[jaw] ${warning}`);
+}
+
+/**
  * The one way the send still breaks once nothing is sponsored: the ERC-20
  * paymaster charges the account the userOp is sent from, and an account with no
  * USDC cannot be charged, so sizing its approval fails. Core's error names the
- * token and the chain and nothing about the account, which is what made this
- * hard to read the first time it happened.
+ * token and the chain and nothing about the account, so the error alone does not
+ * say what to fix.
  *
  * A session normally receives its gas in the grant, so an empty one means that
  * transfer did not happen: the wallet that approved the permission does not
@@ -108,11 +130,47 @@ interface InitializedSession {
 }
 
 export class SessionBridge {
-  private readonly options: SessionBridgeOptions;
+  /** As given, so the paymaster can be resolved again under a fresh key. */
+  private readonly given: SessionBridgeOptions;
+  private options: SessionBridgeOptions;
   private session: InitializedSession | null = null;
 
   constructor(options: SessionBridgeOptions) {
+    this.given = options;
     this.options = { ...options, ...resolvePaymaster(options) };
+  }
+
+  /**
+   * Run an operation, and once more under a fresh key if the proxy refused the
+   * one the browser handed us.
+   *
+   * Only that key. The deployment rotates it, and every install keeps sending
+   * the old one until told otherwise, so a refusal here is how an install
+   * learns. A key the user set is theirs, and a refusal of it surfaces as is.
+   */
+  private async underCurrentKey<T>(op: () => Promise<T>): Promise<T> {
+    try {
+      return await op();
+    } catch (err) {
+      if (!isRejectedApiKey(err) || this.options.apiKey !== loadConfig().workspaceApiKey) throw err;
+      // Lazy for the same reason core is: the browser bridge pulls in the
+      // websocket client, and a payment that never needs it should not load it.
+      const { refreshWorkspaceApiKey } = await import('./bridge-singleton.js');
+      let fresh: string | undefined;
+      try {
+        fresh = await refreshWorkspaceApiKey();
+      } catch {
+        // No browser paired, or it did not answer. The proxy's own refusal is
+        // the useful error here, not ours about the browser we went looking for.
+        throw err;
+      }
+      if (!fresh || fresh === this.options.apiKey) throw err;
+      const given = { ...this.given, apiKey: fresh };
+      this.options = { ...given, ...resolvePaymaster(given) };
+      // The account holds the paymaster url with the old key in it.
+      this.session = null;
+      return await op();
+    }
   }
 
   private async getSession(): Promise<InitializedSession> {
@@ -151,6 +209,12 @@ export class SessionBridge {
     privateKeyHex = null;
 
     const { Account } = await import('@jaw.id/core');
+    // The token in the context is the registry's, and until now nothing compared
+    // it against what the paymaster actually takes. Checked here rather than in
+    // the constructor because it costs a network read, and warned rather than
+    // corrected: see `whyFeeTokenDisagrees`.
+    await warnOnFeeTokenDrift(this.options);
+
     // Every session is EIP-7702, so the account re-derives to the session key
     // EOA and the delegation rides its userOps. Deriving any other way would
     // produce an address the permission was never granted to.
@@ -181,10 +245,19 @@ export class SessionBridge {
   }
 
   private checkExpiry(config: SessionConfig): void {
-    if (config.expiry <= Date.now() / 1000) {
-      const expiryDate = new Date(config.expiry * 1000).toISOString();
-      throw new Error(`Session expired on ${expiryDate}. Run \`jaw session setup\` to create a new session.`);
-    }
+    // `sessionUsable` is the rule, and it answers no for an expiry the file
+    // cannot state: every comparison against a NaN is false, so a hand-edited
+    // field would otherwise wave the session through rather than stop it. The
+    // cleanup paths ask `sessionLives` and get the opposite answer on purpose.
+    if (sessionUsable(config.expiry)) return;
+
+    const ends = expiryInstant(config.expiry);
+    throw new Error(
+      ends
+        ? `Session expired on ${ends.toISOString()}. Run \`jaw session setup\` to create a new session.`
+        : 'Session expired: the session file does not say when it ends, so nothing here can tell that it has not. ' +
+          'Run `jaw session setup` to create a new session, or `jaw session revoke` to end the one on chain.'
+    );
   }
 
   /**
@@ -205,7 +278,11 @@ export class SessionBridge {
    * that turns this into an arbitrary transfer, which matters because an agent
    * reaches the tools that reach this.
    */
-  async approvePermit2(token: `0x${string}`): Promise<string> {
+  approvePermit2(token: `0x${string}`): Promise<string> {
+    return this.underCurrentKey(() => this.approvePermit2Now(token));
+  }
+
+  private async approvePermit2Now(token: `0x${string}`): Promise<string> {
     const { account, config } = await this.getSession();
     const usdc = usdcForNetwork(`eip155:${config.chainId}`);
     if (!usdc || token.toLowerCase() !== usdc.address.toLowerCase()) {
@@ -233,7 +310,11 @@ export class SessionBridge {
     }
   }
 
-  async request(method: string, params?: unknown): Promise<unknown> {
+  request(method: string, params?: unknown): Promise<unknown> {
+    return this.underCurrentKey(() => this.dispatch(method, params));
+  }
+
+  private async dispatch(method: string, params?: unknown): Promise<unknown> {
     const { account, config } = await this.getSession();
 
     switch (method) {

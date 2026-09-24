@@ -4,8 +4,8 @@ const ADDRESS_RE = /^0x[0-9a-fA-F]{40}$/;
 const SELECTOR_RE = /^0x[0-9a-fA-F]{8}$/;
 // The SDK hands `allowance` straight to BigInt(), which takes decimal and hex
 // alike, and the permissions doc shows the decimal form
-// (parseUnits('100', 6).toString()). Accepting only hex here made the CLI
-// stricter than the SDK it wraps, so the documented example failed validation.
+// (parseUnits('100', 6).toString()). Accepting only hex here would make the CLI
+// stricter than the SDK it wraps, and the documented example would not validate.
 const ALLOWANCE_RE = /^(0x[0-9a-fA-F]+|[0-9]+)$/;
 const VALID_SPEND_UNITS = new Set(['minute', 'hour', 'day', 'week', 'month', 'year', 'forever']);
 
@@ -75,6 +75,20 @@ export function parsePermissionsConfig(raw: unknown): PermissionsConfig {
   }
 
   return raw as PermissionsConfig;
+}
+
+/**
+ * Whether an api key is safe to interpolate into a URL, which is how every
+ * consumer of one uses it: `x402/balance.ts` and core's `buildChainConfig` both
+ * concatenate it into a query string without encoding.
+ *
+ * Expressed as a property rather than a guessed alphabet, because the key's
+ * real format is the backend's to define and this does not need to know it. A
+ * value that survives `encodeURIComponent` unchanged cannot carry an `&`, a `#`
+ * or a space, which is what it would take to rewrite the query around it.
+ */
+export function isSafeApiKey(value: string): boolean {
+  return value.length > 0 && encodeURIComponent(value) === value;
 }
 
 export function isValidKeysUrl(url: string): boolean {

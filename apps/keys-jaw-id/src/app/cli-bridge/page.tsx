@@ -4,6 +4,7 @@ import { useSearchParams } from 'next/navigation';
 import { useEffect, useState, Suspense, useRef, useCallback } from 'react';
 import { JAW, Mode } from '@jaw.id/core';
 import { ReactUIHandler } from '@jaw.id/ui';
+import { resolveBridgeApiKey } from '../../lib/cli-api-key';
 import {
   generateKeyPair,
   deriveSharedSecret,
@@ -79,6 +80,8 @@ function CLIBridgeContent() {
   const [error, setError] = useState('');
   const [lastMethod, setLastMethod] = useState<string | null>(null);
   const sdkRef = useRef<ReturnType<typeof JAW.create> | null>(null);
+  /** What `sdkRef` was built from, so a second init can tell whether it still fits. */
+  const sdkSignatureRef = useRef<string | null>(null);
   const wsRef = useRef<WebSocket | null>(null);
   const sharedSecretRef = useRef<CryptoKey | null>(null);
 
@@ -202,7 +205,6 @@ function CLIBridgeContent() {
 
               switch (inner.type) {
                 case 'init': {
-                  const apiKey = inner.apiKey as string;
                   const chainId = (inner.chainId as number) ?? 1;
                   const ens = inner.ens as string | undefined;
                   const paymasterUrl = inner.paymasterUrl as string | undefined;
@@ -210,13 +212,38 @@ function CLIBridgeContent() {
                   // sends the two together or not at all.
                   const paymasterContext = inner.paymasterContext as Record<string, unknown> | undefined;
 
+                  // A CLI that brought its own key keeps it, so anyone who wants
+                  // their own attribution or their own limits sets one and
+                  // nothing about their setup changes. Only the empty case is
+                  // filled in, and it is filled in from the CLI's own workspace
+                  // rather than this app's, which bills something else.
+                  const sentApiKey = typeof inner.apiKey === 'string' ? inner.apiKey : '';
+                  const apiKey = await resolveBridgeApiKey(sentApiKey);
                   if (!apiKey) {
+                    const reason = 'No API key: the CLI sent none and this deployment has none configured for it.';
                     setState('error');
-                    setError('CLI sent empty API key');
+                    setError(reason);
+                    // Said across the channel as well, because this page is not
+                    // where the person is looking. Without it the CLI learns
+                    // nothing for fifteen seconds and then reports a slow SDK,
+                    // which names neither the missing key nor this deployment.
+                    const failure = await encryptAndSerialize(sharedSecretRef.current!, {
+                      type: 'error',
+                      reason,
+                    });
+                    ws!.send(JSON.stringify(failure));
                     return;
                   }
 
-                  if (!sdkRef.current) {
+                  // Rebuilt when the init it was built from changed, not only
+                  // when there is none. A CLI re-sends init on reconnect, and
+                  // the page it reconnects to is the one still open: keeping the
+                  // first SDK meant the browser kept signing under the key, the
+                  // chain and the paymaster of the previous run while the CLI
+                  // recorded the new ones, and neither side could see the gap.
+                  const signature = JSON.stringify({ chainId, ens, paymasterUrl, paymasterContext, apiKey });
+                  if (!sdkRef.current || sdkSignatureRef.current !== signature) {
+                    sdkSignatureRef.current = signature;
                     sdkRef.current = JAW.create({
                       appName: 'JAW CLI',
                       defaultChainId: chainId,
@@ -240,10 +267,14 @@ function CLIBridgeContent() {
                     });
                   }
 
-                  // Send encrypted ready
+                  // Send encrypted ready, carrying the key back only when we
+                  // are the ones who supplied it. Echoing a key the CLI already
+                  // has would hand it something to store that it did not need,
+                  // and this way it only ever persists what it lacked.
                   const readyEnvelope = await encryptAndSerialize(sharedSecretRef.current!, {
                     type: 'ready',
                     chainId,
+                    ...(sentApiKey ? {} : { apiKey }),
                   });
                   ws!.send(JSON.stringify(readyEnvelope));
                   break;

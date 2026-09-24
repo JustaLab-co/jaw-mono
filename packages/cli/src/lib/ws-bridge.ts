@@ -15,11 +15,13 @@ import {
   importKeyFromHex,
   type EncryptedEnvelope,
 } from './crypto.js';
+import { sanitizeLine } from './terminal.js';
 
 type CKey = webcrypto.CryptoKey;
 
 export interface WSBridgeConfig {
-  apiKey: string;
+  /** Absent on a first connect from a machine that has none. */
+  apiKey?: string;
   chainId: number;
   ens?: string;
   paymasterUrl?: string;
@@ -55,12 +57,50 @@ export interface WSBridgeOptions {
 export function buildInitPayload(config: WSBridgeConfig): Record<string, unknown> {
   return {
     type: 'init',
-    apiKey: config.apiKey,
+    // Omitted rather than empty when there is none: the browser reads the
+    // field's absence as "fill one in", and an empty string would have to mean
+    // the same thing in a second place.
+    ...(config.apiKey ? { apiKey: config.apiKey } : {}),
     chainId: config.chainId,
     ens: config.ens,
     paymasterUrl: config.paymasterUrl,
     ...(config.paymasterUrl && config.paymasterContext ? { paymasterContext: config.paymasterContext } : {}),
   };
+}
+
+/**
+ * The api key the browser filled in, off the `ready` it answers with.
+ *
+ * A function rather than a read inside the socket handler, for the same reason
+ * `buildInitPayload` is one: what crosses the bridge can then be asserted
+ * without standing up a relay.
+ *
+ * Null covers both absences, and neither is an error. An older browser does not
+ * send the field at all, and a current one omits it whenever the CLI arrived
+ * with a key of its own, since echoing that back would hand the CLI something
+ * to store that it already had.
+ */
+export function readInjectedApiKey(inner: Record<string, unknown>): string | null {
+  const apiKey = inner['apiKey'];
+  return typeof apiKey === 'string' && apiKey.length > 0 ? apiKey : null;
+}
+
+/**
+ * Why the browser will not come up, off the envelope it sends instead of
+ * `ready`, or null when this is not that envelope.
+ *
+ * Extracted for the reason the two above are: what crosses the bridge can then
+ * be asserted without standing up a relay.
+ *
+ * Sanitized here rather than at the print. The text is written by our own page
+ * and arrives under the shared secret, so nothing else can produce it, but it
+ * ends up on a terminal and this is the last place that knows it came off a
+ * socket.
+ */
+export function readBridgeFailure(inner: Record<string, unknown>): string | null {
+  if (inner['type'] !== 'error') return null;
+  const reason = inner['reason'];
+  return sanitizeLine(typeof reason === 'string' && reason.length > 0 ? reason : 'no reason given', 300);
 }
 
 const DEFAULT_TIMEOUT_MS = 120_000;
@@ -101,6 +141,12 @@ export class WSBridge {
   private readonly config: WSBridgeConfig;
   private readonly privateKeyHex: string;
   readonly publicKeyHex: string;
+  /**
+   * The api key the browser supplied on `ready`, present only when it filled in
+   * one the CLI did not have. Read after `connect` resolves; the caller owns
+   * whether to keep it, because this class does not touch the config file.
+   */
+  injectedApiKey: string | null = null;
   private peerPublicKeyHex: string | null;
   private sharedSecret: CKey | null = null;
   private ws: WebSocket | null = null;
@@ -144,12 +190,18 @@ export class WSBridge {
     this.onBrowserNeeded = onBrowserNeeded;
     this.onPeerKeyChanged = onPeerKeyChanged;
 
-    // Pre-derive shared secret if we already have the peer key
-    if (this.peerPublicKeyHex) {
-      await this.deriveSecret();
+    try {
+      // Pre-derive shared secret if we already have the peer key
+      if (this.peerPublicKeyHex) {
+        await this.deriveSecret(this.peerPublicKeyHex);
+      }
+      await this.connectInternal(onBrowserNeeded, onPeerKeyChanged);
+    } catch (err) {
+      // Nobody receives a bridge whose connect failed, so close it here or it
+      // keeps reconnecting on its own.
+      this.close();
+      throw err;
     }
-
-    return this.connectInternal(onBrowserNeeded, onPeerKeyChanged);
   }
 
   private async connectInternal(
@@ -197,7 +249,19 @@ export class WSBridge {
                 clearTimeout(readyTimer);
                 ws.off('message', onMsg);
                 this.reconnectAttempts = 0; // Reset on successful connect
+                const injected = readInjectedApiKey(inner as Record<string, unknown>);
+                if (injected) this.injectedApiKey = injected;
                 resolve();
+              }
+              // The browser saying why it will not come up. Without this the
+              // only outcome is the timeout below, which blames a slow SDK for
+              // a deployment that is missing a key.
+              const failure = readBridgeFailure(inner as Record<string, unknown>);
+              if (failure) {
+                clearTimeout(readyTimer);
+                ws.off('message', onMsg);
+                ws.close();
+                reject(new Error(`Browser refused to start the session: ${failure}`));
               }
             } catch {
               // Not a valid encrypted message for us, ignore
@@ -257,11 +321,21 @@ export class WSBridge {
           this.handleBrowserDisconnect();
         } else if (msg.type === 'key_exchange' && expectingKeyExchange) {
           expectingKeyExchange = false;
-          const peerKey = msg.publicKey as string;
-          this.peerPublicKeyHex = peerKey;
-          await this.deriveSecret();
-          onPeerKeyChanged?.(peerKey);
-          await onBrowserReady();
+          // The key comes off the network. One that cannot be used rejects the
+          // connect here, rather than throwing in a handler nothing awaits.
+          try {
+            const peerKey = msg.publicKey;
+            if (typeof peerKey !== 'string' || !/^([0-9a-fA-F]{2})+$/.test(peerKey)) {
+              throw new Error('Relay sent an invalid key_exchange public key.');
+            }
+            await this.deriveSecret(peerKey);
+            onPeerKeyChanged?.(peerKey);
+            await onBrowserReady();
+          } catch (err) {
+            clearTimeout(timer);
+            ws.close();
+            reject(err);
+          }
         }
       });
 
@@ -358,13 +432,14 @@ export class WSBridge {
    * Used by `jaw disconnect` when we just need to tell the browser to close.
    */
   async connectAndShutdown(): Promise<void> {
-    if (!this.peerPublicKeyHex) {
+    const peerHex = this.peerPublicKeyHex;
+    if (!peerHex) {
       // No peer key means browser never connected — nothing to shut down
       return;
     }
 
     this.disposed = true;
-    await this.deriveSecret();
+    await this.deriveSecret(peerHex);
 
     return new Promise<void>((resolve) => {
       const url = `${this.relayUrl}?session=${encodeURIComponent(this.session)}&role=cli`;
@@ -456,11 +531,12 @@ export class WSBridge {
     ws.send(data);
   }
 
-  private async deriveSecret(): Promise<void> {
-    if (!this.peerPublicKeyHex) return;
+  /** Key and secret are stored together, and only once the derivation worked. */
+  private async deriveSecret(peerHex: string): Promise<void> {
     const privateKey = await importKeyFromHex('private', this.privateKeyHex);
-    const peerPublicKey = await importKeyFromHex('public', this.peerPublicKeyHex);
+    const peerPublicKey = await importKeyFromHex('public', peerHex);
     this.sharedSecret = await deriveSharedSecret(privateKey, peerPublicKey);
+    this.peerPublicKeyHex = peerHex;
   }
 }
 
