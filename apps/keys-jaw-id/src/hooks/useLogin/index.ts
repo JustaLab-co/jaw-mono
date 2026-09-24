@@ -15,20 +15,12 @@ export const useLogin = () => {
   return useMutation({
     mutationFn: async ({ chainId, credentialId, apiKey }: LoginParams) => {
       try {
-        // Use apiKey from params, fallback to env var
-        const effectiveApiKey = apiKey;
-
-        if (!effectiveApiKey) {
-          throw new Error(
-            'API key is required. Provide it via apiKey parameter or NEXT_PUBLIC_API_KEY environment variable.'
-          );
-        }
-
-        // Use Account.get which handles WebAuthn auth and smart account creation
+        // The key is optional: with none, the proxy answers on the origin keys
+        // forwards on the caller's behalf.
         const account = await Account.get(
           {
             chainId: chainId.id,
-            apiKey: effectiveApiKey,
+            apiKey,
             paymasterUrl: chainId.paymaster?.url,
           },
           credentialId

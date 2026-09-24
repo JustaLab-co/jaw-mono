@@ -50,6 +50,7 @@ export {
     type CapabilitiesResult,
     type ChainCapabilities,
     type ChainMetadataCapability,
+    peekCapabilities,
 } from './capabilities.js';
 
 export {

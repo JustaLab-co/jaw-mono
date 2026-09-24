@@ -95,10 +95,12 @@ describe('usePermissionRevocation', () => {
     expect(relayMock).not.toHaveBeenCalled();
   });
 
-  it('reports lookup-failed with no api key, without calling the relay', async () => {
+  // A dApp registered by origin has no key, and the relay resolves it from the
+  // origin instead. Refusing here built the revocation from no record at all.
+  it('looks the permission up with no api key', async () => {
     await mount({ apiKey: undefined });
-    expect(hook.problem).toBe('lookup-failed');
-    expect(relayMock).not.toHaveBeenCalled();
+    expect(hook.problem).toBeNull();
+    expect(relayMock).toHaveBeenCalledWith(expect.any(String), undefined);
   });
 
   it('reports not-found on a relay 404 — the permission is gone', async () => {

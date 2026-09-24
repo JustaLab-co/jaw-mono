@@ -11,7 +11,7 @@ import { TransactionDialogProps } from './types';
 import { useChainIconURI, useFeeTokenPrice } from '../../hooks';
 import { useDecodedCalldata } from '../../hooks/useDecodedCalldata';
 import { caip10, getDefaultDescriptorSource } from '../../utils/clearSigning';
-import { reverseResolveWithAvatars, getDisplayAddress, getChainLabel } from '../../utils';
+import { reverseResolveWithAvatars, getDisplayAddress, getChainLabel, identityKey } from '../../utils';
 import { formatNativeValue, subscriptDecimal } from '../../utils/displayFormat';
 import { IdentityAvatar } from '../IdentityAvatar';
 import { AppAvatar } from '../AppAvatar';
@@ -111,20 +111,21 @@ export const TransactionDialog = ({
       .then(async (resolved) => {
         if (cancelled) return;
         const next: Record<string, string> = {};
-        const avatarByAddress: Record<string, string> = {};
+        const avatarsByKey: Record<string, string> = {};
         for (const { address, chainId } of inputs) {
-          const identity = resolved[address.toLowerCase()];
+          const identity = resolved[identityKey(address, chainId)];
           if (!identity) continue;
           const label = await getChainLabel(chainId, mainnetRpcUrl);
-          next[address] = label ? `${identity.name}@${label}` : identity.name;
-          if (identity.avatar) avatarByAddress[address] = identity.avatar;
+          const key = identityKey(address, chainId);
+          next[key] = label ? `${identity.name}@${label}` : identity.name;
+          if (identity.avatar) avatarsByKey[key] = identity.avatar;
         }
         if (cancelled) return;
         if (Object.keys(next).length > 0) {
           setResolvedAddresses((prev) => ({ ...prev, ...next }));
         }
-        if (Object.keys(avatarByAddress).length > 0) {
-          setResolvedAvatars((prev) => ({ ...prev, ...avatarByAddress }));
+        if (Object.keys(avatarsByKey).length > 0) {
+          setResolvedAvatars((prev) => ({ ...prev, ...avatarsByKey }));
         }
       })
       .catch(() => undefined);
@@ -133,7 +134,8 @@ export const TransactionDialog = ({
     };
   }, [walletAddress, onBehalfOf, transactions, currentTransaction?.chainId]);
 
-  // Resolve ERC-7730 `metadata.contractName` for every unique `to` in the batch.
+  // Resolve ERC-7730 `metadata.contractName` for every unique chain + `to` in the batch,
+  // filed under the same CAIP-10 key the registry index uses.
   const [contractNames, setContractNames] = useState<Record<string, string>>({});
   const txSignature = transactions
     .filter((t) => !!t.to)
@@ -153,12 +155,15 @@ export const TransactionDialog = ({
         return;
       }
 
+      // Keyed by chain and address, like the index itself: the same address is a
+      // different contract on every chain, so a descriptor found for one chain must not
+      // be reused as another chain's name.
       const lookups = new Map<string, string>();
       for (const t of transactions) {
         if (!t.to) continue;
-        const key = t.to.toLowerCase();
+        const key = caip10(t.chainId, t.to);
         if (lookups.has(key)) continue;
-        const path = index[caip10(t.chainId, t.to)];
+        const path = index[key];
         if (path) lookups.set(key, path);
       }
 
@@ -187,18 +192,27 @@ export const TransactionDialog = ({
     };
   }, [txSignature]);
 
+  // Both maps are filed by address and chain, so a name read on one chain cannot be
+  // rendered on another chain's row. Every reader passes the chain of the row it draws,
+  // and the two helpers absorb the chain being unknown so the call sites stay plain.
+  const nameFor = (address: string | undefined, chainId: number | undefined): string | undefined =>
+    address && chainId ? resolvedAddresses[identityKey(address, chainId)] : undefined;
+  const avatarFor = (address: string | undefined, chainId: number | undefined): string | undefined =>
+    address && chainId ? resolvedAvatars[identityKey(address, chainId)] : undefined;
+
   // Prefer ENS reverse-resolved name, then ERC-7730 contractName, then truncated address.
-  const displayContractAddress = (address: string | undefined): string => {
+  const displayContractAddress = (address: string | undefined, chainId: number | undefined): string => {
     if (!address) return '';
-    const ens = resolvedAddresses[address];
+    const ens = nameFor(address, chainId);
     if (ens) return ens;
-    const cn = contractNames[address.toLowerCase()];
+    const cn = chainId === undefined ? undefined : contractNames[caip10(chainId, address)];
     if (cn) return cn;
     return getDisplayAddress(undefined, address);
   };
 
-  const displayWalletAddress = getDisplayAddress(resolvedAddresses[walletAddress], walletAddress);
-  const displayToAddress = displayContractAddress(currentTransaction?.to);
+  const dialogChainId = currentTransaction?.chainId;
+  const displayWalletAddress = getDisplayAddress(nameFor(walletAddress, dialogChainId), walletAddress);
+  const displayToAddress = displayContractAddress(currentTransaction?.to, dialogChainId);
 
   const blockReason = resolveBlockReason({
     hasSelectablePaymentOption,
@@ -264,7 +278,7 @@ export const TransactionDialog = ({
       {isProcessing ? (
         <ProcessingScreen
           seedAddress={walletAddress}
-          avatarUrl={resolvedAvatars[walletAddress]}
+          avatarUrl={avatarFor(walletAddress, dialogChainId)}
           appAvatar={<AppAvatar appName={appName} appLogoUrl={appLogoUrl} />}
           title="Submitting transaction"
         />
@@ -316,7 +330,7 @@ export const TransactionDialog = ({
                 label="From"
                 value={displayWalletAddress}
                 address={walletAddress}
-                avatarUrl={resolvedAvatars[walletAddress]}
+                avatarUrl={avatarFor(walletAddress, dialogChainId)}
                 // Marks the signer as acting through a delegation rather than for itself.
                 badge={
                   isPermissioned ? (
@@ -333,13 +347,13 @@ export const TransactionDialog = ({
                     label="On behalf of"
                     value={
                       onBehalfOf
-                        ? getDisplayAddress(resolvedAddresses[onBehalfOf], onBehalfOf)
+                        ? getDisplayAddress(nameFor(onBehalfOf, dialogChainId), onBehalfOf)
                         : onBehalfOfLoading
                           ? 'Loading…'
                           : 'Unknown'
                     }
                     address={onBehalfOf ?? ''}
-                    avatarUrl={onBehalfOf ? resolvedAvatars[onBehalfOf] : undefined}
+                    avatarUrl={avatarFor(onBehalfOf, dialogChainId)}
                   />
                 </>
               )}
@@ -360,7 +374,7 @@ export const TransactionDialog = ({
                     label="To"
                     value={displayToAddress}
                     address={currentTransaction.to}
-                    avatarUrl={resolvedAvatars[currentTransaction.to]}
+                    avatarUrl={avatarFor(currentTransaction.to, dialogChainId)}
                   />
                 </>
               )}

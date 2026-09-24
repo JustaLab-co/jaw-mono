@@ -104,7 +104,7 @@ export function InfoPopover({
         <div
           role="dialog"
           aria-label={label}
-          className={`border-shell-line-2 bg-shell-pop animate-fade-up absolute top-[calc(100%+10px)] z-[60] rounded-[14px] border p-[18px] shadow-[0_30px_60px_-30px_rgba(15,23,42,.35)] dark:shadow-[0_30px_60px_-30px_rgba(0,0,0,.8)] ${panelClassName}`}
+          className={`border-shell-line-2 bg-shell-pop animate-fade-up absolute top-[calc(100%+10px)] z-[60] rounded-[14px] border p-[18px] shadow-[0_30px_60px_-30px_rgba(15,23,42,.35)] max-md:fixed max-md:inset-x-4 max-md:bottom-4 max-md:top-auto max-md:max-h-[70vh] max-md:w-auto max-md:overflow-y-auto dark:shadow-[0_30px_60px_-30px_rgba(0,0,0,.8)] ${panelClassName}`}
         >
           {children}
         </div>

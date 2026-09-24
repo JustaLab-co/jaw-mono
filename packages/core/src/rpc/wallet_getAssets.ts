@@ -81,13 +81,13 @@ export type WalletGetAssetsResponse = {
  * Automatically injects chainFilter based on showTestnets preference if not provided.
  *
  * @param request - The request arguments containing params
- * @param apiKey - API key for authentication
+ * @param apiKey - API key for authentication, if the caller has one
  * @param showTestnets - Whether to include testnet chains (default: false)
  * @returns The assets response from the RPC server
  */
 export async function handleGetAssetsRequest(
     request: RequestArguments,
-    apiKey: string,
+    apiKey: string | undefined,
     showTestnets = false
 ): Promise<unknown> {
     const rpcUrl = buildHandleJawRpcUrl(JAW_RPC_URL, apiKey);

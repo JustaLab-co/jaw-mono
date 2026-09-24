@@ -6,6 +6,7 @@ import { useSearchParams } from 'next/navigation';
 import { Mode, type PaymasterConfig, type JawTheme } from '@jaw.id/core';
 import { ShellHeader } from '../../components/shell/header';
 import { ShellSidebar, type ShellView } from '../../components/shell/sidebar';
+import { useMobileDetail, MobileBackButton } from '../../components/shell/mobile-detail';
 import { ConfigCard } from '../../components/shell/config-card';
 import { MethodList } from '../../components/shell/method-list';
 import { MethodDetail } from '../../components/shell/method-detail';
@@ -130,6 +131,10 @@ function WagmiPageContent({
   });
 
   const [view, setView] = useState<ShellView>('playground');
+  // Below md: method list and method detail take turns; the theme view stacks both.
+  const { showDetail, openDetail, closeDetail } = useMobileDetail();
+  const mobileSidebarHidden = view === 'playground' && showDetail;
+  const mobileMainHidden = view === 'playground' && !showDetail;
   // null falls through to WAGMI_METHODS[0] (jaw_connect / useConnect) below, and
   // the sidebar highlights whatever that resolves to — the natural first step,
   // mirroring /core's wallet_connect.
@@ -504,7 +509,7 @@ function WagmiPageContent({
   };
 
   return (
-    <div className="bg-shell-canvas text-shell-ink grid h-screen grid-rows-[auto_1fr] overflow-hidden">
+    <div className="bg-shell-canvas text-shell-ink flex min-h-dvh flex-col md:grid md:h-screen md:min-h-0 md:grid-rows-[auto_1fr] md:overflow-hidden">
       <ShellHeader
         sdk="wagmi"
         isConnected={isConnected}
@@ -519,8 +524,14 @@ function WagmiPageContent({
         }
       />
 
-      <div className="grid min-h-0 grid-cols-[334px_minmax(0,1fr)]">
-        <ShellSidebar view={view} onViewChange={setView} themeMeta={themeMeta} methodCount={WAGMI_METHODS.length}>
+      <div className="flex flex-1 flex-col md:grid md:min-h-0 md:grid-cols-[334px_minmax(0,1fr)]">
+        <ShellSidebar
+          view={view}
+          onViewChange={setView}
+          themeMeta={themeMeta}
+          mobileHidden={mobileSidebarHidden}
+          methodCount={WAGMI_METHODS.length}
+        >
           {view === 'playground' ? (
             <>
               <ConfigCard
@@ -532,7 +543,10 @@ function WagmiPageContent({
               <MethodList
                 methods={WAGMI_METHODS}
                 selectedId={activeMethod?.id ?? null}
-                onSelect={(m) => setActiveMethodId(m.id)}
+                onSelect={(m) => {
+                  setActiveMethodId(m.id);
+                  openDetail();
+                }}
                 isConnected={isConnected}
                 transport={surface}
               />
@@ -549,13 +563,16 @@ function WagmiPageContent({
           )}
         </ShellSidebar>
 
-        <main className="flex min-h-0 flex-col overflow-y-auto">
+        <main
+          className={`flex min-h-0 flex-col overflow-y-auto max-md:flex-1 ${mobileMainHidden ? 'max-md:hidden' : ''}`}
+        >
           <div className="flex flex-1 flex-col gap-6 px-6 py-6 md:px-9 md:py-[30px]">
             {view === 'theme' ? (
               <DialogPreviews theme={draftTheme} />
             ) : activeMethod ? (
               <>
-                <div className="flex justify-end">
+                <div className="flex items-center justify-end gap-3">
+                  <MobileBackButton onClick={closeDetail} />
                   <ConfigSnippet type="wagmi" mode={mode} paymasters={pmConfig} onPaymasterApply={onPaymasterApply} />
                 </div>
                 <MethodDetail

@@ -1,5 +1,7 @@
-import { createPublicClient, http } from 'viem';
+import { createPublicClient } from 'viem';
 import { mainnet } from 'viem/chains';
+
+import { rpcTransport } from './publicClient';
 
 const CHAIN_RESOLVER_ADDRESS = '0x2a9B5787207863cf2d63d20172ed1F7bB2c9487A' as const;
 
@@ -107,7 +109,7 @@ async function queryChainLabel(chainId: number, rpcUrl: string): Promise<string 
   try {
     const client = createPublicClient({
       chain: mainnet,
-      transport: http(rpcUrl),
+      transport: rpcTransport(rpcUrl),
     });
 
     const binary = encodeChainBinary(chainId);

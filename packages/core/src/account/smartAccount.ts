@@ -61,7 +61,8 @@ import {
     unichain,
     monad,
 } from 'viem/chains';
-import { PERMISSIONS_MANAGER_ADDRESS, FACTORY_ADDRESS } from '../constants.js';
+import { PERMISSIONS_MANAGER_ADDRESS, FACTORY_ADDRESS, JAW_PROXY_URL } from '../constants.js';
+import { jawHttp } from '../utils/jawHttp.js';
 import { standardErrors } from '../errors/errors.js';
 import {
     getPermissionFromRelay,
@@ -196,7 +197,7 @@ export const getBundlerClient = (
     // unlisted chain resolves to `undefined` here.
     const publicClient = createPublicClient({
         chain: viemChain,
-        transport: http(chain.rpcUrl),
+        transport: jawHttp(chain.rpcUrl),
     });
 
     // Priority: overrides (from capabilities) > chain config (from SDK config).
@@ -212,19 +213,23 @@ export const getBundlerClient = (
     if (!effectivePaymasterUrl) {
         return createBundlerClient({
             client: publicClient,
-            transport: http(chain.rpcUrl),
+            transport: jawHttp(chain.rpcUrl),
         });
     }
 
     const paymasterClient = createPaymasterClient({
-        transport: http(effectivePaymasterUrl),
+        // A paymaster can be another company's server, and which dApp the user is
+        // on is not theirs to learn. Ours is the only one told.
+        transport: effectivePaymasterUrl.startsWith(JAW_PROXY_URL)
+            ? jawHttp(effectivePaymasterUrl)
+            : http(effectivePaymasterUrl),
     });
 
     // Use shared paymaster functions that handle gas price fetching and v0.8 gas limits
     return createBundlerClient({
         client: publicClient,
         paymaster: createPaymasterFunctions(publicClient, paymasterClient, chain.id, effectivePaymasterContext),
-        transport: http(chain.rpcUrl),
+        transport: jawHttp(chain.rpcUrl),
     });
 };
 
@@ -247,7 +252,7 @@ async function prepareEip7702Calls(
     // gates the next), so there is never more than one eth_call in flight to fold.
     const publicClient = createPublicClient({
         chain: SUPPORTED_CHAINS.find((c) => c.id === chain.id),
-        transport: http(chain.rpcUrl),
+        transport: jawHttp(chain.rpcUrl),
     });
 
     const implementationAddress = await readContract(publicClient, {
@@ -375,27 +380,25 @@ export async function sendTransaction(
         hash: userOpHash,
     });
 
-    // Fire-and-forget notification to proxy
-    if (apiKey) {
-        // Extract the actual receipt - same logic as wallet_sendCalls.ts
-        const actualReceipt = (receipt as any).receipt || receipt;
-        const receiptStatus = actualReceipt.status;
+    // Extract the actual receipt - same logic as wallet_sendCalls.ts
+    const actualReceipt = (receipt as any).receipt || receipt;
+    const receiptStatus = actualReceipt.status;
 
-        // Determine if transaction succeeded:
-        // - status === '0x1' or 1 means success
-        // - If status is undefined but transactionHash exists, assume success (included on-chain)
-        const isSuccess =
-            receiptStatus === '0x1' ||
-            receiptStatus === 1 ||
-            (receiptStatus === undefined && actualReceipt.transactionHash !== undefined);
+    // Determine if transaction succeeded:
+    // - status === '0x1' or 1 means success
+    // - If status is undefined but transactionHash exists, assume success (included on-chain)
+    const isSuccess =
+        receiptStatus === '0x1' ||
+        receiptStatus === 1 ||
+        (receiptStatus === undefined && actualReceipt.transactionHash !== undefined);
 
-        notifyReceiptReceived({
-            userOpHash,
-            transactionHash: actualReceipt.transactionHash,
-            success: isSuccess,
-            apiKey,
-        });
-    }
+    // Fire-and-forget notification to proxy, keyless callers included.
+    notifyReceiptReceived({
+        userOpHash,
+        transactionHash: actualReceipt.transactionHash,
+        success: isSuccess,
+        apiKey,
+    });
 
     return receipt.receipt.transactionHash;
 }
@@ -493,7 +496,7 @@ export async function sendCallsWithPermission(
     }>,
     chain: Chain,
     permissionId: Hex,
-    apiKey: string,
+    apiKey: string | undefined,
     paymasterUrlOverride?: string,
     paymasterContextOverride?: Record<string, unknown>,
     localAccount?: LocalAccount,
@@ -588,7 +591,7 @@ export async function estimateUserOpGasWithPermission(
     }>,
     chain: Chain,
     permissionId: Hex,
-    apiKey: string
+    apiKey?: string
 ): Promise<bigint> {
     // Built the same way the send builds it, so what is estimated stays the shape
     // that goes out.

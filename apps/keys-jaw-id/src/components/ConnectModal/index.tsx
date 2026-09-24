@@ -6,6 +6,7 @@ import { useMemo, useState } from 'react';
 import type { chain } from '../../lib/sdk-types';
 import { getChainNameFromId } from '../../lib/chain-handlers';
 import { standardErrorCodes, JAW_RPC_URL } from '@jaw.id/core';
+import { apiKeyFromChain } from '../../lib/api-key';
 
 export interface ConnectModalProps {
   origin: string;
@@ -33,36 +34,18 @@ export const ConnectModal = ({
   const [isProcessing, setIsProcessing] = useState<boolean>(false);
 
   // Extract API key from rpcUrl if not provided as prop
-  const effectiveApiKey = useMemo(() => {
-    if (apiKey) return apiKey;
-    if (chain?.rpcUrl) {
-      try {
-        const url = new URL(chain.rpcUrl);
-        return url.searchParams.get('api-key') || '';
-      } catch {
-        return '';
-      }
-    }
-    return '';
-  }, [apiKey, chain?.rpcUrl]);
+  const effectiveApiKey = useMemo(() => apiKeyFromChain(apiKey, chain?.rpcUrl), [apiKey, chain?.rpcUrl]);
 
   // Get chain name and icon
   const chainName = useMemo(() => (chain ? getChainNameFromId(chain.id) : undefined), [chain]);
   const chainIcon = useChainIconURI(chain?.id || 1, effectiveApiKey, 24);
 
-  // Extract API key from chain.rpcUrl for mainnet RPC URL
-  const mainnetRpcUrl = useMemo(() => {
-    if (chain?.rpcUrl) {
-      try {
-        const url = new URL(chain.rpcUrl);
-        const apiKey = url.searchParams.get('api-key');
-        return apiKey ? `${JAW_RPC_URL}?chainId=1&api-key=${apiKey}` : `${JAW_RPC_URL}?chainId=1`;
-      } catch {
-        return `${JAW_RPC_URL}?chainId=1`;
-      }
-    }
-    return `${JAW_RPC_URL}?chainId=1`;
-  }, [chain?.rpcUrl]);
+  // Mainnet, for ENS, under whatever key this request carries: the same one the
+  // chain icon above resolves with, so the two cannot disagree about who is asking.
+  const mainnetRpcUrl = useMemo(
+    () => (effectiveApiKey ? `${JAW_RPC_URL}?chainId=1&api-key=${effectiveApiKey}` : `${JAW_RPC_URL}?chainId=1`),
+    [effectiveApiKey]
+  );
 
   const handleConnect = async () => {
     try {

@@ -12,8 +12,8 @@ export interface NotifyReceiptParams {
     transactionHash: Hash;
     /** Whether the transaction was successful (true) or reverted (false) */
     success: boolean;
-    /** API key for authentication */
-    apiKey: string;
+    /** API key for authentication, if the caller has one */
+    apiKey?: string;
 }
 
 /**
@@ -42,7 +42,7 @@ export function notifyReceiptReceived(params: NotifyReceiptParams): void {
             { id: userOpHash },
             undefined,
             JAW_PROXY_URL,
-            { 'api-key': apiKey }
+            apiKey ? { 'api-key': apiKey } : undefined
         ).catch(() => {
             // Silently swallow async errors
         });

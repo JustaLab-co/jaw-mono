@@ -38,7 +38,19 @@ export default defineConfig(() => ({
     },
     rollupOptions: {
       // External packages that should not be bundled into your library.
-      external: ['react', 'react-dom', 'react-dom/client', 'react/jsx-runtime'],
+      // `@jaw.id/core` is one of them: it holds module state, the sdk store among
+      // it, and bundling a copy in here gives an app that also imports core two of
+      // them. What one sets, such as the dApp an origin-served call acts for, the
+      // other never sees. Rollup matches these strings exactly, so the internal
+      // subpath is listed on its own.
+      external: [
+        'react',
+        'react-dom',
+        'react-dom/client',
+        'react/jsx-runtime',
+        '@jaw.id/core',
+        '@jaw.id/core/internal',
+      ],
     },
   },
 }));

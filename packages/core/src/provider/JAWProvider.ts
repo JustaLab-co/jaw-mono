@@ -1,5 +1,7 @@
 import { Communicator } from '../communicator/index.js';
 import { standardErrorCodes, serializeError, standardErrors } from '../errors/index.js';
+// By path: the marker is ours to read and not part of the package's surface.
+import { isBackendRefusal } from '../utils/provider.js';
 
 import { SignerType } from '../messages/index.js';
 
@@ -37,7 +39,7 @@ export class JAWProvider extends ProviderEventEmitter implements ProviderInterfa
     private readonly metadata: AppMetadata;
     private readonly preference: JawProviderPreference;
     private readonly communicator: Communicator;
-    private readonly apiKey: string;
+    private readonly apiKey?: string;
     private readonly paymasters?: Record<number, PaymasterConfig>;
     private theme?: JawTheme;
 
@@ -320,14 +322,20 @@ export class JAWProvider extends ProviderEventEmitter implements ProviderInterfa
             return result as T;
         } catch (error) {
             const { code } = error as { code?: number };
-            // 4100 means two different things here. From a live signer it means
+            // 4100 means three different things here. From a live signer it means
             // the session died, and tearing it down locally is right. From the
             // no-session branch above it just means "connect first", and there
             // is nothing to tear down: disconnecting would emit accountsChanged
             // and disconnect on a provider that was never connected, log the
             // passkey session out, and drop the iframe. A dapp that probes with
             // personal_sign before connecting would pay for it.
-            if (code === standardErrorCodes.provider.unauthorized && this.signer) {
+            //
+            // The third is the backend turning the caller down, over an origin it
+            // does not serve or a key it will not take. That says nothing about
+            // the session, and it arrives from read-only calls: an unregistered
+            // dApp asking for capabilities would be logged out of a wallet that
+            // is working.
+            if (code === standardErrorCodes.provider.unauthorized && this.signer && !isBackendRefusal(error)) {
                 await this.disconnect();
             }
             return Promise.reject(serializeError(error));

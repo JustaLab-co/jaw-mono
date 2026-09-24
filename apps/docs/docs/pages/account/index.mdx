@@ -124,7 +124,7 @@ Configuration for creating or loading an account. React Native options (`nativeG
 interface AccountConfig {
   /** Chain ID for the account */
   chainId: number;
-  /** API key for JAW services. Absent leaves the decision to serve to the backend. */
+  /** API key for JAW services, if the caller has one */
   apiKey?: string;
   /** Custom paymaster URL for gas sponsorship */
   paymasterUrl?: string;

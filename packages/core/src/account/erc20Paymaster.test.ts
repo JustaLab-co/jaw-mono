@@ -1,4 +1,6 @@
-import { describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
+import { setDappOrigin } from '../dappOrigin.js';
+import { JAW_PAYMASTER_URL } from '../constants.js';
 import {
     buildErc20PaymasterContext,
     calculateDisplayTokenCost,
@@ -6,6 +8,7 @@ import {
     calculateTokenEstimatesFromGas,
     computeEffectiveGasPrice,
     computeMeasuredDisplayGas,
+    fetchTokenQuotes,
     type TokenInfo,
     type TokenQuote,
     type UserOpGasFields,
@@ -207,5 +210,60 @@ describe('calculateTokenEstimatesFromGas', () => {
         expect(est.decimals).toBe(0);
         // 23_900_000 smallest units at 0 decimals => "23900000.00", never "0.0000"
         expect(est.tokenCostFormatted).toBe('23900000.00');
+    });
+});
+
+// The quotes are the first call `estimateErc20PaymasterCosts` makes, and the only
+// one to our proxy that went out without saying which dApp it acts for. Keyless
+// that leaves nothing to attribute it to, and the proxy turns it down.
+describe('fetchTokenQuotes and the calling dApp', () => {
+    const QUOTES = {
+        jsonrpc: '2.0',
+        id: 1,
+        result: { quotes: [{ token: '0xabc', postOpGas: '1', exchangeRate: '2', paymaster: '0xdef' }] },
+    };
+
+    function headersSent(): Record<string, string> {
+        return (vi.mocked(globalThis.fetch).mock.calls[0][1] as { headers: Record<string, string> }).headers;
+    }
+
+    afterEach(() => {
+        setDappOrigin(undefined);
+        vi.unstubAllGlobals();
+    });
+
+    it('names the dApp on a quote from our proxy', async () => {
+        vi.stubGlobal(
+            'fetch',
+            vi.fn(async () => new Response(JSON.stringify(QUOTES)))
+        );
+        setDappOrigin('https://dapp.example');
+
+        await fetchTokenQuotes(`${JAW_PAYMASTER_URL}?chainId=8453`, 8453, ['0xabc']);
+
+        expect(headersSent()['x-dapp-origin']).toBe('https://dapp.example');
+    });
+
+    it('sends no dApp header to a paymaster the dApp pointed us at', async () => {
+        vi.stubGlobal(
+            'fetch',
+            vi.fn(async () => new Response(JSON.stringify(QUOTES)))
+        );
+        setDappOrigin('https://dapp.example');
+
+        await fetchTokenQuotes('https://paymaster.dapp.example', 8453, ['0xabc']);
+
+        expect(headersSent()['x-dapp-origin']).toBeUndefined();
+    });
+
+    it('sends no dApp header from a dApp page, where the browser sets the Origin', async () => {
+        vi.stubGlobal(
+            'fetch',
+            vi.fn(async () => new Response(JSON.stringify(QUOTES)))
+        );
+
+        await fetchTokenQuotes(`${JAW_PAYMASTER_URL}?chainId=8453`, 8453, ['0xabc']);
+
+        expect(headersSent()['x-dapp-origin']).toBeUndefined();
     });
 });

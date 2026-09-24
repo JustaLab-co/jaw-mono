@@ -24,6 +24,7 @@ import {
   jawPaymasterUrl,
   JAW_RPC_URL,
 } from '@jaw.id/core';
+import { apiKeyFromChain } from '../../lib/api-key';
 
 // Transaction execution result
 export interface TransactionResult {
@@ -102,18 +103,7 @@ export const TransactionModal = ({
   const [feeTokensLoading, setFeeTokensLoading] = useState(false);
 
   // Extract API key from rpcUrl if not provided as prop
-  const effectiveApiKey = useMemo(() => {
-    if (apiKey) return apiKey;
-    if (chain?.rpcUrl) {
-      try {
-        const url = new URL(chain.rpcUrl);
-        return url.searchParams.get('api-key') || '';
-      } catch {
-        return '';
-      }
-    }
-    return '';
-  }, [apiKey, chain?.rpcUrl]);
+  const effectiveApiKey = useMemo(() => apiKeyFromChain(apiKey, chain?.rpcUrl), [apiKey, chain?.rpcUrl]);
 
   // Determine if sponsored based on transactionRequest or prop
   const isSponsored = useMemo(() => {
@@ -304,7 +294,7 @@ export const TransactionModal = ({
         // Fetch capabilities from JAW RPC
         const capabilities = await handleGetCapabilitiesRequest(
           { method: 'wallet_getCapabilities', params: [] },
-          effectiveApiKey || '',
+          effectiveApiKey,
           true // showTestnets
         );
 

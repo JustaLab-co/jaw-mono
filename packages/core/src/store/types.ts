@@ -63,6 +63,12 @@ export type Config = {
     version: string;
     deviceId?: string;
     apiKey?: string;
+    /**
+     * The dApp this core instance is acting for. Set only by keys, whose own
+     * `Origin` is the same whichever dApp opened it. Never set in a dApp's own
+     * page, where the browser already puts the right `Origin` on the request.
+     */
+    dappOrigin?: string;
     /** Mapping of chain IDs to paymaster configuration */
     paymasters?: Record<number, PaymasterConfig>;
 };

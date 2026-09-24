@@ -41,6 +41,7 @@ vi.mock('./toJustanAccount.js', () => ({
 vi.mock('../constants.js', () => ({
     PERMISSIONS_MANAGER_ADDRESS: '0xf1b40E3D5701C04d86F7828f0EB367B9C90901D8',
     FACTORY_ADDRESS: '0x0000000000000000000000000000000000factory',
+    JAW_PROXY_URL: 'https://proxy.jaw.example',
 }));
 
 vi.mock('../errors/errors.js', async () => {
@@ -87,11 +88,13 @@ import { createBundlerClient, createPaymasterClient } from 'viem/account-abstrac
 import { toJustanAccount } from './toJustanAccount.js';
 import { createPaymasterFunctions } from './paymaster.js';
 import { getPermissionFromRelay, encodeExecuteBatchWithPermission } from '../rpc/permissions.js';
+import { notifyReceiptReceived } from '../analytics/index.js';
 import {
     createSmartAccountForAddress,
     findOwnerIndex,
     getBundlerClient,
     sendCallsWithPermission,
+    sendTransaction,
 } from './smartAccount.js';
 
 const MOCK_TARGET_ADDRESS = '0x1234567890123456789012345678901234567890' as Address;
@@ -381,6 +384,38 @@ describe('sendCallsWithPermission — the sized call is the sent one', () => {
         expect(sendUserOperation.mock.calls[0][0].calls).toEqual([
             { to: '0xf1b40E3D5701C04d86F7828f0EB367B9C90901D8', value: 0n, data: '0xencodedhere' },
         ]);
+    });
+});
+
+// A keyless dApp is attributed by the forwarded origin, so its transactions are
+// reported like anybody else's. This path is the popup's: keys calls it on Confirm.
+describe('sendTransaction — receipt reporting', () => {
+    const CHAIN = { id: 1, rpcUrl: 'https://rpc.example' } as never;
+    const CALLS = [{ to: MOCK_TARGET_ADDRESS }];
+    const TX_HASH = '0xbbb2'.padEnd(66, '0');
+
+    beforeEach(() => {
+        vi.clearAllMocks();
+        vi.mocked(createBundlerClient).mockReturnValue({
+            sendUserOperation: vi.fn().mockResolvedValue('0xuserophash'),
+            waitForUserOperationReceipt: vi.fn().mockResolvedValue({
+                receipt: { status: '0x1', transactionHash: TX_HASH },
+            }),
+        } as never);
+    });
+
+    // Keys builds the account with `preference?.apiKey || ''`, so a keyless dApp
+    // arrives as the empty string rather than as undefined.
+    it.each(['real-key', undefined, ''])('reports the receipt with apiKey %o', async (apiKey) => {
+        await sendTransaction({} as never, CALLS, CHAIN, undefined, undefined, apiKey);
+
+        expect(notifyReceiptReceived).toHaveBeenCalledTimes(1);
+        expect(vi.mocked(notifyReceiptReceived).mock.calls[0][0]).toMatchObject({
+            userOpHash: '0xuserophash',
+            transactionHash: TX_HASH,
+            success: true,
+            apiKey,
+        });
     });
 });
 

@@ -11,6 +11,8 @@ export interface ShellSidebarProps {
   themeMeta: string;
   /** Pill text on the "Playground" row (method count). */
   methodCount: number;
+  /** Below `md`: hide the sidebar while a method detail fills the screen. */
+  mobileHidden?: boolean;
   children?: ReactNode;
 }
 
@@ -51,14 +53,25 @@ const ListIcon = (
   </svg>
 );
 
-export function ShellSidebar({ view, onViewChange, themeMeta, methodCount, children }: ShellSidebarProps) {
+export function ShellSidebar({
+  view,
+  onViewChange,
+  themeMeta,
+  methodCount,
+  mobileHidden = false,
+  children,
+}: ShellSidebarProps) {
   const rows: { key: ShellView; label: string; meta: string; icon: ReactNode }[] = [
     { key: 'theme', label: 'Dialog Theme', meta: themeMeta, icon: ThemeIcon },
     { key: 'playground', label: 'Playground', meta: String(methodCount), icon: ListIcon },
   ];
 
   return (
-    <aside className="border-shell-line bg-shell-panel flex min-h-0 flex-col border-r">
+    <aside
+      className={`border-shell-line bg-shell-panel flex min-h-0 flex-col border-r max-md:border-b max-md:border-r-0 ${
+        mobileHidden ? 'max-md:hidden' : ''
+      }`}
+    >
       <nav className="flex flex-col gap-0.5 px-3 pb-3 pt-3.5">
         {rows.map((row) => {
           const active = view === row.key;

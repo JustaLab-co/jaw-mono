@@ -5,10 +5,18 @@ import { handleGetCapabilitiesRequest, type ChainMetadataCapability } from '@jaw
 export type ChainIconMap = Readonly<Record<number, string>>;
 
 // Keyed on the api key alone: the request below is the same for every caller,
-// so one entry serves them all. Module-level, like useChainIconURI's cache, so
-// this is a first-open cost per session rather than per mount.
+// so one entry serves them all. A caller with no key reaches this as '' from
+// keys and as undefined from the SDK, and both mean the same request, so they
+// share the entry. Module-level, so this is a first-open cost per session
+// rather than per mount.
 const iconsCache = new Map<string, ChainIconMap>();
 const inflight = new Map<string, Promise<ChainIconMap>>();
+
+/** Drops the cached maps. For tests, which would otherwise share them. */
+export function clearChainIconsCache(): void {
+  iconsCache.clear();
+  inflight.clear();
+}
 
 /**
  * Every chain's icon in one request.
@@ -27,12 +35,11 @@ const inflight = new Map<string, Promise<ChainIconMap>>();
  * put a whole-catalogue payload behind every signing dialog.
  */
 export function useChainIcons(apiKey?: string): ChainIconMap {
-  const [icons, setIcons] = useState<ChainIconMap>(() => (apiKey ? (iconsCache.get(apiKey) ?? {}) : {}));
+  const cacheKey = apiKey ?? '';
+  const [icons, setIcons] = useState<ChainIconMap>(() => iconsCache.get(cacheKey) ?? {});
 
   useEffect(() => {
-    if (!apiKey) return;
-
-    const cached = iconsCache.get(apiKey);
+    const cached = iconsCache.get(cacheKey);
     if (cached) {
       setIcons(cached);
       return;
@@ -42,7 +49,7 @@ export function useChainIcons(apiKey?: string): ChainIconMap {
 
     // Shared so two stacks mounting together (dialog + popup) still make one
     // request, which the per-chain hook could not do.
-    let request = inflight.get(apiKey);
+    let request = inflight.get(cacheKey);
     if (!request) {
       request = handleGetCapabilitiesRequest(
         { method: 'wallet_getCapabilities', params: [] },
@@ -55,13 +62,13 @@ export function useChainIcons(apiKey?: string): ChainIconMap {
             const metadata = (chainCapabilities as { chainMetadata?: ChainMetadataCapability }).chainMetadata;
             if (metadata?.icon) map[Number(chainIdHex)] = metadata.icon;
           }
-          iconsCache.set(apiKey, map);
+          iconsCache.set(cacheKey, map);
           return map as ChainIconMap;
         })
         .finally(() => {
-          inflight.delete(apiKey);
+          inflight.delete(cacheKey);
         });
-      inflight.set(apiKey, request);
+      inflight.set(cacheKey, request);
     }
 
     request
@@ -76,7 +83,7 @@ export function useChainIcons(apiKey?: string): ChainIconMap {
     return () => {
       active = false;
     };
-  }, [apiKey]);
+  }, [apiKey, cacheKey]);
 
   return icons;
 }

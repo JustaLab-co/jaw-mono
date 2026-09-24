@@ -13,7 +13,11 @@ import { announceProvider as announceProviderFn, type AnnounceProviderCleanup } 
 import type { JawTheme } from '../ui/theme.js';
 
 export type CreateJAWSDKOptions = Partial<AppMetadata> & {
-    apiKey: string;
+    /**
+     * Identifies the calling dApp to the JAW backend. Optional, because whether
+     * a request is served is the backend's decision rather than the SDK's.
+     */
+    apiKey?: string;
     preference?: Partial<JawProviderPreference>;
     /** Mapping of chain IDs to paymaster configuration */
     paymasters?: Record<number, PaymasterConfig>;
@@ -76,6 +80,13 @@ export function create(params: CreateJAWSDKOptions) {
         throw new Error('Custom Server Url not available with Cross Platform Mode.');
     }
 
+    // App-specific mode hands the key to the dApp's own UIHandler, which has
+    // nowhere to get one. Refused here rather than on the first request, so a
+    // misconfigured app fails while it is still being wired up.
+    if (options.preference.mode == Mode.AppSpecific && !params.apiKey) {
+        throw new Error('API key is required for App Specific Mode.');
+    }
+
     // Store the config
     const storedOptions = {
         metadata: options.metadata,
@@ -89,22 +100,20 @@ export function create(params: CreateJAWSDKOptions) {
     store.chains.clear();
     ChainClients.setState({});
 
-    if (params.apiKey) {
-        const initialChains = createInitialChains(params.apiKey, params.paymasters, options.preference.showTestnets);
-        store.chains.set(initialChains);
-        createClients(initialChains);
+    const initialChains = createInitialChains(params.apiKey, params.paymasters, options.preference.showTestnets);
+    store.chains.set(initialChains);
+    createClients(initialChains);
 
-        // Update stored account chain if defaultChainId is provided and differs from stored chain
-        if (params.defaultChainId !== undefined) {
-            const currentAccount = store.account.get();
-            const storedChainId = currentAccount.chain?.id;
+    // Update stored account chain if defaultChainId is provided and differs from stored chain
+    if (params.defaultChainId !== undefined) {
+        const currentAccount = store.account.get();
+        const storedChainId = currentAccount.chain?.id;
 
-            // Only update if the stored chain differs from the requested default
-            if (storedChainId !== params.defaultChainId) {
-                const targetChain = initialChains.find((c) => c.id === params.defaultChainId);
-                if (targetChain) {
-                    store.account.set({ chain: targetChain });
-                }
+        // Only update if the stored chain differs from the requested default
+        if (storedChainId !== params.defaultChainId) {
+            const targetChain = initialChains.find((c) => c.id === params.defaultChainId);
+            if (targetChain) {
+                store.account.set({ chain: targetChain });
             }
         }
     }

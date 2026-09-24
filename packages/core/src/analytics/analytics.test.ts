@@ -19,12 +19,12 @@ describe('logAccountIssuance', () => {
         expect(vi.mocked(restCall).mock.calls[0]?.[3]).toEqual({ 'x-api-key': 'k' });
     });
 
-    // The endpoint authenticates on that header, so a call with no key is one the
-    // server refuses. Sending it anyway spends a request to be told so, on a path
-    // that is fire and forget and would swallow the answer.
-    it('sends nothing when there is no key', () => {
+    // Without a key the backend decides whether to record it, so the call still
+    // goes out, only without the header.
+    it('records the issuance without a header when there is no key', () => {
         logAccountIssuance({ address: ADDRESS, type: 'create' });
 
-        expect(vi.mocked(restCall)).not.toHaveBeenCalled();
+        expect(vi.mocked(restCall)).toHaveBeenCalledOnce();
+        expect(vi.mocked(restCall).mock.calls[0]?.[3]).toEqual({});
     });
 });

@@ -1,14 +1,15 @@
-import { Address, Hex, createPublicClient, encodeFunctionData, erc20Abi, formatUnits, getAddress, http } from 'viem';
+import { Address, Hex, createPublicClient, encodeFunctionData, erc20Abi, formatUnits, getAddress } from 'viem';
 import { SmartAccount, entryPoint08Address } from 'viem/account-abstraction';
 import { getBundlerClient } from './smartAccount.js';
-import { Chain, getClient } from '../store/index.js';
-import { ERC20_PAYMASTER_ADDRESS, PERMISSIONS_MANAGER_ADDRESS } from '../constants.js';
+import { Chain, getClient, store } from '../store/index.js';
+import { ERC20_PAYMASTER_ADDRESS, JAW_PROXY_URL, PERMISSIONS_MANAGER_ADDRESS } from '../constants.js';
 import {
     getPermissionFromRelay,
     relayPermissionToPermission,
     encodeExecuteBatchWithPermission,
 } from '../rpc/permissions.js';
 import { simulateUserOpGasUsage, type MeasuredUserOpGas } from './userOpGasSimulation.js';
+import { jawHttp } from '../utils/jawHttp.js';
 
 /**
  * Token quote from Pimlico's ERC-20 paymaster
@@ -164,9 +165,18 @@ export async function fetchTokenQuotes(
         params: [{ tokens }, entryPoint08Address, `0x${chainId.toString(16)}`],
     };
 
+    // Calls made from the keys origin all carry the same `Origin`, so the caller
+    // they act on behalf of travels alongside instead of in it. Only to our own
+    // proxy: a paymaster url an app-specific dApp points elsewhere belongs to
+    // somebody else, and which dApp the user is on is not theirs to be told.
+    const dappOrigin = paymasterUrl.startsWith(JAW_PROXY_URL) ? store.config.get().dappOrigin : undefined;
+
     const response = await fetch(paymasterUrl, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: {
+            'Content-Type': 'application/json',
+            ...(dappOrigin ? { 'x-dapp-origin': dappOrigin } : {}),
+        },
         body: JSON.stringify(requestBody),
     });
 
@@ -253,10 +263,6 @@ export async function estimateErc20PaymasterCosts(
     // directly — they must be routed through the permissions manager.
     let preparedCalls: Array<{ to: Address; value: bigint; data: Hex }>;
     if (options?.permissionId) {
-        if (!options.apiKey) {
-            throw new Error('apiKey is required when estimating with permissionId');
-        }
-
         const relayPermission = await getPermissionFromRelay(options.permissionId, options.apiKey);
         const permission = relayPermissionToPermission(relayPermission);
 
@@ -291,7 +297,7 @@ export async function estimateErc20PaymasterCosts(
     // independent and the block is only consumed after the userOp resolves. Reuse the
     // cached per-chain client when the chain is registered in the store. Best-effort:
     // without a base fee the display falls back to the ceiling price.
-    const publicClient = getClient(chain.id) ?? createPublicClient({ transport: http(chain.rpcUrl) });
+    const publicClient = getClient(chain.id) ?? createPublicClient({ transport: jawHttp(chain.rpcUrl) });
     const blockPromise = publicClient.getBlock({ blockTag: 'latest' }).catch(() => null);
 
     const userOp = await bundlerClient.prepareUserOperation({
@@ -320,7 +326,7 @@ export async function estimateErc20PaymasterCosts(
     // really consume — the padded limits stay as the fallback (and the ceiling).
     // No retries + short timeout so a node without eth_simulateV1 can't stall the
     // fee estimate (viem would otherwise retry up to ~40s on every refetch).
-    const simClient = createPublicClient({ transport: http(chain.rpcUrl, { retryCount: 0, timeout: 2_500 }) });
+    const simClient = createPublicClient({ transport: jawHttp(chain.rpcUrl, { retryCount: 0, timeout: 2_500 }) });
     const measuredPromise = simulateUserOpGasUsage(simClient, userOp, smartAccount.entryPoint.address);
 
     // 6. Price the displayed estimate at the effective gas price instead of the

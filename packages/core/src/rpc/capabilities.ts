@@ -2,10 +2,10 @@ import { type Address } from 'viem';
 import type { RequestArguments } from '../provider/index.js';
 import { JAW_RPC_URL } from '../constants.js';
 import { buildHandleJawRpcUrl, fetchRPCRequest, hexStringFromNumber } from '../utils/index.js';
+// By path, not through the barrel: this one is ours to read and not the dApp's.
+import { isBackendRefusal } from '../utils/provider.js';
 import { MAINNET_CHAINS } from '../account/smartAccount.js';
-// Straight to the file rather than the store barrel: this needs one type, and
-// `store/index.js` would pull the whole slice in to get it.
-import type { FeeTokenCapability } from '../store/types.js';
+import { store, type FeeTokenCapability } from '../store/index.js';
 
 /**
  * Chain metadata capability returned by wallet_getCapabilities
@@ -46,43 +46,39 @@ export type CapabilitiesResult = Record<`0x${string}`, ChainCapabilities>;
  */
 const CAPABILITIES_TTL_MS = 60_000;
 
+/**
+ * How long a refusal keeps the next caller from repeating it.
+ *
+ * Only a refusal, never a transient failure. What this is for is the answer that
+ * will not change by asking again: the proxy turning down a caller it cannot
+ * attribute, which the icon hook otherwise re-asks once per chain on every mount.
+ * A blip is the opposite, and holding one would leave a dialog without its fee row
+ * for the window with nothing on the way to clear it, since no caller here retries.
+ */
+const CAPABILITIES_REFUSAL_TTL_MS = 30_000;
+
 const capabilitiesCache = new Map<string, { at: number; value: CapabilitiesResult }>();
+const capabilitiesRefusals = new Map<string, { at: number; error: unknown }>();
 /** Requests in flight, so concurrent callers share one fetch instead of racing duplicates. */
 const capabilitiesInflight = new Map<string, Promise<CapabilitiesResult>>();
 
 /** Drop every cached capabilities response. Exposed for tests and for callers that need a forced refresh. */
 export function clearCapabilitiesCache(): void {
     capabilitiesCache.clear();
+    capabilitiesRefusals.clear();
     capabilitiesInflight.clear();
 }
 
 /**
- * Handle wallet_getCapabilities request (EIP-5792)
- *
- * Returns the wallet's capabilities for all supported chains or filtered by chain IDs.
- * Fetches capabilities from the proxy service.
- *
- * If no chain filter is provided in params:
- * - If showTestnets is true: fetches capabilities for all chains
- * - If showTestnets is false: fetches capabilities only for mainnet chains
- *
- * Responses are memoized per (api key, effective params) for `CAPABILITIES_TTL_MS`,
- * and concurrent callers for the same key share a single request — the dialogs ask for
- * this on mount from several places at once, and it gates the fee-token chain.
- * Failures are never cached, and every caller gets its own copy of the response.
- *
- * @param request - The wallet_getCapabilities request
- * @param apiKey - API key for authentication
- * @param showTestnets - Whether to include testnet chains (default: false)
- * @returns Capabilities for all or filtered chains
+ * The request as it goes on the wire, with the chain filter `showTestnets` implies,
+ * and the entry it is cached under. One function so a reader of the cache and the
+ * caller that fills it cannot derive the key two different ways.
  */
-export async function handleGetCapabilitiesRequest(
+function resolveRequest(
     request: RequestArguments,
-    apiKey: string,
-    showTestnets = false
-): Promise<CapabilitiesResult> {
-    const rpcUrl = buildHandleJawRpcUrl(JAW_RPC_URL, apiKey);
-
+    apiKey: string | undefined,
+    showTestnets: boolean
+): { requestArgs: RequestArguments; cacheKey: string } {
     // EIP-5792 format: params[0] is account address, params[1] is optional array of chain IDs to filter by
     const params = request.params as [Address?, `0x${string}`[]?] | undefined;
     const filterChainIds = params?.[1];
@@ -104,7 +100,65 @@ export async function handleGetCapabilitiesRequest(
 
     // Key on the *effective* params, after the chain filter above is injected — two
     // callers that differ only in `showTestnets` resolve to different requests.
-    const cacheKey = `${apiKey}|${JSON.stringify(requestArgs.params ?? [])}`;
+    // The dApp is part of the key: with no api-key the proxy answers on the origin
+    // we name instead, so two of them would otherwise share the keyless entry.
+    // A caller with no key reaches this as '' from keys and as undefined from the
+    // SDK, and both mean the same request, so they share one entry.
+    const cacheKey = `${apiKey ?? ''}|${store.config.get().dappOrigin ?? ''}|${JSON.stringify(requestArgs.params ?? [])}`;
+
+    return { requestArgs, cacheKey };
+}
+
+/**
+ * The cached answer for this request, or undefined when there is none to give
+ * without asking for it.
+ *
+ * For callers that have to decide what to paint before they can await: the chain
+ * icon resolves on a microtask otherwise, so a warm cache still costs a frame of
+ * placeholder on every mount, on eleven call sites including the confirm screen.
+ * Same entry and same freshness as the async path, so the two cannot disagree.
+ */
+export function peekCapabilities(
+    request: RequestArguments,
+    apiKey: string | undefined,
+    showTestnets = false
+): CapabilitiesResult | undefined {
+    const { cacheKey } = resolveRequest(request, apiKey, showTestnets);
+    const cached = capabilitiesCache.get(cacheKey);
+    if (!cached || Date.now() - cached.at >= CAPABILITIES_TTL_MS) return undefined;
+    return structuredClone(cached.value);
+}
+
+/**
+ * Handle wallet_getCapabilities request (EIP-5792)
+ *
+ * Returns the wallet's capabilities for all supported chains or filtered by chain IDs.
+ * Fetches capabilities from the proxy service.
+ *
+ * If no chain filter is provided in params:
+ * - If showTestnets is true: fetches capabilities for all chains
+ * - If showTestnets is false: fetches capabilities only for mainnet chains
+ *
+ * Responses are memoized per (api key, effective params) for `CAPABILITIES_TTL_MS`,
+ * and concurrent callers for the same key share a single request — the dialogs ask for
+ * this on mount from several places at once, and it gates the fee-token chain.
+ * A refusal is held for `CAPABILITIES_REFUSAL_TTL_MS` and rethrown, so an origin the
+ * backend will not serve is asked about once per window instead of once per mount.
+ * Anything else is retried by the next caller. Every caller gets its own copy of the
+ * response.
+ *
+ * @param request - The wallet_getCapabilities request
+ * @param apiKey - API key for authentication, if the caller has one
+ * @param showTestnets - Whether to include testnet chains (default: false)
+ * @returns Capabilities for all or filtered chains
+ */
+export async function handleGetCapabilitiesRequest(
+    request: RequestArguments,
+    apiKey: string | undefined,
+    showTestnets = false
+): Promise<CapabilitiesResult> {
+    const rpcUrl = buildHandleJawRpcUrl(JAW_RPC_URL, apiKey);
+    const { requestArgs, cacheKey } = resolveRequest(request, apiKey, showTestnets);
 
     // Every exit hands back a copy, never the cache entry itself. `JAWProvider` forwards
     // this result straight to the dApp, and the internal UI call sites all key on the same
@@ -115,6 +169,9 @@ export async function handleGetCapabilitiesRequest(
         return structuredClone(cached.value);
     }
 
+    const refused = capabilitiesRefusals.get(cacheKey);
+    if (refused && Date.now() - refused.at < CAPABILITIES_REFUSAL_TTL_MS) throw refused.error;
+
     const inflight = capabilitiesInflight.get(cacheKey);
     if (inflight) return structuredClone(await inflight);
 
@@ -124,11 +181,16 @@ export async function handleGetCapabilitiesRequest(
         // actually holds is the narrowing every consumer does before use
         // (`if (!feeTokenCap?.supported || !feeTokenCap?.tokens?.length)`). If a
         // runtime check is ever wanted, this is the single place for it.
-        const result = (await fetchRPCRequest(requestArgs, rpcUrl)) as CapabilitiesResult;
-        // Only a fulfilled response is cached; a rejection propagates to every sharer
-        // and leaves the next caller free to retry.
-        capabilitiesCache.set(cacheKey, { at: Date.now(), value: result });
-        return result;
+        try {
+            const result = (await fetchRPCRequest(requestArgs, rpcUrl)) as CapabilitiesResult;
+            capabilitiesCache.set(cacheKey, { at: Date.now(), value: result });
+            return result;
+        } catch (error) {
+            // The rejection propagates to every sharer either way. Only a refusal is
+            // kept, and only it is handed to the callers that follow inside the window.
+            if (isBackendRefusal(error)) capabilitiesRefusals.set(cacheKey, { at: Date.now(), error });
+            throw error;
+        }
     })();
 
     capabilitiesInflight.set(cacheKey, pending);

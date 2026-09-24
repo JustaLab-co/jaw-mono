@@ -121,7 +121,7 @@ describe('normalizeRevokePermissionsParams', () => {
     });
 });
 
-describe('the relay legs refuse without a key', () => {
+describe('a grant refuses without a key', () => {
     /**
      * The order is what makes this worth a local refusal rather than letting the
      * proxy answer: the approval is sent on chain first and stored through the
@@ -142,13 +142,5 @@ describe('the relay legs refuse without a key', () => {
                 ''
             )
         ).rejects.toThrow(/apiKey is required to grant a permission/);
-    });
-
-    test('getPermissionFromRelay names the key rather than letting the proxy answer', async () => {
-        const { getPermissionFromRelay } = await import('./permissions.js');
-
-        await expect(getPermissionFromRelay('0xabc', '')).rejects.toThrow(
-            /apiKey is required to read a permission from the relay/
-        );
     });
 });

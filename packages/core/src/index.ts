@@ -58,6 +58,7 @@ export {
     handleGetCallsHistoryRequest,
     handleGetPermissionsRequest,
     handleGetCapabilitiesRequest,
+    peekCapabilities,
     clearCapabilitiesCache,
     type CapabilitiesResult,
     type ChainCapabilities,

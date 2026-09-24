@@ -1,3 +1,37 @@
+## 1.5.0 (2026-09-23)
+
+### 🚀 Features
+
+- **core:** let the backend decide whether a request is served ([#321](https://github.com/JustaLab-co/jaw-mono/pull/321))
+
+### 🧱 Updated Dependencies
+
+- Updated @jaw.id/core to 1.5.0
+
+### ❤️ Thank You
+
+- Mariano Aguero @mariano-aguero
+
+## 1.4.5 (2026-09-22)
+
+### 🩹 Fixes
+
+- **ui:** key reverse answers by address and chain ([#349](https://github.com/JustaLab-co/jaw-mono/pull/349))
+
+### ❤️ Thank You
+
+- Mariano Aguero @mariano-aguero
+
+## 1.4.4 (2026-09-22)
+
+### 🩹 Fixes
+
+- **ui:** refuse offchain lookups on the shared public client ([#348](https://github.com/JustaLab-co/jaw-mono/pull/348))
+
+### ❤️ Thank You
+
+- Mariano Aguero @mariano-aguero
+
 ## 1.4.3 (2026-09-18)
 
 ### 🩹 Fixes
