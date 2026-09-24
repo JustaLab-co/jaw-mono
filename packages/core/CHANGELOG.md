@@ -1,3 +1,13 @@
+## 1.5.1 (2026-09-24)
+
+### 🩹 Fixes
+
+- **core:** stop reporting landed user operations as failed ([#357](https://github.com/JustaLab-co/jaw-mono/pull/357))
+
+### ❤️ Thank You
+
+- Mariano Aguero @mariano-aguero
+
 ## 1.5.0 (2026-09-23)
 
 ### 🚀 Features
