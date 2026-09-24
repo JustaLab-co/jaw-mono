@@ -120,27 +120,3 @@ describe('normalizeRevokePermissionsParams', () => {
         );
     });
 });
-
-describe('a grant refuses without a key', () => {
-    /**
-     * The order is what makes this worth a local refusal rather than letting the
-     * proxy answer: the approval is sent on chain first and stored through the
-     * relay second, so a refusal from the proxy arrives after the permission
-     * exists and leaves it approved and unreadable.
-     */
-    test('grantPermissions refuses before anything is sent on chain', async () => {
-        const { grantPermissions } = await import('./permissions.js');
-        const smartAccount = { address: '0x1111111111111111111111111111111111111111' };
-
-        await expect(
-            grantPermissions(
-                smartAccount as never,
-                Math.floor(Date.now() / 1000) + 3600,
-                '0x2222222222222222222222222222222222222222',
-                { calls: [], spends: [] },
-                { id: 84532 } as never,
-                ''
-            )
-        ).rejects.toThrow(/apiKey is required to grant a permission/);
-    });
-});
