@@ -233,7 +233,7 @@ function CreateAccountForm({
     try {
       const accountData = await onCreateAccount(username);
 
-      if (ensDomain && chainId && supportedChains && accountData.address) {
+      if (ensDomain && chainId && apiKey && supportedChains && accountData.address) {
         try {
           const justaName = getJustaNameInstance(mainnetRpcUrl);
 
@@ -254,9 +254,7 @@ function CreateAccountForm({
               text: subnameTextRecords && subnameTextRecords.length > 0 ? subnameTextRecords : [],
             },
             {
-              // The SDK requires the header to be present. Empty, the backend
-              // resolves the caller's workspace from the origin instead.
-              xApiKey: apiKey ?? '',
+              xApiKey: apiKey,
               xAddress: accountData.address,
               xMessage: '',
             }

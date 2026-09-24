@@ -37,7 +37,7 @@ type ConstructorOptions = {
     metadata: AppMetadata;
     uiHandler: UIHandler;
     callback: ProviderEventCallback | null;
-    apiKey?: string;
+    apiKey: string;
     paymasters?: Record<number, PaymasterConfig>;
     ens?: string;
     theme?: JawTheme;
@@ -389,9 +389,14 @@ export class AppSpecificSigner extends JAWSigner {
 
                 // Fetch permission from relay to get the correct chainId
                 // (permission may have been granted on a different chain than current)
+                const apiKey = store.config.get().apiKey;
+                if (!apiKey) {
+                    throw standardErrors.rpc.internal('No API key configured');
+                }
+
                 let relayPermission;
                 try {
-                    relayPermission = await getPermissionFromRelay(revokeData.id, store.config.get().apiKey);
+                    relayPermission = await getPermissionFromRelay(revokeData.id, apiKey);
                 } catch {
                     throw standardErrors.rpc.invalidParams(
                         `Permission not found: ${revokeData.id}. It may have already been revoked.`

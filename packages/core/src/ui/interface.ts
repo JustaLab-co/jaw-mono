@@ -299,8 +299,8 @@ export type { PaymasterConfig };
  * Contains SDK configuration that the UI handler may need
  */
 export interface UIHandlerConfig {
-    /** JAW API key for RPC URL resolution. Absent, requests are served by origin. */
-    apiKey?: string;
+    /** JAW API key for RPC URL resolution (required) */
+    apiKey: string;
     /** Default chain ID */
     defaultChainId?: number;
     /** Paymaster configuration per chain for gasless transactions */

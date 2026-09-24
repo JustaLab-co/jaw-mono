@@ -38,8 +38,11 @@ describe('create() chain registration', () => {
         }
     });
 
-    it('accepts app-specific mode with no api-key', () => {
-        expect(() => create({ appName: 'Test', preference: { mode: Mode.AppSpecific } })).not.toThrow();
+    // App-specific mode hands the key to the dApp's own UIHandler, which has nowhere
+    // to get one. It used to be caught in createSigner, so a misconfigured app got
+    // an SDK that built fine and failed on its first request instead.
+    it('refuses app-specific mode with no api-key, at config time', () => {
+        expect(() => create({ appName: 'Test', preference: { mode: Mode.AppSpecific } })).toThrow(/API key/i);
     });
 
     it('honours defaultChainId without an api-key', () => {

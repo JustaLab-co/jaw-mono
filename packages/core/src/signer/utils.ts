@@ -40,6 +40,11 @@ export function createSigner(params: {
             if (!uiHandler) {
                 throw standardErrors.rpc.internal('UIHandler is required for appSpecific signer');
             }
+            // Already refused at config time in create(); kept as the last word on
+            // the type, which allows the key to be absent for the other mode.
+            if (!apiKey) {
+                throw standardErrors.rpc.internal('API key is required for appSpecific signer');
+            }
             return new AppSpecificSigner({
                 metadata,
                 callback,

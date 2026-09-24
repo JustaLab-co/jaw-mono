@@ -80,6 +80,13 @@ export function create(params: CreateJAWSDKOptions) {
         throw new Error('Custom Server Url not available with Cross Platform Mode.');
     }
 
+    // App-specific mode hands the key to the dApp's own UIHandler, which has
+    // nowhere to get one. Refused here rather than on the first request, so a
+    // misconfigured app fails while it is still being wired up.
+    if (options.preference.mode == Mode.AppSpecific && !params.apiKey) {
+        throw new Error('API key is required for App Specific Mode.');
+    }
+
     // Store the config
     const storedOptions = {
         metadata: options.metadata,
