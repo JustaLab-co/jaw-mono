@@ -61,6 +61,7 @@ import {
     soneium,
     unichain,
     monad,
+    citrea,
 } from 'viem/chains';
 import { PERMISSIONS_MANAGER_ADDRESS, FACTORY_ADDRESS, JAW_PROXY_URL } from '../constants.js';
 import { jawHttp } from '../utils/jawHttp.js';
@@ -141,6 +142,7 @@ export const MAINNET_CHAINS: readonly ViemChain[] = [
     arc,
     unichain,
     monad,
+    citrea,
 ];
 
 export const TESTNET_CHAINS: readonly ViemChain[] = [
