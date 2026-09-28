@@ -7,6 +7,7 @@ export { useChainIcons, type ChainIconMap } from './useChainIcons';
 export * from './useReverseIdentity';
 export * from './useFeeTokenPrice';
 export * from './useGasEstimation';
+export * from './useSpenderPrefund';
 export * from './useAssetPreview';
 export * from './usePermissionExecution';
 export * from './usePermissionRevocation';

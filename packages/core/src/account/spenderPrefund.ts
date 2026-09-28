@@ -8,8 +8,10 @@ import type { PermissionsDetail } from '../rpc/permissions.js';
  * first op, so without help that op has no fee source and has to be sponsored.
  *
  * The grant is the one transaction the account owner already signs, so it is
- * where the spender gets what it needs. This builds the transfer that rides
- * along in it.
+ * where the spender gets what it needs. This sizes the transfer that rides
+ * along in it, in two steps: a quote before the grant screen renders, so the
+ * user sees what leaves the account and where it goes, and a check at the
+ * grant, so what is sent is exactly what they saw.
  *
  * The destination is always the spender being approved and the token is always
  * one the permission itself authorises spending, neither of them anything a
@@ -82,8 +84,8 @@ const PREFUND_GAS = 2n * FIRST_OP_GAS;
  * and no prefund goes out; the CLI skips that entry and keeps enforcing the
  * rest. This is the side that is about to move funds.
  *
- * A permission too tight to cover one operation is refused outright by the
- * caller rather than trimmed to it.
+ * A permission too tight to cover one operation is refused outright by
+ * `quoteSpenderPrefund` rather than trimmed to it.
  */
 function ceilingFor(permissions: PermissionsDetail, token: Address): bigint | null {
     let tightest: bigint | null = null;
@@ -104,13 +106,43 @@ function ceilingFor(permissions: PermissionsDetail, token: Address): bigint | nu
     return tightest !== null && tightest > 0n ? tightest : null;
 }
 
-/** Opt-in for the grant. Off by default: a wallet does not move funds unasked. */
+/**
+ * A transfer to the spender, sized before the grant screen renders so the screen
+ * can show it. What it shows is what goes out: `Account.grantPermissions` sends
+ * this amount as is and never prices it again.
+ */
+export interface SpenderPrefund {
+    /** The permission's own spend token, and the one the transfer moves. */
+    token: Address;
+    /** The spender being approved, and the only possible destination. */
+    spender: Address;
+    /** In the token's smallest unit. */
+    amount: bigint;
+}
+
+/**
+ * What `quoteSpenderPrefund` found. `transfer` is one to show and send.
+ * `below-one-operation` is the decline a person can act on, by granting more:
+ * the allowance is under what one operation costs, so no transfer the
+ * permission allows could fund the session.
+ */
+export type SpenderPrefundQuote =
+    | ({ kind: 'transfer' } & SpenderPrefund)
+    | { kind: 'below-one-operation'; token: Address; allowance: bigint; operationCost: bigint };
+
+/** Options for the grant. */
 export interface GrantPermissionsOptions {
     /**
-     * Include a small transfer to the spender in the grant transaction, so its
-     * first userOp can pay its own fee instead of needing a sponsor.
+     * A transfer from `quoteSpenderPrefund` to ride along in the grant, so the
+     * spender's first userOp can pay its own fee. Checked against the
+     * permission and the account's balance before anything is sent, and the
+     * grant fails rather than send something other than this.
+     *
+     * The paymaster `gas` passed with it has to be sized over a batch that
+     * includes `spenderPrefundCall(prefund)`: the transfer is part of what the
+     * transaction costs.
      */
-    prefundSpender?: boolean;
+    prefund?: SpenderPrefund;
 }
 
 /** Reads this needs, injected so the caller owns the client and the caching. */
@@ -127,34 +159,25 @@ export interface PrefundReader {
     exchangeRate(token: Address): Promise<bigint | null>;
 }
 
-export interface PrefundArgs {
+export interface PrefundQuoteArgs {
     /** The account granting the permission, which the transfer comes out of. */
     account: Address;
     /** The address being approved as spender, and the only possible destination. */
     spender: Address;
     permissions: PermissionsDetail;
-    /**
-     * The paymaster context for this transaction. When it names the same token
-     * the prefund goes out in, its `gas` is what the paymaster will take from
-     * `account`, and the prefund has to leave that behind: an account with
-     * exactly enough for the fee would pass the keys screen's estimate, which
-     * runs before this call exists, and then fail when the paymaster charges in
-     * postOp, reverting the whole grant.
-     */
-    paymasterContext?: Record<string, unknown>;
     read: PrefundReader;
 }
 
 /**
- * The transfer that funds the spender's first operation, or null when it is not
- * needed, not affordable, or larger than the permission allows.
+ * The transfer that funds the spender's first operation, or why there is none
+ * the user could act on. Null when it is not needed or not affordable, which
+ * the screen has nothing to say about.
  *
- * Null rather than a throw for every one of those: the grant is what the user
- * came to do, and none of these are reasons to fail it.
+ * Not the fee: that depends on a batch the transfer is part of, so it is
+ * checked at the grant, by `checkSpenderPrefund`, against an estimate that
+ * includes this.
  */
-export async function buildSpenderPrefundCall(
-    args: PrefundArgs
-): Promise<{ to: Address; value: bigint; data: Hex } | null> {
+export async function quoteSpenderPrefund(args: PrefundQuoteArgs): Promise<SpenderPrefundQuote | null> {
     const token = firstErc20Spend(args.permissions);
     // A permission that authorises no ERC-20 spend has no token to prefund in,
     // and picking one ourselves would move funds the permission never mentioned.
@@ -176,14 +199,9 @@ export async function buildSpenderPrefundCall(
     // the spender would hold the whole allowance, outside the permission where
     // nothing meters it, and still not land an op. Refused rather than trimmed
     // to the allowance, which is what sent all of it.
-    if (priceOf(FIRST_OP_GAS) > ceiling) {
-        // The one decline of these that a person can act on, by granting more.
-        // Silent, it reaches them as a session that cannot pay for anything.
-        console.warn(
-            `Permission allows ${ceiling} of ${token} per period, under the ${priceOf(FIRST_OP_GAS)} ` +
-                'one operation costs here, so the spender was not funded.'
-        );
-        return null;
+    const operationCost = priceOf(FIRST_OP_GAS);
+    if (operationCost > ceiling) {
+        return { kind: 'below-one-operation', token, allowance: ceiling, operationCost };
     }
 
     // It can cover an operation, so ask for the buffer and settle for the
@@ -197,17 +215,81 @@ export async function buildSpenderPrefundCall(
     const spenderBalance = await args.read.balanceOf(token, args.spender);
     if (spenderBalance >= amount) return null;
 
-    const fee = paymasterFeeIn(token, args.paymasterContext);
-    if (fee === null) return null;
-
+    // Nothing to show for a transfer the account could not make. The fee comes
+    // on top of this and is checked at the grant.
     const accountBalance = await args.read.balanceOf(token, args.account);
-    if (accountBalance < amount + fee) return null;
+    if (accountBalance < amount) return null;
 
+    return { kind: 'transfer', token, spender: args.spender, amount };
+}
+
+/** The ERC-20 transfer a prefund sends, for the grant and for estimating it. */
+export function spenderPrefundCall(prefund: SpenderPrefund): { to: Address; value: bigint; data: Hex } {
     return {
-        to: token,
+        to: prefund.token,
         value: 0n,
-        data: encodeFunctionData({ abi: erc20Abi, functionName: 'transfer', args: [args.spender, amount] }),
+        data: encodeFunctionData({ abi: erc20Abi, functionName: 'transfer', args: [prefund.spender, prefund.amount] }),
     };
+}
+
+export interface PrefundCheckArgs {
+    prefund: SpenderPrefund;
+    account: Address;
+    spender: Address;
+    permissions: PermissionsDetail;
+    /**
+     * The paymaster context for this transaction. When it names the prefund's
+     * token, its `gas` is what the paymaster will take from `account` on top of
+     * the transfer.
+     */
+    paymasterContext?: Record<string, unknown>;
+    read: Pick<PrefundReader, 'balanceOf'>;
+}
+
+/**
+ * The transfer a quoted prefund sends, once it has been checked against the
+ * grant it rides in. Throws, before anything is sent, when the grant cannot send
+ * exactly what the screen showed.
+ *
+ * The quote reaches here through the caller, so it is held to the same rules it
+ * was built under: the destination is the spender being approved, the token is
+ * the one the permission spends, and the amount fits inside its allowance.
+ */
+export async function checkSpenderPrefund(args: PrefundCheckArgs): Promise<{ to: Address; value: bigint; data: Hex }> {
+    const { prefund } = args;
+
+    if (prefund.spender.toLowerCase() !== args.spender.toLowerCase()) {
+        throw new Error(`The spender prefund is addressed to ${prefund.spender}, not to the spender being approved.`);
+    }
+    const token = firstErc20Spend(args.permissions);
+    if (!token || token.toLowerCase() !== prefund.token.toLowerCase()) {
+        throw new Error(`The spender prefund is in ${prefund.token}, which is not the token this permission spends.`);
+    }
+    const ceiling = ceilingFor(args.permissions, token);
+    if (prefund.amount <= 0n || ceiling === null || prefund.amount > ceiling) {
+        throw new Error('The spender prefund is larger than the permission allows.');
+    }
+
+    const fee = paymasterFeeIn(prefund.token, args.paymasterContext);
+    if (fee === null) {
+        // Sending the transfer against a fee we cannot size is how the account
+        // ends up short in postOp, reverting the grant after it was signed.
+        throw new Error(
+            'Could not size the fee this grant pays in the prefund token, so the prefund cannot be checked. ' +
+                'Estimate the grant with the prefund included, or pay the fee in another token.'
+        );
+    }
+
+    const balance = await args.read.balanceOf(prefund.token, args.account);
+    if (balance < prefund.amount + fee) {
+        throw new Error(
+            `The account no longer holds the ${prefund.amount} of ${prefund.token} shown for the spender` +
+                (fee > 0n ? ', with the fee on top' : '') +
+                '. Nothing was sent.'
+        );
+    }
+
+    return spenderPrefundCall(prefund);
 }
 
 /**
@@ -222,8 +304,7 @@ function paymasterFeeIn(token: Address, context?: Record<string, unknown>): bigi
     // A context that names this token but no `gas` is the path where
     // `createErc20ApprovalCall` sizes the ceiling itself, so the paymaster does
     // charge here and there is a fee to leave behind; we just cannot see it from
-    // this side. Null, like an unreadable one: sending the transfer against a
-    // fee we cannot size is how the account ends up short in postOp.
+    // this side. Null, like an unreadable one.
     if (gas === undefined) return null;
     try {
         return BigInt(gas);

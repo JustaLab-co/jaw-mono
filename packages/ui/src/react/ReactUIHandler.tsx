@@ -22,6 +22,7 @@ import {
   SUPPORTED_CHAINS,
   JAW_RPC_URL,
   jawPaymasterUrl,
+  spenderPrefundCall,
   SubnameTextRecordCapabilityRequest,
   handleGetCapabilitiesRequest,
   buildGrantPermissionCall,
@@ -59,6 +60,7 @@ import {
 } from '../components/OnboardingDialog/accountHelpers';
 import { useChainIconURI } from '../hooks/useChainIconURI';
 import { useGasEstimation } from '../hooks/useGasEstimation';
+import { useSpenderPrefund, describeSpenderPrefund } from '../hooks/useSpenderPrefund';
 import { useAssetPreview } from '../hooks/useAssetPreview';
 import { usePermissionExecution } from '../hooks/usePermissionExecution';
 import { usePermissionRevocation } from '../hooks/usePermissionRevocation';
@@ -2207,6 +2209,23 @@ function PermissionDialogWrapper({
   // Check if this is a sponsored transaction (paymaster provided)
   const isSponsored = !!effectivePaymasterUrl;
 
+  // The transfer to the spender the request asked for, sized before the screen renders so the
+  // screen shows it and the grant sends exactly that.
+  const { quote: prefundQuote, loading: prefundLoading } = useSpenderPrefund({
+    account,
+    enabled: request.data.capabilities?.prefundSpender === true,
+    spender: request.data.spender as Address,
+    permissions: request.data.permissions,
+    address: request.data.address as Address,
+  });
+  const prefund = useMemo(
+    () =>
+      prefundQuote?.kind === 'transfer'
+        ? { token: prefundQuote.token, spender: prefundQuote.spender, amount: prefundQuote.amount }
+        : null,
+    [prefundQuote]
+  );
+
   // Build the actual permission grant call for gas estimation
   // This uses the real approve() call data to PERMISSIONS_MANAGER_ADDRESS
   const transactionCalls = useMemo(() => {
@@ -2220,12 +2239,13 @@ function PermissionDialogWrapper({
         request.data.expiry,
         request.data.permissions
       );
-      return [permissionCall];
+      // The transfer is part of what this transaction costs, so the fee is estimated with it in.
+      return prefund ? [spenderPrefundCall(prefund), permissionCall] : [permissionCall];
     } catch (error) {
       console.warn('[PermissionDialogWrapper] Failed to build permission grant call:', error);
       return [];
     }
-  }, [request.data.address, request.data.spender, request.data.expiry, request.data.permissions]);
+  }, [request.data.address, request.data.spender, request.data.expiry, request.data.permissions, prefund]);
 
   // Use the gas estimation hook for both ETH and ERC-20 cost estimation
   const {
@@ -2563,6 +2583,13 @@ function PermissionDialogWrapper({
     return formatExpiryDate(request.data.expiry);
   }, [request.data.expiry]);
 
+  const prefundDisplay = useMemo(() => {
+    if (!prefundQuote) return null;
+    const token = prefundQuote.token.toLowerCase();
+    const key = Object.keys(tokenInfoMap).find((address) => address.toLowerCase() === token);
+    return describeSpenderPrefund(prefundQuote, key ? tokenInfoMap[key] : undefined);
+  }, [prefundQuote, tokenInfoMap]);
+
   const handleConfirm = async () => {
     if (submittingRef.current) return;
     if (!account) {
@@ -2581,9 +2608,8 @@ function PermissionDialogWrapper({
         calls: request.data.permissions.calls,
       };
 
-      // Grant permissions using Account class with paymaster context.
-      // The last argument needs a core that carries the prefund; without it the
-      // spender is granted the permission and holds nothing to pay its first op.
+      // Grant permissions using Account class with paymaster context. The prefund is the one the
+      // screen showed; core checks it and fails the grant rather than send anything else.
       const result = await account.grantPermissions(
         request.data.expiry,
         request.data.spender as Address,
@@ -2591,7 +2617,7 @@ function PermissionDialogWrapper({
         computedPaymasterUrl,
         computedPaymasterContext,
         request.data.address,
-        { prefundSpender: request.data.capabilities?.prefundSpender === true }
+        prefund ? { prefund } : undefined
       );
 
       setStatus('Permissions granted successfully!');
@@ -2637,6 +2663,8 @@ function PermissionDialogWrapper({
       origin={typeof window !== 'undefined' ? window.location.origin : 'unknown'}
       spends={spends}
       calls={calls}
+      prefund={prefundDisplay}
+      prefundLoading={prefundLoading}
       tokenMeta={tokenInfoMap}
       expiryDate={expiryDate}
       networkName={networkName}
