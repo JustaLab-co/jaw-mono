@@ -54,6 +54,7 @@ export class Account {
     grantPermissions(expiry: number, spender: Address_2, permissions: PermissionsDetail, paymasterUrlOverride?: string, paymasterContextOverride?: Record<string, unknown>, address?: Address_2, options?: GrantPermissionsOptions): Promise<WalletGrantPermissionsResponse>;
     static import(config: AccountConfig): Promise<Account>;
     static logout(apiKey?: string, storage?: SyncStorage): void;
+    quoteSpenderPrefund(spender: Address_2, permissions: PermissionsDetail, address?: Address_2): Promise<SpenderPrefundQuote | null>;
     static restore(config: AccountConfig, credentialId: string, publicKey: `0x${string}`): Promise<Account>;
     revokePermission(permissionId: Hex, paymasterUrlOverride?: string, paymasterContextOverride?: Record<string, unknown>, address?: Address_2): Promise<RevokePermissionApiResponse>;
     // Warning: (ae-forgotten-export) The symbol "BundledTransactionResult" needs to be exported by the entry point index.d.ts
@@ -589,7 +590,7 @@ export function getSupportedChains(showTestnets?: boolean): readonly Chain_2[];
 
 // @public
 export interface GrantPermissionsOptions {
-    prefundSpender?: boolean;
+    prefund?: SpenderPrefund;
 }
 
 // @public
@@ -1275,6 +1276,30 @@ export type SignInWithEthereumCapabilityResponse = {
 
 // @public
 export const SILENT_METHODS: readonly string[];
+
+// @public
+export interface SpenderPrefund {
+    amount: bigint;
+    spender: Address_2;
+    token: Address_2;
+}
+
+// @public
+export function spenderPrefundCall(prefund: SpenderPrefund): {
+    to: Address_2;
+    value: bigint;
+    data: Hex;
+};
+
+// @public
+export type SpenderPrefundQuote = ({
+    kind: 'transfer';
+} & SpenderPrefund) | {
+    kind: 'below-one-operation';
+    token: Address_2;
+    allowance: bigint;
+    operationCost: bigint;
+};
 
 // @public
 export type SpendLimit = {

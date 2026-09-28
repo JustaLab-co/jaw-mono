@@ -26,6 +26,15 @@ export interface SpendPermission {
   total?: string;
 }
 
+/**
+ * The transfer to the spender a grant sends alongside the permission, as the grant screen shows
+ * it. `below-one-operation` is the decline the user can act on: the limit is under what one
+ * transaction costs, so the spender is not funded.
+ */
+export type SpenderPrefundDisplay =
+  | { kind: 'transfer'; amount: string; symbol: string }
+  | { kind: 'below-one-operation'; operationCost: string; symbol: string };
+
 export interface CallPermission {
   target: string;
   selector?: string;
@@ -61,6 +70,11 @@ export interface PermissionDialogProps {
    * means the read failed — only `symbol` is consumed here, but the shape matches the resolver's.
    */
   tokenMeta?: Record<string, { symbol: string; decimals?: number | null }>;
+
+  /** Grant only: what the grant also sends to the spender right away. */
+  prefund?: SpenderPrefundDisplay | null;
+  /** Grant only: the prefund is still being sized, so Confirm waits for it. */
+  prefundLoading?: boolean;
 
   // Period and expiry
   expiryDate: string; // Formatted expiry date

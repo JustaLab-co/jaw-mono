@@ -168,7 +168,8 @@ export type RequestCapabilities = {
     /**
      * On `wallet_grantPermissions`, send a small amount of the permission's own
      * spend token to the spender in the same transaction, so its first userOp
-     * can pay its own fee. The wallet decides the amount; the request only asks.
+     * can pay its own fee. The wallet decides the amount and shows it on the
+     * grant screen before the user confirms; the request only asks.
      */
     prefundSpender?: boolean;
     /** Additional capabilities can be added here */

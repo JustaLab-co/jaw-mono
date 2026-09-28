@@ -33,7 +33,13 @@ import {
     resolveRpId,
 } from '../passkey-manager/index.js';
 import type { SyncStorage } from '../storage-manager/index.js';
-import { buildSpenderPrefundCall, type GrantPermissionsOptions } from './spenderPrefund.js';
+import {
+    checkSpenderPrefund,
+    quoteSpenderPrefund,
+    type GrantPermissionsOptions,
+    type PrefundReader,
+    type SpenderPrefundQuote,
+} from './spenderPrefund.js';
 import {
     grantPermissions as grantSmartAccountPermissions,
     revokePermission as revokeSmartAccountPermission,
@@ -1141,32 +1147,25 @@ export class Account {
         const paymaster = this.resolveEffectivePaymaster(paymasterUrlOverride, paymasterContextOverride);
 
         // Ahead of the approval sizing, so the ceiling covers the transfer too.
-        const prefundCall = options?.prefundSpender
-            ? await this.buildPrefundCall(smartAccount.address, spender, permissions, paymaster.context)
+        // Checked rather than priced: the amount is the one the screen showed,
+        // and a grant that cannot send exactly that fails here, before signing.
+        const prefundCall = options?.prefund
+            ? await checkSpenderPrefund({
+                  prefund: options.prefund,
+                  account: smartAccount.address,
+                  spender,
+                  permissions,
+                  paymasterContext: paymaster.context,
+                  read: this.prefundReader(),
+              })
             : null;
 
         const calls = prefundCall ? [prefundCall, permissionCall] : [permissionCall];
 
-        // Check if we need an ERC-20 approval for the paymaster.
-        //
-        // A `gas` in the context is a ceiling the caller sized, and the caller
-        // sized it off a batch that could not have had the prefund transfer in
-        // it: the wallet estimates the grant, and the transfer is added here.
-        // So when one was added, ask for the ceiling to be measured again with
-        // the batch that will actually be sent. The caller's figure stays as
-        // the fallback, because losing the grant to a sizing that could not run
-        // is worse than an approval that is a transfer short.
-        const resized = prefundCall && paymaster.context?.gas !== undefined;
-        const sizingContext = resized
-            ? Object.fromEntries(Object.entries(paymaster.context ?? {}).filter(([key]) => key !== 'gas'))
-            : paymaster.context;
-        let approvalCall: { to: Address; value?: bigint; data: Hex } | null;
-        try {
-            approvalCall = await this.createErc20ApprovalCall(paymaster.url, sizingContext, calls, smartAccount);
-        } catch (error) {
-            if (!resized) throw error;
-            approvalCall = await this.createErc20ApprovalCall(paymaster.url, paymaster.context, calls, smartAccount);
-        }
+        // Check if we need an ERC-20 approval for the paymaster. A `gas` in the
+        // context was sized by the caller over this same batch, transfer
+        // included, since the transfer was known before the screen rendered.
+        const approvalCall = await this.createErc20ApprovalCall(paymaster.url, paymaster.context, calls, smartAccount);
 
         return await grantSmartAccountPermissions(
             smartAccount,
@@ -1182,65 +1181,73 @@ export class Account {
     }
 
     /**
-     * The transfer that leaves the spender able to pay for its own first userOp,
-     * or null when it is not needed. See `spenderPrefund.ts` for the rules.
+     * The transfer that would leave the spender able to pay for its own first
+     * userOp, sized for the grant screen to show before the user confirms. Pass
+     * a `transfer` result to `grantPermissions` as `options.prefund`, and
+     * include `spenderPrefundCall(quote)` in the batch the fee is estimated
+     * over. See `spenderPrefund.ts` for the rules.
+     *
+     * @returns The transfer, the reason there cannot be one the user could act
+     * on, or null when none is needed or it could not be priced.
      */
-    private async buildPrefundCall(
-        account: Address,
+    async quoteSpenderPrefund(
         spender: Address,
         permissions: PermissionsDetail,
-        paymasterContext?: Record<string, unknown>
-    ): Promise<{ to: Address; value: bigint; data: Hex } | null> {
+        address?: Address
+    ): Promise<SpenderPrefundQuote | null> {
+        const smartAccount = await this.resolveSmartAccount(address);
+        return await quoteSpenderPrefund({
+            account: smartAccount.address,
+            spender,
+            permissions,
+            read: this.prefundReader(),
+        });
+    }
+
+    /**
+     * The reads that size a prefund, all of them from JAW. They decide how much
+     * leaves the account, to a spender the requester chose. `chain.rpcUrl` is
+     * JAW's (`buildChainConfig`), but `chain.paymaster` is the requester's: it
+     * rides in on the request from the dapp's own `paymasters` config, and keys
+     * builds the account from it. An inflated rate trims the transfer to the
+     * whole allowance and lands it outside the permission.
+     */
+    private prefundReader(): PrefundReader {
         const publicClient = createPublicClient({
             chain: { id: this._chain.id } as Parameters<typeof createPublicClient>[0]['chain'],
             transport: jawHttp(this._chain.rpcUrl),
         });
 
-        const read = {
+        return {
             balanceOf: (token: Address, owner: Address) =>
                 publicClient.readContract({ address: token, abi: erc20Abi, functionName: 'balanceOf', args: [owner] }),
             gasPrice: () => publicClient.getGasPrice(),
             exchangeRate: async (token: Address) => {
-                // JAW's own paymaster, never the one on the request. The rate
-                // decides how much leaves the account, to a spender the requester
-                // chose, so an inflated rate trims the transfer to the whole
-                // allowance and lands it outside the permission. `chain.paymaster`
-                // is the requester's too: it rides in on the request from the
-                // dapp's own `paymasters` config, and keys builds the account
-                // from it.
                 const url = jawPaymasterUrl(this._chain.id, this._apiKey);
                 try {
                     const { fetchTokenQuotes } = await import('./erc20Paymaster.js');
                     const quotes = await fetchTokenQuotes(url, this._chain.id, [token]);
-                    const rate = quotes[0]?.exchangeRate;
-                    // A paymaster that answers but does not take this token. Said
-                    // out loud for the same reason as the throw below: otherwise
-                    // it is a grant that landed and a session that cannot pay,
-                    // with nothing connecting the two.
+                    const rate = quotes.find(
+                        (q) => q.tokenAddress?.toLowerCase() === token.toLowerCase()
+                    )?.exchangeRate;
+                    // A paymaster that answers but does not take this token.
+                    // Said out loud: otherwise it is a grant screen with no
+                    // prefund on it and a session that cannot pay, with nothing
+                    // connecting the two.
                     if (rate === undefined) {
-                        console.warn(`The paymaster does not quote ${token}, so the spender was not funded.`);
+                        console.warn(`The paymaster does not quote ${token}, so the spender will not be funded.`);
                         return null;
                     }
                     return rate;
                 } catch (error) {
                     // The grant is what the user came to do; a paymaster that
                     // will not quote is not a reason to fail it. It is a reason
-                    // to say so, though: what the caller sees otherwise is a
-                    // grant that landed and a session that cannot pay for its
-                    // first operation, with nothing connecting the two.
+                    // to say so, for the same reason as above.
                     console.warn('Could not price the spender prefund, granting without it:', error);
                     return null;
                 }
             },
         };
-
-        return await buildSpenderPrefundCall({
-            account,
-            spender,
-            permissions,
-            paymasterContext,
-            read,
-        });
     }
 
     /**

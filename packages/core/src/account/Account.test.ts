@@ -1,6 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { createPublicClient, decodeFunctionData, encodeFunctionData, erc20Abi } from 'viem';
 import { Account } from './Account.js';
+import { spenderPrefundCall } from './spenderPrefund.js';
 import { ERC20_PAYMASTER_ADDRESS, jawPaymasterUrl } from '../constants.js';
 
 // Mock dependencies
@@ -1456,35 +1457,22 @@ describe('Account — ERC-20 paymaster approval', () => {
         expect(vi.mocked(sendCallsWithPermission).mock.calls[0][8]).toEqual(expectedApproval());
     });
 
-    // The wallet estimates the grant and passes the ceiling it measured in the
-    // context. The transfer to the spender is added here, after that estimate,
-    // so taking the caller's figure approved a batch one transfer short of the
-    // one that goes out.
-    it('measures the ceiling again when it adds a prefund transfer the caller could not have priced', async () => {
-        const { fetchTokenQuotes } = await import('./erc20Paymaster.js');
+    // The prefund is quoted before the screen renders, so the wallet estimates
+    // the batch with the transfer already in it and passes that ceiling in the
+    // context. Nothing is added after the estimate any more, so nothing has to
+    // be measured again: the approval is the figure the screen showed.
+    it('approves the ceiling the caller sized over the batch the prefund rides in', async () => {
         const { grantPermissions } = await import('../rpc/permissions.js');
         const SPENDER = '0x2222222222222222222222222222222222222222' as `0x${string}`;
+        const prefund = { token: USDC as `0x${string}`, spender: SPENDER, amount: 6_000n };
 
-        // The spender is empty and the account is not, which is the case the
-        // prefund exists for. The allowance answers separately: a fresh session
-        // has approved nothing.
+        // The account holds the transfer and the fee; a fresh session has
+        // approved nothing.
         vi.mocked(createPublicClient).mockReturnValue({
-            readContract: vi.fn(async ({ functionName, args }: { functionName: string; args?: unknown[] }) => {
-                if (functionName === 'allowance') return 0n;
-                return (args?.[0] as string)?.toLowerCase() === SPENDER.toLowerCase() ? 0n : 5_000_000n;
-            }),
-            // 0.001 gwei, the order Base charges, against a rate that puts the
-            // transfer at 0.006 USDC.
-            getGasPrice: vi.fn().mockResolvedValue(1_000_000n),
+            readContract: vi.fn(async ({ functionName }: { functionName: string }) =>
+                functionName === 'allowance' ? 0n : 5_000_000n
+            ),
         } as never);
-        vi.mocked(fetchTokenQuotes).mockResolvedValue([
-            {
-                tokenAddress: USDC,
-                paymasterAddress: ERC20_PAYMASTER_ADDRESS,
-                exchangeRate: 3_000_000_000n,
-                postOpGas: 40_000n,
-            },
-        ] as never);
         vi.mocked(grantPermissions).mockResolvedValue({ permissionId: '0xperm' } as never);
 
         const account = await makeAccount();
@@ -1493,24 +1481,15 @@ describe('Account — ERC-20 paymaster approval', () => {
             SPENDER,
             { spends: [{ token: USDC, allowance: '10000000', unit: 'day' }] } as never,
             PAYMASTER_URL,
-            // A ceiling of one base unit: whatever the estimate returns, it is
-            // not this, so an approval for it proves the context was not trusted.
-            { token: USDC, gas: '1' },
+            { token: USDC, gas: String(CEILING) },
             undefined,
-            { prefundSpender: true }
+            { prefund }
         );
 
-        const estimated = prepareUserOperation.mock.calls[0][0].calls as Array<{ to: string; data: `0x${string}` }>;
-        const transfers = estimated.filter(
-            (call) =>
-                call.to === USDC && decodeFunctionData({ abi: erc20Abi, data: call.data }).functionName === 'transfer'
-        );
-        expect(transfers).toHaveLength(1);
-
-        // Arg 8 carries the approval and the transfer. The approval is the
-        // re-measured ceiling, not the figure that came in the context.
+        expect(prepareUserOperation).not.toHaveBeenCalled();
+        // Arg 8 carries the approval and the transfer, the transfer exactly as quoted.
         const prepended = vi.mocked(grantPermissions).mock.calls.at(-1)?.[8] as Array<unknown>;
-        expect(prepended[0]).toEqual(expectedApproval());
+        expect(prepended).toEqual([expectedApproval(), spenderPrefundCall(prefund)]);
     });
 
     it('sizes a permission send over the permission-manager call, not the raw calls', async () => {
@@ -1682,20 +1661,17 @@ describe('Account — prefunding the spender in the grant', () => {
     // Not the JAW ERC-20 paymaster, so the approval sizing short-circuits and
     // what is under test is the call array, not the quoting.
     const PAYMASTER_URL = 'https://api.pimlico.io/v2/1/rpc?apikey=x';
-    const TOKEN = '0x036CbD53842c5426634e7929541eC2318f3dCF7e';
+    const TOKEN = '0x036CbD53842c5426634e7929541eC2318f3dCF7e' as `0x${string}`;
     const SPENDER = '0x2222222222222222222222222222222222222222' as `0x${string}`;
     const PERMISSIONS = { spends: [{ token: TOKEN, allowance: '10000000', unit: 'day' }] };
+    // PREFUND_GAS at 0.001 gwei and three thousand a coin, six decimals.
+    const PREFUND = { token: TOKEN, spender: SPENDER, amount: 6_000n };
 
-    async function grant({
-        prefundSpender,
+    async function makeAccount({
         balance = 5_000_000n,
-        requesterPaymasterUrl,
         walletPaymasterUrl = PAYMASTER_URL,
     }: {
-        prefundSpender?: boolean;
         balance?: bigint;
-        /** What the request named through `paymasterService`. */
-        requesterPaymasterUrl?: string;
         /**
          * The chain's paymaster, which arrives on the request from the dapp's
          * own config. Null is the CLI bridge, which sends none.
@@ -1723,22 +1699,25 @@ describe('Account — prefunding the spender in the grant', () => {
         } as never);
         // The paymaster's rate is what turns an amount of gas into an amount of
         // this token. Three thousand a coin, six decimals.
-        vi.mocked(fetchTokenQuotes).mockResolvedValue([{ exchangeRate: 3_000_000_000n }] as never);
+        vi.mocked(fetchTokenQuotes).mockResolvedValue([{ tokenAddress: TOKEN, exchangeRate: 3_000_000_000n }] as never);
         vi.mocked(grantPermissions).mockResolvedValue({ permissionId: '0xperm' } as never);
 
-        const account = await Account.fromLocalAccount(
+        return await Account.fromLocalAccount(
             { chainId: 1, apiKey: 'test', paymasterUrl: walletPaymasterUrl ?? undefined } as never,
             { address: '0xabcdef1234567890abcdef1234567890abcdef12', type: 'local', sign: vi.fn() } as never
         );
+    }
 
+    async function grant(account: Account, options?: Parameters<Account['grantPermissions']>[6]) {
+        const { grantPermissions } = await import('../rpc/permissions.js');
         await account.grantPermissions(
             9999999999,
             SPENDER,
             PERMISSIONS as never,
-            requesterPaymasterUrl,
             undefined,
             undefined,
-            { prefundSpender }
+            undefined,
+            options
         );
         const prepended = vi.mocked(grantPermissions).mock.calls.at(-1)?.[8] ?? [];
         // The parameter also takes a lone call, which this path never sends.
@@ -1749,59 +1728,90 @@ describe('Account — prefunding the spender in the grant', () => {
         vi.clearAllMocks();
     });
 
-    // A wallet does not move funds nobody asked it to move.
-    it('sends nothing extra when the caller did not ask for it', async () => {
-        expect(await grant()).toEqual([]);
-    });
+    it('quotes the transfer the grant screen shows', async () => {
+        const account = await makeAccount();
 
-    it('rides a transfer to the spender along in the same transaction', async () => {
-        const prepended = await grant({ prefundSpender: true });
-
-        expect(prepended).toHaveLength(1);
-        expect(prepended[0].to).toBe(TOKEN);
-        expect(prepended[0].data).toBeDefined();
-        const decoded = decodeFunctionData({ abi: erc20Abi, data: prepended[0].data as `0x${string}` });
-        expect(decoded.functionName).toBe('transfer');
-        // PREFUND_GAS at that price and that rate: 0.006 USDC.
-        expect(decoded.args).toEqual([SPENDER, 6_000n]);
+        expect(await account.quoteSpenderPrefund(SPENDER, PERMISSIONS as never)).toEqual({
+            kind: 'transfer',
+            ...PREFUND,
+        });
     });
 
     // The rate decides how much leaves the account, to a spender the requester
-    // chose. Neither URL the requester can reach is allowed to answer with it:
-    // `paymasterService` is theirs by definition, and the chain's own paymaster
-    // rides in on the request from the dapp's `paymasters` config, which keys
-    // then builds the account from. An inflated rate clamps the transfer to the
-    // whole allowance and lands it outside the permission.
-    it('prices the transfer against JAW, never a paymaster the request carried', async () => {
+    // chose. Neither paymaster URL the requester can reach is allowed to answer
+    // with it: the chain's own paymaster rides in on the request from the dapp's
+    // `paymasters` config, which keys then builds the account from. An inflated
+    // rate clamps the transfer to the whole allowance and lands it outside the
+    // permission.
+    it('prices the quote against JAW, never a paymaster the request carried', async () => {
         const { fetchTokenQuotes } = await import('./erc20Paymaster.js');
+        const account = await makeAccount({ walletPaymasterUrl: 'https://paymaster.the-request-carried' });
 
-        const prepended = await grant({
-            prefundSpender: true,
-            walletPaymasterUrl: 'https://paymaster.the-request-carried',
-            requesterPaymasterUrl: 'https://paymaster.the-requester-chose',
-        });
-
-        expect(prepended).toHaveLength(1);
+        expect(await account.quoteSpenderPrefund(SPENDER, PERMISSIONS as never)).toMatchObject({ kind: 'transfer' });
+        expect(vi.mocked(fetchTokenQuotes)).toHaveBeenCalled();
         for (const call of vi.mocked(fetchTokenQuotes).mock.calls) {
             expect(call[0]).toBe(jawPaymasterUrl(1, 'test'));
         }
-        expect(vi.mocked(fetchTokenQuotes)).toHaveBeenCalled();
     });
 
     // The CLI bridge creates the SDK with no paymaster at all, so reading one
-    // off the chain declined every session created that way while the grant
-    // itself went through: charged, and seeded with nothing.
-    it('still prices the transfer when the request carried no paymaster', async () => {
-        const prepended = await grant({ prefundSpender: true, walletPaymasterUrl: null });
+    // off the chain declined every session created that way.
+    it('still quotes when the request carried no paymaster', async () => {
+        const account = await makeAccount({ walletPaymasterUrl: null });
 
-        expect(prepended).toHaveLength(1);
+        expect(await account.quoteSpenderPrefund(SPENDER, PERMISSIONS as never)).toMatchObject({
+            kind: 'transfer',
+            amount: 6_000n,
+        });
+    });
+
+    it('quotes nothing when the paymaster answers for a different token', async () => {
+        const { fetchTokenQuotes } = await import('./erc20Paymaster.js');
+        const account = await makeAccount();
+        vi.mocked(fetchTokenQuotes).mockResolvedValue([
+            { tokenAddress: '0x9999999999999999999999999999999999999999', exchangeRate: 1n },
+        ] as never);
+
+        expect(await account.quoteSpenderPrefund(SPENDER, PERMISSIONS as never)).toBeNull();
+    });
+
+    // A wallet does not move funds nobody asked it to move.
+    it('sends nothing extra when no prefund was passed', async () => {
+        expect(await grant(await makeAccount())).toEqual([]);
+    });
+
+    it('rides the quoted transfer along in the same transaction, unchanged', async () => {
+        const prepended = await grant(await makeAccount(), { prefund: PREFUND });
+
+        expect(prepended).toEqual([spenderPrefundCall(PREFUND)]);
         const decoded = decodeFunctionData({ abi: erc20Abi, data: prepended[0].data as `0x${string}` });
+        expect(decoded.functionName).toBe('transfer');
         expect(decoded.args).toEqual([SPENDER, 6_000n]);
     });
 
-    // Losing the grant to a reverted transfer is worse than the sponsored op it
-    // was meant to replace.
-    it('leaves the grant alone when the account cannot cover the transfer', async () => {
-        expect(await grant({ prefundSpender: true, balance: 1n })).toEqual([]);
+    // Priced again, the amount could differ from the one the user approved.
+    it('does not price the transfer again at the grant', async () => {
+        const { fetchTokenQuotes } = await import('./erc20Paymaster.js');
+        await grant(await makeAccount(), { prefund: PREFUND });
+
+        expect(vi.mocked(fetchTokenQuotes)).not.toHaveBeenCalled();
+    });
+
+    // What the user saw is what goes out, or nothing does.
+    it('fails the grant, before sending, when the account can no longer cover the transfer', async () => {
+        const { grantPermissions } = await import('../rpc/permissions.js');
+
+        await expect(grant(await makeAccount({ balance: 1n }), { prefund: PREFUND })).rejects.toThrow(
+            /Nothing was sent/
+        );
+        expect(vi.mocked(grantPermissions)).not.toHaveBeenCalled();
+    });
+
+    it('fails the grant when the prefund is addressed to someone else', async () => {
+        const { grantPermissions } = await import('../rpc/permissions.js');
+        const elsewhere = { ...PREFUND, spender: '0x3333333333333333333333333333333333333333' as `0x${string}` };
+
+        await expect(grant(await makeAccount(), { prefund: elsewhere })).rejects.toThrow(/not to the spender/);
+        expect(vi.mocked(grantPermissions)).not.toHaveBeenCalled();
     });
 });

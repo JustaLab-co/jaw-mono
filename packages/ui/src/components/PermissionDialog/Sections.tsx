@@ -11,7 +11,7 @@ import { isNativeToken } from '../../utils/tokenBalance';
 import { isWildcard } from '../../utils/permissionExecution';
 import { getDisplayAddress } from '../../utils';
 import { isLongSpendAmount } from '../../utils/displayFormat';
-import type { CallPermission, SpendPermission } from './types';
+import type { CallPermission, SpendPermission, SpenderPrefundDisplay } from './types';
 
 export { isWildcard };
 
@@ -138,6 +138,62 @@ function SpendRow({
           {expiryDate ? ` by ${expiryDate}` : ''}
         </span>
       )}
+    </div>
+  );
+}
+
+/**
+ * The transfer a grant sends to the spender on top of the permission. Its own section rather
+ * than a spend row: a limit is something the spender may do later, this leaves the account the
+ * moment the grant lands, and revoking the permission does not bring it back.
+ */
+export function SpenderPrefundNotice({
+  prefund,
+  spenderLabel,
+  isLoading,
+}: {
+  prefund?: SpenderPrefundDisplay | null;
+  /** How the spender reads elsewhere on the screen: its name when it resolved, else its address. */
+  spenderLabel: string;
+  isLoading?: boolean;
+}) {
+  if (isLoading) {
+    return (
+      <div className="flex flex-col gap-2">
+        <div className="pl-3">
+          <Eyebrow>Sent now</Eyebrow>
+        </div>
+        <div className="border-border rounded-box border px-3 py-2">
+          <Skeleton className="bg-muted rounded-xs h-3.5 w-32" />
+        </div>
+      </div>
+    );
+  }
+  if (!prefund) return null;
+
+  if (prefund.kind === 'below-one-operation') {
+    return (
+      <p className="text-muted-foreground text-body-sm">
+        The spender won&apos;t be funded: this limit is below one transaction&apos;s fee ({prefund.operationCost}{' '}
+        {prefund.symbol}).
+      </p>
+    );
+  }
+
+  return (
+    <div className="flex flex-col gap-2">
+      <div className="pl-3">
+        <Eyebrow>Sent now</Eyebrow>
+      </div>
+      <div className="border-border rounded-box flex flex-col gap-1 border px-3 py-2">
+        <span className="text-foreground text-value break-all font-semibold">
+          {prefund.amount} {prefund.symbol} → {spenderLabel}
+        </span>
+        <span className="text-muted-foreground text-body-sm">
+          So the spender can pay fees for its first transactions. It leaves your account immediately, and revoking the
+          permission doesn&apos;t return it.
+        </span>
+      </div>
     </div>
   );
 }

@@ -18,7 +18,7 @@ import { resolveBlockReason } from '../../utils/transactionFailure';
 import { isBlockingRevocationProblem, REVOCATION_PROBLEM_TEXT } from '../../utils/permissionExecution';
 import { PermissionDialogProps } from './types';
 import { InlineWarning, PartyRow } from '../primitives';
-import { AllowedCalls, MetaCard, SpendLimits, isWildcard } from './Sections';
+import { AllowedCalls, MetaCard, SpendLimits, SpenderPrefundNotice, isWildcard } from './Sections';
 
 export const PermissionDialog = ({
   open,
@@ -33,6 +33,8 @@ export const PermissionDialog = ({
   appLogoUrl,
   spends = [],
   calls = [],
+  prefund,
+  prefundLoading = false,
   tokenMeta,
   expiryDate,
   grantedDate,
@@ -169,6 +171,8 @@ export const PermissionDialog = ({
     !isProcessing &&
     !isLoadingTokenInfo &&
     !isResolvingAddresses &&
+    // A grant that sends funds is not confirmable before the screen has shown how much.
+    !(isGrant && prefundLoading) &&
     !gasFeeLoading &&
     !blockReason &&
     !missingCalls &&
@@ -310,6 +314,14 @@ export const PermissionDialog = ({
                 nativeSymbol={nativeSymbol}
                 isLoading={isLoadingTokenInfo}
                 expiryDate={mode === 'grant' ? expiryDate : undefined}
+              />
+            )}
+
+            {isGrant && (
+              <SpenderPrefundNotice
+                prefund={prefund}
+                spenderLabel={spenderAddress ? displayAddress(spenderAddress) : 'the spender'}
+                isLoading={prefundLoading}
               />
             )}
 
