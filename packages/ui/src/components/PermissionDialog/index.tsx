@@ -313,7 +313,6 @@ export const PermissionDialog = ({
                 chainId={chainId}
                 nativeSymbol={nativeSymbol}
                 isLoading={isLoadingTokenInfo}
-                expiryDate={mode === 'grant' ? expiryDate : undefined}
               />
             )}
 

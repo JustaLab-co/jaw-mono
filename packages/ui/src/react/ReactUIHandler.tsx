@@ -36,7 +36,6 @@ import {
 } from '@jaw.id/core';
 import { formatUnits, erc20Abi } from 'viem';
 import { formatSpendAmount } from '../utils/displayFormat';
-import { spendExposure } from '../utils/spendExposure';
 import type { Address, Hex } from 'viem';
 import { createSiweMessage } from 'viem/siwe';
 
@@ -2536,17 +2535,6 @@ function PermissionDialogWrapper({
         const multiplier = spend.multiplier ?? 1;
         const duration = `${multiplier} ${spend.unit}${multiplier > 1 ? 's' : ''}`;
 
-        // What approving this rate costs by the time the permission expires. The
-        // row leads with the rate, which is the smaller number and the one that
-        // made a permission asking for a million read like one asking for ten.
-        const exposure = spendExposure({
-          allowance,
-          unit: spend.unit,
-          multiplier,
-          expiry: request.data.expiry,
-          now: Math.floor(Date.now() / 1000),
-        });
-
         return {
           amount,
           decimalsUnknown,
@@ -2554,13 +2542,9 @@ function PermissionDialogWrapper({
           tokenAddress: spend.token,
           duration,
           limit,
-          // Nothing to add when the total only repeats the rate, as it does for a
-          // single-window grant and for `forever`.
-          total:
-            exposure && exposure.periods > 1 ? formatSpendAmount(exposure.total, tokenInfo.decimals).amount : undefined,
         };
       }),
-    [spendsData, tokenInfoMap, viemChain, nativeSymbol, request.data.expiry]
+    [spendsData, tokenInfoMap, viemChain, nativeSymbol]
   );
 
   // Format call permissions. Signatures resolve asynchronously — a selector with no signature yet
