@@ -1,3 +1,13 @@
+## 1.5.4 (2026-09-29)
+
+### 🩹 Fixes
+
+- **cli:** drop relay key exchanges whose key does not import ([#353](https://github.com/JustaLab-co/jaw-mono/pull/353))
+
+### ❤️ Thank You
+
+- Mariano Aguero @mariano-aguero
+
 ## 1.5.3 (2026-09-29)
 
 ### 🩹 Fixes
