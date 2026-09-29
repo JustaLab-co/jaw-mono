@@ -1,3 +1,35 @@
+## 1.5.4 (2026-09-29)
+
+### 🧱 Updated Dependencies
+
+- Updated @jaw.id/core to 1.5.4
+
+## 1.5.3 (2026-09-29)
+
+### 🧱 Updated Dependencies
+
+- Updated @jaw.id/core to 1.5.3
+
+## 1.5.2 (2026-09-29)
+
+### 🩹 Fixes
+
+- add Citrea mainnet support ([#359](https://github.com/JustaLab-co/jaw-mono/pull/359))
+
+### 🧱 Updated Dependencies
+
+- Updated @jaw.id/core to 1.5.2
+
+### ❤️ Thank You
+
+- Ghadi @Ghadi8
+
+## 1.5.1 (2026-09-24)
+
+### 🧱 Updated Dependencies
+
+- Updated @jaw.id/core to 1.5.1
+
 ## 1.5.0 (2026-09-23)
 
 ### 🚀 Features

@@ -1,0 +1,925 @@
+[
+  {
+    "id": "eip712-permit-anchor",
+    "attack": "None. Baseline permit whose challenge was computed outside TypeScript with cast (see README).",
+    "method": "eth_signTypedData_v4",
+    "typedData": {
+      "domain": {
+        "name": "USD Coin",
+        "version": "2",
+        "chainId": 8453,
+        "verifyingContract": "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913"
+      },
+      "primaryType": "Permit",
+      "types": {
+        "EIP712Domain": [
+          {
+            "name": "name",
+            "type": "string"
+          },
+          {
+            "name": "version",
+            "type": "string"
+          },
+          {
+            "name": "chainId",
+            "type": "uint256"
+          },
+          {
+            "name": "verifyingContract",
+            "type": "address"
+          }
+        ],
+        "Permit": [
+          {
+            "name": "owner",
+            "type": "address"
+          },
+          {
+            "name": "value",
+            "type": "uint256"
+          }
+        ]
+      },
+      "message": {
+        "owner": "0x9fD37D2cF1b32b3f7dBae480bbd44BE3De2A9e0F",
+        "value": "1000"
+      }
+    },
+    "expect": {
+      "decision": "sign",
+      "shows": ["USD Coin", "0x8335...2913", "Base · 8453", "1,000"],
+      "challenge": "0x1ac8bbf747fd61141ce6ee5aedbac7a5dd76ebae42f964cc02f4d922d0d9876f",
+      "pairs": [
+        ["owner", "0x9fD3…9e0F"],
+        ["value", "1,000"],
+        ["Domain", "USD Coin"],
+        ["Verifying contract", "0x8335...2913"],
+        ["Network", "Base · 8453"]
+      ]
+    }
+  },
+  {
+    "id": "eip712-wallet-sign-envelope",
+    "attack": "None. The same permit through the ERC-7871 wallet_sign envelope, which keys re-serializes before display.",
+    "method": "wallet_sign",
+    "params": [
+      {
+        "request": {
+          "type": "0x01",
+          "data": {
+            "domain": {
+              "name": "USD Coin",
+              "version": "2",
+              "chainId": 8453,
+              "verifyingContract": "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913"
+            },
+            "primaryType": "Permit",
+            "types": {
+              "EIP712Domain": [
+                {
+                  "name": "name",
+                  "type": "string"
+                },
+                {
+                  "name": "version",
+                  "type": "string"
+                },
+                {
+                  "name": "chainId",
+                  "type": "uint256"
+                },
+                {
+                  "name": "verifyingContract",
+                  "type": "address"
+                }
+              ],
+              "Permit": [
+                {
+                  "name": "owner",
+                  "type": "address"
+                },
+                {
+                  "name": "value",
+                  "type": "uint256"
+                }
+              ]
+            },
+            "message": {
+              "owner": "0x9fD37D2cF1b32b3f7dBae480bbd44BE3De2A9e0F",
+              "value": "1000"
+            }
+          }
+        },
+        "address": "0x9fD37D2cF1b32b3f7dBae480bbd44BE3De2A9e0F"
+      }
+    ],
+    "expect": {
+      "decision": "sign",
+      "shows": ["USD Coin", "Base · 8453", "1,000"],
+      "challenge": "0x1ac8bbf747fd61141ce6ee5aedbac7a5dd76ebae42f964cc02f4d922d0d9876f"
+    }
+  },
+  {
+    "id": "eip712-misleading-field-name",
+    "attack": "A field named \"recipient\" that holds the attacker. The address must be on screen under that name.",
+    "method": "eth_signTypedData_v4",
+    "typedData": {
+      "domain": {
+        "name": "Vault",
+        "version": "1",
+        "chainId": 8453,
+        "verifyingContract": "0x1111111111111111111111111111111111111111"
+      },
+      "primaryType": "Order",
+      "types": {
+        "Order": [
+          {
+            "name": "recipient",
+            "type": "address"
+          },
+          {
+            "name": "amount",
+            "type": "uint256"
+          }
+        ]
+      },
+      "message": {
+        "recipient": "0xbad0000000000000000000000000000000000bad",
+        "amount": "5"
+      }
+    },
+    "expect": {
+      "decision": "sign",
+      "shows": ["recipient", "0xbad0…0bad"],
+      "pairs": [
+        ["recipient", "0xbad0…0bad"],
+        ["amount", "5"]
+      ]
+    }
+  },
+  {
+    "id": "eip712-spoofed-verifying-contract",
+    "attack": "Domain named \"USD Coin\" pointing at an attacker contract. The attacker address must be what the card shows.",
+    "method": "eth_signTypedData_v4",
+    "typedData": {
+      "domain": {
+        "name": "USD Coin",
+        "version": "2",
+        "chainId": 8453,
+        "verifyingContract": "0xbad0000000000000000000000000000000000bad"
+      },
+      "primaryType": "Permit",
+      "types": {
+        "Permit": [
+          {
+            "name": "spender",
+            "type": "address"
+          },
+          {
+            "name": "value",
+            "type": "uint256"
+          }
+        ]
+      },
+      "message": {
+        "spender": "0xbad0000000000000000000000000000000000bad",
+        "value": "1"
+      }
+    },
+    "expect": {
+      "decision": "sign",
+      "shows": ["USD Coin", "0xbad0...0bad"],
+      "hides": ["0x8335...2913"]
+    }
+  },
+  {
+    "id": "eip712-foreign-chain-id",
+    "attack": "Connected on Base, typed data bound to Ethereum. The network shown must be the domain's, not the wallet's.",
+    "method": "eth_signTypedData_v4",
+    "typedData": {
+      "domain": {
+        "name": "USD Coin",
+        "version": "2",
+        "chainId": 1,
+        "verifyingContract": "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913"
+      },
+      "primaryType": "Permit",
+      "types": {
+        "Permit": [
+          {
+            "name": "spender",
+            "type": "address"
+          },
+          {
+            "name": "value",
+            "type": "uint256"
+          }
+        ]
+      },
+      "message": {
+        "spender": "0xbad0000000000000000000000000000000000bad",
+        "value": "1"
+      }
+    },
+    "expect": {
+      "decision": "sign",
+      "shows": ["Ethereum · 1"],
+      "hides": ["Base · 8453"]
+    }
+  },
+  {
+    "id": "eip712-domain-type-omits-chain-id",
+    "attack": "types.EIP712Domain leaves out chainId while domain.chainId is 8453. The domain hash the passkey signs commits to no chain, while the ERC-7739 wrapper rebuilds the app domain separator from the domain fields, chainId included, so the signature verifies on no chain. Not replayable, but the user is shown a binding that does not exist and asked to sign something unusable.",
+    "method": "eth_signTypedData_v4",
+    "typedData": {
+      "domain": {
+        "name": "USD Coin",
+        "version": "2",
+        "chainId": 8453,
+        "verifyingContract": "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913"
+      },
+      "primaryType": "Permit",
+      "types": {
+        "EIP712Domain": [
+          {
+            "name": "name",
+            "type": "string"
+          },
+          {
+            "name": "version",
+            "type": "string"
+          },
+          {
+            "name": "verifyingContract",
+            "type": "address"
+          }
+        ],
+        "Permit": [
+          {
+            "name": "spender",
+            "type": "address"
+          },
+          {
+            "name": "value",
+            "type": "uint256"
+          }
+        ]
+      },
+      "message": {
+        "spender": "0xbad0000000000000000000000000000000000bad",
+        "value": "1"
+      }
+    },
+    "expect": {
+      "decision": "sign",
+      "shows": ["USD Coin"]
+    },
+    "gap": {
+      "note": "The domain card reads \"Base · 8453\", a chain the signed domain hash does not commit to.",
+      "expect": {
+        "hides": ["Base · 8453"]
+      },
+      "fails": "hides Base · 8453"
+    }
+  },
+  {
+    "id": "eip712-unlimited-behind-zero",
+    "attack": "A benign type name with a zero top-level amount and an unlimited allowance one struct down.",
+    "method": "eth_signTypedData_v4",
+    "typedData": {
+      "domain": {
+        "name": "Vault",
+        "version": "1",
+        "chainId": 8453,
+        "verifyingContract": "0x1111111111111111111111111111111111111111"
+      },
+      "primaryType": "Greeting",
+      "types": {
+        "Greeting": [
+          {
+            "name": "tip",
+            "type": "uint256"
+          },
+          {
+            "name": "settings",
+            "type": "Settings"
+          }
+        ],
+        "Settings": [
+          {
+            "name": "spender",
+            "type": "address"
+          },
+          {
+            "name": "allowance",
+            "type": "uint256"
+          }
+        ]
+      },
+      "message": {
+        "tip": "0",
+        "settings": {
+          "spender": "0xbad0000000000000000000000000000000000bad",
+          "allowance": "115792089237316195423570985008687907853269984665640564039457584007913129639935"
+        }
+      }
+    },
+    "expect": {
+      "decision": "sign",
+      "shows": ["Greeting", "settings", "Unlimited", "0xbad0…0bad"]
+    }
+  },
+  {
+    "id": "eip712-deep-nesting",
+    "attack": "The spender sits 14 structs deep, past the depth the tree renders.",
+    "method": "eth_signTypedData_v4",
+    "typedData": {
+      "domain": {
+        "name": "Vault",
+        "version": "1",
+        "chainId": 8453,
+        "verifyingContract": "0x1111111111111111111111111111111111111111"
+      },
+      "primaryType": "Root",
+      "types": {
+        "Root": [
+          {
+            "name": "next",
+            "type": "L1"
+          }
+        ],
+        "L1": [
+          {
+            "name": "next",
+            "type": "L2"
+          }
+        ],
+        "L2": [
+          {
+            "name": "next",
+            "type": "L3"
+          }
+        ],
+        "L3": [
+          {
+            "name": "next",
+            "type": "L4"
+          }
+        ],
+        "L4": [
+          {
+            "name": "next",
+            "type": "L5"
+          }
+        ],
+        "L5": [
+          {
+            "name": "next",
+            "type": "L6"
+          }
+        ],
+        "L6": [
+          {
+            "name": "next",
+            "type": "L7"
+          }
+        ],
+        "L7": [
+          {
+            "name": "next",
+            "type": "L8"
+          }
+        ],
+        "L8": [
+          {
+            "name": "next",
+            "type": "L9"
+          }
+        ],
+        "L9": [
+          {
+            "name": "next",
+            "type": "L10"
+          }
+        ],
+        "L10": [
+          {
+            "name": "next",
+            "type": "L11"
+          }
+        ],
+        "L11": [
+          {
+            "name": "next",
+            "type": "L12"
+          }
+        ],
+        "L12": [
+          {
+            "name": "next",
+            "type": "Leaf"
+          }
+        ],
+        "Leaf": [
+          {
+            "name": "spender",
+            "type": "address"
+          }
+        ]
+      },
+      "message": {
+        "next": {
+          "next": {
+            "next": {
+              "next": {
+                "next": {
+                  "next": {
+                    "next": {
+                      "next": {
+                        "next": {
+                          "next": {
+                            "next": {
+                              "next": {
+                                "next": {
+                                  "spender": "0xbad0000000000000000000000000000000000bad"
+                                }
+                              }
+                            }
+                          }
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "expect": {
+      "decision": "sign",
+      "shows": ["Root"]
+    },
+    "gap": {
+      "note": "Eip712Tree stops at MAX_DEPTH 12 and renders \"…\"; the spender is visible nowhere.",
+      "expect": {
+        "shows": ["0xbad0…0bad"]
+      },
+      "fails": "shows 0xbad0…0bad"
+    }
+  },
+  {
+    "id": "eip712-array-flood",
+    "attack": "64 recipients with the attacker last, meant to sit past what a reviewer scrolls to. jsdom has no layout or scrolling, so this only pins that the last entry is rendered under its index; it cannot tell whether a person would reach it.",
+    "method": "eth_signTypedData_v4",
+    "typedData": {
+      "domain": {
+        "name": "Vault",
+        "version": "1",
+        "chainId": 8453,
+        "verifyingContract": "0x1111111111111111111111111111111111111111"
+      },
+      "primaryType": "Batch",
+      "types": {
+        "Batch": [
+          {
+            "name": "owner",
+            "type": "address"
+          },
+          {
+            "name": "recipients",
+            "type": "address[]"
+          }
+        ]
+      },
+      "message": {
+        "owner": "0x9fD37D2cF1b32b3f7dBae480bbd44BE3De2A9e0F",
+        "recipients": [
+          "0x0000000000000000000000000000000000000001",
+          "0x0000000000000000000000000000000000000002",
+          "0x0000000000000000000000000000000000000003",
+          "0x0000000000000000000000000000000000000004",
+          "0x0000000000000000000000000000000000000005",
+          "0x0000000000000000000000000000000000000006",
+          "0x0000000000000000000000000000000000000007",
+          "0x0000000000000000000000000000000000000008",
+          "0x0000000000000000000000000000000000000009",
+          "0x000000000000000000000000000000000000000a",
+          "0x000000000000000000000000000000000000000b",
+          "0x000000000000000000000000000000000000000c",
+          "0x000000000000000000000000000000000000000d",
+          "0x000000000000000000000000000000000000000e",
+          "0x000000000000000000000000000000000000000f",
+          "0x0000000000000000000000000000000000000010",
+          "0x0000000000000000000000000000000000000011",
+          "0x0000000000000000000000000000000000000012",
+          "0x0000000000000000000000000000000000000013",
+          "0x0000000000000000000000000000000000000014",
+          "0x0000000000000000000000000000000000000015",
+          "0x0000000000000000000000000000000000000016",
+          "0x0000000000000000000000000000000000000017",
+          "0x0000000000000000000000000000000000000018",
+          "0x0000000000000000000000000000000000000019",
+          "0x000000000000000000000000000000000000001a",
+          "0x000000000000000000000000000000000000001b",
+          "0x000000000000000000000000000000000000001c",
+          "0x000000000000000000000000000000000000001d",
+          "0x000000000000000000000000000000000000001e",
+          "0x000000000000000000000000000000000000001f",
+          "0x0000000000000000000000000000000000000020",
+          "0x0000000000000000000000000000000000000021",
+          "0x0000000000000000000000000000000000000022",
+          "0x0000000000000000000000000000000000000023",
+          "0x0000000000000000000000000000000000000024",
+          "0x0000000000000000000000000000000000000025",
+          "0x0000000000000000000000000000000000000026",
+          "0x0000000000000000000000000000000000000027",
+          "0x0000000000000000000000000000000000000028",
+          "0x0000000000000000000000000000000000000029",
+          "0x000000000000000000000000000000000000002a",
+          "0x000000000000000000000000000000000000002b",
+          "0x000000000000000000000000000000000000002c",
+          "0x000000000000000000000000000000000000002d",
+          "0x000000000000000000000000000000000000002e",
+          "0x000000000000000000000000000000000000002f",
+          "0x0000000000000000000000000000000000000030",
+          "0x0000000000000000000000000000000000000031",
+          "0x0000000000000000000000000000000000000032",
+          "0x0000000000000000000000000000000000000033",
+          "0x0000000000000000000000000000000000000034",
+          "0x0000000000000000000000000000000000000035",
+          "0x0000000000000000000000000000000000000036",
+          "0x0000000000000000000000000000000000000037",
+          "0x0000000000000000000000000000000000000038",
+          "0x0000000000000000000000000000000000000039",
+          "0x000000000000000000000000000000000000003a",
+          "0x000000000000000000000000000000000000003b",
+          "0x000000000000000000000000000000000000003c",
+          "0x000000000000000000000000000000000000003d",
+          "0x000000000000000000000000000000000000003e",
+          "0x000000000000000000000000000000000000003f",
+          "0xbad0000000000000000000000000000000000bad"
+        ]
+      }
+    },
+    "expect": {
+      "decision": "sign",
+      "shows": ["[63]", "0xbad0…0bad"]
+    }
+  },
+  {
+    "id": "eip712-vanity-address",
+    "attack": "An address sharing the first and last four hex digits of a known one. Truncation renders both identically.",
+    "method": "eth_signTypedData_v4",
+    "typedData": {
+      "domain": {
+        "name": "Vault",
+        "version": "1",
+        "chainId": 8453,
+        "verifyingContract": "0x1111111111111111111111111111111111111111"
+      },
+      "primaryType": "Transfer",
+      "types": {
+        "Transfer": [
+          {
+            "name": "to",
+            "type": "address"
+          }
+        ]
+      },
+      "message": {
+        "to": "0xbad0111111111111111111111111111111110bad"
+      }
+    },
+    "expect": {
+      "decision": "sign",
+      "shows": ["0xbad0…0bad"]
+    },
+    "gap": {
+      "note": "Only the copy button carries the full address; the screen cannot tell it from 0xbad0000…0bad.",
+      "expect": {
+        "shows": ["0xbad0111111111111111111111111111111110bad"]
+      },
+      "fails": "shows 0xbad0111111111111111111111111111111110bad"
+    }
+  },
+  {
+    "id": "eip712-homoglyph-symbol",
+    "attack": "A string field reading \"USDС\" with a Cyrillic С (U+0421).",
+    "method": "eth_signTypedData_v4",
+    "typedData": {
+      "domain": {
+        "name": "Vault",
+        "version": "1",
+        "chainId": 8453,
+        "verifyingContract": "0x1111111111111111111111111111111111111111"
+      },
+      "primaryType": "Quote",
+      "types": {
+        "Quote": [
+          {
+            "name": "token",
+            "type": "string"
+          },
+          {
+            "name": "amount",
+            "type": "uint256"
+          }
+        ]
+      },
+      "message": {
+        "token": "USDС",
+        "amount": "100"
+      }
+    },
+    "expect": {
+      "decision": "sign"
+    },
+    "gap": {
+      "note": "Rendered verbatim, indistinguishable from ASCII \"USDC\". Replace this expectation with the treatment a fix picks.",
+      "expect": {
+        "hides": ["USDС"]
+      },
+      "fails": "hides USDС"
+    }
+  },
+  {
+    "id": "eip712-bidi-override",
+    "attack": "A string field with a right-to-left override (U+202E) that reorders what the user reads.",
+    "method": "eth_signTypedData_v4",
+    "typedData": {
+      "domain": {
+        "name": "Vault",
+        "version": "1",
+        "chainId": 8453,
+        "verifyingContract": "0x1111111111111111111111111111111111111111"
+      },
+      "primaryType": "Note",
+      "types": {
+        "Note": [
+          {
+            "name": "text",
+            "type": "string"
+          }
+        ]
+      },
+      "message": {
+        "text": "pay ‮evil.example"
+      }
+    },
+    "expect": {
+      "decision": "sign"
+    },
+    "gap": {
+      "note": "sanitizeDisplayName strips bidi controls from app names but tree leaves are rendered raw.",
+      "expect": {
+        "hides": ["‮"]
+      },
+      "fails": "hides ‮"
+    }
+  },
+  {
+    "id": "eip712-unhashable-value",
+    "attack": "Parses and renders, but a uint256 holds \"abc\", so no digest exists. Reachable only by skipping the SDK.",
+    "method": "eth_signTypedData_v4",
+    "typedData": {
+      "domain": {
+        "name": "Vault",
+        "version": "1",
+        "chainId": 8453,
+        "verifyingContract": "0x1111111111111111111111111111111111111111"
+      },
+      "primaryType": "Order",
+      "types": {
+        "Order": [
+          {
+            "name": "amount",
+            "type": "uint256"
+          }
+        ]
+      },
+      "message": {
+        "amount": "abc"
+      }
+    },
+    "expect": {
+      "decision": "sign",
+      "integrity": false,
+      "prompts": false
+    },
+    "gap": {
+      "note": "Sign is offered for a payload that cannot be hashed; it fails after the click instead of before it.",
+      "expect": {
+        "decision": "blocked"
+      },
+      "fails": "decision: expected 'sign' to be 'blocked'"
+    }
+  },
+  {
+    "id": "eip712-truncated-json",
+    "attack": "Malformed: the JSON string is cut short.",
+    "method": "eth_signTypedData_v4",
+    "params": [
+      "0x9fD37D2cF1b32b3f7dBae480bbd44BE3De2A9e0F",
+      "{\"domain\":{\"name\":\"USD Coin\"},\"primaryType\":\"Permit\",\"types\":{\"Permit\":["
+    ],
+    "expect": {
+      "decision": "blocked",
+      "shows": ["Failed to parse typed data"]
+    }
+  },
+  {
+    "id": "eip712-primary-type-undefined",
+    "attack": "Malformed: primaryType names a type that is not defined.",
+    "method": "eth_signTypedData_v4",
+    "params": [
+      "0x9fD37D2cF1b32b3f7dBae480bbd44BE3De2A9e0F",
+      "{\"domain\":{\"name\":\"Vault\",\"version\":\"1\",\"chainId\":8453,\"verifyingContract\":\"0x1111111111111111111111111111111111111111\"},\"primaryType\":\"Permit\",\"types\":{\"Other\":[]},\"message\":{}}"
+    ],
+    "expect": {
+      "decision": "blocked",
+      "shows": ["Failed to parse typed data"]
+    }
+  },
+  {
+    "id": "eip712-types-is-array",
+    "attack": "Malformed: types is an array.",
+    "method": "eth_signTypedData_v4",
+    "params": [
+      "0x9fD37D2cF1b32b3f7dBae480bbd44BE3De2A9e0F",
+      "{\"domain\":{\"name\":\"Vault\",\"version\":\"1\",\"chainId\":8453,\"verifyingContract\":\"0x1111111111111111111111111111111111111111\"},\"primaryType\":\"Permit\",\"types\":[],\"message\":{}}"
+    ],
+    "expect": {
+      "decision": "blocked",
+      "shows": ["Failed to parse typed data"]
+    }
+  },
+  {
+    "id": "eip712-object-instead-of-string",
+    "attack": "Malformed: eth_signTypedData_v4 with the payload as an object, not the JSON string the spec requires.",
+    "method": "eth_signTypedData_v4",
+    "params": [
+      "0x9fD37D2cF1b32b3f7dBae480bbd44BE3De2A9e0F",
+      {
+        "domain": {
+          "name": "Vault",
+          "version": "1",
+          "chainId": 8453,
+          "verifyingContract": "0x1111111111111111111111111111111111111111"
+        },
+        "primaryType": "Order",
+        "types": {
+          "Order": []
+        },
+        "message": {}
+      }
+    ],
+    "expect": {
+      "decision": "blocked",
+      "shows": ["Failed to parse typed data"]
+    }
+  },
+  {
+    "id": "eip712-missing-params",
+    "attack": "Malformed: no params at all.",
+    "method": "eth_signTypedData_v4",
+    "params": [],
+    "expect": {
+      "decision": "blocked"
+    }
+  },
+  {
+    "id": "eip712-nested-anchor",
+    "attack": "None. A nested struct whose dependency (Asset) sorts before the primary type (Transfer), so encodeType ordering matters. Challenge computed with cast (see README).",
+    "method": "eth_signTypedData_v4",
+    "typedData": {
+      "domain": {
+        "name": "Vault",
+        "version": "1",
+        "chainId": 8453,
+        "verifyingContract": "0x1111111111111111111111111111111111111111"
+      },
+      "primaryType": "Transfer",
+      "types": {
+        "EIP712Domain": [
+          {
+            "name": "name",
+            "type": "string"
+          },
+          {
+            "name": "version",
+            "type": "string"
+          },
+          {
+            "name": "chainId",
+            "type": "uint256"
+          },
+          {
+            "name": "verifyingContract",
+            "type": "address"
+          }
+        ],
+        "Transfer": [
+          {
+            "name": "asset",
+            "type": "Asset"
+          },
+          {
+            "name": "to",
+            "type": "address"
+          }
+        ],
+        "Asset": [
+          {
+            "name": "token",
+            "type": "address"
+          },
+          {
+            "name": "amount",
+            "type": "uint256"
+          }
+        ]
+      },
+      "message": {
+        "asset": {
+          "token": "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913",
+          "amount": "1000000"
+        },
+        "to": "0xbad0000000000000000000000000000000000bad"
+      }
+    },
+    "expect": {
+      "decision": "sign",
+      "pairs": [
+        ["to", "0xbad0…0bad"],
+        ["amount", "1,000,000"],
+        ["token", "0x8335…2913"]
+      ],
+      "challenge": "0xad5ce8e8a6ac5c78ef1add3ebcd6494c15ef66820a4420b9589ab925341ac230"
+    }
+  },
+  {
+    "id": "eip712-arrays-strings-anchor",
+    "attack": "None. A string, a string[] and a uint256[] in one struct, each hashed differently by EIP-712. Challenge computed with cast (see README).",
+    "method": "eth_signTypedData_v4",
+    "typedData": {
+      "domain": {
+        "name": "Vault",
+        "version": "1",
+        "chainId": 8453,
+        "verifyingContract": "0x1111111111111111111111111111111111111111"
+      },
+      "primaryType": "Note",
+      "types": {
+        "EIP712Domain": [
+          {
+            "name": "name",
+            "type": "string"
+          },
+          {
+            "name": "version",
+            "type": "string"
+          },
+          {
+            "name": "chainId",
+            "type": "uint256"
+          },
+          {
+            "name": "verifyingContract",
+            "type": "address"
+          }
+        ],
+        "Note": [
+          {
+            "name": "text",
+            "type": "string"
+          },
+          {
+            "name": "tags",
+            "type": "string[]"
+          },
+          {
+            "name": "ids",
+            "type": "uint256[]"
+          }
+        ]
+      },
+      "message": {
+        "text": "gm, café",
+        "tags": ["alpha", "beta"],
+        "ids": ["1", "2"]
+      }
+    },
+    "expect": {
+      "decision": "sign",
+      "pairs": [
+        ["text", "gm, café"],
+        ["[0]", "alpha"],
+        ["[1]", "beta"]
+      ],
+      "challenge": "0x99f6953854a89f354926800573d70f6cc5842427106a6e14763f934f567cfd89"
+    }
+  }
+]

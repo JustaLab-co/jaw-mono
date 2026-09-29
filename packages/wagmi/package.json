@@ -1,7 +1,7 @@
 {
   "name": "@jaw.id/wagmi",
   "description": "Wagmi connector and React hooks for JAW.id.",
-  "version": "1.1.4",
+  "version": "1.1.8",
   "license": "Apache-2.0",
   "type": "module",
   "main": "./dist/index.js",
@@ -32,8 +32,30 @@
     "cjs-error.cjs",
     "!**/*.tsbuildinfo"
   ],
+  "nx": {
+    "targets": {
+      "test": {
+        "dependsOn": [
+          "^generate-sdk-info"
+        ],
+        "inputs": [
+          "default",
+          "^production",
+          "{workspaceRoot}/vitest.setup.localstorage.ts",
+          {
+            "externalDependencies": [
+              "vitest"
+            ]
+          },
+          {
+            "env": "CI"
+          }
+        ]
+      }
+    }
+  },
   "dependencies": {
-    "@jaw.id/core": "1.5.0",
+    "@jaw.id/core": "1.5.4",
     "@wagmi/core": "^3.0.0",
     "tslib": "^2.3.0",
     "viem": "^2.56.7"

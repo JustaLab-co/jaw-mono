@@ -6,6 +6,11 @@
 const tokenPriceCache: Map<string, { price: number; timestamp: number }> = new Map();
 const PRICE_CACHE_TTL = 5 * 60 * 1000; // 5 minutes
 
+// Symbols Binance doesn't list, priced as the asset they are pegged 1:1 to
+const PRICE_SYMBOL_ALIASES: Record<string, string> = {
+  CBTC: 'BTC',
+};
+
 /**
  * Fetches the current price in USD for a token by its symbol from Binance API
  * Results are cached for 5 minutes per symbol to reduce API calls
@@ -16,7 +21,8 @@ export async function fetchTokenPrice(symbol: string): Promise<number> {
   if (!symbol) return 0;
 
   // Normalize symbol (remove special characters like ₮)
-  const normalizedSymbol = symbol.replace(/[₮]/g, 'T').toUpperCase();
+  const upperSymbol = symbol.replace(/[₮]/g, 'T').toUpperCase();
+  const normalizedSymbol = PRICE_SYMBOL_ALIASES[upperSymbol] ?? upperSymbol;
 
   const cached = tokenPriceCache.get(normalizedSymbol);
   if (cached && Date.now() - cached.timestamp < PRICE_CACHE_TTL) {

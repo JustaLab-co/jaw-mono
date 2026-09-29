@@ -180,6 +180,15 @@ export async function fetchTokenQuotes(
         body: JSON.stringify(requestBody),
     });
 
+    // A refusal or a server error is not a JSON-RPC envelope, so without this it
+    // surfaced as "no quotes array" and hid the status the proxy answered with.
+    if (!response.ok) {
+        const body = await response.text();
+        throw new Error(
+            `pimlico_getTokenQuotes failed with ${response.status}${body ? `: ${body.slice(0, 200)}` : ''}`
+        );
+    }
+
     const data = await response.json();
 
     if (data.error) {

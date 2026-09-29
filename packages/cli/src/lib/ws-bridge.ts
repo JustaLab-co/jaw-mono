@@ -321,21 +321,27 @@ export class WSBridge {
           this.handleBrowserDisconnect();
         } else if (msg.type === 'key_exchange' && expectingKeyExchange) {
           expectingKeyExchange = false;
-          // The key comes off the network. One that cannot be used rejects the
-          // connect here, rather than throwing in a handler nothing awaits.
+          const peerKey = msg.publicKey;
+          // This frame is plaintext from the relay. A key that cannot be used
+          // fails a connect still in flight, instead of waiting out the timer.
+          // Once connected it is dropped and the current secret kept.
+          let secret: CKey;
           try {
-            const peerKey = msg.publicKey;
             if (typeof peerKey !== 'string' || !/^([0-9a-fA-F]{2})+$/.test(peerKey)) {
               throw new Error('Relay sent an invalid key_exchange public key.');
             }
-            await this.deriveSecret(peerKey);
-            onPeerKeyChanged?.(peerKey);
-            await onBrowserReady();
+            secret = await this.secretWith(peerKey);
           } catch (err) {
+            if (resolved) return;
             clearTimeout(timer);
             ws.close();
             reject(err);
+            return;
           }
+          this.peerPublicKeyHex = peerKey;
+          this.sharedSecret = secret;
+          onPeerKeyChanged?.(peerKey);
+          await onBrowserReady();
         }
       });
 
@@ -533,10 +539,14 @@ export class WSBridge {
 
   /** Key and secret are stored together, and only once the derivation worked. */
   private async deriveSecret(peerHex: string): Promise<void> {
+    this.sharedSecret = await this.secretWith(peerHex);
+    this.peerPublicKeyHex = peerHex;
+  }
+
+  private async secretWith(peerHex: string): Promise<CKey> {
     const privateKey = await importKeyFromHex('private', this.privateKeyHex);
     const peerPublicKey = await importKeyFromHex('public', peerHex);
-    this.sharedSecret = await deriveSharedSecret(privateKey, peerPublicKey);
-    this.peerPublicKeyHex = peerHex;
+    return deriveSharedSecret(privateKey, peerPublicKey);
   }
 }
 

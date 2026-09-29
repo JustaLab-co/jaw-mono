@@ -1,3 +1,43 @@
+## 1.5.4 (2026-09-29)
+
+### 🩹 Fixes
+
+- **cli:** drop relay key exchanges whose key does not import ([#353](https://github.com/JustaLab-co/jaw-mono/pull/353))
+
+### ❤️ Thank You
+
+- Mariano Aguero @mariano-aguero
+
+## 1.5.3 (2026-09-29)
+
+### 🩹 Fixes
+
+- **core:** encode erc-7739 typed data signatures as solady expects ([#351](https://github.com/JustaLab-co/jaw-mono/pull/351))
+
+### ❤️ Thank You
+
+- Mariano Aguero @mariano-aguero
+
+## 1.5.2 (2026-09-29)
+
+### 🩹 Fixes
+
+- add Citrea mainnet support ([#359](https://github.com/JustaLab-co/jaw-mono/pull/359))
+
+### ❤️ Thank You
+
+- Ghadi @Ghadi8
+
+## 1.5.1 (2026-09-24)
+
+### 🩹 Fixes
+
+- **core:** stop reporting landed user operations as failed ([#357](https://github.com/JustaLab-co/jaw-mono/pull/357))
+
+### ❤️ Thank You
+
+- Mariano Aguero @mariano-aguero
+
 ## 1.5.0 (2026-09-23)
 
 ### 🚀 Features

@@ -266,4 +266,15 @@ describe('fetchTokenQuotes and the calling dApp', () => {
 
         expect(headersSent()['x-dapp-origin']).toBeUndefined();
     });
+
+    it('reports the status when the proxy answers with an error', async () => {
+        vi.stubGlobal(
+            'fetch',
+            vi.fn(async () => new Response('{"statusCode":500,"message":"Internal server error"}', { status: 500 }))
+        );
+
+        await expect(fetchTokenQuotes(`${JAW_PAYMASTER_URL}?chainId=8453`, 8453, ['0xabc'])).rejects.toThrow(
+            'pimlico_getTokenQuotes failed with 500: {"statusCode":500,"message":"Internal server error"}'
+        );
+    });
 });
