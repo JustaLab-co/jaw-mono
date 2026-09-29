@@ -258,8 +258,17 @@ export class WSBridge {
         } else if (msg.type === 'key_exchange' && expectingKeyExchange) {
           expectingKeyExchange = false;
           const peerKey = msg.publicKey as string;
+          // This frame is plaintext from the relay, and a throw here would
+          // escape as an unhandled rejection and take the process down. A key
+          // that does not import is dropped and the current secret kept.
+          let secret: CKey;
+          try {
+            secret = await this.secretWith(peerKey);
+          } catch {
+            return;
+          }
           this.peerPublicKeyHex = peerKey;
-          await this.deriveSecret();
+          this.sharedSecret = secret;
           onPeerKeyChanged?.(peerKey);
           await onBrowserReady();
         }
@@ -458,9 +467,13 @@ export class WSBridge {
 
   private async deriveSecret(): Promise<void> {
     if (!this.peerPublicKeyHex) return;
+    this.sharedSecret = await this.secretWith(this.peerPublicKeyHex);
+  }
+
+  private async secretWith(peerPublicKeyHex: string): Promise<CKey> {
     const privateKey = await importKeyFromHex('private', this.privateKeyHex);
-    const peerPublicKey = await importKeyFromHex('public', this.peerPublicKeyHex);
-    this.sharedSecret = await deriveSharedSecret(privateKey, peerPublicKey);
+    const peerPublicKey = await importKeyFromHex('public', peerPublicKeyHex);
+    return deriveSharedSecret(privateKey, peerPublicKey);
   }
 }
 
