@@ -78,8 +78,6 @@ In the nested anchor EIP-712 sorts `Asset` ahead of `Transfer` inside the `Typed
 
 Recorded as fixtures: `eip712-domain-type-omits-chain-id`, `eip712-deep-nesting`, `eip712-vanity-address`, `eip712-homoglyph-symbol`, `eip712-bidi-override`, `eip712-unhashable-value`, `siwe-uri-on-attacker-host`, `siwe-hex-encoded`, `personal-zero-width`, and the passkey cancellation code in `corpus.test.tsx`.
 
-Not covered by a fixture: viem's `wrapTypedDataSignature` emits the ERC-7739 contents type in implicit mode, primary type first. When a dependency sorts before the primary type (Permit2's `PermitSingle` with `PermitDetails`), the contract derives a different type string from what was hashed and the signature does not verify. The corpus stops at the passkey challenge and does not decode the signature, so it cannot see this.
-
 ## Limits
 
 jsdom has no layout, so nothing here can tell whether content is scrolled out of view or clipped; `eip712-array-flood` only pins that the last entry is rendered. Tooltips are read from `aria-label`, which is what a screen reader announces, not what a sighted user sees without hovering.
