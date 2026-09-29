@@ -1,3 +1,13 @@
+## 1.5.3 (2026-09-29)
+
+### 🩹 Fixes
+
+- **core:** encode erc-7739 typed data signatures as solady expects ([#351](https://github.com/JustaLab-co/jaw-mono/pull/351))
+
+### ❤️ Thank You
+
+- Mariano Aguero @mariano-aguero
+
 ## 1.5.2 (2026-09-29)
 
 ### 🩹 Fixes
