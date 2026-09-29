@@ -130,12 +130,9 @@ function SpendRow({
  */
 export function SpenderPrefundNotice({
   prefund,
-  spenderLabel,
   isLoading,
 }: {
   prefund?: SpenderPrefundDisplay | null;
-  /** How the spender reads elsewhere on the screen: its name when it resolved, else its address. */
-  spenderLabel: string;
   isLoading?: boolean;
 }) {
   if (isLoading) {
@@ -144,7 +141,7 @@ export function SpenderPrefundNotice({
         <div className="pl-3">
           <Eyebrow>Sent now</Eyebrow>
         </div>
-        <div className="border-border rounded-box border px-3 py-2">
+        <div className="border-warning/40 bg-warning/10 rounded-box border px-3 py-2">
           <Skeleton className="bg-muted rounded-xs h-3.5 w-32" />
         </div>
       </div>
@@ -166,9 +163,10 @@ export function SpenderPrefundNotice({
       <div className="pl-3">
         <Eyebrow>Sent now</Eyebrow>
       </div>
-      <div className="border-border rounded-box flex flex-col gap-1 border px-3 py-2">
-        <span className="text-foreground text-value break-all font-semibold">
-          {prefund.amount} {prefund.symbol} → {spenderLabel}
+      <div className="border-warning/40 bg-warning/10 rounded-box flex flex-col gap-1 border px-3 py-2">
+        <span className="text-warning text-value flex items-center gap-1.5 break-all font-semibold">
+          <TriangleAlert className="size-3.5 flex-none" strokeWidth={2} />
+          {prefund.amount} {prefund.symbol}
         </span>
         <span className="text-muted-foreground text-body-sm">
           So the spender can pay fees for its first transactions. It leaves your account immediately, and revoking the

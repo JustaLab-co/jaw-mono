@@ -316,13 +316,7 @@ export const PermissionDialog = ({
               />
             )}
 
-            {isGrant && (
-              <SpenderPrefundNotice
-                prefund={prefund}
-                spenderLabel={spenderAddress ? displayAddress(spenderAddress) : 'the spender'}
-                isLoading={prefundLoading}
-              />
-            )}
+            {isGrant && <SpenderPrefundNotice prefund={prefund} isLoading={prefundLoading} />}
 
             {metaRows.length > 0 && <MetaCard rows={metaRows} />}
 

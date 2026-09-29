@@ -15,15 +15,16 @@ describe('the grant screen states the transfer to the spender', () => {
   const markup = (props: Parameters<typeof SpenderPrefundNotice>[0]) =>
     renderToStaticMarkup(<SpenderPrefundNotice {...props} />);
 
-  it('names the amount, the token and where it goes', () => {
-    const html = markup({ prefund: { kind: 'transfer', amount: '0.0188', symbol: 'USDC' }, spenderLabel: 'agent.eth' });
+  it('names the amount and the token, not the spender the screen already shows', () => {
+    const html = markup({ prefund: { kind: 'transfer', amount: '0.0188', symbol: 'USDC' } });
 
     expect(html).toContain('Sent now');
-    expect(html).toContain('0.0188 USDC → agent.eth');
+    expect(html).toContain('0.0188 USDC');
+    expect(html).not.toContain('→');
   });
 
   it('says that revoking does not return it', () => {
-    const html = markup({ prefund: { kind: 'transfer', amount: '0.0188', symbol: 'USDC' }, spenderLabel: 'agent.eth' });
+    const html = markup({ prefund: { kind: 'transfer', amount: '0.0188', symbol: 'USDC' } });
 
     expect(html).toContain('It leaves your account immediately');
     expect(html).toContain('revoking the permission doesn&#x27;t return it');
@@ -32,7 +33,6 @@ describe('the grant screen states the transfer to the spender', () => {
   it('names the decline a person can act on, by granting more', () => {
     const html = markup({
       prefund: { kind: 'below-one-operation', operationCost: '6', symbol: 'USDC' },
-      spenderLabel: 'agent.eth',
     });
 
     expect(html).toContain('won&#x27;t be funded');
@@ -41,11 +41,11 @@ describe('the grant screen states the transfer to the spender', () => {
   });
 
   it('holds the section open while the transfer is being sized', () => {
-    expect(markup({ prefund: null, spenderLabel: 'agent.eth', isLoading: true })).toContain('Sent now');
+    expect(markup({ prefund: null, isLoading: true })).toContain('Sent now');
   });
 
   it('renders nothing when there is no prefund', () => {
-    expect(markup({ prefund: null, spenderLabel: 'agent.eth' })).toBe('');
+    expect(markup({ prefund: null })).toBe('');
   });
 });
 
