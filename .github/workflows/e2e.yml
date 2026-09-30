@@ -9,7 +9,8 @@ name: E2E
 #
 # iframe (manual): the same suites over https, which is what lets the SDK use
 # the embedded iframe, on chromium, firefox and webkit. Heavier (three browsers
-# and dev servers), so it runs on demand from the Actions tab.
+# and dev servers), so it runs on demand from the Actions tab, together with
+# connect-flows.
 
 on:
   pull_request:
@@ -29,7 +30,6 @@ permissions:
 
 jobs:
   connect-flows:
-    if: github.event_name == 'pull_request'
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
