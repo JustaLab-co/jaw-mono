@@ -478,6 +478,76 @@ describe('PopupTransport', () => {
         });
     });
 
+    // A dApp page served with `Referrer-Policy: no-referrer` (or `same-origin`)
+    // opens the popup with an empty document.referrer. The keys popup then has
+    // no origin to answer to and holds PopupLoaded until the dApp's window
+    // sends it something it can take the origin from.
+    describe('popup that cannot see the dApp origin', () => {
+        let posted: Message[];
+
+        beforeEach(() => {
+            vi.useFakeTimers();
+            posted = [];
+            let originKnown = false;
+            // Replies land on a later task, as they do from a real window.
+            const reply = (data: Record<string, unknown>) =>
+                setTimeout(() => dispatchMessageEvent({ ...data, origin: urlOrigin } as never), 10);
+            mockPopup.postMessage = vi.fn((message: Message) => {
+                posted.push(message);
+                if (!originKnown) {
+                    originKnown = true;
+                    reply(popupLoadedMessage);
+                    return;
+                }
+                if ((message.data as { version?: string } | undefined)?.version) {
+                    reply(popupReadyMessage);
+                }
+            }) as Window['postMessage'];
+        });
+
+        afterEach(() => {
+            vi.useRealTimers();
+        });
+
+        it('completes the handshake', async () => {
+            let settled = false;
+            const ready = transport.ensureReady().finally(() => {
+                settled = true;
+            });
+
+            await vi.advanceTimersByTimeAsync(5_000);
+
+            expect(settled).toBe(true);
+            await expect(ready).resolves.toBe(mockPopup);
+        });
+
+        it('sends nothing but the config after the popup loads, and no data before it', async () => {
+            const ready = transport.ensureReady();
+            await vi.advanceTimersByTimeAsync(5_000);
+            await ready;
+
+            const configIndex = posted.findIndex((m) => (m.data as { version?: string } | undefined)?.version);
+            expect(configIndex).toBeGreaterThan(-1);
+            expect(posted.slice(0, configIndex).every((m) => m.data === undefined)).toBe(true);
+
+            const afterHandshake = posted.length;
+            await vi.advanceTimersByTimeAsync(10_000);
+            expect(posted.length).toBe(afterHandshake);
+        });
+
+        it('stops reaching out once the transport is destroyed', async () => {
+            mockPopup.postMessage = vi.fn() as Window['postMessage'];
+            transport.ensureReady().catch(() => undefined);
+            await vi.advanceTimersByTimeAsync(2_000);
+
+            transport.destroy();
+            const afterDestroy = (mockPopup.postMessage as ReturnType<typeof vi.fn>).mock.calls.length;
+            await vi.advanceTimersByTimeAsync(10_000);
+
+            expect((mockPopup.postMessage as ReturnType<typeof vi.fn>).mock.calls.length).toBe(afterDestroy);
+        });
+    });
+
     describe('PopupUnload event', () => {
         it('should destroy the transport when PopupUnload is received', async () => {
             queueMessageEvent(popupLoadedMessage);

@@ -9,6 +9,7 @@ import type { JawTheme } from '../ui/theme.js';
 const POPUP_WIDTH = 420;
 const POPUP_HEIGHT = 730;
 const HANDSHAKE_TIMEOUT = 60_000;
+const OPENER_PING_INTERVAL_MS = 500;
 
 /**
  * Popup transport: window.open to the keys URL.
@@ -23,6 +24,7 @@ export class PopupTransport implements Transport {
     private readonly url: URL;
     private readonly options: TransportOptions;
     private popup: Window | null = null;
+    private openerPing: ReturnType<typeof setInterval> | undefined;
     private listeners = new Map<(_: MessageEvent) => void, { reject: (_: Error) => void }>();
 
     constructor(options: TransportOptions) {
@@ -55,7 +57,22 @@ export class PopupTransport implements Transport {
                 /* empty */
             });
 
-        return this.onMessage<ConfigMessage>(({ event }) => event === 'PopupLoaded', { timeout: HANDSHAKE_TIMEOUT })
+        // Keys takes the dApp origin from document.referrer, and a dApp served
+        // with `Referrer-Policy: no-referrer` or `same-origin` leaves it empty.
+        // The popup then holds PopupLoaded until a message from this window
+        // gives it the origin, while the config below waits on PopupLoaded, so
+        // neither side would ever speak. Ping until it loads: the ping carries
+        // nothing, and the browser, not the ping, supplies the origin it reads.
+        this.startOpenerPing();
+        const loaded = this.onMessage<ConfigMessage>(({ event }) => event === 'PopupLoaded', {
+            timeout: HANDSHAKE_TIMEOUT,
+        });
+        loaded.then(
+            () => this.stopOpenerPing(),
+            () => this.stopOpenerPing()
+        );
+
+        return loaded
             .then((message) => {
                 this.postToTarget({
                     requestId: message.id,
@@ -176,6 +193,7 @@ export class PopupTransport implements Transport {
      * Close the popup, reject all pending listeners, release resources.
      */
     destroy(): void {
+        this.stopOpenerPing();
         if (this.popup && !this.popup.closed) {
             this.popup.close();
         }
@@ -194,6 +212,25 @@ export class PopupTransport implements Transport {
     private postToTarget(message: Message): void {
         if (!this.popup) throw standardErrors.rpc.internal();
         this.popup.postMessage(message, this.url.origin);
+    }
+
+    private startOpenerPing(): void {
+        this.stopOpenerPing();
+        this.openerPing = setInterval(() => {
+            if (!this.popup || this.popup.closed) {
+                this.stopOpenerPing();
+                return;
+            }
+            // Dropped by the browser while the popup is still on about:blank,
+            // since the target origin does not match yet.
+            const ping: ConfigMessage = { event: 'OpenerPing' };
+            this.popup.postMessage(ping, this.url.origin);
+        }, OPENER_PING_INTERVAL_MS);
+    }
+
+    private stopOpenerPing(): void {
+        clearInterval(this.openerPing);
+        this.openerPing = undefined;
     }
 
     private openPopup(): Window {

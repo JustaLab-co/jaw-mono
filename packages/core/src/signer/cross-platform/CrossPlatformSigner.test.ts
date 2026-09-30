@@ -1055,10 +1055,12 @@ describe('CrossPlatformSigner', () => {
             // Assert
             expect(result).toEqual(['0x1234567890123456789012345678901234567890']);
             // eth_requestAccounts routes through the wallet_connect flow when
-            // unauthenticated, but that request is sent as an encrypted envelope,
-            // which routes method-less — so the ready must be method-less too.
-            expect(mockCommunicator.waitForPopupLoaded).toHaveBeenCalledWith();
-            expect(mockCommunicator.postRequestAndWaitForResponse).toHaveBeenCalled();
+            // unauthenticated, which is a handshake: keys shows its account
+            // screen only for one, so it routes by method like a first connect.
+            expect(mockCommunicator.waitForPopupLoaded).toHaveBeenCalledWith('wallet_connect');
+            const message = mockCommunicator.postRequestAndWaitForResponse.mock.calls[0][0] as RPCRequestMessage;
+            expect(message.content).toMatchObject({ handshake: { method: 'wallet_connect' } });
+            expect(message.content).not.toHaveProperty('encrypted');
         });
 
         it('should trigger accountsChanged callback after eth_requestAccounts', async () => {
@@ -1414,6 +1416,40 @@ describe('CrossPlatformSigner', () => {
 
             // Assert
             expect(mockCallback).toHaveBeenCalledWith('connect', { chainId: '0x1' });
+        });
+
+        // A connect with no cached answer used to go out encrypted over the old
+        // session. keys only shows its account screen for a handshake, so the
+        // dialog sat on the loading skeleton and the connect never settled.
+        // New capabilities skip the cache on a live session too.
+        const siwe = { signInWithEthereum: { nonce: 'nonce', chainId: '0x1' } };
+        it.each([
+            ['the session expired', { connectedAt: Date.now() - 2 * 86400 * 1000 }, undefined, {}],
+            ['authTTL is 0', { connectedAt: Date.now() }, 0, {}],
+            ['a live session asks for new capabilities', { connectedAt: Date.now() }, undefined, siwe],
+        ])('reconnects with a handshake when %s', async (_case, account, authTTL, capabilities) => {
+            vi.spyOn(store.account, 'get').mockReturnValue({
+                accounts: ['0x1234567890123456789012345678901234567890'],
+                chain: { id: 1 },
+                ...account,
+            });
+            vi.spyOn(store.config, 'get').mockReturnValue({
+                metadata: mockMetadata,
+                version: '1.0.0',
+                preference: { authTTL },
+            });
+
+            const result = await signer.request({
+                method: 'wallet_connect',
+                params: [{ version: '1.0', capabilities }],
+            });
+
+            expect(result).toEqual({ accounts: [{ address: '0x1234567890123456789012345678901234567890' }] });
+            expect(mockCommunicator.postRequestAndWaitForResponse).toHaveBeenCalledTimes(1);
+            const message = mockCommunicator.postRequestAndWaitForResponse.mock.calls[0][0] as RPCRequestMessage;
+            expect(message.content).toMatchObject({ handshake: { method: 'wallet_connect' } });
+            expect(message.content).not.toHaveProperty('encrypted');
+            expect(mockKeyManager.setPeerPublicKey).toHaveBeenCalled();
         });
     });
 
@@ -1835,9 +1871,11 @@ describe('CrossPlatformSigner', () => {
             expect(result).toEqual({
                 accounts: [{ address: '0x1234567890123456789012345678901234567890' }],
             });
-            // Unauthenticated wallet_connect is still sent as an encrypted
-            // envelope → method-less ready, matching send-time routing.
-            expect(mockCommunicator.waitForPopupLoaded).toHaveBeenCalledWith();
+            // Unauthenticated wallet_connect is a handshake, routed by method.
+            expect(mockCommunicator.waitForPopupLoaded).toHaveBeenCalledWith('wallet_connect');
+            const message = mockCommunicator.postRequestAndWaitForResponse.mock.calls[0][0] as RPCRequestMessage;
+            expect(message.content).toMatchObject({ handshake: { method: 'wallet_connect' } });
+            expect(message.content).not.toHaveProperty('encrypted');
         });
     });
 

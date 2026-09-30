@@ -80,34 +80,19 @@ export class CrossPlatformSigner extends JAWSigner {
             this.emitConnect();
             return cachedResponse;
         }
-
-        // Ready the routed transport before async calls. No method here: the
-        // outgoing message is an encrypted envelope, which routes method-less
-        // (getRouteContext) — passing the plaintext method would ready a
-        // different transport than the send uses (on Safari, wallet_connect
-        // would open a popup the encrypted request never reaches).
-        await this.communicator.waitForPopupLoaded?.();
-
-        // Validate and inject capabilities using base class method. This
-        // returns a new object, so carry the caller's correlation id across.
-        const modifiedRequest = this.validateAndInjectCapabilities(request);
-
-        this.emitConnect();
-        return this.sendRequestToPopup(modifiedRequest, undefined, false, this.getCorrelationId(request));
+        return this.handleWalletConnectUnauthenticated(request);
     }
 
     protected override async handleWalletConnectUnauthenticated(request: RequestArguments): Promise<unknown> {
-        // Ready the routed transport before async calls. No method here: the
-        // outgoing message is an encrypted envelope, which routes method-less
-        // (getRouteContext) — passing the plaintext method would ready a
-        // different transport than the send uses (on Safari, wallet_connect
-        // would open a popup the encrypted request never reaches).
-        await this.communicator.waitForPopupLoaded?.();
-
-        // Validate and inject capabilities using base class method. This
-        // returns a new object, so carry the caller's correlation id across.
-        const modifiedRequest = this.validateAndInjectCapabilities(request);
-        return this.sendRequestToPopup(modifiedRequest, undefined, false, this.getCorrelationId(request));
+        // A connect with no cached answer (expired session, authTTL 0, or new
+        // capabilities) is a fresh handshake, as on a first visit. keys shows
+        // its account screen only for a handshake, so the same request sent
+        // encrypted over the old session left it on the loading skeleton.
+        // Validated first so a malformed request fails before a window opens.
+        this.validateAndInjectCapabilities(request);
+        await this.handshake(request);
+        this.emitConnect();
+        return this.getCachedWalletConnectResponse(request);
     }
 
     protected override async handleSigningRequest(
