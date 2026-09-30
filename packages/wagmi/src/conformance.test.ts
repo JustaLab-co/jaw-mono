@@ -193,11 +193,10 @@ describe('wagmi conformance against a real core', () => {
       expect(user.seen).toHaveLength(1);
     });
 
-    // Known gap in core. The expiry check empties the restored signer's
-    // accounts but keeps the signer, so the next silent read falls through to
-    // handleUnauthenticatedRequest and is refused with 4100 instead of
-    // answering []. Turn this into a plain `it` once core is fixed.
-    it.fails('keeps answering eth_accounts with [] after the expiry', async () => {
+    // The expiry check empties the restored signer's accounts, and the provider
+    // then drops that signer, so the next silent read is answered as a first
+    // visit ([]) rather than refused with 4100.
+    it('keeps answering eth_accounts with [] after the expiry', async () => {
       const reloaded = await reloadExpired();
 
       expect(await reloaded.provider.request({ method: 'eth_accounts' })).toEqual([]);

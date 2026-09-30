@@ -308,7 +308,9 @@ export type ConfigEvent = 'PopupLoaded' | 'PopupUnload' | 'PopupReady' | 'select
 /** keys -> SDK: connected account hint, persisted dApp-side to survive partitioned/ephemeral iframe storage */
 | 'AccountHint'
 /** SDK -> keys: embedded dialog shown/hidden; drives the keys app's enter animation (mobile bottom sheet) */
-| 'DialogVisibility';
+| 'DialogVisibility'
+/** SDK -> keys: carries nothing; lets a popup opened without a referrer learn the opener's origin from the event */
+| 'OpenerPing';
 
 // @public (undocumented)
 export interface ConfigMessage extends Message {
