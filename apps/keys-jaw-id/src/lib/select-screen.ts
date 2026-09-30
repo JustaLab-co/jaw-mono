@@ -98,3 +98,17 @@ export function selectScreen({ requestType, phase, isAuthenticated }: SelectScre
       return { kind: 'onboarding' };
   }
 }
+
+/**
+ * Whether a request that just became pending needs its handler to put the
+ * account screen up. The loading skeleton is only a waiting room: a request that
+ * would render it has nothing else to move the dialog on, and neither side times
+ * out. Two do: a connect sent encrypted (SDKs that predate the handshake-only
+ * connect send one once their cached connection expires), and a modal request on
+ * a session with no signed-in account. The chain id is answered by an effect with
+ * no screen of its own.
+ */
+export function needsAccountScreen(input: SelectScreenInput): boolean {
+  if (input.requestType === SDKRequestType.CHAIN_ID) return false;
+  return selectScreen(input).kind === 'loading';
+}

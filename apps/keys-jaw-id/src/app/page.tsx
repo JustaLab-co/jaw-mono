@@ -4,7 +4,7 @@ import { useCallback, useEffect, useState, useRef, type MutableRefObject } from 
 import { debugLog } from '../lib/debug-log';
 import { createFlowLock } from '../lib/flow-lock';
 import { buildHandshakeFailure, routeHandshake, routeOwnsScreen } from '../lib/handshake-route';
-import { selectScreen, type Phase } from '../lib/select-screen';
+import { needsAccountScreen, selectScreen, type Phase } from '../lib/select-screen';
 import { RequestModals } from '../components/RequestModals';
 import { extractTransactionData } from '../lib/tx-handler';
 import type { TransactionRequestData } from '../components/TransactionModal';
@@ -408,7 +408,8 @@ function KeysJawIdAppContent({
         // passkey screen) must survive. Finished from the moment the response was
         // handed off, not when the tick stops: the SDK does not serialize requests,
         // so a new one can genuinely arrive mid-tick.
-        if (flowLock.isFinished(phaseRef.current)) {
+        const startsFlow = flowLock.isFinished(phaseRef.current);
+        if (startsFlow) {
           setError(null);
           setPendingRequest(null);
           // The skeleton, not 'working': the handler below has real work to do
@@ -427,7 +428,7 @@ function KeysJawIdAppContent({
 
         // Handle encrypted request
         if ('encrypted' in rpcMessage.content) {
-          handleEncryptedRequest(rpcMessage);
+          handleEncryptedRequest(rpcMessage, startsFlow);
         }
       }
     });
@@ -722,7 +723,7 @@ function KeysJawIdAppContent({
   };
 
   // Handle encrypted request
-  const handleEncryptedRequest = async (request: RPCRequestMessage) => {
+  const handleEncryptedRequest = async (request: RPCRequestMessage, startsFlow: boolean) => {
     // Claimed, never refused: an encrypted request is the dApp's only copy of
     // that call, so it must be served. The claim is what makes a *handshake*
     // arriving mid-transaction refusable, and what lets the dismissal backstop
@@ -912,8 +913,21 @@ function KeysJawIdAppContent({
         },
       });
 
-      // No screen work here on purpose: selectScreen owns that decision and
-      // reads auth straight from the session manager via useAuth.
+      // selectScreen puts most requests up on its own. The ones it would leave
+      // on the skeleton get the account screen, as a handshake connect does:
+      // clearing currentAccount keeps the passkey ceremony from being skipped,
+      // and the refetch makes the render read the auth this decision read.
+      // Only for a request that starts a flow, whose phase the listener just
+      // reset: one joining a live flow, like a cold start's, already has an
+      // owner for the screen.
+      if (
+        startsFlow &&
+        needsAccountScreen({ requestType, phase: 'reading-passkeys', isAuthenticated: !!session.authState })
+      ) {
+        setCurrentAccount(null);
+        await refetchAuthRef.current();
+        driveAccountScreen();
+      }
     } catch (err) {
       console.error('❌ Failed to handle encrypted request:', err);
       setError(err instanceof Error ? err.message : 'Failed to decrypt request');

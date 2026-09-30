@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
 
-import { selectScreen, type Phase, type Screen } from './select-screen';
+import { needsAccountScreen, selectScreen, type Phase, type Screen } from './select-screen';
 import { SDKRequestType } from './sdk-types';
 
 /**
@@ -145,5 +145,55 @@ describe('selectScreen', () => {
         }
       }
     }
+  });
+});
+
+/**
+ * A request left on the skeleton hangs: nothing else moves the dialog, and
+ * neither side times out. An SDK that predates the handshake-only connect sends
+ * wallet_connect encrypted once its cached connection expires, and that sat on
+ * the skeleton until the user cleared site data.
+ */
+describe('needsAccountScreen', () => {
+  it.each([true, false])(
+    'puts the account screen up for an encrypted connect (authenticated: %s)',
+    (isAuthenticated) => {
+      expect(
+        needsAccountScreen({ requestType: SDKRequestType.CONNECT, phase: 'reading-passkeys', isAuthenticated })
+      ).toBe(true);
+    }
+  );
+
+  it.each(MODAL_REQUESTS)('puts it up for %s on a session with no signed-in account', (requestType) => {
+    expect(needsAccountScreen({ requestType, phase: 'reading-passkeys', isAuthenticated: false })).toBe(true);
+  });
+
+  it.each(MODAL_REQUESTS)('leaves %s to its modal when the origin is authenticated', (requestType) => {
+    expect(needsAccountScreen({ requestType, phase: 'reading-passkeys', isAuthenticated: true })).toBe(false);
+  });
+
+  // A cold-start handshake has already put the account screen up when its
+  // request arrives. Driving it again would restart a screen the user is on.
+  it.each(['creating-passkey', 'confirming-account', 'choosing-account'] as Phase[])(
+    'does not restart an account screen already up in %s',
+    (phase) => {
+      expect(needsAccountScreen({ requestType: SDKRequestType.CONNECT, phase, isAuthenticated: false })).toBe(false);
+    }
+  );
+
+  it('leaves the chain id to the effect that answers it', () => {
+    expect(
+      needsAccountScreen({ requestType: SDKRequestType.CHAIN_ID, phase: 'reading-passkeys', isAuthenticated: false })
+    ).toBe(false);
+  });
+
+  it('leaves an unsupported method to its own screen', () => {
+    expect(
+      needsAccountScreen({
+        requestType: SDKRequestType.UNSUPPORTED_METHOD,
+        phase: 'reading-passkeys',
+        isAuthenticated: false,
+      })
+    ).toBe(false);
   });
 });
