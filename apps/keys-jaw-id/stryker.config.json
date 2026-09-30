@@ -1,0 +1,22 @@
+{
+  "$schema": "../../node_modules/@stryker-mutator/core/schema/stryker-schema.json",
+  "testRunner": "vitest",
+  "vitest": {
+    "configFile": "vitest.config.mts"
+  },
+  "inPlace": true,
+  "mutate": [
+    "src/lib/tx-handler.ts",
+    "src/lib/popup-communicator.ts",
+    "src/lib/crypto-handler.ts",
+    "src/lib/handshake-route.ts",
+    "src/middleware.ts"
+  ],
+  "ignoreStatic": true,
+  "reporters": ["clear-text", "html", "json"],
+  "thresholds": {
+    "high": 80,
+    "low": 60,
+    "break": 35
+  }
+}

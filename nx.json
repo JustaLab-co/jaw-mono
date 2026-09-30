@@ -15,6 +15,11 @@
     ],
     "sharedGlobals": ["{workspaceRoot}/.github/workflows/ci.yml"]
   },
+  "targetDefaults": {
+    "test": {
+      "dependsOn": ["^generate-sdk-info"]
+    }
+  },
   "plugins": [
     {
       "plugin": "@nx/js/typescript",

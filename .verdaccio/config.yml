@@ -8,6 +8,13 @@ uplinks:
     maxage: 60m
 
 packages:
+  # Never proxied: a version published here has to win over the same version
+  # on npm, or a consumer test would install the public build instead.
+  '@jaw.id/*':
+    access: $all
+    publish: $all
+    unpublish: $all
+
   '**':
     # give all users (including non-authenticated users) full access
     # because it is a local registry

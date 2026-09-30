@@ -75,7 +75,8 @@
         "inputs": [
           "default",
           "^production",
-          "{projectRoot}/vitest.config.ts"
+          "{projectRoot}/vitest.config.ts",
+          "{workspaceRoot}/vitest.setup.localstorage.ts"
         ],
         "executor": "nx:run-commands",
         "options": {

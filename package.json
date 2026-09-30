@@ -30,6 +30,8 @@
     "@nx/vite": "21.6.4",
     "@nx/web": "21.6.4",
     "@rollup/plugin-url": "^8.0.2",
+    "@stryker-mutator/core": "10.0.0",
+    "@stryker-mutator/vitest-runner": "10.0.0",
     "@svgr/rollup": "^8.1.0",
     "@swc-node/register": "~1.9.1",
     "@swc/cli": "~0.6.0",
