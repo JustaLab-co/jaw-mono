@@ -159,9 +159,13 @@ JAW_TRUSTED_HOSTS=localhost JAW_E2E_HTTPS=1 JAW_E2E_TRUSTED=1 bunx playwright te
 
 `.github/workflows/e2e.yml` runs `connect-flows` on Chromium over http, against
 production builds, on every PR that touches either app, the SDK packages or
-`e2e/`, and uploads the report and traces when it fails. The https run on all
-three engines is manual (`workflow_dispatch`), with a throwaway certificate
-made on the runner.
+`e2e/`, and uploads the report and traces when it fails.
+
+`.github/workflows/e2e-iframe.yml` runs every suite over https on chromium,
+firefox and webkit, with a throwaway certificate made on the runner. It is
+heavier, so on PRs it only runs when something the iframe depends on changes:
+the SDK transport and the checks that route to it, the keys app, `ui` or
+`e2e/`. Both can also be run from the Actions tab.
 
 ## Manual QA (real Safari — not coverable headlessly)
 
