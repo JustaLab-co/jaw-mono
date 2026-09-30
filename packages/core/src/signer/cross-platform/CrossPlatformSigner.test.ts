@@ -1421,10 +1421,13 @@ describe('CrossPlatformSigner', () => {
         // A connect with no cached answer used to go out encrypted over the old
         // session. keys only shows its account screen for a handshake, so the
         // dialog sat on the loading skeleton and the connect never settled.
+        // New capabilities skip the cache on a live session too.
+        const siwe = { signInWithEthereum: { nonce: 'nonce', chainId: '0x1' } };
         it.each([
-            ['the session expired', { connectedAt: Date.now() - 2 * 86400 * 1000 }, undefined],
-            ['authTTL is 0', { connectedAt: Date.now() }, 0],
-        ])('reconnects with a handshake when %s', async (_case, account, authTTL) => {
+            ['the session expired', { connectedAt: Date.now() - 2 * 86400 * 1000 }, undefined, {}],
+            ['authTTL is 0', { connectedAt: Date.now() }, 0, {}],
+            ['a live session asks for new capabilities', { connectedAt: Date.now() }, undefined, siwe],
+        ])('reconnects with a handshake when %s', async (_case, account, authTTL, capabilities) => {
             vi.spyOn(store.account, 'get').mockReturnValue({
                 accounts: ['0x1234567890123456789012345678901234567890'],
                 chain: { id: 1 },
@@ -1438,7 +1441,7 @@ describe('CrossPlatformSigner', () => {
 
             const result = await signer.request({
                 method: 'wallet_connect',
-                params: [{ version: '1.0', capabilities: {} }],
+                params: [{ version: '1.0', capabilities }],
             });
 
             expect(result).toEqual({ accounts: [{ address: '0x1234567890123456789012345678901234567890' }] });
