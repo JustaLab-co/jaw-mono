@@ -1,3 +1,15 @@
+## 1.5.5 (2026-09-30)
+
+### 🩹 Fixes
+
+- **core:** finish the popup handshake when the dApp sends no referrer ([#360](https://github.com/JustaLab-co/jaw-mono/pull/360))
+- **core:** report expired sessions without logging the passkey out ([#356](https://github.com/JustaLab-co/jaw-mono/pull/356))
+
+### ❤️ Thank You
+
+- Ghadi @Ghadi8
+- Mariano Aguero @mariano-aguero
+
 ## 1.5.4 (2026-09-29)
 
 ### 🩹 Fixes

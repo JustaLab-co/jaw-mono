@@ -1,3 +1,17 @@
+## 1.1.9 (2026-09-30)
+
+### 🩹 Fixes
+
+- **core:** finish the popup handshake when the dApp sends no referrer ([#360](https://github.com/JustaLab-co/jaw-mono/pull/360))
+
+### 🧱 Updated Dependencies
+
+- Updated @jaw.id/core to 1.5.5
+
+### ❤️ Thank You
+
+- Ghadi @Ghadi8
+
 ## 1.1.8 (2026-09-29)
 
 ### 🧱 Updated Dependencies
