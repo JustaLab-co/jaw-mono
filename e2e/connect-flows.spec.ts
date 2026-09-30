@@ -144,7 +144,10 @@ test.describe('errors: the dApp always gets an answer', () => {
     network.rpcDown = true;
     await keys.account(dialog).click();
 
+    // The sign-in reached the RPC and got the failure, and the dialog is still usable.
+    await expect.poll(() => network.rpcFailures, { timeout: SETTLES }).toBeGreaterThan(0);
     await expect(keys.account(dialog)).toBeVisible({ timeout: SETTLES });
+    await expect(dapp.result()).toHaveCount(0);
     await keys.close(dialog).click();
     await expect(dapp.result()).toHaveText(/^Error/, { timeout: SETTLES });
   });

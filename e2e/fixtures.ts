@@ -56,7 +56,10 @@ export class Passkey {
    * for one test and not the next.
    */
   watch(context: BrowserContext, page: Page) {
-    void this.attach(context, page, () => page.isClosed());
+    this.attach(context, page, () => page.isClosed()).catch((error) =>
+      // Otherwise it surfaces later as a WebAuthn prompt nobody answers.
+      console.error(`could not attach the virtual passkey to ${page.url() || 'a new page'}:`, error)
+    );
     page.on('framenavigated', (frame) => {
       if (frame === page.mainFrame() || !frame.url().startsWith(KEYS_URL)) return;
       // Throws for an in-process frame, which the page's authenticator covers.
@@ -108,6 +111,8 @@ export class Passkey {
  */
 export class Network {
   rpcDown = false;
+  /** RPC calls answered with an error while rpcDown was set. */
+  rpcFailures = 0;
 
   async install(context: BrowserContext) {
     await context.route('https://api.justaname.id/**', async (route) => {
@@ -115,7 +120,10 @@ export class Network {
       if (!request.url().includes('/rpc') || request.method() !== 'POST') {
         return route.fulfill({ status: 404, json: {} });
       }
-      if (this.rpcDown) return route.fulfill({ status: 503, body: 'down' });
+      if (this.rpcDown) {
+        this.rpcFailures++;
+        return route.fulfill({ status: 503, body: 'down' });
+      }
       const body = request.postDataJSON();
       const answer = (call: { id: number; method: string }) => ({
         jsonrpc: '2.0',
@@ -195,8 +203,11 @@ export class Dapp {
    */
   private async embedded(): Promise<Dialog> {
     await expect(this.page.locator(`${EMBEDDED}[open]`)).toBeVisible();
-    const frame = this.page.frames().find((f) => f.url().startsWith(KEYS_URL));
-    await frame?.evaluate(
+    const keysFrame = () => this.page.frames().find((f) => f.url().startsWith(KEYS_URL));
+    await expect.poll(() => !!keysFrame(), { message: 'the keys iframe never attached' }).toBe(true);
+    const frame = keysFrame();
+    if (!frame) throw new Error('the keys iframe detached before the guard cleared');
+    await frame.evaluate(
       () =>
         new Promise<void>((resolve) => {
           let clearSince = performance.now();
