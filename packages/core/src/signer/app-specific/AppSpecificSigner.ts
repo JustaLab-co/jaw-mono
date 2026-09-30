@@ -496,7 +496,10 @@ export class AppSpecificSigner extends JAWSigner {
     }
 
     override async cleanup(): Promise<void> {
-        await this.uiHandler.cleanup?.();
-        await super.cleanup();
+        try {
+            await this.uiHandler.cleanup?.();
+        } finally {
+            await super.cleanup();
+        }
     }
 }

@@ -4,7 +4,7 @@ import { JAWProvider } from './JAWProvider.js';
 import { createJAWProvider } from './createJAWProvider.js';
 import { Communicator } from '../communicator/index.js';
 import { standardErrorCodes } from '../errors/index.js';
-import { correlationIds } from '../store/index.js';
+import { correlationIds, store } from '../store/index.js';
 import { fetchRPCRequest, checkErrorForInvalidRequestArgs, buildHandleJawRpcUrl } from '../utils/index.js';
 import { createSigner, loadSignerType, storeSignerType } from '../signer/index.js';
 import { waitForReceiptInBackground, clearCapabilitiesCache } from '../rpc/index.js';
@@ -45,6 +45,7 @@ vi.mock('../signer/index.js', () => ({
     fetchSignerType: vi.fn(),
     loadSignerType: vi.fn(),
     storeSignerType: vi.fn(),
+    clearSignerType: vi.fn(),
 }));
 vi.mock('../rpc/index.js', async (importOriginal) => {
     const actual = await importOriginal<typeof import('../rpc/index.js')>();
@@ -73,8 +74,10 @@ vi.mock('../store/index.js', async (importOriginal) => {
             clear: vi.fn(),
         },
         store: {
+            // A connected account, so a signer installed by a test counts as a
+            // live session rather than one the provider drops as expired.
             account: {
-                get: vi.fn(() => ({ chain: { id: 1 } })),
+                get: vi.fn(() => ({ accounts: ['0x1234567890123456789012345678901234567890'], chain: { id: 1 } })),
             },
             config: {
                 get: vi.fn(() => ({ apiKey: 'test-api-key' })),
@@ -392,6 +395,25 @@ describe('JAWProvider', () => {
 
             expect(mockSigner.handshake).not.toHaveBeenCalled();
             expect(mockSigner.request).toHaveBeenCalledWith({ method: 'eth_requestAccounts' });
+        });
+
+        // A read issued while willRouteToIframe is pending can find the stored
+        // account gone and drop this.signer. The connect still finishes on the
+        // signer it started with.
+        it('finishes the connect on its own signer when a parallel read drops the session', async () => {
+            (isSafari as Mock).mockReturnValue(true);
+            let route: (iframe: boolean) => void = () => undefined;
+            (provider as any).communicator.willRouteToIframe = vi.fn(
+                () => new Promise<boolean>((resolve) => (route = resolve))
+            );
+
+            const connect = provider.request({ method: 'eth_requestAccounts' });
+            await vi.waitFor(() => expect((provider as any).communicator.willRouteToIframe).toHaveBeenCalled());
+            (store.account.get as Mock).mockReturnValueOnce({ accounts: [], chain: { id: 1 } });
+            await provider.request({ method: 'eth_chainId' });
+            route(true);
+
+            await expect(connect).resolves.toEqual(['0x1234567890123456789012345678901234567890']);
         });
 
         it('does NOT force the handshake off Safari (Chrome keeps one consistent partition)', async () => {
