@@ -202,7 +202,9 @@ export class Dapp {
    * to stay absent for longer than a cycle.
    */
   private async embedded(): Promise<Dialog> {
-    await expect(this.page.locator(`${EMBEDDED}[open]`)).toBeVisible();
+    // Generous: over https the apps run on `next dev`, which compiles the keys
+    // page on its first load, and that alone outlasts the default on CI runners.
+    await expect(this.page.locator(`${EMBEDDED}[open]`)).toBeVisible({ timeout: 15_000 });
     const keysFrame = () => this.page.frames().find((f) => f.url().startsWith(KEYS_URL));
     await expect.poll(() => !!keysFrame(), { message: 'the keys iframe never attached' }).toBe(true);
     const frame = keysFrame();
