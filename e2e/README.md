@@ -88,98 +88,80 @@ writes a scratch `~/.jaw` and your own session is untouched. It does spend: each
 grant carries a small USDC prefund to the session, and the grant and revoke cost
 gas, paid by the account you approve with.
 
-## iframe-transport (real browser)
+## Playwright suites (real browser, SDK and keys together)
 
-A minimal real-browser check for the embedded iframe transport — covers what
-jsdom/unit tests cannot (real CSS compositing and the browser's iframe
-`color-scheme` canvas behavior). Runs on **chromium, firefox, and webkit**
-(webkit ≈ Safari).
+`connect-flows.spec.ts` and `iframe-transport.spec.ts` run the SDK and the keys
+app together through the playground, with Playwright Test. The config starts
+both apps (or reuses them if they are already up) and mocks everything they
+call on `api.justaname.id`, so no API key and no network are needed.
 
-It is intentionally **not** part of `nx test`: it needs the two dev servers
-running. It does **not** drive the passkey/connect flow, so it is deterministic,
-cross-engine, and needs **no API key** — only the prewarmed, load-time iframe
-state. (The passkey ceremonies need a virtual authenticator that only Chromium
-exposes, so they are covered by Chromium-only tests + manual QA on real Safari.)
+The passkey is the test's own: a P-256 key held by Chromium's virtual
+authenticator, with the matching account seeded in the keys app's local list.
+The sign in runs the real WebAuthn ceremony with nobody at the keyboard. That
+authenticator is a CDP feature, so the connect flows are Chromium only.
 
-## Run
+### connect-flows
 
-1. Start the keys app:
+The happy path (connect, cached connect, sign) and the ways a flow can end
+badly. The rule every test holds the apps to is that the dApp always gets an
+answer: a dialog that neither answers nor closes leaves it waiting forever,
+since neither side times out, so each test bounds that wait.
 
-   ```bash
-   bunx nx dev @jaw-mono/keys-jaw-id --port=3001
-   ```
+- An expired connection shows the account screen instead of hanging on the
+  loading skeleton, and a sign on a keys session with no signed-in account asks
+  to sign in first. Both hung before #360 and #361, and both tests fail on the
+  code from before those fixes.
+- Closing the account screen, closing the popup window, cancelling a signature,
+  a passkey prompt that times out, the RPC failing during sign in and an
+  unreachable keys app each end with an error in the dApp, not a hang.
+- A request sent while the last dialog is still closing reuses it and shows its
+  screen.
 
-2. Start the playground pointing at the local keys app:
+### iframe-transport
 
-   ```bash
-   NEXT_PUBLIC_KEYS_URL=http://localhost:3001 bunx nx dev @jaw-mono/playground --port=3002
-   ```
+The embedded iframe in a real browser: `color-scheme: normal` so the dApp shows
+through, reveal gating (hidden until a request), no broken frame when the keys
+app is unreachable, and the clickjacking guard that keeps an untrusted host on
+the popup where the browser cannot prove the iframe is visible
+(IntersectionObserver v2 is Chromium only). Runs on chromium, firefox and webkit.
 
-3. Run the E2E (defaults to chromium):
+### http and https
 
-   ```bash
-   node e2e/iframe-transport.e2e.mjs
-   # or pick an engine:
-   JAW_E2E_BROWSER=firefox node e2e/iframe-transport.e2e.mjs
-   JAW_E2E_BROWSER=webkit  node e2e/iframe-transport.e2e.mjs
-   ```
-
-   Install the engines once with `bunx playwright install chromium firefox webkit`.
-
-Exits `0` on pass, `1` on failure or unmet prerequisites.
-
-## CI
-
-`.github/workflows/e2e.yml` builds the SDK packages (the playground consumes the
-built dist, not source), starts both dev servers, and runs the **default** and
-**keys-down (error)** modes across chromium/firefox/webkit. Triggers on PRs
-touching the transport, the keys app, the playground, or `e2e/`, and via manual
-`workflow_dispatch`.
-
-## What it asserts
-
-Scenario: **OS in dark mode, playground forced to light.** Assertions are
-**engine-aware** — the clickjacking guard only lets an _untrusted_ host
-embed the iframe on browsers that can verify visibility via **IntersectionObserver
-v2, which is Chromium-only**.
-
-### Errors / guards (the priority — these catch the dangerous regressions)
-
-- **Firefox / WebKit, untrusted host** → the SDK must **not** embed; it falls back to the popup (security gate).
-- **Keys unreachable** (`JAW_E2E_KEYS_DOWN=1`, blocks the keys origin) → **no broken embedded frame is ever shown** (reveal gating) and **the dApp does not hang**.
-- **Reveal gating** (Chromium) → even after the handshake, the prewarmed iframe stays **hidden** until an actual request — the user never sees it unprompted.
-
-### Success path (Chromium, prewarmed iframe)
-
-1. The embedded iframe is the **default** transport (mounted on load, pointed at the keys app).
-2. The iframe element keeps **`color-scheme: normal`** so the browser does not paint an opaque canvas — the host dApp stays visible (see-through regression guard).
-3. The iframe runs in **embedded mode** (`jaw-embedded`).
-4. **Theme sync**: the embedded dialog follows the dApp's light mode (no `.dark`), not the OS.
-5. The embedded document body is **transparent**.
-
-> **Implication:** the see-through embedded iframe is available to every host on
-> Chromium, but only to **trusted (allow-listed) partners** on Firefox/Safari;
-> everyone else gets the popup. See `packages/core/src/trusted-hosts.ts`.
-
-## Trusted-host fixture (see-through on every engine)
-
-To validate that the see-through iframe renders on Firefox/WebKit too, start the
-keys app with the host allow-listed and run in trusted mode (drives a connect to
-mount the iframe — stops before the passkey ceremony, so no API key/authenticator
-is needed):
+The SDK only uses the iframe on an https origin; plain http routes every dialog
+to a popup. So by default the suites run over http and the connect flows go
+through the popup, and `JAW_E2E_HTTPS=1` serves both apps with
+`next dev --experimental-https`, which exercises the iframe instead and enables
+`iframe-transport` (skipped over http, where it would test nothing).
 
 ```bash
-JAW_TRUSTED_HOSTS=localhost bunx nx dev @jaw-mono/keys-jaw-id --port=3001
-# then, against the running playground:
-JAW_E2E_BROWSER=webkit  JAW_E2E_TRUSTED=1 node e2e/iframe-transport.e2e.mjs
-JAW_E2E_BROWSER=firefox JAW_E2E_TRUSTED=1 node e2e/iframe-transport.e2e.mjs
+bunx playwright install chromium firefox webkit   # once
+bunx nx run-many -t build -p @jaw.id/core @jaw.id/wagmi @jaw.id/ui
+cd e2e
+
+bunx playwright test --config playwright.config.ts                     # http: connect flows through the popup
+JAW_E2E_HTTPS=1 bunx playwright test --config playwright.config.ts     # https: iframe, all engines
+bunx playwright test --config playwright.config.ts -g "expired"        # one test
 ```
 
-It asserts the transport-level see-through core (iframe mounted, `color-scheme:
-normal`, embedded mode). Theme/transparency details are asserted only in the
-stable prewarm path — in the connect-driven path the dApp's per-engine theme
-resolution and frame-render timing make them flaky, not the transport. Kept out
-of CI (the connect drive is less stable than the load-time checks).
+The playground consumes the built dist of the SDK packages, so rebuild them
+after changing one. A dev server that was running during a rebuild can keep
+serving stale chunks; stop it and delete the app's `.next` if a suite fails in
+a way the code does not explain.
+
+The trusted host run asserts the see-through iframe on every engine. It needs
+the keys app started with the host allow-listed:
+
+```bash
+JAW_TRUSTED_HOSTS=localhost JAW_E2E_HTTPS=1 JAW_E2E_TRUSTED=1 bunx playwright test --config playwright.config.ts iframe-transport
+```
+
+### CI
+
+`.github/workflows/e2e.yml` runs `connect-flows` on Chromium over http, against
+production builds, on every PR that touches either app, the SDK packages or
+`e2e/`, and uploads the report and traces when it fails. The https run on all
+three engines is manual (`workflow_dispatch`), with a throwaway certificate
+made on the runner.
 
 ## Manual QA (real Safari — not coverable headlessly)
 
@@ -193,5 +175,6 @@ Safari:
 
 ## Overrides
 
-- `JAW_E2E_KEYS_URL` (default `http://localhost:3001`)
-- `JAW_E2E_PLAYGROUND_URL` (default `http://localhost:3002`)
+- `JAW_E2E_KEYS_URL` (default `http://localhost:3001`, or https with `JAW_E2E_HTTPS=1`)
+- `JAW_E2E_PLAYGROUND_URL` (default `http://localhost:3002`, likewise)
+- `JAW_E2E_TLS_CERT`, `JAW_E2E_TLS_KEY`: a certificate for the https run instead of the one `next dev` makes

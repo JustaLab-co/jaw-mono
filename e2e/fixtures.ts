@@ -1,8 +1,24 @@
 import { createHash, generateKeyPairSync, randomBytes } from 'node:crypto';
-import { test as base, expect, type BrowserContext, type Locator, type Page } from '@playwright/test';
+import {
+  test as base,
+  expect,
+  type BrowserContext,
+  type Frame,
+  type FrameLocator,
+  type Locator,
+  type Page,
+} from '@playwright/test';
 
-export const KEYS_URL = process.env.JAW_E2E_KEYS_URL ?? 'http://localhost:3001';
-export const PLAYGROUND_URL = process.env.JAW_E2E_PLAYGROUND_URL ?? 'http://localhost:3002';
+import { HTTPS, KEYS_URL, PLAYGROUND_URL } from './urls';
+
+export { HTTPS, KEYS_URL };
+
+/**
+ * The keys dialog: a popup over http, the embedded iframe over https. Both
+ * answer getByText and getByRole, so a test reads the same either way.
+ */
+export type Dialog = Page | FrameLocator;
+const EMBEDDED = 'dialog[data-jaw]';
 
 /** The address the mocked factory reports for the test passkey's smart account. */
 export const ACCOUNT = '0x00000000000000000000000000000000000e2e01';
@@ -19,7 +35,7 @@ export class Passkey {
   private readonly credential: Buffer;
   private readonly privateKey: string;
   private readonly authenticators: {
-    page: Page;
+    gone: () => boolean;
     cdp: Awaited<ReturnType<BrowserContext['newCDPSession']>>;
     id: string;
   }[] = [];
@@ -34,9 +50,22 @@ export class Passkey {
     this.privateKey = privateKey.export({ format: 'der', type: 'pkcs8' }).toString('base64');
   }
 
-  /** Authenticators live on a target, so every keys popup gets its own. */
-  async attach(context: BrowserContext, page: Page) {
-    const cdp = await context.newCDPSession(page);
+  /**
+   * Authenticators live on a target: every page gets one, and so does the keys
+   * iframe whenever Chromium runs it in a process of its own, which it may do
+   * for one test and not the next.
+   */
+  watch(context: BrowserContext, page: Page) {
+    void this.attach(context, page, () => page.isClosed());
+    page.on('framenavigated', (frame) => {
+      if (frame === page.mainFrame() || !frame.url().startsWith(KEYS_URL)) return;
+      // Throws for an in-process frame, which the page's authenticator covers.
+      this.attach(context, frame, () => frame.isDetached()).catch(() => undefined);
+    });
+  }
+
+  private async attach(context: BrowserContext, target: Page | Frame, gone: () => boolean) {
+    const cdp = await context.newCDPSession(target);
     await cdp.send('WebAuthn.enable');
     const { authenticatorId: id } = await cdp.send('WebAuthn.addVirtualAuthenticator', {
       options: {
@@ -58,14 +87,14 @@ export class Passkey {
         signCount: 0,
       },
     });
-    this.authenticators.push({ page, cdp, id });
+    this.authenticators.push({ gone, cdp, id });
   }
 
   /** Makes the next ceremonies fail the way a user dismissing the prompt does. */
   async refuse() {
     this.refusing = true;
-    for (const { page, cdp, id } of this.authenticators) {
-      if (page.isClosed()) continue;
+    for (const { gone, cdp, id } of this.authenticators) {
+      if (gone()) continue;
       await cdp.send('WebAuthn.setUserVerified', { authenticatorId: id, isUserVerified: false });
       await cdp.send('WebAuthn.setAutomaticPresenceSimulation', { authenticatorId: id, enabled: false });
     }
@@ -123,8 +152,12 @@ export class Dapp {
     await item.click();
   }
 
-  /** Runs the selected method. Plain http routes every dialog to a popup. */
-  async execute(): Promise<Page> {
+  /** Runs the selected method and returns the dialog it opens. */
+  async execute(): Promise<Dialog> {
+    if (HTTPS) {
+      await this.executeWithoutDialog();
+      return this.embedded();
+    }
     const [popup] = await Promise.all([
       this.context.waitForEvent('page'),
       this.page
@@ -133,6 +166,56 @@ export class Dapp {
         .click(),
     ]);
     return popup;
+  }
+
+  /**
+   * Runs the selected method while the last flow's dialog may still be
+   * closing. A popup that has not closed yet takes the request; the iframe
+   * stays mounted across flows either way.
+   */
+  async executeAfter(previous: Dialog): Promise<Dialog> {
+    if (HTTPS) {
+      await this.executeWithoutDialog();
+      return this.embedded();
+    }
+    if (!(previous as Page).isClosed()) {
+      await this.executeWithoutDialog();
+      return previous;
+    }
+    return this.execute();
+  }
+
+  /**
+   * The embedded dialog, once a person could use it. On every reveal keys'
+   * clickjacking guard covers the dialog with a shield that swallows clicks
+   * until IntersectionObserver v2 certifies the iframe as visible, one observer
+   * cycle (100ms) later. The shield only appears after the guard's first
+   * reading, so an absent shield proves nothing on its own: this waits for it
+   * to stay absent for longer than a cycle.
+   */
+  private async embedded(): Promise<Dialog> {
+    await expect(this.page.locator(`${EMBEDDED}[open]`)).toBeVisible();
+    const frame = this.page.frames().find((f) => f.url().startsWith(KEYS_URL));
+    await frame?.evaluate(
+      () =>
+        new Promise<void>((resolve) => {
+          let clearSince = performance.now();
+          const check = () => {
+            if (document.querySelector('[data-testid="jaw-clickjacking-shield"]')) clearSince = performance.now();
+            if (performance.now() - clearSince >= 400) return resolve();
+            setTimeout(check, 50);
+          };
+          check();
+        })
+    );
+    return this.page.frameLocator(`${EMBEDDED} iframe`);
+  }
+
+  /** Resolves once the dialog is gone, so the next request starts clean. */
+  async closed(dialog: Dialog) {
+    if (HTTPS) return expect(this.page.locator(`${EMBEDDED}[open]`)).toHaveCount(0);
+    const popup = dialog as Page;
+    if (!popup.isClosed()) await popup.waitForEvent('close');
   }
 
   async executeWithoutDialog() {
@@ -164,10 +247,10 @@ export class Dapp {
 
 /** Screens of the keys dialog, by what a person reads on them. */
 export const keys = {
-  accountScreen: (popup: Page) => popup.getByText('Welcome back.'),
-  account: (popup: Page) => popup.getByText('e2e', { exact: true }),
-  button: (popup: Page, name: 'Connect' | 'Sign' | 'Cancel') => popup.getByRole('button', { name, exact: true }),
-  close: (popup: Page) => popup.getByRole('button', { name: 'Cancel', exact: true }).first(),
+  accountScreen: (dialog: Dialog) => dialog.getByText('Welcome back.'),
+  account: (dialog: Dialog) => dialog.getByText('e2e', { exact: true }),
+  button: (dialog: Dialog, name: 'Connect' | 'Sign' | 'Cancel') => dialog.getByRole('button', { name, exact: true }),
+  close: (dialog: Dialog) => dialog.getByRole('button', { name: 'Cancel', exact: true }).first(),
 };
 
 /** Seeds the keys origin with the account the passkey belongs to. */
@@ -218,13 +301,31 @@ export const test = base.extend<{ network: Network; passkey: Passkey; dapp: Dapp
   passkey: [
     async ({ context }, use) => {
       const passkey = new Passkey();
-      context.on('page', (page) => void passkey.attach(context, page));
+      context.on('page', (page) => passkey.watch(context, page));
       await seedAccount(context, passkey);
       await use(passkey);
     },
     { auto: true },
   ],
   dapp: async ({ page, context }, use) => {
+    // JAW_E2E_DEBUG=1 prints what the dApp, the keys iframe and any popup log.
+    if (process.env.JAW_E2E_DEBUG === '1') {
+      const log = (source: Page) =>
+        source.on('console', (msg) =>
+          console.log(`[${new URL(source.url() || 'about:blank').port || '-'}] ${msg.text()}`)
+        );
+      log(page);
+      context.on('page', log);
+      await page.addInitScript((keysOrigin) => {
+        window.addEventListener('message', (event) => {
+          if (event.origin !== keysOrigin) return;
+          const data = event.data ?? {};
+          console.log(
+            `postMessage from keys: ${data.event ?? (data.content ? Object.keys(data.content)[0] : 'response')}`
+          );
+        });
+      }, new URL(KEYS_URL).origin);
+    }
     const dapp = new Dapp(page, context);
     await dapp.open();
     await use(dapp);

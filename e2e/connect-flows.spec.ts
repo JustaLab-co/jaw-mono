@@ -1,4 +1,6 @@
-import { ACCOUNT, Dapp, expect, KEYS_URL, keys, signOutKeysSession, test } from './fixtures';
+import type { Page } from '@playwright/test';
+
+import { ACCOUNT, Dapp, expect, HTTPS, KEYS_URL, keys, signOutKeysSession, test, type Dialog } from './fixtures';
 
 /**
  * The SDK and the keys app together, through the playground, with a passkey
@@ -14,18 +16,18 @@ const SETTLES = 15_000;
 
 test.describe('connect', () => {
   test('signs in with the passkey and returns the account', async ({ dapp }) => {
-    const popup = await dapp.execute();
-    await keys.account(popup).click();
-    await keys.button(popup, 'Connect').click();
+    const dialog = await dapp.execute();
+    await keys.account(dialog).click();
+    await keys.button(dialog, 'Connect').click();
 
     await expect(dapp.result()).toHaveText(/^OK/, { timeout: SETTLES });
     await expect(dapp.response()).toContainText(new RegExp(ACCOUNT, 'i'));
   });
 
   test('a cached connection answers without opening a dialog', async ({ dapp, context }) => {
-    const popup = await dapp.execute();
-    await keys.account(popup).click();
-    await keys.button(popup, 'Connect').click();
+    const dialog = await dapp.execute();
+    await keys.account(dialog).click();
+    await keys.button(dialog, 'Connect').click();
     await expect(dapp.result()).toHaveText(/^OK/, { timeout: SETTLES });
 
     await dapp.page.reload();
@@ -48,11 +50,11 @@ test.describe('connect', () => {
     await expect(dapp.result()).toHaveText(/^OK/, { timeout: SETTLES });
 
     await dapp.expireConnection();
-    const popup = await dapp.execute();
+    const dialog = await dapp.execute();
 
-    await expect(keys.accountScreen(popup)).toBeVisible({ timeout: SETTLES });
-    await keys.account(popup).click();
-    await keys.button(popup, 'Connect').click();
+    await expect(keys.accountScreen(dialog)).toBeVisible({ timeout: SETTLES });
+    await keys.account(dialog).click();
+    await approveIfAsked(dapp, dialog);
     await expect(dapp.result()).toHaveText(/^OK/, { timeout: SETTLES });
     await expect(dapp.response()).toContainText(new RegExp(ACCOUNT, 'i'));
   });
@@ -63,8 +65,8 @@ test.describe('sign', () => {
     await connect(dapp);
 
     await dapp.select('Signing', 'personal_sign');
-    const popup = await dapp.execute();
-    await keys.button(popup, 'Sign').click();
+    const dialog = await dapp.execute();
+    await keys.button(dialog, 'Sign').click();
 
     await expect(dapp.result()).toHaveText(/^OK/, { timeout: SETTLES });
     await expect(dapp.response()).toContainText(/^0x[0-9a-f]+/i);
@@ -77,30 +79,26 @@ test.describe('sign', () => {
     await signOutKeysSession(context);
 
     await dapp.select('Signing', 'personal_sign');
-    const popup = await dapp.execute();
-    await expect(keys.accountScreen(popup)).toBeVisible({ timeout: SETTLES });
-    await keys.account(popup).click();
-    await keys.button(popup, 'Sign').click();
+    const dialog = await dapp.execute();
+    await expect(keys.accountScreen(dialog)).toBeVisible({ timeout: SETTLES });
+    await keys.account(dialog).click();
+    await keys.button(dialog, 'Sign').click();
 
     await expect(dapp.result()).toHaveText(/^OK/, { timeout: SETTLES });
   });
 });
 
 test.describe('back to back', () => {
-  // The popup closes itself a moment after a flow ends. A request sent in that
+  // The dialog closes itself a moment after a flow ends. A request sent in that
   // window reuses it, and the pending close must not take the new request with it.
-  test('a sign right after the connect reuses the closing popup and shows its screen', async ({ dapp }) => {
-    const popup = await dapp.execute();
-    await keys.account(popup).click();
-    await keys.button(popup, 'Connect').click();
+  test('a sign right after the connect reuses the closing dialog and shows its screen', async ({ dapp }) => {
+    const dialog = await dapp.execute();
+    await keys.account(dialog).click();
+    await keys.button(dialog, 'Connect').click();
     await expect(dapp.result()).toHaveText(/^OK/, { timeout: SETTLES });
 
     await dapp.select('Signing', 'personal_sign');
-    await dapp.page
-      .getByRole('button', { name: /^Execute/ })
-      .last()
-      .click();
-    const signer = popup.isClosed() ? await dapp.page.context().waitForEvent('page') : popup;
+    const signer = await dapp.executeAfter(dialog);
     await keys.button(signer, 'Sign').click({ timeout: SETTLES });
 
     await expect(dapp.result()).toHaveText(/^OK/, { timeout: SETTLES });
@@ -109,17 +107,18 @@ test.describe('back to back', () => {
 
 test.describe('errors: the dApp always gets an answer', () => {
   test('closing the account screen rejects the connect', async ({ dapp }) => {
-    const popup = await dapp.execute();
-    await keys.close(popup).click();
+    const dialog = await dapp.execute();
+    await keys.close(dialog).click();
 
     await expect(dapp.result()).toHaveText(/^Error/, { timeout: SETTLES });
     await expect(dapp.response()).toContainText(/reject/i);
   });
 
   test('closing the popup window rejects the connect', async ({ dapp }) => {
-    const popup = await dapp.execute();
-    await expect(keys.accountScreen(popup)).toBeVisible({ timeout: SETTLES });
-    await popup.close();
+    test.skip(HTTPS, 'the embedded dialog has no window to close');
+    const dialog = await dapp.execute();
+    await expect(keys.accountScreen(dialog)).toBeVisible({ timeout: SETTLES });
+    await (dialog as Page).close();
 
     await expect(dapp.result()).toHaveText(/^Error/, { timeout: SETTLES });
   });
@@ -127,26 +126,26 @@ test.describe('errors: the dApp always gets an answer', () => {
   // Nobody answers the passkey prompt, so the ceremony runs to its 60s timeout.
   test('a passkey prompt that times out keeps the dialog open, and closing it rejects', async ({ dapp, passkey }) => {
     test.slow();
-    const popup = await dapp.execute();
-    await expect(keys.accountScreen(popup)).toBeVisible({ timeout: SETTLES });
+    const dialog = await dapp.execute();
+    await expect(keys.accountScreen(dialog)).toBeVisible({ timeout: SETTLES });
     await passkey.refuse();
-    await keys.account(popup).click();
+    await keys.account(dialog).click();
 
     // The user can still pick another account or give up: nothing was answered yet.
-    await expect(keys.accountScreen(popup)).toBeVisible();
+    await expect(keys.accountScreen(dialog)).toBeVisible();
     await expect(dapp.result()).toHaveCount(0);
-    await keys.close(popup).click();
+    await keys.close(dialog).click();
     await expect(dapp.result()).toHaveText(/^Error/, { timeout: SETTLES });
   });
 
   test('the RPC failing during sign-in does not leave the dApp waiting', async ({ dapp, network }) => {
-    const popup = await dapp.execute();
-    await expect(keys.accountScreen(popup)).toBeVisible({ timeout: SETTLES });
+    const dialog = await dapp.execute();
+    await expect(keys.accountScreen(dialog)).toBeVisible({ timeout: SETTLES });
     network.rpcDown = true;
-    await keys.account(popup).click();
+    await keys.account(dialog).click();
 
-    await expect(keys.account(popup)).toBeVisible({ timeout: SETTLES });
-    await keys.close(popup).click();
+    await expect(keys.account(dialog)).toBeVisible({ timeout: SETTLES });
+    await keys.close(dialog).click();
     await expect(dapp.result()).toHaveText(/^Error/, { timeout: SETTLES });
   });
 
@@ -154,8 +153,8 @@ test.describe('errors: the dApp always gets an answer', () => {
     await connect(dapp);
 
     await dapp.select('Signing', 'personal_sign');
-    const popup = await dapp.execute();
-    await keys.button(popup, 'Cancel').last().click();
+    const dialog = await dapp.execute();
+    await keys.button(dialog, 'Cancel').last().click();
 
     await expect(dapp.result()).toHaveText(/^Error/, { timeout: SETTLES });
     await expect(dapp.response()).toContainText(/reject/i);
@@ -164,18 +163,32 @@ test.describe('errors: the dApp always gets an answer', () => {
   test('an unreachable keys app fails the request instead of hanging', async ({ dapp, context }) => {
     test.slow();
     await context.route(`${KEYS_URL}/**`, (route) => route.abort());
-    await dapp.execute();
+    await dapp.executeWithoutDialog();
 
-    // The popup handshake gives up after 60s; the dApp must hear about it.
+    // The handshake gives up (the iframe falls back to a popup that cannot load
+    // either, and the popup waits 60s); the dApp must hear about it.
     await expect(dapp.result()).toHaveText(/^Error/, { timeout: 90_000 });
   });
 });
 
-/** Connects and waits for the popup to close, so the next request opens its own. */
+/**
+ * Approves the Connect screen when there is one. The embedded dialog skips it
+ * for the account the dApp is already connected as ("Continue as"): the
+ * passkey is the approval, and the connect resolves right after it.
+ */
+async function approveIfAsked(dapp: Dapp, dialog: Dialog) {
+  const connect = keys.button(dialog, 'Connect');
+  await expect
+    .poll(async () => (await connect.isVisible()) || (await dapp.result().count()) > 0, { timeout: SETTLES })
+    .toBe(true);
+  if (await connect.isVisible()) await connect.click();
+}
+
+/** Connects and waits for the dialog to close, so the next request starts clean. */
 async function connect(dapp: Dapp) {
-  const popup = await dapp.execute();
-  await keys.account(popup).click();
-  await keys.button(popup, 'Connect').click();
+  const dialog = await dapp.execute();
+  await keys.account(dialog).click();
+  await keys.button(dialog, 'Connect').click();
   await expect(dapp.result()).toHaveText(/^OK/, { timeout: SETTLES });
-  if (!popup.isClosed()) await popup.waitForEvent('close', { timeout: SETTLES });
+  await dapp.closed(dialog);
 }

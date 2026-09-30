@@ -10,5 +10,5 @@
     "skipLibCheck": true,
     "types": ["node"]
   },
-  "include": ["playwright.config.ts", "fixtures.ts", "*.spec.ts"]
+  "include": ["playwright.config.ts", "fixtures.ts", "urls.ts", "*.spec.ts"]
 }
