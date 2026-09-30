@@ -4,7 +4,7 @@ import { useCallback, useEffect, useState, useRef, type MutableRefObject } from 
 import { debugLog } from '../lib/debug-log';
 import { createFlowLock } from '../lib/flow-lock';
 import { buildHandshakeFailure, routeHandshake, routeOwnsScreen } from '../lib/handshake-route';
-import { selectScreen, type Phase } from '../lib/select-screen';
+import { needsAccountScreen, selectScreen, type Phase } from '../lib/select-screen';
 import { RequestModals } from '../components/RequestModals';
 import { extractTransactionData } from '../lib/tx-handler';
 import type { TransactionRequestData } from '../components/TransactionModal';
@@ -416,6 +416,8 @@ function KeysJawIdAppContent({
           // 'working' renders a "Please wait while we process your request"
           // caption for a request the user has not been shown yet.
           setPhase('reading-passkeys');
+          // The encrypted handler below decides from this before a render lands.
+          phaseRef.current = 'reading-passkeys';
         }
 
         const rpcMessage = message as RPCRequestMessage;
@@ -912,8 +914,13 @@ function KeysJawIdAppContent({
         },
       });
 
-      // No screen work here on purpose: selectScreen owns that decision and
-      // reads auth straight from the session manager via useAuth.
+      // selectScreen puts most requests up on its own. The ones it would leave
+      // on the skeleton get the account screen, as a handshake connect does;
+      // clearing currentAccount keeps the passkey ceremony from being skipped.
+      if (needsAccountScreen({ requestType, phase: phaseRef.current, isAuthenticated: !!session.authState })) {
+        setCurrentAccount(null);
+        driveAccountScreen();
+      }
     } catch (err) {
       console.error('❌ Failed to handle encrypted request:', err);
       setError(err instanceof Error ? err.message : 'Failed to decrypt request');
