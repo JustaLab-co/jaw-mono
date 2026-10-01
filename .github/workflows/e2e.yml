@@ -3,9 +3,9 @@ name: E2E
 # Real-browser suites for the SDK and the keys app together, driven through
 # the playground. See e2e/README.md.
 #
-# connect-flows runs on every PR that touches either app, the SDK packages or
-# the suites: Chromium only (the passkey is a CDP virtual authenticator), over
-# http against production builds, with the network the apps call mocked.
+# connect-flows runs on every PR that touches the keys app, the SDK packages
+# or the suites: Chromium only (the passkey is a CDP virtual authenticator),
+# over http against production builds, with the network the apps call mocked.
 #
 # The embedded iframe needs https and all three engines, so it has its own
 # workflow with a narrower trigger: e2e-iframe.yml.
@@ -14,7 +14,6 @@ on:
   pull_request:
     paths:
       - 'apps/keys-jaw-id/**'
-      - 'apps/playground/**'
       - 'packages/core/**'
       - 'packages/ui/**'
       - 'packages/wagmi/**'

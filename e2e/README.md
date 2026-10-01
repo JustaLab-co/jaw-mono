@@ -158,7 +158,7 @@ JAW_TRUSTED_HOSTS=localhost JAW_E2E_HTTPS=1 JAW_E2E_TRUSTED=1 bunx playwright te
 ### CI
 
 `.github/workflows/e2e.yml` runs `connect-flows` on Chromium over http, against
-production builds, on every PR that touches either app, the SDK packages or
+production builds, on every PR that touches the keys app, the SDK packages or
 `e2e/`, and uploads the report and traces when it fails.
 
 `.github/workflows/e2e-iframe.yml` runs every suite over https on chromium,
