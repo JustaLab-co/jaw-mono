@@ -43,8 +43,8 @@ const structHash = () =>
 describe('permit2 upto type strings', () => {
   // The transcription itself is checked in `erc7739.vectors.test.ts`, against
   // the type viem derives from the structs. Asserting the constant equals a
-  // second copy of the same string, as this file used to, could only fail by
-  // editing both.
+  // second copy of the same string could only fail by editing both, so this
+  // pins the hash instead.
   it('pins the witness typehash the proxy checks against', () => {
     expect(keccak256(toHex('Witness(address to,address facilitator,uint256 validAfter)'))).toBe(
       '0xd4171c445a74218b01d4fd8af34ff1106580ea1e36ff837e64484bfaa2253b75'

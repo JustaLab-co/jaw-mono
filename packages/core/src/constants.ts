@@ -10,6 +10,19 @@ export const JAW_BASE_URL = 'https://api.justaname.id';
 export const JAW_PROXY_URL = `${JAW_BASE_URL}/proxy/v1`;
 export const JAW_RPC_URL = `${JAW_PROXY_URL}/rpc`;
 export const JAW_PAYMASTER_URL = `${JAW_RPC_URL}/erc20-paymaster`;
+
+/**
+ * The URL for JAW's ERC-20 paymaster on a chain.
+ *
+ * One place because `Account` recognises this paymaster by comparing the part
+ * before the query string against `JAW_PAYMASTER_URL` exactly, and only then
+ * adds the token approval the paymaster needs to charge. A caller that builds
+ * the URL by hand and gets the path wrong does not fail here: it gets a
+ * transaction with no approval on it, which fails later as something else.
+ */
+export function jawPaymasterUrl(chainId: number, apiKey?: string): string {
+    return `${JAW_PAYMASTER_URL}?chainId=${chainId}${apiKey ? `&api-key=${apiKey}` : ''}`;
+}
 export const JAW_PASSKEYS_URL = `${JAW_BASE_URL}/wallet/v2/passkeys`;
 
 export const FACTORY_ADDRESS = '0x5803c076563C85799989d42Fc00292A8aE52fa9E';

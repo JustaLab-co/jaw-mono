@@ -165,10 +165,9 @@ export class Eip3009EoaPayer implements Payer {
    * decides whether USDC will route this signature through ecrecover or
    * EIP-1271, and so which of the two signatures to produce.
    *
-   * Throws rather than guessing when the chain cannot be read. Guessing raw was
-   * the old default, from when a session was usually never delegated; a session
-   * is delegated from its first userOp now, so the guess is wrong nearly every
-   * time it is made. And the guess is not free: a raw signature against a
+   * Throws rather than guessing when the chain cannot be read. A session is
+   * delegated from its first userOp, so a raw guess is wrong nearly every time
+   * it is made. And the guess is not free: a raw signature against a
    * delegated account is refused by the settlement endpoint, which reads as a
    * failed payment, and a failed payment counts against the session cap on the
    * grounds that the facilitator may have broadcast it anyway. It cannot have,

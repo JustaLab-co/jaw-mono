@@ -17,8 +17,8 @@ describe('formatUsdc', () => {
     expect(formatUsdc('not-a-number', 6)).toBe('not-a-number (invalid)');
   });
 
-  // Amounts reach here from the ledger and from config, both editable files,
-  // and the invalid branch used to echo whatever it was handed.
+  // Amounts reach here from the ledger and from config, both editable files, so
+  // the invalid branch cannot echo back whatever it was handed.
   it('disarms a malformed cap rather than printing it back raw', () => {
     const ESC = String.fromCharCode(0x1b);
     const out = formatUsdc(`9${ESC}[2K${ESC}[32m FAKE`, 6);
@@ -170,14 +170,27 @@ describe('diagnose', () => {
       sessionCap: null,
       periodCap: 5_000_000n,
       periodSpent: 5_000_000n,
-      periodLabel: 'day',
+      periodLabel: 'this day',
     });
     expect(problems).toHaveLength(1);
     expect(problems[0]).toMatch(/granted allowance for this day is used up/i);
   });
 
   it('stays quiet while the period allowance still has room', () => {
-    expect(diagnose({ ...healthy, periodCap: 5_000_000n, periodSpent: 1_000_000n, periodLabel: 'day' })).toEqual([]);
+    expect(diagnose({ ...healthy, periodCap: 5_000_000n, periodSpent: 1_000_000n, periodLabel: 'this day' })).toEqual(
+      []
+    );
+  });
+
+  /**
+   * The limit that binds is the one with the least room, and an allowance the
+   * command cannot read has none: `checkPolicy` refuses every payment on it.
+   * Reported ready, it sends an agent to a command that cannot pay.
+   */
+  it('flags a binding allowance it cannot read', () => {
+    const problems = diagnose({ ...healthy, periodCap: null, periodSpent: null, periodLabel: 'this day' });
+    expect(problems).toHaveLength(1);
+    expect(problems[0]).toMatch(/granted allowance for this day cannot be read/i);
   });
 
   it('reports the period cap before the session cap when both are exhausted', () => {
@@ -186,7 +199,7 @@ describe('diagnose', () => {
       spent: 10_000_000n,
       periodCap: 5_000_000n,
       periodSpent: 5_000_000n,
-      periodLabel: 'day',
+      periodLabel: 'this day',
     });
     expect(problems).toHaveLength(2);
     expect(problems[0]).toMatch(/granted allowance/i);
@@ -224,7 +237,32 @@ describe('diagnose as a readiness verdict', () => {
   });
 
   it('is non-empty for a setup that pays but bypasses the permission', () => {
-    // The case that used to report ready:true while warning in the same breath.
+    // The case that must not report ready:true while warning in the same breath.
     expect(diagnose({ ...healthy, ownerBalance: '0', payerBalance: '16.98' }).length).toBeGreaterThan(0);
+  });
+});
+
+describe('diagnose, an unreadable checkpoint', () => {
+  const facts = (over: Partial<StatusFacts> = {}): StatusFacts =>
+    ({
+      expired: false,
+      liveness: 'active',
+      ownerAddress: '0x0000000000000000000000000000000000000001',
+      ownerBalance: '10',
+      payerBalance: '0',
+      hasAsset: true,
+      spent: 0n,
+      sessionCap: 10_000_000n,
+      periodCap: null,
+      ...over,
+    }) as StatusFacts;
+
+  it('says the figures are a floor rather than reporting ready', () => {
+    const problems = diagnose(facts({ unreadableCheckpoints: 2 }));
+    expect(problems.some((p) => p.includes('2 checkpoint row(s)'))).toBe(true);
+  });
+
+  it('says nothing when every checkpoint reads back', () => {
+    expect(diagnose(facts({ unreadableCheckpoints: 0 }))).toEqual([]);
   });
 });

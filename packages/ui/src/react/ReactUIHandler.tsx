@@ -21,7 +21,8 @@ import {
   Account,
   SUPPORTED_CHAINS,
   JAW_RPC_URL,
-  JAW_PAYMASTER_URL,
+  jawPaymasterUrl,
+  spenderPrefundCall,
   SubnameTextRecordCapabilityRequest,
   handleGetCapabilitiesRequest,
   buildGrantPermissionCall,
@@ -30,7 +31,6 @@ import {
   type Chain,
   type SignInWithEthereumCapabilityRequest,
   type PaymasterConfig,
-  type FeeTokenCapability,
   ensureIntNumber,
   standardErrorCodes,
 } from '@jaw.id/core';
@@ -59,6 +59,7 @@ import {
 } from '../components/OnboardingDialog/accountHelpers';
 import { useChainIconURI } from '../hooks/useChainIconURI';
 import { useGasEstimation } from '../hooks/useGasEstimation';
+import { useSpenderPrefund, describeSpenderPrefund } from '../hooks/useSpenderPrefund';
 import { useAssetPreview } from '../hooks/useAssetPreview';
 import { usePermissionExecution } from '../hooks/usePermissionExecution';
 import { usePermissionRevocation } from '../hooks/usePermissionRevocation';
@@ -1549,7 +1550,7 @@ function TransactionDialogWrapper({
 
     // If user selected an ERC-20 token (non-native), use ERC-20 paymaster
     if (selectedFeeToken && !selectedFeeToken.isNative) {
-      return `${JAW_PAYMASTER_URL}?chainId=${chainId}${apiKey ? `&api-key=${apiKey}` : ''}`;
+      return jawPaymasterUrl(chainId, apiKey);
     }
 
     // Native ETH - no paymaster needed
@@ -1595,7 +1596,7 @@ function TransactionDialogWrapper({
         );
 
         const chainIdHex = `0x${chainId.toString(16)}` as `0x${string}`;
-        const feeTokenCap = capabilities?.[chainIdHex]?.feeToken as FeeTokenCapability | undefined;
+        const feeTokenCap = capabilities?.[chainIdHex]?.feeToken;
 
         if (!feeTokenCap?.supported || !feeTokenCap?.tokens?.length) {
           if (isMounted) setFeeTokensLoading(false);
@@ -1910,7 +1911,7 @@ function SendTransactionDialogWrapper({
 
     // If user selected an ERC-20 token (non-native), use ERC-20 paymaster
     if (selectedFeeToken && !selectedFeeToken.isNative) {
-      return `${JAW_PAYMASTER_URL}?chainId=${chainId}${apiKey ? `&api-key=${apiKey}` : ''}`;
+      return jawPaymasterUrl(chainId, apiKey);
     }
 
     // Native ETH - no paymaster needed
@@ -1956,7 +1957,7 @@ function SendTransactionDialogWrapper({
         );
 
         const chainIdHex = `0x${chainId.toString(16)}` as `0x${string}`;
-        const feeTokenCap = capabilities?.[chainIdHex]?.feeToken as FeeTokenCapability | undefined;
+        const feeTokenCap = capabilities?.[chainIdHex]?.feeToken;
 
         if (!feeTokenCap?.supported || !feeTokenCap?.tokens?.length) {
           if (isMounted) setFeeTokensLoading(false);
@@ -2207,6 +2208,23 @@ function PermissionDialogWrapper({
   // Check if this is a sponsored transaction (paymaster provided)
   const isSponsored = !!effectivePaymasterUrl;
 
+  // The transfer to the spender the request asked for, sized before the screen renders so the
+  // screen shows it and the grant sends exactly that.
+  const { quote: prefundQuote, loading: prefundLoading } = useSpenderPrefund({
+    account,
+    enabled: request.data.capabilities?.prefundSpender === true,
+    spender: request.data.spender as Address,
+    permissions: request.data.permissions,
+    address: request.data.address as Address,
+  });
+  const prefund = useMemo(
+    () =>
+      prefundQuote?.kind === 'transfer'
+        ? { token: prefundQuote.token, spender: prefundQuote.spender, amount: prefundQuote.amount }
+        : null,
+    [prefundQuote]
+  );
+
   // Build the actual permission grant call for gas estimation
   // This uses the real approve() call data to PERMISSIONS_MANAGER_ADDRESS
   const transactionCalls = useMemo(() => {
@@ -2220,12 +2238,13 @@ function PermissionDialogWrapper({
         request.data.expiry,
         request.data.permissions
       );
-      return [permissionCall];
+      // The transfer is part of what this transaction costs, so the fee is estimated with it in.
+      return prefund ? [spenderPrefundCall(prefund), permissionCall] : [permissionCall];
     } catch (error) {
       console.warn('[PermissionDialogWrapper] Failed to build permission grant call:', error);
       return [];
     }
-  }, [request.data.address, request.data.spender, request.data.expiry, request.data.permissions]);
+  }, [request.data.address, request.data.spender, request.data.expiry, request.data.permissions, prefund]);
 
   // Use the gas estimation hook for both ETH and ERC-20 cost estimation
   const {
@@ -2254,7 +2273,7 @@ function PermissionDialogWrapper({
 
     // If user selected an ERC-20 token (non-native), use ERC-20 paymaster
     if (selectedFeeToken && !selectedFeeToken.isNative) {
-      return `${JAW_PAYMASTER_URL}?chainId=${chainId}${apiKey ? `&api-key=${apiKey}` : ''}`;
+      return jawPaymasterUrl(chainId, apiKey);
     }
 
     // Native ETH - no paymaster needed
@@ -2398,7 +2417,7 @@ function PermissionDialogWrapper({
         );
 
         const chainIdHex = `0x${chainId.toString(16)}` as `0x${string}`;
-        const feeTokenCap = capabilities?.[chainIdHex]?.feeToken as FeeTokenCapability | undefined;
+        const feeTokenCap = capabilities?.[chainIdHex]?.feeToken;
 
         if (!feeTokenCap?.supported || !feeTokenCap?.tokens?.length) {
           if (isMounted) setFeeTokensLoading(false);
@@ -2548,6 +2567,13 @@ function PermissionDialogWrapper({
     return formatExpiryDate(request.data.expiry);
   }, [request.data.expiry]);
 
+  const prefundDisplay = useMemo(() => {
+    if (!prefundQuote) return null;
+    const token = prefundQuote.token.toLowerCase();
+    const key = Object.keys(tokenInfoMap).find((address) => address.toLowerCase() === token);
+    return describeSpenderPrefund(prefundQuote, key ? tokenInfoMap[key] : undefined);
+  }, [prefundQuote, tokenInfoMap]);
+
   const handleConfirm = async () => {
     if (submittingRef.current) return;
     if (!account) {
@@ -2566,9 +2592,8 @@ function PermissionDialogWrapper({
         calls: request.data.permissions.calls,
       };
 
-      // Grant permissions using Account class with paymaster context.
-      // The last argument needs a core that carries the prefund; without it the
-      // spender is granted the permission and holds nothing to pay its first op.
+      // Grant permissions using Account class with paymaster context. The prefund is the one the
+      // screen showed; core checks it and fails the grant rather than send anything else.
       const result = await account.grantPermissions(
         request.data.expiry,
         request.data.spender as Address,
@@ -2576,7 +2601,7 @@ function PermissionDialogWrapper({
         computedPaymasterUrl,
         computedPaymasterContext,
         request.data.address,
-        { prefundSpender: request.data.capabilities?.prefundSpender === true }
+        prefund ? { prefund } : undefined
       );
 
       setStatus('Permissions granted successfully!');
@@ -2622,6 +2647,8 @@ function PermissionDialogWrapper({
       origin={typeof window !== 'undefined' ? window.location.origin : 'unknown'}
       spends={spends}
       calls={calls}
+      prefund={prefundDisplay}
+      prefundLoading={prefundLoading}
       tokenMeta={tokenInfoMap}
       expiryDate={expiryDate}
       networkName={networkName}
@@ -2926,7 +2953,7 @@ function RevokePermissionDialogWrapper({
 
     // If user selected an ERC-20 token (non-native), use ERC-20 paymaster
     if (selectedFeeToken && !selectedFeeToken.isNative) {
-      return `${JAW_PAYMASTER_URL}?chainId=${chainId}${apiKey ? `&api-key=${apiKey}` : ''}`;
+      return jawPaymasterUrl(chainId, apiKey);
     }
 
     // Native ETH - no paymaster needed
@@ -3063,7 +3090,7 @@ function RevokePermissionDialogWrapper({
         );
 
         const chainIdHex = `0x${chainId.toString(16)}` as `0x${string}`;
-        const feeTokenCap = capabilities?.[chainIdHex]?.feeToken as FeeTokenCapability | undefined;
+        const feeTokenCap = capabilities?.[chainIdHex]?.feeToken;
 
         if (!feeTokenCap?.supported || !feeTokenCap?.tokens?.length) {
           if (isMounted) setFeeTokensLoading(false);

@@ -1,7 +1,8 @@
 import { Flags } from '@oclif/core';
 import { BaseCommand } from '../../base-command.js';
 import { readX402Log } from '../../x402/ledger.js';
-import { renderEntry, renderSummary } from '../../x402/log-view.js';
+import { reconcileSettlements } from '../../x402/settlement.js';
+import { renderEntry, renderSummary, machineEntry } from '../../x402/log-view.js';
 import type { OutputFormat } from '../../lib/types.js';
 
 /**
@@ -42,14 +43,20 @@ export default class X402Log extends BaseCommand {
       this.error(`--limit must be 1 or more (got ${flags.limit}). Omit it to show every entry.`);
     }
 
+    // Reconciled before anything is rendered, so the figures here are the ones
+    // the caps will enforce. Without it this command reported a ceiling the
+    // chain had already settled or freed, and a user who never runs `status`
+    // between payments saw only the stale reading.
+    let entries = await reconcileSettlements(readX402Log());
     // Filter before limiting, so `--limit 5 --status failed` means the last five
     // failures rather than the failures among the last five entries.
-    let entries = readX402Log();
-    if (flags.status) entries = entries.filter((e) => e.status === flags.status);
+    // A checkpoint carries `paid` so the sums count it with no branch of their
+    // own, but it is not an outcome and has no business in a list of them.
+    if (flags.status) entries = entries.filter((e) => e.kind !== 'checkpoint' && e.status === flags.status);
     if (flags.limit !== undefined) entries = entries.slice(-flags.limit);
 
     if (format === 'json') {
-      this.outputResult(entries, format);
+      this.outputResult(entries.map(machineEntry), format);
       return;
     }
 

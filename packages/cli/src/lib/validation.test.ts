@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { isValidKeysUrl, isValidRelayUrl, parsePermissionsConfig } from './validation.js';
+import { isValidKeysUrl, isValidRelayUrl, parsePermissionsConfig, isSafeApiKey } from './validation.js';
 
 describe('validation', () => {
   describe('isValidKeysUrl', () => {
@@ -146,5 +146,28 @@ describe('validation', () => {
     it('rejects invalid URL', () => {
       expect(isValidRelayUrl('not-a-url')).toBe(false);
     });
+  });
+});
+
+// The key is concatenated into a query string by every consumer, without
+// encoding, so what must be rejected is anything that changes the meaning of
+// the URL around it rather than anything that fails a guessed format.
+describe('isSafeApiKey', () => {
+  it('accepts what a key looks like', () => {
+    expect(isSafeApiKey('jaw_live_9f2a8c1d4e')).toBe(true);
+    expect(isSafeApiKey('ABC-123_xyz.~')).toBe(true);
+  });
+
+  it('rejects anything that would rewrite the query it lands in', () => {
+    // `...&api-key=x&chainId=1` and the chain silently changed.
+    expect(isSafeApiKey('x&chainId=1')).toBe(false);
+    expect(isSafeApiKey('x#frag')).toBe(false);
+    expect(isSafeApiKey('x?y=z')).toBe(false);
+    expect(isSafeApiKey('has space')).toBe(false);
+    expect(isSafeApiKey('a/b')).toBe(false);
+  });
+
+  it('rejects an empty one, which is not a key', () => {
+    expect(isSafeApiKey('')).toBe(false);
   });
 });

@@ -1,20 +1,40 @@
 import { BaseCommand } from '../../base-command.js';
 import { keystoreExists } from '../../lib/keystore.js';
 import { loadConfig } from '../../lib/config.js';
-import { isLegacySession, liveOrphans, tryLoadSessionConfig } from '../../lib/session-config.js';
+import {
+  expiryInstant,
+  isLegacySession,
+  liveOrphans,
+  sessionUsable,
+  tryLoadSessionConfig,
+} from '../../lib/session-config.js';
 import { sessionPayerAddress } from '../../x402/payer.js';
 import { usdcBalance } from '../../x402/balance.js';
-import { sumSpentSince } from '../../x402/ledger.js';
-import { resolveSessionX402Policy, sameLimit } from '../../x402/policy.js';
+import { readX402Log, sumSpentSince, checkpointFigureReadable } from '../../x402/ledger.js';
+import { reconcileSettlements } from '../../x402/settlement.js';
+import { resolveSessionX402Policy, sameLimit, tightestLimit } from '../../x402/policy.js';
 import { currentLimitUsageOnChain } from '../../x402/spend-window.js';
-import { describePeriod } from '../../x402/period.js';
-import { parseBigInt } from '../../x402/amount.js';
+import { describePeriodPhrase } from '../../x402/period.js';
+import { parseBigInt, parseNonNegativeBigInt } from '../../x402/amount.js';
 import { USDC_BY_NETWORK } from '../../x402/asset-registry.js';
 import { gasReserve } from '../../x402/gas-reserve.js';
+import { whyEip712DomainDisagrees } from '../../x402/eip712-domain.js';
 import { formatUsdc, formatRemaining, diagnose } from '../../x402/status-report.js';
 import { readLiveness, type PermissionLiveness } from '../../x402/permission-onchain.js';
 import { recoverPermission } from '../../x402/permission-recovery.js';
 import type { OutputFormat } from '../../lib/types.js';
+
+/**
+ * Whether the figure a limit carries was counted over a window we can state.
+ *
+ * Not the end: an end nobody can name still leaves a known start, and the sums
+ * are counted from the start. What makes the figure meaningless is a start the
+ * `Date` cannot hold, which leaves the sums counting every row ever, and a limit
+ * the usage list never measured at all, which carries no start.
+ */
+function windowKnown(startedAt: Date | undefined): boolean {
+  return startedAt !== undefined && !Number.isNaN(startedAt.getTime());
+}
 
 /**
  * Answer "is my x402 setup right?" without spending anything.
@@ -51,7 +71,10 @@ export default class X402Status extends BaseCommand {
 
     const config = loadConfig();
     const now = Date.now() / 1000;
-    const expired = session.expiry <= now;
+    // Unreadable reads as expired in a report, the way the paying path answers
+    // it: this page exists to say whether a payment can happen.
+    const endsAt = expiryInstant(session.expiry);
+    const expired = !sessionUsable(session.expiry, now);
 
     const asset = Object.values(USDC_BY_NETWORK).find((a) => a.chainId === session.chainId);
     const payer = sessionPayerAddress();
@@ -79,7 +102,7 @@ export default class X402Status extends BaseCommand {
       ),
       // Recovered first for a session written before the struct was stored,
       // which is otherwise stuck reporting "cannot tell" forever.
-      recoverPermission(session, config.apiKey),
+      recoverPermission(session, this.resolveApiKey(flags)),
     ]);
     const [ownerBalance, payerBalance] = balances;
     // Threaded through the rest of the command, not just the liveness read.
@@ -96,21 +119,38 @@ export default class X402Status extends BaseCommand {
     // performed it, which is the run where it matters most.
     const policy = resolveSessionX402Policy(config.x402, current);
 
-    const spent = sumSpentSince(payer, session.createdAt);
+    // One read for the whole report: the session total and every limit below
+    // are counted against the same rows.
+    //
+    // Reconciled here too, and not only on the pay paths: an agent that pays
+    // once and stops would otherwise leave that row costing its ceiling for
+    // good, and this is the surface it still reaches.
+    const ledger = await reconcileSettlements(readX402Log());
+    // A checkpoint whose figure will not parse stops `sumSpentSince`, which is
+    // what keeps a payment from spending against a total known to be short. This
+    // command spends nothing and is the one a user runs to find out what is
+    // wrong, so the unreadable rows come out of the sums and are named in the
+    // verdict instead: a floor, and a problem, rather than no report at all.
+    const unreadable = ledger.filter((entry) => entry.kind === 'checkpoint' && !checkpointFigureReadable(entry));
+    const countable = unreadable.length === 0 ? ledger : ledger.filter((entry) => !unreadable.includes(entry));
+    // The session total, so payer only. The per-period figures below come from
+    // `currentLimitUsage`, which scopes to the permission because those mirror
+    // the chain.
+    const spent = sumSpentSince(countable, { payer }, session.createdAt);
 
     const sessionCap = parseBigInt(policy.maxTotalPerSession);
     const decimals = asset?.decimals ?? 6;
 
     // The cap that actually mirrors the permission, and what is left of it right
-    // now. Without this the report was silent about the only cap a grant-seeded
-    // session enforces. Asked of the chain first, which knows about pulls this
-    // CLI's ledger never saw.
+    // now. Without it the report would be silent about the only cap a
+    // grant-seeded session enforces. Asked of the chain first, which knows about
+    // pulls this CLI's ledger never saw.
     // Every limit on the payment token, each with its own window and its own
-    // usage. Reducing them to one was reporting a month's budget as a day's.
-    const usage = await currentLimitUsageOnChain(policy, payer, current);
+    // usage. Reducing them to one would report a month's budget as a day's.
+    const usage = await currentLimitUsageOnChain(countable, policy, payer, current);
     // Joined onto the limits the policy holds, not read off the usage list. A
     // limit whose usage could not be computed is still enforced by
-    // `checkPolicy`, and reporting only what has usage made it invisible here:
+    // `checkPolicy`, and reporting only what has usage makes it invisible here:
     // no line, no json entry, and a `ready: true` for a session whose grant is
     // the thing bounding it.
     const limits = (policy.perPeriod ?? []).map((limit) => {
@@ -120,34 +160,22 @@ export default class X402Status extends BaseCommand {
           ...limit,
           spent: 0n,
           toppedUp: 0n,
+          // Nothing measured it, so it has no window and no figure: said out
+          // loud, so the readers below can tell it from a limit whose usage was
+          // counted over a window that has no end to name.
+          startedAt: undefined,
           endsAt: null,
           source: 'unmeasured' as const,
         }
       );
     });
-    // The one with the least room left, which is what the verdict is about.
-    // Picking the smallest allowance instead said `ready: true` for a session
-    // whose month was drained, because today's counter was still at zero, right
-    // under a printed line reading 100 of 100 USDC used this month.
-    //
-    // Unparseable allowances are skipped rather than thrown on: they reach here
-    // from a config file someone can edit, and the rest of this command reports
-    // a bad value instead of dying on it.
-    const remaining = (limit: (typeof limits)[number]) => {
-      const cap = parseBigInt(limit.allowance);
-      if (cap === null) return null;
-      return cap > limit.toppedUp ? cap - limit.toppedUp : 0n;
-    };
-    const tightest = limits.reduce<(typeof limits)[number] | null>((a, b) => {
-      const left = remaining(b);
-      if (left === null) return a;
-      const best = a === null ? null : remaining(a);
-      return best === null || left < best ? b : a;
-    }, null);
+    // The one with the least room left, which is what the verdict is about, and
+    // the same reduction `topUpCeiling` sizes a pull with. These limits already
+    // carry their own usage, so there is no second list to pass.
+    const tightest = tightestLimit(limits);
 
-    // One verdict for both renderers. `ready` used to be its own expression and
-    // drifted from the warnings: a setup whose owner was empty printed a loud
-    // "the cap is not applying" and still reported ready:true to a script.
+    // One verdict for both renderers, so a setup that prints a loud "the cap is
+    // not applying" cannot also report ready:true to a script.
     const problems = diagnose({
       expired,
       liveness,
@@ -155,22 +183,38 @@ export default class X402Status extends BaseCommand {
       ownerBalance,
       payerBalance,
       hasAsset: asset !== undefined,
+      unreadableCheckpoints: unreadable.length,
       spent,
       sessionCap,
-      periodCap: tightest ? parseBigInt(tightest.allowance) : null,
+      // The same parse rule the ranking uses. Read with `parseBigInt`, a
+      // negative allowance comes back as a negative cap: the "cannot be read"
+      // warning never fires, and beside an unreadable usage nothing is reported
+      // at all, while `checkPolicy` refuses every payment against it.
+      periodCap: tightest ? (parseNonNegativeBigInt(tightest.allowance) ?? null) : null,
       // Top-ups, not payments: the period cap mirrors the on-chain allowance
       // and the top-up is what draws it down, exactly as `topUpCeiling`
       // measures it. Payments lag by whatever float the payer still holds,
       // which kept this check quiet while the grant was already drained.
       // Null, not the zero an unmeasured limit carries: `diagnose` compares it
       // against the cap, and a figure nobody read is not a measurement of zero.
-      periodSpent: tightest && tightest.endsAt !== null ? tightest.toppedUp : null,
-      periodLabel: tightest ? describePeriod(tightest.unit, tightest.multiplier) : null,
+      periodSpent: tightest && windowKnown(tightest.startedAt) ? tightest.toppedUp : null,
+      periodLabel: tightest ? describePeriodPhrase(tightest.unit, tightest.multiplier) : null,
+      // A cap over the whole permission has no end of window to wait for, so the
+      // advice must not send someone to wait for one.
+      periodResets: tightest ? tightest.unit !== 'forever' : undefined,
       outdated: isLegacySession(session),
       // Same units as the formatted balances. Exact in a double: the reserve
       // is a tenth of a token, six decimals at most.
       payerReserve: asset ? Number(gasReserve(asset)) / 10 ** asset.decimals : 0,
     });
+
+    // Checked here and not on the signing path: the domain only matters when a
+    // challenge does not advertise its own, and a payment may not wait on a
+    // node to find out. This command is the one whose job is saying what is
+    // wrong, so a registry entry that has drifted becomes loud here instead of
+    // arriving as a payment the token rejected.
+    const domainDrift = asset ? await whyEip712DomainDisagrees(asset) : null;
+    if (domainDrift) problems.push(domainDrift);
 
     if (format === 'json') {
       this.outputResult(
@@ -191,7 +235,7 @@ export default class X402Status extends BaseCommand {
               allowance: limit.allowance,
               unit: limit.unit,
               multiplier: limit.multiplier,
-              used: limit.endsAt === null ? null : limit.toppedUp.toString(),
+              used: windowKnown(limit.startedAt) ? limit.toppedUp.toString() : null,
               usedFrom: limit.source,
               resetsAt: limit.endsAt === null ? null : limit.endsAt.toISOString(),
             })),
@@ -225,18 +269,21 @@ export default class X402Status extends BaseCommand {
       );
     }
     this.log(`  caps    ${formatUsdc(policy.maxAmountPerPayment, decimals)} per payment`);
-    // Every limit, each with its own window and reset. One of them used to
-    // stand for all, which is how a 100-a-month cap was reported as 50 a day.
+    // Every limit, each with its own window and reset: one of them standing for
+    // all would report a 100-a-month cap as 50 a day.
     for (const limit of limits) {
       const floor = limit.source === 'chain' ? '' : 'at least ';
-      // A limit with no window is one whose usage could not be computed. It
-      // still binds, so it is reported, and the missing figure is named as
-      // missing rather than printed as a zero.
-      const window = limit.endsAt === null ? ' (usage unknown)' : ` (resets ${limit.endsAt.toISOString()})`;
-      const used = limit.endsAt === null ? '?' : `${floor}${formatUsdc(limit.toppedUp.toString(), decimals)}`;
+      // A limit whose window could not be stated is one whose usage could not be
+      // computed. It still binds, so it is reported, and the missing figure is
+      // named as missing rather than printed as a zero. An end nobody can name
+      // is a different thing: the figure is counted from a start that is known,
+      // so it is reported without a reset date.
+      const resets = limit.endsAt === null ? '' : ` (resets ${limit.endsAt.toISOString()})`;
+      const window = windowKnown(limit.startedAt) ? resets : ' (usage unknown)';
+      const used = windowKnown(limit.startedAt) ? `${floor}${formatUsdc(limit.toppedUp.toString(), decimals)}` : '?';
       this.log(
-        `          ${used} of ${formatUsdc(limit.allowance, decimals)} used this ` +
-          `${describePeriod(limit.unit, limit.multiplier)}${window}`
+        `          ${used} of ${formatUsdc(limit.allowance, decimals)} used ` +
+          `${describePeriodPhrase(limit.unit, limit.multiplier)}${window}`
       );
     }
     if (limits.length > 1) {
@@ -253,7 +300,9 @@ export default class X402Status extends BaseCommand {
       this.log(`  float   tops the payer up to ${formatUsdc(policy.topUpFloat, decimals)} when it runs short`);
     }
     this.log(
-      `  expires ${new Date(session.expiry * 1000).toISOString()}${expired ? '' : ` (${formatRemaining(session.expiry - now)})`}`
+      endsAt
+        ? `  expires ${endsAt.toISOString()}${expired ? '' : ` (${formatRemaining(endsAt.getTime() / 1000 - now)})`}`
+        : '  expires unknown, the session file does not say'
     );
 
     // Most likely blocker first.

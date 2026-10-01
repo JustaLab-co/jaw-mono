@@ -1,7 +1,7 @@
 import * as crypto from 'node:crypto';
 import * as fs from 'node:fs';
 import { PATHS } from './paths.js';
-import { ensureDir } from './config.js';
+import { writeJsonAtomic } from './config.js';
 
 interface KeystoreFile {
   version: 2;
@@ -22,6 +22,8 @@ export function generateSessionKey(): `0x${string}` {
  * Save private key to keystore.json.
  * On-chain PermissionManager is the real security boundary — the session key
  * can only act within its granted permission scope regardless of local access.
+ * Written atomically: a torn keystore strands the session until the next
+ * `jaw session setup`.
  */
 export function saveKeystore(privateKeyHex: string, address: string): void {
   const keystore: KeystoreFile = {
@@ -30,14 +32,7 @@ export function saveKeystore(privateKeyHex: string, address: string): void {
     address,
     createdAt: new Date().toISOString(),
   };
-
-  ensureDir(PATHS.root);
-  fs.writeFileSync(PATHS.keystore, JSON.stringify(keystore, null, 2) + '\n', {
-    encoding: 'utf-8',
-    mode: 0o600,
-  });
-  // `mode` is only honored on file creation, not overwrite — re-apply explicitly.
-  fs.chmodSync(PATHS.keystore, 0o600);
+  writeJsonAtomic(PATHS.keystore, keystore);
 }
 
 /**

@@ -1,12 +1,26 @@
 import * as fs from 'node:fs';
+import * as path from 'node:path';
 import { PATHS } from './paths.js';
 import type { JawConfig, SettableConfigKey } from './types.js';
 import type { X402Policy, X402PolicyKey } from '../x402/policy.js';
-import { isValidKeysUrl, isValidRelayUrl } from './validation.js';
+import { isSafeApiKey, isValidKeysUrl, isValidRelayUrl } from './validation.js';
 
 export function ensureDir(dir: string): void {
   fs.mkdirSync(dir, { recursive: true, mode: 0o700 });
   fs.chmodSync(dir, 0o700);
+}
+
+/**
+ * Write JSON to a temp file and rename it over `file`, so no reader or crash
+ * ever sees it half-written. The pid keeps two writers off one temp file.
+ */
+export function writeJsonAtomic(file: string, value: unknown): void {
+  ensureDir(path.dirname(file));
+  const temp = `${file}.${process.pid}.tmp`;
+  fs.writeFileSync(temp, JSON.stringify(value, null, 2) + '\n', { encoding: 'utf-8', mode: 0o600 });
+  // `mode` on create is masked by the umask; this is what actually pins it.
+  fs.chmodSync(temp, 0o600);
+  fs.renameSync(temp, file);
 }
 
 function migrateConfig(config: JawConfig): JawConfig {
@@ -34,12 +48,18 @@ export function loadConfig(): JawConfig {
   }
 }
 
+/**
+ * Written atomically, so a reader never sees a half-written config.
+ *
+ * The bridge writes this file now: a connect that is handed a first or rotated
+ * workspace key keeps it, and the MCP server runs alongside a terminal, so two
+ * processes touching it at once is ordinary rather than exotic. A plain write
+ * truncates first, and a reader landing in that window gets "not valid JSON" on
+ * a file that still holds the api key, the paymasters and the x402 caps. Same
+ * reasoning as `writeSessionConfig`.
+ */
 export function saveConfig(config: JawConfig): void {
-  ensureDir(PATHS.root);
-  fs.writeFileSync(PATHS.config, JSON.stringify(config, null, 2) + '\n', {
-    encoding: 'utf-8',
-    mode: 0o600,
-  });
+  writeJsonAtomic(PATHS.config, config);
 }
 
 /** Paymaster URLs embed provider API keys as query params (e.g. Pimlico's ?apikey=...). */
@@ -59,6 +79,10 @@ export function redactConfig(config: JawConfig): Record<string, unknown> {
   return {
     ...config,
     apiKey: config.apiKey ? `${config.apiKey.slice(0, 8)}...` : undefined,
+    // Public by construction, since anything the browser app carries is in its
+    // bundle. Truncated anyway: it reads as a credential in `config show` and in
+    // the MCP tool's output, and treating it as one costs nothing here.
+    workspaceApiKey: config.workspaceApiKey ? `${config.workspaceApiKey.slice(0, 8)}...` : undefined,
     ...(config.paymasters && {
       paymasters: Object.fromEntries(
         Object.entries(config.paymasters).map(([chainId, pm]) => [
@@ -103,6 +127,9 @@ export function setConfigValue(key: SettableConfigKey, value: string | number): 
   }
   if (key === 'relayUrl' && typeof value === 'string' && !isValidRelayUrl(value)) {
     throw new Error(`Untrusted relayUrl: ${value}. Must be wss://*.jaw.id or ws://localhost.`);
+  }
+  if (key === 'apiKey' && typeof value === 'string' && !isSafeApiKey(value)) {
+    throw new Error('Invalid apiKey: it may not contain characters that change a URL, such as & # or spaces.');
   }
   // Numeric keys: coerce + validate here so EVERY caller is safe. The MCP tool
   // passes raw strings (its schema types value as a string), so without this a

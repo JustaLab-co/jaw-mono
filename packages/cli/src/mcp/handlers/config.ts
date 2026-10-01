@@ -2,7 +2,7 @@ import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { configSetSchema } from '../tools.js';
 import { mcpError, mcpResult } from '../helpers.js';
 import { loadConfig, setConfigValue, redactConfig } from '../../lib/config.js';
-import type { SettableConfigKey } from '../../lib/types.js';
+import type { z } from 'zod';
 
 export function registerConfigTools(server: McpServer): void {
   server.registerTool(
@@ -27,25 +27,18 @@ export function registerConfigTools(server: McpServer): void {
   type RegisterConfigSet = (
     name: string,
     config: { description: string; inputSchema: typeof configSetSchema },
-    handler: (params: { key: SettableConfigKey; value: string }) => Promise<unknown>
+    // Typed from the schema, so the URL keys it leaves out are a type error here too.
+    handler: (params: { key: z.infer<typeof configSetSchema.key>; value: string }) => Promise<unknown>
   ) => void;
   (server.registerTool as unknown as RegisterConfigSet)(
     'jaw_config_set',
     {
-      description: 'Set a CLI configuration value (apiKey, defaultChain, keysUrl, ens, relayUrl, sessionExpiry).',
+      description: 'Set a CLI configuration value (apiKey, defaultChain, ens, sessionExpiry).',
       inputSchema: configSetSchema,
     },
     async (params) => {
       try {
-        if (params.key === 'defaultChain' || params.key === 'sessionExpiry') {
-          const num = parseInt(params.value, 10);
-          if (isNaN(num) || num <= 0) {
-            throw new Error(`Invalid number for ${params.key}: ${params.value}`);
-          }
-          setConfigValue(params.key, num);
-        } else {
-          setConfigValue(params.key, params.value);
-        }
+        setConfigValue(params.key, params.value);
         return {
           content: [
             {

@@ -138,6 +138,15 @@ export function describePeriod(unit: PeriodUnit, multiplier?: number): string {
 }
 
 /**
+ * The window as it reads after "used" or "for": `this day`, or, for a cap over
+ * the whole grant, `the whole permission`. The plain form reads wrong after
+ * "this", which is where both the report and the refusals put it.
+ */
+export function describePeriodPhrase(unit: PeriodUnit, multiplier?: number): string {
+  return unit === 'forever' ? describePeriod(unit) : `this ${describePeriod(unit, multiplier)}`;
+}
+
+/**
  * A spend limit's window, as it reads after "per".
  *
  * Takes a plain string because a grant may say `year`, which is not a

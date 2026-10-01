@@ -21,7 +21,17 @@ export interface PermissionsConfig {
 }
 
 export interface JawConfig {
+  /** The key the user chose, by flag or by `config set`. Never written by us. */
   apiKey?: string;
+  /**
+   * The key the browser bridge handed us, belonging to a workspace created for
+   * the CLI. Kept apart from the user's so it can be replaced on every connect:
+   * a rotated key on the deployment has to reach installs that already have one,
+   * and it cannot if we treat what we were handed as the user's own choice.
+   *
+   * Not settable, and never asserted to the browser.
+   */
+  workspaceApiKey?: string;
   defaultChain?: number;
   keysUrl?: string;
   ens?: string;
@@ -44,7 +54,8 @@ export interface JawConfig {
 }
 
 /**
- * Config keys settable from a plain string value (`jaw config set`, jaw_config_set).
+ * Config keys settable from a plain string value with `jaw config set`. The
+ * MCP tool takes a narrower set; see `configSetSchema`.
  * Excludes structured fields like `x402`/`paymasters`/`permissions`. Kept as a
  * narrow union rather than `keyof JawConfig` so it stays independent of those
  * object fields (which otherwise blow up the MCP SDK's tool-handler inference).

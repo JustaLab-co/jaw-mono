@@ -5,16 +5,9 @@ import { getBridge } from '../../lib/bridge-singleton.js';
 import { SessionBridge } from '../../lib/session-bridge.js';
 import { supportsSessionMode } from '../../lib/rpc-classifier.js';
 import { loadConfig } from '../../lib/config.js';
+import { apiKeyFor } from '../../lib/api-key.js';
 import { tryLoadSessionConfig } from '../../lib/session-config.js';
 import type { JawConfig } from '../../lib/types.js';
-
-function resolveApiKey(config: JawConfig): string {
-  const apiKey = process.env['JAW_API_KEY'] ?? config.apiKey;
-  if (!apiKey) {
-    throw new Error('API key required. Set JAW_API_KEY env var or run: jaw config set apiKey <key>');
-  }
-  return apiKey;
-}
 
 function resolveChainId(paramChainId: number | undefined, config: JawConfig): number {
   if (paramChainId) return paramChainId;
@@ -51,11 +44,10 @@ export function registerRpcTool(server: McpServer): void {
     recentSends.push(now);
   }
 
-  // Same explicit signature the other tools use. This one carried a
-  // `@ts-expect-error` on the handler instead, which stopped covering anything
-  // once the error moved to the schema argument: the directive then reports
-  // itself as unused, which is the failure mode that made the cast the house
-  // pattern in the first place.
+  // Same explicit signature the other tools use. A `@ts-expect-error` on the
+  // handler stops covering anything once the error moves to the schema argument:
+  // the directive then reports itself as unused, which is the failure mode the
+  // cast is the house pattern against.
   type RegisterRpc = (
     name: string,
     config: { description: string; inputSchema: typeof rpcMethodSchema },
@@ -79,7 +71,10 @@ export function registerRpcTool(server: McpServer): void {
     async (params) => {
       try {
         const config = loadConfig();
-        const apiKey = resolveApiKey(config);
+        // Bridge mode opens a browser that fills a key in, so it no longer needs
+        // one up front. Session mode signs locally and refuses below, the same
+        // rule `rpc call` applies to the same two modes.
+        const apiKey = apiKeyFor(config);
         const useSession = params.session ?? envSessionEnabled();
         // In session mode the session's own chain is the only one that can
         // work: `SessionBridge` refuses any other, and an agent that never
@@ -98,6 +93,17 @@ export function registerRpcTool(server: McpServer): void {
             throw new Error(
               `Method ${params.method} is not supported in session mode. ` +
                 'Call again with session: false to route through the browser bridge.'
+            );
+          }
+          // Ahead of the rate limit, which counts as well as checks: a refusal
+          // below it would spend a slot of the window on a call that sends
+          // nothing, and enough of those lock out the sends that would have
+          // worked. Local refusals first, counters after, the order `rpc call`
+          // already follows.
+          if (!apiKey) {
+            throw new Error(
+              'Session mode needs an API key, and there is no browser in this path to get one. ' +
+                'Run `jaw session setup` to have one issued, set JAW_API_KEY, or call again with session: false.'
             );
           }
           if (RATE_LIMITED_SESSION_METHODS.includes(params.method)) {

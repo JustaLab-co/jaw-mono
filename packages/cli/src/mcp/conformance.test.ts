@@ -45,7 +45,7 @@ const CONTRACT: Record<string, ToolContract> = {
     // No `x402.*` and no `paymasters`: a client must not be able to raise its
     // own spending caps or pick who sponsors its sends.
     args: {
-      key: { type: 'string', enum: ['apiKey', 'defaultChain', 'keysUrl', 'ens', 'relayUrl', 'sessionExpiry'] },
+      key: { type: 'string', enum: ['apiKey', 'defaultChain', 'ens', 'sessionExpiry'] },
       value: { type: 'string' },
     },
     required: ['key', 'value'],

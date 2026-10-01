@@ -37,7 +37,9 @@ export const rpcMethodSchema = {
 };
 
 export const configSetSchema = {
-  key: z.enum(['apiKey', 'defaultChain', 'keysUrl', 'ens', 'relayUrl', 'sessionExpiry']).describe('Config key'),
+  // keysUrl and relayUrl decide where signing requests go, so only a person
+  // changes them, through `jaw config set`.
+  key: z.enum(['apiKey', 'defaultChain', 'ens', 'sessionExpiry']).describe('Config key'),
   value: z.string().describe('Config value'),
 };
 

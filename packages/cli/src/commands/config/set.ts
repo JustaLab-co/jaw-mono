@@ -1,6 +1,6 @@
 import { BaseCommand } from '../../base-command.js';
 import { setConfigValue, setX402PolicyValue } from '../../lib/config.js';
-import { isX402PolicyKey } from '../../x402/policy.js';
+import { isX402PolicyKey, X402_ARRAY_KEYS, X402_SCALAR_KEYS } from '../../x402/policy.js';
 import { parseLimit } from '../../x402/grant-preset.js';
 
 const VALID_KEYS = [
@@ -15,6 +15,11 @@ const VALID_KEYS = [
   // allowed to ask a human to approve.
   'grantCeiling',
 ] as const;
+
+// Built from the policy's own lists, not written out beside them. The copy that
+// was written out fell behind `topUpFloat`, so the command answered a key it
+// accepts with a list that does not name it.
+const VALID_KEYS_HINT = `Valid keys: ${VALID_KEYS.join(', ')}, x402.<${[...X402_SCALAR_KEYS, ...X402_ARRAY_KEYS].join('|')}>`;
 
 type ValidKey = (typeof VALID_KEYS)[number];
 
@@ -57,7 +62,7 @@ export default class ConfigSet extends BaseCommand {
 
     if (entries.length === 0) {
       this.error(
-        `No valid key=value pairs provided.\nValid keys: ${VALID_KEYS.join(', ')}\nUsage: jaw config set key=value [key=value ...]`
+        `No valid key=value pairs provided.\n${VALID_KEYS_HINT}\nUsage: jaw config set key=value [key=value ...]`
       );
     }
 
@@ -118,8 +123,6 @@ export default class ConfigSet extends BaseCommand {
 
   private parseEntries(rawArgs: string[]): { key: string; value: string }[] {
     const entries: { key: string; value: string }[] = [];
-    const validKeysHint = `Valid keys: ${VALID_KEYS.join(', ')}, x402.<maxAmountPerPayment|maxTotalPerSession|allowedAssets|allowedNetworks|allowedHosts|allowedPayTo>`;
-
     let i = 0;
     while (i < rawArgs.length) {
       const arg = rawArgs[i];
@@ -131,7 +134,7 @@ export default class ConfigSet extends BaseCommand {
         const value = arg.slice(eqIndex + 1);
 
         if (!isSettableKey(key)) {
-          this.error(`Invalid config key: ${key}\n${validKeysHint}`);
+          this.error(`Invalid config key: ${key}\n${VALID_KEYS_HINT}`);
         }
         entries.push({ key, value });
         i++;
@@ -140,7 +143,9 @@ export default class ConfigSet extends BaseCommand {
         entries.push({ key: arg, value: rawArgs[i + 1] });
         i += 2;
       } else {
-        this.error(`Unexpected argument: ${arg}\nUsage: jaw config set key=value [key=value ...]`);
+        // Both ways of getting here read the same to whoever typed it: a key
+        // that is not one, and a key that is one with no value after it.
+        this.error(`Unexpected argument: ${arg}\n${VALID_KEYS_HINT}\nUsage: jaw config set key=value [key=value ...]`);
       }
     }
 

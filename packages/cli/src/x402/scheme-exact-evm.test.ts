@@ -54,13 +54,18 @@ describe('buildExactPayment', () => {
     expect(recovered.toLowerCase()).toBe(account.address.toLowerCase());
   });
 
-  it('prefers the server-advertised EIP-712 name/version from extra', async () => {
+  it('ignores a server-advertised EIP-712 domain in favour of the registry', async () => {
+    // `extra` is server-controlled, and for a token the registry knows the
+    // server's claim can only agree, adding nothing, or disagree, producing a
+    // signature the token rejects and a failed payment that reserves its whole
+    // ceiling. The registry's own values are checked against the token by
+    // `whyEip712DomainDisagrees`.
     const req = { ...requirement, extra: { name: 'Custom', version: '9' } };
     const payload = await buildExactPayment(req, account.address, signer, { now: 1_000_000, nonce: NONCE });
 
-    // Recovers only under the advertised domain, proving extra was used.
+    // Recovers under the registry's domain, not the advertised one.
     const recovered = await recoverTypedDataAddress({
-      domain: { name: 'Custom', version: '9', chainId: 84532, verifyingContract: requirement.asset },
+      domain: { name: 'USDC', version: '2', chainId: 84532, verifyingContract: requirement.asset },
       types: TRANSFER_WITH_AUTHORIZATION_TYPES,
       primaryType: 'TransferWithAuthorization',
       message: {
@@ -126,7 +131,6 @@ describe('buildExactPayment', () => {
     }
   });
 });
-
 describe('encodePaymentPayload', () => {
   it('base64-encodes round-trippable JSON', async () => {
     const payload = await buildExactPayment(requirement, account.address, signer, { now: 1_000_000, nonce: NONCE });

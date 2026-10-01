@@ -12,7 +12,7 @@ vi.mock('../lib/paths.js', () => {
   return { PATHS: { root, x402Log: p.join(root, 'x402-log.jsonl') } };
 });
 
-const { appendX402Log, readX402Log } = await import('./ledger.js');
+const { appendX402Log, appendX402Correction, readX402Log } = await import('./ledger.js');
 const { PATHS } = await import('../lib/paths.js');
 
 const entry = (over: Partial<Parameters<typeof appendX402Log>[0]> = {}) => ({
@@ -82,5 +82,41 @@ describe('x402 ledger', () => {
     expect(urls).toContain('https://good1');
     expect(urls).toContain('https://good2'); // survived despite the torn line before it
     expect(urls).not.toContain(undefined);
+  });
+
+  it('folds a correction onto the payment it answers, and hides the correction itself', () => {
+    appendX402Log(entry({ nonce: '7', authorized: '1000', settlement: 'unverified' }));
+    appendX402Correction({ at: '2026-07-16T01:00:00.000Z', corrects: '7', settlement: 'verified', amount: '400' });
+
+    const log = readX402Log();
+
+    expect(log).toHaveLength(1);
+    expect(log[0].settlement).toBe('verified');
+    expect(log[0].amount).toBe('400');
+  });
+
+  it('takes the last answer about a nonce', () => {
+    appendX402Log(entry({ nonce: '7', settlement: 'unverified' }));
+    appendX402Correction({ at: '2026-07-16T01:00:00.000Z', corrects: '7', settlement: 'expired', amount: '0' });
+    appendX402Correction({ at: '2026-07-16T02:00:00.000Z', corrects: '7', settlement: 'verified', amount: '400' });
+
+    expect(readX402Log()[0].settlement).toBe('verified');
+  });
+
+  it('counts the limit in payments, not in lines', () => {
+    appendX402Log(entry({ url: 'https://a', nonce: '1' }));
+    appendX402Log(entry({ url: 'https://b', nonce: '2' }));
+    appendX402Correction({ at: '2026-07-16T01:00:00.000Z', corrects: '1', settlement: 'verified', amount: '5' });
+
+    expect(readX402Log(2).map((e) => e.url)).toEqual(['https://a', 'https://b']);
+  });
+
+  it('skips a line that parses to something that is not a record', () => {
+    appendX402Log(entry({ url: 'https://good' }));
+    fs.appendFileSync(PATHS.x402Log, '\nnull');
+    fs.appendFileSync(PATHS.x402Log, '\n42');
+    appendX402Log(entry({ url: 'https://after' }));
+
+    expect(readX402Log().map((e) => e.url)).toEqual(['https://good', 'https://after']);
   });
 });

@@ -73,7 +73,10 @@ vi.mock('../lib/session-bridge.js', () => ({
 
 vi.mock('../x402/balance.js', async (importOriginal) => ({
   ...(await importOriginal<typeof import('../x402/balance.js')>()),
-  usdcBalance: async () => ({ raw: '0', formatted: '0' }),
+  // The payer starts empty so a payment needs a top-up, and the account behind
+  // the permission holds enough to fund one.
+  usdcBalance: async (_network: string, owner: string) =>
+    owner.toLowerCase() === '0x' + '22'.repeat(20) ? { raw: '1000000', formatted: '1' } : { raw: '0', formatted: '0' },
   publicClientFor: () => ({ getCode: async () => undefined }),
 }));
 

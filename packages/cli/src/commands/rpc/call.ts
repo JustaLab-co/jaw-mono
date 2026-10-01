@@ -77,6 +77,17 @@ export default class RpcCall extends BaseCommand {
         );
       }
 
+      // Session mode signs locally and opens nothing, so there is no browser to
+      // fill a key in. Refused here rather than left to fail at the proxy,
+      // where the error names an authorization problem and not the fix.
+      if (!apiKey) {
+        this.error(
+          'Session mode needs an API key, and there is no browser in this path to get one. ' +
+            'Run `jaw session setup` to have one issued, set one with `jaw config set apiKey <key>`, ' +
+            'or drop --session to route through the browser bridge.'
+        );
+      }
+
       bridge = new SessionBridge({ apiKey, chainId });
 
       if (!flags.quiet) {

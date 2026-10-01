@@ -4,6 +4,7 @@ import { usdcForNetwork } from './asset-registry.js';
 import {
   PERMIT_WITNESS_TRANSFER_FROM_TYPES,
   UPTO_VERIFIED_CHAIN_IDS,
+  isUptoVerifiedChain,
   X402_UPTO_PROXY_ADDRESS,
   permit2Domain,
   type UptoPermitMessage,
@@ -94,7 +95,7 @@ export async function buildUptoPayment(
   // pointing at a spender with no code is one nobody can settle. `checkPolicy`
   // already refuses these during selection, before anything is funded; this is
   // the signer's own precondition, for a caller that reaches it another way.
-  if (!UPTO_VERIFIED_CHAIN_IDS.includes(asset.chainId)) {
+  if (!isUptoVerifiedChain(asset.chainId)) {
     throw new Error(
       `x402 upto is not available on ${requirement.network}: the settlement proxy is only verified on ` +
         `chain ids ${UPTO_VERIFIED_CHAIN_IDS.join(', ')}`

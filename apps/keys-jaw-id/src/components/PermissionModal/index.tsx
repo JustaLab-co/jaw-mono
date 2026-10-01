@@ -11,6 +11,8 @@ import {
   isNativeToken,
   isWildcard,
   usePermissionRevocation,
+  useSpenderPrefund,
+  describeSpenderPrefund,
 } from '@jaw.id/ui';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { formatUnits, erc20Abi, type Address } from 'viem';
@@ -26,11 +28,11 @@ import {
   buildRevokePermissionCall,
   buildErc20PaymasterContext,
   standardErrorCodes,
-  JAW_PAYMASTER_URL,
+  jawPaymasterUrl,
+  spenderPrefundCall,
   JAW_RPC_URL,
   SUPPORTED_CHAINS,
   handleGetCapabilitiesRequest,
-  type FeeTokenCapability,
 } from '@jaw.id/core';
 import { apiKeyFromChain } from '../../lib/api-key';
 
@@ -212,10 +214,11 @@ export const PermissionModal = ({
         address: grantParams.address,
         // The spender sends every op this permission authorises, and the ERC-20
         // paymaster charges the sender, so its first one has nothing to be
-        // charged. The SDK rides a small transfer along in this transaction when
-        // the request asks; it decides the amount and the destination, not the
-        // requester. Not rendered: like the paymaster's own approval, it is part
-        // of what this transaction costs rather than part of what it authorises.
+        // charged. When the request asks, a small transfer to the spender rides
+        // along in this transaction. The SDK decides the amount and the
+        // destination, not the requester, and the screen shows both: it leaves
+        // the account to an address the requester chose, and revoking the
+        // permission does not bring it back.
         prefundSpender: grantParams.capabilities?.prefundSpender === true,
       };
     } else {
@@ -250,6 +253,34 @@ export const PermissionModal = ({
     enabled: mode === 'revoke',
   });
 
+  // Grant only: the transfer to the spender the request asked for, sized before the screen
+  // renders so the screen shows it and the grant sends exactly that.
+  const grantPermissionsDetail = useMemo(
+    () =>
+      permissionDetails && 'spends' in permissionDetails
+        ? { spends: permissionDetails.spends, calls: permissionDetails.calls }
+        : undefined,
+    [permissionDetails]
+  );
+  const { quote: prefundQuote, loading: prefundLoading } = useSpenderPrefund({
+    account,
+    enabled:
+      mode === 'grant' &&
+      !!permissionDetails &&
+      'prefundSpender' in permissionDetails &&
+      permissionDetails.prefundSpender === true,
+    spender: permissionDetails && 'spender' in permissionDetails ? (permissionDetails.spender as Address) : undefined,
+    permissions: grantPermissionsDetail,
+    address: permissionDetails?.address as Address | undefined,
+  });
+  const prefund = useMemo(
+    () =>
+      prefundQuote?.kind === 'transfer'
+        ? { token: prefundQuote.token, spender: prefundQuote.spender, amount: prefundQuote.amount }
+        : null,
+    [prefundQuote]
+  );
+
   // Build the actual permission call for gas estimation (grant or revoke)
   const transactionCalls = useMemo(() => {
     if (mode === 'grant') {
@@ -267,7 +298,8 @@ export const PermissionModal = ({
           grantParams!.expiry,
           grantParams!.permissions
         );
-        return [permissionCall];
+        // The transfer is part of what this transaction costs, so the fee is estimated with it in.
+        return prefund ? [spenderPrefundCall(prefund), permissionCall] : [permissionCall];
       } catch (error) {
         console.warn('[PermissionModal] Failed to build permission grant call:', error);
         return [];
@@ -284,7 +316,7 @@ export const PermissionModal = ({
         return [];
       }
     }
-  }, [mode, walletAddress, permissionRequest, fetchedPermissionData]);
+  }, [mode, walletAddress, permissionRequest, fetchedPermissionData, prefund]);
 
   // Use the gas estimation hook for both ETH and ERC-20 cost estimation
   const {
@@ -311,9 +343,12 @@ export const PermissionModal = ({
     // If already sponsored via capabilities or config, use that
     if (effectivePaymasterUrl) return effectivePaymasterUrl;
 
-    // If user selected an ERC-20 token (non-native), use ERC-20 paymaster
-    if (selectedFeeToken && !selectedFeeToken.isNative) {
-      return `${JAW_PAYMASTER_URL}?chainId=${chain?.id || 1}${extractedApiKey ? `&api-key=${extractedApiKey}` : ''}`;
+    // If user selected an ERC-20 token (non-native), use ERC-20 paymaster.
+    // No chain is no paymaster. Every reader of this value guards on `chain`
+    // first, so the check states the requirement rather than handling a case
+    // that fires; the two modals disagreed about it while it was implicit.
+    if (selectedFeeToken && !selectedFeeToken.isNative && chain?.id !== undefined) {
+      return jawPaymasterUrl(chain.id, extractedApiKey);
     }
 
     // Native ETH - no paymaster needed
@@ -440,6 +475,13 @@ export const PermissionModal = ({
     return '';
   }, [permissionDetails, mode, fetchedPermissionData]);
 
+  const prefundDisplay = useMemo(() => {
+    if (!prefundQuote) return null;
+    const token = prefundQuote.token.toLowerCase();
+    const key = Object.keys(tokenInfoMap).find((address) => address.toLowerCase() === token);
+    return describeSpenderPrefund(prefundQuote, key ? tokenInfoMap[key] : undefined);
+  }, [prefundQuote, tokenInfoMap]);
+
   // Spender address
   const spenderAddress = useMemo(() => {
     if (mode === 'revoke' && fetchedPermissionData?.spender) {
@@ -498,7 +540,7 @@ export const PermissionModal = ({
         );
 
         const chainIdHex = `0x${(chain?.id || 1).toString(16)}` as `0x${string}`;
-        const feeTokenCap = capabilities?.[chainIdHex]?.feeToken as FeeTokenCapability | undefined;
+        const feeTokenCap = capabilities?.[chainIdHex]?.feeToken;
 
         if (!feeTokenCap?.supported || !feeTokenCap?.tokens?.length) {
           if (isMounted) setFeeTokensLoading(false);
@@ -675,7 +717,9 @@ export const PermissionModal = ({
           throw new Error('Spender is required for granting permissions.');
         }
 
-        // Account.grantPermissions with paymaster URL and context for ERC-20 payment
+        // Account.grantPermissions with paymaster URL and context for ERC-20 payment. The prefund
+        // is the one the screen showed; core checks it and fails the grant rather than send
+        // anything else.
         const result = await account.grantPermissions(
           permissionDetails.expiry,
           permissionDetails.spender,
@@ -686,7 +730,7 @@ export const PermissionModal = ({
           computedPaymasterUrl,
           computedPaymasterContext,
           permissionDetails.address,
-          { prefundSpender: 'prefundSpender' in permissionDetails && permissionDetails.prefundSpender }
+          prefund ? { prefund } : undefined
         );
 
         console.log('Permissions granted:', result);
@@ -728,7 +772,17 @@ export const PermissionModal = ({
       submittingRef.current = false;
       setIsProcessing(false);
     }
-  }, [account, chain, permissionDetails, mode, onSuccess, onError, computedPaymasterUrl, computedPaymasterContext]);
+  }, [
+    account,
+    chain,
+    permissionDetails,
+    mode,
+    onSuccess,
+    onError,
+    computedPaymasterUrl,
+    computedPaymasterContext,
+    prefund,
+  ]);
 
   const handleCancel = useCallback(() => {
     // isProcessing commits a render late; a same-tick cancel must not report
@@ -768,6 +822,8 @@ export const PermissionModal = ({
       appLogoUrl={appLogoUrl}
       grantedDate={grantedDate}
       spends={formattedSpends}
+      prefund={mode === 'grant' ? prefundDisplay : undefined}
+      prefundLoading={mode === 'grant' && prefundLoading}
       tokenMeta={tokenInfoMap}
       calls={formattedCalls}
       expiryDate={expiryDate}

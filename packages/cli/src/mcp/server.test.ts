@@ -371,9 +371,9 @@ describe('jaw_x402_balance', () => {
     expect(usdcBalanceMock.mock.calls[0][0]).toBe('eip155:84532');
   });
 
-  // The tool's description says it needs a session, and it used to answer
-  // anyway: no session file fell through to config's `allowedNetworks` and then
-  // to Base, so an agent got a confident balance for a chain nobody named.
+  // The tool's description says it needs a session, so it has to refuse without
+  // one. Falling through to config's `allowedNetworks` and then to Base would
+  // hand an agent a confident balance for a chain nobody named.
   it('refuses to guess a network when there is no session', async () => {
     const { saveKeystore } = await import('../lib/keystore.js');
     saveKeystore('0x59c6995e998f97a5a0044966f0945389dc9e86dae88c7a8412f4603b6b78690d', '0xSessionAddr');
@@ -498,13 +498,16 @@ describe('jaw_pay_and_fetch', () => {
       expiry: Math.floor(Date.now() / 1000) + 3600,
     });
 
-    // Empty payer -> the funder must refill through the permission first.
-    usdcBalanceMock.mockResolvedValue({
+    // Empty payer -> the funder must refill through the permission first, and
+    // funded on the read after it, which is what the funder now checks before
+    // letting the payment be signed.
+    const balance = (raw: string) => ({
       network: 'eip155:84532',
       asset: '0x036CbD53842c5426634e7929541eC2318f3dCF7e',
-      raw: '0',
-      formatted: '0',
+      raw,
+      formatted: raw,
     });
+    usdcBalanceMock.mockResolvedValueOnce(balance('0')).mockResolvedValue(balance('10000000'));
     sessionRequestMock.mockImplementation(async (method: string) => {
       if (method === 'wallet_sendCalls') return { id: '0xtopupbatch', chainId: 84532 };
       if (method === 'wallet_getCallsStatus') return { status: 200 };
@@ -529,6 +532,68 @@ describe('jaw_pay_and_fetch', () => {
       // The transfer went through the session bridge with the granted permission.
       const send = sessionRequestMock.mock.calls.find((c) => c[0] === 'wallet_sendCalls');
       expect(send).toBeTruthy();
+
+      // The ledger row carries the permission it was charged against. The sums
+      // fall back to the payer when a row has none, which is what keeps a live
+      // cap from resetting, and which also means a dropped write here would look
+      // like nothing at all: the totals would quietly go back to counting per
+      // spender, which is the defect this field exists to fix.
+      const { readX402Log } = await import('../x402/ledger.js');
+      const row = readX402Log().at(-1);
+      expect(row?.permissionId).toBe('0xperm1');
+    } finally {
+      vi.unstubAllGlobals();
+      sessionRequestMock.mockReset();
+      usdcBalanceMock.mockReset();
+    }
+  });
+
+  it('tops up with the workspace key the browser handed us when the user set none', async () => {
+    const { saveKeystore } = await import('../lib/keystore.js');
+    const { saveSessionConfig } = await import('../lib/session-config.js');
+    saveKeystore(PK, '0xSmartAccount');
+    // The shape of every install where nobody pasted a key: only what the
+    // browser filled in on connect, and no environment override either.
+    delete process.env['JAW_API_KEY'];
+    saveConfig({ workspaceApiKey: 'workspace-key' });
+    saveSessionConfig({
+      mode: 'eip7702',
+      ownerAddress: '0xOwner',
+      sessionAddress: '0xSmartAccount',
+      permissionId: '0xperm1',
+      chainId: 84532,
+      expiry: Math.floor(Date.now() / 1000) + 3600,
+    });
+
+    const balance = (raw: string) => ({
+      network: 'eip155:84532',
+      asset: '0x036CbD53842c5426634e7929541eC2318f3dCF7e',
+      raw,
+      formatted: raw,
+    });
+    usdcBalanceMock.mockResolvedValueOnce(balance('0')).mockResolvedValue(balance('10000000'));
+    sessionRequestMock.mockImplementation(async (method: string) => {
+      if (method === 'wallet_sendCalls') return { id: '0xtopupbatch', chainId: 84532 };
+      if (method === 'wallet_getCallsStatus') return { status: 200 };
+      throw new Error(`unexpected ${method}`);
+    });
+
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(mkRes(402, { 'PAYMENT-REQUIRED': CHALLENGE }, '{}'))
+      .mockResolvedValueOnce(mkRes(200, { 'PAYMENT-RESPONSE': RECEIPT }, JSON.stringify({ data: 'ok' })));
+    vi.stubGlobal('fetch', fetchMock);
+    try {
+      const client = await connectClient();
+      const parsed = payResult(
+        await client.callTool({ name: 'jaw_pay_and_fetch', arguments: { url: 'https://api.example.com/paid' } })
+      );
+
+      expect(parsed.paid).toBe(true);
+      expect(parsed.topUp).toEqual({ amount: '101000', batchId: '0xtopupbatch' });
+      // The bridge that sent the refill operates under the injected key, which
+      // is what the paymaster url is built from.
+      expect(sessionBridgeCtorMock).toHaveBeenCalledWith(expect.objectContaining({ apiKey: 'workspace-key' }));
     } finally {
       vi.unstubAllGlobals();
       sessionRequestMock.mockReset();
@@ -997,6 +1062,25 @@ describe('jaw_config_set', () => {
   it('rejects a non-numeric defaultChain', async () => {
     const client = await connectClient();
     const result = await client.callTool({ name: 'jaw_config_set', arguments: { key: 'defaultChain', value: 'nope' } });
+    expect(result.isError).toBe(true);
+  });
+
+  it('rejects a defaultChain with trailing garbage, as the CLI does', async () => {
+    const { loadConfig } = await import('../lib/config.js');
+    const before = loadConfig().defaultChain;
+    const client = await connectClient();
+    const result = await client.callTool({
+      name: 'jaw_config_set',
+      arguments: { key: 'defaultChain', value: '14abc' },
+    });
+    expect(result.isError).toBe(true);
+    expect(loadConfig().defaultChain).toBe(before);
+  });
+
+  it.each(['keysUrl', 'relayUrl'])('does not let an agent change %s', async (key) => {
+    const client = await connectClient();
+    const value = key === 'keysUrl' ? 'https://keys.jaw.id' : 'wss://relay.jaw.id';
+    const result = await client.callTool({ name: 'jaw_config_set', arguments: { key, value } });
     expect(result.isError).toBe(true);
   });
 });

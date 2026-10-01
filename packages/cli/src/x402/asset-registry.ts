@@ -1,6 +1,13 @@
 // USDC asset registry, mirrored from the backend's
 // `apps/ens/src/external/payment/asset-registry.ts`. Keep this in sync when the
 // server adds a chain. `wireNetwork` is the CAIP-2 id used on the x402 v2 wire.
+//
+// USDC existing on a chain is not enough to list it here. The permission manager
+// has to be deployed there too, because a session pays through a permission and
+// there is nothing to grant against otherwise. Polygon Amoy was listed and had
+// no manager: `eth_getCode` on 0xf1b40E3D5701C04d86F7828f0EB367B9C90901D8
+// answers 0x on 80002 and returns the bytecode on 8453 and 137. Check the chain
+// before adding an entry, not the token.
 
 export interface UsdcAsset {
   address: `0x${string}`;
@@ -21,7 +28,7 @@ export interface UsdcAsset {
   decimals: number;
 }
 
-export const USDC_BY_NETWORK: Record<string, UsdcAsset> = {
+export const USDC_BY_NETWORK = {
   'eip155:8453': {
     address: '0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913',
     chainId: 8453,
@@ -46,15 +53,18 @@ export const USDC_BY_NETWORK: Record<string, UsdcAsset> = {
     usdcVersion: '2',
     decimals: 6,
   },
-  'eip155:80002': {
-    address: '0x41E94Eb019C0762f9Bfcf9Fb1E58725BfB0e7582',
-    chainId: 80002,
-    wireNetwork: 'eip155:80002',
-    usdcName: 'USDC',
-    usdcVersion: '2',
-    decimals: 6,
-  },
-};
+} as const satisfies Record<string, UsdcAsset>;
+
+/**
+ * The chains the registry carries, derived rather than written again.
+ *
+ * `balance.ts` needs a viem chain for each, and `permit2.ts` allows a subset for
+ * `upto`. Stating their key sets by hand leaves the registry and the viem map in
+ * step only by a loop that throws at import time, and only in one direction.
+ * Deriving makes the compiler hold both directions instead.
+ */
+type RegisteredAsset = (typeof USDC_BY_NETWORK)[keyof typeof USDC_BY_NETWORK];
+export type UsdcChainId = RegisteredAsset['chainId'];
 
 /**
  * Look up USDC metadata by CAIP-2 network id, or `undefined` if unsupported.
@@ -64,6 +74,11 @@ export const USDC_BY_NETWORK: Record<string, UsdcAsset> = {
  * `toString` with something off the prototype: callers then read `.address` off
  * a function and throw where they expected an unsupported network.
  */
-export function usdcForNetwork(network: string): UsdcAsset | undefined {
-  return Object.hasOwn(USDC_BY_NETWORK, network) ? USDC_BY_NETWORK[network] : undefined;
+export function usdcForNetwork(network: string): RegisteredAsset | undefined {
+  // The one place an untrusted string meets the closed table, so the widening
+  // lives here and nowhere else: the parameter stays `string` because the network
+  // arrives from a 402 challenge and from the Bazaar catalogue, while the return
+  // carries the registry's own chain id so callers keep it.
+  const registry: Record<string, RegisteredAsset> = USDC_BY_NETWORK;
+  return Object.hasOwn(registry, network) ? registry[network] : undefined;
 }

@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 import type { SessionConfig } from '../lib/session-config.js';
-import type { X402Policy } from './policy.js';
+import type { LimitUsage, X402Policy } from './policy.js';
 
 /**
  * What `topUpCeiling` sizes refills from, and what `jaw x402 status` prints as
@@ -19,11 +19,24 @@ const h = vi.hoisted(() => ({
     | { status: 'outside-window' }
     | { status: 'unavailable' },
   reads: 0,
+  summed: [] as unknown[],
+  scopes: [] as unknown[],
+  sinces: [] as unknown[],
 }));
 
 vi.mock('./ledger.js', () => ({
-  sumToppedUpSince: () => h.toppedUp,
-  sumSpentSince: () => h.spent,
+  sumToppedUpSince: (entries: unknown, scope: unknown, since: unknown) => {
+    h.summed.push(entries);
+    h.scopes.push(scope);
+    h.sinces.push(since);
+    return h.toppedUp;
+  },
+  sumSpentSince: (entries: unknown, scope: unknown, since: unknown) => {
+    h.summed.push(entries);
+    h.scopes.push(scope);
+    h.sinces.push(since);
+    return h.spent;
+  },
 }));
 
 vi.mock('./permission-onchain.js', () => ({
@@ -35,7 +48,11 @@ vi.mock('./permission-onchain.js', () => ({
   },
 }));
 
-const { currentLimitUsage, currentLimitUsageOnChain } = await import('./spend-window.js');
+const { currentLimitUsage, currentLimitUsageOnChain, capWindowStarts } = await import('./spend-window.js');
+
+// The caller's snapshot of the ledger. Its contents do not matter here: the
+// sums are mocked, and what these tests are about is the windows.
+const LEDGER: never[] = [];
 const USDC = '0x036CbD53842c5426634e7929541eC2318f3dCF7e';
 
 const ANCHOR = new Date('2026-08-01T00:00:00.000Z');
@@ -63,16 +80,68 @@ beforeEach(() => {
   h.spent = 0n;
   h.onChain = { status: 'unavailable' };
   h.reads = 0;
+  h.summed = [];
+  h.scopes = [];
+  h.sinces = [];
 });
 
 describe('currentLimitUsage', () => {
   it('marks the ledger as the source, because from there the figure is a floor', () => {
     h.toppedUp = 1_000_000n;
-    expect(currentLimitUsage(POLICY, PAYER, SESSION, NOW)[0]).toMatchObject({ toppedUp: 1_000_000n, source: 'ledger' });
+    expect(currentLimitUsage(LEDGER, POLICY, PAYER, SESSION, NOW)[0]).toMatchObject({
+      toppedUp: 1_000_000n,
+      source: 'ledger',
+    });
   });
 
   it('is empty when no grant seeded a limit, so only the session cap applies', () => {
-    expect(currentLimitUsage({}, PAYER, SESSION, NOW)).toEqual([]);
+    expect(currentLimitUsage(LEDGER, {}, PAYER, SESSION, NOW)).toEqual([]);
+  });
+
+  // One read per payment: every limit is counted against the rows the caller
+  // read under the lock, not against a read of the sum's own.
+  it('counts every limit against the rows it was handed', () => {
+    currentLimitUsage(LEDGER, POLICY, PAYER, SESSION, NOW);
+    expect(h.summed.length).toBeGreaterThan(0);
+    expect(h.summed.every((entries) => entries === LEDGER)).toBe(true);
+  });
+});
+
+/**
+ * `Number.isFinite` passes `type(uint48).max`, which is what a permission
+ * granted with no end leaves in the window: finite, and a thousand times past
+ * what `Date` holds. Kept as an Invalid Date it passes every `endsAt === null`
+ * guard downstream and throws on `toISOString`.
+ */
+describe('a window the Date cannot hold', () => {
+  // `forever` is the case: its window ends where the permission does, so an
+  // expiry of `type(uint48).max` lands in `end` verbatim.
+  const FOREVER: X402Policy = {
+    perPeriod: [{ allowance: '5000000', unit: 'forever', multiplier: 1, anchor: ANCHOR.toISOString() }],
+  };
+
+  it('reports no end from the ledger branch, without throwing', async () => {
+    const [period] = currentLimitUsage(LEDGER, FOREVER, PAYER, { ...SESSION, expiry: 281_474_976_710_655 }, NOW);
+
+    expect(period.endsAt).toBeNull();
+  });
+
+  // Same rule on the way in: an unreadable start leaves the sums with no window
+  // to count over, and they count everything, which refuses early rather than
+  // overspending. The fold is refused on the same Date.
+  it('counts from no window at all when the start cannot be read', async () => {
+    h.onChain = { status: 'ok', start: 281_474_976_710_655, end: 281_474_976_710_655, spend: 0n };
+
+    const [period] = await currentLimitUsageOnChain(LEDGER, POLICY, PAYER, SESSION, NOW);
+
+    expect(Number.isNaN(period.startedAt.getTime())).toBe(true);
+    expect(capWindowStarts([period], SESSION.createdAt)).toBeUndefined();
+    // Every row, not a window: a `since` of 'Invalid Date' would compare as a
+    // string against the timestamps and drop every row, which reads as a cap
+    // nobody has touched.
+    // The ledger pass underneath ran with its own readable window, so what this
+    // pins is that the chain branch asked for every row rather than for one.
+    expect(h.sinces).toContain(undefined);
   });
 });
 
@@ -86,8 +155,22 @@ describe('currentLimitUsageOnChain', () => {
     h.toppedUp = 1_000_000n;
     h.onChain = { status: 'ok', ...CHAIN_WINDOW, spend: 5_000_000n };
 
-    const [period] = await currentLimitUsageOnChain(POLICY, PAYER, SESSION, NOW);
+    const [period] = await currentLimitUsageOnChain(LEDGER, POLICY, PAYER, SESSION, NOW);
     expect(period).toMatchObject({ toppedUp: 5_000_000n, source: 'chain', endsAt: new Date(CHAIN_WINDOW.end * 1000) });
+  });
+
+  /**
+   * A permission whose period end is the contract's way of spelling "no end".
+   * Kept as an Invalid Date it passes every `endsAt === null` guard downstream
+   * and throws on `toISOString`, taking down `x402 status` and turning a policy
+   * refusal into an exception mid-payment.
+   */
+  it('reports no end for a period the Date cannot hold', async () => {
+    h.toppedUp = 0n;
+    h.onChain = { status: 'ok', start: CHAIN_WINDOW.start, end: 281_474_976_710_655, spend: 0n };
+
+    const [period] = await currentLimitUsageOnChain(LEDGER, POLICY, PAYER, SESSION, NOW);
+    expect(period.endsAt).toBeNull();
   });
 
   /**
@@ -99,7 +182,7 @@ describe('currentLimitUsageOnChain', () => {
     h.toppedUp = 5_000_000n;
     h.onChain = { status: 'ok', ...CHAIN_WINDOW, spend: 0n };
 
-    const [period] = await currentLimitUsageOnChain(POLICY, PAYER, SESSION, NOW);
+    const [period] = await currentLimitUsageOnChain(LEDGER, POLICY, PAYER, SESSION, NOW);
     // Reported as the ledger's, because that is what it is: our own estimate of
     // a pull that has not been mined. Calling it the chain's would let the
     // report print an estimate as a metered total. The window is still the
@@ -110,18 +193,18 @@ describe('currentLimitUsageOnChain', () => {
   it('reports the chain as the source when the two agree', async () => {
     h.toppedUp = 5_000_000n;
     h.onChain = { status: 'ok', ...CHAIN_WINDOW, spend: 5_000_000n };
-    expect((await currentLimitUsageOnChain(POLICY, PAYER, SESSION, NOW))[0]).toMatchObject({ source: 'chain' });
+    expect((await currentLimitUsageOnChain(LEDGER, POLICY, PAYER, SESSION, NOW))[0]).toMatchObject({ source: 'chain' });
   });
 
   it('counts the ledger over the window the contract is actually in', async () => {
     h.onChain = { status: 'ok', ...CHAIN_WINDOW, spend: 0n };
-    const [period] = await currentLimitUsageOnChain(POLICY, PAYER, SESSION, NOW);
+    const [period] = await currentLimitUsageOnChain(LEDGER, POLICY, PAYER, SESSION, NOW);
     expect(period?.endsAt).toEqual(new Date(CHAIN_WINDOW.end * 1000));
   });
 
   it('falls back to the ledger when the node does not answer', async () => {
     h.toppedUp = 2_000_000n;
-    const [period] = await currentLimitUsageOnChain(POLICY, PAYER, SESSION, NOW);
+    const [period] = await currentLimitUsageOnChain(LEDGER, POLICY, PAYER, SESSION, NOW);
     expect(period).toMatchObject({ toppedUp: 2_000_000n, source: 'ledger' });
   });
 
@@ -130,19 +213,74 @@ describe('currentLimitUsageOnChain', () => {
   it('falls back to the ledger for a permission outside its own window', async () => {
     h.toppedUp = 2_000_000n;
     h.onChain = { status: 'outside-window' };
-    const [period] = await currentLimitUsageOnChain(POLICY, PAYER, SESSION, NOW);
+    const [period] = await currentLimitUsageOnChain(LEDGER, POLICY, PAYER, SESSION, NOW);
     expect(period).toMatchObject({ toppedUp: 2_000_000n, source: 'ledger' });
   });
 
   it('does not read the chain on a chain with no registry asset to meter', async () => {
     const elsewhere = { ...SESSION, chainId: 1 };
-    const [period] = await currentLimitUsageOnChain(POLICY, PAYER, elsewhere, NOW);
+    const [period] = await currentLimitUsageOnChain(LEDGER, POLICY, PAYER, elsewhere, NOW);
     expect(period?.source).toBe('ledger');
     expect(h.reads).toBe(0);
   });
 
   it('does not read the chain when no period applies at all', async () => {
-    expect(await currentLimitUsageOnChain({}, PAYER, SESSION, NOW)).toEqual([]);
+    expect(await currentLimitUsageOnChain(LEDGER, {}, PAYER, SESSION, NOW)).toEqual([]);
     expect(h.reads).toBe(0);
+  });
+});
+
+/**
+ * The window is read per permission, not per payer. One permission carries one
+ * allowance and every spender under it draws on the same counter, so a scope
+ * that lost the permission would measure each spender against its own copy of a
+ * cap the chain meters once.
+ */
+describe('the ledger is asked about the session permission', () => {
+  it('carries the permission and the payer into every sum', () => {
+    currentLimitUsage(LEDGER, POLICY, PAYER, SESSION, NOW);
+
+    expect(h.scopes.length).toBeGreaterThan(0);
+    for (const scope of h.scopes) {
+      expect(scope).toEqual({ permissionId: SESSION.permissionId, payer: PAYER });
+    }
+  });
+
+  it('asks about the payer alone when the session names no permission', () => {
+    currentLimitUsage(LEDGER, POLICY, PAYER, { expiry: SESSION.expiry }, NOW);
+
+    expect(h.scopes.length).toBeGreaterThan(0);
+    for (const scope of h.scopes) {
+      expect(scope).toEqual({ permissionId: undefined, payer: PAYER });
+    }
+  });
+});
+
+describe('capWindowStarts', () => {
+  const limit = (startedAt: string) => ({ startedAt: new Date(startedAt) }) as LimitUsage;
+
+  it('offers one instant per live limit plus the session start', () => {
+    const starts = capWindowStarts(
+      [limit('2026-07-01T00:00:00.000Z'), limit('2026-07-15T00:00:00.000Z')],
+      '2026-06-01T00:00:00.000Z'
+    );
+    expect(starts).toEqual(['2026-07-01T00:00:00.000Z', '2026-07-15T00:00:00.000Z', '2026-06-01T00:00:00.000Z']);
+  });
+
+  it('offers nothing for a session with no createdAt', () => {
+    // That total is summed with no `since` at all, so it counts every row and
+    // every checkpoint alike and imposes no cut.
+    expect(capWindowStarts([], undefined)).toEqual([]);
+  });
+
+  it('forbids the fold when a window start cannot be read', () => {
+    // A `uint48` period start the `Date` cannot hold. Dropping that cap from
+    // the list would move the cut later and absorb rows it still counts, so the
+    // whole list is withheld instead.
+    const starts = capWindowStarts(
+      [limit('2026-07-01T00:00:00.000Z'), { startedAt: new Date(8.64e15 + 1) } as LimitUsage],
+      '2026-06-01T00:00:00.000Z'
+    );
+    expect(starts).toBeUndefined();
   });
 });

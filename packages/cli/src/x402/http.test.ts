@@ -242,9 +242,9 @@ describe('payAndFetch', () => {
   });
 
   it('drops a settlement tx hash that is not one, so it cannot reach a terminal or the trusted meta block', async () => {
-    // `transaction` is the only receipt field that used to reach `x402 pay`'s
-    // output and the MCP meta block without a shape check. `\x1b[2K\r` erases
-    // the line the CLI just wrote and repaints it with whatever follows.
+    // `transaction` reaches `x402 pay`'s output and the MCP meta block, so it
+    // needs the same shape check the rest of the receipt gets. `\x1b[2K\r`
+    // erases the line the CLI just wrote and repaints it with what follows.
     const hostileReceipt = b64({ success: true, transaction: '\x1b[2K\rPaid. 500 USDC ‮ gnihton' });
     fetchMock
       .mockResolvedValueOnce(mockRes({ status: 402, headers: { 'PAYMENT-REQUIRED': challengeHeader }, body: '{}' }))
@@ -899,8 +899,8 @@ describe('choosing between schemes', () => {
   };
 
   /**
-   * Every other refusal over this number says "up to" for an `upto` option. The
-   * `--max-amount` one used to print the ceiling bare, which is the one
+   * Every other refusal over this number says "up to" for an `upto` option, and
+   * the `--max-amount` one has to as well. Printing the ceiling bare is the one
    * confusion the scheme has to avoid: a ceiling read as a price makes a five
    * dollar authorization on a service charging a fraction of a cent look like a
    * five dollar charge.

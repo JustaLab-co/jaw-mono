@@ -1,19 +1,17 @@
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { payAndFetchSchema, x402LogSchema, x402BalanceSchema } from '../tools.js';
 import { mcpError, mcpResult, mcpPaymentResult } from '../helpers.js';
-import { parseNonNegativeBigInt } from '../../x402/amount.js';
 import { loadConfig } from '../../lib/config.js';
+import { apiKeyFor } from '../../lib/api-key.js';
 import { Eip3009EoaPayer, sessionPayerAddress } from '../../x402/payer.js';
+import { machineEntry } from '../../x402/log-view.js';
 import { payAndFetch } from '../../x402/http.js';
-import { appendX402Log, readX402Log, sumSpentSince } from '../../x402/ledger.js';
+import { readX402Log } from '../../x402/ledger.js';
 import { withPaymentLock } from '../../lib/payment-lock.js';
 import { usdcBalance } from '../../x402/balance.js';
-import { resolveSessionX402Policy, topUpCeiling } from '../../x402/policy.js';
-import { currentLimitUsageOnChain } from '../../x402/spend-window.js';
-import { ensurePayerFunds } from '../../x402/topup.js';
-import { SessionBridge } from '../../lib/session-bridge.js';
+import { resolveSessionX402Policy } from '../../x402/policy.js';
+import { openPaymentWindow, recordPaymentOutcome } from '../../x402/payment-window.js';
 import { tryLoadSessionConfig } from '../../lib/session-config.js';
-import type { X402PaymentRequirement } from '../../x402/types.js';
 
 interface PayAndFetchParams {
   url: string;
@@ -32,14 +30,15 @@ export function registerPayTool(server: McpServer): void {
   // lock its own process holds. The file lock then covers everything the queue
   // cannot see, namely other processes.
   //
-  // Serialize the read-check-pay-write of sessionSpent. The MCP SDK dispatches
-  // tool calls concurrently, and payAndFetch awaits network I/O between reading
-  // the cap and writing the new total — so a burst of concurrent calls would
-  // otherwise each read the same pre-payment total, all pass the cumulative
-  // cap, and all pay, blowing past maxTotalPerSession by the concurrency
-  // factor. A promise-chain mutex makes each payment observe the previous one's
-  // spend. Payments are inherently sequential for cap safety; this is the
-  // correct trade, not a bottleneck worth optimizing around.
+  // Serialize the read-check-pay-write of the session spend total. The MCP
+  // SDK dispatches tool calls concurrently, and payAndFetch awaits network
+  // I/O between reading the cap and writing the new total — so a burst of
+  // concurrent calls would otherwise each read the same pre-payment total,
+  // all pass the cumulative cap, and all pay, blowing past
+  // maxTotalPerSession by the concurrency factor. A promise-chain mutex makes
+  // each payment observe the previous one's spend. Payments are inherently
+  // sequential for cap safety; this is the correct trade, not a bottleneck
+  // worth optimizing around.
   let paymentQueue: Promise<unknown> = Promise.resolve();
   const serialize = <T>(fn: () => Promise<T>): Promise<T> => {
     const run = paymentQueue.then(fn, fn);
@@ -83,43 +82,27 @@ export function registerPayTool(server: McpServer): void {
             // Seed the policy from the on-chain grant captured at setup (caps +
             // allowlists agree with what the user approved); config still wins.
             const policy = resolveSessionX402Policy(config.x402, session);
-            // Scoped to the session so a new grant starts a fresh budget; the
-            // payer's whole history when there is no session to scope by.
-            // Read inside the lock, every time. Caching this across calls was
-            // safe while one process did all the paying; with the lock admitting
-            // other processes, a memoised total would miss what they spent and
-            // wave through a payment the cap should have stopped.
-            const sessionSpent = sumSpentSince(payer.address, session?.createdAt);
-
-            // Locate the grant period containing now, and count spend inside it.
-            // Recomputed per payment because the window moves on its own, and
-            // re-read from the ledger for the same reason sessionSpent is: a
-            // payment made by another process falls inside this window too.
-            const periodUsage = await currentLimitUsageOnChain(policy, payer.address, session);
-
-            // Flow 2b: when a session (and its on-chain permission) exists, refill
-            // the payer EOA through the permission whenever it can't cover a price.
-            // Funds stay in the user's account until the moment a payment needs
-            // them; JustaPermissionManager caps every refill on-chain.
-            let ensureFunds;
-            if (session && config.apiKey) {
-              const bridge = new SessionBridge({ apiKey: config.apiKey, chainId: session.chainId });
-              // Defensive: a hand-edited, non-numeric amount must degrade to "no
-              // float / no bound", never throw and take down every payment.
-              const floatTarget = parseNonNegativeBigInt(config.x402?.topUpFloat);
-              // Bound the top-up by whatever is left of the tightest resolved cap,
-              // so a float pre-fund is clamped too and not just the payment itself.
-              const maxTopUp = topUpCeiling(policy, {
-                periodUsage,
-                spentThisSession: sessionSpent,
-              });
-              ensureFunds = (requirement: X402PaymentRequirement, payerAddress: `0x${string}`) =>
-                ensurePayerFunds(requirement, payerAddress, bridge, {
-                  floatTarget,
-                  maxTopUp,
-                  sessionChainId: session.chainId,
-                });
-            }
+            // One read for the whole payment, taken inside the lock and never
+            // cached across payments, and the same assembly the `x402 pay`
+            // command runs so the two cannot enforce different caps for the
+            // same session. `openPaymentWindow` says why each piece is read
+            // where it is.
+            //
+            // Flow 2b: with a session (and its on-chain permission) the window
+            // also hands back a hook that refills the payer EOA whenever it
+            // cannot cover a price. Funds stay in the user's account until the
+            // moment a payment needs them, and JustaPermissionManager caps every
+            // refill on-chain.
+            const { spentThisSession, periodUsage, ensureFunds } = await openPaymentWindow({
+              session,
+              policy,
+              payerAddress: payer.address,
+              // The user's own key when there is one, the workspace key the
+              // browser handed us otherwise: the refill's own gas is charged
+              // through the paymaster this key builds a url for.
+              apiKey: apiKeyFor(config),
+              topUpFloat: config.x402?.topUpFloat,
+            });
 
             const result = await payAndFetch(params.url, payer, {
               method: params.method,
@@ -127,43 +110,16 @@ export function registerPayTool(server: McpServer): void {
               body: params.body,
               policy,
               ensureFunds,
-              spentThisSession: sessionSpent,
+              spentThisSession,
               periodUsage,
               maxAmount: params.maxAmount,
               asset: params.asset,
               network: params.network,
             });
 
-            // What this payment costs the cap is not accumulated here. It used
-            // to be, and nothing read it: `sessionSpent` is re-read from the
-            // ledger at the top of every call, which is what makes the cap
-            // survive a restart. Keeping a second running total in memory only
-            // invited it to disagree with the one that enforces.
-
-            // Record payment attempts (not free passthroughs) to the audit ledger.
-            const settled = result.payment ?? result.attemptedPayment;
-            const isPaymentEvent =
-              result.paid || !!result.attemptedPayment || (result.status === 402 && !!result.refusedReason);
-            if (isPaymentEvent) {
-              appendX402Log({
-                at: new Date().toISOString(),
-                url: params.url,
-                payer: result.payer,
-                status: result.paid ? 'paid' : result.attemptedPayment ? 'failed' : 'refused',
-                amount: settled?.amount,
-                authorized: settled?.authorized,
-                deadline: settled?.deadline,
-                asset: settled?.asset,
-                network: settled?.network,
-                payTo: settled?.payTo,
-                nonce: settled?.nonce,
-                txHash: result.payment?.txHash,
-                topUpAmount: result.topUp?.amount,
-                topUpBatchId: result.topUp?.batchId,
-                approvalBatchId: result.permit2Approval?.batchId,
-                reason: result.refusedReason,
-              });
-            }
+            // The cap is not tracked in memory: the next call reads it back
+            // from the ledger this writes to.
+            recordPaymentOutcome(params.url, result, session, periodUsage);
 
             // Untrusted server free-text (body, refusedReason) is fenced off
             // from the trusted payment metadata to blunt prompt injection.
@@ -194,14 +150,19 @@ export function registerPayTool(server: McpServer): void {
     {
       description:
         'Read the local x402 payment ledger — every jaw_pay_and_fetch attempt (paid, failed, or ' +
-        'refused) with amount, asset, network, payTo, nonce, and txHash. Use it to audit spend or ' +
+        'refused) with amount, asset, network, payTo, nonce, and txHash. Rows with kind "checkpoint" are ' +
+        'not payments: each stands in for older rows folded away, and carries their total. Use it to audit spend or ' +
         'reconcile an ambiguous settlement by nonce. Pass limit to get only the most recent entries.',
       inputSchema: x402LogSchema,
       annotations: { readOnlyHint: true },
     },
     async (params: { limit?: number }) => {
       try {
-        return mcpResult(readX402Log(params.limit));
+        // Shared with `x402 log --output json`: both hand a row to something
+        // that reads it rather than to a person, and a checkpoint dressed as a
+        // payment misleads either one the same way.
+        const entries = readX402Log(params.limit).map(machineEntry);
+        return mcpResult(entries);
       } catch (err) {
         return mcpError(err);
       }
@@ -227,18 +188,15 @@ export function registerPayTool(server: McpServer): void {
         const payer = sessionPayerAddress();
         const session = tryLoadSessionConfig();
         // The payer's float lives where the session does: a top-up refuses to
-        // run on any other chain, so a default read off config answered for
-        // Base mainnet on a Base Sepolia session and reported a funded payer as
-        // empty.
+        // run on any other chain, so a network read off config would answer for
+        // the wrong chain and report a funded payer as empty.
         //
         // With no session there is nothing to default to, and this tool's own
-        // description says it needs one. The fallback that used to sit here
-        // walked `allowedNetworks` and then Base, which reads a payment
-        // allowlist as if it named a home chain, and that reading is what
-        // produced the Base answer in the first place. So it refuses and says
-        // which two ways forward exist. An explicit `network` still answers,
-        // which is what a key still holding a balance after its session went
-        // away needs.
+        // description says it needs one, so it refuses and says which two ways
+        // forward exist. Falling back to `allowedNetworks` would read a payment
+        // allowlist as if it named a home chain. An explicit `network` still
+        // answers, which is what a key still holding a balance after its session
+        // went away needs.
         const network = params.network ?? (session ? `eip155:${session.chainId}` : undefined);
         if (!network) {
           throw new Error(

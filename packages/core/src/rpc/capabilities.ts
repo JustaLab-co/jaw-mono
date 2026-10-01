@@ -5,7 +5,7 @@ import { buildHandleJawRpcUrl, fetchRPCRequest, hexStringFromNumber } from '../u
 // By path, not through the barrel: this one is ours to read and not the dApp's.
 import { isBackendRefusal } from '../utils/provider.js';
 import { MAINNET_CHAINS } from '../account/smartAccount.js';
-import { store } from '../store/index.js';
+import { store, type FeeTokenCapability } from '../store/index.js';
 
 /**
  * Chain metadata capability returned by wallet_getCapabilities
@@ -16,7 +16,25 @@ export interface ChainMetadataCapability {
     icon?: string;
 }
 
-export type CapabilitiesResult = Record<`0x${string}`, Record<string, unknown>>;
+/**
+ * What the proxy answers for one chain.
+ *
+ * The two capabilities we consume are declared; everything else stays open. The
+ * proxy returns more than this models, and EIP-5792 requires a wallet to pass an
+ * unknown capability through rather than break on it, so the index signature is
+ * the contract and not a gap in it.
+ *
+ * Declared here rather than left to each caller: seven call sites were casting
+ * the same two shapes out of `Record<string, unknown>` by hand, which is seven
+ * copies of a type the package already exports.
+ */
+export interface ChainCapabilities {
+    feeToken?: FeeTokenCapability;
+    chainMetadata?: ChainMetadataCapability;
+    [capability: string]: unknown;
+}
+
+export type CapabilitiesResult = Record<`0x${string}`, ChainCapabilities>;
 
 /**
  * How long a capabilities response stays fresh.
@@ -158,6 +176,11 @@ export async function handleGetCapabilitiesRequest(
     if (inflight) return structuredClone(await inflight);
 
     const pending = (async () => {
+        // The one unverified step. `ChainCapabilities` describes what the proxy
+        // is expected to answer, and nothing here checks that it did; what
+        // actually holds is the narrowing every consumer does before use
+        // (`if (!feeTokenCap?.supported || !feeTokenCap?.tokens?.length)`). If a
+        // runtime check is ever wanted, this is the single place for it.
         try {
             const result = (await fetchRPCRequest(requestArgs, rpcUrl)) as CapabilitiesResult;
             capabilitiesCache.set(cacheKey, { at: Date.now(), value: result });

@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { renderEntry, renderSummary, hostOf, decimalsOf } from './log-view.js';
+import { renderEntry, renderSummary, hostOf, decimalsOf, machineEntry } from './log-view.js';
 import type { X402LogEntry } from './ledger.js';
 
 const entry = (o: Partial<X402LogEntry> = {}): X402LogEntry => ({
@@ -31,6 +31,21 @@ describe('renderEntry', () => {
   // to reconcile it on chain, so it must appear exactly where it is ambiguous.
   it('surfaces the nonce on a failed attempt', () => {
     expect(renderEntry(entry({ status: 'failed', nonce: '0xdeadbeef' }))).toContain('nonce 0xdeadbeef');
+  });
+
+  // The row the diagnosis exists for: the server answered that settlement failed
+  // and the facilitator settled anyway, so the money left with nothing to show.
+  it('says so when the chain settled a row the server reported as failed', () => {
+    const line = renderEntry(
+      entry({ status: 'failed', nonce: '0xdeadbeef', settlement: 'verified', authorized: '5000', amount: '5000' })
+    );
+    expect(line).toContain('settled on chain; the resource never arrived');
+    expect(line).toContain('0.005 USDC');
+  });
+
+  it('says nothing of the sort about an attempt that moved nothing', () => {
+    const line = renderEntry(entry({ status: 'failed', nonce: '0xdeadbeef', settlement: 'expired', amount: '0' }));
+    expect(line).not.toContain('settled on chain');
   });
 
   it('does not clutter a settled payment with the nonce', () => {
@@ -205,5 +220,57 @@ describe('log view against the enforced spend rule', () => {
 
   it('leaves a settled payment reporting what settled', () => {
     expect(renderEntry(entry({ status: 'paid', amount: '40', authorized: '5000000' }))).toContain('0.00004 USDC');
+  });
+});
+
+describe('log view of a compaction checkpoint', () => {
+  const checkpoint = entry({
+    kind: 'checkpoint',
+    folded: 812,
+    url: 'jaw:compacted',
+    amount: '3200000',
+  });
+
+  it('reads as a fold rather than as a payment', () => {
+    const line = renderEntry(checkpoint);
+    expect(line).toContain('folded');
+    expect(line).toContain('812 earlier payments');
+    expect(line).toContain('3.2 USDC');
+    expect(line).not.toContain('paid');
+  });
+
+  it('counts its figure in the total but not as one paid payment', () => {
+    const summary = renderSummary([entry({ amount: '1000' }), checkpoint]);
+    expect(summary).toContain('1 paid');
+    expect(summary).toContain('812 folded away');
+    expect(summary).toContain('3.201 USDC out');
+  });
+
+  // The same row handed to something that reads rather than renders: a script
+  // counting `paid` rows or chasing a nonce is misled by the fields the sums
+  // need.
+  it('says what it is when it goes to a machine', () => {
+    const row = machineEntry(checkpoint) as Record<string, unknown>;
+
+    expect(row['kind']).toBe('checkpoint');
+    expect(row['status']).toBeUndefined();
+    expect(row['url']).toBeUndefined();
+    expect(row['nonce']).toBeUndefined();
+    expect(row['folded']).toBe(812);
+    expect(row['stands_in_for']).toContain('812 earlier payments');
+    expect(row['amount']).toBe('3200000');
+  });
+
+  it('hands a payment row over untouched', () => {
+    const paid = entry({ amount: '1000' });
+    expect(machineEntry(paid)).toBe(paid);
+  });
+});
+
+describe('a tampered checkpoint cannot paint the terminal', () => {
+  it('sanitizes the folded count like every other field', () => {
+    const escape = String.fromCharCode(27);
+    const painted = entry({ kind: 'checkpoint', folded: `${escape}[31mred` as unknown as number });
+    expect(renderEntry(painted)).not.toContain(escape);
   });
 });

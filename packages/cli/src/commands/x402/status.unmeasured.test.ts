@@ -50,13 +50,17 @@ vi.mock('../../lib/paths.js', () => {
 vi.mock('../../lib/keystore.js', () => ({ keystoreExists: () => true }));
 vi.mock('../../lib/config.js', () => ({ loadConfig: () => ({}), ensureDir: () => undefined }));
 vi.mock('../../lib/session-config.js', () => ({
+  sessionUsable: (expiry: unknown, now: number = Date.now() / 1000) =>
+    typeof expiry === 'number' && Number.isFinite(expiry) && expiry > now,
+  expiryInstant: (expiry: unknown) =>
+    typeof expiry === 'number' && Number.isFinite(expiry) ? new Date(expiry * 1000) : null,
   tryLoadSessionConfig: () => h.session,
   isLegacySession: () => false,
   liveOrphans: () => [],
 }));
 vi.mock('../../x402/payer.js', () => ({ sessionPayerAddress: () => h.payer }));
 vi.mock('../../x402/balance.js', () => ({ usdcBalance: async () => ({ formatted: '20' }) }));
-vi.mock('../../x402/ledger.js', () => ({ sumSpentSince: () => 0n, sumToppedUpSince: () => 0n }));
+vi.mock('../../x402/ledger.js', () => ({ readX402Log: () => [], sumSpentSince: () => 0n, sumToppedUpSince: () => 0n }));
 // The whole point: the policy holds a limit and no usage came back for it.
 vi.mock('../../x402/spend-window.js', () => ({ currentLimitUsageOnChain: async () => [] }));
 

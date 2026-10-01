@@ -1,11 +1,12 @@
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { mcpError, mcpResult } from '../helpers.js';
 import { keystoreExists } from '../../lib/keystore.js';
-import { loadSessionConfig } from '../../lib/session-config.js';
+import { loadSessionConfig, sessionUsable } from '../../lib/session-config.js';
 import { sessionPayerAddress } from '../../x402/payer.js';
 import { readLiveness } from '../../x402/permission-onchain.js';
 import { recoverPermission } from '../../x402/permission-recovery.js';
 import { loadConfig } from '../../lib/config.js';
+import { apiKeyFor } from '../../lib/api-key.js';
 
 export function registerSessionTools(server: McpServer): void {
   server.registerTool(
@@ -45,17 +46,19 @@ export function registerSessionTools(server: McpServer): void {
         // The local file cannot know about a revoke made from keys.jaw.id or
         // from another machine, and an agent reading `expired: false` off it
         // would go on to spend against a permission that no longer exists.
-        // Recovered here too. Wiring this into the three commands and not the
-        // tool left an agent, which is the consumer this whole path exists for,
-        // reading `unknown` forever on a session created before the struct was
-        // stored, while the same user got it recovered at a terminal.
-        const permission = await recoverPermission(config, loadConfig().apiKey);
+        // Recovered here and not only in the commands: an agent is the consumer
+        // this whole path exists for, and a session created before the struct
+        // was stored would otherwise read `unknown` forever.
+        const permission = await recoverPermission(config, apiKeyFor(loadConfig()));
         const current = permission ? { ...config, permission } : config;
         const permissionOnChain = await readLiveness(current);
         return mcpResult({
           exists: true,
           ...current,
-          expired: config.expiry <= Date.now() / 1000,
+          // Reported the way the paying path answers it, not the way the
+          // cleanup paths do: an agent reads this to decide whether to try, and
+          // `SessionBridge` refuses to sign under an expiry it cannot read.
+          expired: !sessionUsable(config.expiry),
           permissionOnChain,
           ...(payerAddress ? { payerAddress } : {}),
         });

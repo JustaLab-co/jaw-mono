@@ -106,7 +106,7 @@ export function mergePermissions(existing: GrantedPermission, addition: Permissi
 
   // Absent rather than empty. The validator rejects a `spends: []` outright,
   // and a calls-only session merged with a calls-only addition produces exactly
-  // that, so every such add threw after the browser had already been opened.
+  // that, so such an add throws after the browser has already been opened.
   return {
     ...(calls.length > 0 ? { calls } : {}),
     ...(spends.length > 0 ? { spends } : {}),

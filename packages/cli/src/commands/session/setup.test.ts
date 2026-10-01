@@ -4,11 +4,10 @@ import { fileURLToPath } from 'node:url';
 import { Config } from '@oclif/core';
 
 /**
- * `session setup` had no tests at all, which is how the ordering below went
- * unnoticed: the grant ceiling is a local refusal, and it used to run after the
- * block that revokes the existing permission on chain. A `--limit` over the
- * ceiling therefore cost the user the permission they already had and left them
- * with none, since the revoke had happened and the new grant never would.
+ * The grant ceiling is a local refusal, and it has to run before the block that
+ * revokes the existing permission on chain. The other way round, a `--limit`
+ * over the ceiling costs the user the permission they already had and leaves
+ * them with none: the revoke has happened and the new grant never will.
  *
  * That is the property worth pinning, and it is invisible to a diff: nothing
  * about either line is wrong, only which one comes first.
@@ -22,9 +21,14 @@ const h = vi.hoisted(() => ({
   hasKeystore: false,
   saved: null as Record<string, unknown> | null,
   bridges: 0,
+  closes: 0,
   requests: [] as string[],
   stderr: [] as string[],
   answers: [] as string[],
+  // What the browser hands back through the bridge, which `keepInjectedApiKey`
+  // writes to config before the grant runs.
+  injected: null as string | null,
+  accountApiKey: undefined as string | undefined,
 }));
 
 vi.mock('../../lib/config.js', () => ({ loadConfig: () => h.config }));
@@ -62,6 +66,7 @@ vi.mock('../../lib/session-config.js', async (importOriginal) => ({
 vi.mock('../../lib/bridge-singleton.js', () => ({
   getBridge: async () => {
     h.bridges += 1;
+    if (h.injected) h.config.workspaceApiKey = h.injected;
     return {
       request: async (method: string) => {
         h.requests.push(method);
@@ -81,7 +86,9 @@ vi.mock('../../lib/bridge-singleton.js', () => ({
         }
         return {};
       },
-      close: () => undefined,
+      close: () => {
+        h.closes += 1;
+      },
     };
   },
 }));
@@ -93,7 +100,10 @@ vi.mock('../../x402/funded-owner.js', () => ({
 
 vi.mock('@jaw.id/core', () => ({
   Account: {
-    fromLocalAccount: async () => ({ address: '0x2222222222222222222222222222222222222222' }),
+    fromLocalAccount: async (options: { apiKey?: string }) => {
+      h.accountApiKey = options.apiKey;
+      return { address: '0x2222222222222222222222222222222222222222' };
+    },
   },
 }));
 
@@ -113,11 +123,14 @@ beforeEach(() => {
   h.config = { apiKey: 'k' };
   h.existing = null;
   h.hasKeystore = false;
+  h.closes = 0;
   h.saved = null;
   h.bridges = 0;
   h.requests = [];
   h.stderr = [];
   h.answers = [];
+  h.injected = null;
+  h.accountApiKey = undefined;
   Object.defineProperty(process.stdin, 'isTTY', { value: true, configurable: true });
 });
 
@@ -188,6 +201,21 @@ describe('jaw session setup', () => {
     expect(h.bridges).toBe(0);
   });
 
+  it('builds the account with the key the bridge just wrote, not the one read before it', async () => {
+    // A deployment that rotated its workspace key: the run starts on the stale
+    // one, the browser answers with the live one and it is on disk before the
+    // grant. Carrying the pre-connect reading forward from here spends the rest
+    // of the run on a key the proxy has revoked, with the right one two lines
+    // away.
+    delete process.env.JAW_API_KEY;
+    h.config = { workspaceApiKey: 'W_old' };
+    h.injected = 'W_new';
+
+    await runSetup(['--x402', '--chain', '84532', '--quiet']);
+
+    expect(h.accountApiKey).toBe('W_new');
+  });
+
   it('grants when the limit is within the ceiling', async () => {
     h.config = { apiKey: 'k', grantCeiling: '5/day' };
     await runSetup(['--x402', '--limit', '5/day', '--chain', '84532', '--quiet']);
@@ -227,5 +255,24 @@ describe('jaw session setup', () => {
   it('refuses --limit without --x402, which would silently do nothing', async () => {
     await expect(runSetup(['--limit', '10/day', '--chain', '84532'])).rejects.toThrow(/only applies to --x402/);
     expect(h.bridges).toBe(0);
+  });
+
+  it('closes the bridge when it gives up between opening it and the grant', async () => {
+    // The refusal when no key came back, which is the first thing that runs
+    // after the bridge is open. Anything that throws in there used to leave the
+    // socket up and the browser showing a page that believes it is paired.
+    delete process.env.JAW_API_KEY;
+    h.config = {};
+
+    await expect(runSetup(['--x402', '--chain', '84532', '--quiet'])).rejects.toThrow(/no API key came back/);
+
+    expect(h.bridges).toBe(1);
+    expect(h.closes).toBe(1);
+  });
+
+  it('closes the bridge on the way out of a run that worked', async () => {
+    await runSetup(['--x402', '--chain', '84532', '--quiet']);
+
+    expect(h.closes).toBe(1);
   });
 });
