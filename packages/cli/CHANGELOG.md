@@ -1,3 +1,17 @@
+## 0.4.0 (2026-10-01)
+
+### 🚀 Features
+
+- agentic payments batch ([#315](https://github.com/JustaLab-co/jaw-mono/pull/315))
+
+### 🧱 Updated Dependencies
+
+- Updated @jaw.id/core to 1.6.0
+
+### ❤️ Thank You
+
+- Ghadi @Ghadi8
+
 ## 0.3.9 (2026-09-30)
 
 ### 🧱 Updated Dependencies
