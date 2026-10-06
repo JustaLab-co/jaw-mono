@@ -1,4 +1,6 @@
-import { errorMessage, within, type UsdcAsset } from '@jaw.id/agent';
+import { errorMessage } from '../util/errors.js';
+import { within } from '../util/within.js';
+import type { UsdcAsset } from './asset-registry.js';
 
 /**
  * Check the token the CLI names in the paymaster context against what the wallet

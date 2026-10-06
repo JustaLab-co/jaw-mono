@@ -31,3 +31,5 @@ export * from './x402/ledger.js';
 export * from './x402/settlement.js';
 export * from './x402/log-view.js';
 export * from './x402/permission-recovery.js';
+export * from './x402/fee-token.js';
+export * from './x402/session-bridge.js';

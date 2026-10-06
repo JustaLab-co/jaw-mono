@@ -23,3 +23,17 @@ export interface PermissionStore {
   /** Write a recovered struct into the session; false when the session is gone. */
   saveRecovered(config: SessionConfig, permission: GrantedPermission): boolean;
 }
+
+/** What a session bridge reads from wherever the session is kept. */
+export interface SessionHost {
+  loadSession(): SessionConfig;
+  /** The session key, hex. */
+  loadSessionKey(): string;
+  /** A paymaster configured for this chain, if any. */
+  configuredPaymaster(chainId: number): { url: string; context?: Record<string, unknown> } | undefined;
+  /**
+   * A key to retry with after the proxy refused `refused`, or nothing when
+   * there is none and the refusal should surface as is.
+   */
+  freshApiKey(err: unknown, refused: string): Promise<string | undefined>;
+}
