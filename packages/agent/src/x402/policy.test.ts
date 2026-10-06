@@ -240,6 +240,7 @@ describe('checkPolicy', () => {
   it('refuses cleanly (no throw) on a malformed policy cap', () => {
     expect(checkPolicy(base, { maxAmountPerPayment: 'not-a-number' })).toEqual({
       ok: false,
+      code: 'invalid_config',
       reason: expect.stringContaining('invalid maxAmountPerPayment'),
     });
     expect(checkPolicy(base, { maxTotalPerSession: 'oops' }).ok).toBe(false);

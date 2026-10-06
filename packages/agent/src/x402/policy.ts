@@ -2,6 +2,7 @@ import { USDC_BY_NETWORK, usdcForNetwork } from './asset-registry.js';
 import { parseBigInt, parseNonNegativeBigInt } from './amount.js';
 import { isHexShaped, isPayableAddress, isZeroAddress } from './address.js';
 import { isX402Scheme, type X402PaymentRequirement } from './types.js';
+import type { RefusalCode } from './outcome.js';
 import { describePeriod, normalizePeriod, type PeriodUnit } from './period.js';
 import { UPTO_VERIFIED_CHAIN_IDS, isUptoVerifiedChain } from './permit2.js';
 import type { GrantedPermission } from '../session/session-config.js';
@@ -358,6 +359,8 @@ export interface PolicyContext {
 export interface PolicyResult {
   ok: boolean;
   reason?: string;
+  /** Set with `reason` on a refusal. */
+  code?: RefusalCode;
 }
 
 const has = (list: string[] | undefined): list is string[] => Array.isArray(list) && list.length > 0;
@@ -391,7 +394,7 @@ export function checkPolicy(
   // The wire value is untrusted: it arrives as a plain string and is only cast
   // to the union, so this is a runtime check and not a redundant one.
   if (!isX402Scheme(requirement.scheme)) {
-    return { ok: false, reason: `unsupported scheme: ${String(requirement.scheme)}` };
+    return { ok: false, code: 'unsupported_option', reason: `unsupported scheme: ${String(requirement.scheme)}` };
   }
 
   // The settlement proxy is deployed on fewer chains than the asset registry
@@ -403,11 +406,12 @@ export function checkPolicy(
   if (requirement.scheme === 'upto') {
     const asset = usdcForNetwork(requirement.network);
     if (!asset) {
-      return { ok: false, reason: `unsupported x402 network: ${requirement.network}` };
+      return { ok: false, code: 'unsupported_option', reason: `unsupported x402 network: ${requirement.network}` };
     }
     if (!isUptoVerifiedChain(asset.chainId)) {
       return {
         ok: false,
+        code: 'unsupported_option',
         reason:
           `x402 upto is not available on ${requirement.network}: the settlement proxy is only verified on ` +
           `chain ids ${UPTO_VERIFIED_CHAIN_IDS.join(', ')}`,
@@ -423,6 +427,7 @@ export function checkPolicy(
     if (!isHexShaped(facilitator) || isZeroAddress(facilitator)) {
       return {
         ok: false,
+        code: 'unsupported_option',
         reason:
           `x402 upto needs a settling facilitator in extra.facilitatorAddress on ${requirement.network}, ` +
           `got ${JSON.stringify(facilitator)}`,
@@ -433,6 +438,7 @@ export function checkPolicy(
     if (!isPayableAddress(facilitator)) {
       return {
         ok: false,
+        code: 'malformed_challenge',
         reason: `extra.facilitatorAddress is not a readable address on ${requirement.network}: ${facilitator}`,
       };
     }
@@ -449,45 +455,54 @@ export function checkPolicy(
     ['payTo', requirement.payTo],
   ] as const) {
     if (!isPayableAddress(value)) {
-      return { ok: false, reason: `${field} is not a readable address on ${requirement.network}: ${value}` };
+      return {
+        ok: false,
+        code: 'malformed_challenge',
+        reason: `${field} is not a readable address on ${requirement.network}: ${value}`,
+      };
     }
   }
   if (isZeroAddress(requirement.payTo)) {
-    return { ok: false, reason: `payTo is the zero address on ${requirement.network}` };
+    return { ok: false, code: 'malformed_challenge', reason: `payTo is the zero address on ${requirement.network}` };
   }
 
   if (has(policy.allowedNetworks) && !policy.allowedNetworks.includes(requirement.network)) {
-    return { ok: false, reason: `network not allowed: ${requirement.network}` };
+    return { ok: false, code: 'not_allowed', reason: `network not allowed: ${requirement.network}` };
   }
 
   if (has(policy.allowedAssets) && !policy.allowedAssets.some((a) => eqAddr(a, requirement.asset))) {
-    return { ok: false, reason: `asset not allowed: ${requirement.asset}` };
+    return { ok: false, code: 'not_allowed', reason: `asset not allowed: ${requirement.asset}` };
   }
 
   if (has(policy.allowedPayTo) && !policy.allowedPayTo.some((a) => eqAddr(a, requirement.payTo))) {
-    return { ok: false, reason: `payTo not allowed: ${requirement.payTo}` };
+    return { ok: false, code: 'not_allowed', reason: `payTo not allowed: ${requirement.payTo}` };
   }
 
   if (has(policy.allowedHosts) && (!ctx.host || !policy.allowedHosts.includes(ctx.host))) {
-    return { ok: false, reason: `host not allowed: ${ctx.host ?? '(unknown)'}` };
+    return { ok: false, code: 'not_allowed', reason: `host not allowed: ${ctx.host ?? '(unknown)'}` };
   }
 
   const amount = parseBigInt(requirement.amount);
   if (amount === null) {
-    return { ok: false, reason: `invalid amount: ${requirement.amount}` };
+    return { ok: false, code: 'malformed_challenge', reason: `invalid amount: ${requirement.amount}` };
   }
   if (amount < 0n) {
-    return { ok: false, reason: `negative amount: ${requirement.amount}` };
+    return { ok: false, code: 'malformed_challenge', reason: `negative amount: ${requirement.amount}` };
   }
 
   if (policy.maxAmountPerPayment !== undefined) {
     const cap = parseBigInt(policy.maxAmountPerPayment);
     if (cap === null) {
-      return { ok: false, reason: `invalid maxAmountPerPayment in config: ${policy.maxAmountPerPayment}` };
+      return {
+        ok: false,
+        code: 'invalid_config',
+        reason: `invalid maxAmountPerPayment in config: ${policy.maxAmountPerPayment}`,
+      };
     }
     if (amount > cap) {
       return {
         ok: false,
+        code: 'over_cap',
         reason: `amount ${asks(requirement)} exceeds maxAmountPerPayment ${policy.maxAmountPerPayment}`,
       };
     }
@@ -511,7 +526,7 @@ export function checkPolicy(
     // out of the config file, which is merged over it.
     const cap = parseNonNegativeBigInt(limit.allowance);
     if (cap === undefined) {
-      return { ok: false, reason: `invalid spend allowance: ${limit.allowance}` };
+      return { ok: false, code: 'invalid_config', reason: `invalid spend allowance: ${limit.allowance}` };
     }
     const usage = (ctx.periodUsage ?? []).find((entry) => sameLimit(entry, limit));
     const spent = usage?.spent ?? 0n;
@@ -530,6 +545,7 @@ export function checkPolicy(
     const resets = latest.usage?.endsAt ? `, which resets ${latest.usage.endsAt.toISOString()}` : '';
     return {
       ok: false,
+      code: 'budget_exhausted',
       reason:
         `payment ${asks(requirement)} would exceed the granted ${latest.limit.allowance} per ${window}${resets}` +
         (others > 0 ? ` (${others} other limit${others === 1 ? '' : 's'} also applies)` : ''),
@@ -539,12 +555,17 @@ export function checkPolicy(
   if (policy.maxTotalPerSession !== undefined) {
     const cap = parseBigInt(policy.maxTotalPerSession);
     if (cap === null) {
-      return { ok: false, reason: `invalid maxTotalPerSession in config: ${policy.maxTotalPerSession}` };
+      return {
+        ok: false,
+        code: 'invalid_config',
+        reason: `invalid maxTotalPerSession in config: ${policy.maxTotalPerSession}`,
+      };
     }
     const spent = ctx.spentThisSession ?? 0n;
     if (spent + amount > cap) {
       return {
         ok: false,
+        code: 'budget_exhausted',
         reason:
           `payment ${asks(requirement)} would exceed maxTotalPerSession ${policy.maxTotalPerSession} ` +
           `(already spent ${spent} since the session was created; raise it with ` +

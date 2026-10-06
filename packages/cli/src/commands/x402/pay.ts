@@ -5,6 +5,7 @@ import { tryLoadSessionConfig } from '../../lib/session-config.js';
 import { sessionPayer } from '../../x402/session-payer.js';
 import {
   payAndFetch,
+  toPayAndFetchResult,
   resolveSessionX402Policy,
   usdcForNetwork,
   USDC_BY_NETWORK,
@@ -109,16 +110,18 @@ export default class X402Pay extends BaseCommand {
         cliPaymentPorts
       );
 
-      const outcome = await payAndFetch(args.url, payer, {
-        method: flags.method,
-        body: flags.body,
-        policy,
-        ensureFunds,
-        spentThisSession,
-        periodUsage,
-        maxAmount: flags['max-amount'],
-        dryRun,
-      });
+      const outcome = toPayAndFetchResult(
+        await payAndFetch(args.url, payer, {
+          method: flags.method,
+          body: flags.body,
+          policy,
+          ensureFunds,
+          spentThisSession,
+          periodUsage,
+          maxAmount: flags['max-amount'],
+          dryRun,
+        })
+      );
 
       // No payment row for a dry run: recording one would corrupt the spend
       // totals that both this command and the agent read back. Opening the

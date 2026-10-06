@@ -6,7 +6,6 @@ import {
   X402_HEADERS,
   isX402Scheme,
   type X402PaymentPayload,
-  type X402Scheme,
   type X402PaymentRequired,
   type X402PaymentRequirement,
   type X402SettleResponse,
@@ -14,6 +13,7 @@ import {
 import { type LimitUsage, asks, checkPolicy, type PolicyContext, type X402Policy } from './policy.js';
 import { encodePaymentPayload } from './scheme-exact-evm.js';
 import type { Payer } from './payer.js';
+import type { PaymentDetails, PaymentOutcome, Refusal, RefusalCode, Traces } from './outcome.js';
 
 export interface PayAndFetchOptions {
   method?: string;
@@ -44,10 +44,13 @@ export interface PayAndFetchOptions {
    */
   ensureFunds?: (
     requirement: X402PaymentRequirement,
-    payerAddress: `0x${string}`
+    payerAddress: `0x${string}`,
+    budget: TimeBudget
   ) => Promise<{
     ok: boolean;
     reason?: string;
+    /** Why, for code to branch on. `funding_failed` when absent. */
+    code?: RefusalCode;
     amount?: string;
     batchId?: string;
     approvalBatchId?: string;
@@ -55,72 +58,52 @@ export interface PayAndFetchOptions {
     permit2Allowance?: bigint;
     skipped?: boolean;
   }>;
+  /**
+   * A caller that keeps its own record of each payment, keyed by an
+   * idempotency key it chose. `onSigned` runs between signing and sending and
+   * must resolve only once the authorization is durable; if it throws, nothing
+   * is sent. `resume` resends an authorization a previous call stored, without
+   * probing, funding or signing again, so one key never gets two signatures.
+   */
+  attempt?: {
+    key: string;
+    onSigned?: (authorization: SignedAuthorization) => Promise<void>;
+    resume?: SignedAuthorization;
+  };
+  /** Bounds every network call. Default: each call gets 30s on its own. */
+  budget?: TimeBudget;
+  /**
+   * The fetch every request goes through. A guard that refuses a destination
+   * throws `FetchRefused`. Default: the global fetch.
+   */
+  fetch?: typeof globalThis.fetch;
 }
 
-/** A payment as built/signed — the fields needed to audit or reconcile it. */
-export interface PaymentDetails {
-  /**
-   * Which scheme produced this. Carried because the two figures below mean
-   * different things depending on it, and every surface that shows them has to
-   * say which it is showing.
-   */
-  scheme: X402Scheme;
-  /**
-   * What actually left the payer, once the receipt says. Equal to `authorized`
-   * under `exact`, and until settlement reports otherwise under `upto`.
-   */
-  amount: string;
-  /** The ceiling the signature authorized. What a failed attempt still costs. */
-  authorized: string;
-  /** When the authorization expires, for reconciling an ambiguous settlement. */
-  deadline?: string;
-  asset: string;
-  network: string;
-  payTo: string;
-  /** The EIP-3009 nonce — lets you reconcile an on-chain transfer to this attempt. */
-  nonce: `0x${string}`;
-  /** Settlement tx hash, once the server reports it. */
-  txHash?: string;
+/** What a resend needs: where the proof goes, the proof, and what it is worth. */
+export interface SignedAuthorization {
+  resource: string;
+  payload: X402PaymentPayload;
+  details: PaymentDetails;
 }
 
-export interface PayAndFetchResult {
-  status: number;
-  body: unknown;
-  /** True once a payment was made and the resource returned. */
-  paid: boolean;
-  /** The address funds are paid from — where the agent's USDC must live. */
-  payer: `0x${string}`;
-  /** Present on a successful payment. */
-  payment?: PaymentDetails;
-  /**
-   * Present when a payment was signed and sent but settlement did not confirm.
-   * In pull mode the facilitator may still have broadcast the transfer, so this
-   * carries the nonce/amount to reconcile against — never assume no money moved.
-   */
-  attemptedPayment?: PaymentDetails;
-  /**
-   * Present when the payer was refilled from the user's account through the
-   * on-chain permission before this payment. User funds moved: always surfaced.
-   */
-  topUp?: { amount?: string; batchId?: string };
-  /**
-   * Present when the payer granted Permit2 its allowance as part of this
-   * payment. No principal moves, but it is a userOp charged to the payer's
-   * USDC, so it is surfaced and logged rather than left invisible: an approval
-   * that runs with no top-up beside it would otherwise reach neither the CLI
-   * output nor the ledger.
-   */
-  permit2Approval?: { batchId: string };
-  /** Set when a `402` could not (or should not) be paid. */
-  refusedReason?: string;
-  /**
-   * On a `dryRun`, the requirement that would have been paid. Absent when the
-   * resource was free or the policy refused (see `refusedReason`). Carries
-   * neither nonce nor deadline, deliberately: both only exist once an
-   * authorization is signed, and a dry run never signs one.
-   */
-  wouldPay?: Omit<PaymentDetails, 'nonce' | 'deadline'>;
+/** Thrown by an injected fetch that will not reach a destination. */
+export class FetchRefused extends Error {
+  override name = 'FetchRefused';
 }
+
+/** What bounds the next network call, read right before each one. */
+export interface TimeBudget {
+  /** Milliseconds left, never negative. */
+  left(): number;
+}
+
+/** Every call gets `ms` of its own. */
+export const perCall = (ms: number): TimeBudget => ({ left: () => ms });
+
+/** One deadline across every call of a request. */
+export const until = (deadlineAt: number, now: () => number = Date.now): TimeBudget => ({
+  left: () => Math.max(0, deadlineAt - now()),
+});
 
 const b64json = <T>(header: string | null): T | null => {
   if (!header) return null;
@@ -278,11 +261,18 @@ interface FetchedResponse {
  * So the body is read here, under the same deadline as the request, and callers
  * get it already in hand.
  */
-async function fetchWithTimeout(url: string, init: RequestInit): Promise<FetchedResponse> {
+async function fetchWithTimeout(
+  url: string,
+  init: RequestInit,
+  transport: typeof globalThis.fetch,
+  budget: TimeBudget
+): Promise<FetchedResponse> {
+  const timeoutMs = budget.left();
+  if (timeoutMs <= 0) throw new Error('time budget exhausted before the request');
   const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), FETCH_TIMEOUT_MS);
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
   try {
-    const res = await fetch(url, { ...init, signal: controller.signal });
+    const res = await transport(url, { ...init, signal: controller.signal });
     let body: unknown;
     try {
       body = await readBody(res);
@@ -292,7 +282,7 @@ async function fetchWithTimeout(url: string, init: RequestInit): Promise<Fetched
       // `payAndFetch` after settlement and lose a paid payment's record, which
       // is exactly the trace the ledger needs.
       if (!controller.signal.aborted) throw err;
-      body = { error: `response body timed out after ${FETCH_TIMEOUT_MS}ms` };
+      body = { error: `response body timed out after ${timeoutMs}ms` };
     }
     return { status: res.status, url: res.url, headers: res.headers, body };
   } finally {
@@ -361,10 +351,7 @@ const requirementSchema = z
   })
   .passthrough();
 
-interface Selection {
-  requirement?: X402PaymentRequirement;
-  reason?: string;
-}
+type Selection = { requirement: X402PaymentRequirement } | { refusal: Refusal };
 
 /**
  * Pick the CHEAPEST `accepts` entry that satisfies the caller constraints +
@@ -381,7 +368,7 @@ interface Selection {
  */
 function selectRequirement(accepts: unknown[], opts: PayAndFetchOptions, ctx: PolicyContext): Selection {
   const policy = opts.policy ?? {};
-  let reason = 'no acceptable payment option in the 402 challenge';
+  let refusal: Refusal = { code: 'no_option', reason: 'no acceptable payment option in the 402 challenge' };
   let best: X402PaymentRequirement | undefined;
   let bestAmount = 0n;
 
@@ -389,43 +376,46 @@ function selectRequirement(accepts: unknown[], opts: PayAndFetchOptions, ctx: Po
     const parsed = requirementSchema.safeParse(raw);
     if (!parsed.success) {
       const issue = parsed.error.issues[0];
-      reason = `malformed payment option${issue ? ` (${issue.path.join('.')}: ${issue.message})` : ''}`;
+      refusal = {
+        code: 'malformed_challenge',
+        reason: `malformed payment option${issue ? ` (${issue.path.join('.')}: ${issue.message})` : ''}`,
+      };
       continue;
     }
     const req = parsed.data as X402PaymentRequirement;
     if (!isX402Scheme(req.scheme)) {
-      reason = `unsupported scheme: ${String(req.scheme)}`;
+      refusal = { code: 'unsupported_option', reason: `unsupported scheme: ${String(req.scheme)}` };
       continue;
     }
     if (opts.network && req.network !== opts.network) {
-      reason = `network ${req.network} does not match requested ${opts.network}`;
+      refusal = { code: 'network_mismatch', reason: `network ${req.network} does not match requested ${opts.network}` };
       continue;
     }
     if (opts.asset && req.asset.toLowerCase() !== opts.asset.toLowerCase()) {
-      reason = `asset ${req.asset} does not match requested ${opts.asset}`;
+      refusal = { code: 'asset_mismatch', reason: `asset ${req.asset} does not match requested ${opts.asset}` };
       continue;
     }
 
     const amount = parseBigInt(req.amount);
     if (amount === null) {
-      reason = `invalid amount: ${req.amount}`;
+      refusal = { code: 'malformed_challenge', reason: `invalid amount: ${req.amount}` };
       continue;
     }
     if (opts.maxAmount !== undefined) {
       const cap = parseBigInt(opts.maxAmount);
       if (cap === null) {
-        reason = `invalid maxAmount: ${opts.maxAmount}`;
+        refusal = { code: 'invalid_config', reason: `invalid maxAmount: ${opts.maxAmount}` };
         continue;
       }
       if (amount > cap) {
-        reason = `amount ${asks(req)} exceeds maxAmount ${opts.maxAmount}`;
+        refusal = { code: 'over_cap', reason: `amount ${asks(req)} exceeds maxAmount ${opts.maxAmount}` };
         continue;
       }
     }
 
     const verdict = checkPolicy(req, policy, ctx);
     if (!verdict.ok) {
-      reason = verdict.reason ?? reason;
+      if (verdict.reason) refusal = { code: verdict.code ?? 'not_allowed', reason: verdict.reason };
       continue;
     }
 
@@ -437,7 +427,7 @@ function selectRequirement(accepts: unknown[], opts: PayAndFetchOptions, ctx: Po
     }
   }
 
-  return best ? { requirement: best } : { reason };
+  return best ? { requirement: best } : { refusal };
 }
 
 /**
@@ -447,34 +437,62 @@ function selectRequirement(accepts: unknown[], opts: PayAndFetchOptions, ctx: Po
  * the constraints + policy (never overpaying), builds and signs the payment, and
  * retries with `PAYMENT-SIGNATURE`. Settlement failures surface a reason rather
  * than blind-retrying.
+ *
+ * It throws only before anything is sent: a bad idempotency key, or a probe
+ * that fails or times out. Once a 402 is in hand, every path is an outcome.
  */
-export async function payAndFetch(
-  url: string,
-  payer: Payer,
-  opts: PayAndFetchOptions = {}
-): Promise<PayAndFetchResult> {
+export async function payAndFetch(url: string, payer: Payer, opts: PayAndFetchOptions = {}): Promise<PaymentOutcome> {
   const method = opts.method ?? 'GET';
   const baseHeaders: Record<string, string> = { Accept: 'application/json', ...(opts.headers ?? {}) };
+  if (opts.attempt && !IDEMPOTENCY_KEY.test(opts.attempt.key)) {
+    throw new Error('idempotency key must be 1 to 128 characters of letters, digits, _ . : -');
+  }
+  const budget = opts.budget ?? perCall(FETCH_TIMEOUT_MS);
+  // Read at call time, so a stub of the global fetch still reaches every request.
+  const transport = opts.fetch ?? ((input, init) => fetch(input, init));
+  const request = (target: string, init: RequestInit) => fetchWithTimeout(target, init, transport, budget);
+  const send = (authorization: SignedAuthorization, traces: Traces) =>
+    sendSigned(authorization, traces, { method, baseHeaders, body: opts.body, key: opts.attempt?.key, payer, request });
+
+  // A previous call signed for this key and got no answer: send the same proof
+  // again. Nothing is probed, funded or signed twice.
+  const resumed = opts.attempt?.resume;
+  if (resumed) {
+    const notSent = (code: RefusalCode, reason: string): PaymentOutcome => ({
+      kind: 'refused',
+      status: 402,
+      body: '',
+      payer: payer.address,
+      refusal: { code, reason },
+    });
+    if (!isPaymentUrlSecure(resumed.resource)) {
+      return notSent(
+        'insecure_url',
+        'refusing to sign a payment over a non-HTTPS URL (use https, or localhost for testing)'
+      );
+    }
+    const deadline = Number(resumed.details.deadline);
+    if (Number.isFinite(deadline) && deadline <= Date.now() / 1000) {
+      return notSent('authorization_expired', `the stored authorization expired at ${deadline}; nothing was sent`);
+    }
+    return send(resumed, {});
+  }
 
   // 1. First attempt. Anything but 402 passes through unchanged.
-  const first = await fetchWithTimeout(url, { method, headers: baseHeaders, body: opts.body });
+  const first = await request(url, { method, headers: baseHeaders, body: opts.body });
   if (first.status !== 402) {
-    return { status: first.status, body: first.body, paid: false, payer: payer.address };
+    return { kind: 'free', status: first.status, body: first.body, payer: payer.address };
   }
 
   // Every refusal below answers the same way: the challenge stands, nothing was
-  // paid, and the reason says why. Naming the shape once leaves each site
-  // showing only what makes it different.
-  const refusal = (refusedReason: string | undefined, extra?: Partial<PayAndFetchResult>): PayAndFetchResult => ({
+  // paid, and the reason says why.
+  const refused = (code: RefusalCode, reason: string, traces: Traces = {}): PaymentOutcome => ({
+    kind: 'refused',
     status: 402,
     body: first.body,
     payer: payer.address,
-    refusedReason,
-    ...extra,
-    // After the spread, never from it. Both front ends decide whether to write a
-    // settled row in the ledger from this field, and the ledger is what the caps
-    // are rebuilt from, so a refusal must not be able to claim a payment.
-    paid: false,
+    refusal: { code, reason },
+    ...traces,
   });
 
   // A 402 means we are about to sign a payment. Gate on the FINAL url (after
@@ -486,13 +504,16 @@ export async function payAndFetch(
   // fetches returned above, so plain http still works as a generic fetch.
   const resource = first.url || url;
   if (!isPaymentUrlSecure(resource)) {
-    return refusal('refusing to sign a payment over a non-HTTPS URL (use https, or localhost for testing)');
+    return refused(
+      'insecure_url',
+      'refusing to sign a payment over a non-HTTPS URL (use https, or localhost for testing)'
+    );
   }
 
   // 2. The v2 challenge lives in the PAYMENT-REQUIRED header (body is opaque).
   const challenge = b64json<X402PaymentRequired>(first.headers.get(X402_HEADERS.required));
   if (!challenge || !Array.isArray(challenge.accepts)) {
-    return refusal('missing or malformed PAYMENT-REQUIRED challenge');
+    return refused('malformed_challenge', 'missing or malformed PAYMENT-REQUIRED challenge');
   }
 
   // 3. Choose an option under the constraints + policy, or refuse clearly.
@@ -501,19 +522,20 @@ export async function payAndFetch(
     spentThisSession: opts.spentThisSession,
     periodUsage: opts.periodUsage,
   };
-  const { requirement, reason } = selectRequirement(challenge.accepts, opts, ctx);
-  if (!requirement) {
-    return refusal(reason);
+  const selection = selectRequirement(challenge.accepts, opts, ctx);
+  if ('refusal' in selection) {
+    return refused(selection.refusal.code, selection.refusal.reason);
   }
+  const { requirement } = selection;
 
   // 3.75 Dry run stops here, the last point before anything costs or commits.
   //      Funding moves user money and signing produces a spendable
   //      authorization, so both are past the line.
   if (opts.dryRun) {
     return {
+      kind: 'would-pay',
       status: 402,
       body: first.body,
-      paid: false,
       payer: payer.address,
       wouldPay: {
         scheme: requirement.scheme,
@@ -529,8 +551,7 @@ export async function payAndFetch(
   // 3.5 Funding hook (flow 2b): make sure the payer can actually cover the
   //     price, topping it up through the on-chain permission when it can't.
   //     A refusal here is a policy-shaped outcome, not an error.
-  let topUp: { amount?: string; batchId?: string } | undefined;
-  let permit2Approval: { batchId: string } | undefined;
+  const traces: Traces = {};
   let permit2Allowance: bigint | undefined;
   if (opts.ensureFunds) {
     // Wrapped for the same reason `payer.pay` is below: this hook is what moves
@@ -539,15 +560,15 @@ export async function payAndFetch(
     // call status is enough to trip it.
     let funded;
     try {
-      funded = await opts.ensureFunds(requirement, payer.address);
+      funded = await opts.ensureFunds(requirement, payer.address, budget);
     } catch (err) {
-      return refusal(`payer funding failed: ${errorMessage(err)}`);
+      return refused('funding_failed', `payer funding failed: ${errorMessage(err)}`);
     }
     if (!funded.ok) {
       // A refused funding may still have broadcast the transfer (e.g. a
       // confirmation timeout) — keep the trace so it can be reconciled. Gated
       // on either field: the no-call-id path has an amount and no id.
-      return refusal(funded.reason ?? 'payer funding failed', {
+      return refused(funded.code ?? 'funding_failed', funded.reason ?? 'payer funding failed', {
         ...(funded.amount || funded.batchId ? { topUp: { amount: funded.amount, batchId: funded.batchId } } : {}),
         ...(funded.approvalBatchId ? { permit2Approval: { batchId: funded.approvalBatchId } } : {}),
       });
@@ -555,11 +576,11 @@ export async function payAndFetch(
     // Independent of `skipped`: the approval runs whether or not principal had
     // to move, and it is money out of the payer either way.
     if (funded.approvalBatchId) {
-      permit2Approval = { batchId: funded.approvalBatchId };
+      traces.permit2Approval = { batchId: funded.approvalBatchId };
     }
     permit2Allowance = funded.permit2Allowance;
     if (!funded.skipped) {
-      topUp = { amount: funded.amount, batchId: funded.batchId };
+      traces.topUp = { amount: funded.amount, batchId: funded.batchId };
     }
   }
 
@@ -573,52 +594,100 @@ export async function payAndFetch(
   try {
     payload = await payer.pay(requirement, { permit2Allowance });
   } catch (err) {
-    return refusal(`payment signing failed: ${errorMessage(err)}`, { topUp, permit2Approval });
+    return refused('signing_failed', `payment signing failed: ${errorMessage(err)}`, traces);
   }
-  const details = {
-    scheme: requirement.scheme,
-    // The ceiling until a receipt says otherwise, which is the conservative
-    // reading for `upto` and the exact figure for `exact`.
-    amount: requirement.amount,
-    authorized: requirement.amount,
-    deadline: paymentDeadlineOf(payload),
-    asset: requirement.asset,
-    network: requirement.network,
-    payTo: requirement.payTo,
-    nonce: paymentNonceOf(payload),
+  const authorization: SignedAuthorization = {
+    resource,
+    payload,
+    details: {
+      scheme: requirement.scheme,
+      // The ceiling until a receipt says otherwise, which is the conservative
+      // reading for `upto` and the exact figure for `exact`.
+      amount: requirement.amount,
+      authorized: requirement.amount,
+      deadline: paymentDeadlineOf(payload),
+      asset: requirement.asset,
+      network: requirement.network,
+      payTo: requirement.payTo,
+      nonce: paymentNonceOf(payload),
+    },
   };
-  const proof = encodePaymentPayload(payload);
 
-  // 5. Retry with the proof, against the resolved secure `resource` and with
-  //    redirects DISABLED: the PAYMENT-SIGNATURE header must never be followed
-  //    onto another origin (undici keeps custom headers across cross-origin
-  //    redirects), which would hand the signed proof to an attacker. A fresh
-  //    nonce means the server's replay protection is fine with the re-request.
+  // 4.5 The caller's record of the signature, before the proof leaves. If it
+  //     cannot be kept, the proof is not sent, so a retry can never sign a
+  //     second authorization for the same key.
+  if (opts.attempt?.onSigned) {
+    try {
+      await opts.attempt.onSigned(authorization);
+    } catch (err) {
+      return refused(
+        'store_failed',
+        `payment not sent: the signed authorization could not be stored (${errorMessage(err)})`,
+        traces
+      );
+    }
+  }
+
+  return send(authorization, traces);
+}
+
+const IDEMPOTENCY_KEY = /^[A-Za-z0-9_.:-]{1,128}$/;
+
+interface SendContext {
+  method: string;
+  baseHeaders: Record<string, string>;
+  body: string | undefined;
+  /** The caller's idempotency key; a fresh random one without it. */
+  key: string | undefined;
+  payer: Payer;
+  request: (target: string, init: RequestInit) => Promise<FetchedResponse>;
+}
+
+/**
+ * 5. Retry with the proof, against the resolved secure `resource` and with
+ *    redirects DISABLED: the PAYMENT-SIGNATURE header must never be followed
+ *    onto another origin (undici keeps custom headers across cross-origin
+ *    redirects), which would hand the signed proof to an attacker. Never
+ *    throws: by now the authorization is signed and funds may have moved.
+ */
+async function sendSigned(
+  authorization: SignedAuthorization,
+  traces: Traces,
+  { method, baseHeaders, body, key, payer, request }: SendContext
+): Promise<PaymentOutcome> {
+  const { resource, payload, details } = authorization;
   const retryHeaders: Record<string, string> = {
     ...baseHeaders,
-    [X402_HEADERS.signature]: proof,
-    'Idempotency-Key': idempotencyKey(),
+    [X402_HEADERS.signature]: encodePaymentPayload(payload),
+    'Idempotency-Key': key ?? idempotencyKey(),
   };
-  // Wrapped like `ensureFunds` and `payer.pay` above, and for more than either:
-  // by this point a top-up may have moved the user's USDC and the authorization
-  // is already signed, so a socket error escaping here loses both from the audit
-  // ledger. That ledger is what the period and session caps are rebuilt from, so
-  // the next payment would see a ceiling more permissive than it should.
+  // A socket error escaping here would lose a signed authorization and any
+  // top-up from the audit ledger the caps are rebuilt from, so the next payment
+  // would see a ceiling more permissive than it should.
   let paid;
   try {
-    paid = await fetchWithTimeout(resource, {
-      method,
-      headers: retryHeaders,
-      body: opts.body,
-      redirect: 'manual',
-    });
+    paid = await request(resource, { method, headers: retryHeaders, body, redirect: 'manual' });
   } catch (err) {
-    return refusal(`payment sent but the response never arrived: ${errorMessage(err)}`, {
+    const reason = errorMessage(err);
+    if (err instanceof FetchRefused) {
+      return {
+        kind: 'refused',
+        status: 402,
+        body: '',
+        payer: payer.address,
+        refusal: { code: 'blocked_url', reason },
+        ...traces,
+      };
+    }
+    return {
+      kind: 'failed',
+      status: 402,
       body: '',
-      attemptedPayment: details,
-      topUp,
-      permit2Approval,
-    });
+      payer: payer.address,
+      refusal: { code: 'no_response', reason: `payment sent but the response never arrived: ${reason}` },
+      attempted: details,
+      ...traces,
+    };
   }
 
   // A settled x402 response carries the resource directly (never a redirect).
@@ -626,19 +695,20 @@ export async function payAndFetch(
   // treat it as a settlement failure, never follow it.
   if (paid.status >= 300 && paid.status < 400) {
     return {
+      kind: 'failed',
       status: paid.status,
       body: paid.body,
-      paid: false,
       payer: payer.address,
-      attemptedPayment: details,
-      topUp,
-      permit2Approval,
-      refusedReason: `settlement endpoint attempted a redirect (${paid.status}); not following it with the signed proof`,
+      refusal: {
+        code: 'redirected',
+        reason: `settlement endpoint attempted a redirect (${paid.status}); not following it with the signed proof`,
+      },
+      attempted: details,
+      ...traces,
     };
   }
 
   const receipt = b64json<X402SettleResponse>(paid.headers.get(X402_HEADERS.response));
-  const body = paid.body;
   if (paid.status >= 400) {
     // On rejection the server re-challenges with a fresh PAYMENT-REQUIRED whose
     // `error` carries the real reason (e.g. `invalid_exact_evm_insufficient_balance`),
@@ -646,30 +716,31 @@ export async function payAndFetch(
     // error, then the re-challenge error, then the status.
     const reChallenge = b64json<X402PaymentRequired>(paid.headers.get(X402_HEADERS.required));
     return {
+      kind: 'failed',
       status: paid.status,
-      body,
-      paid: false,
+      body: paid.body,
       payer: payer.address,
       // The payment was signed and sent; surface it so an ambiguous settlement
       // (facilitator may have broadcast) can be reconciled by nonce.
-      attemptedPayment: details,
-      topUp,
-      permit2Approval,
-      refusedReason: receipt?.errorReason ?? reChallenge?.error ?? `settlement failed with status ${paid.status}`,
+      refusal: {
+        code: 'settlement_rejected',
+        reason: receipt?.errorReason ?? reChallenge?.error ?? `settlement failed with status ${paid.status}`,
+      },
+      attempted: details,
+      ...traces,
     };
   }
 
   return {
+    kind: 'paid',
     status: paid.status,
-    body,
-    paid: true,
-    topUp,
-    permit2Approval,
+    body: paid.body,
     payer: payer.address,
     payment: {
       ...details,
-      amount: settledAmountOf(receipt, requirement.scheme, details.authorized),
+      amount: settledAmountOf(receipt, details.scheme, details.authorized),
       txHash: settledTxHash(receipt),
     },
+    ...traces,
   };
 }

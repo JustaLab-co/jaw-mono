@@ -8,6 +8,7 @@ import {
   mcpPaymentResult,
   resolveSessionX402Policy,
   payAndFetch,
+  toPayAndFetchResult,
   machineEntry,
   openPaymentWindow,
   recordPaymentOutcome,
@@ -121,18 +122,20 @@ export function registerPayTool(server: McpServer): void {
               cliPaymentPorts
             );
 
-            const result = await payAndFetch(params.url, payer, {
-              method: params.method,
-              headers: params.headers,
-              body: params.body,
-              policy,
-              ensureFunds,
-              spentThisSession,
-              periodUsage,
-              maxAmount: params.maxAmount,
-              asset: params.asset,
-              network: params.network,
-            });
+            const result = toPayAndFetchResult(
+              await payAndFetch(params.url, payer, {
+                method: params.method,
+                headers: params.headers,
+                body: params.body,
+                policy,
+                ensureFunds,
+                spentThisSession,
+                periodUsage,
+                maxAmount: params.maxAmount,
+                asset: params.asset,
+                network: params.network,
+              })
+            );
 
             // The cap is not tracked in memory: the next call reads it back
             // from the ledger this writes to.

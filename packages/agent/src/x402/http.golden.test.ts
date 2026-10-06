@@ -1,5 +1,6 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { payAndFetch, type PayAndFetchOptions } from './http.js';
+import { toPayAndFetchResult } from './outcome.js';
 import type { X402PaymentPayload, X402PaymentRequirement } from './types.js';
 import type { Payer } from './payer.js';
 
@@ -62,7 +63,7 @@ beforeEach(() => {
 afterEach(() => vi.unstubAllGlobals());
 
 const printed = async (url: string, opts: PayAndFetchOptions = {}, who: Payer = payer) =>
-  JSON.stringify(await payAndFetch(url, who, opts));
+  JSON.stringify(toPayAndFetchResult(await payAndFetch(url, who, opts)));
 
 describe('payAndFetch output, byte for byte', () => {
   it('a free resource', async () => {

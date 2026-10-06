@@ -1,5 +1,11 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { settledAmountOf, payAndFetch } from './http.js';
+import { settledAmountOf, payAndFetch as payAndFetchOutcome } from './http.js';
+import { toPayAndFetchResult } from './outcome.js';
+
+// These cases assert on the record the CLI and MCP print, so they read it
+// through the same projection.
+const payAndFetch = async (...args: Parameters<typeof payAndFetchOutcome>) =>
+  toPayAndFetchResult(await payAndFetchOutcome(...args));
 import { buildUptoPayment } from './scheme-upto-evm.js';
 import { X402_UPTO_PROXY_ADDRESS } from './permit2.js';
 import type { X402PaymentPayload, X402PaymentRequirement } from './types.js';

@@ -16,7 +16,13 @@ import fc from 'fast-check';
 import { getAddress } from 'viem';
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 
-import { payAndFetch, type PayAndFetchOptions } from './http.js';
+import { payAndFetch as payAndFetchOutcome, type PayAndFetchOptions } from './http.js';
+import { toPayAndFetchResult } from './outcome.js';
+
+// These cases assert on the record the CLI and MCP print, so they read it
+// through the same projection.
+const payAndFetch = async (...args: Parameters<typeof payAndFetchOutcome>) =>
+  toPayAndFetchResult(await payAndFetchOutcome(...args));
 import { checkPolicy, type LimitUsage, type X402Policy } from './policy.js';
 import type { X402PaymentRequirement } from './types.js';
 import type { Payer } from './payer.js';

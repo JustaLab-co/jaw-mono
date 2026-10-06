@@ -2,7 +2,7 @@ import { parseNonNegativeBigInt } from './amount.js';
 import { isPayableAddress } from './address.js';
 import type { X402PaymentRequirement } from './types.js';
 import { topUpCeiling, type LimitUsage, type X402Policy } from './policy.js';
-import type { PayAndFetchResult } from './http.js';
+import type { PayAndFetchResult } from './outcome.js';
 import { reconcileSettlements } from './settlement.js';
 import { sumSpentSince } from './ledger.js';
 import type { ChainClients, PaymentLog } from '../ports.js';

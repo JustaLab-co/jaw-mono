@@ -46,6 +46,8 @@ vi.mock('../../x402/session-payer.js', () => ({ sessionPayer: () => ({ address: 
 vi.mock('@jaw.id/agent', async (importOriginal) => ({
   // The real recorder, so the ledger assertions below still see what it writes.
   ...(await importOriginal<typeof import('@jaw.id/agent')>()),
+  // The stub below already answers in the printed shape.
+  toPayAndFetchResult: (result: unknown) => result,
   payAndFetch: async (_url: string, _payer: unknown, opts: Record<string, unknown>) => {
     h.payOpts.push(opts);
     return { payer: h.payer, status: 200, ...h.outcome };
