@@ -2,7 +2,10 @@
 // the type check uses the workspace's tsc because the consumer installs no
 // devDependencies, so its TS version follows the monorepo.
 import assert from 'node:assert/strict';
-import { execFileSync } from 'node:child_process';
+import { execFileSync, spawnSync } from 'node:child_process';
+import { mkdtempSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { registerHooks, createRequire } from 'node:module';
 
 const require = createRequire(import.meta.url);
@@ -30,5 +33,12 @@ const jaw = (args) => execFileSync('node_modules/.bin/jaw', args, { encoding: 'u
 assert.match(jaw(['--version']), new RegExp(`@jaw.id/cli/${cliVersion} `));
 const help = jaw(['--help']);
 for (const topic of ['session', 'mcp', 'rpc']) assert.match(help, new RegExp(`\\b${topic}\\b`));
+// The x402 commands load the payment code the CLI bundles in, which neither
+// call above touches. An empty home, so the answer is the no-session one.
+const status = spawnSync('node_modules/.bin/jaw', ['x402', 'status'], {
+  encoding: 'utf8',
+  env: { ...process.env, HOME: mkdtempSync(join(tmpdir(), 'jaw-home-')) },
+});
+assert.match(status.stdout + status.stderr, /No session/);
 
 console.log('esm ok');
