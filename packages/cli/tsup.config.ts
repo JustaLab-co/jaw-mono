@@ -13,7 +13,6 @@ export default defineConfig({
     'lib/paths': 'src/lib/paths.ts',
     'lib/types': 'src/lib/types.ts',
     'lib/validation': 'src/lib/validation.ts',
-    'lib/terminal': 'src/lib/terminal.ts',
     'lib/payment-lock': 'src/lib/payment-lock.ts',
     // session lib
     'lib/keystore': 'src/lib/keystore.ts',
@@ -41,8 +40,6 @@ export default defineConfig({
     'x402/log-view': 'src/x402/log-view.ts',
     // mcp
     'mcp/server': 'src/mcp/server.ts',
-    'mcp/tools': 'src/mcp/tools.ts',
-    'mcp/helpers': 'src/mcp/helpers.ts',
     'mcp/handlers/rpc': 'src/mcp/handlers/rpc.ts',
     'mcp/handlers/config': 'src/mcp/handlers/config.ts',
     'mcp/handlers/daemon': 'src/mcp/handlers/daemon.ts',
@@ -56,8 +53,12 @@ export default defineConfig({
   clean: true,
   treeshake: true,
   target: 'node20',
-  // Private workspace package, so it ships inside the CLI bundle.
+  // Private workspace package, so it ships inside the CLI bundle. Bundled from
+  // source, so a stale or half-cleaned agent dist never ends up in the CLI.
   noExternal: ['@jaw.id/agent'],
+  esbuildOptions(options) {
+    options.conditions = ['@jaw-mono/source'];
+  },
   external: [
     '@jaw.id/core',
     '@modelcontextprotocol/sdk',
