@@ -55,7 +55,7 @@ vi.mock('../../lib/session-config.js', () => ({
   isLegacySession: () => false,
   liveOrphans: () => [],
 }));
-vi.mock('../../x402/payer.js', () => ({ sessionPayerAddress: () => h.payer }));
+vi.mock('../../x402/session-payer.js', () => ({ sessionPayerAddress: () => h.payer }));
 // No chain behind the reads: liveness comes back as not knowing.
 vi.mock('../../x402/balance.js', () => ({
   usdcBalance: async () => ({ formatted: '20' }),

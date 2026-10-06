@@ -5,6 +5,7 @@ import {
   topUpCeiling,
   type LimitUsage,
   type X402Policy,
+  type PayAndFetchResult,
 } from '@jaw.id/agent';
 import { appendX402Log, compactX402Log, readX402Log, sumSpentSince } from './ledger.js';
 import { reconcileSettlements } from './settlement.js';
@@ -12,7 +13,6 @@ import { capWindowStarts, currentLimitUsageOnChain } from './spend-window.js';
 import { ensurePayerFunds } from './topup.js';
 import { SessionBridge } from '../lib/session-bridge.js';
 import type { SessionConfig } from '../lib/session-config.js';
-import type { PayAndFetchResult } from './http.js';
 
 /** The funding hook `payAndFetch` runs once a requirement has passed the policy. */
 export type EnsureFunds = (

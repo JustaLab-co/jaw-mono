@@ -41,9 +41,7 @@ const h = vi.hoisted(() => ({
 vi.mock('../../lib/config.js', () => ({ loadConfig: () => h.config }));
 vi.mock('../../lib/api-key.js', () => ({ apiKeyFor: () => h.apiKey }));
 vi.mock('../../lib/session-config.js', () => ({ tryLoadSessionConfig: () => h.session }));
-vi.mock('../../x402/payer.js', () => ({
-  Eip3009EoaPayer: { fromSessionKey: () => ({ address: h.payer }) },
-}));
+vi.mock('../../x402/session-payer.js', () => ({ sessionPayer: () => ({ address: h.payer }) }));
 
 vi.mock('../../x402/payment-window.js', async (importOriginal) => ({
   // The real recorder, so the ledger assertions below still see what it writes.
@@ -60,7 +58,8 @@ vi.mock('../../x402/payment-window.js', async (importOriginal) => ({
   },
 }));
 
-vi.mock('../../x402/http.js', () => ({
+vi.mock('@jaw.id/agent', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@jaw.id/agent')>()),
   payAndFetch: async (_url: string, _payer: unknown, opts: Record<string, unknown>) => {
     h.payOpts.push(opts);
     return { payer: h.payer, status: 200, ...h.outcome };

@@ -58,6 +58,7 @@ vi.mock('../x402/balance.js', async (importOriginal) => {
     // before signing; a real client here would hit the stubbed global fetch
     // and eat the mocked 402/200 response sequence. No delegation in E2E.
     publicClientFor: () => ({ getCode: async () => undefined }),
+    cliChainClients: { publicClient: () => ({ getCode: async () => undefined }) },
   };
 });
 

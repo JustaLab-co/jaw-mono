@@ -99,7 +99,7 @@ vi.mock('../../lib/session-config.js', () => ({
   liveOrphans: () => [],
 }));
 
-vi.mock('../../x402/payer.js', () => ({ sessionPayerAddress: () => h.payer }));
+vi.mock('../../x402/session-payer.js', () => ({ sessionPayerAddress: () => h.payer }));
 
 // Both balances funded and readable: the only problem left for `diagnose` to
 // find is the one this file exists to pin.

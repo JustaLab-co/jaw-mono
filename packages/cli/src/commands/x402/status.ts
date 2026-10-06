@@ -8,10 +8,7 @@ import {
   sessionUsable,
   tryLoadSessionConfig,
 } from '../../lib/session-config.js';
-import { sessionPayerAddress } from '../../x402/payer.js';
-import { cliChainClients, usdcBalance } from '../../x402/balance.js';
-import { readX402Log, sumSpentSince, checkpointFigureReadable } from '../../x402/ledger.js';
-import { reconcileSettlements } from '../../x402/settlement.js';
+import { sessionPayerAddress } from '../../x402/session-payer.js';
 import {
   resolveSessionX402Policy,
   sameLimit,
@@ -28,6 +25,9 @@ import {
   diagnose,
   whyEip712DomainDisagrees,
 } from '@jaw.id/agent';
+import { cliChainClients, usdcBalance } from '../../x402/balance.js';
+import { readX402Log, sumSpentSince, checkpointFigureReadable } from '../../x402/ledger.js';
+import { reconcileSettlements } from '../../x402/settlement.js';
 import { currentLimitUsageOnChain } from '../../x402/spend-window.js';
 import { recoverPermission } from '../../x402/permission-recovery.js';
 import type { OutputFormat } from '../../lib/types.js';

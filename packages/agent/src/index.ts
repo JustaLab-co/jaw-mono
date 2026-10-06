@@ -23,3 +23,7 @@ export * from './x402/status-report.js';
 export * from './grants/grant-ceiling.js';
 export * from './x402/funded-owner.js';
 export * from './x402/eip712-domain.js';
+export * from './x402/payer.js';
+export * from './x402/scheme-exact-evm.js';
+export * from './x402/scheme-upto-evm.js';
+export * from './x402/http.js';

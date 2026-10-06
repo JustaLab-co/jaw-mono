@@ -7,12 +7,12 @@ import {
   mcpResult,
   mcpPaymentResult,
   resolveSessionX402Policy,
+  payAndFetch,
 } from '@jaw.id/agent';
+import { sessionPayer, sessionPayerAddress } from '../../x402/session-payer.js';
 import { loadConfig } from '../../lib/config.js';
 import { apiKeyFor } from '../../lib/api-key.js';
-import { Eip3009EoaPayer, sessionPayerAddress } from '../../x402/payer.js';
 import { machineEntry } from '../../x402/log-view.js';
-import { payAndFetch } from '../../x402/http.js';
 import { readX402Log } from '../../x402/ledger.js';
 import { withPaymentLock } from '../../lib/payment-lock.js';
 import { usdcBalance } from '../../x402/balance.js';
@@ -81,7 +81,7 @@ export function registerPayTool(server: McpServer): void {
           try {
             const config = loadConfig();
             // Throws a clear "run jaw session setup" error when no session exists.
-            const payer = Eip3009EoaPayer.fromSessionKey();
+            const payer = sessionPayer();
             // Read once and reuse: it only changes between `jaw session setup`
             // runs, and the policy, both spend windows and the top-up path need it.
             const session = tryLoadSessionConfig();

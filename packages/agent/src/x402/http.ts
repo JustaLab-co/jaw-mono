@@ -1,8 +1,8 @@
 import { randomBytes } from 'node:crypto';
 import { z } from 'zod';
+import { errorMessage } from '../util/errors.js';
+import { parseBigInt } from './amount.js';
 import {
-  errorMessage,
-  parseBigInt,
   X402_HEADERS,
   isX402Scheme,
   type X402PaymentPayload,
@@ -10,12 +10,8 @@ import {
   type X402PaymentRequired,
   type X402PaymentRequirement,
   type X402SettleResponse,
-  type LimitUsage,
-  asks,
-  checkPolicy,
-  type PolicyContext,
-  type X402Policy,
-} from '@jaw.id/agent';
+} from './types.js';
+import { type LimitUsage, asks, checkPolicy, type PolicyContext, type X402Policy } from './policy.js';
 import { encodePaymentPayload } from './scheme-exact-evm.js';
 import type { Payer } from './payer.js';
 

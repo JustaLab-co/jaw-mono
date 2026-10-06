@@ -1,7 +1,9 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { privateKeyToAccount } from 'viem/accounts';
 import { recoverTypedDataAddress, recoverAddress, sliceHex } from 'viem';
-import type { X402PaymentRequirement } from '@jaw.id/agent';
+import type { X402PaymentRequirement } from './types.js';
+import type { ChainClients } from '../ports.js';
+import { Eip3009EoaPayer } from './payer.js';
 import { TRANSFER_WITH_AUTHORIZATION_TYPES } from './scheme-exact-evm.js';
 import { hashTypedData as erc7739HashTypedData } from 'viem/experimental/erc7739';
 
@@ -9,22 +11,12 @@ import { hashTypedData as erc7739HashTypedData } from 'viem/experimental/erc7739
 const PK = '0x59c6995e998f97a5a0044966f0945389dc9e86dae88c7a8412f4603b6b78690d';
 const account = privateKeyToAccount(PK);
 
-vi.mock('../lib/keystore.js', () => ({
-  keystoreExists: vi.fn(() => true),
-  loadSessionKey: vi.fn(() => PK),
-}));
-
 const getCodeMock = vi.fn();
 const readContractMock = vi.fn();
-vi.mock('./balance.js', async (importOriginal) => {
-  const actual = await importOriginal<typeof import('./balance.js')>();
-  return {
-    ...actual,
-    publicClientFor: () => ({ getCode: getCodeMock, readContract: readContractMock }),
-  };
-});
-
-const { Eip3009EoaPayer } = await import('./payer.js');
+const clients = {
+  publicClient: () => ({ getCode: getCodeMock, readContract: readContractMock }),
+} as unknown as ChainClients;
+const sessionPayer = () => Eip3009EoaPayer.fromAccount(account, clients);
 
 const requirement: X402PaymentRequirement = {
   scheme: 'exact',
@@ -53,7 +45,7 @@ beforeEach(() => {
 describe('Eip3009EoaPayer delegation awareness', () => {
   it('signs the plain typed data while the EOA has no code (ecrecover path)', async () => {
     getCodeMock.mockResolvedValue(undefined);
-    const payer = Eip3009EoaPayer.fromSessionKey();
+    const payer = sessionPayer();
 
     const payload = await payer.pay(requirement, { now: 1_000_000, nonce: ('0x' + '11'.repeat(32)) as `0x${string}` });
 
@@ -79,7 +71,7 @@ describe('Eip3009EoaPayer delegation awareness', () => {
   it('signs the ERC-7739 wrapped envelope once the EOA carries the 7702 designator', async () => {
     getCodeMock.mockResolvedValue('0xef0100bb4f7d5418cd8dadb61bb95561179e517572cbcd');
     readContractMock.mockResolvedValue(ACCOUNT_DOMAIN_TUPLE);
-    const payer = Eip3009EoaPayer.fromSessionKey();
+    const payer = sessionPayer();
 
     const payload = await payer.pay(requirement, { now: 1_000_000, nonce: ('0x' + '11'.repeat(32)) as `0x${string}` });
 
@@ -116,7 +108,7 @@ describe('Eip3009EoaPayer delegation awareness', () => {
   it('caches the account domain across payments (one eip712Domain read)', async () => {
     getCodeMock.mockResolvedValue('0xef0100bb4f7d5418cd8dadb61bb95561179e517572cbcd');
     readContractMock.mockResolvedValue(ACCOUNT_DOMAIN_TUPLE);
-    const payer = Eip3009EoaPayer.fromSessionKey();
+    const payer = sessionPayer();
 
     await payer.pay(requirement);
     await payer.pay(requirement);
@@ -129,7 +121,7 @@ describe('Eip3009EoaPayer delegation awareness', () => {
     // domain on chain B would produce signatures the verifier rejects.
     getCodeMock.mockResolvedValue('0xef0100bb4f7d5418cd8dadb61bb95561179e517572cbcd');
     readContractMock.mockResolvedValue(ACCOUNT_DOMAIN_TUPLE);
-    const payer = Eip3009EoaPayer.fromSessionKey();
+    const payer = sessionPayer();
 
     await payer.pay(requirement); // eip155:84532
     await payer.pay({ ...requirement, network: 'eip155:137', asset: '0x3c499c542cEF5E3811e1192ce70d8cC03d5c3359' });
@@ -144,7 +136,7 @@ describe('Eip3009EoaPayer delegation awareness', () => {
   it('refuses to sign when the account domain cannot be read', async () => {
     getCodeMock.mockResolvedValue('0xef0100bb4f7d5418cd8dadb61bb95561179e517572cbcd');
     readContractMock.mockRejectedValue(new Error('rpc timed out'));
-    const payer = Eip3009EoaPayer.fromSessionKey();
+    const payer = sessionPayer();
 
     await expect(payer.pay(requirement)).rejects.toThrow(/rpc timed out/);
   });
@@ -156,7 +148,7 @@ describe('Eip3009EoaPayer delegation awareness', () => {
   // could never settle. Refusing before signing costs a retry instead.
   it('refuses to sign when it cannot tell whether the account is delegated', async () => {
     getCodeMock.mockRejectedValue(new Error('rpc down'));
-    const payer = Eip3009EoaPayer.fromSessionKey();
+    const payer = sessionPayer();
 
     await expect(payer.pay(requirement)).rejects.toThrow(/rpc down/);
   });
@@ -180,7 +172,7 @@ describe('Eip3009EoaPayer paying upto', () => {
   it('refuses before signing when Permit2 was never approved', async () => {
     getCodeMock.mockResolvedValue('0x');
     readContractMock.mockResolvedValue(0n);
-    const payer = Eip3009EoaPayer.fromSessionKey();
+    const payer = sessionPayer();
 
     await expect(payer.pay(uptoRequirement)).rejects.toThrow(/approved Permit2/);
   });
@@ -192,7 +184,7 @@ describe('Eip3009EoaPayer paying upto', () => {
   it('refuses before signing when the allowance cannot be read', async () => {
     getCodeMock.mockResolvedValue('0x');
     readContractMock.mockRejectedValue(new Error('rpc timed out'));
-    const payer = Eip3009EoaPayer.fromSessionKey();
+    const payer = sessionPayer();
 
     await expect(payer.pay(uptoRequirement)).rejects.toThrow(/rpc timed out/);
   });
@@ -200,7 +192,7 @@ describe('Eip3009EoaPayer paying upto', () => {
   it('refuses when the allowance is smaller than the ceiling it would authorize', async () => {
     getCodeMock.mockResolvedValue('0x');
     readContractMock.mockResolvedValue(4_999_999n);
-    const payer = Eip3009EoaPayer.fromSessionKey();
+    const payer = sessionPayer();
 
     await expect(payer.pay(uptoRequirement)).rejects.toThrow(/approved Permit2/);
   });
@@ -213,7 +205,7 @@ describe('Eip3009EoaPayer paying upto', () => {
   it('takes the allowance the funder already read instead of asking the chain again', async () => {
     getCodeMock.mockResolvedValue('0x');
     readContractMock.mockRejectedValue(new Error('the chain must not be asked'));
-    const payer = Eip3009EoaPayer.fromSessionKey();
+    const payer = sessionPayer();
 
     const payload = await payer.pay(uptoRequirement, {
       permit2Allowance: 2n ** 256n - 1n,
@@ -228,7 +220,7 @@ describe('Eip3009EoaPayer paying upto', () => {
   it('still reads the chain when the figure it was handed does not cover the ceiling', async () => {
     getCodeMock.mockResolvedValue('0x');
     readContractMock.mockResolvedValue(2n ** 256n - 1n);
-    const payer = Eip3009EoaPayer.fromSessionKey();
+    const payer = sessionPayer();
 
     await payer.pay(uptoRequirement, {
       permit2Allowance: 4_999_999n,
@@ -242,7 +234,7 @@ describe('Eip3009EoaPayer paying upto', () => {
   it('signs a Permit2 authorization once the allowance covers it', async () => {
     getCodeMock.mockResolvedValue('0x');
     readContractMock.mockResolvedValue(2n ** 256n - 1n);
-    const payer = Eip3009EoaPayer.fromSessionKey();
+    const payer = sessionPayer();
 
     const payload = await payer.pay(uptoRequirement, {
       now: 1_000_000,

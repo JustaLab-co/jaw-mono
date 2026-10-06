@@ -1,19 +1,15 @@
 import { randomBytes } from 'node:crypto';
+import { isHexShaped, isPayableAddress, isZeroAddress } from './address.js';
+import type { X402PaymentPayload, X402Permit2Authorization, X402PaymentRequirement } from './types.js';
+import { usdcForNetwork } from './asset-registry.js';
 import {
-  isHexShaped,
-  isPayableAddress,
-  isZeroAddress,
-  type X402PaymentPayload,
-  type X402Permit2Authorization,
-  type X402PaymentRequirement,
-  usdcForNetwork,
   PERMIT_WITNESS_TRANSFER_FROM_TYPES,
   UPTO_VERIFIED_CHAIN_IDS,
   isUptoVerifiedChain,
   X402_UPTO_PROXY_ADDRESS,
   permit2Domain,
   type UptoPermitMessage,
-} from '@jaw.id/agent';
+} from './permit2.js';
 
 /**
  * The `upto` scheme on EVM: authorize a ceiling, get charged for what was used.

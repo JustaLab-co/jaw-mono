@@ -2,9 +2,9 @@ import { Args, Flags } from '@oclif/core';
 import { BaseCommand } from '../../base-command.js';
 import { loadConfig } from '../../lib/config.js';
 import { tryLoadSessionConfig } from '../../lib/session-config.js';
-import { Eip3009EoaPayer } from '../../x402/payer.js';
-import { payAndFetch } from '../../x402/http.js';
+import { sessionPayer } from '../../x402/session-payer.js';
 import {
+  payAndFetch,
   resolveSessionX402Policy,
   usdcForNetwork,
   USDC_BY_NETWORK,
@@ -69,7 +69,7 @@ export default class X402Pay extends BaseCommand {
     const apiKey = this.resolveApiKey(flags);
 
     // Throws a clear "run jaw session setup" when there is no session key.
-    const payer = Eip3009EoaPayer.fromSessionKey();
+    const payer = sessionPayer();
     const session = tryLoadSessionConfig();
     // Same resolution the MCP tool uses: this path ran on the bare defaults, so
     // the two front ends enforced different caps for the same session.

@@ -17,7 +17,8 @@ import { getAddress } from 'viem';
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 
 import { payAndFetch, type PayAndFetchOptions } from './http.js';
-import { checkPolicy, type LimitUsage, type X402Policy, type X402PaymentRequirement } from '@jaw.id/agent';
+import { checkPolicy, type LimitUsage, type X402Policy } from './policy.js';
+import type { X402PaymentRequirement } from './types.js';
 import type { Payer } from './payer.js';
 
 fc.configureGlobal({ seed: 0x1402, numRuns: 300 });

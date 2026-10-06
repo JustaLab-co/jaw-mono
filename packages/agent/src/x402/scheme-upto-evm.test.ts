@@ -2,13 +2,8 @@ import { describe, it, expect } from 'vitest';
 import { privateKeyToAccount } from 'viem/accounts';
 import { recoverTypedDataAddress } from 'viem';
 import { buildUptoPayment } from './scheme-upto-evm.js';
-import {
-  X402_UPTO_PROXY_ADDRESS,
-  PERMIT_WITNESS_TRANSFER_FROM_TYPES,
-  permit2Domain,
-  type X402PaymentRequirement,
-  type X402UptoPayload,
-} from '@jaw.id/agent';
+import { X402_UPTO_PROXY_ADDRESS, PERMIT_WITNESS_TRANSFER_FROM_TYPES, permit2Domain } from './permit2.js';
+import type { X402PaymentRequirement, X402UptoPayload } from './types.js';
 
 // Well-known Hardhat test key #1 — never used for real funds.
 const PK = '0x59c6995e998f97a5a0044966f0945389dc9e86dae88c7a8412f4603b6b78690d';

@@ -1,12 +1,7 @@
 import { randomBytes } from 'node:crypto';
-import {
-  isPayableAddress,
-  isZeroAddress,
-  type X402EIP3009Authorization,
-  type X402PaymentPayload,
-  type X402PaymentRequirement,
-  usdcForNetwork,
-} from '@jaw.id/agent';
+import { isPayableAddress, isZeroAddress } from './address.js';
+import type { X402EIP3009Authorization, X402PaymentPayload, X402PaymentRequirement } from './types.js';
+import { usdcForNetwork } from './asset-registry.js';
 
 // EIP-712 struct for USDC's EIP-3009 `transferWithAuthorization`, the `exact`
 // scheme's on-chain settlement.

@@ -1,17 +1,12 @@
-import { privateKeyToAccount } from 'viem/accounts';
 import { parseAbi } from 'viem';
-import { keystoreExists, loadSessionKey } from '../lib/keystore.js';
+import type { PrivateKeyAccount } from 'viem/accounts';
 import { hashTypedData as erc7739HashTypedData, wrapTypedDataSignature } from 'viem/experimental/erc7739';
 import { buildExactPayment, type BuildExactOptions, type ExactTypedData } from './scheme-exact-evm.js';
 import { buildUptoPayment, type UptoTypedData } from './scheme-upto-evm.js';
-import {
-  PERMIT2_ADDRESS,
-  usdcForNetwork,
-  type UsdcAsset,
-  type X402PaymentPayload,
-  type X402PaymentRequirement,
-} from '@jaw.id/agent';
-import { publicClientFor } from './balance.js';
+import { PERMIT2_ADDRESS } from './permit2.js';
+import { usdcForNetwork, type UsdcAsset } from './asset-registry.js';
+import type { X402PaymentPayload, X402PaymentRequirement } from './types.js';
+import type { ChainClients } from '../ports.js';
 
 /**
  * Produces the x402 payment for a chosen requirement. The interface is
@@ -92,24 +87,21 @@ export class Eip3009EoaPayer implements Payer {
   private constructor(
     address: `0x${string}`,
     signTypedData: SchemeSigner,
-    signHash: (hash: `0x${string}`) => Promise<`0x${string}`>
+    signHash: (hash: `0x${string}`) => Promise<`0x${string}`>,
+    private readonly clients: ChainClients
   ) {
     this.address = address;
     this.signTypedData = signTypedData;
     this.signHash = signHash;
   }
 
-  /** Load the session key from the keystore and build a pull-mode payer. */
-  static fromSessionKey(): Eip3009EoaPayer {
-    if (!keystoreExists()) {
-      throw new Error('No session key. Run `jaw session setup` to enable autonomous payments.');
-    }
-    const account = privateKeyToAccount(loadSessionKey() as `0x${string}`);
+  /** A pull-mode payer signing with the session key's account. */
+  static fromAccount(account: PrivateKeyAccount, clients: ChainClients): Eip3009EoaPayer {
     // viem's strict TypedData generics don't line up with our concrete
     // ExactTypedData shape; the runtime call is identical.
     const signTypedData: SchemeSigner = (typedData) => account.signTypedData(typedData as never);
     const signHash = (hash: `0x${string}`) => account.sign({ hash });
-    return new Eip3009EoaPayer(account.address, signTypedData, signHash);
+    return new Eip3009EoaPayer(account.address, signTypedData, signHash, clients);
   }
 
   async pay(requirement: X402PaymentRequirement, opts?: PayOptions): Promise<X402PaymentPayload> {
@@ -156,7 +148,7 @@ export class Eip3009EoaPayer implements Payer {
   }
 
   private permit2Allowance(asset: UsdcAsset): Promise<bigint> {
-    return publicClientFor(asset.chainId).readContract({
+    return this.clients.publicClient(asset.chainId).readContract({
       address: asset.address,
       abi: ERC20_ALLOWANCE_ABI,
       functionName: 'allowance',
@@ -182,7 +174,7 @@ export class Eip3009EoaPayer implements Payer {
   private async isDelegated(network: string): Promise<boolean> {
     const asset = usdcForNetwork(network);
     if (!asset) return false;
-    const code = await publicClientFor(asset.chainId).getCode({ address: this.address });
+    const code = await this.clients.publicClient(asset.chainId).getCode({ address: this.address });
     return (code ?? '0x').toLowerCase().startsWith(EIP7702_CODE_PREFIX);
   }
 
@@ -215,28 +207,15 @@ export class Eip3009EoaPayer implements Payer {
   private async readAccountDomain(chainId: number): Promise<AccountEip712Domain> {
     const cached = this.accountDomainByChain.get(chainId);
     if (cached) return cached;
-    const [, name, version, domainChainId, verifyingContract, salt] = await publicClientFor(chainId).readContract({
-      address: this.address,
-      abi: EIP712_DOMAIN_ABI,
-      functionName: 'eip712Domain',
-    });
+    const [, name, version, domainChainId, verifyingContract, salt] = await this.clients
+      .publicClient(chainId)
+      .readContract({
+        address: this.address,
+        abi: EIP712_DOMAIN_ABI,
+        functionName: 'eip712Domain',
+      });
     const domain: AccountEip712Domain = { name, version, chainId: domainChainId, verifyingContract, salt };
     this.accountDomainByChain.set(chainId, domain);
     return domain;
   }
-}
-
-/**
- * The address pull-mode payments are made from, which is the session key's own
- * EOA and also the session address: the EOA is the session account, upgraded in
- * place. This is the address that must hold USDC for `jaw_pay_and_fetch` to
- * pay; expose it so a user/agent knows where the funds end up. Derives the
- * public address only (no signing, no key exposure). Throws if no session key
- * exists.
- */
-export function sessionPayerAddress(): `0x${string}` {
-  if (!keystoreExists()) {
-    throw new Error('No session key. Run `jaw session setup` first.');
-  }
-  return privateKeyToAccount(loadSessionKey() as `0x${string}`).address;
 }
