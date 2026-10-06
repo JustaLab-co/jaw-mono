@@ -4,10 +4,14 @@ import { keystoreExists, loadSessionKey } from '../lib/keystore.js';
 import { hashTypedData as erc7739HashTypedData, wrapTypedDataSignature } from 'viem/experimental/erc7739';
 import { buildExactPayment, type BuildExactOptions, type ExactTypedData } from './scheme-exact-evm.js';
 import { buildUptoPayment, type UptoTypedData } from './scheme-upto-evm.js';
-import { PERMIT2_ADDRESS } from './permit2.js';
+import {
+  PERMIT2_ADDRESS,
+  usdcForNetwork,
+  type UsdcAsset,
+  type X402PaymentPayload,
+  type X402PaymentRequirement,
+} from '@jaw.id/agent';
 import { publicClientFor } from './balance.js';
-import { usdcForNetwork, type UsdcAsset } from './asset-registry.js';
-import type { X402PaymentPayload, X402PaymentRequirement } from '@jaw.id/agent';
 
 /**
  * Produces the x402 payment for a chosen requirement. The interface is

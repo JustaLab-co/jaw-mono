@@ -16,7 +16,7 @@ import { decodeFunctionData, erc20Abi, maxUint256 } from 'viem';
 import { privateKeyToAccount } from 'viem/accounts';
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 
-import { PERMIT2_ADDRESS } from '../x402/permit2.js';
+import { PERMIT2_ADDRESS } from '@jaw.id/agent';
 
 fc.configureGlobal({ seed: 0x5e55, numRuns: 100 });
 

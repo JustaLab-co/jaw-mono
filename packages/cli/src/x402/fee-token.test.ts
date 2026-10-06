@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import type { UsdcAsset } from './asset-registry.js';
+import type { UsdcAsset } from '@jaw.id/agent';
 
 /**
  * The registry is a hand mirror of the backend's own asset list, and nothing

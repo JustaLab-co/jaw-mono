@@ -17,7 +17,7 @@ import { getAddress, isAddress } from 'viem';
 import { describe, it, expect } from 'vitest';
 
 import { checkPolicy, type LimitUsage, type PolicyContext, type X402Policy } from './policy.js';
-import type { X402PaymentRequirement } from '@jaw.id/agent';
+import type { X402PaymentRequirement } from './types.js';
 
 fc.configureGlobal({ seed: 0x402, numRuns: 1000 });
 

@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 import type { SessionConfig } from '../lib/session-config.js';
-import type { GrantedPeriodLimit, LimitUsage, X402Policy } from './policy.js';
+import type { GrantedPeriodLimit, LimitUsage, X402Policy } from '@jaw.id/agent';
 
 /**
  * The assembly both x402 front ends run before they spend. It used to live

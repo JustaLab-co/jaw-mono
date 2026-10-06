@@ -1,4 +1,4 @@
-import type { X402Policy } from '../x402/policy.js';
+import type { X402Policy } from '@jaw.id/agent';
 
 export type PaymasterConfig = {
   url: string;

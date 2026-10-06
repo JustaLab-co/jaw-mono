@@ -6,16 +6,14 @@ import {
   type X402PaymentPayload,
   type X402Permit2Authorization,
   type X402PaymentRequirement,
-} from '@jaw.id/agent';
-import { usdcForNetwork } from './asset-registry.js';
-import {
+  usdcForNetwork,
   PERMIT_WITNESS_TRANSFER_FROM_TYPES,
   UPTO_VERIFIED_CHAIN_IDS,
   isUptoVerifiedChain,
   X402_UPTO_PROXY_ADDRESS,
   permit2Domain,
   type UptoPermitMessage,
-} from './permit2.js';
+} from '@jaw.id/agent';
 
 /**
  * The `upto` scheme on EVM: authorize a ceiling, get charged for what was used.

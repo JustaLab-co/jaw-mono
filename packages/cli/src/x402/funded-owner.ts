@@ -1,6 +1,5 @@
-import { usdcForNetwork } from './asset-registry.js';
+import { usdcForNetwork, firstOperationCost, gasReserve } from '@jaw.id/agent';
 import { usdcBalance } from './balance.js';
-import { firstOperationCost, gasReserve } from './gas-reserve.js';
 import { formatUsdc } from './status-report.js';
 
 /**

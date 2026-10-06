@@ -9,9 +9,8 @@ import {
 import { loadConfig } from './config.js';
 import { isRejectedApiKey } from './api-key.js';
 import { encodeFunctionData, erc20Abi, maxUint256 } from 'viem';
-import { usdcForNetwork } from '../x402/asset-registry.js';
+import { usdcForNetwork, PERMIT2_ADDRESS } from '@jaw.id/agent';
 import { whyFeeTokenDisagrees } from '../x402/fee-token.js';
-import { PERMIT2_ADDRESS } from '../x402/permit2.js';
 
 // JAW's ERC-20 paymaster, mirrored from core's `jawPaymasterUrl`. Kept as a
 // local literal rather than an import because `@jaw.id/core` is lazy-loaded in

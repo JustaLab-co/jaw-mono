@@ -1,8 +1,14 @@
-import { parseNonNegativeBigInt, isPayableAddress, type X402PaymentRequirement } from '@jaw.id/agent';
+import {
+  parseNonNegativeBigInt,
+  isPayableAddress,
+  type X402PaymentRequirement,
+  topUpCeiling,
+  type LimitUsage,
+  type X402Policy,
+} from '@jaw.id/agent';
 import { appendX402Log, compactX402Log, readX402Log, sumSpentSince } from './ledger.js';
 import { reconcileSettlements } from './settlement.js';
 import { capWindowStarts, currentLimitUsageOnChain } from './spend-window.js';
-import { topUpCeiling, type LimitUsage, type X402Policy } from './policy.js';
 import { ensurePayerFunds } from './topup.js';
 import { SessionBridge } from '../lib/session-bridge.js';
 import type { SessionConfig } from '../lib/session-config.js';

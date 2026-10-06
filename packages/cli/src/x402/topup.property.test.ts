@@ -11,10 +11,8 @@ import fc from 'fast-check';
 import { decodeFunctionData, erc20Abi } from 'viem';
 import { describe, it, expect } from 'vitest';
 
-import { USDC_BY_NETWORK } from './asset-registry.js';
-import { firstOperationCost, gasReserve } from './gas-reserve.js';
+import { USDC_BY_NETWORK, firstOperationCost, gasReserve, type X402PaymentRequirement } from '@jaw.id/agent';
 import { ensurePayerFunds, type TopUpExecutor } from './topup.js';
-import type { X402PaymentRequirement } from '@jaw.id/agent';
 
 fc.configureGlobal({ seed: 0x70b, numRuns: 300 });
 

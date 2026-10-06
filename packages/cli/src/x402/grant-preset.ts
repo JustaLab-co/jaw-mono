@@ -1,5 +1,5 @@
 import { parseUnits } from 'viem';
-import { USDC_BY_NETWORK } from './asset-registry.js';
+import { USDC_BY_NETWORK } from '@jaw.id/agent';
 import type { PermissionsConfig } from '../lib/types.js';
 
 /**

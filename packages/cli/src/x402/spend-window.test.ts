@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 import type { SessionConfig } from '../lib/session-config.js';
-import type { LimitUsage, X402Policy } from './policy.js';
+import type { LimitUsage, X402Policy } from '@jaw.id/agent';
 
 /**
  * What `topUpCeiling` sizes refills from, and what `jaw x402 status` prints as

@@ -10,10 +10,13 @@ import {
   type X402PaymentRequired,
   type X402PaymentRequirement,
   type X402SettleResponse,
+  type LimitUsage,
+  asks,
+  checkPolicy,
+  type PolicyContext,
+  type X402Policy,
 } from '@jaw.id/agent';
 import { encodePaymentPayload } from './scheme-exact-evm.js';
-import type { LimitUsage } from './policy.js';
-import { asks, checkPolicy, type PolicyContext, type X402Policy } from './policy.js';
 import type { Payer } from './payer.js';
 
 export interface PayAndFetchOptions {

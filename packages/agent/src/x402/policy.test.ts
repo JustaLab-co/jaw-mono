@@ -56,7 +56,7 @@ import {
   tightestLimit,
 } from './policy.js';
 import { USDC_BY_NETWORK } from './asset-registry.js';
-import type { X402PaymentRequirement } from '@jaw.id/agent';
+import type { X402PaymentRequirement } from './types.js';
 
 const base: X402PaymentRequirement = {
   scheme: 'exact',

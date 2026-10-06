@@ -7,7 +7,7 @@ import {
   permit2Domain,
   X402_UPTO_PROXY_ADDRESS,
   type UptoPermitMessage,
-} from './permit2.js';
+} from '@jaw.id/agent';
 
 /**
  * The bytes the delegated signing path produces, frozen.

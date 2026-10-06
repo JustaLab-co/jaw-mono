@@ -9,7 +9,7 @@ import { payAndFetch } from '../../x402/http.js';
 import { readX402Log } from '../../x402/ledger.js';
 import { withPaymentLock } from '../../lib/payment-lock.js';
 import { usdcBalance } from '../../x402/balance.js';
-import { resolveSessionX402Policy } from '../../x402/policy.js';
+import { resolveSessionX402Policy } from '@jaw.id/agent';
 import { openPaymentWindow, recordPaymentOutcome } from '../../x402/payment-window.js';
 import { tryLoadSessionConfig } from '../../lib/session-config.js';
 

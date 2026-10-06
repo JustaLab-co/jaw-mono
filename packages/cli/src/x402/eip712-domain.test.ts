@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { hashDomain } from 'viem';
-import type { UsdcAsset } from './asset-registry.js';
+import type { UsdcAsset } from '@jaw.id/agent';
 
 const readContract = vi.fn();
 vi.mock('./balance.js', () => ({ publicClientFor: () => ({ readContract }) }));

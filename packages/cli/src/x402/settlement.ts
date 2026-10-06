@@ -1,8 +1,6 @@
 import { parseAbiItem, decodeEventLog } from 'viem';
 import { publicClientFor } from './balance.js';
-import { parseBigInt, errorMessage } from '@jaw.id/agent';
-import { usdcForNetwork, type UsdcAsset } from './asset-registry.js';
-import { PERMIT2_ADDRESS } from './permit2.js';
+import { parseBigInt, errorMessage, usdcForNetwork, type UsdcAsset, PERMIT2_ADDRESS } from '@jaw.id/agent';
 import {
   appendX402Correction,
   type SettlementState,

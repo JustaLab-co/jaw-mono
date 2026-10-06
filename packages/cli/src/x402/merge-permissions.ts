@@ -1,5 +1,5 @@
 import { toFunctionSelector } from 'viem';
-import { describeSpendPeriod } from './period.js';
+import { describeSpendPeriod } from '@jaw.id/agent';
 import type { GrantedPermission } from '../lib/session-config.js';
 import type { PermissionsConfig } from '../lib/types.js';
 

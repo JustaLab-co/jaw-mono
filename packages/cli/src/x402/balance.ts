@@ -1,6 +1,6 @@
 import { createPublicClient, http, erc20Abi, formatUnits, type Chain, type PublicClient } from 'viem';
 import { base, baseSepolia, polygon } from 'viem/chains';
-import { usdcForNetwork, type UsdcAsset, type UsdcChainId } from './asset-registry.js';
+import { usdcForNetwork, type UsdcAsset, type UsdcChainId } from '@jaw.id/agent';
 import { loadConfig } from '../lib/config.js';
 import { apiKeyFor } from '../lib/api-key.js';
 

@@ -12,12 +12,17 @@ import { sessionPayerAddress } from '../../x402/payer.js';
 import { usdcBalance } from '../../x402/balance.js';
 import { readX402Log, sumSpentSince, checkpointFigureReadable } from '../../x402/ledger.js';
 import { reconcileSettlements } from '../../x402/settlement.js';
-import { resolveSessionX402Policy, sameLimit, tightestLimit } from '../../x402/policy.js';
+import {
+  resolveSessionX402Policy,
+  sameLimit,
+  tightestLimit,
+  describePeriodPhrase,
+  parseBigInt,
+  parseNonNegativeBigInt,
+  USDC_BY_NETWORK,
+  gasReserve,
+} from '@jaw.id/agent';
 import { currentLimitUsageOnChain } from '../../x402/spend-window.js';
-import { describePeriodPhrase } from '../../x402/period.js';
-import { parseBigInt, parseNonNegativeBigInt } from '@jaw.id/agent';
-import { USDC_BY_NETWORK } from '../../x402/asset-registry.js';
-import { gasReserve } from '../../x402/gas-reserve.js';
 import { whyEip712DomainDisagrees } from '../../x402/eip712-domain.js';
 import { formatUsdc, formatRemaining, diagnose } from '../../x402/status-report.js';
 import { readLiveness, type PermissionLiveness } from '../../x402/permission-onchain.js';

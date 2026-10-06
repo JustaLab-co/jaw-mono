@@ -5,8 +5,8 @@ import {
   type X402EIP3009Authorization,
   type X402PaymentPayload,
   type X402PaymentRequirement,
+  usdcForNetwork,
 } from '@jaw.id/agent';
-import { usdcForNetwork } from './asset-registry.js';
 
 // EIP-712 struct for USDC's EIP-3009 `transferWithAuthorization`, the `exact`
 // scheme's on-chain settlement.

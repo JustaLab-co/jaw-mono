@@ -1,7 +1,6 @@
 import { parseUnits } from 'viem';
 import { parseLimit, type LimitPeriod } from './grant-preset.js';
-import { describeSpendPeriod, periodLengthSeconds } from './period.js';
-import { USDC_BY_NETWORK } from './asset-registry.js';
+import { describeSpendPeriod, periodLengthSeconds, USDC_BY_NETWORK } from '@jaw.id/agent';
 import { formatUsdc } from './status-report.js';
 import type { PermissionsConfig } from '../lib/types.js';
 
