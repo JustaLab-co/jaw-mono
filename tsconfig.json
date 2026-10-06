@@ -26,6 +26,9 @@
     },
     {
       "path": "./apps/demo"
+    },
+    {
+      "path": "./packages/agent"
     }
   ]
 }
