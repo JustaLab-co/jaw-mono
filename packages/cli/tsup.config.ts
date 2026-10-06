@@ -55,7 +55,7 @@ export default defineConfig({
   // source, so a stale or half-cleaned agent dist never ends up in the CLI.
   noExternal: ['@jaw.id/agent'],
   esbuildOptions(options) {
-    options.conditions = ['@jaw-mono/source'];
+    options.conditions = [...(options.conditions ?? []), '@jaw-mono/source'];
   },
   external: [
     '@jaw.id/core',
