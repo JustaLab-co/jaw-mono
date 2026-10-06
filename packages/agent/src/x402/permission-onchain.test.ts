@@ -13,7 +13,7 @@ import {
   readPermissionState,
   readCurrentPeriods,
 } from './permission-onchain.js';
-import type { GrantedPermission } from '../lib/session-config.js';
+import type { GrantedPermission } from '../session/session-config.js';
 
 const MANAGER = '0xf1b40E3D5701C04d86F7828f0EB367B9C90901D8' as const;
 const USDC = '0x036CbD53842c5426634e7929541eC2318f3dCF7e' as const;

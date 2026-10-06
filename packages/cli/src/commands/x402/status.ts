@@ -21,11 +21,12 @@ import {
   parseNonNegativeBigInt,
   USDC_BY_NETWORK,
   gasReserve,
+  readLiveness,
+  type PermissionLiveness,
 } from '@jaw.id/agent';
 import { currentLimitUsageOnChain } from '../../x402/spend-window.js';
 import { whyEip712DomainDisagrees } from '../../x402/eip712-domain.js';
 import { formatUsdc, formatRemaining, diagnose } from '../../x402/status-report.js';
-import { readLiveness, type PermissionLiveness } from '../../x402/permission-onchain.js';
 import { recoverPermission } from '../../x402/permission-recovery.js';
 import type { OutputFormat } from '../../lib/types.js';
 

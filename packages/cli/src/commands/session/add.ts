@@ -22,10 +22,10 @@ import {
   DEFAULT_X402_LIMIT,
   mergePermissions,
   describeMerge,
+  readLiveness,
 } from '@jaw.id/agent';
 import { whyGrantExceedsCeiling } from '../../x402/grant-ceiling.js';
 import { whyOwnerCannotFundSession, whySpenderCannotPay } from '../../x402/funded-owner.js';
-import { readLiveness } from '../../x402/permission-onchain.js';
 import { cliChainClients } from '../../x402/balance.js';
 import { recoverPermission } from '../../x402/permission-recovery.js';
 

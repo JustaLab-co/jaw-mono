@@ -65,7 +65,10 @@ vi.mock('../../x402/balance.js', () => ({
     },
   },
 }));
-vi.mock('../../x402/permission-onchain.js', () => ({ readLiveness: async () => h.liveness.value }));
+vi.mock('@jaw.id/agent', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@jaw.id/agent')>()),
+  readLiveness: async () => h.liveness.value,
+}));
 
 const { default: X402Status } = await import('./status.js');
 

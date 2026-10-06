@@ -55,7 +55,10 @@ vi.mock('../../x402/funded-owner.js', () => ({
   whyOwnerCannotFundSession: async () => h.ownerBlocked,
   whySpenderCannotPay: async () => null,
 }));
-vi.mock('../../x402/permission-onchain.js', () => ({ readLiveness: async () => h.liveness }));
+vi.mock('@jaw.id/agent', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@jaw.id/agent')>()),
+  readLiveness: async () => h.liveness,
+}));
 // Kept off the network: without this the "no struct" case reaches the relay.
 vi.mock('../../x402/permission-recovery.js', () => ({
   recoverPermission: async (session: { permission?: unknown }) => session.permission ?? h.recovered,

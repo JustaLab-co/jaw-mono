@@ -5,9 +5,10 @@ import {
   USDC_BY_NETWORK,
   type LimitUsage,
   type X402Policy,
+  readCurrentPeriods,
+  type ReadDeps,
 } from '@jaw.id/agent';
 import { sumSpentSince, sumToppedUpSince, type SpendScope, type X402LogEntry } from './ledger.js';
-import { readCurrentPeriods, type ReadDeps } from './permission-onchain.js';
 import { cliChainClients } from './balance.js';
 import type { SessionConfig } from '../lib/session-config.js';
 

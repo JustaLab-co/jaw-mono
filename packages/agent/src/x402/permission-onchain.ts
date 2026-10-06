@@ -1,5 +1,6 @@
 import { parseAbi, zeroAddress, ContractFunctionRevertedError, BaseError } from 'viem';
-import type { GrantedPermission, ChainClients } from '@jaw.id/agent';
+import type { GrantedPermission } from '../session/session-config.js';
+import type { ChainClients } from '../ports.js';
 
 /**
  * What the permission manager will say about a session's own permission.

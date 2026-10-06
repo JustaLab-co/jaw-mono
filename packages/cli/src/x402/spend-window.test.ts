@@ -39,7 +39,8 @@ vi.mock('./ledger.js', () => ({
   },
 }));
 
-vi.mock('./permission-onchain.js', () => ({
+vi.mock('@jaw.id/agent', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@jaw.id/agent')>()),
   readCurrentPeriods: async () => {
     h.reads += 1;
     return h.onChain === null
