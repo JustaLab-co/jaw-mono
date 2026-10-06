@@ -37,6 +37,7 @@ vi.mock('./ledger.js', () => ({
   compactX402Log: (...args: unknown[]) => {
     h.compactions.push(args);
   },
+  jsonlPaymentLog: {},
 }));
 
 vi.mock('./settlement.js', () => ({

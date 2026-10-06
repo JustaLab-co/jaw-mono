@@ -68,7 +68,12 @@ vi.mock('../../x402/balance.js', () => ({
     },
   },
 }));
-vi.mock('../../x402/ledger.js', () => ({ readX402Log: () => [], sumSpentSince: () => 0n, sumToppedUpSince: () => 0n }));
+vi.mock('../../x402/ledger.js', () => ({
+  readX402Log: () => [],
+  sumSpentSince: () => 0n,
+  sumToppedUpSince: () => 0n,
+  jsonlPaymentLog: {},
+}));
 // The whole point: the policy holds a limit and no usage came back for it.
 vi.mock('../../x402/spend-window.js', () => ({ currentLimitUsageOnChain: async () => [] }));
 

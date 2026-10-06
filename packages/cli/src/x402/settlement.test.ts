@@ -3,6 +3,8 @@ import * as fs from 'node:fs';
 import * as path from 'node:path';
 import * as os from 'node:os';
 import { encodeEventTopics, encodeAbiParameters, parseAbiItem } from 'viem';
+import type { ChainClients } from '@jaw.id/agent';
+import type { X402LogEntry } from './ledger.js';
 
 const TEST_ROOT = path.join(os.tmpdir(), 'jaw-settlement-test');
 
@@ -15,12 +17,11 @@ vi.mock('../lib/paths.js', () => {
 
 const getTransactionReceipt = vi.fn();
 const readContract = vi.fn();
-vi.mock('./balance.js', () => ({
-  publicClientFor: () => ({ getTransactionReceipt, readContract }),
-}));
+const clients = { publicClient: () => ({ getTransactionReceipt, readContract }) } as unknown as ChainClients;
 
-const { reconcileSettlements } = await import('./settlement.js');
-const { appendX402Log, readX402Log, spendFigureOf } = await import('./ledger.js');
+const { reconcileSettlements: reconcile } = await import('./settlement.js');
+const { appendX402Log, readX402Log, spendFigureOf, jsonlPaymentLog } = await import('./ledger.js');
+const reconcileSettlements = (entries: X402LogEntry[]) => reconcile(entries, { clients, log: jsonlPaymentLog });
 
 const PAYER = '0x1111111111111111111111111111111111111111';
 const PAY_TO = '0x2222222222222222222222222222222222222222';

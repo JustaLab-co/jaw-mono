@@ -7,7 +7,8 @@ import {
   type X402Policy,
   type PayAndFetchResult,
 } from '@jaw.id/agent';
-import { appendX402Log, compactX402Log, readX402Log, sumSpentSince } from './ledger.js';
+import { appendX402Log, compactX402Log, jsonlPaymentLog, readX402Log, sumSpentSince } from './ledger.js';
+import { cliChainClients } from './balance.js';
 import { reconcileSettlements } from './settlement.js';
 import { capWindowStarts, currentLimitUsageOnChain } from './spend-window.js';
 import { ensurePayerFunds } from './topup.js';
@@ -79,7 +80,7 @@ export async function openPaymentWindow({
   topUpFloat,
   dryRun,
 }: PaymentWindowInput): Promise<PaymentWindow> {
-  const ledger = await reconcileSettlements(readX402Log());
+  const ledger = await reconcileSettlements(readX402Log(), { clients: cliChainClients, log: jsonlPaymentLog });
   const periodUsage = await currentLimitUsageOnChain(ledger, policy, payerAddress, session);
   // Payer, deliberately, with no permission: `session add` preserves
   // `createdAt` so that adding a capability cannot reset the total, and scoping

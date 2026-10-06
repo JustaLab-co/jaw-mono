@@ -82,7 +82,12 @@ vi.mock('../../x402/balance.js', () => ({
     },
   },
 }));
-vi.mock('../../x402/ledger.js', () => ({ readX402Log: () => [], sumSpentSince: () => 0n, sumToppedUpSince: () => 0n }));
+vi.mock('../../x402/ledger.js', () => ({
+  readX402Log: () => [],
+  sumSpentSince: () => 0n,
+  sumToppedUpSince: () => 0n,
+  jsonlPaymentLog: {},
+}));
 // The unreadable anchor case: `currentLimitUsage` drops a limit it cannot
 // window, so the limit reaches the report with no usage beside it.
 vi.mock('../../x402/spend-window.js', () => ({ currentLimitUsageOnChain: async () => [] }));

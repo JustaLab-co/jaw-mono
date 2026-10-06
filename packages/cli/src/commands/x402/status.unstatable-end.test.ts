@@ -64,7 +64,12 @@ vi.mock('../../x402/balance.js', () => ({
     },
   },
 }));
-vi.mock('../../x402/ledger.js', () => ({ readX402Log: () => [], sumSpentSince: () => 0n, sumToppedUpSince: () => 0n }));
+vi.mock('../../x402/ledger.js', () => ({
+  readX402Log: () => [],
+  sumSpentSince: () => 0n,
+  sumToppedUpSince: () => 0n,
+  jsonlPaymentLog: {},
+}));
 // Metered by the chain, counted from a start we have, ending nowhere we can name.
 vi.mock('../../x402/spend-window.js', () => ({
   currentLimitUsageOnChain: async () => [

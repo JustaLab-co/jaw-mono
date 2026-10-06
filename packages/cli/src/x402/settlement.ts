@@ -1,12 +1,20 @@
 import { parseAbiItem, decodeEventLog } from 'viem';
-import { publicClientFor } from './balance.js';
-import { parseBigInt, errorMessage, usdcForNetwork, type UsdcAsset, PERMIT2_ADDRESS } from '@jaw.id/agent';
 import {
-  appendX402Correction,
-  type SettlementState,
-  type X402LogEntry,
-  type X402SettlementCorrection,
-} from './ledger.js';
+  parseBigInt,
+  errorMessage,
+  usdcForNetwork,
+  type UsdcAsset,
+  PERMIT2_ADDRESS,
+  type ChainClients,
+  type PaymentLog,
+} from '@jaw.id/agent';
+import type { SettlementState, X402LogEntry, X402SettlementCorrection } from './ledger.js';
+
+/** The chain to ask, and where the answers are written down. */
+export interface SettlementDeps {
+  clients: ChainClients;
+  log: Pick<PaymentLog, 'correct'>;
+}
 
 /**
  * Check what a receipt claimed against what the chain shows, one payment later.
@@ -76,7 +84,7 @@ const AUTHORIZATION_STATE_ABI = [
  * paths take one snapshot of the ledger per payment and every window is counted
  * against those same rows.
  */
-export async function reconcileSettlements(entries: X402LogEntry[]): Promise<X402LogEntry[]> {
+export async function reconcileSettlements(entries: X402LogEntry[], deps: SettlementDeps): Promise<X402LogEntry[]> {
   // Half from each end rather than the oldest eight. A row can be answerable
   // and still never answer: a node that will not serve its receipt, a chain the
   // client cannot reach. Taken from one end, those rows hold every slot on every
@@ -104,7 +112,7 @@ export async function reconcileSettlements(entries: X402LogEntry[]): Promise<X40
   const answered = await Promise.all(
     pending.map(async (entry) => {
       try {
-        return (await answerFor(entry, shared)) ?? abandonedIfOld(entry);
+        return (await answerFor(entry, shared, deps.clients)) ?? abandonedIfOld(entry);
       } catch (err) {
         // A row is a line in a file a user can edit, and nothing here may fail
         // the payment waiting on it. The row keeps costing its ceiling.
@@ -117,7 +125,7 @@ export async function reconcileSettlements(entries: X402LogEntry[]): Promise<X40
   const answers = new Map<string, X402SettlementCorrection>();
   for (const answer of [...answered, ...retired]) {
     if (!answer) continue;
-    appendX402Correction(answer);
+    deps.log.correct(answer);
     answers.set(answer.corrects, answer);
   }
   if (answers.size === 0) return entries;
@@ -228,14 +236,18 @@ function sharedTxHashes(entries: X402LogEntry[]): Set<string> {
 }
 
 /** What the chain says about one row, or nothing when it has not said yet. */
-async function answerFor(entry: X402LogEntry, sharedTx: Set<string>): Promise<X402SettlementCorrection | null> {
+async function answerFor(
+  entry: X402LogEntry,
+  sharedTx: Set<string>,
+  clients: ChainClients
+): Promise<X402SettlementCorrection | null> {
   const asset = entry.network ? usdcForNetwork(entry.network) : undefined;
   // A row on a network the registry does not carry has no client to ask and no
   // token to price. Left alone, which keeps it at its ceiling.
   if (!asset || !entry.nonce) return null;
 
   if (entry.scheme === 'exact') {
-    const used = await eip3009NonceUsed(entry, asset);
+    const used = await eip3009NonceUsed(entry, asset, clients);
     // A consumed `exact` nonce can only have moved what was signed: the value and
     // the recipient are in the signature, and the one other way to spend a nonce is
     // `cancelAuthorization`, which only the authorizer can send and this never
@@ -253,10 +265,10 @@ async function answerFor(entry: X402LogEntry, sharedTx: Set<string>): Promise<X4
   // that moved funds from this payer to this recipient may be settling a
   // different authorization.
   const named = entry.txHash && !sharedTx.has(entry.txHash.toLowerCase());
-  const moved = named ? await transferredIn(entry, asset) : null;
+  const moved = named ? await transferredIn(entry, asset, clients) : null;
   if (moved === null && !deadlinePassed(entry)) return null;
 
-  const used = await permit2NonceUsed(entry, asset.chainId);
+  const used = await permit2NonceUsed(entry, asset.chainId, clients);
   if (used && moved !== null) return correction(entry, 'verified', moved);
   if (used === false && deadlinePassed(entry)) return correction(entry, 'expired', 0n);
   return null;
@@ -271,10 +283,10 @@ async function answerFor(entry: X402LogEntry, sharedTx: Set<string>): Promise<X4
  * transfer has to be there for the payment to have happened at all, and the
  * three fields that identify it are on every ledger row already.
  */
-async function transferredIn(entry: X402LogEntry, asset: UsdcAsset): Promise<bigint | null> {
+async function transferredIn(entry: X402LogEntry, asset: UsdcAsset, clients: ChainClients): Promise<bigint | null> {
   let receipt;
   try {
-    receipt = await publicClientFor(asset.chainId).getTransactionReceipt({ hash: entry.txHash as `0x${string}` });
+    receipt = await clients.publicClient(asset.chainId).getTransactionReceipt({ hash: entry.txHash as `0x${string}` });
   } catch {
     // Not mined yet, or the node did not answer. Both mean "ask again", and
     // neither may cost the payment that is waiting on this.
@@ -312,7 +324,7 @@ async function transferredIn(entry: X402LogEntry, asset: UsdcAsset): Promise<big
  * or `null` when the question could not be put: the nonce is unreadable or the
  * node did not answer. Either way the row stays at its ceiling.
  */
-async function permit2NonceUsed(entry: X402LogEntry, chainId: number): Promise<boolean | null> {
+async function permit2NonceUsed(entry: X402LogEntry, chainId: number, clients: ChainClients): Promise<boolean | null> {
   let nonce: bigint;
   try {
     nonce = BigInt(entry.nonce as string);
@@ -321,7 +333,7 @@ async function permit2NonceUsed(entry: X402LogEntry, chainId: number): Promise<b
   }
 
   try {
-    const word = await publicClientFor(chainId).readContract({
+    const word = await clients.publicClient(chainId).readContract({
       address: PERMIT2_ADDRESS,
       abi: NONCE_BITMAP_ABI,
       functionName: 'nonceBitmap',
@@ -342,12 +354,12 @@ async function permit2NonceUsed(entry: X402LogEntry, chainId: number): Promise<b
  * user can edit, and a hand-written address would send this read to whatever
  * contract it names.
  */
-async function eip3009NonceUsed(entry: X402LogEntry, asset: UsdcAsset): Promise<boolean | null> {
+async function eip3009NonceUsed(entry: X402LogEntry, asset: UsdcAsset, clients: ChainClients): Promise<boolean | null> {
   const nonce = entry.nonce as string;
   if (!/^0x[0-9a-f]{64}$/i.test(nonce)) return null;
 
   try {
-    return await publicClientFor(asset.chainId).readContract({
+    return await clients.publicClient(asset.chainId).readContract({
       address: asset.address,
       abi: AUTHORIZATION_STATE_ABI,
       functionName: 'authorizationState',
