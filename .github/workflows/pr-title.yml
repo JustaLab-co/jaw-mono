@@ -32,6 +32,7 @@ jobs:
             wagmi
             ui
             cli
+            agent
             playground
             demo
             keys
