@@ -16,6 +16,7 @@ import type { GrantedPeriodLimit, LimitUsage, X402Policy } from './policy.js';
 const h = vi.hoisted(() => ({
   entries: [{ at: '2026-08-01T00:00:00.000Z' }] as unknown[],
   reconciled: [] as unknown[],
+  readDeps: [] as unknown[],
   spent: 0n,
   usage: [] as unknown[],
   ledgerReads: 0,
@@ -35,15 +36,19 @@ vi.mock('./ledger.js', async (importOriginal) => ({
 }));
 
 vi.mock('./settlement.js', () => ({
-  reconcileSettlements: async (entries: unknown[]) => {
+  reconcileSettlements: async (entries: unknown[], deps: unknown) => {
     h.reconciled.push(entries);
+    h.readDeps.push(deps);
     // Reconciliation hands back a corrected copy, never the rows it was given.
     return entries.map((entry) => ({ ...(entry as object), reconciled: true }));
   },
 }));
 
 vi.mock('./spend-window.js', () => ({
-  currentLimitUsageOnChain: async () => h.usage,
+  currentLimitUsageOnChain: async (...args: unknown[]) => {
+    h.readDeps.push(args[5]);
+    return h.usage;
+  },
   capWindowStarts: () => ['2026-08-01T00:00:00.000Z'],
 }));
 
@@ -121,6 +126,7 @@ const requirement = { network: 'eip155:8453', maxAmountRequired: '1000' } as nev
 beforeEach(() => {
   h.entries = [{ at: '2026-08-01T00:00:00.000Z' }];
   h.reconciled = [];
+  h.readDeps = [];
   h.spent = 0n;
   h.usage = [];
   h.ledgerReads = 0;
@@ -219,6 +225,21 @@ describe('openPaymentWindow', () => {
   // The refill pulls from the owner, so its balance is the other bound on the
   // amount, beside the caps. Without the address the funder sizes against the
   // caps alone and sends a transfer the account cannot cover.
+  it('hands its ports to every read and to the refill', async () => {
+    const window = await open({
+      session,
+      policy: policy(),
+      payerAddress: PAYER,
+      apiKey: 'key',
+      topUpFloat: undefined,
+    });
+    await window.ensureFunds?.(requirement, PAYER);
+
+    expect(h.readDeps).toEqual([{ clients: ports.clients, log: ports.log }, { clients: ports.clients }]);
+    expect((h.topUps[0] as { opts: { clients: unknown } }).opts.clients).toBe(ports.clients);
+    expect(h.bridges).toEqual([{ apiKey: 'key', chainId: 8453 }]);
+  });
+
   it('hands the funder the account the permission draws from', async () => {
     const window = await open({
       session,

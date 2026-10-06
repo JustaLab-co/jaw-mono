@@ -51,7 +51,7 @@ vi.mock('../../lib/keystore.js', () => ({ keystoreExists: () => true }));
 vi.mock('../../lib/config.js', () => ({ loadConfig: () => ({}), ensureDir: () => undefined }));
 vi.mock('../../lib/session-config.js', () => ({
   tryLoadSessionConfig: () => h.session,
-  sessionFileStore: {},
+  sessionFileStore: { saveRecovered: () => true },
 }));
 vi.mock('../../x402/session-payer.js', () => ({ sessionPayerAddress: () => h.payer }));
 // No chain behind the reads: liveness comes back as not knowing.
@@ -65,7 +65,18 @@ vi.mock('../../x402/balance.js', () => ({
 }));
 vi.mock('../../x402/ledger.js', () => ({
   readX402Log: () => [],
-  jsonlPaymentLog: {},
+  // Nothing here reconciles a row, so any write is a wiring mistake.
+  jsonlPaymentLog: {
+    append: () => {
+      throw new Error('unexpected ledger write');
+    },
+    correct: () => {
+      throw new Error('unexpected ledger write');
+    },
+    compact: () => {
+      throw new Error('unexpected ledger write');
+    },
+  },
 }));
 // The whole point: the policy holds a limit and no usage came back for it.
 vi.mock('@jaw.id/agent', async (importOriginal) => ({
