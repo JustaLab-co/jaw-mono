@@ -9,7 +9,7 @@ import {
   tryLoadSessionConfig,
 } from '../../lib/session-config.js';
 import { sessionPayerAddress } from '../../x402/payer.js';
-import { usdcBalance } from '../../x402/balance.js';
+import { cliChainClients, usdcBalance } from '../../x402/balance.js';
 import { readX402Log, sumSpentSince, checkpointFigureReadable } from '../../x402/ledger.js';
 import { reconcileSettlements } from '../../x402/settlement.js';
 import {
@@ -115,7 +115,7 @@ export default class X402Status extends BaseCommand {
     // figure, because the on-chain read takes the struct off the session object
     // and that one was still the version loaded from disk.
     const current = recovered ? { ...session, permission: recovered } : session;
-    const liveness = await readLiveness(current);
+    const liveness = await readLiveness(current, { clients: cliChainClients });
 
     // Resolved from the recovered session, not the one loaded off disk. Seeded
     // from the grant exactly as the paying paths do: resolving from config

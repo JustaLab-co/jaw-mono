@@ -1,6 +1,5 @@
 import { parseAbi, zeroAddress, ContractFunctionRevertedError, BaseError } from 'viem';
-import { publicClientFor } from './balance.js';
-import type { GrantedPermission } from '../lib/session-config.js';
+import type { GrantedPermission, ChainClients } from '@jaw.id/agent';
 
 /**
  * What the permission manager will say about a session's own permission.
@@ -142,14 +141,18 @@ export interface PermissionReadTarget {
   permission?: GrantedPermission;
 }
 
-/** Injectable for tests, and the seam that keeps the network out of the unit tests. */
-export interface ReadDeps {
-  readContract?: (args: {
-    address: `0x${string}`;
-    abi: typeof PERMISSION_MANAGER_ABI;
-    functionName: 'getHash' | 'isApproved' | 'isRevoked' | 'getCurrentPeriod';
-    args: readonly unknown[];
-  }) => Promise<unknown>;
+type ReadContract = (args: {
+  address: `0x${string}`;
+  abi: typeof PERMISSION_MANAGER_ABI;
+  functionName: 'getHash' | 'isApproved' | 'isRevoked' | 'getCurrentPeriod';
+  args: readonly unknown[];
+}) => Promise<unknown>;
+
+/**
+ * Where the reads go: the chain clients, or a `readContract` a test stands in
+ * with to keep the network out of the unit tests.
+ */
+export type ReadDeps = ({ clients: ChainClients } | { readContract: ReadContract }) & {
   /** The permission manager, injectable so a test does not have to import core. */
   manager?: `0x${string}`;
   /**
@@ -162,7 +165,7 @@ export interface ReadDeps {
    * is the same answer as any other failed read: not knowing.
    */
   timeoutMs?: number;
-}
+};
 
 const DEFAULT_TIMEOUT_MS = 5_000;
 
@@ -190,18 +193,17 @@ async function managerAddress(override?: `0x${string}`): Promise<`0x${string}`> 
 /**
  * The read function for this chain, or null when there is none.
  *
- * `publicClientFor` throws for a chain it has no viem entry for, and a session
+ * The chain clients throw for a chain they have no viem entry for, and a session
  * can live on one: `session status` runs for any chain the account supports,
  * while the client here covers the four the USDC registry names. Null rather
  * than a throw, so a chain without a client reads as not knowing instead of
  * taking the command down.
  */
-function reader(chainId: number, deps: ReadDeps) {
-  if (deps.readContract) return deps.readContract;
+function reader(chainId: number, deps: ReadDeps): ReadContract | null {
+  if ('readContract' in deps) return deps.readContract;
   try {
-    const client = publicClientFor(chainId);
-    return (args: Parameters<NonNullable<ReadDeps['readContract']>>[0]) =>
-      client.readContract(args as never) as Promise<unknown>;
+    const client = deps.clients.publicClient(chainId);
+    return (args) => client.readContract(args as never) as Promise<unknown>;
   } catch {
     return null;
   }
@@ -216,7 +218,7 @@ function reader(chainId: number, deps: ReadDeps) {
  * What no local file can know is that someone revoked from another device, and
  * that is the whole reason to make the call.
  */
-export async function readPermissionState(target: PermissionReadTarget, deps: ReadDeps = {}): Promise<PermissionState> {
+export async function readPermissionState(target: PermissionReadTarget, deps: ReadDeps): Promise<PermissionState> {
   if (!target.permission) return { status: 'unavailable' };
   const permission = toContractPermission(target.permission);
   if (!permission) return { status: 'unavailable' };
@@ -284,7 +286,7 @@ export interface OnChainLimit {
  */
 export async function readCurrentPeriods(
   target: PermissionReadTarget & { token: string },
-  deps: ReadDeps = {}
+  deps: ReadDeps
 ): Promise<OnChainLimit[]> {
   if (!target.permission) return [];
   const permission = toContractPermission(target.permission);
@@ -370,7 +372,7 @@ function isTimeBoundRevert(err: unknown): boolean {
 export type PermissionLiveness = 'active' | 'revoked' | 'unapproved' | 'mismatch' | 'unknown';
 
 /** `readPermissionState` for the three status surfaces, which all want the one word. */
-export async function readLiveness(session: PermissionReadTarget, deps: ReadDeps = {}): Promise<PermissionLiveness> {
+export async function readLiveness(session: PermissionReadTarget, deps: ReadDeps): Promise<PermissionLiveness> {
   const state = await readPermissionState(session, deps);
   if (state.status === 'unavailable') return 'unknown';
   if (state.status === 'mismatch') return 'mismatch';

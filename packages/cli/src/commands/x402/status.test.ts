@@ -103,17 +103,8 @@ vi.mock('../../x402/payer.js', () => ({ sessionPayerAddress: () => h.payer }));
 
 // Both balances funded and readable: the only problem left for `diagnose` to
 // find is the one this file exists to pin.
-vi.mock('../../x402/balance.js', () => ({
-  usdcBalance: async () => ({ formatted: '20' }),
-  // The domain drift check reads the token's separator through this. Without it
-  // the check would swallow a TypeError and report nothing, which is exactly the
-  // shape of a wiring that looks connected and is not.
-  //
-  // Narrowed to that one read: `permission-onchain.ts` reads through the same
-  // client, and a catch-all here answered its `getHash` with the separator
-  // hash, which quietly moved the liveness these five other cases report from
-  // `unknown` to `mismatch`.
-  publicClientFor: () => ({
+vi.mock('../../x402/balance.js', () => {
+  const client = () => ({
     getTransactionReceipt: h.getTransactionReceipt,
     readContract: (args: { functionName: string }) => {
       if (args.functionName === 'DOMAIN_SEPARATOR') return h.readContract(args);
@@ -121,8 +112,21 @@ vi.mock('../../x402/balance.js', () => ({
       if (args.functionName === 'nonceBitmap') return Promise.resolve(2n ** 256n - 1n);
       return Promise.reject(new Error(`unexpected read in this suite: ${args.functionName}`));
     },
-  }),
-}));
+  });
+  return {
+    usdcBalance: async () => ({ formatted: '20' }),
+    // The domain drift check reads the token's separator through this. Without it
+    // the check would swallow a TypeError and report nothing, which is exactly the
+    // shape of a wiring that looks connected and is not.
+    //
+    // Narrowed to that one read: `permission-onchain.ts` reads through the same
+    // client, and a catch-all here answered its `getHash` with the separator
+    // hash, which quietly moved the liveness these five other cases report from
+    // `unknown` to `mismatch`.
+    publicClientFor: client,
+    cliChainClients: { publicClient: client },
+  };
+});
 
 const { appendX402Log, readX402Log, spendFigureOf } = await import('../../x402/ledger.js');
 const { default: X402Status } = await import('./status.js');

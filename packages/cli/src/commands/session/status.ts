@@ -10,6 +10,7 @@ import {
 import { loadConfig } from '../../lib/config.js';
 import { apiKeyFor } from '../../lib/api-key.js';
 import { readLiveness, type PermissionLiveness } from '../../x402/permission-onchain.js';
+import { cliChainClients } from '../../x402/balance.js';
 import { recoverPermission } from '../../x402/permission-recovery.js';
 import type { OutputFormat } from '../../lib/types.js';
 
@@ -44,7 +45,7 @@ export default class SessionStatus extends BaseCommand {
     // Carried into everything below, including the json, so the run that
     // recovers the struct reports it rather than the next one.
     const current = permission ? { ...config, permission } : config;
-    const liveness = await readLiveness(current);
+    const liveness = await readLiveness(current, { clients: cliChainClients });
     // Permissions from earlier sessions that are still live on chain. Said in
     // terms of the permission rather than of this key: setup generates a fresh
     // key whenever it is not reusing one, and `--yes` always does, so the key

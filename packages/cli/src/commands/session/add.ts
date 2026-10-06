@@ -26,6 +26,7 @@ import {
 import { whyGrantExceedsCeiling } from '../../x402/grant-ceiling.js';
 import { whyOwnerCannotFundSession, whySpenderCannotPay } from '../../x402/funded-owner.js';
 import { readLiveness } from '../../x402/permission-onchain.js';
+import { cliChainClients } from '../../x402/balance.js';
 import { recoverPermission } from '../../x402/permission-recovery.js';
 
 /**
@@ -130,7 +131,7 @@ export default class SessionAdd extends BaseCommand {
     // the capability loss this command exists to prevent. Not knowing is not a
     // reason to refuse: it is what every session reports without a reachable
     // node.
-    const liveness = await readLiveness({ ...session, permission: existing });
+    const liveness = await readLiveness({ ...session, permission: existing }, { clients: cliChainClients });
     if (liveness === 'revoked') {
       this.error(
         'The permission this session names was revoked on chain. Run `jaw session setup` to create a new one.'

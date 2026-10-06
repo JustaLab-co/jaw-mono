@@ -59,7 +59,15 @@ vi.mock('../../lib/session-config.js', () => ({
   liveOrphans: () => [],
 }));
 vi.mock('../../x402/payer.js', () => ({ sessionPayerAddress: () => h.payer }));
-vi.mock('../../x402/balance.js', () => ({ usdcBalance: async () => ({ formatted: '20' }) }));
+// No chain behind the reads: liveness comes back as not knowing.
+vi.mock('../../x402/balance.js', () => ({
+  usdcBalance: async () => ({ formatted: '20' }),
+  cliChainClients: {
+    publicClient: () => {
+      throw new Error('offline');
+    },
+  },
+}));
 vi.mock('../../x402/ledger.js', () => ({ readX402Log: () => [], sumSpentSince: () => 0n, sumToppedUpSince: () => 0n }));
 // The whole point: the policy holds a limit and no usage came back for it.
 vi.mock('../../x402/spend-window.js', () => ({ currentLimitUsageOnChain: async () => [] }));

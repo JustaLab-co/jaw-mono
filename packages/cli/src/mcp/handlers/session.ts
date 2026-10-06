@@ -4,6 +4,7 @@ import { keystoreExists } from '../../lib/keystore.js';
 import { loadSessionConfig, sessionUsable } from '../../lib/session-config.js';
 import { sessionPayerAddress } from '../../x402/payer.js';
 import { readLiveness } from '../../x402/permission-onchain.js';
+import { cliChainClients } from '../../x402/balance.js';
 import { recoverPermission } from '../../x402/permission-recovery.js';
 import { loadConfig } from '../../lib/config.js';
 import { apiKeyFor } from '../../lib/api-key.js';
@@ -51,7 +52,7 @@ export function registerSessionTools(server: McpServer): void {
         // was stored would otherwise read `unknown` forever.
         const permission = await recoverPermission(config, apiKeyFor(loadConfig()));
         const current = permission ? { ...config, permission } : config;
-        const permissionOnChain = await readLiveness(current);
+        const permissionOnChain = await readLiveness(current, { clients: cliChainClients });
         return mcpResult({
           exists: true,
           ...current,

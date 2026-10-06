@@ -8,6 +8,7 @@ import {
 } from '@jaw.id/agent';
 import { sumSpentSince, sumToppedUpSince, type SpendScope, type X402LogEntry } from './ledger.js';
 import { readCurrentPeriods, type ReadDeps } from './permission-onchain.js';
+import { cliChainClients } from './balance.js';
 import type { SessionConfig } from '../lib/session-config.js';
 
 /**
@@ -106,7 +107,7 @@ export async function currentLimitUsageOnChain(
   payerAddress: string,
   session: SessionConfig | null | undefined,
   now: Date = new Date(),
-  deps: ReadDeps = {}
+  deps: ReadDeps = { clients: cliChainClients }
 ): Promise<LimitUsage[]> {
   const local = currentLimitUsage(entries, policy, payerAddress, session, now);
   if (!session || local.length === 0) return local;
