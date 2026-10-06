@@ -72,7 +72,8 @@ vi.mock('../../x402/ledger.js', () => ({
   jsonlPaymentLog: {},
 }));
 // Metered by the chain, counted from a start we have, ending nowhere we can name.
-vi.mock('../../x402/spend-window.js', () => ({
+vi.mock('@jaw.id/agent', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@jaw.id/agent')>()),
   currentLimitUsageOnChain: async () => [
     {
       allowance: '5000000',

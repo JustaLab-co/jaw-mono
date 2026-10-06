@@ -1,6 +1,10 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest';
-import type { SessionConfig } from '../lib/session-config.js';
-import type { GrantedPeriodLimit, LimitUsage, X402Policy } from '@jaw.id/agent';
+import type { SessionConfig } from '../session/session-config.js';
+import type { ChainClients } from '../ports.js';
+import type { X402LogEntry } from './ledger.js';
+import type { TopUpExecutor } from './topup.js';
+import type { PaymentPorts } from './payment-window.js';
+import type { GrantedPeriodLimit, LimitUsage, X402Policy } from './policy.js';
 
 /**
  * The assembly both x402 front ends run before they spend. It used to live
@@ -22,26 +26,15 @@ const h = vi.hoisted(() => ({
   compactions: [] as unknown[][],
 }));
 
-vi.mock('./ledger.js', () => ({
-  readX402Log: () => {
-    h.ledgerReads += 1;
-    return h.entries;
-  },
+vi.mock('./ledger.js', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('./ledger.js')>()),
   sumSpentSince: (entries: unknown, scope: unknown, since: unknown) => {
     h.sums.push({ entries, scope, since });
     return h.spent;
   },
-  appendX402Log: (entry: Record<string, unknown>) => {
-    h.appended.push(entry);
-  },
-  compactX402Log: (...args: unknown[]) => {
-    h.compactions.push(args);
-  },
-  jsonlPaymentLog: {},
 }));
 
-vi.mock('@jaw.id/agent', async (importOriginal) => ({
-  ...(await importOriginal<typeof import('@jaw.id/agent')>()),
+vi.mock('./settlement.js', () => ({
   reconcileSettlements: async (entries: unknown[]) => {
     h.reconciled.push(entries);
     // Reconciliation hands back a corrected copy, never the rows it was given.
@@ -61,15 +54,29 @@ vi.mock('./topup.js', () => ({
   },
 }));
 
-vi.mock('../lib/session-bridge.js', () => ({
-  SessionBridge: class {
-    constructor(options: unknown) {
-      h.bridges.push(options);
-    }
+const ports: PaymentPorts = {
+  clients: {} as ChainClients,
+  log: {
+    read: () => {
+      h.ledgerReads += 1;
+      return h.entries as X402LogEntry[];
+    },
+    append: (entry) => {
+      h.appended.push(entry as unknown as Record<string, unknown>);
+    },
+    compact: (...args) => {
+      h.compactions.push(args);
+    },
+    correct: vi.fn(),
   },
-}));
+  topUpExecutor: (apiKey, chainId) => {
+    h.bridges.push({ apiKey, chainId });
+    return {} as TopUpExecutor;
+  },
+};
 
 const { openPaymentWindow, recordPaymentOutcome } = await import('./payment-window.js');
+const open = (input: Parameters<typeof openPaymentWindow>[0]) => openPaymentWindow(input, ports);
 
 const PAYER = '0x00000000000000000000000000000000000000aa' as const;
 
@@ -128,7 +135,7 @@ describe('openPaymentWindow', () => {
   it('reads the ledger once and measures both totals against the reconciled rows', async () => {
     h.usage = [limit()];
 
-    const window = await openPaymentWindow({
+    const window = await open({
       session,
       policy: policy(),
       payerAddress: PAYER,
@@ -144,7 +151,7 @@ describe('openPaymentWindow', () => {
   });
 
   it('counts the session total by payer since the session began', async () => {
-    await openPaymentWindow({
+    await open({
       session,
       policy: policy(),
       payerAddress: PAYER,
@@ -159,7 +166,7 @@ describe('openPaymentWindow', () => {
   });
 
   it('builds no bridge for a dry run', async () => {
-    const window = await openPaymentWindow({
+    const window = await open({
       session,
       policy: policy(),
       payerAddress: PAYER,
@@ -176,7 +183,7 @@ describe('openPaymentWindow', () => {
     ['no session', { session: null, apiKey: 'key' }],
     ['no api key', { session, apiKey: undefined }],
   ])('hands back no funding hook with %s', async (_label, over) => {
-    const window = await openPaymentWindow({
+    const window = await open({
       policy: policy(),
       payerAddress: PAYER,
       topUpFloat: undefined,
@@ -192,7 +199,7 @@ describe('openPaymentWindow', () => {
     h.usage = [limit({ allowance: '10000000', toppedUp: 6_000_000n })];
     h.spent = 3_000_000n;
 
-    const window = await openPaymentWindow({
+    const window = await open({
       session,
       policy: policy({ perPeriod: [granted()] }),
       payerAddress: PAYER,
@@ -213,7 +220,7 @@ describe('openPaymentWindow', () => {
   // amount, beside the caps. Without the address the funder sizes against the
   // caps alone and sends a transfer the account cannot cover.
   it('hands the funder the account the permission draws from', async () => {
-    const window = await openPaymentWindow({
+    const window = await open({
       session,
       policy: policy(),
       payerAddress: PAYER,
@@ -227,7 +234,7 @@ describe('openPaymentWindow', () => {
   });
 
   it('leaves the funder without an owner it could not use anyway', async () => {
-    const window = await openPaymentWindow({
+    const window = await open({
       session: { ...session, ownerAddress: 'not-an-address' },
       policy: policy(),
       payerAddress: PAYER,
@@ -241,7 +248,7 @@ describe('openPaymentWindow', () => {
   });
 
   it('degrades a hand-edited float to no float instead of throwing', async () => {
-    const window = await openPaymentWindow({
+    const window = await open({
       session,
       policy: policy(),
       payerAddress: PAYER,
@@ -255,7 +262,7 @@ describe('openPaymentWindow', () => {
   });
 
   it('opens one bridge however many times the hook runs', async () => {
-    const window = await openPaymentWindow({
+    const window = await open({
       session,
       policy: policy(),
       payerAddress: PAYER,
@@ -283,7 +290,13 @@ describe('recordPaymentOutcome', () => {
     deadline: 1_900_000_000,
   };
   const record = (outcome: Record<string, unknown>) =>
-    recordPaymentOutcome(URL, { status: 200, body: null, paid: false, payer: PAYER, ...outcome } as never, session, []);
+    recordPaymentOutcome(
+      URL,
+      { status: 200, body: null, paid: false, payer: PAYER, ...outcome } as never,
+      session,
+      [],
+      ports.log
+    );
 
   it('records a paid outcome as unverified, with its tx hash, and compacts', () => {
     record({ paid: true, payment: { ...details, txHash: '0xhash' } });

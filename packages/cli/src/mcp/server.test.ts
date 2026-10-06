@@ -58,7 +58,16 @@ vi.mock('../x402/balance.js', async (importOriginal) => {
     // before signing; a real client here would hit the stubbed global fetch
     // and eat the mocked 402/200 response sequence. No delegation in E2E.
     publicClientFor: () => ({ getCode: async () => undefined }),
-    cliChainClients: { publicClient: () => ({ getCode: async () => undefined }) },
+    // Balance reads answer from the same stub `usdcBalance` does.
+    cliChainClients: {
+      publicClient: (chainId: number) => ({
+        getCode: async () => undefined,
+        readContract: async ({ functionName, args }: { functionName: string; args: [string] }) => {
+          if (functionName !== 'balanceOf') throw new Error(`unexpected read: ${functionName}`);
+          return BigInt((await usdcBalanceMock(`eip155:${chainId}`, args[0])).raw);
+        },
+      }),
+    },
   };
 });
 

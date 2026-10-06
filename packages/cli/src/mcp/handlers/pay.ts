@@ -9,6 +9,8 @@ import {
   resolveSessionX402Policy,
   payAndFetch,
   machineEntry,
+  openPaymentWindow,
+  recordPaymentOutcome,
 } from '@jaw.id/agent';
 import { sessionPayer, sessionPayerAddress } from '../../x402/session-payer.js';
 import { loadConfig } from '../../lib/config.js';
@@ -16,7 +18,7 @@ import { apiKeyFor } from '../../lib/api-key.js';
 import { readX402Log } from '../../x402/ledger.js';
 import { withPaymentLock } from '../../lib/payment-lock.js';
 import { usdcBalance } from '../../x402/balance.js';
-import { openPaymentWindow, recordPaymentOutcome } from '../../x402/payment-window.js';
+import { cliPaymentPorts } from '../../x402/payment-ports.js';
 import { tryLoadSessionConfig } from '../../lib/session-config.js';
 
 interface PayAndFetchParams {
@@ -99,16 +101,19 @@ export function registerPayTool(server: McpServer): void {
             // cannot cover a price. Funds stay in the user's account until the
             // moment a payment needs them, and JustaPermissionManager caps every
             // refill on-chain.
-            const { spentThisSession, periodUsage, ensureFunds } = await openPaymentWindow({
-              session,
-              policy,
-              payerAddress: payer.address,
-              // The user's own key when there is one, the workspace key the
-              // browser handed us otherwise: the refill's own gas is charged
-              // through the paymaster this key builds a url for.
-              apiKey: apiKeyFor(config),
-              topUpFloat: config.x402?.topUpFloat,
-            });
+            const { spentThisSession, periodUsage, ensureFunds } = await openPaymentWindow(
+              {
+                session,
+                policy,
+                payerAddress: payer.address,
+                // The user's own key when there is one, the workspace key the
+                // browser handed us otherwise: the refill's own gas is charged
+                // through the paymaster this key builds a url for.
+                apiKey: apiKeyFor(config),
+                topUpFloat: config.x402?.topUpFloat,
+              },
+              cliPaymentPorts
+            );
 
             const result = await payAndFetch(params.url, payer, {
               method: params.method,
@@ -125,7 +130,7 @@ export function registerPayTool(server: McpServer): void {
 
             // The cap is not tracked in memory: the next call reads it back
             // from the ledger this writes to.
-            recordPaymentOutcome(params.url, result, session, periodUsage);
+            recordPaymentOutcome(params.url, result, session, periodUsage, cliPaymentPorts.log);
 
             // Untrusted server free-text (body, refusedReason) is fenced off
             // from the trusted payment metadata to blunt prompt injection.

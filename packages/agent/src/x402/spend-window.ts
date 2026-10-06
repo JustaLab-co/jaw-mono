@@ -1,16 +1,10 @@
-import {
-  currentPeriodWindow,
-  normalizePeriod,
-  parseBigInt,
-  USDC_BY_NETWORK,
-  type LimitUsage,
-  type X402Policy,
-  readCurrentPeriods,
-  type ReadDeps,
-} from '@jaw.id/agent';
+import { currentPeriodWindow, normalizePeriod } from './period.js';
+import { parseBigInt } from './amount.js';
+import { USDC_BY_NETWORK } from './asset-registry.js';
+import type { LimitUsage, X402Policy } from './policy.js';
+import { readCurrentPeriods, type ReadDeps } from './permission-onchain.js';
+import type { SessionConfig } from '../session/session-config.js';
 import { sumSpentSince, sumToppedUpSince, type SpendScope, type X402LogEntry } from './ledger.js';
-import { cliChainClients } from './balance.js';
-import type { SessionConfig } from '../lib/session-config.js';
 
 /**
  * A period boundary as an instant, or null when the seconds it was given are
@@ -108,7 +102,7 @@ export async function currentLimitUsageOnChain(
   payerAddress: string,
   session: SessionConfig | null | undefined,
   now: Date = new Date(),
-  deps: ReadDeps = { clients: cliChainClients }
+  deps: ReadDeps
 ): Promise<LimitUsage[]> {
   const local = currentLimitUsage(entries, policy, payerAddress, session, now);
   if (!session || local.length === 0) return local;

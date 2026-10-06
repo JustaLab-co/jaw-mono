@@ -76,7 +76,10 @@ vi.mock('../../x402/ledger.js', () => ({
   jsonlPaymentLog: {},
 }));
 // The whole point: the policy holds a limit and no usage came back for it.
-vi.mock('../../x402/spend-window.js', () => ({ currentLimitUsageOnChain: async () => [] }));
+vi.mock('@jaw.id/agent', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@jaw.id/agent')>()),
+  currentLimitUsageOnChain: async () => [],
+}));
 
 const { default: X402Status } = await import('./status.js');
 

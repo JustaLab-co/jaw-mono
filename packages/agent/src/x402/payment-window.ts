@@ -1,19 +1,22 @@
-import {
-  parseNonNegativeBigInt,
-  isPayableAddress,
-  type X402PaymentRequirement,
-  topUpCeiling,
-  type LimitUsage,
-  type X402Policy,
-  type PayAndFetchResult,
-  reconcileSettlements,
-} from '@jaw.id/agent';
-import { appendX402Log, compactX402Log, jsonlPaymentLog, readX402Log, sumSpentSince } from './ledger.js';
-import { cliChainClients } from './balance.js';
+import { parseNonNegativeBigInt } from './amount.js';
+import { isPayableAddress } from './address.js';
+import type { X402PaymentRequirement } from './types.js';
+import { topUpCeiling, type LimitUsage, type X402Policy } from './policy.js';
+import type { PayAndFetchResult } from './http.js';
+import { reconcileSettlements } from './settlement.js';
+import { sumSpentSince } from './ledger.js';
+import type { ChainClients, PaymentLog } from '../ports.js';
+import type { SessionConfig } from '../session/session-config.js';
 import { capWindowStarts, currentLimitUsageOnChain } from './spend-window.js';
-import { ensurePayerFunds } from './topup.js';
-import { SessionBridge } from '../lib/session-bridge.js';
-import type { SessionConfig } from '../lib/session-config.js';
+import { ensurePayerFunds, type TopUpExecutor } from './topup.js';
+
+/** Where a payment window reads from and writes to. */
+export interface PaymentPorts {
+  clients: ChainClients;
+  log: PaymentLog;
+  /** What a refill for a session on `chainId` is sent through. */
+  topUpExecutor(apiKey: string, chainId: number): TopUpExecutor;
+}
 
 /** The funding hook `payAndFetch` runs once a requirement has passed the policy. */
 export type EnsureFunds = (
@@ -72,16 +75,13 @@ export interface PaymentWindowInput {
  * a ceiling down, and a rehearsal that skipped them would measure against
  * ceilings the real run would not have.
  */
-export async function openPaymentWindow({
-  session,
-  policy,
-  payerAddress,
-  apiKey,
-  topUpFloat,
-  dryRun,
-}: PaymentWindowInput): Promise<PaymentWindow> {
-  const ledger = await reconcileSettlements(readX402Log(), { clients: cliChainClients, log: jsonlPaymentLog });
-  const periodUsage = await currentLimitUsageOnChain(ledger, policy, payerAddress, session);
+export async function openPaymentWindow(
+  { session, policy, payerAddress, apiKey, topUpFloat, dryRun }: PaymentWindowInput,
+  ports: PaymentPorts
+): Promise<PaymentWindow> {
+  const { clients, log } = ports;
+  const ledger = await reconcileSettlements(log.read(), { clients, log });
+  const periodUsage = await currentLimitUsageOnChain(ledger, policy, payerAddress, session, new Date(), { clients });
   // Payer, deliberately, with no permission: `session add` preserves
   // `createdAt` so that adding a capability cannot reset the total, and scoping
   // to the new permission would hand back the same clean slate through the
@@ -90,7 +90,7 @@ export async function openPaymentWindow({
 
   if (dryRun || !session || !apiKey) return { spentThisSession, periodUsage };
 
-  const bridge = new SessionBridge({ apiKey, chainId: session.chainId });
+  const bridge = ports.topUpExecutor(apiKey, session.chainId);
   // Defensive: a hand-edited, non-numeric amount must degrade to "no float",
   // never throw and take down every payment.
   const floatTarget = parseNonNegativeBigInt(topUpFloat);
@@ -104,6 +104,7 @@ export async function openPaymentWindow({
   const funderAddress = isPayableAddress(session.ownerAddress) ? session.ownerAddress : undefined;
   const ensureFunds: EnsureFunds = (requirement, payer) =>
     ensurePayerFunds(requirement, payer, bridge, {
+      clients,
       floatTarget,
       maxTopUp,
       funderAddress,
@@ -121,7 +122,8 @@ export function recordPaymentOutcome(
   url: string,
   outcome: PayAndFetchResult,
   session: SessionConfig | null,
-  periodUsage: LimitUsage[]
+  periodUsage: LimitUsage[],
+  log: PaymentLog
 ): void {
   const attempted = !!outcome.attemptedPayment;
   const refused = outcome.status === 402 && !!outcome.refusedReason;
@@ -129,7 +131,7 @@ export function recordPaymentOutcome(
 
   const status = outcome.paid ? 'paid' : attempted ? 'failed' : 'refused';
   const settled = outcome.payment ?? outcome.attemptedPayment;
-  appendX402Log({
+  log.append({
     at: new Date().toISOString(),
     url,
     payer: outcome.payer,
@@ -154,5 +156,5 @@ export function recordPaymentOutcome(
   });
 
   // Below the size threshold this is one `stat` and nothing else.
-  compactX402Log(capWindowStarts(periodUsage, session?.createdAt), outcome.payer);
+  log.compact(capWindowStarts(periodUsage, session?.createdAt), outcome.payer);
 }

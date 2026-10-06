@@ -1,16 +1,12 @@
 import { encodeFunctionData, erc20Abi } from 'viem';
-import {
-  usdcForNetwork,
-  type UsdcAsset,
-  PERMIT2_ADDRESS,
-  parseBigInt,
-  errorMessage,
-  type X402PaymentRequirement,
-  firstOperationCost,
-  gasReserve,
-  type BalanceReader,
-} from '@jaw.id/agent';
-import { publicClientFor, usdcBalance } from './balance.js';
+import { usdcForNetwork, type UsdcAsset } from './asset-registry.js';
+import { PERMIT2_ADDRESS } from './permit2.js';
+import { parseBigInt } from './amount.js';
+import { errorMessage } from '../util/errors.js';
+import type { X402PaymentRequirement } from './types.js';
+import { firstOperationCost, gasReserve } from './gas-reserve.js';
+import { type BalanceReader, balanceReader } from './balance.js';
+import type { ChainClients } from '../ports.js';
 
 /**
  * Permission top-up (flow 2b): when the session payer EOA can't cover a
@@ -57,15 +53,19 @@ export type GrantApproval = (token: `0x${string}`) => Promise<string>;
 /** Reads an ERC-20 allowance. Injected for tests. */
 export type AllowanceReader = (asset: UsdcAsset, owner: `0x${string}`, spender: `0x${string}`) => Promise<bigint>;
 
-const readAllowance: AllowanceReader = (asset, owner, spender) =>
-  publicClientFor(asset.chainId).readContract({
-    address: asset.address,
-    abi: erc20Abi,
-    functionName: 'allowance',
-    args: [owner, spender],
-  });
+const onChainAllowance =
+  (clients: ChainClients): AllowanceReader =>
+  (asset, owner, spender) =>
+    clients.publicClient(asset.chainId).readContract({
+      address: asset.address,
+      abi: erc20Abi,
+      functionName: 'allowance',
+      args: [owner, spender],
+    });
 
 export interface TopUpOptions {
+  /** Where balances and allowances are read. */
+  clients: ChainClients;
   /**
    * The chain the session (and its permission) lives on. When set, a payment
    * on any other chain refuses to top up instead of executing a transfer on
@@ -160,7 +160,7 @@ export async function ensurePayerFunds(
   requirement: X402PaymentRequirement,
   payerAddress: `0x${string}`,
   executor: TopUpExecutor,
-  opts: TopUpOptions = {}
+  opts: TopUpOptions
 ): Promise<TopUpOutcome> {
   const asset = usdcForNetwork(requirement.network);
   if (!asset) {
@@ -207,10 +207,8 @@ export async function ensurePayerFunds(
     permit2Allowance = grantApproval ? undefined : status.allowance;
   }
 
-  const read = opts.balanceReader;
-  const balance = read
-    ? await read(asset, payerAddress)
-    : BigInt((await usdcBalance(requirement.network, payerAddress)).raw);
+  const read = opts.balanceReader ?? balanceReader(opts.clients);
+  const balance = await read(asset, payerAddress);
 
   // A payer holding exactly the price can pay it and nothing else, so when an
   // approval is still owed the bar is the price plus something to be charged
@@ -226,15 +224,7 @@ export async function ensurePayerFunds(
       if (!granted.ok) return { ok: false, reason: granted.reason, approvalBatchId: granted.batchId };
       // No principal moved, but the approval is a userOp the payer was charged
       // for, so its balance is not what the branch above checked any more.
-      const short = await payerStillShort(
-        asset,
-        payerAddress,
-        price,
-        requirement.network,
-        balance,
-        opts,
-        AFTER_APPROVAL
-      );
+      const short = await payerStillShort(asset, payerAddress, price, balance, opts, AFTER_APPROVAL);
       if (short) return { ok: false, reason: short, approvalBatchId: granted.batchId };
       return { ok: true, skipped: true, approvalBatchId: granted.batchId, permit2Allowance: granted.allowance };
     }
@@ -285,7 +275,7 @@ export async function ensurePayerFunds(
   // above, so a payment the payer can already cover asks nothing.
   if (opts.funderAddress) {
     const funder = opts.funderAddress;
-    const funds = read ? await read(asset, funder) : BigInt((await usdcBalance(requirement.network, funder)).raw);
+    const funds = await read(asset, funder);
     if (funds < shortfall + headroom) {
       return {
         ok: false,
@@ -364,7 +354,7 @@ export async function ensurePayerFunds(
   // Two userOps when the approval ran here, and blaming the refill alone sends
   // the operator to raise a cap that is not what left the payer short.
   const charged = approvalBatchId ? AFTER_REFILL_AND_APPROVAL : AFTER_REFILL;
-  const short = await payerStillShort(asset, payerAddress, price, requirement.network, balance, opts, charged);
+  const short = await payerStillShort(asset, payerAddress, price, balance, opts, charged);
   if (short) return { ok: false, reason: short, amount: amount.toString(), batchId, approvalBatchId };
 
   return { ok: true, amount: amount.toString(), batchId, approvalBatchId, permit2Allowance };
@@ -456,7 +446,6 @@ async function payerStillShort(
   asset: UsdcAsset,
   payerAddress: `0x${string}`,
   price: bigint,
-  network: string,
   before: bigint,
   opts: TopUpOptions,
   charged: ChargedFor
@@ -467,8 +456,8 @@ async function payerStillShort(
     if (attempt > 0) await sleep(pollMs);
     let balance: bigint;
     try {
-      const read = opts.balanceReader;
-      balance = read ? await read(asset, payerAddress) : BigInt((await usdcBalance(network, payerAddress)).raw);
+      const read = opts.balanceReader ?? balanceReader(opts.clients);
+      balance = await read(asset, payerAddress);
     } catch (err) {
       // Said out loud rather than swallowed: the payment goes on, and the operator
       // needs to know the one check that would have caught a short payer never ran.
@@ -521,7 +510,7 @@ async function permit2ApprovalStatus(
   executor: TopUpExecutor,
   opts: TopUpOptions
 ): Promise<{ ok: true; grant: GrantApproval | null; allowance: bigint } | { ok: false; reason: string }> {
-  const read = opts.allowanceReader ?? readAllowance;
+  const read = opts.allowanceReader ?? onChainAllowance(opts.clients);
   let allowance: bigint;
   try {
     allowance = await read(asset, payerAddress, PERMIT2_ADDRESS);
@@ -606,7 +595,7 @@ async function allowanceVisible(
   needed: bigint,
   opts: TopUpOptions
 ): Promise<bigint | null> {
-  const read = opts.allowanceReader ?? readAllowance;
+  const read = opts.allowanceReader ?? onChainAllowance(opts.clients);
   const { sleep, pollMs } = pollClock(opts);
 
   for (let attempt = 0; attempt < LAG_POLL_ATTEMPTS; attempt++) {

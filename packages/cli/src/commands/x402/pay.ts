@@ -11,8 +11,10 @@ import {
   sanitizeLine,
   sanitizeBlock,
   formatUsdc,
+  openPaymentWindow,
+  recordPaymentOutcome,
 } from '@jaw.id/agent';
-import { openPaymentWindow, recordPaymentOutcome } from '../../x402/payment-window.js';
+import { cliPaymentPorts } from '../../x402/payment-ports.js';
 import { withPaymentLock } from '../../lib/payment-lock.js';
 import type { OutputFormat } from '../../lib/types.js';
 
@@ -95,14 +97,17 @@ export default class X402Pay extends BaseCommand {
       // One read for the whole payment, taken here and not before the lock, and
       // the same assembly the MCP tool runs so the two cannot enforce different
       // caps for the same session.
-      const { spentThisSession, periodUsage, ensureFunds } = await openPaymentWindow({
-        session,
-        policy,
-        payerAddress: payer.address,
-        apiKey,
-        topUpFloat: config.x402?.topUpFloat,
-        dryRun,
-      });
+      const { spentThisSession, periodUsage, ensureFunds } = await openPaymentWindow(
+        {
+          session,
+          policy,
+          payerAddress: payer.address,
+          apiKey,
+          topUpFloat: config.x402?.topUpFloat,
+          dryRun,
+        },
+        cliPaymentPorts
+      );
 
       const outcome = await payAndFetch(args.url, payer, {
         method: flags.method,
@@ -119,7 +124,7 @@ export default class X402Pay extends BaseCommand {
       // totals that both this command and the agent read back. Opening the
       // window does write, and deliberately, though a dry run holds no lock;
       // `openPaymentWindow` says why.
-      if (flags.pay) recordPaymentOutcome(args.url, outcome, session, periodUsage);
+      if (flags.pay) recordPaymentOutcome(args.url, outcome, session, periodUsage, cliPaymentPorts.log);
 
       return outcome;
     };

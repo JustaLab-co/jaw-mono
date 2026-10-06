@@ -27,10 +27,10 @@ import {
   whyEip712DomainDisagrees,
   reconcileSettlements,
   recoverPermission,
+  currentLimitUsageOnChain,
 } from '@jaw.id/agent';
 import { cliChainClients, usdcBalance } from '../../x402/balance.js';
 import { readX402Log, sumSpentSince, checkpointFigureReadable, jsonlPaymentLog } from '../../x402/ledger.js';
-import { currentLimitUsageOnChain } from '../../x402/spend-window.js';
 import type { OutputFormat } from '../../lib/types.js';
 
 /**
@@ -156,7 +156,9 @@ export default class X402Status extends BaseCommand {
     // pulls this CLI's ledger never saw.
     // Every limit on the payment token, each with its own window and its own
     // usage. Reducing them to one would report a month's budget as a day's.
-    const usage = await currentLimitUsageOnChain(countable, policy, payer, current);
+    const usage = await currentLimitUsageOnChain(countable, policy, payer, current, new Date(), {
+      clients: cliChainClients,
+    });
     // Joined onto the limits the policy holds, not read off the usage list. A
     // limit whose usage could not be computed is still enforced by
     // `checkPolicy`, and reporting only what has usage makes it invisible here:

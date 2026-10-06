@@ -33,3 +33,6 @@ export * from './x402/log-view.js';
 export * from './x402/permission-recovery.js';
 export * from './x402/fee-token.js';
 export * from './x402/session-bridge.js';
+export * from './x402/topup.js';
+export * from './x402/spend-window.js';
+export * from './x402/payment-window.js';

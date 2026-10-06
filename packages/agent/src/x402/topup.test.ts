@@ -2,7 +2,7 @@ import { describe, expect, test, vi } from 'vitest';
 import { decodeFunctionData, erc20Abi } from 'viem';
 import { ensurePayerFunds, type TopUpExecutor } from './topup.js';
 import type { BalanceReader } from './balance.js';
-import type { X402PaymentRequirement } from '@jaw.id/agent';
+import type { X402PaymentRequirement } from './types.js';
 
 const PAYER = '0x1111111111111111111111111111111111111111' as const;
 const BASE_SEPOLIA_USDC = '0x036CbD53842c5426634e7929541eC2318f3dCF7e';

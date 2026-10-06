@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest';
-import type { SessionConfig } from '../lib/session-config.js';
-import type { LimitUsage, X402Policy } from '@jaw.id/agent';
+import type { SessionConfig } from '../session/session-config.js';
+import type { LimitUsage, X402Policy } from './policy.js';
 
 /**
  * What `topUpCeiling` sizes refills from, and what `jaw x402 status` prints as
@@ -39,8 +39,8 @@ vi.mock('./ledger.js', () => ({
   },
 }));
 
-vi.mock('@jaw.id/agent', async (importOriginal) => ({
-  ...(await importOriginal<typeof import('@jaw.id/agent')>()),
+vi.mock('./permission-onchain.js', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('./permission-onchain.js')>()),
   readCurrentPeriods: async () => {
     h.reads += 1;
     return h.onChain === null
