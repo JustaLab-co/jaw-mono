@@ -15,7 +15,7 @@ import { reconcileSettlements } from '../../x402/settlement.js';
 import { resolveSessionX402Policy, sameLimit, tightestLimit } from '../../x402/policy.js';
 import { currentLimitUsageOnChain } from '../../x402/spend-window.js';
 import { describePeriodPhrase } from '../../x402/period.js';
-import { parseBigInt, parseNonNegativeBigInt } from '../../x402/amount.js';
+import { parseBigInt, parseNonNegativeBigInt } from '@jaw.id/agent';
 import { USDC_BY_NETWORK } from '../../x402/asset-registry.js';
 import { gasReserve } from '../../x402/gas-reserve.js';
 import { whyEip712DomainDisagrees } from '../../x402/eip712-domain.js';

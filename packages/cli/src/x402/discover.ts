@@ -8,7 +8,7 @@
 // UNTRUSTED — the MCP layer fences it before handing it to the agent.
 
 import { usdcForNetwork } from './asset-registry.js';
-import { isX402Scheme } from './types.js';
+import { isX402Scheme } from '@jaw.id/agent';
 
 const BAZAAR_BASE = 'https://api.cdp.coinbase.com/platform/v2/x402/discovery';
 // Coinbase's own docs cap search at 20 results per call.

@@ -56,6 +56,8 @@ export default defineConfig({
   clean: true,
   treeshake: true,
   target: 'node20',
+  // Private workspace package, so it ships inside the CLI bundle.
+  noExternal: ['@jaw.id/agent'],
   external: [
     '@jaw.id/core',
     '@modelcontextprotocol/sdk',

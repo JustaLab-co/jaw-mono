@@ -1,9 +1,15 @@
 import { USDC_BY_NETWORK, usdcForNetwork } from './asset-registry.js';
-import { parseBigInt, parseNonNegativeBigInt } from './amount.js';
+import {
+  parseBigInt,
+  parseNonNegativeBigInt,
+  isHexShaped,
+  isPayableAddress,
+  isZeroAddress,
+  isX402Scheme,
+  type X402PaymentRequirement,
+} from '@jaw.id/agent';
 import { describePeriod, normalizePeriod, type PeriodUnit } from './period.js';
-import { isHexShaped, isPayableAddress, isZeroAddress } from './address.js';
 import { UPTO_VERIFIED_CHAIN_IDS, isUptoVerifiedChain } from './permit2.js';
-import { isX402Scheme, type X402PaymentRequirement } from './types.js';
 import type { GrantedPermission } from '../lib/session-config.js';
 
 /**

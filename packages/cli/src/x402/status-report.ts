@@ -1,4 +1,4 @@
-import { parseBigInt } from './amount.js';
+import { parseBigInt } from '@jaw.id/agent';
 import { sanitizeLine } from '../lib/terminal.js';
 import type { PermissionLiveness } from './permission-onchain.js';
 

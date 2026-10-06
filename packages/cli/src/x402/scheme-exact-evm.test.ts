@@ -2,7 +2,7 @@ import { describe, it, expect } from 'vitest';
 import { privateKeyToAccount } from 'viem/accounts';
 import { recoverTypedDataAddress } from 'viem';
 import { buildExactPayment, encodePaymentPayload, TRANSFER_WITH_AUTHORIZATION_TYPES } from './scheme-exact-evm.js';
-import type { X402PaymentRequirement } from './types.js';
+import type { X402PaymentRequirement } from '@jaw.id/agent';
 
 // Well-known Hardhat test key #1 — never used for real funds.
 const PK = '0x59c6995e998f97a5a0044966f0945389dc9e86dae88c7a8412f4603b6b78690d';

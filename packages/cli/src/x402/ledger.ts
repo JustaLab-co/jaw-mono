@@ -1,7 +1,7 @@
 import * as fs from 'node:fs';
 import { PATHS } from '../lib/paths.js';
 import { ensureDir } from '../lib/config.js';
-import { errorMessage } from '../lib/errors.js';
+import { errorMessage } from '@jaw.id/agent';
 
 /**
  * One line of the append-only x402 payment ledger (`~/.jaw/x402-log.jsonl`).

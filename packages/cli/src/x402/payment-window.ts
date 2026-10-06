@@ -1,5 +1,4 @@
-import { parseNonNegativeBigInt } from './amount.js';
-import { isPayableAddress } from './address.js';
+import { parseNonNegativeBigInt, isPayableAddress, type X402PaymentRequirement } from '@jaw.id/agent';
 import { appendX402Log, compactX402Log, readX402Log, sumSpentSince } from './ledger.js';
 import { reconcileSettlements } from './settlement.js';
 import { capWindowStarts, currentLimitUsageOnChain } from './spend-window.js';
@@ -7,7 +6,6 @@ import { topUpCeiling, type LimitUsage, type X402Policy } from './policy.js';
 import { ensurePayerFunds } from './topup.js';
 import { SessionBridge } from '../lib/session-bridge.js';
 import type { SessionConfig } from '../lib/session-config.js';
-import type { X402PaymentRequirement } from './types.js';
 import type { PayAndFetchResult } from './http.js';
 
 /** The funding hook `payAndFetch` runs once a requirement has passed the policy. */

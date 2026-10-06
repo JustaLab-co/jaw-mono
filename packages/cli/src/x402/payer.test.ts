@@ -1,7 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { privateKeyToAccount } from 'viem/accounts';
 import { recoverTypedDataAddress, recoverAddress, sliceHex } from 'viem';
-import type { X402PaymentRequirement } from './types.js';
+import type { X402PaymentRequirement } from '@jaw.id/agent';
 import { TRANSFER_WITH_AUTHORIZATION_TYPES } from './scheme-exact-evm.js';
 import { hashTypedData as erc7739HashTypedData } from 'viem/experimental/erc7739';
 

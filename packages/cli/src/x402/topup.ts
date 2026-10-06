@@ -2,10 +2,8 @@ import { encodeFunctionData, erc20Abi } from 'viem';
 import { usdcForNetwork, type UsdcAsset } from './asset-registry.js';
 import { publicClientFor, usdcBalance, type BalanceReader } from './balance.js';
 import { PERMIT2_ADDRESS } from './permit2.js';
-import { parseBigInt } from './amount.js';
+import { parseBigInt, errorMessage, type X402PaymentRequirement } from '@jaw.id/agent';
 import { firstOperationCost, gasReserve } from './gas-reserve.js';
-import { errorMessage } from '../lib/errors.js';
-import type { X402PaymentRequirement } from './types.js';
 
 /**
  * Permission top-up (flow 2b): when the session payer EOA can't cover a

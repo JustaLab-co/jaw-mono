@@ -78,7 +78,7 @@
   ],
   "release": {
     "projectsRelationship": "independent",
-    "projects": ["packages/*"],
+    "projects": ["packages/*", "!@jaw.id/agent"],
     "version": {
       "conventionalCommits": true,
       "preserveLocalDependencyProtocols": false,

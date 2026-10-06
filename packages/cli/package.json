@@ -121,6 +121,7 @@
     "zod": "^3.24.0"
   },
   "devDependencies": {
+    "@jaw.id/agent": "workspace:*",
     "oclif": "^4.0.0",
     "@oclif/test": "^4.1.0",
     "@types/node": "^20.19.9",

@@ -4,7 +4,7 @@ export default {
     'scope-enum': [
       2,
       'always',
-      ['core', 'wagmi', 'ui', 'cli', 'playground', 'demo', 'keys', 'docs', 'release', 'deps', 'ci', 'repo'],
+      ['core', 'wagmi', 'ui', 'cli', 'agent', 'playground', 'demo', 'keys', 'docs', 'release', 'deps', 'ci', 'repo'],
     ],
     'scope-empty': [1, 'never'],
   },

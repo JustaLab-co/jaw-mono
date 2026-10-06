@@ -1,0 +1,75 @@
+{
+  "name": "@jaw.id/agent",
+  "description": "x402 payments and grants for JAW.id agents, with no I/O of its own",
+  "version": "0.0.0",
+  "private": true,
+  "license": "Apache-2.0",
+  "type": "module",
+  "main": "./dist/index.js",
+  "exports": {
+    "./package.json": "./package.json",
+    ".": {
+      "@jaw-mono/source": "./src/index.ts",
+      "import": "./dist/index.js",
+      "default": "./dist/index.js"
+    }
+  },
+  "nx": {
+    "targets": {
+      "typecheck": {
+        "executor": "nx:run-commands",
+        "options": {
+          "cwd": "{projectRoot}",
+          "command": "tsc --noEmit -p tsconfig.lib.json"
+        },
+        "dependsOn": [
+          "^build"
+        ],
+        "cache": true,
+        "inputs": [
+          "default",
+          "^production"
+        ]
+      },
+      "build": {
+        "executor": "nx:run-commands",
+        "options": {
+          "cwd": "{projectRoot}",
+          "command": "bunx tsup"
+        },
+        "cache": true,
+        "inputs": [
+          "production",
+          "^production"
+        ],
+        "outputs": [
+          "{projectRoot}/dist"
+        ]
+      },
+      "test": {
+        "cache": true,
+        "inputs": [
+          "default",
+          "^production",
+          "{projectRoot}/vitest.config.ts"
+        ],
+        "outputs": [
+          "{workspaceRoot}/coverage/{projectRoot}"
+        ],
+        "executor": "nx:run-commands",
+        "options": {
+          "cwd": "{projectRoot}",
+          "command": "bunx vitest run"
+        }
+      }
+    }
+  },
+  "dependencies": {
+    "viem": "^2.56.7"
+  },
+  "devDependencies": {
+    "@types/node": "^20.19.9",
+    "fast-check": "^4.9.0",
+    "vitest": "^3.0.0"
+  }
+}

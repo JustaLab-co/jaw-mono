@@ -1,7 +1,7 @@
 import { hashDomain, parseAbiItem } from 'viem';
 import { publicClientFor } from './balance.js';
 import type { UsdcAsset } from './asset-registry.js';
-import { within } from '../lib/within.js';
+import { within } from '@jaw.id/agent';
 
 /**
  * Check the EIP-712 domain the registry carries against the one the token

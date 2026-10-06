@@ -7,7 +7,7 @@ import { buildUptoPayment, type UptoTypedData } from './scheme-upto-evm.js';
 import { PERMIT2_ADDRESS } from './permit2.js';
 import { publicClientFor } from './balance.js';
 import { usdcForNetwork, type UsdcAsset } from './asset-registry.js';
-import type { X402PaymentPayload, X402PaymentRequirement } from './types.js';
+import type { X402PaymentPayload, X402PaymentRequirement } from '@jaw.id/agent';
 
 /**
  * Produces the x402 payment for a chosen requirement. The interface is

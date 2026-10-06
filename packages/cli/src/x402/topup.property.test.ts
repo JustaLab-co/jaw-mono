@@ -14,7 +14,7 @@ import { describe, it, expect } from 'vitest';
 import { USDC_BY_NETWORK } from './asset-registry.js';
 import { firstOperationCost, gasReserve } from './gas-reserve.js';
 import { ensurePayerFunds, type TopUpExecutor } from './topup.js';
-import type { X402PaymentRequirement } from './types.js';
+import type { X402PaymentRequirement } from '@jaw.id/agent';
 
 fc.configureGlobal({ seed: 0x70b, numRuns: 300 });
 

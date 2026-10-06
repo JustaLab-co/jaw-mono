@@ -1,6 +1,6 @@
 import { currentPeriodWindow, normalizePeriod } from './period.js';
 import { sumSpentSince, sumToppedUpSince, type SpendScope, type X402LogEntry } from './ledger.js';
-import { parseBigInt } from './amount.js';
+import { parseBigInt } from '@jaw.id/agent';
 import { readCurrentPeriods, type ReadDeps } from './permission-onchain.js';
 import { USDC_BY_NETWORK } from './asset-registry.js';
 import type { LimitUsage, X402Policy } from './policy.js';

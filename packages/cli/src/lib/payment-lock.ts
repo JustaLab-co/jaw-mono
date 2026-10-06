@@ -2,7 +2,7 @@ import * as fs from 'node:fs';
 import * as crypto from 'node:crypto';
 import { PATHS } from './paths.js';
 import { ensureDir } from './config.js';
-import { errorMessage } from './errors.js';
+import { errorMessage } from '@jaw.id/agent';
 
 /**
  * Serialize payments across processes.

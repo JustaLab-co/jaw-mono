@@ -138,14 +138,26 @@
         "wagmi": "3.0.2",
       },
     },
+    "packages/agent": {
+      "name": "@jaw.id/agent",
+      "version": "0.0.0",
+      "dependencies": {
+        "viem": "^2.56.7",
+      },
+      "devDependencies": {
+        "@types/node": "^20.19.9",
+        "fast-check": "^4.9.0",
+        "vitest": "^3.0.0",
+      },
+    },
     "packages/cli": {
       "name": "@jaw.id/cli",
-      "version": "0.3.3",
+      "version": "0.4.0",
       "bin": {
         "jaw": "./bin/run.js",
       },
       "dependencies": {
-        "@jaw.id/core": "1.4.1",
+        "@jaw.id/core": "1.6.0",
         "@modelcontextprotocol/sdk": "^1.12.1",
         "@oclif/core": "^4.3.0",
         "open": "^10.1.0",
@@ -154,6 +166,7 @@
         "zod": "^3.24.0",
       },
       "devDependencies": {
+        "@jaw.id/agent": "workspace:*",
         "@oclif/test": "^4.1.0",
         "@types/node": "^20.19.9",
         "@types/ws": "^8.18.1",
@@ -164,7 +177,7 @@
     },
     "packages/core": {
       "name": "@jaw.id/core",
-      "version": "1.4.3",
+      "version": "1.6.0",
       "dependencies": {
         "axios": "1.13.5",
         "eventemitter3": "5.0.1",
@@ -183,7 +196,7 @@
     },
     "packages/ui": {
       "name": "@jaw.id/ui",
-      "version": "1.4.5",
+      "version": "1.6.0",
       "dependencies": {
         "@hookform/resolvers": "^5.2.2",
         "@jaw.id/core": "1.4.1",
@@ -226,7 +239,7 @@
     },
     "packages/wagmi": {
       "name": "@jaw.id/wagmi",
-      "version": "1.1.3",
+      "version": "1.1.10",
       "dependencies": {
         "@jaw.id/core": "1.4.1",
         "@wagmi/core": "^3.0.0",
@@ -831,6 +844,8 @@
     "@jaw-mono/keys-jaw-id": ["@jaw-mono/keys-jaw-id@workspace:apps/keys-jaw-id"],
 
     "@jaw-mono/playground": ["@jaw-mono/playground@workspace:apps/playground"],
+
+    "@jaw.id/agent": ["@jaw.id/agent@workspace:packages/agent"],
 
     "@jaw.id/cli": ["@jaw.id/cli@workspace:packages/cli"],
 

@@ -1,4 +1,4 @@
-import { errorMessage } from '../lib/errors.js';
+import { errorMessage } from '@jaw.id/agent';
 import { sanitizeBlock } from '../lib/terminal.js';
 
 /**

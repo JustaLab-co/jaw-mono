@@ -3,7 +3,7 @@ import { settledAmountOf, payAndFetch } from './http.js';
 import { buildUptoPayment } from './scheme-upto-evm.js';
 import { X402_UPTO_PROXY_ADDRESS } from './permit2.js';
 import type { Payer } from './payer.js';
-import type { X402PaymentPayload, X402PaymentRequirement } from './types.js';
+import type { X402PaymentPayload, X402PaymentRequirement } from '@jaw.id/agent';
 
 const URL_UNDER_TEST = 'https://api.example.com/paid/resource';
 
