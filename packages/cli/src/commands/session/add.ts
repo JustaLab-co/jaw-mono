@@ -24,8 +24,9 @@ import {
   describeMerge,
   readLiveness,
   whyGrantExceedsCeiling,
+  whyOwnerCannotFundSession,
+  whySpenderCannotPay,
 } from '@jaw.id/agent';
-import { whyOwnerCannotFundSession, whySpenderCannotPay } from '../../x402/funded-owner.js';
 import { cliChainClients, usdcBaseUnits } from '../../x402/balance.js';
 import { recoverPermission } from '../../x402/permission-recovery.js';
 

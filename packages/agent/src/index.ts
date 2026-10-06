@@ -21,3 +21,5 @@ export * from './x402/balance.js';
 export * from './x402/permission-onchain.js';
 export * from './x402/status-report.js';
 export * from './grants/grant-ceiling.js';
+export * from './x402/funded-owner.js';
+export * from './x402/eip712-domain.js';

@@ -1,6 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { hashDomain } from 'viem';
-import type { ChainClients, UsdcAsset } from '@jaw.id/agent';
+import type { ChainClients } from '../ports.js';
+import type { UsdcAsset } from './asset-registry.js';
 import { whyEip712DomainDisagrees } from './eip712-domain.js';
 
 const readContract = vi.fn();

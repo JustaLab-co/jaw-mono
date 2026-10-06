@@ -26,9 +26,9 @@ import {
   formatUsdc,
   formatRemaining,
   diagnose,
+  whyEip712DomainDisagrees,
 } from '@jaw.id/agent';
 import { currentLimitUsageOnChain } from '../../x402/spend-window.js';
-import { whyEip712DomainDisagrees } from '../../x402/eip712-domain.js';
 import { recoverPermission } from '../../x402/permission-recovery.js';
 import type { OutputFormat } from '../../lib/types.js';
 

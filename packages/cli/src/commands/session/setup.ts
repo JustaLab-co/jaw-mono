@@ -27,8 +27,9 @@ import {
   describeX402Grant,
   DEFAULT_X402_LIMIT,
   whyGrantExceedsCeiling,
+  whyOwnerCannotFundSession,
+  whySpenderCannotPay,
 } from '@jaw.id/agent';
-import { whyOwnerCannotFundSession, whySpenderCannotPay } from '../../x402/funded-owner.js';
 import { usdcBaseUnits } from '../../x402/balance.js';
 
 export default class SessionSetup extends BaseCommand {
