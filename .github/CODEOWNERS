@@ -43,6 +43,8 @@
 /packages/cli/src/lib/session-bridge.ts     @Ghadi8 @mariano-aguero
 /packages/cli/src/lib/session-config.ts     @Ghadi8 @mariano-aguero
 /packages/cli/src/lib/keystore.ts           @Ghadi8 @mariano-aguero
-/packages/cli/src/x402/policy.ts            @Ghadi8 @mariano-aguero
 /packages/cli/src/commands/session/         @Ghadi8 @mariano-aguero
 /packages/cli/src/mcp/handlers/session.ts   @Ghadi8 @mariano-aguero
+/packages/agent/src/x402/policy.ts          @Ghadi8 @mariano-aguero
+/packages/agent/src/x402/session-bridge.ts  @Ghadi8 @mariano-aguero
+/packages/agent/src/session/                @Ghadi8 @mariano-aguero
