@@ -1,4 +1,4 @@
-import { createPublicClient, http, erc20Abi, formatUnits, type Chain, type PublicClient } from 'viem';
+import { createPublicClient, http, erc20Abi, formatUnits, type Chain } from 'viem';
 import { base, baseSepolia, polygon } from 'viem/chains';
 import { usdcForNetwork, type UsdcAsset, type UsdcChainId } from './asset-registry.js';
 import type { ChainClients } from '../ports.js';
@@ -18,14 +18,6 @@ const CHAINS: Record<UsdcChainId, Chain> = {
   [baseSepolia.id]: baseSepolia,
   [polygon.id]: polygon,
 };
-
-// One client per (chain, apiKey) across the process — a fresh transport per read
-// is wasted setup once balance checks run more than once per payment. Keying on
-// the apiKey too matters for the long-lived `jaw mcp` server: a first read before
-// a key is configured would otherwise cache the public-RPC client forever, so a
-// later `jaw config set apiKey` (or a key change) never takes effect. A new key
-// yields a new cache entry and a keyed transport; the stale entry just goes cold.
-const clients = new Map<string, PublicClient>();
 
 /**
  * Every read through this transport runs inside the payment lock, so one that
@@ -64,7 +56,11 @@ function rpcTransport(chainId: number, apiKey?: string) {
   return http(`${JAW_RPC_URL}?chainId=${chainId}&api-key=${apiKey}`, options);
 }
 
-/** Shared per-(chain, apiKey) public clients for the x402 modules (reads only). */
+/**
+ * Public clients for the x402 modules (reads only), one new client per call.
+ * The caller decides how long a client lives, since only it knows how long its
+ * api key does.
+ */
 export function chainClients(apiKey: string | undefined): ChainClients {
   return {
     publicClient(chainId) {
@@ -73,13 +69,7 @@ export function chainClients(apiKey: string | undefined): ChainClients {
       // file. The throw below is what narrows it.
       const chain = (CHAINS as Record<number, Chain | undefined>)[chainId];
       if (!chain) throw new Error(`x402: no viem chain configured for chainId ${chainId}`);
-      const key = `${chainId}:${apiKey ?? ''}`;
-      let client = clients.get(key);
-      if (!client) {
-        client = createPublicClient({ chain, transport: rpcTransport(chainId, apiKey) });
-        clients.set(key, client);
-      }
-      return client;
+      return createPublicClient({ chain, transport: rpcTransport(chainId, apiKey) });
     },
   };
 }
