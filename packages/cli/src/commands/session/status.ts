@@ -10,9 +10,8 @@ import {
 } from '../../lib/session-config.js';
 import { loadConfig } from '../../lib/config.js';
 import { apiKeyFor } from '../../lib/api-key.js';
-import { readLiveness, type PermissionLiveness } from '@jaw.id/agent';
+import { readLiveness, type PermissionLiveness, recoverPermission } from '@jaw.id/agent';
 import { cliChainClients } from '../../x402/balance.js';
-import { recoverPermission } from '../../x402/permission-recovery.js';
 import type { OutputFormat } from '../../lib/types.js';
 
 export default class SessionStatus extends BaseCommand {

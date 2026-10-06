@@ -21,9 +21,9 @@ const h = vi.hoisted(() => ({
 vi.mock('../../lib/keystore.js', () => ({ keystoreExists: () => true }));
 vi.mock('../../lib/config.js', () => ({ loadConfig: () => ({}) }));
 vi.mock('../../lib/api-key.js', () => ({ apiKeyFor: () => undefined }));
-vi.mock('../../x402/permission-recovery.js', () => ({ recoverPermission: async () => null }));
 vi.mock('@jaw.id/agent', async (importOriginal) => ({
   ...(await importOriginal<typeof import('@jaw.id/agent')>()),
+  recoverPermission: async () => null,
   readLiveness: async () => h.liveness,
 }));
 

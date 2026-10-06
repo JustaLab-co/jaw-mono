@@ -26,11 +26,11 @@ import {
   diagnose,
   whyEip712DomainDisagrees,
   reconcileSettlements,
+  recoverPermission,
 } from '@jaw.id/agent';
 import { cliChainClients, usdcBalance } from '../../x402/balance.js';
 import { readX402Log, sumSpentSince, checkpointFigureReadable, jsonlPaymentLog } from '../../x402/ledger.js';
 import { currentLimitUsageOnChain } from '../../x402/spend-window.js';
-import { recoverPermission } from '../../x402/permission-recovery.js';
 import type { OutputFormat } from '../../lib/types.js';
 
 /**

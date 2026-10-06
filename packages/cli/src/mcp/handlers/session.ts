@@ -1,10 +1,9 @@
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
-import { mcpError, mcpResult, readLiveness } from '@jaw.id/agent';
+import { mcpError, mcpResult, readLiveness, recoverPermission } from '@jaw.id/agent';
 import { sessionPayerAddress } from '../../x402/session-payer.js';
 import { keystoreExists } from '../../lib/keystore.js';
 import { loadSessionConfig, sessionFileStore, sessionUsable } from '../../lib/session-config.js';
 import { cliChainClients } from '../../x402/balance.js';
-import { recoverPermission } from '../../x402/permission-recovery.js';
 import { loadConfig } from '../../lib/config.js';
 import { apiKeyFor } from '../../lib/api-key.js';
 

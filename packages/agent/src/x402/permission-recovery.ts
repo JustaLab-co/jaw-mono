@@ -1,9 +1,5 @@
-import {
-  parseGrantedPermission,
-  type GrantedPermission,
-  type PermissionStore,
-  type SessionConfig,
-} from '@jaw.id/agent';
+import { parseGrantedPermission, type GrantedPermission, type SessionConfig } from '../session/session-config.js';
+import type { PermissionStore } from '../ports.js';
 
 /**
  * The permission struct for a session that was created before the CLI kept one.

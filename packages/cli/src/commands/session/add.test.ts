@@ -56,9 +56,7 @@ vi.mock('@jaw.id/agent', async (importOriginal) => ({
   whyOwnerCannotFundSession: async () => h.ownerBlocked,
   whySpenderCannotPay: async () => null,
   readLiveness: async () => h.liveness,
-}));
-// Kept off the network: without this the "no struct" case reaches the relay.
-vi.mock('../../x402/permission-recovery.js', () => ({
+  // Kept off the network: without this the "no struct" case reaches the relay.
   recoverPermission: async (session: { permission?: unknown }) => session.permission ?? h.recovered,
 }));
 

@@ -27,9 +27,9 @@ import {
   whyGrantExceedsCeiling,
   whyOwnerCannotFundSession,
   whySpenderCannotPay,
+  recoverPermission,
 } from '@jaw.id/agent';
 import { cliChainClients, usdcBaseUnits } from '../../x402/balance.js';
-import { recoverPermission } from '../../x402/permission-recovery.js';
 
 /**
  * Add a capability to a session without taking away the ones it has.
