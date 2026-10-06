@@ -63,7 +63,7 @@ These hold for every change, however small. A diff that needs to break one is a 
 - **Tests assert behavior, not the implementation.** In `packages/core/src/account` and `src/signer` tests, do not stub what produces bytes: ESLint rejects a `vi.mock` of `viem` or `ox` that replaces an encoder or hash function, any factory mock of `ox/*` or `viem/experimental/erc7739`, and a bare `vi.mock('viem')`. Mocking the client or the network around them is allowed. Write a test from what the issue or PR says should happen, not from what the code currently does, and never loosen an assertion or an expected value so a failing test passes.
 - **A known-bug test flips with its fix.** If a test is marked `it.fails` to record a bug, it becomes `it` in the same change that fixes the bug. It is never deleted to make the suite pass.
 - **What the user sees is what gets signed.** In `apps/keys-jaw-id`, a screen signs the same request object it renders. Do not add a step that rebuilds, normalizes or fills in the signed payload after it has been shown.
-- **Session key scope is never widened to make something work.** `SESSION_SUPPORTED_METHODS` in `packages/cli/src/lib/rpc-classifier.ts` is everything a session key may do with no human present, and signing is deliberately absent (the comment there says why). `checkPolicy` in `packages/cli/src/x402/policy.ts` is not relaxed to let a payment through.
+- **Session key scope is never widened to make something work.** `SESSION_SUPPORTED_METHODS` in `packages/cli/src/lib/rpc-classifier.ts` is everything a session key may do with no human present, and signing is deliberately absent (the comment there says why). `checkPolicy` in `packages/agent/src/x402/policy.ts` is not relaxed to let a payment through.
 - **Paths in `.github/CODEOWNERS` get their own small PR.** They are the vectors, the API report, the EIP-1193 provider, the keys signing screens and the CLI session code. Keep changes there separate from unrelated work so the review stays readable.
 - **Packaging changes run the published test.** After touching `exports`, `files`, `bin` or a build config of a package in `packages/`, run `bunx nx run published-e2e:e2e`, which installs the four packages from a local registry the way an integrator would.
 
@@ -77,6 +77,7 @@ CI runs `bunx nx affected -t lint test typecheck build api-check e2e`, so a chan
 - **@jaw.id/wagmi** - Wagmi connector wrapping core SDK. Exports `jaw()` connector factory, React hooks (`useConnect`, `useGrantPermissions`, etc.), and TanStack Query utilities.
 - **@jaw.id/ui** - React UI components (Radix-based) for wallet dialogs: onboarding, transaction signing, permission management. Exports `ReactUIHandler` for app-specific mode integration.
 - **@jaw.id/cli** - CLI tool (`jaw` binary) and MCP server for terminal/AI agent interaction with smart accounts. Uses oclif framework. Connects to browser via WebSocket relay for passkey signing. All traffic E2E encrypted (ECDH P-256 + AES-256-GCM).
+- **@jaw.id/agent** - Not published: the CLI bundles it. The x402 payment path, grants and session rules, with no filesystem or terminal access of its own; chain reads, the payment log and the session store come in through the interfaces in `src/ports.ts`.
 
 ### Applications (`apps/`)
 
