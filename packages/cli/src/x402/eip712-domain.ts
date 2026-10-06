@@ -1,6 +1,5 @@
 import { hashDomain, parseAbiItem } from 'viem';
-import { publicClientFor } from './balance.js';
-import { type UsdcAsset, within } from '@jaw.id/agent';
+import { type ChainClients, type UsdcAsset, within } from '@jaw.id/agent';
 
 /**
  * Check the EIP-712 domain the registry carries against the one the token
@@ -49,7 +48,7 @@ const EIP712_DOMAIN_TYPE = {
 /**
  * Bounds the retries, and deliberately above one attempt.
  *
- * The transport under `publicClientFor` allows `RPC_TIMEOUT_MS` (5s) per
+ * The transport under the chain clients allows `RPC_TIMEOUT_MS` (5s) per
  * attempt across three of them, so roughly 15s before a read gives up, which is
  * too long for a check that decides nothing. Anything under 5s is worse than
  * too long: it aborts mid-first-attempt, so a healthy but slow node makes this
@@ -58,7 +57,7 @@ const EIP712_DOMAIN_TYPE = {
 const READ_TIMEOUT_MS = 7_000;
 
 /** What is wrong, or null when the registry and the token agree. */
-export async function whyEip712DomainDisagrees(asset: UsdcAsset): Promise<string | null> {
+export async function whyEip712DomainDisagrees(asset: UsdcAsset, clients: ChainClients): Promise<string | null> {
   let fromRegistry: `0x${string}`;
   let onChain: `0x${string}`;
   try {
@@ -76,7 +75,7 @@ export async function whyEip712DomainDisagrees(asset: UsdcAsset): Promise<string
       types: EIP712_DOMAIN_TYPE,
     });
     onChain = await within(
-      publicClientFor(asset.chainId).readContract({
+      clients.publicClient(asset.chainId).readContract({
         address: asset.address,
         abi: DOMAIN_SEPARATOR,
         functionName: 'DOMAIN_SEPARATOR',

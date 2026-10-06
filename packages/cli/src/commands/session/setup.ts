@@ -29,6 +29,7 @@ import {
   whyGrantExceedsCeiling,
 } from '@jaw.id/agent';
 import { whyOwnerCannotFundSession, whySpenderCannotPay } from '../../x402/funded-owner.js';
+import { usdcBaseUnits } from '../../x402/balance.js';
 
 export default class SessionSetup extends BaseCommand {
   static override description =
@@ -322,7 +323,11 @@ export default class SessionSetup extends BaseCommand {
         sessionAddress = account.address;
 
         if (flags.x402) {
-          const blocked = await whyOwnerCannotFundSession({ chainId, request: (m, p) => bridge.request(m, p) });
+          const blocked = await whyOwnerCannotFundSession({
+            chainId,
+            request: (m, p) => bridge.request(m, p),
+            readBalance: usdcBaseUnits,
+          });
           if (blocked) this.error(blocked);
         }
 
@@ -377,7 +382,7 @@ export default class SessionSetup extends BaseCommand {
       //      nothing, and warning there would send someone to move real funds
       //      for no reason.
       if (flags.x402) {
-        const unfunded = await whySpenderCannotPay({ chainId, spender: sessionAddress });
+        const unfunded = await whySpenderCannotPay({ chainId, spender: sessionAddress, readBalance: usdcBaseUnits });
         if (unfunded) this.logToStderr(`\nWarning: ${unfunded}`);
       }
 

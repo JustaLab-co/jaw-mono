@@ -26,7 +26,7 @@ import {
   whyGrantExceedsCeiling,
 } from '@jaw.id/agent';
 import { whyOwnerCannotFundSession, whySpenderCannotPay } from '../../x402/funded-owner.js';
-import { cliChainClients } from '../../x402/balance.js';
+import { cliChainClients, usdcBaseUnits } from '../../x402/balance.js';
 import { recoverPermission } from '../../x402/permission-recovery.js';
 
 /**
@@ -214,6 +214,7 @@ export default class SessionAdd extends BaseCommand {
         const blocked = await whyOwnerCannotFundSession({
           chainId: session.chainId,
           request: (m, p) => bridge.request(m, p),
+          readBalance: usdcBaseUnits,
         });
         if (blocked) this.error(blocked);
       }
@@ -297,6 +298,7 @@ export default class SessionAdd extends BaseCommand {
       const unfunded = await whySpenderCannotPay({
         chainId: session.chainId,
         spender: session.sessionAddress as `0x${string}`,
+        readBalance: usdcBaseUnits,
       });
       if (unfunded) this.logToStderr(`\nWarning: ${unfunded}`);
     }

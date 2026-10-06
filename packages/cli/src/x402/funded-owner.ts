@@ -1,5 +1,4 @@
 import { usdcForNetwork, firstOperationCost, gasReserve, formatUsdc } from '@jaw.id/agent';
-import { usdcBalance } from './balance.js';
 
 /**
  * Why a session cannot be set up yet, or null when it can.
@@ -17,8 +16,8 @@ export interface OwnerFundingCheck {
   chainId: number;
   /** The open browser bridge, asked for the connected account. */
   request(method: string, params?: unknown): Promise<unknown>;
-  /** Injected for tests. */
-  readBalance?: (network: string, owner: `0x${string}`) => Promise<bigint>;
+  /** Base units of USDC held. */
+  readBalance: (network: string, owner: `0x${string}`) => Promise<bigint>;
 }
 
 export async function whyOwnerCannotFundSession(check: OwnerFundingCheck): Promise<string | null> {
@@ -31,9 +30,7 @@ export async function whyOwnerCannotFundSession(check: OwnerFundingCheck): Promi
   const owner = accounts?.[0];
   if (!owner) return null;
 
-  const read =
-    check.readBalance ??
-    (async (network: string, address: `0x${string}`) => BigInt((await usdcBalance(network, address)).raw));
+  const read = check.readBalance;
 
   let held: bigint;
   try {
@@ -83,8 +80,8 @@ export interface SpenderFundingCheck {
   chainId: number;
   /** The session account, which is the one that will send and be charged. */
   spender: `0x${string}`;
-  /** Injected for tests. */
-  readBalance?: (network: string, address: `0x${string}`) => Promise<bigint>;
+  /** Base units of USDC held. */
+  readBalance: (network: string, address: `0x${string}`) => Promise<bigint>;
   /**
    * How long to wait on the node. The session is already created and saved by
    * the time this runs, so a stalled RPC must not hold the command open after
@@ -100,9 +97,7 @@ export async function whySpenderCannotPay(check: SpenderFundingCheck): Promise<s
   // from the native balance and an empty USDC balance says nothing.
   if (!asset) return null;
 
-  const read =
-    check.readBalance ??
-    (async (network: string, address: `0x${string}`) => BigInt((await usdcBalance(network, address)).raw));
+  const read = check.readBalance;
 
   let held: bigint;
   let timer: ReturnType<typeof setTimeout> | undefined;

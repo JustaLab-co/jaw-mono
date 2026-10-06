@@ -221,7 +221,7 @@ export default class X402Status extends BaseCommand {
     // node to find out. This command is the one whose job is saying what is
     // wrong, so a registry entry that has drifted becomes loud here instead of
     // arriving as a payment the token rejected.
-    const domainDrift = asset ? await whyEip712DomainDisagrees(asset) : null;
+    const domainDrift = asset ? await whyEip712DomainDisagrees(asset, cliChainClients) : null;
     if (domainDrift) problems.push(domainDrift);
 
     if (format === 'json') {

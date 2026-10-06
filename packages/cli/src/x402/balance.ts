@@ -15,3 +15,6 @@ export const publicClientFor = (chainId: number): PublicClient => cliChainClient
 
 export const usdcBalance = (network: string, owner: `0x${string}`) =>
   readUsdcBalance(network, owner, balanceReader(cliChainClients));
+
+export const usdcBaseUnits = async (network: string, owner: `0x${string}`) =>
+  BigInt((await usdcBalance(network, owner)).raw);
