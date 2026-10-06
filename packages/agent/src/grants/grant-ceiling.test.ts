@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import { whyGrantExceedsCeiling } from './grant-ceiling.js';
-import { buildX402Permissions } from '@jaw.id/agent';
+import { buildX402Permissions } from './grant-preset.js';
 
 /**
  * The flow this guards is an agent hitting a 402, asking for a budget, and a

@@ -1,6 +1,5 @@
-import { usdcForNetwork, firstOperationCost, gasReserve } from '@jaw.id/agent';
+import { usdcForNetwork, firstOperationCost, gasReserve, formatUsdc } from '@jaw.id/agent';
 import { usdcBalance } from './balance.js';
-import { formatUsdc } from './status-report.js';
 
 /**
  * Why a session cannot be set up yet, or null when it can.

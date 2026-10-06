@@ -26,9 +26,9 @@ import {
   buildX402Permissions,
   describeX402Grant,
   DEFAULT_X402_LIMIT,
+  whyGrantExceedsCeiling,
 } from '@jaw.id/agent';
 import { whyOwnerCannotFundSession, whySpenderCannotPay } from '../../x402/funded-owner.js';
-import { whyGrantExceedsCeiling } from '../../x402/grant-ceiling.js';
 
 export default class SessionSetup extends BaseCommand {
   static override description =

@@ -1,13 +1,9 @@
 import { parseUnits } from 'viem';
-import {
-  parseLimit,
-  type LimitPeriod,
-  describeSpendPeriod,
-  periodLengthSeconds,
-  USDC_BY_NETWORK,
-  type PermissionsConfig,
-} from '@jaw.id/agent';
-import { formatUsdc } from './status-report.js';
+import { parseLimit, type LimitPeriod } from './grant-preset.js';
+import { describeSpendPeriod, periodLengthSeconds } from '../x402/period.js';
+import { USDC_BY_NETWORK } from '../x402/asset-registry.js';
+import type { PermissionsConfig } from './permissions-config.js';
+import { formatUsdc } from '../x402/status-report.js';
 
 /**
  * The most a grant made from this machine may ask for, set by a human.

@@ -4,9 +4,15 @@ import { loadConfig } from '../../lib/config.js';
 import { tryLoadSessionConfig } from '../../lib/session-config.js';
 import { Eip3009EoaPayer } from '../../x402/payer.js';
 import { payAndFetch } from '../../x402/http.js';
-import { resolveSessionX402Policy, usdcForNetwork, USDC_BY_NETWORK, sanitizeLine, sanitizeBlock } from '@jaw.id/agent';
+import {
+  resolveSessionX402Policy,
+  usdcForNetwork,
+  USDC_BY_NETWORK,
+  sanitizeLine,
+  sanitizeBlock,
+  formatUsdc,
+} from '@jaw.id/agent';
 import { openPaymentWindow, recordPaymentOutcome } from '../../x402/payment-window.js';
-import { formatUsdc } from '../../x402/status-report.js';
 import { withPaymentLock } from '../../lib/payment-lock.js';
 import type { OutputFormat } from '../../lib/types.js';
 

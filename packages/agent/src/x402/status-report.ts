@@ -1,4 +1,6 @@
-import { parseBigInt, sanitizeLine, type PermissionLiveness } from '@jaw.id/agent';
+import { parseBigInt } from './amount.js';
+import { sanitizeLine } from '../util/terminal.js';
+import type { PermissionLiveness } from './permission-onchain.js';
 
 /**
  * Presentation and diagnosis for `jaw x402 status`, kept apart from the command

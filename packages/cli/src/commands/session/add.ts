@@ -23,8 +23,8 @@ import {
   mergePermissions,
   describeMerge,
   readLiveness,
+  whyGrantExceedsCeiling,
 } from '@jaw.id/agent';
-import { whyGrantExceedsCeiling } from '../../x402/grant-ceiling.js';
 import { whyOwnerCannotFundSession, whySpenderCannotPay } from '../../x402/funded-owner.js';
 import { cliChainClients } from '../../x402/balance.js';
 import { recoverPermission } from '../../x402/permission-recovery.js';

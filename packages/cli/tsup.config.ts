@@ -36,7 +36,6 @@ export default defineConfig({
     'commands/x402/status': 'src/commands/x402/status.ts',
     'commands/x402/pay': 'src/commands/x402/pay.ts',
     'commands/x402/log': 'src/commands/x402/log.ts',
-    'x402/status-report': 'src/x402/status-report.ts',
     'x402/log-view': 'src/x402/log-view.ts',
     // mcp
     'mcp/server': 'src/mcp/server.ts',
