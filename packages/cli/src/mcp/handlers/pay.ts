@@ -1,6 +1,13 @@
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
-import { payAndFetchSchema, x402LogSchema, x402BalanceSchema } from '../tools.js';
-import { mcpError, mcpResult, mcpPaymentResult } from '../helpers.js';
+import {
+  payAndFetchSchema,
+  x402LogSchema,
+  x402BalanceSchema,
+  mcpError,
+  mcpResult,
+  mcpPaymentResult,
+  resolveSessionX402Policy,
+} from '@jaw.id/agent';
 import { loadConfig } from '../../lib/config.js';
 import { apiKeyFor } from '../../lib/api-key.js';
 import { Eip3009EoaPayer, sessionPayerAddress } from '../../x402/payer.js';
@@ -9,7 +16,6 @@ import { payAndFetch } from '../../x402/http.js';
 import { readX402Log } from '../../x402/ledger.js';
 import { withPaymentLock } from '../../lib/payment-lock.js';
 import { usdcBalance } from '../../x402/balance.js';
-import { resolveSessionX402Policy } from '@jaw.id/agent';
 import { openPaymentWindow, recordPaymentOutcome } from '../../x402/payment-window.js';
 import { tryLoadSessionConfig } from '../../lib/session-config.js';
 

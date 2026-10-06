@@ -13,3 +13,6 @@ export * from './grants/permissions-config.js';
 export * from './grants/grant-preset.js';
 export * from './grants/merge-permissions.js';
 export * from './util/terminal.js';
+export * from './x402/discover.js';
+export * from './mcp/tools.js';
+export * from './mcp/helpers.js';
