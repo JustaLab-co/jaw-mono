@@ -124,7 +124,6 @@ vi.mock('../../x402/balance.js', () => {
     // client, and a catch-all here answered its `getHash` with the separator
     // hash, which quietly moved the liveness these five other cases report from
     // `unknown` to `mismatch`.
-    publicClientFor: client,
     cliChainClients: { publicClient: client },
   };
 });

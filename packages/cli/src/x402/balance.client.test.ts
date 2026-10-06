@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 
-// publicClientFor's transport depends on the configured apiKey, and its client
+// The chain client's transport depends on the configured apiKey, and its client
 // cache must key on that apiKey so the long-lived `jaw mcp` server picks up a key
 // set AFTER a first (keyless) read instead of caching the public-RPC client for
 // good. These tests pin that: transport selection by apiKey, and cache reuse vs
@@ -20,13 +20,14 @@ async function freshPublicClientFor() {
   vi.resetModules();
   createPublicClientMock.mockClear();
   httpMock.mockClear();
-  return (await import('./balance.js')).publicClientFor;
+  const { cliChainClients } = await import('./balance.js');
+  return (chainId: number) => cliChainClients.publicClient(chainId);
 }
 
 const transportUrlOf = (call: number) =>
   (createPublicClientMock.mock.calls[call]?.[0] as unknown as { transport: { __url?: string } }).transport.__url;
 
-// `publicClientFor` resolves the key the way every other path does, and that
+// `cliChainClients` resolves the key the way every other path does, and that
 // includes `JAW_API_KEY`. A developer with one exported would otherwise have
 // these cases read their own key off the environment rather than the config
 // this file controls.
@@ -43,7 +44,7 @@ afterEach(() => {
   else process.env['JAW_API_KEY'] = realEnvKey;
 });
 
-describe('publicClientFor transport + cache', () => {
+describe('cliChainClients transport + cache', () => {
   it('uses the public RPC (no url) when no apiKey is configured', async () => {
     loadConfigMock.mockReturnValue({});
     const publicClientFor = await freshPublicClientFor();

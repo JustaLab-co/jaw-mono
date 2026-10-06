@@ -77,7 +77,6 @@ vi.mock('../x402/balance.js', async (importOriginal) => ({
   // the permission holds enough to fund one.
   usdcBalance: async (_network: string, owner: string) =>
     owner.toLowerCase() === '0x' + '22'.repeat(20) ? { raw: '1000000', formatted: '1' } : { raw: '0', formatted: '0' },
-  publicClientFor: () => ({ getCode: async () => undefined }),
   cliChainClients: {
     publicClient: () => ({
       getCode: async () => undefined,

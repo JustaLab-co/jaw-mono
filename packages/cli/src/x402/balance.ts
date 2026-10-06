@@ -1,4 +1,3 @@
-import type { PublicClient } from 'viem';
 import { balanceReader, chainClients, usdcBalance as readUsdcBalance, type ChainClients } from '@jaw.id/agent';
 import { loadConfig } from '../lib/config.js';
 import { apiKeyFor } from '../lib/api-key.js';
@@ -10,8 +9,6 @@ import { apiKeyFor } from '../lib/api-key.js';
 export const cliChainClients: ChainClients = {
   publicClient: (chainId) => chainClients(apiKeyFor(loadConfig())).publicClient(chainId),
 };
-
-export const publicClientFor = (chainId: number): PublicClient => cliChainClients.publicClient(chainId);
 
 export const usdcBalance = (network: string, owner: `0x${string}`) =>
   readUsdcBalance(network, owner, balanceReader(cliChainClients));
