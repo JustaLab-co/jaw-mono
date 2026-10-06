@@ -11,7 +11,7 @@ import {
   sessionLives,
   type OrphanedPermission,
 } from '../../lib/session-config.js';
-import { sanitizeLine } from '../../lib/terminal.js';
+import { sanitizeLine } from '@jaw.id/agent';
 import type { OutputFormat } from '../../lib/types.js';
 
 export default class SessionRevoke extends BaseCommand {

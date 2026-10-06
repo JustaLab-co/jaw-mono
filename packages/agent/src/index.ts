@@ -9,3 +9,7 @@ export * from './x402/asset-registry.js';
 export * from './x402/gas-reserve.js';
 export * from './x402/permit2.js';
 export * from './x402/policy.js';
+export * from './grants/permissions-config.js';
+export * from './grants/grant-preset.js';
+export * from './grants/merge-permissions.js';
+export * from './util/terminal.js';

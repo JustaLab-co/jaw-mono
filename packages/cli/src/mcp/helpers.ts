@@ -1,5 +1,4 @@
-import { errorMessage } from '@jaw.id/agent';
-import { sanitizeBlock } from '../lib/terminal.js';
+import { errorMessage, sanitizeBlock } from '@jaw.id/agent';
 
 /**
  * Every tool's failure path, which is also where text nobody on this side wrote

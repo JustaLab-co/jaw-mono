@@ -1,6 +1,6 @@
 import { parseUnits } from 'viem';
-import { USDC_BY_NETWORK } from '@jaw.id/agent';
-import type { PermissionsConfig } from '../lib/types.js';
+import { USDC_BY_NETWORK } from '../x402/asset-registry.js';
+import type { PermissionsConfig } from './permissions-config.js';
 
 /**
  * Build the permission an x402 payer actually needs, so nobody has to hand-write

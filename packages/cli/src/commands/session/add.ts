@@ -14,14 +14,19 @@ import {
   saveRevokeProgress,
   sessionUsable,
 } from '../../lib/session-config.js';
-import type { OutputFormat, PermissionsConfig } from '../../lib/types.js';
-import { parsePermissionsConfig } from '../../lib/validation.js';
-import { buildX402Permissions, DEFAULT_X402_LIMIT } from '../../x402/grant-preset.js';
+import type { OutputFormat } from '../../lib/types.js';
+import {
+  type PermissionsConfig,
+  parsePermissionsConfig,
+  buildX402Permissions,
+  DEFAULT_X402_LIMIT,
+  mergePermissions,
+  describeMerge,
+} from '@jaw.id/agent';
 import { whyGrantExceedsCeiling } from '../../x402/grant-ceiling.js';
 import { whyOwnerCannotFundSession, whySpenderCannotPay } from '../../x402/funded-owner.js';
 import { readLiveness } from '../../x402/permission-onchain.js';
 import { recoverPermission } from '../../x402/permission-recovery.js';
-import { mergePermissions, describeMerge } from '../../x402/merge-permissions.js';
 
 /**
  * Add a capability to a session without taking away the ones it has.

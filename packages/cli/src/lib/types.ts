@@ -1,24 +1,9 @@
-import type { X402Policy } from '@jaw.id/agent';
+import type { PermissionsConfig, X402Policy } from '@jaw.id/agent';
 
 export type PaymasterConfig = {
   url: string;
   context?: Record<string, unknown>;
 };
-
-export interface PermissionsConfig {
-  /**
-   * `functionSignature` is the readable form the docs use and what the SDK
-   * prefers, computing the selector from it when no explicit `selector` is
-   * given. Both were already accepted on the wire; only the type omitted it.
-   */
-  calls?: Array<{ target: string; selector?: string; functionSignature?: string }>;
-  spends?: Array<{
-    token: string;
-    allowance: string;
-    unit: string;
-    multiplier?: number;
-  }>;
-}
 
 export interface JawConfig {
   /** The key the user chose, by flag or by `config set`. Never written by us. */

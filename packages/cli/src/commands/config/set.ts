@@ -1,7 +1,6 @@
 import { BaseCommand } from '../../base-command.js';
 import { setConfigValue, setX402PolicyValue } from '../../lib/config.js';
-import { isX402PolicyKey, X402_ARRAY_KEYS, X402_SCALAR_KEYS } from '@jaw.id/agent';
-import { parseLimit } from '../../x402/grant-preset.js';
+import { isX402PolicyKey, X402_ARRAY_KEYS, X402_SCALAR_KEYS, parseLimit } from '@jaw.id/agent';
 
 const VALID_KEYS = [
   'apiKey',

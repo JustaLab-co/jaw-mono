@@ -1,7 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import { mergePermissions, describeMerge } from './merge-permissions.js';
 import { buildX402Permissions } from './grant-preset.js';
-import type { GrantedPermission } from '../lib/session-config.js';
+import type { GrantedPermission } from '../session/session-config.js';
 
 const USDC = '0x036CbD53842c5426634e7929541eC2318f3dCF7e';
 const NFT = '0x4444444444444444444444444444444444444444';

@@ -1,7 +1,7 @@
 import { toFunctionSelector } from 'viem';
-import { describeSpendPeriod } from '@jaw.id/agent';
-import type { GrantedPermission } from '../lib/session-config.js';
-import type { PermissionsConfig } from '../lib/types.js';
+import { describeSpendPeriod } from '../x402/period.js';
+import type { GrantedPermission } from '../session/session-config.js';
+import type { PermissionsConfig } from './permissions-config.js';
 
 /**
  * The union of what a session already grants and what is being added.

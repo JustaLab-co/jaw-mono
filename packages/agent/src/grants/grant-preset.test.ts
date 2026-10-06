@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import { buildX402Permissions, parseLimit, describeX402Grant, DEFAULT_X402_LIMIT } from './grant-preset.js';
-import { parsePermissionsConfig } from '../lib/validation.js';
+import { parsePermissionsConfig } from './permissions-config.js';
 
 const USDC_BASE = '0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913';
 const USDC_BASE_SEPOLIA = '0x036CbD53842c5426634e7929541eC2318f3dCF7e';

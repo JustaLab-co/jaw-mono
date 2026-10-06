@@ -15,7 +15,7 @@ import {
   importKeyFromHex,
   type EncryptedEnvelope,
 } from './crypto.js';
-import { sanitizeLine } from './terminal.js';
+import { sanitizeLine } from '@jaw.id/agent';
 
 type CKey = webcrypto.CryptoKey;
 

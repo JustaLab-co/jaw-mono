@@ -19,9 +19,14 @@ import {
   tryLoadSessionConfig,
   type OrphanedPermission,
 } from '../../lib/session-config.js';
-import type { OutputFormat, PermissionsConfig } from '../../lib/types.js';
-import { parsePermissionsConfig } from '../../lib/validation.js';
-import { buildX402Permissions, describeX402Grant, DEFAULT_X402_LIMIT } from '../../x402/grant-preset.js';
+import type { OutputFormat } from '../../lib/types.js';
+import {
+  type PermissionsConfig,
+  parsePermissionsConfig,
+  buildX402Permissions,
+  describeX402Grant,
+  DEFAULT_X402_LIMIT,
+} from '@jaw.id/agent';
 import { whyOwnerCannotFundSession, whySpenderCannotPay } from '../../x402/funded-owner.js';
 import { whyGrantExceedsCeiling } from '../../x402/grant-ceiling.js';
 
