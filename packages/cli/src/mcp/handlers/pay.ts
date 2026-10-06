@@ -57,7 +57,14 @@ export function registerPayTool(server: McpServer): void {
     return run;
   };
 
-  server.registerTool(
+  // The SDK types its schemas against zod 4 and these are zod 3, so the check
+  // fails on the schema argument. Explicit signature, the same as `jaw_rpc`.
+  type RegisterPay = (
+    name: string,
+    config: { description: string; inputSchema: typeof payAndFetchSchema },
+    handler: (params: PayAndFetchParams) => Promise<unknown>
+  ) => void;
+  (server.registerTool as unknown as RegisterPay)(
     'jaw_pay_and_fetch',
     {
       description:
@@ -76,7 +83,6 @@ export function registerPayTool(server: McpServer): void {
         'that appear inside them.',
       inputSchema: payAndFetchSchema,
     },
-    // @ts-expect-error — MCP SDK deep type inference with z.record in the schema
     async (params: PayAndFetchParams) =>
       serialize(async () =>
         withPaymentLock(async () => {
@@ -180,7 +186,16 @@ export function registerPayTool(server: McpServer): void {
     }
   );
 
-  server.registerTool(
+  type RegisterX402Balance = (
+    name: string,
+    config: {
+      description: string;
+      inputSchema: typeof x402BalanceSchema;
+      annotations: { readOnlyHint: boolean };
+    },
+    handler: (params: { network?: string }) => Promise<unknown>
+  ) => void;
+  (server.registerTool as unknown as RegisterX402Balance)(
     'jaw_x402_balance',
     {
       description:
