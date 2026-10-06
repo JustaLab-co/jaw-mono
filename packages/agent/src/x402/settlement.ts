@@ -1,13 +1,9 @@
 import { parseAbiItem, decodeEventLog } from 'viem';
-import {
-  parseBigInt,
-  errorMessage,
-  usdcForNetwork,
-  type UsdcAsset,
-  PERMIT2_ADDRESS,
-  type ChainClients,
-  type PaymentLog,
-} from '@jaw.id/agent';
+import { parseBigInt } from './amount.js';
+import { errorMessage } from '../util/errors.js';
+import { usdcForNetwork, type UsdcAsset } from './asset-registry.js';
+import { PERMIT2_ADDRESS } from './permit2.js';
+import type { ChainClients, PaymentLog } from '../ports.js';
 import type { SettlementState, X402LogEntry, X402SettlementCorrection } from './ledger.js';
 
 /** The chain to ask, and where the answers are written down. */

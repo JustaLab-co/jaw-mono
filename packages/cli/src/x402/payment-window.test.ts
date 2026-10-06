@@ -40,7 +40,8 @@ vi.mock('./ledger.js', () => ({
   jsonlPaymentLog: {},
 }));
 
-vi.mock('./settlement.js', () => ({
+vi.mock('@jaw.id/agent', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@jaw.id/agent')>()),
   reconcileSettlements: async (entries: unknown[]) => {
     h.reconciled.push(entries);
     // Reconciliation hands back a corrected copy, never the rows it was given.

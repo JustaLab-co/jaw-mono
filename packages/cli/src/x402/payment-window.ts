@@ -6,10 +6,10 @@ import {
   type LimitUsage,
   type X402Policy,
   type PayAndFetchResult,
+  reconcileSettlements,
 } from '@jaw.id/agent';
 import { appendX402Log, compactX402Log, jsonlPaymentLog, readX402Log, sumSpentSince } from './ledger.js';
 import { cliChainClients } from './balance.js';
-import { reconcileSettlements } from './settlement.js';
 import { capWindowStarts, currentLimitUsageOnChain } from './spend-window.js';
 import { ensurePayerFunds } from './topup.js';
 import { SessionBridge } from '../lib/session-bridge.js';

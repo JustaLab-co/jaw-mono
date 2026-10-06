@@ -2,8 +2,7 @@ import { Flags } from '@oclif/core';
 import { BaseCommand } from '../../base-command.js';
 import { jsonlPaymentLog, readX402Log } from '../../x402/ledger.js';
 import { cliChainClients } from '../../x402/balance.js';
-import { reconcileSettlements } from '../../x402/settlement.js';
-import { renderEntry, renderSummary, machineEntry } from '../../x402/log-view.js';
+import { reconcileSettlements, renderEntry, renderSummary, machineEntry } from '@jaw.id/agent';
 import type { OutputFormat } from '../../lib/types.js';
 
 /**

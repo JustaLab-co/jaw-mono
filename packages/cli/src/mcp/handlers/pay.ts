@@ -8,11 +8,11 @@ import {
   mcpPaymentResult,
   resolveSessionX402Policy,
   payAndFetch,
+  machineEntry,
 } from '@jaw.id/agent';
 import { sessionPayer, sessionPayerAddress } from '../../x402/session-payer.js';
 import { loadConfig } from '../../lib/config.js';
 import { apiKeyFor } from '../../lib/api-key.js';
-import { machineEntry } from '../../x402/log-view.js';
 import { readX402Log } from '../../x402/ledger.js';
 import { withPaymentLock } from '../../lib/payment-lock.js';
 import { usdcBalance } from '../../x402/balance.js';

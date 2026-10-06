@@ -1,4 +1,6 @@
-import { formatUsdc, usdcForNetwork, sanitizeLine } from '@jaw.id/agent';
+import { formatUsdc } from './status-report.js';
+import { usdcForNetwork } from './asset-registry.js';
+import { sanitizeLine } from '../util/terminal.js';
 import { spendFigureOf, type X402LogEntry } from './ledger.js';
 
 /**
