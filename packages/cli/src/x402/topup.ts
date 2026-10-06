@@ -8,8 +8,9 @@ import {
   type X402PaymentRequirement,
   firstOperationCost,
   gasReserve,
+  type BalanceReader,
 } from '@jaw.id/agent';
-import { publicClientFor, usdcBalance, type BalanceReader } from './balance.js';
+import { publicClientFor, usdcBalance } from './balance.js';
 
 /**
  * Permission top-up (flow 2b): when the session payer EOA can't cover a

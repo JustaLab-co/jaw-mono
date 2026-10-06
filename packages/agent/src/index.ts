@@ -16,3 +16,5 @@ export * from './util/terminal.js';
 export * from './x402/discover.js';
 export * from './mcp/tools.js';
 export * from './mcp/helpers.js';
+export * from './ports.js';
+export * from './x402/balance.js';
