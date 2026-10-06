@@ -64,13 +64,7 @@ vi.mock('../../lib/paths.js', () => {
 vi.mock('../../lib/keystore.js', () => ({ keystoreExists: () => true }));
 vi.mock('../../lib/config.js', () => ({ loadConfig: () => h.config, ensureDir: () => undefined }));
 vi.mock('../../lib/session-config.js', () => ({
-  sessionUsable: (expiry: unknown, now: number = Date.now() / 1000) =>
-    typeof expiry === 'number' && Number.isFinite(expiry) && expiry > now,
-  expiryInstant: (expiry: unknown) =>
-    typeof expiry === 'number' && Number.isFinite(expiry) ? new Date(expiry * 1000) : null,
   tryLoadSessionConfig: () => h.session,
-  isLegacySession: () => false,
-  liveOrphans: () => [],
   sessionFileStore: {},
 }));
 vi.mock('../../x402/session-payer.js', () => ({ sessionPayerAddress: () => h.payer }));
@@ -85,8 +79,6 @@ vi.mock('../../x402/balance.js', () => ({
 }));
 vi.mock('../../x402/ledger.js', () => ({
   readX402Log: () => [],
-  sumSpentSince: () => 0n,
-  sumToppedUpSince: () => 0n,
   jsonlPaymentLog: {},
 }));
 // The unreadable anchor case: `currentLimitUsage` drops a limit it cannot

@@ -11,20 +11,6 @@ import {
   type X402SettlementCorrection,
 } from '@jaw.id/agent';
 
-// What a row means lives in the agent package; this file is where the rows are
-// kept, as JSON lines under ~/.jaw.
-export {
-  checkpointFigureReadable,
-  spendFigureOf,
-  sumSpentSince,
-  sumToppedUpSince,
-  toppedUpFigureOf,
-  type SettlementState,
-  type SpendScope,
-  type X402LogEntry,
-  type X402SettlementCorrection,
-} from '@jaw.id/agent';
-
 /**
  * Append one entry. Never throws — logging must not break a payment.
  *

@@ -1,16 +1,17 @@
 import { BaseCommand } from '../../base-command.js';
 import { keystoreExists } from '../../lib/keystore.js';
+import { loadSessionConfig, sessionFileStore } from '../../lib/session-config.js';
+import { loadConfig } from '../../lib/config.js';
+import { apiKeyFor } from '../../lib/api-key.js';
 import {
+  readLiveness,
+  type PermissionLiveness,
+  recoverPermission,
   expiryInstant,
   isLegacySession,
   liveOrphans,
-  loadSessionConfig,
   sessionUsable,
-  sessionFileStore,
-} from '../../lib/session-config.js';
-import { loadConfig } from '../../lib/config.js';
-import { apiKeyFor } from '../../lib/api-key.js';
-import { readLiveness, type PermissionLiveness, recoverPermission } from '@jaw.id/agent';
+} from '@jaw.id/agent';
 import { cliChainClients } from '../../x402/balance.js';
 import type { OutputFormat } from '../../lib/types.js';
 

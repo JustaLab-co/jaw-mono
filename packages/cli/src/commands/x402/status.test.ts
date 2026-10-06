@@ -1,4 +1,5 @@
 import { describe, it, expect, beforeAll, beforeEach, afterEach, vi } from 'vitest';
+import { spendFigureOf } from '@jaw.id/agent';
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 import * as os from 'node:os';
@@ -90,13 +91,7 @@ vi.mock('../../lib/config.js', () => ({
 }));
 
 vi.mock('../../lib/session-config.js', () => ({
-  sessionUsable: (expiry: unknown, now: number = Date.now() / 1000) =>
-    typeof expiry === 'number' && Number.isFinite(expiry) && expiry > now,
-  expiryInstant: (expiry: unknown) =>
-    typeof expiry === 'number' && Number.isFinite(expiry) ? new Date(expiry * 1000) : null,
   tryLoadSessionConfig: () => h.session,
-  isLegacySession: () => false,
-  liveOrphans: () => [],
   sessionFileStore: {},
 }));
 
@@ -128,7 +123,7 @@ vi.mock('../../x402/balance.js', () => {
   };
 });
 
-const { appendX402Log, readX402Log, spendFigureOf } = await import('../../x402/ledger.js');
+const { appendX402Log, readX402Log } = await import('../../x402/ledger.js');
 const { default: X402Status } = await import('./status.js');
 
 let oclifConfig: Config;

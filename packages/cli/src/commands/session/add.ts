@@ -5,14 +5,9 @@ import { loadConfig } from '../../lib/config.js';
 import { getBridge } from '../../lib/bridge-singleton.js';
 import { keystoreExists } from '../../lib/keystore.js';
 import {
-  expiryInstant,
-  isLegacySession,
-  liveOrphans,
   loadSessionConfig,
-  parseGrantedPermission,
   replaceSessionConfig,
   saveRevokeProgress,
-  sessionUsable,
   sessionFileStore,
 } from '../../lib/session-config.js';
 import type { OutputFormat } from '../../lib/types.js';
@@ -28,6 +23,11 @@ import {
   whyOwnerCannotFundSession,
   whySpenderCannotPay,
   recoverPermission,
+  expiryInstant,
+  isLegacySession,
+  liveOrphans,
+  parseGrantedPermission,
+  sessionUsable,
 } from '@jaw.id/agent';
 import { cliChainClients, usdcBaseUnits } from '../../x402/balance.js';
 

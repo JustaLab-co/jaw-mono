@@ -3,21 +3,6 @@ import { PATHS } from './paths.js';
 import { writeJsonAtomic } from './config.js';
 import type { GrantedPermission, OrphanedPermission, PermissionStore, SessionConfig } from '@jaw.id/agent';
 
-// The shape and the rules live in the agent package; this file is where the
-// session is read from and written to disk.
-export {
-  expiryInstant,
-  isLegacySession,
-  liveOrphans,
-  parseGrantedPermission,
-  sessionLives,
-  sessionUsable,
-  type GrantedPermission,
-  type OrphanedPermission,
-  type SessionConfig,
-  type SessionMode,
-} from '@jaw.id/agent';
-
 /**
  * `mode` is required and pinned here, unlike on the read side where it stays
  * optional to describe files earlier versions wrote. Nothing but `SessionSetup`

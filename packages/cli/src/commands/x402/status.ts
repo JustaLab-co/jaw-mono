@@ -1,14 +1,7 @@
 import { BaseCommand } from '../../base-command.js';
 import { keystoreExists } from '../../lib/keystore.js';
 import { loadConfig } from '../../lib/config.js';
-import {
-  expiryInstant,
-  isLegacySession,
-  liveOrphans,
-  sessionUsable,
-  tryLoadSessionConfig,
-  sessionFileStore,
-} from '../../lib/session-config.js';
+import { tryLoadSessionConfig, sessionFileStore } from '../../lib/session-config.js';
 import { sessionPayerAddress } from '../../x402/session-payer.js';
 import {
   resolveSessionX402Policy,
@@ -28,9 +21,15 @@ import {
   reconcileSettlements,
   recoverPermission,
   currentLimitUsageOnChain,
+  expiryInstant,
+  isLegacySession,
+  liveOrphans,
+  sessionUsable,
+  sumSpentSince,
+  checkpointFigureReadable,
 } from '@jaw.id/agent';
 import { cliChainClients, usdcBalance } from '../../x402/balance.js';
-import { readX402Log, sumSpentSince, checkpointFigureReadable, jsonlPaymentLog } from '../../x402/ledger.js';
+import { readX402Log, jsonlPaymentLog } from '../../x402/ledger.js';
 import type { OutputFormat } from '../../lib/types.js';
 
 /**

@@ -10,15 +10,7 @@ import {
   loadSessionKey,
   tryLoadKeystoreAddress,
 } from '../../lib/keystore.js';
-import {
-  liveOrphans,
-  parseGrantedPermission,
-  expiryInstant,
-  saveSessionConfig,
-  sessionLives,
-  tryLoadSessionConfig,
-  type OrphanedPermission,
-} from '../../lib/session-config.js';
+import { saveSessionConfig, tryLoadSessionConfig } from '../../lib/session-config.js';
 import type { OutputFormat } from '../../lib/types.js';
 import {
   type PermissionsConfig,
@@ -29,6 +21,11 @@ import {
   whyGrantExceedsCeiling,
   whyOwnerCannotFundSession,
   whySpenderCannotPay,
+  liveOrphans,
+  parseGrantedPermission,
+  expiryInstant,
+  sessionLives,
+  type OrphanedPermission,
 } from '@jaw.id/agent';
 import { usdcBaseUnits } from '../../x402/balance.js';
 
