@@ -6,6 +6,7 @@ import {
   liveOrphans,
   loadSessionConfig,
   sessionUsable,
+  sessionFileStore,
 } from '../../lib/session-config.js';
 import { loadConfig } from '../../lib/config.js';
 import { apiKeyFor } from '../../lib/api-key.js';
@@ -41,7 +42,7 @@ export default class SessionStatus extends BaseCommand {
     // Best-effort, and quiet without an API key: this command has never needed
     // one, and a session written before the struct existed should not start
     // demanding a key to report what it always reported.
-    const permission = await recoverPermission(config, apiKeyFor(loadConfig()));
+    const permission = await recoverPermission(config, apiKeyFor(loadConfig()), { store: sessionFileStore });
     // Carried into everything below, including the json, so the run that
     // recovers the struct reports it rather than the next one.
     const current = permission ? { ...config, permission } : config;

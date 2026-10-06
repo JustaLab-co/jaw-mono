@@ -13,6 +13,7 @@ import {
   replaceSessionConfig,
   saveRevokeProgress,
   sessionUsable,
+  sessionFileStore,
 } from '../../lib/session-config.js';
 import type { OutputFormat } from '../../lib/types.js';
 import {
@@ -108,7 +109,7 @@ export default class SessionAdd extends BaseCommand {
     // permission id.
     // Recovered from the relay when the session predates the CLI storing it,
     // so an older session can be added to rather than told to start over.
-    const existing = await recoverPermission(session, apiKey);
+    const existing = await recoverPermission(session, apiKey, { store: sessionFileStore });
     if (!existing) {
       // Two causes, and only one of them is the session's fault. Recovery reads
       // the relay, which needs a key, so with none the honest answer is to get

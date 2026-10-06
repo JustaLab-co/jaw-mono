@@ -53,6 +53,7 @@ vi.mock('../../lib/session-config.js', () => ({
   tryLoadSessionConfig: () => h.session,
   isLegacySession: () => false,
   liveOrphans: () => [],
+  sessionFileStore: {},
 }));
 vi.mock('../../x402/session-payer.js', () => ({ sessionPayerAddress: () => h.payer }));
 // No chain behind the reads: liveness comes back as not knowing.

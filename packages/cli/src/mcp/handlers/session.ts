@@ -2,7 +2,7 @@ import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { mcpError, mcpResult, readLiveness } from '@jaw.id/agent';
 import { sessionPayerAddress } from '../../x402/session-payer.js';
 import { keystoreExists } from '../../lib/keystore.js';
-import { loadSessionConfig, sessionUsable } from '../../lib/session-config.js';
+import { loadSessionConfig, sessionFileStore, sessionUsable } from '../../lib/session-config.js';
 import { cliChainClients } from '../../x402/balance.js';
 import { recoverPermission } from '../../x402/permission-recovery.js';
 import { loadConfig } from '../../lib/config.js';
@@ -49,7 +49,7 @@ export function registerSessionTools(server: McpServer): void {
         // Recovered here and not only in the commands: an agent is the consumer
         // this whole path exists for, and a session created before the struct
         // was stored would otherwise read `unknown` forever.
-        const permission = await recoverPermission(config, apiKeyFor(loadConfig()));
+        const permission = await recoverPermission(config, apiKeyFor(loadConfig()), { store: sessionFileStore });
         const current = permission ? { ...config, permission } : config;
         const permissionOnChain = await readLiveness(current, { clients: cliChainClients });
         return mcpResult({

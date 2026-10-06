@@ -20,7 +20,10 @@ vi.mock('../lib/paths.js', () => {
   return { PATHS: { root, sessionConfig: p.join(root, 'session-config.json') } };
 });
 
-const { recoverPermission } = await import('./permission-recovery.js');
+const { recoverPermission: recover } = await import('./permission-recovery.js');
+const { sessionFileStore } = await import('../lib/session-config.js');
+const recoverPermission = (...[session, apiKey, deps]: Parameters<typeof recover>) =>
+  recover(session, apiKey, { ...deps, store: sessionFileStore });
 const { PATHS } = await import('../lib/paths.js');
 
 /**

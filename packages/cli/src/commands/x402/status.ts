@@ -7,6 +7,7 @@ import {
   liveOrphans,
   sessionUsable,
   tryLoadSessionConfig,
+  sessionFileStore,
 } from '../../lib/session-config.js';
 import { sessionPayerAddress } from '../../x402/session-payer.js';
 import {
@@ -110,7 +111,7 @@ export default class X402Status extends BaseCommand {
       ),
       // Recovered first for a session written before the struct was stored,
       // which is otherwise stuck reporting "cannot tell" forever.
-      recoverPermission(session, this.resolveApiKey(flags)),
+      recoverPermission(session, this.resolveApiKey(flags), { store: sessionFileStore }),
     ]);
     const [ownerBalance, payerBalance] = balances;
     // Threaded through the rest of the command, not just the liveness read.

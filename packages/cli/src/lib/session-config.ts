@@ -1,7 +1,7 @@
 import * as fs from 'node:fs';
 import { PATHS } from './paths.js';
 import { writeJsonAtomic } from './config.js';
-import type { GrantedPermission, OrphanedPermission, SessionConfig } from '@jaw.id/agent';
+import type { GrantedPermission, OrphanedPermission, PermissionStore, SessionConfig } from '@jaw.id/agent';
 
 // The shape and the rules live in the agent package; this file is where the
 // session is read from and written to disk.
@@ -223,3 +223,5 @@ export function deleteSessionConfig(): void {
     fs.unlinkSync(PATHS.sessionConfig);
   }
 }
+
+export const sessionFileStore: PermissionStore = { saveRecovered: saveRecoveredPermission };

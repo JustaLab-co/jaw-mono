@@ -1,5 +1,9 @@
-import { saveRecoveredPermission, parseGrantedPermission, type SessionConfig } from '../lib/session-config.js';
-import type { GrantedPermission } from '../lib/session-config.js';
+import {
+  parseGrantedPermission,
+  type GrantedPermission,
+  type PermissionStore,
+  type SessionConfig,
+} from '@jaw.id/agent';
 
 /**
  * The permission struct for a session that was created before the CLI kept one.
@@ -19,6 +23,8 @@ import type { GrantedPermission } from '../lib/session-config.js';
 const RECOVERY_TIMEOUT_MS = 5_000;
 
 export interface RecoveryDeps {
+  /** Where a recovered struct is written back to the session. */
+  store: PermissionStore;
   /** Injected for tests, and so the unit tests never import core. */
   fetchPermission?: (permissionId: string, apiKey: string) => Promise<unknown>;
   timeoutMs?: number;
@@ -27,7 +33,7 @@ export interface RecoveryDeps {
 export async function recoverPermission(
   session: SessionConfig,
   apiKey: string | undefined,
-  deps: RecoveryDeps = {}
+  deps: RecoveryDeps
 ): Promise<GrantedPermission | undefined> {
   if (session.permission) return session.permission;
   if (!apiKey) return undefined;
@@ -70,7 +76,7 @@ export async function recoverPermission(
     // this was waiting on the relay. Handing the struct back anyway would let a
     // caller go on to merge against, or report on, a session that no longer
     // exists.
-    return saveRecoveredPermission(session, permission) ? permission : undefined;
+    return deps.store.saveRecovered(session, permission) ? permission : undefined;
   } catch {
     return undefined;
   } finally {
