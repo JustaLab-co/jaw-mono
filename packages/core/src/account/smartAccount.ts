@@ -62,7 +62,7 @@ import {
     unichain,
     monad,
     citrea,
-    adi,
+    adi as adiBase,
 } from 'viem/chains';
 import { PERMISSIONS_MANAGER_ADDRESS, FACTORY_ADDRESS, JAW_PROXY_URL } from '../constants.js';
 import { jawHttp } from '../utils/jawHttp.js';
@@ -112,6 +112,9 @@ export type BundledTransactionResult = {
  */
 const hyveChain = /*#__PURE__*/ defineChain({ ...hyveChainBase, blockTime: 3500 });
 const arc = /*#__PURE__*/ defineChain({ ...arcBase, blockTime: 500 });
+
+// viem names chain 36900 "ADI_Chain", and chain.name is what the wallet UI shows.
+const adi = /*#__PURE__*/ defineChain({ ...adiBase, name: 'ADI Chain' });
 
 /**
  * The chain lists are annotated rather than inferred on purpose. Without the
