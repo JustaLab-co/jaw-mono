@@ -1,6 +1,6 @@
 import { createMcpHandler } from 'mcp-handler';
 import { registerApprovalTools } from '@/approvals/tools';
-import { withConnection } from '@/connections/auth';
+import { connectionKey, withConnection } from '@/connections/auth';
 import { withEdge } from '@/lib/edge';
 import { registerReadTools } from '@/tools/read';
 
@@ -25,7 +25,7 @@ const CORS = {
   'access-control-expose-headers': 'www-authenticate, mcp-session-id, x-request-id',
 };
 
-const edge = withEdge(withConnection(mcp), { guarded: true });
+const edge = withEdge(withConnection(mcp), { guarded: true, rateKey: connectionKey });
 
 const handler: typeof edge = async (req, ctx) => {
   const res = await edge(req, ctx);

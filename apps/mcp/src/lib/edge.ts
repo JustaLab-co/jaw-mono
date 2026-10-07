@@ -9,26 +9,30 @@ type Handler = (req: Request, ctx: RouteContext) => Response | Promise<Response>
 export const RATE_WINDOW_MS = 60_000;
 export const RATE_LIMIT = 120;
 
+type RateKey = (req: Request) => string | undefined | Promise<string | undefined>;
+
 // JAW_MCP_TRUSTED_PROXY_HOPS proxies each append the address they saw to
 // x-forwarded-for, so the client is the entry that many from the right. Without
 // it, x-forwarded-for is the caller's to write; only x-real-ip, which a platform
-// such as Vercel sets itself, is used.
-function clientIp(req: Request): string {
+// such as Vercel sets itself, is used. With neither there is no per-IP limit:
+// one shared bucket would let any caller lock everyone out.
+export const ipKey: RateKey = (req) => {
   const hops = Number(process.env.JAW_MCP_TRUSTED_PROXY_HOPS ?? 0);
-  if (hops > 0) {
-    const chain = (req.headers.get('x-forwarded-for') ?? '')
-      .split(',')
-      .map((s) => s.trim())
-      .filter(Boolean);
-    return chain.at(-hops) ?? 'unknown';
-  }
-  return req.headers.get('x-real-ip') || 'unknown';
-}
+  const ip =
+    hops > 0
+      ? (req.headers.get('x-forwarded-for') ?? '')
+          .split(',')
+          .map((s) => s.trim())
+          .filter(Boolean)
+          .at(-hops)
+      : req.headers.get('x-real-ip');
+  return ip ? `ip:${ip}` : undefined;
+};
 
-async function refuse(req: Request): Promise<Response | undefined> {
+async function refuse(req: Request, rateKey: RateKey): Promise<Response | undefined> {
   if (await isPaused()) return Response.json({ error: 'paused' }, { status: 503 });
-  const hits = await countHit(`ip:${clientIp(req)}`, RATE_WINDOW_MS);
-  if (hits > RATE_LIMIT) {
+  const key = await rateKey(req);
+  if (key && (await countHit(key, RATE_WINDOW_MS)) > RATE_LIMIT) {
     return Response.json({ error: 'rate_limited' }, { status: 429, headers: { 'retry-after': '60' } });
   }
   return undefined;
@@ -71,14 +75,14 @@ export function databaseUnreachable(err: unknown): boolean {
 
 export function withEdge(
   handler: Handler,
-  { guarded, cors = false }: { guarded: boolean; cors?: boolean }
+  { guarded, cors = false, rateKey = ipKey }: { guarded: boolean; cors?: boolean; rateKey?: RateKey }
 ): (req: Request, ctx: RouteContext) => Promise<Response> {
   return async (req, ctx) => {
     const requestId = crypto.randomUUID();
     const started = performance.now();
     let res: Response;
     try {
-      res = (guarded && (await refuse(req))) || (await handler(req, ctx));
+      res = (guarded && (await refuse(req, rateKey))) || (await handler(req, ctx));
     } catch (err) {
       log('error', { requestId, error: errorLabel(err) });
       res = databaseUnreachable(err)
@@ -108,6 +112,6 @@ interface LogFields {
   error?: string;
 }
 
-export function log(level: 'info' | 'error', fields: LogFields) {
+export function log(level: 'info' | 'warn' | 'error', fields: LogFields) {
   console.log(JSON.stringify({ level, time: new Date().toISOString(), ...fields }));
 }

@@ -39,4 +39,4 @@ insert into settings (key, value) values ('paused', 'true')
 on conflict (key) do update set value = excluded.value, updated_at = now();
 ```
 
-Each client IP gets 120 requests per minute across guarded routes, counted in Postgres. Which header names the client IP depends on `JAW_MCP_TRUSTED_PROXY_HOPS`; see `.env.example`.
+Authenticated `/mcp` calls get 120 requests per minute per connection, and unauthenticated routes 120 per client IP, counted in Postgres. Behind your own proxy, production must set `JAW_MCP_TRUSTED_PROXY_HOPS`: without it the client IP comes only from `x-real-ip` (which Vercel sets), and with neither the per-IP limit is skipped rather than shared, with a warning at start. See `.env.example`.

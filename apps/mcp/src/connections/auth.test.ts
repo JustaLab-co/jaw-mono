@@ -4,6 +4,7 @@ import { connect, ISSUER, setTestEnv } from './testkit';
 
 setTestEnv();
 const { POST } = await import('@/app/mcp/route');
+const { RATE_LIMIT } = await import('@/lib/edge');
 
 beforeAll(useTestDb);
 afterEach(() => vi.restoreAllMocks());
@@ -51,6 +52,14 @@ describe('/mcp behind OAuth', () => {
     const res = await rpc(initialize, access_token);
     expect(res.status).toBe(403);
     expect(res.headers.get('www-authenticate')).toContain('insufficient_scope');
+  });
+
+  it('gives each connection its own rate limit bucket, with no IP headers at all', async () => {
+    const [a, b] = [await connect(), await connect()];
+    let last = 0;
+    for (let i = 0; i <= RATE_LIMIT; i++) last = (await rpc(initialize, a.access_token)).status;
+    expect(last).toBe(429);
+    expect((await rpc(initialize, b.access_token)).status).toBe(200);
   });
 
   it('never writes a token or key to the logs', async () => {

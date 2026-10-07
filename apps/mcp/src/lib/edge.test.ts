@@ -69,6 +69,16 @@ describe('withEdge', () => {
     expect((await handler(as('198.51.100.1', '10.9.9.9'), ctx)).status).toBe(200);
   });
 
+  it('never creates a bucket from a caller-supplied x-forwarded-for under the default config', async () => {
+    delete process.env.JAW_MCP_TRUSTED_PROXY_HOPS;
+    const handler = withEdge(ok, { guarded: true });
+    for (let i = 0; i < RATE_LIMIT + 5; i++) {
+      const r = new Request('http://mcp.test/oauth/token', { headers: { 'x-forwarded-for': `10.0.0.${i}` } });
+      expect((await handler(r, ctx)).status).toBe(200);
+    }
+    expect(store.hits.size).toBe(0);
+  });
+
   it('with N trusted proxy hops keys on the Nth entry from the right', async () => {
     process.env.JAW_MCP_TRUSTED_PROXY_HOPS = '2';
     const handler = withEdge(ok, { guarded: true });

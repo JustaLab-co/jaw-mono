@@ -2,6 +2,7 @@ import type { AuthInfo } from '@modelcontextprotocol/server';
 import { compactDecrypt, decodeProtectedHeader } from 'jose';
 import { withMcpAuth } from 'mcp-handler';
 import type { Address } from 'viem';
+import { ipKey } from '@/lib/edge';
 import { config } from './config';
 import type { Scope } from './provider';
 import { findActive } from './rows';
@@ -28,8 +29,8 @@ interface Claims {
   exp: number;
 }
 
-export async function verifyBearer(bearer: string | undefined): Promise<AuthInfo | undefined> {
-  if (!bearer) return undefined;
+/** Claims of a token this server issued for this resource and that has not expired. */
+async function decrypt(bearer: string): Promise<Claims | undefined> {
   const { issuer, resource, ring } = config();
   let claims: Claims;
   try {
@@ -41,6 +42,20 @@ export async function verifyBearer(bearer: string | undefined): Promise<AuthInfo
   }
   const audiences = Array.isArray(claims.aud) ? claims.aud : [claims.aud];
   if (claims.iss !== issuer || !audiences.includes(resource) || claims.exp * 1000 <= Date.now()) return undefined;
+  return claims;
+}
+
+/** The connection a bearer token names, from decryption alone: a rate limit key with no database read. */
+export async function connectionKey(req: Request): Promise<string | undefined> {
+  const bearer = req.headers.get('authorization')?.match(/^Bearer (.+)$/i)?.[1];
+  const claims = bearer ? await decrypt(bearer) : undefined;
+  return claims ? `conn:${claims.sub}` : ipKey(req);
+}
+
+export async function verifyBearer(bearer: string | undefined): Promise<AuthInfo | undefined> {
+  if (!bearer) return undefined;
+  const claims = await decrypt(bearer);
+  if (!claims) return undefined;
   const row = await findActive(claims.sub);
   if (!row || row.clientId !== claims.client_id) return undefined;
   const tenant: Tenant = {
@@ -57,7 +72,7 @@ export async function verifyBearer(bearer: string | undefined): Promise<AuthInfo
     clientId: claims.client_id,
     scopes: (claims.scope ?? '').split(' ').filter(Boolean),
     expiresAt: claims.exp,
-    resource: new URL(resource),
+    resource: new URL(config().resource),
     extra: { tenant },
   };
 }
