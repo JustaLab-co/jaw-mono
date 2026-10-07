@@ -1,6 +1,6 @@
 'use client';
 
-import type { rejectionTypedData } from '@jaw.id/agent';
+import type { rejectionTypedData } from '@jaw.id/agent/reserved';
 import { Account } from '@jaw.id/core';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { useState } from 'react';

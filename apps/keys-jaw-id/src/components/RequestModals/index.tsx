@@ -9,7 +9,7 @@ import { SiweModal } from '../SiweModal';
 import { isSiweMessage, getSiweOriginWarningFromMessage } from '@jaw.id/ui';
 import { Eip712Modal } from '../Eip712Modal';
 import { UnsupportedMethodModal } from '../UnsupportedMethodModal';
-import { reservedSigningRefusal } from '@jaw.id/agent';
+import { reservedSigningRefusal } from '@jaw.id/agent/reserved';
 import { PermissionModal, type PermissionRequestData } from '../PermissionModal';
 import { AddFundsModal } from '../AddFundsModal';
 import type { WalletSendCallsReturn, EthSendTransactionReturn } from '../../lib/tx-handler';
