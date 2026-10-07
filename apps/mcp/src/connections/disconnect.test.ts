@@ -75,7 +75,6 @@ describe('jaw_disconnect', () => {
     const result = await disconnect(tenant, deps);
 
     expect(result.isError).toBeFalsy();
-    // The quote simulates a one unit transfer, so the simulated payer can still pay its fee.
     expect(decodeFunctionData({ abi: erc20Abi, data: quoted[0][1].data }).args).toEqual([c.signer.address, 1n]);
     expect(sent).toHaveLength(1);
     const [revoke, sweep] = sent[0];

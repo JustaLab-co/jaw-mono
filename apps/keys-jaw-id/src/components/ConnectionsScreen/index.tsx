@@ -106,7 +106,6 @@ export function ConnectionsScreen({ mcpUrl }: { mcpUrl: string }) {
       setOnChain(ended.budgets.find((b) => b.state === 'revoke_on_chain')?.permissionId ?? null);
     });
 
-  // The next budget of the same connection still approved on chain, if any.
   const afterOnChain = (done: Hex, failed: string) =>
     run(async () => {
       setOnChain(null);
