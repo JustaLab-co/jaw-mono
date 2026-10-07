@@ -194,6 +194,36 @@ describe('approvals', () => {
     expect((await view(id)).status).toBe('pending');
   });
 
+  it('refuses a decision once the connection has expired', async () => {
+    const { c, id } = await requestSignature();
+    const v = await view(id);
+    const tenant = (await verifyBearer(c.access_token))?.extra?.tenant as { connectionId: string };
+    await getDb()
+      .update(connections)
+      .set({ expiresAt: new Date(Date.now() - 60_000) })
+      .where(eq(connections.id, tenant.connectionId));
+    const signature = await c.signer.signMessage({ message: v.approve.message });
+    expect(
+      (await decideFromPage(id, { verdict: 'approved', signature, previewHash: v.previewHash }, verifyLocally)).kind
+    ).toBe('connection_revoked');
+  });
+
+  it('does not record a decision when the connection is revoked while the signature is checked', async () => {
+    const { c, id } = await requestSignature();
+    const v = await view(id);
+    const tenant = (await verifyBearer(c.access_token))?.extra?.tenant as { connectionId: string };
+    const [row] = await getDb().select().from(connections).where(eq(connections.id, tenant.connectionId));
+    const revokingVerify = async (a: { chainId: number; address: Hex; message: string; signature: Hex }) => {
+      await revokeByGrant(row.grantId as string);
+      return verifyLocally(a);
+    };
+    const signature = await c.signer.signMessage({ message: v.approve.message });
+    expect(
+      (await decideFromPage(id, { verdict: 'approved', signature, previewHash: v.previewHash }, revokingVerify)).kind
+    ).toBe('connection_revoked');
+    expect((await view(id)).status).toBe('pending');
+  });
+
   it('refuses when the page rendered a different preview', async () => {
     const { c, id } = await requestSignature();
     const v = await view(id);

@@ -6,7 +6,8 @@ import {
   type ApprovalRequest,
   type ApprovalState,
 } from '@jaw.id/agent';
-import { and, count, eq, gt, sql } from 'drizzle-orm';
+import { and, count, eq, exists, gt, sql } from 'drizzle-orm';
+import { isLive } from '@/connections/rows';
 import type { Address, Hex } from 'viem';
 import { getDb } from '@/db/client';
 import { approvalRequests, connections } from '@/db/schema';
@@ -111,7 +112,13 @@ export async function recordDecision(request: ApprovalRequest): Promise<boolean>
       and(
         eq(approvalRequests.id, request.id),
         eq(approvalRequests.status, 'pending'),
-        gt(approvalRequests.expiresAt, sql`now()`)
+        gt(approvalRequests.expiresAt, sql`now()`),
+        exists(
+          getDb()
+            .select({ id: connections.id })
+            .from(connections)
+            .where(and(eq(connections.id, approvalRequests.connectionId), isLive()))
+        )
       )
     )
     .returning({ id: approvalRequests.id });
@@ -129,6 +136,6 @@ export async function connectionLive(id: ApprovalId): Promise<boolean> {
     .select({ id: connections.id })
     .from(approvalRequests)
     .innerJoin(connections, eq(connections.id, approvalRequests.connectionId))
-    .where(and(eq(approvalRequests.id, id), eq(connections.status, 'active')));
+    .where(and(eq(approvalRequests.id, id), isLive()));
   return row !== undefined;
 }

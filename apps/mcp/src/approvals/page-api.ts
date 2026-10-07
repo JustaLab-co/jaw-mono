@@ -60,6 +60,7 @@ export async function decideFromPage(
   };
   const result = decide(request, verdict as Verdict, evidence, now);
   if (!result.ok || !(await recordDecision(result.request))) {
+    if (!(await connectionLive(request.id))) return { kind: 'connection_revoked' };
     const current = await findById(id, new Date());
     return current ? { kind: 'not_pending', view: toPageView(current) } : { kind: 'not_found' };
   }

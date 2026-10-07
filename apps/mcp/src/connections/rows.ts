@@ -59,11 +59,14 @@ export async function activate(uid: string, ticketHash: string, grantId: string)
   return row;
 }
 
+/** The one definition of a usable connection: active and not past its end. */
+export const isLive = () => and(eq(connections.status, 'active'), gt(connections.expiresAt, sql`now()`));
+
 export async function findActive(id: string): Promise<ConnectionRow | undefined> {
   const [row] = await getDb()
     .select()
     .from(connections)
-    .where(and(eq(connections.id, id), eq(connections.status, 'active'), gt(connections.expiresAt, sql`now()`)));
+    .where(and(eq(connections.id, id), isLive()));
   return row;
 }
 
