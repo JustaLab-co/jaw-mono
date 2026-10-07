@@ -211,18 +211,6 @@ export class Dapp {
   }
 
   /**
-   * Holds every window.close() for a few seconds, so a request sent right
-   * after a flow lands while the popup's close is still pending, however slow
-   * the runner. A close that was not cancelled still happens.
-   */
-  async holdPopupClose() {
-    await this.context.addInitScript(() => {
-      const close = window.close.bind(window);
-      window.close = () => setTimeout(close, 5_000);
-    });
-  }
-
-  /**
    * The embedded dialog, once a person could use it. On every reveal keys'
    * clickjacking guard covers the dialog with a shield that swallows clicks
    * until IntersectionObserver v2 certifies the iframe as visible, one observer

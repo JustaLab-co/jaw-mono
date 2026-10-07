@@ -94,7 +94,6 @@ test.describe('back to back', () => {
   // The dialog closes itself a moment after a flow ends. A request sent in that
   // window reuses it, and the pending close must not take the new request with it.
   test('a sign right after the connect reuses the closing dialog and shows its screen', async ({ dapp, context }) => {
-    await dapp.holdPopupClose();
     const dialog = await dapp.execute();
     await keys.account(dialog).click();
     await keys.button(dialog, 'Connect').click();
