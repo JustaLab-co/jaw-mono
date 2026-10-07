@@ -648,6 +648,7 @@ async function awaitCall(
   for (;;) {
     let status: CallStatus;
     let timer: ReturnType<typeof setTimeout> | undefined;
+    const timedOut = new Error(`status check timed out after ${timeoutMs}ms`);
     try {
       // Race the status read against the remaining deadline: a hung bundler
       // socket would otherwise never let the loop reach the deadline check
@@ -658,13 +659,13 @@ async function awaitCall(
       // on screen (oclif does not force-exit on the success path).
       const remaining = Math.max(deadline - now(), 0);
       const expired = new Promise<never>((_, reject) => {
-        timer = setTimeout(() => reject(new Error(`status check timed out after ${timeoutMs}ms`)), remaining);
+        timer = setTimeout(() => reject(timedOut), remaining);
       });
       status = (await Promise.race([executor.request('wallet_getCallsStatus', batchId), expired])) as CallStatus;
     } catch (err) {
       return {
         ok: false,
-        code: 'chain_unavailable',
+        code: err === timedOut ? 'timed_out' : 'chain_unavailable',
         reason: `${labels.subject} status check failed: ${errorMessage(err)}`,
       };
     } finally {
@@ -675,7 +676,7 @@ async function awaitCall(
     if (final === 'ok') return { ok: true };
     if (final === 'failed') return { ok: false, reason: labels.onChainFailure };
     if (now() >= deadline) {
-      return { ok: false, reason: `${labels.subject} not confirmed after ${timeoutMs}ms` };
+      return { ok: false, code: 'timed_out', reason: `${labels.subject} not confirmed after ${timeoutMs}ms` };
     }
     await sleep(pollMs);
   }

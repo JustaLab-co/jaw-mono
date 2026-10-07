@@ -90,7 +90,7 @@ function fakeChain(
   return { ...wired, balanceReader: payer.balanceReader };
 }
 
-const instantly = { pollMs: 0, sleep: async () => undefined };
+const instantly = { pollMs: 0, sleep: async () => undefined, logger: { warn: () => undefined } };
 
 describe('ensurePayerFunds', () => {
   test('Given the payer balance covers the price, When ensuring funds, Then nothing runs on-chain', async () => {
@@ -272,9 +272,9 @@ describe('ensurePayerFunds', () => {
     const warn = vi.fn();
 
     const out = await ensurePayerFunds(requirement('2000000'), PAYER, executor, {
-      logger: { warn },
       balanceReader: async () => 0n,
       ...instantly,
+      logger: { warn },
     });
 
     expect(out.ok).toBe(true);
@@ -348,6 +348,19 @@ describe('ensurePayerFunds', () => {
     expect(out.batchId).toBe('0xbatch1');
   });
 
+  test('Given the status read hangs past the deadline, When the race ends it, Then the code is timed_out, not chain_unavailable', async () => {
+    const { executor, balanceReader } = fakeChain(0n, { status: () => new Promise(() => undefined) });
+
+    const out = await ensurePayerFunds(requirement('1000000'), PAYER, executor, {
+      balanceReader,
+      timeoutMs: 0,
+      ...instantly,
+    });
+
+    expect(out.code).toBe('timed_out');
+    expect(out.reason).toBe('top-up status check failed: status check timed out after 0ms');
+  });
+
   test('Given confirmation never arrives, When the timeout passes, Then it gives up with the batch id for reconciliation', async () => {
     const { executor, balanceReader } = fakeChain(0n, { status: async () => ({ status: 100 }) });
     let t = 0;
@@ -360,6 +373,7 @@ describe('ensurePayerFunds', () => {
     });
 
     expect(out.ok).toBe(false);
+    expect(out.code).toBe('timed_out');
     expect(out.reason).toContain('not confirmed after');
     expect(out.batchId).toBe('0xbatch1');
   });
@@ -678,8 +692,8 @@ describe('Permit2 approval for upto', () => {
     let call = 0;
 
     const outcome = await ensurePayerFunds(uptoRequirement('1000000'), PAYER, executor, {
-      logger: { warn },
       ...opts,
+      logger: { warn },
       balanceReader: async () => {
         if (++call === 1) return 1_100_000n;
         throw new Error('rpc down');
@@ -817,13 +831,13 @@ test('Given the post-refill read fails, When it proceeds anyway, Then it says th
   let call = 0;
 
   const out = await ensurePayerFunds(requirement('1000000'), PAYER, executor, {
-    logger: { warn },
     balanceReader: async () => {
       call += 1;
       if (call === 1) return 0n;
       throw new Error('rpc down');
     },
     ...instantly,
+    logger: { warn },
   });
 
   expect(out.ok).toBe(true);
