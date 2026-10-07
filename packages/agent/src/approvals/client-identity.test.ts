@@ -22,8 +22,35 @@ describe('clientIdentity', () => {
     });
   });
 
-  it.each(['JAW CLI', 'jaw', 'My Jaw Wallet', 'JAW​CLI'])('flags a CIMD client calling itself %j', (name) => {
-    const id = clientIdentity('https://evil.example/c.json', name);
-    expect(id).toMatchObject({ official: false, reservedName: true, host: 'evil.example' });
+  it.each([
+    'JAW CLI',
+    'jaw',
+    'My Jaw Wallet',
+    'JAW\u200BCLI',
+    'JAW\uFFFDCLI',
+    '\u0408AW',
+    '\u0458aw',
+    '\uFF2A\uFF21\uFF37',
+    'J.A.W',
+    'J-A-W',
+    'J A W',
+    'j\u03B1w',
+  ])('flags a CIMD client calling itself %j', (name) => {
+    expect(clientIdentity('https://evil.example/c.json', name)).toMatchObject({
+      official: false,
+      reservedName: true,
+      host: 'evil.example',
+    });
+  });
+
+  it.each(['Raj Awesome', 'Mijaw', 'Jawbone', 'Example Agent', 'J. Awesome'])('does not flag %j', (name) => {
+    expect(clientIdentity('https://agent.example/c.json', name).reservedName).toBe(false);
+  });
+
+  it('judges the raw name and shows it sanitized', () => {
+    const id = clientIdentity('https://evil.example/c.json', 'JAW\u200BCLI\u202E');
+    expect(id.reservedName).toBe(true);
+    expect(id.name).not.toContain('\u200B');
+    expect(id.name).not.toContain('\u202E');
   });
 });

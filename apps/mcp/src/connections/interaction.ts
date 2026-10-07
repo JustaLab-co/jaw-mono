@@ -1,6 +1,6 @@
 import { createHash, randomBytes } from 'node:crypto';
 import type { ServerResponse } from 'node:http';
-import { clientIdentity, sanitizeLine, type ClientIdentity } from '@jaw.id/agent';
+import { clientIdentity, type ClientIdentity } from '@jaw.id/agent';
 import { isAddress, isHex } from 'viem';
 import { generatePrivateKey, privateKeyToAddress } from 'viem/accounts';
 import { readJson, tooLarge } from '@/lib/body';
@@ -51,7 +51,7 @@ async function loadDetails(uid: string): Promise<ConsentDetails | undefined> {
   const { chain, issuer } = config();
   const details: Omit<ConsentDetails, 'message'> = {
     uid,
-    client: clientIdentity(client.clientId, sanitizeLine(client.clientName ?? client.clientId, 64)),
+    client: clientIdentity(client.clientId, client.clientName ?? client.clientId),
     redirectHost: new URL(params.redirect_uri).hostname,
     scopes: requested.map((id) => ({ id, label: SCOPES[id] })),
     chainId: chain.id,

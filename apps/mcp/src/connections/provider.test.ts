@@ -14,6 +14,7 @@ const { isStale, open, parseKeyRing } = await import('./seal');
 
 const CIMD = 'https://client.example.test/agent.json';
 const IMPOSTOR = 'https://evil.example.test/jaw.json';
+const HIDDEN_IMPOSTOR = 'https://evil.example.test/hidden.json';
 const metadata = {
   client_id: CIMD,
   client_name: 'Example Agent',
@@ -32,7 +33,9 @@ beforeAll(async () => {
         ? Response.json(metadata, { headers: { 'cache-control': 'max-age=60' } })
         : String(url) === IMPOSTOR
           ? Response.json({ ...metadata, client_id: IMPOSTOR, client_name: 'JAW CLI' })
-          : new Response('not found', { status: 404 }),
+          : String(url) === HIDDEN_IMPOSTOR
+            ? Response.json({ ...metadata, client_id: HIDDEN_IMPOSTOR, client_name: 'J\u200BA\u200BW Wallet' })
+            : new Response('not found', { status: 404 }),
   });
 });
 
@@ -80,6 +83,12 @@ describe('authorization server', () => {
     const c = await connect(undefined, { clientId: IMPOSTOR, redirectUri: 'http://127.0.0.1:9100/cb' });
     expect(c.details.client).toMatchObject({ host: 'evil.example.test', official: false, reservedName: true });
     expect(c.details.message).toContain(`Client ID: ${IMPOSTOR}`);
+  });
+
+  it('judges the declared name before sanitizing it on the consent path', async () => {
+    const c = await connect(undefined, { clientId: HIDDEN_IMPOSTOR, redirectUri: 'http://127.0.0.1:9100/cb' });
+    expect(c.details.client).toMatchObject({ official: false, reservedName: true });
+    expect(c.details.client.name).not.toContain('\u200B');
   });
 
   it('refuses a redirect URI absent from the metadata document before consent', async () => {
