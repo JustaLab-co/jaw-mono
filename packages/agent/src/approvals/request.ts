@@ -1,5 +1,14 @@
-import { hashMessage, keccak256, stringToHex, type Address, type Hex } from 'viem';
+import {
+  hashMessage,
+  hashTypedData,
+  keccak256,
+  stringToHex,
+  type Address,
+  type Hex,
+  type TypedDataDefinition,
+} from 'viem';
 import { clientIdentity, type ClientIdentity } from './client-identity.js';
+import { rejectionTypedData, RESERVED_PREFIX } from './reserved.js';
 
 /** 16 random bytes, base64url. Unguessable: it is the read capability for the approval page. */
 export type ApprovalId = string & { readonly __brand: 'ApprovalId' };
@@ -7,19 +16,18 @@ export type ApprovalId = string & { readonly __brand: 'ApprovalId' };
 export const APPROVAL_TTL_MS = 10 * 60_000;
 export const MAX_MESSAGE_CHARS = 4096;
 
-/** Messages starting with this are reserved for JAW's own statements, such as connection consent. */
-export const RESERVED_PREFIX = 'JAW ';
-
 /** What the agent asked for. */
 export type ApprovalBody = { kind: 'signature'; message: string };
 
 /** Exactly what the wallet signs. Derived from the body, never stored apart from it. */
-export type SignedPayload = { type: 'message'; message: string };
+export type SignedPayload =
+  | { type: 'message'; message: string }
+  | { type: 'typed_data'; typedData: TypedDataDefinition };
 
 export interface DecisionEvidence {
   /** keccak256 of the preview the page rendered. */
   previewHash: Hex;
-  /** EIP-191 hash of the payload the signature covers. */
+  /** EIP-191 or EIP-712 hash of the payload the signature covers. */
   payloadHash: Hex;
   /** Verified for the request's account on its chain. Carries the WebAuthn assertion. */
   signature: Hex;
@@ -126,13 +134,8 @@ export function decide(
   return { ok: true, request: { ...current, state: { status: verdict, evidence } } };
 }
 
-/** A reject is signed too, so only the account can move its own request. */
-export function rejectionMessage(id: ApprovalId): string {
-  return `${RESERVED_PREFIX}approval request ${id}: reject`;
-}
-
 export function signedPayload(request: ApprovalRequest, verdict: Verdict): SignedPayload {
-  if (verdict === 'rejected') return { type: 'message', message: rejectionMessage(request.id) };
+  if (verdict === 'rejected') return { type: 'typed_data', typedData: rejectionTypedData(request.chainId, request.id) };
   switch (request.body.kind) {
     case 'signature':
       return { type: 'message', message: request.body.message };
@@ -140,7 +143,7 @@ export function signedPayload(request: ApprovalRequest, verdict: Verdict): Signe
 }
 
 export function payloadHash(payload: SignedPayload): Hex {
-  return hashMessage(payload.message);
+  return payload.type === 'message' ? hashMessage(payload.message) : hashTypedData(payload.typedData);
 }
 
 // Every control, format (bidi, zero-width, tags), line and paragraph separator

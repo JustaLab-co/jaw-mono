@@ -7,6 +7,8 @@ import { sanitizeDisplayName, isSafeImageUrl } from '@jaw.id/ui';
 export interface UnsupportedMethodModalProps {
   origin: string;
   method: string;
+  /** Set when the method is supported but this request must never be signed here. */
+  reason?: string;
   appName?: string;
   appLogoUrl?: string;
   onClose: (error: Error, errorCode?: number) => void;
@@ -15,6 +17,7 @@ export interface UnsupportedMethodModalProps {
 export const UnsupportedMethodModal = ({
   origin,
   method,
+  reason,
   appName,
   appLogoUrl,
   onClose,
@@ -27,8 +30,9 @@ export const UnsupportedMethodModal = ({
   const handleClose = () => {
     if (!isClosing) {
       setIsClosing(true);
+      if (reason) onClose(new Error(reason), standardErrorCodes.provider.unauthorized);
       // Method not found (JSON-RPC code -32601)
-      onClose(new Error(`Method not supported: ${method}`), standardErrorCodes.rpc.methodNotFound);
+      else onClose(new Error(`Method not supported: ${method}`), standardErrorCodes.rpc.methodNotFound);
     }
   };
 
@@ -65,8 +69,12 @@ export const UnsupportedMethodModal = ({
 
         {/* Content */}
         <div className="mb-8 text-center">
-          <h3 className="text-foreground mb-2 text-xl font-bold">Unsupported Method</h3>
-          <p className="text-muted-foreground mb-4 text-sm">This wallet does not support the following method:</p>
+          <h3 className="text-foreground mb-2 text-xl font-bold">
+            {reason ? 'Request refused' : 'Unsupported Method'}
+          </h3>
+          <p className="text-muted-foreground mb-4 text-sm">
+            {reason ?? 'This wallet does not support the following method:'}
+          </p>
           <div className="bg-muted rounded-lg p-4">
             <code className="text-foreground break-all font-mono text-sm">{method}</code>
           </div>

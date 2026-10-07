@@ -8,6 +8,8 @@ import { SignatureModal } from '../SignatureModal';
 import { SiweModal } from '../SiweModal';
 import { isSiweMessage, getSiweOriginWarningFromMessage } from '@jaw.id/ui';
 import { Eip712Modal } from '../Eip712Modal';
+import { UnsupportedMethodModal } from '../UnsupportedMethodModal';
+import { reservedSigningRefusal } from '@jaw.id/agent';
 import { PermissionModal, type PermissionRequestData } from '../PermissionModal';
 import { AddFundsModal } from '../AddFundsModal';
 import type { WalletSendCallsReturn, EthSendTransactionReturn } from '../../lib/tx-handler';
@@ -115,6 +117,31 @@ export function RequestModals({
             console.error('❌ Failed to reject:', err);
             communicator.requestClose();
           }
+        }}
+      />
+    );
+  }
+
+  const reserved =
+    pendingRequest.type === SDKRequestType.SIGN_MESSAGE || pendingRequest.type === SDKRequestType.SIGN_TYPED_DATA
+      ? reservedSigningRefusal(pendingRequest.method, pendingRequest.params)
+      : undefined;
+  if (reserved) {
+    return (
+      <UnsupportedMethodModal
+        key={pendingRequest.requestId}
+        origin={pendingRequest.origin}
+        method={pendingRequest.method}
+        reason={reserved}
+        appName={pendingRequest.metadata?.appName}
+        appLogoUrl={pendingRequest.metadata?.appLogoUrl}
+        onClose={async (error, errorCode) => {
+          try {
+            await pendingRequest.onReject(error.message, errorCode);
+          } catch (err) {
+            console.error('Failed to refuse a reserved request:', err);
+          }
+          communicator.requestClose();
         }}
       />
     );

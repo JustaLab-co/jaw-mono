@@ -45,7 +45,7 @@ export async function decideFromPage(
   const valid = await verify({
     chainId: request.chainId,
     address: request.account,
-    message: payload.message,
+    payload,
     signature,
   }).catch((err: unknown) => {
     log('error', { msg: 'approval verification unavailable', error: err instanceof Error ? err.name : 'unknown' });

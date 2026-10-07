@@ -1,5 +1,6 @@
 'use client';
 
+import type { rejectionTypedData } from '@jaw.id/agent';
 import { Account } from '@jaw.id/core';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { useState } from 'react';
@@ -25,7 +26,7 @@ export interface ApprovalView {
   };
   previewHash: `0x${string}`;
   approve: { type: 'message'; message: string };
-  reject: { type: 'message'; message: string };
+  reject: { type: 'typed_data'; typedData: ReturnType<typeof rejectionTypedData> };
 }
 
 const WARNINGS: Record<string, string> = {
@@ -70,9 +71,11 @@ export function ApproveScreen({ id, mcpUrl }: { id: string; mcpUrl: string }) {
     setBusy(true);
     setError('');
     try {
-      const payload = verdict === 'approved' ? view.approve : view.reject;
       const signer = await Account.get({ chainId: view.chainId, apiKey });
-      const signature = await signer.signMessage(payload.message);
+      const signature =
+        verdict === 'approved'
+          ? await signer.signMessage(view.approve.message)
+          : await signer.signTypedData(view.reject.typedData);
       const res = await fetch(`${url}/decision`, {
         method: 'POST',
         headers: { 'content-type': 'application/json' },

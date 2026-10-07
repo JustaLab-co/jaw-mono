@@ -1,6 +1,6 @@
 import { createHash, randomBytes } from 'node:crypto';
 import type { ServerResponse } from 'node:http';
-import { clientIdentity, type ClientIdentity } from '@jaw.id/agent';
+import { clientIdentity, consentTypedData, type ClientIdentity } from '@jaw.id/agent';
 import { isAddress, isHex } from 'viem';
 import { readJson, tooLarge } from '@/lib/body';
 import { verifyOnChain, type VerifySignature } from '@/lib/chain';
@@ -20,21 +20,8 @@ export interface ConsentDetails {
   scopes: { id: Scope; label: string }[];
   chainId: number;
   expiresAt: string;
-  message: string;
-}
-
-export function consentMessage(d: Omit<ConsentDetails, 'message'>, issuerHost: string): string {
-  return [
-    'JAW connection consent',
-    `${issuerHost} asks to connect an app to your JAW account.`,
-    '',
-    `App: ${d.client.name}`,
-    `Client ID: ${d.client.clientId}`,
-    `Scopes: ${d.scopes.map((s) => s.id).join(' ') || 'none'}`,
-    `Chain ID: ${d.chainId}`,
-    `Interaction: ${d.uid}`,
-    `Expires: ${d.expiresAt}`,
-  ].join('\n');
+  /** What the user signs. Its domain is refused by every generic signing path. */
+  typedData: ReturnType<typeof consentTypedData>;
 }
 
 async function loadDetails(uid: string): Promise<ConsentDetails | undefined> {
@@ -47,15 +34,24 @@ async function loadDetails(uid: string): Promise<ConsentDetails | undefined> {
   if (!client || !params.redirect_uri) return undefined;
   const requested = (params.scope ?? '').split(' ').filter((s): s is Scope => s in SCOPES);
   const { chain, issuer } = config();
-  const details: Omit<ConsentDetails, 'message'> = {
+  const identity = clientIdentity(client.clientId, client.clientName ?? client.clientId);
+  const expiresAt = new Date(interaction.exp * 1000).toISOString();
+  return {
     uid,
-    client: clientIdentity(client.clientId, client.clientName ?? client.clientId),
+    client: identity,
     redirectHost: new URL(params.redirect_uri).hostname,
     scopes: requested.map((id) => ({ id, label: SCOPES[id] })),
     chainId: chain.id,
-    expiresAt: new Date(interaction.exp * 1000).toISOString(),
+    expiresAt,
+    typedData: consentTypedData(chain.id, {
+      issuer,
+      interaction: uid,
+      clientId: identity.clientId,
+      clientName: identity.name,
+      scopes: requested.join(' '),
+      expires: expiresAt,
+    }),
   };
-  return { ...details, message: consentMessage(details, new URL(issuer).host) };
 }
 
 // The provider scopes the interaction cookie to this path, so the browser
@@ -72,6 +68,8 @@ export async function details(_req: Request, uid: string): Promise<Response> {
 
 // Completion needs both the one-time ticket (this browser signed) and the
 // interaction cookie (this browser started), which defeats a phished consent link.
+// The signature itself can only come from the authorize page, because every
+// other signing path refuses the JAW domain.
 export async function consent(req: Request, uid: string, verify: VerifySignature = verifyOnChain): Promise<Response> {
   const parsed = await readJson(req);
   if (parsed === undefined) return tooLarge();
@@ -84,7 +82,7 @@ export async function consent(req: Request, uid: string, verify: VerifySignature
   const valid = await verify({
     chainId: found.chainId,
     address: body.address,
-    message: found.message,
+    payload: { type: 'typed_data', typedData: found.typedData },
     signature: body.signature,
   }).catch((err: unknown) => {
     log('error', { msg: 'consent verification unavailable', error: err instanceof Error ? err.name : 'unknown' });

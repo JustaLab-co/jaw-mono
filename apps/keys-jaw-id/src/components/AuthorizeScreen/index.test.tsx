@@ -3,11 +3,12 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { act, createElement } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
+import { consentTypedData } from '@jaw.id/agent';
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
-const signMessage = vi.fn(async (_message: string) => '0xsig');
-const get = vi.fn(async (_config: unknown) => ({ signMessage }));
+const signTypedData = vi.fn(async (_typedData: unknown) => '0xsig');
+const get = vi.fn(async (_config: unknown) => ({ signTypedData }));
 vi.mock('@jaw.id/core', () => ({ Account: { get: (config: unknown) => get(config) } }));
 vi.mock('../OnboardingSection', () => ({
   SignInScreen: ({ onComplete }: { onComplete: (a: unknown) => void }) =>
@@ -32,7 +33,14 @@ const DETAILS = {
   scopes: [{ id: 'wallet:read', label: 'See your account, balances and grants' }],
   chainId: 84532,
   expiresAt: '2026-10-06T12:10:00.000Z',
-  message: 'JAW connection consent\nApp: <img src=x onerror=alert(1)>\nInteraction: uid_1234567890\u202Etxt',
+  typedData: consentTypedData(84532, {
+    issuer: MCP,
+    interaction: 'uid_1234567890\u202Etxt',
+    clientId: 'https://evil.example/c.json',
+    clientName: '<img src=x onerror=alert(1)>',
+    scopes: 'wallet:read',
+    expires: '2026-10-06T12:10:00.000Z',
+  }),
 };
 
 let root: Root;
@@ -44,7 +52,7 @@ const assign = vi.fn();
 beforeEach(() => {
   posts.length = 0;
   details = DETAILS;
-  signMessage.mockClear();
+  signTypedData.mockClear();
   vi.stubGlobal(
     'fetch',
     vi.fn(async (url: string, init?: RequestInit) => {
@@ -81,18 +89,18 @@ async function render() {
 const click = (el: Element | null | undefined) => act(async () => (el as HTMLElement).click());
 
 describe('AuthorizeScreen', () => {
-  it('renders the stored consent as inert text and signs exactly that string', async () => {
+  it('renders every signed field as inert text and signs exactly that typed data', async () => {
     await render();
-    const shown = container.querySelector('[data-testid="consent-message"]')!.textContent;
-    expect(shown).toBe(DETAILS.message);
+    const shown = [...container.querySelectorAll('[data-testid="consent-message"] dd')].map((d) => d.textContent);
+    expect(shown).toEqual([...Object.values(DETAILS.typedData.message), '84532']);
     expect(container.querySelector('img')).toBeNull();
 
     await click(container.querySelector('#login'));
     await click([...container.querySelectorAll('button')].find((b) => b.textContent === 'Connect'));
 
     expect(get).toHaveBeenCalledWith({ chainId: 84532, apiKey: 'agent-key' });
-    expect(signMessage).toHaveBeenCalledTimes(1);
-    expect(signMessage.mock.calls[0][0]).toBe(shown);
+    expect(signTypedData).toHaveBeenCalledTimes(1);
+    expect(signTypedData.mock.calls[0][0]).toEqual(DETAILS.typedData);
     expect(posts).toEqual([
       { url: `${MCP}/interaction/uid_1234567890/consent`, body: { address: OWNER, signature: '0xsig' } },
     ]);

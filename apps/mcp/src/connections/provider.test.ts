@@ -158,7 +158,7 @@ describe('authorization server', () => {
   it('never lets a CIMD client named JAW CLI pass as the official client', async () => {
     const c = await connect(undefined, { clientId: IMPOSTOR, redirectUri: 'http://127.0.0.1:9100/cb' });
     expect(c.details.client).toMatchObject({ host: 'evil.example.test', official: false, reservedName: true });
-    expect(c.details.message).toContain(`Client ID: ${IMPOSTOR}`);
+    expect(c.details.typedData.message.clientId).toBe(IMPOSTOR);
   });
 
   it('judges the declared name before sanitizing it on the consent path', async () => {
@@ -276,7 +276,7 @@ describe('authorization server', () => {
     const signer = owner();
     const start = await startAuthorization(browser);
     const d = await getDetails(start.uid!);
-    const consented = await postConsent(start.uid!, signer.address, await signer.signMessage({ message: d.message }));
+    const consented = await postConsent(start.uid!, signer.address, await signer.signTypedData(d.typedData));
     const redirected = await follow(browser, ((await consented.json()) as { next: string }).next);
 
     const [row] = (

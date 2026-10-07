@@ -1,5 +1,6 @@
 import { createHash, randomBytes } from 'node:crypto';
-import { verifyMessage, type Hex } from 'viem';
+import type { SignedPayload } from '@jaw.id/agent';
+import { verifyMessage, verifyTypedData, type Address, type Hex } from 'viem';
 import { privateKeyToAccount, generatePrivateKey } from 'viem/accounts';
 import { abort, complete, consent, details, hop, type ConsentDetails } from './interaction';
 import { oauth } from './provider';
@@ -94,8 +95,18 @@ export async function startAuthorization(browser: Browser, a: Authorize = {}) {
 }
 
 export const owner = () => privateKeyToAccount(generatePrivateKey());
-export const verifyLocally = ({ address, message, signature }: { address: Hex; message: string; signature: Hex }) =>
-  verifyMessage({ address, message, signature });
+export const verifyLocally = ({
+  address,
+  payload,
+  signature,
+}: {
+  address: Address;
+  payload: SignedPayload;
+  signature: Hex;
+}) =>
+  payload.type === 'message'
+    ? verifyMessage({ address, message: payload.message, signature })
+    : verifyTypedData({ address, signature, ...payload.typedData });
 
 export async function getDetails(uid: string): Promise<ConsentDetails> {
   return (await details(new Request(`${ISSUER}/interaction/${uid}/details`), uid)).json();
@@ -147,7 +158,7 @@ export async function connect(signer = owner(), a: Authorize = {}, browser = new
   const start = await startAuthorization(browser, a);
   if (!start.uid) throw new Error('authorization did not reach consent');
   const d = await getDetails(start.uid);
-  const res = await postConsent(start.uid, signer.address, await signer.signMessage({ message: d.message }));
+  const res = await postConsent(start.uid, signer.address, await signer.signTypedData(d.typedData));
   const { next } = (await res.json()) as { next: string };
   const redirected = await follow(browser, next, a.redirectUri ?? REDIRECT);
   const issued = await token({

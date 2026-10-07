@@ -15,6 +15,7 @@ export default defineConfig({
       '@jaw.id/core/internal': resolve(__dirname, '../../packages/core/src/internal.ts'),
       '@jaw.id/core': resolve(__dirname, '../../packages/core/src/index.ts'),
       '@jaw.id/ui': resolve(__dirname, '../../packages/ui/src/index.ts'),
+      '@jaw.id/agent': resolve(__dirname, '../../packages/agent/src/index.ts'),
     },
   },
   test: {

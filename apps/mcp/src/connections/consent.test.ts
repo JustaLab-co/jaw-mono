@@ -30,7 +30,7 @@ async function pending() {
 }
 
 describe('consent hand-back', () => {
-  it('builds the message from the interaction: client, scopes, chain and interaction id', async () => {
+  it('builds the typed data from the interaction: client, scopes, chain, expiry and interaction id', async () => {
     const { uid, details } = await pending();
     expect(details.client).toEqual({
       clientId: 'jaw-cli',
@@ -40,26 +40,41 @@ describe('consent hand-back', () => {
       reservedName: false,
     });
     expect(details.scopes).toEqual([{ id: 'wallet:read', label: expect.any(String) }]);
-    expect(details.message.split('\n')[0]).toBe('JAW connection consent');
-    expect(details.message).toContain(`Interaction: ${uid}`);
-    expect(details.message).toContain('Scopes: wallet:read');
-    expect(details.message).toContain('Chain ID: 84532');
+    expect(details.typedData.domain).toEqual({ name: 'JAW', version: '1', chainId: 84532 });
+    expect(details.typedData.message).toEqual({
+      issuer: ISSUER,
+      interaction: uid,
+      clientId: 'jaw-cli',
+      clientName: 'JAW CLI',
+      scopes: 'wallet:read',
+      expires: details.expiresAt,
+    });
   });
 
   it('refuses a signature made for another interaction', async () => {
     const a = await pending();
     const b = await pending();
     const signer = owner();
-    const res = await postConsent(b.uid, signer.address, await signer.signMessage({ message: a.details.message }));
+    const res = await postConsent(b.uid, signer.address, await signer.signTypedData(a.details.typedData));
     expect(res.status).toBe(401);
     expect(await getDb().select().from(connections)).not.toContainEqual(
       expect.objectContaining({ interactionUid: b.uid })
     );
   });
 
+  it('refuses a plain message signature over the consent terms, as a phishing page would collect', async () => {
+    const { uid, details } = await pending();
+    const victim = owner();
+    const text = Object.entries(details.typedData.message)
+      .map(([k, v]) => `${k}: ${v}`)
+      .join('\n');
+    const res = await postConsent(uid, victim.address, await victim.signMessage({ message: text }));
+    expect(res.status).toBe(401);
+  });
+
   it('refuses a signature from an account other than the one claimed', async () => {
     const { uid, details } = await pending();
-    const res = await postConsent(uid, owner().address, await owner().signMessage({ message: details.message }));
+    const res = await postConsent(uid, owner().address, await owner().signTypedData(details.typedData));
     expect(res.status).toBe(401);
   });
 
@@ -71,7 +86,7 @@ describe('consent hand-back', () => {
         method: 'POST',
         body: JSON.stringify({
           address: signer.address,
-          signature: await signer.signMessage({ message: details.message }),
+          signature: await signer.signTypedData(details.typedData),
         }),
       }),
       uid,
@@ -86,7 +101,7 @@ describe('consent hand-back', () => {
   it('accepts one consent per interaction', async () => {
     const { uid, details } = await pending();
     const signer = owner();
-    const signature = await signer.signMessage({ message: details.message });
+    const signature = await signer.signTypedData(details.typedData);
     expect((await postConsent(uid, signer.address, signature)).status).toBe(200);
     expect((await postConsent(uid, signer.address, signature)).status).toBe(409);
   });
@@ -94,11 +109,7 @@ describe('consent hand-back', () => {
   it('needs both the ticket and the browser that started the authorization', async () => {
     const attacker = await pending();
     const victim = owner();
-    const res = await postConsent(
-      attacker.uid,
-      victim.address,
-      await victim.signMessage({ message: attacker.details.message })
-    );
+    const res = await postConsent(attacker.uid, victim.address, await victim.signTypedData(attacker.details.typedData));
     const { next } = (await res.json()) as { next: string };
 
     const victimBrowser = new Browser();
@@ -112,7 +123,7 @@ describe('consent hand-back', () => {
   it('completes once; the ticket is spent', async () => {
     const { browser, uid, details } = await pending();
     const signer = owner();
-    const res = await postConsent(uid, signer.address, await signer.signMessage({ message: details.message }));
+    const res = await postConsent(uid, signer.address, await signer.signTypedData(details.typedData));
     const { next } = (await res.json()) as { next: string };
     expect((await follow(browser, next)).searchParams.get('code')).toBeTruthy();
     expect((await new Browser().get(next)).status).toBe(400);
@@ -121,7 +132,7 @@ describe('consent hand-back', () => {
   it('does not leave a connection active when the hand-back to the client fails', async () => {
     const { browser, uid, details } = await pending();
     const signer = owner();
-    const res = await postConsent(uid, signer.address, await signer.signMessage({ message: details.message }));
+    const res = await postConsent(uid, signer.address, await signer.signTypedData(details.typedData));
     const { next } = (await res.json()) as { next: string };
     const spy = vi.spyOn(provider(), 'interactionFinished').mockRejectedValueOnce(new Error('hand-back failed'));
     const failed = await browser.get(next).catch(() => undefined);

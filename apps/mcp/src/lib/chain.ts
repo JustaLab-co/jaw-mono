@@ -1,10 +1,11 @@
+import type { SignedPayload } from '@jaw.id/agent';
 import { createPublicClient, http, type Address, type Hex, type PublicClient } from 'viem';
 import { config, SUPPORTED_CHAINS } from '@/connections/config';
 
 export type VerifySignature = (a: {
   chainId: number;
   address: Address;
-  message: string;
+  payload: SignedPayload;
   signature: Hex;
 }) => Promise<boolean>;
 
@@ -16,5 +17,9 @@ export function publicClientFor(chainId: number): PublicClient {
   return createPublicClient({ chain, transport: http(chain.id === configured.id ? rpcUrl : undefined) });
 }
 
-export const verifyOnChain: VerifySignature = async ({ chainId, address, message, signature }) =>
-  publicClientFor(chainId).verifyMessage({ address, message, signature });
+export const verifyOnChain: VerifySignature = async ({ chainId, address, payload, signature }) => {
+  const client = publicClientFor(chainId);
+  return payload.type === 'message'
+    ? client.verifyMessage({ address, message: payload.message, signature })
+    : client.verifyTypedData({ address, signature, ...payload.typedData });
+};

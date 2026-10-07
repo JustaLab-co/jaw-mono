@@ -3,11 +3,13 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { act, createElement } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
+import { rejectionTypedData } from '@jaw.id/agent';
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
 const signMessage = vi.fn(async (_message: string) => '0xsig');
-const get = vi.fn(async (_config: unknown) => ({ signMessage }));
+const signTypedData = vi.fn(async (_typedData: unknown) => '0xsig');
+const get = vi.fn(async (_config: unknown) => ({ signMessage, signTypedData }));
 let signedInAs = '';
 vi.mock('@jaw.id/core', () => ({ Account: { get: (config: unknown) => get(config) } }));
 vi.mock('../OnboardingSection', () => ({
@@ -40,7 +42,10 @@ const VIEW = {
   },
   previewHash: `0x${'ab'.repeat(32)}`,
   approve: { type: 'message', message: STORED },
-  reject: { type: 'message', message: 'JAW approval request q3L0x7mJ2c1VfN8aYw4p9A: reject' },
+  reject: {
+    type: 'typed_data',
+    typedData: rejectionTypedData(84532, 'q3L0x7mJ2c1VfN8aYw4p9A'),
+  },
 };
 
 let root: Root;
@@ -53,6 +58,7 @@ beforeEach(() => {
   view = VIEW;
   posts = [];
   signMessage.mockClear();
+  signTypedData.mockClear();
   signedInAs = OWNER;
   vi.stubGlobal(
     'fetch',
@@ -110,11 +116,12 @@ describe('ApproveScreen', () => {
     expect(container.textContent).toContain('Approved.');
   });
 
-  it('signs the stored rejection statement to reject', async () => {
+  it('signs the stored rejection typed data to reject', async () => {
     await render();
     await click(container.querySelector('#login'));
     await click(button('Reject'));
-    expect(signMessage.mock.calls[0][0]).toBe(VIEW.reject.message);
+    expect(signMessage).not.toHaveBeenCalled();
+    expect(signTypedData.mock.calls[0][0]).toEqual(VIEW.reject.typedData);
     expect(posts).toEqual([{ verdict: 'rejected', signature: '0xsig', previewHash: VIEW.previewHash }]);
   });
 

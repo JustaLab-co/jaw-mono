@@ -1,5 +1,6 @@
 'use client';
 
+import type { consentTypedData } from '@jaw.id/agent';
 import { Account } from '@jaw.id/core';
 import { useQuery } from '@tanstack/react-query';
 import { useState } from 'react';
@@ -15,8 +16,17 @@ export interface ConsentDetails {
   scopes: { id: string; label: string }[];
   chainId: number;
   expiresAt: string;
-  message: string;
+  typedData: ReturnType<typeof consentTypedData>;
 }
+
+const FIELDS: Record<string, string> = {
+  clientName: 'App',
+  clientId: 'Client ID',
+  scopes: 'Scopes',
+  issuer: 'Server',
+  interaction: 'Interaction',
+  expires: 'Expires',
+};
 
 const LOOPBACK = new Set(['127.0.0.1', 'localhost', '[::1]']);
 
@@ -45,7 +55,7 @@ export function AuthorizeScreen({ uid, mcpUrl }: { uid: string; mcpUrl: string }
     setStatus('signing');
     try {
       const signer = await Account.get({ chainId: details.chainId, apiKey });
-      const signature = await signer.signMessage(details.message);
+      const signature = await signer.signTypedData(details.typedData);
       const res = await fetch(`${base}/consent`, {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
@@ -76,9 +86,16 @@ export function AuthorizeScreen({ uid, mcpUrl }: { uid: string; mcpUrl: string }
       </ul>
       <div>
         <p className="text-muted-foreground mb-1 text-xs">You will sign</p>
-        <pre data-testid="consent-message" className="bg-muted whitespace-pre-wrap break-all rounded p-3 text-xs">
-          {details.message}
-        </pre>
+        <dl data-testid="consent-message" className="bg-muted grid grid-cols-[auto_1fr] gap-x-3 rounded p-3 text-xs">
+          {details.typedData.types.Consent.map(({ name }) => (
+            <div key={name} className="contents">
+              <dt className="text-muted-foreground">{FIELDS[name] ?? name}</dt>
+              <dd className="break-all font-mono">{details.typedData.message[name]}</dd>
+            </div>
+          ))}
+          <dt className="text-muted-foreground">Chain ID</dt>
+          <dd className="font-mono">{details.typedData.domain.chainId}</dd>
+        </dl>
       </div>
       {account ? (
         <>

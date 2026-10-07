@@ -1,4 +1,4 @@
-import { APPROVAL_TTL_MS } from '@jaw.id/agent';
+import { APPROVAL_TTL_MS, type SignedPayload } from '@jaw.id/agent';
 import { verifyMessage, type Hex } from 'viem';
 import { beforeAll, describe, expect, it } from 'vitest';
 import { useTestDb } from '@/db/test-db';
@@ -26,6 +26,14 @@ async function view(id: string) {
   return read.view;
 }
 
+type Signer = ReturnType<typeof owner>;
+const sign = (signer: Signer, p: SignedPayload) =>
+  p.type === 'message' ? signer.signMessage({ message: p.message }) : signer.signTypedData(p.typedData);
+const messageOf = (p: SignedPayload) => {
+  if (p.type !== 'message') throw new Error('not a message payload');
+  return p.message;
+};
+
 describe('approvals', () => {
   it('round trip: the owner signs the stored message and status returns a signature that verifies', async () => {
     const { c, result, id } = await requestSignature();
@@ -37,8 +45,8 @@ describe('approvals', () => {
     });
 
     const v = await view(id);
-    expect(v.approve.message).toBe('Sign in to example.com\nNonce: 8f2c');
-    const signature = await c.signer.signMessage({ message: v.approve.message });
+    expect(messageOf(v.approve)).toBe('Sign in to example.com\nNonce: 8f2c');
+    const signature = await sign(c.signer, v.approve);
     const decided = await decideFromPage(
       id,
       { verdict: 'approved', signature, previewHash: v.previewHash },
@@ -51,7 +59,7 @@ describe('approvals', () => {
     expect(
       await verifyMessage({
         address: c.signer.address,
-        message: v.approve.message,
+        message: messageOf(v.approve),
         signature: status.structuredContent.signature as Hex,
       })
     ).toBe(true);
@@ -61,11 +69,11 @@ describe('approvals', () => {
     const { c, id } = await requestSignature();
     const v = await view(id);
     const seen: number[] = [];
-    const spy = async (a: { chainId: number; address: Hex; message: string; signature: Hex }) => {
+    const spy = async (a: Parameters<typeof verifyLocally>[0] & { chainId: number }) => {
       seen.push(a.chainId);
       return verifyLocally(a);
     };
-    const signature = await c.signer.signMessage({ message: v.approve.message });
+    const signature = await sign(c.signer, v.approve);
     await decideFromPage(id, { verdict: 'approved', signature, previewHash: v.previewHash }, spy);
     expect(seen).toEqual([v.chainId]);
   });
@@ -75,14 +83,14 @@ describe('approvals', () => {
     const v = await view(id);
     const approve = {
       verdict: 'approved',
-      signature: await c.signer.signMessage({ message: v.approve.message }),
+      signature: await sign(c.signer, v.approve),
       previewHash: v.previewHash,
     };
     expect((await decideFromPage(id, approve, verifyLocally)).kind).toBe('ok');
     expect((await decideFromPage(id, approve, verifyLocally)).kind).toBe('not_pending');
     const reject = {
       verdict: 'rejected',
-      signature: await c.signer.signMessage({ message: v.reject.message }),
+      signature: await sign(c.signer, v.reject),
       previewHash: v.previewHash,
     };
     expect(await decideFromPage(id, reject, verifyLocally)).toMatchObject({
@@ -95,11 +103,11 @@ describe('approvals', () => {
     const { id } = await requestSignature();
     const v = await view(id);
     const stranger = owner();
-    for (const [verdict, message] of [
-      ['approved', v.approve.message],
-      ['rejected', v.reject.message],
+    for (const [verdict, payload] of [
+      ['approved', v.approve],
+      ['rejected', v.reject],
     ] as const) {
-      const signature = await stranger.signMessage({ message });
+      const signature = await sign(stranger, payload);
       expect((await decideFromPage(id, { verdict, signature, previewHash: v.previewHash }, verifyLocally)).kind).toBe(
         'bad_signature'
       );
@@ -110,7 +118,7 @@ describe('approvals', () => {
   it('refuses a signature over anything other than the stored payload', async () => {
     const { c, id } = await requestSignature();
     const v = await view(id);
-    const signature = await c.signer.signMessage({ message: `${v.approve.message} ` });
+    const signature = await c.signer.signMessage({ message: `${messageOf(v.approve)} ` });
     expect(
       (await decideFromPage(id, { verdict: 'approved', signature, previewHash: v.previewHash }, verifyLocally)).kind
     ).toBe('bad_signature');
@@ -119,7 +127,7 @@ describe('approvals', () => {
   it('records a reject signed by the account', async () => {
     const { c, id } = await requestSignature();
     const v = await view(id);
-    const signature = await c.signer.signMessage({ message: v.reject.message });
+    const signature = await sign(c.signer, v.reject);
     expect(
       await decideFromPage(id, { verdict: 'rejected', signature, previewHash: v.previewHash }, verifyLocally)
     ).toMatchObject({
@@ -134,7 +142,7 @@ describe('approvals', () => {
   it('refuses a decision after expiry and reports the request expired', async () => {
     const { c, id } = await requestSignature();
     const v = await view(id);
-    const signature = await c.signer.signMessage({ message: v.approve.message });
+    const signature = await sign(c.signer, v.approve);
     const late = new Date(Date.now() + APPROVAL_TTL_MS + 1000);
     expect(
       await decideFromPage(id, { verdict: 'approved', signature, previewHash: v.previewHash }, verifyLocally, late)
@@ -147,7 +155,7 @@ describe('approvals', () => {
   it('reports an unreachable chain as unavailable and leaves the request pending', async () => {
     const { c, id } = await requestSignature();
     const v = await view(id);
-    const signature = await c.signer.signMessage({ message: v.approve.message });
+    const signature = await sign(c.signer, v.approve);
     const down = async () => {
       throw new Error('rpc down');
     };
@@ -187,7 +195,7 @@ describe('approvals', () => {
     const tenant = (await verifyBearer(c.access_token))?.extra?.tenant as { connectionId: string };
     const [row] = await getDb().select().from(connections).where(eq(connections.id, tenant.connectionId));
     await revokeByGrant(row.grantId as string);
-    const signature = await c.signer.signMessage({ message: v.approve.message });
+    const signature = await sign(c.signer, v.approve);
     expect(
       (await decideFromPage(id, { verdict: 'approved', signature, previewHash: v.previewHash }, verifyLocally)).kind
     ).toBe('connection_revoked');
@@ -202,7 +210,7 @@ describe('approvals', () => {
       .update(connections)
       .set({ expiresAt: new Date(Date.now() - 60_000) })
       .where(eq(connections.id, tenant.connectionId));
-    const signature = await c.signer.signMessage({ message: v.approve.message });
+    const signature = await sign(c.signer, v.approve);
     expect(
       (await decideFromPage(id, { verdict: 'approved', signature, previewHash: v.previewHash }, verifyLocally)).kind
     ).toBe('connection_revoked');
@@ -213,11 +221,11 @@ describe('approvals', () => {
     const v = await view(id);
     const tenant = (await verifyBearer(c.access_token))?.extra?.tenant as { connectionId: string };
     const [row] = await getDb().select().from(connections).where(eq(connections.id, tenant.connectionId));
-    const revokingVerify = async (a: { chainId: number; address: Hex; message: string; signature: Hex }) => {
+    const revokingVerify = async (a: Parameters<typeof verifyLocally>[0]) => {
       await revokeByGrant(row.grantId as string);
       return verifyLocally(a);
     };
-    const signature = await c.signer.signMessage({ message: v.approve.message });
+    const signature = await sign(c.signer, v.approve);
     expect(
       (await decideFromPage(id, { verdict: 'approved', signature, previewHash: v.previewHash }, revokingVerify)).kind
     ).toBe('connection_revoked');
@@ -228,7 +236,7 @@ describe('approvals', () => {
     const { c, id } = await requestSignature();
     await getDb().update(approvalRequests).set({ chainId: 1 }).where(eq(approvalRequests.id, id));
     const v = await view(id);
-    const signature = await c.signer.signMessage({ message: v.approve.message });
+    const signature = await sign(c.signer, v.approve);
     const outcome = await decideFromPage(id, { verdict: 'approved', signature, previewHash: v.previewHash });
     expect(outcome.kind).toBe('unsupported_chain');
     expect(outcomeResponse(outcome).status).toBe(422);
@@ -238,7 +246,7 @@ describe('approvals', () => {
   it('refuses when the page rendered a different preview', async () => {
     const { c, id } = await requestSignature();
     const v = await view(id);
-    const signature = await c.signer.signMessage({ message: v.approve.message });
+    const signature = await sign(c.signer, v.approve);
     const stale = `0x${'00'.repeat(32)}`;
     expect((await decideFromPage(id, { verdict: 'approved', signature, previewHash: stale }, verifyLocally)).kind).toBe(
       'preview_changed'
