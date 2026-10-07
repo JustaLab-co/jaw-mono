@@ -1,4 +1,5 @@
-import { hashMessage } from 'viem';
+import { encodeFunctionData, erc20Abi, hashMessage, hashTypedData, maxUint256, type Hex } from 'viem';
+import { createSiweMessage } from 'viem/siwe';
 import { rejectionTypedData, reservedSigningRefusal } from './reserved.js';
 import type { X402PaymentRequirement } from '../x402/types.js';
 import { describe, expect, it } from 'vitest';
@@ -23,6 +24,12 @@ import {
   type ApprovalRequest,
   type DecisionEvidence,
   type Preview,
+  messageBody,
+  typedDataRefusal,
+  executedAsSigned,
+  type ApprovalBody,
+  type Call,
+  type DescribeCall,
 } from './request.js';
 import type { GrantedPermission } from '../session/session-config.js';
 
@@ -45,6 +52,9 @@ const request = (message = 'Sign in to example.com\nNonce: 8f2c'): ApprovalReque
     },
     T0
   );
+
+// The server's decoder lives in apps/mcp; here every call shows as raw calldata.
+const rawCall: DescribeCall = (call) => ({ ...call, warnings: [{ code: 'unknown_function' }] });
 
 const evidence = (at = later(1000)): DecisionEvidence => ({
   previewHash: '0x01',
@@ -132,7 +142,7 @@ describe('who asked', () => {
       },
       T0
     );
-    expect(previewOf(r).requester).toEqual({
+    expect(previewOf(r, rawCall).requester).toEqual({
       clientId: 'https://evil.example/client.json',
       name: 'JAW CLI',
       host: 'evil.example',
@@ -156,7 +166,7 @@ describe('preview of a hostile message', () => {
   ].join('\n');
 
   it('shows hidden characters as code points and flags markup and address lines', () => {
-    const preview = textOf(previewOf(request(hostile)));
+    const preview = textOf(previewOf(request(hostile), rawCall));
     expect(preview.text).toContain('Amount: 1 USDC⟦U+202E⟧0001⟦U+202C⟧');
     expect(preview.text).toContain('zero⟦U+200B⟧width and bell⟦U+0007⟧, soft⟦U+00AD⟧hyphen and tag⟦U+E0041⟧');
     expect(preview.text).toContain('<img src=x onerror=alert(1)>');
@@ -165,20 +175,20 @@ describe('preview of a hostile message', () => {
   });
 
   it('shows variation selectors and the combining grapheme joiner', () => {
-    const preview = textOf(previewOf(request('a\uFE0Fb\u034Fc\u{E0100}d\u180Be')));
+    const preview = textOf(previewOf(request('a\uFE0Fb\u034Fc\u{E0100}d\u180Be'), rawCall));
     expect(preview.text).toBe('a⟦U+FE0F⟧b⟦U+034F⟧c⟦U+E0100⟧d⟦U+180B⟧e');
     expect(preview.warnings).toContain('hidden_characters');
   });
 
   it('leaves the signed payload untouched by the preview', () => {
     const r = request(hostile);
-    expect(toPageView(r).approve).toEqual({ type: 'message', message: hostile });
+    expect(toPageView(r, rawCall).approve).toEqual({ type: 'message', message: hostile });
   });
 
   it('hashes the preview stably and changes the hash when the text changes', () => {
-    const a = toPageView(request(hostile));
-    expect(a.previewHash).toBe(previewHash(previewOf(request(hostile))));
-    expect(toPageView(request(`${hostile}!`)).previewHash).not.toBe(a.previewHash);
+    const a = toPageView(request(hostile), rawCall);
+    expect(a.previewHash).toBe(previewHash(previewOf(request(hostile), rawCall)));
+    expect(toPageView(request(`${hostile}!`), rawCall).previewHash).not.toBe(a.previewHash);
     expect(a.previewHash).toMatch(/^0x[0-9a-f]{64}$/);
   });
 });
@@ -209,7 +219,7 @@ describe('budget', () => {
   });
 
   it('previews the daily allowance, the token and the session key as spender', () => {
-    expect(previewOf(budget())).toMatchObject({
+    expect(previewOf(budget(), rawCall)).toMatchObject({
       kind: 'budget',
       account: ACCOUNT,
       spender: SESSION,
@@ -222,7 +232,7 @@ describe('budget', () => {
 
   it('throws on a budget whose spender is not the connection session key', () => {
     const other = budget('0x0000000000000000000000000000000000000bad');
-    expect(() => previewOf(other)).toThrow(/session key/);
+    expect(() => previewOf(other, rawCall)).toThrow(/session key/);
     expect(() => signedPayload(other, 'approved')).toThrow(/session key/);
   });
 
@@ -360,7 +370,7 @@ describe('a payment approval', () => {
     const withQuery = open(OPTION, `${RESOURCE}?api_key=SECRET#frag`);
     const approve = signedPayload(r, 'approved');
     if (approve.type !== 'typed_data') throw new Error('setup');
-    const preview = previewOf(r);
+    const preview = previewOf(r, rawCall);
     expect(preview).toEqual({
       kind: 'payment',
       requester: expect.objectContaining({ clientId: 'https://agent.example/client.json' }),
@@ -374,12 +384,12 @@ describe('a payment approval', () => {
       warnings: [],
       validUntil: new Date(Number(r.body.terms.validBefore) * 1000).toISOString(),
     });
-    expect(JSON.stringify(toPageView(withQuery as ApprovalRequest))).not.toContain('SECRET');
+    expect(JSON.stringify(toPageView(withQuery as ApprovalRequest, rawCall))).not.toContain('SECRET');
   });
 
   it('shows the resource as the url is sent: hidden characters percent-encoded, a lookalike host in punycode', () => {
     const r = open(OPTION, 'https://sеller.example/re\u202Eport');
-    expect(previewOf(r as ApprovalRequest)).toMatchObject({
+    expect(previewOf(r as ApprovalRequest, rawCall)).toMatchObject({
       resource: 'https://xn--sller-zwe.example/re%E2%80%AEport',
       warnings: [],
     });
@@ -405,6 +415,226 @@ describe('a payment approval', () => {
 
     it('refuses the same option from another resource', () => {
       expect(stillOffered(terms(), { resource: `${RESOURCE}/v2`, accepts: [OPTION] })).toBeUndefined();
+    });
+  });
+});
+
+const opened = (body: ApprovalBody, account = ACCOUNT): ApprovalRequest =>
+  openRequest(
+    {
+      id: ID,
+      account,
+      chainId: 84532,
+      requester: { name: 'Example Agent', clientId: 'https://agent.example/client.json' },
+      sessionAddress: SESSION,
+      body,
+    },
+    T0
+  );
+
+const GAS = { estimate: '21000', context: { token: USDC, gas: '90000' } };
+const RECIPIENT = '0x2222222222222222222222222222222222222222';
+const PAYMASTER = '0x888888888888Ec68A58AB8094Cc1AD20Ba3D2402';
+const transferData = encodeFunctionData({ abi: erc20Abi, functionName: 'transfer', args: [RECIPIENT, 10_000n] });
+
+describe('a transfer', () => {
+  const transfer = () =>
+    opened({ kind: 'transfer', to: RECIPIENT, name: 'alice.eth', token: USDC, amount: '10000', gas: GAS });
+
+  it('sends one USDC transfer from the account through wallet_sendCalls, and rejects under the JAW domain', () => {
+    expect(signedPayload(transfer(), 'approved')).toEqual({
+      type: 'calls',
+      calls: [{ to: USDC, value: '0x0', data: transferData }],
+      chainId: '0x14a34',
+    });
+    expect(signedPayload(transfer(), 'rejected')).toEqual({
+      type: 'typed_data',
+      typedData: rejectionTypedData(84532, ID),
+    });
+  });
+
+  it('previews the name beside the address, the amount, and the gas in USDC', () => {
+    expect(previewOf(transfer(), rawCall)).toMatchObject({
+      kind: 'transfer',
+      to: RECIPIENT,
+      name: 'alice.eth',
+      token: USDC,
+      amount: '10000',
+      gas: { token: USDC, estimate: '21000', max: '90000' },
+    });
+  });
+
+  it('hands the page the paymaster context the quote was built with', () => {
+    expect(toPageView(transfer(), rawCall).paymaster).toEqual({ token: USDC, gas: '90000' });
+  });
+
+  it('hashes the calls payload stably and changes the hash with the bytes', () => {
+    const a = payloadHash(signedPayload(transfer(), 'approved'));
+    expect(a).toBe(payloadHash(signedPayload(transfer(), 'approved')));
+    const other = opened({ kind: 'transfer', to: RECIPIENT, token: USDC, amount: '10001', gas: GAS });
+    expect(payloadHash(signedPayload(other, 'approved'))).not.toBe(a);
+  });
+});
+
+describe('calls', () => {
+  const CALLS: Call[] = [
+    { to: USDC, value: '0x0', data: transferData },
+    { to: RECIPIENT, value: '0x1', data: '0xdeadbeef' },
+  ];
+  const calls = (list = CALLS) => opened({ kind: 'calls', calls: list, gas: GAS });
+
+  it('sends the stored calls unchanged', () => {
+    expect(signedPayload(calls(), 'approved')).toEqual({ type: 'calls', calls: CALLS, chainId: '0x14a34' });
+  });
+
+  it('previews each call through the server decoder, with the gas in USDC', () => {
+    const named: DescribeCall = (call) => ({ ...call, function: `seen ${call.data.slice(0, 10)}`, warnings: [] });
+    expect(previewOf(calls(), named)).toMatchObject({
+      kind: 'calls',
+      calls: [
+        { to: USDC, function: 'seen 0xa9059cbb' },
+        { to: RECIPIENT, value: '0x1', data: '0xdeadbeef', function: 'seen 0xdeadbeef' },
+      ],
+      gas: { token: USDC, estimate: '21000', max: '90000' },
+    });
+  });
+
+  it('changes the preview hash when one stored byte changes', () => {
+    const swapped = [CALLS[0], { ...CALLS[1], data: '0xdeadbeee' as Hex }];
+    expect(toPageView(calls(swapped), rawCall).previewHash).not.toBe(toPageView(calls(), rawCall).previewHash);
+  });
+
+  describe('what ran on chain', () => {
+    const executed = (list: Call[]) => list.map((c) => ({ to: c.to, value: BigInt(c.value), data: c.data }));
+    const approve = (amount: bigint) => ({
+      to: USDC,
+      value: '0x0' as Hex,
+      data: encodeFunctionData({ abi: erc20Abi, functionName: 'approve', args: [PAYMASTER, amount] }),
+    });
+
+    it('matches the stored calls byte for byte, with or without the paymaster approval in front', () => {
+      expect(executedAsSigned(CALLS, GAS, executed(CALLS))).toBe(true);
+      expect(executedAsSigned(CALLS, GAS, executed([approve(90_000n), ...CALLS]))).toBe(true);
+    });
+
+    it('refuses any other calls', () => {
+      expect(executedAsSigned(CALLS, GAS, executed([CALLS[0]]))).toBe(false);
+      expect(executedAsSigned(CALLS, GAS, executed([...CALLS, CALLS[0]]))).toBe(false);
+      expect(executedAsSigned(CALLS, GAS, executed([CALLS[0], { ...CALLS[1], data: '0xdeadbeee' }]))).toBe(false);
+      expect(executedAsSigned(CALLS, GAS, executed([CALLS[0], { ...CALLS[1], value: '0x2' }]))).toBe(false);
+      expect(executedAsSigned(CALLS, GAS, executed([approve(maxUint256), ...CALLS]))).toBe(false);
+    });
+  });
+});
+
+describe('typed data', () => {
+  const PERMIT = {
+    domain: { name: 'USD Coin', version: '2', chainId: 84532, verifyingContract: USDC },
+    types: {
+      Permit: [
+        { name: 'owner', type: 'address' },
+        { name: 'spender', type: 'address' },
+        { name: 'value', type: 'uint256' },
+        { name: 'nonce', type: 'uint256' },
+        { name: 'deadline', type: 'uint256' },
+      ],
+    },
+    primaryType: 'Permit',
+    message: { owner: ACCOUNT, spender: RECIPIENT, value: '1000000', nonce: '0', deadline: '1790000000' },
+  } as const;
+  const MAIL = {
+    domain: { name: 'Mail‮', chainId: 84532 },
+    types: { Mail: [{ name: 'contents', type: 'string' }] },
+    primaryType: 'Mail',
+    message: { contents: 'hello' },
+  } as const;
+
+  it('refuses the JAW domain, typed data viem rejects, and text Postgres cannot store', () => {
+    expect(typedDataRefusal(rejectionTypedData(84532, ID), ACCOUNT)).toBe('reserved_domain');
+    expect(reservedSigningRefusal('eth_signTypedData_v4', [ACCOUNT, rejectionTypedData(84532, ID)])).toBeDefined();
+    expect(typedDataRefusal({ ...MAIL, primaryType: 'Missing' }, ACCOUNT)).toBe('invalid');
+    expect(typedDataRefusal({ ...PERMIT, message: { ...PERMIT.message, owner: 'nope' } }, ACCOUNT)).toBe('invalid');
+    expect(typedDataRefusal({ ...MAIL, message: { contents: 'a\u0000b' } }, ACCOUNT)).toBe('unstorable');
+    expect(typedDataRefusal(PERMIT, ACCOUNT)).toBeUndefined();
+  });
+
+  it('signs the stored typed data unchanged', () => {
+    const r = opened({ kind: 'typed-data', typedData: PERMIT });
+    expect(signedPayload(r, 'approved')).toEqual({ type: 'typed_data', typedData: PERMIT });
+    expect(payloadHash(signedPayload(r, 'approved'))).toBe(hashTypedData(PERMIT));
+  });
+
+  it('warns that a permit can move tokens', () => {
+    const preview = previewOf(opened({ kind: 'typed-data', typedData: PERMIT }), rawCall);
+    expect(preview).toMatchObject({ kind: 'typed-data', primaryType: 'Permit', warnings: ['token_permit'] });
+    if (preview.kind !== 'typed-data') throw new Error('kind');
+    expect(preview.message).toContain(RECIPIENT);
+    expect(preview.domain).toContain('USD Coin');
+  });
+
+  it('shows hidden characters as code points and warns about another chain', () => {
+    const typedData = { ...MAIL, domain: { ...MAIL.domain, chainId: 1 } };
+    const preview = previewOf(opened({ kind: 'typed-data', typedData }), rawCall);
+    expect(preview).toMatchObject({ warnings: ['hidden_characters', 'chain_mismatch'] });
+    if (preview.kind !== 'typed-data') throw new Error('kind');
+    expect(preview.domain).toContain('Mail⟦U+202E⟧');
+  });
+});
+
+describe('Sign in with Ethereum', () => {
+  const siwe = (over: Partial<Parameters<typeof createSiweMessage>[0]> = {}) =>
+    createSiweMessage({
+      address: ACCOUNT,
+      chainId: 84532,
+      domain: 'app.example',
+      uri: 'https://app.example/login',
+      version: '1',
+      nonce: 'n0nce1234',
+      issuedAt: T0,
+      expirationTime: later(60_000),
+      statement: 'Log in to the app',
+      ...over,
+    });
+
+  it('routes a message that parses as EIP-4361 to the siwe kind, and anything else to a signature', () => {
+    expect(messageBody(siwe(), ACCOUNT, 84532)).toEqual({ kind: 'siwe', message: siwe() });
+    expect(messageBody('Sign in to example.com', ACCOUNT, 84532)).toEqual({
+      kind: 'signature',
+      message: 'Sign in to example.com',
+    });
+    expect(messageBody('', ACCOUNT, 84532)).toBe('empty');
+  });
+
+  it('refuses a login for another account or another chain', () => {
+    expect(messageBody(siwe({ address: RECIPIENT }), ACCOUNT, 84532)).toBe('siwe_account');
+    expect(messageBody(siwe({ chainId: 8453 }), ACCOUNT, 84532)).toBe('siwe_chain');
+  });
+
+  it('signs the stored message unchanged', () => {
+    expect(signedPayload(opened({ kind: 'siwe', message: siwe() }), 'approved')).toEqual({
+      type: 'message',
+      message: siwe(),
+    });
+  });
+
+  it('previews the login fields and always warns which site it logs into', () => {
+    expect(previewOf(opened({ kind: 'siwe', message: siwe() }), rawCall)).toMatchObject({
+      kind: 'siwe',
+      domain: 'app.example',
+      uri: 'https://app.example/login',
+      statement: 'Log in to the app',
+      nonce: 'n0nce1234',
+      issuedAt: T0.toISOString(),
+      expirationTime: later(60_000).toISOString(),
+      warnings: ['siwe_login'],
+    });
+  });
+
+  it('leaves out the expiry and the statement when the message has none', () => {
+    const bare = siwe({ expirationTime: undefined, statement: undefined });
+    expect(previewOf(opened({ kind: 'siwe', message: bare }), rawCall)).toMatchObject({
+      statement: null,
+      expirationTime: null,
     });
   });
 });

@@ -1,11 +1,22 @@
 import { randomBytes } from 'node:crypto';
-import { openRequest, validateMessage, type ApprovalId, type ApprovalRequest } from '@jaw.id/agent';
+import {
+  messageBody,
+  openRequest,
+  typedDataRefusal,
+  type ApprovalBody,
+  type ApprovalId,
+  type ApprovalRequest,
+  type Call,
+  type GasQuote,
+} from '@jaw.id/agent';
 import type { McpServer } from '@modelcontextprotocol/server';
 import { z } from 'zod';
-import { tenant } from '@/connections/auth';
+import { tenant, type Tenant } from '@/connections/auth';
 import { config } from '@/connections/config';
+import { log } from '@/lib/edge';
 import { oneOffStatus } from '@/payments/one-off';
 import { payOutput } from '@/payments/render';
+import { quoteGas } from './bundler';
 import { findForConnection, insertUnderCap, MAX_PENDING } from './store';
 
 export const statusOutput = z.object({
@@ -17,6 +28,8 @@ export const statusOutput = z.object({
   chainId: z.string().describe('CAIP-2 chain id'),
   signature: z.string().optional(),
   permissionId: z.string().optional().describe('The on-chain permission an approved budget created'),
+  callsId: z.string().optional().describe('The wallet_sendCalls id an approved transfer or calls ran under'),
+  txHash: z.string().optional().describe('The transaction an approved transfer or calls landed in'),
   decidedAt: z.string().optional(),
   payment: payOutput
     .optional()
@@ -30,7 +43,23 @@ const REFUSALS = {
   too_long: 'The message is longer than 4096 characters.',
   reserved_prefix: 'Messages starting with "JAW " are reserved for JAW itself.',
   unstorable: 'The message contains a NUL character or a broken surrogate pair.',
+  siwe_account: 'This Sign in with Ethereum message is for another account than the connected one.',
+  siwe_chain: "This Sign in with Ethereum message is for another chain than the connection's.",
 };
+
+const TYPED_DATA_REFUSALS = {
+  reserved_domain: 'Typed data under the "JAW" domain is reserved for JAW itself.',
+  invalid: 'The typed data is not valid EIP-712: check the types against the message and the domain.',
+  too_long: 'The typed data is longer than 16384 characters as JSON.',
+  unstorable: 'The typed data contains a NUL character or a broken surrogate pair.',
+};
+
+const typedDataInput = z.object({
+  domain: z.record(z.string(), z.unknown()),
+  types: z.record(z.string(), z.array(z.object({ name: z.string(), type: z.string() }))),
+  primaryType: z.string(),
+  message: z.record(z.string(), z.unknown()),
+});
 
 export function describe(request: ApprovalRequest): StatusOutput {
   const approveUrl = `${config().keysOrigin}/approve/${request.id}`;
@@ -52,20 +81,32 @@ export function describe(request: ApprovalRequest): StatusOutput {
     case 'pending':
       return { ...out, summary: `Waiting for the account owner to approve${asked} at ${approveUrl}.` };
     case 'approved': {
-      const { proof, decidedAt } = state.evidence;
-      return proof.type === 'signature'
-        ? {
+      const { proof } = state.evidence;
+      const decidedAt = state.evidence.decidedAt.toISOString();
+      switch (proof.type) {
+        case 'signature':
+          return {
             ...out,
             signature: proof.signature,
-            decidedAt: decidedAt.toISOString(),
+            decidedAt,
             summary: 'Approved. The signature is in `signature`.',
-          }
-        : {
+          };
+        case 'permission':
+          return {
             ...out,
             permissionId: proof.permissionId,
-            decidedAt: decidedAt.toISOString(),
+            decidedAt,
             summary: 'Approved. The budget is live; jaw_status shows it.',
           };
+        case 'calls':
+          return {
+            ...out,
+            callsId: proof.callsId,
+            txHash: proof.txHash,
+            decidedAt,
+            summary: `Approved. It ran in transaction ${proof.txHash}.`,
+          };
+      }
     }
     case 'rejected':
       return {
@@ -84,41 +125,70 @@ export const result = (out: StatusOutput) => ({
 });
 export const refusal = (text: string) => ({ content: [{ type: 'text' as const, text }], isError: true });
 export const NO_SEND_SCOPE =
-  'This connection was not granted wallet:send. Reconnect and ask for it to request signatures or a budget.';
+  'This connection was not granted wallet:send. Reconnect and ask for it to request signatures, a budget, or transactions.';
+
+export function requestFor(t: Tenant, body: ApprovalBody): ApprovalRequest {
+  return openRequest(
+    {
+      id: randomBytes(16).toString('base64url') as ApprovalId,
+      account: t.account,
+      chainId: t.chainId,
+      requester: { name: t.clientName, clientId: t.clientId },
+      sessionAddress: t.sessionAddress,
+      body,
+    },
+    new Date()
+  );
+}
+
+const NO_GAS =
+  'The gas could not be quoted in USDC, so nothing was prepared. The calls may revert, or the paymaster may be unreachable: check them and try again.';
+
+/** Quotes the calls' gas in USDC, then asks for the body built with it. Refuses rather than show no gas. */
+export async function askWithGas(t: Tenant, calls: Call[], body: (gas: GasQuote) => ApprovalBody) {
+  const gas = await quoteGas(t.account, t.chainId, calls).catch((err: unknown) => {
+    log('warn', { msg: 'gas quote unavailable', error: err instanceof Error ? err.name : 'unknown' });
+    return undefined;
+  });
+  if (!gas) return refusal(NO_GAS);
+  return ask(t, requestFor(t, body(gas)));
+}
+
+/** Stores the request under the connection's cap and answers with its status. */
+export async function ask(t: Tenant, request: ApprovalRequest) {
+  if (!(await insertUnderCap(t.connectionId, request, MAX_PENDING))) {
+    return refusal(`This connection already has ${MAX_PENDING} requests waiting. Wait for them or let them expire.`);
+  }
+  return result(describe(request));
+}
 
 export function registerApprovalTools(server: McpServer) {
   server.registerTool(
     'jaw_request_signature',
     {
       description:
-        'Ask the account owner to sign a plain-text message with their passkey. Returns a link for the owner and a request id; poll jaw_request_status for the signature.',
+        'Ask the account owner to sign, with their passkey, either a plain-text message or EIP-712 typed data (exactly one). A message that is a Sign in with Ethereum (EIP-4361) login must name the connected account and chain, and the owner is warned which site it logs into. Returns a link for the owner and a request id; poll jaw_request_status for the signature.',
       inputSchema: z.strictObject({
-        message: z.string().describe('The exact text to sign (EIP-191 personal message).'),
+        message: z.string().optional().describe('The exact text to sign (EIP-191 personal message).'),
+        typedData: typedDataInput
+          .optional()
+          .describe('EIP-712 typed data to sign: domain, types, primaryType, message.'),
       }),
       outputSchema: statusOutput,
     },
-    async ({ message }, ctx) => {
+    async ({ message, typedData }, ctx) => {
       const t = tenant(ctx);
       if (!t.scopes.includes('wallet:send')) return refusal(NO_SEND_SCOPE);
-      const refused = validateMessage(message);
-      if (refused) return refusal(REFUSALS[refused]);
-      const request = openRequest(
-        {
-          id: randomBytes(16).toString('base64url') as ApprovalId,
-          account: t.account,
-          chainId: t.chainId,
-          requester: { name: t.clientName, clientId: t.clientId },
-          sessionAddress: t.sessionAddress,
-          body: { kind: 'signature', message },
-        },
-        new Date()
-      );
-      if (!(await insertUnderCap(t.connectionId, request, MAX_PENDING))) {
-        return refusal(
-          `This connection already has ${MAX_PENDING} requests waiting. Wait for them or let them expire.`
-        );
+      if (typedData !== undefined) {
+        if (message !== undefined) return refusal('Give either message or typedData, not both.');
+        const refused = typedDataRefusal(typedData, t.account);
+        if (refused) return refusal(TYPED_DATA_REFUSALS[refused]);
+        return ask(t, requestFor(t, { kind: 'typed-data', typedData }));
       }
-      return result(describe(request));
+      if (message === undefined) return refusal('Give the message or the typedData to sign.');
+      const body = messageBody(message, t.account, t.chainId);
+      if (typeof body === 'string') return refusal(REFUSALS[body]);
+      return ask(t, requestFor(t, body));
     }
   );
 

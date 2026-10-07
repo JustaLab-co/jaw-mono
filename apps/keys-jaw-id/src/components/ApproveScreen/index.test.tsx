@@ -9,12 +9,15 @@ import { rejectionTypedData } from '@jaw.id/agent/reserved';
 
 const signMessage = vi.fn(async (_message: string) => '0xsig');
 const signTypedData = vi.fn(async (_typedData: unknown) => '0xsig');
+const CALLS_ID = `0x${'c1'.repeat(32)}`;
+const sendCalls = vi.fn(async (..._args: unknown[]) => ({ id: CALLS_ID, chainId: 84532 }));
 const chain = { id: 84532, rpcUrl: 'https://rpc.example' };
-const signer = { signMessage, signTypedData, getChain: () => chain };
+const signer = { signMessage, signTypedData, sendCalls, getChain: () => chain };
 const get = vi.fn(async (_config: unknown) => signer);
 let signedInAs = '';
 vi.mock('@jaw.id/core', () => ({
   Account: { get: (config: unknown) => get(config) },
+  jawPaymasterUrl: (chainId: number, apiKey?: string) => `https://paymaster.example/${chainId}/${apiKey}`,
   standardErrorCodes: { provider: { userRejectedRequest: 4001 } },
 }));
 vi.mock('@jaw.id/ui', async () => ({ PortalContainerContext: (await import('react')).createContext(null) }));
@@ -165,6 +168,7 @@ beforeEach(() => {
   modal = null;
   signMessage.mockClear();
   signTypedData.mockClear();
+  sendCalls.mockClear();
   signedInAs = OWNER;
   vi.stubGlobal(
     'fetch',
@@ -383,5 +387,178 @@ describe('ApproveScreen', () => {
     await click(button('Approve'));
     expect(container.textContent).toContain('the price changed');
     expect(container.textContent).toContain('Nothing was sent.');
+  });
+
+  describe('transfers and calls', () => {
+    const SPENDER = '0x5555555555555555555555555555555555555555';
+    const TRANSFER_DATA = `0xa9059cbb${'0'.repeat(24)}${PAY_TO.slice(2)}${(10000).toString(16).padStart(64, '0')}`;
+    const CALLS = [{ to: USDC, value: '0x0', data: TRANSFER_DATA }];
+    const PAYMASTER = { token: USDC, gas: '90000' };
+    const GAS = { token: USDC, estimate: '21000', max: '90000' };
+    const TRANSFER_VIEW = {
+      ...VIEW,
+      preview: {
+        kind: 'transfer',
+        requester: VIEW.preview.requester,
+        to: PAY_TO,
+        name: 'alice.eth',
+        token: USDC,
+        amount: '10000',
+        gas: GAS,
+      },
+      approve: { type: 'calls', calls: CALLS, chainId: '0x14a34' },
+      paymaster: PAYMASTER,
+    };
+    const CALLS_VIEW = {
+      ...TRANSFER_VIEW,
+      preview: {
+        kind: 'calls',
+        requester: VIEW.preview.requester,
+        calls: [
+          {
+            to: USDC,
+            value: '0x0',
+            data: '0x095ea7b3',
+            function: 'approve(address,uint256)',
+            args: [
+              { name: 'spender', type: 'address', value: SPENDER },
+              {
+                name: 'amount',
+                type: 'uint256',
+                value: '115792089237316195423570985008687907853269984665640564039457584007913129639935',
+              },
+            ],
+            warnings: [{ code: 'token_approval', spender: SPENDER, amount: '1157', unlimited: true }],
+          },
+          { to: PAY_TO, value: '0xde0b6b3a7640000', data: '0xdeadbeef', warnings: [{ code: 'unknown_function' }] },
+          { to: PAY_TO, value: '0x0', data: '0xdead', warnings: [{ code: 'short_calldata' }] },
+        ],
+        gas: GAS,
+      },
+    };
+
+    it('shows the name beside the address, the amount and the gas in USDC', async () => {
+      view = TRANSFER_VIEW;
+      await render();
+      expect(container.querySelector('h1')?.textContent).toBe('Transfer request from evil.example');
+      expect(container.textContent).toContain('Send 0.01 USDC');
+      expect(container.textContent).toContain('alice.eth');
+      expect(container.textContent).toContain(PAY_TO);
+      expect(container.textContent).toContain('about 0.021 USDC, at most 0.09 USDC');
+    });
+
+    it('sends the served calls by reference through the ERC-20 paymaster and posts the calls id', async () => {
+      view = TRANSFER_VIEW;
+      await render();
+      await click(container.querySelector('#login'));
+      await click(button('Approve'));
+      expect(sendCalls).toHaveBeenCalledTimes(1);
+      const [calls, options, paymasterUrl, context] = sendCalls.mock.calls[0];
+      expect(calls).toBe(CALLS);
+      expect(options).toBeUndefined();
+      expect(paymasterUrl).toBe('https://paymaster.example/84532/agent-key');
+      expect(context).toBe(PAYMASTER);
+      expect(signMessage).not.toHaveBeenCalled();
+      expect(signTypedData).not.toHaveBeenCalled();
+      expect(posts).toEqual([{ verdict: 'approved', callsId: CALLS_ID, previewHash: VIEW.previewHash }]);
+      expect(container.textContent).toContain('Approved.');
+    });
+
+    it('waits for the calls to land, and never sends twice when the server still cannot see them', async () => {
+      view = TRANSFER_VIEW;
+      refusals = Array.from({ length: 15 }, () => 'calls_pending');
+      await render();
+      await click(container.querySelector('#login'));
+      vi.useFakeTimers();
+      try {
+        await act(async () => {
+          button('Approve')?.click();
+          await vi.runAllTimersAsync();
+        });
+      } finally {
+        vi.useRealTimers();
+      }
+      expect(posts).toHaveLength(15);
+      expect(container.textContent).toContain('not on chain yet');
+      await click(button('Check again'));
+      expect(sendCalls).toHaveBeenCalledTimes(1);
+      expect(posts).toHaveLength(16);
+      expect(container.textContent).toContain('Approved.');
+    });
+
+    it('shows each call decoded or raw, with its warnings', async () => {
+      view = CALLS_VIEW;
+      await render();
+      expect(container.querySelector('h1')?.textContent).toBe('Transaction request from evil.example');
+      expect(container.textContent).toContain('approve(address,uint256)');
+      expect(container.textContent).toContain(`Lets ${SPENDER} spend an unlimited amount`);
+      expect(container.textContent).toContain('0xdeadbeef');
+      expect(container.textContent).toContain('No known function matches this call');
+      expect(container.textContent).toContain('shorter than a function selector');
+      expect(container.textContent).toContain('Sends 1 ETH');
+    });
+  });
+
+  describe('typed data and Sign in with Ethereum', () => {
+    const TYPED = {
+      domain: { name: 'USD Coin', version: '2', chainId: 84532, verifyingContract: USDC },
+      types: { Permit: [{ name: 'spender', type: 'address' }] },
+      primaryType: 'Permit',
+      message: { spender: PAY_TO },
+    };
+    const TYPED_VIEW = {
+      ...VIEW,
+      preview: {
+        kind: 'typed-data',
+        requester: VIEW.preview.requester,
+        domain: '{"name":"USD Coin"}',
+        primaryType: 'Permit',
+        message: `{"spender":"${PAY_TO}"}`,
+        warnings: ['token_permit', 'chain_mismatch'],
+      },
+      approve: { type: 'typed_data', typedData: TYPED },
+    };
+    const LOGIN = 'app.example wants you to sign in with your Ethereum account:\n...';
+    const SIWE_VIEW = {
+      ...VIEW,
+      preview: {
+        kind: 'siwe',
+        requester: VIEW.preview.requester,
+        account: OWNER,
+        domain: 'app.example',
+        uri: 'https://app.example/login',
+        statement: 'Log in',
+        nonce: 'n0nce1234',
+        issuedAt: '2026-10-07T12:00:00.000Z',
+        expirationTime: null,
+        warnings: ['siwe_login'],
+      },
+      approve: { type: 'message', message: LOGIN },
+    };
+
+    it('shows the typed data as served with its warnings and signs it by reference', async () => {
+      view = TYPED_VIEW;
+      await render();
+      expect(container.querySelector('h1')?.textContent).toBe('Typed data request from evil.example');
+      expect(container.textContent).toContain('{"spender":"');
+      expect(container.textContent).toContain('can let someone move your tokens');
+      expect(container.textContent).toContain('another chain');
+      await click(container.querySelector('#login'));
+      await click(button('Approve'));
+      expect(signTypedData.mock.calls[0][0]).toBe(TYPED);
+      expect(posts).toEqual([{ verdict: 'approved', signature: '0xsig', previewHash: VIEW.previewHash }]);
+    });
+
+    it('warns which site a login is for and signs the served message', async () => {
+      view = SIWE_VIEW;
+      await render();
+      expect(container.querySelector('h1')?.textContent).toBe('Sign-in request from evil.example');
+      expect(container.textContent).toContain(`logs the agent into app.example as ${OWNER}`);
+      expect(container.textContent).toContain('https://app.example/login');
+      await click(container.querySelector('#login'));
+      await click(button('Approve'));
+      expect(signMessage.mock.calls[0][0]).toBe(LOGIN);
+      expect(posts).toEqual([{ verdict: 'approved', signature: '0xsig', previewHash: VIEW.previewHash }]);
+    });
   });
 });

@@ -57,6 +57,13 @@
       "when": 1791395292350,
       "tag": "0007_one_off_payments",
       "breakpoints": true
+    },
+    {
+      "idx": 8,
+      "version": "7",
+      "when": 1791396970657,
+      "tag": "0008_prepared_actions",
+      "breakpoints": true
     }
   ]
 }

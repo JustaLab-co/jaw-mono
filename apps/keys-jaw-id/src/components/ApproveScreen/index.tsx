@@ -1,22 +1,29 @@
 'use client';
 
-import { Account } from '@jaw.id/core';
+import { Account, jawPaymasterUrl } from '@jaw.id/core';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { useState } from 'react';
-import { isAddressEqual } from 'viem';
+import { isAddressEqual, type Hex } from 'viem';
 import {
   isBudget,
+  isCalls,
   isPayment,
   postDecision,
   type ApprovalStatus,
   type ApprovalView,
+  type CallsView,
   type PaymentView,
   type SignedPayload,
+  type TransferView,
 } from '../../lib/approval-decision';
 import { fetchCliApiKey } from '../../lib/cli-api-key';
 import { BudgetApproval, BudgetTerms } from '../BudgetApproval';
+import { CallsTerms } from '../CallsTerms';
 import { ClientHeader } from '../ClientHeader';
 import { PaymentTerms } from '../PaymentTerms';
+import { SiweTerms } from '../SiweTerms';
+import { TransferTerms } from '../TransferTerms';
+import { TypedDataTerms } from '../TypedDataTerms';
 import { SignInScreen, type AuthenticatedAccount } from '../OnboardingSection';
 import type { ChainId } from '../../utils/types';
 
@@ -24,6 +31,16 @@ const WARNINGS: Record<string, string> = {
   hidden_characters: 'This message contains hidden or direction-changing characters, shown as ⟦U+…⟧.',
   address_like: 'This message contains an address. Check it against where it came from.',
   markup_like: 'This message contains markup. It is shown as plain text.',
+};
+
+const TITLES: Record<ApprovalView['preview']['kind'], string> = {
+  signature: 'Signature request from',
+  budget: 'Budget request from',
+  payment: 'Payment request from',
+  transfer: 'Transfer request from',
+  calls: 'Transaction request from',
+  'typed-data': 'Typed data request from',
+  siwe: 'Sign-in request from',
 };
 
 // The name is whatever the client declared; its id (a URL for most clients) is what can be checked.
@@ -42,11 +59,71 @@ function paidOutcome(payment: NonNullable<PaymentView['payment']>) {
   return 'Approved. The payment is on its way; the agent will see how it ends.';
 }
 
+/** The server's preview for each kind, rendered as served. */
+function Terms({ view }: { view: ApprovalView }) {
+  switch (view.preview.kind) {
+    case 'budget':
+      return (
+        <div>
+          <BudgetTerms preview={view.preview} />
+        </div>
+      );
+    case 'payment':
+      return (
+        <div>
+          <PaymentTerms preview={view.preview} />
+        </div>
+      );
+    case 'transfer':
+      return (
+        <div>
+          <TransferTerms preview={view.preview} />
+        </div>
+      );
+    case 'calls':
+      return (
+        <div className="flex flex-col gap-2">
+          <CallsTerms preview={view.preview} />
+        </div>
+      );
+    case 'typed-data':
+      return (
+        <div className="flex flex-col gap-2">
+          <TypedDataTerms preview={view.preview} />
+        </div>
+      );
+    case 'siwe':
+      return (
+        <div className="flex flex-col gap-1">
+          <SiweTerms preview={view.preview} />
+        </div>
+      );
+    case 'signature':
+      return (
+        <>
+          {view.preview.warnings.map((w) => (
+            <p key={w} className="text-destructive text-sm">
+              {WARNINGS[w] ?? w}
+            </p>
+          ))}
+          <div>
+            <p className="text-muted-foreground mb-1 text-xs">Message</p>
+            <pre data-testid="approval-message" className="bg-muted whitespace-pre-wrap break-all rounded p-3 text-xs">
+              {view.preview.text}
+            </pre>
+          </div>
+        </>
+      );
+  }
+}
+
 export function ApproveScreen({ id, mcpUrl }: { id: string; mcpUrl: string }) {
   const [account, setAccount] = useState<AuthenticatedAccount | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
   const [granter, setGranter] = useState<Account | null>(null);
+  // Once the calls are sent, approving again only re-posts their id: sending twice would pay twice.
+  const [sent, setSent] = useState<Hex | null>(null);
   const queryClient = useQueryClient();
   const url = `${mcpUrl}/api/approvals/${encodeURIComponent(id)}`;
 
@@ -94,10 +171,24 @@ export function ApproveScreen({ id, mcpUrl }: { id: string; mcpUrl: string }) {
       show(await postDecision(decisionUrl, { verdict, signature, previewHash: view.previewHash }));
     });
 
-  const approve = () =>
-    isBudget(view)
-      ? run(async () => setGranter(await Account.get({ chainId: view.chainId, apiKey })))
-      : sign('approved', view.approve);
+  // The served calls and paymaster context go to the wallet unchanged.
+  const send = ({ approve, paymaster }: TransferView | CallsView) =>
+    run(async () => {
+      let callsId = sent;
+      if (!callsId) {
+        const signer = await Account.get({ chainId: view.chainId, apiKey });
+        callsId = (await signer.sendCalls(approve.calls, undefined, jawPaymasterUrl(view.chainId, apiKey), paymaster))
+          .id;
+        setSent(callsId);
+      }
+      show(await postDecision(decisionUrl, { verdict: 'approved', callsId, previewHash: view.previewHash }));
+    });
+
+  const approve = () => {
+    if (isBudget(view)) return run(async () => setGranter(await Account.get({ chainId: view.chainId, apiKey })));
+    if (isCalls(view)) return send(view);
+    return sign('approved', view.approve);
+  };
 
   if (granter && isBudget(view)) {
     return (
@@ -118,40 +209,13 @@ export function ApproveScreen({ id, mcpUrl }: { id: string; mcpUrl: string }) {
   return (
     <div className="flex flex-col gap-4 rounded-lg border p-6">
       <div>
-        <ClientHeader
-          title={
-            isBudget(view) ? 'Budget request from' : isPayment(view) ? 'Payment request from' : 'Signature request from'
-          }
-          client={view.preview.requester}
-        />
+        <ClientHeader title={TITLES[view.preview.kind]} client={view.preview.requester} />
         <p className="text-muted-foreground text-sm">
           For <span className="font-mono">{view.account}</span> on chain {view.chainId}
         </p>
         <p className="text-muted-foreground text-xs">Expires {new Date(view.expiresAt).toLocaleTimeString()}</p>
       </div>
-      {isBudget(view) ? (
-        <div>
-          <BudgetTerms preview={view.preview} />
-        </div>
-      ) : isPayment(view) ? (
-        <div>
-          <PaymentTerms preview={view.preview} />
-        </div>
-      ) : (
-        <>
-          {view.preview.warnings.map((w) => (
-            <p key={w} className="text-destructive text-sm">
-              {WARNINGS[w] ?? w}
-            </p>
-          ))}
-          <div>
-            <p className="text-muted-foreground mb-1 text-xs">Message</p>
-            <pre data-testid="approval-message" className="bg-muted whitespace-pre-wrap break-all rounded p-3 text-xs">
-              {view.preview.text}
-            </pre>
-          </div>
-        </>
-      )}
+      <Terms view={view} />
       {account === null ? (
         <SignInScreen chainId={view.chainId as ChainId} apiKey={apiKey} onComplete={setAccount} />
       ) : wrongAccount ? (
@@ -166,11 +230,11 @@ export function ApproveScreen({ id, mcpUrl }: { id: string; mcpUrl: string }) {
             disabled={busy}
             onClick={approve}
           >
-            Approve
+            {sent ? 'Check again' : 'Approve'}
           </button>
           <button
             className="flex-1 rounded border p-2 disabled:opacity-50"
-            disabled={busy}
+            disabled={busy || sent !== null}
             onClick={() => sign('rejected', view.reject)}
           >
             Reject

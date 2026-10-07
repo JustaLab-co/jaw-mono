@@ -113,11 +113,17 @@ export const approvalRequests = pgTable(
     signature: text('signature'),
     assertionRef: text('assertion_ref'),
     permissionId: text('permission_id'),
+    callsId: text('calls_id'),
+    txHash: text('tx_hash'),
     // How to fetch a payment's resource again. Never loaded with the request: the agent's headers can carry secrets.
     sellerRequest: jsonb('seller_request'),
   },
   (t) => [
     index().on(t.connectionId, t.createdAt),
+    // One userOp proves one approval.
+    uniqueIndex()
+      .on(t.callsId)
+      .where(sql`${t.callsId} is not null`),
     check('approval_seller_request', sql`${t.kind} = 'payment' or ${t.sellerRequest} is null`),
     check(
       'approval_evidence',
@@ -125,8 +131,9 @@ export const approvalRequests = pgTable(
     ),
     check(
       'approval_proof',
-      sql`(${t.status} = 'pending' and ${t.signature} is null and ${t.assertionRef} is null and ${t.permissionId} is null)
-        or (${t.status} <> 'pending' and (${t.signature} is null) = (${t.assertionRef} is null) and (${t.signature} is null) <> (${t.permissionId} is null))`
+      sql`(${t.status} = 'pending' and ${t.signature} is null and ${t.assertionRef} is null and ${t.permissionId} is null and ${t.callsId} is null and ${t.txHash} is null)
+        or (${t.status} <> 'pending' and (${t.signature} is null) = (${t.assertionRef} is null) and (${t.callsId} is null) = (${t.txHash} is null)
+          and (${t.signature} is not null)::int + (${t.permissionId} is not null)::int + (${t.callsId} is not null)::int = 1)`
     ),
   ]
 );

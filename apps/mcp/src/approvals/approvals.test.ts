@@ -29,7 +29,7 @@ async function view(id: string) {
 
 type Signer = ReturnType<typeof owner>;
 const sign = (signer: Signer, p: SignedPayload) => {
-  if (p.type === 'grant') throw new Error('a grant is executed, not signed');
+  if (p.type === 'grant' || p.type === 'calls') throw new Error(`${p.type} is executed, not signed`);
   return p.type === 'message' ? signer.signMessage({ message: p.message }) : signer.signTypedData(p.typedData);
 };
 const messageOf = (p: SignedPayload) => {
