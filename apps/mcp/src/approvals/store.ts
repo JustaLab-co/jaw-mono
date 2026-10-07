@@ -254,9 +254,13 @@ export async function recordDecision(request: ApprovalRequest, effect?: Effect):
     if (rows.length !== 1) return false;
     const { connectionId } = rows[0];
     if (effect && 'grant' in effect) {
+      // Budget decisions of one connection land one at a time, each seeing the grant the
+      // previous one stored, so the newest grant is the only one left unreplaced. created_at
+      // is read under the lock: now() is the transaction start, before the previous commit.
+      await tx.execute(sql`select pg_advisory_xact_lock(hashtext(${connectionId}))`);
       await tx
         .insert(grants)
-        .values({ ...effect.grant, connectionId, approvalId: request.id })
+        .values({ ...effect.grant, connectionId, approvalId: request.id, createdAt: sql`clock_timestamp()` })
         .onConflictDoNothing();
       // Decided here, not when the page loaded: every older budget of the connection is now to revoke.
       await tx

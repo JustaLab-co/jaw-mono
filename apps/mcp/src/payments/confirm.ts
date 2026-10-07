@@ -1,5 +1,14 @@
-import { usdcForNetwork, within, type ChainClients, type UsdcAsset } from '@jaw.id/agent';
-import { decodeEventLog, isAddressEqual, pad, parseAbi, type Address, type Hex, type TransactionReceipt } from 'viem';
+import { usdcForNetwork, within, X402_UPTO_PROXY_ADDRESS, type ChainClients, type UsdcAsset } from '@jaw.id/agent';
+import {
+  decodeEventLog,
+  decodeFunctionData,
+  isAddressEqual,
+  parseAbi,
+  type Address,
+  type Hex,
+  type Transaction,
+  type TransactionReceipt,
+} from 'viem';
 
 const EVENTS = parseAbi([
   'event AuthorizationUsed(address indexed authorizer, bytes32 indexed nonce)',
@@ -13,12 +22,42 @@ export interface Attempt {
   network: string;
   payTo: Address;
   authorized: bigint;
-  /** When the authorization was signed: a transaction mined before it cannot be its settlement. */
+  /** When the authorization was signed: where the search for an `exact` settlement starts. */
   signedAt: Date;
 }
 
-// Clock skew allowed between this server and the chain.
-const SKEW_MS = 60_000;
+const UPTO_SETTLE = parseAbi([
+  'struct TokenPermissions { address token; uint256 amount; }',
+  'struct PermitTransferFrom { TokenPermissions permitted; uint256 nonce; uint256 deadline; }',
+  'struct Witness { address to; address facilitator; uint256 validAfter; }',
+  'struct EIP2612Permit { uint256 value; uint256 deadline; bytes32 r; bytes32 s; uint8 v; }',
+  'function settle(PermitTransferFrom permit, uint256 amount, address owner, Witness witness, bytes signature)',
+  'function settleWithPermit(EIP2612Permit permit2612, PermitTransferFrom permit, uint256 amount, address owner, Witness witness, bytes signature)',
+]);
+
+/**
+ * What an upto settlement moved under this authorization. Only a successful
+ * call to the x402 proxy spends a Permit2 nonce the payer signed, so the
+ * transaction must be that call, for this owner, nonce, token and recipient.
+ */
+function settledByProxy(tx: Pick<Transaction, 'to' | 'input'>, attempt: Attempt, token: Address): bigint | undefined {
+  if (!tx.to || !isAddressEqual(tx.to, X402_UPTO_PROXY_ADDRESS)) return undefined;
+  let call;
+  try {
+    call = decodeFunctionData({ abi: UPTO_SETTLE, data: tx.input });
+  } catch {
+    return undefined;
+  }
+  const [permit, amount, owner, witness] =
+    call.functionName === 'settle' ? call.args : [call.args[1], call.args[2], call.args[3], call.args[4]];
+  const ours =
+    isAddressEqual(owner, attempt.payer) &&
+    permit.nonce === BigInt(attempt.nonce) &&
+    isAddressEqual(permit.permitted.token, token) &&
+    isAddressEqual(witness.to, attempt.payTo) &&
+    amount <= attempt.authorized;
+  return ours ? amount : undefined;
+}
 
 export interface Settled {
   /** Absent when the chain proves the nonce was used but no node returned the transaction. */
@@ -71,17 +110,12 @@ export async function confirmByReceipt(
     if (receipt.status !== 'success') return undefined;
     const amount = movedIn(receipt, attempt, token.address);
     if (amount === undefined) return undefined;
+    if (attempt.scheme === 'upto') {
+      const settled = settledByProxy(await client.getTransaction({ hash: txHash }), attempt, token.address);
+      if (settled !== amount) return undefined;
+    }
     const block = await client.getBlock({ blockNumber: receipt.blockNumber });
     const blockTime = new Date(Number(block.timestamp) * 1000);
-    // A transfer names no Permit2 nonce, so an upto settlement is the transfer mined
-    // after signing whose authorization the bitmap shows spent.
-    if (attempt.scheme === 'upto') {
-      if (blockTime.getTime() < attempt.signedAt.getTime() - SKEW_MS) return undefined;
-      if (!(await nonceUsed(attempt, token, clients))) return undefined;
-      // The spent nonce must be this transaction's: its call data carries the Permit2 permit it executed.
-      const { input } = await client.getTransaction({ hash: txHash });
-      if (!input.toLowerCase().includes(pad(attempt.nonce, { size: 32 }).slice(2).toLowerCase())) return undefined;
-    }
     return { txHash, blockTime, amount };
   };
   return within(read(), timeoutMs).catch(() => undefined);

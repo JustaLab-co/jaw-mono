@@ -113,24 +113,6 @@ export class PgAdapter implements Adapter {
         .where(and(eq(connections.id, connectionId), eq(connections.status, 'active')))
         .for('share');
       if (!live) throw new errors.InvalidGrant('connection ended');
-      // A used token past its window can never be retried, so its wrap would only
-      // serve whoever kept the old token. Swept on every rotation, for every grant,
-      // except the token this request presents: find already judged it retryable.
-      // SKIP LOCKED: concurrent rotations never wait on each other's rows (they deadlocked
-      // in a burst); a row another rotation holds is swept by the next one.
-      const stale = tx
-        .select({ key: oauthPayloads.key })
-        .from(oauthPayloads)
-        .where(
-          and(
-            eq(oauthPayloads.model, 'RefreshToken'),
-            ne(oauthPayloads.key, this.key(presented ?? '')),
-            lt(oauthPayloads.consumedAt, new Date(Date.now() - RETRY_WINDOW_MS)),
-            isNotNull(oauthPayloads.keyWrap)
-          )
-        )
-        .for('update', { skipLocked: true });
-      await tx.update(oauthPayloads).set({ keyWrap: null }).where(inArray(oauthPayloads.key, stale));
       let key = requestKeys.get(ctx);
       if (presented) {
         const [from] = await tx
@@ -164,6 +146,31 @@ export class PgAdapter implements Adapter {
         .values({ key: this.key(id), ...row, keyWrap: wrap(this.ring, key, connectionId, id) });
       requestKeys.set(ctx, key);
     });
+    // A used token past its window can never be retried, so its wrap would only
+    // serve whoever kept the old token. Swept after every rotation, for every grant,
+    // except the token this request presented. Outside the rotation, which then locks
+    // only its own grant's rows; SKIP LOCKED leaves a row another request holds to
+    // the next sweep, so the sweep never waits and cannot deadlock.
+    await getDb()
+      .update(oauthPayloads)
+      .set({ keyWrap: null })
+      .where(
+        inArray(
+          oauthPayloads.key,
+          getDb()
+            .select({ key: oauthPayloads.key })
+            .from(oauthPayloads)
+            .where(
+              and(
+                eq(oauthPayloads.model, 'RefreshToken'),
+                ne(oauthPayloads.key, this.key(presented ?? '')),
+                lt(oauthPayloads.consumedAt, new Date(Date.now() - RETRY_WINDOW_MS)),
+                isNotNull(oauthPayloads.keyWrap)
+              )
+            )
+            .for('update', { skipLocked: true })
+        )
+      );
   }
 
   async findByUid(uid: string) {

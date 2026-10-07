@@ -216,6 +216,9 @@ export const payments = pgTable(
   (t) => [
     uniqueIndex().on(t.connectionId, t.idempotencyKey),
     uniqueIndex().on(t.payer, t.nonce),
+    uniqueIndex('payments_payer_tx_hash_index')
+      .on(t.payer, sql`lower(${t.txHash})`)
+      .where(sql`${t.txHash} is not null`),
     uniqueIndex()
       .on(t.approvalId)
       .where(sql`${t.approvalId} is not null`),

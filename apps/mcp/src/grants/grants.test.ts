@@ -211,4 +211,33 @@ describe('budget grants', () => {
     const bothRevoked: ReadPermission = async () => ({ status: 'ok', approved: true, revoked: true });
     expect(await readForPage(r2, new Date(), bothRevoked)).toMatchObject({ kind: 'ok', view: { revoke: [] } });
   });
+
+  it('stops listing a replaced budget once it expires, since the chain no longer honors it', async () => {
+    const { c, id } = await requestBudget('1');
+    const a = permissionId();
+    const first = await budgetView(id);
+    await decideFromPage(
+      id,
+      { verdict: 'approved', previewHash: first.view.previewHash, permission: granted(first.grant, {}, a) },
+      verifyLocally,
+      new Date(),
+      approvedOnChain
+    );
+    const raise = (await callTool(c.access_token, 'jaw_request_budget', { perDay: '2' })).structuredContent.requestId;
+    const second = await budgetView(raise);
+    await decideFromPage(
+      raise,
+      { verdict: 'approved', previewHash: second.view.previewHash, permission: granted(second.grant) },
+      verifyLocally,
+      new Date(),
+      approvedOnChain
+    );
+    expect(await readForPage(raise, new Date(), approvedOnChain)).toMatchObject({ view: { revoke: [a] } });
+
+    await getDb()
+      .update(grants)
+      .set({ expiresAt: new Date(Date.now() - 1000) })
+      .where(eq(grants.permissionId, a));
+    expect(await readForPage(raise, new Date(), approvedOnChain)).toMatchObject({ kind: 'ok', view: { revoke: [] } });
+  });
 });

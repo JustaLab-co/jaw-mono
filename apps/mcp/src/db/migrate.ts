@@ -11,6 +11,8 @@ const LOCK_ID = 0x6a61776d;
 export async function runMigrations(url: string) {
   const sql = postgres(url, { max: 1, connect_timeout: 5, onnotice: () => {} });
   try {
+    // The role's statement_timeout would cut a long migration, or a start waiting on the lock.
+    await sql`set statement_timeout = 0`;
     await sql`select pg_advisory_lock(${LOCK_ID})`;
     await migrate(drizzle(sql), { migrationsFolder: join(process.cwd(), 'drizzle') });
     await sql`delete from oauth_payloads where expires_at < now() - interval '1 day'`;
