@@ -120,8 +120,7 @@ export async function openPaymentWindow(
 /**
  * Record a payment's outcome in the ledger and compact it. Await it inside the
  * payment lock, so the next payment counts this row; free resources write
- * nothing. Never rejects: the payment already happened, and a store that
- * failed is said through the logger rather than costing the caller its result.
+ * nothing. Never rejects.
  */
 export async function recordPaymentOutcome(
   url: string,

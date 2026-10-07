@@ -122,10 +122,6 @@ describe('x402 ledger', () => {
   });
 });
 
-// A table can keep one state per row where the file keeps `status` and
-// `settlement`. Each shape the file holds reads back as a state, and the state
-// reads back as fields that cost what the row cost, with the bytes on disk
-// unchanged.
 describe('row state through the JSONL port', () => {
   const signed = { nonce: '0x01', authorized: '1000', settlement: 'unverified' as const };
   const answered = (settlement: 'verified' | 'expired' | 'abandoned') => ({

@@ -361,8 +361,6 @@ describe('recordPaymentOutcome', () => {
     expect(h.compactions).toEqual([]);
   });
 
-  // The payment already happened by the time its row is written. A store that
-  // refuses the row must not take the result away from the caller.
   it('resolves when the store rejects the row, and says so instead of compacting', async () => {
     const warn = vi.fn();
     const rejecting = {
@@ -383,8 +381,6 @@ describe('recordPaymentOutcome', () => {
     expect(h.compactions).toEqual([]);
   });
 
-  // Callers await this inside the payment lock. Resolving before the row is
-  // stored would let the next payment read a ledger without it.
   it('does not resolve before the store has the row', async () => {
     let store: () => void = () => undefined;
     const slow = {

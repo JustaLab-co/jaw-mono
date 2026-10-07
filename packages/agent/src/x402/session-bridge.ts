@@ -53,7 +53,7 @@ function resolvePaymaster(
   if (!asset) {
     // Say so rather than falling through quietly: the userOp goes out with no
     // paymaster, and the failure the user eventually sees is about native funds
-    // and mentions none of this. Never stdout, which carries stdio MCP framing.
+    // and mentions none of this.
     options.logger.warn(
       `[jaw] No USDC in the x402 asset registry for chain ${options.chainId}, so no ERC-20 paymaster ` +
         'can be engaged. Gas will come out of the account\u2019s native balance. ' +

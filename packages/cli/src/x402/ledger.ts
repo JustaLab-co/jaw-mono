@@ -295,11 +295,8 @@ function serializeEntries(entries: X402LogEntry[]): string {
   return entries.map((entry) => '\n' + JSON.stringify(entry)).join('');
 }
 
-/**
- * The file behind the port. The bodies stay synchronous: compaction detects a
- * concurrent append by the file size before and after, which holds only while
- * nothing yields inside the call.
- */
+// Synchronous bodies on purpose: compaction detects a concurrent append by the
+// file size before and after, which holds only while nothing yields inside it.
 export const jsonlPaymentLog: PaymentLog = {
   read: async (limit) => readX402Log(limit),
   append: async (entry) => appendX402Log(entry),

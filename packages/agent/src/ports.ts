@@ -7,11 +7,7 @@ export interface ChainClients {
   publicClient(chainId: number): PublicClient;
 }
 
-/**
- * Where payment rows are kept. A store that keeps a state per row derives it
- * with `rowStateOf`, so the rows the agent reads back carry only `status` and
- * `settlement`, and a state never disagrees with the fields that decide it.
- */
+/** Where payment rows are kept. A store that keeps a state per row derives it with `rowStateOf`. */
 export interface PaymentLog {
   read(limit?: number): Promise<X402LogEntry[]>;
   append(entry: X402LogEntry): Promise<void>;
