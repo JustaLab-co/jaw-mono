@@ -4,7 +4,7 @@ import { getDb } from '@/db/client';
 import { connections } from '@/db/schema';
 import { useTestDb } from '@/db/test-db';
 import { verifyBearer } from './auth';
-import { consent, details } from './interaction';
+import { consent } from './interaction';
 import { provider } from './provider';
 import {
   Browser,
@@ -54,14 +54,20 @@ describe('consent hand-back', () => {
     });
   });
 
-  it('refuses a consent that leaves out wallet:read, which every tool needs', async () => {
-    const browser = new Browser();
-    const { uid } = await startAuthorization(browser, { scope: 'wallet:send' });
-    const shown = await details(new Request(`${ISSUER}/interaction/${uid}/details`), uid!);
-    expect(shown.status).toBe(400);
-    expect(await shown.json()).toEqual({ error: 'invalid_scope' });
-    const signer = owner();
-    expect((await postConsent(uid!, signer.address, await signer.signMessage({ message: 'x' }))).status).toBe(400);
+  it.each([
+    ['no scope at all', null, ['wallet:read']],
+    ['only openid offline_access', 'openid offline_access', ['wallet:read']],
+    ['both wallet scopes', 'wallet:read wallet:send', ['wallet:read', 'wallet:send']],
+  ])('serves an authorization with %s', async (_name, scope, expected) => {
+    const { uid } = await startAuthorization(new Browser(), { scope });
+    expect(uid).toBeDefined();
+    expect((await getDetails(uid!)).scopes.map((s) => s.id)).toEqual(expected);
+  });
+
+  it('refuses wallet:send without wallet:read at the authorization endpoint, back to the client', async () => {
+    const start = await startAuthorization(new Browser(), { scope: 'wallet:send' });
+    expect(start.uid).toBeUndefined();
+    expect(start.redirected?.searchParams.get('error')).toBe('invalid_scope');
   });
 
   it('refuses a signature made for another interaction', async () => {

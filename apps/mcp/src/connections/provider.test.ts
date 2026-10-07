@@ -444,6 +444,14 @@ describe('authorization server', () => {
     expect(JSON.parse(body).token_endpoint).toBe(`${ISSUER}/oauth/token`);
   });
 
+  it('advertises the wallet scopes in the authorization server metadata', async () => {
+    const { oauth } = await import('./provider');
+    for (const path of ['openid-configuration', 'oauth-authorization-server']) {
+      const res = await oauth(new Request(`${ISSUER}/.well-known/${path}`));
+      expect((await res.json()).scopes_supported, path).toEqual(expect.arrayContaining(['wallet:read', 'wallet:send']));
+    }
+  });
+
   it('advertises only endpoints it serves: no pushed authorization requests', async () => {
     const { oauth } = await import('./provider');
     const res = await oauth(new Request(`${ISSUER}/.well-known/openid-configuration`));
