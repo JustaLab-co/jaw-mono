@@ -3,7 +3,11 @@ import { verifyMessage, type Hex } from 'viem';
 import { beforeAll, describe, expect, it } from 'vitest';
 import { useTestDb } from '@/db/test-db';
 import { callTool, connect, owner, setTestEnv, verifyLocally } from '@/connections/testkit';
+import { eq } from 'drizzle-orm';
 import { verifyBearer } from '@/connections/auth';
+import { revokeByGrant } from '@/connections/rows';
+import { getDb } from '@/db/client';
+import { connections } from '@/db/schema';
 import { decideFromPage, readForPage } from './page-api';
 import { countPending } from './store';
 
@@ -162,6 +166,19 @@ describe('approvals', () => {
     );
     const tenant = (await verifyBearer(c.access_token))?.extra?.tenant as { connectionId: string };
     expect(await countPending(tenant.connectionId)).toBe(20);
+  });
+
+  it('refuses a decision once the connection is revoked', async () => {
+    const { c, id } = await requestSignature();
+    const v = await view(id);
+    const tenant = (await verifyBearer(c.access_token))?.extra?.tenant as { connectionId: string };
+    const [row] = await getDb().select().from(connections).where(eq(connections.id, tenant.connectionId));
+    await revokeByGrant(row.grantId as string);
+    const signature = await c.signer.signMessage({ message: v.approve.message });
+    expect(
+      (await decideFromPage(id, { verdict: 'approved', signature, previewHash: v.previewHash }, verifyLocally)).kind
+    ).toBe('connection_revoked');
+    expect((await view(id)).status).toBe('pending');
   });
 
   it('refuses when the page rendered a different preview', async () => {

@@ -2,13 +2,14 @@ import { decide, payloadHash, signedPayload, toPageView, type ApprovalPageView, 
 import { isHex, keccak256, type Hex } from 'viem';
 import { verifyOnChain, type VerifySignature } from '@/lib/chain';
 import { log } from '@/lib/edge';
-import { findById, recordDecision } from './store';
+import { connectionLive, findById, recordDecision } from './store';
 
 export type PageOutcome =
   | { kind: 'ok'; view: ApprovalPageView }
   | { kind: 'not_found' }
   | { kind: 'invalid_request' }
   | { kind: 'bad_signature' }
+  | { kind: 'connection_revoked' }
   | { kind: 'verification_unavailable' }
   | { kind: 'preview_changed' }
   | { kind: 'not_pending'; view: ApprovalPageView };
@@ -35,6 +36,7 @@ export async function decideFromPage(
   const view = toPageView(request);
   if (request.state.status !== 'pending') return { kind: 'not_pending', view };
   if (view.previewHash !== previewHash) return { kind: 'preview_changed' };
+  if (!(await connectionLive(request.id))) return { kind: 'connection_revoked' };
 
   const payload = signedPayload(request, verdict as Verdict);
   const valid = await verify({ address: request.account, message: payload.message, signature }).catch(
@@ -66,6 +68,7 @@ const STATUS: Record<PageOutcome['kind'], number> = {
   not_found: 404,
   invalid_request: 400,
   bad_signature: 403,
+  connection_revoked: 410,
   verification_unavailable: 503,
   preview_changed: 409,
   not_pending: 409,

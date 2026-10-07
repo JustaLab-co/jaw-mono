@@ -9,7 +9,7 @@ import {
 import { and, count, eq, gt, sql } from 'drizzle-orm';
 import type { Address, Hex } from 'viem';
 import { getDb } from '@/db/client';
-import { approvalRequests } from '@/db/schema';
+import { approvalRequests, connections } from '@/db/schema';
 
 type Row = typeof approvalRequests.$inferSelect;
 
@@ -121,4 +121,14 @@ export async function recordDecision(request: ApprovalRequest): Promise<boolean>
 export async function countPending(connectionId: string): Promise<number> {
   const [row] = await getDb().select({ n: count() }).from(approvalRequests).where(pendingFor(connectionId));
   return row.n;
+}
+
+/** Whether the connection that made this request can still have it decided. */
+export async function connectionLive(id: ApprovalId): Promise<boolean> {
+  const [row] = await getDb()
+    .select({ id: connections.id })
+    .from(approvalRequests)
+    .innerJoin(connections, eq(connections.id, approvalRequests.connectionId))
+    .where(and(eq(approvalRequests.id, id), eq(connections.status, 'active')));
+  return row !== undefined;
 }

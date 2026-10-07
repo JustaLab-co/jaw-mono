@@ -142,4 +142,6 @@ const REFUSALS: Record<string, string> = {
   bad_signature: 'The signature did not verify for this account.',
   preview_changed: 'The request changed while you were reading it. Reload the page.',
   not_found: 'This request does not exist.',
+  connection_revoked: 'The app that asked was disconnected, so this request can no longer be approved.',
+  verification_unavailable: 'The signature could not be checked right now. Try again in a moment.',
 };
