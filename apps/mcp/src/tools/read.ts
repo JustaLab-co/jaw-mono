@@ -94,15 +94,20 @@ async function quote(t: Tenant, url: string) {
     network,
     fetch: safeFetch(config().insecureFetchHosts),
   }).catch((err: unknown) => {
-    const code = err instanceof FetchRefused ? 'blocked_url' : 'unreachable';
-    return { kind: 'unreachable' as const, code, reason: err instanceof Error ? err.message : String(err) };
+    // A fixed reason per code: the error text would tell a client which internal names resolve.
+    const refused = err instanceof FetchRefused;
+    return {
+      kind: 'unreachable' as const,
+      code: refused ? 'blocked_url' : 'unreachable',
+      reason: refused ? 'The URL is not allowed.' : 'The URL could not be reached.',
+    };
   });
   if (outcome.kind === 'unreachable') {
     return {
       out: quoteOutput.parse({
         ...base,
         kind: 'refused',
-        refusal: { code: outcome.code, reason: fenceText('this server', outcome.reason, 400) },
+        refusal: { code: outcome.code, reason: outcome.reason },
         summary: `No quote: ${outcome.code}.`,
       }),
     };
