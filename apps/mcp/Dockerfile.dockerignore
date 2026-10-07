@@ -1,0 +1,8 @@
+**/node_modules
+**/.next
+**/dist
+**/.nx
+.git
+.claude
+contracts
+**/.env*

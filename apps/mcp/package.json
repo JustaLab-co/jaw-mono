@@ -1,0 +1,18 @@
+{
+  "name": "@jaw-mono/mcp",
+  "version": "0.0.1",
+  "private": true,
+  "dependencies": {
+    "@modelcontextprotocol/server": "2.2.0",
+    "drizzle-orm": "0.45.3",
+    "mcp-handler": "2.2.0",
+    "next": "~15.5.10",
+    "postgres": "3.4.9",
+    "react": "19.2.6",
+    "react-dom": "19.2.6",
+    "zod": "^4.3.6"
+  },
+  "devDependencies": {
+    "drizzle-kit": "0.31.11"
+  }
+}
