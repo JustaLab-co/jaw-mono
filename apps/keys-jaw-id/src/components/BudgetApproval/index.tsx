@@ -24,7 +24,7 @@ export function BudgetTerms({ preview }: { preview: BudgetView['preview'] }) {
 }
 
 /** The JAW UI styles apply under `data-jaw-ui`, and the dialog portals into it rather than off to the body. */
-function UiScope({ children }: { children: ReactNode }) {
+export function UiScope({ children }: { children: ReactNode }) {
   const [root, setRoot] = useState<HTMLDivElement | null>(null);
   return (
     <div ref={setRoot} data-jaw-ui className="contents">

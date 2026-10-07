@@ -23,7 +23,8 @@ export function middleware(request: NextRequest) {
   // If dApp RPC proxying is ever routed through api.justaname.id exclusively,
   // the wildcards can be removed.
   const isCLIBridge = request.nextUrl.pathname === '/cli-bridge';
-  const isMcpPage = request.nextUrl.pathname === '/authorize' || request.nextUrl.pathname.startsWith('/approve/');
+  const { pathname } = request.nextUrl;
+  const isMcpPage = pathname === '/authorize' || pathname === '/connections' || pathname.startsWith('/approve/');
   const connectSrc = [
     "'self'",
     'https://api.justaname.id',

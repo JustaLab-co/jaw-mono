@@ -1,4 +1,4 @@
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi } from 'vitest';
 import { NextRequest } from 'next/server';
 
 import { middleware } from './middleware';
@@ -34,13 +34,25 @@ describe('framing policy is route-scoped', () => {
   });
 
   describe('any other route — default deny', () => {
-    it.each(['/settings', '/some/future/route', '/dialog', '/authorize', '/approve/abc'])(
+    it.each(['/settings', '/some/future/route', '/dialog', '/authorize', '/approve/abc', '/connections'])(
       '%s keeps both deny headers',
       (path) => {
         expect(cspFor(path)).toContain("frame-ancestors 'none'");
         expect(headersFor(path).get('X-Frame-Options')).toBe('DENY');
       }
     );
+  });
+});
+
+describe('/connections', () => {
+  it('may reach the MCP server in local development, as the approval page does', () => {
+    vi.stubEnv('NODE_ENV', 'development');
+    vi.stubEnv('JAW_MCP_URL', 'http://localhost:3005');
+    try {
+      expect(cspFor('/connections')).toMatch(/connect-src [^;]*http:\/\/localhost:3005/);
+    } finally {
+      vi.unstubAllEnvs();
+    }
   });
 });
 

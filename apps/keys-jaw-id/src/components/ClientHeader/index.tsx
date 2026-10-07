@@ -9,13 +9,21 @@ export interface ClientIdentity {
 
 // A third-party client is named by the domain of its metadata document, which it
 // cannot fake; the name it declares about itself is secondary.
-export function ClientHeader({ title, client }: { title: string; client: ClientIdentity }) {
+export function ClientHeader({
+  title,
+  client,
+  heading: Heading = 'h1',
+}: {
+  title: string;
+  client: ClientIdentity;
+  heading?: 'h1' | 'h2';
+}) {
   const shown = client.official ? client.name : (client.host ?? client.clientId);
   return (
     <>
-      <h1 className="text-lg font-semibold">
+      <Heading className="text-lg font-semibold">
         {title} {shown}
-      </h1>
+      </Heading>
       {client.official ? (
         <p className="text-muted-foreground text-sm">Official JAW client</p>
       ) : (
