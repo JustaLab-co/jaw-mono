@@ -25,6 +25,12 @@ const LOOKALIKES: Readonly<Record<string, string>> = {
   ѡ: 'w',
   ω: 'w',
   ᴡ: 'w',
+  ɑ: 'a',
+  // Cherokee, by the lowercase form each capital folds to.
+  '\uAB7B': 'j',
+  '\uAB7A': 'a',
+  '\uAB83': 'w',
+  '\uABA4': 'w',
 };
 
 const HIDDEN = /[\p{Cf}\p{Default_Ignorable_Code_Point}]/gu;
@@ -57,7 +63,8 @@ function wordClaimsJaw(word: string): boolean {
 }
 
 function claimsJaw(name: string): boolean {
-  const visible = name.normalize('NFKC').replace(HIDDEN, '').replace(/\p{M}/gu, '');
+  // NFKD leaves accents as separate marks (NFKC would compose them back), so they drop out here.
+  const visible = name.normalize('NFKD').replace(HIDDEN, '').replace(/\p{M}/gu, '');
   const words: string[] = [];
   let letters = '';
   for (const word of visible.split(/[^\p{L}\p{N}]+/u).filter(Boolean)) {
