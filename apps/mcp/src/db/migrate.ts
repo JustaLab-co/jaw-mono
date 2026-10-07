@@ -14,8 +14,8 @@ export async function runMigrations(url: string) {
     await sql`select pg_advisory_lock(${LOCK_ID})`;
     await migrate(drizzle(sql), { migrationsFolder: join(process.cwd(), 'drizzle') });
     await sql`delete from oauth_payloads where expires_at < now() - interval '1 day'`;
-    const retryable = new Date(Date.now() - RETRY_WINDOW_MS);
-    await sql`update oauth_payloads set key_wrap = null where consumed_at < ${retryable} and key_wrap is not null`;
+    await sql`update oauth_payloads set key_wrap = null
+      where consumed_at < now() - ${RETRY_WINDOW_MS} * interval '1 millisecond' and key_wrap is not null`;
     await sql`select pg_advisory_unlock(${LOCK_ID})`;
   } finally {
     await sql.end();
