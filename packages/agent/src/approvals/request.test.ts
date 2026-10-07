@@ -166,3 +166,12 @@ describe('preview of a hostile message', () => {
     expect(a.previewHash).toMatch(/^0x[0-9a-f]{64}$/);
   });
 });
+
+describe('text Postgres cannot store', () => {
+  it('refuses a NUL and an unpaired surrogate, and keeps paired ones', () => {
+    expect(validateMessage('a\u0000b')).toBe('unstorable');
+    expect(validateMessage('a\uD800b')).toBe('unstorable');
+    expect(validateMessage('a\uDC00')).toBe('unstorable');
+    expect(validateMessage('gm \u{1F44B}')).toBeUndefined();
+  });
+});

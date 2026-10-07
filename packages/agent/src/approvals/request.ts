@@ -94,12 +94,16 @@ export function parseApprovalId(raw: string): ApprovalId | undefined {
   return ID.test(raw) ? (raw as ApprovalId) : undefined;
 }
 
-export type MessageRefusal = 'empty' | 'too_long' | 'reserved_prefix';
+export type MessageRefusal = 'empty' | 'too_long' | 'reserved_prefix' | 'unstorable';
+
+/** NUL and unpaired surrogates, which Postgres refuses in text and jsonb. */
+export const hasUnstorableText = (text: string) => /[\0\p{Cs}]/u.test(text);
 
 export function validateMessage(message: string): MessageRefusal | undefined {
   if (message.length === 0) return 'empty';
   if (message.length > MAX_MESSAGE_CHARS) return 'too_long';
   if (message.startsWith(RESERVED_PREFIX)) return 'reserved_prefix';
+  if (hasUnstorableText(message)) return 'unstorable';
   return undefined;
 }
 

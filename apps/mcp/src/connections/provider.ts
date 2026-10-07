@@ -1,4 +1,4 @@
-import { FIRST_PARTY_CLIENTS } from '@jaw.id/agent';
+import { FIRST_PARTY_CLIENTS, hasUnstorableText } from '@jaw.id/agent';
 import Provider, { errors, interactionPolicy, type Configuration } from 'oidc-provider';
 import { databaseUnreachable, log } from '@/lib/edge';
 import { PgAdapter, sessionKey } from './adapter';
@@ -64,7 +64,11 @@ export function createProvider(cfg: Config, overrides: Partial<Configuration> = 
       devInteractions: { enabled: false },
       userinfo: { enabled: false },
       revocation: { enabled: true },
-      clientIdMetadataDocument: { enabled: true, ack: 'draft-02' },
+      clientIdMetadataDocument: {
+        enabled: true,
+        ack: 'draft-02',
+        allowClient: async (_ctx, client) => !hasUnstorableText(client.clientName ?? ''),
+      },
       resourceIndicators: {
         enabled: true,
         defaultResource: () => cfg.resource,

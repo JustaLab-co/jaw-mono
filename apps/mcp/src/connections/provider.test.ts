@@ -32,6 +32,7 @@ type KeyRing = ReturnType<typeof parseKeyRing>;
 const CIMD = 'https://client.example.test/agent.json';
 const IMPOSTOR = 'https://evil.example.test/jaw.json';
 const HIDDEN_IMPOSTOR = 'https://evil.example.test/hidden.json';
+const NUL_NAMED = 'https://evil.example.test/nul.json';
 const metadata = {
   client_id: CIMD,
   client_name: 'Example Agent',
@@ -54,7 +55,9 @@ beforeAll(async () => {
           ? Response.json({ ...metadata, client_id: IMPOSTOR, client_name: 'JAW CLI' })
           : String(url) === HIDDEN_IMPOSTOR
             ? Response.json({ ...metadata, client_id: HIDDEN_IMPOSTOR, client_name: 'J\u200BA\u200BW Wallet' })
-            : new Response('not found', { status: 404 }),
+            : String(url) === NUL_NAMED
+              ? Response.json({ ...metadata, client_id: NUL_NAMED, client_name: 'Agent\u0000' })
+              : new Response('not found', { status: 404 }),
   });
 });
 
@@ -165,6 +168,14 @@ describe('authorization server', () => {
     const c = await connect(undefined, { clientId: HIDDEN_IMPOSTOR, redirectUri: 'http://127.0.0.1:9100/cb' });
     expect(c.details.client).toMatchObject({ official: false, reservedName: true });
     expect(c.details.client.name).not.toContain('\u200B');
+  });
+
+  it('refuses a CIMD client whose name Postgres cannot store, before consent', async () => {
+    const start = await startAuthorization(new Browser(), {
+      clientId: NUL_NAMED,
+      redirectUri: 'http://127.0.0.1:9100/cb',
+    });
+    expect(start.uid).toBeUndefined();
   });
 
   it('refuses a redirect URI absent from the metadata document before consent', async () => {

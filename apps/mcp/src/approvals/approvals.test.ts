@@ -1,6 +1,6 @@
 import { APPROVAL_TTL_MS, type SignedPayload } from '@jaw.id/agent';
 import { verifyMessage, type Hex } from 'viem';
-import { beforeAll, describe, expect, it } from 'vitest';
+import { beforeAll, describe, expect, it, vi } from 'vitest';
 import { useTestDb } from '@/db/test-db';
 import { callTool, connect, owner, setTestEnv, verifyLocally } from '@/connections/testkit';
 import { eq } from 'drizzle-orm';
@@ -9,6 +9,7 @@ import { revokeByGrant } from '@/connections/rows';
 import { getDb } from '@/db/client';
 import { approvalRequests, connections } from '@/db/schema';
 import { decideFromPage, outcomeResponse, readForPage } from './page-api';
+import * as store from './store';
 import { countPending } from './store';
 
 setTestEnv();
@@ -33,6 +34,30 @@ const messageOf = (p: SignedPayload) => {
   if (p.type !== 'message') throw new Error('not a message payload');
   return p.message;
 };
+
+describe('input Postgres cannot store, and errors a client must not see', () => {
+  it('refuses a message with a NUL or a lone surrogate before it reaches the database', async () => {
+    const c = await connect();
+    for (const message of ['a\u0000b', 'a\uD800b']) {
+      const result = await callTool(c.access_token, 'jaw_request_signature', { message });
+      expect(result.isError).toBe(true);
+      expect(result.content[0].text).toBe('The message contains a NUL character or a broken surrogate pair.');
+    }
+    const tenant = (await verifyBearer(c.access_token))?.extra?.tenant as { connectionId: string };
+    expect(await countPending(tenant.connectionId)).toBe(0);
+  });
+
+  it('answers a failing tool with a fixed text and keeps the SQL out of it', async () => {
+    const c = await connect();
+    const leak = Object.assign(new Error('Failed query: insert into "approval_requests" params: secret'), {
+      cause: { code: '22P05' },
+    });
+    vi.spyOn(store, 'insertUnderCap').mockRejectedValueOnce(leak);
+    const result = await callTool(c.access_token, 'jaw_request_signature', { message: 'hello' });
+    expect(result.isError).toBe(true);
+    expect(JSON.stringify(result)).not.toMatch(/insert|params|secret|approval_requests/);
+  });
+});
 
 describe('approvals', () => {
   it('round trip: the owner signs the stored message and status returns a signature that verifies', async () => {

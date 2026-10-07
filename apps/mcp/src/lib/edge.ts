@@ -1,3 +1,4 @@
+import type { McpServer } from '@modelcontextprotocol/server';
 import { countHit, isPaused } from '@/db/settings';
 import { pageCors } from './cors';
 
@@ -71,6 +72,24 @@ export function databaseUnreachable(err: unknown): boolean {
   return [codeOf(err), codeOf((err as { cause?: unknown } | undefined)?.cause)].some(
     (c) => typeof c === 'string' && UNREACHABLE.has(c)
   );
+}
+
+// The MCP SDK answers a throwing tool with the error's message, and a driver
+// error's message carries its SQL and parameters. Every tool gets a fixed text instead.
+export function guardTools(server: McpServer): void {
+  const register = server.registerTool.bind(server) as (...args: unknown[]) => unknown;
+  server.registerTool = ((name: string, config: unknown, handler: (...args: unknown[]) => unknown) =>
+    register(name, config, async (...args: unknown[]) => {
+      try {
+        return await handler(...args);
+      } catch (err) {
+        log('error', { msg: 'tool failed', error: errorLabel(err) });
+        const text = databaseUnreachable(err)
+          ? 'The service is temporarily unavailable. Try again shortly.'
+          : 'The tool failed on the server.';
+        return { content: [{ type: 'text', text }], isError: true };
+      }
+    })) as typeof server.registerTool;
 }
 
 export function withEdge(

@@ -25,6 +25,7 @@ const REFUSALS = {
   empty: 'The message is empty.',
   too_long: 'The message is longer than 4096 characters.',
   reserved_prefix: 'Messages starting with "JAW " are reserved for JAW itself.',
+  unstorable: 'The message contains a NUL character or a broken surrogate pair.',
 };
 
 function describe(request: ApprovalRequest): StatusOutput {
