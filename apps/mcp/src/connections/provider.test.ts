@@ -366,6 +366,18 @@ describe('authorization server', () => {
     expect(await findActive(sub)).toBeDefined();
   });
 
+  it('builds discovery URLs from the configured public URL, never from forwarded headers', async () => {
+    const { oauth } = await import('./provider');
+    const res = await oauth(
+      new Request(`${ISSUER}/.well-known/openid-configuration`, {
+        headers: { 'x-forwarded-host': 'evil.example', 'x-forwarded-proto': 'https' },
+      })
+    );
+    const body = JSON.stringify(await res.json());
+    expect(body).not.toContain('evil.example');
+    expect(JSON.parse(body).token_endpoint).toBe(`${ISSUER}/oauth/token`);
+  });
+
   it('refuses a token for another resource', async () => {
     const c = await connect();
     const other = await token({
