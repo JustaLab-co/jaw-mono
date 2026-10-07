@@ -12,10 +12,7 @@ export function getDb(): Db {
   if (cache.jawMcpDb) return cache.jawMcpDb;
   const url = process.env.DATABASE_URL;
   if (!url) throw new Error('DATABASE_URL is not set');
-  cache.jawMcpDb = drizzle(
-    postgres(url, { connect_timeout: 2, max: 10, onnotice: () => {}, connection: { statement_timeout: 10_000 } }),
-    { schema }
-  );
+  cache.jawMcpDb = drizzle(postgres(url, { connect_timeout: 2, max: 10, onnotice: () => {} }), { schema });
   return cache.jawMcpDb;
 }
 

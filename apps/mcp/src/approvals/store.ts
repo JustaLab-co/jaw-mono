@@ -11,7 +11,7 @@ import {
   type GasQuote,
   type PaymentTerms,
 } from '@jaw.id/agent';
-import { and, count, eq, exists, getTableColumns, gt, sql } from 'drizzle-orm';
+import { and, count, eq, exists, getTableColumns, gt, isNull, ne, sql } from 'drizzle-orm';
 import { isAddress, isHex, zeroAddress, type Address, type Hex } from 'viem';
 import { isLive } from '@/connections/rows';
 import { getDb } from '@/db/client';
@@ -258,6 +258,17 @@ export async function recordDecision(request: ApprovalRequest, effect?: Effect):
         .insert(grants)
         .values({ ...effect.grant, connectionId, approvalId: request.id })
         .onConflictDoNothing();
+      // Decided here, not when the page loaded: every older budget of the connection is now to revoke.
+      await tx
+        .update(grants)
+        .set({ replacedAt: new Date() })
+        .where(
+          and(
+            eq(grants.connectionId, connectionId),
+            ne(grants.permissionId, effect.grant.permissionId),
+            isNull(grants.replacedAt)
+          )
+        );
     }
     if (effect && 'payment' in effect) await insertOneOff(tx, connectionId, effect.payment);
     return true;

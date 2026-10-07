@@ -34,6 +34,7 @@ import {
   entriesFor,
   findPayment,
   finish,
+  txHashTaken,
   markSigned,
   PAY_LIMIT_MS,
   type Conclusion,
@@ -193,6 +194,13 @@ async function settledBy(o: Outcome, signedAfter: Date, clients: ChainClients): 
   return confirmByReceipt(attempt, payment.txHash as Hex, clients, CONFIRM_MS);
 }
 
+/** A hash another payment of this payer already settled on proves nothing about this one, so it is dropped. */
+async function claimedHashOnly(o: Outcome, rowId: string): Promise<Outcome> {
+  if (o.kind !== 'paid' || !o.payment.txHash) return o;
+  if (!(await txHashTaken(o.payer, o.payment.txHash, rowId))) return o;
+  return { ...o, payment: { ...o.payment, txHash: undefined } };
+}
+
 /** When another call concluded the row first, its answer is the row's; this call's only if the row is gone. */
 async function rowAfter(row: PaymentRow, c: Conclusion): Promise<PaymentRow> {
   const current = await findPayment(row.id);
@@ -283,8 +291,9 @@ export async function concludeSend(
   outcome: Outcome,
   opts: { signed: boolean; signedAt: Date; confirmWith?: ChainClients }
 ): Promise<{ row: PaymentRow; fenced: string[] }> {
-  const settled = opts.confirmWith ? await settledBy(outcome, opts.signedAt, opts.confirmWith) : undefined;
-  const conclusion = conclusionOf(outcome, opts.signed, settled);
+  const checked = await claimedHashOnly(outcome, row.id);
+  const settled = opts.confirmWith ? await settledBy(checked, opts.signedAt, opts.confirmWith) : undefined;
+  const conclusion = conclusionOf(checked, opts.signed, settled);
   const fenced = fencedOf(row.url, outcome);
   const written = await finish(row.id, token, conclusion, fenced);
   return { row: written ?? (await rowAfter(row, conclusion)), fenced };

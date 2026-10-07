@@ -1,6 +1,6 @@
 {
-  "id": "a3698bb0-9a8c-47a6-9492-2c18f73c9b60",
-  "prevId": "74d0c234-ccd9-4e25-9ba3-e2a41f0c2c76",
+  "id": "117f4ef3-174c-46fd-acaa-9fde12a124b3",
+  "prevId": "d4f98419-7568-42aa-a000-51bb7f3fcbe5",
   "version": "7",
   "dialect": "postgresql",
   "tables": {
@@ -110,6 +110,12 @@
           "type": "text",
           "primaryKey": false,
           "notNull": false
+        },
+        "seller_request": {
+          "name": "seller_request",
+          "type": "jsonb",
+          "primaryKey": false,
+          "notNull": false
         }
       },
       "indexes": {
@@ -130,26 +136,30 @@
             }
           ],
           "isUnique": false,
-          "with": {},
+          "concurrently": false,
           "method": "btree",
-          "concurrently": false
+          "with": {}
         }
       },
       "foreignKeys": {
         "approval_requests_connection_id_connections_id_fk": {
           "name": "approval_requests_connection_id_connections_id_fk",
           "tableFrom": "approval_requests",
-          "columnsFrom": ["connection_id"],
           "tableTo": "connections",
+          "columnsFrom": ["connection_id"],
           "columnsTo": ["id"],
-          "onUpdate": "no action",
-          "onDelete": "no action"
+          "onDelete": "no action",
+          "onUpdate": "no action"
         }
       },
       "compositePrimaryKeys": {},
       "uniqueConstraints": {},
       "policies": {},
       "checkConstraints": {
+        "approval_seller_request": {
+          "name": "approval_seller_request",
+          "value": "\"approval_requests\".\"kind\" = 'payment' or \"approval_requests\".\"seller_request\" is null"
+        },
         "approval_evidence": {
           "name": "approval_evidence",
           "value": "(\"approval_requests\".\"status\" = 'pending') = (\"approval_requests\".\"decided_at\" is null and \"approval_requests\".\"preview_hash\" is null and \"approval_requests\".\"payload_hash\" is null)"
@@ -263,13 +273,13 @@
       "uniqueConstraints": {
         "connections_interaction_uid_unique": {
           "name": "connections_interaction_uid_unique",
-          "columns": ["interaction_uid"],
-          "nullsNotDistinct": false
+          "nullsNotDistinct": false,
+          "columns": ["interaction_uid"]
         },
         "connections_grant_id_unique": {
           "name": "connections_grant_id_unique",
-          "columns": ["grant_id"],
-          "nullsNotDistinct": false
+          "nullsNotDistinct": false,
+          "columns": ["grant_id"]
         }
       },
       "policies": {},
@@ -357,6 +367,18 @@
           "primaryKey": false,
           "notNull": true,
           "default": "now()"
+        },
+        "replaced_at": {
+          "name": "replaced_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "revoked_at": {
+          "name": "revoked_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": false
         }
       },
       "indexes": {
@@ -377,29 +399,29 @@
             }
           ],
           "isUnique": false,
-          "with": {},
+          "concurrently": false,
           "method": "btree",
-          "concurrently": false
+          "with": {}
         }
       },
       "foreignKeys": {
         "grants_connection_id_connections_id_fk": {
           "name": "grants_connection_id_connections_id_fk",
           "tableFrom": "grants",
-          "columnsFrom": ["connection_id"],
           "tableTo": "connections",
+          "columnsFrom": ["connection_id"],
           "columnsTo": ["id"],
-          "onUpdate": "no action",
-          "onDelete": "no action"
+          "onDelete": "no action",
+          "onUpdate": "no action"
         },
         "grants_approval_id_approval_requests_id_fk": {
           "name": "grants_approval_id_approval_requests_id_fk",
           "tableFrom": "grants",
-          "columnsFrom": ["approval_id"],
           "tableTo": "approval_requests",
+          "columnsFrom": ["approval_id"],
           "columnsTo": ["id"],
-          "onUpdate": "no action",
-          "onDelete": "no action"
+          "onDelete": "no action",
+          "onUpdate": "no action"
         }
       },
       "compositePrimaryKeys": {},
@@ -479,9 +501,9 @@
             }
           ],
           "isUnique": false,
-          "with": {},
+          "concurrently": false,
           "method": "btree",
-          "concurrently": false
+          "with": {}
         },
         "oauth_payloads_uid_index": {
           "name": "oauth_payloads_uid_index",
@@ -494,9 +516,9 @@
             }
           ],
           "isUnique": false,
-          "with": {},
+          "concurrently": false,
           "method": "btree",
-          "concurrently": false
+          "with": {}
         },
         "oauth_payloads_expires_at_index": {
           "name": "oauth_payloads_expires_at_index",
@@ -509,9 +531,9 @@
             }
           ],
           "isUnique": false,
-          "with": {},
+          "concurrently": false,
           "method": "btree",
-          "concurrently": false
+          "with": {}
         },
         "oauth_payloads_wrap_sweep_index": {
           "name": "oauth_payloads_wrap_sweep_index",
@@ -524,10 +546,10 @@
             }
           ],
           "isUnique": false,
-          "with": {},
-          "method": "btree",
           "where": "\"oauth_payloads\".\"key_wrap\" is not null",
-          "concurrently": false
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
         }
       },
       "foreignKeys": {},
@@ -569,7 +591,13 @@
           "name": "permission_id",
           "type": "text",
           "primaryKey": false,
-          "notNull": true
+          "notNull": false
+        },
+        "approval_id": {
+          "name": "approval_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
         },
         "payer": {
           "name": "payer",
@@ -766,9 +794,9 @@
             }
           ],
           "isUnique": true,
-          "with": {},
+          "concurrently": false,
           "method": "btree",
-          "concurrently": false
+          "with": {}
         },
         "payments_payer_nonce_index": {
           "name": "payments_payer_nonce_index",
@@ -787,9 +815,25 @@
             }
           ],
           "isUnique": true,
-          "with": {},
+          "concurrently": false,
           "method": "btree",
-          "concurrently": false
+          "with": {}
+        },
+        "payments_approval_id_index": {
+          "name": "payments_approval_id_index",
+          "columns": [
+            {
+              "expression": "approval_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": true,
+          "where": "\"payments\".\"approval_id\" is not null",
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
         },
         "payments_connection_id_created_at_id_index": {
           "name": "payments_connection_id_created_at_id_index",
@@ -814,9 +858,9 @@
             }
           ],
           "isUnique": false,
-          "with": {},
+          "concurrently": false,
           "method": "btree",
-          "concurrently": false
+          "with": {}
         },
         "payments_permission_id_created_at_index": {
           "name": "payments_permission_id_created_at_index",
@@ -835,9 +879,9 @@
             }
           ],
           "isUnique": false,
-          "with": {},
+          "concurrently": false,
           "method": "btree",
-          "concurrently": false
+          "with": {}
         },
         "payments_signed_at_index": {
           "name": "payments_signed_at_index",
@@ -850,27 +894,40 @@
             }
           ],
           "isUnique": false,
-          "with": {},
-          "method": "btree",
           "where": "\"payments\".\"state\" in ('signed', 'unknown')",
-          "concurrently": false
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
         }
       },
       "foreignKeys": {
         "payments_connection_id_connections_id_fk": {
           "name": "payments_connection_id_connections_id_fk",
           "tableFrom": "payments",
-          "columnsFrom": ["connection_id"],
           "tableTo": "connections",
+          "columnsFrom": ["connection_id"],
           "columnsTo": ["id"],
-          "onUpdate": "no action",
-          "onDelete": "no action"
+          "onDelete": "no action",
+          "onUpdate": "no action"
+        },
+        "payments_approval_id_approval_requests_id_fk": {
+          "name": "payments_approval_id_approval_requests_id_fk",
+          "tableFrom": "payments",
+          "tableTo": "approval_requests",
+          "columnsFrom": ["approval_id"],
+          "columnsTo": ["id"],
+          "onDelete": "no action",
+          "onUpdate": "no action"
         }
       },
       "compositePrimaryKeys": {},
       "uniqueConstraints": {},
       "policies": {},
       "checkConstraints": {
+        "payment_source": {
+          "name": "payment_source",
+          "value": "(\"payments\".\"permission_id\" is null) <> (\"payments\".\"approval_id\" is null)"
+        },
         "payment_shape": {
           "name": "payment_shape",
           "value": "(\"payments\".\"state\" = 'pending' and \"payments\".\"nonce\" is null and \"payments\".\"authorization\" is null and \"payments\".\"fenced\" is null)\n        or (\"payments\".\"state\" in ('signed', 'unknown') and \"payments\".\"nonce\" is not null and \"payments\".\"authorization\" is not null\n            and \"payments\".\"authorized\" is not null and \"payments\".\"deadline\" is not null and \"payments\".\"signed_at\" is not null)\n        or (\"payments\".\"state\" = 'settled' and \"payments\".\"kind\" = 'free' and \"payments\".\"nonce\" is null)\n        or (\"payments\".\"state\" = 'settled' and \"payments\".\"kind\" = 'paid' and \"payments\".\"nonce\" is not null and \"payments\".\"amount\" is not null)\n        or (\"payments\".\"state\" = 'failed' and \"payments\".\"finished_at\" is not null)"
@@ -913,9 +970,9 @@
             }
           ],
           "isUnique": false,
-          "with": {},
+          "concurrently": false,
           "method": "btree",
-          "concurrently": false
+          "with": {}
         }
       },
       "foreignKeys": {},
@@ -965,10 +1022,10 @@
   },
   "enums": {},
   "schemas": {},
-  "views": {},
   "sequences": {},
   "roles": {},
   "policies": {},
+  "views": {},
   "_meta": {
     "columns": {},
     "schemas": {},

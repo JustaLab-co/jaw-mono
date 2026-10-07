@@ -1,5 +1,5 @@
 import { usdcForNetwork, within, type ChainClients, type UsdcAsset } from '@jaw.id/agent';
-import { decodeEventLog, isAddressEqual, parseAbi, type Address, type Hex, type TransactionReceipt } from 'viem';
+import { decodeEventLog, isAddressEqual, pad, parseAbi, type Address, type Hex, type TransactionReceipt } from 'viem';
 
 const EVENTS = parseAbi([
   'event AuthorizationUsed(address indexed authorizer, bytes32 indexed nonce)',
@@ -78,6 +78,9 @@ export async function confirmByReceipt(
     if (attempt.scheme === 'upto') {
       if (blockTime.getTime() < attempt.signedAt.getTime() - SKEW_MS) return undefined;
       if (!(await nonceUsed(attempt, token, clients))) return undefined;
+      // The spent nonce must be this transaction's: its call data carries the Permit2 permit it executed.
+      const { input } = await client.getTransaction({ hash: txHash });
+      if (!input.toLowerCase().includes(pad(attempt.nonce, { size: 32 }).slice(2).toLowerCase())) return undefined;
     }
     return { txHash, blockTime, amount };
   };
@@ -98,7 +101,8 @@ export type ChainAnswer = ({ kind: 'settled' } & Settled) | { kind: 'expired' } 
 export async function nonceUsed(
   attempt: Pick<Attempt, 'payer' | 'nonce' | 'scheme'>,
   token: UsdcAsset,
-  clients: ChainClients
+  clients: ChainClients,
+  blockNumber?: bigint
 ): Promise<boolean> {
   const client = clients.publicClient(token.chainId);
   if (attempt.scheme === 'exact') {
@@ -107,6 +111,7 @@ export async function nonceUsed(
       abi: NONCE_STATE,
       functionName: 'authorizationState',
       args: [attempt.payer, attempt.nonce],
+      blockNumber,
     });
   }
   const nonce = BigInt(attempt.nonce);
@@ -115,6 +120,7 @@ export async function nonceUsed(
     abi: NONCE_STATE,
     functionName: 'nonceBitmap',
     args: [attempt.payer, nonce >> 8n],
+    blockNumber,
   });
   return ((word >> (nonce & 0xffn)) & 1n) === 1n;
 }

@@ -6,7 +6,7 @@ import { getDb } from '@/db/client';
 import { approvalRequests, connections, grants, oauthPayloads, payments, rateLimits } from '@/db/schema';
 import { log } from '@/lib/edge';
 import { chainAnswer, type ChainAnswer } from '@/payments/confirm';
-import { claimUnresolved, expire, markAlerted, settle, type PaymentRow } from '@/payments/store';
+import { claimUnresolved, expire, markAlerted, settle, txHashTaken, type PaymentRow } from '@/payments/store';
 
 export const RECONCILE_AFTER_MS = 60_000;
 const STALE_AFTER_MS = 60 * 60_000;
@@ -64,7 +64,9 @@ function answerFor(row: PaymentRow, clients: ChainClients): Promise<ChainAnswer>
 
 async function apply(row: PaymentRow, answer: ChainAnswer, now: Date, report: Report) {
   if (answer.kind === 'settled') {
-    await settle(row.id, answer);
+    // A hash another payment of this payer settled on is not this one's: the signed ceiling stands, without it.
+    const taken = answer.txHash && (await txHashTaken(row.payer, answer.txHash, row.id));
+    await settle(row.id, taken ? { amount: BigInt(row.authorized as string) } : answer);
     report.settled++;
     return;
   }

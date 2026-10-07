@@ -124,6 +124,13 @@ describe('withEdge', () => {
     expect((await call(withEdge(lookupFailed, { guarded: false }))).status).toBe(503);
   });
 
+  it('answers 503 when the database cancels a statement past its timeout (57014)', async () => {
+    const cancelled = async () => {
+      throw new Error('Failed query', { cause: { code: '57014' } });
+    };
+    expect((await call(withEdge(cancelled, { guarded: false }))).status).toBe(503);
+  });
+
   it('leaves unguarded routes open while paused', async () => {
     store.paused = true;
     expect((await call(withEdge(ok, { guarded: false }))).status).toBe(200);

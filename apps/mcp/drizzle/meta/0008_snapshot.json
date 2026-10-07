@@ -1,6 +1,6 @@
 {
-  "id": "54ed2b2f-42e1-4d93-a93f-113540e32718",
-  "prevId": "e7b78fb4-8dac-4307-bab8-6273bfe3e82a",
+  "id": "d4f98419-7568-42aa-a000-51bb7f3fcbe5",
+  "prevId": "a3698bb0-9a8c-47a6-9492-2c18f73c9b60",
   "version": "7",
   "dialect": "postgresql",
   "tables": {
@@ -110,24 +110,6 @@
           "type": "text",
           "primaryKey": false,
           "notNull": false
-        },
-        "calls_id": {
-          "name": "calls_id",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "tx_hash": {
-          "name": "tx_hash",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "seller_request": {
-          "name": "seller_request",
-          "type": "jsonb",
-          "primaryKey": false,
-          "notNull": false
         }
       },
       "indexes": {
@@ -151,22 +133,6 @@
           "concurrently": false,
           "method": "btree",
           "with": {}
-        },
-        "approval_requests_calls_id_index": {
-          "name": "approval_requests_calls_id_index",
-          "columns": [
-            {
-              "expression": "calls_id",
-              "isExpression": false,
-              "asc": true,
-              "nulls": "last"
-            }
-          ],
-          "isUnique": true,
-          "where": "\"approval_requests\".\"calls_id\" is not null",
-          "concurrently": false,
-          "method": "btree",
-          "with": {}
         }
       },
       "foreignKeys": {
@@ -184,17 +150,13 @@
       "uniqueConstraints": {},
       "policies": {},
       "checkConstraints": {
-        "approval_seller_request": {
-          "name": "approval_seller_request",
-          "value": "\"approval_requests\".\"kind\" = 'payment' or \"approval_requests\".\"seller_request\" is null"
-        },
         "approval_evidence": {
           "name": "approval_evidence",
           "value": "(\"approval_requests\".\"status\" = 'pending') = (\"approval_requests\".\"decided_at\" is null and \"approval_requests\".\"preview_hash\" is null and \"approval_requests\".\"payload_hash\" is null)"
         },
         "approval_proof": {
           "name": "approval_proof",
-          "value": "(\"approval_requests\".\"status\" = 'pending' and \"approval_requests\".\"signature\" is null and \"approval_requests\".\"assertion_ref\" is null and \"approval_requests\".\"permission_id\" is null and \"approval_requests\".\"calls_id\" is null and \"approval_requests\".\"tx_hash\" is null)\n        or (\"approval_requests\".\"status\" <> 'pending' and (\"approval_requests\".\"signature\" is null) = (\"approval_requests\".\"assertion_ref\" is null) and (\"approval_requests\".\"calls_id\" is null) = (\"approval_requests\".\"tx_hash\" is null)\n          and (\"approval_requests\".\"signature\" is not null)::int + (\"approval_requests\".\"permission_id\" is not null)::int + (\"approval_requests\".\"calls_id\" is not null)::int = 1)"
+          "value": "(\"approval_requests\".\"status\" = 'pending' and \"approval_requests\".\"signature\" is null and \"approval_requests\".\"assertion_ref\" is null and \"approval_requests\".\"permission_id\" is null)\n        or (\"approval_requests\".\"status\" <> 'pending' and (\"approval_requests\".\"signature\" is null) = (\"approval_requests\".\"assertion_ref\" is null) and (\"approval_requests\".\"signature\" is null) <> (\"approval_requests\".\"permission_id\" is null))"
         }
       },
       "isRLSEnabled": false
@@ -395,6 +357,18 @@
           "primaryKey": false,
           "notNull": true,
           "default": "now()"
+        },
+        "replaced_at": {
+          "name": "replaced_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "revoked_at": {
+          "name": "revoked_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": false
         }
       },
       "indexes": {
@@ -607,13 +581,7 @@
           "name": "permission_id",
           "type": "text",
           "primaryKey": false,
-          "notNull": false
-        },
-        "approval_id": {
-          "name": "approval_id",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": false
+          "notNull": true
         },
         "payer": {
           "name": "payer",
@@ -835,22 +803,6 @@
           "method": "btree",
           "with": {}
         },
-        "payments_approval_id_index": {
-          "name": "payments_approval_id_index",
-          "columns": [
-            {
-              "expression": "approval_id",
-              "isExpression": false,
-              "asc": true,
-              "nulls": "last"
-            }
-          ],
-          "isUnique": true,
-          "where": "\"payments\".\"approval_id\" is not null",
-          "concurrently": false,
-          "method": "btree",
-          "with": {}
-        },
         "payments_connection_id_created_at_id_index": {
           "name": "payments_connection_id_created_at_id_index",
           "columns": [
@@ -925,25 +877,12 @@
           "columnsTo": ["id"],
           "onDelete": "no action",
           "onUpdate": "no action"
-        },
-        "payments_approval_id_approval_requests_id_fk": {
-          "name": "payments_approval_id_approval_requests_id_fk",
-          "tableFrom": "payments",
-          "tableTo": "approval_requests",
-          "columnsFrom": ["approval_id"],
-          "columnsTo": ["id"],
-          "onDelete": "no action",
-          "onUpdate": "no action"
         }
       },
       "compositePrimaryKeys": {},
       "uniqueConstraints": {},
       "policies": {},
       "checkConstraints": {
-        "payment_source": {
-          "name": "payment_source",
-          "value": "(\"payments\".\"permission_id\" is null) <> (\"payments\".\"approval_id\" is null)"
-        },
         "payment_shape": {
           "name": "payment_shape",
           "value": "(\"payments\".\"state\" = 'pending' and \"payments\".\"nonce\" is null and \"payments\".\"authorization\" is null and \"payments\".\"fenced\" is null)\n        or (\"payments\".\"state\" in ('signed', 'unknown') and \"payments\".\"nonce\" is not null and \"payments\".\"authorization\" is not null\n            and \"payments\".\"authorized\" is not null and \"payments\".\"deadline\" is not null and \"payments\".\"signed_at\" is not null)\n        or (\"payments\".\"state\" = 'settled' and \"payments\".\"kind\" = 'free' and \"payments\".\"nonce\" is null)\n        or (\"payments\".\"state\" = 'settled' and \"payments\".\"kind\" = 'paid' and \"payments\".\"nonce\" is not null and \"payments\".\"amount\" is not null)\n        or (\"payments\".\"state\" = 'failed' and \"payments\".\"finished_at\" is not null)"

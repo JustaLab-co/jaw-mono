@@ -10,7 +10,7 @@ const payTo: Address = '0x2222222222222222222222222222222222222222';
 const TRANSFER = parseAbi(['event Transfer(address indexed from, address indexed to, uint256 value)']);
 
 /** A receipt holding a payer-to-payTo transfer of 1000, mined at `minedAt`, and a Permit2 bitmap. */
-function chain(minedAt: Date, nonceSpent: boolean): ChainClients {
+function chain(minedAt: Date, nonceSpent: boolean, input: Hex = `0x${'00'.repeat(4)}${'00'.repeat(32)}`): ChainClients {
   const node = {
     waitForTransactionReceipt: async () => ({
       status: 'success',
@@ -25,6 +25,7 @@ function chain(minedAt: Date, nonceSpent: boolean): ChainClients {
     }),
     getBlock: async () => ({ timestamp: BigInt(Math.floor(minedAt.getTime() / 1000)) }),
     readContract: async () => (nonceSpent ? 1n : 0n),
+    getTransaction: async () => ({ input }),
   };
   return { publicClient: () => node as unknown as PublicClient };
 }
@@ -50,6 +51,12 @@ describe('confirming an upto payment', () => {
   it('refuses a transfer while the authorization nonce is still unspent', async () => {
     const signedAt = new Date(Date.now() - 10_000);
     expect(await confirmByReceipt(attempt(signedAt), TX, chain(new Date(), false), 1000)).toBeUndefined();
+  });
+
+  it('refuses another transfer from the same payer, mined after signing, that never executed this nonce', async () => {
+    const signedAt = new Date(Date.now() - 10_000);
+    const otherNonce: Hex = `0xdeadbeef${'11'.repeat(32)}`;
+    expect(await confirmByReceipt(attempt(signedAt), TX, chain(new Date(), true, otherNonce), 1000)).toBeUndefined();
   });
 
   it('settles a transfer mined after signing once the nonce is spent', async () => {

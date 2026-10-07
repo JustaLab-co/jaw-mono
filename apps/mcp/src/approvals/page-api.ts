@@ -20,7 +20,7 @@ import { SUPPORTED_CHAINS } from '@/connections/config';
 import { publicClientFor, verifyOnChain, type VerifySignature } from '@/lib/chain';
 import { log } from '@/lib/edge';
 import { isPaymentsPaused } from '@/db/settings';
-import { currentGrant } from '@/grants/store';
+import { outstandingRevokes } from '@/grants/store';
 import { oneOffRow, runOneOff, type PaymentApproval } from '@/payments/one-off';
 import type { PaymentRow, SellerRequest } from '@/payments/store';
 import { readUserOp as readOnBundler, type ReadUserOp } from './bundler';
@@ -31,7 +31,7 @@ import { connectionLive, connectionOf, findById, recordDecision, sellerRequestOf
 type OneOffSummary = Pick<PaymentRow, 'state' | 'kind' | 'code'>;
 
 export type PageOutcome =
-  | { kind: 'ok'; view: ApprovalPageView & { replaces?: { permissionId: Hex }; payment?: OneOffSummary } }
+  | { kind: 'ok'; view: PageView }
   | { kind: 'not_found' }
   | { kind: 'invalid_request' }
   | { kind: 'bad_signature' }
@@ -45,6 +45,8 @@ export type PageOutcome =
   | { kind: 'payments_paused' }
   | { kind: 'preview_changed' }
   | { kind: 'not_pending'; view: ApprovalPageView };
+
+type PageView = ApprovalPageView & { revoke?: Hex[]; payment?: OneOffSummary };
 
 export type ReadPermission = (target: PermissionReadTarget) => Promise<PermissionState>;
 
@@ -139,14 +141,20 @@ async function oneOffOf(request: ApprovalRequest) {
 
 const pageView = (request: ApprovalRequest) => toPageView(request, describeCall);
 
-export async function readForPage(id: string, now = new Date()): Promise<PageOutcome> {
+export async function readForPage(
+  id: string,
+  now = new Date(),
+  readPermission: ReadPermission = readOnChain
+): Promise<PageOutcome> {
   const request = await findById(id, now);
-  if (!request) return { kind: 'not_found' };
+  return request ? { kind: 'ok', view: await withRevokes(request, readPermission) } : { kind: 'not_found' };
+}
+
+// An approved budget lists the budgets it replaced that the chain does not show revoked yet.
+async function withRevokes(request: ApprovalRequest, read: ReadPermission): Promise<PageView> {
   const view = pageView(request);
-  if (request.body.kind !== 'budget' || request.state.status !== 'pending') return { kind: 'ok', view };
-  // The budget this one replaces, which the page revokes right after granting the new one.
-  const previous = await currentGrant(await connectionOf(request.id));
-  return { kind: 'ok', view: previous ? { ...view, replaces: { permissionId: previous.permissionId } } : view };
+  if (request.body.kind !== 'budget' || request.state.status !== 'approved') return view;
+  return { ...view, revoke: await outstandingRevokes(await connectionOf(request.id), read) };
 }
 
 export async function decideFromPage(
@@ -191,7 +199,7 @@ export async function decideFromPage(
     const current = await findById(id, new Date());
     return current ? { kind: 'not_pending', view: pageView(current) } : { kind: 'not_found' };
   }
-  const decided = pageView(result.request);
+  const decided = await withRevokes(result.request, readPermission);
   if (!oneOff) return { kind: 'ok', view: decided };
   const { row } = await runOneOff(oneOff.approval, oneOff.seller, oneOff.row.id, oneOff.row.leaseToken);
   return { kind: 'ok', view: { ...decided, payment: { state: row.state, kind: row.kind, code: row.code } } };

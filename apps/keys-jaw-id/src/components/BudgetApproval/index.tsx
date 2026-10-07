@@ -4,7 +4,8 @@ import { standardErrorCodes, type Account, type WalletGrantPermissionsResponse }
 import { PortalContainerContext } from '@jaw.id/ui';
 import { useMemo, useState, type ReactNode } from 'react';
 import { formatUnits } from 'viem';
-import { postDecision, type ApprovalView, type BudgetView } from '../../lib/approval-decision';
+import { isBudget, postDecision, type ApprovalView, type BudgetView } from '../../lib/approval-decision';
+import type { Hex } from 'viem';
 import { ClientHeader } from '../ClientHeader';
 import { PermissionModal, type PermissionRequestData } from '../PermissionModal';
 
@@ -63,7 +64,7 @@ export function BudgetApproval({ view, account, apiKey, decisionUrl, onDecided, 
         previewHash: view.previewHash,
         permission,
       });
-      if (view.replaces) setDecided(answer);
+      if (isBudget(answer) && answer.revoke?.length) setDecided(answer);
       else onDecided(answer);
     } catch (err) {
       setError(err instanceof Error ? err.message : 'The approval could not be sent.');
@@ -71,14 +72,6 @@ export function BudgetApproval({ view, account, apiKey, decisionUrl, onDecided, 
       setPosting(false);
     }
   };
-
-  const revoke = useMemo<PermissionRequestData | null>(
-    () =>
-      view.replaces
-        ? { method: 'wallet_revokePermissions', params: [{ id: view.replaces.permissionId, address: view.account }] }
-        : null,
-    [view.replaces, view.account]
-  );
 
   return (
     <UiScope>
@@ -99,20 +92,14 @@ export function BudgetApproval({ view, account, apiKey, decisionUrl, onDecided, 
             }
           />
         )}
-        {decided && revoke && (
-          <>
-            <p className="text-sm">
-              Budget granted. Now revoke the budget it replaces, so only the new one stays live.
-            </p>
-            <PermissionModal
-              permissionRequest={revoke}
-              chain={chain}
-              apiKey={apiKey ?? ''}
-              account={account}
-              onSuccess={() => onDecided(decided)}
-              onError={() => onDecided(decided)}
-            />
-          </>
+        {decided && isBudget(decided) && (
+          <RevokeBudgets
+            view={decided}
+            account={account}
+            apiKey={apiKey}
+            viewUrl={viewUrlOf(decisionUrl)}
+            onDone={onDecided}
+          />
         )}
         {posting && <p className="text-sm">Saving your approval…</p>}
         {error && (
@@ -122,6 +109,64 @@ export function BudgetApproval({ view, account, apiKey, decisionUrl, onDecided, 
               Try again
             </button>
           </>
+        )}
+      </div>
+    </UiScope>
+  );
+}
+
+const viewUrlOf = (decisionUrl: string) => decisionUrl.replace(/\/decision$/, '');
+
+interface RevokeBudgetsProps {
+  view: BudgetView;
+  account: Account;
+  apiKey?: string;
+  viewUrl: string;
+  onDone: (view: ApprovalView) => void;
+}
+
+/** Revokes the budgets the server lists as replaced and still live, one at a time, until the chain shows them gone. */
+export function RevokeBudgets({ view, account, apiKey, viewUrl, onDone }: RevokeBudgetsProps) {
+  const [outstanding, setOutstanding] = useState<Hex[]>(view.revoke ?? []);
+  const [open, setOpen] = useState(true);
+  const [error, setError] = useState('');
+  const chain = useMemo(() => account.getChain(), [account]);
+  const request = useMemo<PermissionRequestData>(
+    () => ({ method: 'wallet_revokePermissions', params: [{ id: outstanding[0], address: view.account }] }),
+    [outstanding, view.account]
+  );
+
+  const revoked = async () => {
+    setOpen(false);
+    const fresh: ApprovalView = await (await fetch(viewUrl, { cache: 'no-store' })).json();
+    const left = isBudget(fresh) ? (fresh.revoke ?? []) : [];
+    if (left.length === 0) return onDone(fresh);
+    setOutstanding(left);
+    setError('The chain does not show the previous budget revoked yet, so it is still approved on chain.');
+  };
+
+  return (
+    <UiScope>
+      <div className="flex flex-col gap-2">
+        <p className="text-sm">Revoke the budget this one replaced, so only the new one stays live.</p>
+        {open && (
+          <PermissionModal
+            permissionRequest={request}
+            chain={chain}
+            apiKey={apiKey ?? ''}
+            account={account}
+            onSuccess={revoked}
+            onError={() => {
+              setOpen(false);
+              setError('The budget this one replaced is still approved on chain.');
+            }}
+          />
+        )}
+        {error && <p className="text-destructive text-sm">{error}</p>}
+        {!open && (
+          <button className="rounded border p-2" onClick={() => setOpen(true)}>
+            Retry revoke
+          </button>
         )}
       </div>
     </UiScope>

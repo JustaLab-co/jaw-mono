@@ -158,6 +158,9 @@ export const grants = pgTable(
     permission: jsonb('permission').notNull(),
     expiresAt: timestamp('expires_at', { withTimezone: true }).notNull(),
     createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+    // A newer budget was approved, so this one should be revoked; revokedAt once the chain shows it.
+    replacedAt: timestamp('replaced_at', { withTimezone: true }),
+    revokedAt: timestamp('revoked_at', { withTimezone: true }),
   },
   (t) => [index().on(t.connectionId, t.createdAt)]
 );
