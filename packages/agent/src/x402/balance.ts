@@ -53,7 +53,9 @@ const RPC_RETRY_COUNT = 2;
 function rpcTransport(chainId: number, apiKey?: string) {
   const options = { timeout: RPC_TIMEOUT_MS, retryCount: RPC_RETRY_COUNT };
   if (!apiKey) return http(undefined, options);
-  return http(`${JAW_RPC_URL}?chainId=${chainId}&api-key=${apiKey}`, options);
+  // A header rather than `api-key=` in the url: viem quotes the url in its
+  // errors, and those reach logs and refusal reasons.
+  return http(`${JAW_RPC_URL}?chainId=${chainId}`, { ...options, fetchOptions: { headers: { 'x-api-key': apiKey } } });
 }
 
 /**

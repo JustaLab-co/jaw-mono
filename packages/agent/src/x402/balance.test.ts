@@ -1,5 +1,5 @@
-import { describe, it, expect } from 'vitest';
-import { usdcBalance } from './balance.js';
+import { afterEach, describe, it, expect, vi } from 'vitest';
+import { chainClients, usdcBalance } from './balance.js';
 
 const OWNER = '0x3C44CdDdB6a900fa2b585dd299e03d12FA4293BC';
 
@@ -22,5 +22,31 @@ describe('usdcBalance', () => {
 
   it('throws on an unsupported network', async () => {
     await expect(usdcBalance('eip155:1', OWNER, async () => 0n)).rejects.toThrow(/Unsupported x402 network/);
+  });
+});
+
+describe('chainClients', () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it('sends the api key in a header and keeps it out of the url and its errors', async () => {
+    const seen: Array<{ url: string; key: string | null }> = [];
+    vi.stubGlobal('fetch', async (input: RequestInfo | URL, init?: RequestInit) => {
+      seen.push({ url: String(input), key: new Headers(init?.headers).get('x-api-key') });
+      return new Response('denied', { status: 403 });
+    });
+
+    const failure = await chainClients('key-under-test')
+      .publicClient(84532)
+      .getBlockNumber()
+      .catch((err: Error) => err);
+
+    expect(seen.length).toBeGreaterThan(0);
+    for (const request of seen) {
+      expect(request.url).toBe('https://api.justaname.id/proxy/v1/rpc?chainId=84532');
+      expect(request.key).toBe('key-under-test');
+    }
+    expect(String(failure)).not.toContain('key-under-test');
   });
 });

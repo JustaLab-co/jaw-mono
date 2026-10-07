@@ -27,6 +27,13 @@ async function freshPublicClientFor() {
 const transportUrlOf = (call: number) =>
   (createPublicClientMock.mock.calls[call]?.[0] as unknown as { transport: { __url?: string } }).transport.__url;
 
+const transportKeyOf = (call: number) =>
+  (
+    createPublicClientMock.mock.calls[call]?.[0] as unknown as {
+      transport: { __options?: { fetchOptions?: { headers?: Record<string, string> } } };
+    }
+  ).transport.__options?.fetchOptions?.headers?.['x-api-key'];
+
 // `cliChainClients` resolves the key the way every other path does, and that
 // includes `JAW_API_KEY`. A developer with one exported would otherwise have
 // these cases read their own key off the environment rather than the config
@@ -57,7 +64,8 @@ describe('cliChainClients transport + cache', () => {
     loadConfigMock.mockReturnValue({ apiKey: 'pk_test_123' });
     const publicClientFor = await freshPublicClientFor();
     publicClientFor(8453);
-    expect(transportUrlOf(0)).toBe('https://api.justaname.id/proxy/v1/rpc?chainId=8453&api-key=pk_test_123');
+    expect(transportUrlOf(0)).toBe('https://api.justaname.id/proxy/v1/rpc?chainId=8453');
+    expect(transportKeyOf(0)).toBe('pk_test_123');
   });
 
   // The reason this resolves through `apiKeyFor` rather than reading `apiKey`:
@@ -67,7 +75,7 @@ describe('cliChainClients transport + cache', () => {
     loadConfigMock.mockReturnValue({ workspaceApiKey: 'workspace-key' });
     const publicClientFor = await freshPublicClientFor();
     publicClientFor(8453);
-    expect(transportUrlOf(0)).toContain('api-key=workspace-key');
+    expect(transportKeyOf(0)).toBe('workspace-key');
   });
 
   it('reuses the cached client for the same chain and apiKey', async () => {
@@ -86,7 +94,7 @@ describe('cliChainClients transport + cache', () => {
     publicClientFor(8453);
     expect(createPublicClientMock).toHaveBeenCalledTimes(2);
     expect(transportUrlOf(0)).toBeUndefined();
-    expect(transportUrlOf(1)).toContain('api-key=pk_live_456');
+    expect(transportKeyOf(1)).toBe('pk_live_456');
   });
 
   // These reads run inside the payment lock, so leaving them on viem's defaults
@@ -100,6 +108,6 @@ describe('cliChainClients transport + cache', () => {
     loadConfigMock.mockReturnValue(config);
     const publicClientFor = await freshPublicClientFor();
     publicClientFor(8453);
-    expect(httpMock.mock.calls[0]?.[1]).toEqual({ timeout: 5_000, retryCount: 2 });
+    expect(httpMock.mock.calls[0]?.[1]).toMatchObject({ timeout: 5_000, retryCount: 2 });
   });
 });
