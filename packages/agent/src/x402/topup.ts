@@ -6,7 +6,8 @@ import { errorMessage } from '../util/errors.js';
 import type { X402PaymentRequirement } from './types.js';
 import { firstOperationCost, gasReserve } from './gas-reserve.js';
 import { type BalanceReader, balanceReader } from './balance.js';
-import type { ChainClients } from '../ports.js';
+import type { ChainClients, Logger } from '../ports.js';
+import type { RefusalCode } from './outcome.js';
 
 /**
  * Permission top-up (flow 2b): when the session payer EOA can't cover a
@@ -66,6 +67,7 @@ const onChainAllowance =
 export interface TopUpOptions {
   /** Where balances and allowances are read. */
   clients: ChainClients;
+  logger: Logger;
   /**
    * The chain the session (and its permission) lives on. When set, a payment
    * on any other chain refuses to top up instead of executing a transfer on
@@ -131,6 +133,12 @@ export interface TopUpOutcome {
   approvalBatchId?: string;
   /** Human-readable refusal when ok=false. Never throws for policy-shaped failures. */
   reason?: string;
+  /**
+   * Why, for code to branch on, when a refusal has a code more precise than
+   * `funding_failed`. Only set where nothing was sent: after a broadcast the
+   * refill may have landed, and no code may read as safe to retry.
+   */
+  code?: RefusalCode;
 }
 
 interface CallStatus {
@@ -199,7 +207,7 @@ export async function ensurePayerFunds(
   let permit2Allowance: bigint | undefined;
   if (requirement.scheme === 'upto') {
     const status = await permit2ApprovalStatus(asset, payerAddress, price, executor, opts);
-    if (!status.ok) return { ok: false, reason: status.reason };
+    if (!status.ok) return { ok: false, code: status.code, reason: status.reason };
     grantApproval = status.grant;
     // Only useful when it already covers the payment. When it does not, the
     // figure below is the one the signer must be told about, and until the
@@ -279,6 +287,7 @@ export async function ensurePayerFunds(
     if (funds < shortfall + headroom) {
       return {
         ok: false,
+        code: 'balance_low',
         reason:
           `the account behind the permission, ${funder}, holds ${funds} base units and this payment needs ` +
           `${shortfall + headroom} topped up: ${shortfall} short, plus ${headroom} of headroom for the fee the ` +
@@ -461,7 +470,7 @@ async function payerStillShort(
     } catch (err) {
       // Said out loud rather than swallowed: the payment goes on, and the operator
       // needs to know the one check that would have caught a short payer never ran.
-      console.warn(
+      opts.logger.warn(
         `[jaw] Could not re-read the payer balance after ${charged.moment} (${errorMessage(err)}); paying anyway.`
       );
       return null;
@@ -472,7 +481,7 @@ async function payerStillShort(
     }
   }
 
-  console.warn(
+  opts.logger.warn(
     `[jaw] The payer balance still reads ${before} base units after ${charged.moment}, unchanged from before it, ` +
       'so the node read here has not caught up; paying anyway.'
   );
@@ -509,13 +518,19 @@ async function permit2ApprovalStatus(
   needed: bigint,
   executor: TopUpExecutor,
   opts: TopUpOptions
-): Promise<{ ok: true; grant: GrantApproval | null; allowance: bigint } | { ok: false; reason: string }> {
+): Promise<
+  { ok: true; grant: GrantApproval | null; allowance: bigint } | { ok: false; code?: RefusalCode; reason: string }
+> {
   const read = opts.allowanceReader ?? onChainAllowance(opts.clients);
   let allowance: bigint;
   try {
     allowance = await read(asset, payerAddress, PERMIT2_ADDRESS);
   } catch (err) {
-    return { ok: false, reason: `could not read the payer's Permit2 allowance: ${errorMessage(err)}` };
+    return {
+      ok: false,
+      code: 'chain_unavailable',
+      reason: `could not read the payer's Permit2 allowance: ${errorMessage(err)}`,
+    };
   }
   if (allowance >= needed) return { ok: true, grant: null, allowance };
 
@@ -648,7 +663,10 @@ async function awaitCall(
       });
       status = (await Promise.race([executor.request('wallet_getCallsStatus', batchId), expired])) as CallStatus;
     } catch (err) {
-      return { ok: false, reason: `${labels.subject} status check failed: ${errorMessage(err)}` };
+      return {
+        ok: false,
+        reason: `${labels.subject} status check failed: ${errorMessage(err)}`,
+      };
     } finally {
       clearTimeout(timer);
     }

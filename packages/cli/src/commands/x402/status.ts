@@ -30,6 +30,7 @@ import {
 } from '@jaw.id/agent';
 import { cliChainClients, usdcBalance } from '../../x402/balance.js';
 import { readX402Log, jsonlPaymentLog } from '../../x402/ledger.js';
+import { stderrLogger } from '../../lib/stderr-logger.js';
 import type { OutputFormat } from '../../lib/types.js';
 
 /**
@@ -133,7 +134,11 @@ export default class X402Status extends BaseCommand {
     // Reconciled here too, and not only on the pay paths: an agent that pays
     // once and stops would otherwise leave that row costing its ceiling for
     // good, and this is the surface it still reaches.
-    const ledger = await reconcileSettlements(readX402Log(), { clients: cliChainClients, log: jsonlPaymentLog });
+    const ledger = await reconcileSettlements(readX402Log(), {
+      clients: cliChainClients,
+      log: jsonlPaymentLog,
+      logger: stderrLogger,
+    });
     // A checkpoint whose figure will not parse stops `sumSpentSince`, which is
     // what keeps a payment from spending against a total known to be short. This
     // command spends nothing and is the one a user runs to find out what is

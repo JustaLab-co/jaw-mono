@@ -57,4 +57,12 @@ describe('apiKeyFor', () => {
   it('answers undefined when there is no key anywhere', () => {
     expect(apiKeyFor({})).toBeUndefined();
   });
+
+  it('trims whitespace around a key from the flag or the environment, not inside it', () => {
+    expect(apiKeyFor({}, 'from-flag\t')).toBe('from-flag');
+    process.env['JAW_API_KEY'] = 'from-env\r\n';
+    expect(apiKeyFor({})).toBe('from-env');
+    process.env['JAW_API_KEY'] = 'a\nb';
+    expect(apiKeyFor({})).toBe('a\nb');
+  });
 });

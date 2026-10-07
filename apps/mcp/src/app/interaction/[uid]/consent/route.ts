@@ -1,0 +1,9 @@
+import { consent } from '@/connections/interaction';
+import { preflight } from '@/lib/cors';
+import { withEdge } from '@/lib/edge';
+
+export const runtime = 'nodejs';
+export const dynamic = 'force-dynamic';
+
+export const POST = withEdge((req) => consent(req), { guarded: true });
+export const OPTIONS = preflight;

@@ -4,6 +4,9 @@ import type { X402Scheme } from './types.js';
  * Why a payment did not happen, for code to branch on. The reason text beside
  * it is what a person reads, and is unchanged from 0.4.0. Codes only a host can
  * decide before calling (`no_grant`, `payments_paused`) belong to the host.
+ *
+ * A refusal carrying a `topUp` or `permit2Approval` trace moved money before
+ * it stopped, whatever its code: retrying it can refill the payer twice.
  */
 export type RefusalCode =
   // Before anything was signed.
@@ -19,6 +22,8 @@ export type RefusalCode =
   | 'budget_exhausted'
   | 'invalid_config'
   | 'funding_failed'
+  | 'balance_low'
+  | 'chain_unavailable'
   | 'signing_failed'
   | 'store_failed'
   | 'authorization_expired'

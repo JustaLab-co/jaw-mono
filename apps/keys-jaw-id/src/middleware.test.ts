@@ -34,10 +34,13 @@ describe('framing policy is route-scoped', () => {
   });
 
   describe('any other route — default deny', () => {
-    it.each(['/settings', '/some/future/route', '/dialog'])('%s keeps both deny headers', (path) => {
-      expect(cspFor(path)).toContain("frame-ancestors 'none'");
-      expect(headersFor(path).get('X-Frame-Options')).toBe('DENY');
-    });
+    it.each(['/settings', '/some/future/route', '/dialog', '/authorize', '/approve/abc'])(
+      '%s keeps both deny headers',
+      (path) => {
+        expect(cspFor(path)).toContain("frame-ancestors 'none'");
+        expect(headersFor(path).get('X-Frame-Options')).toBe('DENY');
+      }
+    );
   });
 });
 

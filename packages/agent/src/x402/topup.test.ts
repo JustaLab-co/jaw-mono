@@ -90,7 +90,7 @@ function fakeChain(
   return { ...wired, balanceReader: payer.balanceReader };
 }
 
-const instantly = { pollMs: 0, sleep: async () => undefined };
+const instantly = { pollMs: 0, sleep: async () => undefined, logger: { warn: () => undefined } };
 
 describe('ensurePayerFunds', () => {
   test('Given the payer balance covers the price, When ensuring funds, Then nothing runs on-chain', async () => {
@@ -269,16 +269,16 @@ describe('ensurePayerFunds', () => {
   // funds are already there for.
   test('Given the node has not caught up, When the balance reads unchanged, Then it warns and pays rather than refusing', async () => {
     const { executor } = fakeExecutor();
-    const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    const warn = vi.fn();
 
     const out = await ensurePayerFunds(requirement('2000000'), PAYER, executor, {
       balanceReader: async () => 0n,
       ...instantly,
+      logger: { warn },
     });
 
     expect(out.ok).toBe(true);
     expect(warn).toHaveBeenCalledWith(expect.stringContaining('unchanged from before it'));
-    warn.mockRestore();
   });
 
   test('Given the node catches up on a later poll, When the balance has moved, Then the short payer is refused', async () => {
@@ -330,6 +330,41 @@ describe('ensurePayerFunds', () => {
     expect(out.batchId).toBe('0xbatch1');
   });
 
+  // The transfer was already sent, so no code may read as safe to retry: a
+  // second payment would refill the payer twice.
+  test('Given the call status cannot be read after the transfer was sent, When polling, Then no code claims nothing moved and the trace is kept', async () => {
+    const { executor, balanceReader } = fakeChain(0n, {
+      status: async () => {
+        throw new Error('node unreachable');
+      },
+    });
+
+    const out = await ensurePayerFunds(requirement('1000000'), PAYER, executor, {
+      balanceReader,
+      ...instantly,
+    });
+
+    expect(out.ok).toBe(false);
+    expect(out.code).toBeUndefined();
+    expect(out.reason).toBe('top-up status check failed: node unreachable');
+    expect(out.batchId).toBe('0xbatch1');
+    expect(out.amount).toBeDefined();
+  });
+
+  test('Given the status read hangs past the deadline after the transfer was sent, When the race ends it, Then no code claims nothing moved', async () => {
+    const { executor, balanceReader } = fakeChain(0n, { status: () => new Promise(() => undefined) });
+
+    const out = await ensurePayerFunds(requirement('1000000'), PAYER, executor, {
+      balanceReader,
+      timeoutMs: 0,
+      ...instantly,
+    });
+
+    expect(out.code).toBeUndefined();
+    expect(out.reason).toBe('top-up status check failed: status check timed out after 0ms');
+    expect(out.batchId).toBe('0xbatch1');
+  });
+
   test('Given confirmation never arrives, When the timeout passes, Then it gives up with the batch id for reconciliation', async () => {
     const { executor, balanceReader } = fakeChain(0n, { status: async () => ({ status: 100 }) });
     let t = 0;
@@ -342,6 +377,7 @@ describe('ensurePayerFunds', () => {
     });
 
     expect(out.ok).toBe(false);
+    expect(out.code).toBeUndefined();
     expect(out.reason).toContain('not confirmed after');
     expect(out.batchId).toBe('0xbatch1');
   });
@@ -656,11 +692,12 @@ describe('Permit2 approval for upto', () => {
 
   test('warns about the approval rather than a refill when the balance cannot be re-read', async () => {
     const { executor, opts } = approving(0n);
-    const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    const warn = vi.fn();
     let call = 0;
 
     const outcome = await ensurePayerFunds(uptoRequirement('1000000'), PAYER, executor, {
       ...opts,
+      logger: { warn },
       balanceReader: async () => {
         if (++call === 1) return 1_100_000n;
         throw new Error('rpc down');
@@ -669,7 +706,6 @@ describe('Permit2 approval for upto', () => {
 
     expect(outcome.ok).toBe(true);
     expect(warn).toHaveBeenCalledWith(expect.stringContaining('after the Permit2 approval'));
-    warn.mockRestore();
   });
 
   test('does not grant it again once the allowance covers the ceiling', async () => {
@@ -738,6 +774,21 @@ describe('Permit2 approval for upto', () => {
     expect(outcome.reason).toContain("could not read the payer's Permit2 allowance");
   });
 
+  test('names a chain it could not read before anything was sent as chain_unavailable', async () => {
+    const { executor, approved, opts } = approving(0n);
+    const outcome = await ensurePayerFunds(uptoRequirement(), PAYER, executor, {
+      ...opts,
+      allowanceReader: async () => {
+        throw new Error('rpc down');
+      },
+    });
+
+    expect(outcome.code).toBe('chain_unavailable');
+    expect(outcome.reason).toBe("could not read the payer's Permit2 allowance: rpc down");
+    expect(outcome.batchId).toBeUndefined();
+    expect(approved).toEqual([]);
+  });
+
   test('says so when the executor cannot grant an approval at all', async () => {
     const { executor: base, opts } = approving(0n);
     const executor: TopUpExecutor = { request: base.request.bind(base) };
@@ -795,7 +846,7 @@ describe('Permit2 approval for upto', () => {
 // not run, and only the warning says so.
 test('Given the post-refill read fails, When it proceeds anyway, Then it says the check did not run', async () => {
   const { executor } = fakeExecutor();
-  const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+  const warn = vi.fn();
   let call = 0;
 
   const out = await ensurePayerFunds(requirement('1000000'), PAYER, executor, {
@@ -805,11 +856,11 @@ test('Given the post-refill read fails, When it proceeds anyway, Then it says th
       throw new Error('rpc down');
     },
     ...instantly,
+    logger: { warn },
   });
 
   expect(out.ok).toBe(true);
   expect(warn).toHaveBeenCalledWith(expect.stringContaining('Could not re-read the payer balance'));
-  warn.mockRestore();
 });
 
 describe('ensurePayerFunds against the funds behind the permission', () => {
@@ -855,6 +906,23 @@ describe('ensurePayerFunds against the funds behind the permission', () => {
     expect(out.reason).toContain('700000');
     expect(out.reason).toContain('760000');
     expect(requests).toHaveLength(0);
+  });
+
+  test('Given the account cannot cover the payment, When refusing, Then the code is balance_low and the reason is the 0.4.0 text', async () => {
+    const { executor, balanceReader } = fakeChainWithFunder(250_000n, 700_000n);
+
+    const out = await ensurePayerFunds(requirement('1000000'), PAYER, executor, {
+      balanceReader,
+      funderAddress: FUNDER,
+      ...instantly,
+    });
+
+    expect(out.code).toBe('balance_low');
+    expect(out.reason).toBe(
+      `the account behind the permission, ${FUNDER}, holds 700000 base units and this payment needs ` +
+        '760000 topped up: 750000 short, plus 10000 of headroom for the fee the payer is charged for the ' +
+        'refill itself. Send USDC to that account.'
+    );
   });
 
   test('Given the account covers the payment but not the reserve, When ensuring funds, Then it pulls what the payment needs and leaves the rest', async () => {

@@ -127,7 +127,7 @@ export default class X402Pay extends BaseCommand {
       // totals that both this command and the agent read back. Opening the
       // window does write, and deliberately, though a dry run holds no lock;
       // `openPaymentWindow` says why.
-      if (flags.pay) recordPaymentOutcome(args.url, outcome, session, periodUsage, cliPaymentPorts.log);
+      if (flags.pay) await recordPaymentOutcome(args.url, outcome, session, periodUsage, cliPaymentPorts);
 
       return outcome;
     };

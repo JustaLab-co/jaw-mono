@@ -43,7 +43,8 @@ const host = (over: Partial<SessionHost> = {}, config: SessionConfig = session()
   ...over,
 });
 
-const bridge = (h: SessionHost = host(), apiKey = 'key') => new SessionBridge({ apiKey, chainId: 84532, host: h });
+const bridge = (h: SessionHost = host(), apiKey = 'key') =>
+  new SessionBridge({ apiKey, chainId: 84532, host: h, logger: { warn: vi.fn() } });
 const send = (b: InstanceType<typeof SessionBridge>) => b.request('wallet_sendCalls', [{ calls: [] }]);
 
 beforeEach(() => {

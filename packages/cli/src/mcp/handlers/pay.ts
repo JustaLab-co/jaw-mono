@@ -139,7 +139,7 @@ export function registerPayTool(server: McpServer): void {
 
             // The cap is not tracked in memory: the next call reads it back
             // from the ledger this writes to.
-            recordPaymentOutcome(params.url, result, session, periodUsage, cliPaymentPorts.log);
+            await recordPaymentOutcome(params.url, result, session, periodUsage, cliPaymentPorts);
 
             // Untrusted server free-text (body, refusedReason) is fenced off
             // from the trusted payment metadata to blunt prompt injection.

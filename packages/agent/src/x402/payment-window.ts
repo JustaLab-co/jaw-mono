@@ -4,9 +4,10 @@ import type { X402PaymentRequirement } from './types.js';
 import { topUpCeiling, type LimitUsage, type X402Policy } from './policy.js';
 import type { PayAndFetchResult } from './outcome.js';
 import { reconcileSettlements } from './settlement.js';
-import { sumSpentSince } from './ledger.js';
-import type { ChainClients, PaymentLog } from '../ports.js';
+import { sumSpentSince, type X402LogEntry } from './ledger.js';
+import type { ChainClients, Logger, PaymentLog } from '../ports.js';
 import type { SessionConfig } from '../session/session-config.js';
+import { errorMessage } from '../util/errors.js';
 import { capWindowStarts, currentLimitUsageOnChain } from './spend-window.js';
 import { ensurePayerFunds, type TopUpExecutor } from './topup.js';
 
@@ -14,6 +15,7 @@ import { ensurePayerFunds, type TopUpExecutor } from './topup.js';
 export interface PaymentPorts {
   clients: ChainClients;
   log: PaymentLog;
+  logger: Logger;
   /** What a refill for a session on `chainId` is sent through. */
   topUpExecutor(apiKey: string, chainId: number): TopUpExecutor;
 }
@@ -79,8 +81,8 @@ export async function openPaymentWindow(
   { session, policy, payerAddress, apiKey, topUpFloat, dryRun }: PaymentWindowInput,
   ports: PaymentPorts
 ): Promise<PaymentWindow> {
-  const { clients, log } = ports;
-  const ledger = await reconcileSettlements(log.read(), { clients, log });
+  const { clients, log, logger } = ports;
+  const ledger = await reconcileSettlements(await log.read(), { clients, log, logger });
   const periodUsage = await currentLimitUsageOnChain(ledger, policy, payerAddress, session, new Date(), { clients });
   // Payer, deliberately, with no permission: `session add` preserves
   // `createdAt` so that adding a capability cannot reset the total, and scoping
@@ -105,6 +107,7 @@ export async function openPaymentWindow(
   const ensureFunds: EnsureFunds = (requirement, payer) =>
     ensurePayerFunds(requirement, payer, bridge, {
       clients,
+      logger,
       floatTarget,
       maxTopUp,
       funderAddress,
@@ -115,23 +118,24 @@ export async function openPaymentWindow(
 }
 
 /**
- * Record a payment's outcome in the ledger and compact it. Call it inside the
- * payment lock; free resources write nothing.
+ * Record a payment's outcome in the ledger and compact it. Await it inside the
+ * payment lock, so the next payment counts this row; free resources write
+ * nothing. Never rejects.
  */
-export function recordPaymentOutcome(
+export async function recordPaymentOutcome(
   url: string,
   outcome: PayAndFetchResult,
   session: SessionConfig | null,
   periodUsage: LimitUsage[],
-  log: PaymentLog
-): void {
+  { log, logger }: Pick<PaymentPorts, 'log' | 'logger'>
+): Promise<void> {
   const attempted = !!outcome.attemptedPayment;
   const refused = outcome.status === 402 && !!outcome.refusedReason;
   if (!outcome.paid && !attempted && !refused) return;
 
   const status = outcome.paid ? 'paid' : attempted ? 'failed' : 'refused';
   const settled = outcome.payment ?? outcome.attemptedPayment;
-  log.append({
+  const entry: X402LogEntry = {
     at: new Date().toISOString(),
     url,
     payer: outcome.payer,
@@ -153,8 +157,17 @@ export function recordPaymentOutcome(
     // A signed authorization is worth its ceiling to whoever holds it until the
     // chain says otherwise. A refusal signed nothing.
     settlement: status === 'refused' ? undefined : 'unverified',
-  });
+  };
 
-  // Below the size threshold this is one `stat` and nothing else.
-  log.compact(capWindowStarts(periodUsage, session?.createdAt), outcome.payer);
+  try {
+    await log.append(entry);
+  } catch (err) {
+    logger.warn(`[jaw] warning: failed to write x402 ledger (${errorMessage(err)}); spend audit/cap may undercount`);
+  }
+  try {
+    // Below the size threshold this is one `stat` and nothing else.
+    await log.compact(capWindowStarts(periodUsage, session?.createdAt), outcome.payer);
+  } catch (err) {
+    logger.warn(`[jaw] warning: failed to compact x402 ledger (${errorMessage(err)})`);
+  }
 }

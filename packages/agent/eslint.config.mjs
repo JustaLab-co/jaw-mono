@@ -25,6 +25,12 @@ export default [
           patterns: ['@modelcontextprotocol/*', '@oclif/*', 'fs/*', 'node:fs/*'],
         },
       ],
+      'no-console': 'error',
+      'no-restricted-properties': [
+        'error',
+        { object: 'process', property: 'stderr', message: 'Write through the Logger port.' },
+        { object: 'process', property: 'stdout', message: 'Write through the Logger port.' },
+      ],
     },
   },
   {

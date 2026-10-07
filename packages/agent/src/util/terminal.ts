@@ -24,11 +24,11 @@
  * a control character in the C0 or C1 sense, so stripping those alone misses
  * both. U+2028 and U+2029 break lines the way a newline does.
  */
-const INVISIBLE_AND_BIDI = /[\u200B-\u200F\u2028\u2029\u202A-\u202E\u2066-\u2069\uFEFF]/g;
+export const INVISIBLE_AND_BIDI = /[\u200B-\u200F\u2028\u2029\u202A-\u202E\u2066-\u2069\uFEFF]/g;
 
 /** C0 except tab and newline, DEL, and the C1 block. For multi-line text. */
 // eslint-disable-next-line no-control-regex
-const BLOCK_CONTROLS = /[\u0000-\u0008\u000B-\u001F\u007F-\u009F]/g;
+export const BLOCK_CONTROLS = /[\u0000-\u0008\u000B-\u001F\u007F-\u009F]/g;
 
 /** Every C0 control, DEL and C1. For text that must stay on one line. */
 // eslint-disable-next-line no-control-regex

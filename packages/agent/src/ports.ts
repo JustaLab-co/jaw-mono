@@ -7,15 +7,18 @@ export interface ChainClients {
   publicClient(chainId: number): PublicClient;
 }
 
-/**
- * Where payment rows are kept. Synchronous because the one store behind it, a
- * file, is.
- */
+/** Where payment rows are kept. A store that indexes rows by state derives it with `rowStateOf`. */
 export interface PaymentLog {
-  read(limit?: number): X402LogEntry[];
-  append(entry: X402LogEntry): void;
-  correct(correction: X402SettlementCorrection): void;
-  compact(capStarts: string[] | undefined, payer: string | undefined): void;
+  read(limit?: number): Promise<X402LogEntry[]>;
+  append(entry: X402LogEntry): Promise<void>;
+  correct(correction: X402SettlementCorrection): Promise<void>;
+  compact(capStarts: string[] | undefined, payer: string | undefined): Promise<void>;
+}
+
+/** Where the agent says what an operator should see. The host picks the sink. */
+export interface Logger {
+  /** One line, without its trailing newline. */
+  warn(message: string): void;
 }
 
 /** Where the session is kept. */

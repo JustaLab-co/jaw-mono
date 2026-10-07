@@ -3,7 +3,6 @@ import { PATHS } from '../lib/paths.js';
 import { ensureDir } from '../lib/config.js';
 import {
   checkpointFigureReadable,
-  errorMessage,
   spendFigureOf,
   toppedUpFigureOf,
   type PaymentLog,
@@ -12,25 +11,17 @@ import {
 } from '@jaw.id/agent';
 
 /**
- * Append one entry. Never throws — logging must not break a payment.
+ * Append one entry. Throws on a failed write; `recordPaymentOutcome` reports it
+ * without failing the payment.
  *
  * The newline is a PREFIX, not a suffix: a torn write (crash/ENOSPC mid-append)
  * then leaves an incomplete line that the NEXT append starts on a fresh line
  * instead of concatenating onto, so one bad write loses at most its own record,
  * never the following one too.
- *
- * A write failure is surfaced to stderr (not thrown): the caller's payment
- * still succeeds, but the operator needs to know the audit trail — and the
- * restart-time spend-cap seed that reads it — just lost an entry.
  */
 export function appendX402Log(entry: X402LogEntry): void {
-  try {
-    ensureDir(PATHS.root);
-    fs.appendFileSync(PATHS.x402Log, '\n' + JSON.stringify(entry), { encoding: 'utf-8', mode: 0o600 });
-  } catch (err) {
-    const msg = errorMessage(err);
-    process.stderr.write(`[jaw] warning: failed to write x402 ledger (${msg}); spend audit/cap may undercount\n`);
-  }
+  ensureDir(PATHS.root);
+  fs.appendFileSync(PATHS.x402Log, '\n' + JSON.stringify(entry), { encoding: 'utf-8', mode: 0o600 });
 }
 
 /**
@@ -81,17 +72,10 @@ export function readX402Log(limit?: number): X402LogEntry[] {
   return limit && limit > 0 ? folded.slice(-limit) : folded;
 }
 
-/** Record a later answer about a payment already on file. Never throws, like the append above. */
+/** Record a later answer about a payment already on file. Throws like the append above. */
 export function appendX402Correction(correction: X402SettlementCorrection): void {
-  try {
-    ensureDir(PATHS.root);
-    fs.appendFileSync(PATHS.x402Log, '\n' + JSON.stringify(correction), { encoding: 'utf-8', mode: 0o600 });
-  } catch (err) {
-    const msg = errorMessage(err);
-    process.stderr.write(
-      `[jaw] warning: failed to record a settlement (${msg}); the payment keeps costing its ceiling\n`
-    );
-  }
+  ensureDir(PATHS.root);
+  fs.appendFileSync(PATHS.x402Log, '\n' + JSON.stringify(correction), { encoding: 'utf-8', mode: 0o600 });
 }
 
 /**
@@ -137,74 +121,70 @@ const FOLD_AT_LEAST = 500;
  * Rows of any other payer are left alone until that payer folds its own.
  *
  * Runs after the append and inside the payment lock, so nothing is writing
- * beside it. Never throws: a ledger that could not be tidied must not fail the
- * payment that just succeeded.
+ * beside it. Throws on a failed read or write; `recordPaymentOutcome` reports it
+ * without failing the payment that just succeeded.
  */
 export function compactX402Log(capStarts: string[] | undefined, payer: string | undefined): void {
-  try {
-    // No `capStarts` means a live window could not be read, so there is no
-    // instant to cut against that is known to be early enough. Folding on a
-    // partial list hands back budget; a larger file until the next window rolls
-    // costs nothing but the read.
-    if (capStarts === undefined) return;
+  // No `capStarts` means a live window could not be read, so there is no
+  // instant to cut against that is known to be early enough. Folding on a
+  // partial list hands back budget; a larger file until the next window rolls
+  // costs nothing but the read.
+  if (capStarts === undefined) return;
 
-    const sizeBefore = fs.statSync(PATHS.x402Log).size;
-    if (sizeBefore < COMPACT_AT_BYTES) return;
+  const sizeBefore = fs.statSync(PATHS.x402Log).size;
+  if (sizeBefore < COMPACT_AT_BYTES) return;
 
-    const entries = readX402Log();
-    // The oldest stamp, not the first row: a clock that stepped backwards
-    // between two payments leaves the file out of time order, and taking the
-    // cut from the wrong end moves it past a `since` that is still counting.
-    const mine = (entry: X402LogEntry) =>
-      payer !== undefined && typeof entry.payer === 'string' && entry.payer.toLowerCase() === payer.toLowerCase();
-    const oldest = entries.reduce<string | undefined>((earliest, entry) => {
-      if (!mine(entry) || !absorbable(entry, undefined)) return earliest;
-      return earliest === undefined || entry.at < earliest ? entry.at : earliest;
-    }, undefined);
-    const bound = oldest === undefined ? undefined : cutAbove(capStarts, oldest);
-    const tailFrom = Math.max(entries.length - KEEP_TAIL, 0);
-    const absorbed: X402LogEntry[] = [];
-    const kept: X402LogEntry[] = [];
-    entries.forEach((entry, index) => {
-      if (index < tailFrom && mine(entry) && absorbable(entry, bound)) absorbed.push(entry);
-      else kept.push(entry);
-    });
-    // Above the threshold the absorbable set does not grow again until a window
-    // rolls, so a ledger that can only shed a handful of rows would pay for a
-    // full read and rewrite on every payment and stay over the threshold anyway.
-    if (absorbed.length < FOLD_AT_LEAST) return;
+  const entries = readX402Log();
+  // The oldest stamp, not the first row: a clock that stepped backwards
+  // between two payments leaves the file out of time order, and taking the
+  // cut from the wrong end moves it past a `since` that is still counting.
+  const mine = (entry: X402LogEntry) =>
+    payer !== undefined && typeof entry.payer === 'string' && entry.payer.toLowerCase() === payer.toLowerCase();
+  const oldest = entries.reduce<string | undefined>((earliest, entry) => {
+    if (!mine(entry) || !absorbable(entry, undefined)) return earliest;
+    return earliest === undefined || entry.at < earliest ? entry.at : earliest;
+  }, undefined);
+  const bound = oldest === undefined ? undefined : cutAbove(capStarts, oldest);
+  const tailFrom = Math.max(entries.length - KEEP_TAIL, 0);
+  const absorbed: X402LogEntry[] = [];
+  const kept: X402LogEntry[] = [];
+  entries.forEach((entry, index) => {
+    if (index < tailFrom && mine(entry) && absorbable(entry, bound)) absorbed.push(entry);
+    else kept.push(entry);
+  });
+  // Above the threshold the absorbable set does not grow again until a window
+  // rolls, so a ledger that can only shed a handful of rows would pay for a
+  // full read and rewrite on every payment and stay over the threshold anyway.
+  if (absorbed.length < FOLD_AT_LEAST) return;
 
-    const temp = `${PATHS.x402Log}.${process.pid}.tmp`;
-    // Cleared first so the write below is a create, which is the only time
-    // `mode` applies: a leftover from an earlier crash would otherwise keep its
-    // own mode and carry it onto the ledger through the rename. Created 0o600
-    // rather than chmod'ed afterwards, which leaves the whole payment history
-    // readable to any local user for the width of that gap.
-    fs.rmSync(temp, { force: true, recursive: true });
-    fs.writeFileSync(temp, serializeEntries([...checkpointsFor(absorbed), ...kept]), {
-      encoding: 'utf-8',
-      mode: 0o600,
-    });
+  const temp = `${PATHS.x402Log}.${process.pid}.tmp`;
+  // Cleared first so the write below is a create, which is the only time
+  // `mode` applies: a leftover from an earlier crash would otherwise keep its
+  // own mode and carry it onto the ledger through the rename. Created 0o600
+  // rather than chmod'ed afterwards, which leaves the whole payment history
+  // readable to any local user for the width of that gap.
+  fs.rmSync(temp, { force: true, recursive: true });
+  fs.writeFileSync(temp, serializeEntries([...checkpointsFor(absorbed), ...kept]), {
+    encoding: 'utf-8',
+    mode: 0o600,
+  });
 
-    // The lock can be broken as stale while a payment is still running. Anything
-    // appended since the read is missing from what was just built, so drop the
-    // rewrite rather than lose that row. Checked before the archive and not only
-    // before the rename: giving up after archiving leaves those rows in the
-    // archive with the ledger still holding them, and the next fold that does
-    // go through writes them a second time.
-    if (fs.statSync(PATHS.x402Log).size !== sizeBefore) {
-      fs.rmSync(temp, { force: true });
-      return;
-    }
-
-    // Archive before the ledger is rewritten. A crash between the two leaves
-    // rows in both files, which nothing sums; the other order loses them.
-    fs.appendFileSync(PATHS.x402LogArchive, serializeEntries(absorbed), { encoding: 'utf-8', mode: 0o600 });
-
-    fs.renameSync(temp, PATHS.x402Log);
-  } catch (err) {
-    process.stderr.write(`[jaw] warning: failed to compact x402 ledger (${errorMessage(err)})\n`);
+  // The lock can be broken as stale while a payment is still running. Anything
+  // appended since the read is missing from what was just built, so drop the
+  // rewrite rather than lose that row. Checked before the archive and not only
+  // before the rename: giving up after archiving leaves those rows in the
+  // archive with the ledger still holding them, and the next fold that does
+  // go through writes them a second time.
+  if (fs.statSync(PATHS.x402Log).size !== sizeBefore) {
+    fs.rmSync(temp, { force: true });
+    return;
   }
+
+  // Archive before the ledger is rewritten. A crash between the two leaves
+  // rows in both files, which nothing sums; the other order loses them.
+  fs.appendFileSync(PATHS.x402LogArchive, serializeEntries(absorbed), { encoding: 'utf-8', mode: 0o600 });
+
+  fs.renameSync(temp, PATHS.x402Log);
 }
 
 /**
@@ -295,9 +275,11 @@ function serializeEntries(entries: X402LogEntry[]): string {
   return entries.map((entry) => '\n' + JSON.stringify(entry)).join('');
 }
 
+// Synchronous bodies on purpose: compaction detects a concurrent append by the
+// file size before and after, which holds only while nothing yields inside it.
 export const jsonlPaymentLog: PaymentLog = {
-  read: readX402Log,
-  append: appendX402Log,
-  correct: appendX402Correction,
-  compact: compactX402Log,
+  read: async (limit) => readX402Log(limit),
+  append: async (entry) => appendX402Log(entry),
+  correct: async (correction) => appendX402Correction(correction),
+  compact: async (capStarts, payer) => compactX402Log(capStarts, payer),
 };

@@ -89,6 +89,25 @@ export interface X402LogEntry {
  */
 export type SettlementState = 'unverified' | 'verified' | 'expired' | 'abandoned';
 
+/** Where a row stands. `pending`, written before signing, has no `status`/`settlement` spelling. */
+export type PaymentRowState = 'pending' | 'signed' | 'settled' | 'failed' | 'unknown';
+
+export type StoredRowState = Exclude<PaymentRowState, 'pending'>;
+
+/**
+ * An index a store may keep beside `status` and `settlement`, never in place of
+ * them: two rows in one state can cost a cap different amounts, and
+ * `spendFigureOf` reads the fields.
+ */
+export function rowStateOf(row: Pick<X402LogEntry, 'status' | 'settlement'>): StoredRowState {
+  if (row.status === 'refused' || row.settlement === 'expired') return 'failed';
+  if (row.settlement === 'unverified') return 'signed';
+  if (row.settlement === 'verified') return 'settled';
+  // Rows from before `settlement` existed.
+  if (row.settlement === undefined && row.status === 'paid') return 'settled';
+  return 'unknown';
+}
+
 /**
  * A later answer about a row that was already written.
  *

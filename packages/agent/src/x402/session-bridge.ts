@@ -3,7 +3,7 @@ import { expiryInstant, isLegacySession, sessionUsable, type SessionConfig } fro
 import { usdcForNetwork } from './asset-registry.js';
 import { PERMIT2_ADDRESS } from './permit2.js';
 import { whyFeeTokenDisagrees } from './fee-token.js';
-import type { SessionHost } from '../ports.js';
+import type { Logger, SessionHost } from '../ports.js';
 
 // JAW's ERC-20 paymaster, mirrored from core's `jawPaymasterUrl`. Kept as a
 // local literal rather than an import because `@jaw.id/core` is lazy-loaded in
@@ -53,8 +53,8 @@ function resolvePaymaster(
   if (!asset) {
     // Say so rather than falling through quietly: the userOp goes out with no
     // paymaster, and the failure the user eventually sees is about native funds
-    // and mentions none of this. stderr, so stdio MCP framing is untouched.
-    console.warn(
+    // and mentions none of this.
+    options.logger.warn(
       `[jaw] No USDC in the x402 asset registry for chain ${options.chainId}, so no ERC-20 paymaster ` +
         'can be engaged. Gas will come out of the account\u2019s native balance. ' +
         'Set `paymasters` in your config to sponsor this chain.'
@@ -79,7 +79,7 @@ async function warnOnFeeTokenDrift(options: SessionBridgeOptions): Promise<void>
   const asset = usdcForNetwork(`eip155:${options.chainId}`);
   if (!asset || !options.apiKey) return;
   const warning = await whyFeeTokenDisagrees(asset, options.apiKey);
-  if (warning) console.warn(`[jaw] ${warning}`);
+  if (warning) options.logger.warn(`[jaw] ${warning}`);
 }
 
 /**
@@ -109,6 +109,7 @@ export interface SessionBridgeOptions {
   chainId: number;
   /** Where the session, its key and the paymaster config are read from. */
   host: SessionHost;
+  logger: Logger;
   paymasterUrl?: string;
   paymasterContext?: Record<string, unknown>;
 }
