@@ -1,5 +1,6 @@
 import { decide, payloadHash, signedPayload, toPageView, type ApprovalPageView, type Verdict } from '@jaw.id/agent';
 import { isHex, keccak256, type Hex } from 'viem';
+import { SUPPORTED_CHAINS } from '@/connections/config';
 import { verifyOnChain, type VerifySignature } from '@/lib/chain';
 import { log } from '@/lib/edge';
 import { connectionLive, findById, recordDecision } from './store';
@@ -10,6 +11,7 @@ export type PageOutcome =
   | { kind: 'invalid_request' }
   | { kind: 'bad_signature' }
   | { kind: 'connection_revoked' }
+  | { kind: 'unsupported_chain' }
   | { kind: 'verification_unavailable' }
   | { kind: 'preview_changed' }
   | { kind: 'not_pending'; view: ApprovalPageView };
@@ -37,6 +39,7 @@ export async function decideFromPage(
   if (request.state.status !== 'pending') return { kind: 'not_pending', view };
   if (view.previewHash !== previewHash) return { kind: 'preview_changed' };
   if (!(await connectionLive(request.id))) return { kind: 'connection_revoked' };
+  if (!SUPPORTED_CHAINS[request.chainId]) return { kind: 'unsupported_chain' };
 
   const payload = signedPayload(request, verdict as Verdict);
   const valid = await verify({
@@ -73,6 +76,7 @@ const STATUS: Record<PageOutcome['kind'], number> = {
   invalid_request: 400,
   bad_signature: 403,
   connection_revoked: 410,
+  unsupported_chain: 422,
   verification_unavailable: 503,
   preview_changed: 409,
   not_pending: 409,

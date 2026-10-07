@@ -16,5 +16,5 @@ export function publicClientFor(chainId: number): PublicClient {
   return createPublicClient({ chain, transport: http(chain.id === configured.id ? rpcUrl : undefined) });
 }
 
-export const verifyOnChain: VerifySignature = ({ chainId, address, message, signature }) =>
+export const verifyOnChain: VerifySignature = async ({ chainId, address, message, signature }) =>
   publicClientFor(chainId).verifyMessage({ address, message, signature });

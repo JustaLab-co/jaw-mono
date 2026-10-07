@@ -7,8 +7,8 @@ import { eq } from 'drizzle-orm';
 import { verifyBearer } from '@/connections/auth';
 import { revokeByGrant } from '@/connections/rows';
 import { getDb } from '@/db/client';
-import { connections } from '@/db/schema';
-import { decideFromPage, readForPage } from './page-api';
+import { approvalRequests, connections } from '@/db/schema';
+import { decideFromPage, outcomeResponse, readForPage } from './page-api';
 import { countPending } from './store';
 
 setTestEnv();
@@ -221,6 +221,17 @@ describe('approvals', () => {
     expect(
       (await decideFromPage(id, { verdict: 'approved', signature, previewHash: v.previewHash }, revokingVerify)).kind
     ).toBe('connection_revoked');
+    expect((await view(id)).status).toBe('pending');
+  });
+
+  it('refuses a request on a chain the server cannot verify, with a 4xx, and leaves it pending', async () => {
+    const { c, id } = await requestSignature();
+    await getDb().update(approvalRequests).set({ chainId: 1 }).where(eq(approvalRequests.id, id));
+    const v = await view(id);
+    const signature = await c.signer.signMessage({ message: v.approve.message });
+    const outcome = await decideFromPage(id, { verdict: 'approved', signature, previewHash: v.previewHash });
+    expect(outcome.kind).toBe('unsupported_chain');
+    expect(outcomeResponse(outcome).status).toBe(422);
     expect((await view(id)).status).toBe('pending');
   });
 
