@@ -61,6 +61,7 @@ const UNREACHABLE = new Set([
   'ENOTFOUND',
   'EAI_AGAIN',
   'CONNECT_TIMEOUT',
+  '57014',
   '57P01',
   '57P03',
   '08001',
