@@ -24,7 +24,7 @@ setTestEnv();
 const { verifyBearer } = await import('./auth');
 const { config } = await import('./config');
 const { createProvider } = await import('./provider');
-const { RETRY_WINDOW_MS } = await import('./adapter');
+const { PgAdapter, RETRY_WINDOW_MS } = await import('./adapter');
 const { findActive } = await import('./rows');
 const { open, parseKeyRing, unwrap } = await import('./seal');
 type KeyRing = ReturnType<typeof parseKeyRing>;
@@ -264,6 +264,28 @@ describe('authorization server', () => {
     expect((await refresh(retried.body.refresh_token)).body.error).toBe('invalid_grant');
   });
 
+  it('answers invalid_grant, not a retry, to a refresh that saw its token live and lost the race', async () => {
+    const c = await connect();
+    const sub = (await claimsOf(c.access_token)).sub;
+    let winner: Awaited<ReturnType<typeof refresh>> | undefined;
+    const find = PgAdapter.prototype.find;
+    vi.spyOn(PgAdapter.prototype, 'find').mockImplementationOnce(async function (
+      this: InstanceType<typeof PgAdapter>,
+      id
+    ) {
+      const seen = await find.call(this, id);
+      vi.mocked(PgAdapter.prototype.find).mockImplementation(find);
+      winner = await refresh(c.refresh_token);
+      return seen;
+    });
+    const loser = await refresh(c.refresh_token);
+    vi.restoreAllMocks();
+    expect(winner?.status).toBe(200);
+    expect(loser.body.error).toBe('invalid_grant');
+    expect(await findActive(sub)).toBeDefined();
+    expect((await refresh(winner!.body.refresh_token)).status).toBe(200);
+  });
+
   it('never forks the refresh chain under concurrent refreshes or retries', async () => {
     const c = await connect();
     const sub = (await claimsOf(c.access_token)).sub;
@@ -298,6 +320,8 @@ describe('authorization server', () => {
     expect(dump.some((s) => s.includes(key.slice(2)))).toBe(false);
     expect(recoverable(dump, config().ring, sub, [])).toEqual([]);
     expect(recoverable(dump, config().ring, sub, [second.body.refresh_token])).toEqual([privateKeyToAddress(key)]);
+    // A token whose successor was used keeps no wrap, so an old leaked token opens nothing either.
+    expect(recoverable(dump, config().ring, sub, [c.refresh_token])).toEqual([]);
   });
 
   it('creates the session key at the code exchange, never at consent', async () => {

@@ -16,6 +16,9 @@ const notExpired = or(isNull(oauthPayloads.expiresAt), gt(oauthPayloads.expiresA
 // The key a token request issues for, made by whichever token the provider
 // saves first: the access token in a code exchange, the refresh token in a refresh.
 const requestKeys = new WeakMap<object, Hex>();
+// Requests whose find saw a used token it may retry. One that saw the token
+// live and lost the race to its own sibling is refused, not taken for a retry.
+const retries = new WeakSet<object>();
 
 function requestContext(): KoaContextWithOIDC {
   const ctx = Provider.ctx;
@@ -69,7 +72,9 @@ export class PgAdapter implements Adapter {
       .where(and(eq(oauthPayloads.key, this.key(id)), notExpired));
     if (!row) return undefined;
     const payload = { ...(row.payload as AdapterPayload), jti: id };
-    if (row.consumedAt && !(await this.retryable(row))) payload.consumed = Math.floor(row.consumedAt.getTime() / 1000);
+    if (!row.consumedAt) return payload;
+    if (await this.retryable(row)) retries.add(requestContext());
+    else payload.consumed = Math.floor(row.consumedAt.getTime() / 1000);
     return payload;
   }
 
@@ -100,13 +105,20 @@ export class PgAdapter implements Adapter {
           .where(eq(oauthPayloads.key, this.key(presented)));
         if (!from?.keyWrap) throw new errors.InvalidGrant('refresh token holds no key');
         key = unwrap(this.ring, from.keyWrap as Wrapped, connectionId, presented);
-        const replaced = from.consumedAt ? from.successorKey : from.key;
+        const retry = from.consumedAt !== null;
+        if (retry && !retries.has(ctx)) throw new errors.InvalidGrant('grant already used');
+        // The replaced successor never reached the client, so its wrap goes with it.
         const consumed = await tx
           .update(oauthPayloads)
-          .set({ consumedAt: new Date() })
-          .where(and(eq(oauthPayloads.key, replaced ?? ''), isNull(oauthPayloads.consumedAt)))
+          .set(retry ? { consumedAt: new Date(), keyWrap: null } : { consumedAt: new Date() })
+          .where(
+            and(eq(oauthPayloads.key, (retry ? from.successorKey : from.key) ?? ''), isNull(oauthPayloads.consumedAt))
+          )
           .returning({ key: oauthPayloads.key });
         if (consumed.length === 0) throw new errors.InvalidGrant('grant already used');
+        // Using a token ends its predecessor's retry window, and with it the need for that wrap.
+        if (!retry)
+          await tx.update(oauthPayloads).set({ keyWrap: null }).where(eq(oauthPayloads.successorKey, from.key));
         await tx
           .update(oauthPayloads)
           .set({ successorKey: this.key(id) })
