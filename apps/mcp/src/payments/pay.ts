@@ -26,6 +26,7 @@ import { gate, render, type PayResult } from './render';
 import {
   claim,
   entriesFor,
+  findPayment,
   finish,
   markSigned,
   PAY_LIMIT_MS,
@@ -94,7 +95,7 @@ function fencedOf(url: string, o: Outcome): string[] {
   const code = codeOf(o);
   const reason = o.kind === 'unreached' ? o.reason : 'refusal' in o ? o.refusal.reason : '';
   if (reason && code && SERVER_REASONS.has(code)) {
-    log('warn', { msg: `payment ${code}: ${reason.replace(/https?:\/\/[^\s)]+/g, '<url>')}` });
+    log('warn', { msg: `payment ${code}: ${reason.replace(/[a-z][a-z0-9+.-]*:\/\/[^\s)]+/gi, '<url>')}` });
   } else if (reason) {
     fenced.push(fenceText(host, reason, 400));
   }
@@ -103,7 +104,7 @@ function fencedOf(url: string, o: Outcome): string[] {
 
 /** Where the outcome leaves a row. `signed` says whether an authorization for it exists. */
 function conclusionOf(o: Outcome, signed: boolean, settled: Settled | undefined): Conclusion {
-  if (o.kind === 'unreached') return { state: 'failed', kind: 'refused', code: o.code };
+  if (o.kind === 'unreached') return { state: signed ? 'unknown' : 'failed', kind: 'refused', code: o.code };
   const traces = {
     topUp: 'topUp' in o ? o.topUp : undefined,
     approvalBatchId: 'permit2Approval' in o ? o.permit2Approval?.batchId : undefined,
@@ -157,7 +158,12 @@ async function settledBy(o: Outcome, clients: ChainClients): Promise<Settled | u
   return confirmByReceipt(attempt, payment.txHash as Hex, clients, CONFIRM_MS);
 }
 
-/** The row as this call concluded it, for when another call wrote the row first. */
+/** When another call concluded the row first, its answer is the row's; this call's only if the row is gone. */
+async function rowAfter(row: PaymentRow, c: Conclusion): Promise<PaymentRow> {
+  const current = await findPayment(row.id);
+  return current && current.state !== 'pending' ? current : merged(current ?? row, c);
+}
+
 const merged = (row: PaymentRow, c: Conclusion): PaymentRow => ({
   ...row,
   state: c.state,
@@ -219,7 +225,7 @@ export async function pay(t: Tenant, input: PayInput, deps: PayDeps = liveDeps()
     // A refused resend says nothing about the first send, which the chain or a live first call settles.
     if (outcome.kind !== 'paid') return render(merged(row, conclusion), fenced);
     const written = await finish(row.id, '', conclusion, fenced);
-    return render(written ?? merged(row, conclusion), fenced);
+    return render(written ?? (await rowAfter(row, conclusion)), fenced);
   }
 
   const { row, token } = claimed;
@@ -230,7 +236,7 @@ export async function pay(t: Tenant, input: PayInput, deps: PayDeps = liveDeps()
   const conclusion = conclusionOf(outcome, signed, await settledBy(outcome, deps.clients));
   const fenced = fencedOf(row.url, outcome);
   const written = await finish(row.id, token, conclusion, fenced);
-  return render(written ?? merged(row, conclusion), fenced);
+  return render(written ?? (await rowAfter(row, conclusion)), fenced);
 }
 
 async function payWithinGrant(

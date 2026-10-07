@@ -53,6 +53,26 @@ function inTurn<T>(key: string, work: () => Promise<T>): Promise<T> {
 
 const timedOut = (reason: string): TopUpOutcome => ({ ok: false, code: 'timed_out', reason });
 
+// A waiter gives up when its turn would come too late to send. Once its turn starts the
+// refill is never abandoned, so money it moves always reaches the caller's outcome.
+function queuedWithin(ms: number, key: string, work: () => Promise<TopUpOutcome>): Promise<TopUpOutcome> {
+  let started = false;
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const late = new Promise<TopUpOutcome>((resolve) => {
+    timer = setTimeout(
+      () => {
+        if (!started) resolve(timedOut('other payments on this connection held the refill too long'));
+      },
+      Math.max(ms, 0)
+    );
+  });
+  const turn = inTurn(key, () => {
+    started = true;
+    return work();
+  });
+  return Promise.race([turn, late]).finally(() => clearTimeout(timer));
+}
+
 /**
  * The funding hook `payAndFetch` runs after the probe and before signing: the
  * only place the connection's lock exists, so it never spans a seller fetch.
@@ -62,7 +82,7 @@ const timedOut = (reason: string): TopUpOutcome => ({ ok: false, code: 'timed_ou
  */
 export function refillHook(c: RefillContext): EnsureFunds {
   return (requirement, payer, budget) =>
-    inTurn(c.connectionId, async () => {
+    queuedWithin(budget.left() - SEND_RESERVE_MS, c.connectionId, async () => {
       const waitMs = budget.left() - SEND_RESERVE_MS;
       if (waitMs < MIN_REFILL_MS) return timedOut('not enough time left to refill the payer and still send');
       let funded: TopUpOutcome | undefined;

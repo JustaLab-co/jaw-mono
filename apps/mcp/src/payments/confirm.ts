@@ -144,7 +144,8 @@ export async function chainAnswer(
     if (!(await nonceUsed(attempt, token, clients))) {
       return attempt.deadline.getTime() + EXPIRY_MARGIN_MS < Date.now() ? { kind: 'expired' } : { kind: 'open' };
     }
-    const txHash = attempt.scheme === 'exact' ? await usedIn(attempt, token, clients) : undefined;
+    const txHash =
+      attempt.scheme === 'exact' ? await usedIn(attempt, token, clients).catch(() => undefined) : undefined;
     const found = txHash && (await confirmByReceipt(attempt, txHash, clients, timeoutMs));
     return found ? { kind: 'settled', ...found } : { kind: 'settled', txHash, amount: attempt.authorized };
   };

@@ -12,8 +12,8 @@ export const RECONCILE_AFTER_MS = 60_000;
 const STALE_AFTER_MS = 60 * 60_000;
 const BATCH = 50;
 const READ_MS = 10_000;
-// A claimed row is this run's until its answers are written; another run skips it meanwhile.
-const CLAIM_MS = 3 * READ_MS;
+// Longer than a run, so a row left open is not claimed twice by the same run, and later runs back off from it.
+const CLAIM_MS = 10 * 60_000;
 
 export interface Report {
   settled: number;

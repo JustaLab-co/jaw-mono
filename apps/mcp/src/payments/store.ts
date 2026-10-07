@@ -45,6 +45,11 @@ interface Owner {
   permissionId: string | undefined;
 }
 
+export async function findPayment(id: string): Promise<PaymentRow | undefined> {
+  const [row] = await getDb().select().from(payments).where(eq(payments.id, id));
+  return row;
+}
+
 async function find(connectionId: string, key: string): Promise<PaymentRow | undefined> {
   const [row] = await getDb()
     .select()
@@ -323,7 +328,7 @@ export async function settle(id: string, s: { txHash?: string; blockTime?: Date;
 
 /** The trigger also refuses this before the deadline, whatever the caller read. */
 export async function expire(id: string) {
-  await getDb().update(payments).set({ state: 'failed', finishedAt: new Date() }).where(unresolved(id));
+  await getDb().update(payments).set({ state: 'failed', kind: 'failed', finishedAt: new Date() }).where(unresolved(id));
 }
 
 export async function markAlerted(id: string) {
