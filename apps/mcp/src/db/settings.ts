@@ -2,8 +2,24 @@ import { eq, sql } from 'drizzle-orm';
 import { getDb } from './client';
 import { rateLimits, settings } from './schema';
 
+// A frozen database keeps the connection open and never answers, and postgres.js
+// has no query timeout. The edge reads these first on every request, so giving up
+// here turns a frozen database into a 503 instead of a hung request.
+const DEADLINE_MS = 3_000;
+
+function withinDeadline<T>(query: PromiseLike<T>): Promise<T> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const late = new Promise<never>((_, reject) => {
+    timer = setTimeout(
+      () => reject(Object.assign(new Error('the database did not answer in time'), { code: 'ETIMEDOUT' })),
+      DEADLINE_MS
+    );
+  });
+  return Promise.race([query, late]).finally(() => clearTimeout(timer));
+}
+
 export async function isPaused(): Promise<boolean> {
-  const [row] = await getDb().select().from(settings).where(eq(settings.key, 'paused'));
+  const [row] = await withinDeadline(getDb().select().from(settings).where(eq(settings.key, 'paused')));
   return row?.value === true;
 }
 
@@ -12,15 +28,17 @@ export async function countHit(key: string, windowMs: number): Promise<number> {
   const db = getDb();
   // Old windows are swept now and then rather than on every request.
   if (Math.random() < 0.01) {
-    await db.delete(rateLimits).where(sql`${rateLimits.windowStart} < now() - interval '1 hour'`);
+    await withinDeadline(db.delete(rateLimits).where(sql`${rateLimits.windowStart} < now() - interval '1 hour'`));
   }
-  const [row] = await db
-    .insert(rateLimits)
-    .values({ key, windowStart, count: 1 })
-    .onConflictDoUpdate({
-      target: [rateLimits.key, rateLimits.windowStart],
-      set: { count: sql`${rateLimits.count} + 1` },
-    })
-    .returning({ count: rateLimits.count });
+  const [row] = await withinDeadline(
+    db
+      .insert(rateLimits)
+      .values({ key, windowStart, count: 1 })
+      .onConflictDoUpdate({
+        target: [rateLimits.key, rateLimits.windowStart],
+        set: { count: sql`${rateLimits.count} + 1` },
+      })
+      .returning({ count: rateLimits.count })
+  );
   return row.count;
 }
