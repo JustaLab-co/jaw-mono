@@ -336,6 +336,36 @@ describe('authorization server', () => {
     expect(recoverable(await dumpStrings(), config().ring, sub, [c.refresh_token])).toEqual([]);
   });
 
+  it('answers a retry at the very edge of the window, even when the sweep runs a moment later', async () => {
+    const c = await connect();
+    const sub = (await claimsOf(c.access_token)).sub;
+    await refresh(c.refresh_token);
+    const [{ consumed_at }] = (
+      await db.query<{ consumed_at: Date }>(
+        `select p.consumed_at from oauth_payloads p join connections c on p.grant_id = c.grant_id
+         where c.id = $1 and p.model = 'RefreshToken' and p.consumed_at is not null`,
+        [sub]
+      )
+    ).rows;
+    vi.useFakeTimers({ toFake: ['Date'] });
+    try {
+      vi.setSystemTime(new Date(consumed_at).getTime() + RETRY_WINDOW_MS - 1);
+      const find = PgAdapter.prototype.find;
+      vi.spyOn(PgAdapter.prototype, 'find').mockImplementation(async function (
+        this: InstanceType<typeof PgAdapter>,
+        id
+      ) {
+        const seen = await find.call(this, id);
+        vi.setSystemTime(Date.now() + 5);
+        return seen;
+      });
+      expect((await refresh(c.refresh_token)).status).toBe(200);
+    } finally {
+      vi.restoreAllMocks();
+      vi.useRealTimers();
+    }
+  });
+
   it('creates the session key at the code exchange, never at consent', async () => {
     const browser = new Browser();
     const signer = owner();
