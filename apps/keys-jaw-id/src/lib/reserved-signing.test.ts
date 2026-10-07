@@ -14,20 +14,33 @@ const consent = consentTypedData(8453, {
   scopes: 'wallet:read wallet:send',
   expires: '2026-10-07T12:00:00.000Z',
 });
-const cases: [string, unknown[]][] = [
-  ['personal_sign', ['JAW connection consent', ACCOUNT]],
-  ['personal_sign', [stringToHex('JAW connection consent'), ACCOUNT]],
-  ['personal_sign', ['Hello JAW', ACCOUNT]],
-  ['eth_signTypedData_v4', [ACCOUNT, JSON.stringify(consent)]],
-  ['eth_signTypedData_v4', [ACCOUNT, rejectionTypedData(8453, 'id')]],
-  ['eth_signTypedData_v4', [ACCOUNT, JSON.stringify({ ...consent, domain: { ...consent.domain, name: 'JAWS' } })]],
-  ['wallet_sign', [{ request: { type: '0x01', data: consent } }]],
-  ['wallet_sign', [{ request: { type: '0x45', data: { message: 'JAW consent' } } }]],
-  ['wallet_sendCalls', [{ calls: [] }]],
+const R = 'refused';
+const OK = 'allowed';
+const cases: [string, unknown, typeof R | typeof OK][] = [
+  ['personal_sign', ['JAW connection consent', ACCOUNT], R],
+  ['personal_sign', [stringToHex('JAW connection consent'), ACCOUNT], R],
+  ['personal_sign', [ACCOUNT, 'JAW connection consent'], R],
+  ['personal_sign', 'JAW connection consent', R],
+  ['personal_sign', ['Hello JAW', ACCOUNT], OK],
+  ['personal_sign', ['JAWS', ACCOUNT], OK],
+  ['eth_signTypedData_v4', [ACCOUNT, JSON.stringify(consent)], R],
+  ['eth_signTypedData_v4', [ACCOUNT, consent], R],
+  ['eth_signTypedData_v4', [ACCOUNT, rejectionTypedData(8453, 'id')], R],
+  ['eth_signTypedData_v3', [ACCOUNT, JSON.stringify(consent)], R],
+  ['eth_signTypedData_v4', [ACCOUNT, JSON.stringify({ ...consent, domain: { ...consent.domain, name: 'JAWS' } })], OK],
+  ['eth_signTypedData_v4', [ACCOUNT, '{not json'], OK],
+  ['eth_signTypedData_v4', JSON.stringify(consent), R],
+  ['wallet_sign', [{ request: { type: '0x01', data: consent } }], R],
+  ['wallet_sign', [{ request: { type: '0x45', data: { message: 'JAW consent' } } }], R],
+  ['wallet_sign', [{ request: { type: '0x45', data: { message: 'Sign in to Example' } } }], OK],
+  ['wallet_sign', [{}], OK],
+  ['wallet_sendCalls', [{ calls: [] }], OK],
 ];
 
-describe('the reserved signing rule in @jaw.id/ui', () => {
-  it.each(cases)('agrees with @jaw.id/agent on %s %j', (method, params) => {
-    expect(uiRule(method, params)).toBe(agentRule(method, params));
+describe('the reserved signing rule', () => {
+  it.each(cases)('%s %j is %s by both copies', (method, params, expected) => {
+    const outcome = (rule: typeof agentRule) => (rule(method, params) ? R : OK);
+    expect(outcome(agentRule)).toBe(expected);
+    expect(outcome(uiRule)).toBe(expected);
   });
 });
