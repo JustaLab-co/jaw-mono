@@ -1,6 +1,6 @@
 import { afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
 import { useTestDb } from '@/db/test-db';
-import { connect, ISSUER, setTestEnv } from './testkit';
+import { connect, ISSUER, setTestEnv, token } from './testkit';
 
 setTestEnv();
 const { POST } = await import('@/app/mcp/route');
@@ -48,9 +48,15 @@ describe('/mcp behind OAuth', () => {
     expect(await list.text()).toContain('"tools":[');
   });
 
-  it('refuses a token without wallet:read', async () => {
-    const { access_token } = await connect(undefined, { scope: 'openid' });
-    const res = await rpc(initialize, access_token);
+  it('refuses a token narrowed to leave out wallet:read', async () => {
+    const c = await connect();
+    const narrowed = await token({
+      grant_type: 'refresh_token',
+      refresh_token: c.refresh_token,
+      client_id: 'jaw-cli',
+      scope: 'wallet:send',
+    });
+    const res = await rpc(initialize, narrowed.body.access_token);
     expect(res.status).toBe(401);
   });
 

@@ -4,7 +4,7 @@ import { getDb } from '@/db/client';
 import { connections } from '@/db/schema';
 import { useTestDb } from '@/db/test-db';
 import { verifyBearer } from './auth';
-import { consent } from './interaction';
+import { consent, details } from './interaction';
 import { provider } from './provider';
 import {
   Browser,
@@ -52,6 +52,16 @@ describe('consent hand-back', () => {
       scopes: 'wallet:read wallet:send',
       expires: details.expiresAt,
     });
+  });
+
+  it('refuses a consent that leaves out wallet:read, which every tool needs', async () => {
+    const browser = new Browser();
+    const { uid } = await startAuthorization(browser, { scope: 'wallet:send' });
+    const shown = await details(new Request(`${ISSUER}/interaction/${uid}/details`), uid!);
+    expect(shown.status).toBe(400);
+    expect(await shown.json()).toEqual({ error: 'invalid_scope' });
+    const signer = owner();
+    expect((await postConsent(uid!, signer.address, await signer.signMessage({ message: 'x' }))).status).toBe(400);
   });
 
   it('refuses a signature made for another interaction', async () => {

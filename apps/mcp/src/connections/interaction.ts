@@ -60,9 +60,14 @@ export function hop(_req: Request, uid: string): Response {
   return Response.redirect(`${config().keysOrigin}/authorize?uid=${uid}`, 303);
 }
 
+// Every tool needs wallet:read, so a connection without it could do nothing.
+const lacksRead = (d: ConsentDetails) => !d.scopes.some((s) => s.id === 'wallet:read');
+const invalidScope = () => Response.json({ error: 'invalid_scope' }, { status: 400 });
+
 export async function details(_req: Request, uid: string): Promise<Response> {
   const found = await loadDetails(uid);
-  return found ? Response.json(found) : Response.json({ error: 'not_found' }, { status: 404 });
+  if (!found) return Response.json({ error: 'not_found' }, { status: 404 });
+  return lacksRead(found) ? invalidScope() : Response.json(found);
 }
 
 // Completion needs both the one-time ticket (this browser signed) and the
@@ -76,6 +81,7 @@ export async function consent(req: Request, uid: string, verify: VerifySignature
   }
   const found = await loadDetails(uid);
   if (!found) return Response.json({ error: 'not_found' }, { status: 404 });
+  if (lacksRead(found)) return invalidScope();
   const valid = await verify({
     chainId: found.chainId,
     address: body.address,
