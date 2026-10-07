@@ -5,6 +5,7 @@ import { connect, ISSUER, setTestEnv } from './testkit';
 setTestEnv();
 const { POST } = await import('@/app/mcp/route');
 const { RATE_LIMIT } = await import('@/lib/edge');
+const rows = await import('./rows');
 
 beforeAll(useTestDb);
 afterEach(() => vi.restoreAllMocks());
@@ -64,6 +65,22 @@ describe('/mcp behind OAuth', () => {
     for (let i = 0; i <= RATE_LIMIT; i++) last = (await rpc(initialize, a.access_token)).status;
     expect(last).toBe(429);
     expect((await rpc(initialize, b.access_token)).status).toBe(200);
+  });
+
+  it('answers 503 and keeps the SQL out of the logs when the connection read fails', async () => {
+    const { access_token } = await connect();
+    const lines: string[] = [];
+    const capture = (...args: unknown[]) => void lines.push(args.map(String).join(' '));
+    vi.spyOn(console, 'log').mockImplementation(capture);
+    vi.spyOn(console, 'error').mockImplementation(capture);
+    vi.spyOn(rows, 'findActive').mockRejectedValueOnce(
+      Object.assign(new Error('Failed query: select "id" from "connections" params: conn_secret'), {
+        cause: { code: '42P01' },
+      })
+    );
+    const res = await rpc(initialize, access_token);
+    expect(res.status).toBe(503);
+    expect(lines.join('\n')).not.toMatch(/Failed query|conn_secret/);
   });
 
   it('never writes a token or key to the logs', async () => {

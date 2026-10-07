@@ -2,7 +2,7 @@ import type { AuthInfo } from '@modelcontextprotocol/server';
 import { compactDecrypt, decodeProtectedHeader } from 'jose';
 import { withMcpAuth } from 'mcp-handler';
 import type { Address } from 'viem';
-import { ipKey } from '@/lib/edge';
+import { errorLabel, ipKey, log } from '@/lib/edge';
 import { config } from './config';
 import type { Scope } from './provider';
 import { findActive } from './rows';
@@ -78,14 +78,25 @@ export async function verifyBearer(bearer: string | undefined): Promise<AuthInfo
 }
 
 export function withConnection(handler: (req: Request) => Promise<Response>): (req: Request) => Promise<Response> {
-  return (req) =>
-    withMcpAuth(handler, (_req, bearer) => verifyBearer(bearer), {
+  return async (req) => {
+    // Verified here rather than inside withMcpAuth, which logs a thrown error
+    // whole (a driver error carries its SQL) and answers 401, so a client would
+    // drop working credentials during an outage.
+    let auth: AuthInfo | undefined;
+    try {
+      auth = await verifyBearer(req.headers.get('authorization')?.match(/^Bearer (.+)$/i)?.[1]);
+    } catch (err) {
+      log('error', { msg: 'bearer verification unavailable', error: errorLabel(err) });
+      return Response.json({ error: 'unavailable' }, { status: 503 });
+    }
+    return withMcpAuth(handler, async () => auth, {
       // No required scope: the challenge would name it, and an MCP client then
       // asks for that scope alone instead of every scope the metadata lists.
       required: true,
       resourceMetadataPath: RESOURCE_METADATA_PATH,
       resourceUrl: config().issuer,
     })(req);
+  };
 }
 
 export function tenant(ctx: { http?: { authInfo?: AuthInfo } }): Tenant {
