@@ -45,6 +45,8 @@ export interface BudgetView extends ViewBase {
     expiresAt: string;
   };
   approve: { type: 'grant'; grant: GrantRequest };
+  /** The budget this one replaces, revoked by the page once the new one is granted. */
+  replaces?: { permissionId: Hex };
 }
 
 export type ApprovalView = SignatureView | BudgetView;

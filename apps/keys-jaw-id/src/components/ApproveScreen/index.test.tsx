@@ -17,6 +17,7 @@ vi.mock('@jaw.id/core', () => ({
   Account: { get: (config: unknown) => get(config) },
   standardErrorCodes: { provider: { userRejectedRequest: 4001 } },
 }));
+vi.mock('@jaw.id/ui', async () => ({ PortalContainerContext: (await import('react')).createContext(null) }));
 type ModalProps = {
   permissionRequest: { params: unknown[] };
   account: unknown;
@@ -230,6 +231,34 @@ describe('ApproveScreen', () => {
     await settle();
     expect(posts).toEqual([{ verdict: 'approved', previewHash: VIEW.previewHash, permission: GRANTED }]);
     expect(container.textContent).toContain('Approved.');
+  });
+
+  it('revokes the budget the new one replaces right after granting it', async () => {
+    const OLD = `0x${'ee'.repeat(32)}`;
+    view = { ...BUDGET_VIEW, replaces: { permissionId: OLD } };
+    await render();
+    await click(container.querySelector('#login'));
+    await click(button('Approve'));
+    await act(async () => modal!.onSuccess(GRANTED));
+    await settle();
+    expect(posts).toHaveLength(1);
+    expect(modal!.permissionRequest).toEqual({
+      method: 'wallet_revokePermissions',
+      params: [{ id: OLD, address: OWNER }],
+    });
+    expect(modal!.account).toBe(signer);
+    expect(container.textContent).not.toContain('Approved.');
+    await act(async () => modal!.onSuccess({ success: true }));
+    await settle();
+    expect(container.textContent).toContain('Approved.');
+  });
+
+  it('renders the wallet dialog inside the JAW UI scope, so it is styled and centered', async () => {
+    view = BUDGET_VIEW;
+    await render();
+    await click(container.querySelector('#login'));
+    await click(button('Approve'));
+    expect(container.querySelector('#permission-modal')!.closest('[data-jaw-ui]')).not.toBeNull();
   });
 
   it('retries a grant the chain does not show yet before giving up', async () => {
