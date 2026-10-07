@@ -138,6 +138,19 @@ describe('reconciler', () => {
     });
   });
 
+  it('does not record a transaction hash another payment of the payer already settled on', async () => {
+    const first = await signedRow();
+    const second = await signedRow({ deadline: new Date(Date.now() + 60_000) });
+    const shared = hex32();
+    used.set(first.nonce, shared);
+    await reconcile(clients);
+    used.set(second.nonce, shared);
+    await getDb().update(payments).set({ reconcilingUntil: null }).where(eq(payments.id, second.id));
+    await reconcile(clients);
+    expect(await rowOf(first.id)).toMatchObject({ state: 'settled', txHash: shared });
+    expect(await rowOf(second.id)).toMatchObject({ state: 'settled', txHash: null, amount: '5000' });
+  });
+
   it('leaves a row alone while the call that signed it may still be running', async () => {
     const live = await signedRow({ leaseUntil: new Date(Date.now() + 60_000) });
     used.set(live.nonce, hex32());

@@ -34,6 +34,7 @@ const PRICES: Record<string, string> = {
   '/slow': '5000',
   '/refuse': '5000',
   '/unconfirmed': '5000',
+  '/sametx': '5000',
 };
 const seen: { path: string; nonce: Hex; signature: Hex; advisoryLocks: number }[] = [];
 const receipts = new Map<Hex, { from: Address; nonce: Hex }>();
@@ -86,7 +87,7 @@ const seller = createServer(async (req, res) => {
     balances.set(from.toLowerCase(), balanceOf(from) - BigInt(PRICES[path]));
     return void res.end('{}');
   }
-  const tx = TX(seen.length);
+  const tx = path === '/sametx' ? TX(999) : TX(seen.length);
   receipts.set(tx, { from, nonce });
   const receipt = { success: true, transaction: tx, network: 'eip155:84532', payer: from };
   res
@@ -443,6 +444,16 @@ describe('jaw_pay_and_fetch', () => {
     const second = await pay(t, { url: url('/unconfirmed'), idempotencyKey: 'used-2' }, deps());
     expect(second.structuredContent).toMatchObject({ kind: 'paid', moneyMoved: false });
     expect(refills).toEqual([]);
+  });
+
+  it('refuses to settle a payment on a transaction hash another payment of the payer already settled on', async () => {
+    const { t } = await connected('1');
+    balances.set(t.sessionAddress.toLowerCase(), 1_000_000n);
+    const first = await pay(t, { url: url('/sametx'), idempotencyKey: 'same-1' }, deps());
+    const second = await pay(t, { url: url('/sametx'), idempotencyKey: 'same-2' }, deps());
+    expect(first.structuredContent).toMatchObject({ state: 'settled', payment: { txHash: TX(999) } });
+    expect(second.structuredContent).toMatchObject({ state: 'signed', kind: 'paid' });
+    expect(second.structuredContent?.payment?.txHash).toBeUndefined();
   });
 
   it('reads the payer balance and the nonces it holds against at one block', async () => {

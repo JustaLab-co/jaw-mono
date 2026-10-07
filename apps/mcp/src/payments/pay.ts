@@ -31,6 +31,7 @@ import {
   entriesFor,
   findPayment,
   finish,
+  txHashTaken,
   markSigned,
   PAY_LIMIT_MS,
   type Conclusion,
@@ -190,6 +191,13 @@ async function settledBy(o: Outcome, signedAfter: Date, clients: ChainClients): 
   return confirmByReceipt(attempt, payment.txHash as Hex, clients, CONFIRM_MS);
 }
 
+/** A hash another payment of this payer already settled on proves nothing about this one, so it is dropped. */
+async function claimedHashOnly(o: Outcome, rowId: string): Promise<Outcome> {
+  if (o.kind !== 'paid' || !o.payment.txHash) return o;
+  if (!(await txHashTaken(o.payer, o.payment.txHash, rowId))) return o;
+  return { ...o, payment: { ...o.payment, txHash: undefined } };
+}
+
 /** When another call concluded the row first, its answer is the row's; this call's only if the row is gone. */
 async function rowAfter(row: PaymentRow, c: Conclusion): Promise<PaymentRow> {
   const current = await findPayment(row.id);
@@ -252,10 +260,13 @@ export async function pay(t: Tenant, input: PayInput, deps: PayDeps = liveDeps()
 
   if (claimed.kind === 'resume') {
     const { row, authorization } = claimed;
-    const outcome: Outcome = await payAndFetch(authorization.resource, payer, {
-      ...sent,
-      attempt: { key: row.id, resume: authorization },
-    }).catch(thrown);
+    const outcome = await claimedHashOnly(
+      await payAndFetch(authorization.resource, payer, {
+        ...sent,
+        attempt: { key: row.id, resume: authorization },
+      }).catch(thrown),
+      row.id
+    );
     const conclusion = conclusionOf(outcome, true, await settledBy(outcome, row.signedAt as Date, deps.clients));
     const fenced = fencedOf(row.url, outcome);
     // A refused resend says nothing about the first send, which the chain or a live first call settles.
@@ -270,7 +281,8 @@ export async function pay(t: Tenant, input: PayInput, deps: PayDeps = liveDeps()
     ? ((await grantLive(grant, deps)) ??
       (await payWithinGrant(t, grant, row, token, request, payer, sent, deps, () => (signed = true))))
     : { kind: 'unreached', code: 'no_grant', reason: 'the budget ended while this payment waited' };
-  const conclusion = conclusionOf(outcome, signed, await settledBy(outcome, new Date(started), deps.clients));
+  const checked = await claimedHashOnly(outcome, row.id);
+  const conclusion = conclusionOf(checked, signed, await settledBy(checked, new Date(started), deps.clients));
   const fenced = fencedOf(row.url, outcome);
   const written = await finish(row.id, token, conclusion, fenced);
   return render(written ?? (await rowAfter(row, conclusion)), fenced);

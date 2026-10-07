@@ -133,6 +133,21 @@ export async function markSigned(id: string, token: string, a: SignedAuthorizati
   if (rows.length !== 1) throw new Error('the payment row is no longer held by this call');
 }
 
+export async function txHashTaken(payer: string, txHash: string, exceptId: string): Promise<boolean> {
+  const [row] = await getDb()
+    .select({ id: payments.id })
+    .from(payments)
+    .where(
+      and(
+        eq(payments.payer, payer.toLowerCase()),
+        sql`lower(${payments.txHash}) = ${txHash.toLowerCase()}`,
+        ne(payments.id, exceptId)
+      )
+    )
+    .limit(1);
+  return row !== undefined;
+}
+
 /** Under the refill lock: the price this row now holds against the float. */
 export async function reserve(tx: Tx, id: string, token: string, price: string): Promise<void> {
   const rows = await tx
