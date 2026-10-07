@@ -147,6 +147,12 @@ describe('preview of a hostile message', () => {
     expect(preview.warnings).toEqual(['hidden_characters', 'address_like', 'markup_like']);
   });
 
+  it('shows variation selectors and the combining grapheme joiner', () => {
+    const preview = previewOf(request('a\uFE0Fb\u034Fc\u{E0100}d\u180Be'));
+    expect(preview.text).toBe('a⟦U+FE0F⟧b⟦U+034F⟧c⟦U+E0100⟧d⟦U+180B⟧e');
+    expect(preview.warnings).toContain('hidden_characters');
+  });
+
   it('leaves the signed payload untouched by the preview', () => {
     const r = request(hostile);
     expect(toPageView(r).approve.message).toBe(hostile);

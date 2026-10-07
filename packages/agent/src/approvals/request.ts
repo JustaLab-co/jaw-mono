@@ -144,8 +144,10 @@ export function payloadHash(payload: SignedPayload): Hex {
 }
 
 // Every control, format (bidi, zero-width, tags), line and paragraph separator
-// except newline and tab, plus the fillers that render as blank.
-const HIDDEN = /(?![\n\t])[\p{Cc}\p{Cf}\p{Zl}\p{Zp}\u115F\u1160\u2800\u3164\uFFA0]/gu;
+// except newline and tab, plus variation selectors, the grapheme joiner and the
+// fillers that render as blank.
+const HIDDEN =
+  /(?![\n\t])[\p{Cc}\p{Cf}\p{Zl}\p{Zp}\u034F\u115F\u1160\u180B-\u180F\u2800\u3164\uFE00-\uFE0F\uFFA0\u{E0100}-\u{E01EF}]/gu;
 
 const codePoint = (c: string) => `⟦U+${c.codePointAt(0)?.toString(16).toUpperCase().padStart(4, '0')}⟧`;
 
