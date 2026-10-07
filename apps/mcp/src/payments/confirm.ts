@@ -90,7 +90,7 @@ const NONCE_STATE = parseAbi([
 ]);
 const PERMIT2: Address = '0x000000000022D473030F116dDEE9F6B43aC78BA3';
 // A node a few blocks behind still reports a nonce unused: past this margin the answer is final.
-const EXPIRY_MARGIN_MS = 5 * 60_000;
+export const EXPIRY_MARGIN_MS = 5 * 60_000;
 const SEARCH_MARGIN_BLOCKS = 150n;
 
 export type ChainAnswer = ({ kind: 'settled' } & Settled) | { kind: 'expired' } | { kind: 'open' };

@@ -444,7 +444,7 @@ describe('jaw_pay_and_fetch', () => {
     expect(refills).toEqual([105_000n]);
   });
 
-  it('stops holding an unknown payment once its deadline passed with the nonce unused', async () => {
+  it('stops holding an unknown payment once its deadline plus the reconciler margin passed', async () => {
     const { t } = await connected('1');
     balances.set(t.sessionAddress.toLowerCase(), 5_000n);
     dropNextLost = true;
@@ -452,11 +452,26 @@ describe('jaw_pay_and_fetch', () => {
     const id = rejected.structuredContent!.paymentId;
     await getDb().execute(sql`alter table payments disable trigger payments_guard`);
     await getDb().execute(
-      sql`update payments set state = 'unknown', deadline = now() - interval '1 minute' where id = ${id}`
+      sql`update payments set state = 'unknown', deadline = now() - interval '10 minutes' where id = ${id}`
     );
     await getDb().execute(sql`alter table payments enable trigger payments_guard`);
     await pay(t, { url: url('/exact'), idempotencyKey: 'dead-2' }, deps());
     expect(refills).toEqual([]);
+  });
+
+  it('keeps holding an unknown payment just past its deadline, inside the reconciler margin', async () => {
+    const { t } = await connected('1');
+    balances.set(t.sessionAddress.toLowerCase(), 5_000n);
+    dropNextLost = true;
+    const rejected = await pay(t, { url: url('/refuse'), idempotencyKey: 'margin-1' }, deps());
+    const id = rejected.structuredContent!.paymentId;
+    await getDb().execute(sql`alter table payments disable trigger payments_guard`);
+    await getDb().execute(
+      sql`update payments set state = 'unknown', deadline = now() - interval '1 minute' where id = ${id}`
+    );
+    await getDb().execute(sql`alter table payments enable trigger payments_guard`);
+    await pay(t, { url: url('/exact'), idempotencyKey: 'margin-2' }, deps());
+    expect(refills).toEqual([105_000n]);
   });
 
   it('lists payments newest first in jaw_history, scoped to the connection', async () => {

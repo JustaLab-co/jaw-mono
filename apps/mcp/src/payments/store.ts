@@ -3,6 +3,7 @@ import type { SignedAuthorization, TopUpOutcome, X402LogEntry } from '@jaw.id/ag
 import { and, desc, eq, inArray, isNull, lt, ne, or, sql } from 'drizzle-orm';
 import type { Address } from 'viem';
 import { getDb, type Tx } from '@/db/client';
+import { EXPIRY_MARGIN_MS } from './confirm';
 import { payments } from '@/db/schema';
 
 export type PaymentRow = typeof payments.$inferSelect;
@@ -160,7 +161,8 @@ export async function recordTopUp(tx: Tx, id: string, funded: TopUpOutcome): Pro
 }
 
 const holding = sql`((${payments.state} = 'pending' and ${payments.leaseUntil} > now() and ${payments.reserved} is not null)
-  or (${payments.state} in ('signed', 'unknown') and ${payments.deadline} > now()))`;
+  or (${payments.state} in ('signed', 'unknown')
+    and ${payments.deadline} > now() - ${EXPIRY_MARGIN_MS} * interval '1 millisecond'))`;
 
 /**
  * Under the refill lock: every other row of this payer that may still take money
