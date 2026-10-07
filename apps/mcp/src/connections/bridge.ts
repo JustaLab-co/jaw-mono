@@ -1,5 +1,6 @@
 import { IncomingMessage, ServerResponse } from 'node:http';
 import { Socket } from 'node:net';
+import { readBody, tooLarge } from '@/lib/body';
 
 type NodeHandler = (req: IncomingMessage, res: ServerResponse) => unknown;
 
@@ -10,7 +11,8 @@ const requestUrl = Object.getOwnPropertyDescriptor(Request.prototype, 'url')!.ge
 
 export async function bridge(req: Request, run: NodeHandler): Promise<Response> {
   const url = new URL(requestUrl.call(req));
-  const body = Buffer.from(await req.arrayBuffer());
+  const body = await readBody(req);
+  if (!body) return tooLarge();
 
   const nodeReq = new IncomingMessage(new Socket());
   nodeReq.method = req.method;

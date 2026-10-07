@@ -3,6 +3,7 @@ import type { ServerResponse } from 'node:http';
 import { clientIdentity, sanitizeLine, type ClientIdentity } from '@jaw.id/agent';
 import { isAddress, isHex } from 'viem';
 import { generatePrivateKey, privateKeyToAddress } from 'viem/accounts';
+import { readJson, tooLarge } from '@/lib/body';
 import { verifyOnChain, type VerifySignature } from '@/lib/chain';
 import { log } from '@/lib/edge';
 import { bridge } from './bridge';
@@ -74,7 +75,9 @@ export async function details(_req: Request, uid: string): Promise<Response> {
 // Completion needs both the one-time ticket (this browser signed) and the
 // interaction cookie (this browser started), which defeats a phished consent link.
 export async function consent(req: Request, uid: string, verify: VerifySignature = verifyOnChain): Promise<Response> {
-  const body = (await req.json().catch(() => ({}))) as { address?: string; signature?: string };
+  const parsed = await readJson(req);
+  if (parsed === undefined) return tooLarge();
+  const body = parsed as { address?: string; signature?: string };
   if (!body.address || !isAddress(body.address) || !body.signature || !isHex(body.signature)) {
     return Response.json({ error: 'invalid_request' }, { status: 400 });
   }
