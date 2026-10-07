@@ -2,7 +2,7 @@ import { FIRST_PARTY_CLIENTS, hasUnstorableText } from '@jaw.id/agent';
 import Provider, { errors, interactionPolicy, type Configuration } from 'oidc-provider';
 import { databaseUnreachable, log } from '@/lib/edge';
 import { PgAdapter, sessionKey } from './adapter';
-import { bridge } from './bridge';
+import { bridge, requestUrl } from './bridge';
 import { config, type Config } from './config';
 import { findActive } from './rows';
 import { seal } from './seal';
@@ -147,7 +147,7 @@ export function provider(): Provider {
 // A client that asks for no wallet scope (none at all, or only openid
 // offline_access) gets wallet:read, the scope every tool needs.
 function withDefaultScope(req: Request): Request {
-  const url = new URL(req.url);
+  const url = new URL(requestUrl(req));
   if (req.method !== 'GET' || url.pathname !== '/oauth/authorize') return req;
   const scope = (url.searchParams.get('scope') ?? '').split(' ').filter(Boolean);
   if (scope.some((s) => s in SCOPES)) return req;

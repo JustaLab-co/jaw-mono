@@ -8,10 +8,11 @@ type NodeHandler = (req: IncomingMessage, res: ServerResponse) => unknown;
 // NextRequest rewrites the first loopback host anywhere in its URL to
 // "localhost", query string included, which breaks a loopback redirect_uri
 // such as http://127.0.0.1:8765/callback. The base Request keeps the URL as sent.
-const requestUrl = Object.getOwnPropertyDescriptor(Request.prototype, 'url')!.get!;
+const rawUrl = Object.getOwnPropertyDescriptor(Request.prototype, 'url')!.get!;
+export const requestUrl = (req: Request): string => rawUrl.call(req);
 
 export async function bridge(req: Request, run: NodeHandler): Promise<Response> {
-  const url = new URL(requestUrl.call(req));
+  const url = new URL(requestUrl(req));
   const body = await readBody(req);
   if (!body) return tooLarge();
 

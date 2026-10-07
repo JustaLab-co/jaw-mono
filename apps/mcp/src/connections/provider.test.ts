@@ -444,6 +444,23 @@ describe('authorization server', () => {
     expect(JSON.parse(body).token_endpoint).toBe(`${ISSUER}/oauth/token`);
   });
 
+  it('adds wallet:read to a request with no scope without touching a loopback redirect', async () => {
+    const { oauth } = await import('./provider');
+    const { NextRequest } = await import('next/server');
+    const params = new URLSearchParams({
+      client_id: 'jaw-cli',
+      redirect_uri: REDIRECT,
+      response_type: 'code',
+      state: 's',
+      resource: RESOURCE,
+      code_challenge: 'a'.repeat(43),
+      code_challenge_method: 'S256',
+    });
+    const res = await oauth(new NextRequest(`${ISSUER}/oauth/authorize?${params}`));
+    expect(res.status).toBe(303);
+    expect(res.headers.get('location')).toMatch(/^\/interaction\//);
+  });
+
   it('advertises the wallet scopes in the authorization server metadata', async () => {
     const { oauth } = await import('./provider');
     for (const path of ['openid-configuration', 'oauth-authorization-server']) {
