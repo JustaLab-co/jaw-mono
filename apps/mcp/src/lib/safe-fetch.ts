@@ -22,9 +22,10 @@ for (const [net, bits] of [
 ] as const) {
   blocked.addSubnet(net, bits, 'ipv4');
 }
+// No ::ffff:0:0/96 rule: BlockList checks IPv4-mapped addresses against the
+// IPv4 rules already, and that rule would match every IPv4 address.
 for (const [net, bits] of [
   ['::', 127],
-  ['::ffff:0:0', 96],
   ['64:ff9b::', 96],
   ['2001:db8::', 32],
   ['2002::', 16],

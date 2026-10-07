@@ -1,7 +1,7 @@
 import { createServer } from 'node:http';
 import type { AddressInfo } from 'node:net';
 import { afterAll, describe, expect, it } from 'vitest';
-import { safeFetch } from './safe-fetch';
+import { isPrivate, safeFetch } from './safe-fetch';
 
 const server = createServer((req, res) => {
   if (req.url === '/redirect') return void res.writeHead(302, { location: 'http://169.254.169.254/' }).end();
@@ -43,4 +43,17 @@ describe('safeFetch', () => {
     const res = await guarded(`http://127.0.0.1:${port}/redirect`);
     expect(res.status).toBe(302);
   });
+});
+
+describe('isPrivate', () => {
+  it.each(['93.184.216.34', '8.8.8.8', '2606:4700::1111'])('lets the public address %s through', (address) => {
+    expect(isPrivate(address)).toBe(false);
+  });
+
+  it.each(['127.0.0.1', '169.254.169.254', '10.0.0.1', '::ffff:127.0.0.1', '::ffff:a9fe:a9fe', 'fe80::1'])(
+    'refuses %s',
+    (address) => {
+      expect(isPrivate(address)).toBe(true);
+    }
+  );
 });
