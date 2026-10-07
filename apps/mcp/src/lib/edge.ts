@@ -18,8 +18,6 @@ async function refuse(req: Request): Promise<Response | undefined> {
   return undefined;
 }
 
-// Wraps a route: a request id on every response and one log line per request.
-// Guarded routes also honour the kill switch and the per-IP rate limit.
 export function withEdge(handler: Handler, { guarded }: { guarded: boolean }): (req: Request) => Promise<Response> {
   return async (req) => {
     const requestId = crypto.randomUUID();
@@ -44,7 +42,16 @@ export function withEdge(handler: Handler, { guarded }: { guarded: boolean }): (
   };
 }
 
-// Never pass a token, key, query string or request body here.
-export function log(level: 'info' | 'error', fields: Record<string, unknown>) {
+interface LogFields {
+  msg?: string;
+  requestId?: string;
+  method?: string;
+  path?: string;
+  status?: number;
+  ms?: number;
+  error?: string;
+}
+
+export function log(level: 'info' | 'error', fields: LogFields) {
   console.log(JSON.stringify({ level, time: new Date().toISOString(), ...fields }));
 }

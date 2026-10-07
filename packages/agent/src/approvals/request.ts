@@ -10,7 +10,7 @@ export const MAX_MESSAGE_CHARS = 4096;
 /** Messages starting with this are reserved for JAW's own statements, such as connection consent. */
 export const RESERVED_PREFIX = 'JAW ';
 
-/** What the agent asked for. Later kinds join this union. */
+/** What the agent asked for. */
 export type ApprovalBody = { kind: 'signature'; message: string };
 
 /** Exactly what the wallet signs. Derived from the body, never stored apart from it. */
@@ -152,7 +152,6 @@ export function previewOf(request: ApprovalRequest): Preview {
   if (text !== message) warnings.push('hidden_characters');
   if (/0x[0-9a-fA-F]{40}/.test(message)) warnings.push('address_like');
   if (/<[a-zA-Z!/]/.test(message)) warnings.push('markup_like');
-  // Key order is fixed here because previewHash hashes this object's JSON.
   return {
     kind: request.body.kind,
     requester: request.requester,
@@ -164,7 +163,8 @@ export function previewOf(request: ApprovalRequest): Preview {
 }
 
 export function previewHash(preview: Preview): Hex {
-  return keccak256(stringToHex(JSON.stringify(preview)));
+  const canonical = Object.fromEntries(Object.entries(preview).sort(([a], [b]) => (a < b ? -1 : 1)));
+  return keccak256(stringToHex(JSON.stringify(canonical)));
 }
 
 export function toPageView(request: ApprovalRequest): ApprovalPageView {

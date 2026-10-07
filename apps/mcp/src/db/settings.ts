@@ -7,7 +7,6 @@ export async function isPaused(): Promise<boolean> {
   return row?.value === true;
 }
 
-// Fixed-window counter. Returns how many hits the key has in the current window.
 export async function countHit(key: string, windowMs: number): Promise<number> {
   const windowStart = new Date(Math.floor(Date.now() / windowMs) * windowMs);
   const db = getDb();

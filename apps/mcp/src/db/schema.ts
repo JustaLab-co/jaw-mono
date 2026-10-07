@@ -17,9 +17,8 @@ export const rateLimits = pgTable(
   (t) => [primaryKey({ columns: [t.key, t.windowStart] })]
 );
 
-// node-oidc-provider state. Keys are sha256 of `${model}:${id}` and payloads
-// carry no `jti`, so a dump holds no code, session or refresh token a client
-// could present.
+// Keys are sha256 of `${model}:${id}` and payloads carry no `jti`, so a dump
+// holds no code, session or refresh token a client could present.
 export const oauthPayloads = pgTable(
   'oauth_payloads',
   {
@@ -64,8 +63,8 @@ export const connections = pgTable(
   ]
 );
 
-// Expiry is derived from expires_at and never written, so the decision is the
-// only update a row ever gets.
+// Expiry is derived from expires_at, never written: the decision is the only
+// update a row gets.
 export const approvalRequests = pgTable(
   'approval_requests',
   {

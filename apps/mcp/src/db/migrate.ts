@@ -3,8 +3,8 @@ import { drizzle } from 'drizzle-orm/postgres-js';
 import { migrate } from 'drizzle-orm/postgres-js/migrator';
 import postgres from 'postgres';
 
-// Every instance runs this at start; the advisory lock makes concurrent starts
-// wait for the first one instead of racing on the same DDL.
+// Every instance migrates at start; the lock makes concurrent starts wait
+// for the first instead of racing on the same DDL.
 const LOCK_ID = 0x6a61776d;
 
 export async function runMigrations(url: string) {

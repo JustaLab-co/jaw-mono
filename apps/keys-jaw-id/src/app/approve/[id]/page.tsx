@@ -1,7 +1,6 @@
 import { ApproveScreen } from '../../../components/ApproveScreen';
 
-// An approval an agent asked for through the hosted JAW server. The server
-// comes from this deployment's config, never from the URL.
+// The MCP server comes from this deployment's config, never from the URL.
 export default async function ApprovePage({ params }: { params: Promise<{ id: string }> }) {
   const { id } = await params;
   const mcpUrl = process.env.JAW_MCP_URL;

@@ -4,9 +4,6 @@ import { getDb } from '@/db/client';
 import { connections } from '@/db/schema';
 import type { Sealed } from './seal';
 
-// The only writer of `connections`. A row goes pending -> active -> revoked;
-// a pending row whose interaction expired is never activated.
-
 export type ConnectionRow = typeof connections.$inferSelect;
 
 export interface PendingConnection {
@@ -22,7 +19,6 @@ export interface PendingConnection {
   expiresAt: Date;
 }
 
-/** False when this interaction already has a consent. */
 export async function insertPending(c: PendingConnection, ticketHash: string): Promise<boolean> {
   const rows = await getDb()
     .insert(connections)
@@ -45,7 +41,6 @@ export async function findClaimable(uid: string, ticketHash: string): Promise<Co
   return row;
 }
 
-/** Clears the ticket in the same statement, so a second claim finds nothing. */
 export async function activate(uid: string, ticketHash: string, grantId: string): Promise<ConnectionRow | undefined> {
   const [row] = await getDb()
     .update(connections)
@@ -67,7 +62,6 @@ export async function updateSealedKey(id: string, sealedKey: Sealed) {
   await getDb().update(connections).set({ sealedKey }).where(eq(connections.id, id));
 }
 
-/** Idempotent: an unknown or already revoked grant changes nothing. */
 export async function revokeByGrant(grantId: string) {
   await getDb()
     .update(connections)

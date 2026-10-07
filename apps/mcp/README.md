@@ -14,16 +14,16 @@ Migrations run at start and are safe to run from several instances at once. `GET
 
 ## Configuration
 
-| Variable                    | Required | Meaning                                                                                                               |
-| --------------------------- | -------- | --------------------------------------------------------------------------------------------------------------------- |
-| `DATABASE_URL`              | yes      | Postgres connection string                                                                                            |
-| `JAW_MCP_PUBLIC_URL`        | yes      | The origin clients reach. It is the OAuth issuer, and the MCP resource is `<origin>/mcp`                              |
-| `JAW_KEYS_URL`              | yes      | The keys.jaw.id origin that hosts `/authorize` and `/approve/<id>`                                                    |
-| `JAW_MCP_SEALING_KEYS`      | yes      | Comma-separated base64url keys of 32 bytes, newest first. New tokens use the first; any of them opens an existing one |
-| `JAW_MCP_CHAIN_ID`          | no       | 84532 (default) or 8453                                                                                               |
-| `JAW_MCP_RPC_URL`           | no       | RPC for that chain; the chain's public RPC when unset                                                                 |
-| `JAW_MCP_MAINNET_RPC_URL`   | no       | RPC for ENS lookups                                                                                                   |
-| `JAW_MCP_FETCH_ALLOW_HOSTS` | no       | `host:port` list that `jaw_quote` may reach over plain http or on a private address. Local testing only               |
+| Variable                       | Required | Meaning                                                                                                               |
+| ------------------------------ | -------- | --------------------------------------------------------------------------------------------------------------------- |
+| `DATABASE_URL`                 | yes      | Postgres connection string                                                                                            |
+| `JAW_MCP_PUBLIC_URL`           | yes      | The origin clients reach. It is the OAuth issuer, and the MCP resource is `<origin>/mcp`                              |
+| `JAW_KEYS_URL`                 | yes      | The keys.jaw.id origin that hosts `/authorize` and `/approve/<id>`                                                    |
+| `JAW_MCP_SEALING_KEYS`         | yes      | Comma-separated base64url keys of 32 bytes, newest first. New tokens use the first; any of them opens an existing one |
+| `JAW_MCP_CHAIN_ID`             | no       | 84532 (default) or 8453                                                                                               |
+| `JAW_MCP_RPC_URL`              | no       | RPC for that chain; the chain's public RPC when unset                                                                 |
+| `JAW_MCP_MAINNET_RPC_URL`      | no       | RPC for ENS lookups                                                                                                   |
+| `JAW_MCP_INSECURE_FETCH_HOSTS` | no       | `host:port` list that `jaw_quote` may reach over plain http or on a private address. Local testing only               |
 
 keys.jaw.id needs `JAW_MCP_URL`, the same origin as `JAW_MCP_PUBLIC_URL`.
 

@@ -1,7 +1,6 @@
 import { AuthorizeScreen } from '../../components/AuthorizeScreen';
 
-// Consent for an MCP client connecting to the hosted JAW server. The server
-// comes from this deployment's config, never from the query string.
+// The MCP server comes from this deployment's config, never from the query string.
 export default async function AuthorizePage({ searchParams }: { searchParams: Promise<{ uid?: string }> }) {
   const { uid } = await searchParams;
   const mcpUrl = process.env.JAW_MCP_URL;

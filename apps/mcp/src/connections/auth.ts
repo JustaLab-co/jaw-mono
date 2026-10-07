@@ -8,7 +8,6 @@ import { findActive } from './rows';
 
 export const RESOURCE_METADATA_PATH = '/.well-known/oauth-protected-resource/mcp';
 
-/** What a tool may know about its caller. Built only from a verified token and a live connection row. */
 export interface Tenant {
   connectionId: string;
   account: Address;
@@ -29,7 +28,6 @@ interface Claims {
   exp: number;
 }
 
-/** undefined for anything that is not a live token for this resource; never throws, never logs the token. */
 export async function verifyBearer(bearer: string | undefined): Promise<AuthInfo | undefined> {
   if (!bearer) return undefined;
   const { issuer, resource, ring } = config();
@@ -64,7 +62,6 @@ export async function verifyBearer(bearer: string | undefined): Promise<AuthInfo
   };
 }
 
-/** The MCP route behind OAuth: 401 with resource_metadata without a live token, 403 without wallet:read. */
 export function withConnection(handler: (req: Request) => Promise<Response>): (req: Request) => Promise<Response> {
   return (req) =>
     withMcpAuth(handler, (_req, bearer) => verifyBearer(bearer), {
@@ -75,7 +72,6 @@ export function withConnection(handler: (req: Request) => Promise<Response>): (r
     })(req);
 }
 
-/** The caller of a tool. Throws only when a tool is reachable without withConnection, a wiring bug. */
 export function tenant(ctx: { http?: { authInfo?: AuthInfo } }): Tenant {
   const found = ctx.http?.authInfo?.extra?.tenant as Tenant | undefined;
   if (!found) throw new Error('tool called without a verified connection');

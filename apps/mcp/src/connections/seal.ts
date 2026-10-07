@@ -1,7 +1,6 @@
 import { createCipheriv, createDecipheriv, createHash, createPrivateKey, hkdfSync, randomBytes } from 'node:crypto';
 import type { Hex } from 'viem';
 
-/** `v1.<kid>.<iv>.<ciphertext+tag>`, base64url parts. Opaque outside this file. */
 export type Sealed = string & { readonly __brand: 'Sealed' };
 
 interface RingKey {
@@ -11,7 +10,6 @@ interface RingKey {
   cookie: string;
 }
 
-/** Newest first: seal and encrypt with [0], open with any. */
 export interface KeyRing {
   keys: readonly [RingKey, ...RingKey[]];
   /** Signing key for the provider, so it never falls back to its published dev keys. */
@@ -23,7 +21,6 @@ const derive = (raw: Buffer, purpose: string) => Buffer.from(hkdfSync('sha256', 
 // DER prefix of a PKCS#8 Ed25519 private key; the 32-byte seed follows it.
 const ED25519_PKCS8 = Buffer.from('302e020100300506032b657004220420', 'hex');
 
-/** Parses JAW_MCP_SEALING_KEYS: comma-separated base64url keys of 32 bytes, newest first. */
 export function parseKeyRing(env: string | undefined): KeyRing {
   const raws = (env ?? '')
     .split(',')
@@ -48,7 +45,7 @@ export function parseKeyRing(env: string | undefined): KeyRing {
   return { keys, jwk };
 }
 
-/** AES-256-GCM under the newest key, bound to `id` so a sealed key cannot move to another connection. */
+// The connection id is the AAD, so a sealed key cannot move to another connection.
 export function seal(ring: KeyRing, privateKey: Hex, id: string): Sealed {
   const { kid, seal: key } = ring.keys[0];
   const iv = randomBytes(12);
@@ -57,7 +54,6 @@ export function seal(ring: KeyRing, privateKey: Hex, id: string): Sealed {
   return `v1.${kid}.${iv.toString('base64url')}.${body.toString('base64url')}` as Sealed;
 }
 
-/** Throws on an unknown key, another connection's id, or any tampering. */
 export function open(ring: KeyRing, sealed: Sealed, id: string): Hex {
   const [version, kid, iv, body] = sealed.split('.');
   const key = ring.keys.find((k) => k.kid === kid);

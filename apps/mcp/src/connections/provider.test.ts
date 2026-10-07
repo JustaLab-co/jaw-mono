@@ -24,7 +24,6 @@ const metadata = {
 
 beforeAll(async () => {
   await useTestDb();
-  // Serves the client metadata document without the network.
   (globalThis as { jawMcpProvider?: unknown }).jawMcpProvider = createProvider(config(), {
     fetch: async (url: string | URL | Request) =>
       String(url) === CIMD

@@ -31,7 +31,7 @@ export function middleware(request: NextRequest) {
     // CLI bridge: relay WebSocket + HTTPS/WSS for SDK RPC calls.
     // Other pages: dApps pass arbitrary chain.rpcUrl values.
     ...(isCLIBridge ? ['wss://relay.jaw.id', 'ws://localhost:*', 'https:', 'wss:'] : ['https:', 'wss:']),
-    // The hosted MCP pages call the MCP server; https: covers it outside local development.
+    // https: already covers the MCP server outside local development.
     ...(isDev && isMcpPage && process.env.JAW_MCP_URL ? [new URL(process.env.JAW_MCP_URL).origin] : []),
   ].join(' ');
 

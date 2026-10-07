@@ -7,7 +7,6 @@ import { fetchCliApiKey } from '../../lib/cli-api-key';
 import { SignInScreen, type AuthenticatedAccount } from '../OnboardingSection';
 import type { ChainId } from '../../utils/types';
 
-/** What the MCP server returns for a pending authorization. `message` is signed as is. */
 export interface ConsentDetails {
   uid: string;
   client: { id: string; name: string; host: string | null; official: boolean };
@@ -30,7 +29,7 @@ export function AuthorizeScreen({ uid, mcpUrl }: { uid: string; mcpUrl: string }
     queryKey: ['consent', uid],
     retry: false,
     queryFn: async (): Promise<{ details: ConsentDetails; apiKey?: string }> => {
-      // The agent workspace key, the one the CLI bridge falls back to.
+      // The agent workspace key, the same fallback the CLI bridge uses.
       const [res, apiKey] = await Promise.all([fetch(`${base}/details`, { cache: 'no-store' }), fetchCliApiKey()]);
       if (!res.ok) throw new Error('expired');
       return { details: await res.json(), apiKey: apiKey || undefined };

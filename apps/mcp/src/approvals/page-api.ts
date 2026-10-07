@@ -16,11 +16,8 @@ export async function readForPage(id: string, now = new Date()): Promise<PageOut
   return request ? { kind: 'ok', view: toPageView(request) } : { kind: 'not_found' };
 }
 
-/**
- * The page posts a verdict, a signature and the preview hash it rendered; never
- * the payload. The signature is checked against the payload derived from the
- * stored row, so a page that signed anything else is refused.
- */
+// The page never posts the payload: the signature is checked against the one
+// derived from the stored row, so a page that signed anything else is refused.
 export async function decideFromPage(
   id: string,
   post: unknown,

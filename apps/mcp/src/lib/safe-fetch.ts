@@ -29,15 +29,11 @@ function isPrivate(address: string): boolean {
   return blocked.check(address, isIP(address) === 4 ? 'ipv4' : 'ipv6');
 }
 
-/**
- * fetch for URLs an agent supplies. https only, no redirects, and no host that
- * resolves to a private, loopback, link-local or metadata address. Hosts in
- * `allow` skip both checks; that is for local verification only.
- */
-export function safeFetch(allow: ReadonlySet<string>): typeof fetch {
+// https only, no redirects, and no host that resolves to a private address.
+export function safeFetch(insecureHosts: ReadonlySet<string>): typeof fetch {
   return async (input, init) => {
     const url = new URL(input instanceof Request ? input.url : String(input));
-    if (!allow.has(url.host)) {
+    if (!insecureHosts.has(url.host)) {
       if (url.protocol !== 'https:') throw new FetchRefused('only https URLs can be fetched');
       const host = url.hostname.replace(/^\[|\]$/g, '');
       const addresses = isIP(host) ? [host] : (await lookup(host, { all: true })).map((a) => a.address);

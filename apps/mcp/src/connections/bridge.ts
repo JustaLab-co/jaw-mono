@@ -8,8 +8,6 @@ type NodeHandler = (req: IncomingMessage, res: ServerResponse) => unknown;
 // such as http://127.0.0.1:8765/callback. The base Request keeps the URL as sent.
 const requestUrl = Object.getOwnPropertyDescriptor(Request.prototype, 'url')!.get!;
 
-// Runs a node (req, res) handler, such as a Koa callback, against a web Request.
-// Bodies are buffered: every provider request and response is small.
 export async function bridge(req: Request, run: NodeHandler): Promise<Response> {
   const url = new URL(requestUrl.call(req));
   const body = Buffer.from(await req.arrayBuffer());

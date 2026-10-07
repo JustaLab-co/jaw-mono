@@ -64,7 +64,6 @@ export async function insertRequest(connectionId: string, request: ApprovalReque
   });
 }
 
-/** Scoped to one connection: another connection's id reads exactly like a missing one. */
 export async function findForConnection(id: string, connectionId: string, now: Date) {
   const approvalId = parseApprovalId(id);
   if (!approvalId) return undefined;
@@ -75,7 +74,6 @@ export async function findForConnection(id: string, connectionId: string, now: D
   return row && toRequest(row, now);
 }
 
-/** For the approval page: the id is the capability. */
 export async function findById(id: string, now: Date) {
   const approvalId = parseApprovalId(id);
   if (!approvalId) return undefined;
@@ -83,7 +81,7 @@ export async function findById(id: string, now: Date) {
   return row && toRequest(row, now);
 }
 
-/** Repeats decide's precondition in SQL, so two racing decisions cannot both land. */
+// Repeats decide's precondition in SQL, so two racing decisions cannot both land.
 export async function recordDecision(request: ApprovalRequest, now: Date): Promise<boolean> {
   const { state } = request;
   if (state.status !== 'approved' && state.status !== 'rejected') throw new Error('only a decision is recorded');

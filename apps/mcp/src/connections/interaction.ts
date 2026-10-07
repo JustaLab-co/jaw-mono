@@ -1,4 +1,5 @@
 import { createHash, randomBytes } from 'node:crypto';
+import type { ServerResponse } from 'node:http';
 import { sanitizeLine } from '@jaw.id/agent';
 import { isAddress, isHex } from 'viem';
 import { generatePrivateKey, privateKeyToAddress } from 'viem/accounts';
@@ -23,7 +24,6 @@ export interface ConsentDetails {
   message: string;
 }
 
-/** Every field comes from the stored interaction, so the server rebuilds the exact string when the signature arrives. */
 export function consentMessage(d: Omit<ConsentDetails, 'message'>, issuerHost: string): string {
   return [
     'JAW connection consent',
@@ -66,24 +66,21 @@ async function loadDetails(uid: string): Promise<ConsentDetails | undefined> {
 
 const uidOf = (req: Request) => new URL(req.url).pathname.split('/')[2];
 
-/** GET /interaction/[uid]. Sends the browser on to keys.jaw.id; the interaction cookie is scoped to this path. */
+// The provider scopes the interaction cookie to this path, so the browser
+// passes through here on its way to keys.jaw.id and comes back under it.
 export function hop(req: Request): Response {
   const uid = uidOf(req);
   if (!UID.test(uid)) return Response.json({ error: 'not_found' }, { status: 404 });
   return Response.redirect(`${config().keysOrigin}/authorize?uid=${uid}`, 303);
 }
 
-/** GET /interaction/[uid]/details. What /authorize renders, including the exact message it signs. */
 export async function details(req: Request): Promise<Response> {
   const found = await loadDetails(uidOf(req));
   return pageCors(found ? Response.json(found) : Response.json({ error: 'not_found' }, { status: 404 }));
 }
 
-/**
- * POST /interaction/[uid]/consent { address, signature }. Verifies the consent,
- * mints the session key and hands back a one-time ticket. Completion needs both
- * the ticket (this browser signed) and the interaction cookie (this browser started).
- */
+// Completion needs both the one-time ticket (this browser signed) and the
+// interaction cookie (this browser started), which defeats a phished consent link.
 export async function consent(req: Request, verify: VerifySignature = verifyOnChain): Promise<Response> {
   const uid = uidOf(req);
   const body = (await req.json().catch(() => ({}))) as { address?: string; signature?: string };
@@ -119,13 +116,12 @@ export async function consent(req: Request, verify: VerifySignature = verifyOnCh
   return pageCors(Response.json({ next: `${config().issuer}/interaction/${uid}/complete?ticket=${ticket}` }));
 }
 
-function fail(res: import('node:http').ServerResponse, status: number, error: string) {
+function fail(res: ServerResponse, status: number, error: string) {
   res.statusCode = status;
   res.setHeader('content-type', 'application/json');
   res.end(JSON.stringify({ error }));
 }
 
-/** GET /interaction/[uid]/complete?ticket=. Top-level navigation, so the interaction cookie comes along. */
 export function complete(req: Request): Promise<Response> {
   const uid = uidOf(req);
   const ticketHash = sha256(new URL(req.url).searchParams.get('ticket') ?? '');
@@ -153,7 +149,6 @@ export function complete(req: Request): Promise<Response> {
   });
 }
 
-/** GET /interaction/[uid]/abort. The user declined. */
 export function abort(req: Request): Promise<Response> {
   const p = provider();
   return bridge(req, async (nodeReq, nodeRes) => {

@@ -6,8 +6,7 @@ export type Db = PostgresJsDatabase<typeof schema>;
 
 const cache = globalThis as { jawMcpDb?: Db };
 
-// One pool per process, kept across hot reloads in development. Tests put an
-// in-process database in the same slot.
+// Cached on globalThis so hot reloads in development reuse one pool.
 export function getDb(): Db {
   if (cache.jawMcpDb) return cache.jawMcpDb;
   const url = process.env.DATABASE_URL;

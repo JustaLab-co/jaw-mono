@@ -18,7 +18,6 @@ const { AuthorizeScreen } = await import('./index');
 
 const OWNER = '0x1111111111111111111111111111111111111111';
 const MCP = 'https://mcp.jaw.id';
-// Hostile text in the client name and a message with a right-to-left override.
 const DETAILS = {
   uid: 'uid_1234567890',
   client: {

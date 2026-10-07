@@ -6,7 +6,6 @@ import { oauthPayloads } from '@/db/schema';
 
 const notExpired = or(isNull(oauthPayloads.expiresAt), gt(oauthPayloads.expiresAt, sql`now()`));
 
-/** node-oidc-provider storage on one table. Ids are hashed before they reach the database. */
 export class PgAdapter implements Adapter {
   constructor(private readonly model: string) {}
 
@@ -46,7 +45,8 @@ export class PgAdapter implements Adapter {
       .select()
       .from(oauthPayloads)
       .where(and(eq(oauthPayloads.model, this.model), eq(oauthPayloads.uid, uid), notExpired));
-    // Only Session is looked up by uid, and its id is not stored; the provider needs it back.
+    // The raw session id is not stored. Only session-bound tokens look sessions
+    // up by uid, and this server issues none.
     return row ? (row.payload as AdapterPayload) : undefined;
   }
 

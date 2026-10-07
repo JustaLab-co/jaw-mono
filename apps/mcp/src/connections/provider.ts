@@ -11,7 +11,7 @@ export type Scope = keyof typeof SCOPES;
 
 const DAY = 24 * 60 * 60;
 
-// The jaw CLI. Native loopback redirects match on any port.
+// Native loopback redirects match on any port.
 const JAW_CLI = {
   client_id: 'jaw-cli',
   client_name: 'JAW CLI',
@@ -23,7 +23,7 @@ const JAW_CLI = {
 };
 export const OFFICIAL_CLIENTS = new Set([JAW_CLI.client_id]);
 
-/** The sealed session key for a token, re-sealed under the newest key when it was sealed with an older one. */
+// Re-seals under the newest key when the row still uses an older one.
 async function sealedKeyFor(cfg: Config, connectionId: string): Promise<Sealed> {
   const row = await findActive(connectionId);
   if (!row) throw new Error('connection is not active');
@@ -114,7 +114,6 @@ export function provider(): Provider {
   return cache.jawMcpProvider;
 }
 
-/** Route handler for /oauth/* and the authorization server discovery documents. */
 export async function oauth(req: Request): Promise<Response> {
   return bridge(req, provider().callback());
 }

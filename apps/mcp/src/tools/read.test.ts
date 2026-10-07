@@ -6,7 +6,6 @@ import { callTool, connect, mcp, setTestEnv } from '@/connections/testkit';
 
 const USDC = '0x036CbD53842c5426634e7929541eC2318f3dCF7e';
 const hits: string[] = [];
-// The verify seller's /exact challenge, header only, as x402 v2 sends it.
 const seller = createServer((req, res) => {
   hits.push(`${req.url} ${req.headers['payment-signature'] ? 'paid' : 'challenge'}`);
   if (req.url === '/free') {
@@ -34,8 +33,7 @@ await new Promise<void>((r) => seller.listen(0, '127.0.0.1', r));
 const SELLER = `127.0.0.1:${(seller.address() as AddressInfo).port}`;
 
 setTestEnv();
-process.env.JAW_MCP_FETCH_ALLOW_HOSTS = SELLER;
-// Unreachable RPCs: balances and ENS fail fast instead of reaching the network.
+process.env.JAW_MCP_INSECURE_FETCH_HOSTS = SELLER;
 process.env.JAW_MCP_RPC_URL = 'http://127.0.0.1:9';
 process.env.JAW_MCP_MAINNET_RPC_URL = 'http://127.0.0.1:9';
 

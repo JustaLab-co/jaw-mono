@@ -4,9 +4,6 @@ import { privateKeyToAccount, generatePrivateKey } from 'viem/accounts';
 import { abort, complete, consent, details, hop, type ConsentDetails } from './interaction';
 import { oauth } from './provider';
 
-// Drives the OAuth flow through the route handlers the way a browser and a
-// loopback client would. Test-only.
-
 export const ISSUER = 'http://mcp.test';
 export const RESOURCE = `${ISSUER}/mcp`;
 export const REDIRECT = 'http://127.0.0.1:8765/callback';
@@ -17,7 +14,6 @@ export function setTestEnv(keys = randomBytes(32).toString('base64url')) {
   process.env.JAW_MCP_SEALING_KEYS = keys;
 }
 
-/** Cookie jar that honours each cookie's path, as a browser does. */
 export class Browser {
   private cookies = new Map<string, { value: string; path: string }>();
 
@@ -38,7 +34,6 @@ export class Browser {
   }
 }
 
-/** Dispatches like the Next app router does for these paths. */
 async function route(req: Request): Promise<Response> {
   const parts = new URL(req.url).pathname.split('/');
   if (parts[1] !== 'interaction') return oauth(req);
@@ -60,7 +55,6 @@ export function pkcePair() {
   return { verifier, challenge: createHash('sha256').update(verifier).digest('base64url') };
 }
 
-/** Starts an authorization in `browser` and follows redirects until keys.jaw.id or the client. */
 export async function startAuthorization(browser: Browser, a: Authorize = {}) {
   const { verifier, challenge } = pkcePair();
   const params = new URLSearchParams({
@@ -123,7 +117,6 @@ export async function token(body: Record<string, string>) {
   return { status: res.status, body: (await res.json()) as TokenBody };
 }
 
-/** Follows redirects in `browser` until one lands on the client's redirect URI. */
 export async function follow(browser: Browser, url: string, redirectUri = REDIRECT): Promise<URL> {
   for (let hop = 0; hop < 5; hop++) {
     const location = (await browser.get(url)).headers.get('location');
@@ -134,7 +127,6 @@ export async function follow(browser: Browser, url: string, redirectUri = REDIRE
   throw new Error('too many redirects');
 }
 
-/** The whole happy path: authorize, consent as `signer`, complete, exchange the code. */
 export async function connect(signer = owner(), a: Authorize = {}) {
   const browser = new Browser();
   const start = await startAuthorization(browser, a);
@@ -154,7 +146,6 @@ export async function connect(signer = owner(), a: Authorize = {}) {
   return { signer, details: d, uid: start.uid, ...issued.body, status: issued.status };
 }
 
-/** One JSON-RPC call to the MCP route, decoded from its event stream. */
 export async function mcp(token: string | undefined, body: object) {
   const { POST } = await import('@/app/mcp/route');
   const res = await POST(

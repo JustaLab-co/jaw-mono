@@ -10,7 +10,6 @@ import type { ChainId } from '../../utils/types';
 
 type Status = 'pending' | 'approved' | 'rejected' | 'expired';
 
-/** What the MCP server returns for an approval request. `approve` and `reject` are signed as they arrive. */
 export interface ApprovalView {
   id: string;
   status: Status;
