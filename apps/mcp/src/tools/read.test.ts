@@ -114,14 +114,13 @@ describe('read tools', () => {
     expect(r.structuredContent).toMatchObject({ kind: 'refused' });
   });
 
-  it('jaw_quote gives one fixed reason per refusal code, so it cannot map internal names', async () => {
+  it('jaw_quote gives one refusal for every fetch failure, so it cannot map internal names', async () => {
     const blocked = await callTool(token, 'jaw_quote', { url: 'https://10.0.0.1/' });
     const missing = await callTool(token, 'jaw_quote', { url: 'https://no-such-host.invalid/' });
     for (const r of [blocked, missing]) {
       expect(JSON.stringify(r)).not.toMatch(/private|ENOTFOUND|getaddrinfo|resolve/i);
     }
-    expect(blocked.structuredContent.refusal.code).toBe('blocked_url');
-    expect(missing.structuredContent.refusal.code).toBe('unreachable');
+    expect(blocked.structuredContent.refusal).toEqual(missing.structuredContent.refusal);
   });
 
   it('jaw_add_funds points at the account', async () => {
