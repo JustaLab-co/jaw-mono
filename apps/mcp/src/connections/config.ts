@@ -13,6 +13,8 @@ export interface Config {
   /** Local verification only: hosts jaw_quote may reach without the SSRF checks. */
   insecureFetchHosts: ReadonlySet<string>;
   paymasterApiKey: string | undefined;
+  /** Base units a refill brings the payer up to, so refills are rare; the grant's cap still bounds it. */
+  floatTarget: bigint;
   ring: KeyRing;
 }
 
@@ -33,6 +35,7 @@ export function config(): Config {
     mainnetRpcUrl: process.env.JAW_MCP_MAINNET_RPC_URL || undefined,
     insecureFetchHosts: new Set((process.env.JAW_MCP_INSECURE_FETCH_HOSTS ?? '').split(',').filter(Boolean)),
     paymasterApiKey: process.env.JAW_MCP_API_KEY || undefined,
+    floatTarget: BigInt(process.env.JAW_MCP_FLOAT_TARGET || '250000'),
     ring: parseKeyRing(process.env.JAW_MCP_SEALING_KEYS),
   };
   return cached;

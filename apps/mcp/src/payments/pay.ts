@@ -67,6 +67,7 @@ export interface PayInput {
 export interface PayDeps {
   clients: ChainClients;
   readPermission: (target: PermissionReadTarget) => Promise<PermissionState>;
+  floatTarget: bigint;
   executor: (t: Tenant, grant: Grant) => TopUpExecutor | undefined;
   fetch: typeof fetch;
 }
@@ -74,6 +75,7 @@ export interface PayDeps {
 const liveDeps = (): PayDeps => ({
   clients: chainClients,
   readPermission: (target) => readPermissionState(target, { clients: chainClients }),
+  floatTarget: config().floatTarget,
   executor: topUpExecutor,
   fetch: safeFetch(config().insecureFetchHosts),
 });
@@ -305,6 +307,7 @@ async function payWithinGrant(
       grant,
       policy,
       executor,
+      floatTarget: deps.floatTarget,
       clients: deps.clients,
       logger: agentLogger,
     }),

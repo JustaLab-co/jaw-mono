@@ -14,20 +14,21 @@ Migrations run at start and are safe to run from several instances at once. `GET
 
 ## Configuration
 
-| Variable                       | Required | Meaning                                                                                                                                    |
-| ------------------------------ | -------- | ------------------------------------------------------------------------------------------------------------------------------------------ |
-| `DATABASE_URL`                 | yes      | Postgres connection string                                                                                                                 |
-| `JAW_MCP_PUBLIC_URL`           | yes      | The origin clients reach. It is the OAuth issuer, and the MCP resource is `<origin>/mcp`                                                   |
-| `JAW_KEYS_URL`                 | yes      | The keys.jaw.id origin that hosts `/authorize` and `/approve/<id>`                                                                         |
-| `JAW_MCP_SEALING_KEYS`         | yes      | Comma-separated base64url keys of 32 bytes, newest first. New tokens use the first; any of them opens an existing one                      |
-| `JAW_MCP_CHAIN_ID`             | no       | 84532 (default) or 8453                                                                                                                    |
-| `JAW_MCP_RPC_URL`              | no       | RPC for that chain; the chain's public RPC when unset                                                                                      |
-| `JAW_MCP_MAINNET_RPC_URL`      | no       | RPC for ENS lookups                                                                                                                        |
-| `JAW_MCP_TRUSTED_PROXY_HOPS`   | no       | Proxies in front that append to `x-forwarded-for`. Unset or 0 ignores that header and rate-limits on `x-real-ip`, which Vercel sets itself |
-| `JAW_MCP_INSECURE_FETCH_HOSTS` | no       | `host:port` list that `jaw_quote` and `jaw_pay_and_fetch` may reach over plain http or on a private address. Local testing only            |
-| `JAW_MCP_API_KEY`              | no       | JAW api key the ERC-20 paymaster charges a refill's gas through. Unset, no refill runs and a payer with no float cannot pay                |
-| `JAW_MCP_CRON_SECRET`          | no       | Bearer secret for `/api/cron/reconcile` and `/api/metrics`. Unset, both answer 401                                                         |
-| `JAW_MCP_RECONCILE_EVERY`      | no       | Seconds between reconciler runs inside the server, for a container where nothing calls the cron route                                      |
+| Variable                       | Required | Meaning                                                                                                                                                   |
+| ------------------------------ | -------- | --------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `DATABASE_URL`                 | yes      | Postgres connection string                                                                                                                                |
+| `JAW_MCP_PUBLIC_URL`           | yes      | The origin clients reach. It is the OAuth issuer, and the MCP resource is `<origin>/mcp`                                                                  |
+| `JAW_KEYS_URL`                 | yes      | The keys.jaw.id origin that hosts `/authorize` and `/approve/<id>`                                                                                        |
+| `JAW_MCP_SEALING_KEYS`         | yes      | Comma-separated base64url keys of 32 bytes, newest first. New tokens use the first; any of them opens an existing one                                     |
+| `JAW_MCP_CHAIN_ID`             | no       | 84532 (default) or 8453                                                                                                                                   |
+| `JAW_MCP_RPC_URL`              | no       | RPC for that chain; the chain's public RPC when unset                                                                                                     |
+| `JAW_MCP_MAINNET_RPC_URL`      | no       | RPC for ENS lookups                                                                                                                                       |
+| `JAW_MCP_TRUSTED_PROXY_HOPS`   | no       | Proxies in front that append to `x-forwarded-for`. Unset or 0 ignores that header and rate-limits on `x-real-ip`, which Vercel sets itself                |
+| `JAW_MCP_INSECURE_FETCH_HOSTS` | no       | `host:port` list that `jaw_quote` and `jaw_pay_and_fetch` may reach over plain http or on a private address. Local testing only                           |
+| `JAW_MCP_API_KEY`              | no       | JAW api key the ERC-20 paymaster charges a refill's gas through. Unset, no refill runs and a payer with no float cannot pay                               |
+| `JAW_MCP_FLOAT_TARGET`         | no       | Base units a refill brings the payer up to, default 250000 (0.25 USDC), so most payments need no refill. The budget's daily cap still bounds every refill |
+| `JAW_MCP_CRON_SECRET`          | no       | Bearer secret for `/api/cron/reconcile` and `/api/metrics`. Unset, both answer 401                                                                        |
+| `JAW_MCP_RECONCILE_EVERY`      | no       | Seconds between reconciler runs inside the server, for a container where nothing calls the cron route                                                     |
 
 keys.jaw.id needs `JAW_MCP_URL`, the same origin as `JAW_MCP_PUBLIC_URL`.
 

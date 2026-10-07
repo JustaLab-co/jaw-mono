@@ -148,6 +148,7 @@ const executor = (funder: Address): TopUpExecutor => ({
 
 const deps = (over: Partial<PayDeps> = {}): PayDeps => ({
   clients,
+  floatTarget: 0n,
   readPermission: async () => ({ status: 'ok', approved: true, revoked: false }),
   executor: (_t, grant) => executor(grant.account),
   fetch: safeFetch(new Set([SELLER])),
@@ -294,6 +295,13 @@ describe('jaw_pay_and_fetch', () => {
       moneyMoved: true,
     });
     expect(await rowOf(result.structuredContent!.paymentId)).toMatchObject({ topUpAmount: '105000' });
+  });
+
+  it('refills to the float target, so the next payments need no refill', async () => {
+    const { t } = await connected('1');
+    await pay(t, { url: url('/exact'), idempotencyKey: 'float-1' }, deps({ floatTarget: 50_000n }));
+    await pay(t, { url: url('/exact'), idempotencyKey: 'float-2' }, deps({ floatTarget: 50_000n }));
+    expect(refills).toEqual([150_000n]);
   });
 
   it('gives five concurrent payments their own rows and one refill, with no lock held across a fetch', async () => {

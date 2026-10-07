@@ -36,6 +36,7 @@ interface RefillContext {
   policy: X402Policy;
   /** Absent without a paymaster key: the float is still reserved, a shortfall is refused. */
   executor: TopUpExecutor | undefined;
+  floatTarget: bigint;
   clients: ChainClients;
   logger: Logger;
 }
@@ -134,6 +135,7 @@ export function refillHook(c: RefillContext): EnsureFunds {
             sessionChainId: c.grant.chainId,
             maxTopUp: topUpCeiling(c.policy, { periodUsage, spentThisSession }),
             funderAddress: c.grant.account,
+            floatTarget: c.floatTarget,
             timeoutMs: refillMs,
             balanceReader: async (asset, owner) => {
               const balance = await onChain(asset, owner);
