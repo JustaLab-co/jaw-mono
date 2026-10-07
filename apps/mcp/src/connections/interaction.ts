@@ -1,6 +1,6 @@
 import { createHash, randomBytes } from 'node:crypto';
 import type { ServerResponse } from 'node:http';
-import { sanitizeLine } from '@jaw.id/agent';
+import { clientIdentity, sanitizeLine, type ClientIdentity } from '@jaw.id/agent';
 import { isAddress, isHex } from 'viem';
 import { generatePrivateKey, privateKeyToAddress } from 'viem/accounts';
 import { verifyOnChain, type VerifySignature } from '@/lib/chain';
@@ -16,7 +16,7 @@ const sha256 = (value: string) => createHash('sha256').update(value).digest('hex
 
 export interface ConsentDetails {
   uid: string;
-  client: { id: string; name: string; host: string | null };
+  client: ClientIdentity;
   redirectHost: string;
   scopes: { id: Scope; label: string }[];
   chainId: number;
@@ -30,7 +30,7 @@ export function consentMessage(d: Omit<ConsentDetails, 'message'>, issuerHost: s
     `${issuerHost} asks to connect an app to your JAW account.`,
     '',
     `App: ${d.client.name}`,
-    `Client ID: ${d.client.id}`,
+    `Client ID: ${d.client.clientId}`,
     `Scopes: ${d.scopes.map((s) => s.id).join(' ') || 'none'}`,
     `Chain ID: ${d.chainId}`,
     `Interaction: ${d.uid}`,
@@ -50,11 +50,7 @@ async function loadDetails(uid: string): Promise<ConsentDetails | undefined> {
   const { chain, issuer } = config();
   const details: Omit<ConsentDetails, 'message'> = {
     uid,
-    client: {
-      id: client.clientId,
-      name: sanitizeLine(client.clientName ?? client.clientId, 64),
-      host: URL.canParse(client.clientId) ? new URL(client.clientId).host : null,
-    },
+    client: clientIdentity(client.clientId, sanitizeLine(client.clientName ?? client.clientId, 64)),
     redirectHost: new URL(params.redirect_uri).hostname,
     scopes: requested.map((id) => ({ id, label: SCOPES[id] })),
     chainId: chain.id,
@@ -101,7 +97,7 @@ export async function consent(req: Request, uid: string, verify: VerifySignature
       id,
       account: body.address,
       chainId: found.chainId,
-      clientId: found.client.id,
+      clientId: found.client.clientId,
       clientName: found.client.name,
       scopes: found.scopes.map((s) => s.id),
       sessionAddress: privateKeyToAddress(privateKey),

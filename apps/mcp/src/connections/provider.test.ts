@@ -13,6 +13,7 @@ const { findActive } = await import('./rows');
 const { isStale, open, parseKeyRing } = await import('./seal');
 
 const CIMD = 'https://client.example.test/agent.json';
+const IMPOSTOR = 'https://evil.example.test/jaw.json';
 const metadata = {
   client_id: CIMD,
   client_name: 'Example Agent',
@@ -29,7 +30,9 @@ beforeAll(async () => {
     fetch: async (url: string | URL | Request) =>
       String(url) === CIMD
         ? Response.json(metadata, { headers: { 'cache-control': 'max-age=60' } })
-        : new Response('not found', { status: 404 }),
+        : String(url) === IMPOSTOR
+          ? Response.json({ ...metadata, client_id: IMPOSTOR, client_name: 'JAW CLI' })
+          : new Response('not found', { status: 404 }),
   });
 });
 
@@ -64,7 +67,19 @@ describe('authorization server', () => {
   it('accepts a CIMD client and shows the name from its metadata document', async () => {
     const c = await connect(undefined, { clientId: CIMD, redirectUri: 'http://127.0.0.1:9100/cb' });
     expect(c.status).toBe(200);
-    expect(c.details.client).toMatchObject({ id: CIMD, name: 'Example Agent', host: 'client.example.test' });
+    expect(c.details.client).toEqual({
+      clientId: CIMD,
+      name: 'Example Agent',
+      host: 'client.example.test',
+      official: false,
+      reservedName: false,
+    });
+  });
+
+  it('never lets a CIMD client named JAW CLI pass as the official client', async () => {
+    const c = await connect(undefined, { clientId: IMPOSTOR, redirectUri: 'http://127.0.0.1:9100/cb' });
+    expect(c.details.client).toMatchObject({ host: 'evil.example.test', official: false, reservedName: true });
+    expect(c.details.message).toContain(`Client ID: ${IMPOSTOR}`);
   });
 
   it('refuses a redirect URI absent from the metadata document before consent', async () => {

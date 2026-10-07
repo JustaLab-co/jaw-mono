@@ -1,4 +1,5 @@
 import { hashMessage, keccak256, stringToHex, type Address, type Hex } from 'viem';
+import { clientIdentity, type ClientIdentity } from './client-identity.js';
 
 /** 16 random bytes, base64url. Unguessable: it is the read capability for the approval page. */
 export type ApprovalId = string & { readonly __brand: 'ApprovalId' };
@@ -58,7 +59,7 @@ export type PreviewWarning = 'hidden_characters' | 'address_like' | 'markup_like
 /** Built on the server and rendered verbatim by the page. */
 export interface Preview {
   kind: 'signature';
-  requester: { name: string; clientId: string };
+  requester: ClientIdentity;
   account: Address;
   chainId: number;
   /** The message with control, bidi and zero-width characters shown as ⟦U+XXXX⟧. */
@@ -157,7 +158,7 @@ export function previewOf(request: ApprovalRequest): Preview {
   if (/<[a-zA-Z!/]/.test(message)) warnings.push('markup_like');
   return {
     kind: request.body.kind,
-    requester: request.requester,
+    requester: clientIdentity(request.requester.clientId, request.requester.name),
     account: request.account,
     chainId: request.chainId,
     text,

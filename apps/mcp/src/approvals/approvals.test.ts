@@ -140,7 +140,7 @@ describe('approvals', () => {
 
   it('shows the requesting client id beside its self-declared name', async () => {
     const { id } = await requestSignature();
-    expect((await view(id)).preview.requester).toEqual({ name: 'JAW CLI', clientId: 'jaw-cli' });
+    expect((await view(id)).preview.requester).toMatchObject({ name: 'JAW CLI', clientId: 'jaw-cli', official: true });
   });
 
   it('caps the requests one connection can leave waiting', async () => {

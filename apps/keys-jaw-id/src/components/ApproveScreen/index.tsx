@@ -5,6 +5,7 @@ import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { useState } from 'react';
 import { isAddressEqual, type Address } from 'viem';
 import { fetchCliApiKey } from '../../lib/cli-api-key';
+import { ClientHeader, type ClientIdentity } from '../ClientHeader';
 import { SignInScreen, type AuthenticatedAccount } from '../OnboardingSection';
 import type { ChainId } from '../../utils/types';
 
@@ -18,7 +19,7 @@ export interface ApprovalView {
   expiresAt: string;
   preview: {
     kind: 'signature';
-    requester: { name: string; clientId: string };
+    requester: ClientIdentity;
     text: string;
     warnings: string[];
   };
@@ -34,13 +35,6 @@ const WARNINGS: Record<string, string> = {
 };
 
 // The name is whatever the client declared; its id (a URL for most clients) is what can be checked.
-function clientLabel(clientId: string): string {
-  try {
-    return new URL(clientId).host;
-  } catch {
-    return `client ${clientId}`;
-  }
-}
 
 const DONE: Record<Exclude<Status, 'pending'>, string> = {
   approved: 'Approved. You can close this tab.',
@@ -97,10 +91,9 @@ export function ApproveScreen({ id, mcpUrl }: { id: string; mcpUrl: string }) {
   return (
     <div className="flex flex-col gap-4 rounded-lg border p-6">
       <div>
-        <h1 className="text-lg font-semibold">Signature request</h1>
+        <ClientHeader title="Signature request from" client={view.preview.requester} />
         <p className="text-muted-foreground text-sm">
-          From <q>{view.preview.requester.name}</q> ({clientLabel(view.preview.requester.clientId)}) for{' '}
-          <span className="font-mono">{view.account}</span> on chain {view.chainId}
+          For <span className="font-mono">{view.account}</span> on chain {view.chainId}
         </p>
         <p className="text-muted-foreground text-xs">Expires {new Date(view.expiresAt).toLocaleTimeString()}</p>
       </div>

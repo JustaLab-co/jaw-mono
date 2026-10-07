@@ -4,12 +4,13 @@ import { Account } from '@jaw.id/core';
 import { useQuery } from '@tanstack/react-query';
 import { useState } from 'react';
 import { fetchCliApiKey } from '../../lib/cli-api-key';
+import { ClientHeader, type ClientIdentity } from '../ClientHeader';
 import { SignInScreen, type AuthenticatedAccount } from '../OnboardingSection';
 import type { ChainId } from '../../utils/types';
 
 export interface ConsentDetails {
   uid: string;
-  client: { id: string; name: string; host: string | null };
+  client: ClientIdentity;
   redirectHost: string;
   scopes: { id: string; label: string }[];
   chainId: number;
@@ -63,8 +64,7 @@ export function AuthorizeScreen({ uid, mcpUrl }: { uid: string; mcpUrl: string }
   return (
     <div className="flex flex-col gap-4 rounded-lg border p-6">
       <div>
-        <h1 className="text-lg font-semibold">Connect {details.client.name}</h1>
-        <p className="text-muted-foreground text-sm">{details.client.host ?? `Client ID ${details.client.id}`}</p>
+        <ClientHeader title="Connect" client={details.client} />
         {LOOPBACK.has(details.redirectHost) && (
           <p className="text-muted-foreground text-sm">Returns to an app on this computer.</p>
         )}

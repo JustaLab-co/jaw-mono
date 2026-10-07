@@ -1,3 +1,4 @@
+import { FIRST_PARTY_CLIENTS } from '@jaw.id/agent';
 import Provider, { errors, interactionPolicy, type Configuration } from 'oidc-provider';
 import { log } from '@/lib/edge';
 import { PgAdapter } from './adapter';
@@ -14,7 +15,7 @@ const DAY = 24 * 60 * 60;
 // Native loopback redirects match on any port.
 const JAW_CLI = {
   client_id: 'jaw-cli',
-  client_name: 'JAW CLI',
+  client_name: FIRST_PARTY_CLIENTS['jaw-cli'],
   application_type: 'native' as const,
   token_endpoint_auth_method: 'none' as const,
   redirect_uris: ['http://127.0.0.1/callback'],

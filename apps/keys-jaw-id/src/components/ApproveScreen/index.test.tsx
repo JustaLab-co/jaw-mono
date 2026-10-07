@@ -28,7 +28,13 @@ const VIEW = {
   expiresAt: '2026-10-06T12:10:00.000Z',
   preview: {
     kind: 'signature',
-    requester: { name: '<script>x</script>', clientId: 'https://evil.example/client.json' },
+    requester: {
+      clientId: 'https://evil.example/client.json',
+      name: '<script>x</script>',
+      host: 'evil.example',
+      official: false,
+      reservedName: false,
+    },
     text: 'Pay to: 0x2222222222222222222222222222222222222222\n<b>bold</b> 1 USDC⟦U+202E⟧0001',
     warnings: ['hidden_characters', 'address_like', 'markup_like'],
   },
@@ -41,7 +47,10 @@ let root: Root;
 let container: HTMLDivElement;
 let posts: unknown[];
 
+let view: typeof VIEW = VIEW;
+
 beforeEach(() => {
+  view = VIEW;
   posts = [];
   signMessage.mockClear();
   signedInAs = OWNER;
@@ -54,7 +63,7 @@ beforeEach(() => {
         posts.push(body);
         return Response.json({ ...VIEW, status: body.verdict });
       }
-      return Response.json(VIEW);
+      return Response.json(view);
     })
   );
   container = document.createElement('div');
@@ -107,6 +116,17 @@ describe('ApproveScreen', () => {
     await click(button('Reject'));
     expect(signMessage.mock.calls[0][0]).toBe(VIEW.reject.message);
     expect(posts).toEqual([{ verdict: 'rejected', signature: '0xsig', previewHash: VIEW.previewHash }]);
+  });
+
+  it('names the requester by its domain and warns when it calls itself JAW', async () => {
+    view = {
+      ...VIEW,
+      preview: { ...VIEW.preview, requester: { ...VIEW.preview.requester, name: 'JAW CLI', reservedName: true } },
+    };
+    await render();
+    expect(container.querySelector('h1')!.textContent).toBe('Signature request from evil.example');
+    expect(container.textContent).toContain('Calls itself "JAW CLI"');
+    expect(container.textContent).toContain('is not a JAW app');
   });
 
   it('offers no decision to another account', async () => {

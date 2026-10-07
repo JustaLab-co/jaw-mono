@@ -29,7 +29,13 @@ async function pending() {
 describe('consent hand-back', () => {
   it('builds the message from the interaction: client, scopes, chain and interaction id', async () => {
     const { uid, details } = await pending();
-    expect(details.client).toEqual({ id: 'jaw-cli', name: 'JAW CLI', host: null });
+    expect(details.client).toEqual({
+      clientId: 'jaw-cli',
+      name: 'JAW CLI',
+      host: null,
+      official: true,
+      reservedName: false,
+    });
     expect(details.scopes).toEqual([{ id: 'wallet:read', label: expect.any(String) }]);
     expect(details.message.split('\n')[0]).toBe('JAW connection consent');
     expect(details.message).toContain(`Interaction: ${uid}`);

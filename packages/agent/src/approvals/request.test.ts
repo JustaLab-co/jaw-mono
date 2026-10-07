@@ -108,6 +108,28 @@ describe('what gets signed', () => {
   });
 });
 
+describe('who asked', () => {
+  it('shows a third-party client by its domain and flags a name that claims to be JAW', () => {
+    const r = openRequest(
+      {
+        id: ID,
+        account: ACCOUNT,
+        chainId: 84532,
+        requester: { name: 'JAW CLI', clientId: 'https://evil.example/client.json' },
+        body: { kind: 'signature', message: 'hi' },
+      },
+      T0
+    );
+    expect(previewOf(r).requester).toEqual({
+      clientId: 'https://evil.example/client.json',
+      name: 'JAW CLI',
+      host: 'evil.example',
+      official: false,
+      reservedName: true,
+    });
+  });
+});
+
 describe('preview of a hostile message', () => {
   const hostile = [
     '<img src=x onerror=alert(1)><script>steal()</script>',

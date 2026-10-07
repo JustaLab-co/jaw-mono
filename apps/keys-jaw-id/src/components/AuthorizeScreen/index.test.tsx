@@ -15,15 +15,18 @@ vi.mock('../OnboardingSection', () => ({
 }));
 
 const { AuthorizeScreen } = await import('./index');
+type ClientIdentity = import('../ClientHeader').ClientIdentity;
 
 const OWNER = '0x1111111111111111111111111111111111111111';
 const MCP = 'https://mcp.jaw.id';
 const DETAILS = {
   uid: 'uid_1234567890',
   client: {
-    id: 'https://evil.example/c.json',
+    clientId: 'https://evil.example/c.json',
     name: '<img src=x onerror=alert(1)>',
     host: 'evil.example',
+    official: false,
+    reservedName: false,
   },
   redirectHost: '127.0.0.1',
   scopes: [{ id: 'wallet:read', label: 'See your account, balances and grants' }],
@@ -35,10 +38,12 @@ const DETAILS = {
 let root: Root;
 let container: HTMLDivElement;
 const posts: { url: string; body: unknown }[] = [];
+let details: Omit<typeof DETAILS, 'client'> & { client: ClientIdentity } = DETAILS;
 const assign = vi.fn();
 
 beforeEach(() => {
   posts.length = 0;
+  details = DETAILS;
   signMessage.mockClear();
   vi.stubGlobal(
     'fetch',
@@ -48,7 +53,7 @@ beforeEach(() => {
         posts.push({ url, body: JSON.parse(String(init.body)) });
         return Response.json({ next: `${MCP}/interaction/uid_1234567890/complete?ticket=t` });
       }
-      return Response.json(DETAILS);
+      return Response.json(details);
     })
   );
   Object.defineProperty(window, 'location', { value: { assign }, configurable: true });
@@ -92,6 +97,25 @@ describe('AuthorizeScreen', () => {
       { url: `${MCP}/interaction/uid_1234567890/consent`, body: { address: OWNER, signature: '0xsig' } },
     ]);
     expect(assign).toHaveBeenCalledWith(`${MCP}/interaction/uid_1234567890/complete?ticket=t`);
+  });
+
+  it('names a third-party client by its domain and warns when it calls itself JAW', async () => {
+    details = { ...DETAILS, client: { ...DETAILS.client, name: 'JAW CLI', reservedName: true } };
+    await render();
+    expect(container.querySelector('h1')!.textContent).toBe('Connect evil.example');
+    expect(container.textContent).toContain('Calls itself "JAW CLI"');
+    expect(container.textContent).toContain('is not a JAW app');
+    expect(container.textContent).not.toContain('Official JAW client');
+  });
+
+  it('labels only the first-party client official', async () => {
+    details = {
+      ...DETAILS,
+      client: { clientId: 'jaw-cli', name: 'JAW CLI', host: null, official: true, reservedName: false },
+    };
+    await render();
+    expect(container.querySelector('h1')!.textContent).toBe('Connect JAW CLI');
+    expect(container.textContent).toContain('Official JAW client');
   });
 
   it('refuses a hand-back to another origin', async () => {
