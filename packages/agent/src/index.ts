@@ -37,3 +37,4 @@ export * from './x402/session-bridge.js';
 export * from './x402/topup.js';
 export * from './x402/spend-window.js';
 export * from './x402/payment-window.js';
+export * from './approvals/request.js';
