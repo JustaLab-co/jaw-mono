@@ -18,28 +18,43 @@ export class Browser {
   private cookies = new Map<string, { value: string; path: string }>();
 
   async get(url: string): Promise<Response> {
-    const { pathname } = new URL(url);
+    return this.send(new URL(url), {});
+  }
+
+  private async send(url: URL, init: RequestInit): Promise<Response> {
     const cookie = [...this.cookies]
-      .filter(([, c]) => pathname.startsWith(c.path))
+      .filter(([, c]) => url.pathname.startsWith(c.path))
       .map(([name, c]) => `${name}=${c.value}`)
       .join('; ');
-    const res = await route(new Request(url, { headers: cookie ? { cookie } : {} }));
+    const headers = new Headers(init.headers);
+    if (cookie) headers.set('cookie', cookie);
+    const res = await route(new Request(url, { ...init, headers }));
     for (const line of res.headers.getSetCookie()) {
       const [pair, ...attrs] = line.split(';').map((s) => s.trim());
       const [name, value] = pair.split('=');
       const path = attrs.find((a) => a.toLowerCase().startsWith('path='))?.slice(5) ?? '/';
       this.cookies.set(name, { value, path });
     }
-    return res;
+    // An auto-submitting form, as the provider renders for a logout confirmation.
+    const html = res.headers.get('content-type')?.includes('text/html') ? await res.clone().text() : '';
+    const action = html.match(/<form method="post" action="([^"]+)"/)?.[1];
+    if (!action) return res;
+    const fields = [...html.matchAll(/<input type="hidden" name="([^"]+)" value="([^"]*)"\/>/g)];
+    return this.send(new URL(action.replaceAll('&amp;', '&'), url), {
+      method: 'POST',
+      headers: { 'content-type': 'application/x-www-form-urlencoded' },
+      body: new URLSearchParams(fields.map(([, k, v]) => [k, v])).toString(),
+    });
   }
 }
 
 async function route(req: Request): Promise<Response> {
-  const parts = new URL(req.url).pathname.split('/');
-  if (parts[1] !== 'interaction') return oauth(req);
-  const handler = { undefined: hop, details, complete, abort }[String(parts[3])];
+  const [, first, uid, action] = new URL(req.url).pathname.split('/');
+  if (first !== 'interaction') return oauth(req);
+  if (action === undefined) return hop(req, uid);
+  const handler = { details, complete, abort }[action];
   if (!handler) throw new Error(`no route for ${req.url}`);
-  return handler(req);
+  return handler(req, uid);
 }
 
 export interface Authorize {
@@ -83,7 +98,7 @@ export const verifyLocally = ({ address, message, signature }: { address: Hex; m
   verifyMessage({ address, message, signature });
 
 export async function getDetails(uid: string): Promise<ConsentDetails> {
-  return (await details(new Request(`${ISSUER}/interaction/${uid}/details`))).json();
+  return (await details(new Request(`${ISSUER}/interaction/${uid}/details`), uid)).json();
 }
 
 export async function postConsent(uid: string, address: Hex, signature: Hex) {
@@ -93,6 +108,7 @@ export async function postConsent(uid: string, address: Hex, signature: Hex) {
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({ address, signature }),
     }),
+    uid,
     verifyLocally
   );
 }
@@ -127,8 +143,7 @@ export async function follow(browser: Browser, url: string, redirectUri = REDIRE
   throw new Error('too many redirects');
 }
 
-export async function connect(signer = owner(), a: Authorize = {}) {
-  const browser = new Browser();
+export async function connect(signer = owner(), a: Authorize = {}, browser = new Browser()) {
   const start = await startAuthorization(browser, a);
   if (!start.uid) throw new Error('authorization did not reach consent');
   const d = await getDetails(start.uid);
@@ -157,7 +172,8 @@ export async function mcp(token: string | undefined, body: object) {
         ...(token ? { authorization: `Bearer ${token}` } : {}),
       },
       body: JSON.stringify({ jsonrpc: '2.0', id: 1, ...body }),
-    })
+    }),
+    { params: Promise.resolve({}) }
   );
   const text = await res.text();
   const data = text.split('\n').find((l) => l.startsWith('data: '));

@@ -3,6 +3,7 @@ import { beforeAll, describe, expect, it } from 'vitest';
 import { getDb } from '@/db/client';
 import { connections } from '@/db/schema';
 import { useTestDb } from '@/db/test-db';
+import { consent } from './interaction';
 import {
   Browser,
   follow,
@@ -28,7 +29,7 @@ async function pending() {
 describe('consent hand-back', () => {
   it('builds the message from the interaction: client, scopes, chain and interaction id', async () => {
     const { uid, details } = await pending();
-    expect(details.client).toEqual({ id: 'jaw-cli', name: 'JAW CLI', host: null, official: true });
+    expect(details.client).toEqual({ id: 'jaw-cli', name: 'JAW CLI', host: null });
     expect(details.scopes).toEqual([{ id: 'wallet:read', label: expect.any(String) }]);
     expect(details.message.split('\n')[0]).toBe('JAW connection consent');
     expect(details.message).toContain(`Interaction: ${uid}`);
@@ -51,6 +52,26 @@ describe('consent hand-back', () => {
     const { uid, details } = await pending();
     const res = await postConsent(uid, owner().address, await owner().signMessage({ message: details.message }));
     expect(res.status).toBe(401);
+  });
+
+  it('answers 503, not bad_signature, when the chain cannot be asked', async () => {
+    const { uid, details } = await pending();
+    const signer = owner();
+    const res = await consent(
+      new Request(`${ISSUER}/interaction/${uid}/consent`, {
+        method: 'POST',
+        body: JSON.stringify({
+          address: signer.address,
+          signature: await signer.signMessage({ message: details.message }),
+        }),
+      }),
+      uid,
+      async () => {
+        throw new Error('rpc down');
+      }
+    );
+    expect(res.status).toBe(503);
+    expect(await res.json()).toEqual({ error: 'verification_unavailable' });
   });
 
   it('accepts one consent per interaction', async () => {

@@ -24,7 +24,6 @@ const DETAILS = {
     id: 'https://evil.example/c.json',
     name: '<img src=x onerror=alert(1)>',
     host: 'evil.example',
-    official: false,
   },
   redirectHost: '127.0.0.1',
   scopes: [{ id: 'wallet:read', label: 'See your account, balances and grants' }],

@@ -9,7 +9,7 @@ import type { ChainId } from '../../utils/types';
 
 export interface ConsentDetails {
   uid: string;
-  client: { id: string; name: string; host: string | null; official: boolean };
+  client: { id: string; name: string; host: string | null };
   redirectHost: string;
   scopes: { id: string; label: string }[];
   chainId: number;
@@ -64,9 +64,7 @@ export function AuthorizeScreen({ uid, mcpUrl }: { uid: string; mcpUrl: string }
     <div className="flex flex-col gap-4 rounded-lg border p-6">
       <div>
         <h1 className="text-lg font-semibold">Connect {details.client.name}</h1>
-        <p className="text-muted-foreground text-sm">
-          {details.client.official ? 'Official JAW client' : (details.client.host ?? details.client.id)}
-        </p>
+        <p className="text-muted-foreground text-sm">{details.client.host ?? `Client ID ${details.client.id}`}</p>
         {LOOPBACK.has(details.redirectHost) && (
           <p className="text-muted-foreground text-sm">Returns to an app on this computer.</p>
         )}
@@ -108,6 +106,6 @@ export function AuthorizeScreen({ uid, mcpUrl }: { uid: string; mcpUrl: string }
 
 const REFUSALS: Record<string, string> = {
   bad_signature: 'The signature did not verify for this account.',
-  already_consented: 'Already approved. Return to your app.',
+  already_consented: 'This request was already answered. Start again from your app.',
   not_found: 'This request expired. Start again from your app.',
 };

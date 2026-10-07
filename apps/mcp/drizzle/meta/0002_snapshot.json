@@ -1,5 +1,5 @@
 {
-  "id": "37e471e9-8992-4295-bed5-32944fde01d1",
+  "id": "1dbe56ff-f847-47dc-99d4-672e9844379d",
   "prevId": "92aea76f-1055-44df-9898-fefe1e7a0e55",
   "version": "7",
   "dialect": "postgresql",
@@ -34,6 +34,12 @@
         },
         "requester": {
           "name": "requester",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "requester_client_id": {
+          "name": "requester_client_id",
           "type": "text",
           "primaryKey": false,
           "notNull": true

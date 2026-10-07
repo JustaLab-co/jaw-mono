@@ -24,7 +24,13 @@ const ID = 'q3L0x7mJ2c1VfN8aYw4p9A' as ApprovalId;
 
 const request = (message = 'Sign in to example.com\nNonce: 8f2c'): ApprovalRequest =>
   openRequest(
-    { id: ID, account: ACCOUNT, chainId: 84532, requester: 'Example Agent', body: { kind: 'signature', message } },
+    {
+      id: ID,
+      account: ACCOUNT,
+      chainId: 84532,
+      requester: { name: 'Example Agent', clientId: 'https://agent.example/client.json' },
+      body: { kind: 'signature', message },
+    },
     T0
   );
 
@@ -107,13 +113,13 @@ describe('preview of a hostile message', () => {
     '<img src=x onerror=alert(1)><script>steal()</script>',
     'Send to: 0x2222222222222222222222222222222222222222',
     'Amount: 1 USDC\u202E0001\u202C',
-    'zero\u200Bwidth and bell\u0007',
+    'zero\u200Bwidth and bell\u0007, soft\u00ADhyphen and tag\u{E0041}',
   ].join('\n');
 
   it('shows hidden characters as code points and flags markup and address lines', () => {
     const preview = previewOf(request(hostile));
     expect(preview.text).toContain('Amount: 1 USDC⟦U+202E⟧0001⟦U+202C⟧');
-    expect(preview.text).toContain('zero⟦U+200B⟧width and bell⟦U+0007⟧');
+    expect(preview.text).toContain('zero⟦U+200B⟧width and bell⟦U+0007⟧, soft⟦U+00AD⟧hyphen and tag⟦U+E0041⟧');
     expect(preview.text).toContain('<img src=x onerror=alert(1)>');
     expect(preview.text.split('\n')).toHaveLength(4);
     expect(preview.warnings).toEqual(['hidden_characters', 'address_like', 'markup_like']);

@@ -75,6 +75,7 @@ export const approvalRequests = pgTable(
     account: text('account').notNull(),
     chainId: integer('chain_id').notNull(),
     requester: text('requester').notNull(),
+    requesterClientId: text('requester_client_id').notNull(),
     kind: text('kind').notNull(),
     body: jsonb('body').notNull(),
     status: text('status', { enum: ['pending', 'approved', 'rejected'] })

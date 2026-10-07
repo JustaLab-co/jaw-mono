@@ -27,7 +27,7 @@ Migrations run at start and are safe to run from several instances at once. `GET
 
 keys.jaw.id needs `JAW_MCP_URL`, the same origin as `JAW_MCP_PUBLIC_URL`.
 
-To rotate sealing keys, put the new key first and keep the old one until every connection has refreshed its token, then drop it. Generate a key with `openssl rand -base64 32 | tr '+/' '-_' | tr -d '='`.
+To rotate sealing keys, put the new key first. A connection moves to the new key on its next token refresh, so keep the old key for the 30-day refresh token lifetime before dropping it; `select split_part(sealed_key, '.', 2), count(*) from connections where status = 'active' group by 1` shows which keys are still in use. Generate a key with `openssl rand -base64 32 | tr '+/' '-_' | tr -d '='`.
 
 ## Operations
 

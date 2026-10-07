@@ -28,7 +28,7 @@ const VIEW = {
   expiresAt: '2026-10-06T12:10:00.000Z',
   preview: {
     kind: 'signature',
-    requester: '<script>x</script>',
+    requester: { name: '<script>x</script>', clientId: 'https://evil.example/client.json' },
     text: 'Pay to: 0x2222222222222222222222222222222222222222\n<b>bold</b> 1 USDC⟦U+202E⟧0001',
     warnings: ['hidden_characters', 'address_like', 'markup_like'],
   },

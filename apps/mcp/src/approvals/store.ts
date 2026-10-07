@@ -6,7 +6,7 @@ import {
   type ApprovalRequest,
   type ApprovalState,
 } from '@jaw.id/agent';
-import { and, eq, gt } from 'drizzle-orm';
+import { and, count, eq, gt, sql } from 'drizzle-orm';
 import type { Address, Hex } from 'viem';
 import { getDb } from '@/db/client';
 import { approvalRequests } from '@/db/schema';
@@ -40,7 +40,7 @@ function toRequest(row: Row, now: Date): ApprovalRequest {
       id: row.id as ApprovalId,
       account: row.account as Address,
       chainId: row.chainId,
-      requester: row.requester,
+      requester: { name: row.requester, clientId: row.requesterClientId },
       body: parseBody(row.body),
       createdAt: row.createdAt,
       expiresAt: row.expiresAt,
@@ -56,7 +56,8 @@ export async function insertRequest(connectionId: string, request: ApprovalReque
     connectionId,
     account: request.account,
     chainId: request.chainId,
-    requester: request.requester,
+    requester: request.requester.name,
+    requesterClientId: request.requester.clientId,
     kind: request.body.kind,
     body: request.body,
     createdAt: request.createdAt,
@@ -82,7 +83,7 @@ export async function findById(id: string, now: Date) {
 }
 
 // Repeats decide's precondition in SQL, so two racing decisions cannot both land.
-export async function recordDecision(request: ApprovalRequest, now: Date): Promise<boolean> {
+export async function recordDecision(request: ApprovalRequest): Promise<boolean> {
   const { state } = request;
   if (state.status !== 'approved' && state.status !== 'rejected') throw new Error('only a decision is recorded');
   const rows = await getDb()
@@ -92,9 +93,23 @@ export async function recordDecision(request: ApprovalRequest, now: Date): Promi
       and(
         eq(approvalRequests.id, request.id),
         eq(approvalRequests.status, 'pending'),
-        gt(approvalRequests.expiresAt, now)
+        gt(approvalRequests.expiresAt, sql`now()`)
       )
     )
     .returning({ id: approvalRequests.id });
   return rows.length === 1;
+}
+
+export async function countPending(connectionId: string): Promise<number> {
+  const [row] = await getDb()
+    .select({ n: count() })
+    .from(approvalRequests)
+    .where(
+      and(
+        eq(approvalRequests.connectionId, connectionId),
+        eq(approvalRequests.status, 'pending'),
+        gt(approvalRequests.expiresAt, sql`now()`)
+      )
+    );
+  return row.n;
 }

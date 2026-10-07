@@ -1,8 +1,9 @@
 import { createHash } from 'node:crypto';
 import { and, eq, gt, isNull, or, sql } from 'drizzle-orm';
-import type { Adapter, AdapterPayload } from 'oidc-provider';
+import { errors, type Adapter, type AdapterPayload } from 'oidc-provider';
 import { getDb } from '@/db/client';
 import { oauthPayloads } from '@/db/schema';
+import { revokeByGrant } from './rows';
 
 const notExpired = or(isNull(oauthPayloads.expiresAt), gt(oauthPayloads.expiresAt, sql`now()`));
 
@@ -54,17 +55,22 @@ export class PgAdapter implements Adapter {
     return undefined;
   }
 
+  // Conditional, so two requests racing with one refresh token or code cannot both win.
   async consume(id: string) {
-    await getDb()
+    const rows = await getDb()
       .update(oauthPayloads)
       .set({ consumedAt: new Date() })
-      .where(eq(oauthPayloads.key, this.key(id)));
+      .where(and(eq(oauthPayloads.key, this.key(id)), isNull(oauthPayloads.consumedAt)))
+      .returning({ key: oauthPayloads.key });
+    if (rows.length === 0) throw new errors.InvalidGrant('grant already used');
   }
 
   async destroy(id: string) {
     await getDb()
       .delete(oauthPayloads)
       .where(eq(oauthPayloads.key, this.key(id)));
+    // The provider awaits this when it revokes a grant, so the connection dies with it.
+    if (this.model === 'Grant') await revokeByGrant(id);
   }
 
   async revokeByGrantId(grantId: string) {

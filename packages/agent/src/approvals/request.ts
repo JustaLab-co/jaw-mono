@@ -1,5 +1,4 @@
 import { hashMessage, keccak256, stringToHex, type Address, type Hex } from 'viem';
-import { BLOCK_CONTROLS, INVISIBLE_AND_BIDI } from '../util/terminal.js';
 
 /** 16 random bytes, base64url. Unguessable: it is the read capability for the approval page. */
 export type ApprovalId = string & { readonly __brand: 'ApprovalId' };
@@ -40,8 +39,8 @@ export interface ApprovalRequest {
   id: ApprovalId;
   account: Address;
   chainId: number;
-  /** The connected client's name, third-party text. */
-  requester: string;
+  /** The connected client: its self-declared name (third-party text) and its client id. */
+  requester: { name: string; clientId: string };
   body: ApprovalBody;
   createdAt: Date;
   expiresAt: Date;
@@ -59,7 +58,7 @@ export type PreviewWarning = 'hidden_characters' | 'address_like' | 'markup_like
 /** Built on the server and rendered verbatim by the page. */
 export interface Preview {
   kind: 'signature';
-  requester: string;
+  requester: { name: string; clientId: string };
   account: Address;
   chainId: number;
   /** The message with control, bidi and zero-width characters shown as ⟦U+XXXX⟧. */
@@ -143,11 +142,15 @@ export function payloadHash(payload: SignedPayload): Hex {
   return hashMessage(payload.message);
 }
 
-const codePoint = (c: string) => `⟦U+${c.charCodeAt(0).toString(16).toUpperCase().padStart(4, '0')}⟧`;
+// Every control, format (bidi, zero-width, tags), line and paragraph separator
+// except newline and tab, plus the fillers that render as blank.
+const HIDDEN = /(?![\n\t])[\p{Cc}\p{Cf}\p{Zl}\p{Zp}\u115F\u1160\u2800\u3164\uFFA0]/gu;
+
+const codePoint = (c: string) => `⟦U+${c.codePointAt(0)?.toString(16).toUpperCase().padStart(4, '0')}⟧`;
 
 export function previewOf(request: ApprovalRequest): Preview {
   const { message } = request.body;
-  const text = message.replace(BLOCK_CONTROLS, codePoint).replace(INVISIBLE_AND_BIDI, codePoint);
+  const text = message.replace(HIDDEN, codePoint);
   const warnings: PreviewWarning[] = [];
   if (text !== message) warnings.push('hidden_characters');
   if (/0x[0-9a-fA-F]{40}/.test(message)) warnings.push('address_like');

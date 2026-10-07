@@ -16,7 +16,12 @@ export interface ApprovalView {
   account: Address;
   chainId: number;
   expiresAt: string;
-  preview: { kind: 'signature'; requester: string; text: string; warnings: string[] };
+  preview: {
+    kind: 'signature';
+    requester: { name: string; clientId: string };
+    text: string;
+    warnings: string[];
+  };
   previewHash: `0x${string}`;
   approve: { type: 'message'; message: string };
   reject: { type: 'message'; message: string };
@@ -27,6 +32,15 @@ const WARNINGS: Record<string, string> = {
   address_like: 'This message contains an address. Check it against where it came from.',
   markup_like: 'This message contains markup. It is shown as plain text.',
 };
+
+// The name is whatever the client declared; its id (a URL for most clients) is what can be checked.
+function clientLabel(clientId: string): string {
+  try {
+    return new URL(clientId).host;
+  } catch {
+    return `client ${clientId}`;
+  }
+}
 
 const DONE: Record<Exclude<Status, 'pending'>, string> = {
   approved: 'Approved. You can close this tab.',
@@ -85,8 +99,8 @@ export function ApproveScreen({ id, mcpUrl }: { id: string; mcpUrl: string }) {
       <div>
         <h1 className="text-lg font-semibold">Signature request</h1>
         <p className="text-muted-foreground text-sm">
-          From <q>{view.preview.requester}</q> for <span className="font-mono">{view.account}</span> on chain{' '}
-          {view.chainId}
+          From <q>{view.preview.requester.name}</q> ({clientLabel(view.preview.requester.clientId)}) for{' '}
+          <span className="font-mono">{view.account}</span> on chain {view.chainId}
         </p>
         <p className="text-muted-foreground text-xs">Expires {new Date(view.expiresAt).toLocaleTimeString()}</p>
       </div>

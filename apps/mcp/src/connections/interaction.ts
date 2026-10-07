@@ -4,10 +4,10 @@ import { sanitizeLine } from '@jaw.id/agent';
 import { isAddress, isHex } from 'viem';
 import { generatePrivateKey, privateKeyToAddress } from 'viem/accounts';
 import { verifyOnChain, type VerifySignature } from '@/lib/chain';
-import { pageCors } from '@/lib/cors';
+import { log } from '@/lib/edge';
 import { bridge } from './bridge';
 import { config } from './config';
-import { OFFICIAL_CLIENTS, provider, SCOPES, type Scope } from './provider';
+import { provider, SCOPES, type Scope } from './provider';
 import { activate, findClaimable, insertPending } from './rows';
 import { seal } from './seal';
 
@@ -16,7 +16,7 @@ const sha256 = (value: string) => createHash('sha256').update(value).digest('hex
 
 export interface ConsentDetails {
   uid: string;
-  client: { id: string; name: string; host: string | null; official: boolean };
+  client: { id: string; name: string; host: string | null };
   redirectHost: string;
   scopes: { id: Scope; label: string }[];
   chainId: number;
@@ -54,7 +54,6 @@ async function loadDetails(uid: string): Promise<ConsentDetails | undefined> {
       id: client.clientId,
       name: sanitizeLine(client.clientName ?? client.clientId, 64),
       host: URL.canParse(client.clientId) ? new URL(client.clientId).host : null,
-      official: OFFICIAL_CLIENTS.has(client.clientId),
     },
     redirectHost: new URL(params.redirect_uri).hostname,
     scopes: requested.map((id) => ({ id, label: SCOPES[id] })),
@@ -64,35 +63,35 @@ async function loadDetails(uid: string): Promise<ConsentDetails | undefined> {
   return { ...details, message: consentMessage(details, new URL(issuer).host) };
 }
 
-const uidOf = (req: Request) => new URL(req.url).pathname.split('/')[2];
-
 // The provider scopes the interaction cookie to this path, so the browser
 // passes through here on its way to keys.jaw.id and comes back under it.
-export function hop(req: Request): Response {
-  const uid = uidOf(req);
+export function hop(_req: Request, uid: string): Response {
   if (!UID.test(uid)) return Response.json({ error: 'not_found' }, { status: 404 });
   return Response.redirect(`${config().keysOrigin}/authorize?uid=${uid}`, 303);
 }
 
-export async function details(req: Request): Promise<Response> {
-  const found = await loadDetails(uidOf(req));
-  return pageCors(found ? Response.json(found) : Response.json({ error: 'not_found' }, { status: 404 }));
+export async function details(_req: Request, uid: string): Promise<Response> {
+  const found = await loadDetails(uid);
+  return found ? Response.json(found) : Response.json({ error: 'not_found' }, { status: 404 });
 }
 
 // Completion needs both the one-time ticket (this browser signed) and the
 // interaction cookie (this browser started), which defeats a phished consent link.
-export async function consent(req: Request, verify: VerifySignature = verifyOnChain): Promise<Response> {
-  const uid = uidOf(req);
+export async function consent(req: Request, uid: string, verify: VerifySignature = verifyOnChain): Promise<Response> {
   const body = (await req.json().catch(() => ({}))) as { address?: string; signature?: string };
   if (!body.address || !isAddress(body.address) || !body.signature || !isHex(body.signature)) {
-    return pageCors(Response.json({ error: 'invalid_request' }, { status: 400 }));
+    return Response.json({ error: 'invalid_request' }, { status: 400 });
   }
   const found = await loadDetails(uid);
-  if (!found) return pageCors(Response.json({ error: 'not_found' }, { status: 404 }));
+  if (!found) return Response.json({ error: 'not_found' }, { status: 404 });
   const valid = await verify({ address: body.address, message: found.message, signature: body.signature }).catch(
-    () => false
+    (err: unknown) => {
+      log('error', { msg: 'consent verification unavailable', error: err instanceof Error ? err.name : 'unknown' });
+      return undefined;
+    }
   );
-  if (!valid) return pageCors(Response.json({ error: 'bad_signature' }, { status: 401 }));
+  if (valid === undefined) return Response.json({ error: 'verification_unavailable' }, { status: 503 });
+  if (!valid) return Response.json({ error: 'bad_signature' }, { status: 401 });
 
   const id = `conn_${randomBytes(16).toString('base64url')}`;
   const privateKey = generatePrivateKey();
@@ -112,8 +111,8 @@ export async function consent(req: Request, verify: VerifySignature = verifyOnCh
     },
     sha256(ticket)
   );
-  if (!inserted) return pageCors(Response.json({ error: 'already_consented' }, { status: 409 }));
-  return pageCors(Response.json({ next: `${config().issuer}/interaction/${uid}/complete?ticket=${ticket}` }));
+  if (!inserted) return Response.json({ error: 'already_consented' }, { status: 409 });
+  return Response.json({ next: `${config().issuer}/interaction/${uid}/complete?ticket=${ticket}` });
 }
 
 function fail(res: ServerResponse, status: number, error: string) {
@@ -122,8 +121,7 @@ function fail(res: ServerResponse, status: number, error: string) {
   res.end(JSON.stringify({ error }));
 }
 
-export function complete(req: Request): Promise<Response> {
-  const uid = uidOf(req);
+export function complete(req: Request, uid: string): Promise<Response> {
   const ticketHash = sha256(new URL(req.url).searchParams.get('ticket') ?? '');
   const p = provider();
   return bridge(req, async (nodeReq, nodeRes) => {
@@ -149,11 +147,11 @@ export function complete(req: Request): Promise<Response> {
   });
 }
 
-export function abort(req: Request): Promise<Response> {
+export function abort(req: Request, uid: string): Promise<Response> {
   const p = provider();
   return bridge(req, async (nodeReq, nodeRes) => {
     const interaction = await p.interactionDetails(nodeReq, nodeRes).catch(() => undefined);
-    if (!interaction || interaction.uid !== uidOf(req)) return fail(nodeRes, 400, 'interaction_mismatch');
+    if (!interaction || interaction.uid !== uid) return fail(nodeRes, 400, 'interaction_mismatch');
     await p.interactionFinished(
       nodeReq,
       nodeRes,
