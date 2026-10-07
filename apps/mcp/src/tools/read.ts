@@ -1,12 +1,13 @@
 import { randomBytes } from 'node:crypto';
 import { balanceReader, FetchRefused, payAndFetch, sanitizeBlock, usdcBalance, usdcForNetwork } from '@jaw.id/agent';
 import type { McpServer } from '@modelcontextprotocol/server';
-import { createPublicClient, http, type Address, type PublicClient } from 'viem';
+import { createPublicClient, http, type Address } from 'viem';
 import { normalize } from 'viem/ens';
 import { mainnet } from 'viem/chains';
 import { z } from 'zod';
 import { tenant, type Tenant } from '@/connections/auth';
 import { config } from '@/connections/config';
+import { publicClientFor } from '@/lib/chain';
 import { safeFetch } from '@/lib/safe-fetch';
 
 const caip2 = (chainId: number) => `eip155:${chainId}`;
@@ -38,13 +39,8 @@ function reply<T extends { summary: string }>(out: T, ...extra: { type: 'text'; 
   return { content: [{ type: 'text' as const, text: out.summary }, ...extra], structuredContent: out };
 }
 
-const chainClient = (): PublicClient => {
-  const { chain, rpcUrl } = config();
-  return createPublicClient({ chain, transport: http(rpcUrl) });
-};
-
 async function balanceOf(network: string, owner: Address) {
-  const read = balanceReader({ publicClient: chainClient });
+  const read = balanceReader({ publicClient: publicClientFor });
   return usdcBalance(network, owner, read)
     .then((b) => ({ amount: b.raw, asset: caip19(network, b.asset) }))
     .catch(() => null);

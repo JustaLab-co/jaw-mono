@@ -39,12 +39,15 @@ export async function decideFromPage(
   if (!(await connectionLive(request.id))) return { kind: 'connection_revoked' };
 
   const payload = signedPayload(request, verdict as Verdict);
-  const valid = await verify({ address: request.account, message: payload.message, signature }).catch(
-    (err: unknown) => {
-      log('error', { msg: 'approval verification unavailable', error: err instanceof Error ? err.name : 'unknown' });
-      return undefined;
-    }
-  );
+  const valid = await verify({
+    chainId: request.chainId,
+    address: request.account,
+    message: payload.message,
+    signature,
+  }).catch((err: unknown) => {
+    log('error', { msg: 'approval verification unavailable', error: err instanceof Error ? err.name : 'unknown' });
+    return undefined;
+  });
   if (valid === undefined) return { kind: 'verification_unavailable' };
   if (!valid) return { kind: 'bad_signature' };
 

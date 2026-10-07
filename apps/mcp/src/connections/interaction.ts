@@ -83,12 +83,15 @@ export async function consent(req: Request, uid: string, verify: VerifySignature
   }
   const found = await loadDetails(uid);
   if (!found) return Response.json({ error: 'not_found' }, { status: 404 });
-  const valid = await verify({ address: body.address, message: found.message, signature: body.signature }).catch(
-    (err: unknown) => {
-      log('error', { msg: 'consent verification unavailable', error: err instanceof Error ? err.name : 'unknown' });
-      return undefined;
-    }
-  );
+  const valid = await verify({
+    chainId: found.chainId,
+    address: body.address,
+    message: found.message,
+    signature: body.signature,
+  }).catch((err: unknown) => {
+    log('error', { msg: 'consent verification unavailable', error: err instanceof Error ? err.name : 'unknown' });
+    return undefined;
+  });
   if (valid === undefined) return Response.json({ error: 'verification_unavailable' }, { status: 503 });
   if (!valid) return Response.json({ error: 'bad_signature' }, { status: 401 });
 

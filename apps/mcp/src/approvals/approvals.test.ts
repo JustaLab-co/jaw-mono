@@ -57,6 +57,19 @@ describe('approvals', () => {
     ).toBe(true);
   });
 
+  it('verifies on the chain the request was made for', async () => {
+    const { c, id } = await requestSignature();
+    const v = await view(id);
+    const seen: number[] = [];
+    const spy = async (a: { chainId: number; address: Hex; message: string; signature: Hex }) => {
+      seen.push(a.chainId);
+      return verifyLocally(a);
+    };
+    const signature = await c.signer.signMessage({ message: v.approve.message });
+    await decideFromPage(id, { verdict: 'approved', signature, previewHash: v.previewHash }, spy);
+    expect(seen).toEqual([v.chainId]);
+  });
+
   it('refuses a second decision on the same request', async () => {
     const { c, id } = await requestSignature();
     const v = await view(id);
