@@ -74,6 +74,7 @@ const ports: PaymentPorts = {
     },
     correct: vi.fn(),
   },
+  logger: { warn: vi.fn() },
   topUpExecutor: (apiKey, chainId) => {
     h.bridges.push({ apiKey, chainId });
     return {} as TopUpExecutor;
@@ -235,8 +236,12 @@ describe('openPaymentWindow', () => {
     });
     await window.ensureFunds?.(requirement, PAYER);
 
-    expect(h.readDeps).toEqual([{ clients: ports.clients, log: ports.log }, { clients: ports.clients }]);
+    expect(h.readDeps).toEqual([
+      { clients: ports.clients, log: ports.log, logger: ports.logger },
+      { clients: ports.clients },
+    ]);
     expect((h.topUps[0] as { opts: { clients: unknown } }).opts.clients).toBe(ports.clients);
+    expect((h.topUps[0] as { opts: { logger: unknown } }).opts.logger).toBe(ports.logger);
     expect(h.bridges).toEqual([{ apiKey: 'key', chainId: 8453 }]);
   });
 

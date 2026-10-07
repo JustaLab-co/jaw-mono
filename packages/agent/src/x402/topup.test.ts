@@ -269,16 +269,16 @@ describe('ensurePayerFunds', () => {
   // funds are already there for.
   test('Given the node has not caught up, When the balance reads unchanged, Then it warns and pays rather than refusing', async () => {
     const { executor } = fakeExecutor();
-    const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    const warn = vi.fn();
 
     const out = await ensurePayerFunds(requirement('2000000'), PAYER, executor, {
+      logger: { warn },
       balanceReader: async () => 0n,
       ...instantly,
     });
 
     expect(out.ok).toBe(true);
     expect(warn).toHaveBeenCalledWith(expect.stringContaining('unchanged from before it'));
-    warn.mockRestore();
   });
 
   test('Given the node catches up on a later poll, When the balance has moved, Then the short payer is refused', async () => {
@@ -674,10 +674,11 @@ describe('Permit2 approval for upto', () => {
 
   test('warns about the approval rather than a refill when the balance cannot be re-read', async () => {
     const { executor, opts } = approving(0n);
-    const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    const warn = vi.fn();
     let call = 0;
 
     const outcome = await ensurePayerFunds(uptoRequirement('1000000'), PAYER, executor, {
+      logger: { warn },
       ...opts,
       balanceReader: async () => {
         if (++call === 1) return 1_100_000n;
@@ -687,7 +688,6 @@ describe('Permit2 approval for upto', () => {
 
     expect(outcome.ok).toBe(true);
     expect(warn).toHaveBeenCalledWith(expect.stringContaining('after the Permit2 approval'));
-    warn.mockRestore();
   });
 
   test('does not grant it again once the allowance covers the ceiling', async () => {
@@ -813,10 +813,11 @@ describe('Permit2 approval for upto', () => {
 // not run, and only the warning says so.
 test('Given the post-refill read fails, When it proceeds anyway, Then it says the check did not run', async () => {
   const { executor } = fakeExecutor();
-  const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+  const warn = vi.fn();
   let call = 0;
 
   const out = await ensurePayerFunds(requirement('1000000'), PAYER, executor, {
+    logger: { warn },
     balanceReader: async () => {
       call += 1;
       if (call === 1) return 0n;
@@ -827,7 +828,6 @@ test('Given the post-refill read fails, When it proceeds anyway, Then it says th
 
   expect(out.ok).toBe(true);
   expect(warn).toHaveBeenCalledWith(expect.stringContaining('Could not re-read the payer balance'));
-  warn.mockRestore();
 });
 
 describe('ensurePayerFunds against the funds behind the permission', () => {

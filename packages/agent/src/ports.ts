@@ -18,6 +18,12 @@ export interface PaymentLog {
   compact(capStarts: string[] | undefined, payer: string | undefined): void;
 }
 
+/** Where the agent says what an operator should see. The host picks the sink. */
+export interface Logger {
+  /** One line, without its trailing newline. */
+  warn(message: string): void;
+}
+
 /** Where the session is kept. */
 export interface PermissionStore {
   /** Write a recovered struct into the session; false when the session is gone. */

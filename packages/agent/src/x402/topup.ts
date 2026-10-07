@@ -6,7 +6,7 @@ import { errorMessage } from '../util/errors.js';
 import type { X402PaymentRequirement } from './types.js';
 import { firstOperationCost, gasReserve } from './gas-reserve.js';
 import { type BalanceReader, balanceReader } from './balance.js';
-import type { ChainClients } from '../ports.js';
+import type { ChainClients, Logger } from '../ports.js';
 import type { RefusalCode } from './outcome.js';
 
 /**
@@ -67,6 +67,7 @@ const onChainAllowance =
 export interface TopUpOptions {
   /** Where balances and allowances are read. */
   clients: ChainClients;
+  logger: Logger;
   /**
    * The chain the session (and its permission) lives on. When set, a payment
    * on any other chain refuses to top up instead of executing a transfer on
@@ -474,7 +475,7 @@ async function payerStillShort(
     } catch (err) {
       // Said out loud rather than swallowed: the payment goes on, and the operator
       // needs to know the one check that would have caught a short payer never ran.
-      console.warn(
+      opts.logger.warn(
         `[jaw] Could not re-read the payer balance after ${charged.moment} (${errorMessage(err)}); paying anyway.`
       );
       return null;
@@ -485,7 +486,7 @@ async function payerStillShort(
     }
   }
 
-  console.warn(
+  opts.logger.warn(
     `[jaw] The payer balance still reads ${before} base units after ${charged.moment}, unchanged from before it, ` +
       'so the node read here has not caught up; paying anyway.'
   );

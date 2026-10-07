@@ -25,6 +25,14 @@ export default [
           patterns: ['@modelcontextprotocol/*', '@oclif/*', 'fs/*', 'node:fs/*'],
         },
       ],
+      // Warnings go through the host's Logger port: a hosted server has no
+      // terminal, and stdout carries the stdio MCP protocol.
+      'no-console': 'error',
+      'no-restricted-properties': [
+        'error',
+        { object: 'process', property: 'stderr', message: 'Write through the Logger port.' },
+        { object: 'process', property: 'stdout', message: 'Write through the Logger port.' },
+      ],
     },
   },
   {

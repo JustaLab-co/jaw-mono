@@ -5,7 +5,7 @@ import { topUpCeiling, type LimitUsage, type X402Policy } from './policy.js';
 import type { PayAndFetchResult } from './outcome.js';
 import { reconcileSettlements } from './settlement.js';
 import { sumSpentSince } from './ledger.js';
-import type { ChainClients, PaymentLog } from '../ports.js';
+import type { ChainClients, Logger, PaymentLog } from '../ports.js';
 import type { SessionConfig } from '../session/session-config.js';
 import { capWindowStarts, currentLimitUsageOnChain } from './spend-window.js';
 import { ensurePayerFunds, type TopUpExecutor } from './topup.js';
@@ -14,6 +14,7 @@ import { ensurePayerFunds, type TopUpExecutor } from './topup.js';
 export interface PaymentPorts {
   clients: ChainClients;
   log: PaymentLog;
+  logger: Logger;
   /** What a refill for a session on `chainId` is sent through. */
   topUpExecutor(apiKey: string, chainId: number): TopUpExecutor;
 }
@@ -79,8 +80,8 @@ export async function openPaymentWindow(
   { session, policy, payerAddress, apiKey, topUpFloat, dryRun }: PaymentWindowInput,
   ports: PaymentPorts
 ): Promise<PaymentWindow> {
-  const { clients, log } = ports;
-  const ledger = await reconcileSettlements(log.read(), { clients, log });
+  const { clients, log, logger } = ports;
+  const ledger = await reconcileSettlements(log.read(), { clients, log, logger });
   const periodUsage = await currentLimitUsageOnChain(ledger, policy, payerAddress, session, new Date(), { clients });
   // Payer, deliberately, with no permission: `session add` preserves
   // `createdAt` so that adding a capability cannot reset the total, and scoping
@@ -105,6 +106,7 @@ export async function openPaymentWindow(
   const ensureFunds: EnsureFunds = (requirement, payer) =>
     ensurePayerFunds(requirement, payer, bridge, {
       clients,
+      logger,
       floatTarget,
       maxTopUp,
       funderAddress,

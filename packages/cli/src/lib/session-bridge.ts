@@ -3,6 +3,7 @@ import { loadSessionKey } from './keystore.js';
 import { loadSessionConfig } from './session-config.js';
 import { loadConfig } from './config.js';
 import { isRejectedApiKey } from './api-key.js';
+import { stderrLogger } from './stderr-logger.js';
 
 // Each read goes through at call time, not at import, so a module standing in
 // for the session files is the one that answers.
@@ -33,7 +34,7 @@ const cliSessionHost: SessionHost = {
 
 /** The session bridge on the session kept under ~/.jaw. */
 export class SessionBridge extends AgentSessionBridge {
-  constructor(options: Omit<SessionBridgeOptions, 'host'>) {
-    super({ ...options, host: cliSessionHost });
+  constructor(options: Omit<SessionBridgeOptions, 'host' | 'logger'>) {
+    super({ ...options, host: cliSessionHost, logger: stderrLogger });
   }
 }

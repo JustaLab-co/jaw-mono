@@ -3,13 +3,14 @@ import { parseBigInt } from './amount.js';
 import { errorMessage } from '../util/errors.js';
 import { usdcForNetwork, type UsdcAsset } from './asset-registry.js';
 import { PERMIT2_ADDRESS } from './permit2.js';
-import type { ChainClients, PaymentLog } from '../ports.js';
+import type { ChainClients, Logger, PaymentLog } from '../ports.js';
 import type { SettlementState, X402LogEntry, X402SettlementCorrection } from './ledger.js';
 
 /** The chain to ask, and where the answers are written down. */
 export interface SettlementDeps {
   clients: ChainClients;
   log: Pick<PaymentLog, 'correct'>;
+  logger: Logger;
 }
 
 /**
@@ -112,7 +113,7 @@ export async function reconcileSettlements(entries: X402LogEntry[], deps: Settle
       } catch (err) {
         // A row is a line in a file a user can edit, and nothing here may fail
         // the payment waiting on it. The row keeps costing its ceiling.
-        process.stderr.write(`[jaw] warning: could not reconcile nonce ${entry.nonce} (${errorMessage(err)})\n`);
+        deps.logger.warn(`[jaw] warning: could not reconcile nonce ${entry.nonce} (${errorMessage(err)})`);
         return null;
       }
     })

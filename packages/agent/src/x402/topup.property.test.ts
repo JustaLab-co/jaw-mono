@@ -80,6 +80,7 @@ describe('topping up the payer', () => {
           sessionChainId: s.sessionChainId,
           pollMs: 0,
           sleep: async () => undefined,
+          logger: { warn: () => undefined },
         });
 
         for (const token of approvals) expect(token).toBe(s.usdc?.address);

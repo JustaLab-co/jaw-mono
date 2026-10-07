@@ -4,6 +4,7 @@ import * as path from 'node:path';
 import * as os from 'node:os';
 import { encodeEventTopics, encodeAbiParameters, parseAbiItem } from 'viem';
 import { reconcileSettlements as reconcile, type ChainClients, type X402LogEntry, spendFigureOf } from '@jaw.id/agent';
+import { stderrLogger } from '../lib/stderr-logger.js';
 
 const TEST_ROOT = path.join(os.tmpdir(), 'jaw-settlement-test');
 
@@ -19,7 +20,8 @@ const readContract = vi.fn();
 const clients = { publicClient: () => ({ getTransactionReceipt, readContract }) } as unknown as ChainClients;
 
 const { appendX402Log, readX402Log, jsonlPaymentLog } = await import('./ledger.js');
-const reconcileSettlements = (entries: X402LogEntry[]) => reconcile(entries, { clients, log: jsonlPaymentLog });
+const reconcileSettlements = (entries: X402LogEntry[]) =>
+  reconcile(entries, { clients, log: jsonlPaymentLog, logger: stderrLogger });
 
 const PAYER = '0x1111111111111111111111111111111111111111';
 const PAY_TO = '0x2222222222222222222222222222222222222222';
