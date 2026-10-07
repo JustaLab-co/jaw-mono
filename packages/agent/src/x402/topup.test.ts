@@ -330,7 +330,9 @@ describe('ensurePayerFunds', () => {
     expect(out.batchId).toBe('0xbatch1');
   });
 
-  test('Given the call status cannot be read, When polling, Then the code is chain_unavailable and the reason is the 0.4.0 text', async () => {
+  // The transfer was already sent, so no code may read as safe to retry: a
+  // second payment would refill the payer twice.
+  test('Given the call status cannot be read after the transfer was sent, When polling, Then no code claims nothing moved and the trace is kept', async () => {
     const { executor, balanceReader } = fakeChain(0n, {
       status: async () => {
         throw new Error('node unreachable');
@@ -343,12 +345,13 @@ describe('ensurePayerFunds', () => {
     });
 
     expect(out.ok).toBe(false);
-    expect(out.code).toBe('chain_unavailable');
+    expect(out.code).toBeUndefined();
     expect(out.reason).toBe('top-up status check failed: node unreachable');
     expect(out.batchId).toBe('0xbatch1');
+    expect(out.amount).toBeDefined();
   });
 
-  test('Given the status read hangs past the deadline, When the race ends it, Then the code is timed_out, not chain_unavailable', async () => {
+  test('Given the status read hangs past the deadline after the transfer was sent, When the race ends it, Then no code claims nothing moved', async () => {
     const { executor, balanceReader } = fakeChain(0n, { status: () => new Promise(() => undefined) });
 
     const out = await ensurePayerFunds(requirement('1000000'), PAYER, executor, {
@@ -357,8 +360,9 @@ describe('ensurePayerFunds', () => {
       ...instantly,
     });
 
-    expect(out.code).toBe('timed_out');
+    expect(out.code).toBeUndefined();
     expect(out.reason).toBe('top-up status check failed: status check timed out after 0ms');
+    expect(out.batchId).toBe('0xbatch1');
   });
 
   test('Given confirmation never arrives, When the timeout passes, Then it gives up with the batch id for reconciliation', async () => {
@@ -373,7 +377,7 @@ describe('ensurePayerFunds', () => {
     });
 
     expect(out.ok).toBe(false);
-    expect(out.code).toBe('timed_out');
+    expect(out.code).toBeUndefined();
     expect(out.reason).toContain('not confirmed after');
     expect(out.batchId).toBe('0xbatch1');
   });
@@ -768,6 +772,21 @@ describe('Permit2 approval for upto', () => {
 
     expect(outcome.ok).toBe(false);
     expect(outcome.reason).toContain("could not read the payer's Permit2 allowance");
+  });
+
+  test('names a chain it could not read before anything was sent as chain_unavailable', async () => {
+    const { executor, approved, opts } = approving(0n);
+    const outcome = await ensurePayerFunds(uptoRequirement(), PAYER, executor, {
+      ...opts,
+      allowanceReader: async () => {
+        throw new Error('rpc down');
+      },
+    });
+
+    expect(outcome.code).toBe('chain_unavailable');
+    expect(outcome.reason).toBe("could not read the payer's Permit2 allowance: rpc down");
+    expect(outcome.batchId).toBeUndefined();
+    expect(approved).toEqual([]);
   });
 
   test('says so when the executor cannot grant an approval at all', async () => {

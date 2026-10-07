@@ -133,7 +133,11 @@ export interface TopUpOutcome {
   approvalBatchId?: string;
   /** Human-readable refusal when ok=false. Never throws for policy-shaped failures. */
   reason?: string;
-  /** Why, for code to branch on, when a refusal has a code more precise than `funding_failed`. */
+  /**
+   * Why, for code to branch on, when a refusal has a code more precise than
+   * `funding_failed`. Only set where nothing was sent: after a broadcast the
+   * refill may have landed, and no code may read as safe to retry.
+   */
   code?: RefusalCode;
 }
 
@@ -203,7 +207,7 @@ export async function ensurePayerFunds(
   let permit2Allowance: bigint | undefined;
   if (requirement.scheme === 'upto') {
     const status = await permit2ApprovalStatus(asset, payerAddress, price, executor, opts);
-    if (!status.ok) return { ok: false, reason: status.reason };
+    if (!status.ok) return { ok: false, code: status.code, reason: status.reason };
     grantApproval = status.grant;
     // Only useful when it already covers the payment. When it does not, the
     // figure below is the one the signer must be told about, and until the
@@ -225,9 +229,7 @@ export async function ensurePayerFunds(
       const granted = await grantPermit2Allowance(asset, payerAddress, price, grantApproval, executor, opts);
       // `skipped` says no principal moved, which stays true, but the approval
       // is a userOp the user paid for and it belongs in the trace either way.
-      if (!granted.ok) {
-        return { ok: false, code: granted.code, reason: granted.reason, approvalBatchId: granted.batchId };
-      }
+      if (!granted.ok) return { ok: false, reason: granted.reason, approvalBatchId: granted.batchId };
       // No principal moved, but the approval is a userOp the payer was charged
       // for, so its balance is not what the branch above checked any more.
       const short = await payerStillShort(asset, payerAddress, price, balance, opts, AFTER_APPROVAL);
@@ -342,7 +344,7 @@ export async function ensurePayerFunds(
     onChainFailure: 'top-up transaction failed on-chain (spending cap reached, or permission expired/revoked)',
   });
   if (!confirmed.ok) {
-    return { ok: false, code: confirmed.code, reason: confirmed.reason, amount: amount.toString(), batchId };
+    return { ok: false, reason: confirmed.reason, amount: amount.toString(), batchId };
   }
 
   // Past this line the transfer landed, so the refusal below still carries the
@@ -353,14 +355,7 @@ export async function ensurePayerFunds(
     const granted = await grantPermit2Allowance(asset, payerAddress, price, grantApproval, executor, opts);
     approvalBatchId = granted.batchId;
     if (!granted.ok) {
-      return {
-        ok: false,
-        code: granted.code,
-        reason: granted.reason,
-        amount: amount.toString(),
-        batchId,
-        approvalBatchId,
-      };
+      return { ok: false, reason: granted.reason, amount: amount.toString(), batchId, approvalBatchId };
     }
     permit2Allowance = granted.allowance;
   }
@@ -523,13 +518,19 @@ async function permit2ApprovalStatus(
   needed: bigint,
   executor: TopUpExecutor,
   opts: TopUpOptions
-): Promise<{ ok: true; grant: GrantApproval | null; allowance: bigint } | { ok: false; reason: string }> {
+): Promise<
+  { ok: true; grant: GrantApproval | null; allowance: bigint } | { ok: false; code?: RefusalCode; reason: string }
+> {
   const read = opts.allowanceReader ?? onChainAllowance(opts.clients);
   let allowance: bigint;
   try {
     allowance = await read(asset, payerAddress, PERMIT2_ADDRESS);
   } catch (err) {
-    return { ok: false, reason: `could not read the payer's Permit2 allowance: ${errorMessage(err)}` };
+    return {
+      ok: false,
+      code: 'chain_unavailable',
+      reason: `could not read the payer's Permit2 allowance: ${errorMessage(err)}`,
+    };
   }
   if (allowance >= needed) return { ok: true, grant: null, allowance };
 
@@ -567,7 +568,7 @@ async function grantPermit2Allowance(
   grant: GrantApproval,
   executor: TopUpExecutor,
   opts: TopUpOptions
-): Promise<{ ok: boolean; reason?: string; code?: RefusalCode; batchId?: string; allowance?: bigint }> {
+): Promise<{ ok: boolean; reason?: string; batchId?: string; allowance?: bigint }> {
   let batchId: string;
   try {
     batchId = await grant(asset.address);
@@ -581,7 +582,7 @@ async function grantPermit2Allowance(
   });
   // The id rides on the refusal too: the approval was broadcast either way, and
   // a confirmation timeout is exactly when someone needs it to go looking.
-  if (!confirmed.ok) return { ok: false, code: confirmed.code, reason: confirmed.reason, batchId };
+  if (!confirmed.ok) return { ok: false, reason: confirmed.reason, batchId };
 
   // Confirmed by the bundler is not the same as visible to the node the payer
   // reads from, and the payer re-reads this allowance immediately afterwards,
@@ -639,7 +640,7 @@ async function awaitCall(
   batchId: string,
   opts: TopUpOptions,
   labels: { subject: string; onChainFailure: string }
-): Promise<{ ok: boolean; reason?: string; code?: RefusalCode }> {
+): Promise<{ ok: boolean; reason?: string }> {
   const now = opts.now ?? Date.now;
   const { sleep, pollMs } = pollClock(opts);
   const timeoutMs = opts.timeoutMs ?? 90_000;
@@ -648,7 +649,6 @@ async function awaitCall(
   for (;;) {
     let status: CallStatus;
     let timer: ReturnType<typeof setTimeout> | undefined;
-    const timedOut = new Error(`status check timed out after ${timeoutMs}ms`);
     try {
       // Race the status read against the remaining deadline: a hung bundler
       // socket would otherwise never let the loop reach the deadline check
@@ -659,13 +659,12 @@ async function awaitCall(
       // on screen (oclif does not force-exit on the success path).
       const remaining = Math.max(deadline - now(), 0);
       const expired = new Promise<never>((_, reject) => {
-        timer = setTimeout(() => reject(timedOut), remaining);
+        timer = setTimeout(() => reject(new Error(`status check timed out after ${timeoutMs}ms`)), remaining);
       });
       status = (await Promise.race([executor.request('wallet_getCallsStatus', batchId), expired])) as CallStatus;
     } catch (err) {
       return {
         ok: false,
-        code: err === timedOut ? 'timed_out' : 'chain_unavailable',
         reason: `${labels.subject} status check failed: ${errorMessage(err)}`,
       };
     } finally {
@@ -676,7 +675,7 @@ async function awaitCall(
     if (final === 'ok') return { ok: true };
     if (final === 'failed') return { ok: false, reason: labels.onChainFailure };
     if (now() >= deadline) {
-      return { ok: false, code: 'timed_out', reason: `${labels.subject} not confirmed after ${timeoutMs}ms` };
+      return { ok: false, reason: `${labels.subject} not confirmed after ${timeoutMs}ms` };
     }
     await sleep(pollMs);
   }

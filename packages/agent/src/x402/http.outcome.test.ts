@@ -2,6 +2,8 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { payAndFetch, FetchRefused, until, type SignedAuthorization } from './http.js';
 import type { X402PaymentPayload, X402PaymentRequirement } from './types.js';
 import type { Payer } from './payer.js';
+import { ensurePayerFunds } from './topup.js';
+import type { ChainClients } from '../ports.js';
 
 // What a host that keeps its own payment rows needs from payAndFetch: a kind and
 // a code to branch on, the signed authorization before it leaves, a resend that
@@ -69,6 +71,32 @@ describe('payAndFetch outcome', () => {
 
     fetchMock.mockResolvedValueOnce(challenge()).mockResolvedValueOnce(settled());
     expect(await payAndFetch(URL_UNDER_TEST, payer)).toMatchObject({ kind: 'paid' });
+  });
+
+  it('refuses a refill whose status poll timed out after it was sent as funding_failed, with the trace', async () => {
+    fetchMock.mockResolvedValueOnce(challenge());
+    const executor = {
+      request: async (method: string) =>
+        method === 'wallet_sendCalls' ? { id: '0xbatch1' } : new Promise(() => undefined),
+    };
+    const outcome = await payAndFetch(URL_UNDER_TEST, payer, {
+      ensureFunds: (requirement, address) =>
+        ensurePayerFunds(requirement, address, executor, {
+          clients: {} as ChainClients,
+          balanceReader: async () => 0n,
+          timeoutMs: 0,
+          pollMs: 0,
+          sleep: async () => undefined,
+          logger: { warn: () => undefined },
+        }),
+    });
+
+    expect(outcome).toMatchObject({
+      kind: 'refused',
+      refusal: { code: 'funding_failed', reason: 'top-up status check failed: status check timed out after 0ms' },
+      topUp: { batchId: '0xbatch1' },
+    });
+    expect(pay).not.toHaveBeenCalled();
   });
 
   it("keeps the funding hook's own code", async () => {
