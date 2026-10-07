@@ -163,7 +163,6 @@ export async function recordPaymentOutcome(
     await log.append(entry);
   } catch (err) {
     logger.warn(`[jaw] warning: failed to write x402 ledger (${errorMessage(err)}); spend audit/cap may undercount`);
-    return;
   }
   try {
     // Below the size threshold this is one `stat` and nothing else.

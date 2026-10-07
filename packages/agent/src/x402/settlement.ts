@@ -125,7 +125,9 @@ export async function reconcileSettlements(entries: X402LogEntry[], deps: Settle
     try {
       await deps.log.correct(answer);
     } catch (err) {
-      deps.logger.warn(`[jaw] warning: could not record a settlement (${errorMessage(err)})`);
+      deps.logger.warn(
+        `[jaw] warning: failed to record a settlement (${errorMessage(err)}); the payment keeps costing its ceiling`
+      );
     }
     answers.set(answer.corrects, answer);
   }

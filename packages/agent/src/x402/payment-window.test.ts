@@ -361,7 +361,7 @@ describe('recordPaymentOutcome', () => {
     expect(h.compactions).toEqual([]);
   });
 
-  it('resolves when the store rejects the row, and says so instead of compacting', async () => {
+  it('resolves when the store rejects the row, and says so', async () => {
     const warn = vi.fn();
     const rejecting = {
       log: {
@@ -378,7 +378,6 @@ describe('recordPaymentOutcome', () => {
     expect(warn).toHaveBeenCalledWith(
       '[jaw] warning: failed to write x402 ledger (connection reset); spend audit/cap may undercount'
     );
-    expect(h.compactions).toEqual([]);
   });
 
   it('does not resolve before the store has the row', async () => {

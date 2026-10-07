@@ -120,7 +120,9 @@ describe('reconcileSettlements', () => {
 
     expect(correct).toHaveBeenCalledTimes(1);
     expect(spendFigureOf(row)).toBe(400n);
-    expect(warn).toHaveBeenCalledWith('[jaw] warning: could not record a settlement (connection reset)');
+    expect(warn).toHaveBeenCalledWith(
+      '[jaw] warning: failed to record a settlement (connection reset); the payment keeps costing its ceiling'
+    );
   });
 
   it('ignores transfers in the same transaction that are not ours', async () => {

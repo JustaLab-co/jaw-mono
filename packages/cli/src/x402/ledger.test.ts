@@ -2,7 +2,8 @@ import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 import * as os from 'node:os';
-import { rowFieldsOf, rowStateOf, spendFigureOf } from '@jaw.id/agent';
+import { recordPaymentOutcome, rowStateOf, spendFigureOf } from '@jaw.id/agent';
+import { stderrLogger } from '../lib/stderr-logger.js';
 
 const TEST_ROOT = path.join(os.tmpdir(), 'jaw-ledger-test');
 
@@ -136,6 +137,12 @@ describe('row state through the JSONL port', () => {
     ['failed, unverified', entry({ ...signed, status: 'failed' }), undefined, 'signed'],
     ['paid, verified', entry(signed), answered('verified'), 'settled'],
     ['failed, nonce consumed', entry({ ...signed, status: 'failed' }), answered('verified'), 'settled'],
+    [
+      'failed, verified below its ceiling',
+      entry({ ...signed, status: 'failed', amount: '1' }),
+      answered('verified'),
+      'settled',
+    ],
     ['expired', entry({ ...signed, status: 'failed' }), answered('expired'), 'failed'],
     ['abandoned', entry(signed), answered('abandoned'), 'unknown'],
     ['paid, before settlement existed', entry(), undefined, 'settled'],
@@ -151,14 +158,40 @@ describe('row state through the JSONL port', () => {
     const [read] = await jsonlPaymentLog.read();
     expect(rowStateOf(read)).toBe(state);
 
-    const back = { ...read, ...rowFieldsOf(rowStateOf(read)) };
-    expect(rowStateOf(back)).toBe(state);
-    expect(spendFigureOf(back)).toBe(spendFigureOf(read));
+    // And back: the row as the port hands it out, written again, is the same row.
+    fs.rmSync(PATHS.x402Log);
+    await jsonlPaymentLog.append(read);
+    const [again] = await jsonlPaymentLog.read();
+    expect(again).toEqual(read);
+    expect(rowStateOf(again)).toBe(state);
+    expect(spendFigureOf(again)).toBe(spendFigureOf(read));
   });
 
-  it('reads a settlement value it does not know as unknown, which costs the ceiling', () => {
-    const row = entry({ ...signed, settlement: 'settled?' as never });
-    expect(rowStateOf(row)).toBe('unknown');
-    expect(spendFigureOf({ ...row, ...rowFieldsOf('unknown') })).toBe(spendFigureOf(row));
+  it('reads a settlement value it does not know as unknown', () => {
+    expect(rowStateOf(entry({ ...signed, settlement: 'settled?' as never }))).toBe('unknown');
+  });
+});
+
+describe('a ledger write that fails', () => {
+  it('prints the 0.4.0 warning to stderr and still resolves', async () => {
+    fs.mkdirSync(PATHS.x402Log, { recursive: true });
+    const stderr = vi.spyOn(process.stderr, 'write').mockImplementation(() => true);
+
+    await expect(
+      recordPaymentOutcome(
+        'https://api.example.com/x',
+        { status: 402, body: null, paid: false, payer: entry().payer, refusedReason: 'over cap' },
+        null,
+        [],
+        { log: jsonlPaymentLog, logger: stderrLogger }
+      )
+    ).resolves.toBeUndefined();
+
+    expect(stderr).toHaveBeenCalledWith(
+      expect.stringMatching(
+        /^\[jaw\] warning: failed to write x402 ledger \(EISDIR.*\); spend audit\/cap may undercount\n$/
+      )
+    );
+    stderr.mockRestore();
   });
 });

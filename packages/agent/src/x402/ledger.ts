@@ -94,7 +94,11 @@ export type PaymentRowState = 'pending' | 'signed' | 'settled' | 'failed' | 'unk
 
 export type StoredRowState = Exclude<PaymentRowState, 'pending'>;
 
-/** Read the way `spendFigureOf` reads the row, so a stored state costs what the row costs. */
+/**
+ * An index a store may keep beside `status` and `settlement`, never in place of
+ * them: two rows in one state can cost a cap different amounts, and
+ * `spendFigureOf` reads the fields.
+ */
 export function rowStateOf(row: Pick<X402LogEntry, 'status' | 'settlement'>): StoredRowState {
   if (row.status === 'refused' || row.settlement === 'expired') return 'failed';
   if (row.settlement === 'unverified') return 'signed';
@@ -102,20 +106,6 @@ export function rowStateOf(row: Pick<X402LogEntry, 'status' | 'settlement'>): St
   // Rows from before `settlement` existed.
   if (row.settlement === undefined && row.status === 'paid') return 'settled';
   return 'unknown';
-}
-
-/** A `status`/`settlement` pair that reads back as `state` and costs the same. */
-export function rowFieldsOf(state: StoredRowState): Pick<X402LogEntry, 'status' | 'settlement'> {
-  switch (state) {
-    case 'settled':
-      return { status: 'paid', settlement: 'verified' };
-    case 'signed':
-      return { status: 'paid', settlement: 'unverified' };
-    case 'failed':
-      return { status: 'failed', settlement: 'expired' };
-    case 'unknown':
-      return { status: 'failed', settlement: 'abandoned' };
-  }
 }
 
 /**
