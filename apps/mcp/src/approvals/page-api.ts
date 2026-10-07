@@ -47,12 +47,12 @@ const unavailable = (what: string) => (err: unknown) => {
 
 async function checkSignature(
   request: ApprovalRequest,
-  message: string,
+  payload: Parameters<VerifySignature>[0]['payload'],
   signature: unknown,
   verify: VerifySignature
 ): Promise<Checked> {
   if (!isHex(signature)) return { refused: 'invalid_request' };
-  const valid = await verify({ chainId: request.chainId, address: request.account, message, signature }).catch(
+  const valid = await verify({ chainId: request.chainId, address: request.account, payload, signature }).catch(
     unavailable('approval verification')
   );
   if (valid === undefined) return { refused: 'verification_unavailable' };
@@ -119,9 +119,9 @@ export async function decideFromPage(
 
   const payload = signedPayload(request, verdict);
   const checked =
-    payload.type === 'message'
-      ? await checkSignature(request, payload.message, signature, verify)
-      : await checkPermission(request, payload.grant, permission, readPermission);
+    payload.type === 'grant'
+      ? await checkPermission(request, payload.grant, permission, readPermission)
+      : await checkSignature(request, payload, signature, verify);
   if ('refused' in checked) return { kind: checked.refused };
 
   const evidence = { previewHash, payloadHash: payloadHash(payload), proof: checked.proof, decidedAt: now };

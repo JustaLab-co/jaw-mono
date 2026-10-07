@@ -921,5 +921,73 @@
       ],
       "challenge": "0x99f6953854a89f354926800573d70f6cc5842427106a6e14763f934f567cfd89"
     }
+  },
+  {
+    "id": "jaw-consent-domain",
+    "attack": "A phishing site asks for a JAW connection consent to complete someone else's authorization.",
+    "method": "eth_signTypedData_v4",
+    "typedData": {
+      "domain": {
+        "name": "JAW",
+        "version": "1",
+        "chainId": 8453
+      },
+      "primaryType": "Consent",
+      "types": {
+        "EIP712Domain": [
+          {
+            "name": "name",
+            "type": "string"
+          },
+          {
+            "name": "version",
+            "type": "string"
+          },
+          {
+            "name": "chainId",
+            "type": "uint256"
+          }
+        ],
+        "Consent": [
+          {
+            "name": "issuer",
+            "type": "string"
+          },
+          {
+            "name": "interaction",
+            "type": "string"
+          },
+          {
+            "name": "clientId",
+            "type": "string"
+          },
+          {
+            "name": "clientName",
+            "type": "string"
+          },
+          {
+            "name": "scopes",
+            "type": "string"
+          },
+          {
+            "name": "expires",
+            "type": "string"
+          }
+        ]
+      },
+      "message": {
+        "issuer": "https://mcp.jaw.id",
+        "interaction": "uid_1234567890",
+        "clientId": "jaw-cli",
+        "clientName": "JAW CLI",
+        "scopes": "wallet:read",
+        "expires": "2026-10-07T12:00:00.000Z"
+      }
+    },
+    "expect": {
+      "decision": "blocked",
+      "shows": ["JAW reserves this request for its own consent and approval pages"],
+      "prompts": false
+    }
   }
 ]

@@ -1,5 +1,5 @@
 {
-  "id": "4ace4eec-34a8-4ae8-9348-0fdc2baf4d52",
+  "id": "3654a2ca-1dc8-4b6a-ab14-6a6632cf20d7",
   "prevId": "1dbe56ff-f847-47dc-99d4-672e9844379d",
   "version": "7",
   "dialect": "postgresql",
@@ -104,12 +104,6 @@
           "type": "text",
           "primaryKey": false,
           "notNull": false
-        },
-        "permission_id": {
-          "name": "permission_id",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": false
         }
       },
       "indexes": {
@@ -152,11 +146,7 @@
       "checkConstraints": {
         "approval_evidence": {
           "name": "approval_evidence",
-          "value": "(\"approval_requests\".\"status\" = 'pending') = (\"approval_requests\".\"decided_at\" is null and \"approval_requests\".\"preview_hash\" is null and \"approval_requests\".\"payload_hash\" is null)"
-        },
-        "approval_proof": {
-          "name": "approval_proof",
-          "value": "(\"approval_requests\".\"status\" = 'pending' and \"approval_requests\".\"signature\" is null and \"approval_requests\".\"assertion_ref\" is null and \"approval_requests\".\"permission_id\" is null)\n        or (\"approval_requests\".\"status\" <> 'pending' and (\"approval_requests\".\"signature\" is null) = (\"approval_requests\".\"assertion_ref\" is null) and (\"approval_requests\".\"signature\" is null) <> (\"approval_requests\".\"permission_id\" is null))"
+          "value": "(\"approval_requests\".\"status\" = 'pending') = (\"approval_requests\".\"decided_at\" is null and \"approval_requests\".\"preview_hash\" is null and \"approval_requests\".\"payload_hash\" is null and \"approval_requests\".\"signature\" is null and \"approval_requests\".\"assertion_ref\" is null)"
         }
       },
       "isRLSEnabled": false
@@ -211,13 +201,7 @@
           "name": "session_address",
           "type": "text",
           "primaryKey": false,
-          "notNull": true
-        },
-        "sealed_key": {
-          "name": "sealed_key",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": true
+          "notNull": false
         },
         "interaction_uid": {
           "name": "interaction_uid",
@@ -287,133 +271,6 @@
       },
       "isRLSEnabled": false
     },
-    "public.grants": {
-      "name": "grants",
-      "schema": "",
-      "columns": {
-        "permission_id": {
-          "name": "permission_id",
-          "type": "text",
-          "primaryKey": true,
-          "notNull": true
-        },
-        "connection_id": {
-          "name": "connection_id",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "approval_id": {
-          "name": "approval_id",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "chain_id": {
-          "name": "chain_id",
-          "type": "integer",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "account": {
-          "name": "account",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "spender": {
-          "name": "spender",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "token": {
-          "name": "token",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "allowance": {
-          "name": "allowance",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "period": {
-          "name": "period",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "permission": {
-          "name": "permission",
-          "type": "jsonb",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "expires_at": {
-          "name": "expires_at",
-          "type": "timestamp with time zone",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "created_at": {
-          "name": "created_at",
-          "type": "timestamp with time zone",
-          "primaryKey": false,
-          "notNull": true,
-          "default": "now()"
-        }
-      },
-      "indexes": {
-        "grants_connection_id_created_at_index": {
-          "name": "grants_connection_id_created_at_index",
-          "columns": [
-            {
-              "expression": "connection_id",
-              "isExpression": false,
-              "asc": true,
-              "nulls": "last"
-            },
-            {
-              "expression": "created_at",
-              "isExpression": false,
-              "asc": true,
-              "nulls": "last"
-            }
-          ],
-          "isUnique": false,
-          "concurrently": false,
-          "method": "btree",
-          "with": {}
-        }
-      },
-      "foreignKeys": {
-        "grants_connection_id_connections_id_fk": {
-          "name": "grants_connection_id_connections_id_fk",
-          "tableFrom": "grants",
-          "tableTo": "connections",
-          "columnsFrom": ["connection_id"],
-          "columnsTo": ["id"],
-          "onDelete": "no action",
-          "onUpdate": "no action"
-        },
-        "grants_approval_id_approval_requests_id_fk": {
-          "name": "grants_approval_id_approval_requests_id_fk",
-          "tableFrom": "grants",
-          "tableTo": "approval_requests",
-          "columnsFrom": ["approval_id"],
-          "columnsTo": ["id"],
-          "onDelete": "no action",
-          "onUpdate": "no action"
-        }
-      },
-      "compositePrimaryKeys": {},
-      "uniqueConstraints": {},
-      "policies": {},
-      "checkConstraints": {},
-      "isRLSEnabled": false
-    },
     "public.oauth_payloads": {
       "name": "oauth_payloads",
       "schema": "",
@@ -457,6 +314,12 @@
         "consumed_at": {
           "name": "consumed_at",
           "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "key_wrap": {
+          "name": "key_wrap",
+          "type": "text",
           "primaryKey": false,
           "notNull": false
         }

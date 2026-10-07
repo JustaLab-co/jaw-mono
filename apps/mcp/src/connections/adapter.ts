@@ -1,14 +1,45 @@
 import { createHash } from 'node:crypto';
 import { and, eq, gt, isNull, or, sql } from 'drizzle-orm';
-import { errors, type Adapter, type AdapterPayload } from 'oidc-provider';
+import Provider, { errors, type Adapter, type AdapterPayload, type KoaContextWithOIDC } from 'oidc-provider';
+import type { Hex } from 'viem';
+import { generatePrivateKey, privateKeyToAddress } from 'viem/accounts';
 import { getDb } from '@/db/client';
 import { oauthPayloads } from '@/db/schema';
-import { revokeByGrant } from './rows';
+import { revokeByGrant, setSessionAddress } from './rows';
+import { unwrap, wrap, type KeyRing, type Wrapped } from './seal';
+
+// A client whose refresh response was lost retries with the token it still holds.
+export const RETRY_WINDOW_MS = 60_000;
 
 const notExpired = or(isNull(oauthPayloads.expiresAt), gt(oauthPayloads.expiresAt, sql`now()`));
 
+// The key a token request issues for, made by whichever token the provider
+// saves first: the access token in a code exchange, the refresh token in a refresh.
+const requestKeys = new WeakMap<object, Hex>();
+
+function requestContext(): KoaContextWithOIDC {
+  const ctx = Provider.ctx;
+  if (!ctx) throw new Error('no token request in progress');
+  return ctx;
+}
+
+export async function sessionKey(connectionId: string): Promise<Hex> {
+  const ctx = requestContext();
+  const known = requestKeys.get(ctx);
+  if (known) return known;
+  const key = generatePrivateKey();
+  if (!(await setSessionAddress(connectionId, privateKeyToAddress(key)))) {
+    throw new Error('connection already has a session key');
+  }
+  requestKeys.set(ctx, key);
+  return key;
+}
+
 export class PgAdapter implements Adapter {
-  constructor(private readonly model: string) {}
+  constructor(
+    private readonly model: string,
+    private readonly ring: KeyRing
+  ) {}
 
   private key(id: string) {
     return createHash('sha256').update(`${this.model}:${id}`).digest('hex');
@@ -24,6 +55,7 @@ export class PgAdapter implements Adapter {
       uid: payload.uid ?? null,
       expiresAt: expiresIn ? new Date(Date.now() + expiresIn * 1000) : null,
     };
+    if (this.model === 'RefreshToken') return this.rotate(id, row);
     await getDb()
       .insert(oauthPayloads)
       .values({ key: this.key(id), ...row })
@@ -37,8 +69,55 @@ export class PgAdapter implements Adapter {
       .where(and(eq(oauthPayloads.key, this.key(id)), notExpired));
     if (!row) return undefined;
     const payload = { ...(row.payload as AdapterPayload), jti: id };
-    if (row.consumedAt) payload.consumed = Math.floor(row.consumedAt.getTime() / 1000);
+    if (row.consumedAt && !(await this.retryable(row))) payload.consumed = Math.floor(row.consumedAt.getTime() / 1000);
     return payload;
+  }
+
+  // Used once, but within the window and with its successor still unused: the
+  // client never saw the successor, so this is a retry and not a replay.
+  private async retryable(row: typeof oauthPayloads.$inferSelect): Promise<boolean> {
+    if (!row.successorKey || Date.now() - row.consumedAt!.getTime() >= RETRY_WINDOW_MS) return false;
+    const [successor] = await getDb()
+      .select({ consumedAt: oauthPayloads.consumedAt })
+      .from(oauthPayloads)
+      .where(eq(oauthPayloads.key, row.successorKey));
+    return successor !== undefined && successor.consumedAt === null;
+  }
+
+  // One transaction consumes the presented token and stores its successor with
+  // the key wrapped under it, so a failure anywhere leaves the presented token usable.
+  // A retry consumes the successor it replaces instead, which makes that one a replay.
+  private async rotate(id: string, row: Omit<typeof oauthPayloads.$inferInsert, 'key'>) {
+    const ctx = requestContext();
+    const connectionId = (row.payload as AdapterPayload).accountId!;
+    const presented = ctx.oidc.entities.RotatedRefreshToken?.jti;
+    await getDb().transaction(async (tx) => {
+      let key = requestKeys.get(ctx);
+      if (presented) {
+        const [from] = await tx
+          .select()
+          .from(oauthPayloads)
+          .where(eq(oauthPayloads.key, this.key(presented)));
+        if (!from?.keyWrap) throw new errors.InvalidGrant('refresh token holds no key');
+        key = unwrap(this.ring, from.keyWrap as Wrapped, connectionId, presented);
+        const replaced = from.consumedAt ? from.successorKey : from.key;
+        const consumed = await tx
+          .update(oauthPayloads)
+          .set({ consumedAt: new Date() })
+          .where(and(eq(oauthPayloads.key, replaced ?? ''), isNull(oauthPayloads.consumedAt)))
+          .returning({ key: oauthPayloads.key });
+        if (consumed.length === 0) throw new errors.InvalidGrant('grant already used');
+        await tx
+          .update(oauthPayloads)
+          .set({ successorKey: this.key(id) })
+          .where(eq(oauthPayloads.key, from.key));
+      }
+      if (!key) throw new Error('no session key for this refresh token');
+      await tx
+        .insert(oauthPayloads)
+        .values({ key: this.key(id), ...row, keyWrap: wrap(this.ring, key, connectionId, id) });
+      requestKeys.set(ctx, key);
+    });
   }
 
   async findByUid(uid: string) {
@@ -55,8 +134,10 @@ export class PgAdapter implements Adapter {
     return undefined;
   }
 
-  // Conditional, so two requests racing with one refresh token or code cannot both win.
+  // Conditional, so two requests racing with one code cannot both win. A refresh
+  // token is consumed by the rotation that stores its successor.
   async consume(id: string) {
+    if (this.model === 'RefreshToken') return;
     const rows = await getDb()
       .update(oauthPayloads)
       .set({ consumedAt: new Date() })

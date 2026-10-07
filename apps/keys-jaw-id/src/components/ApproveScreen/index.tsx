@@ -4,7 +4,13 @@ import { Account } from '@jaw.id/core';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { useState } from 'react';
 import { isAddressEqual } from 'viem';
-import { isBudget, postDecision, type ApprovalStatus, type ApprovalView } from '../../lib/approval-decision';
+import {
+  isBudget,
+  postDecision,
+  type ApprovalStatus,
+  type ApprovalView,
+  type SignedPayload,
+} from '../../lib/approval-decision';
 import { fetchCliApiKey } from '../../lib/cli-api-key';
 import { BudgetApproval, BudgetTerms } from '../BudgetApproval';
 import { ClientHeader } from '../ClientHeader';
@@ -64,17 +70,20 @@ export function ApproveScreen({ id, mcpUrl }: { id: string; mcpUrl: string }) {
     }
   };
 
-  const sign = (verdict: 'approved' | 'rejected', message: string) =>
+  const sign = (verdict: 'approved' | 'rejected', payload: SignedPayload) =>
     run(async () => {
       const signer = await Account.get({ chainId: view.chainId, apiKey });
-      const signature = await signer.signMessage(message);
+      const signature =
+        payload.type === 'message'
+          ? await signer.signMessage(payload.message)
+          : await signer.signTypedData(payload.typedData);
       show(await postDecision(decisionUrl, { verdict, signature, previewHash: view.previewHash }));
     });
 
   const approve = () =>
     isBudget(view)
       ? run(async () => setGranter(await Account.get({ chainId: view.chainId, apiKey })))
-      : sign('approved', view.approve.message);
+      : sign('approved', view.approve);
 
   if (granter && isBudget(view)) {
     return (
@@ -142,7 +151,7 @@ export function ApproveScreen({ id, mcpUrl }: { id: string; mcpUrl: string }) {
           <button
             className="flex-1 rounded border p-2 disabled:opacity-50"
             disabled={busy}
-            onClick={() => sign('rejected', view.reject.message)}
+            onClick={() => sign('rejected', view.reject)}
           >
             Reject
           </button>

@@ -1,6 +1,10 @@
 import { NextRequest } from 'next/server';
 import { describe, expect, it } from 'vitest';
-import { bridge } from './bridge';
+import { setTestEnv } from './testkit';
+
+setTestEnv();
+process.env.JAW_MCP_PUBLIC_URL = 'https://mcp.jaw.id';
+const { bridge } = await import('./bridge');
 
 const echo = (req: import('node:http').IncomingMessage, res: import('node:http').ServerResponse) => {
   let body = '';

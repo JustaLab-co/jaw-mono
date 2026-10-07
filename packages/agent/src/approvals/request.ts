@@ -1,5 +1,6 @@
 import {
   hashMessage,
+  hashTypedData,
   isAddressEqual,
   keccak256,
   numberToHex,
@@ -7,18 +8,17 @@ import {
   toFunctionSelector,
   type Address,
   type Hex,
+  type TypedDataDefinition,
 } from 'viem';
 import type { GrantedPermission } from '../session/session-config.js';
 import { clientIdentity, type ClientIdentity } from './client-identity.js';
+import { rejectionTypedData, RESERVED_PREFIX } from './reserved.js';
 
 /** 16 random bytes, base64url. Unguessable: it is the read capability for the approval page. */
 export type ApprovalId = string & { readonly __brand: 'ApprovalId' };
 
 export const APPROVAL_TTL_MS = 10 * 60_000;
 export const MAX_MESSAGE_CHARS = 4096;
-
-/** Messages starting with this are reserved for JAW's own statements, such as connection consent. */
-export const RESERVED_PREFIX = 'JAW ';
 
 export const TRANSFER_SIGNATURE = 'transfer(address,uint256)';
 
@@ -52,7 +52,10 @@ export interface GrantRequest {
 }
 
 /** Exactly what the wallet signs or sends. Derived from the body, never stored apart from it. */
-export type SignedPayload = { type: 'message'; message: string } | { type: 'grant'; grant: GrantRequest };
+export type SignedPayload =
+  | { type: 'message'; message: string }
+  | { type: 'typed_data'; typedData: TypedDataDefinition }
+  | { type: 'grant'; grant: GrantRequest };
 
 /** How the account proved its decision: a signature, or a permission now approved on chain. */
 export type DecisionProof =
@@ -147,12 +150,16 @@ export function parseApprovalId(raw: string): ApprovalId | undefined {
   return ID.test(raw) ? (raw as ApprovalId) : undefined;
 }
 
-export type MessageRefusal = 'empty' | 'too_long' | 'reserved_prefix';
+export type MessageRefusal = 'empty' | 'too_long' | 'reserved_prefix' | 'unstorable';
+
+/** NUL and unpaired surrogates, which Postgres refuses in text and jsonb. */
+export const hasUnstorableText = (text: string) => /[\0\p{Cs}]/u.test(text);
 
 export function validateMessage(message: string): MessageRefusal | undefined {
   if (message.length === 0) return 'empty';
   if (message.length > MAX_MESSAGE_CHARS) return 'too_long';
   if (message.startsWith(RESERVED_PREFIX)) return 'reserved_prefix';
+  if (hasUnstorableText(message)) return 'unstorable';
   return undefined;
 }
 
@@ -187,11 +194,6 @@ export function decide(
   return { ok: true, request: { ...current, state: { status: verdict, evidence } } };
 }
 
-/** A reject is signed too, so only the account can move its own request. */
-export function rejectionMessage(id: ApprovalId): string {
-  return `${RESERVED_PREFIX}approval request ${id}: reject`;
-}
-
 function budgetOf(request: ApprovalRequest & { body: BudgetBody }): BudgetBody {
   if (!isAddressEqual(request.body.spender, request.sessionAddress)) {
     throw new Error('a budget may only name the connection session key as spender');
@@ -215,7 +217,7 @@ function grantOf(request: ApprovalRequest & { body: BudgetBody }): GrantRequest 
 }
 
 export function signedPayload(request: ApprovalRequest, verdict: Verdict): SignedPayload {
-  if (verdict === 'rejected') return { type: 'message', message: rejectionMessage(request.id) };
+  if (verdict === 'rejected') return { type: 'typed_data', typedData: rejectionTypedData(request.chainId, request.id) };
   const { body } = request;
   switch (body.kind) {
     case 'signature':
@@ -226,8 +228,14 @@ export function signedPayload(request: ApprovalRequest, verdict: Verdict): Signe
 }
 
 export function payloadHash(payload: SignedPayload): Hex {
-  if (payload.type === 'message') return hashMessage(payload.message);
-  return keccak256(stringToHex(JSON.stringify(payload.grant)));
+  switch (payload.type) {
+    case 'message':
+      return hashMessage(payload.message);
+    case 'typed_data':
+      return hashTypedData(payload.typedData);
+    case 'grant':
+      return keccak256(stringToHex(JSON.stringify(payload.grant)));
+  }
 }
 
 /** Whether the permission granted on chain is exactly the one requested. Start and salt are the wallet's. */

@@ -26,6 +26,7 @@ const REFUSALS = {
   empty: 'The message is empty.',
   too_long: 'The message is longer than 4096 characters.',
   reserved_prefix: 'Messages starting with "JAW " are reserved for JAW itself.',
+  unstorable: 'The message contains a NUL character or a broken surrogate pair.',
 };
 
 export function describe(request: ApprovalRequest): StatusOutput {
@@ -70,6 +71,7 @@ export const result = (out: StatusOutput) => ({
   structuredContent: out,
 });
 export const refusal = (text: string) => ({ content: [{ type: 'text' as const, text }], isError: true });
+const NO_SEND_SCOPE = 'This connection was not granted wallet:send. Reconnect and ask for it to request signatures.';
 
 export function registerApprovalTools(server: McpServer) {
   server.registerTool(
@@ -83,9 +85,10 @@ export function registerApprovalTools(server: McpServer) {
       outputSchema: statusOutput,
     },
     async ({ message }, ctx) => {
+      const t = tenant(ctx);
+      if (!t.scopes.includes('wallet:send')) return refusal(NO_SEND_SCOPE);
       const refused = validateMessage(message);
       if (refused) return refusal(REFUSALS[refused]);
-      const t = tenant(ctx);
       const request = openRequest(
         {
           id: randomBytes(16).toString('base64url') as ApprovalId,
@@ -115,7 +118,9 @@ export function registerApprovalTools(server: McpServer) {
       annotations: { readOnlyHint: true },
     },
     async ({ requestId }, ctx) => {
-      const request = await findForConnection(requestId, tenant(ctx).connectionId, new Date());
+      const t = tenant(ctx);
+      if (!t.scopes.includes('wallet:send')) return refusal(NO_SEND_SCOPE);
+      const request = await findForConnection(requestId, t.connectionId, new Date());
       return request ? result(describe(request)) : refusal('No such request for this connection.');
     }
   );

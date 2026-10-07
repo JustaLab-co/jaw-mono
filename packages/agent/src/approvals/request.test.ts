@@ -1,4 +1,5 @@
 import { hashMessage } from 'viem';
+import { rejectionTypedData } from './reserved.js';
 import { describe, expect, it } from 'vitest';
 import {
   APPROVAL_TTL_MS,
@@ -9,7 +10,6 @@ import {
   payloadHash,
   previewHash,
   previewOf,
-  rejectionMessage,
   signedPayload,
   toPageView,
   validateMessage,
@@ -92,11 +92,11 @@ describe('approval request state machine', () => {
 });
 
 describe('what gets signed', () => {
-  it('approve signs the stored message byte for byte; reject signs a statement naming the request', () => {
+  it('approve signs the stored message byte for byte; reject signs JAW typed data naming the request', () => {
     const message = 'line one\r\n\ttabbed \u202Ereversed';
     const r = request(message);
     expect(signedPayload(r, 'approved')).toEqual({ type: 'message', message });
-    expect(signedPayload(r, 'rejected')).toEqual({ type: 'message', message: `JAW approval request ${ID}: reject` });
+    expect(signedPayload(r, 'rejected')).toEqual({ type: 'typed_data', typedData: rejectionTypedData(r.chainId, ID) });
     expect(payloadHash(signedPayload(r, 'approved'))).toBe(hashMessage(message));
   });
 
@@ -236,7 +236,7 @@ describe('budget', () => {
         capabilities: { prefundSpender: true },
       },
     });
-    expect(signedPayload(budget(), 'rejected')).toEqual({ type: 'message', message: rejectionMessage(ID) });
+    expect(signedPayload(budget(), 'rejected')).toMatchObject({ type: 'typed_data' });
   });
 
   it('hashes the grant payload stably', () => {
@@ -264,5 +264,14 @@ describe('budget', () => {
         granted({ spends: [{ token: USDC, allowance: '1000000', unit: 'week', multiplier: 1 }] })
       )
     ).toBe(false);
+  });
+});
+
+describe('text Postgres cannot store', () => {
+  it('refuses a NUL and an unpaired surrogate, and keeps paired ones', () => {
+    expect(validateMessage('a\u0000b')).toBe('unstorable');
+    expect(validateMessage('a\uD800b')).toBe('unstorable');
+    expect(validateMessage('a\uDC00')).toBe('unstorable');
+    expect(validateMessage('gm \u{1F44B}')).toBeUndefined();
   });
 });

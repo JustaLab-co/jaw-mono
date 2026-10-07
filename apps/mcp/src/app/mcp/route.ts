@@ -1,7 +1,7 @@
 import { createMcpHandler } from 'mcp-handler';
 import { registerApprovalTools } from '@/approvals/tools';
 import { clientOf, connectionKey, withConnection } from '@/connections/auth';
-import { withEdge } from '@/lib/edge';
+import { guardTools, withEdge } from '@/lib/edge';
 import { countUnauthorized } from '@/lib/metrics';
 import { registerReadTools } from '@/tools/read';
 import { registerHistoryTool } from '@/tools/history';
@@ -13,6 +13,7 @@ export const dynamic = 'force-dynamic';
 
 const mcp = createMcpHandler(
   (server) => {
+    guardTools(server);
     registerReadTools(server);
     registerApprovalTools(server);
     registerBudgetTool(server);

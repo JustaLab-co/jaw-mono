@@ -1,10 +1,7 @@
 import { createHash, randomBytes } from 'node:crypto';
 import type { ServerResponse } from 'node:http';
-import { clientIdentity, type ClientIdentity } from '@jaw.id/agent';
+import { clientIdentity, consentTypedData, type ClientIdentity } from '@jaw.id/agent';
 import { isAddress, isHex } from 'viem';
-import { generatePrivateKey, privateKeyToAddress } from 'viem/accounts';
-import { insertUnderCap } from '@/approvals/store';
-import { MAX_PENDING } from '@/approvals/tools';
 import { readJson, tooLarge } from '@/lib/body';
 import { verifyOnChain, type VerifySignature } from '@/lib/chain';
 import { log } from '@/lib/edge';
@@ -12,8 +9,6 @@ import { bridge } from './bridge';
 import { config } from './config';
 import { provider, SCOPES, type Scope } from './provider';
 import { activate, findClaimable, insertPending } from './rows';
-import { seal } from './seal';
-import { budgetRequest, PER_DAY } from '@/grants/request';
 
 const UID = /^[A-Za-z0-9_-]{10,64}$/;
 const sha256 = (value: string) => createHash('sha256').update(value).digest('hex');
@@ -25,21 +20,8 @@ export interface ConsentDetails {
   scopes: { id: Scope; label: string }[];
   chainId: number;
   expiresAt: string;
-  message: string;
-}
-
-export function consentMessage(d: Omit<ConsentDetails, 'message'>, issuerHost: string): string {
-  return [
-    'JAW connection consent',
-    `${issuerHost} asks to connect an app to your JAW account.`,
-    '',
-    `App: ${d.client.name}`,
-    `Client ID: ${d.client.clientId}`,
-    `Scopes: ${d.scopes.map((s) => s.id).join(' ') || 'none'}`,
-    `Chain ID: ${d.chainId}`,
-    `Interaction: ${d.uid}`,
-    `Expires: ${d.expiresAt}`,
-  ].join('\n');
+  /** What the user signs. Its domain is refused by every generic signing path. */
+  typedData: ReturnType<typeof consentTypedData>;
 }
 
 async function loadDetails(uid: string): Promise<ConsentDetails | undefined> {
@@ -52,15 +34,24 @@ async function loadDetails(uid: string): Promise<ConsentDetails | undefined> {
   if (!client || !params.redirect_uri) return undefined;
   const requested = (params.scope ?? '').split(' ').filter((s): s is Scope => s in SCOPES);
   const { chain, issuer } = config();
-  const details: Omit<ConsentDetails, 'message'> = {
+  const identity = clientIdentity(client.clientId, client.clientName ?? client.clientId);
+  const expiresAt = new Date(interaction.exp * 1000).toISOString();
+  return {
     uid,
-    client: clientIdentity(client.clientId, client.clientName ?? client.clientId),
+    client: identity,
     redirectHost: new URL(params.redirect_uri).hostname,
     scopes: requested.map((id) => ({ id, label: SCOPES[id] })),
     chainId: chain.id,
-    expiresAt: new Date(interaction.exp * 1000).toISOString(),
+    expiresAt,
+    typedData: consentTypedData(chain.id, {
+      issuer,
+      interaction: uid,
+      clientId: identity.clientId,
+      clientName: identity.name,
+      scopes: requested.join(' '),
+      expires: expiresAt,
+    }),
   };
-  return { ...details, message: consentMessage(details, new URL(issuer).host) };
 }
 
 // The provider scopes the interaction cookie to this path, so the browser
@@ -77,22 +68,21 @@ export async function details(_req: Request, uid: string): Promise<Response> {
 
 // Completion needs both the one-time ticket (this browser signed) and the
 // interaction cookie (this browser started), which defeats a phished consent link.
+// The signature itself can only come from the authorize page, because every
+// other signing path refuses the JAW domain.
 export async function consent(req: Request, uid: string, verify: VerifySignature = verifyOnChain): Promise<Response> {
   const parsed = await readJson(req);
   if (parsed === undefined) return tooLarge();
-  const body = parsed as { address?: string; signature?: string; budget?: unknown };
+  const body = parsed as { address?: string; signature?: string };
   if (!body.address || !isAddress(body.address) || !body.signature || !isHex(body.signature)) {
     return Response.json({ error: 'invalid_request' }, { status: 400 });
-  }
-  if (body.budget !== undefined && (typeof body.budget !== 'string' || !PER_DAY.test(body.budget))) {
-    return Response.json({ error: 'invalid_budget' }, { status: 400 });
   }
   const found = await loadDetails(uid);
   if (!found) return Response.json({ error: 'not_found' }, { status: 404 });
   const valid = await verify({
     chainId: found.chainId,
     address: body.address,
-    message: found.message,
+    payload: { type: 'typed_data', typedData: found.typedData },
     signature: body.signature,
   }).catch((err: unknown) => {
     log('error', { msg: 'consent verification unavailable', error: err instanceof Error ? err.name : 'unknown' });
@@ -102,36 +92,22 @@ export async function consent(req: Request, uid: string, verify: VerifySignature
   if (!valid) return Response.json({ error: 'bad_signature' }, { status: 401 });
 
   const id = `conn_${randomBytes(16).toString('base64url')}`;
-  const privateKey = generatePrivateKey();
   const ticket = randomBytes(32).toString('base64url');
-  const connection = {
-    id,
-    account: body.address,
-    chainId: found.chainId,
-    clientId: found.client.clientId,
-    clientName: found.client.name,
-    scopes: found.scopes.map((s) => s.id),
-    sessionAddress: privateKeyToAddress(privateKey),
-    sealedKey: seal(config().ring, privateKey, id),
-    interactionUid: uid,
-    expiresAt: new Date(found.expiresAt),
-  };
-  const budget = body.budget === undefined ? undefined : budgetRequest(connection, body.budget, new Date());
-  if (typeof budget === 'string') return Response.json({ error: 'invalid_budget' }, { status: 400 });
-  if (!(await insertPending(connection, sha256(ticket)))) {
-    return Response.json({ error: 'already_consented' }, { status: 409 });
-  }
-  // The connection exists now: a budget that cannot be stored is skipped, never a failed consent.
-  const budgetStored =
-    budget !== undefined &&
-    (await insertUnderCap(id, budget, MAX_PENDING).catch((err: unknown) => {
-      log('error', { msg: 'consent budget not stored', error: err instanceof Error ? err.name : 'unknown' });
-      return false;
-    }));
-  return Response.json({
-    next: `${config().issuer}/interaction/${uid}/complete?ticket=${ticket}`,
-    ...(budgetStored && budget ? { budgetRequestId: budget.id } : {}),
-  });
+  const inserted = await insertPending(
+    {
+      id,
+      account: body.address,
+      chainId: found.chainId,
+      clientId: found.client.clientId,
+      clientName: found.client.name,
+      scopes: found.scopes.map((s) => s.id),
+      interactionUid: uid,
+      expiresAt: new Date(found.expiresAt),
+    },
+    sha256(ticket)
+  );
+  if (!inserted) return Response.json({ error: 'already_consented' }, { status: 409 });
+  return Response.json({ next: `${config().issuer}/interaction/${uid}/complete?ticket=${ticket}` });
 }
 
 function fail(res: ServerResponse, status: number, error: string) {

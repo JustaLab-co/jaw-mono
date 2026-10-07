@@ -2,6 +2,7 @@ import { createCipheriv, createDecipheriv, createHash, createPrivateKey, hkdfSyn
 import type { Hex } from 'viem';
 
 export type Sealed = string & { readonly __brand: 'Sealed' };
+export type Wrapped = string & { readonly __brand: 'Wrapped' };
 
 interface RingKey {
   kid: string;
@@ -45,26 +46,44 @@ export function parseKeyRing(env: string | undefined): KeyRing {
   return { keys, jwk };
 }
 
-// The connection id is the AAD, so a sealed key cannot move to another connection.
-export function seal(ring: KeyRing, privateKey: Hex, id: string): Sealed {
-  const { kid, seal: key } = ring.keys[0];
+function encrypt(version: string, kid: string, key: Buffer, privateKey: Hex, id: string): string {
   const iv = randomBytes(12);
   const cipher = createCipheriv('aes-256-gcm', key, iv).setAAD(Buffer.from(id));
   const body = Buffer.concat([cipher.update(privateKey.slice(2), 'hex'), cipher.final(), cipher.getAuthTag()]);
-  return `v1.${kid}.${iv.toString('base64url')}.${body.toString('base64url')}` as Sealed;
+  return `${version}.${kid}.${iv.toString('base64url')}.${body.toString('base64url')}`;
 }
 
-export function open(ring: KeyRing, sealed: Sealed, id: string): Hex {
-  const [version, kid, iv, body] = sealed.split('.');
+function decrypt(ring: KeyRing, blob: string, expected: string, id: string, keyOf: (k: RingKey) => Buffer): Hex {
+  const [version, kid, iv, body] = blob.split('.');
   const key = ring.keys.find((k) => k.kid === kid);
-  if (version !== 'v1' || !key || !iv || !body) throw new Error('sealed key cannot be opened');
+  if (version !== expected || !key || !iv || !body) throw new Error('sealed key cannot be opened');
   const data = Buffer.from(body, 'base64url');
-  const decipher = createDecipheriv('aes-256-gcm', key.seal, Buffer.from(iv, 'base64url')).setAAD(Buffer.from(id));
+  const decipher = createDecipheriv('aes-256-gcm', keyOf(key), Buffer.from(iv, 'base64url')).setAAD(Buffer.from(id));
   decipher.setAuthTag(data.subarray(-16));
   const plain = Buffer.concat([decipher.update(data.subarray(0, -16)), decipher.final()]);
   return `0x${plain.toString('hex')}`;
 }
 
-export function isStale(ring: KeyRing, sealed: Sealed): boolean {
-  return sealed.split('.')[1] !== ring.keys[0].kid;
+// The connection id is the AAD, so a sealed key cannot move to another connection.
+export function seal(ring: KeyRing, privateKey: Hex, id: string): Sealed {
+  const { kid, seal: key } = ring.keys[0];
+  return encrypt('v1', kid, key, privateKey, id) as Sealed;
+}
+
+export function open(ring: KeyRing, sealed: Sealed, id: string): Hex {
+  return decrypt(ring, sealed, 'v1', id, (k) => k.seal);
+}
+
+// Neither the ring nor the refresh token opens a wrapped key alone, and the
+// database stores neither the token nor anything that opens without it.
+const wrapKey = (k: RingKey, refreshToken: string) =>
+  Buffer.from(hkdfSync('sha256', refreshToken, k.seal, 'jaw-mcp/wrap', 32));
+
+export function wrap(ring: KeyRing, privateKey: Hex, id: string, refreshToken: string): Wrapped {
+  const newest = ring.keys[0];
+  return encrypt('w1', newest.kid, wrapKey(newest, refreshToken), privateKey, id) as Wrapped;
+}
+
+export function unwrap(ring: KeyRing, wrapped: Wrapped, id: string, refreshToken: string): Hex {
+  return decrypt(ring, wrapped, 'w1', id, (k) => wrapKey(k, refreshToken));
 }

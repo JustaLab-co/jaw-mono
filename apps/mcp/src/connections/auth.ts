@@ -28,6 +28,8 @@ interface Claims {
   scope?: string;
   aud: string | string[];
   iss: string;
+  /** The session key, sealed: the only copy the server can open without the refresh token. */
+  sk: Sealed;
   exp: number;
 }
 
@@ -66,7 +68,7 @@ export async function verifyBearer(bearer: string | undefined): Promise<AuthInfo
   const claims = await decrypt(bearer);
   if (!claims) return undefined;
   const row = await findActive(claims.sub);
-  if (!row || row.clientId !== claims.client_id) return undefined;
+  if (!row?.sessionAddress || row.clientId !== claims.client_id) return undefined;
   const tenant: Tenant = {
     connectionId: row.id,
     account: row.account as Address,
@@ -75,7 +77,7 @@ export async function verifyBearer(bearer: string | undefined): Promise<AuthInfo
     clientName: row.clientName,
     scopes: row.scopes as Scope[],
     sessionAddress: row.sessionAddress as Address,
-    sessionKey: () => open(config().ring, row.sealedKey as Sealed, row.id),
+    sessionKey: () => open(config().ring, claims.sk, row.id),
   };
   return {
     token: claims.jti,

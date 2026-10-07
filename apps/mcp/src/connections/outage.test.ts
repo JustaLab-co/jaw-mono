@@ -19,6 +19,14 @@ describe('OAuth routes while the database is unreachable', () => {
     expect(r.status).toBe(503);
   });
 
+  it('a refresh that fails at the database leaves the token usable', async () => {
+    const c = await connect();
+    vi.spyOn(PgAdapter.prototype, 'upsert').mockRejectedValueOnce(unreachable());
+    const body = { grant_type: 'refresh_token', refresh_token: c.refresh_token, client_id: 'jaw-cli' };
+    expect((await token(body)).status).toBe(503);
+    expect((await token(body)).status).toBe(200);
+  });
+
   it('the authorization endpoint answers 503', async () => {
     vi.spyOn(PgAdapter.prototype, 'upsert').mockRejectedValue(unreachable());
     const { oauth } = await import('./provider');

@@ -38,4 +38,5 @@ export * from './x402/topup.js';
 export * from './x402/spend-window.js';
 export * from './x402/payment-window.js';
 export * from './approvals/request.js';
+export * from './approvals/reserved.js';
 export * from './approvals/client-identity.js';

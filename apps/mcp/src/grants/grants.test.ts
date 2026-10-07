@@ -5,21 +5,7 @@ import type { Hex } from 'viem';
 import { beforeAll, describe, expect, it } from 'vitest';
 import { decideFromPage, readForPage, type ReadPermission } from '@/approvals/page-api';
 import { verifyBearer } from '@/connections/auth';
-import {
-  Browser,
-  callTool,
-  connect,
-  follow,
-  getDetails,
-  owner,
-  postConsent,
-  REDIRECT,
-  RESOURCE,
-  setTestEnv,
-  startAuthorization,
-  token,
-  verifyLocally,
-} from '@/connections/testkit';
+import { callTool, connect, setTestEnv, verifyLocally } from '@/connections/testkit';
 import { getDb } from '@/db/client';
 import { grants } from '@/db/schema';
 import { useTestDb } from '@/db/test-db';
@@ -169,63 +155,5 @@ describe('budget grants', () => {
     );
     const tenant = (await verifyBearer(c.access_token))?.extra?.tenant as { connectionId: string };
     expect(await currentGrant(tenant.connectionId)).toMatchObject({ permissionId: raised, allowance: '5000000' });
-  });
-});
-
-describe('budget at consent', () => {
-  async function consentWith(extra: object) {
-    const signer = owner();
-    const browser = new Browser();
-    const start = await startAuthorization(browser);
-    const d = await getDetails(start.uid!);
-    const res = await postConsent(start.uid!, signer.address, await signer.signMessage({ message: d.message }), extra);
-    return { signer, browser, start, res, body: await res.json() };
-  }
-
-  async function exchange(browser: Browser, next: string, verifier: string) {
-    const redirected = await follow(browser, next, REDIRECT);
-    const issued = await token({
-      grant_type: 'authorization_code',
-      code: redirected.searchParams.get('code')!,
-      redirect_uri: REDIRECT,
-      client_id: 'jaw-cli',
-      code_verifier: verifier,
-      resource: RESOURCE,
-    });
-    return issued.body.access_token;
-  }
-
-  it('has a grant right after the token exchange when the budget was approved before the hand-back', async () => {
-    const { signer, browser, start, body } = await consentWith({ budget: '1' });
-    expect(body.budgetRequestId).toEqual(expect.any(String));
-    const { view, grant } = await budgetView(body.budgetRequestId);
-    expect(grant.address).toBe(signer.address);
-    const pid = permissionId();
-    const post = { verdict: 'approved', previewHash: view.previewHash, permission: granted(grant, {}, pid) };
-    expect((await decideFromPage(body.budgetRequestId, post, verifyLocally, new Date(), approvedOnChain)).kind).toBe(
-      'ok'
-    );
-
-    const access = await exchange(browser, body.next, start.verifier);
-    const tenant = (await verifyBearer(access))?.extra?.tenant as { connectionId: string; sessionAddress: Hex };
-    expect(grant.spender).toBe(tenant.sessionAddress);
-    expect(await currentGrant(tenant.connectionId)).toMatchObject({ permissionId: pid });
-  });
-
-  it('creates no budget request when the budget is skipped, and status reads no_grant', async () => {
-    const { browser, start, body } = await consentWith({});
-    expect(body.budgetRequestId).toBeUndefined();
-    const access = await exchange(browser, body.next, start.verifier);
-    const status = await callTool(access, 'jaw_status', {});
-    expect(status.structuredContent).toMatchObject({
-      readiness: { status: 'not_ready', reason: 'no_grant' },
-      budget: null,
-    });
-  });
-
-  it.each(['0', 'lots', '-1', 1])('refuses consent with a budget of %j and creates no connection', async (budget) => {
-    const { res, body } = await consentWith({ budget });
-    expect(res.status).toBe(400);
-    expect(body.error).toBe('invalid_budget');
   });
 });

@@ -1,3 +1,4 @@
+import type { rejectionTypedData } from '@jaw.id/agent';
 import type { WalletGrantPermissionsResponse } from '@jaw.id/core';
 import type { Address, Hex } from 'viem';
 import type { ClientIdentity } from '../components/ClientHeader';
@@ -23,7 +24,7 @@ interface ViewBase {
   chainId: number;
   expiresAt: string;
   previewHash: Hex;
-  reject: { type: 'message'; message: string };
+  reject: { type: 'typed_data'; typedData: ReturnType<typeof rejectionTypedData> };
 }
 
 export interface SignatureView extends ViewBase {
@@ -47,6 +48,9 @@ export interface BudgetView extends ViewBase {
 }
 
 export type ApprovalView = SignatureView | BudgetView;
+
+/** What the page signs: the approved message, or the reserved rejection typed data. */
+export type SignedPayload = SignatureView['approve'] | ViewBase['reject'];
 
 export const isBudget = (view: ApprovalView): view is BudgetView => view.preview.kind === 'budget';
 

@@ -7,8 +7,9 @@ import {
   type ApprovalState,
   type DecisionProof,
 } from '@jaw.id/agent';
-import { and, count, eq, exists, gt, inArray, sql } from 'drizzle-orm';
-import { isAddress, type Address, type Hex } from 'viem';
+import { and, count, eq, exists, gt, sql } from 'drizzle-orm';
+import { isAddress, zeroAddress, type Address, type Hex } from 'viem';
+import { isLive } from '@/connections/rows';
 import { getDb } from '@/db/client';
 import { approvalRequests, connections, grants } from '@/db/schema';
 
@@ -52,14 +53,15 @@ function stateOf(row: Row): ApprovalState {
   };
 }
 
-function toRequest({ row, sessionAddress }: { row: Row; sessionAddress: string }, now: Date): ApprovalRequest {
+function toRequest({ row, sessionAddress }: { row: Row; sessionAddress: string | null }, now: Date): ApprovalRequest {
   return atTime(
     {
       id: row.id as ApprovalId,
       account: row.account as Address,
       chainId: row.chainId,
       requester: { name: row.requester, clientId: row.requesterClientId },
-      sessionAddress: sessionAddress as Address,
+      // A request comes from a token, which exists only once the session key does.
+      sessionAddress: (sessionAddress ?? zeroAddress) as Address,
       body: parseBody(row.body),
       createdAt: row.createdAt,
       expiresAt: row.expiresAt,
@@ -124,9 +126,6 @@ export async function findById(id: string, now: Date) {
   return found && toRequest(found, now);
 }
 
-const consentedOrActive = () =>
-  and(inArray(connections.status, ['pending', 'active']), gt(connections.expiresAt, sql`now()`));
-
 function proofColumns(proof: DecisionProof) {
   return proof.type === 'signature'
     ? { signature: proof.signature, assertionRef: proof.assertionRef }
@@ -153,7 +152,7 @@ export async function recordDecision(request: ApprovalRequest, grant?: NewGrant)
             tx
               .select({ id: connections.id })
               .from(connections)
-              .where(and(eq(connections.id, approvalRequests.connectionId), consentedOrActive()))
+              .where(and(eq(connections.id, approvalRequests.connectionId), isLive()))
           )
         )
       )
@@ -180,6 +179,6 @@ export async function connectionLive(id: ApprovalId): Promise<boolean> {
     .select({ id: connections.id })
     .from(approvalRequests)
     .innerJoin(connections, eq(connections.id, approvalRequests.connectionId))
-    .where(and(eq(approvalRequests.id, id), consentedOrActive()));
+    .where(and(eq(approvalRequests.id, id), isLive()));
   return row !== undefined;
 }

@@ -1,6 +1,7 @@
 import { IncomingMessage, ServerResponse } from 'node:http';
 import { Socket } from 'node:net';
 import { readBody, tooLarge } from '@/lib/body';
+import { config } from './config';
 
 type NodeHandler = (req: IncomingMessage, res: ServerResponse) => unknown;
 
@@ -18,8 +19,12 @@ export async function bridge(req: Request, run: NodeHandler): Promise<Response> 
   nodeReq.method = req.method;
   nodeReq.url = url.pathname + url.search;
   nodeReq.headers = Object.fromEntries(req.headers);
-  nodeReq.headers.host ??= url.host;
-  nodeReq.headers['x-forwarded-proto'] ??= url.protocol.slice(0, -1);
+  // The provider builds discovery and redirect URLs from these, so they come
+  // from the configured public URL and never from what the caller sent.
+  const issuer = new URL(config().issuer);
+  nodeReq.headers.host = issuer.host;
+  nodeReq.headers['x-forwarded-host'] = issuer.host;
+  nodeReq.headers['x-forwarded-proto'] = issuer.protocol.slice(0, -1);
   if (body.length) {
     nodeReq.headers['content-length'] = String(body.length);
     nodeReq.push(body);

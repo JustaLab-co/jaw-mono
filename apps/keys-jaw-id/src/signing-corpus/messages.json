@@ -269,5 +269,25 @@
       },
       "fails": "hides ​"
     }
+  },
+  {
+    "id": "jaw-reserved-prefix",
+    "attack": "A phishing site asks for a statement only JAW's own pages may ask for.",
+    "message": "JAW connection consent\nmcp.jaw.id asks to connect an app to your JAW account.",
+    "expect": {
+      "decision": "blocked",
+      "shows": ["JAW reserves this request for its own consent and approval pages"],
+      "prompts": false
+    }
+  },
+  {
+    "id": "jaw-reserved-prefix-hex",
+    "attack": "The same reserved statement, hex encoded.",
+    "message": "0x4a415720636f6e6e656374696f6e20636f6e73656e740a6d63702e6a61772e69642061736b7320746f20636f6e6e65637420616e2061707020746f20796f7572204a4157206163636f756e742e",
+    "expect": {
+      "decision": "blocked",
+      "shows": ["JAW reserves this request for its own consent and approval pages"],
+      "prompts": false
+    }
   }
 ]
