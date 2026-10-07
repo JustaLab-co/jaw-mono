@@ -2,6 +2,7 @@ import type { PGlite } from '@electric-sql/pglite';
 import { asc, eq } from 'drizzle-orm';
 import { beforeAll, describe, expect, it, vi } from 'vitest';
 import * as store from '@/approvals/store';
+import * as payments from '@/payments/pay';
 import { connect, mcp, setTestEnv } from '@/connections/testkit';
 import { getDb } from '@/db/client';
 import { auditEvents } from '@/db/schema';
@@ -36,6 +37,28 @@ describe('audit events', () => {
       ['jaw_request_signature', 'ok', ok.headers.get('x-request-id')],
       ['jaw_request_status', 'error', refused.headers.get('x-request-id')],
     ]);
+  });
+
+  it('records a refused payment by its refusal code, not as ok', async () => {
+    const c = await connect();
+    const structuredContent = {
+      paymentId: 'pay_1',
+      idempotencyKey: 'k',
+      state: 'failed',
+      kind: 'refused',
+      httpStatus: 402,
+      refusal: { code: 'budget_exhausted', next: 'jaw_request_budget' },
+      moneyMoved: false,
+      summary: 'Not paid: budget_exhausted. Nothing was sent.',
+    } as const;
+    vi.spyOn(payments, 'pay').mockResolvedValueOnce({
+      content: [{ type: 'text', text: structuredContent.summary }],
+      structuredContent,
+    });
+    await call(c.access_token, 'jaw_pay_and_fetch', { url: 'https://seller.example.test/x' });
+
+    const events = await eventsOf(await connectionOf(c.access_token));
+    expect(events.map((e) => [e.tool, e.outcome])).toEqual([['jaw_pay_and_fetch', 'budget_exhausted']]);
   });
 
   it('records a tool that threw as an error, once', async () => {

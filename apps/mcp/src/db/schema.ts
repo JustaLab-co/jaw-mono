@@ -250,7 +250,7 @@ export const auditEvents = pgTable(
       .notNull()
       .references(() => connections.id),
     tool: text('tool').notNull(),
-    outcome: text('outcome', { enum: ['ok', 'error'] }).notNull(),
+    outcome: text('outcome').notNull(),
     requestId: text('request_id'),
     createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
   },
