@@ -124,9 +124,8 @@ export async function findById(id: string, now: Date) {
   return found && toRequest(found, now);
 }
 
-// A budget offered at consent is decided before the connection activates, so a
-// consented, unexpired pending connection can still have its requests decided.
-const decidable = () => and(inArray(connections.status, ['pending', 'active']), gt(connections.expiresAt, sql`now()`));
+const consentedOrActive = () =>
+  and(inArray(connections.status, ['pending', 'active']), gt(connections.expiresAt, sql`now()`));
 
 function proofColumns(proof: DecisionProof) {
   return proof.type === 'signature'
@@ -137,7 +136,6 @@ function proofColumns(proof: DecisionProof) {
 export type NewGrant = Omit<typeof grants.$inferInsert, 'connectionId' | 'approvalId' | 'createdAt'>;
 
 // Repeats decide's precondition in SQL, so two racing decisions cannot both land.
-// An approved budget writes its grant in the same transaction.
 export async function recordDecision(request: ApprovalRequest, grant?: NewGrant): Promise<boolean> {
   const { state } = request;
   if (state.status !== 'approved' && state.status !== 'rejected') throw new Error('only a decision is recorded');
@@ -155,7 +153,7 @@ export async function recordDecision(request: ApprovalRequest, grant?: NewGrant)
             tx
               .select({ id: connections.id })
               .from(connections)
-              .where(and(eq(connections.id, approvalRequests.connectionId), decidable()))
+              .where(and(eq(connections.id, approvalRequests.connectionId), consentedOrActive()))
           )
         )
       )
@@ -182,6 +180,6 @@ export async function connectionLive(id: ApprovalId): Promise<boolean> {
     .select({ id: connections.id })
     .from(approvalRequests)
     .innerJoin(connections, eq(connections.id, approvalRequests.connectionId))
-    .where(and(eq(approvalRequests.id, id), decidable()));
+    .where(and(eq(approvalRequests.id, id), consentedOrActive()));
   return row !== undefined;
 }

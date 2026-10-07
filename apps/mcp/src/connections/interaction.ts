@@ -13,7 +13,7 @@ import { config } from './config';
 import { provider, SCOPES, type Scope } from './provider';
 import { activate, findClaimable, insertPending } from './rows';
 import { seal } from './seal';
-import { budgetRequest, PER_DAY } from '@/tools/request-budget';
+import { budgetRequest, PER_DAY } from '@/grants/request';
 
 const UID = /^[A-Za-z0-9_-]{10,64}$/;
 const sha256 = (value: string) => createHash('sha256').update(value).digest('hex');
@@ -121,11 +121,16 @@ export async function consent(req: Request, uid: string, verify: VerifySignature
   if (!(await insertPending(connection, sha256(ticket)))) {
     return Response.json({ error: 'already_consented' }, { status: 409 });
   }
-  // The page approves the budget before it hands back, so the grant exists by the token exchange.
-  if (budget) await insertUnderCap(id, budget, MAX_PENDING);
+  // The connection exists now: a budget that cannot be stored is skipped, never a failed consent.
+  const budgetStored =
+    budget !== undefined &&
+    (await insertUnderCap(id, budget, MAX_PENDING).catch((err: unknown) => {
+      log('error', { msg: 'consent budget not stored', error: err instanceof Error ? err.name : 'unknown' });
+      return false;
+    }));
   return Response.json({
     next: `${config().issuer}/interaction/${uid}/complete?ticket=${ticket}`,
-    ...(budget ? { budgetRequestId: budget.id } : {}),
+    ...(budgetStored && budget ? { budgetRequestId: budget.id } : {}),
   });
 }
 

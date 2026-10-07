@@ -60,8 +60,6 @@ async function checkSignature(
   return { proof: { type: 'signature', signature, assertionRef: keccak256(signature) } };
 }
 
-// The wallet answers with the struct it granted. It is trusted only once it is
-// exactly the grant the page rendered and the permission manager approved its hash.
 async function checkPermission(
   request: ApprovalRequest,
   grant: GrantRequest,
@@ -100,8 +98,6 @@ export async function readForPage(id: string, now = new Date()): Promise<PageOut
   return request ? { kind: 'ok', view: toPageView(request) } : { kind: 'not_found' };
 }
 
-// The page never posts the payload: the proof is checked against the one
-// derived from the stored row, so a page that signed or granted anything else is refused.
 export async function decideFromPage(
   id: string,
   post: unknown,

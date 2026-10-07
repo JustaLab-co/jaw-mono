@@ -28,7 +28,7 @@ const PAY_TO: Address = '0x2222222222222222222222222222222222222222';
 const TX = (n: number) => `0x${n.toString(16).padStart(64, '0')}` as Hex;
 const AUTHORIZATION_USED = parseAbi(['event AuthorizationUsed(address indexed authorizer, bytes32 indexed nonce)']);
 
-const PRICES: Record<string, string> = { '/exact': '5000', '/lost': '5000', '/slow': '5000' };
+const PRICES: Record<string, string> = { '/exact': '5000', '/lost': '5000', '/slow': '5000', '/refuse': '5000' };
 const seen: { path: string; nonce: Hex; signature: Hex; advisoryLocks: number }[] = [];
 const receipts = new Map<Hex, { from: Address; nonce: Hex }>();
 let dropNextLost = true;
@@ -64,7 +64,10 @@ const seller = createServer(async (req, res) => {
     .from(sql`pg_locks`)
     .where(sql`locktype = 'advisory'`);
   seen.push({ path, nonce, signature: proof.payload.signature, advisoryLocks: n });
-  if (path === '/lost' && dropNextLost) {
+  if (path === '/refuse' && seen.filter((s) => s.path === '/refuse').length > 1) {
+    return void res.writeHead(402, { 'payment-required': Buffer.from('{}').toString('base64') }).end('{}');
+  }
+  if ((path === '/lost' || path === '/refuse') && dropNextLost) {
     dropNextLost = false;
     return void req.socket.destroy();
   }
@@ -83,7 +86,6 @@ setTestEnv();
 process.env.JAW_MCP_INSECURE_FETCH_HOSTS = SELLER;
 process.env.JAW_MCP_RPC_URL = 'http://127.0.0.1:9';
 
-/** Balances, a node that answers USDC reads, and receipts for what the seller settled. */
 const balances = new Map<string, bigint>();
 const balanceOf = (a: string) => balances.get(a.toLowerCase()) ?? 0n;
 const node = {
@@ -115,7 +117,6 @@ const node = {
 };
 const clients: ChainClients = { publicClient: () => node as unknown as PublicClient };
 
-/** A refill moves USDC from the account to the payer, as the permission would. */
 const refills: bigint[] = [];
 const executor = (funder: Address): TopUpExecutor => ({
   request: async (method, params) => {
@@ -222,7 +223,7 @@ describe('jaw_pay_and_fetch', () => {
     const lost = await pay(t, { url: url('/lost'), idempotencyKey: 'crash' }, deps());
     expect(lost.structuredContent).toMatchObject({ kind: 'failed', state: 'signed', refusal: { code: 'no_response' } });
     const row = await rowOf(lost.structuredContent!.paymentId);
-    expect(row).toMatchObject({ state: 'signed', result: null });
+    expect(row).toMatchObject({ state: 'signed', kind: 'failed', code: 'no_response', fenced: null });
 
     const retried = await pay(t, { url: url('/lost'), idempotencyKey: 'crash' }, deps());
     expect(retried.structuredContent).toMatchObject({ kind: 'paid', state: 'settled', paymentId: row.id });
@@ -230,6 +231,29 @@ describe('jaw_pay_and_fetch', () => {
     expect(seen[1].nonce).toBe(seen[0].nonce);
     expect(seen[1].signature).toBe(seen[0].signature);
     expect(await rowOf(row.id)).toMatchObject({ state: 'settled', nonce: seen[0].nonce.toLowerCase() });
+  });
+
+  it('leaves the row signed when a resend is refused, since the first send may still settle', async () => {
+    const { t } = await connected('1');
+    balances.set(t.sessionAddress.toLowerCase(), 1_000_000n);
+    dropNextLost = true;
+    const lost = await pay(t, { url: url('/refuse'), idempotencyKey: 'refused-resend' }, deps());
+    const again = await pay(t, { url: url('/refuse'), idempotencyKey: 'refused-resend' }, deps());
+    expect(again.structuredContent).toMatchObject({ refusal: { code: 'settlement_rejected' } });
+    expect(await rowOf(lost.structuredContent!.paymentId)).toMatchObject({ state: 'signed', code: 'no_response' });
+  });
+
+  it('never returns a refill error to the agent, which can quote the paymaster key', async () => {
+    const { t } = await connected('1');
+    const leaky: TopUpExecutor = {
+      request: async () => {
+        throw new Error('HTTP request failed.\n\nURL: https://paymaster.example/rpc?api-key=SECRET-KEY');
+      },
+    };
+    const result = await pay(t, { url: url('/exact'), idempotencyKey: 'leak' }, deps({ executor: () => leaky }));
+    expect(result.structuredContent).toMatchObject({ state: 'failed', refusal: { code: 'funding_failed' } });
+    expect(JSON.stringify(result)).not.toContain('SECRET-KEY');
+    expect(JSON.stringify(await rowOf(result.structuredContent!.paymentId))).not.toContain('SECRET-KEY');
   });
 
   it.each([
@@ -258,7 +282,6 @@ describe('jaw_pay_and_fetch', () => {
 
   it('gives five concurrent payments their own rows and one refill, with no lock held across a fetch', async () => {
     const { t } = await connected('1');
-    // The float covers exactly one of them: the others must see it held, not spend it again.
     balances.set(t.sessionAddress.toLowerCase(), 5_000n);
     const results = await Promise.all(
       [1, 2, 3, 4, 5].map((n) => pay(t, { url: url('/slow'), idempotencyKey: `burst-${n}` }, deps()))

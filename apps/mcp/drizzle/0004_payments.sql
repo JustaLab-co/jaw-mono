@@ -27,15 +27,17 @@ CREATE TABLE "payments" (
 	"top_up_batch_id" text,
 	"approval_batch_id" text,
 	"http_status" integer,
-	"result" jsonb,
+	"fenced" jsonb,
 	"created_at" timestamp with time zone DEFAULT now() NOT NULL,
 	"signed_at" timestamp with time zone,
 	"finished_at" timestamp with time zone,
-	CONSTRAINT "payment_shape" CHECK (("payments"."state" = 'pending' and "payments"."nonce" is null and "payments"."authorization" is null and "payments"."result" is null)
+	"reconciling_until" timestamp with time zone,
+	"alerted_at" timestamp with time zone,
+	CONSTRAINT "payment_shape" CHECK (("payments"."state" = 'pending' and "payments"."nonce" is null and "payments"."authorization" is null and "payments"."fenced" is null)
         or ("payments"."state" in ('signed', 'unknown') and "payments"."nonce" is not null and "payments"."authorization" is not null
             and "payments"."authorized" is not null and "payments"."deadline" is not null and "payments"."signed_at" is not null)
         or ("payments"."state" = 'settled' and "payments"."kind" = 'free' and "payments"."nonce" is null)
-        or ("payments"."state" = 'settled' and "payments"."nonce" is not null and "payments"."tx_hash" is not null and "payments"."block_time" is not null)
+        or ("payments"."state" = 'settled' and "payments"."kind" = 'paid' and "payments"."nonce" is not null and "payments"."amount" is not null)
         or ("payments"."state" = 'failed' and "payments"."finished_at" is not null))
 );
 --> statement-breakpoint
@@ -45,6 +47,8 @@ CREATE UNIQUE INDEX "payments_payer_nonce_index" ON "payments" USING btree ("pay
 CREATE INDEX "payments_connection_id_created_at_id_index" ON "payments" USING btree ("connection_id","created_at","id");--> statement-breakpoint
 CREATE INDEX "payments_permission_id_created_at_index" ON "payments" USING btree ("permission_id","created_at");--> statement-breakpoint
 CREATE INDEX "payments_signed_at_index" ON "payments" USING btree ("signed_at") WHERE "payments"."state" in ('signed', 'unknown');--> statement-breakpoint
+CREATE INDEX "rate_limits_window_start_index" ON "rate_limits" USING btree ("window_start");
+--> statement-breakpoint
 CREATE FUNCTION "payments_guard"() RETURNS trigger LANGUAGE plpgsql AS $$
 BEGIN
   IF TG_OP = 'DELETE' THEN
@@ -64,17 +68,15 @@ BEGIN
      IS DISTINCT FROM (OLD.connection_id, OLD.idempotency_key, OLD.request_hash, OLD.payer, OLD.url) THEN
     RAISE EXCEPTION 'payment %: the request is immutable', OLD.id;
   END IF;
-  -- One signature per row: once signed, what was signed never changes.
   IF OLD.state <> 'pending' AND (NEW.nonce, NEW.authorization, NEW.authorized, NEW.deadline)
      IS DISTINCT FROM (OLD.nonce, OLD.authorization, OLD.authorized, OLD.deadline) THEN
     RAISE EXCEPTION 'payment %: the signed authorization is immutable', OLD.id;
   END IF;
-  -- A signed authorization dies only on chain, past its deadline.
   IF OLD.state IN ('signed', 'unknown') AND NEW.state = 'failed' AND NOT (OLD.deadline < now()) THEN
     RAISE EXCEPTION 'payment %: a live authorization cannot fail', OLD.id;
   END IF;
-  IF OLD.result IS NOT NULL AND NEW.result IS DISTINCT FROM OLD.result THEN
-    RAISE EXCEPTION 'payment %: the result is written once', OLD.id;
+  IF OLD.fenced IS NOT NULL AND NEW.fenced IS DISTINCT FROM OLD.fenced THEN
+    RAISE EXCEPTION 'payment %: the fenced text is written once', OLD.id;
   END IF;
   RETURN NEW;
 END $$;

@@ -184,6 +184,7 @@ describe('ensurePayerFunds', () => {
     // and the period cap has been spent on it. The cap mirrors the on-chain
     // allowance, so the transfer for the full shortfall would revert anyway.
     expect(out.ok).toBe(false);
+    expect(out.code).toBe('budget_exhausted');
     expect(out.reason).toContain('1000000 base units left');
     expect(requests).toHaveLength(0);
   });

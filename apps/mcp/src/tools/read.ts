@@ -44,7 +44,6 @@ const budgetOutput = z.object({
 
 const clients = { clients: { publicClient: publicClientFor } };
 
-// What the chain says about the budget: the permission manager is what refuses a refill, so its counter is the one reported.
 async function budgetOf(grant: Grant) {
   const target = { chainId: grant.chainId, permissionId: grant.permissionId, permission: grant.permission };
   const [liveness, periods] = await Promise.all([

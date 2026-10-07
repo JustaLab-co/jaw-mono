@@ -127,7 +127,6 @@ beforeEach(() => {
         if (refusal) return Response.json({ error: refusal }, { status: 409 });
         return Response.json({ ...view, status: body.verdict });
       }
-      // The parsed object itself, so the test can tell whether the page passes it on or a copy.
       return { ok: true, json: async () => view } as Response;
     })
   );
@@ -247,7 +246,7 @@ describe('ApproveScreen', () => {
     expect(container.textContent).toContain('Approved.');
   });
 
-  it('names a grant the server refuses as not the one requested', async () => {
+  it('says a grant the server refuses does not match the request', async () => {
     view = BUDGET_VIEW;
     refusals = ['grant_mismatch'];
     await render();
@@ -255,7 +254,7 @@ describe('ApproveScreen', () => {
     await click(button('Approve'));
     await act(async () => modal!.onSuccess(GRANTED));
     expect(posts).toHaveLength(1);
-    expect(container.textContent).toContain('is not the one requested');
+    expect(container.textContent).toContain('does not match this request');
   });
 
   it('signs the stored rejection statement to reject a budget', async () => {

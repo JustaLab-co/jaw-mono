@@ -18,7 +18,6 @@ export interface Tenant {
   clientName: string;
   scopes: Scope[];
   sessionAddress: Address;
-  /** Opens the connection's sealed session key. The hex lives only in the caller's frame. */
   sessionKey(): Hex;
 }
 
@@ -32,7 +31,6 @@ interface Claims {
   exp: number;
 }
 
-/** Claims of a token this server issued for this resource and, unless `expired` is allowed, still valid. */
 async function decrypt(bearer: string, expired = false): Promise<Claims | undefined> {
   const { issuer, resource, ring } = config();
   let claims: Claims;
@@ -58,7 +56,6 @@ export async function connectionKey(req: Request): Promise<string | undefined> {
   return claims ? `conn:${claims.sub}` : ipKey(req);
 }
 
-/** Which client a refused request came from, for the metrics: expired tokens still name theirs. */
 export async function clientOf(req: Request): Promise<string> {
   const bearer = bearerOf(req);
   return (bearer && (await decrypt(bearer, true))?.client_id) || 'unknown';

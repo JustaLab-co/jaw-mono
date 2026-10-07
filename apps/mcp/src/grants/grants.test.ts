@@ -31,7 +31,6 @@ beforeAll(useTestDb);
 const USDC = '0x036CbD53842c5426634e7929541eC2318f3dCF7e';
 const permissionId = () => `0x${randomBytes(32).toString('hex')}` as Hex;
 
-/** What the wallet answers after granting exactly `grant`. */
 const granted = (grant: GrantRequest, over: Partial<GrantedPermission> = {}, id = permissionId()) => ({
   permissionId: id,
   account: grant.address,

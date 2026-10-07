@@ -48,7 +48,6 @@ export interface PermissionModalProps {
   permissionRequest?: PermissionRequestData;
   chain?: Chain;
   apiKey: string;
-  /** An account the caller already holds, used instead of restoring one from the session. */
   account?: Account;
   origin?: string;
   appName?: string;

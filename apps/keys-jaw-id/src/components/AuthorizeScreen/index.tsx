@@ -22,11 +22,9 @@ export interface ConsentDetails {
 
 const LOOPBACK = new Set(['127.0.0.1', 'localhost', '[::1]']);
 
-// USDC per day, as the server accepts it.
 const BUDGET = /^\d{1,9}(\.\d{1,6})?$/;
 const validBudget = (amount: string) => BUDGET.test(amount) && Number(amount) > 0;
 
-/** A budget asked for alongside the connection, decided before the app gets its token. */
 interface BudgetStep {
   view: BudgetView;
   signer: Account;

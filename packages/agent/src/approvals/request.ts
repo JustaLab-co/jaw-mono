@@ -48,7 +48,6 @@ export interface GrantRequest {
     calls: { target: Address; functionSignature: string }[];
     spends: { token: Address; allowance: string; unit: 'day'; multiplier: 1 }[];
   };
-  /** The session sends every refill and pays its gas, so its first one rides along with the grant. */
   capabilities: { prefundSpender: true };
 }
 
@@ -193,7 +192,6 @@ export function rejectionMessage(id: ApprovalId): string {
   return `${RESERVED_PREFIX}approval request ${id}: reject`;
 }
 
-/** Refuses a budget for any spender but the connection's own session key. */
 function budgetOf(request: ApprovalRequest & { body: BudgetBody }): BudgetBody {
   if (!isAddressEqual(request.body.spender, request.sessionAddress)) {
     throw new Error('a budget may only name the connection session key as spender');

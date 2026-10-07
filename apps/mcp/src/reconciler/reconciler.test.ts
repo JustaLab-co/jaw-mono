@@ -8,6 +8,7 @@ import { connect, setTestEnv } from '@/connections/testkit';
 import { getDb } from '@/db/client';
 import { payments } from '@/db/schema';
 import { useTestDb } from '@/db/test-db';
+import { render } from '@/payments/render';
 import { purge, reconcile } from './run';
 
 setTestEnv();
@@ -17,7 +18,6 @@ const USDC: Address = '0x036CbD53842c5426634e7929541eC2318f3dCF7e';
 const AUTHORIZATION_USED = parseAbi(['event AuthorizationUsed(address indexed authorizer, bytes32 indexed nonce)']);
 const hex32 = () => `0x${randomBytes(32).toString('hex')}` as Hex;
 
-/** The chain's view: which nonces were used and in which transaction. */
 const used = new Map<string, Hex>();
 const unreadable = new Set<string>();
 const asked: string[] = [];
@@ -54,7 +54,7 @@ const node = {
       ],
     };
   },
-  getBlock: async () => ({ timestamp: 1_790_000_000n }),
+  getBlock: async () => ({ number: 5_000n, timestamp: 1_790_000_000n }),
 };
 const clients: ChainClients = { publicClient: () => node as unknown as PublicClient };
 
@@ -73,8 +73,9 @@ beforeEach(() => {
 
 const minutesAgo = (m: number) => new Date(Date.now() - m * 60_000);
 
-/** A signed row as `markSigned` leaves it. */
-async function signedRow(over: { deadline?: Date; signedAt?: Date; state?: 'signed' | 'unknown'; txHash?: Hex } = {}) {
+async function signedRow(
+  over: { deadline?: Date; signedAt?: Date; state?: 'signed' | 'unknown'; txHash?: Hex; leaseUntil?: Date } = {}
+) {
   const id = `pay_${randomBytes(8).toString('hex')}`;
   const nonce = hex32();
   await getDb()
@@ -88,18 +89,20 @@ async function signedRow(over: { deadline?: Date; signedAt?: Date; state?: 'sign
       payer: payer.toLowerCase(),
       url: 'https://seller.example/x',
       state: over.state ?? 'signed',
-      leaseUntil: new Date(),
+      leaseUntil: over.leaseUntil ?? minutesAgo(1),
+      kind: 'failed',
+      code: 'no_response',
+      topUpAmount: '105000',
       scheme: 'exact',
       network: 'eip155:84532',
       asset: USDC,
       payTo: '0x2222222222222222222222222222222222222222',
       nonce,
       authorized: '5000',
-      deadline: over.deadline ?? minutesAgo(1),
+      deadline: over.deadline ?? minutesAgo(10),
       authorization: { nonce },
       signedAt: over.signedAt ?? minutesAgo(10),
       txHash: over.txHash,
-      result: over.state === 'unknown' ? { stored: true } : null,
     });
   return { id, nonce };
 }
@@ -120,6 +123,27 @@ describe('reconciler', () => {
       blockTime: new Date(1_790_000_000_000),
     });
     expect(await rowOf(lapsed.id)).toMatchObject({ state: 'failed', finishedAt: expect.any(Date) });
+  });
+
+  it('settles a payment whose answer was lost as paid, keeping the refill it needed', async () => {
+    const lost = await signedRow();
+    used.set(lost.nonce, hex32());
+    await reconcile(clients);
+    const row = await rowOf(lost.id);
+    expect(row).toMatchObject({ state: 'settled', kind: 'paid', code: null });
+    expect(render(row, []).structuredContent).toMatchObject({
+      kind: 'paid',
+      moneyMoved: true,
+      topUp: { amount: '105000' },
+    });
+  });
+
+  it('leaves a row alone while the call that signed it may still be running', async () => {
+    const live = await signedRow({ leaseUntil: new Date(Date.now() + 60_000) });
+    used.set(live.nonce, hex32());
+    await reconcile(clients);
+    expect(asked).not.toContain(live.nonce);
+    expect((await rowOf(live.id)).state).toBe('signed');
   });
 
   it('leaves an unused nonce still inside its deadline, and a row the node cannot read, open', async () => {

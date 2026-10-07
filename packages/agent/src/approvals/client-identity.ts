@@ -14,7 +14,6 @@ export interface ClientIdentity {
   reservedName: boolean;
 }
 
-// Lowercase Cyrillic, Greek and small capital letters that render like the Latin ones in "jaw".
 const LOOKALIKES: Readonly<Record<string, string>> = {
   ј: 'j',
   ϳ: 'j',
@@ -28,7 +27,6 @@ const LOOKALIKES: Readonly<Record<string, string>> = {
   ᴡ: 'w',
 };
 
-// Renders as nothing: format characters, soft hyphen, joiners, variation selectors, Hangul fillers.
 const HIDDEN = /[\p{Cf}\p{Default_Ignorable_Code_Point}]/gu;
 
 const isLower = (c: string | undefined) => c !== undefined && /\p{Ll}/u.test(c);
@@ -39,7 +37,6 @@ function foldsToJaw(chars: string[]): boolean {
   return chars.map((c) => LOOKALIKES[c.toLowerCase()] ?? c.toLowerCase()).join('') === 'jaw';
 }
 
-/** Whether a camel case segment starts at `i`: myJaw, JAWApp, JAWwallet, Jaw2. */
 function startsSegment(chars: string[], i: number): boolean {
   const [before, prev, cur, next] = [chars[i - 2], chars[i - 1], chars[i], chars[i + 1]];
   if (isLower(prev) && isUpper(cur)) return true;
@@ -48,10 +45,6 @@ function startsSegment(chars: string[], i: number): boolean {
   return isDigit(prev) !== isDigit(cur);
 }
 
-/**
- * "jaw" is the whole word, or a camel case segment at its start or end. An all-capitals
- * word has no segments, so "jaw" at either end counts. "Jawbone" and "Mijaw" do not.
- */
 function wordClaimsJaw(word: string): boolean {
   const chars = [...word];
   if (chars.length <= 3) return foldsToJaw(chars);
@@ -63,7 +56,6 @@ function wordClaimsJaw(word: string): boolean {
   );
 }
 
-/** Whether `name` claims "jaw", after dropping what renders as nothing and folding lookalikes. */
 function claimsJaw(name: string): boolean {
   const visible = name.normalize('NFKC').replace(HIDDEN, '').replace(/\p{M}/gu, '');
   const words: string[] = [];

@@ -16,6 +16,7 @@ export function BudgetTerms({ preview }: { preview: BudgetView['preview'] }) {
       <p className="text-muted-foreground text-sm">
         Spender: <span className="font-mono">{preview.spender}</span>
       </p>
+      <p className="text-muted-foreground text-sm">Until {new Date(preview.expiresAt).toLocaleString()}</p>
     </>
   );
 }
@@ -26,7 +27,6 @@ interface BudgetApprovalProps {
   apiKey?: string;
   decisionUrl: string;
   onDecided: (view: ApprovalView) => void;
-  /** The wallet dialog was closed or failed before granting. Empty when the user cancelled. */
   onCancel: (message: string) => void;
 }
 
@@ -36,7 +36,6 @@ export function BudgetApproval({ view, account, apiKey, decisionUrl, onDecided, 
   const [error, setError] = useState('');
   const chain = useMemo(() => account.getChain(), [account]);
   const grant = view.approve.grant;
-  // Passed by reference so the wallet executes exactly what the server rendered.
   const request = useMemo<PermissionRequestData>(
     () => ({ method: 'wallet_grantPermissions', params: [grant] }),
     [grant]

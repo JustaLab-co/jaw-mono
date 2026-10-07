@@ -254,6 +254,7 @@ export async function ensurePayerFunds(
   if (opts.maxTopUp !== undefined && opts.maxTopUp < shortfall + headroom) {
     return {
       ok: false,
+      code: 'budget_exhausted',
       reason:
         `the tightest spend cap has ${opts.maxTopUp} base units left and this payment needs ` +
         `${shortfall + headroom} topped up: ${shortfall} short, plus ${headroom} of headroom for the fee the ` +

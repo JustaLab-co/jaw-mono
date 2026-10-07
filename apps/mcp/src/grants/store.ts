@@ -10,14 +10,12 @@ export interface Grant {
   account: Address;
   spender: Address;
   token: Address;
-  /** Base units per day. */
   allowance: string;
   permission: GrantedPermission;
   expiresAt: Date;
   createdAt: Date;
 }
 
-/** The connection's budget: its newest grant that has not ended. */
 export async function currentGrant(connectionId: string): Promise<Grant | undefined> {
   const [row] = await getDb()
     .select()

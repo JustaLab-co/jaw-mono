@@ -1,18 +1,19 @@
 import type { ChainClients } from '@jaw.id/agent';
-import { and, asc, eq, gt, inArray, lt, or, sql } from 'drizzle-orm';
+import { and, eq, lt, sql } from 'drizzle-orm';
 import type { Address, Hex } from 'viem';
 import { chainClients } from '@/adapters/session-host';
 import { getDb } from '@/db/client';
 import { approvalRequests, connections, grants, oauthPayloads, payments, rateLimits } from '@/db/schema';
 import { log } from '@/lib/edge';
 import { chainAnswer, type ChainAnswer } from '@/payments/confirm';
+import { claimUnresolved, expire, markAlerted, settle, type PaymentRow } from '@/payments/store';
 
-/** A signed row younger than this is still its caller's to finish. */
 export const RECONCILE_AFTER_MS = 60_000;
-/** A row the chain has not answered by this long after its deadline raises one alert. */
 const STALE_AFTER_MS = 60 * 60_000;
 const BATCH = 50;
 const READ_MS = 10_000;
+// A claimed row is this run's until its answers are written; another run skips it meanwhile.
+const CLAIM_MS = 3 * READ_MS;
 
 export interface Report {
   settled: number;
@@ -21,44 +22,29 @@ export interface Report {
   alerted: number;
 }
 
-type Open = typeof payments.$inferSelect;
-
 /**
- * Resolves every signed or unknown row older than the window against the chain.
- * Each batch is claimed with SKIP LOCKED, so two runs split the rows and each
- * row is answered once; a terminal row is never selected, and the trigger
- * refuses to move one anyway.
+ * Resolves every signed or unknown row older than the window and not held by a
+ * live call. Rows are claimed with SKIP LOCKED and a short lease, the chain is
+ * read with no lock held, and each answer is its own conditional update, so two
+ * runs split the rows and one bad row never undoes the rest.
  */
 export async function reconcile(clients: ChainClients = chainClients, now = new Date()): Promise<Report> {
   const report: Report = { settled: 0, failed: 0, open: 0, alerted: 0 };
-  let after: { at: Date; id: string } | undefined;
   for (;;) {
-    const rows = await getDb().transaction(async (tx) => {
-      const batch = await tx
-        .select()
-        .from(payments)
-        .where(
-          and(
-            inArray(payments.state, ['signed', 'unknown']),
-            lt(payments.signedAt, new Date(now.getTime() - RECONCILE_AFTER_MS)),
-            after &&
-              or(gt(payments.signedAt, after.at), and(eq(payments.signedAt, after.at), gt(payments.id, after.id)))
-          )
-        )
-        .orderBy(asc(payments.signedAt), asc(payments.id))
-        .limit(BATCH)
-        .for('update', { skipLocked: true });
-      const answers = await Promise.all(batch.map((row) => answerFor(row, clients)));
-      for (const [i, row] of batch.entries()) await apply(tx, row, answers[i], now, report);
-      return batch;
-    });
+    const rows = await claimUnresolved(new Date(now.getTime() - RECONCILE_AFTER_MS), CLAIM_MS, BATCH);
+    const answers = await Promise.all(rows.map((row) => answerFor(row, clients)));
+    for (const [i, row] of rows.entries()) {
+      try {
+        await apply(row, answers[i], now, report);
+      } catch (err) {
+        log('error', { msg: `reconcile ${row.id} failed`, error: err instanceof Error ? err.name : 'unknown' });
+      }
+    }
     if (rows.length < BATCH) return report;
-    const last = rows[rows.length - 1];
-    after = { at: last.signedAt as Date, id: last.id };
   }
 }
 
-function answerFor(row: Open, clients: ChainClients): Promise<ChainAnswer> {
+function answerFor(row: PaymentRow, clients: ChainClients): Promise<ChainAnswer> {
   return chainAnswer(
     {
       payer: row.payer as Address,
@@ -76,26 +62,14 @@ function answerFor(row: Open, clients: ChainClients): Promise<ChainAnswer> {
   );
 }
 
-type Tx = Parameters<Parameters<ReturnType<typeof getDb>['transaction']>[0]>[0];
-const stillOpen = (id: string) => and(eq(payments.id, id), inArray(payments.state, ['signed', 'unknown']));
-
-async function apply(tx: Tx, row: Open, answer: ChainAnswer, now: Date, report: Report) {
+async function apply(row: PaymentRow, answer: ChainAnswer, now: Date, report: Report) {
   if (answer.kind === 'settled') {
-    await tx
-      .update(payments)
-      .set({
-        state: 'settled',
-        txHash: answer.txHash,
-        blockTime: answer.blockTime,
-        amount: answer.amount.toString(),
-        finishedAt: now,
-      })
-      .where(stillOpen(row.id));
+    await settle(row.id, answer);
     report.settled++;
     return;
   }
   if (answer.kind === 'expired') {
-    await tx.update(payments).set({ state: 'failed', finishedAt: now }).where(stillOpen(row.id));
+    await expire(row.id);
     report.failed++;
     return;
   }
@@ -103,11 +77,10 @@ async function apply(tx: Tx, row: Open, answer: ChainAnswer, now: Date, report: 
   const stale = (row.deadline as Date).getTime() + STALE_AFTER_MS < now.getTime();
   if (!stale || row.alertedAt) return;
   log('error', { msg: `payment ${row.id} is ${row.state} an hour past its deadline` });
-  await tx.update(payments).set({ alertedAt: now }).where(stillOpen(row.id));
+  await markAlerted(row.id);
   report.alerted++;
 }
 
-/** Deletes what expired and nothing refers to. Payments and decided approvals are kept as evidence. */
 export async function purge(): Promise<void> {
   const db = getDb();
   const dayAgo = sql`now() - interval '1 day'`;

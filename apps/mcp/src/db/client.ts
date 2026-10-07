@@ -3,6 +3,7 @@ import postgres from 'postgres';
 import * as schema from './schema';
 
 export type Db = PostgresJsDatabase<typeof schema>;
+export type Tx = Parameters<Parameters<Db['transaction']>[0]>[0] | Db;
 
 const cache = globalThis as { jawMcpDb?: Db };
 

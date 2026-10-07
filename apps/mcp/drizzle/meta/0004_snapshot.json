@@ -1,5 +1,5 @@
 {
-  "id": "03f2726e-6ecf-4759-bffb-d3ff3445b337",
+  "id": "fa218f69-5190-4a6a-8b02-7c0a6af7d9e0",
   "prevId": "4ace4eec-34a8-4ae8-9348-0fdc2baf4d52",
   "version": "7",
   "dialect": "postgresql",
@@ -688,8 +688,8 @@
           "primaryKey": false,
           "notNull": false
         },
-        "result": {
-          "name": "result",
+        "fenced": {
+          "name": "fenced",
           "type": "jsonb",
           "primaryKey": false,
           "notNull": false
@@ -709,6 +709,18 @@
         },
         "finished_at": {
           "name": "finished_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "reconciling_until": {
+          "name": "reconciling_until",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "alerted_at": {
+          "name": "alerted_at",
           "type": "timestamp with time zone",
           "primaryKey": false,
           "notNull": false
@@ -839,7 +851,7 @@
       "checkConstraints": {
         "payment_shape": {
           "name": "payment_shape",
-          "value": "(\"payments\".\"state\" = 'pending' and \"payments\".\"nonce\" is null and \"payments\".\"authorization\" is null and \"payments\".\"result\" is null)\n        or (\"payments\".\"state\" in ('signed', 'unknown') and \"payments\".\"nonce\" is not null and \"payments\".\"authorization\" is not null\n            and \"payments\".\"authorized\" is not null and \"payments\".\"deadline\" is not null and \"payments\".\"signed_at\" is not null)\n        or (\"payments\".\"state\" = 'settled' and \"payments\".\"kind\" = 'free' and \"payments\".\"nonce\" is null)\n        or (\"payments\".\"state\" = 'settled' and \"payments\".\"nonce\" is not null and \"payments\".\"tx_hash\" is not null and \"payments\".\"block_time\" is not null)\n        or (\"payments\".\"state\" = 'failed' and \"payments\".\"finished_at\" is not null)"
+          "value": "(\"payments\".\"state\" = 'pending' and \"payments\".\"nonce\" is null and \"payments\".\"authorization\" is null and \"payments\".\"fenced\" is null)\n        or (\"payments\".\"state\" in ('signed', 'unknown') and \"payments\".\"nonce\" is not null and \"payments\".\"authorization\" is not null\n            and \"payments\".\"authorized\" is not null and \"payments\".\"deadline\" is not null and \"payments\".\"signed_at\" is not null)\n        or (\"payments\".\"state\" = 'settled' and \"payments\".\"kind\" = 'free' and \"payments\".\"nonce\" is null)\n        or (\"payments\".\"state\" = 'settled' and \"payments\".\"kind\" = 'paid' and \"payments\".\"nonce\" is not null and \"payments\".\"amount\" is not null)\n        or (\"payments\".\"state\" = 'failed' and \"payments\".\"finished_at\" is not null)"
         }
       },
       "isRLSEnabled": false
@@ -867,7 +879,23 @@
           "notNull": true
         }
       },
-      "indexes": {},
+      "indexes": {
+        "rate_limits_window_start_index": {
+          "name": "rate_limits_window_start_index",
+          "columns": [
+            {
+              "expression": "window_start",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        }
+      },
       "foreignKeys": {},
       "compositePrimaryKeys": {
         "rate_limits_key_window_start_pk": {

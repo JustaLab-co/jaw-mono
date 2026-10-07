@@ -12,7 +12,6 @@ export default defineConfig({
     watch: false,
     environment: 'node',
     include: ['src/**/*.test.ts'],
-    // Each file migrates its own in-memory database and drives full OAuth flows, which is slow when suites run side by side.
     hookTimeout: 60_000,
     testTimeout: 30_000,
   },

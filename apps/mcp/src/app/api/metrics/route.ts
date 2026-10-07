@@ -1,7 +1,7 @@
 import { and, count, inArray, lt } from 'drizzle-orm';
 import { getDb } from '@/db/client';
 import { payments } from '@/db/schema';
-import { authorized } from '@/lib/cron';
+import { hasCronSecret } from '@/lib/cron';
 import { withEdge } from '@/lib/edge';
 import { unauthorizedCounts } from '@/lib/metrics';
 import { RECONCILE_AFTER_MS } from '@/reconciler/run';
@@ -11,10 +11,9 @@ export const dynamic = 'force-dynamic';
 
 const label = (value: string) => value.replace(/["\\\n]/g, '_');
 
-/** Prometheus text: payments by state, the reconciler's backlog, and refused calls per client. */
 export const GET = withEdge(
   async (req) => {
-    if (!authorized(req)) return Response.json({ error: 'unauthorized' }, { status: 401 });
+    if (!hasCronSecret(req)) return Response.json({ error: 'unauthorized' }, { status: 401 });
     const db = getDb();
     const byState = await db.select({ state: payments.state, n: count() }).from(payments).groupBy(payments.state);
     const [backlog] = await db

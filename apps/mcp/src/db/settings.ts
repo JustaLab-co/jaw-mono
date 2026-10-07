@@ -9,7 +9,6 @@ async function flag(key: string): Promise<boolean> {
 
 export const isPaused = () => flag('paused');
 
-/** The payments kill switch: every other tool keeps working. */
 export const isPaymentsPaused = () => flag('payments_paused');
 
 export async function countHit(key: string, windowMs: number): Promise<number> {

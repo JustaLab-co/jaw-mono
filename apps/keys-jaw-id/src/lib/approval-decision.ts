@@ -4,7 +4,6 @@ import type { ClientIdentity } from '../components/ClientHeader';
 
 export type ApprovalStatus = 'pending' | 'approved' | 'rejected' | 'expired';
 
-/** The `wallet_grantPermissions` params[0] the server derives. The page executes it as received. */
 export interface GrantRequest {
   address: Address;
   spender: Address;
@@ -40,7 +39,6 @@ export interface BudgetView extends ViewBase {
     chainId: number;
     spender: Address;
     token: Address;
-    /** USDC base units per day. */
     allowance: string;
     period: 'day';
     expiresAt: string;
@@ -64,15 +62,13 @@ const REFUSALS: Record<string, string> = {
   unsupported_chain: 'This request is on a chain this server cannot check.',
   connection_revoked: 'The app that asked was disconnected, so this request can no longer be approved.',
   verification_unavailable: 'The signature could not be checked right now. Try again in a moment.',
-  grant_mismatch: 'The permission your wallet granted is not the one requested. Revoke it from your wallet.',
+  grant_mismatch: 'The permission your wallet returned does not match this request, so nothing was recorded.',
   grant_not_found: 'The permission does not show as granted on chain yet. Try again in a moment.',
 };
 
 const GRANT_TRIES = 3;
 const GRANT_RETRY_MS = 2000;
 
-// A grant can land on chain a block after the wallet returns, so the server's
-// grant_not_found is retried with the same body before it reaches the user.
 export async function postDecision(url: string, decision: Decision): Promise<ApprovalView> {
   for (let attempt = 1; ; attempt++) {
     const res = await fetch(url, {

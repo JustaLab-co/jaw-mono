@@ -2,7 +2,6 @@ import { runMigrations } from './db/migrate';
 import { log } from './lib/edge';
 import { purge, reconcile } from './reconciler/run';
 
-// In a container nothing calls the cron route, so the server runs the same work on a timer.
 function reconcileEvery(seconds: number) {
   let running = false;
   setInterval(async () => {

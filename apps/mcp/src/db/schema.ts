@@ -108,7 +108,6 @@ export const approvalRequests = pgTable(
       'approval_evidence',
       sql`(${t.status} = 'pending') = (${t.decidedAt} is null and ${t.previewHash} is null and ${t.payloadHash} is null)`
     ),
-    // A decision carries one proof: a signature with its assertion, or a permission approved on chain.
     check(
       'approval_proof',
       sql`(${t.status} = 'pending' and ${t.signature} is null and ${t.assertionRef} is null and ${t.permissionId} is null)
@@ -117,7 +116,6 @@ export const approvalRequests = pgTable(
   ]
 );
 
-// One row per budget the account approved on chain. The newest live one is the connection's budget.
 export const grants = pgTable(
   'grants',
   {
@@ -142,8 +140,6 @@ export const grants = pgTable(
   (t) => [index().on(t.connectionId, t.createdAt)]
 );
 
-// One row per payment attempt, updated in place and never deleted. A trigger
-// (migration 0004) freezes settled and failed rows and the signed fields.
 export const payments = pgTable(
   'payments',
   {
@@ -179,11 +175,12 @@ export const payments = pgTable(
     topUpBatchId: text('top_up_batch_id'),
     approvalBatchId: text('approval_batch_id'),
     httpStatus: integer('http_status'),
-    result: jsonb('result'),
+    // The fenced seller text the first answer carried, so a replay returns the same words.
+    fenced: jsonb('fenced').$type<string[]>(),
     createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
     signedAt: timestamp('signed_at', { withTimezone: true }),
     finishedAt: timestamp('finished_at', { withTimezone: true }),
-    // Set when the reconciler raised its one alert for a row the chain has not answered.
+    reconcilingUntil: timestamp('reconciling_until', { withTimezone: true }),
     alertedAt: timestamp('alerted_at', { withTimezone: true }),
   },
   (t) => [
@@ -196,11 +193,11 @@ export const payments = pgTable(
       .where(sql`${t.state} in ('signed', 'unknown')`),
     check(
       'payment_shape',
-      sql`(${t.state} = 'pending' and ${t.nonce} is null and ${t.authorization} is null and ${t.result} is null)
+      sql`(${t.state} = 'pending' and ${t.nonce} is null and ${t.authorization} is null and ${t.fenced} is null)
         or (${t.state} in ('signed', 'unknown') and ${t.nonce} is not null and ${t.authorization} is not null
             and ${t.authorized} is not null and ${t.deadline} is not null and ${t.signedAt} is not null)
         or (${t.state} = 'settled' and ${t.kind} = 'free' and ${t.nonce} is null)
-        or (${t.state} = 'settled' and ${t.nonce} is not null and ${t.txHash} is not null and ${t.blockTime} is not null)
+        or (${t.state} = 'settled' and ${t.kind} = 'paid' and ${t.nonce} is not null and ${t.amount} is not null)
         or (${t.state} = 'failed' and ${t.finishedAt} is not null)`
     ),
   ]

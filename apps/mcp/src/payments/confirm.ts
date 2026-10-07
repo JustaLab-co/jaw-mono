@@ -6,28 +6,22 @@ const EVENTS = parseAbi([
   'event Transfer(address indexed from, address indexed to, uint256 value)',
 ]);
 
-/** What a signed attempt needs to be checked against the chain. */
 export interface Attempt {
   payer: Address;
   nonce: Hex;
   scheme: string;
   network: string;
   payTo: Address;
-  /** Base units the signature authorized: what an `exact` payment moved. */
   authorized: bigint;
 }
 
 export interface Settled {
-  txHash: Hex;
-  blockTime: Date;
+  /** Absent when the chain proves the nonce was used but no node returned the transaction. */
+  txHash?: Hex;
+  blockTime?: Date;
   amount: bigint;
 }
 
-/**
- * What a mined transaction proves about this attempt. Under `exact` the token
- * logged this payer's nonce as used, and the signature fixed the value. Under
- * `upto` the transfer from payer to payTo is what moved, never above the ceiling.
- */
 function movedIn(receipt: TransactionReceipt, attempt: Attempt, token: Address): bigint | undefined {
   let moved: bigint | undefined;
   for (const entry of receipt.logs) {
@@ -58,10 +52,6 @@ function movedIn(receipt: TransactionReceipt, attempt: Attempt, token: Address):
   return moved === undefined || moved <= attempt.authorized ? moved : attempt.authorized;
 }
 
-/**
- * Settles an attempt from the transaction the seller named, or answers nothing
- * when the chain does not prove it within `timeoutMs`. Never throws.
- */
 export async function confirmByReceipt(
   attempt: Attempt,
   txHash: Hex,
@@ -87,7 +77,9 @@ const NONCE_STATE = parseAbi([
   'function nonceBitmap(address owner, uint256 wordPos) view returns (uint256)',
 ]);
 const PERMIT2: Address = '0x000000000022D473030F116dDEE9F6B43aC78BA3';
-const BLOCK_SECONDS = 2;
+// A node a few blocks behind still reports a nonce unused: past this margin the answer is final.
+const EXPIRY_MARGIN_MS = 5 * 60_000;
+const SEARCH_MARGIN_BLOCKS = 150n;
 
 export type ChainAnswer = ({ kind: 'settled' } & Settled) | { kind: 'expired' } | { kind: 'open' };
 
@@ -111,30 +103,33 @@ async function nonceUsed(attempt: Attempt, token: UsdcAsset, clients: ChainClien
   return ((word >> (nonce & 0xffn)) & 1n) === 1n;
 }
 
-/** The transaction that used an `exact` nonce, searched from the blocks around when it was signed. */
+/** The transaction that used an `exact` nonce: it lies between the signature and its deadline. */
 async function usedIn(
-  attempt: Attempt,
+  attempt: Attempt & { deadline: Date; signedAt: Date },
   token: UsdcAsset,
-  signedAt: Date,
   clients: ChainClients
 ): Promise<Hex | undefined> {
   const client = clients.publicClient(token.chainId);
-  const latest = await client.getBlockNumber();
-  const behind = BigInt(Math.ceil((Date.now() - signedAt.getTime()) / 1000 / BLOCK_SECONDS) + 300);
+  const latest = await client.getBlock();
+  const blockMs = BigInt(client.chain?.blockTime ?? 2_000);
+  const at = (time: Date) => latest.number - (latest.timestamp * 1000n - BigInt(time.getTime())) / blockMs;
+  const from = at(attempt.signedAt) - SEARCH_MARGIN_BLOCKS;
+  const to = at(attempt.deadline) + SEARCH_MARGIN_BLOCKS;
   const logs = await client.getLogs({
     address: token.address,
     event: EVENTS[0],
     args: { authorizer: attempt.payer, nonce: attempt.nonce },
-    fromBlock: latest > behind ? latest - behind : 0n,
-    toBlock: latest,
+    fromBlock: from > 0n ? from : 0n,
+    toBlock: to < latest.number ? to : latest.number,
   });
   return logs[0]?.transactionHash ?? undefined;
 }
 
 /**
- * What the chain says about a signed attempt: settled with its transaction,
- * expired with its nonce unused past the deadline, or open. Read failures are
- * open, so the next run asks again. Never throws.
+ * What the chain says about a signed attempt: settled, expired with its nonce
+ * unused well past the deadline, or open. A used nonce settles at the signed
+ * ceiling when no transaction can be found. Read failures are open, so the
+ * next run asks again. Never throws.
  */
 export async function chainAnswer(
   attempt: Attempt & { txHash?: Hex; deadline: Date; signedAt: Date },
@@ -147,12 +142,11 @@ export async function chainAnswer(
   if (named) return { kind: 'settled', ...named };
   const read = async (): Promise<ChainAnswer> => {
     if (!(await nonceUsed(attempt, token, clients))) {
-      return attempt.deadline.getTime() < Date.now() ? { kind: 'expired' } : { kind: 'open' };
+      return attempt.deadline.getTime() + EXPIRY_MARGIN_MS < Date.now() ? { kind: 'expired' } : { kind: 'open' };
     }
-    if (attempt.scheme !== 'exact') return { kind: 'open' };
-    const txHash = await usedIn(attempt, token, attempt.signedAt, clients);
+    const txHash = attempt.scheme === 'exact' ? await usedIn(attempt, token, clients) : undefined;
     const found = txHash && (await confirmByReceipt(attempt, txHash, clients, timeoutMs));
-    return found ? { kind: 'settled', ...found } : { kind: 'open' };
+    return found ? { kind: 'settled', ...found } : { kind: 'settled', txHash, amount: attempt.authorized };
   };
   return within(read(), timeoutMs).catch((): ChainAnswer => ({ kind: 'open' }));
 }

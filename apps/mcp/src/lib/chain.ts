@@ -10,7 +10,6 @@ export type VerifySignature = (a: {
 
 const clients = new Map<number, PublicClient>();
 
-/** A client for `chainId`, one per process; the configured RPC applies only to the configured chain. */
 export function publicClientFor(chainId: number): PublicClient {
   const cached = clients.get(chainId);
   if (cached) return cached;

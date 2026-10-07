@@ -27,16 +27,6 @@ const historyOutput = z.object({
   summary: z.string(),
 });
 
-const cursorOf = (r: PaymentRow) => `${r.createdAt.toISOString()}|${r.id}`;
-
-function parseCursor(cursor: string | undefined) {
-  if (!cursor) return undefined;
-  const [at, id] = cursor.split('|');
-  const date = new Date(at);
-  return id && !Number.isNaN(date.getTime()) ? { at: date, id } : undefined;
-}
-
-// Codes and chain facts only: no seller text reaches this listing, so nothing in it needs a fence.
 const shown = (r: PaymentRow): z.infer<typeof row> => ({
   paymentId: r.id,
   idempotencyKey: r.idempotencyKey,
@@ -67,12 +57,12 @@ export function registerHistoryTool(server: McpServer) {
       annotations: { readOnlyHint: true },
     },
     async ({ limit = 20, before }, ctx) => {
-      const rows = await history(tenant(ctx).connectionId, limit, parseCursor(before));
+      const rows = await history(tenant(ctx).connectionId, limit, before);
       const settled = rows.filter((r) => r.state === 'settled' && r.kind === 'paid').length;
       return reply(
         historyOutput.parse({
           payments: rows.map(shown),
-          ...(rows.length === limit && { next: cursorOf(rows[rows.length - 1]) }),
+          ...(rows.length === limit && { next: rows[rows.length - 1].id }),
           summary: `${rows.length} payments, ${settled} settled.`,
         })
       );

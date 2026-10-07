@@ -60,8 +60,6 @@ describe('isPrivate', () => {
 });
 
 describe('the connect-time lookup', () => {
-  // A name that answers public, then private: each connection is checked on the
-  // answer it actually connects to, so the second one is refused.
   const answers = ['93.184.216.34', '10.0.0.1'];
   const rebinding = ((_host: string, _opts: unknown, cb: (e: null, a: { address: string; family: number }[]) => void) =>
     cb(null, [{ address: answers.shift() as string, family: 4 }])) as unknown as typeof lookup;
