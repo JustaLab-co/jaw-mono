@@ -151,3 +151,35 @@ describe('ReactUIHandler against a real core', () => {
     expect(text).toContain('hello');
   });
 });
+
+describe('requests only JAW pages may ask for', () => {
+  const consent = {
+    domain: { name: 'JAW', version: '1', chainId: 8453 },
+    types: {
+      EIP712Domain: [
+        { name: 'name', type: 'string' },
+        { name: 'version', type: 'string' },
+        { name: 'chainId', type: 'uint256' },
+      ],
+      Consent: [{ name: 'interaction', type: 'string' }],
+    },
+    primaryType: 'Consent',
+    message: { interaction: 'uid_1234567890' },
+  };
+
+  it.each([
+    ['personal_sign', () => [stringToHex('JAW connection consent'), ALICE]],
+    ['eth_signTypedData_v4', () => [ALICE, JSON.stringify(consent)]],
+    ['wallet_sign', () => [{ address: ALICE, request: { type: '0x01', data: consent } }]],
+    ['wallet_sign', () => [{ address: ALICE, request: { type: '0x45', data: { message: 'JAW consent' } } }]],
+  ])('refuses %s as a user rejection, without a dialog', async (method, params) => {
+    const { provider } = JAW.create({
+      apiKey: 'test-api-key',
+      defaultChainId: 8453,
+      preference: { mode: Mode.AppSpecific, uiHandler: signedInHandler() },
+    });
+    await provider.request({ method: 'eth_requestAccounts' });
+    await expect(provider.request({ method, params: params() })).rejects.toMatchObject({ code: 4001 });
+    expect(document.querySelector('[data-slot="dialog-content"]')).toBeNull();
+  });
+});
