@@ -160,15 +160,17 @@ export async function recordTopUp(tx: Tx, id: string, funded: TopUpOutcome): Pro
 }
 
 const holding = sql`((${payments.state} = 'pending' and ${payments.leaseUntil} > now() and ${payments.reserved} is not null)
-  or ${payments.state} in ('signed', 'unknown'))`;
+  or (${payments.state} in ('signed', 'unknown') and ${payments.deadline} > now()))`;
 
-/** Under the refill lock: what every other row of this payer may still take out of the float. */
-export async function heldByOthers(tx: Tx, payer: Address, exceptId: string): Promise<bigint> {
-  const [row] = await tx
-    .select({ held: sql<string>`coalesce(sum(coalesce(${payments.authorized}, ${payments.reserved})), 0)::text` })
+/**
+ * Under the refill lock: every other row of this payer that may still take money
+ * out of the float, a reservation or an authorization still inside its deadline.
+ */
+export async function holdingRows(tx: Tx, payer: Address, exceptId: string): Promise<PaymentRow[]> {
+  return tx
+    .select()
     .from(payments)
     .where(and(eq(payments.payer, payer.toLowerCase()), ne(payments.id, exceptId), holding));
-  return BigInt(row.held);
 }
 
 export interface Conclusion {

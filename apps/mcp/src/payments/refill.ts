@@ -1,6 +1,7 @@
 import {
   balanceReader,
   currentLimitUsageOnChain,
+  usdcForNetwork,
   ensurePayerFunds,
   sumSpentSince,
   topUpCeiling,
@@ -12,11 +13,12 @@ import {
   type X402Policy,
 } from '@jaw.id/agent';
 import { sql } from 'drizzle-orm';
-import { isAddressEqual, type Address } from 'viem';
+import { isAddressEqual, type Address, type Hex } from 'viem';
 import { sessionOf } from '@/adapters/session-host';
 import { getDb } from '@/db/client';
 import type { Grant } from '@/grants/store';
-import { entriesFor, heldByOthers, recordTopUp, reserve } from './store';
+import { nonceUsed } from './confirm';
+import { entriesFor, holdingRows, recordTopUp, reserve, type PaymentRow } from './store';
 
 export type EnsureFunds = NonNullable<PayAndFetchOptions['ensureFunds']>;
 
@@ -49,6 +51,24 @@ function inTurn<T>(key: string, work: () => Promise<T>): Promise<T> {
   queues.set(key, tail);
   void tail.then(() => queues.get(key) === tail && queues.delete(key));
   return run;
+}
+
+/**
+ * What the other rows still hold. A signed authorization whose nonce the token
+ * already consumed was taken out of the balance read alongside it, so it holds
+ * nothing more; one the chain cannot answer about holds its ceiling.
+ */
+async function stillHeld(rows: PaymentRow[], clients: ChainClients): Promise<bigint> {
+  const holds = await Promise.all(
+    rows.map(async (row) => {
+      if (row.state === 'pending') return BigInt(row.reserved as string);
+      const token = usdcForNetwork(row.network as string);
+      const attempt = { payer: row.payer as Address, nonce: row.nonce as Hex, scheme: row.scheme as string };
+      const settled = token && (await nonceUsed(attempt, token, clients).catch(() => false));
+      return settled ? 0n : BigInt(row.authorized as string);
+    })
+  );
+  return holds.reduce((sum, held) => sum + held, 0n);
 }
 
 const timedOut = (reason: string): TopUpOutcome => ({ ok: false, code: 'timed_out', reason });
@@ -93,7 +113,7 @@ export function refillHook(c: RefillContext): EnsureFunds {
           const refillMs = budget.left() - SEND_RESERVE_MS;
           if (refillMs < MIN_REFILL_MS) return timedOut('the refill waited too long to still send');
           await reserve(tx, c.rowId, c.token, requirement.amount);
-          const held = await heldByOthers(tx, c.payer, c.rowId);
+          const held = await stillHeld(await holdingRows(tx, c.payer, c.rowId), c.clients);
           const session = sessionOf(c.grant);
           const entries = await entriesFor(c.grant.permissionId, new Date(), tx);
           const periodUsage = await currentLimitUsageOnChain(entries, c.policy, c.payer, session, new Date(), {

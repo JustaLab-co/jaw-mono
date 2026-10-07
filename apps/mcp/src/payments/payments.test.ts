@@ -28,9 +28,17 @@ const PAY_TO: Address = '0x2222222222222222222222222222222222222222';
 const TX = (n: number) => `0x${n.toString(16).padStart(64, '0')}` as Hex;
 const AUTHORIZATION_USED = parseAbi(['event AuthorizationUsed(address indexed authorizer, bytes32 indexed nonce)']);
 
-const PRICES: Record<string, string> = { '/exact': '5000', '/lost': '5000', '/slow': '5000', '/refuse': '5000' };
+const PRICES: Record<string, string> = {
+  '/exact': '5000',
+  '/lost': '5000',
+  '/slow': '5000',
+  '/refuse': '5000',
+  '/unconfirmed': '5000',
+};
 const seen: { path: string; nonce: Hex; signature: Hex; advisoryLocks: number }[] = [];
 const receipts = new Map<Hex, { from: Address; nonce: Hex }>();
+/** Nonces the token has consumed: the seller settled them on chain. */
+const used = new Set<string>();
 let dropNextLost = true;
 
 const seller = createServer(async (req, res) => {
@@ -72,6 +80,12 @@ const seller = createServer(async (req, res) => {
     return void req.socket.destroy();
   }
   if (path === '/slow') await new Promise((r) => setTimeout(r, 100));
+  // Settles on chain, but names no transaction the server can read back yet.
+  if (path === '/unconfirmed') {
+    used.add(nonce.toLowerCase());
+    balances.set(from.toLowerCase(), balanceOf(from) - BigInt(PRICES[path]));
+    return void res.end('{}');
+  }
   const tx = TX(seen.length);
   receipts.set(tx, { from, nonce });
   const receipt = { success: true, transaction: tx, network: 'eip155:84532', payer: from };
@@ -92,7 +106,8 @@ const node = {
   getCode: async () => undefined,
   readContract: async ({ functionName, args }: { functionName: string; args: readonly unknown[] }) => {
     if (functionName === 'balanceOf') return balanceOf(args[0] as string);
-    throw new Error('this node only knows balances');
+    if (functionName === 'authorizationState') return used.has(String(args[1]).toLowerCase());
+    throw new Error('this node only knows balances and nonces');
   },
   waitForTransactionReceipt: async ({ hash }: { hash: Hex }) => {
     const paid = receipts.get(hash);
@@ -350,6 +365,41 @@ describe('jaw_pay_and_fetch', () => {
     await getDb().execute(sql`update payments set lease_until = now() - interval '1 second' where id = ${held.row.id}`);
     const taken = await pay(t, { url: url('/exact'), idempotencyKey: 'held' }, deps());
     expect(taken.structuredContent).toMatchObject({ paymentId: held.row.id, kind: 'paid', state: 'settled' });
+  });
+
+  it('does not hold a signed payment the chain already settled against the float, so no refill runs', async () => {
+    const { t } = await connected('1');
+    balances.set(t.sessionAddress.toLowerCase(), 10_000n);
+    const first = await pay(t, { url: url('/unconfirmed'), idempotencyKey: 'used-1' }, deps());
+    expect(first.structuredContent).toMatchObject({ state: 'signed', kind: 'paid' });
+    const second = await pay(t, { url: url('/unconfirmed'), idempotencyKey: 'used-2' }, deps());
+    expect(second.structuredContent).toMatchObject({ kind: 'paid', moneyMoved: false });
+    expect(refills).toEqual([]);
+  });
+
+  it('holds a signed payment whose nonce is still unused, so the next one refills', async () => {
+    const { t } = await connected('1');
+    balances.set(t.sessionAddress.toLowerCase(), 5_000n);
+    dropNextLost = true;
+    const lost = await pay(t, { url: url('/lost'), idempotencyKey: 'unused-1' }, deps());
+    expect(lost.structuredContent).toMatchObject({ state: 'signed', refusal: { code: 'no_response' } });
+    await pay(t, { url: url('/exact'), idempotencyKey: 'unused-2' }, deps());
+    expect(refills).toEqual([105_000n]);
+  });
+
+  it('stops holding an unknown payment once its deadline passed with the nonce unused', async () => {
+    const { t } = await connected('1');
+    balances.set(t.sessionAddress.toLowerCase(), 5_000n);
+    dropNextLost = true;
+    const rejected = await pay(t, { url: url('/refuse'), idempotencyKey: 'dead-1' }, deps());
+    const id = rejected.structuredContent!.paymentId;
+    await getDb().execute(sql`alter table payments disable trigger payments_guard`);
+    await getDb().execute(
+      sql`update payments set state = 'unknown', deadline = now() - interval '1 minute' where id = ${id}`
+    );
+    await getDb().execute(sql`alter table payments enable trigger payments_guard`);
+    await pay(t, { url: url('/exact'), idempotencyKey: 'dead-2' }, deps());
+    expect(refills).toEqual([]);
   });
 
   it('lists payments newest first in jaw_history, scoped to the connection', async () => {

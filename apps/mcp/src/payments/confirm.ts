@@ -83,7 +83,11 @@ const SEARCH_MARGIN_BLOCKS = 150n;
 
 export type ChainAnswer = ({ kind: 'settled' } & Settled) | { kind: 'expired' } | { kind: 'open' };
 
-async function nonceUsed(attempt: Attempt, token: UsdcAsset, clients: ChainClients): Promise<boolean> {
+export async function nonceUsed(
+  attempt: Pick<Attempt, 'payer' | 'nonce' | 'scheme'>,
+  token: UsdcAsset,
+  clients: ChainClients
+): Promise<boolean> {
   const client = clients.publicClient(token.chainId);
   if (attempt.scheme === 'exact') {
     return client.readContract({
