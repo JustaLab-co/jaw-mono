@@ -144,7 +144,7 @@ function conclusionOf(o: Outcome, signed: boolean, settled: Settled | undefined)
   }
 }
 
-async function settledBy(o: Outcome, clients: ChainClients): Promise<Settled | undefined> {
+async function settledBy(o: Outcome, signedAfter: Date, clients: ChainClients): Promise<Settled | undefined> {
   if (o.kind !== 'paid' || !o.payment.txHash) return undefined;
   const { payment } = o;
   const attempt = {
@@ -154,6 +154,7 @@ async function settledBy(o: Outcome, clients: ChainClients): Promise<Settled | u
     network: payment.network,
     payTo: payment.payTo as Address,
     authorized: BigInt(payment.authorized),
+    signedAt: signedAfter,
   };
   return confirmByReceipt(attempt, payment.txHash as Hex, clients, CONFIRM_MS);
 }
@@ -210,7 +211,8 @@ export async function pay(t: Tenant, input: PayInput, deps: PayDeps = liveDeps()
       return render(claimed.row, claimed.row.fenced ?? []);
   }
 
-  const budget = until(Date.now() + PAY_LIMIT_MS);
+  const started = Date.now();
+  const budget = until(started + PAY_LIMIT_MS);
   const payer = payerFor(t, deps.clients);
   const sent = { method: request.method, headers: request.headers, body: request.body, budget, fetch: deps.fetch };
 
@@ -220,7 +222,7 @@ export async function pay(t: Tenant, input: PayInput, deps: PayDeps = liveDeps()
       ...sent,
       attempt: { key: row.id, resume: authorization },
     }).catch(thrown);
-    const conclusion = conclusionOf(outcome, true, await settledBy(outcome, deps.clients));
+    const conclusion = conclusionOf(outcome, true, await settledBy(outcome, row.signedAt as Date, deps.clients));
     const fenced = fencedOf(row.url, outcome);
     // A refused resend says nothing about the first send, which the chain or a live first call settles.
     if (outcome.kind !== 'paid') return render(merged(row, conclusion), fenced);
@@ -233,7 +235,7 @@ export async function pay(t: Tenant, input: PayInput, deps: PayDeps = liveDeps()
   const outcome: Outcome = grant
     ? await payWithinGrant(t, grant, row, token, request, payer, sent, deps, () => (signed = true))
     : { kind: 'unreached', code: 'no_grant', reason: 'the budget ended while this payment waited' };
-  const conclusion = conclusionOf(outcome, signed, await settledBy(outcome, deps.clients));
+  const conclusion = conclusionOf(outcome, signed, await settledBy(outcome, new Date(started), deps.clients));
   const fenced = fencedOf(row.url, outcome);
   const written = await finish(row.id, token, conclusion, fenced);
   return render(written ?? (await rowAfter(row, conclusion)), fenced);

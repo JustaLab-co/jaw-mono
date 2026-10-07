@@ -13,7 +13,12 @@ export interface Attempt {
   network: string;
   payTo: Address;
   authorized: bigint;
+  /** When the authorization was signed: a transaction mined before it cannot be its settlement. */
+  signedAt: Date;
 }
+
+// Clock skew allowed between this server and the chain.
+const SKEW_MS = 60_000;
 
 export interface Settled {
   /** Absent when the chain proves the nonce was used but no node returned the transaction. */
@@ -67,7 +72,14 @@ export async function confirmByReceipt(
     const amount = movedIn(receipt, attempt, token.address);
     if (amount === undefined) return undefined;
     const block = await client.getBlock({ blockNumber: receipt.blockNumber });
-    return { txHash, blockTime: new Date(Number(block.timestamp) * 1000), amount };
+    const blockTime = new Date(Number(block.timestamp) * 1000);
+    // A transfer names no Permit2 nonce, so an upto settlement is the transfer mined
+    // after signing whose authorization the bitmap shows spent.
+    if (attempt.scheme === 'upto') {
+      if (blockTime.getTime() < attempt.signedAt.getTime() - SKEW_MS) return undefined;
+      if (!(await nonceUsed(attempt, token, clients))) return undefined;
+    }
+    return { txHash, blockTime, amount };
   };
   return within(read(), timeoutMs).catch(() => undefined);
 }
@@ -136,7 +148,7 @@ async function usedIn(
  * next run asks again. Never throws.
  */
 export async function chainAnswer(
-  attempt: Attempt & { txHash?: Hex; deadline: Date; signedAt: Date },
+  attempt: Attempt & { txHash?: Hex; deadline: Date },
   clients: ChainClients,
   timeoutMs: number
 ): Promise<ChainAnswer> {
