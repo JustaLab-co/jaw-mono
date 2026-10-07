@@ -522,6 +522,7 @@ describe('calls', () => {
       expect(executedAsSigned(CALLS, GAS, executed([...CALLS, CALLS[0]]))).toBe(false);
       expect(executedAsSigned(CALLS, GAS, executed([CALLS[0], { ...CALLS[1], data: '0xdeadbeee' }]))).toBe(false);
       expect(executedAsSigned(CALLS, GAS, executed([CALLS[0], { ...CALLS[1], value: '0x2' }]))).toBe(false);
+      expect(executedAsSigned(CALLS, GAS, executed([CALLS[0], { ...CALLS[1], to: USDC }]))).toBe(false);
       expect(executedAsSigned(CALLS, GAS, executed([approve(maxUint256), ...CALLS]))).toBe(false);
     });
   });
