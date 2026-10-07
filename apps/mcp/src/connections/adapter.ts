@@ -1,4 +1,5 @@
 import { createHash } from 'node:crypto';
+import { hasUnstorableText } from '@jaw.id/agent';
 import { and, eq, gt, isNotNull, isNull, lt, or, sql } from 'drizzle-orm';
 import Provider, { errors, type Adapter, type AdapterPayload, type KoaContextWithOIDC } from 'oidc-provider';
 import type { Hex } from 'viem';
@@ -10,6 +11,12 @@ import { unwrap, wrap, type KeyRing, type Wrapped } from './seal';
 
 // A client whose refresh response was lost retries with the token it still holds.
 export const RETRY_WINDOW_MS = 60_000;
+
+// Request parameters land in jsonb, which refuses NUL and unpaired surrogates.
+const unstorable = (value: unknown): boolean =>
+  typeof value === 'string'
+    ? hasUnstorableText(value)
+    : typeof value === 'object' && value !== null && Object.values(value).some(unstorable);
 
 const notExpired = or(isNull(oauthPayloads.expiresAt), gt(oauthPayloads.expiresAt, sql`now()`));
 
@@ -51,6 +58,7 @@ export class PgAdapter implements Adapter {
   async upsert(id: string, payload: AdapterPayload, expiresIn: number) {
     const stored = { ...payload };
     delete stored.jti;
+    if (unstorable(stored)) throw new errors.InvalidRequest('the request contains characters that cannot be stored');
     const row = {
       model: this.model,
       payload: stored,

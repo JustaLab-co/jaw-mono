@@ -420,6 +420,22 @@ describe('authorization server', () => {
     expect(await res.json()).not.toHaveProperty('pushed_authorization_request_endpoint');
   });
 
+  it('answers a NUL in the authorization request with a client error, not a 500', async () => {
+    const { oauth } = await import('./provider');
+    const params = new URLSearchParams({
+      client_id: 'jaw-cli',
+      redirect_uri: REDIRECT,
+      response_type: 'code',
+      scope: 'wallet:read',
+      state: 'a\u0000b',
+      resource: RESOURCE,
+      code_challenge: 'a'.repeat(43),
+      code_challenge_method: 'S256',
+    });
+    const res = await oauth(new Request(`${ISSUER}/oauth/authorize?${params}`));
+    expect(res.status).toBeLessThan(500);
+  });
+
   it('refuses a token for another resource', async () => {
     const c = await connect();
     const other = await token({
