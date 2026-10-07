@@ -1,6 +1,7 @@
 import type { PGlite } from '@electric-sql/pglite';
 import { asc, eq } from 'drizzle-orm';
-import { beforeAll, describe, expect, it } from 'vitest';
+import { beforeAll, describe, expect, it, vi } from 'vitest';
+import * as store from '@/approvals/store';
 import { connect, mcp, setTestEnv } from '@/connections/testkit';
 import { getDb } from '@/db/client';
 import { auditEvents } from '@/db/schema';
@@ -35,6 +36,15 @@ describe('audit events', () => {
       ['jaw_request_signature', 'ok', ok.headers.get('x-request-id')],
       ['jaw_request_status', 'error', refused.headers.get('x-request-id')],
     ]);
+  });
+
+  it('records a tool that threw as an error, once', async () => {
+    const c = await connect();
+    vi.spyOn(store, 'insertUnderCap').mockRejectedValueOnce(new Error('boom'));
+    const res = await call(c.access_token, 'jaw_request_signature', { message: 'hello' });
+    expect(res.json.result.isError).toBe(true);
+    const events = await eventsOf(await connectionOf(c.access_token));
+    expect(events.map((e) => [e.tool, e.outcome])).toEqual([['jaw_request_signature', 'error']]);
   });
 
   it('records no arguments, tokens or signatures', async () => {

@@ -1,6 +1,5 @@
 import { AsyncLocalStorage } from 'node:async_hooks';
 import type { McpServer } from '@modelcontextprotocol/server';
-import { recordToolCall } from '@/audit/record';
 import { countHit, isPaused } from '@/db/settings';
 import { pageCors } from './cors';
 
@@ -83,38 +82,21 @@ export function guardTools(server: McpServer): void {
   const register = server.registerTool.bind(server) as (...args: unknown[]) => unknown;
   server.registerTool = ((name: string, config: unknown, handler: (...args: unknown[]) => unknown) =>
     register(name, config, async (...args: unknown[]) => {
-      const result = await answer(handler, args);
-      await audit(name, args.at(-1), result.isError ? 'error' : 'ok');
-      return result;
+      try {
+        return await handler(...args);
+      } catch (err) {
+        log('error', { msg: 'tool failed', error: errorLabel(err) });
+        const text = databaseUnreachable(err)
+          ? 'The service is temporarily unavailable. Try again shortly.'
+          : 'The tool failed on the server.';
+        return { content: [{ type: 'text', text }], isError: true };
+      }
     })) as typeof server.registerTool;
 }
 
-type ToolResult = { content?: unknown; isError?: boolean };
-
-async function answer(handler: (...args: unknown[]) => unknown, args: unknown[]): Promise<ToolResult> {
-  try {
-    return (await handler(...args)) as ToolResult;
-  } catch (err) {
-    log('error', { msg: 'tool failed', error: errorLabel(err) });
-    const text = databaseUnreachable(err)
-      ? 'The service is temporarily unavailable. Try again shortly.'
-      : 'The tool failed on the server.';
-    return { content: [{ type: 'text', text }], isError: true };
-  }
-}
-
-// The edge's request id, so an audit event matches the x-request-id the client saw and the log line.
+// The edge's request id for code deeper in the request, such as the audit record.
 const requestScope = new AsyncLocalStorage<string>();
-
-// Never fails the call: the tool may already have moved money, and its answer matters more than the record.
-async function audit(tool: string, ctx: unknown, outcome: 'ok' | 'error') {
-  const tenant = (ctx as { http?: { authInfo?: { extra?: { tenant?: { connectionId: string } } } } } | undefined)?.http
-    ?.authInfo?.extra?.tenant;
-  if (!tenant) return;
-  await recordToolCall({ connectionId: tenant.connectionId, tool, outcome, requestId: requestScope.getStore() }).catch(
-    (err) => log('error', { msg: 'audit record failed', error: errorLabel(err) })
-  );
-}
+export const currentRequestId = () => requestScope.getStore();
 
 export function withEdge(
   handler: Handler,

@@ -79,6 +79,8 @@ export const connections = pgTable(
     revokedAt: timestamp('revoked_at', { withTimezone: true }),
   },
   (t) => [
+    // The connections page finds an account's connections whatever case the address was stored in.
+    index('connections_account_lower_index').on(sql`lower(${t.account})`),
     check(
       'connection_status_shape',
       sql`(${t.status} = 'pending' and ${t.ticketHash} is not null and ${t.grantId} is null)

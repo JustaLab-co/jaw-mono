@@ -3,7 +3,7 @@ import { and, eq, lt, sql } from 'drizzle-orm';
 import type { Address, Hex } from 'viem';
 import { chainClients } from '@/adapters/session-host';
 import { getDb } from '@/db/client';
-import { approvalRequests, connections, grants, oauthPayloads, payments, rateLimits } from '@/db/schema';
+import { approvalRequests, auditEvents, connections, grants, oauthPayloads, payments, rateLimits } from '@/db/schema';
 import { log } from '@/lib/edge';
 import { chainAnswer, type ChainAnswer } from '@/payments/confirm';
 import { claimUnresolved, expire, markAlerted, settle, txHashTaken, type PaymentRow } from '@/payments/store';
@@ -88,6 +88,7 @@ export async function purge(): Promise<void> {
   const dayAgo = sql`now() - interval '1 day'`;
   await db.delete(oauthPayloads).where(lt(oauthPayloads.expiresAt, dayAgo));
   await db.delete(rateLimits).where(lt(rateLimits.windowStart, sql`now() - interval '1 hour'`));
+  await db.delete(auditEvents).where(lt(auditEvents.createdAt, sql`now() - interval '90 days'`));
   await db
     .delete(approvalRequests)
     .where(

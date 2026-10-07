@@ -8,4 +8,5 @@ CREATE TABLE "audit_events" (
 );
 --> statement-breakpoint
 ALTER TABLE "audit_events" ADD CONSTRAINT "audit_events_connection_id_connections_id_fk" FOREIGN KEY ("connection_id") REFERENCES "public"."connections"("id") ON DELETE no action ON UPDATE no action;--> statement-breakpoint
-CREATE INDEX "audit_events_connection_id_created_at_index" ON "audit_events" USING btree ("connection_id","created_at");
+CREATE INDEX "audit_events_connection_id_created_at_index" ON "audit_events" USING btree ("connection_id","created_at");--> statement-breakpoint
+CREATE INDEX "connections_account_lower_index" ON "connections" USING btree (lower("account"));
