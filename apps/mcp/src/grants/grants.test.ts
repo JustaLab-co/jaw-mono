@@ -74,6 +74,13 @@ describe('budget grants', () => {
     });
   });
 
+  it('refuses a budget to a connection without wallet:send, since a budget authorizes money', async () => {
+    const reader = await connect(undefined, { scope: 'wallet:read' });
+    const refused = await callTool(reader.access_token, 'jaw_request_budget', { perDay: '1' });
+    expect(refused.isError).toBe(true);
+    expect(refused.content[0].text).toMatch(/wallet:send/);
+  });
+
   it('refuses a zero budget and a malformed amount', async () => {
     const c = await connect();
     expect((await callTool(c.access_token, 'jaw_request_budget', { perDay: '0' })).isError).toBe(true);

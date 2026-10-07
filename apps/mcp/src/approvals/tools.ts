@@ -71,7 +71,8 @@ export const result = (out: StatusOutput) => ({
   structuredContent: out,
 });
 export const refusal = (text: string) => ({ content: [{ type: 'text' as const, text }], isError: true });
-const NO_SEND_SCOPE = 'This connection was not granted wallet:send. Reconnect and ask for it to request signatures.';
+export const NO_SEND_SCOPE =
+  'This connection was not granted wallet:send. Reconnect and ask for it to request signatures or a budget.';
 
 export function registerApprovalTools(server: McpServer) {
   server.registerTool(

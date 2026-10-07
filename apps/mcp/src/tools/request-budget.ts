@@ -1,6 +1,6 @@
 import type { McpServer } from '@modelcontextprotocol/server';
 import { z } from 'zod';
-import { describe, MAX_PENDING, refusal, result, statusOutput } from '@/approvals/tools';
+import { describe, MAX_PENDING, NO_SEND_SCOPE, refusal, result, statusOutput } from '@/approvals/tools';
 import { insertUnderCap } from '@/approvals/store';
 import { tenant } from '@/connections/auth';
 import { budgetRequest, PER_DAY } from '@/grants/request';
@@ -23,6 +23,7 @@ export function registerBudgetTool(server: McpServer) {
     },
     async ({ perDay }, ctx) => {
       const t = tenant(ctx);
+      if (!t.scopes.includes('wallet:send')) return refusal(NO_SEND_SCOPE);
       const request = budgetRequest(t, perDay, new Date());
       if (typeof request === 'string') return refusal(REFUSALS[request]);
       if (!(await insertUnderCap(t.connectionId, request, MAX_PENDING))) {
