@@ -10,7 +10,8 @@ export function registerDisconnectTool(server: McpServer) {
       description:
         'End this connection. Revokes its budgets on chain, returns the USDC float to the account owner, ' +
         'and invalidates its tokens, so every later call fails until the owner connects again. ' +
-        'If it fails nothing was revoked, and calling it again is safe.',
+        'If it fails before the transaction is sent, nothing was revoked. If the transaction is sent but unconfirmed, ' +
+        'it may still land. Either way calling it again is safe, since it does not repeat what already landed.',
       inputSchema: z.strictObject({}),
       outputSchema: disconnectOutput,
       annotations: { destructiveHint: true, idempotentHint: true },
