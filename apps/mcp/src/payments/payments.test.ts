@@ -102,9 +102,20 @@ process.env.JAW_MCP_RPC_URL = 'http://127.0.0.1:9';
 
 const balances = new Map<string, bigint>();
 const balanceOf = (a: string) => balances.get(a.toLowerCase()) ?? 0n;
+const reads: { functionName: string; blockNumber?: bigint }[] = [];
 const node = {
   getCode: async () => undefined,
-  readContract: async ({ functionName, args }: { functionName: string; args: readonly unknown[] }) => {
+  getBlockNumber: async () => 77n,
+  readContract: async ({
+    functionName,
+    args,
+    blockNumber,
+  }: {
+    functionName: string;
+    args: readonly unknown[];
+    blockNumber?: bigint;
+  }) => {
+    reads.push({ functionName, blockNumber });
     if (functionName === 'balanceOf') return balanceOf(args[0] as string);
     if (functionName === 'authorizationState') return used.has(String(args[1]).toLowerCase());
     throw new Error('this node only knows balances and nonces');
@@ -432,6 +443,18 @@ describe('jaw_pay_and_fetch', () => {
     const second = await pay(t, { url: url('/unconfirmed'), idempotencyKey: 'used-2' }, deps());
     expect(second.structuredContent).toMatchObject({ kind: 'paid', moneyMoved: false });
     expect(refills).toEqual([]);
+  });
+
+  it('reads the payer balance and the nonces it holds against at one block', async () => {
+    const { t } = await connected('1');
+    balances.set(t.sessionAddress.toLowerCase(), 10_000n);
+    await pay(t, { url: url('/unconfirmed'), idempotencyKey: 'block-1' }, deps());
+    reads.length = 0;
+    await pay(t, { url: url('/unconfirmed'), idempotencyKey: 'block-2' }, deps());
+    const nonce = reads.find((r) => r.functionName === 'authorizationState');
+    const balance = reads.find((r) => r.functionName === 'balanceOf');
+    expect(nonce?.blockNumber).toBe(77n);
+    expect(balance?.blockNumber).toBe(77n);
   });
 
   it('holds a signed payment whose nonce is still unused, so the next one refills', async () => {

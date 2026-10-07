@@ -1,5 +1,4 @@
 import {
-  balanceReader,
   currentLimitUsageOnChain,
   usdcForNetwork,
   ensurePayerFunds,
@@ -13,7 +12,7 @@ import {
   type X402Policy,
 } from '@jaw.id/agent';
 import { sql } from 'drizzle-orm';
-import { isAddressEqual, type Address, type Hex } from 'viem';
+import { erc20Abi, isAddressEqual, type Address, type Hex } from 'viem';
 import { sessionOf } from '@/adapters/session-host';
 import { getDb } from '@/db/client';
 import type { Grant } from '@/grants/store';
@@ -60,13 +59,13 @@ function inTurn<T>(key: string, work: () => Promise<T>): Promise<T> {
  * already consumed was taken out of the balance read alongside it, so it holds
  * nothing more; one the chain cannot answer about holds its ceiling.
  */
-async function stillHeld(rows: PaymentRow[], clients: ChainClients): Promise<bigint> {
+async function stillHeld(rows: PaymentRow[], clients: ChainClients, blockNumber: bigint | undefined): Promise<bigint> {
   const holds = await Promise.all(
     rows.map(async (row) => {
       if (row.state === 'pending') return BigInt(row.reserved as string);
       const token = usdcForNetwork(row.network as string);
       const attempt = { payer: row.payer as Address, nonce: row.nonce as Hex, scheme: row.scheme as string };
-      const settled = token && (await nonceUsed(attempt, token, clients).catch(() => false));
+      const settled = token && (await nonceUsed(attempt, token, clients, blockNumber).catch(() => false));
       return settled ? 0n : BigInt(row.authorized as string);
     })
   );
@@ -118,10 +117,12 @@ export function refillHook(c: RefillContext): EnsureFunds {
         return await getDb().transaction(async (tx) => {
           await tx.execute(sql`select set_config('lock_timeout', ${`${waitMs}ms`}, true)`);
           await tx.execute(sql`select pg_advisory_xact_lock(hashtext(${`refill:${c.connectionId}`}))`);
-          const refillMs = budget.left() - SEND_RESERVE_MS;
-          if (refillMs < MIN_REFILL_MS) return timedOut('the refill waited too long to still send');
           await reserve(tx, c.rowId, c.token, requirement.amount);
-          const held = await stillHeld(await holdingRows(tx, c.payer, c.rowId), c.clients);
+          // The balance and the nonces it is netted against are read at one block, so a
+          // payment mined between two reads is neither in the balance nor held, never both.
+          const client = c.clients.publicClient(c.grant.chainId);
+          const block = await client.getBlockNumber().catch(() => undefined);
+          const held = await stillHeld(await holdingRows(tx, c.payer, c.rowId), c.clients, block);
           const session = sessionOf(c.grant);
           const entries = await entriesFor(c.grant.permissionId, new Date(), tx);
           const own = await currentLimitUsageOnChain(entries, c.policy, c.payer, session, new Date(), {
@@ -130,7 +131,9 @@ export function refillHook(c: RefillContext): EnsureFunds {
           const earlier = await pulledUnderOtherGrants(tx, c.connectionId, c.grant.permissionId);
           const periodUsage = own.map((limit) => ({ ...limit, toppedUp: limit.toppedUp + earlier }));
           const spentThisSession = sumSpentSince(entries, { payer: c.payer }, session.createdAt);
-          const onChain = balanceReader(c.clients);
+          const refillMs = budget.left() - SEND_RESERVE_MS;
+          if (refillMs < MIN_REFILL_MS) return timedOut('the refill waited too long to still send');
+          let pinned = block;
           funded = await ensurePayerFunds(requirement, payer, c.executor ?? noRefill, {
             clients: c.clients,
             logger: c.logger,
@@ -140,8 +143,18 @@ export function refillHook(c: RefillContext): EnsureFunds {
             floatTarget: c.floatTarget,
             timeoutMs: refillMs,
             balanceReader: async (asset, owner) => {
-              const balance = await onChain(asset, owner);
-              if (!isAddressEqual(owner, c.payer)) return balance;
+              const payerRead = isAddressEqual(owner, c.payer);
+              // Only the first payer read is pinned: later ones must see the refill land.
+              const blockNumber = payerRead ? pinned : undefined;
+              if (payerRead) pinned = undefined;
+              const balance = await client.readContract({
+                address: asset.address,
+                abi: erc20Abi,
+                functionName: 'balanceOf',
+                args: [owner],
+                blockNumber,
+              });
+              if (!payerRead) return balance;
               return balance > held ? balance - held : 0n;
             },
           });

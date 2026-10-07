@@ -98,7 +98,8 @@ export type ChainAnswer = ({ kind: 'settled' } & Settled) | { kind: 'expired' } 
 export async function nonceUsed(
   attempt: Pick<Attempt, 'payer' | 'nonce' | 'scheme'>,
   token: UsdcAsset,
-  clients: ChainClients
+  clients: ChainClients,
+  blockNumber?: bigint
 ): Promise<boolean> {
   const client = clients.publicClient(token.chainId);
   if (attempt.scheme === 'exact') {
@@ -107,6 +108,7 @@ export async function nonceUsed(
       abi: NONCE_STATE,
       functionName: 'authorizationState',
       args: [attempt.payer, attempt.nonce],
+      blockNumber,
     });
   }
   const nonce = BigInt(attempt.nonce);
@@ -115,6 +117,7 @@ export async function nonceUsed(
     abi: NONCE_STATE,
     functionName: 'nonceBitmap',
     args: [attempt.payer, nonce >> 8n],
+    blockNumber,
   });
   return ((word >> (nonce & 0xffn)) & 1n) === 1n;
 }
