@@ -5,7 +5,7 @@ import { rateLimits, settings } from './schema';
 // A frozen database keeps the connection open and never answers, and postgres.js
 // has no query timeout. The edge reads these first on every request, so giving up
 // here turns a frozen database into a 503 instead of a hung request.
-const DEADLINE_MS = 3_000;
+const DEADLINE_MS = 5_000;
 
 function withinDeadline<T>(query: PromiseLike<T>): Promise<T> {
   let timer: ReturnType<typeof setTimeout> | undefined;

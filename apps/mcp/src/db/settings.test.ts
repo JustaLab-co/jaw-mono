@@ -16,9 +16,7 @@ const chain: unknown = new Proxy(() => chain, {
 it('gives up on a database that never answers, as an unreachable one', async () => {
   vi.useFakeTimers();
   setDb(chain as Db);
-  for (const read of [isPaused(), countHit('ip:203.0.113.7', 60_000)]) {
-    const settled = read.catch((err: unknown) => err);
-    await vi.advanceTimersByTimeAsync(10_000);
-    expect(databaseUnreachable(await settled)).toBe(true);
-  }
+  const settled = [isPaused(), countHit('ip:203.0.113.7', 60_000)].map((read) => read.catch((err: unknown) => err));
+  await vi.advanceTimersByTimeAsync(10_000);
+  for (const err of await Promise.all(settled)) expect(databaseUnreachable(err)).toBe(true);
 });

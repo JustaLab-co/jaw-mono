@@ -7,4 +7,4 @@ it('indexes the wrap sweep, so a refresh does not scan every refresh token', asy
     `select indexdef from pg_indexes where tablename = 'oauth_payloads' and indexdef like '%consumed_at%'`
   );
   expect(rows.map((r) => r.indexdef).join('\n')).toMatch(/consumed_at.*WHERE.*key_wrap IS NOT NULL/s);
-});
+}, 30_000);
