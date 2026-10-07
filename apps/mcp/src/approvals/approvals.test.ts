@@ -3,7 +3,9 @@ import { verifyMessage, type Hex } from 'viem';
 import { beforeAll, describe, expect, it } from 'vitest';
 import { useTestDb } from '@/db/test-db';
 import { callTool, connect, owner, setTestEnv, verifyLocally } from '@/connections/testkit';
+import { verifyBearer } from '@/connections/auth';
 import { decideFromPage, readForPage } from './page-api';
+import { countPending } from './store';
 
 setTestEnv();
 beforeAll(useTestDb);
@@ -151,6 +153,15 @@ describe('approvals', () => {
     expect(await callTool(c.access_token, 'jaw_request_signature', { message: 'one too many' })).toMatchObject({
       isError: true,
     });
+  });
+
+  it('keeps the cap under 50 parallel requests: exactly 20 end up pending', async () => {
+    const c = await connect();
+    await Promise.all(
+      Array.from({ length: 50 }, (_, i) => callTool(c.access_token, 'jaw_request_signature', { message: `p${i}` }))
+    );
+    const tenant = (await verifyBearer(c.access_token))?.extra?.tenant as { connectionId: string };
+    expect(await countPending(tenant.connectionId)).toBe(20);
   });
 
   it('refuses when the page rendered a different preview', async () => {

@@ -4,7 +4,7 @@ import type { McpServer } from '@modelcontextprotocol/server';
 import { z } from 'zod';
 import { tenant } from '@/connections/auth';
 import { config } from '@/connections/config';
-import { countPending, findForConnection, insertRequest } from './store';
+import { findForConnection, insertUnderCap } from './store';
 
 const MAX_PENDING = 20;
 
@@ -76,11 +76,6 @@ export function registerApprovalTools(server: McpServer) {
       const refused = validateMessage(message);
       if (refused) return refusal(REFUSALS[refused]);
       const t = tenant(ctx);
-      if ((await countPending(t.connectionId)) >= MAX_PENDING) {
-        return refusal(
-          `This connection already has ${MAX_PENDING} requests waiting. Wait for them or let them expire.`
-        );
-      }
       const request = openRequest(
         {
           id: randomBytes(16).toString('base64url') as ApprovalId,
@@ -91,7 +86,11 @@ export function registerApprovalTools(server: McpServer) {
         },
         new Date()
       );
-      await insertRequest(t.connectionId, request);
+      if (!(await insertUnderCap(t.connectionId, request, MAX_PENDING))) {
+        return refusal(
+          `This connection already has ${MAX_PENDING} requests waiting. Wait for them or let them expire.`
+        );
+      }
       return result(describe(request));
     }
   );

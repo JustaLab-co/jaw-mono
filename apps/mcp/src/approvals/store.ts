@@ -50,18 +50,36 @@ function toRequest(row: Row, now: Date): ApprovalRequest {
   );
 }
 
-export async function insertRequest(connectionId: string, request: ApprovalRequest) {
-  await getDb().insert(approvalRequests).values({
-    id: request.id,
-    connectionId,
-    account: request.account,
-    chainId: request.chainId,
-    requester: request.requester.name,
-    requesterClientId: request.requester.clientId,
-    kind: request.body.kind,
-    body: request.body,
-    createdAt: request.createdAt,
-    expiresAt: request.expiresAt,
+const pendingFor = (connectionId: string) =>
+  and(
+    eq(approvalRequests.connectionId, connectionId),
+    eq(approvalRequests.status, 'pending'),
+    gt(approvalRequests.expiresAt, sql`now()`)
+  );
+
+/**
+ * Inserts unless the connection already has `max` requests pending. The
+ * per-connection lock makes the count and the insert one step, so parallel
+ * calls cannot all see room under the cap.
+ */
+export async function insertUnderCap(connectionId: string, request: ApprovalRequest, max: number): Promise<boolean> {
+  return getDb().transaction(async (tx) => {
+    await tx.execute(sql`select pg_advisory_xact_lock(hashtext(${connectionId}))`);
+    const [row] = await tx.select({ n: count() }).from(approvalRequests).where(pendingFor(connectionId));
+    if (row.n >= max) return false;
+    await tx.insert(approvalRequests).values({
+      id: request.id,
+      connectionId,
+      account: request.account,
+      chainId: request.chainId,
+      requester: request.requester.name,
+      requesterClientId: request.requester.clientId,
+      kind: request.body.kind,
+      body: request.body,
+      createdAt: request.createdAt,
+      expiresAt: request.expiresAt,
+    });
+    return true;
   });
 }
 
@@ -101,15 +119,6 @@ export async function recordDecision(request: ApprovalRequest): Promise<boolean>
 }
 
 export async function countPending(connectionId: string): Promise<number> {
-  const [row] = await getDb()
-    .select({ n: count() })
-    .from(approvalRequests)
-    .where(
-      and(
-        eq(approvalRequests.connectionId, connectionId),
-        eq(approvalRequests.status, 'pending'),
-        gt(approvalRequests.expiresAt, sql`now()`)
-      )
-    );
+  const [row] = await getDb().select({ n: count() }).from(approvalRequests).where(pendingFor(connectionId));
   return row.n;
 }
