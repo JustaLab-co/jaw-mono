@@ -62,14 +62,14 @@ vi.mock('./topup.js', () => ({
 const ports: PaymentPorts = {
   clients: {} as ChainClients,
   log: {
-    read: () => {
+    read: async () => {
       h.ledgerReads += 1;
       return h.entries as X402LogEntry[];
     },
-    append: (entry) => {
+    append: async (entry) => {
       h.appended.push(entry as unknown as Record<string, unknown>);
     },
-    compact: (...args) => {
+    compact: async (...args) => {
       h.compactions.push(args);
     },
     correct: vi.fn(),
@@ -315,17 +315,17 @@ describe('recordPaymentOutcome', () => {
     nonce: '0x01',
     deadline: 1_900_000_000,
   };
-  const record = (outcome: Record<string, unknown>) =>
+  const record = (outcome: Record<string, unknown>, to: Pick<PaymentPorts, 'log' | 'logger'> = ports) =>
     recordPaymentOutcome(
       URL,
       { status: 200, body: null, paid: false, payer: PAYER, ...outcome } as never,
       session,
       [],
-      ports.log
+      to
     );
 
-  it('records a paid outcome as unverified, with its tx hash, and compacts', () => {
-    record({ paid: true, payment: { ...details, txHash: '0xhash' } });
+  it('records a paid outcome as unverified, with its tx hash, and compacts', async () => {
+    await record({ paid: true, payment: { ...details, txHash: '0xhash' } });
 
     expect(h.appended).toHaveLength(1);
     expect(h.appended[0]).toMatchObject({
@@ -340,24 +340,65 @@ describe('recordPaymentOutcome', () => {
     expect(h.compactions).toEqual([[['2026-08-01T00:00:00.000Z'], PAYER]]);
   });
 
-  it('records a signed payment that did not settle as failed, still unverified', () => {
-    record({ status: 402, attemptedPayment: details });
+  it('records a signed payment that did not settle as failed, still unverified', async () => {
+    await record({ status: 402, attemptedPayment: details });
 
     expect(h.appended[0]).toMatchObject({ status: 'failed', nonce: '0x01', settlement: 'unverified' });
     expect(h.appended[0].txHash).toBeUndefined();
   });
 
-  it('records a refusal with no settlement, since nothing was signed', () => {
-    record({ status: 402, refusedReason: 'amount exceeds maxAmount' });
+  it('records a refusal with no settlement, since nothing was signed', async () => {
+    await record({ status: 402, refusedReason: 'amount exceeds maxAmount' });
 
     expect(h.appended[0]).toMatchObject({ status: 'refused', reason: 'amount exceeds maxAmount' });
     expect(h.appended[0].settlement).toBeUndefined();
   });
 
-  it('writes nothing for a free resource', () => {
-    record({ status: 200 });
+  it('writes nothing for a free resource', async () => {
+    await record({ status: 200 });
 
     expect(h.appended).toEqual([]);
     expect(h.compactions).toEqual([]);
+  });
+
+  // The payment already happened by the time its row is written. A store that
+  // refuses the row must not take the result away from the caller.
+  it('resolves when the store rejects the row, and says so instead of compacting', async () => {
+    const warn = vi.fn();
+    const rejecting = {
+      log: {
+        ...ports.log,
+        append: async () => {
+          throw new Error('connection reset');
+        },
+      },
+      logger: { warn },
+    };
+
+    await expect(record({ paid: true, payment: details }, rejecting)).resolves.toBeUndefined();
+
+    expect(warn).toHaveBeenCalledWith(
+      '[jaw] warning: failed to write x402 ledger (connection reset); spend audit/cap may undercount'
+    );
+    expect(h.compactions).toEqual([]);
+  });
+
+  // Callers await this inside the payment lock. Resolving before the row is
+  // stored would let the next payment read a ledger without it.
+  it('does not resolve before the store has the row', async () => {
+    let store: () => void = () => undefined;
+    const slow = {
+      ...ports,
+      log: { ...ports.log, append: () => new Promise<void>((resolve) => (store = resolve)) },
+    };
+    let done = false;
+
+    const recording = record({ paid: true, payment: details }, slow).then(() => (done = true));
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(done).toBe(false);
+
+    store();
+    await recording;
+    expect(done).toBe(true);
   });
 });

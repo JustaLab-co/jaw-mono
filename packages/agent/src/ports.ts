@@ -8,14 +8,15 @@ export interface ChainClients {
 }
 
 /**
- * Where payment rows are kept. Synchronous because the one store behind it, a
- * file, is.
+ * Where payment rows are kept. A store that keeps a state per row derives it
+ * with `rowStateOf`, so the rows the agent reads back carry only `status` and
+ * `settlement`, and a state never disagrees with the fields that decide it.
  */
 export interface PaymentLog {
-  read(limit?: number): X402LogEntry[];
-  append(entry: X402LogEntry): void;
-  correct(correction: X402SettlementCorrection): void;
-  compact(capStarts: string[] | undefined, payer: string | undefined): void;
+  read(limit?: number): Promise<X402LogEntry[]>;
+  append(entry: X402LogEntry): Promise<void>;
+  correct(correction: X402SettlementCorrection): Promise<void>;
+  compact(capStarts: string[] | undefined, payer: string | undefined): Promise<void>;
 }
 
 /** Where the agent says what an operator should see. The host picks the sink. */

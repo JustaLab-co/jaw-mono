@@ -2,6 +2,7 @@ import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 import * as os from 'node:os';
+import { rowFieldsOf, rowStateOf, spendFigureOf } from '@jaw.id/agent';
 
 const TEST_ROOT = path.join(os.tmpdir(), 'jaw-ledger-test');
 
@@ -12,7 +13,7 @@ vi.mock('../lib/paths.js', () => {
   return { PATHS: { root, x402Log: p.join(root, 'x402-log.jsonl') } };
 });
 
-const { appendX402Log, appendX402Correction, readX402Log } = await import('./ledger.js');
+const { appendX402Log, appendX402Correction, readX402Log, jsonlPaymentLog } = await import('./ledger.js');
 const { PATHS } = await import('../lib/paths.js');
 
 const entry = (over: Partial<Parameters<typeof appendX402Log>[0]> = {}) => ({
@@ -118,5 +119,50 @@ describe('x402 ledger', () => {
     appendX402Log(entry({ url: 'https://after' }));
 
     expect(readX402Log().map((e) => e.url)).toEqual(['https://good', 'https://after']);
+  });
+});
+
+// A table can keep one state per row where the file keeps `status` and
+// `settlement`. Each shape the file holds reads back as a state, and the state
+// reads back as fields that cost what the row cost, with the bytes on disk
+// unchanged.
+describe('row state through the JSONL port', () => {
+  const signed = { nonce: '0x01', authorized: '1000', settlement: 'unverified' as const };
+  const answered = (settlement: 'verified' | 'expired' | 'abandoned') => ({
+    at: '2026-07-16T00:01:00.000Z',
+    corrects: '0x01',
+    settlement,
+  });
+
+  it.each([
+    ['refused', entry({ status: 'refused', amount: undefined, reason: 'over cap' }), undefined, 'failed'],
+    ['paid, unverified', entry({ ...signed, amount: '1' }), undefined, 'signed'],
+    ['failed, unverified', entry({ ...signed, status: 'failed' }), undefined, 'signed'],
+    ['paid, verified', entry(signed), answered('verified'), 'settled'],
+    ['failed, nonce consumed', entry({ ...signed, status: 'failed' }), answered('verified'), 'settled'],
+    ['expired', entry({ ...signed, status: 'failed' }), answered('expired'), 'failed'],
+    ['abandoned', entry(signed), answered('abandoned'), 'unknown'],
+    ['paid, before settlement existed', entry(), undefined, 'settled'],
+    ['failed, before settlement existed', entry({ status: 'failed', authorized: '1000' }), undefined, 'unknown'],
+    ['checkpoint', entry({ kind: 'checkpoint', folded: 3, url: 'jaw:compacted' }), undefined, 'settled'],
+  ] as const)('%s', async (_shape, row, correction, state) => {
+    await jsonlPaymentLog.append(row);
+    if (correction) await jsonlPaymentLog.correct(correction);
+
+    const lines = [row, correction].filter(Boolean).map((line) => '\n' + JSON.stringify(line));
+    expect(fs.readFileSync(PATHS.x402Log, 'utf-8')).toBe(lines.join(''));
+
+    const [read] = await jsonlPaymentLog.read();
+    expect(rowStateOf(read)).toBe(state);
+
+    const back = { ...read, ...rowFieldsOf(rowStateOf(read)) };
+    expect(rowStateOf(back)).toBe(state);
+    expect(spendFigureOf(back)).toBe(spendFigureOf(read));
+  });
+
+  it('reads a settlement value it does not know as unknown, which costs the ceiling', () => {
+    const row = entry({ ...signed, settlement: 'settled?' as never });
+    expect(rowStateOf(row)).toBe('unknown');
+    expect(spendFigureOf({ ...row, ...rowFieldsOf('unknown') })).toBe(spendFigureOf(row));
   });
 });

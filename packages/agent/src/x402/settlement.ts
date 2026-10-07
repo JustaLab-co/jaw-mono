@@ -122,7 +122,13 @@ export async function reconcileSettlements(entries: X402LogEntry[], deps: Settle
   const answers = new Map<string, X402SettlementCorrection>();
   for (const answer of [...answered, ...retired]) {
     if (!answer) continue;
-    deps.log.correct(answer);
+    try {
+      await deps.log.correct(answer);
+    } catch (err) {
+      // The answer came from the chain and still counts for this read. The
+      // next one asks again.
+      deps.logger.warn(`[jaw] warning: could not record a settlement (${errorMessage(err)})`);
+    }
     answers.set(answer.corrects, answer);
   }
   if (answers.size === 0) return entries;

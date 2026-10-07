@@ -90,6 +90,50 @@ export interface X402LogEntry {
 export type SettlementState = 'unverified' | 'verified' | 'expired' | 'abandoned';
 
 /**
+ * Where a row stands, in a form a table can store. `pending` is a row written
+ * before anything was signed; the JSONL ledger never writes one, so no
+ * `status`/`settlement` pair spells it.
+ */
+export type PaymentRowState = 'pending' | 'signed' | 'settled' | 'failed' | 'unknown';
+
+/** The states a written row can be read back as. */
+export type StoredRowState = Exclude<PaymentRowState, 'pending'>;
+
+/**
+ * The state a row is in, read the way `spendFigureOf` reads it: `settled`
+ * costs what settled, `signed` and `unknown` cost the ceiling, `failed` costs
+ * nothing. A settlement value this does not recognise is `unknown`, so a hand
+ * edit lands on the ceiling here too.
+ */
+export function rowStateOf(row: Pick<X402LogEntry, 'status' | 'settlement'>): StoredRowState {
+  if (row.status === 'refused' || row.settlement === 'expired') return 'failed';
+  if (row.settlement === 'unverified') return 'signed';
+  if (row.settlement === 'verified') return 'settled';
+  // Rows from before `settlement` existed: a paid one counts what it reported,
+  // a failed one its ceiling.
+  if (row.settlement === undefined && row.status === 'paid') return 'settled';
+  return 'unknown';
+}
+
+/**
+ * A `status`/`settlement` pair that reads back as `state`. Lossy: a failed
+ * `exact` attempt whose nonce was consumed and a paid one both read back as
+ * paid, which costs the same since `exact` signs for exactly what moves.
+ */
+export function rowFieldsOf(state: StoredRowState): Pick<X402LogEntry, 'status' | 'settlement'> {
+  switch (state) {
+    case 'settled':
+      return { status: 'paid', settlement: 'verified' };
+    case 'signed':
+      return { status: 'paid', settlement: 'unverified' };
+    case 'failed':
+      return { status: 'failed', settlement: 'expired' };
+    case 'unknown':
+      return { status: 'failed', settlement: 'abandoned' };
+  }
+}
+
+/**
  * A later answer about a row that was already written.
  *
  * The ledger is append-only, so a reconciliation cannot edit the payment it is

@@ -109,6 +109,22 @@ describe('reconcileSettlements', () => {
     expect(figureFor('7')).toBe(400n);
   });
 
+  // The chain answered, so this read counts what moved even when the store
+  // would not take the answer down. The next read asks again.
+  it('keeps the answer for this read when the store rejects it, and says so', async () => {
+    getTransactionReceipt.mockResolvedValue({ status: 'success', logs: [transferLog(PAYER, PAY_TO, 400n)] });
+    const warn = vi.fn();
+    const correct = vi.fn(async () => {
+      throw new Error('connection reset');
+    });
+
+    const [row] = await reconcile([underReported()], { clients, log: { correct }, logger: { warn } });
+
+    expect(correct).toHaveBeenCalledTimes(1);
+    expect(spendFigureOf(row)).toBe(400n);
+    expect(warn).toHaveBeenCalledWith('[jaw] warning: could not record a settlement (connection reset)');
+  });
+
   it('ignores transfers in the same transaction that are not ours', async () => {
     appendX402Log(underReported());
     getTransactionReceipt.mockResolvedValue({
