@@ -149,11 +149,13 @@ const addFundsOutput = z.object({
 function addFunds(t: Tenant) {
   const network = caip2(t.chainId);
   const usdc = usdcForNetwork(network);
+  if (!usdc) return undefined;
   return addFundsOutput.parse({
     address: t.account,
     chains: [network],
-    asset: usdc ? caip19(network, usdc.address) : 'unsupported',
-    paymentUri: `ethereum:${t.account}@${t.chainId}`,
+    asset: caip19(network, usdc.address),
+    // EIP-681 ERC-20 transfer: a wallet that opens it sends USDC, not ETH, to the account.
+    paymentUri: `ethereum:${usdc.address}@${t.chainId}/transfer?address=${t.account}`,
     summary: `Send USDC on ${network} to ${t.account}.`,
   });
 }
@@ -215,7 +217,10 @@ export function registerReadTools(server: McpServer) {
       outputSchema: addFundsOutput,
       annotations: { readOnlyHint: true },
     },
-    async (_args, ctx) => reply(addFunds(tenant(ctx)))
+    async (_args, ctx) => {
+      const out = addFunds(tenant(ctx));
+      return out ? reply(out) : refusal("USDC is not supported on this connection's chain.");
+    }
   );
 
   server.registerTool(

@@ -88,7 +88,7 @@ describe('read tools', () => {
       address: account,
       chains: ['eip155:84532'],
       asset: `eip155:84532/erc20:${USDC}`,
-      paymentUri: `ethereum:${account}@84532`,
+      paymentUri: `ethereum:${USDC}@84532/transfer?address=${account}`,
       summary: expect.any(String),
     });
   });
