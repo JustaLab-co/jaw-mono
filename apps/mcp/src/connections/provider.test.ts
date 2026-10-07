@@ -100,7 +100,6 @@ async function liveRefreshTokens(connectionId: string): Promise<number> {
   return rows[0].n;
 }
 
-/** Every string any table holds, as a database dump would show it. */
 async function dumpStrings(): Promise<string[]> {
   const found = new Set<string>();
   const walk = (value: unknown) => {
@@ -320,7 +319,6 @@ describe('authorization server', () => {
     expect(dump.some((s) => s.includes(key.slice(2)))).toBe(false);
     expect(recoverable(dump, config().ring, sub, [])).toEqual([]);
     expect(recoverable(dump, config().ring, sub, [second.body.refresh_token])).toEqual([privateKeyToAddress(key)]);
-    // A token whose successor was used keeps no wrap, so an old leaked token opens nothing either.
     expect(recoverable(dump, config().ring, sub, [c.refresh_token])).toEqual([]);
   });
 

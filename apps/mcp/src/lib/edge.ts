@@ -75,7 +75,7 @@ export function databaseUnreachable(err: unknown): boolean {
 }
 
 // The MCP SDK answers a throwing tool with the error's message, and a driver
-// error's message carries its SQL and parameters. Every tool gets a fixed text instead.
+// error's message carries its SQL and parameters.
 export function guardTools(server: McpServer): void {
   const register = server.registerTool.bind(server) as (...args: unknown[]) => unknown;
   server.registerTool = ((name: string, config: unknown, handler: (...args: unknown[]) => unknown) =>

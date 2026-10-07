@@ -10,7 +10,6 @@ export const GET = withEdge(
     try {
       config();
     } catch (err) {
-      // Config errors name the variable, never its value.
       log('error', { msg: 'configuration invalid', error: err instanceof Error ? err.message : 'unknown' });
       return Response.json({ config: 'invalid' }, { status: 503 });
     }

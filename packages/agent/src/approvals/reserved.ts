@@ -3,11 +3,7 @@ import { hexToString, isHex } from 'viem';
 /** Messages starting with this are reserved for JAW's own statements. */
 export const RESERVED_PREFIX = 'JAW ';
 
-/**
- * The EIP-712 domain of what only JAW's own pages ask for: connection consent and
- * approval decisions. Every generic signing path refuses it, so a signature under
- * it cannot be collected anywhere else.
- */
+/** EIP-712 domain name reserved for JAW's consent and approval pages. Generic signing paths refuse it. */
 export const JAW_DOMAIN_NAME = 'JAW';
 
 const domain = (chainId: number) => ({ name: JAW_DOMAIN_NAME, version: '1', chainId });
