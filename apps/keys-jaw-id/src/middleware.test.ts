@@ -44,6 +44,12 @@ describe('framing policy is route-scoped', () => {
   });
 });
 
+describe('/authorize', () => {
+  it('sends no referrer, so the interaction id in its URL stays on the page', () => {
+    expect(headersFor('/authorize?uid=abc').get('Referrer-Policy')).toBe('no-referrer');
+  });
+});
+
 describe('all other headers stay identical across routes (regression bar)', () => {
   const UNCHANGED_HEADERS = [
     'Strict-Transport-Security',

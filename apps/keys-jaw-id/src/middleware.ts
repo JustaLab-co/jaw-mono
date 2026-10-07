@@ -97,7 +97,9 @@ export function middleware(request: NextRequest) {
   if (!isEmbeddable) {
     response.headers.set('X-Frame-Options', 'DENY');
   }
-  response.headers.set('Referrer-Policy', 'strict-origin-when-cross-origin');
+  // The consent URL carries the interaction id; no other site needs to see it.
+  const referrerPolicy = request.nextUrl.pathname === '/authorize' ? 'no-referrer' : 'strict-origin-when-cross-origin';
+  response.headers.set('Referrer-Policy', referrerPolicy);
   response.headers.set('Permissions-Policy', 'camera=(), microphone=(), geolocation=()');
   response.headers.set('X-DNS-Prefetch-Control', 'off');
 
