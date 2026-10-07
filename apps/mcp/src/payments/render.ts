@@ -29,7 +29,7 @@ type Text = { type: 'text'; text: string };
 export type PayResult = { content: Text[]; structuredContent?: PayOutput; isError?: boolean };
 
 /** Refusals a larger budget would fix. */
-const RAISE = new Set(['budget_exhausted', 'no_grant']);
+const RAISE = new Set(['budget_exhausted', 'no_grant', 'grant_revoked']);
 
 export const gate = (code: string, text: string): PayResult => ({
   content: [{ type: 'text', text: `${code}: ${text}` }],

@@ -148,6 +148,7 @@ const executor = (funder: Address): TopUpExecutor => ({
 
 const deps = (over: Partial<PayDeps> = {}): PayDeps => ({
   clients,
+  readPermission: async () => ({ status: 'ok', approved: true, revoked: false }),
   executor: (_t, grant) => executor(grant.account),
   fetch: safeFetch(new Set([SELLER])),
   ...over,
@@ -332,6 +333,18 @@ describe('jaw_pay_and_fetch', () => {
     } finally {
       await getDb().delete(settings).where(eq(settings.key, 'payments_paused'));
     }
+  });
+
+  it.each([
+    ['revoked on chain', { status: 'ok', approved: true, revoked: true }, 'grant_revoked'],
+    ['not approved on chain', { status: 'ok', approved: false, revoked: false }, 'grant_revoked'],
+    ['unreadable', { status: 'unavailable' }, 'chain_unavailable'],
+  ] as const)('refuses before signing or refilling when the budget is %s', async (_name, state, code) => {
+    const { t } = await connected('1');
+    const result = await pay(t, { url: url('/exact') }, deps({ readPermission: async () => state }));
+    expect(result.structuredContent).toMatchObject({ state: 'failed', refusal: { code } });
+    expect(seen).toEqual([]);
+    expect(refills).toEqual([]);
   });
 
   it('refuses a connection with no budget as no_grant, writing no row', async () => {

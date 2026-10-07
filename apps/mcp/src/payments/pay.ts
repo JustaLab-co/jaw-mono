@@ -4,11 +4,14 @@ import {
   errorMessage,
   FetchRefused,
   payAndFetch,
+  readPermissionState,
   resolveSessionX402Policy,
   sumSpentSince,
   until,
   type ChainClients,
   type PaymentOutcome,
+  type PermissionReadTarget,
+  type PermissionState,
   type TopUpExecutor,
 } from '@jaw.id/agent';
 import type { Address, Hex } from 'viem';
@@ -63,18 +66,44 @@ export interface PayInput {
 
 export interface PayDeps {
   clients: ChainClients;
+  readPermission: (target: PermissionReadTarget) => Promise<PermissionState>;
   executor: (t: Tenant, grant: Grant) => TopUpExecutor | undefined;
   fetch: typeof fetch;
 }
 
 const liveDeps = (): PayDeps => ({
   clients: chainClients,
+  readPermission: (target) => readPermissionState(target, { clients: chainClients }),
   executor: topUpExecutor,
   fetch: safeFetch(config().insecureFetchHosts),
 });
 
 /** The probe never answered, or the grant was gone: nothing was signed. */
-type Unreached = { kind: 'unreached'; code: 'blocked_url' | 'unreachable' | 'no_grant'; reason: string };
+type Unreached = {
+  kind: 'unreached';
+  code: 'blocked_url' | 'unreachable' | 'no_grant' | 'grant_revoked' | 'chain_unavailable';
+  reason: string;
+};
+
+// A revoke on chain stops payments within this long, without a chain read on every call.
+const LIVE_FOR_MS = 30_000;
+const liveUntil = new Map<string, number>();
+
+/** Whether the grant is still approved and not revoked on chain, the permission manager's own answer. */
+async function grantLive(grant: Grant, deps: PayDeps): Promise<Unreached | undefined> {
+  if ((liveUntil.get(grant.permissionId) ?? 0) > Date.now()) return undefined;
+  const state = await deps
+    .readPermission({ chainId: grant.chainId, permissionId: grant.permissionId, permission: grant.permission })
+    .catch((): PermissionState => ({ status: 'unavailable' }));
+  if (state.status === 'unavailable') {
+    return { kind: 'unreached', code: 'chain_unavailable', reason: 'the budget could not be read from the chain' };
+  }
+  if (state.status === 'mismatch' || !state.approved || state.revoked) {
+    return { kind: 'unreached', code: 'grant_revoked', reason: 'the budget is no longer approved on chain' };
+  }
+  liveUntil.set(grant.permissionId, Date.now() + LIVE_FOR_MS);
+  return undefined;
+}
 type Outcome = PaymentOutcome | Unreached;
 
 const thrown = (err: unknown): Unreached => ({
@@ -233,7 +262,8 @@ export async function pay(t: Tenant, input: PayInput, deps: PayDeps = liveDeps()
   const { row, token } = claimed;
   let signed = false;
   const outcome: Outcome = grant
-    ? await payWithinGrant(t, grant, row, token, request, payer, sent, deps, () => (signed = true))
+    ? ((await grantLive(grant, deps)) ??
+      (await payWithinGrant(t, grant, row, token, request, payer, sent, deps, () => (signed = true))))
     : { kind: 'unreached', code: 'no_grant', reason: 'the budget ended while this payment waited' };
   const conclusion = conclusionOf(outcome, signed, await settledBy(outcome, new Date(started), deps.clients));
   const fenced = fencedOf(row.url, outcome);
