@@ -38,9 +38,9 @@ export async function currentGrant(connectionId: string): Promise<Grant | undefi
 }
 
 /**
- * Replaced budgets the chain does not show revoked yet, so the page can revoke them
- * or retry. One the chain shows revoked is recorded and drops out; one it cannot
- * read stays listed.
+ * Replaced budgets that have not expired and the chain does not show revoked yet,
+ * so the page can revoke them or retry. One the chain shows revoked is recorded
+ * and drops out; one it cannot read stays listed.
  */
 export async function outstandingRevokes(
   connectionId: string,
@@ -49,7 +49,14 @@ export async function outstandingRevokes(
   const rows = await getDb()
     .select()
     .from(grants)
-    .where(and(eq(grants.connectionId, connectionId), isNotNull(grants.replacedAt), isNull(grants.revokedAt)))
+    .where(
+      and(
+        eq(grants.connectionId, connectionId),
+        isNotNull(grants.replacedAt),
+        isNull(grants.revokedAt),
+        gt(grants.expiresAt, sql`now()`)
+      )
+    )
     .orderBy(grants.createdAt);
   const outstanding: Hex[] = [];
   for (const row of rows) {
