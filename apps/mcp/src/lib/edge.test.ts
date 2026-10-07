@@ -1,8 +1,12 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
-const store = vi.hoisted(() => ({ paused: false, hits: new Map<string, number>() }));
+const store = vi.hoisted(() => ({ paused: false, down: false, hits: new Map<string, number>() }));
 vi.mock('@/db/settings', () => ({
-  isPaused: async () => store.paused,
+  isPaused: async () => {
+    if (store.down)
+      throw new Error('Failed query', { cause: Object.assign(new Error('connect'), { code: 'ECONNREFUSED' }) });
+    return store.paused;
+  },
   countHit: async (key: string) => {
     store.hits.set(key, (store.hits.get(key) ?? 0) + 1);
     return store.hits.get(key);
@@ -30,6 +34,7 @@ const call = (handler: ReturnType<typeof withEdge>, r = req()) => handler(r, ctx
 let lines: string[];
 beforeEach(() => {
   store.paused = false;
+  store.down = false;
   store.hits.clear();
   lines = [];
   vi.spyOn(console, 'log').mockImplementation((line: string) => void lines.push(line));
@@ -90,6 +95,16 @@ describe('withEdge', () => {
     store.paused = true;
     const res = await call(withEdge(ok, { guarded: true, cors: true }));
     expect(res.headers.get('access-control-allow-origin')).toBe('http://keys.test');
+  });
+
+  it('answers 503 when the database is unreachable, from the guard or the route', async () => {
+    store.down = true;
+    expect((await call(withEdge(ok, { guarded: true }))).status).toBe(503);
+    store.down = false;
+    const dbDown = async () => {
+      throw new Error('Failed query', { cause: { code: 'CONNECT_TIMEOUT' } });
+    };
+    expect((await call(withEdge(dbDown, { guarded: false }))).status).toBe(503);
   });
 
   it('leaves unguarded routes open while paused', async () => {

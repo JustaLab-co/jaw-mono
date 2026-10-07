@@ -49,6 +49,24 @@ const errorLabel = (err: unknown) => {
   return typeof code === 'string' ? `${err.name} ${code}` : err.name;
 };
 
+const UNREACHABLE = new Set([
+  'ECONNREFUSED',
+  'ECONNRESET',
+  'ETIMEDOUT',
+  'CONNECT_TIMEOUT',
+  '57P01',
+  '57P03',
+  '08001',
+  '08006',
+]);
+
+function databaseUnreachable(err: unknown): boolean {
+  const codeOf = (e: unknown) => (e as { code?: unknown } | undefined)?.code;
+  return [codeOf(err), codeOf((err as { cause?: unknown } | undefined)?.cause)].some(
+    (c) => typeof c === 'string' && UNREACHABLE.has(c)
+  );
+}
+
 export function withEdge(
   handler: Handler,
   { guarded, cors = false }: { guarded: boolean; cors?: boolean }
@@ -61,7 +79,9 @@ export function withEdge(
       res = (guarded && (await refuse(req))) || (await handler(req, ctx));
     } catch (err) {
       log('error', { requestId, error: errorLabel(err) });
-      res = Response.json({ error: 'internal_error', requestId }, { status: 500 });
+      res = databaseUnreachable(err)
+        ? Response.json({ error: 'unavailable', requestId }, { status: 503 })
+        : Response.json({ error: 'internal_error', requestId }, { status: 500 });
     }
     const out = new Response(res.body, res);
     out.headers.set('x-request-id', requestId);
