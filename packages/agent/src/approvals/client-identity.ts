@@ -26,6 +26,8 @@ const LOOKALIKES: Readonly<Record<string, string>> = {
   ω: 'w',
   ᴡ: 'w',
   ɑ: 'a',
+  ʝ: 'j',
+  ɉ: 'j',
   // Cherokee, by the lowercase form each capital folds to.
   '\uAB7B': 'j',
   '\uAB7A': 'a',

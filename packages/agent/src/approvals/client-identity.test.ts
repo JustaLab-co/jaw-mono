@@ -98,7 +98,7 @@ describe('clientIdentity', () => {
     expect(id.name).not.toContain('\u202E');
   });
 
-  it.each(['J\u1EA1w', 'J\u00E0w', 'J\u0251w', '\u13ABaw', 'Ja\u13B3', '\u13AB\u13AA\u13D4'])(
+  it.each(['J\u1EA1w', 'J\u00E0w', 'J\u0251w', '\u13ABaw', 'Ja\u13B3', '\u13AB\u13AA\u13D4', '\u029Daw', '\u0249aw'])(
     'flags %j: marks fold away after decomposition, and Cherokee and Latin alpha fold like other lookalikes',
     (name) => {
       expect(clientIdentity('https://evil.example/c.json', name).reservedName).toBe(true);
