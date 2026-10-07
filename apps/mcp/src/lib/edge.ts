@@ -53,6 +53,8 @@ const UNREACHABLE = new Set([
   'ECONNREFUSED',
   'ECONNRESET',
   'ETIMEDOUT',
+  'ENOTFOUND',
+  'EAI_AGAIN',
   'CONNECT_TIMEOUT',
   '57P01',
   '57P03',
@@ -60,7 +62,7 @@ const UNREACHABLE = new Set([
   '08006',
 ]);
 
-function databaseUnreachable(err: unknown): boolean {
+export function databaseUnreachable(err: unknown): boolean {
   const codeOf = (e: unknown) => (e as { code?: unknown } | undefined)?.code;
   return [codeOf(err), codeOf((err as { cause?: unknown } | undefined)?.cause)].some(
     (c) => typeof c === 'string' && UNREACHABLE.has(c)

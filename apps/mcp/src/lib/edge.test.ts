@@ -107,6 +107,13 @@ describe('withEdge', () => {
     expect((await call(withEdge(dbDown, { guarded: false }))).status).toBe(503);
   });
 
+  it.each(['ENOTFOUND', 'EAI_AGAIN'])('answers 503 when the database host does not resolve (%s)', async (code) => {
+    const lookupFailed = async () => {
+      throw new Error('Failed query', { cause: { code } });
+    };
+    expect((await call(withEdge(lookupFailed, { guarded: false }))).status).toBe(503);
+  });
+
   it('leaves unguarded routes open while paused', async () => {
     store.paused = true;
     expect((await call(withEdge(ok, { guarded: false }))).status).toBe(200);

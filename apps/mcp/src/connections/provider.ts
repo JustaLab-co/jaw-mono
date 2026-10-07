@@ -1,6 +1,6 @@
 import { FIRST_PARTY_CLIENTS } from '@jaw.id/agent';
 import Provider, { errors, interactionPolicy, type Configuration } from 'oidc-provider';
-import { log } from '@/lib/edge';
+import { databaseUnreachable, log } from '@/lib/edge';
 import { PgAdapter } from './adapter';
 import { bridge } from './bridge';
 import { config, type Config } from './config';
@@ -100,7 +100,19 @@ export function createProvider(cfg: Config, overrides: Partial<Configuration> = 
     ...overrides,
   });
   provider.proxy = true;
-  provider.on('server_error', (_ctx, err: Error) => log('error', { msg: 'oauth server error', error: err.name }));
+  provider.on('server_error', (ctx: { state: Record<string, unknown> }, err: Error) => {
+    if (databaseUnreachable(err)) ctx.state.databaseUnreachable = true;
+    log('error', { msg: 'oauth server error', error: err.name });
+  });
+  // The provider renders its own 500 for errors in its routes; a database
+  // outage should read as one, like everywhere else on this server.
+  provider.use(async (ctx, next) => {
+    await next();
+    if (!ctx.state.databaseUnreachable) return;
+    ctx.status = 503;
+    ctx.type = 'json';
+    ctx.body = { error: 'temporarily_unavailable', error_description: 'The service is temporarily unavailable' };
+  });
   return provider;
 }
 
