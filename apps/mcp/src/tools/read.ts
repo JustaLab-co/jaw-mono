@@ -13,7 +13,9 @@ import { mainnet } from 'viem/chains';
 import { z } from 'zod';
 import { tenant, type Tenant } from '@/connections/auth';
 import { config } from '@/connections/config';
+import { getDb } from '@/db/client';
 import { currentGrant, type Grant } from '@/grants/store';
+import { pulledUnderOtherGrants } from '@/payments/store';
 import { publicClientFor } from '@/lib/chain';
 import { fenceText, reply } from '@/lib/fence';
 import { safeFetch } from '@/lib/safe-fetch';
@@ -43,15 +45,18 @@ const budgetOutput = z.object({
 
 const clients = { clients: { publicClient: publicClientFor } };
 
-async function budgetOf(grant: Grant) {
+// Spent counts what the connection's replaced budgets pulled in the same day, as the refill does.
+async function budgetOf(grant: Grant, connectionId: string) {
   const target = { chainId: grant.chainId, permissionId: grant.permissionId, permission: grant.permission };
-  const [liveness, periods] = await Promise.all([
+  const [liveness, periods, earlier] = await Promise.all([
     readLiveness(target, clients),
     readCurrentPeriods({ ...target, token: grant.token }, clients),
+    pulledUnderOtherGrants(getDb(), connectionId, grant.permissionId),
   ]);
   const asset = caip19(caip2(grant.chainId), grant.token);
   const counted = periods[0]?.period;
-  const spent = counted?.status === 'ok' ? counted.spend : counted?.status === 'outside-window' ? 0n : null;
+  const own = counted?.status === 'ok' ? counted.spend : counted?.status === 'outside-window' ? 0n : null;
+  const spent = own === null ? null : own + earlier;
   const allowance = BigInt(grant.allowance);
   const left = spent === null ? null : spent >= allowance ? 0n : allowance - spent;
   return {
@@ -76,7 +81,7 @@ function readinessOf(liveness: Awaited<ReturnType<typeof readLiveness>> | undefi
 
 async function readinessFor(t: Tenant): Promise<Readiness> {
   const grant = await currentGrant(t.connectionId);
-  return readinessOf(grant && (await budgetOf(grant)).liveness);
+  return readinessOf(grant && (await budgetOf(grant, t.connectionId)).liveness);
 }
 
 const fenced = (source: string, text: string) => ({ type: 'text' as const, text: fenceText(source, text, 2000) });
@@ -111,7 +116,7 @@ async function status(t: Tenant) {
     balanceOf(network, t.sessionAddress),
     currentGrant(t.connectionId),
   ]);
-  const read = grant && (await budgetOf(grant));
+  const read = grant && (await budgetOf(grant, t.connectionId));
   const ready = readinessOf(read?.liveness);
   const left = read?.budget.remainingToday;
   return statusOutput.parse({
