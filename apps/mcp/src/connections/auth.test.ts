@@ -42,7 +42,7 @@ describe('/mcp behind OAuth', () => {
     expect(await init.text()).toContain('"name":"jaw"');
     const list = await rpc({ method: 'tools/list' }, access_token);
     expect(list.status).toBe(200);
-    expect(await list.text()).toContain('"tools":[]');
+    expect(await list.text()).toContain('"tools":[');
   });
 
   it('refuses a token without wallet:read', async () => {

@@ -153,3 +153,25 @@ export async function connect(signer = owner(), a: Authorize = {}) {
   });
   return { signer, details: d, uid: start.uid, ...issued.body, status: issued.status };
 }
+
+/** One JSON-RPC call to the MCP route, decoded from its event stream. */
+export async function mcp(token: string | undefined, body: object) {
+  const { POST } = await import('@/app/mcp/route');
+  const res = await POST(
+    new Request(`${ISSUER}/mcp`, {
+      method: 'POST',
+      headers: {
+        'content-type': 'application/json',
+        accept: 'application/json, text/event-stream',
+        ...(token ? { authorization: `Bearer ${token}` } : {}),
+      },
+      body: JSON.stringify({ jsonrpc: '2.0', id: 1, ...body }),
+    })
+  );
+  const text = await res.text();
+  const data = text.split('\n').find((l) => l.startsWith('data: '));
+  return { status: res.status, headers: res.headers, text, json: data ? JSON.parse(data.slice(6)) : undefined };
+}
+
+export const callTool = async (token: string, name: string, args: object) =>
+  (await mcp(token, { method: 'tools/call', params: { name, arguments: args } })).json?.result;

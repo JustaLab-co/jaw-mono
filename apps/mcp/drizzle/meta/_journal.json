@@ -15,6 +15,13 @@
       "when": 1791338095574,
       "tag": "0001_connections",
       "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "7",
+      "when": 1791340045138,
+      "tag": "0002_approvals",
+      "breakpoints": true
     }
   ]
 }

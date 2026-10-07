@@ -1,4 +1,5 @@
-import { details, preflight } from '@/connections/interaction';
+import { details } from '@/connections/interaction';
+import { preflight } from '@/lib/cors';
 import { withEdge } from '@/lib/edge';
 
 export const runtime = 'nodejs';

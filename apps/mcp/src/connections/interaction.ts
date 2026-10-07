@@ -1,14 +1,14 @@
 import { createHash, randomBytes } from 'node:crypto';
 import { sanitizeLine } from '@jaw.id/agent';
-import { createPublicClient, http, isAddress, isHex, type Address, type Hex } from 'viem';
+import { isAddress, isHex } from 'viem';
 import { generatePrivateKey, privateKeyToAddress } from 'viem/accounts';
+import { verifyOnChain, type VerifySignature } from '@/lib/chain';
+import { pageCors } from '@/lib/cors';
 import { bridge } from './bridge';
 import { config } from './config';
 import { OFFICIAL_CLIENTS, provider, SCOPES, type Scope } from './provider';
 import { activate, findClaimable, insertPending } from './rows';
 import { seal } from './seal';
-
-export type VerifySignature = (a: { address: Address; message: string; signature: Hex }) => Promise<boolean>;
 
 const UID = /^[A-Za-z0-9_-]{10,64}$/;
 const sha256 = (value: string) => createHash('sha256').update(value).digest('hex');
@@ -64,20 +64,6 @@ async function loadDetails(uid: string): Promise<ConsentDetails | undefined> {
   return { ...details, message: consentMessage(details, new URL(issuer).host) };
 }
 
-function cors(res: Response): Response {
-  res.headers.set('access-control-allow-origin', config().keysOrigin);
-  res.headers.set('access-control-allow-methods', 'GET, POST, OPTIONS');
-  res.headers.set('access-control-allow-headers', 'content-type');
-  res.headers.set('cache-control', 'no-store');
-  res.headers.set('vary', 'origin');
-  return res;
-}
-
-const verifyOnChain: VerifySignature = ({ address, message, signature }) => {
-  const { chain, rpcUrl } = config();
-  return createPublicClient({ chain, transport: http(rpcUrl) }).verifyMessage({ address, message, signature });
-};
-
 const uidOf = (req: Request) => new URL(req.url).pathname.split('/')[2];
 
 /** GET /interaction/[uid]. Sends the browser on to keys.jaw.id; the interaction cookie is scoped to this path. */
@@ -90,7 +76,7 @@ export function hop(req: Request): Response {
 /** GET /interaction/[uid]/details. What /authorize renders, including the exact message it signs. */
 export async function details(req: Request): Promise<Response> {
   const found = await loadDetails(uidOf(req));
-  return cors(found ? Response.json(found) : Response.json({ error: 'not_found' }, { status: 404 }));
+  return pageCors(found ? Response.json(found) : Response.json({ error: 'not_found' }, { status: 404 }));
 }
 
 /**
@@ -102,14 +88,14 @@ export async function consent(req: Request, verify: VerifySignature = verifyOnCh
   const uid = uidOf(req);
   const body = (await req.json().catch(() => ({}))) as { address?: string; signature?: string };
   if (!body.address || !isAddress(body.address) || !body.signature || !isHex(body.signature)) {
-    return cors(Response.json({ error: 'invalid_request' }, { status: 400 }));
+    return pageCors(Response.json({ error: 'invalid_request' }, { status: 400 }));
   }
   const found = await loadDetails(uid);
-  if (!found) return cors(Response.json({ error: 'not_found' }, { status: 404 }));
+  if (!found) return pageCors(Response.json({ error: 'not_found' }, { status: 404 }));
   const valid = await verify({ address: body.address, message: found.message, signature: body.signature }).catch(
     () => false
   );
-  if (!valid) return cors(Response.json({ error: 'bad_signature' }, { status: 401 }));
+  if (!valid) return pageCors(Response.json({ error: 'bad_signature' }, { status: 401 }));
 
   const id = `conn_${randomBytes(16).toString('base64url')}`;
   const privateKey = generatePrivateKey();
@@ -129,12 +115,8 @@ export async function consent(req: Request, verify: VerifySignature = verifyOnCh
     },
     sha256(ticket)
   );
-  if (!inserted) return cors(Response.json({ error: 'already_consented' }, { status: 409 }));
-  return cors(Response.json({ next: `${config().issuer}/interaction/${uid}/complete?ticket=${ticket}` }));
-}
-
-export function preflight(): Response {
-  return cors(new Response(null, { status: 204 }));
+  if (!inserted) return pageCors(Response.json({ error: 'already_consented' }, { status: 409 }));
+  return pageCors(Response.json({ next: `${config().issuer}/interaction/${uid}/complete?ticket=${ticket}` }));
 }
 
 function fail(res: import('node:http').ServerResponse, status: number, error: string) {

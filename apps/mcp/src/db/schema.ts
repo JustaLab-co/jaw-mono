@@ -63,3 +63,37 @@ export const connections = pgTable(
     ),
   ]
 );
+
+// Expiry is derived from expires_at and never written, so the decision is the
+// only update a row ever gets.
+export const approvalRequests = pgTable(
+  'approval_requests',
+  {
+    id: text('id').primaryKey(),
+    connectionId: text('connection_id')
+      .notNull()
+      .references(() => connections.id),
+    account: text('account').notNull(),
+    chainId: integer('chain_id').notNull(),
+    requester: text('requester').notNull(),
+    kind: text('kind').notNull(),
+    body: jsonb('body').notNull(),
+    status: text('status', { enum: ['pending', 'approved', 'rejected'] })
+      .notNull()
+      .default('pending'),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull(),
+    expiresAt: timestamp('expires_at', { withTimezone: true }).notNull(),
+    decidedAt: timestamp('decided_at', { withTimezone: true }),
+    previewHash: text('preview_hash'),
+    payloadHash: text('payload_hash'),
+    signature: text('signature'),
+    assertionRef: text('assertion_ref'),
+  },
+  (t) => [
+    index().on(t.connectionId, t.createdAt),
+    check(
+      'approval_evidence',
+      sql`(${t.status} = 'pending') = (${t.decidedAt} is null and ${t.previewHash} is null and ${t.payloadHash} is null and ${t.signature} is null and ${t.assertionRef} is null)`
+    ),
+  ]
+);

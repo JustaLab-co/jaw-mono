@@ -1,4 +1,5 @@
-import { consent, preflight } from '@/connections/interaction';
+import { consent } from '@/connections/interaction';
+import { preflight } from '@/lib/cors';
 import { withEdge } from '@/lib/edge';
 
 export const runtime = 'nodejs';
