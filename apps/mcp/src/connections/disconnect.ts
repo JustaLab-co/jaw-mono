@@ -224,7 +224,9 @@ async function returnFunds(tx: Tx, t: Tenant, deps: DisconnectDeps): Promise<Ret
     return undefined;
   });
   if (!sender) return REFUSALS.notSent;
-  const fee = await sender.quote([...revokes.map((r) => r.call), transfer(free)]).catch((err) => {
+  // Quoted with a one unit transfer: the fee does not depend on the amount, and a
+  // simulation that moves the whole float leaves nothing to pay the fee with.
+  const fee = await sender.quote([...revokes.map((r) => r.call), transfer(1n)]).catch((err) => {
     log('error', { msg: 'disconnect quote unavailable', error: errorLabel(err) });
     return undefined;
   });
