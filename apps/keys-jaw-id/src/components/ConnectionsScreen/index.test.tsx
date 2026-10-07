@@ -77,12 +77,14 @@ const REVOKED = {
 };
 
 let listed: object[] = [];
+let expired = false;
 let posts: { url: string; body: Record<string, unknown> }[] = [];
 let container: HTMLDivElement;
 let root: Root;
 
 beforeEach(() => {
   listed = [ACTIVE];
+  expired = false;
   posts = [];
   modal = null;
   signTypedData.mockClear();
@@ -95,6 +97,7 @@ beforeEach(() => {
       }
       const body = JSON.parse(String(init?.body));
       posts.push({ url, body });
+      if (expired) return Response.json({ error: 'invalid_request' }, { status: 400 });
       if (url.endsWith('/revoke')) {
         listed = [REVOKED];
         return Response.json(REVOKED);
@@ -199,5 +202,40 @@ describe('ConnectionsScreen', () => {
     expect(container.textContent).toContain('Still approved on chain');
     await click(button('Revoke on chain'));
     expect(modal?.permissionRequest.params).toEqual([{ id: PERMISSION, address: OWNER }]);
+  });
+
+  it('warns about the float even when it could not be read', async () => {
+    listed = [{ ...ACTIVE, float: null }];
+    await signIn();
+    await click(button('Revoke'));
+    expect(container.textContent).toContain('could not be read');
+    expect(container.textContent).toContain('jaw_disconnect');
+  });
+
+  it('asks to sign in again when the sign-in expired on a refresh of the list', async () => {
+    listed = [REVOKED];
+    await signIn();
+    await click(button('Revoke on chain'));
+    expired = true;
+    await act(async () => modal?.onSuccess({}));
+    await settle();
+    expect(container.querySelector('#login')).not.toBeNull();
+    expect(container.textContent).toContain('Your sign-in expired');
+  });
+
+  it('opens the next budget still approved on chain after one is revoked', async () => {
+    const SECOND = `0x${'ef'.repeat(32)}`;
+    const both = [
+      { ...ACTIVE.budgets[0], state: 'revoke_on_chain' },
+      { ...ACTIVE.budgets[0], permissionId: SECOND, state: 'revoke_on_chain' },
+    ];
+    listed = [{ ...REVOKED, budgets: both }];
+    await signIn();
+    await click(button('Revoke on chain'));
+    expect(modal?.permissionRequest.params).toEqual([{ id: PERMISSION, address: OWNER }]);
+    listed = [{ ...REVOKED, budgets: [{ ...both[0], state: 'revoked' }, both[1]] }];
+    await act(async () => modal?.onSuccess({}));
+    await settle();
+    expect(modal?.permissionRequest.params).toEqual([{ id: SECOND, address: OWNER }]);
   });
 });

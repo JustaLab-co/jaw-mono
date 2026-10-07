@@ -4,7 +4,7 @@ import type { ClientIdentity } from '../components/ClientHeader';
 
 export interface ConnectionView {
   id: string;
-  status: 'active' | 'revoked';
+  status: 'active' | 'expired' | 'revoked';
   chainId: number;
   client: ClientIdentity;
   scopes: string[];

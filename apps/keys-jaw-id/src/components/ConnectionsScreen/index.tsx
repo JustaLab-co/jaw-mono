@@ -48,7 +48,18 @@ export function ConnectionsScreen({ mcpUrl }: { mcpUrl: string }) {
   const list = useQuery({
     queryKey: ['connections', proof?.signature],
     enabled: proof !== null,
-    queryFn: () => postProof<ConnectionView[]>(base, proof as SignInProof),
+    retry: false,
+    queryFn: async () => {
+      try {
+        return await postProof<ConnectionView[]>(base, proof as SignInProof);
+      } catch (err) {
+        if (err instanceof SignInExpired) {
+          setProof(null);
+          setError(err.message);
+        }
+        throw err;
+      }
+    },
   });
 
   if (server.isPending) return <p className="text-center text-sm">Loading…</p>;
@@ -95,6 +106,16 @@ export function ConnectionsScreen({ mcpUrl }: { mcpUrl: string }) {
       setOnChain(ended.budgets.find((b) => b.state === 'revoke_on_chain')?.permissionId ?? null);
     });
 
+  // The next budget of the same connection still approved on chain, if any.
+  const afterOnChain = (done: Hex, failed: string) =>
+    run(async () => {
+      setOnChain(null);
+      const { data } = await list.refetch();
+      if (failed) throw new Error(failed);
+      const budgets = data?.find((c) => c.budgets.some((b) => b.permissionId === done))?.budgets ?? [];
+      setOnChain(budgets.find((b) => b.state === 'revoke_on_chain' && b.permissionId !== done)?.permissionId ?? null);
+    });
+
   return (
     <div className="flex flex-col gap-4">
       <h1 className="text-lg font-semibold">Your connections</h1>
@@ -119,11 +140,7 @@ export function ConnectionsScreen({ mcpUrl }: { mcpUrl: string }) {
           owner={proof.account}
           account={owner}
           apiKey={apiKey}
-          onDone={(message) => {
-            setOnChain(null);
-            setError(message);
-            void list.refetch();
-          }}
+          onDone={(failed) => afterOnChain(onChain, failed)}
         />
       )}
     </div>
@@ -142,6 +159,7 @@ interface CardProps {
 function ConnectionCard({ view, confirming, onRevoke, onCancel, onConfirm, onRevokeOnChain }: CardProps) {
   // The float, when there is any to lose.
   const funded = view.float !== null && BigInt(view.float) > 0n ? view.float : null;
+  const unread = view.payer !== null && view.float === null;
   return (
     <section className="flex flex-col gap-3 rounded-lg border p-6">
       <div>
@@ -149,7 +167,9 @@ function ConnectionCard({ view, confirming, onRevoke, onCancel, onConfirm, onRev
         <p className="text-muted-foreground text-sm">
           {view.revokedAt
             ? `Revoked ${new Date(view.revokedAt).toLocaleString()}`
-            : `Connected ${new Date(view.createdAt).toLocaleString()}`}
+            : view.status === 'expired'
+              ? `Ended ${new Date(view.expiresAt).toLocaleString()}`
+              : `Connected ${new Date(view.createdAt).toLocaleString()}`}
         </p>
         <p className="text-muted-foreground text-sm">Can: {view.scopes.join(', ')}</p>
       </div>
@@ -208,6 +228,12 @@ function ConnectionCard({ view, confirming, onRevoke, onCancel, onConfirm, onRev
       {confirming && (
         <div className="flex flex-col gap-2 rounded border p-3 text-sm">
           <p>The app&apos;s tokens stop working at once. Then you revoke its budget on chain with your passkey.</p>
+          {unread && (
+            <p className="text-destructive">
+              The payer&apos;s balance could not be read. Any USDC in it cannot be returned after this; to get it back
+              first, ask the agent to call jaw_disconnect.
+            </p>
+          )}
           {funded && (
             <p className="text-destructive">
               {usdc(funded)} in its payer cannot be returned after this. To get it back first, ask the agent to call
