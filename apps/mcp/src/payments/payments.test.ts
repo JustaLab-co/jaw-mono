@@ -308,6 +308,18 @@ describe('jaw_pay_and_fetch', () => {
     expect(seen.map((s) => s.advisoryLocks)).toEqual([0, 0, 0, 0, 0]);
   });
 
+  it('reserves the float for concurrent payments even when the server cannot refill', async () => {
+    const { t } = await connected('1');
+    balances.set(t.sessionAddress.toLowerCase(), 5_000n);
+    const results = await Promise.all(
+      [1, 2].map((n) =>
+        pay(t, { url: url('/slow'), idempotencyKey: `norefill-${n}` }, deps({ executor: () => undefined }))
+      )
+    );
+    expect(results.map((r) => r.structuredContent?.kind).sort()).toEqual(['paid', 'refused']);
+    expect(seen).toHaveLength(1);
+  });
+
   it('refuses past the daily budget as budget_exhausted, with the raise named and nothing sent', async () => {
     const { t } = await connected('0.006');
     balances.set(t.sessionAddress.toLowerCase(), 1_000_000n);

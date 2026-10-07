@@ -34,7 +34,8 @@ interface RefillContext {
   payer: Address;
   grant: Grant;
   policy: X402Policy;
-  executor: TopUpExecutor;
+  /** Absent without a paymaster key: the float is still reserved, a shortfall is refused. */
+  executor: TopUpExecutor | undefined;
   clients: ChainClients;
   logger: Logger;
 }
@@ -70,6 +71,12 @@ async function stillHeld(rows: PaymentRow[], clients: ChainClients): Promise<big
   );
   return holds.reduce((sum, held) => sum + held, 0n);
 }
+
+const noRefill: TopUpExecutor = {
+  request: async () => {
+    throw new Error('this server has no paymaster key, so it cannot refill the payer');
+  },
+};
 
 const timedOut = (reason: string): TopUpOutcome => ({ ok: false, code: 'timed_out', reason });
 
@@ -121,7 +128,7 @@ export function refillHook(c: RefillContext): EnsureFunds {
           });
           const spentThisSession = sumSpentSince(entries, { payer: c.payer }, session.createdAt);
           const onChain = balanceReader(c.clients);
-          funded = await ensurePayerFunds(requirement, payer, c.executor, {
+          funded = await ensurePayerFunds(requirement, payer, c.executor ?? noRefill, {
             clients: c.clients,
             logger: c.logger,
             sessionChainId: c.grant.chainId,

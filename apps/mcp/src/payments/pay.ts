@@ -297,19 +297,17 @@ async function payWithinGrant(
     spentThisSession: sumSpentSince(entries, { payer: payer.address }, session.createdAt),
     maxAmount: request.maxAmount,
     network: `eip155:${grant.chainId}`,
-    ensureFunds:
-      executor &&
-      refillHook({
-        rowId: row.id,
-        token,
-        connectionId: t.connectionId,
-        payer: payer.address,
-        grant,
-        policy,
-        executor,
-        clients: deps.clients,
-        logger: agentLogger,
-      }),
+    ensureFunds: refillHook({
+      rowId: row.id,
+      token,
+      connectionId: t.connectionId,
+      payer: payer.address,
+      grant,
+      policy,
+      executor,
+      clients: deps.clients,
+      logger: agentLogger,
+    }),
     attempt: {
       key: row.id,
       onSigned: async (authorization) => {
