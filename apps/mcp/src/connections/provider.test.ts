@@ -25,7 +25,7 @@ const { verifyBearer } = await import('./auth');
 const { config } = await import('./config');
 const { createProvider } = await import('./provider');
 const { PgAdapter, RETRY_WINDOW_MS } = await import('./adapter');
-const { findActive } = await import('./rows');
+const { findActive, revokeByGrant } = await import('./rows');
 const { open, parseKeyRing, unwrap } = await import('./seal');
 type KeyRing = ReturnType<typeof parseKeyRing>;
 
@@ -322,6 +322,25 @@ describe('authorization server', () => {
     expect(loser.body.error).toBe('invalid_grant');
     expect(await findActive(sub)).toBeDefined();
     expect((await refresh(winner!.body.refresh_token)).status).toBe(200);
+  });
+
+  it('refuses a refresh whose connection is revoked after the account check, before the rotation', async () => {
+    const c = await connect();
+    const sub = (await claimsOf(c.access_token)).sub;
+    const upsert = PgAdapter.prototype.upsert;
+    vi.spyOn(PgAdapter.prototype, 'upsert').mockImplementationOnce(async function (
+      this: InstanceType<typeof PgAdapter>,
+      id,
+      payload,
+      expiresIn
+    ) {
+      await revokeByGrant(payload.grantId!);
+      return upsert.call(this, id, payload, expiresIn);
+    });
+    const refreshed = await refresh(c.refresh_token);
+    vi.restoreAllMocks();
+    expect(refreshed.body.error).toBe('invalid_grant');
+    expect(await liveRefreshTokens(sub)).toBe(1);
   });
 
   it('never forks the refresh chain under concurrent refreshes or retries', async () => {
