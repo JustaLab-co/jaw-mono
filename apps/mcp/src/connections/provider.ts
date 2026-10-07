@@ -2,7 +2,7 @@ import { FIRST_PARTY_CLIENTS, hasUnstorableText } from '@jaw.id/agent';
 import Provider, { errors, interactionPolicy, type Configuration } from 'oidc-provider';
 import { databaseUnreachable, log } from '@/lib/edge';
 import { PgAdapter, sessionKey } from './adapter';
-import { bridge } from './bridge';
+import { bridge, requestUrl } from './bridge';
 import { config, type Config } from './config';
 import { findActive } from './rows';
 import { seal } from './seal';
@@ -70,6 +70,7 @@ export function createProvider(cfg: Config, overrides: Partial<Configuration> = 
     },
     features: {
       devInteractions: { enabled: false },
+      pushedAuthorizationRequests: { enabled: false },
       userinfo: { enabled: false },
       revocation: { enabled: true },
       clientIdMetadataDocument: {
@@ -83,8 +84,14 @@ export function createProvider(cfg: Config, overrides: Partial<Configuration> = 
         enabled: true,
         defaultResource: () => cfg.resource,
         useGrantedResource: () => true,
-        getResourceServerInfo: (_ctx, indicator) => {
+        getResourceServerInfo: (ctx, indicator) => {
           if (indicator !== cfg.resource) throw new errors.InvalidTarget();
+          // Every tool needs wallet:read. Refused here, the provider answers the
+          // client with an OAuth error instead of leaving the user on a dead page.
+          const scope = String(ctx.oidc.params?.scope ?? '').split(' ');
+          if (ctx.oidc.route === 'authorization' && !scope.includes('wallet:read')) {
+            throw new errors.InvalidScope('wallet:read is required', 'wallet:read');
+          }
           return {
             scope: Object.keys(SCOPES).join(' '),
             audience: cfg.resource,
@@ -111,6 +118,15 @@ export function createProvider(cfg: Config, overrides: Partial<Configuration> = 
   });
   // The provider renders its own 500 for errors in its routes; a database
   // outage should read as one, like everywhere else on this server.
+  // The wallet scopes are resource scopes, so the provider leaves them out of
+  // its metadata; MCP clients ask for the scopes the metadata lists.
+  provider.use(async (ctx, next) => {
+    await next();
+    const body = ctx.body as { scopes_supported?: string[] } | undefined;
+    if (ctx.oidc?.route === 'discovery' && body?.scopes_supported) {
+      body.scopes_supported = [...body.scopes_supported, ...Object.keys(SCOPES)];
+    }
+  });
   provider.use(async (ctx, next) => {
     await next();
     if (!ctx.state.databaseUnreachable) return;
@@ -128,6 +144,17 @@ export function provider(): Provider {
   return cache.jawMcpProvider;
 }
 
+// A client that asks for no wallet scope (none at all, or only openid
+// offline_access) gets wallet:read, the scope every tool needs.
+function withDefaultScope(req: Request): Request {
+  const url = new URL(requestUrl(req));
+  if (req.method !== 'GET' || url.pathname !== '/oauth/authorize') return req;
+  const scope = (url.searchParams.get('scope') ?? '').split(' ').filter(Boolean);
+  if (scope.some((s) => s in SCOPES)) return req;
+  url.searchParams.set('scope', [...scope, 'wallet:read'].join(' '));
+  return new Request(url, req);
+}
+
 export async function oauth(req: Request): Promise<Response> {
-  return bridge(req, provider().callback());
+  return bridge(withDefaultScope(req), provider().callback());
 }

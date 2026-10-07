@@ -61,7 +61,8 @@ async function route(req: Request): Promise<Response> {
 export interface Authorize {
   clientId?: string;
   redirectUri?: string;
-  scope?: string;
+  /** null sends no scope parameter at all. */
+  scope?: string | null;
   resource?: string;
   pkce?: boolean;
 }
@@ -77,7 +78,7 @@ export async function startAuthorization(browser: Browser, a: Authorize = {}) {
     client_id: a.clientId ?? 'jaw-cli',
     redirect_uri: a.redirectUri ?? REDIRECT,
     response_type: 'code',
-    scope: a.scope ?? 'wallet:read wallet:send',
+    ...(a.scope === null ? {} : { scope: a.scope ?? 'wallet:read wallet:send' }),
     state: 'st',
     resource: a.resource ?? RESOURCE,
     ...(a.pkce === false ? {} : { code_challenge: challenge, code_challenge_method: 'S256' }),

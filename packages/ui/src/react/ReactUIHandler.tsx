@@ -69,6 +69,7 @@ import { resolvePaymaster } from '../utils/resolvePaymaster';
 import { getPublicClient } from '../utils/publicClient';
 import { getSiweOriginWarning, getSiweOriginWarningFromMessage, isSiweMessage, hexToUtf8 } from '../utils/siwe';
 import { PortalContainerContext } from '../lib/utils';
+import { reservedSigningRefusal } from '../utils/reservedSigning';
 import type { JawTheme } from '@jaw.id/core';
 import { resolveTheme } from '../theme/resolve-theme.js';
 import { applyThemeToContainer } from '../theme/apply-theme.js';
@@ -242,6 +243,10 @@ export class ReactUIHandler implements UIHandler {
   }
 
   async request<T = unknown>(request: UIRequest): Promise<UIResponse<T>> {
+    // The dialogs carry the signing payload as data.message, data.typedData or, for wallet_sign, data itself.
+    const data = request.data as { message?: unknown; typedData?: unknown } | undefined;
+    const reserved = reservedSigningRefusal(request.type, [data?.message ?? data?.typedData ?? data]);
+    if (reserved) throw UIError.userRejected(reserved);
     // The previous request may have resolved and left its teardown on a timer so its
     // success tick could finish showing. Flush it now: left to fire on its own it
     // would land mid-flow and strip the body pointer-events lock and focus scope that

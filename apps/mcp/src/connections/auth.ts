@@ -2,7 +2,7 @@ import type { AuthInfo } from '@modelcontextprotocol/server';
 import { compactDecrypt, decodeProtectedHeader } from 'jose';
 import { withMcpAuth } from 'mcp-handler';
 import type { Address, Hex } from 'viem';
-import { ipKey } from '@/lib/edge';
+import { errorLabel, ipKey, log } from '@/lib/edge';
 import { config } from './config';
 import type { Scope } from './provider';
 import { findActive } from './rows';
@@ -66,7 +66,9 @@ export async function clientOf(req: Request): Promise<string> {
 export async function verifyBearer(bearer: string | undefined): Promise<AuthInfo | undefined> {
   if (!bearer) return undefined;
   const claims = await decrypt(bearer);
-  if (!claims || !(claims.scope ?? '').split(' ').includes('wallet:read')) return undefined;
+  // The token's scopes, never the row's: a refresh may narrow them.
+  const scopes = (claims?.scope ?? '').split(' ').filter(Boolean);
+  if (!claims || !scopes.includes('wallet:read')) return undefined;
   const row = await findActive(claims.sub);
   if (!row?.sessionAddress || row.clientId !== claims.client_id) return undefined;
   const tenant: Tenant = {
@@ -75,14 +77,14 @@ export async function verifyBearer(bearer: string | undefined): Promise<AuthInfo
     chainId: row.chainId,
     clientId: row.clientId,
     clientName: row.clientName,
-    scopes: row.scopes as Scope[],
+    scopes: scopes as Scope[],
     sessionAddress: row.sessionAddress as Address,
     sessionKey: () => open(config().ring, claims.sk, row.id),
   };
   return {
     token: claims.jti,
     clientId: claims.client_id,
-    scopes: (claims.scope ?? '').split(' ').filter(Boolean),
+    scopes,
     expiresAt: claims.exp,
     resource: new URL(config().resource),
     extra: { tenant },
@@ -90,14 +92,25 @@ export async function verifyBearer(bearer: string | undefined): Promise<AuthInfo
 }
 
 export function withConnection(handler: (req: Request) => Promise<Response>): (req: Request) => Promise<Response> {
-  return (req) =>
-    withMcpAuth(handler, (_req, bearer) => verifyBearer(bearer), {
+  return async (req) => {
+    // Verified here rather than inside withMcpAuth, which logs a thrown error
+    // whole (a driver error carries its SQL) and answers 401, so a client would
+    // drop working credentials during an outage.
+    let auth: AuthInfo | undefined;
+    try {
+      auth = await verifyBearer(req.headers.get('authorization')?.match(/^Bearer (.+)$/i)?.[1]);
+    } catch (err) {
+      log('error', { msg: 'bearer verification unavailable', error: errorLabel(err) });
+      return Response.json({ error: 'unavailable' }, { status: 503 });
+    }
+    return withMcpAuth(handler, async () => auth, {
       // No required scope: the challenge would name it, and an MCP client then
       // asks for that scope alone instead of every scope the metadata lists.
       required: true,
       resourceMetadataPath: RESOURCE_METADATA_PATH,
       resourceUrl: config().issuer,
     })(req);
+  };
 }
 
 export function tenant(ctx: { http?: { authInfo?: AuthInfo } }): Tenant {

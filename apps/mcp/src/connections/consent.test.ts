@@ -54,6 +54,22 @@ describe('consent hand-back', () => {
     });
   });
 
+  it.each([
+    ['no scope at all', null, ['wallet:read']],
+    ['only openid offline_access', 'openid offline_access', ['wallet:read']],
+    ['both wallet scopes', 'wallet:read wallet:send', ['wallet:read', 'wallet:send']],
+  ])('serves an authorization with %s', async (_name, scope, expected) => {
+    const { uid } = await startAuthorization(new Browser(), { scope });
+    expect(uid).toBeDefined();
+    expect((await getDetails(uid!)).scopes.map((s) => s.id)).toEqual(expected);
+  });
+
+  it('refuses wallet:send without wallet:read at the authorization endpoint, back to the client', async () => {
+    const start = await startAuthorization(new Browser(), { scope: 'wallet:send' });
+    expect(start.uid).toBeUndefined();
+    expect(start.redirected?.searchParams.get('error')).toBe('invalid_scope');
+  });
+
   it('refuses a signature made for another interaction', async () => {
     const a = await pending();
     const b = await pending();

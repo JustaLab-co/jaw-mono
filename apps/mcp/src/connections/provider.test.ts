@@ -361,6 +361,50 @@ describe('authorization server', () => {
     expect(recoverable(dump, config().ring, sub, [c.refresh_token])).toEqual([]);
   });
 
+  it('keeps no wrap for a used token once its retry window has passed, successor used or not', async () => {
+    const c = await connect();
+    const sub = (await claimsOf(c.access_token)).sub;
+    await refresh(c.refresh_token);
+    vi.useFakeTimers({ toFake: ['Date'] });
+    try {
+      vi.setSystemTime(Date.now() + RETRY_WINDOW_MS + 1000);
+      await refresh((await connect()).refresh_token);
+    } finally {
+      vi.useRealTimers();
+    }
+    expect(recoverable(await dumpStrings(), config().ring, sub, [c.refresh_token])).toEqual([]);
+  });
+
+  it('answers a retry at the very edge of the window, even when the sweep runs a moment later', async () => {
+    const c = await connect();
+    const sub = (await claimsOf(c.access_token)).sub;
+    await refresh(c.refresh_token);
+    const [{ consumed_at }] = (
+      await db.query<{ consumed_at: Date }>(
+        `select p.consumed_at from oauth_payloads p join connections c on p.grant_id = c.grant_id
+         where c.id = $1 and p.model = 'RefreshToken' and p.consumed_at is not null`,
+        [sub]
+      )
+    ).rows;
+    vi.useFakeTimers({ toFake: ['Date'] });
+    try {
+      vi.setSystemTime(new Date(consumed_at).getTime() + RETRY_WINDOW_MS - 1);
+      const find = PgAdapter.prototype.find;
+      vi.spyOn(PgAdapter.prototype, 'find').mockImplementation(async function (
+        this: InstanceType<typeof PgAdapter>,
+        id
+      ) {
+        const seen = await find.call(this, id);
+        vi.setSystemTime(Date.now() + 5);
+        return seen;
+      });
+      expect((await refresh(c.refresh_token)).status).toBe(200);
+    } finally {
+      vi.restoreAllMocks();
+      vi.useRealTimers();
+    }
+  });
+
   it('creates the session key at the code exchange, never at consent', async () => {
     const browser = new Browser();
     const signer = owner();
@@ -437,6 +481,53 @@ describe('authorization server', () => {
     const body = JSON.stringify(await res.json());
     expect(body).not.toContain('evil.example');
     expect(JSON.parse(body).token_endpoint).toBe(`${ISSUER}/oauth/token`);
+  });
+
+  it('adds wallet:read to a request with no scope without touching a loopback redirect', async () => {
+    const { oauth } = await import('./provider');
+    const { NextRequest } = await import('next/server');
+    const params = new URLSearchParams({
+      client_id: 'jaw-cli',
+      redirect_uri: REDIRECT,
+      response_type: 'code',
+      state: 's',
+      resource: RESOURCE,
+      code_challenge: 'a'.repeat(43),
+      code_challenge_method: 'S256',
+    });
+    const res = await oauth(new NextRequest(`${ISSUER}/oauth/authorize?${params}`));
+    expect(res.status).toBe(303);
+    expect(res.headers.get('location')).toMatch(/^\/interaction\//);
+  });
+
+  it('advertises the wallet scopes in the authorization server metadata', async () => {
+    const { oauth } = await import('./provider');
+    for (const path of ['openid-configuration', 'oauth-authorization-server']) {
+      const res = await oauth(new Request(`${ISSUER}/.well-known/${path}`));
+      expect((await res.json()).scopes_supported, path).toEqual(expect.arrayContaining(['wallet:read', 'wallet:send']));
+    }
+  });
+
+  it('advertises only endpoints it serves: no pushed authorization requests', async () => {
+    const { oauth } = await import('./provider');
+    const res = await oauth(new Request(`${ISSUER}/.well-known/openid-configuration`));
+    expect(await res.json()).not.toHaveProperty('pushed_authorization_request_endpoint');
+  });
+
+  it('answers a NUL in the authorization request with a client error, not a 500', async () => {
+    const { oauth } = await import('./provider');
+    const params = new URLSearchParams({
+      client_id: 'jaw-cli',
+      redirect_uri: REDIRECT,
+      response_type: 'code',
+      scope: 'wallet:read',
+      state: 'a\u0000b',
+      resource: RESOURCE,
+      code_challenge: 'a'.repeat(43),
+      code_challenge_method: 'S256',
+    });
+    const res = await oauth(new Request(`${ISSUER}/oauth/authorize?${params}`));
+    expect(res.status).toBeLessThan(500);
   });
 
   it('refuses a token for another resource', async () => {

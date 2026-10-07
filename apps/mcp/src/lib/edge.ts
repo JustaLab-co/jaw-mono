@@ -48,7 +48,7 @@ const loggedPath = (url: string) =>
 
 // Error messages can carry query parameters (drizzle puts them in its own),
 // so only the class name and a driver code reach the log.
-const errorLabel = (err: unknown) => {
+export const errorLabel = (err: unknown) => {
   if (!(err instanceof Error)) return 'unknown';
   const code = (err.cause as { code?: unknown } | undefined)?.code;
   return typeof code === 'string' ? `${err.name} ${code}` : err.name;

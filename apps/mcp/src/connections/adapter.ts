@@ -1,5 +1,6 @@
 import { createHash } from 'node:crypto';
-import { and, eq, gt, isNull, or, sql } from 'drizzle-orm';
+import { hasUnstorableText } from '@jaw.id/agent';
+import { and, eq, gt, isNotNull, isNull, lt, ne, or, sql } from 'drizzle-orm';
 import Provider, { errors, type Adapter, type AdapterPayload, type KoaContextWithOIDC } from 'oidc-provider';
 import type { Hex } from 'viem';
 import { generatePrivateKey, privateKeyToAddress } from 'viem/accounts';
@@ -10,6 +11,12 @@ import { unwrap, wrap, type KeyRing, type Wrapped } from './seal';
 
 // A client whose refresh response was lost retries with the token it still holds.
 export const RETRY_WINDOW_MS = 60_000;
+
+// Request parameters land in jsonb, which refuses NUL and unpaired surrogates.
+const unstorable = (value: unknown): boolean =>
+  typeof value === 'string'
+    ? hasUnstorableText(value)
+    : typeof value === 'object' && value !== null && Object.values(value).some(unstorable);
 
 const notExpired = or(isNull(oauthPayloads.expiresAt), gt(oauthPayloads.expiresAt, sql`now()`));
 
@@ -51,6 +58,7 @@ export class PgAdapter implements Adapter {
   async upsert(id: string, payload: AdapterPayload, expiresIn: number) {
     const stored = { ...payload };
     delete stored.jti;
+    if (unstorable(stored)) throw new errors.InvalidRequest('the request contains characters that cannot be stored');
     const row = {
       model: this.model,
       payload: stored,
@@ -97,6 +105,20 @@ export class PgAdapter implements Adapter {
     const connectionId = (row.payload as AdapterPayload).accountId!;
     const presented = ctx.oidc.entities.RotatedRefreshToken?.jti;
     await getDb().transaction(async (tx) => {
+      // A used token past its window can never be retried, so its wrap would only
+      // serve whoever kept the old token. Swept on every rotation, for every grant,
+      // except the token this request presents: find already judged it retryable.
+      await tx
+        .update(oauthPayloads)
+        .set({ keyWrap: null })
+        .where(
+          and(
+            eq(oauthPayloads.model, 'RefreshToken'),
+            ne(oauthPayloads.key, this.key(presented ?? '')),
+            lt(oauthPayloads.consumedAt, new Date(Date.now() - RETRY_WINDOW_MS)),
+            isNotNull(oauthPayloads.keyWrap)
+          )
+        );
       let key = requestKeys.get(ctx);
       if (presented) {
         const [from] = await tx
