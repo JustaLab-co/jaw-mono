@@ -1,4 +1,4 @@
-import { randomBytes } from 'node:crypto';
+import { bytesToHex } from 'viem';
 import { isHexShaped, isPayableAddress, isZeroAddress } from './address.js';
 import type { X402PaymentPayload, X402Permit2Authorization, X402PaymentRequirement } from './types.js';
 import { usdcForNetwork } from './asset-registry.js';
@@ -155,7 +155,7 @@ export async function buildUptoPayment(
   );
   const deadline = BigInt(nowSec + window);
   const validAfter = BigInt(Math.max(nowSec - VALID_AFTER_SLACK, 0));
-  const nonce = opts.nonce ?? (`0x${randomBytes(32).toString('hex')}` as `0x${string}`);
+  const nonce = opts.nonce ?? bytesToHex(crypto.getRandomValues(new Uint8Array(32)));
 
   const message: UptoPermitMessage = {
     permitted: { token: asset.address, amount: BigInt(requirement.amount) },
