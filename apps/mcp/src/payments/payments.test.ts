@@ -382,6 +382,15 @@ describe('jaw_pay_and_fetch', () => {
     expect(refills).toEqual([]);
   });
 
+  it('refuses to pay for a token without wallet:send, even on a connection with a budget', async () => {
+    const { t } = await connected('1');
+    balances.set(t.sessionAddress.toLowerCase(), 1_000_000n);
+    const result = await pay({ ...t, scopes: ['wallet:read'] }, { url: url('/exact') }, deps());
+    expect(result).toMatchObject({ isError: true });
+    expect(result.content[0].text).toMatch(/wallet:send/);
+    expect(seen).toEqual([]);
+  });
+
   it('refuses a connection with no budget as no_grant, writing no row', async () => {
     const { t } = await connected();
     const result = await pay(t, { url: url('/exact'), idempotencyKey: 'none' }, deps());

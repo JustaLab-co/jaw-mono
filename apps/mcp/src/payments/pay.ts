@@ -212,6 +212,9 @@ const merged = (row: PaymentRow, c: Conclusion): PaymentRow => ({
 
 /** One `jaw_pay_and_fetch` call, from the gates to an answer drawn from its row. */
 export async function pay(t: Tenant, input: PayInput, deps: PayDeps = liveDeps()): Promise<PayResult> {
+  if (!t.scopes.includes('wallet:send')) {
+    return gate('insufficient_scope', 'This token was not granted wallet:send, which paying from the budget needs.');
+  }
   if (await isPaymentsPaused())
     return gate('payments_paused', 'Payments are paused on this server. Nothing was signed.');
   if ((await countHit(`pay:${t.connectionId}`, RATE_WINDOW_MS)) > PAY_RATE_LIMIT) {
