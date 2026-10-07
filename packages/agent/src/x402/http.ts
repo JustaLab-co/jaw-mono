@@ -1,4 +1,4 @@
-import { randomBytes } from 'node:crypto';
+import { bytesToHex } from 'viem';
 import { z } from 'zod';
 import { errorMessage } from '../util/errors.js';
 import { parseBigInt } from './amount.js';
@@ -317,7 +317,7 @@ function isPaymentUrlSecure(url: string): boolean {
 }
 
 function idempotencyKey(): string {
-  return `jaw-${randomBytes(6).toString('hex')}`;
+  return `jaw-${bytesToHex(crypto.getRandomValues(new Uint8Array(6))).slice(2)}`;
 }
 
 const hexAddress = z

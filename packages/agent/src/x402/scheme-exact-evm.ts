@@ -1,4 +1,4 @@
-import { randomBytes } from 'node:crypto';
+import { bytesToHex } from 'viem';
 import { isPayableAddress, isZeroAddress } from './address.js';
 import type { X402EIP3009Authorization, X402PaymentPayload, X402PaymentRequirement } from './types.js';
 import { usdcForNetwork } from './asset-registry.js';
@@ -121,7 +121,7 @@ export async function buildExactPayment(
   const SETTLEMENT_WINDOW_FLOOR = 600;
   const window = Math.max(requirement.maxTimeoutSeconds || 0, SETTLEMENT_WINDOW_FLOOR);
   const validBefore = String(nowSec + window);
-  const nonce = opts.nonce ?? (`0x${randomBytes(32).toString('hex')}` as `0x${string}`);
+  const nonce = opts.nonce ?? bytesToHex(crypto.getRandomValues(new Uint8Array(32)));
 
   const authorization: X402EIP3009Authorization = {
     from,
