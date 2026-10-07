@@ -31,7 +31,7 @@ const DETAILS = {
   scopes: [{ id: 'wallet:read', label: 'See your account, balances and grants' }],
   chainId: 84532,
   expiresAt: '2026-10-06T12:10:00.000Z',
-  message: 'JAW connection consent\nApp: <img src=x onerror=alert(1)>\nInteraction: uid_1234567890‮txt',
+  message: 'JAW connection consent\nApp: <img src=x onerror=alert(1)>\nInteraction: uid_1234567890\u202Etxt',
 };
 
 let root: Root;

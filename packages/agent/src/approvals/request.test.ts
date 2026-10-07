@@ -81,7 +81,7 @@ describe('approval request state machine', () => {
 
 describe('what gets signed', () => {
   it('approve signs the stored message byte for byte; reject signs a statement naming the request', () => {
-    const message = 'line one\r\n\ttabbed ‮reversed';
+    const message = 'line one\r\n\ttabbed \u202Ereversed';
     const r = request(message);
     expect(signedPayload(r, 'approved')).toEqual({ type: 'message', message });
     expect(signedPayload(r, 'rejected')).toEqual({ type: 'message', message: `JAW approval request ${ID}: reject` });
@@ -106,8 +106,8 @@ describe('preview of a hostile message', () => {
   const hostile = [
     '<img src=x onerror=alert(1)><script>steal()</script>',
     'Send to: 0x2222222222222222222222222222222222222222',
-    'Amount: 1 USDC‮0001‬',
-    'zero​width and bell\u0007',
+    'Amount: 1 USDC\u202E0001\u202C',
+    'zero\u200Bwidth and bell\u0007',
   ].join('\n');
 
   it('shows hidden characters as code points and flags markup and address lines', () => {

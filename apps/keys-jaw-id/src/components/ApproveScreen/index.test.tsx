@@ -19,7 +19,7 @@ const { ApproveScreen } = await import('./index');
 
 const OWNER = '0x1111111111111111111111111111111111111111';
 const MCP = 'https://mcp.jaw.id';
-const STORED = 'Pay to: 0x2222222222222222222222222222222222222222\n<b>bold</b> 1 USDC‮0001';
+const STORED = 'Pay to: 0x2222222222222222222222222222222222222222\n<b>bold</b> 1 USDC\u202E0001';
 const VIEW = {
   id: 'q3L0x7mJ2c1VfN8aYw4p9A',
   status: 'pending',
