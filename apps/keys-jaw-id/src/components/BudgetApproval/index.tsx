@@ -142,7 +142,10 @@ export function RevokeBudgets({ view, account, apiKey, viewUrl, onDone }: Revoke
     const left = isBudget(fresh) ? (fresh.revoke ?? []) : [];
     if (left.length === 0) return onDone(fresh);
     setOutstanding(left);
-    setError('The chain does not show the previous budget revoked yet, so it is still approved on chain.');
+    if (left.includes(outstanding[0]))
+      return setError('The chain does not show the previous budget revoked yet, so it is still approved on chain.');
+    setError('');
+    setOpen(true);
   };
 
   return (

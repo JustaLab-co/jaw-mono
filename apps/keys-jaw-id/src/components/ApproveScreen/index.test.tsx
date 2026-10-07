@@ -337,6 +337,35 @@ describe('ApproveScreen', () => {
     });
   });
 
+  it('moves on to the next outstanding revoke once the chain shows the first one gone', async () => {
+    const OLDER = `0x${'dd'.repeat(32)}`;
+    view = BUDGET_VIEW;
+    postAnswer = { ...APPROVED, revoke: [OLDER, OLD] };
+    await render();
+    await click(container.querySelector('#login'));
+    await click(button('Approve'));
+    await act(async () => modal!.onSuccess(GRANTED));
+    await settle();
+    view = { ...APPROVED, revoke: [OLD] };
+    await act(async () => modal!.onSuccess({ success: true }));
+    await settle();
+    expect(container.textContent).not.toContain('does not show');
+    expect(container.querySelector('#permission-modal')).not.toBeNull();
+    expect(modal!.permissionRequest).toEqual({
+      method: 'wallet_revokePermissions',
+      params: [{ id: OLD, address: OWNER }],
+    });
+  });
+
+  it('offers the outstanding revoke only to the account that granted the budget', async () => {
+    signedInAs = '0x3333333333333333333333333333333333333333';
+    view = { ...APPROVED, revoke: [OLD] };
+    await render();
+    await click(container.querySelector('#login'));
+    expect(button('Retry revoke')).toBeUndefined();
+    expect(container.textContent).toContain('This request is for');
+  });
+
   it('renders the wallet dialog inside the JAW UI scope, so it is styled and centered', async () => {
     view = BUDGET_VIEW;
     await render();

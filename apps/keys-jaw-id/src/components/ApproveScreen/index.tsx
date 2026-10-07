@@ -141,6 +141,13 @@ export function ApproveScreen({ id, mcpUrl }: { id: string; mcpUrl: string }) {
   if (query.isError) return <p className="text-center text-sm">This request does not exist.</p>;
   const { view, apiKey } = query.data;
   const show = (decided: ApprovalView) => queryClient.setQueryData(['approval', id], { view: decided, apiKey });
+  const wrongAccount = account !== null && !isAddressEqual(account.address, view.account);
+  const signedInAsOther = account && (
+    <p className="text-destructive text-sm">
+      This request is for <span className="font-mono">{view.account}</span>, and you are signed in as{' '}
+      <span className="font-mono">{account.address}</span>.
+    </p>
+  );
   if (isBudget(view) && view.status === 'approved' && view.revoke?.length) {
     if (granter) return <RevokeBudgets view={view} account={granter} apiKey={apiKey} viewUrl={url} onDone={show} />;
     return (
@@ -148,6 +155,8 @@ export function ApproveScreen({ id, mcpUrl }: { id: string; mcpUrl: string }) {
         <p className="text-sm">Approved. The budget this one replaced is still approved on chain.</p>
         {account === null ? (
           <SignInScreen chainId={view.chainId as ChainId} apiKey={apiKey} onComplete={setAccount} />
+        ) : wrongAccount ? (
+          signedInAsOther
         ) : (
           <button
             className="rounded border p-2"
@@ -164,7 +173,6 @@ export function ApproveScreen({ id, mcpUrl }: { id: string; mcpUrl: string }) {
     return <p className="text-center text-sm">{done}</p>;
   }
 
-  const wrongAccount = account !== null && !isAddressEqual(account.address, view.account);
   const decisionUrl = `${url}/decision`;
 
   const run = async (step: () => Promise<void>) => {
@@ -237,10 +245,7 @@ export function ApproveScreen({ id, mcpUrl }: { id: string; mcpUrl: string }) {
       {account === null ? (
         <SignInScreen chainId={view.chainId as ChainId} apiKey={apiKey} onComplete={setAccount} />
       ) : wrongAccount ? (
-        <p className="text-destructive text-sm">
-          This request is for <span className="font-mono">{view.account}</span>, and you are signed in as{' '}
-          <span className="font-mono">{account.address}</span>.
-        </p>
+        signedInAsOther
       ) : (
         <div className="flex gap-2">
           <button
