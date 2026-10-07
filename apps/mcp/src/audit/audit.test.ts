@@ -61,6 +61,50 @@ describe('audit events', () => {
     expect(events.map((e) => [e.tool, e.outcome])).toEqual([['jaw_pay_and_fetch', 'budget_exhausted']]);
   });
 
+  it('records a payment that may have reached the seller as unknown, not as refused', async () => {
+    const c = await connect();
+    const answer = (state: 'signed' | 'unknown', code: string) => {
+      const structuredContent = {
+        paymentId: 'pay_1',
+        idempotencyKey: 'k',
+        state,
+        kind: 'failed',
+        httpStatus: null,
+        refusal: { code },
+        moneyMoved: false,
+        summary: 'A payment was sent and no answer came back.',
+      } as const;
+      return { content: [{ type: 'text' as const, text: structuredContent.summary }], structuredContent };
+    };
+    vi.spyOn(payments, 'pay')
+      .mockResolvedValueOnce(answer('signed', 'no_response'))
+      .mockResolvedValueOnce(answer('unknown', 'seller_error'));
+    await call(c.access_token, 'jaw_pay_and_fetch', { url: 'https://seller.example.test/x' });
+    await call(c.access_token, 'jaw_pay_and_fetch', { url: 'https://seller.example.test/x' });
+
+    const events = await eventsOf(await connectionOf(c.access_token));
+    expect(events.map((e) => e.outcome)).toEqual(['unknown', 'unknown']);
+  });
+
+  it('records a payment gate by its code, not as an error', async () => {
+    const c = await connect();
+    const res = await call(c.access_token, 'jaw_pay_and_fetch', { url: 'https://seller.example.test/x' });
+    expect(res.json.result.isError).toBe(true);
+    expect(res.json.result.content[0].text).toMatch(/^no_grant: /);
+
+    const events = await eventsOf(await connectionOf(c.access_token));
+    expect(events.map((e) => [e.tool, e.outcome])).toEqual([['jaw_pay_and_fetch', 'no_grant']]);
+  });
+
+  it('records a quote that found no price as ok, since nothing is paid', async () => {
+    const c = await connect();
+    const res = await call(c.access_token, 'jaw_quote', { url: 'https://169.254.169.254/latest' });
+    expect(res.json.result.structuredContent.refusal.code).toBe('unreachable');
+
+    const events = await eventsOf(await connectionOf(c.access_token));
+    expect(events.map((e) => [e.tool, e.outcome])).toEqual([['jaw_quote', 'ok']]);
+  });
+
   it('records a tool that threw as an error, once', async () => {
     const c = await connect();
     vi.spyOn(store, 'insertUnderCap').mockRejectedValueOnce(new Error('boom'));

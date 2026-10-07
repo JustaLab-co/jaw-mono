@@ -37,7 +37,9 @@ type PayOutput = z.infer<typeof payOutput>;
 
 type Text = { type: 'text'; text: string };
 export type OneOffOffer = { requestId: string; approveUrl: string };
-export type PayResult = { content: Text[]; structuredContent?: PayOutput; isError?: boolean };
+/** The code of a refusal before anything was signed, for the audit record. A symbol key never reaches the client. */
+export const gateCode = Symbol('gate code');
+export type PayResult = { content: Text[]; structuredContent?: PayOutput; isError?: boolean; [gateCode]?: string };
 
 /** Refusals a larger budget would fix. */
 const RAISE = new Set(['budget_exhausted', 'no_grant', 'grant_revoked']);
@@ -45,6 +47,7 @@ const RAISE = new Set(['budget_exhausted', 'no_grant', 'grant_revoked']);
 export const gate = (code: string, text: string): PayResult => ({
   content: [{ type: 'text', text: `${code}: ${text}` }],
   isError: true,
+  [gateCode]: code,
 });
 
 function summaryOf(row: PaymentRow, out: Omit<PayOutput, 'summary'>): string {
