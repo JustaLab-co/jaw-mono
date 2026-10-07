@@ -3,7 +3,7 @@ import { compactDecrypt, decodeProtectedHeader } from 'jose';
 import type { PGlite } from '@electric-sql/pglite';
 import type { Hex } from 'viem';
 import { privateKeyToAddress } from 'viem/accounts';
-import { beforeAll, describe, expect, it } from 'vitest';
+import { beforeAll, describe, expect, it, vi } from 'vitest';
 import { useTestDb } from '@/db/test-db';
 import {
   Browser,
@@ -24,6 +24,7 @@ setTestEnv();
 const { verifyBearer } = await import('./auth');
 const { config } = await import('./config');
 const { createProvider } = await import('./provider');
+const { RETRY_WINDOW_MS } = await import('./adapter');
 const { findActive } = await import('./rows');
 const { open, parseKeyRing, unwrap } = await import('./seal');
 type KeyRing = ReturnType<typeof parseKeyRing>;
@@ -77,6 +78,15 @@ async function withRing<T>(ring: KeyRing, run: () => Promise<T>): Promise<T> {
   } finally {
     cache.jawMcpProvider = before;
   }
+}
+
+async function liveRefreshTokens(connectionId: string): Promise<number> {
+  const { rows } = await db.query<{ n: number }>(
+    `select count(*)::int as n from oauth_payloads p join connections c on p.grant_id = c.grant_id
+     where c.id = $1 and p.model = 'RefreshToken' and p.consumed_at is null`,
+    [connectionId]
+  );
+  return rows[0].n;
 }
 
 /** Every string any table holds, as a database dump would show it. */
@@ -167,31 +177,75 @@ describe('authorization server', () => {
     expect(await start.stopped?.text()).toMatch(/redirect_uri/);
   });
 
-  it('rotates refresh tokens and revokes the connection when an old one is replayed', async () => {
+  it('rotates refresh tokens and revokes the connection when an old one is replayed after its successor', async () => {
     const c = await connect();
     const sub = (await claimsOf(c.access_token)).sub;
-    const first = await token({ grant_type: 'refresh_token', refresh_token: c.refresh_token, client_id: 'jaw-cli' });
+    const first = await refresh(c.refresh_token);
     expect(first.status).toBe(200);
     expect(first.body.refresh_token).not.toBe(c.refresh_token);
-    expect(await sessionAddressOf(first.body.access_token)).toBe(await sessionAddressOf(c.access_token));
+    const second = await refresh(first.body.refresh_token);
+    expect(second.status).toBe(200);
 
-    const replay = await token({ grant_type: 'refresh_token', refresh_token: c.refresh_token, client_id: 'jaw-cli' });
+    const replay = await refresh(c.refresh_token);
     expect(replay.body.error).toBe('invalid_grant');
-    const after = await token({
-      grant_type: 'refresh_token',
-      refresh_token: first.body.refresh_token,
-      client_id: 'jaw-cli',
-    });
-    expect(after.body.error).toBe('invalid_grant');
+    expect((await refresh(second.body.refresh_token)).body.error).toBe('invalid_grant');
     expect(await findActive(sub)).toBeUndefined();
-    expect(await verifyBearer(first.body.access_token)).toBeUndefined();
+    expect(await verifyBearer(second.body.access_token)).toBeUndefined();
   });
 
-  it('lets only one of two concurrent refreshes with the same token through', async () => {
+  it('answers a retry after a lost response with a working pair', async () => {
     const c = await connect();
-    const body = { grant_type: 'refresh_token', refresh_token: c.refresh_token, client_id: 'jaw-cli' };
-    const results = await Promise.all([token(body), token(body)]);
-    expect(results.map((r) => r.status).sort()).toEqual([200, 400]);
+    const sub = (await claimsOf(c.access_token)).sub;
+    const lost = await refresh(c.refresh_token);
+    expect(lost.status).toBe(200);
+
+    const retried = await refresh(c.refresh_token);
+    expect(retried.status).toBe(200);
+    expect(retried.body.refresh_token).not.toBe(lost.body.refresh_token);
+    expect(await verifyBearer(retried.body.access_token)).toBeDefined();
+    expect(await sessionAddressOf(retried.body.access_token)).toBe(await sessionAddressOf(c.access_token));
+    expect((await refresh(retried.body.refresh_token)).status).toBe(200);
+    expect(await findActive(sub)).toBeDefined();
+  });
+
+  it('revokes the connection on reuse after the retry window', async () => {
+    const c = await connect();
+    const sub = (await claimsOf(c.access_token)).sub;
+    const first = await refresh(c.refresh_token);
+    vi.useFakeTimers({ toFake: ['Date'] });
+    try {
+      vi.setSystemTime(Date.now() + RETRY_WINDOW_MS + 1000);
+      expect((await refresh(c.refresh_token)).body.error).toBe('invalid_grant');
+    } finally {
+      vi.useRealTimers();
+    }
+    expect(await findActive(sub)).toBeUndefined();
+    expect((await refresh(first.body.refresh_token)).body.error).toBe('invalid_grant');
+  });
+
+  it('revokes the connection when the successor a retry replaced is presented', async () => {
+    const c = await connect();
+    const sub = (await claimsOf(c.access_token)).sub;
+    const replaced = await refresh(c.refresh_token);
+    const retried = await refresh(c.refresh_token);
+    expect(retried.status).toBe(200);
+
+    expect((await refresh(replaced.body.refresh_token)).body.error).toBe('invalid_grant');
+    expect(await findActive(sub)).toBeUndefined();
+    expect((await refresh(retried.body.refresh_token)).body.error).toBe('invalid_grant');
+  });
+
+  it('never forks the refresh chain under concurrent refreshes or retries', async () => {
+    const c = await connect();
+    const sub = (await claimsOf(c.access_token)).sub;
+    const parallel = await Promise.all([refresh(c.refresh_token), refresh(c.refresh_token)]);
+    expect(parallel.some((r) => r.status === 200)).toBe(true);
+    expect(await liveRefreshTokens(sub)).toBe(1);
+
+    const retries = await Promise.all([refresh(c.refresh_token), refresh(c.refresh_token)]);
+    expect(retries.some((r) => r.status === 200)).toBe(true);
+    expect(await liveRefreshTokens(sub)).toBe(1);
+    expect(await findActive(sub)).toBeDefined();
   });
 
   it('connects twice from the same browser, each time as a new connection', async () => {

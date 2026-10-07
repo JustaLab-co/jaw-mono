@@ -8,6 +8,9 @@ import { oauthPayloads } from '@/db/schema';
 import { revokeByGrant, setSessionAddress } from './rows';
 import { unwrap, wrap, type KeyRing, type Wrapped } from './seal';
 
+// A client whose refresh response was lost retries with the token it still holds.
+export const RETRY_WINDOW_MS = 60_000;
+
 const notExpired = or(isNull(oauthPayloads.expiresAt), gt(oauthPayloads.expiresAt, sql`now()`));
 
 // The key a token request issues for, made by whichever token the provider
@@ -66,12 +69,24 @@ export class PgAdapter implements Adapter {
       .where(and(eq(oauthPayloads.key, this.key(id)), notExpired));
     if (!row) return undefined;
     const payload = { ...(row.payload as AdapterPayload), jti: id };
-    if (row.consumedAt) payload.consumed = Math.floor(row.consumedAt.getTime() / 1000);
+    if (row.consumedAt && !(await this.retryable(row))) payload.consumed = Math.floor(row.consumedAt.getTime() / 1000);
     return payload;
+  }
+
+  // Used once, but within the window and with its successor still unused: the
+  // client never saw the successor, so this is a retry and not a replay.
+  private async retryable(row: typeof oauthPayloads.$inferSelect): Promise<boolean> {
+    if (!row.successorKey || Date.now() - row.consumedAt!.getTime() >= RETRY_WINDOW_MS) return false;
+    const [successor] = await getDb()
+      .select({ consumedAt: oauthPayloads.consumedAt })
+      .from(oauthPayloads)
+      .where(eq(oauthPayloads.key, row.successorKey));
+    return successor !== undefined && successor.consumedAt === null;
   }
 
   // One transaction consumes the presented token and stores its successor with
   // the key wrapped under it, so a failure anywhere leaves the presented token usable.
+  // A retry consumes the successor it replaces instead, which makes that one a replay.
   private async rotate(id: string, row: Omit<typeof oauthPayloads.$inferInsert, 'key'>) {
     const ctx = requestContext();
     const connectionId = (row.payload as AdapterPayload).accountId!;
@@ -85,12 +100,17 @@ export class PgAdapter implements Adapter {
           .where(eq(oauthPayloads.key, this.key(presented)));
         if (!from?.keyWrap) throw new errors.InvalidGrant('refresh token holds no key');
         key = unwrap(this.ring, from.keyWrap as Wrapped, connectionId, presented);
+        const replaced = from.consumedAt ? from.successorKey : from.key;
         const consumed = await tx
           .update(oauthPayloads)
           .set({ consumedAt: new Date() })
-          .where(and(eq(oauthPayloads.key, from.key), isNull(oauthPayloads.consumedAt)))
+          .where(and(eq(oauthPayloads.key, replaced ?? ''), isNull(oauthPayloads.consumedAt)))
           .returning({ key: oauthPayloads.key });
         if (consumed.length === 0) throw new errors.InvalidGrant('grant already used');
+        await tx
+          .update(oauthPayloads)
+          .set({ successorKey: this.key(id) })
+          .where(eq(oauthPayloads.key, from.key));
       }
       if (!key) throw new Error('no session key for this refresh token');
       await tx
