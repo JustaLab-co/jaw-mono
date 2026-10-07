@@ -414,6 +414,12 @@ describe('authorization server', () => {
     expect(JSON.parse(body).token_endpoint).toBe(`${ISSUER}/oauth/token`);
   });
 
+  it('advertises only endpoints it serves: no pushed authorization requests', async () => {
+    const { oauth } = await import('./provider');
+    const res = await oauth(new Request(`${ISSUER}/.well-known/openid-configuration`));
+    expect(await res.json()).not.toHaveProperty('pushed_authorization_request_endpoint');
+  });
+
   it('refuses a token for another resource', async () => {
     const c = await connect();
     const other = await token({

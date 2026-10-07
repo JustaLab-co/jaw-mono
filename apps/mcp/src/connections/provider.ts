@@ -70,6 +70,7 @@ export function createProvider(cfg: Config, overrides: Partial<Configuration> = 
     },
     features: {
       devInteractions: { enabled: false },
+      pushedAuthorizationRequests: { enabled: false },
       userinfo: { enabled: false },
       revocation: { enabled: true },
       clientIdMetadataDocument: {
