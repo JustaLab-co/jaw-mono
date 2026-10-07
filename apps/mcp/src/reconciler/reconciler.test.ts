@@ -151,6 +151,12 @@ describe('reconciler', () => {
     expect(await rowOf(second.id)).toMatchObject({ state: 'settled', txHash: null, amount: '5000' });
   });
 
+  it('refuses a second payment of the payer holding the same transaction hash, in any case', async () => {
+    const hash = hex32();
+    await signedRow({ txHash: hash });
+    await expect(signedRow({ txHash: `0x${hash.slice(2).toUpperCase()}` })).rejects.toThrow();
+  });
+
   it('leaves a row alone while the call that signed it may still be running', async () => {
     const live = await signedRow({ leaseUntil: new Date(Date.now() + 60_000) });
     used.set(live.nonce, hex32());

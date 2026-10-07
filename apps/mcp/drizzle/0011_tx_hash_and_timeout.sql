@@ -1,0 +1,1 @@
+CREATE UNIQUE INDEX "payments_payer_tx_hash_index" ON "payments" USING btree ("payer",lower("tx_hash")) WHERE "payments"."tx_hash" is not null;
