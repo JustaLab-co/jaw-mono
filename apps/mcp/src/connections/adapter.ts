@@ -1,6 +1,6 @@
 import { createHash } from 'node:crypto';
 import { hasUnstorableText } from '@jaw.id/agent';
-import { and, eq, gt, isNotNull, isNull, lt, ne, or, sql, inArray } from 'drizzle-orm';
+import { and, eq, gt, isNotNull, isNull, lt, or, sql, inArray } from 'drizzle-orm';
 import Provider, { errors, type Adapter, type AdapterPayload, type KoaContextWithOIDC } from 'oidc-provider';
 import type { Hex } from 'viem';
 import { generatePrivateKey, privateKeyToAddress } from 'viem/accounts';
@@ -10,6 +10,7 @@ import { revokeByGrant, setSessionAddress } from './rows';
 import { unwrap, wrap, type KeyRing, type Wrapped } from './seal';
 
 // A client whose refresh response was lost retries with the token it still holds.
+// Judged when find reads the token; the unused successor is what stops a replay.
 export const RETRY_WINDOW_MS = 60_000;
 
 // Request parameters land in jsonb, which refuses NUL and unpaired surrogates.
@@ -23,9 +24,10 @@ const notExpired = or(isNull(oauthPayloads.expiresAt), gt(oauthPayloads.expiresA
 // The key a token request issues for, made by whichever token the provider
 // saves first: the access token in a code exchange, the refresh token in a refresh.
 const requestKeys = new WeakMap<object, Hex>();
-// Requests whose find saw a used token it may retry. One that saw the token
+// Requests whose find saw a used token it may retry, with the wrap it saw then,
+// so a sweep running before the rotation cannot take it. One that saw the token
 // live and lost the race to its own sibling is refused, not taken for a retry.
-const retries = new WeakSet<object>();
+const retries = new WeakMap<object, Wrapped | null>();
 
 function requestContext(): KoaContextWithOIDC {
   const ctx = Provider.ctx;
@@ -81,7 +83,7 @@ export class PgAdapter implements Adapter {
     if (!row) return undefined;
     const payload = { ...(row.payload as AdapterPayload), jti: id };
     if (!row.consumedAt) return payload;
-    if (await this.retryable(row)) retries.add(requestContext());
+    if (await this.retryable(row)) retries.set(requestContext(), row.keyWrap as Wrapped | null);
     else payload.consumed = Math.floor(row.consumedAt.getTime() / 1000);
     return payload;
   }
@@ -119,10 +121,12 @@ export class PgAdapter implements Adapter {
           .select()
           .from(oauthPayloads)
           .where(eq(oauthPayloads.key, this.key(presented)));
-        if (!from?.keyWrap) throw new errors.InvalidGrant('refresh token holds no key');
-        key = unwrap(this.ring, from.keyWrap as Wrapped, connectionId, presented);
+        if (!from) throw new errors.InvalidGrant('refresh token not found');
         const retry = from.consumedAt !== null;
         if (retry && !retries.has(ctx)) throw new errors.InvalidGrant('grant already used');
+        const wrapped = retry ? retries.get(ctx) : (from.keyWrap as Wrapped | null);
+        if (!wrapped) throw new errors.InvalidGrant('refresh token holds no key');
+        key = unwrap(this.ring, wrapped, connectionId, presented);
         // The replaced successor never reached the client, so its wrap goes with it.
         const consumed = await tx
           .update(oauthPayloads)
@@ -146,11 +150,11 @@ export class PgAdapter implements Adapter {
         .values({ key: this.key(id), ...row, keyWrap: wrap(this.ring, key, connectionId, id) });
       requestKeys.set(ctx, key);
     });
-    // A used token past its window can never be retried, so its wrap would only
-    // serve whoever kept the old token. Swept after every rotation, for every grant,
-    // except the token this request presented. Outside the rotation, which then locks
-    // only its own grant's rows; SKIP LOCKED leaves a row another request holds to
-    // the next sweep, so the sweep never waits and cannot deadlock.
+    // A used token past its window can no longer start a retry, and an admitted one
+    // carries the wrap find read, so the stored wrap would only serve whoever kept
+    // the old token. Swept after every rotation, for every grant. Outside the
+    // rotation, which then locks only its own grant's rows; SKIP LOCKED leaves a row
+    // another request holds to the next sweep, so the sweep never waits and cannot deadlock.
     await getDb()
       .update(oauthPayloads)
       .set({ keyWrap: null })
@@ -163,7 +167,6 @@ export class PgAdapter implements Adapter {
             .where(
               and(
                 eq(oauthPayloads.model, 'RefreshToken'),
-                ne(oauthPayloads.key, this.key(presented ?? '')),
                 lt(oauthPayloads.consumedAt, new Date(Date.now() - RETRY_WINDOW_MS)),
                 isNotNull(oauthPayloads.keyWrap)
               )

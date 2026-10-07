@@ -405,6 +405,70 @@ describe('authorization server', () => {
     }
   });
 
+  it('answers a retry that waits past the window while another rotation sweeps its wrap', async () => {
+    const c = await connect();
+    const other = await connect();
+    await refresh(c.refresh_token);
+    const usedToken = `select p.consumed_at, p.key_wrap from oauth_payloads p join connections c on p.grant_id = c.grant_id
+       where c.id = $1 and p.model = 'RefreshToken' and p.consumed_at is not null`;
+    const sub = (await claimsOf(c.access_token)).sub;
+    const [{ consumed_at }] = (await db.query<{ consumed_at: Date }>(usedToken, [sub])).rows;
+    vi.useFakeTimers({ toFake: ['Date'] });
+    try {
+      vi.setSystemTime(new Date(consumed_at).getTime() + RETRY_WINDOW_MS - 500);
+      const find = PgAdapter.prototype.find;
+      vi.spyOn(PgAdapter.prototype, 'find').mockImplementationOnce(async function (
+        this: InstanceType<typeof PgAdapter>,
+        id
+      ) {
+        const seen = await find.call(this, id);
+        vi.setSystemTime(Date.now() + 5 * 60_000);
+        expect((await refresh(other.refresh_token)).status).toBe(200);
+        expect((await db.query<{ key_wrap: unknown }>(usedToken, [sub])).rows).toEqual([
+          expect.objectContaining({ key_wrap: null }),
+        ]);
+        return seen;
+      });
+      const retried = await refresh(c.refresh_token);
+      expect(retried.status).toBe(200);
+      expect(await sessionAddressOf(retried.body.access_token)).toBe(await sessionAddressOf(c.access_token));
+    } finally {
+      vi.restoreAllMocks();
+      vi.useRealTimers();
+    }
+  });
+
+  it('keeps no wrap for the token a retry presented once that retry rotates past the window', async () => {
+    const c = await connect();
+    await refresh(c.refresh_token);
+    const sub = (await claimsOf(c.access_token)).sub;
+    const [{ consumed_at }] = (
+      await db.query<{ consumed_at: Date }>(
+        `select p.consumed_at from oauth_payloads p join connections c on p.grant_id = c.grant_id
+         where c.id = $1 and p.model = 'RefreshToken' and p.consumed_at is not null`,
+        [sub]
+      )
+    ).rows;
+    vi.useFakeTimers({ toFake: ['Date'] });
+    try {
+      vi.setSystemTime(new Date(consumed_at).getTime() + RETRY_WINDOW_MS - 500);
+      const find = PgAdapter.prototype.find;
+      vi.spyOn(PgAdapter.prototype, 'find').mockImplementationOnce(async function (
+        this: InstanceType<typeof PgAdapter>,
+        id
+      ) {
+        const seen = await find.call(this, id);
+        vi.setSystemTime(Date.now() + 1000);
+        return seen;
+      });
+      expect((await refresh(c.refresh_token)).status).toBe(200);
+    } finally {
+      vi.restoreAllMocks();
+      vi.useRealTimers();
+    }
+    expect(recoverable(await dumpStrings(), config().ring, sub, [c.refresh_token])).toEqual([]);
+  });
+
   it('creates the session key at the code exchange, never at consent', async () => {
     const browser = new Browser();
     const signer = owner();
