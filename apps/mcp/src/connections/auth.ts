@@ -66,7 +66,7 @@ export async function clientOf(req: Request): Promise<string> {
 export async function verifyBearer(bearer: string | undefined): Promise<AuthInfo | undefined> {
   if (!bearer) return undefined;
   const claims = await decrypt(bearer);
-  if (!claims) return undefined;
+  if (!claims || !(claims.scope ?? '').split(' ').includes('wallet:read')) return undefined;
   const row = await findActive(claims.sub);
   if (!row?.sessionAddress || row.clientId !== claims.client_id) return undefined;
   const tenant: Tenant = {
@@ -92,8 +92,9 @@ export async function verifyBearer(bearer: string | undefined): Promise<AuthInfo
 export function withConnection(handler: (req: Request) => Promise<Response>): (req: Request) => Promise<Response> {
   return (req) =>
     withMcpAuth(handler, (_req, bearer) => verifyBearer(bearer), {
+      // No required scope: the challenge would name it, and an MCP client then
+      // asks for that scope alone instead of every scope the metadata lists.
       required: true,
-      requiredScopes: ['wallet:read'],
       resourceMetadataPath: RESOURCE_METADATA_PATH,
       resourceUrl: config().issuer,
     })(req);

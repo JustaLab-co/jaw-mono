@@ -1,6 +1,6 @@
 'use client';
 
-import type { consentTypedData } from '@jaw.id/agent';
+import type { consentTypedData } from '@jaw.id/agent/reserved';
 import { Account } from '@jaw.id/core';
 import { useQuery } from '@tanstack/react-query';
 import { useState } from 'react';

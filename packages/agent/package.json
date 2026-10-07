@@ -13,6 +13,11 @@
       "@jaw-mono/source": "./src/index.ts",
       "import": "./dist/index.js",
       "default": "./dist/index.js"
+    },
+    "./reserved": {
+      "@jaw-mono/source": "./src/approvals/reserved.ts",
+      "import": "./dist/approvals/reserved.js",
+      "default": "./dist/approvals/reserved.js"
     }
   },
   "nx": {

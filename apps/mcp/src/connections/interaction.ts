@@ -20,7 +20,6 @@ export interface ConsentDetails {
   scopes: { id: Scope; label: string }[];
   chainId: number;
   expiresAt: string;
-  /** What the user signs. Its domain is refused by every generic signing path. */
   typedData: ReturnType<typeof consentTypedData>;
 }
 
@@ -68,8 +67,6 @@ export async function details(_req: Request, uid: string): Promise<Response> {
 
 // Completion needs both the one-time ticket (this browser signed) and the
 // interaction cookie (this browser started), which defeats a phished consent link.
-// The signature itself can only come from the authorize page, because every
-// other signing path refuses the JAW domain.
 export async function consent(req: Request, uid: string, verify: VerifySignature = verifyOnChain): Promise<Response> {
   const parsed = await readJson(req);
   if (parsed === undefined) return tooLarge();

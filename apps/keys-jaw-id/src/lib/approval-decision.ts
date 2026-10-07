@@ -1,4 +1,4 @@
-import type { rejectionTypedData } from '@jaw.id/agent';
+import type { rejectionTypedData } from '@jaw.id/agent/reserved';
 import type { WalletGrantPermissionsResponse } from '@jaw.id/core';
 import type { Address, Hex } from 'viem';
 import type { ClientIdentity } from '../components/ClientHeader';

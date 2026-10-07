@@ -1,6 +1,5 @@
 import {
   balanceReader,
-  FetchRefused,
   payAndFetch,
   readCurrentPeriods,
   readLiveness,
@@ -153,14 +152,10 @@ async function quote(t: Tenant, url: string) {
     dryRun: true,
     network,
     fetch: safeFetch(config().insecureFetchHosts),
-  }).catch((err: unknown) => {
-    // A fixed reason per code: the error text would tell a client which internal names resolve.
-    const refused = err instanceof FetchRefused;
-    return {
-      kind: 'unreachable' as const,
-      code: refused ? 'blocked_url' : 'unreachable',
-      reason: refused ? 'The URL is not allowed.' : 'The URL could not be reached.',
-    };
+  }).catch(() => {
+    // One answer for every failure: telling a refused address from a failed lookup
+    // would tell a client which internal names resolve.
+    return { kind: 'unreachable' as const, code: 'unreachable', reason: 'The URL could not be fetched.' };
   });
   if (outcome.kind === 'unreachable') {
     return {

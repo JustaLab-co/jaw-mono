@@ -50,8 +50,12 @@ describe('/mcp behind OAuth', () => {
   it('refuses a token without wallet:read', async () => {
     const { access_token } = await connect(undefined, { scope: 'openid' });
     const res = await rpc(initialize, access_token);
-    expect(res.status).toBe(403);
-    expect(res.headers.get('www-authenticate')).toContain('insufficient_scope');
+    expect(res.status).toBe(401);
+  });
+
+  it('names no scope in the challenge, so a client asks for every scope in the metadata', async () => {
+    const res = await rpc(initialize);
+    expect(res.headers.get('www-authenticate')).not.toContain('scope=');
   });
 
   it('gives each connection its own rate limit bucket, with no IP headers at all', async () => {

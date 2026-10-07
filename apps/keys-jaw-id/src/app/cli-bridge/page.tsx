@@ -2,7 +2,7 @@
 
 import { useSearchParams } from 'next/navigation';
 import { useEffect, useState, Suspense, useRef, useCallback } from 'react';
-import { reservedSigningRefusal } from '@jaw.id/agent';
+import { reservedSigningRefusal } from '@jaw.id/agent/reserved';
 import { JAW, Mode, standardErrorCodes } from '@jaw.id/core';
 import { ReactUIHandler } from '@jaw.id/ui';
 import { resolveBridgeApiKey } from '../../lib/cli-api-key';
