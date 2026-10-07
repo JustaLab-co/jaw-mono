@@ -39,7 +39,7 @@ export interface Refusal {
   reason: string;
 }
 
-/** A payment as built/signed — the fields needed to audit or reconcile it. */
+/** The fields needed to audit or reconcile a payment as it was built and signed. */
 export interface PaymentDetails {
   /**
    * Which scheme produced this. Carried because the two figures below mean
@@ -59,7 +59,7 @@ export interface PaymentDetails {
   asset: string;
   network: string;
   payTo: string;
-  /** The EIP-3009 nonce — lets you reconcile an on-chain transfer to this attempt. */
+  /** The EIP-3009 nonce, which ties an on-chain transfer to this attempt. */
   nonce: `0x${string}`;
   /** Settlement tx hash, once the server reports it. */
   txHash?: string;
@@ -76,7 +76,7 @@ export interface Traces {
 interface Fetched {
   status: number;
   body: unknown;
-  /** The address funds are paid from — where the agent's USDC must live. */
+  /** The address funds are paid from, so the agent's USDC must live there. */
   payer: `0x${string}`;
 }
 
@@ -101,7 +101,7 @@ export interface PayAndFetchResult extends Fetched, Traces {
   /**
    * A payment was signed and sent but settlement did not confirm. The
    * facilitator may still have broadcast the transfer, so this carries the
-   * nonce and amount to reconcile against — never assume no money moved.
+   * nonce and amount to reconcile against. Never assume no money moved.
    */
   attemptedPayment?: PaymentDetails;
   refusedReason?: string;

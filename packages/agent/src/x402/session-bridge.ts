@@ -212,7 +212,7 @@ export class SessionBridge {
     // The stored sessionAddress is the on-chain permission's spender. If the
     // key or mode drifted since setup (hand-edited keystore, config from
     // another machine), signing would come from an account the permission was
-    // never granted to — fail clearly instead of sending doomed userOps.
+    // never granted to. Failing here is clearer than sending doomed userOps.
     if (account.address.toLowerCase() !== config.sessionAddress.toLowerCase()) {
       throw new Error(
         `Session key derives ${account.address}, but the stored session address is ${config.sessionAddress}. ` +
@@ -334,10 +334,10 @@ export class SessionBridge {
         );
 
       case 'wallet_grantPermissions':
-        throw new Error('Requires browser — run `jaw session setup`.');
+        throw new Error('Requires browser. Run `jaw session setup`.');
 
       case 'wallet_revokePermissions':
-        throw new Error('Requires browser — run `jaw session revoke`.');
+        throw new Error('Requires browser. Run `jaw session revoke`.');
 
       default:
         throw new Error(`Method ${method} is not supported in auto mode.`);
@@ -345,6 +345,6 @@ export class SessionBridge {
   }
 
   close(): void {
-    // No-op — no WebSocket to close
+    // No WebSocket to close.
   }
 }
