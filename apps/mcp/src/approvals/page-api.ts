@@ -50,7 +50,7 @@ type PageView = ApprovalPageView & { revoke?: Hex[]; payment?: OneOffSummary };
 
 export type ReadPermission = (target: PermissionReadTarget) => Promise<PermissionState>;
 
-const readOnChain: ReadPermission = (target) =>
+export const readOnChain: ReadPermission = (target) =>
   readPermissionState(target, { clients: { publicClient: publicClientFor } });
 
 type Refused = Exclude<PageOutcome['kind'], 'ok' | 'not_pending'>;

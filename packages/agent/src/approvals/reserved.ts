@@ -51,6 +51,21 @@ export function rejectionTypedData(chainId: number, request: string) {
   } as const;
 }
 
+/** Proves the account to the connections page of one server, until `expires`. */
+export function connectionsSignInTypedData(chainId: number, terms: { issuer: string; expires: string }) {
+  return {
+    domain: domain(chainId),
+    types: {
+      ConnectionsSignIn: [
+        { name: 'issuer', type: 'string' },
+        { name: 'expires', type: 'string' },
+      ],
+    },
+    primaryType: 'ConnectionsSignIn',
+    message: terms,
+  } as const;
+}
+
 export const RESERVED_SIGNING_REFUSAL = 'JAW reserves this request for its own consent and approval pages';
 
 /** Why a generic signing request must not reach the passkey, or undefined when it may. */
