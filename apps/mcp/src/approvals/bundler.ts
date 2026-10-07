@@ -11,7 +11,7 @@ import { createBundlerClient, UserOperationReceiptNotFoundError } from 'viem/acc
 import { config, SUPPORTED_CHAINS } from '@/connections/config';
 
 // JAW's RPC proxy, which serves the bundler methods too.
-function rpcUrl(chainId: number) {
+export function rpcUrl(chainId: number) {
   const key = config().paymasterApiKey;
   return `${JAW_RPC_URL}?chainId=${chainId}${key ? `&api-key=${key}` : ''}`;
 }

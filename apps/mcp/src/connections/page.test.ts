@@ -56,6 +56,7 @@ describe('connections page sign-in', () => {
     );
 
     expect((await listFromPage({ ...(await proof(a)), chainId: 1 }, deps)).kind).toBe('invalid_request');
+    expect((await listFromPage({ ...(await proof(a)), chainId: 8453 }, deps)).kind).toBe('invalid_request');
     expect((await listFromPage({ ...(await proof(a)), signature: 'nope' }, deps)).kind).toBe('invalid_request');
     expect((await listFromPage(null, deps)).kind).toBe('invalid_request');
   });
@@ -115,6 +116,33 @@ describe('revoke from the page', () => {
       [view.id]
     );
     expect(refreshRows.rows).toEqual([{ n: 0 }]);
+  });
+
+  it('refuses a refresh of an ended connection whose token row survived', async () => {
+    const { c, tenant } = await connectWithBudget();
+    await pg.query(`update connections set status = 'revoked', revoked_at = now() where id = $1`, [
+      tenant.connectionId,
+    ]);
+    const refreshed = await token({
+      grant_type: 'refresh_token',
+      refresh_token: c.refresh_token,
+      client_id: 'jaw-cli',
+    });
+    expect(refreshed.status).toBe(400);
+    const wraps = await pg.query(
+      `select count(*)::int as n from oauth_payloads p join connections c on c.grant_id = p.grant_id
+        where c.id = $1 and p.key_wrap is not null and p.consumed_at is null and p.model = 'RefreshToken'`,
+      [tenant.connectionId]
+    );
+    expect(wraps.rows).toEqual([{ n: 1 }]);
+  });
+
+  it('shows a connection past its end as expired', async () => {
+    const { c, tenant } = await connectWithBudget();
+    await pg.query(`update connections set expires_at = now() - interval '1 minute' where id = $1`, [
+      tenant.connectionId,
+    ]);
+    expect((await list(await proof(c.signer)))[0].status).toBe('expired');
   });
 
   it('lists the budget for an on-chain revoke until the chain shows it revoked', async () => {

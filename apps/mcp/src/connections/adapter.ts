@@ -5,7 +5,7 @@ import Provider, { errors, type Adapter, type AdapterPayload, type KoaContextWit
 import type { Hex } from 'viem';
 import { generatePrivateKey, privateKeyToAddress } from 'viem/accounts';
 import { getDb } from '@/db/client';
-import { oauthPayloads } from '@/db/schema';
+import { connections, oauthPayloads } from '@/db/schema';
 import { revokeByGrant, setSessionAddress } from './rows';
 import { unwrap, wrap, type KeyRing, type Wrapped } from './seal';
 
@@ -105,6 +105,14 @@ export class PgAdapter implements Adapter {
     const connectionId = (row.payload as AdapterPayload).accountId!;
     const presented = ctx.oidc.entities.RotatedRefreshToken?.jti;
     await getDb().transaction(async (tx) => {
+      // Ending a connection locks its row before deleting the tokens, so a rotation
+      // either commits first and is deleted with them, or sees the connection ended.
+      const [live] = await tx
+        .select({ id: connections.id })
+        .from(connections)
+        .where(and(eq(connections.id, connectionId), eq(connections.status, 'active')))
+        .for('share');
+      if (!live) throw new errors.InvalidGrant('connection ended');
       // A used token past its window can never be retried, so its wrap would only
       // serve whoever kept the old token. Swept on every rotation, for every grant,
       // except the token this request presents: find already judged it retryable.

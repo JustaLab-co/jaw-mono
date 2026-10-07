@@ -1,13 +1,14 @@
 import { clientIdentity, connectionsSignInTypedData, usdcForNetwork, type ClientIdentity } from '@jaw.id/agent';
-import { and, desc, eq, inArray, lte, ne, sql } from 'drizzle-orm';
+import { and, desc, eq, inArray, ne } from 'drizzle-orm';
 import { erc20Abi, isAddress, isHex, type Address } from 'viem';
 import { readOnChain, type ReadPermission } from '@/approvals/page-api';
 import { getDb } from '@/db/client';
-import { auditEvents, connections, grants, oauthPayloads } from '@/db/schema';
+import { auditEvents, connections, grants } from '@/db/schema';
 import { outstandingRevokes } from '@/grants/store';
 import { publicClientFor, verifyOnChain, type VerifySignature } from '@/lib/chain';
 import { errorLabel, log } from '@/lib/edge';
-import { config, SUPPORTED_CHAINS } from './config';
+import { config } from './config';
+import { endConnection, ownedBy } from './rows';
 
 /** How far ahead a sign-in may expire: the page asks for ten minutes. */
 export const SIGN_IN_MAX_MS = 15 * 60_000;
@@ -23,7 +24,7 @@ export interface PageDeps {
 
 export interface ConnectionView {
   id: string;
-  status: 'active' | 'revoked';
+  status: 'active' | 'expired' | 'revoked';
   chainId: number;
   client: ClientIdentity;
   scopes: string[];
@@ -72,7 +73,8 @@ const DEFAULTS: PageDeps = { verify: verifyOnChain, readPermission: readOnChain,
 async function signedIn(post: unknown, verify: VerifySignature, now: Date): Promise<Address | Refusal> {
   const { account, chainId, expires, signature } = (post ?? {}) as Record<string, unknown>;
   if (typeof account !== 'string' || !isAddress(account) || !isHex(signature)) return { kind: 'invalid_request' };
-  if (typeof chainId !== 'number' || !SUPPORTED_CHAINS[chainId] || typeof expires !== 'string') {
+  // The connections live on the server's chain, and an account's owners can differ between chains.
+  if (chainId !== config().chain.id || typeof expires !== 'string') {
     return { kind: 'invalid_request' };
   }
   const left = new Date(expires).getTime() - now.getTime();
@@ -92,15 +94,13 @@ async function signedIn(post: unknown, verify: VerifySignature, now: Date): Prom
   return valid ? account : { kind: 'bad_signature' };
 }
 
-const ownedBy = (account: Address) => sql`lower(${connections.account}) = ${account.toLowerCase()}`;
-
 export async function listFromPage(post: unknown, deps = DEFAULTS, now = new Date()): Promise<PageOutcome> {
   const account = await signedIn(post, deps.verify, now);
   if (typeof account !== 'string') return account;
   const rows = await getDb()
     .select()
     .from(connections)
-    .where(and(ownedBy(account), ne(connections.status, 'pending')))
+    .where(and(ownedBy(account), eq(connections.chainId, config().chain.id), ne(connections.status, 'pending')))
     .orderBy(desc(connections.createdAt));
   return { kind: 'ok', body: await viewsOf(rows, deps, now) };
 }
@@ -117,30 +117,6 @@ export async function revokeFromPage(
   if (!row) return { kind: 'not_found' };
   const [view] = await viewsOf([row], deps, now);
   return { kind: 'ok', body: view };
-}
-
-/**
- * Ends the connection on the server: the access token stops at the next call and
- * the refresh tokens, with the key wraps they carry, are deleted, so the session
- * key cannot be opened again. Budgets on chain are revoked separately. Undefined
- * when the account has no such connection; an ended one is returned as it is.
- */
-export async function endConnection(id: string, account: Address, now = new Date()) {
-  return getDb().transaction(async (tx) => {
-    const [found] = await tx
-      .select()
-      .from(connections)
-      .where(and(eq(connections.id, id), ownedBy(account), ne(connections.status, 'pending')))
-      .for('update');
-    if (!found || found.status === 'revoked') return found;
-    const [revoked] = await tx
-      .update(connections)
-      .set({ status: 'revoked', revokedAt: now })
-      .where(eq(connections.id, id))
-      .returning();
-    await tx.delete(oauthPayloads).where(eq(oauthPayloads.grantId, found.grantId!));
-    return revoked;
-  });
 }
 
 type GrantRow = typeof grants.$inferSelect;
@@ -167,7 +143,7 @@ async function viewsOf(
   ]);
   return rows.map((row, i) => ({
     id: row.id,
-    status: row.status as ConnectionView['status'],
+    status: row.status === 'active' && row.expiresAt <= now ? 'expired' : (row.status as ConnectionView['status']),
     chainId: row.chainId,
     client: clientIdentity(row.clientId, row.clientName),
     scopes: row.scopes,
@@ -191,23 +167,19 @@ async function viewsOf(
   }));
 }
 
+// One query per connection, so each reads its newest rows off the index and stops at ten.
 async function recentEvents(ids: string[]) {
-  const ranked = getDb()
-    .select({
-      connectionId: auditEvents.connectionId,
-      tool: auditEvents.tool,
-      outcome: auditEvents.outcome,
-      requestId: auditEvents.requestId,
-      createdAt: auditEvents.createdAt,
-      id: auditEvents.id,
-      rank: sql<number>`row_number() over (partition by ${auditEvents.connectionId} order by ${auditEvents.id} desc)`.as(
-        'rank'
-      ),
-    })
-    .from(auditEvents)
-    .where(inArray(auditEvents.connectionId, ids))
-    .as('ranked');
-  return getDb().select().from(ranked).where(lte(ranked.rank, RECENT_EVENTS)).orderBy(desc(ranked.id));
+  const perConnection = await Promise.all(
+    ids.map((id) =>
+      getDb()
+        .select()
+        .from(auditEvents)
+        .where(eq(auditEvents.connectionId, id))
+        .orderBy(desc(auditEvents.createdAt), desc(auditEvents.id))
+        .limit(RECENT_EVENTS)
+    )
+  );
+  return perConnection.flat();
 }
 
 async function floatsOf(rows: (typeof connections.$inferSelect)[], read: ReadFloats): Promise<Map<string, bigint>> {
