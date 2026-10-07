@@ -144,10 +144,9 @@ export function payloadHash(payload: SignedPayload): Hex {
 }
 
 // Every control, format (bidi, zero-width, tags), line and paragraph separator
-// except newline and tab, plus variation selectors, the grapheme joiner and the
-// fillers that render as blank.
-const HIDDEN =
-  /(?![\n\t])[\p{Cc}\p{Cf}\p{Zl}\p{Zp}\u034F\u115F\u1160\u180B-\u180F\u2800\u3164\uFE00-\uFE0F\uFFA0\u{E0100}-\u{E01EF}]/gu;
+// except newline and tab, plus every default-ignorable code point (variation
+// selectors, the grapheme joiner, Hangul fillers) and the blank braille pattern.
+const HIDDEN = /(?![\n\t])[\p{Cc}\p{Cf}\p{Zl}\p{Zp}\p{Default_Ignorable_Code_Point}\u2800]/gu;
 
 const codePoint = (c: string) => `⟦U+${c.codePointAt(0)?.toString(16).toUpperCase().padStart(4, '0')}⟧`;
 
