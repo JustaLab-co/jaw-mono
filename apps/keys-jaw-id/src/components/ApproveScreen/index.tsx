@@ -12,7 +12,7 @@ import {
   type SignedPayload,
 } from '../../lib/approval-decision';
 import { fetchCliApiKey } from '../../lib/cli-api-key';
-import { BudgetApproval, BudgetTerms } from '../BudgetApproval';
+import { BudgetApproval, BudgetTerms, RevokeBudgets } from '../BudgetApproval';
 import { ClientHeader } from '../ClientHeader';
 import { SignInScreen, type AuthenticatedAccount } from '../OnboardingSection';
 import type { ChainId } from '../../utils/types';
@@ -52,11 +52,29 @@ export function ApproveScreen({ id, mcpUrl }: { id: string; mcpUrl: string }) {
   if (query.isPending) return <p className="text-center text-sm">Loading…</p>;
   if (query.isError) return <p className="text-center text-sm">This request does not exist.</p>;
   const { view, apiKey } = query.data;
+  const show = (decided: ApprovalView) => queryClient.setQueryData(['approval', id], { view: decided, apiKey });
+  if (isBudget(view) && view.status === 'approved' && view.revoke?.length) {
+    if (granter) return <RevokeBudgets view={view} account={granter} apiKey={apiKey} viewUrl={url} onDone={show} />;
+    return (
+      <div className="flex flex-col gap-4 rounded-lg border p-6">
+        <p className="text-sm">Approved. The budget this one replaced is still approved on chain.</p>
+        {account === null ? (
+          <SignInScreen chainId={view.chainId as ChainId} apiKey={apiKey} onComplete={setAccount} />
+        ) : (
+          <button
+            className="rounded border p-2"
+            onClick={async () => setGranter(await Account.get({ chainId: view.chainId, apiKey }))}
+          >
+            Retry revoke
+          </button>
+        )}
+      </div>
+    );
+  }
   if (view.status !== 'pending') return <p className="text-center text-sm">{DONE[view.status]}</p>;
 
   const wrongAccount = account !== null && !isAddressEqual(account.address, view.account);
   const decisionUrl = `${url}/decision`;
-  const show = (decided: ApprovalView) => queryClient.setQueryData(['approval', id], { view: decided, apiKey });
 
   const run = async (step: () => Promise<void>) => {
     setBusy(true);

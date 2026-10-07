@@ -114,11 +114,13 @@ let posts: unknown[];
 
 let view: object = VIEW;
 let refusals: string[] = [];
+let postAnswer: object | null = null;
 
 beforeEach(() => {
   view = VIEW;
   posts = [];
   refusals = [];
+  postAnswer = null;
   modal = null;
   signMessage.mockClear();
   signTypedData.mockClear();
@@ -132,7 +134,7 @@ beforeEach(() => {
         posts.push(body);
         const refusal = refusals.shift();
         if (refusal) return Response.json({ error: refusal }, { status: 409 });
-        return Response.json({ ...view, status: body.verdict });
+        return Response.json(postAnswer ?? { ...view, status: body.verdict });
       }
       return { ok: true, json: async () => view } as Response;
     })
@@ -233,9 +235,12 @@ describe('ApproveScreen', () => {
     expect(container.textContent).toContain('Approved.');
   });
 
-  it('revokes the budget the new one replaces right after granting it', async () => {
-    const OLD = `0x${'ee'.repeat(32)}`;
-    view = { ...BUDGET_VIEW, replaces: { permissionId: OLD } };
+  const OLD = `0x${'ee'.repeat(32)}`;
+  const APPROVED = { ...BUDGET_VIEW, status: 'approved' };
+
+  it('revokes every budget the server lists at the decision, right after granting', async () => {
+    view = BUDGET_VIEW;
+    postAnswer = { ...APPROVED, revoke: [OLD] };
     await render();
     await click(container.querySelector('#login'));
     await click(button('Approve'));
@@ -248,9 +253,41 @@ describe('ApproveScreen', () => {
     });
     expect(modal!.account).toBe(signer);
     expect(container.textContent).not.toContain('Approved.');
+    view = { ...APPROVED, revoke: [] };
     await act(async () => modal!.onSuccess({ success: true }));
     await settle();
     expect(container.textContent).toContain('Approved.');
+  });
+
+  it('says a dismissed revoke left the previous budget live, and retries it', async () => {
+    view = BUDGET_VIEW;
+    postAnswer = { ...APPROVED, revoke: [OLD] };
+    await render();
+    await click(container.querySelector('#login'));
+    await click(button('Approve'));
+    await act(async () => modal!.onSuccess(GRANTED));
+    await settle();
+    await act(async () => modal!.onError(new Error('User rejected the request'), 4001));
+    await settle();
+    expect(container.textContent).toContain('still approved on chain');
+    modal = null;
+    await click(button('Retry revoke'));
+    expect(modal!.permissionRequest).toEqual({
+      method: 'wallet_revokePermissions',
+      params: [{ id: OLD, address: OWNER }],
+    });
+  });
+
+  it('offers the outstanding revoke again on an approved budget page', async () => {
+    view = { ...APPROVED, revoke: [OLD] };
+    await render();
+    expect(container.textContent).toContain('still approved on chain');
+    await click(container.querySelector('#login'));
+    await click(button('Retry revoke'));
+    expect(modal!.permissionRequest).toEqual({
+      method: 'wallet_revokePermissions',
+      params: [{ id: OLD, address: OWNER }],
+    });
   });
 
   it('renders the wallet dialog inside the JAW UI scope, so it is styled and centered', async () => {
