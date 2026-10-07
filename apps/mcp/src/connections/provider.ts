@@ -1,11 +1,11 @@
 import { FIRST_PARTY_CLIENTS } from '@jaw.id/agent';
 import Provider, { errors, interactionPolicy, type Configuration } from 'oidc-provider';
 import { databaseUnreachable, log } from '@/lib/edge';
-import { PgAdapter } from './adapter';
+import { PgAdapter, sessionKey } from './adapter';
 import { bridge } from './bridge';
 import { config, type Config } from './config';
-import { findActive, updateSealedKey } from './rows';
-import { isStale, open, seal, type Sealed } from './seal';
+import { findActive } from './rows';
+import { seal } from './seal';
 
 export const SCOPES = { 'wallet:read': 'See your account and balances, and ask you to approve signatures' } as const;
 export type Scope = keyof typeof SCOPES;
@@ -23,17 +23,6 @@ const JAW_CLI = {
   response_types: ['code' as const],
 };
 
-// Re-seals under the newest key when the row still uses an older one.
-async function sealedKeyFor(cfg: Config, connectionId: string): Promise<Sealed> {
-  const row = await findActive(connectionId);
-  if (!row) throw new Error('connection is not active');
-  const sealed = row.sealedKey as Sealed;
-  if (!isStale(cfg.ring, sealed)) return sealed;
-  const fresh = seal(cfg.ring, open(cfg.ring, sealed, row.id), row.id);
-  await updateSealedKey(row.id, fresh);
-  return fresh;
-}
-
 export function createProvider(cfg: Config, overrides: Partial<Configuration> = {}): Provider {
   const policy = interactionPolicy.base();
   // No session reuse: every authorization goes through consent and makes its own connection.
@@ -46,7 +35,7 @@ export function createProvider(cfg: Config, overrides: Partial<Configuration> = 
     );
 
   const provider = new Provider(cfg.issuer, {
-    adapter: PgAdapter,
+    adapter: (model: string) => new PgAdapter(model, cfg.ring),
     clients: [JAW_CLI],
     clientDefaults: { id_token_signed_response_alg: 'EdDSA' },
     findAccount: async (_ctx, sub) =>
@@ -96,7 +85,9 @@ export function createProvider(cfg: Config, overrides: Partial<Configuration> = 
       },
     },
     extraTokenClaims: async (_ctx, token) =>
-      token.kind === 'AccessToken' ? { sk: await sealedKeyFor(cfg, token.accountId) } : undefined,
+      token.kind === 'AccessToken'
+        ? { sk: seal(cfg.ring, await sessionKey(token.accountId), token.accountId) }
+        : undefined,
     ...overrides,
   });
   provider.proxy = true;

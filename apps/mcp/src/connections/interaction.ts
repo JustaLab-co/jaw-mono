@@ -2,7 +2,6 @@ import { createHash, randomBytes } from 'node:crypto';
 import type { ServerResponse } from 'node:http';
 import { clientIdentity, type ClientIdentity } from '@jaw.id/agent';
 import { isAddress, isHex } from 'viem';
-import { generatePrivateKey, privateKeyToAddress } from 'viem/accounts';
 import { readJson, tooLarge } from '@/lib/body';
 import { verifyOnChain, type VerifySignature } from '@/lib/chain';
 import { log } from '@/lib/edge';
@@ -10,7 +9,6 @@ import { bridge } from './bridge';
 import { config } from './config';
 import { provider, SCOPES, type Scope } from './provider';
 import { activate, findClaimable, insertPending } from './rows';
-import { seal } from './seal';
 
 const UID = /^[A-Za-z0-9_-]{10,64}$/;
 const sha256 = (value: string) => createHash('sha256').update(value).digest('hex');
@@ -96,7 +94,6 @@ export async function consent(req: Request, uid: string, verify: VerifySignature
   if (!valid) return Response.json({ error: 'bad_signature' }, { status: 401 });
 
   const id = `conn_${randomBytes(16).toString('base64url')}`;
-  const privateKey = generatePrivateKey();
   const ticket = randomBytes(32).toString('base64url');
   const inserted = await insertPending(
     {
@@ -106,8 +103,6 @@ export async function consent(req: Request, uid: string, verify: VerifySignature
       clientId: found.client.clientId,
       clientName: found.client.name,
       scopes: found.scopes.map((s) => s.id),
-      sessionAddress: privateKeyToAddress(privateKey),
-      sealedKey: seal(config().ring, privateKey, id),
       interactionUid: uid,
       expiresAt: new Date(found.expiresAt),
     },

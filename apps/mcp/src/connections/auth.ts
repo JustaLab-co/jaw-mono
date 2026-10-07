@@ -57,7 +57,7 @@ export async function verifyBearer(bearer: string | undefined): Promise<AuthInfo
   const claims = await decrypt(bearer);
   if (!claims) return undefined;
   const row = await findActive(claims.sub);
-  if (!row || row.clientId !== claims.client_id) return undefined;
+  if (!row?.sessionAddress || row.clientId !== claims.client_id) return undefined;
   const tenant: Tenant = {
     connectionId: row.id,
     account: row.account as Address,

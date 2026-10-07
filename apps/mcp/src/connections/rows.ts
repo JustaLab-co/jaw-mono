@@ -1,8 +1,7 @@
-import { and, eq, gt, sql } from 'drizzle-orm';
+import { and, eq, gt, isNull, sql } from 'drizzle-orm';
 import type { Address } from 'viem';
 import { getDb } from '@/db/client';
 import { connections } from '@/db/schema';
-import type { Sealed } from './seal';
 
 export type ConnectionRow = typeof connections.$inferSelect;
 
@@ -13,8 +12,6 @@ export interface PendingConnection {
   clientId: string;
   clientName: string;
   scopes: string[];
-  sessionAddress: Address;
-  sealedKey: Sealed;
   interactionUid: string;
   expiresAt: Date;
 }
@@ -70,8 +67,14 @@ export async function findActive(id: string): Promise<ConnectionRow | undefined>
   return row;
 }
 
-export async function updateSealedKey(id: string, sealedKey: Sealed) {
-  await getDb().update(connections).set({ sealedKey }).where(eq(connections.id, id));
+/** The session key is created at the first token exchange; false when the connection already has one. */
+export async function setSessionAddress(id: string, sessionAddress: Address): Promise<boolean> {
+  const rows = await getDb()
+    .update(connections)
+    .set({ sessionAddress })
+    .where(and(eq(connections.id, id), isNull(connections.sessionAddress)))
+    .returning({ id: connections.id });
+  return rows.length === 1;
 }
 
 export async function revokeByGrant(grantId: string) {

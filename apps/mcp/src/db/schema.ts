@@ -29,6 +29,8 @@ export const oauthPayloads = pgTable(
     uid: text('uid'),
     expiresAt: timestamp('expires_at', { withTimezone: true }),
     consumedAt: timestamp('consumed_at', { withTimezone: true }),
+    // Refresh tokens only: the connection's session key, wrapped under this token.
+    keyWrap: text('key_wrap'),
   },
   (t) => [index().on(t.grantId), index().on(t.uid), index().on(t.expiresAt)]
 );
@@ -43,8 +45,8 @@ export const connections = pgTable(
     clientId: text('client_id').notNull(),
     clientName: text('client_name').notNull(),
     scopes: text('scopes').array().notNull(),
-    sessionAddress: text('session_address').notNull(),
-    sealedKey: text('sealed_key').notNull(),
+    // Null until the first token exchange creates the session key.
+    sessionAddress: text('session_address'),
     interactionUid: text('interaction_uid').notNull().unique(),
     ticketHash: text('ticket_hash'),
     // Pending: the consent must be claimed before this. Active: the connection ends here.

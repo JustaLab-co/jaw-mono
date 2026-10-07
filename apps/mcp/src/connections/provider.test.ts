@@ -1,16 +1,32 @@
 import { randomBytes } from 'node:crypto';
 import { compactDecrypt, decodeProtectedHeader } from 'jose';
+import type { PGlite } from '@electric-sql/pglite';
+import type { Hex } from 'viem';
 import { privateKeyToAddress } from 'viem/accounts';
 import { beforeAll, describe, expect, it } from 'vitest';
 import { useTestDb } from '@/db/test-db';
-import { Browser, connect, ISSUER, RESOURCE, setTestEnv, startAuthorization, token } from './testkit';
+import {
+  Browser,
+  connect,
+  follow,
+  getDetails,
+  ISSUER,
+  owner,
+  postConsent,
+  REDIRECT,
+  RESOURCE,
+  setTestEnv,
+  startAuthorization,
+  token,
+} from './testkit';
 
 setTestEnv();
 const { verifyBearer } = await import('./auth');
 const { config } = await import('./config');
 const { createProvider } = await import('./provider');
 const { findActive } = await import('./rows');
-const { isStale, open, parseKeyRing } = await import('./seal');
+const { open, parseKeyRing, unwrap } = await import('./seal');
+type KeyRing = ReturnType<typeof parseKeyRing>;
 
 const CIMD = 'https://client.example.test/agent.json';
 const IMPOSTOR = 'https://evil.example.test/jaw.json';
@@ -25,8 +41,10 @@ const metadata = {
   token_endpoint_auth_method: 'none',
 };
 
+let db: PGlite;
+
 beforeAll(async () => {
-  await useTestDb();
+  db = await useTestDb();
   (globalThis as { jawMcpProvider?: unknown }).jawMcpProvider = createProvider(config(), {
     fetch: async (url: string | URL | Request) =>
       String(url) === CIMD
@@ -39,8 +57,57 @@ beforeAll(async () => {
   });
 });
 
-const claimsOf = async (jwe: string) =>
-  JSON.parse(new TextDecoder().decode((await compactDecrypt(jwe, config().ring.keys[0].jwe)).plaintext));
+const claimsOf = async (jwe: string, ring = config().ring) =>
+  JSON.parse(new TextDecoder().decode((await compactDecrypt(jwe, ring.keys[0].jwe)).plaintext));
+
+const refresh = (refreshToken: string) =>
+  token({ grant_type: 'refresh_token', refresh_token: refreshToken, client_id: 'jaw-cli' });
+
+const sessionAddressOf = async (accessToken: string, ring = config().ring) => {
+  const { sub, sk } = await claimsOf(accessToken, ring);
+  return privateKeyToAddress(open(ring, sk, sub));
+};
+
+async function withRing<T>(ring: KeyRing, run: () => Promise<T>): Promise<T> {
+  const cache = globalThis as { jawMcpProvider?: unknown };
+  const before = cache.jawMcpProvider;
+  cache.jawMcpProvider = createProvider({ ...config(), ring });
+  try {
+    return await run();
+  } finally {
+    cache.jawMcpProvider = before;
+  }
+}
+
+/** Every string any table holds, as a database dump would show it. */
+async function dumpStrings(): Promise<string[]> {
+  const found = new Set<string>();
+  const walk = (value: unknown) => {
+    if (typeof value === 'string') found.add(value);
+    else if (value && typeof value === 'object') Object.values(value).forEach(walk);
+  };
+  for (const table of ['settings', 'rate_limits', 'oauth_payloads', 'connections', 'approval_requests']) {
+    walk((await db.query(`select * from ${table}`)).rows);
+  }
+  return [...found];
+}
+
+/** The session keys of one connection that the ring opens from a dump, alone or with the given tokens. */
+function recoverable(dump: string[], ring: KeyRing, connectionId: string, tokens: string[]): string[] {
+  const keys = new Set<string>();
+  const attempt = (open: () => Hex) => {
+    try {
+      keys.add(privateKeyToAddress(open()));
+    } catch {
+      // not a blob these secrets open
+    }
+  };
+  for (const blob of dump.filter((s) => /^\w+\.[0-9a-f]{16}\./.test(s))) {
+    attempt(() => open(ring, blob as never, connectionId));
+    for (const candidate of [...dump, ...tokens]) attempt(() => unwrap(ring, blob as never, connectionId, candidate));
+  }
+  return [...keys];
+}
 
 describe('authorization server', () => {
   it('issues a five minute dir/A256GCM token that names the connection and carries its sealed key', async () => {
@@ -53,8 +120,7 @@ describe('authorization server', () => {
     expect(claims).toMatchObject({ iss: ISSUER, aud: RESOURCE, client_id: 'jaw-cli', scope: 'wallet:read' });
     const row = await findActive(claims.sub);
     expect(row?.account).toBe(c.signer.address);
-    expect(claims.sk).toBe(row?.sealedKey);
-    expect(privateKeyToAddress(open(config().ring, claims.sk, claims.sub))).toBe(row?.sessionAddress);
+    expect(await sessionAddressOf(c.access_token)).toBe(row?.sessionAddress);
 
     const auth = await verifyBearer(c.access_token);
     expect(auth?.extra?.tenant).toMatchObject({ connectionId: claims.sub, account: c.signer.address });
@@ -107,7 +173,7 @@ describe('authorization server', () => {
     const first = await token({ grant_type: 'refresh_token', refresh_token: c.refresh_token, client_id: 'jaw-cli' });
     expect(first.status).toBe(200);
     expect(first.body.refresh_token).not.toBe(c.refresh_token);
-    expect((await claimsOf(first.body.access_token)).sk).toBe((await claimsOf(c.access_token)).sk);
+    expect(await sessionAddressOf(first.body.access_token)).toBe(await sessionAddressOf(c.access_token));
 
     const replay = await token({ grant_type: 'refresh_token', refresh_token: c.refresh_token, client_id: 'jaw-cli' });
     expect(replay.body.error).toBe('invalid_grant');
@@ -138,26 +204,83 @@ describe('authorization server', () => {
     expect((await verifyBearer(second.access_token))?.extra?.tenant).toMatchObject({ account: second.signer.address });
   });
 
-  it('re-seals a connection under the newest key on refresh after a rotation', async () => {
+  it('a database dump and the sealing keys recover no session key', async () => {
     const c = await connect();
-    const old = config();
-    const ring = parseKeyRing(`${randomBytes(32).toString('base64url')},${process.env.JAW_MCP_SEALING_KEYS}`);
-    const cache = globalThis as { jawMcpProvider?: unknown };
-    const before = cache.jawMcpProvider;
-    cache.jawMcpProvider = createProvider({ ...old, ring });
-    try {
-      const r = await token({ grant_type: 'refresh_token', refresh_token: c.refresh_token, client_id: 'jaw-cli' });
-      const claims = JSON.parse(
-        new TextDecoder().decode((await compactDecrypt(r.body.access_token, ring.keys[0].jwe)).plaintext)
-      );
-      expect(isStale(ring, claims.sk)).toBe(false);
-      expect((await findActive(claims.sub))?.sealedKey).toBe(claims.sk);
-      expect(privateKeyToAddress(open(ring, claims.sk, claims.sub))).toBe(
-        (await findActive(claims.sub))?.sessionAddress
-      );
-    } finally {
-      cache.jawMcpProvider = before;
+    const first = await refresh(c.refresh_token);
+    const second = await refresh(first.body.refresh_token);
+    const { sub, sk } = await claimsOf(second.body.access_token);
+    const key = open(config().ring, sk, sub);
+
+    const dump = await dumpStrings();
+    expect(dump.some((s) => s.includes(key.slice(2)))).toBe(false);
+    expect(recoverable(dump, config().ring, sub, [])).toEqual([]);
+    expect(recoverable(dump, config().ring, sub, [second.body.refresh_token])).toEqual([privateKeyToAddress(key)]);
+  });
+
+  it('creates the session key at the code exchange, never at consent', async () => {
+    const browser = new Browser();
+    const signer = owner();
+    const start = await startAuthorization(browser);
+    const d = await getDetails(start.uid!);
+    const consented = await postConsent(start.uid!, signer.address, await signer.signMessage({ message: d.message }));
+    const redirected = await follow(browser, ((await consented.json()) as { next: string }).next);
+
+    const [row] = (
+      await db.query<{ id: string; session_address: string | null }>(
+        'select id, session_address from connections where interaction_uid = $1',
+        [start.uid]
+      )
+    ).rows;
+    expect(row.session_address).toBeNull();
+    expect(recoverable(await dumpStrings(), config().ring, row.id, [])).toEqual([]);
+
+    const issued = await token({
+      grant_type: 'authorization_code',
+      code: redirected.searchParams.get('code')!,
+      redirect_uri: REDIRECT,
+      client_id: 'jaw-cli',
+      code_verifier: start.verifier,
+      resource: RESOURCE,
+    });
+    expect(issued.status).toBe(200);
+    expect((await findActive(row.id))?.sessionAddress).toBe(await sessionAddressOf(issued.body.access_token));
+  });
+
+  it('keeps the session key across refresh rotations', async () => {
+    const c = await connect();
+    const address = await sessionAddressOf(c.access_token);
+    let current = c.refresh_token;
+    for (let i = 0; i < 3; i++) {
+      const r = await refresh(current);
+      expect(r.status).toBe(200);
+      expect(await sessionAddressOf(r.body.access_token)).toBe(address);
+      current = r.body.refresh_token;
     }
+  });
+
+  it('moves a connection to the newest sealing key on its next refresh', async () => {
+    const c = await connect();
+    const address = await sessionAddressOf(c.access_token);
+    const newest = randomBytes(32).toString('base64url');
+    const rotated = parseKeyRing(`${newest},${process.env.JAW_MCP_SEALING_KEYS}`);
+    const r = await withRing(rotated, () => refresh(c.refresh_token));
+    expect(await sessionAddressOf(r.body.access_token, rotated)).toBe(address);
+
+    const onlyNewest = parseKeyRing(newest);
+    const after = await withRing(onlyNewest, () => refresh(r.body.refresh_token));
+    expect(after.status).toBe(200);
+    expect(await sessionAddressOf(after.body.access_token, onlyNewest)).toBe(address);
+  });
+
+  it('a refresh that needs a dropped sealing key fails without spending the token', async () => {
+    const c = await connect();
+    const sub = (await claimsOf(c.access_token)).sub;
+    const failed = await withRing(parseKeyRing(randomBytes(32).toString('base64url')), () => refresh(c.refresh_token));
+    expect(failed.status).toBe(500);
+
+    const retried = await refresh(c.refresh_token);
+    expect(retried.status).toBe(200);
+    expect(await findActive(sub)).toBeDefined();
   });
 
   it('refuses a token for another resource', async () => {
