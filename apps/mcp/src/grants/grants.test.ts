@@ -146,10 +146,6 @@ describe('budget grants', () => {
       approvedOnChain
     );
     const raise = await callTool(c.access_token, 'jaw_request_budget', { perDay: '5' });
-    const raiseView = await readForPage(raise.structuredContent.requestId);
-    if (raiseView.kind !== 'ok') throw new Error(raiseView.kind);
-    const before = (await verifyBearer(c.access_token))?.extra?.tenant as { connectionId: string };
-    expect(raiseView.view.replaces).toEqual({ permissionId: (await currentGrant(before.connectionId))?.permissionId });
     const raised = permissionId();
     const second = await budgetView(raise.structuredContent.requestId);
     expect(second.grant.spender).toBe(first.grant.spender);
@@ -166,5 +162,53 @@ describe('budget grants', () => {
     );
     const tenant = (await verifyBearer(c.access_token))?.extra?.tenant as { connectionId: string };
     expect(await currentGrant(tenant.connectionId)).toMatchObject({ permissionId: raised, allowance: '5000000' });
+  });
+
+  it('computes the budgets to revoke when the decision lands, every older one still live, not the one seen at page load', async () => {
+    const { c, id } = await requestBudget('1');
+    const a = permissionId();
+    const first = await budgetView(id);
+    await decideFromPage(
+      id,
+      { verdict: 'approved', previewHash: first.view.previewHash, permission: granted(first.grant, {}, a) },
+      verifyLocally,
+      new Date(),
+      approvedOnChain
+    );
+
+    // Two raises opened side by side, both read before either is approved.
+    const r1 = (await callTool(c.access_token, 'jaw_request_budget', { perDay: '2' })).structuredContent.requestId;
+    const r2 = (await callTool(c.access_token, 'jaw_request_budget', { perDay: '3' })).structuredContent.requestId;
+    const v1 = await budgetView(r1);
+    const v2 = await budgetView(r2);
+    const b = permissionId();
+    const d1 = await decideFromPage(
+      r1,
+      { verdict: 'approved', previewHash: v1.view.previewHash, permission: granted(v1.grant, {}, b) },
+      verifyLocally,
+      new Date(),
+      approvedOnChain
+    );
+    expect(d1).toMatchObject({ kind: 'ok', view: { revoke: [a] } });
+
+    // A is now revoked on chain; B is not.
+    const aRevoked: ReadPermission = async (target) =>
+      target.permissionId === a
+        ? { status: 'ok', approved: true, revoked: true }
+        : { status: 'ok', approved: true, revoked: false };
+    const d2 = await decideFromPage(
+      r2,
+      { verdict: 'approved', previewHash: v2.view.previewHash, permission: granted(v2.grant) },
+      verifyLocally,
+      new Date(),
+      aRevoked
+    );
+    expect(d2).toMatchObject({ kind: 'ok', view: { revoke: [b] } });
+
+    // The page can come back for an outstanding revoke.
+    const again = await readForPage(r2, new Date(), aRevoked);
+    expect(again).toMatchObject({ kind: 'ok', view: { revoke: [b] } });
+    const bothRevoked: ReadPermission = async () => ({ status: 'ok', approved: true, revoked: true });
+    expect(await readForPage(r2, new Date(), bothRevoked)).toMatchObject({ kind: 'ok', view: { revoke: [] } });
   });
 });

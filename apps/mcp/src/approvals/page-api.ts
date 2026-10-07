@@ -17,11 +17,11 @@ import { isHex, keccak256, type Address, type Hex } from 'viem';
 import { SUPPORTED_CHAINS } from '@/connections/config';
 import { publicClientFor, verifyOnChain, type VerifySignature } from '@/lib/chain';
 import { log } from '@/lib/edge';
-import { currentGrant } from '@/grants/store';
+import { outstandingRevokes } from '@/grants/store';
 import { connectionLive, connectionOf, findById, recordDecision, type NewGrant } from './store';
 
 export type PageOutcome =
-  | { kind: 'ok'; view: ApprovalPageView & { replaces?: { permissionId: Hex } } }
+  | { kind: 'ok'; view: PageView }
   | { kind: 'not_found' }
   | { kind: 'invalid_request' }
   | { kind: 'bad_signature' }
@@ -32,6 +32,8 @@ export type PageOutcome =
   | { kind: 'verification_unavailable' }
   | { kind: 'preview_changed' }
   | { kind: 'not_pending'; view: ApprovalPageView };
+
+type PageView = ApprovalPageView & { revoke?: Hex[] };
 
 export type ReadPermission = (target: PermissionReadTarget) => Promise<PermissionState>;
 
@@ -94,14 +96,20 @@ async function checkPermission(
   };
 }
 
-export async function readForPage(id: string, now = new Date()): Promise<PageOutcome> {
+export async function readForPage(
+  id: string,
+  now = new Date(),
+  readPermission: ReadPermission = readOnChain
+): Promise<PageOutcome> {
   const request = await findById(id, now);
-  if (!request) return { kind: 'not_found' };
+  return request ? { kind: 'ok', view: await withRevokes(request, readPermission) } : { kind: 'not_found' };
+}
+
+// An approved budget lists the budgets it replaced that the chain does not show revoked yet.
+async function withRevokes(request: ApprovalRequest, read: ReadPermission): Promise<PageView> {
   const view = toPageView(request);
-  if (request.body.kind !== 'budget' || request.state.status !== 'pending') return { kind: 'ok', view };
-  // The budget this one replaces, which the page revokes right after granting the new one.
-  const previous = await currentGrant(await connectionOf(request.id));
-  return { kind: 'ok', view: previous ? { ...view, replaces: { permissionId: previous.permissionId } } : view };
+  if (request.body.kind !== 'budget' || request.state.status !== 'approved') return view;
+  return { ...view, revoke: await outstandingRevokes(await connectionOf(request.id), read) };
 }
 
 export async function decideFromPage(
@@ -137,7 +145,7 @@ export async function decideFromPage(
     const current = await findById(id, new Date());
     return current ? { kind: 'not_pending', view: toPageView(current) } : { kind: 'not_found' };
   }
-  return { kind: 'ok', view: toPageView(result.request) };
+  return { kind: 'ok', view: await withRevokes(result.request, readPermission) };
 }
 
 const STATUS: Record<PageOutcome['kind'], number> = {

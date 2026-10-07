@@ -7,7 +7,7 @@ import {
   type ApprovalState,
   type DecisionProof,
 } from '@jaw.id/agent';
-import { and, count, eq, exists, gt, sql } from 'drizzle-orm';
+import { and, count, eq, exists, gt, isNull, ne, sql } from 'drizzle-orm';
 import { isAddress, zeroAddress, type Address, type Hex } from 'viem';
 import { isLive } from '@/connections/rows';
 import { getDb } from '@/db/client';
@@ -163,6 +163,17 @@ export async function recordDecision(request: ApprovalRequest, grant?: NewGrant)
         .insert(grants)
         .values({ ...grant, connectionId: rows[0].connectionId, approvalId: request.id })
         .onConflictDoNothing();
+      // Decided here, not when the page loaded: every older budget of the connection is now to revoke.
+      await tx
+        .update(grants)
+        .set({ replacedAt: new Date() })
+        .where(
+          and(
+            eq(grants.connectionId, rows[0].connectionId),
+            ne(grants.permissionId, grant.permissionId),
+            isNull(grants.replacedAt)
+          )
+        );
     }
     return true;
   });
