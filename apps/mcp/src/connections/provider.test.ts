@@ -322,6 +322,20 @@ describe('authorization server', () => {
     expect(recoverable(dump, config().ring, sub, [c.refresh_token])).toEqual([]);
   });
 
+  it('keeps no wrap for a used token once its retry window has passed, successor used or not', async () => {
+    const c = await connect();
+    const sub = (await claimsOf(c.access_token)).sub;
+    await refresh(c.refresh_token);
+    vi.useFakeTimers({ toFake: ['Date'] });
+    try {
+      vi.setSystemTime(Date.now() + RETRY_WINDOW_MS + 1000);
+      await refresh((await connect()).refresh_token);
+    } finally {
+      vi.useRealTimers();
+    }
+    expect(recoverable(await dumpStrings(), config().ring, sub, [c.refresh_token])).toEqual([]);
+  });
+
   it('creates the session key at the code exchange, never at consent', async () => {
     const browser = new Browser();
     const signer = owner();

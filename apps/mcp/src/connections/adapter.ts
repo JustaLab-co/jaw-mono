@@ -1,5 +1,5 @@
 import { createHash } from 'node:crypto';
-import { and, eq, gt, isNull, or, sql } from 'drizzle-orm';
+import { and, eq, gt, isNotNull, isNull, lt, or, sql } from 'drizzle-orm';
 import Provider, { errors, type Adapter, type AdapterPayload, type KoaContextWithOIDC } from 'oidc-provider';
 import type { Hex } from 'viem';
 import { generatePrivateKey, privateKeyToAddress } from 'viem/accounts';
@@ -97,6 +97,18 @@ export class PgAdapter implements Adapter {
     const connectionId = (row.payload as AdapterPayload).accountId!;
     const presented = ctx.oidc.entities.RotatedRefreshToken?.jti;
     await getDb().transaction(async (tx) => {
+      // A used token past its window can never be retried, so its wrap would only
+      // serve whoever kept the old token. Swept on every rotation, for every grant.
+      await tx
+        .update(oauthPayloads)
+        .set({ keyWrap: null })
+        .where(
+          and(
+            eq(oauthPayloads.model, 'RefreshToken'),
+            lt(oauthPayloads.consumedAt, new Date(Date.now() - RETRY_WINDOW_MS)),
+            isNotNull(oauthPayloads.keyWrap)
+          )
+        );
       let key = requestKeys.get(ctx);
       if (presented) {
         const [from] = await tx
