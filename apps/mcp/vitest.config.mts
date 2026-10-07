@@ -3,7 +3,10 @@ import { defineConfig } from 'vitest/config';
 
 export default defineConfig({
   resolve: {
-    alias: { '@': resolve(__dirname, 'src') },
+    alias: {
+      '@': resolve(__dirname, 'src'),
+      '@jaw.id/agent': resolve(__dirname, '../../packages/agent/src/index.ts'),
+    },
   },
   test: {
     watch: false,

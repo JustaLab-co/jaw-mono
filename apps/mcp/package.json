@@ -2,17 +2,42 @@
   "name": "@jaw-mono/mcp",
   "version": "0.0.1",
   "private": true,
+  "nx": {
+    "targets": {
+      "typecheck": {
+        "executor": "nx:run-commands",
+        "options": {
+          "cwd": "{projectRoot}",
+          "command": "tsc --noEmit -p tsconfig.json"
+        },
+        "dependsOn": [
+          "^build"
+        ],
+        "cache": true,
+        "inputs": [
+          "default",
+          "^production"
+        ]
+      }
+    }
+  },
   "dependencies": {
+    "@jaw.id/agent": "workspace:*",
     "@modelcontextprotocol/server": "2.2.0",
     "drizzle-orm": "0.45.3",
+    "jose": "6.2.12",
     "mcp-handler": "2.2.0",
     "next": "~15.5.10",
+    "oidc-provider": "9.12.2",
     "postgres": "3.4.9",
     "react": "19.2.6",
     "react-dom": "19.2.6",
+    "viem": "^2.56.7",
     "zod": "^4.3.6"
   },
   "devDependencies": {
+    "@electric-sql/pglite": "0.5.8",
+    "@types/oidc-provider": "^9.12.1",
     "drizzle-kit": "0.31.11"
   }
 }

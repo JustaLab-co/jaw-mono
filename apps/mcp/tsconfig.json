@@ -20,6 +20,7 @@
         "name": "next"
       }
     ],
+    "customConditions": [],
     "baseUrl": ".",
     "paths": {
       "@/*": ["./src/*"]
@@ -35,5 +36,10 @@
     "src/**/*.tsx",
     ".next/types/**/*.ts"
   ],
-  "exclude": ["out-tsc", "dist", "node_modules", ".next", "eslint.config.mjs"]
+  "exclude": ["out-tsc", "dist", "node_modules", ".next", "eslint.config.mjs"],
+  "references": [
+    {
+      "path": "../../packages/agent"
+    }
+  ]
 }

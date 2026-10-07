@@ -23,6 +23,7 @@ export function middleware(request: NextRequest) {
   // If dApp RPC proxying is ever routed through api.justaname.id exclusively,
   // the wildcards can be removed.
   const isCLIBridge = request.nextUrl.pathname === '/cli-bridge';
+  const isMcpPage = request.nextUrl.pathname === '/authorize' || request.nextUrl.pathname.startsWith('/approve/');
   const connectSrc = [
     "'self'",
     'https://api.justaname.id',
@@ -30,6 +31,8 @@ export function middleware(request: NextRequest) {
     // CLI bridge: relay WebSocket + HTTPS/WSS for SDK RPC calls.
     // Other pages: dApps pass arbitrary chain.rpcUrl values.
     ...(isCLIBridge ? ['wss://relay.jaw.id', 'ws://localhost:*', 'https:', 'wss:'] : ['https:', 'wss:']),
+    // The hosted MCP pages call the MCP server; https: covers it outside local development.
+    ...(isDev && isMcpPage && process.env.JAW_MCP_URL ? [new URL(process.env.JAW_MCP_URL).origin] : []),
   ].join(' ');
 
   // --- img-src ---

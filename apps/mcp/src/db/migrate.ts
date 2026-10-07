@@ -12,6 +12,7 @@ export async function runMigrations(url: string) {
   try {
     await sql`select pg_advisory_lock(${LOCK_ID})`;
     await migrate(drizzle(sql), { migrationsFolder: join(process.cwd(), 'drizzle') });
+    await sql`delete from oauth_payloads where expires_at < now() - interval '1 day'`;
     await sql`select pg_advisory_unlock(${LOCK_ID})`;
   } finally {
     await sql.end();
