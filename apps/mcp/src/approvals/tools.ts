@@ -65,7 +65,9 @@ export function registerApprovalTools(server: McpServer) {
     {
       description:
         'Ask the account owner to sign a plain-text message with their passkey. Returns a link for the owner and a request id; poll jaw_request_status for the signature.',
-      inputSchema: z.object({ message: z.string().describe('The exact text to sign (EIP-191 personal message).') }),
+      inputSchema: z.strictObject({
+        message: z.string().describe('The exact text to sign (EIP-191 personal message).'),
+      }),
       outputSchema: statusOutput,
     },
     async ({ message }, ctx) => {
@@ -91,7 +93,7 @@ export function registerApprovalTools(server: McpServer) {
     'jaw_request_status',
     {
       description: 'Read the state of an approval request made by this connection.',
-      inputSchema: z.object({ requestId: z.string() }),
+      inputSchema: z.strictObject({ requestId: z.string() }),
       outputSchema: statusOutput,
       annotations: { readOnlyHint: true },
     },

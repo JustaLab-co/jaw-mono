@@ -10,6 +10,10 @@ export interface Config {
   keysOrigin: string;
   chain: Chain;
   rpcUrl: string | undefined;
+  /** Mainnet RPC for ENS; the chain's default public RPC when unset. */
+  mainnetRpcUrl: string | undefined;
+  /** Hosts agent-supplied URLs may reach without the https and public-address checks. Local verification only. */
+  fetchAllowHosts: ReadonlySet<string>;
   ring: KeyRing;
 }
 
@@ -28,6 +32,8 @@ export function config(): Config {
     keysOrigin: new URL(required('JAW_KEYS_URL')).origin,
     chain,
     rpcUrl: process.env.JAW_MCP_RPC_URL || undefined,
+    mainnetRpcUrl: process.env.JAW_MCP_MAINNET_RPC_URL || undefined,
+    fetchAllowHosts: new Set((process.env.JAW_MCP_FETCH_ALLOW_HOSTS ?? '').split(',').filter(Boolean)),
     ring: parseKeyRing(process.env.JAW_MCP_SEALING_KEYS),
   };
   return cached;
