@@ -77,7 +77,7 @@ export async function startAuthorization(browser: Browser, a: Authorize = {}) {
     client_id: a.clientId ?? 'jaw-cli',
     redirect_uri: a.redirectUri ?? REDIRECT,
     response_type: 'code',
-    scope: a.scope ?? 'wallet:read',
+    scope: a.scope ?? 'wallet:read wallet:send',
     state: 'st',
     resource: a.resource ?? RESOURCE,
     ...(a.pkce === false ? {} : { code_challenge: challenge, code_challenge_method: 'S256' }),

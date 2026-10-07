@@ -35,6 +35,19 @@ const messageOf = (p: SignedPayload) => {
   return p.message;
 };
 
+describe('the wallet:send scope', () => {
+  it('is what lets a connection ask for a signature; wallet:read alone is refused', async () => {
+    const reader = await connect(undefined, { scope: 'wallet:read' });
+    const refused = await callTool(reader.access_token, 'jaw_request_signature', { message: 'hello' });
+    expect(refused.isError).toBe(true);
+    expect(refused.content[0].text).toMatch(/wallet:send/);
+
+    const sender = await connect(undefined, { scope: 'wallet:read wallet:send' });
+    const asked = await callTool(sender.access_token, 'jaw_request_signature', { message: 'hello' });
+    expect(asked.structuredContent).toMatchObject({ status: 'pending' });
+  });
+});
+
 describe('input Postgres cannot store, and errors a client must not see', () => {
   it('refuses a message with a NUL or a lone surrogate before it reaches the database', async () => {
     const c = await connect();

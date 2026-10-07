@@ -130,7 +130,12 @@ describe('authorization server', () => {
     expect(Number(c.expires_in)).toBe(300);
 
     const claims = await claimsOf(c.access_token);
-    expect(claims).toMatchObject({ iss: ISSUER, aud: RESOURCE, client_id: 'jaw-cli', scope: 'wallet:read' });
+    expect(claims).toMatchObject({
+      iss: ISSUER,
+      aud: RESOURCE,
+      client_id: 'jaw-cli',
+      scope: 'wallet:read wallet:send',
+    });
     const row = await findActive(claims.sub);
     expect(row?.account).toBe(c.signer.address);
     expect(await sessionAddressOf(c.access_token)).toBe(row?.sessionAddress);

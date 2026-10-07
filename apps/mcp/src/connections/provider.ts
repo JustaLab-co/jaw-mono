@@ -7,7 +7,10 @@ import { config, type Config } from './config';
 import { findActive } from './rows';
 import { seal } from './seal';
 
-export const SCOPES = { 'wallet:read': 'See your account and balances, and ask you to approve signatures' } as const;
+export const SCOPES = {
+  'wallet:read': 'See your account and balances',
+  'wallet:send': 'Ask you to approve signatures',
+} as const;
 export type Scope = keyof typeof SCOPES;
 
 const DAY = 24 * 60 * 60;
