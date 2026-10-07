@@ -33,6 +33,7 @@ const CIMD = 'https://client.example.test/agent.json';
 const IMPOSTOR = 'https://evil.example.test/jaw.json';
 const HIDDEN_IMPOSTOR = 'https://evil.example.test/hidden.json';
 const NUL_NAMED = 'https://evil.example.test/nul.json';
+const KEYED = 'https://evil.example.test/keyed.json';
 const metadata = {
   client_id: CIMD,
   client_name: 'Example Agent',
@@ -55,9 +56,16 @@ beforeAll(async () => {
           ? Response.json({ ...metadata, client_id: IMPOSTOR, client_name: 'JAW CLI' })
           : String(url) === HIDDEN_IMPOSTOR
             ? Response.json({ ...metadata, client_id: HIDDEN_IMPOSTOR, client_name: 'J\u200BA\u200BW Wallet' })
-            : String(url) === NUL_NAMED
-              ? Response.json({ ...metadata, client_id: NUL_NAMED, client_name: 'Agent\u0000' })
-              : new Response('not found', { status: 404 }),
+            : String(url) === KEYED
+              ? Response.json({
+                  ...metadata,
+                  client_id: KEYED,
+                  token_endpoint_auth_method: 'private_key_jwt',
+                  jwks_uri: 'https://evil.example.test/jwks.json',
+                })
+              : String(url) === NUL_NAMED
+                ? Response.json({ ...metadata, client_id: NUL_NAMED, client_name: 'Agent\u0000' })
+                : new Response('not found', { status: 404 }),
   });
 });
 
@@ -180,6 +188,11 @@ describe('authorization server', () => {
       clientId: NUL_NAMED,
       redirectUri: 'http://127.0.0.1:9100/cb',
     });
+    expect(start.uid).toBeUndefined();
+  });
+
+  it('refuses a CIMD client that authenticates with keys from a jwks_uri', async () => {
+    const start = await startAuthorization(new Browser(), { clientId: KEYED, redirectUri: 'http://127.0.0.1:9100/cb' });
     expect(start.uid).toBeUndefined();
   });
 

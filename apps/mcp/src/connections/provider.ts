@@ -44,6 +44,11 @@ export function createProvider(cfg: Config, overrides: Partial<Configuration> = 
     findAccount: async (_ctx, sub) =>
       (await findActive(sub)) ? { accountId: sub, claims: () => ({ sub }) } : undefined,
     pkce: { required: () => true },
+    fetchResponseBodyLimits: {
+      'client_id metadata document': 5 * 1024,
+      jwks_uri: 64 * 1024,
+      sector_identifier_uri: 64 * 1024,
+    },
     rotateRefreshToken: true,
     expiresWithSession: () => false,
     issueRefreshToken: async (_ctx, client) => client.grantTypeAllowed('refresh_token'),
@@ -70,7 +75,9 @@ export function createProvider(cfg: Config, overrides: Partial<Configuration> = 
       clientIdMetadataDocument: {
         enabled: true,
         ack: 'draft-02',
-        allowClient: async (_ctx, client) => !hasUnstorableText(client.clientName ?? ''),
+        // Public clients only: a jwks_uri would be fetched for every request it signs.
+        allowClient: async (_ctx, client) =>
+          client.tokenEndpointAuthMethod === 'none' && !client.jwksUri && !hasUnstorableText(client.clientName ?? ''),
       },
       resourceIndicators: {
         enabled: true,
