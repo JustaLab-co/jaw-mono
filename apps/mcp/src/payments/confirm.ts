@@ -22,7 +22,7 @@ export interface Attempt {
   network: string;
   payTo: Address;
   authorized: bigint;
-  /** When the authorization was signed: a transaction mined before it cannot be its settlement. */
+  /** When the authorization was signed: where the search for an `exact` settlement starts. */
   signedAt: Date;
 }
 

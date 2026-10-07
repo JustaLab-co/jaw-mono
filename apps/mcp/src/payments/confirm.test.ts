@@ -4,6 +4,7 @@ import {
   encodeFunctionData,
   pad,
   parseAbi,
+  toFunctionSelector,
   toHex,
   type Address,
   type Hex,
@@ -79,6 +80,10 @@ const TX = `0x${'ab'.repeat(32)}` as Hex;
 const confirm = (clients: ChainClients) => confirmByReceipt(attempt, TX, clients, 1000);
 
 describe('confirming an upto payment', () => {
+  it('builds its settle calls with the selectors the deployed proxy dispatches on', () => {
+    expect(SETTLE.map((f) => toFunctionSelector(f))).toEqual(['0xff11e7b4', '0x016c1748']);
+  });
+
   it('settles the proxy call that spent this payer nonce, at the amount it moved', async () => {
     expect(await confirm(chain(settle()))).toMatchObject({ amount: 1000n, txHash: TX });
   });
