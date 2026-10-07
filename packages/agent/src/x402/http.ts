@@ -484,6 +484,15 @@ export async function payAndFetch(url: string, payer: Payer, opts: PayAndFetchOp
     return { kind: 'free', status: first.status, body: first.body, payer: payer.address };
   }
 
+  const read = readChallenge(first, url);
+  if ('code' in read) {
+    return { kind: 'refused', status: 402, body: first.body, payer: payer.address, refusal: read };
+  }
+  const { resource } = read;
+  // Carried on every refusal from here on, so a host can offer to pay this
+  // challenge some other way without asking the seller again.
+  const challenge: Challenge = { resource, accepts: wellFormed(read.accepts) };
+
   // Every refusal below answers the same way: the challenge stands, nothing was
   // paid, and the reason says why.
   const refused = (code: RefusalCode, reason: string, traces: Traces = {}): PaymentOutcome => ({
@@ -492,29 +501,9 @@ export async function payAndFetch(url: string, payer: Payer, opts: PayAndFetchOp
     body: first.body,
     payer: payer.address,
     refusal: { code, reason },
+    challenge,
     ...traces,
   });
-
-  // A 402 means we are about to sign a payment. Gate on the FINAL url (after
-  // any redirects), not the original: fetch follows https->http downgrades by
-  // default, so a trusted https endpoint that redirects to http would smuggle a
-  // cleartext challenge past a check on the original url. `resource` is also
-  // what the policy host allowlist must judge, and where the signed proof is
-  // sent (never the original, which could redirect again). Free (non-402)
-  // fetches returned above, so plain http still works as a generic fetch.
-  const resource = first.url || url;
-  if (!isPaymentUrlSecure(resource)) {
-    return refused(
-      'insecure_url',
-      'refusing to sign a payment over a non-HTTPS URL (use https, or localhost for testing)'
-    );
-  }
-
-  // 2. The v2 challenge lives in the PAYMENT-REQUIRED header (body is opaque).
-  const challenge = b64json<X402PaymentRequired>(first.headers.get(X402_HEADERS.required));
-  if (!challenge || !Array.isArray(challenge.accepts)) {
-    return refused('malformed_challenge', 'missing or malformed PAYMENT-REQUIRED challenge');
-  }
 
   // 3. Choose an option under the constraints + policy, or refuse clearly.
   const ctx: PolicyContext = {
@@ -522,7 +511,7 @@ export async function payAndFetch(url: string, payer: Payer, opts: PayAndFetchOp
     spentThisSession: opts.spentThisSession,
     periodUsage: opts.periodUsage,
   };
-  const selection = selectRequirement(challenge.accepts, opts, ctx);
+  const selection = selectRequirement(read.accepts, opts, ctx);
   if ('refusal' in selection) {
     return refused(selection.refusal.code, selection.refusal.reason);
   }
@@ -596,22 +585,7 @@ export async function payAndFetch(url: string, payer: Payer, opts: PayAndFetchOp
   } catch (err) {
     return refused('signing_failed', `payment signing failed: ${errorMessage(err)}`, traces);
   }
-  const authorization: SignedAuthorization = {
-    resource,
-    payload,
-    details: {
-      scheme: requirement.scheme,
-      // The ceiling until a receipt says otherwise, which is the conservative
-      // reading for `upto` and the exact figure for `exact`.
-      amount: requirement.amount,
-      authorized: requirement.amount,
-      deadline: paymentDeadlineOf(payload),
-      asset: requirement.asset,
-      network: requirement.network,
-      payTo: requirement.payTo,
-      nonce: paymentNonceOf(payload),
-    },
-  };
+  const authorization = toSignedAuthorization(resource, payload);
 
   // 4.5 The caller's record of the signature, before the proof leaves. If it
   //     cannot be kept, the proof is not sent, so a retry can never sign a
@@ -630,6 +604,107 @@ export async function payAndFetch(url: string, payer: Payer, opts: PayAndFetchOp
 
   return send(authorization, traces);
 }
+
+/** The parsed 402: where it came from after redirects, and every option that passed `requirementSchema`. */
+export interface Challenge {
+  resource: string;
+  accepts: X402PaymentRequirement[];
+}
+
+export type Probe =
+  | { kind: 'free'; status: number; body: unknown }
+  | { kind: 'challenge'; challenge: Challenge; body: unknown }
+  | { kind: 'refused'; refusal: Refusal; body: unknown };
+
+/**
+ * Steps 1 and 2 of `payAndFetch` on their own: one request, the https gate on
+ * the final url, the PAYMENT-REQUIRED parse. Throws as that request throws.
+ */
+export async function probe(
+  url: string,
+  opts: Pick<PayAndFetchOptions, 'method' | 'headers' | 'body' | 'budget' | 'fetch'>
+): Promise<Probe> {
+  const transport = opts.fetch ?? ((input, init) => fetch(input, init));
+  const first = await fetchWithTimeout(
+    url,
+    { method: opts.method ?? 'GET', headers: { Accept: 'application/json', ...opts.headers }, body: opts.body },
+    transport,
+    opts.budget ?? perCall(FETCH_TIMEOUT_MS)
+  );
+  if (first.status !== 402) return { kind: 'free', status: first.status, body: first.body };
+  const read = readChallenge(first, url);
+  if ('code' in read) return { kind: 'refused', refusal: read, body: first.body };
+  return {
+    kind: 'challenge',
+    challenge: { resource: read.resource, accepts: wellFormed(read.accepts) },
+    body: first.body,
+  };
+}
+
+/**
+ * The option an owner could pay once from the account: `exact` only, on
+ * `network`, at most `maxAmount`, cheapest first. An empty policy keeps the
+ * structural checks in `checkPolicy` and drops every cap.
+ */
+export function chooseOneOff(
+  challenge: Challenge,
+  constraints: { network: string; maxAmount?: string }
+): X402PaymentRequirement | undefined {
+  const exact = challenge.accepts.filter((option) => option.scheme === 'exact');
+  const selection = selectRequirement(exact, constraints, { host: hostOf(challenge.resource) });
+  return 'requirement' in selection ? selection.requirement : undefined;
+}
+
+/** What a resend needs, from a signed payload: the amounts are the ones `accepted` names. */
+export function toSignedAuthorization(resource: string, payload: X402PaymentPayload): SignedAuthorization {
+  const { accepted } = payload;
+  return {
+    resource,
+    payload,
+    details: {
+      scheme: accepted.scheme,
+      // The ceiling until a receipt says otherwise, which is the conservative
+      // reading for `upto` and the exact figure for `exact`.
+      amount: accepted.amount,
+      authorized: accepted.amount,
+      deadline: paymentDeadlineOf(payload),
+      asset: accepted.asset,
+      network: accepted.network,
+      payTo: accepted.payTo,
+      nonce: paymentNonceOf(payload),
+    },
+  };
+}
+
+/** The https gate on the final url and the challenge header, or why there is nothing to pay. */
+function readChallenge(first: FetchedResponse, url: string): { resource: string; accepts: unknown[] } | Refusal {
+  // A 402 means we are about to sign a payment. Gate on the FINAL url (after
+  // any redirects), not the original: fetch follows https->http downgrades by
+  // default, so a trusted https endpoint that redirects to http would smuggle a
+  // cleartext challenge past a check on the original url. `resource` is also
+  // what the policy host allowlist must judge, and where the signed proof is
+  // sent (never the original, which could redirect again). Free (non-402)
+  // fetches returned before this, so plain http still works as a generic fetch.
+  const resource = first.url || url;
+  if (!isPaymentUrlSecure(resource)) {
+    return {
+      code: 'insecure_url',
+      reason: 'refusing to sign a payment over a non-HTTPS URL (use https, or localhost for testing)',
+    };
+  }
+  // The v2 challenge lives in the PAYMENT-REQUIRED header (body is opaque).
+  const challenge = b64json<X402PaymentRequired>(first.headers.get(X402_HEADERS.required));
+  if (!challenge || !Array.isArray(challenge.accepts)) {
+    return { code: 'malformed_challenge', reason: 'missing or malformed PAYMENT-REQUIRED challenge' };
+  }
+  return { resource, accepts: challenge.accepts };
+}
+
+const wellFormed = (accepts: unknown[]): X402PaymentRequirement[] =>
+  accepts.flatMap((raw) => {
+    const parsed = requirementSchema.safeParse(raw);
+    return parsed.success ? [parsed.data as X402PaymentRequirement] : [];
+  });
 
 const IDEMPOTENCY_KEY = /^[A-Za-z0-9_.:-]{1,128}$/;
 

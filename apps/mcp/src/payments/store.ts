@@ -22,6 +22,9 @@ export interface PaymentRequest {
   maxAmount?: string;
 }
 
+/** How a seller is asked again for the resource of a one-off. */
+export type SellerRequest = Pick<PaymentRequest, 'method' | 'headers' | 'body'>;
+
 /** What "the same request" means for an idempotency key. */
 export function requestHash(r: PaymentRequest): string {
   const headers = Object.entries(r.headers)
@@ -60,7 +63,8 @@ async function find(connectionId: string, key: string): Promise<PaymentRow | und
 }
 
 /** A signed row nobody concluded: its proof may never have arrived, so a retry sends it again. */
-const awaitingAnswer = (row: PaymentRow) => row.state === 'signed' && (row.kind === null || row.code === 'no_response');
+export const awaitingAnswer = (row: PaymentRow) =>
+  row.state === 'signed' && (row.kind === null || row.code === 'no_response');
 
 /**
  * Opens the row for this key, or says what the existing one allows. A stored
@@ -106,6 +110,33 @@ export async function claim(owner: Owner, key: string, request: PaymentRequest):
     .where(and(eq(payments.id, row.id), eq(payments.state, 'pending'), lt(payments.leaseUntil, sql`now()`)))
     .returning();
   return reclaimed ? { kind: 'run', row: reclaimed, token } : { kind: 'busy' };
+}
+
+/** The row an approved one-off opens: charged to the approval, paid by the account. */
+export type NewOneOff = Pick<
+  typeof payments.$inferInsert,
+  'id' | 'idempotencyKey' | 'requestHash' | 'approvalId' | 'payer' | 'url' | 'leaseToken' | 'leaseUntil'
+>;
+
+/** Inside the transaction that records the approval. UNIQUE(approval_id) keeps it to one row. */
+export async function insertOneOff(tx: Tx, connectionId: string, row: NewOneOff): Promise<void> {
+  await tx.insert(payments).values({ ...row, connectionId });
+}
+
+export async function findByApproval(approvalId: string): Promise<PaymentRow | undefined> {
+  const [row] = await getDb().select().from(payments).where(eq(payments.approvalId, approvalId));
+  return row;
+}
+
+/** A pending one-off whose lease lapsed, under a new token, as `claim` takes over a pending row. */
+export async function reclaimOneOff(id: string): Promise<{ row: PaymentRow; token: string } | undefined> {
+  const token = randomBytes(16).toString('base64url');
+  const [row] = await getDb()
+    .update(payments)
+    .set({ leaseToken: token, leaseUntil: new Date(Date.now() + LEASE_MS) })
+    .where(and(eq(payments.id, id), eq(payments.state, 'pending'), lt(payments.leaseUntil, sql`now()`)))
+    .returning();
+  return row && { row, token };
 }
 
 const owned = (id: string, token: string) =>
@@ -231,7 +262,7 @@ export function entryOf(row: PaymentRow, now: Date): X402LogEntry {
     at: row.createdAt.toISOString(),
     url: row.url,
     payer: row.payer,
-    permissionId: row.permissionId,
+    permissionId: row.permissionId ?? undefined,
     topUpAmount: row.topUpAmount ?? undefined,
     topUpBatchId: row.topUpBatchId ?? undefined,
     approvalBatchId: row.approvalBatchId ?? undefined,

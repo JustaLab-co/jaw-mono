@@ -49,12 +49,41 @@ export interface BudgetView extends ViewBase {
   replaces?: { permissionId: Hex };
 }
 
-export type ApprovalView = SignatureView | BudgetView;
+/** EIP-3009 TransferWithAuthorization from the account, under the token's own domain. Amounts are decimal strings. */
+export interface TransferTypedData {
+  domain: { name: string; version: string; chainId: number; verifyingContract: Address };
+  types: { TransferWithAuthorization: { name: string; type: string }[] };
+  primaryType: 'TransferWithAuthorization';
+  message: { from: Address; to: Address; value: string; validAfter: string; validBefore: string; nonce: Hex };
+}
 
-/** What the page signs: the approved message, or the reserved rejection typed data. */
-export type SignedPayload = SignatureView['approve'] | ViewBase['reject'];
+export interface PaymentView extends ViewBase {
+  preview: {
+    kind: 'payment';
+    requester: ClientIdentity;
+    account: Address;
+    chainId: number;
+    payTo: Address;
+    token: Address;
+    /** Base units of USDC. */
+    amount: string;
+    network: string;
+    resource: string;
+    warnings: string[];
+    validUntil: string;
+  };
+  approve: { type: 'typed_data'; typedData: TransferTypedData };
+  /** What paying it came to, on the answer to an approval. No seller text. */
+  payment?: { state: string; kind: string | null; code: string | null };
+}
+
+export type ApprovalView = SignatureView | BudgetView | PaymentView;
+
+/** What the page signs: the approved message or transfer, or the reserved rejection typed data. */
+export type SignedPayload = SignatureView['approve'] | PaymentView['approve'] | ViewBase['reject'];
 
 export const isBudget = (view: ApprovalView): view is BudgetView => view.preview.kind === 'budget';
+export const isPayment = (view: ApprovalView): view is PaymentView => view.preview.kind === 'payment';
 
 type Decision = { verdict: 'approved' | 'rejected'; previewHash: Hex } & (
   | { signature: string }
@@ -70,6 +99,7 @@ const REFUSALS: Record<string, string> = {
   verification_unavailable: 'The signature could not be checked right now. Try again in a moment.',
   grant_mismatch: 'The permission your wallet returned does not match this request, so nothing was recorded.',
   grant_not_found: 'The permission does not show as granted on chain yet. Try again in a moment.',
+  payments_paused: 'Payments are paused on this server, so nothing was paid. Try again later.',
 };
 
 const GRANT_TRIES = 3;

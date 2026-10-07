@@ -113,9 +113,12 @@ export const approvalRequests = pgTable(
     signature: text('signature'),
     assertionRef: text('assertion_ref'),
     permissionId: text('permission_id'),
+    // How to fetch a payment's resource again. Never loaded with the request: the agent's headers can carry secrets.
+    sellerRequest: jsonb('seller_request'),
   },
   (t) => [
     index().on(t.connectionId, t.createdAt),
+    check('approval_seller_request', sql`${t.kind} = 'payment' or ${t.sellerRequest} is null`),
     check(
       'approval_evidence',
       sql`(${t.status} = 'pending') = (${t.decidedAt} is null and ${t.previewHash} is null and ${t.payloadHash} is null)`
@@ -161,7 +164,9 @@ export const payments = pgTable(
       .references(() => connections.id),
     idempotencyKey: text('idempotency_key').notNull(),
     requestHash: text('request_hash').notNull(),
-    permissionId: text('permission_id').notNull(),
+    permissionId: text('permission_id'),
+    // Set when the account owner approved paying this one request, instead of a budget.
+    approvalId: text('approval_id').references(() => approvalRequests.id),
     payer: text('payer').notNull(),
     url: text('url').notNull(),
     state: text('state', { enum: ['pending', 'signed', 'settled', 'failed', 'unknown'] })
@@ -198,11 +203,15 @@ export const payments = pgTable(
   (t) => [
     uniqueIndex().on(t.connectionId, t.idempotencyKey),
     uniqueIndex().on(t.payer, t.nonce),
+    uniqueIndex()
+      .on(t.approvalId)
+      .where(sql`${t.approvalId} is not null`),
     index().on(t.connectionId, t.createdAt, t.id),
     index().on(t.permissionId, t.createdAt),
     index()
       .on(t.signedAt)
       .where(sql`${t.state} in ('signed', 'unknown')`),
+    check('payment_source', sql`(${t.permissionId} is null) <> (${t.approvalId} is null)`),
     check(
       'payment_shape',
       sql`(${t.state} = 'pending' and ${t.nonce} is null and ${t.authorization} is null and ${t.fenced} is null)

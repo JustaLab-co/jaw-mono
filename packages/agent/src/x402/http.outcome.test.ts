@@ -1,5 +1,13 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { payAndFetch, FetchRefused, until, type SignedAuthorization } from './http.js';
+import {
+  chooseOneOff,
+  payAndFetch,
+  FetchRefused,
+  probe,
+  until,
+  type Challenge,
+  type SignedAuthorization,
+} from './http.js';
 import type { X402PaymentPayload, X402PaymentRequirement } from './types.js';
 import type { Payer } from './payer.js';
 import { ensurePayerFunds } from './topup.js';
@@ -219,5 +227,89 @@ describe('payAndFetch transport and time', () => {
     await payAndFetch(URL_UNDER_TEST, payer, { budget, ensureFunds });
 
     expect(ensureFunds).toHaveBeenCalledWith(expect.anything(), payer.address, budget);
+  });
+});
+
+describe('the challenge a refusal carries, for a one-off', () => {
+  const withSessionCap = { policy: { maxTotalPerSession: '1500' }, spentThisSession: 1000n };
+
+  it('is on budget_exhausted from the policy, before any option was chosen', async () => {
+    fetchMock.mockResolvedValueOnce(challenge());
+    const outcome = await payAndFetch(URL_UNDER_TEST, payer, withSessionCap);
+    expect(outcome).toMatchObject({
+      kind: 'refused',
+      refusal: { code: 'budget_exhausted' },
+      challenge: { resource: URL_UNDER_TEST, accepts: [REQUIREMENT] },
+    });
+    expect(pay).not.toHaveBeenCalled();
+  });
+
+  it('is on budget_exhausted from the funding hook, the same challenge', async () => {
+    fetchMock.mockResolvedValueOnce(challenge());
+    const outcome = await payAndFetch(URL_UNDER_TEST, payer, {
+      ensureFunds: async () => ({ ok: false, code: 'budget_exhausted', reason: 'grant used up' }),
+    });
+    expect(outcome).toMatchObject({ challenge: { resource: URL_UNDER_TEST, accepts: [REQUIREMENT] } });
+  });
+
+  it('is absent before the challenge was read', async () => {
+    fetchMock.mockResolvedValueOnce(res(402, {}));
+    const outcome = await payAndFetch(URL_UNDER_TEST, payer);
+    expect(outcome).toMatchObject({ refusal: { code: 'malformed_challenge' } });
+    expect('challenge' in outcome).toBe(false);
+  });
+});
+
+describe('probe', () => {
+  it('reads the challenge from the final url, keeping only well-formed options', async () => {
+    const header = b64({ x402Version: 2, accepts: [REQUIREMENT, { scheme: 'exact', amount: 'lots' }] });
+    fetchMock.mockResolvedValueOnce({ ...res(402, { 'PAYMENT-REQUIRED': header }), url: `${URL_UNDER_TEST}?v=2` });
+    expect(await probe(URL_UNDER_TEST, {})).toMatchObject({
+      kind: 'challenge',
+      challenge: { resource: `${URL_UNDER_TEST}?v=2`, accepts: [REQUIREMENT] },
+    });
+  });
+
+  it('passes a free answer through and refuses cleartext and a missing header', async () => {
+    fetchMock.mockResolvedValueOnce(res(200, {}, '{"free":true}'));
+    expect(await probe(URL_UNDER_TEST, {})).toEqual({ kind: 'free', status: 200, body: { free: true } });
+    fetchMock.mockResolvedValueOnce(res(402, {}));
+    expect(await probe(URL_UNDER_TEST, {})).toMatchObject({
+      kind: 'refused',
+      refusal: { code: 'malformed_challenge' },
+    });
+    fetchMock.mockResolvedValueOnce(challenge());
+    expect(await probe('http://api.example.com/x', {})).toMatchObject({ refusal: { code: 'insecure_url' } });
+  });
+});
+
+describe('chooseOneOff', () => {
+  const USDC_BASE_SEPOLIA = '0x036CbD53842c5426634e7929541eC2318f3dCF7e';
+  const option = (over: Partial<X402PaymentRequirement>): X402PaymentRequirement => ({
+    ...REQUIREMENT,
+    network: 'eip155:84532',
+    asset: USDC_BASE_SEPOLIA,
+    ...over,
+  });
+  const offered = (...accepts: X402PaymentRequirement[]): Challenge => ({ resource: URL_UNDER_TEST, accepts });
+
+  it('takes the cheapest exact option on the network, with no cap from any budget', () => {
+    const chosen = chooseOneOff(
+      offered(option({ amount: '900', scheme: 'upto' }), option({ amount: '5000000000' }), option({ amount: '3000' })),
+      { network: 'eip155:84532' }
+    );
+    expect(chosen).toMatchObject({ scheme: 'exact', amount: '3000' });
+  });
+
+  it("still honors the agent's own maxAmount and the network", () => {
+    const challenge = offered(option({ amount: '3000' }), option({ amount: '10', network: 'eip155:8453' }));
+    expect(chooseOneOff(challenge, { network: 'eip155:84532', maxAmount: '2999' })).toBeUndefined();
+    expect(chooseOneOff(challenge, { network: 'eip155:84532', maxAmount: '3000' })).toMatchObject({ amount: '3000' });
+  });
+
+  it('offers nothing for an upto-only challenge or a zero recipient', () => {
+    expect(chooseOneOff(offered(option({ scheme: 'upto' })), { network: 'eip155:84532' })).toBeUndefined();
+    const zero = option({ payTo: `0x${'0'.repeat(40)}` as `0x${string}` });
+    expect(chooseOneOff(offered(zero), { network: 'eip155:84532' })).toBeUndefined();
   });
 });

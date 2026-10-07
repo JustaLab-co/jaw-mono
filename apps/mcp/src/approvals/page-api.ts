@@ -17,11 +17,17 @@ import { isHex, keccak256, type Address, type Hex } from 'viem';
 import { SUPPORTED_CHAINS } from '@/connections/config';
 import { publicClientFor, verifyOnChain, type VerifySignature } from '@/lib/chain';
 import { log } from '@/lib/edge';
+import { isPaymentsPaused } from '@/db/settings';
 import { currentGrant } from '@/grants/store';
-import { connectionLive, connectionOf, findById, recordDecision, type NewGrant } from './store';
+import { oneOffRow, runOneOff, type PaymentApproval } from '@/payments/one-off';
+import type { PaymentRow, SellerRequest } from '@/payments/store';
+import { connectionLive, connectionOf, findById, recordDecision, sellerRequestOf, type NewGrant } from './store';
+
+/** What the one-off came to, without any seller text: the page is not authenticated. */
+type OneOffSummary = Pick<PaymentRow, 'state' | 'kind' | 'code'>;
 
 export type PageOutcome =
-  | { kind: 'ok'; view: ApprovalPageView & { replaces?: { permissionId: Hex } } }
+  | { kind: 'ok'; view: ApprovalPageView & { replaces?: { permissionId: Hex }; payment?: OneOffSummary } }
   | { kind: 'not_found' }
   | { kind: 'invalid_request' }
   | { kind: 'bad_signature' }
@@ -30,6 +36,7 @@ export type PageOutcome =
   | { kind: 'connection_revoked' }
   | { kind: 'unsupported_chain' }
   | { kind: 'verification_unavailable' }
+  | { kind: 'payments_paused' }
   | { kind: 'preview_changed' }
   | { kind: 'not_pending'; view: ApprovalPageView };
 
@@ -94,6 +101,15 @@ async function checkPermission(
   };
 }
 
+/** An approved payment: the row it opens and how to ask the seller again. */
+async function oneOffOf(request: ApprovalRequest) {
+  const { body } = request;
+  if (request.state.status !== 'approved' || body.kind !== 'payment') return undefined;
+  const approval: PaymentApproval = { ...request, body };
+  const seller: SellerRequest = await sellerRequestOf(request.id);
+  return { approval, seller, row: oneOffRow(approval, seller) };
+}
+
 export async function readForPage(id: string, now = new Date()): Promise<PageOutcome> {
   const request = await findById(id, now);
   if (!request) return { kind: 'not_found' };
@@ -122,6 +138,10 @@ export async function decideFromPage(
   if (view.previewHash !== previewHash) return { kind: 'preview_changed' };
   if (!(await connectionLive(request.id))) return { kind: 'connection_revoked' };
   if (!SUPPORTED_CHAINS[request.chainId]) return { kind: 'unsupported_chain' };
+  // Before the decision is recorded, so the owner can approve again once payments resume.
+  if (verdict === 'approved' && request.body.kind === 'payment' && (await isPaymentsPaused())) {
+    return { kind: 'payments_paused' };
+  }
 
   const payload = signedPayload(request, verdict);
   const checked =
@@ -132,12 +152,17 @@ export async function decideFromPage(
 
   const evidence = { previewHash, payloadHash: payloadHash(payload), proof: checked.proof, decidedAt: now };
   const result = decide(request, verdict, evidence, now);
-  if (!result.ok || !(await recordDecision(result.request, checked.grant))) {
+  const oneOff = result.ok ? await oneOffOf(result.request) : undefined;
+  const effect = oneOff ? { payment: oneOff.row } : checked.grant && { grant: checked.grant };
+  if (!result.ok || !(await recordDecision(result.request, effect))) {
     if (!(await connectionLive(request.id))) return { kind: 'connection_revoked' };
     const current = await findById(id, new Date());
     return current ? { kind: 'not_pending', view: toPageView(current) } : { kind: 'not_found' };
   }
-  return { kind: 'ok', view: toPageView(result.request) };
+  const decided = toPageView(result.request);
+  if (!oneOff) return { kind: 'ok', view: decided };
+  const { row } = await runOneOff(oneOff.approval, oneOff.seller, oneOff.row.id, oneOff.row.leaseToken);
+  return { kind: 'ok', view: { ...decided, payment: { state: row.state, kind: row.kind, code: row.code } } };
 }
 
 const STATUS: Record<PageOutcome['kind'], number> = {
@@ -150,6 +175,7 @@ const STATUS: Record<PageOutcome['kind'], number> = {
   connection_revoked: 410,
   unsupported_chain: 422,
   verification_unavailable: 503,
+  payments_paused: 503,
   preview_changed: 409,
   not_pending: 409,
 };

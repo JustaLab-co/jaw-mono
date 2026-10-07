@@ -6,14 +6,18 @@ import {
   type ApprovalRequest,
   type ApprovalState,
   type DecisionProof,
+  type PaymentTerms,
 } from '@jaw.id/agent';
-import { and, count, eq, exists, gt, sql } from 'drizzle-orm';
+import { and, count, eq, exists, getTableColumns, gt, sql } from 'drizzle-orm';
 import { isAddress, zeroAddress, type Address, type Hex } from 'viem';
 import { isLive } from '@/connections/rows';
 import { getDb } from '@/db/client';
 import { approvalRequests, connections, grants } from '@/db/schema';
+import { insertOneOff, type NewOneOff, type SellerRequest } from '@/payments/store';
 
-type Row = typeof approvalRequests.$inferSelect;
+export const MAX_PENDING = 20;
+
+type Row = Omit<typeof approvalRequests.$inferSelect, 'sellerRequest'>;
 
 function parseBody(raw: unknown): ApprovalBody {
   const body = raw as Record<string, unknown>;
@@ -32,7 +36,29 @@ function parseBody(raw: unknown): ApprovalBody {
     const { spender, token, allowance } = body;
     return { kind: 'budget', spender, token, allowance, expiry: body.expiry as number };
   }
+  if (body.kind === 'payment' && isPaymentTerms(body.terms)) return { kind: 'payment', terms: body.terms };
   throw new Error('stored approval body is malformed');
+}
+
+function isPaymentTerms(raw: unknown): raw is PaymentTerms {
+  const { resource, requirement, nonce, validBefore } = (raw ?? {}) as Record<string, unknown>;
+  const option = (requirement ?? {}) as Record<string, unknown>;
+  return (
+    typeof resource === 'string' &&
+    URL.canParse(resource) &&
+    option.scheme === 'exact' &&
+    typeof option.network === 'string' &&
+    typeof option.amount === 'string' &&
+    /^\d+$/.test(option.amount) &&
+    typeof option.asset === 'string' &&
+    isAddress(option.asset, { strict: false }) &&
+    typeof option.payTo === 'string' &&
+    isAddress(option.payTo, { strict: false }) &&
+    typeof nonce === 'string' &&
+    /^0x[0-9a-f]{64}$/i.test(nonce) &&
+    typeof validBefore === 'string' &&
+    /^\d+$/.test(validBefore)
+  );
 }
 
 function proofOf(row: Row): DecisionProof {
@@ -78,12 +104,26 @@ const pendingFor = (connectionId: string) =>
     gt(approvalRequests.expiresAt, sql`now()`)
   );
 
+/** The only reader of a payment's seller request, which `toRequest` never loads. */
+export async function sellerRequestOf(id: ApprovalId): Promise<SellerRequest> {
+  const [row] = await getDb()
+    .select({ sellerRequest: approvalRequests.sellerRequest })
+    .from(approvalRequests)
+    .where(eq(approvalRequests.id, id));
+  return row.sellerRequest as SellerRequest;
+}
+
 /**
  * Inserts unless the connection already has `max` requests pending. The
  * per-connection lock makes the count and the insert one step, so parallel
  * calls cannot all see room under the cap.
  */
-export async function insertUnderCap(connectionId: string, request: ApprovalRequest, max: number): Promise<boolean> {
+export async function insertUnderCap(
+  connectionId: string,
+  request: ApprovalRequest,
+  max: number,
+  sellerRequest?: SellerRequest
+): Promise<boolean> {
   return getDb().transaction(async (tx) => {
     await tx.execute(sql`select pg_advisory_xact_lock(hashtext(${connectionId}))`);
     const [row] = await tx.select({ n: count() }).from(approvalRequests).where(pendingFor(connectionId));
@@ -97,6 +137,7 @@ export async function insertUnderCap(connectionId: string, request: ApprovalRequ
       requesterClientId: request.requester.clientId,
       kind: request.body.kind,
       body: request.body,
+      sellerRequest,
       createdAt: request.createdAt,
       expiresAt: request.expiresAt,
     });
@@ -104,9 +145,13 @@ export async function insertUnderCap(connectionId: string, request: ApprovalRequ
   });
 }
 
+// Every column but the seller request.
+// eslint-disable-next-line @typescript-eslint/no-unused-vars
+const { sellerRequest, ...columns } = getTableColumns(approvalRequests);
+
 const withSession = () =>
   getDb()
-    .select({ row: approvalRequests, sessionAddress: connections.sessionAddress })
+    .select({ row: columns, sessionAddress: connections.sessionAddress })
     .from(approvalRequests)
     .innerJoin(connections, eq(connections.id, approvalRequests.connectionId));
 
@@ -134,8 +179,11 @@ function proofColumns(proof: DecisionProof) {
 
 export type NewGrant = Omit<typeof grants.$inferInsert, 'connectionId' | 'approvalId' | 'createdAt'>;
 
+/** What an approval starts in the same transaction: a budget, or the row of a one-off payment. */
+export type Effect = { grant: NewGrant } | { payment: NewOneOff };
+
 // Repeats decide's precondition in SQL, so two racing decisions cannot both land.
-export async function recordDecision(request: ApprovalRequest, grant?: NewGrant): Promise<boolean> {
+export async function recordDecision(request: ApprovalRequest, effect?: Effect): Promise<boolean> {
   const { state } = request;
   if (state.status !== 'approved' && state.status !== 'rejected') throw new Error('only a decision is recorded');
   const { proof, ...evidence } = state.evidence;
@@ -158,12 +206,14 @@ export async function recordDecision(request: ApprovalRequest, grant?: NewGrant)
       )
       .returning({ connectionId: approvalRequests.connectionId });
     if (rows.length !== 1) return false;
-    if (grant) {
+    const { connectionId } = rows[0];
+    if (effect && 'grant' in effect) {
       await tx
         .insert(grants)
-        .values({ ...grant, connectionId: rows[0].connectionId, approvalId: request.id })
+        .values({ ...effect.grant, connectionId, approvalId: request.id })
         .onConflictDoNothing();
     }
+    if (effect && 'payment' in effect) await insertOneOff(tx, connectionId, effect.payment);
     return true;
   });
 }

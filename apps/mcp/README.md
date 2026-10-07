@@ -43,7 +43,7 @@ insert into settings (key, value) values ('paused', 'true')
 on conflict (key) do update set value = excluded.value, updated_at = now();
 ```
 
-Payments alone stop with `('payments_paused', 'true')` in the same table: `jaw_pay_and_fetch` refuses with `payments_paused` before it signs anything, and every other tool keeps working.
+Payments alone stop with `('payments_paused', 'true')` in the same table: `jaw_pay_and_fetch` refuses with `payments_paused` before it signs anything, the approval page refuses to record an approved one-off payment (the request stays pending), `jaw_request_status` resends nothing, and every other tool keeps working.
 
 `/api/cron/reconcile` (GET or POST, `Authorization: Bearer <JAW_MCP_CRON_SECRET>`) settles or fails every payment left `signed` or `unknown` for more than a minute by asking the chain, logs one error per payment still unanswered an hour past its deadline, and deletes expired OAuth state, rate limit windows, and pending connections and approval requests nothing refers to. `/api/metrics` serves payments by state, the reconciler backlog, and refused `/mcp` calls per client in Prometheus text.
 

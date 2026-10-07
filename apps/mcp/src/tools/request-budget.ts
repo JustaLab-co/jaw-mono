@@ -1,7 +1,7 @@
 import type { McpServer } from '@modelcontextprotocol/server';
 import { z } from 'zod';
-import { describe, MAX_PENDING, NO_SEND_SCOPE, refusal, result, statusOutput } from '@/approvals/tools';
-import { insertUnderCap } from '@/approvals/store';
+import { describe, NO_SEND_SCOPE, refusal, result, statusOutput } from '@/approvals/tools';
+import { insertUnderCap, MAX_PENDING } from '@/approvals/store';
 import { tenant } from '@/connections/auth';
 import { budgetRequest, PER_DAY } from '@/grants/request';
 

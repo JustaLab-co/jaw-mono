@@ -18,7 +18,17 @@ export const payOutput = z.object({
       blockTime: z.string().optional(),
     })
     .optional(),
-  refusal: z.object({ code: z.string(), next: z.literal('jaw_request_budget').optional() }).optional(),
+  refusal: z
+    .object({
+      code: z.string(),
+      next: z.literal('jaw_request_budget').optional(),
+      oneOff: z
+        .object({ requestId: z.string(), approveUrl: z.string().url() })
+        .optional()
+        .describe('The owner can pay this request once at approveUrl; poll jaw_request_status with requestId'),
+    })
+    .optional(),
+  approvalId: z.string().optional().describe('The approval this one-off payment was paid under'),
   topUp: z.object({ amount: z.string().optional(), batchId: z.string().optional() }).optional(),
   moneyMoved: z.boolean().describe('Funds moved from the account into the payer, whatever the outcome'),
   summary: z.string(),
@@ -26,6 +36,7 @@ export const payOutput = z.object({
 type PayOutput = z.infer<typeof payOutput>;
 
 type Text = { type: 'text'; text: string };
+export type OneOffOffer = { requestId: string; approveUrl: string };
 export type PayResult = { content: Text[]; structuredContent?: PayOutput; isError?: boolean };
 
 /** Refusals a larger budget would fix. */
@@ -40,7 +51,10 @@ function summaryOf(row: PaymentRow, out: Omit<PayOutput, 'summary'>): string {
   const moved = out.moneyMoved ? ' Funds moved into the payer first.' : '';
   const paid = `${out.payment?.amount} base units to ${out.payment?.payTo}`;
   if (out.kind === 'free') return `Free: answered ${out.httpStatus} without a payment.`;
+  const oneOff = out.refusal?.oneOff;
   switch (row.state) {
+    case 'pending':
+      return 'Paying now. Ask again in a few seconds.';
     case 'settled':
       return `Paid ${paid}. Settled${out.payment?.txHash ? ` in ${out.payment.txHash}` : ' on chain'}.${moved}`;
     case 'signed':
@@ -51,12 +65,15 @@ function summaryOf(row: PaymentRow, out: Omit<PayOutput, 'summary'>): string {
       return `A payment may have reached the seller (${out.refusal?.code}). Whether it settled is being checked; jaw_history shows it.${moved}`;
     default:
       if (out.payment) return `The signed payment expired unused. Nothing moved to the seller.${moved}`;
+      if (oneOff) {
+        return `Not paid: ${out.refusal?.code}. Nothing was sent. The owner can pay this once at ${oneOff.approveUrl}; poll jaw_request_status with that requestId. Or ask for a larger budget with jaw_request_budget.${moved}`;
+      }
       return `Not paid: ${out.refusal?.code}. Nothing was sent.${out.refusal?.next ? ' Ask for a larger budget with jaw_request_budget.' : ''}${moved}`;
   }
 }
 
 /** The answer for a row, from its columns, so a replay shows what the reconciler learned since. */
-export function render(row: PaymentRow, fenced: string[]): PayResult {
+export function render(row: PaymentRow, fenced: string[], oneOff?: OneOffOffer): PayResult {
   const out = {
     paymentId: row.id,
     idempotencyKey: row.idempotencyKey,
@@ -75,8 +92,13 @@ export function render(row: PaymentRow, fenced: string[]): PayResult {
       },
     }),
     ...(row.code && {
-      refusal: { code: row.code, ...(RAISE.has(row.code) && { next: 'jaw_request_budget' as const }) },
+      refusal: {
+        code: row.code,
+        ...(RAISE.has(row.code) && { next: 'jaw_request_budget' as const }),
+        ...(oneOff && { oneOff }),
+      },
     }),
+    ...(row.approvalId && { approvalId: row.approvalId }),
     ...((row.topUpAmount || row.topUpBatchId) && {
       topUp: { amount: row.topUpAmount ?? undefined, batchId: row.topUpBatchId ?? undefined },
     }),

@@ -1,5 +1,6 @@
 import { hashMessage } from 'viem';
-import { rejectionTypedData } from './reserved.js';
+import { rejectionTypedData, reservedSigningRefusal } from './reserved.js';
+import type { X402PaymentRequirement } from '../x402/types.js';
 import { describe, expect, it } from 'vitest';
 import {
   APPROVAL_TTL_MS,
@@ -14,6 +15,10 @@ import {
   toPageView,
   validateMessage,
   grantMatches,
+  MIN_DECISION_MS,
+  openPaymentRequest,
+  paymentDraft,
+  stillOffered,
   type ApprovalId,
   type ApprovalRequest,
   type DecisionEvidence,
@@ -273,5 +278,133 @@ describe('text Postgres cannot store', () => {
     expect(validateMessage('a\uD800b')).toBe('unstorable');
     expect(validateMessage('a\uDC00')).toBe('unstorable');
     expect(validateMessage('gm \u{1F44B}')).toBeUndefined();
+  });
+});
+
+describe('a payment approval', () => {
+  const RESOURCE = 'https://seller.example/report';
+  const PAY_TO = '0x2222222222222222222222222222222222222222';
+  const NONCE = `0x${'11'.repeat(32)}` as const;
+  const OPTION: X402PaymentRequirement = {
+    scheme: 'exact',
+    network: 'eip155:84532',
+    amount: '10000',
+    asset: USDC,
+    payTo: PAY_TO,
+    maxTimeoutSeconds: 300,
+  };
+  const input = {
+    id: ID,
+    account: ACCOUNT,
+    chainId: 84532,
+    requester: { name: 'Example Agent', clientId: 'https://agent.example/client.json' },
+    sessionAddress: SESSION,
+  } as const;
+  const open = (requirement = OPTION, resource = RESOURCE) =>
+    openPaymentRequest(input, { resource, requirement }, T0, NONCE);
+  const opened = () => {
+    const r = open();
+    if (!r || r.body.kind !== 'payment') throw new Error('setup');
+    return { ...r, body: r.body };
+  };
+
+  it.each([0, 60, 600, 3600, undefined])(
+    'relates the clocks for maxTimeoutSeconds %s: a settlement window after the last decision',
+    (maxTimeoutSeconds) => {
+      const r = open({ ...OPTION, maxTimeoutSeconds });
+      if (!r || r.body.kind !== 'payment') throw new Error('no offer');
+      const expiresAt = r.expiresAt.getTime();
+      expect(Number(r.body.terms.validBefore) - expiresAt / 1000).toBeGreaterThanOrEqual(600);
+      expect(expiresAt - T0.getTime()).toBeLessThanOrEqual(APPROVAL_TTL_MS);
+      if (maxTimeoutSeconds) expect(expiresAt).toBeLessThanOrEqual(T0.getTime() + maxTimeoutSeconds * 1000);
+    }
+  );
+
+  it('gives a 60 s challenge exactly 60 s, and offers nothing for less', () => {
+    const r = open({ ...OPTION, maxTimeoutSeconds: 60 });
+    expect(r?.expiresAt).toEqual(later(60_000));
+    expect(r?.body).toMatchObject({ terms: { validBefore: String(T0.getTime() / 1000 + 60 + 600) } });
+    expect(open({ ...OPTION, maxTimeoutSeconds: MIN_DECISION_MS / 1000 - 1 })).toBeUndefined();
+  });
+
+  it('throws on an option the signer would refuse, before anything is stored', () => {
+    expect(() => open({ ...OPTION, asset: '0x0000000000000000000000000000000000000bad' })).toThrow(/asset mismatch/);
+  });
+
+  it('approves by signing TransferWithAuthorization from the account, under the USDC domain', () => {
+    const r = opened();
+    const approve = signedPayload(r, 'approved');
+    expect(approve).toEqual({ type: 'typed_data', typedData: paymentDraft(ACCOUNT, r.body.terms).typedData });
+    if (approve.type !== 'typed_data') throw new Error('setup');
+    expect(approve.typedData.domain).toMatchObject({ name: 'USDC', verifyingContract: USDC, chainId: 84532 });
+    expect(approve.typedData.message).toEqual({
+      from: ACCOUNT,
+      to: PAY_TO,
+      value: '10000',
+      validAfter: '0',
+      validBefore: r.body.terms.validBefore,
+      nonce: NONCE,
+    });
+    expect(reservedSigningRefusal('eth_signTypedData_v4', [ACCOUNT, approve.typedData])).toBeUndefined();
+  });
+
+  it('rejects under the reserved JAW domain, which every generic surface refuses', () => {
+    const reject = signedPayload(opened(), 'rejected');
+    expect(reject).toEqual({ type: 'typed_data', typedData: rejectionTypedData(84532, ID) });
+    if (reject.type !== 'typed_data') throw new Error('setup');
+    expect(reservedSigningRefusal('eth_signTypedData_v4', [ACCOUNT, reject.typedData])).toBeDefined();
+  });
+
+  it('previews exactly what the typed data binds, without the query', () => {
+    const r = opened();
+    const withQuery = open(OPTION, `${RESOURCE}?api_key=SECRET#frag`);
+    const approve = signedPayload(r, 'approved');
+    if (approve.type !== 'typed_data') throw new Error('setup');
+    const preview = previewOf(r);
+    expect(preview).toEqual({
+      kind: 'payment',
+      requester: expect.objectContaining({ clientId: 'https://agent.example/client.json' }),
+      account: ACCOUNT,
+      chainId: 84532,
+      payTo: approve.typedData.message?.to,
+      token: approve.typedData.domain?.verifyingContract,
+      amount: approve.typedData.message?.value,
+      network: 'eip155:84532',
+      resource: RESOURCE,
+      warnings: [],
+      validUntil: new Date(Number(r.body.terms.validBefore) * 1000).toISOString(),
+    });
+    expect(JSON.stringify(toPageView(withQuery as ApprovalRequest))).not.toContain('SECRET');
+  });
+
+  it('shows the resource as the url is sent: hidden characters percent-encoded, a lookalike host in punycode', () => {
+    const r = open(OPTION, 'https://sеller.example/re\u202Eport');
+    expect(previewOf(r as ApprovalRequest)).toMatchObject({
+      resource: 'https://xn--sller-zwe.example/re%E2%80%AEport',
+      warnings: [],
+    });
+  });
+
+  describe('stillOffered', () => {
+    const fresh = (...accepts: X402PaymentRequirement[]) => ({ resource: RESOURCE, accepts });
+    const terms = () => opened().body.terms;
+
+    it('finds the same option, case-insensitive on addresses, and returns the fresh copy', () => {
+      const same = { ...OPTION, payTo: PAY_TO.toUpperCase().replace('0X', '0x') as `0x${string}`, extra: { a: 1 } };
+      expect(stillOffered(terms(), fresh({ ...OPTION, amount: '1' }, same))).toBe(same);
+    });
+
+    it.each([
+      ['a moved price', { amount: '10001' }],
+      ['another recipient', { payTo: '0x3333333333333333333333333333333333333333' }],
+      ['another network', { network: 'eip155:8453' }],
+      ['another scheme', { scheme: 'upto' }],
+    ] as const)('refuses %s', (_name, over) => {
+      expect(stillOffered(terms(), fresh({ ...OPTION, ...over }))).toBeUndefined();
+    });
+
+    it('refuses the same option from another resource', () => {
+      expect(stillOffered(terms(), { resource: `${RESOURCE}/v2`, accepts: [OPTION] })).toBeUndefined();
+    });
   });
 });

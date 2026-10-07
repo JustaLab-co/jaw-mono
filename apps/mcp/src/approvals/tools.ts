@@ -4,9 +4,9 @@ import type { McpServer } from '@modelcontextprotocol/server';
 import { z } from 'zod';
 import { tenant } from '@/connections/auth';
 import { config } from '@/connections/config';
-import { findForConnection, insertUnderCap } from './store';
-
-export const MAX_PENDING = 20;
+import { oneOffStatus } from '@/payments/one-off';
+import { payOutput } from '@/payments/render';
+import { findForConnection, insertUnderCap, MAX_PENDING } from './store';
 
 export const statusOutput = z.object({
   requestId: z.string(),
@@ -18,6 +18,9 @@ export const statusOutput = z.object({
   signature: z.string().optional(),
   permissionId: z.string().optional().describe('The on-chain permission an approved budget created'),
   decidedAt: z.string().optional(),
+  payment: payOutput
+    .optional()
+    .describe('An approved payment: what paying it once came to, as jaw_pay_and_fetch answers'),
   summary: z.string(),
 });
 export type StatusOutput = z.infer<typeof statusOutput>;
@@ -31,7 +34,12 @@ const REFUSALS = {
 
 export function describe(request: ApprovalRequest): StatusOutput {
   const approveUrl = `${config().keysOrigin}/approve/${request.id}`;
-  const { state } = request;
+  const { state, body } = request;
+  const paying = body.kind === 'payment';
+  const asked = paying
+    ? ` paying ${body.terms.requirement.amount} base units of USDC to ${body.terms.requirement.payTo}`
+    : '';
+  const unpaid = paying ? ' Nothing was paid.' : '';
   const out = {
     requestId: request.id,
     status: state.status,
@@ -42,7 +50,7 @@ export function describe(request: ApprovalRequest): StatusOutput {
   };
   switch (state.status) {
     case 'pending':
-      return { ...out, summary: `Waiting for the account owner to approve at ${approveUrl}.` };
+      return { ...out, summary: `Waiting for the account owner to approve${asked} at ${approveUrl}.` };
     case 'approved': {
       const { proof, decidedAt } = state.evidence;
       return proof.type === 'signature'
@@ -60,9 +68,13 @@ export function describe(request: ApprovalRequest): StatusOutput {
           };
     }
     case 'rejected':
-      return { ...out, decidedAt: state.evidence.decidedAt.toISOString(), summary: 'The account owner rejected it.' };
+      return {
+        ...out,
+        decidedAt: state.evidence.decidedAt.toISOString(),
+        summary: `The account owner rejected it.${unpaid}`,
+      };
     case 'expired':
-      return { ...out, summary: 'Expired before a decision. Ask again if it is still needed.' };
+      return { ...out, summary: `Expired before a decision.${unpaid} Ask again if it is still needed.` };
   }
 }
 
@@ -116,13 +128,24 @@ export function registerApprovalTools(server: McpServer) {
       description: 'Read the state of an approval request made by this connection.',
       inputSchema: z.strictObject({ requestId: z.string() }),
       outputSchema: statusOutput,
-      annotations: { readOnlyHint: true },
+      // Not read-only: an approved payment that a crash left unsent is sent from here.
+      annotations: { idempotentHint: true },
     },
     async ({ requestId }, ctx) => {
       const t = tenant(ctx);
       if (!t.scopes.includes('wallet:send')) return refusal(NO_SEND_SCOPE);
       const request = await findForConnection(requestId, t.connectionId, new Date());
-      return request ? result(describe(request)) : refusal('No such request for this connection.');
+      if (!request) return refusal('No such request for this connection.');
+      const out = describe(request);
+      const { body } = request;
+      if (body.kind !== 'payment' || request.state.status !== 'approved') return result(out);
+      const paid = await oneOffStatus({ ...request, body });
+      if (!paid?.structuredContent) return result(out);
+      const summary = `Approved. ${paid.structuredContent.summary}`;
+      return {
+        content: [{ type: 'text' as const, text: summary }, ...paid.content.slice(1)],
+        structuredContent: { ...out, payment: paid.structuredContent, summary },
+      };
     }
   );
 }

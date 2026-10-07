@@ -108,17 +108,60 @@ const GRANTED = {
   chainId: '0x14a34',
 };
 
+const PAY_TO = '0x2222222222222222222222222222222222222222';
+const TRANSFER = {
+  domain: { name: 'USDC', version: '2', chainId: 84532, verifyingContract: USDC },
+  types: {
+    TransferWithAuthorization: [
+      { name: 'from', type: 'address' },
+      { name: 'to', type: 'address' },
+      { name: 'value', type: 'uint256' },
+      { name: 'validAfter', type: 'uint256' },
+      { name: 'validBefore', type: 'uint256' },
+      { name: 'nonce', type: 'bytes32' },
+    ],
+  },
+  primaryType: 'TransferWithAuthorization',
+  message: {
+    from: OWNER,
+    to: PAY_TO,
+    value: '10000',
+    validAfter: '0',
+    validBefore: '1791374400',
+    nonce: `0x${'11'.repeat(32)}`,
+  },
+};
+const PAYMENT_VIEW = {
+  ...VIEW,
+  preview: {
+    kind: 'payment',
+    requester: VIEW.preview.requester,
+    account: OWNER,
+    chainId: 84532,
+    payTo: PAY_TO,
+    token: USDC,
+    amount: '10000',
+    network: 'eip155:84532',
+    resource: 'https://seller.example/report',
+    warnings: [],
+    validUntil: '2026-10-07T14:40:00.000Z',
+  },
+  approve: { type: 'typed_data', typedData: TRANSFER },
+};
+
 let root: Root;
 let container: HTMLDivElement;
 let posts: unknown[];
 
 let view: object = VIEW;
 let refusals: string[] = [];
+let decided: object = {};
 
 beforeEach(() => {
   view = VIEW;
   posts = [];
   refusals = [];
+  decided = {};
   modal = null;
   signMessage.mockClear();
   signTypedData.mockClear();
@@ -132,7 +175,7 @@ beforeEach(() => {
         posts.push(body);
         const refusal = refusals.shift();
         if (refusal) return Response.json({ error: refusal }, { status: 409 });
-        return Response.json({ ...view, status: body.verdict });
+        return Response.json({ ...view, status: body.verdict, ...decided });
       }
       return { ok: true, json: async () => view } as Response;
     })
@@ -312,5 +355,33 @@ describe('ApproveScreen', () => {
     expect(container.querySelector('#permission-modal')).toBeNull();
     expect(button('Reject')).toBeDefined();
     expect(posts).toEqual([]);
+  });
+
+  it('shows the payment terms from the server preview and signs the served transfer by reference', async () => {
+    view = PAYMENT_VIEW;
+    decided = { payment: { state: 'signed', kind: 'paid', code: null } };
+    await render();
+    expect(container.querySelector('h1')!.textContent).toBe('Payment request from evil.example');
+    expect(container.textContent).toContain('0.01 USDC');
+    expect(container.textContent).toContain(`To: ${PAY_TO}`);
+    expect(container.textContent).toContain('For: https://seller.example/report');
+    expect(container.textContent).toContain('eip155:84532');
+
+    await click(container.querySelector('#login'));
+    await click(button('Approve'));
+    expect(signMessage).not.toHaveBeenCalled();
+    expect(signTypedData.mock.calls[0][0]).toBe(TRANSFER);
+    expect(posts).toEqual([{ verdict: 'approved', signature: '0xsig', previewHash: VIEW.previewHash }]);
+    expect(container.textContent).toContain('Paid.');
+  });
+
+  it('says nothing was sent when the price moved before the approval', async () => {
+    view = PAYMENT_VIEW;
+    decided = { payment: { state: 'failed', kind: 'refused', code: 'price_changed' } };
+    await render();
+    await click(container.querySelector('#login'));
+    await click(button('Approve'));
+    expect(container.textContent).toContain('the price changed');
+    expect(container.textContent).toContain('Nothing was sent.');
   });
 });

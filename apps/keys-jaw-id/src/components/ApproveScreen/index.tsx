@@ -6,14 +6,17 @@ import { useState } from 'react';
 import { isAddressEqual } from 'viem';
 import {
   isBudget,
+  isPayment,
   postDecision,
   type ApprovalStatus,
   type ApprovalView,
+  type PaymentView,
   type SignedPayload,
 } from '../../lib/approval-decision';
 import { fetchCliApiKey } from '../../lib/cli-api-key';
 import { BudgetApproval, BudgetTerms } from '../BudgetApproval';
 import { ClientHeader } from '../ClientHeader';
+import { PaymentTerms } from '../PaymentTerms';
 import { SignInScreen, type AuthenticatedAccount } from '../OnboardingSection';
 import type { ChainId } from '../../utils/types';
 
@@ -30,6 +33,14 @@ const DONE: Record<Exclude<ApprovalStatus, 'pending'>, string> = {
   rejected: 'Rejected. You can close this tab.',
   expired: 'This request expired. Ask the agent to request it again.',
 };
+
+/** What an approved payment came to, from the decision's answer. */
+function paidOutcome(payment: NonNullable<PaymentView['payment']>) {
+  if (payment.kind === 'paid') return 'Paid. You can close this tab.';
+  if (payment.code === 'price_changed') return 'Approved, but the price changed before paying. Nothing was sent.';
+  if (payment.state === 'failed') return `Approved, but it was not paid (${payment.code}). Nothing was sent.`;
+  return 'Approved. The payment is on its way; the agent will see how it ends.';
+}
 
 export function ApproveScreen({ id, mcpUrl }: { id: string; mcpUrl: string }) {
   const [account, setAccount] = useState<AuthenticatedAccount | null>(null);
@@ -52,7 +63,10 @@ export function ApproveScreen({ id, mcpUrl }: { id: string; mcpUrl: string }) {
   if (query.isPending) return <p className="text-center text-sm">Loading…</p>;
   if (query.isError) return <p className="text-center text-sm">This request does not exist.</p>;
   const { view, apiKey } = query.data;
-  if (view.status !== 'pending') return <p className="text-center text-sm">{DONE[view.status]}</p>;
+  if (view.status !== 'pending') {
+    const done = isPayment(view) && view.payment ? paidOutcome(view.payment) : DONE[view.status];
+    return <p className="text-center text-sm">{done}</p>;
+  }
 
   const wrongAccount = account !== null && !isAddressEqual(account.address, view.account);
   const decisionUrl = `${url}/decision`;
@@ -105,7 +119,9 @@ export function ApproveScreen({ id, mcpUrl }: { id: string; mcpUrl: string }) {
     <div className="flex flex-col gap-4 rounded-lg border p-6">
       <div>
         <ClientHeader
-          title={isBudget(view) ? 'Budget request from' : 'Signature request from'}
+          title={
+            isBudget(view) ? 'Budget request from' : isPayment(view) ? 'Payment request from' : 'Signature request from'
+          }
           client={view.preview.requester}
         />
         <p className="text-muted-foreground text-sm">
@@ -116,6 +132,10 @@ export function ApproveScreen({ id, mcpUrl }: { id: string; mcpUrl: string }) {
       {isBudget(view) ? (
         <div>
           <BudgetTerms preview={view.preview} />
+        </div>
+      ) : isPayment(view) ? (
+        <div>
+          <PaymentTerms preview={view.preview} />
         </div>
       ) : (
         <>

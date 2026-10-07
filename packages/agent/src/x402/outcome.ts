@@ -1,3 +1,4 @@
+import type { Challenge } from './http.js';
 import type { X402Scheme } from './types.js';
 
 /**
@@ -89,7 +90,7 @@ interface Fetched {
 export type PaymentOutcome =
   | ({ kind: 'free' } & Fetched)
   | ({ kind: 'would-pay'; wouldPay: Omit<PaymentDetails, 'nonce' | 'deadline'> } & Fetched)
-  | ({ kind: 'refused'; refusal: Refusal } & Fetched & Traces)
+  | ({ kind: 'refused'; refusal: Refusal; challenge?: Challenge } & Fetched & Traces)
   | ({ kind: 'failed'; refusal: Refusal; attempted: PaymentDetails } & Fetched & Traces)
   | ({ kind: 'paid'; payment: PaymentDetails } & Fetched & Traces);
 
