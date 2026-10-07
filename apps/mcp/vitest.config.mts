@@ -12,5 +12,7 @@ export default defineConfig({
     watch: false,
     environment: 'node',
     include: ['src/**/*.test.ts'],
+    // Each file migrates its own in-memory database, which is slow when nx runs suites side by side.
+    hookTimeout: 60_000,
   },
 });

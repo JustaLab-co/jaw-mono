@@ -1,5 +1,14 @@
 import { randomBytes } from 'node:crypto';
-import { balanceReader, FetchRefused, payAndFetch, sanitizeBlock, usdcBalance, usdcForNetwork } from '@jaw.id/agent';
+import {
+  balanceReader,
+  FetchRefused,
+  payAndFetch,
+  readCurrentPeriods,
+  readLiveness,
+  sanitizeBlock,
+  usdcBalance,
+  usdcForNetwork,
+} from '@jaw.id/agent';
 import type { McpServer } from '@modelcontextprotocol/server';
 import { createPublicClient, http, type Address } from 'viem';
 import { normalize } from 'viem/ens';
@@ -7,6 +16,7 @@ import { mainnet } from 'viem/chains';
 import { z } from 'zod';
 import { tenant, type Tenant } from '@/connections/auth';
 import { config } from '@/connections/config';
+import { currentGrant, type Grant } from '@/grants/store';
 import { publicClientFor } from '@/lib/chain';
 import { safeFetch } from '@/lib/safe-fetch';
 
@@ -19,11 +29,58 @@ const money = z.object({
 });
 const readiness = z.object({
   status: z.enum(['ready', 'not_ready']),
-  reason: z.enum(['no_grant']).optional(),
+  reason: z.enum(['no_grant', 'grant_revoked', 'chain_unavailable']).optional(),
   link: z.string().url().optional(),
 });
+type Readiness = z.infer<typeof readiness>;
 
-const noGrant = () => ({ status: 'not_ready' as const, reason: 'no_grant' as const, link: `${config().keysOrigin}/` });
+const budgetOutput = z.object({
+  permissionId: z.string(),
+  perDay: money,
+  spentToday: money.nullable().describe('What the permission manager counts as spent in the current day'),
+  remainingToday: money.nullable(),
+  resetsAt: z.string().nullable(),
+  expiresAt: z.string(),
+});
+
+const clients = { clients: { publicClient: publicClientFor } };
+
+// What the chain says about the budget: the permission manager is what refuses a refill, so its counter is the one reported.
+async function budgetOf(grant: Grant) {
+  const target = { chainId: grant.chainId, permissionId: grant.permissionId, permission: grant.permission };
+  const [liveness, periods] = await Promise.all([
+    readLiveness(target, clients),
+    readCurrentPeriods({ ...target, token: grant.token }, clients),
+  ]);
+  const asset = caip19(caip2(grant.chainId), grant.token);
+  const counted = periods[0]?.period;
+  const spent = counted?.status === 'ok' ? counted.spend : counted?.status === 'outside-window' ? 0n : null;
+  const allowance = BigInt(grant.allowance);
+  const left = spent === null ? null : spent >= allowance ? 0n : allowance - spent;
+  return {
+    liveness,
+    budget: budgetOutput.parse({
+      permissionId: grant.permissionId,
+      perDay: { amount: grant.allowance, asset },
+      spentToday: spent === null ? null : { amount: spent.toString(), asset },
+      remainingToday: left === null ? null : { amount: left.toString(), asset },
+      resetsAt: counted?.status === 'ok' ? new Date((counted.end + 1) * 1000).toISOString() : null,
+      expiresAt: grant.expiresAt.toISOString(),
+    }),
+  };
+}
+
+function readinessOf(liveness: Awaited<ReturnType<typeof readLiveness>> | undefined): Readiness {
+  if (liveness === undefined) return { status: 'not_ready', reason: 'no_grant' };
+  if (liveness === 'active') return { status: 'ready' };
+  if (liveness === 'unknown') return { status: 'not_ready', reason: 'chain_unavailable' };
+  return { status: 'not_ready', reason: 'grant_revoked' };
+}
+
+async function readinessFor(t: Tenant): Promise<Readiness> {
+  const grant = await currentGrant(t.connectionId);
+  return readinessOf(grant && (await budgetOf(grant)).liveness);
+}
 
 // The closing marker carries a nonce the third party cannot know, and any marker
 // already in the text is defused, so the text cannot end the fence early.
@@ -51,21 +108,38 @@ const statusOutput = z.object({
   chainId: z.string().describe('CAIP-2'),
   sessionAddress: z.string().describe('The address this connection pays from once it has a budget'),
   balances: z.object({ account: money.nullable(), session: money.nullable() }),
+  budget: budgetOutput.nullable(),
   readiness,
   summary: z.string(),
 });
 
+const NOT_READY: Record<NonNullable<Readiness['reason']>, string> = {
+  no_grant: 'No budget yet: ask for one with jaw_request_budget.',
+  grant_revoked: 'The budget was revoked: ask for a new one with jaw_request_budget.',
+  chain_unavailable: 'The budget could not be read from the chain right now.',
+};
+
 async function status(t: Tenant) {
   const network = caip2(t.chainId);
-  const [account, session] = await Promise.all([balanceOf(network, t.account), balanceOf(network, t.sessionAddress)]);
-  const ready = noGrant();
+  const [account, session, grant] = await Promise.all([
+    balanceOf(network, t.account),
+    balanceOf(network, t.sessionAddress),
+    currentGrant(t.connectionId),
+  ]);
+  const read = grant && (await budgetOf(grant));
+  const ready = readinessOf(read?.liveness);
+  const left = read?.budget.remainingToday;
   return statusOutput.parse({
     account: t.account,
     chainId: network,
     sessionAddress: t.sessionAddress,
     balances: { account, session },
+    budget: read?.budget ?? null,
     readiness: ready,
-    summary: `Connected as ${t.account} on ${network}. No budget granted yet: ${ready.link}`,
+    summary:
+      ready.status === 'ready'
+        ? `Connected as ${t.account} on ${network}. Ready to pay${left ? `, ${left.amount} base units left today` : ''}.`
+        : `Connected as ${t.account} on ${network}. ${NOT_READY[ready.reason ?? 'no_grant']}`,
   });
 }
 
@@ -88,7 +162,7 @@ async function quote(t: Tenant, url: string) {
     address: t.sessionAddress,
     pay: () => Promise.reject(new Error('a quote never pays')),
   };
-  const base = { url, readiness: noGrant() };
+  const base = { url, readiness: await readinessFor(t) };
   const outcome = await payAndFetch(url, payer, {
     dryRun: true,
     network,

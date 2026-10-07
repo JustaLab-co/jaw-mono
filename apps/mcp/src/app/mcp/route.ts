@@ -3,6 +3,7 @@ import { registerApprovalTools } from '@/approvals/tools';
 import { connectionKey, withConnection } from '@/connections/auth';
 import { withEdge } from '@/lib/edge';
 import { registerReadTools } from '@/tools/read';
+import { registerBudgetTool } from '@/tools/request-budget';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -11,6 +12,7 @@ const mcp = createMcpHandler(
   (server) => {
     registerReadTools(server);
     registerApprovalTools(server);
+    registerBudgetTool(server);
   },
   {
     serverInfo: { name: 'jaw', version: '0.0.1' },

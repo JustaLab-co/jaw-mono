@@ -89,12 +89,44 @@ export const approvalRequests = pgTable(
     payloadHash: text('payload_hash'),
     signature: text('signature'),
     assertionRef: text('assertion_ref'),
+    permissionId: text('permission_id'),
   },
   (t) => [
     index().on(t.connectionId, t.createdAt),
     check(
       'approval_evidence',
-      sql`(${t.status} = 'pending') = (${t.decidedAt} is null and ${t.previewHash} is null and ${t.payloadHash} is null and ${t.signature} is null and ${t.assertionRef} is null)`
+      sql`(${t.status} = 'pending') = (${t.decidedAt} is null and ${t.previewHash} is null and ${t.payloadHash} is null)`
+    ),
+    // A decision carries one proof: a signature with its assertion, or a permission approved on chain.
+    check(
+      'approval_proof',
+      sql`(${t.status} = 'pending' and ${t.signature} is null and ${t.assertionRef} is null and ${t.permissionId} is null)
+        or (${t.status} <> 'pending' and (${t.signature} is null) = (${t.assertionRef} is null) and (${t.signature} is null) <> (${t.permissionId} is null))`
     ),
   ]
+);
+
+// One row per budget the account approved on chain. The newest live one is the connection's budget.
+export const grants = pgTable(
+  'grants',
+  {
+    permissionId: text('permission_id').primaryKey(),
+    connectionId: text('connection_id')
+      .notNull()
+      .references(() => connections.id),
+    approvalId: text('approval_id')
+      .notNull()
+      .references(() => approvalRequests.id),
+    chainId: integer('chain_id').notNull(),
+    account: text('account').notNull(),
+    spender: text('spender').notNull(),
+    token: text('token').notNull(),
+    allowance: text('allowance').notNull(),
+    period: text('period', { enum: ['day'] }).notNull(),
+    // The struct as approved: the permission manager answers only about a struct, never an id.
+    permission: jsonb('permission').notNull(),
+    expiresAt: timestamp('expires_at', { withTimezone: true }).notNull(),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [index().on(t.connectionId, t.createdAt)]
 );

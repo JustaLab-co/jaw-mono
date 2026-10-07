@@ -3,6 +3,8 @@ import type { ServerResponse } from 'node:http';
 import { clientIdentity, type ClientIdentity } from '@jaw.id/agent';
 import { isAddress, isHex } from 'viem';
 import { generatePrivateKey, privateKeyToAddress } from 'viem/accounts';
+import { insertUnderCap } from '@/approvals/store';
+import { MAX_PENDING } from '@/approvals/tools';
 import { readJson, tooLarge } from '@/lib/body';
 import { verifyOnChain, type VerifySignature } from '@/lib/chain';
 import { log } from '@/lib/edge';
@@ -11,6 +13,7 @@ import { config } from './config';
 import { provider, SCOPES, type Scope } from './provider';
 import { activate, findClaimable, insertPending } from './rows';
 import { seal } from './seal';
+import { budgetRequest, PER_DAY } from '@/tools/request-budget';
 
 const UID = /^[A-Za-z0-9_-]{10,64}$/;
 const sha256 = (value: string) => createHash('sha256').update(value).digest('hex');
@@ -77,9 +80,12 @@ export async function details(_req: Request, uid: string): Promise<Response> {
 export async function consent(req: Request, uid: string, verify: VerifySignature = verifyOnChain): Promise<Response> {
   const parsed = await readJson(req);
   if (parsed === undefined) return tooLarge();
-  const body = parsed as { address?: string; signature?: string };
+  const body = parsed as { address?: string; signature?: string; budget?: unknown };
   if (!body.address || !isAddress(body.address) || !body.signature || !isHex(body.signature)) {
     return Response.json({ error: 'invalid_request' }, { status: 400 });
+  }
+  if (body.budget !== undefined && (typeof body.budget !== 'string' || !PER_DAY.test(body.budget))) {
+    return Response.json({ error: 'invalid_budget' }, { status: 400 });
   }
   const found = await loadDetails(uid);
   if (!found) return Response.json({ error: 'not_found' }, { status: 404 });
@@ -98,23 +104,29 @@ export async function consent(req: Request, uid: string, verify: VerifySignature
   const id = `conn_${randomBytes(16).toString('base64url')}`;
   const privateKey = generatePrivateKey();
   const ticket = randomBytes(32).toString('base64url');
-  const inserted = await insertPending(
-    {
-      id,
-      account: body.address,
-      chainId: found.chainId,
-      clientId: found.client.clientId,
-      clientName: found.client.name,
-      scopes: found.scopes.map((s) => s.id),
-      sessionAddress: privateKeyToAddress(privateKey),
-      sealedKey: seal(config().ring, privateKey, id),
-      interactionUid: uid,
-      expiresAt: new Date(found.expiresAt),
-    },
-    sha256(ticket)
-  );
-  if (!inserted) return Response.json({ error: 'already_consented' }, { status: 409 });
-  return Response.json({ next: `${config().issuer}/interaction/${uid}/complete?ticket=${ticket}` });
+  const connection = {
+    id,
+    account: body.address,
+    chainId: found.chainId,
+    clientId: found.client.clientId,
+    clientName: found.client.name,
+    scopes: found.scopes.map((s) => s.id),
+    sessionAddress: privateKeyToAddress(privateKey),
+    sealedKey: seal(config().ring, privateKey, id),
+    interactionUid: uid,
+    expiresAt: new Date(found.expiresAt),
+  };
+  const budget = body.budget === undefined ? undefined : budgetRequest(connection, body.budget, new Date());
+  if (typeof budget === 'string') return Response.json({ error: 'invalid_budget' }, { status: 400 });
+  if (!(await insertPending(connection, sha256(ticket)))) {
+    return Response.json({ error: 'already_consented' }, { status: 409 });
+  }
+  // The page approves the budget before it hands back, so the grant exists by the token exchange.
+  if (budget) await insertUnderCap(id, budget, MAX_PENDING);
+  return Response.json({
+    next: `${config().issuer}/interaction/${uid}/complete?ticket=${ticket}`,
+    ...(budget ? { budgetRequestId: budget.id } : {}),
+  });
 }
 
 function fail(res: ServerResponse, status: number, error: string) {

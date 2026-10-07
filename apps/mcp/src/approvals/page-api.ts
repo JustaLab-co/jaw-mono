@@ -1,36 +1,116 @@
-import { decide, payloadHash, signedPayload, toPageView, type ApprovalPageView, type Verdict } from '@jaw.id/agent';
-import { isHex, keccak256, type Hex } from 'viem';
+import {
+  decide,
+  grantMatches,
+  parseGrantedPermission,
+  payloadHash,
+  readPermissionState,
+  signedPayload,
+  toPageView,
+  type ApprovalPageView,
+  type ApprovalRequest,
+  type DecisionProof,
+  type GrantRequest,
+  type PermissionReadTarget,
+  type PermissionState,
+} from '@jaw.id/agent';
+import { isHex, keccak256, type Address } from 'viem';
 import { SUPPORTED_CHAINS } from '@/connections/config';
-import { verifyOnChain, type VerifySignature } from '@/lib/chain';
+import { publicClientFor, verifyOnChain, type VerifySignature } from '@/lib/chain';
 import { log } from '@/lib/edge';
-import { connectionLive, findById, recordDecision } from './store';
+import { connectionLive, findById, recordDecision, type NewGrant } from './store';
 
 export type PageOutcome =
   | { kind: 'ok'; view: ApprovalPageView }
   | { kind: 'not_found' }
   | { kind: 'invalid_request' }
   | { kind: 'bad_signature' }
+  | { kind: 'grant_mismatch' }
+  | { kind: 'grant_not_found' }
   | { kind: 'connection_revoked' }
   | { kind: 'unsupported_chain' }
   | { kind: 'verification_unavailable' }
   | { kind: 'preview_changed' }
   | { kind: 'not_pending'; view: ApprovalPageView };
 
+export type ReadPermission = (target: PermissionReadTarget) => Promise<PermissionState>;
+
+const readOnChain: ReadPermission = (target) =>
+  readPermissionState(target, { clients: { publicClient: publicClientFor } });
+
+type Refused = Exclude<PageOutcome['kind'], 'ok' | 'not_pending'>;
+type Checked = { proof: DecisionProof; grant?: NewGrant } | { refused: Refused };
+
+const unavailable = (what: string) => (err: unknown) => {
+  log('error', { msg: `${what} unavailable`, error: err instanceof Error ? err.name : 'unknown' });
+  return undefined;
+};
+
+async function checkSignature(
+  request: ApprovalRequest,
+  message: string,
+  signature: unknown,
+  verify: VerifySignature
+): Promise<Checked> {
+  if (!isHex(signature)) return { refused: 'invalid_request' };
+  const valid = await verify({ chainId: request.chainId, address: request.account, message, signature }).catch(
+    unavailable('approval verification')
+  );
+  if (valid === undefined) return { refused: 'verification_unavailable' };
+  if (!valid) return { refused: 'bad_signature' };
+  return { proof: { type: 'signature', signature, assertionRef: keccak256(signature) } };
+}
+
+// The wallet answers with the struct it granted. It is trusted only once it is
+// exactly the grant the page rendered and the permission manager approved its hash.
+async function checkPermission(
+  request: ApprovalRequest,
+  grant: GrantRequest,
+  granted: unknown,
+  read: ReadPermission
+): Promise<Checked> {
+  const permission = parseGrantedPermission(granted);
+  const permissionId = (granted as { permissionId?: unknown } | null)?.permissionId;
+  if (!permission || !isHex(permissionId)) return { refused: 'invalid_request' };
+  if (!grantMatches(grant, permission)) return { refused: 'grant_mismatch' };
+  const state = await read({ chainId: request.chainId, permissionId, permission }).catch(
+    unavailable('permission read')
+  );
+  if (!state || state.status === 'unavailable') return { refused: 'verification_unavailable' };
+  if (state.status === 'mismatch') return { refused: 'grant_mismatch' };
+  if (!state.approved || state.revoked) return { refused: 'grant_not_found' };
+  const [spend] = grant.permissions.spends;
+  return {
+    proof: { type: 'permission', permissionId },
+    grant: {
+      permissionId,
+      chainId: request.chainId,
+      account: grant.address,
+      spender: grant.spender as Address,
+      token: spend.token,
+      allowance: spend.allowance,
+      period: spend.unit,
+      permission,
+      expiresAt: new Date(permission.end * 1000),
+    },
+  };
+}
+
 export async function readForPage(id: string, now = new Date()): Promise<PageOutcome> {
   const request = await findById(id, now);
   return request ? { kind: 'ok', view: toPageView(request) } : { kind: 'not_found' };
 }
 
-// The page never posts the payload: the signature is checked against the one
-// derived from the stored row, so a page that signed anything else is refused.
+// The page never posts the payload: the proof is checked against the one
+// derived from the stored row, so a page that signed or granted anything else is refused.
 export async function decideFromPage(
   id: string,
   post: unknown,
   verify: VerifySignature = verifyOnChain,
-  now = new Date()
+  now = new Date(),
+  readPermission: ReadPermission = readOnChain
 ): Promise<PageOutcome> {
-  const { verdict, signature, previewHash } = (post ?? {}) as Record<string, unknown>;
-  if ((verdict !== 'approved' && verdict !== 'rejected') || !isHex(signature) || !isHex(previewHash)) {
+  const { verdict, signature, previewHash, permission } = (post ?? {}) as Record<string, unknown>;
+  if ((verdict !== 'approved' && verdict !== 'rejected') || !isHex(previewHash)) {
     return { kind: 'invalid_request' };
   }
   const request = await findById(id, now);
@@ -41,28 +121,16 @@ export async function decideFromPage(
   if (!(await connectionLive(request.id))) return { kind: 'connection_revoked' };
   if (!SUPPORTED_CHAINS[request.chainId]) return { kind: 'unsupported_chain' };
 
-  const payload = signedPayload(request, verdict as Verdict);
-  const valid = await verify({
-    chainId: request.chainId,
-    address: request.account,
-    message: payload.message,
-    signature,
-  }).catch((err: unknown) => {
-    log('error', { msg: 'approval verification unavailable', error: err instanceof Error ? err.name : 'unknown' });
-    return undefined;
-  });
-  if (valid === undefined) return { kind: 'verification_unavailable' };
-  if (!valid) return { kind: 'bad_signature' };
+  const payload = signedPayload(request, verdict);
+  const checked =
+    payload.type === 'message'
+      ? await checkSignature(request, payload.message, signature, verify)
+      : await checkPermission(request, payload.grant, permission, readPermission);
+  if ('refused' in checked) return { kind: checked.refused };
 
-  const evidence = {
-    previewHash: previewHash as Hex,
-    payloadHash: payloadHash(payload),
-    signature,
-    assertionRef: keccak256(signature),
-    decidedAt: now,
-  };
-  const result = decide(request, verdict as Verdict, evidence, now);
-  if (!result.ok || !(await recordDecision(result.request))) {
+  const evidence = { previewHash, payloadHash: payloadHash(payload), proof: checked.proof, decidedAt: now };
+  const result = decide(request, verdict, evidence, now);
+  if (!result.ok || !(await recordDecision(result.request, checked.grant))) {
     if (!(await connectionLive(request.id))) return { kind: 'connection_revoked' };
     const current = await findById(id, new Date());
     return current ? { kind: 'not_pending', view: toPageView(current) } : { kind: 'not_found' };
@@ -75,6 +143,8 @@ const STATUS: Record<PageOutcome['kind'], number> = {
   not_found: 404,
   invalid_request: 400,
   bad_signature: 403,
+  grant_mismatch: 422,
+  grant_not_found: 409,
   connection_revoked: 410,
   unsupported_chain: 422,
   verification_unavailable: 503,

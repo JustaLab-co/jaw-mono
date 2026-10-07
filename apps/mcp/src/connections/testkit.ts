@@ -101,12 +101,12 @@ export async function getDetails(uid: string): Promise<ConsentDetails> {
   return (await details(new Request(`${ISSUER}/interaction/${uid}/details`), uid)).json();
 }
 
-export async function postConsent(uid: string, address: Hex, signature: Hex) {
+export async function postConsent(uid: string, address: Hex, signature: Hex, extra: object = {}) {
   return consent(
     new Request(`${ISSUER}/interaction/${uid}/consent`, {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ address, signature }),
+      body: JSON.stringify({ address, signature, ...extra }),
     }),
     uid,
     verifyLocally

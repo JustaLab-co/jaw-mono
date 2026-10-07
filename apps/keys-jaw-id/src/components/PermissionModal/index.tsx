@@ -19,6 +19,7 @@ import { formatUnits, erc20Abi, type Address } from 'viem';
 import { getChainNameFromId } from '../../lib/chain-handlers';
 import { useSessionAccount } from '../../hooks';
 import {
+  type Account,
   type Chain,
   type WalletGrantPermissionsRequest,
   type WalletRevokePermissionsRequest,
@@ -47,6 +48,8 @@ export interface PermissionModalProps {
   permissionRequest?: PermissionRequestData;
   chain?: Chain;
   apiKey: string;
+  /** An account the caller already holds, used instead of restoring one from the session. */
+  account?: Account;
   origin?: string;
   appName?: string;
   appLogoUrl?: string;
@@ -125,6 +128,7 @@ export const PermissionModal = ({
   permissionRequest,
   chain,
   apiKey,
+  account: givenAccount,
   origin,
   appName,
   appLogoUrl,
@@ -133,14 +137,16 @@ export const PermissionModal = ({
 }: PermissionModalProps) => {
   // Single hook handles session lookup + account restoration
   const {
-    account,
+    account: sessionAccount,
     isLoading: isAccountLoading,
-    walletAddress,
+    walletAddress: sessionAddress,
   } = useSessionAccount({
     origin,
-    chain,
+    chain: givenAccount ? undefined : chain,
     apiKey,
   });
+  const account = givenAccount ?? sessionAccount;
+  const walletAddress = givenAccount?.address ?? sessionAddress;
 
   const [status, setStatus] = useState<string>('');
   const [isProcessing, setIsProcessing] = useState<boolean>(false);
