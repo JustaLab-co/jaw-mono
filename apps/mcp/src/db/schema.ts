@@ -34,7 +34,15 @@ export const oauthPayloads = pgTable(
     // Refresh tokens only: the token issued from this one, so a retry can tell it was never used.
     successorKey: text('successor_key'),
   },
-  (t) => [index().on(t.grantId), index().on(t.uid), index().on(t.expiresAt)]
+  (t) => [
+    index().on(t.grantId),
+    index().on(t.uid),
+    index().on(t.expiresAt),
+    // The wrap sweep on every refresh reads only rows that still hold a wrap.
+    index('oauth_payloads_wrap_sweep_index')
+      .on(t.consumedAt)
+      .where(sql`${t.keyWrap} is not null`),
+  ]
 );
 
 export const connections = pgTable(
