@@ -53,9 +53,26 @@ const RPC_RETRY_COUNT = 2;
 function rpcTransport(chainId: number, apiKey?: string) {
   const options = { timeout: RPC_TIMEOUT_MS, retryCount: RPC_RETRY_COUNT };
   if (!apiKey) return http(undefined, options);
+  // fetch quotes a header value it refuses in its error, key and all.
+  if (!isSafeApiKey(apiKey)) {
+    throw new Error('The api key has characters a url or an HTTP header cannot carry, so no chain read was sent.');
+  }
   // A header rather than `api-key=` in the url: viem quotes the url in its
-  // errors, and those reach logs and refusal reasons.
-  return http(`${JAW_RPC_URL}?chainId=${chainId}`, { ...options, fetchOptions: { headers: { 'x-api-key': apiKey } } });
+  // errors, and those reach logs and refusal reasons. A redirect would carry
+  // the header to wherever it points.
+  return http(`${JAW_RPC_URL}?chainId=${chainId}`, {
+    ...options,
+    fetchOptions: { headers: { 'x-api-key': apiKey }, redirect: 'error' },
+  });
+}
+
+/**
+ * Whether an api key can go into a url or a header as it is. A value that
+ * survives `encodeURIComponent` unchanged has no `&`, `#`, space, control
+ * character or anything outside ASCII.
+ */
+export function isSafeApiKey(value: string): boolean {
+  return value.length > 0 && encodeURIComponent(value) === value;
 }
 
 /**

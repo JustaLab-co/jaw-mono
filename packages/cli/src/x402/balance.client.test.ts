@@ -110,4 +110,24 @@ describe('cliChainClients transport + cache', () => {
     publicClientFor(8453);
     expect(httpMock.mock.calls[0]?.[1]).toMatchObject({ timeout: 5_000, retryCount: 2 });
   });
+
+  it.each(['a\nsecret', 'clave-\u00f1-secret'])(
+    'refuses JAW_API_KEY=%j before it reaches a header, without naming it',
+    async (key) => {
+      process.env['JAW_API_KEY'] = key;
+      loadConfigMock.mockReturnValue({});
+      const publicClientFor = await freshPublicClientFor();
+
+      let failure: unknown;
+      try {
+        publicClientFor(8453);
+      } catch (err) {
+        failure = err;
+      }
+
+      expect(String(failure)).toContain('api key');
+      expect(String(failure)).not.toContain('secret');
+      expect(httpMock).not.toHaveBeenCalled();
+    }
+  );
 });

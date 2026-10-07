@@ -49,4 +49,38 @@ describe('chainClients', () => {
     }
     expect(String(failure)).not.toContain('key-under-test');
   });
+
+  it('does not follow a redirect, which would carry the key to another origin', async () => {
+    const redirects: Array<RequestRedirect | undefined> = [];
+    vi.stubGlobal('fetch', async (_input: RequestInfo | URL, init?: RequestInit) => {
+      redirects.push(init?.redirect);
+      return Response.json({ jsonrpc: '2.0', id: 1, result: '0x1' });
+    });
+
+    await chainClients('key-under-test').publicClient(84532).getBlockNumber();
+
+    expect(redirects).toEqual(['error']);
+  });
+
+  it.each(['abc\nsecret', 'clave-\u00f1-secret', 'sk_live_SECRET\u0000', 'key-\u{1F511}-secret'])(
+    'refuses %j without sending it or naming it',
+    async (key) => {
+      const sent = vi.fn();
+      // `new Headers` is where undici refuses a value, with the value in its message.
+      vi.stubGlobal('fetch', async (_input: RequestInfo | URL, init?: RequestInit) => {
+        new Headers(init?.headers);
+        sent();
+        return new Response('denied', { status: 403 });
+      });
+
+      const failure = await Promise.resolve()
+        .then(() => chainClients(key).publicClient(84532).getBlockNumber())
+        .catch((err: Error) => err);
+
+      expect(failure).toBeInstanceOf(Error);
+      expect(String(failure)).toContain('api key');
+      expect(String(failure)).not.toContain('secret');
+      expect(sent).not.toHaveBeenCalled();
+    }
+  );
 });
