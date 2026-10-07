@@ -14,6 +14,7 @@ export interface Grant {
   allowance: string;
   permission: GrantedPermission;
   expiresAt: Date;
+  createdAt: Date;
 }
 
 /** The connection's budget: its newest grant that has not ended. */
@@ -34,5 +35,6 @@ export async function currentGrant(connectionId: string): Promise<Grant | undefi
     allowance: row.allowance,
     permission: row.permission as GrantedPermission,
     expiresAt: row.expiresAt,
+    createdAt: row.createdAt,
   };
 }

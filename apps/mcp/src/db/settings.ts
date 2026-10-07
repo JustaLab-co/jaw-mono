@@ -2,10 +2,15 @@ import { eq, sql } from 'drizzle-orm';
 import { getDb } from './client';
 import { rateLimits, settings } from './schema';
 
-export async function isPaused(): Promise<boolean> {
-  const [row] = await getDb().select().from(settings).where(eq(settings.key, 'paused'));
+async function flag(key: string): Promise<boolean> {
+  const [row] = await getDb().select().from(settings).where(eq(settings.key, key));
   return row?.value === true;
 }
+
+export const isPaused = () => flag('paused');
+
+/** The payments kill switch: every other tool keeps working. */
+export const isPaymentsPaused = () => flag('payments_paused');
 
 export async function countHit(key: string, windowMs: number): Promise<number> {
   const windowStart = new Date(Math.floor(Date.now() / windowMs) * windowMs);

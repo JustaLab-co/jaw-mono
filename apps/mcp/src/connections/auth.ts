@@ -1,11 +1,12 @@
 import type { AuthInfo } from '@modelcontextprotocol/server';
 import { compactDecrypt, decodeProtectedHeader } from 'jose';
 import { withMcpAuth } from 'mcp-handler';
-import type { Address } from 'viem';
+import type { Address, Hex } from 'viem';
 import { ipKey } from '@/lib/edge';
 import { config } from './config';
 import type { Scope } from './provider';
 import { findActive } from './rows';
+import { open, type Sealed } from './seal';
 
 export const RESOURCE_METADATA_PATH = '/.well-known/oauth-protected-resource/mcp';
 
@@ -17,6 +18,8 @@ export interface Tenant {
   clientName: string;
   scopes: Scope[];
   sessionAddress: Address;
+  /** Opens the connection's sealed session key. The hex lives only in the caller's frame. */
+  sessionKey(): Hex;
 }
 
 interface Claims {
@@ -66,6 +69,7 @@ export async function verifyBearer(bearer: string | undefined): Promise<AuthInfo
     clientName: row.clientName,
     scopes: row.scopes as Scope[],
     sessionAddress: row.sessionAddress as Address,
+    sessionKey: () => open(config().ring, row.sealedKey as Sealed, row.id),
   };
   return {
     token: claims.jti,

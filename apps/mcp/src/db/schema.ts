@@ -1,5 +1,16 @@
 import { sql } from 'drizzle-orm';
-import { check, index, integer, jsonb, pgTable, primaryKey, text, timestamp } from 'drizzle-orm/pg-core';
+import {
+  check,
+  index,
+  integer,
+  jsonb,
+  numeric,
+  pgTable,
+  primaryKey,
+  text,
+  timestamp,
+  uniqueIndex,
+} from 'drizzle-orm/pg-core';
 
 export const settings = pgTable('settings', {
   key: text('key').primaryKey(),
@@ -129,4 +140,66 @@ export const grants = pgTable(
     createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
   },
   (t) => [index().on(t.connectionId, t.createdAt)]
+);
+
+// One row per payment attempt, updated in place and never deleted. A trigger
+// (migration 0004) freezes settled and failed rows and the signed fields.
+export const payments = pgTable(
+  'payments',
+  {
+    id: text('id').primaryKey(),
+    connectionId: text('connection_id')
+      .notNull()
+      .references(() => connections.id),
+    idempotencyKey: text('idempotency_key').notNull(),
+    requestHash: text('request_hash').notNull(),
+    permissionId: text('permission_id').notNull(),
+    payer: text('payer').notNull(),
+    url: text('url').notNull(),
+    state: text('state', { enum: ['pending', 'signed', 'settled', 'failed', 'unknown'] })
+      .notNull()
+      .default('pending'),
+    kind: text('kind', { enum: ['free', 'paid', 'refused', 'failed'] }),
+    code: text('code'),
+    leaseToken: text('lease_token'),
+    leaseUntil: timestamp('lease_until', { withTimezone: true }).notNull(),
+    reserved: numeric('reserved', { precision: 78, scale: 0 }),
+    scheme: text('scheme'),
+    asset: text('asset'),
+    network: text('network'),
+    payTo: text('pay_to'),
+    nonce: text('nonce'),
+    authorized: numeric('authorized', { precision: 78, scale: 0 }),
+    amount: numeric('amount', { precision: 78, scale: 0 }),
+    deadline: timestamp('deadline', { withTimezone: true }),
+    authorization: jsonb('authorization'),
+    txHash: text('tx_hash'),
+    blockTime: timestamp('block_time', { withTimezone: true }),
+    topUpAmount: numeric('top_up_amount', { precision: 78, scale: 0 }),
+    topUpBatchId: text('top_up_batch_id'),
+    approvalBatchId: text('approval_batch_id'),
+    httpStatus: integer('http_status'),
+    result: jsonb('result'),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+    signedAt: timestamp('signed_at', { withTimezone: true }),
+    finishedAt: timestamp('finished_at', { withTimezone: true }),
+  },
+  (t) => [
+    uniqueIndex().on(t.connectionId, t.idempotencyKey),
+    uniqueIndex().on(t.payer, t.nonce),
+    index().on(t.connectionId, t.createdAt, t.id),
+    index().on(t.permissionId, t.createdAt),
+    index()
+      .on(t.signedAt)
+      .where(sql`${t.state} in ('signed', 'unknown')`),
+    check(
+      'payment_shape',
+      sql`(${t.state} = 'pending' and ${t.nonce} is null and ${t.authorization} is null and ${t.result} is null)
+        or (${t.state} in ('signed', 'unknown') and ${t.nonce} is not null and ${t.authorization} is not null
+            and ${t.authorized} is not null and ${t.deadline} is not null and ${t.signedAt} is not null)
+        or (${t.state} = 'settled' and ${t.kind} = 'free' and ${t.nonce} is null)
+        or (${t.state} = 'settled' and ${t.nonce} is not null and ${t.txHash} is not null and ${t.blockTime} is not null)
+        or (${t.state} = 'failed' and ${t.finishedAt} is not null)`
+    ),
+  ]
 );

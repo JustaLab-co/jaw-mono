@@ -12,6 +12,8 @@ export interface Config {
   mainnetRpcUrl: string | undefined;
   /** Local verification only: hosts jaw_quote may reach without the SSRF checks. */
   insecureFetchHosts: ReadonlySet<string>;
+  /** Charges a refill's gas through JAW's ERC-20 paymaster. Without it no refill runs. Never logged. */
+  apiKey: string | undefined;
   ring: KeyRing;
 }
 
@@ -31,6 +33,7 @@ export function config(): Config {
     rpcUrl: process.env.JAW_MCP_RPC_URL || undefined,
     mainnetRpcUrl: process.env.JAW_MCP_MAINNET_RPC_URL || undefined,
     insecureFetchHosts: new Set((process.env.JAW_MCP_INSECURE_FETCH_HOSTS ?? '').split(',').filter(Boolean)),
+    apiKey: process.env.JAW_MCP_API_KEY || undefined,
     ring: parseKeyRing(process.env.JAW_MCP_SEALING_KEYS),
   };
   return cached;
