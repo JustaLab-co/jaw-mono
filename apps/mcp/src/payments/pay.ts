@@ -15,7 +15,7 @@ import {
   type TopUpExecutor,
 } from '@jaw.id/agent';
 import type { Address, Hex } from 'viem';
-import { agentLogger, chainClients, payerFor, sessionOf, topUpExecutor } from '@/adapters/session-host';
+import { agentLogger, chainClients, payerFor, sessionOf, topUpExecutor, withoutUrls } from '@/adapters/session-host';
 import type { Tenant } from '@/connections/auth';
 import { config } from '@/connections/config';
 import { countHit, isPaymentsPaused } from '@/db/settings';
@@ -124,7 +124,7 @@ function fencedOf(url: string, o: Outcome): string[] {
   const code = codeOf(o);
   const reason = o.kind === 'unreached' ? o.reason : 'refusal' in o ? o.refusal.reason : '';
   if (reason && code && SERVER_REASONS.has(code)) {
-    log('warn', { msg: `payment ${code}: ${reason.replace(/[a-z][a-z0-9+.-]*:\/\/[^\s)]+/gi, '<url>')}` });
+    log('warn', { msg: `payment ${code}: ${withoutUrls(reason)}` });
   } else if (reason) {
     fenced.push(fenceText(host, reason, 400));
   }

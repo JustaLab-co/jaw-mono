@@ -17,9 +17,10 @@ import { log } from '@/lib/edge';
 
 export const chainClients: ChainClients = { publicClient: publicClientFor };
 
-export const agentLogger: Logger = {
-  warn: (message) => log('warn', { msg: message.replace(/api-key=[^&\s]+/g, 'api-key=redacted') }),
-};
+/** An RPC or paymaster url can carry its provider key in the path or the query, so no url is ever logged. */
+export const withoutUrls = (text: string) => text.replace(/[a-z][a-z0-9+.-]*:\/\/[^\s)]+/gi, '<url>');
+
+export const agentLogger: Logger = { warn: (message) => log('warn', { msg: withoutUrls(message) }) };
 
 export function sessionOf(grant: Grant): SessionConfig {
   return {
