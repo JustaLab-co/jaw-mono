@@ -41,7 +41,7 @@ describe('consent hand-back', () => {
     });
     expect(details.scopes).toEqual([
       { id: 'wallet:read', label: 'See your account and balances' },
-      { id: 'wallet:send', label: 'Ask you to approve signatures' },
+      { id: 'wallet:send', label: 'Ask you to approve signatures and payment budgets' },
     ]);
     expect(details.typedData.domain).toEqual({ name: 'JAW', version: '1', chainId: 84532 });
     expect(details.typedData.message).toEqual({
