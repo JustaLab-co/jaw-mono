@@ -330,6 +330,24 @@ describe('ensurePayerFunds', () => {
     expect(out.batchId).toBe('0xbatch1');
   });
 
+  test('Given the call status cannot be read, When polling, Then the code is chain_unavailable and the reason is the 0.4.0 text', async () => {
+    const { executor, balanceReader } = fakeChain(0n, {
+      status: async () => {
+        throw new Error('node unreachable');
+      },
+    });
+
+    const out = await ensurePayerFunds(requirement('1000000'), PAYER, executor, {
+      balanceReader,
+      ...instantly,
+    });
+
+    expect(out.ok).toBe(false);
+    expect(out.code).toBe('chain_unavailable');
+    expect(out.reason).toBe('top-up status check failed: node unreachable');
+    expect(out.batchId).toBe('0xbatch1');
+  });
+
   test('Given confirmation never arrives, When the timeout passes, Then it gives up with the batch id for reconciliation', async () => {
     const { executor, balanceReader } = fakeChain(0n, { status: async () => ({ status: 100 }) });
     let t = 0;
@@ -855,6 +873,23 @@ describe('ensurePayerFunds against the funds behind the permission', () => {
     expect(out.reason).toContain('700000');
     expect(out.reason).toContain('760000');
     expect(requests).toHaveLength(0);
+  });
+
+  test('Given the account cannot cover the payment, When refusing, Then the code is balance_low and the reason is the 0.4.0 text', async () => {
+    const { executor, balanceReader } = fakeChainWithFunder(250_000n, 700_000n);
+
+    const out = await ensurePayerFunds(requirement('1000000'), PAYER, executor, {
+      balanceReader,
+      funderAddress: FUNDER,
+      ...instantly,
+    });
+
+    expect(out.code).toBe('balance_low');
+    expect(out.reason).toBe(
+      `the account behind the permission, ${FUNDER}, holds 700000 base units and this payment needs ` +
+        '760000 topped up: 750000 short, plus 10000 of headroom for the fee the payer is charged for the ' +
+        'refill itself. Send USDC to that account.'
+    );
   });
 
   test('Given the account covers the payment but not the reserve, When ensuring funds, Then it pulls what the payment needs and leaves the rest', async () => {

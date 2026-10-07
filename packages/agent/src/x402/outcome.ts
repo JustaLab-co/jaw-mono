@@ -19,6 +19,8 @@ export type RefusalCode =
   | 'budget_exhausted'
   | 'invalid_config'
   | 'funding_failed'
+  | 'balance_low'
+  | 'chain_unavailable'
   | 'signing_failed'
   | 'store_failed'
   | 'authorization_expired'

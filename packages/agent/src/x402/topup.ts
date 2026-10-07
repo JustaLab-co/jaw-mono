@@ -7,6 +7,7 @@ import type { X402PaymentRequirement } from './types.js';
 import { firstOperationCost, gasReserve } from './gas-reserve.js';
 import { type BalanceReader, balanceReader } from './balance.js';
 import type { ChainClients } from '../ports.js';
+import type { RefusalCode } from './outcome.js';
 
 /**
  * Permission top-up (flow 2b): when the session payer EOA can't cover a
@@ -131,6 +132,8 @@ export interface TopUpOutcome {
   approvalBatchId?: string;
   /** Human-readable refusal when ok=false. Never throws for policy-shaped failures. */
   reason?: string;
+  /** Why, for code to branch on, when a refusal has a code more precise than `funding_failed`. */
+  code?: RefusalCode;
 }
 
 interface CallStatus {
@@ -221,7 +224,9 @@ export async function ensurePayerFunds(
       const granted = await grantPermit2Allowance(asset, payerAddress, price, grantApproval, executor, opts);
       // `skipped` says no principal moved, which stays true, but the approval
       // is a userOp the user paid for and it belongs in the trace either way.
-      if (!granted.ok) return { ok: false, reason: granted.reason, approvalBatchId: granted.batchId };
+      if (!granted.ok) {
+        return { ok: false, code: granted.code, reason: granted.reason, approvalBatchId: granted.batchId };
+      }
       // No principal moved, but the approval is a userOp the payer was charged
       // for, so its balance is not what the branch above checked any more.
       const short = await payerStillShort(asset, payerAddress, price, balance, opts, AFTER_APPROVAL);
@@ -279,6 +284,7 @@ export async function ensurePayerFunds(
     if (funds < shortfall + headroom) {
       return {
         ok: false,
+        code: 'balance_low',
         reason:
           `the account behind the permission, ${funder}, holds ${funds} base units and this payment needs ` +
           `${shortfall + headroom} topped up: ${shortfall} short, plus ${headroom} of headroom for the fee the ` +
@@ -335,7 +341,7 @@ export async function ensurePayerFunds(
     onChainFailure: 'top-up transaction failed on-chain (spending cap reached, or permission expired/revoked)',
   });
   if (!confirmed.ok) {
-    return { ok: false, reason: confirmed.reason, amount: amount.toString(), batchId };
+    return { ok: false, code: confirmed.code, reason: confirmed.reason, amount: amount.toString(), batchId };
   }
 
   // Past this line the transfer landed, so the refusal below still carries the
@@ -346,7 +352,14 @@ export async function ensurePayerFunds(
     const granted = await grantPermit2Allowance(asset, payerAddress, price, grantApproval, executor, opts);
     approvalBatchId = granted.batchId;
     if (!granted.ok) {
-      return { ok: false, reason: granted.reason, amount: amount.toString(), batchId, approvalBatchId };
+      return {
+        ok: false,
+        code: granted.code,
+        reason: granted.reason,
+        amount: amount.toString(),
+        batchId,
+        approvalBatchId,
+      };
     }
     permit2Allowance = granted.allowance;
   }
@@ -553,7 +566,7 @@ async function grantPermit2Allowance(
   grant: GrantApproval,
   executor: TopUpExecutor,
   opts: TopUpOptions
-): Promise<{ ok: boolean; reason?: string; batchId?: string; allowance?: bigint }> {
+): Promise<{ ok: boolean; reason?: string; code?: RefusalCode; batchId?: string; allowance?: bigint }> {
   let batchId: string;
   try {
     batchId = await grant(asset.address);
@@ -567,7 +580,7 @@ async function grantPermit2Allowance(
   });
   // The id rides on the refusal too: the approval was broadcast either way, and
   // a confirmation timeout is exactly when someone needs it to go looking.
-  if (!confirmed.ok) return { ok: false, reason: confirmed.reason, batchId };
+  if (!confirmed.ok) return { ok: false, code: confirmed.code, reason: confirmed.reason, batchId };
 
   // Confirmed by the bundler is not the same as visible to the node the payer
   // reads from, and the payer re-reads this allowance immediately afterwards,
@@ -625,7 +638,7 @@ async function awaitCall(
   batchId: string,
   opts: TopUpOptions,
   labels: { subject: string; onChainFailure: string }
-): Promise<{ ok: boolean; reason?: string }> {
+): Promise<{ ok: boolean; reason?: string; code?: RefusalCode }> {
   const now = opts.now ?? Date.now;
   const { sleep, pollMs } = pollClock(opts);
   const timeoutMs = opts.timeoutMs ?? 90_000;
@@ -648,7 +661,11 @@ async function awaitCall(
       });
       status = (await Promise.race([executor.request('wallet_getCallsStatus', batchId), expired])) as CallStatus;
     } catch (err) {
-      return { ok: false, reason: `${labels.subject} status check failed: ${errorMessage(err)}` };
+      return {
+        ok: false,
+        code: 'chain_unavailable',
+        reason: `${labels.subject} status check failed: ${errorMessage(err)}`,
+      };
     } finally {
       clearTimeout(timer);
     }
