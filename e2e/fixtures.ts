@@ -177,20 +177,49 @@ export class Dapp {
   }
 
   /**
-   * Runs the selected method while the last flow's dialog may still be
-   * closing. A popup that has not closed yet takes the request; the iframe
-   * stays mounted across flows either way.
+   * Runs the selected method while the last flow's dialog is still closing,
+   * so the request lands in it. The iframe stays mounted across flows; a popup
+   * that already closed means there is nothing left to reuse, and that fails.
    */
   async executeAfter(previous: Dialog): Promise<Dialog> {
     if (HTTPS) {
       await this.executeWithoutDialog();
       return this.embedded();
     }
-    if (!(previous as Page).isClosed()) {
-      await this.executeWithoutDialog();
-      return previous;
-    }
-    return this.execute();
+    if ((previous as Page).isClosed()) throw new Error('the popup closed before the request, so nothing was reused');
+    await this.executeWithoutDialog();
+    return previous;
+  }
+
+  /**
+   * Counts reveals of the embedded dialog from the next load on. It opens in
+   * this page, so a listener for new pages never sees it.
+   */
+  async countReveals() {
+    await this.page.addInitScript((selector) => {
+      const counter = window as { jawReveals?: number };
+      const showModal = HTMLDialogElement.prototype.showModal;
+      HTMLDialogElement.prototype.showModal = function () {
+        if (this.matches(selector)) counter.jawReveals = (counter.jawReveals ?? 0) + 1;
+        showModal.call(this);
+      };
+    }, EMBEDDED);
+  }
+
+  reveals(): Promise<number> {
+    return this.page.evaluate(() => (window as { jawReveals?: number }).jawReveals ?? 0);
+  }
+
+  /**
+   * Holds every window.close() for a few seconds, so a request sent right
+   * after a flow lands while the popup's close is still pending, however slow
+   * the runner. A close that was not cancelled still happens.
+   */
+  async holdPopupClose() {
+    await this.context.addInitScript(() => {
+      const close = window.close.bind(window);
+      window.close = () => setTimeout(close, 5_000);
+    });
   }
 
   /**

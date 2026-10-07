@@ -30,14 +30,16 @@ test.describe('connect', () => {
     await keys.button(dialog, 'Connect').click();
     await expect(dapp.result()).toHaveText(/^OK/, { timeout: SETTLES });
 
-    await dapp.page.reload();
     const opened: string[] = [];
     context.on('page', (page) => opened.push(page.url()));
+    await dapp.countReveals();
+    await dapp.page.reload();
     await dapp.open();
     await dapp.executeWithoutDialog();
 
     await expect(dapp.result()).toHaveText(/^OK/, { timeout: SETTLES });
     expect(opened).toEqual([]);
+    expect(await dapp.reveals()).toBe(0);
   });
 
   // The hang this suite was written for. An SDK holding an expired connection
@@ -91,17 +93,21 @@ test.describe('sign', () => {
 test.describe('back to back', () => {
   // The dialog closes itself a moment after a flow ends. A request sent in that
   // window reuses it, and the pending close must not take the new request with it.
-  test('a sign right after the connect reuses the closing dialog and shows its screen', async ({ dapp }) => {
+  test('a sign right after the connect reuses the closing dialog and shows its screen', async ({ dapp, context }) => {
+    await dapp.holdPopupClose();
     const dialog = await dapp.execute();
     await keys.account(dialog).click();
     await keys.button(dialog, 'Connect').click();
     await expect(dapp.result()).toHaveText(/^OK/, { timeout: SETTLES });
 
+    const opened: string[] = [];
+    context.on('page', (page) => opened.push(page.url()));
     await dapp.select('Signing', 'personal_sign');
     const signer = await dapp.executeAfter(dialog);
     await keys.button(signer, 'Sign').click({ timeout: SETTLES });
 
     await expect(dapp.result()).toHaveText(/^OK/, { timeout: SETTLES });
+    expect(opened).toEqual([]);
   });
 });
 
