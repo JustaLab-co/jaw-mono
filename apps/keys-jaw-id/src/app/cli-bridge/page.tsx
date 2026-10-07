@@ -117,7 +117,7 @@ function CLIBridgeContent() {
     try {
       const normalizedParams = Array.isArray(params) ? params : params !== undefined ? [params] : [];
       const reserved = reservedSigningRefusal(method, normalizedParams);
-      if (reserved) throw Object.assign(new Error(reserved), { code: standardErrorCodes.provider.unauthorized });
+      if (reserved) throw Object.assign(new Error(reserved), { code: standardErrorCodes.provider.userRejectedRequest });
 
       const result = await sdkRef.current.provider.request({
         method,

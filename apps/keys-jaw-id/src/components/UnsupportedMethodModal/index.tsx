@@ -30,7 +30,7 @@ export const UnsupportedMethodModal = ({
   const handleClose = () => {
     if (!isClosing) {
       setIsClosing(true);
-      if (reason) onClose(new Error(reason), standardErrorCodes.provider.unauthorized);
+      if (reason) onClose(new Error(reason), standardErrorCodes.provider.userRejectedRequest);
       // Method not found (JSON-RPC code -32601)
       else onClose(new Error(`Method not supported: ${method}`), standardErrorCodes.rpc.methodNotFound);
     }
