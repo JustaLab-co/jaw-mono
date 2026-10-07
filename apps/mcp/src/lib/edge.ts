@@ -9,10 +9,20 @@ type Handler = (req: Request, ctx: RouteContext) => Response | Promise<Response>
 export const RATE_WINDOW_MS = 60_000;
 export const RATE_LIMIT = 120;
 
-// The proxy in front appends the address it saw, so only the last entry is not
-// the caller's own claim.
+// JAW_MCP_TRUSTED_PROXY_HOPS proxies each append the address they saw to
+// x-forwarded-for, so the client is the entry that many from the right. Without
+// it, x-forwarded-for is the caller's to write; only x-real-ip, which a platform
+// such as Vercel sets itself, is used.
 function clientIp(req: Request): string {
-  return req.headers.get('x-forwarded-for')?.split(',').at(-1)?.trim() || req.headers.get('x-real-ip') || 'unknown';
+  const hops = Number(process.env.JAW_MCP_TRUSTED_PROXY_HOPS ?? 0);
+  if (hops > 0) {
+    const chain = (req.headers.get('x-forwarded-for') ?? '')
+      .split(',')
+      .map((s) => s.trim())
+      .filter(Boolean);
+    return chain.at(-hops) ?? 'unknown';
+  }
+  return req.headers.get('x-real-ip') || 'unknown';
 }
 
 async function refuse(req: Request): Promise<Response | undefined> {

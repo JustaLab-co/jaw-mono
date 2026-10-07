@@ -53,13 +53,28 @@ describe('withEdge', () => {
     expect(lines[0]).not.toContain('q3L0x7mJ2c1VfN8aYw4p9A');
   });
 
-  it('limits by the address the proxy saw, whatever the caller puts first', async () => {
+  it('by default ignores x-forwarded-for and keys on the platform header x-real-ip', async () => {
+    delete process.env.JAW_MCP_TRUSTED_PROXY_HOPS;
     const handler = withEdge(ok, { guarded: true });
-    for (let i = 0; i < RATE_LIMIT; i++) expect((await call(handler)).status).toBe(200);
-    const limited = await call(handler);
-    expect(limited.status).toBe(429);
-    expect(limited.headers.get('retry-after')).toBe('60');
-    expect((await call(handler, req('198.51.100.1'))).status).toBe(200);
+    const as = (realIp: string, forwarded: string) =>
+      new Request('http://mcp.test/mcp', { headers: { 'x-real-ip': realIp, 'x-forwarded-for': forwarded } });
+    for (let i = 0; i < RATE_LIMIT; i++)
+      expect((await handler(as('203.0.113.7', `10.0.0.${i}`), ctx)).status).toBe(200);
+    expect((await handler(as('203.0.113.7', '10.9.9.9'), ctx)).status).toBe(429);
+    expect((await handler(as('198.51.100.1', '10.9.9.9'), ctx)).status).toBe(200);
+  });
+
+  it('with N trusted proxy hops keys on the Nth entry from the right', async () => {
+    process.env.JAW_MCP_TRUSTED_PROXY_HOPS = '2';
+    const handler = withEdge(ok, { guarded: true });
+    // client-chosen junk, then the client as the first trusted proxy saw it, then that proxy
+    const via = (junk: string, client: string) =>
+      new Request('http://mcp.test/mcp', { headers: { 'x-forwarded-for': `${junk}, ${client}, 10.0.0.1` } });
+    for (let i = 0; i < RATE_LIMIT; i++)
+      expect((await handler(via(`1.2.3.${i}`, '203.0.113.7'), ctx)).status).toBe(200);
+    expect((await handler(via('9.9.9.9', '203.0.113.7'), ctx)).status).toBe(429);
+    expect((await handler(via('9.9.9.9', '198.51.100.1'), ctx)).status).toBe(200);
+    delete process.env.JAW_MCP_TRUSTED_PROXY_HOPS;
   });
 
   it('answers 503 while the kill switch is on, without calling the route', async () => {
