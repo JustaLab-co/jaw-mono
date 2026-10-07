@@ -4,6 +4,7 @@ CREATE TABLE "approval_requests" (
 	"account" text NOT NULL,
 	"chain_id" integer NOT NULL,
 	"requester" text NOT NULL,
+	"requester_client_id" text NOT NULL,
 	"kind" text NOT NULL,
 	"body" jsonb NOT NULL,
 	"status" text DEFAULT 'pending' NOT NULL,

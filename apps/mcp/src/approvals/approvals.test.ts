@@ -125,6 +125,34 @@ describe('approvals', () => {
     });
   });
 
+  it('reports an unreachable chain as unavailable and leaves the request pending', async () => {
+    const { c, id } = await requestSignature();
+    const v = await view(id);
+    const signature = await c.signer.signMessage({ message: v.approve.message });
+    const down = async () => {
+      throw new Error('rpc down');
+    };
+    expect((await decideFromPage(id, { verdict: 'approved', signature, previewHash: v.previewHash }, down)).kind).toBe(
+      'verification_unavailable'
+    );
+    expect((await view(id)).status).toBe('pending');
+  });
+
+  it('shows the requesting client id beside its self-declared name', async () => {
+    const { id } = await requestSignature();
+    expect((await view(id)).preview.requester).toEqual({ name: 'JAW CLI', clientId: 'jaw-cli' });
+  });
+
+  it('caps the requests one connection can leave waiting', async () => {
+    const c = await connect();
+    for (let i = 0; i < 20; i++) {
+      expect((await callTool(c.access_token, 'jaw_request_signature', { message: `m${i}` })).isError).toBeFalsy();
+    }
+    expect(await callTool(c.access_token, 'jaw_request_signature', { message: 'one too many' })).toMatchObject({
+      isError: true,
+    });
+  });
+
   it('refuses when the page rendered a different preview', async () => {
     const { c, id } = await requestSignature();
     const v = await view(id);

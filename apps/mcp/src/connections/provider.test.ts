@@ -1,3 +1,4 @@
+import { randomBytes } from 'node:crypto';
 import { compactDecrypt, decodeProtectedHeader } from 'jose';
 import { privateKeyToAddress } from 'viem/accounts';
 import { beforeAll, describe, expect, it } from 'vitest';
@@ -9,7 +10,7 @@ const { verifyBearer } = await import('./auth');
 const { config } = await import('./config');
 const { createProvider } = await import('./provider');
 const { findActive } = await import('./rows');
-const { open } = await import('./seal');
+const { isStale, open, parseKeyRing } = await import('./seal');
 
 const CIMD = 'https://client.example.test/agent.json';
 const metadata = {
@@ -86,7 +87,6 @@ describe('authorization server', () => {
 
     const replay = await token({ grant_type: 'refresh_token', refresh_token: c.refresh_token, client_id: 'jaw-cli' });
     expect(replay.body.error).toBe('invalid_grant');
-    await new Promise((r) => setTimeout(r, 50));
     const after = await token({
       grant_type: 'refresh_token',
       refresh_token: first.body.refresh_token,
@@ -95,6 +95,45 @@ describe('authorization server', () => {
     expect(after.body.error).toBe('invalid_grant');
     expect(await findActive(sub)).toBeUndefined();
     expect(await verifyBearer(first.body.access_token)).toBeUndefined();
+  });
+
+  it('lets only one of two concurrent refreshes with the same token through', async () => {
+    const c = await connect();
+    const body = { grant_type: 'refresh_token', refresh_token: c.refresh_token, client_id: 'jaw-cli' };
+    const results = await Promise.all([token(body), token(body)]);
+    expect(results.map((r) => r.status).sort()).toEqual([200, 400]);
+  });
+
+  it('connects twice from the same browser, each time as a new connection', async () => {
+    const browser = new Browser();
+    const first = await connect(undefined, {}, browser);
+    const second = await connect(undefined, {}, browser);
+    expect(second.status).toBe(200);
+    const [a, b] = [await claimsOf(first.access_token), await claimsOf(second.access_token)];
+    expect(a.sub).not.toBe(b.sub);
+    expect((await verifyBearer(second.access_token))?.extra?.tenant).toMatchObject({ account: second.signer.address });
+  });
+
+  it('re-seals a connection under the newest key on refresh after a rotation', async () => {
+    const c = await connect();
+    const old = config();
+    const ring = parseKeyRing(`${randomBytes(32).toString('base64url')},${process.env.JAW_MCP_SEALING_KEYS}`);
+    const cache = globalThis as { jawMcpProvider?: unknown };
+    const before = cache.jawMcpProvider;
+    cache.jawMcpProvider = createProvider({ ...old, ring });
+    try {
+      const r = await token({ grant_type: 'refresh_token', refresh_token: c.refresh_token, client_id: 'jaw-cli' });
+      const claims = JSON.parse(
+        new TextDecoder().decode((await compactDecrypt(r.body.access_token, ring.keys[0].jwe)).plaintext)
+      );
+      expect(isStale(ring, claims.sk)).toBe(false);
+      expect((await findActive(claims.sub))?.sealedKey).toBe(claims.sk);
+      expect(privateKeyToAddress(open(ring, claims.sk, claims.sub))).toBe(
+        (await findActive(claims.sub))?.sessionAddress
+      );
+    } finally {
+      cache.jawMcpProvider = before;
+    }
   });
 
   it('refuses a token for another resource', async () => {

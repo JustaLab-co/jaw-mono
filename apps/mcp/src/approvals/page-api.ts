@@ -1,6 +1,7 @@
 import { decide, payloadHash, signedPayload, toPageView, type ApprovalPageView, type Verdict } from '@jaw.id/agent';
 import { isHex, keccak256, type Hex } from 'viem';
 import { verifyOnChain, type VerifySignature } from '@/lib/chain';
+import { log } from '@/lib/edge';
 import { findById, recordDecision } from './store';
 
 export type PageOutcome =
@@ -8,6 +9,7 @@ export type PageOutcome =
   | { kind: 'not_found' }
   | { kind: 'invalid_request' }
   | { kind: 'bad_signature' }
+  | { kind: 'verification_unavailable' }
   | { kind: 'preview_changed' }
   | { kind: 'not_pending'; view: ApprovalPageView };
 
@@ -35,7 +37,13 @@ export async function decideFromPage(
   if (view.previewHash !== previewHash) return { kind: 'preview_changed' };
 
   const payload = signedPayload(request, verdict as Verdict);
-  const valid = await verify({ address: request.account, message: payload.message, signature }).catch(() => false);
+  const valid = await verify({ address: request.account, message: payload.message, signature }).catch(
+    (err: unknown) => {
+      log('error', { msg: 'approval verification unavailable', error: err instanceof Error ? err.name : 'unknown' });
+      return undefined;
+    }
+  );
+  if (valid === undefined) return { kind: 'verification_unavailable' };
   if (!valid) return { kind: 'bad_signature' };
 
   const evidence = {
@@ -46,7 +54,7 @@ export async function decideFromPage(
     decidedAt: now,
   };
   const result = decide(request, verdict as Verdict, evidence, now);
-  if (!result.ok || !(await recordDecision(result.request, now))) {
+  if (!result.ok || !(await recordDecision(result.request))) {
     const current = await findById(id, new Date());
     return current ? { kind: 'not_pending', view: toPageView(current) } : { kind: 'not_found' };
   }
@@ -58,6 +66,7 @@ const STATUS: Record<PageOutcome['kind'], number> = {
   not_found: 404,
   invalid_request: 400,
   bad_signature: 403,
+  verification_unavailable: 503,
   preview_changed: 409,
   not_pending: 409,
 };

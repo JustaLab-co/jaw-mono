@@ -18,7 +18,8 @@ const rpc = (body: object, token?: string) =>
         ...(token ? { authorization: `Bearer ${token}` } : {}),
       },
       body: JSON.stringify({ jsonrpc: '2.0', id: 1, ...body }),
-    })
+    }),
+    { params: Promise.resolve({}) }
   );
 
 const initialize = {

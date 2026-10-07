@@ -3,10 +3,10 @@ import { log } from '@/lib/edge';
 import { PgAdapter } from './adapter';
 import { bridge } from './bridge';
 import { config, type Config } from './config';
-import { findActive, revokeByGrant, updateSealedKey } from './rows';
+import { findActive, updateSealedKey } from './rows';
 import { isStale, open, seal, type Sealed } from './seal';
 
-export const SCOPES = { 'wallet:read': 'See your account, balances and grants' } as const;
+export const SCOPES = { 'wallet:read': 'See your account and balances, and ask you to approve signatures' } as const;
 export type Scope = keyof typeof SCOPES;
 
 const DAY = 24 * 60 * 60;
@@ -21,7 +21,6 @@ const JAW_CLI = {
   grant_types: ['authorization_code', 'refresh_token'],
   response_types: ['code' as const],
 };
-export const OFFICIAL_CLIENTS = new Set([JAW_CLI.client_id]);
 
 // Re-seals under the newest key when the row still uses an older one.
 async function sealedKeyFor(cfg: Config, connectionId: string): Promise<Sealed> {
@@ -100,9 +99,6 @@ export function createProvider(cfg: Config, overrides: Partial<Configuration> = 
     ...overrides,
   });
   provider.proxy = true;
-  provider.on('grant.revoked', (_ctx, grantId: string) => {
-    revokeByGrant(grantId).catch((err: Error) => log('error', { msg: 'revoke connection failed', error: err.name }));
-  });
   provider.on('server_error', (_ctx, err: Error) => log('error', { msg: 'oauth server error', error: err.name }));
   return provider;
 }
