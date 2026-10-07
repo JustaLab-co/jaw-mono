@@ -55,7 +55,9 @@ export async function connectionKey(req: Request): Promise<string | undefined> {
 export async function verifyBearer(bearer: string | undefined): Promise<AuthInfo | undefined> {
   if (!bearer) return undefined;
   const claims = await decrypt(bearer);
-  if (!claims || !(claims.scope ?? '').split(' ').includes('wallet:read')) return undefined;
+  // The token's scopes, never the row's: a refresh may narrow them.
+  const scopes = (claims?.scope ?? '').split(' ').filter(Boolean);
+  if (!claims || !scopes.includes('wallet:read')) return undefined;
   const row = await findActive(claims.sub);
   if (!row?.sessionAddress || row.clientId !== claims.client_id) return undefined;
   const tenant: Tenant = {
@@ -64,13 +66,13 @@ export async function verifyBearer(bearer: string | undefined): Promise<AuthInfo
     chainId: row.chainId,
     clientId: row.clientId,
     clientName: row.clientName,
-    scopes: row.scopes as Scope[],
+    scopes: scopes as Scope[],
     sessionAddress: row.sessionAddress as Address,
   };
   return {
     token: claims.jti,
     clientId: claims.client_id,
-    scopes: (claims.scope ?? '').split(' ').filter(Boolean),
+    scopes,
     expiresAt: claims.exp,
     resource: new URL(config().resource),
     extra: { tenant },

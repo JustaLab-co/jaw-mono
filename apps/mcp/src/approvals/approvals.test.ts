@@ -2,7 +2,7 @@ import { APPROVAL_TTL_MS, type SignedPayload } from '@jaw.id/agent';
 import { verifyMessage, type Hex } from 'viem';
 import { beforeAll, describe, expect, it, vi } from 'vitest';
 import { useTestDb } from '@/db/test-db';
-import { callTool, connect, owner, setTestEnv, verifyLocally } from '@/connections/testkit';
+import { callTool, connect, owner, setTestEnv, token, verifyLocally } from '@/connections/testkit';
 import { eq } from 'drizzle-orm';
 import { verifyBearer } from '@/connections/auth';
 import { revokeByGrant } from '@/connections/rows';
@@ -45,6 +45,21 @@ describe('the wallet:send scope', () => {
     const sender = await connect(undefined, { scope: 'wallet:read wallet:send' });
     const asked = await callTool(sender.access_token, 'jaw_request_signature', { message: 'hello' });
     expect(asked.structuredContent).toMatchObject({ status: 'pending' });
+  });
+});
+
+describe('the wallet:send scope on the token', () => {
+  it('is refused once a refresh narrowed the token to wallet:read', async () => {
+    const c = await connect();
+    const narrowed = await token({
+      grant_type: 'refresh_token',
+      refresh_token: c.refresh_token,
+      client_id: 'jaw-cli',
+      scope: 'wallet:read',
+    });
+    const refused = await callTool(narrowed.body.access_token, 'jaw_request_signature', { message: 'hello' });
+    expect(refused.isError).toBe(true);
+    expect(refused.content[0].text).toMatch(/wallet:send/);
   });
 });
 
