@@ -25,7 +25,7 @@ export const rateLimits = pgTable(
     windowStart: timestamp('window_start', { withTimezone: true }).notNull(),
     count: integer('count').notNull(),
   },
-  (t) => [primaryKey({ columns: [t.key, t.windowStart] })]
+  (t) => [primaryKey({ columns: [t.key, t.windowStart] }), index().on(t.windowStart)]
 );
 
 // Keys are sha256 of `${model}:${id}` and payloads carry no `jti`, so a dump
@@ -183,6 +183,8 @@ export const payments = pgTable(
     createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
     signedAt: timestamp('signed_at', { withTimezone: true }),
     finishedAt: timestamp('finished_at', { withTimezone: true }),
+    // Set when the reconciler raised its one alert for a row the chain has not answered.
+    alertedAt: timestamp('alerted_at', { withTimezone: true }),
   },
   (t) => [
     uniqueIndex().on(t.connectionId, t.idempotencyKey),

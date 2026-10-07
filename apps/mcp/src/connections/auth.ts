@@ -32,8 +32,8 @@ interface Claims {
   exp: number;
 }
 
-/** Claims of a token this server issued for this resource and that has not expired. */
-async function decrypt(bearer: string): Promise<Claims | undefined> {
+/** Claims of a token this server issued for this resource and, unless `expired` is allowed, still valid. */
+async function decrypt(bearer: string, expired = false): Promise<Claims | undefined> {
   const { issuer, resource, ring } = config();
   let claims: Claims;
   try {
@@ -44,15 +44,24 @@ async function decrypt(bearer: string): Promise<Claims | undefined> {
     return undefined;
   }
   const audiences = Array.isArray(claims.aud) ? claims.aud : [claims.aud];
-  if (claims.iss !== issuer || !audiences.includes(resource) || claims.exp * 1000 <= Date.now()) return undefined;
+  if (claims.iss !== issuer || !audiences.includes(resource)) return undefined;
+  if (!expired && claims.exp * 1000 <= Date.now()) return undefined;
   return claims;
 }
 
+const bearerOf = (req: Request) => req.headers.get('authorization')?.match(/^Bearer (.+)$/i)?.[1];
+
 /** The connection a bearer token names, from decryption alone: a rate limit key with no database read. */
 export async function connectionKey(req: Request): Promise<string | undefined> {
-  const bearer = req.headers.get('authorization')?.match(/^Bearer (.+)$/i)?.[1];
+  const bearer = bearerOf(req);
   const claims = bearer ? await decrypt(bearer) : undefined;
   return claims ? `conn:${claims.sub}` : ipKey(req);
+}
+
+/** Which client a refused request came from, for the metrics: expired tokens still name theirs. */
+export async function clientOf(req: Request): Promise<string> {
+  const bearer = bearerOf(req);
+  return (bearer && (await decrypt(bearer, true))?.client_id) || 'unknown';
 }
 
 export async function verifyBearer(bearer: string | undefined): Promise<AuthInfo | undefined> {
