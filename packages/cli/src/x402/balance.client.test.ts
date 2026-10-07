@@ -130,4 +130,16 @@ describe('cliChainClients transport + cache', () => {
       expect(httpMock).not.toHaveBeenCalled();
     }
   );
+
+  it.each(['pk_env_789\r\n', 'pk_env_789\t', ' pk_env_789\n'])(
+    'trims surrounding whitespace from JAW_API_KEY=%j and sends the key it wraps',
+    async (key) => {
+      process.env['JAW_API_KEY'] = key;
+      loadConfigMock.mockReturnValue({});
+      const publicClientFor = await freshPublicClientFor();
+      publicClientFor(8453);
+      expect(httpMock).toHaveBeenCalledTimes(1);
+      expect(transportKeyOf(0)).toBe('pk_env_789');
+    }
+  );
 });
