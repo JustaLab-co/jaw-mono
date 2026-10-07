@@ -1,13 +1,9 @@
-import type { GrantRequest, PermissionState } from '@jaw.id/agent';
+import type { PermissionState } from '@jaw.id/agent';
 import { connectionsSignInTypedData } from '@jaw.id/agent';
 import type { PGlite } from '@electric-sql/pglite';
-import { randomBytes } from 'node:crypto';
-import type { Hex } from 'viem';
 import { beforeAll, describe, expect, it } from 'vitest';
-import { decideFromPage, readForPage } from '@/approvals/page-api';
-import { verifyBearer } from './auth';
 import { listFromPage, revokeFromPage, type ConnectionView, type PageDeps } from './page';
-import { callTool, connect, ISSUER, mcp, owner, setTestEnv, token, verifyLocally } from './testkit';
+import { budgetConnection, callTool, ISSUER, mcp, owner, setTestEnv, token, verifyLocally } from './testkit';
 import { useTestDb } from '@/db/test-db';
 
 setTestEnv();
@@ -37,30 +33,7 @@ const list = async (post: object) => {
   return out.body as ConnectionView[];
 };
 
-async function connectWithBudget() {
-  const c = await connect();
-  const sessionAddress = ((await verifyBearer(c.access_token))?.extra?.tenant as { sessionAddress: Hex })
-    .sessionAddress;
-  const id = (await callTool(c.access_token, 'jaw_request_budget', { perDay: '1' })).structuredContent.requestId;
-  const read = await readForPage(id);
-  if (read.kind !== 'ok') throw new Error(read.kind);
-  const grant = (read.view.approve as { grant: GrantRequest }).grant;
-  const permissionId = `0x${randomBytes(32).toString('hex')}` as Hex;
-  const permission = {
-    permissionId,
-    account: grant.address,
-    spender: grant.spender,
-    start: 1_780_000_000,
-    end: grant.expiry,
-    salt: '0x2a',
-    calls: [{ target: grant.permissions.calls[0].target, selector: '0xa9059cbb' }],
-    spends: grant.permissions.spends,
-  };
-  const post = { verdict: 'approved', previewHash: read.view.previewHash, permission };
-  const decided = await decideFromPage(id, post, verifyLocally, new Date(), deps.readPermission);
-  if (decided.kind !== 'ok') throw new Error(decided.kind);
-  return { c, sessionAddress, permissionId };
-}
+const connectWithBudget = () => budgetConnection(deps.readPermission);
 
 describe('connections page sign-in', () => {
   it.each([

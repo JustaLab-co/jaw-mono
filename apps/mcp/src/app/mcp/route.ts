@@ -4,6 +4,7 @@ import { clientOf, connectionKey, withConnection } from '@/connections/auth';
 import { guardTools, withEdge } from '@/lib/edge';
 import { countUnauthorized } from '@/lib/metrics';
 import { registerReadTools } from '@/tools/read';
+import { registerDisconnectTool } from '@/tools/disconnect';
 import { registerHistoryTool } from '@/tools/history';
 import { registerPayTool } from '@/tools/pay-and-fetch';
 import { registerPrepareCallsTool } from '@/tools/prepare-calls';
@@ -23,6 +24,7 @@ const mcp = createMcpHandler(
     registerPrepareCallsTool(server);
     registerPayTool(server);
     registerHistoryTool(server);
+    registerDisconnectTool(server);
   },
   {
     serverInfo: { name: 'jaw', version: '0.0.1' },

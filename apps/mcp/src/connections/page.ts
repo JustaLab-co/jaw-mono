@@ -105,11 +105,6 @@ export async function listFromPage(post: unknown, deps = DEFAULTS, now = new Dat
   return { kind: 'ok', body: await viewsOf(rows, deps, now) };
 }
 
-/**
- * Ends the connection on the server: the access token stops at the next call and
- * the refresh tokens, with the key wraps they carry, are deleted, so the session
- * key cannot be opened again. The page revokes the budgets on chain afterwards.
- */
 export async function revokeFromPage(
   id: string,
   post: unknown,
@@ -118,7 +113,20 @@ export async function revokeFromPage(
 ): Promise<PageOutcome> {
   const account = await signedIn(post, deps.verify, now);
   if (typeof account !== 'string') return account;
-  const row = await getDb().transaction(async (tx) => {
+  const row = await endConnection(id, account, now);
+  if (!row) return { kind: 'not_found' };
+  const [view] = await viewsOf([row], deps, now);
+  return { kind: 'ok', body: view };
+}
+
+/**
+ * Ends the connection on the server: the access token stops at the next call and
+ * the refresh tokens, with the key wraps they carry, are deleted, so the session
+ * key cannot be opened again. Budgets on chain are revoked separately. Undefined
+ * when the account has no such connection; an ended one is returned as it is.
+ */
+export async function endConnection(id: string, account: Address, now = new Date()) {
+  return getDb().transaction(async (tx) => {
     const [found] = await tx
       .select()
       .from(connections)
@@ -133,9 +141,6 @@ export async function revokeFromPage(
     await tx.delete(oauthPayloads).where(eq(oauthPayloads.grantId, found.grantId!));
     return revoked;
   });
-  if (!row) return { kind: 'not_found' };
-  const [view] = await viewsOf([row], deps, now);
-  return { kind: 'ok', body: view };
 }
 
 type GrantRow = typeof grants.$inferSelect;
