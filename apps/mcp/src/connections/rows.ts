@@ -41,10 +41,19 @@ export async function findClaimable(uid: string, ticketHash: string): Promise<Co
   return row;
 }
 
+// The grant and refresh token lifetime: an active row's expires_at is when the connection ends.
+export const CONNECTION_TTL_MS = 30 * 24 * 60 * 60 * 1000;
+
 export async function activate(uid: string, ticketHash: string, grantId: string): Promise<ConnectionRow | undefined> {
   const [row] = await getDb()
     .update(connections)
-    .set({ status: 'active', grantId, ticketHash: null, activatedAt: new Date() })
+    .set({
+      status: 'active',
+      grantId,
+      ticketHash: null,
+      activatedAt: new Date(),
+      expiresAt: new Date(Date.now() + CONNECTION_TTL_MS),
+    })
     .where(claimable(uid, ticketHash))
     .returning();
   return row;
@@ -54,7 +63,7 @@ export async function findActive(id: string): Promise<ConnectionRow | undefined>
   const [row] = await getDb()
     .select()
     .from(connections)
-    .where(and(eq(connections.id, id), eq(connections.status, 'active')));
+    .where(and(eq(connections.id, id), eq(connections.status, 'active'), gt(connections.expiresAt, sql`now()`)));
   return row;
 }
 

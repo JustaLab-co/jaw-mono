@@ -1,11 +1,14 @@
 import { eq } from 'drizzle-orm';
-import { beforeAll, describe, expect, it } from 'vitest';
+import { beforeAll, describe, expect, it, vi } from 'vitest';
 import { getDb } from '@/db/client';
 import { connections } from '@/db/schema';
 import { useTestDb } from '@/db/test-db';
+import { verifyBearer } from './auth';
 import { consent } from './interaction';
+import { provider } from './provider';
 import {
   Browser,
+  connect,
   follow,
   getDetails,
   ISSUER,
@@ -113,6 +116,29 @@ describe('consent hand-back', () => {
     const { next } = (await res.json()) as { next: string };
     expect((await follow(browser, next)).searchParams.get('code')).toBeTruthy();
     expect((await new Browser().get(next)).status).toBe(400);
+  });
+
+  it('does not leave a connection active when the hand-back to the client fails', async () => {
+    const { browser, uid, details } = await pending();
+    const signer = owner();
+    const res = await postConsent(uid, signer.address, await signer.signMessage({ message: details.message }));
+    const { next } = (await res.json()) as { next: string };
+    const spy = vi.spyOn(provider(), 'interactionFinished').mockRejectedValueOnce(new Error('hand-back failed'));
+    const failed = await browser.get(next).catch(() => undefined);
+    spy.mockRestore();
+    expect(failed?.status ?? 500).toBeGreaterThanOrEqual(400);
+    const [row] = await getDb().select().from(connections).where(eq(connections.interactionUid, uid));
+    expect(row.status).not.toBe('active');
+  });
+
+  it('stops honoring a token once its connection expires', async () => {
+    const c = await connect();
+    const sub = (await verifyBearer(c.access_token))?.extra?.tenant as { connectionId: string };
+    await getDb()
+      .update(connections)
+      .set({ expiresAt: new Date(Date.now() - 60_000) })
+      .where(eq(connections.id, sub.connectionId));
+    expect(await verifyBearer(c.access_token)).toBeUndefined();
   });
 
   it('sends the user back to the client with access_denied on abort', async () => {

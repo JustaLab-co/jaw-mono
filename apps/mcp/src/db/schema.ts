@@ -47,6 +47,7 @@ export const connections = pgTable(
     sealedKey: text('sealed_key').notNull(),
     interactionUid: text('interaction_uid').notNull().unique(),
     ticketHash: text('ticket_hash'),
+    // Pending: the consent must be claimed before this. Active: the connection ends here.
     expiresAt: timestamp('expires_at', { withTimezone: true }).notNull(),
     grantId: text('grant_id').unique(),
     createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),

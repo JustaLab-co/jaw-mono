@@ -140,12 +140,19 @@ export function complete(req: Request, uid: string): Promise<Response> {
       await grant.destroy();
       return fail(nodeRes, 400, 'invalid_ticket');
     }
-    await p.interactionFinished(
-      nodeReq,
-      nodeRes,
-      { login: { accountId: row.id, remember: false }, consent: { grantId } },
-      { mergeWithLastSubmission: false }
-    );
+    try {
+      await p.interactionFinished(
+        nodeReq,
+        nodeRes,
+        { login: { accountId: row.id, remember: false }, consent: { grantId } },
+        { mergeWithLastSubmission: false }
+      );
+    } catch {
+      // No code reached the client, so the connection must not stay usable.
+      // Destroying the grant revokes the connection with it.
+      await grant.destroy();
+      return fail(nodeRes, 500, 'hand_back_failed');
+    }
   });
 }
 
