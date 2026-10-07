@@ -271,6 +271,25 @@ export async function entriesFor(permissionId: string, now: Date, tx: Tx = getDb
   return rows.map((row) => entryOf(row, now));
 }
 
+/**
+ * Under the refill lock: what this connection's other budgets pulled in the last
+ * day. Each permission has its own counter on chain, so a newer budget would
+ * otherwise start the day as if nothing had been pulled.
+ */
+export async function pulledUnderOtherGrants(tx: Tx, connectionId: string, permissionId: string): Promise<bigint> {
+  const [row] = await tx
+    .select({ pulled: sql<string>`coalesce(sum(${payments.topUpAmount}), 0)::text` })
+    .from(payments)
+    .where(
+      and(
+        eq(payments.connectionId, connectionId),
+        ne(payments.permissionId, permissionId),
+        sql`${payments.createdAt} > now() - interval '1 day'`
+      )
+    );
+  return BigInt(row.pulled);
+}
+
 /** Newest first. The cursor is a payment id; the order is read from its row, at full precision. */
 export async function history(connectionId: string, limit: number, before?: string) {
   const anchor = before

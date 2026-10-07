@@ -164,7 +164,12 @@ beforeEach(() => {
 async function connected(perDay?: string) {
   const c = await connect();
   const t = (await verifyBearer(c.access_token))?.extra?.tenant as Tenant;
-  if (perDay) {
+  if (perDay) await approveBudget(c, perDay);
+  return { c, t };
+}
+
+async function approveBudget(c: Awaited<ReturnType<typeof connect>>, perDay: string) {
+  {
     const asked = await callTool(c.access_token, 'jaw_request_budget', { perDay });
     const id = asked.structuredContent.requestId as string;
     const read = await readForPage(id);
@@ -190,7 +195,6 @@ async function connected(perDay?: string) {
     if (decided.kind !== 'ok') throw new Error(decided.kind);
     balances.set(c.signer.address.toLowerCase(), 5_000_000n);
   }
-  return { c, t };
 }
 
 const url = (path: string) => `http://${SELLER}${path}`;
@@ -326,6 +330,17 @@ describe('jaw_pay_and_fetch', () => {
     );
     expect(results.map((r) => r.structuredContent?.kind).sort()).toEqual(['paid', 'refused']);
     expect(seen).toHaveLength(1);
+  });
+
+  it('counts what the previous budget pulled today against a lowered one, so 2 then 1 never pulls more than 2', async () => {
+    const { c, t } = await connected('2');
+    await pay(t, { url: url('/exact'), idempotencyKey: 'old-grant' }, deps({ floatTarget: 1_900_000n }));
+    expect(refills).toEqual([2_000_000n]);
+    balances.set(t.sessionAddress.toLowerCase(), 0n);
+    await approveBudget(c, '1');
+    const after = await pay(t, { url: url('/exact'), idempotencyKey: 'new-grant' }, deps());
+    expect(after.structuredContent).toMatchObject({ refusal: { code: 'budget_exhausted' } });
+    expect(refills).toEqual([2_000_000n]);
   });
 
   it('refuses past the daily budget as budget_exhausted, with the raise named and nothing sent', async () => {

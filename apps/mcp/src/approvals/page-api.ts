@@ -13,14 +13,15 @@ import {
   type PermissionReadTarget,
   type PermissionState,
 } from '@jaw.id/agent';
-import { isHex, keccak256, type Address } from 'viem';
+import { isHex, keccak256, type Address, type Hex } from 'viem';
 import { SUPPORTED_CHAINS } from '@/connections/config';
 import { publicClientFor, verifyOnChain, type VerifySignature } from '@/lib/chain';
 import { log } from '@/lib/edge';
-import { connectionLive, findById, recordDecision, type NewGrant } from './store';
+import { currentGrant } from '@/grants/store';
+import { connectionLive, connectionOf, findById, recordDecision, type NewGrant } from './store';
 
 export type PageOutcome =
-  | { kind: 'ok'; view: ApprovalPageView }
+  | { kind: 'ok'; view: ApprovalPageView & { replaces?: { permissionId: Hex } } }
   | { kind: 'not_found' }
   | { kind: 'invalid_request' }
   | { kind: 'bad_signature' }
@@ -95,7 +96,12 @@ async function checkPermission(
 
 export async function readForPage(id: string, now = new Date()): Promise<PageOutcome> {
   const request = await findById(id, now);
-  return request ? { kind: 'ok', view: toPageView(request) } : { kind: 'not_found' };
+  if (!request) return { kind: 'not_found' };
+  const view = toPageView(request);
+  if (request.body.kind !== 'budget' || request.state.status !== 'pending') return { kind: 'ok', view };
+  // The budget this one replaces, which the page revokes right after granting the new one.
+  const previous = await currentGrant(await connectionOf(request.id));
+  return { kind: 'ok', view: previous ? { ...view, replaces: { permissionId: previous.permissionId } } : view };
 }
 
 export async function decideFromPage(

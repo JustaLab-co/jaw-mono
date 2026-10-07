@@ -146,6 +146,10 @@ describe('budget grants', () => {
       approvedOnChain
     );
     const raise = await callTool(c.access_token, 'jaw_request_budget', { perDay: '5' });
+    const raiseView = await readForPage(raise.structuredContent.requestId);
+    if (raiseView.kind !== 'ok') throw new Error(raiseView.kind);
+    const before = (await verifyBearer(c.access_token))?.extra?.tenant as { connectionId: string };
+    expect(raiseView.view.replaces).toEqual({ permissionId: (await currentGrant(before.connectionId))?.permissionId });
     const raised = permissionId();
     const second = await budgetView(raise.structuredContent.requestId);
     expect(second.grant.spender).toBe(first.grant.spender);

@@ -182,3 +182,11 @@ export async function connectionLive(id: ApprovalId): Promise<boolean> {
     .where(and(eq(approvalRequests.id, id), isLive()));
   return row !== undefined;
 }
+
+export async function connectionOf(id: ApprovalId): Promise<string> {
+  const [row] = await getDb()
+    .select({ connectionId: approvalRequests.connectionId })
+    .from(approvalRequests)
+    .where(eq(approvalRequests.id, id));
+  return row.connectionId;
+}

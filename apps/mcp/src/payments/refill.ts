@@ -18,7 +18,7 @@ import { sessionOf } from '@/adapters/session-host';
 import { getDb } from '@/db/client';
 import type { Grant } from '@/grants/store';
 import { nonceUsed } from './confirm';
-import { entriesFor, holdingRows, recordTopUp, reserve, type PaymentRow } from './store';
+import { entriesFor, holdingRows, pulledUnderOtherGrants, recordTopUp, reserve, type PaymentRow } from './store';
 
 export type EnsureFunds = NonNullable<PayAndFetchOptions['ensureFunds']>;
 
@@ -124,9 +124,11 @@ export function refillHook(c: RefillContext): EnsureFunds {
           const held = await stillHeld(await holdingRows(tx, c.payer, c.rowId), c.clients);
           const session = sessionOf(c.grant);
           const entries = await entriesFor(c.grant.permissionId, new Date(), tx);
-          const periodUsage = await currentLimitUsageOnChain(entries, c.policy, c.payer, session, new Date(), {
+          const own = await currentLimitUsageOnChain(entries, c.policy, c.payer, session, new Date(), {
             clients: c.clients,
           });
+          const earlier = await pulledUnderOtherGrants(tx, c.connectionId, c.grant.permissionId);
+          const periodUsage = own.map((limit) => ({ ...limit, toppedUp: limit.toppedUp + earlier }));
           const spentThisSession = sumSpentSince(entries, { payer: c.payer }, session.createdAt);
           const onChain = balanceReader(c.clients);
           funded = await ensurePayerFunds(requirement, payer, c.executor ?? noRefill, {
