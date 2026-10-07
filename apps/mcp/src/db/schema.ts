@@ -1,5 +1,6 @@
 import { sql } from 'drizzle-orm';
 import {
+  bigserial,
   check,
   index,
   integer,
@@ -232,4 +233,21 @@ export const payments = pgTable(
         or (${t.state} = 'failed' and ${t.finishedAt} is not null)`
     ),
   ]
+);
+
+// One row per tool call. Arguments and results are never stored: they can carry
+// seller headers, signatures and amounts the owner did not ask to keep.
+export const auditEvents = pgTable(
+  'audit_events',
+  {
+    id: bigserial('id', { mode: 'number' }).primaryKey(),
+    connectionId: text('connection_id')
+      .notNull()
+      .references(() => connections.id),
+    tool: text('tool').notNull(),
+    outcome: text('outcome', { enum: ['ok', 'error'] }).notNull(),
+    requestId: text('request_id'),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [index().on(t.connectionId, t.createdAt)]
 );

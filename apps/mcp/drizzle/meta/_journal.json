@@ -78,6 +78,13 @@
       "when": 1791398100806,
       "tag": "0010_prepared_actions",
       "breakpoints": true
+    },
+    {
+      "idx": 11,
+      "version": "7",
+      "when": 1791398387099,
+      "tag": "0011_audit_events",
+      "breakpoints": true
     }
   ]
 }
