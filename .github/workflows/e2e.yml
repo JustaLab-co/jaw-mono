@@ -1,26 +1,34 @@
-name: E2E (iframe transport)
+name: E2E
 
-# Real-browser smoke test for the embedded iframe transport across all three
-# engines (chromium, firefox, webkit≈Safari). It does NOT drive the passkey
-# flow (Chromium-only virtual authenticator), so it needs no API key — only the
-# two dev servers and the prewarmed, load-time iframe state.
+# Real-browser suites for the SDK and the keys app together, driven through
+# the playground. See e2e/README.md.
 #
-# MANUAL-ONLY (not part of CI): this is slow and flaky on hosted runners — the
-# `playwright install --with-deps` step downloads 3 browsers + apt system deps
-# and can exceed the job timeout. Gating every PR on it isn't worth it. Run it
-# locally (see e2e/README.md) or on demand via the Actions "Run workflow" button.
-# The transport/theme guarantees are covered by the unit + integration suites.
+# connect-flows runs on every PR that touches the keys app, the SDK packages
+# or the suites: Chromium only (the passkey is a CDP virtual authenticator),
+# over http against production builds, with the network the apps call mocked.
+#
+# The embedded iframe needs https and all three engines, so it has its own
+# workflow with a narrower trigger: e2e-iframe.yml.
 
 on:
+  pull_request:
+    paths:
+      - 'apps/keys-jaw-id/**'
+      - 'packages/core/**'
+      - 'packages/ui/**'
+      - 'packages/wagmi/**'
+      - 'e2e/**'
+      - 'bun.lock'
+      - '.github/workflows/e2e.yml'
   workflow_dispatch:
 
 permissions:
   contents: read
 
 jobs:
-  e2e:
+  connect-flows:
     runs-on: ubuntu-latest
-    timeout-minutes: 25
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
 
@@ -41,50 +49,24 @@ jobs:
 
       - run: bun install --frozen-lockfile
 
-      # The playground consumes the BUILT dist of the SDK packages, not source —
-      # build them first so it serves the current transport code.
+      # Both apps consume the built dist of the SDK packages, not their source.
       - name: Build SDK packages
         run: bunx nx run-many -t build -p @jaw.id/core @jaw.id/wagmi @jaw.id/ui
 
-      - name: Install Playwright browsers
-        run: bunx playwright install --with-deps chromium firefox webkit
+      - name: Install Chromium
+        run: bunx playwright install --with-deps chromium
 
-      - name: Start servers and run e2e (chromium, firefox, webkit)
-        run: |
-          # Kill the backgrounded dev servers on exit (belt-and-suspenders; the
-          # runner also reaps the process tree at job end).
-          trap 'kill $(jobs -p) 2>/dev/null' EXIT
+      # The config builds and starts both apps itself (see playwright.config.ts).
+      - name: Run connect flows
+        working-directory: e2e
+        run: bunx playwright test --config playwright.config.ts --project chromium
 
-          bunx nx dev @jaw-mono/keys-jaw-id --port=3001 > /tmp/keys.log 2>&1 &
-          NEXT_PUBLIC_KEYS_URL=http://localhost:3001 \
-            bunx nx dev @jaw-mono/playground --port=3002 > /tmp/playground.log 2>&1 &
-
-          # Wait until both respond (dev compiles on first hit).
-          up=0
-          for i in $(seq 1 90); do
-            if curl -sf -o /dev/null http://localhost:3001/ \
-               && curl -sf -o /dev/null http://localhost:3002/wagmi; then up=1; break; fi
-            sleep 2
-          done
-          if [ "$up" != "1" ]; then
-            echo "::error::dev servers did not start in time"
-            tail -n 60 /tmp/keys.log /tmp/playground.log
-            exit 1
-          fi
-
-          fail=0
-          # Default: see-through on Chromium; clickjacking-guard fallback on FF/WebKit.
-          for engine in chromium firefox webkit; do
-            echo "::group::e2e $engine (default)"
-            JAW_E2E_BROWSER=$engine node e2e/iframe-transport.e2e.mjs || fail=1
-            echo "::endgroup::"
-          done
-          # Error path: keys unreachable ⇒ graceful degradation (no broken frame, no hang).
-          # webkit skipped: without a trusted host it never embeds the iframe, so
-          # keys-down is a no-op there (covered by the default-mode guard above).
-          for engine in chromium firefox; do
-            echo "::group::e2e $engine (keys-down)"
-            JAW_E2E_BROWSER=$engine JAW_E2E_KEYS_DOWN=1 node e2e/iframe-transport.e2e.mjs || fail=1
-            echo "::endgroup::"
-          done
-          exit $fail
+      - name: Upload report and traces
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: e2e-connect-flows
+          path: |
+            e2e/playwright-report
+            e2e/test-results
+          retention-days: 14

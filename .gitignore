@@ -74,3 +74,7 @@ expo-env.d.ts
 # Stryker
 .stryker-tmp
 **/reports/mutation
+
+# Playwright e2e output
+e2e/test-results/
+e2e/playwright-report/
