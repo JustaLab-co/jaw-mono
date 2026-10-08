@@ -96,6 +96,15 @@ export interface AccountMetadata {
 }
 
 // @public
+export type AccountRecord = {
+    address: Address_2;
+    version: number;
+    factory: Address_2;
+    owners: Hex[];
+    nonce: string;
+};
+
+// @public
 export interface AddFundsUIRequest extends BaseUIRequest {
     // (undocumented)
     data: {
@@ -902,6 +911,7 @@ export interface NormalizedAddFundsParams {
 
 // @public (undocumented)
 export interface PasskeyAccount {
+    account?: AccountRecord;
     // (undocumented)
     address?: `0x${string}`;
     // (undocumented)
@@ -948,6 +958,7 @@ export class PasskeyManager {
         webAuthnAccount: WebAuthnAccount;
         passkeyAccount: PasskeyAccount;
     }>;
+    fetchAccountRecord(credentialId: string, dev?: boolean): Promise<AccountRecord>;
     fetchAccounts(): PasskeyAccount[];
     fetchActiveCredentialId(): string | null;
     getAccountByCredentialId(credentialId: string): PasskeyAccount | undefined;
@@ -962,10 +973,11 @@ export class PasskeyManager {
     setAccountAddresses(entries: Array<{
         credentialId: string;
         address: `0x${string}`;
+        account?: AccountRecord;
     }>): void;
     storeAuthState(address: Address_2, credentialId: string): void;
-    storePasskeyAccount(name: string, credentialId: string, publicKey: `0x${string}`, address: Address_2, dev?: boolean): Promise<void>;
-    storePasskeyAccountForLogin(credentialId: string, address: Address_2, dev?: boolean): Promise<void>;
+    storePasskeyAccount(name: string, credentialId: string, publicKey: `0x${string}`, address: Address_2, dev?: boolean, account?: AccountRecord): Promise<void>;
+    storePasskeyAccountForLogin(credentialId: string, address: Address_2, dev?: boolean, account?: AccountRecord): Promise<void>;
     updatePreference(preference: Partial<JawProviderPreference>): void;
 }
 
@@ -1406,6 +1418,7 @@ export type ToJustanAccountParameters = {
         version: '0.8';
     } | undefined;
     factoryAddress?: Address_2 | undefined;
+    factoryData?: Hex | undefined;
     address?: Address_2 | undefined;
     eip7702Account?: LocalAccount | undefined;
     eip7702Auth?: SignAuthorizationReturnType | undefined;
