@@ -88,3 +88,32 @@ describe('jaw_status after a budget change', () => {
     });
   });
 });
+
+describe('given a budget of 0.03 USDC with 0.025 already funded into the float today', () => {
+  it('when jaw_status runs, then remainingToday is what pay can still pull', async () => {
+    const c = await connect();
+    const t = (await verifyBearer(c.access_token))?.extra?.tenant as Tenant;
+    const current = await approve(c, '0.03');
+    await getDb().insert(payments).values({
+      id: 'pay_floatfunded',
+      connectionId: t.connectionId,
+      idempotencyKey: 'float-funded',
+      requestHash: 'h',
+      permissionId: current,
+      payer: t.sessionAddress.toLowerCase(),
+      url: 'https://seller.example/x',
+      state: 'failed',
+      kind: 'refused',
+      code: 'over_cap',
+      leaseUntil: new Date(),
+      topUpAmount: '25000',
+      finishedAt: new Date(),
+    });
+    const status = await callTool(c.access_token, 'jaw_status', {});
+    expect(status.structuredContent.budget).toMatchObject({
+      perDay: { amount: '30000' },
+      spentToday: { amount: '25000' },
+      remainingToday: { amount: '5000' },
+    });
+  });
+});

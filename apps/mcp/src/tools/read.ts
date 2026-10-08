@@ -3,6 +3,7 @@ import {
   payAndFetch,
   readCurrentPeriods,
   readLiveness,
+  sumToppedUpSince,
   usdcBalance,
   usdcForNetwork,
 } from '@jaw.id/agent';
@@ -15,7 +16,7 @@ import { tenant, type Tenant } from '@/connections/auth';
 import { config } from '@/connections/config';
 import { getDb } from '@/db/client';
 import { currentGrant, type Grant } from '@/grants/store';
-import { pulledUnderOtherGrants } from '@/payments/store';
+import { entriesFor, pulledUnderOtherGrants } from '@/payments/store';
 import { publicClientFor } from '@/lib/chain';
 import { fenceText, reply } from '@/lib/fence';
 import { safeFetch } from '@/lib/safe-fetch';
@@ -45,17 +46,24 @@ const budgetOutput = z.object({
 
 const clients = { clients: { publicClient: publicClientFor } };
 
-// Spent counts what the connection's replaced budgets pulled in the same day, as the refill does.
-async function budgetOf(grant: Grant, connectionId: string) {
+// Spent is read as pay reads it: the larger of the chain's counter and the float this budget funded
+// in the window, plus what the connection's replaced budgets pulled the same day.
+async function budgetOf(grant: Grant, t: Tenant) {
   const target = { chainId: grant.chainId, permissionId: grant.permissionId, permission: grant.permission };
-  const [liveness, periods, earlier] = await Promise.all([
+  const [liveness, periods, earlier, entries] = await Promise.all([
     readLiveness(target, clients),
     readCurrentPeriods({ ...target, token: grant.token }, clients),
-    pulledUnderOtherGrants(getDb(), connectionId, grant.permissionId),
+    pulledUnderOtherGrants(getDb(), t.connectionId, grant.permissionId),
+    entriesFor(grant.permissionId, new Date()),
   ]);
   const asset = caip19(caip2(grant.chainId), grant.token);
   const counted = periods[0]?.period;
-  const own = counted?.status === 'ok' ? counted.spend : counted?.status === 'outside-window' ? 0n : null;
+  let own: bigint | null = counted?.status === 'outside-window' ? 0n : null;
+  if (counted?.status === 'ok') {
+    const since = new Date(counted.start * 1000).toISOString();
+    const floated = sumToppedUpSince(entries, { permissionId: grant.permissionId, payer: t.sessionAddress }, since);
+    own = counted.spend > floated ? counted.spend : floated;
+  }
   const spent = own === null ? null : own + earlier;
   const allowance = BigInt(grant.allowance);
   const left = spent === null ? null : spent >= allowance ? 0n : allowance - spent;
@@ -81,7 +89,7 @@ function readinessOf(liveness: Awaited<ReturnType<typeof readLiveness>> | undefi
 
 async function readinessFor(t: Tenant): Promise<Readiness> {
   const grant = await currentGrant(t.connectionId);
-  return readinessOf(grant && (await budgetOf(grant, t.connectionId)).liveness);
+  return readinessOf(grant && (await budgetOf(grant, t)).liveness);
 }
 
 const fenced = (source: string, text: string) => ({ type: 'text' as const, text: fenceText(source, text, 2000) });
@@ -116,7 +124,7 @@ async function status(t: Tenant) {
     balanceOf(network, t.sessionAddress),
     currentGrant(t.connectionId),
   ]);
-  const read = grant && (await budgetOf(grant, t.connectionId));
+  const read = grant && (await budgetOf(grant, t));
   const ready = readinessOf(read?.liveness);
   const left = read?.budget.remainingToday;
   return statusOutput.parse({
