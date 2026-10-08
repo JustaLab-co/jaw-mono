@@ -2,7 +2,7 @@ import type { PermissionState } from '@jaw.id/agent';
 import { PERMISSION_MANAGER_ABI } from '@jaw.id/agent';
 import { randomBytes } from 'node:crypto';
 import { eq } from 'drizzle-orm';
-import { decodeFunctionData, erc20Abi, type Address, type Hex, type PublicClient } from 'viem';
+import { decodeFunctionData, erc20Abi, maxUint256, type Address, type Hex, type PublicClient } from 'viem';
 import { beforeAll, describe, expect, it } from 'vitest';
 import { getDb } from '@/db/client';
 import { grants, payments, settings } from '@/db/schema';
@@ -222,6 +222,16 @@ describe('given a funded payer with nothing held and a live budget', () => {
     expect(result.structuredContent).toMatchObject({ revoked: [permissionId], swept: '23750', txHash: TX });
     expect(quoted[0].map((call) => call.to)).toEqual([MANAGER, USDC, USDC]);
     expect(await listed(c.access_token)).toBe(401);
+  });
+
+  it('when the fee is quoted, then the quoted batch leaves the paymaster room for any fee', async () => {
+    const { tenant } = await budgetConnection(async () => approved);
+    const { deps, quoted } = fakes({ float: 30_000n });
+
+    await disconnect(tenant, deps);
+
+    // The bundler runs the paymaster's postOp while it estimates; a small cap there fails the quote.
+    expect(args(quoted[0][2])).toEqual({ functionName: 'approve', args: [PAYMASTER, maxUint256] });
   });
 
   it('when the agent disconnects, then the last call caps what the paymaster can take at the reserve', async () => {

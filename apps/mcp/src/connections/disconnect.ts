@@ -14,7 +14,7 @@ import {
   PERMISSIONS_MANAGER_ADDRESS,
 } from '@jaw.id/core';
 import { and, eq, gt, inArray, isNull, sql } from 'drizzle-orm';
-import { encodeFunctionData, erc20Abi, formatUnits, isAddressEqual, type Address, type Hex } from 'viem';
+import { encodeFunctionData, erc20Abi, formatUnits, isAddressEqual, maxUint256, type Address, type Hex } from 'viem';
 import { privateKeyToAccount } from 'viem/accounts';
 import { z } from 'zod';
 import { chainClients } from '@/adapters/session-host';
@@ -255,9 +255,10 @@ async function returnFunds(tx: Tx, t: Tenant, deps: DisconnectDeps): Promise<Ret
       data: encodeFunctionData({ abi: erc20Abi, functionName: 'approve', args: [sender.paymaster, reserve] }),
     },
   ];
-  // Quoted with one unit amounts: the fee does not depend on them, and a
-  // simulation that moves the whole float leaves nothing to pay the fee with.
-  const fee = await sender.quote(batch(1n, 1n)).catch((err) => {
+  // Quoted with a one unit transfer and an unbounded allowance: the fee does not
+  // depend on either, a simulation that moves the whole float leaves nothing to
+  // pay the fee with, and one capped at a unit fails the paymaster's postOp.
+  const fee = await sender.quote(batch(1n, maxUint256)).catch((err) => {
     log('error', { msg: 'disconnect quote unavailable', error: errorLabel(err) });
     return undefined;
   });
