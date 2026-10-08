@@ -1,12 +1,12 @@
 import { randomBytes } from 'node:crypto';
 import type { ChainClients } from '@jaw.id/agent';
-import { eq, inArray } from 'drizzle-orm';
+import { and, count, eq, inArray, isNotNull, sql } from 'drizzle-orm';
 import { encodeAbiParameters, encodeEventTopics, parseAbi, type Address, type Hex, type PublicClient } from 'viem';
 import { beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { verifyBearer, type Tenant } from '@/connections/auth';
-import { connect, setTestEnv } from '@/connections/testkit';
+import { connect, setTestEnv, token } from '@/connections/testkit';
 import { getDb } from '@/db/client';
-import { auditEvents, payments } from '@/db/schema';
+import { auditEvents, oauthPayloads, payments } from '@/db/schema';
 import { useTestDb } from '@/db/test-db';
 import { render } from '@/payments/render';
 import { purge, reconcile } from './run';
@@ -267,5 +267,51 @@ describe('cron and metrics routes', () => {
     const text = await res.text();
     expect(text).toMatch(/^jaw_mcp_payments\{state="signed"\} \d+$/m);
     expect(text).toMatch(/^jaw_mcp_payments_backlog [1-9]\d*$/m);
+  });
+
+  // Leaves each used refresh token holding its wrap a second past the retry window.
+  const wrapsPastWindow = async (n: number) => {
+    const issued = await Promise.all(Array.from({ length: n }, () => connect()));
+    for (const c of issued) {
+      await token({ grant_type: 'refresh_token', refresh_token: c.refresh_token, client_id: 'jaw-cli' });
+    }
+    await getDb().execute(
+      sql`update oauth_payloads set consumed_at = now() - interval '61 seconds'
+          where model = 'RefreshToken' and consumed_at is not null`
+    );
+  };
+  const wrapsLeft = async () => {
+    const [{ n }] = await getDb()
+      .select({ n: count() })
+      .from(oauthPayloads)
+      .where(
+        and(
+          eq(oauthPayloads.model, 'RefreshToken'),
+          isNotNull(oauthPayloads.consumedAt),
+          isNotNull(oauthPayloads.keyWrap)
+        )
+      );
+    return n;
+  };
+
+  it('given a wrap past the window, when the cron runs and the reconciler throws, then the wrap is gone', async () => {
+    await wrapsPastWindow(1);
+    expect(await wrapsLeft()).toBe(1);
+    await getDb().execute(sql`alter table payments rename to payments_away`);
+    try {
+      expect((await call('cron', 'cron-secret')).status).toBe(500);
+    } finally {
+      await getDb().execute(sql`alter table payments_away rename to payments`);
+    }
+    expect(await wrapsLeft()).toBe(0);
+  });
+
+  it('given two wraps past the window, when metrics are read, then the gauge counts them until a sweep', async () => {
+    await wrapsPastWindow(2);
+    const gauge = async () =>
+      (await (await call('metrics', 'cron-secret')).text()).match(/^jaw_mcp_wraps_past_window .*$/m)?.[0];
+    expect(await gauge()).toBe('jaw_mcp_wraps_past_window 2');
+    await call('cron', 'cron-secret');
+    expect(await gauge()).toBe('jaw_mcp_wraps_past_window 0');
   });
 });
