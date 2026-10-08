@@ -27,7 +27,13 @@ const ROUTES = {
   '/overcap': { scheme: 'exact', amount: '2000000', asset: USDC },
   '/wrong-asset': { scheme: 'exact', amount: '5000', asset: '0x3333333333333333333333333333333333333333' },
   '/upto': { scheme: 'upto', amount: '5000', asset: USDC },
-  '/variable': { scheme: 'exact', get amount() { return variablePrice; }, asset: USDC },
+  '/variable': {
+    scheme: 'exact',
+    get amount() {
+      return variablePrice;
+    },
+    asset: USDC,
+  },
   '/slow': { scheme: 'exact', amount: '5000', asset: USDC, delayMs: 8000 },
 };
 
@@ -66,7 +72,11 @@ http
     const signed = req.headers['payment-signature'];
     if (!signed) {
       log({ path, event: 'challenge' });
-      const challenge = { x402Version: 2, resource: { url: `http://localhost:${port}${path}` }, accepts: [requirement] };
+      const challenge = {
+        x402Version: 2,
+        resource: { url: `http://localhost:${port}${path}` },
+        accepts: [requirement],
+      };
       return res.writeHead(402, { 'PAYMENT-REQUIRED': b64(challenge), 'content-type': 'application/json' }).end('{}');
     }
     if (route.delayMs) await new Promise((r) => setTimeout(r, route.delayMs));
@@ -79,27 +89,58 @@ http
       domain: { name: 'USDC', version: '2', chainId: 84532, verifyingContract: USDC },
       types: TYPES,
       primaryType: 'TransferWithAuthorization',
-      message: { ...auth, value: BigInt(auth.value), validAfter: BigInt(auth.validAfter), validBefore: BigInt(auth.validBefore) },
+      message: {
+        ...auth,
+        value: BigInt(auth.value),
+        validAfter: BigInt(auth.validAfter),
+        validBefore: BigInt(auth.validBefore),
+      },
       signature: payload.payload.signature,
     };
     try {
-      if (await verifyTypedData(typed)) { valid = true; verifiedBy = 'ecdsa'; }
+      if (await verifyTypedData(typed)) {
+        valid = true;
+        verifiedBy = 'ecdsa';
+      }
     } catch (err) {
       log({ path, event: 'verify-error', via: 'ecdsa', error: String(err) });
     }
     if (!valid) {
       try {
-        if (await chain.verifyTypedData(typed)) { valid = true; verifiedBy = 'chain'; }
+        if (await chain.verifyTypedData(typed)) {
+          valid = true;
+          verifiedBy = 'chain';
+        }
       } catch (err) {
         log({ path, event: 'verify-error', via: 'chain', error: String(err) });
       }
     }
     const terms = auth.to.toLowerCase() === PAY_TO && auth.value === route.amount;
-    log({ path, event: 'payment', from: auth.from, value: auth.value, to: auth.to, signatureValid: valid, verifiedBy, termsMatch: terms });
+    log({
+      path,
+      event: 'payment',
+      from: auth.from,
+      value: auth.value,
+      to: auth.to,
+      signatureValid: valid,
+      verifiedBy,
+      termsMatch: terms,
+    });
     if (!valid || !terms) {
-      return res.writeHead(402, { 'PAYMENT-REQUIRED': b64({ x402Version: 2, error: 'invalid', resource: { url: path }, accepts: [requirement] }) }).end('{}');
+      return res
+        .writeHead(402, {
+          'PAYMENT-REQUIRED': b64({
+            x402Version: 2,
+            error: 'invalid',
+            resource: { url: path },
+            accepts: [requirement],
+          }),
+        })
+        .end('{}');
     }
     const receipt = { success: true, transaction: TX, network: 'eip155:84532', payer: auth.from, amount: route.amount };
-    res.writeHead(200, { 'PAYMENT-RESPONSE': b64(receipt), 'content-type': 'application/json' }).end(JSON.stringify({ resolved: 'vitalik.eth', paidBy: auth.from }));
+    res
+      .writeHead(200, { 'PAYMENT-RESPONSE': b64(receipt), 'content-type': 'application/json' })
+      .end(JSON.stringify({ resolved: 'vitalik.eth', paidBy: auth.from }));
   })
   .listen(Number(port), () => log({ event: 'listening', port }));

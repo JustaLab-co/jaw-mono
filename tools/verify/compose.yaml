@@ -8,10 +8,10 @@ services:
       POSTGRES_USER: jaw
       POSTGRES_PASSWORD: jaw
       POSTGRES_DB: jaw_mcp
-    ports: ["${PG_PORT:-0}:5432"]
+    ports: ['${PG_PORT:-0}:5432']
     tmpfs: [/var/lib/postgresql/data]
     healthcheck:
-      test: ["CMD", "pg_isready", "-U", "jaw"]
+      test: ['CMD', 'pg_isready', '-U', 'jaw']
       interval: 1s
       retries: 30
   mcp:
@@ -27,7 +27,7 @@ services:
       JAW_KEYS_URL: ${JAW_KEYS_URL:-}
       JAW_MCP_API_KEY: ${JAW_MCP_API_KEY:-}
       JAW_MCP_INSECURE_FETCH_HOSTS: ${JAW_MCP_INSECURE_FETCH_HOSTS:-}
-    ports: ["${MCP_PORT:-0}:3000"]
-    extra_hosts: ["host.docker.internal:host-gateway"]
+    ports: ['${MCP_PORT:-0}:3000']
+    extra_hosts: ['host.docker.internal:host-gateway']
     depends_on:
       postgres: { condition: service_healthy }
