@@ -756,7 +756,9 @@ describe('given the sweep after a rotation fails', () => {
 
   it('when the sweep fails with a connection error, then the refresh still answers 200', async () => {
     await failSweep('08006');
-    expect((await refresh(first.refresh_token)).status).toBe(200);
+    const rotated = await refresh(first.refresh_token);
+    expect(rotated.status).toBe(200);
+    expect((await refresh(rotated.body.refresh_token)).status).toBe(200);
   });
 
   it('when the trigger is gone and another connection rotates, then the stranded wrap is gone', async () => {

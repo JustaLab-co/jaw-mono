@@ -1,4 +1,4 @@
-import { randomBytes } from 'node:crypto';
+import { createHash, randomBytes } from 'node:crypto';
 import type { ChainClients } from '@jaw.id/agent';
 import { and, count, eq, inArray, isNotNull, sql } from 'drizzle-orm';
 import { encodeAbiParameters, encodeEventTopics, parseAbi, type Address, type Hex, type PublicClient } from 'viem';
@@ -275,10 +275,11 @@ describe('cron and metrics routes', () => {
     for (const c of issued) {
       await token({ grant_type: 'refresh_token', refresh_token: c.refresh_token, client_id: 'jaw-cli' });
     }
-    await getDb().execute(
-      sql`update oauth_payloads set consumed_at = now() - interval '61 seconds'
-          where model = 'RefreshToken' and consumed_at is not null`
-    );
+    const keys = issued.map((c) => createHash('sha256').update(`RefreshToken:${c.refresh_token}`).digest('hex'));
+    await getDb()
+      .update(oauthPayloads)
+      .set({ consumedAt: sql`now() - interval '61 seconds'` })
+      .where(inArray(oauthPayloads.key, keys));
   };
   const wrapsLeft = async () => {
     const [{ n }] = await getDb()
