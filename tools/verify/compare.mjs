@@ -1,5 +1,5 @@
 // Diffs head against baseline evidence for one name, after blanking the values
-// that differ on every run (nonces, deadlines, timestamps, the payer address).
+// that differ on every run (nonces, deadlines, session expiry, timestamps, the payer address).
 // Usage: node compare.mjs <run-dir> <name>   Exits 1 when they differ.
 import { readFileSync, writeFileSync, existsSync } from 'node:fs';
 const [run, name] = process.argv.slice(2);
@@ -9,6 +9,7 @@ const normalize = (text) =>
   text
     .replace(/(\\*"nonce\\*"\s*:\s*\\*")0x[0-9a-fA-F]{64}/g, '$1<nonce>')
     .replace(/(\\*"(deadline|validBefore)\\*"\s*:\s*\\*")\d+/g, '$1<deadline>')
+    .replace(/("expiry"\s*:\s*)\d+/g, '$1<expiry>')
     .replace(/\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d(\.\d+)?Z/g, '<time>')
     .replace(/0x[0-9a-fA-F]{40}/g, (a) =>
       a.toLowerCase() === '0x2222222222222222222222222222222222222222' ? a : '<address>'
