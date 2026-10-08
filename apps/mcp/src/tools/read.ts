@@ -46,6 +46,12 @@ const budgetOutput = z.object({
 
 const clients = { clients: { publicClient: publicClientFor } };
 
+// A chain timestamp can be past what a Date holds (an open-ended permission), and toISOString throws on it.
+function isoOf(seconds: number): string | undefined {
+  const at = new Date(seconds * 1000);
+  return Number.isNaN(at.getTime()) ? undefined : at.toISOString();
+}
+
 // Spent is read as pay reads it: the larger of the chain's counter and the float this budget funded
 // in the window, plus what the connection's replaced budgets pulled the same day.
 async function budgetOf(grant: Grant, t: Tenant) {
@@ -60,7 +66,7 @@ async function budgetOf(grant: Grant, t: Tenant) {
   const counted = periods[0]?.period;
   let own: bigint | null = counted?.status === 'outside-window' ? 0n : null;
   if (counted?.status === 'ok') {
-    const since = new Date(counted.start * 1000).toISOString();
+    const since = isoOf(counted.start);
     const floated = sumToppedUpSince(entries, { permissionId: grant.permissionId, payer: t.sessionAddress }, since);
     own = counted.spend > floated ? counted.spend : floated;
   }
@@ -74,7 +80,7 @@ async function budgetOf(grant: Grant, t: Tenant) {
       perDay: { amount: grant.allowance, asset },
       spentToday: spent === null ? null : { amount: spent.toString(), asset },
       remainingToday: left === null ? null : { amount: left.toString(), asset },
-      resetsAt: counted?.status === 'ok' ? new Date((counted.end + 1) * 1000).toISOString() : null,
+      resetsAt: (counted?.status === 'ok' && isoOf(counted.end + 1)) || null,
       expiresAt: grant.expiresAt.toISOString(),
     }),
   };
