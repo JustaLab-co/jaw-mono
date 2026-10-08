@@ -50,8 +50,9 @@ fi
 
 for which in head base; do node "$HERE/home.mjs" "$REPO" "$W/home-$which" >/dev/null; done
 PORT=$(node -e 'const s=require("net").createServer().listen(0,()=>{console.log(s.address().port);s.close()})')
-# nohup keeps the seller alive when a recorder or terminal that ran this script closes.
-nohup node "$HERE/seller.mjs" "$REPO" "$PORT" "$RUN/evidence/seller.log" >"$W/seller.out" 2>&1 </dev/null &
+# A new session keeps the seller alive when a recorder or terminal that ran this
+# script closes.
+perl -MPOSIX -e 'POSIX::setsid(); exec @ARGV' node "$HERE/seller.mjs" "$REPO" "$PORT" "$RUN/evidence/seller.log" >"$W/seller.out" 2>&1 </dev/null &
 SELLER_PID=$!
 for _ in $(seq 1 50); do grep -q '"listening"' "$RUN/evidence/seller.log" 2>/dev/null && break; sleep 0.2; done
 grep -q '"listening"' "$RUN/evidence/seller.log" || { echo "seller did not start" >&2; kill $SELLER_PID; exit 1; }
