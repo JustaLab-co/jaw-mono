@@ -37,21 +37,44 @@
 /apps/keys-jaw-id/src/middleware.ts                   @Ghadi8 @mariano-aguero
 /apps/keys-jaw-id/src/app/cli-bridge/page.tsx         @Ghadi8 @mariano-aguero
 /apps/keys-jaw-id/src/lib/handshake-route.ts          @Ghadi8 @mariano-aguero
-/apps/keys-jaw-id/src/components/AuthorizeScreen/     @Ghadi8 @mariano-aguero
-/apps/keys-jaw-id/src/components/ApproveScreen/       @Ghadi8 @mariano-aguero
 
-# Hosted MCP: session keys sealed into tokens, and what an approval signs
-/apps/mcp/src/connections/     @Ghadi8 @mariano-aguero
-/apps/mcp/src/approvals/       @Ghadi8 @mariano-aguero
-/packages/agent/src/approvals/ @Ghadi8 @mariano-aguero
-
-# CLI session keys
-/packages/cli/src/lib/rpc-classifier.ts     @Ghadi8 @mariano-aguero
-/packages/cli/src/lib/session-bridge.ts     @Ghadi8 @mariano-aguero
-/packages/cli/src/lib/session-config.ts     @Ghadi8 @mariano-aguero
-/packages/cli/src/lib/keystore.ts           @Ghadi8 @mariano-aguero
-/packages/cli/src/commands/session/         @Ghadi8 @mariano-aguero
-/packages/cli/src/mcp/handlers/session.ts   @Ghadi8 @mariano-aguero
-/packages/agent/src/x402/policy.ts          @Ghadi8 @mariano-aguero
-/packages/agent/src/x402/session-bridge.ts  @Ghadi8 @mariano-aguero
-/packages/agent/src/session/                @Ghadi8 @mariano-aguero
+# Mirrors .github/risky-paths: money, keys, consent, sealed tokens, migrations
+/packages/agent/src/x402/                            @Ghadi8 @mariano-aguero
+/packages/agent/src/grants/                          @Ghadi8 @mariano-aguero
+/packages/agent/src/approvals/                       @Ghadi8 @mariano-aguero
+/packages/agent/src/session/                         @Ghadi8 @mariano-aguero
+/packages/cli/src/lib/keystore.ts                    @Ghadi8 @mariano-aguero
+/packages/cli/src/lib/session-*.ts                   @Ghadi8 @mariano-aguero
+/packages/cli/src/lib/rpc-classifier.ts              @Ghadi8 @mariano-aguero
+/packages/cli/src/lib/payment-lock.ts                @Ghadi8 @mariano-aguero
+/packages/cli/src/commands/session/                  @Ghadi8 @mariano-aguero
+/packages/cli/src/commands/x402/                     @Ghadi8 @mariano-aguero
+/apps/mcp/src/payments/                              @Ghadi8 @mariano-aguero
+/apps/mcp/src/approvals/                             @Ghadi8 @mariano-aguero
+/apps/mcp/src/connections/                           @Ghadi8 @mariano-aguero
+/apps/mcp/src/grants/                                @Ghadi8 @mariano-aguero
+/apps/mcp/src/db/                                    @Ghadi8 @mariano-aguero
+/apps/mcp/drizzle/                                   @Ghadi8 @mariano-aguero
+/apps/keys-jaw-id/src/app/approve/                   @Ghadi8 @mariano-aguero
+/apps/keys-jaw-id/src/app/authorize/                 @Ghadi8 @mariano-aguero
+/apps/keys-jaw-id/src/components/ApproveScreen/      @Ghadi8 @mariano-aguero
+/apps/keys-jaw-id/src/components/AuthorizeScreen/    @Ghadi8 @mariano-aguero
+/apps/keys-jaw-id/src/components/BudgetApproval/     @Ghadi8 @mariano-aguero
+/apps/keys-jaw-id/src/components/ConnectionsScreen/  @Ghadi8 @mariano-aguero
+/apps/keys-jaw-id/src/app/connections/               @Ghadi8 @mariano-aguero
+/apps/mcp/src/reconciler/                            @Ghadi8 @mariano-aguero
+/apps/mcp/src/tools/pay-and-fetch.ts                 @Ghadi8 @mariano-aguero
+/apps/mcp/src/tools/request-budget.ts                @Ghadi8 @mariano-aguero
+/apps/mcp/src/tools/prepare-transfer.ts              @Ghadi8 @mariano-aguero
+/apps/mcp/src/tools/prepare-calls.ts                 @Ghadi8 @mariano-aguero
+/apps/mcp/src/adapters/session-host.ts               @Ghadi8 @mariano-aguero
+/apps/mcp/src/lib/safe-fetch.ts                      @Ghadi8 @mariano-aguero
+/apps/mcp/src/lib/cron.ts                            @Ghadi8 @mariano-aguero
+/apps/mcp/src/app/api/cron/                          @Ghadi8 @mariano-aguero
+/apps/mcp/src/app/api/approvals/                     @Ghadi8 @mariano-aguero
+/apps/mcp/src/app/api/connections/                   @Ghadi8 @mariano-aguero
+/apps/mcp/src/app/interaction/                       @Ghadi8 @mariano-aguero
+/packages/cli/src/mcp/handlers/pay.ts                @Ghadi8 @mariano-aguero
+/packages/cli/src/mcp/handlers/session.ts            @Ghadi8 @mariano-aguero
+/packages/cli/src/lib/crypto.ts                      @Ghadi8 @mariano-aguero
+/packages/cli/src/lib/api-key.ts                     @Ghadi8 @mariano-aguero
