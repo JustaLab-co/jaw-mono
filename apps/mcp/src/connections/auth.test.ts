@@ -1,4 +1,6 @@
 import { afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
+import { getDb } from '@/db/client';
+import { connections } from '@/db/schema';
 import { useTestDb } from '@/db/test-db';
 import { connect, ISSUER, setTestEnv, token } from './testkit';
 
@@ -36,6 +38,17 @@ describe('/mcp behind OAuth', () => {
     expect(res.headers.get('www-authenticate')).toContain(
       `resource_metadata="${ISSUER}/.well-known/oauth-protected-resource/mcp"`
     );
+  });
+
+  it('given a revoked connection, when its token calls /mcp, then the 401 says the token is invalid or revoked', async () => {
+    const { access_token } = await connect();
+    await getDb().update(connections).set({ status: 'revoked', revokedAt: new Date() });
+    const res = await rpc(initialize, access_token);
+    expect(res.status).toBe(401);
+    const challenge = res.headers.get('www-authenticate');
+    expect(challenge).toContain('error="invalid_token"');
+    expect(challenge).toMatch(/error_description="[^"]*(invalid|revoked)/i);
+    expect(challenge).not.toContain('No authorization provided');
   });
 
   it('serves initialize and tools/list to a connected client', async () => {
