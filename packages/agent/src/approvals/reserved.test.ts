@@ -1,6 +1,12 @@
 import { hashTypedData, stringToHex } from 'viem';
 import { describe, expect, it } from 'vitest';
-import { consentTypedData, rejectionTypedData, RESERVED_SIGNING_REFUSAL, reservedSigningRefusal } from './reserved.js';
+import {
+  connectionsSignInTypedData,
+  consentTypedData,
+  rejectionTypedData,
+  RESERVED_SIGNING_REFUSAL,
+  reservedSigningRefusal,
+} from './reserved.js';
 
 const ACCOUNT = '0x9fD37D2cF1b32b3f7dBae480bbd44BE3De2A9e0F';
 const terms = {
@@ -48,5 +54,20 @@ describe('reserved signing requests', () => {
       expect(hashTypedData(consentTypedData(8453, { ...terms, [field]: `${value}x` })), field).not.toBe(base);
     }
     expect(hashTypedData(consentTypedData(84532, terms))).not.toBe(base);
+  });
+
+  it('reserves the connections sign-in, which binds the server and an expiry', () => {
+    const signIn = connectionsSignInTypedData(8453, {
+      issuer: 'https://mcp.jaw.id',
+      expires: '2026-10-07T12:10:00.000Z',
+    });
+    expect(signIn).toMatchObject({
+      domain: { name: 'JAW', version: '1', chainId: 8453 },
+      primaryType: 'ConnectionsSignIn',
+      message: { issuer: 'https://mcp.jaw.id', expires: '2026-10-07T12:10:00.000Z' },
+    });
+    expect(reservedSigningRefusal('eth_signTypedData_v4', [ACCOUNT, JSON.stringify(signIn)])).toBe(
+      RESERVED_SIGNING_REFUSAL
+    );
   });
 });

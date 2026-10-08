@@ -1,7 +1,9 @@
 import { createHash, randomBytes } from 'node:crypto';
-import type { SignedPayload } from '@jaw.id/agent';
+import type { GrantRequest, SignedPayload } from '@jaw.id/agent';
 import { verifyMessage, verifyTypedData, type Address, type Hex } from 'viem';
 import { privateKeyToAccount, generatePrivateKey } from 'viem/accounts';
+import { decideFromPage, readForPage, type ReadPermission } from '@/approvals/page-api';
+import { verifyBearer, type Tenant } from './auth';
 import { abort, complete, consent, details, hop, type ConsentDetails } from './interaction';
 import { oauth } from './provider';
 
@@ -102,7 +104,7 @@ export const verifyLocally = ({
   signature,
 }: {
   address: Address;
-  payload: Exclude<SignedPayload, { type: 'grant' }>;
+  payload: Extract<SignedPayload, { type: 'message' | 'typed_data' }>;
   signature: Hex;
 }) =>
   payload.type === 'message'
@@ -194,3 +196,27 @@ export async function mcp(token: string | undefined, body: object) {
 
 export const callTool = async (token: string, name: string, args: object) =>
   (await mcp(token, { method: 'tools/call', params: { name, arguments: args } })).json?.result;
+
+/** A connection with a 1 USDC daily budget approved through the page, the chain read faked by `read`. */
+export async function budgetConnection(read: ReadPermission) {
+  const c = await connect();
+  const tenant = (await verifyBearer(c.access_token))?.extra?.tenant as Tenant;
+  const id = (await callTool(c.access_token, 'jaw_request_budget', { perDay: '1' })).structuredContent.requestId;
+  const page = await readForPage(id);
+  if (page.kind !== 'ok') throw new Error(page.kind);
+  const grant = (page.view.approve as { grant: GrantRequest }).grant;
+  const permission = {
+    permissionId: `0x${randomBytes(32).toString('hex')}` as Hex,
+    account: grant.address,
+    spender: grant.spender,
+    start: 1_780_000_000,
+    end: grant.expiry,
+    salt: '0x2a',
+    calls: [{ target: grant.permissions.calls[0].target, selector: '0xa9059cbb' }],
+    spends: grant.permissions.spends,
+  };
+  const post = { verdict: 'approved', previewHash: page.view.previewHash, permission };
+  const decided = await decideFromPage(id, post, verifyLocally, new Date(), read);
+  if (decided.kind !== 'ok') throw new Error(decided.kind);
+  return { c, tenant, sessionAddress: tenant.sessionAddress, permissionId: permission.permissionId, permission };
+}

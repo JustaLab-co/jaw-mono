@@ -14,7 +14,7 @@ import {
 import { sql } from 'drizzle-orm';
 import { erc20Abi, isAddressEqual, type Address, type Hex } from 'viem';
 import { sessionOf } from '@/adapters/session-host';
-import { getDb } from '@/db/client';
+import { getDb, type Tx } from '@/db/client';
 import type { Grant } from '@/grants/store';
 import { nonceUsed } from './confirm';
 import { entriesFor, holdingRows, pulledUnderOtherGrants, recordTopUp, reserve, type PaymentRow } from './store';
@@ -24,7 +24,7 @@ export type EnsureFunds = NonNullable<PayAndFetchOptions['ensureFunds']>;
 /** Kept for the paid send when the refill takes its share of the time budget. */
 export const SEND_RESERVE_MS = 20_000;
 const MIN_REFILL_MS = 5_000;
-const LOCK_NOT_AVAILABLE = '55P03';
+export const LOCK_NOT_AVAILABLE = '55P03';
 
 interface RefillContext {
   rowId: string;
@@ -59,7 +59,11 @@ function inTurn<T>(key: string, work: () => Promise<T>): Promise<T> {
  * already consumed was taken out of the balance read alongside it, so it holds
  * nothing more; one the chain cannot answer about holds its ceiling.
  */
-async function stillHeld(rows: PaymentRow[], clients: ChainClients, blockNumber: bigint | undefined): Promise<bigint> {
+export async function stillHeld(
+  rows: PaymentRow[],
+  clients: ChainClients,
+  blockNumber: bigint | undefined
+): Promise<bigint> {
   const holds = await Promise.all(
     rows.map(async (row) => {
       if (row.state === 'pending') return BigInt(row.reserved as string);
@@ -70,6 +74,12 @@ async function stillHeld(rows: PaymentRow[], clients: ChainClients, blockNumber:
     })
   );
   return holds.reduce((sum, held) => sum + held, 0n);
+}
+
+/** Serializes everything that reads and moves one connection's float, until the transaction ends. */
+export async function lockFloat(tx: Tx, connectionId: string, waitMs: number): Promise<void> {
+  await tx.execute(sql`select set_config('lock_timeout', ${`${waitMs}ms`}, true)`);
+  await tx.execute(sql`select pg_advisory_xact_lock(hashtext(${`refill:${connectionId}`}))`);
 }
 
 const noRefill: TopUpExecutor = {
@@ -115,8 +125,7 @@ export function refillHook(c: RefillContext): EnsureFunds {
       let funded: TopUpOutcome | undefined;
       try {
         return await getDb().transaction(async (tx) => {
-          await tx.execute(sql`select set_config('lock_timeout', ${`${waitMs}ms`}, true)`);
-          await tx.execute(sql`select pg_advisory_xact_lock(hashtext(${`refill:${c.connectionId}`}))`);
+          await lockFloat(tx, c.connectionId, waitMs);
           await reserve(tx, c.rowId, c.token, requirement.amount);
           // The balance and the nonces it is netted against are read at one block, so a
           // payment mined between two reads is neither in the balance nor held, never both.

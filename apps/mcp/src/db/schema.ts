@@ -1,5 +1,6 @@
 import { sql } from 'drizzle-orm';
 import {
+  bigserial,
   check,
   index,
   integer,
@@ -78,6 +79,8 @@ export const connections = pgTable(
     revokedAt: timestamp('revoked_at', { withTimezone: true }),
   },
   (t) => [
+    // The connections page finds an account's connections whatever case the address was stored in.
+    index('connections_account_lower_index').on(sql`lower(${t.account})`),
     check(
       'connection_status_shape',
       sql`(${t.status} = 'pending' and ${t.ticketHash} is not null and ${t.grantId} is null)
@@ -113,17 +116,27 @@ export const approvalRequests = pgTable(
     signature: text('signature'),
     assertionRef: text('assertion_ref'),
     permissionId: text('permission_id'),
+    callsId: text('calls_id'),
+    txHash: text('tx_hash'),
+    // How to fetch a payment's resource again. Never loaded with the request: the agent's headers can carry secrets.
+    sellerRequest: jsonb('seller_request'),
   },
   (t) => [
     index().on(t.connectionId, t.createdAt),
+    // One userOp proves one approval.
+    uniqueIndex()
+      .on(t.callsId)
+      .where(sql`${t.callsId} is not null`),
+    check('approval_seller_request', sql`${t.kind} = 'payment' or ${t.sellerRequest} is null`),
     check(
       'approval_evidence',
       sql`(${t.status} = 'pending') = (${t.decidedAt} is null and ${t.previewHash} is null and ${t.payloadHash} is null)`
     ),
     check(
       'approval_proof',
-      sql`(${t.status} = 'pending' and ${t.signature} is null and ${t.assertionRef} is null and ${t.permissionId} is null)
-        or (${t.status} <> 'pending' and (${t.signature} is null) = (${t.assertionRef} is null) and (${t.signature} is null) <> (${t.permissionId} is null))`
+      sql`(${t.status} = 'pending' and ${t.signature} is null and ${t.assertionRef} is null and ${t.permissionId} is null and ${t.callsId} is null and ${t.txHash} is null)
+        or (${t.status} <> 'pending' and (${t.signature} is null) = (${t.assertionRef} is null) and (${t.callsId} is null) = (${t.txHash} is null)
+          and (${t.signature} is not null)::int + (${t.permissionId} is not null)::int + (${t.callsId} is not null)::int = 1)`
     ),
   ]
 );
@@ -164,7 +177,9 @@ export const payments = pgTable(
       .references(() => connections.id),
     idempotencyKey: text('idempotency_key').notNull(),
     requestHash: text('request_hash').notNull(),
-    permissionId: text('permission_id').notNull(),
+    permissionId: text('permission_id'),
+    // Set when the account owner approved paying this one request, instead of a budget.
+    approvalId: text('approval_id').references(() => approvalRequests.id),
     payer: text('payer').notNull(),
     url: text('url').notNull(),
     state: text('state', { enum: ['pending', 'signed', 'settled', 'failed', 'unknown'] })
@@ -201,11 +216,18 @@ export const payments = pgTable(
   (t) => [
     uniqueIndex().on(t.connectionId, t.idempotencyKey),
     uniqueIndex().on(t.payer, t.nonce),
+    uniqueIndex('payments_payer_tx_hash_index')
+      .on(t.payer, sql`lower(${t.txHash})`)
+      .where(sql`${t.txHash} is not null`),
+    uniqueIndex()
+      .on(t.approvalId)
+      .where(sql`${t.approvalId} is not null`),
     index().on(t.connectionId, t.createdAt, t.id),
     index().on(t.permissionId, t.createdAt),
     index()
       .on(t.signedAt)
       .where(sql`${t.state} in ('signed', 'unknown')`),
+    check('payment_source', sql`(${t.permissionId} is null) <> (${t.approvalId} is null)`),
     check(
       'payment_shape',
       sql`(${t.state} = 'pending' and ${t.nonce} is null and ${t.authorization} is null and ${t.fenced} is null)
@@ -216,4 +238,21 @@ export const payments = pgTable(
         or (${t.state} = 'failed' and ${t.finishedAt} is not null)`
     ),
   ]
+);
+
+// One row per tool call. Arguments and results are never stored: they can carry
+// seller headers, signatures and amounts the owner did not ask to keep.
+export const auditEvents = pgTable(
+  'audit_events',
+  {
+    id: bigserial('id', { mode: 'number' }).primaryKey(),
+    connectionId: text('connection_id')
+      .notNull()
+      .references(() => connections.id),
+    tool: text('tool').notNull(),
+    outcome: text('outcome').notNull(),
+    requestId: text('request_id'),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [index().on(t.connectionId, t.createdAt)]
 );

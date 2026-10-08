@@ -1,5 +1,6 @@
 import {
   decide,
+  executedAsSigned,
   grantMatches,
   parseGrantedPermission,
   payloadHash,
@@ -8,17 +9,26 @@ import {
   toPageView,
   type ApprovalPageView,
   type ApprovalRequest,
+  type Call,
   type DecisionProof,
   type GrantRequest,
   type PermissionReadTarget,
   type PermissionState,
 } from '@jaw.id/agent';
-import { isHex, keccak256, type Address, type Hex } from 'viem';
+import { isAddressEqual, isHex, keccak256, size, type Address, type Hex } from 'viem';
 import { SUPPORTED_CHAINS } from '@/connections/config';
 import { publicClientFor, verifyOnChain, type VerifySignature } from '@/lib/chain';
 import { log } from '@/lib/edge';
+import { isPaymentsPaused } from '@/db/settings';
 import { outstandingRevokes } from '@/grants/store';
-import { connectionLive, connectionOf, findById, recordDecision, type NewGrant } from './store';
+import { oneOffRow, runOneOff, type PaymentApproval } from '@/payments/one-off';
+import type { PaymentRow, SellerRequest } from '@/payments/store';
+import { readUserOp as readOnBundler, type ReadUserOp } from './bundler';
+import { describeCall } from './decode';
+import { connectionLive, connectionOf, findById, recordDecision, sellerRequestOf, type NewGrant } from './store';
+
+/** What the one-off came to, without any seller text: the page is not authenticated. */
+type OneOffSummary = Pick<PaymentRow, 'state' | 'kind' | 'code'>;
 
 export type PageOutcome =
   | { kind: 'ok'; view: PageView }
@@ -27,17 +37,20 @@ export type PageOutcome =
   | { kind: 'bad_signature' }
   | { kind: 'grant_mismatch' }
   | { kind: 'grant_not_found' }
+  | { kind: 'calls_mismatch' }
+  | { kind: 'calls_pending' }
   | { kind: 'connection_revoked' }
   | { kind: 'unsupported_chain' }
   | { kind: 'verification_unavailable' }
+  | { kind: 'payments_paused' }
   | { kind: 'preview_changed' }
   | { kind: 'not_pending'; view: ApprovalPageView };
 
-type PageView = ApprovalPageView & { revoke?: Hex[] };
+type PageView = ApprovalPageView & { revoke?: Hex[]; payment?: OneOffSummary };
 
 export type ReadPermission = (target: PermissionReadTarget) => Promise<PermissionState>;
 
-const readOnChain: ReadPermission = (target) =>
+export const readOnChain: ReadPermission = (target) =>
   readPermissionState(target, { clients: { publicClient: publicClientFor } });
 
 type Refused = Exclude<PageOutcome['kind'], 'ok' | 'not_pending'>;
@@ -61,6 +74,27 @@ async function checkSignature(
   if (valid === undefined) return { refused: 'verification_unavailable' };
   if (!valid) return { refused: 'bad_signature' };
   return { proof: { type: 'signature', signature, assertionRef: keccak256(signature) } };
+}
+
+async function checkCalls(
+  request: ApprovalRequest,
+  calls: Call[],
+  callsId: unknown,
+  read: ReadUserOp
+): Promise<Checked> {
+  const { body } = request;
+  if (!isHex(callsId) || size(callsId) !== 32 || (body.kind !== 'transfer' && body.kind !== 'calls')) {
+    return { refused: 'invalid_request' };
+  }
+  const op = await read({ chainId: request.chainId, account: request.account, callsId }).catch(
+    unavailable('userOp read')
+  );
+  if (!op) return { refused: 'verification_unavailable' };
+  if (op.status === 'pending') return { refused: 'calls_pending' };
+  const ranAsSigned =
+    op.success && isAddressEqual(op.sender, request.account) && executedAsSigned(calls, body.gas, op.calls);
+  if (!ranAsSigned) return { refused: 'calls_mismatch' };
+  return { proof: { type: 'calls', callsId, txHash: op.txHash } };
 }
 
 async function checkPermission(
@@ -96,6 +130,17 @@ async function checkPermission(
   };
 }
 
+/** An approved payment: the row it opens and how to ask the seller again. */
+async function oneOffOf(request: ApprovalRequest) {
+  const { body } = request;
+  if (request.state.status !== 'approved' || body.kind !== 'payment') return undefined;
+  const approval: PaymentApproval = { ...request, body };
+  const seller: SellerRequest = await sellerRequestOf(request.id);
+  return { approval, seller, row: oneOffRow(approval, seller) };
+}
+
+const pageView = (request: ApprovalRequest) => toPageView(request, describeCall);
+
 export async function readForPage(
   id: string,
   now = new Date(),
@@ -107,7 +152,7 @@ export async function readForPage(
 
 // An approved budget lists the budgets it replaced that the chain does not show revoked yet.
 async function withRevokes(request: ApprovalRequest, read: ReadPermission): Promise<PageView> {
-  const view = toPageView(request);
+  const view = pageView(request);
   if (request.body.kind !== 'budget' || request.state.status !== 'approved') return view;
   return { ...view, revoke: await outstandingRevokes(await connectionOf(request.id), read) };
 }
@@ -117,35 +162,47 @@ export async function decideFromPage(
   post: unknown,
   verify: VerifySignature = verifyOnChain,
   now = new Date(),
-  readPermission: ReadPermission = readOnChain
+  readPermission: ReadPermission = readOnChain,
+  readUserOp: ReadUserOp = readOnBundler
 ): Promise<PageOutcome> {
-  const { verdict, signature, previewHash, permission } = (post ?? {}) as Record<string, unknown>;
+  const { verdict, signature, previewHash, permission, callsId } = (post ?? {}) as Record<string, unknown>;
   if ((verdict !== 'approved' && verdict !== 'rejected') || !isHex(previewHash)) {
     return { kind: 'invalid_request' };
   }
   const request = await findById(id, now);
   if (!request) return { kind: 'not_found' };
-  const view = toPageView(request);
+  const view = pageView(request);
   if (request.state.status !== 'pending') return { kind: 'not_pending', view };
   if (view.previewHash !== previewHash) return { kind: 'preview_changed' };
   if (!(await connectionLive(request.id))) return { kind: 'connection_revoked' };
   if (!SUPPORTED_CHAINS[request.chainId]) return { kind: 'unsupported_chain' };
+  // Before the decision is recorded, so the owner can approve again once payments resume.
+  if (verdict === 'approved' && request.body.kind === 'payment' && (await isPaymentsPaused())) {
+    return { kind: 'payments_paused' };
+  }
 
   const payload = signedPayload(request, verdict);
   const checked =
     payload.type === 'grant'
       ? await checkPermission(request, payload.grant, permission, readPermission)
-      : await checkSignature(request, payload, signature, verify);
+      : payload.type === 'calls'
+        ? await checkCalls(request, payload.calls, callsId, readUserOp)
+        : await checkSignature(request, payload, signature, verify);
   if ('refused' in checked) return { kind: checked.refused };
 
   const evidence = { previewHash, payloadHash: payloadHash(payload), proof: checked.proof, decidedAt: now };
   const result = decide(request, verdict, evidence, now);
-  if (!result.ok || !(await recordDecision(result.request, checked.grant))) {
+  const oneOff = result.ok ? await oneOffOf(result.request) : undefined;
+  const effect = oneOff ? { payment: oneOff.row } : checked.grant && { grant: checked.grant };
+  if (!result.ok || !(await recordDecision(result.request, effect))) {
     if (!(await connectionLive(request.id))) return { kind: 'connection_revoked' };
     const current = await findById(id, new Date());
-    return current ? { kind: 'not_pending', view: toPageView(current) } : { kind: 'not_found' };
+    return current ? { kind: 'not_pending', view: pageView(current) } : { kind: 'not_found' };
   }
-  return { kind: 'ok', view: await withRevokes(result.request, readPermission) };
+  const decided = await withRevokes(result.request, readPermission);
+  if (!oneOff) return { kind: 'ok', view: decided };
+  const { row } = await runOneOff(oneOff.approval, oneOff.seller, oneOff.row.id, oneOff.row.leaseToken);
+  return { kind: 'ok', view: { ...decided, payment: { state: row.state, kind: row.kind, code: row.code } } };
 }
 
 const STATUS: Record<PageOutcome['kind'], number> = {
@@ -155,9 +212,12 @@ const STATUS: Record<PageOutcome['kind'], number> = {
   bad_signature: 403,
   grant_mismatch: 422,
   grant_not_found: 409,
+  calls_mismatch: 422,
+  calls_pending: 409,
   connection_revoked: 410,
   unsupported_chain: 422,
   verification_unavailable: 503,
+  payments_paused: 503,
   preview_changed: 409,
   not_pending: 409,
 };

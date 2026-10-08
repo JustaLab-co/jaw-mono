@@ -1,7 +1,6 @@
 import type { McpServer } from '@modelcontextprotocol/server';
 import { z } from 'zod';
-import { describe, MAX_PENDING, NO_SEND_SCOPE, refusal, result, statusOutput } from '@/approvals/tools';
-import { insertUnderCap } from '@/approvals/store';
+import { ask, NO_SEND_SCOPE, refusal, statusOutput } from '@/approvals/tools';
 import { tenant } from '@/connections/auth';
 import { budgetRequest, PER_DAY } from '@/grants/request';
 
@@ -26,12 +25,7 @@ export function registerBudgetTool(server: McpServer) {
       if (!t.scopes.includes('wallet:send')) return refusal(NO_SEND_SCOPE);
       const request = budgetRequest(t, perDay, new Date());
       if (typeof request === 'string') return refusal(REFUSALS[request]);
-      if (!(await insertUnderCap(t.connectionId, request, MAX_PENDING))) {
-        return refusal(
-          `This connection already has ${MAX_PENDING} requests waiting. Wait for them or let them expire.`
-        );
-      }
-      return result(describe(request));
+      return ask(t, request);
     }
   );
 }

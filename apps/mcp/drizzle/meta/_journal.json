@@ -64,6 +64,34 @@
       "when": 1791393554568,
       "tag": "0008_grant_revokes",
       "breakpoints": true
+    },
+    {
+      "idx": 9,
+      "version": "7",
+      "when": 1791398099546,
+      "tag": "0009_one_off_payments",
+      "breakpoints": true
+    },
+    {
+      "idx": 10,
+      "version": "7",
+      "when": 1791398100806,
+      "tag": "0010_prepared_actions",
+      "breakpoints": true
+    },
+    {
+      "idx": 11,
+      "version": "7",
+      "when": 1791398469636,
+      "tag": "0011_tx_hash_and_timeout",
+      "breakpoints": true
+    },
+    {
+      "idx": 12,
+      "version": "7",
+      "when": 1791401714476,
+      "tag": "0012_connections_page",
+      "breakpoints": true
     }
   ]
 }

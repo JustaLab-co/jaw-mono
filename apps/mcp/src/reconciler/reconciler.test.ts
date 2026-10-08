@@ -6,7 +6,7 @@ import { beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { verifyBearer, type Tenant } from '@/connections/auth';
 import { connect, setTestEnv } from '@/connections/testkit';
 import { getDb } from '@/db/client';
-import { payments } from '@/db/schema';
+import { auditEvents, payments } from '@/db/schema';
 import { useTestDb } from '@/db/test-db';
 import { render } from '@/payments/render';
 import { purge, reconcile } from './run';
@@ -151,6 +151,12 @@ describe('reconciler', () => {
     expect(await rowOf(second.id)).toMatchObject({ state: 'settled', txHash: null, amount: '5000' });
   });
 
+  it('refuses a second payment of the payer holding the same transaction hash, in any case', async () => {
+    const hash = hex32();
+    await signedRow({ txHash: hash });
+    await expect(signedRow({ txHash: `0x${hash.slice(2).toUpperCase()}` })).rejects.toThrow();
+  });
+
   it('leaves a row alone while the call that signed it may still be running', async () => {
     const live = await signedRow({ leaseUntil: new Date(Date.now() + 60_000) });
     used.set(live.nonce, hex32());
@@ -219,6 +225,23 @@ describe('reconciler', () => {
     const kept = await signedRow({ deadline: new Date(Date.now() + 60_000) });
     await purge();
     expect(await rowOf(kept.id)).toBeDefined();
+  });
+});
+
+describe('audit retention', () => {
+  it('purges audit events older than ninety days and keeps recent ones', async () => {
+    const c = await connect();
+    const { connectionId } = (await verifyBearer(c.access_token))?.extra?.tenant as Tenant;
+    const day = 24 * 60 * 60 * 1000;
+    await getDb()
+      .insert(auditEvents)
+      .values([
+        { connectionId, tool: 'old', outcome: 'ok', createdAt: new Date(Date.now() - 91 * day) },
+        { connectionId, tool: 'recent', outcome: 'ok', createdAt: new Date(Date.now() - 89 * day) },
+      ]);
+    await purge();
+    const left = await getDb().select().from(auditEvents).where(eq(auditEvents.connectionId, connectionId));
+    expect(left.map((e) => e.tool)).toEqual(['recent']);
   });
 });
 

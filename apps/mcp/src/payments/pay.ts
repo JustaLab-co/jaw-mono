@@ -12,6 +12,8 @@ import {
   type PaymentOutcome,
   type PermissionReadTarget,
   type PermissionState,
+  type Payer,
+  type SignedAuthorization,
   type TopUpExecutor,
 } from '@jaw.id/agent';
 import type { Address, Hex } from 'viem';
@@ -25,6 +27,7 @@ import { fenceText } from '@/lib/fence';
 import { safeFetch } from '@/lib/safe-fetch';
 import { confirmByReceipt, type Settled } from './confirm';
 import { refillHook } from './refill';
+import { offerOneOff } from './one-off';
 import { gate, render, type PayResult } from './render';
 import {
   claim,
@@ -109,7 +112,7 @@ async function grantLive(grant: Grant, deps: PayDeps): Promise<Unreached | undef
 }
 type Outcome = PaymentOutcome | Unreached;
 
-const thrown = (err: unknown): Unreached => ({
+export const thrown = (err: unknown): Unreached => ({
   kind: 'unreached',
   code: err instanceof FetchRefused ? 'blocked_url' : 'unreachable',
   reason: errorMessage(err),
@@ -258,22 +261,7 @@ export async function pay(t: Tenant, input: PayInput, deps: PayDeps = liveDeps()
   const payer = payerFor(t, deps.clients);
   const sent = { method: request.method, headers: request.headers, body: request.body, budget, fetch: deps.fetch };
 
-  if (claimed.kind === 'resume') {
-    const { row, authorization } = claimed;
-    const outcome = await claimedHashOnly(
-      await payAndFetch(authorization.resource, payer, {
-        ...sent,
-        attempt: { key: row.id, resume: authorization },
-      }).catch(thrown),
-      row.id
-    );
-    const conclusion = conclusionOf(outcome, true, await settledBy(outcome, row.signedAt as Date, deps.clients));
-    const fenced = fencedOf(row.url, outcome);
-    // A refused resend says nothing about the first send, which the chain or a live first call settles.
-    if (outcome.kind !== 'paid') return render(merged(row, conclusion), fenced);
-    const written = await finish(row.id, '', conclusion, fenced);
-    return render(written ?? (await rowAfter(row, conclusion)), fenced);
-  }
+  if (claimed.kind === 'resume') return resend(claimed.row, payer, sent, deps.clients);
 
   const { row, token } = claimed;
   let signed = false;
@@ -281,11 +269,54 @@ export async function pay(t: Tenant, input: PayInput, deps: PayDeps = liveDeps()
     ? ((await grantLive(grant, deps)) ??
       (await payWithinGrant(t, grant, row, token, request, payer, sent, deps, () => (signed = true))))
     : { kind: 'unreached', code: 'no_grant', reason: 'the budget ended while this payment waited' };
+  const done = await concludeSend(row, token, outcome, {
+    signed,
+    signedAt: new Date(started),
+    confirmWith: deps.clients,
+  });
+  const offer =
+    outcome.kind === 'refused' && outcome.refusal.code === 'budget_exhausted' && outcome.challenge
+      ? await offerOneOff(t, request, outcome.challenge)
+      : undefined;
+  return render(done.row, done.fenced, offer);
+}
+
+/**
+ * The tail of every send: the conclusion written from the outcome, and the row
+ * it left. Without `confirmWith` a paid row stays signed for the reconciler.
+ */
+export async function concludeSend(
+  row: PaymentRow,
+  token: string,
+  outcome: Outcome,
+  opts: { signed: boolean; signedAt: Date; confirmWith?: ChainClients }
+): Promise<{ row: PaymentRow; fenced: string[] }> {
   const checked = await claimedHashOnly(outcome, row.id);
-  const conclusion = conclusionOf(checked, signed, await settledBy(checked, new Date(started), deps.clients));
+  const settled = opts.confirmWith ? await settledBy(checked, opts.signedAt, opts.confirmWith) : undefined;
+  const conclusion = conclusionOf(checked, opts.signed, settled);
   const fenced = fencedOf(row.url, outcome);
   const written = await finish(row.id, token, conclusion, fenced);
-  return render(written ?? (await rowAfter(row, conclusion)), fenced);
+  return { row: written ?? (await rowAfter(row, conclusion)), fenced };
+}
+
+/** A previous call signed for this row and got no answer: the same proof again, under the same key. */
+export async function resend(
+  row: PaymentRow,
+  payer: Payer,
+  sent: Parameters<typeof payAndFetch>[2],
+  confirmWith?: ChainClients
+): Promise<PayResult> {
+  const authorization = row.authorization as SignedAuthorization;
+  const outcome: Outcome = await payAndFetch(authorization.resource, payer, {
+    ...sent,
+    attempt: { key: row.id, resume: authorization },
+  }).catch(thrown);
+  // A refused resend says nothing about the first send, which the chain or a live first call settles.
+  if (outcome.kind !== 'paid') {
+    return render(merged(row, conclusionOf(outcome, true, undefined)), fencedOf(row.url, outcome));
+  }
+  const done = await concludeSend(row, '', outcome, { signed: true, signedAt: row.signedAt as Date, confirmWith });
+  return render(done.row, done.fenced);
 }
 
 async function payWithinGrant(
