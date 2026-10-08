@@ -46,14 +46,21 @@ describe('given the session key of a payer', () => {
     expect(estimate.mock.calls[0][5].localAccount.address).toBe(PAYER);
   });
 
-  it('when the bundler refuses the batch because the fee is over the cap, then it reports it reverted', async () => {
-    sendCalls.mockRejectedValue(
-      new Error('Details: UserOperation reverted during simulation with reason: AA50 postOp reverted 0x7939f424')
-    );
-    const sender = await sessionSender(tenant);
+  it.each([
+    ['the bundler', 'Details: UserOperation reverted during simulation with reason: AA50 postOp reverted 0x7939f424'],
+    [
+      'the paymaster',
+      'Details: AA50 PostOp Reverted: Insufficient balance, 0.007197 USDC required but sender has 0.001 USDC',
+    ],
+  ])(
+    'when %s refuses the batch because the fee is over the cap, then it reports it reverted',
+    async (_who, message) => {
+      sendCalls.mockRejectedValue(new Error(message));
+      const sender = await sessionSender(tenant);
 
-    expect(await sender.send([call])).toEqual({ status: 'reverted' });
-  });
+      expect(await sender.send([call])).toEqual({ status: 'reverted' });
+    }
+  );
 
   it('when the bundler refuses the batch for another reason, then it throws so nothing counts as sent', async () => {
     sendCalls.mockRejectedValue(new Error('AA25 invalid account nonce'));

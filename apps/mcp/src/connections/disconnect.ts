@@ -110,9 +110,9 @@ export async function sessionSender(t: Tenant): Promise<SessionSender> {
       try {
         ({ id } = await account.sendCalls(calls));
       } catch (err) {
-        // The bundler runs the paymaster's postOp when it estimates, so a fee above
-        // the allowance the batch leaves fails there, before anything is sent.
-        if (String(err).includes('AA50 postOp reverted')) return { status: 'reverted' };
+        // The bundler and the paymaster both run its postOp before signing, so a fee
+        // above the allowance the batch leaves fails there, before anything is sent.
+        if (/AA50 postOp reverted/i.test(String(err))) return { status: 'reverted' };
         throw err;
       }
       for (const until = Date.now() + RECEIPT_MS; Date.now() < until; ) {
