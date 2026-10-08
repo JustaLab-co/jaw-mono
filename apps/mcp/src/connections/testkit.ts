@@ -102,7 +102,7 @@ export const verifyLocally = ({
   signature,
 }: {
   address: Address;
-  payload: SignedPayload;
+  payload: Exclude<SignedPayload, { type: 'grant' }>;
   signature: Hex;
 }) =>
   payload.type === 'message'

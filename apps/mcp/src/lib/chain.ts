@@ -5,16 +5,21 @@ import { config, SUPPORTED_CHAINS } from '@/connections/config';
 export type VerifySignature = (a: {
   chainId: number;
   address: Address;
-  payload: SignedPayload;
+  payload: Exclude<SignedPayload, { type: 'grant' }>;
   signature: Hex;
 }) => Promise<boolean>;
 
-/** A client for `chainId`; the configured RPC applies only to the configured chain. */
+const clients = new Map<number, PublicClient>();
+
 export function publicClientFor(chainId: number): PublicClient {
+  const cached = clients.get(chainId);
+  if (cached) return cached;
   const chain = SUPPORTED_CHAINS[chainId];
   if (!chain) throw new Error(`chain ${chainId} is not supported`);
   const { chain: configured, rpcUrl } = config();
-  return createPublicClient({ chain, transport: http(chain.id === configured.id ? rpcUrl : undefined) });
+  const client = createPublicClient({ chain, transport: http(chain.id === configured.id ? rpcUrl : undefined) });
+  clients.set(chainId, client);
+  return client;
 }
 
 export const verifyOnChain: VerifySignature = async ({ chainId, address, payload, signature }) => {

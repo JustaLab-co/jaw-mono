@@ -14,26 +14,64 @@ export interface ClientIdentity {
   reservedName: boolean;
 }
 
-// Lowercase Cyrillic and Greek letters that render like the Latin ones in "jaw".
 const LOOKALIKES: Readonly<Record<string, string>> = {
   ј: 'j',
   ϳ: 'j',
+  ᴊ: 'j',
   а: 'a',
   α: 'a',
+  ᴀ: 'a',
   ԝ: 'w',
   ѡ: 'w',
   ω: 'w',
+  ᴡ: 'w',
+  ɑ: 'a',
+  ʝ: 'j',
+  ɉ: 'j',
+  // Cherokee, by the lowercase form each capital folds to.
+  '\uAB7B': 'j',
+  '\uAB7A': 'a',
+  '\uAB83': 'w',
+  '\uABA4': 'w',
 };
 
-/** Whether `name` contains "jaw" as a word, after folding lookalikes and joining spelled-out letters. */
+const HIDDEN = /[\p{Cf}\p{Default_Ignorable_Code_Point}]/gu;
+
+const isLower = (c: string | undefined) => c !== undefined && /\p{Ll}/u.test(c);
+const isUpper = (c: string | undefined) => c !== undefined && /\p{Lu}/u.test(c);
+const isDigit = (c: string | undefined) => c !== undefined && /\p{N}/u.test(c);
+
+function foldsToJaw(chars: string[]): boolean {
+  return chars.map((c) => LOOKALIKES[c.toLowerCase()] ?? c.toLowerCase()).join('') === 'jaw';
+}
+
+function startsSegment(chars: string[], i: number): boolean {
+  const [before, prev, cur, next] = [chars[i - 2], chars[i - 1], chars[i], chars[i + 1]];
+  if (isLower(prev) && isUpper(cur)) return true;
+  if (isUpper(prev) && isUpper(cur) && isLower(next)) return true;
+  if (isUpper(before) && isUpper(prev) && isLower(cur)) return true;
+  return isDigit(prev) !== isDigit(cur);
+}
+
+function wordClaimsJaw(word: string): boolean {
+  const chars = [...word];
+  if (chars.length <= 3) return foldsToJaw(chars);
+  const capitals = !chars.some(isLower);
+  const end = chars.length - 3;
+  return (
+    (foldsToJaw(chars.slice(0, 3)) && (capitals || startsSegment(chars, 3))) ||
+    (foldsToJaw(chars.slice(end)) && (capitals || startsSegment(chars, end)))
+  );
+}
+
 function claimsJaw(name: string): boolean {
-  const folded = [...name.normalize('NFKC').toLowerCase()].map((c) => LOOKALIKES[c] ?? c).join('');
-  // Anything but a letter or digit separates words, invisible characters included.
+  // NFKD leaves accents as separate marks (NFKC would compose them back), so they drop out here.
+  const visible = name.normalize('NFKD').replace(HIDDEN, '').replace(/\p{M}/gu, '');
   const words: string[] = [];
   let letters = '';
-  for (const word of folded.split(/[^\p{L}\p{N}]+/u).filter(Boolean)) {
+  for (const word of visible.split(/[^\p{L}\p{N}]+/u).filter(Boolean)) {
     // "J.A.W" and "J A W" spell one word out of single letters.
-    if (word.length === 1) {
+    if ([...word].length === 1) {
       letters += word;
       continue;
     }
@@ -42,7 +80,7 @@ function claimsJaw(name: string): boolean {
     words.push(word);
   }
   if (letters) words.push(letters);
-  return words.includes('jaw');
+  return words.some(wordClaimsJaw);
 }
 
 export function clientIdentity(clientId: string, declaredName: string): ClientIdentity {
@@ -55,7 +93,7 @@ export function clientIdentity(clientId: string, declaredName: string): ClientId
   }
   return {
     clientId,
-    name: firstParty ?? sanitizeLine(declaredName, 64),
+    name: firstParty ?? sanitizeLine(declaredName.replace(HIDDEN, ''), 64),
     host,
     official: firstParty !== undefined,
     reservedName: firstParty === undefined && claimsJaw(declaredName),

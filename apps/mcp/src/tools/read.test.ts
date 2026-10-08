@@ -61,15 +61,16 @@ beforeAll(async () => {
 });
 
 describe('read tools', () => {
-  it('jaw_status names the account and reads no_grant with a link', async () => {
+  it('jaw_status names the account and reads no_grant, pointing at jaw_request_budget', async () => {
     const r = await callTool(token, 'jaw_status', {});
     expect(r.structuredContent).toMatchObject({
       account,
       chainId: 'eip155:84532',
-      readiness: { status: 'not_ready', reason: 'no_grant', link: 'http://keys.test/' },
+      readiness: { status: 'not_ready', reason: 'no_grant' },
+      budget: null,
       balances: { account: null, session: null },
     });
-    expect(r.content[0].text).toContain('No budget granted yet');
+    expect(r.content[0].text).toContain('jaw_request_budget');
   });
 
   it('jaw_quote prices the exact route at 5000 Base Sepolia USDC without paying', async () => {
@@ -150,7 +151,10 @@ describe('read tools', () => {
     const tools = json.result.tools as { name: string; outputSchema?: object }[];
     expect(tools.map((t) => t.name).sort()).toEqual([
       'jaw_add_funds',
+      'jaw_history',
+      'jaw_pay_and_fetch',
       'jaw_quote',
+      'jaw_request_budget',
       'jaw_request_signature',
       'jaw_request_status',
       'jaw_resolve_name',

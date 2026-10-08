@@ -1,11 +1,12 @@
 import type { AuthInfo } from '@modelcontextprotocol/server';
 import { compactDecrypt, decodeProtectedHeader } from 'jose';
 import { withMcpAuth } from 'mcp-handler';
-import type { Address } from 'viem';
+import type { Address, Hex } from 'viem';
 import { errorLabel, ipKey, log } from '@/lib/edge';
 import { config } from './config';
 import type { Scope } from './provider';
 import { findActive } from './rows';
+import { open, type Sealed } from './seal';
 
 export const RESOURCE_METADATA_PATH = '/.well-known/oauth-protected-resource/mcp';
 
@@ -17,6 +18,7 @@ export interface Tenant {
   clientName: string;
   scopes: Scope[];
   sessionAddress: Address;
+  sessionKey(): Hex;
 }
 
 interface Claims {
@@ -26,11 +28,12 @@ interface Claims {
   scope?: string;
   aud: string | string[];
   iss: string;
+  /** The session key, sealed: the only copy the server can open without the refresh token. */
+  sk: Sealed;
   exp: number;
 }
 
-/** Claims of a token this server issued for this resource and that has not expired. */
-async function decrypt(bearer: string): Promise<Claims | undefined> {
+async function decrypt(bearer: string, expired = false): Promise<Claims | undefined> {
   const { issuer, resource, ring } = config();
   let claims: Claims;
   try {
@@ -41,15 +44,23 @@ async function decrypt(bearer: string): Promise<Claims | undefined> {
     return undefined;
   }
   const audiences = Array.isArray(claims.aud) ? claims.aud : [claims.aud];
-  if (claims.iss !== issuer || !audiences.includes(resource) || claims.exp * 1000 <= Date.now()) return undefined;
+  if (claims.iss !== issuer || !audiences.includes(resource)) return undefined;
+  if (!expired && claims.exp * 1000 <= Date.now()) return undefined;
   return claims;
 }
 
+const bearerOf = (req: Request) => req.headers.get('authorization')?.match(/^Bearer (.+)$/i)?.[1];
+
 /** The connection a bearer token names, from decryption alone: a rate limit key with no database read. */
 export async function connectionKey(req: Request): Promise<string | undefined> {
-  const bearer = req.headers.get('authorization')?.match(/^Bearer (.+)$/i)?.[1];
+  const bearer = bearerOf(req);
   const claims = bearer ? await decrypt(bearer) : undefined;
   return claims ? `conn:${claims.sub}` : ipKey(req);
+}
+
+export async function clientOf(req: Request): Promise<string> {
+  const bearer = bearerOf(req);
+  return (bearer && (await decrypt(bearer, true))?.client_id) || 'unknown';
 }
 
 export async function verifyBearer(bearer: string | undefined): Promise<AuthInfo | undefined> {
@@ -68,6 +79,7 @@ export async function verifyBearer(bearer: string | undefined): Promise<AuthInfo
     clientName: row.clientName,
     scopes: scopes as Scope[],
     sessionAddress: row.sessionAddress as Address,
+    sessionKey: () => open(config().ring, claims.sk, row.id),
   };
   return {
     token: claims.jti,

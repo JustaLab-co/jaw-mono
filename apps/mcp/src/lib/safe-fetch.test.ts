@@ -1,7 +1,8 @@
 import { createServer } from 'node:http';
 import type { AddressInfo } from 'node:net';
 import { afterAll, describe, expect, it } from 'vitest';
-import { isPrivate, safeFetch } from './safe-fetch';
+import type { lookup } from 'node:dns';
+import { isPrivate, publicOnly, safeFetch } from './safe-fetch';
 
 const server = createServer((req, res) => {
   if (req.url === '/redirect') return void res.writeHead(302, { location: 'http://169.254.169.254/' }).end();
@@ -56,4 +57,32 @@ describe('isPrivate', () => {
       expect(isPrivate(address)).toBe(true);
     }
   );
+});
+
+describe('the connect-time lookup', () => {
+  const answers = ['93.184.216.34', '10.0.0.1'];
+  const rebinding = ((_host: string, _opts: unknown, cb: (e: null, a: { address: string; family: number }[]) => void) =>
+    cb(null, [{ address: answers.shift() as string, family: 4 }])) as unknown as typeof lookup;
+  const connect = publicOnly(rebinding);
+  const resolve = () =>
+    new Promise<string>((ok, fail) =>
+      connect('rebind.example', { family: 0 }, (err, address) => (err ? fail(err) : ok(address as string)))
+    );
+
+  it('pins each connection to the address it checked when the answer changes between lookups', async () => {
+    await expect(resolve()).resolves.toBe('93.184.216.34');
+    await expect(resolve()).rejects.toMatchObject({ name: 'FetchRefused' });
+  });
+
+  it('refuses an answer set that mixes a public and a private address', async () => {
+    const mixed = ((_h: string, _o: unknown, cb: (e: null, a: { address: string; family: number }[]) => void) =>
+      cb(null, [
+        { address: '93.184.216.34', family: 4 },
+        { address: '169.254.169.254', family: 4 },
+      ])) as unknown as typeof lookup;
+    const refused = new Promise((ok, fail) =>
+      publicOnly(mixed)('mixed.example', { family: 0 }, (err) => (err ? fail(err) : ok(undefined)))
+    );
+    await expect(refused).rejects.toMatchObject({ name: 'FetchRefused' });
+  });
 });

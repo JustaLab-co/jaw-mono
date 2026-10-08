@@ -42,16 +42,18 @@ export const isPrivate = (address: string) => blocked.check(address, isIP(addres
 
 // Checks the addresses the socket actually connects to, so a name cannot pass
 // with a public answer and then connect to a private one.
-const publicOnly: LookupFunction = (hostname, options, callback) => {
-  lookup(hostname, { ...options, all: true }, (err, addresses: LookupAddress[]) => {
-    if (err) return callback(err, '', 0);
-    if (addresses.some((a) => isPrivate(a.address))) {
-      return callback(new FetchRefused('the URL resolves to a private address'), '', 0);
-    }
-    if (options.all) return callback(null, addresses);
-    return callback(null, addresses[0].address, addresses[0].family);
-  });
-};
+export const publicOnly =
+  (resolve: typeof lookup = lookup): LookupFunction =>
+  (hostname, options, callback) => {
+    resolve(hostname, { ...options, all: true }, (err, addresses: LookupAddress[]) => {
+      if (err) return callback(err, '', 0);
+      if (addresses.some((a) => isPrivate(a.address))) {
+        return callback(new FetchRefused('the URL resolves to a private address'), '', 0);
+      }
+      if (options.all) return callback(null, addresses);
+      return callback(null, addresses[0].address, addresses[0].family);
+    });
+  };
 
 function toResponse(res: IncomingMessage, body: Buffer): Response {
   const headers = new Headers();
@@ -81,7 +83,7 @@ export function safeFetch(insecureHosts: ReadonlySet<string>): typeof fetch {
           method: init?.method ?? 'GET',
           headers,
           signal: init?.signal ?? undefined,
-          lookup: insecure ? undefined : publicOnly,
+          lookup: insecure ? undefined : publicOnly(),
         },
         (res) => {
           const chunks: Buffer[] = [];

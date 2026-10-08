@@ -32,6 +32,8 @@ type KeyRing = ReturnType<typeof parseKeyRing>;
 const CIMD = 'https://client.example.test/agent.json';
 const IMPOSTOR = 'https://evil.example.test/jaw.json';
 const HIDDEN_IMPOSTOR = 'https://evil.example.test/hidden.json';
+const NAMED = 'https://named.example.test/';
+const named = (name: string) => `${NAMED}${encodeURIComponent(name)}.json`;
 const NUL_NAMED = 'https://evil.example.test/nul.json';
 const KEYED = 'https://evil.example.test/keyed.json';
 const metadata = {
@@ -65,7 +67,13 @@ beforeAll(async () => {
                 })
               : String(url) === NUL_NAMED
                 ? Response.json({ ...metadata, client_id: NUL_NAMED, client_name: 'Agent\u0000' })
-                : new Response('not found', { status: 404 }),
+                : String(url).startsWith(NAMED)
+                  ? Response.json({
+                      ...metadata,
+                      client_id: String(url),
+                      client_name: decodeURIComponent(String(url).slice(NAMED.length, -'.json'.length)),
+                    })
+                  : new Response('not found', { status: 404 }),
   });
 });
 
@@ -181,6 +189,37 @@ describe('authorization server', () => {
     expect(c.details.client).toMatchObject({ official: false, reservedName: true });
     expect(c.details.client.name).not.toContain('\u200B');
   });
+
+  it.each([
+    'J\u200BAW',
+    'J\u00ADaw',
+    'J\u2060aw',
+    'ja\u3164w',
+    'JawWallet',
+    'MyJaw',
+    'JAWApp',
+    'JAWwallet',
+    '\u1D0A\u1D00\u1D21',
+  ])('warns on the consent screen for a CIMD client named %j', async (name) => {
+    const start = await startAuthorization(new Browser(), {
+      clientId: named(name),
+      redirectUri: 'http://127.0.0.1:9100/cb',
+    });
+    const { client } = await getDetails(start.uid!);
+    expect(client).toMatchObject({ official: false, reservedName: true });
+    expect(client.name).not.toMatch(/[\u00AD\u200B\u2060\u3164]/u);
+  });
+
+  it.each(['Mijaw', 'Jawbone', 'Raj Awesome', 'Jaws'])(
+    'does not warn on the consent screen for a CIMD client named %j',
+    async (name) => {
+      const start = await startAuthorization(new Browser(), {
+        clientId: named(name),
+        redirectUri: 'http://127.0.0.1:9100/cb',
+      });
+      expect((await getDetails(start.uid!)).client).toMatchObject({ name, reservedName: false });
+    }
+  );
 
   it('refuses a CIMD client whose name Postgres cannot store, before consent', async () => {
     const start = await startAuthorization(new Browser(), {

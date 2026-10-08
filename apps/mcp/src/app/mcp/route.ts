@@ -1,8 +1,12 @@
 import { createMcpHandler } from 'mcp-handler';
 import { registerApprovalTools } from '@/approvals/tools';
-import { connectionKey, withConnection } from '@/connections/auth';
+import { clientOf, connectionKey, withConnection } from '@/connections/auth';
 import { guardTools, withEdge } from '@/lib/edge';
+import { countUnauthorized } from '@/lib/metrics';
 import { registerReadTools } from '@/tools/read';
+import { registerHistoryTool } from '@/tools/history';
+import { registerPayTool } from '@/tools/pay-and-fetch';
+import { registerBudgetTool } from '@/tools/request-budget';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -12,6 +16,9 @@ const mcp = createMcpHandler(
     guardTools(server);
     registerReadTools(server);
     registerApprovalTools(server);
+    registerBudgetTool(server);
+    registerPayTool(server);
+    registerHistoryTool(server);
   },
   {
     serverInfo: { name: 'jaw', version: '0.0.1' },
@@ -30,6 +37,7 @@ const edge = withEdge(withConnection(mcp), { guarded: true, rateKey: connectionK
 
 const handler: typeof edge = async (req, ctx) => {
   const res = await edge(req, ctx);
+  if (res.status === 401) countUnauthorized(await clientOf(req));
   for (const [name, value] of Object.entries(CORS)) res.headers.set(name, value);
   return res;
 };

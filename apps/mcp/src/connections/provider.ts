@@ -9,7 +9,7 @@ import { seal } from './seal';
 
 export const SCOPES = {
   'wallet:read': 'See your account and balances',
-  'wallet:send': 'Ask you to approve signatures',
+  'wallet:send': 'Ask you to approve signatures and payment budgets',
 } as const;
 export type Scope = keyof typeof SCOPES;
 

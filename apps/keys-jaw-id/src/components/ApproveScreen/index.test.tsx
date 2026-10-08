@@ -9,9 +9,29 @@ import { rejectionTypedData } from '@jaw.id/agent/reserved';
 
 const signMessage = vi.fn(async (_message: string) => '0xsig');
 const signTypedData = vi.fn(async (_typedData: unknown) => '0xsig');
-const get = vi.fn(async (_config: unknown) => ({ signMessage, signTypedData }));
+const chain = { id: 84532, rpcUrl: 'https://rpc.example' };
+const signer = { signMessage, signTypedData, getChain: () => chain };
+const get = vi.fn(async (_config: unknown) => signer);
 let signedInAs = '';
-vi.mock('@jaw.id/core', () => ({ Account: { get: (config: unknown) => get(config) } }));
+vi.mock('@jaw.id/core', () => ({
+  Account: { get: (config: unknown) => get(config) },
+  standardErrorCodes: { provider: { userRejectedRequest: 4001 } },
+}));
+vi.mock('@jaw.id/ui', async () => ({ PortalContainerContext: (await import('react')).createContext(null) }));
+type ModalProps = {
+  permissionRequest: { params: unknown[] };
+  account: unknown;
+  chain: unknown;
+  onSuccess: (result: unknown) => Promise<void>;
+  onError: (error: Error, code: number) => void;
+};
+let modal: ModalProps | null = null;
+vi.mock('../PermissionModal', () => ({
+  PermissionModal: (props: ModalProps) => {
+    modal = props;
+    return createElement('div', { id: 'permission-modal' });
+  },
+}));
 vi.mock('../OnboardingSection', () => ({
   SignInScreen: ({ onComplete }: { onComplete: (a: unknown) => void }) =>
     createElement('button', { id: 'login', onClick: () => onComplete({ address: signedInAs }) }, 'login'),
@@ -48,15 +68,60 @@ const VIEW = {
   },
 };
 
+const SESSION = '0x4444444444444444444444444444444444444444';
+const USDC = '0x036CbD53842c5426634e7929541eC2318f3dCF7e';
+const GRANT = {
+  address: OWNER,
+  spender: SESSION,
+  expiry: 1790000000,
+  chainId: 84532,
+  permissions: {
+    calls: [{ target: USDC, functionSignature: 'transfer(address,uint256)' }],
+    spends: [{ token: USDC, allowance: '5000000', unit: 'day', multiplier: 1 }],
+  },
+  capabilities: { prefundSpender: true },
+};
+const BUDGET_VIEW = {
+  ...VIEW,
+  preview: {
+    kind: 'budget',
+    requester: VIEW.preview.requester,
+    account: OWNER,
+    chainId: 84532,
+    spender: SESSION,
+    token: USDC,
+    allowance: '5000000',
+    period: 'day',
+    expiresAt: '2026-09-21T09:46:40.000Z',
+  },
+  approve: { type: 'grant', grant: GRANT },
+};
+const GRANTED = {
+  account: OWNER,
+  spender: SESSION,
+  start: 1780000000,
+  end: 1790000000,
+  salt: '0x01',
+  calls: [{ target: USDC, selector: '0xa9059cbb' }],
+  spends: [{ token: USDC, allowance: '5000000', unit: 'day', multiplier: 1 }],
+  permissionId: `0x${'cd'.repeat(32)}`,
+  chainId: '0x14a34',
+};
+
 let root: Root;
 let container: HTMLDivElement;
 let posts: unknown[];
 
-let view: typeof VIEW = VIEW;
+let view: object = VIEW;
+let refusals: string[] = [];
+let postAnswer: object | null = null;
 
 beforeEach(() => {
   view = VIEW;
   posts = [];
+  refusals = [];
+  postAnswer = null;
+  modal = null;
   signMessage.mockClear();
   signTypedData.mockClear();
   signedInAs = OWNER;
@@ -67,9 +132,11 @@ beforeEach(() => {
       if (init?.method === 'POST') {
         const body = JSON.parse(String(init.body));
         posts.push(body);
-        return Response.json({ ...VIEW, status: body.verdict });
+        const refusal = refusals.shift();
+        if (refusal) return Response.json({ error: refusal }, { status: 409 });
+        return Response.json(postAnswer ?? { ...view, status: body.verdict });
       }
-      return Response.json(view);
+      return { ok: true, json: async () => view } as Response;
     })
   );
   container = document.createElement('div');
@@ -94,6 +161,7 @@ async function render() {
 }
 
 const button = (label: string) => [...container.querySelectorAll('button')].find((b) => b.textContent === label);
+const settle = () => act(() => new Promise((r) => setTimeout(r, 0)));
 const click = (el: Element | null | undefined) => act(async () => (el as HTMLElement).click());
 
 describe('ApproveScreen', () => {
@@ -144,5 +212,142 @@ describe('ApproveScreen', () => {
     expect(button('Reject')).toBeUndefined();
     expect(container.textContent).toContain('This request is for');
     expect(signMessage).not.toHaveBeenCalled();
+  });
+
+  it('hands the served grant to the wallet by reference and posts the granted permission unmodified', async () => {
+    view = BUDGET_VIEW;
+    await render();
+    expect(container.querySelector('h1')!.textContent).toBe('Budget request from evil.example');
+    expect(container.textContent).toContain('5 USDC per day');
+    expect(container.textContent).toContain(`Spender: ${SESSION}`);
+
+    await click(container.querySelector('#login'));
+    await click(button('Approve'));
+    expect(modal!.permissionRequest).toEqual({ method: 'wallet_grantPermissions', params: [GRANT] });
+    expect(modal!.permissionRequest.params[0]).toBe(GRANT);
+    expect(modal!.account).toBe(signer);
+    expect(modal!.chain).toBe(chain);
+    expect(signMessage).not.toHaveBeenCalled();
+
+    await act(async () => modal!.onSuccess(GRANTED));
+    await settle();
+    expect(posts).toEqual([{ verdict: 'approved', previewHash: VIEW.previewHash, permission: GRANTED }]);
+    expect(container.textContent).toContain('Approved.');
+  });
+
+  const OLD = `0x${'ee'.repeat(32)}`;
+  const APPROVED = { ...BUDGET_VIEW, status: 'approved' };
+
+  it('revokes every budget the server lists at the decision, right after granting', async () => {
+    view = BUDGET_VIEW;
+    postAnswer = { ...APPROVED, revoke: [OLD] };
+    await render();
+    await click(container.querySelector('#login'));
+    await click(button('Approve'));
+    await act(async () => modal!.onSuccess(GRANTED));
+    await settle();
+    expect(posts).toHaveLength(1);
+    expect(modal!.permissionRequest).toEqual({
+      method: 'wallet_revokePermissions',
+      params: [{ id: OLD, address: OWNER }],
+    });
+    expect(modal!.account).toBe(signer);
+    expect(container.textContent).not.toContain('Approved.');
+    view = { ...APPROVED, revoke: [] };
+    await act(async () => modal!.onSuccess({ success: true }));
+    await settle();
+    expect(container.textContent).toContain('Approved.');
+  });
+
+  it('says a dismissed revoke left the previous budget live, and retries it', async () => {
+    view = BUDGET_VIEW;
+    postAnswer = { ...APPROVED, revoke: [OLD] };
+    await render();
+    await click(container.querySelector('#login'));
+    await click(button('Approve'));
+    await act(async () => modal!.onSuccess(GRANTED));
+    await settle();
+    await act(async () => modal!.onError(new Error('User rejected the request'), 4001));
+    await settle();
+    expect(container.textContent).toContain('still approved on chain');
+    modal = null;
+    await click(button('Retry revoke'));
+    expect(modal!.permissionRequest).toEqual({
+      method: 'wallet_revokePermissions',
+      params: [{ id: OLD, address: OWNER }],
+    });
+  });
+
+  it('offers the outstanding revoke again on an approved budget page', async () => {
+    view = { ...APPROVED, revoke: [OLD] };
+    await render();
+    expect(container.textContent).toContain('still approved on chain');
+    await click(container.querySelector('#login'));
+    await click(button('Retry revoke'));
+    expect(modal!.permissionRequest).toEqual({
+      method: 'wallet_revokePermissions',
+      params: [{ id: OLD, address: OWNER }],
+    });
+  });
+
+  it('renders the wallet dialog inside the JAW UI scope, so it is styled and centered', async () => {
+    view = BUDGET_VIEW;
+    await render();
+    await click(container.querySelector('#login'));
+    await click(button('Approve'));
+    expect(container.querySelector('#permission-modal')!.closest('[data-jaw-ui]')).not.toBeNull();
+  });
+
+  it('retries a grant the chain does not show yet before giving up', async () => {
+    view = BUDGET_VIEW;
+    refusals = ['grant_not_found', 'grant_not_found'];
+    await render();
+    await click(container.querySelector('#login'));
+    await click(button('Approve'));
+    vi.useFakeTimers();
+    try {
+      await act(async () => {
+        modal!.onSuccess(GRANTED);
+        await vi.advanceTimersByTimeAsync(4000);
+        await vi.runAllTimersAsync();
+      });
+    } finally {
+      vi.useRealTimers();
+    }
+    expect(posts).toHaveLength(3);
+    expect(posts[2]).toEqual(posts[0]);
+    expect(container.textContent).toContain('Approved.');
+  });
+
+  it('says a grant the server refuses does not match the request', async () => {
+    view = BUDGET_VIEW;
+    refusals = ['grant_mismatch'];
+    await render();
+    await click(container.querySelector('#login'));
+    await click(button('Approve'));
+    await act(async () => modal!.onSuccess(GRANTED));
+    expect(posts).toHaveLength(1);
+    expect(container.textContent).toContain('does not match this request');
+  });
+
+  it('signs the stored rejection statement to reject a budget', async () => {
+    view = BUDGET_VIEW;
+    await render();
+    await click(container.querySelector('#login'));
+    await click(button('Reject'));
+    expect(modal).toBeNull();
+    expect(signTypedData.mock.calls[0][0]).toEqual(VIEW.reject.typedData);
+    expect(posts).toEqual([{ verdict: 'rejected', signature: '0xsig', previewHash: VIEW.previewHash }]);
+  });
+
+  it('returns to the request when the wallet dialog is cancelled', async () => {
+    view = BUDGET_VIEW;
+    await render();
+    await click(container.querySelector('#login'));
+    await click(button('Approve'));
+    await act(async () => modal!.onError(new Error('User rejected the request'), 4001));
+    expect(container.querySelector('#permission-modal')).toBeNull();
+    expect(button('Reject')).toBeDefined();
+    expect(posts).toEqual([]);
   });
 });

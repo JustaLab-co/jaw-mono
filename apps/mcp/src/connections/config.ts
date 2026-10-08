@@ -12,6 +12,9 @@ export interface Config {
   mainnetRpcUrl: string | undefined;
   /** Local verification only: hosts jaw_quote may reach without the SSRF checks. */
   insecureFetchHosts: ReadonlySet<string>;
+  paymasterApiKey: string | undefined;
+  /** Base units a refill brings the payer up to, so refills are rare; the grant's cap still bounds it. */
+  floatTarget: bigint;
   ring: KeyRing;
 }
 
@@ -31,6 +34,8 @@ export function config(): Config {
     rpcUrl: process.env.JAW_MCP_RPC_URL || undefined,
     mainnetRpcUrl: process.env.JAW_MCP_MAINNET_RPC_URL || undefined,
     insecureFetchHosts: new Set((process.env.JAW_MCP_INSECURE_FETCH_HOSTS ?? '').split(',').filter(Boolean)),
+    paymasterApiKey: process.env.JAW_MCP_API_KEY || undefined,
+    floatTarget: baseUnits('JAW_MCP_FLOAT_TARGET', process.env.JAW_MCP_FLOAT_TARGET || '250000'),
     ring: parseKeyRing(process.env.JAW_MCP_SEALING_KEYS),
   };
   return cached;
@@ -40,4 +45,9 @@ function required(name: string): string {
   const value = process.env[name];
   if (!value) throw new Error(`${name} is not set`);
   return value;
+}
+
+function baseUnits(name: string, value: string): bigint {
+  if (!/^\d+$/.test(value)) throw new Error(`${name} must be whole base units, such as 250000 for 0.25 USDC`);
+  return BigInt(value);
 }

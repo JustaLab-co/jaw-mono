@@ -67,10 +67,16 @@ describe('/mcp behind OAuth', () => {
 
   it('gives each connection its own rate limit bucket, with no IP headers at all', async () => {
     const [a, b] = [await connect(), await connect()];
-    let last = 0;
-    for (let i = 0; i <= RATE_LIMIT; i++) last = (await rpc(initialize, a.access_token)).status;
-    expect(last).toBe(429);
-    expect((await rpc(initialize, b.access_token)).status).toBe(200);
+    // Buckets are clock-minute windows: pin the clock so the burst cannot straddle two of them.
+    vi.useFakeTimers({ toFake: ['Date'], now: Math.floor(Date.now() / 60_000) * 60_000 + 1_000 });
+    try {
+      let last = 0;
+      for (let i = 0; i <= RATE_LIMIT; i++) last = (await rpc(initialize, a.access_token)).status;
+      expect(last).toBe(429);
+      expect((await rpc(initialize, b.access_token)).status).toBe(200);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it('answers 503 and keeps the SQL out of the logs when the connection read fails', async () => {

@@ -1,6 +1,6 @@
 import { createHash } from 'node:crypto';
 import { hasUnstorableText } from '@jaw.id/agent';
-import { and, eq, gt, isNotNull, isNull, lt, ne, or, sql } from 'drizzle-orm';
+import { and, eq, gt, isNotNull, isNull, lt, ne, or, sql, inArray } from 'drizzle-orm';
 import Provider, { errors, type Adapter, type AdapterPayload, type KoaContextWithOIDC } from 'oidc-provider';
 import type { Hex } from 'viem';
 import { generatePrivateKey, privateKeyToAddress } from 'viem/accounts';
@@ -108,9 +108,11 @@ export class PgAdapter implements Adapter {
       // A used token past its window can never be retried, so its wrap would only
       // serve whoever kept the old token. Swept on every rotation, for every grant,
       // except the token this request presents: find already judged it retryable.
-      await tx
-        .update(oauthPayloads)
-        .set({ keyWrap: null })
+      // SKIP LOCKED: concurrent rotations never wait on each other's rows (they deadlocked
+      // in a burst); a row another rotation holds is swept by the next one.
+      const stale = tx
+        .select({ key: oauthPayloads.key })
+        .from(oauthPayloads)
         .where(
           and(
             eq(oauthPayloads.model, 'RefreshToken'),
@@ -118,7 +120,9 @@ export class PgAdapter implements Adapter {
             lt(oauthPayloads.consumedAt, new Date(Date.now() - RETRY_WINDOW_MS)),
             isNotNull(oauthPayloads.keyWrap)
           )
-        );
+        )
+        .for('update', { skipLocked: true });
+      await tx.update(oauthPayloads).set({ keyWrap: null }).where(inArray(oauthPayloads.key, stale));
       let key = requestKeys.get(ctx);
       if (presented) {
         const [from] = await tx

@@ -1,5 +1,16 @@
 import { sql } from 'drizzle-orm';
-import { check, index, integer, jsonb, pgTable, primaryKey, text, timestamp } from 'drizzle-orm/pg-core';
+import {
+  check,
+  index,
+  integer,
+  jsonb,
+  numeric,
+  pgTable,
+  primaryKey,
+  text,
+  timestamp,
+  uniqueIndex,
+} from 'drizzle-orm/pg-core';
 
 export const settings = pgTable('settings', {
   key: text('key').primaryKey(),
@@ -14,7 +25,7 @@ export const rateLimits = pgTable(
     windowStart: timestamp('window_start', { withTimezone: true }).notNull(),
     count: integer('count').notNull(),
   },
-  (t) => [primaryKey({ columns: [t.key, t.windowStart] })]
+  (t) => [primaryKey({ columns: [t.key, t.windowStart] }), index().on(t.windowStart)]
 );
 
 // Keys are sha256 of `${model}:${id}` and payloads carry no `jti`, so a dump
@@ -101,12 +112,108 @@ export const approvalRequests = pgTable(
     payloadHash: text('payload_hash'),
     signature: text('signature'),
     assertionRef: text('assertion_ref'),
+    permissionId: text('permission_id'),
   },
   (t) => [
     index().on(t.connectionId, t.createdAt),
     check(
       'approval_evidence',
-      sql`(${t.status} = 'pending') = (${t.decidedAt} is null and ${t.previewHash} is null and ${t.payloadHash} is null and ${t.signature} is null and ${t.assertionRef} is null)`
+      sql`(${t.status} = 'pending') = (${t.decidedAt} is null and ${t.previewHash} is null and ${t.payloadHash} is null)`
+    ),
+    check(
+      'approval_proof',
+      sql`(${t.status} = 'pending' and ${t.signature} is null and ${t.assertionRef} is null and ${t.permissionId} is null)
+        or (${t.status} <> 'pending' and (${t.signature} is null) = (${t.assertionRef} is null) and (${t.signature} is null) <> (${t.permissionId} is null))`
+    ),
+  ]
+);
+
+export const grants = pgTable(
+  'grants',
+  {
+    permissionId: text('permission_id').primaryKey(),
+    connectionId: text('connection_id')
+      .notNull()
+      .references(() => connections.id),
+    approvalId: text('approval_id')
+      .notNull()
+      .references(() => approvalRequests.id),
+    chainId: integer('chain_id').notNull(),
+    account: text('account').notNull(),
+    spender: text('spender').notNull(),
+    token: text('token').notNull(),
+    allowance: text('allowance').notNull(),
+    period: text('period', { enum: ['day'] }).notNull(),
+    // The struct as approved: the permission manager answers only about a struct, never an id.
+    permission: jsonb('permission').notNull(),
+    expiresAt: timestamp('expires_at', { withTimezone: true }).notNull(),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+    // A newer budget was approved, so this one should be revoked; revokedAt once the chain shows it.
+    replacedAt: timestamp('replaced_at', { withTimezone: true }),
+    revokedAt: timestamp('revoked_at', { withTimezone: true }),
+  },
+  (t) => [index().on(t.connectionId, t.createdAt)]
+);
+
+export const payments = pgTable(
+  'payments',
+  {
+    id: text('id').primaryKey(),
+    connectionId: text('connection_id')
+      .notNull()
+      .references(() => connections.id),
+    idempotencyKey: text('idempotency_key').notNull(),
+    requestHash: text('request_hash').notNull(),
+    permissionId: text('permission_id').notNull(),
+    payer: text('payer').notNull(),
+    url: text('url').notNull(),
+    state: text('state', { enum: ['pending', 'signed', 'settled', 'failed', 'unknown'] })
+      .notNull()
+      .default('pending'),
+    kind: text('kind', { enum: ['free', 'paid', 'refused', 'failed'] }),
+    code: text('code'),
+    leaseToken: text('lease_token'),
+    leaseUntil: timestamp('lease_until', { withTimezone: true }).notNull(),
+    reserved: numeric('reserved', { precision: 78, scale: 0 }),
+    scheme: text('scheme'),
+    asset: text('asset'),
+    network: text('network'),
+    payTo: text('pay_to'),
+    nonce: text('nonce'),
+    authorized: numeric('authorized', { precision: 78, scale: 0 }),
+    amount: numeric('amount', { precision: 78, scale: 0 }),
+    deadline: timestamp('deadline', { withTimezone: true }),
+    authorization: jsonb('authorization'),
+    txHash: text('tx_hash'),
+    blockTime: timestamp('block_time', { withTimezone: true }),
+    topUpAmount: numeric('top_up_amount', { precision: 78, scale: 0 }),
+    topUpBatchId: text('top_up_batch_id'),
+    approvalBatchId: text('approval_batch_id'),
+    httpStatus: integer('http_status'),
+    // The fenced seller text the first answer carried, so a replay returns the same words.
+    fenced: jsonb('fenced').$type<string[]>(),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+    signedAt: timestamp('signed_at', { withTimezone: true }),
+    finishedAt: timestamp('finished_at', { withTimezone: true }),
+    reconcilingUntil: timestamp('reconciling_until', { withTimezone: true }),
+    alertedAt: timestamp('alerted_at', { withTimezone: true }),
+  },
+  (t) => [
+    uniqueIndex().on(t.connectionId, t.idempotencyKey),
+    uniqueIndex().on(t.payer, t.nonce),
+    index().on(t.connectionId, t.createdAt, t.id),
+    index().on(t.permissionId, t.createdAt),
+    index()
+      .on(t.signedAt)
+      .where(sql`${t.state} in ('signed', 'unknown')`),
+    check(
+      'payment_shape',
+      sql`(${t.state} = 'pending' and ${t.nonce} is null and ${t.authorization} is null and ${t.fenced} is null)
+        or (${t.state} in ('signed', 'unknown') and ${t.nonce} is not null and ${t.authorization} is not null
+            and ${t.authorized} is not null and ${t.deadline} is not null and ${t.signedAt} is not null)
+        or (${t.state} = 'settled' and ${t.kind} = 'free' and ${t.nonce} is null)
+        or (${t.state} = 'settled' and ${t.kind} = 'paid' and ${t.nonce} is not null and ${t.amount} is not null)
+        or (${t.state} = 'failed' and ${t.finishedAt} is not null)`
     ),
   ]
 );
