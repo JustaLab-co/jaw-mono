@@ -1,0 +1,33 @@
+# Hosted stack for verification. Each run is its own compose project, so runs
+# can sit side by side. The mcp service is enabled by hosted-up.sh through
+# the "mcp" profile when apps/mcp/Dockerfile exists.
+services:
+  postgres:
+    image: postgres:17-alpine
+    environment:
+      POSTGRES_USER: jaw
+      POSTGRES_PASSWORD: jaw
+      POSTGRES_DB: jaw_mcp
+    ports: ["${PG_PORT:-0}:5432"]
+    tmpfs: [/var/lib/postgresql/data]
+    healthcheck:
+      test: ["CMD", "pg_isready", "-U", "jaw"]
+      interval: 1s
+      retries: 30
+  mcp:
+    profiles: [mcp]
+    image: ${MCP_IMAGE:-jaw-verify-mcp:local}
+    build:
+      context: ${REPO}
+      dockerfile: apps/mcp/Dockerfile
+    environment:
+      DATABASE_URL: postgres://jaw:jaw@postgres:5432/jaw_mcp
+      JAW_MCP_SEALING_KEYS: ${JAW_MCP_SEALING_KEYS:-}
+      JAW_MCP_PUBLIC_URL: ${JAW_MCP_PUBLIC_URL:-}
+      JAW_KEYS_URL: ${JAW_KEYS_URL:-}
+      JAW_MCP_API_KEY: ${JAW_MCP_API_KEY:-}
+      JAW_MCP_INSECURE_FETCH_HOSTS: ${JAW_MCP_INSECURE_FETCH_HOSTS:-}
+    ports: ["${MCP_PORT:-0}:3000"]
+    extra_hosts: ["host.docker.internal:host-gateway"]
+    depends_on:
+      postgres: { condition: service_healthy }

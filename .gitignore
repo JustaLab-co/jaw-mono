@@ -74,3 +74,6 @@ expo-env.d.ts
 # Stryker
 .stryker-tmp
 **/reports/mutation
+
+# Verification runs (tools/verify)
+.verify-cache/
