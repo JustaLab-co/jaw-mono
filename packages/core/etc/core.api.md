@@ -519,6 +519,7 @@ export function estimateErc20PaymasterCosts(smartAccount: SmartAccount, calls: A
 }>, chain: Chain, paymasterUrl: string, tokens: TokenInfo[], options?: {
     permissionId?: Hex;
     apiKey?: string;
+    localAccount?: LocalAccount;
 }): Promise<TokenEstimate[]>;
 
 // @public (undocumented)

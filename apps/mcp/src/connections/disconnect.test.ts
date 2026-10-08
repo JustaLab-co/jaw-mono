@@ -18,13 +18,23 @@ beforeAll(useTestDb);
 const USDC = '0x036CbD53842c5426634e7929541eC2318f3dCF7e';
 const MANAGER = '0xf1b40E3D5701C04d86F7828f0EB367B9C90901D8';
 const TX = `0x${'ab'.repeat(32)}` as Hex;
+const PAYMASTER = '0x888888888888Ec68A58AB8094Cc1AD20Ba3D2402';
 const approved: PermissionState = { status: 'ok', approved: true, revoked: false };
 
+type Call = { to: Address; data: Hex };
+
 function fakes(
-  over: { float?: bigint; fee?: bigint; sent?: Sent; readPermission?: DisconnectDeps['readPermission'] } = {}
+  over: {
+    float?: bigint;
+    expected?: bigint;
+    max?: bigint;
+    sent?: Sent | Sent[];
+    readPermission?: DisconnectDeps['readPermission'];
+  } = {}
 ) {
-  const sent: { to: Address; data: Hex }[][] = [];
-  const quoted: { to: Address; data: Hex }[][] = [];
+  const sent: Call[][] = [];
+  const quoted: Call[][] = [];
+  const outcomes = [over.sent ?? { status: 'landed', txHash: TX }].flat();
   const node = {
     getBlockNumber: async () => 100n,
     readContract: async () => over.float ?? 500_000n,
@@ -33,18 +43,21 @@ function fakes(
     readPermission: over.readPermission ?? (async () => approved),
     clients: { publicClient: () => node },
     sender: async () => ({
+      paymaster: PAYMASTER,
       quote: async (calls) => {
         quoted.push(calls);
-        return over.fee ?? 3_000n;
+        return { expected: over.expected ?? 2_000n, max: over.max ?? 10_000n };
       },
       send: async (calls) => {
         sent.push(calls);
-        return over.sent ?? { status: 'landed', txHash: TX };
+        return outcomes[Math.min(sent.length, outcomes.length) - 1];
       },
     }),
   };
   return { deps, sent, quoted };
 }
+
+const args = (call: Call) => decodeFunctionData({ abi: erc20Abi, data: call.data });
 
 const listed = async (token: string) => (await mcp(token, { method: 'tools/list' })).status;
 const revokedAt = async (permissionId: string) =>
@@ -75,17 +88,19 @@ describe('jaw_disconnect', () => {
     const result = await disconnect(tenant, deps);
 
     expect(result.isError).toBeFalsy();
-    expect(decodeFunctionData({ abi: erc20Abi, data: quoted[0][1].data }).args).toEqual([c.signer.address, 1n]);
+    expect(args(quoted[0][1]).args).toEqual([c.signer.address, 1n]);
     expect(sent).toHaveLength(1);
-    const [revoke, sweep] = sent[0];
+    const [revoke, sweep, cap] = sent[0];
     expect(revoke.to).toBe(MANAGER);
     const call = decodeFunctionData({ abi: PERMISSION_MANAGER_ABI, data: revoke.data });
     expect(call.functionName).toBe('revokeAsSpender');
     expect(call.args[0]).toMatchObject({ account: permission.account, spender: permission.spender });
     expect(sweep.to).toBe(USDC);
-    // 0.5 float, 0.02 held by a pending payment, 0.003 kept for the batch's own fee.
-    expect(decodeFunctionData({ abi: erc20Abi, data: sweep.data }).args).toEqual([c.signer.address, 477_000n]);
-    expect(result.structuredContent).toMatchObject({ revoked: [permissionId], swept: '477000', txHash: TX });
+    // 0.5 float, 0.02 held by a pending payment, 0.0025 reserved for the batch's own fee.
+    expect(args(sweep).args).toEqual([c.signer.address, 477_500n]);
+    // The most the payer can lose to the fee is the reserve, whatever the fee turns out to be.
+    expect(args(cap)).toEqual({ functionName: 'approve', args: [PAYMASTER, 2_500n] });
+    expect(result.structuredContent).toMatchObject({ revoked: [permissionId], swept: '477500', txHash: TX });
 
     expect(await revokedAt(permissionId)).not.toBeNull();
     expect(await listed(c.access_token)).toBe(401);
@@ -100,7 +115,8 @@ describe('jaw_disconnect', () => {
     const failing = fakes({ sent: outcome });
     if (!outcome) {
       failing.deps.sender = async () => ({
-        quote: async () => 3_000n,
+        paymaster: PAYMASTER,
+        quote: async () => ({ expected: 2_000n, max: 10_000n }),
         send: async () => Promise.reject(new Error('bundler said no, key 0xsecret')),
       });
     }
@@ -125,12 +141,12 @@ describe('jaw_disconnect', () => {
     expect(await listed(c.access_token)).toBe(401);
   });
 
-  it('leaves the budget to the owner when the payer cannot pay the fee, and still ends the tokens', async () => {
+  it('leaves the budget to the owner when the float cannot pay the reserve, and still ends the tokens', async () => {
     const { c, tenant, permissionId } = await budgetConnection(async () => approved);
-    const { deps, sent } = fakes({ float: 2_000n, fee: 3_000n });
+    const { deps, sent } = fakes({ float: 2_500n, expected: 2_000n, max: 10_000n });
     const result = await disconnect(tenant, deps);
     expect(sent).toEqual([]);
-    expect(result.structuredContent).toMatchObject({ revoked: [], stillApproved: [permissionId], left: '2000' });
+    expect(result.structuredContent).toMatchObject({ revoked: [], stillApproved: [permissionId], left: '2500' });
     expect(result.content[0].text).toContain('http://keys.test/connections');
     expect(await revokedAt(permissionId)).toBeNull();
     expect(await listed(c.access_token)).toBe(401);
@@ -191,5 +207,110 @@ describe('jaw_disconnect', () => {
       content: [{ type: 'text', text: 'Nothing was revoked: the chain could not be read. Try again.' }],
     });
     expect(await listed(reader.access_token)).toBe(200);
+  });
+});
+
+describe('given a funded payer with nothing held and a live budget', () => {
+  it('when the agent disconnects, then it returns the float less the expected fee with a margin', async () => {
+    const { c, tenant, permissionId } = await budgetConnection(async () => approved);
+    const { deps, sent, quoted } = fakes({ float: 30_000n, expected: 5_000n, max: 20_000n });
+
+    const result = await disconnect(tenant, deps);
+
+    // 1.25 x 5000 reserved, against the 20000 ceiling kept before.
+    expect(args(sent[0][1]).args).toEqual([c.signer.address, 23_750n]);
+    expect(result.structuredContent).toMatchObject({ revoked: [permissionId], swept: '23750', txHash: TX });
+    expect(quoted[0].map((call) => call.to)).toEqual([MANAGER, USDC, USDC]);
+    expect(await listed(c.access_token)).toBe(401);
+  });
+
+  it('when the agent disconnects, then the last call caps what the paymaster can take at the reserve', async () => {
+    const { tenant } = await budgetConnection(async () => approved);
+    const { deps, sent } = fakes({ float: 30_000n, expected: 5_001n, max: 20_000n });
+
+    await disconnect(tenant, deps);
+
+    expect(sent).toHaveLength(1);
+    expect(sent[0]).toHaveLength(3);
+    // Rounded up, so the reserve is never below 1.25 x the expected fee.
+    expect(args(sent[0][2])).toEqual({ functionName: 'approve', args: [PAYMASTER, 6_252n] });
+  });
+
+  it('when the margin would pass the ceiling, then it never reserves more than the ceiling', async () => {
+    const { c, tenant } = await budgetConnection(async () => approved);
+    const { deps, sent } = fakes({ float: 30_000n, expected: 10_000n, max: 11_000n });
+
+    await disconnect(tenant, deps);
+
+    expect(args(sent[0][1]).args).toEqual([c.signer.address, 19_000n]);
+    expect(args(sent[0][2]).args).toEqual([PAYMASTER, 11_000n]);
+  });
+
+  it('when the float covers the reserve but not the ceiling, then it still revokes and returns it', async () => {
+    const { c, tenant, permissionId } = await budgetConnection(async () => approved);
+    const { deps, sent } = fakes({ float: 2_501n, expected: 2_000n, max: 10_000n });
+
+    const result = await disconnect(tenant, deps);
+
+    expect(args(sent[0][1]).args).toEqual([c.signer.address, 1n]);
+    expect(result.structuredContent).toMatchObject({ revoked: [permissionId], stillApproved: [] });
+  });
+});
+
+describe('given the fee rises above the reserve before the batch lands', () => {
+  it('when the batch reverts, then it retries once at the ceiling and completes', async () => {
+    const { c, tenant, permissionId } = await budgetConnection(async () => approved);
+    const { deps, sent } = fakes({
+      float: 30_000n,
+      expected: 5_000n,
+      max: 20_000n,
+      sent: [{ status: 'reverted' }, { status: 'landed', txHash: TX }],
+    });
+
+    const result = await disconnect(tenant, deps);
+
+    expect(sent).toHaveLength(2);
+    expect(args(sent[1][1]).args).toEqual([c.signer.address, 10_000n]);
+    expect(args(sent[1][2]).args).toEqual([PAYMASTER, 20_000n]);
+    expect(result.structuredContent).toMatchObject({ revoked: [permissionId], swept: '10000', txHash: TX });
+    expect(await listed(c.access_token)).toBe(401);
+  });
+
+  it('when the retry at the ceiling reverts too, then nothing is revoked and the token still works', async () => {
+    const { c, tenant, permissionId } = await budgetConnection(async () => approved);
+    const { deps, sent } = fakes({ float: 30_000n, expected: 5_000n, max: 20_000n, sent: { status: 'reverted' } });
+
+    const refused = await disconnect(tenant, deps);
+
+    expect(sent).toHaveLength(2);
+    expect(refused.content[0].text).toBe('Nothing was revoked: the transaction reverted. Try again.');
+    expect(await revokedAt(permissionId)).toBeNull();
+    expect(await listed(c.access_token)).toBe(200);
+  });
+
+  it('when the float cannot cover the ceiling, then it does not retry', async () => {
+    const { c, tenant } = await budgetConnection(async () => approved);
+    const { deps, sent } = fakes({ float: 15_000n, expected: 5_000n, max: 20_000n, sent: { status: 'reverted' } });
+
+    expect((await disconnect(tenant, deps)).isError).toBe(true);
+    expect(sent).toHaveLength(1);
+    expect(await listed(c.access_token)).toBe(200);
+  });
+});
+
+describe('given the batch landed but its reply was lost', () => {
+  it('when the agent calls again, then it sends nothing for the residual and ends the connection', async () => {
+    const { c, tenant, permissionId } = await budgetConnection(async () => approved);
+    const { deps, sent } = fakes({
+      float: 1_800n,
+      readPermission: async () => ({ status: 'ok', approved: true, revoked: true }),
+    });
+
+    const result = await disconnect(tenant, deps);
+
+    expect(sent).toEqual([]);
+    expect(result.structuredContent).toMatchObject({ revoked: [], stillApproved: [], swept: '0', left: '1800' });
+    expect(await revokedAt(permissionId)).not.toBeNull();
+    expect(await listed(c.access_token)).toBe(401);
   });
 });
