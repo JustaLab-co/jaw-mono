@@ -33,8 +33,10 @@ Local payments need a payer that holds USDC on Base Sepolia, because the funding
 Hosted stack, when the change touches `apps/mcp` or storage:
 
 ```bash
-JAW_KEYS_URL=<keys.jaw.id origin> $S/hosted-up.sh "$RUN"   # needs Docker; appends DATABASE_URL, MCP_URL, MCP_PUBLIC_URL, KEYS_URL
+$S/hosted-up.sh "$RUN"   # needs Docker, JAW_KEYS_URL optional; appends DATABASE_URL, MCP_URL, MCP_PUBLIC_URL, KEYS_URL
 ```
+
+`JAW_KEYS_URL` is the origin of the keys app. `apps/mcp` refuses to start without it (`/api/health` answers 503 `config invalid`) because it builds the owner-facing links from it: the `/approve/<id>` URL of a payment request, the `/authorize` redirect of the OAuth consent step, and the CORS allowed origin. The verify flows never open those links, so it is optional here and defaults to `http://localhost:3100`. Set it to a running keys app only when you need to follow an approval link by hand.
 
 The mcp container gets `DATABASE_URL`, `JAW_MCP_PUBLIC_URL` (fixed host port, so the OAuth issuer matches what clients reach), `JAW_KEYS_URL` and the optional `JAW_MCP_API_KEY` from your environment, and a per-run `JAW_MCP_SEALING_KEYS` generated into `work/sealing.key` (0600, never copied to evidence). From inside the container the seller is `http://host.docker.internal:$PORT`.
 
@@ -44,7 +46,7 @@ The mcp container gets `DATABASE_URL`, `JAW_MCP_PUBLIC_URL` (fixed host port, so
 $S/doctor.sh "$RUN"            # add --live before using the real session
 ```
 
-It checks that the seller pid is alive and owns the port, both binaries run and the baseline is 0.4.0, and the working tree is the one that was built. It warns when `git diff HEAD` changed since `up.sh`; results then say nothing about the current tree. It also checks that Postgres answers when the hosted stack is up. With `--live` it also requires a real session in `~/.jaw` and saves `jaw x402 status` to `evidence/live-status.json`.
+It checks that the seller pid is alive and owns the port, both binaries run and the baseline is 0.4.0, and the working tree is the one that was built. It warns when `git diff HEAD` changed since `up.sh`; results then say nothing about the current tree. When the hosted stack is up it also checks that Postgres answers and that the mcp container answers `GET /api/health` with 200 (config valid, database reachable), saving the body to `evidence/mcp-health.json`. With `--live` it also requires a real session in `~/.jaw` and saves `jaw x402 status` to `evidence/live-status.json`.
 
 ## Drive
 

@@ -60,7 +60,7 @@ bunx nx release
 
 ## Verify
 
-Unit tests do not cover the payment path. For a change under `packages/agent`, `packages/cli` or `apps/mcp`, build, pack and drive the real thing with the scripts in `tools/verify/`:
+Needs `bun`, `pnpm` and `node` 20+, plus Docker for the hosted step. `cast` (Foundry) is only for the live paths. Unit tests do not cover the payment path. For a change under `packages/agent`, `packages/cli` or `apps/mcp`, build, pack and drive the real thing with the scripts in `tools/verify/`:
 
 ```bash
 bun install

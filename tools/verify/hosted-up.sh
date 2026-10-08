@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Starts Postgres for this run, and apps/mcp too once it has a Dockerfile.
+# Starts Postgres and the apps/mcp container for this run.
 # Appends COMPOSE_PROJECT, DATABASE_URL and MCP_URL to run.env.
 # Usage: [JAW_KEYS_URL=http://localhost:<keys port>] [JAW_VERIFY_MCP_IMAGE=<tag>] hosted-up.sh <run-dir>
 set -euo pipefail
@@ -14,8 +14,10 @@ PROFILE=; [ -f "$REPO/apps/mcp/Dockerfile" ] && PROFILE="--profile mcp"
 MCP_PORT=$(node -e 'const s=require("net").createServer().listen(0,()=>{console.log(s.address().port);s.close()})')
 KEYFILE=$RUN/work/sealing.key
 [ -f "$KEYFILE" ] || (umask 077; openssl rand -base64 32 | tr '+/' '-_' | tr -d '=' >"$KEYFILE")
-export MCP_PORT JAW_MCP_PUBLIC_URL=http://localhost:$MCP_PORT JAW_KEYS_URL=${JAW_KEYS_URL:-}
+export MCP_PORT JAW_MCP_PUBLIC_URL=http://localhost:$MCP_PORT JAW_KEYS_URL=${JAW_KEYS_URL:-http://localhost:3100}
 export JAW_MCP_SEALING_KEYS=$(cat "$KEYFILE")
+# JAW_KEYS_URL is required by the server (it builds the approve and authorize
+# links from it) but nothing here contacts it, so a placeholder is enough.
 # JAW_VERIFY_MCP_IMAGE reuses an image built once per round; otherwise this run
 # builds its own tag.
 BUILD=--build

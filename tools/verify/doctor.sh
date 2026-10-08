@@ -24,4 +24,8 @@ if [ -n "${COMPOSE_PROJECT:-}" ]; then
   docker compose -p "$COMPOSE_PROJECT" -f "$(dirname "$0")/compose.yaml" exec -T postgres pg_isready -U jaw >/dev/null || fail "postgres not ready"
   ok "postgres ready at $DATABASE_URL"
 fi
+if [ -n "${MCP_URL:-}" ]; then
+  curl -fsS --max-time 5 "${MCP_URL%/mcp}/api/health" >"$RUN/evidence/mcp-health.json" || fail "mcp /api/health is not 200, see evidence/mcp-health.json and docker logs"
+  ok "mcp healthy ($(cat "$RUN/evidence/mcp-health.json"))"
+fi
 exit 0

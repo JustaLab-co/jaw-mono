@@ -1,6 +1,6 @@
 # Hosted stack for verification. Each run is its own compose project, so runs
 # can sit side by side. The mcp service is enabled by hosted-up.sh through
-# the "mcp" profile when apps/mcp/Dockerfile exists.
+# the "mcp" profile.
 services:
   postgres:
     image: postgres:17-alpine
