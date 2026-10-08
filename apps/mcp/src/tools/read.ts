@@ -234,7 +234,7 @@ const resolveOutput = z.object({
   summary: z.string(),
 });
 
-async function resolveName(name: string) {
+export async function resolveName(name: string) {
   const normalized = normalize(name);
   const client = createPublicClient({ chain: mainnet, transport: http(config().mainnetRpcUrl) });
   const address = await client.getEnsAddress({ name: normalized });

@@ -1,7 +1,13 @@
 import { describe, it, expect } from 'vitest';
 import { privateKeyToAccount } from 'viem/accounts';
-import { recoverTypedDataAddress } from 'viem';
-import { buildExactPayment, encodePaymentPayload, TRANSFER_WITH_AUTHORIZATION_TYPES } from './scheme-exact-evm.js';
+import { hashTypedData, recoverTypedDataAddress, verifyTypedData } from 'viem';
+import {
+  buildExactPayment,
+  encodePaymentPayload,
+  exactDraft,
+  signedExact,
+  TRANSFER_WITH_AUTHORIZATION_TYPES,
+} from './scheme-exact-evm.js';
 import type { X402PaymentRequirement } from './types.js';
 
 // Well-known Hardhat test key #1 — never used for real funds.
@@ -138,5 +144,45 @@ describe('encodePaymentPayload', () => {
     expect(decoded.accepted.payTo).toBe(requirement.payTo);
     expect(decoded.payload.signature).toBe(payload.payload.signature);
     expect(decoded.payload.authorization.nonce).toBe(NONCE);
+  });
+});
+
+describe('exactDraft', () => {
+  const fixed = { validBefore: '1000600', nonce: NONCE };
+
+  it('is what buildExactPayment signs, so a draft signed later produces the same payload', async () => {
+    const built = await buildExactPayment(requirement, account.address, signer, { now: 1_000_000, nonce: NONCE });
+    const draft = exactDraft(requirement, account.address, fixed);
+    const later = signedExact(draft, await account.signTypedData(draft.typedData as never));
+    expect(later).toEqual(built);
+  });
+
+  it('carries decimal strings that hash and verify the same as bigints', async () => {
+    const draft = exactDraft(requirement, account.address, fixed);
+    const { message } = draft.typedData;
+    const asBigints = {
+      ...draft.typedData,
+      message: {
+        ...message,
+        value: BigInt(message.value),
+        validAfter: BigInt(message.validAfter),
+        validBefore: BigInt(message.validBefore),
+      },
+    };
+    expect(hashTypedData(draft.typedData as never)).toBe(hashTypedData(asBigints));
+    const signature = await account.signTypedData(asBigints);
+    expect(await verifyTypedData({ ...(draft.typedData as never), address: account.address, signature })).toBe(true);
+  });
+
+  it('sends a fresher copy of the same option as accepted', () => {
+    const draft = exactDraft(requirement, account.address, fixed);
+    const fresh = { ...requirement, maxTimeoutSeconds: 30, extra: { name: 'USDC', version: '2' } };
+    expect(signedExact(draft, '0x01', fresh).accepted).toBe(fresh);
+  });
+
+  it('refuses what buildExactPayment refuses, before anything is signed', () => {
+    const rogue = { ...requirement, asset: '0x0000000000000000000000000000000000000bad' as `0x${string}` };
+    expect(() => exactDraft(rogue, account.address, fixed)).toThrow(/asset mismatch/);
+    expect(() => exactDraft({ ...requirement, scheme: 'upto' }, account.address, fixed)).toThrow(/Not an exact/);
   });
 });

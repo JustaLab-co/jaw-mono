@@ -1,7 +1,7 @@
-import { and, eq, gt, isNull, sql } from 'drizzle-orm';
+import { and, eq, gt, isNull, ne, sql } from 'drizzle-orm';
 import type { Address } from 'viem';
-import { getDb } from '@/db/client';
-import { connections } from '@/db/schema';
+import { getDb, type Tx } from '@/db/client';
+import { connections, oauthPayloads } from '@/db/schema';
 
 export type ConnectionRow = typeof connections.$inferSelect;
 
@@ -82,4 +82,30 @@ export async function revokeByGrant(grantId: string) {
     .update(connections)
     .set({ status: 'revoked', revokedAt: new Date() })
     .where(and(eq(connections.grantId, grantId), eq(connections.status, 'active')));
+}
+
+export const ownedBy = (account: Address) => sql`lower(${connections.account}) = ${account.toLowerCase()}`;
+
+/**
+ * Ends a connection of this account: the access token stops at the next call and
+ * the refresh tokens, with the key wraps they carry, are deleted, so the session
+ * key cannot be opened again. Budgets on chain are revoked separately. Undefined
+ * when the account has no such connection; an ended one is returned as it is.
+ */
+export async function endConnection(id: string, account: Address, now = new Date(), db: Tx = getDb()) {
+  return db.transaction(async (tx) => {
+    const [found] = await tx
+      .select()
+      .from(connections)
+      .where(and(eq(connections.id, id), ownedBy(account), ne(connections.status, 'pending')))
+      .for('update');
+    if (!found?.grantId || found.status === 'revoked') return found;
+    const [ended] = await tx
+      .update(connections)
+      .set({ status: 'revoked', revokedAt: now })
+      .where(eq(connections.id, id))
+      .returning();
+    await tx.delete(oauthPayloads).where(eq(oauthPayloads.grantId, found.grantId));
+    return ended;
+  });
 }

@@ -55,15 +55,19 @@ export interface X402PaymentRequired {
   extensions?: Record<string, unknown>;
 }
 
-/** EIP-3009 `transferWithAuthorization` signed message (shared by x402 and MPP). */
-export interface X402EIP3009Authorization {
+/**
+ * EIP-3009 `transferWithAuthorization` signed message (shared by x402 and MPP).
+ * A type alias, not an interface: it is also a typed data message, and viem's
+ * checks need the index signature an alias implies.
+ */
+export type X402EIP3009Authorization = {
   from: `0x${string}`;
   to: `0x${string}`;
   value: string;
   validAfter: string;
   validBefore: string;
   nonce: `0x${string}`;
-}
+};
 
 /** Signed message + signature — the payload of the `exact` scheme on EVM. */
 export interface X402ExactPayload {

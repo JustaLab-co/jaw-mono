@@ -1,11 +1,15 @@
 import { createMcpHandler } from 'mcp-handler';
 import { registerApprovalTools } from '@/approvals/tools';
+import { auditTools } from '@/audit/record';
 import { clientOf, connectionKey, withConnection } from '@/connections/auth';
 import { guardTools, withEdge } from '@/lib/edge';
 import { countUnauthorized } from '@/lib/metrics';
 import { registerReadTools } from '@/tools/read';
+import { registerDisconnectTool } from '@/tools/disconnect';
 import { registerHistoryTool } from '@/tools/history';
 import { registerPayTool } from '@/tools/pay-and-fetch';
+import { registerPrepareCallsTool } from '@/tools/prepare-calls';
+import { registerPrepareTransferTool } from '@/tools/prepare-transfer';
 import { registerBudgetTool } from '@/tools/request-budget';
 
 export const runtime = 'nodejs';
@@ -13,12 +17,16 @@ export const dynamic = 'force-dynamic';
 
 const mcp = createMcpHandler(
   (server) => {
+    auditTools(server);
     guardTools(server);
     registerReadTools(server);
     registerApprovalTools(server);
     registerBudgetTool(server);
+    registerPrepareTransferTool(server);
+    registerPrepareCallsTool(server);
     registerPayTool(server);
     registerHistoryTool(server);
+    registerDisconnectTool(server);
   },
   {
     serverInfo: { name: 'jaw', version: '0.0.1' },

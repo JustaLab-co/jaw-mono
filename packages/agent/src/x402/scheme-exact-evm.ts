@@ -45,6 +45,8 @@ export interface BuildExactOptions {
   nonce?: `0x${string}`;
 }
 
+export const SETTLEMENT_WINDOW_FLOOR = 600;
+
 /**
  * Build and sign the `exact`-scheme payment for one chosen requirement. `from`
  * is the payer address (the session-key EOA in pull mode). Each call uses a
@@ -56,6 +58,50 @@ export async function buildExactPayment(
   sign: ExactSigner,
   opts: BuildExactOptions = {}
 ): Promise<X402PaymentPayload> {
+  const nowSec = opts.now ?? Math.floor(Date.now() / 1000);
+  // The authorization must stay valid until the facilitator's settlement tx is
+  // MINED, which includes verify + submit + block time on top of our signing.
+  // A server's advertised maxTimeoutSeconds is often as low as 60s, too tight,
+  // so the auth can expire before settlement and the transfer reverts. Give a
+  // generous floor; a longer-valid authorization is harmless because the
+  // EIP-3009 nonce is single-use.
+  const window = Math.max(requirement.maxTimeoutSeconds || 0, SETTLEMENT_WINDOW_FLOOR);
+  const draft = exactDraft(requirement, from, {
+    validBefore: String(nowSec + window),
+    nonce: opts.nonce ?? bytesToHex(crypto.getRandomValues(new Uint8Array(32))),
+  });
+  const { message } = draft.typedData;
+  const signature = await sign({
+    ...draft.typedData,
+    message: {
+      ...message,
+      value: BigInt(message.value),
+      validAfter: BigInt(message.validAfter),
+      validBefore: BigInt(message.validBefore),
+    },
+  });
+  return signedExact(draft, signature);
+}
+
+/** The unsigned authorization for one exact requirement: fixed now, signed later. */
+export interface ExactDraft {
+  requirement: X402PaymentRequirement;
+  authorization: X402EIP3009Authorization;
+  /** The registry's USDC domain, never `extra`. `message` is `authorization`, decimal strings and all. */
+  typedData: {
+    domain: ExactTypedData['domain'];
+    types: typeof TRANSFER_WITH_AUTHORIZATION_TYPES;
+    primaryType: 'TransferWithAuthorization';
+    message: X402EIP3009Authorization;
+  };
+}
+
+/** Pure: the caller fixes the clock and the nonce. Throws on any requirement the signer must refuse. */
+export function exactDraft(
+  requirement: X402PaymentRequirement,
+  from: `0x${string}`,
+  fixed: { validBefore: string; nonce: `0x${string}` }
+): ExactDraft {
   // Signing an `upto` ceiling as a fixed EIP-3009 transfer would move the whole
   // ceiling and call it a price. The two builders each refuse the other's work.
   if (requirement.scheme !== 'exact') {
@@ -110,43 +156,33 @@ export async function buildExactPayment(
   // compares it against the separator the token verifies against, in
   // `x402 status`, which is where a network read belongs and this is not.
 
-  const nowSec = opts.now ?? Math.floor(Date.now() / 1000);
-  const validAfter = '0';
-  // The authorization must stay valid until the facilitator's settlement tx is
-  // MINED, which includes verify + submit + block time on top of our signing.
-  // A server's advertised maxTimeoutSeconds is often as low as 60s — too tight,
-  // so the auth can expire before settlement and the transfer reverts. Give a
-  // generous floor; a longer-valid authorization is harmless because the
-  // EIP-3009 nonce is single-use.
-  const SETTLEMENT_WINDOW_FLOOR = 600;
-  const window = Math.max(requirement.maxTimeoutSeconds || 0, SETTLEMENT_WINDOW_FLOOR);
-  const validBefore = String(nowSec + window);
-  const nonce = opts.nonce ?? bytesToHex(crypto.getRandomValues(new Uint8Array(32)));
-
   const authorization: X402EIP3009Authorization = {
     from,
     to: requirement.payTo,
     value: requirement.amount,
-    validAfter,
-    validBefore,
-    nonce,
+    validAfter: '0',
+    validBefore: fixed.validBefore,
+    nonce: fixed.nonce,
   };
-
-  const signature = await sign({
-    domain: { name: asset.usdcName, version: asset.usdcVersion, chainId: asset.chainId, verifyingContract },
-    types: TRANSFER_WITH_AUTHORIZATION_TYPES,
-    primaryType: 'TransferWithAuthorization',
-    message: {
-      from,
-      to: requirement.payTo,
-      value: BigInt(requirement.amount),
-      validAfter: BigInt(validAfter),
-      validBefore: BigInt(validBefore),
-      nonce,
+  return {
+    requirement,
+    authorization,
+    typedData: {
+      domain: { name: asset.usdcName, version: asset.usdcVersion, chainId: asset.chainId, verifyingContract },
+      types: TRANSFER_WITH_AUTHORIZATION_TYPES,
+      primaryType: 'TransferWithAuthorization',
+      message: authorization,
     },
-  });
+  };
+}
 
-  return { x402Version: 2, accepted: requirement, payload: { signature, authorization } };
+/** The wire payload for a draft and its signature. `accepted` may be a fresher copy of the same option. */
+export function signedExact(
+  draft: ExactDraft,
+  signature: `0x${string}`,
+  accepted: X402PaymentRequirement = draft.requirement
+): X402PaymentPayload {
+  return { x402Version: 2, accepted, payload: { signature, authorization: draft.authorization } };
 }
 
 /** Base64-encode a payment payload for the `PAYMENT-SIGNATURE` header. */

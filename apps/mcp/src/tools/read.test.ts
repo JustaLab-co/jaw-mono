@@ -151,8 +151,11 @@ describe('read tools', () => {
     const tools = json.result.tools as { name: string; outputSchema?: object }[];
     expect(tools.map((t) => t.name).sort()).toEqual([
       'jaw_add_funds',
+      'jaw_disconnect',
       'jaw_history',
       'jaw_pay_and_fetch',
+      'jaw_prepare_calls',
+      'jaw_prepare_transfer',
       'jaw_quote',
       'jaw_request_budget',
       'jaw_request_signature',

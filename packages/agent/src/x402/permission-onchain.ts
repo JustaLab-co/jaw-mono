@@ -28,6 +28,7 @@ export const PERMISSION_MANAGER_ABI = parseAbi([
   'function isApproved(Permission permission) view returns (bool)',
   'function isRevoked(Permission permission) view returns (bool)',
   'function getCurrentPeriod(Permission permission, SpendLimit spendLimit) view returns (PeriodSpend)',
+  'function revokeAsSpender(Permission permission)',
   // Carried so the two time-bound reverts can be told apart from a node that
   // did not answer. Everything else the manager can revert with decodes to an
   // unnamed error, which is treated as unavailable rather than guessed at.

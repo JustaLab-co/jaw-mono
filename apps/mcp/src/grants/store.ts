@@ -1,8 +1,8 @@
 import type { GrantedPermission, PermissionReadTarget, PermissionState } from '@jaw.id/agent';
-import { and, desc, eq, gt, isNotNull, isNull, sql } from 'drizzle-orm';
+import { and, desc, eq, gt, isNotNull, isNull, or, sql } from 'drizzle-orm';
 import type { Address, Hex } from 'viem';
 import { getDb } from '@/db/client';
-import { grants } from '@/db/schema';
+import { connections, grants } from '@/db/schema';
 
 export interface Grant {
   permissionId: Hex;
@@ -38,7 +38,8 @@ export async function currentGrant(connectionId: string): Promise<Grant | undefi
 }
 
 /**
- * Replaced budgets the chain does not show revoked yet, so the page can revoke them
+ * Unexpired budgets that should be revoked, replaced ones and every one of a revoked
+ * connection, that the chain does not show revoked yet, so the page can revoke them
  * or retry. One the chain shows revoked is recorded and drops out; one it cannot
  * read stays listed.
  */
@@ -49,7 +50,17 @@ export async function outstandingRevokes(
   const rows = await getDb()
     .select()
     .from(grants)
-    .where(and(eq(grants.connectionId, connectionId), isNotNull(grants.replacedAt), isNull(grants.revokedAt)))
+    .where(
+      and(
+        eq(grants.connectionId, connectionId),
+        isNull(grants.revokedAt),
+        gt(grants.expiresAt, sql`now()`),
+        or(
+          isNotNull(grants.replacedAt),
+          sql`exists (select 1 from ${connections} where ${connections.id} = ${grants.connectionId} and ${connections.status} = 'revoked')`
+        )
+      )
+    )
     .orderBy(grants.createdAt);
   const outstanding: Hex[] = [];
   for (const row of rows) {

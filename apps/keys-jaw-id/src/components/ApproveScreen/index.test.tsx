@@ -9,12 +9,15 @@ import { rejectionTypedData } from '@jaw.id/agent/reserved';
 
 const signMessage = vi.fn(async (_message: string) => '0xsig');
 const signTypedData = vi.fn(async (_typedData: unknown) => '0xsig');
+const CALLS_ID = `0x${'c1'.repeat(32)}`;
+const sendCalls = vi.fn(async (..._args: unknown[]) => ({ id: CALLS_ID, chainId: 84532 }));
 const chain = { id: 84532, rpcUrl: 'https://rpc.example' };
-const signer = { signMessage, signTypedData, getChain: () => chain };
+const signer = { signMessage, signTypedData, sendCalls, getChain: () => chain };
 const get = vi.fn(async (_config: unknown) => signer);
 let signedInAs = '';
 vi.mock('@jaw.id/core', () => ({
   Account: { get: (config: unknown) => get(config) },
+  jawPaymasterUrl: (chainId: number, apiKey?: string) => `https://paymaster.example/${chainId}/${apiKey}`,
   standardErrorCodes: { provider: { userRejectedRequest: 4001 } },
 }));
 vi.mock('@jaw.id/ui', async () => ({ PortalContainerContext: (await import('react')).createContext(null) }));
@@ -108,22 +111,66 @@ const GRANTED = {
   chainId: '0x14a34',
 };
 
+const PAY_TO = '0x2222222222222222222222222222222222222222';
+const TRANSFER = {
+  domain: { name: 'USDC', version: '2', chainId: 84532, verifyingContract: USDC },
+  types: {
+    TransferWithAuthorization: [
+      { name: 'from', type: 'address' },
+      { name: 'to', type: 'address' },
+      { name: 'value', type: 'uint256' },
+      { name: 'validAfter', type: 'uint256' },
+      { name: 'validBefore', type: 'uint256' },
+      { name: 'nonce', type: 'bytes32' },
+    ],
+  },
+  primaryType: 'TransferWithAuthorization',
+  message: {
+    from: OWNER,
+    to: PAY_TO,
+    value: '10000',
+    validAfter: '0',
+    validBefore: '1791374400',
+    nonce: `0x${'11'.repeat(32)}`,
+  },
+};
+const PAYMENT_VIEW = {
+  ...VIEW,
+  preview: {
+    kind: 'payment',
+    requester: VIEW.preview.requester,
+    account: OWNER,
+    chainId: 84532,
+    payTo: PAY_TO,
+    token: USDC,
+    amount: '10000',
+    network: 'eip155:84532',
+    resource: 'https://seller.example/report',
+    warnings: [],
+    validUntil: '2026-10-07T14:40:00.000Z',
+  },
+  approve: { type: 'typed_data', typedData: TRANSFER },
+};
+
 let root: Root;
 let container: HTMLDivElement;
 let posts: unknown[];
 
 let view: object = VIEW;
 let refusals: string[] = [];
+let decided: object = {};
 let postAnswer: object | null = null;
 
 beforeEach(() => {
   view = VIEW;
   posts = [];
   refusals = [];
+  decided = {};
   postAnswer = null;
   modal = null;
   signMessage.mockClear();
   signTypedData.mockClear();
+  sendCalls.mockClear();
   signedInAs = OWNER;
   vi.stubGlobal(
     'fetch',
@@ -134,7 +181,7 @@ beforeEach(() => {
         posts.push(body);
         const refusal = refusals.shift();
         if (refusal) return Response.json({ error: refusal }, { status: 409 });
-        return Response.json(postAnswer ?? { ...view, status: body.verdict });
+        return Response.json(postAnswer ?? { ...view, status: body.verdict, ...decided });
       }
       return { ok: true, json: async () => view } as Response;
     })
@@ -290,6 +337,35 @@ describe('ApproveScreen', () => {
     });
   });
 
+  it('moves on to the next outstanding revoke once the chain shows the first one gone', async () => {
+    const OLDER = `0x${'dd'.repeat(32)}`;
+    view = BUDGET_VIEW;
+    postAnswer = { ...APPROVED, revoke: [OLDER, OLD] };
+    await render();
+    await click(container.querySelector('#login'));
+    await click(button('Approve'));
+    await act(async () => modal!.onSuccess(GRANTED));
+    await settle();
+    view = { ...APPROVED, revoke: [OLD] };
+    await act(async () => modal!.onSuccess({ success: true }));
+    await settle();
+    expect(container.textContent).not.toContain('does not show');
+    expect(container.querySelector('#permission-modal')).not.toBeNull();
+    expect(modal!.permissionRequest).toEqual({
+      method: 'wallet_revokePermissions',
+      params: [{ id: OLD, address: OWNER }],
+    });
+  });
+
+  it('offers the outstanding revoke only to the account that granted the budget', async () => {
+    signedInAs = '0x3333333333333333333333333333333333333333';
+    view = { ...APPROVED, revoke: [OLD] };
+    await render();
+    await click(container.querySelector('#login'));
+    expect(button('Retry revoke')).toBeUndefined();
+    expect(container.textContent).toContain('This request is for');
+  });
+
   it('renders the wallet dialog inside the JAW UI scope, so it is styled and centered', async () => {
     view = BUDGET_VIEW;
     await render();
@@ -349,5 +425,206 @@ describe('ApproveScreen', () => {
     expect(container.querySelector('#permission-modal')).toBeNull();
     expect(button('Reject')).toBeDefined();
     expect(posts).toEqual([]);
+  });
+
+  it('shows the payment terms from the server preview and signs the served transfer by reference', async () => {
+    view = PAYMENT_VIEW;
+    decided = { payment: { state: 'signed', kind: 'paid', code: null } };
+    await render();
+    expect(container.querySelector('h1')!.textContent).toBe('Payment request from evil.example');
+    expect(container.textContent).toContain('0.01 USDC');
+    expect(container.textContent).toContain(`To: ${PAY_TO}`);
+    expect(container.textContent).toContain('For: https://seller.example/report');
+    expect(container.textContent).toContain('eip155:84532');
+
+    await click(container.querySelector('#login'));
+    await click(button('Approve'));
+    expect(signMessage).not.toHaveBeenCalled();
+    expect(signTypedData.mock.calls[0][0]).toBe(TRANSFER);
+    expect(posts).toEqual([{ verdict: 'approved', signature: '0xsig', previewHash: VIEW.previewHash }]);
+    expect(container.textContent).toContain('Paid.');
+  });
+
+  it('says nothing was sent when the price moved before the approval', async () => {
+    view = PAYMENT_VIEW;
+    decided = { payment: { state: 'failed', kind: 'refused', code: 'price_changed' } };
+    await render();
+    await click(container.querySelector('#login'));
+    await click(button('Approve'));
+    expect(container.textContent).toContain('the price changed');
+    expect(container.textContent).toContain('Nothing was sent.');
+  });
+
+  describe('transfers and calls', () => {
+    const SPENDER = '0x5555555555555555555555555555555555555555';
+    const TRANSFER_DATA = `0xa9059cbb${'0'.repeat(24)}${PAY_TO.slice(2)}${(10000).toString(16).padStart(64, '0')}`;
+    const CALLS = [{ to: USDC, value: '0x0', data: TRANSFER_DATA }];
+    const PAYMASTER = { token: USDC, gas: '90000' };
+    const GAS = { token: USDC, estimate: '21000', max: '90000' };
+    const TRANSFER_VIEW = {
+      ...VIEW,
+      preview: {
+        kind: 'transfer',
+        requester: VIEW.preview.requester,
+        to: PAY_TO,
+        name: 'alice.eth',
+        token: USDC,
+        amount: '10000',
+        gas: GAS,
+      },
+      approve: { type: 'calls', calls: CALLS, chainId: '0x14a34' },
+      paymaster: PAYMASTER,
+    };
+    const CALLS_VIEW = {
+      ...TRANSFER_VIEW,
+      preview: {
+        kind: 'calls',
+        requester: VIEW.preview.requester,
+        calls: [
+          {
+            to: USDC,
+            value: '0x0',
+            data: '0x095ea7b3',
+            function: 'approve(address,uint256)',
+            args: [
+              { name: 'spender', type: 'address', value: SPENDER },
+              {
+                name: 'amount',
+                type: 'uint256',
+                value: '115792089237316195423570985008687907853269984665640564039457584007913129639935',
+              },
+            ],
+            warnings: [{ code: 'token_approval', spender: SPENDER, amount: '1157', unlimited: true }],
+          },
+          { to: PAY_TO, value: '0xde0b6b3a7640000', data: '0xdeadbeef', warnings: [{ code: 'unknown_function' }] },
+          { to: PAY_TO, value: '0x0', data: '0xdead', warnings: [{ code: 'short_calldata' }] },
+        ],
+        gas: GAS,
+      },
+    };
+
+    it('shows the name beside the address, the amount and the gas in USDC', async () => {
+      view = TRANSFER_VIEW;
+      await render();
+      expect(container.querySelector('h1')?.textContent).toBe('Transfer request from evil.example');
+      expect(container.textContent).toContain('Send 0.01 USDC');
+      expect(container.textContent).toContain('alice.eth');
+      expect(container.textContent).toContain(PAY_TO);
+      expect(container.textContent).toContain('about 0.021 USDC, at most 0.09 USDC');
+    });
+
+    it('sends the served calls by reference through the ERC-20 paymaster and posts the calls id', async () => {
+      view = TRANSFER_VIEW;
+      await render();
+      await click(container.querySelector('#login'));
+      await click(button('Approve'));
+      expect(sendCalls).toHaveBeenCalledTimes(1);
+      const [calls, options, paymasterUrl, context] = sendCalls.mock.calls[0];
+      expect(calls).toBe(CALLS);
+      expect(options).toBeUndefined();
+      expect(paymasterUrl).toBe('https://paymaster.example/84532/agent-key');
+      expect(context).toBe(PAYMASTER);
+      expect(signMessage).not.toHaveBeenCalled();
+      expect(signTypedData).not.toHaveBeenCalled();
+      expect(posts).toEqual([{ verdict: 'approved', callsId: CALLS_ID, previewHash: VIEW.previewHash }]);
+      expect(container.textContent).toContain('Approved.');
+    });
+
+    it('waits for the calls to land, and never sends twice when the server still cannot see them', async () => {
+      view = TRANSFER_VIEW;
+      refusals = Array.from({ length: 15 }, () => 'calls_pending');
+      await render();
+      await click(container.querySelector('#login'));
+      vi.useFakeTimers();
+      try {
+        await act(async () => {
+          button('Approve')?.click();
+          await vi.runAllTimersAsync();
+        });
+      } finally {
+        vi.useRealTimers();
+      }
+      expect(posts).toHaveLength(15);
+      expect(container.textContent).toContain('not on chain yet');
+      await click(button('Check again'));
+      expect(sendCalls).toHaveBeenCalledTimes(1);
+      expect(posts).toHaveLength(16);
+      expect(container.textContent).toContain('Approved.');
+    });
+
+    it('shows each call decoded or raw, with its warnings', async () => {
+      view = CALLS_VIEW;
+      await render();
+      expect(container.querySelector('h1')?.textContent).toBe('Transaction request from evil.example');
+      expect(container.textContent).toContain('approve(address,uint256)');
+      expect(container.textContent).toContain(`Lets ${SPENDER} spend an unlimited amount`);
+      expect(container.textContent).toContain('0xdeadbeef');
+      expect(container.textContent).toContain('No known function matches this call');
+      expect(container.textContent).toContain('shorter than a function selector');
+      expect(container.textContent).toContain('Sends 1 ETH');
+    });
+  });
+
+  describe('typed data and Sign in with Ethereum', () => {
+    const TYPED = {
+      domain: { name: 'USD Coin', version: '2', chainId: 84532, verifyingContract: USDC },
+      types: { Permit: [{ name: 'spender', type: 'address' }] },
+      primaryType: 'Permit',
+      message: { spender: PAY_TO },
+    };
+    const TYPED_VIEW = {
+      ...VIEW,
+      preview: {
+        kind: 'typed-data',
+        requester: VIEW.preview.requester,
+        domain: '{"name":"USD Coin"}',
+        primaryType: 'Permit',
+        message: `{"spender":"${PAY_TO}"}`,
+        warnings: ['token_permit', 'chain_mismatch'],
+      },
+      approve: { type: 'typed_data', typedData: TYPED },
+    };
+    const LOGIN = 'app.example wants you to sign in with your Ethereum account:\n...';
+    const SIWE_VIEW = {
+      ...VIEW,
+      preview: {
+        kind: 'siwe',
+        requester: VIEW.preview.requester,
+        account: OWNER,
+        domain: 'app.example',
+        uri: 'https://app.example/login',
+        statement: 'Log in',
+        nonce: 'n0nce1234',
+        issuedAt: '2026-10-07T12:00:00.000Z',
+        expirationTime: null,
+        warnings: ['siwe_login'],
+      },
+      approve: { type: 'message', message: LOGIN },
+    };
+
+    it('shows the typed data as served with its warnings and signs it by reference', async () => {
+      view = TYPED_VIEW;
+      await render();
+      expect(container.querySelector('h1')?.textContent).toBe('Typed data request from evil.example');
+      expect(container.textContent).toContain('{"spender":"');
+      expect(container.textContent).toContain('can let someone move your tokens');
+      expect(container.textContent).toContain('another chain');
+      await click(container.querySelector('#login'));
+      await click(button('Approve'));
+      expect(signTypedData.mock.calls[0][0]).toBe(TYPED);
+      expect(posts).toEqual([{ verdict: 'approved', signature: '0xsig', previewHash: VIEW.previewHash }]);
+    });
+
+    it('warns which site a login is for and signs the served message', async () => {
+      view = SIWE_VIEW;
+      await render();
+      expect(container.querySelector('h1')?.textContent).toBe('Sign-in request from evil.example');
+      expect(container.textContent).toContain(`logs the agent into app.example as ${OWNER}`);
+      expect(container.textContent).toContain('https://app.example/login');
+      await click(container.querySelector('#login'));
+      await click(button('Approve'));
+      expect(signMessage.mock.calls[0][0]).toBe(LOGIN);
+      expect(posts).toEqual([{ verdict: 'approved', signature: '0xsig', previewHash: VIEW.previewHash }]);
+    });
   });
 });

@@ -1,11 +1,11 @@
 import type { SignedPayload } from '@jaw.id/agent';
-import { createPublicClient, http, type Address, type Hex, type PublicClient } from 'viem';
+import { createPublicClient, http, type Address, type Hex, type PublicClient, type TypedDataDefinition } from 'viem';
 import { config, SUPPORTED_CHAINS } from '@/connections/config';
 
 export type VerifySignature = (a: {
   chainId: number;
   address: Address;
-  payload: Exclude<SignedPayload, { type: 'grant' }>;
+  payload: Extract<SignedPayload, { type: 'message' | 'typed_data' }>;
   signature: Hex;
 }) => Promise<boolean>;
 
@@ -26,5 +26,5 @@ export const verifyOnChain: VerifySignature = async ({ chainId, address, payload
   const client = publicClientFor(chainId);
   return payload.type === 'message'
     ? client.verifyMessage({ address, message: payload.message, signature })
-    : client.verifyTypedData({ address, signature, ...payload.typedData });
+    : client.verifyTypedData({ address, signature, ...(payload.typedData as TypedDataDefinition) });
 };

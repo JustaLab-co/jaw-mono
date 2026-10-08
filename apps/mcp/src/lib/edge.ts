@@ -1,3 +1,4 @@
+import { AsyncLocalStorage } from 'node:async_hooks';
 import type { McpServer } from '@modelcontextprotocol/server';
 import { countHit, isPaused } from '@/db/settings';
 import { pageCors } from './cors';
@@ -93,6 +94,10 @@ export function guardTools(server: McpServer): void {
     })) as typeof server.registerTool;
 }
 
+// The edge's request id for code deeper in the request, such as the audit record.
+const requestScope = new AsyncLocalStorage<string>();
+export const currentRequestId = () => requestScope.getStore();
+
 export function withEdge(
   handler: Handler,
   { guarded, cors = false, rateKey = ipKey }: { guarded: boolean; cors?: boolean; rateKey?: RateKey }
@@ -102,7 +107,7 @@ export function withEdge(
     const started = performance.now();
     let res: Response;
     try {
-      res = (guarded && (await refuse(req, rateKey))) || (await handler(req, ctx));
+      res = (guarded && (await refuse(req, rateKey))) || (await requestScope.run(requestId, () => handler(req, ctx)));
     } catch (err) {
       log('error', { requestId, error: errorLabel(err) });
       res = databaseUnreachable(err)
