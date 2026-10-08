@@ -1,6 +1,6 @@
-# CLAUDE.md
+# AGENTS.md
 
-This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
+Guidance for AI coding agents and contributors working in this repository.
 
 ## Overview
 
@@ -22,6 +22,10 @@ bunx nx build @jaw.id/ui
 
 # Run tests for a package
 bunx nx test @jaw.id/core
+
+# Tests for the agent package and the hosted server
+bunx nx test @jaw.id/agent
+bunx nx test @jaw-mono/mcp
 
 # Run a single test file
 cd packages/core && bunx vitest run src/path/to/file.test.ts
@@ -54,6 +58,26 @@ bunx nx graph
 bunx nx release
 ```
 
+## Verify
+
+Unit tests do not cover the payment path. For a change under `packages/agent`, `packages/cli` or `apps/mcp`, build, pack and drive the real thing with the scripts in `tools/verify/`:
+
+```bash
+bun install
+S=tools/verify
+RUN=$($S/up.sh | tail -1)        # builds the CLI, starts the local x402 seller
+$S/doctor.sh "$RUN"              # must print no FAIL and no WARN
+$S/drive.sh "$RUN" head status x402 status -o json
+$S/hosted-up.sh "$RUN"           # Docker: Postgres and apps/mcp
+$S/down.sh "$RUN"
+```
+
+`tools/verify/README.md` has the full recipes, the seller routes and what counts as evidence. Build before driving any artifact: the packed CLI runs the last build, not the source. Say which revision you built when you report a manual check, and force the edge (a price over the cap, an empty balance) when the change only acts there.
+
+## Risky paths
+
+`.github/risky-paths` lists, one glob per line, the code that moves money, holds keys, renders consent screens, seals tokens or migrates the database. A change touching it needs a person to read it, so keep it in its own small PR and run the matching `tools/verify` drive. Its entries are mirrored in `.github/CODEOWNERS`.
+
 ## Testing invariants
 
 These hold for every change, however small. A diff that needs to break one is a decision for a person to make in the PR description, not something to route around.
@@ -83,6 +107,7 @@ CI runs `bunx nx affected -t lint test typecheck build api-check e2e`, so a chan
 
 - **playground** - Next.js demo app exercising the SDK via @jaw.id/wagmi (the `jaw()` connector wired through wagmi)
 - **keys-jaw-id** - Next.js keys management application (keys.jaw.id)
+- **mcp** - Hosted MCP server (Next.js, Postgres, Drizzle): OAuth with a passkey consent on keys.jaw.id, read tools, passkey-approved signatures and x402 payments within a granted budget
 - **docs** - Documentation site built with Vocs
 
 ### Smart Contracts (`contracts/`)

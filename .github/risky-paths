@@ -1,0 +1,25 @@
+# Code that moves money, holds keys, renders consent, seals tokens or migrates the database.
+# One glob per line. Mirrored in CODEOWNERS.
+packages/agent/src/x402/**
+packages/agent/src/grants/**
+packages/agent/src/approvals/**
+packages/agent/src/session/**
+packages/cli/src/lib/keystore.ts
+packages/cli/src/lib/session-*.ts
+packages/cli/src/lib/rpc-classifier.ts
+packages/cli/src/lib/payment-lock.ts
+packages/cli/src/commands/session/**
+packages/cli/src/commands/x402/**
+apps/mcp/src/payments/**
+apps/mcp/src/approvals/**
+apps/mcp/src/connections/**
+apps/mcp/src/grants/**
+apps/mcp/src/db/**
+apps/mcp/drizzle/**
+apps/keys-jaw-id/src/app/approve/**
+apps/keys-jaw-id/src/app/authorize/**
+apps/keys-jaw-id/src/components/ApproveScreen/**
+apps/keys-jaw-id/src/components/AuthorizeScreen/**
+apps/keys-jaw-id/src/components/BudgetApproval/**
+apps/keys-jaw-id/src/components/ConnectionsScreen/**
+apps/keys-jaw-id/src/app/connections/**
