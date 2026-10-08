@@ -24,6 +24,7 @@ import {
 } from '../rpc/wallet_sendCalls.js';
 import type { JustanAccountImplementation } from './toJustanAccount.js';
 import { jawHttp } from '../utils/jawHttp.js';
+import { withoutApiKey } from '../utils/redact.js';
 import {
     PasskeyManager,
     type PasskeyAccount,
@@ -1243,7 +1244,7 @@ export class Account {
                     // The grant is what the user came to do; a paymaster that
                     // will not quote is not a reason to fail it. It is a reason
                     // to say so, for the same reason as above.
-                    console.warn('Could not price the spender prefund, granting without it:', error);
+                    console.warn('Could not price the spender prefund, granting without it:', withoutApiKey(error));
                     return null;
                 }
             },
@@ -1294,7 +1295,7 @@ export class Account {
                     { cause: error }
                 );
             }
-            console.warn('Could not fetch permission for gas estimation:', error);
+            console.warn('Could not fetch permission for gas estimation:', withoutApiKey(error));
         }
 
         // Check if we need an ERC-20 approval for the paymaster
