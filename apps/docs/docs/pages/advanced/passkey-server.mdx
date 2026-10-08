@@ -1,18 +1,22 @@
 # Custom Passkey Server
 
-Run your own passkey metadata server for managing passkey credentials in app-specific mode.
+Run your own passkey metadata server in app-specific mode.
 
 ## Overview
 
-The SDK needs a server to store passkey metadata (credential IDs, public keys, display names). By default, the SDK uses `https://api.justaname.id/wallet/v2/passkeys`, but you can host your own.
+The SDK needs a server to store passkey metadata (credential IDs, public keys, display names). By default the SDK uses `https://api.justaname.id/wallet/v2/passkeys`, but you can host your own.
 
 :::warning
 **Important:** This server does NOT store passkeys themselves—passkeys are always stored by the browser/device. The server only stores metadata to enable passkey lookups and management.
 :::
 
+:::info
+A custom passkey server is only available in app-specific mode. Setting `serverUrl` in cross-platform mode throws, because keys.jaw.id manages passkeys there.
+:::
+
 ## Configuration
 
-Point the SDK to your custom server:
+Point the SDK to your server's passkeys endpoint:
 
 ```typescript
 import { JAW, Mode } from '@jaw.id/core';
@@ -28,13 +32,63 @@ const jaw = JAW.create({
 });
 ```
 
+`serverUrl` is the full URL of the passkeys endpoint. The SDK sends its `GET` and `POST` requests to exactly that URL. Query strings in `serverUrl` are dropped.
+
+## Response Format
+
+Every response is a JSON envelope:
+
+```json
+{
+  "statusCode": 200,
+  "result": {
+    "data": {},
+    "error": null
+  }
+}
+```
+
+On success, `data` must not be `null`: the SDK treats a `null` `data` as a failure and reports `error`. On failure, return a `4xx`/`5xx` status with `data: null` and a message in `error`.
+
 ## Required Endpoints
 
-Your server must implement the following endpoints:
+### POST /passkeys - Register a New Passkey
 
-### GET / - Lookup Passkeys by Credential IDs
+Registers a new passkey credential.
 
-Retrieves passkey information for one or more credential IDs.
+**Headers:**
+
+- `Content-Type: application/json`
+
+**Request Body:**
+
+```json
+{
+  "credentialId": "string",
+  "publicKey": "0x...",
+  "displayName": "string"
+}
+```
+
+**Success Response (200/201):** any non-null `data`, for example:
+
+```json
+{
+  "statusCode": 201,
+  "result": {
+    "data": "Passkey registered successfully",
+    "error": null
+  }
+}
+```
+
+**Behavior:**
+
+- If the credential ID is already registered, change nothing and return success. Never overwrite the public key of an existing credential.
+
+### GET /passkeys - Lookup Passkeys by Credential IDs
+
+Retrieves passkey information for one or more credential IDs. Used when a user imports a passkey on a new device.
 
 **Query Parameters:**
 
@@ -72,36 +126,13 @@ Retrieves passkey information for one or more credential IDs.
 }
 ```
 
-### POST / - Register a New Passkey
-
-Registers a new passkey credential.
-
-**Headers:**
-
-- `Content-Type: application/json`
-
-**Request Body:**
-
-```json
-{
-  "credentialId": "string",
-  "publicKey": "0x...",
-  "displayName": "string"
-}
-```
-
-**Response:**
-
-- Status `200`/`201` for successful registration
-- Status `4xx`/`5xx` for errors
-
 ## Data Format Requirements
 
-| Field            | Format                      | Description                            |
-| ---------------- | --------------------------- | -------------------------------------- |
-| **credentialId** | Base64url string            | Standard WebAuthn credential ID format |
-| **publicKey**    | Hex string with `0x` prefix | The passkey's public key               |
-| **displayName**  | String                      | Human-readable name for the passkey    |
+| Field            | Format                      | Description                                            |
+| ---------------- | --------------------------- | ------------------------------------------------------ |
+| **credentialId** | Base64url string            | Standard WebAuthn credential ID format                 |
+| **publicKey**    | Hex string with `0x` prefix | The passkey's P-256 public key: 64 bytes, `x` then `y` |
+| **displayName**  | String                      | Human-readable name for the passkey                    |
 
 ## When to Self-Host
 

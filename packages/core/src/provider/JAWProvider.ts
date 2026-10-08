@@ -388,6 +388,7 @@ export class JAWProvider extends ProviderEventEmitter implements ProviderInterfa
             paymasters: signerType === 'appSpecific' ? this.paymasters : undefined,
             ens: signerType === 'appSpecific' ? this.preference.ens : undefined,
             theme: signerType === 'appSpecific' ? this.theme : undefined,
+            serverUrl: signerType === 'appSpecific' ? this.preference.serverUrl : undefined,
         });
     }
 }

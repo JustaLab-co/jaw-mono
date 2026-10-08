@@ -78,6 +78,7 @@ export interface AccountConfig {
     paymasterUrl?: string;
     rpId?: string;
     rpName?: string;
+    serverUrl?: string;
     storage?: SyncStorage;
 }
 
@@ -1548,6 +1549,7 @@ export interface UIHandlerConfig {
     defaultChainId?: number;
     ens?: string;
     paymasters?: Record<number, PaymasterConfig>;
+    serverUrl?: string;
     showTestnets?: boolean;
     theme?: JawTheme;
 }

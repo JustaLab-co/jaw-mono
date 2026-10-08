@@ -1490,6 +1490,28 @@ describe('JAWProvider', () => {
             );
         });
 
+        it('hands an app-specific signer the configured passkey server', async () => {
+            provider = new JAWProvider({
+                ...mockConstructorOptions,
+                preference: {
+                    mode: 'AppSpecific',
+                    uiHandler: { request: vi.fn() } as never,
+                    serverUrl: 'https://passkeys.example.com/passkeys',
+                },
+            });
+            (mockSigner.handshake as Mock).mockResolvedValue(undefined);
+            (mockSigner.request as Mock).mockResolvedValue(['0x1234567890123456789012345678901234567890']);
+
+            await provider.request({ method: 'eth_requestAccounts' });
+
+            expect(createSigner).toHaveBeenCalledWith(
+                expect.objectContaining({
+                    signerType: 'appSpecific',
+                    serverUrl: 'https://passkeys.example.com/passkeys',
+                })
+            );
+        });
+
         it('should emit connect event through callback from signer', async () => {
             // Arrange
             provider = new JAWProvider(mockConstructorOptions);
