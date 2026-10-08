@@ -37,12 +37,21 @@
 /apps/keys-jaw-id/src/middleware.ts                   @Ghadi8 @mariano-aguero
 /apps/keys-jaw-id/src/app/cli-bridge/page.tsx         @Ghadi8 @mariano-aguero
 /apps/keys-jaw-id/src/lib/handshake-route.ts          @Ghadi8 @mariano-aguero
+/apps/keys-jaw-id/src/components/AuthorizeScreen/     @Ghadi8 @mariano-aguero
+/apps/keys-jaw-id/src/components/ApproveScreen/       @Ghadi8 @mariano-aguero
+
+# Hosted MCP: session keys sealed into tokens, and what an approval signs
+/apps/mcp/src/connections/     @Ghadi8 @mariano-aguero
+/apps/mcp/src/approvals/       @Ghadi8 @mariano-aguero
+/packages/agent/src/approvals/ @Ghadi8 @mariano-aguero
 
 # CLI session keys
 /packages/cli/src/lib/rpc-classifier.ts     @Ghadi8 @mariano-aguero
 /packages/cli/src/lib/session-bridge.ts     @Ghadi8 @mariano-aguero
 /packages/cli/src/lib/session-config.ts     @Ghadi8 @mariano-aguero
 /packages/cli/src/lib/keystore.ts           @Ghadi8 @mariano-aguero
-/packages/cli/src/x402/policy.ts            @Ghadi8 @mariano-aguero
 /packages/cli/src/commands/session/         @Ghadi8 @mariano-aguero
 /packages/cli/src/mcp/handlers/session.ts   @Ghadi8 @mariano-aguero
+/packages/agent/src/x402/policy.ts          @Ghadi8 @mariano-aguero
+/packages/agent/src/x402/session-bridge.ts  @Ghadi8 @mariano-aguero
+/packages/agent/src/session/                @Ghadi8 @mariano-aguero

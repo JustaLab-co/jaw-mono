@@ -15,7 +15,7 @@ import {
   importKeyFromHex,
   type EncryptedEnvelope,
 } from './crypto.js';
-import { sanitizeLine } from './terminal.js';
+import { reservedSigningRefusal, sanitizeLine } from '@jaw.id/agent';
 
 type CKey = webcrypto.CryptoKey;
 
@@ -363,6 +363,8 @@ export class WSBridge {
    * Send an encrypted RPC request through the relay to the browser SDK.
    */
   async request(method: string, params?: unknown): Promise<unknown> {
+    const reserved = reservedSigningRefusal(method, params);
+    if (reserved) throw new Error(reserved);
     const ws = this.ws;
     if (!ws || ws.readyState !== WebSocket.OPEN) {
       throw new Error('Not connected to relay');

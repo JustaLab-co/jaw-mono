@@ -2,13 +2,20 @@ import { Args, Flags } from '@oclif/core';
 import { BaseCommand } from '../../base-command.js';
 import { loadConfig } from '../../lib/config.js';
 import { tryLoadSessionConfig } from '../../lib/session-config.js';
-import { Eip3009EoaPayer } from '../../x402/payer.js';
-import { payAndFetch } from '../../x402/http.js';
-import { resolveSessionX402Policy } from '../../x402/policy.js';
-import { openPaymentWindow, recordPaymentOutcome } from '../../x402/payment-window.js';
-import { usdcForNetwork, USDC_BY_NETWORK } from '../../x402/asset-registry.js';
-import { formatUsdc } from '../../x402/status-report.js';
-import { sanitizeLine, sanitizeBlock } from '../../lib/terminal.js';
+import { sessionPayer } from '../../x402/session-payer.js';
+import {
+  payAndFetch,
+  toPayAndFetchResult,
+  resolveSessionX402Policy,
+  usdcForNetwork,
+  USDC_BY_NETWORK,
+  sanitizeLine,
+  sanitizeBlock,
+  formatUsdc,
+  openPaymentWindow,
+  recordPaymentOutcome,
+} from '@jaw.id/agent';
+import { cliPaymentPorts } from '../../x402/payment-ports.js';
 import { withPaymentLock } from '../../lib/payment-lock.js';
 import type { OutputFormat } from '../../lib/types.js';
 
@@ -65,7 +72,7 @@ export default class X402Pay extends BaseCommand {
     const apiKey = this.resolveApiKey(flags);
 
     // Throws a clear "run jaw session setup" when there is no session key.
-    const payer = Eip3009EoaPayer.fromSessionKey();
+    const payer = sessionPayer();
     const session = tryLoadSessionConfig();
     // Same resolution the MCP tool uses: this path ran on the bare defaults, so
     // the two front ends enforced different caps for the same session.
@@ -91,31 +98,36 @@ export default class X402Pay extends BaseCommand {
       // One read for the whole payment, taken here and not before the lock, and
       // the same assembly the MCP tool runs so the two cannot enforce different
       // caps for the same session.
-      const { spentThisSession, periodUsage, ensureFunds } = await openPaymentWindow({
-        session,
-        policy,
-        payerAddress: payer.address,
-        apiKey,
-        topUpFloat: config.x402?.topUpFloat,
-        dryRun,
-      });
+      const { spentThisSession, periodUsage, ensureFunds } = await openPaymentWindow(
+        {
+          session,
+          policy,
+          payerAddress: payer.address,
+          apiKey,
+          topUpFloat: config.x402?.topUpFloat,
+          dryRun,
+        },
+        cliPaymentPorts
+      );
 
-      const outcome = await payAndFetch(args.url, payer, {
-        method: flags.method,
-        body: flags.body,
-        policy,
-        ensureFunds,
-        spentThisSession,
-        periodUsage,
-        maxAmount: flags['max-amount'],
-        dryRun,
-      });
+      const outcome = toPayAndFetchResult(
+        await payAndFetch(args.url, payer, {
+          method: flags.method,
+          body: flags.body,
+          policy,
+          ensureFunds,
+          spentThisSession,
+          periodUsage,
+          maxAmount: flags['max-amount'],
+          dryRun,
+        })
+      );
 
       // No payment row for a dry run: recording one would corrupt the spend
       // totals that both this command and the agent read back. Opening the
       // window does write, and deliberately, though a dry run holds no lock;
       // `openPaymentWindow` says why.
-      if (flags.pay) recordPaymentOutcome(args.url, outcome, session, periodUsage);
+      if (flags.pay) await recordPaymentOutcome(args.url, outcome, session, periodUsage, cliPaymentPorts);
 
       return outcome;
     };

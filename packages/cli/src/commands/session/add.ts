@@ -5,23 +5,31 @@ import { loadConfig } from '../../lib/config.js';
 import { getBridge } from '../../lib/bridge-singleton.js';
 import { keystoreExists } from '../../lib/keystore.js';
 import {
+  loadSessionConfig,
+  replaceSessionConfig,
+  saveRevokeProgress,
+  sessionFileStore,
+} from '../../lib/session-config.js';
+import type { OutputFormat } from '../../lib/types.js';
+import {
+  type PermissionsConfig,
+  parsePermissionsConfig,
+  buildX402Permissions,
+  DEFAULT_X402_LIMIT,
+  mergePermissions,
+  describeMerge,
+  readLiveness,
+  whyGrantExceedsCeiling,
+  whyOwnerCannotFundSession,
+  whySpenderCannotPay,
+  recoverPermission,
   expiryInstant,
   isLegacySession,
   liveOrphans,
-  loadSessionConfig,
   parseGrantedPermission,
-  replaceSessionConfig,
-  saveRevokeProgress,
   sessionUsable,
-} from '../../lib/session-config.js';
-import type { OutputFormat, PermissionsConfig } from '../../lib/types.js';
-import { parsePermissionsConfig } from '../../lib/validation.js';
-import { buildX402Permissions, DEFAULT_X402_LIMIT } from '../../x402/grant-preset.js';
-import { whyGrantExceedsCeiling } from '../../x402/grant-ceiling.js';
-import { whyOwnerCannotFundSession, whySpenderCannotPay } from '../../x402/funded-owner.js';
-import { readLiveness } from '../../x402/permission-onchain.js';
-import { recoverPermission } from '../../x402/permission-recovery.js';
-import { mergePermissions, describeMerge } from '../../x402/merge-permissions.js';
+} from '@jaw.id/agent';
+import { cliChainClients, usdcBaseUnits } from '../../x402/balance.js';
 
 /**
  * Add a capability to a session without taking away the ones it has.
@@ -101,7 +109,7 @@ export default class SessionAdd extends BaseCommand {
     // permission id.
     // Recovered from the relay when the session predates the CLI storing it,
     // so an older session can be added to rather than told to start over.
-    const existing = await recoverPermission(session, apiKey);
+    const existing = await recoverPermission(session, apiKey, { store: sessionFileStore });
     if (!existing) {
       // Two causes, and only one of them is the session's fault. Recovery reads
       // the relay, which needs a key, so with none the honest answer is to get
@@ -125,7 +133,7 @@ export default class SessionAdd extends BaseCommand {
     // the capability loss this command exists to prevent. Not knowing is not a
     // reason to refuse: it is what every session reports without a reachable
     // node.
-    const liveness = await readLiveness({ ...session, permission: existing });
+    const liveness = await readLiveness({ ...session, permission: existing }, { clients: cliChainClients });
     if (liveness === 'revoked') {
       this.error(
         'The permission this session names was revoked on chain. Run `jaw session setup` to create a new one.'
@@ -208,6 +216,7 @@ export default class SessionAdd extends BaseCommand {
         const blocked = await whyOwnerCannotFundSession({
           chainId: session.chainId,
           request: (m, p) => bridge.request(m, p),
+          readBalance: usdcBaseUnits,
         });
         if (blocked) this.error(blocked);
       }
@@ -291,6 +300,7 @@ export default class SessionAdd extends BaseCommand {
       const unfunded = await whySpenderCannotPay({
         chainId: session.chainId,
         spender: session.sessionAddress as `0x${string}`,
+        readBalance: usdcBaseUnits,
       });
       if (unfunded) this.logToStderr(`\nWarning: ${unfunded}`);
     }

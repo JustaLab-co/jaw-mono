@@ -1,0 +1,228 @@
+import {
+  decide,
+  executedAsSigned,
+  grantMatches,
+  parseGrantedPermission,
+  payloadHash,
+  readPermissionState,
+  signedPayload,
+  toPageView,
+  type ApprovalPageView,
+  type ApprovalRequest,
+  type Call,
+  type DecisionProof,
+  type GrantRequest,
+  type PermissionReadTarget,
+  type PermissionState,
+} from '@jaw.id/agent';
+import { isAddressEqual, isHex, keccak256, size, type Address, type Hex } from 'viem';
+import { SUPPORTED_CHAINS } from '@/connections/config';
+import { publicClientFor, verifyOnChain, type VerifySignature } from '@/lib/chain';
+import { log } from '@/lib/edge';
+import { isPaymentsPaused } from '@/db/settings';
+import { outstandingRevokes } from '@/grants/store';
+import { oneOffRow, runOneOff, type PaymentApproval } from '@/payments/one-off';
+import type { PaymentRow, SellerRequest } from '@/payments/store';
+import { readUserOp as readOnBundler, type ReadUserOp } from './bundler';
+import { describeCall } from './decode';
+import { connectionLive, connectionOf, findById, recordDecision, sellerRequestOf, type NewGrant } from './store';
+
+/** What the one-off came to, without any seller text: the page is not authenticated. */
+type OneOffSummary = Pick<PaymentRow, 'state' | 'kind' | 'code'>;
+
+export type PageOutcome =
+  | { kind: 'ok'; view: PageView }
+  | { kind: 'not_found' }
+  | { kind: 'invalid_request' }
+  | { kind: 'bad_signature' }
+  | { kind: 'grant_mismatch' }
+  | { kind: 'grant_not_found' }
+  | { kind: 'calls_mismatch' }
+  | { kind: 'calls_pending' }
+  | { kind: 'connection_revoked' }
+  | { kind: 'unsupported_chain' }
+  | { kind: 'verification_unavailable' }
+  | { kind: 'payments_paused' }
+  | { kind: 'preview_changed' }
+  | { kind: 'not_pending'; view: ApprovalPageView };
+
+type PageView = ApprovalPageView & { revoke?: Hex[]; payment?: OneOffSummary };
+
+export type ReadPermission = (target: PermissionReadTarget) => Promise<PermissionState>;
+
+export const readOnChain: ReadPermission = (target) =>
+  readPermissionState(target, { clients: { publicClient: publicClientFor } });
+
+type Refused = Exclude<PageOutcome['kind'], 'ok' | 'not_pending'>;
+type Checked = { proof: DecisionProof; grant?: NewGrant } | { refused: Refused };
+
+const unavailable = (what: string) => (err: unknown) => {
+  log('error', { msg: `${what} unavailable`, error: err instanceof Error ? err.name : 'unknown' });
+  return undefined;
+};
+
+async function checkSignature(
+  request: ApprovalRequest,
+  payload: Parameters<VerifySignature>[0]['payload'],
+  signature: unknown,
+  verify: VerifySignature
+): Promise<Checked> {
+  if (!isHex(signature)) return { refused: 'invalid_request' };
+  const valid = await verify({ chainId: request.chainId, address: request.account, payload, signature }).catch(
+    unavailable('approval verification')
+  );
+  if (valid === undefined) return { refused: 'verification_unavailable' };
+  if (!valid) return { refused: 'bad_signature' };
+  return { proof: { type: 'signature', signature, assertionRef: keccak256(signature) } };
+}
+
+async function checkCalls(
+  request: ApprovalRequest,
+  calls: Call[],
+  callsId: unknown,
+  read: ReadUserOp
+): Promise<Checked> {
+  const { body } = request;
+  if (!isHex(callsId) || size(callsId) !== 32 || (body.kind !== 'transfer' && body.kind !== 'calls')) {
+    return { refused: 'invalid_request' };
+  }
+  const op = await read({ chainId: request.chainId, account: request.account, callsId }).catch(
+    unavailable('userOp read')
+  );
+  if (!op) return { refused: 'verification_unavailable' };
+  if (op.status === 'pending') return { refused: 'calls_pending' };
+  const ranAsSigned =
+    op.success && isAddressEqual(op.sender, request.account) && executedAsSigned(calls, body.gas, op.calls);
+  if (!ranAsSigned) return { refused: 'calls_mismatch' };
+  return { proof: { type: 'calls', callsId, txHash: op.txHash } };
+}
+
+async function checkPermission(
+  request: ApprovalRequest,
+  grant: GrantRequest,
+  granted: unknown,
+  read: ReadPermission
+): Promise<Checked> {
+  const permission = parseGrantedPermission(granted);
+  const permissionId = (granted as { permissionId?: unknown } | null)?.permissionId;
+  if (!permission || !isHex(permissionId)) return { refused: 'invalid_request' };
+  if (!grantMatches(grant, permission)) return { refused: 'grant_mismatch' };
+  const state = await read({ chainId: request.chainId, permissionId, permission }).catch(
+    unavailable('permission read')
+  );
+  if (!state || state.status === 'unavailable') return { refused: 'verification_unavailable' };
+  if (state.status === 'mismatch') return { refused: 'grant_mismatch' };
+  if (!state.approved || state.revoked) return { refused: 'grant_not_found' };
+  const [spend] = grant.permissions.spends;
+  return {
+    proof: { type: 'permission', permissionId },
+    grant: {
+      permissionId,
+      chainId: request.chainId,
+      account: grant.address,
+      spender: grant.spender as Address,
+      token: spend.token,
+      allowance: spend.allowance,
+      period: spend.unit,
+      permission,
+      expiresAt: new Date(permission.end * 1000),
+    },
+  };
+}
+
+/** An approved payment: the row it opens and how to ask the seller again. */
+async function oneOffOf(request: ApprovalRequest) {
+  const { body } = request;
+  if (request.state.status !== 'approved' || body.kind !== 'payment') return undefined;
+  const approval: PaymentApproval = { ...request, body };
+  const seller: SellerRequest = await sellerRequestOf(request.id);
+  return { approval, seller, row: oneOffRow(approval, seller) };
+}
+
+const pageView = (request: ApprovalRequest) => toPageView(request, describeCall);
+
+export async function readForPage(
+  id: string,
+  now = new Date(),
+  readPermission: ReadPermission = readOnChain
+): Promise<PageOutcome> {
+  const request = await findById(id, now);
+  return request ? { kind: 'ok', view: await withRevokes(request, readPermission) } : { kind: 'not_found' };
+}
+
+// An approved budget lists the budgets it replaced that the chain does not show revoked yet.
+async function withRevokes(request: ApprovalRequest, read: ReadPermission): Promise<PageView> {
+  const view = pageView(request);
+  if (request.body.kind !== 'budget' || request.state.status !== 'approved') return view;
+  return { ...view, revoke: await outstandingRevokes(await connectionOf(request.id), read) };
+}
+
+export async function decideFromPage(
+  id: string,
+  post: unknown,
+  verify: VerifySignature = verifyOnChain,
+  now = new Date(),
+  readPermission: ReadPermission = readOnChain,
+  readUserOp: ReadUserOp = readOnBundler
+): Promise<PageOutcome> {
+  const { verdict, signature, previewHash, permission, callsId } = (post ?? {}) as Record<string, unknown>;
+  if ((verdict !== 'approved' && verdict !== 'rejected') || !isHex(previewHash)) {
+    return { kind: 'invalid_request' };
+  }
+  const request = await findById(id, now);
+  if (!request) return { kind: 'not_found' };
+  const view = pageView(request);
+  if (request.state.status !== 'pending') return { kind: 'not_pending', view };
+  if (view.previewHash !== previewHash) return { kind: 'preview_changed' };
+  if (!(await connectionLive(request.id))) return { kind: 'connection_revoked' };
+  if (!SUPPORTED_CHAINS[request.chainId]) return { kind: 'unsupported_chain' };
+  // Before the decision is recorded, so the owner can approve again once payments resume.
+  if (verdict === 'approved' && request.body.kind === 'payment' && (await isPaymentsPaused())) {
+    return { kind: 'payments_paused' };
+  }
+
+  const payload = signedPayload(request, verdict);
+  const checked =
+    payload.type === 'grant'
+      ? await checkPermission(request, payload.grant, permission, readPermission)
+      : payload.type === 'calls'
+        ? await checkCalls(request, payload.calls, callsId, readUserOp)
+        : await checkSignature(request, payload, signature, verify);
+  if ('refused' in checked) return { kind: checked.refused };
+
+  const evidence = { previewHash, payloadHash: payloadHash(payload), proof: checked.proof, decidedAt: now };
+  const result = decide(request, verdict, evidence, now);
+  const oneOff = result.ok ? await oneOffOf(result.request) : undefined;
+  const effect = oneOff ? { payment: oneOff.row } : checked.grant && { grant: checked.grant };
+  if (!result.ok || !(await recordDecision(result.request, effect))) {
+    if (!(await connectionLive(request.id))) return { kind: 'connection_revoked' };
+    const current = await findById(id, new Date());
+    return current ? { kind: 'not_pending', view: pageView(current) } : { kind: 'not_found' };
+  }
+  const decided = await withRevokes(result.request, readPermission);
+  if (!oneOff) return { kind: 'ok', view: decided };
+  const { row } = await runOneOff(oneOff.approval, oneOff.seller, oneOff.row.id, oneOff.row.leaseToken);
+  return { kind: 'ok', view: { ...decided, payment: { state: row.state, kind: row.kind, code: row.code } } };
+}
+
+const STATUS: Record<PageOutcome['kind'], number> = {
+  ok: 200,
+  not_found: 404,
+  invalid_request: 400,
+  bad_signature: 403,
+  grant_mismatch: 422,
+  grant_not_found: 409,
+  calls_mismatch: 422,
+  calls_pending: 409,
+  connection_revoked: 410,
+  unsupported_chain: 422,
+  verification_unavailable: 503,
+  payments_paused: 503,
+  preview_changed: 409,
+  not_pending: 409,
+};
+
+export function outcomeResponse(outcome: PageOutcome): Response {
+  const body = 'view' in outcome ? { ...outcome.view, outcome: outcome.kind } : { error: outcome.kind };
+  return Response.json(body, { status: STATUS[outcome.kind] });
+}

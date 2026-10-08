@@ -23,6 +23,8 @@ export function middleware(request: NextRequest) {
   // If dApp RPC proxying is ever routed through api.justaname.id exclusively,
   // the wildcards can be removed.
   const isCLIBridge = request.nextUrl.pathname === '/cli-bridge';
+  const { pathname } = request.nextUrl;
+  const isMcpPage = pathname === '/authorize' || pathname === '/connections' || pathname.startsWith('/approve/');
   const connectSrc = [
     "'self'",
     'https://api.justaname.id',
@@ -30,6 +32,8 @@ export function middleware(request: NextRequest) {
     // CLI bridge: relay WebSocket + HTTPS/WSS for SDK RPC calls.
     // Other pages: dApps pass arbitrary chain.rpcUrl values.
     ...(isCLIBridge ? ['wss://relay.jaw.id', 'ws://localhost:*', 'https:', 'wss:'] : ['https:', 'wss:']),
+    // https: already covers the MCP server outside local development.
+    ...(isDev && isMcpPage && process.env.JAW_MCP_URL ? [new URL(process.env.JAW_MCP_URL).origin] : []),
   ].join(' ');
 
   // --- img-src ---
@@ -94,7 +98,9 @@ export function middleware(request: NextRequest) {
   if (!isEmbeddable) {
     response.headers.set('X-Frame-Options', 'DENY');
   }
-  response.headers.set('Referrer-Policy', 'strict-origin-when-cross-origin');
+  // The consent URL carries the interaction id; no other site needs to see it.
+  const referrerPolicy = request.nextUrl.pathname === '/authorize' ? 'no-referrer' : 'strict-origin-when-cross-origin';
+  response.headers.set('Referrer-Policy', referrerPolicy);
   response.headers.set('Permissions-Policy', 'camera=(), microphone=(), geolocation=()');
   response.headers.set('X-DNS-Prefetch-Control', 'off');
 

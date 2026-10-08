@@ -15,7 +15,9 @@ import type { JawConfig } from './types.js';
  * payer on exactly the installs the injected key exists for.
  */
 export function apiKeyFor(config: JawConfig, chosen?: string): string | undefined {
-  return chosen ?? process.env['JAW_API_KEY'] ?? config.apiKey ?? config.workspaceApiKey;
+  // A dotenv file with CRLF endings leaves a `\r` on the env value. The url
+  // form dropped it silently; a header refuses it.
+  return (chosen ?? process.env['JAW_API_KEY'])?.trim() ?? config.apiKey ?? config.workspaceApiKey;
 }
 
 /**

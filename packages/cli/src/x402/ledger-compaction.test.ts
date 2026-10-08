@@ -1,8 +1,9 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
+import { sumSpentSince, sumToppedUpSince } from '@jaw.id/agent';
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 import * as os from 'node:os';
-import type { X402LogEntry } from './ledger.js';
+import type { X402LogEntry } from '@jaw.id/agent';
 
 const TEST_ROOT = path.join(os.tmpdir(), 'jaw-ledger-compaction-test');
 
@@ -40,7 +41,7 @@ vi.mock('../lib/paths.js', () => {
   };
 });
 
-const { appendX402Log, compactX402Log, readX402Log, sumSpentSince, sumToppedUpSince } = await import('./ledger.js');
+const { appendX402Log, compactX402Log, readX402Log } = await import('./ledger.js');
 const { PATHS } = await import('../lib/paths.js');
 
 const PAYER_A = '0x0000000000000000000000000000000000000001';

@@ -21,8 +21,11 @@ const h = vi.hoisted(() => ({
 vi.mock('../../lib/keystore.js', () => ({ keystoreExists: () => true }));
 vi.mock('../../lib/config.js', () => ({ loadConfig: () => ({}) }));
 vi.mock('../../lib/api-key.js', () => ({ apiKeyFor: () => undefined }));
-vi.mock('../../x402/permission-recovery.js', () => ({ recoverPermission: async () => null }));
-vi.mock('../../x402/permission-onchain.js', () => ({ readLiveness: async () => h.liveness }));
+vi.mock('@jaw.id/agent', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@jaw.id/agent')>()),
+  recoverPermission: async () => null,
+  readLiveness: async () => h.liveness,
+}));
 
 // Not mocked, deliberately: the bug lives in how these two disagree, so a stub
 // of either would answer the question the test is asking.

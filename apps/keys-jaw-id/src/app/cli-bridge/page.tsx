@@ -2,7 +2,8 @@
 
 import { useSearchParams } from 'next/navigation';
 import { useEffect, useState, Suspense, useRef, useCallback } from 'react';
-import { JAW, Mode } from '@jaw.id/core';
+import { reservedSigningRefusal } from '@jaw.id/agent/reserved';
+import { JAW, Mode, standardErrorCodes } from '@jaw.id/core';
 import { ReactUIHandler } from '@jaw.id/ui';
 import { resolveBridgeApiKey } from '../../lib/cli-api-key';
 import {
@@ -115,6 +116,8 @@ function CLIBridgeContent() {
 
     try {
       const normalizedParams = Array.isArray(params) ? params : params !== undefined ? [params] : [];
+      const reserved = reservedSigningRefusal(method, normalizedParams);
+      if (reserved) throw Object.assign(new Error(reserved), { code: standardErrorCodes.provider.userRejectedRequest });
 
       const result = await sdkRef.current.provider.request({
         method,

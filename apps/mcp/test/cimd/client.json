@@ -1,0 +1,9 @@
+{
+  "client_id": "https://raw.githubusercontent.com/JustaLab-co/jaw-mono/mariano-aguero/agent-package/apps/mcp/test/cimd/client.json",
+  "client_name": "JAW MCP test client",
+  "application_type": "native",
+  "redirect_uris": ["http://127.0.0.1:8765/callback"],
+  "grant_types": ["authorization_code", "refresh_token"],
+  "response_types": ["code"],
+  "token_endpoint_auth_method": "none"
+}

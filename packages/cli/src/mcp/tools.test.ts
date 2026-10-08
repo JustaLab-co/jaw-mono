@@ -1,7 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import { z } from 'zod';
 import { supportsSessionMode } from '../lib/rpc-classifier.js';
-import { payAndFetchSchema, rpcMethodSchema } from './tools.js';
+import { payAndFetchSchema, rpcMethodSchema } from '@jaw.id/agent';
 
 describe('payAndFetch url schema', () => {
   const url = z.object(payAndFetchSchema).shape.url;

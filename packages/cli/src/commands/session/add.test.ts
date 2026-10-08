@@ -51,13 +51,12 @@ vi.mock('../../lib/session-config.js', async (importOriginal) => ({
 }));
 // The guards `setup --x402` runs, which `add --x402` skipped. Mocked rather
 // than reached, since they read balances on chain.
-vi.mock('../../x402/funded-owner.js', () => ({
+vi.mock('@jaw.id/agent', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@jaw.id/agent')>()),
   whyOwnerCannotFundSession: async () => h.ownerBlocked,
   whySpenderCannotPay: async () => null,
-}));
-vi.mock('../../x402/permission-onchain.js', () => ({ readLiveness: async () => h.liveness }));
-// Kept off the network: without this the "no struct" case reaches the relay.
-vi.mock('../../x402/permission-recovery.js', () => ({
+  readLiveness: async () => h.liveness,
+  // Kept off the network: without this the "no struct" case reaches the relay.
   recoverPermission: async (session: { permission?: unknown }) => session.permission ?? h.recovered,
 }));
 
