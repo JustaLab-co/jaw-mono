@@ -87,3 +87,13 @@ export function wrap(ring: KeyRing, privateKey: Hex, id: string, refreshToken: s
 export function unwrap(ring: KeyRing, wrapped: Wrapped, id: string, refreshToken: string): Hex {
   return decrypt(ring, wrapped, 'w1', id, (k) => wrapKey(k, refreshToken));
 }
+
+// The id of the token a refresh rotates to, the same for every request presenting
+// this token. It needs the key and the raw token, and the wrap the sweep takes at the
+// end of the window, so a token past its window derives nothing.
+export function nextRefreshId(key: Hex, refreshToken: string, wrapped: Wrapped): string {
+  const ikm = Buffer.from(key.slice(2), 'hex');
+  return Buffer.from(hkdfSync('sha256', ikm, refreshToken, `jaw-mcp/next-refresh/${wrapped}`, 32)).toString(
+    'base64url'
+  );
+}
