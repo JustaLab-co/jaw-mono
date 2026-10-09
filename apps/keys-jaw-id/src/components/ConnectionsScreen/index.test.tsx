@@ -166,11 +166,20 @@ describe('ConnectionsScreen', () => {
     expect(container.querySelector('h2')?.textContent).toContain('agent.example');
     expect(text).toContain('Calls itself "JAW Wallet"');
     expect(text).toContain('"JAW Wallet" is not a JAW app');
-    expect(text).toContain('wallet:read, wallet:send');
     expect(text).toContain('1 USDC per day');
     expect(text).toContain('0.07 USDC');
     expect(text).toContain('jaw_pay_and_fetch');
     expect(text).toContain('jaw_status');
+  });
+
+  it('given a connection granted wallet:read wallet:send, when it is listed, then it says in words what the agent can and cannot do', async () => {
+    await signIn();
+    const text = container.textContent ?? '';
+    expect(text).toContain(
+      'Can: See your account, balances and payment history; Ask you to approve transfers, contract calls and signatures'
+    );
+    expect(text).toContain('Cannot: Pay x402 services from a daily USDC budget you approve');
+    expect(text).not.toContain('wallet:send');
   });
 
   it('warns that the float stays behind, then revokes on the server and opens the on-chain revoke', async () => {

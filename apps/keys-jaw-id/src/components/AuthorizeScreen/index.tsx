@@ -1,6 +1,6 @@
 'use client';
 
-import type { consentTypedData } from '@jaw.id/agent/reserved';
+import { consentTypedData } from '@jaw.id/agent/reserved';
 import { Account } from '@jaw.id/core';
 import { useQuery } from '@tanstack/react-query';
 import { useState } from 'react';
@@ -13,7 +13,8 @@ export interface ConsentDetails {
   uid: string;
   client: ClientIdentity;
   redirectHost: string;
-  scopes: { id: string; label: string }[];
+  // Absent from servers that predate unticking; wallet:read is required there too.
+  scopes: { id: string; label: string; required?: boolean }[];
   chainId: number;
   expiresAt: string;
   typedData: ReturnType<typeof consentTypedData>;
@@ -34,6 +35,7 @@ export function AuthorizeScreen({ uid, mcpUrl }: { uid: string; mcpUrl: string }
   const [account, setAccount] = useState<AuthenticatedAccount | null>(null);
   const [status, setStatus] = useState<'idle' | 'signing' | 'error'>('idle');
   const [error, setError] = useState('');
+  const [unticked, setUnticked] = useState<ReadonlySet<string>>(new Set());
   const base = `${mcpUrl}/interaction/${encodeURIComponent(uid)}`;
 
   const query = useQuery({
@@ -50,16 +52,28 @@ export function AuthorizeScreen({ uid, mcpUrl }: { uid: string; mcpUrl: string }
   if (query.isPending) return <p className="text-center text-sm">Loading…</p>;
   if (query.isError) return <p className="text-center text-sm">This request expired. Start again from your app.</p>;
   const { details, apiKey } = query.data;
+  const scopes = details.scopes.map((s) => ({ ...s, required: s.required ?? s.id === 'wallet:read' }));
+  const granted = scopes.filter((s) => !unticked.has(s.id)).map((s) => s.id);
+  const dropped = scopes.filter((s) => unticked.has(s.id));
+  // The server rebuilds this from its own copy of the terms and the granted ids.
+  const typedData = consentTypedData(details.chainId, { ...details.typedData.message, scopes: granted.join(' ') });
+
+  const toggle = (id: string) =>
+    setUnticked((prev) => {
+      const next = new Set(prev);
+      if (!next.delete(id)) next.add(id);
+      return next;
+    });
 
   const connect = async (who: AuthenticatedAccount) => {
     setStatus('signing');
     try {
       const signer = await Account.get({ chainId: details.chainId, apiKey });
-      const signature = await signer.signTypedData(details.typedData);
+      const signature = await signer.signTypedData(typedData);
       const res = await fetch(`${base}/consent`, {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ address: who.address, signature }),
+        body: JSON.stringify({ address: who.address, signature, scopes: granted }),
       });
       const body = await res.json();
       if (!res.ok) throw new Error(REFUSALS[body.error] ?? 'The server refused this consent.');
@@ -79,22 +93,42 @@ export function AuthorizeScreen({ uid, mcpUrl }: { uid: string; mcpUrl: string }
           <p className="text-muted-foreground text-sm">Returns to an app on this computer.</p>
         )}
       </div>
-      <ul className="list-disc pl-5 text-sm">
-        {details.scopes.map((s) => (
-          <li key={s.id}>{s.label}</li>
+      <ul className="flex flex-col gap-1 text-sm">
+        {scopes.map((s) => (
+          <li key={s.id}>
+            <label className="flex items-start gap-2">
+              <input
+                type="checkbox"
+                className="mt-1"
+                value={s.id}
+                checked={!unticked.has(s.id)}
+                disabled={s.required}
+                onChange={() => toggle(s.id)}
+              />
+              {s.required ? `${s.label} (required)` : s.label}
+            </label>
+          </li>
         ))}
       </ul>
+      {scopes.some((s) => !s.required) && (
+        <p className="text-muted-foreground text-xs">
+          Untick what this app should not do. You can reconnect later to add it.
+        </p>
+      )}
+      {dropped.length > 0 && (
+        <p className="text-sm">It will not be able to: {dropped.map((s) => s.label).join('; ')}</p>
+      )}
       <div>
         <p className="text-muted-foreground mb-1 text-xs">You will sign</p>
         <dl data-testid="consent-message" className="bg-muted grid grid-cols-[auto_1fr] gap-x-3 rounded p-3 text-xs">
-          {details.typedData.types.Consent.map(({ name }) => (
+          {typedData.types.Consent.map(({ name }) => (
             <div key={name} className="contents">
               <dt className="text-muted-foreground">{FIELDS[name] ?? name}</dt>
-              <dd className="break-all font-mono">{details.typedData.message[name]}</dd>
+              <dd className="break-all font-mono">{typedData.message[name]}</dd>
             </div>
           ))}
           <dt className="text-muted-foreground">Chain ID</dt>
-          <dd className="font-mono">{details.typedData.domain.chainId}</dd>
+          <dd className="font-mono">{typedData.domain.chainId}</dd>
         </dl>
       </div>
       {account ? (
