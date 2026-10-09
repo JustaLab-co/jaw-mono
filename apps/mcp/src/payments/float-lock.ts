@@ -15,12 +15,12 @@ export function lockTimedOut(err: unknown): boolean {
 
 /** Serializes everything that reads and moves one connection's float, until the transaction ends. */
 export async function lockFloat(tx: Tx, connectionId: string, waitMs: number): Promise<void> {
-  await tx.execute(sql`select set_config('lock_timeout', ${`${waitMs}ms`}, true)`);
   // The holder waits on the chain between statements, two receipts for a disconnect.
   // A host default that ends idle transactions sooner would drop the lock mid-send.
-  await tx.execute(sql`select set_config('idle_in_transaction_session_timeout', '5min', true)`);
   // The role's statement_timeout would cancel a longer wait before lock_timeout answers it.
-  await tx.execute(sql`select set_config('statement_timeout', ${`${waitMs + 1_000}ms`}, true)`);
+  await tx.execute(sql`select set_config('lock_timeout', ${`${waitMs}ms`}, true),
+    set_config('idle_in_transaction_session_timeout', '5min', true),
+    set_config('statement_timeout', ${`${waitMs + 1_000}ms`}, true)`);
   await tx.execute(sql`select pg_advisory_xact_lock(hashtext(${key(connectionId)}))`);
   await tx.execute(sql`set local statement_timeout to default`);
 }

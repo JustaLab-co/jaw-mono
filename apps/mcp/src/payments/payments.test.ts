@@ -739,28 +739,31 @@ describe.skipIf(!TEST_PG_URL)('on Postgres with a 1 s role statement_timeout', (
   it('given another transaction holds the float lock past it, when a refill waits longer, then the pay refuses timed_out and logs no SQL', async () => {
     const { t } = await connected('1');
     const release = await holdFloat(t.connectionId);
-    // The budget is a fixed 90 s: from the probe on, the clock jumps so the refill has about 6 s left to wait.
+    // The budget is a fixed 90 s: from the probe on, the clock jumps so the refill has about 8 s left to wait.
     const now = Date.now;
     let skipped = 0;
-    vi.spyOn(Date, 'now').mockImplementation(() => now() + skipped);
+    const clock = vi.spyOn(Date, 'now').mockImplementation(() => now() + skipped);
     onProbe.set('/race', async () => {
-      skipped = PAY_LIMIT_MS - SEND_RESERVE_MS - 6_000;
+      skipped = PAY_LIMIT_MS - SEND_RESERVE_MS - 8_000;
     });
     const logged = vi.spyOn(console, 'log');
     try {
-      const result = await pay(t, { url: url('/race'), idempotencyKey: 'lock-timeout' }, deps());
-      expect(result.structuredContent).toMatchObject({
+      const paying = pay(t, { url: url('/race'), idempotencyKey: 'lock-timeout' }, deps());
+      await parked(t.connectionId);
+      expect((await paying).structuredContent).toMatchObject({
         kind: 'refused',
         moneyMoved: false,
         refusal: { code: 'timed_out' },
       });
       const lines = logged.mock.calls.flat().join('\n');
+      expect(lines).toContain('payment timed_out: another payment on this connection held the refill too long');
       expect(lines).not.toContain(`refill:${t.connectionId}`);
       expect(lines).not.toContain('pg_advisory');
       expect(refills).toEqual([]);
       expect(seen).toHaveLength(0);
     } finally {
-      vi.restoreAllMocks();
+      clock.mockRestore();
+      logged.mockRestore();
       await release();
     }
   });
@@ -768,12 +771,16 @@ describe.skipIf(!TEST_PG_URL)('on Postgres with a 1 s role statement_timeout', (
   it('given another transaction holds the float lock past it, when the holder releases before the wait ends, then the refill runs and the pay settles', async () => {
     const { t } = await connected('1');
     const release = await holdFloat(t.connectionId);
-    const paying = pay(t, { url: url('/race'), idempotencyKey: 'lock-released' }, deps());
-    await parked(t.connectionId);
-    await sleep(1_500);
-    await release();
-    expect((await paying).structuredContent).toMatchObject({ kind: 'paid', state: 'settled' });
-    expect(refills).toEqual([105_000n]);
+    try {
+      const paying = pay(t, { url: url('/race'), idempotencyKey: 'lock-released' }, deps());
+      await parked(t.connectionId);
+      await sleep(1_500);
+      await release();
+      expect((await paying).structuredContent).toMatchObject({ kind: 'paid', state: 'settled' });
+      expect(refills).toEqual([105_000n]);
+    } finally {
+      await release();
+    }
   });
 
   it('given the float lock was taken, when the next statement runs past the role limit, then it is canceled', async () => {
