@@ -1,4 +1,4 @@
-import { FIRST_PARTY_CLIENTS, hasUnstorableText } from '@jaw.id/agent';
+import { CONNECTION_SCOPES, FIRST_PARTY_CLIENTS, hasUnstorableText } from '@jaw.id/agent';
 import Provider, { errors, interactionPolicy, type Configuration } from 'oidc-provider';
 import { databaseUnreachable, log } from '@/lib/edge';
 import { PgAdapter, sessionKey } from './adapter';
@@ -6,14 +6,6 @@ import { bridge, requestUrl } from './bridge';
 import { config, type Config } from './config';
 import { findActive } from './rows';
 import { seal } from './seal';
-
-// Key order is the order consent lists and signs them.
-export const SCOPES = {
-  'wallet:read': 'See your account, balances and payment history',
-  'x402:pay': 'Pay x402 services from a daily USDC budget you approve',
-  'wallet:send': 'Ask you to approve transfers, contract calls and signatures',
-} as const;
-export type Scope = keyof typeof SCOPES;
 
 const DAY = 24 * 60 * 60;
 
@@ -95,7 +87,7 @@ export function createProvider(cfg: Config, overrides: Partial<Configuration> = 
             throw new errors.InvalidScope('wallet:read is required', 'wallet:read');
           }
           return {
-            scope: Object.keys(SCOPES).join(' '),
+            scope: Object.keys(CONNECTION_SCOPES).join(' '),
             audience: cfg.resource,
             accessTokenTTL: 300,
             accessTokenFormat: 'jwt',
@@ -126,7 +118,7 @@ export function createProvider(cfg: Config, overrides: Partial<Configuration> = 
     await next();
     const body = ctx.body as { scopes_supported?: string[] } | undefined;
     if (ctx.oidc?.route === 'discovery' && body?.scopes_supported) {
-      body.scopes_supported = [...body.scopes_supported, ...Object.keys(SCOPES)];
+      body.scopes_supported = [...body.scopes_supported, ...Object.keys(CONNECTION_SCOPES)];
     }
   });
   provider.use(async (ctx, next) => {
@@ -153,7 +145,7 @@ function withDefaultScope(req: Request): Request {
   if (req.method !== 'GET' || url.pathname !== '/oauth/authorize') return req;
   const scope = (url.searchParams.get('scope') ?? '').split(' ').filter(Boolean);
   // `in` would also count prototype keys such as constructor.
-  if (scope.some((s) => Object.hasOwn(SCOPES, s))) return req;
+  if (scope.some((s) => Object.hasOwn(CONNECTION_SCOPES, s))) return req;
   url.searchParams.set('scope', [...scope, 'wallet:read'].join(' '));
   return new Request(url, req);
 }
