@@ -1,3 +1,4 @@
+import { sweepWraps } from './connections/adapter';
 import { runMigrations } from './db/migrate';
 import { log } from './lib/edge';
 import { purge, reconcile } from './reconciler/run';
@@ -8,6 +9,7 @@ function reconcileEvery(seconds: number) {
     if (running) return;
     running = true;
     try {
+      await sweepWraps();
       await reconcile();
       await purge();
     } catch (err) {
