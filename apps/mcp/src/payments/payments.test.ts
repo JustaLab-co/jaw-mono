@@ -1,3 +1,4 @@
+import { randomUUID } from 'node:crypto';
 import { createServer } from 'node:http';
 import type { AddressInfo } from 'node:net';
 import type { ChainClients, GrantRequest, TopUpExecutor } from '@jaw.id/agent';
@@ -15,13 +16,15 @@ import {
 import { beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import { decideFromPage, readForPage } from '@/approvals/page-api';
 import { verifyBearer, type Tenant } from '@/connections/auth';
+import { endConnection } from '@/connections/rows';
 import { callTool, connect, setTestEnv, verifyLocally } from '@/connections/testkit';
 import { getDb } from '@/db/client';
 import { payments, settings } from '@/db/schema';
 import { useTestDb } from '@/db/test-db';
 import { safeFetch } from '@/lib/safe-fetch';
 import { pay, type PayDeps } from './pay';
-import { claim } from './store';
+import { lockFloat, stillHeld } from './refill';
+import { claim, holdingRows } from './store';
 
 const USDC: Address = '0x036CbD53842c5426634e7929541eC2318f3dCF7e';
 const PAY_TO: Address = '0x2222222222222222222222222222222222222222';
@@ -35,18 +38,23 @@ const PRICES: Record<string, string> = {
   '/refuse': '5000',
   '/unconfirmed': '5000',
   '/sametx': '5000',
+  '/race': '5000',
 };
 const seen: { path: string; nonce: Hex; signature: Hex; advisoryLocks: number }[] = [];
 const receipts = new Map<Hex, { from: Address; nonce: Hex }>();
 /** Nonces the token has consumed: the seller settled them on chain. */
 const used = new Set<string>();
 let dropNextLost = true;
+/** Runs when the seller sees the request: on the probe before the refill, or on the signed proof after it. */
+const onProbe = new Map<string, () => Promise<void>>();
+const onProof = new Map<string, () => Promise<void>>();
 
 const seller = createServer(async (req, res) => {
   const path = new URL(req.url ?? '/', 'http://seller').pathname;
   const signed = req.headers['payment-signature'];
   if (path === '/free') return void res.end('hello');
   if (!signed) {
+    await onProbe.get(path)?.();
     const challenge = {
       x402Version: 2,
       resource: { url: `http://${req.headers.host}${path}` },
@@ -68,6 +76,7 @@ const seller = createServer(async (req, res) => {
   }
   const proof = JSON.parse(Buffer.from(String(signed), 'base64').toString());
   const { nonce, from } = proof.payload.authorization;
+  await onProof.get(path)?.();
   const [{ n }] = await getDb()
     .select({ n: sql<number>`count(*)::int` })
     .from(sql`pg_locks`)
@@ -171,6 +180,8 @@ beforeAll(useTestDb);
 beforeEach(() => {
   seen.length = 0;
   refills.length = 0;
+  onProbe.clear();
+  onProof.clear();
 });
 
 async function connected(perDay?: string) {
@@ -520,6 +531,41 @@ describe('jaw_pay_and_fetch', () => {
     expect(next.structuredContent.payments.map((p: { idempotencyKey: string }) => p.idempotencyKey)).toEqual(['h1']);
     const stranger = await connected();
     expect((await callTool(stranger.c.access_token, 'jaw_history', {})).structuredContent.payments).toEqual([]);
+  });
+});
+
+describe('given a pay request that verified its bearer before the connection was disconnected', () => {
+  // What jaw_disconnect does once its batch landed: end the connection under the float lock.
+  const disconnect = (t: Tenant, held?: bigint[]) => () =>
+    getDb().transaction(async (tx) => {
+      await lockFloat(tx, t.connectionId, 1_000);
+      if (held) held.push(await stillHeld(await holdingRows(tx, t.sessionAddress, randomUUID()), clients, 77n));
+      await endConnection(t.connectionId, t.account, new Date(), tx);
+    });
+
+  it('when its refill turn comes after the disconnect committed, then it refuses, reserves nothing and signs nothing', async () => {
+    const { t } = await connected('1');
+    onProbe.set('/race', disconnect(t));
+    const result = await pay(t, { url: url('/race'), idempotencyKey: 'race-refill' }, deps());
+    expect(result.structuredContent).toMatchObject({
+      kind: 'refused',
+      state: 'failed',
+      moneyMoved: false,
+      refusal: { code: 'not_allowed' },
+    });
+    expect(refills).toEqual([]);
+    expect(seen).toHaveLength(0);
+    expect(await rowOf(result.structuredContent!.paymentId)).toMatchObject({ reserved: null, nonce: null });
+  });
+
+  it('when the disconnect commits after its refill, then its hold keeps the float for it and it settles', async () => {
+    const { t } = await connected('1');
+    const held: bigint[] = [];
+    onProof.set('/race', disconnect(t, held));
+    const result = await pay(t, { url: url('/race'), idempotencyKey: 'race-past-refill' }, deps());
+    expect(held).toEqual([5_000n]);
+    expect(result.structuredContent).toMatchObject({ kind: 'paid', state: 'settled' });
+    expect(refills).toEqual([105_000n]);
   });
 });
 

@@ -11,10 +11,12 @@ import {
   type TopUpOutcome,
   type X402Policy,
 } from '@jaw.id/agent';
-import { sql } from 'drizzle-orm';
+import { and, eq, sql } from 'drizzle-orm';
 import { erc20Abi, isAddressEqual, type Address, type Hex } from 'viem';
 import { sessionOf } from '@/adapters/session-host';
+import { isLive } from '@/connections/rows';
 import { getDb, type Tx } from '@/db/client';
+import { connections } from '@/db/schema';
 import type { Grant } from '@/grants/store';
 import { nonceUsed } from './confirm';
 import { entriesFor, holdingRows, pulledUnderOtherGrants, recordTopUp, reserve, type PaymentRow } from './store';
@@ -126,6 +128,12 @@ export function refillHook(c: RefillContext): EnsureFunds {
       try {
         return await getDb().transaction(async (tx) => {
           await lockFloat(tx, c.connectionId, waitMs);
+          // A payment that verified its bearer before a disconnect may get its turn after it.
+          const [live] = await tx
+            .select({ id: connections.id })
+            .from(connections)
+            .where(and(eq(connections.id, c.connectionId), isLive()));
+          if (!live) return { ok: false, code: 'not_allowed', reason: 'this connection has ended' };
           await reserve(tx, c.rowId, c.token, requirement.amount);
           // The balance and the nonces it is netted against are read at one block, so a
           // payment mined between two reads is neither in the balance nor held, never both.
