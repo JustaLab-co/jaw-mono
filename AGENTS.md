@@ -65,12 +65,22 @@ Needs `bun`, `pnpm` and `node` 20+, plus Docker for the hosted step. `cast` (Fou
 ```bash
 bun install
 S=tools/verify
-RUN=$($S/up.sh | tail -1)        # builds the CLI, starts the local x402 seller
+RUN=$($S/up.sh | tail -1)        # clean tree only: builds HEAD in a worktree, starts the seller
 $S/doctor.sh "$RUN"              # must print no FAIL and no WARN
 $S/drive.sh "$RUN" head status x402 status -o json
 $S/hosted-up.sh "$RUN"           # Docker: Postgres and apps/mcp
 $S/down.sh "$RUN"
 ```
+
+`up.sh` refuses a dirty tree and stamps `head: <sha>` and `tree: clean` at the top of its evidence; put that `head:` line in the PR's "How to test". Kill only what a run started, by the PID files in `$RUN/pids/`, never by process name.
+
+Wait on any long command with a file and a deadline, not a background notification. `tools/verify/run-bounded.sh <max-seconds> <log> <cmd...>` always ends and writes the exit code to `<log>.done`:
+
+```bash
+until [ -f <log>.done ] || [ $SECONDS -gt N ]; do sleep 5; done; tail <log>
+```
+
+`tools/verify/selftest.sh` checks the harness itself. `.husky/pre-push` runs `nx affected` against the PR base (`gh pr view`), falling back to `main`, so a stacked branch checks only its own commits.
 
 `tools/verify/README.md` has the full recipes, the seller routes and what counts as evidence. Build before driving any artifact: the packed CLI runs the last build, not the source. Say which revision you built when you report a manual check, and force the edge (a price over the cap, an empty balance) when the change only acts there.
 
@@ -91,7 +101,7 @@ These hold for every change, however small. A diff that needs to break one is a 
 - **Paths in `.github/CODEOWNERS` get their own small PR.** They are the vectors, the API report, the EIP-1193 provider, the keys signing screens and the CLI session code. Keep changes there separate from unrelated work so the review stays readable.
 - **Packaging changes run the published test.** After touching `exports`, `files`, `bin` or a build config of a package in `packages/`, run `bunx nx run published-e2e:e2e`, which installs the four packages from a local registry the way an integrator would.
 
-CI runs `bunx nx affected -t lint test typecheck build api-check e2e`, so a change to core also runs the tests of everything that depends on it.
+CI runs `bunx nx affected -t lint test typecheck build api-check e2e`, so a change to core also runs the tests of everything that depends on it. `test` depends on `^build` in `nx.json`, so `nx test` builds the packages it imports first instead of reading a stale local `dist`.
 
 ## Architecture
 
