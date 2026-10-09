@@ -30,7 +30,7 @@ const money = z.object({
 });
 const readiness = z.object({
   status: z.enum(['ready', 'not_ready']),
-  reason: z.enum(['no_grant', 'grant_revoked', 'chain_unavailable']).optional(),
+  reason: z.enum(['no_scope', 'no_grant', 'grant_revoked', 'chain_unavailable']).optional(),
   link: z.string().url().optional(),
 });
 type Readiness = z.infer<typeof readiness>;
@@ -86,7 +86,8 @@ async function budgetOf(grant: Grant, t: Tenant) {
   };
 }
 
-function readinessOf(liveness: Awaited<ReturnType<typeof readLiveness>> | undefined): Readiness {
+function readinessOf(t: Tenant, liveness: Awaited<ReturnType<typeof readLiveness>> | undefined): Readiness {
+  if (!t.scopes.includes('x402:pay')) return { status: 'not_ready', reason: 'no_scope' };
   if (liveness === undefined) return { status: 'not_ready', reason: 'no_grant' };
   if (liveness === 'active') return { status: 'ready' };
   if (liveness === 'unknown') return { status: 'not_ready', reason: 'chain_unavailable' };
@@ -95,7 +96,7 @@ function readinessOf(liveness: Awaited<ReturnType<typeof readLiveness>> | undefi
 
 async function readinessFor(t: Tenant): Promise<Readiness> {
   const grant = await currentGrant(t.connectionId);
-  return readinessOf(grant && (await budgetOf(grant, t)).liveness);
+  return readinessOf(t, grant && (await budgetOf(grant, t)).liveness);
 }
 
 const fenced = (source: string, text: string) => ({ type: 'text' as const, text: fenceText(source, text, 2000) });
@@ -118,6 +119,7 @@ const statusOutput = z.object({
 });
 
 const NOT_READY: Record<NonNullable<Readiness['reason']>, string> = {
+  no_scope: 'Paying needs the x402:pay scope: reconnect and ask for it.',
   no_grant: 'No budget yet: ask for one with jaw_request_budget.',
   grant_revoked: 'The budget was revoked: ask for a new one with jaw_request_budget.',
   chain_unavailable: 'The budget could not be read from the chain right now.',
@@ -131,7 +133,7 @@ async function status(t: Tenant) {
     currentGrant(t.connectionId),
   ]);
   const read = grant && (await budgetOf(grant, t));
-  const ready = readinessOf(read?.liveness);
+  const ready = readinessOf(t, read?.liveness);
   const left = read?.budget.remainingToday;
   return statusOutput.parse({
     account: t.account,
