@@ -6,9 +6,15 @@ import {
   type GrantedPermission,
   type PermissionState,
 } from '@jaw.id/agent';
-import { Account, estimateErc20PaymasterCosts, jawPaymasterUrl, PERMISSIONS_MANAGER_ADDRESS } from '@jaw.id/core';
+import {
+  Account,
+  estimateErc20PaymasterCosts,
+  fetchTokenQuotes,
+  jawPaymasterUrl,
+  PERMISSIONS_MANAGER_ADDRESS,
+} from '@jaw.id/core';
 import { and, eq, gt, inArray, isNull, sql } from 'drizzle-orm';
-import { encodeFunctionData, erc20Abi, formatUnits, isAddressEqual, type Address, type Hex } from 'viem';
+import { encodeFunctionData, erc20Abi, formatUnits, isAddressEqual, maxUint256, type Address, type Hex } from 'viem';
 import { privateKeyToAccount } from 'viem/accounts';
 import { z } from 'zod';
 import { chainClients } from '@/adapters/session-host';
@@ -30,9 +36,10 @@ export type Sent = { status: 'landed'; txHash: Hex } | { status: 'reverted' } | 
 
 /** The session key's own EIP-7702 account, paying its fees in USDC through JAW's ERC-20 paymaster. */
 export interface SessionSender {
-  /** The most the paymaster may charge for these calls, in USDC base units. */
-  quote: (calls: SessionCall[]) => Promise<bigint>;
-  /** Throws when nothing was sent. */
+  paymaster: Address;
+  /** The fee these calls are expected to cost and the most the paymaster may charge, in USDC base units. */
+  quote: (calls: SessionCall[]) => Promise<{ expected: bigint; max: bigint }>;
+  /** Throws when nothing was sent, except for a fee over the cap, which reverts in simulation. */
   send: (calls: SessionCall[]) => Promise<Sent>;
 }
 
@@ -67,33 +74,47 @@ const REFUSALS = {
 };
 
 const LOCK_WAIT_MS = 8_000;
+const FEE_MARGIN_BPS = 12_500n;
 const RECEIPT_MS = 60_000;
 
-async function sessionSender(t: Tenant): Promise<SessionSender> {
+export async function sessionSender(t: Tenant): Promise<SessionSender> {
   const apiKey = config().paymasterApiKey;
   const usdc = usdcForNetwork(`eip155:${t.chainId}`);
   if (!apiKey || !usdc) throw new Error('no ERC-20 paymaster for this chain');
   const paymasterUrl = jawPaymasterUrl(t.chainId, apiKey);
+  const localAccount = privateKeyToAccount(t.sessionKey());
   const account = await Account.fromLocalAccount(
     { chainId: t.chainId, apiKey, paymasterUrl, paymasterContext: { token: usdc.address } },
-    privateKeyToAccount(t.sessionKey()),
+    localAccount,
     { eip7702: true }
   );
   if (!isAddressEqual(account.address, t.sessionAddress)) throw new Error('the session key is not the payer');
+  const [paymasterQuote] = await fetchTokenQuotes(paymasterUrl, t.chainId, [usdc.address]);
+  if (!paymasterQuote) throw new Error('the paymaster returned no quote');
   return {
+    paymaster: paymasterQuote.paymasterAddress,
     quote: async (calls) => {
       const [estimate] = await estimateErc20PaymasterCosts(
         account.getSmartAccount(),
         calls,
         { ...SUPPORTED_CHAINS[t.chainId], rpcUrl: rpcUrl(t.chainId) },
         paymasterUrl,
-        [{ address: usdc.address, symbol: 'USDC', decimals: usdc.decimals, balance: 0n }]
+        [{ address: usdc.address, symbol: 'USDC', decimals: usdc.decimals, balance: 0n }],
+        { localAccount }
       );
       if (!estimate) throw new Error('the paymaster returned no estimate');
-      return estimate.tokenCostMax;
+      return { expected: estimate.tokenCost, max: estimate.tokenCostMax };
     },
     send: async (calls) => {
-      const { id } = await account.sendCalls(calls);
+      let id: string;
+      try {
+        ({ id } = await account.sendCalls(calls));
+      } catch (err) {
+        // The bundler and the paymaster both run its postOp before signing, so a fee
+        // above the allowance the batch leaves fails there, before anything is sent.
+        if (/AA50 postOp reverted/i.test(String(err))) return { status: 'reverted' };
+        throw err;
+      }
       for (const until = Date.now() + RECEIPT_MS; Date.now() < until; ) {
         const status = await account.getCallStatus(id as Hex).catch(() => undefined);
         const txHash = status?.receipts?.[0]?.transactionHash;
@@ -224,25 +245,53 @@ async function returnFunds(tx: Tx, t: Tenant, deps: DisconnectDeps): Promise<Ret
     return undefined;
   });
   if (!sender) return REFUSALS.notSent;
-  // Quoted with a one unit transfer: the fee does not depend on the amount, and a
-  // simulation that moves the whole float leaves nothing to pay the fee with.
-  const fee = await sender.quote([...revokes.map((r) => r.call), transfer(1n)]).catch((err) => {
+  const batch = (swept: bigint, reserve: bigint): SessionCall[] => [
+    ...revokes.map((r) => r.call),
+    transfer(swept),
+    // Last, so it overwrites any allowance before it: the fee can take the reserve
+    // and never what payments hold. A fee above it reverts the whole batch.
+    {
+      to: usdc.address,
+      data: encodeFunctionData({ abi: erc20Abi, functionName: 'approve', args: [sender.paymaster, reserve] }),
+    },
+  ];
+  // Quoted with a one unit transfer and an unbounded allowance: the fee does not
+  // depend on either, a simulation that moves the whole float leaves nothing to
+  // pay the fee with, and one capped at a unit fails the paymaster's postOp.
+  const fee = await sender.quote(batch(1n, maxUint256)).catch((err) => {
     log('error', { msg: 'disconnect quote unavailable', error: errorLabel(err) });
     return undefined;
   });
   if (fee === undefined) return REFUSALS.chain;
+  const margin = (fee.expected * FEE_MARGIN_BPS + 9_999n) / 10_000n;
+  const reserve = margin < fee.max ? margin : fee.max;
+  log('info', {
+    msg: 'disconnect fee reserve',
+    fee: { expected: fee.expected.toString(), reserve: reserve.toString(), max: fee.max.toString() },
+  });
   // What payments hold is not the payer's to spend on fees, so a payer that cannot
   // cover the fee leaves the budgets to the owner's page.
-  if (free <= fee) {
+  const leaveToOwner = async () => {
     await recordRevoked(seenRevoked);
     return { ...nothingSent, stillApproved: revokes.map((r) => r.permissionId) };
-  }
+  };
+  if (free <= reserve) return leaveToOwner();
 
-  const swept = free - fee;
-  const sent = await sender.send([...revokes.map((r) => r.call), transfer(swept)]).catch((err) => {
-    log('error', { msg: 'disconnect batch not sent', error: errorLabel(err) });
-    return undefined;
-  });
+  const sendWith = (cap: bigint) =>
+    sender.send(batch(free - cap, cap)).catch((err) => {
+      log('error', { msg: 'disconnect batch not sent', error: errorLabel(err) });
+      return undefined;
+    });
+  let swept = free - reserve;
+  let sent = await sendWith(reserve);
+  // A fee over the reserve reverts with nothing moved; one more try at the ceiling.
+  // A float under the ceiling cannot pay more, so the budgets go to the owner and the
+  // connection still ends.
+  if (sent?.status === 'reverted' && reserve < fee.max) {
+    if (free <= fee.max) return leaveToOwner();
+    swept = free - fee.max;
+    sent = await sendWith(fee.max);
+  }
   if (!sent) return REFUSALS.notSent;
   if (sent.status !== 'landed') return REFUSALS[sent.status];
 

@@ -79,6 +79,9 @@ export async function stillHeld(
 /** Serializes everything that reads and moves one connection's float, until the transaction ends. */
 export async function lockFloat(tx: Tx, connectionId: string, waitMs: number): Promise<void> {
   await tx.execute(sql`select set_config('lock_timeout', ${`${waitMs}ms`}, true)`);
+  // The holder waits on the chain between statements, two receipts for a disconnect.
+  // A host default that ends idle transactions sooner would drop the lock mid-send.
+  await tx.execute(sql`select set_config('idle_in_transaction_session_timeout', '5min', true)`);
   await tx.execute(sql`select pg_advisory_xact_lock(hashtext(${`refill:${connectionId}`}))`);
 }
 
