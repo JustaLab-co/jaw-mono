@@ -26,7 +26,9 @@ export type EnsureFunds = NonNullable<PayAndFetchOptions['ensureFunds']>;
 /** Kept for the paid send when the refill takes its share of the time budget. */
 export const SEND_RESERVE_MS = 20_000;
 const MIN_REFILL_MS = 5_000;
-export const LOCK_NOT_AVAILABLE = '55P03';
+const LOCK_NOT_AVAILABLE = '55P03';
+/** How long ending a connection waits for a funding turn before it gives up. */
+export const LOCK_WAIT_MS = 8_000;
 
 interface RefillContext {
   rowId: string;
@@ -76,6 +78,11 @@ export async function stillHeld(
     })
   );
   return holds.reduce((sum, held) => sum + held, 0n);
+}
+
+export function lockTimedOut(err: unknown): boolean {
+  const e = err as { code?: unknown; cause?: { code?: unknown } };
+  return (e.code ?? e.cause?.code) === LOCK_NOT_AVAILABLE;
 }
 
 /** Serializes everything that reads and moves one connection's float, until the transaction ends. */
@@ -184,10 +191,7 @@ export function refillHook(c: RefillContext): EnsureFunds {
       } catch (err) {
         // Money that moved stays in the outcome, so the row records it even when this transaction did not commit.
         if (funded) return funded;
-        const code =
-          (err as { code?: unknown; cause?: { code?: unknown } }).code ??
-          (err as { cause?: { code?: unknown } }).cause?.code;
-        if (code === LOCK_NOT_AVAILABLE) return timedOut('another payment on this connection held the refill too long');
+        if (lockTimedOut(err)) return timedOut('another payment on this connection held the refill too long');
         throw err;
       }
     });

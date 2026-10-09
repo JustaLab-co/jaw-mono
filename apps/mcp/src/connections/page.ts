@@ -7,8 +7,9 @@ import { auditEvents, connections, grants } from '@/db/schema';
 import { outstandingRevokes } from '@/grants/store';
 import { publicClientFor, verifyOnChain, type VerifySignature } from '@/lib/chain';
 import { errorLabel, log } from '@/lib/edge';
+import { LOCK_WAIT_MS, lockFloat, lockTimedOut } from '@/payments/refill';
 import { config } from './config';
-import { endConnection, ownedBy } from './rows';
+import { endConnection, ownedBy, type ConnectionRow } from './rows';
 
 /** How far ahead a sign-in may expire: the page asks for ten minutes. */
 export const SIGN_IN_MAX_MS = 15 * 60_000;
@@ -20,6 +21,7 @@ export interface PageDeps {
   verify: VerifySignature;
   readPermission: ReadPermission;
   readFloats: ReadFloats;
+  lockWaitMs?: number;
 }
 
 export interface ConnectionView {
@@ -47,7 +49,7 @@ export interface ConnectionView {
 
 export type PageOutcome =
   | { kind: 'ok'; body: ConnectionView | ConnectionView[] }
-  | { kind: 'invalid_request' | 'bad_signature' | 'verification_unavailable' | 'not_found' };
+  | { kind: 'invalid_request' | 'bad_signature' | 'verification_unavailable' | 'not_found' | 'busy' };
 type Refusal = Exclude<PageOutcome, { kind: 'ok' }>;
 
 const floatsOnChain: ReadFloats = async (chainId, payers) => {
@@ -113,7 +115,25 @@ export async function revokeFromPage(
 ): Promise<PageOutcome> {
   const account = await signedIn(post, deps.verify, now);
   if (typeof account !== 'string') return account;
-  const row = await endConnection(id, account, now);
+  // Read before the lock, so nobody can queue on the float of a connection that is not theirs.
+  const [found] = await getDb()
+    .select()
+    .from(connections)
+    .where(and(eq(connections.id, id), ownedBy(account), ne(connections.status, 'pending')));
+  if (!found) return { kind: 'not_found' };
+  let row: ConnectionRow | undefined = found;
+  if (found.status !== 'revoked') {
+    try {
+      // After the funding turn in flight, so the float read below includes its refill.
+      row = await getDb().transaction(async (tx) => {
+        await lockFloat(tx, id, deps.lockWaitMs ?? LOCK_WAIT_MS);
+        return endConnection(id, account, now, tx);
+      });
+    } catch (err) {
+      if (lockTimedOut(err)) return { kind: 'busy' };
+      throw err;
+    }
+  }
   if (!row) return { kind: 'not_found' };
   const [view] = await viewsOf([row], deps, now);
   return { kind: 'ok', body: view };
@@ -200,6 +220,7 @@ const STATUS: Record<PageOutcome['kind'], number> = {
   invalid_request: 400,
   bad_signature: 403,
   not_found: 404,
+  busy: 409,
   verification_unavailable: 503,
 };
 

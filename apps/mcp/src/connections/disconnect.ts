@@ -25,7 +25,7 @@ import { getDb, type Tx } from '@/db/client';
 import { grants } from '@/db/schema';
 import { isPaymentsPaused } from '@/db/settings';
 import { errorLabel, log } from '@/lib/edge';
-import { LOCK_NOT_AVAILABLE, lockFloat, stillHeld } from '@/payments/refill';
+import { LOCK_WAIT_MS, lockFloat, lockTimedOut, stillHeld } from '@/payments/refill';
 import { holdingRows } from '@/payments/store';
 import type { Tenant } from './auth';
 import { config, SUPPORTED_CHAINS } from './config';
@@ -73,7 +73,6 @@ const REFUSALS = {
     'The transaction was sent but is not confirmed yet. Call jaw_disconnect again in a minute to finish; it does not repeat what already landed.',
 };
 
-const LOCK_WAIT_MS = 8_000;
 const FEE_MARGIN_BPS = 12_500n;
 const RECEIPT_MS = 60_000;
 
@@ -154,8 +153,7 @@ export async function disconnect(t: Tenant, deps = DEFAULTS): Promise<Reply> {
       return returned;
     });
   } catch (err) {
-    const code = (err as { code?: unknown }).code ?? (err as { cause?: { code?: unknown } }).cause?.code;
-    if (code === LOCK_NOT_AVAILABLE) return refusal(REFUSALS.busy);
+    if (lockTimedOut(err)) return refusal(REFUSALS.busy);
     throw err;
   }
   if (typeof outcome === 'string') return refusal(outcome);

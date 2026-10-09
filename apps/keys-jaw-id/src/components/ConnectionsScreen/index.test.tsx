@@ -78,6 +78,7 @@ const REVOKED = {
 
 let listed: object[] = [];
 let expired = false;
+let revokeReply: (() => Promise<Response>) | null = null;
 let posts: { url: string; body: Record<string, unknown> }[] = [];
 let container: HTMLDivElement;
 let root: Root;
@@ -85,6 +86,7 @@ let root: Root;
 beforeEach(() => {
   listed = [ACTIVE];
   expired = false;
+  revokeReply = null;
   posts = [];
   modal = null;
   signTypedData.mockClear();
@@ -98,6 +100,7 @@ beforeEach(() => {
       const body = JSON.parse(String(init?.body));
       posts.push({ url, body });
       if (expired) return Response.json({ error: 'invalid_request' }, { status: 400 });
+      if (url.endsWith('/revoke') && revokeReply) return revokeReply();
       if (url.endsWith('/revoke')) {
         listed = [REVOKED];
         return Response.json(REVOKED);
@@ -246,5 +249,26 @@ describe('ConnectionsScreen', () => {
     await act(async () => modal?.onSuccess({}));
     await settle();
     expect(modal?.permissionRequest.params).toEqual([{ id: SECOND, address: OWNER }]);
+  });
+
+  it('given a payment holds the connection, when the server answers busy, then it says so, opens no passkey prompt and offers Revoke again', async () => {
+    let answer!: () => void;
+    const answered = new Promise<void>((r) => (answer = r));
+    revokeReply = async () => {
+      await answered;
+      return Response.json({ error: 'busy' }, { status: 409 });
+    };
+    await signIn();
+    await click(button('Revoke'));
+    await click(button('Revoke anyway'));
+    expect(button('Revoke')?.disabled).toBe(true);
+
+    await act(async () => answer());
+    await settle();
+    expect(container.textContent).toContain(
+      'A payment or a disconnect on this connection is in progress. Try again in a moment.'
+    );
+    expect(modal).toBeNull();
+    expect(button('Revoke')?.disabled).toBe(false);
   });
 });
