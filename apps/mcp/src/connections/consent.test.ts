@@ -283,6 +283,20 @@ describe('given an authorization for all three scopes, when the user narrows the
   });
 });
 
+describe('given a connection where the user unticked x402:pay', () => {
+  it('when the same browser authorizes again, then consent offers all three and grants all three', async () => {
+    const browser = new Browser();
+    const signer = owner();
+    const first = await connect(signer, {}, browser, ['wallet:read', 'wallet:send']);
+    expect(first.scope).toBe('wallet:read wallet:send');
+
+    const again = await connect(signer, {}, browser);
+    expect(again.details.scopes.map((s) => s.id)).toEqual(['wallet:read', 'x402:pay', 'wallet:send']);
+    expect(again.scope).toBe('wallet:read x402:pay wallet:send');
+    expect((await rowsOf(again.uid))[0].scopes).toEqual(['wallet:read', 'x402:pay', 'wallet:send']);
+  });
+});
+
 describe('given an authorization for wallet:read x402:pay', () => {
   it('when the POST asks for wallet:send too, signed over that, then invalid_scope and no row', async () => {
     const { uid } = await startAuthorization(new Browser(), { scope: 'wallet:read x402:pay' });

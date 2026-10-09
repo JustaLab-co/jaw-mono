@@ -4,6 +4,7 @@ import { act, createElement } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { consentTypedData } from '@jaw.id/agent/reserved';
+import { getByRole } from '@testing-library/dom';
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
@@ -16,7 +17,7 @@ vi.mock('../OnboardingSection', () => ({
 }));
 
 const { AuthorizeScreen } = await import('./index');
-type ClientIdentity = import('../ClientHeader').ClientIdentity;
+type ConsentDetails = import('./index').ConsentDetails;
 
 const OWNER = '0x1111111111111111111111111111111111111111';
 const MCP = 'https://mcp.jaw.id';
@@ -46,7 +47,7 @@ const DETAILS = {
 let root: Root;
 let container: HTMLDivElement;
 const posts: { url: string; body: unknown }[] = [];
-let details: Omit<typeof DETAILS, 'client'> & { client: ClientIdentity } = DETAILS;
+let details: ConsentDetails = DETAILS;
 const assign = vi.fn();
 
 beforeEach(() => {
@@ -176,6 +177,17 @@ describe('AuthorizeScreen', () => {
       expect(container.textContent).toContain('Untick what this app should not do. You can reconnect later to add it.');
     });
 
+    it('when it renders, then a screen reader hears that wallet:read is required and the others are not', async () => {
+      await render();
+      const read = getByRole(container, 'checkbox', {
+        name: 'See your account, balances and payment history (required)',
+      });
+      expect(read).toBe(box('wallet:read'));
+      expect(getByRole(container, 'checkbox', { name: 'Pay x402 services from a daily USDC budget you approve' })).toBe(
+        box('x402:pay')
+      );
+    });
+
     it('when the user unticks x402:pay and connects, then it signs the typed data for wallet:read wallet:send byte for byte and posts that set', async () => {
       await render();
       await click(box('x402:pay'));
@@ -210,6 +222,18 @@ describe('AuthorizeScreen', () => {
         'wallet:read x402:pay wallet:send'
       );
       expect(posts[0].body).toMatchObject({ scopes: ['wallet:read', 'x402:pay', 'wallet:send'] });
+    });
+
+    it('when an older server sends no required flag, then wallet:read still cannot be unticked and is signed', async () => {
+      details = { ...ALL_THREE, scopes: ALL_THREE.scopes.map(({ id, label }) => ({ id, label })) };
+      await render();
+      expect(box('wallet:read').disabled).toBe(true);
+      expect(box('x402:pay').disabled).toBe(false);
+      await click(box('wallet:read'));
+      await click(box('x402:pay'));
+      await click(container.querySelector('#login'));
+      await click([...container.querySelectorAll('button')].find((b) => b.textContent === 'Connect'));
+      expect(posts[0].body).toMatchObject({ scopes: ['wallet:read', 'wallet:send'] });
     });
   });
 });
