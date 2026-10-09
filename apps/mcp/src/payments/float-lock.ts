@@ -1,5 +1,6 @@
-import { sql } from 'drizzle-orm';
+import { eq, sql } from 'drizzle-orm';
 import type { Tx } from '@/db/client';
+import { connections } from '@/db/schema';
 
 const LOCK_NOT_AVAILABLE = '55P03';
 /** How long ending a connection waits for a funding turn before it gives up. */
@@ -23,10 +24,11 @@ export async function lockFloat(tx: Tx, connectionId: string, waitMs: number): P
 
 /** The same lock without waiting: false when someone else holds it. */
 export async function tryLockFloat(tx: Tx, connectionId: string): Promise<boolean> {
-  const [{ locked }] = await tx.execute<{ locked: boolean }>(
-    sql`select pg_try_advisory_xact_lock(hashtext(${key(connectionId)})) as locked`
-  );
-  return locked;
+  const [row] = await tx
+    .select({ locked: sql<boolean>`pg_try_advisory_xact_lock(hashtext(${key(connectionId)}))` })
+    .from(connections)
+    .where(eq(connections.id, connectionId));
+  return row.locked;
 }
 
 // Waiters on one connection queue here, so only the one holding the lock pins a pooled connection.
