@@ -5,7 +5,14 @@ import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { useMemo, useState } from 'react';
 import { formatUnits, type Address, type Hex } from 'viem';
 import { fetchCliApiKey } from '../../lib/cli-api-key';
-import { postProof, SignInExpired, signIn, type ConnectionView, type SignInProof } from '../../lib/connections';
+import {
+  postProof,
+  SCOPE_LABELS,
+  SignInExpired,
+  signIn,
+  type ConnectionView,
+  type SignInProof,
+} from '../../lib/connections';
 import { UiScope } from '../BudgetApproval';
 import { ClientHeader } from '../ClientHeader';
 import { SignInScreen } from '../OnboardingSection';
@@ -159,6 +166,7 @@ function ConnectionCard({ view, confirming, onRevoke, onCancel, onConfirm, onRev
   // The float, when there is any to lose.
   const funded = view.float !== null && BigInt(view.float) > 0n ? view.float : null;
   const unread = view.payer !== null && view.float === null;
+  const cannot = Object.keys(SCOPE_LABELS).filter((s) => !view.scopes.includes(s));
   return (
     <section className="flex flex-col gap-3 rounded-lg border p-6">
       <div>
@@ -170,7 +178,10 @@ function ConnectionCard({ view, confirming, onRevoke, onCancel, onConfirm, onRev
               ? `Ended ${new Date(view.expiresAt).toLocaleString()}`
               : `Connected ${new Date(view.createdAt).toLocaleString()}`}
         </p>
-        <p className="text-muted-foreground text-sm">Can: {view.scopes.join(', ')}</p>
+        <p className="text-muted-foreground text-sm">Can: {view.scopes.map((s) => SCOPE_LABELS[s] ?? s).join('; ')}</p>
+        {cannot.length > 0 && (
+          <p className="text-muted-foreground text-sm">Cannot: {cannot.map((s) => SCOPE_LABELS[s]).join('; ')}</p>
+        )}
       </div>
 
       {view.budgets.length > 0 && (

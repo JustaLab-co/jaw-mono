@@ -30,7 +30,7 @@ const DETAILS = {
     reservedName: false,
   },
   redirectHost: '127.0.0.1',
-  scopes: [{ id: 'wallet:read', label: 'See your account, balances and grants' }],
+  scopes: [{ id: 'wallet:read', label: 'See your account, balances and grants', required: true }],
   chainId: 84532,
   expiresAt: '2026-10-06T12:10:00.000Z',
   typedData: consentTypedData(84532, {
@@ -87,6 +87,19 @@ async function render() {
 }
 
 const click = (el: Element | null | undefined) => act(async () => (el as HTMLElement).click());
+const box = (id: string) => container.querySelector<HTMLInputElement>(`input[type="checkbox"][value="${id}"]`)!;
+const signedScopes = () =>
+  [...container.querySelectorAll('[data-testid="consent-message"] dd')].map((d) => d.textContent)[4];
+
+const ALL_THREE = {
+  ...DETAILS,
+  scopes: [
+    { id: 'wallet:read', label: 'See your account, balances and payment history', required: true },
+    { id: 'x402:pay', label: 'Pay x402 services from a daily USDC budget you approve', required: false },
+    { id: 'wallet:send', label: 'Ask you to approve transfers, contract calls and signatures', required: false },
+  ],
+  typedData: consentTypedData(84532, { ...DETAILS.typedData.message, scopes: 'wallet:read x402:pay wallet:send' }),
+};
 
 describe('AuthorizeScreen', () => {
   it('renders every signed field as inert text and signs exactly that typed data', async () => {
@@ -102,7 +115,10 @@ describe('AuthorizeScreen', () => {
     expect(signTypedData).toHaveBeenCalledTimes(1);
     expect(signTypedData.mock.calls[0][0]).toEqual(DETAILS.typedData);
     expect(posts).toEqual([
-      { url: `${MCP}/interaction/uid_1234567890/consent`, body: { address: OWNER, signature: '0xsig' } },
+      {
+        url: `${MCP}/interaction/uid_1234567890/consent`,
+        body: { address: OWNER, signature: '0xsig', scopes: ['wallet:read'] },
+      },
     ]);
     expect(assign).toHaveBeenCalledWith(`${MCP}/interaction/uid_1234567890/complete?ticket=t`);
   });
@@ -139,5 +155,61 @@ describe('AuthorizeScreen', () => {
     await click([...container.querySelectorAll('button')].find((b) => b.textContent === 'Connect'));
     expect(assign).not.toHaveBeenCalled();
     expect(container.textContent).toContain('Unexpected hand-back address.');
+  });
+
+  describe('given a request for wallet:read x402:pay wallet:send', () => {
+    beforeEach(() => {
+      details = ALL_THREE;
+    });
+
+    it('when it renders, then every scope is ticked, wallet:read cannot be unticked, and all three are to be signed', async () => {
+      await render();
+      expect([box('wallet:read'), box('x402:pay'), box('wallet:send')].map((b) => b.checked)).toEqual([
+        true,
+        true,
+        true,
+      ]);
+      expect(box('wallet:read').disabled).toBe(true);
+      await click(box('wallet:read'));
+      expect(box('wallet:read').checked).toBe(true);
+      expect(signedScopes()).toBe('wallet:read x402:pay wallet:send');
+      expect(container.textContent).toContain('Untick what this app should not do. You can reconnect later to add it.');
+    });
+
+    it('when the user unticks x402:pay and connects, then it signs the typed data for wallet:read wallet:send byte for byte and posts that set', async () => {
+      await render();
+      await click(box('x402:pay'));
+      expect(signedScopes()).toBe('wallet:read wallet:send');
+      expect(container.textContent).toContain(
+        'It will not be able to: Pay x402 services from a daily USDC budget you approve'
+      );
+
+      await click(container.querySelector('#login'));
+      await click([...container.querySelectorAll('button')].find((b) => b.textContent === 'Connect'));
+
+      const expected = consentTypedData(84532, {
+        issuer: MCP,
+        interaction: 'uid_1234567890\u202Etxt',
+        clientId: 'https://evil.example/c.json',
+        clientName: '<img src=x onerror=alert(1)>',
+        scopes: 'wallet:read wallet:send',
+        expires: '2026-10-06T12:10:00.000Z',
+      });
+      expect(JSON.stringify(signTypedData.mock.calls[0][0])).toBe(JSON.stringify(expected));
+      expect(posts.map((p) => p.body)).toEqual([
+        { address: OWNER, signature: '0xsig', scopes: ['wallet:read', 'wallet:send'] },
+      ]);
+    });
+
+    it('when the user clicks wallet:read and connects, then wallet:read is still signed and posted', async () => {
+      await render();
+      await click(box('wallet:read'));
+      await click(container.querySelector('#login'));
+      await click([...container.querySelectorAll('button')].find((b) => b.textContent === 'Connect'));
+      expect((signTypedData.mock.calls[0][0] as typeof DETAILS.typedData).message.scopes).toBe(
+        'wallet:read x402:pay wallet:send'
+      );
+      expect(posts[0].body).toMatchObject({ scopes: ['wallet:read', 'x402:pay', 'wallet:send'] });
+    });
   });
 });

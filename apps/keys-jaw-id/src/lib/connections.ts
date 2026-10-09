@@ -2,6 +2,13 @@ import { connectionsSignInTypedData } from '@jaw.id/agent/reserved';
 import type { Address, Hex } from 'viem';
 import type { ClientIdentity } from '../components/ClientHeader';
 
+// The MCP server's consent labels, in its order. The connection list sends ids only.
+export const SCOPE_LABELS: Record<string, string> = {
+  'wallet:read': 'See your account, balances and payment history',
+  'x402:pay': 'Pay x402 services from a daily USDC budget you approve',
+  'wallet:send': 'Ask you to approve transfers, contract calls and signatures',
+};
+
 export interface ConnectionView {
   id: string;
   status: 'active' | 'expired' | 'revoked';
