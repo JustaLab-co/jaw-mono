@@ -91,4 +91,30 @@ describe('given a 7702 payer that is not delegated yet', () => {
         expect(authorization).toBeUndefined();
         expect(calls).toHaveLength(2);
     });
+
+    it('when its fee is estimated without one, then a target it accepted before is passed through as given', async () => {
+        stubPaymaster();
+        // Mixed case with a wrong checksum: getAddress rejects it, the estimate never checked it.
+        const target = '0x036cbd53842c5426634e7929541eC2318f3dCF7e' as Address;
+
+        await estimateErc20PaymasterCosts(
+            smartAccount,
+            [{ ...transfer, to: target }],
+            chain,
+            'https://pm.test',
+            tokens
+        );
+
+        expect(prepareUserOperation.mock.calls[0][0].calls[1].to).toBe(target);
+    });
+
+    it('when a permission is also given, then the type refuses the local account it would ignore', () => {
+        const both = () =>
+            estimateErc20PaymasterCosts(smartAccount, [transfer], chain, 'https://pm.test', tokens, {
+                permissionId: '0x01',
+                // @ts-expect-error a permission send is priced through the permissions manager, not as a 7702 sender
+                localAccount: { address: PAYER } as LocalAccount,
+            });
+        expect(both).toBeTypeOf('function');
+    });
 });
