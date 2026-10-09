@@ -92,6 +92,7 @@ export async function revokeByGrant(grantId: string, waitMs = PAY_LIMIT_MS) {
   const end = (db: Tx) => db.update(connections).set({ status: 'revoked', revokedAt: new Date() }).where(active);
   const [row] = await getDb().select({ id: connections.id }).from(connections).where(active);
   if (!row) return;
+  // Taken before inTurn on purpose: time queued behind other revokes counts against the wait.
   const deadline = Date.now() + waitMs;
   // In turn with this replica's refills, and polling instead of waiting on the lock:
   // a client posting its revoke many times holds no pooled connection while it waits,
