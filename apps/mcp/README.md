@@ -12,6 +12,8 @@ The hosted JAW MCP server. Any MCP client connects over Streamable HTTP at `/mcp
 
 No scope implies another. `jaw_request_status` needs the scope of the request's kind, and answers a request of another kind as if it did not exist. A tool refused for a missing scope answers with an error naming the scope; the agent reconnects and asks for it, which makes a new connection, so a budget approved on the old one does not carry over. A client that asks for `wallet:read wallet:send` only can no longer request a budget or pay.
 
+The owner can untick `x402:pay` or `wallet:send` on the consent page, never `wallet:read`. The token response's `scope` then lists fewer scopes than the client asked for; read it rather than assuming the request was granted whole. A refresh that asks for an unticked scope is refused with `invalid_scope`.
+
 ## Run it
 
 ```bash
