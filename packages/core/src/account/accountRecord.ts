@@ -4,7 +4,6 @@ import {
     encodeAbiParameters,
     encodeFunctionData,
     getContractAddress,
-    isAddressEqual,
     keccak256,
     pad,
 } from 'viem';
@@ -71,17 +70,27 @@ export function deriveAccountRecordV1(publicKey: Hex): AccountRecord {
  * `[publicKey, someoneElse]` give a valid CREATE2 address that someone else
  * co-owns. While v1 is the only recipe and nothing rotates, the only record a
  * key can have is the one it derives.
+ *
+ * Total: a record comes from a server response or localStorage, so any field
+ * may be missing or of the wrong type, and such a record is rejected rather
+ * than thrown on.
  */
 export function isAccountRecordOf(record: AccountRecord, publicKey: Hex): boolean {
     const expected = deriveAccountRecordV1(publicKey);
+    const owners: unknown = record?.owners;
     return (
-        record.version === expected.version &&
-        isAddressEqual(record.address, expected.address) &&
-        isAddressEqual(record.factory, expected.factory) &&
+        record?.version === expected.version &&
+        sameHex(record.address, expected.address) &&
+        sameHex(record.factory, expected.factory) &&
         record.nonce === expected.nonce &&
-        record.owners.length === expected.owners.length &&
-        record.owners.every((owner, i) => owner.toLowerCase() === expected.owners[i])
+        Array.isArray(owners) &&
+        owners.length === expected.owners.length &&
+        owners.every((owner, i) => sameHex(owner, expected.owners[i]))
     );
+}
+
+function sameHex(value: unknown, expected: Hex): boolean {
+    return typeof value === 'string' && value.toLowerCase() === expected.toLowerCase();
 }
 
 /**

@@ -114,6 +114,24 @@ describe('resolveAccountRecord', () => {
         const stored = deriveAccountRecordV1(OTHER_VECTOR.publicKey);
         expect(resolveAccountRecord(stored, VECTOR.publicKey).address).toBe(VECTOR.address);
     });
+
+    // A record comes from a server response or localStorage, so its shape is
+    // not guaranteed. A malformed one is ignored, never thrown on.
+    const valid = deriveAccountRecordV1(VECTOR.publicKey);
+    it.each([
+        ['an empty address', { ...valid, address: '' }],
+        ['no address', { ...valid, address: undefined }],
+        ['no factory', { ...valid, factory: undefined }],
+        ['no owners', { ...valid, owners: undefined }],
+        ['owners that are not an array', { ...valid, owners: 'nope' }],
+        ['an owner that is not a string', { ...valid, owners: [null, PM_OWNER] }],
+        ['a numeric nonce', { ...valid, nonce: 0 }],
+        ['null', null],
+    ])('derives the record when the stored one has %s', (_, stored) => {
+        const record = resolveAccountRecord(stored as unknown as AccountRecord, VECTOR.publicKey);
+        expect(record).toEqual(valid);
+        expect(record).not.toBe(stored);
+    });
 });
 
 describe('accountRecordFactoryData', () => {
