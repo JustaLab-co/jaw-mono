@@ -224,8 +224,11 @@ const merged = (row: PaymentRow, c: Conclusion): PaymentRow => ({
 
 /** One `jaw_pay_and_fetch` call, from the gates to an answer drawn from its row. */
 export async function pay(t: Tenant, input: PayInput, deps: PayDeps = liveDeps()): Promise<PayResult> {
-  if (!t.scopes.includes('wallet:send')) {
-    return gate('insufficient_scope', 'This token was not granted wallet:send, which paying from the budget needs.');
+  if (!t.scopes.includes('x402:pay')) {
+    return gate(
+      'insufficient_scope',
+      'This token was not granted x402:pay. Reconnect and ask for it to pay from a budget; a budget approved on this connection does not carry over to the new one.'
+    );
   }
   if (await isPaymentsPaused())
     return gate('payments_paused', 'Payments are paused on this server. Nothing was signed.');

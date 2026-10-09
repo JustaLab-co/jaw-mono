@@ -197,7 +197,7 @@ describe('authorization server', () => {
       iss: ISSUER,
       aud: RESOURCE,
       client_id: 'jaw-cli',
-      scope: 'wallet:read wallet:send',
+      scope: 'wallet:read x402:pay wallet:send',
     });
     const row = await findActive(claims.sub);
     expect(row?.account).toBe(c.signer.address);
@@ -566,7 +566,9 @@ describe('authorization server', () => {
     const { oauth } = await import('./provider');
     for (const path of ['openid-configuration', 'oauth-authorization-server']) {
       const res = await oauth(new Request(`${ISSUER}/.well-known/${path}`));
-      expect((await res.json()).scopes_supported, path).toEqual(expect.arrayContaining(['wallet:read', 'wallet:send']));
+      expect((await res.json()).scopes_supported, path).toEqual(
+        expect.arrayContaining(['wallet:read', 'x402:pay', 'wallet:send'])
+      );
     }
   });
 

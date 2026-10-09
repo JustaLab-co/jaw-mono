@@ -77,7 +77,7 @@ describe('connections list', () => {
       status: 'active',
       chainId: CHAIN,
       client: { clientId: 'jaw-cli', name: 'JAW CLI', official: true },
-      scopes: ['wallet:read', 'wallet:send'],
+      scopes: ['wallet:read', 'x402:pay', 'wallet:send'],
       payer: sessionAddress,
       float: '70000',
       budgets: [{ permissionId, allowance: '1000000', period: 'day', state: 'active' }],

@@ -73,6 +73,14 @@ describe('read tools', () => {
     expect(r.content[0].text).toContain('jaw_request_budget');
   });
 
+  it('given a token with wallet:read wallet:send, when jaw_status runs, then it is not ready for lack of x402:pay', async () => {
+    const c = await connect(undefined, { scope: 'wallet:read wallet:send' });
+    const r = await callTool(c.access_token, 'jaw_status', {});
+    expect(r.structuredContent.readiness).toEqual({ status: 'not_ready', reason: 'no_scope' });
+    expect(r.content[0].text).toContain('x402:pay');
+    expect(r.content[0].text).not.toContain('Ready to pay');
+  });
+
   it('jaw_quote prices the exact route at 5000 Base Sepolia USDC without paying', async () => {
     hits.length = 0;
     const r = await callTool(token, 'jaw_quote', { url: `http://${SELLER}/exact` });

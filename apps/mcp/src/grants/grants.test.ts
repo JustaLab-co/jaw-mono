@@ -4,6 +4,7 @@ import { eq } from 'drizzle-orm';
 import type { Hex } from 'viem';
 import { beforeAll, describe, expect, it } from 'vitest';
 import { decideFromPage, readForPage, type ReadPermission } from '@/approvals/page-api';
+import { NO_PAY_SCOPE } from '@/approvals/tools';
 import { verifyBearer } from '@/connections/auth';
 import { callTool, connect, setTestEnv, verifyLocally } from '@/connections/testkit';
 import { getDb } from '@/db/client';
@@ -42,7 +43,7 @@ async function budgetView(id: string) {
 }
 
 async function requestBudget(perDay = '1') {
-  const c = await connect();
+  const c = await connect(undefined, { scope: 'wallet:read x402:pay' });
   const sessionAddress = ((await verifyBearer(c.access_token))?.extra?.tenant as { sessionAddress: Hex })
     .sessionAddress;
   const result = await callTool(c.access_token, 'jaw_request_budget', { perDay });
@@ -74,11 +75,11 @@ describe('budget grants', () => {
     });
   });
 
-  it('refuses a budget to a connection without wallet:send, since a budget authorizes money', async () => {
-    const reader = await connect(undefined, { scope: 'wallet:read' });
-    const refused = await callTool(reader.access_token, 'jaw_request_budget', { perDay: '1' });
+  it('given a token with wallet:read wallet:send, when it asks for a budget, then it is refused naming x402:pay', async () => {
+    const sender = await connect(undefined, { scope: 'wallet:read wallet:send' });
+    const refused = await callTool(sender.access_token, 'jaw_request_budget', { perDay: '1' });
     expect(refused.isError).toBe(true);
-    expect(refused.content[0].text).toMatch(/wallet:send/);
+    expect(refused.content[0].text).toBe(NO_PAY_SCOPE);
   });
 
   it('refuses a zero budget and a malformed amount', async () => {

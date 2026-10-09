@@ -31,7 +31,8 @@ async function loadDetails(uid: string): Promise<ConsentDetails | undefined> {
   const params = interaction.params as Record<string, string | undefined>;
   const client = params.client_id ? await p.Client.find(params.client_id) : undefined;
   if (!client || !params.redirect_uri) return undefined;
-  const requested = (params.scope ?? '').split(' ').filter((s): s is Scope => s in SCOPES);
+  const asked = (params.scope ?? '').split(' ');
+  const requested = (Object.keys(SCOPES) as Scope[]).filter((s) => asked.includes(s));
   const { chain, issuer } = config();
   const identity = clientIdentity(client.clientId, client.clientName ?? client.clientId);
   const expiresAt = new Date(interaction.exp * 1000).toISOString();
