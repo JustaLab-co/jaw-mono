@@ -10,7 +10,9 @@ docker run -p 3000:3000 -e DATABASE_URL=... -e JAW_MCP_PUBLIC_URL=http://localho
   -e JAW_KEYS_URL=http://localhost:3001 -e JAW_MCP_SEALING_KEYS=... jaw-mcp
 ```
 
-Migrations run at start and are safe to run from several instances at once. `GET /api/health` answers `{ db, paused }`, and 503 when Postgres is unreachable.
+Migrations run at start and are safe to run from several instances at once.
+
+Migrations must run as the app role, over a direct connection to Postgres, not through a transaction-mode pooler such as PgBouncer or the Supabase pooler on port 6543. Migration `0011` sets `statement_timeout` for the current role in the current database, so a different role leaves the app database unbounded. The runner also relies on session state, `set statement_timeout = 0` and `pg_advisory_lock`, which a transaction-mode pooler can move to another backend between statements, so the lock and the timeout reset stop holding. `GET /api/health` answers `{ db, paused }`, and 503 when Postgres is unreachable.
 
 ## Configuration
 
