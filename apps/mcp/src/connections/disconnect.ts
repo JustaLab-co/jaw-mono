@@ -265,13 +265,17 @@ async function returnFunds(tx: Tx, t: Tenant, deps: DisconnectDeps): Promise<Ret
   if (fee === undefined) return REFUSALS.chain;
   const margin = (fee.expected * FEE_MARGIN_BPS + 9_999n) / 10_000n;
   const reserve = margin < fee.max ? margin : fee.max;
-  log('info', { msg: `disconnect fee reserve ${reserve}, expected ${fee.expected}, max ${fee.max}` });
+  log('info', {
+    msg: 'disconnect fee reserve',
+    fee: { expected: fee.expected.toString(), reserve: reserve.toString(), max: fee.max.toString() },
+  });
   // What payments hold is not the payer's to spend on fees, so a payer that cannot
-  // cover the reserve leaves the budgets to the owner's page.
-  if (free <= reserve) {
+  // cover the fee leaves the budgets to the owner's page.
+  const leaveToOwner = async () => {
     await recordRevoked(seenRevoked);
     return { ...nothingSent, stillApproved: revokes.map((r) => r.permissionId) };
-  }
+  };
+  if (free <= reserve) return leaveToOwner();
 
   const sendWith = (cap: bigint) =>
     sender.send(batch(free - cap, cap)).catch((err) => {
@@ -281,7 +285,10 @@ async function returnFunds(tx: Tx, t: Tenant, deps: DisconnectDeps): Promise<Ret
   let swept = free - reserve;
   let sent = await sendWith(reserve);
   // A fee over the reserve reverts with nothing moved; one more try at the ceiling.
-  if (sent?.status === 'reverted' && reserve < fee.max && free > fee.max) {
+  // A float under the ceiling cannot pay more, so the budgets go to the owner and the
+  // connection still ends.
+  if (sent?.status === 'reverted' && reserve < fee.max) {
+    if (free <= fee.max) return leaveToOwner();
     swept = free - fee.max;
     sent = await sendWith(fee.max);
   }

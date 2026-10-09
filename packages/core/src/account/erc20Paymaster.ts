@@ -236,7 +236,7 @@ export async function fetchTokenQuotes(
  * @param paymasterUrl - The ERC-20 paymaster URL
  * @param tokens - Array of tokens to estimate costs for
  * @param options - Optional permission-based execution context, or the local account of an
- *   EIP-7702 sender so the delegation and owner setup its send adds are priced too
+ *   EIP-7702 sender so the delegation and owner setup its send adds are priced too; not both
  * @returns Array of token estimates with costs
  */
 export async function estimateErc20PaymasterCosts(
@@ -245,7 +245,9 @@ export async function estimateErc20PaymasterCosts(
     chain: Chain,
     paymasterUrl: string,
     tokens: TokenInfo[],
-    options?: { permissionId?: Hex; apiKey?: string; localAccount?: LocalAccount }
+    options?:
+        | { permissionId?: Hex; apiKey?: string; localAccount?: undefined }
+        | { localAccount: LocalAccount; apiKey?: string; permissionId?: undefined }
 ): Promise<TokenEstimate[]> {
     if (tokens.length === 0) {
         return [];
@@ -302,13 +304,18 @@ export async function estimateErc20PaymasterCosts(
                 data: encodedData,
             },
         ];
-    } else {
+    } else if (options?.localAccount) {
         ({ calls: preparedCalls, authorization } = await prepareCallsForExecution(
             smartAccount,
             [approvalCall, ...calls],
             chain,
-            options?.localAccount
+            options.localAccount
         ));
+    } else {
+        preparedCalls = [
+            approvalCall,
+            ...calls.map((c) => ({ to: c.to, value: c.value ?? 0n, data: c.data ?? ('0x' as Hex) })),
+        ];
     }
 
     // 3. Prepare UserOp WITH the paymaster configured
