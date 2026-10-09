@@ -50,6 +50,9 @@ const stateOf = async (id: string) =>
       from connections c where c.id = ${id}`)
   )[0];
 
+const within = <T>(ms: number, work: Promise<T>) =>
+  Promise.race([work, new Promise<'blocked'>((r) => setTimeout(() => r('blocked'), ms))]);
+
 async function waitersReach(connectionId: string, n: number) {
   for (let i = 0; i < 100 && (await lockWaiters(connectionId)) < n; i++) await new Promise((r) => setTimeout(r, 50));
 }
@@ -158,6 +161,23 @@ describe.skipIf(!TEST_PG_URL)('on Postgres, given a funding turn that holds the 
     expect(await statusOnceParked(t.connectionId)).toBe('active');
     await release();
     expect((await revoking).status).toBe(200);
+    expect((await stateOf(t.connectionId)).status).toBe('revoked');
+  });
+
+  it('when the provider destroys one grant many times at once, then at most one session waits and the pool serves other queries', async () => {
+    const { t } = await connected();
+    const { grant } = await stateOf(t.connectionId);
+    const release = await holdLock(t.connectionId);
+    const revoking = Promise.all(Array.from({ length: 12 }, () => revokeByGrant(grant)));
+    try {
+      await new Promise((r) => setTimeout(r, 1_000));
+      expect(await within(1_000, getDb().execute(sql`select 1`))).not.toBe('blocked');
+      expect(await within(1_000, lockWaiters(t.connectionId))).toBeLessThanOrEqual(1);
+      expect((await stateOf(t.connectionId)).status).toBe('active');
+    } finally {
+      await release();
+    }
+    await revoking;
     expect((await stateOf(t.connectionId)).status).toBe('revoked');
   });
 
