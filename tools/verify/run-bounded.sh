@@ -13,7 +13,7 @@ rm -f "$LOG.done" "$LOG.timeout"
 set -m
 "$@" >"$LOG" 2>&1 </dev/null &
 CMD=$!
-(sleep "$MAX"; touch "$LOG.timeout"; kill -TERM -- -"$CMD"; sleep 2; kill -KILL -- -"$CMD") >/dev/null 2>&1 &
+(sleep "$MAX"; kill -0 -- -"$CMD" && touch "$LOG.timeout" && kill -TERM -- -"$CMD"; sleep 2; kill -KILL -- -"$CMD") >/dev/null 2>&1 &
 WATCH=$!
 set +m
 stop() { kill -KILL -- -"$CMD" -"$WATCH" 2>/dev/null; echo 130 >"$LOG.done.tmp"; mv "$LOG.done.tmp" "$LOG.done"; exit 130; }

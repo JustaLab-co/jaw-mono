@@ -10,6 +10,9 @@ docker info >/dev/null 2>&1 || { echo "docker is not running" >&2; exit 1; }
 PROJECT=jaw-verify-$(printf %s "$RUN" | shasum | cut -c1-8)
 # The image builds from up.sh's clean worktree of HEAD when there is one.
 CTX=$REPO; [ -d "${SRC:-}" ] && CTX=$SRC
+if [ "$CTX" = "$REPO" ] && [ -n "$(git -C "$REPO" status --porcelain 2>/dev/null)" ]; then
+  echo "refusing to build the mcp image from a dirty tree; commit first" >&2; exit 1
+fi
 PROFILE=; [ -f "$CTX/apps/mcp/Dockerfile" ] && PROFILE="--profile mcp"
 # The OAuth issuer must equal the URL clients reach, so the host port is fixed
 # before start. The sealing key is per run and stays out of run.env, which is

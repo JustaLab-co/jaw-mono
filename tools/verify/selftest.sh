@@ -42,7 +42,10 @@ check "within about 2 s" "[ $took -le 4 ]"
 check "given a command that exits 3, <log>.done holds 3 and the log both streams" \
   "[ \"\$(cat '$T/ok.log.done')\" = 3 ] && grep -q out '$T/ok.log' && grep -q err '$T/ok.log'"
 
-# .husky/pre-push, with gh and nx stubbed.
+# .husky/pre-push, with gh and nx stubbed and an origin that has the base.
+git init -q --bare "$T/origin.git"
+git -C "$T/repo" remote add origin "$T/origin.git"
+git -C "$T/repo" push -q origin HEAD:refs/heads/mariano-aguero/agent-verify HEAD:refs/heads/main
 mkdir -p "$T/bin"
 printf '#!/bin/sh\necho "$*" >"%s/nx.args"\n' "$T" >"$T/bin/nx"
 printf '#!/bin/sh\n[ -n "$GH_BASE" ] || exit 1\necho "$GH_BASE"\n' >"$T/bin/gh"
@@ -53,6 +56,8 @@ check "given a stacked branch, pre-push uses origin/<PR base>" "grep -q -- '--ba
 (cd "$T/repo" && GH_BASE= PATH="$T/bin:$PATH" sh "$REPO/.husky/pre-push" >/dev/null 2>&1)
 echo "     without a PR: nx $(cat "$T/nx.args")"
 check "given no PR or a failing gh, pre-push uses origin/main" "grep -q -- '--base=origin/main ' '$T/nx.args'"
+(cd "$T/repo" && GH_BASE=deleted-branch PATH="$T/bin:$PATH" sh "$REPO/.husky/pre-push" >/dev/null 2>&1)
+check "given a PR base missing on origin, pre-push uses origin/main" "grep -q -- '--base=origin/main ' '$T/nx.args'"
 
 # hosted-up.sh and down.sh: two runs with the same id from two roots.
 if ! docker info >/dev/null 2>&1; then
