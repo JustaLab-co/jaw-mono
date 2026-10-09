@@ -8,7 +8,7 @@ import { getDb } from '@/db/client';
 import { connections, oauthPayloads } from '@/db/schema';
 import { errorLabel, log } from '@/lib/edge';
 import { revokeByGrant, setSessionAddress } from './rows';
-import { unwrap, wrap, type KeyRing, type Wrapped } from './seal';
+import { nextRefreshId, unwrap, wrap, type KeyRing, type Wrapped } from './seal';
 
 // A client whose refresh response was lost retries with the token it still holds.
 // Judged when find reads the token; the unused successor is what stops a replay.
@@ -33,10 +33,15 @@ const notExpired = or(isNull(oauthPayloads.expiresAt), gt(oauthPayloads.expiresA
 // The key a token request issues for, made by whichever token the provider
 // saves first: the access token in a code exchange, the refresh token in a refresh.
 const requestKeys = new WeakMap<object, Hex>();
-// Requests whose find saw a used token it may retry, with the wrap it saw then,
-// so a sweep running before the rotation cannot take it. One that saw the token
-// live and lost the race to its own sibling is refused, not taken for a retry.
-const retries = new WeakMap<object, Wrapped | null>();
+// What find read for the token a refresh presents: the key its wrap opens, so a
+// sweep running before the rotation cannot take it, the successor id every request
+// with that token derives, and whether find admitted the token as a used one.
+const refreshes = new WeakMap<object, { key: Hex; next: string; retry: boolean }>();
+
+export const successorId = (): string | undefined => {
+  const ctx = Provider.ctx;
+  return ctx && refreshes.get(ctx)?.next;
+};
 
 function requestContext(): KoaContextWithOIDC {
   const ctx = Provider.ctx;
@@ -98,19 +103,29 @@ export class PgAdapter implements Adapter {
     if (!found) return undefined;
     const { row, retryable } = found;
     const payload = { ...(row.payload as AdapterPayload), jti: id };
-    if (!row.consumedAt) return payload;
-    if (retryable) retries.set(requestContext(), row.keyWrap as Wrapped | null);
-    else payload.consumed = Math.floor(row.consumedAt.getTime() / 1000);
+    if (row.consumedAt && !retryable) {
+      payload.consumed = Math.floor(row.consumedAt.getTime() / 1000);
+      return payload;
+    }
+    // Only the refresh grant takes this parameter; revocation and introspection read the token too.
+    const ctx = Provider.ctx;
+    const wrapped = row.keyWrap as Wrapped | null;
+    if (wrapped && ctx?.oidc.params?.refresh_token === id) {
+      const key = unwrap(this.ring, wrapped, payload.accountId!, id);
+      refreshes.set(ctx, { key, next: nextRefreshId(key, id, wrapped), retry: row.consumedAt !== null });
+    }
     return payload;
   }
 
   // One transaction consumes the presented token and stores its successor with
   // the key wrapped under it, so a failure anywhere leaves the presented token usable.
-  // A retry consumes the successor it replaces instead, which makes that one a replay.
+  // Every request presenting the token saves the same successor id, so one that
+  // finds it already stored answers it again and writes nothing.
   private async rotate(id: string, row: Omit<typeof oauthPayloads.$inferInsert, 'key'>) {
     const ctx = requestContext();
     const connectionId = (row.payload as AdapterPayload).accountId!;
     const presented = ctx.oidc.entities.RotatedRefreshToken?.jti;
+    const seen = refreshes.get(ctx);
     await getDb().transaction(async (tx) => {
       // Ending a connection locks its row before deleting the tokens, so a rotation
       // either commits first and is deleted with them, or sees the connection ended.
@@ -120,37 +135,40 @@ export class PgAdapter implements Adapter {
         .where(and(eq(connections.id, connectionId), eq(connections.status, 'active')))
         .for('share');
       if (!live) throw new errors.InvalidGrant('connection ended');
-      let key = requestKeys.get(ctx);
       if (presented) {
+        // Requests presenting the same token take turns here.
         const [from] = await tx
           .select()
           .from(oauthPayloads)
-          .where(eq(oauthPayloads.key, this.key(presented)));
+          .where(eq(oauthPayloads.key, this.key(presented)))
+          .for('update');
         if (!from) throw new errors.InvalidGrant('refresh token not found');
-        const retry = from.consumedAt !== null;
-        if (retry && !retries.has(ctx)) throw new errors.InvalidGrant('grant already used');
-        const wrapped = retry ? retries.get(ctx) : (from.keyWrap as Wrapped | null);
-        if (!wrapped) throw new errors.InvalidGrant('refresh token holds no key');
-        key = unwrap(this.ring, wrapped, connectionId, presented);
+        if (!seen) throw new errors.InvalidGrant('refresh token holds no key');
+        requestKeys.set(ctx, seen.key);
+        if (from.consumedAt) {
+          // A statement of its own, so it sees the successor stored by the request this one waited on.
+          const [state] = await tx
+            .select({
+              inWindow: sql<boolean>`${oauthPayloads.consumedAt} > ${windowStart}`,
+              successorUnused: sql<boolean>`exists (
+                select 1 from oauth_payloads s where s.key = oauth_payloads.successor_key and s.consumed_at is null)`,
+            })
+            .from(oauthPayloads)
+            .where(eq(oauthPayloads.key, from.key));
+          // One that saw the token live was not admitted as a retry, so its window is judged now.
+          const reissue = from.successorKey === this.key(id) && state.successorUnused && (seen.retry || state.inWindow);
+          if (!reissue) throw new errors.InvalidGrant('grant already used');
+          return;
+        }
         // Taken after the lock wait, which then does not shorten the client's window.
-        const consumedAt = sql`statement_timestamp()`;
-        // The replaced successor never reached the client, so its wrap goes with it.
-        const consumed = await tx
-          .update(oauthPayloads)
-          .set(retry ? { consumedAt, keyWrap: null } : { consumedAt })
-          .where(
-            and(eq(oauthPayloads.key, (retry ? from.successorKey : from.key) ?? ''), isNull(oauthPayloads.consumedAt))
-          )
-          .returning({ key: oauthPayloads.key });
-        if (consumed.length === 0) throw new errors.InvalidGrant('grant already used');
-        // Using a token ends its predecessor's retry window, and with it the need for that wrap.
-        if (!retry)
-          await tx.update(oauthPayloads).set({ keyWrap: null }).where(eq(oauthPayloads.successorKey, from.key));
         await tx
           .update(oauthPayloads)
-          .set({ successorKey: this.key(id) })
+          .set({ consumedAt: sql`statement_timestamp()`, successorKey: this.key(id) })
           .where(eq(oauthPayloads.key, from.key));
+        // Using a token ends its predecessor's retry window, and with it the need for that wrap.
+        await tx.update(oauthPayloads).set({ keyWrap: null }).where(eq(oauthPayloads.successorKey, from.key));
       }
+      const key = requestKeys.get(ctx);
       if (!key) throw new Error('no session key for this refresh token');
       await tx
         .insert(oauthPayloads)
@@ -200,7 +218,7 @@ export class PgAdapter implements Adapter {
 }
 
 // A used token past its window can no longer start a retry, and an admitted one
-// carries the wrap find read, so the stored wrap would only serve whoever kept
+// carries the key find opened, so the stored wrap would only serve whoever kept
 // the old token. Swept after every rotation, for every grant, and by the cron.
 // Outside the rotation, which then locks only its own grant's rows; SKIP LOCKED
 // leaves a row another request holds to the next sweep, so the sweep never waits
