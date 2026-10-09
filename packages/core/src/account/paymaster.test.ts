@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import type { Client } from 'viem';
+import { HttpRequestError, type Client } from 'viem';
 import type { PaymasterClient } from 'viem/account-abstraction';
 import { createPaymasterFunctions } from './paymaster.js';
 
@@ -123,6 +123,20 @@ describe('createPaymasterFunctions — estimation fallback', () => {
 
         expect(result.paymasterVerificationGasLimit).toBe(0x400n);
         expect(result.paymasterPostOpGasLimit).toBe(0x500n);
+    });
+
+    it('keeps the api key out of the warning when estimation fails', async () => {
+        const url = 'https://api.justaname.id/proxy/v1/rpc?chainId=84532&api-key=secret-key';
+        paymasterClient.request.mockRejectedValue(new HttpRequestError({ url, status: 500 }));
+        const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+
+        await functions.getPaymasterStubData(
+            baseUserOperation as unknown as Parameters<(typeof functions)['getPaymasterStubData']>[0]
+        );
+
+        expect(warn).toHaveBeenCalledTimes(1);
+        expect(warn.mock.calls.flat().map(String).join(' ')).not.toContain('secret-key');
+        warn.mockRestore();
     });
 });
 

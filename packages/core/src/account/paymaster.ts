@@ -2,6 +2,7 @@ import { Client, Hex, numberToHex, pad } from 'viem';
 import { getGasPrice } from 'viem/actions';
 import { PaymasterClient, entryPoint08Address } from 'viem/account-abstraction';
 import type { SignedAuthorization } from 'viem';
+import { withoutApiKey } from '../utils/redact.js';
 
 /**
  * Serialize a signed EIP-7702 authorization into the bundler wire format
@@ -228,7 +229,7 @@ export function createPaymasterFunctions(
                     } as typeof stubData;
                 } catch (error) {
                     // If estimation fails, return stub data as-is (will likely fail later)
-                    console.warn('[createPaymasterFunctions] Gas estimation failed:', error);
+                    console.warn('[createPaymasterFunctions] Gas estimation failed:', withoutApiKey(error));
                     return stubData;
                 }
             }
