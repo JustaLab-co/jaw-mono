@@ -1,12 +1,13 @@
 import type { PermissionState } from '@jaw.id/agent';
 import { PERMISSION_MANAGER_ABI } from '@jaw.id/agent';
 import { randomBytes } from 'node:crypto';
-import { eq } from 'drizzle-orm';
+import { eq, sql } from 'drizzle-orm';
 import { decodeFunctionData, erc20Abi, maxUint256, type Address, type Hex, type PublicClient } from 'viem';
-import { beforeAll, describe, expect, it } from 'vitest';
+import { beforeAll, describe, expect, it, vi } from 'vitest';
 import { getDb } from '@/db/client';
 import { grants, payments, settings } from '@/db/schema';
 import { useTestDb } from '@/db/test-db';
+import { lockFloat } from '@/payments/refill';
 import { disconnect, type DisconnectDeps, type Sent } from './disconnect';
 import { budgetConnection, callTool, connect, mcp, setTestEnv } from './testkit';
 import { verifyBearer, type Tenant } from './auth';
@@ -224,6 +225,26 @@ describe('given a funded payer with nothing held and a live budget', () => {
     expect(await listed(c.access_token)).toBe(401);
   });
 
+  it('when the reserve is set, then the fee amounts are logged as fields', async () => {
+    const { tenant } = await budgetConnection(async () => approved);
+    const { deps } = fakes({ float: 30_000n, expected: 5_000n, max: 20_000n });
+    const logged: unknown[] = [];
+    const spy = vi.spyOn(console, 'log').mockImplementation((line) => logged.push(JSON.parse(String(line))));
+
+    try {
+      await disconnect(tenant, deps);
+    } finally {
+      spy.mockRestore();
+    }
+
+    expect(logged).toContainEqual(
+      expect.objectContaining({
+        msg: 'disconnect fee reserve',
+        fee: { expected: '5000', reserve: '6250', max: '20000' },
+      })
+    );
+  });
+
   it('when the fee is quoted, then the quoted batch leaves the paymaster room for any fee', async () => {
     const { tenant } = await budgetConnection(async () => approved);
     const { deps, quoted } = fakes({ float: 30_000n });
@@ -298,13 +319,16 @@ describe('given the fee rises above the reserve before the batch lands', () => {
     expect(await listed(c.access_token)).toBe(200);
   });
 
-  it('when the float cannot cover the ceiling, then it does not retry', async () => {
-    const { c, tenant } = await budgetConnection(async () => approved);
+  it('when the float cannot cover the ceiling, then it leaves the budget to the owner and still ends the tokens', async () => {
+    const { c, tenant, permissionId } = await budgetConnection(async () => approved);
     const { deps, sent } = fakes({ float: 15_000n, expected: 5_000n, max: 20_000n, sent: { status: 'reverted' } });
 
-    expect((await disconnect(tenant, deps)).isError).toBe(true);
+    const result = await disconnect(tenant, deps);
+
     expect(sent).toHaveLength(1);
-    expect(await listed(c.access_token)).toBe(200);
+    expect(result.structuredContent).toMatchObject({ revoked: [], stillApproved: [permissionId], left: '15000' });
+    expect(await revokedAt(permissionId)).toBeNull();
+    expect(await listed(c.access_token)).toBe(401);
   });
 });
 
@@ -322,5 +346,20 @@ describe('given the batch landed but its reply was lost', () => {
     expect(result.structuredContent).toMatchObject({ revoked: [], stillApproved: [], swept: '0', left: '1800' });
     expect(await revokedAt(permissionId)).not.toBeNull();
     expect(await listed(c.access_token)).toBe(401);
+  });
+});
+
+describe('given a host that ends transactions left idle', () => {
+  it('when disconnect holds the float lock across two receipt waits, then its transaction outlives them', async () => {
+    const setting = await getDb().transaction(async (tx) => {
+      await lockFloat(tx, 'conn_idle', 1_000);
+      const { rows } = (await tx.execute(
+        sql`select current_setting('idle_in_transaction_session_timeout') as idle`
+      )) as unknown as { rows: { idle: string }[] };
+      return rows[0].idle;
+    });
+
+    // Two 60 s receipt waits plus the quote, with room to spare.
+    expect(setting).toBe('5min');
   });
 });
