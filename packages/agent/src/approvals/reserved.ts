@@ -8,6 +8,14 @@ export const JAW_DOMAIN_NAME = 'JAW';
 
 const domain = (chainId: number) => ({ name: JAW_DOMAIN_NAME, version: '1', chainId });
 
+/** What a JAW MCP connection can be granted, in the order consent lists and signs them. */
+export const CONNECTION_SCOPES = {
+  'wallet:read': 'See your account, balances and payment history',
+  'x402:pay': 'Pay x402 services from a daily USDC budget you approve',
+  'wallet:send': 'Ask you to approve transfers, contract calls and signatures',
+} as const;
+export type ConnectionScope = keyof typeof CONNECTION_SCOPES;
+
 // A type alias, not an interface: viem's typed data checks need the index signature it implies.
 export type ConsentTerms = {
   issuer: string;
