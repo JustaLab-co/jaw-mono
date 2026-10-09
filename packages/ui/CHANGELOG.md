@@ -1,3 +1,17 @@
+## 1.6.2 (2026-10-09)
+
+### 🩹 Fixes
+
+- **core:** send passkey requests to the configured serverUrl ([#373](https://github.com/JustaLab-co/jaw-mono/pull/373))
+
+### 🧱 Updated Dependencies
+
+- Updated @jaw.id/core to 1.6.2
+
+### ❤️ Thank You
+
+- Ghadi @Ghadi8
+
 ## 1.6.1 (2026-10-06)
 
 ### 🩹 Fixes
