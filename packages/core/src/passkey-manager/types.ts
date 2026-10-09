@@ -1,3 +1,5 @@
+import type { AccountRecord } from '../account/accountRecord.js';
+
 export interface PasskeyCredential {
     id: string;
     name: string;
@@ -16,6 +18,8 @@ export interface PasskeyAccount {
     username: string;
     publicKey: `0x${string}`;
     address?: `0x${string}`;
+    /** What the account was created from; absent on entries stored before records existed. */
+    account?: AccountRecord;
 }
 
 export interface AuthCheckResult {
@@ -55,4 +59,8 @@ export interface BackendResponse<T> {
 
 export interface PasskeysByCredIdsResponse {
     passkeys: PasskeyLookupResponse[];
+}
+
+export interface AccountByCredIdRequest {
+    credentialId: string;
 }

@@ -1,6 +1,6 @@
 import type { Page } from '@playwright/test';
 
-import { ACCOUNT, Dapp, expect, HTTPS, KEYS_URL, keys, signOutKeysSession, test, type Dialog } from './fixtures';
+import { Dapp, expect, HTTPS, KEYS_URL, keys, signOutKeysSession, test, type Dialog } from './fixtures';
 
 /**
  * The SDK and the keys app together, through the playground, with a passkey
@@ -15,13 +15,13 @@ import { ACCOUNT, Dapp, expect, HTTPS, KEYS_URL, keys, signOutKeysSession, test,
 const SETTLES = 15_000;
 
 test.describe('connect', () => {
-  test('signs in with the passkey and returns the account', async ({ dapp }) => {
+  test('signs in with the passkey and returns the account', async ({ dapp, passkey }) => {
     const dialog = await dapp.execute();
     await keys.account(dialog).click();
     await keys.button(dialog, 'Connect').click();
 
     await expect(dapp.result()).toHaveText(/^OK/, { timeout: SETTLES });
-    await expect(dapp.response()).toContainText(new RegExp(ACCOUNT, 'i'));
+    await expect(dapp.response()).toContainText(new RegExp(passkey.account, 'i'));
   });
 
   test('a cached connection answers without opening a dialog', async ({ dapp, context }) => {
@@ -45,7 +45,7 @@ test.describe('connect', () => {
   // The hang this suite was written for. An SDK holding an expired connection
   // sent wallet_connect encrypted over the old session, and keys had no screen
   // for it, so the dialog sat on the loading skeleton until site data was cleared.
-  test('an expired connection shows the account screen instead of hanging', async ({ dapp }) => {
+  test('an expired connection shows the account screen instead of hanging', async ({ dapp, passkey }) => {
     const first = await dapp.execute();
     await keys.account(first).click();
     await keys.button(first, 'Connect').click();
@@ -58,7 +58,7 @@ test.describe('connect', () => {
     await keys.account(dialog).click();
     await approveIfAsked(dapp, dialog);
     await expect(dapp.result()).toHaveText(/^OK/, { timeout: SETTLES });
-    await expect(dapp.response()).toContainText(new RegExp(ACCOUNT, 'i'));
+    await expect(dapp.response()).toContainText(new RegExp(passkey.account, 'i'));
   });
 });
 

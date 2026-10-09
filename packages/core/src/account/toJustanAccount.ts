@@ -62,6 +62,12 @@ export type ToJustanAccountParameters = {
           }
         | undefined;
     factoryAddress?: Address | undefined;
+    /**
+     * The `createAccount` calldata the account was created with, from its stored
+     * record. Deploys the account exactly as it was created, instead of
+     * re-encoding `owners` and `nonce`.
+     */
+    factoryData?: Hex | undefined;
     /** Override the factory-derived address. Used when signing for an account this passkey owns but didn't create. */
     address?: Address | undefined;
 
@@ -86,6 +92,7 @@ export async function toJustanAccount(parameters: ToJustanAccountParameters): Pr
             version: '0.8',
         },
         factoryAddress = FACTORY_ADDRESS,
+        factoryData: factoryDataOverride,
         address: addressOverride,
         // EIP-7702 parameters
         eip7702Account,
@@ -202,11 +209,13 @@ export async function toJustanAccount(parameters: ToJustanAccountParameters): Pr
 
             return {
                 factory: factoryAddress,
-                factoryData: encodeFunctionData({
-                    abi: factoryAbi,
-                    functionName: 'createAccount',
-                    args: [owners_bytes, nonce],
-                }),
+                factoryData:
+                    factoryDataOverride ??
+                    encodeFunctionData({
+                        abi: factoryAbi,
+                        functionName: 'createAccount',
+                        args: [owners_bytes, nonce],
+                    }),
             };
         },
         async getStubSignature() {
