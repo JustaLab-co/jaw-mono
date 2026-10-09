@@ -79,6 +79,11 @@ export interface AccountConfig {
     rpId?: string;
     /** Relying party name (defaults to 'JAW') */
     rpName?: string;
+    /**
+     * Passkey server endpoint that registers passkeys and looks them up
+     * (defaults to https://api.justaname.id/wallet/v2/passkeys).
+     */
+    serverUrl?: string;
 }
 
 /**
@@ -179,6 +184,15 @@ export class Account {
     // Static Factory Methods
     // ============================================
 
+    /** The PasskeyManager for a config: its storage, passkey server and API key. */
+    private static passkeyManager(config: AccountConfig): PasskeyManager {
+        return new PasskeyManager(
+            config.storage,
+            config.serverUrl ? { serverUrl: config.serverUrl } : undefined,
+            config.apiKey
+        );
+    }
+
     /**
      * Derive and persist addresses for stored accounts that predate address
      * persistence, returning the (updated) stored list.
@@ -191,7 +205,7 @@ export class Account {
      */
     static async backfillStoredAccountAddresses(config: AccountConfig): Promise<PasskeyAccount[]> {
         const { chainId, apiKey, paymasterUrl, paymasterContext } = config;
-        const passkeyManager = new PasskeyManager(config.storage, undefined, apiKey);
+        const passkeyManager = Account.passkeyManager(config);
         const accounts = passkeyManager.fetchAccounts();
         const missing = accounts.filter((account) => !account.address);
         if (missing.length === 0) return accounts;
@@ -265,7 +279,7 @@ export class Account {
         const getFn = resolved.getFn;
         const rpIdOption = config.rpId;
 
-        const passkeyManager = new PasskeyManager(config.storage, undefined, apiKey);
+        const passkeyManager = Account.passkeyManager(config);
         const authResult = passkeyManager.checkAuth();
 
         // If credentialId is explicitly provided, always require WebAuthn authentication
@@ -369,7 +383,7 @@ export class Account {
             nativeGetFn: config.nativeGetFn,
         });
 
-        const passkeyManager = new PasskeyManager(config.storage, undefined, apiKey);
+        const passkeyManager = Account.passkeyManager(config);
         const passkeyAccount = passkeyManager.getAccountByCredentialId(credentialId);
 
         // validates publicKey against the locally cached entry when present; not a primary defense
@@ -436,7 +450,7 @@ export class Account {
         const resolvedRpId = resolveRpId(config.rpId);
         const resolvedRpName = config.rpName ?? 'JAW';
 
-        const passkeyManager = new PasskeyManager(config.storage, undefined, apiKey);
+        const passkeyManager = Account.passkeyManager(config);
 
         // Create the passkey
         const { credentialId, publicKey, webAuthnAccount, passkeyAccount } = await passkeyManager.createPasskey(
@@ -484,7 +498,7 @@ export class Account {
             nativeGetFn: config.nativeGetFn,
         });
 
-        const passkeyManager = new PasskeyManager(config.storage, undefined, apiKey);
+        const passkeyManager = Account.passkeyManager(config);
 
         // Import passkey from cloud backup
         const importResult = await passkeyManager.importPasskeyAccount(resolved.getFn, config.rpId);

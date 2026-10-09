@@ -33,3 +33,22 @@ describe('createSigner api-key requirement', () => {
         ).not.toThrow();
     });
 });
+
+describe('createSigner passkey server', () => {
+    it('hands the app-specific UI handler the configured passkey server', () => {
+        const init = vi.fn();
+
+        createSigner({
+            signerType: 'appSpecific',
+            metadata,
+            uiHandler: { init, request: vi.fn() } as unknown as UIHandler,
+            callback: vi.fn(),
+            apiKey: 'k1',
+            serverUrl: 'https://passkeys.example.com/passkeys',
+        });
+
+        expect(init).toHaveBeenCalledWith(
+            expect.objectContaining({ apiKey: 'k1', serverUrl: 'https://passkeys.example.com/passkeys' })
+        );
+    });
+});
