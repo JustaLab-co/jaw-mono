@@ -2,6 +2,16 @@
 
 The hosted JAW MCP server. Any MCP client connects over Streamable HTTP at `/mcp`, authorizes through OAuth 2.1 with a passkey consent on keys.jaw.id, and gets read tools, passkey-approved signatures, and x402 payments from a daily USDC budget the account owner approved on chain.
 
+## Scopes
+
+| Scope                                 | Tools                                                                                           |
+| ------------------------------------- | ----------------------------------------------------------------------------------------------- |
+| `wallet:read` (required, the default) | `jaw_status`, `jaw_quote`, `jaw_add_funds`, `jaw_resolve_name`, `jaw_history`, `jaw_disconnect` |
+| `x402:pay`                            | `jaw_request_budget`, `jaw_pay_and_fetch` and the one-off payment it offers past the budget     |
+| `wallet:send`                         | `jaw_prepare_transfer`, `jaw_prepare_calls`, `jaw_request_signature`                            |
+
+No scope implies another. `jaw_request_status` needs the scope of the request's kind, and answers a request of another kind as if it did not exist. A tool refused for a missing scope answers with an error naming the scope; the agent reconnects and asks for it, which makes a new connection, so a budget approved on the old one does not carry over. A client that asks for `wallet:read wallet:send` only can no longer request a budget or pay.
+
 ## Run it
 
 ```bash

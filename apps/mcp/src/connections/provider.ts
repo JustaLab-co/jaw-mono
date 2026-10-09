@@ -7,9 +7,11 @@ import { config, type Config } from './config';
 import { findActive } from './rows';
 import { seal } from './seal';
 
+// Key order is the order consent lists and signs them.
 export const SCOPES = {
-  'wallet:read': 'See your account and balances',
-  'wallet:send': 'Ask you to approve signatures and payment budgets',
+  'wallet:read': 'See your account, balances and payment history',
+  'x402:pay': 'Pay x402 services from a daily USDC budget you approve',
+  'wallet:send': 'Ask you to approve transfers, contract calls and signatures',
 } as const;
 export type Scope = keyof typeof SCOPES;
 
@@ -150,7 +152,8 @@ function withDefaultScope(req: Request): Request {
   const url = new URL(requestUrl(req));
   if (req.method !== 'GET' || url.pathname !== '/oauth/authorize') return req;
   const scope = (url.searchParams.get('scope') ?? '').split(' ').filter(Boolean);
-  if (scope.some((s) => s in SCOPES)) return req;
+  // `in` would also count prototype keys such as constructor.
+  if (scope.some((s) => Object.hasOwn(SCOPES, s))) return req;
   url.searchParams.set('scope', [...scope, 'wallet:read'].join(' '));
   return new Request(url, req);
 }
