@@ -12,6 +12,14 @@ jobs:
   validate:
     runs-on: ubuntu-latest
     timeout-minutes: 45
+    services:
+      postgres:
+        image: postgres:17
+        env:
+          POSTGRES_PASSWORD: pg
+        ports:
+          - 5432:5432
+        options: --health-cmd pg_isready --health-interval 5s --health-retries 10
     steps:
       - uses: actions/checkout@v4
         with:
@@ -42,3 +50,8 @@ jobs:
 
       # e2e is published-e2e: the SDK packages installed from a local registry.
       - run: bunx nx affected -t lint test typecheck build api-check e2e
+
+      # Lock races PGlite cannot show, since it runs one transaction at a time.
+      - run: bunx nx affected -t test-pg
+        env:
+          MCP_TEST_DATABASE_URL: postgres://postgres:pg@127.0.0.1:5432/postgres

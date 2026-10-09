@@ -9,6 +9,18 @@
           "^build"
         ]
       },
+      "test-pg": {
+        "executor": "nx:run-commands",
+        "options": {
+          "cwd": "{projectRoot}",
+          "command": "sh -c ': \"${MCP_TEST_DATABASE_URL:?set it to a Postgres server URL}\" && vitest run --reporter=verbose src/payments/payments.test.ts'"
+        },
+        "dependsOn": [
+          "^build",
+          "^generate-sdk-info"
+        ],
+        "cache": false
+      },
       "typecheck": {
         "executor": "nx:run-commands",
         "options": {

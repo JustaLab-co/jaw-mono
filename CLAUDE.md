@@ -67,7 +67,7 @@ These hold for every change, however small. A diff that needs to break one is a 
 - **Paths in `.github/CODEOWNERS` get their own small PR.** They are the vectors, the API report, the EIP-1193 provider, the keys signing screens and the CLI session code. Keep changes there separate from unrelated work so the review stays readable.
 - **Packaging changes run the published test.** After touching `exports`, `files`, `bin` or a build config of a package in `packages/`, run `bunx nx run published-e2e:e2e`, which installs the four packages from a local registry the way an integrator would.
 
-CI runs `bunx nx affected -t lint test typecheck build api-check e2e`, so a change to core also runs the tests of everything that depends on it.
+CI runs `bunx nx affected -t lint test typecheck build api-check e2e`, so a change to core also runs the tests of everything that depends on it. It then runs `bunx nx affected -t test-pg`, the `apps/mcp` tests on a real Postgres (see its README). A test of a lock race goes there: PGlite runs one transaction at a time and cannot fail it.
 
 ## Architecture
 
