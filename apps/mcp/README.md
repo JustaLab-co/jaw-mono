@@ -46,6 +46,8 @@ Migrations must run as the app role, over a direct connection to Postgres, not t
 
 keys.jaw.id needs `JAW_MCP_URL`, the same origin as `JAW_MCP_PUBLIC_URL`.
 
+keys.jaw.id deploys on every merge to main and this server does not, so keys usually ships first. Deploy this server right after it when a change touches the consent page or `/interaction`. The page copes with an older server for the consent change: when `/details` sends no `required` flag it still keeps `wallet:read` ticked, but an older server ignores the unticked scopes and refuses a narrowed signature as `bad_signature` until it is deployed.
+
 To rotate sealing keys, put the new key first. A connection moves to the new key on its next token refresh, so keep the old key for the 30-day refresh token lifetime before dropping it; `select split_part(key_wrap, '.', 2), count(*) from oauth_payloads where model = 'RefreshToken' and consumed_at is null group by 1` shows which keys are still in use. A refresh that needs a dropped key fails without using up the token, so restoring the key repairs it. Generate a key with `openssl rand -base64 32 | tr '+/' '-_' | tr -d '='`.
 
 ## Operations

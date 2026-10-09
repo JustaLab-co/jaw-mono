@@ -13,7 +13,8 @@ export interface ConsentDetails {
   uid: string;
   client: ClientIdentity;
   redirectHost: string;
-  scopes: { id: string; label: string; required: boolean }[];
+  // Absent from servers that predate unticking; wallet:read is required there too.
+  scopes: { id: string; label: string; required?: boolean }[];
   chainId: number;
   expiresAt: string;
   typedData: ReturnType<typeof consentTypedData>;
@@ -51,8 +52,9 @@ export function AuthorizeScreen({ uid, mcpUrl }: { uid: string; mcpUrl: string }
   if (query.isPending) return <p className="text-center text-sm">Loading…</p>;
   if (query.isError) return <p className="text-center text-sm">This request expired. Start again from your app.</p>;
   const { details, apiKey } = query.data;
-  const granted = details.scopes.filter((s) => !unticked.has(s.id)).map((s) => s.id);
-  const dropped = details.scopes.filter((s) => unticked.has(s.id));
+  const scopes = details.scopes.map((s) => ({ ...s, required: s.required ?? s.id === 'wallet:read' }));
+  const granted = scopes.filter((s) => !unticked.has(s.id)).map((s) => s.id);
+  const dropped = scopes.filter((s) => unticked.has(s.id));
   // The server rebuilds this from its own copy of the terms and the granted ids.
   const typedData = consentTypedData(details.chainId, { ...details.typedData.message, scopes: granted.join(' ') });
 
@@ -92,7 +94,7 @@ export function AuthorizeScreen({ uid, mcpUrl }: { uid: string; mcpUrl: string }
         )}
       </div>
       <ul className="flex flex-col gap-1 text-sm">
-        {details.scopes.map((s) => (
+        {scopes.map((s) => (
           <li key={s.id}>
             <label className="flex items-start gap-2">
               <input
@@ -103,12 +105,12 @@ export function AuthorizeScreen({ uid, mcpUrl }: { uid: string; mcpUrl: string }
                 disabled={s.required}
                 onChange={() => toggle(s.id)}
               />
-              {s.label}
+              {s.required ? `${s.label} (required)` : s.label}
             </label>
           </li>
         ))}
       </ul>
-      {details.scopes.some((s) => !s.required) && (
+      {scopes.some((s) => !s.required) && (
         <p className="text-muted-foreground text-xs">
           Untick what this app should not do. You can reconnect later to add it.
         </p>

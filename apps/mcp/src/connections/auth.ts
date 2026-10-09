@@ -1,10 +1,10 @@
+import type { ConnectionScope } from '@jaw.id/agent';
 import { bearerAuthChallengeResponse, OAuthError, OAuthErrorCode, type AuthInfo } from '@modelcontextprotocol/server';
 import { compactDecrypt, decodeProtectedHeader } from 'jose';
 import { withMcpAuth } from 'mcp-handler';
 import type { Address, Hex } from 'viem';
 import { errorLabel, ipKey, log } from '@/lib/edge';
 import { config } from './config';
-import type { Scope } from './provider';
 import { findActive } from './rows';
 import { open, type Sealed } from './seal';
 
@@ -16,7 +16,7 @@ export interface Tenant {
   chainId: number;
   clientId: string;
   clientName: string;
-  scopes: Scope[];
+  scopes: ConnectionScope[];
   sessionAddress: Address;
   sessionKey(): Hex;
 }
@@ -77,7 +77,7 @@ export async function verifyBearer(bearer: string | undefined): Promise<AuthInfo
     chainId: row.chainId,
     clientId: row.clientId,
     clientName: row.clientName,
-    scopes: scopes as Scope[],
+    scopes: scopes as ConnectionScope[],
     sessionAddress: row.sessionAddress as Address,
     sessionKey: () => open(config().ring, claims.sk, row.id),
   };
