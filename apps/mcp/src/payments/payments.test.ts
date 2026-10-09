@@ -16,14 +16,16 @@ import {
 import { beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import { decideFromPage, readForPage } from '@/approvals/page-api';
 import { verifyBearer, type Tenant } from '@/connections/auth';
+import { revokeFromPage, type PageDeps, type PageOutcome } from '@/connections/page';
 import { endConnection } from '@/connections/rows';
-import { callTool, connect, setTestEnv, verifyLocally } from '@/connections/testkit';
+import { callTool, connect, pageProof, setTestEnv, verifyLocally } from '@/connections/testkit';
 import { getDb } from '@/db/client';
 import { payments, settings } from '@/db/schema';
-import { TEST_PG_URL, useTestDb, useTestPostgres } from '@/db/test-db';
+import { lockWaiters, statusOnceParked, TEST_PG_URL, useTestDb, useTestPostgres } from '@/db/test-db';
 import { safeFetch } from '@/lib/safe-fetch';
 import { pay, type PayDeps } from './pay';
-import { lockFloat, stillHeld } from './refill';
+import { lockFloat } from './float-lock';
+import { stillHeld } from './refill';
 import { claim, holdingRows } from './store';
 
 const USDC: Address = '0x036CbD53842c5426634e7929541eC2318f3dCF7e';
@@ -217,6 +219,11 @@ async function approveBudget(c: Awaited<ReturnType<typeof connect>>, perDay: str
 }
 
 const url = (path: string) => `http://${SELLER}${path}`;
+const pageDeps: PageDeps = {
+  verify: verifyLocally,
+  readPermission: async () => ({ status: 'ok', approved: true, revoked: false }),
+  readFloats: async (_chainId, payers) => payers.map((p) => balanceOf(p)),
+};
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
 // Another session takes the lock unless someone holds it past `ms`. On PGlite that
@@ -603,17 +610,66 @@ describe('given a pay request that verified its bearer before the connection was
   });
 });
 
-describe.skipIf(!TEST_PG_URL)('on Postgres, given a disconnect that holds the float lock', () => {
-  // Waiters on this connection's key in this database. The int4 key fills objid, sign extended into classid.
-  const waiters = async (connectionId: string) =>
-    (
-      await getDb().execute<{ n: number }>(sql`
-        select count(*)::int as n from pg_locks
-        where locktype = 'advisory' and not granted
-          and database = (select oid from pg_database where datname = current_database())
-          and ((classid::bigint << 32) | objid::bigint) = hashtext(${`refill:${connectionId}`})`)
-    )[0].n;
+describe('given a pay request that verified its bearer before the owner revoked it on the page', () => {
+  it('when its refill turn comes after the revoke committed, then it refuses, reserves nothing and signs nothing', async () => {
+    const { c, t } = await connected('1');
+    onProbe.set('/race', async () => {
+      expect((await revokeFromPage(t.connectionId, await pageProof(c.signer), pageDeps)).kind).toBe('ok');
+    });
+    const result = await pay(t, { url: url('/race'), idempotencyKey: 'page-race-refill' }, deps());
+    expect(result.structuredContent).toMatchObject({
+      kind: 'refused',
+      moneyMoved: false,
+      refusal: { code: 'not_allowed' },
+    });
+    expect(refills).toEqual([]);
+    expect(seen).toHaveLength(0);
+    expect(await rowOf(result.structuredContent!.paymentId)).toMatchObject({ reserved: null, nonce: null });
+  });
 
+  it('when the revoke commits after its refill, then the reply shows the refilled float and the pay still settles', async () => {
+    const { c, t } = await connected('1');
+    let revoked: PageOutcome | undefined;
+    onProof.set('/race', async () => {
+      revoked = await revokeFromPage(t.connectionId, await pageProof(c.signer), pageDeps);
+    });
+    const result = await pay(t, { url: url('/race'), idempotencyKey: 'page-race-past-refill' }, deps());
+    expect(revoked).toMatchObject({ kind: 'ok', body: { status: 'revoked', float: '105000' } });
+    expect(result.structuredContent).toMatchObject({ kind: 'paid', state: 'settled' });
+    expect(refills).toEqual([105_000n]);
+  });
+});
+
+describe.skipIf(!TEST_PG_URL)('on Postgres, given a pay inside its funding turn', () => {
+  it('when the owner revokes on the page, then the revoke waits for the turn, shows its refill, and the next pay refuses', async () => {
+    const { c, t } = await connected('1');
+    let revoking: Promise<PageOutcome> | undefined;
+    let statusInTurn: string | undefined;
+    const inTurn = (funder: Address): TopUpExecutor => ({
+      request: async (method, params) => {
+        if (!revoking) {
+          revoking = revokeFromPage(t.connectionId, await pageProof(c.signer), pageDeps);
+          statusInTurn = await statusOnceParked(t.connectionId);
+        }
+        return executor(funder).request(method, params);
+      },
+    });
+    const paid = await pay(
+      t,
+      { url: url('/race'), idempotencyKey: 'page-in-turn' },
+      deps({ executor: (_t, grant) => inTurn(grant.account) })
+    );
+    expect(statusInTurn).toBe('active');
+    expect(paid.structuredContent).toMatchObject({ kind: 'paid' });
+    expect(await revoking).toMatchObject({ kind: 'ok', body: { status: 'revoked', float: '105000' } });
+
+    const after = await pay(t, { url: url('/race'), idempotencyKey: 'page-after-turn' }, deps());
+    expect(after.structuredContent).toMatchObject({ kind: 'refused', refusal: { code: 'not_allowed' } });
+    expect(refills).toEqual([105_000n]);
+  });
+});
+
+describe.skipIf(!TEST_PG_URL)('on Postgres, given a disconnect that holds the float lock', () => {
   it('when a pay waits on that lock and the disconnect ends the connection, then the pay refuses and moves nothing', async () => {
     const { t } = await connected('1');
     let locked!: () => void;
@@ -624,7 +680,7 @@ describe.skipIf(!TEST_PG_URL)('on Postgres, given a disconnect that holds the fl
       locked();
       for (let i = 0; i < 100 && parked === 0; i++) {
         await sleep(50);
-        parked = await waiters(t.connectionId);
+        parked = await lockWaiters(t.connectionId);
       }
       await endConnection(t.connectionId, t.account, new Date(), tx);
     });

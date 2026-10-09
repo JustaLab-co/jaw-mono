@@ -1,12 +1,13 @@
 import { randomUUID } from 'node:crypto';
 import { join } from 'node:path';
 import { PGlite } from '@electric-sql/pglite';
+import { eq, sql } from 'drizzle-orm';
 import { drizzle } from 'drizzle-orm/pglite';
 import { migrate } from 'drizzle-orm/pglite/migrator';
 import { drizzle as drizzlePg } from 'drizzle-orm/postgres-js';
 import { migrate as migratePg } from 'drizzle-orm/postgres-js/migrator';
 import postgres from 'postgres';
-import { setDb, type Db } from './client';
+import { getDb, setDb, type Db } from './client';
 import * as schema from './schema';
 
 const migrationsFolder = join(__dirname, '../../drizzle');
@@ -46,4 +47,28 @@ export async function useTestPostgres(): Promise<() => Promise<void>> {
   });
   setDb(db);
   return teardown;
+}
+
+/** Sessions waiting on this connection's float lock. The int4 key fills objid, sign extended into classid. */
+export async function lockWaiters(connectionId: string): Promise<number> {
+  const [{ n }] = await getDb().execute<{ n: number }>(sql`
+    select count(*)::int as n from pg_locks
+    where locktype = 'advisory' and not granted
+      and database = (select oid from pg_database where datname = current_database())
+      and ((classid::bigint << 32) | objid::bigint) = hashtext(${`refill:${connectionId}`})`);
+  return n;
+}
+
+/** The connection's status once something waits on its float lock, or once it ended without waiting. */
+export async function statusOnceParked(connectionId: string): Promise<string> {
+  for (let i = 0; i < 100; i++) {
+    const parked = (await lockWaiters(connectionId)) > 0;
+    const [row] = await getDb()
+      .select({ status: schema.connections.status })
+      .from(schema.connections)
+      .where(eq(schema.connections.id, connectionId));
+    if (parked || row.status === 'revoked') return row.status;
+    await new Promise((r) => setTimeout(r, 50));
+  }
+  throw new Error('nothing waited on the float lock and the connection did not end');
 }

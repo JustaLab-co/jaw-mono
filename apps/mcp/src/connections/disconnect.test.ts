@@ -7,7 +7,7 @@ import { beforeAll, describe, expect, it, vi } from 'vitest';
 import { getDb } from '@/db/client';
 import { grants, payments, settings } from '@/db/schema';
 import { useTestDb } from '@/db/test-db';
-import { lockFloat } from '@/payments/refill';
+import { lockFloat } from '@/payments/float-lock';
 import { disconnect, type DisconnectDeps, type Sent } from './disconnect';
 import { budgetConnection, callTool, connect, mcp, setTestEnv } from './testkit';
 import { verifyBearer, type Tenant } from './auth';
