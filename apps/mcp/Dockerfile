@@ -3,6 +3,7 @@ FROM oven/bun:1.3.2 AS build
 WORKDIR /repo
 COPY . .
 RUN bun install --frozen-lockfile --ignore-scripts
+RUN cd packages/core && bun scripts/generate-sdk-info.ts
 RUN cd packages/agent && bunx tsc --build tsconfig.lib.json
 RUN cd apps/mcp && bunx next build
 
