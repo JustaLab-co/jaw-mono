@@ -3,7 +3,7 @@ import type { Address } from 'viem';
 import { getDb, type Tx } from '@/db/client';
 import { connections, oauthPayloads } from '@/db/schema';
 import { log } from '@/lib/edge';
-import { lockFloat, lockTimedOut } from '@/payments/refill';
+import { inTurn, tryLockFloat } from '@/payments/float-lock';
 import { PAY_LIMIT_MS } from '@/payments/store';
 
 export type ConnectionRow = typeof connections.$inferSelect;
@@ -80,6 +80,8 @@ export async function setSessionAddress(id: string, sessionAddress: Address): Pr
   return rows.length === 1;
 }
 
+const RETRY_MS = 250;
+
 /**
  * Ends the connection of a grant the provider destroyed, after the funding turn in
  * flight. It never refuses: the provider already deleted the tokens, so a connection
@@ -90,16 +92,23 @@ export async function revokeByGrant(grantId: string, waitMs = PAY_LIMIT_MS) {
   const end = (db: Tx) => db.update(connections).set({ status: 'revoked', revokedAt: new Date() }).where(active);
   const [row] = await getDb().select({ id: connections.id }).from(connections).where(active);
   if (!row) return;
-  try {
-    await getDb().transaction(async (tx) => {
-      await lockFloat(tx, row.id, waitMs);
-      await end(tx);
-    });
-  } catch (err) {
-    if (!lockTimedOut(err)) throw err;
+  const deadline = Date.now() + waitMs;
+  // In turn with this replica's refills, and polling instead of waiting on the lock:
+  // a client posting its revoke many times holds no pooled connection while it waits,
+  // and the role's 10 s statement_timeout cannot cut a wait meant to last longer.
+  await inTurn(row.id, async () => {
+    while (Date.now() < deadline) {
+      const ended = await getDb().transaction(async (tx) => {
+        if (!(await tryLockFloat(tx, row.id))) return false;
+        await end(tx);
+        return true;
+      });
+      if (ended) return;
+      await new Promise((r) => setTimeout(r, RETRY_MS));
+    }
     log('error', { msg: `ended connection ${row.id} without the float lock` });
     await end(getDb());
-  }
+  });
 }
 
 export const ownedBy = (account: Address) => sql`lower(${connections.account}) = ${account.toLowerCase()}`;

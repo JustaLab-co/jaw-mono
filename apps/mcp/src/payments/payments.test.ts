@@ -24,7 +24,8 @@ import { payments, settings } from '@/db/schema';
 import { lockWaiters, statusOnceParked, TEST_PG_URL, useTestDb, useTestPostgres } from '@/db/test-db';
 import { safeFetch } from '@/lib/safe-fetch';
 import { pay, type PayDeps } from './pay';
-import { lockFloat, stillHeld } from './refill';
+import { lockFloat } from './float-lock';
+import { stillHeld } from './refill';
 import { claim, holdingRows } from './store';
 
 const USDC: Address = '0x036CbD53842c5426634e7929541eC2318f3dCF7e';

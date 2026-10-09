@@ -11,14 +11,15 @@ import {
   type TopUpOutcome,
   type X402Policy,
 } from '@jaw.id/agent';
-import { and, eq, sql } from 'drizzle-orm';
+import { and, eq } from 'drizzle-orm';
 import { erc20Abi, isAddressEqual, type Address, type Hex } from 'viem';
 import { sessionOf } from '@/adapters/session-host';
 import { isLive } from '@/connections/rows';
-import { getDb, type Tx } from '@/db/client';
+import { getDb } from '@/db/client';
 import { connections } from '@/db/schema';
 import type { Grant } from '@/grants/store';
 import { nonceUsed } from './confirm';
+import { inTurn, lockFloat, lockTimedOut } from './float-lock';
 import { entriesFor, holdingRows, pulledUnderOtherGrants, recordTopUp, reserve, type PaymentRow } from './store';
 
 export type EnsureFunds = NonNullable<PayAndFetchOptions['ensureFunds']>;
@@ -26,9 +27,6 @@ export type EnsureFunds = NonNullable<PayAndFetchOptions['ensureFunds']>;
 /** Kept for the paid send when the refill takes its share of the time budget. */
 export const SEND_RESERVE_MS = 20_000;
 const MIN_REFILL_MS = 5_000;
-const LOCK_NOT_AVAILABLE = '55P03';
-/** How long ending a connection waits for a funding turn before it gives up. */
-export const LOCK_WAIT_MS = 8_000;
 
 interface RefillContext {
   rowId: string;
@@ -42,20 +40,6 @@ interface RefillContext {
   floatTarget: bigint;
   clients: ChainClients;
   logger: Logger;
-}
-
-// Waiters on one connection queue here, so only the one holding the lock pins a pooled connection.
-const queues = new Map<string, Promise<unknown>>();
-
-function inTurn<T>(key: string, work: () => Promise<T>): Promise<T> {
-  const run = (queues.get(key) ?? Promise.resolve()).then(work, work);
-  const tail = run.then(
-    () => undefined,
-    () => undefined
-  );
-  queues.set(key, tail);
-  void tail.then(() => queues.get(key) === tail && queues.delete(key));
-  return run;
 }
 
 /**
@@ -78,20 +62,6 @@ export async function stillHeld(
     })
   );
   return holds.reduce((sum, held) => sum + held, 0n);
-}
-
-export function lockTimedOut(err: unknown): boolean {
-  const e = err as { code?: unknown; cause?: { code?: unknown } };
-  return (e.code ?? e.cause?.code) === LOCK_NOT_AVAILABLE;
-}
-
-/** Serializes everything that reads and moves one connection's float, until the transaction ends. */
-export async function lockFloat(tx: Tx, connectionId: string, waitMs: number): Promise<void> {
-  await tx.execute(sql`select set_config('lock_timeout', ${`${waitMs}ms`}, true)`);
-  // The holder waits on the chain between statements, two receipts for a disconnect.
-  // A host default that ends idle transactions sooner would drop the lock mid-send.
-  await tx.execute(sql`select set_config('idle_in_transaction_session_timeout', '5min', true)`);
-  await tx.execute(sql`select pg_advisory_xact_lock(hashtext(${`refill:${connectionId}`}))`);
 }
 
 const noRefill: TopUpExecutor = {

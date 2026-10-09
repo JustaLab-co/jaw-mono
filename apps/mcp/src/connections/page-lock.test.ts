@@ -1,9 +1,9 @@
 import { randomUUID } from 'node:crypto';
 import { sql } from 'drizzle-orm';
-import { beforeAll, describe, expect, it } from 'vitest';
+import { beforeAll, describe, expect, it, vi } from 'vitest';
 import { getDb } from '@/db/client';
-import { lockWaiters, statusOnceParked, TEST_PG_URL, useTestPostgres } from '@/db/test-db';
-import { lockFloat } from '@/payments/refill';
+import { lockWaiters, TEST_PG_URL, useTestPostgres } from '@/db/test-db';
+import { lockFloat, tryLockFloat } from '@/payments/float-lock';
 import { verifyBearer, type Tenant } from './auth';
 import { pageResponse, revokeFromPage, type PageDeps } from './page';
 import { oauth } from './provider';
@@ -11,6 +11,11 @@ import { endConnection, revokeByGrant } from './rows';
 import { connect, ISSUER, mcp, owner, pageProof, setTestEnv, verifyLocally } from './testkit';
 
 setTestEnv();
+
+vi.mock('@/payments/float-lock', async (load) => {
+  const real = await load<typeof import('@/payments/float-lock')>();
+  return { ...real, tryLockFloat: vi.fn(real.tryLockFloat) };
+});
 
 const deps: PageDeps = {
   verify: verifyLocally,
@@ -158,7 +163,8 @@ describe.skipIf(!TEST_PG_URL)('on Postgres, given a funding turn that holds the 
     const { c, t } = await connected();
     const release = await holdLock(t.connectionId);
     const revoking = revocation(c.refresh_token);
-    expect(await statusOnceParked(t.connectionId)).toBe('active');
+    await new Promise((r) => setTimeout(r, 500));
+    expect((await stateOf(t.connectionId)).status).toBe('active');
     await release();
     expect((await revoking).status).toBe(200);
     expect((await stateOf(t.connectionId)).status).toBe('revoked');
@@ -180,6 +186,34 @@ describe.skipIf(!TEST_PG_URL)('on Postgres, given a funding turn that holds the 
     await revoking;
     expect((await stateOf(t.connectionId)).status).toBe('revoked');
   });
+
+  it('when the provider destroys one grant many times at once, then the revokes wait as one', async () => {
+    const { t } = await connected();
+    const { grant } = await stateOf(t.connectionId);
+    const release = await holdLock(t.connectionId);
+    vi.mocked(tryLockFloat).mockClear();
+    const revoking = Promise.all(Array.from({ length: 12 }, () => revokeByGrant(grant)));
+    try {
+      await new Promise((r) => setTimeout(r, 1_000));
+      expect(vi.mocked(tryLockFloat).mock.calls.length).toBeLessThan(12);
+    } finally {
+      await release();
+    }
+    await revoking;
+    expect((await stateOf(t.connectionId)).status).toBe('revoked');
+  });
+
+  it('when the turn holds the lock past the role statement timeout, then ending by grant waits it out', async () => {
+    const { t } = await connected();
+    const { grant } = await stateOf(t.connectionId);
+    const release = await holdLock(t.connectionId);
+    const revoking = revokeByGrant(grant);
+    await new Promise((r) => setTimeout(r, 11_000));
+    expect((await stateOf(t.connectionId)).status).toBe('active');
+    await release();
+    await revoking;
+    expect((await stateOf(t.connectionId)).status).toBe('revoked');
+  }, 20_000);
 
   it('when the turn outlasts the wait, then ending by grant still ends the connection', async () => {
     const { t } = await connected();

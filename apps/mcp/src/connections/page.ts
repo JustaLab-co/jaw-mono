@@ -7,7 +7,7 @@ import { auditEvents, connections, grants } from '@/db/schema';
 import { outstandingRevokes } from '@/grants/store';
 import { publicClientFor, verifyOnChain, type VerifySignature } from '@/lib/chain';
 import { errorLabel, log } from '@/lib/edge';
-import { LOCK_WAIT_MS, lockFloat, lockTimedOut } from '@/payments/refill';
+import { LOCK_WAIT_MS, lockFloat, lockTimedOut } from '@/payments/float-lock';
 import { config } from './config';
 import { endConnection, ownedBy, type ConnectionRow } from './rows';
 
