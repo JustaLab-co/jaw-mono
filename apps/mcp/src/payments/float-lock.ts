@@ -19,7 +19,10 @@ export async function lockFloat(tx: Tx, connectionId: string, waitMs: number): P
   // The holder waits on the chain between statements, two receipts for a disconnect.
   // A host default that ends idle transactions sooner would drop the lock mid-send.
   await tx.execute(sql`select set_config('idle_in_transaction_session_timeout', '5min', true)`);
+  // The role's statement_timeout would cancel a longer wait before lock_timeout answers it.
+  await tx.execute(sql`select set_config('statement_timeout', ${`${waitMs + 1_000}ms`}, true)`);
   await tx.execute(sql`select pg_advisory_xact_lock(hashtext(${key(connectionId)}))`);
+  await tx.execute(sql`set local statement_timeout to default`);
 }
 
 /** The same lock without waiting: false when someone else holds it. */
