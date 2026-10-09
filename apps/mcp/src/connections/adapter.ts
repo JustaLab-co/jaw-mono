@@ -110,7 +110,7 @@ export class PgAdapter implements Adapter {
     // Only the refresh grant takes this parameter; revocation and introspection read the token too.
     const ctx = Provider.ctx;
     const wrapped = row.keyWrap as Wrapped | null;
-    if (wrapped && ctx?.oidc.params?.refresh_token === id) {
+    if (this.model === 'RefreshToken' && wrapped && ctx?.oidc.params?.refresh_token === id) {
       const key = unwrap(this.ring, wrapped, payload.accountId!, id);
       refreshes.set(ctx, { key, next: nextRefreshId(key, id, wrapped), retry: row.consumedAt !== null });
     }
@@ -173,7 +173,6 @@ export class PgAdapter implements Adapter {
       await tx
         .insert(oauthPayloads)
         .values({ key: this.key(id), ...row, keyWrap: wrap(this.ring, key, connectionId, id) });
-      requestKeys.set(ctx, key);
     });
     await sweepWraps();
   }
