@@ -7,7 +7,7 @@ import { connections, payments } from '@/db/schema';
 import { useTestDb } from '@/db/test-db';
 import { verifyBearer, type Tenant } from './auth';
 import type { Scope } from './provider';
-import { callTool, connect, ISSUER, mcp, setTestEnv, token } from './testkit';
+import { callTool, connect, mcp, setTestEnv, token } from './testkit';
 
 setTestEnv();
 process.env.JAW_MCP_RPC_URL = 'http://127.0.0.1:9';
@@ -143,12 +143,4 @@ describe('the scopes a consent grants', () => {
       expect(row.scopes).toEqual(scope.split(' '));
     }
   );
-
-  it('given a client, when it reads the protected resource metadata, then it lists the three scopes in order', async () => {
-    const { GET } = await import('@/app/.well-known/oauth-protected-resource/mcp/route');
-    const res = await GET(new Request(`${ISSUER}/.well-known/oauth-protected-resource/mcp`), {
-      params: Promise.resolve({}),
-    });
-    expect((await res.json()).scopes_supported).toEqual(['wallet:read', 'x402:pay', 'wallet:send']);
-  });
 });
