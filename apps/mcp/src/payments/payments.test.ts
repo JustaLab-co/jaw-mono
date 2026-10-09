@@ -556,6 +556,12 @@ describe('given a pay request that verified its bearer before the connection was
     expect(refills).toEqual([]);
     expect(seen).toHaveLength(0);
     expect(await rowOf(result.structuredContent!.paymentId)).toMatchObject({ reserved: null, nonce: null });
+    expect(
+      result.content
+        .slice(1)
+        .map((c) => c.text)
+        .join('\n')
+    ).not.toContain('this connection has ended');
   });
 
   it('when the disconnect commits after its refill, then its hold keeps the float for it and it settles', async () => {

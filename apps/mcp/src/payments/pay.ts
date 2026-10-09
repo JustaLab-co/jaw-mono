@@ -57,6 +57,7 @@ const SERVER_REASONS = new Set([
   'timed_out',
   'unreachable',
   'no_response',
+  'not_allowed',
 ]);
 
 export interface PayInput {
