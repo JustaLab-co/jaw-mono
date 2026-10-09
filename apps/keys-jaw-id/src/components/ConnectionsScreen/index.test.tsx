@@ -78,7 +78,7 @@ const REVOKED = {
 
 let listed: object[] = [];
 let expired = false;
-let revokeReply: (() => Promise<Response>) | null = null;
+let revokeReply: ((url: string) => Promise<Response>) | null = null;
 let posts: { url: string; body: Record<string, unknown> }[] = [];
 let container: HTMLDivElement;
 let root: Root;
@@ -100,7 +100,7 @@ beforeEach(() => {
       const body = JSON.parse(String(init?.body));
       posts.push({ url, body });
       if (expired) return Response.json({ error: 'invalid_request' }, { status: 400 });
-      if (url.endsWith('/revoke') && revokeReply) return revokeReply();
+      if (url.endsWith('/revoke') && revokeReply) return revokeReply(url);
       if (url.endsWith('/revoke')) {
         listed = [REVOKED];
         return Response.json(REVOKED);
@@ -270,5 +270,27 @@ describe('ConnectionsScreen', () => {
     );
     expect(modal).toBeNull();
     expect(button('Revoke')?.disabled).toBe(false);
+  });
+
+  it('given two revokes pending, when one settles, then the other card keeps Revoke disabled until its own reply', async () => {
+    listed = [ACTIVE, { ...ACTIVE, id: 'conn_2' }];
+    const answers = new Map<string, () => void>();
+    revokeReply = (url) =>
+      new Promise((r) => answers.set(url, () => r(Response.json({ error: 'busy' }, { status: 409 }))));
+    const revokes = () => [...container.querySelectorAll('button')].filter((b) => b.textContent === 'Revoke');
+    await signIn();
+    await click(revokes()[0]);
+    await click(button('Revoke anyway'));
+    await click(revokes()[1]);
+    await click(button('Revoke anyway'));
+    expect(revokes().map((b) => b.disabled)).toEqual([true, true]);
+
+    await act(async () => answers.get(`${MCP}/api/connections/conn_2/revoke`)?.());
+    await settle();
+    expect(revokes().map((b) => b.disabled)).toEqual([true, false]);
+
+    await act(async () => answers.get(`${MCP}/api/connections/conn_1/revoke`)?.());
+    await settle();
+    expect(revokes().map((b) => b.disabled)).toEqual([false, false]);
   });
 });

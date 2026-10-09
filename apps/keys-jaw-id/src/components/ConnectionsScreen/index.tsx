@@ -34,7 +34,7 @@ export function ConnectionsScreen({ mcpUrl }: { mcpUrl: string }) {
   const [owner, setOwner] = useState<Account | null>(null);
   const [onChain, setOnChain] = useState<Hex | null>(null);
   const [confirming, setConfirming] = useState<string | null>(null);
-  const [revoking, setRevoking] = useState<string | null>(null);
+  const [revoking, setRevoking] = useState<ReadonlySet<string>>(new Set());
   const [error, setError] = useState('');
   const queryClient = useQueryClient();
   const base = `${mcpUrl}/api/connections`;
@@ -101,9 +101,9 @@ export function ConnectionsScreen({ mcpUrl }: { mcpUrl: string }) {
   const revoke = (view: ConnectionView) =>
     run(async () => {
       setConfirming(null);
-      setRevoking(view.id);
+      setRevoking((ids) => new Set(ids).add(view.id));
       const ended = await postProof<ConnectionView>(`${base}/${encodeURIComponent(view.id)}/revoke`, proof).finally(
-        () => setRevoking(null)
+        () => setRevoking((ids) => new Set([...ids].filter((id) => id !== view.id)))
       );
       queryClient.setQueryData<ConnectionView[]>(['connections', proof.signature], (old) =>
         old?.map((c) => (c.id === ended.id ? ended : c))
@@ -132,7 +132,7 @@ export function ConnectionsScreen({ mcpUrl }: { mcpUrl: string }) {
           key={view.id}
           view={view}
           confirming={confirming === view.id}
-          revoking={revoking === view.id}
+          revoking={revoking.has(view.id)}
           onRevoke={() => setConfirming(view.id)}
           onCancel={() => setConfirming(null)}
           onConfirm={() => revoke(view)}
