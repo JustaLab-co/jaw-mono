@@ -28,12 +28,14 @@ Migrations must run as the app role, over a direct connection to Postgres, not t
 
 ## Tests
 
-`bunx nx test @jaw-mono/mcp` runs on PGlite, which runs one transaction at a time, so it cannot show a lock race. `test-pg` runs the files that opt in (`beforeAll(TEST_PG_URL ? useTestPostgres : useTestDb)`) on a real Postgres, one fresh database per file, plus the tests under `describe.skipIf(!TEST_PG_URL)`. CI runs it against a `postgres:17` service. Locally:
+`bunx nx test @jaw-mono/mcp` runs on PGlite, which runs one transaction at a time, so it cannot show a lock race. `test-pg` runs every `*.test.ts` file under `src` that references `TEST_PG_URL` (`beforeAll(TEST_PG_URL ? useTestPostgres : useTestDb)`), so a new file opts in by importing it on a real Postgres, one fresh database per file, plus the tests under `describe.skipIf(!TEST_PG_URL)`. CI runs it against a `postgres:17` service. Locally:
 
 ```bash
 docker run -d --rm --name mcp-test-pg -e POSTGRES_PASSWORD=pg -p 55432:5432 postgres:17
 MCP_TEST_DATABASE_URL=postgres://postgres:pg@127.0.0.1:55432/postgres bunx nx run @jaw-mono/mcp:test-pg
 ```
+
+A killed run can leave `mcp_test_*` databases behind. List them with `psql "$MCP_TEST_DATABASE_URL" -c '\l mcp_test_*'` and drop each with `drop database <name> with (force)`. Removing the container removes them all.
 
 ## Configuration
 

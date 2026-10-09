@@ -27,7 +27,10 @@ export async function useTestPostgres(): Promise<() => Promise<void>> {
   if (!TEST_PG_URL) throw new Error('MCP_TEST_DATABASE_URL is not set');
   const name = `mcp_test_${randomUUID().replaceAll('-', '')}`;
   const admin = postgres(TEST_PG_URL, { connect_timeout: 5, max: 1, onnotice: () => {} });
-  await admin.unsafe(`create database ${name}`);
+  await admin.unsafe(`create database ${name}`).catch(async (e) => {
+    await admin.end();
+    throw e;
+  });
   const url = new URL(TEST_PG_URL);
   url.pathname = `/${name}`;
   const client = postgres(url.href, { max: 10, onnotice: () => {} });

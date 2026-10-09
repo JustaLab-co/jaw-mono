@@ -13,7 +13,7 @@
         "executor": "nx:run-commands",
         "options": {
           "cwd": "{projectRoot}",
-          "command": "sh -c ': \"${MCP_TEST_DATABASE_URL:?set it to a Postgres server URL}\" && vitest run --reporter=verbose src/payments/payments.test.ts'"
+          "command": "sh -c ': \"${MCP_TEST_DATABASE_URL:?set it to a Postgres server URL}\" && files=$(grep -rl TEST_PG_URL src --include=*.test.ts) && : \"${files:?no test file references TEST_PG_URL}\" && vitest run --reporter=verbose $files'"
         },
         "dependsOn": [
           "^build",
