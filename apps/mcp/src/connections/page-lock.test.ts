@@ -195,12 +195,38 @@ describe.skipIf(!TEST_PG_URL)('on Postgres, given a funding turn that holds the 
     const revoking = Promise.all(Array.from({ length: 12 }, () => revokeByGrant(grant)));
     try {
       await new Promise((r) => setTimeout(r, 1_000));
-      expect(vi.mocked(tryLockFloat).mock.calls.length).toBeLessThan(12);
+      const tries = vi.mocked(tryLockFloat).mock.calls.length;
+      expect(tries).toBeGreaterThan(0);
+      expect(tries).toBeLessThan(12);
     } finally {
       await release();
     }
     await revoking;
     expect((await stateOf(t.connectionId)).status).toBe('revoked');
+  });
+
+  it('when revokes wait on the lock, then none of them holds a transaction open between polls', async () => {
+    const { t } = await connected();
+    const { grant } = await stateOf(t.connectionId);
+    const idleInTx = async () =>
+      (
+        await getDb().execute<{ n: number }>(sql`
+          select count(*)::int as n from pg_stat_activity
+          where datname = current_database() and state = 'idle in transaction'`)
+      )[0].n;
+    const release = await holdLock(t.connectionId);
+    const holderOnly = await idleInTx();
+    const revoking = Promise.all(Array.from({ length: 3 }, () => revokeByGrant(grant)));
+    try {
+      await new Promise((r) => setTimeout(r, 1_000));
+      for (let i = 0; i < 5; i++) {
+        expect(await idleInTx()).toBe(holderOnly);
+        await new Promise((r) => setTimeout(r, 100));
+      }
+    } finally {
+      await release();
+    }
+    await revoking;
   });
 
   it('when the turn holds the lock past the role statement timeout, then ending by grant waits it out', async () => {
