@@ -7,8 +7,8 @@ import { getDb } from '@/db/client';
 import { approvalRequests, payments } from '@/db/schema';
 import { countHit } from '@/db/settings';
 import { TEST_PG_URL, useTestPostgres } from '@/db/test-db';
-import { oneOffRow, type PaymentApproval } from './one-off';
-import { claim, entriesFor, findByApproval, insertOneOff, LEASE_MS, reclaimOneOff, type PaymentRow } from './store';
+import { oneOffRow, oneOffStatus, type PaymentApproval } from './one-off';
+import { claim, entriesFor, insertOneOff, LEASE_MS, reclaimOneOff } from './store';
 
 setTestEnv();
 
@@ -123,15 +123,18 @@ describe.skipIf(!TEST_PG_URL)('on Postgres, a replica whose clock is off by 90 s
     expect(await leaseLeftMs(row.id)).toBeGreaterThan(LEASE_MS - 2_000);
   });
 
-  it('given a one-off whose lease lapsed on the database, when a replica behind reads it, then it is stranded', async () => {
+  it('given a one-off whose lease lapsed on the database, when a replica behind polls it, then it takes the row to run it', async () => {
     const approvalId = await approval();
     const row = oneOff(approvalId);
     await getDb().transaction((tx) => insertOneOff(tx, t.connectionId, row));
     await lapse(row.id);
     onReplica(-SKEW_MS);
-    const found = (await findByApproval(approvalId)) as PaymentRow & { leaseLive: boolean };
+    // The approval was never signed, so the run that follows the takeover refuses to send.
+    const polled = oneOffStatus({ id: approvalId, state: { status: 'pending' } } as PaymentApproval);
+    await expect(polled).rejects.toThrow('a one-off runs only after a signed approval');
     vi.useRealTimers();
-    expect(found.leaseLive).toBe(false);
+    const [taken] = await getDb().select().from(payments).where(eq(payments.id, row.id));
+    expect(taken.leaseToken).not.toBe(row.leaseToken);
   });
 
   it('given a reservation with 30 s left on the database, when a replica ahead reads the caps, then it counts', async () => {
