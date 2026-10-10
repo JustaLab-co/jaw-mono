@@ -15,11 +15,10 @@ import { and, eq } from 'drizzle-orm';
 import { erc20Abi, isAddressEqual, type Address, type Hex } from 'viem';
 import { sessionOf } from '@/adapters/session-host';
 import { isLive } from '@/connections/rows';
-import { getDb } from '@/db/client';
 import { connections } from '@/db/schema';
 import type { Grant } from '@/grants/store';
 import { nonceUsed } from './confirm';
-import { inTurn, lockFloat, lockTimedOut } from './float-lock';
+import { FloatBusy, inTurn, withFloat } from './float-lock';
 import { entriesFor, holdingRows, pulledUnderOtherGrants, recordTopUp, reserve, type PaymentRow } from './store';
 
 export type EnsureFunds = NonNullable<PayAndFetchOptions['ensureFunds']>;
@@ -106,31 +105,36 @@ export function refillHook(c: RefillContext): EnsureFunds {
       if (waitMs < MIN_REFILL_MS) return timedOut('not enough time left to refill the payer and still send');
       let funded: TopUpOutcome | undefined;
       try {
-        return await getDb().transaction(async (tx) => {
-          await lockFloat(tx, c.connectionId, waitMs);
+        return await withFloat(c.connectionId, waitMs, async (hold) => {
           // A payment that verified its bearer before a disconnect may get its turn after it.
-          const [live] = await tx
-            .select({ id: connections.id })
-            .from(connections)
-            .where(and(eq(connections.id, c.connectionId), isLive()));
+          const live = await hold.tx(async (tx) => {
+            const [row] = await tx
+              .select({ id: connections.id })
+              .from(connections)
+              .where(and(eq(connections.id, c.connectionId), isLive()));
+            if (row) await reserve(tx, c.rowId, c.token, requirement.amount);
+            return Boolean(row);
+          });
           if (!live) return { ok: false, code: 'not_allowed', reason: 'this connection has ended' };
-          await reserve(tx, c.rowId, c.token, requirement.amount);
           // The balance and the nonces it is netted against are read at one block, so a
           // payment mined between two reads is neither in the balance nor held, never both.
           const client = c.clients.publicClient(c.grant.chainId);
           const block = await client.getBlockNumber().catch(() => undefined);
-          const held = await stillHeld(await holdingRows(tx, c.payer, c.rowId), c.clients, block);
+          const held = await stillHeld(await hold.tx((tx) => holdingRows(tx, c.payer, c.rowId)), c.clients, block);
           const session = sessionOf(c.grant);
-          const entries = await entriesFor(c.grant.permissionId, new Date(), tx);
+          const { entries, earlier } = await hold.tx(async (tx) => ({
+            entries: await entriesFor(c.grant.permissionId, new Date(), tx),
+            earlier: await pulledUnderOtherGrants(tx, c.connectionId, c.grant.permissionId),
+          }));
           const own = await currentLimitUsageOnChain(entries, c.policy, c.payer, session, new Date(), {
             clients: c.clients,
           });
-          const earlier = await pulledUnderOtherGrants(tx, c.connectionId, c.grant.permissionId);
           const periodUsage = own.map((limit) => ({ ...limit, toppedUp: limit.toppedUp + earlier }));
           const spentThisSession = sumSpentSince(entries, { payer: c.payer }, session.createdAt);
           const refillMs = budget.left() - SEND_RESERVE_MS;
           if (refillMs < MIN_REFILL_MS) return timedOut('the refill waited too long to still send');
           let pinned = block;
+          hold.assertHeld();
           funded = await ensurePayerFunds(requirement, payer, c.executor ?? noRefill, {
             clients: c.clients,
             logger: c.logger,
@@ -155,13 +159,13 @@ export function refillHook(c: RefillContext): EnsureFunds {
               return balance > held ? balance - held : 0n;
             },
           });
-          await recordTopUp(tx, c.rowId, funded);
+          const outcome = funded;
+          await hold.tx((tx) => recordTopUp(tx, c.rowId, outcome));
           return funded;
         });
       } catch (err) {
-        // Money that moved stays in the outcome, so the row records it even when this transaction did not commit.
         if (funded) return funded;
-        if (lockTimedOut(err)) return timedOut('another payment on this connection held the refill too long');
+        if (err instanceof FloatBusy) return timedOut('another payment on this connection held the refill too long');
         throw err;
       }
     });

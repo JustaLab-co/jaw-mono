@@ -3,7 +3,7 @@ import { sql } from 'drizzle-orm';
 import { beforeAll, describe, expect, it, vi } from 'vitest';
 import { getDb } from '@/db/client';
 import { lockWaiters, TEST_PG_URL, useTestPostgres } from '@/db/test-db';
-import { lockFloat, tryLockFloat } from '@/payments/float-lock';
+import { tryLockFloat, withFloat } from '@/payments/float-lock';
 import { verifyBearer, type Tenant } from './auth';
 import { pageResponse, revokeFromPage, type PageDeps } from './page';
 import { oauth } from './provider';
@@ -35,8 +35,7 @@ async function holdLock(connectionId: string) {
   const released = new Promise<void>((r) => (release = r));
   let locked!: () => void;
   const holding = new Promise<void>((r) => (locked = r));
-  const holder = getDb().transaction(async (tx) => {
-    await lockFloat(tx, connectionId, 1_000);
+  const holder = withFloat(connectionId, 1_000, async () => {
     locked();
     await released;
   });
@@ -98,10 +97,7 @@ describe.skipIf(!TEST_PG_URL)('on Postgres, given a funding turn that holds the 
     const release = await holdLock(t.connectionId);
     const revoking = revokeFromPage(t.connectionId, await pageProof(c.signer), deps);
     await waitersReach(t.connectionId, 1);
-    const nextTurn = getDb().transaction(async (tx) => {
-      await lockFloat(tx, t.connectionId, 5_000);
-      return (await stateOf(t.connectionId)).status;
-    });
+    const nextTurn = withFloat(t.connectionId, 5_000, async () => (await stateOf(t.connectionId)).status);
     await waitersReach(t.connectionId, 2);
     await release();
     expect((await revoking).kind).toBe('ok');

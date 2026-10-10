@@ -1,5 +1,5 @@
 import { clientIdentity, connectionsSignInTypedData, usdcForNetwork, type ClientIdentity } from '@jaw.id/agent';
-import { and, desc, eq, inArray, ne } from 'drizzle-orm';
+import { and, desc, eq, inArray, ne, sql } from 'drizzle-orm';
 import { erc20Abi, isAddress, isHex, type Address } from 'viem';
 import { readOnChain, type ReadPermission } from '@/approvals/page-api';
 import { getDb } from '@/db/client';
@@ -7,7 +7,7 @@ import { auditEvents, connections, grants } from '@/db/schema';
 import { outstandingRevokes } from '@/grants/store';
 import { publicClientFor, verifyOnChain, type VerifySignature } from '@/lib/chain';
 import { errorLabel, log } from '@/lib/edge';
-import { LOCK_WAIT_MS, lockFloat, lockTimedOut } from '@/payments/float-lock';
+import { FloatBusy, LOCK_WAIT_MS, lockTimedOut, withFloat } from '@/payments/float-lock';
 import { config } from './config';
 import { endConnection, ownedBy, type ConnectionRow } from './rows';
 
@@ -125,12 +125,16 @@ export async function revokeFromPage(
   if (found.status !== 'revoked') {
     try {
       // After the funding turn in flight, so the float read below includes its refill.
-      row = await getDb().transaction(async (tx) => {
-        await lockFloat(tx, id, deps.lockWaitMs ?? LOCK_WAIT_MS);
-        return endConnection(id, account, now, tx);
-      });
+      const waitMs = deps.lockWaitMs ?? LOCK_WAIT_MS;
+      row = await withFloat(id, waitMs, (hold) =>
+        hold.tx(async (tx) => {
+          // A token rotation holding the row past the wait is busy too.
+          await tx.execute(sql`select set_config('lock_timeout', ${`${waitMs}ms`}, true)`);
+          return endConnection(id, account, now, tx);
+        })
+      );
     } catch (err) {
-      if (lockTimedOut(err)) return { kind: 'busy' };
+      if (err instanceof FloatBusy || lockTimedOut(err)) return { kind: 'busy' };
       throw err;
     }
   }
