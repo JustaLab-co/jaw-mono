@@ -409,6 +409,8 @@ describe('jaw_pay_and_fetch', () => {
     );
     expect(results.map((r) => r.structuredContent?.kind).sort()).toEqual(['paid', 'refused']);
     expect(seen).toHaveLength(1);
+    const refused = results.find((r) => r.structuredContent?.kind === 'refused');
+    expect(await rowOf(refused!.structuredContent!.paymentId)).toMatchObject({ reserved: null });
   });
 
   it('counts what the previous budget pulled today against a lowered one, so 2 then 1 never pulls more than 2', async () => {
@@ -772,29 +774,41 @@ describe.skipIf(!TEST_PG_URL)('on Postgres, given ten connections refilling at o
 });
 
 describe('given a 1 USDC/day budget and 1.5 USDC already in the payer', () => {
-  const payOne = (t: Tenant, key: string) => pay(t, { url: url('/budget'), idempotencyKey: key }, deps());
+  const payOne = (t: Tenant, key: string, payWith = pay) =>
+    payWith(t, { url: url('/budget'), idempotencyKey: key }, deps());
 
-  it('when six 0.3 payments run one after another, then three are paid', async () => {
+  it('when six 0.3 payments run one after another, then three are paid and the rest refuse budget_exhausted', async () => {
     const { t } = await connected('1');
     balances.set(t.sessionAddress.toLowerCase(), 1_500_000n);
-    const kinds: (string | undefined)[] = [];
-    for (let i = 0; i < 6; i++) kinds.push((await payOne(t, `budget-seq-${i}`)).structuredContent?.kind);
-    expect(kinds.filter((k) => k === 'paid')).toHaveLength(3);
+    const outcomes: (string | undefined)[] = [];
+    for (let i = 0; i < 6; i++) {
+      const r = (await payOne(t, `budget-seq-${i}`)).structuredContent;
+      outcomes.push(r?.kind === 'paid' ? 'paid' : r?.refusal?.code);
+    }
+    expect(outcomes).toEqual(['paid', 'paid', 'paid', 'budget_exhausted', 'budget_exhausted', 'budget_exhausted']);
   });
 
-  it('when six 0.3 payments run at once, then three are paid, the rest refuse budget_exhausted holding nothing, and jaw_status shows what is left', async () => {
-    const { c, t } = await connected('1');
-    balances.set(t.sessionAddress.toLowerCase(), 1_500_000n);
-    const results = await Promise.all(Array.from({ length: 6 }, (_, i) => payOne(t, `budget-burst-${i}`)));
-    const refused = results.filter((r) => r.structuredContent?.kind !== 'paid');
-    expect(refused.map((r) => r.structuredContent?.refusal?.code)).toEqual(Array(3).fill('budget_exhausted'));
-    expect(seen).toHaveLength(3);
-    for (const r of refused) {
-      expect(await rowOf(r.structuredContent!.paymentId)).toMatchObject({ reserved: null, topUpAmount: null });
+  it.skipIf(!TEST_PG_URL)(
+    'when six 0.3 payments run at once across two replicas on Postgres, then three are paid, the rest refuse budget_exhausted holding nothing with a one-off offer, and jaw_status shows what is left',
+    async () => {
+      const { c, t } = await connected('1');
+      balances.set(t.sessionAddress.toLowerCase(), 1_500_000n);
+      vi.resetModules();
+      const replica = (await import('./pay')).pay;
+      const results = await Promise.all(
+        Array.from({ length: 6 }, (_, i) => payOne(t, `budget-burst-${i}`, i % 2 ? replica : pay))
+      );
+      const refused = results.filter((r) => r.structuredContent?.kind !== 'paid');
+      expect(refused.map((r) => r.structuredContent?.refusal?.code)).toEqual(Array(3).fill('budget_exhausted'));
+      expect(refused.every((r) => r.structuredContent?.refusal?.oneOff?.requestId)).toBe(true);
+      expect(seen).toHaveLength(3);
+      for (const r of refused) {
+        expect(await rowOf(r.structuredContent!.paymentId)).toMatchObject({ reserved: null, topUpAmount: null });
+      }
+      const status = await callTool(c.access_token, 'jaw_status', {});
+      expect(status.structuredContent.balances.session.amount).toBe('600000');
     }
-    const status = await callTool(c.access_token, 'jaw_status', {});
-    expect(status.structuredContent.balances.session.amount).toBe('600000');
-  });
+  );
 });
 
 describe.skipIf(!TEST_PG_URL)(
@@ -860,6 +874,41 @@ describe.skipIf(!TEST_PG_URL)('on Postgres, given a refill whose lock session dr
     expect(seen).toHaveLength(0);
   });
 });
+
+describe.skipIf(!TEST_PG_URL)(
+  'on Postgres, given an exact refill whose lock session drops while the top-up confirms',
+  () => {
+    it('when the top-up landed, then the pay is refused unsigned with the top-up traced and nothing reserved', async () => {
+      const { t } = await connected('1');
+      let dropped = false;
+      const dropping = (funder: Address): TopUpExecutor => ({
+        request: async (method, params) => {
+          if (method === 'wallet_getCallsStatus' && !dropped) {
+            dropped = true;
+            await getDb().execute(sql`select pg_terminate_backend(pid) from pg_locks
+            where locktype = 'advisory' and granted
+              and ((classid::bigint << 32) | objid::bigint) = hashtext(${`refill:${t.connectionId}`})`);
+            await sleep(200);
+          }
+          return executor(funder).request(method, params);
+        },
+      });
+      const result = await pay(
+        t,
+        { url: url('/race'), idempotencyKey: 'holder-dropped-exact' },
+        deps({ executor: (_t, grant) => dropping(grant.account) })
+      );
+      expect(dropped).toBe(true);
+      expect(refills).toHaveLength(1);
+      expect(seen).toHaveLength(0);
+      expect(result.structuredContent?.refusal?.code).toBe('funding_failed');
+      expect(await rowOf(result.structuredContent!.paymentId)).toMatchObject({
+        reserved: null,
+        topUpAmount: refills[0].toString(),
+      });
+    });
+  }
+);
 
 describe.skipIf(!TEST_PG_URL)(
   'on Postgres, given an upto refill whose lock session drops while the top-up confirms',
