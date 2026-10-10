@@ -636,6 +636,35 @@ describe('jaw_pay_and_fetch', () => {
     }
   });
 
+  it('given a seller advertising a ten year maxTimeoutSeconds, when it pays, then the proof expires within the hour', async () => {
+    const { saveKeystore } = await import('../lib/keystore.js');
+    saveKeystore(PK, '0xSmartAccount');
+    const challenge = JSON.parse(Buffer.from(CHALLENGE, 'base64').toString());
+    challenge.accepts[0].maxTimeoutSeconds = 10 * 365 * 86_400;
+    const forever = Buffer.from(JSON.stringify(challenge)).toString('base64');
+
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(mkRes(402, { 'PAYMENT-REQUIRED': forever }, '{}'))
+      .mockResolvedValueOnce(mkRes(200, { 'PAYMENT-RESPONSE': RECEIPT }, JSON.stringify({ data: 'ok' })));
+    vi.stubGlobal('fetch', fetchMock);
+    try {
+      const client = await connectClient();
+      const before = Math.floor(Date.now() / 1000);
+      const parsed = payResult(
+        await client.callTool({ name: 'jaw_pay_and_fetch', arguments: { url: 'https://api.example.com/paid' } })
+      );
+      expect(parsed.paid).toBe(true);
+      const retryInit = fetchMock.mock.calls[1][1] as { headers: Record<string, string> };
+      const proof = JSON.parse(Buffer.from(retryInit.headers['PAYMENT-SIGNATURE'], 'base64').toString());
+      const validBefore = Number(proof.payload.authorization.validBefore);
+      expect(validBefore).toBeGreaterThanOrEqual(before + 3600);
+      expect(validBefore).toBeLessThanOrEqual(Date.now() / 1000 + 3600);
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
   it('enforces maxTotalPerSession across calls (refuses the second)', async () => {
     const { saveKeystore } = await import('../lib/keystore.js');
     saveKeystore(PK, '0xSmartAccount');

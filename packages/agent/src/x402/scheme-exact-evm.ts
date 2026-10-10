@@ -2,6 +2,7 @@ import { bytesToHex } from 'viem';
 import { isPayableAddress, isZeroAddress } from './address.js';
 import type { X402EIP3009Authorization, X402PaymentPayload, X402PaymentRequirement } from './types.js';
 import { usdcForNetwork } from './asset-registry.js';
+import { settlementWindow } from './settlement-window.js';
 
 // EIP-712 struct for USDC's EIP-3009 `transferWithAuthorization`, the `exact`
 // scheme's on-chain settlement.
@@ -45,8 +46,6 @@ export interface BuildExactOptions {
   nonce?: `0x${string}`;
 }
 
-export const SETTLEMENT_WINDOW_FLOOR = 600;
-
 /**
  * Build and sign the `exact`-scheme payment for one chosen requirement. `from`
  * is the payer address (the session-key EOA in pull mode). Each call uses a
@@ -59,15 +58,8 @@ export async function buildExactPayment(
   opts: BuildExactOptions = {}
 ): Promise<X402PaymentPayload> {
   const nowSec = opts.now ?? Math.floor(Date.now() / 1000);
-  // The authorization must stay valid until the facilitator's settlement tx is
-  // MINED, which includes verify + submit + block time on top of our signing.
-  // A server's advertised maxTimeoutSeconds is often as low as 60s, too tight,
-  // so the auth can expire before settlement and the transfer reverts. Give a
-  // generous floor; a longer-valid authorization is harmless because the
-  // EIP-3009 nonce is single-use.
-  const window = Math.max(requirement.maxTimeoutSeconds || 0, SETTLEMENT_WINDOW_FLOOR);
   const draft = exactDraft(requirement, from, {
-    validBefore: String(nowSec + window),
+    validBefore: String(nowSec + settlementWindow(requirement)),
     nonce: opts.nonce ?? bytesToHex(crypto.getRandomValues(new Uint8Array(32))),
   });
   const { message } = draft.typedData;
