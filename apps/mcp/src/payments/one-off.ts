@@ -54,6 +54,9 @@ const accountPayer = (account: Address): Payer => ({
   pay: () => Promise.reject(new Error('a one-off is signed on the approval page')),
 });
 
+export const oneOffFor = (t: Tenant, request: PaymentRequest, challenge: Challenge) =>
+  chooseOneOff(challenge, { network: `eip155:${t.chainId}`, maxAmount: request.maxAmount });
+
 /** On budget_exhausted or over_cap: open a one-off approval for the challenge just refused, or nothing. Never throws. */
 export async function offerOneOff(
   t: Tenant,
@@ -61,7 +64,7 @@ export async function offerOneOff(
   challenge: Challenge
 ): Promise<OneOffOffer | undefined> {
   try {
-    const requirement = chooseOneOff(challenge, { network: `eip155:${t.chainId}`, maxAmount: request.maxAmount });
+    const requirement = oneOffFor(t, request, challenge);
     if (!requirement) return undefined;
     const approval = openPaymentRequest(
       {
