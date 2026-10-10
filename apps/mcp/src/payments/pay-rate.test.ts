@@ -5,11 +5,12 @@ import { useTestDb } from '@/db/test-db';
 import { pay, PAY_RATE_LIMIT, type PayDeps } from './pay';
 
 // The count is set rather than reached, so a run that crosses a window boundary cannot split it.
-const hits = vi.hoisted(() => ({ count: 0, keys: [] as string[] }));
+const hits = vi.hoisted(() => ({ count: 0, keys: [] as string[], windows: [] as number[] }));
 vi.mock('@/db/settings', async (actual) => ({
   ...(await actual<typeof import('@/db/settings')>()),
-  countHit: async (key: string) => {
+  countHit: async (key: string, windowMs: number) => {
     hits.keys.push(key);
+    hits.windows.push(windowMs);
     return hits.count;
   },
 }));
@@ -29,7 +30,8 @@ describe('the per-connection pay rate limit', () => {
 
     const result = await pay(t, { url: 'https://seller.test/x', idempotencyKey: `rate-${count}` }, {} as PayDeps);
 
-    expect(hits.keys.at(-1)).toBe(`pay:${t.connectionId}`);
+    // The refusal tells the agent to wait a minute.
+    expect([hits.keys.at(-1), hits.windows.at(-1)]).toEqual([`pay:${t.connectionId}`, 60_000]);
     // Past the gate, a connection with no budget is refused at the next one.
     expect(result.content[0].text).toMatch(limited ? /^rate_limited/ : /^no_grant/);
   });

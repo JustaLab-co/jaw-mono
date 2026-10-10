@@ -135,13 +135,17 @@ describe('a bearer token', () => {
     return new CompactEncrypt(body).setProtectedHeader(header as never).encrypt(key);
   };
 
-  it('given an access token past its exp, when it is verified, then it is refused', async () => {
+  it('given an access token at its exp second, when it is verified, then it is refused, and a millisecond earlier it is not', async () => {
     const { verifyBearer } = await import('./auth');
     const c = await connect();
-    expect(await verifyBearer(c.access_token)).toBeDefined();
-    vi.spyOn(Date, 'now').mockReturnValue(Date.now() + (c.expires_in + 1) * 1000);
+    const exp = Math.floor(Date.now() / 1000) + 60;
+    const bearer = await reseal(c.access_token, { exp });
+    const now = vi.spyOn(Date, 'now');
 
-    expect(await verifyBearer(c.access_token)).toBeUndefined();
+    now.mockReturnValue(exp * 1000 - 1);
+    expect(await verifyBearer(bearer)).toBeDefined();
+    now.mockReturnValue(exp * 1000);
+    expect(await verifyBearer(bearer)).toBeUndefined();
   });
 
   // Sealed with this ring, so only the claims tell a token for another deployment apart.

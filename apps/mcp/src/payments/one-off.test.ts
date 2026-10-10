@@ -21,7 +21,7 @@ import { getDb } from '@/db/client';
 import { approvalRequests, auditEvents, payments, settings } from '@/db/schema';
 import { useTestDb } from '@/db/test-db';
 import { safeFetch } from '@/lib/safe-fetch';
-import { oneOffRow, oneOffStatus, type PaymentApproval } from './one-off';
+import { oneOffRow, oneOffStatus, runOneOff, type PaymentApproval } from './one-off';
 import { pay, type PayDeps } from './pay';
 import {
   assertOwned,
@@ -34,6 +34,7 @@ import {
   markSigned,
   pulledUnderOtherGrants,
   take,
+  type PaymentRow,
 } from './store';
 
 const USDC: Address = '0x036CbD53842c5426634e7929541eC2318f3dCF7e';
@@ -115,6 +116,8 @@ const deps = (): PayDeps => ({
   executor: () => undefined,
   fetch: safeFetch(new Set([SELLER])),
 });
+
+const oneOffDeps = (at = new Date()) => ({ fetch: deps().fetch, now: () => at });
 
 beforeAll(useTestDb);
 beforeEach(() => {
@@ -341,7 +344,7 @@ describe('a one-off payment after budget_exhausted', () => {
     await lapse(approval.id);
     const at = new Date(approval.expiresAt.getTime() + LEASE_MS);
 
-    const result = await oneOffStatus(approval, { fetch: deps().fetch, now: () => at });
+    const result = await oneOffStatus(approval, oneOffDeps(at));
 
     expect(result?.structuredContent).toMatchObject({ refusal: { code: 'challenge_expired' } });
     expect(paidRequests()).toEqual([]);
@@ -352,11 +355,36 @@ describe('a one-off payment after budget_exhausted', () => {
     await lapse(approval.id);
     const at = new Date(approval.expiresAt.getTime() + LEASE_MS - 1);
 
-    const result = await oneOffStatus(approval, { fetch: deps().fetch, now: () => at });
+    const result = await oneOffStatus(approval, oneOffDeps(at));
 
     expect(result?.structuredContent).toMatchObject({ kind: 'paid' });
     expect(paidRequests()).toHaveLength(1);
   });
+
+  it.each([
+    ['a permission', { type: 'permission', permissionId: `0x${'1'.repeat(64)}` }],
+    ['a calls bundle', { type: 'calls', callsId: '0x01', txHash: `0x${'2'.repeat(64)}` }],
+  ])(
+    'given an approval proven by %s instead of a signature, when its one-off runs, then it throws and asks the seller nothing',
+    async (_, proof) => {
+      const { approval } = await stranded('/unsigned');
+      const row = (await rowFor(approval.id)) as PaymentRow;
+      if (approval.state.status !== 'approved') throw new Error('setup');
+      const state = { ...approval.state, evidence: { ...approval.state.evidence, proof } } as PaymentApproval['state'];
+      const asked = seen.length;
+
+      await expect(
+        runOneOff(
+          { ...approval, state },
+          await sellerRequestOf(approval.id),
+          row.id,
+          row.leaseToken as string,
+          oneOffDeps()
+        )
+      ).rejects.toThrow('only after a signed approval');
+      expect(seen.length).toBe(asked);
+    }
+  );
 
   it('resends the same proof under the same key when the answer to the send was lost', async () => {
     dropNextPaid = new Set(['/lost']);
