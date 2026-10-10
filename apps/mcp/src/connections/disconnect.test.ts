@@ -364,3 +364,34 @@ describe.skipIf(!TEST_PG_URL)('on Postgres, given a host that ends transactions 
     expect(held).toBe(true);
   });
 });
+
+describe.skipIf(!TEST_PG_URL)('on Postgres, given a token rotation that holds the connection row', () => {
+  beforeAll(useTestPostgres);
+
+  it("when disconnect's final write waits on it past the wait, then it answers busy and the tokens still work", async () => {
+    const reader = await connect(undefined, { scope: 'wallet:read' });
+    const tenant = (await verifyBearer(reader.access_token))?.extra?.tenant as Tenant;
+    const { deps } = fakes({ float: 0n });
+    let release!: () => void;
+    const released = new Promise<void>((r) => (release = r));
+    let held!: () => void;
+    const holding = new Promise<void>((r) => (held = r));
+    const rotation = getDb().transaction(async (tx) => {
+      await tx.execute(sql`select id from connections where id = ${tenant.connectionId} for share`);
+      held();
+      await released;
+    });
+    await holding;
+    try {
+      const reply = await Promise.race([
+        disconnect(tenant, { ...deps, lockWaitMs: 200 }),
+        new Promise((r) => setTimeout(() => r('blocked'), 2_000)),
+      ]);
+      expect(JSON.stringify(reply)).toContain('A payment on this connection is in progress');
+      expect(await listed(reader.access_token)).toBe(200);
+    } finally {
+      release();
+      await rotation;
+    }
+  });
+});

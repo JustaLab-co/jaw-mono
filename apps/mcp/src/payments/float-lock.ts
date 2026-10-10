@@ -1,16 +1,26 @@
 import { eq, sql } from 'drizzle-orm';
 import postgres from 'postgres';
-import { getDb, holderUrl, type Tx } from '@/db/client';
+import { floatHolder, getDb, type Tx } from '@/db/client';
 import { connections } from '@/db/schema';
+import { log } from '@/lib/edge';
 
 /** How long ending a connection waits for a funding turn before it gives up. */
 export const LOCK_WAIT_MS = 8_000;
 export const MAX_HOLDS = 16;
+const SESSIONS_PER_CONNECTION = 2;
 
 /** The wait ran out before the float lock was taken; the work never ran. */
-export class FloatBusy extends Error {}
+export class FloatBusy extends Error {
+  constructor(reason = 'another session held the float lock past the wait') {
+    super(reason);
+  }
+}
 /** The session holding the float lock dropped, so the lock may be someone else's now. */
-export class FloatLost extends Error {}
+export class FloatLost extends Error {
+  constructor() {
+    super('the session holding the float lock dropped');
+  }
+}
 
 export interface FloatHold {
   /** One short transaction on the app pool. */
@@ -20,6 +30,7 @@ export interface FloatHold {
 }
 
 const key = (connectionId: string) => `refill:${connectionId}`;
+const sessions = new Map<string, number>();
 
 /**
  * Serializes everything that reads and moves one connection's float, across
@@ -33,12 +44,35 @@ export async function withFloat<T>(
   work: (hold: FloatHold) => Promise<T>
 ): Promise<T> {
   const deadline = Date.now() + waitMs;
-  const url = holderUrl();
+  const tx = <R>(fn: (tx: Tx) => Promise<R>) => boundedTx(waitMs, fn);
+  const holder = floatHolder();
   // PGlite runs one session: the queue below is all the serialization it needs.
-  if (!url)
-    return inTurn(`pglite:${connectionId}`, () => work({ tx: (fn) => getDb().transaction(fn), assertHeld() {} }));
+  if (holder === 'pglite') return inTurn(`pglite:${connectionId}`, () => work({ tx, assertHeld() {} }));
 
-  await slots.take(deadline);
+  const open = sessions.get(connectionId) ?? 0;
+  if (open >= SESSIONS_PER_CONNECTION) throw new FloatBusy('this connection already holds the float and has a waiter');
+  sessions.set(connectionId, open + 1);
+  try {
+    await slots.take(deadline);
+    try {
+      return await hold(holder.url, connectionId, deadline, tx, work);
+    } finally {
+      slots.give();
+    }
+  } finally {
+    const left = (sessions.get(connectionId) as number) - 1;
+    if (left) sessions.set(connectionId, left);
+    else sessions.delete(connectionId);
+  }
+}
+
+async function hold<T>(
+  url: string,
+  connectionId: string,
+  deadline: number,
+  tx: FloatHold['tx'],
+  work: (hold: FloatHold) => Promise<T>
+): Promise<T> {
   let lost = false;
   let released = false;
   const session = postgres(url, {
@@ -63,12 +97,12 @@ export async function withFloat<T>(
         `begin;
         select set_config('lock_timeout', '${left}ms', true),
           set_config('statement_timeout', '${left + 1_000}ms', true),
-          set_config('idle_in_transaction_session_timeout', '5min', true);
-        select pg_advisory_xact_lock(hashtext('${key(connectionId).replaceAll("'", "''")}'))`
+          set_config('idle_in_transaction_session_timeout', '5min', true)`
       )
       .catch(busyOr);
+    await session`select pg_advisory_xact_lock(hashtext(${key(connectionId)}))`.catch(busyOr);
     return await work({
-      tx: (fn) => getDb().transaction(fn),
+      tx,
       assertHeld() {
         if (lost) throw new FloatLost();
       },
@@ -78,18 +112,33 @@ export async function withFloat<T>(
     // after a drop crashes the driver. onclose fires on this end too.
     released = true;
     await session.end({ timeout: 1 });
-    slots.give();
+  }
+}
+
+async function boundedTx<T>(waitMs: number, work: (tx: Tx) => Promise<T>): Promise<T> {
+  try {
+    return await getDb().transaction(async (tx) => {
+      await tx.execute(sql`select set_config('lock_timeout', ${`${waitMs}ms`}, true)`);
+      return work(tx);
+    });
+  } catch (err) {
+    if (lockTimedOut(err)) throw new FloatBusy('a row this work writes stayed locked past the wait');
+    throw err;
   }
 }
 
 const TOO_MANY_CLIENTS = '53300';
 
 function busyOr(err: { code?: string }): never {
-  if (lockTimedOut(err) || err.code === TOO_MANY_CLIENTS) throw new FloatBusy();
+  if (lockTimedOut(err)) throw new FloatBusy();
+  if (err.code === TOO_MANY_CLIENTS) {
+    log('warn', { msg: 'float lock session refused: database has too many clients' });
+    throw new FloatBusy('the database refused another session');
+  }
   throw err;
 }
 
-export function lockTimedOut(err: unknown): boolean {
+function lockTimedOut(err: unknown): boolean {
   const e = err as { code?: unknown; cause?: { code?: unknown } };
   return (e.code ?? e.cause?.code) === '55P03';
 }
@@ -119,7 +168,8 @@ const slots = {
       const timer = setTimeout(
         () => {
           this.waiting.splice(this.waiting.indexOf(turn), 1);
-          reject(new FloatBusy());
+          log('warn', { msg: 'float lock waited past its deadline for a free session' });
+          reject(new FloatBusy('every float lock session on this replica stayed taken past the wait'));
         },
         Math.max(deadline - Date.now(), 0)
       );

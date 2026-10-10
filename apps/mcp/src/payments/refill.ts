@@ -18,7 +18,7 @@ import { isLive } from '@/connections/rows';
 import { connections } from '@/db/schema';
 import type { Grant } from '@/grants/store';
 import { nonceUsed } from './confirm';
-import { FloatBusy, inTurn, withFloat } from './float-lock';
+import { FloatBusy, inTurn, withFloat, type FloatHold } from './float-lock';
 import {
   assertOwned,
   entriesFor,
@@ -76,6 +76,22 @@ const noRefill: TopUpExecutor = {
     throw new Error('this server has no paymaster key, so it cannot refill the payer');
   },
 };
+
+function guarded(executor: TopUpExecutor, hold: FloatHold): TopUpExecutor {
+  const approve = executor.approvePermit2?.bind(executor);
+  return {
+    request: (method, params) => {
+      if (method === 'wallet_sendCalls') hold.assertHeld();
+      return executor.request(method, params);
+    },
+    approvePermit2:
+      approve &&
+      (async (token) => {
+        hold.assertHeld();
+        return approve(token);
+      }),
+  };
+}
 
 const timedOut = (reason: string): TopUpOutcome => ({ ok: false, code: 'timed_out', reason });
 
@@ -143,7 +159,7 @@ export function refillHook(c: RefillContext): EnsureFunds {
           if (refillMs < MIN_REFILL_MS) return timedOut('the refill waited too long to still send');
           let pinned = block;
           hold.assertHeld();
-          funded = await ensurePayerFunds(requirement, payer, c.executor ?? noRefill, {
+          const outcome = await ensurePayerFunds(requirement, payer, guarded(c.executor ?? noRefill, hold), {
             clients: c.clients,
             logger: c.logger,
             sessionChainId: c.grant.chainId,
@@ -167,14 +183,14 @@ export function refillHook(c: RefillContext): EnsureFunds {
               return balance > held ? balance - held : 0n;
             },
           });
+          funded = outcome;
           // The reservation lands with the outcome: holders that read it come after this
           // turn, and a refill killed during the chain wait leaves none behind.
-          const outcome = funded;
           await hold.tx(async (tx) => {
             await reserve(tx, c.rowId, c.token, requirement.amount);
             await recordTopUp(tx, c.rowId, outcome);
           });
-          return funded;
+          return outcome;
         });
       } catch (err) {
         if (funded) return funded;

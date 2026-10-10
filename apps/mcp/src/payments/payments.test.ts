@@ -48,6 +48,7 @@ const PRICES: Record<string, string> = {
   '/unconfirmed': '5000',
   '/sametx': '5000',
   '/race': '5000',
+  '/upto': '5000',
 };
 const seen: { path: string; nonce: Hex; signature: Hex }[] = [];
 const receipts = new Map<Hex, { from: Address; nonce: Hex }>();
@@ -69,13 +70,13 @@ const seller = createServer(async (req, res) => {
       resource: { url: `http://${req.headers.host}${path}` },
       accepts: [
         {
-          scheme: 'exact',
+          scheme: path === '/upto' ? 'upto' : 'exact',
           network: 'eip155:84532',
           amount: PRICES[path],
           asset: USDC,
           payTo: PAY_TO,
           maxTimeoutSeconds: 300,
-          extra: { name: 'USDC', version: '2' },
+          extra: { name: 'USDC', version: '2', facilitatorAddress: PAY_TO },
         },
       ],
     };
@@ -132,6 +133,7 @@ const node = {
   }) => {
     reads.push({ functionName, blockNumber });
     if (functionName === 'balanceOf') return balanceOf(args[0] as string);
+    if (functionName === 'allowance') return 0n;
     if (functionName === 'authorizationState') return used.has(String(args[1]).toLowerCase());
     throw new Error('this node only knows balances and nonces');
   },
@@ -786,6 +788,42 @@ describe.skipIf(!TEST_PG_URL)('on Postgres, given a refill whose lock session dr
     expect(seen).toHaveLength(0);
   });
 });
+
+describe.skipIf(!TEST_PG_URL)(
+  'on Postgres, given an upto refill whose lock session drops while the top-up confirms',
+  () => {
+    it('when the Permit2 approval comes next, then it is never sent and the pay does not end paid', async () => {
+      const { t } = await connected('1');
+      let dropped = false;
+      const approvals: string[] = [];
+      const dropping = (funder: Address): TopUpExecutor => ({
+        request: async (method, params) => {
+          if (method === 'wallet_getCallsStatus' && !dropped) {
+            dropped = true;
+            await getDb().execute(sql`select pg_terminate_backend(pid) from pg_locks
+            where locktype = 'advisory' and granted
+              and ((classid::bigint << 32) | objid::bigint) = hashtext(${`refill:${t.connectionId}`})`);
+            await sleep(200);
+          }
+          return executor(funder).request(method, params);
+        },
+        approvePermit2: async (token) => {
+          approvals.push(token);
+          return '0xapproval';
+        },
+      });
+      const result = await pay(
+        t,
+        { url: url('/upto'), idempotencyKey: 'holder-dropped-upto' },
+        deps({ executor: (_t, grant) => dropping(grant.account) })
+      );
+      expect(dropped).toBe(true);
+      expect(refills).toHaveLength(1);
+      expect(approvals).toEqual([]);
+      expect(result.structuredContent?.kind).not.toBe('paid');
+    });
+  }
+);
 
 describe.skipIf(!TEST_PG_URL)('on Postgres with a 1 s role statement_timeout', () => {
   beforeAll(() => withRoleStatementTimeout('1s'));

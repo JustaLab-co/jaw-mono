@@ -1,7 +1,8 @@
 import { randomUUID } from 'node:crypto';
 import { sql } from 'drizzle-orm';
+import postgres from 'postgres';
 import { beforeAll, describe, expect, it, vi } from 'vitest';
-import { getDb } from '@/db/client';
+import { floatHolder, getDb } from '@/db/client';
 import { lockWaiters, TEST_PG_URL, useTestPostgres } from '@/db/test-db';
 import { tryLockFloat, withFloat } from '@/payments/float-lock';
 import { verifyBearer, type Tenant } from './auth';
@@ -29,21 +30,11 @@ async function connected() {
   return { c, t };
 }
 
-/** Holds the float lock from another session, as a funding turn does, until the returned release. */
 async function holdLock(connectionId: string) {
-  let release!: () => void;
-  const released = new Promise<void>((r) => (release = r));
-  let locked!: () => void;
-  const holding = new Promise<void>((r) => (locked = r));
-  const holder = withFloat(connectionId, 1_000, async () => {
-    locked();
-    await released;
-  });
-  await holding;
-  return () => {
-    release();
-    return holder;
-  };
+  const replica = postgres((floatHolder() as { url: string }).url, { max: 1, onnotice: () => {} });
+  await replica.unsafe('begin');
+  await replica`select pg_advisory_xact_lock(hashtext(${`refill:${connectionId}`}))`;
+  return () => replica.end();
 }
 
 const stateOf = async (id: string) =>

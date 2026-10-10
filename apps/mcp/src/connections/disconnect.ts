@@ -47,6 +47,7 @@ export interface DisconnectDeps {
   readPermission: ReadPermission;
   clients: ChainClients;
   sender: (t: Tenant) => Promise<SessionSender>;
+  lockWaitMs?: number;
 }
 
 export const disconnectOutput = z.object({
@@ -147,7 +148,7 @@ export async function disconnect(t: Tenant, deps = DEFAULTS): Promise<Reply> {
   if (await isPaymentsPaused()) return refusal(REFUSALS.paused);
   let outcome: Returned | string;
   try {
-    outcome = await withFloat(t.connectionId, LOCK_WAIT_MS, async (hold) => {
+    outcome = await withFloat(t.connectionId, deps.lockWaitMs ?? LOCK_WAIT_MS, async (hold) => {
       const returned = await returnFunds(hold, t, deps);
       if (typeof returned === 'string') return returned;
       await hold.tx(async (tx) => {

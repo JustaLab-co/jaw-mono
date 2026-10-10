@@ -98,6 +98,23 @@ describe.skipIf(!TEST_PG_URL)('on Postgres, the float lock', () => {
     }
   });
 
+  it('given a hold and a waiter on one connection, when a third caller asks, then it is busy at once and other connections still hold', async () => {
+    const id = randomUUID();
+    const release = await holding([id]);
+    const waiter = withFloat(id, 5_000, async () => 'waited');
+    try {
+      for (let i = 0; i < 100 && (await activity()).waiting < 1; i++) await sleep(20);
+      const started = Date.now();
+      const third = await withFloat(id, 5_000, async () => 'ran').catch((e: unknown) => e);
+      expect(Date.now() - started).toBeLessThan(500);
+      expect(third).toBeInstanceOf(FloatBusy);
+      expect(await withFloat(randomUUID(), 1_000, async () => 'other')).toBe('other');
+    } finally {
+      await release();
+    }
+    expect(await waiter).toBe('waited');
+  });
+
   it('given every hold of this replica taken, when one more asks with a short wait, then it is busy and opens no session', async () => {
     const release = await holding(Array.from({ length: MAX_HOLDS }, () => randomUUID()));
     try {
