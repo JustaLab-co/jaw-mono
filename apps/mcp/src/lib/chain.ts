@@ -2,6 +2,7 @@ import type { SignedPayload } from '@jaw.id/agent';
 import { createPublicClient, http, type Address, type Hex, type PublicClient, type TypedDataDefinition } from 'viem';
 import { config, SUPPORTED_CHAINS } from '@/connections/config';
 
+/** False when the signature does not verify, malformed bytes included; rejects only when the chain cannot be asked. */
 export type VerifySignature = (a: {
   chainId: number;
   address: Address;
@@ -24,7 +25,10 @@ export function publicClientFor(chainId: number): PublicClient {
 
 export const verifyOnChain: VerifySignature = async ({ chainId, address, payload, signature }) => {
   const client = publicClientFor(chainId);
-  return payload.type === 'message'
+  const valid = await (payload.type === 'message'
     ? client.verifyMessage({ address, message: payload.message, signature })
-    : client.verifyTypedData({ address, signature, ...(payload.typedData as TypedDataDefinition) });
+    : client.verifyTypedData({ address, signature, ...(payload.typedData as TypedDataDefinition) }));
+  // viem answers false when the node cannot be reached too; only a node that answers makes it a bad signature.
+  if (!valid) await client.getBlockNumber({ cacheTime: 0 });
+  return valid;
 };
