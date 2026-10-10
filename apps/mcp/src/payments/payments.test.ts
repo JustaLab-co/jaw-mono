@@ -368,12 +368,14 @@ describe('jaw_pay_and_fetch', () => {
   it('given a seller advertising a ten year maxTimeoutSeconds, when it pays, then the proof and the row expire within the hour', async () => {
     const { t } = await connected('1');
     balances.set(t.sessionAddress.toLowerCase(), 1_000_000n);
+    const before = Math.floor(Date.now() / 1000);
     const result = await pay(t, { url: url('/forever'), idempotencyKey: 'forever' }, deps());
     expect(result.structuredContent).toMatchObject({ kind: 'paid', state: 'settled' });
-    const hourFromNow = Date.now() / 1000 + 3600;
-    expect(Number(seen.find((s) => s.path === '/forever')!.validBefore)).toBeLessThanOrEqual(hourFromNow);
+    const validBefore = Number(seen.find((s) => s.path === '/forever')!.validBefore);
+    expect(validBefore).toBeGreaterThanOrEqual(before + 3600);
+    expect(validBefore).toBeLessThanOrEqual(Date.now() / 1000 + 3600);
     const row = await rowOf(result.structuredContent!.paymentId);
-    expect(row.deadline!.getTime()).toBeLessThanOrEqual(hourFromNow * 1000);
+    expect(row.deadline!.getTime()).toBe(validBefore * 1000);
   });
 
   it('given a seller advertising the largest safe maxTimeoutSeconds, when it refills and pays, then the row records the payment', async () => {
@@ -381,6 +383,8 @@ describe('jaw_pay_and_fetch', () => {
     const result = await pay(t, { url: url('/overflow'), idempotencyKey: 'overflow' }, deps());
     expect(refills).toEqual([105_000n]);
     expect(result.structuredContent).toMatchObject({ kind: 'paid', state: 'settled', moneyMoved: true });
+    const row = await rowOf(result.structuredContent!.paymentId);
+    expect(row.deadline!.getTime()).toBeLessThanOrEqual(Date.now() + 3_600_000);
   });
 
   it('holds no reservation while the refill waits on the chain, so a refill killed there leaves none', async () => {

@@ -650,13 +650,16 @@ describe('jaw_pay_and_fetch', () => {
     vi.stubGlobal('fetch', fetchMock);
     try {
       const client = await connectClient();
+      const before = Math.floor(Date.now() / 1000);
       const parsed = payResult(
         await client.callTool({ name: 'jaw_pay_and_fetch', arguments: { url: 'https://api.example.com/paid' } })
       );
       expect(parsed.paid).toBe(true);
       const retryInit = fetchMock.mock.calls[1][1] as { headers: Record<string, string> };
       const proof = JSON.parse(Buffer.from(retryInit.headers['PAYMENT-SIGNATURE'], 'base64').toString());
-      expect(Number(proof.payload.authorization.validBefore)).toBeLessThanOrEqual(Date.now() / 1000 + 3600);
+      const validBefore = Number(proof.payload.authorization.validBefore);
+      expect(validBefore).toBeGreaterThanOrEqual(before + 3600);
+      expect(validBefore).toBeLessThanOrEqual(Date.now() / 1000 + 3600);
     } finally {
       vi.unstubAllGlobals();
     }
