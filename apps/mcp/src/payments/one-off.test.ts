@@ -24,7 +24,7 @@ import { useTestDb } from '@/db/test-db';
 import { safeFetch } from '@/lib/safe-fetch';
 import { oneOffRow } from './one-off';
 import { pay, type PayDeps } from './pay';
-import { claim, entriesFor, holdingRows, pulledUnderOtherGrants } from './store';
+import { claim, entriesFor, findPayment, finish, holdingRows, pulledUnderOtherGrants, take } from './store';
 
 const USDC: Address = '0x036CbD53842c5426634e7929541eC2318f3dCF7e';
 const PAY_TO: Address = '0x2222222222222222222222222222222222222222';
@@ -36,6 +36,7 @@ let dropNextPaid = new Set<string>();
 let holdPaid = new Set<string>();
 const held: Array<() => void> = [];
 const largePaid = new Set<string>();
+const unreachable = new Set<string>();
 type Seen = {
   path: string;
   authorization?: string;
@@ -54,6 +55,7 @@ const seller = createServer((req, res) => {
     key: req.headers['idempotency-key'] as string | undefined,
   };
   seen.push(s);
+  if (unreachable.has(path)) return void req.socket.destroy();
   if (!signed) {
     const challenge = {
       x402Version: 2,
@@ -112,6 +114,7 @@ beforeEach(() => {
   dropNextPaid = new Set();
   holdPaid = new Set();
   largePaid.clear();
+  unreachable.clear();
 });
 
 const url = (path: string) => `http://${SELLER}${path}`;
@@ -468,5 +471,61 @@ describe('what the agent can see and resend', () => {
     });
 
     expect((await retry()).kind).toBe('busy');
+  });
+
+  it('given a row another call concluded paid, when a stale read of it is taken, then nothing is taken', async () => {
+    const { id } = await signedRow({ kind: 'paid', amount: '5000', leaseUntil: lapsed });
+    const stale = { ...((await findPayment(id)) as NonNullable<Awaited<ReturnType<typeof findPayment>>>), kind: null };
+
+    expect(await take(stale)).toBeUndefined();
+  });
+
+  it('given a row taken by another call, when the first call concludes with its old token, then nothing is written', async () => {
+    const { id } = await signedRow({});
+
+    const written = await finish(id, 'not-this-call', { state: 'signed', kind: 'paid', amount: '5000' }, []);
+
+    expect(written).toBeUndefined();
+    expect(await findPayment(id)).toMatchObject({ kind: null });
+  });
+
+  it('given over_cap before signing, when the price drops and the same key is retried, then it runs again', async () => {
+    const c = await connect(undefined, { scope: 'wallet:read x402:pay' });
+    const t = (await verifyBearer(c.access_token))?.extra?.tenant as Tenant;
+    await grantBudget(c, '1');
+    const request = { url: url('/dearer'), maxAmount: '4000', idempotencyKey: 'k-dearer' };
+
+    const first = await pay(t, request, deps());
+    expect(first.structuredContent?.refusal?.code).toBe('over_cap');
+    prices.set('/dearer', '3000');
+    const retried = await pay(t, request, deps());
+
+    expect(retried.structuredContent?.refusal?.code).not.toBe('over_cap');
+    expect(seen.filter((s) => s.path === '/dearer')).toHaveLength(2);
+  });
+
+  it('given a refill that threw, when the same key is retried, then the refusal is replayed and the seller not asked again', async () => {
+    const c = await connect(undefined, { scope: 'wallet:read x402:pay' });
+    const t = (await verifyBearer(c.access_token))?.extra?.tenant as Tenant;
+    await grantBudget(c, '1');
+    const request = { url: url('/no-refill'), idempotencyKey: 'k-no-refill' };
+
+    const first = await pay(t, request, deps());
+    expect(first.structuredContent?.refusal?.code).toBe('funding_failed');
+    await pay(t, request, deps());
+
+    expect(seen.filter((s) => s.path === '/no-refill')).toHaveLength(1);
+  });
+
+  it('given a one-off whose seller cannot be reached, when its status is polled, then the seller is not asked again', async () => {
+    const { c, id, post } = await offered('/gone');
+    unreachable.add('/gone');
+    await decideFromPage(id, post, verifyLocally);
+    const asked = seen.length;
+
+    await callTool(c.access_token, 'jaw_request_status', { requestId: id });
+
+    expect(seen).toHaveLength(asked);
+    expect(await rowFor(id)).toMatchObject({ state: 'failed', code: 'unreachable' });
   });
 });

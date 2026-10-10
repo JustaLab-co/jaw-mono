@@ -324,7 +324,9 @@ describe('jaw_pay_and_fetch', () => {
     dropNextLost = true;
     const lost = await pay(t, { url: url('/refuse'), idempotencyKey: 'refused-resend' }, deps());
     const again = await pay(t, { url: url('/refuse'), idempotencyKey: 'refused-resend' }, deps());
+    const third = await pay(t, { url: url('/refuse'), idempotencyKey: 'refused-resend' }, deps());
     expect(again.structuredContent).toMatchObject({ refusal: { code: 'settlement_rejected' } });
+    expect(third.structuredContent).toMatchObject({ refusal: { code: 'settlement_rejected' } });
     expect(await rowOf(lost.structuredContent!.paymentId)).toMatchObject({ state: 'signed', code: 'no_response' });
   });
 
