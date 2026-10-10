@@ -8,7 +8,7 @@ import { approvalRequests, payments } from '@/db/schema';
 import { countHit } from '@/db/settings';
 import { TEST_PG_URL, useTestPostgres } from '@/db/test-db';
 import { oneOffRow, oneOffStatus, type PaymentApproval } from './one-off';
-import { claim, entriesFor, insertOneOff, LEASE_MS, reclaimOneOff } from './store';
+import { claim, entriesFor, holdingRows, insertOneOff, LEASE_MS, reclaimOneOff } from './store';
 
 setTestEnv();
 
@@ -68,7 +68,7 @@ describe.skipIf(!TEST_PG_URL)('on Postgres, a replica whose clock is off by 90 s
     expect(await leaseLeftMs(first.row.id)).toBeGreaterThan(LEASE_MS - 2_000);
   });
 
-  it('given a live lease, when a replica 150 s ahead claims the key, then the row stays busy', async () => {
+  it('given a live lease, when a replica 150 s ahead claims the key, then the database keeps the row busy', async () => {
     const key = randomUUID();
     expect((await claim(owner(), key, request)).kind).toBe('run');
     onReplica(150_000);
@@ -137,22 +137,38 @@ describe.skipIf(!TEST_PG_URL)('on Postgres, a replica whose clock is off by 90 s
     expect(taken.leaseToken).not.toBe(row.leaseToken);
   });
 
-  it('given a reservation with 30 s left on the database, when a replica ahead reads the caps, then it counts', async () => {
-    const permissionId = `0x${randomUUID().replaceAll('-', '')}`;
+  async function reservation(permissionId: string): Promise<string> {
     const claimed = await claim({ ...owner(), permissionId }, randomUUID(), request);
     if (claimed.kind !== 'run') throw new Error(claimed.kind);
     await getDb()
       .update(payments)
       .set({ reserved: '5000', leaseUntil: sql`now() + interval '30 seconds'` })
       .where(eq(payments.id, claimed.row.id));
+    return claimed.row.id;
+  }
+
+  it('given a reservation with 30 s left on the database, when a replica ahead reads the caps, then it counts', async () => {
+    const permissionId = `0x${randomUUID().replaceAll('-', '')}`;
+    await reservation(permissionId);
     onReplica(SKEW_MS);
     const entries = await entriesFor(permissionId);
     vi.useRealTimers();
     expect(entries).toMatchObject([{ status: 'failed', authorized: '5000', settlement: 'unverified' }]);
   });
 
+  it('given a reservation with 30 s left on the database, when a replica ahead funds another payment, then it holds the float', async () => {
+    const id = await reservation(`0x${randomUUID().replaceAll('-', '')}`);
+    onReplica(150_000);
+    const held = await getDb().transaction((tx) => holdingRows(tx, t.sessionAddress, 'pay_other'));
+    vi.useRealTimers();
+    expect(held.map((r) => r.id)).toContain(id);
+  });
+
   it('given two replicas 90 s apart, when each counts a hit on one key, then both land in one window', async () => {
     const key = `ip:${randomUUID()}`;
+    // Two statements a few ms apart can straddle a minute of the database clock.
+    const [{ s }] = await getDb().execute<{ s: string }>(sql`select extract(second from statement_timestamp()) as s`);
+    if (Number(s) > 59) await new Promise((r) => setTimeout(r, 1_500));
     expect(await countHit(key, 60_000)).toBe(1);
     onReplica(SKEW_MS);
     expect(await countHit(key, 60_000)).toBe(2);
