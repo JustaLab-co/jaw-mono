@@ -1,6 +1,6 @@
 import { createHash, randomBytes } from 'node:crypto';
 import type { SignedAuthorization, TopUpOutcome, X402LogEntry } from '@jaw.id/agent';
-import { and, desc, eq, inArray, isNull, lt, ne, or, sql } from 'drizzle-orm';
+import { and, desc, eq, getTableColumns, inArray, isNull, lt, ne, not, or, sql } from 'drizzle-orm';
 import type { Address } from 'viem';
 import { getDb, type Tx } from '@/db/client';
 import { EXPIRY_MARGIN_MS } from './confirm';
@@ -13,6 +13,18 @@ export type PaymentState = PaymentRow['state'];
 export const PAY_LIMIT_MS = 90_000;
 // Longer than any call can run, so a live owner never loses its row.
 export const LEASE_MS = PAY_LIMIT_MS + 30_000;
+
+// Leases and deadlines are written and judged on the database clock, so a
+// replica's skew never shortens them: another replica takes a row over only
+// when the database says so. The statement's time, not the transaction's, as a
+// read under the refill lock may run long after its transaction began.
+const dbNow = sql`statement_timestamp()`;
+const leaseFromNow = sql`${dbNow} + ${LEASE_MS} * interval '1 millisecond'`;
+const leaseLive = sql<boolean>`${payments.leaseUntil} > ${dbNow}`;
+const leaseLapsed = not(leaseLive);
+/** A row with the database's answer to whether its lease still runs. */
+const withLease = { ...getTableColumns(payments), leaseLive };
+export type LeasedRow = PaymentRow & { leaseLive: boolean };
 
 export interface PaymentRequest {
   url: string;
@@ -87,7 +99,7 @@ export async function claim(owner: Owner, key: string, request: PaymentRequest):
         payer: owner.payer.toLowerCase(),
         url: request.url,
         leaseToken: token,
-        leaseUntil: new Date(Date.now() + LEASE_MS),
+        leaseUntil: leaseFromNow,
       })
       .onConflictDoNothing()
       .returning();
@@ -103,11 +115,11 @@ export async function claim(owner: Owner, key: string, request: PaymentRequest):
     .update(payments)
     .set({
       leaseToken: token,
-      leaseUntil: new Date(Date.now() + LEASE_MS),
+      leaseUntil: leaseFromNow,
       reserved: null,
       permissionId: owner.permissionId,
     })
-    .where(and(eq(payments.id, row.id), eq(payments.state, 'pending'), lt(payments.leaseUntil, sql`now()`)))
+    .where(and(eq(payments.id, row.id), eq(payments.state, 'pending'), leaseLapsed))
     .returning();
   return reclaimed ? { kind: 'run', row: reclaimed, token } : { kind: 'busy' };
 }
@@ -115,16 +127,16 @@ export async function claim(owner: Owner, key: string, request: PaymentRequest):
 /** The row an approved one-off opens: charged to the approval, paid by the account. */
 export type NewOneOff = Pick<
   typeof payments.$inferInsert,
-  'id' | 'idempotencyKey' | 'requestHash' | 'approvalId' | 'payer' | 'url' | 'leaseToken' | 'leaseUntil'
+  'id' | 'idempotencyKey' | 'requestHash' | 'approvalId' | 'payer' | 'url' | 'leaseToken'
 >;
 
 /** Inside the transaction that records the approval. UNIQUE(approval_id) keeps it to one row. */
 export async function insertOneOff(tx: Tx, connectionId: string, row: NewOneOff): Promise<void> {
-  await tx.insert(payments).values({ ...row, connectionId });
+  await tx.insert(payments).values({ ...row, connectionId, leaseUntil: leaseFromNow });
 }
 
-export async function findByApproval(approvalId: string): Promise<PaymentRow | undefined> {
-  const [row] = await getDb().select().from(payments).where(eq(payments.approvalId, approvalId));
+export async function findByApproval(approvalId: string): Promise<LeasedRow | undefined> {
+  const [row] = await getDb().select(withLease).from(payments).where(eq(payments.approvalId, approvalId));
   return row;
 }
 
@@ -133,8 +145,8 @@ export async function reclaimOneOff(id: string): Promise<{ row: PaymentRow; toke
   const token = randomBytes(16).toString('base64url');
   const [row] = await getDb()
     .update(payments)
-    .set({ leaseToken: token, leaseUntil: new Date(Date.now() + LEASE_MS) })
-    .where(and(eq(payments.id, id), eq(payments.state, 'pending'), lt(payments.leaseUntil, sql`now()`)))
+    .set({ leaseToken: token, leaseUntil: leaseFromNow })
+    .where(and(eq(payments.id, id), eq(payments.state, 'pending'), leaseLapsed))
     .returning();
   return row && { row, token };
 }
@@ -210,9 +222,9 @@ export async function recordTopUp(tx: Tx, id: string, funded: TopUpOutcome): Pro
     .where(eq(payments.id, id));
 }
 
-const holding = sql`((${payments.state} = 'pending' and ${payments.leaseUntil} > now() and ${payments.reserved} is not null)
+const holding = sql`((${payments.state} = 'pending' and ${leaseLive} and ${payments.reserved} is not null)
   or (${payments.state} in ('signed', 'unknown')
-    and ${payments.deadline} > now() - ${EXPIRY_MARGIN_MS} * interval '1 millisecond'))`;
+    and ${payments.deadline} > ${dbNow} - ${EXPIRY_MARGIN_MS} * interval '1 millisecond'))`;
 
 /**
  * Under the refill lock: every other row of this payer that may still take money
@@ -276,7 +288,7 @@ export async function finish(
 }
 
 /** The agent's ledger view of a row, so caps are counted by `spendFigureOf`, the one rule. */
-export function entryOf(row: PaymentRow, now: Date): X402LogEntry {
+function entryOf(row: LeasedRow): X402LogEntry {
   const base = {
     at: row.createdAt.toISOString(),
     url: row.url,
@@ -289,7 +301,7 @@ export function entryOf(row: PaymentRow, now: Date): X402LogEntry {
   switch (row.state) {
     case 'pending':
       // A reservation costs its price while its lease lives, like a signature nobody has answered.
-      return row.reserved !== null && row.leaseUntil > now
+      return row.reserved !== null && row.leaseLive
         ? { ...base, status: 'failed', authorized: row.reserved, settlement: 'unverified' }
         : { ...base, status: 'refused' };
     case 'signed':
@@ -309,9 +321,9 @@ export function entryOf(row: PaymentRow, now: Date): X402LogEntry {
 }
 
 /** The rows of this permission that cost a cap something, as the agent's cap math reads them. */
-export async function entriesFor(permissionId: string, now: Date, tx: Tx = getDb()): Promise<X402LogEntry[]> {
+export async function entriesFor(permissionId: string, tx: Tx = getDb()): Promise<X402LogEntry[]> {
   const rows = await tx
-    .select()
+    .select(withLease)
     .from(payments)
     .where(
       and(
@@ -320,7 +332,7 @@ export async function entriesFor(permissionId: string, now: Date, tx: Tx = getDb
         or(ne(payments.state, 'failed'), sql`${payments.topUpAmount} is not null`)
       )
     );
-  return rows.map((row) => entryOf(row, now));
+  return rows.map(entryOf);
 }
 
 /**
@@ -368,8 +380,8 @@ export async function claimUnresolved(signedBefore: Date, claimMs: number, limit
       and(
         inArray(payments.state, ['signed', 'unknown']),
         lt(payments.signedAt, signedBefore),
-        lt(payments.leaseUntil, sql`now()`),
-        or(isNull(payments.reconcilingUntil), lt(payments.reconcilingUntil, sql`now()`))
+        leaseLapsed,
+        or(isNull(payments.reconcilingUntil), lt(payments.reconcilingUntil, dbNow))
       )
     )
     .orderBy(payments.signedAt)
@@ -377,7 +389,7 @@ export async function claimUnresolved(signedBefore: Date, claimMs: number, limit
     .for('update', { skipLocked: true });
   return getDb()
     .update(payments)
-    .set({ reconcilingUntil: new Date(Date.now() + claimMs) })
+    .set({ reconcilingUntil: sql`${dbNow} + ${claimMs} * interval '1 millisecond'` })
     .where(inArray(payments.id, due))
     .returning();
 }

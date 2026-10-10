@@ -97,7 +97,6 @@ export function oneOffRow(approval: PaymentApproval, seller: SellerRequest): New
     payer: approval.account.toLowerCase(),
     url: resource,
     leaseToken: randomBytes(16).toString('base64url'),
-    leaseUntil: new Date(Date.now() + LEASE_MS),
   };
 }
 
@@ -167,7 +166,7 @@ export async function oneOffStatus(
 ): Promise<PayResult | undefined> {
   const row = await findByApproval(approval.id);
   if (!row) return undefined;
-  const stranded = row.state === 'pending' && row.leaseUntil < deps.now();
+  const stranded = row.state === 'pending' && !row.leaseLive;
   if (!(stranded || awaitingAnswer(row)) || (await isPaymentsPaused())) return render(row, row.fenced ?? []);
 
   const seller = await sellerRequestOf(approval.id);

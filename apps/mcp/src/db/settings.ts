@@ -28,7 +28,8 @@ export const isPaused = () => flag('paused');
 export const isPaymentsPaused = () => flag('payments_paused');
 
 export async function countHit(key: string, windowMs: number): Promise<number> {
-  const windowStart = new Date(Math.floor(Date.now() / windowMs) * windowMs);
+  // The window comes from the database clock, so replicas with skewed clocks share it.
+  const windowStart = sql`to_timestamp(floor(extract(epoch from statement_timestamp()) * 1000 / ${windowMs}) * ${windowMs} / 1000.0)`;
   const db = getDb();
   // Old windows are swept now and then rather than on every request.
   if (Math.random() < 0.01) {
