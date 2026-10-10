@@ -157,8 +157,7 @@ export async function runOneOff(
 /**
  * What an approved one-off came to, for jaw_request_status. Also the recovery
  * path: a row stranded pending by a crash runs now, and a signed row whose
- * answer was lost is sent again under the same key. A row another call is
- * sending is shown as it stands.
+ * answer was lost is sent again under the same key.
  */
 export async function oneOffStatus(
   approval: PaymentApproval,
@@ -166,7 +165,7 @@ export async function oneOffStatus(
 ): Promise<PayResult | undefined> {
   const row = await findByApproval(approval.id);
   if (!row) return undefined;
-  if (!row.open || (await isPaymentsPaused())) return render(row, row.fenced ?? []);
+  if (!row.sendable || (await isPaymentsPaused())) return render(row, row.fenced ?? []);
   const taken = await take(row);
   if (!taken) return render(row, []);
 

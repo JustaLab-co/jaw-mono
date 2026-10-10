@@ -145,7 +145,6 @@ const FINAL_UNSIGNED = new Set(['budget_exhausted', 'funding_failed']);
 
 /** Where the outcome leaves a row. `signed` says whether an authorization for it exists. */
 function conclusionOf(o: Outcome, signed: boolean, settled: Settled | undefined): Conclusion {
-  // Nothing signed and nothing moved: the row stays pending, so a retry of the key runs again.
   if (o.kind === 'unreached') return { state: signed ? 'unknown' : 'pending', kind: 'refused', code: o.code };
   const traces = {
     topUp: 'topUp' in o ? o.topUp : undefined,

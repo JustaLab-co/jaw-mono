@@ -421,7 +421,6 @@ describe('what the agent can see and resend', () => {
 
   const lapsed = sql`now() - interval '1 second'`;
 
-  /** A pay row a call signed, with `set` written over it, and a retry of its key. */
   async function signedRow(set: PgUpdateSetSource<typeof payments>) {
     const c = await connect(undefined, { scope: 'wallet:read x402:pay' });
     const t = (await verifyBearer(c.access_token))?.extra?.tenant as Tenant;
