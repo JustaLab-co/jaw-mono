@@ -54,7 +54,7 @@ const accountPayer = (account: Address): Payer => ({
   pay: () => Promise.reject(new Error('a one-off is signed on the approval page')),
 });
 
-/** On budget_exhausted: open a one-off approval for the challenge just refused, or nothing. Never throws. */
+/** On budget_exhausted or over_cap: open a one-off approval for the challenge just refused, or nothing. Never throws. */
 export async function offerOneOff(
   t: Tenant,
   request: PaymentRequest,

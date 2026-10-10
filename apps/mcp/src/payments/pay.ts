@@ -139,9 +139,8 @@ function fencedOf(url: string, o: Outcome): string[] {
   return fenced;
 }
 
-// Final even unsigned: budget_exhausted carries a one-off offer, which a retry would open
-// again; a refill that threw may have moved money that no trace shows.
-const FINAL_UNSIGNED = new Set(['budget_exhausted', 'funding_failed']);
+const ONE_OFF = new Set(['budget_exhausted', 'over_cap']);
+const FINAL_UNSIGNED = new Set([...ONE_OFF, 'funding_failed']);
 
 /**
  * Where the outcome leaves a row. `signed` says whether an authorization for it
@@ -293,7 +292,7 @@ export async function pay(t: Tenant, input: PayInput, deps: PayDeps = liveDeps()
     confirmWith: deps.clients,
   });
   const offer =
-    outcome.kind === 'refused' && outcome.refusal.code === 'budget_exhausted' && outcome.challenge
+    outcome.kind === 'refused' && ONE_OFF.has(outcome.refusal.code) && outcome.challenge
       ? await offerOneOff(t, request, outcome.challenge)
       : undefined;
   return render(done.row, done.fenced, offer);

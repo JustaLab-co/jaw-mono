@@ -2,7 +2,7 @@ import { randomUUID } from 'node:crypto';
 import { createServer } from 'node:http';
 import type { AddressInfo } from 'node:net';
 import type { ChainClients, GrantRequest, TopUpExecutor } from '@jaw.id/agent';
-import { eq, sql } from 'drizzle-orm';
+import { and, eq, sql } from 'drizzle-orm';
 import {
   decodeFunctionData,
   encodeAbiParameters,
@@ -20,7 +20,7 @@ import { revokeFromPage, type PageDeps, type PageOutcome } from '@/connections/p
 import { endConnection } from '@/connections/rows';
 import { callTool, connect, pageProof, setTestEnv, verifyLocally } from '@/connections/testkit';
 import { getDb } from '@/db/client';
-import { payments, settings } from '@/db/schema';
+import { approvalRequests, payments, settings } from '@/db/schema';
 import {
   lockWaiters,
   statusOnceParked,
@@ -50,6 +50,7 @@ const PRICES: Record<string, string> = {
   '/race': '5000',
   '/upto': '5000',
   '/budget': '300000',
+  '/pricey': '2000000',
   '/forever': '5000',
   '/overflow': '5000',
 };
@@ -461,6 +462,30 @@ describe('jaw_pay_and_fetch', () => {
     );
     expect(result.structuredContent).toMatchObject({ kind: 'refused', moneyMoved: true });
     expect(await rowOf(result.structuredContent!.paymentId)).toMatchObject({ topUpAmount: refills[0].toString() });
+  });
+
+  it('given a 5 USDC/day budget and a 2 USDC price, when the agent pays, then over_cap with a one-off offer, nothing signed or pulled, and a retry replays it', async () => {
+    const { t } = await connected('5');
+    const first = await pay(t, { url: url('/pricey'), idempotencyKey: 'pricey' }, deps());
+    expect(first.structuredContent).toMatchObject({
+      kind: 'refused',
+      state: 'failed',
+      refusal: { code: 'over_cap', oneOff: { requestId: expect.any(String) } },
+      moneyMoved: false,
+    });
+    expect(first.structuredContent?.refusal?.next).toBeUndefined();
+    expect(first.structuredContent?.summary).not.toContain('jaw_request_budget');
+    expect([seen.length, refills.length]).toEqual([0, 0]);
+    const again = await pay(t, { url: url('/pricey'), idempotencyKey: 'pricey' }, deps());
+    expect(again.structuredContent).toMatchObject({
+      paymentId: first.structuredContent?.paymentId,
+      refusal: { code: 'over_cap' },
+    });
+    const offers = await getDb()
+      .select()
+      .from(approvalRequests)
+      .where(and(eq(approvalRequests.connectionId, t.connectionId), eq(approvalRequests.kind, 'payment')));
+    expect(offers).toHaveLength(1);
   });
 
   it('refills to the float target, so the next payments need no refill', async () => {
