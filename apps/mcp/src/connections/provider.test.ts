@@ -45,6 +45,7 @@ const NAMED = 'https://named.example.test/';
 const named = (name: string) => `${NAMED}${encodeURIComponent(name)}.json`;
 const NUL_NAMED = 'https://evil.example.test/nul.json';
 const KEYED = 'https://evil.example.test/keyed.json';
+const PUBLIC_KEYED = 'https://evil.example.test/public-keyed.json';
 const metadata = {
   client_id: CIMD,
   client_name: 'Example Agent',
@@ -76,15 +77,21 @@ beforeAll(async () => {
                   token_endpoint_auth_method: 'private_key_jwt',
                   jwks_uri: 'https://evil.example.test/jwks.json',
                 })
-              : String(url) === NUL_NAMED
-                ? Response.json({ ...metadata, client_id: NUL_NAMED, client_name: 'Agent\u0000' })
-                : String(url).startsWith(NAMED)
-                  ? Response.json({
-                      ...metadata,
-                      client_id: String(url),
-                      client_name: decodeURIComponent(String(url).slice(NAMED.length, -'.json'.length)),
-                    })
-                  : new Response('not found', { status: 404 }),
+              : String(url) === PUBLIC_KEYED
+                ? Response.json({
+                    ...metadata,
+                    client_id: PUBLIC_KEYED,
+                    jwks_uri: 'https://evil.example.test/jwks.json',
+                  })
+                : String(url) === NUL_NAMED
+                  ? Response.json({ ...metadata, client_id: NUL_NAMED, client_name: 'Agent\u0000' })
+                  : String(url).startsWith(NAMED)
+                    ? Response.json({
+                        ...metadata,
+                        client_id: String(url),
+                        client_name: decodeURIComponent(String(url).slice(NAMED.length, -'.json'.length)),
+                      })
+                    : new Response('not found', { status: 404 }),
   });
 });
 
@@ -286,10 +293,16 @@ describe('authorization server', () => {
     expect(start.uid).toBeUndefined();
   });
 
-  it('refuses a CIMD client that authenticates with keys from a jwks_uri', async () => {
-    const start = await startAuthorization(new Browser(), { clientId: KEYED, redirectUri: 'http://127.0.0.1:9100/cb' });
-    expect(start.uid).toBeUndefined();
-  });
+  it.each([
+    ['private_key_jwt', KEYED],
+    ['none', PUBLIC_KEYED],
+  ])(
+    'given a CIMD client with a jwks_uri and auth method %s, when it asks to authorize, then it is refused',
+    async (_, clientId) => {
+      const start = await startAuthorization(new Browser(), { clientId, redirectUri: 'http://127.0.0.1:9100/cb' });
+      expect(start.uid).toBeUndefined();
+    }
+  );
 
   it('refuses a redirect URI absent from the metadata document before consent', async () => {
     const start = await startAuthorization(new Browser(), {

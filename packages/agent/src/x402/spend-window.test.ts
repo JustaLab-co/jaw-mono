@@ -19,6 +19,7 @@ const h = vi.hoisted(() => ({
     | { status: 'outside-window' }
     | { status: 'unavailable' },
   reads: 0,
+  periods: null as null | Array<{ unit: string; multiplier: number; allowance: string }>,
   summed: [] as unknown[],
   scopes: [] as unknown[],
   sinces: [] as unknown[],
@@ -43,6 +44,7 @@ vi.mock('./permission-onchain.js', async (importOriginal) => ({
   ...(await importOriginal<typeof import('./permission-onchain.js')>()),
   readCurrentPeriods: async () => {
     h.reads += 1;
+    if (h.periods) return h.periods.map((limit) => ({ token: USDC, ...limit, period: h.onChain }));
     return h.onChain === null
       ? []
       : [{ token: USDC, unit: 'day', multiplier: 1, allowance: '5000000', period: h.onChain }];
@@ -81,6 +83,7 @@ beforeEach(() => {
   h.spent = 0n;
   h.onChain = { status: 'unavailable' };
   h.reads = 0;
+  h.periods = null;
   h.summed = [];
   h.scopes = [];
   h.sinces = [];
@@ -202,6 +205,25 @@ describe('currentLimitUsageOnChain', () => {
     const [period] = await currentLimitUsageOnChain(LEDGER, POLICY, PAYER, SESSION, NOW);
     expect(period?.endsAt).toEqual(new Date(CHAIN_WINDOW.end * 1000));
   });
+
+  // The chain lists every spend on the permission, the policy only the ones it
+  // could normalise. A counter for another limit read as this one's would meter
+  // a month against a day's window.
+  it.each([
+    ['another unit', { unit: 'week', multiplier: 1, allowance: '5000000' }],
+    ['another multiplier', { unit: 'day', multiplier: 7, allowance: '5000000' }],
+    ['another allowance', { unit: 'day', multiplier: 1, allowance: '9000000' }],
+  ])(
+    'given a chain counter for a limit with %s, when usage is read, then the ledger figure stands',
+    async (_, other) => {
+      h.toppedUp = 1_000_000n;
+      h.onChain = { status: 'ok', ...CHAIN_WINDOW, spend: 4_000_000n };
+      h.periods = [other];
+
+      const [period] = await currentLimitUsageOnChain(LEDGER, POLICY, PAYER, SESSION, NOW);
+      expect(period).toMatchObject({ toppedUp: 1_000_000n, source: 'ledger' });
+    }
+  );
 
   it('falls back to the ledger when the node does not answer', async () => {
     h.toppedUp = 2_000_000n;

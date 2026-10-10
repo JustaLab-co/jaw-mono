@@ -5,10 +5,9 @@ import {
   decide,
   payloadHash,
   signedPayload,
-  type ApprovalRequest,
   type ChainClients,
   type GrantRequest,
-  type PaymentBody,
+  type SignedAuthorization,
 } from '@jaw.id/agent';
 import { eq, sql } from 'drizzle-orm';
 import type { PgUpdateSetSource } from 'drizzle-orm/pg-core';
@@ -22,7 +21,7 @@ import { getDb } from '@/db/client';
 import { approvalRequests, auditEvents, payments, settings } from '@/db/schema';
 import { useTestDb } from '@/db/test-db';
 import { safeFetch } from '@/lib/safe-fetch';
-import { oneOffRow } from './one-off';
+import { oneOffRow, oneOffStatus, type PaymentApproval } from './one-off';
 import { pay, type PayDeps } from './pay';
 import {
   assertOwned,
@@ -31,6 +30,8 @@ import {
   findPayment,
   finish,
   holdingRows,
+  LEASE_MS,
+  markSigned,
   pulledUnderOtherGrants,
   take,
 } from './store';
@@ -173,6 +174,29 @@ async function offered(path: string) {
   return { c, t, permissionId, refused, id: oneOff.requestId, view, signature, post };
 }
 
+/** An approved one-off recorded with its row, as a crash before the send leaves it. */
+async function stranded(path: string) {
+  const offer = await offered(path);
+  const request = (await findById(offer.id, new Date())) as PaymentApproval;
+  const payload = signedPayload(request, 'approved');
+  const evidence = {
+    previewHash: offer.view.previewHash,
+    payloadHash: payloadHash(payload),
+    proof: { type: 'signature' as const, signature: offer.signature, assertionRef: keccak256(offer.signature) },
+    decidedAt: new Date(),
+  };
+  const decided = decide(request, 'approved', evidence, new Date());
+  if (!decided.ok) throw new Error('setup');
+  const approval = { ...decided.request, body: request.body };
+  expect(
+    await recordDecision(decided.request, { payment: oneOffRow(approval, await sellerRequestOf(request.id)) })
+  ).toBe(true);
+  return { ...offer, approval };
+}
+
+const lapse = (approvalId: string) =>
+  getDb().execute(sql`update payments set lease_until = now() - interval '1 second' where approval_id = ${approvalId}`);
+
 const rowFor = async (approvalId: string) =>
   (await getDb().select().from(payments).where(eq(payments.approvalId, approvalId)))[0];
 
@@ -297,28 +321,40 @@ describe('a one-off payment after budget_exhausted', () => {
   });
 
   it('pays a decision stranded before the send once its lease lapsed, from jaw_request_status', async () => {
-    const { c, id, signature, view } = await offered('/stranded');
-    const request = (await findById(id, new Date())) as ApprovalRequest & { body: PaymentBody };
-    const payload = signedPayload(request, 'approved');
-    const evidence = {
-      previewHash: view.previewHash,
-      payloadHash: payloadHash(payload),
-      proof: { type: 'signature' as const, signature, assertionRef: keccak256(signature) },
-      decidedAt: new Date(),
-    };
-    const decided = decide(request, 'approved', evidence, new Date());
-    if (!decided.ok) throw new Error('setup');
-    const row = oneOffRow({ ...decided.request, body: request.body }, await sellerRequestOf(request.id));
-    expect(await recordDecision(decided.request, { payment: row })).toBe(true);
+    const { c, id } = await stranded('/stranded');
 
     const waiting = await callTool(c.access_token, 'jaw_request_status', { requestId: id });
     expect(waiting.structuredContent).toMatchObject({ status: 'approved', payment: { state: 'pending' } });
     expect(paidRequests()).toEqual([]);
 
-    await getDb().execute(sql`update payments set lease_until = now() - interval '1 second' where approval_id = ${id}`);
+    await lapse(id);
     const resumed = await callTool(c.access_token, 'jaw_request_status', { requestId: id });
     expect(resumed.structuredContent).toMatchObject({ payment: { kind: 'paid' } });
     await callTool(c.access_token, 'jaw_request_status', { requestId: id });
+    expect(paidRequests()).toHaveLength(1);
+  });
+
+  // A stranded run may start up to one lease after the challenge timed out: the
+  // decision was made in time and the lease is how long its send may take.
+  it('given a stranded decision resumed one lease after the challenge ended, when it runs, then it is refused challenge_expired and nothing is sent', async () => {
+    const { approval } = await stranded('/expired');
+    await lapse(approval.id);
+    const at = new Date(approval.expiresAt.getTime() + LEASE_MS);
+
+    const result = await oneOffStatus(approval, { fetch: deps().fetch, now: () => at });
+
+    expect(result?.structuredContent).toMatchObject({ refusal: { code: 'challenge_expired' } });
+    expect(paidRequests()).toEqual([]);
+  });
+
+  it('given a stranded decision resumed just inside one lease after the challenge ended, when it runs, then it pays', async () => {
+    const { approval } = await stranded('/in-time');
+    await lapse(approval.id);
+    const at = new Date(approval.expiresAt.getTime() + LEASE_MS - 1);
+
+    const result = await oneOffStatus(approval, { fetch: deps().fetch, now: () => at });
+
+    expect(result?.structuredContent).toMatchObject({ kind: 'paid' });
     expect(paidRequests()).toHaveLength(1);
   });
 
@@ -579,5 +615,10 @@ describe('what the agent can see and resend', () => {
     await finish(first.row.id, first.token, { state: 'pending', kind: 'refused', code: 'chain_unavailable' }, []);
 
     await expect(assertOwned(getDb(), first.row.id, first.token)).rejects.toThrow('no longer held');
+    const details = { nonce: '0x01', authorized: '1', deadline: '1', scheme: 'exact', asset: USDC, payTo: PAY_TO };
+    await expect(markSigned(first.row.id, first.token, { details } as SignedAuthorization)).rejects.toThrow(
+      'no longer held'
+    );
+    expect(await findPayment(first.row.id)).toMatchObject({ signedAt: null, nonce: null });
   });
 });
