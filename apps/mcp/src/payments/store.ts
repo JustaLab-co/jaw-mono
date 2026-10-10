@@ -179,14 +179,18 @@ export async function txHashTaken(payer: string, txHash: string, exceptId: strin
   return row !== undefined;
 }
 
-/** Under the refill lock: the price this row now holds against the float. */
-export async function reserve(tx: Tx, id: string, token: string, price: string): Promise<void> {
-  const rows = await tx
-    .update(payments)
-    .set({ reserved: price })
-    .where(owned(id, token))
-    .returning({ id: payments.id });
+/** Under the refill lock: throws when the row is no longer this call's. */
+export async function assertOwned(tx: Tx, id: string, token: string): Promise<void> {
+  const rows = await tx.select({ id: payments.id }).from(payments).where(owned(id, token));
   if (rows.length !== 1) throw new Error('the payment row is no longer held by this call');
+}
+
+/**
+ * Under the refill lock, at the end of the turn: the price this row now holds
+ * against the float. A row lost meanwhile is left alone; `markSigned` refuses it.
+ */
+export async function reserve(tx: Tx, id: string, token: string, price: string): Promise<void> {
+  await tx.update(payments).set({ reserved: price }).where(owned(id, token));
 }
 
 const traceOf = (t: { topUp?: { amount?: string; batchId?: string }; approvalBatchId?: string }) => ({

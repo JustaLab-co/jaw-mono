@@ -346,6 +346,26 @@ describe('jaw_pay_and_fetch', () => {
     expect(await rowOf(result.structuredContent!.paymentId)).toMatchObject({ topUpAmount: '105000' });
   });
 
+  it('holds no reservation while the refill waits on the chain, so a refill killed there leaves none', async () => {
+    const { t } = await connected('1');
+    const reservedDuringWait: (string | null)[] = [];
+    const watching = (funder: Address): TopUpExecutor => ({
+      request: async (method, params) => {
+        const [row] = await getDb().select().from(payments).where(eq(payments.idempotencyKey, 'chain-wait'));
+        reservedDuringWait.push(row.reserved);
+        return executor(funder).request(method, params);
+      },
+    });
+    const result = await pay(
+      t,
+      { url: url('/exact'), idempotencyKey: 'chain-wait' },
+      deps({ executor: (_t, grant) => watching(grant.account) })
+    );
+    expect(result.structuredContent).toMatchObject({ kind: 'paid', moneyMoved: true });
+    expect(reservedDuringWait.length).toBeGreaterThan(0);
+    expect(reservedDuringWait.every((reserved) => reserved === null)).toBe(true);
+  });
+
   it('refills to the float target, so the next payments need no refill', async () => {
     const { t } = await connected('1');
     await pay(t, { url: url('/exact'), idempotencyKey: 'float-1' }, deps({ floatTarget: 50_000n }));

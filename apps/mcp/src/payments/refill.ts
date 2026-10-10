@@ -19,7 +19,15 @@ import { connections } from '@/db/schema';
 import type { Grant } from '@/grants/store';
 import { nonceUsed } from './confirm';
 import { FloatBusy, inTurn, withFloat } from './float-lock';
-import { entriesFor, holdingRows, pulledUnderOtherGrants, recordTopUp, reserve, type PaymentRow } from './store';
+import {
+  assertOwned,
+  entriesFor,
+  holdingRows,
+  pulledUnderOtherGrants,
+  recordTopUp,
+  reserve,
+  type PaymentRow,
+} from './store';
 
 export type EnsureFunds = NonNullable<PayAndFetchOptions['ensureFunds']>;
 
@@ -112,7 +120,7 @@ export function refillHook(c: RefillContext): EnsureFunds {
               .select({ id: connections.id })
               .from(connections)
               .where(and(eq(connections.id, c.connectionId), isLive()));
-            if (row) await reserve(tx, c.rowId, c.token, requirement.amount);
+            if (row) await assertOwned(tx, c.rowId, c.token);
             return Boolean(row);
           });
           if (!live) return { ok: false, code: 'not_allowed', reason: 'this connection has ended' };
@@ -159,8 +167,13 @@ export function refillHook(c: RefillContext): EnsureFunds {
               return balance > held ? balance - held : 0n;
             },
           });
+          // The reservation lands with the outcome: holders that read it come after this
+          // turn, and a refill killed during the chain wait leaves none behind.
           const outcome = funded;
-          await hold.tx((tx) => recordTopUp(tx, c.rowId, outcome));
+          await hold.tx(async (tx) => {
+            await reserve(tx, c.rowId, c.token, requirement.amount);
+            await recordTopUp(tx, c.rowId, outcome);
+          });
           return funded;
         });
       } catch (err) {
