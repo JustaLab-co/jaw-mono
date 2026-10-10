@@ -8,7 +8,7 @@ import { approvalRequests, payments } from '@/db/schema';
 import { countHit } from '@/db/settings';
 import { TEST_PG_URL, useTestPostgres } from '@/db/test-db';
 import { oneOffRow, oneOffStatus, type PaymentApproval } from './one-off';
-import { claim, entriesFor, holdingRows, insertOneOff, LEASE_MS, reclaimOneOff } from './store';
+import { claim, entriesFor, holdingRows, insertOneOff, LEASE_MS, take } from './store';
 
 setTestEnv();
 
@@ -75,12 +75,12 @@ describe.skipIf(!TEST_PG_URL)('on Postgres, a replica whose clock is off by 90 s
     expect((await claim(owner(), key, request)).kind).toBe('busy');
   });
 
-  it('given a lapsed pending row and a replica behind, when it reclaims a one-off, then the new lease runs LEASE_MS', async () => {
+  it('given a lapsed pending row and a replica behind, when it takes the row, then the new lease runs LEASE_MS', async () => {
     const first = await claim(owner(), randomUUID(), request);
     if (first.kind !== 'run') throw new Error(first.kind);
     await lapse(first.row.id);
     onReplica(-SKEW_MS);
-    const taken = await reclaimOneOff(first.row.id);
+    const taken = await take(first.row);
     vi.useRealTimers();
     expect(taken).toBeDefined();
     expect(await leaseLeftMs(first.row.id)).toBeGreaterThan(LEASE_MS - 2_000);
@@ -135,6 +135,30 @@ describe.skipIf(!TEST_PG_URL)('on Postgres, a replica whose clock is off by 90 s
     vi.useRealTimers();
     const [taken] = await getDb().select().from(payments).where(eq(payments.id, row.id));
     expect(taken.leaseToken).not.toBe(row.leaseToken);
+  });
+
+  it('given a row whose answer was lost, when two replicas retry it at once, then one resends and the other is busy', async () => {
+    const key = randomUUID();
+    const first = await claim(owner(), key, request);
+    if (first.kind !== 'run') throw new Error(first.kind);
+    await getDb()
+      .update(payments)
+      .set({
+        state: 'signed',
+        kind: 'failed',
+        code: 'no_response',
+        nonce: `0x${'1'.repeat(64)}`,
+        authorization: { resource: request.url },
+        authorized: '5000',
+        deadline: sql`now() + interval '10 minutes'`,
+        signedAt: new Date(),
+      })
+      .where(eq(payments.id, first.row.id));
+    await lapse(first.row.id);
+
+    const kinds = (await Promise.all([claim(owner(), key, request), claim(owner(), key, request)])).map((c) => c.kind);
+
+    expect(kinds.sort()).toEqual(['busy', 'resume']);
   });
 
   async function reservation(permissionId: string): Promise<string> {

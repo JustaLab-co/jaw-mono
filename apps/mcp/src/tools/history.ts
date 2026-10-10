@@ -2,7 +2,7 @@ import type { McpServer } from '@modelcontextprotocol/server';
 import { z } from 'zod';
 import { tenant } from '@/connections/auth';
 import { reply } from '@/lib/fence';
-import { history, type PaymentRow } from '@/payments/store';
+import { history, stateOf, type PaymentRow } from '@/payments/store';
 
 const row = z.object({
   paymentId: z.string(),
@@ -31,7 +31,7 @@ const shown = (r: PaymentRow): z.infer<typeof row> => ({
   paymentId: r.id,
   idempotencyKey: r.idempotencyKey,
   host: new URL(r.url).host,
-  state: r.state,
+  state: stateOf(r),
   kind: r.kind,
   code: r.code,
   amount: r.amount,

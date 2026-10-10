@@ -25,15 +25,14 @@ import { safeFetch } from '@/lib/safe-fetch';
 import { concludeSend, resend, thrown } from './pay';
 import { render, type OneOffOffer, type PayResult } from './render';
 import {
-  awaitingAnswer,
   findByApproval,
   findPayment,
   finish,
   LEASE_MS,
   markSigned,
   PAY_LIMIT_MS,
-  reclaimOneOff,
   requestHash,
+  take,
   type NewOneOff,
   type PaymentRequest,
   type PaymentRow,
@@ -129,7 +128,7 @@ export async function runOneOff(
   const probed = await probe(terms.resource, sent).catch(thrown);
   switch (probed.kind) {
     case 'unreached':
-      return concludeSend(row, token, probed, { signed: false, signedAt: started });
+      return refuse(probed.code);
     case 'free':
       return concludeSend(row, token, { ...probed, payer: approval.account }, { signed: false, signedAt: started });
     case 'refused':
@@ -166,16 +165,15 @@ export async function oneOffStatus(
 ): Promise<PayResult | undefined> {
   const row = await findByApproval(approval.id);
   if (!row) return undefined;
-  const stranded = row.state === 'pending' && !row.leaseLive;
-  if (!(stranded || awaitingAnswer(row)) || (await isPaymentsPaused())) return render(row, row.fenced ?? []);
+  if (!row.sendable || (await isPaymentsPaused())) return render(row, row.fenced ?? []);
+  const taken = await take(row);
+  if (!taken) return render(row, []);
 
   const seller = await sellerRequestOf(approval.id);
-  if (awaitingAnswer(row)) {
+  if (taken.row.state === 'signed') {
     const sent = { ...seller, budget: until(Date.now() + PAY_LIMIT_MS), fetch: deps.fetch };
-    return resend(row, accountPayer(approval.account), sent);
+    return resend(taken.row, taken.token, accountPayer(approval.account), sent);
   }
-  const claimed = await reclaimOneOff(row.id);
-  if (!claimed) return render(row, []);
-  const done = await runOneOff(approval, seller, claimed.row.id, claimed.token, deps);
+  const done = await runOneOff(approval, seller, taken.row.id, taken.token, deps);
   return render(done.row, done.fenced);
 }

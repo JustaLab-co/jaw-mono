@@ -5,6 +5,7 @@ import { oauthPayloads, payments } from '@/db/schema';
 import { hasCronSecret } from '@/lib/cron';
 import { withEdge } from '@/lib/edge';
 import { unauthorizedCounts } from '@/lib/metrics';
+import { stateOf } from '@/payments/store';
 import { RECONCILE_AFTER_MS } from '@/reconciler/run';
 
 export const runtime = 'nodejs';
@@ -16,7 +17,12 @@ export const GET = withEdge(
   async (req) => {
     if (!hasCronSecret(req)) return Response.json({ error: 'unauthorized' }, { status: 401 });
     const db = getDb();
-    const byState = await db.select({ state: payments.state, n: count() }).from(payments).groupBy(payments.state);
+    const byState = new Map<string, number>();
+    const rows = await db
+      .select({ state: payments.state, kind: payments.kind, n: count() })
+      .from(payments)
+      .groupBy(payments.state, payments.kind);
+    for (const r of rows) byState.set(stateOf(r), (byState.get(stateOf(r)) ?? 0) + r.n);
     const [backlog] = await db
       .select({ n: count() })
       .from(payments)
@@ -29,7 +35,7 @@ export const GET = withEdge(
     const [exposed] = await db.select({ n: count() }).from(oauthPayloads).where(wrapPastWindow);
     const lines = [
       '# TYPE jaw_mcp_payments gauge',
-      ...byState.map((r) => `jaw_mcp_payments{state="${r.state}"} ${r.n}`),
+      ...[...byState].map(([state, n]) => `jaw_mcp_payments{state="${state}"} ${n}`),
       '# TYPE jaw_mcp_payments_backlog gauge',
       `jaw_mcp_payments_backlog ${backlog.n}`,
       '# TYPE jaw_mcp_wraps_past_window gauge',

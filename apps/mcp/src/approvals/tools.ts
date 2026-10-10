@@ -86,6 +86,8 @@ export function describe(request: ApprovalRequest): StatusOutput {
       const decidedAt = state.evidence.decidedAt.toISOString();
       switch (proof.type) {
         case 'signature':
+          // The owner's payment authorization is sent by this server alone, never handed to the agent.
+          if (paying) return { ...out, decidedAt, summary: 'Approved. This server sends the payment.' };
           return {
             ...out,
             signature: proof.signature,

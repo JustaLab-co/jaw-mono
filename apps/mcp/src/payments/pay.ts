@@ -36,6 +36,7 @@ import {
   finish,
   txHashTaken,
   markSigned,
+  release,
   PAY_LIMIT_MS,
   type Conclusion,
   type PaymentRequest,
@@ -138,13 +139,26 @@ function fencedOf(url: string, o: Outcome): string[] {
   return fenced;
 }
 
-/** Where the outcome leaves a row. `signed` says whether an authorization for it exists. */
-function conclusionOf(o: Outcome, signed: boolean, settled: Settled | undefined): Conclusion {
-  if (o.kind === 'unreached') return { state: signed ? 'unknown' : 'failed', kind: 'refused', code: o.code };
+// Final even unsigned: budget_exhausted carries a one-off offer, which a retry would open
+// again; a refill that threw may have moved money that no trace shows.
+const FINAL_UNSIGNED = new Set(['budget_exhausted', 'funding_failed']);
+
+/**
+ * Where the outcome leaves a row. `signed` says whether an authorization for it
+ * exists; `movedBefore`, whether an earlier attempt on the row moved money.
+ */
+function conclusionOf(o: Outcome, signed: boolean, settled: Settled | undefined, movedBefore: boolean): Conclusion {
   const traces = {
     topUp: 'topUp' in o ? o.topUp : undefined,
     approvalBatchId: 'permit2Approval' in o ? o.permit2Approval?.batchId : undefined,
   };
+  const retry =
+    !movedBefore &&
+    !traces.topUp &&
+    !traces.approvalBatchId &&
+    !(o.kind === 'refused' && FINAL_UNSIGNED.has(o.refusal.code));
+  const refused = signed ? 'unknown' : retry ? 'pending' : 'failed';
+  if (o.kind === 'unreached') return { state: refused, kind: 'refused', code: o.code };
   switch (o.kind) {
     case 'free':
     case 'would-pay':
@@ -152,7 +166,7 @@ function conclusionOf(o: Outcome, signed: boolean, settled: Settled | undefined)
     case 'refused':
       // Refused after signing: the proof may have left in a call that crashed. Only the chain can say.
       return {
-        state: signed ? 'unknown' : 'failed',
+        state: refused,
         kind: 'refused',
         code: o.refusal.code,
         httpStatus: o.status,
@@ -265,7 +279,7 @@ export async function pay(t: Tenant, input: PayInput, deps: PayDeps = liveDeps()
   const payer = payerFor(t, deps.clients);
   const sent = { method: request.method, headers: request.headers, body: request.body, budget, fetch: deps.fetch };
 
-  if (claimed.kind === 'resume') return resend(claimed.row, payer, sent, deps.clients);
+  if (claimed.kind === 'resume') return resend(claimed.row, claimed.token, payer, sent, deps.clients);
 
   const { row, token } = claimed;
   let signed = false;
@@ -297,7 +311,8 @@ export async function concludeSend(
 ): Promise<{ row: PaymentRow; fenced: string[] }> {
   const checked = await claimedHashOnly(outcome, row.id);
   const settled = opts.confirmWith ? await settledBy(checked, opts.signedAt, opts.confirmWith) : undefined;
-  const conclusion = conclusionOf(checked, opts.signed, settled);
+  const movedBefore = Boolean(row.topUpAmount || row.topUpBatchId || row.approvalBatchId);
+  const conclusion = conclusionOf(checked, opts.signed, settled, movedBefore);
   const fenced = fencedOf(row.url, outcome);
   const written = await finish(row.id, token, conclusion, fenced);
   return { row: written ?? (await rowAfter(row, conclusion)), fenced };
@@ -306,6 +321,7 @@ export async function concludeSend(
 /** A previous call signed for this row and got no answer: the same proof again, under the same key. */
 export async function resend(
   row: PaymentRow,
+  token: string,
   payer: Payer,
   sent: Parameters<typeof payAndFetch>[2],
   confirmWith?: ChainClients
@@ -317,9 +333,10 @@ export async function resend(
   }).catch(thrown);
   // A refused resend says nothing about the first send, which the chain or a live first call settles.
   if (outcome.kind !== 'paid') {
-    return render(merged(row, conclusionOf(outcome, true, undefined)), fencedOf(row.url, outcome));
+    await release(row.id, token);
+    return render(merged(row, conclusionOf(outcome, true, undefined, false)), fencedOf(row.url, outcome));
   }
-  const done = await concludeSend(row, '', outcome, { signed: true, signedAt: row.signedAt as Date, confirmWith });
+  const done = await concludeSend(row, token, outcome, { signed: true, signedAt: row.signedAt as Date, confirmWith });
   return render(done.row, done.fenced);
 }
 

@@ -269,6 +269,32 @@ describe('cron and metrics routes', () => {
     expect(text).toMatch(/^jaw_mcp_payments_backlog [1-9]\d*$/m);
   });
 
+  it('given a refusal kept pending for a retry, when metrics are read, then the gauge counts it failed', async () => {
+    const gauge = async (state: string) => {
+      const text = await (await call('metrics', 'cron-secret')).text();
+      return Number(text.match(new RegExp(`^jaw_mcp_payments\\{state="${state}"\\} (\\d+)$`, 'm'))?.[1] ?? 0);
+    };
+    const before = [await gauge('pending'), await gauge('failed')];
+    const id = `pay_${randomBytes(8).toString('hex')}`;
+    await getDb()
+      .insert(payments)
+      .values({
+        id,
+        connectionId: t.connectionId,
+        idempotencyKey: id,
+        requestHash: 'h',
+        permissionId: '0xgrant',
+        payer: payer.toLowerCase(),
+        url: 'https://seller.example/x',
+        state: 'pending',
+        kind: 'refused',
+        code: 'chain_unavailable',
+        leaseUntil: minutesAgo(1),
+      });
+
+    expect([await gauge('pending'), await gauge('failed')]).toEqual([before[0], before[1] + 1]);
+  });
+
   // Leaves each used refresh token holding its wrap a second past the retry window.
   const wrapsPastWindow = async (n: number) => {
     const issued = await Promise.all(Array.from({ length: n }, () => connect()));

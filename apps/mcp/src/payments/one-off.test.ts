@@ -1,3 +1,4 @@
+import { randomUUID } from 'node:crypto';
 import { createServer } from 'node:http';
 import type { AddressInfo } from 'node:net';
 import {
@@ -10,8 +11,9 @@ import {
   type PaymentBody,
 } from '@jaw.id/agent';
 import { eq, sql } from 'drizzle-orm';
+import type { PgUpdateSetSource } from 'drizzle-orm/pg-core';
 import { keccak256, type Address, type Hex, type PublicClient } from 'viem';
-import { beforeAll, beforeEach, describe, expect, it } from 'vitest';
+import { beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { decideFromPage, outcomeResponse, readForPage } from '@/approvals/page-api';
 import { findById, recordDecision, sellerRequestOf } from '@/approvals/store';
 import { verifyBearer, type Tenant } from '@/connections/auth';
@@ -22,7 +24,16 @@ import { useTestDb } from '@/db/test-db';
 import { safeFetch } from '@/lib/safe-fetch';
 import { oneOffRow } from './one-off';
 import { pay, type PayDeps } from './pay';
-import { entriesFor, holdingRows, pulledUnderOtherGrants } from './store';
+import {
+  assertOwned,
+  claim,
+  entriesFor,
+  findPayment,
+  finish,
+  holdingRows,
+  pulledUnderOtherGrants,
+  take,
+} from './store';
 
 const USDC: Address = '0x036CbD53842c5426634e7929541eC2318f3dCF7e';
 const PAY_TO: Address = '0x2222222222222222222222222222222222222222';
@@ -31,6 +42,10 @@ const SECRET = 'Bearer SELLER-SECRET';
 const prices = new Map<string, string>();
 const timeouts = new Map<string, number>();
 let dropNextPaid = new Set<string>();
+let holdPaid = new Set<string>();
+const held: Array<() => void> = [];
+const largePaid = new Set<string>();
+const unreachable = new Set<string>();
 type Seen = {
   path: string;
   authorization?: string;
@@ -49,6 +64,7 @@ const seller = createServer((req, res) => {
     key: req.headers['idempotency-key'] as string | undefined,
   };
   seen.push(s);
+  if (unreachable.has(path)) return void req.socket.destroy();
   if (!signed) {
     const challenge = {
       x402Version: 2,
@@ -70,9 +86,11 @@ const seller = createServer((req, res) => {
   s.proof = JSON.parse(Buffer.from(String(signed), 'base64').toString());
   if (dropNextPaid.delete(path)) return void req.socket.destroy();
   const receipt = { success: true, transaction: `0x${'ab'.repeat(32)}`, network: 'eip155:84532' };
-  res
-    .writeHead(200, { 'payment-response': Buffer.from(JSON.stringify(receipt)).toString('base64') })
-    .end(JSON.stringify({ report: 'paid once from the account' }));
+  const body = largePaid.has(path) ? 'x'.repeat(1_500_000) : JSON.stringify({ report: 'paid once from the account' });
+  const answer = () =>
+    res.writeHead(200, { 'payment-response': Buffer.from(JSON.stringify(receipt)).toString('base64') }).end(body);
+  if (holdPaid.delete(path)) return void held.push(answer);
+  answer();
 });
 await new Promise<void>((r) => seller.listen(0, '127.0.0.1', r));
 const SELLER = `127.0.0.1:${(seller.address() as AddressInfo).port}`;
@@ -103,6 +121,9 @@ beforeEach(() => {
   prices.clear();
   timeouts.clear();
   dropNextPaid = new Set();
+  holdPaid = new Set();
+  largePaid.clear();
+  unreachable.clear();
 });
 
 const url = (path: string) => `http://${SELLER}${path}`;
@@ -355,3 +376,208 @@ describe('the payment source', () => {
 
 const rowsOf = async (id: string) =>
   (await getDb().select().from(approvalRequests).where(eq(approvalRequests.id, id)))[0];
+
+describe('what the agent can see and resend', () => {
+  it('given a one-off refused price_changed, when its status is read, then the owner signature is not in it', async () => {
+    const { c, id, post, signature } = await offered('/withheld');
+    prices.set('/withheld', '5001');
+    await decideFromPage(id, post, verifyLocally);
+
+    const status = await callTool(c.access_token, 'jaw_request_status', { requestId: id });
+
+    expect(JSON.stringify(status).toLowerCase()).not.toContain(signature.slice(2).toLowerCase());
+  });
+
+  it('given a one-off send in flight, when its status is polled, then the proof is not sent again', async () => {
+    const { c, id, post } = await offered('/slow');
+    holdPaid.add('/slow');
+    const deciding = decideFromPage(id, post, verifyLocally);
+    await vi.waitFor(() => expect(paidRequests()).toHaveLength(1));
+
+    await callTool(c.access_token, 'jaw_request_status', { requestId: id });
+
+    expect(paidRequests()).toHaveLength(1);
+    held.splice(0).forEach((answer) => answer());
+    await deciding;
+  });
+
+  it('given chain_unavailable before signing, when the same key is retried, then it runs again', async () => {
+    const c = await connect(undefined, { scope: 'wallet:read x402:pay' });
+    const t = (await verifyBearer(c.access_token))?.extra?.tenant as Tenant;
+    await grantBudget(c, '1');
+    const request = { url: url('/flaky'), idempotencyKey: 'k-flaky' };
+    const down: PayDeps = { ...deps(), readPermission: async () => ({ status: 'unavailable' }) };
+
+    const first = await pay(t, request, down);
+    expect(first.structuredContent?.refusal?.code).toBe('chain_unavailable');
+    expect(first.content[0].text).toContain('Send the same idempotencyKey again to retry.');
+    const retried = await pay(t, request, deps());
+
+    expect(retried.structuredContent?.refusal?.code).not.toBe('chain_unavailable');
+    expect(seen.filter((s) => s.path === '/flaky')).toHaveLength(1);
+  });
+
+  it('given a paid answer over the fetch size cap, when it arrives and its status is read, then the row is paid and sent once', async () => {
+    const { c, id, post } = await offered('/large');
+    largePaid.add('/large');
+
+    const decided = await decideFromPage(id, post, verifyLocally);
+    await callTool(c.access_token, 'jaw_request_status', { requestId: id });
+
+    expect(decided).toMatchObject({ kind: 'ok', view: { payment: { kind: 'paid' } } });
+    expect(await rowFor(id)).toMatchObject({ kind: 'paid' });
+    expect(paidRequests()).toHaveLength(1);
+  });
+
+  const lapsed = sql`now() - interval '1 second'`;
+
+  async function signedRow(set: PgUpdateSetSource<typeof payments>) {
+    const c = await connect(undefined, { scope: 'wallet:read x402:pay' });
+    const t = (await verifyBearer(c.access_token))?.extra?.tenant as Tenant;
+    const who = { connectionId: t.connectionId, payer: t.sessionAddress, permissionId: await grantBudget(c, '1') };
+    const key = randomUUID();
+    const request = { url: url('/signed'), method: 'GET' as const, headers: {} };
+    const first = await claim(who, key, request);
+    if (first.kind !== 'run') throw new Error(first.kind);
+    await getDb()
+      .update(payments)
+      .set({
+        state: 'signed',
+        nonce: `0x${'1'.repeat(64)}`,
+        authorization: { resource: request.url },
+        authorized: '5000',
+        deadline: sql`now() + interval '10 minutes'`,
+        signedAt: new Date(),
+        ...set,
+      })
+      .where(eq(payments.id, first.row.id));
+    return { id: first.row.id, retry: () => claim(who, key, request) };
+  }
+
+  it('given a signed row whose call still holds the lease, when its key is retried, then busy until the lease lapses', async () => {
+    const { id, retry } = await signedRow({});
+    expect((await retry()).kind).toBe('busy');
+
+    await getDb().update(payments).set({ leaseUntil: lapsed }).where(eq(payments.id, id));
+
+    expect((await retry()).kind).toBe('resume');
+  });
+
+  it('given a row whose answer was lost, when two retries race, then one resends and the other is busy', async () => {
+    const { retry } = await signedRow({ kind: 'failed', code: 'no_response', leaseUntil: lapsed });
+
+    const kinds = (await Promise.all([retry(), retry()])).map((c) => c.kind).sort();
+
+    expect(kinds).toEqual(['busy', 'resume']);
+  });
+
+  it('given a row a reconciler run holds, when its key is retried, then busy', async () => {
+    const { retry } = await signedRow({
+      kind: 'failed',
+      code: 'no_response',
+      leaseUntil: lapsed,
+      reconcilingUntil: sql`now() + interval '1 minute'`,
+    });
+
+    expect((await retry()).kind).toBe('busy');
+  });
+
+  it('given a row another call concluded paid, when a stale read of it is taken, then nothing is taken', async () => {
+    const { id } = await signedRow({ kind: 'paid', amount: '5000', leaseUntil: lapsed });
+    const stale = { ...((await findPayment(id)) as NonNullable<Awaited<ReturnType<typeof findPayment>>>), kind: null };
+
+    expect(await take(stale)).toBeUndefined();
+  });
+
+  it('given a row taken by another call, when the first call concludes with its old token, then nothing is written', async () => {
+    const { id } = await signedRow({});
+
+    const written = await finish(id, 'not-this-call', { state: 'signed', kind: 'paid', amount: '5000' }, []);
+
+    expect(written).toBeUndefined();
+    expect(await findPayment(id)).toMatchObject({ kind: null });
+  });
+
+  it('given over_cap before signing, when the price drops and the same key is retried, then it runs again', async () => {
+    const c = await connect(undefined, { scope: 'wallet:read x402:pay' });
+    const t = (await verifyBearer(c.access_token))?.extra?.tenant as Tenant;
+    await grantBudget(c, '1');
+    const request = { url: url('/dearer'), maxAmount: '4000', idempotencyKey: 'k-dearer' };
+
+    const first = await pay(t, request, deps());
+    expect(first.structuredContent?.refusal?.code).toBe('over_cap');
+    prices.set('/dearer', '3000');
+    const retried = await pay(t, request, deps());
+
+    expect(retried.structuredContent?.refusal?.code).not.toBe('over_cap');
+    expect(seen.filter((s) => s.path === '/dearer')).toHaveLength(2);
+  });
+
+  it('given a refill that threw, when the same key is retried, then the refusal is replayed and the seller not asked again', async () => {
+    const c = await connect(undefined, { scope: 'wallet:read x402:pay' });
+    const t = (await verifyBearer(c.access_token))?.extra?.tenant as Tenant;
+    await grantBudget(c, '1');
+    const request = { url: url('/no-refill'), idempotencyKey: 'k-no-refill' };
+
+    const first = await pay(t, request, deps());
+    expect(first.structuredContent?.refusal?.code).toBe('funding_failed');
+    await pay(t, request, deps());
+
+    expect(seen.filter((s) => s.path === '/no-refill')).toHaveLength(1);
+  });
+
+  it('given a one-off whose seller cannot be reached, when its status is polled, then the seller is not asked again', async () => {
+    const { c, id, post } = await offered('/gone');
+    unreachable.add('/gone');
+    await decideFromPage(id, post, verifyLocally);
+    const asked = seen.length;
+
+    await callTool(c.access_token, 'jaw_request_status', { requestId: id });
+
+    expect(seen).toHaveLength(asked);
+    expect(await rowFor(id)).toMatchObject({ state: 'failed', code: 'unreachable' });
+  });
+
+  it('given chain_unavailable before signing, when jaw_history lists the row, then it reads failed', async () => {
+    const c = await connect(undefined, { scope: 'wallet:read x402:pay' });
+    const t = (await verifyBearer(c.access_token))?.extra?.tenant as Tenant;
+    await grantBudget(c, '1');
+    const down: PayDeps = { ...deps(), readPermission: async () => ({ status: 'unavailable' }) };
+    await pay(t, { url: url('/listed'), idempotencyKey: 'k-listed' }, down);
+
+    const listed = await callTool(c.access_token, 'jaw_history', {});
+
+    expect(listed.structuredContent.payments).toMatchObject([{ state: 'failed', code: 'chain_unavailable' }]);
+  });
+
+  it('given a row an earlier attempt topped up, when a retry is refused before signing, then the refusal is final', async () => {
+    const c = await connect(undefined, { scope: 'wallet:read x402:pay' });
+    const t = (await verifyBearer(c.access_token))?.extra?.tenant as Tenant;
+    const permissionId = await grantBudget(c, '1');
+    const request = { url: url('/topped'), idempotencyKey: 'k-topped' };
+    const who = { connectionId: t.connectionId, payer: t.sessionAddress, permissionId };
+    const first = await claim(who, 'k-topped', { url: request.url, method: 'GET', headers: {} });
+    if (first.kind !== 'run') throw new Error(first.kind);
+    await getDb()
+      .update(payments)
+      .set({ topUpAmount: '105000', leaseUntil: lapsed })
+      .where(eq(payments.id, first.row.id));
+
+    const down: PayDeps = { ...deps(), readPermission: async () => ({ status: 'unavailable' }) };
+    const retried = await pay(t, request, down);
+
+    expect(retried.structuredContent?.refusal?.code).toBe('chain_unavailable');
+    expect(await findPayment(first.row.id)).toMatchObject({ state: 'failed', topUpAmount: '105000' });
+  });
+
+  it('given a call that concluded a retryable refusal, when it writes to the row again, then it no longer owns it', async () => {
+    const c = await connect(undefined, { scope: 'wallet:read x402:pay' });
+    const t = (await verifyBearer(c.access_token))?.extra?.tenant as Tenant;
+    const who = { connectionId: t.connectionId, payer: t.sessionAddress, permissionId: await grantBudget(c, '1') };
+    const first = await claim(who, randomUUID(), { url: url('/late'), method: 'GET', headers: {} });
+    if (first.kind !== 'run') throw new Error(first.kind);
+    await finish(first.row.id, first.token, { state: 'pending', kind: 'refused', code: 'chain_unavailable' }, []);
+
+    await expect(assertOwned(getDb(), first.row.id, first.token)).rejects.toThrow('no longer held');
+  });
+});
