@@ -789,15 +789,20 @@ describe('given a 1 USDC/day budget and 1.5 USDC already in the payer', () => {
   });
 
   it.skipIf(!TEST_PG_URL)(
-    'when six 0.3 payments run at once across two replicas on Postgres, then three are paid, the rest refuse budget_exhausted holding nothing with a one-off offer, and jaw_status shows what is left',
+    'when six 0.3 payments run at once across two replicas on Postgres, with each signature landing after the next turn, then three are paid, the rest refuse budget_exhausted holding nothing with a one-off offer, and jaw_status shows what is left',
     async () => {
       const { c, t } = await connected('1');
       balances.set(t.sessionAddress.toLowerCase(), 1_500_000n);
       vi.resetModules();
       const replica = (await import('./pay')).pay;
+      // Each signature lands after the next turn has read the caps, so only the reservation counts it.
+      await getDb().execute(sql`create function slow_sign() returns trigger language plpgsql
+        as $$ begin perform pg_sleep(0.3); return new; end $$`);
+      await getDb().execute(sql`create trigger slow_sign before update on payments for each row
+        when (old.state = 'pending' and new.state = 'signed') execute function slow_sign()`);
       const results = await Promise.all(
         Array.from({ length: 6 }, (_, i) => payOne(t, `budget-burst-${i}`, i % 2 ? replica : pay))
-      );
+      ).finally(() => getDb().execute(sql`drop function slow_sign cascade`));
       const refused = results.filter((r) => r.structuredContent?.kind !== 'paid');
       expect(refused.map((r) => r.structuredContent?.refusal?.code)).toEqual(Array(3).fill('budget_exhausted'));
       expect(refused.every((r) => r.structuredContent?.refusal?.oneOff?.requestId)).toBe(true);
