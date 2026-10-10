@@ -409,6 +409,60 @@ describe('jaw_pay_and_fetch', () => {
     expect(reservedDuringWait.every((reserved) => reserved === null)).toBe(true);
   });
 
+  it('given a top-up send that moved money and has not returned, then the row already carries its amount, and its batch id once it returns', async () => {
+    const { t } = await connected('1');
+    const during: { sending?: string | null; confirming?: string | null } = {};
+    const watching = (funder: Address): TopUpExecutor => ({
+      request: async (method, params) => {
+        const sent = await executor(funder).request(method, params);
+        const [row] = await getDb().select().from(payments).where(eq(payments.idempotencyKey, 'write-ahead'));
+        if (method === 'wallet_sendCalls') during.sending = row.topUpAmount;
+        else during.confirming ??= row.topUpBatchId;
+        return sent;
+      },
+    });
+    const result = await pay(
+      t,
+      { url: url('/exact'), idempotencyKey: 'write-ahead' },
+      deps({ executor: (_t, grant) => watching(grant.account) })
+    );
+    expect(during).toEqual({ sending: refills[0].toString(), confirming: '0xbatch1' });
+    expect(await rowOf(result.structuredContent!.paymentId)).toMatchObject({ topUpAmount: refills[0].toString() });
+  });
+
+  it('given a top-up send that throws, then the row carries no top-up and no money moved', async () => {
+    const { t } = await connected('1');
+    const refusing: TopUpExecutor = {
+      request: async () => {
+        throw new Error('the permission refused the transfer');
+      },
+    };
+    const result = await pay(
+      t,
+      { url: url('/exact'), idempotencyKey: 'send-threw' },
+      deps({ executor: () => refusing })
+    );
+    expect(result.structuredContent).toMatchObject({ kind: 'refused', moneyMoved: false });
+    expect(await rowOf(result.structuredContent!.paymentId)).toMatchObject({ topUpAmount: null, topUpBatchId: null });
+  });
+
+  it('given a top-up send that returns no id, then the row keeps the amount and money moved', async () => {
+    const { t } = await connected('1');
+    const silent = (funder: Address): TopUpExecutor => ({
+      request: async (method, params) => {
+        await executor(funder).request(method, params);
+        return null;
+      },
+    });
+    const result = await pay(
+      t,
+      { url: url('/exact'), idempotencyKey: 'no-id' },
+      deps({ executor: (_t, grant) => silent(grant.account) })
+    );
+    expect(result.structuredContent).toMatchObject({ kind: 'refused', moneyMoved: true });
+    expect(await rowOf(result.structuredContent!.paymentId)).toMatchObject({ topUpAmount: refills[0].toString() });
+  });
+
   it('refills to the float target, so the next payments need no refill', async () => {
     const { t } = await connected('1');
     await pay(t, { url: url('/exact'), idempotencyKey: 'float-1' }, deps({ floatTarget: 50_000n }));
