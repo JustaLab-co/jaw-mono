@@ -27,7 +27,7 @@ import { fenceText } from '@/lib/fence';
 import { safeFetch } from '@/lib/safe-fetch';
 import { confirmByReceipt, type Settled } from './confirm';
 import { refillHook } from './refill';
-import { offerOneOff } from './one-off';
+import { offerOneOff, oneOffFor } from './one-off';
 import { gate, render, type PayResult } from './render';
 import {
   claim,
@@ -139,21 +139,19 @@ function fencedOf(url: string, o: Outcome): string[] {
   return fenced;
 }
 
-// Final even unsigned: budget_exhausted carries a one-off offer, which a retry would open
-// again; a refill that threw may have moved money that no trace shows.
+const ONE_OFF = new Set(['budget_exhausted', 'over_cap']);
+// Final even unsigned: a one-off offer, which a retry would open again; a refill
+// that threw may have moved money that no trace shows.
 const FINAL_UNSIGNED = new Set(['budget_exhausted', 'funding_failed']);
 
-/**
- * Where the outcome leaves a row. `signed` says whether an authorization for it
- * exists; `movedBefore`, whether an earlier attempt on the row moved money.
- */
-function conclusionOf(o: Outcome, signed: boolean, settled: Settled | undefined, movedBefore: boolean): Conclusion {
+/** Where the outcome leaves a row. `signed` says whether an authorization for it exists. */
+function conclusionOf(o: Outcome, signed: boolean, settled: Settled | undefined, noRetry: boolean): Conclusion {
   const traces = {
     topUp: 'topUp' in o ? o.topUp : undefined,
     approvalBatchId: 'permit2Approval' in o ? o.permit2Approval?.batchId : undefined,
   };
   const retry =
-    !movedBefore &&
+    !noRetry &&
     !traces.topUp &&
     !traces.approvalBatchId &&
     !(o.kind === 'refused' && FINAL_UNSIGNED.has(o.refusal.code));
@@ -287,15 +285,15 @@ export async function pay(t: Tenant, input: PayInput, deps: PayDeps = liveDeps()
     ? ((await grantLive(grant, deps)) ??
       (await payWithinGrant(t, grant, row, token, request, payer, sent, deps, () => (signed = true))))
     : { kind: 'unreached', code: 'no_grant', reason: 'the budget ended while this payment waited' };
+  const challenge = outcome.kind === 'refused' && ONE_OFF.has(outcome.refusal.code) ? outcome.challenge : undefined;
+  const oneOff = challenge !== undefined && oneOffFor(t, request, challenge) !== undefined;
   const done = await concludeSend(row, token, outcome, {
     signed,
     signedAt: new Date(started),
     confirmWith: deps.clients,
+    noRetry: oneOff,
   });
-  const offer =
-    outcome.kind === 'refused' && outcome.refusal.code === 'budget_exhausted' && outcome.challenge
-      ? await offerOneOff(t, request, outcome.challenge)
-      : undefined;
+  const offer = oneOff ? await offerOneOff(t, request, challenge) : undefined;
   return render(done.row, done.fenced, offer);
 }
 
@@ -307,12 +305,12 @@ export async function concludeSend(
   row: PaymentRow,
   token: string,
   outcome: Outcome,
-  opts: { signed: boolean; signedAt: Date; confirmWith?: ChainClients }
+  opts: { signed: boolean; signedAt: Date; confirmWith?: ChainClients; noRetry?: boolean }
 ): Promise<{ row: PaymentRow; fenced: string[] }> {
   const checked = await claimedHashOnly(outcome, row.id);
   const settled = opts.confirmWith ? await settledBy(checked, opts.signedAt, opts.confirmWith) : undefined;
   const movedBefore = Boolean(row.topUpAmount || row.topUpBatchId || row.approvalBatchId);
-  const conclusion = conclusionOf(checked, opts.signed, settled, movedBefore);
+  const conclusion = conclusionOf(checked, opts.signed, settled, movedBefore || Boolean(opts.noRetry));
   const fenced = fencedOf(row.url, outcome);
   const written = await finish(row.id, token, conclusion, fenced);
   return { row: written ?? (await rowAfter(row, conclusion)), fenced };

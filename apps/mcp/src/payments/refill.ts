@@ -13,14 +13,16 @@ import {
   type X402Policy,
 } from '@jaw.id/agent';
 import { and, eq } from 'drizzle-orm';
-import { erc20Abi, isAddressEqual, type Address, type Hex } from 'viem';
+import { decodeFunctionData, erc20Abi, isAddressEqual, type Address, type Hex } from 'viem';
 import { sessionOf } from '@/adapters/session-host';
 import { isLive } from '@/connections/rows';
 import { connections } from '@/db/schema';
 import type { Grant } from '@/grants/store';
+import { errorLabel, log } from '@/lib/edge';
 import { nonceUsed } from './confirm';
 import { FloatBusy, inTurn, withFloat, type FloatHold } from './float-lock';
 import {
+  addTopUp,
   assertOwned,
   entriesFor,
   holdingRows,
@@ -78,19 +80,59 @@ const noRefill: TopUpExecutor = {
   },
 };
 
-function guarded(executor: TopUpExecutor, hold: FloatHold): TopUpExecutor {
+function transferAmount(params: unknown): bigint {
+  const [{ calls }] = params as [{ calls: { data: Hex }[] }];
+  if (calls.length !== 1) throw new Error('a top-up sends one ERC-20 transfer');
+  const { functionName, args } = decodeFunctionData({ abi: erc20Abi, data: calls[0].data });
+  if (functionName !== 'transfer') throw new Error('a top-up sends one ERC-20 transfer');
+  return args[1] as bigint;
+}
+
+const logFailure = (msg: string) => (err: unknown) => log('error', { msg, error: errorLabel(err) });
+
+function guarded(
+  executor: TopUpExecutor,
+  hold: FloatHold,
+  rowId: string
+): { executor: TopUpExecutor; failedBeforeSend: () => unknown } {
   const approve = executor.approvePermit2?.bind(executor);
+  let failedBeforeSend: unknown;
   return {
-    request: (method, params) => {
-      if (method === 'wallet_sendCalls') hold.assertHeld();
-      return executor.request(method, params);
+    failedBeforeSend: () => failedBeforeSend,
+    executor: {
+      request: async (method, params) => {
+        if (method !== 'wallet_sendCalls') return executor.request(method, params);
+        let amount: bigint;
+        try {
+          amount = transferAmount(params);
+          await hold.tx((tx) => addTopUp(tx, rowId, amount));
+        } catch (err) {
+          failedBeforeSend = err;
+          throw err;
+        }
+        let sent: unknown;
+        try {
+          hold.assertHeld();
+          sent = await executor.request(method, params);
+        } catch (err) {
+          await hold.tx((tx) => addTopUp(tx, rowId, -amount)).catch(logFailure('top-up subtract failed'));
+          throw err;
+        }
+        const batchId = typeof sent === 'string' ? sent : (sent as { id?: string } | null)?.id;
+        if (batchId) {
+          await hold
+            .tx((tx) => recordTopUp(tx, rowId, { ok: true, batchId }))
+            .catch(logFailure('top-up batch id write failed'));
+        }
+        return sent;
+      },
+      approvePermit2:
+        approve &&
+        (async (token) => {
+          hold.assertHeld();
+          return approve(token);
+        }),
     },
-    approvePermit2:
-      approve &&
-      (async (token) => {
-        hold.assertHeld();
-        return approve(token);
-      }),
   };
 }
 
@@ -168,7 +210,8 @@ export function refillHook(c: RefillContext): EnsureFunds {
           if (refillMs < MIN_REFILL_MS) return timedOut('the refill waited too long to still send');
           let pinned = block;
           hold.assertHeld();
-          const outcome = await ensurePayerFunds(requirement, payer, guarded(c.executor ?? noRefill, hold), {
+          const guard = guarded(c.executor ?? noRefill, hold, c.rowId);
+          const outcome = await ensurePayerFunds(requirement, payer, guard.executor, {
             clients: c.clients,
             logger: c.logger,
             sessionChainId: c.grant.chainId,
@@ -192,6 +235,7 @@ export function refillHook(c: RefillContext): EnsureFunds {
               return balance > held ? balance - held : 0n;
             },
           });
+          if (guard.failedBeforeSend() !== undefined) throw guard.failedBeforeSend();
           const moved = Boolean(outcome.amount || outcome.batchId || outcome.approvalBatchId);
           if (!moved && !outcome.ok) return outcome;
           // A turn that moved no money commits its reservation under the lock or not at all.

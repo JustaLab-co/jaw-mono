@@ -2,7 +2,7 @@ import { randomUUID } from 'node:crypto';
 import { createServer } from 'node:http';
 import type { AddressInfo } from 'node:net';
 import type { ChainClients, GrantRequest, TopUpExecutor } from '@jaw.id/agent';
-import { eq, sql } from 'drizzle-orm';
+import { and, eq, sql } from 'drizzle-orm';
 import {
   decodeFunctionData,
   encodeAbiParameters,
@@ -20,7 +20,7 @@ import { revokeFromPage, type PageDeps, type PageOutcome } from '@/connections/p
 import { endConnection } from '@/connections/rows';
 import { callTool, connect, pageProof, setTestEnv, verifyLocally } from '@/connections/testkit';
 import { getDb } from '@/db/client';
-import { payments, settings } from '@/db/schema';
+import { approvalRequests, payments, settings } from '@/db/schema';
 import {
   lockWaiters,
   statusOnceParked,
@@ -50,6 +50,7 @@ const PRICES: Record<string, string> = {
   '/race': '5000',
   '/upto': '5000',
   '/budget': '300000',
+  '/pricey': '2000000',
   '/forever': '5000',
   '/overflow': '5000',
 };
@@ -264,6 +265,32 @@ const lockFreeWithin = (connectionId: string, ms: number) =>
   ]);
 const rowOf = async (id: string) => (await getDb().select().from(payments).where(eq(payments.id, id)))[0];
 
+async function failUpdates(key: string, when: string) {
+  const name = `fail_${key.replaceAll('-', '_')}`;
+  await getDb().execute(
+    sql.raw(`create function ${name}() returns trigger language plpgsql as $$ begin
+      if new.idempotency_key = '${key}' and (${when}) then raise exception '${key} write refused'; end if;
+      return new; end $$`)
+  );
+  await getDb().execute(
+    sql.raw(`create trigger ${name} before update on payments for each row execute function ${name}()`)
+  );
+  return async () => {
+    await getDb().execute(sql.raw(`drop trigger ${name} on payments`));
+    await getDb().execute(sql.raw(`drop function ${name}()`));
+  };
+}
+
+async function logsOf(work: () => Promise<unknown>): Promise<string> {
+  const logged = vi.spyOn(console, 'log');
+  try {
+    await work();
+    return logged.mock.calls.flat().join('\n');
+  } finally {
+    logged.mockRestore();
+  }
+}
+
 describe('jaw_pay_and_fetch', () => {
   it('pays from the float, answers with the fenced body, and settles the row from the receipt', async () => {
     const { t } = await connected('1');
@@ -407,6 +434,139 @@ describe('jaw_pay_and_fetch', () => {
     expect(result.structuredContent).toMatchObject({ kind: 'paid', moneyMoved: true });
     expect(reservedDuringWait.length).toBeGreaterThan(0);
     expect(reservedDuringWait.every((reserved) => reserved === null)).toBe(true);
+  });
+
+  it('given a top-up send that moved money and has not returned, then the row already carries its amount, and its batch id once it returns', async () => {
+    const { t } = await connected('1');
+    const during: { sending?: string | null; confirming?: string | null } = {};
+    const watching = (funder: Address): TopUpExecutor => ({
+      request: async (method, params) => {
+        const sent = await executor(funder).request(method, params);
+        const [row] = await getDb().select().from(payments).where(eq(payments.idempotencyKey, 'write-ahead'));
+        if (method === 'wallet_sendCalls') during.sending = row.topUpAmount;
+        else during.confirming ??= row.topUpBatchId;
+        return sent;
+      },
+    });
+    const result = await pay(
+      t,
+      { url: url('/exact'), idempotencyKey: 'write-ahead' },
+      deps({ executor: (_t, grant) => watching(grant.account) })
+    );
+    expect(during).toEqual({ sending: refills[0].toString(), confirming: '0xbatch1' });
+    expect(await rowOf(result.structuredContent!.paymentId)).toMatchObject({ topUpAmount: refills[0].toString() });
+  });
+
+  it('given a top-up send that throws, then the row carries no top-up and no money moved', async () => {
+    const { t } = await connected('1');
+    const refusing: TopUpExecutor = {
+      request: async () => {
+        throw new Error('the permission refused the transfer');
+      },
+    };
+    const result = await pay(
+      t,
+      { url: url('/exact'), idempotencyKey: 'send-threw' },
+      deps({ executor: () => refusing })
+    );
+    expect(result.structuredContent).toMatchObject({ kind: 'refused', moneyMoved: false });
+    expect(await rowOf(result.structuredContent!.paymentId)).toMatchObject({ topUpAmount: null, topUpBatchId: null });
+  });
+
+  it('given a top-up send that returns no id, then the row keeps the amount and money moved', async () => {
+    const { t } = await connected('1');
+    const silent = (funder: Address): TopUpExecutor => ({
+      request: async (method, params) => {
+        await executor(funder).request(method, params);
+        return null;
+      },
+    });
+    const result = await pay(
+      t,
+      { url: url('/exact'), idempotencyKey: 'no-id' },
+      deps({ executor: (_t, grant) => silent(grant.account) })
+    );
+    expect(result.structuredContent).toMatchObject({ kind: 'refused', moneyMoved: true });
+    expect(await rowOf(result.structuredContent!.paymentId)).toMatchObject({ topUpAmount: refills[0].toString() });
+  });
+
+  it('given the write-ahead of the top-up amount fails, then nothing is sent and the turn fails as a database error, not a refusal on chain', async () => {
+    const { t } = await connected('1');
+    const drop = await failUpdates('add-fails', 'old.top_up_amount is null and new.top_up_amount is not null');
+    let result: Awaited<ReturnType<typeof pay>> | undefined;
+    try {
+      const lines = await logsOf(async () => {
+        result = await pay(t, { url: url('/exact'), idempotencyKey: 'add-fails' }, deps());
+      });
+      expect(lines).toContain('payment funding_failed: payer funding failed');
+      expect(lines).not.toContain('refused on-chain');
+    } finally {
+      await drop();
+    }
+    expect(result?.structuredContent).toMatchObject({ refusal: { code: 'funding_failed' }, moneyMoved: false });
+    expect([seen.length, refills.length]).toEqual([0, 0]);
+  });
+
+  it('given a top-up send that throws and a subtract that fails, then the refusal keeps the send error', async () => {
+    const { t } = await connected('1');
+    const refusing: TopUpExecutor = {
+      request: async () => {
+        throw new Error('the permission refused the transfer');
+      },
+    };
+    const drop = await failUpdates('subtract-fails', 'old.top_up_amount is not null and new.top_up_amount is null');
+    try {
+      const lines = await logsOf(() =>
+        pay(t, { url: url('/exact'), idempotencyKey: 'subtract-fails' }, deps({ executor: () => refusing }))
+      );
+      expect(lines).toContain('top-up refused on-chain (the permission refused the transfer)');
+    } finally {
+      await drop();
+    }
+  });
+
+  it('given an over_cap with a one-off whose conclusion fails to write, when the same key is retried, then one approval is ever opened', async () => {
+    const { t } = await connected('5');
+    const drop = await failUpdates('conclude-fails', "new.state <> 'pending'");
+    try {
+      await expect(pay(t, { url: url('/pricey'), idempotencyKey: 'conclude-fails' }, deps())).rejects.toThrow();
+    } finally {
+      await drop();
+    }
+    await getDb().execute(
+      sql`update payments set lease_until = now() - interval '1 second' where idempotency_key = 'conclude-fails'`
+    );
+    const again = await pay(t, { url: url('/pricey'), idempotencyKey: 'conclude-fails' }, deps());
+    expect(again.structuredContent).toMatchObject({ state: 'failed', refusal: { code: 'over_cap' } });
+    const offers = await getDb()
+      .select()
+      .from(approvalRequests)
+      .where(and(eq(approvalRequests.connectionId, t.connectionId), eq(approvalRequests.kind, 'payment')));
+    expect(offers).toHaveLength(1);
+  });
+
+  it('given a 5 USDC/day budget and a 2 USDC price, when the agent pays, then over_cap with a one-off offer, nothing signed or pulled, and a retry replays it', async () => {
+    const { t } = await connected('5');
+    const first = await pay(t, { url: url('/pricey'), idempotencyKey: 'pricey' }, deps());
+    expect(first.structuredContent).toMatchObject({
+      kind: 'refused',
+      state: 'failed',
+      refusal: { code: 'over_cap', oneOff: { requestId: expect.any(String) } },
+      moneyMoved: false,
+    });
+    expect(first.structuredContent?.refusal?.next).toBeUndefined();
+    expect(first.structuredContent?.summary).not.toContain('jaw_request_budget');
+    expect([seen.length, refills.length]).toEqual([0, 0]);
+    const again = await pay(t, { url: url('/pricey'), idempotencyKey: 'pricey' }, deps());
+    expect(again.structuredContent).toMatchObject({
+      paymentId: first.structuredContent?.paymentId,
+      refusal: { code: 'over_cap' },
+    });
+    const offers = await getDb()
+      .select()
+      .from(approvalRequests)
+      .where(and(eq(approvalRequests.connectionId, t.connectionId), eq(approvalRequests.kind, 'payment')));
+    expect(offers).toHaveLength(1);
   });
 
   it('refills to the float target, so the next payments need no refill', async () => {

@@ -131,6 +131,13 @@ describe('withEdge', () => {
     expect((await call(withEdge(cancelled, { guarded: false }))).status).toBe(503);
   });
 
+  it('given a query on a connection Postgres closed mid-restart (CONNECTION_CLOSED), then 503', async () => {
+    const closed = async () => {
+      throw new Error('Failed query', { cause: { code: 'CONNECTION_CLOSED' } });
+    };
+    expect((await call(withEdge(closed, { guarded: false }))).status).toBe(503);
+  });
+
   it('leaves unguarded routes open while paused', async () => {
     store.paused = true;
     expect((await call(withEdge(ok, { guarded: false }))).status).toBe(200);
