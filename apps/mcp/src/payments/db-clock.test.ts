@@ -68,6 +68,13 @@ describe.skipIf(!TEST_PG_URL)('on Postgres, a replica whose clock is off by 90 s
     expect(await leaseLeftMs(first.row.id)).toBeGreaterThan(LEASE_MS - 2_000);
   });
 
+  it('given a live lease, when a replica 150 s ahead claims the key, then the row stays busy', async () => {
+    const key = randomUUID();
+    expect((await claim(owner(), key, request)).kind).toBe('run');
+    onReplica(150_000);
+    expect((await claim(owner(), key, request)).kind).toBe('busy');
+  });
+
   it('given a lapsed pending row and a replica behind, when it reclaims a one-off, then the new lease runs LEASE_MS', async () => {
     const first = await claim(owner(), randomUUID(), request);
     if (first.kind !== 'run') throw new Error(first.kind);
