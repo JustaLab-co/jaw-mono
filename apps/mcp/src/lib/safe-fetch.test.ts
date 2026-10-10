@@ -2,7 +2,7 @@ import { createServer } from 'node:http';
 import type { AddressInfo } from 'node:net';
 import { afterAll, describe, expect, it } from 'vitest';
 import type { lookup } from 'node:dns';
-import { isPrivate, publicOnly, safeFetch } from './safe-fetch';
+import { isPrivate, publicOnly, resolvesPublic, safeFetch } from './safe-fetch';
 
 const server = createServer((req, res) => {
   if (req.url === '/redirect') return void res.writeHead(302, { location: 'http://169.254.169.254/' }).end();
@@ -65,6 +65,41 @@ describe('isPrivate', () => {
       expect(isPrivate(address)).toBe(true);
     }
   );
+});
+
+describe('given the first address of every range oidc-provider treats as special-use', () => {
+  it.each([
+    ...['0.0.0.0', '10.0.0.0', '100.64.0.0', '127.0.0.0', '169.254.0.0', '172.16.0.0', '192.0.0.0', '192.0.2.0'],
+    ...['192.31.196.0', '192.52.193.0', '192.88.99.0', '192.168.0.0', '192.175.48.0', '198.18.0.0'],
+    ...['198.51.100.0', '203.0.113.0', '240.0.0.0', '::', '::1', '64:ff9b::', '64:ff9b:1::', '100::', '100:0:0:1::'],
+    ...['2001::', '2001:100::', '2001:db8::', '2002::', '2620:4f:8000::', '3fff::', '5f00::', 'fc00::', 'fd00::'],
+    ...['fe80::', 'fe90::', 'fea0::', 'feb0::'],
+  ])('then %s is private', (address) => {
+    expect(isPrivate(address)).toBe(true);
+  });
+});
+
+describe('resolvesPublic', () => {
+  const answering = (...addresses: string[]) =>
+    ((_h: string, _o: unknown, cb: (e: null, a: { address: string; family: number }[]) => void) =>
+      cb(
+        null,
+        addresses.map((address) => ({ address, family: address.includes(':') ? 6 : 4 }))
+      )) as unknown as typeof lookup;
+  const failing = ((_h: string, _o: unknown, cb: (e: Error) => void) =>
+    cb(Object.assign(new Error('not found'), { code: 'ENOTFOUND' }))) as unknown as typeof lookup;
+
+  it('given a name that resolves to public addresses only, then true', async () => {
+    expect(await resolvesPublic('agent.example', answering('93.184.216.34', '2606:4700::1111'))).toBe(true);
+  });
+
+  it.each([
+    ['a private answer among public ones', 'agent.example', answering('93.184.216.34', '10.0.0.1')],
+    ['a bracketed IPv6 literal', '[::1]', answering('::1')],
+    ['a name that does not resolve', 'nowhere.example', failing],
+  ])('given %s, then false', async (_, host, resolve) => {
+    expect(await resolvesPublic(host, resolve)).toBe(false);
+  });
 });
 
 describe('the connect-time lookup', () => {

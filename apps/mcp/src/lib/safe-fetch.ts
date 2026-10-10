@@ -14,7 +14,11 @@ for (const [net, bits] of [
   ['172.16.0.0', 12],
   ['192.0.0.0', 24],
   ['192.0.2.0', 24],
+  ['192.31.196.0', 24],
+  ['192.52.193.0', 24],
+  ['192.88.99.0', 24],
   ['192.168.0.0', 16],
+  ['192.175.48.0', 24],
   ['198.18.0.0', 15],
   ['198.51.100.0', 24],
   ['203.0.113.0', 24],
@@ -27,8 +31,14 @@ for (const [net, bits] of [
 for (const [net, bits] of [
   ['::', 127],
   ['64:ff9b::', 96],
+  ['64:ff9b:1::', 48],
+  ['100::', 63],
+  ['2001::', 23],
   ['2001:db8::', 32],
   ['2002::', 16],
+  ['2620:4f:8000::', 48],
+  ['3fff::', 20],
+  ['5f00::', 16],
   ['fc00::', 7],
   ['fe80::', 10],
   ['ff00::', 8],
@@ -54,6 +64,11 @@ export const publicOnly =
       return callback(null, addresses[0].address, addresses[0].family);
     });
   };
+
+export const resolvesPublic = (hostname: string, resolve: typeof lookup = lookup) =>
+  new Promise<boolean>((answer) =>
+    publicOnly(resolve)(hostname.replace(/^\[|\]$/g, ''), { all: true }, (err) => answer(!err))
+  );
 
 function toResponse(res: IncomingMessage, body: Buffer): Response {
   const headers = new Headers();
