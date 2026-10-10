@@ -18,7 +18,8 @@ const timed = async (work) => {
 };
 
 test('other tenants still get status, revoke and health while six connections queue disconnects', async (t) => {
-  const busy = await Promise.all(Array.from({ length: 6 }, () => connect()));
+  const busy = [];
+  for (let i = 0; i < 6; i++) busy.push(await connect());
   const other = await connect();
   const victim = await connect();
   const ids = await Promise.all(
