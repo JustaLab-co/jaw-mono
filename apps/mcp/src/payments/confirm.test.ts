@@ -1,7 +1,11 @@
 import { usdcForNetwork, X402_UPTO_PROXY_ADDRESS, type ChainClients } from '@jaw.id/agent';
 import {
+  createPublicClient,
+  custom,
+  decodeFunctionData,
   encodeEventTopics,
   encodeFunctionData,
+  keccak256,
   pad,
   parseAbi,
   toFunctionSelector,
@@ -11,6 +15,8 @@ import {
   type PublicClient,
 } from 'viem';
 import { describe, expect, it } from 'vitest';
+import receiptJson from './fixtures/upto-bundle-receipt.json';
+import txJson from './fixtures/upto-bundle-tx.json';
 import { confirmByReceipt } from './confirm';
 
 const network = 'eip155:84532';
@@ -118,5 +124,141 @@ describe('confirming an upto payment', () => {
 
   it('refuses when the transfer differs from the amount the proxy settled', async () => {
     expect(await confirm(chain(settle({ amount: 1n })))).toBeUndefined();
+  });
+});
+
+type RpcLog = (typeof receiptJson.logs)[number];
+type World = { receipt: typeof receiptJson; others: RpcLog[]; nonceSetAt: bigint; blockHash: string };
+
+const N = BigInt(receiptJson.blockNumber);
+const BLOCK_TIME = '0x6ac9991e';
+const BUNDLE_NONCE = 18899003587150008777749060612176507154056406888323159840139766848196094455960n;
+const owner: Address = '0xB021ED7538F02693C5d3f3bad7f85714E9C702f6';
+const [settledLog] = receiptJson.logs.filter((l) => l.address === X402_UPTO_PROXY_ADDRESS.toLowerCase());
+const payerTransfer = receiptJson.logs.find((l) => l.topics[1] === pad(owner.toLowerCase() as Hex))!;
+const SETTLED_WITH_PERMIT = keccak256(toHex('SettledWithPermit()'));
+const NONCE_BITMAP = parseAbi(['function nonceBitmap(address owner, uint256 wordPos) view returns (uint256)']);
+const otherTx = `0x${'cd'.repeat(32)}`;
+const earlier = {
+  ...settledLog,
+  blockHash: `0x${'ee'.repeat(32)}`,
+  blockNumber: toHex(N - 1n),
+  transactionHash: otherTx,
+};
+
+/** The real Base Sepolia bundle as a node serves it, with `over` applied. Another block holds another settle. */
+function served(over: Partial<World> = {}): ChainClients {
+  const world: World = {
+    receipt: receiptJson,
+    others: [earlier],
+    nonceSetAt: N,
+    blockHash: receiptJson.blockHash,
+    ...over,
+  };
+  const request = async ({ method, params }: { method: string; params: unknown[] }) => {
+    if (method === 'eth_getTransactionReceipt') return world.receipt;
+    if (method === 'eth_getTransactionByHash') return txJson;
+    if (method === 'eth_blockNumber') return toHex(N);
+    if (method === 'eth_getBlockByNumber') {
+      return { number: params[0], hash: world.blockHash, timestamp: BLOCK_TIME, transactions: [] };
+    }
+    if (method === 'eth_getLogs') {
+      const [{ address, blockHash, topics }] = params as [
+        { address: string; blockHash?: string; topics?: (string | string[])[] },
+      ];
+      return [...world.receipt.logs, ...world.others].filter(
+        (l) =>
+          l.address === address.toLowerCase() &&
+          (!blockHash || l.blockHash === blockHash) &&
+          (!topics?.[0] || [topics[0]].flat().includes(l.topics[0]))
+      );
+    }
+    if (method === 'eth_call') {
+      const [call, block] = params as [{ data: Hex }, Hex];
+      const { args } = decodeFunctionData({ abi: NONCE_BITMAP, data: call.data });
+      const used = args[0] === owner && args[1] === BUNDLE_NONCE >> 8n && BigInt(block) >= world.nonceSetAt;
+      return pad(toHex(used ? 1n << (BUNDLE_NONCE & 0xffn) : 0n));
+    }
+    throw new Error(`unserved ${method}`);
+  };
+  const client = createPublicClient({ transport: custom({ request }) });
+  return { publicClient: () => client };
+}
+
+const bundled = {
+  payer: owner,
+  nonce: toHex(BUNDLE_NONCE, { size: 32 }),
+  scheme: 'upto',
+  network,
+  payTo: '0x68b2C058720eB5A54DF7fC2dAb53bBc4327764Cb' as Address,
+  authorized: 25_000n,
+  signedAt: new Date(Date.now() - 10_000),
+};
+const confirmBundle = (clients: ChainClients) =>
+  confirmByReceipt(bundled, receiptJson.transactionHash as Hex, clients, 5000);
+const withLogs = (logs: RpcLog[]) => ({ ...receiptJson, logs });
+const rewritten = (change: Partial<RpcLog>) =>
+  withLogs(receiptJson.logs.map((l) => (l === payerTransfer ? { ...l, ...change } : l)));
+
+describe('confirming an upto payment settled inside a bundle', () => {
+  it('settles the EntryPoint bundle at what the payer moved', async () => {
+    expect(await confirmBundle(served())).toMatchObject({ amount: 20_000n, txHash: receiptJson.transactionHash });
+  });
+
+  it('refuses a receipt with a second settle', async () => {
+    const second = { ...settledLog, logIndex: '0xb2' };
+    expect(await confirmBundle(served({ receipt: withLogs([...receiptJson.logs, second]) }))).toBeUndefined();
+  });
+
+  it('refuses when another transaction in the block also settled', async () => {
+    const other = { ...settledLog, transactionHash: otherTx, logIndex: '0x01' };
+    expect(await confirmBundle(served({ others: [earlier, other] }))).toBeUndefined();
+  });
+
+  it('refuses when another transaction in the block settled with a permit', async () => {
+    const other = { ...settledLog, topics: [SETTLED_WITH_PERMIT], transactionHash: otherTx, logIndex: '0x01' };
+    expect(await confirmBundle(served({ others: [earlier, other] }))).toBeUndefined();
+  });
+
+  it('refuses when the block only settle is another transaction', async () => {
+    const other = { ...settledLog, transactionHash: otherTx, logIndex: '0x01' };
+    const unsettled = withLogs(receiptJson.logs.filter((l) => l !== settledLog));
+    expect(await confirmBundle(served({ receipt: unsettled, others: [earlier, other] }))).toBeUndefined();
+  });
+
+  it('refuses when the block at that height is no longer the receipt block', async () => {
+    expect(await confirmBundle(served({ blockHash: `0x${'ff'.repeat(32)}` }))).toBeUndefined();
+  });
+
+  it('refuses when the nonce was already used before the block', async () => {
+    expect(await confirmBundle(served({ nonceSetAt: N - 1n }))).toBeUndefined();
+  });
+
+  it('refuses when the nonce is still unused at the block', async () => {
+    expect(await confirmBundle(served({ nonceSetAt: N + 1n }))).toBeUndefined();
+  });
+
+  it('refuses when no transfer comes from the payer', async () => {
+    const from = pad(facilitator.toLowerCase() as Hex);
+    const receipt = rewritten({ topics: [payerTransfer.topics[0], from, payerTransfer.topics[2]] });
+    expect(await confirmBundle(served({ receipt }))).toBeUndefined();
+  });
+
+  it('refuses when the payer transfer is of another token', async () => {
+    expect(await confirmBundle(served({ receipt: rewritten({ address: facilitator.toLowerCase() }) }))).toBeUndefined();
+  });
+
+  it('caps payer transfers to any recipient at the authorized amount', async () => {
+    const elsewhere = {
+      ...payerTransfer,
+      topics: [payerTransfer.topics[0], payerTransfer.topics[1], pad(payTo)],
+      logIndex: '0xb2',
+    };
+    const receipt = withLogs([...receiptJson.logs, { ...elsewhere, data: pad(toHex(10_000n)) }]);
+    expect(await confirmBundle(served({ receipt }))).toMatchObject({ amount: 25_000n });
+  });
+
+  it('refuses a reverted bundle', async () => {
+    expect(await confirmBundle(served({ receipt: { ...receiptJson, status: '0x0' } }))).toBeUndefined();
   });
 });
