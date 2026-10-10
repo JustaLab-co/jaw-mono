@@ -24,7 +24,16 @@ import { useTestDb } from '@/db/test-db';
 import { safeFetch } from '@/lib/safe-fetch';
 import { oneOffRow } from './one-off';
 import { pay, type PayDeps } from './pay';
-import { claim, entriesFor, findPayment, finish, holdingRows, pulledUnderOtherGrants, take } from './store';
+import {
+  assertOwned,
+  claim,
+  entriesFor,
+  findPayment,
+  finish,
+  holdingRows,
+  pulledUnderOtherGrants,
+  take,
+} from './store';
 
 const USDC: Address = '0x036CbD53842c5426634e7929541eC2318f3dCF7e';
 const PAY_TO: Address = '0x2222222222222222222222222222222222222222';
@@ -526,5 +535,48 @@ describe('what the agent can see and resend', () => {
 
     expect(seen).toHaveLength(asked);
     expect(await rowFor(id)).toMatchObject({ state: 'failed', code: 'unreachable' });
+  });
+
+  it('given chain_unavailable before signing, when jaw_history lists the row, then it reads failed', async () => {
+    const c = await connect(undefined, { scope: 'wallet:read x402:pay' });
+    const t = (await verifyBearer(c.access_token))?.extra?.tenant as Tenant;
+    await grantBudget(c, '1');
+    const down: PayDeps = { ...deps(), readPermission: async () => ({ status: 'unavailable' }) };
+    await pay(t, { url: url('/listed'), idempotencyKey: 'k-listed' }, down);
+
+    const listed = await callTool(c.access_token, 'jaw_history', {});
+
+    expect(listed.structuredContent.payments).toMatchObject([{ state: 'failed', code: 'chain_unavailable' }]);
+  });
+
+  it('given a row an earlier attempt topped up, when a retry is refused before signing, then the refusal is final', async () => {
+    const c = await connect(undefined, { scope: 'wallet:read x402:pay' });
+    const t = (await verifyBearer(c.access_token))?.extra?.tenant as Tenant;
+    const permissionId = await grantBudget(c, '1');
+    const request = { url: url('/topped'), idempotencyKey: 'k-topped' };
+    const who = { connectionId: t.connectionId, payer: t.sessionAddress, permissionId };
+    const first = await claim(who, 'k-topped', { url: request.url, method: 'GET', headers: {} });
+    if (first.kind !== 'run') throw new Error(first.kind);
+    await getDb()
+      .update(payments)
+      .set({ topUpAmount: '105000', leaseUntil: lapsed })
+      .where(eq(payments.id, first.row.id));
+
+    const down: PayDeps = { ...deps(), readPermission: async () => ({ status: 'unavailable' }) };
+    const retried = await pay(t, request, down);
+
+    expect(retried.structuredContent?.refusal?.code).toBe('chain_unavailable');
+    expect(await findPayment(first.row.id)).toMatchObject({ state: 'failed', topUpAmount: '105000' });
+  });
+
+  it('given a call that concluded a retryable refusal, when it writes to the row again, then it no longer owns it', async () => {
+    const c = await connect(undefined, { scope: 'wallet:read x402:pay' });
+    const t = (await verifyBearer(c.access_token))?.extra?.tenant as Tenant;
+    const who = { connectionId: t.connectionId, payer: t.sessionAddress, permissionId: await grantBudget(c, '1') };
+    const first = await claim(who, randomUUID(), { url: url('/late'), method: 'GET', headers: {} });
+    if (first.kind !== 'run') throw new Error(first.kind);
+    await finish(first.row.id, first.token, { state: 'pending', kind: 'refused', code: 'chain_unavailable' }, []);
+
+    await expect(assertOwned(getDb(), first.row.id, first.token)).rejects.toThrow('no longer held');
   });
 });

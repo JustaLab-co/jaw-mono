@@ -143,28 +143,35 @@ function fencedOf(url: string, o: Outcome): string[] {
 // again; a refill that threw may have moved money that no trace shows.
 const FINAL_UNSIGNED = new Set(['budget_exhausted', 'funding_failed']);
 
-/** Where the outcome leaves a row. `signed` says whether an authorization for it exists. */
-function conclusionOf(o: Outcome, signed: boolean, settled: Settled | undefined): Conclusion {
-  if (o.kind === 'unreached') return { state: signed ? 'unknown' : 'pending', kind: 'refused', code: o.code };
+/**
+ * Where the outcome leaves a row. `signed` says whether an authorization for it
+ * exists; `movedBefore`, whether an earlier attempt on the row moved money.
+ */
+function conclusionOf(o: Outcome, signed: boolean, settled: Settled | undefined, movedBefore: boolean): Conclusion {
   const traces = {
     topUp: 'topUp' in o ? o.topUp : undefined,
     approvalBatchId: 'permit2Approval' in o ? o.permit2Approval?.batchId : undefined,
   };
+  const retry =
+    !movedBefore &&
+    !traces.topUp &&
+    !traces.approvalBatchId &&
+    !(o.kind === 'refused' && FINAL_UNSIGNED.has(o.refusal.code));
+  const refused = signed ? 'unknown' : retry ? 'pending' : 'failed';
+  if (o.kind === 'unreached') return { state: refused, kind: 'refused', code: o.code };
   switch (o.kind) {
     case 'free':
     case 'would-pay':
       return { state: 'settled', kind: 'free', httpStatus: o.status };
-    case 'refused': {
-      const retry = !traces.topUp && !traces.approvalBatchId && !FINAL_UNSIGNED.has(o.refusal.code);
+    case 'refused':
       // Refused after signing: the proof may have left in a call that crashed. Only the chain can say.
       return {
-        state: signed ? 'unknown' : retry ? 'pending' : 'failed',
+        state: refused,
         kind: 'refused',
         code: o.refusal.code,
         httpStatus: o.status,
         ...traces,
       };
-    }
     case 'failed':
       return {
         state: o.refusal.code === 'no_response' ? 'signed' : 'unknown',
@@ -304,7 +311,8 @@ export async function concludeSend(
 ): Promise<{ row: PaymentRow; fenced: string[] }> {
   const checked = await claimedHashOnly(outcome, row.id);
   const settled = opts.confirmWith ? await settledBy(checked, opts.signedAt, opts.confirmWith) : undefined;
-  const conclusion = conclusionOf(checked, opts.signed, settled);
+  const movedBefore = Boolean(row.topUpAmount || row.topUpBatchId || row.approvalBatchId);
+  const conclusion = conclusionOf(checked, opts.signed, settled, movedBefore);
   const fenced = fencedOf(row.url, outcome);
   const written = await finish(row.id, token, conclusion, fenced);
   return { row: written ?? (await rowAfter(row, conclusion)), fenced };
@@ -326,7 +334,7 @@ export async function resend(
   // A refused resend says nothing about the first send, which the chain or a live first call settles.
   if (outcome.kind !== 'paid') {
     await release(row.id, token);
-    return render(merged(row, conclusionOf(outcome, true, undefined)), fencedOf(row.url, outcome));
+    return render(merged(row, conclusionOf(outcome, true, undefined, false)), fencedOf(row.url, outcome));
   }
   const done = await concludeSend(row, token, outcome, { signed: true, signedAt: row.signedAt as Date, confirmWith });
   return render(done.row, done.fenced);

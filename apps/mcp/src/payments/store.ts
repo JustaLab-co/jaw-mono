@@ -64,6 +64,10 @@ interface Owner {
   permissionId: string | undefined;
 }
 
+/** What a row reads as outside: a refused row is kept pending only so its key can run again. */
+export const stateOf = (row: Pick<PaymentRow, 'state' | 'kind'>): PaymentState =>
+  row.state === 'pending' && row.kind !== null ? 'failed' : row.state;
+
 export async function findPayment(id: string): Promise<PaymentRow | undefined> {
   const [row] = await getDb().select().from(payments).where(eq(payments.id, id));
   return row;
@@ -80,13 +84,13 @@ async function find(connectionId: string, key: string): Promise<LeasedRow | unde
 /** The only way a call gets to send a row: once its lease lapsed and no reconciler run holds it. */
 export async function take(
   row: PaymentRow,
-  set: Partial<Pick<PaymentRow, 'permissionId'>> = {}
+  permissionId?: string
 ): Promise<{ row: PaymentRow; token: string } | undefined> {
   const token = randomBytes(16).toString('base64url');
   const fresh = row.state === 'pending' ? { kind: null, code: null, httpStatus: null, reserved: null } : {};
   const [taken] = await getDb()
     .update(payments)
-    .set({ ...fresh, ...set, leaseToken: token, leaseUntil: leaseFromNow })
+    .set({ ...fresh, ...(permissionId && { permissionId }), leaseToken: token, leaseUntil: leaseFromNow })
     .where(
       and(
         eq(payments.id, row.id),
@@ -142,7 +146,7 @@ export async function claim(owner: Owner, key: string, request: PaymentRequest):
     return taken ? { kind: 'resume', ...taken } : { kind: 'busy' };
   }
   if (!owner.permissionId) return { kind: 'no_grant' };
-  const taken = await take(row, { permissionId: owner.permissionId });
+  const taken = await take(row, owner.permissionId);
   return taken ? { kind: 'run', ...taken } : { kind: 'busy' };
 }
 
@@ -163,7 +167,7 @@ export async function findByApproval(approvalId: string): Promise<LeasedRow | un
 }
 
 const owned = (id: string, token: string) =>
-  and(eq(payments.id, id), eq(payments.state, 'pending'), eq(payments.leaseToken, token));
+  and(eq(payments.id, id), eq(payments.state, 'pending'), eq(payments.leaseToken, token), leaseLive);
 
 /** The `onSigned` hook. Throws when the row is no longer this call's, so nothing is sent. */
 export async function markSigned(id: string, token: string, a: SignedAuthorization): Promise<void> {

@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import type { PaymentRow } from './store';
+import { stateOf, type PaymentRow } from './store';
 
 const money = z.object({ amount: z.string(), asset: z.string().describe('CAIP-19 asset id') });
 
@@ -82,8 +82,7 @@ export function render(row: PaymentRow, fenced: string[], oneOff?: OneOffOffer):
   const out = {
     paymentId: row.id,
     idempotencyKey: row.idempotencyKey,
-    // A refused row is kept pending only so the same key can run again; to the agent it failed.
-    state: row.state === 'pending' && row.kind !== null ? 'failed' : row.state,
+    state: stateOf(row),
     kind: row.kind ?? 'failed',
     httpStatus: row.httpStatus,
     ...(row.nonce && {
