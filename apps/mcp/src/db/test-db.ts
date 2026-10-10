@@ -7,7 +7,7 @@ import { migrate } from 'drizzle-orm/pglite/migrator';
 import { drizzle as drizzlePg } from 'drizzle-orm/postgres-js';
 import { migrate as migratePg } from 'drizzle-orm/postgres-js/migrator';
 import postgres from 'postgres';
-import { getDb, setDb, type Db } from './client';
+import { floatHolder, getDb, setDb, type Db } from './client';
 import * as schema from './schema';
 
 const migrationsFolder = join(__dirname, '../../drizzle');
@@ -16,7 +16,7 @@ export async function useTestDb(): Promise<PGlite> {
   const client = new PGlite();
   const db = drizzle(client, { schema });
   await migrate(db, { migrationsFolder });
-  setDb(db as unknown as Db);
+  setDb(db as unknown as Db, 'pglite');
   return client;
 }
 
@@ -45,7 +45,7 @@ export async function useTestPostgres(): Promise<() => Promise<void>> {
     await teardown();
     throw e;
   });
-  setDb(db);
+  setDb(db, { url: url.href });
   return teardown;
 }
 
@@ -55,6 +55,7 @@ export async function useTestPostgres(): Promise<() => Promise<void>> {
  */
 export async function withRoleStatementTimeout(value: string): Promise<() => Promise<void>> {
   const previous = getDb();
+  const previousHolder = floatHolder();
   const [{ db }] = await previous.execute<{ db: string }>(sql`select current_database() as db`);
   const url = new URL(TEST_PG_URL as string);
   url.pathname = `/${db}`;
@@ -68,9 +69,9 @@ export async function withRoleStatementTimeout(value: string): Promise<() => Pro
   await probe.end();
   await setRole(value);
   const client = postgres(url.href, { max: 10, onnotice: () => {} });
-  setDb(drizzlePg(client, { schema }));
+  setDb(drizzlePg(client, { schema }), { url: url.href });
   return async () => {
-    setDb(previous);
+    setDb(previous, previousHolder);
     await client.end();
     await setRole(before);
   };

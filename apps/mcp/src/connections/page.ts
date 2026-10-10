@@ -7,7 +7,7 @@ import { auditEvents, connections, grants } from '@/db/schema';
 import { outstandingRevokes } from '@/grants/store';
 import { publicClientFor, verifyOnChain, type VerifySignature } from '@/lib/chain';
 import { errorLabel, log } from '@/lib/edge';
-import { LOCK_WAIT_MS, lockFloat, lockTimedOut } from '@/payments/float-lock';
+import { FloatBusy, LOCK_WAIT_MS, withFloat } from '@/payments/float-lock';
 import { config } from './config';
 import { endConnection, ownedBy, type ConnectionRow } from './rows';
 
@@ -125,12 +125,11 @@ export async function revokeFromPage(
   if (found.status !== 'revoked') {
     try {
       // After the funding turn in flight, so the float read below includes its refill.
-      row = await getDb().transaction(async (tx) => {
-        await lockFloat(tx, id, deps.lockWaitMs ?? LOCK_WAIT_MS);
-        return endConnection(id, account, now, tx);
-      });
+      row = await withFloat(id, deps.lockWaitMs ?? LOCK_WAIT_MS, (hold) =>
+        hold.tx((tx) => endConnection(id, account, now, tx))
+      );
     } catch (err) {
-      if (lockTimedOut(err)) return { kind: 'busy' };
+      if (err instanceof FloatBusy) return { kind: 'busy' };
       throw err;
     }
   }

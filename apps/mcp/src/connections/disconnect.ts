@@ -21,11 +21,10 @@ import { chainClients } from '@/adapters/session-host';
 import { rpcUrl } from '@/approvals/bundler';
 import { readOnChain, type ReadPermission } from '@/approvals/page-api';
 import { refusal } from '@/approvals/tools';
-import { getDb, type Tx } from '@/db/client';
 import { grants } from '@/db/schema';
 import { isPaymentsPaused } from '@/db/settings';
 import { errorLabel, log } from '@/lib/edge';
-import { LOCK_WAIT_MS, lockFloat, lockTimedOut } from '@/payments/float-lock';
+import { FloatBusy, LOCK_WAIT_MS, withFloat, type FloatHold } from '@/payments/float-lock';
 import { stillHeld } from '@/payments/refill';
 import { holdingRows } from '@/payments/store';
 import type { Tenant } from './auth';
@@ -48,6 +47,7 @@ export interface DisconnectDeps {
   readPermission: ReadPermission;
   clients: ChainClients;
   sender: (t: Tenant) => Promise<SessionSender>;
+  lockWaitMs?: number;
 }
 
 export const disconnectOutput = z.object({
@@ -135,6 +135,7 @@ interface Returned {
   swept: bigint;
   txHash: Hex | null;
   left: bigint | null;
+  seenRevoked: Hex[];
 }
 
 /**
@@ -147,14 +148,18 @@ export async function disconnect(t: Tenant, deps = DEFAULTS): Promise<Reply> {
   if (await isPaymentsPaused()) return refusal(REFUSALS.paused);
   let outcome: Returned | string;
   try {
-    outcome = await getDb().transaction(async (tx) => {
-      await lockFloat(tx, t.connectionId, LOCK_WAIT_MS);
-      const returned = await returnFunds(tx, t, deps);
-      if (typeof returned !== 'string') await endConnection(t.connectionId, t.account, new Date(), tx);
+    outcome = await withFloat(t.connectionId, deps.lockWaitMs ?? LOCK_WAIT_MS, async (hold) => {
+      const returned = await returnFunds(hold, t, deps);
+      if (typeof returned === 'string') return returned;
+      await hold.tx(async (tx) => {
+        const ids = [...returned.revoked, ...returned.seenRevoked];
+        if (ids.length) await tx.update(grants).set({ revokedAt: new Date() }).where(inArray(grants.permissionId, ids));
+        await endConnection(t.connectionId, t.account, new Date(), tx);
+      });
       return returned;
     });
   } catch (err) {
-    if (lockTimedOut(err)) return refusal(REFUSALS.busy);
+    if (err instanceof FloatBusy) return refusal(REFUSALS.busy);
     throw err;
   }
   if (typeof outcome === 'string') return refusal(outcome);
@@ -186,13 +191,15 @@ function summarize(t: Tenant, r: Returned): string {
   return said.join(' ');
 }
 
-async function returnFunds(tx: Tx, t: Tenant, deps: DisconnectDeps): Promise<Returned | string> {
+async function returnFunds(hold: FloatHold, t: Tenant, deps: DisconnectDeps): Promise<Returned | string> {
   const usdc = usdcForNetwork(`eip155:${t.chainId}`);
   if (!usdc) return REFUSALS.chain;
-  const live = await tx
-    .select()
-    .from(grants)
-    .where(and(eq(grants.connectionId, t.connectionId), isNull(grants.revokedAt), gt(grants.expiresAt, sql`now()`)));
+  const live = await hold.tx((tx) =>
+    tx
+      .select()
+      .from(grants)
+      .where(and(eq(grants.connectionId, t.connectionId), isNull(grants.revokedAt), gt(grants.expiresAt, sql`now()`)))
+  );
 
   const revokes: { permissionId: Hex; call: SessionCall }[] = [];
   const seenRevoked: Hex[] = [];
@@ -210,10 +217,6 @@ async function returnFunds(tx: Tx, t: Tenant, deps: DisconnectDeps): Promise<Ret
     const data = encodeFunctionData({ abi: PERMISSION_MANAGER_ABI, functionName: 'revokeAsSpender', args: [struct] });
     revokes.push({ permissionId: g.permissionId as Hex, call: { to: PERMISSIONS_MANAGER_ADDRESS, data } });
   }
-  const recordRevoked = async (ids: Hex[]) => {
-    if (ids.length) await tx.update(grants).set({ revokedAt: new Date() }).where(inArray(grants.permissionId, ids));
-  };
-
   // The balance and the nonces it is netted against are read at one block, as the refill does.
   const client = deps.clients.publicClient(t.chainId);
   const balanceAt = (blockNumber?: bigint) =>
@@ -227,17 +230,14 @@ async function returnFunds(tx: Tx, t: Tenant, deps: DisconnectDeps): Promise<Ret
   const block = await client.getBlockNumber().catch(() => undefined);
   const float = await balanceAt(block).catch(() => undefined);
   if (float === undefined) return REFUSALS.chain;
-  const held = await stillHeld(await holdingRows(tx, t.sessionAddress, ''), deps.clients, block);
+  const held = await stillHeld(await hold.tx((tx) => holdingRows(tx, t.sessionAddress, '')), deps.clients, block);
   const free = float > held ? float - held : 0n;
   const transfer = (amount: bigint): SessionCall => ({
     to: usdc.address,
     data: encodeFunctionData({ abi: erc20Abi, functionName: 'transfer', args: [t.account, amount] }),
   });
-  const nothingSent = { revoked: [], swept: 0n, txHash: null, left: float };
-  if (revokes.length === 0 && free === 0n) {
-    await recordRevoked(seenRevoked);
-    return { ...nothingSent, stillApproved: [] };
-  }
+  const nothingSent = { revoked: [], swept: 0n, txHash: null, left: float, seenRevoked };
+  if (revokes.length === 0 && free === 0n) return { ...nothingSent, stillApproved: [] };
 
   const sender = await deps.sender(t).catch((err) => {
     log('error', { msg: 'disconnect sender unavailable', error: errorLabel(err) });
@@ -270,17 +270,16 @@ async function returnFunds(tx: Tx, t: Tenant, deps: DisconnectDeps): Promise<Ret
   });
   // What payments hold is not the payer's to spend on fees, so a payer that cannot
   // cover the fee leaves the budgets to the owner's page.
-  const leaveToOwner = async () => {
-    await recordRevoked(seenRevoked);
-    return { ...nothingSent, stillApproved: revokes.map((r) => r.permissionId) };
-  };
+  const leaveToOwner = () => ({ ...nothingSent, stillApproved: revokes.map((r) => r.permissionId) });
   if (free <= reserve) return leaveToOwner();
 
-  const sendWith = (cap: bigint) =>
-    sender.send(batch(free - cap, cap)).catch((err) => {
+  const sendWith = (cap: bigint) => {
+    hold.assertHeld();
+    return sender.send(batch(free - cap, cap)).catch((err) => {
       log('error', { msg: 'disconnect batch not sent', error: errorLabel(err) });
       return undefined;
     });
+  };
   let swept = free - reserve;
   let sent = await sendWith(reserve);
   // A fee over the reserve reverts with nothing moved; one more try at the ceiling.
@@ -295,7 +294,6 @@ async function returnFunds(tx: Tx, t: Tenant, deps: DisconnectDeps): Promise<Ret
   if (sent.status !== 'landed') return REFUSALS[sent.status];
 
   const revoked = revokes.map((r) => r.permissionId);
-  await recordRevoked([...revoked, ...seenRevoked]);
   const left = await balanceAt().catch(() => null);
-  return { revoked, stillApproved: [], swept, txHash: sent.txHash, left };
+  return { revoked, stillApproved: [], swept, txHash: sent.txHash, left, seenRevoked };
 }

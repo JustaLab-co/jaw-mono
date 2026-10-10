@@ -31,7 +31,7 @@ import {
 } from '@/db/test-db';
 import { safeFetch } from '@/lib/safe-fetch';
 import { pay, type PayDeps } from './pay';
-import { lockFloat } from './float-lock';
+import { withFloat } from './float-lock';
 import { SEND_RESERVE_MS, stillHeld } from './refill';
 import { claim, holdingRows, PAY_LIMIT_MS } from './store';
 
@@ -48,6 +48,7 @@ const PRICES: Record<string, string> = {
   '/unconfirmed': '5000',
   '/sametx': '5000',
   '/race': '5000',
+  '/upto': '5000',
 };
 const seen: { path: string; nonce: Hex; signature: Hex }[] = [];
 const receipts = new Map<Hex, { from: Address; nonce: Hex }>();
@@ -69,13 +70,13 @@ const seller = createServer(async (req, res) => {
       resource: { url: `http://${req.headers.host}${path}` },
       accepts: [
         {
-          scheme: 'exact',
+          scheme: path === '/upto' ? 'upto' : 'exact',
           network: 'eip155:84532',
           amount: PRICES[path],
           asset: USDC,
           payTo: PAY_TO,
           maxTimeoutSeconds: 300,
-          extra: { name: 'USDC', version: '2' },
+          extra: { name: 'USDC', version: '2', facilitatorAddress: PAY_TO },
         },
       ],
     };
@@ -132,6 +133,7 @@ const node = {
   }) => {
     reads.push({ functionName, blockNumber });
     if (functionName === 'balanceOf') return balanceOf(args[0] as string);
+    if (functionName === 'allowance') return 0n;
     if (functionName === 'authorizationState') return used.has(String(args[1]).toLowerCase());
     throw new Error('this node only knows balances and nonces');
   },
@@ -237,12 +239,10 @@ const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 // session is the one shared connection, so a pay holding its transaction blocks it too.
 const lockFreeWithin = (connectionId: string, ms: number) =>
   Promise.race([
-    getDb()
-      .transaction((tx) => lockFloat(tx, connectionId, ms))
-      .then(
-        () => true,
-        () => false
-      ),
+    withFloat(connectionId, ms, async () => undefined).then(
+      () => true,
+      () => false
+    ),
     sleep(ms + 1_000).then(() => false),
   ]);
 const rowOf = async (id: string) => (await getDb().select().from(payments).where(eq(payments.id, id)))[0];
@@ -346,6 +346,26 @@ describe('jaw_pay_and_fetch', () => {
       moneyMoved: true,
     });
     expect(await rowOf(result.structuredContent!.paymentId)).toMatchObject({ topUpAmount: '105000' });
+  });
+
+  it('holds no reservation while the refill waits on the chain, so a refill killed there leaves none', async () => {
+    const { t } = await connected('1');
+    const reservedDuringWait: (string | null)[] = [];
+    const watching = (funder: Address): TopUpExecutor => ({
+      request: async (method, params) => {
+        const [row] = await getDb().select().from(payments).where(eq(payments.idempotencyKey, 'chain-wait'));
+        reservedDuringWait.push(row.reserved);
+        return executor(funder).request(method, params);
+      },
+    });
+    const result = await pay(
+      t,
+      { url: url('/exact'), idempotencyKey: 'chain-wait' },
+      deps({ executor: (_t, grant) => watching(grant.account) })
+    );
+    expect(result.structuredContent).toMatchObject({ kind: 'paid', moneyMoved: true });
+    expect(reservedDuringWait.length).toBeGreaterThan(0);
+    expect(reservedDuringWait.every((reserved) => reserved === null)).toBe(true);
   });
 
   it('refills to the float target, so the next payments need no refill', async () => {
@@ -579,11 +599,12 @@ describe('jaw_pay_and_fetch', () => {
 describe('given a pay request that verified its bearer before the connection was disconnected', () => {
   // What jaw_disconnect does once its batch landed: end the connection under the float lock.
   const disconnect = (t: Tenant, held?: bigint[]) => () =>
-    getDb().transaction(async (tx) => {
-      await lockFloat(tx, t.connectionId, 1_000);
-      if (held) held.push(await stillHeld(await holdingRows(tx, t.sessionAddress, randomUUID()), clients, 77n));
-      await endConnection(t.connectionId, t.account, new Date(), tx);
-    });
+    withFloat(t.connectionId, 1_000, (hold) =>
+      hold.tx(async (tx) => {
+        if (held) held.push(await stillHeld(await holdingRows(tx, t.sessionAddress, randomUUID()), clients, 77n));
+        await endConnection(t.connectionId, t.account, new Date(), tx);
+      })
+    );
 
   it('when its refill turn comes after the disconnect committed, then it refuses, reserves nothing and signs nothing', async () => {
     const { t } = await connected('1');
@@ -682,14 +703,13 @@ describe.skipIf(!TEST_PG_URL)('on Postgres, given a disconnect that holds the fl
     let locked!: () => void;
     const holding = new Promise<void>((r) => (locked = r));
     let parked = 0;
-    const disconnecting = getDb().transaction(async (tx) => {
-      await lockFloat(tx, t.connectionId, 1_000);
+    const disconnecting = withFloat(t.connectionId, 1_000, async (hold) => {
       locked();
       for (let i = 0; i < 100 && parked === 0; i++) {
         await sleep(50);
         parked = await lockWaiters(t.connectionId);
       }
-      await endConnection(t.connectionId, t.account, new Date(), tx);
+      await hold.tx((tx) => endConnection(t.connectionId, t.account, new Date(), tx));
     });
     await holding;
     const paying = pay(t, { url: url('/race'), idempotencyKey: 'race-lock' }, deps());
@@ -707,6 +727,104 @@ describe.skipIf(!TEST_PG_URL)('on Postgres, given a disconnect that holds the fl
   });
 });
 
+describe.skipIf(!TEST_PG_URL)('on Postgres, given ten connections refilling at once', () => {
+  it('when another tenant checks its bearer during their chain wait, then it answers in under 1 s and all ten pay', async () => {
+    const payers = await Promise.all(Array.from({ length: 10 }, () => connected('1')));
+    const bystander = await connected();
+    let started = 0;
+    const slow = (funder: Address): TopUpExecutor => ({
+      request: async (method, params) => {
+        if (method !== 'wallet_getCallsStatus') {
+          started++;
+          await sleep(4_000);
+        }
+        return executor(funder).request(method, params);
+      },
+    });
+    const paying = Promise.all(
+      payers.map(({ t }, i) =>
+        pay(
+          t,
+          { url: url('/race'), idempotencyKey: `pool-${i}` },
+          deps({ executor: (_t, grant) => slow(grant.account) })
+        )
+      )
+    );
+    for (let i = 0; i < 100 && started < 10; i++) await sleep(50);
+    const t0 = Date.now();
+    await verifyBearer(bystander.c.access_token);
+    const waited = Date.now() - t0;
+    const results = await paying;
+    expect(started).toBe(10);
+    expect(results.map((r) => r.structuredContent?.kind)).toEqual(Array(10).fill('paid'));
+    expect(waited).toBeLessThan(1_000);
+  });
+});
+
+describe.skipIf(!TEST_PG_URL)('on Postgres, given a refill whose lock session drops before it sends', () => {
+  it('when the refill reaches the send, then it moves no money and the pay does not end paid', async () => {
+    const { t } = await connected('1');
+    let dropped = false;
+    const dropping: ChainClients = {
+      publicClient: () =>
+        ({
+          ...node,
+          getBlockNumber: async () => {
+            if (!dropped) {
+              dropped = true;
+              await getDb().execute(sql`select pg_terminate_backend(pid) from pg_locks
+                where locktype = 'advisory' and granted
+                  and ((classid::bigint << 32) | objid::bigint) = hashtext(${`refill:${t.connectionId}`})`);
+              await sleep(200);
+            }
+            return node.getBlockNumber();
+          },
+        }) as unknown as PublicClient,
+    };
+    const result = await pay(t, { url: url('/race'), idempotencyKey: 'holder-dropped' }, deps({ clients: dropping }));
+    expect(dropped).toBe(true);
+    expect(result.structuredContent?.kind).not.toBe('paid');
+    expect(refills).toEqual([]);
+    expect(seen).toHaveLength(0);
+  });
+});
+
+describe.skipIf(!TEST_PG_URL)(
+  'on Postgres, given an upto refill whose lock session drops while the top-up confirms',
+  () => {
+    it('when the Permit2 approval comes next, then it is never sent and the pay does not end paid', async () => {
+      const { t } = await connected('1');
+      let dropped = false;
+      const approvals: string[] = [];
+      const dropping = (funder: Address): TopUpExecutor => ({
+        request: async (method, params) => {
+          if (method === 'wallet_getCallsStatus' && !dropped) {
+            dropped = true;
+            await getDb().execute(sql`select pg_terminate_backend(pid) from pg_locks
+            where locktype = 'advisory' and granted
+              and ((classid::bigint << 32) | objid::bigint) = hashtext(${`refill:${t.connectionId}`})`);
+            await sleep(200);
+          }
+          return executor(funder).request(method, params);
+        },
+        approvePermit2: async (token) => {
+          approvals.push(token);
+          return '0xapproval';
+        },
+      });
+      const result = await pay(
+        t,
+        { url: url('/upto'), idempotencyKey: 'holder-dropped-upto' },
+        deps({ executor: (_t, grant) => dropping(grant.account) })
+      );
+      expect(dropped).toBe(true);
+      expect(refills).toHaveLength(1);
+      expect(approvals).toEqual([]);
+      expect(result.structuredContent?.kind).not.toBe('paid');
+    });
+  }
+);
+
 describe.skipIf(!TEST_PG_URL)('on Postgres with a 1 s role statement_timeout', () => {
   beforeAll(() => withRoleStatementTimeout('1s'));
 
@@ -716,8 +834,7 @@ describe.skipIf(!TEST_PG_URL)('on Postgres with a 1 s role statement_timeout', (
     const released = new Promise<void>((r) => (release = r));
     let locked!: () => void;
     const held = new Promise<void>((r) => (locked = r));
-    const done = getDb().transaction(async (tx) => {
-      await lockFloat(tx, connectionId, 1_000);
+    const done = withFloat(connectionId, 1_000, async () => {
       locked();
       await released;
     });
@@ -784,15 +901,12 @@ describe.skipIf(!TEST_PG_URL)('on Postgres with a 1 s role statement_timeout', (
   });
 
   it('given the float lock was taken, when the next statement runs past the role limit, then it is canceled', async () => {
-    const code = await getDb()
-      .transaction(async (tx) => {
-        await lockFloat(tx, randomUUID(), 5_000);
-        await tx.execute(sql`select pg_sleep(1.5)`);
-      })
-      .then(
-        () => 'finished',
-        (e: { code?: string; cause?: { code?: string } }) => e.code ?? e.cause?.code
-      );
+    const code = await withFloat(randomUUID(), 5_000, (hold) =>
+      hold.tx((tx) => tx.execute(sql`select pg_sleep(1.5)`))
+    ).then(
+      () => 'finished',
+      (e: { code?: string; cause?: { code?: string } }) => e.code ?? e.cause?.code
+    );
     expect(code).toBe('57014');
   });
 });

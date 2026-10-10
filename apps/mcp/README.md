@@ -26,6 +26,8 @@ Migrations run at start and are safe to run from several instances at once.
 
 Migrations must run as the app role, over a direct connection to Postgres, not through a transaction-mode pooler such as PgBouncer or the Supabase pooler on port 6543. Migration `0011` sets `statement_timeout` for the current role in the current database, so a different role leaves the app database unbounded. The runner also relies on session state, `set statement_timeout = 0` and `pg_advisory_lock`, which a transaction-mode pooler can move to another backend between statements, so the lock and the timeout reset stop holding. `GET /api/health` answers `{ db, paused }`, and 503 when Postgres is unreachable.
 
+Each instance opens up to 26 Postgres sessions: a pool of 10 for requests, plus one session per refill or disconnect in progress, at most 16, which holds that connection's funding lock while it waits on the chain. Size `max_connections`, or the pooler in front of Postgres, for 26 per instance.
+
 ## Tests
 
 `bunx nx test @jaw-mono/mcp` runs on PGlite, which runs one transaction at a time, so it cannot show a lock race. `test-pg` runs every `*.test.ts` file under `src` that references `TEST_PG_URL` (`beforeAll(TEST_PG_URL ? useTestPostgres : useTestDb)`), so a new file opts in by importing it on a real Postgres, one fresh database per file, plus the tests under `describe.skipIf(!TEST_PG_URL)`. CI runs it against a `postgres:17` service. Locally:
