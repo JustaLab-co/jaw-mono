@@ -410,6 +410,7 @@ describe('what the agent can see and resend', () => {
 
     const first = await pay(t, request, down);
     expect(first.structuredContent?.refusal?.code).toBe('chain_unavailable');
+    expect(first.content[0].text).toContain('Send the same idempotencyKey again to retry.');
     const retried = await pay(t, request, deps());
 
     expect(retried.structuredContent?.refusal?.code).not.toBe('chain_unavailable');
