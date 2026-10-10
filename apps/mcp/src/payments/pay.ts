@@ -140,13 +140,21 @@ function fencedOf(url: string, o: Outcome): string[] {
 }
 
 const ONE_OFF = new Set(['budget_exhausted', 'over_cap']);
-const FINAL_UNSIGNED = new Set([...ONE_OFF, 'funding_failed']);
+// Final even unsigned: a one-off offer, which a retry would open again; a refill
+// that threw may have moved money that no trace shows.
+const FINAL_UNSIGNED = new Set(['budget_exhausted', 'funding_failed']);
 
 /**
  * Where the outcome leaves a row. `signed` says whether an authorization for it
  * exists; `movedBefore`, whether an earlier attempt on the row moved money.
  */
-function conclusionOf(o: Outcome, signed: boolean, settled: Settled | undefined, movedBefore: boolean): Conclusion {
+function conclusionOf(
+  o: Outcome,
+  signed: boolean,
+  settled: Settled | undefined,
+  movedBefore: boolean,
+  offered = false
+): Conclusion {
   const traces = {
     topUp: 'topUp' in o ? o.topUp : undefined,
     approvalBatchId: 'permit2Approval' in o ? o.permit2Approval?.batchId : undefined,
@@ -155,6 +163,7 @@ function conclusionOf(o: Outcome, signed: boolean, settled: Settled | undefined,
     !movedBefore &&
     !traces.topUp &&
     !traces.approvalBatchId &&
+    !offered &&
     !(o.kind === 'refused' && FINAL_UNSIGNED.has(o.refusal.code));
   const refused = signed ? 'unknown' : retry ? 'pending' : 'failed';
   if (o.kind === 'unreached') return { state: refused, kind: 'refused', code: o.code };
@@ -286,15 +295,16 @@ export async function pay(t: Tenant, input: PayInput, deps: PayDeps = liveDeps()
     ? ((await grantLive(grant, deps)) ??
       (await payWithinGrant(t, grant, row, token, request, payer, sent, deps, () => (signed = true))))
     : { kind: 'unreached', code: 'no_grant', reason: 'the budget ended while this payment waited' };
-  const done = await concludeSend(row, token, outcome, {
-    signed,
-    signedAt: new Date(started),
-    confirmWith: deps.clients,
-  });
   const offer =
     outcome.kind === 'refused' && ONE_OFF.has(outcome.refusal.code) && outcome.challenge
       ? await offerOneOff(t, request, outcome.challenge)
       : undefined;
+  const done = await concludeSend(row, token, outcome, {
+    signed,
+    signedAt: new Date(started),
+    confirmWith: deps.clients,
+    offered: offer !== undefined,
+  });
   return render(done.row, done.fenced, offer);
 }
 
@@ -306,12 +316,12 @@ export async function concludeSend(
   row: PaymentRow,
   token: string,
   outcome: Outcome,
-  opts: { signed: boolean; signedAt: Date; confirmWith?: ChainClients }
+  opts: { signed: boolean; signedAt: Date; confirmWith?: ChainClients; offered?: boolean }
 ): Promise<{ row: PaymentRow; fenced: string[] }> {
   const checked = await claimedHashOnly(outcome, row.id);
   const settled = opts.confirmWith ? await settledBy(checked, opts.signedAt, opts.confirmWith) : undefined;
   const movedBefore = Boolean(row.topUpAmount || row.topUpBatchId || row.approvalBatchId);
-  const conclusion = conclusionOf(checked, opts.signed, settled, movedBefore);
+  const conclusion = conclusionOf(checked, opts.signed, settled, movedBefore, opts.offered);
   const fenced = fencedOf(row.url, outcome);
   const written = await finish(row.id, token, conclusion, fenced);
   return { row: written ?? (await rowAfter(row, conclusion)), fenced };

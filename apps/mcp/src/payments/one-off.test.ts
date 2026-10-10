@@ -498,7 +498,7 @@ describe('what the agent can see and resend', () => {
     expect(await findPayment(id)).toMatchObject({ kind: null });
   });
 
-  it('given a maxAmount below the price, when the agent pays, then over_cap with no offer, and a retry replays it', async () => {
+  it('given over_cap before signing, when the price drops and the same key is retried, then it runs again', async () => {
     const c = await connect(undefined, { scope: 'wallet:read x402:pay' });
     const t = (await verifyBearer(c.access_token))?.extra?.tenant as Tenant;
     await grantBudget(c, '1');
@@ -509,8 +509,8 @@ describe('what the agent can see and resend', () => {
     prices.set('/dearer', '3000');
     const retried = await pay(t, request, deps());
 
-    expect(retried.structuredContent?.refusal?.code).toBe('over_cap');
-    expect(seen.filter((s) => s.path === '/dearer')).toHaveLength(1);
+    expect(retried.structuredContent?.refusal?.code).not.toBe('over_cap');
+    expect(seen.filter((s) => s.path === '/dearer')).toHaveLength(2);
   });
 
   it('given a refill that threw, when the same key is retried, then the refusal is replayed and the seller not asked again', async () => {
