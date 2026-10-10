@@ -6,8 +6,8 @@ import { decodeFunctionData, erc20Abi, maxUint256, type Address, type Hex, type 
 import { beforeAll, describe, expect, it, vi } from 'vitest';
 import { getDb } from '@/db/client';
 import { grants, payments, settings } from '@/db/schema';
-import { useTestDb } from '@/db/test-db';
-import { lockFloat } from '@/payments/float-lock';
+import { TEST_PG_URL, useTestDb, useTestPostgres } from '@/db/test-db';
+import { withFloat } from '@/payments/float-lock';
 import { disconnect, type DisconnectDeps, type Sent } from './disconnect';
 import { budgetConnection, callTool, connect, mcp, setTestEnv } from './testkit';
 import { verifyBearer, type Tenant } from './auth';
@@ -349,17 +349,18 @@ describe('given the batch landed but its reply was lost', () => {
   });
 });
 
-describe('given a host that ends transactions left idle', () => {
-  it('when disconnect holds the float lock across two receipt waits, then its transaction outlives them', async () => {
-    const setting = await getDb().transaction(async (tx) => {
-      await lockFloat(tx, 'conn_idle', 1_000);
-      const { rows } = (await tx.execute(
-        sql`select current_setting('idle_in_transaction_session_timeout') as idle`
-      )) as unknown as { rows: { idle: string }[] };
-      return rows[0].idle;
-    });
+describe.skipIf(!TEST_PG_URL)('on Postgres, given a host that ends transactions left idle', () => {
+  beforeAll(useTestPostgres);
 
-    // Two 60 s receipt waits plus the quote, with room to spare.
-    expect(setting).toBe('5min');
+  it('when disconnect holds the float across two receipt waits, then its hold outlives the host limit', async () => {
+    await getDb().execute(
+      sql`do $$ begin execute format('alter database %I set idle_in_transaction_session_timeout = %L', current_database(), '1s'); end $$`
+    );
+    const held = await withFloat('conn_idle', 1_000, async (hold) => {
+      await new Promise((r) => setTimeout(r, 1_500));
+      hold.assertHeld();
+      return true;
+    });
+    expect(held).toBe(true);
   });
 });
