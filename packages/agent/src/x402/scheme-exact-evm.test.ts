@@ -125,10 +125,6 @@ describe('buildExactPayment', () => {
     );
   });
 
-  /**
-   * The two spellings a real server uses round-trip untouched, which is what
-   * lets a facilitator match the payload against its own challenge.
-   */
   it.each([
     [0, 600],
     [1800, 1800],
@@ -142,6 +138,10 @@ describe('buildExactPayment', () => {
     expect(payload.payload.authorization.validBefore).toBe(String(1_000_000 + window));
   });
 
+  /**
+   * The two spellings a real server uses round-trip untouched, which is what
+   * lets a facilitator match the payload against its own challenge.
+   */
   it('echoes a parseable recipient byte for byte', async () => {
     for (const spell of [(a: string) => a, (a: string) => a.toLowerCase()]) {
       const req = { ...requirement, payTo: spell(requirement.payTo) as `0x${string}` };

@@ -2,7 +2,7 @@ import { bytesToHex } from 'viem';
 import { isHexShaped, isPayableAddress, isZeroAddress } from './address.js';
 import type { X402PaymentPayload, X402Permit2Authorization, X402PaymentRequirement } from './types.js';
 import { usdcForNetwork } from './asset-registry.js';
-import { settlementWindow } from './scheme-exact-evm.js';
+import { settlementWindow } from './settlement-window.js';
 import {
   PERMIT_WITNESS_TRANSFER_FROM_TYPES,
   UPTO_VERIFIED_CHAIN_IDS,
