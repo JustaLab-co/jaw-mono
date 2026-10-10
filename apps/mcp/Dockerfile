@@ -15,4 +15,8 @@ COPY --from=build /repo/apps/mcp/.next/static ./apps/mcp/.next/static
 COPY --from=build /repo/apps/mcp/drizzle ./apps/mcp/drizzle
 USER node
 EXPOSE 3000
+# Busybox wget exits non-zero on a 503, which /api/health returns when the
+# config is invalid or the database is down.
+HEALTHCHECK --interval=30s --timeout=5s --start-period=20s --retries=3 \
+  CMD wget -q -O /dev/null "http://127.0.0.1:$PORT/api/health" || exit 1
 CMD ["node", "apps/mcp/server.js"]
