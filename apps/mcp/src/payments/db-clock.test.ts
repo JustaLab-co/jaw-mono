@@ -8,7 +8,7 @@ import { approvalRequests, payments } from '@/db/schema';
 import { countHit } from '@/db/settings';
 import { TEST_PG_URL, useTestPostgres } from '@/db/test-db';
 import { oneOffRow, oneOffStatus, type PaymentApproval } from './one-off';
-import { claim, entriesFor, holdingRows, insertOneOff, LEASE_MS, reclaimOneOff } from './store';
+import { claim, entriesFor, holdingRows, insertOneOff, LEASE_MS, take } from './store';
 
 setTestEnv();
 
@@ -75,12 +75,12 @@ describe.skipIf(!TEST_PG_URL)('on Postgres, a replica whose clock is off by 90 s
     expect((await claim(owner(), key, request)).kind).toBe('busy');
   });
 
-  it('given a lapsed pending row and a replica behind, when it reclaims a one-off, then the new lease runs LEASE_MS', async () => {
+  it('given a lapsed pending row and a replica behind, when it takes the row, then the new lease runs LEASE_MS', async () => {
     const first = await claim(owner(), randomUUID(), request);
     if (first.kind !== 'run') throw new Error(first.kind);
     await lapse(first.row.id);
     onReplica(-SKEW_MS);
-    const taken = await reclaimOneOff(first.row.id);
+    const taken = await take(first.row);
     vi.useRealTimers();
     expect(taken).toBeDefined();
     expect(await leaseLeftMs(first.row.id)).toBeGreaterThan(LEASE_MS - 2_000);

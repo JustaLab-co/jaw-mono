@@ -350,7 +350,7 @@ describe('jaw_pay_and_fetch', () => {
     const { t } = await connected('1');
     const result = await pay(t, { url: target, idempotencyKey: 'ssrf' }, deps());
     expect(result.structuredContent).toMatchObject({ state: 'failed', refusal: { code: 'blocked_url' } });
-    expect(await rowOf(result.structuredContent!.paymentId)).toMatchObject({ state: 'failed', nonce: null });
+    expect(await rowOf(result.structuredContent!.paymentId)).toMatchObject({ state: 'pending', nonce: null });
   });
 
   it('refills only the shortfall plus the gas reserve when the float is empty', async () => {

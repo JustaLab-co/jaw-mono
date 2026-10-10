@@ -36,6 +36,7 @@ import {
   finish,
   txHashTaken,
   markSigned,
+  release,
   PAY_LIMIT_MS,
   type Conclusion,
   type PaymentRequest,
@@ -138,9 +139,14 @@ function fencedOf(url: string, o: Outcome): string[] {
   return fenced;
 }
 
+// Final even unsigned: budget_exhausted carries a one-off offer, which a retry would open
+// again; a refill that threw may have moved money that no trace shows.
+const FINAL_UNSIGNED = new Set(['budget_exhausted', 'funding_failed']);
+
 /** Where the outcome leaves a row. `signed` says whether an authorization for it exists. */
 function conclusionOf(o: Outcome, signed: boolean, settled: Settled | undefined): Conclusion {
-  if (o.kind === 'unreached') return { state: signed ? 'unknown' : 'failed', kind: 'refused', code: o.code };
+  // Nothing signed and nothing moved: the row stays pending, so a retry of the key runs again.
+  if (o.kind === 'unreached') return { state: signed ? 'unknown' : 'pending', kind: 'refused', code: o.code };
   const traces = {
     topUp: 'topUp' in o ? o.topUp : undefined,
     approvalBatchId: 'permit2Approval' in o ? o.permit2Approval?.batchId : undefined,
@@ -149,15 +155,17 @@ function conclusionOf(o: Outcome, signed: boolean, settled: Settled | undefined)
     case 'free':
     case 'would-pay':
       return { state: 'settled', kind: 'free', httpStatus: o.status };
-    case 'refused':
+    case 'refused': {
+      const retry = !traces.topUp && !traces.approvalBatchId && !FINAL_UNSIGNED.has(o.refusal.code);
       // Refused after signing: the proof may have left in a call that crashed. Only the chain can say.
       return {
-        state: signed ? 'unknown' : 'failed',
+        state: signed ? 'unknown' : retry ? 'pending' : 'failed',
         kind: 'refused',
         code: o.refusal.code,
         httpStatus: o.status,
         ...traces,
       };
+    }
     case 'failed':
       return {
         state: o.refusal.code === 'no_response' ? 'signed' : 'unknown',
@@ -265,7 +273,7 @@ export async function pay(t: Tenant, input: PayInput, deps: PayDeps = liveDeps()
   const payer = payerFor(t, deps.clients);
   const sent = { method: request.method, headers: request.headers, body: request.body, budget, fetch: deps.fetch };
 
-  if (claimed.kind === 'resume') return resend(claimed.row, payer, sent, deps.clients);
+  if (claimed.kind === 'resume') return resend(claimed.row, claimed.token, payer, sent, deps.clients);
 
   const { row, token } = claimed;
   let signed = false;
@@ -306,6 +314,7 @@ export async function concludeSend(
 /** A previous call signed for this row and got no answer: the same proof again, under the same key. */
 export async function resend(
   row: PaymentRow,
+  token: string,
   payer: Payer,
   sent: Parameters<typeof payAndFetch>[2],
   confirmWith?: ChainClients
@@ -317,9 +326,10 @@ export async function resend(
   }).catch(thrown);
   // A refused resend says nothing about the first send, which the chain or a live first call settles.
   if (outcome.kind !== 'paid') {
+    await release(row.id, token);
     return render(merged(row, conclusionOf(outcome, true, undefined)), fencedOf(row.url, outcome));
   }
-  const done = await concludeSend(row, '', outcome, { signed: true, signedAt: row.signedAt as Date, confirmWith });
+  const done = await concludeSend(row, token, outcome, { signed: true, signedAt: row.signedAt as Date, confirmWith });
   return render(done.row, done.fenced);
 }
 
