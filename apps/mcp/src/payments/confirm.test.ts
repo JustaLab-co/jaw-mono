@@ -58,6 +58,7 @@ function chain(input: Hex, to: Address = X402_UPTO_PROXY_ADDRESS, moved = 1000n)
   const node = {
     waitForTransactionReceipt: async () => ({
       status: 'success',
+      to,
       blockNumber: 100n,
       logs: [
         {
@@ -128,7 +129,7 @@ describe('confirming an upto payment', () => {
 });
 
 type RpcLog = (typeof receiptJson.logs)[number];
-type World = { receipt: typeof receiptJson; others: RpcLog[]; nonceSetAt: bigint; blockHash: string };
+type World = { receipt: typeof receiptJson; others: RpcLog[]; nonceSetAt: bigint; blockHash: string; down?: string };
 
 const N = BigInt(receiptJson.blockNumber);
 const BLOCK_TIME = '0x6ac9991e';
@@ -156,6 +157,7 @@ function served(over: Partial<World> = {}): ChainClients {
     ...over,
   };
   const request = async ({ method, params }: { method: string; params: unknown[] }) => {
+    if (method === world.down) throw new Error(`${method} unavailable`);
     if (method === 'eth_getTransactionReceipt') return world.receipt;
     if (method === 'eth_getTransactionByHash') return txJson;
     if (method === 'eth_blockNumber') return toHex(N);
@@ -220,6 +222,13 @@ describe('confirming an upto payment settled inside a bundle', () => {
     expect(await confirmBundle(served({ others: [earlier, other] }))).toBeUndefined();
   });
 
+  it('settles when the block only settle is a permit settle in this transaction', async () => {
+    const receipt = withLogs(
+      receiptJson.logs.map((l) => (l === settledLog ? { ...l, topics: [SETTLED_WITH_PERMIT] } : l))
+    );
+    expect(await confirmBundle(served({ receipt }))).toMatchObject({ amount: 20_000n });
+  });
+
   it('refuses when the block only settle is another transaction', async () => {
     const other = { ...settledLog, transactionHash: otherTx, logIndex: '0x01' };
     const unsettled = withLogs(receiptJson.logs.filter((l) => l !== settledLog));
@@ -256,6 +265,14 @@ describe('confirming an upto payment settled inside a bundle', () => {
     };
     const receipt = withLogs([...receiptJson.logs, { ...elsewhere, data: pad(toHex(10_000n)) }]);
     expect(await confirmBundle(served({ receipt }))).toMatchObject({ amount: 25_000n });
+  });
+
+  it('refuses when the nonce cannot be read', async () => {
+    expect(await confirmBundle(served({ down: 'eth_call' }))).toBeUndefined();
+  });
+
+  it('refuses when the block logs cannot be read', async () => {
+    expect(await confirmBundle(served({ down: 'eth_getLogs' }))).toBeUndefined();
   });
 
   it('refuses a reverted bundle', async () => {

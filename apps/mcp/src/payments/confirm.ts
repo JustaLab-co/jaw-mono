@@ -66,8 +66,26 @@ export interface Settled {
   amount: bigint;
 }
 
-function movedIn(receipt: TransactionReceipt, attempt: Attempt, token: Address): bigint | undefined {
+/** USDC the payer sent in this receipt, only to `to` when given, capped at the authorized amount. */
+function paidBy(receipt: TransactionReceipt, attempt: Attempt, token: Address, to?: Address): bigint | undefined {
   let moved: bigint | undefined;
+  for (const entry of receipt.logs) {
+    if (!isAddressEqual(entry.address, token)) continue;
+    let event;
+    try {
+      event = decodeEventLog({ abi: EVENTS, data: entry.data, topics: entry.topics });
+    } catch {
+      continue;
+    }
+    if (event.eventName !== 'Transfer' || !isAddressEqual(event.args.from, attempt.payer)) continue;
+    if (to && !isAddressEqual(event.args.to, to)) continue;
+    moved = (moved ?? 0n) + event.args.value;
+  }
+  return moved === undefined || moved <= attempt.authorized ? moved : attempt.authorized;
+}
+
+function movedIn(receipt: TransactionReceipt, attempt: Attempt, token: Address): bigint | undefined {
+  if (attempt.scheme === 'upto') return paidBy(receipt, attempt, token, attempt.payTo);
   for (const entry of receipt.logs) {
     if (!isAddressEqual(entry.address, token)) continue;
     let event;
@@ -84,16 +102,8 @@ function movedIn(receipt: TransactionReceipt, attempt: Attempt, token: Address):
     ) {
       return attempt.authorized;
     }
-    if (
-      attempt.scheme === 'upto' &&
-      event.eventName === 'Transfer' &&
-      isAddressEqual(event.args.from, attempt.payer) &&
-      isAddressEqual(event.args.to, attempt.payTo)
-    ) {
-      moved = (moved ?? 0n) + event.args.value;
-    }
   }
-  return moved === undefined || moved <= attempt.authorized ? moved : attempt.authorized;
+  return undefined;
 }
 
 const PROXY_EVENTS = parseAbi(['event Settled()', 'event SettledWithPermit()']);
@@ -109,34 +119,28 @@ async function settledInBundle(
   attempt: Attempt,
   token: UsdcAsset,
   clients: ChainClients
-): Promise<bigint | undefined> {
+): Promise<Settled | undefined> {
   const client = clients.publicClient(token.chainId);
   const settles = await client.getLogs({
     address: X402_UPTO_PROXY_ADDRESS,
     events: PROXY_EVENTS,
     blockHash: receipt.blockHash,
   });
-  if (settles.length !== 1 || settles[0].transactionHash !== receipt.transactionHash) return undefined;
+  if (settles.length !== 1 || !sameHash(settles[0].transactionHash, receipt.transactionHash)) return undefined;
   const [before, after] = await Promise.all([
     nonceUsed(attempt, token, clients, receipt.blockNumber - 1n),
     nonceUsed(attempt, token, clients, receipt.blockNumber),
   ]);
   if (before || !after) return undefined;
-  let moved: bigint | undefined;
-  for (const entry of receipt.logs) {
-    if (!isAddressEqual(entry.address, token.address)) continue;
-    let event;
-    try {
-      event = decodeEventLog({ abi: EVENTS, data: entry.data, topics: entry.topics });
-    } catch {
-      continue;
-    }
-    if (event.eventName === 'Transfer' && isAddressEqual(event.args.from, attempt.payer)) {
-      moved = (moved ?? 0n) + event.args.value;
-    }
-  }
-  return moved === undefined || moved <= attempt.authorized ? moved : attempt.authorized;
+  const amount = paidBy(receipt, attempt, token.address);
+  if (amount === undefined) return undefined;
+  const block = await client.getBlock({ blockNumber: receipt.blockNumber });
+  // A reorg after the reads above swaps the block at this height.
+  if (!sameHash(block.hash, receipt.blockHash)) return undefined;
+  return { txHash: receipt.transactionHash, blockTime: new Date(Number(block.timestamp) * 1000), amount };
 }
+
+const sameHash = (a: Hex, b: Hex) => a.toLowerCase() === b.toLowerCase();
 
 export async function confirmByReceipt(
   attempt: Attempt,
@@ -150,16 +154,15 @@ export async function confirmByReceipt(
     const client = clients.publicClient(token.chainId);
     const receipt = await client.waitForTransactionReceipt({ hash: txHash, timeout: timeoutMs, pollingInterval: 500 });
     if (receipt.status !== 'success') return undefined;
-    const tx = attempt.scheme === 'upto' ? await client.getTransaction({ hash: txHash }) : undefined;
-    const bundled = tx !== undefined && (!tx.to || !isAddressEqual(tx.to, X402_UPTO_PROXY_ADDRESS));
-    const amount = bundled
-      ? await settledInBundle(receipt, attempt, token, clients)
-      : movedIn(receipt, attempt, token.address);
+    const bundled = attempt.scheme === 'upto' && (!receipt.to || !isAddressEqual(receipt.to, X402_UPTO_PROXY_ADDRESS));
+    if (bundled) return settledInBundle(receipt, attempt, token, clients);
+    const amount = movedIn(receipt, attempt, token.address);
     if (amount === undefined) return undefined;
-    if (tx && !bundled && settledByProxy(tx, attempt, token.address) !== amount) return undefined;
+    if (attempt.scheme === 'upto') {
+      const settled = settledByProxy(await client.getTransaction({ hash: txHash }), attempt, token.address);
+      if (settled !== amount) return undefined;
+    }
     const block = await client.getBlock({ blockNumber: receipt.blockNumber });
-    // A reorg after the reads above swaps the block at this height.
-    if (bundled && block.hash !== receipt.blockHash) return undefined;
     const blockTime = new Date(Number(block.timestamp) * 1000);
     return { txHash, blockTime, amount };
   };
