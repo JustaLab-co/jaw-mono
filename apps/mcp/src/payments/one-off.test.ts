@@ -167,7 +167,7 @@ describe('a one-off payment after budget_exhausted', () => {
     expect(refused.content[0].text).toContain(`http://keys.test/approve/${id}`);
     expect(view.preview).toMatchObject({ kind: 'payment', amount: '5000', payTo: PAY_TO, resource: url('/report') });
     expect(JSON.stringify(view)).not.toContain('SELLER-SECRET');
-    const before = await entriesFor(permissionId, new Date());
+    const before = await entriesFor(permissionId);
 
     const decided = await decideFromPage(id, post, verifyLocally);
     expect(decided).toMatchObject({ kind: 'ok', view: { status: 'approved', payment: { kind: 'paid' } } });
@@ -188,7 +188,7 @@ describe('a one-off payment after budget_exhausted', () => {
     });
     expect(sent.key).toBe(row.id);
 
-    expect(await entriesFor(permissionId, new Date())).toEqual(before);
+    expect(await entriesFor(permissionId)).toEqual(before);
     await getDb().transaction(async (tx) => {
       expect(await holdingRows(tx, t.sessionAddress, 'none')).toEqual([]);
       expect(await pulledUnderOtherGrants(tx, t.connectionId, permissionId)).toBe(0n);

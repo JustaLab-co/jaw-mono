@@ -151,7 +151,7 @@ export function refillHook(c: RefillContext): EnsureFunds {
           const held = await stillHeld(await hold.tx((tx) => holdingRows(tx, c.payer, c.rowId)), c.clients, block);
           const session = sessionOf(c.grant);
           const { entries, earlier } = await hold.tx(async (tx) => ({
-            entries: await entriesFor(c.grant.permissionId, new Date(), tx),
+            entries: await entriesFor(c.grant.permissionId, tx),
             earlier: await pulledUnderOtherGrants(tx, c.connectionId, c.grant.permissionId),
           }));
           const own = await currentLimitUsageOnChain(entries, c.policy, c.payer, session, new Date(), {
