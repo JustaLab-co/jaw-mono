@@ -265,6 +265,32 @@ const lockFreeWithin = (connectionId: string, ms: number) =>
   ]);
 const rowOf = async (id: string) => (await getDb().select().from(payments).where(eq(payments.id, id)))[0];
 
+async function failUpdates(key: string, when: string) {
+  const name = `fail_${key.replaceAll('-', '_')}`;
+  await getDb().execute(
+    sql.raw(`create function ${name}() returns trigger language plpgsql as $$ begin
+      if new.idempotency_key = '${key}' and (${when}) then raise exception '${key} write refused'; end if;
+      return new; end $$`)
+  );
+  await getDb().execute(
+    sql.raw(`create trigger ${name} before update on payments for each row execute function ${name}()`)
+  );
+  return async () => {
+    await getDb().execute(sql.raw(`drop trigger ${name} on payments`));
+    await getDb().execute(sql.raw(`drop function ${name}()`));
+  };
+}
+
+async function logsOf(work: () => Promise<unknown>): Promise<string> {
+  const logged = vi.spyOn(console, 'log');
+  try {
+    await work();
+    return logged.mock.calls.flat().join('\n');
+  } finally {
+    logged.mockRestore();
+  }
+}
+
 describe('jaw_pay_and_fetch', () => {
   it('pays from the float, answers with the fenced body, and settles the row from the receipt', async () => {
     const { t } = await connected('1');
@@ -462,6 +488,61 @@ describe('jaw_pay_and_fetch', () => {
     );
     expect(result.structuredContent).toMatchObject({ kind: 'refused', moneyMoved: true });
     expect(await rowOf(result.structuredContent!.paymentId)).toMatchObject({ topUpAmount: refills[0].toString() });
+  });
+
+  it('given the write-ahead of the top-up amount fails, then nothing is sent and the turn fails as a database error, not a refusal on chain', async () => {
+    const { t } = await connected('1');
+    const drop = await failUpdates('add-fails', 'old.top_up_amount is null and new.top_up_amount is not null');
+    let result: Awaited<ReturnType<typeof pay>> | undefined;
+    try {
+      const lines = await logsOf(async () => {
+        result = await pay(t, { url: url('/exact'), idempotencyKey: 'add-fails' }, deps());
+      });
+      expect(lines).toContain('payment funding_failed: payer funding failed');
+      expect(lines).not.toContain('refused on-chain');
+    } finally {
+      await drop();
+    }
+    expect(result?.structuredContent).toMatchObject({ refusal: { code: 'funding_failed' }, moneyMoved: false });
+    expect([seen.length, refills.length]).toEqual([0, 0]);
+  });
+
+  it('given a top-up send that throws and a subtract that fails, then the refusal keeps the send error', async () => {
+    const { t } = await connected('1');
+    const refusing: TopUpExecutor = {
+      request: async () => {
+        throw new Error('the permission refused the transfer');
+      },
+    };
+    const drop = await failUpdates('subtract-fails', 'old.top_up_amount is not null and new.top_up_amount is null');
+    try {
+      const lines = await logsOf(() =>
+        pay(t, { url: url('/exact'), idempotencyKey: 'subtract-fails' }, deps({ executor: () => refusing }))
+      );
+      expect(lines).toContain('top-up refused on-chain (the permission refused the transfer)');
+    } finally {
+      await drop();
+    }
+  });
+
+  it('given an over_cap with a one-off whose conclusion fails to write, when the same key is retried, then one approval is ever opened', async () => {
+    const { t } = await connected('5');
+    const drop = await failUpdates('conclude-fails', "new.state <> 'pending'");
+    try {
+      await expect(pay(t, { url: url('/pricey'), idempotencyKey: 'conclude-fails' }, deps())).rejects.toThrow();
+    } finally {
+      await drop();
+    }
+    await getDb().execute(
+      sql`update payments set lease_until = now() - interval '1 second' where idempotency_key = 'conclude-fails'`
+    );
+    const again = await pay(t, { url: url('/pricey'), idempotencyKey: 'conclude-fails' }, deps());
+    expect(again.structuredContent).toMatchObject({ state: 'failed', refusal: { code: 'over_cap' } });
+    const offers = await getDb()
+      .select()
+      .from(approvalRequests)
+      .where(and(eq(approvalRequests.connectionId, t.connectionId), eq(approvalRequests.kind, 'payment')));
+    expect(offers).toHaveLength(1);
   });
 
   it('given a 5 USDC/day budget and a 2 USDC price, when the agent pays, then over_cap with a one-off offer, nothing signed or pulled, and a retry replays it', async () => {
