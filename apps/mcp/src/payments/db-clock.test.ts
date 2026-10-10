@@ -137,6 +137,30 @@ describe.skipIf(!TEST_PG_URL)('on Postgres, a replica whose clock is off by 90 s
     expect(taken.leaseToken).not.toBe(row.leaseToken);
   });
 
+  it('given a row whose answer was lost, when two replicas retry it at once, then one resends and the other is busy', async () => {
+    const key = randomUUID();
+    const first = await claim(owner(), key, request);
+    if (first.kind !== 'run') throw new Error(first.kind);
+    await getDb()
+      .update(payments)
+      .set({
+        state: 'signed',
+        kind: 'failed',
+        code: 'no_response',
+        nonce: `0x${'1'.repeat(64)}`,
+        authorization: { resource: request.url },
+        authorized: '5000',
+        deadline: sql`now() + interval '10 minutes'`,
+        signedAt: new Date(),
+      })
+      .where(eq(payments.id, first.row.id));
+    await lapse(first.row.id);
+
+    const kinds = (await Promise.all([claim(owner(), key, request), claim(owner(), key, request)])).map((c) => c.kind);
+
+    expect(kinds.sort()).toEqual(['busy', 'resume']);
+  });
+
   async function reservation(permissionId: string): Promise<string> {
     const claimed = await claim({ ...owner(), permissionId }, randomUUID(), request);
     if (claimed.kind !== 'run') throw new Error(claimed.kind);
