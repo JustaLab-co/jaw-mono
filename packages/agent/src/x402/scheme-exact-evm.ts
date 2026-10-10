@@ -45,7 +45,24 @@ export interface BuildExactOptions {
   nonce?: `0x${string}`;
 }
 
+/**
+ * The authorization must stay valid until the facilitator's settlement is
+ * MINED. Servers advertise timeouts as low as 60s, which is not enough for
+ * verify, submit and a block.
+ */
 export const SETTLEMENT_WINDOW_FLOOR = 600;
+
+/**
+ * The server picks maxTimeoutSeconds too, and the window decides how long a
+ * signed authorization stays spendable and held against the budget. A shorter
+ * validBefore is still within the server's maximum, so a larger ask is capped,
+ * not refused. An hour is generous for verify, submit and mine.
+ */
+const SETTLEMENT_WINDOW_CEILING = 3600;
+
+/** Seconds a signed authorization stays valid for: the server's ask, between the floor and the ceiling. */
+export const settlementWindow = (requirement: X402PaymentRequirement): number =>
+  Math.min(Math.max(requirement.maxTimeoutSeconds || 0, SETTLEMENT_WINDOW_FLOOR), SETTLEMENT_WINDOW_CEILING);
 
 /**
  * Build and sign the `exact`-scheme payment for one chosen requirement. `from`
@@ -59,15 +76,8 @@ export async function buildExactPayment(
   opts: BuildExactOptions = {}
 ): Promise<X402PaymentPayload> {
   const nowSec = opts.now ?? Math.floor(Date.now() / 1000);
-  // The authorization must stay valid until the facilitator's settlement tx is
-  // MINED, which includes verify + submit + block time on top of our signing.
-  // A server's advertised maxTimeoutSeconds is often as low as 60s, too tight,
-  // so the auth can expire before settlement and the transfer reverts. Give a
-  // generous floor; a longer-valid authorization is harmless because the
-  // EIP-3009 nonce is single-use.
-  const window = Math.max(requirement.maxTimeoutSeconds || 0, SETTLEMENT_WINDOW_FLOOR);
   const draft = exactDraft(requirement, from, {
-    validBefore: String(nowSec + window),
+    validBefore: String(nowSec + settlementWindow(requirement)),
     nonce: opts.nonce ?? bytesToHex(crypto.getRandomValues(new Uint8Array(32))),
   });
   const { message } = draft.typedData;

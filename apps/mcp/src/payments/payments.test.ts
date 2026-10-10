@@ -50,8 +50,15 @@ const PRICES: Record<string, string> = {
   '/race': '5000',
   '/upto': '5000',
   '/budget': '300000',
+  '/forever': '5000',
+  '/overflow': '5000',
 };
-const seen: { path: string; nonce: Hex; signature: Hex }[] = [];
+/** What the seller advertises as maxTimeoutSeconds, where it is not 300. */
+const TIMEOUTS: Record<string, number> = {
+  '/forever': 10 * 365 * 86_400,
+  '/overflow': Number.MAX_SAFE_INTEGER,
+};
+const seen: { path: string; nonce: Hex; signature: Hex; validBefore: string }[] = [];
 const receipts = new Map<Hex, { from: Address; nonce: Hex }>();
 /** Nonces the token has consumed: the seller settled them on chain. */
 const used = new Set<string>();
@@ -76,7 +83,7 @@ const seller = createServer(async (req, res) => {
           amount: PRICES[path],
           asset: USDC,
           payTo: PAY_TO,
-          maxTimeoutSeconds: 300,
+          maxTimeoutSeconds: TIMEOUTS[path] ?? 300,
           extra: { name: 'USDC', version: '2', facilitatorAddress: PAY_TO },
         },
       ],
@@ -86,9 +93,9 @@ const seller = createServer(async (req, res) => {
       .end('{}');
   }
   const proof = JSON.parse(Buffer.from(String(signed), 'base64').toString());
-  const { nonce, from } = proof.payload.authorization;
+  const { nonce, from, validBefore } = proof.payload.authorization;
   await onProof.get(path)?.();
-  const n = seen.push({ path, nonce, signature: proof.payload.signature });
+  const n = seen.push({ path, nonce, signature: proof.payload.signature, validBefore });
   if (path === '/budget') {
     used.add(nonce.toLowerCase());
     balances.set(from.toLowerCase(), balanceOf(from) - BigInt(PRICES[path]));
@@ -356,6 +363,24 @@ describe('jaw_pay_and_fetch', () => {
       moneyMoved: true,
     });
     expect(await rowOf(result.structuredContent!.paymentId)).toMatchObject({ topUpAmount: '105000' });
+  });
+
+  it('given a seller advertising a ten year maxTimeoutSeconds, when it pays, then the proof and the row expire within the hour', async () => {
+    const { t } = await connected('1');
+    balances.set(t.sessionAddress.toLowerCase(), 1_000_000n);
+    const result = await pay(t, { url: url('/forever'), idempotencyKey: 'forever' }, deps());
+    expect(result.structuredContent).toMatchObject({ kind: 'paid', state: 'settled' });
+    const hourFromNow = Date.now() / 1000 + 3600;
+    expect(Number(seen.find((s) => s.path === '/forever')!.validBefore)).toBeLessThanOrEqual(hourFromNow);
+    const row = await rowOf(result.structuredContent!.paymentId);
+    expect(row.deadline!.getTime()).toBeLessThanOrEqual(hourFromNow * 1000);
+  });
+
+  it('given a seller advertising the largest safe maxTimeoutSeconds, when it refills and pays, then the row records the payment', async () => {
+    const { t } = await connected('1');
+    const result = await pay(t, { url: url('/overflow'), idempotencyKey: 'overflow' }, deps());
+    expect(refills).toEqual([105_000n]);
+    expect(result.structuredContent).toMatchObject({ kind: 'paid', state: 'settled', moneyMoved: true });
   });
 
   it('holds no reservation while the refill waits on the chain, so a refill killed there leaves none', async () => {
