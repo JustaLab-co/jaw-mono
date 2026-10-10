@@ -13,7 +13,7 @@ import {
   type X402Policy,
 } from '@jaw.id/agent';
 import { and, eq } from 'drizzle-orm';
-import { erc20Abi, isAddressEqual, type Address, type Hex } from 'viem';
+import { decodeFunctionData, erc20Abi, isAddressEqual, type Address, type Hex } from 'viem';
 import { sessionOf } from '@/adapters/session-host';
 import { isLive } from '@/connections/rows';
 import { connections } from '@/db/schema';
@@ -21,6 +21,7 @@ import type { Grant } from '@/grants/store';
 import { nonceUsed } from './confirm';
 import { FloatBusy, inTurn, withFloat, type FloatHold } from './float-lock';
 import {
+  addTopUp,
   assertOwned,
   entriesFor,
   holdingRows,
@@ -78,12 +79,31 @@ const noRefill: TopUpExecutor = {
   },
 };
 
-function guarded(executor: TopUpExecutor, hold: FloatHold): TopUpExecutor {
+function transferAmount(params: unknown): bigint {
+  const [{ calls }] = params as [{ calls: { data: Hex }[] }];
+  const { functionName, args } = decodeFunctionData({ abi: erc20Abi, data: calls[0].data });
+  if (calls.length !== 1 || functionName !== 'transfer') throw new Error('a top-up sends one ERC-20 transfer');
+  return args[1] as bigint;
+}
+
+function guarded(executor: TopUpExecutor, hold: FloatHold, rowId: string): TopUpExecutor {
   const approve = executor.approvePermit2?.bind(executor);
   return {
-    request: (method, params) => {
-      if (method === 'wallet_sendCalls') hold.assertHeld();
-      return executor.request(method, params);
+    request: async (method, params) => {
+      if (method !== 'wallet_sendCalls') return executor.request(method, params);
+      const amount = transferAmount(params);
+      await hold.tx((tx) => addTopUp(tx, rowId, amount));
+      let sent: unknown;
+      try {
+        hold.assertHeld();
+        sent = await executor.request(method, params);
+      } catch (err) {
+        await hold.tx((tx) => addTopUp(tx, rowId, -amount));
+        throw err;
+      }
+      const batchId = typeof sent === 'string' ? sent : (sent as { id?: string } | null)?.id;
+      if (batchId) await hold.tx((tx) => recordTopUp(tx, rowId, { ok: true, batchId }));
+      return sent;
     },
     approvePermit2:
       approve &&
@@ -168,7 +188,7 @@ export function refillHook(c: RefillContext): EnsureFunds {
           if (refillMs < MIN_REFILL_MS) return timedOut('the refill waited too long to still send');
           let pinned = block;
           hold.assertHeld();
-          const outcome = await ensurePayerFunds(requirement, payer, guarded(c.executor ?? noRefill, hold), {
+          const outcome = await ensurePayerFunds(requirement, payer, guarded(c.executor ?? noRefill, hold, c.rowId), {
             clients: c.clients,
             logger: c.logger,
             sessionChainId: c.grant.chainId,
