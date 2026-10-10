@@ -39,7 +39,17 @@ export async function waitFor(what, check, ms = 60_000) {
 export async function postgresOnly() {
   const name = `${LANE}-pg-doubles`;
   await docker('rm', '-f', '-v', name).catch(() => {});
-  await docker('run', '-d', '--name', name, '-e', 'POSTGRES_PASSWORD=pg', '-p', `127.0.0.1:${BASE + 34}:5432`, 'postgres:17');
+  await docker(
+    'run',
+    '-d',
+    '--name',
+    name,
+    '-e',
+    'POSTGRES_PASSWORD=pg',
+    '-p',
+    `127.0.0.1:${BASE + 34}:5432`,
+    'postgres:17'
+  );
   const url = `postgres://postgres:pg@127.0.0.1:${BASE + 34}/postgres`;
   const sql = postgres(url, { max: 1, onnotice: () => {}, connect_timeout: 2 });
   await waitFor('postgres', async () => (await sql`select 1 as ok`)[0].ok === 1, 180_000);
