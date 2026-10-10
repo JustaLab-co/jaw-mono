@@ -49,6 +49,7 @@ const PRICES: Record<string, string> = {
   '/sametx': '5000',
   '/race': '5000',
   '/upto': '5000',
+  '/budget': '300000',
 };
 const seen: { path: string; nonce: Hex; signature: Hex }[] = [];
 const receipts = new Map<Hex, { from: Address; nonce: Hex }>();
@@ -88,6 +89,10 @@ const seller = createServer(async (req, res) => {
   const { nonce, from } = proof.payload.authorization;
   await onProof.get(path)?.();
   const n = seen.push({ path, nonce, signature: proof.payload.signature });
+  if (path === '/budget') {
+    used.add(nonce.toLowerCase());
+    balances.set(from.toLowerCase(), balanceOf(from) - BigInt(PRICES[path]));
+  }
   if (path === '/refuse' && seen.filter((s) => s.path === '/refuse').length > 1) {
     return void res.writeHead(402, { 'payment-required': Buffer.from('{}').toString('base64') }).end('{}');
   }
@@ -111,6 +116,11 @@ const seller = createServer(async (req, res) => {
 });
 await new Promise<void>((r) => seller.listen(0, '127.0.0.1', r));
 const SELLER = `127.0.0.1:${(seller.address() as AddressInfo).port}`;
+
+vi.mock('@/lib/chain', async (original) => ({
+  ...(await original<object>()),
+  publicClientFor: () => node as unknown as PublicClient,
+}));
 
 setTestEnv();
 process.env.JAW_MCP_INSECURE_FETCH_HOSTS = SELLER;
@@ -760,6 +770,68 @@ describe.skipIf(!TEST_PG_URL)('on Postgres, given ten connections refilling at o
     expect(waited).toBeLessThan(1_000);
   });
 });
+
+describe('given a 1 USDC/day budget and 1.5 USDC already in the payer', () => {
+  const payOne = (t: Tenant, key: string) => pay(t, { url: url('/budget'), idempotencyKey: key }, deps());
+
+  it('when six 0.3 payments run one after another, then three are paid', async () => {
+    const { t } = await connected('1');
+    balances.set(t.sessionAddress.toLowerCase(), 1_500_000n);
+    const kinds: (string | undefined)[] = [];
+    for (let i = 0; i < 6; i++) kinds.push((await payOne(t, `budget-seq-${i}`)).structuredContent?.kind);
+    expect(kinds.filter((k) => k === 'paid')).toHaveLength(3);
+  });
+
+  it('when six 0.3 payments run at once, then three are paid, the rest refuse budget_exhausted holding nothing, and jaw_status shows what is left', async () => {
+    const { c, t } = await connected('1');
+    balances.set(t.sessionAddress.toLowerCase(), 1_500_000n);
+    const results = await Promise.all(Array.from({ length: 6 }, (_, i) => payOne(t, `budget-burst-${i}`)));
+    const refused = results.filter((r) => r.structuredContent?.kind !== 'paid');
+    expect(refused.map((r) => r.structuredContent?.refusal?.code)).toEqual(Array(3).fill('budget_exhausted'));
+    expect(seen).toHaveLength(3);
+    for (const r of refused) {
+      expect(await rowOf(r.structuredContent!.paymentId)).toMatchObject({ reserved: null, topUpAmount: null });
+    }
+    const status = await callTool(c.access_token, 'jaw_status', {});
+    expect(status.structuredContent.balances.session.amount).toBe('600000');
+  });
+});
+
+describe.skipIf(!TEST_PG_URL)(
+  'on Postgres, given a float that covers the price and a lock session that drops while the refill reads the balance',
+  () => {
+    it('when the turn ends with nothing to send, then it reserves nothing and the pay does not end paid', async () => {
+      const { t } = await connected('1');
+      balances.set(t.sessionAddress.toLowerCase(), 1_000_000n);
+      let dropped = false;
+      const dropping: ChainClients = {
+        publicClient: () =>
+          ({
+            ...node,
+            readContract: async (read: Parameters<typeof node.readContract>[0]) => {
+              if (read.functionName === 'balanceOf' && !dropped) {
+                dropped = true;
+                await getDb().execute(sql`select pg_terminate_backend(pid) from pg_locks
+                where locktype = 'advisory' and granted
+                  and ((classid::bigint << 32) | objid::bigint) = hashtext(${`refill:${t.connectionId}`})`);
+                await sleep(200);
+              }
+              return node.readContract(read);
+            },
+          }) as unknown as PublicClient,
+      };
+      const result = await pay(
+        t,
+        { url: url('/race'), idempotencyKey: 'holder-dropped-covered' },
+        deps({ clients: dropping })
+      );
+      expect(dropped).toBe(true);
+      expect(result.structuredContent?.kind).not.toBe('paid');
+      expect(seen).toHaveLength(0);
+      expect(await rowOf(result.structuredContent!.paymentId)).toMatchObject({ reserved: null });
+    });
+  }
+);
 
 describe.skipIf(!TEST_PG_URL)('on Postgres, given a refill whose lock session drops before it sends', () => {
   it('when the refill reaches the send, then it moves no money and the pay does not end paid', async () => {

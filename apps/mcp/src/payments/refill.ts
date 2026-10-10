@@ -1,4 +1,5 @@
 import {
+  checkPolicy,
   currentLimitUsageOnChain,
   usdcForNetwork,
   ensurePayerFunds,
@@ -118,9 +119,10 @@ function queuedWithin(ms: number, key: string, work: () => Promise<TopUpOutcome>
 /**
  * The funding hook `payAndFetch` runs after the probe and before signing: the
  * only place the connection's lock exists, so it never spans a seller fetch.
- * Under it this row reserves its price, the caps are read again, and the payer's
- * balance is read less what every other row still holds, so concurrent payments
- * never sign against the same float. The refill is the shortfall plus the gas reserve.
+ * Under it the caps are checked against what earlier turns committed, this row
+ * reserves its price, and the payer's balance is read less what every other row
+ * still holds, so concurrent payments never sign past a cap or against the same
+ * float. The refill is the shortfall plus the gas reserve.
  */
 export function refillHook(c: RefillContext): EnsureFunds {
   return (requirement, payer, budget) =>
@@ -155,6 +157,11 @@ export function refillHook(c: RefillContext): EnsureFunds {
           });
           const periodUsage = own.map((limit) => ({ ...limit, toppedUp: limit.toppedUp + earlier }));
           const spentThisSession = sumSpentSince(entries, { payer: c.payer }, session.createdAt);
+          // The caps again, against what earlier turns committed: the check before the probe
+          // saw none of the payments queued with this one.
+          const caps = { perPeriod: c.policy.perPeriod, maxTotalPerSession: c.policy.maxTotalPerSession };
+          const verdict = checkPolicy(requirement, caps, { periodUsage: own, spentThisSession });
+          if (!verdict.ok) return { ok: false, code: verdict.code, reason: verdict.reason };
           const refillMs = budget.left() - SEND_RESERVE_MS;
           if (refillMs < MIN_REFILL_MS) return timedOut('the refill waited too long to still send');
           let pinned = block;
@@ -183,7 +190,10 @@ export function refillHook(c: RefillContext): EnsureFunds {
               return balance > held ? balance - held : 0n;
             },
           });
-          funded = outcome;
+          // Money that moved reaches the caller whatever follows. A turn that moved none
+          // commits its reservation under the lock or not at all.
+          if (outcome.amount || outcome.batchId || outcome.approvalBatchId) funded = outcome;
+          else hold.assertHeld();
           // The reservation lands with the outcome: holders that read it come after this
           // turn, and a refill killed during the chain wait leaves none behind.
           await hold.tx(async (tx) => {
