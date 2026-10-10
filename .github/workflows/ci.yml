@@ -43,6 +43,8 @@ jobs:
 
       - run: bun install --frozen-lockfile
 
+      - run: tools/verify/tracked-ignored.sh
+
       - name: Check code formatting
         run: bunx prettier --check .
 
