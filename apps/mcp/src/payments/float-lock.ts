@@ -25,6 +25,8 @@ export class FloatLost extends Error {
 export interface FloatHold {
   /** One short transaction on the app pool. */
   tx<T>(work: (tx: Tx) => Promise<T>): Promise<T>;
+  /** False once the lock session dropped. */
+  held(): boolean;
   /** Throws FloatLost once the lock session dropped. Called right before each chain send. */
   assertHeld(): void;
 }
@@ -47,7 +49,8 @@ export async function withFloat<T>(
   const tx = <R>(fn: (tx: Tx) => Promise<R>) => boundedTx(waitMs, fn);
   const holder = floatHolder();
   // PGlite runs one session: the queue below is all the serialization it needs.
-  if (holder === 'pglite') return inTurn(`pglite:${connectionId}`, () => work({ tx, assertHeld() {} }));
+  if (holder === 'pglite')
+    return inTurn(`pglite:${connectionId}`, () => work({ tx, held: () => true, assertHeld() {} }));
 
   const open = sessions.get(connectionId) ?? 0;
   if (open >= SESSIONS_PER_CONNECTION) throw new FloatBusy('this connection already holds the float and has a waiter');
@@ -103,6 +106,7 @@ async function hold<T>(
     await session`select pg_advisory_xact_lock(hashtext(${key(connectionId)}))`.catch(busyOr);
     return await work({
       tx,
+      held: () => !lost,
       assertHeld() {
         if (lost) throw new FloatLost();
       },
