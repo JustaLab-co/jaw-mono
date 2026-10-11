@@ -9,6 +9,7 @@ import { revokeByGrant } from '@/connections/rows';
 import { getDb } from '@/db/client';
 import { approvalRequests, connections } from '@/db/schema';
 import { decideFromPage, outcomeResponse, readForPage } from './page-api';
+import { NO_SEND_SCOPE } from './tools';
 import * as store from './store';
 import { countPending } from './store';
 
@@ -38,11 +39,12 @@ const messageOf = (p: SignedPayload) => {
 };
 
 describe('the wallet:send scope', () => {
-  it('is what lets a connection ask for a signature; wallet:read alone is refused', async () => {
-    const reader = await connect(undefined, { scope: 'wallet:read' });
-    const refused = await callTool(reader.access_token, 'jaw_request_signature', { message: 'hello' });
-    expect(refused.isError).toBe(true);
-    expect(refused.content[0].text).toMatch(/wallet:send/);
+  it('is what lets a connection ask for a signature; wallet:read alone or with x402:pay is refused', async () => {
+    for (const scope of ['wallet:read', 'wallet:read x402:pay']) {
+      const reader = await connect(undefined, { scope });
+      const refused = await callTool(reader.access_token, 'jaw_request_signature', { message: 'hello' });
+      expect(refused).toEqual({ content: [{ type: 'text', text: NO_SEND_SCOPE }], isError: true });
+    }
 
     const sender = await connect(undefined, { scope: 'wallet:read wallet:send' });
     const asked = await callTool(sender.access_token, 'jaw_request_signature', { message: 'hello' });

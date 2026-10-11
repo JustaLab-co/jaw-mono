@@ -137,7 +137,7 @@ async function grantBudget(c: Awaited<ReturnType<typeof connect>>, perDay: strin
 
 /** A budget too small for the price, so the call ends in budget_exhausted and offers a one-off. */
 async function offered(path: string) {
-  const c = await connect();
+  const c = await connect(undefined, { scope: 'wallet:read x402:pay' });
   const t = (await verifyBearer(c.access_token))?.extra?.tenant as Tenant;
   const permissionId = await grantBudget(c, '0.001');
   const refused = await pay(t, { url: url(path), headers: { Authorization: SECRET }, idempotencyKey: 'k1' }, deps());

@@ -40,8 +40,9 @@ describe('consent hand-back', () => {
       reservedName: false,
     });
     expect(details.scopes).toEqual([
-      { id: 'wallet:read', label: 'See your account and balances' },
-      { id: 'wallet:send', label: 'Ask you to approve signatures and payment budgets' },
+      { id: 'wallet:read', label: 'See your account, balances and payment history' },
+      { id: 'x402:pay', label: 'Pay x402 services from a daily USDC budget you approve' },
+      { id: 'wallet:send', label: 'Ask you to approve transfers, contract calls and signatures' },
     ]);
     expect(details.typedData.domain).toEqual({ name: 'JAW', version: '1', chainId: 84532 });
     expect(details.typedData.message).toEqual({
@@ -49,7 +50,7 @@ describe('consent hand-back', () => {
       interaction: uid,
       clientId: 'jaw-cli',
       clientName: 'JAW CLI',
-      scopes: 'wallet:read wallet:send',
+      scopes: 'wallet:read x402:pay wallet:send',
       expires: details.expiresAt,
     });
   });
@@ -57,17 +58,29 @@ describe('consent hand-back', () => {
   it.each([
     ['no scope at all', null, ['wallet:read']],
     ['only openid offline_access', 'openid offline_access', ['wallet:read']],
-    ['both wallet scopes', 'wallet:read wallet:send', ['wallet:read', 'wallet:send']],
+    ['wallet:read wallet:send', 'wallet:read wallet:send', ['wallet:read', 'wallet:send']],
+    ['wallet:read x402:pay', 'wallet:read x402:pay', ['wallet:read', 'x402:pay']],
+    ['the scopes out of order', 'wallet:send x402:pay wallet:read', ['wallet:read', 'x402:pay', 'wallet:send']],
+    ['prototype keys next to wallet:read', 'constructor wallet:read toString', ['wallet:read']],
+    ['prototype keys alone', 'constructor toString', ['wallet:read']],
   ])('serves an authorization with %s', async (_name, scope, expected) => {
     const { uid } = await startAuthorization(new Browser(), { scope });
     expect(uid).toBeDefined();
     expect((await getDetails(uid!)).scopes.map((s) => s.id)).toEqual(expected);
   });
 
-  it('refuses wallet:send without wallet:read at the authorization endpoint, back to the client', async () => {
-    const start = await startAuthorization(new Browser(), { scope: 'wallet:send' });
-    expect(start.uid).toBeUndefined();
-    expect(start.redirected?.searchParams.get('error')).toBe('invalid_scope');
+  it.each(['wallet:send', 'x402:pay', 'x402:pay wallet:send'])(
+    'refuses %s without wallet:read at the authorization endpoint, back to the client',
+    async (scope) => {
+      const start = await startAuthorization(new Browser(), { scope });
+      expect(start.uid).toBeUndefined();
+      expect(start.redirected?.searchParams.get('error')).toBe('invalid_scope');
+    }
+  );
+
+  it('signs the scopes in canonical order, whatever order the client asked in', async () => {
+    const { uid } = await startAuthorization(new Browser(), { scope: 'wallet:send x402:pay wallet:read' });
+    expect((await getDetails(uid!)).typedData.message.scopes).toBe('wallet:read x402:pay wallet:send');
   });
 
   it('refuses a signature made for another interaction', async () => {

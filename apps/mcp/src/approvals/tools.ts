@@ -13,6 +13,7 @@ import type { McpServer } from '@modelcontextprotocol/server';
 import { z } from 'zod';
 import { tenant, type Tenant } from '@/connections/auth';
 import { config } from '@/connections/config';
+import type { Scope } from '@/connections/provider';
 import { log } from '@/lib/edge';
 import { oneOffStatus } from '@/payments/one-off';
 import { payOutput } from '@/payments/render';
@@ -125,7 +126,20 @@ export const result = (out: StatusOutput) => ({
 });
 export const refusal = (text: string) => ({ content: [{ type: 'text' as const, text }], isError: true });
 export const NO_SEND_SCOPE =
-  'This connection was not granted wallet:send. Reconnect and ask for it to request signatures, a budget, or transactions.';
+  'This connection was not granted wallet:send. Reconnect and ask for it to request transfers, contract calls or signatures.';
+export const NO_PAY_SCOPE =
+  'This connection was not granted x402:pay. Reconnect and ask for it to request a budget or pay x402 services; a budget approved on this connection does not carry over to the new one.';
+
+// A token without the scope of the request's kind is answered as if the request did not exist.
+const KIND_SCOPE: Record<ApprovalBody['kind'], Scope> = {
+  budget: 'x402:pay',
+  payment: 'x402:pay',
+  signature: 'wallet:send',
+  siwe: 'wallet:send',
+  'typed-data': 'wallet:send',
+  transfer: 'wallet:send',
+  calls: 'wallet:send',
+};
 
 export function requestFor(t: Tenant, body: ApprovalBody): ApprovalRequest {
   return openRequest(
@@ -203,9 +217,10 @@ export function registerApprovalTools(server: McpServer) {
     },
     async ({ requestId }, ctx) => {
       const t = tenant(ctx);
-      if (!t.scopes.includes('wallet:send')) return refusal(NO_SEND_SCOPE);
       const request = await findForConnection(requestId, t.connectionId, new Date());
-      if (!request) return refusal('No such request for this connection.');
+      if (!request || !t.scopes.includes(KIND_SCOPE[request.body.kind])) {
+        return refusal('No such request for this connection.');
+      }
       const out = describe(request);
       const { body } = request;
       if (body.kind !== 'payment' || request.state.status !== 'approved') return result(out);

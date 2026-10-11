@@ -185,7 +185,7 @@ beforeEach(() => {
 });
 
 async function connected(perDay?: string) {
-  const c = await connect();
+  const c = await connect(undefined, { scope: 'wallet:read x402:pay' });
   const t = (await verifyBearer(c.access_token))?.extra?.tenant as Tenant;
   if (perDay) await approveBudget(c, perDay);
   return { c, t };
@@ -405,13 +405,29 @@ describe('jaw_pay_and_fetch', () => {
     expect(refills).toEqual([]);
   });
 
-  it('refuses to pay for a token without wallet:send, even on a connection with a budget', async () => {
+  it('given a token with wallet:read wallet:send on a connection with a budget, when it pays, then it is refused insufficient_scope naming x402:pay', async () => {
     const { t } = await connected('1');
-    balances.set(t.sessionAddress.toLowerCase(), 1_000_000n);
-    const result = await pay({ ...t, scopes: ['wallet:read'] }, { url: url('/exact') }, deps());
+    const result = await pay(
+      { ...t, scopes: ['wallet:read', 'wallet:send'] },
+      { url: url('/exact'), idempotencyKey: 'no-pay-scope' },
+      deps()
+    );
     expect(result).toMatchObject({ isError: true });
-    expect(result.content[0].text).toMatch(/wallet:send/);
+    expect(result.content[0].text).toMatch(/^insufficient_scope: This token was not granted x402:pay\./);
     expect(seen).toEqual([]);
+    expect(refills).toEqual([]);
+    expect(await getDb().select().from(payments).where(eq(payments.idempotencyKey, 'no-pay-scope'))).toEqual([]);
+  });
+
+  it('given payments are paused, when a token without x402:pay pays, then the scope refusal comes first', async () => {
+    const { t } = await connected('1');
+    await getDb().insert(settings).values({ key: 'payments_paused', value: true });
+    try {
+      const result = await pay({ ...t, scopes: ['wallet:read', 'wallet:send'] }, { url: url('/exact') }, deps());
+      expect(result.content[0].text).toMatch(/^insufficient_scope: /);
+    } finally {
+      await getDb().delete(settings).where(eq(settings.key, 'payments_paused'));
+    }
   });
 
   it('refuses a connection with no budget as no_grant, writing no row', async () => {

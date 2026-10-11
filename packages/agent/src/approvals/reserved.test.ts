@@ -56,6 +56,11 @@ describe('reserved signing requests', () => {
     expect(hashTypedData(consentTypedData(84532, terms))).not.toBe(base);
   });
 
+  it('keeps the consent digest pages already sign, so a change to the Consent struct shows up', () => {
+    const all = consentTypedData(8453, { ...terms, scopes: 'wallet:read x402:pay wallet:send' });
+    expect(hashTypedData(all)).toBe('0xda63a325fadfea220b61e4957b00bc2989a61a170c3cd0bfe6f99786c2ff4838');
+  });
+
   it('reserves the connections sign-in, which binds the server and an expiry', () => {
     const signIn = connectionsSignInTypedData(8453, {
       issuer: 'https://mcp.jaw.id',
