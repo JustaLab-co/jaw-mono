@@ -7,13 +7,13 @@ import {
   type ApprovalId,
   type ApprovalRequest,
   type Call,
+  type ConnectionScope,
   type GasQuote,
 } from '@jaw.id/agent';
 import type { McpServer } from '@modelcontextprotocol/server';
 import { z } from 'zod';
 import { tenant, type Tenant } from '@/connections/auth';
 import { config } from '@/connections/config';
-import type { Scope } from '@/connections/provider';
 import { log } from '@/lib/edge';
 import { oneOffStatus } from '@/payments/one-off';
 import { payOutput } from '@/payments/render';
@@ -131,7 +131,7 @@ export const NO_PAY_SCOPE =
   'This connection was not granted x402:pay. Reconnect and ask for it to request a budget or pay x402 services; a budget approved on this connection does not carry over to the new one.';
 
 // A token without the scope of the request's kind is answered as if the request did not exist.
-const KIND_SCOPE: Record<ApprovalBody['kind'], Scope> = {
+const KIND_SCOPE: Record<ApprovalBody['kind'], ConnectionScope> = {
   budget: 'x402:pay',
   payment: 'x402:pay',
   signature: 'wallet:send',

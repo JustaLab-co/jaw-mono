@@ -1,13 +1,15 @@
+import { consentTypedData } from '@jaw.id/agent';
 import { eq } from 'drizzle-orm';
 import { beforeAll, describe, expect, it, vi } from 'vitest';
 import { getDb } from '@/db/client';
 import { connections } from '@/db/schema';
 import { useTestDb } from '@/db/test-db';
 import { verifyBearer } from './auth';
-import { consent } from './interaction';
+import { consent, type ConsentDetails } from './interaction';
 import { provider } from './provider';
 import {
   Browser,
+  callTool,
   connect,
   follow,
   getDetails,
@@ -40,9 +42,9 @@ describe('consent hand-back', () => {
       reservedName: false,
     });
     expect(details.scopes).toEqual([
-      { id: 'wallet:read', label: 'See your account, balances and payment history' },
-      { id: 'x402:pay', label: 'Pay x402 services from a daily USDC budget you approve' },
-      { id: 'wallet:send', label: 'Ask you to approve transfers, contract calls and signatures' },
+      { id: 'wallet:read', label: 'See your account, balances and payment history', required: true },
+      { id: 'x402:pay', label: 'Pay x402 services from a daily USDC budget you approve', required: false },
+      { id: 'wallet:send', label: 'Ask you to approve transfers, contract calls and signatures', required: false },
     ]);
     expect(details.typedData.domain).toEqual({ name: 'JAW', version: '1', chainId: 84532 });
     expect(details.typedData.message).toEqual({
@@ -188,5 +190,123 @@ describe('consent hand-back', () => {
     const { browser, uid } = await pending();
     const back = await follow(browser, `${ISSUER}/interaction/${uid}/abort`, REDIRECT);
     expect(back.searchParams.get('error')).toBe('access_denied');
+  });
+});
+
+const signedFor = (d: ConsentDetails, scopes: string) =>
+  consentTypedData(d.chainId, { ...d.typedData.message, scopes });
+const rowsOf = (uid: string) => getDb().select().from(connections).where(eq(connections.interactionUid, uid));
+
+describe('given an authorization for all three scopes, when the user narrows them at consent', () => {
+  it('when wallet:send is unticked, then the row and the token hold wallet:read x402:pay and jaw_prepare_transfer is refused', async () => {
+    const c = await connect(undefined, {}, undefined, ['wallet:read', 'x402:pay']);
+    expect(c.scope).toBe('wallet:read x402:pay');
+    expect((await rowsOf(c.uid))[0].scopes).toEqual(['wallet:read', 'x402:pay']);
+    const result = await callTool(c.access_token, 'jaw_prepare_transfer', {
+      to: '0x2222222222222222222222222222222222222222',
+      amount: '0.01',
+    });
+    expect(result.isError).toBe(true);
+    expect(result.content[0].text).toContain('not granted wallet:send.');
+  });
+
+  it('when the POST carries no scopes field, then every requested scope is granted', async () => {
+    const c = await connect();
+    expect(c.scope).toBe('wallet:read x402:pay wallet:send');
+  });
+
+  it('when the POST lists the chosen scopes out of order, then the server checks the signature over the canonical order', async () => {
+    const { uid, details } = await pending();
+    const signer = owner();
+    const signature = await signer.signTypedData(signedFor(details, 'wallet:read x402:pay'));
+    const res = await postConsent(uid, signer.address, signature, ['x402:pay', 'wallet:read']);
+    expect(res.status).toBe(200);
+    expect((await rowsOf(uid))[0].scopes).toEqual(['wallet:read', 'x402:pay']);
+  });
+
+  it('when the POST repeats a scope, then it is granted once', async () => {
+    const { uid, details } = await pending();
+    const signer = owner();
+    const signature = await signer.signTypedData(signedFor(details, 'wallet:read x402:pay'));
+    const res = await postConsent(uid, signer.address, signature, ['wallet:read', 'wallet:read', 'x402:pay']);
+    expect(res.status).toBe(200);
+    expect((await rowsOf(uid))[0].scopes).toEqual(['wallet:read', 'x402:pay']);
+  });
+
+  it('when the user signed wallet:read x402:pay but the POST says all three, then bad_signature and no row', async () => {
+    const { uid, details } = await pending();
+    const signer = owner();
+    const signature = await signer.signTypedData(signedFor(details, 'wallet:read x402:pay'));
+    const res = await postConsent(uid, signer.address, signature, ['wallet:read', 'x402:pay', 'wallet:send']);
+    expect(res.status).toBe(401);
+    expect(await res.json()).toEqual({ error: 'bad_signature' });
+    expect(await rowsOf(uid)).toEqual([]);
+  });
+
+  it.each([
+    ['empty', []],
+    ['without wallet:read', ['x402:pay']],
+    ['with a prototype key', ['wallet:read', 'constructor']],
+    ['with an unknown id', ['wallet:read', 'wallet:admin']],
+  ])('when the chosen set is %s, signed as sent, then invalid_scope and no row', async (_name, scopes) => {
+    const { uid, details } = await pending();
+    const signer = owner();
+    const signature = await signer.signTypedData(signedFor(details, scopes.join(' ')));
+    const res = await postConsent(uid, signer.address, signature, scopes);
+    expect(res.status).toBe(400);
+    expect(await res.json()).toEqual({ error: 'invalid_scope' });
+    expect(await rowsOf(uid)).toEqual([]);
+  });
+
+  it.each([
+    ['a string', 'wallet:read'],
+    ['null', null],
+    ['a non-string entry', ['wallet:read', 1]],
+    ['more than three entries', ['wallet:read', 'wallet:read', 'x402:pay', 'wallet:send']],
+  ])('when scopes is %s, then invalid_request and no row', async (_name, scopes) => {
+    const { uid, details } = await pending();
+    const signer = owner();
+    const res = await postConsent(uid, signer.address, await signer.signTypedData(details.typedData), scopes);
+    expect(res.status).toBe(400);
+    expect(await res.json()).toEqual({ error: 'invalid_request' });
+    expect(await rowsOf(uid)).toEqual([]);
+  });
+
+  it('given a consent already recorded, when a second POST narrows the scopes, then 409 already_consented', async () => {
+    const { uid, details } = await pending();
+    const signer = owner();
+    expect((await postConsent(uid, signer.address, await signer.signTypedData(details.typedData))).status).toBe(200);
+    const narrowed = await signer.signTypedData(signedFor(details, 'wallet:read'));
+    const res = await postConsent(uid, signer.address, narrowed, ['wallet:read']);
+    expect(res.status).toBe(409);
+    expect((await rowsOf(uid))[0].scopes).toEqual(['wallet:read', 'x402:pay', 'wallet:send']);
+  });
+});
+
+describe('given a connection where the user unticked x402:pay', () => {
+  it('when the same browser authorizes again, then consent offers all three and grants all three', async () => {
+    const browser = new Browser();
+    const signer = owner();
+    const first = await connect(signer, {}, browser, ['wallet:read', 'wallet:send']);
+    expect(first.scope).toBe('wallet:read wallet:send');
+
+    const again = await connect(signer, {}, browser);
+    expect(again.details.scopes.map((s) => s.id)).toEqual(['wallet:read', 'x402:pay', 'wallet:send']);
+    expect(again.scope).toBe('wallet:read x402:pay wallet:send');
+    expect((await rowsOf(again.uid))[0].scopes).toEqual(['wallet:read', 'x402:pay', 'wallet:send']);
+  });
+});
+
+describe('given an authorization for wallet:read x402:pay', () => {
+  it('when the POST asks for wallet:send too, signed over that, then invalid_scope and no row', async () => {
+    const { uid } = await startAuthorization(new Browser(), { scope: 'wallet:read x402:pay' });
+    const details = await getDetails(uid!);
+    const signer = owner();
+    const all = ['wallet:read', 'x402:pay', 'wallet:send'];
+    const signature = await signer.signTypedData(signedFor(details, all.join(' ')));
+    const res = await postConsent(uid!, signer.address, signature, all);
+    expect(res.status).toBe(400);
+    expect(await res.json()).toEqual({ error: 'invalid_scope' });
+    expect(await rowsOf(uid!)).toEqual([]);
   });
 });

@@ -1,6 +1,6 @@
 import { generateProtectedResourceMetadata, metadataCorsOptionsRequestHandler } from 'mcp-handler';
 import { config } from '@/connections/config';
-import { SCOPES } from '@/connections/provider';
+import { CONNECTION_SCOPES } from '@jaw.id/agent';
 import { withEdge } from '@/lib/edge';
 
 export const runtime = 'nodejs';
@@ -12,7 +12,7 @@ export const GET = withEdge(
     const metadata = generateProtectedResourceMetadata({
       authServerUrls: [issuer],
       resourceUrl: resource,
-      additionalMetadata: { scopes_supported: Object.keys(SCOPES), resource_name: 'JAW' },
+      additionalMetadata: { scopes_supported: Object.keys(CONNECTION_SCOPES), resource_name: 'JAW' },
     });
     return Response.json(metadata, { headers: { 'access-control-allow-origin': '*' } });
   },

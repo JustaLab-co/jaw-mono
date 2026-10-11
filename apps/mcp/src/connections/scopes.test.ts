@@ -1,3 +1,4 @@
+import type { ConnectionScope } from '@jaw.id/agent';
 import { eq } from 'drizzle-orm';
 import { afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
 import * as bundler from '@/approvals/bundler';
@@ -6,7 +7,6 @@ import { getDb } from '@/db/client';
 import { connections, payments } from '@/db/schema';
 import { useTestDb } from '@/db/test-db';
 import { verifyBearer, type Tenant } from './auth';
-import type { Scope } from './provider';
 import { callTool, connect, mcp, setTestEnv, token } from './testkit';
 
 setTestEnv();
@@ -20,7 +20,7 @@ const UNKNOWN = 'No such request for this connection.';
 const GAS = { estimate: '20000', context: { token: RECIPIENT, gas: '40000' } } as const;
 
 // jaw_request_status is left out: it checks the scope of the request's kind.
-const TOOLS: Record<string, { needs: Scope; args: object }> = {
+const TOOLS: Record<string, { needs: ConnectionScope; args: object }> = {
   jaw_status: { needs: 'wallet:read', args: {} },
   jaw_quote: { needs: 'wallet:read', args: { url: 'http://127.0.0.1:9/paid' } },
   jaw_add_funds: { needs: 'wallet:read', args: {} },

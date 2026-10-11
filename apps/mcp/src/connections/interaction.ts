@@ -1,13 +1,19 @@
 import { createHash, randomBytes } from 'node:crypto';
 import type { ServerResponse } from 'node:http';
-import { clientIdentity, consentTypedData, type ClientIdentity } from '@jaw.id/agent';
+import {
+  clientIdentity,
+  CONNECTION_SCOPES,
+  consentTypedData,
+  type ClientIdentity,
+  type ConnectionScope,
+} from '@jaw.id/agent';
 import { isAddress, isHex } from 'viem';
 import { readJson, tooLarge } from '@/lib/body';
 import { verifyOnChain, type VerifySignature } from '@/lib/chain';
 import { log } from '@/lib/edge';
 import { bridge } from './bridge';
 import { config } from './config';
-import { provider, SCOPES, type Scope } from './provider';
+import { provider } from './provider';
 import { activate, findClaimable, insertPending } from './rows';
 
 const UID = /^[A-Za-z0-9_-]{10,64}$/;
@@ -17,7 +23,7 @@ export interface ConsentDetails {
   uid: string;
   client: ClientIdentity;
   redirectHost: string;
-  scopes: { id: Scope; label: string }[];
+  scopes: { id: ConnectionScope; label: string; required: boolean }[];
   chainId: number;
   expiresAt: string;
   typedData: ReturnType<typeof consentTypedData>;
@@ -32,7 +38,7 @@ async function loadDetails(uid: string): Promise<ConsentDetails | undefined> {
   const client = params.client_id ? await p.Client.find(params.client_id) : undefined;
   if (!client || !params.redirect_uri) return undefined;
   const asked = (params.scope ?? '').split(' ');
-  const requested = (Object.keys(SCOPES) as Scope[]).filter((s) => asked.includes(s));
+  const requested = (Object.keys(CONNECTION_SCOPES) as ConnectionScope[]).filter((s) => asked.includes(s));
   const { chain, issuer } = config();
   const identity = clientIdentity(client.clientId, client.clientName ?? client.clientId);
   const expiresAt = new Date(interaction.exp * 1000).toISOString();
@@ -40,7 +46,7 @@ async function loadDetails(uid: string): Promise<ConsentDetails | undefined> {
     uid,
     client: identity,
     redirectHost: new URL(params.redirect_uri).hostname,
-    scopes: requested.map((id) => ({ id, label: SCOPES[id] })),
+    scopes: requested.map((id) => ({ id, label: CONNECTION_SCOPES[id], required: id === 'wallet:read' })),
     chainId: chain.id,
     expiresAt,
     typedData: consentTypedData(chain.id, {
@@ -71,22 +77,39 @@ export async function details(_req: Request, uid: string): Promise<Response> {
   return lacksRead(found) ? invalidScope() : Response.json(found);
 }
 
+/** Deduped scope ids, or null when the shape is wrong. */
+function chosenScopes(value: unknown): string[] | null {
+  if (!Array.isArray(value) || value.length > Object.keys(CONNECTION_SCOPES).length) return null;
+  if (!value.every((s) => typeof s === 'string')) return null;
+  return [...new Set(value as string[])];
+}
+
 // Completion needs both the one-time ticket (this browser signed) and the
 // interaction cookie (this browser started), which defeats a phished consent link.
 export async function consent(req: Request, uid: string, verify: VerifySignature = verifyOnChain): Promise<Response> {
   const parsed = await readJson(req);
   if (parsed === undefined) return tooLarge();
-  const body = parsed as { address?: string; signature?: string };
+  const body = parsed as { address?: string; signature?: string; scopes?: unknown };
   if (!body.address || !isAddress(body.address) || !body.signature || !isHex(body.signature)) {
     return Response.json({ error: 'invalid_request' }, { status: 400 });
   }
+  const chosen = body.scopes === undefined ? undefined : chosenScopes(body.scopes);
+  if (chosen === null) return Response.json({ error: 'invalid_request' }, { status: 400 });
   const found = await loadDetails(uid);
   if (!found) return Response.json({ error: 'not_found' }, { status: 404 });
   if (lacksRead(found)) return invalidScope();
+  const requested = found.scopes.map((s) => s.id);
+  // The user may untick scopes, never add one or drop wallet:read.
+  if (chosen && (!chosen.includes('wallet:read') || chosen.some((s) => !requested.includes(s as ConnectionScope)))) {
+    return invalidScope();
+  }
+  const granted = chosen ? requested.filter((s) => chosen.includes(s)) : requested;
+  // Rebuilt here from the interaction, so the body only picks which scopes, never what was signed.
+  const typedData = consentTypedData(found.chainId, { ...found.typedData.message, scopes: granted.join(' ') });
   const valid = await verify({
     chainId: found.chainId,
     address: body.address,
-    payload: { type: 'typed_data', typedData: found.typedData },
+    payload: { type: 'typed_data', typedData },
     signature: body.signature,
   }).catch((err: unknown) => {
     log('error', { msg: 'consent verification unavailable', error: err instanceof Error ? err.name : 'unknown' });
@@ -104,7 +127,7 @@ export async function consent(req: Request, uid: string, verify: VerifySignature
       chainId: found.chainId,
       clientId: found.client.clientId,
       clientName: found.client.name,
-      scopes: found.scopes.map((s) => s.id),
+      scopes: granted,
       interactionUid: uid,
       expiresAt: new Date(found.expiresAt),
     },
@@ -132,6 +155,9 @@ export function complete(req: Request, uid: string): Promise<Response> {
     const grant = new p.Grant({ accountId: row.id, clientId: row.clientId });
     grant.addOIDCScope('openid offline_access');
     grant.addResourceScope(config().resource, row.scopes.join(' '));
+    // Scopes the user unticked count as answered, or the provider would ask for consent again.
+    const unticked = Object.keys(CONNECTION_SCOPES).filter((s) => !row.scopes.includes(s));
+    if (unticked.length) grant.rejectResourceScope(config().resource, unticked.join(' '));
     const grantId = await grant.save();
     if (!(await activate(uid, ticketHash, grantId))) {
       await grant.destroy();

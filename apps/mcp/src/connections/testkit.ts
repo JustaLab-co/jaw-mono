@@ -1,5 +1,5 @@
 import { createHash, randomBytes } from 'node:crypto';
-import type { GrantRequest, SignedPayload } from '@jaw.id/agent';
+import { consentTypedData, type GrantRequest, type SignedPayload } from '@jaw.id/agent';
 import { verifyMessage, verifyTypedData, type Address, type Hex } from 'viem';
 import { privateKeyToAccount, generatePrivateKey } from 'viem/accounts';
 import { decideFromPage, readForPage, type ReadPermission } from '@/approvals/page-api';
@@ -115,12 +115,12 @@ export async function getDetails(uid: string): Promise<ConsentDetails> {
   return (await details(new Request(`${ISSUER}/interaction/${uid}/details`), uid)).json();
 }
 
-export async function postConsent(uid: string, address: Hex, signature: Hex) {
+export async function postConsent(uid: string, address: Hex, signature: Hex, scopes?: unknown) {
   return consent(
     new Request(`${ISSUER}/interaction/${uid}/consent`, {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ address, signature }),
+      body: JSON.stringify({ address, signature, scopes }),
     }),
     uid,
     verifyLocally
@@ -157,11 +157,15 @@ export async function follow(browser: Browser, url: string, redirectUri = REDIRE
   throw new Error('too many redirects');
 }
 
-export async function connect(signer = owner(), a: Authorize = {}, browser = new Browser()) {
+/** `granted` is what the user leaves ticked; absent signs the full request, as an older page does. */
+export async function connect(signer = owner(), a: Authorize = {}, browser = new Browser(), granted?: string[]) {
   const start = await startAuthorization(browser, a);
   if (!start.uid) throw new Error('authorization did not reach consent');
   const d = await getDetails(start.uid);
-  const res = await postConsent(start.uid, signer.address, await signer.signTypedData(d.typedData));
+  const signed = granted
+    ? consentTypedData(d.chainId, { ...d.typedData.message, scopes: granted.join(' ') })
+    : d.typedData;
+  const res = await postConsent(start.uid, signer.address, await signer.signTypedData(signed), granted);
   const { next } = (await res.json()) as { next: string };
   const redirected = await follow(browser, next, a.redirectUri ?? REDIRECT);
   const issued = await token({
