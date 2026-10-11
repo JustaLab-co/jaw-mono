@@ -86,7 +86,7 @@ const seller = createServer(async (req, res) => {
   const proof = JSON.parse(Buffer.from(String(signed), 'base64').toString());
   const { nonce, from } = proof.payload.authorization;
   await onProof.get(path)?.();
-  seen.push({ path, nonce, signature: proof.payload.signature });
+  const n = seen.push({ path, nonce, signature: proof.payload.signature });
   if (path === '/refuse' && seen.filter((s) => s.path === '/refuse').length > 1) {
     return void res.writeHead(402, { 'payment-required': Buffer.from('{}').toString('base64') }).end('{}');
   }
@@ -101,7 +101,7 @@ const seller = createServer(async (req, res) => {
     balances.set(from.toLowerCase(), balanceOf(from) - BigInt(PRICES[path]));
     return void res.end('{}');
   }
-  const tx = path === '/sametx' ? TX(999) : TX(seen.length);
+  const tx = path === '/sametx' ? TX(999) : TX(n);
   receipts.set(tx, { from, nonce });
   const receipt = { success: true, transaction: tx, network: 'eip155:84532', payer: from };
   res
