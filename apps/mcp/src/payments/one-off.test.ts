@@ -17,7 +17,7 @@ import { findById, recordDecision, sellerRequestOf } from '@/approvals/store';
 import { verifyBearer, type Tenant } from '@/connections/auth';
 import { callTool, connect, owner, setTestEnv, verifyLocally } from '@/connections/testkit';
 import { getDb } from '@/db/client';
-import { approvalRequests, payments, settings } from '@/db/schema';
+import { approvalRequests, auditEvents, payments, settings } from '@/db/schema';
 import { useTestDb } from '@/db/test-db';
 import { safeFetch } from '@/lib/safe-fetch';
 import { oneOffRow } from './one-off';
@@ -313,6 +313,30 @@ describe('a one-off payment after budget_exhausted', () => {
     expect(paidRequests()).toHaveLength(2);
     expect(second.proof).toEqual(first.proof);
     expect(second.key).toBe(first.key);
+  });
+});
+
+const statusOutcomes = async () =>
+  (await getDb().select().from(auditEvents).where(eq(auditEvents.tool, 'jaw_request_status'))).map((e) => e.outcome);
+
+describe('the audit record of jaw_request_status', () => {
+  it('given a one-off refused with price_changed, when its status is read, then the outcome is price_changed', async () => {
+    const { c, id, post } = await offered('/audit-moved');
+    prices.set('/audit-moved', '5001');
+    await decideFromPage(id, post, verifyLocally);
+    await getDb().delete(auditEvents);
+    await callTool(c.access_token, 'jaw_request_status', { requestId: id });
+    expect(await statusOutcomes()).toEqual(['price_changed']);
+  });
+
+  it('given a one-off whose resend is lost again, when its status is read, then the outcome is unknown', async () => {
+    dropNextPaid = new Set(['/audit-lost']);
+    const { c, id, post } = await offered('/audit-lost');
+    await decideFromPage(id, post, verifyLocally);
+    await getDb().delete(auditEvents);
+    dropNextPaid = new Set(['/audit-lost']);
+    await callTool(c.access_token, 'jaw_request_status', { requestId: id });
+    expect(await statusOutcomes()).toEqual(['unknown']);
   });
 });
 

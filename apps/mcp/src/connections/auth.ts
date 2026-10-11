@@ -1,4 +1,4 @@
-import type { AuthInfo } from '@modelcontextprotocol/server';
+import { bearerAuthChallengeResponse, OAuthError, OAuthErrorCode, type AuthInfo } from '@modelcontextprotocol/server';
 import { compactDecrypt, decodeProtectedHeader } from 'jose';
 import { withMcpAuth } from 'mcp-handler';
 import type { Address, Hex } from 'viem';
@@ -96,12 +96,20 @@ export function withConnection(handler: (req: Request) => Promise<Response>): (r
     // Verified here rather than inside withMcpAuth, which logs a thrown error
     // whole (a driver error carries its SQL) and answers 401, so a client would
     // drop working credentials during an outage.
+    const bearer = bearerOf(req);
     let auth: AuthInfo | undefined;
     try {
-      auth = await verifyBearer(req.headers.get('authorization')?.match(/^Bearer (.+)$/i)?.[1]);
+      auth = await verifyBearer(bearer);
     } catch (err) {
       log('error', { msg: 'bearer verification unavailable', error: errorLabel(err) });
       return Response.json({ error: 'unavailable' }, { status: 503 });
+    }
+    // withMcpAuth would answer a rejected token "No authorization provided", as if none was sent.
+    if (bearer && !auth) {
+      return bearerAuthChallengeResponse(
+        new OAuthError(OAuthErrorCode.InvalidToken, 'The access token is invalid, expired or revoked'),
+        { resourceMetadataUrl: `${config().issuer}${RESOURCE_METADATA_PATH}` }
+      );
     }
     return withMcpAuth(handler, async () => auth, {
       // No required scope: the challenge would name it, and an MCP client then

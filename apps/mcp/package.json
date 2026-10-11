@@ -4,6 +4,11 @@
   "private": true,
   "nx": {
     "targets": {
+      "test": {
+        "dependsOn": [
+          "^build"
+        ]
+      },
       "typecheck": {
         "executor": "nx:run-commands",
         "options": {
