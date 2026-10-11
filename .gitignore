@@ -57,6 +57,7 @@ vite.config.*.timestamp*
 vitest.config.*.timestamp*
 
 test/
+!apps/mcp/test/
 
 .claude
 .cursor
