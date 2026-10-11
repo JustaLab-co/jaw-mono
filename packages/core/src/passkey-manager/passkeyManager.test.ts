@@ -871,13 +871,28 @@ describe('PasskeyManager', () => {
 
             const result = await manager.importPasskeyAccount(mockGetFn, 'myapp.com');
 
+            // No serverUrl configured: the lookup goes to the JAW passkeys route.
+            expect(utils.importPasskeyUtils).toHaveBeenCalledWith(mockGetFn, 'myapp.com', undefined, undefined);
+            expect(result).toBe(mockResult);
+        });
+
+        it('importPasskeyAccount forwards a configured passkey server', async () => {
+            vi.spyOn(utils, 'importPasskeyUtils').mockResolvedValue({
+                name: 'imported',
+                credential: { id: 'imp-cred', publicKey: '0x04imp' as `0x${string}` },
+            });
+            const custom = new PasskeyManager(createMemoryStorage(), {
+                serverUrl: 'https://passkeys.example.com/passkeys',
+            });
+
+            await custom.importPasskeyAccount(undefined, 'myapp.com');
+
             expect(utils.importPasskeyUtils).toHaveBeenCalledWith(
-                mockGetFn,
+                undefined,
                 'myapp.com',
                 undefined,
-                'https://api.justaname.id'
+                'https://passkeys.example.com/passkeys'
             );
-            expect(result).toBe(mockResult);
         });
     });
 });

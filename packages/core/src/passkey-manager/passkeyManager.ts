@@ -14,7 +14,6 @@ import {
     type PasskeyGetFn,
     type InternalNativeCreateFn,
 } from './utils.js';
-import { JAW_BASE_URL } from '../constants.js';
 import type { WebAuthnAccount } from 'viem/account-abstraction';
 
 /**
@@ -246,7 +245,7 @@ export class PasskeyManager {
      * @throws {PasskeyLookupError} If backend lookup fails or passkey not found
      */
     async importPasskeyAccount(getFn?: PasskeyGetFn, rpId?: string): Promise<ImportWebAuthnAuthenticationResult> {
-        const serverUrl = this.preference.serverUrl ?? JAW_BASE_URL;
+        const serverUrl = this.preference.serverUrl;
         return importPasskeyUtils(getFn, rpId, this.apiKey, serverUrl);
     }
 
@@ -270,8 +269,8 @@ export class PasskeyManager {
         this.validateDisplayName(name);
         this.validateCredentialId(credentialId);
 
-        // Register with backend - use base URL since the route path is already defined in Routes
-        const serverUrl = this.preference.serverUrl ?? JAW_BASE_URL;
+        // Register with the passkey server
+        const serverUrl = this.preference.serverUrl;
         await registerPasskeyInBackend(
             {
                 credentialId,
@@ -309,8 +308,8 @@ export class PasskeyManager {
      * @throws {PasskeyLookupError} If backend lookup fails or passkey not found
      */
     async storePasskeyAccountForLogin(credentialId: string, address: Address, dev = false): Promise<void> {
-        // Lookup from backend first - use base URL since the route path is already defined in Routes
-        const serverUrl = this.preference.serverUrl ?? JAW_BASE_URL;
+        // Lookup from the passkey server first
+        const serverUrl = this.preference.serverUrl;
         const passkeyData = await lookupPasskeyFromBackend(credentialId, this.apiKey, dev, serverUrl);
 
         // Store auth state (validates inputs)

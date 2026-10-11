@@ -480,6 +480,7 @@ export class ReactUIHandler implements UIHandler {
             defaultChainId={this.config.defaultChainId}
             paymasters={this.config.paymasters}
             ens={this.config.ens}
+            serverUrl={this.config.serverUrl}
           />
         );
 
@@ -744,6 +745,7 @@ function OnboardingDialogWrapper({
   defaultChainId,
   paymasters,
   ens,
+  serverUrl,
 }: {
   request: ConnectUIRequest;
   onApprove: (data: any) => void;
@@ -752,6 +754,7 @@ function OnboardingDialogWrapper({
   defaultChainId?: number;
   paymasters?: Record<number, PaymasterConfig>;
   ens?: string;
+  serverUrl?: string;
 }) {
   const [open, setOpen] = useState(true);
   const [accounts, setAccounts] = useState<LocalStorageAccount[]>(() => getStoredLocalAccounts(apiKey));
@@ -856,6 +859,7 @@ function OnboardingDialogWrapper({
           chainId: targetChainId,
           apiKey,
           paymasterUrl: paymasters?.[targetChainId]?.url,
+          serverUrl,
         },
         account.credentialId
       );
@@ -899,6 +903,7 @@ function OnboardingDialogWrapper({
         chainId: targetChainId,
         apiKey,
         paymasterUrl: paymasters?.[targetChainId]?.url,
+        serverUrl,
       });
 
       // Import wrote the account + auth state to storage
@@ -955,6 +960,7 @@ function OnboardingDialogWrapper({
           chainId: createChainId,
           apiKey,
           paymasterUrl: paymasters?.[createChainId]?.url,
+          serverUrl,
           rpId,
           rpName,
         },

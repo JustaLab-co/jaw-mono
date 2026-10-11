@@ -317,6 +317,13 @@ export async function simulateAssetChanges({
     blockNumber,
   });
   const failed = results.find((r) => r.status !== 'success');
+  // A failed call that spent no gas and returned no data never executed: the node refused it before
+  // running it, as ADI's does for any sender with code (EIP-3607, "RejectCallerWithCode"). A real
+  // revert always burns at least the intrinsic gas. That leaves the outcome unknown, not a revert,
+  // so it takes the same path as a simulation that could not run.
+  if (failed && failed.gasUsed === 0n && failed.data === '0x') {
+    throw new Error('eth_simulateV1 refused to execute the batch');
+  }
   if (failed) return { deltas: [], willRevert: true, revertCause: classifyRevert(failed.error) };
 
   const { changes, erc721 } = await resolveTokenUnits(client, assetChanges, blockNumber, {

@@ -531,11 +531,21 @@ export class PasskeyLookupError extends Error {
 }
 
 /**
+ * The origin and path to call for a passkeys URL. The `serverUrl` preference is
+ * the passkeys endpoint itself, so a custom server is called exactly at the URL
+ * it was configured with: GET and POST at that path.
+ */
+export function passkeysEndpoint(passkeysUrl: string): { baseUrl: string; path: string } {
+    const url = new URL(passkeysUrl);
+    return { baseUrl: url.origin, path: url.pathname.replace(/\/+$/, '') || '/' };
+}
+
+/**
  * Register a passkey with the backend
  * @param request - The passkey registration request
  * @param apiKey - Optional API key for authentication
- * @param dev - Whether to use the staging environment
- * @param serverUrl - Optional custom server URL (defaults to https://api.justaname.id/wallet/v2/passkeys)
+ * @param dev - Whether to use the staging environment (ignored when serverUrl is given)
+ * @param serverUrl - Optional passkeys endpoint URL (defaults to https://api.justaname.id/wallet/v2/passkeys)
  * @throws {PasskeyRegistrationError} If registration fails
  */
 export async function registerPasskeyInBackend(
@@ -544,6 +554,7 @@ export async function registerPasskeyInBackend(
     dev?: boolean,
     serverUrl?: string
 ): Promise<void> {
+    const endpoint = serverUrl ? passkeysEndpoint(serverUrl) : undefined;
     try {
         await restCall(
             'REGISTER_PASSKEY',
@@ -552,7 +563,9 @@ export async function registerPasskeyInBackend(
             apiKey ? { 'x-api-key': apiKey } : {},
             undefined,
             dev,
-            serverUrl
+            endpoint?.baseUrl,
+            undefined,
+            endpoint?.path
         );
     } catch (error) {
         throw new PasskeyRegistrationError(
@@ -566,8 +579,8 @@ export async function registerPasskeyInBackend(
  * Lookup a single passkey by credential ID from the backend
  * @param credentialId - The credential ID to lookup
  * @param apiKey - Optional API key for authentication
- * @param dev - Whether to use the staging environment
- * @param serverUrl - Optional custom server URL (defaults to https://api.justaname.id/wallet/v2/passkeys)
+ * @param dev - Whether to use the staging environment (ignored when serverUrl is given)
+ * @param serverUrl - Optional passkeys endpoint URL (defaults to https://api.justaname.id/wallet/v2/passkeys)
  * @throws {PasskeyLookupError} If lookup fails or passkey not found
  */
 export async function lookupPasskeyFromBackend(
@@ -576,6 +589,7 @@ export async function lookupPasskeyFromBackend(
     dev?: boolean,
     serverUrl?: string
 ): Promise<PasskeyLookupResponse> {
+    const endpoint = serverUrl ? passkeysEndpoint(serverUrl) : undefined;
     try {
         const response = await restCall(
             'LOOKUP_PASSKEYS',
@@ -584,7 +598,9 @@ export async function lookupPasskeyFromBackend(
             apiKey ? { 'x-api-key': apiKey } : {},
             undefined,
             dev,
-            serverUrl
+            endpoint?.baseUrl,
+            undefined,
+            endpoint?.path
         );
 
         if (!response.passkeys || response.passkeys.length === 0) {

@@ -78,3 +78,7 @@ expo-env.d.ts
 
 # Verification runs (tools/verify)
 .verify-cache/
+
+# Playwright e2e output
+e2e/test-results/
+e2e/playwright-report/

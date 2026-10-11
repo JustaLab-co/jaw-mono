@@ -315,6 +315,8 @@ export interface UIHandlerConfig {
     showTestnets?: boolean;
     /** Theme configuration for UI appearance (colors, mode, border radius) */
     theme?: JawTheme;
+    /** Passkey server endpoint, passed on to Account as `serverUrl` */
+    serverUrl?: string;
 }
 
 /**

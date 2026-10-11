@@ -448,7 +448,7 @@ const ETH_BALANCE = word(10n ** 18n);
  * Answers are keyed off the exact calldata, not just "request 3", so a probe asking the wrong
  * question — a different interface id, the two probe groups swapped — fails here.
  */
-function stubNode({ batchReverts = false } = {}) {
+function stubNode({ batchReverts = false, senderRejected = false } = {}) {
   const blockParams: unknown[] = [];
   let blockNumberCalls = 0;
   let simulations = 0;
@@ -470,6 +470,11 @@ function stubNode({ batchReverts = false } = {}) {
         const [{ blockStateCalls }, block] = params as [{ blockStateCalls: { calls: unknown[] }[] }, string];
         blockParams.push(block);
         simulations++;
+
+        // ADI's node, for a sender that has code: every call is refused before it runs (EIP-3607),
+        // reported per call as a failure that spent no gas and returned no data.
+        if (senderRejected && simulations <= 2)
+          return blockStateCalls.map((b) => ({ number: block, calls: b.calls.map(() => failed()) }));
 
         if (simulations === 1)
           return [
@@ -557,6 +562,16 @@ describe('simulateAssetChanges', () => {
 
     expect(result).toMatchObject({ willRevert: true, deltas: [], revertCause: 'balance' });
     expect(node.simulations()).toBe(2);
+  });
+
+  it('rejects, rather than reporting a revert, when the node refused to run the batch', async () => {
+    stubNode({ senderRejected: true });
+
+    // Nothing executed, so nothing is known about whether the batch lands. Reading this as a
+    // revert put "likely to fail" on every transaction from a deployed account on ADI.
+    await expect(simulateAssetChanges({ chainId: base.id, account: ACCOUNT, calls })).rejects.toThrow(
+      /refused to execute/
+    );
   });
 });
 

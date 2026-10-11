@@ -1,0 +1,81 @@
+name: E2E (iframe)
+
+# The same suites over https, which is what lets the SDK use the embedded
+# iframe, on chromium, firefox and webkit. See e2e/README.md.
+#
+# Heavier than connect-flows (three browsers and dev servers), so on PRs it
+# only runs when something the iframe depends on changes: the SDK transport
+# and the checks that route to it, the keys app (the clickjacking guard and
+# the embedded shell live there), the dialogs in ui, or the suites. It can
+# also be run from the Actions tab.
+
+on:
+  pull_request:
+    paths:
+      - 'packages/core/src/communicator/**'
+      - 'packages/core/src/trusted-hosts.ts'
+      - 'packages/core/src/utils/user-agent.ts'
+      - 'apps/keys-jaw-id/**'
+      - 'packages/ui/**'
+      - 'e2e/**'
+      - '.github/workflows/e2e-iframe.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  iframe:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
+        with:
+          bun-version: latest
+
+      - name: Cache bun dependencies
+        uses: actions/cache@v4
+        with:
+          path: ~/.bun/install/cache
+          key: bun-${{ runner.os }}-${{ hashFiles('bun.lock') }}
+          restore-keys: bun-${{ runner.os }}-
+
+      - run: bun install --frozen-lockfile
+
+      - name: Build SDK packages
+        run: bunx nx run-many -t build -p @jaw.id/core @jaw.id/wagmi @jaw.id/ui
+
+      - name: Install browsers
+        run: bunx playwright install --with-deps chromium firefox webkit
+
+      # A throwaway certificate for localhost. The browsers accept it through
+      # ignoreHTTPSErrors, so nothing is added to the system trust store.
+      - name: Create a localhost certificate
+        run: |
+          openssl req -x509 -newkey rsa:2048 -nodes -days 1 -subj '/CN=localhost' \
+            -addext 'subjectAltName=DNS:localhost' \
+            -keyout "$RUNNER_TEMP/localhost-key.pem" -out "$RUNNER_TEMP/localhost.pem"
+
+      - name: Run all suites over https
+        working-directory: e2e
+        env:
+          JAW_E2E_HTTPS: '1'
+          JAW_E2E_TLS_CERT: ${{ runner.temp }}/localhost.pem
+          JAW_E2E_TLS_KEY: ${{ runner.temp }}/localhost-key.pem
+        run: bunx playwright test --config playwright.config.ts
+
+      - name: Upload report and traces
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: e2e-iframe
+          path: |
+            e2e/playwright-report
+            e2e/test-results
+          retention-days: 14

@@ -30,6 +30,7 @@ function isOurHost(serverUrl: string): boolean {
  * @param dev - Whether to use the staging environment.
  * @param serverUrl - Optional custom server URL to override the default.
  * @param queryParams - Optional query parameters to append to the URL (for PATCH/PUT with body + query params)
+ * @param path - Optional path to call instead of the route's own, for a server configured by its full endpoint URL.
  * @returns The promise of the data.
  */
 export const restCall = <
@@ -47,10 +48,11 @@ export const restCall = <
     pathParams?: P,
     dev?: boolean,
     serverUrl?: string,
-    queryParams?: Q
+    queryParams?: Q,
+    path?: string
 ): Promise<ROUTES[T]['response']> => {
     // Get the route template
-    let url = Routes[route];
+    let url = path ?? Routes[route];
 
     // Replace path parameters if provided
     if (pathParams) {

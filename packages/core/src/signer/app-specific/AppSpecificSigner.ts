@@ -41,6 +41,7 @@ type ConstructorOptions = {
     paymasters?: Record<number, PaymasterConfig>;
     ens?: string;
     theme?: JawTheme;
+    serverUrl?: string;
 };
 
 export class AppSpecificSigner extends JAWSigner {
@@ -63,6 +64,7 @@ export class AppSpecificSigner extends JAWSigner {
                 appLogoUrl: params.metadata.appLogoUrl,
                 ens: params.ens,
                 theme: params.theme,
+                serverUrl: params.serverUrl,
             });
         }
     }

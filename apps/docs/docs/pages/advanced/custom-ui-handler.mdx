@@ -82,8 +82,14 @@ interface UIHandlerConfig {
   ens?: string;
   /** Whether to show testnet chains */
   showTestnets?: boolean;
+  /** Passkey server endpoint, set from `preference.serverUrl` */
+  serverUrl?: string;
 }
 ```
+
+:::warning
+If your handler creates or imports accounts, pass `config.serverUrl` to `Account.create` and `Account.import`. Otherwise passkeys are registered with and looked up from the default JAW server, even when `preference.serverUrl` points at your own [passkey server](/advanced/passkey-server).
+:::
 
 ## Request Types
 
