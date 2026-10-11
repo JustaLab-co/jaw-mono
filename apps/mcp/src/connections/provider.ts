@@ -1,6 +1,7 @@
 import { CONNECTION_SCOPES, FIRST_PARTY_CLIENTS, hasUnstorableText } from '@jaw.id/agent';
 import Provider, { errors, interactionPolicy, type Configuration } from 'oidc-provider';
 import { databaseUnreachable, log } from '@/lib/edge';
+import { resolvesPublic } from '@/lib/safe-fetch';
 import { PgAdapter, sessionKey, successorId } from './adapter';
 import { bridge, requestUrl } from './bridge';
 import { config, type Config } from './config';
@@ -70,6 +71,8 @@ export function createProvider(cfg: Config, overrides: Partial<Configuration> = 
       clientIdMetadataDocument: {
         enabled: true,
         ack: 'draft-02',
+        // The provider cuts a private socket only after connecting; the delay would tell whether the host is live.
+        allowFetch: (_ctx, clientId) => resolvesPublic(new URL(clientId).hostname),
         // Public clients only: a jwks_uri would be fetched for every request it signs.
         allowClient: async (_ctx, client) =>
           client.tokenEndpointAuthMethod === 'none' && !client.jwksUri && !hasUnstorableText(client.clientName ?? ''),

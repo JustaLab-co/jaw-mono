@@ -112,6 +112,15 @@ describe('consent hand-back', () => {
     expect(res.status).toBe(401);
   });
 
+  it('given a malformed signature, when consent is posted, then 401 bad_signature and no connection', async () => {
+    const { uid } = await pending();
+    const before = await getDb().select().from(connections);
+    const res = await postConsent(uid, owner().address, `0x${'11'.repeat(65)}`);
+    expect(res.status).toBe(401);
+    expect(await res.json()).toEqual({ error: 'bad_signature' });
+    expect(await getDb().select().from(connections)).toHaveLength(before.length);
+  });
+
   it('answers 503, not bad_signature, when the chain cannot be asked', async () => {
     const { uid, details } = await pending();
     const signer = owner();

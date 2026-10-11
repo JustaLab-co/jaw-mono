@@ -20,6 +20,15 @@ import {
   token,
 } from './testkit';
 
+vi.mock('node:dns', async (original) => {
+  const dns = await original<typeof import('node:dns')>();
+  const lookup = ((host: string, opts: object, cb: (...a: unknown[]) => void) =>
+    host.endsWith('.example.test')
+      ? cb(null, [{ address: '93.184.216.34', family: 4 }])
+      : dns.lookup(host, opts, cb)) as typeof dns.lookup;
+  return { ...dns, default: { ...dns, lookup }, lookup };
+});
+
 setTestEnv();
 const { verifyBearer } = await import('./auth');
 const { config } = await import('./config');

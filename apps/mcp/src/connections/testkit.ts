@@ -107,9 +107,10 @@ export const verifyLocally = ({
   payload: Extract<SignedPayload, { type: 'message' | 'typed_data' }>;
   signature: Hex;
 }) =>
-  payload.type === 'message'
+  (payload.type === 'message'
     ? verifyMessage({ address, message: payload.message, signature })
-    : verifyTypedData({ address, signature, ...payload.typedData });
+    : verifyTypedData({ address, signature, ...payload.typedData })
+  ).catch(() => false);
 
 /** What the keys page posts to /api/connections: a sign-in valid ten minutes. */
 export async function pageProof(signer: ReturnType<typeof owner>) {
