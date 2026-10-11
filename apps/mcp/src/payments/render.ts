@@ -71,7 +71,7 @@ function summaryOf(row: PaymentRow, out: Omit<PayOutput, 'summary'>): string {
     default:
       if (out.payment) return `The signed payment expired unused. Nothing moved to the seller.${moved}`;
       if (oneOff) {
-        return `Not paid: ${out.refusal?.code}. Nothing was sent. The owner can pay this once at ${oneOff.approveUrl}; poll jaw_request_status with that requestId. Or ask for a larger budget with jaw_request_budget.${moved}`;
+        return `Not paid: ${out.refusal?.code}. Nothing was sent. The owner can pay this once at ${oneOff.approveUrl}; poll jaw_request_status with that requestId.${raise}${moved}`;
       }
       return `Not paid: ${out.refusal?.code}. Nothing was sent.${raise}${moved}`;
   }

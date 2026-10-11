@@ -237,6 +237,13 @@ export async function recordTopUp(tx: Tx, id: string, funded: TopUpOutcome): Pro
     .where(eq(payments.id, id));
 }
 
+export async function addTopUp(tx: Tx, id: string, delta: bigint): Promise<void> {
+  await tx
+    .update(payments)
+    .set({ topUpAmount: sql`nullif(coalesce(${payments.topUpAmount}, 0) + ${delta.toString()}, 0)` })
+    .where(eq(payments.id, id));
+}
+
 const holding = sql`((${payments.state} = 'pending' and ${leaseLive} and ${payments.reserved} is not null)
   or (${payments.state} in ('signed', 'unknown')
     and ${payments.deadline} > ${dbNow} - ${EXPIRY_MARGIN_MS} * interval '1 millisecond'))`;

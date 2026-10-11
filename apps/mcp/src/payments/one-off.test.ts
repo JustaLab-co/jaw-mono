@@ -505,7 +505,7 @@ describe('what the agent can see and resend', () => {
     const request = { url: url('/dearer'), maxAmount: '4000', idempotencyKey: 'k-dearer' };
 
     const first = await pay(t, request, deps());
-    expect(first.structuredContent?.refusal?.code).toBe('over_cap');
+    expect(first.structuredContent?.refusal).toEqual({ code: 'over_cap' });
     prices.set('/dearer', '3000');
     const retried = await pay(t, request, deps());
 
