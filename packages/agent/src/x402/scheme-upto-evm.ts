@@ -2,6 +2,7 @@ import { bytesToHex } from 'viem';
 import { isHexShaped, isPayableAddress, isZeroAddress } from './address.js';
 import type { X402PaymentPayload, X402Permit2Authorization, X402PaymentRequirement } from './types.js';
 import { usdcForNetwork } from './asset-registry.js';
+import { settlementWindow } from './settlement-window.js';
 import {
   PERMIT_WITNESS_TRANSFER_FROM_TYPES,
   UPTO_VERIFIED_CHAIN_IDS,
@@ -45,25 +46,6 @@ export interface BuildUptoOptions {
   /** Override the 32-byte nonce for deterministic tests. */
   nonce?: `0x${string}`;
 }
-
-/**
- * The authorization must stay valid until the facilitator's settlement is
- * MINED. Servers advertise timeouts as low as 60s, which is not enough for
- * verify, submit and a block, so the exact scheme learned to floor it at ten
- * minutes and this one inherits the lesson. A longer window costs nothing: the
- * Permit2 nonce is single-use, so the signature dies on first settlement
- * whether or not the deadline has passed.
- */
-const SETTLEMENT_WINDOW_FLOOR = 600;
-
-/**
- * And a ceiling, because the server picks this number too. A challenge is free
- * to advertise a year, and the deadline is what decides how long a failed
- * attempt keeps its ceiling reserved against the cap, so an absurd window parks
- * the user's budget for as long as the server likes. An hour is generous for
- * verify, submit and mine.
- */
-const SETTLEMENT_WINDOW_CEILING = 3600;
 
 /**
  * Backdating for clock skew. `validAfter` is a floor the proxy checks against
@@ -149,11 +131,7 @@ export async function buildUptoPayment(
   }
 
   const nowSec = opts.now ?? Math.floor(Date.now() / 1000);
-  const window = Math.min(
-    Math.max(requirement.maxTimeoutSeconds || 0, SETTLEMENT_WINDOW_FLOOR),
-    SETTLEMENT_WINDOW_CEILING
-  );
-  const deadline = BigInt(nowSec + window);
+  const deadline = BigInt(nowSec + settlementWindow(requirement));
   const validAfter = BigInt(Math.max(nowSec - VALID_AFTER_SLACK, 0));
   const nonce = opts.nonce ?? bytesToHex(crypto.getRandomValues(new Uint8Array(32)));
 

@@ -125,6 +125,19 @@ describe('buildExactPayment', () => {
     );
   });
 
+  it.each([
+    [0, 600],
+    [1800, 1800],
+    [10 * 365 * 86_400, 3600],
+    [Number.MAX_SAFE_INTEGER, 3600],
+    [1e21, 3600],
+  ])('given maxTimeoutSeconds %d, signs an authorization valid for %d seconds', async (asked, window) => {
+    const payload = await buildExactPayment({ ...requirement, maxTimeoutSeconds: asked }, account.address, signer, {
+      now: 1_000_000,
+    });
+    expect(payload.payload.authorization.validBefore).toBe(String(1_000_000 + window));
+  });
+
   /**
    * The two spellings a real server uses round-trip untouched, which is what
    * lets a facilitator match the payload against its own challenge.

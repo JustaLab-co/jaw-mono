@@ -17,7 +17,8 @@ import {
 import { parseSiweMessage } from 'viem/siwe';
 import type { GrantedPermission } from '../session/session-config.js';
 import type { Challenge } from '../x402/http.js';
-import { exactDraft, SETTLEMENT_WINDOW_FLOOR, type ExactDraft } from '../x402/scheme-exact-evm.js';
+import { exactDraft, type ExactDraft } from '../x402/scheme-exact-evm.js';
+import { SETTLEMENT_WINDOW_FLOOR } from '../x402/settlement-window.js';
 import type { X402PaymentRequirement } from '../x402/types.js';
 import { clientIdentity, type ClientIdentity } from './client-identity.js';
 import { rejectionTypedData, RESERVED_PREFIX, reservedSigningRefusal } from './reserved.js';
