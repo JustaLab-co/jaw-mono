@@ -6,8 +6,14 @@ set -euo pipefail
 RUN=${1:?run dir}; . "$RUN/run.env"
 DIR=$(cd "$(dirname "$0")" && pwd)
 docker info >/dev/null 2>&1 || { echo "docker is not running" >&2; exit 1; }
-PROJECT=jaw-verify-$(basename "$RUN" | tr -c 'a-z0-9\n' '-')
-PROFILE=; [ -f "$REPO/apps/mcp/Dockerfile" ] && PROFILE="--profile mcp"
+# Hash of the absolute run path: two worktrees can start runs with the same id.
+PROJECT=jaw-verify-$(printf %s "$RUN" | shasum | cut -c1-8)
+# The image builds from up.sh's clean worktree of HEAD when there is one.
+CTX=$REPO; [ -d "${SRC:-}" ] && CTX=$SRC
+if [ "$CTX" = "$REPO" ] && [ -n "$(git -C "$REPO" status --porcelain 2>/dev/null)" ]; then
+  echo "refusing to build the mcp image from a dirty tree; commit first" >&2; exit 1
+fi
+PROFILE=; [ -f "$CTX/apps/mcp/Dockerfile" ] && PROFILE="--profile mcp"
 # The OAuth issuer must equal the URL clients reach, so the host port is fixed
 # before start. The sealing key is per run and stays out of run.env, which is
 # copied into evidence.
@@ -23,7 +29,8 @@ export JAW_MCP_SEALING_KEYS=$(cat "$KEYFILE")
 BUILD=--build
 if [ -n "${JAW_VERIFY_MCP_IMAGE:-}" ]; then export MCP_IMAGE=$JAW_VERIFY_MCP_IMAGE; BUILD=--no-build
 else export MCP_IMAGE=jaw-verify-mcp:$PROJECT; fi
-REPO=$REPO docker compose -p "$PROJECT" -f "$DIR/compose.yaml" $PROFILE up -d $BUILD --wait >"$RUN/evidence/compose-up.log" 2>&1 \
+printf 'head: %s\ntree: clean\n' "$HEAD_SHA" >"$RUN/evidence/compose-up.log"
+REPO=$CTX docker compose -p "$PROJECT" -f "$DIR/compose.yaml" $PROFILE up -d $BUILD --wait >>"$RUN/evidence/compose-up.log" 2>&1 \
   || { tail -20 "$RUN/evidence/compose-up.log" >&2; exit 1; }
 PG=$(docker compose -p "$PROJECT" -f "$DIR/compose.yaml" port postgres 5432 | sed 's/.*://')
 { echo "COMPOSE_PROJECT=$PROJECT"; echo "DATABASE_URL=postgres://jaw:jaw@localhost:$PG/jaw_mcp"; } >>"$RUN/run.env"
@@ -32,5 +39,5 @@ if [ -n "$PROFILE" ]; then
 else
   echo "apps/mcp/Dockerfile not found: Postgres only" >&2
 fi
-cp "$RUN/run.env" "$RUN/evidence/run.env"
+{ printf 'head: %s\ntree: clean\n' "$HEAD_SHA"; cat "$RUN/run.env"; } >"$RUN/evidence/run.env"
 grep -E 'DATABASE_URL|MCP_URL' "$RUN/run.env"

@@ -17,7 +17,7 @@
   },
   "targetDefaults": {
     "test": {
-      "dependsOn": ["^generate-sdk-info"]
+      "dependsOn": ["^generate-sdk-info", "^build"]
     }
   },
   "plugins": [
