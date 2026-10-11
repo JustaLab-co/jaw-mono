@@ -6,6 +6,7 @@ import { isPrivate, publicOnly, safeFetch } from './safe-fetch';
 
 const server = createServer((req, res) => {
   if (req.url === '/redirect') return void res.writeHead(302, { location: 'http://169.254.169.254/' }).end();
+  if (req.url === '/large') return void res.writeHead(200, { 'content-length': '1000001' }).end('x'.repeat(1_000_001));
   res.writeHead(402, { 'payment-required': 'abc' }).end('body');
 });
 await new Promise<void>((r) => server.listen(0, '127.0.0.1', r));
@@ -38,6 +39,13 @@ describe('safeFetch', () => {
     expect(res.status).toBe(402);
     expect(res.headers.get('payment-required')).toBe('abc');
     expect(await res.text()).toBe('body');
+  });
+
+  it('given a body one byte over the cap, when it is read, then it is cut at the cap with no content-length', async () => {
+    const res = await guarded(`http://127.0.0.1:${port}/large`);
+    expect(res.status).toBe(200);
+    expect(res.headers.get('content-length')).toBeNull();
+    expect((await res.text()).length).toBe(1_000_000);
   });
 
   it('never follows a redirect', async () => {

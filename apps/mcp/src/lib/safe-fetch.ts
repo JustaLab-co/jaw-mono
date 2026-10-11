@@ -88,10 +88,15 @@ export function safeFetch(insecureHosts: ReadonlySet<string>): typeof fetch {
         (res) => {
           const chunks: Buffer[] = [];
           let size = 0;
+          // A longer body is cut, not refused: a paid answer still arrives, and its payment stays recorded.
           res.on('data', (chunk: Buffer) => {
+            if (size >= MAX_BODY_BYTES) return;
+            chunks.push(chunk.subarray(0, MAX_BODY_BYTES - size));
             size += chunk.length;
-            if (size > MAX_BODY_BYTES) res.destroy(new Error('response body too large'));
-            else chunks.push(chunk);
+            if (size < MAX_BODY_BYTES) return;
+            delete res.headers['content-length'];
+            resolve(toResponse(res, Buffer.concat(chunks)));
+            res.destroy();
           });
           res.on('end', () => resolve(toResponse(res, Buffer.concat(chunks))));
           res.on('error', reject);

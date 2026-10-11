@@ -22,9 +22,12 @@ const dbNow = sql`statement_timestamp()`;
 const leaseFromNow = sql`${dbNow} + ${LEASE_MS} * interval '1 millisecond'`;
 const leaseLive = sql<boolean>`${payments.leaseUntil} > ${dbNow}`;
 const leaseLapsed = not(leaseLive);
-/** A row with the database's answer to whether its lease still runs. */
-const withLease = { ...getTableColumns(payments), leaseLive };
-export type LeasedRow = PaymentRow & { leaseLive: boolean };
+// A signed row nobody concluded: its proof may never have arrived.
+const unanswered = and(eq(payments.state, 'signed'), or(isNull(payments.kind), eq(payments.code, 'no_response')));
+const sendable = or(eq(payments.state, 'pending'), unanswered);
+/** A row with the database's answer to whether its lease still runs and whether it may be sent. */
+const withLease = { ...getTableColumns(payments), leaseLive, sendable: sql<boolean>`(${sendable})` };
+export type LeasedRow = PaymentRow & { leaseLive: boolean; sendable: boolean };
 
 export interface PaymentRequest {
   url: string;
@@ -48,7 +51,7 @@ export function requestHash(r: PaymentRequest): string {
 
 export type Claim =
   | { kind: 'run'; row: PaymentRow; token: string }
-  | { kind: 'resume'; row: PaymentRow; authorization: SignedAuthorization }
+  | { kind: 'resume'; row: PaymentRow; token: string }
   | { kind: 'stored'; row: PaymentRow }
   | { kind: 'busy' }
   | { kind: 'conflict' }
@@ -61,22 +64,52 @@ interface Owner {
   permissionId: string | undefined;
 }
 
+/** What a row reads as outside: a refused row is kept pending only so its key can run again. */
+export const stateOf = (row: Pick<PaymentRow, 'state' | 'kind'>): PaymentState =>
+  row.state === 'pending' && row.kind !== null ? 'failed' : row.state;
+
 export async function findPayment(id: string): Promise<PaymentRow | undefined> {
   const [row] = await getDb().select().from(payments).where(eq(payments.id, id));
   return row;
 }
 
-async function find(connectionId: string, key: string): Promise<PaymentRow | undefined> {
+async function find(connectionId: string, key: string): Promise<LeasedRow | undefined> {
   const [row] = await getDb()
-    .select()
+    .select(withLease)
     .from(payments)
     .where(and(eq(payments.connectionId, connectionId), eq(payments.idempotencyKey, key)));
   return row;
 }
 
-/** A signed row nobody concluded: its proof may never have arrived, so a retry sends it again. */
-export const awaitingAnswer = (row: PaymentRow) =>
-  row.state === 'signed' && (row.kind === null || row.code === 'no_response');
+/** The only way a call gets to send a row: once its lease lapsed and no reconciler run holds it. */
+export async function take(
+  row: PaymentRow,
+  permissionId?: string
+): Promise<{ row: PaymentRow; token: string } | undefined> {
+  const token = randomBytes(16).toString('base64url');
+  const fresh = row.state === 'pending' ? { kind: null, code: null, httpStatus: null, reserved: null } : {};
+  const [taken] = await getDb()
+    .update(payments)
+    .set({ ...fresh, ...(permissionId && { permissionId }), leaseToken: token, leaseUntil: leaseFromNow })
+    .where(
+      and(
+        eq(payments.id, row.id),
+        eq(payments.state, row.state),
+        sendable,
+        leaseLapsed,
+        or(isNull(payments.reconcilingUntil), lt(payments.reconcilingUntil, dbNow))
+      )
+    )
+    .returning();
+  return taken && { row: taken, token };
+}
+
+export async function release(id: string, token: string): Promise<void> {
+  await getDb()
+    .update(payments)
+    .set({ leaseUntil: dbNow })
+    .where(and(eq(payments.id, id), eq(payments.leaseToken, token)));
+}
 
 /**
  * Opens the row for this key, or says what the existing one allows. A stored
@@ -104,24 +137,17 @@ export async function claim(owner: Owner, key: string, request: PaymentRequest):
       .onConflictDoNothing()
       .returning();
     if (inserted) return { kind: 'run', row: inserted, token };
-    row = (await find(owner.connectionId, key)) as PaymentRow;
+    row = (await find(owner.connectionId, key)) as LeasedRow;
   }
   if (row.requestHash !== hash) return { kind: 'conflict' };
-  if (awaitingAnswer(row)) return { kind: 'resume', row, authorization: row.authorization as SignedAuthorization };
-  if (row.state !== 'pending') return { kind: 'stored', row };
+  if (!row.sendable) return { kind: 'stored', row };
+  if (row.state === 'signed') {
+    const taken = await take(row);
+    return taken ? { kind: 'resume', ...taken } : { kind: 'busy' };
+  }
   if (!owner.permissionId) return { kind: 'no_grant' };
-  const token = randomBytes(16).toString('base64url');
-  const [reclaimed] = await getDb()
-    .update(payments)
-    .set({
-      leaseToken: token,
-      leaseUntil: leaseFromNow,
-      reserved: null,
-      permissionId: owner.permissionId,
-    })
-    .where(and(eq(payments.id, row.id), eq(payments.state, 'pending'), leaseLapsed))
-    .returning();
-  return reclaimed ? { kind: 'run', row: reclaimed, token } : { kind: 'busy' };
+  const taken = await take(row, owner.permissionId);
+  return taken ? { kind: 'run', ...taken } : { kind: 'busy' };
 }
 
 /** The row an approved one-off opens: charged to the approval, paid by the account. */
@@ -140,19 +166,8 @@ export async function findByApproval(approvalId: string): Promise<LeasedRow | un
   return row;
 }
 
-/** A pending one-off whose lease lapsed, under a new token, as `claim` takes over a pending row. */
-export async function reclaimOneOff(id: string): Promise<{ row: PaymentRow; token: string } | undefined> {
-  const token = randomBytes(16).toString('base64url');
-  const [row] = await getDb()
-    .update(payments)
-    .set({ leaseToken: token, leaseUntil: leaseFromNow })
-    .where(and(eq(payments.id, id), eq(payments.state, 'pending'), leaseLapsed))
-    .returning();
-  return row && { row, token };
-}
-
 const owned = (id: string, token: string) =>
-  and(eq(payments.id, id), eq(payments.state, 'pending'), eq(payments.leaseToken, token));
+  and(eq(payments.id, id), eq(payments.state, 'pending'), eq(payments.leaseToken, token), leaseLive);
 
 /** The `onSigned` hook. Throws when the row is no longer this call's, so nothing is sent. */
 export async function markSigned(id: string, token: string, a: SignedAuthorization): Promise<void> {
@@ -250,9 +265,8 @@ export interface Conclusion {
 }
 
 /**
- * Writes what the call came to: from pending under the lease, or from a signed
- * row nobody concluded yet. Returns the row as written, or nothing when another
- * call concluded it first.
+ * Writes what the call came to and ends its lease. A pending conclusion is a
+ * refusal the next call may retry. Nothing when another call took the row.
  */
 export async function finish(
   id: string,
@@ -271,18 +285,12 @@ export async function finish(
       txHash: c.txHash ?? null,
       blockTime: c.blockTime ?? null,
       ...traceOf(c),
-      fenced: c.state === 'signed' && c.kind !== 'paid' ? null : fenced,
-      finishedAt: c.state === 'signed' ? null : new Date(),
+      fenced: c.state === 'pending' || (c.state === 'signed' && c.kind !== 'paid') ? null : fenced,
+      finishedAt: c.state === 'signed' || c.state === 'pending' ? null : new Date(),
+      ...(c.state === 'pending' && { reserved: null }),
+      leaseUntil: dbNow,
     })
-    .where(
-      and(
-        eq(payments.id, id),
-        or(
-          and(eq(payments.state, 'pending'), eq(payments.leaseToken, token)),
-          and(eq(payments.state, 'signed'), or(isNull(payments.kind), eq(payments.code, 'no_response')))
-        )
-      )
-    )
+    .where(and(eq(payments.id, id), eq(payments.leaseToken, token), sendable))
     .returning();
   return row;
 }

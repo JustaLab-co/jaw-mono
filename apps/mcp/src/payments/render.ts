@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import type { PaymentRow } from './store';
+import { stateOf, type PaymentRow } from './store';
 
 const money = z.object({ amount: z.string(), asset: z.string().describe('CAIP-19 asset id') });
 
@@ -55,9 +55,11 @@ function summaryOf(row: PaymentRow, out: Omit<PayOutput, 'summary'>): string {
   const paid = `${out.payment?.amount} base units to ${out.payment?.payTo}`;
   if (out.kind === 'free') return `Free: answered ${out.httpStatus} without a payment.`;
   const oneOff = out.refusal?.oneOff;
+  const raise = out.refusal?.next ? ' Ask for a larger budget with jaw_request_budget.' : '';
+  if (row.kind === null) return 'Paying now. Ask again in a few seconds.';
   switch (row.state) {
     case 'pending':
-      return 'Paying now. Ask again in a few seconds.';
+      return `Not paid: ${out.refusal?.code}. Nothing was sent. Send the same idempotencyKey again to retry.${raise}`;
     case 'settled':
       return `Paid ${paid}. Settled${out.payment?.txHash ? ` in ${out.payment.txHash}` : ' on chain'}.${moved}`;
     case 'signed':
@@ -71,7 +73,7 @@ function summaryOf(row: PaymentRow, out: Omit<PayOutput, 'summary'>): string {
       if (oneOff) {
         return `Not paid: ${out.refusal?.code}. Nothing was sent. The owner can pay this once at ${oneOff.approveUrl}; poll jaw_request_status with that requestId. Or ask for a larger budget with jaw_request_budget.${moved}`;
       }
-      return `Not paid: ${out.refusal?.code}. Nothing was sent.${out.refusal?.next ? ' Ask for a larger budget with jaw_request_budget.' : ''}${moved}`;
+      return `Not paid: ${out.refusal?.code}. Nothing was sent.${raise}${moved}`;
   }
 }
 
@@ -80,7 +82,7 @@ export function render(row: PaymentRow, fenced: string[], oneOff?: OneOffOffer):
   const out = {
     paymentId: row.id,
     idempotencyKey: row.idempotencyKey,
-    state: row.state,
+    state: stateOf(row),
     kind: row.kind ?? 'failed',
     httpStatus: row.httpStatus,
     ...(row.nonce && {
