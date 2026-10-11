@@ -60,7 +60,7 @@ async function budgetOf(grant: Grant, t: Tenant) {
     readLiveness(target, clients),
     readCurrentPeriods({ ...target, token: grant.token }, clients),
     pulledUnderOtherGrants(getDb(), t.connectionId, grant.permissionId),
-    entriesFor(grant.permissionId, new Date()),
+    entriesFor(grant.permissionId),
   ]);
   const asset = caip19(caip2(grant.chainId), grant.token);
   const counted = periods[0]?.period;

@@ -337,7 +337,7 @@ async function payWithinGrant(
   const session = sessionOf(grant);
   // Seeded from the grant alone: nothing a tool call sends can widen it. maxAmount only tightens.
   const policy = resolveSessionX402Policy(undefined, session);
-  const entries = await entriesFor(grant.permissionId, new Date());
+  const entries = await entriesFor(grant.permissionId);
   const periodUsage = await currentLimitUsageOnChain(entries, policy, payer.address, session, new Date(), {
     clients: deps.clients,
   });
