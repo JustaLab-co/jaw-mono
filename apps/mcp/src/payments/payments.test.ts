@@ -22,12 +22,14 @@ import {
   connect,
   fakeWallet,
   setTestEnv,
+  verifyLocally,
   walletAnswers,
   walletsSettled,
 } from '@/connections/testkit';
 import { getDb } from '@/db/client';
-import { grants, payments, settings } from '@/db/schema';
+import { connections, grants, payments, settings } from '@/db/schema';
 import { currentGrant } from '@/grants/store';
+import { revokeConnection } from '@/tools/connections';
 import { requestBudget } from '@/tools/request-budget';
 import {
   lockWaiters,
@@ -235,13 +237,17 @@ async function approveBudget(c: Awaited<ReturnType<typeof connect>>, perDay: str
   balances.set(c.signer.address.toLowerCase(), 5_000_000n);
 }
 
-/** Another app of the same owner, which ends `t`'s connection with jaw_revoke_connection. */
+/** Another app of the same owner, which ends `t`'s connection with jaw_revoke_connection, the owner confirming. */
 async function revoker(c: Awaited<ReturnType<typeof connect>>, t: Tenant) {
   const other = await connect(c.signer, { scope: 'wallet:read' });
-  return async () =>
-    (await callTool(other.access_token, 'jaw_revoke_connection', { id: t.connectionId })).structuredContent as
-      | { connection: { status: string } }
-      | undefined;
+  const asker = (await verifyBearer(other.access_token))?.extra?.tenant as Tenant;
+  const confirmed = { openWallet: fakeWallet(walletAnswers(c.signer)), verify: verifyLocally };
+  return async () => {
+    await revokeConnection(asker, t.connectionId, confirmed);
+    await walletsSettled();
+    const [row] = await getDb().select().from(connections).where(eq(connections.id, t.connectionId));
+    return { connection: { status: row.status } };
+  };
 }
 
 const url = (path: string) => `http://${SELLER}${path}`;
@@ -830,7 +836,7 @@ describe('given a pay request that verified its bearer before another app of the
   it('when the revoke commits after its refill, then the pay still settles', async () => {
     const { c, t } = await connected('1');
     const revoke = await revoker(c, t);
-    let revoked: Awaited<ReturnType<typeof revoke>>;
+    let revoked: Awaited<ReturnType<typeof revoke>> | undefined;
     onProof.set('/race', async () => {
       revoked = await revoke();
     });

@@ -33,7 +33,9 @@ await new Promise((r) => relay.once('listening', r));
 
 setTestEnv();
 process.env.JAW_RELAY_URL = `ws://127.0.0.1:${(relay.address() as AddressInfo).port}`;
-const { openRelay } = await import('./relay');
+process.env.JAW_MCP_API_KEY = 'server-secret-key';
+const { openRelay: open } = await import('./relay');
+const openRelay = (chainId: number, ms = 30_000) => open(chainId, new Date(Date.now() + ms));
 afterAll(() => relay.close());
 
 type Answer = (method: string, params: unknown) => { success: true; data: unknown } | { success: false; error: object };
@@ -79,7 +81,21 @@ describe('a wallet session over the relay', () => {
     const accounts = await wallet.run((ask) => ask('eth_requestAccounts', []));
     expect(accounts).toEqual(['0x00000000000000000000000000000000000000aa']);
     await opened.shutdown;
-    expect(opened.inits).toEqual([expect.objectContaining({ type: 'init', chainId: 84532 })]);
+    expect(opened.inits).toEqual([{ type: 'init', chainId: 84532 }]);
+  });
+
+  it("carries no key: the page takes its own deployment's, and the server's never leaves it", async () => {
+    const wallet = await openRelay(84532);
+    const opened = await page(wallet.url, () => ({ success: true, data: [] }));
+    await wallet.run((ask) => ask('eth_requestAccounts', []));
+    await opened.shutdown;
+    expect(opened.inits[0]).not.toHaveProperty('apiKey');
+    expect(JSON.stringify(opened.inits)).not.toContain('server-secret-key');
+  });
+
+  it('given nobody opens the link before its deadline, then the session ends refused', async () => {
+    const wallet = await openRelay(84532, 300);
+    await expect(wallet.run((ask) => ask('eth_requestAccounts', []))).rejects.toThrow();
   });
 
   it('keeps the key out of what the relay sees: the public key rides the fragment, every message is ciphertext', async () => {

@@ -119,4 +119,15 @@ describe('jaw_send_calls', () => {
     expect(result.content[0].text).toContain('jaw_request_budget');
     expect(bridge.sent).toEqual([]);
   });
+
+  it('given a function the budget lists on another contract, then it refuses: a listing names a contract, not just a function', async () => {
+    const { c } = await sender([{ target: USDC, functionSignature: 'approve(address,uint256)' }]);
+    const elsewhere: Address = '0x3333333333333333333333333333333333333333';
+    const result = await callTool(c.access_token, 'jaw_send_calls', {
+      calls: [{ to: elsewhere, data: approveCall(BOB) }],
+    });
+    expect(result.isError).toBe(true);
+    expect(result.content[0].text).toContain(elsewhere);
+    expect(bridge.sent).toEqual([]);
+  });
 });

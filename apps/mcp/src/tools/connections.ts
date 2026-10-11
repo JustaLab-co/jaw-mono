@@ -1,11 +1,16 @@
 import type { McpServer } from '@modelcontextprotocol/server';
 import { and, desc, eq, inArray, ne } from 'drizzle-orm';
+import { isAddressEqual, isHex, stringToHex, type Address } from 'viem';
 import { z } from 'zod';
 import { tenant, type Tenant } from '@/connections/auth';
+import { config } from '@/connections/config';
+import { openRelay, WalletBusy, type OpenWallet, type Wallet } from '@/connections/relay';
 import { endConnection, ownedBy } from '@/connections/rows';
 import { getDb } from '@/db/client';
 import { connections, grants } from '@/db/schema';
-import { FloatBusy, LOCK_WAIT_MS, withFloat } from '@/payments/float-lock';
+import { LOCK_WAIT_MS, withFloat } from '@/payments/float-lock';
+import { verifyOnChain, type VerifySignature } from '@/lib/chain';
+import { errorLabel, log } from '@/lib/edge';
 import { refusal } from './reply';
 
 const connectionView = z.object({
@@ -84,37 +89,78 @@ export function registerConnectionTools(server: McpServer) {
     'jaw_revoke_connection',
     {
       description:
-        "End another app's connection to this account: its tokens stop working and its session key is gone, so its budget can no longer be spent. To end this connection, and return its float, use jaw_disconnect.",
+        "End another app's connection to this account, once the owner confirms it in their wallet: its tokens stop working and its session key is gone, so its budget can no longer be spent. Returns a link for the owner; jaw_connections shows it revoked once they confirm. To end this connection, and return its float, use jaw_disconnect.",
       inputSchema: z.strictObject({ id: z.string().max(64).describe('From jaw_connections') }),
-      outputSchema: z.object({ connection: connectionView, summary: z.string() }),
+      outputSchema: z.object({ url: z.url(), summary: z.string() }),
       annotations: { destructiveHint: true, idempotentHint: true },
     },
-    async ({ id }, ctx) => {
-      const t = tenant(ctx);
-      if (id === t.connectionId)
-        return refusal('That is this connection. Use jaw_disconnect, which also returns its float.');
-      // Read before the lock, so nobody can queue on the float of a connection that is not theirs.
-      const [owned] = await getDb()
-        .select({ id: connections.id })
-        .from(connections)
-        .where(and(eq(connections.id, id), ownedBy(t.account), ne(connections.status, 'pending')));
-      if (!owned) return refusal('No such connection for this account.');
-      let row;
-      try {
-        // After the funding turn in flight, so nothing is mid-refill when its key goes.
-        row = await withFloat(id, LOCK_WAIT_MS, (hold) =>
-          hold.tx((tx) => endConnection(id, t.account, new Date(), tx))
-        );
-      } catch (err) {
-        if (err instanceof FloatBusy) return refusal('That connection is paying right now. Try again in a moment.');
-        throw err;
-      }
-      if (!row) return refusal('No such connection for this account.');
-      const [view] = await viewsOf(t, [row]);
-      const until = view.budget
-        ? ` Its budget stays approved on chain until ${view.budget.expiresAt}, with no key left to spend it.`
-        : '';
-      return reply(`Revoked ${view.client}.${until}`, { connection: view });
-    }
+    async ({ id }, ctx) => revokeConnection(tenant(ctx), id)
   );
+}
+
+export interface RevokeDeps {
+  openWallet: OpenWallet;
+  verify: VerifySignature;
+}
+
+const DEFAULTS: RevokeDeps = { openWallet: openRelay, verify: verifyOnChain };
+const CONFIRM_WITHIN_MS = 10 * 60_000;
+
+/** The text the owner signs to end a connection. It names the connection, so it ends no other. */
+export const revokeMessage = (row: { id: string; clientName: string }, account: Address, until: Date) =>
+  [
+    `Revoke ${row.clientName} on ${new URL(config().issuer).host}`,
+    `Connection: ${row.id}`,
+    '',
+    `Account: ${account}`,
+    `Expires: ${until.toISOString()}`,
+  ].join('\n');
+
+/**
+ * Ending another app is the owner's call, not this connection's: any connection
+ * can ask, and the owner confirms in their wallet with a signature over the
+ * connection it ends.
+ */
+export async function revokeConnection(t: Tenant, id: string, deps = DEFAULTS) {
+  if (id === t.connectionId)
+    return refusal('That is this connection. Use jaw_disconnect, which also returns its float.');
+  const [row] = await getDb()
+    .select()
+    .from(connections)
+    .where(and(eq(connections.id, id), ownedBy(t.account), eq(connections.status, 'active')));
+  if (!row) return refusal('No active connection with that id for this account.');
+
+  const until = new Date(Date.now() + CONFIRM_WITHIN_MS);
+  let wallet: Wallet;
+  try {
+    wallet = await deps.openWallet(t.chainId, until);
+  } catch (err) {
+    if (err instanceof WalletBusy) return refusal('Too many owners are approving right now. Try again in a minute.');
+    throw err;
+  }
+  void wallet
+    .run(async (ask) => {
+      const [account] = (await ask('eth_requestAccounts', [])) as unknown[];
+      if (typeof account !== 'string' || !isAddressEqual(account as Address, t.account)) {
+        throw new Error('the wallet is signed in to another account');
+      }
+      const message = revokeMessage(row, t.account, until);
+      const signature = await ask('personal_sign', [stringToHex(message), account]);
+      const valid =
+        isHex(signature) &&
+        (await deps.verify({
+          chainId: t.chainId,
+          address: t.account,
+          payload: { type: 'message', message },
+          signature,
+        }));
+      if (!valid) throw new Error('bad_signature');
+      // After the funding turn in flight, so nothing is mid-refill when its key goes.
+      await withFloat(id, LOCK_WAIT_MS, (hold) => hold.tx((tx) => endConnection(id, t.account, new Date(), tx)));
+    })
+    .catch((err: unknown) => log('warn', { msg: 'connection not revoked', error: errorLabel(err) }));
+  const summary =
+    `Ask the account owner to open ${wallet.url} and confirm ending ${row.clientName}. ` +
+    'jaw_connections shows it revoked once they do. Its budget stays approved on chain until it expires, with no key left to spend it.';
+  return { content: [{ type: 'text' as const, text: summary }], structuredContent: { url: wallet.url, summary } };
 }

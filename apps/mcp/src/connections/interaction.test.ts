@@ -1,4 +1,5 @@
 import { eq } from 'drizzle-orm';
+import { hexToString, type Hex } from 'viem';
 import { beforeAll, describe, expect, it } from 'vitest';
 import { getDb } from '@/db/client';
 import { connections, grants } from '@/db/schema';
@@ -39,13 +40,13 @@ describe('connecting through the owner wallet', () => {
     expect((await rowOf(start.uid!)).account).toBe(signer.address);
   });
 
-  it('given a spending scope, then the wallet is asked once, for the default daily budget with the session key as spender', async () => {
+  it('given a spending scope, then after the sign-in the wallet is asked for the default daily budget with the session key as spender', async () => {
     const asked: { method: string; params: unknown[] }[] = [];
     setWallet({ openWallet: fakeWallet(walletAnswers(owner()), asked) });
     const start = await startAuthorization(new Browser(), { scope: 'wallet:read x402:pay' });
     await walletsSettled();
-    expect(asked.map((a) => a.method)).toEqual(['wallet_grantPermissions']);
-    const grant = asked[0].params[0] as GrantRequest;
+    expect(asked.map((a) => a.method)).toEqual(['eth_requestAccounts', 'personal_sign', 'wallet_grantPermissions']);
+    const grant = asked[2].params[0] as GrantRequest;
     const row = await rowOf(start.uid!);
     expect(grant.spender).toBe(row.sessionAddress);
     expect(grant.permissions.spends[0].allowance).toBe('1000000');
@@ -76,6 +77,44 @@ describe('connecting through the owner wallet', () => {
     expect((await stateOf(browser, start.uid!)).state).toBe('failed');
   });
 
+  it('signs a text that names the app and what it asks for, with the code the page shows', async () => {
+    const asked: { method: string; params: unknown[] }[] = [];
+    const signer = owner();
+    setWallet({ openWallet: fakeWallet(walletAnswers(signer), asked) });
+    const start = await startAuthorization(new Browser(), { scope: 'wallet:read x402:pay' });
+    await walletsSettled();
+    const signed = hexToString(asked[1].params[0] as Hex);
+    const code = start.html!.match(/<p class="code">([A-Z0-9]{6})<\/p>/)?.[1];
+    expect(code).toBeDefined();
+    expect(signed).toContain(`Code: ${code}`);
+    expect(signed).toContain('Connect JAW CLI to mcp.test');
+    expect(signed).toContain('Pay x402 services');
+    expect(signed).toContain(`Account: ${signer.address}`);
+  });
+
+  it('given a budget approved from another account than the one that signed in, then nothing is stored', async () => {
+    const [signing, granting] = [owner(), owner()];
+    const [signIn, grant] = [walletAnswers(signing), walletAnswers(granting)];
+    setWallet({
+      openWallet: fakeWallet(async (method, params) =>
+        method === 'wallet_grantPermissions' ? grant(method, params) : signIn(method, params)
+      ),
+    });
+    const browser = new Browser();
+    const start = await startAuthorization(browser);
+    await walletsSettled();
+    expect(await rowOf(start.uid!)).toBeUndefined();
+    expect(await stateOf(browser, start.uid!)).toEqual({ state: 'failed', reason: 'grant_mismatch' });
+  });
+
+  it('says the owner turned it down when the wallet answers 4001', async () => {
+    setWallet({ openWallet: fakeWallet(walletAnswers(owner(), ['personal_sign'])) });
+    const browser = new Browser();
+    const start = await startAuthorization(browser);
+    await walletsSettled();
+    expect(await stateOf(browser, start.uid!)).toEqual({ state: 'failed', reason: 'turned down in the wallet' });
+  });
+
   it('given the wallet has not answered yet, when the page reloads, then it shows the same link and opens no second session', async () => {
     let opened = 0;
     const waiting: OpenWallet = async () => {
@@ -88,6 +127,8 @@ describe('connecting through the owner wallet', () => {
     const again = await (await browser.get(`${ISSUER}/interaction/${start.uid}`)).text();
     expect(opened).toBe(1);
     expect(again).toContain('session=s1');
+    // The ticket and the code come from the interaction, so a reload on another replica shows the same ones.
+    expect(again).toContain(`"ticket":"${start.ticket}"`);
     expect(await stateOf(browser, start.uid!)).toEqual({ state: 'waiting' });
   });
 
@@ -104,9 +145,9 @@ describe('connecting through the owner wallet', () => {
   it('given an interaction that does not exist, then the page answers 410 and opens no wallet', async () => {
     let opened = 0;
     setWallet({
-      openWallet: async (chainId) => {
+      openWallet: async (chainId, until) => {
         opened++;
-        return fakeWallet(walletAnswers(owner()))(chainId);
+        return fakeWallet(walletAnswers(owner()))(chainId, until);
       },
     });
     const res = await new Browser().get(`${ISSUER}/interaction/abcdefghijklmnop`);

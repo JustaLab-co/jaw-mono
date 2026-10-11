@@ -60,7 +60,8 @@ async function sendWithinBudget(t: Tenant, calls: Call[]) {
 
   let out: z.infer<typeof output>;
   try {
-    out = await withFloat(t.connectionId, LOCK_WAIT_MS, async () => {
+    out = await withFloat(t.connectionId, LOCK_WAIT_MS, async (hold) => {
+      hold.assertHeld();
       const sent = (await bridge.request('wallet_sendCalls', [{ calls }])) as { id: Hex };
       for (const until = Date.now() + RECEIPT_MS; Date.now() < until; ) {
         const status = (await bridge.request('wallet_getCallsStatus', sent.id).catch(() => undefined)) as

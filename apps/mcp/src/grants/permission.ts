@@ -10,7 +10,7 @@ import type { Tx } from '@/db/client';
 import { grants } from '@/db/schema';
 import { publicClientFor } from '@/lib/chain';
 
-export const TRANSFER_SIGNATURE = 'transfer(address,uint256)';
+const TRANSFER_SIGNATURE = 'transfer(address,uint256)';
 
 export interface PermissionCall {
   target: Address;
@@ -54,11 +54,12 @@ export function budgetGrant(b: {
 type Granted = NonNullable<ReturnType<typeof parseGrantedPermission>>;
 
 /** Whether what the wallet granted is exactly what was asked. Start and salt are the wallet's. */
-export function grantMatches(grant: GrantRequest, permission: Granted): boolean {
-  const asked = grant.permissions.calls.map(
-    (c) => `${c.target.toLowerCase()}:${toFunctionSelector(c.functionSignature)}`
-  );
-  const got = permission.calls.map((c) => `${c.target.toLowerCase()}:${c.selector.toLowerCase()}`);
+function grantMatches(grant: GrantRequest, permission: Granted): boolean {
+  // As sets: the wallet may return the calls in another order.
+  const asked = grant.permissions.calls
+    .map((c) => `${c.target.toLowerCase()}:${toFunctionSelector(c.functionSignature)}`)
+    .sort();
+  const got = permission.calls.map((c) => `${c.target.toLowerCase()}:${c.selector.toLowerCase()}`).sort();
   const [spend] = grant.permissions.spends;
   const [granted] = permission.spends;
   return (
@@ -81,7 +82,7 @@ export const readOnChain: ReadPermission = (target) =>
 
 export type NewGrant = Omit<typeof grants.$inferInsert, 'connectionId' | 'createdAt'>;
 
-export type GrantRefusal = 'invalid_response' | 'grant_mismatch' | 'grant_not_found' | 'verification_unavailable';
+type GrantRefusal = 'invalid_response' | 'grant_mismatch' | 'grant_not_found' | 'verification_unavailable';
 
 /**
  * What the wallet answered, checked against what was asked and against the chain,

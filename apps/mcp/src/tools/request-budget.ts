@@ -4,7 +4,7 @@ import { and, eq } from 'drizzle-orm';
 import { getAddress, isAddressEqual, parseUnits, toFunctionSelector } from 'viem';
 import { z } from 'zod';
 import { tenant, type Tenant } from '@/connections/auth';
-import { openRelay, type OpenWallet } from '@/connections/relay';
+import { openRelay, WalletBusy, type OpenWallet, type Wallet } from '@/connections/relay';
 import { CONNECTION_TTL_MS, isLive } from '@/connections/rows';
 import { spends } from '@/connections/scopes';
 import { getDb } from '@/db/client';
@@ -20,7 +20,7 @@ import {
 import { errorLabel, log } from '@/lib/edge';
 import { NO_PAY_SCOPE, refusal } from './reply';
 
-export const PER_DAY = /^\d{1,9}(\.\d{1,6})?$/;
+const PER_DAY = /^\d{1,9}(\.\d{1,6})?$/;
 const MAX_CALLS = 10;
 
 export interface BudgetDeps {
@@ -49,8 +49,19 @@ const validSignature = (signature: string) => {
   }
 };
 
+/** How long the owner has to approve a budget once the link is handed out. */
+const APPROVE_WITHIN_MS = 10 * 60_000;
+/** The link of the request still open, per connection: asking again while it waits hands out the same one. */
+const open = new Map<string, string>();
+
 /** Asks the owner's wallet for the permission, and makes it the connection's budget once the chain shows it. */
 export async function requestBudget(t: Tenant, perDay: string, calls: PermissionCall[], deps = DEFAULTS) {
+  const waiting = open.get(t.connectionId);
+  if (waiting) {
+    return refusal(
+      `A budget request is still waiting for the owner at ${waiting}. Ask again once they approve or it expires in ten minutes.`
+    );
+  }
   const usdc = usdcForNetwork(`eip155:${t.chainId}`);
   if (!usdc) return refusal("USDC is not supported on this connection's chain.");
   const allowance = parseUnits(perDay, usdc.decimals);
@@ -63,7 +74,14 @@ export async function requestBudget(t: Tenant, perDay: string, calls: Permission
     expiry: Math.floor((Date.now() + CONNECTION_TTL_MS) / 1000),
     calls,
   });
-  const wallet = await deps.openWallet(t.chainId);
+  let wallet: Wallet;
+  try {
+    wallet = await deps.openWallet(t.chainId, new Date(Date.now() + APPROVE_WITHIN_MS));
+  } catch (err) {
+    if (err instanceof WalletBusy) return refusal('Too many owners are approving right now. Try again in a minute.');
+    throw err;
+  }
+  open.set(t.connectionId, wallet.url);
   void wallet
     .run(async (ask) => {
       const checked = await checkGranted(
@@ -84,7 +102,8 @@ export async function requestBudget(t: Tenant, perDay: string, calls: Permission
         await recordGrant(tx, t.connectionId, checked);
       });
     })
-    .catch((err: unknown) => log('warn', { msg: 'budget not granted', error: errorLabel(err) }));
+    .catch((err: unknown) => log('warn', { msg: 'budget not granted', error: errorLabel(err) }))
+    .finally(() => open.delete(t.connectionId));
   const out = {
     url: wallet.url,
     summary:

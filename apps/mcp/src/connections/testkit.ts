@@ -74,6 +74,8 @@ export const fakeWallet =
 /** Waits for every wallet session the server started to finish, including ones started meanwhile. */
 export const walletsSettled = async () => {
   while (runs.size) await Promise.all(runs);
+  // Then what the server chained after each run, such as freeing its slot.
+  await new Promise((resolve) => setImmediate(resolve));
 };
 
 let interactionDeps: InteractionDeps = {
