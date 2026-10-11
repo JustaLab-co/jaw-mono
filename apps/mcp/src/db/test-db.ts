@@ -49,6 +49,33 @@ export async function useTestPostgres(): Promise<() => Promise<void>> {
   return teardown;
 }
 
+/**
+ * Points getDb at a fresh pool on the test database whose sessions start with this
+ * role statement_timeout, as migration 0011 sets it. Returns the restore.
+ */
+export async function withRoleStatementTimeout(value: string): Promise<() => Promise<void>> {
+  const previous = getDb();
+  const [{ db }] = await previous.execute<{ db: string }>(sql`select current_database() as db`);
+  const url = new URL(TEST_PG_URL as string);
+  url.pathname = `/${db}`;
+  const setRole = (v: string) =>
+    previous.execute(
+      sql.raw(`do $$ begin execute format('alter role %I in database %I set statement_timeout = %L',
+        current_user, current_database(), '${v}'); end $$`)
+    );
+  const probe = postgres(url.href, { max: 1 });
+  const [{ statement_timeout: before }] = await probe`show statement_timeout`;
+  await probe.end();
+  await setRole(value);
+  const client = postgres(url.href, { max: 10, onnotice: () => {} });
+  setDb(drizzlePg(client, { schema }));
+  return async () => {
+    setDb(previous);
+    await client.end();
+    await setRole(before);
+  };
+}
+
 /** Sessions waiting on this connection's float lock. The int4 key fills objid, sign extended into classid. */
 export async function lockWaiters(connectionId: string): Promise<number> {
   const [{ n }] = await getDb().execute<{ n: number }>(sql`
