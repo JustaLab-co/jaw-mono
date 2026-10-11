@@ -49,7 +49,7 @@ jobs:
       - run: bun install --frozen-lockfile
 
       - name: Build SDK packages
-        run: bunx nx run-many -t build -p @jaw.id/core @jaw.id/wagmi @jaw.id/ui
+        run: bunx nx run-many -t build -p @jaw.id/core @jaw.id/wagmi @jaw.id/ui @jaw.id/agent
 
       - name: Install browsers
         run: bunx playwright install --with-deps chromium firefox webkit
