@@ -20,7 +20,7 @@ import { endConnection } from '@/connections/rows';
 import { callTool, connect, setTestEnv, verifyLocally } from '@/connections/testkit';
 import { getDb } from '@/db/client';
 import { payments, settings } from '@/db/schema';
-import { useTestDb } from '@/db/test-db';
+import { TEST_PG_URL, useTestDb, useTestPostgres } from '@/db/test-db';
 import { safeFetch } from '@/lib/safe-fetch';
 import { pay, type PayDeps } from './pay';
 import { lockFloat, stillHeld } from './refill';
@@ -40,7 +40,7 @@ const PRICES: Record<string, string> = {
   '/sametx': '5000',
   '/race': '5000',
 };
-const seen: { path: string; nonce: Hex; signature: Hex; advisoryLocks: number }[] = [];
+const seen: { path: string; nonce: Hex; signature: Hex }[] = [];
 const receipts = new Map<Hex, { from: Address; nonce: Hex }>();
 /** Nonces the token has consumed: the seller settled them on chain. */
 const used = new Set<string>();
@@ -77,11 +77,7 @@ const seller = createServer(async (req, res) => {
   const proof = JSON.parse(Buffer.from(String(signed), 'base64').toString());
   const { nonce, from } = proof.payload.authorization;
   await onProof.get(path)?.();
-  const [{ n }] = await getDb()
-    .select({ n: sql<number>`count(*)::int` })
-    .from(sql`pg_locks`)
-    .where(sql`locktype = 'advisory'`);
-  seen.push({ path, nonce, signature: proof.payload.signature, advisoryLocks: n });
+  seen.push({ path, nonce, signature: proof.payload.signature });
   if (path === '/refuse' && seen.filter((s) => s.path === '/refuse').length > 1) {
     return void res.writeHead(402, { 'payment-required': Buffer.from('{}').toString('base64') }).end('{}');
   }
@@ -176,7 +172,7 @@ const deps = (over: Partial<PayDeps> = {}): PayDeps => ({
   ...over,
 });
 
-beforeAll(useTestDb);
+beforeAll(TEST_PG_URL ? useTestPostgres : useTestDb);
 beforeEach(() => {
   seen.length = 0;
   refills.length = 0;
@@ -221,6 +217,20 @@ async function approveBudget(c: Awaited<ReturnType<typeof connect>>, perDay: str
 }
 
 const url = (path: string) => `http://${SELLER}${path}`;
+const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+
+// Another session takes the lock unless someone holds it past `ms`. On PGlite that
+// session is the one shared connection, so a pay holding its transaction blocks it too.
+const lockFreeWithin = (connectionId: string, ms: number) =>
+  Promise.race([
+    getDb()
+      .transaction((tx) => lockFloat(tx, connectionId, ms))
+      .then(
+        () => true,
+        () => false
+      ),
+    sleep(ms + 1_000).then(() => false),
+  ]);
 const rowOf = async (id: string) => (await getDb().select().from(payments).where(eq(payments.id, id)))[0];
 
 describe('jaw_pay_and_fetch', () => {
@@ -334,13 +344,15 @@ describe('jaw_pay_and_fetch', () => {
   it('gives five concurrent payments their own rows and one refill, with no lock held across a fetch', async () => {
     const { t } = await connected('1');
     balances.set(t.sessionAddress.toLowerCase(), 5_000n);
+    const lockFree: boolean[] = [];
+    onProof.set('/slow', async () => void lockFree.push(await lockFreeWithin(t.connectionId, 2_000)));
     const results = await Promise.all(
       [1, 2, 3, 4, 5].map((n) => pay(t, { url: url('/slow'), idempotencyKey: `burst-${n}` }, deps()))
     );
     expect(new Set(results.map((r) => r.structuredContent?.paymentId)).size).toBe(5);
     expect(results.every((r) => r.structuredContent?.kind === 'paid')).toBe(true);
     expect(refills).toEqual([105_000n]);
-    expect(seen.map((s) => s.advisoryLocks)).toEqual([0, 0, 0, 0, 0]);
+    expect(lockFree).toEqual([true, true, true, true, true]);
   });
 
   it('reserves the float for concurrent payments even when the server cannot refill', async () => {
@@ -588,6 +600,47 @@ describe('given a pay request that verified its bearer before the connection was
     expect(held).toEqual([5_000n]);
     expect(result.structuredContent).toMatchObject({ kind: 'paid', state: 'settled' });
     expect(refills).toEqual([105_000n]);
+  });
+});
+
+describe.skipIf(!TEST_PG_URL)('on Postgres, given a disconnect that holds the float lock', () => {
+  // Waiters on this connection's key in this database. The int4 key fills objid, sign extended into classid.
+  const waiters = async (connectionId: string) =>
+    (
+      await getDb().execute<{ n: number }>(sql`
+        select count(*)::int as n from pg_locks
+        where locktype = 'advisory' and not granted
+          and database = (select oid from pg_database where datname = current_database())
+          and ((classid::bigint << 32) | objid::bigint) = hashtext(${`refill:${connectionId}`})`)
+    )[0].n;
+
+  it('when a pay waits on that lock and the disconnect ends the connection, then the pay refuses and moves nothing', async () => {
+    const { t } = await connected('1');
+    let locked!: () => void;
+    const holding = new Promise<void>((r) => (locked = r));
+    let parked = 0;
+    const disconnecting = getDb().transaction(async (tx) => {
+      await lockFloat(tx, t.connectionId, 1_000);
+      locked();
+      for (let i = 0; i < 100 && parked === 0; i++) {
+        await sleep(50);
+        parked = await waiters(t.connectionId);
+      }
+      await endConnection(t.connectionId, t.account, new Date(), tx);
+    });
+    await holding;
+    const paying = pay(t, { url: url('/race'), idempotencyKey: 'race-lock' }, deps());
+    await disconnecting;
+    const result = await paying;
+    expect(parked).toBe(1);
+    expect(result.structuredContent).toMatchObject({
+      kind: 'refused',
+      moneyMoved: false,
+      refusal: { code: 'not_allowed' },
+    });
+    expect(refills).toEqual([]);
+    expect(seen).toHaveLength(0);
+    expect(await rowOf(result.structuredContent!.paymentId)).toMatchObject({ reserved: null, nonce: null });
   });
 });
 
