@@ -1,5 +1,5 @@
 import { createHash, randomBytes } from 'node:crypto';
-import { consentTypedData, type GrantRequest, type SignedPayload } from '@jaw.id/agent';
+import { connectionsSignInTypedData, consentTypedData, type GrantRequest, type SignedPayload } from '@jaw.id/agent';
 import { verifyMessage, verifyTypedData, type Address, type Hex } from 'viem';
 import { privateKeyToAccount, generatePrivateKey } from 'viem/accounts';
 import { decideFromPage, readForPage, type ReadPermission } from '@/approvals/page-api';
@@ -110,6 +110,13 @@ export const verifyLocally = ({
   payload.type === 'message'
     ? verifyMessage({ address, message: payload.message, signature })
     : verifyTypedData({ address, signature, ...payload.typedData });
+
+/** What the keys page posts to /api/connections: a sign-in valid ten minutes. */
+export async function pageProof(signer: ReturnType<typeof owner>) {
+  const expires = new Date(Date.now() + 10 * 60_000).toISOString();
+  const typedData = connectionsSignInTypedData(84532, { issuer: ISSUER, expires });
+  return { account: signer.address, chainId: 84532, expires, signature: await signer.signTypedData(typedData) };
+}
 
 export async function getDetails(uid: string): Promise<ConsentDetails> {
   return (await details(new Request(`${ISSUER}/interaction/${uid}/details`), uid)).json();

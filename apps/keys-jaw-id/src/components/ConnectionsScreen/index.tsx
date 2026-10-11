@@ -34,6 +34,7 @@ export function ConnectionsScreen({ mcpUrl }: { mcpUrl: string }) {
   const [owner, setOwner] = useState<Account | null>(null);
   const [onChain, setOnChain] = useState<Hex | null>(null);
   const [confirming, setConfirming] = useState<string | null>(null);
+  const [revoking, setRevoking] = useState<ReadonlySet<string>>(new Set());
   const [error, setError] = useState('');
   const queryClient = useQueryClient();
   const base = `${mcpUrl}/api/connections`;
@@ -100,7 +101,10 @@ export function ConnectionsScreen({ mcpUrl }: { mcpUrl: string }) {
   const revoke = (view: ConnectionView) =>
     run(async () => {
       setConfirming(null);
-      const ended = await postProof<ConnectionView>(`${base}/${encodeURIComponent(view.id)}/revoke`, proof);
+      setRevoking((ids) => new Set(ids).add(view.id));
+      const ended = await postProof<ConnectionView>(`${base}/${encodeURIComponent(view.id)}/revoke`, proof).finally(
+        () => setRevoking((ids) => new Set([...ids].filter((id) => id !== view.id)))
+      );
       queryClient.setQueryData<ConnectionView[]>(['connections', proof.signature], (old) =>
         old?.map((c) => (c.id === ended.id ? ended : c))
       );
@@ -128,6 +132,7 @@ export function ConnectionsScreen({ mcpUrl }: { mcpUrl: string }) {
           key={view.id}
           view={view}
           confirming={confirming === view.id}
+          revoking={revoking.has(view.id)}
           onRevoke={() => setConfirming(view.id)}
           onCancel={() => setConfirming(null)}
           onConfirm={() => revoke(view)}
@@ -150,13 +155,14 @@ export function ConnectionsScreen({ mcpUrl }: { mcpUrl: string }) {
 interface CardProps {
   view: ConnectionView;
   confirming: boolean;
+  revoking: boolean;
   onRevoke: () => void;
   onCancel: () => void;
   onConfirm: () => void;
   onRevokeOnChain: (permissionId: Hex) => void;
 }
 
-function ConnectionCard({ view, confirming, onRevoke, onCancel, onConfirm, onRevokeOnChain }: CardProps) {
+function ConnectionCard({ view, confirming, revoking, onRevoke, onCancel, onConfirm, onRevokeOnChain }: CardProps) {
   // The float, when there is any to lose.
   const funded = view.float !== null && BigInt(view.float) > 0n ? view.float : null;
   const unread = view.payer !== null && view.float === null;
@@ -227,7 +233,7 @@ function ConnectionCard({ view, confirming, onRevoke, onCancel, onConfirm, onRev
       )}
 
       {view.status === 'active' && !confirming && (
-        <button className="rounded border p-2" onClick={onRevoke}>
+        <button className="rounded border p-2 disabled:opacity-50" disabled={revoking} onClick={onRevoke}>
           Revoke
         </button>
       )}

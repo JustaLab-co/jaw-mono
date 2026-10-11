@@ -49,6 +49,7 @@ const REFUSALS: Record<string, string> = {
   bad_signature: 'The sign-in did not verify for this account.',
   not_found: 'This connection does not exist.',
   verification_unavailable: 'The sign-in could not be checked right now. Try again in a moment.',
+  busy: 'A payment or a disconnect on this connection is in progress. Try again in a moment.',
 };
 
 export class SignInExpired extends Error {}
