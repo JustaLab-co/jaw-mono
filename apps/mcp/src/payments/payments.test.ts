@@ -31,7 +31,7 @@ import {
 } from '@/db/test-db';
 import { safeFetch } from '@/lib/safe-fetch';
 import { pay, type PayDeps } from './pay';
-import { withFloat } from './float-lock';
+import { inTurn, withFloat } from './float-lock';
 import { SEND_RESERVE_MS, stillHeld } from './refill';
 import { claim, holdingRows, PAY_LIMIT_MS } from './store';
 
@@ -580,7 +580,13 @@ describe('jaw_pay_and_fetch', () => {
     const { t } = await connected('1');
     balances.set(t.sessionAddress.toLowerCase(), 5_000n);
     const lockFree: boolean[] = [];
-    onProof.set('/slow', async () => void lockFree.push(await lockFreeWithin(t.connectionId, 2_000)));
+    // Probes run one at a time. A replica opens two float sessions per connection, so
+    // two probes and a payment's funding turn would get one refused at once.
+    onProof.set(
+      '/slow',
+      async () =>
+        void lockFree.push(await inTurn(`probe:${t.connectionId}`, () => lockFreeWithin(t.connectionId, 2_000)))
+    );
     const results = await Promise.all(
       [1, 2, 3, 4, 5].map((n) => pay(t, { url: url('/slow'), idempotencyKey: `burst-${n}` }, deps()))
     );
