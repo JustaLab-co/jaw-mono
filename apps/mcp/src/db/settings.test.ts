@@ -15,8 +15,13 @@ const chain: unknown = new Proxy(() => chain, {
 
 it('gives up on a database that never answers, as an unreachable one', async () => {
   vi.useFakeTimers();
-  setDb(chain as Db);
+  setDb(chain as Db, 'pglite');
   const settled = [isPaused(), countHit('ip:203.0.113.7', 60_000)].map((read) => read.catch((err: unknown) => err));
   await vi.advanceTimersByTimeAsync(10_000);
   for (const err of await Promise.all(settled)) expect(databaseUnreachable(err)).toBe(true);
+});
+
+it('takes the float holder by name', () => {
+  // @ts-expect-error without a holder, holds would not serialize across replicas
+  expect(() => setDb(chain as Db)).not.toThrow();
 });
