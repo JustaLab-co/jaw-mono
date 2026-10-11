@@ -1,7 +1,7 @@
 import { CONNECTION_SCOPES, FIRST_PARTY_CLIENTS, hasUnstorableText } from '@jaw.id/agent';
 import Provider, { errors, interactionPolicy, type Configuration } from 'oidc-provider';
 import { databaseUnreachable, log } from '@/lib/edge';
-import { PgAdapter, sessionKey } from './adapter';
+import { PgAdapter, sessionKey, successorId } from './adapter';
 import { bridge, requestUrl } from './bridge';
 import { config, type Config } from './config';
 import { findActive } from './rows';
@@ -106,6 +106,12 @@ export function createProvider(cfg: Config, overrides: Partial<Configuration> = 
     ...overrides,
   });
   provider.proxy = true;
+  // Not a documented option: oidc-provider is pinned, and the retry tests fail if it stops calling this.
+  const token = provider.RefreshToken.prototype as unknown as { generateTokenId(): string };
+  const random = token.generateTokenId;
+  token.generateTokenId = function () {
+    return successorId() ?? random.call(this);
+  };
   provider.on('server_error', (ctx: { state: Record<string, unknown> }, err: Error) => {
     if (databaseUnreachable(err)) ctx.state.databaseUnreachable = true;
     log('error', { msg: 'oauth server error', error: err.name });

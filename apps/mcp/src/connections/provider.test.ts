@@ -1,4 +1,4 @@
-import { randomBytes } from 'node:crypto';
+import { createHash, randomBytes } from 'node:crypto';
 import { compactDecrypt, decodeProtectedHeader } from 'jose';
 import type { PGlite } from '@electric-sql/pglite';
 import type { Hex } from 'viem';
@@ -26,7 +26,7 @@ const { config } = await import('./config');
 const { createProvider } = await import('./provider');
 const { PgAdapter } = await import('./adapter');
 const { findActive, revokeByGrant } = await import('./rows');
-const { open, parseKeyRing, unwrap } = await import('./seal');
+const { nextRefreshId, open, parseKeyRing, unwrap } = await import('./seal');
 type KeyRing = ReturnType<typeof parseKeyRing>;
 
 const CIMD = 'https://client.example.test/agent.json';
@@ -308,7 +308,7 @@ describe('authorization server', () => {
     expect(await verifyBearer(second.body.access_token)).toBeUndefined();
   });
 
-  it('answers a retry after a lost response with a working pair', async () => {
+  it('given a refresh whose response was lost, when the client retries with the same token, then 200 with the same refresh token', async () => {
     const c = await connect();
     const sub = (await claimsOf(c.access_token)).sub;
     const lost = await refresh(c.refresh_token);
@@ -316,7 +316,8 @@ describe('authorization server', () => {
 
     const retried = await refresh(c.refresh_token);
     expect(retried.status).toBe(200);
-    expect(retried.body.refresh_token).not.toBe(lost.body.refresh_token);
+    expect(retried.body.refresh_token).toBe(lost.body.refresh_token);
+    expect(await liveRefreshTokens(sub)).toBe(1);
     expect(await verifyBearer(retried.body.access_token)).toBeDefined();
     expect(await sessionAddressOf(retried.body.access_token)).toBe(await sessionAddressOf(c.access_token));
     expect((await refresh(retried.body.refresh_token)).status).toBe(200);
@@ -333,38 +334,88 @@ describe('authorization server', () => {
     expect((await refresh(first.body.refresh_token)).body.error).toBe('invalid_grant');
   });
 
-  it('revokes the connection when the successor a retry replaced is presented', async () => {
+  it('given a second holder of the token, when it refreshes 30 s after the first, then 200 with the same refresh token', async () => {
     const c = await connect();
     const sub = (await claimsOf(c.access_token)).sub;
-    const replaced = await refresh(c.refresh_token);
-    const retried = await refresh(c.refresh_token);
-    expect(retried.status).toBe(200);
-
-    expect((await refresh(replaced.body.refresh_token)).body.error).toBe('invalid_grant');
-    expect(await findActive(sub)).toBeUndefined();
-    expect((await refresh(retried.body.refresh_token)).body.error).toBe('invalid_grant');
+    const first = await refresh(c.refresh_token);
+    await ageUsedToken(sub, 30_000);
+    const second = await refresh(c.refresh_token);
+    expect(second.status).toBe(200);
+    expect(second.body.refresh_token).toBe(first.body.refresh_token);
   });
 
-  it('answers invalid_grant, not a retry, to a refresh that saw its token live and lost the race', async () => {
+  it('given a retry that returned the lost successor, when that successor is used and its lost copy comes 61 s later, then invalid_grant and the connection is ended', async () => {
     const c = await connect();
     const sub = (await claimsOf(c.access_token)).sub;
-    let winner: Awaited<ReturnType<typeof refresh>> | undefined;
-    const find = PgAdapter.prototype.find;
-    vi.spyOn(PgAdapter.prototype, 'find').mockImplementationOnce(async function (
-      this: InstanceType<typeof PgAdapter>,
-      id
-    ) {
-      const seen = await find.call(this, id);
-      vi.mocked(PgAdapter.prototype.find).mockImplementation(find);
-      winner = await refresh(c.refresh_token);
-      return seen;
+    await refresh(c.refresh_token);
+    const retried = await refresh(c.refresh_token);
+    expect((await refresh(retried.body.refresh_token)).status).toBe(200);
+    await ageUsedToken(sub, 61_000);
+    expect((await refresh(retried.body.refresh_token)).body.error).toBe('invalid_grant');
+    expect(await findActive(sub)).toBeUndefined();
+  });
+
+  it('given two refreshes that saw the token live, when one rotates first, then both 200 with the same refresh token', async () => {
+    const c = await connect();
+    const sub = (await claimsOf(c.access_token)).sub;
+    let first: Awaited<ReturnType<typeof refresh>> | undefined;
+    afterFind(async () => {
+      first = await refresh(c.refresh_token);
     });
-    const loser = await refresh(c.refresh_token);
-    vi.restoreAllMocks();
-    expect(winner?.status).toBe(200);
-    expect(loser.body.error).toBe('invalid_grant');
+    const second = await refresh(c.refresh_token);
+    expect(first?.status).toBe(200);
+    expect(second.status).toBe(200);
+    expect(second.body.refresh_token).toBe(first?.body.refresh_token);
+    expect(await liveRefreshTokens(sub)).toBe(1);
+    expect((await refresh(second.body.refresh_token)).status).toBe(200);
+  });
+
+  it('given a retry that passed find, when another retry completes first, then both 200 with the same refresh token, which then refreshes', async () => {
+    const c = await connect();
+    await refresh(c.refresh_token);
+    let first: Awaited<ReturnType<typeof refresh>> | undefined;
+    afterFind(async () => {
+      first = await refresh(c.refresh_token);
+    });
+    const second = await refresh(c.refresh_token);
+    expect(first?.status).toBe(200);
+    expect(second.status).toBe(200);
+    expect(second.body.refresh_token).toBe(first?.body.refresh_token);
+    expect((await refresh(second.body.refresh_token)).status).toBe(200);
+  });
+
+  it('given a retry that passed find, when its successor is used before it rotates, then invalid_grant and the connection stays active', async () => {
+    const c = await connect();
+    const sub = (await claimsOf(c.access_token)).sub;
+    const lost = await refresh(c.refresh_token);
+    afterFind(async () => {
+      expect((await refresh(lost.body.refresh_token)).status).toBe(200);
+    });
+    expect((await refresh(c.refresh_token)).body.error).toBe('invalid_grant');
     expect(await findActive(sub)).toBeDefined();
-    expect((await refresh(winner!.body.refresh_token)).status).toBe(200);
+  });
+
+  it('given a refresh that saw the token live, when another rotates it and the window passes before this one rotates, then invalid_grant and the connection stays active', async () => {
+    const c = await connect();
+    const sub = (await claimsOf(c.access_token)).sub;
+    afterFind(async () => {
+      expect((await refresh(c.refresh_token)).status).toBe(200);
+      await ageUsedToken(sub, 61_000);
+    });
+    expect((await refresh(c.refresh_token)).body.error).toBe('invalid_grant');
+    expect(await findActive(sub)).toBeDefined();
+  });
+
+  it('given a successor stored under an id this build does not derive, when its token is retried, then invalid_grant and the connection stays active', async () => {
+    const c = await connect();
+    const sub = (await claimsOf(c.access_token)).sub;
+    const lost = await refresh(c.refresh_token);
+    const keyOf = (id: string) => createHash('sha256').update(`RefreshToken:${id}`).digest('hex');
+    const [stored, random] = [keyOf(lost.body.refresh_token), keyOf('random-successor-of-an-older-build')];
+    await db.query('update oauth_payloads set key = $2 where key = $1', [stored, random]);
+    await db.query('update oauth_payloads set successor_key = $2 where successor_key = $1', [stored, random]);
+    expect((await refresh(c.refresh_token)).body.error).toBe('invalid_grant');
+    expect(await findActive(sub)).toBeDefined();
   });
 
   it('refuses a refresh whose connection is revoked after the account check, before the rotation', async () => {
@@ -386,15 +437,38 @@ describe('authorization server', () => {
     expect(await liveRefreshTokens(sub)).toBe(1);
   });
 
+  it('given a retry that passed find, when the connection is revoked before the rotation, then invalid_grant and no new token', async () => {
+    const c = await connect();
+    const sub = (await claimsOf(c.access_token)).sub;
+    await refresh(c.refresh_token);
+    const upsert = PgAdapter.prototype.upsert;
+    vi.spyOn(PgAdapter.prototype, 'upsert').mockImplementationOnce(async function (
+      this: InstanceType<typeof PgAdapter>,
+      id,
+      payload,
+      expiresIn
+    ) {
+      await revokeByGrant(payload.grantId!);
+      return upsert.call(this, id, payload, expiresIn);
+    });
+    const retried = await refresh(c.refresh_token);
+    vi.restoreAllMocks();
+    expect(retried.body.error).toBe('invalid_grant');
+    expect(await findActive(sub)).toBeUndefined();
+    expect(await liveRefreshTokens(sub)).toBe(1);
+  });
+
   it('never forks the refresh chain under concurrent refreshes or retries', async () => {
     const c = await connect();
     const sub = (await claimsOf(c.access_token)).sub;
     const parallel = await Promise.all([refresh(c.refresh_token), refresh(c.refresh_token)]);
-    expect(parallel.some((r) => r.status === 200)).toBe(true);
+    expect(parallel.map((r) => r.status)).toEqual([200, 200]);
+    expect(parallel[1].body.refresh_token).toBe(parallel[0].body.refresh_token);
     expect(await liveRefreshTokens(sub)).toBe(1);
 
     const retries = await Promise.all([refresh(c.refresh_token), refresh(c.refresh_token)]);
-    expect(retries.some((r) => r.status === 200)).toBe(true);
+    const successor = parallel[0].body.refresh_token;
+    expect(retries.map((r) => r.body.refresh_token)).toEqual([successor, successor]);
     expect(await liveRefreshTokens(sub)).toBe(1);
     expect(await findActive(sub)).toBeDefined();
   });
@@ -423,6 +497,19 @@ describe('authorization server', () => {
     expect(recoverable(dump, config().ring, sub, [c.refresh_token])).toEqual([]);
   });
 
+  it('given a used token past the window whose wrap was swept, then the dump and the session key derive no successor from it', async () => {
+    const c = await connect();
+    const sub = (await claimsOf(c.access_token)).sub;
+    const next = await refresh(c.refresh_token);
+    const key = open(config().ring, (await claimsOf(next.body.access_token)).sk, sub);
+    const derives = async () =>
+      (await dumpStrings()).some((s) => nextRefreshId(key, c.refresh_token, s as never) === next.body.refresh_token);
+    expect(await derives()).toBe(true);
+    await ageUsedToken(sub, 61_000);
+    await refresh((await connect()).refresh_token);
+    expect(await derives()).toBe(false);
+  });
+
   it('given a used token past the window, when another connection rotates, then its wrap is gone', async () => {
     const c = await connect();
     const sub = (await claimsOf(c.access_token)).sub;
@@ -441,11 +528,11 @@ describe('authorization server', () => {
     expect((await refresh(c.refresh_token)).status).toBe(200);
   });
 
-  it('given a retry admitted at 59.5 s, when another rotation sweeps its stored wrap meanwhile, then 200 with the same key', async () => {
+  it('given a retry admitted at 59.5 s, when another rotation sweeps its stored wrap meanwhile, then 200 with the same key and successor', async () => {
     const c = await connect();
     const other = await connect();
     const sub = (await claimsOf(c.access_token)).sub;
-    await refresh(c.refresh_token);
+    const lost = await refresh(c.refresh_token);
     await ageUsedToken(sub, 59_500);
     afterFind(async () => {
       await ageUsedToken(sub, 2_000);
@@ -454,6 +541,7 @@ describe('authorization server', () => {
     });
     const retried = await refresh(c.refresh_token);
     expect(retried.status).toBe(200);
+    expect(retried.body.refresh_token).toBe(lost.body.refresh_token);
     expect(await sessionAddressOf(retried.body.access_token)).toBe(await sessionAddressOf(c.access_token));
   });
 
@@ -531,6 +619,23 @@ describe('authorization server', () => {
     const retried = await refresh(c.refresh_token);
     expect(retried.status).toBe(200);
     expect(await findActive(sub)).toBeDefined();
+  });
+
+  it('given a revocation of a refresh token whose sealing key left the ring, then 200 and the connection ends', async () => {
+    const { oauth } = await import('./provider');
+    const c = await connect();
+    const sub = (await claimsOf(c.access_token)).sub;
+    const revoked = await withRing(parseKeyRing(randomBytes(32).toString('base64url')), () =>
+      oauth(
+        new Request(`${ISSUER}/oauth/revoke`, {
+          method: 'POST',
+          headers: { 'content-type': 'application/x-www-form-urlencoded' },
+          body: new URLSearchParams({ token: c.refresh_token, token_type_hint: 'refresh_token', client_id: 'jaw-cli' }),
+        })
+      )
+    );
+    expect(revoked.status).toBe(200);
+    expect(await findActive(sub)).toBeUndefined();
   });
 
   it('builds discovery URLs from the configured public URL, never from forwarded headers', async () => {

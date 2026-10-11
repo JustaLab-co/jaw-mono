@@ -1,7 +1,7 @@
 import { randomBytes } from 'node:crypto';
 import { generatePrivateKey } from 'viem/accounts';
 import { describe, expect, it } from 'vitest';
-import { open, parseKeyRing, seal, unwrap, wrap } from './seal';
+import { nextRefreshId, open, parseKeyRing, seal, unwrap, wrap } from './seal';
 
 const key = () => randomBytes(32).toString('base64url');
 
@@ -47,6 +47,17 @@ describe('sealing key ring', () => {
     expect(() => unwrap(ring, wrapped, 'conn_2', 'rt_1')).toThrow();
     expect(() => unwrap(parseKeyRing(b), wrapped, 'conn_1', 'rt_1')).toThrow('cannot be opened');
     expect(() => open(ring, wrapped as never, 'conn_1')).toThrow('cannot be opened');
+  });
+
+  it('given the same key, token and wrap, then the same successor id, and a different one when any of them differs', () => {
+    const ring = parseKeyRing(a);
+    const wrapped = wrap(ring, pk, 'conn_1', 'rt_1');
+    const next = nextRefreshId(pk, 'rt_1', wrapped);
+    expect(next).toMatch(/^[\w-]{43}$/);
+    expect(nextRefreshId(pk, 'rt_1', wrapped)).toBe(next);
+    expect(nextRefreshId(pk, 'rt_1', wrap(ring, pk, 'conn_1', 'rt_1'))).not.toBe(next);
+    expect(nextRefreshId(generatePrivateKey(), 'rt_1', wrapped)).not.toBe(next);
+    expect(nextRefreshId(pk, 'rt_2', wrapped)).not.toBe(next);
   });
 
   it('rejects a missing or short key list', () => {
