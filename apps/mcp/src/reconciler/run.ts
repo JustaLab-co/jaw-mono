@@ -3,7 +3,7 @@ import { and, eq, lt, sql } from 'drizzle-orm';
 import type { Address, Hex } from 'viem';
 import { chainClients } from '@/adapters/session-host';
 import { getDb } from '@/db/client';
-import { approvalRequests, auditEvents, connections, grants, oauthPayloads, payments, rateLimits } from '@/db/schema';
+import { auditEvents, connections, grants, oauthPayloads, payments, rateLimits } from '@/db/schema';
 import { log } from '@/lib/edge';
 import { chainAnswer, type ChainAnswer } from '@/payments/confirm';
 import { claimUnresolved, expire, markAlerted, settle, txHashTaken, type PaymentRow } from '@/payments/store';
@@ -89,22 +89,17 @@ export async function purge(): Promise<void> {
   await db.delete(oauthPayloads).where(lt(oauthPayloads.expiresAt, dayAgo));
   await db.delete(rateLimits).where(lt(rateLimits.windowStart, sql`now() - interval '1 hour'`));
   await db.delete(auditEvents).where(lt(auditEvents.createdAt, sql`now() - interval '90 days'`));
+  // Approved in the wallet but never completed: nobody holds a token for it, so its key goes.
   await db
-    .delete(approvalRequests)
-    .where(
-      and(
-        eq(approvalRequests.status, 'pending'),
-        lt(approvalRequests.expiresAt, dayAgo),
-        sql`not exists (select 1 from ${grants} where ${grants.approvalId} = ${approvalRequests.id})`
-      )
-    );
+    .update(connections)
+    .set({ sealedKey: null })
+    .where(and(eq(connections.status, 'pending'), lt(connections.expiresAt, sql`now()`)));
   await db
     .delete(connections)
     .where(
       and(
         eq(connections.status, 'pending'),
         lt(connections.expiresAt, dayAgo),
-        sql`not exists (select 1 from ${approvalRequests} where ${approvalRequests.connectionId} = ${connections.id})`,
         sql`not exists (select 1 from ${grants} where ${grants.connectionId} = ${connections.id})`,
         sql`not exists (select 1 from ${payments} where ${payments.connectionId} = ${connections.id})`
       )

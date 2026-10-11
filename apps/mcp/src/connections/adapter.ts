@@ -1,14 +1,13 @@
 import { createHash } from 'node:crypto';
-import { hasUnstorableText } from '@jaw.id/agent';
+import { hasUnstorableText } from '@/lib/body';
 import { and, eq, gt, isNotNull, isNull, lt, or, sql, inArray } from 'drizzle-orm';
 import Provider, { errors, type Adapter, type AdapterPayload, type KoaContextWithOIDC } from 'oidc-provider';
 import type { Hex } from 'viem';
-import { generatePrivateKey, privateKeyToAddress } from 'viem/accounts';
 import { getDb } from '@/db/client';
 import { connections, oauthPayloads } from '@/db/schema';
 import { errorLabel, log } from '@/lib/edge';
-import { revokeByGrant, setSessionAddress } from './rows';
-import { nextRefreshId, unwrap, wrap, type KeyRing, type Wrapped } from './seal';
+import { revokeByGrant, takeSealedKey } from './rows';
+import { nextRefreshId, open, unwrap, wrap, type KeyRing, type Wrapped } from './seal';
 
 // A client whose refresh response was lost retries with the token it still holds.
 // Judged when find reads the token; the unused successor is what stops a replay.
@@ -49,14 +48,13 @@ function requestContext(): KoaContextWithOIDC {
   return ctx;
 }
 
-export async function sessionKey(connectionId: string): Promise<Hex> {
+export async function sessionKey(connectionId: string, ring: KeyRing): Promise<Hex> {
   const ctx = requestContext();
   const known = requestKeys.get(ctx);
   if (known) return known;
-  const key = generatePrivateKey();
-  if (!(await setSessionAddress(connectionId, privateKeyToAddress(key)))) {
-    throw new Error('connection already has a session key');
-  }
+  const sealed = await takeSealedKey(connectionId);
+  if (!sealed) throw new Error('the session key was already issued');
+  const key = open(ring, sealed, connectionId);
   requestKeys.set(ctx, key);
   return key;
 }

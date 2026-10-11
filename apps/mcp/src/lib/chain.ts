@@ -1,4 +1,4 @@
-import type { SignedPayload } from '@jaw.id/agent';
+import { JAW_RPC_URL } from '@jaw.id/core';
 import {
   createPublicClient,
   http,
@@ -10,13 +10,24 @@ import {
 } from 'viem';
 import { config, SUPPORTED_CHAINS } from '@/connections/config';
 
+/** What an owner signs: plain text, or EIP-712 typed data. */
+export type SignedPayload =
+  | { type: 'message'; message: string }
+  | { type: 'typed_data'; typedData: TypedDataDefinition };
+
 /** False when the signature does not verify, malformed bytes included; rejects only when the chain cannot be asked. */
 export type VerifySignature = (a: {
   chainId: number;
   address: Address;
-  payload: Extract<SignedPayload, { type: 'message' | 'typed_data' }>;
+  payload: SignedPayload;
   signature: Hex;
 }) => Promise<boolean>;
+
+// JAW's RPC proxy, which serves the bundler methods too.
+export function rpcUrl(chainId: number) {
+  const key = config().paymasterApiKey;
+  return `${JAW_RPC_URL}?chainId=${chainId}${key ? `&api-key=${key}` : ''}`;
+}
 
 const clients = new Map<number, PublicClient>();
 
@@ -37,7 +48,7 @@ export const verifyOnChain: VerifySignature = async ({ chainId, address, payload
   const client = publicClientFor(chainId);
   const valid = await (payload.type === 'message'
     ? client.verifyMessage({ address, message: payload.message, signature })
-    : client.verifyTypedData({ address, signature, ...(payload.typedData as TypedDataDefinition) }));
+    : client.verifyTypedData({ address, signature, ...payload.typedData }));
   // viem answers false when the node cannot be reached too; only a node that answers makes it a bad signature.
   if (!valid) {
     await withTimeout(() => client.getBlockNumber({ cacheTime: 0 }), {

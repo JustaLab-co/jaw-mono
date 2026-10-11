@@ -36,7 +36,7 @@ Hosted stack, when the change touches `apps/mcp` or storage:
 $S/hosted-up.sh "$RUN"   # needs Docker, JAW_KEYS_URL optional; appends DATABASE_URL, MCP_URL, MCP_PUBLIC_URL, KEYS_URL
 ```
 
-`JAW_KEYS_URL` is the origin of the keys app. `apps/mcp` refuses to start without it (`/api/health` answers 503 `config invalid`) because it builds the owner-facing links from it: the `/approve/<id>` URL of a payment request, the `/authorize` redirect of the OAuth consent step, and the CORS allowed origin. The verify flows never open those links, so it is optional here and defaults to `http://localhost:3100`. Set it to a running keys app only when you need to follow an approval link by hand.
+`JAW_KEYS_URL` is the origin of the keys app. `apps/mcp` refuses to start without it (`/api/health` answers 503 `config invalid`) because it builds the owner-facing link from it: the `/cli-bridge` URL the interaction page opens for the owner to approve the budget. The verify flows never open that link, so it is optional here and defaults to `http://localhost:3100`. Set it to a running keys app, with `JAW_RELAY_URL` pointing at a relay both reach, only when you need to connect by hand.
 
 The mcp image builds from `work/src`, the clean worktree of HEAD, when `up.sh` made one; otherwise (a run started with `JAW_VERIFY_TGZ`) from the checkout, and `hosted-up.sh` refuses when that checkout is dirty. The mcp container gets `DATABASE_URL`, `JAW_MCP_PUBLIC_URL` (fixed host port, so the OAuth issuer matches what clients reach), `JAW_KEYS_URL` and the optional `JAW_MCP_API_KEY` from your environment, and a per-run `JAW_MCP_SEALING_KEYS` generated into `work/sealing.key` (0600, never copied to evidence). From inside the container the seller is `http://host.docker.internal:$PORT`.
 

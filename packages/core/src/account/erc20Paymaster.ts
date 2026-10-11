@@ -1,15 +1,6 @@
-import {
-    Address,
-    Hex,
-    LocalAccount,
-    createPublicClient,
-    encodeFunctionData,
-    erc20Abi,
-    formatUnits,
-    getAddress,
-} from 'viem';
+import { Address, Hex, createPublicClient, encodeFunctionData, erc20Abi, formatUnits, getAddress } from 'viem';
 import { SmartAccount, entryPoint08Address } from 'viem/account-abstraction';
-import { getBundlerClient, prepareCallsForExecution } from './smartAccount.js';
+import { getBundlerClient } from './smartAccount.js';
 import { Chain, getClient, store } from '../store/index.js';
 import { ERC20_PAYMASTER_ADDRESS, JAW_PROXY_URL, PERMISSIONS_MANAGER_ADDRESS } from '../constants.js';
 import {
@@ -235,8 +226,7 @@ export async function fetchTokenQuotes(
  * @param chain - The chain configuration
  * @param paymasterUrl - The ERC-20 paymaster URL
  * @param tokens - Array of tokens to estimate costs for
- * @param options - Optional permission-based execution context, or the local account of an
- *   EIP-7702 sender so the delegation and owner setup its send adds are priced too; not both
+ * @param options - Optional permission-based execution context
  * @returns Array of token estimates with costs
  */
 export async function estimateErc20PaymasterCosts(
@@ -245,9 +235,7 @@ export async function estimateErc20PaymasterCosts(
     chain: Chain,
     paymasterUrl: string,
     tokens: TokenInfo[],
-    options?:
-        | { permissionId?: Hex; apiKey?: string; localAccount?: undefined }
-        | { localAccount: LocalAccount; apiKey?: string; permissionId?: undefined }
+    options?: { permissionId?: Hex; apiKey?: string }
 ): Promise<TokenEstimate[]> {
     if (tokens.length === 0) {
         return [];
@@ -283,7 +271,6 @@ export async function estimateErc20PaymasterCosts(
     // For permission-based execution, the user's calls cannot go to their targets
     // directly — they must be routed through the permissions manager.
     let preparedCalls: Array<{ to: Address; value: bigint; data: Hex }>;
-    let authorization: Awaited<ReturnType<typeof prepareCallsForExecution>>['authorization'];
     if (options?.permissionId) {
         const relayPermission = await getPermissionFromRelay(options.permissionId, options.apiKey);
         const permission = relayPermissionToPermission(relayPermission);
@@ -304,13 +291,6 @@ export async function estimateErc20PaymasterCosts(
                 data: encodedData,
             },
         ];
-    } else if (options?.localAccount) {
-        ({ calls: preparedCalls, authorization } = await prepareCallsForExecution(
-            smartAccount,
-            [approvalCall, ...calls],
-            chain,
-            options.localAccount
-        ));
     } else {
         preparedCalls = [
             approvalCall,
@@ -332,7 +312,6 @@ export async function estimateErc20PaymasterCosts(
     const userOp = await bundlerClient.prepareUserOperation({
         account: smartAccount,
         calls: preparedCalls,
-        ...(authorization ? { authorization } : {}),
     });
 
     // 4. Extract gas fields from userOp

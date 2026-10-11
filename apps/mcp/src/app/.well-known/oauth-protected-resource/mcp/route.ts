@@ -1,6 +1,6 @@
 import { generateProtectedResourceMetadata, metadataCorsOptionsRequestHandler } from 'mcp-handler';
 import { config } from '@/connections/config';
-import { CONNECTION_SCOPES } from '@jaw.id/agent';
+import { CONNECTION_SCOPES } from '@/connections/scopes';
 import { withEdge } from '@/lib/edge';
 
 export const runtime = 'nodejs';

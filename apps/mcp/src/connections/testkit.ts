@@ -1,11 +1,13 @@
 import { createHash, randomBytes } from 'node:crypto';
-import { connectionsSignInTypedData, consentTypedData, type GrantRequest, type SignedPayload } from '@jaw.id/agent';
-import { verifyMessage, verifyTypedData, type Address, type Hex } from 'viem';
+import { toFunctionSelector, verifyMessage, verifyTypedData, type Address, type Hex } from 'viem';
 import { privateKeyToAccount, generatePrivateKey } from 'viem/accounts';
-import { decideFromPage, readForPage, type ReadPermission } from '@/approvals/page-api';
+import { currentGrant, type Grant } from '@/grants/store';
+import type { GrantRequest, ReadPermission } from '@/grants/permission';
+import type { SignedPayload } from '@/lib/chain';
 import { verifyBearer, type Tenant } from './auth';
-import { abort, complete, consent, details, hop, type ConsentDetails } from './interaction';
+import { abort, complete, hop, status, type InteractionDeps } from './interaction';
 import { oauth } from './provider';
+import type { Ask, OpenWallet } from './relay';
 
 export const ISSUER = 'http://mcp.test';
 export const RESOURCE = `${ISSUER}/mcp`;
@@ -17,8 +19,78 @@ export function setTestEnv(keys = randomBytes(32).toString('base64url')) {
   process.env.JAW_MCP_SEALING_KEYS = keys;
 }
 
+export const owner = () => privateKeyToAccount(generatePrivateKey());
+
+export const approvedOnChain: ReadPermission = async () => ({ status: 'ok', approved: true, revoked: false });
+
+/** What the owner's wallet answers, signing with `signer`. `refuse` lists methods the owner turns down. */
+export function walletAnswers(signer: ReturnType<typeof owner>, refuse: string[] = []): Ask {
+  return async (method, params) => {
+    if (refuse.includes(method)) throw Object.assign(new Error('User rejected the request'), { code: 4001 });
+    switch (method) {
+      case 'eth_requestAccounts':
+        return [signer.address];
+      case 'personal_sign':
+        return signer.signMessage({ message: { raw: params[0] as Hex } });
+      case 'wallet_grantPermissions': {
+        const grant = params[0] as GrantRequest;
+        return {
+          permissionId: `0x${randomBytes(32).toString('hex')}`,
+          account: signer.address,
+          spender: grant.spender,
+          start: 1_780_000_000,
+          end: grant.expiry,
+          salt: '0x2a',
+          calls: grant.permissions.calls.map((c) => ({
+            target: c.target,
+            selector: toFunctionSelector(c.functionSignature),
+          })),
+          spends: grant.permissions.spends,
+        };
+      }
+    }
+    throw new Error(`the test wallet does not answer ${method}`);
+  };
+}
+
+const runs = new Set<Promise<unknown>>();
+
+/** A wallet that answers at once, as if the owner approved everything asked. */
+export const fakeWallet =
+  (answer: Ask, asked: { method: string; params: unknown[] }[] = []): OpenWallet =>
+  async () => ({
+    url: `http://keys.test/cli-bridge?session=${randomBytes(8).toString('hex')}`,
+    run: (work) => {
+      const done = work((method, params) => {
+        asked.push({ method, params });
+        return answer(method, params);
+      });
+      const settled: Promise<unknown> = done.catch(() => undefined).finally(() => runs.delete(settled));
+      runs.add(settled);
+      return done;
+    },
+  });
+
+/** Waits for every wallet session the server started to finish, including ones started meanwhile. */
+export const walletsSettled = async () => {
+  while (runs.size) await Promise.all(runs);
+};
+
+let interactionDeps: InteractionDeps = {
+  openWallet: fakeWallet(walletAnswers(owner())),
+  verify: (a) => verifyLocally(a),
+  readPermission: approvedOnChain,
+};
+
+/** The wallet the next authorization opens, and how it is checked. */
+export function setWallet(deps: Partial<InteractionDeps>) {
+  interactionDeps = { ...interactionDeps, ...deps };
+}
+
 export class Browser {
   private cookies = new Map<string, { value: string; path: string }>();
+  /** The wallet this browser's owner approves in; the one set with setWallet when absent. */
+  wallet?: InteractionDeps;
 
   async get(url: string): Promise<Response> {
     return this.send(new URL(url), {});
@@ -31,7 +103,7 @@ export class Browser {
       .join('; ');
     const headers = new Headers(init.headers);
     if (cookie) headers.set('cookie', cookie);
-    const res = await route(new Request(url, { ...init, headers }));
+    const res = await route(new Request(url, { ...init, headers }), this.wallet ?? interactionDeps);
     for (const line of res.headers.getSetCookie()) {
       const [pair, ...attrs] = line.split(';').map((s) => s.trim());
       const [name, value] = pair.split('=');
@@ -51,11 +123,11 @@ export class Browser {
   }
 }
 
-async function route(req: Request): Promise<Response> {
+async function route(req: Request, deps: InteractionDeps): Promise<Response> {
   const [, first, uid, action] = new URL(req.url).pathname.split('/');
   if (first !== 'interaction') return oauth(req);
-  if (action === undefined) return hop(req, uid);
-  const handler = { details, complete, abort }[action];
+  if (action === undefined) return hop(req, uid, deps);
+  const handler = { status, complete, abort }[action];
   if (!handler) throw new Error(`no route for ${req.url}`);
   return handler(req, uid);
 }
@@ -91,49 +163,29 @@ export async function startAuthorization(browser: Browser, a: Authorize = {}) {
     const location = res.headers.get('location');
     if (!location) return { verifier, stopped: res };
     url = new URL(location, url).href;
-    if (url.startsWith('http://keys.test/')) return { verifier, uid: new URL(url).searchParams.get('uid')! };
+    const uid = url.match(/\/interaction\/([^/?]+)$/)?.[1];
+    if (uid) {
+      const html = await (await browser.get(url)).text();
+      return { verifier, uid, ticket: html.match(/"ticket":"([^"]+)"/)?.[1], html };
+    }
     if (url.startsWith(a.redirectUri ?? REDIRECT)) return { verifier, redirected: new URL(url) };
   }
   throw new Error('too many redirects');
 }
 
-export const owner = () => privateKeyToAccount(generatePrivateKey());
 export const verifyLocally = ({
   address,
   payload,
   signature,
 }: {
   address: Address;
-  payload: Extract<SignedPayload, { type: 'message' | 'typed_data' }>;
+  payload: SignedPayload;
   signature: Hex;
 }) =>
   (payload.type === 'message'
     ? verifyMessage({ address, message: payload.message, signature })
     : verifyTypedData({ address, signature, ...payload.typedData })
   ).catch(() => false);
-
-/** What the keys page posts to /api/connections: a sign-in valid ten minutes. */
-export async function pageProof(signer: ReturnType<typeof owner>) {
-  const expires = new Date(Date.now() + 10 * 60_000).toISOString();
-  const typedData = connectionsSignInTypedData(84532, { issuer: ISSUER, expires });
-  return { account: signer.address, chainId: 84532, expires, signature: await signer.signTypedData(typedData) };
-}
-
-export async function getDetails(uid: string): Promise<ConsentDetails> {
-  return (await details(new Request(`${ISSUER}/interaction/${uid}/details`), uid)).json();
-}
-
-export async function postConsent(uid: string, address: Hex, signature: Hex, scopes?: unknown) {
-  return consent(
-    new Request(`${ISSUER}/interaction/${uid}/consent`, {
-      method: 'POST',
-      headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ address, signature, scopes }),
-    }),
-    uid,
-    verifyLocally
-  );
-}
 
 export interface TokenBody {
   access_token: string;
@@ -165,17 +217,22 @@ export async function follow(browser: Browser, url: string, redirectUri = REDIRE
   throw new Error('too many redirects');
 }
 
-/** `granted` is what the user leaves ticked; absent signs the full request, as an older page does. */
-export async function connect(signer = owner(), a: Authorize = {}, browser = new Browser(), granted?: string[]) {
+/** An authorization the owner approves in their wallet, through to the tokens. */
+export async function connect(
+  signer = owner(),
+  a: Authorize = {},
+  browser = new Browser(),
+  read: ReadPermission = approvedOnChain
+) {
+  browser.wallet = { ...interactionDeps, openWallet: fakeWallet(walletAnswers(signer)), readPermission: read };
   const start = await startAuthorization(browser, a);
-  if (!start.uid) throw new Error('authorization did not reach consent');
-  const d = await getDetails(start.uid);
-  const signed = granted
-    ? consentTypedData(d.chainId, { ...d.typedData.message, scopes: granted.join(' ') })
-    : d.typedData;
-  const res = await postConsent(start.uid, signer.address, await signer.signTypedData(signed), granted);
-  const { next } = (await res.json()) as { next: string };
-  const redirected = await follow(browser, next, a.redirectUri ?? REDIRECT);
+  if (!start.uid || !start.ticket) throw new Error('authorization did not reach the wallet');
+  await walletsSettled();
+  const redirected = await follow(
+    browser,
+    `${ISSUER}/interaction/${start.uid}/complete?ticket=${start.ticket}`,
+    a.redirectUri ?? REDIRECT
+  );
   const issued = await token({
     grant_type: 'authorization_code',
     code: redirected.searchParams.get('code')!,
@@ -184,7 +241,7 @@ export async function connect(signer = owner(), a: Authorize = {}, browser = new
     code_verifier: start.verifier,
     resource: RESOURCE,
   });
-  return { signer, details: d, uid: start.uid, ...issued.body, status: issued.status };
+  return { signer, uid: start.uid, ...issued.body, status: issued.status };
 }
 
 export async function mcp(token: string | undefined, body: object) {
@@ -209,26 +266,16 @@ export async function mcp(token: string | undefined, body: object) {
 export const callTool = async (token: string, name: string, args: object) =>
   (await mcp(token, { method: 'tools/call', params: { name, arguments: args } })).json?.result;
 
-/** A connection with a 1 USDC daily budget approved through the page, the chain read faked by `read`. */
-export async function budgetConnection(read: ReadPermission) {
-  const c = await connect();
+/** A connection whose owner approved the default daily budget when connecting, the chain read faked by `read`. */
+export async function budgetConnection(read: ReadPermission = approvedOnChain) {
+  const c = await connect(owner(), {}, new Browser(), read);
   const tenant = (await verifyBearer(c.access_token))?.extra?.tenant as Tenant;
-  const id = (await callTool(c.access_token, 'jaw_request_budget', { perDay: '1' })).structuredContent.requestId;
-  const page = await readForPage(id);
-  if (page.kind !== 'ok') throw new Error(page.kind);
-  const grant = (page.view.approve as { grant: GrantRequest }).grant;
-  const permission = {
-    permissionId: `0x${randomBytes(32).toString('hex')}` as Hex,
-    account: grant.address,
-    spender: grant.spender,
-    start: 1_780_000_000,
-    end: grant.expiry,
-    salt: '0x2a',
-    calls: [{ target: grant.permissions.calls[0].target, selector: '0xa9059cbb' }],
-    spends: grant.permissions.spends,
+  const grant = (await currentGrant(tenant.connectionId)) as Grant;
+  return {
+    c,
+    tenant,
+    sessionAddress: tenant.sessionAddress,
+    permissionId: grant.permissionId,
+    permission: grant.permission,
   };
-  const post = { verdict: 'approved', previewHash: page.view.previewHash, permission };
-  const decided = await decideFromPage(id, post, verifyLocally, new Date(), read);
-  if (decided.kind !== 'ok') throw new Error(decided.kind);
-  return { c, tenant, sessionAddress: tenant.sessionAddress, permissionId: permission.permissionId, permission };
 }

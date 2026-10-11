@@ -18,15 +18,15 @@ import { encodeFunctionData, erc20Abi, formatUnits, isAddressEqual, maxUint256, 
 import { privateKeyToAccount } from 'viem/accounts';
 import { z } from 'zod';
 import { chainClients } from '@/adapters/session-host';
-import { rpcUrl } from '@/approvals/bundler';
-import { readOnChain, type ReadPermission } from '@/approvals/page-api';
-import { refusal } from '@/approvals/tools';
 import { grants } from '@/db/schema';
 import { isPaymentsPaused } from '@/db/settings';
+import { readOnChain, type ReadPermission } from '@/grants/permission';
+import { publicClientFor, rpcUrl } from '@/lib/chain';
 import { errorLabel, log } from '@/lib/edge';
 import { FloatBusy, LOCK_WAIT_MS, withFloat, type FloatHold } from '@/payments/float-lock';
 import { stillHeld } from '@/payments/refill';
 import { holdingRows } from '@/payments/store';
+import { refusal } from '@/tools/reply';
 import type { Tenant } from './auth';
 import { config, SUPPORTED_CHAINS } from './config';
 import { endConnection } from './rows';
@@ -76,16 +76,22 @@ const REFUSALS = {
 
 const FEE_MARGIN_BPS = 12_500n;
 const RECEIPT_MS = 60_000;
+/**
+ * The fee reserved for a session that never sent an op. Its first op carries the
+ * EIP-7702 delegation, which the paymaster estimate cannot price, so a fixed
+ * ceiling stands in: a few cents on Base. A higher fee reverts with nothing moved.
+ */
+const FIRST_OP_FEE = 50_000n;
+const isDelegated = (code: Hex | undefined) => code?.toLowerCase().startsWith('0xef0100') ?? false;
 
 export async function sessionSender(t: Tenant): Promise<SessionSender> {
   const apiKey = config().paymasterApiKey;
   const usdc = usdcForNetwork(`eip155:${t.chainId}`);
   if (!apiKey || !usdc) throw new Error('no ERC-20 paymaster for this chain');
   const paymasterUrl = jawPaymasterUrl(t.chainId, apiKey);
-  const localAccount = privateKeyToAccount(t.sessionKey());
   const account = await Account.fromLocalAccount(
     { chainId: t.chainId, apiKey, paymasterUrl, paymasterContext: { token: usdc.address } },
-    localAccount,
+    privateKeyToAccount(t.sessionKey()),
     { eip7702: true }
   );
   if (!isAddressEqual(account.address, t.sessionAddress)) throw new Error('the session key is not the payer');
@@ -94,13 +100,14 @@ export async function sessionSender(t: Tenant): Promise<SessionSender> {
   return {
     paymaster: paymasterQuote.paymasterAddress,
     quote: async (calls) => {
+      const code = await publicClientFor(t.chainId).getCode({ address: t.sessionAddress });
+      if (!isDelegated(code)) return { expected: FIRST_OP_FEE, max: FIRST_OP_FEE };
       const [estimate] = await estimateErc20PaymasterCosts(
         account.getSmartAccount(),
         calls,
         { ...SUPPORTED_CHAINS[t.chainId], rpcUrl: rpcUrl(t.chainId) },
         paymasterUrl,
-        [{ address: usdc.address, symbol: 'USDC', decimals: usdc.decimals, balance: 0n }],
-        { localAccount }
+        [{ address: usdc.address, symbol: 'USDC', decimals: usdc.decimals, balance: 0n }]
       );
       if (!estimate) throw new Error('the paymaster returned no estimate');
       return { expected: estimate.tokenCost, max: estimate.tokenCostMax };
@@ -183,8 +190,8 @@ function summarize(t: Tenant, r: Returned): string {
   if (r.swept > 0n) said.push(`Returned ${usdc(r.swept)} to ${t.account} in ${r.txHash}.`);
   if (r.stillApproved.length) {
     said.push(
-      `${r.stillApproved.length} budget(s) are still approved on chain because the payer cannot pay the fee to revoke them; ` +
-        `the owner can revoke them at ${config().keysOrigin}/connections.`
+      `${r.stillApproved.length} budget(s) are still approved on chain until they expire, because the payer cannot pay the fee to revoke them. ` +
+        'Nothing can spend from them: the session key went with this connection.'
     );
   }
   if (r.left) said.push(`${usdc(r.left)} stays in the payer ${t.sessionAddress}.`);

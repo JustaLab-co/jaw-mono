@@ -1,8 +1,8 @@
 import { randomUUID } from 'node:crypto';
 import { createServer } from 'node:http';
 import type { AddressInfo } from 'node:net';
-import type { ChainClients, GrantRequest, TopUpExecutor } from '@jaw.id/agent';
-import { and, eq, sql } from 'drizzle-orm';
+import type { ChainClients, TopUpExecutor } from '@jaw.id/agent';
+import { eq, sql } from 'drizzle-orm';
 import {
   decodeFunctionData,
   encodeAbiParameters,
@@ -14,13 +14,21 @@ import {
   type PublicClient,
 } from 'viem';
 import { beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
-import { decideFromPage, readForPage } from '@/approvals/page-api';
 import { verifyBearer, type Tenant } from '@/connections/auth';
-import { revokeFromPage, type PageDeps, type PageOutcome } from '@/connections/page';
 import { endConnection } from '@/connections/rows';
-import { callTool, connect, pageProof, setTestEnv, verifyLocally } from '@/connections/testkit';
+import {
+  approvedOnChain,
+  callTool,
+  connect,
+  fakeWallet,
+  setTestEnv,
+  walletAnswers,
+  walletsSettled,
+} from '@/connections/testkit';
 import { getDb } from '@/db/client';
-import { approvalRequests, payments, settings } from '@/db/schema';
+import { grants, payments, settings } from '@/db/schema';
+import { currentGrant } from '@/grants/store';
+import { requestBudget } from '@/tools/request-budget';
 import {
   lockWaiters,
   statusOnceParked,
@@ -209,48 +217,34 @@ beforeEach(() => {
   onProof.clear();
 });
 
+/** A connection whose only budget is `perDay`, or none: the one approved when connecting is dropped. */
 async function connected(perDay?: string) {
   const c = await connect(undefined, { scope: 'wallet:read x402:pay' });
   const t = (await verifyBearer(c.access_token))?.extra?.tenant as Tenant;
+  await getDb().delete(grants).where(eq(grants.connectionId, t.connectionId));
   if (perDay) await approveBudget(c, perDay);
   return { c, t };
 }
 
 async function approveBudget(c: Awaited<ReturnType<typeof connect>>, perDay: string) {
-  {
-    const asked = await callTool(c.access_token, 'jaw_request_budget', { perDay });
-    const id = asked.structuredContent.requestId as string;
-    const read = await readForPage(id);
-    if (read.kind !== 'ok' || read.view.approve.type !== 'grant') throw new Error('no budget view');
-    const grant: GrantRequest = read.view.approve.grant;
-    const permission = {
-      permissionId: `0x${Buffer.from(id).toString('hex').padEnd(64, '0').slice(0, 64)}`,
-      account: grant.address,
-      spender: grant.spender,
-      start: 1_780_000_000,
-      end: grant.expiry,
-      salt: '0x1',
-      calls: [{ target: USDC, selector: '0xa9059cbb' }],
-      spends: grant.permissions.spends,
-    };
-    const decided = await decideFromPage(
-      id,
-      { verdict: 'approved', previewHash: read.view.previewHash, permission },
-      verifyLocally,
-      new Date(),
-      async () => ({ status: 'ok', approved: true, revoked: false })
-    );
-    if (decided.kind !== 'ok') throw new Error(decided.kind);
-    balances.set(c.signer.address.toLowerCase(), 5_000_000n);
-  }
+  const t = (await verifyBearer(c.access_token))?.extra?.tenant as Tenant;
+  const wallet = fakeWallet(walletAnswers(c.signer));
+  await requestBudget(t, perDay, [], { openWallet: wallet, readPermission: approvedOnChain });
+  await walletsSettled();
+  if (!(await currentGrant(t.connectionId))) throw new Error('no budget');
+  balances.set(c.signer.address.toLowerCase(), 5_000_000n);
+}
+
+/** Another app of the same owner, which ends `t`'s connection with jaw_revoke_connection. */
+async function revoker(c: Awaited<ReturnType<typeof connect>>, t: Tenant) {
+  const other = await connect(c.signer, { scope: 'wallet:read' });
+  return async () =>
+    (await callTool(other.access_token, 'jaw_revoke_connection', { id: t.connectionId })).structuredContent as
+      | { connection: { status: string } }
+      | undefined;
 }
 
 const url = (path: string) => `http://${SELLER}${path}`;
-const pageDeps: PageDeps = {
-  verify: verifyLocally,
-  readPermission: async () => ({ status: 'ok', approved: true, revoked: false }),
-  readFloats: async (_chainId, payers) => payers.map((p) => balanceOf(p)),
-};
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
 // Another session takes the lock unless someone holds it past `ms`. On PGlite that
@@ -525,48 +519,16 @@ describe('jaw_pay_and_fetch', () => {
     }
   });
 
-  it('given an over_cap with a one-off whose conclusion fails to write, when the same key is retried, then one approval is ever opened', async () => {
-    const { t } = await connected('5');
-    const drop = await failUpdates('conclude-fails', "new.state <> 'pending'");
-    try {
-      await expect(pay(t, { url: url('/pricey'), idempotencyKey: 'conclude-fails' }, deps())).rejects.toThrow();
-    } finally {
-      await drop();
-    }
-    await getDb().execute(
-      sql`update payments set lease_until = now() - interval '1 second' where idempotency_key = 'conclude-fails'`
-    );
-    const again = await pay(t, { url: url('/pricey'), idempotencyKey: 'conclude-fails' }, deps());
-    expect(again.structuredContent).toMatchObject({ state: 'failed', refusal: { code: 'over_cap' } });
-    const offers = await getDb()
-      .select()
-      .from(approvalRequests)
-      .where(and(eq(approvalRequests.connectionId, t.connectionId), eq(approvalRequests.kind, 'payment')));
-    expect(offers).toHaveLength(1);
-  });
-
-  it('given a 5 USDC/day budget and a 2 USDC price, when the agent pays, then over_cap with a one-off offer, nothing signed or pulled, and a retry replays it', async () => {
+  it('given a 5 USDC/day budget and a 2 USDC price, when the agent pays, then over_cap pointing at a larger budget, nothing signed or pulled', async () => {
     const { t } = await connected('5');
     const first = await pay(t, { url: url('/pricey'), idempotencyKey: 'pricey' }, deps());
     expect(first.structuredContent).toMatchObject({
       kind: 'refused',
-      state: 'failed',
-      refusal: { code: 'over_cap', oneOff: { requestId: expect.any(String) } },
+      refusal: { code: 'over_cap', next: 'jaw_request_budget' },
       moneyMoved: false,
     });
-    expect(first.structuredContent?.refusal?.next).toBeUndefined();
-    expect(first.structuredContent?.summary).not.toContain('jaw_request_budget');
+    expect(first.structuredContent?.summary).toContain('jaw_request_budget');
     expect([seen.length, refills.length]).toEqual([0, 0]);
-    const again = await pay(t, { url: url('/pricey'), idempotencyKey: 'pricey' }, deps());
-    expect(again.structuredContent).toMatchObject({
-      paymentId: first.structuredContent?.paymentId,
-      refusal: { code: 'over_cap' },
-    });
-    const offers = await getDb()
-      .select()
-      .from(approvalRequests)
-      .where(and(eq(approvalRequests.connectionId, t.connectionId), eq(approvalRequests.kind, 'payment')));
-    expect(offers).toHaveLength(1);
   });
 
   it('refills to the float target, so the next payments need no refill', async () => {
@@ -847,11 +809,12 @@ describe('given a pay request that verified its bearer before the connection was
   });
 });
 
-describe('given a pay request that verified its bearer before the owner revoked it on the page', () => {
+describe('given a pay request that verified its bearer before another app of the owner revoked it', () => {
   it('when its refill turn comes after the revoke committed, then it refuses, reserves nothing and signs nothing', async () => {
     const { c, t } = await connected('1');
+    const revoke = await revoker(c, t);
     onProbe.set('/race', async () => {
-      expect((await revokeFromPage(t.connectionId, await pageProof(c.signer), pageDeps)).kind).toBe('ok');
+      expect((await revoke())?.connection.status).toBe('revoked');
     });
     const result = await pay(t, { url: url('/race'), idempotencyKey: 'page-race-refill' }, deps());
     expect(result.structuredContent).toMatchObject({
@@ -864,28 +827,30 @@ describe('given a pay request that verified its bearer before the owner revoked 
     expect(await rowOf(result.structuredContent!.paymentId)).toMatchObject({ reserved: null, nonce: null });
   });
 
-  it('when the revoke commits after its refill, then the reply shows the refilled float and the pay still settles', async () => {
+  it('when the revoke commits after its refill, then the pay still settles', async () => {
     const { c, t } = await connected('1');
-    let revoked: PageOutcome | undefined;
+    const revoke = await revoker(c, t);
+    let revoked: Awaited<ReturnType<typeof revoke>>;
     onProof.set('/race', async () => {
-      revoked = await revokeFromPage(t.connectionId, await pageProof(c.signer), pageDeps);
+      revoked = await revoke();
     });
     const result = await pay(t, { url: url('/race'), idempotencyKey: 'page-race-past-refill' }, deps());
-    expect(revoked).toMatchObject({ kind: 'ok', body: { status: 'revoked', float: '105000' } });
+    expect(revoked).toMatchObject({ connection: { status: 'revoked' } });
     expect(result.structuredContent).toMatchObject({ kind: 'paid', state: 'settled' });
     expect(refills).toEqual([105_000n]);
   });
 });
 
 describe.skipIf(!TEST_PG_URL)('on Postgres, given a pay inside its funding turn', () => {
-  it('when the owner revokes on the page, then the revoke waits for the turn, shows its refill, and the next pay refuses', async () => {
+  it('when another app of the owner revokes it, then the revoke waits for the turn and the next pay refuses', async () => {
     const { c, t } = await connected('1');
-    let revoking: Promise<PageOutcome> | undefined;
+    const revoke = await revoker(c, t);
+    let revoking: ReturnType<typeof revoke> | undefined;
     let statusInTurn: string | undefined;
     const inTurn = (funder: Address): TopUpExecutor => ({
       request: async (method, params) => {
         if (!revoking) {
-          revoking = revokeFromPage(t.connectionId, await pageProof(c.signer), pageDeps);
+          revoking = revoke();
           statusInTurn = await statusOnceParked(t.connectionId);
         }
         return executor(funder).request(method, params);
@@ -898,7 +863,7 @@ describe.skipIf(!TEST_PG_URL)('on Postgres, given a pay inside its funding turn'
     );
     expect(statusInTurn).toBe('active');
     expect(paid.structuredContent).toMatchObject({ kind: 'paid' });
-    expect(await revoking).toMatchObject({ kind: 'ok', body: { status: 'revoked', float: '105000' } });
+    expect(await revoking).toMatchObject({ connection: { status: 'revoked' } });
 
     const after = await pay(t, { url: url('/race'), idempotencyKey: 'page-after-turn' }, deps());
     expect(after.structuredContent).toMatchObject({ kind: 'refused', refusal: { code: 'not_allowed' } });
@@ -986,7 +951,7 @@ describe('given a 1 USDC/day budget and 1.5 USDC already in the payer', () => {
   });
 
   it.skipIf(!TEST_PG_URL)(
-    'when six 0.3 payments run at once across two replicas on Postgres, with each signature landing after the next turn, then three are paid, the rest refuse budget_exhausted holding nothing with a one-off offer, and jaw_status shows what is left',
+    'when six 0.3 payments run at once across two replicas on Postgres, with each signature landing after the next turn, then three are paid, the rest refuse budget_exhausted holding nothing, and jaw_status shows what is left',
     async () => {
       const { c, t } = await connected('1');
       balances.set(t.sessionAddress.toLowerCase(), 1_500_000n);
@@ -1002,7 +967,7 @@ describe('given a 1 USDC/day budget and 1.5 USDC already in the payer', () => {
       ).finally(() => getDb().execute(sql`drop function slow_sign cascade`));
       const refused = results.filter((r) => r.structuredContent?.kind !== 'paid');
       expect(refused.map((r) => r.structuredContent?.refusal?.code)).toEqual(Array(3).fill('budget_exhausted'));
-      expect(refused.every((r) => r.structuredContent?.refusal?.oneOff?.requestId)).toBe(true);
+      expect(refused.every((r) => r.structuredContent?.refusal?.next === 'jaw_request_budget')).toBe(true);
       expect(seen).toHaveLength(3);
       for (const r of refused) {
         expect(await rowOf(r.structuredContent!.paymentId)).toMatchObject({ reserved: null, topUpAmount: null });

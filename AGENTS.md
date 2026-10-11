@@ -117,7 +117,7 @@ CI runs `bunx nx affected -t lint test typecheck build api-check e2e`, so a chan
 
 - **playground** - Next.js demo app exercising the SDK via @jaw.id/wagmi (the `jaw()` connector wired through wagmi)
 - **keys-jaw-id** - Next.js keys management application (keys.jaw.id)
-- **mcp** - Hosted MCP server (Next.js, Postgres, Drizzle): OAuth with a passkey consent on keys.jaw.id, read tools, passkey-approved signatures and x402 payments within a granted budget
+- **mcp** - Hosted MCP server (Next.js, Postgres, Drizzle): OAuth whose only owner step is approving a budget in the wallet through `/cli-bridge`, as the CLI does; payments, transfers and listed contract calls run within that budget with no further prompts
 - **docs** - Documentation site built with Vocs
 
 ### Smart Contracts (`contracts/`)

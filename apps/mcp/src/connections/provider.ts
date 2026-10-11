@@ -1,11 +1,12 @@
-import { CONNECTION_SCOPES, FIRST_PARTY_CLIENTS, hasUnstorableText } from '@jaw.id/agent';
 import Provider, { errors, interactionPolicy, type Configuration } from 'oidc-provider';
+import { hasUnstorableText } from '@/lib/body';
 import { databaseUnreachable, log } from '@/lib/edge';
 import { resolvesPublic } from '@/lib/safe-fetch';
 import { PgAdapter, sessionKey, successorId } from './adapter';
 import { bridge, requestUrl } from './bridge';
 import { config, type Config } from './config';
 import { findActive } from './rows';
+import { CONNECTION_SCOPES, FIRST_PARTY_CLIENTS } from './scopes';
 import { seal } from './seal';
 
 const DAY = 24 * 60 * 60;
@@ -104,7 +105,7 @@ export function createProvider(cfg: Config, overrides: Partial<Configuration> = 
     },
     extraTokenClaims: async (_ctx, token) =>
       token.kind === 'AccessToken'
-        ? { sk: seal(cfg.ring, await sessionKey(token.accountId), token.accountId) }
+        ? { sk: seal(cfg.ring, await sessionKey(token.accountId, cfg.ring), token.accountId) }
         : undefined,
     ...overrides,
   });

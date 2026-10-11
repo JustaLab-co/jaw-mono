@@ -32,21 +32,4 @@ describe('request body caps', () => {
     }
     expect(run).not.toHaveBeenCalled();
   });
-
-  it('consent answers 413', async () => {
-    const { consent } = await import('@/connections/interaction');
-    const res = await consent(
-      post('http://mcp.test/interaction/abcdefghijklmnop/consent', streamed(big)),
-      'abcdefghijklmnop'
-    );
-    expect(res.status).toBe(413);
-  });
-
-  it('the approval decision route answers 413', async () => {
-    const { POST } = await import('@/app/api/approvals/[id]/decision/route');
-    const res = await POST(post('http://mcp.test/api/approvals/q3L0x7mJ2c1VfN8aYw4p9A/decision', big), {
-      params: Promise.resolve({ id: 'q3L0x7mJ2c1VfN8aYw4p9A' }),
-    });
-    expect(res.status).toBe(413);
-  });
 });

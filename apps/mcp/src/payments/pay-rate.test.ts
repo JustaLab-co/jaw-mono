@@ -28,11 +28,14 @@ describe('the per-connection pay rate limit', () => {
     const t = (await verifyBearer(c.access_token))?.extra?.tenant as Tenant;
     hits.count = count;
 
-    const result = await pay(t, { url: 'https://seller.test/x', idempotencyKey: `rate-${count}` }, {} as PayDeps);
+    const unreadable = { readPermission: async () => ({ status: 'unavailable' }) } as unknown as PayDeps;
+    const result = await pay(t, { url: 'https://seller.test/x', idempotencyKey: `rate-${count}` }, unreadable);
 
     // The refusal tells the agent to wait a minute.
     expect([hits.keys.at(-1), hits.windows.at(-1)]).toEqual([`pay:${t.connectionId}`, 60_000]);
-    // Past the gate, a connection with no budget is refused at the next one.
-    expect(result.content[0].text).toMatch(limited ? /^rate_limited/ : /^no_grant/);
+    // Past the gate, the budget is read from a chain this test leaves unreachable.
+    expect(result.structuredContent?.refusal?.code ?? result.content[0].text).toMatch(
+      limited ? /^rate_limited/ : /^chain_unavailable/
+    );
   });
 });

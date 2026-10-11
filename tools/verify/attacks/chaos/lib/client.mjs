@@ -1,8 +1,9 @@
 // An MCP client of the stack, over HTTP through the proxy: the OAuth flow with a
-// consent signed by a throwaway EOA, refreshes, and tool calls.
+// throwaway EOA signing in through the wallet page it plays itself, refreshes,
+// and tool calls.
 import { createHash, randomBytes } from 'node:crypto';
 import { generatePrivateKey, privateKeyToAccount } from 'viem/accounts';
-import { PUBLIC_URL } from './stack.mjs';
+import { PUBLIC_URL, RELAY_URL, waitFor } from './stack.mjs';
 
 const REDIRECT = 'http://127.0.0.1:8765/callback';
 const RESOURCE = `${PUBLIC_URL}/mcp`;
@@ -37,12 +38,85 @@ class Browser {
   }
 }
 
+const subtle = globalThis.crypto.subtle;
+const ECDH = { name: 'ECDH', namedCurve: 'P-256' };
+
 /**
- * Runs authorize, consent and the code exchange. `pin` names the replica for
- * each step: authorize, consent, complete (which issues the code) and token.
- * With `stopBeforeToken` it returns the code instead of exchanging it.
+ * The keys.jaw.id cli-bridge page, played by the owner: agrees the key in the
+ * link's fragment, answers init, signs in and signs, then waits to be shut down.
+ * A budget is not approved: the anvil fork has no permission to show for it.
  */
-export async function connect({ scope = 'wallet:read x402:pay wallet:send', pin = {}, stopBeforeToken = false } = {}) {
+async function approveInWallet(link, owner) {
+  const url = new URL(link);
+  const keys = await subtle.generateKey(ECDH, true, ['deriveKey']);
+  const theirs = await subtle.importKey('spki', Buffer.from(url.hash.slice('#pk='.length), 'hex'), ECDH, true, []);
+  const secret = await subtle.deriveKey(
+    { name: 'ECDH', public: theirs },
+    keys.privateKey,
+    { name: 'AES-GCM', length: 256 },
+    false,
+    ['encrypt', 'decrypt']
+  );
+  const seal = async (payload) => {
+    const iv = globalThis.crypto.getRandomValues(new Uint8Array(12));
+    const ciphertext = await subtle.encrypt(
+      { name: 'AES-GCM', iv },
+      secret,
+      new TextEncoder().encode(JSON.stringify(payload))
+    );
+    return JSON.stringify({
+      type: 'encrypted',
+      iv: Buffer.from(iv).toString('base64'),
+      ciphertext: Buffer.from(ciphertext).toString('base64'),
+    });
+  };
+  const open = async ({ iv, ciphertext }) =>
+    JSON.parse(
+      new TextDecoder().decode(
+        await subtle.decrypt(
+          { name: 'AES-GCM', iv: Buffer.from(iv, 'base64') },
+          secret,
+          Buffer.from(ciphertext, 'base64')
+        )
+      )
+    );
+  const answer = async ({ method, params }) => {
+    if (method === 'eth_requestAccounts') return { success: true, data: [owner.address] };
+    if (method === 'personal_sign')
+      return { success: true, data: await owner.signMessage({ message: { raw: params[0] } }) };
+    return { success: false, error: { code: 4200, message: `this wallet does not answer ${method}` } };
+  };
+
+  const ws = new WebSocket(`${RELAY_URL}?session=${url.searchParams.get('session')}&role=browser`);
+  await new Promise((resolve, reject) => {
+    ws.onopen = resolve;
+    ws.onerror = () => reject(new Error('the relay connection failed'));
+  });
+  const publicKey = Buffer.from(await subtle.exportKey('spki', keys.publicKey)).toString('hex');
+  ws.send(JSON.stringify({ type: 'key_exchange', publicKey }));
+  await new Promise((resolve) => {
+    ws.onmessage = async (e) => {
+      const m = JSON.parse(String(e.data));
+      if (m.type !== 'encrypted') return;
+      const inner = await open(m);
+      if (inner.type === 'init') ws.send(await seal({ type: 'ready', chainId: inner.chainId }));
+      if (inner.type === 'rpc_request')
+        ws.send(await seal({ type: 'rpc_response', id: inner.id, ...(await answer(inner)) }));
+      if (inner.type === 'shutdown') {
+        ws.close();
+        resolve();
+      }
+    };
+  });
+}
+
+/**
+ * Runs authorize, the owner's approval in the wallet and the code exchange.
+ * `pin` names the replica for each step: authorize, consent (the page and its
+ * status), complete (which issues the code) and token. With `stopBeforeToken`
+ * it returns the code instead of exchanging it.
+ */
+export async function connect({ scope = 'wallet:read', pin = {}, stopBeforeToken = false } = {}) {
   const owner = privateKeyToAccount(generatePrivateKey());
   const browser = new Browser();
   const verifier = randomBytes(32).toString('base64url');
@@ -60,16 +134,18 @@ export async function connect({ scope = 'wallet:read x402:pay wallet:send', pin 
   const uid = res.headers.get('location')?.match(/\/interaction\/([^/?]+)/)?.[1];
   if (!uid) throw new Error(`authorize did not reach the interaction: ${res.status} ${await res.text()}`);
 
-  const details = await (await send(`/interaction/${uid}/details`, { replica: pin.consent })).json();
-  const signature = await owner.signTypedData(details.typedData);
-  res = await send(`/interaction/${uid}/consent`, {
-    replica: pin.consent,
-    method: 'POST',
-    headers: { 'content-type': 'application/json' },
-    body: JSON.stringify({ address: owner.address, signature }),
+  res = await browser.get(`/interaction/${uid}`, pin.consent);
+  const page = await res.text();
+  const data = page.match(/const d = (\{.*\});/)?.[1];
+  if (!data) throw new Error(`the interaction page carries no wallet link: ${res.status}`);
+  const { url: link, ticket } = JSON.parse(data);
+  await approveInWallet(link, owner);
+  await waitFor('the approval', async () => {
+    const status = await (await send(`/interaction/${uid}/status`, { replica: pin.consent })).json();
+    if (status.state === 'failed') throw new Error(`the approval failed: ${status.reason}`);
+    return status.state === 'approved';
   });
-  if (res.status !== 200) throw new Error(`consent refused: ${res.status} ${await res.text()}`);
-  let url = (await res.json()).next;
+  let url = `/interaction/${uid}/complete?ticket=${ticket}`;
   let code;
   for (let hop = 0; hop < 6 && !code; hop++) {
     res = await browser.get(url, pin.complete);

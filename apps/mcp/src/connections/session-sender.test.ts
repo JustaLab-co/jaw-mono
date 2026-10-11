@@ -28,6 +28,13 @@ vi.mock('@jaw.id/core', async (original) => ({
   estimateErc20PaymasterCosts: (...args: unknown[]) => estimate(...args),
 }));
 
+// What the chain holds at the payer: an EIP-7702 delegation once it has sent an op, nothing before.
+const chain = vi.hoisted(() => ({ code: undefined as string | undefined }));
+vi.mock('@/lib/chain', async (original) => ({
+  ...(await original<object>()),
+  publicClientFor: () => ({ getCode: async () => chain.code }),
+}));
+
 const tenant = { chainId: 84532, sessionAddress: PAYER, sessionKey: () => KEY } as unknown as Tenant;
 const call = { to: PAYMASTER, data: '0x' } as const;
 
@@ -37,13 +44,21 @@ afterEach(() => {
 });
 
 describe('given the session key of a payer', () => {
-  it('when the batch is quoted, then it prices the delegation a fresh payer still needs', async () => {
+  it('when a payer that has sent an op is quoted, then the paymaster estimate prices it', async () => {
+    chain.code = `0xef0100${'ab'.repeat(20)}`;
     estimate.mockResolvedValue([{ tokenCost: 5_000n, tokenCostMax: 20_000n }]);
     const sender = await sessionSender(tenant);
 
     expect(await sender.quote([call])).toEqual({ expected: 5_000n, max: 20_000n });
     expect(sender.paymaster).toBe(PAYMASTER);
-    expect(estimate.mock.calls[0][5].localAccount.address).toBe(PAYER);
+  });
+
+  it('when a payer that never sent an op is quoted, then it reserves the first-op fee the estimate cannot price', async () => {
+    chain.code = undefined;
+    const sender = await sessionSender(tenant);
+
+    expect(await sender.quote([call])).toEqual({ expected: 50_000n, max: 50_000n });
+    expect(estimate).not.toHaveBeenCalled();
   });
 
   it.each([

@@ -1,6 +1,5 @@
 // @vitest-environment jsdom
 import { readFileSync } from 'node:fs';
-import { act } from 'react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { concat, hexToString, keccak256, stringToBytes, type Hex } from 'viem';
 
@@ -213,15 +212,5 @@ describe('passkey cancellation', () => {
     expect(() => expect(screen.rejection()?.code, 'rejection code').toBe(4001)).toThrow(
       'rejection code: expected -32603 to be 4001'
     );
-  });
-});
-
-describe('a refused reserved request', () => {
-  it('answers the dapp as a user rejection, so its session stays connected', async () => {
-    const screen = await renderRequest('personal_sign', ['JAW connection consent', ACCOUNT]);
-    const close = [...document.querySelectorAll('button')].find((b) => b.textContent?.trim() === 'Close');
-    await act(async () => close?.click());
-    await vi.waitFor(() => expect(screen.rejection()).toBeDefined());
-    expect(screen.rejection()?.code).toBe(4001);
   });
 });

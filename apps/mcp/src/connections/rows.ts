@@ -1,16 +1,19 @@
-import { and, eq, gt, isNull, ne, sql } from 'drizzle-orm';
+import { and, eq, gt, isNotNull, ne, sql } from 'drizzle-orm';
 import type { Address } from 'viem';
 import { getDb, type Tx } from '@/db/client';
 import { connections, oauthPayloads } from '@/db/schema';
 import { log } from '@/lib/edge';
 import { inTurn, tryLockFloat } from '@/payments/float-lock';
 import { PAY_LIMIT_MS } from '@/payments/store';
+import type { Sealed } from './seal';
 
 export type ConnectionRow = typeof connections.$inferSelect;
 
 export interface PendingConnection {
   id: string;
   account: Address;
+  sessionAddress: Address;
+  sealedKey: Sealed;
   chainId: number;
   clientId: string;
   clientName: string;
@@ -19,8 +22,8 @@ export interface PendingConnection {
   expiresAt: Date;
 }
 
-export async function insertPending(c: PendingConnection, ticketHash: string): Promise<boolean> {
-  const rows = await getDb()
+export async function insertPending(c: PendingConnection, ticketHash: string, db: Tx = getDb()): Promise<boolean> {
+  const rows = await db
     .insert(connections)
     .values({ ...c, status: 'pending', ticketHash })
     .onConflictDoNothing({ target: connections.interactionUid })
@@ -70,14 +73,21 @@ export async function findActive(id: string): Promise<ConnectionRow | undefined>
   return row;
 }
 
-/** The session key is created at the first token exchange; false when the connection already has one. */
-export async function setSessionAddress(id: string, sessionAddress: Address): Promise<boolean> {
-  const rows = await getDb()
-    .update(connections)
-    .set({ sessionAddress })
-    .where(and(eq(connections.id, id), isNull(connections.sessionAddress)))
-    .returning({ id: connections.id });
-  return rows.length === 1;
+/**
+ * The sealed session key, taken once: the first token exchange wraps it under the
+ * refresh token, after which the database alone can no longer open it.
+ */
+export async function takeSealedKey(id: string): Promise<Sealed | undefined> {
+  return getDb().transaction(async (tx) => {
+    const [row] = await tx
+      .select({ sealedKey: connections.sealedKey })
+      .from(connections)
+      .where(and(eq(connections.id, id), isNotNull(connections.sealedKey)))
+      .for('update');
+    if (!row) return undefined;
+    await tx.update(connections).set({ sealedKey: null }).where(eq(connections.id, id));
+    return row.sealedKey as Sealed;
+  });
 }
 
 const RETRY_MS = 250;

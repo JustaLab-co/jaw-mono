@@ -2,9 +2,8 @@ import { describe, it, expect, afterEach } from 'vitest';
 import { WebSocketServer } from 'ws';
 import type { AddressInfo } from 'node:net';
 
-import { consentTypedData, RESERVED_SIGNING_REFUSAL } from '@jaw.id/agent';
 import { buildInitPayload, readBridgeFailure, readInjectedApiKey, WSBridge } from './ws-bridge.js';
-import { exportKeyToHex, generateKeyPair } from './crypto.js';
+import { exportKeyToHex, generateKeyPair } from '@jaw.id/agent';
 
 // The init envelope is the only thing the CLI tells the browser about the
 // paymaster, so it has to carry the context and not the url alone. Dropping a
@@ -194,35 +193,5 @@ describe('WSBridge against a relay sending bad frames', () => {
     await afterFirstReconnectDelay();
 
     expect(connections).toBe(1);
-  });
-});
-
-describe('WSBridge with a JAW consent or decision to sign', () => {
-  const unconnected = () =>
-    new WSBridge({
-      relayUrl: 'ws://127.0.0.1:1',
-      session: 'test',
-      config: { chainId: 8453 },
-      privateKeyHex: '00',
-      publicKeyHex: '00',
-      peerPublicKeyHex: null,
-    });
-  const ACCOUNT = '0x9fD37D2cF1b32b3f7dBae480bbd44BE3De2A9e0F';
-
-  it('refuses before anything reaches the browser', async () => {
-    const consent = consentTypedData(8453, {
-      issuer: 'https://mcp.jaw.id',
-      interaction: 'uid_1234567890',
-      clientId: 'jaw-cli',
-      clientName: 'JAW CLI',
-      scopes: 'wallet:read',
-      expires: '2026-10-07T12:00:00.000Z',
-    });
-    await expect(unconnected().request('eth_signTypedData_v4', [ACCOUNT, JSON.stringify(consent)])).rejects.toThrow(
-      RESERVED_SIGNING_REFUSAL
-    );
-    await expect(unconnected().request('personal_sign', ['JAW connection consent', ACCOUNT])).rejects.toThrow(
-      RESERVED_SIGNING_REFUSAL
-    );
   });
 });

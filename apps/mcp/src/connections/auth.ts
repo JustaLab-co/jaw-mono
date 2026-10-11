@@ -1,4 +1,4 @@
-import type { ConnectionScope } from '@jaw.id/agent';
+import type { ConnectionScope } from './scopes';
 import { bearerAuthChallengeResponse, OAuthError, OAuthErrorCode, type AuthInfo } from '@modelcontextprotocol/server';
 import { compactDecrypt, decodeProtectedHeader } from 'jose';
 import { withMcpAuth } from 'mcp-handler';

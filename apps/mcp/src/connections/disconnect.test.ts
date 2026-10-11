@@ -148,7 +148,7 @@ describe('jaw_disconnect', () => {
     const result = await disconnect(tenant, deps);
     expect(sent).toEqual([]);
     expect(result.structuredContent).toMatchObject({ revoked: [], stillApproved: [permissionId], left: '2500' });
-    expect(result.content[0].text).toContain('http://keys.test/connections');
+    expect(result.content[0].text).toContain('still approved on chain until they expire');
     expect(await revokedAt(permissionId)).toBeNull();
     expect(await listed(c.access_token)).toBe(401);
   });

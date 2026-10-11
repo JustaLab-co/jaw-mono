@@ -1,7 +1,6 @@
 import { AsyncLocalStorage } from 'node:async_hooks';
 import type { McpServer } from '@modelcontextprotocol/server';
 import { countHit, isPaused } from '@/db/settings';
-import { pageCors } from './cors';
 
 export interface RouteContext {
   params: Promise<Record<string, string>>;
@@ -40,7 +39,7 @@ async function refuse(req: Request, rateKey: RateKey): Promise<Response | undefi
   return undefined;
 }
 
-// Ids in paths are capabilities (an approval id, an interaction uid); keep them out of logs.
+// Ids in paths are capabilities (an interaction uid); keep them out of logs.
 const loggedPath = (url: string) =>
   new URL(url).pathname
     .split('/')
@@ -101,7 +100,7 @@ export const currentRequestId = () => requestScope.getStore();
 
 export function withEdge(
   handler: Handler,
-  { guarded, cors = false, rateKey = ipKey }: { guarded: boolean; cors?: boolean; rateKey?: RateKey }
+  { guarded, rateKey = ipKey }: { guarded: boolean; rateKey?: RateKey }
 ): (req: Request, ctx: RouteContext) => Promise<Response> {
   return async (req, ctx) => {
     const requestId = crypto.randomUUID();
@@ -124,7 +123,7 @@ export function withEdge(
       status: out.status,
       ms: Math.round(performance.now() - started),
     });
-    return cors ? pageCors(out) : out;
+    return out;
   };
 }
 

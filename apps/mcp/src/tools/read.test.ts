@@ -1,6 +1,10 @@
 import { createServer } from 'node:http';
 import type { AddressInfo } from 'node:net';
 import { beforeAll, describe, expect, it } from 'vitest';
+import { eq } from 'drizzle-orm';
+import { verifyBearer, type Tenant } from '@/connections/auth';
+import { getDb } from '@/db/client';
+import { grants } from '@/db/schema';
 import { useTestDb } from '@/db/test-db';
 import { callTool, connect, mcp, setTestEnv } from '@/connections/testkit';
 
@@ -61,10 +65,13 @@ beforeAll(async () => {
 });
 
 describe('read tools', () => {
-  it('jaw_status names the account and reads no_grant, pointing at jaw_request_budget', async () => {
-    const r = await callTool(token, 'jaw_status', {});
+  it('given a connection whose budget is gone, jaw_status names the account and reads no_grant, pointing at jaw_request_budget', async () => {
+    const c = await connect();
+    const t = (await verifyBearer(c.access_token))?.extra?.tenant as Tenant;
+    await getDb().delete(grants).where(eq(grants.connectionId, t.connectionId));
+    const r = await callTool(c.access_token, 'jaw_status', {});
     expect(r.structuredContent).toMatchObject({
-      account,
+      account: c.signer.address,
       chainId: 'eip155:84532',
       readiness: { status: 'not_ready', reason: 'no_grant' },
       budget: null,
@@ -159,17 +166,17 @@ describe('read tools', () => {
     const tools = json.result.tools as { name: string; outputSchema?: object }[];
     expect(tools.map((t) => t.name).sort()).toEqual([
       'jaw_add_funds',
+      'jaw_connections',
       'jaw_disconnect',
       'jaw_history',
       'jaw_pay_and_fetch',
-      'jaw_prepare_calls',
-      'jaw_prepare_transfer',
       'jaw_quote',
       'jaw_request_budget',
-      'jaw_request_signature',
-      'jaw_request_status',
       'jaw_resolve_name',
+      'jaw_revoke_connection',
+      'jaw_send_calls',
       'jaw_status',
+      'jaw_transfer',
     ]);
     expect(tools.every((t) => t.outputSchema)).toBe(true);
   });
