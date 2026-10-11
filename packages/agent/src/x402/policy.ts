@@ -508,6 +508,21 @@ export function checkPolicy(
     }
   }
 
+  return checkCaps(requirement, amount, policy, ctx);
+}
+
+/**
+ * The caps measured against what was already spent: every per-period limit,
+ * then the session total. A caller that serializes payments checks them again
+ * with usage read under its lock, since selection saw none of the payments
+ * queued alongside.
+ */
+export function checkCaps(
+  requirement: X402PaymentRequirement,
+  amount: bigint,
+  policy: Pick<X402Policy, 'perPeriod' | 'maxTotalPerSession'>,
+  ctx: Pick<PolicyContext, 'periodUsage' | 'spentThisSession'> = {}
+): PolicyResult {
   // Checked before the session cap: this is the one that mirrors the on-chain
   // permission, so when both would refuse, the reason the chain would give is
   // the more useful one to report.

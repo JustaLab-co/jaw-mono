@@ -1,4 +1,5 @@
 import {
+  checkCaps,
   currentLimitUsageOnChain,
   usdcForNetwork,
   ensurePayerFunds,
@@ -93,6 +94,8 @@ function guarded(executor: TopUpExecutor, hold: FloatHold): TopUpExecutor {
   };
 }
 
+const LOST = 'the refill lost its lock while it moved money, so the payment was not signed';
+
 const timedOut = (reason: string): TopUpOutcome => ({ ok: false, code: 'timed_out', reason });
 
 // A waiter gives up when its turn would come too late to send. Once its turn starts the
@@ -118,9 +121,10 @@ function queuedWithin(ms: number, key: string, work: () => Promise<TopUpOutcome>
 /**
  * The funding hook `payAndFetch` runs after the probe and before signing: the
  * only place the connection's lock exists, so it never spans a seller fetch.
- * Under it this row reserves its price, the caps are read again, and the payer's
- * balance is read less what every other row still holds, so concurrent payments
- * never sign against the same float. The refill is the shortfall plus the gas reserve.
+ * Under it the caps are checked against what earlier turns committed, this row
+ * reserves its price, and the payer's balance is read less what every other row
+ * still holds, so concurrent payments never sign past a cap or against the same
+ * float. The refill is the shortfall plus the gas reserve.
  */
 export function refillHook(c: RefillContext): EnsureFunds {
   return (requirement, payer, budget) =>
@@ -155,6 +159,11 @@ export function refillHook(c: RefillContext): EnsureFunds {
           });
           const periodUsage = own.map((limit) => ({ ...limit, toppedUp: limit.toppedUp + earlier }));
           const spentThisSession = sumSpentSince(entries, { payer: c.payer }, session.createdAt);
+          const verdict = checkCaps(requirement, BigInt(requirement.amount), c.policy, {
+            periodUsage: own,
+            spentThisSession,
+          });
+          if (!verdict.ok) return { ok: false, code: verdict.code, reason: verdict.reason };
           const refillMs = budget.left() - SEND_RESERVE_MS;
           if (refillMs < MIN_REFILL_MS) return timedOut('the refill waited too long to still send');
           let pinned = block;
@@ -183,14 +192,21 @@ export function refillHook(c: RefillContext): EnsureFunds {
               return balance > held ? balance - held : 0n;
             },
           });
-          funded = outcome;
+          const moved = Boolean(outcome.amount || outcome.batchId || outcome.approvalBatchId);
+          if (!moved && !outcome.ok) return outcome;
+          // A turn that moved no money commits its reservation under the lock or not at all.
+          // Money that moved reaches the caller whatever follows, refused when the lock dropped
+          // meanwhile: another turn may have checked the caps since without this payment.
+          if (!moved) hold.assertHeld();
+          else funded = hold.held() ? outcome : { ...outcome, ok: false, code: 'funding_failed', reason: LOST };
+          const result = funded ?? outcome;
           // The reservation lands with the outcome: holders that read it come after this
           // turn, and a refill killed during the chain wait leaves none behind.
           await hold.tx(async (tx) => {
-            await reserve(tx, c.rowId, c.token, requirement.amount);
-            await recordTopUp(tx, c.rowId, outcome);
+            if (result.ok) await reserve(tx, c.rowId, c.token, requirement.amount);
+            await recordTopUp(tx, c.rowId, result);
           });
-          return outcome;
+          return result;
         });
       } catch (err) {
         if (funded) return funded;
