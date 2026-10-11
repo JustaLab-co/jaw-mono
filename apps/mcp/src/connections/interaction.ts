@@ -160,7 +160,12 @@ const SHOWN = new Set([
 ]);
 export const reasonOf = (err: unknown) => {
   if ((err as { code?: unknown })?.code === 4001) return 'turned down in the wallet';
-  return err instanceof Error && SHOWN.has(err.message) ? err.message : 'the wallet did not approve';
+  if (!(err instanceof Error)) return 'the wallet did not approve';
+  // Raised by the relay session itself, so the text is this server's own.
+  if (err.message.startsWith('the wallet page refused:') || err.message === 'timed out waiting for the wallet') {
+    return err.message;
+  }
+  return SHOWN.has(err.message) ? err.message : 'the wallet did not approve';
 };
 
 /** The owner's approval in flight on this replica, so a reload here shows the same link. */
