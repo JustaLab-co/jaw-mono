@@ -739,7 +739,9 @@ describe('authorization server', () => {
     expect(await verifyBearer(undefined)).toBeUndefined();
     const c = await connect();
     const [h, k, iv, ct, tag] = c.access_token.split('.');
-    expect(await verifyBearer([h, k, iv, ct.slice(0, -2) + 'AA', tag].join('.'))).toBeUndefined();
+    const tampered = Buffer.from(ct, 'base64url');
+    tampered[0] ^= 1;
+    expect(await verifyBearer([h, k, iv, tampered.toString('base64url'), tag].join('.'))).toBeUndefined();
   });
 });
 
