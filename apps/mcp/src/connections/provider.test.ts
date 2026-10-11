@@ -3,7 +3,7 @@ import { compactDecrypt, decodeProtectedHeader } from 'jose';
 import type { PGlite } from '@electric-sql/pglite';
 import type { Hex } from 'viem';
 import { privateKeyToAddress } from 'viem/accounts';
-import { beforeAll, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { useTestDb } from '@/db/test-db';
 import {
   Browser,
@@ -24,7 +24,7 @@ setTestEnv();
 const { verifyBearer } = await import('./auth');
 const { config } = await import('./config');
 const { createProvider } = await import('./provider');
-const { PgAdapter, RETRY_WINDOW_MS } = await import('./adapter');
+const { PgAdapter } = await import('./adapter');
 const { findActive, revokeByGrant } = await import('./rows');
 const { open, parseKeyRing, unwrap } = await import('./seal');
 type KeyRing = ReturnType<typeof parseKeyRing>;
@@ -47,6 +47,8 @@ const metadata = {
 };
 
 let db: PGlite;
+
+afterEach(() => vi.restoreAllMocks());
 
 beforeAll(async () => {
   db = await useTestDb();
@@ -135,6 +137,52 @@ function recoverable(dump: string[], ring: KeyRing, connectionId: string, tokens
     for (const candidate of [...dump, ...tokens]) attempt(() => unwrap(ring, blob as never, connectionId, candidate));
   }
   return [...keys];
+}
+
+async function usedToken(connectionId: string) {
+  const { rows } = await db.query<{ consumed_at: Date; key_wrap: unknown }>(
+    `select p.consumed_at, p.key_wrap from oauth_payloads p join connections c on p.grant_id = c.grant_id
+     where c.id = $1 and p.model = 'RefreshToken' and p.consumed_at is not null`,
+    [connectionId]
+  );
+  return rows[0];
+}
+
+// Time passes in the database: the window is judged on its clock, not the app's.
+async function ageUsedToken(connectionId: string, ms: number) {
+  await db.query(
+    `update oauth_payloads p set consumed_at = consumed_at - $2 * interval '1 millisecond' from connections c
+     where p.grant_id = c.grant_id and c.id = $1 and p.model = 'RefreshToken' and p.consumed_at is not null`,
+    [connectionId, ms]
+  );
+}
+
+// Runs between find and the rotation of the next refresh.
+function afterFind(run: () => Promise<void>) {
+  const find = PgAdapter.prototype.find;
+  vi.spyOn(PgAdapter.prototype, 'find').mockImplementationOnce(async function (
+    this: InstanceType<typeof PgAdapter>,
+    id
+  ) {
+    const seen = await find.call(this, id);
+    await run();
+    return seen;
+  });
+}
+
+// A replica whose clock is off by skewMs. PGlite reads the same Date.now as the
+// app, so every caller is skewed except the database's own clock read.
+async function onReplica<T>(skewMs: number, run: () => Promise<T>): Promise<T> {
+  const realNow = Date.now;
+  vi.useFakeTimers({ toFake: ['Date'] });
+  vi.setSystemTime(realNow() + skewMs);
+  const appNow = Date.now;
+  Date.now = () => (new Error().stack!.split('\n')[2].includes('@electric-sql/pglite') ? realNow() : appNow());
+  try {
+    return await run();
+  } finally {
+    vi.useRealTimers();
+  }
 }
 
 describe('authorization server', () => {
@@ -275,17 +323,12 @@ describe('authorization server', () => {
     expect(await findActive(sub)).toBeDefined();
   });
 
-  it('revokes the connection on reuse after the retry window', async () => {
+  it('given a token used 60.5 s ago, when presented, then invalid_grant and its successor is refused too', async () => {
     const c = await connect();
     const sub = (await claimsOf(c.access_token)).sub;
     const first = await refresh(c.refresh_token);
-    vi.useFakeTimers({ toFake: ['Date'] });
-    try {
-      vi.setSystemTime(Date.now() + RETRY_WINDOW_MS + 1000);
-      expect((await refresh(c.refresh_token)).body.error).toBe('invalid_grant');
-    } finally {
-      vi.useRealTimers();
-    }
+    await ageUsedToken(sub, 60_500);
+    expect((await refresh(c.refresh_token)).body.error).toBe('invalid_grant');
     expect(await findActive(sub)).toBeUndefined();
     expect((await refresh(first.body.refresh_token)).body.error).toBe('invalid_grant');
   });
@@ -380,111 +423,47 @@ describe('authorization server', () => {
     expect(recoverable(dump, config().ring, sub, [c.refresh_token])).toEqual([]);
   });
 
-  it('keeps no wrap for a used token once its retry window has passed, successor used or not', async () => {
+  it('given a used token past the window, when another connection rotates, then its wrap is gone', async () => {
     const c = await connect();
     const sub = (await claimsOf(c.access_token)).sub;
     await refresh(c.refresh_token);
-    vi.useFakeTimers({ toFake: ['Date'] });
-    try {
-      vi.setSystemTime(Date.now() + RETRY_WINDOW_MS + 1000);
-      await refresh((await connect()).refresh_token);
-    } finally {
-      vi.useRealTimers();
-    }
+    await ageUsedToken(sub, 61_000);
+    await refresh((await connect()).refresh_token);
     expect(recoverable(await dumpStrings(), config().ring, sub, [c.refresh_token])).toEqual([]);
   });
 
-  it('answers a retry at the very edge of the window, even when the sweep runs a moment later', async () => {
+  it('given a retry admitted at 59 s, when its token passes the window before the rotation, then 200', async () => {
     const c = await connect();
     const sub = (await claimsOf(c.access_token)).sub;
     await refresh(c.refresh_token);
-    const [{ consumed_at }] = (
-      await db.query<{ consumed_at: Date }>(
-        `select p.consumed_at from oauth_payloads p join connections c on p.grant_id = c.grant_id
-         where c.id = $1 and p.model = 'RefreshToken' and p.consumed_at is not null`,
-        [sub]
-      )
-    ).rows;
-    vi.useFakeTimers({ toFake: ['Date'] });
-    try {
-      vi.setSystemTime(new Date(consumed_at).getTime() + RETRY_WINDOW_MS - 1);
-      const find = PgAdapter.prototype.find;
-      vi.spyOn(PgAdapter.prototype, 'find').mockImplementation(async function (
-        this: InstanceType<typeof PgAdapter>,
-        id
-      ) {
-        const seen = await find.call(this, id);
-        vi.setSystemTime(Date.now() + 5);
-        return seen;
-      });
-      expect((await refresh(c.refresh_token)).status).toBe(200);
-    } finally {
-      vi.restoreAllMocks();
-      vi.useRealTimers();
-    }
+    await ageUsedToken(sub, 59_000);
+    afterFind(() => ageUsedToken(sub, 2_000));
+    expect((await refresh(c.refresh_token)).status).toBe(200);
   });
 
-  it('answers a retry that waits past the window while another rotation sweeps its wrap', async () => {
+  it('given a retry admitted at 59.5 s, when another rotation sweeps its stored wrap meanwhile, then 200 with the same key', async () => {
     const c = await connect();
     const other = await connect();
-    await refresh(c.refresh_token);
-    const usedToken = `select p.consumed_at, p.key_wrap from oauth_payloads p join connections c on p.grant_id = c.grant_id
-       where c.id = $1 and p.model = 'RefreshToken' and p.consumed_at is not null`;
     const sub = (await claimsOf(c.access_token)).sub;
-    const [{ consumed_at }] = (await db.query<{ consumed_at: Date }>(usedToken, [sub])).rows;
-    vi.useFakeTimers({ toFake: ['Date'] });
-    try {
-      vi.setSystemTime(new Date(consumed_at).getTime() + RETRY_WINDOW_MS - 500);
-      const find = PgAdapter.prototype.find;
-      vi.spyOn(PgAdapter.prototype, 'find').mockImplementationOnce(async function (
-        this: InstanceType<typeof PgAdapter>,
-        id
-      ) {
-        const seen = await find.call(this, id);
-        vi.setSystemTime(Date.now() + 5 * 60_000);
-        expect((await refresh(other.refresh_token)).status).toBe(200);
-        expect((await db.query<{ key_wrap: unknown }>(usedToken, [sub])).rows).toEqual([
-          expect.objectContaining({ key_wrap: null }),
-        ]);
-        return seen;
-      });
-      const retried = await refresh(c.refresh_token);
-      expect(retried.status).toBe(200);
-      expect(await sessionAddressOf(retried.body.access_token)).toBe(await sessionAddressOf(c.access_token));
-    } finally {
-      vi.restoreAllMocks();
-      vi.useRealTimers();
-    }
+    await refresh(c.refresh_token);
+    await ageUsedToken(sub, 59_500);
+    afterFind(async () => {
+      await ageUsedToken(sub, 2_000);
+      expect((await refresh(other.refresh_token)).status).toBe(200);
+      expect((await usedToken(sub)).key_wrap).toBeNull();
+    });
+    const retried = await refresh(c.refresh_token);
+    expect(retried.status).toBe(200);
+    expect(await sessionAddressOf(retried.body.access_token)).toBe(await sessionAddressOf(c.access_token));
   });
 
-  it('keeps no wrap for the token a retry presented once that retry rotates past the window', async () => {
+  it('given a retry that rotates after its token passed the window, then that token keeps no wrap', async () => {
     const c = await connect();
-    await refresh(c.refresh_token);
     const sub = (await claimsOf(c.access_token)).sub;
-    const [{ consumed_at }] = (
-      await db.query<{ consumed_at: Date }>(
-        `select p.consumed_at from oauth_payloads p join connections c on p.grant_id = c.grant_id
-         where c.id = $1 and p.model = 'RefreshToken' and p.consumed_at is not null`,
-        [sub]
-      )
-    ).rows;
-    vi.useFakeTimers({ toFake: ['Date'] });
-    try {
-      vi.setSystemTime(new Date(consumed_at).getTime() + RETRY_WINDOW_MS - 500);
-      const find = PgAdapter.prototype.find;
-      vi.spyOn(PgAdapter.prototype, 'find').mockImplementationOnce(async function (
-        this: InstanceType<typeof PgAdapter>,
-        id
-      ) {
-        const seen = await find.call(this, id);
-        vi.setSystemTime(Date.now() + 1000);
-        return seen;
-      });
-      expect((await refresh(c.refresh_token)).status).toBe(200);
-    } finally {
-      vi.restoreAllMocks();
-      vi.useRealTimers();
-    }
+    await refresh(c.refresh_token);
+    await ageUsedToken(sub, 59_500);
+    afterFind(() => ageUsedToken(sub, 2_000));
+    expect((await refresh(c.refresh_token)).status).toBe(200);
     expect(recoverable(await dumpStrings(), config().ring, sub, [c.refresh_token])).toEqual([]);
   });
 
@@ -632,5 +611,161 @@ describe('authorization server', () => {
     const c = await connect();
     const [h, k, iv, ct, tag] = c.access_token.split('.');
     expect(await verifyBearer([h, k, iv, ct.slice(0, -2) + 'AA', tag].join('.'))).toBeUndefined();
+  });
+});
+
+const FIVE_MINUTES = 5 * 60_000;
+
+describe('given replicas whose clocks disagree by five minutes', () => {
+  it('when a retry 5 s after the rotation reaches a replica ahead, then 200 with the same key', async () => {
+    const c = await connect();
+    const sub = (await claimsOf(c.access_token)).sub;
+    await refresh(c.refresh_token);
+    await ageUsedToken(sub, 5_000);
+    const retried = await onReplica(FIVE_MINUTES, () => refresh(c.refresh_token));
+    expect(retried.status).toBe(200);
+    expect(await sessionAddressOf(retried.body.access_token)).toBe(await sessionAddressOf(c.access_token));
+    expect(await findActive(sub)).toBeDefined();
+  });
+
+  it('when a token used 61 s ago reaches a replica behind, then invalid_grant and revoked', async () => {
+    const c = await connect();
+    const sub = (await claimsOf(c.access_token)).sub;
+    await refresh(c.refresh_token);
+    await ageUsedToken(sub, 61_000);
+    expect((await onReplica(-FIVE_MINUTES, () => refresh(c.refresh_token))).body.error).toBe('invalid_grant');
+    expect(await findActive(sub)).toBeUndefined();
+  });
+
+  it('when a replica behind rotates, then a retry 5 s later on a correct replica answers 200', async () => {
+    const c = await connect();
+    const sub = (await claimsOf(c.access_token)).sub;
+    await onReplica(-FIVE_MINUTES, () => refresh(c.refresh_token));
+    await ageUsedToken(sub, 5_000);
+    expect((await refresh(c.refresh_token)).status).toBe(200);
+    expect(await findActive(sub)).toBeDefined();
+  });
+
+  it('when a replica ahead rotates and 61 s pass, then a correct replica answers invalid_grant', async () => {
+    const c = await connect();
+    const sub = (await claimsOf(c.access_token)).sub;
+    await onReplica(FIVE_MINUTES, () => refresh(c.refresh_token));
+    await ageUsedToken(sub, 61_000);
+    expect((await refresh(c.refresh_token)).body.error).toBe('invalid_grant');
+  });
+
+  it('when another connection rotates on a replica behind, then a wrap used 61 s ago is gone', async () => {
+    const c = await connect();
+    const other = await connect();
+    const sub = (await claimsOf(c.access_token)).sub;
+    await refresh(c.refresh_token);
+    await ageUsedToken(sub, 61_000);
+    await onReplica(-FIVE_MINUTES, () => refresh(other.refresh_token));
+    expect((await usedToken(sub)).key_wrap).toBeNull();
+    expect(recoverable(await dumpStrings(), config().ring, sub, [c.refresh_token])).toEqual([]);
+  });
+
+  it('when another connection rotates on a replica ahead, then a wrap used 5 s ago is kept for its retry', async () => {
+    const c = await connect();
+    const other = await connect();
+    const sub = (await claimsOf(c.access_token)).sub;
+    await refresh(c.refresh_token);
+    await ageUsedToken(sub, 5_000);
+    await onReplica(FIVE_MINUTES, () => refresh(other.refresh_token));
+    const retried = await refresh(c.refresh_token);
+    expect(retried.status).toBe(200);
+    expect(await sessionAddressOf(retried.body.access_token)).toBe(await sessionAddressOf(c.access_token));
+  });
+});
+
+describe('given a rotation that waits 2 s on the connection row lock', () => {
+  it('when it commits, then the window starts after the wait', async () => {
+    const c = await connect();
+    const sub = (await claimsOf(c.access_token)).sub;
+    let released = 0;
+    const transaction = db.transaction.bind(db);
+    vi.spyOn(db, 'transaction').mockImplementationOnce((run) =>
+      transaction((tx) => {
+        const query = tx.query.bind(tx);
+        tx.query = (async (text: string, ...rest: never[]) => {
+          if (text.includes('for share')) {
+            await new Promise((resolve) => setTimeout(resolve, 2_000));
+            released = Date.now();
+          }
+          return query(text, ...rest);
+        }) as typeof tx.query;
+        return run(tx);
+      })
+    );
+    expect((await refresh(c.refresh_token)).status).toBe(200);
+    expect(new Date((await usedToken(sub)).consumed_at).getTime()).toBeGreaterThanOrEqual(released);
+  });
+});
+
+describe('given the sweep after a rotation fails', () => {
+  let stranded: string;
+  // Connecting rotates too, so these exist before the stranded wrap does.
+  let first: Awaited<ReturnType<typeof connect>>;
+  let second: Awaited<ReturnType<typeof connect>>;
+
+  // Raises on nulling a wrap already past the window, which only the sweep does
+  // on a chain whose predecessor is inside the window or already swept.
+  const failSweep = (errcode: string) =>
+    db.exec(`
+      create or replace function fail_sweep() returns trigger language plpgsql as $$
+      begin
+        if new.key_wrap is null and old.key_wrap is not null and old.consumed_at < now() - interval '60 seconds' then
+          raise exception 'sweep refused' using errcode = '${errcode}';
+        end if;
+        return new;
+      end $$;
+      create or replace trigger fail_sweep before update on oauth_payloads
+        for each row execute function fail_sweep();`);
+
+  beforeEach(async () => {
+    [first, second] = [await connect(), await connect()];
+    const c = await connect();
+    stranded = (await claimsOf(c.access_token)).sub;
+    await refresh(c.refresh_token);
+    await ageUsedToken(stranded, 61_000);
+  });
+
+  afterEach(async () => {
+    await db.exec('drop trigger if exists fail_sweep on oauth_payloads');
+  });
+
+  it('when a refresh rotates, then 200, a working pair, and one error line with the label only', async () => {
+    await failSweep('P0001');
+    const sub = (await claimsOf(first.access_token)).sub;
+    const logged = vi.spyOn(console, 'log').mockImplementation(() => {});
+    const rotated = await refresh(first.refresh_token);
+    const lines = logged.mock.calls.map(([line]) => String(line)).filter((l) => l.includes('wrap sweep failed'));
+    logged.mockRestore();
+    expect(rotated.status).toBe(200);
+    expect(lines).toHaveLength(1);
+    expect(JSON.parse(lines[0])).toEqual({
+      level: 'error',
+      time: expect.any(String),
+      msg: 'wrap sweep failed',
+      error: expect.stringMatching(/^\w+ P0001$/),
+    });
+    expect(await verifyBearer(rotated.body.access_token)).toBeDefined();
+    expect((await refresh(rotated.body.refresh_token)).status).toBe(200);
+    expect(await findActive(sub)).toBeDefined();
+  });
+
+  it('when the sweep fails with a connection error, then the refresh still answers 200', async () => {
+    await failSweep('08006');
+    const rotated = await refresh(first.refresh_token);
+    expect(rotated.status).toBe(200);
+    expect((await refresh(rotated.body.refresh_token)).status).toBe(200);
+  });
+
+  it('when the trigger is gone and another connection rotates, then the stranded wrap is gone', async () => {
+    await failSweep('P0001');
+    await refresh(first.refresh_token);
+    await db.exec('drop trigger fail_sweep on oauth_payloads');
+    await refresh(second.refresh_token);
+    expect((await usedToken(stranded)).key_wrap).toBeNull();
   });
 });

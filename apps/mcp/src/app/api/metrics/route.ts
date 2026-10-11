@@ -1,6 +1,7 @@
 import { and, count, inArray, lt } from 'drizzle-orm';
+import { wrapPastWindow } from '@/connections/adapter';
 import { getDb } from '@/db/client';
-import { payments } from '@/db/schema';
+import { oauthPayloads, payments } from '@/db/schema';
 import { hasCronSecret } from '@/lib/cron';
 import { withEdge } from '@/lib/edge';
 import { unauthorizedCounts } from '@/lib/metrics';
@@ -25,11 +26,14 @@ export const GET = withEdge(
           lt(payments.signedAt, new Date(Date.now() - RECONCILE_AFTER_MS))
         )
       );
+    const [exposed] = await db.select({ n: count() }).from(oauthPayloads).where(wrapPastWindow);
     const lines = [
       '# TYPE jaw_mcp_payments gauge',
       ...byState.map((r) => `jaw_mcp_payments{state="${r.state}"} ${r.n}`),
       '# TYPE jaw_mcp_payments_backlog gauge',
       `jaw_mcp_payments_backlog ${backlog.n}`,
+      '# TYPE jaw_mcp_wraps_past_window gauge',
+      `jaw_mcp_wraps_past_window ${exposed.n}`,
       '# TYPE jaw_mcp_unauthorized_total counter',
       ...[...unauthorizedCounts()].map(([client, n]) => `jaw_mcp_unauthorized_total{client="${label(client)}"} ${n}`),
     ];

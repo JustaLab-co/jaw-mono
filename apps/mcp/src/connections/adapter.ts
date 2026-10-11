@@ -6,12 +6,21 @@ import type { Hex } from 'viem';
 import { generatePrivateKey, privateKeyToAddress } from 'viem/accounts';
 import { getDb } from '@/db/client';
 import { connections, oauthPayloads } from '@/db/schema';
+import { errorLabel, log } from '@/lib/edge';
 import { revokeByGrant, setSessionAddress } from './rows';
 import { unwrap, wrap, type KeyRing, type Wrapped } from './seal';
 
 // A client whose refresh response was lost retries with the token it still holds.
 // Judged when find reads the token; the unused successor is what stops a replay.
 export const RETRY_WINDOW_MS = 60_000;
+// On the database clock, the one every replica shares.
+const windowStart = sql.raw(`now() - interval '${RETRY_WINDOW_MS} milliseconds'`);
+
+export const wrapPastWindow = and(
+  eq(oauthPayloads.model, 'RefreshToken'),
+  lt(oauthPayloads.consumedAt, windowStart),
+  isNotNull(oauthPayloads.keyWrap)
+);
 
 // Request parameters land in jsonb, which refuses NUL and unpaired surrogates.
 const unstorable = (value: unknown): boolean =>
@@ -76,27 +85,23 @@ export class PgAdapter implements Adapter {
   }
 
   async find(id: string) {
-    const [row] = await getDb()
-      .select()
+    // Used once, but within the window and with its successor still unused: the
+    // client never saw the successor, so this is a retry and not a replay.
+    const [found] = await getDb()
+      .select({
+        row: oauthPayloads,
+        retryable: sql<boolean>`oauth_payloads.consumed_at > ${windowStart} and exists (
+          select 1 from oauth_payloads s where s.key = oauth_payloads.successor_key and s.consumed_at is null)`,
+      })
       .from(oauthPayloads)
       .where(and(eq(oauthPayloads.key, this.key(id)), notExpired));
-    if (!row) return undefined;
+    if (!found) return undefined;
+    const { row, retryable } = found;
     const payload = { ...(row.payload as AdapterPayload), jti: id };
     if (!row.consumedAt) return payload;
-    if (await this.retryable(row)) retries.set(requestContext(), row.keyWrap as Wrapped | null);
+    if (retryable) retries.set(requestContext(), row.keyWrap as Wrapped | null);
     else payload.consumed = Math.floor(row.consumedAt.getTime() / 1000);
     return payload;
-  }
-
-  // Used once, but within the window and with its successor still unused: the
-  // client never saw the successor, so this is a retry and not a replay.
-  private async retryable(row: typeof oauthPayloads.$inferSelect): Promise<boolean> {
-    if (!row.successorKey || Date.now() - row.consumedAt!.getTime() >= RETRY_WINDOW_MS) return false;
-    const [successor] = await getDb()
-      .select({ consumedAt: oauthPayloads.consumedAt })
-      .from(oauthPayloads)
-      .where(eq(oauthPayloads.key, row.successorKey));
-    return successor !== undefined && successor.consumedAt === null;
   }
 
   // One transaction consumes the presented token and stores its successor with
@@ -127,10 +132,12 @@ export class PgAdapter implements Adapter {
         const wrapped = retry ? retries.get(ctx) : (from.keyWrap as Wrapped | null);
         if (!wrapped) throw new errors.InvalidGrant('refresh token holds no key');
         key = unwrap(this.ring, wrapped, connectionId, presented);
+        // Taken after the lock wait, which then does not shorten the client's window.
+        const consumedAt = sql`statement_timestamp()`;
         // The replaced successor never reached the client, so its wrap goes with it.
         const consumed = await tx
           .update(oauthPayloads)
-          .set(retry ? { consumedAt: new Date(), keyWrap: null } : { consumedAt: new Date() })
+          .set(retry ? { consumedAt, keyWrap: null } : { consumedAt })
           .where(
             and(eq(oauthPayloads.key, (retry ? from.successorKey : from.key) ?? ''), isNull(oauthPayloads.consumedAt))
           )
@@ -150,30 +157,7 @@ export class PgAdapter implements Adapter {
         .values({ key: this.key(id), ...row, keyWrap: wrap(this.ring, key, connectionId, id) });
       requestKeys.set(ctx, key);
     });
-    // A used token past its window can no longer start a retry, and an admitted one
-    // carries the wrap find read, so the stored wrap would only serve whoever kept
-    // the old token. Swept after every rotation, for every grant. Outside the
-    // rotation, which then locks only its own grant's rows; SKIP LOCKED leaves a row
-    // another request holds to the next sweep, so the sweep never waits and cannot deadlock.
-    await getDb()
-      .update(oauthPayloads)
-      .set({ keyWrap: null })
-      .where(
-        inArray(
-          oauthPayloads.key,
-          getDb()
-            .select({ key: oauthPayloads.key })
-            .from(oauthPayloads)
-            .where(
-              and(
-                eq(oauthPayloads.model, 'RefreshToken'),
-                lt(oauthPayloads.consumedAt, new Date(Date.now() - RETRY_WINDOW_MS)),
-                isNotNull(oauthPayloads.keyWrap)
-              )
-            )
-            .for('update', { skipLocked: true })
-        )
-      );
+    await sweepWraps();
   }
 
   async findByUid(uid: string) {
@@ -212,5 +196,32 @@ export class PgAdapter implements Adapter {
 
   async revokeByGrantId(grantId: string) {
     await getDb().delete(oauthPayloads).where(eq(oauthPayloads.grantId, grantId));
+  }
+}
+
+// A used token past its window can no longer start a retry, and an admitted one
+// carries the wrap find read, so the stored wrap would only serve whoever kept
+// the old token. Swept after every rotation, for every grant, and by the cron.
+// Outside the rotation, which then locks only its own grant's rows; SKIP LOCKED
+// leaves a row another request holds to the next sweep, so the sweep never waits
+// and cannot deadlock. A failure is logged, never thrown: the rotation before it
+// has committed and its client must get the new pair.
+export async function sweepWraps(): Promise<void> {
+  try {
+    await getDb()
+      .update(oauthPayloads)
+      .set({ keyWrap: null })
+      .where(
+        inArray(
+          oauthPayloads.key,
+          getDb()
+            .select({ key: oauthPayloads.key })
+            .from(oauthPayloads)
+            .where(wrapPastWindow)
+            .for('update', { skipLocked: true })
+        )
+      );
+  } catch (err) {
+    log('error', { msg: 'wrap sweep failed', error: errorLabel(err) });
   }
 }
