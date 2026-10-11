@@ -4,7 +4,6 @@ import { act, createElement } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { consentTypedData } from '@jaw.id/agent/reserved';
-import { queryAllByRole } from '@testing-library/dom';
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
@@ -159,7 +158,7 @@ describe('AuthorizeScreen', () => {
 
     it('when it renders, then it lists the three scopes as text with no checkbox to untick', async () => {
       await render();
-      expect(queryAllByRole(container, 'checkbox')).toHaveLength(0);
+      expect(container.querySelector('input')).toBeNull();
       expect([...container.querySelectorAll('li')].map((li) => li.textContent)).toEqual([
         'See your account, balances and payment history',
         'Pay x402 services from a daily USDC budget you approve',
@@ -173,9 +172,6 @@ describe('AuthorizeScreen', () => {
       await click(container.querySelector('#login'));
       await click([...container.querySelectorAll('button')].find((b) => b.textContent === 'Connect'));
       expect(JSON.stringify(signTypedData.mock.calls[0][0])).toBe(JSON.stringify(ALL_THREE.typedData));
-      expect((signTypedData.mock.calls[0][0] as typeof DETAILS.typedData).message.scopes).toBe(
-        'wallet:read x402:pay wallet:send'
-      );
       expect(posts.map((p) => p.body)).toEqual([{ address: OWNER, signature: '0xsig' }]);
     });
   });

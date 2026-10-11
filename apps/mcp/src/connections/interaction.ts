@@ -99,7 +99,7 @@ export async function consent(req: Request, uid: string, verify: VerifySignature
   if (!found) return Response.json({ error: 'not_found' }, { status: 404 });
   if (lacksRead(found)) return invalidScope();
   const requested = found.scopes.map((s) => s.id);
-  // The user may untick scopes, never add one or drop wallet:read.
+  // A consent may grant a subset of the requested scopes, never more and never without wallet:read.
   if (chosen && (!chosen.includes('wallet:read') || chosen.some((s) => !requested.includes(s as ConnectionScope)))) {
     return invalidScope();
   }
@@ -155,7 +155,7 @@ export function complete(req: Request, uid: string): Promise<Response> {
     const grant = new p.Grant({ accountId: row.id, clientId: row.clientId });
     grant.addOIDCScope('openid offline_access');
     grant.addResourceScope(config().resource, row.scopes.join(' '));
-    // Scopes the user unticked count as answered, or the provider would ask for consent again.
+    // Scopes not granted count as answered, or the provider would ask for consent again.
     const unticked = Object.keys(CONNECTION_SCOPES).filter((s) => !row.scopes.includes(s));
     if (unticked.length) grant.rejectResourceScope(config().resource, unticked.join(' '));
     const grantId = await grant.save();
