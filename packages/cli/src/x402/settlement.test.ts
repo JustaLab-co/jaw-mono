@@ -205,6 +205,19 @@ describe('reconcileSettlements', () => {
     expect(readX402Log().find((e) => e.nonce === '7')?.settlement).toBe('unverified');
   });
 
+  it('given the only transfer out goes to someone other than the payee, when it reconciles, then nothing is counted', async () => {
+    appendX402Log(underReported());
+    // Our nonce is spent, and the named transaction is one of the payer's own,
+    // where the only transfer out is a fee to the paymaster.
+    const paymaster = '0x5555555555555555555555555555555555555555';
+    getTransactionReceipt.mockResolvedValue({ status: 'success', logs: [transferLog(PAYER, paymaster, 10n)] });
+
+    await reconcileSettlements(readX402Log());
+
+    expect(figureFor('7')).toBe(1000n);
+    expect(readX402Log().find((e) => e.nonce === '7')?.settlement).toBe('unverified');
+  });
+
   it("does not count a transfer while the row's own nonce is unspent", async () => {
     appendX402Log(underReported());
     getTransactionReceipt.mockResolvedValue({ status: 'success', logs: [transferLog(PAYER, PAY_TO, 1n)] });

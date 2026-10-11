@@ -88,6 +88,24 @@ describe('recoverPermission', () => {
     expect(written.createdAt).toBe(SESSION.createdAt);
   });
 
+  it.each([
+    ['another owner', { account: '0x3333333333333333333333333333333333333333' }],
+    ['another spender', { spender: '0x4444444444444444444444444444444444444444' }],
+    ['another expiry', { end: RELAYED.end + 86_400 }],
+  ])(
+    'given a relayed struct for %s, when it is recovered, then it is refused and nothing is written',
+    async (_, wrong) => {
+      onDisk(SESSION);
+      const recovered = await recoverPermission(SESSION, 'key', {
+        fetchPermission: async () => ({ ...RELAYED, ...wrong }),
+      });
+
+      expect(recovered).toBeUndefined();
+      const written = JSON.parse(fs.readFileSync(PATHS.sessionConfig, 'utf-8'));
+      expect(written.permission).toBeUndefined();
+    }
+  );
+
   it('only pays for the round trip once', async () => {
     onDisk(SESSION);
     const fetchPermission = vi.fn(async () => RELAYED);

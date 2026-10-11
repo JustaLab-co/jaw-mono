@@ -65,6 +65,11 @@ describe('sealing key ring', () => {
     expect(() => parseKeyRing(randomBytes(16).toString('base64url'))).toThrow('32 bytes');
   });
 
+  it('given a ring with one good key and one short key, when it is parsed, then it is refused', () => {
+    const ring = [randomBytes(32), randomBytes(16)].map((k) => k.toString('base64url')).join(',');
+    expect(() => parseKeyRing(ring)).toThrow('32 bytes');
+  });
+
   it('derives distinct keys per purpose and a stable signing key', () => {
     const ring = parseKeyRing(a);
     const [k] = ring.keys;

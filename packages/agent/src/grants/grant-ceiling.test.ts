@@ -55,6 +55,21 @@ describe('whyGrantExceedsCeiling', () => {
     );
   });
 
+  // A ceiling is measured at its longest and a grant at its shortest, so a
+  // multiple of a shorter unit that can reset more often than the ceiling is
+  // refused even where it lines up with the ceiling on some calendars.
+  it.each([
+    ['4 weeks under a monthly ceiling', 'week', 4, '10/month'],
+    ['12 months under a yearly ceiling', 'month', 12, '10/year'],
+    ['365 days under a yearly ceiling', 'day', 365, '10/year'],
+  ])('given %s, when it is checked, then it is refused as resetting more often', (_, unit, multiplier, ceiling) => {
+    const handWritten = {
+      calls: [{ target: USDC, functionSignature: 'transfer(address,uint256)' }],
+      spends: [{ token: USDC, allowance: '10000000', unit, multiplier }],
+    };
+    expect(whyGrantExceedsCeiling(handWritten, BASE_SEPOLIA, ceiling)).toMatch(/more often than/);
+  });
+
   it('allows a one-time allowance over the whole permission', () => {
     expect(whyGrantExceedsCeiling(buildX402Permissions(BASE_SEPOLIA, '10/forever'), BASE_SEPOLIA, '10/day')).toBeNull();
   });

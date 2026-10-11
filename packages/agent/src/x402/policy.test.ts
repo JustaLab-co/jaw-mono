@@ -649,3 +649,34 @@ describe('per-period cap', () => {
     expect(policyFromPermission(wild, BASE)).toEqual({});
   });
 });
+
+describe('given two per-period limits with their own usage', () => {
+  // Two limits with the same allowance, usage listed short window first. A
+  // limit that read another limit's usage would count today's spend against
+  // the month, and the month cap would stop binding.
+  const twoUsdc = { ...base, amount: '2000000' };
+
+  it('given an equal allowance and only the day with room, when it pays, then the month refuses it', () => {
+    const policy = { perPeriod: [limit('10000000'), limit('10000000', 'month')] };
+    const result = checkPolicy(twoUsdc, policy, {
+      periodUsage: [
+        { ...usage('10000000'), spent: 0n },
+        { ...usage('10000000', 0n, 'month', new Date('2026-02-01T00:00:00.000Z')), spent: 9000000n },
+      ],
+    });
+    expect(result).toMatchObject({ ok: false, code: 'budget_exhausted' });
+    expect(result.reason).toContain('per month');
+  });
+
+  it('given only the one-day limit with room, when it pays, then the seven-day limit refuses it', () => {
+    const weekly = { ...limit('10000000'), multiplier: 7 };
+    const policy = { perPeriod: [limit('10000000'), weekly] };
+    const result = checkPolicy(twoUsdc, policy, {
+      periodUsage: [
+        { ...usage('10000000'), spent: 0n },
+        { ...usage('10000000'), multiplier: 7, spent: 9000000n },
+      ],
+    });
+    expect(result).toMatchObject({ ok: false, code: 'budget_exhausted' });
+  });
+});

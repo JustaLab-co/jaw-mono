@@ -123,3 +123,40 @@ describe('/mcp behind OAuth', () => {
     }
   });
 });
+
+describe('a bearer token', () => {
+  const reseal = async (bearer: string, change: Record<string, unknown>) => {
+    const { config } = await import('./config');
+    const { CompactEncrypt, compactDecrypt, decodeProtectedHeader } = await import('jose');
+    const header = decodeProtectedHeader(bearer);
+    const key = config().ring.keys.find((k) => k.kid === header.kid)!.jwe;
+    const claims = JSON.parse(new TextDecoder().decode((await compactDecrypt(bearer, key)).plaintext));
+    const body = new TextEncoder().encode(JSON.stringify({ ...claims, ...change }));
+    return new CompactEncrypt(body).setProtectedHeader(header as never).encrypt(key);
+  };
+
+  it('given an access token at its exp second, when it is verified, then it is refused, and a millisecond earlier it is not', async () => {
+    const { verifyBearer } = await import('./auth');
+    const c = await connect();
+    const exp = Math.floor(Date.now() / 1000) + 60;
+    const bearer = await reseal(c.access_token, { exp });
+    const now = vi.spyOn(Date, 'now');
+
+    now.mockReturnValue(exp * 1000 - 1);
+    expect(await verifyBearer(bearer)).toBeDefined();
+    now.mockReturnValue(exp * 1000);
+    expect(await verifyBearer(bearer)).toBeUndefined();
+  });
+
+  // Sealed with this ring, so only the claims tell a token for another deployment apart.
+  it.each([
+    ['another issuer', { iss: 'http://other.test' }],
+    ['another resource', { aud: 'http://other.test/mcp' }],
+  ])('given a token sealed with this ring for %s, when it is verified, then it is refused', async (_, change) => {
+    const { verifyBearer } = await import('./auth');
+    const c = await connect();
+    expect(await verifyBearer(await reseal(c.access_token, {}))).toBeDefined();
+
+    expect(await verifyBearer(await reseal(c.access_token, change))).toBeUndefined();
+  });
+});
