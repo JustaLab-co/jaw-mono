@@ -16,6 +16,7 @@ import {
   type SignedAuthorization,
   type TopUpExecutor,
 } from '@jaw.id/agent';
+import { after } from 'next/server';
 import type { Address, Hex } from 'viem';
 import { agentLogger, chainClients, payerFor, sessionOf, topUpExecutor, withoutUrls } from '@/adapters/session-host';
 import type { Tenant } from '@/connections/auth';
@@ -36,6 +37,7 @@ import {
   txHashTaken,
   markSigned,
   release,
+  settle,
   PAY_LIMIT_MS,
   type Conclusion,
   type PaymentRequest,
@@ -46,6 +48,8 @@ export { payOutput } from './render';
 
 export const PAY_RATE_LIMIT = 30;
 const CONFIRM_MS = 3_000;
+// How long the receipt is awaited once the answer is out, before the reconciler takes over.
+const LATE_CONFIRM_MS = 30_000;
 const BODY_MAX = 8_000;
 
 // Reasons built from our own errors can quote an RPC or paymaster url, key included.
@@ -75,6 +79,14 @@ export interface PayDeps {
   floatTarget: bigint;
   executor: (t: Tenant, grant: Grant) => TopUpExecutor | undefined;
   fetch: typeof fetch;
+  /** Runs a task after the response is sent. */
+  later: Confirm['later'];
+}
+
+/** Where a paid row's receipt is read: briefly in the call, and once more after the answer is out. */
+export interface Confirm {
+  clients: ChainClients;
+  later: (task: () => Promise<void>) => void;
 }
 
 const liveDeps = (): PayDeps => ({
@@ -83,6 +95,7 @@ const liveDeps = (): PayDeps => ({
   floatTarget: config().floatTarget,
   executor: topUpExecutor,
   fetch: safeFetch(config().insecureFetchHosts),
+  later: after,
 });
 
 /** The probe never answered, or the grant was gone: nothing was signed. */
@@ -190,7 +203,12 @@ function conclusionOf(o: Outcome, signed: boolean, settled: Settled | undefined,
   }
 }
 
-async function settledBy(o: Outcome, signedAfter: Date, clients: ChainClients): Promise<Settled | undefined> {
+async function settledBy(
+  o: Outcome,
+  signedAfter: Date,
+  clients: ChainClients,
+  timeoutMs: number
+): Promise<Settled | undefined> {
   if (o.kind !== 'paid' || !o.payment.txHash) return undefined;
   const { payment } = o;
   const attempt = {
@@ -202,7 +220,7 @@ async function settledBy(o: Outcome, signedAfter: Date, clients: ChainClients): 
     authorized: BigInt(payment.authorized),
     signedAt: signedAfter,
   };
-  return confirmByReceipt(attempt, payment.txHash as Hex, clients, CONFIRM_MS);
+  return confirmByReceipt(attempt, payment.txHash as Hex, clients, timeoutMs);
 }
 
 /** A hash another payment of this payer already settled on proves nothing about this one, so it is dropped. */
@@ -274,8 +292,9 @@ export async function pay(t: Tenant, input: PayInput, deps: PayDeps = liveDeps()
   const budget = until(started + PAY_LIMIT_MS);
   const payer = payerFor(t, deps.clients);
   const sent = { method: request.method, headers: request.headers, body: request.body, budget, fetch: deps.fetch };
+  const confirm = { clients: deps.clients, later: deps.later };
 
-  if (claimed.kind === 'resume') return resend(claimed.row, claimed.token, payer, sent, deps.clients);
+  if (claimed.kind === 'resume') return resend(claimed.row, claimed.token, payer, sent, confirm);
 
   const { row, token } = claimed;
   let signed = false;
@@ -286,28 +305,48 @@ export async function pay(t: Tenant, input: PayInput, deps: PayDeps = liveDeps()
   const done = await concludeSend(row, token, outcome, {
     signed,
     signedAt: new Date(started),
-    confirmWith: deps.clients,
+    confirm,
   });
   return render(done.row, done.fenced);
 }
 
 /**
  * The tail of every send: the conclusion written from the outcome, and the row
- * it left. Without `confirmWith` a paid row stays signed for the reconciler.
+ * it left. Without `confirm` a paid row stays signed for the reconciler.
  */
 export async function concludeSend(
   row: PaymentRow,
   token: string,
   outcome: Outcome,
-  opts: { signed: boolean; signedAt: Date; confirmWith?: ChainClients }
+  opts: { signed: boolean; signedAt: Date; confirm?: Confirm }
 ): Promise<{ row: PaymentRow; fenced: string[] }> {
   const checked = await claimedHashOnly(outcome, row.id);
-  const settled = opts.confirmWith ? await settledBy(checked, opts.signedAt, opts.confirmWith) : undefined;
+  const settled = opts.confirm ? await settledBy(checked, opts.signedAt, opts.confirm.clients, CONFIRM_MS) : undefined;
   const movedBefore = Boolean(row.topUpAmount || row.topUpBatchId || row.approvalBatchId);
   const conclusion = conclusionOf(checked, opts.signed, settled, movedBefore);
   const fenced = fencedOf(row.url, outcome);
   const written = await finish(row.id, token, conclusion, fenced);
+  if (written && opts.confirm) settleLater(written, checked, opts.signedAt, opts.confirm);
   return { row: written ?? (await rowAfter(row, conclusion)), fenced };
+}
+
+/** A receipt the call could not wait for, read again once the answer is out. The reconciler covers what this misses. */
+function settleLater(row: PaymentRow, o: Outcome, signedAt: Date, { clients, later }: Confirm) {
+  if (row.state !== 'signed') return;
+  const task = async () => {
+    const settled = await settledBy(o, signedAt, clients, LATE_CONFIRM_MS);
+    if (settled) await settle(row.id, settled);
+  };
+  // The payment is already written, so a task that cannot be scheduled must not fail the call.
+  try {
+    later(() =>
+      task().catch((err) => {
+        log('error', { msg: `late settle ${row.id} failed`, error: err instanceof Error ? err.name : 'unknown' });
+      })
+    );
+  } catch (err) {
+    log('warn', { msg: `late settle ${row.id} not scheduled`, error: err instanceof Error ? err.name : 'unknown' });
+  }
 }
 
 /** A previous call signed for this row and got no answer: the same proof again, under the same key. */
@@ -316,7 +355,7 @@ export async function resend(
   token: string,
   payer: Payer,
   sent: Parameters<typeof payAndFetch>[2],
-  confirmWith?: ChainClients
+  confirm?: Confirm
 ): Promise<PayResult> {
   const authorization = row.authorization as SignedAuthorization;
   const outcome: Outcome = await payAndFetch(authorization.resource, payer, {
@@ -328,7 +367,7 @@ export async function resend(
     await release(row.id, token);
     return render(merged(row, conclusionOf(outcome, true, undefined, false)), fencedOf(row.url, outcome));
   }
-  const done = await concludeSend(row, token, outcome, { signed: true, signedAt: row.signedAt as Date, confirmWith });
+  const done = await concludeSend(row, token, outcome, { signed: true, signedAt: row.signedAt as Date, confirm });
   return render(done.row, done.fenced);
 }
 

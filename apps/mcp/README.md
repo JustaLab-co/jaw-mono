@@ -67,7 +67,7 @@ A killed run can leave `mcp_test_*` databases behind. List them with `psql "$MCP
 | `JAW_MCP_API_KEY`              | no       | JAW api key the ERC-20 paymaster charges a refill's gas through. Unset, no refill runs and a payer with no float cannot pay                               |
 | `JAW_MCP_FLOAT_TARGET`         | no       | Base units a refill brings the payer up to, default 250000 (0.25 USDC), so most payments need no refill. The budget's daily cap still bounds every refill |
 | `JAW_MCP_CRON_SECRET`          | no       | Bearer secret for `/api/cron/reconcile` and `/api/metrics`. Unset, both answer 401                                                                        |
-| `JAW_MCP_RECONCILE_EVERY`      | no       | Seconds between reconciler runs inside the server, for a container where nothing calls the cron route                                                     |
+| `JAW_MCP_RECONCILE_EVERY`      | no       | Seconds between reconciler runs inside the server, default 60. Set 0 only when a cron calls `/api/cron/reconcile`                                         |
 
 To rotate sealing keys, put the new key first. A connection moves to the new key on its next token refresh, so keep the old key for the 30-day refresh token lifetime before dropping it; `select split_part(key_wrap, '.', 2), count(*) from oauth_payloads where model = 'RefreshToken' and consumed_at is null group by 1` shows which keys are still in use. A refresh that needs a dropped key fails without using up the token, so restoring the key repairs it. Generate a key with `openssl rand -base64 32 | tr '+/' '-_' | tr -d '='`.
 

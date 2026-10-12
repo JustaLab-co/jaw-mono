@@ -1,9 +1,12 @@
 import { usdcForNetwork, within, X402_UPTO_PROXY_ADDRESS, type ChainClients, type UsdcAsset } from '@jaw.id/agent';
 import {
+  BlockNotFoundError,
   decodeEventLog,
   decodeFunctionData,
   isAddressEqual,
   parseAbi,
+  TransactionNotFoundError,
+  withRetry,
   type Address,
   type Hex,
   type Transaction,
@@ -118,29 +121,43 @@ async function settledInBundle(
   receipt: TransactionReceipt,
   attempt: Attempt,
   token: UsdcAsset,
-  clients: ChainClients
+  clients: ChainClients,
+  signal: AbortSignal
 ): Promise<Settled | undefined> {
   const client = clients.publicClient(token.chainId);
-  const settles = await client.getLogs({
-    address: X402_UPTO_PROXY_ADDRESS,
-    events: PROXY_EVENTS,
-    blockHash: receipt.blockHash,
-  });
+  const settles = await caughtUp(
+    () => client.getLogs({ address: X402_UPTO_PROXY_ADDRESS, events: PROXY_EVENTS, blockHash: receipt.blockHash }),
+    signal
+  );
   if (settles.length !== 1 || !sameHash(settles[0].transactionHash, receipt.transactionHash)) return undefined;
   const [before, after] = await Promise.all([
-    nonceUsed(attempt, token, clients, receipt.blockNumber - 1n),
-    nonceUsed(attempt, token, clients, receipt.blockNumber),
+    caughtUp(() => nonceUsed(attempt, token, clients, receipt.blockNumber - 1n), signal),
+    caughtUp(() => nonceUsed(attempt, token, clients, receipt.blockNumber), signal),
   ]);
   if (before || !after) return undefined;
   const amount = paidBy(receipt, attempt, token.address);
   if (amount === undefined) return undefined;
-  const block = await client.getBlock({ blockNumber: receipt.blockNumber });
+  const block = await caughtUp(() => client.getBlock({ blockNumber: receipt.blockNumber }), signal);
   // A reorg after the reads above swaps the block at this height.
   if (!sameHash(block.hash, receipt.blockHash)) return undefined;
   return { txHash: receipt.transactionHash, blockTime: new Date(Number(block.timestamp) * 1000), amount };
 }
 
 const sameHash = (a: Hex, b: Hex) => a.toLowerCase() === b.toLowerCase();
+
+// The RPC balances across nodes, so the one asked after the receipt may not
+// have its block yet. Such reads are retried, and get READS_MS past the
+// receipt's deadline so a receipt found late can still settle.
+const READS_MS = 2_000;
+const BEHIND = /header not found|unknown block/i;
+const caughtUp = <T>(read: () => Promise<T>, signal: AbortSignal) =>
+  withRetry(read, {
+    delay: 500,
+    retryCount: Number.MAX_SAFE_INTEGER,
+    signal,
+    shouldRetry: ({ error }) =>
+      error instanceof BlockNotFoundError || error instanceof TransactionNotFoundError || BEHIND.test(error.message),
+  });
 
 export async function confirmByReceipt(
   attempt: Attempt,
@@ -150,23 +167,29 @@ export async function confirmByReceipt(
 ): Promise<Settled | undefined> {
   const token = usdcForNetwork(attempt.network);
   if (!token) return undefined;
+  // Retries stop once the confirm answers, at its deadline or before.
+  const done = new AbortController();
+  const { signal } = done;
   const read = async () => {
     const client = clients.publicClient(token.chainId);
     const receipt = await client.waitForTransactionReceipt({ hash: txHash, timeout: timeoutMs, pollingInterval: 500 });
     if (receipt.status !== 'success') return undefined;
     const bundled = attempt.scheme === 'upto' && (!receipt.to || !isAddressEqual(receipt.to, X402_UPTO_PROXY_ADDRESS));
-    if (bundled) return settledInBundle(receipt, attempt, token, clients);
+    if (bundled) return settledInBundle(receipt, attempt, token, clients, signal);
     const amount = movedIn(receipt, attempt, token.address);
     if (amount === undefined) return undefined;
     if (attempt.scheme === 'upto') {
-      const settled = settledByProxy(await client.getTransaction({ hash: txHash }), attempt, token.address);
+      const tx = await caughtUp(() => client.getTransaction({ hash: txHash }), signal);
+      const settled = settledByProxy(tx, attempt, token.address);
       if (settled !== amount) return undefined;
     }
-    const block = await client.getBlock({ blockNumber: receipt.blockNumber });
+    const block = await caughtUp(() => client.getBlock({ blockNumber: receipt.blockNumber }), signal);
     const blockTime = new Date(Number(block.timestamp) * 1000);
     return { txHash, blockTime, amount };
   };
-  return within(read(), timeoutMs).catch(() => undefined);
+  return within(read(), timeoutMs + READS_MS)
+    .catch(() => undefined)
+    .finally(() => done.abort());
 }
 
 const NONCE_STATE = parseAbi([

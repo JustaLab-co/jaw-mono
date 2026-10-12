@@ -4,6 +4,7 @@ import type { AddressInfo } from 'node:net';
 import type { ChainClients, TopUpExecutor } from '@jaw.id/agent';
 import { eq, sql } from 'drizzle-orm';
 import {
+  BlockNotFoundError,
   decodeFunctionData,
   encodeAbiParameters,
   encodeEventTopics,
@@ -65,6 +66,7 @@ const PRICES: Record<string, string> = {
   '/pricey': '2000000',
   '/forever': '5000',
   '/overflow': '5000',
+  '/late': '5000',
 };
 /** What the seller advertises as maxTimeoutSeconds, where it is not 300. */
 const TIMEOUTS: Record<string, number> = {
@@ -73,6 +75,14 @@ const TIMEOUTS: Record<string, number> = {
 };
 const seen: { path: string; nonce: Hex; signature: Hex; validBefore: string }[] = [];
 const receipts = new Map<Hex, { from: Address; nonce: Hex }>();
+/** Mined, but not yet readable when the seller answers. */
+const minedLater = new Map<Hex, { from: Address; nonce: Hex }>();
+const laterTasks: (() => Promise<void>)[] = [];
+/** Block reads that land on a node without the receipt's block yet. */
+let blocksBehind = 0;
+/** Block reads that fail for a reason other than a node behind. */
+let blockDown = false;
+let blockReads = 0;
 /** Nonces the token has consumed: the seller settled them on chain. */
 const used = new Set<string>();
 let dropNextLost = true;
@@ -128,7 +138,13 @@ const seller = createServer(async (req, res) => {
     return void res.end('{}');
   }
   const tx = path === '/sametx' ? TX(999) : TX(n);
-  receipts.set(tx, { from, nonce });
+  // Hashes repeat across tests, so a late one must not find an earlier test's receipt.
+  if (path === '/late') {
+    receipts.delete(tx);
+    minedLater.set(tx, { from, nonce });
+  } else {
+    receipts.set(tx, { from, nonce });
+  }
   const receipt = { success: true, transaction: tx, network: 'eip155:84532', payer: from };
   res
     .writeHead(200, { 'payment-response': Buffer.from(JSON.stringify(receipt)).toString('base64') })
@@ -167,7 +183,9 @@ const node = {
     if (functionName === 'authorizationState') return used.has(String(args[1]).toLowerCase());
     throw new Error('this node only knows balances and nonces');
   },
-  waitForTransactionReceipt: async ({ hash }: { hash: Hex }) => {
+  waitForTransactionReceipt: async ({ hash, timeout }: { hash: Hex; timeout: number }) => {
+    const end = Date.now() + timeout;
+    while (minedLater.has(hash) && !receipts.has(hash) && Date.now() < end) await sleep(10);
     const paid = receipts.get(hash);
     if (!paid) throw new Error('no receipt');
     return {
@@ -186,7 +204,15 @@ const node = {
       ],
     };
   },
-  getBlock: async () => ({ timestamp: 1_790_000_000n }),
+  getBlock: async ({ blockNumber }: { blockNumber?: bigint } = {}) => {
+    if (blockNumber !== undefined) blockReads++;
+    if (blockNumber !== undefined && blocksBehind > 0) {
+      blocksBehind--;
+      throw new BlockNotFoundError({ blockNumber });
+    }
+    if (blockNumber !== undefined && blockDown) throw new Error('rpc down');
+    return { timestamp: 1_790_000_000n };
+  },
 };
 const clients: ChainClients = { publicClient: () => node as unknown as PublicClient };
 
@@ -210,6 +236,7 @@ const deps = (over: Partial<PayDeps> = {}): PayDeps => ({
   readPermission: async () => ({ status: 'ok', approved: true, revoked: false }),
   executor: (_t, grant) => executor(grant.account),
   fetch: safeFetch(new Set([SELLER])),
+  later: (task) => void laterTasks.push(task),
   ...over,
 });
 
@@ -219,6 +246,10 @@ beforeEach(() => {
   refills.length = 0;
   onProbe.clear();
   onProof.clear();
+  laterTasks.length = 0;
+  blocksBehind = 0;
+  blockDown = false;
+  blockReads = 0;
 });
 
 /** A connection whose only budget is `perDay`, or none: the one approved when connecting is dropped. */
@@ -702,6 +733,62 @@ describe('jaw_pay_and_fetch', () => {
     const second = await pay(t, { url: url('/unconfirmed'), idempotencyKey: 'used-2' }, deps());
     expect(second.structuredContent).toMatchObject({ kind: 'paid', payerRefilled: false });
     expect(refills).toEqual([]);
+  });
+
+  it('settles a payment once its receipt shows up after the answer was sent', async () => {
+    const { t } = await connected('1');
+    balances.set(t.sessionAddress.toLowerCase(), 1_000_000n);
+    const paid = await pay(t, { url: url('/late'), idempotencyKey: 'late-1' }, deps());
+    expect(paid.structuredContent).toMatchObject({ state: 'signed', kind: 'paid' });
+
+    const running = Promise.all(laterTasks.map((task) => task()));
+    await sleep(50);
+    for (const [tx, r] of minedLater) receipts.set(tx, r);
+    await running;
+    expect(await rowOf(paid.structuredContent!.paymentId)).toMatchObject({
+      state: 'settled',
+      amount: '5000',
+      txHash: paid.structuredContent?.payment?.txHash,
+      blockTime: new Date(1_790_000_000_000),
+    });
+  });
+
+  it('leaves a payment signed for the reconciler when its receipt never shows up', async () => {
+    const { t } = await connected('1');
+    balances.set(t.sessionAddress.toLowerCase(), 1_000_000n);
+    const paid = await pay(t, { url: url('/late'), idempotencyKey: 'late-2' }, deps());
+    minedLater.clear();
+    await Promise.all(laterTasks.map((task) => task()));
+    expect((await rowOf(paid.structuredContent!.paymentId)).state).toBe('signed');
+  });
+
+  it('settles in the call when the node asked for the block is behind the one that had the receipt', async () => {
+    const { t } = await connected('1');
+    balances.set(t.sessionAddress.toLowerCase(), 1_000_000n);
+    blocksBehind = 2;
+    const paid = await pay(t, { url: url('/exact'), idempotencyKey: 'behind-1' }, deps());
+    expect(paid.structuredContent).toMatchObject({ kind: 'paid', state: 'settled' });
+    expect(laterTasks).toEqual([]);
+  });
+
+  it('does not ask again for a block that failed for any other reason', async () => {
+    const { t } = await connected('1');
+    balances.set(t.sessionAddress.toLowerCase(), 1_000_000n);
+    blockDown = true;
+    const paid = await pay(t, { url: url('/exact'), idempotencyKey: 'down-1' }, deps());
+    expect(paid.structuredContent).toMatchObject({ kind: 'paid', state: 'signed' });
+    expect(blockReads).toBe(1);
+  });
+
+  it('answers a paid call even when the settle after it cannot be scheduled', async () => {
+    const { t } = await connected('1');
+    balances.set(t.sessionAddress.toLowerCase(), 1_000_000n);
+    blockDown = true;
+    const outside = () => {
+      throw new Error('after() was called outside a request scope');
+    };
+    const paid = await pay(t, { url: url('/exact'), idempotencyKey: 'outside-1' }, deps({ later: outside }));
+    expect(paid.structuredContent).toMatchObject({ kind: 'paid', state: 'signed', httpStatus: 200 });
   });
 
   it('refuses to settle a payment on a transaction hash another payment of the payer already settled on', async () => {
