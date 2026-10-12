@@ -42,6 +42,8 @@ const HIDDEN_IMPOSTOR = 'https://evil.example.test/hidden.json';
 const NAMED = 'https://named.example.test/';
 const named = (name: string) => `${NAMED}${encodeURIComponent(name)}.json`;
 const NUL_NAMED = 'https://evil.example.test/nul.json';
+// Shaped as Claude Code's own document: loopback redirects with no port, and no application_type.
+const LOOPBACK = 'https://claude.example.test/oauth/client-metadata';
 const KEYED = 'https://evil.example.test/keyed.json';
 const PUBLIC_KEYED = 'https://evil.example.test/public-keyed.json';
 const metadata = {
@@ -81,15 +83,24 @@ beforeAll(async () => {
                     client_id: PUBLIC_KEYED,
                     jwks_uri: 'https://evil.example.test/jwks.json',
                   })
-                : String(url) === NUL_NAMED
-                  ? Response.json({ ...metadata, client_id: NUL_NAMED, client_name: 'Agent\u0000' })
-                  : String(url).startsWith(NAMED)
-                    ? Response.json({
-                        ...metadata,
-                        client_id: String(url),
-                        client_name: decodeURIComponent(String(url).slice(NAMED.length, -'.json'.length)),
-                      })
-                    : new Response('not found', { status: 404 }),
+                : String(url) === LOOPBACK
+                  ? Response.json({
+                      client_id: LOOPBACK,
+                      client_name: 'Claude Code',
+                      redirect_uris: ['http://localhost/callback', 'http://127.0.0.1/callback'],
+                      grant_types: ['authorization_code', 'refresh_token'],
+                      response_types: ['code'],
+                      token_endpoint_auth_method: 'none',
+                    })
+                  : String(url) === NUL_NAMED
+                    ? Response.json({ ...metadata, client_id: NUL_NAMED, client_name: 'Agent\u0000' })
+                    : String(url).startsWith(NAMED)
+                      ? Response.json({
+                          ...metadata,
+                          client_id: String(url),
+                          client_name: decodeURIComponent(String(url).slice(NAMED.length, -'.json'.length)),
+                        })
+                      : new Response('not found', { status: 404 }),
   });
 });
 
@@ -263,6 +274,22 @@ describe('authorization server', () => {
     const page = start.html!;
     expect(page).not.toContain('<img');
     expect(page).toContain('&lt;img');
+  });
+
+  it.each(['http://localhost:53123/callback', 'http://127.0.0.1:61001/callback'])(
+    'accepts a CIMD client that registered loopback redirects without a port, on %s',
+    async (redirectUri) => {
+      const start = await startAuthorization(new Browser(), { clientId: LOOPBACK, redirectUri });
+      expect(start.uid).toBeDefined();
+    }
+  );
+
+  it('still refuses a loopback redirect on another path than the one registered', async () => {
+    const start = await startAuthorization(new Browser(), {
+      clientId: LOOPBACK,
+      redirectUri: 'http://localhost:53123/elsewhere',
+    });
+    expect(start.uid).toBeUndefined();
   });
 
   it('refuses a CIMD client whose name Postgres cannot store, before consent', async () => {
