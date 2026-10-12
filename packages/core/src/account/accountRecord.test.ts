@@ -103,7 +103,17 @@ describe('isAccountRecordOf', () => {
 describe('resolveAccountRecord', () => {
     it('returns the stored record when it checks out', () => {
         const stored = deriveAccountRecordV1(VECTOR.publicKey);
-        expect(resolveAccountRecord(stored, VECTOR.publicKey)).toBe(stored);
+        expect(resolveAccountRecord(stored, VECTOR.publicKey)).toEqual(stored);
+    });
+
+    it('checksums the addresses of a stored record that checks out in another casing', () => {
+        const valid = deriveAccountRecordV1(VECTOR.publicKey);
+        const stored = {
+            ...valid,
+            address: valid.address.toLowerCase() as Hex,
+            factory: valid.factory.toLowerCase() as Hex,
+        };
+        expect(resolveAccountRecord(stored, VECTOR.publicKey)).toEqual(valid);
     });
 
     it('derives the record when none is stored', () => {

@@ -65,6 +65,17 @@ function storageWith(entries: PasskeyAccount[]) {
     return storage;
 }
 
+/** Storage that rejects every write of the stored accounts, as a full localStorage does. */
+function fullStorageWith(entries: PasskeyAccount[]) {
+    const storage = storageWith(entries);
+    const setItem = storage.setItem.bind(storage);
+    storage.setItem = (key: string, value: unknown) => {
+        if (key === 'accounts') throw new DOMException('quota', 'QuotaExceededError');
+        setItem(key, value);
+    };
+    return storage;
+}
+
 function storedAccounts(storage: ReturnType<typeof createMemoryStorage>): PasskeyAccount[] {
     return storage.getItem<PasskeyAccount[]>('accounts') ?? [];
 }
@@ -116,6 +127,14 @@ describe('Account.get with a credential id', () => {
         expect(recordUsed()?.address).toBe(ADDRESS);
     });
 
+    it('signs in when the record cannot be stored', async () => {
+        const storage = fullStorageWith([storedEntry({ address: ADDRESS })]);
+
+        const account = await Account.get(config(storage), CREDENTIAL_ID);
+
+        expect(account.address).toBe(ADDRESS);
+    });
+
     it('does not call the backend', async () => {
         const storage = storageWith([storedEntry()]);
 
@@ -135,6 +154,15 @@ describe('Account.get restoring the signed-in session', () => {
         expect(account.address).toBe(ADDRESS);
         expect(storedAccounts(storage)[0].account).toEqual(deriveAccountRecordV1(PUBLIC_KEY));
     });
+
+    it('restores the session when the record cannot be stored', async () => {
+        const storage = fullStorageWith([storedEntry({ address: ADDRESS })]);
+        storage.setItem('authState', { isLoggedIn: true, address: ADDRESS, credentialId: CREDENTIAL_ID });
+
+        const account = await Account.get(config(storage));
+
+        expect(account.address).toBe(ADDRESS);
+    });
 });
 
 describe('Account.restore', () => {
@@ -153,6 +181,14 @@ describe('Account.restore', () => {
         await Account.restore(config(storage), CREDENTIAL_ID, PUBLIC_KEY);
 
         expect(storedAccounts(storage)[0].account).toEqual(deriveAccountRecordV1(PUBLIC_KEY));
+    });
+
+    it('restores the account when the record cannot be stored', async () => {
+        const storage = fullStorageWith([storedEntry({ address: ADDRESS })]);
+
+        const account = await Account.restore(config(storage), CREDENTIAL_ID, PUBLIC_KEY);
+
+        expect(account.address).toBe(ADDRESS);
     });
 });
 
@@ -212,6 +248,21 @@ describe('Account.import', () => {
 
         expect(account.address).toBe(ADDRESS);
         expect(recordUsed()).toEqual(deriveAccountRecordV1(PUBLIC_KEY));
+    });
+
+    it('checksums the address of a record the backend returns in lowercase', async () => {
+        const storage = storageWith([]);
+        const record = deriveAccountRecordV1(PUBLIC_KEY);
+        vi.mocked(fetchAccountRecordFromBackend).mockResolvedValue({
+            ...record,
+            address: record.address.toLowerCase() as Hex,
+        });
+
+        const account = await Account.import(config(storage));
+
+        expect(account.address).toBe(ADDRESS);
+        expect(storedAccounts(storage)[0]).toMatchObject({ address: ADDRESS, account: record });
+        expect(storage.getItem<{ address: string }>('authState')?.address).toBe(ADDRESS);
     });
 
     it('derives the record when the backend returns one that is not this key’s', async () => {

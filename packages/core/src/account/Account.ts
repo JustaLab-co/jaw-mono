@@ -232,6 +232,10 @@ export class Account {
     /**
      * Store `record` on a stored entry that has none yet, so the next sign-in
      * reads it instead of deriving.
+     *
+     * The record is a cache derived again on every call, so a failed write
+     * (a full localStorage, a storage that rejects writes) is ignored rather
+     * than failing sign-in.
      */
     private static persistRecordIfMissing(
         passkeyManager: PasskeyManager,
@@ -239,9 +243,13 @@ export class Account {
         record: AccountRecord
     ): void {
         if (!passkeyAccount || passkeyAccount.account) return;
-        passkeyManager.setAccountAddresses([
-            { credentialId: passkeyAccount.credentialId, address: record.address, account: record },
-        ]);
+        try {
+            passkeyManager.setAccountAddresses([
+                { credentialId: passkeyAccount.credentialId, address: record.address, account: record },
+            ]);
+        } catch {
+            /* left as it is; the next call derives and retries */
+        }
     }
 
     /**

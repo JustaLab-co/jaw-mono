@@ -3,6 +3,7 @@ import {
     type Hex,
     encodeAbiParameters,
     encodeFunctionData,
+    getAddress,
     getContractAddress,
     keccak256,
     pad,
@@ -95,7 +96,8 @@ function sameHex(value: unknown, expected: Hex): boolean {
 
 /**
  * The record to use for `publicKey`: the stored one when there is one and it
- * checks out, otherwise the one its key derives.
+ * checks out, otherwise the one its key derives. A stored record's addresses
+ * are returned checksummed whatever their casing, like a derived one's.
  *
  * FALLBACK, VALID ONLY WHILE NO ACCOUNT ROTATES. Deriving from the signer's
  * public key gives the right address only for a key that created its account.
@@ -108,7 +110,7 @@ function sameHex(value: unknown, expected: Hex): boolean {
  */
 export function resolveAccountRecord(stored: AccountRecord | undefined, publicKey: Hex): AccountRecord {
     if (stored && isAccountRecordOf(stored, publicKey)) {
-        return stored;
+        return { ...stored, address: getAddress(stored.address), factory: getAddress(stored.factory) };
     }
     return deriveAccountRecordV1(publicKey);
 }
