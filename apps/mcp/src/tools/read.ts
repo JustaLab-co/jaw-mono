@@ -38,7 +38,11 @@ type Readiness = z.infer<typeof readiness>;
 const budgetOutput = z.object({
   permissionId: z.string(),
   perDay: money,
-  spentToday: money.nullable().describe('What the permission manager counts as spent in the current day'),
+  spentToday: money
+    .nullable()
+    .describe(
+      'What the budget pulled from the account in the current day. Payments made from float the session already holds are not counted again'
+    ),
   remainingToday: money.nullable(),
   resetsAt: z.string().nullable(),
   expiresAt: z.string(),
@@ -135,6 +139,7 @@ async function status(t: Tenant) {
   const read = grant && (await budgetOf(grant, t));
   const ready = readinessOf(t, read?.liveness);
   const left = read?.budget.remainingToday;
+  const held = session && BigInt(session.amount) > 0n ? `, plus ${session.amount} already held by the session` : '';
   return statusOutput.parse({
     account: t.account,
     chainId: network,
@@ -144,7 +149,7 @@ async function status(t: Tenant) {
     readiness: ready,
     summary:
       ready.status === 'ready'
-        ? `Connected as ${t.account} on ${network}. Ready to pay${left ? `, ${left.amount} base units left today` : ''}.`
+        ? `Connected as ${t.account} on ${network}. Ready to pay${left ? `, ${left.amount} base units left today${held}` : ''}.`
         : `Connected as ${t.account} on ${network}. ${NOT_READY[ready.reason ?? 'no_grant']}`,
   });
 }
