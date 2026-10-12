@@ -133,7 +133,7 @@ describe('reconciler', () => {
     expect(row).toMatchObject({ state: 'settled', kind: 'paid', code: null });
     expect(render(row, []).structuredContent).toMatchObject({
       kind: 'paid',
-      moneyMoved: true,
+      payerRefilled: true,
       topUp: { amount: '105000' },
     });
   });

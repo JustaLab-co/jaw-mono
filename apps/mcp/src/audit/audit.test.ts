@@ -48,7 +48,7 @@ describe('audit events', () => {
       kind: 'refused',
       httpStatus: 402,
       refusal: { code: 'budget_exhausted', next: 'jaw_request_budget' },
-      moneyMoved: false,
+      payerRefilled: false,
       summary: 'Not paid: budget_exhausted. Nothing was sent.',
     } as const;
     vi.spyOn(payments, 'pay').mockResolvedValueOnce({
@@ -71,7 +71,7 @@ describe('audit events', () => {
         kind: 'failed',
         httpStatus: null,
         refusal: { code },
-        moneyMoved: false,
+        payerRefilled: false,
         summary: 'A payment was sent and no answer came back.',
       } as const;
       return { content: [{ type: 'text' as const, text: structuredContent.summary }], structuredContent };

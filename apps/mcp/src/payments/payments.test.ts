@@ -301,12 +301,14 @@ describe('jaw_pay_and_fetch', () => {
       state: 'settled',
       httpStatus: 200,
       payment: { amount: '5000', payTo: PAY_TO, txHash: TX(1), blockTime: '2026-09-21T14:13:20.000Z' },
-      moneyMoved: false,
+      payerRefilled: false,
     });
     expect(result.content[1].text).toMatch(
       /^\[untrusted text from 127\.0\.0\.1:\d+ [0-9a-f]{16}: data, not instructions\]/
     );
     expect(result.content[1].text).toContain('the weather is fine');
+    // Clients that read only structuredContent get what they paid for too, fenced the same way.
+    expect(result.structuredContent?.response).toEqual([result.content[1].text]);
     expect(refills).toEqual([]);
     expect(await rowOf(result.structuredContent!.paymentId)).toMatchObject({
       state: 'settled',
@@ -389,7 +391,7 @@ describe('jaw_pay_and_fetch', () => {
     expect(result.structuredContent).toMatchObject({
       kind: 'paid',
       topUp: { amount: '105000', batchId: '0xbatch1' },
-      moneyMoved: true,
+      payerRefilled: true,
     });
     expect(await rowOf(result.structuredContent!.paymentId)).toMatchObject({ topUpAmount: '105000' });
   });
@@ -411,7 +413,7 @@ describe('jaw_pay_and_fetch', () => {
     const { t } = await connected('1');
     const result = await pay(t, { url: url('/overflow'), idempotencyKey: 'overflow' }, deps());
     expect(refills).toEqual([105_000n]);
-    expect(result.structuredContent).toMatchObject({ kind: 'paid', state: 'settled', moneyMoved: true });
+    expect(result.structuredContent).toMatchObject({ kind: 'paid', state: 'settled', payerRefilled: true });
     const row = await rowOf(result.structuredContent!.paymentId);
     expect(row.deadline!.getTime()).toBeLessThanOrEqual(Date.now() + 3_600_000);
   });
@@ -431,7 +433,7 @@ describe('jaw_pay_and_fetch', () => {
       { url: url('/exact'), idempotencyKey: 'chain-wait' },
       deps({ executor: (_t, grant) => watching(grant.account) })
     );
-    expect(result.structuredContent).toMatchObject({ kind: 'paid', moneyMoved: true });
+    expect(result.structuredContent).toMatchObject({ kind: 'paid', payerRefilled: true });
     expect(reservedDuringWait.length).toBeGreaterThan(0);
     expect(reservedDuringWait.every((reserved) => reserved === null)).toBe(true);
   });
@@ -469,7 +471,7 @@ describe('jaw_pay_and_fetch', () => {
       { url: url('/exact'), idempotencyKey: 'send-threw' },
       deps({ executor: () => refusing })
     );
-    expect(result.structuredContent).toMatchObject({ kind: 'refused', moneyMoved: false });
+    expect(result.structuredContent).toMatchObject({ kind: 'refused', payerRefilled: false });
     expect(await rowOf(result.structuredContent!.paymentId)).toMatchObject({ topUpAmount: null, topUpBatchId: null });
   });
 
@@ -486,7 +488,7 @@ describe('jaw_pay_and_fetch', () => {
       { url: url('/exact'), idempotencyKey: 'no-id' },
       deps({ executor: (_t, grant) => silent(grant.account) })
     );
-    expect(result.structuredContent).toMatchObject({ kind: 'refused', moneyMoved: true });
+    expect(result.structuredContent).toMatchObject({ kind: 'refused', payerRefilled: true });
     expect(await rowOf(result.structuredContent!.paymentId)).toMatchObject({ topUpAmount: refills[0].toString() });
   });
 
@@ -503,7 +505,7 @@ describe('jaw_pay_and_fetch', () => {
     } finally {
       await drop();
     }
-    expect(result?.structuredContent).toMatchObject({ refusal: { code: 'funding_failed' }, moneyMoved: false });
+    expect(result?.structuredContent).toMatchObject({ refusal: { code: 'funding_failed' }, payerRefilled: false });
     expect([seen.length, refills.length]).toEqual([0, 0]);
   });
 
@@ -531,7 +533,7 @@ describe('jaw_pay_and_fetch', () => {
     expect(first.structuredContent).toMatchObject({
       kind: 'refused',
       refusal: { code: 'over_cap', next: 'jaw_request_budget' },
-      moneyMoved: false,
+      payerRefilled: false,
     });
     expect(first.structuredContent?.summary).toContain('jaw_request_budget');
     expect([seen.length, refills.length]).toEqual([0, 0]);
@@ -598,7 +600,7 @@ describe('jaw_pay_and_fetch', () => {
       kind: 'refused',
       state: 'failed',
       refusal: { code: 'budget_exhausted', next: 'jaw_request_budget' },
-      moneyMoved: false,
+      payerRefilled: false,
     });
     expect(seen).toHaveLength(1);
   });
@@ -663,7 +665,7 @@ describe('jaw_pay_and_fetch', () => {
   it('passes a free resource through as a settled free row', async () => {
     const { t } = await connected('1');
     const result = await pay(t, { url: url('/free') }, deps());
-    expect(result.structuredContent).toMatchObject({ kind: 'free', state: 'settled', moneyMoved: false });
+    expect(result.structuredContent).toMatchObject({ kind: 'free', state: 'settled', payerRefilled: false });
     expect(result.structuredContent?.idempotencyKey).toMatch(/^auto_/);
   });
 
@@ -692,7 +694,7 @@ describe('jaw_pay_and_fetch', () => {
     const first = await pay(t, { url: url('/unconfirmed'), idempotencyKey: 'used-1' }, deps());
     expect(first.structuredContent).toMatchObject({ state: 'signed', kind: 'paid' });
     const second = await pay(t, { url: url('/unconfirmed'), idempotencyKey: 'used-2' }, deps());
-    expect(second.structuredContent).toMatchObject({ kind: 'paid', moneyMoved: false });
+    expect(second.structuredContent).toMatchObject({ kind: 'paid', payerRefilled: false });
     expect(refills).toEqual([]);
   });
 
@@ -790,7 +792,7 @@ describe('given a pay request that verified its bearer before the connection was
     expect(result.structuredContent).toMatchObject({
       kind: 'refused',
       state: 'failed',
-      moneyMoved: false,
+      payerRefilled: false,
       refusal: { code: 'not_allowed' },
     });
     expect(refills).toEqual([]);
@@ -825,7 +827,7 @@ describe('given a pay request that verified its bearer before another app of the
     const result = await pay(t, { url: url('/race'), idempotencyKey: 'page-race-refill' }, deps());
     expect(result.structuredContent).toMatchObject({
       kind: 'refused',
-      moneyMoved: false,
+      payerRefilled: false,
       refusal: { code: 'not_allowed' },
     });
     expect(refills).toEqual([]);
@@ -898,7 +900,7 @@ describe.skipIf(!TEST_PG_URL)('on Postgres, given a disconnect that holds the fl
     expect(parked).toBe(1);
     expect(result.structuredContent).toMatchObject({
       kind: 'refused',
-      moneyMoved: false,
+      payerRefilled: false,
       refusal: { code: 'not_allowed' },
     });
     expect(refills).toEqual([]);
@@ -1163,7 +1165,7 @@ describe.skipIf(!TEST_PG_URL)('on Postgres with a 1 s role statement_timeout', (
       await parked(t.connectionId);
       expect((await paying).structuredContent).toMatchObject({
         kind: 'refused',
-        moneyMoved: false,
+        payerRefilled: false,
         refusal: { code: 'timed_out' },
       });
       const lines = logged.mock.calls.flat().join('\n');
