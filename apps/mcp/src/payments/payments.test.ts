@@ -753,6 +753,33 @@ describe('jaw_pay_and_fetch', () => {
     });
   });
 
+  it('keeps waiting for a receipt past the in-call wait once the answer is out', async () => {
+    const { t } = await connected('1');
+    balances.set(t.sessionAddress.toLowerCase(), 1_000_000n);
+    const paid = await pay(t, { url: url('/late'), idempotencyKey: 'late-3' }, deps());
+    const running = Promise.all(laterTasks.map((task) => task()));
+    await sleep(3_500);
+    for (const [tx, r] of minedLater) receipts.set(tx, r);
+    await running;
+    expect((await rowOf(paid.structuredContent!.paymentId)).state).toBe('settled');
+  });
+
+  it('logs a late settle that fails instead of leaving it unhandled', async () => {
+    const { t } = await connected('1');
+    balances.set(t.sessionAddress.toLowerCase(), 1_000_000n);
+    const paid = await pay(t, { url: url('/late'), idempotencyKey: 'late-4' }, deps());
+    for (const [tx, r] of minedLater) receipts.set(tx, r);
+    const drop = await failUpdates('late-4', "new.state = 'settled'");
+    try {
+      const lines = await logsOf(async () => {
+        await Promise.all(laterTasks.map((task) => task()));
+      });
+      expect(lines).toContain(`late settle ${paid.structuredContent!.paymentId} failed`);
+    } finally {
+      await drop();
+    }
+  });
+
   it('leaves a payment signed for the reconciler when its receipt never shows up', async () => {
     const { t } = await connected('1');
     balances.set(t.sessionAddress.toLowerCase(), 1_000_000n);
