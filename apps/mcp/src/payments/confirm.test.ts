@@ -129,7 +129,15 @@ describe('confirming an upto payment', () => {
 });
 
 type RpcLog = (typeof receiptJson.logs)[number];
-type World = { receipt: typeof receiptJson; others: RpcLog[]; nonceSetAt: bigint; blockHash: string; down?: string };
+type World = {
+  receipt: typeof receiptJson;
+  others: RpcLog[];
+  nonceSetAt: bigint;
+  blockHash: string;
+  down?: string;
+  /** Reads per method answered by a node that does not have the receipt's block yet. */
+  behind?: Record<string, number>;
+};
 
 const N = BigInt(receiptJson.blockNumber);
 const BLOCK_TIME = '0x6ac9991e';
@@ -147,6 +155,8 @@ const earlier = {
   transactionHash: otherTx,
 };
 
+const calls: string[] = [];
+
 /** The real Base Sepolia bundle as a node serves it, with `over` applied. Another block holds another settle. */
 function served(over: Partial<World> = {}): ChainClients {
   const world: World = {
@@ -158,6 +168,11 @@ function served(over: Partial<World> = {}): ChainClients {
   };
   const request = async ({ method, params }: { method: string; params: unknown[] }) => {
     if (method === world.down) throw new Error(`${method} unavailable`);
+    calls.push(method);
+    if ((world.behind?.[method] ?? 0) > 0) {
+      world.behind![method]--;
+      throw new Error('header not found');
+    }
     if (method === 'eth_getTransactionReceipt') return world.receipt;
     if (method === 'eth_getTransactionByHash') return txJson;
     if (method === 'eth_blockNumber') return toHex(N);
@@ -273,6 +288,19 @@ describe('confirming an upto payment settled inside a bundle', () => {
 
   it('refuses when the block logs cannot be read', async () => {
     expect(await confirmBundle(served({ down: 'eth_getLogs' }))).toBeUndefined();
+  });
+
+  it('settles when the nodes asked after the receipt are behind it', async () => {
+    const behind = { eth_getLogs: 2, eth_call: 2, eth_getBlockByNumber: 2 };
+    expect(await confirmBundle(served({ behind }))).toMatchObject({ amount: 20_000n });
+  });
+
+  it('stops asking a node that stays behind once the time to confirm is up', async () => {
+    const lagging = served({ behind: { eth_getBlockByNumber: Number.POSITIVE_INFINITY } });
+    expect(await confirmByReceipt(bundled, receiptJson.transactionHash as Hex, lagging, 1200)).toBeUndefined();
+    const asked = calls.length;
+    await new Promise((r) => setTimeout(r, 1100));
+    expect(calls.length).toBe(asked);
   });
 
   it('refuses a reverted bundle', async () => {

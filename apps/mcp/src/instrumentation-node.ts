@@ -3,7 +3,8 @@ import { runMigrations } from './db/migrate';
 import { log } from './lib/edge';
 import { purge, reconcile } from './reconciler/run';
 
-const DEFAULT_RECONCILE_EVERY = 60;
+/** Every minute unless set: a cron secret alone does not mean a cron calls the route. 0 turns it off. */
+export const reconcileSeconds = (value: string | undefined) => (value ? Number(value) : 60);
 
 function reconcileEvery(seconds: number) {
   let running = false;
@@ -28,10 +29,7 @@ export async function prepare() {
     if (!url) throw new Error('DATABASE_URL is not set');
     await runMigrations(url);
     log('info', { msg: 'migrations applied' });
-    let every = Number(process.env.JAW_MCP_RECONCILE_EVERY);
-    // With no cron secret nothing can call /api/cron/reconcile, so the server
-    // reconciles on its own rather than leave unconfirmed payments signed.
-    if (!process.env.JAW_MCP_RECONCILE_EVERY && !process.env.JAW_MCP_CRON_SECRET) every = DEFAULT_RECONCILE_EVERY;
+    const every = reconcileSeconds(process.env.JAW_MCP_RECONCILE_EVERY);
     if (every > 0) reconcileEvery(every);
     if (!process.env.JAW_MCP_TRUSTED_PROXY_HOPS) {
       log('warn', {

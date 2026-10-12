@@ -81,7 +81,14 @@ export interface PayDeps {
   executor: (t: Tenant, grant: Grant) => TopUpExecutor | undefined;
   fetch: typeof fetch;
   /** Runs a task after the response is sent. */
+  later: Confirm['later'];
+}
+
+/** Where a paid row's receipt is read: once more after the answer is out, and briefly in the call when `inCall`. */
+export interface Confirm {
+  clients: ChainClients;
   later: (task: () => Promise<void>) => void;
+  inCall: boolean;
 }
 
 const liveDeps = (): PayDeps => ({
@@ -203,7 +210,7 @@ async function settledBy(
   o: Outcome,
   signedAfter: Date,
   clients: ChainClients,
-  timeoutMs = CONFIRM_MS
+  timeoutMs: number
 ): Promise<Settled | undefined> {
   if (o.kind !== 'paid' || !o.payment.txHash) return undefined;
   const { payment } = o;
@@ -288,8 +295,9 @@ export async function pay(t: Tenant, input: PayInput, deps: PayDeps = liveDeps()
   const budget = until(started + PAY_LIMIT_MS);
   const payer = payerFor(t, deps.clients);
   const sent = { method: request.method, headers: request.headers, body: request.body, budget, fetch: deps.fetch };
+  const confirm = { clients: deps.clients, later: deps.later, inCall: true };
 
-  if (claimed.kind === 'resume') return resend(claimed.row, claimed.token, payer, sent, deps.clients);
+  if (claimed.kind === 'resume') return resend(claimed.row, claimed.token, payer, sent, confirm);
 
   const { row, token } = claimed;
   let signed = false;
@@ -302,40 +310,52 @@ export async function pay(t: Tenant, input: PayInput, deps: PayDeps = liveDeps()
   const done = await concludeSend(row, token, outcome, {
     signed,
     signedAt: new Date(started),
-    confirmWith: deps.clients,
+    confirm,
     noRetry: oneOff,
   });
-  const { row: written } = done;
-  if (written.state === 'signed' && written.kind === 'paid' && written.txHash) {
-    deps.later(async () => {
-      const settled = await settledBy(outcome, new Date(started), deps.clients, LATE_CONFIRM_MS);
-      if (!settled) return;
-      await settle(written.id, settled).catch((err) => {
-        log('error', { msg: `late settle ${written.id} failed`, error: err instanceof Error ? err.name : 'unknown' });
-      });
-    });
-  }
   const offer = oneOff ? await offerOneOff(t, request, challenge) : undefined;
   return render(done.row, done.fenced, offer);
 }
 
 /**
  * The tail of every send: the conclusion written from the outcome, and the row
- * it left. Without `confirmWith` a paid row stays signed for the reconciler.
+ * it left. Without `confirm` a paid row stays signed for the reconciler.
  */
 export async function concludeSend(
   row: PaymentRow,
   token: string,
   outcome: Outcome,
-  opts: { signed: boolean; signedAt: Date; confirmWith?: ChainClients; noRetry?: boolean }
+  opts: { signed: boolean; signedAt: Date; confirm?: Confirm; noRetry?: boolean }
 ): Promise<{ row: PaymentRow; fenced: string[] }> {
   const checked = await claimedHashOnly(outcome, row.id);
-  const settled = opts.confirmWith ? await settledBy(checked, opts.signedAt, opts.confirmWith) : undefined;
+  const settled = opts.confirm?.inCall
+    ? await settledBy(checked, opts.signedAt, opts.confirm.clients, CONFIRM_MS)
+    : undefined;
   const movedBefore = Boolean(row.topUpAmount || row.topUpBatchId || row.approvalBatchId);
   const conclusion = conclusionOf(checked, opts.signed, settled, movedBefore || Boolean(opts.noRetry));
   const fenced = fencedOf(row.url, outcome);
   const written = await finish(row.id, token, conclusion, fenced);
+  if (written && opts.confirm) settleLater(written, checked, opts.signedAt, opts.confirm);
   return { row: written ?? (await rowAfter(row, conclusion)), fenced };
+}
+
+/** A receipt the call could not wait for, read again once the answer is out. The reconciler covers what this misses. */
+function settleLater(row: PaymentRow, o: Outcome, signedAt: Date, { clients, later }: Confirm) {
+  if (row.state !== 'signed' || row.kind !== 'paid' || !row.txHash) return;
+  const task = async () => {
+    const settled = await settledBy(o, signedAt, clients, LATE_CONFIRM_MS);
+    if (settled) await settle(row.id, settled);
+  };
+  // The payment is already written, so a task that cannot be scheduled must not fail the call.
+  try {
+    later(() =>
+      task().catch((err) => {
+        log('error', { msg: `late settle ${row.id} failed`, error: err instanceof Error ? err.name : 'unknown' });
+      })
+    );
+  } catch (err) {
+    log('warn', { msg: `late settle ${row.id} not scheduled`, error: err instanceof Error ? err.name : 'unknown' });
+  }
 }
 
 /** A previous call signed for this row and got no answer: the same proof again, under the same key. */
@@ -344,7 +364,7 @@ export async function resend(
   token: string,
   payer: Payer,
   sent: Parameters<typeof payAndFetch>[2],
-  confirmWith?: ChainClients
+  confirm?: Confirm
 ): Promise<PayResult> {
   const authorization = row.authorization as SignedAuthorization;
   const outcome: Outcome = await payAndFetch(authorization.resource, payer, {
@@ -356,7 +376,7 @@ export async function resend(
     await release(row.id, token);
     return render(merged(row, conclusionOf(outcome, true, undefined, false)), fencedOf(row.url, outcome));
   }
-  const done = await concludeSend(row, token, outcome, { signed: true, signedAt: row.signedAt as Date, confirmWith });
+  const done = await concludeSend(row, token, outcome, { signed: true, signedAt: row.signedAt as Date, confirm });
   return render(done.row, done.fenced);
 }
 

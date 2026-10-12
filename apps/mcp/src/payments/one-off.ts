@@ -15,14 +15,16 @@ import {
   type Payer,
   type PaymentBody,
 } from '@jaw.id/agent';
+import { after } from 'next/server';
 import type { Address } from 'viem';
+import { chainClients } from '@/adapters/session-host';
 import { insertUnderCap, MAX_PENDING, sellerRequestOf } from '@/approvals/store';
 import type { Tenant } from '@/connections/auth';
 import { config } from '@/connections/config';
 import { isPaymentsPaused } from '@/db/settings';
 import { log } from '@/lib/edge';
 import { safeFetch } from '@/lib/safe-fetch';
-import { concludeSend, resend, thrown } from './pay';
+import { concludeSend, resend, thrown, type Confirm } from './pay';
 import { render, type OneOffOffer, type PayResult } from './render';
 import {
   findByApproval,
@@ -44,9 +46,15 @@ export type PaymentApproval = ApprovalRequest & { body: PaymentBody };
 interface OneOffDeps {
   fetch: typeof fetch;
   now: () => Date;
+  confirm: Confirm;
 }
 
-const liveDeps = (): OneOffDeps => ({ fetch: safeFetch(config().insecureFetchHosts), now: () => new Date() });
+const liveDeps = (): OneOffDeps => ({
+  fetch: safeFetch(config().insecureFetchHosts),
+  now: () => new Date(),
+  // The approval page answers without waiting on the chain.
+  confirm: { clients: chainClients, later: after, inCall: false },
+});
 
 // The account pays with the owner's signature from the approval page; this payer only sends it again.
 const accountPayer = (account: Address): Payer => ({
@@ -105,7 +113,7 @@ export function oneOffRow(approval: PaymentApproval, seller: SellerRequest): New
 /**
  * Owns a pending one-off row under `token`. Asks the seller again and sends the
  * owner's signature only when the fresh challenge still offers what was signed;
- * every earlier stop sends nothing. A paid row stays signed for the reconciler.
+ * every earlier stop sends nothing.
  */
 export async function runOneOff(
   approval: PaymentApproval,
@@ -154,7 +162,7 @@ export async function runOneOff(
     ...sent,
     attempt: { key: row.id, resume: authorization },
   }).catch(thrown);
-  return concludeSend(row, token, outcome, { signed: true, signedAt: started });
+  return concludeSend(row, token, outcome, { signed: true, signedAt: started, confirm: deps.confirm });
 }
 
 /**
@@ -175,7 +183,7 @@ export async function oneOffStatus(
   const seller = await sellerRequestOf(approval.id);
   if (taken.row.state === 'signed') {
     const sent = { ...seller, budget: until(Date.now() + PAY_LIMIT_MS), fetch: deps.fetch };
-    return resend(taken.row, taken.token, accountPayer(approval.account), sent);
+    return resend(taken.row, taken.token, accountPayer(approval.account), sent, deps.confirm);
   }
   const done = await runOneOff(approval, seller, taken.row.id, taken.token, deps);
   return render(done.row, done.fenced);

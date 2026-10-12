@@ -118,7 +118,11 @@ const deps = (): PayDeps => ({
   later: () => undefined,
 });
 
-const oneOffDeps = (at = new Date()) => ({ fetch: deps().fetch, now: () => at });
+const oneOffDeps = (at = new Date()) => ({
+  fetch: deps().fetch,
+  now: () => at,
+  confirm: { clients, later: () => undefined, inCall: false },
+});
 
 beforeAll(useTestDb);
 beforeEach(() => {
