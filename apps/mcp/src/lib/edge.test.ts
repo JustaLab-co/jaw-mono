@@ -17,7 +17,7 @@ const { withEdge, RATE_LIMIT } = await import('./edge');
 const ok = async () => Response.json({ ok: true });
 const ctx = { params: Promise.resolve({}) };
 // The proxy appends the address it saw; whatever the caller sent comes first.
-const req = (ip = '203.0.113.7', url = 'http://mcp.test/api/approvals/q3L0x7mJ2c1VfN8aYw4p9A?code=secret') =>
+const req = (ip = '203.0.113.7', url = 'http://mcp.test/interaction/q3L0x7mJ2c1VfN8aYw4p9A/open?code=secret') =>
   new Request(url, {
     method: 'POST',
     headers: { 'x-forwarded-for': `1.2.3.${Math.floor(Math.random() * 255)}, ${ip}` },
@@ -44,7 +44,7 @@ describe('withEdge', () => {
     expect(JSON.parse(lines[0])).toMatchObject({
       requestId: id,
       method: 'POST',
-      path: '/api/approvals/:id',
+      path: '/interaction/:id/open',
       status: 200,
     });
     expect(lines[0]).not.toContain('secret');
