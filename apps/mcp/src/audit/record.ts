@@ -8,7 +8,7 @@ import { gateCode } from '@/payments/render';
 type Payment = { state?: string; refusal?: { code: string } };
 type Answer = {
   isError?: boolean;
-  structuredContent?: Payment & { payment?: Payment };
+  structuredContent?: Payment;
   [gateCode]?: string;
 };
 
@@ -16,10 +16,8 @@ type Answer = {
 function outcomeOf(tool: string, answer: Answer): string {
   if (answer[gateCode]) return answer[gateCode];
   if (answer.isError) return 'error';
-  let payment: Payment | undefined;
-  if (tool === 'jaw_pay_and_fetch') payment = answer.structuredContent;
-  if (tool === 'jaw_request_status') payment = answer.structuredContent?.payment;
-  if (!payment || !payment.refusal) return 'ok';
+  const payment = answer.structuredContent;
+  if (tool !== 'jaw_pay_and_fetch' || !payment?.refusal) return 'ok';
   return payment.state === 'signed' || payment.state === 'unknown' ? 'unknown' : payment.refusal.code;
 }
 
