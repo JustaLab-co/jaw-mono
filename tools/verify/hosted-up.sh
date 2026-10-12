@@ -20,7 +20,7 @@ PROFILE=; [ -f "$CTX/apps/mcp/Dockerfile" ] && PROFILE="--profile mcp"
 MCP_PORT=$(node -e 'const s=require("net").createServer().listen(0,()=>{console.log(s.address().port);s.close()})')
 KEYFILE=$RUN/work/sealing.key
 [ -f "$KEYFILE" ] || (umask 077; openssl rand -base64 32 | tr '+/' '-_' | tr -d '=' >"$KEYFILE")
-export MCP_PORT JAW_MCP_PUBLIC_URL=http://localhost:$MCP_PORT JAW_KEYS_URL=${JAW_KEYS_URL:-http://localhost:3100}
+export HEAD_SHA MCP_PORT JAW_MCP_PUBLIC_URL=http://localhost:$MCP_PORT JAW_KEYS_URL=${JAW_KEYS_URL:-http://localhost:3100}
 export JAW_MCP_SEALING_KEYS=$(cat "$KEYFILE")
 # JAW_KEYS_URL is required by the server (it builds the wallet link of the
 # interaction page from it) but nothing here contacts it, so a placeholder is enough.

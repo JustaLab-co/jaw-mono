@@ -59,6 +59,49 @@ check "given no PR or a failing gh, pre-push uses origin/main" "grep -q -- '--ba
 (cd "$T/repo" && GH_BASE=deleted-branch PATH="$T/bin:$PATH" sh "$REPO/.husky/pre-push" >/dev/null 2>&1)
 check "given a PR base missing on origin, pre-push uses origin/main" "grep -q -- '--base=origin/main ' '$T/nx.args'"
 
+# doctor.sh, against a fake run: a node listener as the seller and stub binaries.
+D=$T/doctor
+mkdir -p "$D/work/head" "$D/work/home-head" "$D/evidence"
+echo '{"dependencies":{"@jaw.id/cli":"file:jaw.id-cli-0.0.0.tgz"}}' >"$D/work/head/package.json"
+stub() { # stub <file> <version> <payer usdc>
+  cat >"$1" <<STUB
+#!/bin/sh
+[ "\$1" = --version ] && { echo "@jaw.id/cli/$2 darwin-arm64"; exit 0; }
+echo '{"payer":{"address":"0x00000000000000000000000000000000000000aa","usdc":"$3"}}'
+STUB
+  chmod +x "$1"
+}
+DPORT=$(node -e 'const s=require("net").createServer().listen(0,()=>{console.log(s.address().port);s.close()})')
+node -e "require('net').createServer().listen($DPORT)" &
+DPID=$!
+sleep 0.5
+fake_run() { # fake_run <seller pid> <baseline version> <payer usdc> [extra run.env lines]
+  stub "$D/head" 0.5.0 "$3"
+  stub "$D/base" "$2" 0
+  {
+    echo "REPO=$REPO"; echo "RUN=$D"; echo "PORT=$DPORT"; echo "SELLER=http://localhost:$DPORT"; echo "SELLER_PID=$1"
+    echo "HEAD_SHA=$(git -C "$REPO" rev-parse HEAD)"; echo "REV=$(git -C "$REPO" rev-parse --short HEAD)"
+    echo "TREE=$(git -C "$REPO" diff HEAD | shasum | cut -c1-12)"; echo "BIN_head=$D/head"; echo "BIN_base=$D/base"
+    printf '%s\n' "${@:4}"
+  } >"$D/run.env"
+}
+fake_run "$DPID" 0.4.0 5
+"$HERE/doctor.sh" "$D" >"$T/doctor-ok.out" 2>&1
+code=$?
+sed 's/^/     /' "$T/doctor-ok.out"
+check "given a sound run with a funded payer, doctor exits 0 without warnings" "[ $code = 0 ] && ! grep -q WARN '$T/doctor-ok.out'"
+fake_run "$DPID" 0.4.0 0.5
+"$HERE/doctor.sh" "$D" >"$T/doctor-payer.out" 2>&1
+code=$?
+check "given a payer holding 0.5 USDC, doctor warns with the balance and still exits 0" \
+  "[ $code = 0 ] && grep -q 'WARN.*payer.*0.5 USDC' '$T/doctor-payer.out'"
+fake_run 999999 0.3.9 5
+"$HERE/doctor.sh" "$D" >"$T/doctor-fail.out" 2>&1
+code=$?
+sed 's/^/     /' "$T/doctor-fail.out"
+check "given a dead seller and a wrong baseline, doctor names both and exits 1" \
+  "[ $code = 1 ] && grep -q 'FAIL seller' '$T/doctor-fail.out' && grep -q 'FAIL baseline' '$T/doctor-fail.out'"
+
 # hosted-up.sh and down.sh: two runs with the same id from two roots.
 if ! docker info >/dev/null 2>&1; then
   echo "skip compose isolation: docker is not running"
@@ -87,9 +130,22 @@ else
   check "given no run.env, down.sh fails and leaves b up" "[ $code -ne 0 ] && up '$PB'"
   "$HERE/down.sh" "$B" >/dev/null
   check "when down.sh runs in b, b is gone" "! up '$PB'"
+  # doctor.sh, given the run's mcp container comes from an image built at another commit.
+  P=jaw-verify-selftest-$$
+  docker run -d --rm --label com.docker.compose.project=$P --label com.docker.compose.service=mcp \
+    --label org.opencontainers.image.revision=0000000000000000000000000000000000000000 postgres:17-alpine sleep 60 >/dev/null
+  fake_run "$DPID" 0.4.0 5 "COMPOSE_PROJECT=$P"
+  "$HERE/doctor.sh" "$D" >"$T/doctor-image.out" 2>&1
+  code=$?
+  sed 's/^/     /' "$T/doctor-image.out"
+  check "given an mcp image built from another commit, doctor fails naming both commits" \
+    "[ $code = 1 ] && grep -q 'FAIL mcp image is from 0000000000000000000000000000000000000000' '$T/doctor-image.out'"
+  docker rm -f $(docker ps -q --filter "label=com.docker.compose.project=$P") >/dev/null 2>&1
+
   for p in $PA $PB; do docker compose -p "$p" -f "$HERE/compose.yaml" down -v >/dev/null 2>&1; done
 fi
 
+kill $DPID 2>/dev/null; wait $DPID 2>/dev/null
 rm -rf "$T"
 [ $FAILED = 0 ] && echo "selftest passed" || echo "selftest FAILED"
 exit $FAILED
