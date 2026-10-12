@@ -4,6 +4,7 @@ import { clientOf, connectionKey, withConnection } from '@/connections/auth';
 import { guardTools, withEdge } from '@/lib/edge';
 import { countUnauthorized } from '@/lib/metrics';
 import { registerReadTools } from '@/tools/read';
+import { registerDiscoverTool } from '@/tools/discover';
 import { registerDisconnectTool } from '@/tools/disconnect';
 import { registerHistoryTool } from '@/tools/history';
 import { registerPayTool } from '@/tools/pay-and-fetch';
@@ -19,6 +20,7 @@ const mcp = createMcpHandler(
     auditTools(server);
     guardTools(server);
     registerReadTools(server);
+    registerDiscoverTool(server);
     registerBudgetTool(server);
     registerSendTools(server);
     registerPayTool(server);

@@ -150,9 +150,10 @@ describe('read tools', () => {
     });
   });
 
-  it('jaw_resolve_name refuses a name that does not normalize', async () => {
-    const r = await callTool(token, 'jaw_resolve_name', { name: 'a\u0000.eth' });
+  it('jaw_transfer refuses a recipient name that does not normalize, before sending', async () => {
+    const r = await callTool(token, 'jaw_transfer', { to: 'a\u0000.eth', amount: '0.01' });
     expect(r.isError).toBe(true);
+    expect(r.content[0].text).toContain('could not be resolved');
   });
 
   it('refuses an account argument: tenancy comes from the token only', async () => {
@@ -168,11 +169,11 @@ describe('read tools', () => {
       'jaw_add_funds',
       'jaw_connections',
       'jaw_disconnect',
+      'jaw_discover',
       'jaw_history',
       'jaw_pay_and_fetch',
       'jaw_quote',
       'jaw_request_budget',
-      'jaw_resolve_name',
       'jaw_revoke_connection',
       'jaw_send_calls',
       'jaw_status',

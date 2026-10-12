@@ -14,15 +14,17 @@ A wallet session ends at a deadline: a minute before the interaction does, or te
 
 ## Scopes
 
-| Scope                                 | Tools                                                                                                                                       |
-| ------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------- |
-| `wallet:read` (required, the default) | `jaw_status`, `jaw_quote`, `jaw_add_funds`, `jaw_resolve_name`, `jaw_history`, `jaw_connections`, `jaw_revoke_connection`, `jaw_disconnect` |
-| `x402:pay`                            | `jaw_request_budget`, `jaw_pay_and_fetch`                                                                                                   |
-| `wallet:send`                         | `jaw_request_budget`, `jaw_transfer`, `jaw_send_calls`                                                                                      |
+| Scope                                 | Tools                                                                                                                                   |
+| ------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------- |
+| `wallet:read` (required, the default) | `jaw_status`, `jaw_discover`, `jaw_quote`, `jaw_add_funds`, `jaw_history`, `jaw_connections`, `jaw_revoke_connection`, `jaw_disconnect` |
+| `x402:pay`                            | `jaw_request_budget`, `jaw_pay_and_fetch`                                                                                               |
+| `wallet:send`                         | `jaw_request_budget`, `jaw_transfer`, `jaw_send_calls`                                                                                  |
 
 No scope implies another. A tool refused for a missing scope answers with an error naming the scope; the agent reconnects and asks for it, which makes a new connection, so a budget approved on the old one does not carry over.
 
 A payment, transfer or call past what the budget has left is refused and points at `jaw_request_budget`, which returns a wallet link for the owner to approve a new one. The new budget replaces the connection's current one, and the session key then revokes the old one on chain, paying the fee from its float. A replaced budget it cannot revoke is retried after the next budget lands, and `jaw_disconnect` revokes it with the rest. `jaw_send_calls` runs only the contract functions the budget lists; the agent names them in `calls` when it asks for the budget. Signatures are not offered: a session key never signs for the account.
+
+`jaw_discover` searches the x402 Bazaar for services payable on the connection's chain, as the CLI's does; resolving a name is one of those services, not a free tool. `jaw_transfer` still takes an ENS name and resolves it on the server.
 
 ## Run it
 
