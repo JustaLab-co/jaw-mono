@@ -51,7 +51,7 @@ async function approve(c: Awaited<ReturnType<typeof connect>>, perDay: string) {
 }
 
 describe('jaw_status after a budget change', () => {
-  it('counts what the replaced budget pulled today in spentToday and remainingToday', async () => {
+  it('counts what the replaced budget pulled today in remainingToday', async () => {
     const c = await connect();
     const t = (await verifyBearer(c.access_token))?.extra?.tenant as Tenant;
     const old = await approve(c, '2');
@@ -74,7 +74,7 @@ describe('jaw_status after a budget change', () => {
     const status = await callTool(c.access_token, 'jaw_status', {});
     expect(status.structuredContent.budget).toMatchObject({
       perDay: { amount: '1000000' },
-      spentToday: { amount: '700000' },
+      spentToday: { amount: '0' },
       remainingToday: { amount: '300000' },
     });
   });
@@ -103,7 +103,7 @@ describe('given a budget of 0.03 USDC with 0.025 already funded into the float t
     const status = await callTool(c.access_token, 'jaw_status', {});
     expect(status.structuredContent.budget).toMatchObject({
       perDay: { amount: '30000' },
-      spentToday: { amount: '25000' },
+      spentToday: { amount: '0' },
       remainingToday: { amount: '5000' },
     });
   });
@@ -137,7 +137,7 @@ describe('given the chain counts more spent today than the ledger topped up', ()
     Object.assign(chain, { start: 1, spend: 20_000n });
     const status = await callTool(c.access_token, 'jaw_status', {});
     expect(status.structuredContent.budget).toMatchObject({
-      spentToday: { amount: '20000' },
+      spentToday: { amount: '0' },
       remainingToday: { amount: '30000' },
     });
   });
@@ -168,22 +168,93 @@ describe('given a window start past the range a Date can hold', () => {
     Object.assign(chain, { start: 99_999_999_999_999, end: 99_999_999_999_999, spend: 0n });
     const status = await callTool(c.access_token, 'jaw_status', {});
     expect(status.structuredContent.budget).toMatchObject({
-      spentToday: { amount: '25000' },
+      spentToday: { amount: '0' },
       remainingToday: { amount: '25000' },
       resetsAt: null,
     });
   });
 });
 
+async function paidRow(t: Tenant, permissionId: string, id: string, amount: string) {
+  await getDb()
+    .insert(payments)
+    .values({
+      id,
+      connectionId: t.connectionId,
+      idempotencyKey: id,
+      requestHash: 'h',
+      permissionId,
+      payer: t.sessionAddress.toLowerCase(),
+      url: 'https://seller.example/x',
+      state: 'settled',
+      kind: 'paid',
+      nonce: `0x${id}`,
+      leaseUntil: new Date(),
+      amount,
+      finishedAt: new Date(),
+    });
+}
+
 describe('given the session already holds float from an earlier pull', () => {
-  it('when jaw_status runs, then the summary adds it to what is left today', async () => {
+  it('when jaw_status runs, then the summary reports only what is left today', async () => {
     const c = await connect();
     await approve(c, '0.05');
     chain.held = 28_143n;
     const status = await callTool(c.access_token, 'jaw_status', {});
-    expect(status.structuredContent.budget).toMatchObject({ spentToday: { amount: '0' } });
-    expect(status.structuredContent.summary).toContain(
-      '50000 base units left today, plus 28143 already held by the session.'
-    );
+    expect(status.structuredContent.budget).toMatchObject({
+      spentToday: { amount: '0' },
+      remainingToday: { amount: '50000' },
+    });
+    expect(status.structuredContent.summary).toContain('Ready to pay, 50000 base units left today.');
+    expect(status.structuredContent.summary).not.toContain('held by the session');
+  });
+});
+
+describe('given 1 USDC a day, float from an earlier window and 0.9 paid today', () => {
+  it('when jaw_status runs, then remainingToday is what the daily cap still allows', async () => {
+    const c = await connect();
+    const t = (await verifyBearer(c.access_token))?.extra?.tenant as Tenant;
+    const current = await approve(c, '1');
+    const now = Date.now();
+    await fundedRow(t, current, 'pay_earlierfloat', '1500000', new Date(now - 2 * 3_600_000));
+    Object.assign(chain, { start: Math.floor(now / 1000) - 3600, spend: 0n, held: 600_000n });
+    for (const id of ['pay_today1', 'pay_today2', 'pay_today3']) await paidRow(t, current, id, '300000');
+    const status = await callTool(c.access_token, 'jaw_status', {});
+    expect(status.structuredContent.budget).toMatchObject({
+      spentToday: { amount: '900000' },
+      remainingToday: { amount: '100000' },
+    });
+    expect(status.structuredContent.summary).toContain('100000 base units left today.');
+  });
+});
+
+describe('given 1 USDC pulled today into the float and nothing paid yet', () => {
+  it('when jaw_status runs, then the whole day is still left', async () => {
+    const c = await connect();
+    const t = (await verifyBearer(c.access_token))?.extra?.tenant as Tenant;
+    const current = await approve(c, '1');
+    await fundedRow(t, current, 'pay_fullpull', '1000000', new Date());
+    Object.assign(chain, { spend: 1_000_000n, held: 1_000_000n });
+    const status = await callTool(c.access_token, 'jaw_status', {});
+    expect(status.structuredContent.budget).toMatchObject({
+      spentToday: { amount: '0' },
+      remainingToday: { amount: '1000000' },
+    });
+  });
+});
+
+describe('given 1 USDC pulled today, 0.69 paid and 0.29 left in the float', () => {
+  it('when jaw_status runs, then remainingToday is the float, since nothing more can be pulled', async () => {
+    const c = await connect();
+    const t = (await verifyBearer(c.access_token))?.extra?.tenant as Tenant;
+    const current = await approve(c, '1');
+    await fundedRow(t, current, 'pay_g1pull', '1000000', new Date());
+    await paidRow(t, current, 'pay_g1paid', '690000');
+    Object.assign(chain, { spend: 1_000_000n, held: 290_000n });
+    const status = await callTool(c.access_token, 'jaw_status', {});
+    expect(status.structuredContent.budget).toMatchObject({
+      spentToday: { amount: '690000' },
+      remainingToday: { amount: '290000' },
+    });
   });
 });

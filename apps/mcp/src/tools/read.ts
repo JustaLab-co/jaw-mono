@@ -3,6 +3,7 @@ import {
   payAndFetch,
   readCurrentPeriods,
   readLiveness,
+  sumSpentSince,
   sumToppedUpSince,
   usdcBalance,
   usdcForNetwork,
@@ -38,11 +39,7 @@ type Readiness = z.infer<typeof readiness>;
 const budgetOutput = z.object({
   permissionId: z.string(),
   perDay: money,
-  spentToday: money
-    .nullable()
-    .describe(
-      'What the budget pulled from the account in the current day. Payments made from float the session already holds are not counted again'
-    ),
+  spentToday: money.nullable().describe('Payments made today under this budget, as the daily cap counts them'),
   remainingToday: money.nullable(),
   resetsAt: z.string().nullable(),
   expiresAt: z.string(),
@@ -56,9 +53,14 @@ function isoOf(seconds: number): string | undefined {
   return Number.isNaN(at.getTime()) ? undefined : at.toISOString();
 }
 
-// Spent is read as pay reads it: the larger of the chain's counter and the float this budget funded
-// in the window, plus what the connection's replaced budgets pulled the same day.
-async function budgetOf(grant: Grant, t: Tenant) {
+const floorZero = (n: bigint) => (n > 0n ? n : 0n);
+
+// spentToday is what this budget paid in the chain's current period, the figure pay's daily cap counts.
+// remainingToday is the smaller of the cap's room and what the session can fund: the float it holds
+// plus what the permission can still pull. Pulled is the larger of the chain's counter and the float
+// funded in the window, plus what the connection's replaced budgets pulled the same day.
+// A session balance that could not be read counts as empty.
+async function budgetOf(grant: Grant, t: Tenant, held: bigint | null) {
   const target = { chainId: grant.chainId, permissionId: grant.permissionId, permission: grant.permission };
   const [liveness, periods, earlier, entries] = await Promise.all([
     readLiveness(target, clients),
@@ -68,21 +70,28 @@ async function budgetOf(grant: Grant, t: Tenant) {
   ]);
   const asset = caip19(caip2(grant.chainId), grant.token);
   const counted = periods[0]?.period;
-  let own: bigint | null = counted?.status === 'outside-window' ? 0n : null;
+  let paid: bigint | null = counted?.status === 'outside-window' ? 0n : null;
+  let pulled = 0n;
   if (counted?.status === 'ok') {
     const since = isoOf(counted.start);
-    const floated = sumToppedUpSince(entries, { permissionId: grant.permissionId, payer: t.sessionAddress }, since);
-    own = counted.spend > floated ? counted.spend : floated;
+    const scope = { permissionId: grant.permissionId, payer: t.sessionAddress };
+    paid = sumSpentSince(entries, scope, since);
+    const floated = sumToppedUpSince(entries, scope, since);
+    pulled = counted.spend > floated ? counted.spend : floated;
   }
-  const spent = own === null ? null : own + earlier;
   const allowance = BigInt(grant.allowance);
-  const left = spent === null ? null : spent >= allowance ? 0n : allowance - spent;
+  let left: bigint | null = null;
+  if (paid !== null) {
+    const capRoom = floorZero(allowance - paid);
+    const fundable = (held ?? 0n) + floorZero(allowance - pulled - earlier);
+    left = capRoom < fundable ? capRoom : fundable;
+  }
   return {
     liveness,
     budget: budgetOutput.parse({
       permissionId: grant.permissionId,
       perDay: { amount: grant.allowance, asset },
-      spentToday: spent === null ? null : { amount: spent.toString(), asset },
+      spentToday: paid === null ? null : { amount: paid.toString(), asset },
       remainingToday: left === null ? null : { amount: left.toString(), asset },
       resetsAt: (counted?.status === 'ok' && isoOf(counted.end + 1)) || null,
       expiresAt: grant.expiresAt.toISOString(),
@@ -100,7 +109,7 @@ function readinessOf(t: Tenant, liveness: Awaited<ReturnType<typeof readLiveness
 
 async function readinessFor(t: Tenant): Promise<Readiness> {
   const grant = await currentGrant(t.connectionId);
-  return readinessOf(t, grant && (await budgetOf(grant, t)).liveness);
+  return readinessOf(t, grant && (await budgetOf(grant, t, null)).liveness);
 }
 
 const fenced = (source: string, text: string) => ({ type: 'text' as const, text: fenceText(source, text, 2000) });
@@ -136,10 +145,9 @@ async function status(t: Tenant) {
     balanceOf(network, t.sessionAddress),
     currentGrant(t.connectionId),
   ]);
-  const read = grant && (await budgetOf(grant, t));
+  const read = grant && (await budgetOf(grant, t, session && BigInt(session.amount)));
   const ready = readinessOf(t, read?.liveness);
   const left = read?.budget.remainingToday;
-  const held = session && BigInt(session.amount) > 0n ? `, plus ${session.amount} already held by the session` : '';
   return statusOutput.parse({
     account: t.account,
     chainId: network,
@@ -149,7 +157,7 @@ async function status(t: Tenant) {
     readiness: ready,
     summary:
       ready.status === 'ready'
-        ? `Connected as ${t.account} on ${network}. Ready to pay${left ? `, ${left.amount} base units left today${held}` : ''}.`
+        ? `Connected as ${t.account} on ${network}. Ready to pay${left ? `, ${left.amount} base units left today` : ''}.`
         : `Connected as ${t.account} on ${network}. ${NOT_READY[ready.reason ?? 'no_grant']}`,
   });
 }
