@@ -1,11 +1,12 @@
-import { CONNECTION_SCOPES, FIRST_PARTY_CLIENTS, hasUnstorableText } from '@jaw.id/agent';
 import Provider, { errors, interactionPolicy, type Configuration } from 'oidc-provider';
+import { hasUnstorableText } from '@/lib/body';
 import { databaseUnreachable, log } from '@/lib/edge';
 import { resolvesPublic } from '@/lib/safe-fetch';
 import { PgAdapter, sessionKey, successorId } from './adapter';
 import { bridge, requestUrl } from './bridge';
 import { config, type Config } from './config';
 import { findActive } from './rows';
+import { CONNECTION_SCOPES, FIRST_PARTY_CLIENTS } from './scopes';
 import { seal } from './seal';
 
 const DAY = 24 * 60 * 60;
@@ -35,7 +36,10 @@ export function createProvider(cfg: Config, overrides: Partial<Configuration> = 
   const provider = new Provider(cfg.issuer, {
     adapter: (model: string) => new PgAdapter(model, cfg.ring),
     clients: [JAW_CLI],
-    clientDefaults: { id_token_signed_response_alg: 'EdDSA' },
+    // Every client is public, so one that declares no application_type is a native
+    // app: per RFC 8252 7.3 its loopback redirect may use any port, which a CIMD
+    // document that registers http://localhost/callback with no port relies on.
+    clientDefaults: { id_token_signed_response_alg: 'EdDSA', application_type: 'native' },
     findAccount: async (_ctx, sub) =>
       (await findActive(sub)) ? { accountId: sub, claims: () => ({ sub }) } : undefined,
     pkce: { required: () => true },
@@ -104,7 +108,7 @@ export function createProvider(cfg: Config, overrides: Partial<Configuration> = 
     },
     extraTokenClaims: async (_ctx, token) =>
       token.kind === 'AccessToken'
-        ? { sk: seal(cfg.ring, await sessionKey(token.accountId), token.accountId) }
+        ? { sk: seal(cfg.ring, await sessionKey(token.accountId, cfg.ring), token.accountId) }
         : undefined,
     ...overrides,
   });

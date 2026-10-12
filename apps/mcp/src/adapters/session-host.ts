@@ -39,7 +39,10 @@ export function payerFor(t: Tenant, clients: ChainClients): Payer {
   return Eip3009EoaPayer.fromAccount(privateKeyToAccount(t.sessionKey()), clients);
 }
 
-export function topUpExecutor(t: Tenant, grant: Grant): TopUpExecutor | undefined {
+export const topUpExecutor = (t: Tenant, grant: Grant): TopUpExecutor | undefined => sessionBridge(t, grant);
+
+/** Sends calls as the session key through the grant. Undefined without a paymaster key to pay the fee with. */
+export function sessionBridge(t: Tenant, grant: Grant): SessionBridge | undefined {
   const apiKey = config().paymasterApiKey;
   if (!apiKey) return undefined;
   const session = sessionOf(grant);

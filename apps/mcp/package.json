@@ -56,6 +56,8 @@
   "devDependencies": {
     "@electric-sql/pglite": "0.5.8",
     "@types/oidc-provider": "^9.12.1",
-    "drizzle-kit": "0.31.11"
+    "@types/ws": "^8.18.1",
+    "drizzle-kit": "0.31.11",
+    "ws": "^8.18.0"
   }
 }

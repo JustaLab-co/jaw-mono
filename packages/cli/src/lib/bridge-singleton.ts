@@ -13,7 +13,7 @@ import { PATHS } from './paths.js';
 import { loadConfig, saveConfig } from './config.js';
 import { WSBridge } from './ws-bridge.js';
 import { isValidKeysUrl, isValidRelayUrl, isSafeApiKey } from './validation.js';
-import { generateKeyPair, exportKeyToHex } from './crypto.js';
+import { generateKeyPair, exportKeyToHex } from '@jaw.id/agent';
 import { type RelaySession, loadRelaySession, saveRelaySession, deleteRelaySession } from './relay-session.js';
 
 const DEFAULT_KEYS_URL = 'https://keys.jaw.id';

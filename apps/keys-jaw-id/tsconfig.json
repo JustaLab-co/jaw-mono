@@ -56,9 +56,6 @@
     },
     {
       "path": "../../packages/core"
-    },
-    {
-      "path": "../../packages/agent"
     }
   ]
 }

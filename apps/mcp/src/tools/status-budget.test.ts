@@ -1,14 +1,22 @@
-import type { GrantRequest } from '@jaw.id/agent';
 import type { PublicClient } from 'viem';
 import { beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
-import { decideFromPage, readForPage } from '@/approvals/page-api';
 import { verifyBearer, type Tenant } from '@/connections/auth';
-import { callTool, connect, setTestEnv, verifyLocally } from '@/connections/testkit';
+import {
+  approvedOnChain,
+  callTool,
+  connect,
+  fakeWallet,
+  setTestEnv,
+  walletAnswers,
+  walletsSettled,
+  offlineSession,
+} from '@/connections/testkit';
+import { currentGrant } from '@/grants/store';
+import { requestBudget } from './request-budget';
 import { getDb } from '@/db/client';
 import { payments } from '@/db/schema';
 import { useTestDb } from '@/db/test-db';
 
-const USDC = '0x036CbD53842c5426634e7929541eC2318f3dCF7e';
 const asked: { id: string }[] = [];
 const chain = { start: 1, end: 2_000_000_000, spend: 0n };
 
@@ -30,33 +38,13 @@ setTestEnv();
 beforeAll(useTestDb);
 beforeEach(() => Object.assign(chain, { start: 1, end: 2_000_000_000, spend: 0n }));
 
+/** The owner approves a new budget in their wallet; the chain mock then answers for it. */
 async function approve(c: Awaited<ReturnType<typeof connect>>, perDay: string) {
-  const id = (await callTool(c.access_token, 'jaw_request_budget', { perDay })).structuredContent.requestId as string;
-  const read = await readForPage(id);
-  if (read.kind !== 'ok' || read.view.approve.type !== 'grant') throw new Error('no budget view');
-  const grant: GrantRequest = read.view.approve.grant;
-  const permissionId = `0x${Buffer.from(id).toString('hex').padEnd(64, '0').slice(0, 64)}`;
-  const permission = {
-    permissionId,
-    account: grant.address,
-    spender: grant.spender,
-    start: 1_780_000_000,
-    end: grant.expiry,
-    salt: '0x1',
-    calls: [{ target: USDC, selector: '0xa9059cbb' }],
-    spends: grant.permissions.spends,
-  };
-  await decideFromPage(
-    id,
-    { verdict: 'approved', previewHash: read.view.previewHash, permission },
-    verifyLocally,
-    new Date(),
-    async () => ({
-      status: 'ok',
-      approved: true,
-      revoked: false,
-    })
-  );
+  const t = (await verifyBearer(c.access_token))?.extra?.tenant as Tenant;
+  const wallet = fakeWallet(walletAnswers(c.signer));
+  await requestBudget(t, perDay, [], { openWallet: wallet, readPermission: approvedOnChain, ...offlineSession });
+  await walletsSettled();
+  const permissionId = (await currentGrant(t.connectionId))!.permissionId;
   asked.push({ id: permissionId });
   return permissionId;
 }

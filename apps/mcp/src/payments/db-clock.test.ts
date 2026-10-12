@@ -4,11 +4,10 @@ import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from 'vitest
 import { verifyBearer, type Tenant } from '@/connections/auth';
 import { connect, setTestEnv } from '@/connections/testkit';
 import { getDb } from '@/db/client';
-import { approvalRequests, payments } from '@/db/schema';
+import { payments } from '@/db/schema';
 import { countHit } from '@/db/settings';
 import { TEST_PG_URL, useTestPostgres } from '@/db/test-db';
-import { oneOffRow, oneOffStatus, type PaymentApproval } from './one-off';
-import { claim, entriesFor, holdingRows, insertOneOff, LEASE_MS, take } from './store';
+import { claim, entriesFor, holdingRows, LEASE_MS, take } from './store';
 
 setTestEnv();
 
@@ -84,57 +83,6 @@ describe.skipIf(!TEST_PG_URL)('on Postgres, a replica whose clock is off by 90 s
     vi.useRealTimers();
     expect(taken).toBeDefined();
     expect(await leaseLeftMs(first.row.id)).toBeGreaterThan(LEASE_MS - 2_000);
-  });
-
-  async function approval(): Promise<string> {
-    const id = `apr_${randomUUID()}`;
-    await getDb()
-      .insert(approvalRequests)
-      .values({
-        id,
-        connectionId: t.connectionId,
-        account: t.account,
-        chainId: 84532,
-        requester: 'test',
-        requesterClientId: 'test',
-        kind: 'payment',
-        body: {},
-        createdAt: sql`now()`,
-        expiresAt: sql`now() + interval '5 minutes'`,
-      });
-    return id;
-  }
-
-  const oneOff = (approvalId: string) =>
-    oneOffRow(
-      { id: approvalId, account: t.sessionAddress, body: { terms: { resource: request.url } } } as PaymentApproval,
-      {
-        method: 'GET',
-        headers: {},
-      }
-    );
-
-  it('given a replica behind, when an approved one-off opens its row, then the lease runs LEASE_MS', async () => {
-    const approvalId = await approval();
-    onReplica(-SKEW_MS);
-    const row = oneOff(approvalId);
-    await getDb().transaction((tx) => insertOneOff(tx, t.connectionId, row));
-    vi.useRealTimers();
-    expect(await leaseLeftMs(row.id)).toBeGreaterThan(LEASE_MS - 2_000);
-  });
-
-  it('given a one-off whose lease lapsed on the database, when a replica behind polls it, then it takes the row to run it', async () => {
-    const approvalId = await approval();
-    const row = oneOff(approvalId);
-    await getDb().transaction((tx) => insertOneOff(tx, t.connectionId, row));
-    await lapse(row.id);
-    onReplica(-SKEW_MS);
-    // The approval was never signed, so the run that follows the takeover refuses to send.
-    const polled = oneOffStatus({ id: approvalId, state: { status: 'pending' } } as PaymentApproval);
-    await expect(polled).rejects.toThrow('a one-off runs only after a signed approval');
-    vi.useRealTimers();
-    const [taken] = await getDb().select().from(payments).where(eq(payments.id, row.id));
-    expect(taken.leaseToken).not.toBe(row.leaseToken);
   });
 
   it('given a row whose answer was lost, when two replicas retry it at once, then one resends and the other is busy', async () => {

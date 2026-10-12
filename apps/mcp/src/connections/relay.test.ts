@@ -1,0 +1,143 @@
+import type { AddressInfo } from 'node:net';
+import {
+  decryptMessage,
+  deriveSharedSecret,
+  encryptMessage,
+  exportKeyToHex,
+  generateKeyPair,
+  importKeyFromHex,
+  type EncryptedEnvelope,
+} from '@jaw.id/agent';
+import { afterAll, describe, expect, it } from 'vitest';
+import WebSocket, { WebSocketServer } from 'ws';
+import { setTestEnv } from './testkit';
+
+// A relay that pairs the two roles of a session and forwards what each sends, as relay.jaw.id does.
+const seen: string[] = [];
+const relay = new WebSocketServer({ port: 0, host: '127.0.0.1' });
+const sessions = new Map<string, { cli?: WebSocket; browser?: WebSocket }>();
+relay.on('connection', (ws, req) => {
+  const url = new URL(req.url ?? '/', 'ws://relay');
+  const id = url.searchParams.get('session')!;
+  const role = url.searchParams.get('role') as 'cli' | 'browser';
+  const pair = sessions.get(id) ?? {};
+  pair[role] = ws;
+  sessions.set(id, pair);
+  if (role === 'browser') pair.cli?.send(JSON.stringify({ type: 'browser_connected' }));
+  ws.on('message', (data) => {
+    seen.push(String(data));
+    (role === 'cli' ? pair.browser : pair.cli)?.send(String(data));
+  });
+});
+await new Promise((r) => relay.once('listening', r));
+
+setTestEnv();
+process.env.JAW_RELAY_URL = `ws://127.0.0.1:${(relay.address() as AddressInfo).port}`;
+process.env.JAW_MCP_API_KEY = 'server-secret-key';
+const { connectRelay, ownerRelay, SESSION_LIMITS, WalletBusy } = await import('./relay');
+const openRelay = (chainId: number, ms = 30_000) => ownerRelay(chainId, new Date(Date.now() + ms));
+afterAll(() => relay.close());
+
+type Answer = (method: string, params: unknown) => { success: true; data: unknown } | { success: false; error: object };
+
+/** The cli-bridge page: opens the link, agrees the key, answers init and each request, and records the shutdown. */
+async function page(link: string, answer: Answer, onInit?: (inner: Record<string, unknown>) => object) {
+  const url = new URL(link);
+  const keys = await generateKeyPair();
+  const secret = await deriveSharedSecret(
+    keys.privateKey,
+    await importKeyFromHex('public', url.hash.slice('#pk='.length))
+  );
+  const ws = new WebSocket(`${url.searchParams.get('relay')}?session=${url.searchParams.get('session')}&role=browser`);
+  const send = async (payload: Record<string, unknown>) =>
+    ws.send(JSON.stringify({ type: 'encrypted', ...(await encryptMessage(secret, payload)) }));
+  const inits: Record<string, unknown>[] = [];
+  const shutdown = new Promise<void>((resolve) => {
+    ws.on('message', async (data) => {
+      const inner = await decryptMessage(secret, JSON.parse(String(data)) as EncryptedEnvelope);
+      if (inner.type === 'init') {
+        inits.push(inner);
+        await send(onInit ? (onInit(inner) as Record<string, unknown>) : { type: 'ready' });
+      }
+      if (inner.type === 'rpc_request')
+        await send({ type: 'rpc_response', id: inner.id, ...answer(String(inner.method), inner.params) });
+      if (inner.type === 'shutdown') resolve();
+    });
+  });
+  ws.on('open', async () =>
+    ws.send(JSON.stringify({ type: 'key_exchange', publicKey: await exportKeyToHex('public', keys.publicKey) }))
+  );
+  return { inits, shutdown };
+}
+
+describe('a wallet session over the relay', () => {
+  it('runs each request through the cli-bridge page, then closes the page', async () => {
+    const wallet = await openRelay(84532);
+    expect(new URL(wallet.url).pathname).toBe('/cli-bridge');
+    const opened = await page(wallet.url, () => ({
+      success: true,
+      data: ['0x00000000000000000000000000000000000000aa'],
+    }));
+    const accounts = await wallet.run((ask) => ask('eth_requestAccounts', []));
+    expect(accounts).toEqual(['0x00000000000000000000000000000000000000aa']);
+    await opened.shutdown;
+    expect(opened.inits).toEqual([{ type: 'init', chainId: 84532 }]);
+  });
+
+  it("carries no key: the page takes its own deployment's, and the server's never leaves it", async () => {
+    const wallet = await openRelay(84532);
+    const opened = await page(wallet.url, () => ({ success: true, data: [] }));
+    await wallet.run((ask) => ask('eth_requestAccounts', []));
+    await opened.shutdown;
+    expect(opened.inits[0]).not.toHaveProperty('apiKey');
+    expect(JSON.stringify(opened.inits)).not.toContain('server-secret-key');
+  });
+
+  it('given nobody opens the link before its deadline, then the session ends refused', async () => {
+    const wallet = await openRelay(84532, 300);
+    await expect(wallet.run((ask) => ask('eth_requestAccounts', []))).rejects.toThrow();
+  });
+
+  it('keeps the key out of what the relay sees: the public key rides the fragment, every message is ciphertext', async () => {
+    const wallet = await openRelay(84532);
+    expect(new URL(wallet.url).search).not.toContain('pk=');
+    const opened = await page(wallet.url, () => ({ success: true, data: 'secret-answer' }));
+    await wallet.run((ask) => ask('personal_sign', ['0x68656c6c6f', '0xaa']));
+    await opened.shutdown;
+    const relayed = seen.join('\n');
+    expect(relayed).not.toContain('personal_sign');
+    expect(relayed).not.toContain('secret-answer');
+  });
+
+  it('given the owner refuses in the wallet, then the caller gets the refusal and its code', async () => {
+    const wallet = await openRelay(84532);
+    await page(wallet.url, () => ({ success: false, error: { code: 4001, message: 'User rejected the request' } }));
+    await expect(wallet.run((ask) => ask('wallet_grantPermissions', [{}]))).rejects.toMatchObject({
+      message: 'User rejected the request',
+      code: 4001,
+    });
+  });
+
+  it('given the page cannot start, then the caller gets the reason it gave', async () => {
+    const wallet = await openRelay(84532);
+    await page(
+      wallet.url,
+      () => ({ success: true, data: null }),
+      () => ({ type: 'error', reason: 'No API key' })
+    );
+    await expect(wallet.run((ask) => ask('eth_requestAccounts', []))).rejects.toThrow(
+      'the wallet page refused: No API key'
+    );
+  });
+});
+
+describe('given authorizations hold every session of their pool', () => {
+  it("when the owner's tools ask for a session, then theirs still opens, and a further authorization is busy", async () => {
+    const until = new Date(Date.now() + 1_000);
+    const held = await Promise.all(Array.from({ length: SESSION_LIMITS.connect }, () => connectRelay(84532, until)));
+    expect(held).toHaveLength(SESSION_LIMITS.connect);
+
+    await expect(connectRelay(84532, until)).rejects.toBeInstanceOf(WalletBusy);
+    expect((await ownerRelay(84532, until)).url).toMatch(/cli-bridge/);
+  });
+});

@@ -1,23 +1,35 @@
 # @jaw-mono/mcp
 
-The hosted JAW MCP server. Any MCP client connects over Streamable HTTP at `/mcp`, authorizes through OAuth 2.1 with a passkey consent on keys.jaw.id, and gets read tools, passkey-approved signatures, and x402 payments from a daily USDC budget the account owner approved on chain.
+The hosted JAW MCP server. Any MCP client connects over Streamable HTTP at `/mcp` and authorizes through OAuth 2.1. The account owner approves the connection once, in the JAW wallet, the same way `jaw session setup` does for the CLI: a daily USDC budget granted on chain to a session key the server holds. Within that budget the agent pays x402 services, sends USDC and runs the contract calls the budget lists, with no further prompts.
+
+## Connecting
+
+`/oauth/authorize` lands on `/interaction/<uid>`, a page this server renders. When the owner clicks "Open JAW", it opens a session on JAW's relay and links the owner to keys.jaw.id `/cli-bridge`, the page the CLI uses, so every request is answered in the wallet's own dialogs. Messages over the relay are encrypted end to end under a key agreed through the link's fragment, and carry no key of this server: the page uses its own deployment's.
+
+The owner first signs a plain-text sign-in that names the app, the domain of its metadata document, what it asks for, and a six-character code the page also shows. The wallet link can be forwarded, so the text asks the owner to approve only if the page that sent them there shows that code. A connection that spends then asks for the budget, and its permission must come from the account that signed in; the server checks it on chain. The page completes the authorization once the server has both.
+
+The session key is created once the owner signs in, and stored sealed before the wallet is asked for the budget, since the grant's prefund goes to its address. A retry of the same interaction keeps that key. The sealed copy stays until the code exchange, which wraps it under the refresh token and clears it. The ticket and the code are derived from the interaction under the sealing key, so every replica shows the same ones.
+
+A wallet session ends at a deadline: a minute before the interaction does, or ten minutes after a budget or revoke request. An approval cannot land after the flow it belongs to is over. One process holds at most 150 sessions for authorizations and 50 for `jaw_request_budget` and `jaw_revoke_connection`, so authorizations cannot take the slots the tools need; past either, the page or the tool answers that the wallet is busy. A session opens only on the owner's click, from the browser holding the interaction cookie, and one address can hold 5 of them at a time and one client 50. Holding them needs a long-lived Node process, as the Docker image runs, not serverless functions.
 
 ## Scopes
 
-| Scope                                 | Tools                                                                                           |
-| ------------------------------------- | ----------------------------------------------------------------------------------------------- |
-| `wallet:read` (required, the default) | `jaw_status`, `jaw_quote`, `jaw_add_funds`, `jaw_resolve_name`, `jaw_history`, `jaw_disconnect` |
-| `x402:pay`                            | `jaw_request_budget`, `jaw_pay_and_fetch` and the one-off payment it offers past the budget     |
-| `wallet:send`                         | `jaw_prepare_transfer`, `jaw_prepare_calls`, `jaw_request_signature`                            |
+| Scope                                 | Tools                                                                                                                                       |
+| ------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------- |
+| `wallet:read` (required, the default) | `jaw_status`, `jaw_quote`, `jaw_add_funds`, `jaw_resolve_name`, `jaw_history`, `jaw_connections`, `jaw_revoke_connection`, `jaw_disconnect` |
+| `x402:pay`                            | `jaw_request_budget`, `jaw_pay_and_fetch`                                                                                                   |
+| `wallet:send`                         | `jaw_request_budget`, `jaw_transfer`, `jaw_send_calls`                                                                                      |
 
-No scope implies another. `jaw_request_status` needs the scope of the request's kind, and answers a request of another kind as if it did not exist. A tool refused for a missing scope answers with an error naming the scope; the agent reconnects and asks for it, which makes a new connection, so a budget approved on the old one does not carry over. A client that asks for `wallet:read wallet:send` only can no longer request a budget or pay.
+No scope implies another. A tool refused for a missing scope answers with an error naming the scope; the agent reconnects and asks for it, which makes a new connection, so a budget approved on the old one does not carry over.
+
+A payment, transfer or call past what the budget has left is refused and points at `jaw_request_budget`, which returns a wallet link for the owner to approve a new one. The new budget replaces the connection's current one, and the session key then revokes the old one on chain, paying the fee from its float. A replaced budget it cannot revoke is retried after the next budget lands, and `jaw_disconnect` revokes it with the rest. `jaw_send_calls` runs only the contract functions the budget lists; the agent names them in `calls` when it asks for the budget. Signatures are not offered: a session key never signs for the account.
 
 ## Run it
 
 ```bash
 docker build -f apps/mcp/Dockerfile -t jaw-mcp .   # from the repository root
 docker run -p 3000:3000 -e DATABASE_URL=... -e JAW_MCP_PUBLIC_URL=http://localhost:3000 \
-  -e JAW_KEYS_URL=http://localhost:3001 -e JAW_MCP_SEALING_KEYS=... jaw-mcp
+  -e JAW_KEYS_URL=https://keys.jaw.id -e JAW_MCP_SEALING_KEYS=... jaw-mcp
 ```
 
 Migrations run at start and are safe to run from several instances at once.
@@ -43,7 +55,9 @@ A killed run can leave `mcp_test_*` databases behind. List them with `psql "$MCP
 | ------------------------------ | -------- | --------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `DATABASE_URL`                 | yes      | Postgres connection string                                                                                                                                |
 | `JAW_MCP_PUBLIC_URL`           | yes      | The origin clients reach. It is the OAuth issuer, and the MCP resource is `<origin>/mcp`                                                                  |
-| `JAW_KEYS_URL`                 | yes      | The keys.jaw.id origin that hosts `/authorize` and `/approve/<id>`                                                                                        |
+| `JAW_KEYS_URL`                 | yes      | The keys.jaw.id origin whose `/cli-bridge` page the owner opens to approve                                                                                |
+| `JAW_RELAY_URL`                | no       | The relay that page and this server talk through, `wss://relay.jaw.id` by default                                                                         |
+| `JAW_MCP_DAILY_BUDGET`         | no       | USDC base units per day a paying connection asks for when it connects, default 1000000 (1 USDC). `jaw_request_budget` asks for another                    |
 | `JAW_MCP_SEALING_KEYS`         | yes      | Comma-separated base64url keys of 32 bytes, newest first. New tokens use the first; any of them opens an existing one                                     |
 | `JAW_MCP_CHAIN_ID`             | no       | 84532 (default) or 8453                                                                                                                                   |
 | `JAW_MCP_RPC_URL`              | no       | RPC for that chain; the chain's public RPC when unset                                                                                                     |
@@ -55,25 +69,21 @@ A killed run can leave `mcp_test_*` databases behind. List them with `psql "$MCP
 | `JAW_MCP_CRON_SECRET`          | no       | Bearer secret for `/api/cron/reconcile` and `/api/metrics`. Unset, both answer 401                                                                        |
 | `JAW_MCP_RECONCILE_EVERY`      | no       | Seconds between reconciler runs inside the server, for a container where nothing calls the cron route                                                     |
 
-keys.jaw.id needs `JAW_MCP_URL`, the same origin as `JAW_MCP_PUBLIC_URL`.
-
-keys.jaw.id deploys on every merge to main and this server does not, so keys usually ships first. Deploy this server right after it when a change touches the consent page or `/interaction`.
-
 To rotate sealing keys, put the new key first. A connection moves to the new key on its next token refresh, so keep the old key for the 30-day refresh token lifetime before dropping it; `select split_part(key_wrap, '.', 2), count(*) from oauth_payloads where model = 'RefreshToken' and consumed_at is null group by 1` shows which keys are still in use. A refresh that needs a dropped key fails without using up the token, so restoring the key repairs it. Generate a key with `openssl rand -base64 32 | tr '+/' '-_' | tr -d '='`.
 
 ## Operations
 
-The kill switch stops `/mcp`, OAuth and the approval routes with a 503 and leaves health up:
+The kill switch stops `/mcp`, OAuth and the interaction routes with a 503 and leaves health up:
 
 ```sql
 insert into settings (key, value) values ('paused', 'true')
 on conflict (key) do update set value = excluded.value, updated_at = now();
 ```
 
-Payments alone stop with `('payments_paused', 'true')` in the same table: `jaw_pay_and_fetch` refuses with `payments_paused` before it signs anything, the approval page refuses to record an approved one-off payment (the request stays pending), `jaw_request_status` resends nothing, `jaw_disconnect` refuses before it revokes or returns anything, and every other tool keeps working.
+Payments alone stop with `('payments_paused', 'true')` in the same table: `jaw_pay_and_fetch` refuses with `payments_paused` before it signs anything, `jaw_transfer` and `jaw_send_calls` refuse before they send, `jaw_disconnect` refuses before it revokes or returns anything, and every other tool keeps working.
 
-`/api/cron/reconcile` (GET or POST, `Authorization: Bearer <JAW_MCP_CRON_SECRET>`) clears the key wraps of refresh tokens used more than a minute ago, settles or fails every payment left `signed` or `unknown` for more than a minute by asking the chain, logs one error per payment still unanswered an hour past its deadline, and deletes expired OAuth state, rate limit windows, audit events older than 90 days, and pending connections and approval requests nothing refers to. `/api/metrics` serves payments by state, the reconciler backlog, refused `/mcp` calls per client, and `jaw_mcp_wraps_past_window`, the key wraps still stored for refresh tokens past their retry window, in Prometheus text. Each rotation sweeps those wraps and logs `wrap sweep failed` when it cannot; alert when the gauge stays above zero for longer than one cron interval.
+`/api/cron/reconcile` (GET or POST, `Authorization: Bearer <JAW_MCP_CRON_SECRET>`) clears the key wraps of refresh tokens used more than a minute ago, settles or fails every payment left `signed` or `unknown` for more than a minute by asking the chain, logs one error per payment still unanswered an hour past its deadline, and deletes expired OAuth state, rate limit windows, audit events older than 90 days, and pending connections nothing refers to. A pending connection the owner approved but whose authorization never completed is retired past the interaction's end: its key revokes the budget and returns the prefund to the owner, as `jaw_disconnect` does, and then its sealed key is cleared. A run that cannot send keeps the key for the next one. `/api/metrics` serves payments by state, the reconciler backlog, refused `/mcp` calls per client, and `jaw_mcp_wraps_past_window`, the key wraps still stored for refresh tokens past their retry window, in Prometheus text. Each rotation sweeps those wraps and logs `wrap sweep failed` when it cannot; alert when the gauge stays above zero for longer than one cron interval.
 
-Every tool call writes one row to `audit_events` with the connection, the tool, the outcome, and the request id from `x-request-id`. The outcome is `ok`, `error`, the code of a payment that ended without paying (such as `budget_exhausted` or `payments_paused`), or `unknown` for a payment that may have reached the seller while the chain settles it. Arguments and results are never stored. The account owner sees the last ten per connection on keys.jaw.id `/connections`, which signs in with the passkey (a typed data signature under the JAW domain, checked on every request, valid at most 15 minutes). Revoking there ends the tokens at once and deletes the refresh tokens with the key wraps they carry, so the float left in the payer can no longer be moved; `jaw_disconnect` returns it to the owner first.
+Every tool call writes one row to `audit_events` with the connection, the tool, the outcome, and the request id from `x-request-id`. The outcome is `ok`, `error`, the code of a payment that ended without paying (such as `budget_exhausted` or `payments_paused`), or `unknown` for a payment that may have reached the seller while the chain settles it. Arguments and results are never stored. `jaw_connections` lists every connection of the account with its budget. `jaw_revoke_connection` asks the owner to confirm in the wallet, with a signature over the connection it ends, and then ends it: its tokens stop at once and its refresh tokens go with the key wraps they carry, so its budget and the float left in its payer can no longer be moved. The tool reads that float and says how much stays there. `jaw_disconnect`, called from the connection itself, also revokes its budgets on chain and returns the float to the owner first.
 
 Authenticated `/mcp` calls get 120 requests per minute per connection, and unauthenticated routes 120 per client IP, counted in Postgres. Behind your own proxy, production must set `JAW_MCP_TRUSTED_PROXY_HOPS`: without it the client IP comes only from `x-real-ip` (which Vercel sets), and with neither the per-IP limit is skipped rather than shared, with a warning at start. See `.env.example`.

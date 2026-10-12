@@ -52,7 +52,7 @@ jobs:
       - run: bun install --frozen-lockfile
 
       - name: Build workspace packages
-        run: bunx nx run-many -t build --projects=@jaw.id/core,@jaw.id/wagmi,@jaw.id/ui,@jaw.id/agent
+        run: bunx nx run-many -t build --projects=@jaw.id/core,@jaw.id/wagmi,@jaw.id/ui
 
       - name: Pull Vercel environment
         run: bunx vercel pull --yes --environment=production --token=${{ secrets.VERCEL_TOKEN }}

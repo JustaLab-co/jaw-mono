@@ -27,7 +27,6 @@ import { fenceText } from '@/lib/fence';
 import { safeFetch } from '@/lib/safe-fetch';
 import { confirmByReceipt, type Settled } from './confirm';
 import { refillHook } from './refill';
-import { offerOneOff, oneOffFor } from './one-off';
 import { gate, render, type PayResult } from './render';
 import {
   claim,
@@ -139,8 +138,7 @@ function fencedOf(url: string, o: Outcome): string[] {
   return fenced;
 }
 
-const ONE_OFF = new Set(['budget_exhausted', 'over_cap']);
-// Final even unsigned: a one-off offer, which a retry would open again; a refill
+// Final even unsigned: a larger budget, not a retry, is what pays it; a refill
 // that threw may have moved money that no trace shows.
 const FINAL_UNSIGNED = new Set(['budget_exhausted', 'funding_failed']);
 
@@ -285,16 +283,12 @@ export async function pay(t: Tenant, input: PayInput, deps: PayDeps = liveDeps()
     ? ((await grantLive(grant, deps)) ??
       (await payWithinGrant(t, grant, row, token, request, payer, sent, deps, () => (signed = true))))
     : { kind: 'unreached', code: 'no_grant', reason: 'the budget ended while this payment waited' };
-  const challenge = outcome.kind === 'refused' && ONE_OFF.has(outcome.refusal.code) ? outcome.challenge : undefined;
-  const oneOff = challenge !== undefined && oneOffFor(t, request, challenge) !== undefined;
   const done = await concludeSend(row, token, outcome, {
     signed,
     signedAt: new Date(started),
     confirmWith: deps.clients,
-    noRetry: oneOff,
   });
-  const offer = oneOff ? await offerOneOff(t, request, challenge) : undefined;
-  return render(done.row, done.fenced, offer);
+  return render(done.row, done.fenced);
 }
 
 /**
@@ -305,12 +299,12 @@ export async function concludeSend(
   row: PaymentRow,
   token: string,
   outcome: Outcome,
-  opts: { signed: boolean; signedAt: Date; confirmWith?: ChainClients; noRetry?: boolean }
+  opts: { signed: boolean; signedAt: Date; confirmWith?: ChainClients }
 ): Promise<{ row: PaymentRow; fenced: string[] }> {
   const checked = await claimedHashOnly(outcome, row.id);
   const settled = opts.confirmWith ? await settledBy(checked, opts.signedAt, opts.confirmWith) : undefined;
   const movedBefore = Boolean(row.topUpAmount || row.topUpBatchId || row.approvalBatchId);
-  const conclusion = conclusionOf(checked, opts.signed, settled, movedBefore || Boolean(opts.noRetry));
+  const conclusion = conclusionOf(checked, opts.signed, settled, movedBefore);
   const fenced = fencedOf(row.url, outcome);
   const written = await finish(row.id, token, conclusion, fenced);
   return { row: written ?? (await rowAfter(row, conclusion)), fenced };

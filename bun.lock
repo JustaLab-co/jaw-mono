@@ -110,7 +110,6 @@
       "name": "@jaw-mono/keys-jaw-id",
       "version": "0.0.1",
       "dependencies": {
-        "@jaw.id/agent": "workspace:*",
         "@jaw.id/core": "workspace:*",
         "@jaw.id/ui": "workspace:*",
         "@tanstack/react-query": "5.90.21",
@@ -142,7 +141,9 @@
       "devDependencies": {
         "@electric-sql/pglite": "0.5.8",
         "@types/oidc-provider": "^9.12.1",
+        "@types/ws": "^8.18.1",
         "drizzle-kit": "0.31.11",
+        "ws": "^8.18.0",
       },
     },
     "apps/playground": {

@@ -67,8 +67,11 @@ export const connections = pgTable(
     clientId: text('client_id').notNull(),
     clientName: text('client_name').notNull(),
     scopes: text('scopes').array().notNull(),
-    // Null until the first token exchange creates the session key.
     sessionAddress: text('session_address'),
+    // The session key, sealed, from the owner's sign-in until the first token
+    // exchange wraps it under the refresh token and clears this, or the reconciler
+    // returns an abandoned approval's prefund and clears it.
+    sealedKey: text('sealed_key'),
     interactionUid: text('interaction_uid').notNull().unique(),
     ticketHash: text('ticket_hash'),
     // Pending: the consent must be claimed before this. Active: the connection ends here.
@@ -90,57 +93,6 @@ export const connections = pgTable(
   ]
 );
 
-// Expiry is derived from expires_at, never written: the decision is the only
-// update a row gets.
-export const approvalRequests = pgTable(
-  'approval_requests',
-  {
-    id: text('id').primaryKey(),
-    connectionId: text('connection_id')
-      .notNull()
-      .references(() => connections.id),
-    account: text('account').notNull(),
-    chainId: integer('chain_id').notNull(),
-    requester: text('requester').notNull(),
-    requesterClientId: text('requester_client_id').notNull(),
-    kind: text('kind').notNull(),
-    body: jsonb('body').notNull(),
-    status: text('status', { enum: ['pending', 'approved', 'rejected'] })
-      .notNull()
-      .default('pending'),
-    createdAt: timestamp('created_at', { withTimezone: true }).notNull(),
-    expiresAt: timestamp('expires_at', { withTimezone: true }).notNull(),
-    decidedAt: timestamp('decided_at', { withTimezone: true }),
-    previewHash: text('preview_hash'),
-    payloadHash: text('payload_hash'),
-    signature: text('signature'),
-    assertionRef: text('assertion_ref'),
-    permissionId: text('permission_id'),
-    callsId: text('calls_id'),
-    txHash: text('tx_hash'),
-    // How to fetch a payment's resource again. Never loaded with the request: the agent's headers can carry secrets.
-    sellerRequest: jsonb('seller_request'),
-  },
-  (t) => [
-    index().on(t.connectionId, t.createdAt),
-    // One userOp proves one approval.
-    uniqueIndex()
-      .on(t.callsId)
-      .where(sql`${t.callsId} is not null`),
-    check('approval_seller_request', sql`${t.kind} = 'payment' or ${t.sellerRequest} is null`),
-    check(
-      'approval_evidence',
-      sql`(${t.status} = 'pending') = (${t.decidedAt} is null and ${t.previewHash} is null and ${t.payloadHash} is null)`
-    ),
-    check(
-      'approval_proof',
-      sql`(${t.status} = 'pending' and ${t.signature} is null and ${t.assertionRef} is null and ${t.permissionId} is null and ${t.callsId} is null and ${t.txHash} is null)
-        or (${t.status} <> 'pending' and (${t.signature} is null) = (${t.assertionRef} is null) and (${t.callsId} is null) = (${t.txHash} is null)
-          and (${t.signature} is not null)::int + (${t.permissionId} is not null)::int + (${t.callsId} is not null)::int = 1)`
-    ),
-  ]
-);
-
 export const grants = pgTable(
   'grants',
   {
@@ -148,9 +100,6 @@ export const grants = pgTable(
     connectionId: text('connection_id')
       .notNull()
       .references(() => connections.id),
-    approvalId: text('approval_id')
-      .notNull()
-      .references(() => approvalRequests.id),
     chainId: integer('chain_id').notNull(),
     account: text('account').notNull(),
     spender: text('spender').notNull(),
@@ -178,8 +127,6 @@ export const payments = pgTable(
     idempotencyKey: text('idempotency_key').notNull(),
     requestHash: text('request_hash').notNull(),
     permissionId: text('permission_id'),
-    // Set when the account owner approved paying this one request, instead of a budget.
-    approvalId: text('approval_id').references(() => approvalRequests.id),
     payer: text('payer').notNull(),
     url: text('url').notNull(),
     state: text('state', { enum: ['pending', 'signed', 'settled', 'failed', 'unknown'] })
@@ -219,15 +166,11 @@ export const payments = pgTable(
     uniqueIndex('payments_payer_tx_hash_index')
       .on(t.payer, sql`lower(${t.txHash})`)
       .where(sql`${t.txHash} is not null`),
-    uniqueIndex()
-      .on(t.approvalId)
-      .where(sql`${t.approvalId} is not null`),
     index().on(t.connectionId, t.createdAt, t.id),
     index().on(t.permissionId, t.createdAt),
     index()
       .on(t.signedAt)
       .where(sql`${t.state} in ('signed', 'unknown')`),
-    check('payment_source', sql`(${t.permissionId} is null) <> (${t.approvalId} is null)`),
     check(
       'payment_shape',
       sql`(${t.state} = 'pending' and ${t.nonce} is null and ${t.authorization} is null and ${t.fenced} is null)

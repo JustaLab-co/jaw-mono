@@ -22,8 +22,8 @@ KEYFILE=$RUN/work/sealing.key
 [ -f "$KEYFILE" ] || (umask 077; openssl rand -base64 32 | tr '+/' '-_' | tr -d '=' >"$KEYFILE")
 export MCP_PORT JAW_MCP_PUBLIC_URL=http://localhost:$MCP_PORT JAW_KEYS_URL=${JAW_KEYS_URL:-http://localhost:3100}
 export JAW_MCP_SEALING_KEYS=$(cat "$KEYFILE")
-# JAW_KEYS_URL is required by the server (it builds the approve and authorize
-# links from it) but nothing here contacts it, so a placeholder is enough.
+# JAW_KEYS_URL is required by the server (it builds the wallet link of the
+# interaction page from it) but nothing here contacts it, so a placeholder is enough.
 # JAW_VERIFY_MCP_IMAGE reuses an image built once per round; otherwise this run
 # builds its own tag.
 BUILD=--build

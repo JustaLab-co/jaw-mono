@@ -1,4 +1,4 @@
-import { CONNECTION_SCOPES, type ConnectionScope } from '@jaw.id/agent';
+import { CONNECTION_SCOPES, type ConnectionScope } from '@/connections/scopes';
 import { describe, expect, it } from 'vitest';
 import { setTestEnv } from '@/connections/testkit';
 import { GET } from './route';

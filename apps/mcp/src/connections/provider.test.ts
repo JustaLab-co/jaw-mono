@@ -9,15 +9,13 @@ import {
   Browser,
   connect,
   follow,
-  getDetails,
   ISSUER,
-  owner,
-  postConsent,
   REDIRECT,
   RESOURCE,
   setTestEnv,
   startAuthorization,
   token,
+  walletsSettled,
 } from './testkit';
 
 vi.mock('node:dns', async (original) => {
@@ -44,6 +42,8 @@ const HIDDEN_IMPOSTOR = 'https://evil.example.test/hidden.json';
 const NAMED = 'https://named.example.test/';
 const named = (name: string) => `${NAMED}${encodeURIComponent(name)}.json`;
 const NUL_NAMED = 'https://evil.example.test/nul.json';
+// A document with loopback redirects that name no port, and no application_type.
+const LOOPBACK = 'https://claude.example.test/oauth/client-metadata';
 const KEYED = 'https://evil.example.test/keyed.json';
 const PUBLIC_KEYED = 'https://evil.example.test/public-keyed.json';
 const metadata = {
@@ -83,15 +83,24 @@ beforeAll(async () => {
                     client_id: PUBLIC_KEYED,
                     jwks_uri: 'https://evil.example.test/jwks.json',
                   })
-                : String(url) === NUL_NAMED
-                  ? Response.json({ ...metadata, client_id: NUL_NAMED, client_name: 'Agent\u0000' })
-                  : String(url).startsWith(NAMED)
-                    ? Response.json({
-                        ...metadata,
-                        client_id: String(url),
-                        client_name: decodeURIComponent(String(url).slice(NAMED.length, -'.json'.length)),
-                      })
-                    : new Response('not found', { status: 404 }),
+                : String(url) === LOOPBACK
+                  ? Response.json({
+                      client_id: LOOPBACK,
+                      client_name: 'Loopback Agent',
+                      redirect_uris: ['http://localhost/callback', 'http://127.0.0.1/callback'],
+                      grant_types: ['authorization_code', 'refresh_token'],
+                      response_types: ['code'],
+                      token_endpoint_auth_method: 'none',
+                    })
+                  : String(url) === NUL_NAMED
+                    ? Response.json({ ...metadata, client_id: NUL_NAMED, client_name: 'Agent\u0000' })
+                    : String(url).startsWith(NAMED)
+                      ? Response.json({
+                          ...metadata,
+                          client_id: String(url),
+                          client_name: decodeURIComponent(String(url).slice(NAMED.length, -'.json'.length)),
+                        })
+                      : new Response('not found', { status: 404 }),
   });
 });
 
@@ -132,7 +141,7 @@ async function dumpStrings(): Promise<string[]> {
     if (typeof value === 'string') found.add(value);
     else if (value && typeof value === 'object') Object.values(value).forEach(walk);
   };
-  for (const table of ['settings', 'rate_limits', 'oauth_payloads', 'connections', 'approval_requests']) {
+  for (const table of ['settings', 'rate_limits', 'oauth_payloads', 'connections', 'grants', 'payments']) {
     walk((await db.query(`select * from ${table}`)).rows);
   }
   return [...found];
@@ -230,60 +239,58 @@ describe('authorization server', () => {
     expect(start.redirected?.searchParams.get('error_description')).toMatch(/PKCE/);
   });
 
-  it('accepts a CIMD client and shows the name from its metadata document', async () => {
+  it('accepts a CIMD client and names it with the domain of its metadata document', async () => {
+    const start = await startAuthorization(new Browser(), { clientId: CIMD, redirectUri: 'http://127.0.0.1:9100/cb' });
+    const page = start.html!;
+    expect(page).toContain('Connect Example Agent');
+    expect(page).toContain('<strong>client.example.test</strong>');
     const c = await connect(undefined, { clientId: CIMD, redirectUri: 'http://127.0.0.1:9100/cb' });
     expect(c.status).toBe(200);
-    expect(c.details.client).toEqual({
-      clientId: CIMD,
-      name: 'Example Agent',
-      host: 'client.example.test',
-      official: false,
-      reservedName: false,
-    });
   });
 
-  it('never lets a CIMD client named JAW CLI pass as the official client', async () => {
-    const c = await connect(undefined, { clientId: IMPOSTOR, redirectUri: 'http://127.0.0.1:9100/cb' });
-    expect(c.details.client).toMatchObject({ host: 'evil.example.test', official: false, reservedName: true });
-    expect(c.details.typedData.message.clientId).toBe(IMPOSTOR);
-  });
-
-  it('judges the declared name before sanitizing it on the consent path', async () => {
-    const c = await connect(undefined, { clientId: HIDDEN_IMPOSTOR, redirectUri: 'http://127.0.0.1:9100/cb' });
-    expect(c.details.client).toMatchObject({ official: false, reservedName: true });
-    expect(c.details.client.name).not.toContain('\u200B');
-  });
-
-  it.each([
-    'J\u200BAW',
-    'J\u00ADaw',
-    'J\u2060aw',
-    'ja\u3164w',
-    'JawWallet',
-    'MyJaw',
-    'JAWApp',
-    'JAWwallet',
-    '\u1D0A\u1D00\u1D21',
-  ])('warns on the consent screen for a CIMD client named %j', async (name) => {
-    const start = await startAuthorization(new Browser(), {
-      clientId: named(name),
+  it('shows the domain of a CIMD client named JAW CLI, which the official client has none of', async () => {
+    const impostor = await startAuthorization(new Browser(), {
+      clientId: IMPOSTOR,
       redirectUri: 'http://127.0.0.1:9100/cb',
     });
-    const { client } = await getDetails(start.uid!);
-    expect(client).toMatchObject({ official: false, reservedName: true });
-    expect(client.name).not.toMatch(/[\u00AD\u200B\u2060\u3164]/u);
+    expect(impostor.html!).toContain('<strong>evil.example.test</strong>');
+    const official = await startAuthorization(new Browser());
+    expect(official.html!).not.toContain('<strong>');
   });
 
-  it.each(['Mijaw', 'Jawbone', 'Raj Awesome', 'Jaws'])(
-    'does not warn on the consent screen for a CIMD client named %j',
-    async (name) => {
-      const start = await startAuthorization(new Browser(), {
-        clientId: named(name),
-        redirectUri: 'http://127.0.0.1:9100/cb',
-      });
-      expect((await getDetails(start.uid!)).client).toMatchObject({ name, reservedName: false });
+  it('drops invisible characters from a declared name before showing it', async () => {
+    const start = await startAuthorization(new Browser(), {
+      clientId: HIDDEN_IMPOSTOR,
+      redirectUri: 'http://127.0.0.1:9100/cb',
+    });
+    expect(start.html!).not.toMatch(/[\u00AD\u200B\u2060]/u);
+  });
+
+  it('escapes a declared name on the page', async () => {
+    const start = await startAuthorization(new Browser(), {
+      clientId: named('<img src=x onerror=alert(1)>'),
+      redirectUri: 'http://127.0.0.1:9100/cb',
+    });
+    const page = start.html!;
+    expect(page).not.toContain('<img');
+    expect(page).toContain('&lt;img');
+  });
+
+  it.each(['http://localhost:53123/callback', 'http://127.0.0.1:61001/callback'])(
+    'accepts a CIMD client that registered loopback redirects without a port, on %s',
+    async (redirectUri) => {
+      const start = await startAuthorization(new Browser(), { clientId: LOOPBACK, redirectUri });
+      expect(start.uid).toBeDefined();
     }
   );
+
+  it('still refuses a loopback redirect on another path than the one registered', async () => {
+    const start = await startAuthorization(new Browser(), {
+      clientId: LOOPBACK,
+      redirectUri: 'http://localhost:53123/elsewhere',
+    });
+    expect(start.uid).toBeUndefined();
+  });
 
   it('refuses a CIMD client whose name Postgres cannot store, before consent', async () => {
     const start = await startAuthorization(new Browser(), {
@@ -577,23 +584,20 @@ describe('authorization server', () => {
     expect(recoverable(await dumpStrings(), config().ring, sub, [c.refresh_token])).toEqual([]);
   });
 
-  it('creates the session key at the code exchange, never at consent', async () => {
+  it('keeps the session key sealed until the code exchange, and only the refresh token opens it after', async () => {
     const browser = new Browser();
-    const signer = owner();
     const start = await startAuthorization(browser);
-    const d = await getDetails(start.uid!);
-    const consented = await postConsent(start.uid!, signer.address, await signer.signTypedData(d.typedData));
-    const redirected = await follow(browser, ((await consented.json()) as { next: string }).next);
-
-    const [row] = (
-      await db.query<{ id: string; session_address: string | null }>(
-        'select id, session_address from connections where interaction_uid = $1',
-        [start.uid]
-      )
+    await walletsSettled();
+    const select = 'select id, session_address, sealed_key from connections where interaction_uid = $1';
+    const [pending] = (
+      await db.query<{ id: string; session_address: string; sealed_key: string | null }>(select, [start.uid])
     ).rows;
-    expect(row.session_address).toBeNull();
-    expect(recoverable(await dumpStrings(), config().ring, row.id, [])).toEqual([]);
+    // Between the wallet's approval and the exchange, the ring opens it: the permission names it as spender.
+    expect(privateKeyToAddress(open(config().ring, pending.sealed_key as never, pending.id))).toBe(
+      pending.session_address
+    );
 
+    const redirected = await follow(browser, `${ISSUER}/interaction/${start.uid}/complete?ticket=${start.ticket}`);
     const issued = await token({
       grant_type: 'authorization_code',
       code: redirected.searchParams.get('code')!,
@@ -603,7 +607,10 @@ describe('authorization server', () => {
       resource: RESOURCE,
     });
     expect(issued.status).toBe(200);
-    expect((await findActive(row.id))?.sessionAddress).toBe(await sessionAddressOf(issued.body.access_token));
+    expect(await sessionAddressOf(issued.body.access_token)).toBe(pending.session_address);
+    const [after] = (await db.query<{ sealed_key: string | null }>(select, [start.uid])).rows;
+    expect(after.sealed_key).toBeNull();
+    expect(recoverable(await dumpStrings(), config().ring, pending.id, [])).toEqual([]);
   });
 
   it('keeps the session key across refresh rotations', async () => {

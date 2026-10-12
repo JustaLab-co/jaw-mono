@@ -1,5 +1,6 @@
 // Two apps/mcp replicas behind one round-robin proxy, one Postgres, one anvil
-// fork of Base Sepolia. Every name carries the lane, so nothing else is touched.
+// fork of Base Sepolia, and a relay for the wallet sessions. Every name carries
+// the lane, so nothing else is touched.
 import { execFile, spawn } from 'node:child_process';
 import { randomBytes } from 'node:crypto';
 import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
@@ -8,6 +9,7 @@ import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { promisify } from 'node:util';
 import postgres from 'postgres';
+import { WebSocketServer } from 'ws';
 
 const run = promisify(execFile);
 export const IMAGE = process.env.CHAOS_IMAGE ?? 'jaw-mcp:integration-cfebc45f';
@@ -16,7 +18,8 @@ const LANE = process.env.CHAOS_LANE ?? 'lane-chaos';
 const BASE = Number(process.env.CHAOS_PORT ?? 13900);
 const NET = `${LANE}-net`;
 const PG = `${LANE}-pg`;
-const PORTS = { proxy: BASE, mcp1: BASE + 1, mcp2: BASE + 2, pg: BASE + 32, anvil: BASE + 45 };
+const PORTS = { proxy: BASE, mcp1: BASE + 1, mcp2: BASE + 2, pg: BASE + 32, anvil: BASE + 45, relay: BASE + 46 };
+export const RELAY_URL = `ws://127.0.0.1:${PORTS.relay}`;
 export const PUBLIC_URL = `http://localhost:${PORTS.proxy}`;
 export const PG_URL = `postgres://postgres:pg@127.0.0.1:${PORTS.pg}/mcp`;
 const FORK_URL = process.env.CHAOS_FORK_URL ?? 'https://sepolia.base.org';
@@ -103,6 +106,7 @@ export async function up({ replicas = { mcp1: {}, mcp2: {} }, label = 'stack' } 
     DATABASE_URL: 'postgres://postgres:pg@pg:5432/mcp',
     JAW_MCP_PUBLIC_URL: PUBLIC_URL,
     JAW_KEYS_URL: 'http://keys.chaos.test',
+    JAW_RELAY_URL: `ws://host.docker.internal:${PORTS.relay}`,
     JAW_MCP_SEALING_KEYS: sealing,
     JAW_MCP_RPC_URL: `http://host.docker.internal:${PORTS.anvil}`,
     JAW_MCP_CRON_SECRET: secret,
@@ -126,8 +130,9 @@ export async function up({ replicas = { mcp1: {}, mcp2: {} }, label = 'stack' } 
   }
   await Promise.all(specs.map(startReplica));
   const proxy = await startProxy(specs.map((s) => s.id));
+  const relay = await startRelay();
   const db = postgres(PG_URL, { max: 5, onnotice: () => {} });
-  const stack = { label, secret, db, proxy, specs, anvil };
+  const stack = { label, secret, db, proxy, relay, specs, anvil };
   current = stack;
   return stack;
 }
@@ -232,6 +237,23 @@ function writePid(name, pid) {
   writeFileSync(join(dir, name), String(pid));
 }
 
+/** Pairs the server and the client acting as the wallet page by session, and forwards what each sends, as relay.jaw.id does. */
+async function startRelay() {
+  const relay = new WebSocketServer({ port: PORTS.relay, host: '0.0.0.0' });
+  const sessions = new Map();
+  relay.on('connection', (ws, req) => {
+    const url = new URL(req.url ?? '/', 'ws://relay');
+    const role = url.searchParams.get('role');
+    const pair = sessions.get(url.searchParams.get('session')) ?? {};
+    pair[role] = ws;
+    sessions.set(url.searchParams.get('session'), pair);
+    if (role === 'browser') pair.cli?.send(JSON.stringify({ type: 'browser_connected' }));
+    ws.on('message', (data) => (role === 'cli' ? pair.browser : pair.cli)?.send(String(data)));
+  });
+  await new Promise((r) => relay.once('listening', r));
+  return relay;
+}
+
 /** Saves each replica's log to evidence, then removes everything this lane started. */
 export async function down() {
   const stack = current;
@@ -246,6 +268,8 @@ export async function down() {
     await stack.db.end({ timeout: 1 }).catch(() => {});
     stack.proxy.server.closeAllConnections();
     await new Promise((r) => stack.proxy.server.close(r));
+    for (const ws of stack.relay.clients) ws.terminate();
+    await new Promise((r) => stack.relay.close(r));
   }
   // An anvil left by a run that died before its own down.
   const pidFile = join(EVIDENCE, 'pids', 'anvil');

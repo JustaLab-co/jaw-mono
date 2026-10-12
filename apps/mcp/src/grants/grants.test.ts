@@ -1,71 +1,94 @@
-import type { GrantedPermission, GrantRequest, PermissionState } from '@jaw.id/agent';
-import { randomBytes } from 'node:crypto';
-import { eq } from 'drizzle-orm';
-import type { Hex } from 'viem';
+import { PERMISSION_MANAGER_ABI, type PermissionState } from '@jaw.id/agent';
+import { and, eq, isNull } from 'drizzle-orm';
+import { decodeFunctionData, type Address } from 'viem';
 import { beforeAll, describe, expect, it } from 'vitest';
-import { decideFromPage, readForPage, type ReadPermission } from '@/approvals/page-api';
-import { NO_PAY_SCOPE } from '@/approvals/tools';
-import { verifyBearer } from '@/connections/auth';
-import { callTool, connect, setTestEnv, verifyLocally } from '@/connections/testkit';
+import { verifyBearer, type Tenant } from '@/connections/auth';
+import {
+  approvedOnChain,
+  callTool,
+  connect,
+  fakeWallet,
+  owner,
+  setTestEnv,
+  walletAnswers,
+  sessionFakes,
+  walletsSettled,
+  type SessionCall,
+} from '@/connections/testkit';
 import { getDb } from '@/db/client';
 import { grants } from '@/db/schema';
 import { useTestDb } from '@/db/test-db';
+import { requestBudget } from '@/tools/request-budget';
+import { NO_PAY_SCOPE } from '@/tools/reply';
+import type { GrantRequest, ReadPermission } from './permission';
 import { currentGrant } from './store';
 
 setTestEnv();
 beforeAll(useTestDb);
 
 const USDC = '0x036CbD53842c5426634e7929541eC2318f3dCF7e';
-const permissionId = () => `0x${randomBytes(32).toString('hex')}` as Hex;
+const APPROVE = { target: USDC as Address, functionSignature: 'approve(address,uint256)' };
 
-const granted = (grant: GrantRequest, over: Partial<GrantedPermission> = {}, id = permissionId()) => ({
-  permissionId: id,
-  account: grant.address,
-  spender: grant.spender,
-  start: 1_780_000_000,
-  end: grant.expiry,
-  salt: '0x2a',
-  calls: [{ target: grant.permissions.calls[0].target, selector: '0xa9059cbb' }],
-  spends: grant.permissions.spends,
-  ...over,
-});
+const MANAGER = '0xf1b40E3D5701C04d86F7828f0EB367B9C90901D8';
+const revokedAsSpender = (batch: SessionCall[]) =>
+  batch
+    .filter((c) => c.to === MANAGER)
+    .map((c) => decodeFunctionData({ abi: PERMISSION_MANAGER_ABI, data: c.data }))
+    .map((d) => (d.functionName === 'revokeAsSpender' ? d.args[0] : undefined));
+
+const revokedAt = async (permissionId: string | undefined) =>
+  (
+    await getDb()
+      .select()
+      .from(grants)
+      .where(eq(grants.permissionId, permissionId as string))
+  )[0].revokedAt;
 
 const onChain =
   (state: PermissionState): ReadPermission =>
   async () =>
     state;
-const approvedOnChain = onChain({ status: 'ok', approved: true, revoked: false });
 
-async function budgetView(id: string) {
-  const read = await readForPage(id);
-  if (read.kind !== 'ok' || read.view.approve.type !== 'grant') throw new Error(read.kind);
-  return { view: read.view, grant: read.view.approve.grant };
+async function connected(scope = 'wallet:read x402:pay') {
+  const signer = owner();
+  const c = await connect(signer, { scope });
+  const t = (await verifyBearer(c.access_token))?.extra?.tenant as Tenant;
+  return { c, t, signer, connectedWith: (await currentGrant(t.connectionId))?.permissionId };
 }
 
-async function requestBudget(perDay = '1') {
-  const c = await connect(undefined, { scope: 'wallet:read x402:pay' });
-  const sessionAddress = ((await verifyBearer(c.access_token))?.extra?.tenant as { sessionAddress: Hex })
-    .sessionAddress;
-  const result = await callTool(c.access_token, 'jaw_request_budget', { perDay });
-  return { c, sessionAddress, result, id: result.structuredContent?.requestId as string };
+/** Asks for a budget through a wallet that answers as `answer` says, and waits for it to settle. */
+async function ask(
+  t: Tenant,
+  signer: ReturnType<typeof owner>,
+  opts: {
+    perDay?: string;
+    read?: ReadPermission;
+    tamper?: (granted: Record<string, unknown>) => object;
+    session?: ReturnType<typeof sessionFakes>['deps'];
+  } = {}
+) {
+  const asked: { method: string; params: unknown[] }[] = [];
+  const honest = walletAnswers(signer);
+  const answer = async (method: string, params: unknown[]) => {
+    const granted = (await honest(method, params)) as Record<string, unknown>;
+    return opts.tamper ? opts.tamper(granted) : granted;
+  };
+  const result = await requestBudget(t, opts.perDay ?? '1', [], {
+    openWallet: fakeWallet(answer, asked),
+    readPermission: opts.read ?? approvedOnChain,
+    ...(opts.session ?? sessionFakes().deps),
+  });
+  await walletsSettled();
+  return { result, grant: asked[0]?.params[0] as GrantRequest };
 }
 
 describe('budget grants', () => {
-  it('asks for a daily USDC transfer allowance whose only spender is the connection session key', async () => {
-    const { c, sessionAddress, result, id } = await requestBudget('1.5');
-    expect(result.structuredContent).toMatchObject({ status: 'pending', approveUrl: `http://keys.test/approve/${id}` });
-    const { view, grant } = await budgetView(id);
-    expect(view.preview).toMatchObject({
-      kind: 'budget',
-      account: c.signer.address,
-      spender: sessionAddress,
-      token: USDC,
-      allowance: '1500000',
-      period: 'day',
-    });
+  it('gives the owner a wallet link that asks for a daily USDC allowance whose only spender is the session key', async () => {
+    const { t, signer } = await connected();
+    const { result, grant } = await ask(t, signer, { perDay: '1.5' });
+    expect('structuredContent' in result && result.structuredContent.url).toMatch(/^http:\/\/keys\.test\/cli-bridge\?/);
     expect(grant).toMatchObject({
-      address: c.signer.address,
-      spender: sessionAddress,
+      spender: t.sessionAddress,
       chainId: '0x14a34',
       permissions: {
         calls: [{ target: USDC, functionSignature: 'transfer(address,uint256)' }],
@@ -75,38 +98,55 @@ describe('budget grants', () => {
     });
   });
 
-  it('given a token with wallet:read wallet:send, when it asks for a budget, then it is refused naming x402:pay', async () => {
-    const sender = await connect(undefined, { scope: 'wallet:read wallet:send' });
-    const refused = await callTool(sender.access_token, 'jaw_request_budget', { perDay: '1' });
+  it('given a token with wallet:read alone, when it asks for a budget, then it is refused naming x402:pay', async () => {
+    const reader = await connect(undefined, { scope: 'wallet:read' });
+    const refused = await callTool(reader.access_token, 'jaw_request_budget', { perDay: '1' });
     expect(refused.isError).toBe(true);
     expect(refused.content[0].text).toBe(NO_PAY_SCOPE);
   });
 
-  it('refuses a zero budget and a malformed amount', async () => {
-    const c = await connect();
+  it('refuses a zero budget, a malformed amount and an invalid function signature', async () => {
+    const { c } = await connected();
     expect((await callTool(c.access_token, 'jaw_request_budget', { perDay: '0' })).isError).toBe(true);
     expect((await callTool(c.access_token, 'jaw_request_budget', { perDay: '1e3' })).isError).toBe(true);
+    const calls = [{ to: USDC, functionSignature: 'not a signature' }];
+    expect((await callTool(c.access_token, 'jaw_request_budget', { perDay: '1', calls })).isError).toBe(true);
   });
 
-  it('records the grant once the permission the page granted is approved on chain', async () => {
-    const { c, id } = await requestBudget();
-    const { view, grant } = await budgetView(id);
-    const pid = permissionId();
-    const post = { verdict: 'approved', previewHash: view.previewHash, permission: granted(grant, {}, pid) };
-    expect(await decideFromPage(id, post, verifyLocally, new Date(), approvedOnChain)).toMatchObject({
-      kind: 'ok',
-      view: { status: 'approved' },
-    });
-
-    const status = await callTool(c.access_token, 'jaw_request_status', { requestId: id });
-    expect(status.structuredContent).toMatchObject({ status: 'approved', permissionId: pid });
-    const tenant = (await verifyBearer(c.access_token))?.extra?.tenant as { connectionId: string };
-    expect(await currentGrant(tenant.connectionId)).toMatchObject({
-      permissionId: pid,
-      spender: grant.spender,
-      allowance: '1000000',
+  it('makes the permission the budget in force once the chain shows it approved, and marks the older one replaced', async () => {
+    const { t, signer, connectedWith } = await connected();
+    const { grant } = await ask(t, signer, { perDay: '5' });
+    const now = await currentGrant(t.connectionId);
+    expect(now).toMatchObject({
+      spender: t.sessionAddress,
+      allowance: '5000000',
       expiresAt: new Date(grant.expiry * 1000),
     });
+    expect(now?.permissionId).not.toBe(connectedWith);
+    const unreplaced = await getDb()
+      .select({ id: grants.permissionId })
+      .from(grants)
+      .where(and(eq(grants.connectionId, t.connectionId), isNull(grants.replacedAt)));
+    expect(unreplaced).toEqual([{ id: now?.permissionId }]);
+  });
+
+  it('asks for the contract calls the agent names, after the USDC transfer', async () => {
+    const { t, signer } = await connected();
+    const asked: { method: string; params: unknown[] }[] = [];
+    await requestBudget(t, '1', [APPROVE], {
+      openWallet: fakeWallet(walletAnswers(signer), asked),
+      readPermission: approvedOnChain,
+      ...sessionFakes().deps,
+    });
+    await walletsSettled();
+    expect((asked[0].params[0] as GrantRequest).permissions.calls).toEqual([
+      { target: USDC, functionSignature: 'transfer(address,uint256)' },
+      APPROVE,
+    ]);
+    expect((await currentGrant(t.connectionId))?.permission.calls.map((c) => c.selector)).toEqual([
+      '0xa9059cbb',
+      '0x095ea7b3',
+    ]);
   });
 
   it.each([
@@ -114,131 +154,59 @@ describe('budget grants', () => {
     ['a longer life', { end: 1_999_999_999 }],
     ['an approve call', { calls: [{ target: USDC, selector: '0x095ea7b3' }] }],
     ['a larger allowance', { spends: [{ token: USDC, allowance: '9000000', unit: 'day', multiplier: 1 }] }],
-  ])('refuses a granted permission with %s and records nothing', async (_name, over) => {
-    const { id } = await requestBudget();
-    const { view, grant } = await budgetView(id);
-    const post = { verdict: 'approved', previewHash: view.previewHash, permission: granted(grant, over) };
-    expect((await decideFromPage(id, post, verifyLocally, new Date(), approvedOnChain)).kind).toBe('grant_mismatch');
-    expect((await budgetView(id)).view.status).toBe('pending');
-    expect(await getDb().select().from(grants).where(eq(grants.approvalId, id))).toEqual([]);
+  ])('keeps the budget it had when the wallet answers a permission with %s', async (_name, over) => {
+    const { t, signer, connectedWith } = await connected();
+    await ask(t, signer, { tamper: (granted) => ({ ...granted, ...over }) });
+    expect((await currentGrant(t.connectionId))?.permissionId).toBe(connectedWith);
   });
 
   it.each([
-    ['not approved', { status: 'ok', approved: false, revoked: false }, 'grant_not_found'],
-    ['revoked', { status: 'ok', approved: true, revoked: true }, 'grant_not_found'],
-    ['another hash', { status: 'mismatch' }, 'grant_mismatch'],
-    ['unreadable', { status: 'unavailable' }, 'verification_unavailable'],
-  ] as const)('refuses a permission the chain reads as %s', async (_name, state, kind) => {
-    const { id } = await requestBudget();
-    const { view, grant } = await budgetView(id);
-    const post = { verdict: 'approved', previewHash: view.previewHash, permission: granted(grant) };
-    expect((await decideFromPage(id, post, verifyLocally, new Date(), onChain(state))).kind).toBe(kind);
-    expect((await budgetView(id)).view.status).toBe('pending');
+    ['not approved', { status: 'ok', approved: false, revoked: false }],
+    ['revoked', { status: 'ok', approved: true, revoked: true }],
+    ['another hash', { status: 'mismatch' }],
+    ['unreadable', { status: 'unavailable' }],
+  ] as const)('keeps the budget it had when the chain reads the new permission as %s', async (_name, state) => {
+    const { t, signer, connectedWith } = await connected();
+    await ask(t, signer, { read: onChain(state) });
+    expect((await currentGrant(t.connectionId))?.permissionId).toBe(connectedWith);
   });
 
-  it('keeps the same spender when the budget is raised, and the newest grant is the budget', async () => {
-    const { c, id } = await requestBudget('1');
-    const first = await budgetView(id);
-    await decideFromPage(
-      id,
-      { verdict: 'approved', previewHash: first.view.previewHash, permission: granted(first.grant) },
-      verifyLocally,
-      new Date(),
-      approvedOnChain
-    );
-    const raise = await callTool(c.access_token, 'jaw_request_budget', { perDay: '5' });
-    const raised = permissionId();
-    const second = await budgetView(raise.structuredContent.requestId);
-    expect(second.grant.spender).toBe(first.grant.spender);
-    await decideFromPage(
-      raise.structuredContent.requestId,
-      {
-        verdict: 'approved',
-        previewHash: second.view.previewHash,
-        permission: granted(second.grant, {}, raised),
-      },
-      verifyLocally,
-      new Date(),
-      approvedOnChain
-    );
-    const tenant = (await verifyBearer(c.access_token))?.extra?.tenant as { connectionId: string };
-    expect(await currentGrant(tenant.connectionId)).toMatchObject({ permissionId: raised, allowance: '5000000' });
+  it('keeps the budget it had when another account approves the permission', async () => {
+    const { t, connectedWith } = await connected();
+    await ask(t, owner());
+    expect((await currentGrant(t.connectionId))?.permissionId).toBe(connectedWith);
+  });
+});
+
+describe('given a connection whose budget the owner replaces', () => {
+  it('when the new budget lands, then the session key revokes the old one on chain and keeps its float', async () => {
+    const { t, signer, connectedWith } = await connected();
+    const old = (await currentGrant(t.connectionId))?.permission;
+    const { deps, sent } = sessionFakes();
+
+    await ask(t, signer, { perDay: '0.5', session: deps });
+
+    expect(sent).toHaveLength(1);
+    expect(revokedAsSpender(sent[0])).toEqual([
+      expect.objectContaining({ spender: old?.spender, salt: BigInt(old?.salt ?? 0) }),
+    ]);
+    // Only the revoke and the fee cap: nothing goes back to the owner.
+    expect(sent[0].map((c) => c.to)).toEqual([MANAGER, USDC]);
+    expect(await revokedAt(connectedWith)).not.toBeNull();
+    expect(await revokedAt((await currentGrant(t.connectionId))?.permissionId)).toBeNull();
   });
 
-  it('computes the budgets to revoke when the decision lands, every older one still live, not the one seen at page load', async () => {
-    const { c, id } = await requestBudget('1');
-    const a = permissionId();
-    const first = await budgetView(id);
-    await decideFromPage(
-      id,
-      { verdict: 'approved', previewHash: first.view.previewHash, permission: granted(first.grant, {}, a) },
-      verifyLocally,
-      new Date(),
-      approvedOnChain
-    );
+  it('when the revoke does not land, then the next budget retries it', async () => {
+    const { t, signer, connectedWith } = await connected();
+    await ask(t, signer, { perDay: '0.5', session: sessionFakes({ status: 'reverted' }).deps });
+    expect(await revokedAt(connectedWith)).toBeNull();
+    const second = (await currentGrant(t.connectionId))?.permissionId;
 
-    // Two raises opened side by side, both read before either is approved.
-    const r1 = (await callTool(c.access_token, 'jaw_request_budget', { perDay: '2' })).structuredContent.requestId;
-    const r2 = (await callTool(c.access_token, 'jaw_request_budget', { perDay: '3' })).structuredContent.requestId;
-    const v1 = await budgetView(r1);
-    const v2 = await budgetView(r2);
-    const b = permissionId();
-    const d1 = await decideFromPage(
-      r1,
-      { verdict: 'approved', previewHash: v1.view.previewHash, permission: granted(v1.grant, {}, b) },
-      verifyLocally,
-      new Date(),
-      approvedOnChain
-    );
-    expect(d1).toMatchObject({ kind: 'ok', view: { revoke: [a] } });
+    const { deps, sent } = sessionFakes();
+    await ask(t, signer, { perDay: '0.2', session: deps });
 
-    // A is now revoked on chain; B is not.
-    const aRevoked: ReadPermission = async (target) =>
-      target.permissionId === a
-        ? { status: 'ok', approved: true, revoked: true }
-        : { status: 'ok', approved: true, revoked: false };
-    const d2 = await decideFromPage(
-      r2,
-      { verdict: 'approved', previewHash: v2.view.previewHash, permission: granted(v2.grant) },
-      verifyLocally,
-      new Date(),
-      aRevoked
-    );
-    expect(d2).toMatchObject({ kind: 'ok', view: { revoke: [b] } });
-
-    // The page can come back for an outstanding revoke.
-    const again = await readForPage(r2, new Date(), aRevoked);
-    expect(again).toMatchObject({ kind: 'ok', view: { revoke: [b] } });
-    const bothRevoked: ReadPermission = async () => ({ status: 'ok', approved: true, revoked: true });
-    expect(await readForPage(r2, new Date(), bothRevoked)).toMatchObject({ kind: 'ok', view: { revoke: [] } });
-  });
-
-  it('stops listing a replaced budget once it expires, since the chain no longer honors it', async () => {
-    const { c, id } = await requestBudget('1');
-    const a = permissionId();
-    const first = await budgetView(id);
-    await decideFromPage(
-      id,
-      { verdict: 'approved', previewHash: first.view.previewHash, permission: granted(first.grant, {}, a) },
-      verifyLocally,
-      new Date(),
-      approvedOnChain
-    );
-    const raise = (await callTool(c.access_token, 'jaw_request_budget', { perDay: '2' })).structuredContent.requestId;
-    const second = await budgetView(raise);
-    await decideFromPage(
-      raise,
-      { verdict: 'approved', previewHash: second.view.previewHash, permission: granted(second.grant) },
-      verifyLocally,
-      new Date(),
-      approvedOnChain
-    );
-    expect(await readForPage(raise, new Date(), approvedOnChain)).toMatchObject({ view: { revoke: [a] } });
-
-    await getDb()
-      .update(grants)
-      .set({ expiresAt: new Date(Date.now() - 1000) })
-      .where(eq(grants.permissionId, a));
-    expect(await readForPage(raise, new Date(), approvedOnChain)).toMatchObject({ kind: 'ok', view: { revoke: [] } });
+    expect(revokedAsSpender(sent[0])).toHaveLength(2);
+    expect(await revokedAt(connectedWith)).not.toBeNull();
+    expect(await revokedAt(second)).not.toBeNull();
   });
 });

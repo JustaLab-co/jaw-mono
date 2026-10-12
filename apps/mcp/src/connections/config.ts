@@ -6,7 +6,9 @@ export const SUPPORTED_CHAINS: Readonly<Record<number, Chain>> = { [base.id]: ba
 export interface Config {
   issuer: string;
   resource: string;
+  /** Where the owner's wallet opens: keys.jaw.id, whose cli-bridge page answers over the relay. */
   keysOrigin: string;
+  relayUrl: string;
   chain: Chain;
   rpcUrl: string | undefined;
   mainnetRpcUrl: string | undefined;
@@ -15,6 +17,8 @@ export interface Config {
   paymasterApiKey: string | undefined;
   /** Base units a refill brings the payer up to, so refills are rare; the grant's cap still bounds it. */
   floatTarget: bigint;
+  /** USDC base units per day a connection that pays asks for when it connects. */
+  dailyBudget: bigint;
   ring: KeyRing;
 }
 
@@ -30,12 +34,14 @@ export function config(): Config {
     issuer,
     resource: `${issuer}/mcp`,
     keysOrigin: new URL(required('JAW_KEYS_URL')).origin,
+    relayUrl: process.env.JAW_RELAY_URL || 'wss://relay.jaw.id',
     chain,
     rpcUrl: process.env.JAW_MCP_RPC_URL || undefined,
     mainnetRpcUrl: process.env.JAW_MCP_MAINNET_RPC_URL || undefined,
     insecureFetchHosts: new Set((process.env.JAW_MCP_INSECURE_FETCH_HOSTS ?? '').split(',').filter(Boolean)),
     paymasterApiKey: process.env.JAW_MCP_API_KEY || undefined,
     floatTarget: baseUnits('JAW_MCP_FLOAT_TARGET', process.env.JAW_MCP_FLOAT_TARGET || '250000'),
+    dailyBudget: baseUnits('JAW_MCP_DAILY_BUDGET', process.env.JAW_MCP_DAILY_BUDGET || '1000000'),
     ring: parseKeyRing(process.env.JAW_MCP_SEALING_KEYS),
   };
   return cached;

@@ -4,7 +4,7 @@ import { connect, ISSUER, REDIRECT, setTestEnv, token } from './testkit';
 
 setTestEnv();
 const { PgAdapter } = await import('./adapter');
-const { GET: details } = await import('@/app/interaction/[uid]/details/route');
+const { GET: connectPage } = await import('@/app/interaction/[uid]/route');
 
 beforeAll(useTestDb);
 afterEach(() => vi.restoreAllMocks());
@@ -44,7 +44,7 @@ describe('OAuth routes while the database is unreachable', () => {
 
   it('the interaction routes answer 503', async () => {
     vi.spyOn(PgAdapter.prototype, 'find').mockRejectedValue(unreachable());
-    const res = await details(new Request(`${ISSUER}/interaction/abcdefghijklmnop/details`), {
+    const res = await connectPage(new Request(`${ISSUER}/interaction/abcdefghijklmnop`), {
       params: Promise.resolve({ uid: 'abcdefghijklmnop' }),
     });
     expect(res.status).toBe(503);

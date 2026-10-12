@@ -37,7 +37,6 @@
     }
   },
   "dependencies": {
-    "@jaw.id/agent": "workspace:*",
     "@jaw.id/core": "workspace:*",
     "@jaw.id/ui": "workspace:*",
     "@tanstack/react-query": "5.90.21",

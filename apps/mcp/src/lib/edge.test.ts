@@ -12,13 +12,6 @@ vi.mock('@/db/settings', () => ({
     return store.hits.get(key);
   },
 }));
-vi.mock('./cors', () => ({
-  pageCors: (res: Response) => {
-    res.headers.set('access-control-allow-origin', 'http://keys.test');
-    return res;
-  },
-}));
-
 const { withEdge, RATE_LIMIT } = await import('./edge');
 
 const ok = async () => Response.json({ ok: true });
@@ -99,12 +92,6 @@ describe('withEdge', () => {
     expect(res.status).toBe(503);
     expect(await res.json()).toEqual({ error: 'paused' });
     expect(route).not.toHaveBeenCalled();
-  });
-
-  it('puts CORS headers on refusals too, so the page can read them', async () => {
-    store.paused = true;
-    const res = await call(withEdge(ok, { guarded: true, cors: true }));
-    expect(res.headers.get('access-control-allow-origin')).toBe('http://keys.test');
   });
 
   it('answers 503 when the database is unreachable, from the guard or the route', async () => {

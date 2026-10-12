@@ -37,9 +37,6 @@ export interface PaymentRequest {
   maxAmount?: string;
 }
 
-/** How a seller is asked again for the resource of a one-off. */
-export type SellerRequest = Pick<PaymentRequest, 'method' | 'headers' | 'body'>;
-
 /** What "the same request" means for an idempotency key. */
 export function requestHash(r: PaymentRequest): string {
   const headers = Object.entries(r.headers)
@@ -148,22 +145,6 @@ export async function claim(owner: Owner, key: string, request: PaymentRequest):
   if (!owner.permissionId) return { kind: 'no_grant' };
   const taken = await take(row, owner.permissionId);
   return taken ? { kind: 'run', ...taken } : { kind: 'busy' };
-}
-
-/** The row an approved one-off opens: charged to the approval, paid by the account. */
-export type NewOneOff = Pick<
-  typeof payments.$inferInsert,
-  'id' | 'idempotencyKey' | 'requestHash' | 'approvalId' | 'payer' | 'url' | 'leaseToken'
->;
-
-/** Inside the transaction that records the approval. UNIQUE(approval_id) keeps it to one row. */
-export async function insertOneOff(tx: Tx, connectionId: string, row: NewOneOff): Promise<void> {
-  await tx.insert(payments).values({ ...row, connectionId, leaseUntil: leaseFromNow });
-}
-
-export async function findByApproval(approvalId: string): Promise<LeasedRow | undefined> {
-  const [row] = await getDb().select(withLease).from(payments).where(eq(payments.approvalId, approvalId));
-  return row;
 }
 
 const owned = (id: string, token: string) =>

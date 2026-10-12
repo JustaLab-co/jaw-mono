@@ -30,3 +30,6 @@ export async function readJson(req: Request, max = 16 * 1024): Promise<unknown> 
     return {};
   }
 }
+
+/** jsonb refuses NUL and unpaired surrogates. */
+export const hasUnstorableText = (text: string) => /[\0\p{Cs}]/u.test(text);

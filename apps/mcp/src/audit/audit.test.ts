@@ -1,11 +1,11 @@
 import type { PGlite } from '@electric-sql/pglite';
 import { asc, eq } from 'drizzle-orm';
 import { beforeAll, describe, expect, it, vi } from 'vitest';
-import * as store from '@/approvals/store';
+import * as grantsStore from '@/grants/store';
 import * as payments from '@/payments/pay';
 import { connect, mcp, setTestEnv } from '@/connections/testkit';
 import { getDb } from '@/db/client';
-import { auditEvents } from '@/db/schema';
+import { auditEvents, grants } from '@/db/schema';
 import { useTestDb } from '@/db/test-db';
 
 setTestEnv();
@@ -28,14 +28,14 @@ const connectionOf = async (token: string) => {
 describe('audit events', () => {
   it('records one event per tool call with its tool, outcome and request id', async () => {
     const c = await connect();
-    const ok = await call(c.access_token, 'jaw_request_signature', { message: 'hello' });
-    const refused = await call(c.access_token, 'jaw_request_status', { requestId: 'apr_nope' });
+    const ok = await call(c.access_token, 'jaw_connections', {});
+    const refused = await call(c.access_token, 'jaw_revoke_connection', { id: 'conn_nope' });
     expect(refused.json.result.isError).toBe(true);
 
     const events = await eventsOf(await connectionOf(c.access_token));
     expect(events.map((e) => [e.tool, e.outcome, e.requestId])).toEqual([
-      ['jaw_request_signature', 'ok', ok.headers.get('x-request-id')],
-      ['jaw_request_status', 'error', refused.headers.get('x-request-id')],
+      ['jaw_connections', 'ok', ok.headers.get('x-request-id')],
+      ['jaw_revoke_connection', 'error', refused.headers.get('x-request-id')],
     ]);
   });
 
@@ -48,7 +48,7 @@ describe('audit events', () => {
       kind: 'refused',
       httpStatus: 402,
       refusal: { code: 'budget_exhausted', next: 'jaw_request_budget' },
-      moneyMoved: false,
+      payerRefilled: false,
       summary: 'Not paid: budget_exhausted. Nothing was sent.',
     } as const;
     vi.spyOn(payments, 'pay').mockResolvedValueOnce({
@@ -71,7 +71,7 @@ describe('audit events', () => {
         kind: 'failed',
         httpStatus: null,
         refusal: { code },
-        moneyMoved: false,
+        payerRefilled: false,
         summary: 'A payment was sent and no answer came back.',
       } as const;
       return { content: [{ type: 'text' as const, text: structuredContent.summary }], structuredContent };
@@ -88,6 +88,9 @@ describe('audit events', () => {
 
   it('records a payment gate by its code, not as an error', async () => {
     const c = await connect();
+    await getDb()
+      .delete(grants)
+      .where(eq(grants.connectionId, await connectionOf(c.access_token)));
     const res = await call(c.access_token, 'jaw_pay_and_fetch', { url: 'https://seller.example.test/x' });
     expect(res.json.result.isError).toBe(true);
     expect(res.json.result.content[0].text).toMatch(/^no_grant: /);
@@ -107,17 +110,20 @@ describe('audit events', () => {
 
   it('records a tool that threw as an error, once', async () => {
     const c = await connect();
-    vi.spyOn(store, 'insertUnderCap').mockRejectedValueOnce(new Error('boom'));
-    const res = await call(c.access_token, 'jaw_request_signature', { message: 'hello' });
+    vi.spyOn(grantsStore, 'currentGrant').mockRejectedValueOnce(new Error('boom'));
+    const res = await call(c.access_token, 'jaw_transfer', {
+      to: '0x2222222222222222222222222222222222222222',
+      amount: '1',
+    });
     expect(res.json.result.isError).toBe(true);
     const events = await eventsOf(await connectionOf(c.access_token));
-    expect(events.map((e) => [e.tool, e.outcome])).toEqual([['jaw_request_signature', 'error']]);
+    expect(events.map((e) => [e.tool, e.outcome])).toEqual([['jaw_transfer', 'error']]);
   });
 
   it('records no arguments, tokens or signatures', async () => {
     const c = await connect();
     const secret = 'seller-session-0123456789abcdef';
-    await call(c.access_token, 'jaw_request_signature', { message: `Bearer ${secret}` });
+    await call(c.access_token, 'jaw_quote', { url: `https://169.254.169.254/x?token=${secret}` });
 
     const dump = JSON.stringify((await pg.query('select * from audit_events')).rows);
     expect(dump).not.toContain(secret);
@@ -130,9 +136,9 @@ describe('audit events', () => {
     const c = await connect();
     await pg.exec('alter table audit_events rename to audit_events_away');
     try {
-      const res = await call(c.access_token, 'jaw_request_signature', { message: 'still here' });
+      const res = await call(c.access_token, 'jaw_connections', {});
       expect(res.json.result.isError).toBeFalsy();
-      expect(res.json.result.structuredContent.status).toBe('pending');
+      expect(res.json.result.structuredContent.connections).toHaveLength(1);
     } finally {
       await pg.exec('alter table audit_events_away rename to audit_events');
     }
