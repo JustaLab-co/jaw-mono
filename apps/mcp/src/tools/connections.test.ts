@@ -6,6 +6,7 @@ import {
   fakeWallet,
   mcp,
   owner,
+  sessionFakes,
   setTestEnv,
   verifyLocally,
   walletAnswers,
@@ -40,9 +41,43 @@ describe('jaw_connections', () => {
 });
 
 describe('jaw_revoke_connection', () => {
-  const confirmedBy = (signer: ReturnType<typeof owner>) => ({
+  const confirmedBy = (signer: ReturnType<typeof owner>, float = 0n) => ({
     openWallet: fakeWallet(walletAnswers(signer)),
     verify: verifyLocally,
+    clients: sessionFakes(undefined, float).deps.clients,
+  });
+
+  it('says how much float stays at the other connection once it ends, and that jaw_disconnect from it returns it', async () => {
+    const signer = owner();
+    const other = await connect(signer);
+    const me = await connect(signer, { scope: 'wallet:read' });
+    const { connectionId, sessionAddress } = await tenantOf(other.access_token);
+
+    const asked = await revokeConnection(await tenantOf(me.access_token), connectionId, confirmedBy(signer, 180_000n));
+
+    expect('structuredContent' in asked && asked.structuredContent).toMatchObject({
+      payer: sessionAddress,
+      left: '180000',
+    });
+    const text = asked.content[0].text;
+    expect(text).toContain(`0.18 USDC stays at ${sessionAddress}`);
+    expect(text).toContain('jaw_disconnect');
+  });
+
+  it('given the payer cannot be read, then it says the float may stay, without an amount', async () => {
+    const signer = owner();
+    const other = await connect(signer);
+    const me = await connect(signer, { scope: 'wallet:read' });
+    const { connectionId, sessionAddress } = await tenantOf(other.access_token);
+    const unreadable = { publicClient: () => ({ readContract: () => Promise.reject(new Error('node down')) }) };
+
+    const asked = await revokeConnection(await tenantOf(me.access_token), connectionId, {
+      ...confirmedBy(signer),
+      clients: unreadable as never,
+    });
+
+    expect('structuredContent' in asked && asked.structuredContent).toMatchObject({ left: null });
+    expect(asked.content[0].text).toContain(`Whatever float is at ${sessionAddress} stays there`);
   });
 
   it('ends another connection of the same owner once the owner confirms in the wallet: its tokens stop working', async () => {
@@ -75,7 +110,7 @@ describe('jaw_revoke_connection', () => {
     const signer = owner();
     const other = await connect(signer);
     const me = await connect(signer, { scope: 'wallet:read' });
-    const declined = { openWallet: fakeWallet(walletAnswers(signer, ['personal_sign'])), verify: verifyLocally };
+    const declined = { ...confirmedBy(signer), openWallet: fakeWallet(walletAnswers(signer, ['personal_sign'])) };
     await revokeConnection(
       await tenantOf(me.access_token),
       (await tenantOf(other.access_token)).connectionId,

@@ -26,6 +26,7 @@ import {
   walletAnswers,
   walletsSettled,
   offlineSession,
+  sessionFakes,
 } from '@/connections/testkit';
 import { getDb } from '@/db/client';
 import { connections, grants, payments, settings } from '@/db/schema';
@@ -242,7 +243,11 @@ async function approveBudget(c: Awaited<ReturnType<typeof connect>>, perDay: str
 async function revoker(c: Awaited<ReturnType<typeof connect>>, t: Tenant) {
   const other = await connect(c.signer, { scope: 'wallet:read' });
   const asker = (await verifyBearer(other.access_token))?.extra?.tenant as Tenant;
-  const confirmed = { openWallet: fakeWallet(walletAnswers(c.signer)), verify: verifyLocally };
+  const confirmed = {
+    openWallet: fakeWallet(walletAnswers(c.signer)),
+    verify: verifyLocally,
+    clients: sessionFakes().deps.clients,
+  };
   return async () => {
     await revokeConnection(asker, t.connectionId, confirmed);
     await walletsSettled();

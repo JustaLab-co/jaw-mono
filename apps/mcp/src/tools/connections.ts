@@ -1,7 +1,9 @@
+import { usdcForNetwork, type ChainClients } from '@jaw.id/agent';
 import type { McpServer } from '@modelcontextprotocol/server';
 import { and, desc, eq, inArray, ne } from 'drizzle-orm';
-import { isAddressEqual, isHex, stringToHex, type Address } from 'viem';
+import { erc20Abi, formatUnits, isAddressEqual, isHex, stringToHex, type Address } from 'viem';
 import { z } from 'zod';
+import { chainClients } from '@/adapters/session-host';
 import { tenant, type Tenant } from '@/connections/auth';
 import { config } from '@/connections/config';
 import { openRelay, WalletBusy, type OpenWallet, type Wallet } from '@/connections/relay';
@@ -89,9 +91,17 @@ export function registerConnectionTools(server: McpServer) {
     'jaw_revoke_connection',
     {
       description:
-        "End another app's connection to this account, once the owner confirms it in their wallet: its tokens stop working and its session key is gone, so its budget can no longer be spent. Returns a link for the owner; jaw_connections shows it revoked once they confirm. To end this connection, and return its float, use jaw_disconnect.",
+        "End another app's connection to this account, once the owner confirms it in their wallet: its tokens stop working and its session key is gone, so its budget can no longer be spent. The float at its payer stays there, since only that key could move it; jaw_disconnect called from that app returns it instead. Returns a link for the owner; jaw_connections shows it revoked once they confirm. To end this connection, and return its float, use jaw_disconnect.",
       inputSchema: z.strictObject({ id: z.string().max(64).describe('From jaw_connections') }),
-      outputSchema: z.object({ url: z.url(), summary: z.string() }),
+      outputSchema: z.object({
+        url: z.url(),
+        payer: z.string().describe("The other connection's session address"),
+        left: z
+          .string()
+          .nullable()
+          .describe('USDC base units at its payer, which stay there once it ends; null when unreadable'),
+        summary: z.string(),
+      }),
       annotations: { destructiveHint: true, idempotentHint: true },
     },
     async ({ id }, ctx) => revokeConnection(tenant(ctx), id)
@@ -101,9 +111,10 @@ export function registerConnectionTools(server: McpServer) {
 export interface RevokeDeps {
   openWallet: OpenWallet;
   verify: VerifySignature;
+  clients: ChainClients;
 }
 
-const DEFAULTS: RevokeDeps = { openWallet: openRelay, verify: verifyOnChain };
+const DEFAULTS: RevokeDeps = { openWallet: openRelay, verify: verifyOnChain, clients: chainClients };
 const CONFIRM_WITHIN_MS = 10 * 60_000;
 
 /** The text the owner signs to end a connection. It names the connection, so it ends no other. */
@@ -159,8 +170,34 @@ export async function revokeConnection(t: Tenant, id: string, deps = DEFAULTS) {
       await withFloat(id, LOCK_WAIT_MS, (hold) => hold.tx((tx) => endConnection(id, t.account, new Date(), tx)));
     })
     .catch((err: unknown) => log('warn', { msg: 'connection not revoked', error: errorLabel(err) }));
-  const summary =
-    `Ask the account owner to open ${wallet.url} and confirm ending ${row.clientName}. ` +
-    'jaw_connections shows it revoked once they do. Its budget stays approved on chain until it expires, with no key left to spend it.';
-  return { content: [{ type: 'text' as const, text: summary }], structuredContent: { url: wallet.url, summary } };
+  const payer = row.sessionAddress as Address;
+  const left = await floatAt(t.chainId, payer, deps.clients);
+  const said = [
+    `Ask the account owner to open ${wallet.url} and confirm ending ${row.clientName}.`,
+    'jaw_connections shows it revoked once they do. Its budget stays approved on chain until it expires, with no key left to spend it.',
+  ];
+  // The key that could move it goes with the connection, and this server cannot open it.
+  if (left === null) {
+    said.push(
+      `Whatever float is at ${payer} stays there once it ends; jaw_disconnect called from that app returns it.`
+    );
+  } else if (left > 0n) {
+    said.push(
+      `${formatUnits(left, 6)} USDC stays at ${payer} once it ends, and nothing can move it. To get it back, call jaw_disconnect from that app instead, if it still works.`
+    );
+  }
+  const summary = said.join(' ');
+  return {
+    content: [{ type: 'text' as const, text: summary }],
+    structuredContent: { url: wallet.url, payer, left: left?.toString() ?? null, summary },
+  };
+}
+
+async function floatAt(chainId: number, payer: Address, clients: ChainClients): Promise<bigint | null> {
+  const usdc = usdcForNetwork(`eip155:${chainId}`);
+  if (!usdc) return null;
+  return clients
+    .publicClient(chainId)
+    .readContract({ address: usdc.address, abi: erc20Abi, functionName: 'balanceOf', args: [payer] })
+    .catch(() => null);
 }
