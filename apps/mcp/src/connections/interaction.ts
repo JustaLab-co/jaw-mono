@@ -1,26 +1,19 @@
 import { createHash, createHmac, randomBytes } from 'node:crypto';
 import type { ServerResponse } from 'node:http';
 import { sanitizeLine, usdcForNetwork } from '@jaw.id/agent';
-import { and, eq, inArray } from 'drizzle-orm';
+import { eq } from 'drizzle-orm';
 import { isAddress, isAddressEqual, isHex, stringToHex, type Address } from 'viem';
 import { generatePrivateKey, privateKeyToAddress } from 'viem/accounts';
 import { getDb } from '@/db/client';
 import { connections } from '@/db/schema';
-import {
-  budgetGrant,
-  checkGranted,
-  readOnChain,
-  recordGrant,
-  type NewGrant,
-  type ReadPermission,
-} from '@/grants/permission';
+import { budgetGrant, checkGranted, readOnChain, recordGrant, type ReadPermission } from '@/grants/permission';
 import { verifyOnChain, type VerifySignature } from '@/lib/chain';
 import { errorLabel, log } from '@/lib/edge';
 import { bridge } from './bridge';
 import { config } from './config';
 import { provider } from './provider';
 import { openRelay, type Ask, type OpenWallet } from './relay';
-import { activate, CONNECTION_TTL_MS, findClaimable, insertPending } from './rows';
+import { activate, armTicket, CONNECTION_TTL_MS, findClaimable, pendingFor } from './rows';
 import { CONNECTION_SCOPES, FIRST_PARTY_CLIENTS, spends, type ConnectionScope } from './scopes';
 import { seal } from './seal';
 
@@ -112,12 +105,8 @@ export const connectMessage = (a: Asked, account: Address) =>
     `Expires: ${a.expiresAt.toISOString()}`,
   ].join('\n');
 
-/**
- * The account that approved: signed in on the message that names this request,
- * and, for a connection that spends, the owner of the permission it granted, which
- * the chain confirms.
- */
-async function approve(a: Asked, ask: Ask, spender: Address, deps: InteractionDeps) {
+/** The account that signed in on the message that names this request. */
+async function signIn(a: Asked, ask: Ask, deps: InteractionDeps): Promise<Address> {
   const [account] = (await ask('eth_requestAccounts', [])) as unknown[];
   if (typeof account !== 'string' || !isAddress(account)) throw new Error('the wallet returned no account');
   const message = connectMessage(a, account);
@@ -130,8 +119,11 @@ async function approve(a: Asked, ask: Ask, spender: Address, deps: InteractionDe
     signature,
   });
   if (!valid) throw new Error('bad_signature');
-  if (!spends(a.scopes)) return { account, grant: undefined };
+  return account;
+}
 
+/** The budget the account granted the spender, as the chain confirms it. */
+async function askBudget(a: Asked, ask: Ask, account: Address, spender: Address, deps: InteractionDeps) {
   const usdc = usdcForNetwork(`eip155:${a.chainId}`);
   if (!usdc) throw new Error('no USDC on this chain');
   const grant = budgetGrant({
@@ -145,7 +137,7 @@ async function approve(a: Asked, ask: Ask, spender: Address, deps: InteractionDe
   const checked = await checkGranted(a.chainId, grant, answer, deps.readPermission);
   if (typeof checked === 'string') throw new Error(checked);
   if (!isAddressEqual(checked.account as Address, account)) throw new Error('grant_mismatch');
-  return { account, grant: checked };
+  return checked;
 }
 
 // What the page may say about a failure: the refusals this module raises, never
@@ -157,6 +149,7 @@ const SHOWN = new Set([
   'verification_unavailable',
   'bad_signature',
   'already_connected',
+  'another_account_signed_in_first',
 ]);
 export const reasonOf = (err: unknown) => {
   if ((err as { code?: unknown })?.code === 4001) return 'turned down in the wallet';
@@ -175,33 +168,38 @@ interface Job {
 }
 const jobs = new Map<string, Job>();
 
-async function start(a: Asked, deps: InteractionDeps): Promise<Job> {
+/** The pending connection of this interaction for `account`, with its session key stored. */
+async function pending(a: Asked, account: Address) {
   const id = `conn_${randomBytes(16).toString('base64url')}`;
   const key = generatePrivateKey();
-  const spender = privateKeyToAddress(key);
+  const row = await pendingFor({
+    id,
+    account,
+    sessionAddress: privateKeyToAddress(key),
+    sealedKey: seal(config().ring, key, id),
+    chainId: a.chainId,
+    clientId: a.clientId,
+    clientName: a.clientName,
+    scopes: a.scopes,
+    interactionUid: a.uid,
+    expiresAt: a.expiresAt,
+  });
+  if (!row) throw new Error('another_account_signed_in_first');
+  return { id: row.id, spender: row.sessionAddress as Address };
+}
+
+async function start(a: Asked, deps: InteractionDeps): Promise<Job> {
   const wallet = await deps.openWallet(a.chainId, new Date(a.expiresAt.getTime() - COMPLETE_WITHIN_MS));
   const job: Job = { walletUrl: wallet.url };
-  const saved = async (account: Address, grant: NewGrant | undefined) =>
-    getDb().transaction(async (tx) => {
-      const pending = {
-        id,
-        account,
-        sessionAddress: spender,
-        sealedKey: seal(config().ring, key, id),
-        chainId: a.chainId,
-        clientId: a.clientId,
-        clientName: a.clientName,
-        scopes: a.scopes,
-        interactionUid: a.uid,
-        expiresAt: a.expiresAt,
-      };
-      if (!(await insertPending(pending, sha256(ticketOf(a.uid)), tx))) throw new Error('already_connected');
-      if (grant) await recordGrant(tx, id, grant);
-    });
   void wallet
     .run(async (ask) => {
-      const { account, grant } = await approve(a, ask, spender, deps);
-      await saved(account, grant);
+      const account = await signIn(a, ask, deps);
+      const { id, spender } = await pending(a, account);
+      const grant = spends(a.scopes) ? await askBudget(a, ask, account, spender, deps) : undefined;
+      await getDb().transaction(async (tx) => {
+        if (grant) await recordGrant(tx, id, grant);
+        if (!(await armTicket(a.uid, sha256(ticketOf(a.uid)), tx))) throw new Error('already_connected');
+      });
     })
     .catch((err: unknown) => {
       job.failed = reasonOf(err);
@@ -231,10 +229,13 @@ export async function hop(_req: Request, uid: string, deps = DEFAULTS): Promise<
 export async function status(_req: Request, uid: string): Promise<Response> {
   if (!UID.test(uid)) return Response.json({ error: 'not_found' }, { status: 404 });
   const [row] = await getDb()
-    .select({ id: connections.id })
+    .select({ status: connections.status, ticketHash: connections.ticketHash })
     .from(connections)
-    .where(and(eq(connections.interactionUid, uid), inArray(connections.status, ['pending', 'active'])));
-  if (row) return Response.json({ state: 'approved' });
+    .where(eq(connections.interactionUid, uid));
+  // A pending row is approved once its ticket is armed; before that it only holds the key.
+  if (row?.status === 'active' || (row?.status === 'pending' && row.ticketHash === sha256(ticketOf(uid)))) {
+    return Response.json({ state: 'approved' });
+  }
   const failed = jobs.get(uid)?.failed;
   return Response.json(failed ? { state: 'failed', reason: failed } : { state: 'waiting' });
 }

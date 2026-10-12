@@ -1,11 +1,11 @@
 import { createHash, randomBytes } from 'node:crypto';
-import { toFunctionSelector, verifyMessage, verifyTypedData, type Address, type Hex } from 'viem';
+import { toFunctionSelector, verifyMessage, verifyTypedData, type Address, type Hex, type PublicClient } from 'viem';
 import { privateKeyToAccount, generatePrivateKey } from 'viem/accounts';
 import { currentGrant, type Grant } from '@/grants/store';
 import type { GrantRequest, ReadPermission } from '@/grants/permission';
 import type { SignedPayload } from '@/lib/chain';
 import { verifyBearer, type Tenant } from './auth';
-import type { DisconnectDeps } from './disconnect';
+import type { DisconnectDeps, Sent } from './disconnect';
 import { abort, complete, hop, status, type InteractionDeps } from './interaction';
 import { oauth } from './provider';
 import type { Ask, OpenWallet } from './relay';
@@ -81,6 +81,27 @@ export const offlineSession: Pick<DisconnectDeps, 'clients' | 'sender'> = {
   },
   sender: () => Promise.reject(new Error('this test sends nothing as the session')),
 };
+
+export const SENT_TX = `0x${'ab'.repeat(32)}` as Hex;
+export type SessionCall = { to: Address; data: Hex };
+
+/** A session account holding `float` USDC whose batches end as `outcome` says, with what it sent. */
+export function sessionFakes(outcome: Sent = { status: 'landed', txHash: SENT_TX }, float = 500_000n) {
+  const sent: SessionCall[][] = [];
+  const node = { getBlockNumber: async () => 100n, readContract: async () => float } as unknown as PublicClient;
+  const deps: Pick<DisconnectDeps, 'clients' | 'sender'> = {
+    clients: { publicClient: () => node },
+    sender: async () => ({
+      paymaster: '0x888888888888Ec68A58AB8094Cc1AD20Ba3D2402',
+      quote: async () => ({ expected: 2_000n, max: 10_000n }),
+      send: async (calls) => {
+        sent.push(calls);
+        return outcome;
+      },
+    }),
+  };
+  return { deps, sent };
+}
 
 /** Waits for every wallet session the server started to finish, including ones started meanwhile. */
 export const walletsSettled = async () => {

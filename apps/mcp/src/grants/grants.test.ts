@@ -1,9 +1,8 @@
 import { PERMISSION_MANAGER_ABI, type PermissionState } from '@jaw.id/agent';
 import { and, eq, isNull } from 'drizzle-orm';
-import { decodeFunctionData, type Address, type Hex, type PublicClient } from 'viem';
+import { decodeFunctionData, type Address } from 'viem';
 import { beforeAll, describe, expect, it } from 'vitest';
 import { verifyBearer, type Tenant } from '@/connections/auth';
-import type { DisconnectDeps, Sent } from '@/connections/disconnect';
 import {
   approvedOnChain,
   callTool,
@@ -12,7 +11,9 @@ import {
   owner,
   setTestEnv,
   walletAnswers,
+  sessionFakes,
   walletsSettled,
+  type SessionCall,
 } from '@/connections/testkit';
 import { getDb } from '@/db/client';
 import { grants } from '@/db/schema';
@@ -29,29 +30,7 @@ const USDC = '0x036CbD53842c5426634e7929541eC2318f3dCF7e';
 const APPROVE = { target: USDC as Address, functionSignature: 'approve(address,uint256)' };
 
 const MANAGER = '0xf1b40E3D5701C04d86F7828f0EB367B9C90901D8';
-const TX = `0x${'ab'.repeat(32)}` as Hex;
-
-type Call = { to: Address; data: Hex };
-
-/** A session account with `float` USDC whose batches land, or end as `outcome` says. */
-function sessionFakes(outcome: Sent = { status: 'landed', txHash: TX }, float = 500_000n) {
-  const sent: Call[][] = [];
-  const node = { getBlockNumber: async () => 100n, readContract: async () => float } as unknown as PublicClient;
-  const deps: Pick<DisconnectDeps, 'clients' | 'sender'> = {
-    clients: { publicClient: () => node },
-    sender: async () => ({
-      paymaster: '0x888888888888Ec68A58AB8094Cc1AD20Ba3D2402',
-      quote: async () => ({ expected: 2_000n, max: 10_000n }),
-      send: async (calls) => {
-        sent.push(calls);
-        return outcome;
-      },
-    }),
-  };
-  return { deps, sent };
-}
-
-const revokedAsSpender = (batch: Call[]) =>
+const revokedAsSpender = (batch: SessionCall[]) =>
   batch
     .filter((c) => c.to === MANAGER)
     .map((c) => decodeFunctionData({ abi: PERMISSION_MANAGER_ABI, data: c.data }))
@@ -85,7 +64,7 @@ async function ask(
     perDay?: string;
     read?: ReadPermission;
     tamper?: (granted: Record<string, unknown>) => object;
-    session?: Pick<DisconnectDeps, 'clients' | 'sender'>;
+    session?: ReturnType<typeof sessionFakes>['deps'];
   } = {}
 ) {
   const asked: { method: string; params: unknown[] }[] = [];

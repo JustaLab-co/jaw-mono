@@ -68,8 +68,9 @@ export const connections = pgTable(
     clientName: text('client_name').notNull(),
     scopes: text('scopes').array().notNull(),
     sessionAddress: text('session_address'),
-    // The session key, sealed, from the owner's approval until the first token
-    // exchange wraps it under the refresh token and clears this.
+    // The session key, sealed, from the owner's sign-in until the first token
+    // exchange wraps it under the refresh token and clears this, or the reconciler
+    // returns an abandoned approval's prefund and clears it.
     sealedKey: text('sealed_key'),
     interactionUid: text('interaction_uid').notNull().unique(),
     ticketHash: text('ticket_hash'),

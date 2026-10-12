@@ -1,12 +1,16 @@
 import { eq } from 'drizzle-orm';
 import { hexToString, type Hex } from 'viem';
+import { privateKeyToAddress } from 'viem/accounts';
 import { beforeAll, describe, expect, it } from 'vitest';
 import { getDb } from '@/db/client';
 import { connections, grants } from '@/db/schema';
 import { useTestDb } from '@/db/test-db';
 import type { GrantRequest } from '@/grants/permission';
+import { config } from './config';
 import type { OpenWallet } from './relay';
+import { open, type Sealed } from './seal';
 import {
+  approvedOnChain,
   Browser,
   fakeWallet,
   ISSUER,
@@ -23,6 +27,13 @@ beforeAll(useTestDb);
 
 const rowOf = async (uid: string) =>
   (await getDb().select().from(connections).where(eq(connections.interactionUid, uid)))[0];
+
+const budgetsOf = async (connectionId: string) =>
+  getDb().select().from(grants).where(eq(grants.connectionId, connectionId));
+
+/** The session key the server can still open for a connection, as its address. */
+const keptKey = (row: typeof connections.$inferSelect) =>
+  row.sealedKey && privateKeyToAddress(open(config().ring, row.sealedKey as Sealed, row.id));
 
 const stateOf = async (browser: Browser, uid: string) =>
   (await (await browser.get(`${ISSUER}/interaction/${uid}/status`)).json()) as { state: string; reason?: string };
@@ -68,13 +79,50 @@ describe('connecting through the owner wallet', () => {
     expect(await stateOf(browser, start.uid!)).toEqual({ state: 'failed', reason: 'bad_signature' });
   });
 
-  it('given the owner turns the budget down, then nothing is stored and the page says it failed', async () => {
+  it('given the owner turns the budget down, then no budget is stored and the page says it failed', async () => {
     setWallet({ openWallet: fakeWallet(walletAnswers(owner(), ['wallet_grantPermissions'])) });
     const browser = new Browser();
     const start = await startAuthorization(browser);
     await walletsSettled();
-    expect(await rowOf(start.uid!)).toBeUndefined();
+    expect(await budgetsOf((await rowOf(start.uid!)).id)).toEqual([]);
     expect((await stateOf(browser, start.uid!)).state).toBe('failed');
+  });
+
+  it('given the wallet granted the budget but the chain cannot confirm it yet, then the spender key is kept and the connection cannot be completed', async () => {
+    const asked: { method: string; params: unknown[] }[] = [];
+    setWallet({
+      openWallet: fakeWallet(walletAnswers(owner()), asked),
+      readPermission: async () => ({ status: 'unavailable' }),
+    });
+    const browser = new Browser();
+    const start = await startAuthorization(browser);
+    await walletsSettled();
+    const row = await rowOf(start.uid!);
+    // The grant sent its prefund to this address: only a key the server keeps can move it back.
+    expect(keptKey(row)).toBe((asked[2].params[0] as GrantRequest).spender);
+    expect(await stateOf(browser, start.uid!)).toEqual({ state: 'failed', reason: 'verification_unavailable' });
+    const res = await browser.get(`${ISSUER}/interaction/${start.uid}/complete?ticket=${start.ticket}`);
+    expect(res.status).toBe(400);
+  });
+
+  it('given a failed approval, when the page reloads and the owner approves, then the budget names the same spender', async () => {
+    const asked: { method: string; params: unknown[] }[] = [];
+    setWallet({
+      openWallet: fakeWallet(walletAnswers(owner()), asked),
+      readPermission: async () => ({ status: 'unavailable' }),
+    });
+    const browser = new Browser();
+    const start = await startAuthorization(browser);
+    await walletsSettled();
+    setWallet({ readPermission: approvedOnChain });
+    await browser.get(`${ISSUER}/interaction/${start.uid}`);
+    await walletsSettled();
+    const spenders = asked
+      .filter((a) => a.method === 'wallet_grantPermissions')
+      .map((a) => (a.params[0] as GrantRequest).spender);
+    expect(spenders).toHaveLength(2);
+    expect(spenders[1]).toBe(spenders[0]);
+    expect(await stateOf(browser, start.uid!)).toEqual({ state: 'approved' });
   });
 
   it('signs a text that names the app and what it asks for, with the code the page shows', async () => {
@@ -92,7 +140,7 @@ describe('connecting through the owner wallet', () => {
     expect(signed).toContain(`Account: ${signer.address}`);
   });
 
-  it('given a budget approved from another account than the one that signed in, then nothing is stored', async () => {
+  it('given a budget approved from another account than the one that signed in, then no budget is stored', async () => {
     const [signing, granting] = [owner(), owner()];
     const [signIn, grant] = [walletAnswers(signing), walletAnswers(granting)];
     setWallet({
@@ -103,7 +151,7 @@ describe('connecting through the owner wallet', () => {
     const browser = new Browser();
     const start = await startAuthorization(browser);
     await walletsSettled();
-    expect(await rowOf(start.uid!)).toBeUndefined();
+    expect(await budgetsOf((await rowOf(start.uid!)).id)).toEqual([]);
     expect(await stateOf(browser, start.uid!)).toEqual({ state: 'failed', reason: 'grant_mismatch' });
   });
 

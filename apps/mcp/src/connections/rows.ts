@@ -1,5 +1,6 @@
+import { createHash, randomBytes } from 'node:crypto';
 import { and, eq, gt, isNotNull, ne, sql } from 'drizzle-orm';
-import type { Address } from 'viem';
+import { isAddressEqual, type Address } from 'viem';
 import { getDb, type Tx } from '@/db/client';
 import { connections, oauthPayloads } from '@/db/schema';
 import { log } from '@/lib/edge';
@@ -22,11 +23,32 @@ export interface PendingConnection {
   expiresAt: Date;
 }
 
-export async function insertPending(c: PendingConnection, ticketHash: string, db: Tx = getDb()): Promise<boolean> {
-  const rows = await db
+/**
+ * The pending row of an interaction, stored with its session key before the wallet
+ * is asked for a budget, whose prefund goes to the key's address. A retry of the
+ * interaction finds the row and keeps its key. Undefined when another account
+ * signed in first. Nobody can claim it until `armTicket`: its ticket hash is of
+ * nothing anyone holds.
+ */
+export async function pendingFor(c: PendingConnection): Promise<ConnectionRow | undefined> {
+  const unclaimable = createHash('sha256').update(randomBytes(32)).digest('hex');
+  await getDb()
     .insert(connections)
-    .values({ ...c, status: 'pending', ticketHash })
-    .onConflictDoNothing({ target: connections.interactionUid })
+    .values({ ...c, status: 'pending', ticketHash: unclaimable })
+    .onConflictDoNothing({ target: connections.interactionUid });
+  const [row] = await getDb()
+    .select()
+    .from(connections)
+    .where(and(eq(connections.interactionUid, c.interactionUid), eq(connections.status, 'pending')));
+  return row && isAddressEqual(row.account as Address, c.account) ? row : undefined;
+}
+
+/** Makes a pending connection claimable with the ticket of its page, once the owner approved everything. */
+export async function armTicket(uid: string, ticketHash: string, tx: Tx): Promise<boolean> {
+  const rows = await tx
+    .update(connections)
+    .set({ ticketHash })
+    .where(and(eq(connections.interactionUid, uid), eq(connections.status, 'pending')))
     .returning({ id: connections.id });
   return rows.length === 1;
 }

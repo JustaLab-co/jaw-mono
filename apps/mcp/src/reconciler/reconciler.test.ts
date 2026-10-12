@@ -1,12 +1,35 @@
 import { createHash, randomBytes } from 'node:crypto';
 import type { ChainClients } from '@jaw.id/agent';
 import { and, count, eq, inArray, isNotNull, sql } from 'drizzle-orm';
-import { encodeAbiParameters, encodeEventTopics, parseAbi, type Address, type Hex, type PublicClient } from 'viem';
+import { PERMISSION_MANAGER_ABI } from '@jaw.id/agent';
+import {
+  decodeFunctionData,
+  encodeAbiParameters,
+  encodeEventTopics,
+  erc20Abi,
+  parseAbi,
+  type Address,
+  type Hex,
+  type PublicClient,
+} from 'viem';
 import { beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { verifyBearer, type Tenant } from '@/connections/auth';
-import { connect, setTestEnv, token } from '@/connections/testkit';
+import {
+  approvedOnChain,
+  Browser,
+  connect,
+  fakeWallet,
+  owner,
+  sessionFakes,
+  setTestEnv,
+  setWallet,
+  startAuthorization,
+  token,
+  walletAnswers,
+  walletsSettled,
+} from '@/connections/testkit';
 import { getDb } from '@/db/client';
-import { auditEvents, oauthPayloads, payments } from '@/db/schema';
+import { auditEvents, connections, grants, oauthPayloads, payments } from '@/db/schema';
 import { useTestDb } from '@/db/test-db';
 import { render } from '@/payments/render';
 import { purge, reconcile } from './run';
@@ -340,5 +363,70 @@ describe('cron and metrics routes', () => {
     expect(await gauge()).toBe('jaw_mcp_wraps_past_window 2');
     await call('cron', 'cron-secret');
     expect(await gauge()).toBe('jaw_mcp_wraps_past_window 0');
+  });
+});
+
+describe('given an approval the owner never completed, past its expiry', () => {
+  /** A pending connection whose owner signed in and, with `scope` that spends, granted the budget. */
+  async function abandoned(scope = 'wallet:read x402:pay') {
+    const signer = owner();
+    setWallet({ openWallet: fakeWallet(walletAnswers(signer)) });
+    const start = await startAuthorization(new Browser(), { scope });
+    await walletsSettled();
+    const [row] = await getDb()
+      .update(connections)
+      .set({ expiresAt: new Date(Date.now() - 1_000) })
+      .where(eq(connections.interactionUid, start.uid!))
+      .returning();
+    return { row, owner: signer.address };
+  }
+  const rowAfter = async (id: string) => (await getDb().select().from(connections).where(eq(connections.id, id)))[0];
+  const budgetOf = async (id: string) => (await getDb().select().from(grants).where(eq(grants.connectionId, id)))[0];
+  const deps = (session: ReturnType<typeof sessionFakes>) => ({ readPermission: approvedOnChain, ...session.deps });
+
+  it('when the purge runs, then the session revokes the budget, returns the prefund to the owner, and only then drops the key', async () => {
+    const { row, owner: account } = await abandoned();
+    const session = sessionFakes();
+
+    await purge(deps(session));
+
+    expect(session.sent).toHaveLength(1);
+    const [revoke, sweep] = session.sent[0];
+    expect(decodeFunctionData({ abi: PERMISSION_MANAGER_ABI, data: revoke.data }).functionName).toBe('revokeAsSpender');
+    expect(decodeFunctionData({ abi: erc20Abi, data: sweep.data }).args).toEqual([account, 497_500n]);
+    expect((await budgetOf(row.id)).revokedAt).not.toBeNull();
+    expect((await rowAfter(row.id)).sealedKey).toBeNull();
+  });
+
+  it('when the batch does not land, then the key stays for the next run', async () => {
+    const { row } = await abandoned();
+
+    await purge(deps(sessionFakes({ status: 'reverted' })));
+    expect((await rowAfter(row.id)).sealedKey).not.toBeNull();
+
+    await purge(deps(sessionFakes()));
+    expect((await rowAfter(row.id)).sealedKey).toBeNull();
+  });
+
+  it('when a float the key alone can move is stuck past a day, then the row and its key are kept', async () => {
+    const { row } = await abandoned('wallet:read');
+    await getDb()
+      .update(connections)
+      .set({ expiresAt: new Date(Date.now() - 2 * 24 * 60 * 60 * 1000) })
+      .where(eq(connections.id, row.id));
+
+    await purge(deps(sessionFakes({ status: 'reverted' })));
+
+    expect((await rowAfter(row.id))?.sealedKey).toEqual(expect.any(String));
+  });
+
+  it('when nothing was granted and the payer is empty, then it drops the key without sending', async () => {
+    const { row } = await abandoned('wallet:read');
+    const session = sessionFakes(undefined, 0n);
+
+    await purge(deps(session));
+
+    expect(session.sent).toEqual([]);
+    expect((await rowAfter(row.id)).sealedKey).toBeNull();
   });
 });

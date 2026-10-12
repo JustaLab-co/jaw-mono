@@ -1,10 +1,15 @@
 import type { ChainClients } from '@jaw.id/agent';
-import { and, eq, lt, sql } from 'drizzle-orm';
+import { and, eq, isNotNull, isNull, lt, sql } from 'drizzle-orm';
 import type { Address, Hex } from 'viem';
 import { chainClients } from '@/adapters/session-host';
+import { config } from '@/connections/config';
+import { retire, sessionSender, type DisconnectDeps } from '@/connections/disconnect';
+import { open, type Sealed } from '@/connections/seal';
 import { getDb } from '@/db/client';
 import { auditEvents, connections, grants, oauthPayloads, payments, rateLimits } from '@/db/schema';
-import { log } from '@/lib/edge';
+import { isPaymentsPaused } from '@/db/settings';
+import { readOnChain } from '@/grants/permission';
+import { errorLabel, log } from '@/lib/edge';
 import { chainAnswer, type ChainAnswer } from '@/payments/confirm';
 import { claimUnresolved, expire, markAlerted, settle, txHashTaken, type PaymentRow } from '@/payments/store';
 
@@ -83,25 +88,58 @@ async function apply(row: PaymentRow, answer: ChainAnswer, now: Date, report: Re
   report.alerted++;
 }
 
-export async function purge(): Promise<void> {
+const SESSION_DEPS: DisconnectDeps = { readPermission: readOnChain, clients: chainClients, sender: sessionSender };
+
+export async function purge(deps = SESSION_DEPS): Promise<void> {
   const db = getDb();
   const dayAgo = sql`now() - interval '1 day'`;
   await db.delete(oauthPayloads).where(lt(oauthPayloads.expiresAt, dayAgo));
   await db.delete(rateLimits).where(lt(rateLimits.windowStart, sql`now() - interval '1 hour'`));
   await db.delete(auditEvents).where(lt(auditEvents.createdAt, sql`now() - interval '90 days'`));
-  // Approved in the wallet but never completed: nobody holds a token for it, so its key goes.
-  await db
-    .update(connections)
-    .set({ sealedKey: null })
-    .where(and(eq(connections.status, 'pending'), lt(connections.expiresAt, sql`now()`)));
+  await retireAbandoned(deps);
   await db
     .delete(connections)
     .where(
       and(
         eq(connections.status, 'pending'),
         lt(connections.expiresAt, dayAgo),
+        isNull(connections.sealedKey),
         sql`not exists (select 1 from ${grants} where ${grants.connectionId} = ${connections.id})`,
         sql`not exists (select 1 from ${payments} where ${payments.connectionId} = ${connections.id})`
       )
     );
+}
+
+/**
+ * Approved in the wallet but never completed: nobody holds a token for it, so its
+ * key goes. First the key revokes the budget and returns the prefund the grant
+ * sent it, since nothing else can. A run that cannot keeps the key for the next.
+ */
+async function retireAbandoned(deps: DisconnectDeps) {
+  if (await isPaymentsPaused()) return;
+  const rows = await getDb()
+    .select()
+    .from(connections)
+    .where(
+      and(eq(connections.status, 'pending'), lt(connections.expiresAt, sql`now()`), isNotNull(connections.sealedKey))
+    )
+    .limit(BATCH);
+  for (const row of rows) {
+    const outcome = await retire(
+      {
+        connectionId: row.id,
+        account: row.account as Address,
+        chainId: row.chainId,
+        sessionAddress: row.sessionAddress as Address,
+        sessionKey: () => open(config().ring, row.sealedKey as Sealed, row.id),
+      },
+      deps
+    ).catch((err: unknown) => errorLabel(err));
+    if (typeof outcome === 'string') {
+      log('warn', { msg: `abandoned connection ${row.id} not retired`, error: outcome });
+      continue;
+    }
+    // What is left is under the fee to move it, if anything.
+    await getDb().update(connections).set({ sealedKey: null }).where(eq(connections.id, row.id));
+  }
 }

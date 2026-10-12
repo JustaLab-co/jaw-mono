@@ -197,6 +197,10 @@ export async function revokeReplaced(s: Session, deps = DEFAULTS): Promise<void>
     log('warn', { msg: 'replaced budget not revoked: the float cannot pay the fee' });
 }
 
+/** Revokes every live budget of a session and returns its free float to the owner, under the float lock. */
+export const retire = (s: Session, deps = DEFAULTS): Promise<Returned | string> =>
+  withFloat(s.connectionId, deps.lockWaitMs ?? LOCK_WAIT_MS, (hold) => returnFunds(hold, s, deps, 'everything'));
+
 function summarize(t: Tenant, r: Returned): string {
   const usdc = (amount: bigint) => `${formatUnits(amount, 6)} USDC`;
   const said = ['Disconnected. Tokens for this connection no longer work.'];
