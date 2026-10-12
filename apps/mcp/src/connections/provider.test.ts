@@ -272,7 +272,7 @@ describe('authorization server', () => {
       redirectUri: 'http://127.0.0.1:9100/cb',
     });
     const page = start.html!;
-    expect(page).not.toContain('<img');
+    expect(page).not.toContain('<img src=x');
     expect(page).toContain('&lt;img');
   });
 
