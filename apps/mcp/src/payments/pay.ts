@@ -84,7 +84,7 @@ export interface PayDeps {
 }
 
 /** Where a paid row's receipt is read: briefly in the call, and once more after the answer is out. */
-export interface Confirm {
+interface Confirm {
   clients: ChainClients;
   later: (task: () => Promise<void>) => void;
 }
@@ -312,21 +312,21 @@ export async function pay(t: Tenant, input: PayInput, deps: PayDeps = liveDeps()
 
 /**
  * The tail of every send: the conclusion written from the outcome, and the row
- * it left. Without `confirm` a paid row stays signed for the reconciler.
+ * it left.
  */
-export async function concludeSend(
+async function concludeSend(
   row: PaymentRow,
   token: string,
   outcome: Outcome,
-  opts: { signed: boolean; signedAt: Date; confirm?: Confirm }
+  opts: { signed: boolean; signedAt: Date; confirm: Confirm }
 ): Promise<{ row: PaymentRow; fenced: string[] }> {
   const checked = await claimedHashOnly(outcome, row.id);
-  const settled = opts.confirm ? await settledBy(checked, opts.signedAt, opts.confirm.clients, CONFIRM_MS) : undefined;
+  const settled = await settledBy(checked, opts.signedAt, opts.confirm.clients, CONFIRM_MS);
   const movedBefore = Boolean(row.topUpAmount || row.topUpBatchId || row.approvalBatchId);
   const conclusion = conclusionOf(checked, opts.signed, settled, movedBefore);
   const fenced = fencedOf(row.url, outcome);
   const written = await finish(row.id, token, conclusion, fenced);
-  if (written && opts.confirm) settleLater(written, checked, opts.signedAt, opts.confirm);
+  if (written) settleLater(written, checked, opts.signedAt, opts.confirm);
   return { row: written ?? (await rowAfter(row, conclusion)), fenced };
 }
 
@@ -350,12 +350,12 @@ function settleLater(row: PaymentRow, o: Outcome, signedAt: Date, { clients, lat
 }
 
 /** A previous call signed for this row and got no answer: the same proof again, under the same key. */
-export async function resend(
+async function resend(
   row: PaymentRow,
   token: string,
   payer: Payer,
   sent: Parameters<typeof payAndFetch>[2],
-  confirm?: Confirm
+  confirm: Confirm
 ): Promise<PayResult> {
   const authorization = row.authorization as SignedAuthorization;
   const outcome: Outcome = await payAndFetch(authorization.resource, payer, {
