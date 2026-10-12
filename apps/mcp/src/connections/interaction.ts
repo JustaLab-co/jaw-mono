@@ -296,6 +296,7 @@ body{margin:0;min-height:100vh;display:flex;align-items:center;justify-content:c
 .card{width:100%;max-width:26rem;background:var(--card);border:1px solid var(--border);border-radius:.75rem;padding:2rem;box-shadow:0 1px 3px rgb(0 0 0/.06),0 8px 24px rgb(0 0 0/.04)}
 .brand{display:flex;align-items:center;gap:.5rem;margin-bottom:1.5rem;color:var(--muted);font-size:.8rem;font-weight:600;letter-spacing:.08em;text-transform:uppercase}
 .brand img{width:28px;height:28px}
+@media (prefers-color-scheme:dark){.brand img{filter:invert(1)}}
 h1{margin:0 0 .35rem;font-size:1.35rem;line-height:1.3;font-weight:650}
 .from{margin:0 0 1.25rem;color:var(--muted);font-size:.85rem}
 .from strong{color:var(--fg);font-weight:600}
