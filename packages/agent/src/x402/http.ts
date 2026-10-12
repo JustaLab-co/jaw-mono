@@ -641,20 +641,6 @@ export async function probe(
   };
 }
 
-/**
- * The option an owner could pay once from the account: `exact` only, on
- * `network`, at most `maxAmount`, cheapest first. An empty policy keeps the
- * structural checks in `checkPolicy` and drops every cap.
- */
-export function chooseOneOff(
-  challenge: Challenge,
-  constraints: { network: string; maxAmount?: string }
-): X402PaymentRequirement | undefined {
-  const exact = challenge.accepts.filter((option) => option.scheme === 'exact');
-  const selection = selectRequirement(exact, constraints, { host: hostOf(challenge.resource) });
-  return 'requirement' in selection ? selection.requirement : undefined;
-}
-
 /** What a resend needs, from a signed payload: the amounts are the ones `accepted` names. */
 export function toSignedAuthorization(resource: string, payload: X402PaymentPayload): SignedAuthorization {
   const { accepted } = payload;
