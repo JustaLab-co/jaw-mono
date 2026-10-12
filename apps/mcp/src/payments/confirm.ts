@@ -1,11 +1,14 @@
 import { usdcForNetwork, within, X402_UPTO_PROXY_ADDRESS, type ChainClients, type UsdcAsset } from '@jaw.id/agent';
 import {
+  BlockNotFoundError,
   decodeEventLog,
   decodeFunctionData,
   isAddressEqual,
   parseAbi,
+  withRetry,
   type Address,
   type Hex,
+  type PublicClient,
   type Transaction,
   type TransactionReceipt,
 } from 'viem';
@@ -134,13 +137,21 @@ async function settledInBundle(
   if (before || !after) return undefined;
   const amount = paidBy(receipt, attempt, token.address);
   if (amount === undefined) return undefined;
-  const block = await client.getBlock({ blockNumber: receipt.blockNumber });
+  const block = await blockAt(client, receipt.blockNumber);
   // A reorg after the reads above swaps the block at this height.
   if (!sameHash(block.hash, receipt.blockHash)) return undefined;
   return { txHash: receipt.transactionHash, blockTime: new Date(Number(block.timestamp) * 1000), amount };
 }
 
 const sameHash = (a: Hex, b: Hex) => a.toLowerCase() === b.toLowerCase();
+
+// The RPC balances across nodes, and the one asked next may not have the receipt's block yet.
+const blockAt = (client: PublicClient, blockNumber: bigint) =>
+  withRetry(() => client.getBlock({ blockNumber }), {
+    delay: 500,
+    retryCount: 10,
+    shouldRetry: ({ error }) => error instanceof BlockNotFoundError,
+  });
 
 export async function confirmByReceipt(
   attempt: Attempt,
@@ -162,7 +173,7 @@ export async function confirmByReceipt(
       const settled = settledByProxy(await client.getTransaction({ hash: txHash }), attempt, token.address);
       if (settled !== amount) return undefined;
     }
-    const block = await client.getBlock({ blockNumber: receipt.blockNumber });
+    const block = await blockAt(client, receipt.blockNumber);
     const blockTime = new Date(Number(block.timestamp) * 1000);
     return { txHash, blockTime, amount };
   };

@@ -4,6 +4,7 @@ import type { AddressInfo } from 'node:net';
 import type { ChainClients, GrantRequest, TopUpExecutor } from '@jaw.id/agent';
 import { and, eq, sql } from 'drizzle-orm';
 import {
+  BlockNotFoundError,
   decodeFunctionData,
   encodeAbiParameters,
   encodeEventTopics,
@@ -65,6 +66,8 @@ const receipts = new Map<Hex, { from: Address; nonce: Hex }>();
 /** Mined, but not yet readable when the seller answers. */
 const minedLater = new Map<Hex, { from: Address; nonce: Hex }>();
 const laterTasks: (() => Promise<void>)[] = [];
+/** Block reads that land on a node without the receipt's block yet. */
+let blocksBehind = 0;
 /** Nonces the token has consumed: the seller settled them on chain. */
 const used = new Set<string>();
 let dropNextLost = true;
@@ -178,7 +181,13 @@ const node = {
       ],
     };
   },
-  getBlock: async () => ({ timestamp: 1_790_000_000n }),
+  getBlock: async ({ blockNumber }: { blockNumber?: bigint } = {}) => {
+    if (blockNumber !== undefined && blocksBehind > 0) {
+      blocksBehind--;
+      throw new BlockNotFoundError({ blockNumber });
+    }
+    return { timestamp: 1_790_000_000n };
+  },
 };
 const clients: ChainClients = { publicClient: () => node as unknown as PublicClient };
 
@@ -213,6 +222,7 @@ beforeEach(() => {
   onProbe.clear();
   onProof.clear();
   laterTasks.length = 0;
+  blocksBehind = 0;
 });
 
 async function connected(perDay?: string) {
@@ -748,6 +758,14 @@ describe('jaw_pay_and_fetch', () => {
       amount: '5000',
       txHash: paid.structuredContent?.payment?.txHash,
     });
+  });
+
+  it('settles in the call when the node asked for the block is behind the one that had the receipt', async () => {
+    const { t } = await connected('1');
+    balances.set(t.sessionAddress.toLowerCase(), 1_000_000n);
+    blocksBehind = 2;
+    const paid = await pay(t, { url: url('/exact'), idempotencyKey: 'behind-1' }, deps());
+    expect(paid.structuredContent).toMatchObject({ kind: 'paid', state: 'settled' });
   });
 
   it('leaves a payment signed for the reconciler when its receipt never shows up', async () => {
