@@ -2,7 +2,7 @@ import { createServer } from 'node:http';
 import type { AddressInfo } from 'node:net';
 import { afterAll, describe, expect, it } from 'vitest';
 import type { lookup } from 'node:dns';
-import { isPrivate, publicOnly, resolvesPublic, safeFetch } from './safe-fetch';
+import { isPrivate, publicOnly, resolvesPublic, safeFetch, watchCuts } from './safe-fetch';
 
 const server = createServer((req, res) => {
   if (req.url === '/redirect') return void res.writeHead(302, { location: 'http://169.254.169.254/' }).end();
@@ -46,6 +46,14 @@ describe('safeFetch', () => {
     expect(res.status).toBe(200);
     expect(res.headers.get('content-length')).toBeNull();
     expect((await res.text()).length).toBe(1_000_000);
+  });
+
+  it('given a fetch watched for cuts, then it reports the body over the cap as cut and a whole body as not', async () => {
+    const watched = watchCuts(guarded);
+    await watched.fetch(`http://127.0.0.1:${port}/large`);
+    expect(watched.lastCut()).toBe(true);
+    await watched.fetch(`http://127.0.0.1:${port}/exact`);
+    expect(watched.lastCut()).toBe(false);
   });
 
   it('never follows a redirect', async () => {

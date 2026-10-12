@@ -20,7 +20,7 @@ import { currentGrant, type Grant } from '@/grants/store';
 import { entriesFor, pulledUnderOtherGrants } from '@/payments/store';
 import { publicClientFor } from '@/lib/chain';
 import { fenceText, reply } from '@/lib/fence';
-import { safeFetch } from '@/lib/safe-fetch';
+import { safeFetch, watchCuts } from '@/lib/safe-fetch';
 
 const caip2 = (chainId: number) => `eip155:${chainId}`;
 const caip19 = (network: string, token: string) => `${network}/erc20:${token}`;
@@ -170,6 +170,10 @@ const quoteOutput = z.object({
   scheme: z.string().optional(),
   payTo: z.string().optional(),
   refusal: z.object({ code: z.string(), reason: z.string() }).optional(),
+  bodyTruncated: z
+    .literal(true)
+    .optional()
+    .describe('Present when the free body was over 1 MB and was cut there before it was read'),
   readiness,
   summary: z.string(),
 });
@@ -182,11 +186,8 @@ async function quote(t: Tenant, url: string) {
     pay: () => Promise.reject(new Error('a quote never pays')),
   };
   const base = { url, readiness: await readinessFor(t) };
-  const outcome = await payAndFetch(url, payer, {
-    dryRun: true,
-    network,
-    fetch: safeFetch(config().insecureFetchHosts),
-  }).catch(() => {
+  const cuts = watchCuts(safeFetch(config().insecureFetchHosts));
+  const outcome = await payAndFetch(url, payer, { dryRun: true, network, fetch: cuts.fetch }).catch(() => {
     // One answer for every failure: telling a refused address from a failed lookup
     // would tell a client which internal names resolve.
     return { kind: 'unreachable' as const, code: 'unreachable', reason: 'The URL could not be fetched.' };
@@ -228,8 +229,14 @@ async function quote(t: Tenant, url: string) {
       extra: [fenced(new URL(url).host, outcome.refusal.reason)],
     };
   }
+  const cut = cuts.lastCut();
   return {
-    out: quoteOutput.parse({ ...base, kind: 'free', summary: `Free: answered ${outcome.status} without a payment.` }),
+    out: quoteOutput.parse({
+      ...base,
+      kind: 'free',
+      ...(cut && { bodyTruncated: true }),
+      summary: `Free: answered ${outcome.status} without a payment.${cut ? ' The body was cut at 1 MB.' : ''}`,
+    }),
     extra: [fenced(new URL(url).host, typeof outcome.body === 'string' ? outcome.body : JSON.stringify(outcome.body))],
   };
 }
