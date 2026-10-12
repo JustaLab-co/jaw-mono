@@ -20,6 +20,9 @@ services:
     build:
       context: ${REPO}
       dockerfile: apps/mcp/Dockerfile
+      # doctor.sh compares it with the run's commit.
+      labels:
+        org.opencontainers.image.revision: ${HEAD_SHA:-}
     environment:
       DATABASE_URL: postgres://jaw:jaw@postgres:5432/jaw_mcp
       JAW_MCP_SEALING_KEYS: ${JAW_MCP_SEALING_KEYS:-}

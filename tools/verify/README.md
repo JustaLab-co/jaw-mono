@@ -48,7 +48,7 @@ The mcp image builds from `work/src`, the clean worktree of HEAD, when `up.sh` m
 $S/doctor.sh "$RUN"            # add --live before using the real session
 ```
 
-It checks that the seller pid is alive and owns the port, both binaries run and the baseline is 0.4.0, and the working tree is the one that was built. It warns when `git diff HEAD` changed since `up.sh`; results then say nothing about the current tree. When the hosted stack is up it also checks that Postgres answers and that the mcp container answers `GET /api/health` with 200 (config valid, database reachable), saving the body to `evidence/mcp-health.json`. With `--live` it also requires a real session in `~/.jaw` and saves `jaw x402 status` to `evidence/live-status.json`.
+It checks that the seller pid is alive and owns the port, both binaries run and the baseline is 0.4.0, and the working tree is the one that was built. It warns when `git diff HEAD` changed since `up.sh`; results then say nothing about the current tree. It reads the payer's balance with `jaw x402 status` and warns under 1.2 USDC, the amount local `--pay` drives need. When the hosted stack is up it also checks that Postgres answers, that the mcp image carries the run's commit in its `org.opencontainers.image.revision` label (it fails on another commit and warns when the label is missing), and that the mcp container answers `GET /api/health` with 200 (config valid, database reachable), saving the body to `evidence/mcp-health.json`. Every check runs; the exit code is 1 when any of them failed, and a warning never fails the run. With `--live` it also requires a real session in `~/.jaw` and saves `jaw x402 status` to `evidence/live-status.json`.
 
 ## Drive
 
@@ -112,7 +112,7 @@ Runs are isolated by port, home and compose project, so several can run side by 
 
 ## Shared image per round
 
-Build the `apps/mcp` image once and let every lane reuse it: `docker build -f apps/mcp/Dockerfile -t jaw-verify-mcp:<sha> .` from the checkout, then `JAW_VERIFY_MCP_IMAGE=jaw-verify-mcp:<sha> $S/hosted-up.sh "$RUN"` in each lane. Pair it with `JAW_VERIFY_TGZ` for the CLI. Doctor's build check covers the CLI only, so name the image tag in every report.
+Build the `apps/mcp` image once and let every lane reuse it: `docker build -f apps/mcp/Dockerfile --label org.opencontainers.image.revision=$(git rev-parse HEAD) -t jaw-verify-mcp:<sha> .` from the checkout, then `JAW_VERIFY_MCP_IMAGE=jaw-verify-mcp:<sha> $S/hosted-up.sh "$RUN"` in each lane. Pair it with `JAW_VERIFY_TGZ` for the CLI. Doctor fails when the label names another commit than the run's, and warns when it is missing.
 
 ## Waiting on a long command
 
