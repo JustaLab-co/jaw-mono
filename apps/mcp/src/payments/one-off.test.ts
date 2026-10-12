@@ -11,7 +11,15 @@ import {
 } from '@jaw.id/agent';
 import { eq, sql } from 'drizzle-orm';
 import type { PgUpdateSetSource } from 'drizzle-orm/pg-core';
-import { keccak256, type Address, type Hex, type PublicClient } from 'viem';
+import {
+  encodeAbiParameters,
+  encodeEventTopics,
+  keccak256,
+  parseAbi,
+  type Address,
+  type Hex,
+  type PublicClient,
+} from 'viem';
 import { beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { decideFromPage, outcomeResponse, readForPage } from '@/approvals/page-api';
 import { findById, recordDecision, sellerRequestOf } from '@/approvals/store';
@@ -109,6 +117,28 @@ const node = {
   },
 };
 const clients: ChainClients = { publicClient: () => node as unknown as PublicClient };
+
+const AUTHORIZATION_USED = parseAbi(['event AuthorizationUsed(address indexed authorizer, bytes32 indexed nonce)']);
+/** A node that has mined every proof the seller received, and the tasks left for after the answer. */
+function mined() {
+  const tasks: (() => Promise<void>)[] = [];
+  const receipt = async () => {
+    const { from, nonce } = paidRequests().at(-1)!.proof!.payload.authorization;
+    const topics = encodeEventTopics({
+      abi: AUTHORIZATION_USED,
+      eventName: 'AuthorizationUsed',
+      args: { authorizer: from, nonce },
+    });
+    return { status: 'success', blockNumber: 7n, logs: [{ address: USDC, topics, data: encodeAbiParameters([], []) }] };
+  };
+  const chain = { ...node, waitForTransactionReceipt: receipt, getBlock: async () => ({ timestamp: 1_790_000_000n }) };
+  const confirm = {
+    clients: { publicClient: () => chain as unknown as PublicClient },
+    later: (task: () => Promise<void>) => void tasks.push(task),
+    inCall: false,
+  };
+  return { tasks, confirm };
+}
 const deps = (): PayDeps => ({
   clients,
   floatTarget: 0n,
@@ -364,6 +394,36 @@ describe('a one-off payment after budget_exhausted', () => {
 
     expect(result?.structuredContent).toMatchObject({ kind: 'paid' });
     expect(paidRequests()).toHaveLength(1);
+  });
+
+  it('given a one-off paid, when its receipt is read after the answer, then the row settles', async () => {
+    const { approval } = await stranded('/settles');
+    await lapse(approval.id);
+    const { tasks, confirm } = mined();
+
+    const result = await oneOffStatus(approval, { ...oneOffDeps(), confirm });
+
+    expect(result?.structuredContent).toMatchObject({ kind: 'paid', state: 'signed' });
+    await Promise.all(tasks.map((task) => task()));
+    expect(await rowFor(approval.id)).toMatchObject({ state: 'settled', blockTime: new Date(1_790_000_000_000) });
+  });
+
+  it('given a one-off whose answer was lost, when its status resends it, then the row settles after the answer', async () => {
+    dropNextPaid = new Set(['/resettles']);
+    const { approval } = await stranded('/resettles');
+    await lapse(approval.id);
+    expect(await oneOffStatus(approval, oneOffDeps())).toMatchObject({
+      structuredContent: { refusal: { code: 'no_response' } },
+    });
+    await lapse(approval.id);
+    const { tasks, confirm } = mined();
+
+    expect(await oneOffStatus(approval, { ...oneOffDeps(), confirm })).toMatchObject({
+      structuredContent: { kind: 'paid', state: 'signed' },
+    });
+    await Promise.all(tasks.map((task) => task()));
+    expect((await rowFor(approval.id)).state).toBe('settled');
+    expect(paidRequests()).toHaveLength(2);
   });
 
   it.each([

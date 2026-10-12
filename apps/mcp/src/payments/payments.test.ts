@@ -792,6 +792,7 @@ describe('jaw_pay_and_fetch', () => {
     blocksBehind = 2;
     const paid = await pay(t, { url: url('/exact'), idempotencyKey: 'behind-1' }, deps());
     expect(paid.structuredContent).toMatchObject({ kind: 'paid', state: 'settled' });
+    expect(laterTasks).toEqual([]);
   });
 
   it('does not ask again for a block that failed for any other reason', async () => {

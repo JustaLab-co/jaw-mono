@@ -3,8 +3,14 @@ import { runMigrations } from './db/migrate';
 import { log } from './lib/edge';
 import { purge, reconcile } from './reconciler/run';
 
-/** Every minute unless set: a cron secret alone does not mean a cron calls the route. 0 turns it off. */
-export const reconcileSeconds = (value: string | undefined) => (value ? Number(value) : 60);
+/** Every minute unless set, 0 turns it off. A value that is not seconds keeps the default. */
+export function reconcileSeconds(value: string | undefined): number {
+  if (!value) return 60;
+  const seconds = Number(value);
+  if (Number.isFinite(seconds) && seconds >= 0) return seconds;
+  log('warn', { msg: `JAW_MCP_RECONCILE_EVERY=${value} is not a number of seconds, reconciling every 60` });
+  return 60;
+}
 
 function reconcileEvery(seconds: number) {
   let running = false;

@@ -8,4 +8,9 @@ describe('reconcileSeconds', () => {
     expect(reconcileSeconds('30')).toBe(30);
     expect(reconcileSeconds('0')).toBe(0);
   });
+
+  it('keeps the default for a value that is not seconds', () => {
+    expect(reconcileSeconds('1m')).toBe(60);
+    expect(reconcileSeconds('-5')).toBe(60);
+  });
 });

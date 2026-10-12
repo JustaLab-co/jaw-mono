@@ -341,7 +341,7 @@ export async function concludeSend(
 
 /** A receipt the call could not wait for, read again once the answer is out. The reconciler covers what this misses. */
 function settleLater(row: PaymentRow, o: Outcome, signedAt: Date, { clients, later }: Confirm) {
-  if (row.state !== 'signed' || row.kind !== 'paid' || !row.txHash) return;
+  if (row.state !== 'signed') return;
   const task = async () => {
     const settled = await settledBy(o, signedAt, clients, LATE_CONFIRM_MS);
     if (settled) await settle(row.id, settled);
