@@ -7,6 +7,7 @@ import { connections, grants } from '@/db/schema';
 import { useTestDb } from '@/db/test-db';
 import type { GrantRequest } from '@/grants/permission';
 import { config } from './config';
+import { SESSIONS_PER_CLIENT, SESSIONS_PER_IP } from './interaction';
 import type { OpenWallet } from './relay';
 import { open, type Sealed } from './seal';
 import {
@@ -37,6 +38,72 @@ const keptKey = (row: typeof connections.$inferSelect) =>
 
 const stateOf = async (browser: Browser, uid: string) =>
   (await (await browser.get(`${ISSUER}/interaction/${uid}/status`)).json()) as { state: string; reason?: string };
+
+/** A wallet whose sessions wait for the owner until `release`, counting how many were opened. */
+function heldWallets() {
+  let opened = 0;
+  let release!: () => void;
+  const released = new Promise<never>((_, reject) => (release = () => reject(new Error('the wallet session ended'))));
+  released.catch(() => undefined);
+  const openWallet: OpenWallet = async () => {
+    opened++;
+    return { url: `http://keys.test/cli-bridge?session=h${opened}`, run: () => released };
+  };
+  return { openWallet, opened: () => opened, release: async () => (release(), await new Promise(setImmediate)) };
+}
+
+describe('opening the wallet session', () => {
+  it('given the page loads, then no wallet session is open until the owner clicks Open JAW', async () => {
+    const held = heldWallets();
+    setWallet({ openWallet: held.openWallet });
+    const browser = new Browser();
+    const start = await startAuthorization(browser, {}, { click: false });
+    await browser.get(`${ISSUER}/interaction/${start.uid}`);
+    expect(held.opened()).toBe(0);
+    const clicked = await browser.post(`${ISSUER}/interaction/${start.uid}/open`);
+    expect(await clicked.json()).toEqual({ url: 'http://keys.test/cli-bridge?session=h1' });
+    expect(held.opened()).toBe(1);
+    await held.release();
+  });
+
+  it('given a browser without the interaction cookie, when it asks to open the session, then it is refused and nothing opens', async () => {
+    const held = heldWallets();
+    setWallet({ openWallet: held.openWallet });
+    const start = await startAuthorization(new Browser(), { scope: 'wallet:read' });
+    const before = held.opened();
+    const res = await new Browser().post(`${ISSUER}/interaction/${start.uid}/open`);
+    expect(res.status).toBe(400);
+    expect(held.opened()).toBe(before);
+    await held.release();
+  });
+
+  it('given one address holds its share of sessions, then another authorization from it is refused, and one from elsewhere opens', async () => {
+    const held = heldWallets();
+    setWallet({ openWallet: held.openWallet });
+    const from = (ip: string) => ({ headers: { 'x-real-ip': ip } });
+    for (let i = 0; i < SESSIONS_PER_IP; i++) {
+      expect((await startAuthorization(new Browser(), {}, from('198.51.100.7'))).opened?.status).toBe(200);
+    }
+    const refused = (await startAuthorization(new Browser(), {}, from('198.51.100.7'))).opened;
+    expect(refused?.status).toBe(429);
+    expect((await startAuthorization(new Browser(), {}, from('198.51.100.8'))).opened?.status).toBe(200);
+    expect(held.opened()).toBe(SESSIONS_PER_IP + 1);
+    await held.release();
+    expect((await startAuthorization(new Browser(), {}, from('198.51.100.7'))).opened?.status).toBe(200);
+  });
+
+  it('given one client holds its share of sessions, then another authorization for it is refused whatever the address', async () => {
+    const held = heldWallets();
+    setWallet({ openWallet: held.openWallet });
+    for (let i = 0; i < SESSIONS_PER_CLIENT; i++) {
+      await startAuthorization(new Browser(), {}, { headers: { 'x-real-ip': `203.0.113.${i}` } });
+    }
+    const refused = (await startAuthorization(new Browser(), {}, { headers: { 'x-real-ip': '192.0.2.1' } })).opened;
+    expect(refused?.status).toBe(429);
+    expect(held.opened()).toBe(SESSIONS_PER_CLIENT);
+    await held.release();
+  });
+});
 
 describe('connecting through the owner wallet', () => {
   it('given wallet:read alone, then the wallet is asked to sign in, never for a budget, and the connection is made', async () => {
@@ -105,7 +172,7 @@ describe('connecting through the owner wallet', () => {
     expect(res.status).toBe(400);
   });
 
-  it('given a failed approval, when the page reloads and the owner approves, then the budget names the same spender', async () => {
+  it('given a failed approval, when the owner clicks again and approves, then the budget names the same spender', async () => {
     const asked: { method: string; params: unknown[] }[] = [];
     setWallet({
       openWallet: fakeWallet(walletAnswers(owner()), asked),
@@ -115,7 +182,7 @@ describe('connecting through the owner wallet', () => {
     const start = await startAuthorization(browser);
     await walletsSettled();
     setWallet({ readPermission: approvedOnChain });
-    await browser.get(`${ISSUER}/interaction/${start.uid}`);
+    await browser.post(`${ISSUER}/interaction/${start.uid}/open`);
     await walletsSettled();
     const spenders = asked
       .filter((a) => a.method === 'wallet_grantPermissions')
@@ -163,7 +230,7 @@ describe('connecting through the owner wallet', () => {
     expect(await stateOf(browser, start.uid!)).toEqual({ state: 'failed', reason: 'turned down in the wallet' });
   });
 
-  it('given the wallet has not answered yet, when the page reloads, then it shows the same link and opens no second session', async () => {
+  it('given the wallet has not answered yet, when the page reloads and the owner clicks again, then it hands out the same link and opens no second session', async () => {
     let opened = 0;
     const waiting: OpenWallet = async () => {
       opened++;
@@ -173,8 +240,9 @@ describe('connecting through the owner wallet', () => {
     const browser = new Browser();
     const start = await startAuthorization(browser);
     const again = await (await browser.get(`${ISSUER}/interaction/${start.uid}`)).text();
+    const clicked = await (await browser.post(`${ISSUER}/interaction/${start.uid}/open`)).json();
     expect(opened).toBe(1);
-    expect(again).toContain('session=s1');
+    expect(clicked).toEqual({ url: 'http://keys.test/cli-bridge?session=s1' });
     // The ticket and the code come from the interaction, so a reload on another replica shows the same ones.
     expect(again).toContain(`"ticket":"${start.ticket}"`);
     expect(await stateOf(browser, start.uid!)).toEqual({ state: 'waiting' });

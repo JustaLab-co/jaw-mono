@@ -34,8 +34,8 @@ await new Promise((r) => relay.once('listening', r));
 setTestEnv();
 process.env.JAW_RELAY_URL = `ws://127.0.0.1:${(relay.address() as AddressInfo).port}`;
 process.env.JAW_MCP_API_KEY = 'server-secret-key';
-const { openRelay: open } = await import('./relay');
-const openRelay = (chainId: number, ms = 30_000) => open(chainId, new Date(Date.now() + ms));
+const { connectRelay, ownerRelay, SESSION_LIMITS, WalletBusy } = await import('./relay');
+const openRelay = (chainId: number, ms = 30_000) => ownerRelay(chainId, new Date(Date.now() + ms));
 afterAll(() => relay.close());
 
 type Answer = (method: string, params: unknown) => { success: true; data: unknown } | { success: false; error: object };
@@ -128,5 +128,16 @@ describe('a wallet session over the relay', () => {
     await expect(wallet.run((ask) => ask('eth_requestAccounts', []))).rejects.toThrow(
       'the wallet page refused: No API key'
     );
+  });
+});
+
+describe('given authorizations hold every session of their pool', () => {
+  it("when the owner's tools ask for a session, then theirs still opens, and a further authorization is busy", async () => {
+    const until = new Date(Date.now() + 1_000);
+    const held = await Promise.all(Array.from({ length: SESSION_LIMITS.connect }, () => connectRelay(84532, until)));
+    expect(held).toHaveLength(SESSION_LIMITS.connect);
+
+    await expect(connectRelay(84532, until)).rejects.toBeInstanceOf(WalletBusy);
+    expect((await ownerRelay(84532, until)).url).toMatch(/cli-bridge/);
   });
 });

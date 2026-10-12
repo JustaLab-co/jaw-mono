@@ -6,7 +6,7 @@ import type { GrantRequest, ReadPermission } from '@/grants/permission';
 import type { SignedPayload } from '@/lib/chain';
 import { verifyBearer, type Tenant } from './auth';
 import type { DisconnectDeps, Sent } from './disconnect';
-import { abort, complete, hop, status, type InteractionDeps } from './interaction';
+import { abort, complete, hop, openSession, status, type InteractionDeps } from './interaction';
 import { oauth } from './provider';
 import type { Ask, OpenWallet } from './relay';
 
@@ -126,8 +126,12 @@ export class Browser {
   /** The wallet this browser's owner approves in; the one set with setWallet when absent. */
   wallet?: InteractionDeps;
 
-  async get(url: string): Promise<Response> {
-    return this.send(new URL(url), {});
+  async get(url: string, headers: Record<string, string> = {}): Promise<Response> {
+    return this.send(new URL(url), { headers });
+  }
+
+  async post(url: string, headers: Record<string, string> = {}): Promise<Response> {
+    return this.send(new URL(url), { method: 'POST', headers });
   }
 
   private async send(url: URL, init: RequestInit): Promise<Response> {
@@ -160,7 +164,8 @@ export class Browser {
 async function route(req: Request, deps: InteractionDeps): Promise<Response> {
   const [, first, uid, action] = new URL(req.url).pathname.split('/');
   if (first !== 'interaction') return oauth(req);
-  if (action === undefined) return hop(req, uid, deps);
+  if (action === undefined) return hop(req, uid);
+  if (action === 'open') return openSession(req, uid, deps);
   const handler = { status, complete, abort }[action];
   if (!handler) throw new Error(`no route for ${req.url}`);
   return handler(req, uid);
@@ -180,7 +185,12 @@ export function pkcePair() {
   return { verifier, challenge: createHash('sha256').update(verifier).digest('base64url') };
 }
 
-export async function startAuthorization(browser: Browser, a: Authorize = {}) {
+/** An authorization through to its page, where the owner clicks "Open JAW" unless `click` is false. */
+export async function startAuthorization(
+  browser: Browser,
+  a: Authorize = {},
+  { headers = {}, click = true }: { headers?: Record<string, string>; click?: boolean } = {}
+) {
   const { verifier, challenge } = pkcePair();
   const params = new URLSearchParams({
     client_id: a.clientId ?? 'jaw-cli',
@@ -200,7 +210,8 @@ export async function startAuthorization(browser: Browser, a: Authorize = {}) {
     const uid = url.match(/\/interaction\/([^/?]+)$/)?.[1];
     if (uid) {
       const html = await (await browser.get(url)).text();
-      return { verifier, uid, ticket: html.match(/"ticket":"([^"]+)"/)?.[1], html };
+      const opened = click ? await browser.post(`${url}/open`, headers) : undefined;
+      return { verifier, uid, ticket: html.match(/"ticket":"([^"]+)"/)?.[1], html, opened };
     }
     if (url.startsWith(a.redirectUri ?? REDIRECT)) return { verifier, redirected: new URL(url) };
   }

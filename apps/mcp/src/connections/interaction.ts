@@ -8,11 +8,11 @@ import { getDb } from '@/db/client';
 import { connections } from '@/db/schema';
 import { budgetGrant, checkGranted, readOnChain, recordGrant, type ReadPermission } from '@/grants/permission';
 import { verifyOnChain, type VerifySignature } from '@/lib/chain';
-import { errorLabel, log } from '@/lib/edge';
+import { errorLabel, ipKey, log } from '@/lib/edge';
 import { bridge } from './bridge';
 import { config } from './config';
 import { provider } from './provider';
-import { openRelay, type Ask, type OpenWallet } from './relay';
+import { connectRelay, type Ask, type OpenWallet } from './relay';
 import { activate, armTicket, CONNECTION_TTL_MS, findClaimable, pendingFor } from './rows';
 import { CONNECTION_SCOPES, FIRST_PARTY_CLIENTS, spends, type ConnectionScope } from './scopes';
 import { seal } from './seal';
@@ -30,7 +30,7 @@ export interface InteractionDeps {
   readPermission: ReadPermission;
 }
 
-const DEFAULTS: InteractionDeps = { openWallet: openRelay, verify: verifyOnChain, readPermission: readOnChain };
+const DEFAULTS: InteractionDeps = { openWallet: connectRelay, verify: verifyOnChain, readPermission: readOnChain };
 
 interface Asked {
   uid: string;
@@ -161,12 +161,31 @@ export const reasonOf = (err: unknown) => {
   return SHOWN.has(err.message) ? err.message : 'the wallet did not approve';
 };
 
-/** The owner's approval in flight on this replica, so a reload here shows the same link. */
+/** The owner's approval in flight on this replica, so a second click here hands out the same link. */
 interface Job {
   walletUrl: string;
   failed?: string;
 }
 const jobs = new Map<string, Job>();
+
+/**
+ * Sessions one address, or one client, may hold open on this replica at once, so
+ * a few callers starting authorizations cannot fill the pool every owner draws on.
+ */
+export const SESSIONS_PER_IP = 5;
+export const SESSIONS_PER_CLIENT = 50;
+const holding = new Map<string, number>();
+const holds = (key: string) => holding.get(key) ?? 0;
+
+function take(keys: string[]) {
+  for (const key of keys) holding.set(key, holds(key) + 1);
+  return () => {
+    for (const key of keys) {
+      if (holds(key) > 1) holding.set(key, holds(key) - 1);
+      else holding.delete(key);
+    }
+  };
+}
 
 /** The pending connection of this interaction for `account`, with its session key stored. */
 async function pending(a: Asked, account: Address) {
@@ -188,9 +207,10 @@ async function pending(a: Asked, account: Address) {
   return { id: row.id, spender: row.sessionAddress as Address };
 }
 
-async function start(a: Asked, deps: InteractionDeps): Promise<Job> {
+async function start(a: Asked, deps: InteractionDeps, keys: string[]): Promise<Job> {
   const wallet = await deps.openWallet(a.chainId, new Date(a.expiresAt.getTime() - COMPLETE_WITHIN_MS));
   const job: Job = { walletUrl: wallet.url };
+  const release = take(keys);
   void wallet
     .run(async (ask) => {
       const account = await signIn(a, ask, deps);
@@ -204,25 +224,49 @@ async function start(a: Asked, deps: InteractionDeps): Promise<Job> {
     .catch((err: unknown) => {
       job.failed = reasonOf(err);
       log('warn', { msg: 'connection not approved', error: errorLabel(err) });
-    });
+    })
+    .finally(release);
   return job;
 }
 
-export async function hop(_req: Request, uid: string, deps = DEFAULTS): Promise<Response> {
+export async function hop(_req: Request, uid: string): Promise<Response> {
   const asked = await loadInteraction(uid);
   if (!asked) return page(410, 'This request expired. Start again from your app.');
-  let job = jobs.get(uid);
-  if (!job || job.failed) {
-    try {
-      job = await start(asked, deps);
-    } catch (err) {
-      log('error', { msg: 'wallet unreachable', error: errorLabel(err) });
-      return page(503, 'The wallet cannot be reached right now. Reload this page to try again.');
+  return page(200, '', asked);
+}
+
+/**
+ * Opens the wallet session when the owner clicks "Open JAW", from the browser that
+ * started the authorization: it needs the interaction cookie, which a cross-site
+ * request does not carry.
+ */
+export async function openSession(req: Request, uid: string, deps = DEFAULTS): Promise<Response> {
+  const ip = await ipKey(req);
+  const p = provider();
+  return bridge(req, async (nodeReq, nodeRes) => {
+    const interaction = await p.interactionDetails(nodeReq, nodeRes).catch(() => undefined);
+    if (!interaction || interaction.uid !== uid) return fail(nodeRes, 400, 'interaction_mismatch');
+    const asked = await loadInteraction(uid);
+    if (!asked) return fail(nodeRes, 410, 'expired');
+    let job = jobs.get(uid);
+    if (!job || job.failed) {
+      const client = `client:${asked.clientHost ?? asked.clientId}`;
+      if (holds(client) >= SESSIONS_PER_CLIENT || (ip && holds(ip) >= SESSIONS_PER_IP)) {
+        return fail(nodeRes, 429, 'too_many_open');
+      }
+      try {
+        job = await start(asked, deps, ip ? [client, ip] : [client]);
+      } catch (err) {
+        log('error', { msg: 'wallet unreachable', error: errorLabel(err) });
+        return fail(nodeRes, 503, 'wallet_unreachable');
+      }
+      jobs.set(uid, job);
+      setTimeout(() => jobs.delete(uid), asked.expiresAt.getTime() - Date.now()).unref();
     }
-    jobs.set(uid, job);
-    setTimeout(() => jobs.delete(uid), asked.expiresAt.getTime() - Date.now()).unref();
-  }
-  return page(200, '', { asked, job });
+    nodeRes.setHeader('content-type', 'application/json');
+    nodeRes.setHeader('cache-control', 'no-store');
+    nodeRes.end(JSON.stringify({ url: job.walletUrl }));
+  });
 }
 
 /** Where the owner's approval stands. A failure is only known to the replica that ran it. */
@@ -243,8 +287,8 @@ export async function status(_req: Request, uid: string): Promise<Response> {
 const escape = (text: string) =>
   text.replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c]!);
 
-function page(status: number, error: string, open?: { asked: Asked; job: Job }): Response {
-  const body = open ? connectBody(open.asked, open.job) : `<p>${escape(error)}</p>`;
+function page(status: number, error: string, asked?: Asked): Response {
+  const body = asked ? connectBody(asked) : `<p>${escape(error)}</p>`;
   const html = `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Connect to JAW</title><style>body{font:16px/1.5 system-ui,sans-serif;max-width:30rem;margin:4rem auto;padding:0 1rem}button{font:inherit;padding:.6rem 1.2rem;cursor:pointer}.code{font:700 1.6rem/1 ui-monospace,monospace;letter-spacing:.2em}</style></head><body>${body}</body></html>`;
   return new Response(html, {
     status,
@@ -259,13 +303,13 @@ function page(status: number, error: string, open?: { asked: Asked; job: Job }):
   });
 }
 
-function connectBody(a: Asked, job: Job): string {
+function connectBody(a: Asked): string {
   const budget = Number(config().dailyBudget) / 1e6;
   const what = spends(a.scopes)
     ? `Your wallet will ask you to sign in, then to approve a budget of up to ${budget} USDC a day for it. Payments within it need nothing more from you.`
     : 'Your wallet will ask you to sign in.';
   // JSON in a script: "<" escaped so nothing in it can close the tag.
-  const data = JSON.stringify({ url: job.walletUrl, uid: a.uid, ticket: ticketOf(a.uid) }).replace(/</g, '\\u003c');
+  const data = JSON.stringify({ uid: a.uid, ticket: ticketOf(a.uid) }).replace(/</g, '\\u003c');
   const from = a.clientHost
     ? `<p>From <strong>${escape(a.clientHost)}</strong>. That domain is checked; the name is the app's own.</p>`
     : '';
@@ -279,8 +323,25 @@ ${from}
 <p><a href="/interaction/${a.uid}/abort">Cancel</a></p>
 <script>
 const d = ${data};
-document.getElementById('open').onclick = () => window.open(d.url, 'jaw', 'popup,width=440,height=760');
 const state = document.getElementById('state');
+const refused = {
+  429: 'Too many approvals are open from here or for this app. Finish or cancel one, then try again.',
+  503: 'The wallet cannot be reached right now. Try again.',
+};
+// The popup opens on the click itself, which browsers allow, and gets the link once the session is up.
+document.getElementById('open').onclick = async () => {
+  const popup = window.open('', 'jaw', 'popup,width=440,height=760');
+  const r = await fetch('/interaction/' + d.uid + '/open', { method: 'POST' }).catch(() => undefined);
+  const url = r && r.ok ? (await r.json()).url : undefined;
+  if (!url) {
+    popup?.close();
+    state.textContent = (r && refused[r.status]) || 'This request expired. Start again from your app.';
+    return;
+  }
+  if (popup) return void (popup.location = url);
+  const link = Object.assign(document.createElement('a'), { href: url, target: '_blank', textContent: 'Open the wallet' });
+  state.replaceChildren(link);
+};
 const poll = async () => {
   const s = await fetch('/interaction/' + d.uid + '/status').then((r) => r.json()).catch(() => ({ state: 'waiting' }));
   if (s.state === 'approved') return location.assign('/interaction/' + d.uid + '/complete?ticket=' + d.ticket);

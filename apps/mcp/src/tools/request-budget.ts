@@ -6,7 +6,7 @@ import { z } from 'zod';
 import { chainClients } from '@/adapters/session-host';
 import { tenant, type Tenant } from '@/connections/auth';
 import { revokeReplaced, sessionSender, type DisconnectDeps } from '@/connections/disconnect';
-import { openRelay, WalletBusy, type OpenWallet, type Wallet } from '@/connections/relay';
+import { ownerRelay, WalletBusy, type OpenWallet, type Wallet } from '@/connections/relay';
 import { CONNECTION_TTL_MS, isLive } from '@/connections/rows';
 import { spends } from '@/connections/scopes';
 import { getDb } from '@/db/client';
@@ -31,7 +31,7 @@ export interface BudgetDeps extends Pick<DisconnectDeps, 'clients' | 'sender'> {
 }
 
 const DEFAULTS: BudgetDeps = {
-  openWallet: openRelay,
+  openWallet: ownerRelay,
   readPermission: readOnChain,
   clients: chainClients,
   sender: sessionSender,

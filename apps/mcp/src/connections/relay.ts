@@ -22,9 +22,12 @@ export interface Wallet {
 /** Opens a session that ends at `until`, answered or not. */
 export type OpenWallet = (chainId: number, until: Date) => Promise<Wallet>;
 
-/** Sessions one process holds open at once, each a socket waiting on an owner. */
-export const MAX_SESSIONS = 200;
-let sessions = 0;
+/**
+ * Sessions one process holds open at once, each a socket waiting on an owner.
+ * Authorizations and the owner's tool requests have pools of their own, so a
+ * flood of authorizations cannot take the slots budget and revoke requests need.
+ */
+export const SESSION_LIMITS = { connect: 150, owner: 50 };
 
 export class WalletBusy extends Error {
   constructor() {
@@ -33,6 +36,16 @@ export class WalletBusy extends Error {
 }
 
 type Message = Record<string, unknown>;
+
+interface Pool {
+  limit: number;
+  open: number;
+}
+const connectPool: Pool = { limit: SESSION_LIMITS.connect, open: 0 };
+const ownerPool: Pool = { limit: SESSION_LIMITS.owner, open: 0 };
+
+export const connectRelay: OpenWallet = (chainId, until) => openRelay(connectPool, chainId, until);
+export const ownerRelay: OpenWallet = (chainId, until) => openRelay(ownerPool, chainId, until);
 
 /**
  * A session on JAW's relay, the channel `jaw session setup` uses. The owner opens
@@ -46,8 +59,8 @@ type Message = Record<string, unknown>;
  * The socket is opened here, before the link is handed out, so the relay knows
  * this side is waiting when the page connects.
  */
-export const openRelay: OpenWallet = async (chainId, until) => {
-  if (sessions >= MAX_SESSIONS) throw new WalletBusy();
+async function openRelay(pool: Pool, chainId: number, until: Date): Promise<Wallet> {
+  if (pool.open >= pool.limit) throw new WalletBusy();
   const { keysOrigin, relayUrl } = config();
   const keys = await generateKeyPair();
   const session = randomUUID();
@@ -56,9 +69,9 @@ export const openRelay: OpenWallet = async (chainId, until) => {
   url.searchParams.set('relay', relayUrl);
   url.hash = `pk=${await exportKeyToHex('public', keys.publicKey)}`;
 
-  sessions++;
+  pool.open++;
   const ws = new WebSocket(`${relayUrl}?session=${encodeURIComponent(session)}&role=cli`);
-  ws.addEventListener('close', () => sessions--, { once: true });
+  ws.addEventListener('close', () => pool.open--, { once: true });
   // Ends the session at its deadline even if nobody runs it.
   setTimeout(() => ws.close(), until.getTime() - Date.now()).unref();
   const inbox = new Inbox(ws, until);
@@ -103,7 +116,7 @@ export const openRelay: OpenWallet = async (chainId, until) => {
       }
     },
   };
-};
+}
 
 /** Messages from the relay, read in order by whoever is waiting for the next one that matters. */
 class Inbox {

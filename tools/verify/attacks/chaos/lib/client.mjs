@@ -21,13 +21,13 @@ export async function send(path, { replica, headers = {}, ...init } = {}) {
 class Browser {
   cookies = new Map();
 
-  async get(url, replica) {
+  async get(url, replica, init = {}) {
     const u = new URL(url, PUBLIC_URL);
     const cookie = [...this.cookies]
       .filter(([, c]) => u.pathname.startsWith(c.path))
       .map(([name, c]) => `${name}=${c.value}`)
       .join('; ');
-    const res = await send(u.pathname + u.search, { replica, headers: cookie ? { cookie } : {} });
+    const res = await send(u.pathname + u.search, { ...init, replica, headers: cookie ? { cookie } : {} });
     for (const line of res.headers.getSetCookie()) {
       const [pair, ...attrs] = line.split(';').map((s) => s.trim());
       const [name, value] = pair.split('=');
@@ -35,6 +35,10 @@ class Browser {
       this.cookies.set(name, { value, path });
     }
     return res;
+  }
+
+  post(url, replica) {
+    return this.get(url, replica, { method: 'POST' });
   }
 }
 
@@ -137,8 +141,12 @@ export async function connect({ scope = 'wallet:read', pin = {}, stopBeforeToken
   res = await browser.get(`/interaction/${uid}`, pin.consent);
   const page = await res.text();
   const data = page.match(/const d = (\{.*\});/)?.[1];
-  if (!data) throw new Error(`the interaction page carries no wallet link: ${res.status}`);
-  const { url: link, ticket } = JSON.parse(data);
+  if (!data) throw new Error(`the interaction page carries no ticket: ${res.status}`);
+  const { ticket } = JSON.parse(data);
+  // The owner's click on "Open JAW", from the browser that holds the interaction cookie.
+  res = await browser.post(`/interaction/${uid}/open`, pin.consent);
+  if (!res.ok) throw new Error(`the wallet session did not open: ${res.status} ${await res.text()}`);
+  const { url: link } = await res.json();
   await approveInWallet(link, owner);
   await waitFor('the approval', async () => {
     const status = await (await send(`/interaction/${uid}/status`, { replica: pin.consent })).json();

@@ -6,7 +6,7 @@ import { z } from 'zod';
 import { chainClients } from '@/adapters/session-host';
 import { tenant, type Tenant } from '@/connections/auth';
 import { config } from '@/connections/config';
-import { openRelay, WalletBusy, type OpenWallet, type Wallet } from '@/connections/relay';
+import { ownerRelay, WalletBusy, type OpenWallet, type Wallet } from '@/connections/relay';
 import { endConnection, ownedBy } from '@/connections/rows';
 import { getDb } from '@/db/client';
 import { connections, grants } from '@/db/schema';
@@ -114,7 +114,7 @@ export interface RevokeDeps {
   clients: ChainClients;
 }
 
-const DEFAULTS: RevokeDeps = { openWallet: openRelay, verify: verifyOnChain, clients: chainClients };
+const DEFAULTS: RevokeDeps = { openWallet: ownerRelay, verify: verifyOnChain, clients: chainClients };
 const CONFIRM_WITHIN_MS = 10 * 60_000;
 
 /** The text the owner signs to end a connection. It names the connection, so it ends no other. */
