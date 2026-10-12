@@ -1,5 +1,5 @@
 import { createHash, randomBytes } from 'node:crypto';
-import { and, eq, gt, isNotNull, ne, sql } from 'drizzle-orm';
+import { and, eq, gt, isNotNull, isNull, ne, sql } from 'drizzle-orm';
 import { isAddressEqual, type Address } from 'viem';
 import { getDb, type Tx } from '@/db/client';
 import { connections, oauthPayloads } from '@/db/schema';
@@ -110,6 +110,31 @@ export async function takeSealedKey(id: string): Promise<Sealed | undefined> {
     await tx.update(connections).set({ sealedKey: null }).where(eq(connections.id, id));
     return row.sealedKey as Sealed;
   });
+}
+
+/**
+ * Atomically claims the sealed key so the reconciler and a late code exchange
+ * cannot both get it. SKIP LOCKED lets the loser move on instead of blocking.
+ */
+export async function claimSealedKey(id: string): Promise<Sealed | undefined> {
+  return getDb().transaction(async (tx) => {
+    const [row] = await tx
+      .select({ sealedKey: connections.sealedKey })
+      .from(connections)
+      .where(and(eq(connections.id, id), isNotNull(connections.sealedKey)))
+      .for('update', { skipLocked: true });
+    if (!row) return undefined;
+    await tx.update(connections).set({ sealedKey: null }).where(eq(connections.id, id));
+    return row.sealedKey as Sealed;
+  });
+}
+
+/** Puts the key back after a failed retire, so the next run can try again. */
+export async function restoreSealedKey(id: string, key: Sealed): Promise<void> {
+  await getDb()
+    .update(connections)
+    .set({ sealedKey: key })
+    .where(and(eq(connections.id, id), isNull(connections.sealedKey)));
 }
 
 const RETRY_MS = 250;

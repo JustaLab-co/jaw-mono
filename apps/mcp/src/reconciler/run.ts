@@ -1,9 +1,10 @@
 import type { ChainClients } from '@jaw.id/agent';
-import { and, eq, isNotNull, isNull, lt, sql } from 'drizzle-orm';
+import { and, eq, isNotNull, isNull, lt, ne, sql } from 'drizzle-orm';
 import type { Address, Hex } from 'viem';
 import { chainClients } from '@/adapters/session-host';
 import { config } from '@/connections/config';
 import { retire, sessionSender, type DisconnectDeps } from '@/connections/disconnect';
+import { claimSealedKey, endConnection, restoreSealedKey } from '@/connections/rows';
 import { open, type Sealed } from '@/connections/seal';
 import { getDb } from '@/db/client';
 import { auditEvents, connections, grants, oauthPayloads, payments, rateLimits } from '@/db/schema';
@@ -97,6 +98,7 @@ export async function purge(deps = SESSION_DEPS): Promise<void> {
   await db.delete(rateLimits).where(lt(rateLimits.windowStart, sql`now() - interval '1 hour'`));
   await db.delete(auditEvents).where(lt(auditEvents.createdAt, sql`now() - interval '90 days'`));
   await retireAbandoned(deps);
+  await retireUnexchanged(deps);
   await db
     .delete(connections)
     .where(
@@ -136,10 +138,61 @@ async function retireAbandoned(deps: DisconnectDeps) {
       deps
     ).catch((err: unknown) => errorLabel(err));
     if (typeof outcome === 'string') {
-      log('warn', { msg: `abandoned connection ${row.id} not retired`, error: outcome });
+      log('error', { msg: `abandoned connection ${row.id} not retired`, error: outcome });
       continue;
     }
     // What is left is under the fee to move it, if anything.
     await getDb().update(connections).set({ sealedKey: null }).where(eq(connections.id, row.id));
+  }
+}
+
+// AuthorizationCode TTL (60 s, provider.ts) plus two minutes for clock skew and slow networks.
+export const EXCHANGE_WINDOW_MS = 180_000;
+const exchangeDeadline = sql.raw(`now() - interval '${EXCHANGE_WINDOW_MS} milliseconds'`);
+
+/**
+ * Activated but never exchanged, or revoked by a hand_back_failed: the code
+ * expired and no token will ever wrap the key, so it stays env-sealed until
+ * this clears it. Claims the key atomically so a late takeSealedKey cannot
+ * also get it (one winner), restores on failure so the next run retries.
+ */
+async function retireUnexchanged(deps: DisconnectDeps) {
+  const rows = await getDb()
+    .select()
+    .from(connections)
+    .where(
+      and(
+        isNotNull(connections.sealedKey),
+        isNotNull(connections.activatedAt),
+        lt(connections.activatedAt, exchangeDeadline),
+        ne(connections.status, 'pending')
+      )
+    )
+    .limit(BATCH);
+  if (rows.length === 0) return;
+  const paused = await isPaymentsPaused();
+  if (paused) {
+    log('error', { msg: `${rows.length} sealed key(s) past the exchange window while payments are paused` });
+    return;
+  }
+  for (const row of rows) {
+    const claimed = await claimSealedKey(row.id);
+    if (!claimed) continue;
+    const outcome = await retire(
+      {
+        connectionId: row.id,
+        account: row.account as Address,
+        chainId: row.chainId,
+        sessionAddress: row.sessionAddress as Address,
+        sessionKey: () => open(config().ring, claimed, row.id),
+      },
+      deps
+    ).catch((err: unknown) => errorLabel(err));
+    if (typeof outcome === 'string') {
+      await restoreSealedKey(row.id, claimed);
+      log('error', { msg: `unexchanged connection ${row.id} not retired`, error: outcome });
+      continue;
+    }
+    await endConnection(row.id, row.account as Address);
   }
 }

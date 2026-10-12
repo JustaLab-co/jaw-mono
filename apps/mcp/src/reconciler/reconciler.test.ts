@@ -19,15 +19,19 @@ import {
   Browser,
   connect,
   fakeWallet,
+  follow,
   owner,
   sessionFakes,
   setTestEnv,
   setWallet,
   startAuthorization,
   token,
+  verifyLocally,
   walletAnswers,
   walletsSettled,
+  ISSUER,
 } from '@/connections/testkit';
+import { takeSealedKey } from '@/connections/rows';
 import { getDb } from '@/db/client';
 import { auditEvents, connections, grants, oauthPayloads, payments } from '@/db/schema';
 import { useTestDb } from '@/db/test-db';
@@ -435,5 +439,132 @@ describe('given an approval the owner never completed, past its expiry', () => {
 
     expect(session.sent).toEqual([]);
     expect((await rowAfter(row.id)).sealedKey).toBeNull();
+  });
+});
+
+describe('given an activated connection whose code was never exchanged, past the exchange window', () => {
+  /** An active connection the owner completed but whose authorization code was never exchanged. */
+  async function activeNeverExchanged(scope = 'wallet:read x402:pay') {
+    const signer = owner();
+    const browser = new Browser();
+    browser.wallet = {
+      openWallet: fakeWallet(walletAnswers(signer)),
+      verify: verifyLocally,
+      readPermission: approvedOnChain,
+    };
+    const start = await startAuthorization(browser, { scope });
+    if (!start.uid || !start.ticket) throw new Error('did not reach the wallet');
+    await walletsSettled();
+    await follow(browser, `${ISSUER}/interaction/${start.uid}/complete?ticket=${start.ticket}`);
+    // 181 seconds: past the 180 s exchange window (60 s AuthorizationCode TTL + 120 s margin).
+    const [row] = await getDb()
+      .update(connections)
+      .set({ activatedAt: sql`now() - interval '181 seconds'` })
+      .where(eq(connections.interactionUid, start.uid!))
+      .returning();
+    return { row, owner: signer.address };
+  }
+
+  const rowAfter = async (id: string) => (await getDb().select().from(connections).where(eq(connections.id, id)))[0];
+  const budgetOf = async (id: string) => (await getDb().select().from(grants).where(eq(grants.connectionId, id)))[0];
+  const deps = (session: ReturnType<typeof sessionFakes>) => ({ readPermission: approvedOnChain, ...session.deps });
+
+  it('retires the connection and clears its sealed key', async () => {
+    const { row } = await activeNeverExchanged();
+    expect(row.sealedKey).not.toBeNull();
+    const session = sessionFakes();
+
+    await purge(deps(session));
+
+    expect(await rowAfter(row.id)).toMatchObject({ sealedKey: null, status: 'revoked' });
+    expect((await budgetOf(row.id)).revokedAt).not.toBeNull();
+  });
+
+  it('does not touch a row exchanged in time', async () => {
+    const c = await connect();
+    const tenant = (await verifyBearer(c.access_token))?.extra?.tenant as Tenant;
+    const before = await rowAfter(tenant.connectionId);
+    expect(before.sealedKey).toBeNull();
+
+    await purge(deps(sessionFakes()));
+
+    const after = await rowAfter(tenant.connectionId);
+    expect(after.status).toBe('active');
+    expect(after.sealedKey).toBeNull();
+  });
+
+  it('does not touch a row still within the exchange window', async () => {
+    const signer = owner();
+    const browser = new Browser();
+    browser.wallet = {
+      openWallet: fakeWallet(walletAnswers(signer)),
+      verify: verifyLocally,
+      readPermission: approvedOnChain,
+    };
+    const start = await startAuthorization(browser, {});
+    if (!start.uid || !start.ticket) throw new Error('did not reach the wallet');
+    await walletsSettled();
+    await follow(browser, `${ISSUER}/interaction/${start.uid}/complete?ticket=${start.ticket}`);
+    const [row] = await getDb().select().from(connections).where(eq(connections.interactionUid, start.uid!));
+
+    await purge(deps(sessionFakes()));
+
+    expect((await rowAfter(row.id)).sealedKey).not.toBeNull();
+  });
+
+  it('the exchange vs retire race has exactly one winner', async () => {
+    const { row } = await activeNeverExchanged();
+    expect(row.sealedKey).not.toBeNull();
+
+    await purge(deps(sessionFakes()));
+
+    const taken = await takeSealedKey(row.id);
+    expect(taken).toBeUndefined();
+    expect((await rowAfter(row.id)).sealedKey).toBeNull();
+  });
+
+  it('clears the sealed key on a hand_back_failed row', async () => {
+    const signer = owner();
+    const browser = new Browser();
+    browser.wallet = {
+      openWallet: fakeWallet(walletAnswers(signer)),
+      verify: verifyLocally,
+      readPermission: approvedOnChain,
+    };
+    const start = await startAuthorization(browser, { scope: 'wallet:read x402:pay' });
+    if (!start.uid || !start.ticket) throw new Error('did not reach the wallet');
+    await walletsSettled();
+    await follow(browser, `${ISSUER}/interaction/${start.uid}/complete?ticket=${start.ticket}`);
+    // Simulate hand_back_failed: activated then revoked, key never cleared.
+    await getDb()
+      .update(connections)
+      .set({
+        status: 'revoked',
+        revokedAt: new Date(),
+        activatedAt: sql`now() - interval '181 seconds'`,
+      })
+      .where(eq(connections.interactionUid, start.uid!));
+    const [row] = await getDb().select().from(connections).where(eq(connections.interactionUid, start.uid!));
+
+    await purge(deps(sessionFakes()));
+
+    expect((await rowAfter(row.id)).sealedKey).toBeNull();
+  });
+
+  it('keeps the key and logs at error when the retire fails', async () => {
+    const { row } = await activeNeverExchanged();
+    const logged = vi.spyOn(console, 'log').mockImplementation(() => {});
+
+    try {
+      await purge(deps(sessionFakes({ status: 'reverted' })));
+
+      expect((await rowAfter(row.id)).sealedKey).not.toBeNull();
+      const errors = logged.mock.calls.filter(
+        ([line]) => typeof line === 'string' && line.includes(row.id) && line.includes('"level":"error"')
+      );
+      expect(errors.length).toBeGreaterThanOrEqual(1);
+    } finally {
+      logged.mockRestore();
+    }
   });
 });
