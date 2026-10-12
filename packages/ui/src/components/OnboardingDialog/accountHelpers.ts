@@ -19,17 +19,11 @@ export function getStoredLocalAccounts(apiKey?: string): LocalStorageAccount[] {
 
 /**
  * Derive + persist addresses for stored records that predate address
- * persistence (ceremony-free factory derivation), returning credentialId →
- * address for every record that has one.
+ * persistence (offline, from each record's stored public key), returning
+ * credentialId → address for every record that has one.
  */
-export async function backfillLocalAccountAddresses(params: {
-  chainId?: number;
-  apiKey?: string;
-}): Promise<Record<string, string>> {
-  const accounts = await Account.backfillStoredAccountAddresses({
-    chainId: params.chainId ?? 1,
-    apiKey: params.apiKey,
-  });
+export async function backfillLocalAccountAddresses(params: { apiKey?: string }): Promise<Record<string, string>> {
+  const accounts = await Account.backfillStoredAccountAddresses({ apiKey: params.apiKey });
   const byCredentialId: Record<string, string> = {};
   for (const account of accounts) {
     if (account.credentialId && account.address) byCredentialId[account.credentialId] = account.address;

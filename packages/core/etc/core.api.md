@@ -26,7 +26,7 @@ import type * as WebAuthnP256 from 'ox/WebAuthnP256';
 // @public
 export class Account {
     get address(): Address_2;
-    static backfillStoredAccountAddresses(config: AccountConfig): Promise<PasskeyAccount[]>;
+    static backfillStoredAccountAddresses(config: Partial<AccountConfig>): Promise<PasskeyAccount[]>;
     calculateGasCost(calls: TransactionCall[], options?: {
         permissionId?: Hex;
         address?: Address_2;

@@ -186,7 +186,7 @@ export class Account {
     // ============================================
 
     /** The PasskeyManager for a config: its storage, passkey server and API key. */
-    private static passkeyManager(config: AccountConfig): PasskeyManager {
+    private static passkeyManager(config: Partial<AccountConfig>): PasskeyManager {
         return new PasskeyManager(
             config.storage,
             config.serverUrl ? { serverUrl: config.serverUrl } : undefined,
@@ -202,8 +202,11 @@ export class Account {
      * publicKey (nothing is ever signed), the same way Account.get resolves it
      * at login. A stored address is kept as it is. Failures are per-record and
      * non-fatal; an entry left incomplete is retried on the next call.
+     *
+     * Only `storage`, `serverUrl` and `apiKey` are read; no chain is involved,
+     * so `chainId` and the paymaster options may be left out.
      */
-    static async backfillStoredAccountAddresses(config: AccountConfig): Promise<PasskeyAccount[]> {
+    static async backfillStoredAccountAddresses(config: Partial<AccountConfig>): Promise<PasskeyAccount[]> {
         const passkeyManager = Account.passkeyManager(config);
         const accounts = passkeyManager.fetchAccounts();
         const missing = accounts.filter((account) => !account.address || !account.account);

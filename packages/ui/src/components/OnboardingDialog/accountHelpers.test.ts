@@ -24,18 +24,18 @@ describe('backfillLocalAccountAddresses', () => {
   it('derives with no api key', async () => {
     backfillMock.mockResolvedValue([{ credentialId: 'cred-1', address: ADDRESS }] as never);
 
-    const byCredentialId = await backfillLocalAccountAddresses({ chainId: 1 });
+    const byCredentialId = await backfillLocalAccountAddresses({});
 
-    expect(backfillMock).toHaveBeenCalledWith({ chainId: 1, apiKey: undefined });
+    expect(backfillMock).toHaveBeenCalledWith({ apiKey: undefined });
     expect(byCredentialId).toEqual({ 'cred-1': ADDRESS });
   });
 
-  it('defaults to mainnet when the dialog has no chain yet', async () => {
+  it('passes the api key, and no chain: the derivation is offline', async () => {
     backfillMock.mockResolvedValue([] as never);
 
     await backfillLocalAccountAddresses({ apiKey: 'test-key' });
 
-    expect(backfillMock).toHaveBeenCalledWith({ chainId: 1, apiKey: 'test-key' });
+    expect(backfillMock).toHaveBeenCalledWith({ apiKey: 'test-key' });
   });
 
   // A record whose derivation failed comes back without an address, and the
@@ -43,6 +43,6 @@ describe('backfillLocalAccountAddresses', () => {
   it('leaves out the records that resolved nothing', async () => {
     backfillMock.mockResolvedValue([{ credentialId: 'cred-1', address: ADDRESS }, { credentialId: 'cred-2' }] as never);
 
-    expect(await backfillLocalAccountAddresses({ chainId: 1 })).toEqual({ 'cred-1': ADDRESS });
+    expect(await backfillLocalAccountAddresses({})).toEqual({ 'cred-1': ADDRESS });
   });
 });
