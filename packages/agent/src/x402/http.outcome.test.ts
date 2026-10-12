@@ -230,7 +230,7 @@ describe('payAndFetch transport and time', () => {
   });
 });
 
-describe('the challenge a refusal carries, for a one-off', () => {
+describe('the challenge a refusal carries', () => {
   const withSessionCap = { policy: { maxTotalPerSession: '1500' }, spentThisSession: 1000n };
 
   it('is on budget_exhausted from the policy, before any option was chosen', async () => {
