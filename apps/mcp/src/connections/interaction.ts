@@ -13,7 +13,7 @@ import { bridge } from './bridge';
 import { config } from './config';
 import { provider } from './provider';
 import { connectRelay, type Ask, type OpenWallet } from './relay';
-import { activate, armTicket, CONNECTION_TTL_MS, findClaimable, pendingFor } from './rows';
+import { activate, armTicket, CONNECTION_TTL_MS, countLive, findClaimable, pendingFor } from './rows';
 import { CONNECTION_SCOPES, FIRST_PARTY_CLIENTS, spends, type ConnectionScope } from './scopes';
 import { seal } from './seal';
 
@@ -150,6 +150,7 @@ const SHOWN = new Set([
   'bad_signature',
   'already_connected',
   'another_account_signed_in_first',
+  'too many active connections; revoke one first',
 ]);
 export const reasonOf = (err: unknown) => {
   if ((err as { code?: unknown })?.code === 4001) return 'turned down in the wallet';
@@ -174,6 +175,8 @@ const jobs = new Map<string, Job>();
  */
 export const SESSIONS_PER_IP = 5;
 export const SESSIONS_PER_CLIENT = 50;
+/** Live connections one account may hold; past it, a new sign-in is refused. */
+export const CONNECTIONS_PER_ACCOUNT = 20;
 const holding = new Map<string, number>();
 const holds = (key: string) => holding.get(key) ?? 0;
 
@@ -214,6 +217,9 @@ async function start(a: Asked, deps: InteractionDeps, keys: string[]): Promise<J
   void wallet
     .run(async (ask) => {
       const account = await signIn(a, ask, deps);
+      if ((await countLive(account)) >= CONNECTIONS_PER_ACCOUNT) {
+        throw new Error('too many active connections; revoke one first');
+      }
       const { id, spender } = await pending(a, account);
       const grant = spends(a.scopes) ? await askBudget(a, ask, account, spender, deps) : undefined;
       await getDb().transaction(async (tx) => {
