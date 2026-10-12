@@ -42,7 +42,7 @@ const HIDDEN_IMPOSTOR = 'https://evil.example.test/hidden.json';
 const NAMED = 'https://named.example.test/';
 const named = (name: string) => `${NAMED}${encodeURIComponent(name)}.json`;
 const NUL_NAMED = 'https://evil.example.test/nul.json';
-// Shaped as Claude Code's own document: loopback redirects with no port, and no application_type.
+// A document with loopback redirects that name no port, and no application_type.
 const LOOPBACK = 'https://claude.example.test/oauth/client-metadata';
 const KEYED = 'https://evil.example.test/keyed.json';
 const PUBLIC_KEYED = 'https://evil.example.test/public-keyed.json';
@@ -86,7 +86,7 @@ beforeAll(async () => {
                 : String(url) === LOOPBACK
                   ? Response.json({
                       client_id: LOOPBACK,
-                      client_name: 'Claude Code',
+                      client_name: 'Loopback Agent',
                       redirect_uris: ['http://localhost/callback', 'http://127.0.0.1/callback'],
                       grant_types: ['authorization_code', 'refresh_token'],
                       response_types: ['code'],

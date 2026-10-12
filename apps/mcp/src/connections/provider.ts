@@ -38,7 +38,7 @@ export function createProvider(cfg: Config, overrides: Partial<Configuration> = 
     clients: [JAW_CLI],
     // Every client is public, so one that declares no application_type is a native
     // app: per RFC 8252 7.3 its loopback redirect may use any port, which a CIMD
-    // document such as Claude Code's (http://localhost/callback, no port) relies on.
+    // document that registers http://localhost/callback with no port relies on.
     clientDefaults: { id_token_signed_response_alg: 'EdDSA', application_type: 'native' },
     findAccount: async (_ctx, sub) =>
       (await findActive(sub)) ? { accountId: sub, claims: () => ({ sub }) } : undefined,
