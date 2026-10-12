@@ -18,7 +18,7 @@ import { payments } from '@/db/schema';
 import { useTestDb } from '@/db/test-db';
 
 const asked: { id: string }[] = [];
-const chain = { start: 1, end: 2_000_000_000, spend: 0n };
+const chain = { start: 1, end: 2_000_000_000, spend: 0n, held: 0n };
 
 // The permission manager answers for whichever permission is asked about: approved,
 // not revoked, nothing spent this period, so any spend in jaw_status comes from elsewhere unless a test sets `chain`.
@@ -29,6 +29,7 @@ vi.mock('@/lib/chain', async (original) => ({
       readContract: async ({ functionName, args }: { functionName: string; args: [{ salt: bigint }] }) => {
         if (functionName === 'getHash') return asked[asked.length - 1].id;
         if (functionName === 'getCurrentPeriod') return chain;
+        if (functionName === 'balanceOf') return chain.held;
         return functionName === 'isApproved';
       },
     }) as unknown as PublicClient,
@@ -36,7 +37,7 @@ vi.mock('@/lib/chain', async (original) => ({
 
 setTestEnv();
 beforeAll(useTestDb);
-beforeEach(() => Object.assign(chain, { start: 1, end: 2_000_000_000, spend: 0n }));
+beforeEach(() => Object.assign(chain, { start: 1, end: 2_000_000_000, spend: 0n, held: 0n }));
 
 /** The owner approves a new budget in their wallet; the chain mock then answers for it. */
 async function approve(c: Awaited<ReturnType<typeof connect>>, perDay: string) {
@@ -171,5 +172,18 @@ describe('given a window start past the range a Date can hold', () => {
       remainingToday: { amount: '25000' },
       resetsAt: null,
     });
+  });
+});
+
+describe('given the session already holds float from an earlier pull', () => {
+  it('when jaw_status runs, then the summary adds it to what is left today', async () => {
+    const c = await connect();
+    await approve(c, '0.05');
+    chain.held = 28_143n;
+    const status = await callTool(c.access_token, 'jaw_status', {});
+    expect(status.structuredContent.budget).toMatchObject({ spentToday: { amount: '0' } });
+    expect(status.structuredContent.summary).toContain(
+      '50000 base units left today, plus 28143 already held by the session.'
+    );
   });
 });
