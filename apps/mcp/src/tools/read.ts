@@ -263,6 +263,7 @@ const resolveOutput = z.object({
   summary: z.string(),
 });
 
+/** For jaw_transfer, which takes an ENS name. Not a tool: resolving a name is a service the agent pays for. */
 export async function resolveName(name: string) {
   const normalized = normalize(name);
   const client = createPublicClient({ chain: mainnet, transport: http(config().mainnetRpcUrl) });
@@ -316,23 +317,6 @@ export function registerReadTools(server: McpServer) {
     async (_args, ctx) => {
       const out = addFunds(tenant(ctx));
       return out ? reply(out) : refusal("USDC is not supported on this connection's chain.");
-    }
-  );
-
-  server.registerTool(
-    'jaw_resolve_name',
-    {
-      description: 'Resolve an ENS name to an address on Ethereum mainnet.',
-      inputSchema: z.strictObject({ name: z.string().max(255) }),
-      outputSchema: resolveOutput,
-      annotations: readOnly,
-    },
-    async ({ name }) => {
-      try {
-        return reply(await resolveName(name));
-      } catch {
-        return refusal('Not a valid ENS name, or the lookup failed.');
-      }
     }
   );
 }

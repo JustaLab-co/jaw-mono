@@ -287,9 +287,36 @@ export async function status(_req: Request, uid: string): Promise<Response> {
 const escape = (text: string) =>
   text.replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c]!);
 
+// keys.jaw.id's palette (shadcn slate), so the page reads as the wallet's own.
+const STYLE = `
+:root{--bg:#f8fafc;--card:#fff;--fg:#020817;--muted:#64748b;--subtle:#f1f5f9;--border:#e2e8f0;--primary:#0f172a;--on-primary:#f8fafc;--ok:#16a34a;--bad:#dc2626;color-scheme:light}
+@media (prefers-color-scheme:dark){:root{--bg:#020817;--card:#0b1222;--fg:#f8fafc;--muted:#94a3b8;--subtle:#1e293b;--border:#1e293b;--primary:#f8fafc;--on-primary:#0f172a;color-scheme:dark}}
+*{box-sizing:border-box}
+body{margin:0;min-height:100vh;display:flex;align-items:center;justify-content:center;padding:1rem;background:var(--bg);color:var(--fg);font:15px/1.55 ui-sans-serif,system-ui,-apple-system,"Segoe UI",sans-serif}
+.card{width:100%;max-width:26rem;background:var(--card);border:1px solid var(--border);border-radius:.75rem;padding:2rem;box-shadow:0 1px 3px rgb(0 0 0/.06),0 8px 24px rgb(0 0 0/.04)}
+.brand{display:flex;align-items:center;gap:.5rem;margin-bottom:1.5rem;color:var(--muted);font-size:.8rem;font-weight:600;letter-spacing:.08em;text-transform:uppercase}
+.brand img{width:28px;height:28px}
+@media (prefers-color-scheme:dark){.brand img{filter:invert(1)}}
+h1{margin:0 0 .35rem;font-size:1.35rem;line-height:1.3;font-weight:650}
+.from{margin:0 0 1.25rem;color:var(--muted);font-size:.85rem}
+.from strong{color:var(--fg);font-weight:600}
+ol{margin:0 0 1.25rem;padding-left:1.1rem;color:var(--muted)}
+ol li{margin:.2rem 0}
+.label{margin:0 0 .4rem;color:var(--muted);font-size:.8rem}
+.code{margin:0 0 1.5rem;padding:.9rem;border-radius:.5rem;background:var(--subtle);text-align:center;font:700 1.75rem/1 ui-monospace,SFMono-Regular,Menlo,monospace;letter-spacing:.3em}
+button{width:100%;padding:.75rem 1rem;border:0;border-radius:.5rem;background:var(--primary);color:var(--on-primary);font:inherit;font-weight:600;cursor:pointer}
+button:hover{opacity:.9}
+#state{margin:1rem 0 0;color:var(--muted);font-size:.85rem;text-align:center}
+#state.bad{color:var(--bad)}
+#state.ok{color:var(--ok)}
+#state a{color:var(--fg)}
+.cancel{display:block;margin-top:1.25rem;color:var(--muted);font-size:.8rem;text-align:center}
+`;
+
 function page(status: number, error: string, asked?: Asked): Response {
-  const body = asked ? connectBody(asked) : `<p>${escape(error)}</p>`;
-  const html = `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Connect to JAW</title><style>body{font:16px/1.5 system-ui,sans-serif;max-width:30rem;margin:4rem auto;padding:0 1rem}button{font:inherit;padding:.6rem 1.2rem;cursor:pointer}.code{font:700 1.6rem/1 ui-monospace,monospace;letter-spacing:.2em}</style></head><body>${body}</body></html>`;
+  const logo = `${config().keysOrigin}/jaw-logo.png`;
+  const content = asked ? connectBody(asked) : `<p class="from">${escape(error)}</p>`;
+  const html = `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Connect to JAW</title><style>${STYLE}</style></head><body><main class="card"><div class="brand"><img src="${escape(logo)}" alt="">JAW</div>${content}</main></body></html>`;
   return new Response(html, {
     status,
     headers: {
@@ -297,33 +324,39 @@ function page(status: number, error: string, asked?: Asked): Response {
       'cache-control': 'no-store',
       // The uid and the ticket ride in this page's URLs; no other site needs them.
       'referrer-policy': 'no-referrer',
-      'content-security-policy':
-        "default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; connect-src 'self'; frame-ancestors 'none'",
+      'content-security-policy': `default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; img-src ${config().keysOrigin}; connect-src 'self'; frame-ancestors 'none'`,
     },
   });
 }
 
 function connectBody(a: Asked): string {
   const budget = Number(config().dailyBudget) / 1e6;
-  const what = spends(a.scopes)
-    ? `Your wallet will ask you to sign in, then to approve a budget of up to ${budget} USDC a day for it. Payments within it need nothing more from you.`
-    : 'Your wallet will ask you to sign in.';
+  const steps = spends(a.scopes)
+    ? [
+        'Sign in with your passkey.',
+        `Approve a budget of up to ${budget} USDC a day. Payments within it need nothing more from you.`,
+      ]
+    : ['Sign in with your passkey.'];
   // JSON in a script: "<" escaped so nothing in it can close the tag.
   const data = JSON.stringify({ uid: a.uid, ticket: ticketOf(a.uid) }).replace(/</g, '\\u003c');
   const from = a.clientHost
-    ? `<p>From <strong>${escape(a.clientHost)}</strong>. That domain is checked; the name is the app's own.</p>`
-    : '';
+    ? `<p class="from">From <strong>${escape(a.clientHost)}</strong>. That domain is checked; the name is the app's own.</p>`
+    : '<p class="from">Wants to use your JAW account.</p>';
   return `<h1>Connect ${escape(a.clientName)}</h1>
 ${from}
-<p>${escape(what)}</p>
-<p>The sign-in shows this code. Approve only if it matches:</p>
+<ol>${steps.map((step) => `<li>${escape(step)}</li>`).join('')}</ol>
+<p class="label">Your wallet will show this code. Approve only if it matches.</p>
 <p class="code">${codeOf(a.uid)}</p>
-<p><button id="open">Open JAW</button></p>
+<button id="open">Open JAW wallet</button>
 <p id="state">Waiting for your wallet.</p>
-<p><a href="/interaction/${a.uid}/abort">Cancel</a></p>
+<a class="cancel" href="/interaction/${a.uid}/abort">Cancel</a>
 <script>
 const d = ${data};
 const state = document.getElementById('state');
+const say = (text, tone) => {
+  state.textContent = text;
+  state.className = tone || '';
+};
 const refused = {
   429: 'Too many approvals are open from here or for this app. Finish or cancel one, then try again.',
   503: 'The wallet cannot be reached right now. Try again.',
@@ -335,7 +368,7 @@ document.getElementById('open').onclick = async () => {
   const url = r && r.ok ? (await r.json()).url : undefined;
   if (!url) {
     popup?.close();
-    state.textContent = (r && refused[r.status]) || 'This request expired. Start again from your app.';
+    say((r && refused[r.status]) || 'This request expired. Start again from your app.', 'bad');
     return;
   }
   if (popup) return void (popup.location = url);
@@ -344,8 +377,11 @@ document.getElementById('open').onclick = async () => {
 };
 const poll = async () => {
   const s = await fetch('/interaction/' + d.uid + '/status').then((r) => r.json()).catch(() => ({ state: 'waiting' }));
-  if (s.state === 'approved') return location.assign('/interaction/' + d.uid + '/complete?ticket=' + d.ticket);
-  if (s.state === 'failed') return (state.textContent = 'Not connected: ' + s.reason + '. Reload this page to try again.');
+  if (s.state === 'approved') {
+    say('Approved. Returning to your app…', 'ok');
+    return location.assign('/interaction/' + d.uid + '/complete?ticket=' + d.ticket);
+  }
+  if (s.state === 'failed') return say('Not connected: ' + s.reason + '. Reload this page to try again.', 'bad');
   setTimeout(poll, 2000);
 };
 poll();
