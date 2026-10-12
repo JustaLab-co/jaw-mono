@@ -52,7 +52,6 @@ interface OneOffDeps {
 const liveDeps = (): OneOffDeps => ({
   fetch: safeFetch(config().insecureFetchHosts),
   now: () => new Date(),
-  // The approval page answers without waiting on the chain.
   confirm: { clients: chainClients, later: after, inCall: false },
 });
 

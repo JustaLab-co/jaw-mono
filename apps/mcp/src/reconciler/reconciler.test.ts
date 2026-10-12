@@ -175,6 +175,13 @@ describe('reconciler', () => {
     expect((await rowOf(dark.id)).state).toBe('signed');
   });
 
+  it('asks the chain about an open row once per claim, however often it runs', async () => {
+    const open = await signedRow({ deadline: new Date(Date.now() + 60_000) });
+    await reconcile(clients);
+    await reconcile(clients);
+    expect(asked.filter((n) => n === open.nonce)).toHaveLength(1);
+  });
+
   it('never selects a row younger than the window, nor a terminal one', async () => {
     const young = await signedRow({ signedAt: new Date() });
     const done = await signedRow();

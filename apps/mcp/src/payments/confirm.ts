@@ -146,7 +146,9 @@ async function settledInBundle(
 const sameHash = (a: Hex, b: Hex) => a.toLowerCase() === b.toLowerCase();
 
 // The RPC balances across nodes, so the one asked after the receipt may not
-// have its block yet. Such reads are retried until the confirm's time is up.
+// have its block yet. Such reads are retried, and get READS_MS past the
+// receipt's deadline so a receipt found late can still settle.
+const READS_MS = 2_000;
 const BEHIND = /header not found|unknown block/i;
 const caughtUp = <T>(read: () => Promise<T>, signal: AbortSignal) =>
   withRetry(read, {
@@ -165,7 +167,9 @@ export async function confirmByReceipt(
 ): Promise<Settled | undefined> {
   const token = usdcForNetwork(attempt.network);
   if (!token) return undefined;
-  const signal = AbortSignal.timeout(timeoutMs);
+  // Retries stop once the confirm answers, at its deadline or before.
+  const done = new AbortController();
+  const { signal } = done;
   const read = async () => {
     const client = clients.publicClient(token.chainId);
     const receipt = await client.waitForTransactionReceipt({ hash: txHash, timeout: timeoutMs, pollingInterval: 500 });
@@ -183,7 +187,9 @@ export async function confirmByReceipt(
     const blockTime = new Date(Number(block.timestamp) * 1000);
     return { txHash, blockTime, amount };
   };
-  return within(read(), timeoutMs).catch(() => undefined);
+  return within(read(), timeoutMs + READS_MS)
+    .catch(() => undefined)
+    .finally(() => done.abort());
 }
 
 const NONCE_STATE = parseAbi([

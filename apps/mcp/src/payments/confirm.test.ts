@@ -137,6 +137,11 @@ type World = {
   down?: string;
   /** Reads per method answered by a node that does not have the receipt's block yet. */
   behind?: Record<string, number>;
+  /** When the receipt shows up; before it the node has none. */
+  minedAt?: number;
+  calls?: string[];
+  /** The transport's own retries, viem's default when unset. */
+  retries?: number;
 };
 
 const N = BigInt(receiptJson.blockNumber);
@@ -155,8 +160,6 @@ const earlier = {
   transactionHash: otherTx,
 };
 
-const calls: string[] = [];
-
 /** The real Base Sepolia bundle as a node serves it, with `over` applied. Another block holds another settle. */
 function served(over: Partial<World> = {}): ChainClients {
   const world: World = {
@@ -166,16 +169,17 @@ function served(over: Partial<World> = {}): ChainClients {
     blockHash: receiptJson.blockHash,
     ...over,
   };
+  let block = N;
   const request = async ({ method, params }: { method: string; params: unknown[] }) => {
     if (method === world.down) throw new Error(`${method} unavailable`);
-    calls.push(method);
+    world.calls?.push(method);
     if ((world.behind?.[method] ?? 0) > 0) {
       world.behind![method]--;
       throw new Error('header not found');
     }
-    if (method === 'eth_getTransactionReceipt') return world.receipt;
+    if (method === 'eth_getTransactionReceipt') return Date.now() < (world.minedAt ?? 0) ? null : world.receipt;
     if (method === 'eth_getTransactionByHash') return txJson;
-    if (method === 'eth_blockNumber') return toHex(N);
+    if (method === 'eth_blockNumber') return toHex(block++);
     if (method === 'eth_getBlockByNumber') {
       return { number: params[0], hash: world.blockHash, timestamp: BLOCK_TIME, transactions: [] };
     }
@@ -198,7 +202,7 @@ function served(over: Partial<World> = {}): ChainClients {
     }
     throw new Error(`unserved ${method}`);
   };
-  const client = createPublicClient({ transport: custom({ request }) });
+  const client = createPublicClient({ transport: custom({ request }, { retryCount: world.retries }) });
   return { publicClient: () => client };
 }
 
@@ -295,11 +299,21 @@ describe('confirming an upto payment settled inside a bundle', () => {
     expect(await confirmBundle(served({ behind }))).toMatchObject({ amount: 20_000n });
   });
 
+  it('settles a receipt found at the deadline when the node asked for its block is behind', async () => {
+    const late = served({ minedAt: Date.now() + 300, behind: { eth_getLogs: 2 }, retries: 0 });
+    expect(await confirmByReceipt(bundled, receiptJson.transactionHash as Hex, late, 1000)).toMatchObject({
+      amount: 20_000n,
+    });
+  });
+
   it('stops asking a node that stays behind once the time to confirm is up', async () => {
-    const lagging = served({ behind: { eth_getBlockByNumber: Number.POSITIVE_INFINITY } });
-    expect(await confirmByReceipt(bundled, receiptJson.transactionHash as Hex, lagging, 1200)).toBeUndefined();
-    const asked = calls.length;
+    const calls: string[] = [];
+    const lagging = served({ behind: { eth_getBlockByNumber: Number.POSITIVE_INFINITY }, calls });
+    expect(await confirmByReceipt(bundled, receiptJson.transactionHash as Hex, lagging, 100)).toBeUndefined();
+    // The read in flight at the deadline still runs the transport's own retries, about a second.
     await new Promise((r) => setTimeout(r, 1100));
+    const asked = calls.length;
+    await new Promise((r) => setTimeout(r, 600));
     expect(calls.length).toBe(asked);
   });
 
