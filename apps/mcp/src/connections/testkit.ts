@@ -5,6 +5,7 @@ import { currentGrant, type Grant } from '@/grants/store';
 import type { GrantRequest, ReadPermission } from '@/grants/permission';
 import type { SignedPayload } from '@/lib/chain';
 import { verifyBearer, type Tenant } from './auth';
+import type { DisconnectDeps } from './disconnect';
 import { abort, complete, hop, status, type InteractionDeps } from './interaction';
 import { oauth } from './provider';
 import type { Ask, OpenWallet } from './relay';
@@ -70,6 +71,16 @@ export const fakeWallet =
       return done;
     },
   });
+
+/** For a test that never sends as the session: any send, or chain read around one, fails. */
+export const offlineSession: Pick<DisconnectDeps, 'clients' | 'sender'> = {
+  clients: {
+    publicClient: () => {
+      throw new Error('this test reads no chain');
+    },
+  },
+  sender: () => Promise.reject(new Error('this test sends nothing as the session')),
+};
 
 /** Waits for every wallet session the server started to finish, including ones started meanwhile. */
 export const walletsSettled = async () => {

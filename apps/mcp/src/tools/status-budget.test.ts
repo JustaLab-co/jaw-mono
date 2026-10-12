@@ -9,6 +9,7 @@ import {
   setTestEnv,
   walletAnswers,
   walletsSettled,
+  offlineSession,
 } from '@/connections/testkit';
 import { currentGrant } from '@/grants/store';
 import { requestBudget } from './request-budget';
@@ -41,7 +42,7 @@ beforeEach(() => Object.assign(chain, { start: 1, end: 2_000_000_000, spend: 0n 
 async function approve(c: Awaited<ReturnType<typeof connect>>, perDay: string) {
   const t = (await verifyBearer(c.access_token))?.extra?.tenant as Tenant;
   const wallet = fakeWallet(walletAnswers(c.signer));
-  await requestBudget(t, perDay, [], { openWallet: wallet, readPermission: approvedOnChain });
+  await requestBudget(t, perDay, [], { openWallet: wallet, readPermission: approvedOnChain, ...offlineSession });
   await walletsSettled();
   const permissionId = (await currentGrant(t.connectionId))!.permissionId;
   asked.push({ id: permissionId });

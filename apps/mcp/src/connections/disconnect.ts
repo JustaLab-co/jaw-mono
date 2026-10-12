@@ -13,7 +13,7 @@ import {
   jawPaymasterUrl,
   PERMISSIONS_MANAGER_ADDRESS,
 } from '@jaw.id/core';
-import { and, eq, gt, inArray, isNull, sql } from 'drizzle-orm';
+import { and, eq, gt, inArray, isNotNull, isNull, sql } from 'drizzle-orm';
 import { encodeFunctionData, erc20Abi, formatUnits, isAddressEqual, maxUint256, type Address, type Hex } from 'viem';
 import { privateKeyToAccount } from 'viem/accounts';
 import { z } from 'zod';
@@ -43,10 +43,13 @@ export interface SessionSender {
   send: (calls: SessionCall[]) => Promise<Sent>;
 }
 
+/** What acting as a connection's spender needs: its session key, and the account its float goes back to. */
+export type Session = Pick<Tenant, 'connectionId' | 'account' | 'chainId' | 'sessionAddress' | 'sessionKey'>;
+
 export interface DisconnectDeps {
   readPermission: ReadPermission;
   clients: ChainClients;
-  sender: (t: Tenant) => Promise<SessionSender>;
+  sender: (s: Session) => Promise<SessionSender>;
   lockWaitMs?: number;
 }
 
@@ -84,7 +87,7 @@ const RECEIPT_MS = 60_000;
 const FIRST_OP_FEE = 50_000n;
 const isDelegated = (code: Hex | undefined) => code?.toLowerCase().startsWith('0xef0100') ?? false;
 
-export async function sessionSender(t: Tenant): Promise<SessionSender> {
+export async function sessionSender(t: Session): Promise<SessionSender> {
   const apiKey = config().paymasterApiKey;
   const usdc = usdcForNetwork(`eip155:${t.chainId}`);
   if (!apiKey || !usdc) throw new Error('no ERC-20 paymaster for this chain');
@@ -156,13 +159,9 @@ export async function disconnect(t: Tenant, deps = DEFAULTS): Promise<Reply> {
   let outcome: Returned | string;
   try {
     outcome = await withFloat(t.connectionId, deps.lockWaitMs ?? LOCK_WAIT_MS, async (hold) => {
-      const returned = await returnFunds(hold, t, deps);
+      const returned = await returnFunds(hold, t, deps, 'everything');
       if (typeof returned === 'string') return returned;
-      await hold.tx(async (tx) => {
-        const ids = [...returned.revoked, ...returned.seenRevoked];
-        if (ids.length) await tx.update(grants).set({ revokedAt: new Date() }).where(inArray(grants.permissionId, ids));
-        await endConnection(t.connectionId, t.account, new Date(), tx);
-      });
+      await hold.tx((tx) => endConnection(t.connectionId, t.account, new Date(), tx));
       return returned;
     });
   } catch (err) {
@@ -183,6 +182,21 @@ export async function disconnect(t: Tenant, deps = DEFAULTS): Promise<Reply> {
   return { content: [{ type: 'text', text: out.summary }], structuredContent: out };
 }
 
+/**
+ * Revokes as spender the budgets a newer one replaced, so only the newest can be
+ * spent. The float stays for payments. A replaced budget it could not revoke stays
+ * marked replaced and unrevoked, and the next call picks it up.
+ */
+export async function revokeReplaced(s: Session, deps = DEFAULTS): Promise<void> {
+  if (await isPaymentsPaused()) return;
+  const outcome = await withFloat(s.connectionId, deps.lockWaitMs ?? LOCK_WAIT_MS, (hold) =>
+    returnFunds(hold, s, deps, 'replaced')
+  ).catch((err: unknown) => errorLabel(err));
+  if (typeof outcome === 'string') log('warn', { msg: 'replaced budget not revoked', error: outcome });
+  else if (outcome.stillApproved.length)
+    log('warn', { msg: 'replaced budget not revoked: the float cannot pay the fee' });
+}
+
 function summarize(t: Tenant, r: Returned): string {
   const usdc = (amount: bigint) => `${formatUnits(amount, 6)} USDC`;
   const said = ['Disconnected. Tokens for this connection no longer work.'];
@@ -198,16 +212,49 @@ function summarize(t: Tenant, r: Returned): string {
   return said.join(' ');
 }
 
-async function returnFunds(hold: FloatHold, t: Tenant, deps: DisconnectDeps): Promise<Returned | string> {
+/**
+ * `everything` revokes every live budget and returns the free float to the owner.
+ * `replaced` revokes only the budgets a newer one replaced and leaves the float.
+ * Budgets the batch revoked, or the chain already shows revoked, are marked so.
+ */
+async function returnFunds(
+  hold: FloatHold,
+  t: Session,
+  deps: DisconnectDeps,
+  scope: 'everything' | 'replaced'
+): Promise<Returned | string> {
   const usdc = usdcForNetwork(`eip155:${t.chainId}`);
   if (!usdc) return REFUSALS.chain;
   const live = await hold.tx((tx) =>
     tx
       .select()
       .from(grants)
-      .where(and(eq(grants.connectionId, t.connectionId), isNull(grants.revokedAt), gt(grants.expiresAt, sql`now()`)))
+      .where(
+        and(
+          eq(grants.connectionId, t.connectionId),
+          isNull(grants.revokedAt),
+          gt(grants.expiresAt, sql`now()`),
+          scope === 'replaced' ? isNotNull(grants.replacedAt) : undefined
+        )
+      )
   );
+  const returned = await sendBatch(hold, t, deps, live, usdc.address, scope === 'everything');
+  if (typeof returned === 'string') return returned;
+  const ids = [...returned.revoked, ...returned.seenRevoked];
+  if (ids.length) {
+    await hold.tx((tx) => tx.update(grants).set({ revokedAt: new Date() }).where(inArray(grants.permissionId, ids)));
+  }
+  return returned;
+}
 
+async function sendBatch(
+  hold: FloatHold,
+  t: Session,
+  deps: DisconnectDeps,
+  live: (typeof grants.$inferSelect)[],
+  token: Address,
+  sweep: boolean
+): Promise<Returned | string> {
   const revokes: { permissionId: Hex; call: SessionCall }[] = [];
   const seenRevoked: Hex[] = [];
   for (const g of live) {
@@ -228,7 +275,7 @@ async function returnFunds(hold: FloatHold, t: Tenant, deps: DisconnectDeps): Pr
   const client = deps.clients.publicClient(t.chainId);
   const balanceAt = (blockNumber?: bigint) =>
     client.readContract({
-      address: usdc.address,
+      address: token,
       abi: erc20Abi,
       functionName: 'balanceOf',
       args: [t.sessionAddress],
@@ -240,11 +287,11 @@ async function returnFunds(hold: FloatHold, t: Tenant, deps: DisconnectDeps): Pr
   const held = await stillHeld(await hold.tx((tx) => holdingRows(tx, t.sessionAddress, '')), deps.clients, block);
   const free = float > held ? float - held : 0n;
   const transfer = (amount: bigint): SessionCall => ({
-    to: usdc.address,
+    to: token,
     data: encodeFunctionData({ abi: erc20Abi, functionName: 'transfer', args: [t.account, amount] }),
   });
   const nothingSent = { revoked: [], swept: 0n, txHash: null, left: float, seenRevoked };
-  if (revokes.length === 0 && free === 0n) return { ...nothingSent, stillApproved: [] };
+  if (revokes.length === 0 && (!sweep || free === 0n)) return { ...nothingSent, stillApproved: [] };
 
   const sender = await deps.sender(t).catch((err) => {
     log('error', { msg: 'disconnect sender unavailable', error: errorLabel(err) });
@@ -253,11 +300,11 @@ async function returnFunds(hold: FloatHold, t: Tenant, deps: DisconnectDeps): Pr
   if (!sender) return REFUSALS.notSent;
   const batch = (swept: bigint, reserve: bigint): SessionCall[] => [
     ...revokes.map((r) => r.call),
-    transfer(swept),
+    ...(sweep ? [transfer(swept)] : []),
     // Last, so it overwrites any allowance before it: the fee can take the reserve
     // and never what payments hold. A fee above it reverts the whole batch.
     {
-      to: usdc.address,
+      to: token,
       data: encodeFunctionData({ abi: erc20Abi, functionName: 'approve', args: [sender.paymaster, reserve] }),
     },
   ];
@@ -287,14 +334,14 @@ async function returnFunds(hold: FloatHold, t: Tenant, deps: DisconnectDeps): Pr
       return undefined;
     });
   };
-  let swept = free - reserve;
+  let swept = sweep ? free - reserve : 0n;
   let sent = await sendWith(reserve);
   // A fee over the reserve reverts with nothing moved; one more try at the ceiling.
   // A float under the ceiling cannot pay more, so the budgets go to the owner and the
   // connection still ends.
   if (sent?.status === 'reverted' && reserve < fee.max) {
     if (free <= fee.max) return leaveToOwner();
-    swept = free - fee.max;
+    swept = sweep ? free - fee.max : 0n;
     sent = await sendWith(fee.max);
   }
   if (!sent) return REFUSALS.notSent;

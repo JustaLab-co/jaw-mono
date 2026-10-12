@@ -3,7 +3,9 @@ import type { McpServer } from '@modelcontextprotocol/server';
 import { and, eq } from 'drizzle-orm';
 import { getAddress, isAddressEqual, parseUnits, toFunctionSelector } from 'viem';
 import { z } from 'zod';
+import { chainClients } from '@/adapters/session-host';
 import { tenant, type Tenant } from '@/connections/auth';
+import { revokeReplaced, sessionSender, type DisconnectDeps } from '@/connections/disconnect';
 import { openRelay, WalletBusy, type OpenWallet, type Wallet } from '@/connections/relay';
 import { CONNECTION_TTL_MS, isLive } from '@/connections/rows';
 import { spends } from '@/connections/scopes';
@@ -23,12 +25,17 @@ import { NO_PAY_SCOPE, refusal } from './reply';
 const PER_DAY = /^\d{1,9}(\.\d{1,6})?$/;
 const MAX_CALLS = 10;
 
-export interface BudgetDeps {
+export interface BudgetDeps extends Pick<DisconnectDeps, 'clients' | 'sender'> {
   openWallet: OpenWallet;
   readPermission: ReadPermission;
 }
 
-const DEFAULTS: BudgetDeps = { openWallet: openRelay, readPermission: readOnChain };
+const DEFAULTS: BudgetDeps = {
+  openWallet: openRelay,
+  readPermission: readOnChain,
+  clients: chainClients,
+  sender: sessionSender,
+};
 
 const callInput = z.strictObject({
   to: z
@@ -101,6 +108,7 @@ export async function requestBudget(t: Tenant, perDay: string, calls: Permission
         if (!live) throw new Error('connection ended');
         await recordGrant(tx, t.connectionId, checked);
       });
+      await revokeReplaced(t, deps);
     })
     .catch((err: unknown) => log('warn', { msg: 'budget not granted', error: errorLabel(err) }))
     .finally(() => open.delete(t.connectionId));

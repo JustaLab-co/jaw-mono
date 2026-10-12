@@ -10,6 +10,7 @@ import {
   setTestEnv,
   walletAnswers,
   walletsSettled,
+  offlineSession,
 } from '@/connections/testkit';
 import { getDb } from '@/db/client';
 import { grants, settings } from '@/db/schema';
@@ -52,6 +53,7 @@ async function sender(calls: { target: Address; functionSignature: string }[] = 
     await requestBudget(t, '1', calls, {
       openWallet: fakeWallet(walletAnswers(c.signer)),
       readPermission: approvedOnChain,
+      ...offlineSession,
     });
     await walletsSettled();
   }

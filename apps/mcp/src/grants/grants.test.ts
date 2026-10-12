@@ -1,8 +1,9 @@
-import type { PermissionState } from '@jaw.id/agent';
+import { PERMISSION_MANAGER_ABI, type PermissionState } from '@jaw.id/agent';
 import { and, eq, isNull } from 'drizzle-orm';
-import type { Address } from 'viem';
+import { decodeFunctionData, type Address, type Hex, type PublicClient } from 'viem';
 import { beforeAll, describe, expect, it } from 'vitest';
 import { verifyBearer, type Tenant } from '@/connections/auth';
+import type { DisconnectDeps, Sent } from '@/connections/disconnect';
 import {
   approvedOnChain,
   callTool,
@@ -27,6 +28,43 @@ beforeAll(useTestDb);
 const USDC = '0x036CbD53842c5426634e7929541eC2318f3dCF7e';
 const APPROVE = { target: USDC as Address, functionSignature: 'approve(address,uint256)' };
 
+const MANAGER = '0xf1b40E3D5701C04d86F7828f0EB367B9C90901D8';
+const TX = `0x${'ab'.repeat(32)}` as Hex;
+
+type Call = { to: Address; data: Hex };
+
+/** A session account with `float` USDC whose batches land, or end as `outcome` says. */
+function sessionFakes(outcome: Sent = { status: 'landed', txHash: TX }, float = 500_000n) {
+  const sent: Call[][] = [];
+  const node = { getBlockNumber: async () => 100n, readContract: async () => float } as unknown as PublicClient;
+  const deps: Pick<DisconnectDeps, 'clients' | 'sender'> = {
+    clients: { publicClient: () => node },
+    sender: async () => ({
+      paymaster: '0x888888888888Ec68A58AB8094Cc1AD20Ba3D2402',
+      quote: async () => ({ expected: 2_000n, max: 10_000n }),
+      send: async (calls) => {
+        sent.push(calls);
+        return outcome;
+      },
+    }),
+  };
+  return { deps, sent };
+}
+
+const revokedAsSpender = (batch: Call[]) =>
+  batch
+    .filter((c) => c.to === MANAGER)
+    .map((c) => decodeFunctionData({ abi: PERMISSION_MANAGER_ABI, data: c.data }))
+    .map((d) => (d.functionName === 'revokeAsSpender' ? d.args[0] : undefined));
+
+const revokedAt = async (permissionId: string | undefined) =>
+  (
+    await getDb()
+      .select()
+      .from(grants)
+      .where(eq(grants.permissionId, permissionId as string))
+  )[0].revokedAt;
+
 const onChain =
   (state: PermissionState): ReadPermission =>
   async () =>
@@ -43,7 +81,12 @@ async function connected(scope = 'wallet:read x402:pay') {
 async function ask(
   t: Tenant,
   signer: ReturnType<typeof owner>,
-  opts: { perDay?: string; read?: ReadPermission; tamper?: (granted: Record<string, unknown>) => object } = {}
+  opts: {
+    perDay?: string;
+    read?: ReadPermission;
+    tamper?: (granted: Record<string, unknown>) => object;
+    session?: Pick<DisconnectDeps, 'clients' | 'sender'>;
+  } = {}
 ) {
   const asked: { method: string; params: unknown[] }[] = [];
   const honest = walletAnswers(signer);
@@ -54,6 +97,7 @@ async function ask(
   const result = await requestBudget(t, opts.perDay ?? '1', [], {
     openWallet: fakeWallet(answer, asked),
     readPermission: opts.read ?? approvedOnChain,
+    ...(opts.session ?? sessionFakes().deps),
   });
   await walletsSettled();
   return { result, grant: asked[0]?.params[0] as GrantRequest };
@@ -113,6 +157,7 @@ describe('budget grants', () => {
     await requestBudget(t, '1', [APPROVE], {
       openWallet: fakeWallet(walletAnswers(signer), asked),
       readPermission: approvedOnChain,
+      ...sessionFakes().deps,
     });
     await walletsSettled();
     expect((asked[0].params[0] as GrantRequest).permissions.calls).toEqual([
@@ -151,5 +196,38 @@ describe('budget grants', () => {
     const { t, connectedWith } = await connected();
     await ask(t, owner());
     expect((await currentGrant(t.connectionId))?.permissionId).toBe(connectedWith);
+  });
+});
+
+describe('given a connection whose budget the owner replaces', () => {
+  it('when the new budget lands, then the session key revokes the old one on chain and keeps its float', async () => {
+    const { t, signer, connectedWith } = await connected();
+    const old = (await currentGrant(t.connectionId))?.permission;
+    const { deps, sent } = sessionFakes();
+
+    await ask(t, signer, { perDay: '0.5', session: deps });
+
+    expect(sent).toHaveLength(1);
+    expect(revokedAsSpender(sent[0])).toEqual([
+      expect.objectContaining({ spender: old?.spender, salt: BigInt(old?.salt ?? 0) }),
+    ]);
+    // Only the revoke and the fee cap: nothing goes back to the owner.
+    expect(sent[0].map((c) => c.to)).toEqual([MANAGER, USDC]);
+    expect(await revokedAt(connectedWith)).not.toBeNull();
+    expect(await revokedAt((await currentGrant(t.connectionId))?.permissionId)).toBeNull();
+  });
+
+  it('when the revoke does not land, then the next budget retries it', async () => {
+    const { t, signer, connectedWith } = await connected();
+    await ask(t, signer, { perDay: '0.5', session: sessionFakes({ status: 'reverted' }).deps });
+    expect(await revokedAt(connectedWith)).toBeNull();
+    const second = (await currentGrant(t.connectionId))?.permissionId;
+
+    const { deps, sent } = sessionFakes();
+    await ask(t, signer, { perDay: '0.2', session: deps });
+
+    expect(revokedAsSpender(sent[0])).toHaveLength(2);
+    expect(await revokedAt(connectedWith)).not.toBeNull();
+    expect(await revokedAt(second)).not.toBeNull();
   });
 });
