@@ -140,8 +140,10 @@ type World = {
   /** When the receipt shows up; before it the node has none. */
   minedAt?: number;
   calls?: string[];
-  /** The transport's own retries, viem's default when unset. */
+  /** The transport's own retries: none unless set, so a behind node exercises the confirm's retries. */
   retries?: number;
+  /** What eth_getTransactionByHash returns, the bundle transaction when unset. */
+  tx?: unknown;
 };
 
 const N = BigInt(receiptJson.blockNumber);
@@ -171,14 +173,16 @@ function served(over: Partial<World> = {}): ChainClients {
   };
   let block = N;
   const request = async ({ method, params }: { method: string; params: unknown[] }) => {
-    if (method === world.down) throw new Error(`${method} unavailable`);
     world.calls?.push(method);
+    // Ends a retry loop that does not wait between reads, so it fails the test instead of hanging it.
+    if (world.calls && world.calls.length > 200) throw new Error('runaway reads');
+    if (method === world.down) throw new Error(`${method} unavailable`);
     if ((world.behind?.[method] ?? 0) > 0) {
       world.behind![method]--;
       throw new Error('header not found');
     }
     if (method === 'eth_getTransactionReceipt') return Date.now() < (world.minedAt ?? 0) ? null : world.receipt;
-    if (method === 'eth_getTransactionByHash') return txJson;
+    if (method === 'eth_getTransactionByHash') return world.tx ?? txJson;
     if (method === 'eth_blockNumber') return toHex(block++);
     if (method === 'eth_getBlockByNumber') {
       return { number: params[0], hash: world.blockHash, timestamp: BLOCK_TIME, transactions: [] };
@@ -202,7 +206,7 @@ function served(over: Partial<World> = {}): ChainClients {
     }
     throw new Error(`unserved ${method}`);
   };
-  const client = createPublicClient({ transport: custom({ request }, { retryCount: world.retries }) });
+  const client = createPublicClient({ transport: custom({ request }, { retryCount: world.retries ?? 0 }) });
   return { publicClient: () => client };
 }
 
@@ -294,6 +298,12 @@ describe('confirming an upto payment settled inside a bundle', () => {
     expect(await confirmBundle(served({ down: 'eth_getLogs' }))).toBeUndefined();
   });
 
+  it('does not retry a read that fails for another reason', async () => {
+    const calls: string[] = [];
+    expect(await confirmBundle(served({ down: 'eth_getLogs', calls }))).toBeUndefined();
+    expect(calls.filter((m) => m === 'eth_getLogs')).toHaveLength(1);
+  });
+
   it('settles when the nodes asked after the receipt are behind it', async () => {
     const behind = { eth_getLogs: 2, eth_call: 2, eth_getBlockByNumber: 2 };
     expect(await confirmBundle(served({ behind }))).toMatchObject({ amount: 20_000n });
@@ -310,11 +320,33 @@ describe('confirming an upto payment settled inside a bundle', () => {
     const calls: string[] = [];
     const lagging = served({ behind: { eth_getBlockByNumber: Number.POSITIVE_INFINITY }, calls });
     expect(await confirmByReceipt(bundled, receiptJson.transactionHash as Hex, lagging, 100)).toBeUndefined();
-    // The read in flight at the deadline still runs the transport's own retries, about a second.
-    await new Promise((r) => setTimeout(r, 1100));
     const asked = calls.length;
-    await new Promise((r) => setTimeout(r, 600));
+    await new Promise((r) => setTimeout(r, 1100));
     expect(calls.length).toBe(asked);
+  });
+
+  it('spaces the reads of a node that stays behind', async () => {
+    const calls: string[] = [];
+    const lagging = served({ behind: { eth_getBlockByNumber: Number.POSITIVE_INFINITY }, calls });
+    await confirmByReceipt(bundled, receiptJson.transactionHash as Hex, lagging, 100);
+    // About one read per 500 ms over the 2 s past the deadline.
+    expect(calls.filter((m) => m === 'eth_getBlockByNumber').length).toBeLessThanOrEqual(8);
+  });
+
+  it('settles a direct upto call when the node asked for its transaction and block is behind', async () => {
+    const transfer = {
+      ...payerTransfer,
+      address: usdc.address.toLowerCase(),
+      topics: encodeEventTopics({ abi: TRANSFER, eventName: 'Transfer', args: { from: payer, to: payTo } }) as Hex[],
+      data: pad(toHex(1000n)),
+    };
+    const receipt = { ...receiptJson, to: X402_UPTO_PROXY_ADDRESS.toLowerCase(), logs: [transfer] };
+    const tx = { ...txJson, to: X402_UPTO_PROXY_ADDRESS.toLowerCase(), input: settle() };
+    const behind = { eth_getTransactionByHash: 2, eth_getBlockByNumber: 2 };
+    const clients = served({ receipt, tx, behind });
+    expect(await confirmByReceipt(attempt, receiptJson.transactionHash as Hex, clients, 5000)).toMatchObject({
+      amount: 1000n,
+    });
   });
 
   it('refuses a reverted bundle', async () => {
