@@ -53,6 +53,7 @@ const PRICES: Record<string, string> = {
   '/pricey': '2000000',
   '/forever': '5000',
   '/overflow': '5000',
+  '/late': '5000',
 };
 /** What the seller advertises as maxTimeoutSeconds, where it is not 300. */
 const TIMEOUTS: Record<string, number> = {
@@ -61,6 +62,9 @@ const TIMEOUTS: Record<string, number> = {
 };
 const seen: { path: string; nonce: Hex; signature: Hex; validBefore: string }[] = [];
 const receipts = new Map<Hex, { from: Address; nonce: Hex }>();
+/** Mined, but not yet readable when the seller answers. */
+const minedLater = new Map<Hex, { from: Address; nonce: Hex }>();
+const laterTasks: (() => Promise<void>)[] = [];
 /** Nonces the token has consumed: the seller settled them on chain. */
 const used = new Set<string>();
 let dropNextLost = true;
@@ -116,7 +120,7 @@ const seller = createServer(async (req, res) => {
     return void res.end('{}');
   }
   const tx = path === '/sametx' ? TX(999) : TX(n);
-  receipts.set(tx, { from, nonce });
+  (path === '/late' ? minedLater : receipts).set(tx, { from, nonce });
   const receipt = { success: true, transaction: tx, network: 'eip155:84532', payer: from };
   res
     .writeHead(200, { 'payment-response': Buffer.from(JSON.stringify(receipt)).toString('base64') })
@@ -198,6 +202,7 @@ const deps = (over: Partial<PayDeps> = {}): PayDeps => ({
   readPermission: async () => ({ status: 'ok', approved: true, revoked: false }),
   executor: (_t, grant) => executor(grant.account),
   fetch: safeFetch(new Set([SELLER])),
+  later: (task) => void laterTasks.push(task),
   ...over,
 });
 
@@ -207,6 +212,7 @@ beforeEach(() => {
   refills.length = 0;
   onProbe.clear();
   onProof.clear();
+  laterTasks.length = 0;
 });
 
 async function connected(perDay?: string) {
@@ -726,6 +732,30 @@ describe('jaw_pay_and_fetch', () => {
     const second = await pay(t, { url: url('/unconfirmed'), idempotencyKey: 'used-2' }, deps());
     expect(second.structuredContent).toMatchObject({ kind: 'paid', moneyMoved: false });
     expect(refills).toEqual([]);
+  });
+
+  it('settles a payment once its receipt shows up after the answer was sent', async () => {
+    const { t } = await connected('1');
+    balances.set(t.sessionAddress.toLowerCase(), 1_000_000n);
+    const paid = await pay(t, { url: url('/late'), idempotencyKey: 'late-1' }, deps());
+    expect(paid.structuredContent).toMatchObject({ state: 'signed', kind: 'paid' });
+    const id = paid.structuredContent!.paymentId;
+
+    for (const [tx, r] of minedLater) receipts.set(tx, r);
+    await Promise.all(laterTasks.map((task) => task()));
+    expect(await rowOf(id)).toMatchObject({
+      state: 'settled',
+      amount: '5000',
+      txHash: paid.structuredContent?.payment?.txHash,
+    });
+  });
+
+  it('leaves a payment signed for the reconciler when its receipt never shows up', async () => {
+    const { t } = await connected('1');
+    balances.set(t.sessionAddress.toLowerCase(), 1_000_000n);
+    const paid = await pay(t, { url: url('/late'), idempotencyKey: 'late-2' }, deps());
+    await Promise.all(laterTasks.map((task) => task()));
+    expect((await rowOf(paid.structuredContent!.paymentId)).state).toBe('signed');
   });
 
   it('refuses to settle a payment on a transaction hash another payment of the payer already settled on', async () => {

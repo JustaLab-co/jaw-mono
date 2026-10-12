@@ -16,6 +16,7 @@ import {
   type SignedAuthorization,
   type TopUpExecutor,
 } from '@jaw.id/agent';
+import { after } from 'next/server';
 import type { Address, Hex } from 'viem';
 import { agentLogger, chainClients, payerFor, sessionOf, topUpExecutor, withoutUrls } from '@/adapters/session-host';
 import type { Tenant } from '@/connections/auth';
@@ -37,6 +38,7 @@ import {
   txHashTaken,
   markSigned,
   release,
+  settle,
   PAY_LIMIT_MS,
   type Conclusion,
   type PaymentRequest,
@@ -47,6 +49,8 @@ export { payOutput } from './render';
 
 export const PAY_RATE_LIMIT = 30;
 const CONFIRM_MS = 3_000;
+// How long the receipt is awaited once the answer is out, before the reconciler takes over.
+const LATE_CONFIRM_MS = 30_000;
 const BODY_MAX = 8_000;
 
 // Reasons built from our own errors can quote an RPC or paymaster url, key included.
@@ -76,6 +80,8 @@ export interface PayDeps {
   floatTarget: bigint;
   executor: (t: Tenant, grant: Grant) => TopUpExecutor | undefined;
   fetch: typeof fetch;
+  /** Runs a task after the response is sent. */
+  later: (task: () => Promise<void>) => void;
 }
 
 const liveDeps = (): PayDeps => ({
@@ -84,6 +90,7 @@ const liveDeps = (): PayDeps => ({
   floatTarget: config().floatTarget,
   executor: topUpExecutor,
   fetch: safeFetch(config().insecureFetchHosts),
+  later: after,
 });
 
 /** The probe never answered, or the grant was gone: nothing was signed. */
@@ -192,7 +199,12 @@ function conclusionOf(o: Outcome, signed: boolean, settled: Settled | undefined,
   }
 }
 
-async function settledBy(o: Outcome, signedAfter: Date, clients: ChainClients): Promise<Settled | undefined> {
+async function settledBy(
+  o: Outcome,
+  signedAfter: Date,
+  clients: ChainClients,
+  timeoutMs = CONFIRM_MS
+): Promise<Settled | undefined> {
   if (o.kind !== 'paid' || !o.payment.txHash) return undefined;
   const { payment } = o;
   const attempt = {
@@ -204,7 +216,7 @@ async function settledBy(o: Outcome, signedAfter: Date, clients: ChainClients): 
     authorized: BigInt(payment.authorized),
     signedAt: signedAfter,
   };
-  return confirmByReceipt(attempt, payment.txHash as Hex, clients, CONFIRM_MS);
+  return confirmByReceipt(attempt, payment.txHash as Hex, clients, timeoutMs);
 }
 
 /** A hash another payment of this payer already settled on proves nothing about this one, so it is dropped. */
@@ -293,6 +305,16 @@ export async function pay(t: Tenant, input: PayInput, deps: PayDeps = liveDeps()
     confirmWith: deps.clients,
     noRetry: oneOff,
   });
+  const { row: written } = done;
+  if (written.state === 'signed' && written.kind === 'paid' && written.txHash) {
+    deps.later(async () => {
+      const settled = await settledBy(outcome, new Date(started), deps.clients, LATE_CONFIRM_MS);
+      if (!settled) return;
+      await settle(written.id, settled).catch((err) => {
+        log('error', { msg: `late settle ${written.id} failed`, error: err instanceof Error ? err.name : 'unknown' });
+      });
+    });
+  }
   const offer = oneOff ? await offerOneOff(t, request, challenge) : undefined;
   return render(done.row, done.fenced, offer);
 }

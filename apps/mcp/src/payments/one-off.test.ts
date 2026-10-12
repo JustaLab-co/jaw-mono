@@ -115,6 +115,7 @@ const deps = (): PayDeps => ({
   readPermission: async () => ({ status: 'ok', approved: true, revoked: false }),
   executor: () => undefined,
   fetch: safeFetch(new Set([SELLER])),
+  later: () => undefined,
 });
 
 const oneOffDeps = (at = new Date()) => ({ fetch: deps().fetch, now: () => at });
