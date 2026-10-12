@@ -44,6 +44,7 @@ const named = (name: string) => `${NAMED}${encodeURIComponent(name)}.json`;
 const NUL_NAMED = 'https://evil.example.test/nul.json';
 // A document with loopback redirects that name no port, and no application_type.
 const LOOPBACK = 'https://claude.example.test/oauth/client-metadata';
+const NO_REFRESH = 'https://norefresh.example.test/agent.json';
 const KEYED = 'https://evil.example.test/keyed.json';
 const PUBLIC_KEYED = 'https://evil.example.test/public-keyed.json';
 const metadata = {
@@ -70,37 +71,43 @@ beforeAll(async () => {
           ? Response.json({ ...metadata, client_id: IMPOSTOR, client_name: 'JAW CLI' })
           : String(url) === HIDDEN_IMPOSTOR
             ? Response.json({ ...metadata, client_id: HIDDEN_IMPOSTOR, client_name: 'J\u200BA\u200BW Wallet' })
-            : String(url) === KEYED
+            : String(url) === NO_REFRESH
               ? Response.json({
                   ...metadata,
-                  client_id: KEYED,
-                  token_endpoint_auth_method: 'private_key_jwt',
-                  jwks_uri: 'https://evil.example.test/jwks.json',
+                  client_id: NO_REFRESH,
+                  grant_types: ['authorization_code'],
                 })
-              : String(url) === PUBLIC_KEYED
+              : String(url) === KEYED
                 ? Response.json({
                     ...metadata,
-                    client_id: PUBLIC_KEYED,
+                    client_id: KEYED,
+                    token_endpoint_auth_method: 'private_key_jwt',
                     jwks_uri: 'https://evil.example.test/jwks.json',
                   })
-                : String(url) === LOOPBACK
+                : String(url) === PUBLIC_KEYED
                   ? Response.json({
-                      client_id: LOOPBACK,
-                      client_name: 'Loopback Agent',
-                      redirect_uris: ['http://localhost/callback', 'http://127.0.0.1/callback'],
-                      grant_types: ['authorization_code', 'refresh_token'],
-                      response_types: ['code'],
-                      token_endpoint_auth_method: 'none',
+                      ...metadata,
+                      client_id: PUBLIC_KEYED,
+                      jwks_uri: 'https://evil.example.test/jwks.json',
                     })
-                  : String(url) === NUL_NAMED
-                    ? Response.json({ ...metadata, client_id: NUL_NAMED, client_name: 'Agent\u0000' })
-                    : String(url).startsWith(NAMED)
-                      ? Response.json({
-                          ...metadata,
-                          client_id: String(url),
-                          client_name: decodeURIComponent(String(url).slice(NAMED.length, -'.json'.length)),
-                        })
-                      : new Response('not found', { status: 404 }),
+                  : String(url) === LOOPBACK
+                    ? Response.json({
+                        client_id: LOOPBACK,
+                        client_name: 'Loopback Agent',
+                        redirect_uris: ['http://localhost/callback', 'http://127.0.0.1/callback'],
+                        grant_types: ['authorization_code', 'refresh_token'],
+                        response_types: ['code'],
+                        token_endpoint_auth_method: 'none',
+                      })
+                    : String(url) === NUL_NAMED
+                      ? Response.json({ ...metadata, client_id: NUL_NAMED, client_name: 'Agent\u0000' })
+                      : String(url).startsWith(NAMED)
+                        ? Response.json({
+                            ...metadata,
+                            client_id: String(url),
+                            client_name: decodeURIComponent(String(url).slice(NAMED.length, -'.json'.length)),
+                          })
+                        : new Response('not found', { status: 404 }),
   });
 });
 
@@ -298,6 +305,15 @@ describe('authorization server', () => {
       redirectUri: 'http://127.0.0.1:9100/cb',
     });
     expect(start.uid).toBeUndefined();
+  });
+
+  it('refuses a CIMD client whose grant_types omit refresh_token, before consent', async () => {
+    const start = await startAuthorization(new Browser(), {
+      clientId: NO_REFRESH,
+      redirectUri: 'http://127.0.0.1:9100/cb',
+    });
+    expect(start.uid).toBeUndefined();
+    expect(await start.stopped?.text()).toMatch(/refresh_token/);
   });
 
   it.each([
