@@ -289,8 +289,10 @@ export async function connect(
   return { signer, uid: start.uid, ...issued.body, status: issued.status };
 }
 
-export async function mcp(token: string | undefined, body: object) {
-  const { POST } = await import('@/app/mcp/route');
+type Route = (req: Request, ctx: { params: Promise<Record<string, string>> }) => Promise<Response>;
+
+export async function mcp(token: string | undefined, body: object, route?: Route) {
+  const POST: Route = route ?? (await import('@/app/mcp/route')).POST;
   const res = await POST(
     new Request(`${ISSUER}/mcp`, {
       method: 'POST',

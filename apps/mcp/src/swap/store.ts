@@ -1,6 +1,7 @@
 import { createHash, randomBytes } from 'node:crypto';
-import { and, eq, inArray, isNull, lt, not, sql, type SQL } from 'drizzle-orm';
+import { and, eq, inArray, isNotNull, isNull, lt, not, sql, type SQL } from 'drizzle-orm';
 import type { PgUpdateSetSource } from 'drizzle-orm/pg-core';
+import { config, QUOTE_MARGIN_SEC } from '@/connections/config';
 import { getDb, type Tx } from '@/db/client';
 import { payments, SWAP_DEPOSIT_ADDRESS_INDEX, swaps } from '@/db/schema';
 import { LEASE_MS } from '@/payments/store';
@@ -54,6 +55,15 @@ const leaseLive = sql<boolean>`${swaps.leaseUntil} > ${dbNow}`;
 const currentPayment = (where: SQL) =>
   sql`exists (select 1 from payments p
     where p.connection_id = ${swaps.connectionId} and p.idempotency_key = ${swaps.paymentKey} and ${where})`;
+
+const OWNER_WINDOW_MS = 10 * 60_000;
+const ownerWindowMs = (ttlSec: number) => Math.min(OWNER_WINDOW_MS, (ttlSec - QUOTE_MARGIN_SEC) * 1000);
+
+export const approveByOf = (paidAt: Date, ttlSec: number) => new Date(paidAt.getTime() + ownerWindowMs(ttlSec));
+
+const quoteStale = () =>
+  sql`(${swaps.paidAt} is null or ${swaps.paidAt} + ${ownerWindowMs(config().swapQuoteTtlSec)} * interval '1 millisecond' <= ${dbNow})`;
+const toStale: SwapSet = { state: 'quote_failed', code: 'quote_stale', leaseToken: null, leaseUntil: dbNow };
 
 const lowerHex = (address: string) => (/^0x[0-9a-f]{40}$/i.test(address) ? address.toLowerCase() : address);
 
@@ -115,9 +125,16 @@ async function waitForQuotePaymentWriters(tx: Tx, connectionId: string): Promise
     .for('share', { of: payments });
 }
 
+const expirePast = (where: SQL) =>
+  write(and(where, eq(swaps.state, 'awaiting_owner'), lt(swaps.approveBy, dbNow)), { state: 'expired' });
+
 async function freeStale(connectionId: string): Promise<void> {
   const ofConnection = eq(swaps.connectionId, connectionId);
-  await write(and(ofConnection, eq(swaps.state, 'awaiting_owner'), lt(swaps.approveBy, dbNow)), { state: 'expired' });
+  await expirePast(ofConnection);
+  await write(
+    and(ofConnection, eq(swaps.state, 'quoting'), not(leaseLive), isNotNull(swaps.quoteId), quoteStale()),
+    toStale
+  );
   const paying = currentPayment(sql`(p.signed_at is not null or (p.state = 'pending' and p.lease_until > ${dbNow}))`);
   await getDb().transaction(async (tx) => {
     await waitForQuotePaymentWriters(tx, connectionId);
@@ -138,6 +155,7 @@ async function openSwap(connectionId: string): Promise<SwapRow | undefined> {
 
 async function answer(row: SwapRow, hash: string): Promise<SwapClaim> {
   if (row.requestHash !== hash) return { kind: 'conflict' };
+  if (row.state === 'awaiting_owner') return { kind: 'stored', row: (await expirePast(eq(swaps.id, row.id))) ?? row };
   if (row.state !== 'quoting') return { kind: 'stored', row };
   const token = newToken();
   const taken = await write(and(eq(swaps.id, row.id), eq(swaps.state, 'quoting'), not(leaseLive)), {
@@ -165,6 +183,23 @@ export async function claimSwap(connectionId: string, key: string, request: Swap
   return { kind: 'busy' };
 }
 
+export async function nextStepPays(connectionId: string, key: string, request: SwapRequest): Promise<boolean> {
+  const row = await find(connectionId, key);
+  if (!row) return true;
+  const otherRequest = row.requestHash !== swapRequestHash(request);
+  const quoteHeld = row.quoteId !== null;
+  if (otherRequest || row.state !== 'quoting' || quoteHeld) return false;
+  return !(await quotePaymentSigned(row.id));
+}
+
+async function quotePaymentSigned(id: string): Promise<boolean> {
+  const [signed] = await getDb()
+    .select({ id: swaps.id })
+    .from(swaps)
+    .where(and(eq(swaps.id, id), currentPayment(sql`p.signed_at is not null`)));
+  return signed !== undefined;
+}
+
 export type SwapLease = { connectionId: string; id: string; token: string };
 
 const held = ({ connectionId, id, token }: SwapLease) =>
@@ -177,6 +212,15 @@ const held = ({ connectionId, id, token }: SwapLease) =>
   );
 
 export const writeHeld = (lease: SwapLease, set: SwapSet) => write(held(lease), set);
+
+const holdingQuote = (lease: SwapLease) => and(held(lease), isNotNull(swaps.quoteId));
+
+export const failIfStale = (lease: SwapLease) => write(and(holdingQuote(lease), quoteStale()), toStale);
+
+export const renewQuoted = (lease: SwapLease) => write(holdingQuote(lease), { leaseUntil: leaseFromNow });
+
+export const releaseQuoted = (lease: SwapLease, set: SwapSet) =>
+  write(holdingQuote(lease), { ...set, leaseToken: null, leaseUntil: dbNow });
 
 export const release = (lease: SwapLease, set: SwapSet) =>
   write(and(held(lease), isNull(swaps.quoteId)), { ...set, leaseToken: null, leaseUntil: dbNow });

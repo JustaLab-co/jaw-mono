@@ -2,6 +2,7 @@ import { randomBytes, randomUUID } from 'node:crypto';
 import { eq, sql, type SQL } from 'drizzle-orm';
 import { getAddress } from 'viem';
 import { beforeAll, describe, expect, it } from 'vitest';
+import { setTestEnv } from '@/connections/testkit';
 import { getDb } from '@/db/client';
 import { connections, payments, swaps } from '@/db/schema';
 import { TEST_PG_URL, useTestDb, useTestPostgres } from '@/db/test-db';
@@ -33,6 +34,8 @@ const request: SwapRequest = {
   depositor: ACCOUNT,
   recipient: ACCOUNT,
 };
+
+setTestEnv();
 
 beforeAll(async () => {
   if (TEST_PG_URL) await useTestPostgres();

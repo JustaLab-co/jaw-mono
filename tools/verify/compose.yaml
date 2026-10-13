@@ -31,6 +31,7 @@ services:
       JAW_MCP_API_KEY: ${JAW_MCP_API_KEY:-}
       JAW_MCP_INSECURE_FETCH_HOSTS: ${JAW_MCP_INSECURE_FETCH_HOSTS:-},host.docker.internal:${PORT}
       JAW_MCP_SWAP_URL: ${JAW_MCP_SWAP_URL:-http://host.docker.internal:${PORT}/proxy/v2}
+      JAW_MCP_SWAP_QUOTE_TTL_SEC: ${JAW_MCP_SWAP_QUOTE_TTL_SEC:-}
       # Settles signed payments whose receipt came after the call answered.
       JAW_MCP_RECONCILE_EVERY: ${JAW_MCP_RECONCILE_EVERY:-30}
       JAW_RELAY_URL: ${JAW_RELAY_URL:-}
