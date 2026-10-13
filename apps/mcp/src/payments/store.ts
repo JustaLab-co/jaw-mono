@@ -4,7 +4,7 @@ import { and, desc, eq, getTableColumns, inArray, isNotNull, isNull, lt, ne, not
 import type { Address } from 'viem';
 import { getDb, type Tx } from '@/db/client';
 import { EXPIRY_MARGIN_MS } from './confirm';
-import { connections, payments } from '@/db/schema';
+import { connections, PAYER_TX_HASH_INDEX, payments } from '@/db/schema';
 
 export type PaymentRow = typeof payments.$inferSelect;
 export type PaymentState = PaymentRow['state'];
@@ -174,7 +174,7 @@ export async function markSigned(id: string, token: string, a: SignedAuthorizati
 
 function hashIndexViolated(err: unknown): boolean {
   const e = (err as { cause?: { code?: unknown; constraint_name?: unknown } }).cause;
-  return e?.code === '23505' && e.constraint_name === 'payments_payer_tx_hash_index';
+  return e?.code === '23505' && e.constraint_name === PAYER_TX_HASH_INDEX;
 }
 
 export async function txHashTaken(payer: string, txHash: string, exceptId: string): Promise<boolean> {
@@ -309,10 +309,28 @@ export async function finish(
   try {
     return await finishWith(id, token, c, fenced);
   } catch (err) {
-    // Another payment of the payer wrote this hash since the call checked it: the row is written without it.
     if (!c.txHash || !hashIndexViolated(err)) throw err;
+    // Another payment of the payer wrote this hash since the call checked it. A receipt that
+    // proves this row takes the hash from a row no receipt proved; otherwise this row goes without it.
+    if (c.state === 'settled' && (await dropUnprovenHash(id, c.txHash))) return finishWith(id, token, c, fenced);
     return finishWith(id, token, { ...c, txHash: undefined }, fenced);
   }
+}
+
+async function dropUnprovenHash(id: string, txHash: string): Promise<boolean> {
+  const rows = await getDb()
+    .update(payments)
+    .set({ txHash: null })
+    .where(
+      and(
+        sql`${payments.payer} = (select payer from payments where id = ${id})`,
+        sql`lower(${payments.txHash}) = ${txHash.toLowerCase()}`,
+        ne(payments.id, id),
+        ne(payments.state, 'settled')
+      )
+    )
+    .returning({ id: payments.id });
+  return rows.length > 0;
 }
 
 async function finishWith(id: string, token: string, c: Conclusion, fenced: string[]) {

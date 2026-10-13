@@ -2,7 +2,7 @@ import { randomUUID } from 'node:crypto';
 import { createServer } from 'node:http';
 import { createServer as createTcpServer, connect as tcpConnect, type AddressInfo, type Socket } from 'node:net';
 import type { ChainClients, TopUpExecutor } from '@jaw.id/agent';
-import { eq, sql } from 'drizzle-orm';
+import { eq, inArray, sql } from 'drizzle-orm';
 import fc from 'fast-check';
 import postgres from 'postgres';
 import {
@@ -928,29 +928,64 @@ describe('jaw_pay_and_fetch', () => {
     expect(second.structuredContent?.payment?.txHash).toBeUndefined();
   });
 
-  it.skipIf(!TEST_PG_URL)(
-    'given two payments of one payer whose seller names the same transaction at once, then each answers from its row and neither throws',
-    async () => {
+  it.skipIf(!TEST_PG_URL).each(['the proven', 'the unproven'])(
+    'given two payments of one payer whose seller names the same transaction at once and %s row writes last, then each answers from its row, the proven one settles on the hash and the other waits without it',
+    async (last) => {
       const { t } = await connected('1');
       balances.set(t.sessionAddress.toLowerCase(), 1_000_000n);
       onProof.set('/sametx', barrier(2));
-      const results = await Promise.allSettled([
-        pay(t, { url: url('/sametx'), idempotencyKey: 'same-at-once-a' }, deps()),
-        pay(t, { url: url('/sametx'), idempotencyKey: 'same-at-once-b' }, deps()),
-      ]);
-      const reasons = results.flatMap((r) =>
-        r.status === 'rejected' ? [String((r.reason as Error).cause ?? r.reason)] : []
+      const keys = [`same-at-once-${last.replace(' ', '-')}-a`, `same-at-once-${last.replace(' ', '-')}-b`];
+      // A proven row reads its block after the receipt; a row the receipt does not prove is concluded signed.
+      if (last === 'the proven') blocksBehind = 1;
+      const slow =
+        last === 'the unproven'
+          ? await Promise.all(keys.map((k) => slowUpdates(k, "new.state = 'signed' and new.kind = 'paid'", 1)))
+          : [];
+      try {
+        const results = await Promise.allSettled(
+          keys.map((k) => pay(t, { url: url('/sametx'), idempotencyKey: k }, deps()))
+        );
+        const reasons = results.flatMap((r) =>
+          r.status === 'rejected' ? [String((r.reason as Error).cause ?? r.reason)] : []
+        );
+        expect(reasons).toEqual([]);
+      } finally {
+        for (const drop of slow) await drop();
+      }
+      const rows = await getDb().select().from(payments).where(inArray(payments.idempotencyKey, keys));
+      // The receipt names the nonce the seller settled last; the other row is left to the reconciler.
+      const proven = receipts.get(TX(999))!.nonce.toLowerCase();
+      const byState = rows.sort((a, b) => (a.state < b.state ? 1 : -1));
+      expect(byState.map(({ state, kind, amount, txHash, nonce }) => ({ state, kind, amount, txHash, nonce }))).toEqual(
+        [
+          {
+            state: 'signed',
+            kind: 'paid',
+            amount: PRICES['/sametx'],
+            txHash: null,
+            nonce: expect.not.stringMatching(proven),
+          },
+          { state: 'settled', kind: 'paid', amount: PRICES['/sametx'], txHash: TX(999), nonce: proven },
+        ]
       );
-      expect(reasons).toEqual([]);
-      const rows = await getDb()
-        .select()
-        .from(payments)
-        .where(sql`${payments.idempotencyKey} in ('same-at-once-a', 'same-at-once-b')`);
-      // Both proofs reached the seller, so both rows say so, and at most one carries the hash.
-      expect(rows.map((r) => r.kind).sort()).toEqual(['paid', 'paid']);
-      expect(rows.filter((r) => r.txHash !== null).length).toBeLessThanOrEqual(1);
     }
   );
+
+  it('given the conclusion write fails for a reason other than a taken hash, then the call fails instead of writing the row without its hash', async () => {
+    const { t } = await connected('1');
+    balances.set(t.sessionAddress.toLowerCase(), 1_000_000n);
+    const drop = await failUpdates('hash-write-fails', 'new.tx_hash is not null');
+    try {
+      const paid = pay(t, { url: url('/exact'), idempotencyKey: 'hash-write-fails' }, deps());
+      await expect(paid.catch((err: Error) => Promise.reject(String(err.cause ?? err)))).rejects.toMatch(
+        'hash-write-fails write refused'
+      );
+      const [row] = await getDb().select().from(payments).where(eq(payments.idempotencyKey, 'hash-write-fails'));
+      expect(row).toMatchObject({ kind: null, txHash: null });
+    } finally {
+      await drop();
+    }
+  });
 
   it('reads the payer balance and the nonces it holds against at one block', async () => {
     const { t } = await connected('1');
