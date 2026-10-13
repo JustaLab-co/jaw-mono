@@ -78,8 +78,14 @@ export function createProvider(cfg: Config, overrides: Partial<Configuration> = 
         // The provider cuts a private socket only after connecting; the delay would tell whether the host is live.
         allowFetch: (_ctx, clientId) => resolvesPublic(new URL(clientId).hostname),
         // Public clients only: a jwks_uri would be fetched for every request it signs.
-        allowClient: async (_ctx, client) =>
-          client.tokenEndpointAuthMethod === 'none' && !client.jwksUri && !hasUnstorableText(client.clientName ?? ''),
+        allowClient: async (_ctx, client) => {
+          if (client.tokenEndpointAuthMethod !== 'none' || client.jwksUri) return false;
+          if (hasUnstorableText(client.clientName ?? '')) return false;
+          if (!client.grantTypeAllowed('refresh_token')) {
+            throw new errors.InvalidClientMetadata('grant_types must include refresh_token');
+          }
+          return true;
+        },
       },
       resourceIndicators: {
         enabled: true,

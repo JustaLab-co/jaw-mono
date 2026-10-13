@@ -1,13 +1,14 @@
+import { randomBytes } from 'node:crypto';
 import { eq } from 'drizzle-orm';
 import { hexToString, type Hex } from 'viem';
-import { privateKeyToAddress } from 'viem/accounts';
+import { generatePrivateKey, privateKeyToAddress } from 'viem/accounts';
 import { beforeAll, describe, expect, it } from 'vitest';
 import { getDb } from '@/db/client';
 import { connections, grants } from '@/db/schema';
 import { useTestDb } from '@/db/test-db';
 import type { GrantRequest } from '@/grants/permission';
 import { config } from './config';
-import { SESSIONS_PER_CLIENT, SESSIONS_PER_IP } from './interaction';
+import { CONNECTIONS_PER_ACCOUNT, SESSIONS_PER_CLIENT, SESSIONS_PER_IP } from './interaction';
 import type { OpenWallet } from './relay';
 import { open, type Sealed } from './seal';
 import {
@@ -269,5 +270,52 @@ describe('connecting through the owner wallet', () => {
     const res = await new Browser().get(`${ISSUER}/interaction/abcdefghijklmnop`);
     expect(res.status).toBe(410);
     expect(opened).toBe(0);
+  });
+});
+
+async function fillConnections(account: string, n: number) {
+  for (let i = 0; i < n; i++) {
+    await getDb()
+      .insert(connections)
+      .values({
+        id: `conn_fill_${randomBytes(8).toString('hex')}`,
+        status: 'active',
+        account,
+        chainId: config().chain.id,
+        clientId: 'jaw-cli',
+        clientName: 'JAW CLI',
+        scopes: ['wallet:read'],
+        sessionAddress: privateKeyToAddress(generatePrivateKey()),
+        interactionUid: `fill_${randomBytes(8).toString('hex')}`,
+        ticketHash: null,
+        expiresAt: new Date(Date.now() + 30 * 24 * 60 * 60 * 1000),
+        grantId: `fill_grant_${randomBytes(8).toString('hex')}`,
+        activatedAt: new Date(),
+      });
+  }
+}
+
+describe('per-account connection cap', () => {
+  it('given an account at the cap, then a new connection is refused after sign-in', async () => {
+    const signer = owner();
+    await fillConnections(signer.address, CONNECTIONS_PER_ACCOUNT);
+    setWallet({ openWallet: fakeWallet(walletAnswers(signer)) });
+    const browser = new Browser();
+    const start = await startAuthorization(browser, { scope: 'wallet:read' });
+    await walletsSettled();
+    expect(await stateOf(browser, start.uid!)).toEqual({
+      state: 'failed',
+      reason: 'too many active connections; revoke one first',
+    });
+  });
+
+  it('given an account one under the cap, then a new connection succeeds', async () => {
+    const signer = owner();
+    await fillConnections(signer.address, CONNECTIONS_PER_ACCOUNT - 1);
+    setWallet({ openWallet: fakeWallet(walletAnswers(signer)) });
+    const browser = new Browser();
+    const start = await startAuthorization(browser, { scope: 'wallet:read' });
+    await walletsSettled();
+    expect(await stateOf(browser, start.uid!)).toEqual({ state: 'approved' });
   });
 });
