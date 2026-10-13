@@ -12,6 +12,28 @@ const BASE = new URL(process.argv[2] ?? '').origin;
 const SCOPE = process.argv[3] ?? 'wallet:read x402:pay wallet:send';
 const RESOURCE = `${BASE}/mcp`;
 
+// The page the browser lands on after the wallet, in the look of the connect page.
+const STYLE = `
+:root{--bg:#f8fafc;--card:#fff;--fg:#020817;--muted:#64748b;--border:#e2e8f0;--ok:#16a34a;--bad:#dc2626;color-scheme:light}
+@media (prefers-color-scheme:dark){:root{--bg:#020817;--card:#0b1222;--fg:#f8fafc;--muted:#94a3b8;--border:#1e293b;color-scheme:dark}}
+*{box-sizing:border-box}
+body{margin:0;min-height:100vh;display:flex;align-items:center;justify-content:center;padding:1rem;background:var(--bg);color:var(--fg);font:15px/1.55 ui-sans-serif,system-ui,-apple-system,"Segoe UI",sans-serif}
+.card{width:100%;max-width:26rem;background:var(--card);border:1px solid var(--border);border-radius:.75rem;padding:2rem;box-shadow:0 1px 3px rgb(0 0 0/.06),0 8px 24px rgb(0 0 0/.04)}
+.brand{display:flex;align-items:center;gap:.5rem;margin-bottom:1.5rem;color:var(--muted);font-size:.8rem;font-weight:600;letter-spacing:.08em;text-transform:uppercase}
+.brand img{width:28px;height:28px}
+@media (prefers-color-scheme:dark){.brand img{filter:invert(1)}}
+h1{margin:0 0 .35rem;font-size:1.35rem;line-height:1.3;font-weight:650}
+h1.ok{color:var(--ok)}h1.bad{color:var(--bad)}
+p{margin:0;color:var(--muted);font-size:.9rem}
+`;
+const escape = (text) => text.replace(/[&<>"']/g, (c) => `&#${c.charCodeAt(0)};`);
+const done = (error) => {
+  const body = error
+    ? `<h1 class="bad">Not connected</h1><p>${escape(error)}. You can close this tab.</p>`
+    : '<h1 class="ok">Connected</h1><p>You can close this tab and go back to the terminal.</p>';
+  return `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>JAW</title><style>${STYLE}</style></head><body><main class="card"><div class="brand"><img src="https://keys.jaw.id/jaw-logo.png" alt="">JAW</div>${body}</main></body></html>`;
+};
+
 async function authorize() {
   const verifier = randomBytes(32).toString('base64url');
   const state = randomBytes(8).toString('hex');
@@ -21,7 +43,8 @@ async function authorize() {
       const url = new URL(req.url, redirect);
       if (url.pathname !== '/callback') return void res.writeHead(404).end();
       const error = url.searchParams.get('error');
-      res.end(error ? `Not connected: ${error}. You can close this tab.` : 'Connected. You can close this tab.');
+      res.writeHead(200, { 'content-type': 'text/html; charset=utf-8' });
+      res.end(done(error));
       server.close();
       if (error) reject(new Error(`${error}: ${url.searchParams.get('error_description') ?? ''}`));
       else if (url.searchParams.get('state') !== state) reject(new Error('state mismatch'));
