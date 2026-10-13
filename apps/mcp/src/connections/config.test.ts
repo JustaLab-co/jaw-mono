@@ -8,6 +8,7 @@ afterEach(() => {
   delete process.env.JAW_MCP_FLOAT_TARGET;
   delete process.env.JAW_MCP_INSECURE_FETCH_HOSTS;
   delete process.env.JAW_MCP_SWAP_URL;
+  delete process.env.JAW_MCP_SWAP_QUOTE_TTL_SEC;
   vi.resetModules();
 });
 
@@ -99,4 +100,26 @@ describe('JAW_MCP_SWAP_URL', () => {
     const { config } = await import('./config');
     expect(() => config()).toThrow(/JAW_MCP_SWAP_URL/);
   });
+});
+
+describe('JAW_MCP_SWAP_QUOTE_TTL_SEC', () => {
+  it('given it unset, then the quote TTL is the backend default of 300 s', async () => {
+    const { config } = await import('./config');
+    expect(config().swapQuoteTtlSec).toBe(300);
+  });
+
+  it('given 660, then it is read as 660 s', async () => {
+    process.env.JAW_MCP_SWAP_QUOTE_TTL_SEC = '660';
+    const { config } = await import('./config');
+    expect(config().swapQuoteTtlSec).toBe(660);
+  });
+
+  it.each(['60', '0', '1.5', '-300', 'five'])(
+    'given %j, then it refuses to start naming the variable',
+    async (value) => {
+      process.env.JAW_MCP_SWAP_QUOTE_TTL_SEC = value;
+      const { config } = await import('./config');
+      expect(() => config()).toThrow(/JAW_MCP_SWAP_QUOTE_TTL_SEC/);
+    }
+  );
 });

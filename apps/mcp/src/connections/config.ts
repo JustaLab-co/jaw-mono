@@ -21,6 +21,7 @@ export interface Config {
   /** USDC base units per day a connection that pays asks for when it connects. */
   dailyBudget: bigint;
   swapUrl: string;
+  swapQuoteTtlSec: number;
   ring: KeyRing;
 }
 
@@ -52,6 +53,7 @@ export function config(): Config {
     floatTarget: baseUnits('JAW_MCP_FLOAT_TARGET', process.env.JAW_MCP_FLOAT_TARGET || '250000'),
     dailyBudget: baseUnits('JAW_MCP_DAILY_BUDGET', process.env.JAW_MCP_DAILY_BUDGET || '1000000'),
     swapUrl: swapUrl(process.env.JAW_MCP_SWAP_URL || 'https://api.justaname.id/proxy/v2', insecureFetchHosts),
+    swapQuoteTtlSec: quoteTtl(process.env.JAW_MCP_SWAP_QUOTE_TTL_SEC || '300'),
     ring: parseKeyRing(process.env.JAW_MCP_SEALING_KEYS),
   };
   return cached;
@@ -77,6 +79,15 @@ function required(name: string): string {
 function baseUnits(name: string, value: string): bigint {
   if (!/^\d+$/.test(value)) throw new Error(`${name} must be whole base units, such as 250000 for 0.25 USDC`);
   return BigInt(value);
+}
+
+export const QUOTE_MARGIN_SEC = 60;
+
+function quoteTtl(value: string): number {
+  if (!/^\d+$/.test(value) || Number(value) <= QUOTE_MARGIN_SEC) {
+    throw new Error('JAW_MCP_SWAP_QUOTE_TTL_SEC must be whole seconds over 60, such as 300');
+  }
+  return Number(value);
 }
 
 function swapUrl(value: string, insecureFetchHosts: ReadonlySet<string>): string {

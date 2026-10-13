@@ -57,7 +57,7 @@ export type PayResult = {
 };
 
 /** Refusals a larger budget would fix. */
-const RAISE = new Set(['budget_exhausted', 'over_cap', 'no_grant', 'grant_revoked']);
+export const RAISE = new Set(['budget_exhausted', 'over_cap', 'no_grant', 'grant_revoked']);
 
 export const gate = (code: string, text: string): PayResult => ({
   content: [{ type: 'text', text: `${code}: ${text}` }],
