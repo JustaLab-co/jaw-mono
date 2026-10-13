@@ -326,7 +326,19 @@ async function concludeSend(
   const movedBefore = Boolean(row.topUpAmount || row.topUpBatchId || row.approvalBatchId);
   const conclusion = conclusionOf(checked, opts.signed, settled, movedBefore);
   const fenced = fencedOf(row.url, outcome);
-  const written = await finish(row.id, token, conclusion, fenced);
+  let written: PaymentRow | undefined;
+  try {
+    written = await finish(row.id, token, conclusion, fenced);
+  } catch (err) {
+    // The seller already answered, so the caller still gets it. The row keeps
+    // what it had, and its lease ends so a retry or the reconciler can take it.
+    log('error', { msg: `payment ${row.id} not concluded`, error: err instanceof Error ? err.name : 'unknown' });
+    await release(row.id, token).catch((e) => {
+      log('warn', { msg: `payment ${row.id} lease not released`, error: e instanceof Error ? e.name : 'unknown' });
+    });
+    const current = await findPayment(row.id).catch(() => undefined);
+    return { row: merged(current ?? row, conclusion), fenced };
+  }
   if (written) settleLater(written, checked, opts.signedAt, opts.confirm);
   return { row: written ?? (await rowAfter(row, conclusion)), fenced };
 }
