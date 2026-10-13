@@ -10,7 +10,7 @@ import {
   type Hex,
   type PublicClient,
 } from 'viem';
-import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeAll, beforeEach, describe, expect, it, onTestFinished, vi } from 'vitest';
 import { createMcpHandler } from 'mcp-handler';
 import { verifyBearer, withConnection, type Tenant } from '@/connections/auth';
 import { config } from '@/connections/config';
@@ -81,18 +81,23 @@ const executor = (funder: Address): TopUpExecutor => ({
   },
 });
 
-const backend = { deposit: undefined as Address | undefined, hits: [] as { url: URL; nonce?: Hex }[], lose: 0 };
+const backend = {
+  deposit: undefined as Address | undefined,
+  hits: [] as { url: URL; nonce?: Hex }[],
+  lose: 0,
+  probe: '' as '' | 'down' | 'other-asset',
+};
 const b64 = (v: unknown) => Buffer.from(JSON.stringify(v)).toString('base64');
 const transfer = (to: Address, amount: bigint) =>
   encodeFunctionData({ abi: erc20Abi, functionName: 'transfer', args: [to, amount] });
 
-function challenge(url: URL): Response {
+function challenge(url: URL, asset: Address = USDC): Response {
   const accepts = [
     {
       scheme: 'exact',
       network: 'eip155:84532',
       amount: '5000',
-      asset: USDC,
+      asset,
       payTo: PAY_TO,
       maxTimeoutSeconds: 300,
       extra: { name: 'USDC', version: '2' },
@@ -111,7 +116,8 @@ const auroraErc20Backend: typeof fetch = async (input, init) => {
     ? JSON.parse(Buffer.from(signature, 'base64').toString()).payload.authorization.nonce
     : undefined;
   backend.hits.push({ url, nonce });
-  if (!nonce) return challenge(url);
+  if (!nonce && backend.probe === 'down') throw new TypeError('fetch failed');
+  if (!nonce) return challenge(url, backend.probe === 'other-asset' ? PAY_TO : USDC);
   if (backend.lose > 0) {
     backend.lose--;
     throw new TypeError('socket hang up');
@@ -218,6 +224,7 @@ beforeEach(() => {
   backend.deposit = undefined;
   backend.hits.length = 0;
   backend.lose = 0;
+  backend.probe = '';
   opened = [];
   asked = [];
   closed = [];
@@ -1862,6 +1869,98 @@ describe('stored answers before the gates', () => {
 
     expect(result[gateCode]).toBeUndefined();
     expect(result.structuredContent).toMatchObject({ state: 'quoting', quotePayment: { paymentId: payment.id } });
+    expect(await paymentsOf(t.connectionId)).toHaveLength(1);
+  });
+});
+
+describe('a quote refused before anything was signed', () => {
+  const swapUrlFor = (url: string) => {
+    const was = config().swapUrl;
+    Object.assign(config(), { swapUrl: url });
+    onTestFinished(() => void Object.assign(config(), { swapUrl: was }));
+  };
+  const RETRY = 'Send the same idempotencyKey again to retry';
+
+  it('given a swap url over plain http to a remote host, when jaw_swap runs, then quote_failed with insecure_url, nothing signed and no retry offered', async () => {
+    const { t } = await connected('1');
+    swapUrlFor('http://quote.test/proxy/v2');
+
+    const result = await run(t);
+
+    expect(result.structuredContent).toMatchObject({ state: 'quote_failed', refusal: { code: 'insecure_url' } });
+    expect(result.structuredContent?.summary).not.toContain(RETRY);
+    expect(paidHits()).toHaveLength(0);
+  });
+
+  it('given insecure_url and the swap url fixed in config, when the same key comes, then the stored answer, no conflict, and a new key gets the quote', async () => {
+    const { t } = await connected('1');
+    swapUrlFor('http://quote.test/proxy/v2');
+    const refused = await run(t);
+    swapUrlFor('https://quote.test/proxy/v2');
+    const hits = backend.hits.length;
+
+    const again = await run(t);
+    const fresh = await run(t, { idempotencyKey: 'agent-key-2' });
+
+    expect(again[gateCode]).toBeUndefined();
+    expect(again.structuredContent).toEqual(refused.structuredContent);
+    expect(fresh.structuredContent).toMatchObject({ state: 'awaiting_owner' });
+    expect(backend.hits.slice(hits).every((h) => h.url.origin === 'https://quote.test')).toBe(true);
+    expect((await paymentsOf(t.connectionId)).filter((p) => p.signedAt)).toHaveLength(1);
+  });
+
+  it('given budget_exhausted, when the same key comes with the same budget, then a new attempt refused the same way, nothing signed, and the summary names a larger budget', async () => {
+    const { t } = await connected('0.004');
+    await run(t);
+
+    const again = await run(t);
+
+    const [row] = await swapsOf(t.connectionId);
+    expect(row).toMatchObject({ state: 'quoting', code: 'budget_exhausted', paymentAttempt: 2 });
+    expect(again.structuredContent?.refusal).toEqual({ code: 'budget_exhausted', next: 'jaw_request_budget' });
+    expect(again.structuredContent?.summary).toContain('jaw_request_budget');
+    const rows = await paymentsOf(t.connectionId);
+    expect(rows.map((p) => [p.idempotencyKey, p.state]).sort()).toEqual([
+      [`swap:${row.id}:1`, 'failed'],
+      [`swap:${row.id}:2`, 'failed'],
+    ]);
+    expect(paidHits()).toHaveLength(0);
+  });
+
+  it('given the probe could not reach the backend, when the same key comes once it is back, then the same payment key runs again and the quote is bought once', async () => {
+    const { t } = await connected('1');
+    backend.probe = 'down';
+    const down = await run(t);
+    expect(down.structuredContent).toMatchObject({
+      state: 'quoting',
+      refusal: { code: 'unreachable' },
+      quotePayment: { state: 'failed' },
+    });
+    expect(down.structuredContent?.summary).toContain(RETRY);
+    backend.probe = '';
+
+    const again = await run(t);
+
+    const [row] = await swapsOf(t.connectionId);
+    expect(again.structuredContent).toMatchObject({ state: 'awaiting_owner' });
+    expect(row).toMatchObject({ paymentAttempt: 1, paymentKey: `swap:${row.id}:1` });
+    expect(await paymentsOf(t.connectionId)).toHaveLength(1);
+    expect(paidHits()).toHaveLength(1);
+  });
+
+  it('given the budget policy refused the asset the backend asked, when the same key comes once the backend asks USDC, then the same payment key runs again and the quote is bought once', async () => {
+    const { t } = await connected('1');
+    backend.probe = 'other-asset';
+    const refused = await run(t);
+    expect(refused.structuredContent).toMatchObject({ state: 'quoting', refusal: { code: 'not_allowed' } });
+    expect(paidHits()).toHaveLength(0);
+    backend.probe = '';
+
+    const again = await run(t);
+
+    const [row] = await swapsOf(t.connectionId);
+    expect(again.structuredContent).toMatchObject({ state: 'awaiting_owner' });
+    expect(row).toMatchObject({ paymentAttempt: 1, paymentKey: `swap:${row.id}:1` });
     expect(await paymentsOf(t.connectionId)).toHaveLength(1);
   });
 });
