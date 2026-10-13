@@ -12,11 +12,11 @@
      payments/refill.ts 93-137      guarded: addTopUp tx before the send (108),
                                     assertHeld (115), send (116), subtract on a
                                     thrown send (118)
-     payments/refill.ts 171-261     refillHook: live check (180-188), caps read
-                                    and check (193-208), assertHeld (212),
-                                    held() after money moved (244-245), reserve
-                                    and recordTopUp tx (249-252), catch returns
-                                    funded (255-256)
+     payments/refill.ts 172-267     refillHook: live check (181-189), caps read
+                                    and check (194-209), assertHeld (213),
+                                    held() after money moved (245-246), reserve
+                                    and recordTopUp tx (250-253), catch refuses
+                                    funded unreserved (256-262)
      payments/store.ts              reserve 200, addTopUp 221, recordTopUp 211,
                                     entriesFor 320 (what the caps read counts)
      connections/disconnect.ts 157-357  disconnect: returnFunds, assertHeld
@@ -41,15 +41,15 @@
      whose price the caps read sees: a reservation (reserve) or a signed row
      (markSigned, after the turn). Each refill has one price; a top-up is one
      unit when the payer is short, else nothing is sent (the skip branch).
-   - Reads under the lock (live 180, holding rows 193, caps 195) are one step.
+   - Reads under the lock (live 181, holding rows 194, caps 196) are one step.
    - A Disconnect either sends its batch (revokes the grant on chain, sweeps)
      and ends the connection, or ends it with nothing sent (298, or the budget
      left to the owner at 332, which revokes nothing).
    - A refill top-up after the grant is revoked on chain moves nothing.
    - LostReply: the bundler took the top-up but the request threw, so the money
      lands while guarded subtracts the topUp row (118) and ensurePayerFunds
-     returns a plain failure with no amount. TxFault: the reserve tx (249)
-     fails, so the catch (255) runs.
+     returns a plain failure with no amount. TxFault: the reserve tx (250)
+     fails, so the catch (256) runs.
    - Fairness: weak fairness on each thread's steps, which include the
      lock_timeout give-up, so a waiter cannot starve on its own. *)
 EXTENDS Naturals, FiniteSets
@@ -126,14 +126,14 @@ Finally(t) == /\ pc[t] = "finally"
 
 (* Refill turn, refill.ts *)
 
-\* live check and caps read and check (180-208).
+\* live check and caps read and check (181-209).
 Check(r) == /\ pc[r] = "check"
             /\ IF ~live \/ Committed + Price > Cap
                  THEN Leave(r, "refused")
                  ELSE Go(r, "assert212") /\ UNCHANGED outcome
             /\ UNCHANGED <<funded, lock, db, chain>>
 
-\* hold.assertHeld() (212), then ensurePayerFunds sends only when the payer is short.
+\* hold.assertHeld() (213), then ensurePayerFunds sends only when the payer is short.
 Assert212(r) == /\ pc[r] = "assert212"
                 /\ IF lost[r]
                      THEN Leave(r, "error")
@@ -175,22 +175,22 @@ Send(r) == /\ pc[r] = "send"
                  /\ Leave(r, "refused")
            /\ UNCHANGED <<funded, lock, live, visible, revokedOnChain>>
 
-\* Money moved: funded is the caller's outcome from here on (245).
+\* Money moved: funded is the caller's outcome from here on (246).
 Held(r) == /\ pc[r] = "held"
            /\ funded' = [funded EXCEPT ![r] = TRUE]
            /\ Say(r, IF lost[r] THEN "funding_failed" ELSE "ok")
            /\ Go(r, "reserve")
            /\ UNCHANGED <<lock, db, chain>>
 
-\* No money moved: the reservation commits under the lock or not at all (244).
+\* No money moved: the reservation commits under the lock or not at all (245).
 Skip(r) == /\ pc[r] = "skip"
            /\ IF lost[r]
                 THEN Leave(r, "error")
                 ELSE Go(r, "reserve") /\ UNCHANGED outcome
            /\ UNCHANGED <<funded, lock, db, chain>>
 
-\* reserve and recordTopUp in one tx (249-252); a failed tx lands in the catch
-\* (255-257), which returns funded when money moved.
+\* reserve and recordTopUp in one tx (250-253); a failed tx lands in the catch
+\* (256-262), which refuses funded when money moved: nothing reserved its price.
 Reserve(r) == /\ pc[r] = "reserve"
               /\ \/ /\ ~funded[r]
                     /\ visible' = [visible EXCEPT ![r] = TRUE]
@@ -199,7 +199,7 @@ Reserve(r) == /\ pc[r] = "reserve"
                     /\ visible' = IF outcome[r] = "ok" THEN [visible EXCEPT ![r] = TRUE] ELSE visible
                     /\ UNCHANGED outcome
                  \/ /\ TxFault
-                    /\ outcome' = IF funded[r] THEN outcome ELSE [outcome EXCEPT ![r] = "error"]
+                    /\ outcome' = [outcome EXCEPT ![r] = IF funded[r] THEN "funding_failed" ELSE "error"]
                     /\ UNCHANGED visible
               /\ Go(r, "finally")
               /\ UNCHANGED <<funded, lock, live, topUp, chain>>
