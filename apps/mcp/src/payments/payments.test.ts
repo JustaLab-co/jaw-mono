@@ -17,7 +17,7 @@ import {
 } from 'viem';
 import { beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { verifyBearer, type Tenant } from '@/connections/auth';
-import { disconnect } from '@/connections/disconnect';
+import { disconnect, sweepOnReuse } from '@/connections/disconnect';
 import { endConnection } from '@/connections/rows';
 import {
   approvedOnChain,
@@ -1064,6 +1064,35 @@ describe.skipIf(!TEST_PG_URL)('on Postgres, given a top-up in flight whose lock 
 
     const after = await disconnect(t, disconnectDeps);
     expect(after.structuredContent).toMatchObject({ swept: (105_000n - 2_500n).toString() });
+    expect(await statusOf(t.connectionId)).toBe('revoked');
+  });
+
+  it('when a reused refresh token sweeps it, then the sweep waits for the top-up and returns it with the float', async () => {
+    const { t } = await connected('1');
+    const { deps: session, sent } = sessionFakes();
+    const sweepDeps = { readPermission: approvedOnChain, clients, sender: session.sender };
+    let sweeping: Promise<void> | undefined;
+    let sentInFlight: unknown[] = [];
+    const meanwhile = async () => {
+      sweeping = sweepOnReuse(t.connectionId, t.sessionKey(), sweepDeps);
+      await sleep(1_000);
+      sentInFlight = [...sent];
+    };
+    await pay(
+      t,
+      { url: url('/exact'), idempotencyKey: 'drop-in-flight-reuse' },
+      deps({ executor: (_t, g) => dropThenLand(t, meanwhile)(g.account) })
+    );
+    await sweeping;
+    expect(sentInFlight).toEqual([]);
+    expect(refills).toEqual([105_000n]);
+    expect(sent).toHaveLength(1);
+    const swept = sent[0].flatMap(({ to, data }) => {
+      if (to.toLowerCase() !== USDC.toLowerCase()) return [];
+      const call = decodeFunctionData({ abi: erc20Abi, data });
+      return call.functionName === 'transfer' ? [call.args[1]] : [];
+    });
+    expect(swept).toEqual([105_000n - 2_500n]);
     expect(await statusOf(t.connectionId)).toBe('revoked');
   });
 });

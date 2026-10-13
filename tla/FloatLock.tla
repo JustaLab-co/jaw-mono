@@ -22,9 +22,10 @@
                                     connection is active, under a share lock on
                                     its row), topUpInFlight 249 (under an update
                                     lock on it), entriesFor 359
-     connections/disconnect.ts 159-361  disconnect: topUpInFlight (164),
-                                    returnFunds, assertHeld (339), sender.send
-                                    (340), endConnection (167)
+     connections/disconnect.ts 161-407  disconnect and sweepOnReuse, both
+                                    through returnAndEnd (188-201):
+                                    topUpInFlight (191), returnFunds, assertHeld
+                                    (385), sender.send (386), endConnection (194)
      connections/rows.ts 157-180    revokeByGrant: tryLockFloat poll; past its
                                     deadline it ends without the lock (170-173),
                                     never while a top-up is in flight (171)
@@ -56,8 +57,8 @@
    - Past its deadline revokeByGrant still waits out a top-up in flight; the
      lease of the call that wrote it bounds that wait.
    - A Disconnect either sends its batch (revokes the grant on chain, sweeps)
-     and ends the connection, or ends it with nothing sent (302, or the budget
-     left to the owner at 336, which revokes nothing).
+     and ends the connection, or ends it with nothing sent (348, or the budget
+     left to the owner at 382, which revokes nothing).
    - A refill top-up after the grant is revoked on chain moves nothing.
    - LostReply: the bundler took the top-up but the request threw, so the money
      lands while guarded subtracts the topUp row (119) and ensurePayerFunds
@@ -231,8 +232,8 @@ Sign(r) == /\ pc[r] = "sign"
 
 (* Disconnect turn, disconnect.ts *)
 
-\* A top-up in flight refuses first (164). Then returnFunds reads (236-295): a
-\* batch to send, or nothing sent (302, 336).
+\* A top-up in flight refuses first (191). Then returnFunds reads (282-341): a
+\* batch to send, or nothing sent (348, 382).
 Read(d) == /\ pc[d] = "read"
            /\ IF InFlight
                 THEN Leave(d, "busy")
@@ -245,7 +246,7 @@ Assert335(d) == /\ pc[d] = "assert335"
                      ELSE Go(d, "sweep") /\ UNCHANGED outcome
                 /\ UNCHANGED <<funded, lock, db, chain>>
 
-\* sender.send (340): the batch revokes the grant and sweeps, or nothing lands.
+\* sender.send (386): the batch revokes the grant and sweeps, or nothing lands.
 Sweep(d) == /\ pc[d] = "sweep"
             /\ \/ /\ revokedOnChain' = TRUE
                   /\ Go(d, "end")
@@ -254,7 +255,7 @@ Sweep(d) == /\ pc[d] = "sweep"
                   /\ UNCHANGED revokedOnChain
             /\ UNCHANGED <<funded, lock, db, moved, lateSend>>
 
-\* endConnection (167, rows.ts:198).
+\* endConnection (194, rows.ts:198).
 End(d) == /\ pc[d] = "end"
           /\ ~InFlight
           /\ live' = FALSE
