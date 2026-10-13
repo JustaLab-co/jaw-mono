@@ -1,8 +1,9 @@
 #!/usr/bin/env bash
 # Checks the harness itself: up.sh refuses a dirty tree, run-bounded.sh ends on
-# its limit, pre-push compares against the PR base, and two runs with the same
-# id get separate compose projects. The compose case needs Docker and starts
-# only Postgres, under projects it removes before exiting.
+# its limit, pre-push compares against the PR base, the seller answers its
+# routes, and two runs with the same id get separate compose projects. The
+# compose case needs Docker and starts only Postgres, under projects it removes
+# before exiting.
 # Usage: tools/verify/selftest.sh
 set -uo pipefail
 HERE=$(cd "$(dirname "$0")" && pwd)
@@ -58,6 +59,12 @@ echo "     without a PR: nx $(cat "$T/nx.args")"
 check "given no PR or a failing gh, pre-push uses origin/main" "grep -q -- '--base=origin/main ' '$T/nx.args'"
 (cd "$T/repo" && GH_BASE=deleted-branch PATH="$T/bin:$PATH" sh "$REPO/.husky/pre-push" >/dev/null 2>&1)
 check "given a PR base missing on origin, pre-push uses origin/main" "grep -q -- '--base=origin/main ' '$T/nx.args'"
+
+node --test "$HERE/seller.test.mjs" >"$T/seller-test.out" 2>&1
+code=$?
+grep -E '^(not )?ok ' "$T/seller-test.out" | sed 's/^/     /'
+check "given the seller test suite, every case passes" "[ $code = 0 ]"
+[ $code = 0 ] || sed 's/^/     /' "$T/seller-test.out"
 
 # doctor.sh, against a fake run: a node listener as the seller and stub binaries.
 D=$T/doctor

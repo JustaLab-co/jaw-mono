@@ -62,6 +62,23 @@ node $S/compare.mjs "$RUN" pay-exact       # exit 1 on any difference
 
 Seller routes (all Base Sepolia USDC unless noted, `payTo` 0x2222...2222): `/exact` 5000, `/tenth` 100000, `/one` 1000000, `/overcap` 2000000, `/wrong-asset` 5000 of a fake token, `/upto` 5000 under the `upto` scheme, `/slow` 5000 that answers the paid request after 8 s, and `/variable` (default 5000) whose price changes with a POST to `{SELLER}/_price?amount=N`. The seller recovers the EIP-3009 signer with viem and logs `signatureValid` and `termsMatch` for every payment to `evidence/seller.log`. `verifiedBy` records whether plain ECDSA or the on-chain check (ERC-1271, ERC-6492) validated it.
 
+### Swap backend stub
+
+The seller also answers the three routes of JAW's swap backend that the hosted server calls, in the backend's `{ statusCode, result: { data, error } }` envelope. Point `JAW_MCP_SWAP_URL` at `http://host.docker.internal:$PORT/proxy/v2`.
+
+- `GET /proxy/v2/swap/quote`: a query that fails validation gets its 400 unpaid; a valid one gets a 402 for 5000 USDC base units on `eip155:84532`. A paid request answers a quote built like the backend's Aurora mapper: `quoteId` is `aurora:<depositAddress>` and the one `deposit` transaction is `transfer(depositAddress, amount)` on the origin token, or the amount sent to the deposit address for the zero address. The deposit address is the last 20 bytes of the keccak of the payment nonce, so every paid quote gets a new one and a test that signed the payment can compute it. A resent proof answers 402 unless it carries the same `Idempotency-Key`, which replays the first answer.
+- `POST /proxy/v2/move-asset/deposit/submit` and `GET /proxy/v2/move-asset/deposit/status`: free, `provider=aurora` (any other answers 501). Status is `PENDING_DEPOSIT` until a submit, which answers `KNOWN_DEPOSIT_TX`; the reads after it give `PROCESSING`, then `SUCCESS` for good. A state that is not one of the seven comes back as `PROCESSING` with `rawState`, as the mapper does. Once past `PENDING_DEPOSIT`, status carries the submitted hash, or a made-up one when the wallet never submitted.
+
+`POST {SELLER}/_swap` changes the stub until the next call, with any of:
+
+- `network=eip155:8453`: the network the quote's 402 advertises. Empty goes back to `eip155:84532`.
+- `mode=<name>`: `422` or `502` refuses the quote before the charge, as the backend does for a pair it cannot route or a provider outage. `invalid` charges and answers 200 with `data: null`; `paid-502` charges and answers 502 with the receipt. The rest charge and break one rule of the quote check: `two-tx`, `no-tx`, `wrong-chain`, `quote-id`, `provider`, `deposit-field`, `tx-to`, `tx-value`, `tx-data`, `trailing-bytes`, `input-amount`, `output-amount`, `zero-min`, `deposit-self` and `reused` (the previous quote's deposit address). Empty goes back to a good quote.
+- `submitFails=N`: the next N submits answer 500, the backend's answer when Aurora refuses one.
+- `state=<STATE>`, with `depositAddress=<address>` for one deposit or without it for all: status and submit answer that state. Empty goes back to the scripted walk.
+- `expire=<address>`: the quote expired, so submits for it answer 500 and status stays `PENDING_DEPOSIT`.
+
+Every request lands in `seller.log`: `challenge`, `payment`, `spent`, `replay`, `quote`, `refused`, `submit`, `status` and `control` rows. `node --test tools/verify/seller.test.mjs` drives each route and switch; `selftest.sh` runs it.
+
 MCP stdio, tool calls run in order and each waits for its response:
 
 ```bash
@@ -127,4 +144,4 @@ macOS ships no `timeout`, so the script does not use one: it starts the command 
 
 ## Harness self-test
 
-`$S/selftest.sh` checks the scripts themselves: the dirty-tree refusal, `run-bounded.sh` ending on its limit, `.husky/pre-push` choosing the PR base, and two runs with the same id getting separate compose projects (Postgres only; skipped without Docker). Run it after changing anything in this folder.
+`$S/selftest.sh` checks the scripts themselves: the dirty-tree refusal, `run-bounded.sh` ending on its limit, `.husky/pre-push` choosing the PR base, the seller answering every route and switch (`seller.test.mjs`), and two runs with the same id getting separate compose projects (Postgres only; skipped without Docker). Run it after changing anything in this folder.
