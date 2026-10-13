@@ -63,6 +63,8 @@ export async function sessionKey(connectionId: string, ring: KeyRing): Promise<H
   return key;
 }
 
+const payloadKey = (model: string, id: string) => createHash('sha256').update(`${model}:${id}`).digest('hex');
+
 export class PgAdapter implements Adapter {
   constructor(
     private readonly model: string,
@@ -70,7 +72,7 @@ export class PgAdapter implements Adapter {
   ) {}
 
   private key(id: string) {
-    return createHash('sha256').update(`${this.model}:${id}`).digest('hex');
+    return payloadKey(this.model, id);
   }
 
   async upsert(id: string, payload: AdapterPayload, expiresIn: number) {
@@ -190,11 +192,20 @@ export class PgAdapter implements Adapter {
     });
     await sweepWraps();
     // A client that refreshes is still active: slide its expiry forward so a
-    // connection in use never hits the 30-day cliff.
-    await getDb()
+    // connection in use never hits the 30-day cliff. Its grant slides with it,
+    // or the next refresh fails while the row still says the connection is live.
+    const expiresAt = new Date(Date.now() + CONNECTION_TTL_MS);
+    const slid = await getDb()
       .update(connections)
-      .set({ expiresAt: new Date(Date.now() + CONNECTION_TTL_MS) })
-      .where(and(eq(connections.id, connectionId), eq(connections.status, 'active')));
+      .set({ expiresAt })
+      .where(and(eq(connections.id, connectionId), eq(connections.status, 'active')))
+      .returning({ id: connections.id });
+    if (slid.length === 0 || !row.grantId) return;
+    const exp = Math.floor(expiresAt.getTime() / 1000);
+    await getDb()
+      .update(oauthPayloads)
+      .set({ expiresAt, payload: sql`jsonb_set(${oauthPayloads.payload}, '{exp}', to_jsonb(${exp}::bigint))` })
+      .where(eq(oauthPayloads.key, payloadKey('Grant', row.grantId)));
   }
 
   async findByUid(uid: string) {
