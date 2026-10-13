@@ -29,6 +29,11 @@ export interface FloatHold {
   held(): boolean;
   /** Throws FloatLost once the lock session dropped. Called right before each chain send. */
   assertHeld(): void;
+  /**
+   * Inside a tx: locks the connection row and says whether no other turn took the
+   * lock since this one did. A drop the client was never told of shows up here.
+   */
+  owns(tx: Tx): Promise<boolean>;
 }
 
 const key = (connectionId: string) => `refill:${connectionId}`;
@@ -50,7 +55,9 @@ export async function withFloat<T>(
   const holder = floatHolder();
   // PGlite runs one session: the queue below is all the serialization it needs.
   if (holder === 'pglite')
-    return inTurn(`pglite:${connectionId}`, () => work({ tx, held: () => true, assertHeld() {} }));
+    return inTurn(`pglite:${connectionId}`, () =>
+      work({ tx, held: () => true, assertHeld() {}, owns: async () => true })
+    );
 
   const open = sessions.get(connectionId) ?? 0;
   if (open >= SESSIONS_PER_CONNECTION) throw new FloatBusy('this connection already holds the float and has a waiter');
@@ -104,11 +111,27 @@ async function hold<T>(
       )
       .catch(busyOr);
     await session`select pg_advisory_xact_lock(hashtext(${key(connectionId)}))`.catch(busyOr);
+    const [taken] = await tx((t) =>
+      t
+        .update(connections)
+        .set({ floatFence: sql`${connections.floatFence} + 1` })
+        .where(eq(connections.id, connectionId))
+        .returning({ fence: connections.floatFence })
+    );
     return await work({
       tx,
       held: () => !lost,
       assertHeld() {
         if (lost) throw new FloatLost();
+      },
+      async owns(t) {
+        const [row] = await t
+          .select({ fence: connections.floatFence })
+          .from(connections)
+          .where(eq(connections.id, connectionId))
+          .for('share');
+        if (row?.fence !== taken?.fence) lost = true;
+        return !lost;
       },
     });
   } finally {

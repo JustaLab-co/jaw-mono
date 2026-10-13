@@ -30,8 +30,8 @@ only base refills=1 disc=1
 mutation the catch drops the funded outcome when the reserve tx fails
 detects MovedReachesCaller
 only money refills=2
-- /\ outcome' = IF funded[r] THEN outcome ELSE [outcome EXCEPT ![r] = "error"]
-+ /\ outcome' = [outcome EXCEPT ![r] = "error"]
+- /\ Say(r, IF funded[r] THEN Returned(r) ELSE "error")
++ /\ Say(r, "error")
 
 mutation the session end keeps the lock and the wait has no lock_timeout
 detects WaitEnds
@@ -65,3 +65,9 @@ detects TypeOK
 only base refills=1
 - /\ topUp' = [topUp EXCEPT ![r] = 1]
 + /\ topUp' = [topUp EXCEPT ![r] = 2]
+
+mutation the reserve tx does not check the fence, as before it existed
+detects CapHolds
+only cap refills=3 drops=1
+- Owns(r) == ~lost[r] /\ took[r] = fence
++ Owns(r) == ~lost[r]

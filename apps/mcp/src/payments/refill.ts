@@ -20,7 +20,7 @@ import { connections } from '@/db/schema';
 import type { Grant } from '@/grants/store';
 import { errorLabel, log } from '@/lib/edge';
 import { nonceUsed } from './confirm';
-import { FloatBusy, inTurn, withFloat, type FloatHold } from './float-lock';
+import { FloatBusy, FloatLost, inTurn, withFloat, type FloatHold } from './float-lock';
 import {
   addTopUp,
   assertOwned,
@@ -241,16 +241,23 @@ export function refillHook(c: RefillContext): EnsureFunds {
           // A turn that moved no money commits its reservation under the lock or not at all.
           // Money that moved reaches the caller whatever follows, refused when the lock dropped
           // meanwhile: another turn may have checked the caps since without this payment.
+          const lostFunding: TopUpOutcome = { ...outcome, ok: false, code: 'funding_failed', reason: LOST };
           if (!moved) hold.assertHeld();
-          else funded = hold.held() ? outcome : { ...outcome, ok: false, code: 'funding_failed', reason: LOST };
-          const result = funded ?? outcome;
+          else funded = hold.held() ? outcome : lostFunding;
           // The reservation lands with the outcome: holders that read it come after this
-          // turn, and a refill killed during the chain wait leaves none behind.
-          await hold.tx(async (tx) => {
+          // turn, and a refill killed during the chain wait leaves none behind. owns() holds
+          // the connection row against the next holder's fence bump, so that holder reads
+          // this reservation, or this turn finds the fence moved and reserves nothing.
+          return await hold.tx(async (tx) => {
+            if (!(await hold.owns(tx))) {
+              if (!moved) throw new FloatLost();
+              funded = lostFunding;
+            }
+            const result = funded ?? outcome;
             if (result.ok) await reserve(tx, c.rowId, c.token, requirement.amount);
             await recordTopUp(tx, c.rowId, result);
+            return result;
           });
-          return result;
         });
       } catch (err) {
         if (funded) return funded;
