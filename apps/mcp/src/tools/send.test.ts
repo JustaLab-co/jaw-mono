@@ -12,9 +12,11 @@ import {
   walletsSettled,
   offlineSession,
 } from '@/connections/testkit';
+import { endConnection } from '@/connections/rows';
 import { getDb } from '@/db/client';
-import { grants, settings } from '@/db/schema';
-import { useTestDb } from '@/db/test-db';
+import { connections, grants, settings } from '@/db/schema';
+import { lockWaiters, TEST_PG_URL, useTestDb, useTestPostgres } from '@/db/test-db';
+import { withFloat } from '@/payments/float-lock';
 import { requestBudget } from './request-budget';
 
 const USDC: Address = '0x036CbD53842c5426634e7929541eC2318f3dCF7e';
@@ -131,5 +133,34 @@ describe('jaw_send_calls', () => {
     expect(result.isError).toBe(true);
     expect(result.content[0].text).toContain(elsewhere);
     expect(bridge.sent).toEqual([]);
+  });
+});
+
+describe.skipIf(!TEST_PG_URL)('on Postgres, given a disconnect holding the float lock', () => {
+  beforeAll(useTestPostgres);
+
+  it('given a transfer waiting on the lock while the disconnect ends the connection, then the session key sends nothing', async () => {
+    const { c, t } = await sender();
+    let locked!: () => void;
+    const holding = new Promise<void>((r) => (locked = r));
+    let parked = 0;
+    // What jaw_disconnect does once its batch landed: end the connection under the float lock.
+    const disconnecting = withFloat(t.connectionId, 5_000, async (hold) => {
+      locked();
+      for (let i = 0; i < 100 && parked === 0; i++) {
+        await new Promise((r) => setTimeout(r, 50));
+        parked = await lockWaiters(t.connectionId);
+      }
+      await hold.tx((tx) => endConnection(t.connectionId, t.account, new Date(), tx));
+    });
+    await holding;
+    const sending = callTool(c.access_token, 'jaw_transfer', { to: BOB, amount: '0.25' });
+    await disconnecting;
+    const result = await sending;
+    const [row] = await getDb().select().from(connections).where(eq(connections.id, t.connectionId));
+    expect(parked).toBe(1);
+    expect(row.status).toBe('revoked');
+    expect(bridge.sent).toEqual([]);
+    expect(result.isError).toBe(true);
   });
 });
