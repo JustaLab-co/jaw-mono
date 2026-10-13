@@ -15,6 +15,7 @@ import { mainnet } from 'viem/chains';
 import { z } from 'zod';
 import { tenant, type Tenant } from '@/connections/auth';
 import { config } from '@/connections/config';
+import { findActive } from '@/connections/rows';
 import { getDb } from '@/db/client';
 import { currentGrant, type Grant } from '@/grants/store';
 import { entriesFor, pulledUnderOtherGrants } from '@/payments/store';
@@ -125,6 +126,7 @@ const statusOutput = z.object({
   account: z.string(),
   chainId: z.string().describe('CAIP-2'),
   sessionAddress: z.string().describe('The address this connection pays from once it has a budget'),
+  connectionExpiresAt: z.string().describe('When this connection expires; call jaw_disconnect before then'),
   balances: z.object({ account: money.nullable(), session: money.nullable() }),
   budget: budgetOutput.nullable(),
   readiness,
@@ -138,27 +140,37 @@ const NOT_READY: Record<NonNullable<Readiness['reason']>, string> = {
   chain_unavailable: 'The budget could not be read from the chain right now.',
 };
 
+const EXPIRY_WARN_MS = 48 * 60 * 60 * 1000;
+
 async function status(t: Tenant) {
   const network = caip2(t.chainId);
-  const [account, session, grant] = await Promise.all([
+  const [account, session, grant, conn] = await Promise.all([
     balanceOf(network, t.account),
     balanceOf(network, t.sessionAddress),
     currentGrant(t.connectionId),
+    findActive(t.connectionId),
   ]);
   const read = grant && (await budgetOf(grant, t, session && BigInt(session.amount)));
   const ready = readinessOf(t, read?.liveness);
   const left = read?.budget.remainingToday;
+  const expiresAt = conn?.expiresAt ?? new Date();
+  const nearExpiry = expiresAt.getTime() - Date.now() < EXPIRY_WARN_MS;
+  const base =
+    ready.status === 'ready'
+      ? `Connected as ${t.account} on ${network}. Ready to pay${left ? `, ${left.amount} base units left today` : ''}.`
+      : `Connected as ${t.account} on ${network}. ${NOT_READY[ready.reason ?? 'no_grant']}`;
+  const summary = nearExpiry
+    ? `${base} Connection expires ${expiresAt.toISOString()}; call jaw_disconnect soon.`
+    : base;
   return statusOutput.parse({
     account: t.account,
     chainId: network,
     sessionAddress: t.sessionAddress,
+    connectionExpiresAt: expiresAt.toISOString(),
     balances: { account, session },
     budget: read?.budget ?? null,
     readiness: ready,
-    summary:
-      ready.status === 'ready'
-        ? `Connected as ${t.account} on ${network}. Ready to pay${left ? `, ${left.amount} base units left today` : ''}.`
-        : `Connected as ${t.account} on ${network}. ${NOT_READY[ready.reason ?? 'no_grant']}`,
+    summary,
   });
 }
 

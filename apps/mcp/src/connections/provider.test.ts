@@ -923,3 +923,105 @@ describe('given the sweep after a rotation fails', () => {
     expect((await usedToken(stranded)).key_wrap).toBeNull();
   });
 });
+
+describe('sliding connection expiry', () => {
+  it('a successful refresh extends the connection expiry', async () => {
+    const c = await connect();
+    const sub = (await claimsOf(c.access_token)).sub;
+    const before = await db.query<{ expires_at: Date }>(`select expires_at from connections where id = $1`, [sub]);
+    const oldExpiry = before.rows[0].expires_at.getTime();
+
+    // Move the clock forward by 1 day on the connection row so the slide is visible.
+    await db.query(`update connections set expires_at = expires_at - interval '1 day' where id = $1`, [sub]);
+    const shifted = await db.query<{ expires_at: Date }>(`select expires_at from connections where id = $1`, [sub]);
+    const shiftedExpiry = shifted.rows[0].expires_at.getTime();
+    expect(shiftedExpiry).toBeLessThan(oldExpiry);
+
+    const r = await refresh(c.refresh_token);
+    expect(r.status).toBe(200);
+
+    const after = await db.query<{ expires_at: Date }>(`select expires_at from connections where id = $1`, [sub]);
+    const newExpiry = after.rows[0].expires_at.getTime();
+    // The expiry was extended past the shifted value, back to about 30 days from now.
+    expect(newExpiry).toBeGreaterThan(shiftedExpiry);
+    expect(newExpiry).toBeGreaterThanOrEqual(oldExpiry);
+  });
+
+  it('a retry does not double-extend the expiry', async () => {
+    const c = await connect();
+    const sub = (await claimsOf(c.access_token)).sub;
+    const lost = await refresh(c.refresh_token);
+    expect(lost.status).toBe(200);
+
+    const {
+      rows: [{ expires_at: afterFirst }],
+    } = await db.query<{ expires_at: Date }>(`select expires_at from connections where id = $1`, [sub]);
+    const retried = await refresh(c.refresh_token);
+    expect(retried.status).toBe(200);
+
+    const {
+      rows: [{ expires_at: afterRetry }],
+    } = await db.query<{ expires_at: Date }>(`select expires_at from connections where id = $1`, [sub]);
+    // A retry re-issues the same successor, so the expiry moves at most a few ms.
+    expect(Math.abs(afterRetry.getTime() - afterFirst.getTime())).toBeLessThan(5_000);
+  });
+});
+
+describe('reuse sweep', () => {
+  it('when a reused token still holds its wrap, the key is recovered for the sweep', async () => {
+    const c = await connect();
+    const sub = (await claimsOf(c.access_token)).sub;
+    const first = await refresh(c.refresh_token);
+    expect(first.status).toBe(200);
+
+    // The used token carries a wrap for 60 s. Age it past the window so it
+    // counts as reuse, but do not trigger another rotation (which would sweep
+    // the wrap). The wrap is still on the row.
+    await ageUsedToken(sub, 61_000);
+    const token = await usedToken(sub);
+    expect(token.key_wrap).not.toBeNull();
+
+    // Spy on sweepOnReuse to verify the adapter calls it with the recovered key.
+    const spy = vi.spyOn(await import('./disconnect'), 'sweepOnReuse').mockResolvedValue();
+
+    const reused = await refresh(c.refresh_token);
+    expect(reused.body.error).toBe('invalid_grant');
+    expect(spy).toHaveBeenCalledWith(sub, expect.stringMatching(/^0x[0-9a-f]+$/));
+
+    spy.mockRestore();
+  });
+
+  it('when the sweep fails, the reused token still ends the connection', async () => {
+    const c = await connect();
+    const sub = (await claimsOf(c.access_token)).sub;
+    expect((await refresh(c.refresh_token)).status).toBe(200);
+    await ageUsedToken(sub, 61_000);
+    const spy = vi.spyOn(await import('./disconnect'), 'sweepOnReuse').mockRejectedValue(new Error('chain down'));
+
+    const reused = await refresh(c.refresh_token);
+    expect(reused.body.error).toBe('invalid_grant');
+    expect(spy).toHaveBeenCalled();
+    expect(await findActive(sub)).toBeUndefined();
+
+    spy.mockRestore();
+  });
+
+  it('when a reused token has no wrap, no sweep is attempted', async () => {
+    const c = await connect();
+    const first = await refresh(c.refresh_token);
+    expect(first.status).toBe(200);
+
+    // Using the successor nulls the predecessor's wrap (adapter.ts line 182).
+    const second = await refresh(first.body.refresh_token);
+    expect(second.status).toBe(200);
+
+    const spy = vi.spyOn(await import('./disconnect'), 'sweepOnReuse').mockResolvedValue();
+
+    // The original token's wrap was nulled, so the adapter cannot recover the key.
+    const reused = await refresh(c.refresh_token);
+    expect(reused.body.error).toBe('invalid_grant');
+    expect(spy).not.toHaveBeenCalled();
+
+    spy.mockRestore();
+  });
+});

@@ -6,7 +6,8 @@ import type { Hex } from 'viem';
 import { getDb } from '@/db/client';
 import { connections, oauthPayloads } from '@/db/schema';
 import { errorLabel, log } from '@/lib/edge';
-import { revokeByGrant, takeSealedKey } from './rows';
+import { sweepOnReuse } from './disconnect';
+import { CONNECTION_TTL_MS, revokeByGrant, takeSealedKey } from './rows';
 import { nextRefreshId, open, unwrap, wrap, type KeyRing, type Wrapped } from './seal';
 
 // A client whose refresh response was lost retries with the token it still holds.
@@ -36,6 +37,9 @@ const requestKeys = new WeakMap<object, Hex>();
 // sweep running before the rotation cannot take it, the successor id every request
 // with that token derives, and whether find admitted the token as a used one.
 const refreshes = new WeakMap<object, { key: Hex; next: string; retry: boolean }>();
+// The key recovered from a reused token whose wrap was still present, so destroy
+// can sweep the float before the connection ends. Cleared after use.
+const reuseKeys = new WeakMap<object, { key: Hex; connectionId: string }>();
 
 export const successorId = (): string | undefined => {
   const ctx = Provider.ctx;
@@ -102,6 +106,18 @@ export class PgAdapter implements Adapter {
     const { row, retryable } = found;
     const payload = { ...(row.payload as AdapterPayload), jti: id };
     if (row.consumedAt && !retryable) {
+      // The wrap may still be present if the sweep has not run. Recover the key
+      // so destroy can sweep the float before the connection ends.
+      const ctx = Provider.ctx;
+      const wrapped = row.keyWrap as Wrapped | null;
+      if (this.model === 'RefreshToken' && wrapped && ctx?.oidc.params?.refresh_token === id) {
+        try {
+          const key = unwrap(this.ring, wrapped, payload.accountId!, id);
+          reuseKeys.set(ctx, { key, connectionId: payload.accountId! });
+        } catch {
+          // Wrap cannot be opened: ring rotated or data corrupted. Proceed without sweeping.
+        }
+      }
       payload.consumed = Math.floor(row.consumedAt.getTime() / 1000);
       return payload;
     }
@@ -173,6 +189,12 @@ export class PgAdapter implements Adapter {
         .values({ key: this.key(id), ...row, keyWrap: wrap(this.ring, key, connectionId, id) });
     });
     await sweepWraps();
+    // A client that refreshes is still active: slide its expiry forward so a
+    // connection in use never hits the 30-day cliff.
+    await getDb()
+      .update(connections)
+      .set({ expiresAt: new Date(Date.now() + CONNECTION_TTL_MS) })
+      .where(and(eq(connections.id, connectionId), eq(connections.status, 'active')));
   }
 
   async findByUid(uid: string) {
@@ -205,8 +227,18 @@ export class PgAdapter implements Adapter {
     await getDb()
       .delete(oauthPayloads)
       .where(eq(oauthPayloads.key, this.key(id)));
-    // The provider awaits this when it revokes a grant, so the connection dies with it.
-    if (this.model === 'Grant') await revokeByGrant(id);
+    if (this.model === 'Grant') {
+      const ctx = Provider.ctx;
+      const reuse = ctx && reuseKeys.get(ctx);
+      if (reuse) {
+        reuseKeys.delete(ctx);
+        // A failed sweep must not keep the connection alive.
+        await sweepOnReuse(reuse.connectionId, reuse.key).catch((err: unknown) =>
+          log('error', { msg: `reuse sweep failed for ${reuse.connectionId}`, error: errorLabel(err) })
+        );
+      }
+      await revokeByGrant(id);
+    }
   }
 
   async revokeByGrantId(grantId: string) {
