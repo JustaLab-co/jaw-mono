@@ -1,15 +1,17 @@
 import { randomUUID } from 'node:crypto';
 import { createServer } from 'node:http';
-import type { AddressInfo } from 'node:net';
+import { createServer as createTcpServer, connect as tcpConnect, type AddressInfo, type Socket } from 'node:net';
 import type { ChainClients, TopUpExecutor } from '@jaw.id/agent';
 import { eq, sql } from 'drizzle-orm';
 import fc from 'fast-check';
+import postgres from 'postgres';
 import {
   BlockNotFoundError,
   decodeFunctionData,
   encodeAbiParameters,
   encodeEventTopics,
   erc20Abi,
+  isAddressEqual,
   parseAbi,
   type Address,
   type Hex,
@@ -30,7 +32,7 @@ import {
   offlineSession,
   sessionFakes,
 } from '@/connections/testkit';
-import { getDb } from '@/db/client';
+import { floatHolder, getDb, setDb } from '@/db/client';
 import { connections, grants, payments, settings } from '@/db/schema';
 import { currentGrant } from '@/grants/store';
 import { revokeConnection } from '@/tools/connections';
@@ -339,6 +341,34 @@ async function slowUpdates(key: string, when: string, seconds: number) {
   return async () => {
     await getDb().execute(sql.raw(`drop trigger ${name} on payments`));
     await getDb().execute(sql.raw(`drop function ${name}()`));
+  };
+}
+
+/** A proxy for the lock sessions. freeze() cuts what is open now off from both ends, as a partition would. */
+async function partitionable(target: string) {
+  const open = new Set<{ client: Socket; upstream: Socket; frozen: boolean }>();
+  const server = createTcpServer((client) => {
+    const to = new URL(target);
+    const pair = { client, upstream: tcpConnect(Number(to.port), to.hostname), frozen: false };
+    open.add(pair);
+    client.on('data', (d) => void (pair.frozen || pair.upstream.write(d)));
+    pair.upstream.on('data', (d) => void (pair.frozen || client.write(d)));
+    client.on('close', () => pair.upstream.destroy());
+    pair.upstream.on('close', () => void (pair.frozen || client.destroy()));
+    client.on('error', () => {});
+    pair.upstream.on('error', () => {});
+  });
+  await new Promise<void>((r) => server.listen(0, '127.0.0.1', r));
+  const url = new URL(target);
+  url.hostname = '127.0.0.1';
+  url.port = String((server.address() as AddressInfo).port);
+  return {
+    url: url.href,
+    freeze: () => open.forEach((pair) => (pair.frozen = true)),
+    close: async () => {
+      open.forEach((pair) => [pair.client.destroy(), pair.upstream.destroy()]);
+      await new Promise((r) => server.close(r));
+    },
   };
 }
 
@@ -1227,6 +1257,100 @@ describe.skipIf(!TEST_PG_URL)('on Postgres, given a refill whose lock session dr
     expect(seen).toHaveLength(0);
   });
 });
+
+describe.skipIf(!TEST_PG_URL)('on Postgres, given a refill whose lock session is cut off without it knowing', () => {
+  it('when another replica takes the lock and pays, then the two do not both pay past the cap', async () => {
+    const { t } = await connected('0.3');
+    balances.set(t.sessionAddress.toLowerCase(), 600_000n);
+    const payB = await otherReplica();
+    const holder = floatHolder();
+    const proxy = await partitionable((holder as { url: string }).url);
+    setDb(getDb(), { url: proxy.url });
+    const admin = postgres(TEST_PG_URL as string, { max: 1, onnotice: () => {} });
+    let killed = 0;
+    let second: Awaited<ReturnType<typeof pay>> | undefined;
+    const cutting: ChainClients = {
+      publicClient: () =>
+        ({
+          ...node,
+          readContract: async (read: Parameters<typeof node.readContract>[0]) => {
+            const payerRead =
+              read.functionName === 'balanceOf' && isAddressEqual(read.args[0] as Address, t.sessionAddress);
+            if (payerRead && !second) {
+              proxy.freeze();
+              const rows = await admin`select pg_terminate_backend(pid) from pg_locks
+                where locktype = 'advisory' and granted
+                  and ((classid::bigint << 32) | objid::bigint) = hashtext(${`refill:${t.connectionId}`})`;
+              killed = rows.length;
+              second = await payB(t, { url: url('/budget'), idempotencyKey: 'replica-b-cap' }, deps());
+            }
+            return node.readContract(read);
+          },
+        }) as unknown as PublicClient,
+    };
+    let first: Awaited<ReturnType<typeof pay>> | undefined;
+    try {
+      first = await pay(t, { url: url('/budget'), idempotencyKey: 'replica-a-cap' }, deps({ clients: cutting }));
+    } finally {
+      setDb(getDb(), holder);
+      await proxy.close();
+      await admin.end();
+    }
+    expect(killed).toBe(1);
+    expect([first?.structuredContent?.kind, second?.structuredContent?.kind].filter((k) => k === 'paid')).toHaveLength(
+      1
+    );
+  });
+});
+
+describe.skipIf(!TEST_PG_URL)(
+  'on Postgres, given a short payer whose lock session is cut off without it knowing',
+  () => {
+    it('when another replica takes the lock and tops up first, then the cut-off turn sends no top-up', async () => {
+      const { t } = await connected('1');
+      const payB = await otherReplica();
+      const holder = floatHolder();
+      const proxy = await partitionable((holder as { url: string }).url);
+      setDb(getDb(), { url: proxy.url });
+      const admin = postgres(TEST_PG_URL as string, { max: 1, onnotice: () => {} });
+      let killed = 0;
+      let second: Awaited<ReturnType<typeof pay>> | undefined;
+      const cutting: ChainClients = {
+        publicClient: () =>
+          ({
+            ...node,
+            readContract: async (read: Parameters<typeof node.readContract>[0]) => {
+              const payerRead =
+                read.functionName === 'balanceOf' && isAddressEqual(read.args[0] as Address, t.sessionAddress);
+              // The pinned read answers for the block before the other replica's top-up.
+              const balance = await node.readContract(read);
+              if (payerRead && !second) {
+                proxy.freeze();
+                const rows = await admin`select pg_terminate_backend(pid) from pg_locks
+                where locktype = 'advisory' and granted
+                  and ((classid::bigint << 32) | objid::bigint) = hashtext(${`refill:${t.connectionId}`})`;
+                killed = rows.length;
+                second = await payB(t, { url: url('/budget'), idempotencyKey: 'replica-b-topup' }, deps());
+              }
+              return balance;
+            },
+          }) as unknown as PublicClient,
+      };
+      let first: Awaited<ReturnType<typeof pay>> | undefined;
+      try {
+        first = await pay(t, { url: url('/budget'), idempotencyKey: 'replica-a-topup' }, deps({ clients: cutting }));
+      } finally {
+        setDb(getDb(), holder);
+        await proxy.close();
+        await admin.end();
+      }
+      expect(killed).toBe(1);
+      expect(second?.structuredContent?.kind).toBe('paid');
+      expect(refills).toHaveLength(1);
+      expect(first?.structuredContent?.kind).not.toBe('paid');
+    });
+  }
+);
 
 describe.skipIf(!TEST_PG_URL)(
   'on Postgres, given an exact refill whose lock session drops while the top-up confirms',

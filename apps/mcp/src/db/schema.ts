@@ -80,6 +80,9 @@ export const connections = pgTable(
     createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
     activatedAt: timestamp('activated_at', { withTimezone: true }),
     revokedAt: timestamp('revoked_at', { withTimezone: true }),
+    // Bumped by each turn that takes the float lock, so a turn whose lock session
+    // dropped unnoticed finds it moved before it reserves.
+    floatFence: integer('float_fence').notNull().default(0),
   },
   (t) => [
     // The connections page finds an account's connections whatever case the address was stored in.

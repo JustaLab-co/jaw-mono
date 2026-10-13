@@ -3,21 +3,24 @@
    one connection's money, and what a turn does when its lock session drops.
 
    Follows apps/mcp/src:
-     payments/float-lock.ts 43-120  withFloat/hold: own postgres session,
-                                    pg_advisory_xact_lock (106), lock_timeout
-                                    (101), onclose sets lost unless released
-                                    (86-88), held()/assertHeld() (109-112),
-                                    session.end frees the lock (117-118)
-     payments/float-lock.ts 151-157 tryLockFloat
-     payments/refill.ts 93-137      guarded: addTopUp tx before the send (108),
-                                    assertHeld (114), subtract on FloatLost
-                                    (116), send (120), which keeps the amount
-                                    on the row when it throws
-     payments/refill.ts 172-267     refillHook: live check (181-189), caps read
-                                    and check (194-209), assertHeld (213),
-                                    held() after money moved (245-246), reserve
-                                    and recordTopUp tx (250-253), catch refuses
-                                    funded unreserved (256-262)
+     payments/float-lock.ts 48-143  withFloat/hold: own postgres session,
+                                    pg_advisory_xact_lock (113), lock_timeout
+                                    (108), fence bump (114-120), onclose sets
+                                    lost unless released (93-95),
+                                    held()/assertHeld() (123-126), owns()
+                                    (127-135), session.end frees the lock
+                                    (140-141)
+     payments/float-lock.ts 174-180 tryLockFloat
+     payments/refill.ts 93-141      guarded: owns() then addTopUp in one tx
+                                    before the send (109-112), assertHeld (118),
+                                    subtract on FloatLost (120), send (124),
+                                    which keeps the amount on the row when it
+                                    throws
+     payments/refill.ts 175-272     refillHook: live check (184-192), caps read
+                                    and check (197-212), assertHeld (216),
+                                    held() after money moved (249-250), owns()
+                                    then reserve and recordTopUp tx (255-264),
+                                    catch refuses funded unreserved (267-274)
      payments/store.ts              reserve 200, addTopUp 221, recordTopUp 211,
                                     entriesFor 320 (what the caps read counts)
      connections/disconnect.ts 157-357  disconnect: returnFunds, assertHeld
@@ -38,19 +41,23 @@
      step has fairness. A drop while waiting fails the lock query (busyOr
      rethrows), so that turn ends with an error.
    - hold.tx runs on the app pool, so a turn whose lock dropped still writes.
+   - fence is connections.float_fence. Acquire takes the lock and bumps it in
+     one step: in the code the bump waits on the row owns() locks, and the
+     next turn reads the caps only after its bump, so a reserve tx that passed
+     owns() commits before that read. The same holds for the top-up write.
    - The caps check is Committed + Price <= Cap, where Committed counts rows
      whose price the caps read sees: a reservation (reserve) or a signed row
      (markSigned, after the turn). Each refill has one price; a top-up is one
      unit when the payer is short, else nothing is sent (the skip branch).
-   - Reads under the lock (live 181, holding rows 194, caps 196) are one step.
+   - Reads under the lock (live 184, holding rows 197, caps 199) are one step.
    - A Disconnect either sends its batch (revokes the grant on chain, sweeps)
      and ends the connection, or ends it with nothing sent (298, or the budget
      left to the owner at 332, which revokes nothing).
    - A refill top-up after the grant is revoked on chain moves nothing.
    - LostReply: the bundler took the top-up but the request threw, so the money
      lands while ensurePayerFunds returns a plain failure with no amount, which
-     the caller reads as funding_failed. TxFault: the reserve tx (250) fails, so
-     the catch (256) runs.
+     the caller reads as funding_failed. TxFault: the reserve tx (255-264) fails,
+     so the catch (267-274) runs.
    - Fairness: weak fairness on each thread's steps, which include the
      lock_timeout give-up, so a waiter cannot starve on its own. *)
 EXTENDS Naturals, FiniteSets
@@ -62,18 +69,18 @@ Holders == Refills \cup Discs
 Threads == Holders \cup Revokes
 
 VARIABLES pc, funded, outcome,
-          lockOwner, sess, lost, drops,
+          lockOwner, sess, lost, drops, fence, took,
           live, topUp, visible,
-          revokedOnChain, moved, lateSend
+          revokedOnChain, moved, lateSend, staleTopUp
 
 turn == <<pc, funded, outcome>>
-lock == <<lockOwner, sess, lost, drops>>
+lock == <<lockOwner, sess, lost, drops, fence, took>>
 db == <<live, topUp, visible>>
-chain == <<revokedOnChain, moved, lateSend>>
+chain == <<revokedOnChain, moved, lateSend, staleTopUp>>
 vars == <<turn, lock, db, chain>>
 
 Failed == {"refused", "busy", "error", "funding_failed"}
-Outcomes == {"none", "ok"} \cup Failed
+Outcomes == {"none", "ok", "funded"} \cup Failed
 Committed == Cardinality({r \in Refills : visible[r]}) * Price
 
 Init == /\ pc = [t \in Threads |-> IF t \in Revokes THEN "poll" ELSE "wait"]
@@ -83,12 +90,15 @@ Init == /\ pc = [t \in Threads |-> IF t \in Revokes THEN "poll" ELSE "wait"]
         /\ sess = [t \in Holders |-> "open"]
         /\ lost = [t \in Holders |-> FALSE]
         /\ drops = 0
+        /\ fence = 0
+        /\ took = [t \in Holders |-> 0]
         /\ live = TRUE
         /\ topUp = [r \in Refills |-> 0]
         /\ visible = [r \in Refills |-> FALSE]
         /\ revokedOnChain = FALSE
         /\ moved = [r \in Refills |-> FALSE]
         /\ lateSend = FALSE
+        /\ staleTopUp = FALSE
 
 Go(t, p) == pc' = [pc EXCEPT ![t] = p]
 Say(t, o) == outcome' = [outcome EXCEPT ![t] = o]
@@ -103,11 +113,13 @@ GiveUp(t) == /\ pc[t] = "wait"
              /\ Leave(t, "busy")
              /\ UNCHANGED <<funded, lock, db, chain>>
 
-\* pg_advisory_xact_lock (float-lock.ts:106).
+\* pg_advisory_xact_lock and the fence bump (float-lock.ts:113-120).
 Acquire(t) == /\ pc[t] = "wait"
               /\ sess[t] = "open"
               /\ lockOwner = None
               /\ lockOwner' = t
+              /\ fence' = fence + 1
+              /\ took' = [took EXCEPT ![t] = fence + 1]
               /\ Go(t, IF t \in Refills THEN "check" ELSE "read")
               /\ UNCHANGED <<funded, outcome, sess, lost, drops, db, chain>>
 
@@ -117,38 +129,47 @@ WaitBroken(t) == /\ pc[t] = "wait"
                  /\ Leave(t, "error")
                  /\ UNCHANGED <<funded, lock, db, chain>>
 
+\* owns() (float-lock.ts:127-135): no drop seen and no turn bumped the fence since.
+Owns(r) == ~lost[r] /\ took[r] = fence
+
 \* finally: released = true, session.end (float-lock.ts:117-118). A pending
 \* onclose is swallowed: released is already set.
 Finally(t) == /\ pc[t] = "finally"
               /\ lockOwner' = Free(t)
               /\ sess' = [sess EXCEPT ![t] = "ended"]
               /\ Go(t, IF t \in Refills /\ outcome[t] = "ok" THEN "sign" ELSE "done")
-              /\ UNCHANGED <<funded, outcome, lost, drops, db, chain>>
+              /\ UNCHANGED <<funded, outcome, lost, drops, fence, took, db, chain>>
 
 (* Refill turn, refill.ts *)
 
-\* live check and caps read and check (181-209).
+\* live check and caps read and check (184-212).
 Check(r) == /\ pc[r] = "check"
             /\ IF ~live \/ Committed + Price > Cap
                  THEN Leave(r, "refused")
                  ELSE Go(r, "assert212") /\ UNCHANGED outcome
             /\ UNCHANGED <<funded, lock, db, chain>>
 
-\* hold.assertHeld() (213), then ensurePayerFunds sends only when the payer is short.
+\* hold.assertHeld() (216), then ensurePayerFunds sends only when the payer is short.
 Assert212(r) == /\ pc[r] = "assert212"
                 /\ IF lost[r]
                      THEN Leave(r, "error")
                      ELSE (Go(r, "addTopUp") \/ Go(r, "skip")) /\ UNCHANGED outcome
                 /\ UNCHANGED <<funded, lock, db, chain>>
 
-\* addTopUp in its own tx before the send (108, store.ts:221).
+\* owns() then addTopUp in one tx before the send (109-112, store.ts:221). Not
+\* owning throws FloatLost with nothing sent, which the turn rethrows (242).
 AddTopUp(r) == /\ pc[r] = "addTopUp"
-               /\ topUp' = [topUp EXCEPT ![r] = 1]
-               /\ Go(r, "assert115")
-               /\ UNCHANGED <<funded, outcome, lock, live, visible, chain>>
+               /\ IF Owns(r)
+                    THEN /\ topUp' = [topUp EXCEPT ![r] = 1]
+                         /\ Go(r, "assert115")
+                         /\ UNCHANGED outcome
+                    ELSE /\ Leave(r, "error")
+                         /\ UNCHANGED topUp
+               /\ staleTopUp' = (staleTopUp \/ (topUp'[r] = 1 /\ took[r] # fence))
+               /\ UNCHANGED <<funded, lock, live, visible, revokedOnChain, moved, lateSend>>
 
-\* hold.assertHeld() right before the send (114); FloatLost lands in the catch
-\* that subtracts the top-up (116) and ensurePayerFunds returns a failure.
+\* hold.assertHeld() right before the send (118); FloatLost lands in the catch
+\* that subtracts the top-up (120) and ensurePayerFunds returns a failure.
 Assert115(r) == /\ pc[r] = "assert115"
                 /\ IF lost[r]
                      THEN /\ topUp' = [topUp EXCEPT ![r] = 0]
@@ -160,7 +181,7 @@ Assert115(r) == /\ pc[r] = "assert115"
 Land(r) == /\ moved' = [moved EXCEPT ![r] = TRUE]
            /\ lateSend' = (lateSend \/ ~live)
 
-\* executor.request('wallet_sendCalls') (120). A send that throws keeps the
+\* executor.request('wallet_sendCalls') (124). A send that throws keeps the
 \* top-up on the row, whether or not the money landed.
 Send(r) == /\ pc[r] = "send"
            /\ \/ /\ ~revokedOnChain
@@ -173,31 +194,41 @@ Send(r) == /\ pc[r] = "send"
                  /\ ~revokedOnChain
                  /\ Land(r)
                  /\ Leave(r, "funding_failed")
-           /\ UNCHANGED <<funded, lock, live, topUp, visible, revokedOnChain>>
+           /\ UNCHANGED <<funded, lock, live, topUp, visible, revokedOnChain, staleTopUp>>
 
-\* Money moved: funded is the caller's outcome from here on (246).
+\* Money moved: funded is the caller's outcome from here on (250). "funded" is an
+\* ok the turn holds but has not returned yet.
 Held(r) == /\ pc[r] = "held"
            /\ funded' = [funded EXCEPT ![r] = TRUE]
-           /\ Say(r, IF lost[r] THEN "funding_failed" ELSE "ok")
+           /\ Say(r, IF lost[r] THEN "funding_failed" ELSE "funded")
            /\ Go(r, "reserve")
            /\ UNCHANGED <<lock, db, chain>>
 
-\* No money moved: the reservation commits under the lock or not at all (245).
+\* No money moved: the reservation commits under the lock or not at all (249).
 Skip(r) == /\ pc[r] = "skip"
            /\ IF lost[r]
                 THEN Leave(r, "error")
                 ELSE Go(r, "reserve") /\ UNCHANGED outcome
            /\ UNCHANGED <<funded, lock, db, chain>>
 
-\* reserve and recordTopUp in one tx (250-253); a failed tx lands in the catch
-\* (256-262), which refuses funded when money moved: nothing reserved its price.
+Returned(r) == IF outcome[r] = "funded" THEN "ok" ELSE outcome[r]
+
+\* owns(), reserve and recordTopUp in one tx (255-264). Not owning reserves nothing:
+\* FloatLost when no money moved, LOST when it did. A tx that fails, before owns()
+\* or after it, lands in the catch (267-274), which refuses funded when money
+\* moved: nothing reserved its price.
 Reserve(r) == /\ pc[r] = "reserve"
-              /\ \/ /\ ~funded[r]
+              /\ \/ /\ ~Owns(r)
+                    /\ Say(r, IF funded[r] THEN "funding_failed" ELSE "error")
+                    /\ UNCHANGED visible
+                 \/ /\ Owns(r)
+                    /\ ~funded[r]
                     /\ visible' = [visible EXCEPT ![r] = TRUE]
                     /\ Say(r, "ok")
-                 \/ /\ funded[r]
-                    /\ visible' = IF outcome[r] = "ok" THEN [visible EXCEPT ![r] = TRUE] ELSE visible
-                    /\ UNCHANGED outcome
+                 \/ /\ Owns(r)
+                    /\ funded[r]
+                    /\ visible' = IF outcome[r] = "funded" THEN [visible EXCEPT ![r] = TRUE] ELSE visible
+                    /\ Say(r, Returned(r))
                  \/ /\ TxFault
                     /\ outcome' = [outcome EXCEPT ![r] = IF funded[r] THEN "funding_failed" ELSE "error"]
                     /\ UNCHANGED visible
@@ -230,7 +261,7 @@ Sweep(d) == /\ pc[d] = "sweep"
                   /\ UNCHANGED outcome
                \/ /\ Leave(d, "refused")
                   /\ UNCHANGED revokedOnChain
-            /\ UNCHANGED <<funded, lock, db, moved, lateSend>>
+            /\ UNCHANGED <<funded, lock, db, moved, lateSend, staleTopUp>>
 
 \* endConnection (164, rows.ts:188).
 End(d) == /\ pc[d] = "end"
@@ -265,13 +296,13 @@ Drop(t) == /\ drops < MaxDrops
            /\ sess' = [sess EXCEPT ![t] = "dropped"]
            /\ lockOwner' = Free(t)
            /\ drops' = drops + 1
-           /\ UNCHANGED <<turn, lost, db, chain>>
+           /\ UNCHANGED <<turn, lost, fence, took, db, chain>>
 
 \* onclose reaches the holder (float-lock.ts:86-88).
 Notify(t) == /\ sess[t] = "dropped"
              /\ sess' = [sess EXCEPT ![t] = "closed"]
              /\ lost' = [lost EXCEPT ![t] = TRUE]
-             /\ UNCHANGED <<turn, lockOwner, drops, db, chain>>
+             /\ UNCHANGED <<turn, lockOwner, drops, fence, took, db, chain>>
 
 RefillStep(r) == Acquire(r) \/ GiveUp(r) \/ WaitBroken(r) \/ Check(r) \/ Assert212(r)
                  \/ AddTopUp(r) \/ Assert115(r) \/ Send(r) \/ Held(r) \/ Skip(r)
@@ -302,18 +333,25 @@ TypeOK == /\ pc \in [Threads -> {"wait", "poll", "check", "assert212", "addTopUp
           /\ sess \in [Holders -> {"open", "dropped", "closed", "ended"}]
           /\ lost \in [Holders -> BOOLEAN]
           /\ drops \in 0..MaxDrops
+          /\ fence \in 0..Cardinality(Holders)
+          /\ took \in [Holders -> 0..Cardinality(Holders)]
           /\ live \in BOOLEAN
           /\ topUp \in [Refills -> 0..1]
           /\ visible \in [Refills -> BOOLEAN]
           /\ revokedOnChain \in BOOLEAN
           /\ moved \in [Refills -> BOOLEAN]
           /\ lateSend \in BOOLEAN
+          /\ staleTopUp \in BOOLEAN
 
 \* (a) The prices of turns that return ok never pass the cap checkCaps enforces.
 CapHolds == Cardinality({r \in Refills : outcome[r] = "ok"}) * Price <= Cap
 
 \* (b) Money that landed has its topUpAmount on the row, or its turn reports failure.
 MovedRecorded == \A r \in Refills : moved[r] /\ topUp[r] = 0 => outcome[r] \in Failed
+
+\* (f) No turn writes its top-up, and so sends it, after another turn took the
+\* lock from it: the next holder's caps read always sees the top-up row.
+NoStaleTopUp == ~staleTopUp
 
 \* (c) No top-up lands once the connection is no longer live.
 NoSendAfterEnd == ~lateSend

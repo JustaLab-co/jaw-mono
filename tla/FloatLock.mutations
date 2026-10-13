@@ -37,7 +37,7 @@ mutation the catch returns funded as ok when the reserve tx fails, so the caller
 detects CapHolds
 only cap refills=3 txfault
 - /\ outcome' = [outcome EXCEPT ![r] = IF funded[r] THEN "funding_failed" ELSE "error"]
-+ /\ outcome' = IF funded[r] THEN outcome ELSE [outcome EXCEPT ![r] = "error"]
++ /\ outcome' = [outcome EXCEPT ![r] = IF funded[r] THEN Returned(r) ELSE "error"]
 
 mutation the session end keeps the lock and the wait has no lock_timeout
 detects WaitEnds
@@ -79,3 +79,15 @@ only money refills=1 lostreply
 -                  /\ Leave(r, "funding_failed")
 + /\ Land(r)
 +                  /\ Leave(r, "refused")
+
+mutation the reserve tx does not check the fence, as before it existed
+detects CapHolds
+only cap refills=3 drops=1
+- Owns(r) == ~lost[r] /\ took[r] = fence
++ Owns(r) == ~lost[r]
+
+mutation the top-up write does not check the fence
+detects NoStaleTopUp
+only cap refills=3 drops=1
+- /\ IF Owns(r)
++ /\ IF TRUE
