@@ -324,8 +324,12 @@ export async function finish(
 
 /** The agent's ledger view of a row, so caps are counted by `spendFigureOf`, the one rule. */
 function entryOf(row: LeasedRow): X402LogEntry {
+  const reserved = row.leaseLive ? row.reserved : null;
+  // A payment counts in the day it was signed, and a live reservation in the day it runs:
+  // a key claimed before the day ends may be retried or signed after it.
+  const at = row.signedAt ?? (reserved !== null ? new Date() : row.createdAt);
   const base = {
-    at: row.createdAt.toISOString(),
+    at: at.toISOString(),
     url: row.url,
     payer: row.payer,
     permissionId: row.permissionId ?? undefined,
@@ -336,8 +340,8 @@ function entryOf(row: LeasedRow): X402LogEntry {
   switch (row.state) {
     case 'pending':
       // A reservation costs its price while its lease lives, like a signature nobody has answered.
-      return row.reserved !== null && row.leaseLive
-        ? { ...base, status: 'failed', authorized: row.reserved, settlement: 'unverified' }
+      return reserved !== null
+        ? { ...base, status: 'failed', authorized: reserved, settlement: 'unverified' }
         : { ...base, status: 'refused' };
     case 'signed':
     case 'unknown':
