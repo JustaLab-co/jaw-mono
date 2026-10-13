@@ -170,6 +170,9 @@ const held = (id: string, token: string) =>
 
 export const writeHeld = (id: string, token: string, set: SwapSet) => write(held(id, token), set);
 
+export const release = (id: string, token: string, set: SwapSet) =>
+  write(held(id, token), { ...set, leaseToken: null, leaseUntil: dbNow });
+
 export const nextAttempt = (id: string, token: string) =>
   write(and(held(id, token), isNull(swaps.quoteId), currentPayment(sql`p.state = 'failed'`)), {
     paymentAttempt: sql`${swaps.paymentAttempt} + 1`,
