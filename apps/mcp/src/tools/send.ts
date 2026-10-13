@@ -102,6 +102,7 @@ async function sendWithinBudget(t: Tenant, calls: Call[]) {
     });
   } catch (err) {
     if (err instanceof FloatBusy) return refusal('A payment on this connection is in progress. Try again in a moment.');
+    if (err instanceof FloatLost) return refusal('Nothing was sent: this send lost its turn on the budget. Try again.');
     log('warn', { msg: 'send not submitted', error: errorLabel(err) });
     return refusal('Nothing was sent: the calls failed in simulation, or are over what the budget has left today.');
   }

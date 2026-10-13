@@ -16,7 +16,7 @@ import { endConnection } from '@/connections/rows';
 import { getDb } from '@/db/client';
 import { connections, grants, settings } from '@/db/schema';
 import { lockWaiters, TEST_PG_URL, useTestDb, useTestPostgres } from '@/db/test-db';
-import { withFloat } from '@/payments/float-lock';
+import { withFloat, type FloatHold } from '@/payments/float-lock';
 import { requestBudget } from './request-budget';
 
 const USDC: Address = '0x036CbD53842c5426634e7929541eC2318f3dCF7e';
@@ -27,6 +27,16 @@ const bridge = vi.hoisted(() => ({
   sent: [] as { to: Address; data: Hex }[][],
   status: 200,
 }));
+// Set to make every float turn find its lock taken by another turn when it checks.
+const fence = vi.hoisted(() => ({ lost: false }));
+vi.mock('@/payments/float-lock', async (original) => {
+  const real = await original<typeof import('@/payments/float-lock')>();
+  return {
+    ...real,
+    withFloat: <T>(id: string, waitMs: number, work: (hold: FloatHold) => Promise<T>) =>
+      real.withFloat(id, waitMs, (hold) => work(fence.lost ? { ...hold, owns: async () => false } : hold)),
+  };
+});
 vi.mock('@/adapters/session-host', async (original) => ({
   ...(await original<object>()),
   sessionBridge: () => ({
@@ -45,6 +55,7 @@ beforeAll(useTestDb);
 afterEach(async () => {
   bridge.sent.length = 0;
   bridge.status = 200;
+  fence.lost = false;
   await getDb().delete(settings);
 });
 
@@ -100,6 +111,17 @@ describe('jaw_transfer', () => {
     expect(result.isError).toBe(true);
     expect(bridge.sent).toEqual([]);
   });
+
+  it('given a transfer whose turn on the float lock was taken by another, then it sends nothing and asks to try again', async () => {
+    const { c } = await sender();
+    fence.lost = true;
+    const result = await callTool(c.access_token, 'jaw_transfer', { to: BOB, amount: '0.25' });
+    expect(result.isError).toBe(true);
+    expect(result.content[0].text).toContain('Nothing was sent');
+    expect(result.content[0].text).toContain('Try again');
+    expect(result.content[0].text).not.toContain('simulation');
+    expect(bridge.sent).toEqual([]);
+  });
 });
 
 describe('jaw_send_calls', () => {
@@ -136,7 +158,7 @@ describe('jaw_send_calls', () => {
   });
 });
 
-describe.skipIf(!TEST_PG_URL)('on Postgres, given a disconnect holding the float lock', () => {
+describe.skipIf(!TEST_PG_URL)('on Postgres, given another turn holding the float lock', () => {
   beforeAll(useTestPostgres);
 
   it('given a transfer waiting on the lock while the disconnect ends the connection, then the session key sends nothing', async () => {
@@ -162,5 +184,36 @@ describe.skipIf(!TEST_PG_URL)('on Postgres, given a disconnect holding the float
     expect(row.status).toBe('revoked');
     expect(bridge.sent).toEqual([]);
     expect(result.isError).toBe(true);
+    expect(result.content[0].text).toContain('This connection has ended');
+  });
+
+  it('given a transfer waiting on the lock while the connection expires, then the session key sends nothing', async () => {
+    const { c, t } = await sender();
+    let locked!: () => void;
+    const holding = new Promise<void>((r) => (locked = r));
+    let parked = 0;
+    const expiring = withFloat(t.connectionId, 5_000, async (hold) => {
+      locked();
+      for (let i = 0; i < 100 && parked === 0; i++) {
+        await new Promise((r) => setTimeout(r, 50));
+        parked = await lockWaiters(t.connectionId);
+      }
+      await hold.tx((tx) =>
+        tx
+          .update(connections)
+          .set({ expiresAt: new Date(Date.now() - 1_000) })
+          .where(eq(connections.id, t.connectionId))
+      );
+    });
+    await holding;
+    const sending = callTool(c.access_token, 'jaw_transfer', { to: BOB, amount: '0.25' });
+    await expiring;
+    const result = await sending;
+    const [row] = await getDb().select().from(connections).where(eq(connections.id, t.connectionId));
+    expect(parked).toBe(1);
+    expect(row.status).toBe('active');
+    expect(bridge.sent).toEqual([]);
+    expect(result.isError).toBe(true);
+    expect(result.content[0].text).toContain('This connection has ended');
   });
 });
