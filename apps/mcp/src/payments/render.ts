@@ -81,6 +81,7 @@ function summaryOf(row: PaymentRow, out: Omit<PayOutput, 'summary'>): string {
 
 /** The answer for a row, from its columns, so a replay shows what the reconciler learned since. */
 export function render(row: PaymentRow, fenced: string[], truncated = false): PayResult {
+  const maybeSent = row.state === 'signed' || row.state === 'unknown';
   const out = {
     paymentId: row.id,
     idempotencyKey: row.idempotencyKey,
@@ -101,7 +102,8 @@ export function render(row: PaymentRow, fenced: string[], truncated = false): Pa
     ...(row.code && {
       refusal: {
         code: row.code,
-        ...(RAISE.has(row.code) && { next: 'jaw_request_budget' as const }),
+        // A proof already sent stays tied to its own budget, so a new one does not pay it.
+        ...(RAISE.has(row.code) && !maybeSent && { next: 'jaw_request_budget' as const }),
       },
     }),
     ...((row.topUpAmount || row.topUpBatchId) && {

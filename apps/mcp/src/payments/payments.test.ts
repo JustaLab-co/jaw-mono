@@ -462,6 +462,49 @@ describe('jaw_pay_and_fetch', () => {
     expect(await rowOf(lost.structuredContent!.paymentId)).toMatchObject({ state: 'signed', code: 'no_response' });
   });
 
+  it('given a lost answer and a budget revoked on chain since, when the key is retried, then the proof is not sent again', async () => {
+    const { t } = await connected('1');
+    balances.set(t.sessionAddress.toLowerCase(), 1_000_000n);
+    dropNextLost = true;
+    const lost = await pay(t, { url: url('/lost'), idempotencyKey: 'revoked-resend' }, deps());
+    expect(lost.structuredContent).toMatchObject({ state: 'signed', refusal: { code: 'no_response' } });
+    // Past the cached liveness of the first send, as a later call or another replica is.
+    const later = await otherReplica();
+    const revoked = deps({ readPermission: async () => ({ status: 'ok', approved: true, revoked: true }) });
+    const again = await later(t, { url: url('/lost'), idempotencyKey: 'revoked-resend' }, revoked);
+    expect(again.structuredContent).toMatchObject({ refusal: { code: 'grant_revoked' } });
+    expect(seen).toHaveLength(1);
+    expect(await rowOf(lost.structuredContent!.paymentId)).toMatchObject({ state: 'signed', code: 'no_response' });
+  });
+
+  it('given a lost answer and a new budget approved since, when the key is retried, then no_grant, the proof is not sent again, and no budget is suggested', async () => {
+    const { c, t } = await connected('1');
+    balances.set(t.sessionAddress.toLowerCase(), 1_000_000n);
+    dropNextLost = true;
+    const lost = await pay(t, { url: url('/lost'), idempotencyKey: 'replaced-resend' }, deps());
+    expect(lost.structuredContent).toMatchObject({ state: 'signed', refusal: { code: 'no_response' } });
+    await approveBudget(c, '1');
+    const again = await pay(t, { url: url('/lost'), idempotencyKey: 'replaced-resend' }, deps());
+    expect(again.structuredContent).toMatchObject({ refusal: { code: 'no_grant' } });
+    expect(again.structuredContent?.refusal?.next).toBeUndefined();
+    expect(seen).toHaveLength(1);
+    expect(await rowOf(lost.structuredContent!.paymentId)).toMatchObject({ state: 'signed', code: 'no_response' });
+  });
+
+  it('given a lost answer and a chain that cannot be read, when the key is retried, then the proof is not sent again', async () => {
+    const { t } = await connected('1');
+    balances.set(t.sessionAddress.toLowerCase(), 1_000_000n);
+    dropNextLost = true;
+    const lost = await pay(t, { url: url('/lost'), idempotencyKey: 'unread-resend' }, deps());
+    expect(lost.structuredContent).toMatchObject({ state: 'signed', refusal: { code: 'no_response' } });
+    const later = await otherReplica();
+    const down = deps({ readPermission: async () => Promise.reject(new Error('rpc down')) });
+    const again = await later(t, { url: url('/lost'), idempotencyKey: 'unread-resend' }, down);
+    expect(again.structuredContent).toMatchObject({ refusal: { code: 'chain_unavailable' } });
+    expect(seen).toHaveLength(1);
+    expect(await rowOf(lost.structuredContent!.paymentId)).toMatchObject({ state: 'signed', code: 'no_response' });
+  });
+
   it('never returns a refill error to the agent, which can quote the paymaster key', async () => {
     const { t } = await connected('1');
     const leaky: TopUpExecutor = {
