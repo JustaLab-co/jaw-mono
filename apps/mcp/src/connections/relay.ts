@@ -17,6 +17,7 @@ export type Ask = (method: string, params: unknown[]) => Promise<unknown>;
 export interface Wallet {
   url: string;
   run<T>(work: (ask: Ask) => Promise<T>): Promise<T>;
+  close(): void;
 }
 
 /** Opens a session that ends at `until`, answered or not. */
@@ -115,6 +116,7 @@ async function openRelay(pool: Pool, chainId: number, until: Date): Promise<Wall
         ws.close();
       }
     },
+    close: () => ws.close(),
   };
 }
 

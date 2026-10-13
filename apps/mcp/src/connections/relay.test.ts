@@ -98,6 +98,14 @@ describe('a wallet session over the relay', () => {
     await expect(wallet.run((ask) => ask('eth_requestAccounts', []))).rejects.toThrow();
   });
 
+  it('given the caller closes the session before handing out its link, then running it is refused', async () => {
+    const wallet = await openRelay(84532);
+    wallet.close();
+    await expect(wallet.run((ask) => ask('eth_requestAccounts', []))).rejects.toThrow(
+      /the relay connection failed|the wallet session ended/
+    );
+  });
+
   it('keeps the key out of what the relay sees: the public key rides the fragment, every message is ciphertext', async () => {
     const wallet = await openRelay(84532);
     expect(new URL(wallet.url).search).not.toContain('pk=');
