@@ -1262,6 +1262,55 @@ describe.skipIf(!TEST_PG_URL)('on Postgres, given a refill whose lock session is
 });
 
 describe.skipIf(!TEST_PG_URL)(
+  'on Postgres, given a short payer whose lock session is cut off without it knowing',
+  () => {
+    it('when another replica takes the lock and tops up first, then the cut-off turn sends no top-up', async () => {
+      const { t } = await connected('1');
+      const payB = await otherReplica();
+      const holder = floatHolder();
+      const proxy = await partitionable((holder as { url: string }).url);
+      setDb(getDb(), { url: proxy.url });
+      const admin = postgres(TEST_PG_URL as string, { max: 1, onnotice: () => {} });
+      let killed = 0;
+      let second: Awaited<ReturnType<typeof pay>> | undefined;
+      const cutting: ChainClients = {
+        publicClient: () =>
+          ({
+            ...node,
+            readContract: async (read: Parameters<typeof node.readContract>[0]) => {
+              const payerRead =
+                read.functionName === 'balanceOf' && isAddressEqual(read.args[0] as Address, t.sessionAddress);
+              // The pinned read answers for the block before the other replica's top-up.
+              const balance = await node.readContract(read);
+              if (payerRead && !second) {
+                proxy.freeze();
+                const rows = await admin`select pg_terminate_backend(pid) from pg_locks
+                where locktype = 'advisory' and granted
+                  and ((classid::bigint << 32) | objid::bigint) = hashtext(${`refill:${t.connectionId}`})`;
+                killed = rows.length;
+                second = await payB(t, { url: url('/budget'), idempotencyKey: 'replica-b-topup' }, deps());
+              }
+              return balance;
+            },
+          }) as unknown as PublicClient,
+      };
+      let first: Awaited<ReturnType<typeof pay>> | undefined;
+      try {
+        first = await pay(t, { url: url('/budget'), idempotencyKey: 'replica-a-topup' }, deps({ clients: cutting }));
+      } finally {
+        setDb(getDb(), holder);
+        await proxy.close();
+        await admin.end();
+      }
+      expect(killed).toBe(1);
+      expect(second?.structuredContent?.kind).toBe('paid');
+      expect(refills).toHaveLength(1);
+      expect(first?.structuredContent?.kind).not.toBe('paid');
+    });
+  }
+);
+
+describe.skipIf(!TEST_PG_URL)(
   'on Postgres, given an exact refill whose lock session drops while the top-up confirms',
   () => {
     it('when the top-up landed, then the pay is refused unsigned with the top-up traced and nothing reserved', async () => {

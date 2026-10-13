@@ -71,3 +71,9 @@ detects CapHolds
 only cap refills=3 drops=1
 - Owns(r) == ~lost[r] /\ took[r] = fence
 + Owns(r) == ~lost[r]
+
+mutation the top-up write does not check the fence
+detects NoStaleTopUp
+only cap refills=3 drops=1
+- /\ IF Owns(r)
++ /\ IF TRUE

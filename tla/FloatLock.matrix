@@ -13,9 +13,10 @@ run base refills=3 | Refills={r1,r2,r3} Discs={} Revokes={} Cap=2 Price=1 MaxDro
 run base refills=1 disc=1 | Refills={r1} Discs={d1} Revokes={} Cap=2 Price=1 MaxDrops=0 LostReply=FALSE TxFault=FALSE
 run base refills=2 disc=1 | Refills={r1,r2} Discs={d1} Revokes={} Cap=2 Price=1 MaxDrops=0 LostReply=FALSE TxFault=FALSE
 
-# (a) the cap, with the lock session dropping, and with a failed reserve tx.
+# (a) the cap, with the lock session dropping, and with a failed reserve tx;
+# (f) no top-up written after the lock was taken from its turn.
 spec FloatLock.tla
-check INVARIANTS TypeOK CapHolds
+check INVARIANTS TypeOK CapHolds NoStaleTopUp
 reach LockStolen | cap refills=2 drops=2
 reach LostSeen | cap refills=2 drops=2
 run cap refills=2 drops=2 | Refills={r1,r2} Discs={} Revokes={} Cap=2 Price=1 MaxDrops=2 LostReply=FALSE TxFault=FALSE

@@ -105,7 +105,11 @@ function guarded(
         let amount: bigint;
         try {
           amount = transferAmount(params);
-          await hold.tx((tx) => addTopUp(tx, rowId, amount));
+          // A turn whose lock was taken while it went unnoticed sends nothing.
+          await hold.tx(async (tx) => {
+            if (!(await hold.owns(tx))) throw new FloatLost();
+            await addTopUp(tx, rowId, amount);
+          });
         } catch (err) {
           failedBeforeSend = err;
           throw err;
