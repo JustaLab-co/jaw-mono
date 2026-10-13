@@ -13,12 +13,13 @@ import {
   jawPaymasterUrl,
   PERMISSIONS_MANAGER_ADDRESS,
 } from '@jaw.id/core';
-import { and, eq, gt, inArray, isNotNull, isNull, sql } from 'drizzle-orm';
+import { and, eq, gt, inArray, isNotNull, isNull, ne, sql } from 'drizzle-orm';
 import { encodeFunctionData, erc20Abi, formatUnits, isAddressEqual, maxUint256, type Address, type Hex } from 'viem';
 import { privateKeyToAccount } from 'viem/accounts';
 import { z } from 'zod';
 import { chainClients } from '@/adapters/session-host';
-import { grants } from '@/db/schema';
+import { getDb } from '@/db/client';
+import { connections, grants } from '@/db/schema';
 import { isPaymentsPaused } from '@/db/settings';
 import { readOnChain, type ReadPermission } from '@/grants/permission';
 import { publicClientFor, rpcUrl } from '@/lib/chain';
@@ -204,6 +205,31 @@ export async function revokeReplaced(s: Session, deps = DEFAULTS): Promise<void>
 /** Revokes every live budget of a session and returns its free float to the owner, under the float lock. */
 export const retire = (s: Session, deps = DEFAULTS): Promise<Returned | string> =>
   withFloat(s.connectionId, deps.lockWaitMs ?? LOCK_WAIT_MS, (hold) => returnFunds(hold, s, deps, 'everything'));
+
+/**
+ * Returns the float and revokes the budgets of a connection ended by a reused
+ * refresh token, with the key that token's wrap still opened. Paused payments
+ * or a failed retire leave the float at the payer.
+ */
+export async function sweepOnReuse(connectionId: string, key: Hex, deps = DEFAULTS): Promise<void> {
+  if (await isPaymentsPaused()) return;
+  const [conn] = await getDb()
+    .select()
+    .from(connections)
+    .where(and(eq(connections.id, connectionId), ne(connections.status, 'pending')));
+  if (!conn?.sessionAddress) return;
+  const session: Session = {
+    connectionId,
+    account: conn.account as Address,
+    chainId: conn.chainId,
+    sessionAddress: conn.sessionAddress as Address,
+    sessionKey: () => key,
+  };
+  const outcome = await retire(session, deps).catch((err: unknown) => errorLabel(err));
+  if (typeof outcome === 'string') {
+    log('warn', { msg: `reuse sweep skipped for ${connectionId}`, error: outcome });
+  }
+}
 
 function summarize(t: Tenant, r: Returned): string {
   const usdc = (amount: bigint) => `${formatUnits(amount, 6)} USDC`;
