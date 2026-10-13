@@ -1,3 +1,17 @@
+## 1.6.3 (2026-10-13)
+
+### 🩹 Fixes
+
+- **core:** keep each account's address fixed by storing the record it was created from ([#374](https://github.com/JustaLab-co/jaw-mono/pull/374))
+
+### 🧱 Updated Dependencies
+
+- Updated @jaw.id/core to 1.6.3
+
+### ❤️ Thank You
+
+- Ghadi @Ghadi8
+
 ## 1.6.2 (2026-10-09)
 
 ### 🩹 Fixes
