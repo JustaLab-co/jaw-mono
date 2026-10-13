@@ -3,8 +3,10 @@ import { toHex, type Address } from 'viem';
 import { z } from 'zod';
 import type { Ask } from '@/connections/relay';
 import { errorLabel, log } from '@/lib/edge';
+import type { BackendDeps } from './backend';
 import type { DepositCall } from './check';
 import { markSendStarted, move, recordCallsId, recordCode, recordSentCode, recordTxHash, type SwapRow } from './store';
+import { submit } from './track';
 
 const POLL_MS = 2_000;
 const PENDING = 100;
@@ -18,7 +20,13 @@ const callsStatus = z.object({
   receipts: z.array(z.object({ transactionHash: z.string().regex(/^0x[0-9a-fA-F]{64}$/) })).optional(),
 });
 
-export async function approve(ask: Ask, row: SwapRow, account: Address, pollMs = POLL_MS): Promise<void> {
+export async function approve(
+  ask: Ask,
+  row: SwapRow,
+  account: Address,
+  pollMs = POLL_MS,
+  backend?: BackendDeps
+): Promise<void> {
   const call = row.call as DepositCall;
   let accounts: unknown;
   try {
@@ -57,7 +65,9 @@ export async function approve(ask: Ask, row: SwapRow, account: Address, pollMs =
     }
     if (status.data.status !== PENDING) {
       const hash = status.data.status === MINED ? status.data.receipts?.[0]?.transactionHash : undefined;
-      if (hash) await recordTxHash(row.connectionId, row.id, hash);
+      if (!hash) return;
+      const deposited = await recordTxHash(row.connectionId, row.id, hash);
+      if (deposited) await submit(deposited, backend);
       return;
     }
     await sleep(pollMs);

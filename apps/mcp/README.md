@@ -18,11 +18,11 @@ One account can hold at most 20 active connections. The check runs after the own
 
 ## Scopes
 
-| Scope                                 | Tools                                                                                                                                   |
-| ------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------- |
-| `wallet:read` (required, the default) | `jaw_status`, `jaw_discover`, `jaw_quote`, `jaw_add_funds`, `jaw_history`, `jaw_connections`, `jaw_revoke_connection`, `jaw_disconnect` |
-| `x402:pay`                            | `jaw_request_budget`, `jaw_pay_and_fetch`                                                                                               |
-| `wallet:send`                         | `jaw_request_budget`, `jaw_transfer`, `jaw_send_calls`                                                                                  |
+| Scope                                 | Tools                                                                                                                                                      |
+| ------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `wallet:read` (required, the default) | `jaw_status`, `jaw_discover`, `jaw_quote`, `jaw_add_funds`, `jaw_history`, `jaw_connections`, `jaw_revoke_connection`, `jaw_disconnect`, `jaw_swap_status` |
+| `x402:pay`                            | `jaw_request_budget`, `jaw_pay_and_fetch`, `jaw_swap`                                                                                                      |
+| `wallet:send`                         | `jaw_request_budget`, `jaw_transfer`, `jaw_send_calls`                                                                                                     |
 
 No scope implies another. A tool refused for a missing scope answers with an error naming the scope; the agent reconnects and asks for it, which makes a new connection, so a budget approved on the old one does not carry over.
 
@@ -90,7 +90,7 @@ insert into settings (key, value) values ('paused', 'true')
 on conflict (key) do update set value = excluded.value, updated_at = now();
 ```
 
-Payments alone stop with `('payments_paused', 'true')` in the same table: `jaw_pay_and_fetch` refuses with `payments_paused` before it signs anything, `jaw_transfer` and `jaw_send_calls` refuse before they send, `jaw_disconnect` refuses before it revokes or returns anything, and every other tool keeps working.
+Payments alone stop with `('payments_paused', 'true')` in the same table: `jaw_pay_and_fetch` and `jaw_swap` refuse with `payments_paused` before they sign anything (a `jaw_swap` retry of a stored swap still answers), `jaw_transfer` and `jaw_send_calls` refuse before they send, `jaw_disconnect` refuses before it revokes or returns anything, and every other tool keeps working.
 
 `/api/cron/reconcile` (GET or POST, `Authorization: Bearer <JAW_MCP_CRON_SECRET>`) clears the key wraps of refresh tokens used more than a minute ago, settles or fails every payment left `signed` or `unknown` for more than a minute by asking the chain, logs one error per payment still unanswered an hour past its deadline, and deletes expired OAuth state, rate limit windows, audit events older than 90 days, and pending connections nothing refers to. A pending connection the owner approved but whose authorization never completed is retired past the interaction's end: its key revokes the budget and returns the prefund to the owner, as `jaw_disconnect` does, and then its sealed key is cleared. A run that cannot send keeps the key for the next one. `/api/metrics` serves payments by state, the reconciler backlog, refused `/mcp` calls per client, and `jaw_mcp_wraps_past_window`, the key wraps still stored for refresh tokens past their retry window, in Prometheus text. Each rotation sweeps those wraps and logs `wrap sweep failed` when it cannot; alert when the gauge stays above zero for longer than one cron interval.
 

@@ -207,6 +207,8 @@ describe('read tools', () => {
       'jaw_revoke_connection',
       'jaw_send_calls',
       'jaw_status',
+      'jaw_swap',
+      'jaw_swap_status',
       'jaw_transfer',
     ]);
     expect(tools.every((t) => t.outputSchema)).toBe(true);

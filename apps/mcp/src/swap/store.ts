@@ -5,10 +5,12 @@ import { config, QUOTE_MARGIN_SEC } from '@/connections/config';
 import { getDb, type Tx } from '@/db/client';
 import { payments, SWAP_DEPOSIT_ADDRESS_INDEX, swaps } from '@/db/schema';
 import { LEASE_MS } from '@/payments/store';
+import type { BackendState, DepositStatus } from './backend';
 
 export type SwapRow = typeof swaps.$inferSelect;
 export type SwapState = SwapRow['state'];
 type SwapSet = PgUpdateSetSource<typeof swaps>;
+type KnownStatus = Extract<DepositStatus, { backendState: BackendState }>;
 
 export interface SwapRequest {
   originChainId: number;
@@ -268,6 +270,37 @@ export const recordSentCode = (connectionId: string, id: string, code: string) =
 
 export const recordTxHash = (connectionId: string, id: string, txHash: string) =>
   write(and(ofSwap(connectionId, id, ['deposit_sent', 'submitted']), isNull(swaps.txHash)), { txHash });
+
+export async function findByQuoteId(connectionId: string, quoteId: string): Promise<SwapRow | undefined> {
+  const [row] = await getDb()
+    .select()
+    .from(swaps)
+    .where(and(eq(swaps.connectionId, connectionId), sql`lower(${swaps.quoteId}) = ${quoteId.toLowerCase()}`));
+  return row;
+}
+
+export const recordSubmit = (connectionId: string, id: string, accepted: boolean, backendState?: BackendState) =>
+  write(ofSwap(connectionId, id, ['deposit_sent']), {
+    submitAttempts: sql`${swaps.submitAttempts} + 1`,
+    ...(accepted && { state: 'submitted', backendState }),
+  });
+
+export async function recordBackend(connectionId: string, id: string, status: KnownStatus): Promise<void> {
+  const seen: SwapSet = {
+    backendState: status.backendState,
+    backendRawState: status.untrustedRawState ?? null,
+    checkedAt: dbNow,
+    ...(status.txHash && { txHash: sql`coalesce(${swaps.txHash}, ${status.txHash})` }),
+  };
+  const following = ofSwap(connectionId, id, ['awaiting_owner', 'expired', 'deposit_sent', 'submitted']);
+  if (status.state === 'pending_deposit') {
+    await write(following, seen);
+    await write(and(ofSwap(connectionId, id, ['awaiting_owner']), lt(swaps.approveBy, dbNow)), { state: 'expired' });
+    return;
+  }
+  await write(following, { ...seen, state: 'submitted', code: null });
+  if (status.state !== 'submitted') await write(ofSwap(connectionId, id, ['submitted']), { state: status.state });
+}
 
 const DEPOSIT_ADDRESS_KEYS = new Set([SWAP_DEPOSIT_ADDRESS_INDEX, 'swaps_quote_id_unique']);
 
