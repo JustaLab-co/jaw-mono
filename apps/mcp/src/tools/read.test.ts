@@ -4,7 +4,7 @@ import { beforeAll, describe, expect, it } from 'vitest';
 import { eq } from 'drizzle-orm';
 import { verifyBearer, type Tenant } from '@/connections/auth';
 import { getDb } from '@/db/client';
-import { grants } from '@/db/schema';
+import { connections, grants } from '@/db/schema';
 import { useTestDb } from '@/db/test-db';
 import { callTool, connect, mcp, setTestEnv } from '@/connections/testkit';
 
@@ -86,6 +86,25 @@ describe('read tools', () => {
     expect(r.structuredContent.readiness).toEqual({ status: 'not_ready', reason: 'no_scope' });
     expect(r.content[0].text).toContain('x402:pay');
     expect(r.content[0].text).not.toContain('Ready to pay');
+  });
+
+  it('jaw_status includes connectionExpiresAt', async () => {
+    const r = await callTool(token, 'jaw_status', {});
+    expect(r.structuredContent.connectionExpiresAt).toEqual(expect.any(String));
+    const expiry = new Date(r.structuredContent.connectionExpiresAt);
+    expect(expiry.getTime()).toBeGreaterThan(Date.now());
+  });
+
+  it('jaw_status warns when the connection expires within 48 hours', async () => {
+    const c = await connect();
+    const t = (await verifyBearer(c.access_token))?.extra?.tenant as Tenant;
+    await getDb()
+      .update(connections)
+      .set({ expiresAt: new Date(Date.now() + 12 * 60 * 60 * 1000) })
+      .where(eq(connections.id, t.connectionId));
+    const r = await callTool(c.access_token, 'jaw_status', {});
+    expect(r.content[0].text).toContain('jaw_disconnect');
+    expect(r.content[0].text).toContain('expires');
   });
 
   it('jaw_quote prices the exact route at 5000 Base Sepolia USDC without paying', async () => {
