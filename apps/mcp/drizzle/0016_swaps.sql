@@ -47,11 +47,13 @@ CREATE INDEX "swaps_connection_id_created_at_id_index" ON "swaps" USING btree ("
 CREATE UNIQUE INDEX "swaps_open_index" ON "swaps" USING btree ("connection_id") WHERE "swaps"."state" in ('quoting', 'awaiting_owner');
 --> statement-breakpoint
 CREATE FUNCTION "swaps_guard"() RETURNS trigger LANGUAGE plpgsql AS $$
+DECLARE
+  finals CONSTANT text[] := ARRAY['quote_failed', 'quote_rejected', 'abandoned', 'owner_declined', 'completed', 'refunded', 'failed'];
 BEGIN
   IF TG_OP = 'DELETE' THEN
     RAISE EXCEPTION 'swap % is never deleted', OLD.id;
   END IF;
-  IF OLD.state IN ('quote_failed', 'quote_rejected', 'abandoned', 'owner_declined', 'completed', 'refunded', 'failed') THEN
+  IF OLD.state = ANY (finals) THEN
     RAISE EXCEPTION 'swap % is % and final', OLD.id, OLD.state;
   END IF;
   IF OLD.state <> NEW.state AND (OLD.state, NEW.state) NOT IN (
@@ -64,8 +66,8 @@ BEGIN
   ) THEN
     RAISE EXCEPTION 'swap %: % to % is not a transition', OLD.id, OLD.state, NEW.state;
   END IF;
-  IF OLD.state = 'expired' AND NEW.state = 'deposit_sent' AND NEW.calls_id IS NULL THEN
-    RAISE EXCEPTION 'swap %: an expired swap moves to deposit_sent only with a calls id', OLD.id;
+  IF NEW.state = 'deposit_sent' AND NEW.calls_id IS NULL THEN
+    RAISE EXCEPTION 'swap %: deposit_sent only with a calls id', OLD.id;
   END IF;
   IF (NEW.id, NEW.connection_id, NEW.idempotency_key, NEW.request_hash, NEW.depositor, NEW.recipient,
       NEW.origin_chain_id, NEW.origin_token, NEW.destination_chain_id, NEW.destination_token, NEW.amount)
@@ -73,14 +75,21 @@ BEGIN
       OLD.origin_chain_id, OLD.origin_token, OLD.destination_chain_id, OLD.destination_token, OLD.amount) THEN
     RAISE EXCEPTION 'swap %: the request is immutable', OLD.id;
   END IF;
-  IF (NEW.quote_id, NEW.deposit_address, NEW.call, NEW.quote_fenced, NEW.paid_at)
+  IF (NEW.quote_id, NEW.deposit_address, NEW.quote, NEW.call, NEW.quote_fenced, NEW.paid_at,
+      NEW.wallet_url, NEW.approve_by, NEW.calls_id)
      IS DISTINCT FROM (coalesce(OLD.quote_id, NEW.quote_id), coalesce(OLD.deposit_address, NEW.deposit_address),
-      coalesce(OLD.call, NEW.call), coalesce(OLD.quote_fenced, NEW.quote_fenced), coalesce(OLD.paid_at, NEW.paid_at)) THEN
-    RAISE EXCEPTION 'swap %: the quote is written once', OLD.id;
+      coalesce(OLD.quote, NEW.quote), coalesce(OLD.call, NEW.call), coalesce(OLD.quote_fenced, NEW.quote_fenced),
+      coalesce(OLD.paid_at, NEW.paid_at), coalesce(OLD.wallet_url, NEW.wallet_url),
+      coalesce(OLD.approve_by, NEW.approve_by), coalesce(OLD.calls_id, NEW.calls_id)) THEN
+    RAISE EXCEPTION 'swap %: the quote, its link and the calls id are written once', OLD.id;
   END IF;
-  IF NEW.payment_attempt <> OLD.payment_attempt
-     AND NOT (NEW.payment_attempt = OLD.payment_attempt + 1 AND OLD.state = 'quoting' AND OLD.quote_id IS NULL) THEN
+  IF NEW.payment_attempt <> OLD.payment_attempt AND NOT (NEW.payment_attempt = OLD.payment_attempt + 1
+     AND OLD.state = 'quoting' AND OLD.quote_id IS NULL AND NEW.quote_id IS NULL) THEN
     RAISE EXCEPTION 'swap %: the payment attempt grows by one, and only while quoting with no quote', OLD.id;
+  END IF;
+  NEW.updated_at := statement_timestamp();
+  IF NEW.state = ANY (finals) THEN
+    NEW.finished_at := statement_timestamp();
   END IF;
   RETURN NEW;
 END $$;

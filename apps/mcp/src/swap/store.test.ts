@@ -1,5 +1,5 @@
 import { randomBytes, randomUUID } from 'node:crypto';
-import { eq, sql } from 'drizzle-orm';
+import { eq, sql, type SQL } from 'drizzle-orm';
 import { getAddress } from 'viem';
 import { beforeAll, describe, expect, it } from 'vitest';
 import { getDb } from '@/db/client';
@@ -12,6 +12,7 @@ import {
   move,
   nextAttempt,
   recordCallsId,
+  SWAP_TRANSITIONS,
   writeHeld,
   type SwapRequest,
   type SwapRow,
@@ -73,14 +74,15 @@ async function quoting(connectionId: string, key: string = randomUUID()) {
   return claimed;
 }
 
-async function awaiting(connectionId: string, approveBy = sql`now() + interval '4 minutes'`) {
+const linkOf = (approveBy: SQL = sql`now() + interval '4 minutes'`) => ({
+  ...quoteOf(),
+  walletUrl: 'https://keys.test/cli-bridge#s',
+  approveBy,
+});
+
+async function awaiting(connectionId: string, approveBy?: SQL) {
   const { row, token } = await quoting(connectionId);
-  const held = await writeHeld(row.id, token, {
-    ...quoteOf(),
-    state: 'awaiting_owner',
-    walletUrl: 'https://keys.test/cli-bridge#s',
-    approveBy,
-  });
+  const held = await writeHeld(row.id, token, { ...linkOf(approveBy), state: 'awaiting_owner' });
   if (!held) throw new Error('the quote was not written');
   return held;
 }
@@ -98,6 +100,12 @@ const refusalOf = (write: Promise<unknown>) =>
     () => 'written',
     (e: Error & { cause?: Error }) => e.cause?.message ?? e.message
   );
+
+const lapsePayments = (connectionId: string) =>
+  getDb()
+    .update(payments)
+    .set({ leaseUntil: sql`now() - interval '1 second'` })
+    .where(eq(payments.connectionId, connectionId));
 
 async function paymentFor(row: SwapRow) {
   const claimed = await claimPayment(
@@ -157,6 +165,18 @@ describe('claiming a swap by its idempotency key', () => {
     expect((await claimSwap(connectionId, 'k', { ...request, amount: '2000000' })).kind).toBe('conflict');
   });
 
+  it('given a row for the key, when it is claimed with the same addresses in another case, then it is the same request', async () => {
+    const connectionId = await newConnection();
+    await quoting(connectionId, 'k');
+    const checksummed = {
+      ...request,
+      originToken: getAddress(request.originToken),
+      destinationToken: getAddress(request.destinationToken),
+      depositor: ACCOUNT.toUpperCase().replace('0X', '0x'),
+    };
+    expect((await claimSwap(connectionId, 'k', checksummed)).kind).toBe('busy');
+  });
+
   it('given a row past quoting, when the same key is claimed, then the stored row answers', async () => {
     const connectionId = await newConnection();
     const row = await awaiting(connectionId);
@@ -191,6 +211,7 @@ describe('one open swap per connection (B18)', () => {
     const old = await quoting(connectionId);
     await paymentFor(old.row);
     await lapse(old.row.id);
+    await lapsePayments(connectionId);
     expect((await claimSwap(connectionId, 'other', request)).kind).toBe('run');
     expect(await rowOf(old.row.id)).toMatchObject({ state: 'abandoned', finishedAt: expect.any(Date) });
   });
@@ -199,6 +220,15 @@ describe('one open swap per connection (B18)', () => {
     const connectionId = await newConnection();
     const old = await quoting(connectionId);
     await signPayment(await paymentFor(old.row));
+    await lapse(old.row.id);
+    expect(await claimSwap(connectionId, 'other', request)).toMatchObject({ kind: 'open', row: { id: old.row.id } });
+    expect((await rowOf(old.row.id)).state).toBe('quoting');
+  });
+
+  it('given a quoting swap with a lapsed lease whose quote payment is pending under a live lease, when another key is claimed, then it stays open', async () => {
+    const connectionId = await newConnection();
+    const old = await quoting(connectionId);
+    await paymentFor(old.row);
     await lapse(old.row.id);
     expect(await claimSwap(connectionId, 'other', request)).toMatchObject({ kind: 'open', row: { id: old.row.id } });
     expect((await rowOf(old.row.id)).state).toBe('quoting');
@@ -244,6 +274,16 @@ describe('payment attempts', () => {
     expect(await write({ paymentKey: `swap:${row.id}:2` })).toMatch(/swap_payment_key/);
   });
 
+  it('given a quoting row with no quote, when the attempt grows in the same write that sets a quote id, then the database refuses', async () => {
+    const { row } = await quoting(await newConnection());
+    const write = getDb()
+      .update(swaps)
+      .set({ paymentAttempt: 2, paymentKey: `swap:${row.id}:2`, quoteId: `aurora:${freshAddress()}` })
+      .where(eq(swaps.id, row.id));
+    expect(await refusalOf(write)).toMatch(/grows by one/);
+    expect((await rowOf(row.id)).quoteId).toBeNull();
+  });
+
   it('given a row holding a quote, when the attempt grows, then the database refuses', async () => {
     const { row, token } = await quoting(await newConnection());
     await writeHeld(row.id, token, quoteOf());
@@ -274,43 +314,45 @@ describe('the swaps guard', () => {
     }
     const row = await awaiting(connectionId);
     if (state === 'awaiting_owner') return row;
-    if (['owner_declined', 'expired'].includes(state)) return (await move(row.id, ['awaiting_owner'], state))!;
-    const sent = (await recordCallsId(row.id, '0xcalls'))!;
+    if (['owner_declined', 'expired'].includes(state)) {
+      return (await move(connectionId, row.id, ['awaiting_owner'], state))!;
+    }
+    const sent = (await recordCallsId(connectionId, row.id, '0xcalls'))!;
     if (state === 'deposit_sent') return sent;
-    const submitted = (await move(row.id, ['deposit_sent'], 'submitted'))!;
+    const submitted = (await move(connectionId, row.id, ['deposit_sent'], 'submitted'))!;
     if (state === 'submitted') return submitted;
-    return (await move(row.id, ['submitted'], state))!;
+    return (await move(connectionId, row.id, ['submitted'], state))!;
   }
 
-  const illegal: [SwapRow['state'], SwapRow['state']][] = [
-    ['quoting', 'deposit_sent'],
-    ['quoting', 'expired'],
-    ['quoting', 'completed'],
-    ['awaiting_owner', 'quoting'],
-    ['expired', 'awaiting_owner'],
-    ['expired', 'owner_declined'],
-    ['deposit_sent', 'completed'],
-    ['deposit_sent', 'expired'],
-    ['submitted', 'deposit_sent'],
-    ['quote_failed', 'quoting'],
-    ['abandoned', 'awaiting_owner'],
-    ['owner_declined', 'deposit_sent'],
-    ['completed', 'failed'],
-    ['refunded', 'submitted'],
-  ];
+  const states = swaps.state.enumValues;
+  const pairs = states.flatMap((from) => states.filter((to) => to !== from).map((to) => [from, to] as const));
+  const listed = (from: string, to: string) => SWAP_TRANSITIONS.some(([f, t]) => f === from && t === to);
 
-  it.each(illegal)('given a %s row, when it is moved to %s, then the database refuses', async (from, to) => {
-    const row = await rowIn(from);
-    const write = getDb().update(swaps).set({ state: to, callsId: '0xcalls' }).where(eq(swaps.id, row.id));
-    expect(await refusalOf(write)).toMatch(/is not a transition|and final/);
-    expect((await rowOf(row.id)).state).toBe(from);
-  });
+  it.each(pairs)(
+    'given a %s row, when it is moved to %s, then the database takes it only if the transition is listed',
+    async (from, to) => {
+      const row = await rowIn(from);
+      const quote = from === 'quoting' ? linkOf() : {};
+      const write = getDb()
+        .update(swaps)
+        .set({ ...quote, state: to, callsId: '0xcalls' })
+        .where(eq(swaps.id, row.id));
+      if (listed(from, to)) {
+        expect(await refusalOf(write)).toBe('written');
+        expect((await rowOf(row.id)).state).toBe(to);
+        return;
+      }
+      expect(await refusalOf(write)).toMatch(/is not a transition|and final/);
+      expect((await rowOf(row.id)).state).toBe(from);
+    }
+  );
 
   it('given a swap, when it runs from quote to completed, then each step lands and only the last one finishes it', async () => {
-    const row = await awaiting(await newConnection());
-    expect((await recordCallsId(row.id, '0xcalls'))?.finishedAt).toBeNull();
-    expect((await move(row.id, ['deposit_sent'], 'submitted'))?.finishedAt).toBeNull();
-    expect(await move(row.id, ['submitted'], 'completed')).toMatchObject({
+    const connectionId = await newConnection();
+    const row = await awaiting(connectionId);
+    expect((await recordCallsId(connectionId, row.id, '0xcalls'))?.finishedAt).toBeNull();
+    expect((await move(connectionId, row.id, ['deposit_sent'], 'submitted'))?.finishedAt).toBeNull();
+    expect(await move(connectionId, row.id, ['submitted'], 'completed')).toMatchObject({
       state: 'completed',
       callsId: '0xcalls',
       finishedAt: expect.any(Date),
@@ -318,31 +360,64 @@ describe('the swaps guard', () => {
   });
 
   it('given an awaiting_owner row, when the backend already shows the deposit, then it moves straight to submitted', async () => {
-    const row = await awaiting(await newConnection());
-    expect((await move(row.id, ['awaiting_owner', 'expired'], 'submitted'))?.state).toBe('submitted');
+    const connectionId = await newConnection();
+    const row = await awaiting(connectionId);
+    expect((await move(connectionId, row.id, ['awaiting_owner', 'expired'], 'submitted'))?.state).toBe('submitted');
+  });
+
+  it('given a swap of another connection, when it is moved or given a calls id, then nothing is written', async () => {
+    const row = await rowIn('awaiting_owner');
+    const stranger = await newConnection();
+    expect(await move(stranger, row.id, ['awaiting_owner'], 'owner_declined')).toBeUndefined();
+    expect(await recordCallsId(stranger, row.id, '0xcalls')).toBeUndefined();
+    expect(await rowOf(row.id)).toMatchObject({ state: 'awaiting_owner', callsId: null });
+  });
+
+  it('given a swap, when a write outside the store ends it, then the database stamps updated_at and finished_at', async () => {
+    const row = await rowIn('awaiting_owner');
+    const [declined] = await getDb()
+      .update(swaps)
+      .set({ state: 'owner_declined', updatedAt: new Date(0) })
+      .where(eq(swaps.id, row.id))
+      .returning();
+    expect(declined.updatedAt.getTime()).toBeGreaterThan(0);
+    expect(declined.finishedAt).toEqual(declined.updatedAt);
   });
 
   it('given a row that expired, when the wallet answers a calls id, then it moves to deposit_sent (B33)', async () => {
     const row = await rowIn('expired');
-    expect(await recordCallsId(row.id, '0xlate')).toMatchObject({ state: 'deposit_sent', callsId: '0xlate' });
+    expect(await recordCallsId(row.connectionId, row.id, '0xlate')).toMatchObject({
+      state: 'deposit_sent',
+      callsId: '0xlate',
+    });
   });
 
-  it('given a row that expired, when it moves to deposit_sent with no calls id, then the database refuses', async () => {
-    const row = await rowIn('expired');
-    const write = getDb().update(swaps).set({ state: 'deposit_sent' }).where(eq(swaps.id, row.id));
-    expect(await refusalOf(write)).toMatch(/only with a calls id/);
-  });
+  it.each(['awaiting_owner', 'expired'] as const)(
+    'given a %s row, when it moves to deposit_sent with no calls id, then the database refuses',
+    async (from) => {
+      const row = await rowIn(from);
+      const write = getDb().update(swaps).set({ state: 'deposit_sent' }).where(eq(swaps.id, row.id));
+      expect(await refusalOf(write)).toMatch(/only with a calls id/);
+    }
+  );
 
   it('given a row in a final state, when a calls id arrives, then nothing is written', async () => {
     const row = await rowIn('owner_declined');
-    expect(await recordCallsId(row.id, '0xcalls')).toBeUndefined();
+    expect(await recordCallsId(row.connectionId, row.id, '0xcalls')).toBeUndefined();
     expect((await rowOf(row.id)).state).toBe('owner_declined');
   });
 
-  it('given a completed row, when anything on it is rewritten, then the database refuses', async () => {
-    const row = await rowIn('completed');
+  const finals = states.filter((s) => !SWAP_TRANSITIONS.some(([from]) => from === s));
+
+  it.each(finals)('given a %s row, then it is finished and anything rewritten on it is refused', async (state) => {
+    const row = await rowIn(state);
+    expect(row.finishedAt).toEqual(expect.any(Date));
     const write = getDb().update(swaps).set({ backendState: 'FAILED' }).where(eq(swaps.id, row.id));
-    expect(await refusalOf(write)).toMatch(/is completed and final/);
+    expect(await refusalOf(write)).toMatch(new RegExp(`is ${state} and final`));
+  });
+
+  it.each(states.filter((s) => !finals.includes(s)))('given a %s row, then it is not finished', async (state) => {
+    expect((await rowIn(state)).finishedAt).toBeNull();
   });
 
   it('given any swap, when it is deleted, then the database refuses', async () => {
@@ -368,11 +443,18 @@ describe('the swaps guard', () => {
     ['deposit address', { depositAddress: freshAddress() }],
     ['fenced quote', { quoteFenced: 'other' }],
     ['paid at', { paidAt: new Date(0) }],
+    ['wallet url', { walletUrl: 'https://keys.test/cli-bridge#other' }],
+    ['approve by', { approveBy: new Date(0) }],
+    ['quote', { quote: { inputAmount: '1' } }],
   ])('given an awaiting_owner row, when its %s is rewritten, then the database refuses', async (_, set) => {
     const row = await rowIn('awaiting_owner');
-    expect(await refusalOf(getDb().update(swaps).set(set).where(eq(swaps.id, row.id)))).toMatch(
-      /the quote is written once/
-    );
+    expect(await refusalOf(getDb().update(swaps).set(set).where(eq(swaps.id, row.id)))).toMatch(/are written once/);
+  });
+
+  it('given a deposit_sent row, when its calls id is rewritten, then the database refuses', async () => {
+    const row = await rowIn('deposit_sent');
+    const write = getDb().update(swaps).set({ callsId: '0xother' }).where(eq(swaps.id, row.id));
+    expect(await refusalOf(write)).toMatch(/are written once/);
   });
 
   it('given a quoting row, when it moves to awaiting_owner without a link, then the database refuses', async () => {
@@ -418,6 +500,25 @@ describe.skipIf(!TEST_PG_URL)('on Postgres, claims racing for the open-swap slot
         expect(c).toMatchObject({ kind: 'open', row: { id: winner } });
       }
       expect(await getDb().select().from(swaps).where(eq(swaps.connectionId, connectionId))).toHaveLength(1);
+    }
+  });
+
+  it('given no swap for a key, when the same request claims it twice at once, then one runs and the other is busy', async () => {
+    for (let round = 0; round < 5; round++) {
+      const connectionId = await newConnection();
+      const claims = await Promise.all([claimSwap(connectionId, 'k', request), claimSwap(connectionId, 'k', request)]);
+      expect(claims.map((c) => c.kind).sort()).toEqual(['busy', 'run']);
+    }
+  });
+
+  it('given no swap for a key, when two requests claim it at once, then one runs and the other is a conflict', async () => {
+    for (let round = 0; round < 5; round++) {
+      const connectionId = await newConnection();
+      const claims = await Promise.all([
+        claimSwap(connectionId, 'k', request),
+        claimSwap(connectionId, 'k', { ...request, amount: '2000000' }),
+      ]);
+      expect(claims.map((c) => c.kind).sort()).toEqual(['conflict', 'run']);
     }
   });
 
