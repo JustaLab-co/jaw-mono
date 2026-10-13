@@ -326,7 +326,7 @@ export async function finish(
 function entryOf(row: LeasedRow): X402LogEntry {
   const reserved = row.leaseLive ? row.reserved : null;
   // A payment counts in the day it was signed, and a live reservation in the day it runs:
-  // a key claimed before midnight may be retried or signed after it.
+  // a key claimed before the day ends may be retried or signed after it.
   const at = row.signedAt ?? (reserved !== null ? new Date() : row.createdAt);
   const base = {
     at: at.toISOString(),
