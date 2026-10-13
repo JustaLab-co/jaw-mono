@@ -1,4 +1,4 @@
-import type { Hex } from 'viem';
+import type { Address, Hex } from 'viem';
 import { z } from 'zod';
 import { config } from '@/connections/config';
 import { errorLabel, log } from '@/lib/edge';
@@ -37,7 +37,7 @@ const liveDeps = (): BackendDeps => ({
   timeoutMs: 10_000,
 });
 
-const backendState = z.enum(Object.keys(swapState) as [BackendState, ...BackendState[]]);
+const isBackendState = (state: string): state is BackendState => Object.hasOwn(swapState, state);
 
 const statusBody = z.object({
   result: z.object({
@@ -46,17 +46,17 @@ const statusBody = z.object({
       depositAddress: z.string(),
       state: z.string().max(256),
       txHash: z
-        .string()
-        .regex(/^0x[0-9a-fA-F]{64}$/)
-        .optional(),
-      rawState: z.string().max(256).optional(),
+        .custom<Hex>((v) => typeof v === 'string' && /^0x[0-9a-fA-F]{64}$/.test(v))
+        .optional()
+        .catch(undefined),
+      rawState: z.string().max(256).optional().catch(undefined),
     }),
   }),
 });
 
 const errorBody = z.object({ result: z.object({ error: z.string().max(256) }) });
 
-export function submitDeposit(deposit: { depositAddress: string; txHash: Hex }, deps = liveDeps()) {
+export function submitDeposit(deposit: { depositAddress: Address; txHash: Hex }, deps = liveDeps()) {
   return call(deposit.depositAddress, deps, `${deps.baseUrl}/move-asset/deposit/submit`, {
     method: 'POST',
     headers: { 'content-type': 'application/json' },
@@ -64,12 +64,17 @@ export function submitDeposit(deposit: { depositAddress: string; txHash: Hex }, 
   });
 }
 
-export function depositStatus(depositAddress: string, deps = liveDeps()) {
+export function depositStatus(depositAddress: Address, deps = liveDeps()) {
   const query = new URLSearchParams({ provider: PROVIDER, depositAddress });
   return call(depositAddress, deps, `${deps.baseUrl}/move-asset/deposit/status?${query}`, { method: 'GET' });
 }
 
-async function call(depositAddress: string, deps: BackendDeps, url: string, init: RequestInit): Promise<BackendAnswer> {
+async function call(
+  depositAddress: Address,
+  deps: BackendDeps,
+  url: string,
+  init: RequestInit
+): Promise<BackendAnswer> {
   let res: Response;
   let text: string;
   try {
@@ -82,19 +87,21 @@ async function call(depositAddress: string, deps: BackendDeps, url: string, init
   const body = parseJson(text);
   if (!res.ok) {
     const untrustedError = errorBody.safeParse(body).data?.result.error;
+    log('warn', { msg: 'swap backend http error', status: res.status });
     return { ok: false, code: 'http_error', httpStatus: res.status, ...(untrustedError && { untrustedError }) };
   }
-  const parsed = statusBody.safeParse(body);
-  if (!parsed.success) return { ok: false, code: 'invalid_response' };
-  const { depositAddress: answered, state, txHash, rawState } = parsed.data.result.data;
-  if (answered.toLowerCase() !== depositAddress.toLowerCase()) return { ok: false, code: 'invalid_response' };
+  const data = statusBody.safeParse(body).data?.result.data;
+  if (!data || data.depositAddress.toLowerCase() !== depositAddress.toLowerCase()) {
+    log('warn', { msg: 'swap backend invalid response' });
+    return { ok: false, code: 'invalid_response' };
+  }
+  const { state, txHash, rawState } = data;
   const extra = {
-    ...(txHash && { txHash: txHash as Hex }),
+    ...(txHash && { txHash }),
     ...(rawState !== undefined && { untrustedRawState: rawState }),
   };
-  const known = backendState.safeParse(state);
-  if (!known.success) return { ok: true, status: { state: 'unknown', untrustedState: state, ...extra } };
-  return { ok: true, status: { state: swapState[known.data], backendState: known.data, ...extra } };
+  if (!isBackendState(state)) return { ok: true, status: { state: 'unknown', untrustedState: state, ...extra } };
+  return { ok: true, status: { state: swapState[state], backendState: state, ...extra } };
 }
 
 function parseJson(text: string): unknown {
