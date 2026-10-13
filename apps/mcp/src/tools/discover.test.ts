@@ -60,6 +60,18 @@ describe('jaw_discover', () => {
     expect(result.structuredContent.summary).not.toContain(injected);
   });
 
+  it('skips a listing whose url does not parse and returns the rest', async () => {
+    const find = catalog([
+      listed('', 'eip155:84532'),
+      listed('/relative/ens', 'eip155:84532'),
+      listed('https://a.example/ens', 'eip155:84532'),
+    ]);
+    const result = await discover(84532, { query: 'ens' }, find);
+    if (!('structuredContent' in result)) throw new Error('refused');
+    expect(result.structuredContent.services.map((s) => s.url)).toEqual(['https://a.example/ens']);
+    expect(result.structuredContent.count).toBe(1);
+  });
+
   it('asks for a query or a seller before reaching the catalog', async () => {
     const asked: DiscoverParams[] = [];
     const result = await discover(84532, {}, catalog([], asked));

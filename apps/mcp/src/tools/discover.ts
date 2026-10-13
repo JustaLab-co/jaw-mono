@@ -51,8 +51,9 @@ export async function discover(
     log('warn', { msg: 'catalog unreachable', error: errorLabel(err) });
     return refusal('The x402 catalog could not be reached. Try again, or pay a url you already know.');
   }
-  // Only the services this connection can pay: a price on another chain is not one it can meet.
-  const payable = found.services.filter((s) => s.price?.network === network);
+  // Only the services this connection can pay: a price on another chain is not one it can meet,
+  // and a url that does not parse is not one it can call.
+  const payable = found.services.filter((s) => s.price?.network === network && URL.canParse(s.url));
   const services = payable.map((s) => ({
     url: s.url,
     price: s.price && {
