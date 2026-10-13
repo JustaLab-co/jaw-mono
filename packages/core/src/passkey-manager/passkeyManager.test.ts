@@ -3,6 +3,7 @@ import { PasskeyManager } from './passkeyManager.js';
 import { createMemoryStorage } from '../storage-manager/index.js';
 import type { PasskeyAccount } from './types.js';
 import * as utils from './utils.js';
+import type { AccountRecord } from '../account/accountRecord.js';
 
 // Mock the backend utility functions
 vi.spyOn(utils, 'registerPasskeyInBackend').mockResolvedValue(undefined);
@@ -11,6 +12,14 @@ vi.spyOn(utils, 'lookupPasskeyFromBackend').mockResolvedValue({
     publicKey: '0x04a1b2c3d4e5f6071829384756',
     displayName: 'test.justan.id',
 });
+
+const RECORD: AccountRecord = {
+    address: '0x1f4201aED7443a59a3f849E6A07dbF438FFB6C62',
+    version: 1,
+    factory: '0x5803c076563C85799989d42Fc00292A8aE52fa9E',
+    owners: ['0x01', '0x02'],
+    nonce: '0',
+};
 
 describe('PasskeyManager', () => {
     let manager: PasskeyManager;
@@ -383,6 +392,25 @@ describe('PasskeyManager', () => {
             expect(manager.fetchAccounts()[0].address).toBe(mockAddress);
         });
 
+        it('fills a missing account record alongside the address', () => {
+            manager.addAccountToList(makeAccount('credA'));
+            manager.setAccountAddresses([{ credentialId: 'credA', address: RECORD.address, account: RECORD }]);
+            expect(manager.fetchAccounts()[0]).toMatchObject({ address: RECORD.address, account: RECORD });
+        });
+
+        it('fills a missing record on an entry whose address is already set, keeping the address', () => {
+            manager.addAccountToList({ ...makeAccount('credA'), address: mockAddress });
+            manager.setAccountAddresses([{ credentialId: 'credA', address: RECORD.address, account: RECORD }]);
+            expect(manager.fetchAccounts()[0]).toMatchObject({ address: mockAddress, account: RECORD });
+        });
+
+        it('does not overwrite a record that is already set', () => {
+            const stored = { ...RECORD, nonce: '7' };
+            manager.addAccountToList({ ...makeAccount('credA'), address: RECORD.address, account: stored });
+            manager.setAccountAddresses([{ credentialId: 'credA', address: RECORD.address, account: RECORD }]);
+            expect(manager.fetchAccounts()[0].account).toEqual(stored);
+        });
+
         it('is a no-op for an empty batch or unknown credentials', () => {
             manager.addAccountToList(makeAccount('credA'));
             manager.setAccountAddresses([]);
@@ -390,6 +418,66 @@ describe('PasskeyManager', () => {
                 { credentialId: 'missing', address: '0x00000000000000000000000000000000000000AA' },
             ]);
             expect(manager.fetchAccounts()[0].address).toBeUndefined();
+        });
+    });
+
+    describe('account records', () => {
+        it('storePasskeyAccount stores the record it is given', async () => {
+            await manager.storePasskeyAccount(
+                mockUsername,
+                mockCredentialId,
+                mockPublicKey,
+                mockAddress,
+                false,
+                RECORD
+            );
+            expect(manager.getAccountByCredentialId(mockCredentialId)?.account).toEqual(RECORD);
+        });
+
+        it('storePasskeyAccount stores no record field when given none', async () => {
+            await manager.storePasskeyAccount(mockUsername, mockCredentialId, mockPublicKey, mockAddress);
+            expect(manager.getAccountByCredentialId(mockCredentialId)).not.toHaveProperty('account');
+        });
+
+        it('storePasskeyAccountForLogin stores the record it is given', async () => {
+            await manager.storePasskeyAccountForLogin(mockCredentialId, mockAddress, false, RECORD);
+            expect(manager.getAccountByCredentialId(mockCredentialId)?.account).toEqual(RECORD);
+        });
+
+        it('addAccountToList fills a missing record on an existing entry', () => {
+            const entry: PasskeyAccount = {
+                username: mockUsername,
+                credentialId: mockCredentialId,
+                publicKey: mockPublicKey,
+                creationDate: new Date().toISOString(),
+                isImported: false,
+            };
+            manager.addAccountToList(entry);
+            manager.addAccountToList({ ...entry, account: RECORD });
+            expect(manager.fetchAccounts()[0].account).toEqual(RECORD);
+        });
+
+        it('fetchAccountRecord asks the JAW server for the credential, with the api key, when none is configured', async () => {
+            const spy = vi.spyOn(utils, 'fetchAccountRecordFromBackend').mockResolvedValue(RECORD);
+            const keyed = new PasskeyManager(createMemoryStorage(), undefined, 'k1');
+
+            await expect(keyed.fetchAccountRecord(mockCredentialId)).resolves.toEqual(RECORD);
+            expect(spy).toHaveBeenCalledWith(mockCredentialId, 'k1', false, undefined);
+        });
+
+        it('fetchAccountRecord passes on a configured passkey server', async () => {
+            const spy = vi.spyOn(utils, 'fetchAccountRecordFromBackend').mockResolvedValue(RECORD);
+            const custom = new PasskeyManager(createMemoryStorage(), {
+                serverUrl: 'https://passkeys.example.com/passkeys',
+            });
+
+            await custom.fetchAccountRecord(mockCredentialId);
+            expect(spy).toHaveBeenCalledWith(
+                mockCredentialId,
+                undefined,
+                false,
+                'https://passkeys.example.com/passkeys'
+            );
         });
     });
 

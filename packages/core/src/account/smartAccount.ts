@@ -25,6 +25,7 @@ import {
     type ToJustanAccountReturnType,
 } from './toJustanAccount.js';
 import { isDelegatedToImplementation } from './delegation.js';
+import { type AccountRecord, accountRecordFactoryData } from './accountRecord.js';
 import { waitForOperationReceipt } from './userOperationReceipt.js';
 import { createPaymasterFunctions } from './paymaster.js';
 import {
@@ -608,10 +609,34 @@ export async function estimateUserOpGasWithPermission(
     return gasEstimate.callGasLimit + gasEstimate.preVerificationGas + gasEstimate.verificationGasLimit;
 }
 
+/**
+ * @param record - The account's stored record. When given, its address,
+ * factory and createAccount calldata are used as they are, and nothing is
+ * derived; `account` only signs.
+ */
 export async function createSmartAccount(
     account: WebAuthnAccount | LocalAccount,
-    bundlerClient: JustanAccountImplementation['client']
+    bundlerClient: JustanAccountImplementation['client'],
+    record?: AccountRecord
 ): Promise<SmartAccount> {
+    if (record) {
+        const ownerBytes: Hex = account.type === 'webAuthn' ? account.publicKey : pad(account.address);
+        const ownerIndex = await findOwnerIndex({
+            address: record.address,
+            client: bundlerClient,
+            publicKey: ownerBytes,
+        });
+
+        return await toJustanAccount({
+            client: bundlerClient,
+            owners: [account, PERMISSIONS_MANAGER_ADDRESS],
+            ownerIndex,
+            address: record.address,
+            factoryAddress: record.factory,
+            factoryData: accountRecordFactoryData(record),
+        });
+    }
+
     // First create a temporary smart account to get the predicted address
     const tempSmartAccount = await toJustanAccount({
         client: bundlerClient,

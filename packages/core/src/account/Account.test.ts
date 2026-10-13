@@ -20,6 +20,8 @@ vi.mock('../passkey-manager/index.js', async (importOriginal) => {
             importPasskeyAccount: vi.fn(),
             storePasskeyAccount: vi.fn(),
             storePasskeyAccountForLogin: vi.fn(),
+            setAccountAddresses: vi.fn(),
+            fetchAccountRecord: vi.fn().mockRejectedValue(new Error('no record endpoint in tests')),
             storeAuthState: vi.fn(),
         })),
     };
@@ -106,6 +108,8 @@ describe('Account', () => {
                     importPasskeyAccount: vi.fn(),
                     storePasskeyAccount: vi.fn(),
                     storePasskeyAccountForLogin: vi.fn(),
+                    setAccountAddresses: vi.fn(),
+                    fetchAccountRecord: vi.fn().mockRejectedValue(new Error('no record endpoint in tests')),
                     storeAuthState: vi.fn(),
                     getCurrentAccount: vi.fn().mockReturnValue(undefined),
                 }) as never
@@ -354,6 +358,8 @@ describe('Account', () => {
                         importPasskeyAccount: vi.fn(),
                         storePasskeyAccount: vi.fn(),
                         storePasskeyAccountForLogin: vi.fn(),
+                        setAccountAddresses: vi.fn(),
+                        fetchAccountRecord: vi.fn().mockRejectedValue(new Error('no record endpoint in tests')),
                         storeAuthState: vi.fn(),
                     }) as never
             );
@@ -764,6 +770,8 @@ describe('Account', () => {
                         importPasskeyAccount: vi.fn(),
                         storePasskeyAccount: vi.fn(),
                         storePasskeyAccountForLogin: vi.fn(),
+                        setAccountAddresses: vi.fn(),
+                        fetchAccountRecord: vi.fn().mockRejectedValue(new Error('no record endpoint in tests')),
                         storeAuthState: vi.fn(),
                     }) as never
             );
@@ -833,6 +841,8 @@ describe('Account', () => {
                 importPasskeyAccount: vi.fn(),
                 storePasskeyAccount: vi.fn(),
                 storePasskeyAccountForLogin: vi.fn(),
+                setAccountAddresses: vi.fn(),
+                fetchAccountRecord: vi.fn().mockRejectedValue(new Error('no record endpoint in tests')),
                 storeAuthState: vi.fn(),
             };
             vi.mocked(PasskeyManager).mockImplementation(() => mockManagerInstance as never);
@@ -888,6 +898,8 @@ describe('Account', () => {
                 }),
                 storePasskeyAccount: vi.fn(),
                 storePasskeyAccountForLogin: vi.fn(),
+                setAccountAddresses: vi.fn(),
+                fetchAccountRecord: vi.fn().mockRejectedValue(new Error('no record endpoint in tests')),
                 storeAuthState: vi.fn(),
             };
             vi.mocked(PasskeyManager).mockImplementation(() => mockManagerInstance as never);

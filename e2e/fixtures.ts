@@ -1,4 +1,5 @@
 import { createHash, generateKeyPairSync, randomBytes } from 'node:crypto';
+import { encodeAbiParameters, getContractAddress, keccak256, pad, type Address, type Hex } from 'viem';
 import {
   test as base,
   expect,
@@ -20,9 +21,25 @@ export { HTTPS, KEYS_URL };
 export type Dialog = Page | FrameLocator;
 const EMBEDDED = 'dialog[data-jaw]';
 
-/** The address the mocked factory reports for the test passkey's smart account. */
-export const ACCOUNT = '0x00000000000000000000000000000000000e2e01';
+/** What the mocked chain answers to any contract read. */
+const CONTRACT_READ = '0x00000000000000000000000000000000000e2e01';
 const CHAIN_ID = '0xaa36a7';
+
+/**
+ * The smart account a passkey creates: the factory's CREATE2 address for owners
+ * [publicKey, permission manager] and nonce 0. Written out here rather than
+ * taken from the SDK, so the test checks the SDK against the recipe.
+ */
+function accountOf(publicKey: Hex): Address {
+  const owners = [publicKey, pad('0xf1b40E3D5701C04d86F7828f0EB367B9C90901D8')];
+  const salt = keccak256(encodeAbiParameters([{ type: 'bytes[]' }, { type: 'uint256' }], [owners, 0n]));
+  return getContractAddress({
+    opcode: 'CREATE2',
+    from: '0x5803c076563C85799989d42Fc00292A8aE52fa9E',
+    salt,
+    bytecodeHash: '0x66e5c494c913cf25a974791c8b932da3b3e54d43bb638e7a6421c64db20696e4',
+  });
+}
 
 /**
  * A P-256 passkey the test owns. Chromium's virtual authenticator holds the
@@ -31,7 +48,9 @@ const CHAIN_ID = '0xaa36a7';
  */
 export class Passkey {
   readonly credentialId: string;
-  readonly publicKey: string;
+  readonly publicKey: Hex;
+  /** The smart account this passkey signs for. */
+  readonly account: Address;
   private readonly credential: Buffer;
   private readonly privateKey: string;
   private readonly authenticators: {
@@ -45,6 +64,7 @@ export class Passkey {
     const { privateKey, publicKey } = generateKeyPairSync('ec', { namedCurve: 'P-256' });
     const { x, y } = publicKey.export({ format: 'jwk' }) as { x: string; y: string };
     this.publicKey = `0x04${Buffer.from(x, 'base64url').toString('hex')}${Buffer.from(y, 'base64url').toString('hex')}`;
+    this.account = accountOf(this.publicKey);
     this.credential = randomBytes(16);
     this.credentialId = this.credential.toString('base64url');
     this.privateKey = privateKey.export({ format: 'der', type: 'pkcs8' }).toString('base64');
@@ -138,7 +158,7 @@ export class Network {
 function rpc(method: string) {
   if (method === 'eth_chainId') return CHAIN_ID;
   if (method === 'eth_getCode') return '0x';
-  if (method === 'eth_call') return `0x${ACCOUNT.slice(2).padStart(64, '0')}`;
+  if (method === 'eth_call') return `0x${CONTRACT_READ.slice(2).padStart(64, '0')}`;
   return null;
 }
 

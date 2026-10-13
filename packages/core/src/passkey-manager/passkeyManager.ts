@@ -5,6 +5,7 @@ import type { JawProviderPreference } from '../provider/index.js';
 import {
     registerPasskeyInBackend,
     lookupPasskeyFromBackend,
+    fetchAccountRecordFromBackend,
     WebAuthnAuthenticationResult,
     authenticateWithWebAuthnUtils,
     createPasskeyUtils,
@@ -15,6 +16,7 @@ import {
     type InternalNativeCreateFn,
 } from './utils.js';
 import type { WebAuthnAccount } from 'viem/account-abstraction';
+import type { AccountRecord } from '../account/accountRecord.js';
 
 /**
  * PasskeyManager handles passkey authentication and account management
@@ -141,6 +143,7 @@ export class PasskeyManager {
         const patch: Partial<PasskeyAccount> = {};
         if (account.isImported && !existing.isImported) patch.isImported = true;
         if (account.address && !existing.address) patch.address = account.address;
+        if (account.account && !existing.account) patch.account = account.account;
 
         if (Object.keys(patch).length === 0) return;
 
@@ -157,22 +160,38 @@ export class PasskeyManager {
     }
 
     /**
-     * Persist addresses for several stored accounts in a single read-modify-write.
+     * Persist addresses, and account records when given, for several stored
+     * accounts in a single read-modify-write. Only fills what an entry lacks.
      * Callers that derive addresses concurrently must batch through here: issuing
      * one `setAccountAddress` per result races the reads and loses writes.
      */
-    setAccountAddresses(entries: Array<{ credentialId: string; address: `0x${string}` }>): void {
+    setAccountAddresses(
+        entries: Array<{ credentialId: string; address: `0x${string}`; account?: AccountRecord }>
+    ): void {
         if (entries.length === 0) return;
-        const byCredential = new Map(entries.map((entry) => [entry.credentialId, entry.address]));
+        const byCredential = new Map(entries.map((entry) => [entry.credentialId, entry]));
         const accounts = this.fetchAccounts();
         let changed = false;
         const updated = accounts.map((account) => {
-            const address = byCredential.get(account.credentialId);
-            if (!address || account.address) return account;
+            const entry = byCredential.get(account.credentialId);
+            if (!entry) return account;
+            const patch: Partial<PasskeyAccount> = {};
+            if (!account.address) patch.address = entry.address;
+            if (entry.account && !account.account) patch.account = entry.account;
+            if (Object.keys(patch).length === 0) return account;
             changed = true;
-            return { ...account, address };
+            return { ...account, ...patch };
         });
         if (changed) this.storage.setItem('accounts', updated);
+    }
+
+    /**
+     * Fetch the stored record of the account a credential signs for, from the
+     * `accounts` endpoint next to the passkey server.
+     * @throws If the request fails or the credential is not registered
+     */
+    async fetchAccountRecord(credentialId: string, dev = false): Promise<AccountRecord> {
+        return fetchAccountRecordFromBackend(credentialId, this.apiKey, dev, this.preference.serverUrl);
     }
 
     /**
@@ -257,6 +276,7 @@ export class PasskeyManager {
      * @param publicKey - The public key associated with the passkey
      * @param address - Wallet address associated with the passkey
      * @param dev - Whether to use the staging environment (default: false)
+     * @param account - The record the account was created from
      * @throws {PasskeyRegistrationError} If backend registration fails
      */
     async storePasskeyAccount(
@@ -264,7 +284,8 @@ export class PasskeyManager {
         credentialId: string,
         publicKey: `0x${string}`,
         address: Address,
-        dev = false
+        dev = false,
+        account?: AccountRecord
     ): Promise<void> {
         this.validateDisplayName(name);
         this.validateCredentialId(credentialId);
@@ -291,6 +312,7 @@ export class PasskeyManager {
             credentialId,
             publicKey,
             address,
+            ...(account ? { account } : {}),
             creationDate: new Date().toISOString(),
             isImported: false,
         };
@@ -305,9 +327,15 @@ export class PasskeyManager {
      * @param credentialId - The passkey credential ID to lookup
      * @param address - Wallet address associated with the passkey
      * @param dev - Whether to use the staging environment (default: false)
+     * @param account - The record the account was created from
      * @throws {PasskeyLookupError} If backend lookup fails or passkey not found
      */
-    async storePasskeyAccountForLogin(credentialId: string, address: Address, dev = false): Promise<void> {
+    async storePasskeyAccountForLogin(
+        credentialId: string,
+        address: Address,
+        dev = false,
+        account?: AccountRecord
+    ): Promise<void> {
         // Lookup from the passkey server first
         const serverUrl = this.preference.serverUrl;
         const passkeyData = await lookupPasskeyFromBackend(credentialId, this.apiKey, dev, serverUrl);
@@ -322,6 +350,7 @@ export class PasskeyManager {
             credentialId,
             publicKey: passkeyData.publicKey as `0x${string}`,
             address,
+            ...(account ? { account } : {}),
             creationDate: new Date().toISOString(),
             isImported: true,
         };

@@ -1,10 +1,10 @@
 # Custom Passkey Server
 
-Run your own passkey metadata server in app-specific mode.
+Run your own server for passkey metadata and account records in app-specific mode.
 
 ## Overview
 
-The SDK needs a server to store passkey metadata (credential IDs, public keys, display names). By default the SDK uses `https://api.justaname.id/wallet/v2/passkeys`, but you can host your own.
+The SDK needs a server that stores, for each passkey, its credential ID, public key and display name, plus the record of the smart account the passkey created. By default the SDK uses `https://api.justaname.id/wallet/v2/passkeys`, but you can host your own.
 
 :::warning
 **Important:** This server does NOT store passkeys themselves—passkeys are always stored by the browser/device. The server only stores metadata to enable passkey lookups and management.
@@ -32,7 +32,14 @@ const jaw = JAW.create({
 });
 ```
 
-`serverUrl` is the full URL of the passkeys endpoint. The SDK sends its `GET` and `POST` requests to exactly that URL. Query strings in `serverUrl` are dropped.
+`serverUrl` is the full URL of the passkeys endpoint. The SDK sends requests to exactly that URL, and fetches account records from the `accounts` path next to it:
+
+| `serverUrl`                                   | Passkeys endpoint                             | Accounts endpoint                             |
+| --------------------------------------------- | --------------------------------------------- | --------------------------------------------- |
+| `https://your-server.example.com/passkeys`    | `https://your-server.example.com/passkeys`    | `https://your-server.example.com/accounts`    |
+| `https://your-server.example.com/v1/passkeys` | `https://your-server.example.com/v1/passkeys` | `https://your-server.example.com/v1/accounts` |
+
+Query strings in `serverUrl` are dropped.
 
 ## Response Format
 
@@ -54,7 +61,7 @@ On success, `data` must not be `null`: the SDK treats a `null` `data` as a failu
 
 ### POST /passkeys - Register a New Passkey
 
-Registers a new passkey credential.
+Registers a new passkey credential, and stores the record of the account it creates.
 
 **Headers:**
 
@@ -85,6 +92,7 @@ Registers a new passkey credential.
 **Behavior:**
 
 - If the credential ID is already registered, change nothing and return success. Never overwrite the public key of an existing credential.
+- Compute the account record from the public key, as described in [Computing the account record](#computing-the-account-record), and store it with the passkey in the same transaction.
 
 ### GET /passkeys - Lookup Passkeys by Credential IDs
 
@@ -126,6 +134,88 @@ Retrieves passkey information for one or more credential IDs. Used when a user i
 }
 ```
 
+### GET /accounts - Get the Account Record of a Credential
+
+Returns the record of the smart account a passkey signs for: its address and what it was created from.
+
+**Query Parameters:**
+
+- `credentialId` (string): The credential ID to look up
+
+**Success Response (200):**
+
+```json
+{
+  "statusCode": 200,
+  "result": {
+    "data": {
+      "address": "0x1f4201aED7443a59a3f849E6A07dbF438FFB6C62",
+      "version": 1,
+      "factory": "0x5803c076563C85799989d42Fc00292A8aE52fa9E",
+      "owners": [
+        "0x885d083da109f4ea0b626025ee5886d869f51817afad5a380f2b1fa9a35bccf8d52b9347c47495158ef458c338cdd15f7a902d357541d0e19d0b19e8f7ea0fd8",
+        "0x000000000000000000000000f1b40e3d5701c04d86f7828f0eb367b9c90901d8"
+      ],
+      "nonce": "0"
+    },
+    "error": null
+  }
+}
+```
+
+**Error Response (404):** the credential is not registered.
+
+**Behavior:**
+
+- The request carries only a credential ID. Look up the stored record; if the passkey was registered before you stored records, compute it from the stored public key and store it then.
+- Never accept an address or owners from a request. Anyone with your app's API key can call this endpoint, so a record a client could write is a record an attacker could write.
+
+## Computing the Account Record
+
+Every account is created from its passkey's public key with this recipe (version 1):
+
+| Field       | Value                                                                                                                                                                      |
+| ----------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **factory** | `0x5803c076563C85799989d42Fc00292A8aE52fa9E`                                                                                                                               |
+| **owners**  | `[publicKey, 0x000000000000000000000000f1b40e3d5701c04d86f7828f0eb367b9c90901d8]`                                                                                          |
+| **nonce**   | `0`                                                                                                                                                                        |
+| **address** | CREATE2 from the factory, with the salt `keccak256(abi.encode(owners, nonce))` and the init code hash `0x66e5c494c913cf25a974791c8b932da3b3e54d43bb638e7a6421c64db20696e4` |
+
+The second owner is the permission manager, `0xf1b40E3D5701C04d86F7828f0EB367B9C90901D8`, padded to 32 bytes. With viem:
+
+```typescript
+import { encodeAbiParameters, getContractAddress, keccak256, pad, type Hex } from 'viem';
+
+const FACTORY = '0x5803c076563C85799989d42Fc00292A8aE52fa9E';
+const PERMISSIONS_MANAGER = '0xf1b40E3D5701C04d86F7828f0EB367B9C90901D8';
+const INIT_CODE_HASH = '0x66e5c494c913cf25a974791c8b932da3b3e54d43bb638e7a6421c64db20696e4';
+
+export function accountRecord(publicKey: Hex) {
+  const owners = [publicKey.toLowerCase() as Hex, pad(PERMISSIONS_MANAGER).toLowerCase() as Hex];
+  const nonce = 0n;
+  const salt = keccak256(encodeAbiParameters([{ type: 'bytes[]' }, { type: 'uint256' }], [owners, nonce]));
+  const address = getContractAddress({ opcode: 'CREATE2', from: FACTORY, salt, bytecodeHash: INIT_CODE_HASH });
+
+  return { address, version: 1, factory: FACTORY, owners, nonce: nonce.toString() };
+}
+```
+
+Check your implementation against the factory itself. For the public key `0x` followed by `11` repeated 64 times, the address is `0x3f9D0947449d8dbAfDC6ACFE301593e97176780F`:
+
+```bash
+cast call 0x5803c076563C85799989d42Fc00292A8aE52fa9E \
+  'getAddress(bytes[],uint256)(address)' \
+  '[<publicKey>,0x000000000000000000000000f1b40E3D5701C04d86F7828f0EB367B9C90901D8]' 0 \
+  --rpc-url https://mainnet.base.org
+```
+
+Store the record once, when the passkey is registered, and serve it from then on. Do not recompute it on each request: the stored record is what keeps an account's address fixed if the recipe for new accounts ever changes.
+
+## How the SDK Uses the Record
+
+- The SDK accepts a record only if it is exactly the one the user's own public key creates. A record that does not match is ignored, so a misbehaving server cannot point a user at another account.
+- If the accounts endpoint is missing or fails, the SDK computes the record itself, so the endpoint is optional today. Implement it anyway: a future release that lets users rotate passkeys will rely on it, because a rotated passkey cannot compute its account's address from its own key.
+
 ## Data Format Requirements
 
 | Field            | Format                      | Description                                            |
@@ -133,6 +223,9 @@ Retrieves passkey information for one or more credential IDs. Used when a user i
 | **credentialId** | Base64url string            | Standard WebAuthn credential ID format                 |
 | **publicKey**    | Hex string with `0x` prefix | The passkey's P-256 public key: 64 bytes, `x` then `y` |
 | **displayName**  | String                      | Human-readable name for the passkey                    |
+| **address**      | Checksummed address         | The smart account address                              |
+| **owners**       | Array of hex strings        | Owner bytes the account was created with, in order     |
+| **nonce**        | Decimal string              | The nonce the account was created with                 |
 
 ## When to Self-Host
 

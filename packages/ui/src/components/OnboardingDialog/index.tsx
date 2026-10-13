@@ -389,8 +389,8 @@ export function OnboardingDialog({
   const isBusy = loggingInAccount !== null || isImporting || isCreating;
 
   // Addresses for the switch-account chips and avatar resolution. New records
-  // carry them; legacy records get a one-time ceremony-free factory derivation,
-  // persisted back so subsequent opens are pure localStorage reads.
+  // carry them; legacy records get a one-time offline derivation from their
+  // stored public key, persisted back so subsequent opens are pure localStorage reads.
   const [addressByCredentialId, setAddressByCredentialId] = useState<Record<string, string>>({});
   const [backfillInFlight, setBackfillInFlight] = useState(false);
   const hasAddressGaps = accounts.some((a) => !a.address && a.credentialId);
@@ -398,7 +398,7 @@ export function OnboardingDialog({
     if (!hasAddressGaps) return;
     let cancelled = false;
     setBackfillInFlight(true);
-    backfillLocalAccountAddresses({ chainId, apiKey })
+    backfillLocalAccountAddresses({ apiKey })
       .then((byCredentialId) => {
         if (!cancelled) setAddressByCredentialId(byCredentialId);
       })
@@ -411,7 +411,7 @@ export function OnboardingDialog({
     return () => {
       cancelled = true;
     };
-  }, [hasAddressGaps, chainId, apiKey]);
+  }, [hasAddressGaps, apiKey]);
   const addressOf = (account: LocalStorageAccount) =>
     account.address ?? (account.credentialId ? addressByCredentialId[account.credentialId] : undefined);
 

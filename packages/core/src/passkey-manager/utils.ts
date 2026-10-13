@@ -3,6 +3,7 @@ import type * as WebAuthnP256 from 'ox/WebAuthnP256';
 import * as PublicKey from 'ox/PublicKey';
 import { restCall } from '../api/index.js';
 import type { PasskeyRegistrationRequest, PasskeyLookupResponse } from './types.js';
+import type { AccountRecord } from '../account/accountRecord.js';
 import type { WebAuthnAccount } from 'viem/account-abstraction';
 
 /**
@@ -622,4 +623,44 @@ export async function lookupPasskeyFromBackend(
             error
         );
     }
+}
+
+/**
+ * The account record endpoint that belongs to a passkey server: the sibling
+ * `accounts` path of its passkeys URL, so `https://example.com/passkeys` pairs
+ * with `https://example.com/accounts`.
+ */
+export function accountsEndpoint(passkeysUrl: string): { baseUrl: string; path: string } {
+    const { baseUrl, path } = passkeysEndpoint(passkeysUrl);
+    return { baseUrl, path: `${path.replace(/\/[^/]*$/, '')}/accounts` };
+}
+
+/**
+ * Fetch the stored record of the account a credential signs for. The backend
+ * derives and stores it on first request for a credential registered before
+ * records existed.
+ * @param credentialId - The credential ID to look up
+ * @param apiKey - Optional API key for authentication
+ * @param dev - Whether to use the staging environment (ignored when serverUrl is given)
+ * @param serverUrl - Optional passkeys endpoint URL; the record is fetched from its sibling `accounts` path
+ * @throws If the request fails or the credential is not registered
+ */
+export async function fetchAccountRecordFromBackend(
+    credentialId: string,
+    apiKey?: string,
+    dev?: boolean,
+    serverUrl?: string
+): Promise<AccountRecord> {
+    const endpoint = serverUrl ? accountsEndpoint(serverUrl) : undefined;
+    return restCall(
+        'GET_ACCOUNT_BY_CREDENTIAL',
+        'GET',
+        { credentialId },
+        apiKey ? { 'x-api-key': apiKey } : {},
+        undefined,
+        dev,
+        endpoint?.baseUrl,
+        undefined,
+        endpoint?.path
+    );
 }

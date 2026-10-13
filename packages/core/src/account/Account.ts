@@ -23,6 +23,7 @@ import {
     type CallStatusResponse,
 } from '../rpc/wallet_sendCalls.js';
 import type { JustanAccountImplementation } from './toJustanAccount.js';
+import { type AccountRecord, deriveAccountRecordV1, resolveAccountRecord } from './accountRecord.js';
 import { jawHttp } from '../utils/jawHttp.js';
 import {
     PasskeyManager,
@@ -185,7 +186,7 @@ export class Account {
     // ============================================
 
     /** The PasskeyManager for a config: its storage, passkey server and API key. */
-    private static passkeyManager(config: AccountConfig): PasskeyManager {
+    private static passkeyManager(config: Partial<AccountConfig>): PasskeyManager {
         return new PasskeyManager(
             config.storage,
             config.serverUrl ? { serverUrl: config.serverUrl } : undefined,
@@ -194,46 +195,34 @@ export class Account {
     }
 
     /**
-     * Derive and persist addresses for stored accounts that predate address
-     * persistence, returning the (updated) stored list.
+     * Fill in the address and account record of stored accounts that predate
+     * them, returning the (updated) stored list.
      *
-     * Ceremony-free: builds a WebAuthn account object from the stored publicKey
-     * (nothing is ever signed) and asks the factory for the counterfactual
-     * address — the same derivation Account.get performs at login. Failures are
-     * per-record and non-fatal; a record left without an address is retried on
-     * the next call.
+     * Ceremony-free and offline: the record is derived from the stored
+     * publicKey (nothing is ever signed), the same way Account.get resolves it
+     * at login. A stored address is kept as it is. Failures are per-record and
+     * non-fatal; an entry left incomplete is retried on the next call.
+     *
+     * Only `storage`, `serverUrl` and `apiKey` are read; no chain is involved,
+     * so `chainId` and the paymaster options may be left out.
      */
-    static async backfillStoredAccountAddresses(config: AccountConfig): Promise<PasskeyAccount[]> {
-        const { chainId, apiKey, paymasterUrl, paymasterContext } = config;
+    static async backfillStoredAccountAddresses(config: Partial<AccountConfig>): Promise<PasskeyAccount[]> {
         const passkeyManager = Account.passkeyManager(config);
         const accounts = passkeyManager.fetchAccounts();
-        const missing = accounts.filter((account) => !account.address);
+        const missing = accounts.filter((account) => !account.address || !account.account);
         if (missing.length === 0) return accounts;
 
-        const chain = Account.buildChainConfig(chainId, apiKey, paymasterUrl, paymasterContext);
-        const bundlerClient = getBundlerClient(chain);
-
-        const derived = await Promise.all(
-            missing.map(async (account) => {
-                try {
-                    const webAuthnAccount = toWebAuthnAccount({
-                        credential: {
-                            id: account.credentialId,
-                            publicKey: account.publicKey,
-                        },
-                    });
-                    const smartAccount = await createSmartAccount(
-                        webAuthnAccount,
-                        bundlerClient as JustanAccountImplementation['client']
-                    );
-                    account.address = await smartAccount.getAddress();
-                    return { credentialId: account.credentialId, address: account.address };
-                } catch {
-                    /* leave the record without an address; next call retries */
-                    return null;
-                }
-            })
-        );
+        const derived = missing.map((account) => {
+            try {
+                const record = resolveAccountRecord(account.account, account.publicKey);
+                account.address ??= record.address;
+                account.account ??= record;
+                return { credentialId: account.credentialId, address: account.address, account: record };
+            } catch {
+                /* leave the entry as it is; next call retries */
+                return null;
+            }
+        });
 
         // One batched write: a setAccountAddress per result would race the reads
         // and drop all but the last address.
@@ -241,6 +230,29 @@ export class Account {
             derived.filter((entry): entry is NonNullable<typeof entry> => entry !== null)
         );
         return accounts;
+    }
+
+    /**
+     * Store `record` on a stored entry that has none yet, so the next sign-in
+     * reads it instead of deriving.
+     *
+     * The record is a cache derived again on every call, so a failed write
+     * (a full localStorage, a storage that rejects writes) is ignored rather
+     * than failing sign-in.
+     */
+    private static persistRecordIfMissing(
+        passkeyManager: PasskeyManager,
+        passkeyAccount: PasskeyAccount | undefined,
+        record: AccountRecord
+    ): void {
+        if (!passkeyAccount || passkeyAccount.account) return;
+        try {
+            passkeyManager.setAccountAddresses([
+                { credentialId: passkeyAccount.credentialId, address: record.address, account: record },
+            ]);
+        } catch {
+            /* left as it is; the next call derives and retries */
+        }
     }
 
     /**
@@ -306,11 +318,14 @@ export class Account {
 
             const chain = Account.buildChainConfig(chainId, apiKey, paymasterUrl, paymasterContext);
             const bundlerClient = getBundlerClient(chain);
+            const record = resolveAccountRecord(passkeyAccount.account, passkeyAccount.publicKey);
             const smartAccount = await createSmartAccount(
                 webAuthnAccount,
-                bundlerClient as JustanAccountImplementation['client']
+                bundlerClient as JustanAccountImplementation['client'],
+                record
             );
             const address = await smartAccount.getAddress();
+            Account.persistRecordIfMissing(passkeyManager, passkeyAccount, record);
 
             // Store auth state
             passkeyManager.storeAuthState(address, credentialId);
@@ -334,10 +349,13 @@ export class Account {
 
                 const chain = Account.buildChainConfig(chainId, apiKey, paymasterUrl, paymasterContext);
                 const bundlerClient = getBundlerClient(chain);
+                const record = resolveAccountRecord(currentAccount.account, currentAccount.publicKey);
                 const smartAccount = await createSmartAccount(
                     webAuthnAccount,
-                    bundlerClient as JustanAccountImplementation['client']
+                    bundlerClient as JustanAccountImplementation['client'],
+                    record
                 );
+                Account.persistRecordIfMissing(passkeyManager, currentAccount, record);
 
                 return new Account(smartAccount, chain, apiKey, currentAccount);
             }
@@ -406,10 +424,13 @@ export class Account {
 
         const chain = Account.buildChainConfig(chainId, apiKey, paymasterUrl, paymasterContext);
         const bundlerClient = getBundlerClient(chain);
+        const record = resolveAccountRecord(passkeyAccount?.account, publicKey);
         const smartAccount = await createSmartAccount(
             webAuthnAccount,
-            bundlerClient as JustanAccountImplementation['client']
+            bundlerClient as JustanAccountImplementation['client'],
+            record
         );
+        Account.persistRecordIfMissing(passkeyManager, passkeyAccount, record);
 
         // Use passkeyAccount if found, otherwise create minimal metadata
         const accountMetadata = passkeyAccount ?? {
@@ -465,14 +486,16 @@ export class Account {
         const chain = Account.buildChainConfig(chainId, apiKey, paymasterUrl, paymasterContext);
 
         const bundlerClient = getBundlerClient(chain);
+        const record = deriveAccountRecordV1(publicKey);
         const smartAccount = await createSmartAccount(
             webAuthnAccount,
-            bundlerClient as JustanAccountImplementation['client']
+            bundlerClient as JustanAccountImplementation['client'],
+            record
         );
         const address = await smartAccount.getAddress();
 
-        // Store the passkey account with the smart account address
-        await passkeyManager.storePasskeyAccount(username, credentialId, publicKey, address);
+        // Store the passkey account with the smart account address and the record it was created from
+        await passkeyManager.storePasskeyAccount(username, credentialId, publicKey, address, false, record);
 
         // Log account issuance for analytics (fire-and-forget)
         logAccountIssuance({ address, type: 'create', apiKey });
@@ -514,15 +537,26 @@ export class Account {
 
         const chain = Account.buildChainConfig(chainId, apiKey, paymasterUrl, paymasterContext);
 
+        // A failed lookup falls back to deriving the record, which is only safe
+        // while no account rotates: see resolveAccountRecord.
+        let fetched: AccountRecord | undefined;
+        try {
+            fetched = await passkeyManager.fetchAccountRecord(importResult.credential.id);
+        } catch {
+            fetched = undefined;
+        }
+        const record = resolveAccountRecord(fetched, importResult.credential.publicKey);
+
         const bundlerClient = getBundlerClient(chain);
         const smartAccount = await createSmartAccount(
             webAuthnAccount,
-            bundlerClient as JustanAccountImplementation['client']
+            bundlerClient as JustanAccountImplementation['client'],
+            record
         );
         const address = await smartAccount.getAddress();
 
         // Store for login (marks as imported)
-        await passkeyManager.storePasskeyAccountForLogin(importResult.credential.id, address);
+        await passkeyManager.storePasskeyAccountForLogin(importResult.credential.id, address, false, record);
 
         const passkeyAccount = passkeyManager.getAccountByCredentialId(importResult.credential.id);
         if (!passkeyAccount) {
