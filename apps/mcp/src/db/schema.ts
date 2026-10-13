@@ -120,6 +120,8 @@ export const grants = pgTable(
   (t) => [index().on(t.connectionId, t.createdAt)]
 );
 
+export const PAYER_TX_HASH_INDEX = 'payments_payer_tx_hash_index';
+
 export const payments = pgTable(
   'payments',
   {
@@ -166,7 +168,7 @@ export const payments = pgTable(
   (t) => [
     uniqueIndex().on(t.connectionId, t.idempotencyKey),
     uniqueIndex().on(t.payer, t.nonce),
-    uniqueIndex('payments_payer_tx_hash_index')
+    uniqueIndex(PAYER_TX_HASH_INDEX)
       .on(t.payer, sql`lower(${t.txHash})`)
       .where(sql`${t.txHash} is not null`),
     index().on(t.connectionId, t.createdAt, t.id),
