@@ -46,12 +46,14 @@ type Text = { type: 'text'; text: string };
 /** The code of a refusal before anything was signed, for the audit record. A symbol key never reaches the client. */
 export const gateCode = Symbol('gate code');
 export const rawBody = Symbol('raw body');
+export const resent = Symbol('resent');
 export type PayResult = {
   content: Text[];
   structuredContent?: PayOutput;
   isError?: boolean;
   [gateCode]?: string;
   [rawBody]?: string;
+  [resent]?: true;
 };
 
 /** Refusals a larger budget would fix. */

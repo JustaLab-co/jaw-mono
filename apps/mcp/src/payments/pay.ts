@@ -28,7 +28,7 @@ import { fenceText } from '@/lib/fence';
 import { safeFetch, watchCuts } from '@/lib/safe-fetch';
 import { confirmByReceipt, type Settled } from './confirm';
 import { refillHook } from './refill';
-import { gate, render, type PayResult } from './render';
+import { gate, render, resent, type PayResult } from './render';
 import {
   claim,
   entriesFor,
@@ -439,7 +439,12 @@ async function resend(
   // A refused resend says nothing about the first send, which the chain or a live first call settles.
   if (outcome.kind !== 'paid') {
     await release(row.id, token);
-    return render(merged(row, conclusionOf(outcome, true, undefined, false)), fencedOf(row.url, outcome), lastCut());
+    const answer = render(
+      merged(row, conclusionOf(outcome, true, undefined, false)),
+      fencedOf(row.url, outcome),
+      lastCut()
+    );
+    return { ...answer, [resent]: true };
   }
   const done = await concludeSend(row, token, outcome, {
     signed: true,
