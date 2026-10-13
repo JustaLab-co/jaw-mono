@@ -45,7 +45,14 @@ type PayOutput = z.infer<typeof payOutput>;
 type Text = { type: 'text'; text: string };
 /** The code of a refusal before anything was signed, for the audit record. A symbol key never reaches the client. */
 export const gateCode = Symbol('gate code');
-export type PayResult = { content: Text[]; structuredContent?: PayOutput; isError?: boolean; [gateCode]?: string };
+export const rawBody = Symbol('raw body');
+export type PayResult = {
+  content: Text[];
+  structuredContent?: PayOutput;
+  isError?: boolean;
+  [gateCode]?: string;
+  [rawBody]?: string;
+};
 
 /** Refusals a larger budget would fix. */
 const RAISE = new Set(['budget_exhausted', 'over_cap', 'no_grant', 'grant_revoked']);
@@ -120,5 +127,6 @@ export function render(row: PaymentRow, fenced: string[], truncated = false): Pa
   return {
     content: [{ type: 'text', text: structured.summary }, ...fenced.map((text) => ({ type: 'text' as const, text }))],
     structuredContent: structured,
+    ...(row.body !== null && { [rawBody]: row.body }),
   };
 }

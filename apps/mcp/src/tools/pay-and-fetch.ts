@@ -24,9 +24,11 @@ export function registerPayTool(server: McpServer) {
           .describe('Refuse to pay more than this, in base units'),
         idempotencyKey: z
           .string()
-          .regex(/^[A-Za-z0-9_.:-]{1,100}$/)
+          .regex(/^(?!swap:)[A-Za-z0-9_.:-]{1,100}$/)
           .optional()
-          .describe('Reuse it to retry this exact request; one is made up and returned when absent'),
+          .describe(
+            'Reuse it to retry this exact request; one is made up and returned when absent. The swap: prefix is reserved'
+          ),
       }),
       outputSchema: payOutput,
       annotations: { openWorldHint: true },

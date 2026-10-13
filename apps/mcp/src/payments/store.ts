@@ -3,6 +3,7 @@ import type { SignedAuthorization, TopUpOutcome, X402LogEntry } from '@jaw.id/ag
 import { and, desc, eq, getTableColumns, gt, inArray, isNotNull, isNull, lt, ne, not, or, sql } from 'drizzle-orm';
 import type { Address } from 'viem';
 import { getDb, type Tx } from '@/db/client';
+import { errorLabel, log } from '@/lib/edge';
 import { EXPIRY_MARGIN_MS } from './confirm';
 import { connections, PAYER_TX_HASH_INDEX, payments } from '@/db/schema';
 
@@ -294,6 +295,7 @@ export interface Conclusion {
   blockTime?: Date;
   topUp?: { amount?: string; batchId?: string };
   approvalBatchId?: string;
+  body?: string;
 }
 
 /**
@@ -306,6 +308,25 @@ export async function finish(
   c: Conclusion,
   fenced: string[]
 ): Promise<PaymentRow | undefined> {
+  try {
+    return await finishHashed(id, token, c, fenced);
+  } catch (err) {
+    if (c.body === undefined || !bodyRefused(err)) throw err;
+    log('warn', { msg: `payment ${id} concluded without its body`, error: errorLabel(err) });
+    return finishHashed(id, token, { ...c, body: undefined }, fenced);
+  }
+}
+
+const INVALID_TEXT = '22021';
+const CHECK_VIOLATION = '23514';
+
+function bodyRefused(err: unknown): boolean {
+  const e = (err as { cause?: { code?: unknown; constraint_name?: unknown; constraint?: unknown } }).cause;
+  if (e?.code === INVALID_TEXT) return true;
+  return e?.code === CHECK_VIOLATION && (e.constraint_name ?? e.constraint) === 'payment_body';
+}
+
+async function finishHashed(id: string, token: string, c: Conclusion, fenced: string[]) {
   try {
     return await finishWith(id, token, c, fenced);
   } catch (err) {
@@ -334,6 +355,7 @@ async function dropUnprovenHash(id: string, txHash: string): Promise<boolean> {
 }
 
 async function finishWith(id: string, token: string, c: Conclusion, fenced: string[]) {
+  const noAnswer = c.state === 'pending' || (c.state === 'signed' && c.kind !== 'paid');
   const [row] = await getDb()
     .update(payments)
     .set({
@@ -345,7 +367,8 @@ async function finishWith(id: string, token: string, c: Conclusion, fenced: stri
       txHash: c.txHash ?? null,
       blockTime: c.blockTime ?? null,
       ...traceOf(c),
-      fenced: c.state === 'pending' || (c.state === 'signed' && c.kind !== 'paid') ? null : fenced,
+      fenced: noAnswer ? null : fenced,
+      body: noAnswer ? null : (c.body ?? null),
       finishedAt: c.state === 'signed' || c.state === 'pending' ? null : new Date(),
       ...(c.state === 'pending' && { reserved: null }),
       leaseUntil: dbNow,

@@ -159,6 +159,7 @@ export const payments = pgTable(
     httpStatus: integer('http_status'),
     // The fenced seller text the first answer carried, so a replay returns the same words.
     fenced: jsonb('fenced').$type<string[]>(),
+    body: text('body'),
     createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
     signedAt: timestamp('signed_at', { withTimezone: true }),
     finishedAt: timestamp('finished_at', { withTimezone: true }),
@@ -185,6 +186,7 @@ export const payments = pgTable(
         or (${t.state} = 'settled' and ${t.kind} = 'paid' and ${t.nonce} is not null and ${t.amount} is not null)
         or (${t.state} = 'failed' and ${t.finishedAt} is not null)`
     ),
+    check('payment_body', sql`${t.body} is null or (${t.state} <> 'pending' and octet_length(${t.body}) <= 16384)`),
   ]
 );
 
