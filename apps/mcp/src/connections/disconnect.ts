@@ -81,11 +81,12 @@ const REFUSALS = {
 const FEE_MARGIN_BPS = 12_500n;
 const RECEIPT_MS = 60_000;
 /**
- * The fee reserved for a session that never sent an op. Its first op carries the
- * EIP-7702 delegation, which the paymaster estimate cannot price, so a fixed
- * ceiling stands in: a few cents on Base. A higher fee reverts with nothing moved.
+ * The fee of a session's first op, which carries the EIP-7702 delegation the
+ * paymaster estimate cannot price: the expected fee, as `firstOperationCost`
+ * in @jaw.id/agent, and a ceiling for a gas spike.
  */
-const FIRST_OP_FEE = 50_000n;
+const FIRST_OP_EXPECTED = 10_000n;
+const FIRST_OP_MAX = 50_000n;
 const isDelegated = (code: Hex | undefined) => code?.toLowerCase().startsWith('0xef0100') ?? false;
 
 export async function sessionSender(t: Session): Promise<SessionSender> {
@@ -105,7 +106,7 @@ export async function sessionSender(t: Session): Promise<SessionSender> {
     paymaster: paymasterQuote.paymasterAddress,
     quote: async (calls) => {
       const code = await publicClientFor(t.chainId).getCode({ address: t.sessionAddress });
-      if (!isDelegated(code)) return { expected: FIRST_OP_FEE, max: FIRST_OP_FEE };
+      if (!isDelegated(code)) return { expected: FIRST_OP_EXPECTED, max: FIRST_OP_MAX };
       const [estimate] = await estimateErc20PaymasterCosts(
         account.getSmartAccount(),
         calls,
@@ -238,7 +239,10 @@ function summarize(t: Tenant, r: Returned): string {
         'Nothing can spend from them: the session key went with this connection.'
     );
   }
-  if (r.left) said.push(`${usdc(r.left)} stays in the payer ${t.sessionAddress}.`);
+  if (r.left) {
+    const why = r.revoked.length && r.swept === 0n ? ': too little to sweep after the fee' : '';
+    said.push(`${usdc(r.left)} stays in the payer ${t.sessionAddress}${why}.`);
+  }
   return said.join(' ');
 }
 
@@ -355,7 +359,36 @@ async function sendBatch(
   // What payments hold is not the payer's to spend on fees, so a payer that cannot
   // cover the fee leaves the budgets to the owner's page.
   const leaveToOwner = () => ({ ...nothingSent, stillApproved: revokes.map((r) => r.permissionId) });
-  if (free <= reserve) return leaveToOwner();
+
+  // Too little to cover the fee and a sweep: revoke the budgets alone, with the
+  // paymaster's fee capped at what the payer holds.
+  const tryRevokeOnly = async (): Promise<Returned | null> => {
+    if (revokes.length === 0 || free === 0n) return null;
+    const calls: SessionCall[] = [
+      ...revokes.map((r) => r.call),
+      {
+        to: token,
+        data: encodeFunctionData({ abi: erc20Abi, functionName: 'approve', args: [sender.paymaster, free] }),
+      },
+    ];
+    hold.assertHeld();
+    const result = await sender.send(calls).catch((err) => {
+      log('error', { msg: 'disconnect revoke-only not sent', error: errorLabel(err) });
+      return undefined;
+    });
+    if (!result || result.status !== 'landed') return null;
+    const left = await balanceAt().catch(() => null);
+    return {
+      revoked: revokes.map((r) => r.permissionId),
+      stillApproved: [],
+      swept: 0n,
+      txHash: result.txHash,
+      left,
+      seenRevoked,
+    };
+  };
+
+  if (free <= reserve) return (await tryRevokeOnly()) ?? leaveToOwner();
 
   const sendWith = (cap: bigint) => {
     hold.assertHeld();
@@ -370,7 +403,7 @@ async function sendBatch(
   // A float under the ceiling cannot pay more, so the budgets go to the owner and the
   // connection still ends.
   if (sent?.status === 'reverted' && reserve < fee.max) {
-    if (free <= fee.max) return leaveToOwner();
+    if (free <= fee.max) return (await tryRevokeOnly()) ?? leaveToOwner();
     swept = sweep ? free - fee.max : 0n;
     sent = await sendWith(fee.max);
   }

@@ -142,11 +142,31 @@ describe('jaw_disconnect', () => {
     expect(await listed(c.access_token)).toBe(401);
   });
 
-  it('leaves the budget to the owner when the float cannot pay the reserve, and still ends the tokens', async () => {
+  it('revokes via revoke-only when the float is below the reserve but covers the real fee', async () => {
     const { c, tenant, permissionId } = await budgetConnection(async () => approved);
     const { deps, sent } = fakes({ float: 2_500n, expected: 2_000n, max: 10_000n });
     const result = await disconnect(tenant, deps);
-    expect(sent).toEqual([]);
+    expect(sent).toHaveLength(1);
+    const [revoke, cap] = sent[0];
+    expect(revoke.to).toBe(MANAGER);
+    expect(args(cap)).toEqual({ functionName: 'approve', args: [PAYMASTER, 2_500n] });
+    expect(result.structuredContent).toMatchObject({
+      revoked: [permissionId],
+      stillApproved: [],
+      swept: '0',
+      txHash: TX,
+      left: '2500',
+    });
+    expect(result.content[0].text).toContain('too little to sweep after the fee');
+    expect(await revokedAt(permissionId)).not.toBeNull();
+    expect(await listed(c.access_token)).toBe(401);
+  });
+
+  it('leaves the budget to the owner when the revoke-only also reverts', async () => {
+    const { c, tenant, permissionId } = await budgetConnection(async () => approved);
+    const { deps, sent } = fakes({ float: 2_500n, expected: 2_000n, max: 10_000n, sent: { status: 'reverted' } });
+    const result = await disconnect(tenant, deps);
+    expect(sent).toHaveLength(1);
     expect(result.structuredContent).toMatchObject({ revoked: [], stillApproved: [permissionId], left: '2500' });
     expect(result.content[0].text).toContain('still approved on chain until they expire');
     expect(await revokedAt(permissionId)).toBeNull();
@@ -319,13 +339,14 @@ describe('given the fee rises above the reserve before the batch lands', () => {
     expect(await listed(c.access_token)).toBe(200);
   });
 
-  it('when the float cannot cover the ceiling, then it leaves the budget to the owner and still ends the tokens', async () => {
+  it('when the float cannot cover the ceiling and the revoke-only also reverts, then it leaves the budget to the owner', async () => {
     const { c, tenant, permissionId } = await budgetConnection(async () => approved);
     const { deps, sent } = fakes({ float: 15_000n, expected: 5_000n, max: 20_000n, sent: { status: 'reverted' } });
 
     const result = await disconnect(tenant, deps);
 
-    expect(sent).toHaveLength(1);
+    // Two sends: batch at the reserve, then revoke-only fallback (both revert)
+    expect(sent).toHaveLength(2);
     expect(result.structuredContent).toMatchObject({ revoked: [], stillApproved: [permissionId], left: '15000' });
     expect(await revokedAt(permissionId)).toBeNull();
     expect(await listed(c.access_token)).toBe(401);
@@ -345,6 +366,55 @@ describe('given the batch landed but its reply was lost', () => {
     expect(sent).toEqual([]);
     expect(result.structuredContent).toMatchObject({ revoked: [], stillApproved: [], swept: '0', left: '1800' });
     expect(await revokedAt(permissionId)).not.toBeNull();
+    expect(await listed(c.access_token)).toBe(401);
+  });
+});
+
+describe('given a never-delegated payer holding the prefund', () => {
+  it('when the prefund covers the realistic fee, then it revokes the budget and sweeps the remainder', async () => {
+    const { c, tenant, permissionId } = await budgetConnection(async () => approved);
+    // 0.028117 USDC free, realistic first-op fee estimate (matching the measured ~0.0094)
+    const { deps, sent } = fakes({ float: 28_117n, expected: 10_000n, max: 50_000n });
+
+    const result = await disconnect(tenant, deps);
+
+    expect(sent).toHaveLength(1);
+    expect(sent[0][0].to).toBe(MANAGER);
+    // margin = ceil(10_000 * 1.25) = 12_500; swept = 28_117 - 12_500
+    expect(args(sent[0][1]).args).toEqual([c.signer.address, 15_617n]);
+    expect(args(sent[0][2]).args).toEqual([PAYMASTER, 12_500n]);
+    expect(result.structuredContent).toMatchObject({ revoked: [permissionId], swept: '15617', txHash: TX });
+  });
+
+  it('when the prefund is below the fee reserve but above the real fee, then revoke-only succeeds', async () => {
+    const { c, tenant, permissionId } = await budgetConnection(async () => approved);
+    // 8_000 < reserve of 12_500 but above the measured ~9_400 (the sender mock lands it)
+    const { deps, sent } = fakes({ float: 8_000n, expected: 10_000n, max: 50_000n });
+
+    const result = await disconnect(tenant, deps);
+
+    expect(sent).toHaveLength(1);
+    expect(sent[0]).toHaveLength(2);
+    expect(args(sent[0][1])).toEqual({ functionName: 'approve', args: [PAYMASTER, 8_000n] });
+    expect(result.structuredContent).toMatchObject({
+      revoked: [permissionId],
+      stillApproved: [],
+      swept: '0',
+      txHash: TX,
+    });
+    expect(result.content[0].text).toContain('too little to sweep after the fee');
+    expect(await listed(c.access_token)).toBe(401);
+  });
+
+  it('when the payer holds too little for even the revoke fee, then it answers cleanly', async () => {
+    const { c, tenant, permissionId } = await budgetConnection(async () => approved);
+    const { deps, sent } = fakes({ float: 500n, expected: 10_000n, max: 50_000n, sent: { status: 'reverted' } });
+
+    const result = await disconnect(tenant, deps);
+
+    expect(sent).toHaveLength(1);
+    expect(result.structuredContent).toMatchObject({ revoked: [], stillApproved: [permissionId], left: '500' });
+    expect(result.content[0].text).toContain('still approved on chain until they expire');
     expect(await listed(c.access_token)).toBe(401);
   });
 });

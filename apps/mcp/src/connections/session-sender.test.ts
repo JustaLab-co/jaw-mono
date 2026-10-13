@@ -53,11 +53,11 @@ describe('given the session key of a payer', () => {
     expect(sender.paymaster).toBe(PAYMASTER);
   });
 
-  it('when a payer that never sent an op is quoted, then it reserves the first-op fee the estimate cannot price', async () => {
+  it('when a payer that never sent an op is quoted, then it uses a realistic expected and a ceiling max', async () => {
     chain.code = undefined;
     const sender = await sessionSender(tenant);
 
-    expect(await sender.quote([call])).toEqual({ expected: 50_000n, max: 50_000n });
+    expect(await sender.quote([call])).toEqual({ expected: 10_000n, max: 50_000n });
     expect(estimate).not.toHaveBeenCalled();
   });
 
