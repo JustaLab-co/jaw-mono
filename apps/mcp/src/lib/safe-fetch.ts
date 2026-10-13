@@ -47,6 +47,20 @@ for (const [net, bits] of [
 }
 
 const MAX_BODY_BYTES = 1_000_000;
+const cutResponses = new WeakSet<Response>();
+
+// Wraps a fetch and tells whether the body of its last response was cut at
+// MAX_BODY_BYTES, so a tool can say so next to what it shows.
+export function watchCuts(inner: typeof fetch) {
+  let lastCut = false;
+  const watched: typeof fetch = async (input, init) => {
+    lastCut = false;
+    const res = await inner(input, init);
+    lastCut = cutResponses.has(res);
+    return res;
+  };
+  return { fetch: watched, lastCut: () => lastCut };
+}
 
 export const isPrivate = (address: string) => blocked.check(address, isIP(address) === 4 ? 'ipv4' : 'ipv6');
 
@@ -105,12 +119,16 @@ export function safeFetch(insecureHosts: ReadonlySet<string>): typeof fetch {
           let size = 0;
           // A longer body is cut, not refused: a paid answer still arrives, and its payment stays recorded.
           res.on('data', (chunk: Buffer) => {
-            if (size >= MAX_BODY_BYTES) return;
+            if (size + chunk.length <= MAX_BODY_BYTES) {
+              chunks.push(chunk);
+              size += chunk.length;
+              return;
+            }
             chunks.push(chunk.subarray(0, MAX_BODY_BYTES - size));
-            size += chunk.length;
-            if (size < MAX_BODY_BYTES) return;
             delete res.headers['content-length'];
-            resolve(toResponse(res, Buffer.concat(chunks)));
+            const response = toResponse(res, Buffer.concat(chunks));
+            cutResponses.add(response);
+            resolve(response);
             res.destroy();
           });
           res.on('end', () => resolve(toResponse(res, Buffer.concat(chunks))));

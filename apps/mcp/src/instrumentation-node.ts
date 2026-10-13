@@ -1,4 +1,5 @@
 import { sweepWraps } from './connections/adapter';
+import { config } from './connections/config';
 import { runMigrations } from './db/migrate';
 import { log } from './lib/edge';
 import { purge, reconcile } from './reconciler/run';
@@ -30,6 +31,13 @@ function reconcileEvery(seconds: number) {
 }
 
 export async function prepare() {
+  try {
+    config();
+  } catch (err) {
+    // Read once at boot so a missing or invalid variable stops the server, not every request.
+    log('error', { msg: 'invalid config', error: err instanceof Error ? err.message : String(err) });
+    process.exit(1);
+  }
   const url = process.env.DATABASE_URL;
   try {
     if (!url) throw new Error('DATABASE_URL is not set');

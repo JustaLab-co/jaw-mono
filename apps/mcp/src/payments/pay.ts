@@ -25,7 +25,7 @@ import { countHit, isPaymentsPaused } from '@/db/settings';
 import { currentGrant, type Grant } from '@/grants/store';
 import { log, RATE_WINDOW_MS } from '@/lib/edge';
 import { fenceText } from '@/lib/fence';
-import { safeFetch } from '@/lib/safe-fetch';
+import { safeFetch, watchCuts } from '@/lib/safe-fetch';
 import { confirmByReceipt, type Settled } from './confirm';
 import { refillHook } from './refill';
 import { gate, render, type PayResult } from './render';
@@ -291,10 +291,11 @@ export async function pay(t: Tenant, input: PayInput, deps: PayDeps = liveDeps()
   const started = Date.now();
   const budget = until(started + PAY_LIMIT_MS);
   const payer = payerFor(t, deps.clients);
-  const sent = { method: request.method, headers: request.headers, body: request.body, budget, fetch: deps.fetch };
+  const cuts = watchCuts(deps.fetch);
+  const sent = { method: request.method, headers: request.headers, body: request.body, budget, fetch: cuts.fetch };
   const confirm = { clients: deps.clients, later: deps.later };
 
-  if (claimed.kind === 'resume') return resend(claimed.row, claimed.token, payer, sent, confirm);
+  if (claimed.kind === 'resume') return resend(claimed.row, claimed.token, payer, sent, confirm, cuts.lastCut);
 
   const { row, token } = claimed;
   let signed = false;
@@ -307,7 +308,7 @@ export async function pay(t: Tenant, input: PayInput, deps: PayDeps = liveDeps()
     signedAt: new Date(started),
     confirm,
   });
-  return render(done.row, done.fenced);
+  return render(done.row, done.fenced, cuts.lastCut());
 }
 
 /**
@@ -355,7 +356,8 @@ async function resend(
   token: string,
   payer: Payer,
   sent: Parameters<typeof payAndFetch>[2],
-  confirm: Confirm
+  confirm: Confirm,
+  lastCut: () => boolean
 ): Promise<PayResult> {
   const authorization = row.authorization as SignedAuthorization;
   const outcome: Outcome = await payAndFetch(authorization.resource, payer, {
@@ -365,10 +367,10 @@ async function resend(
   // A refused resend says nothing about the first send, which the chain or a live first call settles.
   if (outcome.kind !== 'paid') {
     await release(row.id, token);
-    return render(merged(row, conclusionOf(outcome, true, undefined, false)), fencedOf(row.url, outcome));
+    return render(merged(row, conclusionOf(outcome, true, undefined, false)), fencedOf(row.url, outcome), lastCut());
   }
   const done = await concludeSend(row, token, outcome, { signed: true, signedAt: row.signedAt as Date, confirm });
-  return render(done.row, done.fenced);
+  return render(done.row, done.fenced, lastCut());
 }
 
 async function payWithinGrant(

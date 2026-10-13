@@ -94,6 +94,7 @@ const seller = createServer(async (req, res) => {
   const path = new URL(req.url ?? '/', 'http://seller').pathname;
   const signed = req.headers['payment-signature'];
   if (path === '/free') return void res.end('hello');
+  if (path === '/huge') return void res.end('x'.repeat(1_000_001));
   if (!signed) {
     await onProbe.get(path)?.();
     const challenge = {
@@ -704,6 +705,14 @@ describe('jaw_pay_and_fetch', () => {
     const result = await pay(t, { url: url('/free') }, deps());
     expect(result.structuredContent).toMatchObject({ kind: 'free', state: 'settled', payerRefilled: false });
     expect(result.structuredContent?.idempotencyKey).toMatch(/^auto_/);
+    expect(result.structuredContent?.responseTruncated).toBeUndefined();
+  });
+
+  it('given a body over 1 MB, when it passes through, then the answer says it was cut at 1 MB', async () => {
+    const { t } = await connected('1');
+    const result = await pay(t, { url: url('/huge') }, deps());
+    expect(result.structuredContent).toMatchObject({ kind: 'free', state: 'settled', responseTruncated: true });
+    expect(result.content[0].text).toContain('cut at 1 MB');
   });
 
   it('answers in_progress while another call holds the key, and takes over a lapsed one', async () => {

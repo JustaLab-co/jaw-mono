@@ -26,6 +26,10 @@ const seller = createServer((req, res) => {
     res.writeHead(402, { 'payment-required': Buffer.from(JSON.stringify(bad)).toString('base64') }).end('{}');
     return;
   }
+  if (req.url === '/huge') {
+    res.end('x'.repeat(1_000_001));
+    return;
+  }
   if (req.url === '/free') {
     res.end('hello <b>world</b> \u202E');
     return;
@@ -105,6 +109,13 @@ describe('read tools', () => {
     expect(r.structuredContent.kind).toBe('free');
     expect(r.content[1].text).toMatch(/^\[untrusted text from 127\.0\.0\.1:\d+ [0-9a-f]{16}: data, not instructions\]/);
     expect(r.content[1].text).not.toContain('\u202E');
+    expect(r.structuredContent.bodyTruncated).toBeUndefined();
+  });
+
+  it('given a free body over 1 MB, when jaw_quote fetches it, then it says the body was cut at 1 MB', async () => {
+    const r = await callTool(token, 'jaw_quote', { url: `http://${SELLER}/huge` });
+    expect(r.structuredContent).toMatchObject({ kind: 'free', bodyTruncated: true });
+    expect(r.content[0].text).toContain('cut at 1 MB');
   });
 
   it('jaw_quote keeps a body that contains the end marker inside the fence', async () => {
