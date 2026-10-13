@@ -36,8 +36,8 @@ import {
 import { floatHolder, getDb, setDb } from '@/db/client';
 import { connections, grants, payments, settings } from '@/db/schema';
 import { currentGrant } from '@/grants/store';
-import { revokeConnection } from '@/tools/connections';
 import { reconcile } from '@/reconciler/run';
+import { revokeConnection } from '@/tools/connections';
 import { requestBudget } from '@/tools/request-budget';
 import {
   lockWaiters,
@@ -507,13 +507,16 @@ describe('jaw_pay_and_fetch', () => {
     const settled = await rowOf(id);
     expect(settled).toMatchObject({ state: 'settled', kind: 'paid', amount: '5000' });
     used.add(seen[0].nonce.toLowerCase());
-    read.go();
-    await run;
+    const lines = await logsOf(async () => {
+      read.go();
+      await run;
+    });
     expect(again.structuredContent).toMatchObject({ kind: 'paid', state: 'settled', paymentId: id });
     expect(await rowOf(id)).toEqual(settled);
+    expect(lines).not.toContain(`reconcile ${id} failed`);
   });
 
-  it('given a reconciler run that settles while the resend is at the seller, then the resend answers from that row', async () => {
+  it('given a reconciler run that reads while the resend is at the seller, then the resend answers settled', async () => {
     const { t, id } = await lostAndDue('recon-race-2');
     const read = heldRead();
     const run = reconcile(read.clients);
@@ -528,6 +531,34 @@ describe('jaw_pay_and_fetch', () => {
     expect(row).toMatchObject({ state: 'settled', kind: 'paid', amount: '5000' });
     expect(again.structuredContent).toMatchObject({ kind: 'paid', state: 'settled', paymentId: id });
     expect(seen.map((s) => s.nonce)).toEqual([seen[0].nonce, seen[0].nonce]);
+  });
+
+  it("given a reconciler run that reads while the resend is at the seller, then a replay repeats the seller's answer", async () => {
+    const { t, id } = await lostAndDue('recon-race-3');
+    const read = heldRead();
+    const run = reconcile(read.clients);
+    await read.reached;
+    onProof.set('/lost', async () => {
+      used.add(seen[0].nonce.toLowerCase());
+      read.go();
+      await run;
+    });
+    const again = await pay(t, { url: url('/lost'), idempotencyKey: 'recon-race-3' }, deps());
+    const replay = await pay(t, { url: url('/lost'), idempotencyKey: 'recon-race-3' }, deps());
+    expect(again.content[1].text).toContain('the weather is fine');
+    expect(replay).toEqual(again);
+    expect(await rowOf(id)).toMatchObject({ state: 'settled', httpStatus: 200, txHash: TX(2) });
+  });
+
+  it('given a lost answer whose proof deadline passed, then a resend does not send it', async () => {
+    const { t, id } = await lostAndDue('recon-expired');
+    await getDb().execute(sql`alter table payments disable trigger payments_guard`);
+    await getDb().execute(sql`update payments set deadline = now() - interval '1 second' where id = ${id}`);
+    await getDb().execute(sql`alter table payments enable trigger payments_guard`);
+    const again = await pay(t, { url: url('/lost'), idempotencyKey: 'recon-expired' }, deps());
+    expect(again.structuredContent).not.toMatchObject({ kind: 'paid' });
+    expect(seen).toHaveLength(1);
+    expect(await rowOf(id)).toMatchObject({ state: 'signed', code: 'no_response' });
   });
 
   it('never returns a refill error to the agent, which can quote the paymaster key', async () => {
