@@ -52,6 +52,10 @@ if [ -n "${COMPOSE_PROJECT:-}" ]; then
     if [ -z "$built" ]; then warn "mcp image has no revision label, so nothing ties it to $REV; build it with --label org.opencontainers.image.revision=$HEAD_SHA"
     elif [ "$built" != "$HEAD_SHA" ]; then fail "mcp image is from $built, not $HEAD_SHA; rebuild it or unset JAW_VERIFY_MCP_IMAGE"
     else ok "mcp image built from $REV"; fi
+    # The seller answers 404 on /, and only the seller owns $PORT on the host.
+    code=$(docker exec "$mcp" node -e 'fetch(process.argv[1]).then((r) => console.log(r.status), () => console.log("unreachable"))' "http://localhost:$PORT/" 2>&1)
+    if [ "$code" = 404 ]; then ok "seller reachable from the mcp container at http://localhost:$PORT"
+    else fail "seller not reachable from the mcp container at http://localhost:$PORT ($code); check the seller-forward service"; fi
   fi
 fi
 if [ -n "${MCP_URL:-}" ]; then
