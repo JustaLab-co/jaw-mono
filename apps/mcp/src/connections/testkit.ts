@@ -70,6 +70,7 @@ export const fakeWallet =
       runs.add(settled);
       return done;
     },
+    close: () => undefined,
   });
 
 /** For a test that never sends as the session: any send, or chain read around one, fails. */

@@ -1,5 +1,5 @@
 import { createHash, randomBytes } from 'node:crypto';
-import { and, eq, inArray, isNotNull, isNull, lt, not, sql, type SQL } from 'drizzle-orm';
+import { and, eq, gt, inArray, isNotNull, isNull, lt, not, sql, type SQL } from 'drizzle-orm';
 import type { PgUpdateSetSource } from 'drizzle-orm/pg-core';
 import { config, QUOTE_MARGIN_SEC } from '@/connections/config';
 import { getDb, type Tx } from '@/db/client';
@@ -233,14 +233,41 @@ export const nextAttempt = (lease: SwapLease) =>
     code: null,
   });
 
+const ofSwap = (connectionId: string, id: string, states: SwapState[]) =>
+  and(eq(swaps.id, id), eq(swaps.connectionId, connectionId), inArray(swaps.state, states));
+
 export const move = (connectionId: string, id: string, from: SwapState[], to: SwapState, set: SwapSet = {}) =>
-  write(and(eq(swaps.id, id), eq(swaps.connectionId, connectionId), inArray(swaps.state, from)), {
-    ...set,
-    state: to,
+  write(ofSwap(connectionId, id, from), { ...set, state: to });
+
+export const SEND_STARTED = 'send_started';
+
+export const markSendStarted = (connectionId: string, id: string) =>
+  write(and(ofSwap(connectionId, id, ['awaiting_owner']), isNull(swaps.code), gt(swaps.approveBy, dbNow)), {
+    code: SEND_STARTED,
   });
 
+export const reopenLink = (row: SwapRow, walletUrl: string) =>
+  write(
+    and(
+      ofSwap(row.connectionId, row.id, ['awaiting_owner']),
+      eq(swaps.walletUrl, row.walletUrl!),
+      sql`${swaps.code} is distinct from ${SEND_STARTED}`,
+      gt(swaps.approveBy, dbNow)
+    ),
+    { walletUrl, code: null }
+  );
+
 export const recordCallsId = (connectionId: string, id: string, callsId: string) =>
-  move(connectionId, id, ['awaiting_owner', 'expired'], 'deposit_sent', { callsId });
+  move(connectionId, id, ['awaiting_owner', 'expired'], 'deposit_sent', { callsId, code: null });
+
+export const recordCode = (connectionId: string, id: string, code: string) =>
+  write(ofSwap(connectionId, id, ['awaiting_owner', 'expired']), { code });
+
+export const recordSentCode = (connectionId: string, id: string, code: string) =>
+  write(ofSwap(connectionId, id, ['deposit_sent']), { code });
+
+export const recordTxHash = (connectionId: string, id: string, txHash: string) =>
+  write(and(ofSwap(connectionId, id, ['deposit_sent', 'submitted']), isNull(swaps.txHash)), { txHash });
 
 const DEPOSIT_ADDRESS_KEYS = new Set([SWAP_DEPOSIT_ADDRESS_INDEX, 'swaps_quote_id_unique']);
 

@@ -14,7 +14,7 @@ import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vite
 import { createMcpHandler } from 'mcp-handler';
 import { verifyBearer, withConnection, type Tenant } from '@/connections/auth';
 import { config } from '@/connections/config';
-import { WalletBusy, type OpenWallet } from '@/connections/relay';
+import { WalletBusy, type Ask, type OpenWallet, type Wallet } from '@/connections/relay';
 import {
   approvedOnChain,
   connect,
@@ -153,15 +153,19 @@ const payDeps: PayDeps = {
 
 type Opened = { chainId: number; until: Date; args: number };
 let opened: Opened[] = [];
+let asked: { method: string; params: unknown[] }[] = [];
+let closed: string[] = [];
+const neverOpened = (): Wallet => {
+  const url = `http://keys.test/cli-bridge?session=unopened-${opened.length}`;
+  return { url, run: () => new Promise(() => {}), close: () => closed.push(url) };
+};
 const recordingWallet =
-  (busy = false): OpenWallet =>
+  (busy = false, answer?: Ask): OpenWallet =>
   async (...args) => {
     if (busy) throw new WalletBusy();
     const [chainId, until] = args;
     opened.push({ chainId, until, args: args.length });
-    return fakeWallet(async () => {
-      throw new Error('this pull request opens the link only');
-    })(chainId, until);
+    return answer ? fakeWallet(answer, asked)(chainId, until) : neverOpened();
   };
 
 beforeAll(TEST_PG_URL ? useTestPostgres : useTestDb);
@@ -170,6 +174,8 @@ beforeEach(() => {
   backend.hits.length = 0;
   backend.lose = 0;
   opened = [];
+  asked = [];
+  closed = [];
 });
 afterEach(async () => {
   await getDb().delete(settings).where(eq(settings.key, 'payments_paused'));
@@ -200,7 +206,7 @@ const input: SwapToolInput = {
 };
 
 const run = (t: Tenant, args: Partial<SwapToolInput> = {}, openWallet = recordingWallet()) =>
-  swap(t, { ...input, ...args }, { openWallet, pay: payDeps });
+  swap(t, { ...input, ...args }, { openWallet, pay: payDeps, pollMs: 0 });
 
 const swapsOf = (connectionId: string): Promise<SwapRow[]> =>
   getDb().select().from(swaps).where(eq(swaps.connectionId, connectionId));
@@ -656,6 +662,465 @@ describe('the owner window', () => {
   });
 });
 
+describe('the owner approves the deposit', () => {
+  const HASH = `0x${'cd'.repeat(32)}`;
+  const rejected = (code?: number) => Object.assign(new Error('the wallet refused'), { code });
+  const mined: Ask = async () => ({ status: 200, receipts: [{ transactionHash: HASH }] });
+  const sendingAs =
+    (account: string, sendCalls: Ask, status = mined): Ask =>
+    async (method, params) => {
+      if (method === 'eth_requestAccounts') return [account];
+      if (method === 'wallet_sendCalls') return sendCalls(method, params);
+      if (method === 'wallet_getCallsStatus') return status(method, params);
+      throw new Error(`unexpected ${method}`);
+    };
+  const approved: Ask = async () => ({ id: '0xcalls', chainId: '0x2105' });
+  const methods = () => asked.map((a) => a.method);
+
+  async function approve(t: Tenant, answer: Ask, args: Partial<SwapToolInput> = {}) {
+    const result = await run(t, args, recordingWallet(false, answer));
+    await walletsSettled();
+    const [row] = await swapsOf(t.connectionId);
+    return { result, row };
+  }
+
+  it('B20: given a swap awaiting the owner, when the owner approves, then the wallet gets the stored call byte for byte on the origin chain, and the row is deposit_sent with the calls id and the hash', async () => {
+    const { t } = await connected('1');
+    let polls = 0;
+    const status: Ask = async () =>
+      ++polls < 2 ? { status: 100 } : { status: 200, receipts: [{ transactionHash: HASH }] };
+
+    const { row } = await approve(t, sendingAs(t.account, approved, status), {
+      originChainId: 8453,
+      originToken: '0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913',
+    });
+
+    const call = row.call!;
+    expect(opened).toEqual([{ chainId: 84532, until: row.approveBy, args: 2 }]);
+    expect(methods()).toEqual([
+      'eth_requestAccounts',
+      'wallet_sendCalls',
+      'wallet_getCallsStatus',
+      'wallet_getCallsStatus',
+    ]);
+    expect(asked[1].params).toEqual([
+      {
+        version: '2.0.0',
+        chainId: '0x2105',
+        from: t.account,
+        atomicRequired: true,
+        calls: [{ to: call.to, data: call.data, value: call.value }],
+      },
+    ]);
+    const [{ calls }] = asked[1].params as [{ calls: [unknown] }];
+    expect(JSON.stringify(calls[0])).toBe(JSON.stringify({ to: call.to, data: call.data, value: call.value }));
+    expect(asked[2].params).toEqual(['0xcalls']);
+    expect(row).toMatchObject({ state: 'deposit_sent', callsId: '0xcalls', txHash: HASH, code: null });
+  });
+
+  it('B20: given the owner approved, when the session ends before the wallet reports a hash, then the row stays deposit_sent with no hash', async () => {
+    const { t } = await connected('1');
+    const ended: Ask = async () => {
+      throw new Error('the wallet session ended');
+    };
+
+    const { row } = await approve(t, sendingAs(t.account, approved, ended));
+
+    expect(row).toMatchObject({ state: 'deposit_sent', callsId: '0xcalls', txHash: null });
+  });
+
+  it('B20: given the wallet reports the batch failed off chain, when it is polled, then polling stops with no hash', async () => {
+    const { t } = await connected('1');
+
+    const { row } = await approve(
+      t,
+      sendingAs(t.account, approved, async () => ({ status: 400 }))
+    );
+
+    expect(methods().filter((m) => m === 'wallet_getCallsStatus')).toHaveLength(1);
+    expect(row).toMatchObject({ state: 'deposit_sent', txHash: null });
+  });
+
+  it('B9: given a swap awaiting the owner, when the owner rejects in the wallet, then owner_declined and the replay says nothing was sent', async () => {
+    const { t } = await connected('1');
+
+    const { row } = await approve(
+      t,
+      sendingAs(t.account, async () => {
+        throw rejected(4001);
+      })
+    );
+
+    expect(row.state).toBe('owner_declined');
+    const replay = await run(t);
+    expect(replay.structuredContent?.state).toBe('owner_declined');
+    expect(replay.structuredContent?.url).toBeUndefined();
+    expect(replay.structuredContent?.summary).toMatch(/nothing was (sent|deposited)/i);
+  });
+
+  it('B9: given a swap awaiting the owner, when the owner rejects the account request, then owner_declined and no deposit is asked', async () => {
+    const { t } = await connected('1');
+    const refuse: Ask = async () => {
+      throw rejected(4001);
+    };
+
+    const { row } = await approve(t, refuse);
+
+    expect(methods()).toEqual(['eth_requestAccounts']);
+    expect(row.state).toBe('owner_declined');
+  });
+
+  it('B27: given the owner signs in with another account, when the wallet answers, then owner_declined with wrong_account and the deposit is never asked', async () => {
+    const { t } = await connected('1');
+
+    const { row } = await approve(t, sendingAs('0x00000000000000000000000000000000000000aa', approved));
+
+    expect(methods()).toEqual(['eth_requestAccounts']);
+    expect(row).toMatchObject({ state: 'owner_declined', code: 'wrong_account', callsId: null });
+  });
+
+  async function expectMaybeSent(t: Tenant) {
+    const replay = (await run(t)).structuredContent;
+    expect(replay?.url).toBeUndefined();
+    expect(replay?.summary).toMatch(/may have sent the deposit/i);
+    expect(replay?.summary).toMatch(/jaw_swap_status/);
+    expect(replay?.summary).not.toMatch(/nothing was sent|new idempotencyKey/i);
+    expect(opened).toHaveLength(1);
+  }
+
+  it.each([
+    [5710, 'wallet_error:5710'],
+    [-32000, 'wallet_error:-32000'],
+    [undefined, 'wallet_error:unknown'],
+  ])(
+    'B32: given a swap awaiting the owner, when the wallet answers the account request with error %s, then the row records %s, nothing is sent, and a replay opens a new link for the same quote',
+    async (code, recorded) => {
+      const { t } = await connected('1');
+
+      const { row } = await approve(t, async () => {
+        throw rejected(code);
+      });
+
+      expect(methods()).toEqual(['eth_requestAccounts']);
+      expect(row).toMatchObject({ state: 'awaiting_owner', code: recorded, callsId: null });
+      const paid = paidHits().length;
+      const replay = await run(t);
+      const [reopened] = await swapsOf(t.connectionId);
+      expect(opened).toHaveLength(2);
+      expect(reopened).toMatchObject({ state: 'awaiting_owner', code: null, quoteId: row.quoteId });
+      expect(reopened.walletUrl).not.toBe(row.walletUrl);
+      expect(replay.structuredContent?.url).toBe(reopened.walletUrl);
+      expect(paidHits()).toHaveLength(paid);
+    }
+  );
+
+  it.each([5710, -32000, undefined])(
+    'B32: given the deposit was asked, when the wallet answers it with error %s, then the row keeps the send marker and the replay says the deposit may be sent',
+    async (code) => {
+      const { t } = await connected('1');
+
+      const { row } = await approve(
+        t,
+        sendingAs(t.account, async () => {
+          throw rejected(code);
+        })
+      );
+
+      expect(row).toMatchObject({ state: 'awaiting_owner', code: 'send_started', callsId: null });
+      await expectMaybeSent(t);
+    }
+  );
+
+  it('given the owner signed in, when the deposit is asked, then the row already holds the send marker, cleared once the calls id is recorded', async () => {
+    const { t } = await connected('1');
+    let during: SwapRow | undefined;
+
+    const { row } = await approve(
+      t,
+      sendingAs(t.account, async (method, params) => {
+        [during] = await swapsOf(t.connectionId);
+        return approved(method, params);
+      })
+    );
+
+    expect(during).toMatchObject({ state: 'awaiting_owner', code: 'send_started' });
+    expect(row).toMatchObject({ state: 'deposit_sent', callsId: '0xcalls', code: null });
+  });
+
+  async function failingSwapWrites(when: string, run: () => Promise<void>) {
+    await getDb().execute(
+      sql.raw(`create function fail_swap_write() returns trigger language plpgsql as $$ begin
+        if ${when} then raise exception 'connection lost'; end if;
+        return new; end $$`)
+    );
+    await getDb().execute(
+      sql.raw('create trigger fail_swap_write before update on swaps for each row execute function fail_swap_write()')
+    );
+    try {
+      await run();
+    } finally {
+      await getDb().execute(sql.raw('drop trigger fail_swap_write on swaps'));
+      await getDb().execute(sql.raw('drop function fail_swap_write()'));
+    }
+  }
+
+  it('given the owner signed in, when the send marker cannot be written, then the deposit is never asked', async () => {
+    const { t } = await connected('1');
+
+    await failingSwapWrites(`new.code = 'send_started'`, async () => {
+      const { row } = await approve(t, sendingAs(t.account, approved));
+
+      expect(methods()).toEqual(['eth_requestAccounts']);
+      expect(row).toMatchObject({ state: 'awaiting_owner', code: null });
+    });
+  });
+
+  it('given the owner signed in, when the row expired meanwhile, then the deposit is never asked', async () => {
+    const { t } = await connected('1');
+    const expiring: Ask = async (method) => {
+      const [row] = await swapsOf(t.connectionId);
+      await getDb().update(swaps).set({ state: 'expired' }).where(eq(swaps.id, row.id));
+      if (method === 'eth_requestAccounts') return [t.account];
+      throw new Error(`unexpected ${method}`);
+    };
+
+    const { row } = await approve(t, expiring);
+
+    expect(methods()).toEqual(['eth_requestAccounts']);
+    expect(row).toMatchObject({ state: 'expired', code: null });
+  });
+
+  it('given the wallet took the deposit, when its answer has no calls id, then the row keeps the send marker and the replay says the deposit may be sent', async () => {
+    const { t } = await connected('1');
+
+    const { row } = await approve(
+      t,
+      sendingAs(t.account, async () => ({ batch: '0xcalls' }))
+    );
+
+    expect(row).toMatchObject({ state: 'awaiting_owner', code: 'send_started', callsId: null });
+    await expectMaybeSent(t);
+  });
+
+  it('given the owner signed, when writing the calls id fails once, then it is logged with the swap and calls ids and written on the retry', async () => {
+    const { t } = await connected('1');
+    await getDb().execute(sql.raw('create sequence calls_id_writes'));
+    await getDb().execute(
+      sql.raw(`create function fail_calls_id_once() returns trigger language plpgsql as $$ begin
+        if new.calls_id is not null and old.calls_id is null and nextval('calls_id_writes') = 1 then
+          raise exception 'connection lost';
+        end if;
+        return new; end $$`)
+    );
+    await getDb().execute(
+      sql.raw(
+        'create trigger fail_calls_id_once before update on swaps for each row execute function fail_calls_id_once()'
+      )
+    );
+    const logged = vi.spyOn(console, 'log').mockImplementation(() => undefined);
+
+    try {
+      const { row } = await approve(t, sendingAs(t.account, approved));
+
+      expect(row).toMatchObject({ state: 'deposit_sent', callsId: '0xcalls', txHash: HASH });
+      const lines = logged.mock.calls.map(([line]) => String(line)).filter((line) => line.includes('0xcalls'));
+      expect(lines).toHaveLength(1);
+      expect(lines[0]).toContain(row.id);
+    } finally {
+      logged.mockRestore();
+      await getDb().execute(sql.raw('drop trigger fail_calls_id_once on swaps'));
+      await getDb().execute(sql.raw('drop function fail_calls_id_once()'));
+      await getDb().execute(sql.raw('drop sequence calls_id_writes'));
+    }
+  });
+
+  it('given the owner signed, when no write after the send marker succeeds, then the row keeps the marker, the swap and calls ids are logged, and the replay says the deposit may be sent', async () => {
+    const { t } = await connected('1');
+    const logged = vi.spyOn(console, 'log').mockImplementation(() => undefined);
+
+    try {
+      await failingSwapWrites(`old.code = 'send_started'`, async () => {
+        const { row } = await approve(t, sendingAs(t.account, approved));
+
+        expect(row).toMatchObject({ state: 'awaiting_owner', code: 'send_started', callsId: null });
+        const lines = logged.mock.calls.map(([line]) => JSON.parse(String(line)));
+        expect(lines).toContainEqual(expect.objectContaining({ swapId: row.id, callsId: '0xcalls' }));
+      });
+    } finally {
+      logged.mockRestore();
+    }
+    await expectMaybeSent(t);
+  });
+
+  it('given the deposit was asked, when the process stops before the answer is handled, then the replay keeps no link, opens none, and the link cannot be rewritten', async () => {
+    const { t } = await connected('1');
+    let crash!: () => void;
+    const crashed = new Promise<void>((resolve) => (crash = resolve));
+    const dying: OpenWallet = async (chainId, until) => {
+      opened.push({ chainId, until, args: 2 });
+      return {
+        url: 'http://keys.test/cli-bridge?session=dying',
+        run: (work) =>
+          new Promise((_, reject) => {
+            void work(async (method) => {
+              if (method === 'eth_requestAccounts') return [t.account];
+              reject(new Error('the process stopped'));
+              crash();
+              return new Promise(() => {});
+            });
+          }),
+        close: () => undefined,
+      };
+    };
+    await run(t, {}, dying);
+    await crashed;
+    await new Promise((resolve) => setImmediate(resolve));
+
+    const [row] = await swapsOf(t.connectionId);
+    expect(row).toMatchObject({ state: 'awaiting_owner', code: 'send_started' });
+    await expectMaybeSent(t);
+    await expect(
+      getDb().update(swaps).set({ walletUrl: 'http://keys.test/cli-bridge?session=other' }).where(eq(swaps.id, row.id))
+    ).rejects.toThrow();
+  });
+
+  it.each([
+    ['a status that is not a number', { status: 'CONFIRMED' }],
+    ['a mined batch whose hash is not a hash', { status: 200, receipts: [{ transactionHash: '0x12' }] }],
+  ])(
+    'given the deposit was sent, when the wallet answers %s, then the row keeps deposit_sent and records that the answer was unreadable',
+    async (_, answer) => {
+      const { t } = await connected('1');
+
+      const { row } = await approve(
+        t,
+        sendingAs(t.account, approved, async () => answer)
+      );
+
+      expect(row).toMatchObject({
+        state: 'deposit_sent',
+        callsId: '0xcalls',
+        txHash: null,
+        code: 'wallet_answer_unreadable',
+      });
+      const replay = await run(t);
+      expect(replay.structuredContent).toMatchObject({
+        state: 'deposit_sent',
+        refusal: { code: 'wallet_answer_unreadable' },
+      });
+      expect(replay.structuredContent?.url).toBeUndefined();
+    }
+  );
+
+  it('given approve_by is a second away on the process clock, when the session ends with no code, then no wallet error is recorded', async () => {
+    const { t } = await connected('1');
+    const closing: Ask = async () => {
+      const [row] = await swapsOf(t.connectionId);
+      vi.useFakeTimers({ toFake: ['Date'] });
+      vi.setSystemTime(row.approveBy!.getTime() - 1_000);
+      throw new Error('the wallet session ended');
+    };
+
+    try {
+      const { row } = await approve(t, closing);
+      expect(row).toMatchObject({ state: 'awaiting_owner', code: null });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it.each([
+    ['the owner rejects', 'owner_declined'],
+    ['another account signs in', 'wrong_account'],
+  ])('given the row already expired, when %s, then the row stays expired with code %s', async (_, code) => {
+    const { t } = await connected('1');
+    const expireThen =
+      (then: Ask): Ask =>
+      async (method, params) => {
+        const [row] = await swapsOf(t.connectionId);
+        await getDb().update(swaps).set({ state: 'expired' }).where(eq(swaps.id, row.id));
+        return then(method, params);
+      };
+    const answer =
+      code === 'wrong_account'
+        ? expireThen(async () => ['0x00000000000000000000000000000000000000aa'])
+        : expireThen(async () => {
+            throw rejected(4001);
+          });
+
+    const { row } = await approve(t, answer);
+
+    expect(row).toMatchObject({ state: 'expired', code, callsId: null });
+  });
+
+  it('B10: given a swap awaiting the owner, when approve_by passes with no answer and the session ends, then the row keeps awaiting_owner with no code', async () => {
+    const { t } = await connected('1');
+    const timedOut: Ask = async () => {
+      const [row] = await swapsOf(t.connectionId);
+      vi.useFakeTimers({ toFake: ['Date'] });
+      vi.setSystemTime(row.approveBy!);
+      throw new Error('timed out waiting for the wallet');
+    };
+
+    try {
+      const { row } = await approve(t, timedOut);
+      expect(row).toMatchObject({ state: 'awaiting_owner', code: null, callsId: null });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  const gone: OpenWallet = async (chainId, until) => {
+    opened.push({ chainId, until, args: 2 });
+    const ended = Promise.reject(new Error('the wallet session ended'));
+    ended.catch(() => undefined);
+    return { url: 'http://keys.test/cli-bridge?session=gone', run: () => ended, close: () => undefined };
+  };
+
+  it('B12: given a swap awaiting the owner whose session is gone, when the same key comes, then a new link for the same quote, kept while its session lives', async () => {
+    const { t } = await connected('1');
+    await run(t, {}, gone);
+    await walletsSettled();
+    const paid = paidHits().length;
+
+    const again = await run(t);
+    const third = await run(t);
+
+    const [row] = await swapsOf(t.connectionId);
+    expect(opened).toHaveLength(2);
+    expect(opened[1].until).toEqual(row.approveBy);
+    expect(again.structuredContent).toMatchObject({ state: 'awaiting_owner', url: row.walletUrl });
+    expect(row.walletUrl).not.toBe('http://keys.test/cli-bridge?session=gone');
+    expect(third.structuredContent?.url).toBe(row.walletUrl);
+    expect(paidHits()).toHaveLength(paid);
+  });
+
+  it('B12: given a swap whose session is gone, when the same key comes while the pool is full, then wallet_busy and the row is unchanged', async () => {
+    const { t } = await connected('1');
+    await run(t, {}, gone);
+    await walletsSettled();
+    const [before] = await swapsOf(t.connectionId);
+
+    const again = await run(t, {}, recordingWallet(true));
+
+    expect(again[gateCode]).toBe('wallet_busy');
+    expect((await swapsOf(t.connectionId))[0]).toEqual(before);
+  });
+
+  it('B33: given the row expired on the database clock, when the wallet then answers with a calls id, then the row is deposit_sent with that id', async () => {
+    const { t } = await connected('1');
+    const lateAnswer: Ask = async () => {
+      const [row] = await swapsOf(t.connectionId);
+      await getDb().update(swaps).set({ state: 'expired' }).where(eq(swaps.id, row.id));
+      return { id: '0xlate', chainId: '0x14a34' };
+    };
+
+    const { row } = await approve(t, sendingAs(t.account, lateAnswer));
+
+    expect(row).toMatchObject({ state: 'deposit_sent', callsId: '0xlate', txHash: HASH });
+  });
+});
+
 describe('a held quote whose link did not open', () => {
   it('given wallet_busy on a swap with no key, when another key asks, then swap_in_progress names the key, and that key opens the link without paying again', async () => {
     const { t } = await connected('1');
@@ -741,6 +1206,46 @@ describe('a held quote whose link did not open', () => {
     } finally {
       await getDb().execute(sql.raw('drop trigger steal_swap_lease on swaps'));
       await getDb().execute(sql.raw('drop function steal_swap_lease()'));
+    }
+  });
+});
+
+describe('a link the caller never hands out', () => {
+  it('given another call takes the swap over while the wallet opens, when the link would be kept, then in_progress and the opened session is closed', async () => {
+    const { t } = await connected('1');
+    const takenWhileOpening: OpenWallet = async (chainId, until) => {
+      await getDb().update(swaps).set({ leaseToken: 'stolen' }).where(eq(swaps.connectionId, t.connectionId));
+      return recordingWallet()(chainId, until);
+    };
+
+    const result = await run(t, {}, takenWhileOpening);
+
+    expect(result[gateCode]).toBe('in_progress');
+    expect(opened).toHaveLength(1);
+    expect(closed).toEqual(['http://keys.test/cli-bridge?session=unopened-1']);
+    expect((await swapsOf(t.connectionId))[0]).toMatchObject({ state: 'quoting', walletUrl: null });
+  });
+
+  it('given the database fails while the link is kept, when the wallet already opened, then the error surfaces and the session is closed', async () => {
+    const { t } = await connected('1');
+    await getDb().execute(
+      sql.raw(`create function refuse_wallet_url() returns trigger language plpgsql as $$ begin
+        if new.wallet_url is not null then raise exception 'connection lost'; end if;
+        return new; end $$`)
+    );
+    await getDb().execute(
+      sql.raw(
+        'create trigger refuse_wallet_url before update on swaps for each row execute function refuse_wallet_url()'
+      )
+    );
+
+    try {
+      await expect(run(t)).rejects.toThrow();
+      expect(opened).toHaveLength(1);
+      expect(closed).toHaveLength(1);
+    } finally {
+      await getDb().execute(sql.raw('drop trigger refuse_wallet_url on swaps'));
+      await getDb().execute(sql.raw('drop function refuse_wallet_url()'));
     }
   });
 });

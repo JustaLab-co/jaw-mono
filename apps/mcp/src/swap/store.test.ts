@@ -14,8 +14,11 @@ import {
   isDepositAddressTaken,
   move,
   nextAttempt,
+  markSendStarted,
   recordCallsId,
   release,
+  reopenLink,
+  SEND_STARTED,
   SWAP_TRANSITIONS,
   writeHeld,
   type SwapLease,
@@ -543,12 +546,30 @@ describe('the swaps guard', () => {
     ['deposit address', { depositAddress: freshAddress() }],
     ['fenced quote', { quoteFenced: 'other' }],
     ['paid at', { paidAt: new Date(0) }],
-    ['wallet url', { walletUrl: 'https://keys.test/cli-bridge#other' }],
     ['approve by', { approveBy: new Date(0) }],
     ['quote', { quote: { inputAmount: '1' } }],
   ])('given an awaiting_owner row, when its %s is rewritten, then the database refuses', async (_, set) => {
     const row = await rowIn('awaiting_owner');
     expect(await refusalOf(getDb().update(swaps).set(set).where(eq(swaps.id, row.id)))).toMatch(/are written once/);
+  });
+
+  it.each([
+    ['awaiting_owner row holding the send marker', 'awaiting_owner', { code: SEND_STARTED }],
+    ['expired row', 'expired', { code: null }],
+  ] as const)('given an %s, when its wallet url is rewritten, then the database refuses', async (_, state, set) => {
+    const row = await rowIn(state);
+    await getDb().update(swaps).set(set).where(eq(swaps.id, row.id));
+    const write = getDb()
+      .update(swaps)
+      .set({ walletUrl: 'https://keys.test/cli-bridge#other' })
+      .where(eq(swaps.id, row.id));
+    expect(await refusalOf(write)).toMatch(/are written once/);
+  });
+
+  it('given an awaiting_owner row with no send marker, when its wallet url is cleared, then the database refuses', async () => {
+    const row = await rowIn('awaiting_owner');
+    const write = getDb().update(swaps).set({ walletUrl: null }).where(eq(swaps.id, row.id));
+    expect(await refusalOf(write)).not.toBe('written');
   });
 
   it('given a deposit_sent row, when its calls id is rewritten, then the database refuses', async () => {
@@ -698,4 +719,64 @@ describe.skipIf(!TEST_PG_URL)('on Postgres, the sweep racing the quote payment (
       expect((await rowOf(old.row.id)).state).toBe('quoting');
     }
   );
+});
+
+describe('the send marker and a reopened link', () => {
+  it('given an awaiting_owner row before approve_by with no code, when the send starts, then it holds the marker', async () => {
+    const row = await awaiting(await newConnection());
+    expect(await markSendStarted(row.connectionId, row.id)).toMatchObject({
+      state: 'awaiting_owner',
+      code: SEND_STARTED,
+    });
+  });
+
+  it.each([
+    ['approve_by has passed', sql`now() - interval '1 second'`, { code: null }],
+    ['it already holds the marker', undefined, { code: SEND_STARTED }],
+    ['it holds a wallet error', undefined, { code: 'wallet_error:5710' }],
+  ])(
+    'given an awaiting_owner row where %s, when the send starts, then no marker is written',
+    async (_, approveBy, set) => {
+      const row = await awaiting(await newConnection(), approveBy);
+      await getDb().update(swaps).set(set).where(eq(swaps.id, row.id));
+      expect(await markSendStarted(row.connectionId, row.id)).toBeUndefined();
+    }
+  );
+
+  it('given an expired row, when the send starts, then no marker is written', async () => {
+    const row = await awaiting(await newConnection());
+    await move(row.connectionId, row.id, ['awaiting_owner'], 'expired');
+    expect(await markSendStarted(row.connectionId, row.id)).toBeUndefined();
+  });
+
+  it('given an awaiting_owner row with a wallet error, when its link reopens, then the new url is written and the code cleared', async () => {
+    const row = await awaiting(await newConnection());
+    await getDb().update(swaps).set({ code: 'wallet_error:5710' }).where(eq(swaps.id, row.id));
+    expect(await reopenLink(row, 'https://keys.test/cli-bridge#new')).toMatchObject({
+      state: 'awaiting_owner',
+      walletUrl: 'https://keys.test/cli-bridge#new',
+      code: null,
+    });
+  });
+
+  it.each([
+    ['it holds the send marker', { code: SEND_STARTED }],
+    ['another call reopened it first', { walletUrl: 'https://keys.test/cli-bridge#first' }],
+    ['approve_by has passed', { approveBy: sql`now() - interval '1 second'` }],
+  ])('given an awaiting_owner row where %s, when its link reopens, then nothing is written', async (_, set) => {
+    const row = await awaiting(await newConnection());
+    await getDb().execute(sql`alter table swaps disable trigger swaps_guard`);
+    await getDb().update(swaps).set(set).where(eq(swaps.id, row.id));
+    await getDb().execute(sql`alter table swaps enable trigger swaps_guard`);
+    expect(await reopenLink(row, 'https://keys.test/cli-bridge#new')).toBeUndefined();
+  });
+
+  it('given a send marker, when the calls id is recorded, then the marker is cleared', async () => {
+    const row = await awaiting(await newConnection());
+    await markSendStarted(row.connectionId, row.id);
+    expect(await recordCallsId(row.connectionId, row.id, '0xcalls')).toMatchObject({
+      state: 'deposit_sent',
+      code: null,
+    });
+  });
 });

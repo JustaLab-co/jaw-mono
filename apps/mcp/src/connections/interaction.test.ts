@@ -48,7 +48,7 @@ function heldWallets() {
   released.catch(() => undefined);
   const openWallet: OpenWallet = async () => {
     opened++;
-    return { url: `http://keys.test/cli-bridge?session=h${opened}`, run: () => released };
+    return { url: `http://keys.test/cli-bridge?session=h${opened}`, run: () => released, close: () => undefined };
   };
   return { openWallet, opened: () => opened, release: async () => (release(), await new Promise(setImmediate)) };
 }
@@ -235,7 +235,11 @@ describe('connecting through the owner wallet', () => {
     let opened = 0;
     const waiting: OpenWallet = async () => {
       opened++;
-      return { url: `http://keys.test/cli-bridge?session=s${opened}`, run: () => new Promise(() => {}) };
+      return {
+        url: `http://keys.test/cli-bridge?session=s${opened}`,
+        run: () => new Promise(() => {}),
+        close: () => undefined,
+      };
     };
     setWallet({ openWallet: waiting });
     const browser = new Browser();

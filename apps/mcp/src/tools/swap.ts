@@ -7,11 +7,12 @@ import { config } from '@/connections/config';
 import { ownerRelay, WalletBusy, type OpenWallet, type Wallet } from '@/connections/relay';
 import { countHit, isPaymentsPaused } from '@/db/settings';
 import { currentGrant } from '@/grants/store';
-import { RATE_WINDOW_MS } from '@/lib/edge';
+import { errorLabel, log, RATE_WINDOW_MS } from '@/lib/edge';
 import { reply } from '@/lib/fence';
 import type { PayDeps } from '@/payments/pay';
 import { gateCode, RAISE } from '@/payments/render';
 import { findPayment, stateOf } from '@/payments/store';
+import { approve } from '@/swap/approve';
 import { isSupportedOriginChain, type CheckedQuote } from '@/swap/check';
 import { quote, swapRequest } from '@/swap/quote';
 import {
@@ -21,6 +22,8 @@ import {
   nextStepPays,
   releaseQuoted,
   renewQuoted,
+  reopenLink,
+  SEND_STARTED,
   type SwapLease,
   type SwapRow,
 } from '@/swap/store';
@@ -107,6 +110,7 @@ type SwapResult = {
 export interface SwapDeps {
   openWallet: OpenWallet;
   pay?: PayDeps;
+  pollMs?: number;
 }
 
 const DEFAULTS: SwapDeps = { openWallet: ownerRelay };
@@ -116,6 +120,12 @@ const refuse = (code: string, text: string): SwapResult => ({
   isError: true,
   [gateCode]: code,
 });
+
+const walletBusy = (key: string) =>
+  refuse(
+    'wallet_busy',
+    `Too many owners are approving right now. Send idempotencyKey ${key} again with the same input in a minute; the quote is kept and not paid again.`
+  );
 
 const takenOver = (key: string) =>
   refuse('in_progress', `Another call took this swap over. Send idempotencyKey ${key} again with the same input.`);
@@ -161,7 +171,17 @@ function summaryOf(row: SwapRow): string {
     case 'quote_failed':
     case 'quote_rejected':
       return `No swap: ${row.state} (${row.code}). Nothing was deposited.`;
+    case 'owner_declined':
+      return row.code === 'wrong_account'
+        ? 'The owner signed in with another account than this connection. Nothing was sent.'
+        : 'The owner declined the deposit in the wallet. Nothing was sent.';
     case 'awaiting_owner': {
+      if (row.code === SEND_STARTED) {
+        return (
+          'The wallet may have sent the deposit, and no link opens again for this quote. ' +
+          `Do not swap these funds again yet: follow it with jaw_swap_status and ${row.quoteId}.`
+        );
+      }
       const token = row.originToken === zeroAddress ? 'the native coin' : row.originToken;
       return (
         `Ask the account owner to open ${row.walletUrl} before ${row.approveBy?.toISOString()} and approve one transfer ` +
@@ -184,7 +204,7 @@ async function answer(row: SwapRow): Promise<SwapResult> {
     idempotencyKey: row.idempotencyKey,
     quoteId: row.quoteId ?? undefined,
     state: row.state,
-    url: row.state === 'awaiting_owner' ? row.walletUrl : undefined,
+    url: row.state === 'awaiting_owner' && !row.code ? row.walletUrl : undefined,
     approveBy: row.approveBy?.toISOString(),
     origin: { chainId: row.originChainId, token: row.originToken, amount: row.amount },
     destination: {
@@ -208,7 +228,7 @@ async function answer(row: SwapRow): Promise<SwapResult> {
   return reply(out, ...(out.response ?? []).map((text) => ({ type: 'text' as const, text })));
 }
 
-async function openLink(t: Tenant, lease: SwapLease, key: string, openWallet: OpenWallet): Promise<SwapResult> {
+async function openLink(t: Tenant, lease: SwapLease, key: string, deps: SwapDeps): Promise<SwapResult> {
   const stale = await failIfStale(lease);
   if (stale) return answer(stale);
   const held = await renewQuoted(lease);
@@ -217,23 +237,55 @@ async function openLink(t: Tenant, lease: SwapLease, key: string, openWallet: Op
   const approveBy = approveByOf(held.paidAt, config().swapQuoteTtlSec);
   let wallet: Wallet;
   try {
-    wallet = await openWallet(t.chainId, approveBy);
+    wallet = await deps.openWallet(t.chainId, approveBy);
   } catch (err) {
     if (!(err instanceof WalletBusy)) throw err;
     await releaseQuoted(lease, { code: 'wallet_busy' });
-    return refuse(
-      'wallet_busy',
-      `Too many owners are approving right now. Send idempotencyKey ${key} again with the same input in a minute; the quote is kept and not paid again.`
-    );
+    return walletBusy(key);
   }
-  const waiting = await releaseQuoted(lease, {
-    state: 'awaiting_owner',
-    code: null,
-    walletUrl: wallet.url,
-    approveBy,
-  });
+  let waiting: SwapRow | undefined;
+  try {
+    waiting = await releaseQuoted(lease, { state: 'awaiting_owner', code: null, walletUrl: wallet.url, approveBy });
+  } finally {
+    if (!waiting) wallet.close();
+  }
   if (!waiting) return takenOver(key);
+  follow(t, waiting, wallet, deps);
   return answer(waiting);
+}
+
+async function reopen(t: Tenant, row: SwapRow, key: string, deps: SwapDeps): Promise<SwapResult> {
+  let wallet: Wallet;
+  try {
+    wallet = await deps.openWallet(t.chainId, row.approveBy!);
+  } catch (err) {
+    if (!(err instanceof WalletBusy)) throw err;
+    return walletBusy(key);
+  }
+  let waiting: SwapRow | undefined;
+  try {
+    waiting = await reopenLink(row, wallet.url);
+  } finally {
+    if (!waiting) wallet.close();
+  }
+  if (!waiting) return takenOver(key);
+  follow(t, waiting, wallet, deps);
+  return answer(waiting);
+}
+
+const sessionsInThisProcess = new Set<string>();
+
+function follow(t: Tenant, row: SwapRow, wallet: Wallet, deps: SwapDeps): void {
+  sessionsInThisProcess.add(row.id);
+  void wallet
+    .run((ask) => approve(ask, row, t.account, deps.pollMs))
+    .catch((err: unknown) => log('warn', { msg: 'swap approval ended', swapId: row.id, error: errorLabel(err) }))
+    .finally(() => sessionsInThisProcess.delete(row.id));
+}
+
+function replay(t: Tenant, row: SwapRow, key: string, deps: SwapDeps): Promise<SwapResult> {
+  const linkDead = row.state === 'awaiting_owner' && row.code !== SEND_STARTED && !sessionsInThisProcess.has(row.id);
+  return linkDead ? reopen(t, row, key, deps) : answer(row);
 }
 
 export async function swap(t: Tenant, input: SwapToolInput, deps: SwapDeps = DEFAULTS): Promise<SwapResult> {
@@ -259,12 +311,12 @@ export async function swap(t: Tenant, input: SwapToolInput, deps: SwapDeps = DEF
           'Send that key with the same input to retry it, follow it with jaw_swap_status, or wait until it ends.'
       );
     case 'stored':
-      return answer(claim.row);
+      return replay(t, claim.row, key, deps);
   }
   const step = await quote(t, claim, deps.pay);
   if (step.kind === 'lease_lost') return takenOver(key);
   if (step.row.state !== 'quoting' || step.row.quoteId === null) return answer(step.row);
-  return openLink(t, { connectionId: t.connectionId, id: step.row.id, token: claim.token }, key, deps.openWallet);
+  return openLink(t, { connectionId: t.connectionId, id: step.row.id, token: claim.token }, key, deps);
 }
 
 export function registerSwapTools(server: McpServer) {
