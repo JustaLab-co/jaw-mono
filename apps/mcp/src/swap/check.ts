@@ -71,7 +71,7 @@ export async function checkQuote(
   const [tx] = quote.transactions;
   if (tx.chainId !== request.originChainId) return fail('tx_chain');
 
-  if (quote.inputAmount !== request.amount) return fail('input_amount');
+  if (!baseUnits.test(request.amount) || quote.inputAmount !== request.amount) return fail('input_amount');
   const { expectedOutputAmount, minOutputAmount } = quote;
   if (!baseUnits.test(expectedOutputAmount) || !baseUnits.test(minOutputAmount)) return fail('output_amount');
   if (BigInt(minOutputAmount) > BigInt(expectedOutputAmount)) return fail('output_amount');
@@ -82,9 +82,9 @@ export async function checkQuote(
 
   const native = isAddressEqual(request.originToken, zeroAddress);
   const call: DepositCall = native
-    ? { chainId: tx.chainId, to: depositAddress, data: '0x', value: request.amount }
+    ? { chainId: request.originChainId, to: depositAddress, data: '0x', value: request.amount }
     : {
-        chainId: tx.chainId,
+        chainId: request.originChainId,
         to: getAddress(request.originToken),
         data: encodeFunctionData({
           abi: erc20Abi,
@@ -102,7 +102,7 @@ export async function checkQuote(
   const feesUsd = quote.fees.totalUsd;
   return {
     ok: true,
-    quoteId: quote.quoteId,
+    quoteId: `aurora:${depositAddress}`,
     depositAddress,
     call,
     quote: {

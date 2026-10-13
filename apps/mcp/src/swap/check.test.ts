@@ -4,7 +4,7 @@ import { checkQuote, isSupportedOriginChain, type QuoteRequest } from './check';
 
 const account = getAddress('0x1111111111111111111111111111111111111111');
 const usdc = getAddress('0x833589fcd6edb6e08f4c7c32d4f71b54bda02913');
-const depositAddress = getAddress('0x2222222222222222222222222222222222222222');
+const depositAddress = getAddress('0x5f6a2b3c4d5e6f708192a3b4c5d6e7f8091a2b3c');
 const elsewhere = getAddress('0x3333333333333333333333333333333333333333');
 
 const erc20Request: QuoteRequest = { originChainId: 8453, originToken: usdc, amount: '1000000', account };
@@ -14,28 +14,46 @@ const transfer = (to: Address, amount: string) =>
   encodeFunctionData({ abi: erc20Abi, functionName: 'transfer', args: [to, BigInt(amount)] });
 
 function backendQuoteJson(request: QuoteRequest, deposit: Address = depositAddress) {
-  const native = request.originToken === zeroAddress;
+  const aurora = {
+    depositAddress: deposit.toLowerCase(),
+    amountIn: request.amount,
+    amountInUsd: '1.000150',
+    amountOut: '999000',
+    amountOutUsd: '0.998840',
+    minAmountOut: '990000',
+    timeEstimate: 30,
+  };
+  const checksummed = getAddress(aurora.depositAddress);
+  const native = request.originToken.toLowerCase() === zeroAddress;
   const quote = {
-    quoteId: `aurora:${deposit}`,
+    quoteId: `aurora:${checksummed}`,
     provider: 'aurora',
-    inputAmount: request.amount,
-    expectedOutputAmount: '999000',
-    minOutputAmount: '990000',
-    expectedFillTimeSec: 30,
-    fees: { totalUsd: '0.012345', originGasUsd: undefined },
+    inputAmount: aurora.amountIn,
+    expectedOutputAmount: aurora.amountOut,
+    minOutputAmount: aurora.minAmountOut,
+    expectedFillTimeSec: aurora.timeEstimate,
+    fees: {
+      totalUsd: (Number(aurora.amountInUsd) - Number(aurora.amountOutUsd)).toFixed(6),
+      originGasUsd: undefined,
+      destinationGasUsd: undefined,
+      relayerUsd: undefined,
+      appFeeUsd: undefined,
+    },
     transactions: [
-      native
-        ? { chainId: request.originChainId, to: deposit, data: '0x', value: request.amount, description: 'deposit' }
-        : {
-            chainId: request.originChainId,
-            to: getAddress(request.originToken),
-            data: transfer(deposit, request.amount),
-            value: '0',
-            description: 'deposit',
-          },
+      {
+        chainId: request.originChainId,
+        to: native ? checksummed : getAddress(request.originToken),
+        data: native ? '0x' : transfer(checksummed, aurora.amountIn),
+        value: native ? aurora.amountIn : '0',
+        gas: undefined,
+        maxFeePerGas: undefined,
+        maxPriorityFeePerGas: undefined,
+        description: 'deposit',
+      },
     ],
   };
-  return JSON.parse(JSON.stringify(quote));
+  const envelope = { statusCode: 200, result: { data: quote, error: null } };
+  return JSON.parse(JSON.stringify(envelope)).result.data;
 }
 
 const unused = async () => false;
@@ -47,7 +65,7 @@ async function rejected(request: QuoteRequest, body: unknown) {
 }
 
 describe('checkQuote', () => {
-  it('Given an ERC-20 quote as the backend builds it, When checked, Then it returns the transfer to show the owner', async () => {
+  it('Given an ERC-20 quote as the backend Aurora mapper builds it, When checked, Then it returns the transfer to show the owner', async () => {
     const result = await checkQuote(erc20Request, backendQuoteJson(erc20Request), unused);
 
     expect(result).toEqual({
@@ -60,12 +78,12 @@ describe('checkQuote', () => {
         expectedOutputAmount: '999000',
         minOutputAmount: '990000',
         expectedFillTimeSec: 30,
-        feesUsd: '0.012345',
+        feesUsd: '0.001310',
       },
     });
   });
 
-  it('Given a native quote as the backend builds it, When checked, Then it returns the plain send to the deposit address', async () => {
+  it('Given a native quote as the backend Aurora mapper builds it, When checked, Then it returns the plain send to the deposit address', async () => {
     const result = await checkQuote(nativeRequest, backendQuoteJson(nativeRequest), unused);
 
     expect(result).toMatchObject({
@@ -203,6 +221,30 @@ describe('checkQuote', () => {
     body.inputAmount = '999999';
 
     expect(await rejected(erc20Request, body)).toBe('input_amount');
+  });
+
+  it.each(['0', '1.5', '-1', '+1', '01', '1e6', ''])(
+    'B8.11 Given a requested amount %j that is not positive base units, When checked, Then it fails with input_amount and does not throw',
+    async (amount) => {
+      for (const origin of [erc20Request, nativeRequest]) {
+        const request = { ...origin, amount };
+        const body = backendQuoteJson(origin);
+        body.inputAmount = amount;
+        body.transactions[0].value = origin === nativeRequest ? amount : '0';
+        if (amount === '0' && origin === erc20Request) body.transactions[0].data = transfer(depositAddress, '0');
+
+        expect(await rejected(request, body)).toBe('input_amount');
+      }
+    }
+  );
+
+  it('B8.3 Given a quoteId with the deposit address in lowercase, When checked, Then the checked quote carries it checksummed', async () => {
+    const body = backendQuoteJson(erc20Request);
+    body.quoteId = `aurora:${depositAddress.toLowerCase()}`;
+
+    const result = await checkQuote(erc20Request, body, unused);
+
+    expect(result).toMatchObject({ ok: true, quoteId: `aurora:${depositAddress}`, depositAddress });
   });
 
   it('B8.12 Given output amounts that are not base units, zero, or a minimum above the expected output, When checked, Then it fails with output_amount', async () => {
