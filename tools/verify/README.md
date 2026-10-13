@@ -66,8 +66,8 @@ Seller routes (all Base Sepolia USDC unless noted, `payTo` 0x2222...2222): `/exa
 
 The seller also answers the three routes of JAW's swap backend that the hosted server calls, in the backend's `{ statusCode, result: { data, error } }` envelope. Point `JAW_MCP_SWAP_URL` at `http://host.docker.internal:$PORT/proxy/v2`.
 
-- `GET /proxy/v2/swap/quote`: a query that fails validation gets its 400 unpaid; a valid one gets a 402 for 5000 USDC base units on `eip155:84532`. A paid request answers a quote built like the backend's Aurora mapper: `quoteId` is `aurora:<depositAddress>` and the one `deposit` transaction is `transfer(depositAddress, amount)` on the origin token, or the amount sent to the deposit address for the zero address. The deposit address is the last 20 bytes of the keccak of the payment nonce, so every paid quote gets a new one and a test that signed the payment can compute it. A resent proof answers 402 unless it carries the same `Idempotency-Key`, which replays the first answer.
-- `POST /proxy/v2/move-asset/deposit/submit` and `GET /proxy/v2/move-asset/deposit/status`: free, `provider=aurora` (any other answers 501). Status is `PENDING_DEPOSIT` until a submit, which answers `KNOWN_DEPOSIT_TX`; the reads after it give `PROCESSING`, then `SUCCESS` for good. A state that is not one of the seven comes back as `PROCESSING` with `rawState`, as the mapper does. Once past `PENDING_DEPOSIT`, status carries the submitted hash, or a made-up one when the wallet never submitted.
+- `GET /proxy/v2/swap/quote`: an unpaid request gets the 402 even with an invalid query, as the backend validates after the challenge; a paid request with an invalid query gets its 400. A valid unpaid one gets a 402 for 5000 USDC base units on `eip155:84532`. A paid request answers a quote built like the backend's Aurora mapper: `quoteId` is `aurora:<depositAddress>` and the one `deposit` transaction is `transfer(depositAddress, amount)` on the origin token, or the amount sent to the deposit address for the zero address. The deposit address is the last 20 bytes of the keccak of the payment nonce, so every paid quote gets a new one and a test that signed the payment can compute it. A resent proof answers 402 unless it carries the same `Idempotency-Key`, which replays the first answer.
+- `POST /proxy/v2/move-asset/deposit/submit` and `GET /proxy/v2/move-asset/deposit/status`: free, `provider=aurora` (any other answers 501). Status is `PENDING_DEPOSIT` until a submit, which answers `KNOWN_DEPOSIT_TX`; the reads after it give `PROCESSING`, then `SUCCESS` for good. A state that is not one of the seven comes back as `PROCESSING` with `rawState`, as the mapper does. Submit answers HTTP 201 with `statusCode: 200` in the body, as Nest does without `@HttpCode`. Status carries `txHash` only after a submit.
 
 `POST {SELLER}/_swap` changes the stub until the next call, with any of:
 
@@ -76,6 +76,9 @@ The seller also answers the three routes of JAW's swap backend that the hosted s
 - `submitFails=N`: the next N submits answer 500, the backend's answer when Aurora refuses one.
 - `state=<STATE>`, with `depositAddress=<address>` for one deposit or without it for all: status and submit answer that state. Empty goes back to the scripted walk.
 - `expire=<address>`: the quote expired, so submits for it answer 500 and status stays `PENDING_DEPOSIT`.
+- A JSON body of `{ "reset": true }`: every switch above goes back to its default. The seller also starts from the defaults.
+
+The stub is EVM-only: the backend also accepts Solana deposit addresses and signatures, and the stub refuses them with a 400.
 
 Every request lands in `seller.log`: `challenge`, `payment`, `spent`, `replay`, `quote`, `refused`, `submit`, `status` and `control` rows. `node --test tools/verify/seller.test.mjs` drives each route and switch; `selftest.sh` runs it.
 

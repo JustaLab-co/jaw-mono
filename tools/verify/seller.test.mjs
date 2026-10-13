@@ -135,14 +135,19 @@ test('given a network override, the 402 advertises it until reset', async () => 
   assert.equal(unb64(again.headers.get('payment-required')).accepts[0].network, 'eip155:84532');
 });
 
-test('given an invalid query, the quote answers 400 unpaid in the backend envelope', async () => {
+test('given an invalid query and no payment, the quote still answers the 402 challenge', async () => {
   const res = await fetch(quoteUrl({ ...ERC20_QUERY, amount: '0' }));
+  assert.equal(res.status, 402);
+  assert.equal(unb64(res.headers.get('payment-required')).accepts[0].amount, '5000');
+});
+
+test('given an invalid query and a payment, the quote answers 400 in the backend envelope', async () => {
+  const { res, body } = await paidQuote({ ...ERC20_QUERY, amount: '0' });
   assert.equal(res.status, 400);
-  const body = await res.json();
   assert.equal(body.statusCode, 400);
   assert.equal(body.result.data, null);
   assert.ok(body.result.error.some((m) => m.startsWith('amount ')));
-  assert.equal(res.headers.get('payment-required'), null);
+  assert.equal(res.headers.get('payment-response'), null);
 });
 
 test('given a paid ERC-20 quote, the single deposit is transfer(depositAddress, amount) on the token', async () => {
@@ -292,6 +297,26 @@ const submit = async (body) => {
   });
   return { res, body: await res.json() };
 };
+const DEFAULTS = { network: 'eip155:84532', quote: 'ok', deposit: 'PENDING_DEPOSIT', submit: 201 };
+async function defaults(at = base) {
+  const challenge = await fetch(`${at}/proxy/v2/swap/quote?${new URLSearchParams(ERC20_QUERY)}`);
+  const network = unb64(challenge.headers.get('payment-required')).accepts[0].network;
+  const { header } = await proof();
+  const paid = await fetch(`${at}/proxy/v2/swap/quote?${new URLSearchParams(ERC20_QUERY)}`, {
+    headers: { 'PAYMENT-SIGNATURE': header },
+  });
+  const quote = (await paid.json()).result.data?.transactions?.length === 1 ? 'ok' : 'broken';
+  const address = getAddress('0x' + 'ab'.repeat(20));
+  const status = await fetch(
+    `${at}/proxy/v2/move-asset/deposit/status?${new URLSearchParams({ provider: 'aurora', depositAddress: address })}`
+  );
+  const sent = await fetch(`${at}/proxy/v2/move-asset/deposit/submit`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ provider: 'aurora', depositAddress: address, txHash: '0x' + 'cd'.repeat(32) }),
+  });
+  return { network, quote, deposit: (await status.json()).result.data.state, submit: sent.status };
+}
 const TX_HASH = '0x' + 'cd'.repeat(32);
 
 test('given a quoted deposit, status is PENDING_DEPOSIT until submit, then walks to SUCCESS', async () => {
@@ -303,7 +328,8 @@ test('given a quoted deposit, status is PENDING_DEPOSIT until submit, then walks
     result: { data: { provider: 'aurora', depositAddress: deposit, state: 'PENDING_DEPOSIT' }, error: null },
   });
   const sent = await submit({ provider: 'aurora', depositAddress: deposit, txHash: TX_HASH });
-  assert.equal(sent.res.status, 200);
+  assert.equal(sent.res.status, 201);
+  assert.equal(sent.body.statusCode, 200);
   assert.deepEqual(sent.body.result.data, {
     provider: 'aurora',
     depositAddress: deposit,
@@ -316,12 +342,12 @@ test('given a quoted deposit, status is PENDING_DEPOSIT until submit, then walks
   assert.equal((await statusOf(deposit)).body.result.data.txHash, TX_HASH);
 });
 
-test('given a pinned state, status answers it with a hash the wallet never sent', async () => {
+test('given a pinned state and no submit, status answers it without a txHash', async () => {
   const deposit = await freshDeposit();
   await control({ state: 'PROCESSING', depositAddress: deposit });
   const { body } = await statusOf(deposit);
   assert.equal(body.result.data.state, 'PROCESSING');
-  assert.match(body.result.data.txHash, /^0x[0-9a-f]{64}$/);
+  assert.equal('txHash' in body.result.data, false);
   await control({ state: 'REFUNDED', depositAddress: deposit });
   assert.equal((await statusOf(deposit)).body.result.data.state, 'REFUNDED');
 });
@@ -341,7 +367,7 @@ test('given submitFails=1, the first submit fails and the second goes through', 
   assert.equal(first.res.status, 500);
   assert.equal((await statusOf(deposit)).body.result.data.state, 'PENDING_DEPOSIT');
   const second = await submit({ provider: 'aurora', depositAddress: deposit, txHash: TX_HASH });
-  assert.equal(second.res.status, 200);
+  assert.equal(second.res.status, 201);
 });
 
 test('given an expired quote, submit fails and status stays PENDING_DEPOSIT', async () => {
@@ -363,6 +389,29 @@ test('given a provider other than aurora, submit and status answer 501', async (
   const deposit = await freshDeposit();
   assert.equal((await submit({ provider: 'relay', depositAddress: deposit, txHash: TX_HASH })).res.status, 501);
   assert.equal((await statusOf(deposit, 'relay')).res.status, 501);
+});
+
+test('given reset, the control state goes back to its defaults', async () => {
+  await control({ mode: 'two-tx', network: 'eip155:8453', submitFails: '3', state: 'REFUNDED' });
+  const res = await fetch(`${base}/_swap`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ reset: true }),
+  });
+  assert.equal(res.status, 204);
+  assert.deepEqual(await defaults(), DEFAULTS);
+});
+
+test('given a fresh seller, the control state starts from the defaults', async () => {
+  const port = await freePort();
+  const file = path.join(dir, 'fresh.log');
+  const fresh = spawn('node', [path.join(here, 'seller.mjs'), repo, String(port), file], { stdio: 'ignore' });
+  try {
+    for (let i = 0; i < 50 && !fs.existsSync(file); i++) await new Promise((r) => setTimeout(r, 100));
+    assert.deepEqual(await defaults(`http://localhost:${port}`), DEFAULTS);
+  } finally {
+    fresh.kill();
+  }
 });
 
 test('every swap route and control call is logged', () => {

@@ -207,15 +207,16 @@ const MODES = new Set([
   ...Object.keys(QUOTE_TAMPERS),
 ]);
 
-const swap = { mode: '', network: SEPOLIA, submitFails: 0, pinned: '', lastDeposit: null };
+const freshSwap = () => ({ mode: '', network: SEPOLIA, submitFails: 0, pinned: '', lastDeposit: null });
+const swap = freshSwap();
 const quoteRoute = { scheme: 'exact', amount: '5000', spent: new Set() };
 const replays = new Map();
 const deposits = new Map();
 
-const answer = (res, status, data, error, headers = {}) =>
+const answer = (res, status, data, error, headers = {}, statusCode = status) =>
   res
     .writeHead(status, { 'content-type': 'application/json', ...headers })
-    .end(JSON.stringify({ statusCode: status, result: { data, error } }));
+    .end(JSON.stringify({ statusCode, result: { data, error } }));
 
 function track(address) {
   const key = address.toLowerCase();
@@ -291,7 +292,7 @@ function paidQuote(query, nonce) {
 async function quote(req, res, url) {
   const query = Object.fromEntries(url.searchParams);
   const errors = quoteErrors(query);
-  if (errors.length) {
+  if (errors.length && req.headers['payment-signature']) {
     log({ path: QUOTE, event: 'refused', status: 400 });
     return answer(res, 400, null, errors);
   }
@@ -321,8 +322,7 @@ function depositStatus(address, t, raw) {
   if (KNOWN_STATES.has(upper)) state = upper;
   else if (raw.trim() === '') state = 'PENDING_DEPOSIT';
   const data = { provider: 'aurora', depositAddress: getAddress(address), state };
-  const txHash = t.txHash ?? (state === 'PENDING_DEPOSIT' ? null : keccak256(data.depositAddress));
-  if (txHash) data.txHash = txHash;
+  if (t.txHash) data.txHash = t.txHash;
   if (state === 'PROCESSING' && !KNOWN_STATES.has(upper)) data.rawState = raw;
   return data;
 }
@@ -377,7 +377,7 @@ async function deposit(req, res, url, path) {
   t.reads = 0;
   const data = depositStatus(input.depositAddress, t, t.pinned || swap.pinned || 'KNOWN_DEPOSIT_TX');
   log({ path, event: 'submit', depositAddress: data.depositAddress, txHash: t.txHash, status: 200 });
-  answer(res, 200, data, null);
+  answer(res, 201, data, null, {}, 200);
 }
 
 function control(url) {
@@ -408,6 +408,18 @@ http
       return res.writeHead(204).end();
     }
     if (path === '/_swap' && req.method === 'POST') {
+      let text = '';
+      for await (const chunk of req) text += chunk;
+      let body = {};
+      try {
+        body = JSON.parse(text) ?? {};
+      } catch {}
+      if (body.reset === true) {
+        Object.assign(swap, freshSwap());
+        for (const t of deposits.values()) Object.assign(t, { pinned: '', expired: false });
+        log({ path, event: 'control', reset: true });
+        return res.writeHead(204).end();
+      }
       if (!control(url)) return res.writeHead(400).end();
       log({ path, event: 'control', ...Object.fromEntries(url.searchParams) });
       return res.writeHead(204).end();
