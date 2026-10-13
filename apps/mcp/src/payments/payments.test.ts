@@ -3,6 +3,7 @@ import { createServer } from 'node:http';
 import type { AddressInfo } from 'node:net';
 import type { ChainClients, TopUpExecutor } from '@jaw.id/agent';
 import { eq, sql } from 'drizzle-orm';
+import fc from 'fast-check';
 import {
   BlockNotFoundError,
   decodeFunctionData,
@@ -1365,4 +1366,69 @@ describe('the payments table', () => {
     await expect(getDb().execute(sql`update payments set state = 'pending' where id = ${id}`)).rejects.toThrow();
     expect((await rowOf(id)).state).toBe('signed');
   });
+});
+
+// The funding turn's chain calls resolve in whatever order the scheduler picks: balance
+// reads, the block number and the top-up send. `/budget` spends from the payer's float
+// as the seller settles, so a payment signed against float another one holds drives it
+// below zero. The database and the seller run outside the scheduler. A pause before
+// each release lets every payment reach its next chain call, so the scheduler picks
+// among them; no pause releases each call as it comes, which lets a signed payment
+// stay unsettled while the next one reads the float.
+const pauseThenRelease = async (release: () => Promise<void>) => {
+  await sleep(10);
+  await release();
+};
+
+describe('given concurrent payments whose chain calls resolve in any order', () => {
+  it('then none signs against float another holds, and none pays or refills past the daily budget', async () => {
+    await fc.assert(
+      fc.asyncProperty(
+        fc.scheduler(),
+        fc.integer({ min: 2, max: 4 }),
+        fc.constantFrom(0n, 300_000n),
+        fc.boolean(),
+        async (s, count, float, pause) => {
+          const { t } = await connected('0.6');
+          balances.set(t.sessionAddress.toLowerCase(), float);
+          seen.length = 0;
+          refills.length = 0;
+          // Reads the node rejects stay off the scheduler: its wrapper would leave the rejection unhandled.
+          const scheduledRead = s.scheduleFunction(node.readContract);
+          const scheduled: ChainClients = {
+            publicClient: () =>
+              ({
+                ...node,
+                getBlockNumber: s.scheduleFunction(node.getBlockNumber),
+                readContract: (read: Parameters<typeof node.readContract>[0]) =>
+                  read.functionName === 'balanceOf' || read.functionName === 'authorizationState'
+                    ? scheduledRead(read)
+                    : node.readContract(read),
+              }) as unknown as PublicClient,
+          };
+          const sendLater = (funder: Address): TopUpExecutor => ({
+            request: async (method, params) => {
+              await s.schedule(Promise.resolve(), method);
+              return executor(funder).request(method, params);
+            },
+          });
+          const over = deps({ clients: scheduled, executor: (_t, grant) => sendLater(grant.account) });
+          const results = await s.waitFor(
+            Promise.all(
+              Array.from({ length: count }, () => pay(t, { url: url('/budget'), idempotencyKey: randomUUID() }, over))
+            ),
+            pause ? pauseThenRelease : undefined
+          );
+
+          const paid = results.filter((r) => r.structuredContent?.kind === 'paid').length;
+          expect(balanceOf(t.sessionAddress)).toBeGreaterThanOrEqual(0n);
+          expect(seen).toHaveLength(paid);
+          expect(paid).toBeGreaterThan(0);
+          expect(paid).toBeLessThanOrEqual(2);
+          expect(refills.reduce((sum, amount) => sum + amount, 0n)).toBeLessThanOrEqual(600_000n);
+        }
+      ),
+      { seed: 0x5ced, numRuns: 30 }
+    );
+  }, 120_000);
 });
