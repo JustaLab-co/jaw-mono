@@ -137,6 +137,7 @@ function guarded(
 }
 
 const LOST = 'the refill lost its lock while it moved money, so the payment was not signed';
+const UNRESERVED = 'the refill moved money but could not reserve the price, so the payment was not signed';
 
 const timedOut = (reason: string): TopUpOutcome => ({ ok: false, code: 'timed_out', reason });
 
@@ -253,6 +254,11 @@ export function refillHook(c: RefillContext): EnsureFunds {
           return result;
         });
       } catch (err) {
+        // Signing without the reservation would hide this price from the next turn's caps and float.
+        if (funded?.ok) {
+          logFailure('reservation write failed')(err);
+          return { ...funded, ok: false, code: 'funding_failed', reason: UNRESERVED };
+        }
         if (funded) return funded;
         if (err instanceof FloatBusy) return timedOut('another payment on this connection held the refill too long');
         throw err;

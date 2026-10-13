@@ -320,6 +320,28 @@ async function failUpdates(key: string, when: string) {
   };
 }
 
+/** A second replica: its own inTurn queues, slots and lock sessions, over the same database. */
+async function otherReplica() {
+  vi.resetModules();
+  return (await import('./pay')).pay;
+}
+
+async function slowUpdates(key: string, when: string, seconds: number) {
+  const name = `slow_${key.replaceAll('-', '_')}`;
+  await getDb().execute(
+    sql.raw(`create function ${name}() returns trigger language plpgsql as $$ begin
+      if new.idempotency_key = '${key}' and (${when}) then perform pg_sleep(${seconds}); end if;
+      return new; end $$`)
+  );
+  await getDb().execute(
+    sql.raw(`create trigger ${name} before update on payments for each row execute function ${name}()`)
+  );
+  return async () => {
+    await getDb().execute(sql.raw(`drop trigger ${name} on payments`));
+    await getDb().execute(sql.raw(`drop function ${name}()`));
+  };
+}
+
 async function logsOf(work: () => Promise<unknown>): Promise<string> {
   const logged = vi.spyOn(console, 'log');
   try {
@@ -1214,6 +1236,43 @@ describe.skipIf(!TEST_PG_URL)(
     });
   }
 );
+
+describe.skipIf(!TEST_PG_URL)('on Postgres, given a funded turn whose reservation write fails', () => {
+  it('when a payment on another replica takes the next turn, then only that one signs against the float', async () => {
+    const { t } = await connected('1');
+    const payB = await otherReplica();
+    const dropReserve = await failUpdates('replica-a-float', 'old.reserved is null and new.reserved is not null');
+    const slowSign = await slowUpdates('replica-a-float', "new.state = 'signed'", 2);
+    let second: ReturnType<typeof pay> | undefined;
+    const startSecond = (funder: Address): TopUpExecutor => ({
+      request: async (method, params) => {
+        if (method === 'wallet_sendCalls')
+          second ??= payB(t, { url: url('/budget'), idempotencyKey: 'replica-b-float' }, deps());
+        return executor(funder).request(method, params);
+      },
+    });
+    let first: Awaited<ReturnType<typeof pay>>;
+    try {
+      first = await pay(
+        t,
+        { url: url('/budget'), idempotencyKey: 'replica-a-float' },
+        deps({ executor: (_t, grant) => startSecond(grant.account) })
+      );
+      await second;
+    } finally {
+      await dropReserve();
+      await slowSign();
+    }
+    expect(balanceOf(t.sessionAddress)).toBeGreaterThanOrEqual(0n);
+    expect(first.structuredContent?.refusal?.code).toBe('funding_failed');
+    expect((await second)?.structuredContent?.kind).toBe('paid');
+    expect(seen).toHaveLength(1);
+    expect(await rowOf(first.structuredContent!.paymentId)).toMatchObject({
+      reserved: null,
+      topUpAmount: refills[0].toString(),
+    });
+  });
+});
 
 describe.skipIf(!TEST_PG_URL)(
   'on Postgres, given an upto refill whose lock session drops while the top-up confirms',
