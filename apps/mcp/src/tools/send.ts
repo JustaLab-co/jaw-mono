@@ -1,5 +1,6 @@
 import { usdcForNetwork } from '@jaw.id/agent';
 import type { McpServer } from '@modelcontextprotocol/server';
+import { and, eq } from 'drizzle-orm';
 import {
   encodeFunctionData,
   erc20Abi,
@@ -13,10 +14,12 @@ import {
 import { z } from 'zod';
 import { sessionBridge } from '@/adapters/session-host';
 import { tenant, type Tenant } from '@/connections/auth';
+import { isLive } from '@/connections/rows';
+import { connections } from '@/db/schema';
 import { isPaymentsPaused } from '@/db/settings';
 import { currentGrant, type Grant } from '@/grants/store';
 import { errorLabel, log } from '@/lib/edge';
-import { FloatBusy, LOCK_WAIT_MS, withFloat } from '@/payments/float-lock';
+import { FloatBusy, FloatLost, LOCK_WAIT_MS, withFloat } from '@/payments/float-lock';
 import { resolveName } from './read';
 import { NO_SEND_SCOPE, refusal } from './reply';
 
@@ -58,9 +61,19 @@ async function sendWithinBudget(t: Tenant, calls: Call[]) {
   const bridge = sessionBridge(t, grant);
   if (!bridge) return refusal('This server has no paymaster key, so it cannot pay the fee to send.');
 
-  let out: z.infer<typeof output>;
+  let out: z.infer<typeof output> | undefined;
   try {
     out = await withFloat(t.connectionId, LOCK_WAIT_MS, async (hold) => {
+      // A send that verified its bearer before a disconnect may get its turn after it.
+      const live = await hold.tx(async (tx) => {
+        if (!(await hold.owns(tx))) throw new FloatLost();
+        const [row] = await tx
+          .select({ id: connections.id })
+          .from(connections)
+          .where(and(eq(connections.id, t.connectionId), isLive()));
+        return Boolean(row);
+      });
+      if (!live) return undefined;
       hold.assertHeld();
       const sent = (await bridge.request('wallet_sendCalls', [{ calls }])) as { id: Hex };
       for (const until = Date.now() + RECEIPT_MS; Date.now() < until; ) {
@@ -89,9 +102,11 @@ async function sendWithinBudget(t: Tenant, calls: Call[]) {
     });
   } catch (err) {
     if (err instanceof FloatBusy) return refusal('A payment on this connection is in progress. Try again in a moment.');
+    if (err instanceof FloatLost) return refusal('Nothing was sent: this send lost its turn on the budget. Try again.');
     log('warn', { msg: 'send not submitted', error: errorLabel(err) });
     return refusal('Nothing was sent: the calls failed in simulation, or are over what the budget has left today.');
   }
+  if (!out) return refusal('This connection has ended, so nothing was sent.');
   return {
     content: [{ type: 'text' as const, text: out.summary }],
     structuredContent: out,
