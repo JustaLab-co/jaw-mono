@@ -40,7 +40,7 @@ const AUTHORIZATION_USED = parseAbi(['event AuthorizationUsed(address indexed au
 const seen: { nonce: Hex }[] = [];
 const receipts = new Map<Hex, { from: Address; nonce: Hex }>();
 
-/** Charges PRICE for every request and settles each proof in its own transaction. */
+/** Charges PRICE for every request and settles each proof in its own transaction. `/once` refuses a nonce it saw. */
 const seller = createServer((req, res) => {
   const signed = req.headers['payment-signature'];
   if (!signed) {
@@ -65,6 +65,9 @@ const seller = createServer((req, res) => {
   }
   const proof = JSON.parse(Buffer.from(String(signed), 'base64').toString());
   const { nonce, from } = proof.payload.authorization;
+  if (req.url === '/once' && seen.some((s) => s.nonce === nonce)) {
+    return void res.writeHead(402, { 'payment-required': Buffer.from('{}').toString('base64') }).end('{}');
+  }
   const tx = TX(seen.push({ nonce }) + 0x1000);
   receipts.set(tx, { from, nonce });
   const receipt = { success: true, transaction: tx, network: 'eip155:84532', payer: from };
@@ -75,6 +78,15 @@ const seller = createServer((req, res) => {
 await new Promise<void>((r) => seller.listen(0, '127.0.0.1', r));
 const SELLER = `127.0.0.1:${(seller.address() as AddressInfo).port}`;
 const url = `http://${SELLER}/exact`;
+
+let readFails = false;
+vi.mock('./store', async (original) => {
+  const store = await original<typeof import('./store')>();
+  return {
+    ...store,
+    findPayment: (id: string) => (readFails ? Promise.reject(new Error('read refused')) : store.findPayment(id)),
+  };
+});
 
 vi.mock('@/lib/chain', async (original) => ({
   ...(await original<object>()),
@@ -148,6 +160,7 @@ beforeAll(async () => {
 beforeEach(() => {
   seen.length = 0;
   refills.length = 0;
+  readFails = false;
 });
 
 /** A connection with a budget of `perDay` and a funded account behind it. */
@@ -181,10 +194,10 @@ async function failUpdates(key: string, when: string) {
 }
 
 /** Pays once with every update matching `when` refused, and returns the answer or what was thrown. */
-async function payWithFailedWrite(t: Tenant, key: string, when: string) {
+async function payWithFailedWrite(t: Tenant, key: string, when: string, to = url) {
   const drop = await failUpdates(key, when);
   try {
-    return { result: await pay(t, { url, idempotencyKey: key }, deps()) };
+    return { result: await pay(t, { url: to, idempotencyKey: key }, deps()) };
   } catch (thrown) {
     return { thrown };
   } finally {
@@ -200,14 +213,62 @@ describe.skipIf(!TEST_PG_URL)('given a paid call whose final write fails', () =>
     expect(seen).toHaveLength(1);
     expect(thrown).toBeUndefined();
     expect(result?.structuredContent?.idempotencyKey).toBe('final-paid');
+    expect(result?.structuredContent).toMatchObject({
+      kind: 'paid',
+      state: expect.stringMatching(/^(signed|settled)$/),
+      payment: { nonce: seen[0].nonce.toLowerCase(), payTo: PAY_TO, amount: PRICE },
+    });
+    expect(result?.structuredContent?.response?.join()).toContain('the weather is fine');
+  });
+
+  it('given the conclusion, the lease release and the read back all fail, then the answer still names the payment the seller took', async () => {
+    const t = await connected('1');
+    balances.set(t.sessionAddress.toLowerCase(), 1_000_000n);
+    readFails = true;
+    const { result, thrown } = await payWithFailedWrite(
+      t,
+      'final-dark',
+      "new.kind = 'paid' or new.lease_until is distinct from old.lease_until"
+    );
+    expect(thrown).toBeUndefined();
+    expect(seen).toHaveLength(1);
+    expect(result?.structuredContent).toMatchObject({
+      kind: 'paid',
+      payment: { nonce: seen[0].nonce.toLowerCase(), payTo: PAY_TO, amount: PRICE },
+    });
+    expect(result?.structuredContent?.summary).toContain(`Paid ${PRICE} base units to ${PAY_TO}`);
+    expect(result?.structuredContent?.response?.join()).toContain('the weather is fine');
   });
 
   it('given a retry with the same key right after, then it does not answer in_progress for the whole lease', async () => {
     const t = await connected('1');
     balances.set(t.sessionAddress.toLowerCase(), 1_000_000n);
-    await payWithFailedWrite(t, 'final-retry', "new.kind = 'paid'");
+    const { result: first } = await payWithFailedWrite(t, 'final-retry', "new.kind = 'paid'");
     const again = await pay(t, { url, idempotencyKey: 'final-retry' }, deps());
     expect(again.content[0].text).not.toContain('in_progress');
+    expect(seen.map((s) => s.nonce)).toEqual([seen[0].nonce, seen[0].nonce]);
+    expect(again.structuredContent).toMatchObject({
+      kind: 'paid',
+      paymentId: first?.structuredContent?.paymentId,
+      payment: { nonce: seen[0].nonce.toLowerCase() },
+    });
+  });
+
+  it('given a seller that refuses a used nonce, then the retry says the payment may have reached it, not that nothing was sent', async () => {
+    const t = await connected('1');
+    balances.set(t.sessionAddress.toLowerCase(), 1_000_000n);
+    const once = `http://${SELLER}/once`;
+    await payWithFailedWrite(t, 'final-once', "new.kind = 'paid'", once);
+    const again = await pay(t, { url: once, idempotencyKey: 'final-once' }, deps());
+    expect(seen).toHaveLength(1);
+    expect(again.structuredContent).toMatchObject({
+      state: 'unknown',
+      kind: 'failed',
+      refusal: { code: 'settlement_rejected' },
+      payment: { nonce: seen[0].nonce.toLowerCase() },
+    });
+    expect(again.structuredContent?.summary).toContain('A payment may have reached the seller');
+    expect(again.structuredContent?.summary).not.toContain('Nothing was sent');
   });
 
   it('when the payment was refilled first, then the top-up and the sent proof stay on the row and the caller gets an answer', async () => {

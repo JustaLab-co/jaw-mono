@@ -23,7 +23,7 @@ import type { Tenant } from '@/connections/auth';
 import { config } from '@/connections/config';
 import { countHit, isPaymentsPaused } from '@/db/settings';
 import { currentGrant, type Grant } from '@/grants/store';
-import { log, RATE_WINDOW_MS } from '@/lib/edge';
+import { errorLabel, log, RATE_WINDOW_MS } from '@/lib/edge';
 import { fenceText } from '@/lib/fence';
 import { safeFetch, watchCuts } from '@/lib/safe-fetch';
 import { confirmByReceipt, type Settled } from './confirm';
@@ -236,6 +236,14 @@ async function rowAfter(row: PaymentRow, c: Conclusion): Promise<PaymentRow> {
   return current && current.state !== 'pending' ? current : merged(current ?? row, c);
 }
 
+/** The row as the signing write left it, from the proof this call sent, when the database cannot be read. */
+function signedAs(row: PaymentRow, o: Outcome): PaymentRow {
+  const sent = o.kind === 'paid' ? o.payment : o.kind === 'failed' ? o.attempted : undefined;
+  if (!sent || row.nonce) return row;
+  const { nonce, authorized, scheme, asset, network, payTo } = sent;
+  return { ...row, nonce: nonce.toLowerCase(), authorized, scheme, asset, network, payTo };
+}
+
 const merged = (row: PaymentRow, c: Conclusion): PaymentRow => ({
   ...row,
   state: c.state,
@@ -330,14 +338,14 @@ async function concludeSend(
   try {
     written = await finish(row.id, token, conclusion, fenced);
   } catch (err) {
-    // The seller already answered, so the caller still gets it. The row keeps
-    // what it had, and its lease ends so a retry or the reconciler can take it.
-    log('error', { msg: `payment ${row.id} not concluded`, error: err instanceof Error ? err.name : 'unknown' });
+    // The caller still gets what this call reached. The row keeps what it had,
+    // and its lease ends so a retry or the reconciler can take it.
+    log('error', { msg: `payment ${row.id} not concluded`, error: errorLabel(err) });
     await release(row.id, token).catch((e) => {
-      log('warn', { msg: `payment ${row.id} lease not released`, error: e instanceof Error ? e.name : 'unknown' });
+      log('warn', { msg: `payment ${row.id} lease not released`, error: errorLabel(e) });
     });
     const current = await findPayment(row.id).catch(() => undefined);
-    return { row: merged(current ?? row, conclusion), fenced };
+    return { row: merged(current ?? signedAs(row, outcome), conclusion), fenced };
   }
   if (written) settleLater(written, checked, opts.signedAt, opts.confirm);
   return { row: written ?? (await rowAfter(row, conclusion)), fenced };
