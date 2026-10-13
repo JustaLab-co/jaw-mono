@@ -19,6 +19,8 @@ apps/mcp/src/tools/pay-and-fetch.ts
 apps/mcp/src/tools/request-budget.ts
 apps/mcp/src/tools/send.ts
 apps/mcp/src/tools/connections.ts
+apps/mcp/src/tools/swap.ts
+apps/mcp/src/swap/**
 apps/mcp/src/adapters/session-host.ts
 apps/mcp/src/lib/safe-fetch.ts
 apps/mcp/src/lib/cron.ts

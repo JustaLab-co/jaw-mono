@@ -59,6 +59,8 @@
 /apps/mcp/src/tools/request-budget.ts                @Ghadi8 @mariano-aguero
 /apps/mcp/src/tools/send.ts                          @Ghadi8 @mariano-aguero
 /apps/mcp/src/tools/connections.ts                   @Ghadi8 @mariano-aguero
+/apps/mcp/src/tools/swap.ts                          @Ghadi8 @mariano-aguero
+/apps/mcp/src/swap/                                  @Ghadi8 @mariano-aguero
 /apps/mcp/src/adapters/session-host.ts               @Ghadi8 @mariano-aguero
 /apps/mcp/src/lib/safe-fetch.ts                      @Ghadi8 @mariano-aguero
 /apps/mcp/src/lib/cron.ts                            @Ghadi8 @mariano-aguero
