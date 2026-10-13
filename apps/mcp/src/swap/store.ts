@@ -1,8 +1,8 @@
 import { createHash, randomBytes } from 'node:crypto';
 import { and, eq, inArray, isNull, lt, not, sql, type SQL } from 'drizzle-orm';
 import type { PgUpdateSetSource } from 'drizzle-orm/pg-core';
-import { getDb } from '@/db/client';
-import { swaps } from '@/db/schema';
+import { getDb, type Tx } from '@/db/client';
+import { payments, swaps } from '@/db/schema';
 import { LEASE_MS } from '@/payments/store';
 
 export type SwapRow = typeof swaps.$inferSelect;
@@ -106,11 +106,26 @@ async function insert(connectionId: string, key: string, hash: string, request: 
   return row && { kind: 'run' as const, row, token };
 }
 
+async function waitForQuotePaymentWriters(tx: Tx, connectionId: string): Promise<void> {
+  await tx
+    .select({ id: payments.id })
+    .from(payments)
+    .innerJoin(swaps, and(eq(swaps.connectionId, payments.connectionId), eq(swaps.paymentKey, payments.idempotencyKey)))
+    .where(and(eq(swaps.connectionId, connectionId), eq(swaps.state, 'quoting')))
+    .for('share', { of: payments });
+}
+
 async function freeStale(connectionId: string): Promise<void> {
   const ofConnection = eq(swaps.connectionId, connectionId);
   await write(and(ofConnection, eq(swaps.state, 'awaiting_owner'), lt(swaps.approveBy, dbNow)), { state: 'expired' });
   const paying = currentPayment(sql`(p.signed_at is not null or (p.state = 'pending' and p.lease_until > ${dbNow}))`);
-  await write(and(ofConnection, eq(swaps.state, 'quoting'), not(leaseLive), not(paying)), { state: 'abandoned' });
+  await getDb().transaction(async (tx) => {
+    await waitForQuotePaymentWriters(tx, connectionId);
+    await tx
+      .update(swaps)
+      .set({ state: 'abandoned' })
+      .where(and(ofConnection, eq(swaps.state, 'quoting'), not(leaseLive), not(paying)));
+  });
 }
 
 async function openSwap(connectionId: string): Promise<SwapRow | undefined> {

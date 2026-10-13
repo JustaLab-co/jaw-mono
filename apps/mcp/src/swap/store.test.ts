@@ -6,6 +6,7 @@ import { getDb } from '@/db/client';
 import { connections, payments, swaps } from '@/db/schema';
 import { TEST_PG_URL, useTestDb, useTestPostgres } from '@/db/test-db';
 import { claim as claimPayment } from '@/payments/store';
+import { purge } from '@/reconciler/run';
 import {
   claimSwap,
   isDepositAddressTaken,
@@ -35,7 +36,7 @@ beforeAll(async () => {
   else await useTestDb();
 });
 
-async function newConnection(): Promise<string> {
+async function newConnection(over: Partial<typeof connections.$inferInsert> = {}): Promise<string> {
   const id = `con_${randomUUID()}`;
   await getDb()
     .insert(connections)
@@ -51,9 +52,19 @@ async function newConnection(): Promise<string> {
       expiresAt: new Date(Date.now() + 86_400_000),
       grantId: randomUUID(),
       activatedAt: new Date(),
+      ...over,
     });
   return id;
 }
+
+const stalePending = () =>
+  newConnection({
+    status: 'pending',
+    ticketHash: randomUUID(),
+    grantId: null,
+    activatedAt: null,
+    expiresAt: new Date(Date.now() - 2 * 86_400_000),
+  });
 
 const freshAddress = () => getAddress(`0x${randomBytes(20).toString('hex')}`);
 
@@ -123,18 +134,16 @@ const failPayment = (id: string) =>
     .set({ state: 'failed', kind: 'failed', code: 'budget_exhausted', finishedAt: new Date() })
     .where(eq(payments.id, id));
 
-const signPayment = (id: string) =>
-  getDb()
-    .update(payments)
-    .set({
-      state: 'signed',
-      nonce: `0x${randomBytes(32).toString('hex')}`,
-      authorization: { resource: 'quote' },
-      authorized: '5000',
-      deadline: sql`now() + interval '10 minutes'`,
-      signedAt: new Date(),
-    })
-    .where(eq(payments.id, id));
+const signed = () => ({
+  state: 'signed' as const,
+  nonce: `0x${randomBytes(32).toString('hex')}`,
+  authorization: { resource: 'quote' },
+  authorized: '5000',
+  deadline: sql`now() + interval '10 minutes'`,
+  signedAt: new Date(),
+});
+
+const signPayment = (id: string) => getDb().update(payments).set(signed()).where(eq(payments.id, id));
 
 describe('claiming a swap by its idempotency key', () => {
   it('given a new key, when it is claimed, then the row is quoting on attempt 1 under the key swap:<id>:1', async () => {
@@ -239,6 +248,58 @@ describe('one open swap per connection (B18)', () => {
     const { row, token } = await quoting(connectionId);
     await writeHeld(row.id, token, { state: 'quote_failed', code: 'quote_unavailable' });
     expect((await claimSwap(connectionId, 'other', request)).kind).toBe('run');
+  });
+});
+
+describe('a claim that keeps losing the open-swap slot', () => {
+  const churn = [
+    sql.raw(`
+    create function churn() returns trigger language plpgsql as $$
+    declare id text := 'swp_churn_' || md5(random()::text);
+    begin
+      if new.idempotency_key = 'churned' then
+        insert into swaps (id, connection_id, idempotency_key, request_hash, payment_key, lease_until,
+          origin_chain_id, origin_token, destination_chain_id, destination_token, amount, depositor, recipient)
+        values (id, new.connection_id, id, new.request_hash, 'swap:' || id || ':1', now() - interval '1 second',
+          new.origin_chain_id, new.origin_token, new.destination_chain_id, new.destination_token, new.amount,
+          new.depositor, new.recipient);
+      end if;
+      return new;
+    end $$`),
+    sql.raw('create trigger churn before insert on swaps for each row execute function churn()'),
+  ];
+  const calm = [sql.raw('drop trigger churn on swaps'), sql.raw('drop function churn()')];
+  const run = async (statements: SQL[]) => {
+    for (const s of statements) await getDb().execute(s);
+  };
+
+  it('given another swap takes the slot before every insert and frees it right after, when the key is claimed, then it is busy and nothing is written for it', async () => {
+    const connectionId = await newConnection();
+    await run(churn);
+    try {
+      expect(await claimSwap(connectionId, 'churned', request)).toEqual({ kind: 'busy' });
+    } finally {
+      await run(calm);
+    }
+    const rows = await getDb().select().from(swaps).where(eq(swaps.connectionId, connectionId));
+    expect(rows.filter((r) => r.idempotencyKey === 'churned')).toEqual([]);
+    expect(rows.every((r) => r.state === 'abandoned')).toBe(true);
+    expect((await claimSwap(connectionId, 'churned', request)).kind).toBe('run');
+  });
+});
+
+describe('the purge of approvals never completed', () => {
+  it('given a stale pending connection holding a swap, when the purge runs, then the swap and its connection stay and the rest is purged', async () => {
+    const withSwap = await stalePending();
+    const bare = await stalePending();
+    const { row } = await quoting(withSwap);
+
+    await purge();
+
+    expect((await rowOf(row.id)).state).toBe('quoting');
+    const left = await getDb().select({ id: connections.id }).from(connections);
+    expect(left.map((c) => c.id)).toContain(withSwap);
+    expect(left.map((c) => c.id)).not.toContain(bare);
   });
 });
 
@@ -531,4 +592,51 @@ describe.skipIf(!TEST_PG_URL)('on Postgres, claims racing for the open-swap slot
       expect((await rowOf(old.id)).state).toBe('expired');
     }
   });
+});
+
+describe.skipIf(!TEST_PG_URL)('on Postgres, the sweep racing the quote payment (B18)', () => {
+  const lockWaiters = async () => {
+    const [{ n }] = await getDb().execute<{ n: number }>(
+      sql`select count(*)::int as n from pg_stat_activity where datname = current_database() and wait_event_type = 'Lock'`
+    );
+    return n;
+  };
+
+  async function untilBlockedOrDone(claim: Promise<unknown>) {
+    let done = false;
+    const end = () => (done = true);
+    void claim.then(end, end);
+    for (let i = 0; i < 100 && !done && (await lockWaiters()) === 0; i++) await new Promise((r) => setTimeout(r, 50));
+  }
+
+  it.each([
+    ['signed', signed],
+    ['taken under a new lease', () => ({ leaseUntil: sql`now() + interval '2 minutes'` })],
+  ])(
+    'given a quoting swap and its payment both past their leases, when the payment is %s while another key sweeps, then the swap stays open',
+    async (_, set) => {
+      const connectionId = await newConnection();
+      const old = await quoting(connectionId);
+      const paymentId = await paymentFor(old.row);
+      await lapse(old.row.id);
+      await lapsePayments(connectionId);
+
+      let commit!: () => void;
+      let written!: () => void;
+      const wrote = new Promise<void>((r) => (written = r));
+      const payment = getDb().transaction(async (tx) => {
+        await tx.update(payments).set(set()).where(eq(payments.id, paymentId));
+        written();
+        await new Promise<void>((r) => (commit = r));
+      });
+      await wrote;
+      const claim = claimSwap(connectionId, 'other', request);
+      await untilBlockedOrDone(claim);
+      commit();
+      await payment;
+
+      expect(await claim).toMatchObject({ kind: 'open', row: { id: old.row.id } });
+      expect((await rowOf(old.row.id)).state).toBe('quoting');
+    }
+  );
 });
