@@ -71,3 +71,11 @@ detects TypeOK
 only base refills=1
 - /\ topUp' = [topUp EXCEPT ![r] = 1]
 + /\ topUp' = [topUp EXCEPT ![r] = 2]
+
+mutation a send that throws after the bundler took it reports a plain refusal
+detects MovedReachesCaller
+only money refills=1 lostreply
+- /\ Land(r)
+-                  /\ Leave(r, "funding_failed")
++ /\ Land(r)
++                  /\ Leave(r, "refused")

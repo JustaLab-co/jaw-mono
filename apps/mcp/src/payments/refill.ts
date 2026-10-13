@@ -110,14 +110,14 @@ function guarded(
           failedBeforeSend = err;
           throw err;
         }
-        let sent: unknown;
         try {
           hold.assertHeld();
-          sent = await executor.request(method, params);
         } catch (err) {
           await hold.tx((tx) => addTopUp(tx, rowId, -amount)).catch(logFailure('top-up subtract failed'));
           throw err;
         }
+        // A send that throws may still land, so the amount stays on the row.
+        const sent = await executor.request(method, params);
         const batchId = typeof sent === 'string' ? sent : (sent as { id?: string } | null)?.id;
         if (batchId) {
           await hold
