@@ -295,7 +295,14 @@ export async function pay(t: Tenant, input: PayInput, deps: PayDeps = liveDeps()
   const sent = { method: request.method, headers: request.headers, body: request.body, budget, fetch: cuts.fetch };
   const confirm = { clients: deps.clients, later: deps.later };
 
-  if (claimed.kind === 'resume') return resend(claimed.row, claimed.token, payer, sent, confirm, cuts.lastCut);
+  if (claimed.kind === 'resume') {
+    // The proof goes out again only while the budget it was signed under is live.
+    const stopped: Unreached | undefined =
+      grant?.permissionId === claimed.row.permissionId
+        ? await grantLive(grant, deps)
+        : { kind: 'unreached', code: 'no_grant', reason: 'the budget this payment was signed under ended' };
+    return resend(claimed.row, claimed.token, stopped, payer, sent, confirm, cuts.lastCut);
+  }
 
   const { row, token } = claimed;
   let signed = false;
@@ -354,16 +361,19 @@ function settleLater(row: PaymentRow, o: Outcome, signedAt: Date, { clients, lat
 async function resend(
   row: PaymentRow,
   token: string,
+  stopped: Unreached | undefined,
   payer: Payer,
   sent: Parameters<typeof payAndFetch>[2],
   confirm: Confirm,
   lastCut: () => boolean
 ): Promise<PayResult> {
   const authorization = row.authorization as SignedAuthorization;
-  const outcome: Outcome = await payAndFetch(authorization.resource, payer, {
-    ...sent,
-    attempt: { key: row.id, resume: authorization },
-  }).catch(thrown);
+  const outcome: Outcome =
+    stopped ??
+    (await payAndFetch(authorization.resource, payer, {
+      ...sent,
+      attempt: { key: row.id, resume: authorization },
+    }).catch(thrown));
   // A refused resend says nothing about the first send, which the chain or a live first call settles.
   if (outcome.kind !== 'paid') {
     await release(row.id, token);
