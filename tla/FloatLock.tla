@@ -10,8 +10,9 @@
                                     session.end frees the lock (117-118)
      payments/float-lock.ts 151-157 tryLockFloat
      payments/refill.ts 93-137      guarded: addTopUp tx before the send (108),
-                                    assertHeld (115), send (116), subtract on a
-                                    thrown send (118)
+                                    assertHeld (114), subtract on FloatLost
+                                    (116), send (120), which keeps the amount
+                                    on the row when it throws
      payments/refill.ts 171-261     refillHook: live check (180-188), caps read
                                     and check (193-208), assertHeld (212),
                                     held() after money moved (244-245), reserve
@@ -47,9 +48,9 @@
      left to the owner at 332, which revokes nothing).
    - A refill top-up after the grant is revoked on chain moves nothing.
    - LostReply: the bundler took the top-up but the request threw, so the money
-     lands while guarded subtracts the topUp row (118) and ensurePayerFunds
-     returns a plain failure with no amount. TxFault: the reserve tx (249)
-     fails, so the catch (255) runs.
+     lands while ensurePayerFunds returns a plain failure with no amount, which
+     the caller reads as funding_failed. TxFault: the reserve tx (249) fails, so
+     the catch (255) runs.
    - Fairness: weak fairness on each thread's steps, which include the
      lock_timeout give-up, so a waiter cannot starve on its own. *)
 EXTENDS Naturals, FiniteSets
@@ -146,8 +147,8 @@ AddTopUp(r) == /\ pc[r] = "addTopUp"
                /\ Go(r, "assert115")
                /\ UNCHANGED <<funded, outcome, lock, live, visible, chain>>
 
-\* hold.assertHeld() right before the send (115); FloatLost lands in the catch
-\* that subtracts the top-up (118) and ensurePayerFunds returns a failure.
+\* hold.assertHeld() right before the send (114); FloatLost lands in the catch
+\* that subtracts the top-up (116) and ensurePayerFunds returns a failure.
 Assert115(r) == /\ pc[r] = "assert115"
                 /\ IF lost[r]
                      THEN /\ topUp' = [topUp EXCEPT ![r] = 0]
@@ -159,21 +160,20 @@ Assert115(r) == /\ pc[r] = "assert115"
 Land(r) == /\ moved' = [moved EXCEPT ![r] = TRUE]
            /\ lateSend' = (lateSend \/ ~live)
 
-\* executor.request('wallet_sendCalls') (116).
+\* executor.request('wallet_sendCalls') (120). A send that throws keeps the
+\* top-up on the row, whether or not the money landed.
 Send(r) == /\ pc[r] = "send"
            /\ \/ /\ ~revokedOnChain
                  /\ Land(r)
                  /\ Go(r, "held")
-                 /\ UNCHANGED <<outcome, topUp>>
-              \/ /\ topUp' = [topUp EXCEPT ![r] = 0]
-                 /\ Leave(r, "refused")
+                 /\ UNCHANGED outcome
+              \/ /\ Leave(r, "funding_failed")
                  /\ UNCHANGED <<moved, lateSend>>
               \/ /\ LostReply
                  /\ ~revokedOnChain
                  /\ Land(r)
-                 /\ topUp' = [topUp EXCEPT ![r] = 0]
-                 /\ Leave(r, "refused")
-           /\ UNCHANGED <<funded, lock, live, visible, revokedOnChain>>
+                 /\ Leave(r, "funding_failed")
+           /\ UNCHANGED <<funded, lock, live, topUp, visible, revokedOnChain>>
 
 \* Money moved: funded is the caller's outcome from here on (245).
 Held(r) == /\ pc[r] = "held"

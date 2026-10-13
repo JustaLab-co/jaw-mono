@@ -498,7 +498,7 @@ describe('jaw_pay_and_fetch', () => {
     expect(await rowOf(result.structuredContent!.paymentId)).toMatchObject({ topUpAmount: refills[0].toString() });
   });
 
-  it('given a top-up send that throws, then the row carries no top-up and no money moved', async () => {
+  it('given a top-up send that throws, then the payment is refused unsigned and the row keeps the amount it may have moved', async () => {
     const { t } = await connected('1');
     const refusing: TopUpExecutor = {
       request: async () => {
@@ -510,8 +510,39 @@ describe('jaw_pay_and_fetch', () => {
       { url: url('/exact'), idempotencyKey: 'send-threw' },
       deps({ executor: () => refusing })
     );
-    expect(result.structuredContent).toMatchObject({ kind: 'refused', payerRefilled: false });
-    expect(await rowOf(result.structuredContent!.paymentId)).toMatchObject({ topUpAmount: null, topUpBatchId: null });
+    expect(result.structuredContent).toMatchObject({
+      kind: 'refused',
+      state: 'failed',
+      refusal: { code: 'funding_failed' },
+    });
+    expect(result.structuredContent?.payment).toBeUndefined();
+    expect(seen).toHaveLength(0);
+    expect(await rowOf(result.structuredContent!.paymentId)).toMatchObject({
+      topUpAmount: '105000',
+      topUpBatchId: null,
+    });
+  });
+
+  it('given a top-up that lands but whose send throws, then a lowered budget still counts it', async () => {
+    const { c, t } = await connected('2');
+    const lostReply = (funder: Address): TopUpExecutor => ({
+      request: async (method, params) => {
+        await executor(funder).request(method, params);
+        if (method === 'wallet_sendCalls') throw new Error('bundler reply lost');
+        return { status: 200 };
+      },
+    });
+    await pay(
+      t,
+      { url: url('/exact'), idempotencyKey: 'lost-reply' },
+      deps({ floatTarget: 1_900_000n, executor: (_t, grant) => lostReply(grant.account) })
+    );
+    expect(refills).toEqual([2_000_000n]);
+    balances.set(t.sessionAddress.toLowerCase(), 0n);
+    await approveBudget(c, '1');
+    const after = await pay(t, { url: url('/exact'), idempotencyKey: 'lost-reply-new' }, deps());
+    expect(after.structuredContent).toMatchObject({ refusal: { code: 'budget_exhausted' } });
+    expect(refills).toEqual([2_000_000n]);
   });
 
   it('given a top-up send that returns no id, then the row keeps the amount and money moved', async () => {
@@ -548,22 +579,17 @@ describe('jaw_pay_and_fetch', () => {
     expect([seen.length, refills.length]).toEqual([0, 0]);
   });
 
-  it('given a top-up send that throws and a subtract that fails, then the refusal keeps the send error', async () => {
+  it('given a top-up send that throws, then the refusal keeps the send error', async () => {
     const { t } = await connected('1');
     const refusing: TopUpExecutor = {
       request: async () => {
         throw new Error('the permission refused the transfer');
       },
     };
-    const drop = await failUpdates('subtract-fails', 'old.top_up_amount is not null and new.top_up_amount is null');
-    try {
-      const lines = await logsOf(() =>
-        pay(t, { url: url('/exact'), idempotencyKey: 'subtract-fails' }, deps({ executor: () => refusing }))
-      );
-      expect(lines).toContain('top-up refused on-chain (the permission refused the transfer)');
-    } finally {
-      await drop();
-    }
+    const lines = await logsOf(() =>
+      pay(t, { url: url('/exact'), idempotencyKey: 'send-error' }, deps({ executor: () => refusing }))
+    );
+    expect(lines).toContain('top-up refused on-chain (the permission refused the transfer)');
   });
 
   it('given a 5 USDC/day budget and a 2 USDC price, when the agent pays, then over_cap pointing at a larger budget, nothing signed or pulled', async () => {
