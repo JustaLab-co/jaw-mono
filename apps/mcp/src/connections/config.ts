@@ -1,4 +1,5 @@
 import { base, baseSepolia, type Chain } from 'viem/chains';
+import { refusal } from '@/lib/safe-fetch';
 import { parseKeyRing, type KeyRing } from './seal';
 
 export const SUPPORTED_CHAINS: Readonly<Record<number, Chain>> = { [base.id]: base, [baseSepolia.id]: baseSepolia };
@@ -50,7 +51,7 @@ export function config(): Config {
     paymasterApiKey: process.env.JAW_MCP_API_KEY || undefined,
     floatTarget: baseUnits('JAW_MCP_FLOAT_TARGET', process.env.JAW_MCP_FLOAT_TARGET || '250000'),
     dailyBudget: baseUnits('JAW_MCP_DAILY_BUDGET', process.env.JAW_MCP_DAILY_BUDGET || '1000000'),
-    swapUrl: swapUrl(process.env.JAW_MCP_SWAP_URL || 'https://api.justaname.id/proxy/v2'),
+    swapUrl: swapUrl(process.env.JAW_MCP_SWAP_URL || 'https://api.justaname.id/proxy/v2', insecureFetchHosts),
     ring: parseKeyRing(process.env.JAW_MCP_SEALING_KEYS),
   };
   return cached;
@@ -78,8 +79,16 @@ function baseUnits(name: string, value: string): bigint {
   return BigInt(value);
 }
 
-function swapUrl(value: string): string {
-  if (!URL.canParse(value))
-    throw new Error('JAW_MCP_SWAP_URL must be a URL, such as https://api.justaname.id/proxy/v2');
+function swapUrl(value: string, insecureFetchHosts: ReadonlySet<string>): string {
+  if (!URL.canParse(value) || /[?#]/.test(value)) {
+    throw new Error('JAW_MCP_SWAP_URL must be a URL with no query or hash, such as https://api.justaname.id/proxy/v2');
+  }
+  const url = new URL(value);
+  const allowed = 'list its host:port in JAW_MCP_INSECURE_FETCH_HOSTS to allow it';
+  const refused = refusal(url, insecureFetchHosts);
+  if (refused) throw new Error(`JAW_MCP_SWAP_URL is refused, ${refused}: ${allowed}`);
+  if (isLocal(url.hostname) && !insecureFetchHosts.has(url.host)) {
+    throw new Error(`JAW_MCP_SWAP_URL is refused, its host is local: ${allowed}`);
+  }
   return value.replace(/\/+$/, '');
 }

@@ -60,13 +60,42 @@ describe('JAW_MCP_SWAP_URL', () => {
   });
 
   it('given a URL with a trailing slash, then it is read without it', async () => {
+    process.env.JAW_MCP_SWAP_URL = 'https://backend.example/proxy/v2/';
+    const { config } = await import('./config');
+    expect(config().swapUrl).toBe('https://backend.example/proxy/v2');
+  });
+
+  it('given a value that is not a URL, then it refuses to start naming the variable', async () => {
+    process.env.JAW_MCP_SWAP_URL = 'api.justaname.id';
+    const { config } = await import('./config');
+    expect(() => config()).toThrow(/JAW_MCP_SWAP_URL/);
+  });
+
+  it.each([
+    ['plain http', 'http://backend.example/proxy/v2'],
+    ['a loopback address', 'https://127.0.0.1:4021/proxy/v2'],
+    ['a private address', 'https://10.0.0.5/proxy/v2'],
+    ['a private IPv6 address', 'https://[fd00::1]/proxy/v2'],
+    ['localhost', 'https://localhost:4021/proxy/v2'],
+    ['a query', 'https://backend.example/proxy/v2?key=1'],
+    ['an empty query', 'https://backend.example/proxy/v2?'],
+    ['a hash', 'https://backend.example/proxy/v2#x'],
+  ])('given %s, then it refuses to start naming the variable', async (_, url) => {
+    process.env.JAW_MCP_SWAP_URL = url;
+    const { config } = await import('./config');
+    expect(() => config()).toThrow(/JAW_MCP_SWAP_URL/);
+  });
+
+  it('given http to a host listed in JAW_MCP_INSECURE_FETCH_HOSTS, then it is read as is', async () => {
+    process.env.JAW_MCP_INSECURE_FETCH_HOSTS = '127.0.0.1:4021';
     process.env.JAW_MCP_SWAP_URL = 'http://127.0.0.1:4021/proxy/v2/';
     const { config } = await import('./config');
     expect(config().swapUrl).toBe('http://127.0.0.1:4021/proxy/v2');
   });
 
-  it('given a value that is not a URL, then it refuses to start naming the variable', async () => {
-    process.env.JAW_MCP_SWAP_URL = 'api.justaname.id';
+  it('given http to a listed host on another port, then it refuses to start', async () => {
+    process.env.JAW_MCP_INSECURE_FETCH_HOSTS = '127.0.0.1:4021';
+    process.env.JAW_MCP_SWAP_URL = 'http://127.0.0.1:4022/proxy/v2';
     const { config } = await import('./config');
     expect(() => config()).toThrow(/JAW_MCP_SWAP_URL/);
   });

@@ -93,16 +93,23 @@ function toResponse(res: IncomingMessage, body: Buffer): Response {
   return new Response([101, 204, 205, 304].includes(status) ? null : new Uint8Array(body), { status, headers });
 }
 
+// Why safeFetch refuses a URL before connecting, if it does. Hosts in
+// `insecureHosts` skip the https and address checks: local verification only.
+export function refusal(url: URL, insecureHosts: ReadonlySet<string>): string | undefined {
+  if (insecureHosts.has(url.host)) return undefined;
+  if (url.protocol !== 'https:') return 'only https URLs can be fetched';
+  const ip = url.hostname.replace(/^\[|\]$/g, '');
+  if (isIP(ip) && isPrivate(ip)) return 'the URL resolves to a private address';
+  return undefined;
+}
+
 // https only, never follows redirects, and connects only to public addresses.
-// Hosts in `insecureHosts` skip the https and address checks: local verification only.
 export function safeFetch(insecureHosts: ReadonlySet<string>): typeof fetch {
   return async (input, init) => {
     const url = new URL(input instanceof Request ? input.url : String(input));
+    const refused = refusal(url, insecureHosts);
+    if (refused) throw new FetchRefused(refused);
     const insecure = insecureHosts.has(url.host);
-    if (!insecure && url.protocol !== 'https:') throw new FetchRefused('only https URLs can be fetched');
-    if (!insecure && isIP(url.hostname.replace(/^\[|\]$/g, '')) && isPrivate(url.hostname.replace(/^\[|\]$/g, ''))) {
-      throw new FetchRefused('the URL resolves to a private address');
-    }
     const send = url.protocol === 'https:' ? httpsRequest : httpRequest;
     const headers = Object.fromEntries(new Headers(init?.headers));
     return new Promise<Response>((resolve, reject) => {
