@@ -3264,7 +3264,7 @@ function RevokePermissionDialogWrapper({
     setStatus('Revoking permission...');
     try {
       // Revoke permission using Account class with paymaster context
-      await account.revokePermission(
+      const result = await account.revokePermission(
         request.data.permissionId as `0x${string}`,
         computedPaymasterUrl,
         computedPaymasterContext,
@@ -3272,7 +3272,7 @@ function RevokePermissionDialogWrapper({
       );
 
       setStatus('Permission revoked successfully!');
-      onApprove({ success: true });
+      onApprove(result);
     } catch (error) {
       console.error('Permission revoke failed:', error);
       const errorObj = error instanceof Error ? error : new Error(String(error));
