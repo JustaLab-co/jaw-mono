@@ -1,7 +1,7 @@
 import Provider, { errors, interactionPolicy, type Configuration } from 'oidc-provider';
 import { hasUnstorableText } from '@/lib/body';
 import { databaseUnreachable, log } from '@/lib/edge';
-import { resolvesPublic } from '@/lib/safe-fetch';
+import { resolvesPublic, safeFetch } from '@/lib/safe-fetch';
 import { PgAdapter, sessionKey, successorId } from './adapter';
 import { bridge, requestUrl } from './bridge';
 import { config, type Config } from './config';
@@ -106,6 +106,8 @@ export function createProvider(cfg: Config, overrides: Partial<Configuration> = 
         },
       },
     },
+    // Checks the address it connects to, not only the one allowFetch resolved.
+    fetch: safeFetch(new Set()),
     extraTokenClaims: async (_ctx, token) =>
       token.kind === 'AccessToken'
         ? { sk: seal(cfg.ring, await sessionKey(token.accountId, cfg.ring), token.accountId) }
