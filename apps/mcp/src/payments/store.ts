@@ -294,6 +294,7 @@ export interface Conclusion {
   blockTime?: Date;
   topUp?: { amount?: string; batchId?: string };
   approvalBatchId?: string;
+  body?: string;
 }
 
 /**
@@ -334,6 +335,7 @@ async function dropUnprovenHash(id: string, txHash: string): Promise<boolean> {
 }
 
 async function finishWith(id: string, token: string, c: Conclusion, fenced: string[]) {
+  const noAnswer = c.state === 'pending' || (c.state === 'signed' && c.kind !== 'paid');
   const [row] = await getDb()
     .update(payments)
     .set({
@@ -345,7 +347,8 @@ async function finishWith(id: string, token: string, c: Conclusion, fenced: stri
       txHash: c.txHash ?? null,
       blockTime: c.blockTime ?? null,
       ...traceOf(c),
-      fenced: c.state === 'pending' || (c.state === 'signed' && c.kind !== 'paid') ? null : fenced,
+      fenced: noAnswer ? null : fenced,
+      body: noAnswer ? null : (c.body ?? null),
       finishedAt: c.state === 'signed' || c.state === 'pending' ? null : new Date(),
       ...(c.state === 'pending' && { reserved: null }),
       leaseUntil: dbNow,

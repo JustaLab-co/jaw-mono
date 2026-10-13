@@ -49,6 +49,7 @@ import {
 } from '@/db/test-db';
 import { safeFetch } from '@/lib/safe-fetch';
 import { pay, type PayDeps } from './pay';
+import { rawBody } from './render';
 import { inTurn, withFloat } from './float-lock';
 import { SEND_RESERVE_MS, stillHeld } from './refill';
 import { claim, holdingRows, PAY_LIMIT_MS } from './store';
@@ -1201,6 +1202,101 @@ describe('jaw_pay_and_fetch', () => {
     expect(next.structuredContent.payments.map((p: { idempotencyKey: string }) => p.idempotencyKey)).toEqual(['h1']);
     const stranger = await connected();
     expect((await callTool(stranger.c.access_token, 'jaw_history', {})).structuredContent.payments).toEqual([]);
+  });
+});
+
+describe('the raw body kept for an internal caller', () => {
+  const refusalOf = (write: Promise<unknown>) =>
+    write.then(
+      () => 'written',
+      (e: Error & { cause?: Error }) => e.cause?.message ?? e.message
+    );
+
+  it('given keepBody, when the payment settles, then the call carries the raw body off the wire and the row stores it', async () => {
+    const { t } = await connected('1');
+    balances.set(t.sessionAddress.toLowerCase(), 1_000_000n);
+    const result = await pay(t, { url: url('/exact'), idempotencyKey: 'raw-paid' }, deps(), { keepBody: true });
+    expect(result.structuredContent).toMatchObject({ kind: 'paid', state: 'settled' });
+    expect(JSON.parse(result[rawBody] as string)).toEqual({ report: 'the weather is fine' });
+    expect(JSON.stringify(result)).not.toContain('{"report"');
+    expect((await rowOf(result.structuredContent!.paymentId)).body).toBe(result[rawBody]);
+  });
+
+  it('given a stored keepBody payment, when the key is sent again, then the replay returns the raw body without paying', async () => {
+    const { t } = await connected('1');
+    balances.set(t.sessionAddress.toLowerCase(), 1_000_000n);
+    const first = await pay(t, { url: url('/exact'), idempotencyKey: 'raw-replay' }, deps(), { keepBody: true });
+    const again = await pay(t, { url: url('/exact'), idempotencyKey: 'raw-replay' }, deps(), { keepBody: true });
+    expect(first[rawBody]).toBeDefined();
+    expect(again[rawBody]).toBe(first[rawBody]);
+    expect(again.structuredContent).toEqual(first.structuredContent);
+    expect(seen).toHaveLength(1);
+  });
+
+  it('given keepBody and a lost answer, when the key is retried and the resend is paid, then the raw body is kept', async () => {
+    const { t } = await connected('1');
+    balances.set(t.sessionAddress.toLowerCase(), 1_000_000n);
+    dropNextLost = true;
+    const lost = await pay(t, { url: url('/lost'), idempotencyKey: 'raw-lost' }, deps(), { keepBody: true });
+    expect(lost.structuredContent).toMatchObject({ state: 'signed', refusal: { code: 'no_response' } });
+    expect(lost[rawBody]).toBeUndefined();
+    const retried = await pay(t, { url: url('/lost'), idempotencyKey: 'raw-lost' }, deps(), { keepBody: true });
+    expect(retried.structuredContent).toMatchObject({ kind: 'paid', state: 'settled' });
+    expect(JSON.parse(retried[rawBody] as string)).toEqual({ report: 'the weather is fine' });
+  });
+
+  it('given keepBody and a refusal the key may retry, when the seller sent a body, then the call answers and keeps no raw body', async () => {
+    const { t } = await connected('5');
+    const result = await pay(t, { url: url('/pricey'), idempotencyKey: 'raw-refused' }, deps(), { keepBody: true });
+    expect(result.structuredContent).toMatchObject({ kind: 'refused', refusal: { code: 'over_cap' } });
+    expect(result[rawBody]).toBeUndefined();
+    expect(await rowOf(result.structuredContent!.paymentId)).toMatchObject({
+      state: 'pending',
+      code: 'over_cap',
+      body: null,
+    });
+  });
+
+  it('given a body over 16 KB and keepBody, when it passes through, then the raw body is cut at 16 KB', async () => {
+    const { t } = await connected('1');
+    const result = await pay(t, { url: url('/huge') }, deps(), { keepBody: true });
+    expect(result[rawBody]).toBe('x'.repeat(16_384));
+    expect((await rowOf(result.structuredContent!.paymentId)).body).toBe('x'.repeat(16_384));
+  });
+
+  it('given jaw_pay_and_fetch, when it pays, then its row keeps no raw body and its answer only the fenced one', async () => {
+    const { t } = await connected('1');
+    balances.set(t.sessionAddress.toLowerCase(), 1_000_000n);
+    const result = await pay(t, { url: url('/exact'), idempotencyKey: 'raw-tool' }, deps());
+    expect(rawBody in result).toBe(false);
+    expect(result.structuredContent?.response).toEqual([result.content[1].text]);
+    expect((await rowOf(result.structuredContent!.paymentId)).body).toBeNull();
+  });
+
+  it('given a signed row holding a raw body, when anything rewrites it, then the database refuses', async () => {
+    const { t } = await connected('1');
+    balances.set(t.sessionAddress.toLowerCase(), 1_000_000n);
+    const result = await pay(t, { url: url('/unconfirmed') }, deps(), { keepBody: true });
+    const id = result.structuredContent!.paymentId;
+    expect(await rowOf(id)).toMatchObject({ state: 'signed', body: '{}' });
+    expect(await refusalOf(getDb().execute(sql`update payments set body = 'other' where id = ${id}`))).toMatch(
+      /the body is written once/
+    );
+    expect((await rowOf(id)).body).toBe('{}');
+  });
+
+  it('given a pending row, when a raw body is written on it, then the database refuses', async () => {
+    const { t } = await connected('1');
+    const claimed = await claim(
+      { connectionId: t.connectionId, payer: t.sessionAddress, permissionId: 'p' },
+      'raw-pending',
+      { url: url('/exact'), method: 'GET', headers: {} }
+    );
+    if (claimed.kind !== 'run') throw new Error(`claimed ${claimed.kind}`);
+    const id = claimed.row.id;
+    expect(await refusalOf(getDb().execute(sql`update payments set body = 'early' where id = ${id}`))).toMatch(
+      /payment_body/
+    );
   });
 });
 

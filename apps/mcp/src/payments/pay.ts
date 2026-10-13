@@ -51,6 +51,7 @@ const CONFIRM_MS = 3_000;
 // How long the receipt is awaited once the answer is out, before the reconciler takes over.
 const LATE_CONFIRM_MS = 30_000;
 const BODY_MAX = 8_000;
+const STORED_BODY_MAX = 16_384;
 
 // Reasons built from our own errors can quote an RPC or paymaster url, key included.
 const SERVER_REASONS = new Set([
@@ -132,15 +133,19 @@ export const thrown = (err: unknown): Unreached => ({
   reason: errorMessage(err),
 });
 
+function bodyOf(o: Outcome): string | undefined {
+  if (!('body' in o) || o.body === undefined || o.body === '') return undefined;
+  return typeof o.body === 'string' ? o.body : JSON.stringify(o.body);
+}
+
 const codeOf = (o: Outcome) => (o.kind === 'unreached' ? o.code : 'refusal' in o ? o.refusal.code : undefined);
 
 /** The seller's body and reason, fenced once, so a replay repeats the same words. */
 function fencedOf(url: string, o: Outcome): string[] {
   const host = new URL(url).host;
   const fenced: string[] = [];
-  if ('body' in o && o.body !== undefined && o.body !== '') {
-    fenced.push(fenceText(host, typeof o.body === 'string' ? o.body : JSON.stringify(o.body), BODY_MAX));
-  }
+  const body = bodyOf(o);
+  if (body !== undefined) fenced.push(fenceText(host, body, BODY_MAX));
   const code = codeOf(o);
   const reason = o.kind === 'unreached' ? o.reason : 'refusal' in o ? o.refusal.reason : '';
   if (reason && code && SERVER_REASONS.has(code)) {
@@ -259,7 +264,12 @@ const merged = (row: PaymentRow, c: Conclusion): PaymentRow => ({
 });
 
 /** One `jaw_pay_and_fetch` call, from the gates to an answer drawn from its row. */
-export async function pay(t: Tenant, input: PayInput, deps: PayDeps = liveDeps()): Promise<PayResult> {
+export async function pay(
+  t: Tenant,
+  input: PayInput,
+  deps: PayDeps = liveDeps(),
+  { keepBody = false } = {}
+): Promise<PayResult> {
   if (!t.scopes.includes('x402:pay')) {
     return gate(
       'insufficient_scope',
@@ -309,7 +319,7 @@ export async function pay(t: Tenant, input: PayInput, deps: PayDeps = liveDeps()
       grant?.permissionId === claimed.row.permissionId
         ? await grantLive(grant, deps)
         : { kind: 'unreached', code: 'no_grant', reason: 'the budget this payment was signed under ended' };
-    return resend(claimed.row, claimed.token, stopped, payer, sent, confirm, cuts.lastCut);
+    return resend(claimed.row, claimed.token, stopped, payer, sent, confirm, cuts.lastCut, keepBody);
   }
 
   const { row, token } = claimed;
@@ -322,6 +332,7 @@ export async function pay(t: Tenant, input: PayInput, deps: PayDeps = liveDeps()
     signed,
     signedAt: new Date(started),
     confirm,
+    keepBody,
   });
   return render(done.row, done.fenced, cuts.lastCut());
 }
@@ -334,12 +345,14 @@ async function concludeSend(
   row: PaymentRow,
   token: string,
   outcome: Outcome,
-  opts: { signed: boolean; signedAt: Date; confirm: Confirm }
+  opts: { signed: boolean; signedAt: Date; confirm: Confirm; keepBody: boolean }
 ): Promise<{ row: PaymentRow; fenced: string[] }> {
   const checked = await claimedHashOnly(outcome, row.id);
   const settled = await settledBy(checked, opts.signedAt, opts.confirm.clients, CONFIRM_MS);
   const movedBefore = Boolean(row.topUpAmount || row.topUpBatchId || row.approvalBatchId);
   const conclusion = conclusionOf(checked, opts.signed, settled, movedBefore);
+  const body = opts.keepBody ? bodyOf(outcome) : undefined;
+  if (body !== undefined) conclusion.body = Array.from(body).slice(0, STORED_BODY_MAX).join('');
   const fenced = fencedOf(row.url, outcome);
   let written: PaymentRow | undefined;
   try {
@@ -385,7 +398,8 @@ async function resend(
   payer: Payer,
   sent: Parameters<typeof payAndFetch>[2],
   confirm: Confirm,
-  lastCut: () => boolean
+  lastCut: () => boolean,
+  keepBody: boolean
 ): Promise<PayResult> {
   const authorization = row.authorization as SignedAuthorization;
   const outcome: Outcome =
@@ -399,7 +413,12 @@ async function resend(
     await release(row.id, token);
     return render(merged(row, conclusionOf(outcome, true, undefined, false)), fencedOf(row.url, outcome), lastCut());
   }
-  const done = await concludeSend(row, token, outcome, { signed: true, signedAt: row.signedAt as Date, confirm });
+  const done = await concludeSend(row, token, outcome, {
+    signed: true,
+    signedAt: row.signedAt as Date,
+    confirm,
+    keepBody,
+  });
   return render(done.row, done.fenced, lastCut());
 }
 
