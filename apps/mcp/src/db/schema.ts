@@ -190,6 +190,82 @@ export const payments = pgTable(
   ]
 );
 
+export const SWAP_DEPOSIT_ADDRESS_INDEX = 'swaps_deposit_address_index';
+
+export const swaps = pgTable(
+  'swaps',
+  {
+    id: text('id').primaryKey(),
+    connectionId: text('connection_id')
+      .notNull()
+      .references(() => connections.id),
+    idempotencyKey: text('idempotency_key').notNull(),
+    requestHash: text('request_hash').notNull(),
+    state: text('state', {
+      enum: [
+        'quoting',
+        'quote_failed',
+        'quote_rejected',
+        'abandoned',
+        'awaiting_owner',
+        'owner_declined',
+        'expired',
+        'deposit_sent',
+        'submitted',
+        'completed',
+        'refunded',
+        'failed',
+      ],
+    })
+      .notNull()
+      .default('quoting'),
+    code: text('code'),
+    leaseToken: text('lease_token'),
+    leaseUntil: timestamp('lease_until', { withTimezone: true }).notNull(),
+    originChainId: integer('origin_chain_id').notNull(),
+    originToken: text('origin_token').notNull(),
+    destinationChainId: integer('destination_chain_id').notNull(),
+    destinationToken: text('destination_token').notNull(),
+    amount: numeric('amount', { precision: 78, scale: 0 }).notNull(),
+    depositor: text('depositor').notNull(),
+    recipient: text('recipient').notNull(),
+    paymentAttempt: integer('payment_attempt').notNull().default(1),
+    paymentKey: text('payment_key').notNull(),
+    paymentId: text('payment_id'),
+    paidAt: timestamp('paid_at', { withTimezone: true }),
+    quoteId: text('quote_id').unique(),
+    depositAddress: text('deposit_address'),
+    quote: jsonb('quote'),
+    quoteFenced: text('quote_fenced'),
+    call: jsonb('call').$type<{ chainId: number; to: string; data: string; value: string }>(),
+    walletUrl: text('wallet_url'),
+    approveBy: timestamp('approve_by', { withTimezone: true }),
+    callsId: text('calls_id'),
+    txHash: text('tx_hash'),
+    backendState: text('backend_state'),
+    backendRawState: text('backend_raw_state'),
+    submitAttempts: integer('submit_attempts').notNull().default(0),
+    checkedAt: timestamp('checked_at', { withTimezone: true }),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+    updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
+    finishedAt: timestamp('finished_at', { withTimezone: true }),
+  },
+  (t) => [
+    uniqueIndex().on(t.connectionId, t.idempotencyKey),
+    uniqueIndex(SWAP_DEPOSIT_ADDRESS_INDEX).on(sql`lower(${t.depositAddress})`),
+    index().on(t.connectionId, t.createdAt, t.id),
+    uniqueIndex('swaps_open_index')
+      .on(t.connectionId)
+      .where(sql`${t.state} in ('quoting', 'awaiting_owner')`),
+    check('swap_payment_key', sql`${t.paymentKey} = 'swap:' || ${t.id} || ':' || ${t.paymentAttempt}`),
+    check(
+      'swap_shape',
+      sql`${t.state} in ('quoting', 'quote_failed', 'quote_rejected', 'abandoned')
+        or (${t.quoteId} is not null and ${t.call} is not null and ${t.walletUrl} is not null and ${t.approveBy} is not null)`
+    ),
+  ]
+);
+
 // One row per tool call. Arguments and results are never stored: they can carry
 // seller headers, signatures and amounts the owner did not ask to keep.
 export const auditEvents = pgTable(
