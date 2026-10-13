@@ -9,12 +9,15 @@ import { claim as claimPayment } from '@/payments/store';
 import { purge } from '@/reconciler/run';
 import {
   claimSwap,
+  depositAddressReused,
   isDepositAddressTaken,
   move,
   nextAttempt,
   recordCallsId,
+  release,
   SWAP_TRANSITIONS,
   writeHeld,
+  type SwapLease,
   type SwapRequest,
   type SwapRow,
 } from './store';
@@ -85,6 +88,8 @@ async function quoting(connectionId: string, key: string = randomUUID()) {
   return claimed;
 }
 
+const leaseOf = (row: SwapRow, token: string): SwapLease => ({ connectionId: row.connectionId, id: row.id, token });
+
 const linkOf = (approveBy: SQL = sql`now() + interval '4 minutes'`) => ({
   ...quoteOf(),
   walletUrl: 'https://keys.test/cli-bridge#s',
@@ -93,7 +98,7 @@ const linkOf = (approveBy: SQL = sql`now() + interval '4 minutes'`) => ({
 
 async function awaiting(connectionId: string, approveBy?: SQL) {
   const { row, token } = await quoting(connectionId);
-  const held = await writeHeld(row.id, token, { ...linkOf(approveBy), state: 'awaiting_owner' });
+  const held = await writeHeld(leaseOf(row, token), { ...linkOf(approveBy), state: 'awaiting_owner' });
   if (!held) throw new Error('the quote was not written');
   return held;
 }
@@ -164,7 +169,7 @@ describe('claiming a swap by its idempotency key', () => {
     await lapse(first.row.id);
     const again = await claimSwap(connectionId, 'k', request);
     expect(again).toMatchObject({ kind: 'run', row: { id: first.row.id } });
-    expect(await writeHeld(first.row.id, first.token, { code: 'late' })).toBeUndefined();
+    expect(await writeHeld(leaseOf(first.row, first.token), { code: 'late' })).toBeUndefined();
     expect((await rowOf(first.row.id)).code).toBeNull();
   });
 
@@ -246,7 +251,7 @@ describe('one open swap per connection (B18)', () => {
   it('given a swap that ended, when another key is claimed, then the new key runs', async () => {
     const connectionId = await newConnection();
     const { row, token } = await quoting(connectionId);
-    await writeHeld(row.id, token, { state: 'quote_failed', code: 'quote_unavailable' });
+    await writeHeld(leaseOf(row, token), { state: 'quote_failed', code: 'quote_unavailable' });
     expect((await claimSwap(connectionId, 'other', request)).kind).toBe('run');
   });
 });
@@ -303,27 +308,58 @@ describe('the purge of approvals never completed', () => {
   });
 });
 
+describe('lease writes', () => {
+  it('given a lease of another connection, when the row is written, released or moved to a new attempt, then nothing changes', async () => {
+    const { row, token } = await quoting(await newConnection());
+    await failPayment(await paymentFor(row));
+    const foreign = { ...leaseOf(row, token), connectionId: await newConnection() };
+
+    expect(await writeHeld(foreign, { code: 'foreign' })).toBeUndefined();
+    expect(await release(foreign, { code: 'foreign' })).toBeUndefined();
+    expect(await nextAttempt(foreign)).toBeUndefined();
+    expect(await rowOf(row.id)).toMatchObject({ code: null, leaseToken: token, paymentAttempt: 1 });
+  });
+
+  it('given a row holding its quote, when the lease is released, then the row keeps its quote and its lease', async () => {
+    const { row, token } = await quoting(await newConnection());
+    await writeHeld(leaseOf(row, token), quoteOf());
+
+    expect(await release(leaseOf(row, token), { code: 'late' })).toBeUndefined();
+    expect(await rowOf(row.id)).toMatchObject({ code: null, leaseToken: token });
+  });
+});
+
 describe('payment attempts', () => {
   it('given the current payment is still pending, when a new attempt is asked, then the row keeps its attempt', async () => {
     const { row, token } = await quoting(await newConnection());
     await paymentFor(row);
-    expect(await nextAttempt(row.id, token)).toBeUndefined();
+    expect(await nextAttempt(leaseOf(row, token))).toBeUndefined();
     expect((await rowOf(row.id)).paymentAttempt).toBe(1);
   });
 
   it('given the current payment failed unpaid, when a new attempt is asked, then the row moves to attempt 2 under swap:<id>:2', async () => {
     const { row, token } = await quoting(await newConnection());
-    await writeHeld(row.id, token, { paymentId: await paymentFor(row), code: 'budget_exhausted' });
+    await writeHeld(leaseOf(row, token), { paymentId: await paymentFor(row), code: 'budget_exhausted' });
     await failPayment((await rowOf(row.id)).paymentId!);
-    const next = await nextAttempt(row.id, token);
+    const next = await nextAttempt(leaseOf(row, token));
     expect(next).toMatchObject({ paymentAttempt: 2, paymentKey: `swap:${row.id}:2`, paymentId: null, code: null });
+  });
+
+  it('given the current payment was answered free, when a new attempt is asked, then the row moves to attempt 2', async () => {
+    const { row, token } = await quoting(await newConnection());
+    const paymentId = await paymentFor(row);
+    await getDb()
+      .update(payments)
+      .set({ state: 'settled', kind: 'free', httpStatus: 503, finishedAt: new Date() })
+      .where(eq(payments.id, paymentId));
+    expect(await nextAttempt(leaseOf(row, token))).toMatchObject({ paymentAttempt: 2 });
   });
 
   it('given a row holding a quote whose payment later failed, when a new attempt is asked, then the row keeps its attempt', async () => {
     const { row, token } = await quoting(await newConnection());
     await failPayment(await paymentFor(row));
-    await writeHeld(row.id, token, quoteOf());
-    expect(await nextAttempt(row.id, token)).toBeUndefined();
+    await writeHeld(leaseOf(row, token), quoteOf());
+    expect(await nextAttempt(leaseOf(row, token))).toBeUndefined();
     expect((await rowOf(row.id)).paymentAttempt).toBe(1);
   });
 
@@ -347,7 +383,7 @@ describe('payment attempts', () => {
 
   it('given a row holding a quote, when the attempt grows, then the database refuses', async () => {
     const { row, token } = await quoting(await newConnection());
-    await writeHeld(row.id, token, quoteOf());
+    await writeHeld(leaseOf(row, token), quoteOf());
     const write = getDb()
       .update(swaps)
       .set({ paymentAttempt: 2, paymentKey: `swap:${row.id}:2` })
@@ -371,7 +407,7 @@ describe('the swaps guard', () => {
     if (state === 'quoting') return (await quoting(connectionId)).row;
     if (['quote_failed', 'quote_rejected', 'abandoned'].includes(state)) {
       const { row, token } = await quoting(connectionId);
-      return (await writeHeld(row.id, token, { state }))!;
+      return (await writeHeld(leaseOf(row, token), { state }))!;
     }
     const row = await awaiting(connectionId);
     if (state === 'awaiting_owner') return row;
@@ -520,7 +556,9 @@ describe('the swaps guard', () => {
 
   it('given a quoting row, when it moves to awaiting_owner without a link, then the database refuses', async () => {
     const { row, token } = await quoting(await newConnection());
-    expect(await refusalOf(writeHeld(row.id, token, { ...quoteOf(), state: 'awaiting_owner' }))).toMatch(/swap_shape/);
+    expect(await refusalOf(writeHeld(leaseOf(row, token), { ...quoteOf(), state: 'awaiting_owner' }))).toMatch(
+      /swap_shape/
+    );
   });
 });
 
@@ -528,19 +566,37 @@ describe('deposit addresses', () => {
   it('given a swap holding a deposit address, when another swap writes it in another case, then the database refuses', async () => {
     const address = freshAddress();
     const first = await quoting(await newConnection());
-    await writeHeld(first.row.id, first.token, quoteOf(address));
+    await writeHeld(leaseOf(first.row, first.token), quoteOf(address));
     const second = await quoting(await newConnection());
-    const write = writeHeld(second.row.id, second.token, {
+    const write = writeHeld(leaseOf(second.row, second.token), {
       ...quoteOf(),
       depositAddress: address.toLowerCase(),
     });
     expect(await refusalOf(write)).toMatch(/swaps_deposit_address_index/);
   });
 
+  it('given a write refused by the deposit address index or by another unique key, when it is read, then only the first is a reused address', async () => {
+    const address = freshAddress();
+    const first = await quoting(await newConnection());
+    await writeHeld(leaseOf(first.row, first.token), quoteOf(address));
+    const second = await quoting(await newConnection());
+    const reused = await writeHeld(leaseOf(second.row, second.token), {
+      ...quoteOf(),
+      depositAddress: address,
+    }).catch((e: unknown) => e);
+    const duplicate = await getDb()
+      .insert(swaps)
+      .values(first.row)
+      .catch((e: unknown) => e);
+
+    expect(depositAddressReused(reused)).toBe(true);
+    expect(depositAddressReused(duplicate)).toBe(false);
+  });
+
   it('given a swap holding a deposit address, when it is looked up in any case, then it is taken', async () => {
     const address = freshAddress();
     const { row, token } = await quoting(await newConnection());
-    await writeHeld(row.id, token, quoteOf(address));
+    await writeHeld(leaseOf(row, token), quoteOf(address));
     expect(await isDepositAddressTaken(address.toLowerCase())).toBe(true);
     expect(await isDepositAddressTaken(address.toUpperCase().replace('0X', '0x'))).toBe(true);
     expect(await isDepositAddressTaken(freshAddress())).toBe(false);

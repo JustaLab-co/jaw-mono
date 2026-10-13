@@ -2,7 +2,7 @@ import { createHash, randomBytes } from 'node:crypto';
 import { and, eq, inArray, isNull, lt, not, sql, type SQL } from 'drizzle-orm';
 import type { PgUpdateSetSource } from 'drizzle-orm/pg-core';
 import { getDb, type Tx } from '@/db/client';
-import { payments, swaps } from '@/db/schema';
+import { payments, SWAP_DEPOSIT_ADDRESS_INDEX, swaps } from '@/db/schema';
 import { LEASE_MS } from '@/payments/store';
 
 export type SwapRow = typeof swaps.$inferSelect;
@@ -165,16 +165,24 @@ export async function claimSwap(connectionId: string, key: string, request: Swap
   return { kind: 'busy' };
 }
 
-const held = (id: string, token: string) =>
-  and(eq(swaps.id, id), eq(swaps.state, 'quoting'), eq(swaps.leaseToken, token), leaseLive);
+export type SwapLease = { connectionId: string; id: string; token: string };
 
-export const writeHeld = (id: string, token: string, set: SwapSet) => write(held(id, token), set);
+const held = ({ connectionId, id, token }: SwapLease) =>
+  and(
+    eq(swaps.id, id),
+    eq(swaps.connectionId, connectionId),
+    eq(swaps.state, 'quoting'),
+    eq(swaps.leaseToken, token),
+    leaseLive
+  );
 
-export const release = (id: string, token: string, set: SwapSet) =>
-  write(held(id, token), { ...set, leaseToken: null, leaseUntil: dbNow });
+export const writeHeld = (lease: SwapLease, set: SwapSet) => write(held(lease), set);
 
-export const nextAttempt = (id: string, token: string) =>
-  write(and(held(id, token), isNull(swaps.quoteId), currentPayment(sql`p.state = 'failed'`)), {
+export const release = (lease: SwapLease, set: SwapSet) =>
+  write(and(held(lease), isNull(swaps.quoteId)), { ...set, leaseToken: null, leaseUntil: dbNow });
+
+export const nextAttempt = (lease: SwapLease) =>
+  write(and(held(lease), isNull(swaps.quoteId), currentPayment(sql`(p.state = 'failed' or p.kind = 'free')`)), {
     paymentAttempt: sql`${swaps.paymentAttempt} + 1`,
     paymentKey: sql`'swap:' || ${swaps.id} || ':' || (${swaps.paymentAttempt} + 1)`,
     paymentId: null,
@@ -189,6 +197,13 @@ export const move = (connectionId: string, id: string, from: SwapState[], to: Sw
 
 export const recordCallsId = (connectionId: string, id: string, callsId: string) =>
   move(connectionId, id, ['awaiting_owner', 'expired'], 'deposit_sent', { callsId });
+
+const DEPOSIT_ADDRESS_KEYS = new Set([SWAP_DEPOSIT_ADDRESS_INDEX, 'swaps_quote_id_unique']);
+
+export function depositAddressReused(err: unknown): boolean {
+  const e = (err as { cause?: { code?: unknown; constraint_name?: unknown; constraint?: unknown } }).cause;
+  return e?.code === '23505' && DEPOSIT_ADDRESS_KEYS.has(String(e.constraint_name ?? e.constraint));
+}
 
 export async function isDepositAddressTaken(address: string): Promise<boolean> {
   const [row] = await getDb()
