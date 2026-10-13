@@ -50,7 +50,7 @@ import {
 } from '@/db/test-db';
 import { safeFetch } from '@/lib/safe-fetch';
 import { pay, type PayDeps } from './pay';
-import { rawBody } from './render';
+import { rawBody, resent } from './render';
 import { inTurn, withFloat } from './float-lock';
 import { SEND_RESERVE_MS, stillHeld } from './refill';
 import { claim, finish, holdingRows, PAY_LIMIT_MS } from './store';
@@ -463,6 +463,19 @@ describe('jaw_pay_and_fetch', () => {
     expect(again.structuredContent).toMatchObject({ refusal: { code: 'settlement_rejected' } });
     expect(third.structuredContent).toMatchObject({ refusal: { code: 'settlement_rejected' } });
     expect(await rowOf(lost.structuredContent!.paymentId)).toMatchObject({ state: 'signed', code: 'no_response' });
+  });
+
+  it('given a proof the seller rejects, when it is a resend of a lost proof, then the answer says it was resent; when it is a first send, then it does not', async () => {
+    const { t } = await connected('1');
+    balances.set(t.sessionAddress.toLowerCase(), 1_000_000n);
+    dropNextLost = true;
+    await pay(t, { url: url('/refuse'), idempotencyKey: 'resent-1' }, deps());
+    const again = await pay(t, { url: url('/refuse'), idempotencyKey: 'resent-1' }, deps());
+    const first = await pay(t, { url: url('/refuse'), idempotencyKey: 'resent-2' }, deps());
+    expect(again.structuredContent).toMatchObject({ httpStatus: 402, refusal: { code: 'settlement_rejected' } });
+    expect(again[resent]).toBe(true);
+    expect(first.structuredContent).toMatchObject({ httpStatus: 402, refusal: { code: 'settlement_rejected' } });
+    expect(first[resent]).toBeUndefined();
   });
 
   it('given a lost answer and a budget revoked on chain since, when the key is retried, then the proof is not sent again', async () => {
