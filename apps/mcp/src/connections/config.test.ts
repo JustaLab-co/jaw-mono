@@ -7,6 +7,7 @@ afterEach(() => {
   setTestEnv();
   delete process.env.JAW_MCP_FLOAT_TARGET;
   delete process.env.JAW_MCP_INSECURE_FETCH_HOSTS;
+  delete process.env.JAW_MCP_SWAP_URL;
   vi.resetModules();
 });
 
@@ -49,5 +50,24 @@ describe('JAW_MCP_INSECURE_FETCH_HOSTS', () => {
     process.env.JAW_MCP_PUBLIC_URL = 'https://mcp.jaw.id';
     const { config } = await import('./config');
     expect(config().insecureFetchHosts.size).toBe(0);
+  });
+});
+
+describe('JAW_MCP_SWAP_URL', () => {
+  it('given it unset, then the swap backend is the production proxy', async () => {
+    const { config } = await import('./config');
+    expect(config().swapUrl).toBe('https://api.justaname.id/proxy/v2');
+  });
+
+  it('given a URL with a trailing slash, then it is read without it', async () => {
+    process.env.JAW_MCP_SWAP_URL = 'http://127.0.0.1:4021/proxy/v2/';
+    const { config } = await import('./config');
+    expect(config().swapUrl).toBe('http://127.0.0.1:4021/proxy/v2');
+  });
+
+  it('given a value that is not a URL, then it refuses to start naming the variable', async () => {
+    process.env.JAW_MCP_SWAP_URL = 'api.justaname.id';
+    const { config } = await import('./config');
+    expect(() => config()).toThrow(/JAW_MCP_SWAP_URL/);
   });
 });

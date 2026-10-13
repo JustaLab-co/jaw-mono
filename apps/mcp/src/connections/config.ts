@@ -19,6 +19,7 @@ export interface Config {
   floatTarget: bigint;
   /** USDC base units per day a connection that pays asks for when it connects. */
   dailyBudget: bigint;
+  swapUrl: string;
   ring: KeyRing;
 }
 
@@ -49,6 +50,7 @@ export function config(): Config {
     paymasterApiKey: process.env.JAW_MCP_API_KEY || undefined,
     floatTarget: baseUnits('JAW_MCP_FLOAT_TARGET', process.env.JAW_MCP_FLOAT_TARGET || '250000'),
     dailyBudget: baseUnits('JAW_MCP_DAILY_BUDGET', process.env.JAW_MCP_DAILY_BUDGET || '1000000'),
+    swapUrl: swapUrl(process.env.JAW_MCP_SWAP_URL || 'https://api.justaname.id/proxy/v2'),
     ring: parseKeyRing(process.env.JAW_MCP_SEALING_KEYS),
   };
   return cached;
@@ -74,4 +76,10 @@ function required(name: string): string {
 function baseUnits(name: string, value: string): bigint {
   if (!/^\d+$/.test(value)) throw new Error(`${name} must be whole base units, such as 250000 for 0.25 USDC`);
   return BigInt(value);
+}
+
+function swapUrl(value: string): string {
+  if (!URL.canParse(value))
+    throw new Error('JAW_MCP_SWAP_URL must be a URL, such as https://api.justaname.id/proxy/v2');
+  return value.replace(/\/+$/, '');
 }
