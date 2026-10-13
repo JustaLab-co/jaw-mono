@@ -113,6 +113,13 @@
       "when": 1791917266461,
       "tag": "0015_payment_body",
       "breakpoints": true
+    },
+    {
+      "idx": 16,
+      "version": "7",
+      "when": 1791922126766,
+      "tag": "0016_swaps",
+      "breakpoints": true
     }
   ]
 }

@@ -7,7 +7,7 @@ import { retire, sessionSender, type DisconnectDeps } from '@/connections/discon
 import { claimSealedKey, endConnection, restoreSealedKey } from '@/connections/rows';
 import { open, type Sealed } from '@/connections/seal';
 import { getDb } from '@/db/client';
-import { auditEvents, connections, grants, oauthPayloads, payments, rateLimits } from '@/db/schema';
+import { auditEvents, connections, grants, oauthPayloads, payments, rateLimits, swaps } from '@/db/schema';
 import { isPaymentsPaused } from '@/db/settings';
 import { readOnChain } from '@/grants/permission';
 import { errorLabel, log } from '@/lib/edge';
@@ -107,7 +107,8 @@ export async function purge(deps = SESSION_DEPS): Promise<void> {
         lt(connections.expiresAt, dayAgo),
         isNull(connections.sealedKey),
         sql`not exists (select 1 from ${grants} where ${grants.connectionId} = ${connections.id})`,
-        sql`not exists (select 1 from ${payments} where ${payments.connectionId} = ${connections.id})`
+        sql`not exists (select 1 from ${payments} where ${payments.connectionId} = ${connections.id})`,
+        sql`not exists (select 1 from ${swaps} where ${swaps.connectionId} = ${connections.id})`
       )
     );
 }
