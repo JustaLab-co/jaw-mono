@@ -11,6 +11,14 @@ describe('withoutApiKey', () => {
         expect(text).toContain('api-key=***&x=1');
     });
 
+    it.each(['apikey', 'api_key', 'API-KEY'])('masks a %s key in a custom paymaster url', (param) => {
+        const url = `https://api.pimlico.io/v2/84532/rpc?${param}=SECRET123`;
+        const text = withoutApiKey(new HttpRequestError({ url, status: 500 }));
+
+        expect(text).not.toContain('SECRET123');
+        expect(text).toContain(`rpc?${param}=***`);
+    });
+
     it('leaves text without a key as it was', () => {
         expect(withoutApiKey('rate limited')).toBe('rate limited');
     });
