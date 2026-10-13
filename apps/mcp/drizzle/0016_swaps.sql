@@ -44,8 +44,7 @@ ALTER TABLE "swaps" ADD CONSTRAINT "swaps_connection_id_connections_id_fk" FOREI
 CREATE UNIQUE INDEX "swaps_connection_id_idempotency_key_index" ON "swaps" USING btree ("connection_id","idempotency_key");--> statement-breakpoint
 CREATE UNIQUE INDEX "swaps_deposit_address_index" ON "swaps" USING btree (lower("deposit_address"));--> statement-breakpoint
 CREATE INDEX "swaps_connection_id_created_at_id_index" ON "swaps" USING btree ("connection_id","created_at","id");--> statement-breakpoint
-CREATE UNIQUE INDEX "swaps_open_index" ON "swaps" USING btree ("connection_id") WHERE "swaps"."state" in ('quoting', 'awaiting_owner');
---> statement-breakpoint
+CREATE UNIQUE INDEX "swaps_open_index" ON "swaps" USING btree ("connection_id") WHERE "swaps"."state" in ('quoting', 'awaiting_owner');--> statement-breakpoint
 CREATE FUNCTION "swaps_guard"() RETURNS trigger LANGUAGE plpgsql AS $$
 DECLARE
   finals CONSTANT text[] := ARRAY['quote_failed', 'quote_rejected', 'abandoned', 'owner_declined', 'completed', 'refunded', 'failed'];
