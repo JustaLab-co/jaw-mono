@@ -1,7 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import { createServer } from 'node:http';
 import { createServer as createTcpServer, connect as tcpConnect, type AddressInfo, type Socket } from 'node:net';
-import type { ChainClients, TopUpExecutor } from '@jaw.id/agent';
+import { FetchRefused, type ChainClients, type TopUpExecutor } from '@jaw.id/agent';
 import { eq, inArray, sql } from 'drizzle-orm';
 import fc from 'fast-check';
 import postgres from 'postgres';
@@ -1257,11 +1257,125 @@ describe('the raw body kept for an internal caller', () => {
     });
   });
 
-  it('given a body over 16 KB and keepBody, when it passes through, then the raw body is cut at 16 KB', async () => {
+  const serving = (body: string | null) => deps({ fetch: async () => new Response(body) });
+  const kept = async (body: string | null, idempotencyKey?: string) => {
+    const { t } = await connected('1');
+    const result = await pay(t, { url: url('/free'), idempotencyKey }, serving(body), { keepBody: true });
+    return { result, row: await rowOf(result.structuredContent!.paymentId) };
+  };
+
+  it('given keepBody and a body over 16384 bytes, when it passes through, then no raw body is kept rather than a cut one', async () => {
     const { t } = await connected('1');
     const result = await pay(t, { url: url('/huge') }, deps(), { keepBody: true });
-    expect(result[rawBody]).toBe('x'.repeat(16_384));
-    expect((await rowOf(result.structuredContent!.paymentId)).body).toBe('x'.repeat(16_384));
+    expect(result.structuredContent).toMatchObject({ kind: 'free', state: 'settled' });
+    expect(result[rawBody]).toBeUndefined();
+    expect((await rowOf(result.structuredContent!.paymentId)).body).toBeNull();
+  });
+
+  it('given keepBody and a body of exactly 16384 bytes, when it passes through, then it is kept whole', async () => {
+    const { result, row } = await kept('é'.repeat(8_192));
+    expect(result[rawBody]).toBe('é'.repeat(8_192));
+    expect(row.body).toBe('é'.repeat(8_192));
+  });
+
+  it('given keepBody and a body one byte over 16384 in fewer characters, when it passes through, then no raw body is kept', async () => {
+    const { result, row } = await kept(`${'é'.repeat(8_192)}x`);
+    expect(result[rawBody]).toBeUndefined();
+    expect(row.body).toBeNull();
+  });
+
+  it('given keepBody and a JSON body with an integer past 2^53, when it is kept, then the raw body holds the digits the seller sent', async () => {
+    const { result, row } = await kept('{"amount":123456789012345678901}');
+    expect(result[rawBody]).toBe('{"amount":123456789012345678901}');
+    expect(row.body).toBe('{"amount":123456789012345678901}');
+  });
+
+  it('given keepBody and an empty body, when it is kept, then the raw body is empty, not {}', async () => {
+    const { result, row } = await kept('');
+    expect(result[rawBody]).toBe('');
+    expect(row.body).toBe('');
+  });
+
+  it('given keepBody and a response with no body at all, when it is kept, then the raw body is empty', async () => {
+    const { result, row } = await kept(null);
+    expect(result[rawBody]).toBe('');
+    expect(row.body).toBe('');
+  });
+
+  it('given keepBody and a signed proof that never reached the seller, when it concludes, then the 402 before it is not kept as the body', async () => {
+    const { t } = await connected('1');
+    balances.set(t.sessionAddress.toLowerCase(), 1_000_000n);
+    const live = safeFetch(new Set([SELLER]));
+    const blockedProof: typeof fetch = async (input, init) => {
+      if (new Headers(init?.headers).has('payment-signature')) throw new FetchRefused('blocked');
+      return live(input, init);
+    };
+    const result = await pay(t, { url: url('/exact') }, deps({ fetch: blockedProof }), { keepBody: true });
+    expect(result.structuredContent).toMatchObject({ state: 'unknown', refusal: { code: 'blocked_url' } });
+    expect(result[rawBody]).toBeUndefined();
+    expect((await rowOf(result.structuredContent!.paymentId)).body).toBeNull();
+  });
+
+  it('given keepBody and a body the agent replaced with its own error past 2 MB, when it concludes, then no raw body is kept', async () => {
+    const { result, row } = await kept('y'.repeat(2 * 1024 * 1024 + 1));
+    expect(result.structuredContent).toMatchObject({ kind: 'free', state: 'settled' });
+    expect(result[rawBody]).toBeUndefined();
+    expect(row.body).toBeNull();
+  });
+
+  it('given keepBody and a body holding NUL bytes, when it is stored, then each NUL is kept as U+FFFD and the payment concludes', async () => {
+    const { result, row } = await kept('a\u0000b\u0000');
+    expect(result.structuredContent).toMatchObject({ kind: 'free', state: 'settled' });
+    expect(result[rawBody]).toBe('a\uFFFDb\uFFFD');
+    expect(row).toMatchObject({ state: 'settled', body: 'a\uFFFDb\uFFFD' });
+  });
+
+  it('given keepBody and a body the database refuses, when the payment settles, then the conclusion lands without the body', async () => {
+    const { t } = await connected('1');
+    balances.set(t.sessionAddress.toLowerCase(), 1_000_000n);
+    const drop = await failUpdates('raw-refused-body', 'new.body is not null');
+    try {
+      const result = await pay(t, { url: url('/exact'), idempotencyKey: 'raw-refused-body' }, deps(), {
+        keepBody: true,
+      });
+      expect(result.structuredContent).toMatchObject({ kind: 'paid', state: 'settled' });
+      expect(result[rawBody]).toBeUndefined();
+      expect(await rowOf(result.structuredContent!.paymentId)).toMatchObject({ state: 'settled', body: null });
+      const again = await pay(t, { url: url('/exact'), idempotencyKey: 'raw-refused-body' }, deps(), {
+        keepBody: true,
+      });
+      expect(again.structuredContent).toEqual(result.structuredContent);
+      expect(seen).toHaveLength(1);
+    } finally {
+      await drop();
+    }
+  });
+
+  it('given keepBody and a conclusion write that fails, when the call answers, then it still carries the raw body it read', async () => {
+    const drop = await failUpdates('raw-unwritten', 'new.kind is not null');
+    try {
+      const { result, row } = await kept('{"quote":1}', 'raw-unwritten');
+      expect(row.kind).toBeNull();
+      expect(result.structuredContent).toMatchObject({ kind: 'free', state: 'settled' });
+      expect(result[rawBody]).toBe('{"quote":1}');
+    } finally {
+      await drop();
+    }
+  });
+
+  it('given jaw_pay_and_fetch, when an idempotency key claims the swap: namespace, then it is refused and nothing is claimed', async () => {
+    const { c } = await connected('1');
+    const swapKey = await callTool(c.access_token, 'jaw_pay_and_fetch', {
+      url: url('/free'),
+      idempotencyKey: 'swap:abc:1',
+    });
+    expect(swapKey.isError).toBe(true);
+    await callTool(c.access_token, 'jaw_pay_and_fetch', { url: url('/free'), idempotencyKey: 'swap-abc-1' });
+    const claimed = await getDb()
+      .select({ key: payments.idempotencyKey })
+      .from(payments)
+      .where(inArray(payments.idempotencyKey, ['swap:abc:1', 'swap-abc-1']));
+    expect(claimed).toEqual([{ key: 'swap-abc-1' }]);
   });
 
   it('given jaw_pay_and_fetch, when it pays, then its row keeps no raw body and its answer only the fenced one', async () => {

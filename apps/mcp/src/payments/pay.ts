@@ -133,19 +133,15 @@ export const thrown = (err: unknown): Unreached => ({
   reason: errorMessage(err),
 });
 
-function bodyOf(o: Outcome): string | undefined {
-  if (!('body' in o) || o.body === undefined || o.body === '') return undefined;
-  return typeof o.body === 'string' ? o.body : JSON.stringify(o.body);
-}
-
 const codeOf = (o: Outcome) => (o.kind === 'unreached' ? o.code : 'refusal' in o ? o.refusal.code : undefined);
 
 /** The seller's body and reason, fenced once, so a replay repeats the same words. */
 function fencedOf(url: string, o: Outcome): string[] {
   const host = new URL(url).host;
   const fenced: string[] = [];
-  const body = bodyOf(o);
-  if (body !== undefined) fenced.push(fenceText(host, body, BODY_MAX));
+  if ('body' in o && o.body !== undefined && o.body !== '') {
+    fenced.push(fenceText(host, typeof o.body === 'string' ? o.body : JSON.stringify(o.body), BODY_MAX));
+  }
   const code = codeOf(o);
   const reason = o.kind === 'unreached' ? o.reason : 'refusal' in o ? o.refusal.reason : '';
   if (reason && code && SERVER_REASONS.has(code)) {
@@ -261,7 +257,38 @@ const merged = (row: PaymentRow, c: Conclusion): PaymentRow => ({
   topUpAmount: row.topUpAmount ?? c.topUp?.amount ?? null,
   topUpBatchId: row.topUpBatchId ?? c.topUp?.batchId ?? null,
   approvalBatchId: row.approvalBatchId ?? c.approvalBatchId ?? null,
+  body: c.body ?? row.body,
 });
+
+function tapBodies(inner: typeof fetch) {
+  let last: Promise<string | undefined> = Promise.resolve(undefined);
+  const tapped: typeof fetch = async (input, init) => {
+    last = Promise.resolve(undefined);
+    const res = await inner(input, init);
+    last = textUpTo(res.clone(), STORED_BODY_MAX).catch(() => undefined);
+    return res;
+  };
+  return { fetch: tapped, last: () => last };
+}
+
+async function textUpTo(res: Response, max: number): Promise<string | undefined> {
+  const reader = res.body?.getReader();
+  if (!reader) return '';
+  const chunks: Uint8Array[] = [];
+  let size = 0;
+  for (;;) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    size += value.byteLength;
+    if (size > max) {
+      await reader.cancel();
+      return undefined;
+    }
+    chunks.push(value);
+  }
+  // Postgres text columns reject NUL.
+  return Buffer.concat(chunks).toString('utf-8').replaceAll('\u0000', '\uFFFD');
+}
 
 /** One `jaw_pay_and_fetch` call, from the gates to an answer drawn from its row. */
 export async function pay(
@@ -309,7 +336,8 @@ export async function pay(
   const started = Date.now();
   const budget = until(started + PAY_LIMIT_MS);
   const payer = payerFor(t, deps.clients);
-  const cuts = watchCuts(deps.fetch);
+  const tap = tapBodies(deps.fetch);
+  const cuts = watchCuts(keepBody ? tap.fetch : deps.fetch);
   const sent = { method: request.method, headers: request.headers, body: request.body, budget, fetch: cuts.fetch };
   const confirm = { clients: deps.clients, later: deps.later };
 
@@ -319,7 +347,7 @@ export async function pay(
       grant?.permissionId === claimed.row.permissionId
         ? await grantLive(grant, deps)
         : { kind: 'unreached', code: 'no_grant', reason: 'the budget this payment was signed under ended' };
-    return resend(claimed.row, claimed.token, stopped, payer, sent, confirm, cuts.lastCut, keepBody);
+    return resend(claimed.row, claimed.token, stopped, payer, sent, confirm, cuts.lastCut, tap.last);
   }
 
   const { row, token } = claimed;
@@ -332,7 +360,7 @@ export async function pay(
     signed,
     signedAt: new Date(started),
     confirm,
-    keepBody,
+    raw: tap.last,
   });
   return render(done.row, done.fenced, cuts.lastCut());
 }
@@ -345,14 +373,13 @@ async function concludeSend(
   row: PaymentRow,
   token: string,
   outcome: Outcome,
-  opts: { signed: boolean; signedAt: Date; confirm: Confirm; keepBody: boolean }
+  opts: { signed: boolean; signedAt: Date; confirm: Confirm; raw: () => Promise<string | undefined> }
 ): Promise<{ row: PaymentRow; fenced: string[] }> {
   const checked = await claimedHashOnly(outcome, row.id);
   const settled = await settledBy(checked, opts.signedAt, opts.confirm.clients, CONFIRM_MS);
   const movedBefore = Boolean(row.topUpAmount || row.topUpBatchId || row.approvalBatchId);
   const conclusion = conclusionOf(checked, opts.signed, settled, movedBefore);
-  const body = opts.keepBody ? bodyOf(outcome) : undefined;
-  if (body !== undefined) conclusion.body = Array.from(body).slice(0, STORED_BODY_MAX).join('');
+  conclusion.body = await opts.raw();
   const fenced = fencedOf(row.url, outcome);
   let written: PaymentRow | undefined;
   try {
@@ -399,7 +426,7 @@ async function resend(
   sent: Parameters<typeof payAndFetch>[2],
   confirm: Confirm,
   lastCut: () => boolean,
-  keepBody: boolean
+  raw: () => Promise<string | undefined>
 ): Promise<PayResult> {
   const authorization = row.authorization as SignedAuthorization;
   const outcome: Outcome =
@@ -417,7 +444,7 @@ async function resend(
     signed: true,
     signedAt: row.signedAt as Date,
     confirm,
-    keepBody,
+    raw,
   });
   return render(done.row, done.fenced, lastCut());
 }

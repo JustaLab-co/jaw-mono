@@ -3,6 +3,7 @@ import type { SignedAuthorization, TopUpOutcome, X402LogEntry } from '@jaw.id/ag
 import { and, desc, eq, getTableColumns, gt, inArray, isNotNull, isNull, lt, ne, not, or, sql } from 'drizzle-orm';
 import type { Address } from 'viem';
 import { getDb, type Tx } from '@/db/client';
+import { errorLabel, log } from '@/lib/edge';
 import { EXPIRY_MARGIN_MS } from './confirm';
 import { connections, PAYER_TX_HASH_INDEX, payments } from '@/db/schema';
 
@@ -307,6 +308,16 @@ export async function finish(
   c: Conclusion,
   fenced: string[]
 ): Promise<PaymentRow | undefined> {
+  try {
+    return await finishHashed(id, token, c, fenced);
+  } catch (err) {
+    if (c.body === undefined) throw err;
+    log('warn', { msg: `payment ${id} concluded without its body`, error: errorLabel(err) });
+    return finishHashed(id, token, { ...c, body: undefined }, fenced);
+  }
+}
+
+async function finishHashed(id: string, token: string, c: Conclusion, fenced: string[]) {
   try {
     return await finishWith(id, token, c, fenced);
   } catch (err) {
