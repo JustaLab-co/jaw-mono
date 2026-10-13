@@ -1,6 +1,6 @@
 import { createHash, randomBytes } from 'node:crypto';
 import type { SignedAuthorization, TopUpOutcome, X402LogEntry } from '@jaw.id/agent';
-import { and, desc, eq, getTableColumns, inArray, isNotNull, isNull, lt, ne, not, or, sql } from 'drizzle-orm';
+import { and, desc, eq, getTableColumns, gt, inArray, isNotNull, isNull, lt, ne, not, or, sql } from 'drizzle-orm';
 import type { Address } from 'viem';
 import { getDb, type Tx } from '@/db/client';
 import { EXPIRY_MARGIN_MS } from './confirm';
@@ -78,7 +78,7 @@ async function find(connectionId: string, key: string): Promise<LeasedRow | unde
   return row;
 }
 
-/** The only way a call gets to send a row: once its lease lapsed and no reconciler run holds it. */
+/** The only way a call gets to send a row: once its lease lapsed, and for a signed row while its proof is live. */
 export async function take(
   row: PaymentRow,
   permissionId?: string
@@ -94,7 +94,7 @@ export async function take(
         eq(payments.state, row.state),
         sendable,
         leaseLapsed,
-        or(isNull(payments.reconcilingUntil), lt(payments.reconcilingUntil, dbNow))
+        or(eq(payments.state, 'pending'), gt(payments.deadline, dbNow))
       )
     )
     .returning();
@@ -441,8 +441,9 @@ export async function history(connectionId: string, limit: number, before?: stri
 
 /**
  * Claims up to `limit` rows for one reconciler run: signed or unknown, signed
- * before `signedBefore`, not owned by a live call, and not claimed by another
- * run. The claim is a lease on the row, so the chain is read with no lock held.
+ * before `signedBefore`, not owned by a live call, and not claimed by a run in
+ * the last `claimMs`. The claim only spaces runs out: a call may still take the
+ * row while the chain is read, so each write checks the row again.
  */
 export async function claimUnresolved(signedBefore: Date, claimMs: number, limit: number): Promise<PaymentRow[]> {
   const due = getDb()
@@ -466,7 +467,9 @@ export async function claimUnresolved(signedBefore: Date, claimMs: number, limit
     .returning();
 }
 
-const unresolved = (id: string) => and(eq(payments.id, id), inArray(payments.state, ['signed', 'unknown']));
+// A call that took the row meanwhile writes its own conclusion.
+const unresolved = (id: string) =>
+  and(eq(payments.id, id), inArray(payments.state, ['signed', 'unknown']), leaseLapsed);
 
 export async function settle(id: string, s: { txHash?: string; blockTime?: Date; amount: bigint }) {
   await getDb()

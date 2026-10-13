@@ -30,9 +30,9 @@ export interface Report {
 
 /**
  * Resolves every signed or unknown row older than the window and not held by a
- * live call. Rows are claimed with SKIP LOCKED and a short lease, the chain is
- * read with no lock held, and each answer is its own conditional update, so two
- * runs split the rows and one bad row never undoes the rest.
+ * live call. Rows are claimed with SKIP LOCKED and marked for `CLAIM_MS`, the
+ * chain is read with no lock held, and each answer is its own conditional
+ * update, so two runs split the rows and one bad row never undoes the rest.
  */
 export async function reconcile(clients: ChainClients = chainClients, now = new Date()): Promise<Report> {
   const report: Report = { settled: 0, failed: 0, open: 0, alerted: 0 };

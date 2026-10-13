@@ -36,6 +36,7 @@ import {
 import { floatHolder, getDb, setDb } from '@/db/client';
 import { connections, grants, payments, settings } from '@/db/schema';
 import { currentGrant } from '@/grants/store';
+import { reconcile } from '@/reconciler/run';
 import { revokeConnection } from '@/tools/connections';
 import { requestBudget } from '@/tools/request-budget';
 import {
@@ -503,6 +504,115 @@ describe('jaw_pay_and_fetch', () => {
     expect(again.structuredContent).toMatchObject({ refusal: { code: 'chain_unavailable' } });
     expect(seen).toHaveLength(1);
     expect(await rowOf(lost.structuredContent!.paymentId)).toMatchObject({ state: 'signed', code: 'no_response' });
+  });
+
+  /** A payment whose answer was lost, two minutes on: the call's lease ran out and the reconciler's window opened. */
+  async function lostAndDue(key: string) {
+    const { t } = await connected('1');
+    balances.set(t.sessionAddress.toLowerCase(), 1_000_000n);
+    dropNextLost = true;
+    const lost = await pay(t, { url: url('/lost'), idempotencyKey: key }, deps());
+    expect(lost.structuredContent).toMatchObject({ state: 'signed', refusal: { code: 'no_response' } });
+    const id = lost.structuredContent!.paymentId;
+    await getDb()
+      .update(payments)
+      .set({ signedAt: sql`now() - interval '2 minutes'`, leaseUntil: sql`now() - interval '1 second'` })
+      .where(eq(payments.id, id));
+    return { t, id };
+  }
+
+  /** Chain clients whose nonce read waits until `go` is called, so a reconciler run is caught mid-read. */
+  function heldRead() {
+    let reading!: () => void;
+    let go!: () => void;
+    const reached = new Promise<void>((r) => (reading = r));
+    const released = new Promise<void>((r) => (go = r));
+    const held = {
+      ...node,
+      readContract: async (args: Parameters<typeof node.readContract>[0]) => {
+        if (args.functionName === 'authorizationState') {
+          reading();
+          await released;
+        }
+        return node.readContract(args);
+      },
+    };
+    return { clients: { publicClient: () => held as unknown as PublicClient }, reached, go };
+  }
+
+  it('given a lost answer the reconciler already looked at, then a resend inside the proof deadline still sends it', async () => {
+    const { t, id } = await lostAndDue('recon-resend');
+    expect((await reconcile(clients)).open).toBeGreaterThanOrEqual(1);
+    expect((await rowOf(id)).deadline!.getTime()).toBeGreaterThan(Date.now() + 60_000);
+
+    const again = await pay(t, { url: url('/lost'), idempotencyKey: 'recon-resend' }, deps());
+    expect(again.content[0].text).not.toMatch(/^in_progress/);
+    expect(again.structuredContent).toMatchObject({ kind: 'paid', state: 'settled', paymentId: id });
+    expect(seen).toHaveLength(2);
+    expect(seen[1].nonce).toBe(seen[0].nonce);
+  });
+
+  it('given a resend that settles while a reconciler run reads the chain, then the run does not write over it', async () => {
+    const { t, id } = await lostAndDue('recon-race-1');
+    const read = heldRead();
+    const run = reconcile(read.clients);
+    await read.reached;
+    const again = await pay(t, { url: url('/lost'), idempotencyKey: 'recon-race-1' }, deps());
+    const settled = await rowOf(id);
+    expect(settled).toMatchObject({ state: 'settled', kind: 'paid', amount: '5000' });
+    used.add(seen[0].nonce.toLowerCase());
+    const lines = await logsOf(async () => {
+      read.go();
+      await run;
+    });
+    expect(again.structuredContent).toMatchObject({ kind: 'paid', state: 'settled', paymentId: id });
+    expect(await rowOf(id)).toEqual(settled);
+    expect(lines).not.toContain(`reconcile ${id} failed`);
+  });
+
+  it('given a reconciler run that reads while the resend is at the seller, then the resend answers settled', async () => {
+    const { t, id } = await lostAndDue('recon-race-2');
+    const read = heldRead();
+    const run = reconcile(read.clients);
+    await read.reached;
+    onProof.set('/lost', async () => {
+      used.add(seen[0].nonce.toLowerCase());
+      read.go();
+      await run;
+    });
+    const again = await pay(t, { url: url('/lost'), idempotencyKey: 'recon-race-2' }, deps());
+    const row = await rowOf(id);
+    expect(row).toMatchObject({ state: 'settled', kind: 'paid', amount: '5000' });
+    expect(again.structuredContent).toMatchObject({ kind: 'paid', state: 'settled', paymentId: id });
+    expect(seen.map((s) => s.nonce)).toEqual([seen[0].nonce, seen[0].nonce]);
+  });
+
+  it("given a reconciler run that reads while the resend is at the seller, then a replay repeats the seller's answer", async () => {
+    const { t, id } = await lostAndDue('recon-race-3');
+    const read = heldRead();
+    const run = reconcile(read.clients);
+    await read.reached;
+    onProof.set('/lost', async () => {
+      used.add(seen[0].nonce.toLowerCase());
+      read.go();
+      await run;
+    });
+    const again = await pay(t, { url: url('/lost'), idempotencyKey: 'recon-race-3' }, deps());
+    const replay = await pay(t, { url: url('/lost'), idempotencyKey: 'recon-race-3' }, deps());
+    expect(again.content[1].text).toContain('the weather is fine');
+    expect(replay).toEqual(again);
+    expect(await rowOf(id)).toMatchObject({ state: 'settled', httpStatus: 200, txHash: TX(2) });
+  });
+
+  it('given a lost answer whose proof deadline passed, then a resend does not send it', async () => {
+    const { t, id } = await lostAndDue('recon-expired');
+    await getDb().execute(sql`alter table payments disable trigger payments_guard`);
+    await getDb().execute(sql`update payments set deadline = now() - interval '1 second' where id = ${id}`);
+    await getDb().execute(sql`alter table payments enable trigger payments_guard`);
+    const again = await pay(t, { url: url('/lost'), idempotencyKey: 'recon-expired' }, deps());
+    expect(again.structuredContent).not.toMatchObject({ kind: 'paid' });
+    expect(seen).toHaveLength(1);
+    expect(await rowOf(id)).toMatchObject({ state: 'signed', code: 'no_response' });
   });
 
   it('never returns a refill error to the agent, which can quote the paymaster key', async () => {
