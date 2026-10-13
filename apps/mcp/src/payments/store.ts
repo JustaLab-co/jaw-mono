@@ -172,6 +172,11 @@ export async function markSigned(id: string, token: string, a: SignedAuthorizati
   if (rows.length !== 1) throw new Error('the payment row is no longer held by this call');
 }
 
+function hashIndexViolated(err: unknown): boolean {
+  const e = (err as { cause?: { code?: unknown; constraint_name?: unknown } }).cause;
+  return e?.code === '23505' && e.constraint_name === 'payments_payer_tx_hash_index';
+}
+
 export async function txHashTaken(payer: string, txHash: string, exceptId: string): Promise<boolean> {
   const [row] = await getDb()
     .select({ id: payments.id })
@@ -301,6 +306,16 @@ export async function finish(
   c: Conclusion,
   fenced: string[]
 ): Promise<PaymentRow | undefined> {
+  try {
+    return await finishWith(id, token, c, fenced);
+  } catch (err) {
+    // Another payment of the payer wrote this hash since the call checked it: the row is written without it.
+    if (!c.txHash || !hashIndexViolated(err)) throw err;
+    return finishWith(id, token, { ...c, txHash: undefined }, fenced);
+  }
+}
+
+async function finishWith(id: string, token: string, c: Conclusion, fenced: string[]) {
   const [row] = await getDb()
     .update(payments)
     .set({

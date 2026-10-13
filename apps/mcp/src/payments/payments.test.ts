@@ -329,6 +329,17 @@ async function otherReplica() {
   return (await import('./pay')).pay;
 }
 
+/** Resolves every waiter once `n` have arrived. */
+function barrier(n: number) {
+  let arrived = 0;
+  let open!: () => void;
+  const opened = new Promise<void>((r) => (open = r));
+  return async () => {
+    if (++arrived >= n) open();
+    await opened;
+  };
+}
+
 async function slowUpdates(key: string, when: string, seconds: number) {
   const name = `slow_${key.replaceAll('-', '_')}`;
   await getDb().execute(
@@ -916,6 +927,30 @@ describe('jaw_pay_and_fetch', () => {
     expect(second.structuredContent).toMatchObject({ state: 'signed', kind: 'paid' });
     expect(second.structuredContent?.payment?.txHash).toBeUndefined();
   });
+
+  it.skipIf(!TEST_PG_URL)(
+    'given two payments of one payer whose seller names the same transaction at once, then each answers from its row and neither throws',
+    async () => {
+      const { t } = await connected('1');
+      balances.set(t.sessionAddress.toLowerCase(), 1_000_000n);
+      onProof.set('/sametx', barrier(2));
+      const results = await Promise.allSettled([
+        pay(t, { url: url('/sametx'), idempotencyKey: 'same-at-once-a' }, deps()),
+        pay(t, { url: url('/sametx'), idempotencyKey: 'same-at-once-b' }, deps()),
+      ]);
+      const reasons = results.flatMap((r) =>
+        r.status === 'rejected' ? [String((r.reason as Error).cause ?? r.reason)] : []
+      );
+      expect(reasons).toEqual([]);
+      const rows = await getDb()
+        .select()
+        .from(payments)
+        .where(sql`${payments.idempotencyKey} in ('same-at-once-a', 'same-at-once-b')`);
+      // Both proofs reached the seller, so both rows say so, and at most one carries the hash.
+      expect(rows.map((r) => r.kind).sort()).toEqual(['paid', 'paid']);
+      expect(rows.filter((r) => r.txHash !== null).length).toBeLessThanOrEqual(1);
+    }
+  );
 
   it('reads the payer balance and the nonces it holds against at one block', async () => {
     const { t } = await connected('1');
