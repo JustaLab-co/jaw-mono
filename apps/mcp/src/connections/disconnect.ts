@@ -26,11 +26,11 @@ import { publicClientFor, rpcUrl } from '@/lib/chain';
 import { errorLabel, log } from '@/lib/edge';
 import { FloatBusy, LOCK_WAIT_MS, withFloat, type FloatHold } from '@/payments/float-lock';
 import { stillHeld } from '@/payments/refill';
-import { holdingRows } from '@/payments/store';
+import { holdingRows, PAY_LIMIT_MS, topUpInFlight } from '@/payments/store';
 import { refusal } from '@/tools/reply';
 import type { Tenant } from './auth';
 import { config, SUPPORTED_CHAINS } from './config';
-import { endConnection } from './rows';
+import { endConnection, TopUpInFlight } from './rows';
 
 type SessionCall = { to: Address; data: Hex };
 export type Sent = { status: 'landed'; txHash: Hex } | { status: 'reverted' } | { status: 'unconfirmed' };
@@ -72,6 +72,8 @@ const REFUSALS = {
   paused: 'Payments are paused, so nothing was revoked. Try again later.',
   chain: 'Nothing was revoked: the chain could not be read. Try again.',
   busy: 'A payment on this connection is in progress, so nothing was revoked. Try again in a moment.',
+  landing:
+    'A payment is still refilling the payer, so the connection stays open. Call jaw_disconnect again in a moment; it returns what landed.',
   notSent: 'Nothing was revoked: the transaction could not be sent. Try again.',
   reverted: 'Nothing was revoked: the transaction reverted. Try again.',
   unconfirmed:
@@ -79,6 +81,7 @@ const REFUSALS = {
 };
 
 const FEE_MARGIN_BPS = 12_500n;
+const LANDING_RETRY_MS = 250;
 const RECEIPT_MS = 60_000;
 /**
  * The fee of a session's first op, which carries the EIP-7702 delegation the
@@ -160,12 +163,7 @@ export async function disconnect(t: Tenant, deps = DEFAULTS): Promise<Reply> {
   if (await isPaymentsPaused()) return refusal(REFUSALS.paused);
   let outcome: Returned | string;
   try {
-    outcome = await withFloat(t.connectionId, deps.lockWaitMs ?? LOCK_WAIT_MS, async (hold) => {
-      const returned = await returnFunds(hold, t, deps, 'everything');
-      if (typeof returned === 'string') return returned;
-      await hold.tx((tx) => endConnection(t.connectionId, t.account, new Date(), tx));
-      return returned;
-    });
+    outcome = await returnAndEnd(t, deps);
   } catch (err) {
     if (err instanceof FloatBusy) return refusal(REFUSALS.busy);
     throw err;
@@ -182,6 +180,25 @@ export async function disconnect(t: Tenant, deps = DEFAULTS): Promise<Reply> {
     summary: summarize(t, outcome),
   };
   return { content: [{ type: 'text', text: out.summary }], structuredContent: out };
+}
+
+/**
+ * Returns the float and ends the connection under the float lock. While a top-up
+ * may still land in the payer it does neither and answers `REFUSALS.landing`.
+ */
+async function returnAndEnd(s: Session, deps: DisconnectDeps): Promise<Returned | string> {
+  try {
+    return await withFloat(s.connectionId, deps.lockWaitMs ?? LOCK_WAIT_MS, async (hold) => {
+      if (await hold.tx((tx) => topUpInFlight(tx, s.connectionId))) return REFUSALS.landing;
+      const returned = await returnFunds(hold, s, deps, 'everything');
+      if (typeof returned === 'string') return returned;
+      await hold.tx((tx) => endConnection(s.connectionId, s.account, new Date(), tx));
+      return returned;
+    });
+  } catch (err) {
+    if (err instanceof TopUpInFlight) return REFUSALS.landing;
+    throw err;
+  }
 }
 
 /**
@@ -204,9 +221,11 @@ export const retire = (s: Session, deps = DEFAULTS): Promise<Returned | string> 
   withFloat(s.connectionId, deps.lockWaitMs ?? LOCK_WAIT_MS, (hold) => returnFunds(hold, s, deps, 'everything'));
 
 /**
- * Returns the float and revokes the budgets of a connection ended by a reused
- * refresh token, with the key that token's wrap still opened. Paused payments
- * or a failed retire leave the float at the payer.
+ * Returns the float, revokes the budgets and ends a connection whose refresh
+ * token was reused, with the key that token's wrap still opened. The key exists
+ * only in this request, so a top-up still landing is waited for, up to the
+ * longest a call runs. Paused payments or a failed return leave the float at
+ * the payer.
  */
 export async function sweepOnReuse(connectionId: string, key: Hex, deps = DEFAULTS): Promise<void> {
   if (await isPaymentsPaused()) return;
@@ -222,9 +241,14 @@ export async function sweepOnReuse(connectionId: string, key: Hex, deps = DEFAUL
     sessionAddress: conn.sessionAddress as Address,
     sessionKey: () => key,
   };
-  const outcome = await retire(session, deps).catch((err: unknown) => errorLabel(err));
-  if (typeof outcome === 'string') {
-    log('warn', { msg: `reuse sweep skipped for ${connectionId}`, error: outcome });
+  const until = Date.now() + PAY_LIMIT_MS;
+  for (;;) {
+    const outcome = await returnAndEnd(session, deps).catch((err: unknown) => errorLabel(err));
+    if (outcome !== REFUSALS.landing || Date.now() > until) {
+      if (typeof outcome === 'string') log('warn', { msg: `reuse sweep skipped for ${connectionId}`, error: outcome });
+      return;
+    }
+    await new Promise((resolve) => setTimeout(resolve, LANDING_RETRY_MS));
   }
 }
 

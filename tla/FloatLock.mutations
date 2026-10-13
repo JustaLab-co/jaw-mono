@@ -21,11 +21,43 @@ only money refills=2
 - /\ topUp' = [topUp EXCEPT ![r] = 1]
 + /\ UNCHANGED topUp
 
-mutation the refill skips the live check
+mutation the refill skips the live check and writes the top-up ahead on an ended connection
 detects NoSendAfterEnd
 only base refills=1 disc=1
 - /\ IF ~live \/ Committed + Price > Cap
+-                  THEN Leave(r, "refused")
+-                  ELSE Go(r, "assert212") /\ UNCHANGED outcome
+-             /\ UNCHANGED <<funded, lock, db, chain>>
+-
+- \* hold.assertHeld() (218), then ensurePayerFunds sends only when the payer is short.
+- Assert212(r) == /\ pc[r] = "assert212"
+-                 /\ IF lost[r]
+-                      THEN Leave(r, "error")
+-                      ELSE (Go(r, "addTopUp") \/ Go(r, "skip")) /\ UNCHANGED outcome
+-                 /\ UNCHANGED <<funded, lock, db, chain>>
+-
+- \* owns() then writeTopUpAhead in one tx before the send (110-113,
+- \* store.ts:233). Not owning throws FloatLost, and on an ended connection the
+- \* write-ahead throws: either way nothing is sent and the turn ends in error.
+- AddTopUp(r) == /\ pc[r] = "addTopUp"
+-                /\ IF Owns(r) /\ live
 + /\ IF Committed + Price > Cap
++                  THEN Leave(r, "refused")
++                  ELSE Go(r, "assert212") /\ UNCHANGED outcome
++             /\ UNCHANGED <<funded, lock, db, chain>>
++
++ \* hold.assertHeld() (218), then ensurePayerFunds sends only when the payer is short.
++ Assert212(r) == /\ pc[r] = "assert212"
++                 /\ IF lost[r]
++                      THEN Leave(r, "error")
++                      ELSE (Go(r, "addTopUp") \/ Go(r, "skip")) /\ UNCHANGED outcome
++                 /\ UNCHANGED <<funded, lock, db, chain>>
++
++ \* owns() then writeTopUpAhead in one tx before the send (110-113,
++ \* store.ts:233). Not owning throws FloatLost, and on an ended connection the
++ \* write-ahead throws: either way nothing is sent and the turn ends in error.
++ AddTopUp(r) == /\ pc[r] = "addTopUp"
++                /\ IF Owns(r)
 
 mutation the catch drops the funded outcome when the reserve tx fails
 detects MovedReachesCaller
@@ -89,5 +121,25 @@ only cap refills=3 drops=1
 mutation the top-up write does not check the fence
 detects NoStaleTopUp
 only cap refills=3 drops=1
-- /\ IF Owns(r)
-+ /\ IF TRUE
+- /\ IF Owns(r) /\ live
++ /\ IF live
+
+mutation an end does not wait for a top-up in flight
+detects NoSendAfterEnd
+only end refills=1 disc=1 drops=1
+- /\ ~InFlight
+-           /\ live' = FALSE
++ /\ live' = FALSE
+
+mutation the top-up is written ahead whether or not the connection is live
+detects NoSendAfterEnd
+only end refills=1 disc=1 drops=1
+- /\ IF Owns(r) /\ live
++ /\ IF Owns(r)
+
+mutation revokeByGrant ends past its deadline under a top-up in flight
+detects NoSendAfterEnd
+only end refills=1 revoke=1
+- /\ lockOwner # None
+-                /\ ~InFlight
++ /\ lockOwner # None

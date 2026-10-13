@@ -29,6 +29,7 @@ import {
   pulledUnderOtherGrants,
   recordTopUp,
   reserve,
+  writeTopUpAhead,
   type PaymentRow,
 } from './store';
 
@@ -108,7 +109,7 @@ function guarded(
           // A turn whose lock was taken while it went unnoticed sends nothing.
           await hold.tx(async (tx) => {
             if (!(await hold.owns(tx))) throw new FloatLost();
-            await addTopUp(tx, rowId, amount);
+            await writeTopUpAhead(tx, rowId, amount);
           });
         } catch (err) {
           failedBeforeSend = err;

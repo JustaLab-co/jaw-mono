@@ -1,10 +1,10 @@
 import { createHash, randomBytes } from 'node:crypto';
 import type { SignedAuthorization, TopUpOutcome, X402LogEntry } from '@jaw.id/agent';
-import { and, desc, eq, getTableColumns, inArray, isNull, lt, ne, not, or, sql } from 'drizzle-orm';
+import { and, desc, eq, getTableColumns, inArray, isNotNull, isNull, lt, ne, not, or, sql } from 'drizzle-orm';
 import type { Address } from 'viem';
 import { getDb, type Tx } from '@/db/client';
 import { EXPIRY_MARGIN_MS } from './confirm';
-import { payments } from '@/db/schema';
+import { connections, payments } from '@/db/schema';
 
 export type PaymentRow = typeof payments.$inferSelect;
 export type PaymentState = PaymentRow['state'];
@@ -223,6 +223,45 @@ export async function addTopUp(tx: Tx, id: string, delta: bigint): Promise<void>
     .update(payments)
     .set({ topUpAmount: sql`nullif(coalesce(${payments.topUpAmount}, 0) + ${delta.toString()}, 0)` })
     .where(eq(payments.id, id));
+}
+
+/**
+ * The top-up amount, written before its send and only while the connection is
+ * active. The share lock on the connection orders this write against an end
+ * that locks the row: either the end sees the amount, or this sees the end.
+ */
+export async function writeTopUpAhead(tx: Tx, id: string, amount: bigint): Promise<void> {
+  const [active] = await tx
+    .select({ id: connections.id })
+    .from(connections)
+    .innerJoin(payments, eq(payments.connectionId, connections.id))
+    .where(and(eq(payments.id, id), eq(connections.status, 'active')))
+    .for('share', { of: connections });
+  if (!active) throw new Error('the connection ended before the top-up was sent');
+  await addTopUp(tx, id, amount);
+}
+
+/**
+ * Locks the connection row, then says whether a turn still running wrote a
+ * top-up ahead of its send: until the turn reserves or its call ends, that
+ * money may still land in the payer.
+ */
+export async function topUpInFlight(tx: Tx, connectionId: string): Promise<boolean> {
+  await tx.select({ id: connections.id }).from(connections).where(eq(connections.id, connectionId)).for('update');
+  const [row] = await tx
+    .select({ id: payments.id })
+    .from(payments)
+    .where(
+      and(
+        eq(payments.connectionId, connectionId),
+        eq(payments.state, 'pending'),
+        isNotNull(payments.topUpAmount),
+        isNull(payments.reserved),
+        leaseLive
+      )
+    )
+    .limit(1);
+  return row !== undefined;
 }
 
 const holding = sql`((${payments.state} = 'pending' and ${leaseLive} and ${payments.reserved} is not null)
