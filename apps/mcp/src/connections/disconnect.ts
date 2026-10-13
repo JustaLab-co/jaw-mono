@@ -25,11 +25,11 @@ import { publicClientFor, rpcUrl } from '@/lib/chain';
 import { errorLabel, log } from '@/lib/edge';
 import { FloatBusy, LOCK_WAIT_MS, withFloat, type FloatHold } from '@/payments/float-lock';
 import { stillHeld } from '@/payments/refill';
-import { holdingRows } from '@/payments/store';
+import { holdingRows, topUpInFlight } from '@/payments/store';
 import { refusal } from '@/tools/reply';
 import type { Tenant } from './auth';
 import { config, SUPPORTED_CHAINS } from './config';
-import { endConnection } from './rows';
+import { endConnection, TopUpInFlight } from './rows';
 
 type SessionCall = { to: Address; data: Hex };
 export type Sent = { status: 'landed'; txHash: Hex } | { status: 'reverted' } | { status: 'unconfirmed' };
@@ -71,6 +71,8 @@ const REFUSALS = {
   paused: 'Payments are paused, so nothing was revoked. Try again later.',
   chain: 'Nothing was revoked: the chain could not be read. Try again.',
   busy: 'A payment on this connection is in progress, so nothing was revoked. Try again in a moment.',
+  landing:
+    'A payment is still refilling the payer, so the connection stays open. Call jaw_disconnect again in a moment; it returns what landed.',
   notSent: 'Nothing was revoked: the transaction could not be sent. Try again.',
   reverted: 'Nothing was revoked: the transaction reverted. Try again.',
   unconfirmed:
@@ -159,6 +161,7 @@ export async function disconnect(t: Tenant, deps = DEFAULTS): Promise<Reply> {
   let outcome: Returned | string;
   try {
     outcome = await withFloat(t.connectionId, deps.lockWaitMs ?? LOCK_WAIT_MS, async (hold) => {
+      if (await hold.tx((tx) => topUpInFlight(tx, t.connectionId))) return REFUSALS.landing;
       const returned = await returnFunds(hold, t, deps, 'everything');
       if (typeof returned === 'string') return returned;
       await hold.tx((tx) => endConnection(t.connectionId, t.account, new Date(), tx));
@@ -166,6 +169,7 @@ export async function disconnect(t: Tenant, deps = DEFAULTS): Promise<Reply> {
     });
   } catch (err) {
     if (err instanceof FloatBusy) return refusal(REFUSALS.busy);
+    if (err instanceof TopUpInFlight) return refusal(REFUSALS.landing);
     throw err;
   }
   if (typeof outcome === 'string') return refusal(outcome);

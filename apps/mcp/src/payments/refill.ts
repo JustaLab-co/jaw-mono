@@ -29,6 +29,7 @@ import {
   pulledUnderOtherGrants,
   recordTopUp,
   reserve,
+  writeTopUpAhead,
   type PaymentRow,
 } from './store';
 
@@ -105,7 +106,7 @@ function guarded(
         let amount: bigint;
         try {
           amount = transferAmount(params);
-          await hold.tx((tx) => addTopUp(tx, rowId, amount));
+          await hold.tx((tx) => writeTopUpAhead(tx, rowId, amount));
         } catch (err) {
           failedBeforeSend = err;
           throw err;

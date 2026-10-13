@@ -17,6 +17,7 @@ import {
 } from 'viem';
 import { beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { verifyBearer, type Tenant } from '@/connections/auth';
+import { disconnect } from '@/connections/disconnect';
 import { endConnection } from '@/connections/rows';
 import {
   approvedOnChain,
@@ -1006,6 +1007,64 @@ describe.skipIf(!TEST_PG_URL)('on Postgres, given a pay inside its funding turn'
     const after = await pay(t, { url: url('/race'), idempotencyKey: 'page-after-turn' }, deps());
     expect(after.structuredContent).toMatchObject({ kind: 'refused', refusal: { code: 'not_allowed' } });
     expect(refills).toEqual([105_000n]);
+  });
+});
+
+describe.skipIf(!TEST_PG_URL)('on Postgres, given a top-up in flight whose lock session dropped', () => {
+  // Frees the lock under the refill's send, then runs `meanwhile` before the transfer lands.
+  const dropThenLand =
+    (t: Tenant, meanwhile: () => Promise<void>) =>
+    (funder: Address): TopUpExecutor => ({
+      request: async (method, params) => {
+        if (method === 'wallet_sendCalls') {
+          await getDb().execute(sql`select pg_terminate_backend(pid) from pg_locks
+            where locktype = 'advisory' and granted
+              and ((classid::bigint << 32) | objid::bigint) = hashtext(${`refill:${t.connectionId}`})`);
+          await meanwhile();
+        }
+        return executor(funder).request(method, params);
+      },
+    });
+  const statusOf = async (id: string) =>
+    (await getDb().select().from(connections).where(eq(connections.id, id)))[0].status;
+
+  it('when another app of the owner revokes it, then the connection stays active until the pay concludes, and a revoke after ends it', async () => {
+    const { c, t } = await connected('1');
+    const revoke = await revoker(c, t);
+    let statusWhenLanded: string | undefined;
+    const meanwhile = async () => {
+      statusWhenLanded = (await revoke()).connection.status;
+    };
+    await pay(
+      t,
+      { url: url('/exact'), idempotencyKey: 'drop-in-flight' },
+      deps({ executor: (_t, g) => dropThenLand(t, meanwhile)(g.account) })
+    );
+    expect(refills).toHaveLength(1);
+    expect(statusWhenLanded).toBe('active');
+    expect((await revoke()).connection.status).toBe('revoked');
+  });
+
+  it('when the agent disconnects, then it sends nothing and answers busy, and a disconnect after returns the top-up', async () => {
+    const { t } = await connected('1');
+    const { deps: session, sent } = sessionFakes();
+    const disconnectDeps = { readPermission: approvedOnChain, clients, sender: session.sender };
+    let during: Awaited<ReturnType<typeof disconnect>> | undefined;
+    const meanwhile = async () => {
+      during = await disconnect(t, disconnectDeps);
+    };
+    await pay(
+      t,
+      { url: url('/exact'), idempotencyKey: 'drop-in-flight-disconnect' },
+      deps({ executor: (_t, g) => dropThenLand(t, meanwhile)(g.account) })
+    );
+    expect(during?.isError).toBe(true);
+    expect(sent).toEqual([]);
+    expect(refills).toEqual([105_000n]);
+
+    const after = await disconnect(t, disconnectDeps);
+    expect(after.structuredContent).toMatchObject({ swept: (105_000n - 2_500n).toString() });
+    expect(await statusOf(t.connectionId)).toBe('revoked');
   });
 });
 

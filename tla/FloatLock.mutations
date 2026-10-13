@@ -21,11 +21,41 @@ only money refills=2
 - /\ topUp' = [topUp EXCEPT ![r] = 1]
 + /\ UNCHANGED topUp
 
-mutation the refill skips the live check
+mutation the refill skips the live check and writes the top-up ahead on an ended connection
 detects NoSendAfterEnd
 only base refills=1 disc=1
 - /\ IF ~live \/ Committed + Price > Cap
+-                  THEN Leave(r, "refused")
+-                  ELSE Go(r, "assert212") /\ UNCHANGED outcome
+-             /\ UNCHANGED <<funded, lock, db, chain>>
+- 
+- \* hold.assertHeld() (213), then ensurePayerFunds sends only when the payer is short.
+- Assert212(r) == /\ pc[r] = "assert212"
+-                 /\ IF lost[r]
+-                      THEN Leave(r, "error")
+-                      ELSE (Go(r, "addTopUp") \/ Go(r, "skip")) /\ UNCHANGED outcome
+-                 /\ UNCHANGED <<funded, lock, db, chain>>
+- 
+- \* writeTopUpAhead in its own tx before the send (109, store.ts:233): on an
+- \* ended connection it throws, failedBeforeSend, and the turn ends in error.
+- AddTopUp(r) == /\ pc[r] = "addTopUp"
+-                /\ IF live
 + /\ IF Committed + Price > Cap
++                  THEN Leave(r, "refused")
++                  ELSE Go(r, "assert212") /\ UNCHANGED outcome
++             /\ UNCHANGED <<funded, lock, db, chain>>
++ 
++ \* hold.assertHeld() (213), then ensurePayerFunds sends only when the payer is short.
++ Assert212(r) == /\ pc[r] = "assert212"
++                 /\ IF lost[r]
++                      THEN Leave(r, "error")
++                      ELSE (Go(r, "addTopUp") \/ Go(r, "skip")) /\ UNCHANGED outcome
++                 /\ UNCHANGED <<funded, lock, db, chain>>
++ 
++ \* writeTopUpAhead in its own tx before the send (109, store.ts:233): on an
++ \* ended connection it throws, failedBeforeSend, and the turn ends in error.
++ AddTopUp(r) == /\ pc[r] = "addTopUp"
++                /\ IF TRUE
 
 mutation the catch drops the funded outcome when the reserve tx fails
 detects MovedReachesCaller
@@ -65,3 +95,25 @@ detects TypeOK
 only base refills=1
 - /\ topUp' = [topUp EXCEPT ![r] = 1]
 + /\ topUp' = [topUp EXCEPT ![r] = 2]
+
+mutation an end does not wait for a top-up in flight
+detects NoSendAfterEnd
+only end refills=1 disc=1 drops=1
+- /\ ~InFlight
+-           /\ live' = FALSE
++ /\ live' = FALSE
+
+mutation the top-up is written ahead whether or not the connection is live
+detects NoSendAfterEnd
+only end refills=1 disc=1 drops=1
+- /\ IF live
+-                     THEN /\ topUp' = [topUp EXCEPT ![r] = 1]
++ /\ IF TRUE
++                     THEN /\ topUp' = [topUp EXCEPT ![r] = 1]
+
+mutation revokeByGrant ends past its deadline under a top-up in flight
+detects NoSendAfterEnd
+only end refills=1 revoke=1
+- /\ lockOwner # None
+-                /\ ~InFlight
++ /\ lockOwner # None

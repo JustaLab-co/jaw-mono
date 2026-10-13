@@ -9,20 +9,27 @@
                                     (86-88), held()/assertHeld() (109-112),
                                     session.end frees the lock (117-118)
      payments/float-lock.ts 151-157 tryLockFloat
-     payments/refill.ts 93-137      guarded: addTopUp tx before the send (108),
-                                    assertHeld (115), send (116), subtract on a
-                                    thrown send (118)
-     payments/refill.ts 171-261     refillHook: live check (180-188), caps read
-                                    and check (193-208), assertHeld (212),
-                                    held() after money moved (244-245), reserve
-                                    and recordTopUp tx (249-252), catch returns
-                                    funded (255-256)
+     payments/refill.ts 94-138      guarded: writeTopUpAhead tx before the send (109),
+                                    assertHeld (116), send (117), subtract on a
+                                    thrown send (119)
+     payments/refill.ts 172-262     refillHook: live check (181-189), caps read
+                                    and check (194-209), assertHeld (213),
+                                    held() after money moved (245-246), reserve
+                                    and recordTopUp tx (250-253), catch returns
+                                    funded (256-257)
      payments/store.ts              reserve 200, addTopUp 221, recordTopUp 211,
-                                    entriesFor 320 (what the caps read counts)
-     connections/disconnect.ts 157-357  disconnect: returnFunds, assertHeld
-                                    (335), sender.send (336), endConnection (164)
-     connections/rows.ts 155-178    revokeByGrant: tryLockFloat poll, then end
-                                    without the lock past its deadline (175-176)
+                                    writeTopUpAhead 233 (only while the
+                                    connection is active, under a share lock on
+                                    its row), topUpInFlight 249 (under an update
+                                    lock on it), entriesFor 359
+     connections/disconnect.ts 159-361  disconnect: topUpInFlight (164),
+                                    returnFunds, assertHeld (339), sender.send
+                                    (340), endConnection (167)
+     connections/rows.ts 157-180    revokeByGrant: tryLockFloat poll; past its
+                                    deadline it ends without the lock (170-173),
+                                    never while a top-up is in flight (171)
+     connections/rows.ts 198-215    endConnection refuses while a top-up is in
+                                    flight (206)
      tools/connections.ts 170       revoke: withFloat + endConnection, the same
                                     shape as a disconnect with nothing to send
      tools/send.ts 55-95            jaw_transfer: assertHeld then send; it moves
@@ -41,15 +48,21 @@
      whose price the caps read sees: a reservation (reserve) or a signed row
      (markSigned, after the turn). Each refill has one price; a top-up is one
      unit when the payer is short, else nothing is sent (the skip branch).
-   - Reads under the lock (live 180, holding rows 193, caps 195) are one step.
+   - Reads under the lock (live 181, holding rows 194, caps 196) are one step.
+   - A top-up is in flight from its write-ahead until its turn reserves or its
+     call ends (store.ts topUpInFlight: amount written, reserved null, lease
+     live). The write-ahead and an end both lock the connection row, so each
+     is one step and they never interleave.
+   - Past its deadline revokeByGrant still waits out a top-up in flight; the
+     lease of the call that wrote it bounds that wait.
    - A Disconnect either sends its batch (revokes the grant on chain, sweeps)
-     and ends the connection, or ends it with nothing sent (298, or the budget
-     left to the owner at 332, which revokes nothing).
+     and ends the connection, or ends it with nothing sent (302, or the budget
+     left to the owner at 336, which revokes nothing).
    - A refill top-up after the grant is revoked on chain moves nothing.
    - LostReply: the bundler took the top-up but the request threw, so the money
-     lands while guarded subtracts the topUp row (118) and ensurePayerFunds
-     returns a plain failure with no amount. TxFault: the reserve tx (249)
-     fails, so the catch (255) runs.
+     lands while guarded subtracts the topUp row (119) and ensurePayerFunds
+     returns a plain failure with no amount. TxFault: the reserve tx (250)
+     fails, so the catch (256) runs.
    - Fairness: weak fairness on each thread's steps, which include the
      lock_timeout give-up, so a waiter cannot starve on its own. *)
 EXTENDS Naturals, FiniteSets
@@ -74,6 +87,7 @@ vars == <<turn, lock, db, chain>>
 Failed == {"refused", "busy", "error", "funding_failed"}
 Outcomes == {"none", "ok"} \cup Failed
 Committed == Cardinality({r \in Refills : visible[r]}) * Price
+InFlight == \E r \in Refills : topUp[r] = 1 /\ ~visible[r] /\ pc[r] # "done"
 
 Init == /\ pc = [t \in Threads |-> IF t \in Revokes THEN "poll" ELSE "wait"]
         /\ funded = [r \in Refills |-> FALSE]
@@ -126,28 +140,33 @@ Finally(t) == /\ pc[t] = "finally"
 
 (* Refill turn, refill.ts *)
 
-\* live check and caps read and check (180-208).
+\* live check and caps read and check (181-209).
 Check(r) == /\ pc[r] = "check"
             /\ IF ~live \/ Committed + Price > Cap
                  THEN Leave(r, "refused")
                  ELSE Go(r, "assert212") /\ UNCHANGED outcome
             /\ UNCHANGED <<funded, lock, db, chain>>
 
-\* hold.assertHeld() (212), then ensurePayerFunds sends only when the payer is short.
+\* hold.assertHeld() (213), then ensurePayerFunds sends only when the payer is short.
 Assert212(r) == /\ pc[r] = "assert212"
                 /\ IF lost[r]
                      THEN Leave(r, "error")
                      ELSE (Go(r, "addTopUp") \/ Go(r, "skip")) /\ UNCHANGED outcome
                 /\ UNCHANGED <<funded, lock, db, chain>>
 
-\* addTopUp in its own tx before the send (108, store.ts:221).
+\* writeTopUpAhead in its own tx before the send (109, store.ts:233): on an
+\* ended connection it throws, failedBeforeSend, and the turn ends in error.
 AddTopUp(r) == /\ pc[r] = "addTopUp"
-               /\ topUp' = [topUp EXCEPT ![r] = 1]
-               /\ Go(r, "assert115")
-               /\ UNCHANGED <<funded, outcome, lock, live, visible, chain>>
+               /\ IF live
+                    THEN /\ topUp' = [topUp EXCEPT ![r] = 1]
+                         /\ Go(r, "assert115")
+                         /\ UNCHANGED outcome
+                    ELSE /\ Leave(r, "error")
+                         /\ UNCHANGED topUp
+               /\ UNCHANGED <<funded, lock, live, visible, chain>>
 
-\* hold.assertHeld() right before the send (115); FloatLost lands in the catch
-\* that subtracts the top-up (118) and ensurePayerFunds returns a failure.
+\* hold.assertHeld() right before the send (116); FloatLost lands in the catch
+\* that subtracts the top-up (119) and ensurePayerFunds returns a failure.
 Assert115(r) == /\ pc[r] = "assert115"
                 /\ IF lost[r]
                      THEN /\ topUp' = [topUp EXCEPT ![r] = 0]
@@ -159,7 +178,7 @@ Assert115(r) == /\ pc[r] = "assert115"
 Land(r) == /\ moved' = [moved EXCEPT ![r] = TRUE]
            /\ lateSend' = (lateSend \/ ~live)
 
-\* executor.request('wallet_sendCalls') (116).
+\* executor.request('wallet_sendCalls') (117).
 Send(r) == /\ pc[r] = "send"
            /\ \/ /\ ~revokedOnChain
                  /\ Land(r)
@@ -175,22 +194,22 @@ Send(r) == /\ pc[r] = "send"
                  /\ Leave(r, "refused")
            /\ UNCHANGED <<funded, lock, live, visible, revokedOnChain>>
 
-\* Money moved: funded is the caller's outcome from here on (245).
+\* Money moved: funded is the caller's outcome from here on (246).
 Held(r) == /\ pc[r] = "held"
            /\ funded' = [funded EXCEPT ![r] = TRUE]
            /\ Say(r, IF lost[r] THEN "funding_failed" ELSE "ok")
            /\ Go(r, "reserve")
            /\ UNCHANGED <<lock, db, chain>>
 
-\* No money moved: the reservation commits under the lock or not at all (244).
+\* No money moved: the reservation commits under the lock or not at all (245).
 Skip(r) == /\ pc[r] = "skip"
            /\ IF lost[r]
                 THEN Leave(r, "error")
                 ELSE Go(r, "reserve") /\ UNCHANGED outcome
            /\ UNCHANGED <<funded, lock, db, chain>>
 
-\* reserve and recordTopUp in one tx (249-252); a failed tx lands in the catch
-\* (255-257), which returns funded when money moved.
+\* reserve and recordTopUp in one tx (250-253); a failed tx lands in the catch
+\* (256-258), which returns funded when money moved.
 Reserve(r) == /\ pc[r] = "reserve"
               /\ \/ /\ ~funded[r]
                     /\ visible' = [visible EXCEPT ![r] = TRUE]
@@ -212,10 +231,13 @@ Sign(r) == /\ pc[r] = "sign"
 
 (* Disconnect turn, disconnect.ts *)
 
-\* returnFunds reads (232-291): a batch to send, or nothing sent (298, 332).
+\* A top-up in flight refuses first (164). Then returnFunds reads (236-295): a
+\* batch to send, or nothing sent (302, 336).
 Read(d) == /\ pc[d] = "read"
-           /\ (Go(d, "assert335") \/ Go(d, "end"))
-           /\ UNCHANGED <<funded, outcome, lock, db, chain>>
+           /\ IF InFlight
+                THEN Leave(d, "busy")
+                ELSE (Go(d, "assert335") \/ Go(d, "end")) /\ UNCHANGED outcome
+           /\ UNCHANGED <<funded, lock, db, chain>>
 
 Assert335(d) == /\ pc[d] = "assert335"
                 /\ IF lost[d]
@@ -223,7 +245,7 @@ Assert335(d) == /\ pc[d] = "assert335"
                      ELSE Go(d, "sweep") /\ UNCHANGED outcome
                 /\ UNCHANGED <<funded, lock, db, chain>>
 
-\* sender.send (336): the batch revokes the grant and sweeps, or nothing lands.
+\* sender.send (340): the batch revokes the grant and sweeps, or nothing lands.
 Sweep(d) == /\ pc[d] = "sweep"
             /\ \/ /\ revokedOnChain' = TRUE
                   /\ Go(d, "end")
@@ -232,25 +254,34 @@ Sweep(d) == /\ pc[d] = "sweep"
                   /\ UNCHANGED revokedOnChain
             /\ UNCHANGED <<funded, lock, db, moved, lateSend>>
 
-\* endConnection (164, rows.ts:188).
+\* endConnection (167, rows.ts:198).
 End(d) == /\ pc[d] = "end"
+          /\ ~InFlight
           /\ live' = FALSE
           /\ Leave(d, "ok")
           /\ UNCHANGED <<funded, lock, topUp, visible, chain>>
 
-(* revokeByGrant, rows.ts:155-178 *)
+\* It throws TopUpInFlight while a top-up may still land (rows.ts:206).
+EndBusy(d) == /\ pc[d] = "end"
+              /\ InFlight
+              /\ Leave(d, "busy")
+              /\ UNCHANGED <<funded, lock, db, chain>>
 
-\* tryLockFloat and the end in one tx (167-171).
+(* revokeByGrant, rows.ts:157-180 *)
+
+\* tryLockFloat, topUpInFlight and the end in one tx (168-174).
 TryLock(v) == /\ pc[v] = "poll"
               /\ lockOwner = None
+              /\ ~InFlight
               /\ live' = FALSE
               /\ Go(v, "done")
               /\ Say(v, "ok")
               /\ UNCHANGED <<funded, lock, topUp, visible, chain>>
 
-\* Past the deadline it ends the connection without the lock (175-176).
+\* Past the deadline it ends the connection without the lock (170-173).
 Deadline(v) == /\ pc[v] = "poll"
                /\ lockOwner # None
+               /\ ~InFlight
                /\ live' = FALSE
                /\ Go(v, "done")
                /\ Say(v, "ok")
@@ -277,7 +308,7 @@ RefillStep(r) == Acquire(r) \/ GiveUp(r) \/ WaitBroken(r) \/ Check(r) \/ Assert2
                  \/ AddTopUp(r) \/ Assert115(r) \/ Send(r) \/ Held(r) \/ Skip(r)
                  \/ Reserve(r) \/ Finally(r) \/ Sign(r)
 DiscStep(d) == Acquire(d) \/ GiveUp(d) \/ WaitBroken(d) \/ Read(d) \/ Assert335(d)
-               \/ Sweep(d) \/ End(d) \/ Finally(d)
+               \/ Sweep(d) \/ End(d) \/ EndBusy(d) \/ Finally(d)
 Step(t) == IF t \in Refills THEN RefillStep(t)
            ELSE IF t \in Discs THEN DiscStep(t)
            ELSE TryLock(t) \/ Deadline(t)
