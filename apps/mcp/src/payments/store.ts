@@ -78,7 +78,11 @@ async function find(connectionId: string, key: string): Promise<LeasedRow | unde
   return row;
 }
 
-/** The only way a call gets to send a row: once its lease lapsed and no reconciler run holds it. */
+/**
+ * The only way a call gets to send a row: once its lease lapsed. A reconciler
+ * run reading the row does not hold it back, since both sides write only while
+ * the row is unresolved and the nonce settles once.
+ */
 export async function take(
   row: PaymentRow,
   permissionId?: string
@@ -88,15 +92,7 @@ export async function take(
   const [taken] = await getDb()
     .update(payments)
     .set({ ...fresh, ...(permissionId && { permissionId }), leaseToken: token, leaseUntil: leaseFromNow })
-    .where(
-      and(
-        eq(payments.id, row.id),
-        eq(payments.state, row.state),
-        sendable,
-        leaseLapsed,
-        or(isNull(payments.reconcilingUntil), lt(payments.reconcilingUntil, dbNow))
-      )
-    )
+    .where(and(eq(payments.id, row.id), eq(payments.state, row.state), sendable, leaseLapsed))
     .returning();
   return taken && { row: taken, token };
 }
