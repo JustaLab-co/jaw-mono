@@ -1,4 +1,5 @@
 import { randomUUID } from 'node:crypto';
+import { join } from 'node:path';
 import { createServer } from 'node:http';
 import { createServer as createTcpServer, connect as tcpConnect, type AddressInfo, type Socket } from 'node:net';
 import { FetchRefused, type ChainClients, type TopUpExecutor } from '@jaw.id/agent';
@@ -52,7 +53,7 @@ import { pay, type PayDeps } from './pay';
 import { rawBody } from './render';
 import { inTurn, withFloat } from './float-lock';
 import { SEND_RESERVE_MS, stillHeld } from './refill';
-import { claim, holdingRows, PAY_LIMIT_MS } from './store';
+import { claim, finish, holdingRows, PAY_LIMIT_MS } from './store';
 
 const USDC: Address = '0x036CbD53842c5426634e7929541eC2318f3dCF7e';
 const PAY_TO: Address = '0x2222222222222222222222222222222222222222';
@@ -309,11 +310,11 @@ const lockFreeWithin = (connectionId: string, ms: number) =>
   ]);
 const rowOf = async (id: string) => (await getDb().select().from(payments).where(eq(payments.id, id)))[0];
 
-async function failUpdates(key: string, when: string) {
+async function failUpdates(key: string, when: string, using = '') {
   const name = `fail_${key.replaceAll('-', '_')}`;
   await getDb().execute(
     sql.raw(`create function ${name}() returns trigger language plpgsql as $$ begin
-      if new.idempotency_key = '${key}' and (${when}) then raise exception '${key} write refused'; end if;
+      if new.idempotency_key = '${key}' and (${when}) then raise exception '${key} write refused' ${using}; end if;
       return new; end $$`)
   );
   await getDb().execute(
@@ -1257,8 +1258,8 @@ describe('the raw body kept for an internal caller', () => {
     });
   });
 
-  const serving = (body: string | null) => deps({ fetch: async () => new Response(body) });
-  const kept = async (body: string | null, idempotencyKey?: string) => {
+  const serving = (body: BodyInit | null) => deps({ fetch: async () => new Response(body) });
+  const kept = async (body: BodyInit | null, idempotencyKey?: string) => {
     const { t } = await connected('1');
     const result = await pay(t, { url: url('/free'), idempotencyKey }, serving(body), { keepBody: true });
     return { result, row: await rowOf(result.structuredContent!.paymentId) };
@@ -1282,6 +1283,40 @@ describe('the raw body kept for an internal caller', () => {
     const { result, row } = await kept(`${'é'.repeat(8_192)}x`);
     expect(result[rawBody]).toBeUndefined();
     expect(row.body).toBeNull();
+  });
+
+  it('given keepBody and an é whose second byte is byte 16385, when it passes through, then no raw body is kept, not the text before the é', async () => {
+    const { result, row } = await kept(`${'x'.repeat(16_383)}é`);
+    expect(result[rawBody]).toBeUndefined();
+    expect(row.body).toBeNull();
+  });
+
+  it('given keepBody and an é that ends on byte 16384, when it passes through, then it is kept whole', async () => {
+    const { result, row } = await kept(`${'x'.repeat(16_382)}é`);
+    expect(result[rawBody]).toBe(`${'x'.repeat(16_382)}é`);
+    expect(row.body).toBe(`${'x'.repeat(16_382)}é`);
+  });
+
+  it('given keepBody and the bytes a 0xFF b, when they are stored, then the text is a U+FFFD b', async () => {
+    const { result, row } = await kept(new Uint8Array([0x61, 0xff, 0x62]));
+    expect(result[rawBody]).toBe('a\uFFFDb');
+    expect(row.body).toBe('a\uFFFDb');
+  });
+
+  it('given keepBody and a body cut inside an é, when it is stored, then the text is a U+FFFD', async () => {
+    const { result, row } = await kept(new Uint8Array([0x61, 0xc3]));
+    expect(result[rawBody]).toBe('a\uFFFD');
+    expect(row.body).toBe('a\uFFFD');
+  });
+
+  it('given keepBody and 16384 bytes whose invalid ones decode to 16392 bytes of text, when it passes through, then no raw body is kept and the database is never offered it', async () => {
+    const bytes = new Uint8Array(16_384).fill(0x61);
+    bytes.fill(0xff, 16_380);
+    let kept16392: Awaited<ReturnType<typeof kept>> | undefined;
+    const logs = await logsOf(async () => (kept16392 = await kept(bytes)));
+    expect(kept16392?.result[rawBody]).toBeUndefined();
+    expect(kept16392?.row.body).toBeNull();
+    expect(logs).not.toContain('concluded without its body');
   });
 
   it('given keepBody and a JSON body with an integer past 2^53, when it is kept, then the raw body holds the digits the seller sent', async () => {
@@ -1330,26 +1365,51 @@ describe('the raw body kept for an internal caller', () => {
     expect(row).toMatchObject({ state: 'settled', body: 'a\uFFFDb\uFFFD' });
   });
 
-  it('given keepBody and a body the database refuses, when the payment settles, then the conclusion lands without the body', async () => {
-    const { t } = await connected('1');
-    balances.set(t.sessionAddress.toLowerCase(), 1_000_000n);
-    const drop = await failUpdates('raw-refused-body', 'new.body is not null');
-    try {
-      const result = await pay(t, { url: url('/exact'), idempotencyKey: 'raw-refused-body' }, deps(), {
-        keepBody: true,
-      });
-      expect(result.structuredContent).toMatchObject({ kind: 'paid', state: 'settled' });
-      expect(result[rawBody]).toBeUndefined();
-      expect(await rowOf(result.structuredContent!.paymentId)).toMatchObject({ state: 'settled', body: null });
-      const again = await pay(t, { url: url('/exact'), idempotencyKey: 'raw-refused-body' }, deps(), {
-        keepBody: true,
-      });
-      expect(again.structuredContent).toEqual(result.structuredContent);
-      expect(seen).toHaveLength(1);
-    } finally {
-      await drop();
+  it.each([
+    ['the payment_body check', "using errcode = 'check_violation', constraint = 'payment_body'"],
+    ['an invalid byte sequence', "using errcode = 'character_not_in_repertoire'"],
+  ])(
+    'given keepBody and a body Postgres rejects with %s, when the payment settles, then the conclusion lands without the body',
+    async (_, using) => {
+      const { t } = await connected('1');
+      balances.set(t.sessionAddress.toLowerCase(), 1_000_000n);
+      const key = `raw-refused-${randomUUID()}`;
+      const drop = await failUpdates(key, 'new.body is not null', using);
+      try {
+        const result = await pay(t, { url: url('/exact'), idempotencyKey: key }, deps(), { keepBody: true });
+        expect(result.structuredContent).toMatchObject({ kind: 'paid', state: 'settled' });
+        expect(result[rawBody]).toBeUndefined();
+        expect(await rowOf(result.structuredContent!.paymentId)).toMatchObject({ state: 'settled', body: null });
+        const again = await pay(t, { url: url('/exact'), idempotencyKey: key }, deps(), { keepBody: true });
+        expect(again.structuredContent).toEqual(result.structuredContent);
+        expect(seen).toHaveLength(1);
+      } finally {
+        await drop();
+      }
     }
-  });
+  );
+
+  it.each([
+    ['a serialization failure', "using errcode = 'serialization_failure'"],
+    ['a lock timeout', "using errcode = 'lock_not_available'"],
+    ['another check', "using errcode = 'check_violation', constraint = 'payment_shape'"],
+    ['an error raised by a trigger', ''],
+  ])(
+    'given keepBody and a conclusion write with its body that fails with %s, when the payment settles, then the row is not concluded without the body',
+    async (_, using) => {
+      const { t } = await connected('1');
+      balances.set(t.sessionAddress.toLowerCase(), 1_000_000n);
+      const key = `raw-other-${randomUUID()}`;
+      const drop = await failUpdates(key, 'new.body is not null', using);
+      try {
+        const result = await pay(t, { url: url('/exact'), idempotencyKey: key }, deps(), { keepBody: true });
+        expect(JSON.parse(result[rawBody] as string)).toEqual({ report: 'the weather is fine' });
+        expect(await rowOf(result.structuredContent!.paymentId)).toMatchObject({ state: 'signed', body: null });
+      } finally {
+        await drop();
+      }
+    }
+  );
 
   it('given keepBody and a conclusion write that fails, when the call answers, then it still carries the raw body it read', async () => {
     const drop = await failUpdates('raw-unwritten', 'new.kind is not null');
@@ -1397,6 +1457,32 @@ describe('the raw body kept for an internal caller', () => {
       /the body is written once/
     );
     expect((await rowOf(id)).body).toBe('{}');
+  });
+
+  it('given a signed row without a body, when 16385 bytes in 8193 characters are written, then the database refuses and 16384 bytes it accepts', async () => {
+    const { t } = await connected('1');
+    balances.set(t.sessionAddress.toLowerCase(), 1_000_000n);
+    const result = await pay(t, { url: url('/unconfirmed') }, deps());
+    const id = result.structuredContent!.paymentId;
+    expect(await rowOf(id)).toMatchObject({ state: 'signed', body: null });
+    expect(
+      await refusalOf(getDb().execute(sql`update payments set body = repeat('é', 8193) where id = ${id}`))
+    ).toMatch(/payment_body/);
+    await getDb().execute(sql`update payments set body = repeat('é', 8192) where id = ${id}`);
+    expect((await rowOf(id)).body).toBe('é'.repeat(8_192));
+  });
+
+  it('given a body and a lease another call took, when finish writes, then nothing is concluded and the row keeps its state', async () => {
+    const { t } = await connected('1');
+    const claimed = await claim(
+      { connectionId: t.connectionId, payer: t.sessionAddress, permissionId: 'p' },
+      'raw-lost-lease',
+      { url: url('/exact'), method: 'GET', headers: {} }
+    );
+    if (claimed.kind !== 'run') throw new Error(`claimed ${claimed.kind}`);
+    const written = await finish(claimed.row.id, randomUUID(), { state: 'settled', kind: 'free', body: 'kept' }, []);
+    expect(written).toBeUndefined();
+    expect(await rowOf(claimed.row.id)).toMatchObject({ state: 'pending', kind: null, body: null });
   });
 
   it('given a pending row, when a raw body is written on it, then the database refuses', async () => {
@@ -2092,6 +2178,61 @@ describe('the payments table', () => {
     ).rejects.toThrow();
     await expect(getDb().execute(sql`update payments set state = 'pending' where id = ${id}`)).rejects.toThrow();
     expect((await rowOf(id)).state).toBe('signed');
+  });
+
+  describe('the guard every migration since 0006 keeps', () => {
+    const refusal = (q: ReturnType<typeof sql>) =>
+      getDb()
+        .execute(q)
+        .then(
+          () => 'written',
+          (e: Error & { cause?: Error }) => e.cause?.message ?? e.message
+        );
+
+    it('refuses deleting a row, moving or rewriting a final one, and a move that is not a transition', async () => {
+      const id = await settledRow();
+      expect(await refusal(sql`delete from payments where id = ${id}`)).toMatch(/is never deleted/);
+      expect(await refusal(sql`update payments set code = 'x' where id = ${id}`)).toMatch(/is settled and final/);
+      const { t } = await connected('1');
+      balances.set(t.sessionAddress.toLowerCase(), 1_000_000n);
+      const signed = (await pay(t, { url: url('/unconfirmed') }, deps())).structuredContent!.paymentId;
+      expect((await rowOf(signed)).state).toBe('signed');
+      expect(await refusal(sql`update payments set state = 'pending' where id = ${signed}`)).toMatch(
+        /signed to pending is not a transition/
+      );
+    });
+
+    it('refuses rewriting the request, the signed authorization, a live authorization to failed, or the fenced text', async () => {
+      const { t } = await connected('1');
+      balances.set(t.sessionAddress.toLowerCase(), 1_000_000n);
+      const id = (await pay(t, { url: url('/unconfirmed') }, deps())).structuredContent!.paymentId;
+      expect((await rowOf(id)).state).toBe('signed');
+      expect(await refusal(sql`update payments set url = 'http://elsewhere' where id = ${id}`)).toMatch(
+        /the request is immutable/
+      );
+      expect(await refusal(sql`update payments set nonce = '0x01' where id = ${id}`)).toMatch(
+        /the signed authorization is immutable/
+      );
+      expect(await refusal(sql`update payments set state = 'failed', finished_at = now() where id = ${id}`)).toMatch(
+        /a live authorization cannot fail/
+      );
+      expect(await refusal(sql`update payments set fenced = '["other"]' where id = ${id}`)).toMatch(
+        /the fenced text is written once/
+      );
+      expect(await rowOf(id)).toMatchObject({ state: 'signed', url: url('/unconfirmed') });
+    });
+
+    it('as 0015 redefines it, keeps every rule of the 0013 definition it replaces', async () => {
+      const { readFileSync } = await import('node:fs');
+      const rules = (file: string) => {
+        const sql = readFileSync(join(__dirname, '../../drizzle', file), 'utf8');
+        const guard = sql.slice(sql.indexOf('"payments_guard"()'), sql.indexOf('END $$'));
+        return (guard.match(/IF [\s\S]*?END IF;/g) ?? []).map((r) => r.replace(/\s+/g, ' '));
+      };
+      const before = rules('0013_wallet_relay.sql');
+      expect(before).toHaveLength(7);
+      expect(rules('0015_payment_body.sql')).toEqual([...before, expect.stringMatching(/the body is written once/)]);
+    });
   });
 });
 

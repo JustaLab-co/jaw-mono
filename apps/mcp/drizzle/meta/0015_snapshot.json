@@ -1,5 +1,5 @@
 {
-  "id": "fd9f4d92-6765-456f-b1b7-9cdf54c47534",
+  "id": "62a6bee8-5765-414f-8ae5-8157d191c0fb",
   "prevId": "d53c8a35-1953-4b86-93cd-7c597fa48921",
   "version": "7",
   "dialect": "postgresql",
@@ -856,7 +856,7 @@
         },
         "payment_body": {
           "name": "payment_body",
-          "value": "\"payments\".\"body\" is null or (\"payments\".\"state\" <> 'pending' and char_length(\"payments\".\"body\") <= 16384)"
+          "value": "\"payments\".\"body\" is null or (\"payments\".\"state\" <> 'pending' and octet_length(\"payments\".\"body\") <= 16384)"
         }
       },
       "isRLSEnabled": false

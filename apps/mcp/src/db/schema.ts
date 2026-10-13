@@ -186,7 +186,7 @@ export const payments = pgTable(
         or (${t.state} = 'settled' and ${t.kind} = 'paid' and ${t.nonce} is not null and ${t.amount} is not null)
         or (${t.state} = 'failed' and ${t.finishedAt} is not null)`
     ),
-    check('payment_body', sql`${t.body} is null or (${t.state} <> 'pending' and char_length(${t.body}) <= 16384)`),
+    check('payment_body', sql`${t.body} is null or (${t.state} <> 'pending' and octet_length(${t.body}) <= 16384)`),
   ]
 );
 

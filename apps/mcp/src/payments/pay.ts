@@ -287,7 +287,8 @@ async function textUpTo(res: Response, max: number): Promise<string | undefined>
     chunks.push(value);
   }
   // Postgres text columns reject NUL.
-  return Buffer.concat(chunks).toString('utf-8').replaceAll('\u0000', '\uFFFD');
+  const text = Buffer.concat(chunks).toString('utf-8').replaceAll('\u0000', '\uFFFD');
+  return Buffer.byteLength(text) > max ? undefined : text;
 }
 
 /** One `jaw_pay_and_fetch` call, from the gates to an answer drawn from its row. */

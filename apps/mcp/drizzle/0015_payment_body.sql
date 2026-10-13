@@ -1,5 +1,5 @@
 ALTER TABLE "payments" ADD COLUMN "body" text;--> statement-breakpoint
-ALTER TABLE "payments" ADD CONSTRAINT "payment_body" CHECK ("payments"."body" is null or ("payments"."state" <> 'pending' and char_length("payments"."body") <= 16384));--> statement-breakpoint
+ALTER TABLE "payments" ADD CONSTRAINT "payment_body" CHECK ("payments"."body" is null or ("payments"."state" <> 'pending' and octet_length("payments"."body") <= 16384));--> statement-breakpoint
 CREATE OR REPLACE FUNCTION "payments_guard"() RETURNS trigger LANGUAGE plpgsql AS $$
 BEGIN
   IF TG_OP = 'DELETE' THEN

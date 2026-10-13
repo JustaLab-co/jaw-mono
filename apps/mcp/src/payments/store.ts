@@ -311,10 +311,19 @@ export async function finish(
   try {
     return await finishHashed(id, token, c, fenced);
   } catch (err) {
-    if (c.body === undefined) throw err;
+    if (c.body === undefined || !bodyRefused(err)) throw err;
     log('warn', { msg: `payment ${id} concluded without its body`, error: errorLabel(err) });
     return finishHashed(id, token, { ...c, body: undefined }, fenced);
   }
+}
+
+const INVALID_TEXT = '22021';
+const CHECK_VIOLATION = '23514';
+
+function bodyRefused(err: unknown): boolean {
+  const e = (err as { cause?: { code?: unknown; constraint_name?: unknown; constraint?: unknown } }).cause;
+  if (e?.code === INVALID_TEXT) return true;
+  return e?.code === CHECK_VIOLATION && (e.constraint_name ?? e.constraint) === 'payment_body';
 }
 
 async function finishHashed(id: string, token: string, c: Conclusion, fenced: string[]) {
