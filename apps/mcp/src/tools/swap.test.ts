@@ -900,6 +900,7 @@ describe('the owner approves the deposit', () => {
       const replay = await run(t);
       const [reopened] = await swapsOf(t.connectionId);
       expect(opened).toHaveLength(2);
+      expect(opened[1]).toMatchObject({ args: 3, client: t.clientId, until: row.approveBy });
       expect(reopened).toMatchObject({ state: 'awaiting_owner', code: null, quoteId: row.quoteId });
       expect(reopened.walletUrl).not.toBe(row.walletUrl);
       expect(replay.structuredContent?.url).toBe(reopened.walletUrl);

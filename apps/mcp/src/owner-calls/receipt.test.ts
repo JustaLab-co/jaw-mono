@@ -65,6 +65,30 @@ describe('readReceipt', () => {
     await expect(readReceipt(8453, CALLS_ID)).rejects.toThrow();
   });
 
+  it('given an HTTP failure with a JSON body that says no receipt, then it throws instead of reading as pending', async () => {
+    rpc(() => Response.json({ jsonrpc: '2.0', id: 1, result: null }, { status: 502 }));
+
+    await expect(readReceipt(8453, CALLS_ID)).rejects.toThrow('502');
+  });
+
+  it('given any read, then the request ends after ten seconds', async () => {
+    const timeout = vi.spyOn(AbortSignal, 'timeout');
+    const signals: (AbortSignal | null | undefined)[] = [];
+    vi.stubGlobal('fetch', async (_input: string, init: RequestInit) => {
+      signals.push(init.signal);
+      return result(null);
+    });
+
+    try {
+      await readReceipt(8453, CALLS_ID);
+
+      expect(timeout).toHaveBeenCalledWith(10_000);
+      expect(signals).toEqual([timeout.mock.results[0].value]);
+    } finally {
+      timeout.mockRestore();
+    }
+  });
+
   it('given an answer that is not JSON, then it throws', async () => {
     rpc(() => new Response('<html>', { status: 200 }));
 

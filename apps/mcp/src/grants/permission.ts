@@ -54,7 +54,7 @@ type Granted = NonNullable<ReturnType<typeof parseGrantedPermission>>;
 
 /** Whether what the wallet granted is exactly what was asked. Start and salt are the wallet's. */
 function grantMatches(grant: GrantRequest, permission: Granted): boolean {
-  // As sets: the wallet may return the calls in another order.
+  // Calls compare as sorted target:selector pairs, so the wallet's order does not matter.
   const asked = grant.permissions.calls
     .map((c) => `${c.target.toLowerCase()}:${toFunctionSelector(c.functionSignature)}`)
     .sort();

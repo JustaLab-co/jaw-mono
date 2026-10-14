@@ -157,6 +157,11 @@ describe('insert and find', () => {
     expect((await findById(row.connectionId, row.id))?.id).toBe(row.id);
   });
 
+  it('given exactly ten calls, then the row is stored', async () => {
+    const row = await open(await newConnection(), { calls: Array(10).fill(CALL) });
+    expect(row.calls).toHaveLength(10);
+  });
+
   it('given zero or eleven calls, then the database refuses', async () => {
     const connectionId = await newConnection();
     const insert = (calls: unknown[]) => refusalOf(open(connectionId, { calls }));
@@ -201,6 +206,13 @@ describe('reopenLink', () => {
       const row = await rowIn(state);
       expect(await reopenLink(row, URL_B)).toBeUndefined();
     }
+  });
+
+  it('given an awaiting row past approve_by that nobody expired, then the link does not reopen', async () => {
+    const row = await open(await newConnection(), { approveBy: inMinutes(-1) });
+    expect(row.state).toBe('awaiting_owner');
+    expect(await reopenLink(row, URL_B)).toBeUndefined();
+    expect((await rowOf(row.id)).walletUrl).toBe(URL_A);
   });
 
   it('given a stale url, then the link does not reopen', async () => {
@@ -337,10 +349,15 @@ describe('the guard', () => {
     expect(await refusalOf(getDb().delete(ownerCalls).where(eq(ownerCalls.id, row.id)))).toMatch(/never deleted/);
   });
 
-  it('given a write, then updated_at moves', async () => {
+  it('given a write, then updated_at moves to the time of that write', async () => {
     const row = await rowIn('awaiting_owner');
+    await getDb().execute(sql`alter table owner_calls disable trigger owner_calls_guard`);
     await getDb().execute(sql`update owner_calls set updated_at = now() - interval '1 hour' where id = ${row.id}`);
+    await getDb().execute(sql`alter table owner_calls enable trigger owner_calls_guard`);
+    expect((await rowOf(row.id)).updatedAt.getTime()).toBeLessThan(Date.now() - 59 * 60_000);
+
     await setCode(row.connectionId, row.id, 'wallet_error:1');
+
     expect((await rowOf(row.id)).updatedAt.getTime()).toBeGreaterThan(Date.now() - 60_000);
   });
 
@@ -355,6 +372,20 @@ describe('the guard', () => {
     const row = await rowIn('awaiting_owner');
     expect(await refusalOf(set(row.id, values))).toMatch(/the request is immutable/);
   });
+
+  it('given an awaiting row, when its id or connection changes, then the database refuses', async () => {
+    const row = await rowIn('awaiting_owner');
+    expect(await refusalOf(set(row.id, { id: 'oc_other' }))).toMatch(/the request is immutable/);
+    expect(await refusalOf(set(row.id, { connectionId: await newConnection() }))).toMatch(/the request is immutable/);
+  });
+
+  it.each(['expired', 'owner_declined'] as const)(
+    'given an awaiting row, when it moves to %s with a new wallet url, then the database refuses',
+    async (to) => {
+      const row = await rowIn('awaiting_owner');
+      expect(await refusalOf(set(row.id, { state: to, walletUrl: URL_B }))).toMatch(/written once/);
+    }
+  );
 
   it('given a sent row, when its calls id or tx hash is rewritten, then the database refuses', async () => {
     const row = await rowIn('sent');

@@ -97,6 +97,26 @@ describe('budget grants', () => {
     });
   });
 
+  it('given a budget request, then the wallet opens for the client of the connection', async () => {
+    const { t, signer } = await connected();
+    const opened: unknown[][] = [];
+    const answers = fakeWallet(walletAnswers(signer));
+
+    await requestBudget(t, '1', {
+      openWallet: async (...args) => {
+        opened.push(args);
+        return answers(...args);
+      },
+      readPermission: approvedOnChain,
+      ...sessionFakes().deps,
+    });
+    await walletsSettled();
+
+    expect(opened).toHaveLength(1);
+    expect(opened[0]).toHaveLength(3);
+    expect(opened[0][2]).toMatchObject({ clientId: t.clientId, clientName: t.clientName });
+  });
+
   it('given a token with wallet:read alone, when it asks for a budget, then it is refused naming x402:pay', async () => {
     const reader = await connect(undefined, { scope: 'wallet:read' });
     const refused = await callTool(reader.access_token, 'jaw_request_budget', { perDay: '1' });
@@ -110,7 +130,7 @@ describe('budget grants', () => {
     expect((await callTool(c.access_token, 'jaw_request_budget', { perDay: '1e3' })).isError).toBe(true);
   });
 
-  it('given a client that still passes calls, then the input is refused and no wallet opens', async () => {
+  it('given a client that still passes calls, then the input is refused and the budget in force is unchanged', async () => {
     const { c, t, connectedWith } = await connected();
     const calls = [{ to: USDC, functionSignature: 'approve(address,uint256)' }];
     const refused = await callTool(c.access_token, 'jaw_request_budget', { perDay: '1', calls });
