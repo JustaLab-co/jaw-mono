@@ -19,6 +19,7 @@ import { connections } from '@/db/schema';
 import { isPaymentsPaused } from '@/db/settings';
 import { currentGrant, type Grant } from '@/grants/store';
 import { errorLabel, log } from '@/lib/edge';
+import { reply } from '@/lib/fence';
 import { dayLeft, readDaySpend } from '@/payments/day-spend';
 import { FloatBusy, FloatLost, LOCK_WAIT_MS, withFloat } from '@/payments/float-lock';
 import { handToReconciler, noteCallsId, recordedSends, recordSend, settleSend } from '@/payments/sends';
@@ -174,11 +175,7 @@ async function sendWithinBudget(t: Tenant, calls: Call[]) {
     return refusal('Nothing was sent: the calls failed in simulation, or are over what the budget has left today.');
   }
   if ('refused' in out) return refusal(out.refused);
-  return {
-    content: [{ type: 'text' as const, text: out.summary }],
-    structuredContent: out,
-    isError: out.status === 'reverted',
-  };
+  return { ...reply(out), isError: out.status === 'reverted' };
 }
 
 async function receiptOf(bridge: SessionBridge, callsId: Hex): Promise<z.infer<typeof output>> {

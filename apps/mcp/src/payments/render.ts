@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { reply } from '@/lib/fence';
 import { stateOf, type PaymentRow } from './store';
 
 const money = z.object({ amount: z.string(), asset: z.string().describe('CAIP-19 asset id') });
@@ -127,8 +128,7 @@ export function render(row: PaymentRow, fenced: string[], truncated = false): Pa
     summary: summaryOf(row, out) + (truncated ? ' The response body was cut at 1 MB.' : ''),
   });
   return {
-    content: [{ type: 'text', text: structured.summary }, ...fenced.map((text) => ({ type: 'text' as const, text }))],
-    structuredContent: structured,
+    ...reply(structured),
     ...(row.body !== null && { [rawBody]: row.body }),
   };
 }

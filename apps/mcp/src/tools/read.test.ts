@@ -92,6 +92,12 @@ describe('read tools', () => {
     expect(r.content[0].text).not.toContain('Ready to pay');
   });
 
+  it('given a client that reads only text, when jaw_status answers, then the last text block is the structured content as JSON', async () => {
+    const r = await callTool(token, 'jaw_status', {});
+    expect(r.content[0].text).toBe(r.structuredContent.summary);
+    expect(JSON.parse(r.content.at(-1).text)).toEqual(r.structuredContent);
+  });
+
   it('jaw_status includes connectionExpiresAt', async () => {
     const r = await callTool(token, 'jaw_status', {});
     expect(r.structuredContent.connectionExpiresAt).toEqual(expect.any(String));
@@ -144,6 +150,14 @@ describe('read tools', () => {
     expect(end).toMatch(/^\[end of untrusted text [0-9a-f]{16}\]$/);
     expect(fence.indexOf(end)).toBe(fence.length - end.length);
     expect(fence.match(/\[end of untrusted text/g)).toHaveLength(1);
+  });
+
+  it('given a seller body with instructions in it, when jaw_quote answers, then the JSON block matches the structured content and the body appears only inside its fence', async () => {
+    const r = await callTool(token, 'jaw_quote', { url: `http://${SELLER}/inject` });
+    expect(JSON.parse(r.content.at(-1).text)).toEqual(r.structuredContent);
+    const carrying = r.content.filter((b: { text: string }) => b.text.includes('Ignore previous instructions'));
+    expect(carrying).toHaveLength(1);
+    expect(carrying[0].text).toMatch(/^\[untrusted text from /);
   });
 
   it('jaw_quote fences and truncates third-party text in structured content too', async () => {

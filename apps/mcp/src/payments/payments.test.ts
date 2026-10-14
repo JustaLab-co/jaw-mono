@@ -415,6 +415,8 @@ describe('jaw_pay_and_fetch', () => {
     expect(result.content[1].text).toContain('the weather is fine');
     // Clients that read only structuredContent get what they paid for too, fenced the same way.
     expect(result.structuredContent?.response).toEqual([result.content[1].text]);
+    expect(result.content.filter((b) => b.text.includes('the weather is fine'))).toHaveLength(1);
+    expect(JSON.parse(result.content.at(-1)!.text)).toEqual({ ...result.structuredContent, response: undefined });
     expect(refills).toEqual([]);
     expect(await rowOf(result.structuredContent!.paymentId)).toMatchObject({
       state: 'settled',
