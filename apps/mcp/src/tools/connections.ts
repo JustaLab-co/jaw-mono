@@ -7,7 +7,7 @@ import { chainClients } from '@/adapters/session-host';
 import { tenant, type Tenant } from '@/connections/auth';
 import { config } from '@/connections/config';
 import { ownerRelay, WalletBusy, type OpenWallet, type Wallet } from '@/connections/relay';
-import { endConnection, ownedBy } from '@/connections/rows';
+import { endConnection, ownedBy, type ConnectionRow } from '@/connections/rows';
 import { getDb } from '@/db/client';
 import { connections, grants } from '@/db/schema';
 import { LOCK_WAIT_MS, withFloat } from '@/payments/float-lock';
@@ -116,6 +116,8 @@ export interface RevokeDeps {
 
 const DEFAULTS: RevokeDeps = { openWallet: ownerRelay, verify: verifyOnChain, clients: chainClients };
 const CONFIRM_WITHIN_MS = 10 * 60_000;
+/** The link of the revoke still open, per connection it ends: asking again while it waits hands out the same one. */
+const open = new Map<string, Promise<string | undefined>>();
 
 /** The text the owner signs to end a connection. It names the connection, so it ends no other. */
 export const revokeMessage = (row: { id: string; clientName: string }, account: Address, until: Date) =>
@@ -141,12 +143,51 @@ export async function revokeConnection(t: Tenant, id: string, deps = DEFAULTS) {
     .where(and(eq(connections.id, id), ownedBy(t.account), eq(connections.status, 'active')));
   if (!row) return refusal('No active connection with that id for this account.');
 
+  let asked = open.get(id);
+  if (!asked) {
+    asked = askOwner(t, row, deps);
+    open.set(id, asked);
+    // Without a session there is nothing to wait on, so the next call tries again.
+    void asked.then(
+      (url) => url ?? open.delete(id),
+      () => open.delete(id)
+    );
+  }
+  const url = await asked;
+  if (!url) return refusal('Too many owners are approving right now. Try again in a minute.');
+
+  const payer = row.sessionAddress as Address;
+  const left = await floatAt(t.chainId, payer, deps.clients);
+  const said = [
+    `Ask the account owner to open ${url} and confirm ending ${row.clientName}.`,
+    'jaw_connections shows it revoked once they do. Its budget stays approved on chain until it expires, with no key left to spend it.',
+  ];
+  // The key that could move it goes with the connection, and this server cannot open it.
+  if (left === null) {
+    said.push(
+      `Whatever float is at ${payer} stays there once it ends; jaw_disconnect called from that app returns it.`
+    );
+  } else if (left > 0n) {
+    said.push(
+      `${formatUnits(left, 6)} USDC stays at ${payer} once it ends, and nothing can move it. To get it back, call jaw_disconnect from that app instead, if it still works.`
+    );
+  }
+  const summary = said.join(' ');
+  return {
+    content: [{ type: 'text' as const, text: summary }],
+    structuredContent: { url, payer, left: left?.toString() ?? null, summary },
+  };
+}
+
+/** Asks the owner to sign the revoke, and ends the connection once they do. Undefined when no session is free. */
+async function askOwner(t: Tenant, row: ConnectionRow, deps: RevokeDeps): Promise<string | undefined> {
+  const id = row.id;
   const until = new Date(Date.now() + CONFIRM_WITHIN_MS);
   let wallet: Wallet;
   try {
     wallet = await deps.openWallet(t.chainId, until);
   } catch (err) {
-    if (err instanceof WalletBusy) return refusal('Too many owners are approving right now. Try again in a minute.');
+    if (err instanceof WalletBusy) return undefined;
     throw err;
   }
   void wallet
@@ -169,28 +210,9 @@ export async function revokeConnection(t: Tenant, id: string, deps = DEFAULTS) {
       // After the funding turn in flight, so nothing is mid-refill when its key goes.
       await withFloat(id, LOCK_WAIT_MS, (hold) => hold.tx((tx) => endConnection(id, t.account, new Date(), tx)));
     })
-    .catch((err: unknown) => log('warn', { msg: 'connection not revoked', error: errorLabel(err) }));
-  const payer = row.sessionAddress as Address;
-  const left = await floatAt(t.chainId, payer, deps.clients);
-  const said = [
-    `Ask the account owner to open ${wallet.url} and confirm ending ${row.clientName}.`,
-    'jaw_connections shows it revoked once they do. Its budget stays approved on chain until it expires, with no key left to spend it.',
-  ];
-  // The key that could move it goes with the connection, and this server cannot open it.
-  if (left === null) {
-    said.push(
-      `Whatever float is at ${payer} stays there once it ends; jaw_disconnect called from that app returns it.`
-    );
-  } else if (left > 0n) {
-    said.push(
-      `${formatUnits(left, 6)} USDC stays at ${payer} once it ends, and nothing can move it. To get it back, call jaw_disconnect from that app instead, if it still works.`
-    );
-  }
-  const summary = said.join(' ');
-  return {
-    content: [{ type: 'text' as const, text: summary }],
-    structuredContent: { url: wallet.url, payer, left: left?.toString() ?? null, summary },
-  };
+    .catch((err: unknown) => log('warn', { msg: 'connection not revoked', error: errorLabel(err) }))
+    .finally(() => open.delete(id));
+  return wallet.url;
 }
 
 async function floatAt(chainId: number, payer: Address, clients: ChainClients): Promise<bigint | null> {

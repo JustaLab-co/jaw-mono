@@ -12,6 +12,7 @@ import {
   walletAnswers,
   walletsSettled,
 } from '@/connections/testkit';
+import type { OpenWallet } from '@/connections/relay';
 import { revokeConnection } from './connections';
 import { useTestDb } from '@/db/test-db';
 
@@ -91,6 +92,37 @@ describe('jaw_revoke_connection', () => {
     await walletsSettled();
     expect(await works(other.access_token)).toBe(false);
     expect(await works(me.access_token)).toBe(true);
+  });
+
+  it('given a revoke of that connection still waiting for the owner, when asked again, then it hands back the same link and opens no other session', async () => {
+    const signer = owner();
+    const other = await connect(signer);
+    const me = await connect(signer, { scope: 'wallet:read' });
+    const t = await tenantOf(me.access_token);
+    const id = (await tenantOf(other.access_token)).connectionId;
+    let answer = () => {};
+    const answered = new Promise<void>((resolve) => (answer = () => resolve()));
+    const signs = walletAnswers(signer);
+    let opened = 0;
+    const waiting = {
+      ...confirmedBy(signer),
+      openWallet: ((chainId, until) => {
+        opened++;
+        return fakeWallet(async (method, params) => answered.then(() => signs(method, params)))(chainId, until);
+      }) as OpenWallet,
+    };
+
+    const [first, again] = await Promise.all([revokeConnection(t, id, waiting), revokeConnection(t, id, waiting)]);
+    const later = await revokeConnection(t, id, waiting);
+    answer();
+    await walletsSettled();
+
+    expect(opened).toBe(1);
+    const url = 'structuredContent' in first && first.structuredContent.url;
+    expect(url).toMatch(/cli-bridge/);
+    expect('structuredContent' in again && again.structuredContent.url).toBe(url);
+    expect('structuredContent' in later && later.structuredContent.url).toBe(url);
+    expect(await works(other.access_token)).toBe(false);
   });
 
   it('given the wallet is signed in to another account, then nothing is revoked', async () => {
