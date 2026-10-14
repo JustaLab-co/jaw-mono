@@ -390,6 +390,9 @@ function entryOf(row: LeasedRow): X402LogEntry {
     payer: row.payer,
     permissionId: row.permissionId ?? undefined,
     topUpAmount: row.topUpAmount ?? undefined,
+    // The call that opens a row pulls its top-up. A pull on a later retry counts a
+    // day early here, which the chain's own counter, read beside this, still has.
+    topUpAt: row.topUpAmount ? row.createdAt.toISOString() : undefined,
     topUpBatchId: row.topUpBatchId ?? undefined,
     approvalBatchId: row.approvalBatchId ?? undefined,
   };

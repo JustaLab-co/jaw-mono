@@ -5,7 +5,7 @@
  */
 import { createServer } from 'node:http';
 import type { AddressInfo } from 'node:net';
-import type { ChainClients } from '@jaw.id/agent';
+import { sumSpentSince, sumToppedUpSince, type ChainClients } from '@jaw.id/agent';
 import { eq, sql } from 'drizzle-orm';
 import { encodeAbiParameters, encodeEventTopics, parseAbi, type Address, type Hex, type PublicClient } from 'viem';
 import { beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -26,6 +26,7 @@ import { currentGrant } from '@/grants/store';
 import { safeFetch } from '@/lib/safe-fetch';
 import { requestBudget } from '@/tools/request-budget';
 import { pay, type PayDeps } from './pay';
+import { entriesFor } from './store';
 
 const USDC: Address = '0x036CbD53842c5426634e7929541eC2318f3dCF7e';
 const PAY_TO: Address = '0x2222222222222222222222222222222222222222';
@@ -230,6 +231,28 @@ describe('the daily cap at the end of a day', () => {
     expect(b.structuredContent).toMatchObject({ kind: 'paid' });
     expect(seen).toHaveLength(2);
   }, 30_000);
+
+  it('given a key whose top-up was pulled yesterday and that was signed today, then the top-up counts yesterday and the payment today', async () => {
+    const t = await connected('1', 2_000_000n);
+    routes.set('/refilled', { price: '600000' });
+    const a = await pay(t, { url: url('/refilled'), idempotencyKey: 'refilled-yesterday' }, deps);
+    expect(a.structuredContent).toMatchObject({ kind: 'paid' });
+    const id = a.structuredContent!.paymentId;
+    await getDb().execute(sql`alter table payments disable trigger payments_guard`);
+    await getDb()
+      .update(payments)
+      .set({ createdAt: sql`now() - interval '1 day'`, topUpAmount: '1000000' })
+      .where(eq(payments.id, id));
+    await getDb().execute(sql`alter table payments enable trigger payments_guard`);
+    const grant = (await currentGrant(t.connectionId))!;
+    const scope = { permissionId: grant.permissionId, payer: t.sessionAddress };
+    const today = new Date(Date.now() - 60 * 60_000).toISOString();
+
+    const entries = await entriesFor(grant.permissionId);
+
+    expect(sumToppedUpSince(entries, scope, today)).toBe(0n);
+    expect(sumSpentSince(entries, scope, today)).toBe(600_000n);
+  });
 
   it('given a key claimed yesterday whose reservation is live today, when the next payment would pass the cap of today, then it is refused', async () => {
     const t = await connected('1', 2_000_000n);

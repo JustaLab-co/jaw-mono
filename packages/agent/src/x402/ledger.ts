@@ -44,6 +44,11 @@ export interface X402LogEntry {
   txHash?: string;
   /** Base units refilled into the payer through the permission, when a top-up ran. */
   topUpAmount?: string;
+  /**
+   * When that top-up was pulled, if not at `at`. The chain charges a pull to the
+   * period it ran in, which can be earlier than the payment it funded.
+   */
+  topUpAt?: string;
   /** wallet_sendCalls id of that top-up, for on-chain reconciliation. */
   topUpBatchId?: string;
   /**
@@ -284,7 +289,7 @@ function assertCheckpointReadable(entry: X402LogEntry): void {
 export function sumToppedUpSince(entries: X402LogEntry[], scope: SpendScope, since?: string): bigint {
   return entries.reduce((total, entry) => {
     if (!countsIn(entry, scope)) return total;
-    if (since && entry.at < since) return total;
+    if (since && (entry.topUpAt ?? entry.at) < since) return total;
     return total + toppedUpFigureOf(entry);
   }, 0n);
 }
