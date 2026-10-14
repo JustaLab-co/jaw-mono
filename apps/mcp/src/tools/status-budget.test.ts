@@ -76,6 +76,7 @@ describe('jaw_status after a budget change', () => {
       perDay: { amount: '1000000' },
       spentToday: { amount: '0' },
       remainingToday: { amount: '300000' },
+      sendableToday: { amount: '1000000' },
     });
   });
 });
@@ -129,7 +130,7 @@ async function fundedRow(t: Tenant, permissionId: string, id: string, amount: st
 }
 
 describe('given the chain counts more spent today than the ledger topped up', () => {
-  it('when jaw_status runs, then remainingToday follows the chain', async () => {
+  it('when jaw_status runs, then remainingToday follows the chain and the difference is spent', async () => {
     const c = await connect();
     const t = (await verifyBearer(c.access_token))?.extra?.tenant as Tenant;
     const current = await approve(c, '0.05');
@@ -137,7 +138,7 @@ describe('given the chain counts more spent today than the ledger topped up', ()
     Object.assign(chain, { start: 1, spend: 20_000n });
     const status = await callTool(c.access_token, 'jaw_status', {});
     expect(status.structuredContent.budget).toMatchObject({
-      spentToday: { amount: '0' },
+      spentToday: { amount: '10000' },
       remainingToday: { amount: '30000' },
     });
   });
@@ -255,6 +256,94 @@ describe('given 1 USDC pulled today, 0.69 paid and 0.29 left in the float', () =
     expect(status.structuredContent.budget).toMatchObject({
       spentToday: { amount: '690000' },
       remainingToday: { amount: '290000' },
+    });
+  });
+});
+
+describe('given 1 USDC a day and the reads jaw_status combines', () => {
+  async function budgetAfter(setup: (t: Tenant, permissionId: string) => Promise<void>) {
+    const c = await connect();
+    const t = (await verifyBearer(c.access_token))?.extra?.tenant as Tenant;
+    await setup(t, await approve(c, '1'));
+    const status = await callTool(c.access_token, 'jaw_status', {});
+    return status.structuredContent;
+  }
+
+  it('when only a payment ran today, then it is spent and the rest is left for both actions', async () => {
+    const out = await budgetAfter(async (t, id) => {
+      await fundedRow(t, id, 'pay_onlypull', '100000', new Date());
+      await paidRow(t, id, 'pay_onlypaid', '100000');
+      Object.assign(chain, { spend: 100_000n, held: 0n });
+    });
+    expect(out.budget).toMatchObject({
+      spentToday: { amount: '100000' },
+      remainingToday: { amount: '900000' },
+      sendableToday: { amount: '900000' },
+    });
+    expect(out.summary).toContain('Ready to pay, 900000 base units left today.');
+  });
+
+  it('when only a transfer of 0.01 ran, with float held from an earlier day, then it is spent', async () => {
+    const out = await budgetAfter(async () => {
+      Object.assign(chain, { spend: 10_000n, held: 28_143n });
+    });
+    expect(out.budget).toMatchObject({
+      spentToday: { amount: '10000' },
+      remainingToday: { amount: '990000' },
+      sendableToday: { amount: '990000' },
+    });
+    expect(out.summary).toContain('Ready to pay, 990000 base units left today.');
+  });
+
+  it('when a payment and a transfer ran, then both are spent', async () => {
+    const out = await budgetAfter(async (t, id) => {
+      await fundedRow(t, id, 'pay_bothpull', '100000', new Date());
+      await paidRow(t, id, 'pay_bothpaid', '100000');
+      Object.assign(chain, { spend: 110_000n, held: 0n });
+    });
+    expect(out.budget).toMatchObject({
+      spentToday: { amount: '110000' },
+      remainingToday: { amount: '890000' },
+      sendableToday: { amount: '890000' },
+    });
+  });
+
+  it('when a refill, a payment out of it and a transfer ran, then the refill is not spent twice', async () => {
+    const out = await budgetAfter(async (t, id) => {
+      await fundedRow(t, id, 'pay_refillpull', '200000', new Date());
+      await paidRow(t, id, 'pay_refillpaid', '150000');
+      Object.assign(chain, { spend: 210_000n, held: 50_000n });
+    });
+    expect(out.budget).toMatchObject({
+      spentToday: { amount: '160000' },
+      remainingToday: { amount: '840000' },
+      sendableToday: { amount: '790000' },
+    });
+    expect(out.summary).toContain('840000 base units left today for payments, 790000 for transfers and calls.');
+  });
+
+  it('when a transfer took 0.99 and the float holds more than is left, then 0.01 is left', async () => {
+    const out = await budgetAfter(async () => {
+      Object.assign(chain, { spend: 990_000n, held: 28_143n });
+    });
+    expect(out.budget).toMatchObject({
+      spentToday: { amount: '990000' },
+      remainingToday: { amount: '10000' },
+      sendableToday: { amount: '10000' },
+    });
+  });
+
+  it('when 0.9 was paid today from an earlier day float, then a send is held to what the day has left', async () => {
+    const out = await budgetAfter(async (t, id) => {
+      const now = Date.now();
+      await fundedRow(t, id, 'pay_oldfloat', '900000', new Date(now - 2 * 3_600_000));
+      Object.assign(chain, { start: Math.floor(now / 1000) - 3600, spend: 0n, held: 0n });
+      await paidRow(t, id, 'pay_fromoldfloat', '900000');
+    });
+    expect(out.budget).toMatchObject({
+      spentToday: { amount: '900000' },
+      remainingToday: { amount: '100000' },
+      sendableToday: { amount: '100000' },
     });
   });
 });
