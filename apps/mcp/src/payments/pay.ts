@@ -227,7 +227,12 @@ async function settledBy(
 /** A hash another payment of this payer already settled on proves nothing about this one, so it is dropped. */
 async function claimedHashOnly(o: Outcome, rowId: string): Promise<Outcome> {
   if (o.kind !== 'paid' || !o.payment.txHash) return o;
-  if (!(await txHashTaken(o.payer, o.payment.txHash, rowId))) return o;
+  // The seller was paid already, so a hash that cannot be checked is dropped like a taken one.
+  const taken = await txHashTaken(o.payer, o.payment.txHash, rowId).catch((err: unknown) => {
+    log('warn', { msg: `payment ${rowId} hash not checked`, error: errorLabel(err) });
+    return true;
+  });
+  if (!taken) return o;
   return { ...o, payment: { ...o.payment, txHash: undefined } };
 }
 
@@ -392,8 +397,12 @@ async function concludeSend(
     await release(row.id, token).catch((e) => {
       log('warn', { msg: `payment ${row.id} lease not released`, error: errorLabel(e) });
     });
-    const current = await findPayment(row.id).catch(() => undefined);
-    return { row: merged(current ?? signedAs(row, outcome), conclusion), fenced };
+    const stored = (await findPayment(row.id).catch(() => undefined)) ?? signedAs(row, outcome);
+    settleLater(stored, checked, opts.signedAt, opts.confirm);
+    const shown = merged(stored, conclusion);
+    // Settled only once the row says so: until then the answer says it is being confirmed.
+    if (shown.state === 'settled' && stored.state === 'signed') shown.state = 'signed';
+    return { row: shown, fenced };
   }
   if (written) settleLater(written, checked, opts.signedAt, opts.confirm);
   return { row: written ?? (await rowAfter(row, conclusion)), fenced };
