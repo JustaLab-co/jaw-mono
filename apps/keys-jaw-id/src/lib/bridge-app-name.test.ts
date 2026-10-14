@@ -43,6 +43,10 @@ describe('resolveBridgeAppName', () => {
     expect(resolveBridgeAppName('\u3164\u034F')).toBe('JAW CLI');
   });
 
+  it('removes a format character outside the default-ignorable set', () => {
+    expect(resolveBridgeAppName('A\u0600B')).toBe('AB');
+  });
+
   it('removes invisible characters before collapsing whitespace', () => {
     expect(resolveBridgeAppName('A \u200b B')).toBe('A B');
     expect(resolveBridgeAppName('A\u200bB')).toBe('AB');
