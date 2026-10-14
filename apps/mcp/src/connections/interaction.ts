@@ -211,7 +211,7 @@ async function pending(a: Asked, account: Address) {
 }
 
 async function start(a: Asked, deps: InteractionDeps, keys: string[]): Promise<Job> {
-  const wallet = await deps.openWallet(a.chainId, new Date(a.expiresAt.getTime() - COMPLETE_WITHIN_MS));
+  const wallet = await deps.openWallet(a.chainId, new Date(a.expiresAt.getTime() - COMPLETE_WITHIN_MS), a);
   const job: Job = { walletUrl: wallet.url };
   const release = take(keys);
   void wallet

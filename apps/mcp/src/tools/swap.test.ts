@@ -200,7 +200,7 @@ const payDeps: PayDeps = {
   later: () => undefined,
 };
 
-type Opened = { chainId: number; until: Date; args: number };
+type Opened = { chainId: number; until: Date; args: number; client?: string };
 let opened: Opened[] = [];
 let asked: { method: string; params: unknown[] }[] = [];
 let closed: string[] = [];
@@ -213,7 +213,7 @@ const recordingWallet =
   async (...args) => {
     if (busy) throw new WalletBusy();
     const [chainId, until] = args;
-    opened.push({ chainId, until, args: args.length });
+    opened.push({ chainId, until, args: args.length, client: args[2]?.clientId });
     return answer ? fakeWallet(answer, asked)(chainId, until) : neverOpened();
   };
 
@@ -432,7 +432,7 @@ describe('a swap waiting for the owner', () => {
       walletUrl: expect.stringContaining('/cli-bridge'),
       approveBy,
     });
-    expect(opened).toEqual([{ chainId: t.chainId, until: approveBy, args: 2 }]);
+    expect(opened).toEqual([{ chainId: t.chainId, until: approveBy, args: 3, client: t.clientId }]);
 
     const deposit = row.depositAddress as Address;
     expect(result.structuredContent).toMatchObject({
@@ -514,14 +514,14 @@ describe('the owner link', () => {
     expect(row.approveBy?.getTime()).toBe(row.paidAt!.getTime() + 600_000);
   });
 
-  it('B36: given an origin chain other than the connection chain, when the link opens, then the relay opens on the connection chain with no third argument and the deposit stays on the origin chain', async () => {
+  it('B36: given an origin chain other than the connection chain, when the link opens, then the relay opens on the connection chain with only the client as its third argument and the deposit stays on the origin chain', async () => {
     const { t } = await connected('1');
 
     const result = await run(t, { originChainId: 8453, originToken: '0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913' });
 
     const [row] = await swapsOf(t.connectionId);
     expect(row.call?.chainId).toBe(8453);
-    expect(opened).toEqual([{ chainId: 84532, until: row.approveBy, args: 2 }]);
+    expect(opened).toEqual([{ chainId: 84532, until: row.approveBy, args: 3, client: t.clientId }]);
     expect(result.structuredContent?.summary).toMatch(/pays that transaction's gas in the wallet/);
   });
 });
@@ -765,7 +765,7 @@ describe('the owner approves the deposit', () => {
     });
 
     const call = row.call!;
-    expect(opened).toEqual([{ chainId: 84532, until: row.approveBy, args: 2 }]);
+    expect(opened).toEqual([{ chainId: 84532, until: row.approveBy, args: 3, client: t.clientId }]);
     expect(methods()).toEqual([
       'eth_requestAccounts',
       'wallet_sendCalls',

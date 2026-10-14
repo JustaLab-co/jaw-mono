@@ -142,7 +142,7 @@ describe('the owner session for a swap', () => {
     await opened.shutdown;
 
     const inits = opened.received.filter((m) => m.type === 'init');
-    expect(inits).toEqual([{ type: 'init', chainId: 84532 }]);
+    expect(inits).toEqual([{ type: 'init', chainId: 84532, appName: 'JAW MCP' }]);
     const requests = opened.received.filter((m) => m.type === 'rpc_request');
     expect(requests.map((m) => m.method)).toEqual(['eth_requestAccounts', 'wallet_sendCalls', 'wallet_getCallsStatus']);
     expect(requests[1].params).toEqual([

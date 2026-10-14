@@ -179,7 +179,7 @@ async function askOwner(t: Tenant, row: ConnectionRow, deps: RevokeDeps): Promis
   const until = new Date(Date.now() + CONFIRM_WITHIN_MS);
   let wallet: Wallet;
   try {
-    wallet = await deps.openWallet(t.chainId, until);
+    wallet = await deps.openWallet(t.chainId, until, t);
   } catch (err) {
     if (err instanceof WalletBusy) return undefined;
     throw err;
