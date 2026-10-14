@@ -80,11 +80,14 @@ const SELLER = `127.0.0.1:${(seller.address() as AddressInfo).port}`;
 const url = `http://${SELLER}/exact`;
 
 let readFails = false;
+let hashCheckFails = false;
 vi.mock('./store', async (original) => {
   const store = await original<typeof import('./store')>();
   return {
     ...store,
     findPayment: (id: string) => (readFails ? Promise.reject(new Error('read refused')) : store.findPayment(id)),
+    txHashTaken: (...args: Parameters<typeof store.txHashTaken>) =>
+      hashCheckFails ? Promise.reject(new Error('read refused')) : store.txHashTaken(...args),
   };
 });
 
@@ -132,6 +135,7 @@ const node = {
 const clients: ChainClients = { publicClient: () => node as unknown as PublicClient };
 
 const refills: bigint[] = [];
+const lateTasks: (() => Promise<void>)[] = [];
 const executor = (funder: Address): TopUpExecutor => ({
   request: async (method, params) => {
     if (method === 'wallet_getCallsStatus') return { status: 200 };
@@ -151,7 +155,7 @@ const deps = (): PayDeps => ({
   readPermission: async () => ({ status: 'ok', approved: true, revoked: false }),
   executor: (_t, grant) => executor(grant.account),
   fetch: safeFetch(new Set([SELLER])),
-  later: () => undefined,
+  later: (task) => void lateTasks.push(task),
 });
 
 beforeAll(async () => {
@@ -160,7 +164,9 @@ beforeAll(async () => {
 beforeEach(() => {
   seen.length = 0;
   refills.length = 0;
+  lateTasks.length = 0;
   readFails = false;
+  hashCheckFails = false;
 });
 
 /** A connection with a budget of `perDay` and a funded account behind it. */
@@ -238,6 +244,32 @@ describe.skipIf(!TEST_PG_URL)('given a paid call whose final write fails', () =>
     });
     expect(result?.structuredContent?.summary).toContain(`Paid ${PRICE} base units to ${PAY_TO}`);
     expect(result?.structuredContent?.response?.join()).toContain('the weather is fine');
+  });
+
+  it('when the seller was paid and the conclusion cannot be stored, then the answer is not settled until a late check settles the row', async () => {
+    const t = await connected('1');
+    balances.set(t.sessionAddress.toLowerCase(), 1_000_000n);
+    const { result } = await payWithFailedWrite(t, 'final-late', "new.kind = 'paid'");
+    expect(result?.structuredContent).toMatchObject({ kind: 'paid', state: 'signed' });
+    expect(result?.structuredContent?.summary).toContain('Settlement is being confirmed');
+    expect(lateTasks).toHaveLength(1);
+
+    await lateTasks[0]();
+
+    const [row] = await getDb().select().from(payments).where(eq(payments.idempotencyKey, 'final-late'));
+    expect(row).toMatchObject({ state: 'settled', kind: 'paid', amount: PRICE });
+  });
+
+  it('when the seller was paid and its transaction hash cannot be checked, then the caller gets the answer and the row concludes without the hash', async () => {
+    const t = await connected('1');
+    balances.set(t.sessionAddress.toLowerCase(), 1_000_000n);
+    hashCheckFails = true;
+    const result = await pay(t, { url, idempotencyKey: 'hash-dark' }, deps());
+    expect(seen).toHaveLength(1);
+    expect(result.structuredContent).toMatchObject({ kind: 'paid', idempotencyKey: 'hash-dark' });
+    expect(result.structuredContent?.response?.join()).toContain('the weather is fine');
+    const [row] = await getDb().select().from(payments).where(eq(payments.idempotencyKey, 'hash-dark'));
+    expect(row).toMatchObject({ kind: 'paid', txHash: null });
   });
 
   it('given a retry with the same key right after, then it does not answer in_progress for the whole lease', async () => {
