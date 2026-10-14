@@ -1637,21 +1637,25 @@ describe.skipIf(!TEST_PG_URL)('on Postgres, given a top-up in flight whose lock 
   const statusOf = async (id: string) =>
     (await getDb().select().from(connections).where(eq(connections.id, id)))[0].status;
 
-  it('when another app of the owner revokes it, then the connection stays active until the pay concludes, and a revoke after ends it', async () => {
+  it('when another app of the owner revokes it, then the connection stays active until the pay concludes, and that revoke then ends it', async () => {
     const { c, t } = await connected('1');
     const revoke = await revoker(c, t);
+    let revoking: ReturnType<typeof revoke> | undefined;
     let statusWhenLanded: string | undefined;
     const meanwhile = async () => {
-      statusWhenLanded = (await revoke()).connection.status;
+      revoking = revoke();
+      await sleep(1_500);
+      statusWhenLanded = await statusOf(t.connectionId);
     };
     await pay(
       t,
       { url: url('/exact'), idempotencyKey: 'drop-in-flight' },
       deps({ executor: (_t, g) => dropThenLand(t, meanwhile)(g.account) })
     );
-    expect(refills).toHaveLength(1);
+    const revoked = await revoking;
+    expect(refills).toEqual([105_000n]);
     expect(statusWhenLanded).toBe('active');
-    expect((await revoke()).connection.status).toBe('revoked');
+    expect(revoked?.connection.status).toBe('revoked');
   });
 
   it('when the agent disconnects, then it sends nothing and answers busy, and a disconnect after returns the top-up', async () => {
