@@ -147,6 +147,8 @@ else
   sed 's/^/     /' "$T/doctor-image.out"
   check "given an mcp image built from another commit, doctor fails naming both commits" \
     "[ $code = 1 ] && grep -q 'FAIL mcp image is from 0000000000000000000000000000000000000000' '$T/doctor-image.out'"
+  check "and, with no forwarder in that container, fails on the seller at localhost" \
+    "grep -q 'FAIL seller not reachable from the mcp container at http://localhost:$DPORT' '$T/doctor-image.out'"
   docker rm -f $(docker ps -q --filter "label=com.docker.compose.project=$P") >/dev/null 2>&1
 
   for p in $PA $PB; do docker compose -p "$p" -f "$HERE/compose.yaml" down -v >/dev/null 2>&1; done

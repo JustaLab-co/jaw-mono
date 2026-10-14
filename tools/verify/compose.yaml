@@ -1,6 +1,10 @@
 # Hosted stack for verification. Each run is its own compose project, so runs
 # can sit side by side. The mcp service is enabled by hosted-up.sh through
 # the "mcp" profile.
+#
+# The payer refuses to sign over http unless the host is localhost, so the
+# seller has to be localhost inside the mcp container too. seller-forward
+# shares that container's network and forwards localhost:$PORT to the host.
 services:
   postgres:
     image: postgres:17-alpine
@@ -29,8 +33,8 @@ services:
       JAW_MCP_PUBLIC_URL: ${JAW_MCP_PUBLIC_URL:-}
       JAW_KEYS_URL: ${JAW_KEYS_URL:-}
       JAW_MCP_API_KEY: ${JAW_MCP_API_KEY:-}
-      JAW_MCP_INSECURE_FETCH_HOSTS: ${JAW_MCP_INSECURE_FETCH_HOSTS:-},host.docker.internal:${PORT}
-      JAW_MCP_SWAP_URL: ${JAW_MCP_SWAP_URL:-http://host.docker.internal:${PORT}/proxy/v2}
+      JAW_MCP_INSECURE_FETCH_HOSTS: ${JAW_MCP_INSECURE_FETCH_HOSTS:-},localhost:${PORT}
+      JAW_MCP_SWAP_URL: ${JAW_MCP_SWAP_URL:-http://localhost:${PORT}/proxy/v2}
       JAW_MCP_SWAP_QUOTE_TTL_SEC: ${JAW_MCP_SWAP_QUOTE_TTL_SEC:-}
       # Settles signed payments whose receipt came after the call answered.
       JAW_MCP_RECONCILE_EVERY: ${JAW_MCP_RECONCILE_EVERY:-30}
@@ -40,3 +44,32 @@ services:
     extra_hosts: ['host.docker.internal:host-gateway']
     depends_on:
       postgres: { condition: service_healthy }
+  seller-forward:
+    profiles: [mcp]
+    image: ${MCP_IMAGE:-jaw-verify-mcp:local}
+    # The mcp service builds this tag in the same up.
+    pull_policy: never
+    network_mode: service:mcp
+    init: true
+    healthcheck: { disable: true }
+    environment:
+      SELLER_PORT: ${PORT}
+    command:
+      - node
+      - -e
+      - |
+        const net = require('net');
+        const port = Number(process.env.SELLER_PORT);
+        const forward = (client) => {
+          const seller = net.connect(port, 'host.docker.internal');
+          client.pipe(seller).pipe(client);
+          client.on('error', () => seller.destroy());
+          seller.on('error', () => client.destroy());
+        };
+        // localhost resolves to either address depending on the client.
+        for (const host of ['127.0.0.1', '::1']) {
+          net
+            .createServer(forward)
+            .on('error', (err) => console.error(host, err.message))
+            .listen(port, host);
+        }
