@@ -2,23 +2,13 @@ import { eq } from 'drizzle-orm';
 import { decodeFunctionData, erc20Abi, type Address, type Hex, type PublicClient } from 'viem';
 import { afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
 import { verifyBearer, type Tenant } from '@/connections/auth';
-import {
-  approvedOnChain,
-  callTool,
-  connect,
-  fakeWallet,
-  setTestEnv,
-  walletAnswers,
-  walletsSettled,
-  offlineSession,
-} from '@/connections/testkit';
+import { callTool, connect, setTestEnv } from '@/connections/testkit';
 import { endConnection } from '@/connections/rows';
 import { getDb } from '@/db/client';
 import { connections, grants, settings } from '@/db/schema';
 import { lockWaiters, TEST_PG_URL, useTestDb, useTestPostgres } from '@/db/test-db';
 import { currentGrant } from '@/grants/store';
 import { withFloat, type FloatHold } from '@/payments/float-lock';
-import { requestBudget } from './request-budget';
 
 const USDC: Address = '0x036CbD53842c5426634e7929541eC2318f3dCF7e';
 const BOB: Address = '0x2222222222222222222222222222222222222222';
@@ -81,17 +71,9 @@ afterEach(async () => {
   await getDb().delete(settings);
 });
 
-async function sender(calls: { target: Address; functionSignature: string }[] = []) {
+async function sender() {
   const c = await connect(undefined, { scope: 'wallet:read wallet:send' });
   const t = (await verifyBearer(c.access_token))?.extra?.tenant as Tenant;
-  if (calls.length) {
-    await requestBudget(t, '1', calls, {
-      openWallet: fakeWallet(walletAnswers(c.signer)),
-      readPermission: approvedOnChain,
-      ...offlineSession,
-    });
-    await walletsSettled();
-  }
   chain.permissionId = (await currentGrant(t.connectionId))?.permissionId ?? '0x';
   return { c, t };
 }

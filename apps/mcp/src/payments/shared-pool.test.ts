@@ -225,11 +225,11 @@ afterEach(() => {
   Object.assign(chain, { start: 1, end: 2_000_000_000, spend: 0n, down: false, head: 77n });
 });
 
-async function connected(perDay: string, float: bigint, calls: { target: Address; functionSignature: string }[] = []) {
+async function connected(perDay: string, float: bigint) {
   const c = await connect(undefined, { scope: 'wallet:read wallet:send x402:pay' });
   const t = (await verifyBearer(c.access_token))?.extra?.tenant as Tenant;
   await getDb().delete(grants).where(eq(grants.connectionId, t.connectionId));
-  await requestBudget(t, perDay, calls, {
+  await requestBudget(t, perDay, {
     openWallet: fakeWallet(walletAnswers(c.signer)),
     readPermission: approvedOnChain,
     ...offlineSession,
