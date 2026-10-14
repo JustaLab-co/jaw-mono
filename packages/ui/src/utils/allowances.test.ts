@@ -98,11 +98,38 @@ describe('decodeAllowanceChange', () => {
     expect(decodeAllowanceChange({ data: approve(1n) })).toBeNull();
   });
 
-  it('ignores short or malformed calldata', () => {
-    expect(decodeAllowanceChange({ to: TOKEN, data: '0x095ea7b3' })).toBeNull();
-    expect(decodeAllowanceChange({ to: TOKEN, data: approve(1n).slice(0, 100) })).toBeNull();
+  it('ignores calldata that is not hex or a target that is not an address', () => {
     expect(decodeAllowanceChange({ to: TOKEN, data: 'not hex' })).toBeNull();
     expect(decodeAllowanceChange({ to: 'not an address', data: approve(1n) })).toBeNull();
+  });
+});
+
+describe('decodeAllowanceChange with an allowance selector that cannot be read', () => {
+  const undecoded = { token: TOKEN, undecoded: true };
+
+  it('flags setApprovalForAll with a bool word of 2', () => {
+    expect(decodeAllowanceChange({ to: TOKEN, data: setAll(2n) })).toMatchObject(undecoded);
+  });
+
+  it('flags approve with a truncated amount word', () => {
+    expect(decodeAllowanceChange({ to: TOKEN, data: approve(1n).slice(0, 100) })).toMatchObject(undecoded);
+    expect(decodeAllowanceChange({ to: TOKEN, data: '0x095ea7b3' })).toMatchObject(undecoded);
+  });
+
+  it('flags a Permit2 approve with garbage arguments, on the Permit2 address', () => {
+    const data = `0x87517c45${'ff'.repeat(40)}`;
+    expect(decodeAllowanceChange({ to: PERMIT2, data })).toMatchObject({ token: PERMIT2, undecoded: true });
+  });
+
+  it('flags every other allowance selector', () => {
+    for (const selector of ['0x39509351', '0xd73dd623', '0x3177029f', '0xcae9ca51', '0xd505accf']) {
+      expect(decodeAllowanceChange({ to: TOKEN, data: `${selector}01` })).toMatchObject(undecoded);
+    }
+  });
+
+  it('still ignores a selector that is not an allowance one', () => {
+    expect(decodeAllowanceChange({ to: TOKEN, data: '0xa9059cbb01' })).toBeNull();
+    expect(decodeAllowanceChange({ to: TOKEN, data: `0x87517c45${'ff'.repeat(40)}` })).toBeNull();
   });
 });
 
