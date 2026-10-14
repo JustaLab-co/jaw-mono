@@ -2,7 +2,10 @@ import { describe, expect, it, vi } from 'vitest';
 import { renderToStaticMarkup } from 'react-dom/server';
 import type { ReactNode } from 'react';
 
-vi.mock('../../hooks', () => ({ useChainIconURI: () => undefined, useFeeTokenPrice: () => undefined }));
+vi.mock('../../hooks', () => ({
+  useChainIconURI: () => <i data-testid="chain-icon" />,
+  useFeeTokenPrice: () => undefined,
+}));
 vi.mock('../../hooks/useDecodedCalldata', () => ({
   useDecodedCalldata: () => ({ clearSigned: null, decoded: null, isLoading: false }),
 }));
@@ -10,7 +13,7 @@ vi.mock('../ShellDialog', () => ({ ShellDialog: ({ children }: { children: React
 
 import { TransactionDialog } from './index';
 
-const render = (extra: { appName?: string; origin?: string }) =>
+const render = (extra: { appName?: string; origin?: string; appLogoUrl?: string }) =>
   renderToStaticMarkup(
     <TransactionDialog
       open
@@ -34,6 +37,17 @@ describe('TransactionDialog app header', () => {
     const html = render({ appName: 'Claude (via JAW MCP)', origin: 'https://mcp.jaw.id' });
     expect(html).toContain('Claude (via JAW MCP)');
     expect(html).toContain('mcp.jaw.id');
+  });
+
+  it('passes the app logo and the chain to the header', () => {
+    const html = render({
+      appName: 'Claude (via JAW MCP)',
+      origin: 'https://mcp.jaw.id',
+      appLogoUrl: 'https://logo.example/app.png',
+    });
+    expect(html).toContain('src="https://logo.example/app.png"');
+    expect(html).toContain('title="Base Sepolia"');
+    expect(html).toContain('data-testid="chain-icon"');
   });
 
   it('shows no header without an app name', () => {

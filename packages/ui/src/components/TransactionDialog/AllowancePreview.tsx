@@ -13,17 +13,21 @@ interface AllowancePreviewProps {
   chainId?: number;
 }
 
+/** A zero `approve` is a revoke only on a token known to be an ERC-20: on an NFT it clears one id. */
+function isRevoke(change: AllowanceChange, known?: AssetDelta): boolean {
+  return change.revoke && (!change.ambiguous || !!known);
+}
+
 function amountLabel(change: AllowanceChange, known?: AssetDelta): string {
-  if (change.revoke) return 'Revoke';
+  if (isRevoke(change, known)) return 'Revoke';
   if (change.allTokens) return 'All tokens';
   if (change.unlimited) return 'Unlimited';
   const raw = change.amount ?? 0n;
-  const amount = known ? formatUnits(raw, known.decimals) : raw.toString();
+  const amount = known ? formatUnits(raw, known.decimals) : `${raw} (raw)`;
   return change.added ? `+${amount}` : amount;
 }
 
 function AllowanceRow({ change, known, chainId }: { change: AllowanceChange; known?: AssetDelta; chainId?: number }) {
-  const warn = change.unlimited && !change.revoke;
   const symbol = known?.symbol ?? '';
   return (
     <div className="flex flex-row items-start gap-1.5 p-2">
@@ -31,17 +35,20 @@ function AllowanceRow({ change, known, chainId }: { change: AllowanceChange; kno
       <div className="flex min-w-0 flex-1 flex-col gap-0.5">
         <span className="text-foreground text-symbol truncate">{symbol || formatAddress(change.token)}</span>
         <span className="text-muted-foreground text-body-xs flex min-w-0 flex-row items-center gap-1 font-mono">
-          <span className="flex-none">{change.revoke ? 'Spender' : 'To'}</span>
+          <span className="flex-none">{isRevoke(change, known) ? 'Spender' : 'To'}</span>
           <span className="truncate">{formatAddress(change.spender)}</span>
           <CopyButton value={change.spender} size={10} label="Copy spender address" />
         </span>
+        {change.owner && (
+          <span className="text-warning text-body-xs font-mono">Permit signed by {formatAddress(change.owner)}</span>
+        )}
       </div>
       <span
         className={`text-value flex flex-none items-center gap-1 break-all text-right font-mono font-semibold ${
-          warn ? 'text-warning' : 'text-foreground'
+          change.unlimited ? 'text-warning' : 'text-foreground'
         }`}
       >
-        {warn && <TriangleAlert className="size-3.5 flex-none" strokeWidth={2} />}
+        {change.unlimited && <TriangleAlert className="size-3.5 flex-none" strokeWidth={2} />}
         {amountLabel(change, known)}
       </span>
     </div>
@@ -55,7 +62,7 @@ function AllowanceRow({ change, known, chainId }: { change: AllowanceChange; kno
 export const AllowancePreview = ({ changes, knownTokens, chainId }: AllowancePreviewProps) => {
   if (changes.length === 0) return null;
 
-  const hasWarning = changes.some((c) => c.unlimited && !c.revoke);
+  const hasWarning = changes.some((c) => c.unlimited);
 
   return (
     <div className={`rounded-box overflow-hidden border ${hasWarning ? 'border-warning/60' : 'border-border'}`}>
