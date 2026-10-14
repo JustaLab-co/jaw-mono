@@ -17,6 +17,7 @@ import { findActive } from '@/connections/rows';
 import { getDb } from '@/db/client';
 import { currentGrant, type Grant } from '@/grants/store';
 import { dayLeft, daySpendOf, isoOf } from '@/payments/day-spend';
+import { recordedSends } from '@/payments/sends';
 import { entriesFor, pulledUnderOtherGrants } from '@/payments/store';
 import { publicClientFor } from '@/lib/chain';
 import { fenceText, reply } from '@/lib/fence';
@@ -54,15 +55,16 @@ const least = (a: bigint, b: bigint) => (a < b ? a : b);
 // A session balance that could not be read counts as empty.
 async function budgetOf(grant: Grant, t: Tenant, held: bigint | null) {
   const target = { chainId: grant.chainId, permissionId: grant.permissionId, permission: grant.permission };
-  const [liveness, periods, earlier, entries] = await Promise.all([
+  const [liveness, periods, earlier, entries, sent] = await Promise.all([
     readLiveness(target, clients),
     readCurrentPeriods({ ...target, token: grant.token }, clients),
     pulledUnderOtherGrants(getDb(), t.connectionId, grant.permissionId),
     entriesFor(grant.permissionId),
+    recordedSends(grant.permissionId),
   ]);
   const asset = caip19(caip2(grant.chainId), grant.token);
   const counted = periods[0]?.period;
-  const day = daySpendOf(counted, entries, { permissionId: grant.permissionId, payer: t.sessionAddress });
+  const day = daySpendOf(counted, entries, sent, { permissionId: grant.permissionId, payer: t.sessionAddress });
   const allowance = BigInt(grant.allowance);
   const figure = (amount: bigint) => ({ amount: amount.toString(), asset });
   let spent = null;

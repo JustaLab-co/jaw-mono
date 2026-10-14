@@ -1,5 +1,6 @@
 import { sql } from 'drizzle-orm';
 import {
+  bigint,
   bigserial,
   check,
   index,
@@ -187,6 +188,43 @@ export const payments = pgTable(
         or (${t.state} = 'failed' and ${t.finishedAt} is not null)`
     ),
     check('payment_body', sql`${t.body} is null or (${t.state} <> 'pending' and octet_length(${t.body}) <= 16384)`),
+  ]
+);
+
+export const sends = pgTable(
+  'sends',
+  {
+    id: text('id').primaryKey(),
+    connectionId: text('connection_id')
+      .notNull()
+      .references(() => connections.id),
+    permissionId: text('permission_id').notNull(),
+    chainId: integer('chain_id').notNull(),
+    sender: text('sender').notNull(),
+    amount: numeric('amount', { precision: 78, scale: 0 }).notNull(),
+    periodStart: bigint('period_start', { mode: 'number' }).notNull(),
+    fromBlock: bigint('from_block', { mode: 'bigint' }).notNull(),
+    state: text('state', { enum: ['open', 'landed', 'released'] })
+      .notNull()
+      .default('open'),
+    callsId: text('calls_id'),
+    txHash: text('tx_hash'),
+    leaseUntil: timestamp('lease_until', { withTimezone: true }).notNull(),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+    finishedAt: timestamp('finished_at', { withTimezone: true }),
+  },
+  (t) => [
+    index().on(t.permissionId, t.createdAt),
+    index()
+      .on(t.leaseUntil)
+      .where(sql`${t.state} = 'open'`),
+    check(
+      'send_shape',
+      sql`${t.amount} > 0 and (
+        (${t.state} = 'open' and ${t.finishedAt} is null)
+        or (${t.state} = 'landed' and ${t.txHash} is not null and ${t.finishedAt} is not null)
+        or (${t.state} = 'released' and ${t.finishedAt} is not null))`
+    ),
   ]
 );
 

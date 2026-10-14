@@ -61,6 +61,7 @@ vi.mock('@/lib/chain', async (original) => ({
   ...(await original<object>()),
   publicClientFor: () =>
     ({
+      getBlockNumber: async () => 77n,
       readContract: async ({ functionName }: { functionName: string }) => {
         if (functionName === 'getHash') return chain.permissionId;
         if (functionName === 'getCurrentPeriod') return { start: 1, end: 2_000_000_000, spend: 0n };

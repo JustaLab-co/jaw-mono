@@ -22,6 +22,7 @@ import { errorLabel, log } from '@/lib/edge';
 import { nonceUsed } from './confirm';
 import { dayLeft, readDaySpend } from './day-spend';
 import { FloatBusy, FloatLost, inTurn, withFloat, type FloatHold } from './float-lock';
+import { recordedSends } from './sends';
 import {
   addTopUp,
   assertOwned,
@@ -199,8 +200,9 @@ export function refillHook(c: RefillContext): EnsureFunds {
           const block = await client.getBlockNumber().catch(() => undefined);
           const held = await stillHeld(await hold.tx((tx) => holdingRows(tx, c.payer, c.rowId)), c.clients, block);
           const session = sessionOf(c.grant);
-          const { entries, earlier } = await hold.tx(async (tx) => ({
+          const { entries, sent, earlier } = await hold.tx(async (tx) => ({
             entries: await entriesFor(c.grant.permissionId, tx),
+            sent: await recordedSends(c.grant.permissionId, tx),
             earlier: await pulledUnderOtherGrants(tx, c.connectionId, c.grant.permissionId),
           }));
           const own = await currentLimitUsageOnChain(entries, c.policy, c.payer, session, new Date(), {
@@ -213,7 +215,7 @@ export function refillHook(c: RefillContext): EnsureFunds {
             spentThisSession,
           });
           if (!verdict.ok) return { ok: false, code: verdict.code, reason: verdict.reason };
-          const day = await readDaySpend(c.grant, c.payer, entries, c.clients);
+          const day = await readDaySpend(c.grant, c.payer, entries, sent, c.clients);
           if (day && BigInt(requirement.amount) > dayLeft(BigInt(c.grant.allowance), day)) {
             const reason = `payment ${requirement.amount} would pass the ${c.grant.allowance} a day shared with transfers and calls`;
             return { ok: false, code: 'budget_exhausted', reason };
