@@ -1,42 +1,117 @@
-# Overview
+---
+layout: minimal
+---
 
-## What is JAW?
+import { HomePage, Cards, Card } from 'vocs';
 
-The JAW SDK is a TypeScript library for building identity-first smart accounts on EVM chains: passkey-authenticated, programmable, and extensible through delegated permissions.
+<HomePage.Root>
+  <HomePage.Logo />
+  <HomePage.Tagline>{'Passkey smart accounts for every app.'}</HomePage.Tagline>
+  <HomePage.Description>
+    {
+      'No seed phrases, gas in stablecoins, ENS names and programmable permissions. ERC-4337 and EIP-7702 on EVM chains.'
+    }
+  </HomePage.Description>
+  <HomePage.InstallPackage name="@jaw.id/wagmi" />
+  <HomePage.Buttons>
+    <HomePage.Button href="/guides/quickstart" variant="accent">
+      Quickstart
+    </HomePage.Button>
+    <HomePage.Button href="/why-jaw">Why JAW</HomePage.Button>
+  </HomePage.Buttons>
+</HomePage.Root>
 
-**Smart wallets** are blockchain accounts controlled by smart contracts instead of private keys. This enables powerful features like:
+## Documentation
 
-- **Gasless transactions** - Users don't need ETH to pay for gas
-- **Batch operations** - Execute multiple actions in a single transaction
-- **Programmable permissions** - Grant limited access to third parties
+<Cards>
+  <Card
+    topRight="01"
+    title="Get Started"
+    description="Quickstart, choosing your setup and supported networks."
+    to="/guides/quickstart"
+  />
+  <Card
+    topRight="02"
+    title="Core Concepts"
+    description="Smart accounts, passkeys, ENS names and the permission layer."
+    to="/concepts/smart-accounts"
+  />
+  <Card
+    topRight="03"
+    title="Integrations"
+    description="Wagmi, Reown AppKit, the EIP-1193 provider and React Native."
+    to="/integrations"
+  />
+  <Card
+    topRight="04"
+    title="Guides"
+    description="Gas sponsoring, stablecoin payments, subscriptions, SIWE and EIP-7702."
+    to="/guides/gas-sponsoring"
+  />
+  <Card
+    topRight="05"
+    title="Customization"
+    description="Theming, your own wallet UI and a custom passkey server."
+    to="/advanced"
+  />
+  <Card
+    topRight="06"
+    title="CLI and Agents"
+    description="The jaw CLI, the MCP server and paying for APIs with x402."
+    to="/cli"
+  />
+  <Card
+    topRight="07"
+    title="Reference"
+    description="Configuration, wagmi hooks, provider RPC methods and the Account class."
+    to="/configuration"
+  />
+  <Card
+    topRight="08"
+    title="Troubleshooting"
+    description="Browser support and fixes for common issues."
+    to="/troubleshooting"
+  />
+</Cards>
 
-**Passkeys** replace seed phrases and passwords with biometric authentication (Face ID, fingerprint, or device PIN). Your users get:
+## Platform
 
-- No seed phrases to lose or steal
-- Phishing-resistant authentication
-- Cross-device sync via iCloud/Google
+<Cards>
+  <Card
+    icon="lucide:layout-dashboard"
+    title="Dashboard"
+    description="Create API keys and manage your apps."
+    to="https://dashboard.jaw.id/"
+  />
+  <Card
+    icon="lucide:key-round"
+    title="keys.jaw.id"
+    description="Where CrossPlatform accounts sign in and approve."
+    to="https://keys.jaw.id/"
+  />
+  <Card icon="lucide:bot" title="Docs for LLMs" description="These docs as plain text for AI assistants." to="/llms" />
+  <Card
+    icon="lucide:network"
+    title="Supported Networks"
+    description="Chains and capabilities, live from the JAW API."
+    to="/supported-networks"
+  />
+</Cards>
 
-## Start Here
+## Community
 
-1. **[Quickstart](/guides/quickstart)**. Install the SDK, connect a passkey account and send a batched transaction.
-2. **[Choose Your Setup](/setup)**. Decide where passkeys live, how you integrate and who pays gas.
-3. **[Integrations](/integrations)**. Wagmi, Reown AppKit, the Core SDK and React Native.
-
-You need an API key for any of them. Get one at the [JAW Dashboard](https://dashboard.jaw.id/).
-
-## Build Something
-
-- **[Gas Sponsoring](/guides/gas-sponsoring)**. Pay gas for your users.
-- **[Embed Stablecoin Payments](/guides/embed-stablecoin-payments)**. USDC transfers inside your app with no wallet UI.
-- **[Subscription Payments](/guides/subscription)**. Recurring charges through permissions.
-- **[Onchain Identity](/guides/onchain-identity)**. Give every account an ENS name.
-- **[Upgrade an EOA (EIP-7702)](/guides/eip7702-upgrade)**. Keep an existing address and add smart account features.
-
-## Reference
-
-- **[Configuration](/configuration)**. Every SDK option.
-- **[Wagmi](/wagmi)**. Connector and hooks.
-- **[Provider RPC](/api-reference)**. EIP-1193 methods.
-- **[Account](/account)**. The headless `Account` class.
-
-Something not working? See [Troubleshooting](/troubleshooting).
+<Cards>
+  <Card
+    icon="simple-icons:github"
+    title="GitHub"
+    description="Source code and issue tracker."
+    to="https://github.com/JustaLab-co/jaw-mono"
+  />
+  <Card
+    icon="simple-icons:telegram"
+    title="Telegram"
+    description="Ask the team and other builders."
+    to="https://t.me/+RsFLPfky7-YxZjVk"
+  />
+  <Card icon="simple-icons:x" title="X" description="Releases and updates." to="https://x.com/_JAW_ID" />
+</Cards>
