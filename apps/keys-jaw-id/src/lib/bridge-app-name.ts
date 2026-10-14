@@ -2,18 +2,17 @@ export const DEFAULT_BRIDGE_APP_NAME = 'JAW CLI';
 
 const MAX_LENGTH = 64;
 
+const UNSEEN = /[\p{Cc}\p{Cf}\p{Zl}\p{Zp}\p{Default_Ignorable_Code_Point}]/gu;
+
 /**
  * The name a bridge client asks to be shown under, or the CLI default when it
- * sent none. It reaches the owner's screens, so control and bidi characters
- * are dropped and whitespace is flattened before it is used.
+ * sent none. It reaches the owner's screens, so whitespace is flattened,
+ * invisible characters are removed and the cap counts code points, matching
+ * the hosted server.
  */
 export function resolveBridgeAppName(raw: unknown): string {
   if (typeof raw !== 'string') return DEFAULT_BRIDGE_APP_NAME;
-  const name = raw
-    .replace(/[\p{Cc}\p{Cf}]/gu, ' ')
-    .replace(/\s+/g, ' ')
-    .trim()
-    .slice(0, MAX_LENGTH)
-    .trim();
+  const clean = raw.replace(/\s+/g, ' ').replace(UNSEEN, '').replace(/\s+/g, ' ').trim();
+  const name = Array.from(clean).slice(0, MAX_LENGTH).join('').trim();
   return name || DEFAULT_BRIDGE_APP_NAME;
 }

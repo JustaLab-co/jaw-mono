@@ -84,6 +84,8 @@ function CLIBridgeContent() {
   const sdkRef = useRef<ReturnType<typeof JAW.create> | null>(null);
   /** What `sdkRef` was built from, so a second init can tell whether it still fits. */
   const sdkSignatureRef = useRef<string | null>(null);
+  /** The first name a client gave. A dialog may be open under it, so a later init cannot rename the page. */
+  const appNameRef = useRef<string | null>(null);
   const wsRef = useRef<WebSocket | null>(null);
   const sharedSecretRef = useRef<CryptoKey | null>(null);
 
@@ -209,7 +211,7 @@ function CLIBridgeContent() {
                 case 'init': {
                   const chainId = (inner.chainId as number) ?? 1;
                   const ens = inner.ens as string | undefined;
-                  const name = resolveBridgeAppName(inner.appName);
+                  const name = (appNameRef.current ??= resolveBridgeAppName(inner.appName));
                   setAppName(name);
                   const paymasterUrl = inner.paymasterUrl as string | undefined;
                   // Only meaningful alongside the url it was written for; the CLI
