@@ -15,6 +15,7 @@ import { reverseResolveWithAvatars, getDisplayAddress, getChainLabel, identityKe
 import { formatNativeValue, subscriptDecimal } from '../../utils/displayFormat';
 import { IdentityAvatar } from '../IdentityAvatar';
 import { AppAvatar } from '../AppAvatar';
+import { DialogAppHeader } from '../DialogAppHeader';
 import { TokenIcon } from '../TokenIcon';
 import { SubText } from '../SubText';
 import { AssetPreview } from './AssetPreview';
@@ -51,6 +52,7 @@ export const TransactionDialog = ({
   apiKey,
   appName,
   appLogoUrl,
+  origin,
   feeTokens,
   feeTokensLoading,
   selectedFeeToken,
@@ -289,6 +291,17 @@ export const TransactionDialog = ({
           {/* Pinned header. The close X comes from DialogShell, pinned over the top-right corner,
               so the title keeps clear of it. */}
           <div className="flex-none px-6 pt-6">
+            {appName && origin && (
+              <div className="mb-4">
+                <DialogAppHeader
+                  appName={appName}
+                  appLogoUrl={appLogoUrl}
+                  origin={origin}
+                  chainName={networkName}
+                  chainIcon={chainIcon}
+                />
+              </div>
+            )}
             <h2 className="text-foreground text-title-xl truncate pr-9">{title}</h2>
             {totalTransactions > 1 && currentTransaction?.description && (
               <p className="text-muted-foreground text-body mt-1">

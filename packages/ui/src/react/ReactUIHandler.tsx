@@ -1799,6 +1799,7 @@ function TransactionDialogWrapper({
       nativeCurrencySymbol={viemChain?.nativeCurrency?.symbol}
       appName={appName}
       appLogoUrl={appLogoUrl}
+      origin={typeof window !== 'undefined' ? window.location.origin : 'unknown'}
     />
   );
 }
@@ -2151,6 +2152,7 @@ function SendTransactionDialogWrapper({
       nativeCurrencySymbol={viemChain?.nativeCurrency?.symbol}
       appName={appName}
       appLogoUrl={appLogoUrl}
+      origin={typeof window !== 'undefined' ? window.location.origin : 'unknown'}
     />
   );
 }
