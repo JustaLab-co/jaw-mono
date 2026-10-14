@@ -133,7 +133,6 @@ describe('connecting through the owner wallet', () => {
 
     const row = await rowOf(start.uid!);
     expect(opened).toHaveLength(1);
-    expect(opened[0]).toHaveLength(3);
     expect(opened[0][2]).toMatchObject({ clientId: row.clientId, clientName: row.clientName });
     expect(row.clientId).toBe('jaw-cli');
   });

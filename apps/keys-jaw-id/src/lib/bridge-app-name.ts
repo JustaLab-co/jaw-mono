@@ -2,6 +2,7 @@ export const DEFAULT_BRIDGE_APP_NAME = 'JAW CLI';
 
 const MAX_LENGTH = 64;
 
+// Keep in sync with appNameOf in apps/mcp/src/connections/relay.ts.
 const UNSEEN = /[\p{Cc}\p{Cf}\p{Zl}\p{Zp}\p{Default_Ignorable_Code_Point}]/gu;
 
 /**

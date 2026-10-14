@@ -180,6 +180,10 @@ describe('given authorizations hold every session of their pool', () => {
       expect(named('A \r\n\t B')).toBe(`A B${VIA}`);
     });
 
+    it('given a line separator between words, then it is one space like on the keys page', () => {
+      expect(named('A\u2028B')).toBe(`A B${VIA}`);
+    });
+
     it('given a name that is only invisible characters, then it falls back to JAW MCP', () => {
       expect(named('\u0600\u3164 \t')).toBe('JAW MCP');
     });

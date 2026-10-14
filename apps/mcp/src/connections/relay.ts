@@ -32,7 +32,8 @@ export type OpenWallet = (chainId: number, until: Date, client?: RelayClient) =>
 
 const APP_NAME_MAX = 64;
 const SELF_ASSERTED = ' (via JAW MCP)';
-const UNSEEN = /(?!\s)[\p{Cc}\p{Cf}\p{Zl}\p{Zp}\p{Default_Ignorable_Code_Point}]/gu;
+// Keep in sync with resolveBridgeAppName in apps/keys-jaw-id/src/lib/bridge-app-name.ts.
+const UNSEEN = /[\p{Cc}\p{Cf}\p{Zl}\p{Zp}\p{Default_Ignorable_Code_Point}]/gu;
 
 /**
  * What the wallet page calls the app. Any client can claim a name or a public
@@ -41,7 +42,7 @@ const UNSEEN = /(?!\s)[\p{Cc}\p{Cf}\p{Zl}\p{Zp}\p{Default_Ignorable_Code_Point}]
 export function appNameOf(client?: RelayClient): string {
   const known = client && Object.hasOwn(FIRST_PARTY_CLIENTS, client.clientId);
   const raw = known ? FIRST_PARTY_CLIENTS[client.clientId] : (client?.clientName ?? '');
-  const claimed = Array.from(raw.replace(UNSEEN, '').replace(/\s+/g, ' ').trim());
+  const claimed = Array.from(raw.replace(/\s+/g, ' ').replace(UNSEEN, '').replace(/\s+/g, ' ').trim());
   const name = claimed
     .slice(0, APP_NAME_MAX - SELF_ASSERTED.length)
     .join('')
