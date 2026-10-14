@@ -1,4 +1,7 @@
-import { describe, expect, it } from 'vitest';
+// @vitest-environment jsdom
+import { act } from 'react';
+import { createRoot } from 'react-dom/client';
+import { describe, expect, it, vi } from 'vitest';
 import { renderToStaticMarkup } from 'react-dom/server';
 
 import { AllowancePreview } from './AllowancePreview';
@@ -32,8 +35,8 @@ const usdc: AssetDelta = {
   isNative: false,
 };
 
-const render = (changes: AllowanceChange[], knownTokens: AssetDelta[] = []) =>
-  renderToStaticMarkup(<AllowancePreview changes={changes} knownTokens={knownTokens} />);
+const render = (changes: AllowanceChange[], knownTokens: AssetDelta[] = [], chainId?: number) =>
+  renderToStaticMarkup(<AllowancePreview changes={changes} knownTokens={knownTokens} chainId={chainId} />);
 
 /** Class list and visible text of the first row's amount span. */
 function amount(html: string) {
@@ -148,5 +151,36 @@ describe('AllowancePreview', () => {
   it('renders one row per change', () => {
     const html = render([change(), change({ spender: OWNER })]);
     expect(html.match(/Copy spender address/g)).toHaveLength(2);
+  });
+
+  it('reads a change without an amount as a raw zero', () => {
+    expect(amount(render([change({ amount: undefined })])).text).toBe('0 (raw)');
+  });
+
+  it('flags the card when any one change is unlimited, not only when all are', () => {
+    expect(cardWarns(render([change({ unlimited: true }), change()]))).toBe(true);
+    expect(cardWarns(render([change(), change()]))).toBe(false);
+  });
+
+  it('looks the token icon up on the chain of the request', () => {
+    expect(render([change()], [], 8453)).toContain(`/tokens/8453/${TOKEN.toLowerCase()}/icon`);
+    expect(render([change()])).not.toContain('<img');
+  });
+
+  it('copies the spender address, not the token', async () => {
+    (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
+    const writeText = vi.fn(async () => undefined);
+    vi.stubGlobal('navigator', { clipboard: { writeText } });
+    const host = document.createElement('div');
+    document.body.append(host);
+    const root = createRoot(host);
+    await act(async () => root.render(<AllowancePreview changes={[change()]} knownTokens={[]} />));
+
+    await act(async () => host.querySelector<HTMLButtonElement>('[aria-label="Copy spender address"]')!.click());
+
+    expect(writeText).toHaveBeenCalledWith(SPENDER);
+    act(() => root.unmount());
+    host.remove();
+    vi.unstubAllGlobals();
   });
 });

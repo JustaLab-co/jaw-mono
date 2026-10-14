@@ -86,6 +86,18 @@ describe('decodeAllowanceChange', () => {
     expect(change?.unlimited).toBe(true);
   });
 
+  it('does not flag a Permit2 approve one below max uint160 as unlimited', () => {
+    expect(decodeAllowanceChange({ to: PERMIT2, data: permit2(maxUint160 - 1n) })).toMatchObject({ unlimited: false });
+  });
+
+  it('reads a Permit2 approve as setting the allowance, never adding to it', () => {
+    expect(decodeAllowanceChange({ to: PERMIT2, data: permit2(5n) })).toMatchObject({
+      added: false,
+      amount: 5n,
+      revoke: false,
+    });
+  });
+
   it('ignores the Permit2 selector on another contract', () => {
     expect(decodeAllowanceChange({ to: TOKEN, data: permit2(1n) })).toBeNull();
   });
