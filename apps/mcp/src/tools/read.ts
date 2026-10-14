@@ -40,8 +40,9 @@ type Readiness = z.infer<typeof readiness>;
 const budgetOutput = z.object({
   permissionId: z.string(),
   perDay: money,
-  spentToday: money.nullable().describe('Payments made today under this budget, as the daily cap counts them'),
-  remainingToday: money.nullable(),
+  spentToday: money.nullable().describe('What left this budget today: payments, transfers and sent calls'),
+  remainingToday: money.nullable().describe('The most the next payment can spend today'),
+  sendableToday: money.nullable().describe('The most the next jaw_transfer or jaw_send_calls can move today'),
   resetsAt: z.string().nullable(),
   expiresAt: z.string(),
 });
@@ -55,11 +56,8 @@ function isoOf(seconds: number): string | undefined {
 }
 
 const floorZero = (n: bigint) => (n > 0n ? n : 0n);
+const least = (a: bigint, b: bigint) => (a < b ? a : b);
 
-// spentToday is what this budget paid in the chain's current period, the figure pay's daily cap counts.
-// remainingToday is the smaller of the cap's room and what the session can fund: the float it holds
-// plus what the permission can still pull. Pulled is the larger of the chain's counter and the float
-// funded in the window, plus what the connection's replaced budgets pulled the same day.
 // A session balance that could not be read counts as empty.
 async function budgetOf(grant: Grant, t: Tenant, held: bigint | null) {
   const target = { chainId: grant.chainId, permissionId: grant.permissionId, permission: grant.permission };
@@ -71,29 +69,36 @@ async function budgetOf(grant: Grant, t: Tenant, held: bigint | null) {
   ]);
   const asset = caip19(caip2(grant.chainId), grant.token);
   const counted = periods[0]?.period;
-  let paid: bigint | null = counted?.status === 'outside-window' ? 0n : null;
-  let pulled = 0n;
+  let day = counted?.status === 'outside-window' ? { paid: 0n, refilled: 0n, sentFromAccount: 0n } : null;
   if (counted?.status === 'ok') {
     const since = isoOf(counted.start);
     const scope = { permissionId: grant.permissionId, payer: t.sessionAddress };
-    paid = sumSpentSince(entries, scope, since);
-    const floated = sumToppedUpSince(entries, scope, since);
-    pulled = counted.spend > floated ? counted.spend : floated;
+    const refilled = sumToppedUpSince(entries, scope, since);
+    const sentFromAccount = floorZero(counted.spend - refilled);
+    day = { paid: sumSpentSince(entries, scope, since), refilled, sentFromAccount };
   }
   const allowance = BigInt(grant.allowance);
-  let left: bigint | null = null;
-  if (paid !== null) {
-    const capRoom = floorZero(allowance - paid);
-    const fundable = (held ?? 0n) + floorZero(allowance - pulled - earlier);
-    left = capRoom < fundable ? capRoom : fundable;
+  const figure = (amount: bigint) => ({ amount: amount.toString(), asset });
+  let spent = null;
+  let payable = null;
+  let sendable = null;
+  if (day) {
+    const pulled = day.refilled + day.sentFromAccount;
+    const dayLeft = floorZero(allowance - day.paid - day.sentFromAccount);
+    const pullable = floorZero(allowance - pulled);
+    const floatFundable = (held ?? 0n) + floorZero(pullable - earlier);
+    spent = figure(day.paid + day.sentFromAccount);
+    payable = figure(least(dayLeft, floatFundable));
+    sendable = figure(least(dayLeft, pullable));
   }
   return {
     liveness,
     budget: budgetOutput.parse({
       permissionId: grant.permissionId,
       perDay: { amount: grant.allowance, asset },
-      spentToday: paid === null ? null : { amount: paid.toString(), asset },
-      remainingToday: left === null ? null : { amount: left.toString(), asset },
+      spentToday: spent,
+      remainingToday: payable,
+      sendableToday: sendable,
       resetsAt: (counted?.status === 'ok' && isoOf(counted.end + 1)) || null,
       expiresAt: grant.expiresAt.toISOString(),
     }),
@@ -140,6 +145,14 @@ const NOT_READY: Record<NonNullable<Readiness['reason']>, string> = {
   chain_unavailable: 'The budget could not be read from the chain right now.',
 };
 
+function leftToday(budget: z.infer<typeof budgetOutput> | undefined) {
+  const pay = budget?.remainingToday;
+  const send = budget?.sendableToday;
+  if (!pay) return '';
+  if (!send || send.amount === pay.amount) return `, ${pay.amount} base units left today`;
+  return `, ${pay.amount} base units left today for payments, ${send.amount} for transfers and calls`;
+}
+
 const EXPIRY_WARN_MS = 48 * 60 * 60 * 1000;
 
 async function status(t: Tenant) {
@@ -152,12 +165,11 @@ async function status(t: Tenant) {
   ]);
   const read = grant && (await budgetOf(grant, t, session && BigInt(session.amount)));
   const ready = readinessOf(t, read?.liveness);
-  const left = read?.budget.remainingToday;
   const expiresAt = conn?.expiresAt ?? new Date();
   const nearExpiry = expiresAt.getTime() - Date.now() < EXPIRY_WARN_MS;
   const base =
     ready.status === 'ready'
-      ? `Connected as ${t.account} on ${network}. Ready to pay${left ? `, ${left.amount} base units left today` : ''}.`
+      ? `Connected as ${t.account} on ${network}. Ready to pay${leftToday(read?.budget)}.`
       : `Connected as ${t.account} on ${network}. ${NOT_READY[ready.reason ?? 'no_grant']}`;
   const summary = nearExpiry
     ? `${base} Connection expires ${expiresAt.toISOString()}; call jaw_disconnect soon.`
