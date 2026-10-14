@@ -304,6 +304,45 @@ export const swaps = pgTable(
   ]
 );
 
+export const ownerCalls = pgTable(
+  'owner_calls',
+  {
+    id: text('id').primaryKey(),
+    connectionId: text('connection_id')
+      .notNull()
+      .references(() => connections.id),
+    idempotencyKey: text('idempotency_key').notNull(),
+    requestHash: text('request_hash').notNull(),
+    chainId: integer('chain_id').notNull(),
+    account: text('account').notNull(),
+    calls: jsonb('calls').notNull().$type<{ to: string; data: string; value: string }[]>(),
+    state: text('state', { enum: ['awaiting_owner', 'owner_declined', 'expired', 'sent', 'landed', 'reverted'] })
+      .notNull()
+      .default('awaiting_owner'),
+    code: text('code'),
+    walletUrl: text('wallet_url').notNull(),
+    approveBy: timestamp('approve_by', { withTimezone: true }).notNull(),
+    callsId: text('calls_id'),
+    txHash: text('tx_hash'),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+    updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
+    finishedAt: timestamp('finished_at', { withTimezone: true }),
+  },
+  (t) => [
+    uniqueIndex().on(t.connectionId, t.idempotencyKey),
+    index().on(t.connectionId, t.createdAt, t.id),
+    uniqueIndex('owner_calls_open_index')
+      .on(t.connectionId)
+      .where(sql`${t.state} = 'awaiting_owner'`),
+    check(
+      'owner_call_shape',
+      sql`jsonb_array_length(${t.calls}) between 1 and 10
+        and (${t.state} <> 'sent' or ${t.callsId} is not null)
+        and (${t.state} not in ('landed', 'reverted') or (${t.callsId} is not null and ${t.txHash} is not null))`
+    ),
+  ]
+);
+
 // One row per tool call. Arguments and results are never stored: they can carry
 // seller headers, signatures and amounts the owner did not ask to keep.
 export const auditEvents = pgTable(
