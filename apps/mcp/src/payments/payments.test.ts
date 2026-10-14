@@ -524,11 +524,11 @@ describe('jaw_pay_and_fetch', () => {
   });
 
   /** A payment whose answer was lost, two minutes on: the call's lease ran out and the reconciler's window opened. */
-  async function lostAndDue(key: string) {
+  async function lostAndDue(key: string, path = '/lost') {
     const { t } = await connected('1');
     balances.set(t.sessionAddress.toLowerCase(), 1_000_000n);
     dropNextLost = true;
-    const lost = await pay(t, { url: url('/lost'), idempotencyKey: key }, deps());
+    const lost = await pay(t, { url: url(path), idempotencyKey: key }, deps());
     expect(lost.structuredContent).toMatchObject({ state: 'signed', refusal: { code: 'no_response' } });
     const id = lost.structuredContent!.paymentId;
     await getDb()
@@ -602,6 +602,28 @@ describe('jaw_pay_and_fetch', () => {
     expect(row).toMatchObject({ state: 'settled', kind: 'paid', amount: '5000' });
     expect(again.structuredContent).toMatchObject({ kind: 'paid', state: 'settled', paymentId: id });
     expect(seen.map((s) => s.nonce)).toEqual([seen[0].nonce, seen[0].nonce]);
+  });
+
+  it('given a reconciler run that reads while the resend is at the seller, when the seller refuses the used nonce, then the resend answers and the next run settles the row', async () => {
+    const { t, id } = await lostAndDue('recon-race-refused', '/refuse');
+    const read = heldRead();
+    const run = reconcile(read.clients);
+    await read.reached;
+    onProof.set('/refuse', async () => {
+      used.add(seen[0].nonce.toLowerCase());
+      read.go();
+      await run;
+    });
+
+    const again = await pay(t, { url: url('/refuse'), idempotencyKey: 'recon-race-refused' }, deps());
+
+    expect(again.structuredContent).toMatchObject({ state: 'unknown', paymentId: id });
+    expect(again.content[0].text).toContain('A payment may have reached the seller');
+    expect(await rowOf(id)).toMatchObject({ state: 'signed' });
+    expect(seen.map((s) => s.nonce)).toEqual([seen[0].nonce, seen[0].nonce]);
+    await getDb().update(payments).set({ reconcilingUntil: null }).where(eq(payments.id, id));
+    await reconcile(clients);
+    expect(await rowOf(id)).toMatchObject({ state: 'settled', kind: 'paid' });
   });
 
   it("given a reconciler run that reads while the resend is at the seller, then a replay repeats the seller's answer", async () => {
