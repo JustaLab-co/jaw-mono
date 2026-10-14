@@ -217,7 +217,7 @@ export function refillHook(c: RefillContext): EnsureFunds {
           if (!verdict.ok) return { ok: false, code: verdict.code, reason: verdict.reason };
           const day = await readDaySpend(c.grant, c.payer, entries, sent, c.clients);
           if (day && BigInt(requirement.amount) > dayLeft(BigInt(c.grant.allowance), day)) {
-            const reason = `payment ${requirement.amount} would pass the ${c.grant.allowance} a day shared with transfers and calls`;
+            const reason = `payment ${requirement.amount} would pass the ${c.grant.allowance} a day shared with transfers`;
             return { ok: false, code: 'budget_exhausted', reason };
           }
           const refillMs = budget.left() - SEND_RESERVE_MS;

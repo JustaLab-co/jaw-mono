@@ -118,7 +118,7 @@ async function sendWithinBudget(t: Tenant, call: Call, amount: bigint) {
       );
     }
     log('warn', { msg: 'send not submitted', error: errorLabel(err) });
-    return refusal('Nothing was sent: the calls failed in simulation, or are over what the budget has left today.');
+    return refusal('Nothing was sent: the transfer failed in simulation, or is over what the budget has left today.');
   }
   if ('refused' in out) return refusal(out.refused);
   return { ...reply(out), isError: out.status === 'reverted' };

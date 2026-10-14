@@ -319,7 +319,7 @@ describe('given 1 USDC a day and the reads jaw_status combines', () => {
       remainingToday: { amount: '840000' },
       sendableToday: { amount: '790000' },
     });
-    expect(out.summary).toContain('840000 base units left today for payments, 790000 for transfers and calls.');
+    expect(out.summary).toContain('840000 base units left today for payments, 790000 for transfers.');
   });
 
   it('when a transfer took 0.99 and the float holds more than is left, then 0.01 is left', async () => {
