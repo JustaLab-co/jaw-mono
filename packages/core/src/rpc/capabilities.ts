@@ -17,6 +17,13 @@ export interface ChainMetadataCapability {
 }
 
 /**
+ * Whether the recovery manager and its relayer serve the chain
+ */
+export interface RecoveryCapability {
+    supported: boolean;
+}
+
+/**
  * What the proxy answers for one chain.
  *
  * The two capabilities we consume are declared; everything else stays open. The
@@ -31,6 +38,7 @@ export interface ChainMetadataCapability {
 export interface ChainCapabilities {
     feeToken?: FeeTokenCapability;
     chainMetadata?: ChainMetadataCapability;
+    recovery?: RecoveryCapability;
     [capability: string]: unknown;
 }
 

@@ -31,5 +31,12 @@ export const CONTRACT_VERSION = '1';
 
 export const PERMISSIONS_MANAGER_ADDRESS = '0xf1b40E3D5701C04d86F7828f0EB367B9C90901D8';
 
+/**
+ * The recovery contracts, deployed at one deterministic address on every chain.
+ * Base Sepolia values until the audited release replaces them.
+ */
+export const RECOVERY_MANAGER_ADDRESS: `0x${string}` = '0x9D1df5AeBE2CdBe6051687C0ab2c788890907E45';
+export const SIGNATURE_RECOVERY_PROVIDER_ADDRESS: `0x${string}` = '0xf67C870EF05A5038a4225456Cb08e238fF3B59b8';
+
 export const EIP7702_CODE_PREFIX = '0xef0100';
 export const ERC20_PAYMASTER_ADDRESS = '0x888888888888Ec68A58AB8094Cc1AD20Ba3D2402';
