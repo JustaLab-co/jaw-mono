@@ -14,7 +14,8 @@ import { countHit } from '@/db/settings';
 import { TEST_PG_URL, useTestDb, useTestPostgres } from '@/db/test-db';
 import { RATE_WINDOW_MS } from '@/lib/edge';
 import { gateCode } from '@/payments/render';
-import { sendCalls, type SendCallsInput } from './owner-calls';
+import type { ReadReceipt } from '@/owner-calls/receipt';
+import { sendCalls, sendCallsStatus, type SendCallsInput } from './owner-calls';
 
 setTestEnv();
 process.env.JAW_MCP_RPC_URL = 'http://127.0.0.1:9';
@@ -85,7 +86,7 @@ const input = (over: Partial<SendCallsInput> = {}): SendCallsInput => ({
   ...over,
 });
 const send = (t: Tenant, args: Partial<SendCallsInput> = {}, openWallet = wallet()) =>
-  sendCalls(t, input(args), { openWallet });
+  sendCalls(t, input(args), { openWallet, receipt: async () => null });
 const rowsOf = (connectionId: string) =>
   getDb().select().from(ownerCalls).where(eq(ownerCalls.connectionId, connectionId));
 const settle = async () => {
@@ -470,5 +471,157 @@ describe('jaw_send_calls refusals', () => {
     const result = await callTool(token, 'jaw_send_calls', { calls: [{ to: TARGET }], chainId: 324 });
 
     expect(result.content[0].text).toMatch(/^unsupported_chain: /);
+  });
+});
+
+const TX = `0x${'ab'.repeat(32)}`;
+const STATUS_KEY = 'status-key';
+
+const check = (t: Tenant, id: string, receipt: ReadReceipt = async () => null) =>
+  sendCallsStatus(t, { id }, { openWallet: wallet(), receipt });
+
+async function sentRow() {
+  const { t, token } = await connected();
+  const first = await send(t, { idempotencyKey: STATUS_KEY }, wallet(owner(t.account)));
+  await settle();
+  return { t, token, id: first.structuredContent!.id };
+}
+
+describe('jaw_send_calls_status', () => {
+  it('given a sent row whose receipt succeeded, then landed with the tx hash and the row is concluded', async () => {
+    const { t, id } = await sentRow();
+    const receipt = vi.fn<ReadReceipt>(async () => ({ success: true, txHash: TX }));
+
+    const result = await check(t, id, receipt);
+
+    expect(receipt).toHaveBeenCalledWith(t.chainId, CALLS_ID);
+    expect(result.isError).toBeFalsy();
+    expect(result.structuredContent).toMatchObject({ state: 'landed', txHash: TX, callsId: CALLS_ID });
+    expect(result.structuredContent!.summary).toBe(`Mined in ${TX}.`);
+    expect((await rowsOf(t.connectionId))[0]).toMatchObject({ state: 'landed', txHash: TX });
+  });
+
+  it('given a sent row whose receipt failed, then reverted, isError and the tx hash', async () => {
+    const { t, id } = await sentRow();
+
+    const result = await check(t, id, async () => ({ success: false, txHash: TX }));
+
+    expect(result.isError).toBe(true);
+    expect(result.structuredContent).toMatchObject({ state: 'reverted', txHash: TX });
+    expect(result.structuredContent!.summary).toContain('owner paid the gas');
+  });
+
+  it('given a sent row with no receipt yet, then it stays sent and says to call again', async () => {
+    const { t, id } = await sentRow();
+
+    const result = await check(t, id);
+
+    expect(result.structuredContent).toMatchObject({ state: 'sent', callsId: CALLS_ID });
+    expect(result.structuredContent!.summary).toContain('call jaw_send_calls_status again');
+    expect((await rowsOf(t.connectionId))[0].state).toBe('sent');
+  });
+
+  it('given a sent row long past approveBy with no receipt, then it says to check the account', async () => {
+    const { t, id } = await sentRow();
+    await rewrite(id, { approveBy: sql`statement_timestamp() - interval '11 minutes'` });
+
+    const result = await check(t, id);
+
+    expect(result.structuredContent!.state).toBe('sent');
+    expect(result.structuredContent!.summary).toContain('check the account before sending these calls again');
+  });
+
+  it('given a bundler that cannot be read, then the stored row answers with a note and nothing is written', async () => {
+    const { t, id } = await sentRow();
+
+    const result = await check(t, id, async () => {
+      throw new Error('rpc down');
+    });
+
+    expect(result.isError).toBeFalsy();
+    expect(result.structuredContent!.state).toBe('sent');
+    expect(result.structuredContent!.summary).toContain(
+      'The chain could not be read right now; this is the request as last stored.'
+    );
+    expect((await rowsOf(t.connectionId))[0].state).toBe('sent');
+  });
+
+  it('given a row past approveBy still awaiting the owner, then expired and the chain is not read', async () => {
+    const { t } = await connected();
+    const first = await send(t);
+    await rewrite(first.structuredContent!.id, { approveBy: sql`statement_timestamp() - interval '1 second'` });
+    const receipt = vi.fn<ReadReceipt>(async () => null);
+
+    const result = await check(t, first.structuredContent!.id, receipt);
+
+    expect(result.structuredContent!.state).toBe('expired');
+    expect(receipt).not.toHaveBeenCalled();
+  });
+
+  it('given a row awaiting the owner, then it answers the link without reading the chain', async () => {
+    const { t } = await connected();
+    const first = await send(t);
+    const receipt = vi.fn<ReadReceipt>(async () => null);
+
+    const result = await check(t, first.structuredContent!.id, receipt);
+
+    expect(result.structuredContent).toMatchObject({ state: 'awaiting_owner', url: first.structuredContent!.url });
+    expect(receipt).not.toHaveBeenCalled();
+  });
+
+  it('given a send_started row with no calls id, then it answers the stored row and reads no receipt', async () => {
+    const { t } = await connected();
+    await send(
+      t,
+      {},
+      wallet(
+        owner(t.account, {
+          wallet_sendCalls: () => {
+            throw new Error('socket closed');
+          },
+        })
+      )
+    );
+    await settle();
+    const [row] = await rowsOf(t.connectionId);
+    const receipt = vi.fn<ReadReceipt>(async () => ({ success: true, txHash: TX }));
+
+    const result = await check(t, row.id, receipt);
+
+    expect(receipt).not.toHaveBeenCalled();
+    expect(result.structuredContent).toMatchObject({ state: 'awaiting_owner', refusal: { code: 'send_started' } });
+    expect(result.structuredContent!.url).toBeUndefined();
+    expect(result.structuredContent!.summary).toContain('may have sent');
+  });
+
+  it('given another connection id, then not_found, the same as an id that never existed', async () => {
+    const { id } = await sentRow();
+    const { t: other } = await connected();
+
+    const foreign = await check(other, id);
+    const missing = await check(other, `oc_${'A'.repeat(22)}`);
+
+    expect(foreign[gateCode]).toBe('not_found');
+    expect(foreign.isError).toBe(true);
+    expect(foreign.content).toEqual(missing.content);
+  });
+
+  it('given more than 30 reads this minute, then rate_limited', async () => {
+    const { t, id } = await sentRow();
+    for (let i = 0; i < 30; i++) await countHit(`owner-calls-status:${t.connectionId}`, RATE_WINDOW_MS);
+
+    const result = await check(t, id);
+
+    expect(result[gateCode]).toBe('rate_limited');
+  });
+
+  it('given a wallet:read token, then the tool is served and refuses a malformed id', async () => {
+    const { token } = await connected('wallet:read');
+
+    const result = await callTool(token, 'jaw_send_calls_status', { id: `oc_${'A'.repeat(22)}` });
+
+    expect(result.content[0].text).toMatch(/^not_found: /);
+    const bad = await callTool(token, 'jaw_send_calls_status', { id: 'nope' });
+    expect(bad.isError).toBe(true);
   });
 });

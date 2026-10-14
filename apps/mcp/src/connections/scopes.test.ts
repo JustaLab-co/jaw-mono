@@ -58,6 +58,7 @@ const TOOLS: Record<string, { needs: ConnectionScope[]; args: object }> = {
     needs: ['wallet:read'],
     args: { chainId: UNSUPPORTED_ORIGIN_CHAIN, calls: [{ to: RECIPIENT, data: '0xa9059cbb' }] },
   },
+  jaw_send_calls_status: { needs: ['wallet:read'], args: { id: `oc_${'A'.repeat(22)}` } },
 };
 
 const PROFILES = ['wallet:read', 'wallet:read x402:pay', 'wallet:read wallet:send', 'wallet:read x402:pay wallet:send'];

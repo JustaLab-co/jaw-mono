@@ -11,8 +11,11 @@ import { countHit, isPaymentsPaused } from '@/db/settings';
 import { errorLabel, log, RATE_WINDOW_MS } from '@/lib/edge';
 import { reply } from '@/lib/fence';
 import { approve } from '@/owner-calls/approve';
+import { readReceipt, type ReadReceipt } from '@/owner-calls/receipt';
 import {
+  conclude,
   expirePast,
+  findById,
   findByKey,
   findOpen,
   insertOwnerCall,
@@ -24,6 +27,7 @@ import { gateCode } from '@/payments/render';
 
 const MAX_CALLS = 10;
 const LINK_RATE_LIMIT = 10;
+const STATUS_RATE_LIMIT = 30;
 const APPROVE_WINDOW_MS = 10 * 60_000;
 const SENT_GRACE_MS = 10 * 60_000;
 
@@ -42,6 +46,14 @@ const callInput = z.strictObject({
     .optional()
     .describe('Native coin in wei, decimal; defaults to 0'),
 });
+
+const statusInput = z.strictObject({
+  id: z
+    .string()
+    .regex(/^oc_[A-Za-z0-9_-]{22}$/)
+    .describe('The id jaw_send_calls returned'),
+});
+export type SendCallsStatusInput = z.infer<typeof statusInput>;
 
 const sendCallsInput = z.strictObject({
   chainId: z
@@ -85,9 +97,10 @@ type SendResult = {
 
 export interface OwnerCallDeps {
   openWallet: OpenWallet;
+  receipt: ReadReceipt;
 }
 
-const DEFAULTS: OwnerCallDeps = { openWallet: ownerRelay };
+const DEFAULTS: OwnerCallDeps = { openWallet: ownerRelay, receipt: readReceipt };
 
 const refuse = (code: string, text: string): SendResult => ({
   content: [{ type: 'text', text: `${code}: ${text}` }],
@@ -161,7 +174,7 @@ function summaryOf(row: OwnerCallRow): string {
   }
 }
 
-function answer(row: OwnerCallRow): SendResult {
+function answer(row: OwnerCallRow, note = ''): SendResult {
   const out = ownerCallsOutput.parse({
     id: row.id,
     idempotencyKey: row.idempotencyKey,
@@ -175,7 +188,7 @@ function answer(row: OwnerCallRow): SendResult {
     callsId: row.callsId ?? undefined,
     txHash: row.txHash ?? undefined,
     refusal: row.code ? { code: row.code } : undefined,
-    summary: summaryOf(row),
+    summary: note + summaryOf(row),
   });
   return { ...reply(out), isError: row.state === 'reverted' };
 }
@@ -296,6 +309,31 @@ export async function sendCalls(t: Tenant, input: SendCallsInput, deps: OwnerCal
   return raced ? replay(t, raced, hash, deps) : inProgress(await findOpen(t.connectionId));
 }
 
+const UNREADABLE = 'The chain could not be read right now; this is the request as last stored. ';
+
+export async function sendCallsStatus(
+  t: Tenant,
+  { id }: SendCallsStatusInput,
+  deps: OwnerCallDeps = DEFAULTS
+): Promise<SendResult> {
+  if ((await countHit(`owner-calls-status:${t.connectionId}`, RATE_WINDOW_MS)) > STATUS_RATE_LIMIT) {
+    return refuse('rate_limited', 'Too many status reads on this connection. Wait a minute.');
+  }
+  await expirePast(t.connectionId);
+  const row = await findById(t.connectionId, id);
+  if (!row) return refuse('not_found', 'No request on this connection has that id.');
+  if (row.state !== 'sent' || !row.callsId) return answer(row);
+  try {
+    const mined = await deps.receipt(row.chainId, row.callsId);
+    if (!mined) return answer(row);
+    await conclude(t.connectionId, id, mined.success ? 'landed' : 'reverted', mined.txHash);
+  } catch (err) {
+    log('warn', { msg: 'owner calls receipt not read', ownerCallId: id, error: errorLabel(err) });
+    return answer(row, UNREADABLE);
+  }
+  return answer((await findById(t.connectionId, id)) ?? row);
+}
+
 export function registerOwnerCallTools(server: McpServer) {
   server.registerTool(
     'jaw_send_calls',
@@ -309,5 +347,17 @@ export function registerOwnerCallTools(server: McpServer) {
       outputSchema: ownerCallsOutput,
     },
     async (input, ctx) => sendCalls(tenant(ctx), input)
+  );
+  server.registerTool(
+    'jaw_send_calls_status',
+    {
+      description:
+        'Follow calls jaw_send_calls asked the owner for on this connection: whether the owner approved, declined or let the link expire, and the transaction once it is mined. ' +
+        'Reads the chain by the calls id the wallet returned.',
+      inputSchema: statusInput,
+      outputSchema: ownerCallsOutput,
+      annotations: { openWorldHint: true },
+    },
+    async (input, ctx) => sendCallsStatus(tenant(ctx), input)
   );
 }

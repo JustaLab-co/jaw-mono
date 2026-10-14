@@ -220,6 +220,7 @@ describe('read tools', () => {
       'jaw_request_budget',
       'jaw_revoke_connection',
       'jaw_send_calls',
+      'jaw_send_calls_status',
       'jaw_status',
       'jaw_swap',
       'jaw_swap_status',
