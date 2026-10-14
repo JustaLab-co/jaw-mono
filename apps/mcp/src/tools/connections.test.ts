@@ -1,3 +1,4 @@
+import { randomBytes } from 'node:crypto';
 import { beforeAll, describe, expect, it } from 'vitest';
 import { verifyBearer, type Tenant } from '@/connections/auth';
 import {
@@ -14,6 +15,8 @@ import {
 } from '@/connections/testkit';
 import type { OpenWallet } from '@/connections/relay';
 import { revokeConnection } from './connections';
+import { getDb } from '@/db/client';
+import { payments } from '@/db/schema';
 import { useTestDb } from '@/db/test-db';
 
 setTestEnv();
@@ -122,6 +125,30 @@ describe('jaw_revoke_connection', () => {
     expect(url).toMatch(/cli-bridge/);
     expect('structuredContent' in again && again.structuredContent.url).toBe(url);
     expect('structuredContent' in later && later.structuredContent.url).toBe(url);
+    expect(await works(other.access_token)).toBe(false);
+  });
+
+  it('given a top-up of the other connection still landing, when the owner confirms, then it ends once the top-up lease is over', async () => {
+    const signer = owner();
+    const other = await connect(signer);
+    const me = await connect(signer, { scope: 'wallet:read' });
+    const theirs = await tenantOf(other.access_token);
+    await getDb()
+      .insert(payments)
+      .values({
+        id: `pay_${randomBytes(8).toString('hex')}`,
+        connectionId: theirs.connectionId,
+        idempotencyKey: randomBytes(8).toString('hex'),
+        requestHash: 'h',
+        payer: theirs.sessionAddress.toLowerCase(),
+        url: 'https://seller.example/x',
+        leaseUntil: new Date(Date.now() + 1_500),
+        topUpAmount: '105000',
+      });
+
+    await revokeConnection(await tenantOf(me.access_token), theirs.connectionId, confirmedBy(signer));
+    await walletsSettled();
+
     expect(await works(other.access_token)).toBe(false);
   });
 

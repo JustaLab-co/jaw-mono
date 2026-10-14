@@ -7,10 +7,11 @@ import { chainClients } from '@/adapters/session-host';
 import { tenant, type Tenant } from '@/connections/auth';
 import { config } from '@/connections/config';
 import { ownerRelay, WalletBusy, type OpenWallet, type Wallet } from '@/connections/relay';
-import { endConnection, ownedBy, type ConnectionRow } from '@/connections/rows';
+import { endConnection, ownedBy, TopUpInFlight, type ConnectionRow } from '@/connections/rows';
 import { getDb } from '@/db/client';
 import { connections, grants } from '@/db/schema';
-import { LOCK_WAIT_MS, withFloat } from '@/payments/float-lock';
+import { FloatBusy, LOCK_WAIT_MS, withFloat } from '@/payments/float-lock';
+import { LEASE_MS } from '@/payments/store';
 import { verifyOnChain, type VerifySignature } from '@/lib/chain';
 import { errorLabel, log } from '@/lib/edge';
 import { refusal } from './reply';
@@ -207,12 +208,30 @@ async function askOwner(t: Tenant, row: ConnectionRow, deps: RevokeDeps): Promis
           signature,
         }));
       if (!valid) throw new Error('bad_signature');
-      // After the funding turn in flight, so nothing is mid-refill when its key goes.
-      await withFloat(id, LOCK_WAIT_MS, (hold) => hold.tx((tx) => endConnection(id, t.account, new Date(), tx)));
+      await endSigned(id, t.account);
     })
     .catch((err: unknown) => log('warn', { msg: 'connection not revoked', error: errorLabel(err) }))
     .finally(() => open.delete(id));
   return wallet.url;
+}
+
+const RETRY_MS = 1_000;
+
+/**
+ * Ends a connection the owner signed off, after the funding turn in flight, so
+ * nothing is mid-refill when its key goes. A top-up still landing lasts at most
+ * the lease of the payment that sent it, so it tries again until then.
+ */
+async function endSigned(id: string, account: Address) {
+  const deadline = Date.now() + LEASE_MS;
+  for (;;) {
+    try {
+      return await withFloat(id, LOCK_WAIT_MS, (hold) => hold.tx((tx) => endConnection(id, account, new Date(), tx)));
+    } catch (err) {
+      if (!(err instanceof TopUpInFlight || err instanceof FloatBusy) || Date.now() > deadline) throw err;
+    }
+    await new Promise((resolve) => setTimeout(resolve, RETRY_MS));
+  }
 }
 
 async function floatAt(chainId: number, payer: Address, clients: ChainClients): Promise<bigint | null> {
