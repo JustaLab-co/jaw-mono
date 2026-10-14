@@ -3,8 +3,6 @@ import {
   payAndFetch,
   readCurrentPeriods,
   readLiveness,
-  sumSpentSince,
-  sumToppedUpSince,
   usdcBalance,
   usdcForNetwork,
 } from '@jaw.id/agent';
@@ -18,6 +16,8 @@ import { config } from '@/connections/config';
 import { findActive } from '@/connections/rows';
 import { getDb } from '@/db/client';
 import { currentGrant, type Grant } from '@/grants/store';
+import { dayLeft, daySpendOf, isoOf } from '@/payments/day-spend';
+import { recordedSends } from '@/payments/sends';
 import { entriesFor, pulledUnderOtherGrants } from '@/payments/store';
 import { publicClientFor } from '@/lib/chain';
 import { fenceText, reply } from '@/lib/fence';
@@ -49,34 +49,22 @@ const budgetOutput = z.object({
 
 const clients = { clients: { publicClient: publicClientFor } };
 
-// A chain timestamp can be past what a Date holds (an open-ended permission), and toISOString throws on it.
-function isoOf(seconds: number): string | undefined {
-  const at = new Date(seconds * 1000);
-  return Number.isNaN(at.getTime()) ? undefined : at.toISOString();
-}
-
 const floorZero = (n: bigint) => (n > 0n ? n : 0n);
 const least = (a: bigint, b: bigint) => (a < b ? a : b);
 
 // A session balance that could not be read counts as empty.
 async function budgetOf(grant: Grant, t: Tenant, held: bigint | null) {
   const target = { chainId: grant.chainId, permissionId: grant.permissionId, permission: grant.permission };
-  const [liveness, periods, earlier, entries] = await Promise.all([
+  const [liveness, periods, earlier, entries, sent] = await Promise.all([
     readLiveness(target, clients),
     readCurrentPeriods({ ...target, token: grant.token }, clients),
     pulledUnderOtherGrants(getDb(), t.connectionId, grant.permissionId),
     entriesFor(grant.permissionId),
+    recordedSends(grant.permissionId),
   ]);
   const asset = caip19(caip2(grant.chainId), grant.token);
   const counted = periods[0]?.period;
-  let day = counted?.status === 'outside-window' ? { paid: 0n, refilled: 0n, sentFromAccount: 0n } : null;
-  if (counted?.status === 'ok') {
-    const since = isoOf(counted.start);
-    const scope = { permissionId: grant.permissionId, payer: t.sessionAddress };
-    const refilled = sumToppedUpSince(entries, scope, since);
-    const sentFromAccount = floorZero(counted.spend - refilled);
-    day = { paid: sumSpentSince(entries, scope, since), refilled, sentFromAccount };
-  }
+  const day = daySpendOf(counted, entries, sent, { permissionId: grant.permissionId, payer: t.sessionAddress });
   const allowance = BigInt(grant.allowance);
   const figure = (amount: bigint) => ({ amount: amount.toString(), asset });
   let spent = null;
@@ -84,12 +72,12 @@ async function budgetOf(grant: Grant, t: Tenant, held: bigint | null) {
   let sendable = null;
   if (day) {
     const pulled = day.refilled + day.sentFromAccount;
-    const dayLeft = floorZero(allowance - day.paid - day.sentFromAccount);
+    const left = dayLeft(allowance, day);
     const pullable = floorZero(allowance - pulled);
     const floatFundable = (held ?? 0n) + floorZero(pullable - earlier);
     spent = figure(day.paid + day.sentFromAccount);
-    payable = figure(least(dayLeft, floatFundable));
-    sendable = figure(least(dayLeft, pullable));
+    payable = figure(least(left, floatFundable));
+    sendable = figure(least(left, pullable));
   }
   return {
     liveness,

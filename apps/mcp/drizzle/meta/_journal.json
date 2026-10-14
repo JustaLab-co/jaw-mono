@@ -127,6 +127,13 @@
       "when": 1791932632251,
       "tag": "0017_swap_reopen",
       "breakpoints": true
+    },
+    {
+      "idx": 18,
+      "version": "7",
+      "when": 1791946656745,
+      "tag": "0018_sends",
+      "breakpoints": true
     }
   ]
 }

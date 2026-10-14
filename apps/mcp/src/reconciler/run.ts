@@ -1,6 +1,7 @@
 import type { ChainClients } from '@jaw.id/agent';
 import { and, eq, isNotNull, isNull, lt, ne, sql } from 'drizzle-orm';
-import type { Address, Hex } from 'viem';
+import { getAbiItem, type Address, type Hex } from 'viem';
+import { entryPoint08Abi, entryPoint08Address } from 'viem/account-abstraction';
 import { chainClients } from '@/adapters/session-host';
 import { config } from '@/connections/config';
 import { retire, sessionSender, type DisconnectDeps } from '@/connections/disconnect';
@@ -12,6 +13,7 @@ import { isPaymentsPaused } from '@/db/settings';
 import { readOnChain } from '@/grants/permission';
 import { errorLabel, log } from '@/lib/edge';
 import { chainAnswer, type ChainAnswer } from '@/payments/confirm';
+import { claimOpenSends, settleSend, type SendRow } from '@/payments/sends';
 import { claimUnresolved, expire, markAlerted, settle, txHashTaken, type PaymentRow } from '@/payments/store';
 
 export const RECONCILE_AFTER_MS = 60_000;
@@ -26,6 +28,7 @@ export interface Report {
   failed: number;
   open: number;
   alerted: number;
+  sends: { landed: number; released: number; open: number };
 }
 
 /**
@@ -35,7 +38,8 @@ export interface Report {
  * update, so two runs split the rows and one bad row never undoes the rest.
  */
 export async function reconcile(clients: ChainClients = chainClients, now = new Date()): Promise<Report> {
-  const report: Report = { settled: 0, failed: 0, open: 0, alerted: 0 };
+  const report: Report = { settled: 0, failed: 0, open: 0, alerted: 0, sends: { landed: 0, released: 0, open: 0 } };
+  await reconcileSends(clients, report);
   for (;;) {
     const rows = await claimUnresolved(new Date(now.getTime() - RECONCILE_AFTER_MS), CLAIM_MS, BATCH);
     const answers = await Promise.all(rows.map((row) => answerFor(row, clients)));
@@ -87,6 +91,49 @@ async function apply(row: PaymentRow, answer: ChainAnswer, now: Date, report: Re
   log('error', { msg: `payment ${row.id} is ${row.state} an hour past its deadline` });
   await markAlerted(row.id);
   report.alerted++;
+}
+
+// Some RPC providers cap eth_getLogs at 500 blocks.
+const SEND_WINDOW_BLOCKS = 450n;
+const userOperationEvent = getAbiItem({ abi: entryPoint08Abi, name: 'UserOperationEvent' });
+
+async function reconcileSends(clients: ChainClients, report: Report) {
+  for (;;) {
+    const rows = await claimOpenSends(CLAIM_MS, BATCH);
+    for (const row of rows) {
+      try {
+        const end = await sendOutcome(row, clients);
+        if (!end) {
+          report.sends.open++;
+          continue;
+        }
+        await settleSend(row.id, end);
+        report.sends[end.state]++;
+      } catch (err) {
+        log('error', { msg: `reconcile ${row.id} failed`, error: errorLabel(err) });
+        report.sends.open++;
+      }
+    }
+    if (rows.length < BATCH) return;
+  }
+}
+
+async function sendOutcome(row: SendRow, clients: ChainClients) {
+  const client = clients.publicClient(row.chainId);
+  const head = await client.getBlockNumber();
+  const windowEnd = row.fromBlock + SEND_WINDOW_BLOCKS;
+  const logs = await client.getLogs({
+    address: entryPoint08Address,
+    event: userOperationEvent,
+    args: row.callsId ? { userOpHash: row.callsId as Hex } : { sender: row.sender as Address },
+    fromBlock: row.fromBlock,
+    toBlock: head < windowEnd ? head : windowEnd,
+    strict: true,
+  });
+  const landed = logs.find((l) => l.args.success);
+  if (landed) return { state: 'landed' as const, txHash: landed.transactionHash };
+  if ((row.callsId && logs.length > 0) || head >= windowEnd) return { state: 'released' as const };
+  return undefined;
 }
 
 const SESSION_DEPS: DisconnectDeps = { readPermission: readOnChain, clients: chainClients, sender: sessionSender };
