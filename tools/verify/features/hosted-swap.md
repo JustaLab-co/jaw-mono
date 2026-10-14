@@ -33,8 +33,6 @@ S=tools/verify
 RUN=$($S/up.sh | tail -1)
 $S/doctor.sh "$RUN"
 . "$RUN/run.env"
-JAW_MCP_SWAP_URL="http://host.docker.internal:$PORT/proxy/v2" \
-JAW_MCP_INSECURE_FETCH_HOSTS="host.docker.internal:$PORT" \
 JAW_KEYS_URL=https://keys.jaw.id $S/hosted-up.sh "$RUN"
 node $S/hosted-client.mjs "$MCP_PUBLIC_URL"
 ```
@@ -87,7 +85,7 @@ Evidence: the settled quote payment, the origin receipt, the destination credit,
 
 ## Gotchas
 
-- Inside the container the seller is `host.docker.internal:$PORT`; `JAW_MCP_INSECURE_FETCH_HOSTS` must list it or the server refuses the plain-http backend.
+- `compose.yaml` points `JAW_MCP_SWAP_URL` at `http://localhost:$PORT/proxy/v2`, which the `seller-forward` service carries to the seller. Do not override it with `host.docker.internal:$PORT`: the quote payment then ends `insecure_url`, because the payer signs over plain http only for localhost.
 - One swap is open per connection. A second key while one is `quoting` or `awaiting_owner` gets `swap_in_progress`.
 - `expired` is not final; status keeps reading the backend because a deposit signed in time can land late.
 - Postgres runs on tmpfs; dump the `swaps` and `payments` rows into `evidence/` before `down.sh`.
