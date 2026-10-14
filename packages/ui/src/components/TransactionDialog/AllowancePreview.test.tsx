@@ -42,6 +42,11 @@ function amount(html: string) {
   return { className: match[1], text: match[2].replace(/<[^>]+>/g, '') };
 }
 
+/** The warning style lives in class names, so every assertion on it goes through these two. */
+const cardWarns = (html: string) => html.includes('border-warning/60');
+const unreadWarns = (html: string) => /<span class="text-warning[^"]*">.*Allowance call could not be read/s.test(html);
+const amountWarns = (html: string) => amount(html).className.includes('text-warning');
+
 describe('AllowancePreview', () => {
   it('renders nothing without changes', () => {
     expect(render([])).toBe('');
@@ -50,9 +55,9 @@ describe('AllowancePreview', () => {
   it('shows an unlimited approval with the warning on the card and on the amount', () => {
     const html = render([change({ unlimited: true })]);
     expect(html).toContain('Permissions granted');
-    expect(html).toContain('border-warning/60');
+    expect(cardWarns(html)).toBe(true);
     expect(amount(html).text).toBe('Unlimited');
-    expect(amount(html).className).toContain('text-warning');
+    expect(amountWarns(html)).toBe(true);
   });
 
   it('puts a warning icon on the card header and on the amount only when unlimited', () => {
@@ -67,7 +72,7 @@ describe('AllowancePreview', () => {
   it('shows all tokens, not unlimited, for a collection-wide approval', () => {
     const html = render([change({ allTokens: true, unlimited: true, amount: undefined })]);
     expect(amount(html).text).toBe('All tokens');
-    expect(amount(html).className).toContain('text-warning');
+    expect(amountWarns(html)).toBe(true);
     expect(html).not.toContain('Unlimited');
   });
 
@@ -76,8 +81,8 @@ describe('AllowancePreview', () => {
     const known = render([zero], [usdc]);
     expect(amount(known).text).toBe('Revoke');
     expect(known).toContain('Spender');
-    expect(known).not.toContain('border-warning');
-    expect(amount(known).className).not.toContain('text-warning');
+    expect(cardWarns(known)).toBe(false);
+    expect(amountWarns(known)).toBe(false);
 
     const unknown = render([zero]);
     expect(unknown).not.toContain('Revoke');
@@ -108,13 +113,13 @@ describe('AllowancePreview', () => {
   it('says a raw amount is in base units when decimals are unknown', () => {
     const html = render([change()]);
     expect(amount(html).text).toBe('5000000 (raw)');
-    expect(amount(html).className).not.toContain('text-warning');
-    expect(html).not.toContain('border-warning');
+    expect(amountWarns(html)).toBe(false);
+    expect(cardWarns(html)).toBe(false);
   });
 
   it('shows the spender in the To row and not the token address', () => {
     const html = render([change()], [usdc]);
-    expect(html).toContain('To');
+    expect(html).toContain('>To<');
     expect(html).toContain(formatAddress(SPENDER));
     expect(html).not.toContain(formatAddress(TOKEN));
   });
@@ -128,6 +133,16 @@ describe('AllowancePreview', () => {
     expect(html).toContain('Permit signed by');
     expect(html).toContain(formatAddress(OWNER));
     expect(html).toMatch(/text-warning[^>]*>[^<]*Permit signed by/);
+  });
+
+  it('warns that an allowance call could not be read, without a spender', () => {
+    const html = render([change({ undecoded: true, spender: '', amount: undefined })]);
+    expect(html).toContain('Allowance call could not be read');
+    expect(html).toContain(formatAddress(TOKEN));
+    expect(html).not.toContain('Copy spender address');
+    expect(html).not.toContain('>To<');
+    expect(cardWarns(html)).toBe(true);
+    expect(unreadWarns(html)).toBe(true);
   });
 
   it('renders one row per change', () => {

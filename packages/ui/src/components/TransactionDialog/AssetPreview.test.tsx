@@ -56,7 +56,7 @@ describe('AssetPreview', () => {
     const sendSide = html.slice(send, get);
     const getSide = html.slice(get);
     expect(sendSide).toContain('USDC');
-    expect(sendSide).toMatch(/text-negative[^>]*>−5</);
+    expect(sendSide).toMatch(/text-negative[^>]*>\u22125</);
     expect(getSide).toContain('ETH');
     expect(getSide).toMatch(/text-positive[^>]*>\+0\.01</);
   });

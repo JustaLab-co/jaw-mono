@@ -29,6 +29,20 @@ function amountLabel(change: AllowanceChange, known?: AssetDelta): string {
 
 function AllowanceRow({ change, known, chainId }: { change: AllowanceChange; known?: AssetDelta; chainId?: number }) {
   const symbol = known?.symbol ?? '';
+  if (change.undecoded) {
+    return (
+      <div className="flex flex-row items-start gap-1.5 p-2">
+        <TokenIcon chainId={chainId} address={change.token} symbol={symbol} className="size-token mt-0.5 flex-none" />
+        <div className="flex min-w-0 flex-1 flex-col gap-0.5">
+          <span className="text-foreground text-symbol truncate">{symbol || formatAddress(change.token)}</span>
+          <span className="text-warning text-body-xs flex flex-row items-center gap-1">
+            <TriangleAlert className="size-3.5 flex-none" strokeWidth={2} />
+            Allowance call could not be read
+          </span>
+        </div>
+      </div>
+    );
+  }
   return (
     <div className="flex flex-row items-start gap-1.5 p-2">
       <TokenIcon chainId={chainId} address={change.token} symbol={symbol} className="size-token mt-0.5 flex-none" />
@@ -62,7 +76,7 @@ function AllowanceRow({ change, known, chainId }: { change: AllowanceChange; kno
 export const AllowancePreview = ({ changes, knownTokens, chainId }: AllowancePreviewProps) => {
   if (changes.length === 0) return null;
 
-  const hasWarning = changes.some((c) => c.unlimited);
+  const hasWarning = changes.some((c) => c.unlimited || c.undecoded);
 
   return (
     <div className={`rounded-box overflow-hidden border ${hasWarning ? 'border-warning/60' : 'border-border'}`}>
@@ -73,7 +87,7 @@ export const AllowancePreview = ({ changes, knownTokens, chainId }: AllowancePre
       <div className="divide-border/40 flex flex-col divide-y">
         {changes.map((change, i) => (
           <AllowanceRow
-            key={i}
+            key={`${change.token}:${change.spender}:${i}`}
             change={change}
             known={knownTokens.find((d) => !d.isNative && d.address.toLowerCase() === change.token.toLowerCase())}
             chainId={chainId}
