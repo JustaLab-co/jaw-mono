@@ -51,8 +51,6 @@ interface RevokePermissionApiResponse {
   success: boolean;
   /** True when the relay does not see the on-chain revoke yet; it removes the permission once it does */
   pending?: boolean;
-  /** Transaction hash if on-chain revocation was needed */
-  transactionHash?: Hex;
 }
 ```
 
