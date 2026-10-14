@@ -10,6 +10,7 @@ import { registerHistoryTool } from '@/tools/history';
 import { registerPayTool } from '@/tools/pay-and-fetch';
 import { registerBudgetTool } from '@/tools/request-budget';
 import { registerSendTools } from '@/tools/send';
+import { registerSwapTools } from '@/tools/swap';
 import { registerConnectionTools } from '@/tools/connections';
 
 export const runtime = 'nodejs';
@@ -24,6 +25,7 @@ const mcp = createMcpHandler(
     registerBudgetTool(server);
     registerSendTools(server);
     registerPayTool(server);
+    registerSwapTools(server);
     registerHistoryTool(server);
     registerConnectionTools(server);
     registerDisconnectTool(server);

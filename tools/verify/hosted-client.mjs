@@ -134,6 +134,10 @@ const HELP = `Commands:
   budget <perDay> [<0xcontract>:<signature> ...]
                                  jaw_request_budget, e.g. budget 2 0x036C...:approve(address,uint256)
   transfer <to> <amount>         jaw_transfer, amount in USDC
+  swap <originChain> <originToken> <destChain> <destToken> <amount> [recipient|-] [key]
+                                 jaw_swap, amount in base units of originToken, 0x000...0 for the native coin,
+                                 e.g. swap 8453 0x8335...2913 42161 0xaf88...5831 1000000
+  swap-status <quoteId>          jaw_swap_status, quoteId is aurora:<deposit address>
   calls '<json array>'           jaw_send_calls, e.g. calls '[{"to":"0x...","data":"0x..."}]'
   revoke <connection id>         jaw_revoke_connection
   disconnect                     jaw_disconnect
@@ -159,6 +163,17 @@ const commands = {
       }),
     }),
   transfer: (to, amount) => call('jaw_transfer', { to, amount }),
+  swap: (originChainId, originToken, destinationChainId, destinationToken, amount, recipient, idempotencyKey) =>
+    call('jaw_swap', {
+      originChainId: Number(originChainId),
+      originToken,
+      destinationChainId: Number(destinationChainId),
+      destinationToken,
+      amount,
+      ...(recipient && recipient !== '-' && { recipient }),
+      ...(idempotencyKey && { idempotencyKey }),
+    }),
+  'swap-status': (quoteId) => call('jaw_swap_status', { quoteId }),
   calls: (...json) => call('jaw_send_calls', { calls: JSON.parse(json.join(' ')) }),
   revoke: (connection) => call('jaw_revoke_connection', { id: connection }),
   disconnect: () => call('jaw_disconnect', {}),

@@ -27,6 +27,7 @@ afterEach(async () => {
 });
 
 const RECIPIENT = '0x2222222222222222222222222222222222222222';
+const UNSUPPORTED_ORIGIN_CHAIN = 324;
 
 // `needs` is any one of these scopes.
 const TOOLS: Record<string, { needs: ConnectionScope[]; args: object }> = {
@@ -41,6 +42,17 @@ const TOOLS: Record<string, { needs: ConnectionScope[]; args: object }> = {
   jaw_disconnect: { needs: ['wallet:read'], args: {} },
   jaw_request_budget: { needs: ['x402:pay', 'wallet:send'], args: { perDay: '1' } },
   jaw_pay_and_fetch: { needs: ['x402:pay'], args: { url: 'http://127.0.0.1:9/paid' } },
+  jaw_swap: {
+    needs: ['x402:pay'],
+    args: {
+      originChainId: UNSUPPORTED_ORIGIN_CHAIN,
+      originToken: RECIPIENT,
+      destinationChainId: 8453,
+      destinationToken: RECIPIENT,
+      amount: '1000000',
+    },
+  },
+  jaw_swap_status: { needs: ['wallet:read'], args: { quoteId: `aurora:${RECIPIENT}` } },
   jaw_transfer: { needs: ['wallet:send'], args: { to: RECIPIENT, amount: '0.01' } },
   jaw_send_calls: { needs: ['wallet:send'], args: { calls: [{ to: RECIPIENT, data: '0xa9059cbb' }] } },
 };

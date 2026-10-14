@@ -86,7 +86,7 @@ until [ -f <log>.done ] || [ $SECONDS -gt N ]; do sleep 5; done; tail <log>
 
 ## Risky paths
 
-`.github/risky-paths` lists, one glob per line, the code that moves money, holds keys, renders consent screens, seals tokens or migrates the database. A change touching it needs a person to read it, so keep it in its own small PR and run the matching `tools/verify` drive. Its entries are mirrored in `.github/CODEOWNERS`.
+`.github/risky-paths` lists, one glob per line, the code that moves money, holds keys, renders consent screens, seals tokens or migrates the database. A change touching it needs a person to read it, so keep it in its own small PR and run the matching `tools/verify` drive. Its entries are mirrored in `.github/CODEOWNERS`. A change to the swap tools runs the drives in `tools/verify/features/hosted-swap.md` against the seller's swap stub.
 
 ## Testing invariants
 
@@ -117,7 +117,7 @@ CI runs `bunx nx affected -t lint test typecheck build api-check e2e`, so a chan
 
 - **playground** - Next.js demo app exercising the SDK via @jaw.id/wagmi (the `jaw()` connector wired through wagmi)
 - **keys-jaw-id** - Next.js keys management application (keys.jaw.id)
-- **mcp** - Hosted MCP server (Next.js, Postgres, Drizzle): OAuth whose only owner step is approving a budget in the wallet through `/cli-bridge`, as the CLI does; payments, transfers and listed contract calls run within that budget with no further prompts
+- **mcp** - Hosted MCP server (Next.js, Postgres, Drizzle): OAuth whose only owner step is approving a budget in the wallet through `/cli-bridge`, as the CLI does; payments, transfers and listed contract calls run within that budget with no further prompts. `jaw_swap` and `jaw_swap_status` (`src/tools/swap.ts`, `src/swap/`) buy a paid quote from that budget, but the deposit is never signed by the session key: the owner approves that one transfer in the wallet, so the swap files are risky paths
 - **docs** - Documentation site built with Vocs
 
 ### Smart Contracts (`contracts/`)

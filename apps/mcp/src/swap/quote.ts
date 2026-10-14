@@ -95,8 +95,14 @@ async function conclude(lease: SwapLease, request: QuoteRequest, payment: PayRes
   return release(lease, { code, paymentId: out.paymentId });
 }
 
+const UNRETRYABLE_REFUSALS = new Map([
+  ['network_mismatch', 'wrong_chain'],
+  ['insecure_url', 'insecure_url'],
+]);
+
 function finalCodeOf(out: Paid, afterResend: boolean): string | undefined {
-  if (out.refusal?.code === 'network_mismatch') return 'wrong_chain';
+  const unretryable = out.refusal && UNRETRYABLE_REFUSALS.get(out.refusal.code);
+  if (unretryable) return unretryable;
   if (out.kind === 'free') return (out.httpStatus ?? 0) >= 500 ? undefined : 'quote_unavailable';
   if (out.kind === 'paid') return 'quote_invalid';
   if (out.kind !== 'failed' || out.state !== 'unknown') return undefined;
