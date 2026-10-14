@@ -1,8 +1,4 @@
-# Getting Started
-
-:::warning
-**Using Safari or Firefox?** These browsers can't verify the embedded dialog's visibility (no IntersectionObserver v2), so JAW falls back to a popup there to prevent clickjacking. To enable the embedded dialog for your site on those browsers, message us on [Telegram](https://t.me/+RsFLPfky7-YxZjVk) to be added to our trusted allow-list. Chromium-based browsers (Chrome, Edge, Brave) work with no setup. [Learn more](/configuration/transportMode).
-:::
+# Overview
 
 ## What is JAW?
 
@@ -20,152 +16,27 @@ The JAW SDK is a TypeScript library for building identity-first smart accounts o
 - Phishing-resistant authentication
 - Cross-device sync via iCloud/Google
 
-:::info[Building a native iOS or Android app?]
-The wagmi connector and built-in dialogs below are for web apps. In React Native, use the `Account` class with the platform's native passkey prompt — see [React Native (Expo)](/guides/react-native).
-:::
+## Start Here
 
-## Installation
+1. **[Quickstart](/guides/quickstart)**. Install the SDK, connect a passkey account and send a batched transaction.
+2. **[Choose Your Setup](/setup)**. Decide where passkeys live, how you integrate and who pays gas.
+3. **[Integrations](/integrations)**. Wagmi, Reown AppKit, the Core SDK and React Native.
 
-:::code-group
+You need an API key for any of them. Get one at the [JAW Dashboard](https://dashboard.jaw.id/).
 
-```bash [npm]
-npm install @jaw.id/wagmi wagmi @tanstack/react-query
-```
+## Build Something
 
-```bash [pnpm]
-pnpm add @jaw.id/wagmi wagmi @tanstack/react-query
-```
+- **[Gas Sponsoring](/guides/gas-sponsoring)**. Pay gas for your users.
+- **[Embed Stablecoin Payments](/guides/embed-stablecoin-payments)**. USDC transfers inside your app with no wallet UI.
+- **[Subscription Payments](/guides/subscription)**. Recurring charges through permissions.
+- **[Onchain Identity](/guides/onchain-identity)**. Give every account an ENS name.
+- **[Upgrade an EOA (EIP-7702)](/guides/eip7702-upgrade)**. Keep an existing address and add smart account features.
 
-```bash [yarn]
-yarn add @jaw.id/wagmi wagmi @tanstack/react-query
-```
+## Reference
 
-```bash [bun]
-bun add @jaw.id/wagmi wagmi @tanstack/react-query
-```
+- **[Configuration](/configuration)**. Every SDK option.
+- **[Wagmi](/wagmi)**. Connector and hooks.
+- **[Provider RPC](/api-reference)**. EIP-1193 methods.
+- **[Account](/account)**. The headless `Account` class.
 
-:::
-
-:::warning
-You need an API key to use the SDK. Get one at [JAW Dashboard](https://dashboard.jaw.id/).
-:::
-
-## Quick Start
-
-### 1. Configure Wagmi
-
-Create your wagmi config with the JAW connector:
-
-```typescript
-// config.ts
-import { createConfig, http } from 'wagmi';
-import { mainnet, base } from 'wagmi/chains';
-import { jaw } from '@jaw.id/wagmi';
-
-export const config = createConfig({
-  chains: [mainnet, base],
-  connectors: [
-    jaw({
-      apiKey: 'your-api-key',
-      appName: 'My DApp',
-      appLogoUrl: 'https://my-dapp.com/logo.png',
-    }),
-  ],
-  transports: {
-    [mainnet.id]: http(),
-    [base.id]: http(),
-  },
-});
-```
-
-### 2. Set Up Providers
-
-Wrap your app with the required providers:
-
-```tsx
-// App.tsx
-import { WagmiProvider } from 'wagmi';
-import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
-import { config } from './config';
-
-const queryClient = new QueryClient();
-
-function App({ children }: { children: React.ReactNode }) {
-  return (
-    <WagmiProvider config={config}>
-      <QueryClientProvider client={queryClient}>{children}</QueryClientProvider>
-    </WagmiProvider>
-  );
-}
-```
-
-### 3. Connect & Interact
-
-```tsx
-import { useAccount, useSendTransaction } from 'wagmi';
-import { useConnect, useDisconnect } from '@jaw.id/wagmi';
-import { parseEther } from 'viem';
-import { config } from './config';
-
-function WalletButton() {
-  const { address, isConnected } = useAccount();
-  const { mutate: connect, isPending } = useConnect();
-  const { mutate: disconnect } = useDisconnect();
-  const { sendTransaction } = useSendTransaction();
-
-  if (isConnected) {
-    return (
-      <div>
-        <p>Connected: {address}</p>
-        <button
-          onClick={() =>
-            sendTransaction({
-              to: '0x...',
-              value: parseEther('0.01'),
-            })
-          }
-        >
-          Send ETH
-        </button>
-        <button onClick={() => disconnect({})}>Disconnect</button>
-      </div>
-    );
-  }
-
-  return (
-    <button onClick={() => connect({ connector: config.connectors[0] })} disabled={isPending}>
-      {isPending ? 'Connecting...' : 'Connect Wallet'}
-    </button>
-  );
-}
-```
-
-When users click "Connect Wallet", a popup appears for passkey authentication.
-
-## Using the Provider Directly
-
-For non-React applications or advanced use cases, you can use the provider API directly:
-
-```typescript
-import { JAW } from '@jaw.id/core';
-
-const jaw = JAW.create({
-  apiKey: 'your-api-key',
-  appName: 'My DApp',
-});
-
-// EIP-1193 compatible provider
-const accounts = await jaw.provider.request({
-  method: 'wallet_connect',
-});
-```
-
-See the [Provider API Reference](/api-reference) for all available methods.
-
-## Next Steps
-
-- **[Configuration](/configuration)** - All configuration options
-- **[Wagmi Integration](/wagmi)** - Full wagmi hooks reference
-- **[Guides](/guides/quickstart)** - Tutorials for common use cases
-- **[React Native (Expo)](/guides/react-native)** - Native iOS and Android apps
-- **[Supported Networks](/supported-networks)** - Available chains
+Something not working? See [Troubleshooting](/troubleshooting).

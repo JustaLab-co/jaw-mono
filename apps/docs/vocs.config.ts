@@ -42,16 +42,15 @@ export default defineConfig({
   sidebar: {
     '/': [
       {
-        text: 'Why JAW',
-        link: '/why-jaw',
-      },
-      {
-        text: 'Getting Started',
-        link: '/',
-      },
-      {
-        text: 'LLMs',
-        link: '/llms',
+        text: 'Get Started',
+        items: [
+          { text: 'Overview', link: '/' },
+          { text: 'Why JAW', link: '/why-jaw' },
+          { text: 'Quickstart', link: '/guides/quickstart' },
+          { text: 'Choose Your Setup', link: '/setup' },
+          { text: 'Supported Networks', link: '/supported-networks' },
+          { text: 'LLMs', link: '/llms' },
+        ],
       },
       {
         text: 'Core Concepts',
@@ -64,12 +63,45 @@ export default defineConfig({
         ],
       },
       {
-        text: 'Supported Networks',
-        link: '/supported-networks',
+        text: 'Integrations',
+        collapsed: false,
+        items: [
+          { text: 'Overview', link: '/integrations' },
+          { text: 'Wagmi', link: '/wagmi' },
+          { text: 'Reown AppKit', link: '/guides/reown-appkit' },
+          { text: 'React Native (Expo)', link: '/guides/react-native' },
+        ],
       },
       {
-        text: 'Configuration',
+        text: 'Guides',
         collapsed: false,
+        items: [
+          { text: 'Gas Sponsoring', link: '/guides/gas-sponsoring' },
+          {
+            text: 'Embed Stablecoin Payments (Headless)',
+            link: '/guides/embed-stablecoin-payments',
+          },
+          { text: 'Subscription Payments', link: '/guides/subscription' },
+          { text: 'Onchain Identity', link: '/guides/onchain-identity' },
+          { text: 'Sign-In With Ethereum', link: '/guides/siwe' },
+          {
+            text: 'Upgrade EOA to Smart Account (EIP-7702)',
+            link: '/guides/eip7702-upgrade',
+          },
+        ],
+      },
+      {
+        text: 'Customization',
+        collapsed: false,
+        items: [
+          { text: 'Overview', link: '/advanced' },
+          { text: 'Custom UI Handler', link: '/advanced/custom-ui-handler' },
+          { text: 'Custom Passkey Server', link: '/advanced/passkey-server' },
+        ],
+      },
+      {
+        text: 'Configuration Reference',
+        collapsed: true,
         items: [
           { text: 'Overview', link: '/configuration' },
           { text: 'apiKey', link: '/configuration/apiKey' },
@@ -95,29 +127,8 @@ export default defineConfig({
         ],
       },
       {
-        text: 'Guides',
-        collapsed: false,
-        items: [
-          { text: 'Quickstart', link: '/guides/quickstart' },
-          {
-            text: 'Upgrade EOA to Smart Account (EIP-7702)',
-            link: '/guides/eip7702-upgrade',
-          },
-          {
-            text: 'Embed Stablecoin Payments (Headless)',
-            link: '/guides/embed-stablecoin-payments',
-          },
-          { text: 'Onchain Identity', link: '/guides/onchain-identity' },
-          { text: 'Gas Sponsoring', link: '/guides/gas-sponsoring' },
-          { text: 'Sign-In With Ethereum', link: '/guides/siwe' },
-          { text: 'Subscription Payments', link: '/guides/subscription' },
-          { text: 'Reown AppKit', link: '/guides/reown-appkit' },
-          { text: 'React Native (Expo)', link: '/guides/react-native' },
-        ],
-      },
-      {
-        text: 'Wagmi',
-        collapsed: false,
+        text: 'Wagmi Reference',
+        collapsed: true,
         items: [
           { text: 'Overview', link: '/wagmi' },
           { text: 'Connector', link: '/wagmi/jaw' },
@@ -149,8 +160,8 @@ export default defineConfig({
         ],
       },
       {
-        text: 'Provider - RPC Reference',
-        collapsed: false,
+        text: 'Provider RPC Reference',
+        collapsed: true,
         items: [
           { text: 'Overview', link: '/api-reference' },
           {
@@ -208,7 +219,7 @@ export default defineConfig({
         ],
       },
       {
-        text: 'Account',
+        text: 'Account Reference',
         collapsed: true,
         items: [
           { text: 'Overview', link: '/account' },
@@ -282,13 +293,9 @@ export default defineConfig({
         ],
       },
       {
-        text: 'Advanced',
-        collapsed: true,
-        items: [
-          { text: 'Overview', link: '/advanced' },
-          { text: 'Custom UI Handler', link: '/advanced/custom-ui-handler' },
-          { text: 'Custom Passkey Server', link: '/advanced/passkey-server' },
-        ],
+        text: 'Help',
+        collapsed: false,
+        items: [{ text: 'Troubleshooting', link: '/troubleshooting' }],
       },
     ],
     '/cli': [
