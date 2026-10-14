@@ -14,6 +14,8 @@ import { afterEach, beforeAll, beforeEach, describe, expect, it, onTestFinished,
 import { createMcpHandler } from 'mcp-handler';
 import { verifyBearer, withConnection, type Tenant } from '@/connections/auth';
 import { config } from '@/connections/config';
+import { disconnect } from '@/connections/disconnect';
+import { endConnection } from '@/connections/rows';
 import { WalletBusy, type Ask, type OpenWallet, type Wallet } from '@/connections/relay';
 import {
   approvedOnChain,
@@ -22,12 +24,14 @@ import {
   fakeWallet,
   mcp,
   offlineSession,
+  sessionFakes,
   setTestEnv,
+  verifyLocally,
   walletAnswers,
   walletsSettled,
 } from '@/connections/testkit';
 import { getDb } from '@/db/client';
-import { grants, payments, settings, swaps } from '@/db/schema';
+import { connections, grants, payments, settings, swaps } from '@/db/schema';
 import { countHit } from '@/db/settings';
 import { TEST_PG_URL, useTestDb, useTestPostgres } from '@/db/test-db';
 import { currentGrant } from '@/grants/store';
@@ -37,6 +41,8 @@ import { gateCode } from '@/payments/render';
 import type { BackendDeps } from '@/swap/backend';
 import { swapRequest } from '@/swap/quote';
 import { approveByOf, claimSwap, type SwapRow } from '@/swap/store';
+import { purge } from '@/reconciler/run';
+import { revokeConnection } from './connections';
 import { requestBudget } from './request-budget';
 import { registerSwapTools, swap, swapStatus, type SwapToolInput } from './swap';
 
@@ -245,7 +251,7 @@ async function connected(perDay?: string, scope = 'wallet:read x402:pay') {
     if (!(await currentGrant(t.connectionId))) throw new Error('no budget');
   };
   if (perDay) await budget(perDay);
-  return { t, token: c.access_token, budget };
+  return { t, token: c.access_token, budget, signer: c.signer };
 }
 
 const input: SwapToolInput = {
@@ -1974,4 +1980,199 @@ describe('a quote refused before anything was signed', () => {
     expect(row).toMatchObject({ paymentAttempt: 1, paymentKey: `swap:${row.id}:1` });
     expect(await paymentsOf(t.connectionId)).toHaveLength(1);
   });
+});
+
+describe('B28: the connection ends while the swap awaits the owner', () => {
+  const HASH = `0x${'cd'.repeat(32)}`;
+  type Connected = Awaited<ReturnType<typeof connected>>;
+  type PrepareEnd = (c: Connected) => Promise<() => Promise<void>>;
+
+  function ownerPausedAt(method: string, account: Address) {
+    let release!: () => void;
+    let reach!: () => void;
+    const released = new Promise<void>((resolve) => (release = resolve));
+    const reached = new Promise<void>((resolve) => (reach = resolve));
+    const answer: Ask = async (called) => {
+      if (called === method) {
+        reach();
+        await released;
+      }
+      if (called === 'eth_requestAccounts') return [account];
+      if (called === 'wallet_sendCalls') return { id: '0xcalls', chainId: '0x14a34' };
+      return { status: 200, receipts: [{ transactionHash: HASH }] };
+    };
+    return { answer, reached, release };
+  }
+
+  const tokenWorks = async (token: string) => (await verifyBearer(token)) !== undefined;
+  const tenantOf = async (token: string) => (await verifyBearer(token))?.extra?.tenant as Tenant;
+
+  async function untilEnded(token: string) {
+    for (const deadline = Date.now() + 5_000; Date.now() < deadline; ) {
+      if (!(await tokenWorks(token))) return;
+      await new Promise((resolve) => setTimeout(resolve, 20));
+    }
+    throw new Error('the connection did not end');
+  }
+
+  const ends: [string, PrepareEnd][] = [
+    [
+      'the owner revokes it from another app',
+      async (c) => {
+        const other = await tenantOf((await connect(c.signer, { scope: 'wallet:read' })).access_token);
+        return async () => {
+          const asked = await revokeConnection(other, c.t.connectionId, {
+            openWallet: fakeWallet(walletAnswers(c.signer)),
+            verify: verifyLocally,
+            clients: sessionFakes().deps.clients,
+          });
+          expect('structuredContent' in asked).toBe(true);
+          await untilEnded(c.token);
+        };
+      },
+    ],
+    [
+      'the agent calls jaw_disconnect',
+      async (c) => async () => {
+        const ended = await disconnect(c.t, { readPermission: approvedOnChain, ...sessionFakes().deps });
+        expect(ended.isError).toBeFalsy();
+      },
+    ],
+    [
+      'the connection expires and the reconciler runs',
+      async (c) => async () => {
+        await getDb()
+          .update(connections)
+          .set({ expiresAt: sql`now() - interval '1 second'` })
+          .where(eq(connections.id, c.t.connectionId));
+        await purge({ readPermission: approvedOnChain, ...sessionFakes().deps });
+      },
+    ],
+  ];
+  const cases = ends.flatMap(([how, end]) => [
+    ['before the owner signs in', how, end, 'eth_requestAccounts', null] as const,
+    ['between the send marker and the calls id', how, end, 'wallet_sendCalls', 'send_started'] as const,
+  ]);
+
+  it.each(cases)(
+    'given a swap awaiting the owner, when %s %s and the owner then approves, then the deposit lands and the row records it, with no second payment and no session key',
+    async (_, __, prepare, pausedAt, codeWhileWaiting) => {
+      const c = await connected('1');
+      const end = await prepare(c);
+      const owner = ownerPausedAt(pausedAt, c.t.account);
+      const started = await run(c.t, {}, recordingWallet(false, owner.answer));
+      await owner.reached;
+      const quoteId = started.structuredContent!.quoteId!;
+      expect((await swapsOf(c.t.connectionId))[0]).toMatchObject({ state: 'awaiting_owner', code: codeWhileWaiting });
+      const paid = paidHits().length;
+
+      await end();
+      expect(await tokenWorks(c.token)).toBe(false);
+      let keyUses = 0;
+      const key = c.t.sessionKey;
+      c.t.sessionKey = () => {
+        keyUses++;
+        return key();
+      };
+      owner.release();
+      await walletsSettled();
+
+      const [row] = await swapsOf(c.t.connectionId);
+      expect(row).toMatchObject({ quoteId, state: 'submitted', callsId: '0xcalls', txHash: HASH, code: null });
+      expect(asked.filter((a) => a.method === 'wallet_sendCalls')).toHaveLength(1);
+      expect(submits().map((h) => h.body)).toEqual([
+        { provider: 'aurora', depositAddress: row.depositAddress, txHash: HASH },
+      ]);
+      expect(paid).toBe(1);
+      expect(paidHits()).toHaveLength(paid);
+      expect(await paymentsOf(c.t.connectionId)).toHaveLength(1);
+      expect(keyUses).toBe(0);
+    }
+  );
+
+  it.each(ends)(
+    'given the owner approved after %s, when jaw_swap_status asks for that quote, then the ended token is refused and any other connection of the account gets not_found with no backend call',
+    async (_, prepare) => {
+      const c = await connected('1');
+      const end = await prepare(c);
+      const owner = ownerPausedAt('eth_requestAccounts', c.t.account);
+      const started = await run(c.t, {}, recordingWallet(false, owner.answer));
+      await owner.reached;
+      const quoteId = started.structuredContent!.quoteId!;
+      await end();
+      owner.release();
+      await walletsSettled();
+      const next = await connect(c.signer, { scope: 'wallet:read' });
+      deposits.hits = [];
+
+      const own = await mcp(
+        c.token,
+        { method: 'tools/call', params: { name: 'jaw_swap_status', arguments: { quoteId } } },
+        swapRoute
+      );
+      const fromNext = await swapStatus(await tenantOf(next.access_token), { quoteId }, { backend: backendDeps });
+
+      expect(own.status).toBe(401);
+      expect(fromNext[gateCode]).toBe('not_found');
+      expect(deposits.hits).toEqual([]);
+    }
+  );
+
+  const gone: OpenWallet = async (chainId, until) => {
+    opened.push({ chainId, until, args: 2 });
+    const ended = Promise.reject(new Error('the wallet session ended'));
+    ended.catch(() => undefined);
+    return { url: 'http://keys.test/cli-bridge?session=gone', run: () => ended, close: () => undefined };
+  };
+
+  it.fails.each(ends)(
+    'given a swap whose session is gone, when %s and a call authenticated before it replays the key, then no new link opens and nothing is paid',
+    async (_, prepare) => {
+      const c = await connected('1');
+      const end = await prepare(c);
+      await run(c.t, {}, gone);
+      await walletsSettled();
+      const [before] = await swapsOf(c.t.connectionId);
+      await end();
+
+      const replay = await run(c.t);
+
+      expect(opened).toHaveLength(1);
+      expect(replay.structuredContent?.url).toBeUndefined();
+      expect((await swapsOf(c.t.connectionId))[0]).toMatchObject({ walletUrl: before.walletUrl });
+      expect(paidHits()).toHaveLength(1);
+    }
+  );
+
+  it.fails.each([
+    ['revoked', (t: Tenant) => endConnection(t.connectionId, t.account)],
+    [
+      'past its end',
+      (t: Tenant) =>
+        getDb()
+          .update(connections)
+          .set({ expiresAt: sql`now() - interval '1 second'` })
+          .where(eq(connections.id, t.connectionId)),
+    ],
+  ])(
+    'given the connection is %s while its quote is bought, when the link would open, then no session opens and the quote is not paid again',
+    async (_, end) => {
+      const c = await connected('1');
+      const ending: typeof fetch = async (input, init) => {
+        if (new Headers(init?.headers).get('payment-signature')) await end(c.t);
+        return auroraErc20Backend(input, init);
+      };
+
+      const result = await swap(c.t, input, {
+        openWallet: recordingWallet(),
+        pay: { ...payDeps, fetch: ending },
+        pollMs: 0,
+        backend: backendDeps,
+      });
+
+      expect(opened).toEqual([]);
+      expect(result.structuredContent?.url).toBeUndefined();
+      expect(paidHits()).toHaveLength(1);
+    }
+  );
 });
