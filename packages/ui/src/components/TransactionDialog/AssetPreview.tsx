@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 import { ethAddress } from 'viem';
-import { ArrowDownLeft, ArrowUpRight, ChevronDown } from 'lucide-react';
+import { ArrowDownLeft, ArrowUpRight, ChevronDown, TriangleAlert } from 'lucide-react';
 import { AssetDelta, formatAssetAmount } from '../../utils/assetPreview';
 import { fetchTokenPrice } from '../../utils/tokenPrice';
 import { formatAddress } from '../../utils/formatAddress';
@@ -177,7 +177,17 @@ export const AssetPreview = ({ assetsOut, assetsIn, error, nativeSymbol, chainId
     };
   }, [assetsOut, assetsIn, nativeSymbol]);
 
-  if (error || (assetsOut.length === 0 && assetsIn.length === 0)) return null;
+  if (error) {
+    return (
+      <div role="alert" className="border-warning/40 bg-warning/10 rounded-box flex items-start gap-2 border p-3">
+        <TriangleAlert className="text-warning mt-px size-3.5 flex-none" strokeWidth={2} />
+        <p className="text-foreground text-body-sm">
+          Could not simulate this transaction. Balance changes are unknown; review each call before you approve.
+        </p>
+      </div>
+    );
+  }
+  if (assetsOut.length === 0 && assetsIn.length === 0) return null;
 
   const columnProps = { nativeSymbol, chainId, prices, onBehalf };
 
