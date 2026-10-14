@@ -14,6 +14,7 @@ import { FloatBusy, LOCK_WAIT_MS, withFloat } from '@/payments/float-lock';
 import { LEASE_MS } from '@/payments/store';
 import { verifyOnChain, type VerifySignature } from '@/lib/chain';
 import { errorLabel, log } from '@/lib/edge';
+import { reply } from '@/lib/fence';
 import { refusal } from './reply';
 
 const connectionView = z.object({
@@ -60,11 +61,6 @@ async function viewsOf(t: Tenant, rows: (typeof connections.$inferSelect)[]): Pr
   });
 }
 
-const reply = <T extends object>(summary: string, structured: T) => ({
-  content: [{ type: 'text' as const, text: summary }],
-  structuredContent: { ...structured, summary },
-});
-
 export function registerConnectionTools(server: McpServer) {
   server.registerTool(
     'jaw_connections',
@@ -84,7 +80,7 @@ export function registerConnectionTools(server: McpServer) {
         .orderBy(desc(connections.createdAt));
       const views = await viewsOf(t, rows);
       const live = views.filter((v) => v.status === 'active').length;
-      return reply(`${views.length} connection(s), ${live} active.`, { connections: views });
+      return reply({ connections: views, summary: `${views.length} connection(s), ${live} active.` });
     }
   );
 
@@ -174,10 +170,7 @@ export async function revokeConnection(t: Tenant, id: string, deps = DEFAULTS) {
     );
   }
   const summary = said.join(' ');
-  return {
-    content: [{ type: 'text' as const, text: summary }],
-    structuredContent: { url, payer, left: left?.toString() ?? null, summary },
-  };
+  return reply({ url, payer, left: left?.toString() ?? null, summary });
 }
 
 /** Asks the owner to sign the revoke, and ends the connection once they do. Undefined when no session is free. */

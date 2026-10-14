@@ -94,6 +94,13 @@ describe('jaw_transfer', () => {
     expect(decodeFunctionData({ abi: erc20Abi, data: call.data }).args).toEqual([BOB, 250_000n]);
   });
 
+  it('given a client that reads only text, when jaw_transfer lands, then the last text block is the structured content as JSON', async () => {
+    const { c } = await sender();
+    const result = await callTool(c.access_token, 'jaw_transfer', { to: BOB, amount: '0.25' });
+    expect(result.content[0].text).toBe(result.structuredContent.summary);
+    expect(JSON.parse(result.content.at(-1).text)).toEqual(result.structuredContent);
+  });
+
   it('given a transfer that reverts on chain, then it says so as an error', async () => {
     const { c } = await sender();
     bridge.status = 500;

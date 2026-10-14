@@ -24,6 +24,7 @@ import { isPaymentsPaused } from '@/db/settings';
 import { readOnChain, type ReadPermission } from '@/grants/permission';
 import { publicClientFor, rpcUrl } from '@/lib/chain';
 import { errorLabel, log } from '@/lib/edge';
+import { reply } from '@/lib/fence';
 import { FloatBusy, LOCK_WAIT_MS, withFloat, type FloatHold } from '@/payments/float-lock';
 import { stillHeld } from '@/payments/refill';
 import { holdingRows, LEASE_MS, topUpInFlight } from '@/payments/store';
@@ -179,7 +180,7 @@ export async function disconnect(t: Tenant, deps = DEFAULTS): Promise<Reply> {
     payer: t.sessionAddress,
     summary: summarize(t, outcome),
   };
-  return { content: [{ type: 'text', text: out.summary }], structuredContent: out };
+  return reply(out);
 }
 
 /**

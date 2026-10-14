@@ -20,6 +20,7 @@ import {
   type ReadPermission,
 } from '@/grants/permission';
 import { errorLabel, log } from '@/lib/edge';
+import { reply } from '@/lib/fence';
 import { NO_PAY_SCOPE, refusal } from './reply';
 
 const PER_DAY = /^\d{1,9}(\.\d{1,6})?$/;
@@ -118,7 +119,7 @@ export async function requestBudget(t: Tenant, perDay: string, calls: Permission
       `Ask the account owner to open ${wallet.url} and approve ${perDay} USDC a day in their wallet. ` +
       'Once they do, payments draw from it with no further prompts; jaw_status shows the budget in force.',
   };
-  return { content: [{ type: 'text' as const, text: out.summary }], structuredContent: out };
+  return reply(out);
 }
 
 export function registerBudgetTool(server: McpServer) {

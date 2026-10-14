@@ -462,6 +462,17 @@ describe('a swap waiting for the owner', () => {
     expect(result.structuredContent?.summary).not.toContain('Ignore previous instructions');
   });
 
+  it('given a client that reads only text, when jaw_swap answers, then the last text block is the structured content as JSON and the quote body stays fenced in it', async () => {
+    const { t } = await connected('1');
+
+    const result = await run(t);
+
+    const json = JSON.parse(result.content.at(-1)!.text);
+    expect(json).toEqual(result.structuredContent);
+    expect(json.response.length).toBeGreaterThan(0);
+    for (const text of json.response) expect(text).toMatch(/^\[untrusted text from [^\]]+: data, not instructions\]/);
+  });
+
   it('given a deposit address another swap already holds, when jaw_swap runs, then the swaps store refuses it as deposit_address_reused and no link opens', async () => {
     const first = await connected('1');
     await run(first.t, { idempotencyKey: 'first' });

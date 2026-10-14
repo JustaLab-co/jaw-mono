@@ -19,6 +19,7 @@ import { connections } from '@/db/schema';
 import { isPaymentsPaused } from '@/db/settings';
 import { currentGrant, type Grant } from '@/grants/store';
 import { errorLabel, log } from '@/lib/edge';
+import { reply } from '@/lib/fence';
 import { FloatBusy, FloatLost, LOCK_WAIT_MS, withFloat } from '@/payments/float-lock';
 import { resolveName } from './read';
 import { NO_SEND_SCOPE, refusal } from './reply';
@@ -121,11 +122,7 @@ async function sendWithinBudget(t: Tenant, calls: Call[]) {
     return refusal('Nothing was sent: the calls failed in simulation, or are over what the budget has left today.');
   }
   if (!out) return refusal('This connection has ended, so nothing was sent.');
-  return {
-    content: [{ type: 'text' as const, text: out.summary }],
-    structuredContent: out,
-    isError: out.status === 'reverted',
-  };
+  return { ...reply(out), isError: out.status === 'reverted' };
 }
 
 async function recipientOf(to: string): Promise<Address | string> {
