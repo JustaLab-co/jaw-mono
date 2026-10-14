@@ -54,7 +54,10 @@ const TOOLS: Record<string, { needs: ConnectionScope[]; args: object }> = {
   },
   jaw_swap_status: { needs: ['wallet:read'], args: { quoteId: `aurora:${RECIPIENT}` } },
   jaw_transfer: { needs: ['wallet:send'], args: { to: RECIPIENT, amount: '0.01' } },
-  jaw_send_calls: { needs: ['wallet:send'], args: { calls: [{ to: RECIPIENT, data: '0xa9059cbb' }] } },
+  jaw_send_calls: {
+    needs: ['wallet:read'],
+    args: { chainId: UNSUPPORTED_ORIGIN_CHAIN, calls: [{ to: RECIPIENT, data: '0xa9059cbb' }] },
+  },
 };
 
 const PROFILES = ['wallet:read', 'wallet:read x402:pay', 'wallet:read wallet:send', 'wallet:read x402:pay wallet:send'];

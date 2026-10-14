@@ -1,5 +1,5 @@
 import { eq } from 'drizzle-orm';
-import { decodeFunctionData, encodeFunctionData, erc20Abi, type Address, type Hex, type PublicClient } from 'viem';
+import { decodeFunctionData, erc20Abi, type Address, type Hex, type PublicClient } from 'viem';
 import { afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
 import { verifyBearer, type Tenant } from '@/connections/auth';
 import {
@@ -96,9 +96,6 @@ async function sender(calls: { target: Address; functionSignature: string }[] = 
   return { c, t };
 }
 
-const approveCall = (spender: Address) =>
-  encodeFunctionData({ abi: erc20Abi, functionName: 'approve', args: [spender, 1n] });
-
 describe('jaw_transfer', () => {
   it('sends USDC from the budget with no prompt to the owner, and answers with the transaction', async () => {
     const { c } = await sender();
@@ -174,40 +171,6 @@ describe('jaw_transfer', () => {
     expect(result.isError).toBe(true);
     expect(result.content[0].text).toContain('Nothing was sent');
     expect(result.content[0].text).not.toContain('may have been sent');
-    expect(bridge.sent).toEqual([]);
-  });
-});
-
-describe('jaw_send_calls', () => {
-  it('runs a call the budget lists', async () => {
-    const { c } = await sender([{ target: USDC, functionSignature: 'approve(address,uint256)' }]);
-    const calls = [{ to: USDC, data: approveCall(BOB) }];
-    const result = await callTool(c.access_token, 'jaw_send_calls', { calls });
-    expect(result.structuredContent).toMatchObject({ status: 'landed' });
-    expect(bridge.sent).toEqual([calls]);
-  });
-
-  it('given a call the budget does not list, then it refuses naming how to ask for it, and sends none of the batch', async () => {
-    const { c } = await sender();
-    const calls = [
-      { to: USDC, data: encodeFunctionData({ abi: erc20Abi, functionName: 'transfer', args: [BOB, 1n] }) },
-      { to: USDC, data: approveCall(BOB) },
-    ];
-    const result = await callTool(c.access_token, 'jaw_send_calls', { calls });
-    expect(result.isError).toBe(true);
-    expect(result.content[0].text).toContain('0x095ea7b3');
-    expect(result.content[0].text).toContain('jaw_request_budget');
-    expect(bridge.sent).toEqual([]);
-  });
-
-  it('given a function the budget lists on another contract, then it refuses: a listing names a contract, not just a function', async () => {
-    const { c } = await sender([{ target: USDC, functionSignature: 'approve(address,uint256)' }]);
-    const elsewhere: Address = '0x3333333333333333333333333333333333333333';
-    const result = await callTool(c.access_token, 'jaw_send_calls', {
-      calls: [{ to: elsewhere, data: approveCall(BOB) }],
-    });
-    expect(result.isError).toBe(true);
-    expect(result.content[0].text).toContain(elsewhere);
     expect(bridge.sent).toEqual([]);
   });
 });

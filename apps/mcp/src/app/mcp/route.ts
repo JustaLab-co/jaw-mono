@@ -9,6 +9,7 @@ import { registerDisconnectTool } from '@/tools/disconnect';
 import { registerHistoryTool } from '@/tools/history';
 import { registerPayTool } from '@/tools/pay-and-fetch';
 import { registerBudgetTool } from '@/tools/request-budget';
+import { registerOwnerCallTools } from '@/tools/owner-calls';
 import { registerSendTools } from '@/tools/send';
 import { registerSwapTools } from '@/tools/swap';
 import { registerConnectionTools } from '@/tools/connections';
@@ -24,6 +25,7 @@ const mcp = createMcpHandler(
     registerDiscoverTool(server);
     registerBudgetTool(server);
     registerSendTools(server);
+    registerOwnerCallTools(server);
     registerPayTool(server);
     registerSwapTools(server);
     registerHistoryTool(server);

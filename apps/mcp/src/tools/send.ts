@@ -28,7 +28,6 @@ import { resolveName } from './read';
 import { NO_SEND_SCOPE, refusal } from './reply';
 
 const AMOUNT = /^\d{1,9}(\.\d{1,6})?$/;
-const MAX_CALLS = 10;
 const RECEIPT_MS = 60_000;
 
 type Call = { to: Address; data: Hex };
@@ -236,39 +235,6 @@ export function registerSendTools(server: McpServer) {
       if (!isAddress(recipient)) return refusal(recipient);
       const data = encodeFunctionData({ abi: erc20Abi, functionName: 'transfer', args: [recipient, units] });
       return sendWithinBudget(t, [{ to: usdc.address, data }]);
-    }
-  );
-
-  server.registerTool(
-    'jaw_send_calls',
-    {
-      description: `Run up to ${MAX_CALLS} contract calls from the account, together, within this connection's budget. Only calls the budget lists are allowed (see jaw_request_budget); no prompt to the owner. Calls carry no ETH.`,
-      inputSchema: z.strictObject({
-        calls: z
-          .array(
-            z.strictObject({
-              to: z
-                .string()
-                .regex(/^0x[0-9a-fA-F]{40}$/)
-                .describe('The contract to call'),
-              data: z
-                .string()
-                .regex(/^0x[0-9a-fA-F]{8}([0-9a-fA-F]{2})*$/)
-                .describe('Calldata, hex, starting with the function selector'),
-            })
-          )
-          .min(1)
-          .max(MAX_CALLS),
-      }),
-      outputSchema: output,
-    },
-    async ({ calls }, ctx) => {
-      const t = tenant(ctx);
-      if (!t.scopes.includes('wallet:send')) return refusal(NO_SEND_SCOPE);
-      return sendWithinBudget(
-        t,
-        calls.map((c) => ({ to: getAddress(c.to), data: c.data as Hex }))
-      );
     }
   );
 }

@@ -42,7 +42,7 @@ const budgetOutput = z.object({
   perDay: money,
   spentToday: money.nullable().describe('What left this budget today: payments, transfers and sent calls'),
   remainingToday: money.nullable().describe('The most the next payment can spend today'),
-  sendableToday: money.nullable().describe('The most the next jaw_transfer or jaw_send_calls can move today'),
+  sendableToday: money.nullable().describe('The most the next jaw_transfer can move today'),
   resetsAt: z.string().nullable(),
   expiresAt: z.string(),
 });

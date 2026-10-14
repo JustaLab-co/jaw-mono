@@ -6,7 +6,6 @@ import {
   decodeFunctionData,
   encodeAbiParameters,
   encodeEventTopics,
-  encodeFunctionData,
   erc20Abi,
   parseAbi,
   type Address,
@@ -37,7 +36,6 @@ import { pay, type PayDeps } from './pay';
 const USDC: Address = '0x036CbD53842c5426634e7929541eC2318f3dCF7e';
 const PAY_TO: Address = '0x2222222222222222222222222222222222222222';
 const BOB: Address = '0x3333333333333333333333333333333333333333';
-const OTHER: Address = '0x4444444444444444444444444444444444444444';
 const TX = (n: number) => `0x${n.toString(16).padStart(64, '0')}` as Hex;
 const AUTHORIZATION_USED = parseAbi(['event AuthorizationUsed(address indexed authorizer, bytes32 indexed nonce)']);
 
@@ -246,10 +244,6 @@ async function connected(perDay: string, float: bigint, calls: { target: Address
 
 const url = (path: string) => `http://${SELLER}${path}`;
 const transfer = (token: string, amount: string) => callTool(token, 'jaw_transfer', { to: BOB, amount });
-const usdcCall = (functionName: 'approve' | 'transfer', amount: bigint) => ({
-  to: USDC,
-  data: encodeFunctionData({ abi: erc20Abi, functionName, args: [BOB, amount] }),
-});
 const unconfirmed = async (token: string, amount: string) => {
   bridge.answer = 'pending';
   const sent = await transfer(token, amount);
@@ -302,30 +296,6 @@ describe('given 1 USDC a day and 2 USDC of float pulled on an earlier day', () =
     expect(left).toBe('400000');
     expect((await transfer(token, '0.400001')).isError).toBe(true);
     expect((await transfer(token, '0.4')).structuredContent).toMatchObject({ status: 'landed' });
-  });
-
-  it('when 0.6 was paid and the calls approve 0.5 of USDC, then they are refused, and 0.4 goes through', async () => {
-    const { t, token } = await connected('1', 2_000_000n, [
-      { target: USDC, functionSignature: 'approve(address,uint256)' },
-    ]);
-    prices.set('/a', '600000');
-    await pay(t, { url: url('/a') }, deps);
-    const over = await callTool(token, 'jaw_send_calls', { calls: [usdcCall('approve', 500_000n)] });
-    expect(over.isError).toBe(true);
-    expect(over.content[0].text).toContain('jaw_request_budget');
-    expect(bridge.sent).toEqual([]);
-    const within = await callTool(token, 'jaw_send_calls', { calls: [usdcCall('approve', 400_000n)] });
-    expect(within.structuredContent).toMatchObject({ status: 'landed' });
-  });
-
-  it('when the whole day was paid, then calls that move no USDC still go through', async () => {
-    const { t, token } = await connected('1', 2_000_000n, [{ target: OTHER, functionSignature: 'ping()' }]);
-    prices.set('/a', '1000000');
-    expect((await pay(t, { url: url('/a') }, deps)).structuredContent).toMatchObject({ kind: 'paid' });
-    const calls = [{ to: OTHER, data: '0x5c36b186' }];
-    expect((await callTool(token, 'jaw_send_calls', { calls })).structuredContent).toMatchObject({
-      status: 'landed',
-    });
   });
 });
 
