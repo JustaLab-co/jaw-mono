@@ -35,7 +35,8 @@ setTestEnv();
 process.env.JAW_RELAY_URL = `ws://127.0.0.1:${(relay.address() as AddressInfo).port}`;
 process.env.JAW_MCP_API_KEY = 'server-secret-key';
 const { connectRelay, ownerRelay, SESSION_LIMITS, WalletBusy } = await import('./relay');
-const openRelay = (chainId: number, ms = 30_000) => ownerRelay(chainId, new Date(Date.now() + ms));
+const openRelay = (chainId: number, ms = 30_000, client?: { clientId: string; clientName: string }) =>
+  ownerRelay(chainId, new Date(Date.now() + ms), client);
 afterAll(() => relay.close());
 
 type Answer = (method: string, params: unknown) => { success: true; data: unknown } | { success: false; error: object };
@@ -81,7 +82,7 @@ describe('a wallet session over the relay', () => {
     const accounts = await wallet.run((ask) => ask('eth_requestAccounts', []));
     expect(accounts).toEqual(['0x00000000000000000000000000000000000000aa']);
     await opened.shutdown;
-    expect(opened.inits).toEqual([{ type: 'init', chainId: 84532 }]);
+    expect(opened.inits).toEqual([{ type: 'init', chainId: 84532, appName: 'JAW MCP' }]);
   });
 
   it("carries no key: the page takes its own deployment's, and the server's never leaves it", async () => {
@@ -147,5 +148,38 @@ describe('given authorizations hold every session of their pool', () => {
 
     await expect(connectRelay(84532, until)).rejects.toBeInstanceOf(WalletBusy);
     expect((await ownerRelay(84532, until)).url).toMatch(/cli-bridge/);
+  });
+
+  describe('the app name the page shows', () => {
+    const initOf = async (client?: { clientId: string; clientName: string }) => {
+      const wallet = await openRelay(84532, 30_000, client);
+      const opened = await page(wallet.url, () => ({ success: true, data: [] }));
+      await wallet.run((ask) => ask('eth_requestAccounts', []));
+      await opened.shutdown;
+      return opened.inits[0];
+    };
+
+    it('names a registered client and marks the name as its own claim', async () => {
+      const init = await initOf({ clientId: 'https://agent.example/client.json', clientName: 'Example Agent' });
+      expect(init).toEqual({ type: 'init', chainId: 84532, appName: 'Example Agent (via JAW MCP)' });
+    });
+
+    it('names a first-party client by its known name, whatever the row holds, still marked as via the server', async () => {
+      const init = await initOf({ clientId: 'jaw-cli', clientName: 'something else' });
+      expect(init?.appName).toBe('JAW CLI (via JAW MCP)');
+    });
+
+    it('falls back to JAW MCP when there is no client or the name is empty', async () => {
+      expect((await initOf())?.appName).toBe('JAW MCP');
+      expect((await initOf({ clientId: 'x', clientName: ' \u200b\n ' }))?.appName).toBe('JAW MCP');
+    });
+
+    it('strips control and direction characters and keeps the whole string within 64 characters', async () => {
+      const dirty = await initOf({ clientId: 'x', clientName: 'Ev\u0000il\u202e\n Agent\u200b' });
+      expect(dirty?.appName).toBe('Evil Agent (via JAW MCP)');
+      const long = await initOf({ clientId: 'x', clientName: 'A'.repeat(200) });
+      expect(String(long?.appName)).toHaveLength(64);
+      expect(String(long?.appName)).toMatch(/^A+ \(via JAW MCP\)$/);
+    });
   });
 });

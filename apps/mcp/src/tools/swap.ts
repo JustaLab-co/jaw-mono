@@ -334,7 +334,7 @@ async function openLink(t: Tenant, lease: SwapLease, key: string, deps: SwapDeps
   const approveBy = approveByOf(held.paidAt, config().swapQuoteTtlSec);
   let wallet: Wallet;
   try {
-    wallet = await deps.openWallet(t.chainId, approveBy);
+    wallet = await deps.openWallet(t.chainId, approveBy, t);
   } catch (err) {
     if (!(err instanceof WalletBusy)) throw err;
     await releaseQuoted(lease, { code: 'wallet_busy' });
@@ -354,7 +354,7 @@ async function openLink(t: Tenant, lease: SwapLease, key: string, deps: SwapDeps
 async function reopen(t: Tenant, row: SwapRow, key: string, deps: SwapDeps): Promise<SwapResult> {
   let wallet: Wallet;
   try {
-    wallet = await deps.openWallet(t.chainId, row.approveBy!);
+    wallet = await deps.openWallet(t.chainId, row.approveBy!, t);
   } catch (err) {
     if (!(err instanceof WalletBusy)) throw err;
     return walletBusy(key);

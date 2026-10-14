@@ -221,7 +221,7 @@ async function refusedBeforeLink(t: Tenant): Promise<SendResult | undefined> {
 /** Undefined when the owner pool is full. */
 async function openWalletFor(t: Tenant, approveBy: Date, deps: OwnerCallDeps): Promise<Wallet | undefined> {
   try {
-    return await deps.openWallet(t.chainId, approveBy);
+    return await deps.openWallet(t.chainId, approveBy, t);
   } catch (err) {
     if (err instanceof WalletBusy) return undefined;
     throw err;

@@ -58,7 +58,7 @@ export async function requestBudget(t: Tenant, perDay: string, deps = DEFAULTS) 
   });
   let wallet: Wallet;
   try {
-    wallet = await deps.openWallet(t.chainId, new Date(Date.now() + APPROVE_WITHIN_MS));
+    wallet = await deps.openWallet(t.chainId, new Date(Date.now() + APPROVE_WITHIN_MS), t);
   } catch (err) {
     if (err instanceof WalletBusy) return refusal('Too many owners are approving right now. Try again in a minute.');
     throw err;

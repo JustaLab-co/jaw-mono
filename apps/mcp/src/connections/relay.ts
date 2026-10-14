@@ -9,6 +9,7 @@ import {
   type EncryptedEnvelope,
 } from '@jaw.id/agent';
 import { config } from './config';
+import { FIRST_PARTY_CLIENTS } from './scopes';
 
 /** A request to the owner's wallet, answered with what the wallet returns or thrown with why it refused. */
 export type Ask = (method: string, params: unknown[]) => Promise<unknown>;
@@ -20,8 +21,33 @@ export interface Wallet {
   close(): void;
 }
 
+/** The OAuth client a session is opened for, named on the wallet page. */
+export interface RelayClient {
+  clientId: string;
+  clientName: string;
+}
+
 /** Opens a session that ends at `until`, answered or not. */
-export type OpenWallet = (chainId: number, until: Date) => Promise<Wallet>;
+export type OpenWallet = (chainId: number, until: Date, client?: RelayClient) => Promise<Wallet>;
+
+const APP_NAME_MAX = 64;
+const SELF_ASSERTED = ' (via JAW MCP)';
+const UNSEEN = /[\p{Cc}\p{Cf}\p{Zl}\p{Zp}\p{Default_Ignorable_Code_Point}]/gu;
+
+/**
+ * What the wallet page calls the app. Any client can claim a name or a public
+ * client id, so the name always carries the route it came by.
+ */
+export function appNameOf(client?: RelayClient): string {
+  const known = client && Object.hasOwn(FIRST_PARTY_CLIENTS, client.clientId);
+  const raw = known ? FIRST_PARTY_CLIENTS[client.clientId] : (client?.clientName ?? '');
+  const claimed = Array.from(raw.replace(/\s+/g, ' ').replace(UNSEEN, '').trim());
+  const name = claimed
+    .slice(0, APP_NAME_MAX - SELF_ASSERTED.length)
+    .join('')
+    .trim();
+  return name ? name + SELF_ASSERTED : 'JAW MCP';
+}
 
 /**
  * Sessions one process holds open at once, each a socket waiting on an owner.
@@ -45,8 +71,8 @@ interface Pool {
 const connectPool: Pool = { limit: SESSION_LIMITS.connect, open: 0 };
 const ownerPool: Pool = { limit: SESSION_LIMITS.owner, open: 0 };
 
-export const connectRelay: OpenWallet = (chainId, until) => openRelay(connectPool, chainId, until);
-export const ownerRelay: OpenWallet = (chainId, until) => openRelay(ownerPool, chainId, until);
+export const connectRelay: OpenWallet = (chainId, until, client) => openRelay(connectPool, chainId, until, client);
+export const ownerRelay: OpenWallet = (chainId, until, client) => openRelay(ownerPool, chainId, until, client);
 
 /**
  * A session on JAW's relay, the channel `jaw session setup` uses. The owner opens
@@ -60,7 +86,7 @@ export const ownerRelay: OpenWallet = (chainId, until) => openRelay(ownerPool, c
  * The socket is opened here, before the link is handed out, so the relay knows
  * this side is waiting when the page connects.
  */
-async function openRelay(pool: Pool, chainId: number, until: Date): Promise<Wallet> {
+async function openRelay(pool: Pool, chainId: number, until: Date, client?: RelayClient): Promise<Wallet> {
   if (pool.open >= pool.limit) throw new WalletBusy();
   const { keysOrigin, relayUrl } = config();
   const keys = await generateKeyPair();
@@ -97,7 +123,7 @@ async function openRelay(pool: Pool, chainId: number, until: Date): Promise<Wall
           }
         };
 
-        await send({ type: 'init', chainId });
+        await send({ type: 'init', chainId, appName: appNameOf(client) });
         await read((m) => m.type === 'ready');
 
         const ask: Ask = async (method, params) => {
