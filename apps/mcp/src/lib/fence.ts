@@ -9,8 +9,11 @@ export function fenceText(source: string, text: string, max: number): string {
 
 type Text = { type: 'text'; text: string };
 
-/** Ends with the structured content as JSON, for clients that pass only text to the model. */
-export function reply<T extends { summary: string }>(out: T, ...extra: Text[]) {
-  const content: Text[] = [{ type: 'text', text: out.summary }, ...extra, { type: 'text', text: JSON.stringify(out) }];
+const text = (text: string): Text => ({ type: 'text', text });
+
+/** For clients that pass only text to the model: the fenced `response` as its own blocks, then the rest as JSON. */
+export function reply<T extends { summary: string; response?: string[] }>(out: T, ...extra: Text[]) {
+  const { response = [], ...rest } = out;
+  const content = [text(out.summary), ...response.map(text), ...extra, text(JSON.stringify(rest))];
   return { content, structuredContent: out };
 }

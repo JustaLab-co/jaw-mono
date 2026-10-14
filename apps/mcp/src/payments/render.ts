@@ -128,7 +128,7 @@ export function render(row: PaymentRow, fenced: string[], truncated = false): Pa
     summary: summaryOf(row, out) + (truncated ? ' The response body was cut at 1 MB.' : ''),
   });
   return {
-    ...reply(structured, ...fenced.map((text) => ({ type: 'text' as const, text }))),
+    ...reply(structured),
     ...(row.body !== null && { [rawBody]: row.body }),
   };
 }

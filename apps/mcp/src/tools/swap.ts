@@ -311,7 +311,7 @@ async function answer(row: SwapRow, read?: BackendAnswer): Promise<SwapResult> {
     response: response.length ? response : undefined,
     summary: readNote(read) + summaryOf(row),
   });
-  return reply(out, ...(out.response ?? []).map((text) => ({ type: 'text' as const, text })));
+  return reply(out);
 }
 
 async function openLink(t: Tenant, lease: SwapLease, key: string, deps: SwapDeps): Promise<SwapResult> {
