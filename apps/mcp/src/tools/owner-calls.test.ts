@@ -12,7 +12,15 @@ import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vite
 import { verifyBearer, type Tenant } from '@/connections/auth';
 import { WalletBusy, type Ask, type OpenWallet, type Wallet } from '@/connections/relay';
 import { endConnection } from '@/connections/rows';
-import { callTool, connect, fakeWallet, owner as newSigner, setTestEnv, walletsSettled } from '@/connections/testkit';
+import {
+  callTool,
+  connect,
+  fakeWallet,
+  mcp,
+  owner as newSigner,
+  setTestEnv,
+  walletsSettled,
+} from '@/connections/testkit';
 import { getDb } from '@/db/client';
 import { grants, ownerCalls, sends, settings } from '@/db/schema';
 import { countHit } from '@/db/settings';
@@ -375,7 +383,8 @@ describe('jaw_send_calls approval', () => {
 
     expect(again.structuredContent).toMatchObject({ state: 'awaiting_owner', refusal: { code: 'wallet_error:4200' } });
     expect(again.structuredContent!.url).toBeUndefined();
-    expect(again.structuredContent!.summary).toContain('4200');
+    expect(again.structuredContent!.summary).toContain('answered 4200 when asked');
+    expect(again.structuredContent!.summary).not.toContain('wallet_error:');
     expect(opened).toHaveLength(1);
   });
 
@@ -430,6 +439,7 @@ describe('jaw_send_calls approval', () => {
 
   it.each([
     ['empty', ''],
+    ['257 characters', 'x'.repeat(257)],
     ['300 characters', 'x'.repeat(300)],
   ])('given a calls id that is %s, then the row keeps the send marker and is not sent', async (_name, id) => {
     const { t } = await connected();
@@ -448,6 +458,39 @@ describe('jaw_send_calls approval', () => {
     await settle();
 
     expect((await rowsOf(t.connectionId))[0]).toMatchObject({ state: 'sent', callsId: id });
+  });
+
+  it('given a calls id of one character, then it is stored', async () => {
+    const { t } = await connected();
+
+    await send(t, {}, wallet(owner(t.account, { wallet_sendCalls: () => ({ id: 'x' }) })));
+    await settle();
+
+    expect((await rowsOf(t.connectionId))[0]).toMatchObject({ state: 'sent', callsId: 'x' });
+  });
+
+  it.each([
+    ['null', null],
+    ['an object', {}],
+    ['a list of numbers', [1234]],
+    ['an empty list', []],
+  ])('given an account answer of %s, then wrong_account and wallet_sendCalls is never asked', async (_name, answer) => {
+    const { t } = await connected();
+
+    await send(t, {}, wallet(owner(t.account, { eth_requestAccounts: () => answer })));
+    await settle();
+
+    expect((await rowsOf(t.connectionId))[0]).toMatchObject({ state: 'owner_declined', code: 'wrong_account' });
+    expect(asked.map((a) => a.method)).toEqual(['eth_requestAccounts']);
+  });
+
+  it('given the owner account anywhere in the accounts answered, then the owner is accepted', async () => {
+    const { t } = await connected();
+
+    await send(t, {}, wallet(owner(t.account, { eth_requestAccounts: () => [OTHER, t.account] })));
+    await settle();
+
+    expect((await rowsOf(t.connectionId))[0]).toMatchObject({ state: 'sent', callsId: CALLS_ID });
   });
 
   it('given a calls id write that fails once, then it is written again and the row is sent', async () => {
@@ -497,7 +540,7 @@ describe('jaw_send_calls approval', () => {
       await vi.waitFor(async () => expect((await rowsOf(t.connectionId))[0].code).toBe('wallet_error:unknown'));
     });
 
-    it('given the session is within five seconds of its end, then nothing is recorded', async () => {
+    const codeWithLeft = async (msLeft: number) => {
       const { t } = await connected();
       const gate = Promise.withResolvers<void>();
 
@@ -506,9 +549,10 @@ describe('jaw_send_calls approval', () => {
         {},
         wallet(undefined, () => failing(t, gate.promise))
       );
+      const [row] = await rowsOf(t.connectionId);
       vi.useFakeTimers({ toFake: ['Date'] });
       try {
-        vi.setSystemTime(Date.now() + 10 * 60_000 - 2_000);
+        vi.setSystemTime(row.approveBy.getTime() - msLeft);
         gate.resolve();
         await vi.waitFor(() => expect(threw).toBe(1));
         await Promise.allSettled(sessions);
@@ -517,7 +561,16 @@ describe('jaw_send_calls approval', () => {
         vi.useRealTimers();
       }
 
-      expect((await rowsOf(t.connectionId))[0].code).toBeNull();
+      return (await rowsOf(t.connectionId))[0].code;
+    };
+
+    it('given the session is within five seconds of its end, then nothing is recorded', async () => {
+      expect(await codeWithLeft(2_000)).toBeNull();
+      expect(await codeWithLeft(4_500)).toBeNull();
+    });
+
+    it('given the session has more than five seconds left, then the code is recorded', async () => {
+      expect(await codeWithLeft(5_500)).toBe('wallet_error:unknown');
     });
   });
 });
@@ -724,6 +777,27 @@ describe('jaw_send_calls refusals', () => {
 
     expect(result[gateCode]).toBe('wallet_busy');
     expect(await rowsOf(t.connectionId)).toEqual([]);
+  });
+
+  it('given a link that would reopen and the owner pool is full, then wallet_busy', async () => {
+    const { t } = await connected();
+    await send(t, {}, wallet(undefined, ended));
+    await settle();
+
+    const result = await send(t, {}, busy);
+
+    expect(result[gateCode]).toBe('wallet_busy');
+  });
+
+  it('given a link that reopened, then the owner answering it sends the calls', async () => {
+    const { t } = await connected();
+    await send(t, {}, wallet(undefined, ended));
+    await settle();
+
+    await send(t, {}, wallet(owner(t.account)));
+    await settle();
+
+    expect((await rowsOf(t.connectionId))[0]).toMatchObject({ state: 'sent', callsId: CALLS_ID });
   });
 
   it('given payments paused, then payments_paused and no wallet opens, while a stored row still answers', async () => {
@@ -1016,7 +1090,36 @@ describe('jaw_send_calls refusals', () => {
 
       await Promise.all([sendCalls(t, input(), deps), sendCalls(t, input(), deps)]);
 
+      const [row] = await rowsOf(t.connectionId);
       expect(closed).toHaveLength(1);
+      expect(closed).not.toContain(row.walletUrl);
+    });
+
+    it('given one key with other calls, then the loser is idempotency_conflict', async () => {
+      const { t } = await connected();
+      const deps = together();
+
+      const results = await Promise.all([
+        sendCalls(t, input({ calls: [CALL] }), deps),
+        sendCalls(t, input({ calls: [{ to: OTHER, value: '7' }] }), deps),
+      ]);
+
+      expect(results.map((r) => r[gateCode]).filter(Boolean)).toEqual(['idempotency_conflict']);
+    });
+
+    it('given two keys, then the loser names the open request', async () => {
+      const { t } = await connected();
+      const deps = together();
+
+      const results = await Promise.all([
+        sendCalls(t, input({ idempotencyKey: 'a' }), deps),
+        sendCalls(t, input({ idempotencyKey: 'b' }), deps),
+      ]);
+
+      const [row] = await rowsOf(t.connectionId);
+      const loser = results.find((r) => r[gateCode] === 'calls_in_progress')!;
+      expect(loser.content[0].text).toContain(row.id);
+      expect(loser.content[0].text).toContain(row.idempotencyKey);
     });
   });
 
@@ -1068,6 +1171,34 @@ describe('jaw_send_calls_status', () => {
     expect(result.isError).toBe(true);
     expect(result.structuredContent).toMatchObject({ state: 'reverted', txHash: TX });
     expect(result.structuredContent!.summary).toContain('owner paid the gas');
+  });
+
+  it('given a landed row, then the chain is not read again', async () => {
+    const { t, id } = await sentRow();
+    await check(t, id, async () => ({ success: true, txHash: TX }));
+    const receipt = vi.fn<ReadReceipt>(async () => ({ success: false, txHash: TX }));
+
+    const result = await check(t, id, receipt);
+
+    expect(receipt).not.toHaveBeenCalled();
+    expect(result.structuredContent).toMatchObject({ state: 'landed' });
+  });
+
+  it('given a sent row with no receipt yet, then the summary carries no unreadable-chain note', async () => {
+    const { t, id } = await sentRow();
+
+    const result = await check(t, id);
+
+    expect(result.structuredContent!.summary).not.toContain('could not be read');
+  });
+
+  it('given the tools list, then jaw_send_calls_status is an open-world read', async () => {
+    const { token } = await connected();
+
+    const { json } = await mcp(token, { method: 'tools/list' });
+
+    const status = json.result.tools.find((x: { name: string }) => x.name === 'jaw_send_calls_status');
+    expect(status.annotations).toMatchObject({ openWorldHint: true });
   });
 
   it('given a sent row with no receipt yet, then it stays sent and says to call again', async () => {

@@ -1,5 +1,5 @@
 import { eq } from 'drizzle-orm';
-import { decodeFunctionData, erc20Abi, type Address, type Hex, type PublicClient } from 'viem';
+import { decodeFunctionData, erc20Abi, getAddress, type Address, type Hex, type PublicClient } from 'viem';
 import { afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
 import { verifyBearer, type Tenant } from '@/connections/auth';
 import { callTool, connect, setTestEnv } from '@/connections/testkit';
@@ -20,6 +20,9 @@ const bridge = vi.hoisted(() => ({
   status: 200,
   fail: undefined as Error | undefined,
   taken: false,
+  absent: false,
+  statuses: [] as { status: number; receipts?: { transactionHash: string }[] }[],
+  polls: 0,
 }));
 // Set to make every float turn find its lock taken by another turn when it checks.
 const fence = vi.hoisted(() => ({ lost: false }));
@@ -27,26 +30,33 @@ vi.mock('@/payments/float-lock', async (original) => {
   const real = await original<typeof import('@/payments/float-lock')>();
   return {
     ...real,
+    LOCK_WAIT_MS: 300,
     withFloat: <T>(id: string, waitMs: number, work: (hold: FloatHold) => Promise<T>) =>
       real.withFloat(id, waitMs, (hold) => work(fence.lost ? { ...hold, owns: async () => false } : hold)),
   };
 });
 vi.mock('@/adapters/session-host', async (original) => ({
   ...(await original<object>()),
-  sessionBridge: () => ({
-    request: async (method: string, params: unknown) => {
-      if (method === 'wallet_sendCalls') {
-        if (bridge.fail && !bridge.taken) throw bridge.fail;
-        bridge.sent.push((params as [{ calls: { to: Address; data: Hex }[] }])[0].calls);
-        if (bridge.fail) throw bridge.fail;
-        return { id: `0x${'b'.repeat(64)}` };
-      }
-      return { status: bridge.status, receipts: [{ transactionHash: `0x${'c'.repeat(64)}` }] };
-    },
-  }),
+  sessionBridge: () =>
+    bridge.absent
+      ? undefined
+      : {
+          request: async (method: string, params: unknown) => {
+            if (method === 'wallet_sendCalls') {
+              if (bridge.fail && !bridge.taken) throw bridge.fail;
+              bridge.sent.push((params as [{ calls: { to: Address; data: Hex }[] }])[0].calls);
+              if (bridge.fail) throw bridge.fail;
+              return { id: `0x${'b'.repeat(64)}` };
+            }
+            bridge.polls++;
+            const next = bridge.statuses.shift();
+            if (next) return next;
+            return { status: bridge.status, receipts: [{ transactionHash: `0x${'c'.repeat(64)}` }] };
+          },
+        },
 }));
 
-const chain = vi.hoisted(() => ({ permissionId: '0x', headUnreadable: false }));
+const chain = vi.hoisted(() => ({ permissionId: '0x', headUnreadable: false, periodUnreadable: false }));
 vi.mock('@/lib/chain', async (original) => ({
   ...(await original<object>()),
   publicClientFor: () =>
@@ -57,6 +67,7 @@ vi.mock('@/lib/chain', async (original) => ({
       },
       readContract: async ({ functionName }: { functionName: string }) => {
         if (functionName === 'getHash') return chain.permissionId;
+        if (functionName === 'getCurrentPeriod' && chain.periodUnreadable) throw new Error('node down');
         if (functionName === 'getCurrentPeriod') return { start: 1, end: 2_000_000_000, spend: 0n };
         throw new Error(`this node does not answer ${functionName}`);
       },
@@ -72,6 +83,12 @@ afterEach(async () => {
   bridge.taken = false;
   fence.lost = false;
   chain.headUnreadable = false;
+  chain.periodUnreadable = false;
+  bridge.absent = false;
+  bridge.statuses = [];
+  bridge.polls = 0;
+  vi.useRealTimers();
+  vi.restoreAllMocks();
   await getDb().delete(settings);
 });
 
@@ -80,6 +97,23 @@ async function sender() {
   const t = (await verifyBearer(c.access_token))?.extra?.tenant as Tenant;
   chain.permissionId = (await currentGrant(t.connectionId))?.permissionId ?? '0x';
   return { c, t };
+}
+
+const TX = `0x${'c'.repeat(64)}`;
+const CALLS = `0x${'b'.repeat(64)}`;
+const rowsOf = (connectionId: string) => getDb().select().from(sends).where(eq(sends.connectionId, connectionId));
+const transfer = (c: { access_token: string }, amount = '0.25', to: string = BOB) =>
+  callTool(c.access_token, 'jaw_transfer', { to, amount });
+
+// Polling waits 2 seconds between reads: here each wait costs nothing but moves the clock the same.
+function fastPolling() {
+  vi.useFakeTimers({ toFake: ['Date'] });
+  const real = globalThis.setTimeout;
+  vi.spyOn(globalThis, 'setTimeout').mockImplementation(((fn: () => void, ms?: number, ...rest: unknown[]) => {
+    if (ms !== 2_000) return real(fn, ms, ...rest);
+    vi.setSystemTime(Date.now() + 2_000);
+    return real(fn, 0);
+  }) as typeof setTimeout);
 }
 
 describe('jaw_transfer', () => {
@@ -179,8 +213,179 @@ describe('jaw_transfer', () => {
   });
 });
 
+describe('the ledger row of a jaw_transfer', () => {
+  it('given a transfer that lands, then the row is landed with the calls id, the hash and the head block', async () => {
+    const { c, t } = await sender();
+    await transfer(c);
+    const [row] = await rowsOf(t.connectionId);
+    expect(row).toMatchObject({ state: 'landed', txHash: TX, callsId: CALLS, amount: '250000', fromBlock: 77n });
+  });
+
+  it('given a transfer that reverts, then the row is released', async () => {
+    const { c, t } = await sender();
+    bridge.status = 500;
+    await transfer(c);
+    expect((await rowsOf(t.connectionId))[0]).toMatchObject({ state: 'released', callsId: CALLS });
+  });
+
+  it('given a transfer refused in simulation, then the row is released', async () => {
+    const { c, t } = await sender();
+    bridge.fail = new Error(
+      `Could not size the ERC-20 paymaster approval for token ${USDC} on chain 84532: execution reverted.`
+    );
+    await transfer(c);
+    expect((await rowsOf(t.connectionId))[0]).toMatchObject({ state: 'released' });
+  });
+
+  it('given a transfer the bundler took and whose answer timed out, then the row stays open for the reconciler', async () => {
+    const { c, t } = await sender();
+    bridge.fail = new Error('The request took too long to respond.');
+    bridge.taken = true;
+    await transfer(c);
+    const [row] = await rowsOf(t.connectionId);
+    expect(row.state).toBe('open');
+    expect(row.leaseUntil.getTime()).toBeLessThanOrEqual(Date.now());
+  });
+});
+
+describe('the receipt of a jaw_transfer', () => {
+  it('given a receipt that never settles, then it is unconfirmed after a minute of reads and the row stays open', async () => {
+    const { c, t } = await sender();
+    bridge.statuses = Array.from({ length: 200 }, () => ({ status: 100 }));
+    fastPolling();
+    const result = await transfer(c);
+    expect(result.structuredContent).toMatchObject({ status: 'unconfirmed', txHash: null, callsId: CALLS });
+    expect(result.structuredContent.summary).toContain(`Submitted as ${CALLS}`);
+    expect(bridge.polls).toBe(30);
+    expect((await rowsOf(t.connectionId))[0]).toMatchObject({ state: 'open', callsId: CALLS });
+  });
+
+  it('given a success status without a receipt, then it is not landed yet', async () => {
+    const { c } = await sender();
+    bridge.statuses = [
+      { status: 200, receipts: [] },
+      { status: 200, receipts: [{ transactionHash: TX }] },
+    ];
+    fastPolling();
+    const result = await transfer(c);
+    expect(result.structuredContent).toMatchObject({ status: 'landed', txHash: TX });
+  });
+
+  it('given a status of exactly 400, then it is a revert and the row is released', async () => {
+    const { c, t } = await sender();
+    bridge.statuses = [{ status: 400 }];
+    fastPolling();
+    const result = await transfer(c);
+    expect(result.structuredContent).toMatchObject({ status: 'reverted', txHash: null });
+    expect((await rowsOf(t.connectionId))[0].state).toBe('released');
+  });
+
+  it('given a status below 400 that is not success, then it keeps reading', async () => {
+    const { c } = await sender();
+    bridge.statuses = [{ status: 399 }, { status: 200, receipts: [{ transactionHash: TX }] }];
+    fastPolling();
+    const result = await transfer(c);
+    expect(result.structuredContent).toMatchObject({ status: 'landed' });
+  });
+});
+
+describe('what jaw_transfer accepts', () => {
+  it.each(['1234567890', '0.1234567', '-1', '1e3'])(
+    'given the amount %s, then the schema refuses it before anything is read',
+    async (amount) => {
+      const { c, t } = await sender();
+      const result = await transfer(c, amount);
+      expect(result.content[0].text).toContain('Input validation error');
+      expect(result.isError).toBe(true);
+      expect(bridge.sent).toEqual([]);
+      expect(await rowsOf(t.connectionId)).toEqual([]);
+    }
+  );
+
+  it('given the largest amount the schema takes, then the schema accepts it and the budget refuses it', async () => {
+    const { c } = await sender();
+    const result = await transfer(c, '999999999.999999');
+    expect(result.content[0].text).not.toContain('Input validation error');
+    expect(bridge.sent).toEqual([]);
+  });
+
+  it('given a connection with only wallet:read, then it cannot transfer', async () => {
+    const read = await connect(undefined, { scope: 'wallet:read' });
+    const result = await transfer(read);
+    expect(result.isError).toBe(true);
+    expect(result.content[0].text).toContain('wallet:send');
+    expect(bridge.sent).toEqual([]);
+  });
+
+  it('given a name that does not resolve, then it is refused by name', async () => {
+    const { c } = await sender();
+    const result = await transfer(c, '0.25', 'nobody-here.invalid');
+    expect(result.isError).toBe(true);
+    expect(result.content[0].text).toContain('nobody-here.invalid');
+    expect(result.content[0].text).toMatch(/could not be resolved|does not resolve/);
+    expect(bridge.sent).toEqual([]);
+  });
+
+  it('given an address with a wrong checksum, then it is taken as the address it spells', async () => {
+    const { c } = await sender();
+    const miscased = '0xd8dA6BF26964aF9D7eEd9e03E53415D37aA96045'.replace('d8dA6BF', 'D8Da6bf');
+    await transfer(c, '0.25', miscased);
+    const [call] = bridge.sent[0];
+    expect(decodeFunctionData({ abi: erc20Abi, data: call.data }).args[0]).toBe(getAddress(miscased));
+  });
+
+  it('given the whole of what the budget has left, then it is allowed, and one unit more is refused', async () => {
+    const { c, t } = await sender();
+    const allowance = BigInt((await currentGrant(t.connectionId))!.allowance);
+    const over = await transfer(c, (Number(allowance + 1n) / 1e6).toFixed(6));
+    expect(over.isError).toBe(true);
+    expect(over.content[0].text).toContain('after payments and transfers');
+    expect(bridge.sent).toEqual([]);
+
+    const exact = await transfer(c, (Number(allowance) / 1e6).toFixed(6));
+    expect(exact.structuredContent).toMatchObject({ status: 'landed' });
+  });
+
+  it('given an allowance the chain cannot give, then it refuses as unreadable and records nothing', async () => {
+    const { c, t } = await sender();
+    chain.periodUnreadable = true;
+    const result = await transfer(c);
+    expect(result.isError).toBe(true);
+    expect(result.content[0].text).toBe('Nothing was sent: the budget could not be read from the chain right now.');
+    expect(bridge.sent).toEqual([]);
+    expect(await rowsOf(t.connectionId)).toEqual([]);
+  });
+
+  it('given a server without a paymaster key, then it refuses before reading anything', async () => {
+    const { c } = await sender();
+    bridge.absent = true;
+    const result = await transfer(c);
+    expect(result.content[0].text).toContain('no paymaster key');
+  });
+});
+
 describe.skipIf(!TEST_PG_URL)('on Postgres, given another turn holding the float lock', () => {
   beforeAll(useTestPostgres);
+
+  it('given a lock held past the wait, then the transfer is told a payment is in progress', async () => {
+    const { c, t } = await sender();
+    let locked!: () => void;
+    const holding = new Promise<void>((r) => (locked = r));
+    const release = Promise.withResolvers<void>();
+    const holder = withFloat(t.connectionId, 5_000, async () => {
+      locked();
+      await release.promise;
+    });
+    await holding;
+
+    const result = await transfer(c);
+    release.resolve();
+    await holder;
+
+    expect(result.isError).toBe(true);
+    expect(result.content[0].text).toBe('A payment on this connection is in progress. Try again in a moment.');
+    expect(bridge.sent).toEqual([]);
+  });
 
   it('given a transfer waiting on the lock while the disconnect ends the connection, then the session key sends nothing', async () => {
     const { c, t } = await sender();

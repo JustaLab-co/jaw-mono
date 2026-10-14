@@ -21,6 +21,19 @@ const result = (value: unknown) => Response.json({ jsonrpc: '2.0', id: 1, result
 afterEach(() => vi.unstubAllGlobals());
 
 describe('readReceipt', () => {
+  it('posts JSON to the bundler', async () => {
+    let init: RequestInit | undefined;
+    vi.stubGlobal('fetch', async (_url: string, i: RequestInit) => {
+      init = i;
+      return result(null);
+    });
+
+    await readReceipt(8453, CALLS_ID);
+
+    expect(init?.method).toBe('POST');
+    expect(new Headers(init?.headers).get('content-type')).toBe('application/json');
+  });
+
   it('given a mined user operation, then it asks the bundler on that chain and returns success and the hash', async () => {
     const seen = rpc(() => result({ success: true, receipt: { transactionHash: TX } }));
 

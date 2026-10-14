@@ -8,7 +8,7 @@ import {
   importKeyFromHex,
   type EncryptedEnvelope,
 } from '@jaw.id/agent';
-import { afterAll, describe, expect, it } from 'vitest';
+import { afterAll, describe, expect, it, vi } from 'vitest';
 import WebSocket, { WebSocketServer } from 'ws';
 import { setTestEnv } from './testkit';
 
@@ -137,6 +137,153 @@ describe('a wallet session over the relay', () => {
     await expect(wallet.run((ask) => ask('eth_requestAccounts', []))).rejects.toThrow(
       'the wallet page refused: No API key'
     );
+  });
+});
+
+/** A page that first sends what it should not: a key that is not a string, and an answer to a request nobody made. */
+async function rogue(link: string, opts: { badKey?: boolean; stale?: boolean }) {
+  const url = new URL(link);
+  const keys = await generateKeyPair();
+  const secret = await deriveSharedSecret(
+    keys.privateKey,
+    await importKeyFromHex('public', url.hash.slice('#pk='.length))
+  );
+  const ws = new WebSocket(`${url.searchParams.get('relay')}?session=${url.searchParams.get('session')}&role=browser`);
+  const send = async (payload: Record<string, unknown>) =>
+    ws.send(JSON.stringify({ type: 'encrypted', ...(await encryptMessage(secret, payload)) }));
+  ws.on('message', async (data) => {
+    const inner = await decryptMessage(secret, JSON.parse(String(data)) as EncryptedEnvelope);
+    if (inner.type === 'init') await send({ type: 'ready' });
+    if (inner.type === 'rpc_request') {
+      if (opts.stale) await send({ type: 'rpc_response', id: 'someone-else', success: true, data: 'stale' });
+      await send({ type: 'rpc_response', id: inner.id, success: true, data: 'real' });
+    }
+  });
+  ws.on('open', async () => {
+    if (opts.badKey) ws.send(JSON.stringify({ type: 'key_exchange', publicKey: 42 }));
+    ws.send(JSON.stringify({ type: 'key_exchange', publicKey: await exportKeyToHex('public', keys.publicKey) }));
+  });
+}
+
+describe('what the wallet page can get wrong', () => {
+  it('given a refusal with no code, then the caller gets the message and no code', async () => {
+    const wallet = await openRelay(84532);
+    await page(wallet.url, () => ({ success: false, error: { message: 'boom' } }));
+
+    const err = await wallet.run((ask) => ask('eth_requestAccounts', [])).catch((e: unknown) => e);
+
+    expect(err).toMatchObject({ message: 'boom' });
+    expect((err as { code?: number }).code).toBeUndefined();
+  });
+
+  it('given an answer to another request first, then it is not taken for the answer', async () => {
+    const wallet = await openRelay(84532);
+    await rogue(wallet.url, { stale: true });
+
+    expect(await wallet.run((ask) => ask('eth_requestAccounts', []))).toBe('real');
+  });
+
+  it('given a key exchange whose key is not a string, then it is ignored', async () => {
+    const wallet = await openRelay(84532);
+    await rogue(wallet.url, { badKey: true });
+
+    expect(await wallet.run((ask) => ask('eth_requestAccounts', []))).toBe('real');
+  });
+
+  it('given nobody opens the link before its deadline, then the caller is told it timed out', async () => {
+    const wallet = await openRelay(84532, 300);
+    await expect(wallet.run((ask) => ask('eth_requestAccounts', []))).rejects.toThrow(
+      'timed out waiting for the wallet'
+    );
+  });
+});
+
+describe('the pool of sessions', () => {
+  // A pool is process-wide, so each test fills its own copy of the module.
+  const fresh = () => {
+    vi.resetModules();
+    return import('./relay');
+  };
+  const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+  const opensAgain = (relay: Awaited<ReturnType<typeof fresh>>, ms = 500) =>
+    vi.waitFor(
+      async () => expect((await relay.ownerRelay(84532, new Date(Date.now() + ms))).url).toMatch(/cli-bridge/),
+      { timeout: 3_000 }
+    );
+
+  it('given authorizations beyond the owner limit, then all of them open', async () => {
+    const relay = await fresh();
+    const until = new Date(Date.now() + 3_000);
+    const count = relay.SESSION_LIMITS.owner + 10;
+    const held = await Promise.all(Array.from({ length: count }, () => relay.connectRelay(84532, until)));
+    expect(held).toHaveLength(count);
+  });
+
+  it('given the owner pool is full, then a further session is busy until one closes', async () => {
+    const relay = await fresh();
+    const until = new Date(Date.now() + 8_000);
+    const held = [];
+    for (let i = 0; i < relay.SESSION_LIMITS.owner; i++) held.push(await relay.ownerRelay(84532, until));
+    await expect(relay.ownerRelay(84532, until)).rejects.toBeInstanceOf(relay.WalletBusy);
+    await sleep(500);
+
+    held[0].close();
+
+    await opensAgain(relay);
+  });
+
+  it('given a session that ran to its end, then its slot is free at once', async () => {
+    const relay = await fresh();
+    const until = new Date(Date.now() + 20_000);
+    for (let i = 0; i < relay.SESSION_LIMITS.owner - 1; i++) await relay.ownerRelay(84532, until);
+    const last = await relay.ownerRelay(84532, until);
+    await page(last.url, () => ({ success: true, data: [] }));
+    await last.run((ask) => ask('eth_requestAccounts', []));
+
+    await opensAgain(relay);
+  });
+
+  it('given sessions nobody runs, then their slots are free at their deadline', async () => {
+    const relay = await fresh();
+    const until = new Date(Date.now() + 700);
+    for (let i = 0; i < relay.SESSION_LIMITS.owner; i++) await relay.ownerRelay(84532, until);
+    await expect(relay.ownerRelay(84532, until)).rejects.toBeInstanceOf(relay.WalletBusy);
+    await sleep(300);
+
+    await opensAgain(relay);
+  });
+
+  it('given sessions closed before their socket opened, then their slots are free', async () => {
+    const relay = await fresh();
+    const until = new Date(Date.now() + 8_000);
+    for (let i = 0; i < relay.SESSION_LIMITS.owner; i++) (await relay.ownerRelay(84532, until)).close();
+    await sleep(800);
+
+    const opened = [];
+    for (let i = 0; i < relay.SESSION_LIMITS.owner; i++) opened.push(await relay.ownerRelay(84532, until));
+    expect(opened).toHaveLength(relay.SESSION_LIMITS.owner);
+  });
+
+  it('given a session closed twice, then it frees one slot', async () => {
+    const relay = await fresh();
+    const until = new Date(Date.now() + 8_000);
+    const held = [];
+    for (let i = 0; i < relay.SESSION_LIMITS.owner; i++) held.push(await relay.ownerRelay(84532, until));
+    held[0].close();
+    held[0].close();
+    await sleep(500);
+
+    await relay.ownerRelay(84532, until);
+    await expect(relay.ownerRelay(84532, until)).rejects.toBeInstanceOf(relay.WalletBusy);
+  });
+
+  it('given more sessions asked for at once than the limit, then only the limit opens', async () => {
+    const relay = await fresh();
+    const until = new Date(Date.now() + 5_000);
+
+    const results = await Promise.allSettled(Array.from({ length: 60 }, () => relay.ownerRelay(84532, until)));
+
+    expect(results.filter((r) => r.status === 'fulfilled')).toHaveLength(relay.SESSION_LIMITS.owner);
   });
 });
 

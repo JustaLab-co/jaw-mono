@@ -89,6 +89,22 @@ export const ownerRelay: OpenWallet = (chainId, until, client) => openRelay(owne
  */
 async function openRelay(pool: Pool, chainId: number, until: Date, client?: RelayClient): Promise<Wallet> {
   if (pool.open >= pool.limit) throw new WalletBusy();
+  // Taken before the first await, so sessions asked for together cannot all pass the check.
+  pool.open++;
+  let held = true;
+  const release = () => {
+    if (held) pool.open--;
+    held = false;
+  };
+  try {
+    return await startSession(release, chainId, until, client);
+  } catch (err) {
+    release();
+    throw err;
+  }
+}
+
+async function startSession(release: () => void, chainId: number, until: Date, client?: RelayClient): Promise<Wallet> {
   const { keysOrigin, relayUrl } = config();
   const keys = await generateKeyPair();
   const session = randomUUID();
@@ -97,11 +113,15 @@ async function openRelay(pool: Pool, chainId: number, until: Date, client?: Rela
   url.searchParams.set('relay', relayUrl);
   url.hash = `pk=${await exportKeyToHex('public', keys.publicKey)}`;
 
-  pool.open++;
   const ws = new WebSocket(`${relayUrl}?session=${encodeURIComponent(session)}&role=cli`);
-  ws.addEventListener('close', () => pool.open--, { once: true });
+  // A socket closed while still connecting never fires `close`, so closing frees the slot itself.
+  const end = () => {
+    ws.close();
+    release();
+  };
+  ws.addEventListener('close', release, { once: true });
   // Ends the session at its deadline even if nobody runs it.
-  setTimeout(() => ws.close(), until.getTime() - Date.now()).unref();
+  setTimeout(end, until.getTime() - Date.now()).unref();
   const inbox = new Inbox(ws, until);
 
   return {
@@ -140,10 +160,10 @@ async function openRelay(pool: Pool, chainId: number, until: Date, client?: Rela
         await send({ type: 'shutdown' }).catch(() => undefined);
         return result;
       } finally {
-        ws.close();
+        end();
       }
     },
-    close: () => ws.close(),
+    close: end,
   };
 }
 
