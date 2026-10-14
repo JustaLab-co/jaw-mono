@@ -46,11 +46,27 @@ describe('AssetPreview', () => {
     expect(render({})).toBe('');
   });
 
-  it('shows the deltas and no warning when there are balance changes', () => {
+  it('labels each side with its own asset and sign', () => {
     const html = render({ assetsOut: [usdcOut], assetsIn: [ethIn] });
-    expect(html).toContain('You send');
-    expect(html).toContain('You get');
-    expect(html).toContain('USDC');
     expect(html).not.toContain(WARNING);
+    const send = html.indexOf('You send');
+    const get = html.indexOf('You get');
+    expect(send).toBeGreaterThan(-1);
+    expect(get).toBeGreaterThan(send);
+    const sendSide = html.slice(send, get);
+    const getSide = html.slice(get);
+    expect(sendSide).toContain('USDC');
+    expect(sendSide).toMatch(/text-negative[^>]*>−5</);
+    expect(getSide).toContain('ETH');
+    expect(getSide).toMatch(/text-positive[^>]*>\+0\.01</);
+  });
+
+  it('shows only the side that has changes', () => {
+    const out = render({ assetsOut: [usdcOut] });
+    expect(out).toContain('You send');
+    expect(out).not.toContain('You get');
+    const received = render({ assetsIn: [ethIn] });
+    expect(received).toContain('You get');
+    expect(received).not.toContain('You send');
   });
 });
