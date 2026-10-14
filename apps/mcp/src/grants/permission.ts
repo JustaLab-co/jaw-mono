@@ -35,15 +35,14 @@ export function budgetGrant(b: {
   token: Address;
   allowance: bigint;
   expiry: number;
-  calls?: PermissionCall[];
 }): GrantRequest {
   return {
     spender: b.spender,
     expiry: b.expiry,
     chainId: numberToHex(b.chainId),
     permissions: {
-      // The USDC transfer comes first: refills, payments and jaw_transfer all go through it.
-      calls: [{ target: b.token, functionSignature: TRANSFER_SIGNATURE }, ...(b.calls ?? [])],
+      // Refills, payments and jaw_transfer all go through the USDC transfer.
+      calls: [{ target: b.token, functionSignature: TRANSFER_SIGNATURE }],
       spends: [{ token: b.token, allowance: b.allowance.toString(), unit: 'day', multiplier: 1 }],
     },
     // The session pays its own first op's fee from what the wallet sends along.

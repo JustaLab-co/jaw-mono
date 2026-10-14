@@ -131,14 +131,16 @@ const HELP = `Commands:
   funds                          jaw_add_funds
   quote <url>                    jaw_quote
   pay <url> [maxAmount]          jaw_pay_and_fetch (maxAmount in base units)
-  budget <perDay> [<0xcontract>:<signature> ...]
-                                 jaw_request_budget, e.g. budget 2 0x036C...:approve(address,uint256)
+  budget <perDay>                jaw_request_budget, USDC only
   transfer <to> <amount>         jaw_transfer, amount in USDC
   swap <originChain> <originToken> <destChain> <destToken> <amount> [recipient|-] [key]
                                  jaw_swap, amount in base units of originToken, 0x000...0 for the native coin,
                                  e.g. swap 8453 0x8335...2913 42161 0xaf88...5831 1000000
   swap-status <quoteId>          jaw_swap_status, quoteId is aurora:<deposit address>
-  calls '<json array>'           jaw_send_calls, e.g. calls '[{"to":"0x...","data":"0x..."}]'
+  calls '<json array>' [chainId] [key]
+                                 jaw_send_calls, the owner approves in the wallet, e.g.
+                                 calls '[{"to":"0x...","data":"0x..."}]' 8453 my-key
+  calls-status <id>              jaw_send_calls_status, id is the oc_ id jaw_send_calls returned
   revoke <connection id>         jaw_revoke_connection
   disconnect                     jaw_disconnect
   call <tool> '<json>'           any tool with raw arguments
@@ -152,16 +154,7 @@ const commands = {
   funds: () => call('jaw_add_funds', {}),
   quote: (url) => call('jaw_quote', { url }),
   pay: (url, maxAmount) => call('jaw_pay_and_fetch', { url, ...(maxAmount && { maxAmount }) }),
-  budget: (perDay, ...calls) =>
-    call('jaw_request_budget', {
-      perDay,
-      ...(calls.length && {
-        calls: calls.map((c) => {
-          const at = c.indexOf(':');
-          return { to: c.slice(0, at), functionSignature: c.slice(at + 1) };
-        }),
-      }),
-    }),
+  budget: (perDay) => call('jaw_request_budget', { perDay }),
   transfer: (to, amount) => call('jaw_transfer', { to, amount }),
   swap: (originChainId, originToken, destinationChainId, destinationToken, amount, recipient, idempotencyKey) =>
     call('jaw_swap', {
@@ -174,7 +167,13 @@ const commands = {
       ...(idempotencyKey && { idempotencyKey }),
     }),
   'swap-status': (quoteId) => call('jaw_swap_status', { quoteId }),
-  calls: (...json) => call('jaw_send_calls', { calls: JSON.parse(json.join(' ')) }),
+  calls: (json, chainId, idempotencyKey) =>
+    call('jaw_send_calls', {
+      calls: JSON.parse(json),
+      ...(chainId && { chainId: Number(chainId) }),
+      ...(idempotencyKey && { idempotencyKey }),
+    }),
+  'calls-status': (id) => call('jaw_send_calls_status', { id }),
   revoke: (connection) => call('jaw_revoke_connection', { id: connection }),
   disconnect: () => call('jaw_disconnect', {}),
   call: (name, ...json) => call(name, json.length ? JSON.parse(json.join(' ')) : {}),

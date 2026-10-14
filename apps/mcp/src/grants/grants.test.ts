@@ -1,6 +1,6 @@
 import { PERMISSION_MANAGER_ABI, type PermissionState } from '@jaw.id/agent';
 import { and, eq, isNull } from 'drizzle-orm';
-import { decodeFunctionData, type Address } from 'viem';
+import { decodeFunctionData } from 'viem';
 import { beforeAll, describe, expect, it } from 'vitest';
 import { verifyBearer, type Tenant } from '@/connections/auth';
 import {
@@ -27,7 +27,6 @@ setTestEnv();
 beforeAll(useTestDb);
 
 const USDC = '0x036CbD53842c5426634e7929541eC2318f3dCF7e';
-const APPROVE = { target: USDC as Address, functionSignature: 'approve(address,uint256)' };
 
 const MANAGER = '0xf1b40E3D5701C04d86F7828f0EB367B9C90901D8';
 const revokedAsSpender = (batch: SessionCall[]) =>
@@ -73,7 +72,7 @@ async function ask(
     const granted = (await honest(method, params)) as Record<string, unknown>;
     return opts.tamper ? opts.tamper(granted) : granted;
   };
-  const result = await requestBudget(t, opts.perDay ?? '1', [], {
+  const result = await requestBudget(t, opts.perDay ?? '1', {
     openWallet: fakeWallet(answer, asked),
     readPermission: opts.read ?? approvedOnChain,
     ...(opts.session ?? sessionFakes().deps),
@@ -105,12 +104,21 @@ describe('budget grants', () => {
     expect(refused.content[0].text).toBe(NO_PAY_SCOPE);
   });
 
-  it('refuses a zero budget, a malformed amount and an invalid function signature', async () => {
+  it('refuses a zero budget and a malformed amount', async () => {
     const { c } = await connected();
     expect((await callTool(c.access_token, 'jaw_request_budget', { perDay: '0' })).isError).toBe(true);
     expect((await callTool(c.access_token, 'jaw_request_budget', { perDay: '1e3' })).isError).toBe(true);
-    const calls = [{ to: USDC, functionSignature: 'not a signature' }];
-    expect((await callTool(c.access_token, 'jaw_request_budget', { perDay: '1', calls })).isError).toBe(true);
+  });
+
+  it('given a client that still passes calls, then the input is refused and no wallet opens', async () => {
+    const { c, t, connectedWith } = await connected();
+    const calls = [{ to: USDC, functionSignature: 'approve(address,uint256)' }];
+    const refused = await callTool(c.access_token, 'jaw_request_budget', { perDay: '1', calls });
+    expect(refused.isError).toBe(true);
+    expect(refused.content[0].text).toContain('calls');
+    expect(refused.structuredContent).toBeUndefined();
+    await walletsSettled();
+    expect((await currentGrant(t.connectionId))?.permissionId).toBe(connectedWith);
   });
 
   it('makes the permission the budget in force once the chain shows it approved, and marks the older one replaced', async () => {
@@ -128,25 +136,6 @@ describe('budget grants', () => {
       .from(grants)
       .where(and(eq(grants.connectionId, t.connectionId), isNull(grants.replacedAt)));
     expect(unreplaced).toEqual([{ id: now?.permissionId }]);
-  });
-
-  it('asks for the contract calls the agent names, after the USDC transfer', async () => {
-    const { t, signer } = await connected();
-    const asked: { method: string; params: unknown[] }[] = [];
-    await requestBudget(t, '1', [APPROVE], {
-      openWallet: fakeWallet(walletAnswers(signer), asked),
-      readPermission: approvedOnChain,
-      ...sessionFakes().deps,
-    });
-    await walletsSettled();
-    expect((asked[0].params[0] as GrantRequest).permissions.calls).toEqual([
-      { target: USDC, functionSignature: 'transfer(address,uint256)' },
-      APPROVE,
-    ]);
-    expect((await currentGrant(t.connectionId))?.permission.calls.map((c) => c.selector)).toEqual([
-      '0xa9059cbb',
-      '0x095ea7b3',
-    ]);
   });
 
   it.each([

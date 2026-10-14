@@ -1,7 +1,7 @@
 import { usdcForNetwork } from '@jaw.id/agent';
 import type { McpServer } from '@modelcontextprotocol/server';
 import { and, eq } from 'drizzle-orm';
-import { getAddress, isAddressEqual, parseUnits, toFunctionSelector } from 'viem';
+import { isAddressEqual, parseUnits } from 'viem';
 import { z } from 'zod';
 import { chainClients } from '@/adapters/session-host';
 import { tenant, type Tenant } from '@/connections/auth';
@@ -11,20 +11,12 @@ import { CONNECTION_TTL_MS, isLive } from '@/connections/rows';
 import { spends } from '@/connections/scopes';
 import { getDb } from '@/db/client';
 import { connections } from '@/db/schema';
-import {
-  budgetGrant,
-  checkGranted,
-  readOnChain,
-  recordGrant,
-  type PermissionCall,
-  type ReadPermission,
-} from '@/grants/permission';
+import { budgetGrant, checkGranted, readOnChain, recordGrant, type ReadPermission } from '@/grants/permission';
 import { errorLabel, log } from '@/lib/edge';
 import { reply } from '@/lib/fence';
 import { NO_PAY_SCOPE, refusal } from './reply';
 
 const PER_DAY = /^\d{1,9}(\.\d{1,6})?$/;
-const MAX_CALLS = 10;
 
 export interface BudgetDeps extends Pick<DisconnectDeps, 'clients' | 'sender'> {
   openWallet: OpenWallet;
@@ -38,24 +30,7 @@ const DEFAULTS: BudgetDeps = {
   sender: sessionSender,
 };
 
-const callInput = z.strictObject({
-  to: z
-    .string()
-    .regex(/^0x[0-9a-fA-F]{40}$/)
-    .describe('The contract'),
-  functionSignature: z.string().max(256).describe('Such as "approve(address,uint256)"'),
-});
-
 const output = z.object({ url: z.url(), summary: z.string() });
-
-const validSignature = (signature: string) => {
-  try {
-    toFunctionSelector(signature);
-    return true;
-  } catch {
-    return false;
-  }
-};
 
 /** How long the owner has to approve a budget once the link is handed out. */
 const APPROVE_WITHIN_MS = 10 * 60_000;
@@ -63,7 +38,7 @@ const APPROVE_WITHIN_MS = 10 * 60_000;
 const open = new Map<string, string>();
 
 /** Asks the owner's wallet for the permission, and makes it the connection's budget once the chain shows it. */
-export async function requestBudget(t: Tenant, perDay: string, calls: PermissionCall[], deps = DEFAULTS) {
+export async function requestBudget(t: Tenant, perDay: string, deps = DEFAULTS) {
   const waiting = open.get(t.connectionId);
   if (waiting) {
     return refusal(
@@ -80,7 +55,6 @@ export async function requestBudget(t: Tenant, perDay: string, calls: Permission
     token: usdc.address,
     allowance,
     expiry: Math.floor((Date.now() + CONNECTION_TTL_MS) / 1000),
-    calls,
   });
   let wallet: Wallet;
   try {
@@ -127,27 +101,16 @@ export function registerBudgetTool(server: McpServer) {
     'jaw_request_budget',
     {
       description:
-        "Ask the account owner for a daily USDC budget, approved once in their JAW wallet. Payments, transfers and the contract calls it lists then run with no further prompts, up to the budget. Returns a link for the owner. Ask again for more, or to add calls; the new budget replaces this connection's current one.",
+        "Ask the account owner for a daily USDC budget, approved once in their JAW wallet. The budget covers USDC only: payments, transfers, refills and swap quotes run with no further prompts, up to it. For any other contract call use jaw_send_calls, which asks the owner each time. Returns a link for the owner. Ask again for a different amount; the new budget replaces this connection's current one.",
       inputSchema: z.strictObject({
         perDay: z.string().regex(PER_DAY).describe('USDC per day, as a decimal such as "1" or "0.5"'),
-        calls: z
-          .array(callInput)
-          .max(MAX_CALLS)
-          .optional()
-          .describe(
-            'Contract functions jaw_send_calls may call within the budget. USDC transfers are always included.'
-          ),
       }),
       outputSchema: output,
     },
-    async ({ perDay, calls = [] }, ctx) => {
+    async ({ perDay }, ctx) => {
       const t = tenant(ctx);
       if (!spends(t.scopes)) return refusal(NO_PAY_SCOPE);
-      if (!calls.every((c) => validSignature(c.functionSignature))) {
-        return refusal('A function signature is not valid, such as "approve(address,uint256)".');
-      }
-      const asked = calls.map((c) => ({ target: getAddress(c.to), functionSignature: c.functionSignature }));
-      return requestBudget(t, perDay, asked);
+      return requestBudget(t, perDay);
     }
   );
 }

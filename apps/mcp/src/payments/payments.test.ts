@@ -272,7 +272,7 @@ async function connected(perDay?: string) {
 async function approveBudget(c: Awaited<ReturnType<typeof connect>>, perDay: string) {
   const t = (await verifyBearer(c.access_token))?.extra?.tenant as Tenant;
   const wallet = fakeWallet(walletAnswers(c.signer));
-  await requestBudget(t, perDay, [], { openWallet: wallet, readPermission: approvedOnChain, ...offlineSession });
+  await requestBudget(t, perDay, { openWallet: wallet, readPermission: approvedOnChain, ...offlineSession });
   await walletsSettled();
   if (!(await currentGrant(t.connectionId))) throw new Error('no budget');
   balances.set(c.signer.address.toLowerCase(), 5_000_000n);

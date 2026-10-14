@@ -231,7 +231,7 @@ async function connected(perDay?: string): Promise<Connected> {
   balances.set(c.signer.address.toLowerCase(), 5_000_000n);
   const budget = async (day: string) => {
     const wallet = fakeWallet(walletAnswers(c.signer));
-    await requestBudget(t, day, [], { openWallet: wallet, readPermission: approvedOnChain, ...offlineSession });
+    await requestBudget(t, day, { openWallet: wallet, readPermission: approvedOnChain, ...offlineSession });
     await walletsSettled();
     if (!(await currentGrant(t.connectionId))) throw new Error('no budget');
   };
