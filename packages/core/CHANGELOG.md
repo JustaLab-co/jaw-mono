@@ -1,3 +1,14 @@
+## 1.6.4 (2026-10-14)
+
+### 🩹 Fixes
+
+- **core:** mask apikey and api_key params in any case ([e1d2e2b8](https://github.com/JustaLab-co/jaw-mono/commit/e1d2e2b8))
+- **core:** mask the api key in rpc error logs ([535c8a71](https://github.com/JustaLab-co/jaw-mono/commit/535c8a71))
+
+### ❤️ Thank You
+
+- Mariano Aguero @mariano-aguero
+
 ## 1.6.3 (2026-10-13)
 
 ### 🩹 Fixes
