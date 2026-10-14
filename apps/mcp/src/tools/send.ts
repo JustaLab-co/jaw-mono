@@ -1,4 +1,4 @@
-import { usdcForNetwork } from '@jaw.id/agent';
+import { usdcForNetwork, type SessionBridge } from '@jaw.id/agent';
 import type { McpServer } from '@modelcontextprotocol/server';
 import { and, eq } from 'drizzle-orm';
 import {
@@ -21,6 +21,7 @@ import { currentGrant, type Grant } from '@/grants/store';
 import { errorLabel, log } from '@/lib/edge';
 import { dayLeft, readDaySpend } from '@/payments/day-spend';
 import { FloatBusy, FloatLost, LOCK_WAIT_MS, withFloat } from '@/payments/float-lock';
+import { handToReconciler, noteCallsId, recordedSends, recordSend, settleSend } from '@/payments/sends';
 import { entriesFor } from '@/payments/store';
 import { resolveName } from './read';
 import { NO_SEND_SCOPE, refusal } from './reply';
@@ -69,6 +70,8 @@ function usdcThePermissionCounts(calls: Call[], grant: Grant): bigint {
   return sum;
 }
 
+const UNREADABLE = 'Nothing was sent: the budget could not be read from the chain right now.';
+
 const OVER_DAY =
   "Nothing was sent: this would pass what today's budget has left after payments, transfers and calls. " +
   'Ask for a larger budget with jaw_request_budget.';
@@ -113,38 +116,49 @@ async function sendWithinBudget(t: Tenant, calls: Call[]) {
       });
       if (!live) return { refused: 'This connection has ended, so nothing was sent.' };
       const moving = usdcThePermissionCounts(calls, grant);
+      let sendId: string | undefined;
       if (moving > 0n) {
-        const entries = await hold.tx((tx) => entriesFor(grant.permissionId, tx));
-        const day = await readDaySpend(grant, t.sessionAddress, entries, chainClients);
-        if (!day) return { refused: 'Nothing was sent: the budget could not be read from the chain right now.' };
+        const { entries, sent } = await hold.tx(async (tx) => ({
+          entries: await entriesFor(grant.permissionId, tx),
+          sent: await recordedSends(grant.permissionId, tx),
+        }));
+        const day = await readDaySpend(grant, t.sessionAddress, entries, sent, chainClients);
+        const head = await chainClients
+          .publicClient(grant.chainId)
+          .getBlockNumber()
+          .catch(() => undefined);
+        if (!day || head === undefined) return { refused: UNREADABLE };
         if (moving > dayLeft(BigInt(grant.allowance), day)) return { refused: OVER_DAY };
+        sendId = await hold.tx(async (tx) => {
+          if (!(await hold.owns(tx))) throw new FloatLost();
+          return recordSend(tx, {
+            connectionId: t.connectionId,
+            permissionId: grant.permissionId,
+            chainId: grant.chainId,
+            sender: t.sessionAddress,
+            amount: moving,
+            periodStart: day.periodStart,
+            fromBlock: head,
+          });
+        });
       }
-      hold.assertHeld();
-      submitting = true;
-      const sent = (await bridge.request('wallet_sendCalls', [{ calls }])) as { id: Hex };
-      for (const until = Date.now() + RECEIPT_MS; Date.now() < until; ) {
-        const status = (await bridge.request('wallet_getCallsStatus', sent.id).catch(() => undefined)) as
-          | { status: number; receipts?: { transactionHash: Hex }[] }
-          | undefined;
-        const txHash = status?.receipts?.[0]?.transactionHash ?? null;
-        if (status?.status === 200 && txHash)
-          return { callsId: sent.id, txHash, status: 'landed' as const, summary: `Sent in ${txHash}.` };
-        if (status && status.status >= 400) {
-          return {
-            callsId: sent.id,
-            txHash,
-            status: 'reverted' as const,
-            summary: 'Reverted on chain. Nothing was sent.',
-          };
+      try {
+        hold.assertHeld();
+        submitting = true;
+        const sent = (await bridge.request('wallet_sendCalls', [{ calls }])) as { id: Hex };
+        if (sendId) await noteCallsId(sendId, sent.id).catch(logFailure('send calls id write failed'));
+        const done = await receiptOf(bridge, sent.id);
+        if (sendId) await concludeSend(sendId, done).catch(logFailure('send conclusion write failed'));
+        return done;
+      } catch (err) {
+        const unsent = !submitting || refusedInSimulation(err);
+        if (sendId) {
+          await (unsent ? settleSend(sendId, { state: 'released' }) : handToReconciler(sendId)).catch(
+            logFailure('send conclusion write failed')
+          );
         }
-        await new Promise((resolve) => setTimeout(resolve, 2_000));
+        throw err;
       }
-      return {
-        callsId: sent.id,
-        txHash: null,
-        status: 'unconfirmed' as const,
-        summary: `Submitted as ${sent.id} and not confirmed yet. Check it before sending again, or it may land twice.`,
-      };
     });
   } catch (err) {
     if (err instanceof FloatBusy) return refusal('A payment on this connection is in progress. Try again in a moment.');
@@ -165,6 +179,34 @@ async function sendWithinBudget(t: Tenant, calls: Call[]) {
     structuredContent: out,
     isError: out.status === 'reverted',
   };
+}
+
+async function receiptOf(bridge: SessionBridge, callsId: Hex): Promise<z.infer<typeof output>> {
+  for (const until = Date.now() + RECEIPT_MS; Date.now() < until; ) {
+    const status = (await bridge.request('wallet_getCallsStatus', callsId).catch(() => undefined)) as
+      | { status: number; receipts?: { transactionHash: Hex }[] }
+      | undefined;
+    const txHash = status?.receipts?.[0]?.transactionHash ?? null;
+    if (status?.status === 200 && txHash) return { callsId, txHash, status: 'landed', summary: `Sent in ${txHash}.` };
+    if (status && status.status >= 400) {
+      return { callsId, txHash, status: 'reverted', summary: 'Reverted on chain. Nothing was sent.' };
+    }
+    await new Promise((resolve) => setTimeout(resolve, 2_000));
+  }
+  return {
+    callsId,
+    txHash: null,
+    status: 'unconfirmed',
+    summary: `Submitted as ${callsId} and not confirmed yet. Check it before sending again, or it may land twice.`,
+  };
+}
+
+const logFailure = (msg: string) => (err: unknown) => log('error', { msg, error: errorLabel(err) });
+
+function concludeSend(id: string, out: z.infer<typeof output>) {
+  if (out.status === 'landed') return settleSend(id, { state: 'landed', txHash: out.txHash as Hex });
+  if (out.status === 'reverted') return settleSend(id, { state: 'released' });
+  return handToReconciler(id);
 }
 
 async function recipientOf(to: string): Promise<Address | string> {

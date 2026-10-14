@@ -1,7 +1,7 @@
 import { createServer } from 'node:http';
 import type { AddressInfo } from 'node:net';
 import type { ChainClients } from '@jaw.id/agent';
-import { eq } from 'drizzle-orm';
+import { eq, sql } from 'drizzle-orm';
 import {
   decodeFunctionData,
   encodeAbiParameters,
@@ -30,6 +30,7 @@ import { grants, payments } from '@/db/schema';
 import { lockWaiters, TEST_PG_URL, useTestDb, useTestPostgres } from '@/db/test-db';
 import { currentGrant } from '@/grants/store';
 import { safeFetch } from '@/lib/safe-fetch';
+import { reconcile } from '@/reconciler/run';
 import { requestBudget } from '@/tools/request-budget';
 import { pay, type PayDeps } from './pay';
 
@@ -84,7 +85,13 @@ const seller = createServer((req, res) => {
 await new Promise<void>((r) => seller.listen(0, '127.0.0.1', r));
 const SELLER = `127.0.0.1:${(seller.address() as AddressInfo).port}`;
 
-const chain = { permissionId: '0x' as Hex, start: 1, end: 2_000_000_000, spend: 0n, down: false };
+const chain = { permissionId: '0x' as Hex, start: 1, end: 2_000_000_000, spend: 0n, down: false, head: 77n };
+const CALLS_ID = `0x${'b'.repeat(64)}` as Hex;
+const userOpEvents: { userOpHash: Hex; sender: Address; success: boolean; blockNumber: bigint }[] = [];
+// PGlite reads Date.now too, so the skew lasts until the test ends to keep its clock in step.
+const receiptWait = { skew: 0 };
+const realNow = Date.now.bind(Date);
+vi.spyOn(Date, 'now').mockImplementation(() => realNow() + receiptWait.skew);
 const gate = { hold: undefined as Promise<void> | undefined, entered: () => {} };
 
 const node = {
@@ -94,8 +101,22 @@ const node = {
       gate.entered();
       await gate.hold;
     }
-    return 77n;
+    return chain.head;
   },
+  getLogs: async ({
+    args,
+    fromBlock,
+    toBlock,
+  }: {
+    args: { userOpHash?: Hex; sender?: Address };
+    fromBlock: bigint;
+    toBlock: bigint;
+  }) =>
+    userOpEvents
+      .filter((op) => op.blockNumber >= fromBlock && op.blockNumber <= toBlock)
+      .filter((op) => !args.userOpHash || op.userOpHash === args.userOpHash)
+      .filter((op) => !args.sender || op.sender.toLowerCase() === args.sender.toLowerCase())
+      .map((op) => ({ args: op, blockNumber: op.blockNumber, transactionHash: TX(900) })),
   readContract: async ({ functionName, args }: { functionName: string; args: readonly unknown[] }) => {
     switch (functionName) {
       case 'getHash':
@@ -148,6 +169,8 @@ const bridge = {
   sent: [] as { to: Address; data: Hex }[][],
   landing: undefined as Promise<void> | undefined,
   submitted: () => {},
+  answer: 'landed' as 'landed' | 'pending' | 'reverted',
+  fails: undefined as Error | undefined,
 };
 const counted = (calls: { to: Address; data: Hex }[]) =>
   calls
@@ -158,12 +181,18 @@ vi.mock('@/adapters/session-host', async (original) => ({
   sessionBridge: () => ({
     request: async (method: string, params: unknown) => {
       if (method === 'wallet_sendCalls') {
+        if (bridge.fails) throw bridge.fails;
         const calls = (params as [{ calls: { to: Address; data: Hex }[] }])[0].calls;
         bridge.sent.push(calls);
         bridge.submitted();
-        return { id: `0x${'b'.repeat(64)}` };
+        return { id: CALLS_ID };
       }
       if (bridge.landing) await bridge.landing;
+      if (bridge.answer === 'pending') {
+        receiptWait.skew += 61_000;
+        return { status: 100 };
+      }
+      if (bridge.answer === 'reverted') return { status: 500, receipts: [{ transactionHash: TX(901) }] };
       chain.spend += counted(bridge.sent[bridge.sent.length - 1]);
       return { status: 200, receipts: [{ transactionHash: `0x${'c'.repeat(64)}` }] };
     },
@@ -190,8 +219,12 @@ afterEach(() => {
   bridge.sent.length = 0;
   bridge.landing = undefined;
   bridge.submitted = () => {};
+  bridge.answer = 'landed';
+  bridge.fails = undefined;
   gate.hold = undefined;
-  Object.assign(chain, { start: 1, end: 2_000_000_000, spend: 0n, down: false });
+  userOpEvents.length = 0;
+  receiptWait.skew = 0;
+  Object.assign(chain, { start: 1, end: 2_000_000_000, spend: 0n, down: false, head: 77n });
 });
 
 async function connected(perDay: string, float: bigint, calls: { target: Address; functionSignature: string }[] = []) {
@@ -217,6 +250,13 @@ const usdcCall = (functionName: 'approve' | 'transfer', amount: bigint) => ({
   to: USDC,
   data: encodeFunctionData({ abi: erc20Abi, functionName, args: [BOB, amount] }),
 });
+const unconfirmed = async (token: string, amount: string) => {
+  bridge.answer = 'pending';
+  const sent = await transfer(token, amount);
+  expect(sent.structuredContent).toMatchObject({ status: 'unconfirmed' });
+  bridge.answer = 'landed';
+};
+const refused = { refusal: { code: 'budget_exhausted', next: 'jaw_request_budget' } };
 const rowOf = async (id: string) => (await getDb().select().from(payments).where(eq(payments.id, id)))[0];
 
 describe('given 1 USDC a day and 2 USDC of float pulled on an earlier day', () => {
@@ -357,5 +397,165 @@ describe.skipIf(!TEST_PG_URL)('on Postgres, given 1 USDC a day and a payment and
     const wins = [paid.structuredContent?.kind === 'paid', sent.structuredContent?.status === 'landed'];
     expect(wins.filter(Boolean)).toHaveLength(1);
     expect(seen.length + bridge.sent.length).toBe(1);
+  }, 30_000);
+});
+
+describe('given 1 USDC a day, 2 USDC of float, and a transfer of 0.5 the bundler took and did not confirm in time', () => {
+  it('when a payment of 0.6 comes, then it is refused and nothing is signed', async () => {
+    const { t, token } = await connected('1', 2_000_000n);
+    await unconfirmed(token, '0.5');
+    prices.set('/a', '600000');
+    expect((await pay(t, { url: url('/a') }, deps)).structuredContent).toMatchObject(refused);
+    expect(seen).toHaveLength(0);
+  });
+
+  it('when a transfer of 0.6 comes, then it is refused and nothing more is sent', async () => {
+    const { token } = await connected('1', 2_000_000n);
+    await unconfirmed(token, '0.5');
+    const sent = await transfer(token, '0.6');
+    expect(sent.content[0].text).toContain('Nothing was sent');
+    expect(bridge.sent).toHaveLength(1);
+  });
+
+  it('when jaw_status is read, then it counts the transfer as spent today', async () => {
+    const { token } = await connected('1', 2_000_000n);
+    await unconfirmed(token, '0.5');
+    const status = await callTool(token, 'jaw_status', {});
+    expect(status.structuredContent.budget).toMatchObject({
+      spentToday: { amount: '500000' },
+      sendableToday: { amount: '500000' },
+    });
+  });
+
+  it('when the chain shows it reverted and the reconciler ran, then a payment of 0.6 goes through', async () => {
+    const { t, token } = await connected('1', 2_000_000n);
+    await unconfirmed(token, '0.5');
+    userOpEvents.push({ userOpHash: CALLS_ID, sender: t.sessionAddress, success: false, blockNumber: 80n });
+    chain.head = 81n;
+    await reconcile(clients);
+    prices.set('/a', '600000');
+    expect((await pay(t, { url: url('/a') }, deps)).structuredContent).toMatchObject({ kind: 'paid' });
+  });
+
+  it('when the chain counter already counts it, then it counts once: 0.6 is refused and 0.5 goes through', async () => {
+    const { t, token } = await connected('1', 2_000_000n);
+    await unconfirmed(token, '0.5');
+    chain.spend = 500_000n;
+    prices.set('/a', '600000');
+    prices.set('/b', '500000');
+    expect((await pay(t, { url: url('/a') }, deps)).structuredContent).toMatchObject(refused);
+    expect((await pay(t, { url: url('/b') }, deps)).structuredContent).toMatchObject({ kind: 'paid' });
+  });
+
+  it('when it landed, the counter counts it and the reconciler ran, then 0.6 is refused and 0.5 goes through', async () => {
+    const { t, token } = await connected('1', 2_000_000n);
+    await unconfirmed(token, '0.5');
+    userOpEvents.push({ userOpHash: CALLS_ID, sender: t.sessionAddress, success: true, blockNumber: 80n });
+    chain.spend = 500_000n;
+    chain.head = 81n;
+    await reconcile(clients);
+    prices.set('/a', '600000');
+    prices.set('/b', '500000');
+    expect((await pay(t, { url: url('/a') }, deps)).structuredContent).toMatchObject(refused);
+    expect((await pay(t, { url: url('/b') }, deps)).structuredContent).toMatchObject({ kind: 'paid' });
+  });
+});
+
+describe('given 1 USDC a day and a transfer of 0.5 the chain counted before the day ended', () => {
+  it('when a payment of 0.6 comes in the next day, then it goes through', async () => {
+    const { t, token } = await connected('1', 2_000_000n);
+    expect((await transfer(token, '0.5')).structuredContent).toMatchObject({ status: 'landed' });
+    Object.assign(chain, { start: 86_401, spend: 0n });
+    prices.set('/a', '600000');
+    expect((await pay(t, { url: url('/a') }, deps)).structuredContent).toMatchObject({ kind: 'paid' });
+  });
+});
+
+describe('given 1 USDC a day and a transfer of 0.5 the simulation refused before the bundler', () => {
+  it('when a payment of 0.6 comes, then it goes through', async () => {
+    const { t, token } = await connected('1', 2_000_000n);
+    bridge.fails = new Error('Could not size the ERC-20 paymaster approval: execution reverted');
+    expect((await transfer(token, '0.5')).content[0].text).toContain('Nothing was sent');
+    bridge.fails = undefined;
+    prices.set('/a', '600000');
+    expect((await pay(t, { url: url('/a') }, deps)).structuredContent).toMatchObject({ kind: 'paid' });
+  });
+});
+
+describe('given 1 USDC a day and a transfer of 0.5 whose receipt says it reverted', () => {
+  it('when a payment of 0.6 comes, then it goes through', async () => {
+    const { t, token } = await connected('1', 2_000_000n);
+    bridge.answer = 'reverted';
+    expect((await transfer(token, '0.5')).structuredContent).toMatchObject({ status: 'reverted' });
+    prices.set('/a', '600000');
+    expect((await pay(t, { url: url('/a') }, deps)).structuredContent).toMatchObject({ kind: 'paid' });
+  });
+});
+
+describe('given 1 USDC a day and a transfer of 0.5 whose call died after its row was written, before the bundler', () => {
+  it('when payments of 0.6 come, then they are refused until the reconciler finds nothing on chain in the window', async () => {
+    const { t, token } = await connected('1', 2_000_000n);
+    bridge.fails = new Error('the bundler was never reached');
+    expect((await transfer(token, '0.5')).isError).toBe(true);
+    expect(bridge.sent).toEqual([]);
+    prices.set('/a', '600000');
+    expect((await pay(t, { url: url('/a') }, deps)).structuredContent).toMatchObject(refused);
+    const lapse = () => getDb().execute(sql`update sends set lease_until = now() - interval '1 minute'`);
+    await lapse();
+    await reconcile(clients);
+    expect((await pay(t, { url: url('/a') }, deps)).structuredContent).toMatchObject(refused);
+    await lapse();
+    chain.head = 77n + 10_000n;
+    await reconcile(clients);
+    expect((await pay(t, { url: url('/a') }, deps)).structuredContent).toMatchObject({ kind: 'paid' });
+  });
+
+  it('when another send of the session landed in the window, then the row stays counted', async () => {
+    const { t, token } = await connected('1', 2_000_000n);
+    bridge.fails = new Error('the bundler was never reached');
+    await transfer(token, '0.5');
+    userOpEvents.push({ userOpHash: TX(902), sender: t.sessionAddress, success: true, blockNumber: 90n });
+    await getDb().execute(sql`update sends set lease_until = now() - interval '1 minute'`);
+    chain.head = 77n + 10_000n;
+    await reconcile(clients);
+    prices.set('/a', '600000');
+    expect((await pay(t, { url: url('/a') }, deps)).structuredContent).toMatchObject(refused);
+  });
+});
+
+describe('given 1 USDC a day and a transfer whose row cannot be written', () => {
+  it('when the transfer comes, then nothing is sent', async () => {
+    const { token } = await connected('1', 2_000_000n);
+    await getDb().execute(sql`alter table sends add constraint no_new_sends check (false) not valid`);
+    try {
+      const sent = await transfer(token, '0.5');
+      expect(sent.isError).toBe(true);
+      expect(sent.content[0].text).toContain('Nothing was sent');
+    } finally {
+      await getDb().execute(sql`alter table sends drop constraint no_new_sends`);
+    }
+    expect(bridge.sent).toEqual([]);
+  });
+});
+
+describe.skipIf(!TEST_PG_URL)('on Postgres, given 1 USDC a day and a transfer that ends unconfirmed', () => {
+  it('when a payment waits for the transfer to finish its turn, then the payment is refused and only the transfer went out', async () => {
+    const { t, token } = await connected('1', 2_000_000n);
+    prices.set('/a', '600000');
+    bridge.answer = 'pending';
+    let land!: () => void;
+    bridge.landing = new Promise<void>((r) => (land = r));
+    const submitted = new Promise<void>((r) => (bridge.submitted = r));
+    const sending = transfer(token, '0.5');
+    await submitted;
+    const paying = pay(t, { url: url('/a') }, deps);
+    for (let i = 0; i < 100 && (await lockWaiters(t.connectionId)) === 0; i++)
+      await new Promise((r) => setTimeout(r, 50));
+    land();
+    const [paid, sent] = await Promise.all([paying, sending]);
+    expect(sent.structuredContent).toMatchObject({ status: 'unconfirmed' });
+    expect(paid.structuredContent).toMatchObject(refused);
+    expect(seen).toHaveLength(0);
+    expect(bridge.sent).toHaveLength(1);
   }, 30_000);
 });
