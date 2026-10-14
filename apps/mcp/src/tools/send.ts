@@ -12,14 +12,16 @@ import {
   type Hex,
 } from 'viem';
 import { z } from 'zod';
-import { sessionBridge } from '@/adapters/session-host';
+import { chainClients, sessionBridge } from '@/adapters/session-host';
 import { tenant, type Tenant } from '@/connections/auth';
 import { isLive } from '@/connections/rows';
 import { connections } from '@/db/schema';
 import { isPaymentsPaused } from '@/db/settings';
 import { currentGrant, type Grant } from '@/grants/store';
 import { errorLabel, log } from '@/lib/edge';
+import { dayLeft, readDaySpend } from '@/payments/day-spend';
 import { FloatBusy, FloatLost, LOCK_WAIT_MS, withFloat } from '@/payments/float-lock';
+import { entriesFor } from '@/payments/store';
 import { resolveName } from './read';
 import { NO_SEND_SCOPE, refusal } from './reply';
 
@@ -40,6 +42,36 @@ const output = z.object({
 // budget refuses reverts, and throws this before anything reaches the bundler.
 const refusedInSimulation = (err: unknown) =>
   err instanceof Error && err.message.includes('Could not size the ERC-20 paymaster approval');
+
+const PERMIT2: Address = '0x000000000022D473030F116dDEE9F6B43aC78BA3';
+const TRANSFER = '0xa9059cbb';
+const TRANSFER_FROM = '0x23b872dd';
+const APPROVE = '0x095ea7b3';
+const INCREASE_ALLOWANCE = '0x39509351';
+const PERMIT2_APPROVE = '0x87517c45';
+
+// The 32-byte word at a calldata offset, zero padded past the end as the EVM reads it.
+const word = (data: Hex, offset: number) => BigInt(`0x${data.slice(2 + offset * 2, 66 + offset * 2).padEnd(64, '0')}`);
+const isAt = (data: Hex, offset: number, address: Address) => word(data, offset) % 2n ** 160n === BigInt(address);
+
+function usdcThePermissionCounts(calls: Call[], grant: Grant): bigint {
+  let sum = 0n;
+  for (const { to, data } of calls) {
+    const selector = data.slice(0, 10).toLowerCase();
+    if (isAddressEqual(to, grant.token)) {
+      if (selector === TRANSFER || selector === APPROVE || selector === INCREASE_ALLOWANCE) sum += word(data, 0x24);
+      if (selector === TRANSFER_FROM && isAt(data, 0x04, grant.account)) sum += word(data, 0x44);
+    }
+    if (isAddressEqual(to, PERMIT2) && selector === PERMIT2_APPROVE && isAt(data, 0x04, grant.token)) {
+      sum += word(data, 0x44);
+    }
+  }
+  return sum;
+}
+
+const OVER_DAY =
+  "Nothing was sent: this would pass what today's budget has left after payments, transfers and calls. " +
+  'Ask for a larger budget with jaw_request_budget.';
 
 const covers = (grant: Grant, call: Call) =>
   grant.permission.calls.some(
@@ -66,7 +98,7 @@ async function sendWithinBudget(t: Tenant, calls: Call[]) {
   const bridge = sessionBridge(t, grant);
   if (!bridge) return refusal('This server has no paymaster key, so it cannot pay the fee to send.');
 
-  let out: z.infer<typeof output> | undefined;
+  let out: z.infer<typeof output> | { refused: string };
   let submitting = false;
   try {
     out = await withFloat(t.connectionId, LOCK_WAIT_MS, async (hold) => {
@@ -79,7 +111,14 @@ async function sendWithinBudget(t: Tenant, calls: Call[]) {
           .where(and(eq(connections.id, t.connectionId), isLive()));
         return Boolean(row);
       });
-      if (!live) return undefined;
+      if (!live) return { refused: 'This connection has ended, so nothing was sent.' };
+      const moving = usdcThePermissionCounts(calls, grant);
+      if (moving > 0n) {
+        const entries = await hold.tx((tx) => entriesFor(grant.permissionId, tx));
+        const day = await readDaySpend(grant, t.sessionAddress, entries, chainClients);
+        if (!day) return { refused: 'Nothing was sent: the budget could not be read from the chain right now.' };
+        if (moving > dayLeft(BigInt(grant.allowance), day)) return { refused: OVER_DAY };
+      }
       hold.assertHeld();
       submitting = true;
       const sent = (await bridge.request('wallet_sendCalls', [{ calls }])) as { id: Hex };
@@ -120,7 +159,7 @@ async function sendWithinBudget(t: Tenant, calls: Call[]) {
     log('warn', { msg: 'send not submitted', error: errorLabel(err) });
     return refusal('Nothing was sent: the calls failed in simulation, or are over what the budget has left today.');
   }
-  if (!out) return refusal('This connection has ended, so nothing was sent.');
+  if ('refused' in out) return refusal(out.refused);
   return {
     content: [{ type: 'text' as const, text: out.summary }],
     structuredContent: out,
