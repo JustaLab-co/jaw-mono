@@ -40,7 +40,7 @@ type Readiness = z.infer<typeof readiness>;
 const budgetOutput = z.object({
   permissionId: z.string(),
   perDay: money,
-  spentToday: money.nullable().describe('What left this budget today: payments, transfers and sent calls'),
+  spentToday: money.nullable().describe('What left this budget today: payments and transfers'),
   remainingToday: money.nullable().describe('The most the next payment can spend today'),
   sendableToday: money.nullable().describe('The most the next jaw_transfer can move today'),
   resetsAt: z.string().nullable(),
@@ -138,7 +138,7 @@ function leftToday(budget: z.infer<typeof budgetOutput> | undefined) {
   const send = budget?.sendableToday;
   if (!pay) return '';
   if (!send || send.amount === pay.amount) return `, ${pay.amount} base units left today`;
-  return `, ${pay.amount} base units left today for payments, ${send.amount} for transfers and calls`;
+  return `, ${pay.amount} base units left today for payments, ${send.amount} for transfers`;
 }
 
 const EXPIRY_WARN_MS = 48 * 60 * 60 * 1000;

@@ -2,7 +2,7 @@
 export const CONNECTION_SCOPES = {
   'wallet:read': 'See your account, balances and payment history',
   'x402:pay': 'Pay x402 services from a daily USDC budget you approve',
-  'wallet:send': 'Send USDC and the contract calls you approve from that same budget',
+  'wallet:send': 'Send USDC from that same budget',
 } as const;
 export type ConnectionScope = keyof typeof CONNECTION_SCOPES;
 
