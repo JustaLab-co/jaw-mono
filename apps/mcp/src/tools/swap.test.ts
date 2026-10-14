@@ -2125,7 +2125,7 @@ describe('B28: the connection ends while the swap awaits the owner', () => {
     return { url: 'http://keys.test/cli-bridge?session=gone', run: () => ended, close: () => undefined };
   };
 
-  it.fails.each(ends)(
+  it.each(ends)(
     'given a swap whose session is gone, when %s and a call authenticated before it replays the key, then no new link opens and nothing is paid',
     async (_, prepare) => {
       const c = await connected('1');
@@ -2137,6 +2137,7 @@ describe('B28: the connection ends while the swap awaits the owner', () => {
 
       const replay = await run(c.t);
 
+      expect(replay[gateCode]).toBe('connection_ended');
       expect(opened).toHaveLength(1);
       expect(replay.structuredContent?.url).toBeUndefined();
       expect((await swapsOf(c.t.connectionId))[0]).toMatchObject({ walletUrl: before.walletUrl });
@@ -2144,7 +2145,7 @@ describe('B28: the connection ends while the swap awaits the owner', () => {
     }
   );
 
-  it.fails.each([
+  it.each([
     ['revoked', (t: Tenant) => endConnection(t.connectionId, t.account)],
     [
       'past its end',
@@ -2170,8 +2171,14 @@ describe('B28: the connection ends while the swap awaits the owner', () => {
         backend: backendDeps,
       });
 
+      expect(result[gateCode]).toBe('connection_ended');
       expect(opened).toEqual([]);
       expect(result.structuredContent?.url).toBeUndefined();
+      expect((await swapsOf(c.t.connectionId))[0]).toMatchObject({
+        state: 'quoting',
+        code: 'connection_ended',
+        leaseToken: null,
+      });
       expect(paidHits()).toHaveLength(1);
     }
   );

@@ -4,6 +4,7 @@ import { zeroAddress, type Address } from 'viem';
 import { z } from 'zod';
 import { tenant, type Tenant } from '@/connections/auth';
 import { config } from '@/connections/config';
+import { findActive } from '@/connections/rows';
 import { ownerRelay, WalletBusy, type OpenWallet, type Wallet } from '@/connections/relay';
 import { countHit, isPaymentsPaused } from '@/db/settings';
 import { currentGrant } from '@/grants/store';
@@ -139,6 +140,12 @@ const walletBusy = (key: string) =>
   refuse(
     'wallet_busy',
     `Too many owners are approving right now. Send idempotencyKey ${key} again with the same input in a minute; the quote is kept and not paid again.`
+  );
+
+const connectionEnded = () =>
+  refuse(
+    'connection_ended',
+    'This connection has ended, so no approval link opens. The quote is not paid again. Connect again to start a new swap.'
   );
 
 const takenOver = (key: string) =>
@@ -317,6 +324,10 @@ async function answer(row: SwapRow, read?: BackendAnswer): Promise<SwapResult> {
 async function openLink(t: Tenant, lease: SwapLease, key: string, deps: SwapDeps): Promise<SwapResult> {
   const stale = await failIfStale(lease);
   if (stale) return answer(stale);
+  if (!(await findActive(t.connectionId))) {
+    await releaseQuoted(lease, { code: 'connection_ended' });
+    return connectionEnded();
+  }
   const held = await renewQuoted(lease);
   if (!held) return takenOver(key);
   if (!held.paidAt) throw new Error(`swap ${held.id} holds a quote with no paid_at`);
@@ -369,9 +380,11 @@ function follow(t: Tenant, row: SwapRow, wallet: Wallet, deps: SwapDeps): void {
     .finally(() => sessionsInThisProcess.delete(row.id));
 }
 
-function replay(t: Tenant, row: SwapRow, key: string, deps: SwapDeps): Promise<SwapResult> {
+async function replay(t: Tenant, row: SwapRow, key: string, deps: SwapDeps): Promise<SwapResult> {
   const linkDead = row.state === 'awaiting_owner' && row.code !== SEND_STARTED && !sessionsInThisProcess.has(row.id);
-  return linkDead ? reopen(t, row, key, deps) : answer(row);
+  if (!linkDead) return answer(row);
+  if (!(await findActive(t.connectionId))) return connectionEnded();
+  return reopen(t, row, key, deps);
 }
 
 export async function swap(t: Tenant, input: SwapToolInput, deps: SwapDeps = DEFAULTS): Promise<SwapResult> {
