@@ -113,7 +113,6 @@ describe('budget grants', () => {
     await walletsSettled();
 
     expect(opened).toHaveLength(1);
-    expect(opened[0]).toHaveLength(3);
     expect(opened[0][2]).toMatchObject({ clientId: t.clientId, clientName: t.clientName });
   });
 

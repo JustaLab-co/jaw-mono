@@ -4,7 +4,7 @@ import { beforeAll, describe, expect, it } from 'vitest';
 import { setTestEnv } from '@/connections/testkit';
 import { getDb } from '@/db/client';
 import { connections, ownerCalls } from '@/db/schema';
-import { TEST_PG_URL, useTestDb, useTestPostgres } from '@/db/test-db';
+import { TEST_PG_URL, useTestDb, useTestPostgres, withoutOwnerCallsGuard } from '@/db/test-db';
 import { purge } from '@/reconciler/run';
 import {
   conclude,
@@ -27,6 +27,7 @@ const CALL = { to: '0x2222222222222222222222222222222222222222', data: '0xa9059c
 const URL_A = 'https://keys.test/cli-bridge#a';
 const URL_B = 'https://keys.test/cli-bridge#b';
 const inMinutes = (n: number) => new Date(Date.now() + n * 60_000);
+const DB_MINUTE = sql`interval '1 minute'`;
 
 setTestEnv();
 
@@ -80,15 +81,20 @@ const refusalOf = (write: Promise<unknown>) =>
     (e: Error & { cause?: Error }) => e.cause?.message ?? e.message
   );
 
+/** Moves approve_by one minute behind the database clock, which is the one the store compares with. */
+const lapse = (id: string) =>
+  withoutOwnerCallsGuard(() =>
+    getDb().execute(sql`update owner_calls set approve_by = statement_timestamp() - ${DB_MINUTE} where id = ${id}`)
+  );
+
 const set = (id: string, values: Partial<typeof ownerCalls.$inferInsert>) =>
   getDb().update(ownerCalls).set(values).where(eq(ownerCalls.id, id));
 
 const STATES = ['awaiting_owner', 'owner_declined', 'expired', 'sent', 'landed', 'reverted'] as const;
 
 async function rowIn(state: (typeof STATES)[number]): Promise<OwnerCallRow> {
-  const { connectionId, id } = await open(await newConnection(), {
-    approveBy: inMinutes(state === 'expired' ? -1 : 10),
-  });
+  const { connectionId, id } = await open(await newConnection());
+  if (state === 'expired') await lapse(id);
   if (state === 'owner_declined') await decline(connectionId, id, 'owner_declined');
   if (state === 'expired') await expirePast(connectionId);
   if (['sent', 'landed', 'reverted'].includes(state)) await markSent(connectionId, id, '0xcalls');
@@ -173,8 +179,10 @@ describe('insert and find', () => {
 describe('expirePast', () => {
   it('given an awaiting row past approve_by, then it expires; a live one and other connections are untouched', async () => {
     const connectionId = await newConnection();
-    const lapsed = await open(connectionId, { approveBy: inMinutes(-1) });
-    const other = await open(await newConnection(), { approveBy: inMinutes(-1) });
+    const lapsed = await open(connectionId);
+    const other = await open(await newConnection());
+    await lapse(lapsed.id);
+    await lapse(other.id);
 
     await expirePast(connectionId);
 
@@ -209,7 +217,8 @@ describe('reopenLink', () => {
   });
 
   it('given an awaiting row past approve_by that nobody expired, then the link does not reopen', async () => {
-    const row = await open(await newConnection(), { approveBy: inMinutes(-1) });
+    const row = await open(await newConnection());
+    await lapse(row.id);
     expect(row.state).toBe('awaiting_owner');
     expect(await reopenLink(row, URL_B)).toBeUndefined();
     expect((await rowOf(row.id)).walletUrl).toBe(URL_A);
@@ -263,7 +272,8 @@ describe('markSendStarted', () => {
   });
 
   it('given a row past approve_by that nobody expired, then the marker is refused', async () => {
-    const row = await open(await newConnection(), { approveBy: inMinutes(-1) });
+    const row = await open(await newConnection());
+    await lapse(row.id);
     expect(await markSendStarted(row.connectionId, row.id)).toBe(false);
     expect((await rowOf(row.id)).code).toBeNull();
   });
@@ -351,14 +361,23 @@ describe('the guard', () => {
 
   it('given a write, then updated_at moves to the time of that write', async () => {
     const row = await rowIn('awaiting_owner');
-    await getDb().execute(sql`alter table owner_calls disable trigger owner_calls_guard`);
-    await getDb().execute(sql`update owner_calls set updated_at = now() - interval '1 hour' where id = ${row.id}`);
-    await getDb().execute(sql`alter table owner_calls enable trigger owner_calls_guard`);
-    expect((await rowOf(row.id)).updatedAt.getTime()).toBeLessThan(Date.now() - 59 * 60_000);
+    const ageMinutes = async () => {
+      const [{ age }] = await getDb()
+        .select({ age: sql<string>`extract(epoch from statement_timestamp() - ${ownerCalls.updatedAt}) / 60` })
+        .from(ownerCalls)
+        .where(eq(ownerCalls.id, row.id));
+      return Number(age);
+    };
+    await withoutOwnerCallsGuard(() =>
+      getDb().execute(
+        sql`update owner_calls set updated_at = statement_timestamp() - interval '1 hour' where id = ${row.id}`
+      )
+    );
+    expect(await ageMinutes()).toBeGreaterThan(59);
 
     await setCode(row.connectionId, row.id, 'wallet_error:1');
 
-    expect((await rowOf(row.id)).updatedAt.getTime()).toBeGreaterThan(Date.now() - 60_000);
+    expect(await ageMinutes()).toBeLessThan(1);
   });
 
   it.each([

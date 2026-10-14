@@ -1,5 +1,5 @@
 import { randomBytes } from 'node:crypto';
-import { and, eq, gt, inArray, isNull, lt, sql, type SQL } from 'drizzle-orm';
+import { and, count, eq, gt, inArray, isNull, lt, ne, sql, type SQL } from 'drizzle-orm';
 import type { PgUpdateSetSource } from 'drizzle-orm/pg-core';
 import { getDb } from '@/db/client';
 import { ownerCalls } from '@/db/schema';
@@ -63,6 +63,22 @@ export const findById = (connectionId: string, id: string) =>
 
 export const findOpen = (connectionId: string) =>
   find(and(eq(ownerCalls.connectionId, connectionId), eq(ownerCalls.state, 'awaiting_owner'))!);
+
+/** Links still waiting on the owner across every connection of the account, apart from `except`. */
+export async function countOpenForAccount(account: string, except?: string): Promise<number> {
+  const [row] = await getDb()
+    .select({ n: count() })
+    .from(ownerCalls)
+    .where(
+      and(
+        sql`lower(${ownerCalls.account}) = ${account.toLowerCase()}`,
+        eq(ownerCalls.state, 'awaiting_owner'),
+        gt(ownerCalls.approveBy, dbNow),
+        except ? ne(ownerCalls.id, except) : undefined
+      )
+    );
+  return row.n;
+}
 
 export async function expirePast(connectionId: string): Promise<void> {
   await write(

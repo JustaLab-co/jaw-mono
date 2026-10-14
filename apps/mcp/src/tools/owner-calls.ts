@@ -19,6 +19,7 @@ import { approve } from '@/owner-calls/approve';
 import { readReceipt, type ReadReceipt, type Receipt } from '@/owner-calls/receipt';
 import {
   conclude,
+  countOpenForAccount,
   expirePast,
   findById,
   findByKey,
@@ -36,6 +37,8 @@ const ACCOUNT_LINK_RATE_LIMIT = 20;
 const STATUS_RATE_LIMIT = 30;
 const APPROVE_WINDOW_MS = 10 * 60_000;
 const SENT_GRACE_MS = 10 * 60_000;
+// Each open link holds a relay socket for up to APPROVE_WINDOW_MS, and the pool is shared by every user.
+const MAX_OPEN_PER_ACCOUNT = 3;
 
 const callInput = z.strictObject({
   to: z.string().regex(/^0x[0-9a-fA-F]{40}$/),
@@ -130,6 +133,12 @@ const inProgress = (open?: OwnerCallRow) =>
       ? `Request ${open.id} is still awaiting the owner on this connection under idempotencyKey ${open.idempotencyKey}. ` +
           'Send that key with the same input to get its link, follow it with jaw_send_calls_status, or wait until it ends.'
       : 'Another request is awaiting the owner on this connection. Try again shortly.'
+  );
+
+const accountBusy = () =>
+  refuse(
+    'calls_in_progress',
+    `This account already has ${MAX_OPEN_PER_ACCOUNT} requests awaiting the owner across its connections. Wait until one ends, then try again.`
   );
 
 const graceEnd = (row: OwnerCallRow) => new Date(row.approveBy.getTime() + SENT_GRACE_MS);
@@ -238,6 +247,7 @@ async function openWalletFor(t: Tenant, approveBy: Date, deps: OwnerCallDeps): P
 }
 
 async function reopen(t: Tenant, row: OwnerCallRow, deps: OwnerCallDeps): Promise<SendResult> {
+  if ((await countOpenForAccount(t.account, row.id)) >= MAX_OPEN_PER_ACCOUNT) return accountBusy();
   const wallet = await openWalletFor(t, row.approveBy, deps);
   if (!wallet) return walletBusy(row.idempotencyKey);
   let reopened: OwnerCallRow | undefined;
@@ -297,6 +307,7 @@ export async function sendCalls(t: Tenant, input: SendCallsInput, deps: OwnerCal
   if (gated) return gated;
   const open = await findOpen(t.connectionId);
   if (open) return inProgress(open);
+  if ((await countOpenForAccount(t.account)) >= MAX_OPEN_PER_ACCOUNT) return accountBusy();
   if (!(await findActive(t.connectionId))) return connectionEnded();
   const approveBy = new Date(Date.now() + APPROVE_WINDOW_MS);
   const wallet = await openWalletFor(t, approveBy, deps);

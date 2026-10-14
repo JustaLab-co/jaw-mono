@@ -100,3 +100,13 @@ export async function statusOnceParked(connectionId: string): Promise<string> {
   }
   throw new Error('nothing waited on the float lock and the connection did not end');
 }
+
+/** Runs fn with the owner_calls guard trigger off, and puts it back even when fn throws. */
+export async function withoutOwnerCallsGuard(fn: () => Promise<unknown>): Promise<void> {
+  await getDb().execute(sql`alter table owner_calls disable trigger owner_calls_guard`);
+  try {
+    await fn();
+  } finally {
+    await getDb().execute(sql`alter table owner_calls enable trigger owner_calls_guard`);
+  }
+}

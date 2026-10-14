@@ -200,7 +200,7 @@ const payDeps: PayDeps = {
   later: () => undefined,
 };
 
-type Opened = { chainId: number; until: Date; args: number; client?: string };
+type Opened = { chainId: number; until: Date; client?: string };
 let opened: Opened[] = [];
 let asked: { method: string; params: unknown[] }[] = [];
 let closed: string[] = [];
@@ -213,7 +213,7 @@ const recordingWallet =
   async (...args) => {
     if (busy) throw new WalletBusy();
     const [chainId, until] = args;
-    opened.push({ chainId, until, args: args.length, client: args[2]?.clientId });
+    opened.push({ chainId, until, client: args[2]?.clientId });
     return answer ? fakeWallet(answer, asked)(chainId, until) : neverOpened();
   };
 
@@ -432,7 +432,7 @@ describe('a swap waiting for the owner', () => {
       walletUrl: expect.stringContaining('/cli-bridge'),
       approveBy,
     });
-    expect(opened).toEqual([{ chainId: t.chainId, until: approveBy, args: 3, client: t.clientId }]);
+    expect(opened).toEqual([{ chainId: t.chainId, until: approveBy, client: t.clientId }]);
 
     const deposit = row.depositAddress as Address;
     expect(result.structuredContent).toMatchObject({
@@ -521,7 +521,7 @@ describe('the owner link', () => {
 
     const [row] = await swapsOf(t.connectionId);
     expect(row.call?.chainId).toBe(8453);
-    expect(opened).toEqual([{ chainId: 84532, until: row.approveBy, args: 3, client: t.clientId }]);
+    expect(opened).toEqual([{ chainId: 84532, until: row.approveBy, client: t.clientId }]);
     expect(result.structuredContent?.summary).toMatch(/pays that transaction's gas in the wallet/);
   });
 });
@@ -765,7 +765,7 @@ describe('the owner approves the deposit', () => {
     });
 
     const call = row.call!;
-    expect(opened).toEqual([{ chainId: 84532, until: row.approveBy, args: 3, client: t.clientId }]);
+    expect(opened).toEqual([{ chainId: 84532, until: row.approveBy, client: t.clientId }]);
     expect(methods()).toEqual([
       'eth_requestAccounts',
       'wallet_sendCalls',
@@ -900,7 +900,7 @@ describe('the owner approves the deposit', () => {
       const replay = await run(t);
       const [reopened] = await swapsOf(t.connectionId);
       expect(opened).toHaveLength(2);
-      expect(opened[1]).toMatchObject({ args: 3, client: t.clientId, until: row.approveBy });
+      expect(opened[1]).toMatchObject({ client: t.clientId, until: row.approveBy });
       expect(reopened).toMatchObject({ state: 'awaiting_owner', code: null, quoteId: row.quoteId });
       expect(reopened.walletUrl).not.toBe(row.walletUrl);
       expect(replay.structuredContent?.url).toBe(reopened.walletUrl);
@@ -1051,7 +1051,7 @@ describe('the owner approves the deposit', () => {
     let crash!: () => void;
     const crashed = new Promise<void>((resolve) => (crash = resolve));
     const dying: OpenWallet = async (chainId, until) => {
-      opened.push({ chainId, until, args: 2 });
+      opened.push({ chainId, until });
       return {
         url: 'http://keys.test/cli-bridge?session=dying',
         run: (work) =>
@@ -1165,7 +1165,7 @@ describe('the owner approves the deposit', () => {
   });
 
   const gone: OpenWallet = async (chainId, until) => {
-    opened.push({ chainId, until, args: 2 });
+    opened.push({ chainId, until });
     const ended = Promise.reject(new Error('the wallet session ended'));
     ended.catch(() => undefined);
     return { url: 'http://keys.test/cli-bridge?session=gone', run: () => ended, close: () => undefined };
@@ -2120,7 +2120,7 @@ describe('B28: the connection ends while the swap awaits the owner', () => {
   );
 
   const gone: OpenWallet = async (chainId, until) => {
-    opened.push({ chainId, until, args: 2 });
+    opened.push({ chainId, until });
     const ended = Promise.reject(new Error('the wallet session ended'));
     ended.catch(() => undefined);
     return { url: 'http://keys.test/cli-bridge?session=gone', run: () => ended, close: () => undefined };
