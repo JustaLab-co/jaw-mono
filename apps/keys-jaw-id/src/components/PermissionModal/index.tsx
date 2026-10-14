@@ -757,7 +757,8 @@ export const PermissionModal = ({
 
         console.log('Permission revoked');
         setStatus('Permission revoked successfully!');
-        onSuccess?.(result);
+        // The revoke has mined, so it succeeded even if the relay had no row left to remove.
+        onSuccess?.(result.pending ? { success: true, pending: true } : { success: true });
       }
     } catch (error) {
       console.error('Error in permission operation:', error);

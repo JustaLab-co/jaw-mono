@@ -109,4 +109,12 @@ describe('PermissionModal revoke', () => {
 
     expect(onSuccess).toHaveBeenCalledWith({ success: true });
   });
+
+  it('tells the dapp the revoke succeeded when the relay had no row left to remove', async () => {
+    revokePermission.mockResolvedValue({ success: false });
+
+    const onSuccess = await confirmRevoke();
+
+    expect(onSuccess).toHaveBeenCalledWith({ success: true });
+  });
 });

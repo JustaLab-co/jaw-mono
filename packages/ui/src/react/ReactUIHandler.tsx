@@ -3271,8 +3271,9 @@ function RevokePermissionDialogWrapper({
         request.data.address
       );
 
+      // The revoke has mined, so it succeeded even if the relay had no row left to remove.
       setStatus('Permission revoked successfully!');
-      onApprove(result);
+      onApprove(result.pending ? { success: true, pending: true } : { success: true });
     } catch (error) {
       console.error('Permission revoke failed:', error);
       const errorObj = error instanceof Error ? error : new Error(String(error));

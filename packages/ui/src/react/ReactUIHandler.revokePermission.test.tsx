@@ -108,4 +108,13 @@ describe('ReactUIHandler revoke', () => {
     expect(response).toMatchObject({ approved: true, data: { success: true } });
     expect((response as { data: object }).data).not.toHaveProperty('pending');
   });
+
+  it('tells the dapp the revoke succeeded when the relay had no row left to remove', async () => {
+    revokePermission.mockResolvedValue({ success: false });
+
+    const response = await confirmRevoke();
+
+    expect(response).toMatchObject({ approved: true, data: { success: true } });
+    expect((response as { data: object }).data).not.toHaveProperty('pending');
+  });
 });
