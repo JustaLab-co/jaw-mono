@@ -8,7 +8,8 @@ import { getDb } from '@/db/client';
 import { grants, payments, settings } from '@/db/schema';
 import { TEST_PG_URL, useTestDb, useTestPostgres } from '@/db/test-db';
 import { withFloat } from '@/payments/float-lock';
-import { disconnect, type DisconnectDeps, type Sent } from './disconnect';
+import { LEASE_MS, PAY_LIMIT_MS } from '@/payments/store';
+import { disconnect, sweepOnReuse, type DisconnectDeps, type Sent } from './disconnect';
 import { budgetConnection, callTool, connect, mcp, setTestEnv } from './testkit';
 import { verifyBearer, type Tenant } from './auth';
 
@@ -365,6 +366,53 @@ describe('given the batch landed but its reply was lost', () => {
 
     expect(sent).toEqual([]);
     expect(result.structuredContent).toMatchObject({ revoked: [], stillApproved: [], swept: '0', left: '1800' });
+    expect(await revokedAt(permissionId)).not.toBeNull();
+    expect(await listed(c.access_token)).toBe(401);
+  });
+});
+
+describe('given a reused refresh token while a top-up is in flight', () => {
+  const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
+
+  it('when the top-up outlives the call limit but not its lease, then the sweep waits for it and returns the float', async () => {
+    const { c, tenant, permissionId } = await budgetConnection(async () => approved);
+    const id = `pay_${randomBytes(8).toString('hex')}`;
+    await getDb()
+      .insert(payments)
+      .values({
+        id,
+        connectionId: tenant.connectionId,
+        idempotencyKey: randomBytes(8).toString('hex'),
+        requestHash: 'h',
+        permissionId,
+        payer: tenant.sessionAddress.toLowerCase(),
+        url: 'https://seller.example/x',
+        leaseUntil: new Date(Date.now() + LEASE_MS),
+        topUpAmount: '105000',
+      });
+    const { deps, sent } = fakes();
+    // Once the sweep is waiting, the local clock jumps past the call limit but stays inside the lease.
+    const real = Date.now.bind(Date);
+    let skew = 0;
+    const clock = vi.spyOn(Date, 'now').mockImplementation(() => real() + skew);
+
+    try {
+      const sweeping = sweepOnReuse(tenant.connectionId, tenant.sessionKey(), deps);
+      await sleep(200);
+      skew = PAY_LIMIT_MS + 10_000;
+      await sleep(1_000);
+      await getDb()
+        .update(payments)
+        .set({ leaseUntil: sql`now() - interval '1 second'` })
+        .where(eq(payments.id, id));
+      await sweeping;
+    } finally {
+      clock.mockRestore();
+    }
+
+    expect(sent).toHaveLength(1);
+    // 0.5 float less the 0.0025 fee reserve.
+    expect(args(sent[0][1]).args).toEqual([c.signer.address, 497_500n]);
     expect(await revokedAt(permissionId)).not.toBeNull();
     expect(await listed(c.access_token)).toBe(401);
   });

@@ -26,7 +26,7 @@ import { publicClientFor, rpcUrl } from '@/lib/chain';
 import { errorLabel, log } from '@/lib/edge';
 import { FloatBusy, LOCK_WAIT_MS, withFloat, type FloatHold } from '@/payments/float-lock';
 import { stillHeld } from '@/payments/refill';
-import { holdingRows, PAY_LIMIT_MS, topUpInFlight } from '@/payments/store';
+import { holdingRows, LEASE_MS, topUpInFlight } from '@/payments/store';
 import { refusal } from '@/tools/reply';
 import type { Tenant } from './auth';
 import { config, SUPPORTED_CHAINS } from './config';
@@ -224,8 +224,8 @@ export const retire = (s: Session, deps = DEFAULTS): Promise<Returned | string> 
  * Returns the float, revokes the budgets and ends a connection whose refresh
  * token was reused, with the key that token's wrap still opened. The key exists
  * only in this request, so a top-up still landing is waited for, up to the
- * longest a call runs. Paused payments or a failed return leave the float at
- * the payer.
+ * lease that keeps it in flight. Paused payments or a failed return leave the
+ * float at the payer.
  */
 export async function sweepOnReuse(connectionId: string, key: Hex, deps = DEFAULTS): Promise<void> {
   if (await isPaymentsPaused()) return;
@@ -241,7 +241,7 @@ export async function sweepOnReuse(connectionId: string, key: Hex, deps = DEFAUL
     sessionAddress: conn.sessionAddress as Address,
     sessionKey: () => key,
   };
-  const until = Date.now() + PAY_LIMIT_MS;
+  const until = Date.now() + LEASE_MS;
   for (;;) {
     const outcome = await returnAndEnd(session, deps).catch((err: unknown) => errorLabel(err));
     if (outcome !== REFUSALS.landing || Date.now() > until) {
