@@ -6,7 +6,7 @@
 
 - `calls-read-only`: a connection with only `wallet:read` and no budget gets a wallet link.
 - `calls-chain`: a chain the JAW wallet does not support gives `unsupported_chain` before any row or link.
-- `calls-target`: a call to the account itself, the permission manager or the EntryPoint gives `call_target_refused` before any row or link.
+- `calls-target`: a call to the account itself, the permission manager or any EntryPoint (0.6 to 0.9) gives `call_target_refused` before any row or link.
 - `calls-paused`: with payments paused, a new `jaw_send_calls` is refused as `payments_paused` with no link, and `jaw_send_calls_status` keeps working.
 - `calls-happy`: link, owner approval, `sent` with a calls id, then `jaw_send_calls_status` until `landed` with a `txHash`.
 - `calls-decline`: the owner rejects the calls in the wallet and the state is `owner_declined`.
@@ -42,7 +42,7 @@ A call that moves something visible on Base Sepolia is a USDC transfer of 0.01 t
 
 - calls-read-only: connect with `wallet:read` only; the connect page asks for no budget. Then `calls`. Pass: `awaiting_owner` with a `url`, `refusal` absent, and no `grants` row for the connection.
 - calls-chain: `calls '<json>' 1234567`. Pass: `unsupported_chain`, no `owner_calls` row.
-- calls-target: `calls` with `to` set to the connected account, then to the permission manager, then to `0x4337084D9E255Ff0702461CF8895CE9E3b5Ff108` (EntryPoint 0.8). Pass: `call_target_refused` each time, no `owner_calls` row.
+- calls-target: `calls` with `to` set to the connected account, then to the permission manager, then to each EntryPoint: `0x5FF137D4b0FDCD49DcA30c7CF57E578a026d2789` (0.6), `0x0000000071727De22E5E9d8BAf0edAc6f37da032` (0.7), `0x4337084D9E255Ff0702461CF8895CE9E3b5Ff108` (0.8) and `0x433709009B8330FDa32311DF1C2AFA402eD8D009` (0.9). Pass: `call_target_refused` each time, no `owner_calls` row.
 - calls-paused: set `payments_paused` with psql, then `calls` with a new key: `payments_paused`, no row. `calls-status` on an earlier id still answers.
 - calls-happy: `calls`, open the `url` as the owner and approve, then `calls-status <id>` until it changes. Pass: `sent` with a `callsId`, then `landed` with a `txHash`, and the Base Sepolia receipt of that transaction shows the USDC transfer from the account.
 - calls-decline: reject in the wallet, then `calls-status <id>`. Pass: `owner_declined`, no `callsId`, the summary says nothing was sent.
@@ -56,7 +56,7 @@ A call that moves something visible on Base Sepolia is a USDC transfer of 0.01 t
 
 A run shows these states across its drives: `awaiting_owner`, `sent`, `landed`, `owner_declined`, `expired`. A drive that does not reach one of them for lack of the owner step is not counted as passing it.
 
-Not driven here: `reverted` (the wallet usually refuses a batch that fails its simulation, so a revert on chain is hard to force by hand), the 10 links and 30 status reads a minute per connection (`rate_limited`), a full owner pool (`wallet_busy`), a connection ended while its request waits (`connection_ended`), a wallet that answers the account request with an error code (the row keeps a `wallet_error:<n>` code, shows no `url`, and the same key opens a new link), and a receipt read that fails (the answer is the stored row with a note that the chain could not be read). Unit tests and the Postgres tests cover them.
+Not driven here: `reverted` (the wallet usually refuses a batch that fails its simulation, so a revert on chain is hard to force by hand), the 10 links a minute per connection, the 20 links a minute per account and the 30 status reads a minute per connection (`rate_limited`), a full owner pool (`wallet_busy`), a connection ended while its request waits (`connection_ended`), a wallet that answers the account request with an error code (the row keeps a `wallet_error:<n>` code, shows no `url`, and the same key opens a new link), and a receipt read that fails (the answer is the stored row with a note that the chain could not be read). Unit tests and the Postgres tests cover them.
 
 ## Risks
 
@@ -64,7 +64,7 @@ Not driven here: `reverted` (the wallet usually refuses a batch that fails its s
 - A session key must never sign these calls, and nothing may come out of the budget. A connection with no budget must still get its link, and the payer's balance and the budget's `spentToday` must not move after a landed request.
 - A link must not open again once the wallet was asked to send: a row with the `send_started` marker never reopens, and an unmarked one reopens only when no session for it is live in the process.
 - A retry must never ask the owner twice. Compare the `owner_calls` rows with the number of `calls` commands.
-- The refused targets are the only server-side check on where calls go. The account, the permission manager and the EntryPoint must be refused before a row is written, whatever the case of the address.
+- The refused targets are the only server-side check on where calls go. The account, the permission manager and every EntryPoint must be refused before a row is written, whatever the case of the address.
 
 ## What counts as evidence
 

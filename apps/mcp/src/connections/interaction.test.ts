@@ -119,6 +119,25 @@ describe('connecting through the owner wallet', () => {
     expect((await rowOf(start.uid!)).account).toBe(signer.address);
   });
 
+  it('given an authorization, then the wallet opens for the client that asked', async () => {
+    const opened: unknown[][] = [];
+    const answers = fakeWallet(walletAnswers(owner()));
+    setWallet({
+      openWallet: async (...args) => {
+        opened.push(args);
+        return answers(...args);
+      },
+    });
+    const start = await startAuthorization(new Browser(), { scope: 'wallet:read' });
+    await walletsSettled();
+
+    const row = await rowOf(start.uid!);
+    expect(opened).toHaveLength(1);
+    expect(opened[0]).toHaveLength(3);
+    expect(opened[0][2]).toMatchObject({ clientId: row.clientId, clientName: row.clientName });
+    expect(row.clientId).toBe('jaw-cli');
+  });
+
   it('given a spending scope, then after the sign-in the wallet is asked for the default daily budget with the session key as spender', async () => {
     const asked: { method: string; params: unknown[] }[] = [];
     setWallet({ openWallet: fakeWallet(walletAnswers(owner()), asked) });

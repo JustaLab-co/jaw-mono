@@ -54,6 +54,7 @@ const TOOLS: Record<string, { needs: ConnectionScope[]; args: object }> = {
   },
   jaw_swap_status: { needs: ['wallet:read'], args: { quoteId: `aurora:${RECIPIENT}` } },
   jaw_transfer: { needs: ['wallet:send'], args: { to: RECIPIENT, amount: '0.01' } },
+  // An unsupported chain is refused in the tool body, after the scope check and before a wallet opens.
   jaw_send_calls: {
     needs: ['wallet:read'],
     args: { chainId: UNSUPPORTED_ORIGIN_CHAIN, calls: [{ to: RECIPIENT, data: '0xa9059cbb' }] },

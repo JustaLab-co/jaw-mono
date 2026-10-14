@@ -5,7 +5,7 @@ import { verifyBearer, type Tenant } from '@/connections/auth';
 import { callTool, connect, setTestEnv } from '@/connections/testkit';
 import { endConnection } from '@/connections/rows';
 import { getDb } from '@/db/client';
-import { connections, grants, settings } from '@/db/schema';
+import { connections, grants, sends, settings } from '@/db/schema';
 import { lockWaiters, TEST_PG_URL, useTestDb, useTestPostgres } from '@/db/test-db';
 import { currentGrant } from '@/grants/store';
 import { withFloat, type FloatHold } from '@/payments/float-lock';
@@ -46,12 +46,15 @@ vi.mock('@/adapters/session-host', async (original) => ({
   }),
 }));
 
-const chain = vi.hoisted(() => ({ permissionId: '0x' }));
+const chain = vi.hoisted(() => ({ permissionId: '0x', headUnreadable: false }));
 vi.mock('@/lib/chain', async (original) => ({
   ...(await original<object>()),
   publicClientFor: () =>
     ({
-      getBlockNumber: async () => 77n,
+      getBlockNumber: async () => {
+        if (chain.headUnreadable) throw new Error('node down');
+        return 77n;
+      },
       readContract: async ({ functionName }: { functionName: string }) => {
         if (functionName === 'getHash') return chain.permissionId;
         if (functionName === 'getCurrentPeriod') return { start: 1, end: 2_000_000_000, spend: 0n };
@@ -68,6 +71,7 @@ afterEach(async () => {
   bridge.fail = undefined;
   bridge.taken = false;
   fence.lost = false;
+  chain.headUnreadable = false;
   await getDb().delete(settings);
 });
 
@@ -142,6 +146,24 @@ describe('jaw_transfer', () => {
     expect(result.content[0].text).toContain('Check it before sending again');
     expect(result.content[0].text).not.toContain('Nothing was sent');
     expect(bridge.sent).toHaveLength(1);
+  });
+
+  it('given an amount of zero, then it refuses by name and sends nothing', async () => {
+    const { c } = await sender();
+    const result = await callTool(c.access_token, 'jaw_transfer', { to: BOB, amount: '0' });
+    expect(result.isError).toBe(true);
+    expect(result.content[0].text).toBe('A transfer of zero sends nothing.');
+    expect(bridge.sent).toEqual([]);
+  });
+
+  it('given a head block the node cannot give, then it refuses as unreadable and sends nothing', async () => {
+    const { c, t } = await sender();
+    chain.headUnreadable = true;
+    const result = await callTool(c.access_token, 'jaw_transfer', { to: BOB, amount: '0.25' });
+    expect(result.isError).toBe(true);
+    expect(result.content[0].text).toBe('Nothing was sent: the budget could not be read from the chain right now.');
+    expect(bridge.sent).toEqual([]);
+    expect(await getDb().select().from(sends).where(eq(sends.connectionId, t.connectionId))).toEqual([]);
   });
 
   it('given a transfer over what the budget has left, refused in simulation, then it says nothing was sent', async () => {

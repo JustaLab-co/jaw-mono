@@ -34,7 +34,7 @@ await new Promise((r) => relay.once('listening', r));
 setTestEnv();
 process.env.JAW_RELAY_URL = `ws://127.0.0.1:${(relay.address() as AddressInfo).port}`;
 process.env.JAW_MCP_API_KEY = 'server-secret-key';
-const { connectRelay, ownerRelay, SESSION_LIMITS, WalletBusy } = await import('./relay');
+const { appNameOf, connectRelay, ownerRelay, SESSION_LIMITS, WalletBusy } = await import('./relay');
 const openRelay = (chainId: number, ms = 30_000, client?: { clientId: string; clientName: string }) =>
   ownerRelay(chainId, new Date(Date.now() + ms), client);
 afterAll(() => relay.close());
@@ -148,6 +148,52 @@ describe('given authorizations hold every session of their pool', () => {
 
     await expect(connectRelay(84532, until)).rejects.toBeInstanceOf(WalletBusy);
     expect((await ownerRelay(84532, until)).url).toMatch(/cli-bridge/);
+  });
+
+  describe('appNameOf', () => {
+    const VIA = ' (via JAW MCP)';
+    const named = (clientName: string, clientId = 'https://agent.example/client.json') =>
+      appNameOf({ clientId, clientName });
+
+    it.each(['constructor', '__proto__', 'toString', 'hasOwnProperty'])(
+      'given the client id %s, then it is not taken for a first-party client',
+      (clientId) => {
+        expect(named('Evil Agent', clientId)).toBe(`Evil Agent${VIA}`);
+      }
+    );
+
+    it('given invisible characters between spaces, then one space is left', () => {
+      expect(named('A \u200b B')).toBe(`A B${VIA}`);
+      expect(named('A \u200b\u200b \u202e B')).toBe(`A B${VIA}`);
+    });
+
+    it('given a format character outside the default-ignorable set, then it is dropped', () => {
+      expect(named('A\u0600B')).toBe(`AB${VIA}`);
+    });
+
+    it('given a default-ignorable letter, then it is dropped', () => {
+      expect(named('A\u3164B')).toBe(`AB${VIA}`);
+    });
+
+    it('given tabs and newlines between words, then each run becomes one space', () => {
+      expect(named('A\t\nB')).toBe(`A B${VIA}`);
+      expect(named('A \r\n\t B')).toBe(`A B${VIA}`);
+    });
+
+    it('given a name that is only invisible characters, then it falls back to JAW MCP', () => {
+      expect(named('\u0600\u3164 \t')).toBe('JAW MCP');
+    });
+
+    it('given a cut that lands after a space, then no space is left before the suffix', () => {
+      const name = named(`${'a'.repeat(49)} b`);
+      expect(name).toBe(`${'a'.repeat(49)}${VIA}`);
+    });
+
+    it('given a name of emoji, then the cut keeps whole code points and the suffix intact', () => {
+      const name = named('\u{1F600}'.repeat(60));
+      expect(name).toBe(`${'\u{1F600}'.repeat(50)}${VIA}`);
+      expect(Array.from(name)).toHaveLength(64);
+    });
   });
 
   describe('the app name the page shows', () => {
