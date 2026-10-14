@@ -101,3 +101,9 @@ main :is(p, li, td) > a {
 .page-actions-menu [role='menuitem']:hover {
   background: var(--vocs-color-accenta3);
 }
+
+/* Copy Markdown already sits under the title; the outline stays for navigation. */
+[data-v-copy-for-ai],
+div:has(> [data-v-copy-for-ai]:only-child) {
+  display: none;
+}
