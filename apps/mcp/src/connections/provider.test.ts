@@ -629,6 +629,41 @@ describe('authorization server', () => {
     expect(recoverable(await dumpStrings(), config().ring, pending.id, [])).toEqual([]);
   });
 
+  it('given a code exchange whose refresh token fails to store, then the session key is sealed again for the reconciler', async () => {
+    const browser = new Browser();
+    const start = await startAuthorization(browser);
+    await walletsSettled();
+    const redirected = await follow(browser, `${ISSUER}/interaction/${start.uid}/complete?ticket=${start.ticket}`);
+    await db.exec(`
+      create or replace function fail_refresh() returns trigger language plpgsql as $$
+      begin
+        raise exception 'refresh token refused';
+      end $$;
+      create or replace trigger fail_refresh before insert on oauth_payloads
+        for each row when (new.model = 'RefreshToken') execute function fail_refresh();`);
+    try {
+      const issued = await token({
+        grant_type: 'authorization_code',
+        code: redirected.searchParams.get('code')!,
+        redirect_uri: REDIRECT,
+        client_id: 'jaw-cli',
+        code_verifier: start.verifier,
+        resource: RESOURCE,
+      });
+      expect(issued.status).not.toBe(200);
+    } finally {
+      await db.exec('drop trigger if exists fail_refresh on oauth_payloads');
+    }
+    const [row] = (
+      await db.query<{ id: string; session_address: string; sealed_key: string | null }>(
+        'select id, session_address, sealed_key from connections where interaction_uid = $1',
+        [start.uid]
+      )
+    ).rows;
+    expect(row.sealed_key).not.toBeNull();
+    expect(privateKeyToAddress(open(config().ring, row.sealed_key as never, row.id))).toBe(row.session_address);
+  });
+
   it('keeps the session key across refresh rotations', async () => {
     const c = await connect();
     const address = await sessionAddressOf(c.access_token);

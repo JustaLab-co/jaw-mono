@@ -7,8 +7,8 @@ import { getDb } from '@/db/client';
 import { connections, oauthPayloads } from '@/db/schema';
 import { errorLabel, log } from '@/lib/edge';
 import { sweepOnReuse } from './disconnect';
-import { CONNECTION_TTL_MS, revokeByGrant, takeSealedKey } from './rows';
-import { nextRefreshId, open, unwrap, wrap, type KeyRing, type Wrapped } from './seal';
+import { CONNECTION_TTL_MS, restoreSealedKey, revokeByGrant, takeSealedKey } from './rows';
+import { nextRefreshId, open, seal, unwrap, wrap, type KeyRing, type Wrapped } from './seal';
 
 // A client whose refresh response was lost retries with the token it still holds.
 // Judged when find reads the token; the unused successor is what stops a replay.
@@ -142,54 +142,63 @@ export class PgAdapter implements Adapter {
     const connectionId = (row.payload as AdapterPayload).accountId!;
     const presented = ctx.oidc.entities.RotatedRefreshToken?.jti;
     const seen = refreshes.get(ctx);
-    await getDb().transaction(async (tx) => {
-      // Ending a connection locks its row before deleting the tokens, so a rotation
-      // either commits first and is deleted with them, or sees the connection ended.
-      const [live] = await tx
-        .select({ id: connections.id })
-        .from(connections)
-        .where(and(eq(connections.id, connectionId), eq(connections.status, 'active')))
-        .for('share');
-      if (!live) throw new errors.InvalidGrant('connection ended');
-      if (presented) {
-        // Requests presenting the same token take turns here.
-        const [from] = await tx
-          .select()
-          .from(oauthPayloads)
-          .where(eq(oauthPayloads.key, this.key(presented)))
-          .for('update');
-        if (!from) throw new errors.InvalidGrant('refresh token not found');
-        if (!seen) throw new errors.InvalidGrant('refresh token holds no key');
-        requestKeys.set(ctx, seen.key);
-        if (from.consumedAt) {
-          // A statement of its own, so it sees the successor stored by the request this one waited on.
-          const [state] = await tx
-            .select({
-              inWindow: sql<boolean>`${oauthPayloads.consumedAt} > ${windowStart}`,
-              successorUnused: sql<boolean>`exists (
-                select 1 from oauth_payloads s where s.key = oauth_payloads.successor_key and s.consumed_at is null)`,
-            })
+    try {
+      await getDb().transaction(async (tx) => {
+        // Ending a connection locks its row before deleting the tokens, so a rotation
+        // either commits first and is deleted with them, or sees the connection ended.
+        const [live] = await tx
+          .select({ id: connections.id })
+          .from(connections)
+          .where(and(eq(connections.id, connectionId), eq(connections.status, 'active')))
+          .for('share');
+        if (!live) throw new errors.InvalidGrant('connection ended');
+        if (presented) {
+          // Requests presenting the same token take turns here.
+          const [from] = await tx
+            .select()
             .from(oauthPayloads)
+            .where(eq(oauthPayloads.key, this.key(presented)))
+            .for('update');
+          if (!from) throw new errors.InvalidGrant('refresh token not found');
+          if (!seen) throw new errors.InvalidGrant('refresh token holds no key');
+          requestKeys.set(ctx, seen.key);
+          if (from.consumedAt) {
+            // A statement of its own, so it sees the successor stored by the request this one waited on.
+            const [state] = await tx
+              .select({
+                inWindow: sql<boolean>`${oauthPayloads.consumedAt} > ${windowStart}`,
+                successorUnused: sql<boolean>`exists (
+                select 1 from oauth_payloads s where s.key = oauth_payloads.successor_key and s.consumed_at is null)`,
+              })
+              .from(oauthPayloads)
+              .where(eq(oauthPayloads.key, from.key));
+            // One that saw the token live was not admitted as a retry, so its window is judged now.
+            const reissue =
+              from.successorKey === this.key(id) && state.successorUnused && (seen.retry || state.inWindow);
+            if (!reissue) throw new errors.InvalidGrant('grant already used');
+            return;
+          }
+          // Taken after the lock wait, which then does not shorten the client's window.
+          await tx
+            .update(oauthPayloads)
+            .set({ consumedAt: sql`statement_timestamp()`, successorKey: this.key(id) })
             .where(eq(oauthPayloads.key, from.key));
-          // One that saw the token live was not admitted as a retry, so its window is judged now.
-          const reissue = from.successorKey === this.key(id) && state.successorUnused && (seen.retry || state.inWindow);
-          if (!reissue) throw new errors.InvalidGrant('grant already used');
-          return;
+          // Using a token ends its predecessor's retry window, and with it the need for that wrap.
+          await tx.update(oauthPayloads).set({ keyWrap: null }).where(eq(oauthPayloads.successorKey, from.key));
         }
-        // Taken after the lock wait, which then does not shorten the client's window.
+        const key = requestKeys.get(ctx);
+        if (!key) throw new Error('no session key for this refresh token');
         await tx
-          .update(oauthPayloads)
-          .set({ consumedAt: sql`statement_timestamp()`, successorKey: this.key(id) })
-          .where(eq(oauthPayloads.key, from.key));
-        // Using a token ends its predecessor's retry window, and with it the need for that wrap.
-        await tx.update(oauthPayloads).set({ keyWrap: null }).where(eq(oauthPayloads.successorKey, from.key));
-      }
+          .insert(oauthPayloads)
+          .values({ key: this.key(id), ...row, keyWrap: wrap(this.ring, key, connectionId, id) });
+      });
+    } catch (err) {
+      // The code is spent and its exchange took the sealed key: put it back so
+      // the reconciler can still retire the connection.
       const key = requestKeys.get(ctx);
-      if (!key) throw new Error('no session key for this refresh token');
-      await tx
-        .insert(oauthPayloads)
-        .values({ key: this.key(id), ...row, keyWrap: wrap(this.ring, key, connectionId, id) });
-    });
+      if (!presented && key) await restoreSealedKey(connectionId, seal(this.ring, key, connectionId));
+      throw err;
+    }
     await sweepWraps();
     // A client that refreshes is still active: slide its expiry forward so a
     // connection in use never hits the 30-day cliff. Its grant slides with it,
