@@ -1,0 +1,42 @@
+/* Ask AI as a compact pill in the bottom-right corner instead of a centered bar. */
+[data-v-ask-ai-container] {
+  left: auto;
+  right: 1.5rem;
+  translate: none;
+  transform: none;
+}
+
+[data-v-ask-ai-container] button {
+  max-width: max-content;
+  gap: 0.5rem;
+  padding: 0 1rem;
+  border-radius: 9999px;
+  box-shadow: 0 1px 3px rgb(0 0 0 / 0.08);
+}
+
+[data-v-ask-ai-container] button::before {
+  content: '';
+  width: 1rem;
+  height: 1rem;
+  background-color: currentColor;
+  mask: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M7.9 20A9 9 0 1 0 4 16.1L2 22Z'/%3E%3C/svg%3E")
+    center / contain no-repeat;
+}
+
+[data-v-ask-ai-container] button > div:last-child {
+  display: none;
+}
+
+[role='presentation'] > [role='menu'][data-side='top'] {
+  --anchor-width: 220px;
+}
+
+main :is(p, li, td) > a {
+  color: var(--vocs-color-accent);
+  text-decoration-color: color-mix(in srgb, var(--vocs-color-accent) 40%, transparent);
+}
+
+/* jaw.id buttons put white text on the blue accent. */
+:root {
+  --vocs-color-accentInvert: light-dark(white, black);
+}

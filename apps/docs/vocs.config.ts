@@ -14,6 +14,7 @@ export default defineConfig({
   // Set to 'warn' to allow build to succeed with dead links (they'll be logged as warnings)
   checkDeadlinks: 'warn',
   title: 'JAW.id Documentation',
+  accentColor: 'light-dark(#0851ff, #6b93ff)',
   description: 'Official documentation for JAW.id',
   logoUrl: {
     light: '/logo.svg',
