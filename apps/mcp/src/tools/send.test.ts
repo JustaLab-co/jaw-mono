@@ -1,5 +1,5 @@
 import { eq } from 'drizzle-orm';
-import { decodeFunctionData, encodeFunctionData, erc20Abi, type Address, type Hex } from 'viem';
+import { decodeFunctionData, encodeFunctionData, erc20Abi, type Address, type Hex, type PublicClient } from 'viem';
 import { afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
 import { verifyBearer, type Tenant } from '@/connections/auth';
 import {
@@ -16,6 +16,7 @@ import { endConnection } from '@/connections/rows';
 import { getDb } from '@/db/client';
 import { connections, grants, settings } from '@/db/schema';
 import { lockWaiters, TEST_PG_URL, useTestDb, useTestPostgres } from '@/db/test-db';
+import { currentGrant } from '@/grants/store';
 import { withFloat, type FloatHold } from '@/payments/float-lock';
 import { requestBudget } from './request-budget';
 
@@ -55,6 +56,19 @@ vi.mock('@/adapters/session-host', async (original) => ({
   }),
 }));
 
+const chain = vi.hoisted(() => ({ permissionId: '0x' }));
+vi.mock('@/lib/chain', async (original) => ({
+  ...(await original<object>()),
+  publicClientFor: () =>
+    ({
+      readContract: async ({ functionName }: { functionName: string }) => {
+        if (functionName === 'getHash') return chain.permissionId;
+        if (functionName === 'getCurrentPeriod') return { start: 1, end: 2_000_000_000, spend: 0n };
+        throw new Error(`this node does not answer ${functionName}`);
+      },
+    }) as unknown as PublicClient,
+}));
+
 setTestEnv();
 beforeAll(useTestDb);
 afterEach(async () => {
@@ -77,6 +91,7 @@ async function sender(calls: { target: Address; functionSignature: string }[] = 
     });
     await walletsSettled();
   }
+  chain.permissionId = (await currentGrant(t.connectionId))?.permissionId ?? '0x';
   return { c, t };
 }
 

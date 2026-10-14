@@ -20,6 +20,7 @@ import { connections } from '@/db/schema';
 import type { Grant } from '@/grants/store';
 import { errorLabel, log } from '@/lib/edge';
 import { nonceUsed } from './confirm';
+import { dayLeft, readDaySpend } from './day-spend';
 import { FloatBusy, FloatLost, inTurn, withFloat, type FloatHold } from './float-lock';
 import {
   addTopUp,
@@ -212,6 +213,11 @@ export function refillHook(c: RefillContext): EnsureFunds {
             spentThisSession,
           });
           if (!verdict.ok) return { ok: false, code: verdict.code, reason: verdict.reason };
+          const day = await readDaySpend(c.grant, c.payer, entries, c.clients);
+          if (day && BigInt(requirement.amount) > dayLeft(BigInt(c.grant.allowance), day)) {
+            const reason = `payment ${requirement.amount} would pass the ${c.grant.allowance} a day shared with transfers and calls`;
+            return { ok: false, code: 'budget_exhausted', reason };
+          }
           const refillMs = budget.left() - SEND_RESERVE_MS;
           if (refillMs < MIN_REFILL_MS) return timedOut('the refill waited too long to still send');
           let pinned = block;
