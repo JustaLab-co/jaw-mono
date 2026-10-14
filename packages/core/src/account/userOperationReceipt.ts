@@ -7,6 +7,8 @@ import {
     type UserOperationReceipt,
 } from 'viem/account-abstraction';
 
+import { withoutApiKey } from '../utils/redact.js';
+
 export type OperationReceipt = Pick<UserOperationReceipt, 'success' | 'receipt'>;
 
 // How long the chain is read once the bundler has failed to answer: 20 reads,
@@ -38,7 +40,7 @@ export async function waitForOperationReceipt(
         return await bundlerClient.waitForUserOperationReceipt({ hash });
     } catch (error) {
         if (error instanceof Error && error.name === 'WaitForUserOperationReceiptTimeoutError') throw error;
-        console.warn(`The bundler returned no receipt for ${hash}, reading it from the chain:`, error);
+        console.warn(`The bundler returned no receipt for ${hash}, reading it from the chain:`, withoutApiKey(error));
     }
 
     const client = bundlerClient.client;
@@ -65,7 +67,7 @@ export async function waitForOperationReceipt(
             }
         }
     } catch (error) {
-        console.warn(`Reading the receipt for ${hash} from the chain failed:`, error);
+        console.warn(`Reading the receipt for ${hash} from the chain failed:`, withoutApiKey(error));
     }
     return undefined;
 }

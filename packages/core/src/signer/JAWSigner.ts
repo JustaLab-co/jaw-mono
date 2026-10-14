@@ -32,6 +32,7 @@ import {
     handleGetCapabilitiesRequest,
 } from '../rpc/index.js';
 import { fetchRPCRequest, ensureIntNumber, hexStringFromNumber } from '../utils/index.js';
+import { withoutApiKey } from '../utils/redact.js';
 import { clearSignerType } from './signerStorage.js';
 
 type ConstructorOptions = {
@@ -546,7 +547,7 @@ export abstract class JAWSigner implements Signer {
         if (userOpHash && chainId) {
             storeCallStatus(userOpHash, chainId, apiKey);
             waitForReceiptInBackground(userOpHash, chainId, apiKey).catch((error) => {
-                console.error('Background receipt wait failed:', error);
+                console.error('Background receipt wait failed:', withoutApiKey(error));
             });
         }
     }
