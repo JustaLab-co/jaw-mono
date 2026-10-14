@@ -261,6 +261,12 @@ describe('setCode and decline', () => {
     const row = await rowIn('sent');
     expect(await decline(row.connectionId, row.id, 'owner_declined')).toBeUndefined();
   });
+
+  it('given an expired row, when declined, then nothing is written and it stays expired', async () => {
+    const row = await rowIn('expired');
+    expect(await decline(row.connectionId, row.id, 'owner_declined')).toBeUndefined();
+    expect((await rowOf(row.id)).state).toBe('expired');
+  });
 });
 
 describe('markSendStarted', () => {
@@ -318,6 +324,12 @@ describe('markSent and conclude', () => {
   it('given a row that is not sent, then conclude writes nothing', async () => {
     const row = await rowIn('awaiting_owner');
     expect(await conclude(row.connectionId, row.id, 'landed', '0xtx')).toBeUndefined();
+  });
+
+  it('given an expired row, then conclude writes nothing and it stays expired', async () => {
+    const row = await rowIn('expired');
+    expect(await conclude(row.connectionId, row.id, 'landed', '0xtx')).toBeUndefined();
+    expect((await rowOf(row.id)).state).toBe('expired');
   });
 });
 
@@ -439,6 +451,14 @@ describe('the guard', () => {
   it('given a sent row, when it moves to landed without a tx hash, then the shape check refuses', async () => {
     const row = await rowIn('sent');
     expect(await refusalOf(set(row.id, { state: 'landed' }))).toMatch(/owner_call_shape/);
+  });
+
+  it('given a landed row inserted with a tx hash and no calls id, then the shape check refuses', async () => {
+    const { id: _id, ...rest } = await open(await newConnection());
+    const insert = getDb()
+      .insert(ownerCalls)
+      .values({ ...rest, id: 'oc_shape00000000000000000', idempotencyKey: 'shape', state: 'landed', txHash: '0xtx' });
+    expect(await refusalOf(insert)).toMatch(/owner_call_shape/);
   });
 });
 
