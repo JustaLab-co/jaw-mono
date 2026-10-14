@@ -22,10 +22,13 @@ import { requestBudget } from './request-budget';
 const USDC: Address = '0x036CbD53842c5426634e7929541eC2318f3dCF7e';
 const BOB: Address = '0x2222222222222222222222222222222222222222';
 
-// The session key's sends, and what the chain says about each batch.
+// The session key's sends, and what the chain says about each batch. With `fail` set,
+// wallet_sendCalls throws it, after the bundler took the batch if `taken` is set.
 const bridge = vi.hoisted(() => ({
   sent: [] as { to: Address; data: Hex }[][],
   status: 200,
+  fail: undefined as Error | undefined,
+  taken: false,
 }));
 // Set to make every float turn find its lock taken by another turn when it checks.
 const fence = vi.hoisted(() => ({ lost: false }));
@@ -42,7 +45,9 @@ vi.mock('@/adapters/session-host', async (original) => ({
   sessionBridge: () => ({
     request: async (method: string, params: unknown) => {
       if (method === 'wallet_sendCalls') {
+        if (bridge.fail && !bridge.taken) throw bridge.fail;
         bridge.sent.push((params as [{ calls: { to: Address; data: Hex }[] }])[0].calls);
+        if (bridge.fail) throw bridge.fail;
         return { id: `0x${'b'.repeat(64)}` };
       }
       return { status: bridge.status, receipts: [{ transactionHash: `0x${'c'.repeat(64)}` }] };
@@ -55,6 +60,8 @@ beforeAll(useTestDb);
 afterEach(async () => {
   bridge.sent.length = 0;
   bridge.status = 200;
+  bridge.fail = undefined;
+  bridge.taken = false;
   fence.lost = false;
   await getDb().delete(settings);
 });
@@ -120,6 +127,30 @@ describe('jaw_transfer', () => {
     expect(result.content[0].text).toContain('Nothing was sent');
     expect(result.content[0].text).toContain('Try again');
     expect(result.content[0].text).not.toContain('simulation');
+    expect(bridge.sent).toEqual([]);
+  });
+
+  it('given a transfer the bundler took and whose answer timed out, then it says it may have been sent and to check first', async () => {
+    const { c } = await sender();
+    bridge.fail = new Error('The request took too long to respond.');
+    bridge.taken = true;
+    const result = await callTool(c.access_token, 'jaw_transfer', { to: BOB, amount: '0.25' });
+    expect(result.isError).toBe(true);
+    expect(result.content[0].text).toContain('may have been sent');
+    expect(result.content[0].text).toContain('Check it before sending again');
+    expect(result.content[0].text).not.toContain('Nothing was sent');
+    expect(bridge.sent).toHaveLength(1);
+  });
+
+  it('given a transfer over what the budget has left, refused in simulation, then it says nothing was sent', async () => {
+    const { c } = await sender();
+    bridge.fail = new Error(
+      `Could not size the ERC-20 paymaster approval for token ${USDC} on chain 84532: execution reverted.`
+    );
+    const result = await callTool(c.access_token, 'jaw_transfer', { to: BOB, amount: '0.25' });
+    expect(result.isError).toBe(true);
+    expect(result.content[0].text).toContain('Nothing was sent');
+    expect(result.content[0].text).not.toContain('may have been sent');
     expect(bridge.sent).toEqual([]);
   });
 });

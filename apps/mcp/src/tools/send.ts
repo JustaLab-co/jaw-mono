@@ -36,6 +36,11 @@ const output = z.object({
   summary: z.string(),
 });
 
+// Core simulates the batch to size the paymaster approval, which is where a call the
+// budget refuses reverts, and throws this before anything reaches the bundler.
+const refusedInSimulation = (err: unknown) =>
+  err instanceof Error && err.message.includes('Could not size the ERC-20 paymaster approval');
+
 const covers = (grant: Grant, call: Call) =>
   grant.permission.calls.some(
     (p) =>
@@ -62,6 +67,7 @@ async function sendWithinBudget(t: Tenant, calls: Call[]) {
   if (!bridge) return refusal('This server has no paymaster key, so it cannot pay the fee to send.');
 
   let out: z.infer<typeof output> | undefined;
+  let submitting = false;
   try {
     out = await withFloat(t.connectionId, LOCK_WAIT_MS, async (hold) => {
       // A send that verified its bearer before a disconnect may get its turn after it.
@@ -75,6 +81,7 @@ async function sendWithinBudget(t: Tenant, calls: Call[]) {
       });
       if (!live) return undefined;
       hold.assertHeld();
+      submitting = true;
       const sent = (await bridge.request('wallet_sendCalls', [{ calls }])) as { id: Hex };
       for (const until = Date.now() + RECEIPT_MS; Date.now() < until; ) {
         const status = (await bridge.request('wallet_getCallsStatus', sent.id).catch(() => undefined)) as
@@ -103,6 +110,13 @@ async function sendWithinBudget(t: Tenant, calls: Call[]) {
   } catch (err) {
     if (err instanceof FloatBusy) return refusal('A payment on this connection is in progress. Try again in a moment.');
     if (err instanceof FloatLost) return refusal('Nothing was sent: this send lost its turn on the budget. Try again.');
+    // A timed out or dropped answer can come after the bundler took the operation.
+    if (submitting && !refusedInSimulation(err)) {
+      log('warn', { msg: 'send may have been submitted', error: errorLabel(err) });
+      return refusal(
+        'This send failed and may have been sent anyway. Check it before sending again, or it may land twice.'
+      );
+    }
     log('warn', { msg: 'send not submitted', error: errorLabel(err) });
     return refusal('Nothing was sent: the calls failed in simulation, or are over what the budget has left today.');
   }
