@@ -135,7 +135,7 @@ const inProgress = (open?: OwnerCallRow) =>
 
 const accountBusy = () =>
   refuse(
-    'calls_in_progress',
+    'account_busy',
     `This account already has ${MAX_OPEN_PER_ACCOUNT} requests awaiting the owner across its connections. Wait until one ends, then try again.`
   );
 

@@ -2214,7 +2214,7 @@ describe('owner links per account, swaps and calls together', () => {
     expect(opened).toHaveLength(openedBefore);
   });
 
-  it('given a swap and two calls open on one account, when a third connection sends calls, then calls_in_progress', async () => {
+  it('given a swap and two calls open on one account, when a third connection sends calls, then account_busy', async () => {
     const [a, b, c, d] = await sameAccount(4);
     await run(a);
     await call(b, 'k');
@@ -2222,7 +2222,7 @@ describe('owner links per account, swaps and calls together', () => {
 
     const result = await call(d, 'k');
 
-    expect(result[gateCode]).toBe('calls_in_progress');
+    expect(result[gateCode]).toBe('account_busy');
   });
 
   it('given three swaps open on one account, when a fourth connection asks, then account_busy and nothing is paid for it', async () => {
