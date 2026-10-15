@@ -265,8 +265,14 @@ export const recordCallsId = (connectionId: string, id: string, callsId: string)
 export const recordCode = (connectionId: string, id: string, code: string) =>
   write(ofSwap(connectionId, id, ['awaiting_owner', 'expired']), { code });
 
-export const recordSentCode = (connectionId: string, id: string, code: string) =>
-  write(ofSwap(connectionId, id, ['deposit_sent']), { code });
+export const DEPOSIT_FAILED = 'deposit_failed';
+export const DEPOSIT_REVERTED = 'deposit_reverted';
+
+export const recordSentCode = (connectionId: string, id: string, code: string, txHash?: string) =>
+  write(ofSwap(connectionId, id, ['deposit_sent']), {
+    code,
+    ...(txHash && { txHash: sql`coalesce(${swaps.txHash}, ${txHash})` }),
+  });
 
 export const recordTxHash = (connectionId: string, id: string, txHash: string) =>
   write(and(ofSwap(connectionId, id, ['deposit_sent', 'submitted']), isNull(swaps.txHash)), { txHash });

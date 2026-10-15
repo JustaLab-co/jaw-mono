@@ -6,12 +6,24 @@ import { refusedBeforeSubmit, USER_REJECTED } from '@/connections/wallet-codes';
 import { errorLabel, log } from '@/lib/edge';
 import type { BackendDeps } from './backend';
 import type { DepositCall } from './check';
-import { markSendStarted, move, recordCallsId, recordCode, recordSentCode, recordTxHash, type SwapRow } from './store';
+import {
+  DEPOSIT_FAILED,
+  DEPOSIT_REVERTED,
+  markSendStarted,
+  move,
+  recordCallsId,
+  recordCode,
+  recordSentCode,
+  recordTxHash,
+  type SwapRow,
+} from './store';
 import { submit } from './track';
 
 const POLL_MS = 2_000;
 const PENDING = 100;
 const MINED = 200;
+const FAILED_OFF_CHAIN = 400;
+const REVERTED = 500;
 const SESSION_END_MARGIN_MS = 5_000;
 
 const sent = z.object({ id: z.string().min(1).max(256) });
@@ -65,14 +77,24 @@ export async function approve(
       await recordSentCode(row.connectionId, row.id, 'wallet_answer_unreadable');
       return;
     }
-    if (status.data.status !== PENDING) {
-      const hash = status.data.status === MINED ? status.data.receipts?.[0]?.transactionHash : undefined;
+    const { status: code, receipts } = status.data;
+    if (code === PENDING) {
+      await sleep(pollMs);
+      continue;
+    }
+    const hash = receipts?.[0]?.transactionHash;
+    if (code === MINED) {
       if (!hash) return;
       const deposited = await recordTxHash(row.connectionId, row.id, hash);
       if (deposited) await submit(deposited, backend);
-      return;
+    } else if (code === FAILED_OFF_CHAIN) {
+      await recordSentCode(row.connectionId, row.id, DEPOSIT_FAILED);
+    } else if (code === REVERTED) {
+      await recordSentCode(row.connectionId, row.id, DEPOSIT_REVERTED, hash);
+    } else {
+      await recordSentCode(row.connectionId, row.id, 'wallet_answer_unreadable');
     }
-    await sleep(pollMs);
+    return;
   }
 }
 
