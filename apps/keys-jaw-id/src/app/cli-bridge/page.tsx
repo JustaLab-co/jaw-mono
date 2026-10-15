@@ -340,6 +340,8 @@ function CLIBridgeContent() {
 
     return () => {
       cancelled = true;
+      appNameRef.current = null;
+      setAppName(DEFAULT_BRIDGE_APP_NAME);
       if (beforeUnloadHandler) {
         window.removeEventListener('beforeunload', beforeUnloadHandler);
       }

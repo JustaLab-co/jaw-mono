@@ -17,6 +17,7 @@ import {
   approvedOnChain,
   connect,
   fakeWallet,
+  managerAnswer,
   offlineSession,
   setTestEnv,
   walletAnswers,
@@ -73,7 +74,8 @@ const node = {
     if (functionName === 'balanceOf') return balanceOf(args[0] as string);
     if (functionName === 'allowance') return 0n;
     if (functionName === 'authorizationState') return false;
-    throw new Error('this node only knows balances and nonces');
+    if (functionName === 'getHash' || functionName === 'getCurrentPeriod') return managerAnswer(functionName, args);
+    throw new Error('this node only knows balances, nonces and the permission');
   },
   waitForTransactionReceipt: async () => {
     throw new Error('no receipt yet');

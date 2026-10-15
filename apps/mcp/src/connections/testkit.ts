@@ -1,6 +1,10 @@
 import { createHash, randomBytes } from 'node:crypto';
+import { currentPeriodWindow } from '@jaw.id/agent';
+import { desc, sql } from 'drizzle-orm';
 import { toFunctionSelector, verifyMessage, verifyTypedData, type Address, type Hex, type PublicClient } from 'viem';
 import { privateKeyToAccount, generatePrivateKey } from 'viem/accounts';
+import { getDb } from '@/db/client';
+import { grants } from '@/db/schema';
 import { currentGrant, type Grant } from '@/grants/store';
 import type { GrantRequest, ReadPermission } from '@/grants/permission';
 import type { SignedPayload } from '@/lib/chain';
@@ -23,6 +27,27 @@ export function setTestEnv(keys = randomBytes(32).toString('base64url')) {
 export const owner = () => privateKeyToAccount(generatePrivateKey());
 
 export const approvedOnChain: ReadPermission = async () => ({ status: 'ok', approved: true, revoked: false });
+
+/**
+ * The permission manager's answer to `getHash` or `getCurrentPeriod` for a struct
+ * from the grants table: it hashes to the spender's newest grant, and its counter
+ * is the current day of the window with nothing pulled through the permission.
+ */
+export async function managerAnswer(functionName: 'getHash' | 'getCurrentPeriod', args: readonly unknown[]) {
+  const permission = args[0] as { spender: Address; start: number; end: number };
+  if (functionName === 'getHash') {
+    const [row] = await getDb()
+      .select({ id: grants.permissionId })
+      .from(grants)
+      .where(sql`lower(${grants.spender}) = lower(${permission.spender})`)
+      .orderBy(desc(grants.createdAt))
+      .limit(1);
+    return row?.id;
+  }
+  const now = Math.floor(Date.now() / 1000);
+  const day = currentPeriodWindow({ anchor: permission.start, unit: 'day', now, permissionEnd: permission.end });
+  return { ...day, spend: 0n };
+}
 
 /** What the owner's wallet answers, signing with `signer`. `refuse` lists methods the owner turns down. */
 export function walletAnswers(signer: ReturnType<typeof owner>, refuse: string[] = []): Ask {
