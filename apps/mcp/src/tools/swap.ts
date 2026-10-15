@@ -193,9 +193,16 @@ function summaryOf(row: SwapRow): string {
     case 'quote_rejected':
       return `No swap: ${row.state} (${row.code}). Nothing was deposited.`;
     case 'owner_declined':
-      return row.code === 'wrong_account'
-        ? 'The owner signed in with another account than this connection. Nothing was sent.'
-        : 'The owner declined the deposit in the wallet. Nothing was sent.';
+      if (row.code === 'wrong_account') {
+        return 'The owner signed in with another account than this connection. Nothing was sent.';
+      }
+      if (row.code?.startsWith('wallet_error:')) {
+        return (
+          `The wallet refused the deposit with ${row.code.replace('wallet_error:', '')} before sending it. ` +
+          'Nothing was sent. A new jaw_swap with a new idempotencyKey gets a new quote.'
+        );
+      }
+      return 'The owner declined the deposit in the wallet. Nothing was sent.';
     case 'awaiting_owner': {
       if (row.code === SEND_STARTED) return maybeSent(row);
       if (row.code?.startsWith('wallet_error:')) {

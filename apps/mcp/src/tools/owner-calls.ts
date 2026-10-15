@@ -172,9 +172,16 @@ function summaryOf(row: OwnerCallRow): string {
         `Tell the owner what each call does: their review is the only check on this calldata. Follow it with jaw_send_calls_status and ${row.id}.`
       );
     case 'owner_declined':
-      return row.code === 'wrong_account'
-        ? 'The owner signed in with another account than this connection. Nothing was sent.'
-        : 'The owner declined the calls in the wallet. Nothing was sent.';
+      if (row.code === 'wrong_account') {
+        return 'The owner signed in with another account than this connection. Nothing was sent.';
+      }
+      if (row.code?.startsWith('wallet_error:')) {
+        return (
+          `The wallet refused the calls with ${row.code.replace('wallet_error:', '')} before sending them. ` +
+          'Nothing was sent. Use a new idempotencyKey to ask again.'
+        );
+      }
+      return 'The owner declined the calls in the wallet. Nothing was sent.';
     case 'expired':
       return `The owner did not approve before ${by}. Nothing was sent. Use a new idempotencyKey to ask again.`;
     case 'sent':
