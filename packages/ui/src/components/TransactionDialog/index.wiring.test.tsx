@@ -6,6 +6,8 @@ vi.mock('../../hooks', () => ({ useChainIconURI: () => undefined, useFeeTokenPri
 vi.mock('../../hooks/useDecodedCalldata', () => ({
   useDecodedCalldata: () => ({ clearSigned: null, decoded: null, isLoading: false }),
 }));
+// The raw display is what a token that cannot be read gets; the read itself is covered in AllowancePreview.token.test.
+vi.mock('../../hooks/useApprovalTokenKind', () => ({ useApprovalTokenKind: () => ({ status: 'unknown' }) }));
 vi.mock('../ShellDialog', () => ({ ShellDialog: ({ children }: { children: ReactNode }) => <div>{children}</div> }));
 
 import { TransactionDialog } from './index';

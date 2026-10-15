@@ -11,11 +11,17 @@ import {
 } from '@jaw.id/core';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
-const created = vi.hoisted(() => ({ appNames: [] as string[], session: 's1' }));
+const created = vi.hoisted(() => ({ appNames: [] as string[], handlerOptions: [] as unknown[], session: 's1' }));
 vi.mock('next/navigation', () => ({
   useSearchParams: () => new URLSearchParams(`session=${created.session}&relay=ws://relay.test`),
 }));
-vi.mock('@jaw.id/ui', () => ({ ReactUIHandler: class {} }));
+vi.mock('@jaw.id/ui', () => ({
+  ReactUIHandler: class {
+    constructor(options?: unknown) {
+      created.handlerOptions.push(options);
+    }
+  },
+}));
 vi.mock('@jaw.id/core', async (original) => ({
   ...(await original<object>()),
   JAW: {
@@ -99,6 +105,7 @@ beforeEach(() => {
   (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
   FakeSocket.all = [];
   created.appNames = [];
+  created.handlerOptions = [];
   created.session = 's1';
   vi.stubGlobal('WebSocket', FakeSocket);
   host = document.createElement('div');
@@ -125,6 +132,12 @@ describe('cli-bridge page app name', () => {
 
     expect(host.querySelector('h1')!.textContent).toBe('Cursor');
     expect(created.appNames).toEqual(['Claude', 'Cursor']);
+  });
+
+  it('labels the requester on the transaction screen instead of the wallet host', async () => {
+    const ws = await start();
+    await init(ws, { appName: 'Claude' });
+    expect(created.handlerOptions).toEqual([{ originLabel: 'via JAW bridge' }]);
   });
 
   it('the page and the SDK carry the name the client gave, cleaned', async () => {

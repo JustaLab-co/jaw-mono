@@ -13,7 +13,7 @@ vi.mock('../ShellDialog', () => ({ ShellDialog: ({ children }: { children: React
 
 import { TransactionDialog } from './index';
 
-const render = (extra: { appName?: string; origin?: string; appLogoUrl?: string }) =>
+const render = (extra: { appName?: string; origin?: string; originLabel?: string; appLogoUrl?: string }) =>
   renderToStaticMarkup(
     <TransactionDialog
       open
@@ -48,6 +48,12 @@ describe('TransactionDialog app header', () => {
     expect(html).toContain('src="https://logo.example/app.png"');
     expect(html).toContain('title="Base Sepolia"');
     expect(html).toContain('data-testid="chain-icon"');
+  });
+
+  it('shows the origin label in place of the host', () => {
+    const html = render({ appName: 'Claude', origin: 'https://keys.jaw.id', originLabel: 'via JAW bridge' });
+    expect(html).toContain('via JAW bridge');
+    expect(html).not.toContain('keys.jaw.id');
   });
 
   it('shows no header without an app name', () => {

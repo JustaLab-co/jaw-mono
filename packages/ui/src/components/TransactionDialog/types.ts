@@ -61,6 +61,8 @@ export interface TransactionDialogProps {
   appName?: string;
   appLogoUrl?: string | null;
   origin?: string;
+  /** Replaces the host under the app name. */
+  originLabel?: string;
 
   // Fee token selection (for ERC-20 paymaster)
   feeTokens?: FeeTokenOption[];
