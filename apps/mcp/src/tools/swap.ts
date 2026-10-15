@@ -20,6 +20,8 @@ import { quote, swapRequest } from '@/swap/quote';
 import {
   approveByOf,
   claimSwap,
+  DEPOSIT_FAILED,
+  DEPOSIT_REVERTED,
   failIfStale,
   findByQuoteId,
   nextStepPays,
@@ -226,6 +228,7 @@ function summaryOf(row: SwapRow): string {
         'A deposit signed in time that lands later still shows in jaw_swap_status.'
       );
     case 'deposit_sent': {
+      if (row.code === DEPOSIT_FAILED || row.code === DEPOSIT_REVERTED) return didNotLeave(row);
       if (unseenPastGrace(row)) return notSeen(row);
       const unread =
         row.code === 'wallet_answer_unreadable' ? ", but the wallet's status answer could not be read" : '';
@@ -243,6 +246,13 @@ function summaryOf(row: SwapRow): string {
       return `Swap ${row.state}. Follow it with jaw_swap_status.`;
   }
 }
+
+const didNotLeave = (row: SwapRow) =>
+  (row.code === DEPOSIT_REVERTED
+    ? `The deposit transaction reverted on chain${row.txHash ? ` (${row.txHash})` : ''}.`
+    : 'The deposit failed before it was mined.') +
+  ` The funds did not leave the account on chain ${row.originChainId}. ` +
+  'If the swap backend later sees a deposit, jaw_swap_status shows it. Otherwise start a new swap.';
 
 const DEPOSIT_GRACE_MS = 10 * 60_000;
 

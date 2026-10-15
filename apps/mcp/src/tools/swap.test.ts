@@ -1225,7 +1225,8 @@ describe('jaw_swap_status', () => {
     async (method) => {
       if (method === 'eth_requestAccounts') return [account];
       if (method === 'wallet_sendCalls') return { id: '0xcalls', chainId: '0x14a34' };
-      return receipt ? { status: 200, receipts: [{ transactionHash: receipt }] } : { status: 400 };
+      if (!receipt) throw new Error('the wallet session ended');
+      return { status: 200, receipts: [{ transactionHash: receipt }] };
     };
 
   async function started(t: Tenant, answer?: Ask) {
@@ -1494,6 +1495,94 @@ describe('jaw_swap_status', () => {
     expect(result.structuredContent).toMatchObject({ state: 'completed', deposit: { txHash: BACKEND_HASH } });
     expect(result.structuredContent?.refusal).toBeUndefined();
     expect(await rowOf(t)).toMatchObject({ state: 'completed', code: null, txHash: BACKEND_HASH });
+  });
+
+  const finalStatus =
+    (account: string, answer: unknown): Ask =>
+    async (method) => {
+      if (method === 'eth_requestAccounts') return [account];
+      if (method === 'wallet_sendCalls') return { id: '0xcalls', chainId: '0x14a34' };
+      return answer;
+    };
+  const REVERT_HASH = `0x${'ab'.repeat(32)}`;
+
+  it.each([
+    ['without receipts', { status: 400 }],
+    ['with an empty receipts list', { status: 400, receipts: [] }],
+  ])(
+    'given the wallet reports the batch failed off chain %s, when the backend has no deposit, then deposit_sent carries deposit_failed, no submit, and the summary says the funds did not leave',
+    async (_, answer) => {
+      const { t } = await connected('1');
+      const quoteId = await started(t, finalStatus(t.account, answer));
+
+      const result = await status(t, quoteId);
+
+      expect(submits()).toEqual([]);
+      expect(await rowOf(t)).toMatchObject({ state: 'deposit_sent', code: 'deposit_failed', txHash: null });
+      expect(result.structuredContent).toMatchObject({
+        state: 'deposit_sent',
+        refusal: { code: 'deposit_failed' },
+      });
+      const summary = result.structuredContent?.summary ?? '';
+      expect(summary).toMatch(/failed before it was mined/i);
+      expect(summary).toMatch(/did not leave/i);
+      expect(summary).not.toMatch(/has not seen it yet|approved the deposit/i);
+    }
+  );
+
+  it('given a batch reported failed off chain, when the backend later shows the deposit, then the backend wins and the code is dropped', async () => {
+    const { t } = await connected('1');
+    const quoteId = await started(t, finalStatus(t.account, { status: 400 }));
+    Object.assign(deposits, { state: 'SUCCESS', txHash: BACKEND_HASH });
+
+    const result = await status(t, quoteId);
+
+    expect(result.structuredContent).toMatchObject({ state: 'completed', deposit: { txHash: BACKEND_HASH } });
+    expect(result.structuredContent?.refusal).toBeUndefined();
+    expect(await rowOf(t)).toMatchObject({ state: 'completed', code: null, txHash: BACKEND_HASH });
+  });
+
+  it('given a reverted batch with a receipt, when the backend has no deposit, then the mined hash is kept, deposit_reverted shows, and nothing is submitted', async () => {
+    const { t } = await connected('1');
+    const quoteId = await started(
+      t,
+      finalStatus(t.account, { status: 500, receipts: [{ transactionHash: REVERT_HASH }] })
+    );
+
+    const result = await status(t, quoteId);
+
+    expect(submits()).toEqual([]);
+    expect(await rowOf(t)).toMatchObject({ state: 'deposit_sent', code: 'deposit_reverted', txHash: REVERT_HASH });
+    expect(result.structuredContent).toMatchObject({
+      state: 'deposit_sent',
+      refusal: { code: 'deposit_reverted' },
+      deposit: { txHash: REVERT_HASH },
+    });
+    const summary = result.structuredContent?.summary ?? '';
+    expect(summary).toMatch(/reverted/i);
+    expect(summary).toMatch(/did not leave/i);
+    expect(summary).not.toMatch(/has not seen it yet|approved the deposit/i);
+  });
+
+  it('given a reverted batch with no receipt, then deposit_reverted shows with no hash', async () => {
+    const { t } = await connected('1');
+    const quoteId = await started(t, finalStatus(t.account, { status: 500 }));
+
+    const result = await status(t, quoteId);
+
+    expect(submits()).toEqual([]);
+    expect(await rowOf(t)).toMatchObject({ state: 'deposit_sent', code: 'deposit_reverted', txHash: null });
+    expect(result.structuredContent?.summary).toMatch(/reverted/i);
+  });
+
+  it('given a mined batch, then no failure code is recorded and the hash is submitted', async () => {
+    const { t } = await connected('1');
+    const quoteId = await started(t, finalStatus(t.account, { status: 200, receipts: [{ transactionHash: HASH }] }));
+
+    const result = await status(t, quoteId);
+
+    expect(await rowOf(t)).toMatchObject({ state: 'submitted', code: null, txHash: HASH });
+    expect(result.structuredContent?.refusal).toBeUndefined();
   });
 
   it('given deposit_sent with an unreadable wallet status past the grace window, when the backend has no deposit, then the summary says the deposit was not seen', async () => {
