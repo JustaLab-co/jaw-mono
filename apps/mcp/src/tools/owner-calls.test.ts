@@ -1696,6 +1696,24 @@ describe('a sent call the bundler no longer answers for', () => {
     }
   });
 
+  it('given a head past the span searched from the sent block, then no log is read and the stored row answers', async () => {
+    const chain = fakeChain({ head: 100_000n, events: [mined()] });
+    const { t, id, status } = await stale(chain.clients);
+    await withoutOwnerCallsGuard(() =>
+      getDb()
+        .update(ownerCalls)
+        .set({ approveBy: sql`statement_timestamp() - interval '1 hour'` })
+        .where(eq(ownerCalls.id, id))
+    );
+
+    const result = await status();
+
+    expect(chain.ranges).toEqual([]);
+    expect(result.structuredContent!.state).toBe('sent');
+    expect(result.structuredContent!.summary).toContain('Not seen on chain by');
+    expect((await rowsOf(t.connectionId))[0].state).toBe('sent');
+  });
+
   it('given a row sent without a recorded head, then the log is still found from the age of the row', async () => {
     const { status } = await stale(fakeChain({ head: 100_000n, events: [mined({ block: 99_500n })] }).clients, null);
 

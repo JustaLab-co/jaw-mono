@@ -157,11 +157,18 @@ describe('findUserOpEvent', () => {
   });
 
   it('given no event for a long range, then one call reads at most fifty chunks and ends before the head', async () => {
-    const { clients, ranges } = fakeChain({ head: 1_000_000n });
+    const { clients, ranges } = fakeChain({ head: 10_999n });
 
     expect(await findUserOpEvent(clients, 84532, CALLS_ID as `0x${string}`, 1_000n)).toBeNull();
     expect(ranges).toHaveLength(50);
     expect(ranges[49].to).toBe(10_999n);
+  });
+
+  it('given a head past the whole span of fifty chunks, then the search is over and no log is read', async () => {
+    const { clients, ranges } = fakeChain({ head: 11_000n, events: [event(1_500n)] });
+
+    expect(await findUserOpEvent(clients, 84532, CALLS_ID as `0x${string}`, 1_000n)).toBeNull();
+    expect(ranges).toEqual([]);
   });
 
   it('given a range that ends at the head, then the last chunk stops at the head', async () => {

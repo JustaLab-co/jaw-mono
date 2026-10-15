@@ -13,7 +13,7 @@ import { isPaymentsPaused } from '@/db/settings';
 import { readOnChain } from '@/grants/permission';
 import { errorLabel, log } from '@/lib/edge';
 import { conclude, sentBefore } from '@/owner-calls/store';
-import { readReceipt, receiptOf, type ReadReceipt } from '@/owner-calls/receipt';
+import { canSearchChain, readReceipt, searchChain, type ReadReceipt } from '@/owner-calls/receipt';
 import { chainAnswer, type ChainAnswer } from '@/payments/confirm';
 import { claimOpenSends, settleSend, type SendRow } from '@/payments/sends';
 import { claimUnresolved, expire, markAlerted, settle, txHashTaken, type PaymentRow } from '@/payments/store';
@@ -151,6 +151,10 @@ async function sendOutcome(row: SendRow, clients: ChainClients) {
   return undefined;
 }
 
+// Each chain search can take dozens of log reads. The rows come in random order, so a few rows
+// that never land cannot take every run's searches from the rest.
+const CHAIN_SEARCHES_PER_RUN = 5;
+
 /**
  * Sent calls nobody asked about again. One batch per run: rows still waiting for a
  * receipt are read again next run, and `jaw_send_calls_status` concludes the same
@@ -159,10 +163,14 @@ async function sendOutcome(row: SendRow, clients: ChainClients) {
  */
 async function reconcileOwnerCalls(receipt: ReadReceipt, clients: ChainClients, now: Date, report: Report) {
   const rows = await sentBefore(RECONCILE_AFTER_MS, BATCH);
+  let chainSearches = 0;
   await Promise.all(
     rows.map(async (row) => {
       try {
-        const mined = await receiptOf(row, receipt, clients, now.getTime());
+        let mined = await receipt(row.chainId, row.callsId as string);
+        if (!mined && canSearchChain(row, now.getTime()) && chainSearches++ < CHAIN_SEARCHES_PER_RUN) {
+          mined = await searchChain(row, clients, now.getTime());
+        }
         if (!mined) {
           report.ownerCalls.open++;
           return;

@@ -49,6 +49,7 @@ const userOperationEvent = getAbiItem({ abi: entryPoint08Abi, name: 'UserOperati
 /**
  * Looks for the operation's event from `fromBlock` forward, at most MAX_CHUNKS
  * ranges of CHUNK_BLOCKS per call. Null when none is found; throws when the node cannot be read.
+ * Once the head is past that whole span the search is over and costs no log reads.
  */
 export async function findUserOpEvent(
   clients: ChainClients,
@@ -58,6 +59,7 @@ export async function findUserOpEvent(
 ): Promise<Receipt | null> {
   const client = clients.publicClient(chainId);
   const head = await client.getBlockNumber();
+  if (head >= fromBlock + CHUNK_BLOCKS * BigInt(MAX_CHUNKS)) return null;
   let from = fromBlock;
   for (let i = 0; i < MAX_CHUNKS && from <= head; i++) {
     const to = from + CHUNK_BLOCKS - 1n < head ? from + CHUNK_BLOCKS - 1n : head;
@@ -93,6 +95,14 @@ async function startBlock(row: OwnerCallRow, clients: ChainClients, now: number)
   return head > back ? head - back : 0n;
 }
 
+/** Whether a sent call has been quiet long enough for the bundler's silence to mean it is gone from its window. */
+export const canSearchChain = (row: OwnerCallRow, now: number) =>
+  now - row.updatedAt.getTime() >= LOG_FALLBACK_AFTER_MS;
+
+export async function searchChain(row: OwnerCallRow, clients: ChainClients, now: number): Promise<Receipt | null> {
+  return findUserOpEvent(clients, row.chainId, row.callsId as Hex, await startBlock(row, clients, now));
+}
+
 /** The bundler's receipt, or for a call it has gone quiet on, the event on chain. */
 export async function receiptOf(
   row: OwnerCallRow,
@@ -100,8 +110,7 @@ export async function receiptOf(
   clients: ChainClients,
   now: number
 ): Promise<Receipt | null> {
-  const userOpHash = row.callsId as Hex;
-  const mined = await bundler(row.chainId, userOpHash);
-  if (mined || now - row.updatedAt.getTime() < LOG_FALLBACK_AFTER_MS) return mined;
-  return findUserOpEvent(clients, row.chainId, userOpHash, await startBlock(row, clients, now));
+  const mined = await bundler(row.chainId, row.callsId as Hex);
+  if (mined || !canSearchChain(row, now)) return mined;
+  return searchChain(row, clients, now);
 }

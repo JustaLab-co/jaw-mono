@@ -747,6 +747,31 @@ describe('sent owner calls the bundler no longer answers for', () => {
     expect((await callOf(id)).state).toBe('sent');
   });
 
+  it('searches the chain for at most five calls per run and asks the bundler about all of them', async () => {
+    const hashes = Array.from({ length: 7 }, (_, i) => `0x${(i + 1).toString(16).padStart(2, '0').repeat(32)}` as Hex);
+    const ids: string[] = [];
+    for (const h of hashes) ids.push(await stale(h));
+    const chain = fakeChain({ head: 10_000n, events: hashes.map((h) => event({ userOpHash: h })) });
+    const bundler = receiptFor({});
+
+    const report = await reconcile(chain.clients, new Date(), bundler);
+
+    expect(bundler).toHaveBeenCalledTimes(7);
+    expect(report.ownerCalls).toEqual({ landed: 5, reverted: 0, open: 2 });
+    expect((await Promise.all(ids.map(callOf))).filter((c) => c.state === 'sent')).toHaveLength(2);
+  });
+
+  it('does not read logs for a call whose searched span is already behind the head', async () => {
+    const id = await stale();
+    const chain = fakeChain({ head: 100_000n, events: [event()] });
+
+    const report = await sweep(chain);
+
+    expect(chain.ranges).toEqual([]);
+    expect(report.ownerCalls.open).toBe(1);
+    expect((await callOf(id)).state).toBe('sent');
+  });
+
   it('does not read the chain for a call sent minutes ago', async () => {
     const id = await sentCall(OLD);
     const chain = fakeChain({ head: 10_000n, events: [event()] });
