@@ -328,9 +328,15 @@ describe('sent owner calls', () => {
 
   it('keeps a call sent while the bundler has no receipt', async () => {
     const id = await sentCall(OLD);
-    const report = await reconcile(clients, new Date(), receiptFor({}));
-    expect(await callOf(id)).toMatchObject({ state: 'sent', txHash: null });
-    expect(report.ownerCalls.open).toBe(1);
+    const logged = vi.spyOn(console, 'log').mockImplementation(() => {});
+    try {
+      const report = await reconcile(clients, new Date(), receiptFor({}));
+      expect(await callOf(id)).toMatchObject({ state: 'sent', txHash: null });
+      expect(report.ownerCalls.open).toBe(1);
+      expect(logged.mock.calls.filter(([line]) => String(line).includes(id))).toEqual([]);
+    } finally {
+      logged.mockRestore();
+    }
   });
 
   it('logs and skips a receipt it cannot read, and still concludes the others', async () => {
