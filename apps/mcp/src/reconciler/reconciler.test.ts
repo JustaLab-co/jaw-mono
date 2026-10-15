@@ -33,10 +33,13 @@ import {
 } from '@/connections/testkit';
 import { takeSealedKey } from '@/connections/rows';
 import { getDb } from '@/db/client';
-import { auditEvents, connections, grants, oauthPayloads, payments } from '@/db/schema';
-import { useTestDb } from '@/db/test-db';
+import { auditEvents, connections, grants, oauthPayloads, ownerCalls, payments } from '@/db/schema';
+import { useTestDb, withoutOwnerCallsGuard } from '@/db/test-db';
+import type { ReadReceipt } from '@/owner-calls/receipt';
+import { decline, insertOwnerCall, markSent, markSendStarted } from '@/owner-calls/store';
+import { sendCallsStatus } from '@/tools/owner-calls';
 import { render } from '@/payments/render';
-import { purge, reconcile } from './run';
+import { purge, reconcile, RECONCILE_AFTER_MS } from './run';
 
 setTestEnv();
 process.env.JAW_MCP_CRON_SECRET = 'cron-secret';
@@ -259,6 +262,137 @@ describe('reconciler', () => {
     const kept = await signedRow({ deadline: new Date(Date.now() + 60_000) });
     await purge();
     expect(await rowOf(kept.id)).toBeDefined();
+  });
+});
+
+const CALLS_ID = `0x${'cd'.repeat(32)}`;
+const MINED = `0x${'ab'.repeat(32)}`;
+const noWallet = async () => {
+  throw new Error('no wallet in this test');
+};
+
+async function openCall() {
+  const row = await insertOwnerCall({
+    connectionId: t.connectionId,
+    key: randomBytes(8).toString('hex'),
+    requestHash: 'h',
+    chainId: t.chainId,
+    account: t.account,
+    calls: [{ to: '0x2222222222222222222222222222222222222222', data: '0xa9059cbb', value: '0' }],
+    walletUrl: 'https://keys.test/cli-bridge#x',
+    approveBy: new Date(Date.now() + 600_000),
+  });
+  return row!.id;
+}
+
+/** A sent owner call, `age` ms past its last write on the database clock. */
+async function sentCall(age: number, callsId: string = CALLS_ID) {
+  const id = await openCall();
+  await markSent(t.connectionId, id, callsId);
+  await ageCall(id, age);
+  return id;
+}
+
+const ageCall = (id: string, age: number) =>
+  withoutOwnerCallsGuard(() =>
+    getDb().execute(
+      sql`update owner_calls set updated_at = statement_timestamp() - ${age} * interval '1 millisecond' where id = ${id}`
+    )
+  );
+
+const callOf = async (id: string) => (await getDb().select().from(ownerCalls).where(eq(ownerCalls.id, id)))[0];
+const OLD = RECONCILE_AFTER_MS + 1_000;
+const receiptFor = (answers: Record<string, Awaited<ReturnType<ReadReceipt>> | Error>): ReadReceipt =>
+  vi.fn(async (_chain, id) => {
+    const a = answers[id];
+    if (a instanceof Error) throw a;
+    return a ?? null;
+  });
+
+describe('sent owner calls', () => {
+  beforeEach(() => withoutOwnerCallsGuard(() => getDb().delete(ownerCalls)));
+
+  it('concludes a sent call whose receipt succeeded as landed with the transaction', async () => {
+    const id = await sentCall(OLD);
+    const report = await reconcile(clients, new Date(), receiptFor({ [CALLS_ID]: { success: true, txHash: MINED } }));
+    expect(await callOf(id)).toMatchObject({ state: 'landed', txHash: MINED });
+    expect(report.ownerCalls).toEqual({ landed: 1, reverted: 0, open: 0 });
+  });
+
+  it('concludes a sent call whose receipt failed as reverted', async () => {
+    const id = await sentCall(OLD);
+    const report = await reconcile(clients, new Date(), receiptFor({ [CALLS_ID]: { success: false, txHash: MINED } }));
+    expect(await callOf(id)).toMatchObject({ state: 'reverted', txHash: MINED });
+    expect(report.ownerCalls).toEqual({ landed: 0, reverted: 1, open: 0 });
+  });
+
+  it('keeps a call sent while the bundler has no receipt', async () => {
+    const id = await sentCall(OLD);
+    const logged = vi.spyOn(console, 'log').mockImplementation(() => {});
+    try {
+      const report = await reconcile(clients, new Date(), receiptFor({}));
+      expect(await callOf(id)).toMatchObject({ state: 'sent', txHash: null });
+      expect(report.ownerCalls.open).toBe(1);
+      expect(logged.mock.calls.filter(([line]) => String(line).includes(id))).toEqual([]);
+    } finally {
+      logged.mockRestore();
+    }
+  });
+
+  it('logs and skips a receipt it cannot read, and still concludes the others', async () => {
+    const down = await sentCall(OLD, `0x${'01'.repeat(32)}`);
+    const up = await sentCall(OLD);
+    const report = await reconcile(
+      clients,
+      new Date(),
+      receiptFor({ [`0x${'01'.repeat(32)}`]: new Error('bundler down'), [CALLS_ID]: { success: true, txHash: MINED } })
+    );
+    expect((await callOf(down)).state).toBe('sent');
+    expect((await callOf(up)).state).toBe('landed');
+    expect(report.ownerCalls).toEqual({ landed: 1, reverted: 0, open: 1 });
+  });
+
+  it('reads at most one batch of calls per run', async () => {
+    const ids: string[] = [];
+    for (let i = 0; i < 52; i++) ids.push(await sentCall(OLD));
+    const receipt = receiptFor({ [CALLS_ID]: { success: true, txHash: MINED } });
+    await reconcile(clients, new Date(), receipt);
+    expect(receipt).toHaveBeenCalledTimes(50);
+    const states = await Promise.all(ids.map(async (id) => (await callOf(id)).state));
+    expect(states.filter((s) => s === 'landed')).toHaveLength(50);
+    expect(states.filter((s) => s === 'sent')).toHaveLength(2);
+  });
+
+  it('leaves a call younger than the delay for the agent to ask about', async () => {
+    const id = await sentCall(RECONCILE_AFTER_MS - 10_000);
+    const receipt = receiptFor({ [CALLS_ID]: { success: true, txHash: MINED } });
+    await reconcile(clients, new Date(), receipt);
+    expect(receipt).not.toHaveBeenCalled();
+    expect((await callOf(id)).state).toBe('sent');
+  });
+
+  it('touches no call that is not sent, including one that started sending and has no calls id', async () => {
+    const declined = await openCall();
+    await decline(t.connectionId, declined, 'owner_declined');
+    const started = await openCall();
+    await markSendStarted(t.connectionId, started);
+    await Promise.all([declined, started].map((id) => ageCall(id, OLD)));
+    const before = await Promise.all([declined, started].map(callOf));
+    const receipt = receiptFor({ [CALLS_ID]: { success: true, txHash: MINED } });
+    const report = await reconcile(clients, new Date(), receipt);
+    expect(receipt).not.toHaveBeenCalled();
+    expect(await Promise.all([declined, started].map(callOf))).toEqual(before);
+    expect(before[1]).toMatchObject({ state: 'awaiting_owner', code: 'send_started', callsId: null });
+    expect(report.ownerCalls).toEqual({ landed: 0, reverted: 0, open: 0 });
+  });
+
+  it('is answered by the status tool afterwards without asking the bundler', async () => {
+    const id = await sentCall(OLD);
+    await reconcile(clients, new Date(), receiptFor({ [CALLS_ID]: { success: false, txHash: MINED } }));
+    const receipt = vi.fn<ReadReceipt>(async () => null);
+    const result = await sendCallsStatus(t, { id }, { openWallet: noWallet, receipt });
+    expect(result.structuredContent).toMatchObject({ state: 'reverted', txHash: MINED, callsId: CALLS_ID });
+    expect(receipt).not.toHaveBeenCalled();
   });
 });
 
