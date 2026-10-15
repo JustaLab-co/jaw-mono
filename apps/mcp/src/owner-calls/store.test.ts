@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto';
-import { eq, sql } from 'drizzle-orm';
+import { eq, sql, type SQL } from 'drizzle-orm';
 import { beforeAll, describe, expect, it } from 'vitest';
 import { setTestEnv } from '@/connections/testkit';
 import { getDb } from '@/db/client';
@@ -16,6 +16,8 @@ import {
   insertOwnerCall,
   markSendStarted,
   markSent,
+  renewSession,
+  endSession,
   reopenLink,
   SEND_STARTED,
   setCode,
@@ -86,6 +88,10 @@ const lapse = (id: string) =>
   withoutOwnerCallsGuard(() =>
     getDb().execute(sql`update owner_calls set approve_by = statement_timestamp() - ${DB_MINUTE} where id = ${id}`)
   );
+
+const setLease = (id: string, sessionUntil: SQL | null) =>
+  getDb().update(ownerCalls).set({ sessionUntil }).where(eq(ownerCalls.id, id));
+const lapseLease = (id: string) => setLease(id, sql`statement_timestamp() - interval '1 second'`);
 
 const set = (id: string, values: Partial<typeof ownerCalls.$inferInsert>) =>
   getDb().update(ownerCalls).set(values).where(eq(ownerCalls.id, id));
@@ -197,6 +203,7 @@ describe('expirePast', () => {
 describe('reopenLink', () => {
   it('given a link with a wallet error, then it takes a new url and clears the code', async () => {
     const row = await open(await newConnection());
+    await lapseLease(row.id);
     await setCode(row.connectionId, row.id, 'wallet_error:-32000');
     const reopened = await reopenLink(row, URL_B);
     expect(reopened).toMatchObject({ walletUrl: URL_B, code: null, approveBy: row.approveBy });
@@ -440,6 +447,7 @@ describe('the guard', () => {
 
   it('given an awaiting row, when its wallet url is rewritten, then it is accepted', async () => {
     const row = await rowIn('awaiting_owner');
+    await lapseLease(row.id);
     expect(await refusalOf(set(row.id, { walletUrl: URL_B }))).toBe('written');
   });
 
@@ -481,5 +489,88 @@ describe('the purge of approvals never completed', () => {
     const left = (await getDb().select({ id: connections.id }).from(connections)).map((c) => c.id);
     expect(left).toContain(withCall);
     expect(left).not.toContain(bare);
+  });
+});
+
+describe('the session lease', () => {
+  const lease = async (id: string) => (await rowOf(id)).sessionUntil;
+
+  it('given a new row, then its lease is already live', async () => {
+    const row = await open(await newConnection());
+    expect((await lease(row.id))!.getTime()).toBeGreaterThan(Date.now());
+  });
+
+  it('given a live lease, then the link does not reopen and keeps its url', async () => {
+    const row = await open(await newConnection());
+    expect(await reopenLink(row, URL_B)).toBeUndefined();
+    expect((await rowOf(row.id)).walletUrl).toBe(URL_A);
+  });
+
+  it.each([
+    ['no lease', null],
+    ['a lapsed lease', sql`statement_timestamp() - interval '1 second'`],
+  ])('given %s, then the link reopens and takes a live lease', async (_, sessionUntil) => {
+    const row = await open(await newConnection());
+    await setLease(row.id, sessionUntil);
+    const reopened = await reopenLink(row, URL_B);
+    expect(reopened).toMatchObject({ walletUrl: URL_B });
+    expect(reopened!.sessionUntil!.getTime()).toBeGreaterThan(Date.now());
+  });
+
+  it('given two reopens racing on a lapsed lease, then one wins', async () => {
+    const row = await open(await newConnection());
+    await lapseLease(row.id);
+    const wins = await Promise.all([reopenLink(row, URL_B), reopenLink(row, 'https://keys.test/cli-bridge#c')]);
+    expect(wins.filter(Boolean)).toHaveLength(1);
+  });
+
+  it('given a live row, when its session renews, then the lease moves forward', async () => {
+    const row = await open(await newConnection());
+    await setLease(row.id, sql`statement_timestamp() + interval '1 second'`);
+    const before = (await lease(row.id))!.getTime();
+    expect((await renewSession(row))!.sessionUntil!.getTime()).toBeGreaterThan(before + 5_000);
+  });
+
+  it('given a session that ends, then the lease clears', async () => {
+    const row = await open(await newConnection());
+    await endSession(row);
+    expect(await lease(row.id)).toBeNull();
+  });
+
+  it.each(['renewSession', 'endSession'] as const)(
+    'given another process took the url, when %s runs for the old one, then the lease is untouched',
+    async (call) => {
+      const row = await open(await newConnection());
+      await lapseLease(row.id);
+      const taken = await reopenLink(row, URL_B);
+      await { renewSession, endSession }[call](row);
+      expect((await rowOf(row.id)).sessionUntil).toEqual(taken!.sessionUntil);
+    }
+  );
+
+  it.each(['expired', 'owner_declined', 'sent'] as const)(
+    'given a %s row, then renewSession writes nothing',
+    async (state) => {
+      const row = await rowIn(state);
+      expect(await renewSession(row)).toBeUndefined();
+    }
+  );
+
+  describe('the guard', () => {
+    it('given a live lease, when the wallet url is rewritten, then the database refuses', async () => {
+      const row = await open(await newConnection());
+      expect(await refusalOf(set(row.id, { walletUrl: URL_B }))).toMatch(/written once/);
+    });
+
+    it('given a lapsed lease, when the wallet url is rewritten, then it is accepted', async () => {
+      const row = await open(await newConnection());
+      await lapseLease(row.id);
+      expect(await refusalOf(set(row.id, { walletUrl: URL_B }))).toBe('written');
+    });
+
+    it('given a live lease, when only the lease changes, then it is accepted', async () => {
+      const row = await open(await newConnection());
+      expect(await refusalOf(setLease(row.id, null))).toBe('written');
+    });
   });
 });

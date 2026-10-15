@@ -5,6 +5,7 @@ import { z } from 'zod';
 import { tenant, type Tenant } from '@/connections/auth';
 import { config } from '@/connections/config';
 import { findActive } from '@/connections/rows';
+import { keepLease, leaseHeld, sessionLeaseEnd } from '@/connections/session-lease';
 import { ownerRelay, WalletBusy, type OpenWallet, type Wallet } from '@/connections/relay';
 import { countHit, isPaymentsPaused } from '@/db/settings';
 import { currentGrant } from '@/grants/store';
@@ -24,10 +25,13 @@ import {
   DEPOSIT_FAILED,
   DEPOSIT_REVERTED,
   failIfStale,
+  findById,
   findByQuoteId,
   nextStepPays,
   releaseQuoted,
   renewQuoted,
+  endSession,
+  renewSession,
   reopenLink,
   SEND_STARTED,
   type SwapLease,
@@ -372,7 +376,11 @@ async function openLink(t: Tenant, lease: SwapLease, key: string, deps: SwapDeps
   let waiting: SwapRow | undefined | typeof FULL;
   try {
     waiting = await withLinkSlot(t.account, undefined, (tx) =>
-      releaseQuoted(lease, { state: 'awaiting_owner', code: null, walletUrl: wallet.url, approveBy }, tx)
+      releaseQuoted(
+        lease,
+        { state: 'awaiting_owner', code: null, walletUrl: wallet.url, approveBy, sessionUntil: sessionLeaseEnd },
+        tx
+      )
     );
   } finally {
     if (!waiting || waiting === FULL) wallet.close();
@@ -402,23 +410,24 @@ async function reopen(t: Tenant, row: SwapRow, key: string, deps: SwapDeps): Pro
     if (!waiting || waiting === FULL) wallet.close();
   }
   if (waiting === FULL) return accountBusy(key);
-  if (!waiting) return takenOver(key);
+  if (!waiting) return answer((await findById(t.connectionId, row.id)) ?? row);
   follow(t, waiting, wallet, deps);
   return answer(waiting);
 }
 
-const sessionsInThisProcess = new Set<string>();
-
 function follow(t: Tenant, row: SwapRow, wallet: Wallet, deps: SwapDeps): void {
-  sessionsInThisProcess.add(row.id);
+  const stop = keepLease(
+    () => renewSession(row),
+    () => endSession(row)
+  );
   void wallet
     .run((ask) => approve(ask, row, t.account, deps.pollMs, deps.backend))
     .catch((err: unknown) => log('warn', { msg: 'swap approval ended', swapId: row.id, error: errorLabel(err) }))
-    .finally(() => sessionsInThisProcess.delete(row.id));
+    .finally(stop);
 }
 
 async function replay(t: Tenant, row: SwapRow, key: string, deps: SwapDeps): Promise<SwapResult> {
-  const linkDead = row.state === 'awaiting_owner' && row.code !== SEND_STARTED && !sessionsInThisProcess.has(row.id);
+  const linkDead = row.state === 'awaiting_owner' && row.code !== SEND_STARTED && !leaseHeld(row.sessionUntil);
   if (!linkDead) return answer(row);
   if (!(await findActive(t.connectionId))) return connectionEnded();
   return reopen(t, row, key, deps);

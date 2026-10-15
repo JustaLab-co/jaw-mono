@@ -12,6 +12,7 @@ import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vite
 import { verifyBearer, type Tenant } from '@/connections/auth';
 import { WalletBusy, type Ask, type OpenWallet, type Wallet } from '@/connections/relay';
 import { endConnection } from '@/connections/rows';
+import { SESSION_RENEW_MS } from '@/connections/session-lease';
 import {
   callTool,
   connect,
@@ -119,6 +120,11 @@ const settle = async () => {
   await walletsSettled();
   await new Promise((resolve) => setImmediate(resolve));
 };
+// A session's end clears its lease with a write of its own; wait for it before retrying.
+const sessionEnded = (connectionId: string) =>
+  vi.waitFor(async () =>
+    expect((await rowsOf(connectionId)).map((r) => r.sessionUntil)).not.toContainEqual(expect.any(Date))
+  );
 const rewrite = (id: string, set: { approveBy: ReturnType<typeof sql> }) =>
   withoutOwnerCallsGuard(() => getDb().update(ownerCalls).set(set).where(eq(ownerCalls.id, id)));
 
@@ -782,6 +788,7 @@ describe('jaw_send_calls refusals', () => {
     const { t } = await connected();
     const first = await send(t, {}, wallet(undefined, ended));
     await settle();
+    await sessionEnded(t.connectionId);
 
     const second = await send(t, {}, wallet());
 
@@ -808,6 +815,7 @@ describe('jaw_send_calls refusals', () => {
     const { t } = await connected();
     await send(t, {}, wallet(undefined, ended));
     await settle();
+    await sessionEnded(t.connectionId);
     await endConnection(t.connectionId, t.account);
 
     const result = await send(t);
@@ -829,6 +837,7 @@ describe('jaw_send_calls refusals', () => {
     const { t } = await connected();
     await send(t, {}, wallet(undefined, ended));
     await settle();
+    await sessionEnded(t.connectionId);
 
     const result = await send(t, {}, busy);
 
@@ -839,6 +848,7 @@ describe('jaw_send_calls refusals', () => {
     const { t } = await connected();
     await send(t, {}, wallet(undefined, ended));
     await settle();
+    await sessionEnded(t.connectionId);
 
     await send(t, {}, wallet(owner(t.account)));
     await settle();
@@ -864,6 +874,7 @@ describe('jaw_send_calls refusals', () => {
     const { t } = await connected();
     await send(t, {}, wallet(undefined, ended));
     await settle();
+    await sessionEnded(t.connectionId);
     await getDb().insert(settings).values({ key: 'payments_paused', value: true });
 
     const result = await send(t);
@@ -1009,6 +1020,7 @@ describe('jaw_send_calls refusals', () => {
       const [a, b, c] = await sameAccount(3);
       await send(a, {}, wallet(undefined, ended));
       await settle();
+      await sessionEnded(a.connectionId);
       await send(b);
       await send(c);
 
@@ -1022,6 +1034,7 @@ describe('jaw_send_calls refusals', () => {
       const [a, b, c, d] = await sameAccount(4);
       await send(a, {}, wallet(undefined, ended));
       await settle();
+      await sessionEnded(a.connectionId);
       await send(b);
       await send(c);
       await store.insertOwnerCall({
@@ -1119,6 +1132,7 @@ describe('jaw_send_calls refusals', () => {
     const { t } = await connected();
     await send(t, {}, wallet(undefined, ended));
     await settle();
+    await sessionEnded(t.connectionId);
     const clients: unknown[] = [];
     const spy: OpenWallet = async (_chainId, _until, client) => {
       clients.push(client);
@@ -1134,6 +1148,7 @@ describe('jaw_send_calls refusals', () => {
     const { t } = await connected();
     const first = await send(t, {}, wallet(undefined, ended));
     await settle();
+    await sessionEnded(t.connectionId);
     await rewrite(first.structuredContent!.id, { approveBy: sql`statement_timestamp() - interval '1 second'` });
     const [row] = await rowsOf(t.connectionId);
 
@@ -1181,6 +1196,7 @@ describe('jaw_send_calls refusals', () => {
       const { t } = await connected();
       await send(t, {}, wallet(undefined, ended));
       await settle();
+      await sessionEnded(t.connectionId);
       const deps = together();
 
       await Promise.all([sendCalls(t, input(), deps), sendCalls(t, input(), deps)]);
@@ -1504,4 +1520,110 @@ describe('jaw_send_calls_status', () => {
       expect(result.content[0].text).not.toMatch(/not_found/);
     }
   );
+});
+
+describe('owner link lease between two processes', () => {
+  // A wallet whose relay session stays up until the test ends it.
+  const heldWallet = () => {
+    let end = () => {};
+    const open: OpenWallet = async (chainId, until) => {
+      opened.push({ chainId, until });
+      return {
+        url: `http://keys.test/cli-bridge?session=held-${randomBytes(4).toString('hex')}`,
+        run: () => new Promise<never>((resolve) => (end = () => resolve(undefined as never))),
+        close: () => {},
+      };
+    };
+    return { open, end: () => end() };
+  };
+  const leaseOf = async (id: string) => {
+    const [row] = await getDb().select().from(ownerCalls).where(eq(ownerCalls.id, id));
+    return row.sessionUntil;
+  };
+  const lapseLease = (id: string) =>
+    getDb()
+      .update(ownerCalls)
+      .set({ sessionUntil: sql`statement_timestamp() - interval '1 second'` })
+      .where(eq(ownerCalls.id, id));
+  const eventually = async (check: () => Promise<boolean>) => {
+    for (const deadline = Date.now() + 5_000; Date.now() < deadline; ) {
+      if (await check()) return;
+      await new Promise((resolve) => setImmediate(resolve));
+    }
+    throw new Error('the condition never held');
+  };
+
+  it('given process A follows the link, when process B gets the same key, then B opens no wallet and the url is A', async () => {
+    const { t } = await connected();
+    const first = await send(t, {}, heldWallet().open);
+
+    const second = await send(t, {}, heldWallet().open);
+
+    expect(second.structuredContent!.url).toBe(first.structuredContent!.url);
+    expect(opened).toHaveLength(1);
+    expect((await rowsOf(t.connectionId))[0].walletUrl).toBe(first.structuredContent!.url);
+  });
+
+  it('given the lease of A lapsed, when process B gets the same key, then B reopens the row with its own url', async () => {
+    const { t } = await connected();
+    const first = await send(t, {}, heldWallet().open);
+    await lapseLease(first.structuredContent!.id);
+
+    const second = await send(t, {}, heldWallet().open);
+
+    expect(opened).toHaveLength(2);
+    expect(second.structuredContent!.id).toBe(first.structuredContent!.id);
+    expect(second.structuredContent!.url).not.toBe(first.structuredContent!.url);
+    expect((await leaseOf(first.structuredContent!.id))!.getTime()).toBeGreaterThan(Date.now());
+  });
+
+  it('given A renews while its session lives, then the lease moves forward and B still cannot reopen', async () => {
+    vi.useFakeTimers({ toFake: ['setInterval', 'clearInterval'] });
+    try {
+      const { t } = await connected();
+      const first = await send(t, {}, heldWallet().open);
+      const id = first.structuredContent!.id;
+      await getDb()
+        .update(ownerCalls)
+        .set({ sessionUntil: sql`statement_timestamp() + interval '1 second'` })
+        .where(eq(ownerCalls.id, id));
+      const before = (await leaseOf(id))!.getTime();
+
+      await vi.advanceTimersByTimeAsync(SESSION_RENEW_MS);
+      await eventually(async () => (await leaseOf(id))!.getTime() > before + 5_000);
+
+      await send(t, {}, heldWallet().open);
+      expect(opened).toHaveLength(1);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('given the session of A ended, then the lease is cleared and B reopens at once', async () => {
+    const { t } = await connected();
+    const a = heldWallet();
+    const first = await send(t, {}, a.open);
+    const id = first.structuredContent!.id;
+
+    a.end();
+    await eventually(async () => (await leaseOf(id)) === null);
+    const second = await send(t, {}, heldWallet().open);
+
+    expect(opened).toHaveLength(2);
+    expect(second.structuredContent!.url).not.toBe(first.structuredContent!.url);
+  });
+
+  it('given B reopened after a lapse, when A renews or ends, then the url and the lease of B stay', async () => {
+    const { t } = await connected();
+    const first = await send(t, {}, heldWallet().open);
+    const [stale] = await rowsOf(t.connectionId);
+    await lapseLease(first.structuredContent!.id);
+    await send(t, {}, heldWallet().open);
+    const [current] = await rowsOf(t.connectionId);
+
+    expect(await store.renewSession(stale)).toBeUndefined();
+    await store.endSession(stale);
+
+    expect((await rowsOf(t.connectionId))[0].sessionUntil).toEqual(current.sessionUntil);
+  });
 });

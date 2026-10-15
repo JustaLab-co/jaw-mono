@@ -16,6 +16,7 @@ import { verifyBearer, withConnection, type Tenant } from '@/connections/auth';
 import { config } from '@/connections/config';
 import { disconnect } from '@/connections/disconnect';
 import { endConnection } from '@/connections/rows';
+import { SESSION_RENEW_MS } from '@/connections/session-lease';
 import { WalletBusy, type Ask, type OpenWallet, type Wallet } from '@/connections/relay';
 import {
   approvedOnChain,
@@ -2414,5 +2415,122 @@ describe('owner links per account, swaps and calls together', () => {
     expect(states.filter((s) => s === 'awaiting_owner')).toHaveLength(3);
     expect(states.filter((s) => s === 'account_busy')).toHaveLength(2);
     expect(closed).toHaveLength(2);
+  });
+});
+
+describe('swap owner link lease between two processes', () => {
+  // A wallet whose relay session stays up until the test ends it.
+  const heldWallet = () => {
+    let end = () => {};
+    const open: OpenWallet = async (chainId, until, client) => {
+      opened.push({ chainId, until, client: client?.clientId });
+      return {
+        url: `http://keys.test/cli-bridge?session=held-${opened.length}-${Math.random().toString(36).slice(2)}`,
+        run: () => new Promise<never>((resolve) => (end = () => resolve(undefined as never))),
+        close: () => {},
+      };
+    };
+    return { open, end: () => end() };
+  };
+  const leaseOf = async (id: string) => {
+    const [row] = await getDb().select().from(swaps).where(eq(swaps.id, id));
+    return row.sessionUntil;
+  };
+  const lapseLease = (id: string) =>
+    getDb()
+      .update(swaps)
+      .set({ sessionUntil: sql`statement_timestamp() - interval '1 second'` })
+      .where(eq(swaps.id, id));
+  const eventually = async (check: () => Promise<boolean>) => {
+    for (const deadline = Date.now() + 5_000; Date.now() < deadline; ) {
+      if (await check()) return;
+      await new Promise((resolve) => setImmediate(resolve));
+    }
+    throw new Error('the condition never held');
+  };
+
+  it('given process A follows the link, when process B gets the same key, then B opens no wallet and the url is A', async () => {
+    const { t } = await connected('1');
+    const first = await run(t, {}, heldWallet().open);
+
+    const second = await run(t, {}, heldWallet().open);
+
+    expect(second.structuredContent?.url).toBe(first.structuredContent?.url);
+    expect(opened).toHaveLength(1);
+    expect((await swapsOf(t.connectionId))[0].walletUrl).toBe(first.structuredContent?.url);
+  });
+
+  it('given the lease of A lapsed, when process B gets the same key, then B reopens the row with its own url', async () => {
+    const { t } = await connected('1');
+    const first = await run(t, {}, heldWallet().open);
+    const [row] = await swapsOf(t.connectionId);
+    await lapseLease(row.id);
+
+    const second = await run(t, {}, heldWallet().open);
+
+    expect(opened).toHaveLength(2);
+    expect(second.structuredContent?.url).not.toBe(first.structuredContent?.url);
+    expect((await swapsOf(t.connectionId))[0].walletUrl).toBe(second.structuredContent?.url);
+    expect((await leaseOf(row.id))!.getTime()).toBeGreaterThan(Date.now());
+  });
+
+  it('given another process takes the link while B opens its wallet, then B answers with that url', async () => {
+    const { t } = await connected('1');
+    await run(t, {}, heldWallet().open);
+    const [row] = await swapsOf(t.connectionId);
+    await lapseLease(row.id);
+    const taken = 'http://keys.test/cli-bridge?session=taken';
+    const racing: OpenWallet = async () => {
+      await getDb()
+        .update(swaps)
+        .set({ walletUrl: taken, sessionUntil: sql`statement_timestamp() + interval '30 seconds'` })
+        .where(eq(swaps.id, row.id));
+      return {
+        url: 'http://keys.test/cli-bridge?session=late',
+        run: () => new Promise<never>(() => {}),
+        close: () => {},
+      };
+    };
+
+    const second = await run(t, {}, racing);
+
+    expect(second.structuredContent?.url).toBe(taken);
+    expect(second.isError).toBeFalsy();
+  });
+
+  it('given A renews while its session lives, then the lease moves forward and B still cannot reopen', async () => {
+    vi.useFakeTimers({ toFake: ['setInterval', 'clearInterval'] });
+    try {
+      const { t } = await connected('1');
+      await run(t, {}, heldWallet().open);
+      const [row] = await swapsOf(t.connectionId);
+      await getDb()
+        .update(swaps)
+        .set({ sessionUntil: sql`statement_timestamp() + interval '1 second'` })
+        .where(eq(swaps.id, row.id));
+      const before = (await leaseOf(row.id))!.getTime();
+
+      await vi.advanceTimersByTimeAsync(SESSION_RENEW_MS);
+      await eventually(async () => (await leaseOf(row.id))!.getTime() > before + 5_000);
+
+      await run(t, {}, heldWallet().open);
+      expect(opened).toHaveLength(1);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('given the session of A ended, then the lease is cleared and B reopens at once', async () => {
+    const { t } = await connected('1');
+    const a = heldWallet();
+    const first = await run(t, {}, a.open);
+    const [row] = await swapsOf(t.connectionId);
+
+    a.end();
+    await eventually(async () => (await leaseOf(row.id)) === null);
+    const second = await run(t, {}, heldWallet().open);
+
+    expect(opened).toHaveLength(2);
+    expect(second.structuredContent?.url).not.toBe(first.structuredContent?.url);
   });
 });

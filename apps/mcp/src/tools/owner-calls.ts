@@ -12,6 +12,7 @@ import { z } from 'zod';
 import { tenant, type Tenant } from '@/connections/auth';
 import { ownerRelay, WalletBusy, type OpenWallet, type Wallet } from '@/connections/relay';
 import { findActive } from '@/connections/rows';
+import { keepLease, leaseHeld } from '@/connections/session-lease';
 import { countHit, isPaymentsPaused } from '@/db/settings';
 import { errorLabel, log, RATE_WINDOW_MS } from '@/lib/edge';
 import { reply } from '@/lib/fence';
@@ -25,6 +26,8 @@ import {
   findByKey,
   findOpen,
   insertOwnerCall,
+  endSession,
+  renewSession,
   reopenLink,
   SEND_STARTED,
   type OwnerCallRow,
@@ -213,16 +216,17 @@ function answer(row: OwnerCallRow, note = ''): SendResult {
   return { ...reply(out), isError: row.state === 'reverted' };
 }
 
-const sessionsInThisProcess = new Set<string>();
-
 function follow(row: OwnerCallRow, wallet: Wallet): void {
-  sessionsInThisProcess.add(row.id);
+  const stop = keepLease(
+    () => renewSession(row),
+    () => endSession(row)
+  );
   void wallet
     .run((ask) => approve(ask, row))
     .catch((err: unknown) =>
       log('warn', { msg: 'owner calls approval ended', ownerCallId: row.id, error: errorLabel(err) })
     )
-    .finally(() => sessionsInThisProcess.delete(row.id));
+    .finally(stop);
 }
 
 async function refusedBeforeLink(t: Tenant): Promise<SendResult | undefined> {
@@ -263,14 +267,14 @@ async function reopen(t: Tenant, row: OwnerCallRow, deps: OwnerCallDeps): Promis
   }
   if (reopened === FULL) return accountBusy();
   if (reopened) follow(reopened, wallet);
-  return answer(reopened ?? row);
+  return answer(reopened ?? (await findById(t.connectionId, row.id)) ?? row);
 }
 
 async function replay(t: Tenant, row: OwnerCallRow, hash: string, deps: OwnerCallDeps): Promise<SendResult> {
   if (row.requestHash !== hash) {
     return refuse('idempotency_conflict', 'This idempotency key was used for another request. Nothing was sent.');
   }
-  const linkDead = row.state === 'awaiting_owner' && row.code !== SEND_STARTED && !sessionsInThisProcess.has(row.id);
+  const linkDead = row.state === 'awaiting_owner' && row.code !== SEND_STARTED && !leaseHeld(row.sessionUntil);
   if (!linkDead) return answer(row);
   const refused = await refusedBeforeLink(t);
   if (refused) return refused;

@@ -17,6 +17,8 @@ import {
   markSendStarted,
   recordCallsId,
   release,
+  renewSession,
+  endSession,
   reopenLink,
   SEND_STARTED,
   SWAP_TRANSITIONS,
@@ -777,6 +779,92 @@ describe('the send marker and a reopened link', () => {
     expect(await recordCallsId(row.connectionId, row.id, '0xcalls')).toMatchObject({
       state: 'deposit_sent',
       code: null,
+    });
+  });
+});
+
+describe('the session lease', () => {
+  const lease = async (id: string) => (await rowOf(id)).sessionUntil;
+  const setLease = (id: string, sessionUntil: SQL | null) =>
+    getDb().update(swaps).set({ sessionUntil }).where(eq(swaps.id, id));
+  const lapsed = sql`now() - interval '1 second'`;
+  const URL_NEW = 'https://keys.test/cli-bridge#new';
+
+  it('given a live lease, then the link does not reopen and keeps its url', async () => {
+    const row = await awaiting(await newConnection());
+    await setLease(row.id, sql`now() + interval '30 seconds'`);
+    expect(await reopenLink(row, URL_NEW)).toBeUndefined();
+    expect((await rowOf(row.id)).walletUrl).toBe(row.walletUrl);
+  });
+
+  it.each([
+    ['no lease', null],
+    ['a lapsed lease', lapsed],
+  ])('given %s, then the link reopens and takes a live lease', async (_, sessionUntil) => {
+    const row = await awaiting(await newConnection());
+    await setLease(row.id, sessionUntil);
+    const reopened = await reopenLink(row, URL_NEW);
+    expect(reopened).toMatchObject({ walletUrl: URL_NEW });
+    expect(reopened!.sessionUntil!.getTime()).toBeGreaterThan(Date.now());
+  });
+
+  it('given two reopens racing on a lapsed lease, then one wins', async () => {
+    const row = await awaiting(await newConnection());
+    await setLease(row.id, lapsed);
+    const wins = await Promise.all([reopenLink(row, URL_NEW), reopenLink(row, 'https://keys.test/cli-bridge#c')]);
+    expect(wins.filter(Boolean)).toHaveLength(1);
+  });
+
+  it('given a live row, when its session renews, then the lease moves forward', async () => {
+    const row = await awaiting(await newConnection());
+    await setLease(row.id, sql`now() + interval '1 second'`);
+    const before = (await lease(row.id))!.getTime();
+    expect((await renewSession(row))!.sessionUntil!.getTime()).toBeGreaterThan(before + 5_000);
+  });
+
+  it('given a session that ends, then the lease clears', async () => {
+    const row = await awaiting(await newConnection());
+    await setLease(row.id, sql`now() + interval '30 seconds'`);
+    await endSession(row);
+    expect(await lease(row.id)).toBeNull();
+  });
+
+  it.each(['renewSession', 'endSession'] as const)(
+    'given another process took the url, when %s runs for the old one, then the lease is untouched',
+    async (call) => {
+      const row = await awaiting(await newConnection());
+      await setLease(row.id, lapsed);
+      const taken = await reopenLink(row, URL_NEW);
+      await { renewSession, endSession }[call](row);
+      expect((await rowOf(row.id)).sessionUntil).toEqual(taken!.sessionUntil);
+    }
+  );
+
+  it('given an expired row, then renewSession writes nothing', async () => {
+    const row = await awaiting(await newConnection());
+    await move(row.connectionId, row.id, ['awaiting_owner'], 'expired');
+    expect(await renewSession(row)).toBeUndefined();
+  });
+
+  describe('the guard', () => {
+    it('given a live lease, when the wallet url is rewritten, then the database refuses', async () => {
+      const row = await awaiting(await newConnection());
+      await setLease(row.id, sql`now() + interval '30 seconds'`);
+      const write = getDb().update(swaps).set({ walletUrl: URL_NEW }).where(eq(swaps.id, row.id));
+      expect(await refusalOf(write)).toMatch(/written once/);
+    });
+
+    it('given a lapsed lease, when the wallet url is rewritten, then it is accepted', async () => {
+      const row = await awaiting(await newConnection());
+      await setLease(row.id, lapsed);
+      const write = getDb().update(swaps).set({ walletUrl: URL_NEW }).where(eq(swaps.id, row.id));
+      expect(await refusalOf(write)).toBe('written');
+    });
+
+    it('given a live lease, when only the lease changes, then it is accepted', async () => {
+      const row = await awaiting(await newConnection());
+      await setLease(row.id, sql`now() + interval '30 seconds'`);
+      expect(await refusalOf(setLease(row.id, null))).toBe('written');
     });
   });
 });

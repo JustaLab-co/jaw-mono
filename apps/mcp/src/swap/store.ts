@@ -1,7 +1,8 @@
 import { createHash, randomBytes } from 'node:crypto';
-import { and, eq, gt, inArray, isNotNull, isNull, lt, not, sql, type SQL } from 'drizzle-orm';
+import { and, eq, gt, inArray, isNotNull, isNull, lt, lte, not, or, sql, type SQL } from 'drizzle-orm';
 import type { PgUpdateSetSource } from 'drizzle-orm/pg-core';
 import { config, QUOTE_MARGIN_SEC } from '@/connections/config';
+import { sessionLeaseEnd } from '@/connections/session-lease';
 import { getDb, type Tx } from '@/db/client';
 import { payments, SWAP_DEPOSIT_ADDRESS_INDEX, swaps } from '@/db/schema';
 import { LEASE_MS } from '@/payments/store';
@@ -248,17 +249,26 @@ export const markSendStarted = (connectionId: string, id: string) =>
     code: SEND_STARTED,
   });
 
+/** Reopens only when no process holds the link: the lease is empty or lapsed. */
 export const reopenLink = (row: SwapRow, walletUrl: string, db: Tx = getDb()) =>
   write(
     and(
       ofSwap(row.connectionId, row.id, ['awaiting_owner']),
       eq(swaps.walletUrl, row.walletUrl!),
       sql`${swaps.code} is distinct from ${SEND_STARTED}`,
-      gt(swaps.approveBy, dbNow)
+      gt(swaps.approveBy, dbNow),
+      or(isNull(swaps.sessionUntil), lte(swaps.sessionUntil, dbNow))
     ),
-    { walletUrl, code: null },
+    { walletUrl, code: null, sessionUntil: sessionLeaseEnd },
     db
   );
+
+const ofSession = (row: SwapRow) =>
+  and(ofSwap(row.connectionId, row.id, ['awaiting_owner']), eq(swaps.walletUrl, row.walletUrl!));
+
+export const renewSession = (row: SwapRow) => write(ofSession(row), { sessionUntil: sessionLeaseEnd });
+
+export const endSession = (row: SwapRow) => write(ofSession(row), { sessionUntil: null });
 
 export const recordCallsId = (connectionId: string, id: string, callsId: string) =>
   move(connectionId, id, ['awaiting_owner', 'expired'], 'deposit_sent', { callsId, code: null });
@@ -277,6 +287,14 @@ export const recordSentCode = (connectionId: string, id: string, code: string, t
 
 export const recordTxHash = (connectionId: string, id: string, txHash: string) =>
   write(and(ofSwap(connectionId, id, ['deposit_sent', 'submitted']), isNull(swaps.txHash)), { txHash });
+
+export async function findById(connectionId: string, id: string): Promise<SwapRow | undefined> {
+  const [row] = await getDb()
+    .select()
+    .from(swaps)
+    .where(and(eq(swaps.connectionId, connectionId), eq(swaps.id, id)));
+  return row;
+}
 
 export async function findByQuoteId(connectionId: string, quoteId: string): Promise<SwapRow | undefined> {
   const [row] = await getDb()

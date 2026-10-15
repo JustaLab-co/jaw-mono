@@ -1,6 +1,7 @@
 import { randomBytes } from 'node:crypto';
-import { and, eq, gt, inArray, isNotNull, isNull, lt, sql, type SQL } from 'drizzle-orm';
+import { and, eq, gt, inArray, isNotNull, isNull, lt, lte, or, sql, type SQL } from 'drizzle-orm';
 import type { PgUpdateSetSource } from 'drizzle-orm/pg-core';
+import { sessionLeaseEnd } from '@/connections/session-lease';
 import { getDb, type Tx } from '@/db/client';
 import { ownerCalls } from '@/db/schema';
 
@@ -44,6 +45,7 @@ export async function insertOwnerCall(input: NewOwnerCall, db: Tx = getDb()): Pr
       calls: input.calls,
       walletUrl: input.walletUrl,
       approveBy: input.approveBy,
+      sessionUntil: sessionLeaseEnd,
     })
     .onConflictDoNothing()
     .returning();
@@ -75,17 +77,26 @@ export async function expirePast(connectionId: string): Promise<void> {
   );
 }
 
+/** Reopens only when no process holds the link: the lease is empty or lapsed. */
 export const reopenLink = (row: OwnerCallRow, walletUrl: string, db: Tx = getDb()) =>
   write(
     and(
       ofCall(row.connectionId, row.id, ['awaiting_owner']),
       eq(ownerCalls.walletUrl, row.walletUrl),
       sql`${ownerCalls.code} is distinct from ${SEND_STARTED}`,
-      gt(ownerCalls.approveBy, dbNow)
+      gt(ownerCalls.approveBy, dbNow),
+      or(isNull(ownerCalls.sessionUntil), lte(ownerCalls.sessionUntil, dbNow))
     ),
-    { walletUrl, code: null },
+    { walletUrl, code: null, sessionUntil: sessionLeaseEnd },
     db
   );
+
+const ofSession = (row: OwnerCallRow) =>
+  and(ofCall(row.connectionId, row.id, ['awaiting_owner']), eq(ownerCalls.walletUrl, row.walletUrl));
+
+export const renewSession = (row: OwnerCallRow) => write(ofSession(row), { sessionUntil: sessionLeaseEnd });
+
+export const endSession = (row: OwnerCallRow) => write(ofSession(row), { sessionUntil: null });
 
 export const setCode = (connectionId: string, id: string, code: string) =>
   write(and(ofCall(connectionId, id, ['awaiting_owner']), sql`${ownerCalls.code} is distinct from ${SEND_STARTED}`), {
