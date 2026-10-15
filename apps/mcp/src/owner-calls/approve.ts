@@ -1,4 +1,5 @@
-import { toHex } from 'viem';
+import type { ChainClients } from '@jaw.id/agent';
+import { toHex, withTimeout } from 'viem';
 import { z } from 'zod';
 import type { Ask } from '@/connections/relay';
 import { refusedBeforeSubmit, USER_REJECTED } from '@/connections/wallet-codes';
@@ -6,11 +7,12 @@ import { errorLabel, log } from '@/lib/edge';
 import { decline, markSendStarted, markSent, setCode, type OwnerCallRow } from './store';
 
 const SESSION_END_MARGIN_MS = 5_000;
+const HEAD_TIMEOUT_MS = 3_000;
 
 const sent = z.object({ id: z.string().min(1).max(256) });
 
 /** Asks the owner's wallet for the account, then for the stored calls, and records what came back. */
-export async function approve(ask: Ask, row: OwnerCallRow): Promise<void> {
+export async function approve(ask: Ask, row: OwnerCallRow, clients: ChainClients): Promise<void> {
   let accounts: unknown;
   try {
     accounts = await ask('eth_requestAccounts', []);
@@ -41,7 +43,7 @@ export async function approve(ask: Ask, row: OwnerCallRow): Promise<void> {
     return;
   }
   const callsId = sent.safeParse(answer).data?.id;
-  if (callsId !== undefined) await keepCallsId(row, callsId);
+  if (callsId !== undefined) await keepCallsId(row, callsId, await headOf(row, clients));
 }
 
 const codeOf = (err: unknown) => (err as { code?: unknown } | undefined)?.code;
@@ -49,12 +51,23 @@ const codeOf = (err: unknown) => (err as { code?: unknown } | undefined)?.code;
 const includes = (accounts: unknown, account: string) =>
   Array.isArray(accounts) && accounts.some((a) => typeof a === 'string' && a.toLowerCase() === account.toLowerCase());
 
-async function keepCallsId(row: OwnerCallRow, callsId: string): Promise<void> {
+/** Where to start looking for the call on chain later. Null when the node does not answer: the send is recorded anyway. */
+async function headOf(row: OwnerCallRow, clients: ChainClients): Promise<bigint | null> {
   try {
-    await markSent(row.connectionId, row.id, callsId);
+    const client = clients.publicClient(row.chainId);
+    return await withTimeout(() => client.getBlockNumber({ cacheTime: 0 }), { timeout: HEAD_TIMEOUT_MS });
+  } catch (err) {
+    log('warn', { msg: 'owner calls head not read', ownerCallId: row.id, error: errorLabel(err) });
+    return null;
+  }
+}
+
+async function keepCallsId(row: OwnerCallRow, callsId: string, head: bigint | null): Promise<void> {
+  try {
+    await markSent(row.connectionId, row.id, callsId, head);
   } catch (err) {
     log('warn', { msg: 'owner calls id not written, retrying', ownerCallId: row.id, callsId, error: errorLabel(err) });
-    await markSent(row.connectionId, row.id, callsId);
+    await markSent(row.connectionId, row.id, callsId, head);
   }
 }
 

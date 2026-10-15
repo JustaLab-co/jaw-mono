@@ -13,7 +13,7 @@ import { isPaymentsPaused } from '@/db/settings';
 import { readOnChain } from '@/grants/permission';
 import { errorLabel, log } from '@/lib/edge';
 import { conclude, sentBefore } from '@/owner-calls/store';
-import { readReceipt, type ReadReceipt } from '@/owner-calls/receipt';
+import { canSearchChain, readReceipt, searchChain, type ReadReceipt } from '@/owner-calls/receipt';
 import { chainAnswer, type ChainAnswer } from '@/payments/confirm';
 import { claimOpenSends, settleSend, type SendRow } from '@/payments/sends';
 import { claimUnresolved, expire, markAlerted, settle, txHashTaken, type PaymentRow } from '@/payments/store';
@@ -54,7 +54,7 @@ export async function reconcile(
     ownerCalls: { landed: 0, reverted: 0, open: 0 },
   };
   await reconcileSends(clients, report);
-  await reconcileOwnerCalls(receipt, report);
+  await reconcileOwnerCalls(receipt, clients, now, report);
   for (;;) {
     const rows = await claimUnresolved(new Date(now.getTime() - RECONCILE_AFTER_MS), CLAIM_MS, BATCH);
     const answers = await Promise.all(rows.map((row) => answerFor(row, clients)));
@@ -151,18 +151,26 @@ async function sendOutcome(row: SendRow, clients: ChainClients) {
   return undefined;
 }
 
+// Each chain search can take dozens of log reads. The rows come in random order, so a few rows
+// that never land cannot take every run's searches from the rest.
+const CHAIN_SEARCHES_PER_RUN = 5;
+
 /**
  * Sent calls nobody asked about again. One batch per run: rows still waiting for a
  * receipt are read again next run, and `jaw_send_calls_status` concludes the same
  * way, so whichever lands first wins. A row stuck at `send_started` has no calls
  * id to look up by, so it is left alone.
  */
-async function reconcileOwnerCalls(receipt: ReadReceipt, report: Report) {
+async function reconcileOwnerCalls(receipt: ReadReceipt, clients: ChainClients, now: Date, report: Report) {
   const rows = await sentBefore(RECONCILE_AFTER_MS, BATCH);
+  let chainSearches = 0;
   await Promise.all(
     rows.map(async (row) => {
       try {
-        const mined = await receipt(row.chainId, row.callsId as string);
+        let mined = await receipt(row.chainId, row.callsId as string);
+        if (!mined && canSearchChain(row, now.getTime()) && chainSearches++ < CHAIN_SEARCHES_PER_RUN) {
+          mined = await searchChain(row, clients, now.getTime());
+        }
         if (!mined) {
           report.ownerCalls.open++;
           return;

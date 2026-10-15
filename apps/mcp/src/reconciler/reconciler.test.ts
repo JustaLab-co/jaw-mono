@@ -35,6 +35,7 @@ import { takeSealedKey } from '@/connections/rows';
 import { getDb } from '@/db/client';
 import { auditEvents, connections, grants, oauthPayloads, ownerCalls, payments } from '@/db/schema';
 import { useTestDb, withoutOwnerCallsGuard } from '@/db/test-db';
+import { fakeChain, type FakeEvent } from '@/owner-calls/chain-testkit';
 import type { ReadReceipt } from '@/owner-calls/receipt';
 import { decline, insertOwnerCall, markSent, markSendStarted } from '@/owner-calls/store';
 import { sendCallsStatus } from '@/tools/owner-calls';
@@ -390,7 +391,7 @@ describe('sent owner calls', () => {
     const id = await sentCall(OLD);
     await reconcile(clients, new Date(), receiptFor({ [CALLS_ID]: { success: false, txHash: MINED } }));
     const receipt = vi.fn<ReadReceipt>(async () => null);
-    const result = await sendCallsStatus(t, { id }, { openWallet: noWallet, receipt });
+    const result = await sendCallsStatus(t, { id }, { openWallet: noWallet, receipt, clients });
     expect(result.structuredContent).toMatchObject({ state: 'reverted', txHash: MINED, callsId: CALLS_ID });
     expect(receipt).not.toHaveBeenCalled();
   });
@@ -697,6 +698,99 @@ describe('given an activated connection whose code was never exchanged, past the
         ([line]) => typeof line === 'string' && line.includes(row.id) && line.includes('"level":"error"')
       );
       expect(errors.length).toBeGreaterThanOrEqual(1);
+    } finally {
+      logged.mockRestore();
+    }
+  });
+});
+
+describe('sent owner calls the bundler no longer answers for', () => {
+  const QUIET = 30 * 60_000;
+  const event = (over: Partial<FakeEvent> = {}): FakeEvent => ({
+    userOpHash: CALLS_ID as Hex,
+    block: 9_500n,
+    txHash: MINED as Hex,
+    success: true,
+    ...over,
+  });
+  const stale = async (callsId = CALLS_ID) => {
+    const id = await sentCall(0, callsId);
+    await getDb().update(ownerCalls).set({ sentBlock: 9_000n }).where(eq(ownerCalls.id, id));
+    await ageCall(id, QUIET);
+    return id;
+  };
+  const sweep = (chain: ReturnType<typeof fakeChain>) => reconcile(chain.clients, new Date(), receiptFor({}));
+
+  beforeEach(() => withoutOwnerCallsGuard(() => getDb().delete(ownerCalls)));
+
+  it('concludes a call as landed from the event on chain', async () => {
+    const id = await stale();
+    const report = await sweep(fakeChain({ head: 10_000n, events: [event()] }));
+
+    expect(report.ownerCalls).toEqual({ landed: 1, reverted: 0, open: 0 });
+    expect(await callOf(id)).toMatchObject({ state: 'landed', txHash: MINED });
+  });
+
+  it('concludes a call as reverted when the event says the operation failed', async () => {
+    const id = await stale();
+    const report = await sweep(fakeChain({ head: 10_000n, events: [event({ success: false })] }));
+
+    expect(report.ownerCalls).toEqual({ landed: 0, reverted: 1, open: 0 });
+    expect((await callOf(id)).state).toBe('reverted');
+  });
+
+  it('keeps a call sent when no event is found', async () => {
+    const id = await stale();
+    const report = await sweep(fakeChain({ head: 10_000n }));
+
+    expect(report.ownerCalls).toEqual({ landed: 0, reverted: 0, open: 1 });
+    expect((await callOf(id)).state).toBe('sent');
+  });
+
+  it('searches the chain for at most five calls per run and asks the bundler about all of them', async () => {
+    const hashes = Array.from({ length: 7 }, (_, i) => `0x${(i + 1).toString(16).padStart(2, '0').repeat(32)}` as Hex);
+    const ids: string[] = [];
+    for (const h of hashes) ids.push(await stale(h));
+    const chain = fakeChain({ head: 10_000n, events: hashes.map((h) => event({ userOpHash: h })) });
+    const bundler = receiptFor({});
+
+    const report = await reconcile(chain.clients, new Date(), bundler);
+
+    expect(bundler).toHaveBeenCalledTimes(7);
+    expect(report.ownerCalls).toEqual({ landed: 5, reverted: 0, open: 2 });
+    expect((await Promise.all(ids.map(callOf))).filter((c) => c.state === 'sent')).toHaveLength(2);
+  });
+
+  it('does not read logs for a call whose searched span is already behind the head', async () => {
+    const id = await stale();
+    const chain = fakeChain({ head: 100_000n, events: [event()] });
+
+    const report = await sweep(chain);
+
+    expect(chain.ranges).toEqual([]);
+    expect(report.ownerCalls.open).toBe(1);
+    expect((await callOf(id)).state).toBe('sent');
+  });
+
+  it('does not read the chain for a call sent minutes ago', async () => {
+    const id = await sentCall(OLD);
+    const chain = fakeChain({ head: 10_000n, events: [event()] });
+    const report = await sweep(chain);
+
+    expect(chain.ranges).toEqual([]);
+    expect(report.ownerCalls.open).toBe(1);
+    expect((await callOf(id)).state).toBe('sent');
+  });
+
+  it('logs and skips a call whose chain cannot be read', async () => {
+    const id = await stale();
+    const logged = vi.spyOn(console, 'log').mockImplementation(() => {});
+    try {
+      const report = await sweep(fakeChain({ head: 10_000n, down: true }));
+
+      expect(report.ownerCalls).toEqual({ landed: 0, reverted: 0, open: 1 });
+      expect((await callOf(id)).state).toBe('sent');
+      expect(logged.mock.calls.some(([line]) => String(line).includes(`owner call ${id} not settled`))).toBe(true);
     } finally {
       logged.mockRestore();
     }

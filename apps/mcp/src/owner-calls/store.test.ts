@@ -314,6 +314,17 @@ describe('markSent and conclude', () => {
     }
   );
 
+  it('given a head block, then markSent stores it with the move to sent', async () => {
+    const row = await rowIn('awaiting_owner');
+    const sent = await markSent(row.connectionId, row.id, '0xcalls', 48_153_900n);
+    expect(sent).toMatchObject({ state: 'sent', sentBlock: 48_153_900n });
+  });
+
+  it('given no head block, then markSent still moves the row to sent with a null sent block', async () => {
+    const row = await rowIn('awaiting_owner');
+    expect(await markSent(row.connectionId, row.id, '0xcalls', null)).toMatchObject({ state: 'sent', sentBlock: null });
+  });
+
   it('given a declined row, then markSent writes nothing', async () => {
     const row = await rowIn('owner_declined');
     expect(await markSent(row.connectionId, row.id, '0xcalls')).toBeUndefined();
@@ -434,6 +445,21 @@ describe('the guard', () => {
     const row = await rowIn('sent');
     await set(row.id, { txHash: '0xfirst' });
     expect(await refusalOf(set(row.id, { txHash: '0xsecond' }))).toMatch(/written once/);
+  });
+
+  it('given a sent row without a sent block, when one is written, then it is accepted once and a rewrite is refused', async () => {
+    const row = await rowIn('sent');
+    expect(row.sentBlock).toBeNull();
+    expect(await refusalOf(set(row.id, { sentBlock: 100n }))).toBe('written');
+    expect(await refusalOf(set(row.id, { sentBlock: 200n }))).toMatch(/written once/);
+    expect(await refusalOf(set(row.id, { sentBlock: null }))).toMatch(/written once/);
+    expect((await rowOf(row.id)).sentBlock).toBe(100n);
+  });
+
+  it('given a sent row with a sent block, when it concludes, then the sent block stays', async () => {
+    const row = await rowIn('awaiting_owner');
+    await markSent(row.connectionId, row.id, '0xcalls', 77n);
+    expect(await conclude(row.connectionId, row.id, 'landed', '0xtx')).toMatchObject({ sentBlock: 77n });
   });
 
   it.each([
