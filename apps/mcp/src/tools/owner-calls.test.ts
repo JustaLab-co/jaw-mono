@@ -120,6 +120,11 @@ const settle = async () => {
   await walletsSettled();
   await new Promise((resolve) => setImmediate(resolve));
 };
+// A session's end clears its lease with a write of its own; wait for it before retrying.
+const sessionEnded = (connectionId: string) =>
+  vi.waitFor(async () =>
+    expect((await rowsOf(connectionId)).map((r) => r.sessionUntil)).not.toContainEqual(expect.any(Date))
+  );
 const rewrite = (id: string, set: { approveBy: ReturnType<typeof sql> }) =>
   withoutOwnerCallsGuard(() => getDb().update(ownerCalls).set(set).where(eq(ownerCalls.id, id)));
 
@@ -783,6 +788,7 @@ describe('jaw_send_calls refusals', () => {
     const { t } = await connected();
     const first = await send(t, {}, wallet(undefined, ended));
     await settle();
+    await sessionEnded(t.connectionId);
 
     const second = await send(t, {}, wallet());
 
@@ -809,6 +815,7 @@ describe('jaw_send_calls refusals', () => {
     const { t } = await connected();
     await send(t, {}, wallet(undefined, ended));
     await settle();
+    await sessionEnded(t.connectionId);
     await endConnection(t.connectionId, t.account);
 
     const result = await send(t);
@@ -830,6 +837,7 @@ describe('jaw_send_calls refusals', () => {
     const { t } = await connected();
     await send(t, {}, wallet(undefined, ended));
     await settle();
+    await sessionEnded(t.connectionId);
 
     const result = await send(t, {}, busy);
 
@@ -840,6 +848,7 @@ describe('jaw_send_calls refusals', () => {
     const { t } = await connected();
     await send(t, {}, wallet(undefined, ended));
     await settle();
+    await sessionEnded(t.connectionId);
 
     await send(t, {}, wallet(owner(t.account)));
     await settle();
@@ -865,6 +874,7 @@ describe('jaw_send_calls refusals', () => {
     const { t } = await connected();
     await send(t, {}, wallet(undefined, ended));
     await settle();
+    await sessionEnded(t.connectionId);
     await getDb().insert(settings).values({ key: 'payments_paused', value: true });
 
     const result = await send(t);
@@ -1010,6 +1020,7 @@ describe('jaw_send_calls refusals', () => {
       const [a, b, c] = await sameAccount(3);
       await send(a, {}, wallet(undefined, ended));
       await settle();
+      await sessionEnded(a.connectionId);
       await send(b);
       await send(c);
 
@@ -1023,6 +1034,7 @@ describe('jaw_send_calls refusals', () => {
       const [a, b, c, d] = await sameAccount(4);
       await send(a, {}, wallet(undefined, ended));
       await settle();
+      await sessionEnded(a.connectionId);
       await send(b);
       await send(c);
       await store.insertOwnerCall({
@@ -1120,6 +1132,7 @@ describe('jaw_send_calls refusals', () => {
     const { t } = await connected();
     await send(t, {}, wallet(undefined, ended));
     await settle();
+    await sessionEnded(t.connectionId);
     const clients: unknown[] = [];
     const spy: OpenWallet = async (_chainId, _until, client) => {
       clients.push(client);
@@ -1135,6 +1148,7 @@ describe('jaw_send_calls refusals', () => {
     const { t } = await connected();
     const first = await send(t, {}, wallet(undefined, ended));
     await settle();
+    await sessionEnded(t.connectionId);
     await rewrite(first.structuredContent!.id, { approveBy: sql`statement_timestamp() - interval '1 second'` });
     const [row] = await rowsOf(t.connectionId);
 
@@ -1182,6 +1196,7 @@ describe('jaw_send_calls refusals', () => {
       const { t } = await connected();
       await send(t, {}, wallet(undefined, ended));
       await settle();
+      await sessionEnded(t.connectionId);
       const deps = together();
 
       await Promise.all([sendCalls(t, input(), deps), sendCalls(t, input(), deps)]);
