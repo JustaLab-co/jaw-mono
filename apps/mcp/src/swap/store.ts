@@ -288,6 +288,14 @@ export const recordSentCode = (connectionId: string, id: string, code: string, t
 export const recordTxHash = (connectionId: string, id: string, txHash: string) =>
   write(and(ofSwap(connectionId, id, ['deposit_sent', 'submitted']), isNull(swaps.txHash)), { txHash });
 
+export async function findById(connectionId: string, id: string): Promise<SwapRow | undefined> {
+  const [row] = await getDb()
+    .select()
+    .from(swaps)
+    .where(and(eq(swaps.connectionId, connectionId), eq(swaps.id, id)));
+  return row;
+}
+
 export async function findByQuoteId(connectionId: string, quoteId: string): Promise<SwapRow | undefined> {
   const [row] = await getDb()
     .select()

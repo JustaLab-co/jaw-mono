@@ -2474,6 +2474,30 @@ describe('swap owner link lease between two processes', () => {
     expect((await leaseOf(row.id))!.getTime()).toBeGreaterThan(Date.now());
   });
 
+  it('given another process takes the link while B opens its wallet, then B answers with that url', async () => {
+    const { t } = await connected('1');
+    await run(t, {}, heldWallet().open);
+    const [row] = await swapsOf(t.connectionId);
+    await lapseLease(row.id);
+    const taken = 'http://keys.test/cli-bridge?session=taken';
+    const racing: OpenWallet = async () => {
+      await getDb()
+        .update(swaps)
+        .set({ walletUrl: taken, sessionUntil: sql`statement_timestamp() + interval '30 seconds'` })
+        .where(eq(swaps.id, row.id));
+      return {
+        url: 'http://keys.test/cli-bridge?session=late',
+        run: () => new Promise<never>(() => {}),
+        close: () => {},
+      };
+    };
+
+    const second = await run(t, {}, racing);
+
+    expect(second.structuredContent?.url).toBe(taken);
+    expect(second.isError).toBeFalsy();
+  });
+
   it('given A renews while its session lives, then the lease moves forward and B still cannot reopen', async () => {
     vi.useFakeTimers({ toFake: ['setInterval', 'clearInterval'] });
     try {

@@ -25,6 +25,7 @@ import {
   DEPOSIT_FAILED,
   DEPOSIT_REVERTED,
   failIfStale,
+  findById,
   findByQuoteId,
   nextStepPays,
   releaseQuoted,
@@ -409,7 +410,7 @@ async function reopen(t: Tenant, row: SwapRow, key: string, deps: SwapDeps): Pro
     if (!waiting || waiting === FULL) wallet.close();
   }
   if (waiting === FULL) return accountBusy(key);
-  if (!waiting) return takenOver(key);
+  if (!waiting) return answer((await findById(t.connectionId, row.id)) ?? row);
   follow(t, waiting, wallet, deps);
   return answer(waiting);
 }

@@ -12,23 +12,26 @@ export const leaseHeld = (until: Date | null) => until !== null && until.getTime
 
 /**
  * Renews a row's lease while its relay session runs. `renew` resolves empty once the row
- * moved on or another process took its url. The returned stop waits for a renewal in
- * flight, then clears the lease so a retry can reopen at once.
+ * moved on or another process took its url. The returned stop waits for every
+ * renewal in flight, then clears the lease so a retry can reopen at once.
  */
 export function keepLease(renew: () => Promise<unknown>, end: () => Promise<unknown>): () => Promise<void> {
-  let inFlight: Promise<unknown> = Promise.resolve();
+  const inFlight = new Set<Promise<void>>();
   const timer = setInterval(() => {
-    inFlight = renew().then(
-      (held) => {
-        if (!held) clearInterval(timer);
-      },
-      (err: unknown) => log('warn', { msg: 'session lease not renewed', error: errorLabel(err) })
-    );
+    const run: Promise<void> = renew()
+      .then(
+        (held) => {
+          if (!held) clearInterval(timer);
+        },
+        (err: unknown) => log('warn', { msg: 'session lease not renewed', error: errorLabel(err) })
+      )
+      .finally(() => inFlight.delete(run));
+    inFlight.add(run);
   }, SESSION_RENEW_MS);
   timer.unref();
   return async () => {
     clearInterval(timer);
-    await inFlight;
+    await Promise.all(inFlight);
     await end().catch((err: unknown) => log('warn', { msg: 'session lease not cleared', error: errorLabel(err) }));
   };
 }
