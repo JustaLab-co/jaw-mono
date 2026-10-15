@@ -12,6 +12,8 @@ import { auditEvents, connections, grants, oauthPayloads, ownerCalls, payments, 
 import { isPaymentsPaused } from '@/db/settings';
 import { readOnChain } from '@/grants/permission';
 import { errorLabel, log } from '@/lib/edge';
+import { conclude, sentBefore } from '@/owner-calls/store';
+import { readReceipt, type ReadReceipt } from '@/owner-calls/receipt';
 import { chainAnswer, type ChainAnswer } from '@/payments/confirm';
 import { claimOpenSends, settleSend, type SendRow } from '@/payments/sends';
 import { claimUnresolved, expire, markAlerted, settle, txHashTaken, type PaymentRow } from '@/payments/store';
@@ -29,6 +31,7 @@ export interface Report {
   open: number;
   alerted: number;
   sends: { landed: number; released: number; open: number };
+  ownerCalls: { landed: number; reverted: number; open: number };
 }
 
 /**
@@ -37,9 +40,21 @@ export interface Report {
  * chain is read with no lock held, and each answer is its own conditional
  * update, so two runs split the rows and one bad row never undoes the rest.
  */
-export async function reconcile(clients: ChainClients = chainClients, now = new Date()): Promise<Report> {
-  const report: Report = { settled: 0, failed: 0, open: 0, alerted: 0, sends: { landed: 0, released: 0, open: 0 } };
+export async function reconcile(
+  clients: ChainClients = chainClients,
+  now = new Date(),
+  receipt: ReadReceipt = readReceipt
+): Promise<Report> {
+  const report: Report = {
+    settled: 0,
+    failed: 0,
+    open: 0,
+    alerted: 0,
+    sends: { landed: 0, released: 0, open: 0 },
+    ownerCalls: { landed: 0, reverted: 0, open: 0 },
+  };
   await reconcileSends(clients, report);
+  await reconcileOwnerCalls(receipt, report);
   for (;;) {
     const rows = await claimUnresolved(new Date(now.getTime() - RECONCILE_AFTER_MS), CLAIM_MS, BATCH);
     const answers = await Promise.all(rows.map((row) => answerFor(row, clients)));
@@ -134,6 +149,32 @@ async function sendOutcome(row: SendRow, clients: ChainClients) {
   if (landed) return { state: 'landed' as const, txHash: landed.transactionHash };
   if ((row.callsId && logs.length > 0) || head >= windowEnd) return { state: 'released' as const };
   return undefined;
+}
+
+/**
+ * Sent calls nobody asked about again. One batch per run: rows still waiting for a
+ * receipt are read again next run, and `jaw_send_calls_status` concludes the same
+ * way, so whichever lands first wins. A row stuck at `send_started` has no calls
+ * id to look up by, so it is left alone.
+ */
+async function reconcileOwnerCalls(receipt: ReadReceipt, report: Report) {
+  const rows = await sentBefore(RECONCILE_AFTER_MS, BATCH);
+  await Promise.all(
+    rows.map(async (row) => {
+      try {
+        const mined = await receipt(row.chainId, row.callsId as string);
+        if (!mined) {
+          report.ownerCalls.open++;
+          return;
+        }
+        const state = mined.success ? 'landed' : 'reverted';
+        if (await conclude(row.connectionId, row.id, state, mined.txHash)) report.ownerCalls[state]++;
+      } catch (err) {
+        log('warn', { msg: `owner call ${row.id} not settled`, error: errorLabel(err) });
+        report.ownerCalls.open++;
+      }
+    })
+  );
 }
 
 const SESSION_DEPS: DisconnectDeps = { readPermission: readOnChain, clients: chainClients, sender: sessionSender };
