@@ -16,6 +16,7 @@ import { findPayment, stateOf } from '@/payments/store';
 import { approve } from '@/swap/approve';
 import type { BackendAnswer, BackendDeps } from '@/swap/backend';
 import { isSupportedOriginChain, type CheckedQuote } from '@/swap/check';
+import { countOpenLinks, FULL, MAX_OPEN_PER_ACCOUNT, withLinkSlot } from '@/owner-calls/cap';
 import { quote, swapRequest } from '@/swap/quote';
 import {
   approveByOf,
@@ -144,6 +145,12 @@ const walletBusy = (key: string) =>
     `Too many owners are approving right now. Send idempotencyKey ${key} again with the same input in a minute; the quote is kept and not paid again.`
   );
 
+const accountBusy = (key: string) =>
+  refuse(
+    'account_busy',
+    `This account already has ${MAX_OPEN_PER_ACCOUNT} requests awaiting the owner across its connections. Send idempotencyKey ${key} again with the same input once one ends; a quote already bought is kept and not paid again.`
+  );
+
 const connectionEnded = () =>
   refuse(
     'connection_ended',
@@ -166,7 +173,7 @@ function invalidInput(input: SwapToolInput): string | undefined {
   return 'An EVM destination needs a hex destinationToken and, when given, a hex recipient.';
 }
 
-async function refusedBeforePaying(t: Tenant, originChainId: number): Promise<SwapResult | undefined> {
+async function refusedBeforePaying(t: Tenant, originChainId: number, key: string): Promise<SwapResult | undefined> {
   if (await isPaymentsPaused())
     return refuse('payments_paused', 'Payments are paused on this server. Nothing was paid.');
   if ((await countHit(`swap:${t.connectionId}`, RATE_WINDOW_MS)) > SWAP_RATE_LIMIT) {
@@ -181,6 +188,7 @@ async function refusedBeforePaying(t: Tenant, originChainId: number): Promise<Sw
   if (!isSupportedOriginChain(originChainId)) {
     return refuse('unsupported_origin_chain', `Chain ${originChainId} is not one the JAW wallet can send from.`);
   }
+  if ((await countOpenLinks(t.account)) >= MAX_OPEN_PER_ACCOUNT) return accountBusy(key);
   return undefined;
 }
 
@@ -348,6 +356,10 @@ async function openLink(t: Tenant, lease: SwapLease, key: string, deps: SwapDeps
   const held = await renewQuoted(lease);
   if (!held) return takenOver(key);
   if (!held.paidAt) throw new Error(`swap ${held.id} holds a quote with no paid_at`);
+  if ((await countOpenLinks(t.account)) >= MAX_OPEN_PER_ACCOUNT) {
+    await releaseQuoted(lease, { code: 'account_busy' });
+    return accountBusy(key);
+  }
   const approveBy = approveByOf(held.paidAt, config().swapQuoteTtlSec);
   let wallet: Wallet;
   try {
@@ -357,11 +369,17 @@ async function openLink(t: Tenant, lease: SwapLease, key: string, deps: SwapDeps
     await releaseQuoted(lease, { code: 'wallet_busy' });
     return walletBusy(key);
   }
-  let waiting: SwapRow | undefined;
+  let waiting: SwapRow | undefined | typeof FULL;
   try {
-    waiting = await releaseQuoted(lease, { state: 'awaiting_owner', code: null, walletUrl: wallet.url, approveBy });
+    waiting = await withLinkSlot(t.account, undefined, (tx) =>
+      releaseQuoted(lease, { state: 'awaiting_owner', code: null, walletUrl: wallet.url, approveBy }, tx)
+    );
   } finally {
-    if (!waiting) wallet.close();
+    if (!waiting || waiting === FULL) wallet.close();
+  }
+  if (waiting === FULL) {
+    await releaseQuoted(lease, { code: 'account_busy' });
+    return accountBusy(key);
   }
   if (!waiting) return takenOver(key);
   follow(t, waiting, wallet, deps);
@@ -369,6 +387,7 @@ async function openLink(t: Tenant, lease: SwapLease, key: string, deps: SwapDeps
 }
 
 async function reopen(t: Tenant, row: SwapRow, key: string, deps: SwapDeps): Promise<SwapResult> {
+  if ((await countOpenLinks(t.account, row.id)) >= MAX_OPEN_PER_ACCOUNT) return accountBusy(key);
   let wallet: Wallet;
   try {
     wallet = await deps.openWallet(t.chainId, row.approveBy!, t);
@@ -376,12 +395,13 @@ async function reopen(t: Tenant, row: SwapRow, key: string, deps: SwapDeps): Pro
     if (!(err instanceof WalletBusy)) throw err;
     return walletBusy(key);
   }
-  let waiting: SwapRow | undefined;
+  let waiting: SwapRow | undefined | typeof FULL;
   try {
-    waiting = await reopenLink(row, wallet.url);
+    waiting = await withLinkSlot(t.account, row.id, (tx) => reopenLink(row, wallet.url, tx));
   } finally {
-    if (!waiting) wallet.close();
+    if (!waiting || waiting === FULL) wallet.close();
   }
+  if (waiting === FULL) return accountBusy(key);
   if (!waiting) return takenOver(key);
   follow(t, waiting, wallet, deps);
   return answer(waiting);
@@ -411,7 +431,7 @@ export async function swap(t: Tenant, input: SwapToolInput, deps: SwapDeps = DEF
   const key = input.idempotencyKey ?? `auto_${randomBytes(12).toString('base64url')}`;
   const request = swapRequest(t, { ...input, originToken: input.originToken as Address });
   if (await nextStepPays(t.connectionId, key, request)) {
-    const refused = await refusedBeforePaying(t, input.originChainId);
+    const refused = await refusedBeforePaying(t, input.originChainId, key);
     if (refused) return refused;
   }
   const claim = await claimSwap(t.connectionId, key, request);

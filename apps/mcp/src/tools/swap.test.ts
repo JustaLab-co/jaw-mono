@@ -25,6 +25,7 @@ import {
   managerAnswer,
   mcp,
   offlineSession,
+  owner as newSigner,
   sessionFakes,
   setTestEnv,
   verifyLocally,
@@ -44,6 +45,7 @@ import { swapRequest } from '@/swap/quote';
 import { approveByOf, claimSwap, type SwapRow } from '@/swap/store';
 import { purge } from '@/reconciler/run';
 import { revokeConnection } from './connections';
+import { sendCalls } from './owner-calls';
 import { requestBudget } from './request-budget';
 import { registerSwapTools, swap, swapStatus, type SwapToolInput } from './swap';
 
@@ -241,8 +243,8 @@ afterEach(async () => {
   await getDb().delete(settings).where(eq(settings.key, 'payments_paused'));
 });
 
-async function connected(perDay?: string, scope = 'wallet:read x402:pay') {
-  const c = await connect(undefined, { scope });
+async function connected(perDay?: string, scope = 'wallet:read x402:pay', signer?: ReturnType<typeof newSigner>) {
+  const c = await connect(signer, { scope });
   const t = (await verifyBearer(c.access_token))?.extra?.tenant as Tenant;
   await getDb().delete(grants).where(eq(grants.connectionId, t.connectionId));
   balances.set(c.signer.address.toLowerCase(), 5_000_000n);
@@ -2296,4 +2298,121 @@ describe('B28: the connection ends while the swap awaits the owner', () => {
       expect(paidHits()).toHaveLength(1);
     }
   );
+});
+
+describe('owner links per account, swaps and calls together', () => {
+  const sameAccount = async (n: number, perDay = '1') => {
+    const signer = newSigner();
+    const all = [];
+    for (let i = 0; i < n; i++) all.push(await connected(perDay, undefined, signer));
+    return all.map((c) => c.t);
+  };
+  const call = (t: Tenant, key: string) =>
+    sendCalls(
+      t,
+      { calls: [{ to: PAY_TO, value: '1' }], idempotencyKey: key },
+      { openWallet: recordingWallet(), receipt: async () => null }
+    );
+
+  it('given three links open on one account, when another connection asks to swap, then account_busy before anything is paid', async () => {
+    const [a, b, c, d] = await sameAccount(4);
+    for (const t of [a, b, c]) await call(t, 'k');
+    const openedBefore = opened.length;
+
+    const result = await run(d);
+
+    expect(result[gateCode]).toBe('account_busy');
+    expect(paidHits()).toHaveLength(0);
+    expect(await swapsOf(d.connectionId)).toEqual([]);
+    expect(opened).toHaveLength(openedBefore);
+  });
+
+  it('given a swap and two calls open on one account, when a third connection sends calls, then account_busy', async () => {
+    const [a, b, c, d] = await sameAccount(4);
+    await run(a);
+    await call(b, 'k');
+    await call(c, 'k');
+
+    const result = await call(d, 'k');
+
+    expect(result[gateCode]).toBe('account_busy');
+  });
+
+  it('given three swaps open on one account, when a fourth connection asks, then account_busy and nothing is paid for it', async () => {
+    const [a, b, c, d] = await sameAccount(4);
+    for (const t of [a, b, c]) await run(t);
+    const paid = paidHits().length;
+
+    const result = await run(d);
+
+    expect(result[gateCode]).toBe('account_busy');
+    expect(paidHits()).toHaveLength(paid);
+  });
+
+  it('given three links open on one account, when another account swaps, then it is served', async () => {
+    const [a, b, c] = await sameAccount(3);
+    for (const t of [a, b, c]) await call(t, 'k');
+    const { t: other } = await connected('1');
+
+    const result = await run(other);
+
+    expect(result.structuredContent).toMatchObject({ state: 'awaiting_owner' });
+  });
+
+  it('given a swap whose owner window passed among three links, when a connection asks to swap, then it is served', async () => {
+    const [a, b, c, d] = await sameAccount(4);
+    await call(a, 'k');
+    await call(b, 'k');
+    await run(c);
+    const [lapsed] = await swapsOf(c.connectionId);
+    await rewrite(lapsed.id, { approveBy: sql`statement_timestamp() - interval '1 second'` });
+
+    const result = await run(d);
+
+    expect(result.structuredContent).toMatchObject({ state: 'awaiting_owner' });
+  });
+
+  it('given a quote bought while the account filled up, when the link would open, then account_busy with the quote held, and the same key opens it once a slot frees', async () => {
+    const [a, b, c, d] = await sameAccount(4);
+    for (const t of [a, b]) await call(t, 'k');
+    const paying: typeof fetch = async (input, init) => {
+      if (new Headers(init?.headers).get('payment-signature')) await call(c, 'k');
+      return auroraErc20Backend(input, init);
+    };
+    const full = await swap(d, input, {
+      openWallet: recordingWallet(),
+      pay: { ...payDeps, fetch: paying },
+      pollMs: 0,
+      backend: backendDeps,
+    });
+
+    expect(full[gateCode]).toBe('account_busy');
+    const [held] = await swapsOf(d.connectionId);
+    expect(held).toMatchObject({ state: 'quoting', code: 'account_busy', walletUrl: null });
+
+    await getDb().execute(sql`update owner_calls set state = 'owner_declined' where connection_id = ${c.connectionId}`);
+    const retried = await run(d);
+
+    expect(retried.structuredContent).toMatchObject({ state: 'awaiting_owner', quoteId: held.quoteId });
+    expect(paidHits()).toHaveLength(1);
+  });
+
+  it('given five connections of one account swapping at once, when every one passed the count before any stored its link, then three stay open and two keep their quote', async () => {
+    const connections = await sameAccount(5);
+    let arrived = 0;
+    let release!: () => void;
+    const barrier = new Promise<void>((resolve) => (release = resolve));
+    const gated: OpenWallet = async (...args) => {
+      if (++arrived === connections.length) release();
+      await barrier;
+      return recordingWallet()(...args);
+    };
+
+    const results = await Promise.all(connections.map((t) => run(t, {}, gated)));
+
+    const states = results.map((r) => r.structuredContent?.state ?? r[gateCode]);
+    expect(states.filter((s) => s === 'awaiting_owner')).toHaveLength(3);
+    expect(states.filter((s) => s === 'account_busy')).toHaveLength(2);
+    expect(closed).toHaveLength(2);
+  });
 });

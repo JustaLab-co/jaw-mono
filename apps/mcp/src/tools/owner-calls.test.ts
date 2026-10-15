@@ -898,16 +898,38 @@ describe('jaw_send_calls refusals', () => {
       return Promise.all(Array.from({ length: n }, () => connected('wallet:read', signer).then((c) => c.t)));
     };
 
-    it('given three links open across connections of one account, when a fourth connection asks, then calls_in_progress and no wallet opens', async () => {
+    it('given three links open across connections of one account, when a fourth connection asks, then account_busy and no wallet opens', async () => {
       const [a, b, c, d] = await sameAccount(4);
       for (const t of [a, b, c]) await send(t);
 
       const result = await send(d);
 
-      expect(result[gateCode]).toBe('calls_in_progress');
+      expect(result[gateCode]).toBe('account_busy');
       expect(result.content[0].text).toContain('account');
       expect(opened).toHaveLength(3);
       expect(await rowsOf(d.connectionId)).toEqual([]);
+    });
+
+    it('given six connections of one account asking at once, when every one passed the count before any inserted, then three links stay open and the rest close their wallets', async () => {
+      const connections = await sameAccount(6);
+      let arrived = 0;
+      let release!: () => void;
+      const barrier = new Promise<void>((resolve) => (release = resolve));
+      const gated: OpenWallet = async (...args) => {
+        if (++arrived === connections.length) release();
+        await barrier;
+        return wallet()(...args);
+      };
+
+      const results = await Promise.all(connections.map((t) => send(t, {}, gated)));
+
+      const states = results.map((r) => r.structuredContent?.state ?? r[gateCode]);
+      expect(states.filter((s) => s === 'awaiting_owner')).toHaveLength(3);
+      expect(states.filter((s) => s === 'account_busy')).toHaveLength(3);
+      expect(
+        await getDb().select().from(ownerCalls).where(eq(ownerCalls.account, connections[0].account))
+      ).toHaveLength(3);
+      expect(closed).toHaveLength(3);
     });
 
     it('given three links open on one account, when another account asks, then it is served', async () => {
@@ -939,7 +961,7 @@ describe('jaw_send_calls refusals', () => {
       const results = await Promise.all(ts.map((t) => send(t, {}, openAll)));
 
       expect(results.filter((r) => r.structuredContent?.state === 'awaiting_owner')).toHaveLength(3);
-      expect(results.filter((r) => r[gateCode] === 'calls_in_progress')).toHaveLength(2);
+      expect(results.filter((r) => r[gateCode] === 'account_busy')).toHaveLength(2);
       const stored = (await Promise.all(ts.map((t) => rowsOf(t.connectionId)))).flat();
       expect(stored.map((r) => r.state)).toEqual(['awaiting_owner', 'awaiting_owner', 'awaiting_owner']);
       const kept = stored.map((r) => r.walletUrl);
@@ -980,7 +1002,7 @@ describe('jaw_send_calls refusals', () => {
 
       const result = await send(d);
 
-      expect(result[gateCode]).toBe('calls_in_progress');
+      expect(result[gateCode]).toBe('account_busy');
     });
 
     it('given three links open and one whose process lost its session, when it is sent again, then it reopens', async () => {
@@ -996,7 +1018,7 @@ describe('jaw_send_calls refusals', () => {
       expect(opened).toHaveLength(4);
     });
 
-    it('given three other links open, when a link whose session is lost is sent again, then calls_in_progress and no wallet opens', async () => {
+    it('given three other links open, when a link whose session is lost is sent again, then account_busy and no wallet opens', async () => {
       const [a, b, c, d] = await sameAccount(4);
       await send(a, {}, wallet(undefined, ended));
       await settle();
@@ -1016,7 +1038,7 @@ describe('jaw_send_calls refusals', () => {
 
       const result = await send(a, {}, wallet());
 
-      expect(result[gateCode]).toBe('calls_in_progress');
+      expect(result[gateCode]).toBe('account_busy');
       expect(opened).toHaveLength(before);
     });
   });

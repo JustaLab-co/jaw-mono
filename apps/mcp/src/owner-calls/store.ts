@@ -1,5 +1,5 @@
 import { randomBytes } from 'node:crypto';
-import { and, count, eq, gt, inArray, isNull, lt, ne, sql, type SQL } from 'drizzle-orm';
+import { and, eq, gt, inArray, isNull, lt, sql, type SQL } from 'drizzle-orm';
 import type { PgUpdateSetSource } from 'drizzle-orm/pg-core';
 import { getDb, type Tx } from '@/db/client';
 import { ownerCalls } from '@/db/schema';
@@ -23,40 +23,31 @@ export interface NewOwnerCall {
 
 const dbNow = sql`statement_timestamp()`;
 
-async function write(where: SQL | undefined, set: CallSet): Promise<OwnerCallRow | undefined> {
-  const [row] = await getDb().update(ownerCalls).set(set).where(where).returning();
+async function write(where: SQL | undefined, set: CallSet, db: Tx = getDb()): Promise<OwnerCallRow | undefined> {
+  const [row] = await db.update(ownerCalls).set(set).where(where).returning();
   return row;
 }
 
 const ofCall = (connectionId: string, id: string, states: OwnerCallState[]) =>
   and(eq(ownerCalls.id, id), eq(ownerCalls.connectionId, connectionId), inArray(ownerCalls.state, states));
 
-/** Null when the key or the connection's open slot is taken, 'account_busy' when the account holds `maxOpen` links. */
-export async function insertOwnerCall(
-  input: NewOwnerCall,
-  maxOpen = Infinity
-): Promise<OwnerCallRow | 'account_busy' | null> {
-  return getDb().transaction(async (tx) => {
-    // Links of one account land one at a time, so the count holds until the insert commits.
-    await tx.execute(sql`select pg_advisory_xact_lock(hashtext(${`owner-calls:${input.account.toLowerCase()}`}))`);
-    if ((await openForAccount(tx, input.account)) >= maxOpen) return 'account_busy';
-    const [row] = await tx
-      .insert(ownerCalls)
-      .values({
-        id: `oc_${randomBytes(16).toString('base64url')}`,
-        connectionId: input.connectionId,
-        idempotencyKey: input.key,
-        requestHash: input.requestHash,
-        chainId: input.chainId,
-        account: input.account,
-        calls: input.calls,
-        walletUrl: input.walletUrl,
-        approveBy: input.approveBy,
-      })
-      .onConflictDoNothing()
-      .returning();
-    return row ?? null;
-  });
+export async function insertOwnerCall(input: NewOwnerCall, db: Tx = getDb()): Promise<OwnerCallRow | null> {
+  const [row] = await db
+    .insert(ownerCalls)
+    .values({
+      id: `oc_${randomBytes(16).toString('base64url')}`,
+      connectionId: input.connectionId,
+      idempotencyKey: input.key,
+      requestHash: input.requestHash,
+      chainId: input.chainId,
+      account: input.account,
+      calls: input.calls,
+      walletUrl: input.walletUrl,
+      approveBy: input.approveBy,
+    })
+    .onConflictDoNothing()
+    .returning();
+  return row ?? null;
 }
 
 async function find(where: SQL): Promise<OwnerCallRow | undefined> {
@@ -73,24 +64,6 @@ export const findById = (connectionId: string, id: string) =>
 export const findOpen = (connectionId: string) =>
   find(and(eq(ownerCalls.connectionId, connectionId), eq(ownerCalls.state, 'awaiting_owner'))!);
 
-/** Links still waiting on the owner across every connection of the account, apart from `except`. */
-export const countOpenForAccount = (account: string, except?: string) => openForAccount(getDb(), account, except);
-
-async function openForAccount(db: Tx, account: string, except?: string): Promise<number> {
-  const [row] = await db
-    .select({ n: count() })
-    .from(ownerCalls)
-    .where(
-      and(
-        sql`lower(${ownerCalls.account}) = ${account.toLowerCase()}`,
-        eq(ownerCalls.state, 'awaiting_owner'),
-        gt(ownerCalls.approveBy, dbNow),
-        except ? ne(ownerCalls.id, except) : undefined
-      )
-    );
-  return row.n;
-}
-
 export async function expirePast(connectionId: string): Promise<void> {
   await write(
     and(
@@ -102,7 +75,7 @@ export async function expirePast(connectionId: string): Promise<void> {
   );
 }
 
-export const reopenLink = (row: OwnerCallRow, walletUrl: string) =>
+export const reopenLink = (row: OwnerCallRow, walletUrl: string, db: Tx = getDb()) =>
   write(
     and(
       ofCall(row.connectionId, row.id, ['awaiting_owner']),
@@ -110,7 +83,8 @@ export const reopenLink = (row: OwnerCallRow, walletUrl: string) =>
       sql`${ownerCalls.code} is distinct from ${SEND_STARTED}`,
       gt(ownerCalls.approveBy, dbNow)
     ),
-    { walletUrl, code: null }
+    { walletUrl, code: null },
+    db
   );
 
 export const setCode = (connectionId: string, id: string, code: string) =>

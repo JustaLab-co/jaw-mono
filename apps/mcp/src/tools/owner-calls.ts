@@ -17,9 +17,9 @@ import { errorLabel, log, RATE_WINDOW_MS } from '@/lib/edge';
 import { reply } from '@/lib/fence';
 import { approve } from '@/owner-calls/approve';
 import { readReceipt, type ReadReceipt, type Receipt } from '@/owner-calls/receipt';
+import { countOpenLinks, FULL, MAX_OPEN_PER_ACCOUNT, withLinkSlot } from '@/owner-calls/cap';
 import {
   conclude,
-  countOpenForAccount,
   expirePast,
   findById,
   findByKey,
@@ -37,8 +37,6 @@ const ACCOUNT_LINK_RATE_LIMIT = 20;
 const STATUS_RATE_LIMIT = 30;
 const APPROVE_WINDOW_MS = 10 * 60_000;
 const SENT_GRACE_MS = 10 * 60_000;
-// Each open link holds a relay socket for up to APPROVE_WINDOW_MS, and the pool is shared by every user.
-const MAX_OPEN_PER_ACCOUNT = 3;
 
 const callInput = z.strictObject({
   to: z.string().regex(/^0x[0-9a-fA-F]{40}$/),
@@ -137,7 +135,7 @@ const inProgress = (open?: OwnerCallRow) =>
 
 const accountBusy = () =>
   refuse(
-    'calls_in_progress',
+    'account_busy',
     `This account already has ${MAX_OPEN_PER_ACCOUNT} requests awaiting the owner across its connections. Wait until one ends, then try again.`
   );
 
@@ -254,15 +252,16 @@ async function openWalletFor(t: Tenant, approveBy: Date, deps: OwnerCallDeps): P
 }
 
 async function reopen(t: Tenant, row: OwnerCallRow, deps: OwnerCallDeps): Promise<SendResult> {
-  if ((await countOpenForAccount(t.account, row.id)) >= MAX_OPEN_PER_ACCOUNT) return accountBusy();
+  if ((await countOpenLinks(t.account, row.id)) >= MAX_OPEN_PER_ACCOUNT) return accountBusy();
   const wallet = await openWalletFor(t, row.approveBy, deps);
   if (!wallet) return walletBusy(row.idempotencyKey);
-  let reopened: OwnerCallRow | undefined;
+  let reopened: OwnerCallRow | undefined | typeof FULL;
   try {
-    reopened = await reopenLink(row, wallet.url);
+    reopened = await withLinkSlot(t.account, row.id, (tx) => reopenLink(row, wallet.url, tx));
   } finally {
-    if (!reopened) wallet.close();
+    if (!reopened || reopened === FULL) wallet.close();
   }
+  if (reopened === FULL) return accountBusy();
   if (reopened) follow(reopened, wallet);
   return answer(reopened ?? row);
 }
@@ -314,30 +313,32 @@ export async function sendCalls(t: Tenant, input: SendCallsInput, deps: OwnerCal
   if (gated) return gated;
   const open = await findOpen(t.connectionId);
   if (open) return inProgress(open);
-  if ((await countOpenForAccount(t.account)) >= MAX_OPEN_PER_ACCOUNT) return accountBusy();
+  if ((await countOpenLinks(t.account)) >= MAX_OPEN_PER_ACCOUNT) return accountBusy();
   if (!(await findActive(t.connectionId))) return connectionEnded();
   const approveBy = new Date(Date.now() + APPROVE_WINDOW_MS);
   const wallet = await openWalletFor(t, approveBy, deps);
   if (!wallet) return walletBusy(key);
-  let row: OwnerCallRow | 'account_busy' | null = null;
+  let row: OwnerCallRow | null | typeof FULL = null;
   try {
-    row = await insertOwnerCall(
-      {
-        connectionId: t.connectionId,
-        key,
-        requestHash: hash,
-        chainId,
-        account: t.account,
-        calls,
-        walletUrl: wallet.url,
-        approveBy,
-      },
-      MAX_OPEN_PER_ACCOUNT
+    row = await withLinkSlot(t.account, undefined, (tx) =>
+      insertOwnerCall(
+        {
+          connectionId: t.connectionId,
+          key,
+          requestHash: hash,
+          chainId,
+          account: t.account,
+          calls,
+          walletUrl: wallet.url,
+          approveBy,
+        },
+        tx
+      )
     );
   } finally {
-    if (!row || row === 'account_busy') wallet.close();
+    if (!row || row === FULL) wallet.close();
   }
-  if (row === 'account_busy') return accountBusy();
+  if (row === FULL) return accountBusy();
   if (row) {
     follow(row, wallet);
     return answer(row);
