@@ -34,7 +34,7 @@ vi.mock('../hooks/usePermissionExecution', () => ({
   usePermissionExecution: () => ({ onBehalfOf: undefined, loading: false, problem: undefined }),
 }));
 
-type DialogProps = { origin?: string; appName?: string };
+type DialogProps = { origin?: string; originLabel?: string; appName?: string };
 let dialogProps: DialogProps = {};
 vi.mock('../components/TransactionDialog', () => ({
   TransactionDialog: (props: DialogProps) => {
@@ -48,8 +48,8 @@ const { ReactUIHandler } = await import('./ReactUIHandler');
 const FROM = '0x1111111111111111111111111111111111111111';
 const TO = '0x2222222222222222222222222222222222222222';
 
-async function open(request: unknown) {
-  const handler = new ReactUIHandler();
+async function open(request: unknown, options?: { originLabel?: string }) {
+  const handler = new ReactUIHandler(options);
   (handler as unknown as { config: Record<string, unknown> }).config = {
     apiKey: 'test-key',
     defaultChainId: 8453,
@@ -94,5 +94,28 @@ describe('ReactUIHandler passes the page origin to the transaction dialog', () =
     });
     expect(dialogProps.origin).toBe(window.location.origin);
     expect(dialogProps.appName).toBe('Test app');
+  });
+});
+
+describe('ReactUIHandler originLabel option', () => {
+  const calls = {
+    id: 'req-calls',
+    type: 'wallet_sendCalls',
+    data: { from: FROM, chainId: 8453, calls: [{ to: TO, value: '0x1' }] },
+  };
+  const tx = { id: 'req-tx', type: 'eth_sendTransaction', data: { from: FROM, chainId: 8453, to: TO, value: '0x1' } };
+
+  it.each([
+    ['wallet_sendCalls', calls],
+    ['eth_sendTransaction', tx],
+  ])('hands the label to the dialog for %s', async (_name, request) => {
+    await open(request, { originLabel: 'via JAW bridge' });
+    expect(dialogProps.originLabel).toBe('via JAW bridge');
+    expect(dialogProps.origin).toBe(window.location.origin);
+  });
+
+  it('leaves the label unset by default', async () => {
+    await open(calls);
+    expect(dialogProps.originLabel).toBeUndefined();
   });
 });

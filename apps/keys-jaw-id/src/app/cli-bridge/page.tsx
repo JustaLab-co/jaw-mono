@@ -255,7 +255,7 @@ function CLIBridgeContent() {
                       defaultChainId: chainId,
                       preference: {
                         mode: Mode.AppSpecific,
-                        uiHandler: new ReactUIHandler(),
+                        uiHandler: new ReactUIHandler({ originLabel: 'via JAW bridge' }),
                         showTestnets: true,
                       },
                       apiKey,
