@@ -310,6 +310,30 @@ describe('given 1 USDC a day and a counter the chain does not answer for', () =>
   });
 });
 
+describe('given 1 USDC a day, 2 USDC of float and a counter the chain does not answer for', () => {
+  it('when a payment of 0.6 comes from the float, then it is refused as chain_unavailable and nothing is signed', async () => {
+    const { t } = await connected('1', 2_000_000n);
+    prices.set('/a', '600000');
+    chain.down = true;
+    const paid = await pay(t, { url: url('/a') }, deps);
+    expect(paid.structuredContent).toMatchObject({ refusal: { code: 'chain_unavailable' } });
+    expect(seen).toHaveLength(0);
+    expect(bridge.sent).toEqual([]);
+  });
+
+  it('when the counter answers again, then the same payment goes through', async () => {
+    const { t } = await connected('1', 2_000_000n);
+    prices.set('/a', '600000');
+    chain.down = true;
+    const down = await pay(t, { url: url('/a') }, deps);
+    expect(down.structuredContent).toMatchObject({ refusal: { code: 'chain_unavailable' } });
+    chain.down = false;
+    const paid = await pay(t, { url: url('/a') }, deps);
+    expect(paid.isError).toBeFalsy();
+    expect(seen).toHaveLength(1);
+  });
+});
+
 describe('given 1 USDC a day at the end of a day', () => {
   it('when 0.6 was paid before the day ended, then a transfer of 0.5 after it goes through', async () => {
     const { t, token } = await connected('1', 2_000_000n);
