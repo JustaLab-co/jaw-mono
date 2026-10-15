@@ -22,6 +22,16 @@ export function setTestEnv(keys = randomBytes(32).toString('base64url')) {
 
 export const owner = () => privateKeyToAccount(generatePrivateKey());
 
+const grantedBySalt = new Map<bigint, Hex>();
+let nextSalt = 42n;
+
+/** The permission manager's answers for a test node: every grant this wallet made, with nothing spent in an open day. */
+export function permissionReads(functionName: string, args: readonly unknown[]): unknown {
+  if (functionName === 'getHash') return grantedBySalt.get((args[0] as { salt: bigint }).salt);
+  if (functionName === 'getCurrentPeriod') return { start: 1, end: 2_000_000_000, spend: 0n };
+  return undefined;
+}
+
 export const approvedOnChain: ReadPermission = async () => ({ status: 'ok', approved: true, revoked: false });
 
 /** What the owner's wallet answers, signing with `signer`. `refuse` lists methods the owner turns down. */
@@ -35,13 +45,16 @@ export function walletAnswers(signer: ReturnType<typeof owner>, refuse: string[]
         return signer.signMessage({ message: { raw: params[0] as Hex } });
       case 'wallet_grantPermissions': {
         const grant = params[0] as GrantRequest;
+        const salt = nextSalt++;
+        const permissionId: Hex = `0x${randomBytes(32).toString('hex')}`;
+        grantedBySalt.set(salt, permissionId);
         return {
-          permissionId: `0x${randomBytes(32).toString('hex')}`,
+          permissionId,
           account: signer.address,
           spender: grant.spender,
           start: 1_780_000_000,
           end: grant.expiry,
-          salt: '0x2a',
+          salt: `0x${salt.toString(16)}`,
           calls: grant.permissions.calls.map((c) => ({
             target: c.target,
             selector: toFunctionSelector(c.functionSignature),

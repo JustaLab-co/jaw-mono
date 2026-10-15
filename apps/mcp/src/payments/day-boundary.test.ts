@@ -18,6 +18,7 @@ import {
   setTestEnv,
   walletAnswers,
   walletsSettled,
+  permissionReads,
 } from '@/connections/testkit';
 import { getDb } from '@/db/client';
 import { grants, payments } from '@/db/schema';
@@ -103,6 +104,15 @@ const node = {
     if (functionName === 'balanceOf') return balanceOf(args[0] as string);
     if (functionName === 'allowance') return 0n;
     if (functionName === 'authorizationState') return used.has(String(args[1]).toLowerCase());
+    if (functionName === 'getCurrentPeriod') {
+      // The day rolls from the permission's start, which the tests move to place a boundary.
+      const first = Number((args[0] as { start: bigint }).start);
+      const day = 86_400;
+      const start = first + Math.floor((Date.now() / 1000 - first) / day) * day;
+      return { start, end: start + day, spend: 0n };
+    }
+    const permission = permissionReads(functionName, args);
+    if (permission !== undefined) return permission;
     throw new Error('this node only knows balances and nonces');
   },
   waitForTransactionReceipt: async ({ hash }: { hash: Hex }) => {

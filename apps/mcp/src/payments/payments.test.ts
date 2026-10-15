@@ -33,6 +33,7 @@ import {
   walletsSettled,
   offlineSession,
   sessionFakes,
+  permissionReads,
 } from '@/connections/testkit';
 import { floatHolder, getDb, setDb } from '@/db/client';
 import { connections, grants, payments, settings } from '@/db/schema';
@@ -189,6 +190,8 @@ const node = {
     if (functionName === 'balanceOf') return balanceOf(args[0] as string);
     if (functionName === 'allowance') return 0n;
     if (functionName === 'authorizationState') return used.has(String(args[1]).toLowerCase());
+    const permission = permissionReads(functionName, args);
+    if (permission !== undefined) return permission;
     throw new Error('this node only knows balances and nonces');
   },
   waitForTransactionReceipt: async ({ hash, timeout }: { hash: Hex; timeout: number }) => {

@@ -216,7 +216,11 @@ export function refillHook(c: RefillContext): EnsureFunds {
           });
           if (!verdict.ok) return { ok: false, code: verdict.code, reason: verdict.reason };
           const day = await readDaySpend(c.grant, c.payer, entries, sent, c.clients);
-          if (day && BigInt(requirement.amount) > dayLeft(BigInt(c.grant.allowance), day)) {
+          // Float already pulled is spendable without a refill, so an unreadable day refuses
+          // every payment, as jaw_transfer does.
+          if (!day)
+            return { ok: false, code: 'chain_unavailable', reason: 'the budget could not be read from the chain' };
+          if (BigInt(requirement.amount) > dayLeft(BigInt(c.grant.allowance), day)) {
             const reason = `payment ${requirement.amount} would pass the ${c.grant.allowance} a day shared with transfers`;
             return { ok: false, code: 'budget_exhausted', reason };
           }
