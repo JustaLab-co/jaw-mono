@@ -325,6 +325,7 @@ export const ownerCalls = pgTable(
     approveBy: timestamp('approve_by', { withTimezone: true }).notNull(),
     sessionUntil: timestamp('session_until', { withTimezone: true }),
     callsId: text('calls_id'),
+    sentBlock: bigint('sent_block', { mode: 'bigint' }),
     txHash: text('tx_hash'),
     createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
     updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),

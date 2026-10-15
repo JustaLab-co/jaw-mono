@@ -1,4 +1,5 @@
 import { createHash, randomBytes } from 'node:crypto';
+import type { ChainClients } from '@jaw.id/agent';
 import { getSupportedChains, PERMISSIONS_MANAGER_ADDRESS } from '@jaw.id/core';
 import type { McpServer } from '@modelcontextprotocol/server';
 import { getAddress } from 'viem';
@@ -10,6 +11,7 @@ import {
 } from 'viem/account-abstraction';
 import { z } from 'zod';
 import { tenant, type Tenant } from '@/connections/auth';
+import { chainClients } from '@/adapters/session-host';
 import { ownerRelay, WalletBusy, type OpenWallet, type Wallet } from '@/connections/relay';
 import { findActive } from '@/connections/rows';
 import { keepLease, leaseHeld } from '@/connections/session-lease';
@@ -17,7 +19,7 @@ import { countHit, isPaymentsPaused } from '@/db/settings';
 import { errorLabel, log, RATE_WINDOW_MS } from '@/lib/edge';
 import { reply } from '@/lib/fence';
 import { approve } from '@/owner-calls/approve';
-import { readReceipt, type ReadReceipt, type Receipt } from '@/owner-calls/receipt';
+import { readReceipt, receiptOf, type ReadReceipt, type Receipt } from '@/owner-calls/receipt';
 import { countOpenLinks, FULL, MAX_OPEN_PER_ACCOUNT, withLinkSlot } from '@/owner-calls/cap';
 import {
   conclude,
@@ -108,9 +110,10 @@ type SendResult = {
 export interface OwnerCallDeps {
   openWallet: OpenWallet;
   receipt: ReadReceipt;
+  clients: ChainClients;
 }
 
-const DEFAULTS: OwnerCallDeps = { openWallet: ownerRelay, receipt: readReceipt };
+const DEFAULTS: OwnerCallDeps = { openWallet: ownerRelay, receipt: readReceipt, clients: chainClients };
 
 const refuse = (code: string, text: string): SendResult => ({
   content: [{ type: 'text', text: `${code}: ${text}` }],
@@ -216,13 +219,13 @@ function answer(row: OwnerCallRow, note = ''): SendResult {
   return { ...reply(out), isError: row.state === 'reverted' };
 }
 
-function follow(row: OwnerCallRow, wallet: Wallet): void {
+function follow(row: OwnerCallRow, wallet: Wallet, clients: ChainClients): void {
   const stop = keepLease(
     () => renewSession(row),
     () => endSession(row)
   );
   void wallet
-    .run((ask) => approve(ask, row))
+    .run((ask) => approve(ask, row, clients))
     .catch((err: unknown) =>
       log('warn', { msg: 'owner calls approval ended', ownerCallId: row.id, error: errorLabel(err) })
     )
@@ -266,7 +269,7 @@ async function reopen(t: Tenant, row: OwnerCallRow, deps: OwnerCallDeps): Promis
     if (!reopened || reopened === FULL) wallet.close();
   }
   if (reopened === FULL) return accountBusy();
-  if (reopened) follow(reopened, wallet);
+  if (reopened) follow(reopened, wallet, deps.clients);
   return answer(reopened ?? (await findById(t.connectionId, row.id)) ?? row);
 }
 
@@ -344,7 +347,7 @@ export async function sendCalls(t: Tenant, input: SendCallsInput, deps: OwnerCal
   }
   if (row === FULL) return accountBusy();
   if (row) {
-    follow(row, wallet);
+    follow(row, wallet, deps.clients);
     return answer(row);
   }
   const raced = await findByKey(t.connectionId, key);
@@ -367,7 +370,7 @@ export async function sendCallsStatus(
   if (row.state !== 'sent' || !row.callsId) return answer(row);
   let mined: Receipt | null;
   try {
-    mined = await deps.receipt(row.chainId, row.callsId);
+    mined = await receiptOf(row, deps.receipt, deps.clients, Date.now());
   } catch (err) {
     log('warn', { msg: 'owner calls receipt not read', ownerCallId: id, error: errorLabel(err) });
     return answer(row, UNREADABLE);

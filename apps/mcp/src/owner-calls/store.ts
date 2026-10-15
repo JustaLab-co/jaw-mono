@@ -114,8 +114,9 @@ export async function markSendStarted(connectionId: string, id: string): Promise
   return row !== undefined;
 }
 
-export const markSent = (connectionId: string, id: string, callsId: string) =>
-  write(ofCall(connectionId, id, ['awaiting_owner', 'expired']), { state: 'sent', callsId, code: null });
+/** `sentBlock` is the chain head when the call was sent; null when it could not be read. */
+export const markSent = (connectionId: string, id: string, callsId: string, sentBlock: bigint | null = null) =>
+  write(ofCall(connectionId, id, ['awaiting_owner', 'expired']), { state: 'sent', callsId, sentBlock, code: null });
 
 export const conclude = (connectionId: string, id: string, state: 'landed' | 'reverted', txHash: string) =>
   write(ofCall(connectionId, id, ['sent']), { state, txHash });

@@ -1,7 +1,8 @@
 import { randomBytes } from 'node:crypto';
 import { getSupportedChains, PERMISSIONS_MANAGER_ADDRESS } from '@jaw.id/core';
 import { eq, sql } from 'drizzle-orm';
-import { toHex, type Address } from 'viem';
+import type { ChainClients } from '@jaw.id/agent';
+import { toHex, type Address, type Hex } from 'viem';
 import {
   entryPoint06Address,
   entryPoint07Address,
@@ -30,6 +31,7 @@ import { RATE_WINDOW_MS } from '@/lib/edge';
 import { gateCode } from '@/payments/render';
 import { SEND_STARTED } from '@/owner-calls/store';
 import * as store from '@/owner-calls/store';
+import { fakeChain, type FakeEvent } from '@/owner-calls/chain-testkit';
 import type { ReadReceipt } from '@/owner-calls/receipt';
 import { sendCalls, sendCallsStatus, type SendCallsInput } from './owner-calls';
 
@@ -88,6 +90,8 @@ const owner =
     throw new Error(`the test wallet does not answer ${method}`);
   };
 
+const quietChain = fakeChain({ head: 1_000_000n }).clients;
+
 beforeAll(TEST_PG_URL ? useTestPostgres : useTestDb);
 beforeEach(() => {
   served.clients = [];
@@ -113,7 +117,7 @@ const input = (over: Partial<SendCallsInput> = {}): SendCallsInput => ({
   ...over,
 });
 const send = (t: Tenant, args: Partial<SendCallsInput> = {}, openWallet = wallet()) =>
-  sendCalls(t, input(args), { openWallet, receipt: async () => null });
+  sendCalls(t, input(args), { openWallet, receipt: async () => null, clients: quietChain });
 const rowsOf = (connectionId: string) =>
   getDb().select().from(ownerCalls).where(eq(ownerCalls.connectionId, connectionId));
 const settle = async () => {
@@ -205,7 +209,8 @@ describe('jaw_send_calls link', () => {
 
   it('given no idempotency key, then one is made up, returned, and distinct per request', async () => {
     const { t } = await connected();
-    const bare = (openWallet: OpenWallet) => sendCalls(t, { calls: [CALL] }, { openWallet, receipt: async () => null });
+    const bare = (openWallet: OpenWallet) =>
+      sendCalls(t, { calls: [CALL] }, { openWallet, receipt: async () => null, clients: quietChain });
 
     const first = await bare(wallet());
     await getDb()
@@ -1164,7 +1169,7 @@ describe('jaw_send_calls refusals', () => {
         await both.promise;
         return idle();
       };
-      return { openWallet, receipt: async () => null };
+      return { openWallet, receipt: async () => null, clients: quietChain };
     };
 
     it('given two keys, then one gets the link, the other calls_in_progress, and its wallet is closed', async () => {
@@ -1251,7 +1256,7 @@ const pastApproveBy = (minutes: number) => ({
 });
 
 const check = (t: Tenant, id: string, receipt: ReadReceipt = async () => null) =>
-  sendCallsStatus(t, { id }, { openWallet: wallet(), receipt });
+  sendCallsStatus(t, { id }, { openWallet: wallet(), receipt, clients: quietChain });
 
 async function sentRow() {
   const { t, token } = await connected();
@@ -1625,5 +1630,102 @@ describe('owner link lease between two processes', () => {
     await store.endSession(stale);
 
     expect((await rowsOf(t.connectionId))[0].sessionUntil).toEqual(current.sessionUntil);
+  });
+});
+
+describe('a sent call the bundler no longer answers for', () => {
+  const stale = async (clients: ChainClients, sentBlock: bigint | null = 9_000n) => {
+    const { t } = await connected();
+    const first = await send(t, { idempotencyKey: STATUS_KEY }, wallet(owner(t.account)));
+    await settle();
+    const id = first.structuredContent!.id;
+    await withoutOwnerCallsGuard(() =>
+      getDb()
+        .update(ownerCalls)
+        .set({ sentBlock, updatedAt: sql`statement_timestamp() - interval '30 minutes'` })
+        .where(eq(ownerCalls.id, id))
+    );
+    const status = () => sendCallsStatus(t, { id }, { openWallet: wallet(), receipt: async () => null, clients });
+    return { t, id, status };
+  };
+  const mined = (over: Partial<FakeEvent> = {}): FakeEvent => ({
+    userOpHash: CALLS_ID as Hex,
+    block: 9_500n,
+    txHash: TX as Hex,
+    success: true,
+    ...over,
+  });
+
+  it('given a log with success, then the row lands with the transaction of the log', async () => {
+    const { t, id, status } = await stale(fakeChain({ head: 10_000n, events: [mined()] }).clients);
+
+    const result = await status();
+
+    expect(result.structuredContent).toMatchObject({ state: 'landed', txHash: TX });
+    expect((await rowsOf(t.connectionId))[0]).toMatchObject({ id, state: 'landed', txHash: TX });
+  });
+
+  it('given a log with success false, then the row is reverted', async () => {
+    const { status } = await stale(fakeChain({ head: 10_000n, events: [mined({ success: false })] }).clients);
+
+    const result = await status();
+
+    expect(result.structuredContent).toMatchObject({ state: 'reverted', txHash: TX });
+    expect(result.isError).toBe(true);
+  });
+
+  it('given no log, then the row stays sent', async () => {
+    const { t, status } = await stale(fakeChain({ head: 10_000n }).clients);
+
+    expect((await status()).structuredContent!.state).toBe('sent');
+    expect((await rowsOf(t.connectionId))[0].state).toBe('sent');
+  });
+
+  it('given a node that cannot be read, then the stored row answers with the unreadable note and the row is unchanged', async () => {
+    const { t, status } = await stale(fakeChain({ head: 10_000n, down: true }).clients);
+    const logged = vi.spyOn(console, 'log').mockImplementation(() => undefined);
+
+    try {
+      const result = await status();
+
+      expect(result.structuredContent!.state).toBe('sent');
+      expect(result.structuredContent!.summary).toContain('The chain could not be read right now');
+      expect((await rowsOf(t.connectionId))[0].state).toBe('sent');
+    } finally {
+      logged.mockRestore();
+    }
+  });
+
+  it('given a row sent without a recorded head, then the log is still found from the age of the row', async () => {
+    const { status } = await stale(fakeChain({ head: 100_000n, events: [mined({ block: 99_500n })] }).clients, null);
+
+    expect((await status()).structuredContent).toMatchObject({ state: 'landed', txHash: TX });
+  });
+});
+
+describe('the block recorded when a call is sent', () => {
+  const sendWith = async (clients: ChainClients) => {
+    const { t } = await connected();
+    await sendCalls(t, input(), { openWallet: wallet(owner(t.account)), receipt: async () => null, clients });
+    await settle();
+    return (await rowsOf(t.connectionId))[0];
+  };
+
+  it('given a node that answers, then the row is sent with the head at that moment', async () => {
+    const row = await sendWith(fakeChain({ head: 48_153_975n }).clients);
+
+    expect(row).toMatchObject({ state: 'sent', callsId: CALLS_ID, sentBlock: 48_153_975n });
+  });
+
+  it('given a node that does not answer, then the row is still sent, with no block', async () => {
+    const logged = vi.spyOn(console, 'log').mockImplementation(() => undefined);
+
+    try {
+      const row = await sendWith(fakeChain({ head: 1n, down: true }).clients);
+
+      expect(row).toMatchObject({ state: 'sent', callsId: CALLS_ID, sentBlock: null });
+    } finally {
+      logged.mockRestore();
+    }
   });
 });

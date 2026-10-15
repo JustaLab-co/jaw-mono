@@ -9,7 +9,7 @@
 - `calls-target`: a call to the account itself, the permission manager or any EntryPoint (0.6 to 0.9) gives `call_target_refused` before any row or link.
 - `calls-paused`: with payments paused, a new `jaw_send_calls` is refused as `payments_paused` with no link, and `jaw_send_calls_status` keeps working.
 - `calls-happy`: link, owner approval, `sent` with a calls id, then `jaw_send_calls_status` until `landed` with a `txHash`.
-- `calls-sweep`: a `sent` request nobody asks about again is concluded as `landed` or `reverted` by the reconciler once it is a minute old; a `send_started` one with no calls id stays as it is.
+- `calls-sweep`: a `sent` request nobody asks about again is concluded as `landed` or `reverted` by the reconciler once it is a minute old, from the bundler receipt or, when the bundler has none ten minutes after the send, from the `UserOperationEvent` on chain (the row keeps `sent_block`, the head when it was sent, where that search starts); a `send_started` one with no calls id stays as it is.
 - `calls-decline`: the owner rejects the calls in the wallet and the state is `owner_declined`.
 - `calls-wrong-account`: the owner signs in with another account than the connection's; the state is `owner_declined` with code `wrong_account`.
 - `calls-retry`: the same key and input twice while the link is live answer the same `id` and `url`.

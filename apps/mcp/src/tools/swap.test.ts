@@ -46,6 +46,7 @@ import { swapRequest } from '@/swap/quote';
 import { approveByOf, claimSwap, type SwapRow } from '@/swap/store';
 import { purge } from '@/reconciler/run';
 import { revokeConnection } from './connections';
+import { fakeChain } from '@/owner-calls/chain-testkit';
 import { sendCalls } from './owner-calls';
 import { requestBudget } from './request-budget';
 import { registerSwapTools, swap, swapStatus, type SwapToolInput } from './swap';
@@ -2322,7 +2323,7 @@ describe('owner links per account, swaps and calls together', () => {
     sendCalls(
       t,
       { calls: [{ to: PAY_TO, value: '1' }], idempotencyKey: key },
-      { openWallet: recordingWallet(), receipt: async () => null }
+      { openWallet: recordingWallet(), receipt: async () => null, clients: fakeChain({ head: 1_000_000n }).clients }
     );
 
   it('given three links open on one account, when another connection asks to swap, then account_busy before anything is paid', async () => {
