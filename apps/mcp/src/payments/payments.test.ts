@@ -27,6 +27,7 @@ import {
   callTool,
   connect,
   fakeWallet,
+  managerAnswer,
   setTestEnv,
   verifyLocally,
   walletAnswers,
@@ -90,6 +91,8 @@ let blocksBehind = 0;
 /** Block reads that fail for a reason other than a node behind. */
 let blockDown = false;
 let blockReads = 0;
+/** The permission's day counter does not answer. */
+let periodDown = false;
 /** Nonces the token has consumed: the seller settled them on chain. */
 const used = new Set<string>();
 let dropNextLost = true;
@@ -189,7 +192,9 @@ const node = {
     if (functionName === 'balanceOf') return balanceOf(args[0] as string);
     if (functionName === 'allowance') return 0n;
     if (functionName === 'authorizationState') return used.has(String(args[1]).toLowerCase());
-    throw new Error('this node only knows balances and nonces');
+    if (functionName === 'getCurrentPeriod' && periodDown) throw new Error('the node did not answer');
+    if (functionName === 'getHash' || functionName === 'getCurrentPeriod') return managerAnswer(functionName, args);
+    throw new Error('this node only knows balances, nonces and the permission');
   },
   waitForTransactionReceipt: async ({ hash, timeout }: { hash: Hex; timeout: number }) => {
     const end = Date.now() + timeout;
@@ -258,6 +263,7 @@ beforeEach(() => {
   blocksBehind = 0;
   blockDown = false;
   blockReads = 0;
+  periodDown = false;
 });
 
 /** A connection whose only budget is `perDay`, or none: the one approved when connecting is dropped. */
@@ -947,6 +953,20 @@ describe('jaw_pay_and_fetch', () => {
     const { t } = await connected('1');
     const result = await pay(t, { url: url('/exact') }, deps({ readPermission: async () => state }));
     expect(result.structuredContent).toMatchObject({ state: 'failed', refusal: { code } });
+    expect(seen).toEqual([]);
+    expect(refills).toEqual([]);
+  });
+
+  it('given a payer that needs a refill, when the day spent so far cannot be read from the chain, then it is refused chain_unavailable before signing or refilling', async () => {
+    const { t } = await connected('1');
+    periodDown = true;
+    const result = await pay(t, { url: url('/exact'), idempotencyKey: 'day-unreadable' }, deps());
+    expect(result.structuredContent).toMatchObject({
+      kind: 'refused',
+      state: 'failed',
+      refusal: { code: 'chain_unavailable' },
+      payerRefilled: false,
+    });
     expect(seen).toEqual([]);
     expect(refills).toEqual([]);
   });

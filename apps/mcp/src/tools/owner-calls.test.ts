@@ -342,6 +342,52 @@ describe('jaw_send_calls approval', () => {
     expect(opened).toHaveLength(1);
   });
 
+  it.each([4100, 4200, 4900, 4901, 5700, 5710, -32602])(
+    'given a wallet that refuses wallet_sendCalls with %i, which it only returns before submitting, then the row is owner_declined and the key says nothing was sent',
+    async (code) => {
+      const { t } = await connected();
+      const refuse = () => {
+        throw Object.assign(new Error('the wallet refused'), { code });
+      };
+
+      await send(t, {}, wallet(owner(t.account, { wallet_sendCalls: refuse })));
+      await settle();
+      const again = await send(t);
+
+      expect((await rowsOf(t.connectionId))[0]).toMatchObject({
+        state: 'owner_declined',
+        code: `wallet_error:${code}`,
+      });
+      expect(again.structuredContent).toMatchObject({
+        state: 'owner_declined',
+        refusal: { code: `wallet_error:${code}` },
+      });
+      expect(again.structuredContent!.url).toBeUndefined();
+      expect(again.structuredContent!.summary).toContain(`refused the calls with ${code} before sending them`);
+      expect(again.structuredContent!.summary).toContain('Nothing was sent');
+      expect(again.structuredContent!.summary).toContain('new idempotencyKey');
+      expect(opened).toHaveLength(1);
+    }
+  );
+
+  it.each([-32000, -32603, -32003, 4002, undefined])(
+    'given a wallet that fails wallet_sendCalls with %s, which can follow a submission, then the row keeps the send marker and the key says the wallet may have sent',
+    async (code) => {
+      const { t } = await connected();
+      const fail = () => {
+        throw Object.assign(new Error('the wallet failed'), { code });
+      };
+
+      await send(t, {}, wallet(owner(t.account, { wallet_sendCalls: fail })));
+      await settle();
+      const again = await send(t);
+
+      expect((await rowsOf(t.connectionId))[0]).toMatchObject({ state: 'awaiting_owner', code: SEND_STARTED });
+      expect(again.structuredContent!.summary).toContain('may have sent');
+      expect(again.structuredContent!.url).toBeUndefined();
+    }
+  );
+
   it('given an owner who rejects the account request, then the row is owner_declined', async () => {
     const { t } = await connected();
 
@@ -872,6 +918,33 @@ describe('jaw_send_calls refusals', () => {
       const result = await send(other);
 
       expect(result.structuredContent!.state).toBe('awaiting_owner');
+    });
+
+    it('given five connections of one account sending at once, then three links open and every other wallet is closed', async () => {
+      const ts = await sameAccount(5);
+      const urls: string[] = [];
+      let allOpen = () => {};
+      const gate = new Promise<void>((resolve) => {
+        allOpen = () => resolve();
+      });
+      // Every request holds its wallet until all five have one, so all of them got past the early count.
+      const openAll: OpenWallet = async (chainId, until) => {
+        const w = await wallet()(chainId, until);
+        urls.push(w.url);
+        if (urls.length === ts.length) allOpen();
+        await gate;
+        return w;
+      };
+
+      const results = await Promise.all(ts.map((t) => send(t, {}, openAll)));
+
+      expect(results.filter((r) => r.structuredContent?.state === 'awaiting_owner')).toHaveLength(3);
+      expect(results.filter((r) => r[gateCode] === 'calls_in_progress')).toHaveLength(2);
+      const stored = (await Promise.all(ts.map((t) => rowsOf(t.connectionId)))).flat();
+      expect(stored.map((r) => r.state)).toEqual(['awaiting_owner', 'awaiting_owner', 'awaiting_owner']);
+      const kept = stored.map((r) => r.walletUrl);
+      expect(urls).toHaveLength(5);
+      expect([...closed].sort()).toEqual(urls.filter((u) => !kept.includes(u)).sort());
     });
 
     it('given two links open and a third that expired, when a connection asks, then it is served', async () => {

@@ -1,10 +1,10 @@
 import { toHex } from 'viem';
 import { z } from 'zod';
 import type { Ask } from '@/connections/relay';
+import { refusedBeforeSubmit, USER_REJECTED } from '@/connections/wallet-codes';
 import { errorLabel, log } from '@/lib/edge';
 import { decline, markSendStarted, markSent, setCode, type OwnerCallRow } from './store';
 
-const USER_REJECTED = 4001;
 const SESSION_END_MARGIN_MS = 5_000;
 
 const sent = z.object({ id: z.string().min(1).max(256) });
@@ -35,7 +35,9 @@ export async function approve(ask: Ask, row: OwnerCallRow): Promise<void> {
       },
     ]);
   } catch (err) {
-    if (codeOf(err) === USER_REJECTED) await decline(row.connectionId, row.id, 'owner_declined');
+    const code = codeOf(err);
+    if (code === USER_REJECTED) await decline(row.connectionId, row.id, 'owner_declined');
+    else if (refusedBeforeSubmit(code)) await decline(row.connectionId, row.id, `wallet_error:${code}`);
     return;
   }
   const callsId = sent.safeParse(answer).data?.id;
