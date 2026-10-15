@@ -4,7 +4,7 @@ import { afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
 import { verifyBearer, type Tenant } from '@/connections/auth';
 import { callTool, connect, setTestEnv } from '@/connections/testkit';
 import { endConnection } from '@/connections/rows';
-import { getDb } from '@/db/client';
+import { floatHolder, getDb, setDb } from '@/db/client';
 import { connections, grants, sends, settings } from '@/db/schema';
 import { lockWaiters, TEST_PG_URL, useTestDb, useTestPostgres } from '@/db/test-db';
 import { currentGrant } from '@/grants/store';
@@ -365,7 +365,15 @@ describe('what jaw_transfer accepts', () => {
 });
 
 describe.skipIf(!TEST_PG_URL)('on Postgres, given another turn holding the float lock', () => {
-  beforeAll(useTestPostgres);
+  // Under shuffle the other tests can run after this block, so hand back the database they use.
+  beforeAll(async () => {
+    const [outer, holder] = [getDb(), floatHolder()];
+    const drop = await useTestPostgres();
+    return async () => {
+      setDb(outer, holder);
+      await drop();
+    };
+  });
 
   it('given a lock held past the wait, then the transfer is told a payment is in progress', async () => {
     const { c, t } = await sender();

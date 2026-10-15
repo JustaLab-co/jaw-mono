@@ -173,6 +173,8 @@ export class DialogErrorBoundary extends React.Component<
 export interface ReactUIHandlerOptions {
   /** Theme configuration. Takes precedence over theme provided via JAW.create(). */
   readonly theme?: JawTheme;
+  /** Shown under the app name of the transaction screen instead of the page host. */
+  readonly originLabel?: string;
 }
 
 /**
@@ -211,11 +213,13 @@ export interface ReactUIHandlerOptions {
 export class ReactUIHandler implements UIHandler {
   private config: UIHandlerConfig = {} as UIHandlerConfig;
   private localTheme?: JawTheme;
+  private originLabel?: string;
   /** Teardown of the request that resolved but is still holding its success tick. */
   private pendingTeardown: (() => void) | null = null;
 
   constructor(options?: ReactUIHandlerOptions) {
     this.localTheme = options?.theme;
+    this.originLabel = options?.originLabel;
   }
 
   /**
@@ -632,6 +636,7 @@ export class ReactUIHandler implements UIHandler {
             paymasters={this.config.paymasters}
             appName={this.config.appName}
             appLogoUrl={this.config.appLogoUrl}
+            originLabel={this.originLabel}
           />
         );
 
@@ -648,6 +653,7 @@ export class ReactUIHandler implements UIHandler {
             paymasters={this.config.paymasters}
             appName={this.config.appName}
             appLogoUrl={this.config.appLogoUrl}
+            originLabel={this.originLabel}
           />
         );
 
@@ -1438,6 +1444,7 @@ function TransactionDialogWrapper({
   paymasters,
   appName,
   appLogoUrl,
+  originLabel,
 }: {
   request: TransactionUIRequest;
   onApprove: (data: any) => void;
@@ -1449,6 +1456,7 @@ function TransactionDialogWrapper({
   paymasters?: Record<number, PaymasterConfig>;
   appName?: string;
   appLogoUrl?: string | null;
+  originLabel?: string;
 }) {
   const [open, setOpen] = useState(true);
   const [isProcessing, setIsProcessing] = useState(false);
@@ -1800,6 +1808,7 @@ function TransactionDialogWrapper({
       appName={appName}
       appLogoUrl={appLogoUrl}
       origin={typeof window !== 'undefined' ? window.location.origin : 'unknown'}
+      originLabel={originLabel}
     />
   );
 }
@@ -1815,6 +1824,7 @@ function SendTransactionDialogWrapper({
   paymasters,
   appName,
   appLogoUrl,
+  originLabel,
 }: {
   request: SendTransactionUIRequest;
   onApprove: (data: any) => void;
@@ -1826,6 +1836,7 @@ function SendTransactionDialogWrapper({
   paymasters?: Record<number, PaymasterConfig>;
   appName?: string;
   appLogoUrl?: string | null;
+  originLabel?: string;
 }) {
   const [open, setOpen] = useState(true);
   const [isProcessing, setIsProcessing] = useState(false);
@@ -2153,6 +2164,7 @@ function SendTransactionDialogWrapper({
       appName={appName}
       appLogoUrl={appLogoUrl}
       origin={typeof window !== 'undefined' ? window.location.origin : 'unknown'}
+      originLabel={originLabel}
     />
   );
 }

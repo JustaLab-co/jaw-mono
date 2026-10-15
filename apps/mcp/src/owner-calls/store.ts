@@ -1,5 +1,5 @@
 import { randomBytes } from 'node:crypto';
-import { and, eq, gt, inArray, isNull, lt, lte, or, sql, type SQL } from 'drizzle-orm';
+import { and, eq, gt, inArray, isNotNull, isNull, lt, lte, or, sql, type SQL } from 'drizzle-orm';
 import type { PgUpdateSetSource } from 'drizzle-orm/pg-core';
 import { sessionLeaseEnd } from '@/connections/session-lease';
 import { getDb, type Tx } from '@/db/client';
@@ -119,3 +119,18 @@ export const markSent = (connectionId: string, id: string, callsId: string) =>
 
 export const conclude = (connectionId: string, id: string, state: 'landed' | 'reverted', txHash: string) =>
   write(ofCall(connectionId, id, ['sent']), { state, txHash });
+
+/** Random order, so rows the bundler never answers cannot crowd newer ones out of a batch. */
+export const sentBefore = (ageMs: number, limit: number) =>
+  getDb()
+    .select()
+    .from(ownerCalls)
+    .where(
+      and(
+        eq(ownerCalls.state, 'sent'),
+        isNotNull(ownerCalls.callsId),
+        lt(ownerCalls.updatedAt, sql`${dbNow} - ${ageMs} * interval '1 millisecond'`)
+      )
+    )
+    .orderBy(sql`random()`)
+    .limit(limit);

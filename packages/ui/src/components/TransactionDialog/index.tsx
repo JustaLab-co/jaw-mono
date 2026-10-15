@@ -53,6 +53,7 @@ export const TransactionDialog = ({
   appName,
   appLogoUrl,
   origin,
+  originLabel,
   feeTokens,
   feeTokensLoading,
   selectedFeeToken,
@@ -297,6 +298,7 @@ export const TransactionDialog = ({
                   appName={appName}
                   appLogoUrl={appLogoUrl}
                   origin={origin}
+                  originLabel={originLabel}
                   chainName={networkName}
                   chainIcon={chainIcon}
                 />
@@ -436,6 +438,7 @@ export const TransactionDialog = ({
               changes={allowanceChanges(transactions)}
               knownTokens={[...(assetsOut ?? []), ...(assetsIn ?? [])]}
               chainId={currentTransaction?.chainId}
+              apiKey={apiKey}
             />
 
             {/* Value (single, non-native) */}
