@@ -343,7 +343,12 @@ describe('the owner pool per account', () => {
     const until = new Date(Date.now() + 8_000);
     await fill(relay, ACCOUNT, until);
 
-    expect((await relay.connectRelay(84532, until, as(ACCOUNT))).url).toMatch(/cli-bridge/);
+    const held = [];
+    for (let i = 0; i < relay.SESSION_LIMITS.ownerPerAccount + 1; i++) {
+      held.push(await relay.connectRelay(84532, until, as(ACCOUNT)));
+    }
+
+    expect(held).toHaveLength(relay.SESSION_LIMITS.ownerPerAccount + 1);
   });
 
   it('given a session closed, then only that account gets the slot back', async () => {
