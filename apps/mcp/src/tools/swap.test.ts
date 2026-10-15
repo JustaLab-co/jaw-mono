@@ -273,6 +273,13 @@ const run = (t: Tenant, args: Partial<SwapToolInput> = {}, openWallet = recordin
 
 const swapsOf = (connectionId: string): Promise<SwapRow[]> =>
   getDb().select().from(swaps).where(eq(swaps.connectionId, connectionId));
+// A session's end clears its lease with a write of its own; wait for it before a retry.
+// A row past the send marker never reopens, so its lease does not matter.
+const sessionEnded = (connectionId: string) =>
+  vi.waitFor(async () => {
+    const open = (await swapsOf(connectionId)).filter((r) => r.state === 'awaiting_owner' && r.code !== 'send_started');
+    expect(open.map((r) => r.sessionUntil)).not.toContainEqual(expect.any(Date));
+  });
 const paymentsOf = (connectionId: string) =>
   getDb().select().from(payments).where(eq(payments.connectionId, connectionId));
 const paidHits = () => backend.hits.filter((h) => h.nonce);
@@ -754,6 +761,7 @@ describe('the owner approves the deposit', () => {
   async function approve(t: Tenant, answer: Ask, args: Partial<SwapToolInput> = {}) {
     const result = await run(t, args, recordingWallet(false, answer));
     await walletsSettled();
+    await sessionEnded(t.connectionId);
     const [row] = await swapsOf(t.connectionId);
     return { result, row };
   }
@@ -1202,6 +1210,7 @@ describe('the owner approves the deposit', () => {
     const { t } = await connected('1');
     await run(t, {}, gone);
     await walletsSettled();
+    await sessionEnded(t.connectionId);
     const paid = paidHits().length;
 
     const again = await run(t);
@@ -1220,6 +1229,7 @@ describe('the owner approves the deposit', () => {
     const { t } = await connected('1');
     await run(t, {}, gone);
     await walletsSettled();
+    await sessionEnded(t.connectionId);
     const [before] = await swapsOf(t.connectionId);
 
     const again = await run(t, {}, recordingWallet(true));
