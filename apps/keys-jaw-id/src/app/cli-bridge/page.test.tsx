@@ -119,6 +119,7 @@ describe('cli-bridge page app name', () => {
 
     created.session = 's2';
     await act(async () => root.render(<CLIBridgePage />));
+    expect(host.querySelector('h1')!.textContent).toBe('JAW CLI');
     const second = await connect(2, cliKeys);
     await init(second, { appName: 'Cursor' });
 
