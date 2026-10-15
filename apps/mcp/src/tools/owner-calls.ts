@@ -312,21 +312,25 @@ export async function sendCalls(t: Tenant, input: SendCallsInput, deps: OwnerCal
   const approveBy = new Date(Date.now() + APPROVE_WINDOW_MS);
   const wallet = await openWalletFor(t, approveBy, deps);
   if (!wallet) return walletBusy(key);
-  let row: OwnerCallRow | null = null;
+  let row: OwnerCallRow | 'account_busy' | null = null;
   try {
-    row = await insertOwnerCall({
-      connectionId: t.connectionId,
-      key,
-      requestHash: hash,
-      chainId,
-      account: t.account,
-      calls,
-      walletUrl: wallet.url,
-      approveBy,
-    });
+    row = await insertOwnerCall(
+      {
+        connectionId: t.connectionId,
+        key,
+        requestHash: hash,
+        chainId,
+        account: t.account,
+        calls,
+        walletUrl: wallet.url,
+        approveBy,
+      },
+      MAX_OPEN_PER_ACCOUNT
+    );
   } finally {
-    if (!row) wallet.close();
+    if (!row || row === 'account_busy') wallet.close();
   }
+  if (row === 'account_busy') return accountBusy();
   if (row) {
     follow(row, wallet);
     return answer(row);

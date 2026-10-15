@@ -874,6 +874,33 @@ describe('jaw_send_calls refusals', () => {
       expect(result.structuredContent!.state).toBe('awaiting_owner');
     });
 
+    it('given five connections of one account sending at once, then three links open and every other wallet is closed', async () => {
+      const ts = await sameAccount(5);
+      const urls: string[] = [];
+      let allOpen = () => {};
+      const gate = new Promise<void>((resolve) => {
+        allOpen = () => resolve();
+      });
+      // Every request holds its wallet until all five have one, so all of them got past the early count.
+      const openAll: OpenWallet = async (chainId, until) => {
+        const w = await wallet()(chainId, until);
+        urls.push(w.url);
+        if (urls.length === ts.length) allOpen();
+        await gate;
+        return w;
+      };
+
+      const results = await Promise.all(ts.map((t) => send(t, {}, openAll)));
+
+      expect(results.filter((r) => r.structuredContent?.state === 'awaiting_owner')).toHaveLength(3);
+      expect(results.filter((r) => r[gateCode] === 'calls_in_progress')).toHaveLength(2);
+      const stored = (await Promise.all(ts.map((t) => rowsOf(t.connectionId)))).flat();
+      expect(stored.map((r) => r.state)).toEqual(['awaiting_owner', 'awaiting_owner', 'awaiting_owner']);
+      const kept = stored.map((r) => r.walletUrl);
+      expect(urls).toHaveLength(5);
+      expect([...closed].sort()).toEqual(urls.filter((u) => !kept.includes(u)).sort());
+    });
+
     it('given two links open and a third that expired, when a connection asks, then it is served', async () => {
       const [a, b, c, d] = await sameAccount(4);
       await send(a);

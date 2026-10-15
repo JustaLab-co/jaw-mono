@@ -1,7 +1,7 @@
 import { randomBytes } from 'node:crypto';
 import { and, count, eq, gt, inArray, isNull, lt, ne, sql, type SQL } from 'drizzle-orm';
 import type { PgUpdateSetSource } from 'drizzle-orm/pg-core';
-import { getDb } from '@/db/client';
+import { getDb, type Tx } from '@/db/client';
 import { ownerCalls } from '@/db/schema';
 
 export type OwnerCallRow = typeof ownerCalls.$inferSelect;
@@ -31,23 +31,32 @@ async function write(where: SQL | undefined, set: CallSet): Promise<OwnerCallRow
 const ofCall = (connectionId: string, id: string, states: OwnerCallState[]) =>
   and(eq(ownerCalls.id, id), eq(ownerCalls.connectionId, connectionId), inArray(ownerCalls.state, states));
 
-export async function insertOwnerCall(input: NewOwnerCall): Promise<OwnerCallRow | null> {
-  const [row] = await getDb()
-    .insert(ownerCalls)
-    .values({
-      id: `oc_${randomBytes(16).toString('base64url')}`,
-      connectionId: input.connectionId,
-      idempotencyKey: input.key,
-      requestHash: input.requestHash,
-      chainId: input.chainId,
-      account: input.account,
-      calls: input.calls,
-      walletUrl: input.walletUrl,
-      approveBy: input.approveBy,
-    })
-    .onConflictDoNothing()
-    .returning();
-  return row ?? null;
+/** Null when the key or the connection's open slot is taken, 'account_busy' when the account holds `maxOpen` links. */
+export async function insertOwnerCall(
+  input: NewOwnerCall,
+  maxOpen = Infinity
+): Promise<OwnerCallRow | 'account_busy' | null> {
+  return getDb().transaction(async (tx) => {
+    // Links of one account land one at a time, so the count holds until the insert commits.
+    await tx.execute(sql`select pg_advisory_xact_lock(hashtext(${`owner-calls:${input.account.toLowerCase()}`}))`);
+    if ((await openForAccount(tx, input.account)) >= maxOpen) return 'account_busy';
+    const [row] = await tx
+      .insert(ownerCalls)
+      .values({
+        id: `oc_${randomBytes(16).toString('base64url')}`,
+        connectionId: input.connectionId,
+        idempotencyKey: input.key,
+        requestHash: input.requestHash,
+        chainId: input.chainId,
+        account: input.account,
+        calls: input.calls,
+        walletUrl: input.walletUrl,
+        approveBy: input.approveBy,
+      })
+      .onConflictDoNothing()
+      .returning();
+    return row ?? null;
+  });
 }
 
 async function find(where: SQL): Promise<OwnerCallRow | undefined> {
@@ -65,8 +74,10 @@ export const findOpen = (connectionId: string) =>
   find(and(eq(ownerCalls.connectionId, connectionId), eq(ownerCalls.state, 'awaiting_owner'))!);
 
 /** Links still waiting on the owner across every connection of the account, apart from `except`. */
-export async function countOpenForAccount(account: string, except?: string): Promise<number> {
-  const [row] = await getDb()
+export const countOpenForAccount = (account: string, except?: string) => openForAccount(getDb(), account, except);
+
+async function openForAccount(db: Tx, account: string, except?: string): Promise<number> {
+  const [row] = await db
     .select({ n: count() })
     .from(ownerCalls)
     .where(
