@@ -25,6 +25,8 @@ export interface Wallet {
 export interface RelayClient {
   clientId: string;
   clientName: string;
+  /** The owner account the session is for. Counts against that account's share of the pool. */
+  account?: string;
 }
 
 /** Opens a session that ends at `until`, answered or not. */
@@ -54,8 +56,13 @@ export function appNameOf(client?: RelayClient): string {
  * Sessions one process holds open at once, each a socket waiting on an owner.
  * Authorizations and the owner's tool requests have pools of their own, so a
  * flood of authorizations cannot take the slots budget and revoke requests need.
+ *
+ * One account may hold `ownerPerAccount` of the owner pool: the three open links
+ * the database allows for sends and swaps, plus a budget request and a revoke.
+ * Authorizations are not counted per account, as nobody is known yet when they open.
+ * The count is per process; the database cap covers the replicas.
  */
-export const SESSION_LIMITS = { connect: 150, owner: 50 };
+export const SESSION_LIMITS = { connect: 150, owner: 50, ownerPerAccount: 5 };
 
 export class WalletBusy extends Error {
   constructor() {
@@ -68,9 +75,16 @@ type Message = Record<string, unknown>;
 interface Pool {
   limit: number;
   open: number;
+  perAccount?: number;
+  byAccount: Map<string, number>;
 }
-const connectPool: Pool = { limit: SESSION_LIMITS.connect, open: 0 };
-const ownerPool: Pool = { limit: SESSION_LIMITS.owner, open: 0 };
+const connectPool: Pool = { limit: SESSION_LIMITS.connect, open: 0, byAccount: new Map() };
+const ownerPool: Pool = {
+  limit: SESSION_LIMITS.owner,
+  open: 0,
+  perAccount: SESSION_LIMITS.ownerPerAccount,
+  byAccount: new Map(),
+};
 
 export const connectRelay: OpenWallet = (chainId, until, client) => openRelay(connectPool, chainId, until, client);
 export const ownerRelay: OpenWallet = (chainId, until, client) => openRelay(ownerPool, chainId, until, client);
@@ -88,13 +102,21 @@ export const ownerRelay: OpenWallet = (chainId, until, client) => openRelay(owne
  * this side is waiting when the page connects.
  */
 async function openRelay(pool: Pool, chainId: number, until: Date, client?: RelayClient): Promise<Wallet> {
-  if (pool.open >= pool.limit) throw new WalletBusy();
+  const account = pool.perAccount ? client?.account?.toLowerCase() : undefined;
+  const mine = account ? (pool.byAccount.get(account) ?? 0) : 0;
+  if (pool.open >= pool.limit || mine >= (pool.perAccount ?? Infinity)) throw new WalletBusy();
   // Taken before the first await, so sessions asked for together cannot all pass the check.
   pool.open++;
+  if (account) pool.byAccount.set(account, mine + 1);
   let held = true;
   const release = () => {
-    if (held) pool.open--;
+    if (!held) return;
     held = false;
+    pool.open--;
+    if (!account) return;
+    const left = (pool.byAccount.get(account) ?? 1) - 1;
+    if (left > 0) pool.byAccount.set(account, left);
+    else pool.byAccount.delete(account);
   };
   try {
     return await startSession(release, chainId, until, client);

@@ -287,6 +287,146 @@ describe('the pool of sessions', () => {
   });
 });
 
+describe('the owner pool per account', () => {
+  const fresh = () => {
+    vi.resetModules();
+    return import('./relay');
+  };
+  const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+  const ACCOUNT = '0xAbCdEf0000000000000000000000000000000001';
+  const OTHER = '0x0000000000000000000000000000000000000002';
+  const as = (account: string) => ({ clientId: 'c', clientName: 'c', account });
+  type Relay = Awaited<ReturnType<typeof fresh>>;
+  const fill = async (relay: Relay, account: string, until: Date) => {
+    const held = [];
+    for (let i = 0; i < relay.SESSION_LIMITS.ownerPerAccount; i++) {
+      held.push(await relay.ownerRelay(84532, until, as(account)));
+    }
+    return held;
+  };
+  const busy = (relay: Relay, account: string, until: Date) =>
+    expect(relay.ownerRelay(84532, until, as(account))).rejects.toBeInstanceOf(relay.WalletBusy);
+  const opensAgain = (relay: Relay, account: string) =>
+    vi.waitFor(
+      async () =>
+        expect((await relay.ownerRelay(84532, new Date(Date.now() + 500), as(account))).url).toMatch(/cli-bridge/),
+      { timeout: 3_000 }
+    );
+
+  it('given an account holds its share, then a further session for it is busy', async () => {
+    const relay = await fresh();
+    const until = new Date(Date.now() + 8_000);
+    await fill(relay, ACCOUNT, until);
+
+    await busy(relay, ACCOUNT, until);
+  });
+
+  it('given the share is held, then the same address in another case is busy too', async () => {
+    const relay = await fresh();
+    const until = new Date(Date.now() + 8_000);
+    await fill(relay, ACCOUNT, until);
+
+    await busy(relay, ACCOUNT.toLowerCase(), until);
+  });
+
+  it('given one account is full, then another account and a session with no account still open', async () => {
+    const relay = await fresh();
+    const until = new Date(Date.now() + 8_000);
+    await fill(relay, ACCOUNT, until);
+
+    expect((await relay.ownerRelay(84532, until, as(OTHER))).url).toMatch(/cli-bridge/);
+    expect((await relay.ownerRelay(84532, until)).url).toMatch(/cli-bridge/);
+  });
+
+  it('given an account is full, then the authorization pool is not limited by it', async () => {
+    const relay = await fresh();
+    const until = new Date(Date.now() + 8_000);
+    await fill(relay, ACCOUNT, until);
+
+    expect((await relay.connectRelay(84532, until, as(ACCOUNT))).url).toMatch(/cli-bridge/);
+  });
+
+  it('given a session closed, then only that account gets the slot back', async () => {
+    const relay = await fresh();
+    const until = new Date(Date.now() + 8_000);
+    const held = await fill(relay, ACCOUNT, until);
+    await fill(relay, OTHER, until);
+    held[0].close();
+    await sleep(300);
+
+    await opensAgain(relay, ACCOUNT);
+    await busy(relay, OTHER, until);
+  });
+
+  it('given a session that ran to its end, then its slot is free at once', async () => {
+    const relay = await fresh();
+    const until = new Date(Date.now() + 20_000);
+    const held = await fill(relay, ACCOUNT, until);
+    await page(held[0].url, () => ({ success: true, data: [] }));
+    await held[0].run((ask) => ask('eth_requestAccounts', []));
+
+    await opensAgain(relay, ACCOUNT);
+  });
+
+  it('given sessions nobody runs, then the slots are free at their deadline', async () => {
+    const relay = await fresh();
+    await fill(relay, ACCOUNT, new Date(Date.now() + 600));
+    await busy(relay, ACCOUNT, new Date(Date.now() + 600));
+    await sleep(300);
+
+    await opensAgain(relay, ACCOUNT);
+  });
+
+  it('given sessions closed before their socket opened, then the slots are free', async () => {
+    const relay = await fresh();
+    const until = new Date(Date.now() + 8_000);
+    for (const wallet of await fill(relay, ACCOUNT, until)) wallet.close();
+    await sleep(500);
+
+    expect(await fill(relay, ACCOUNT, until)).toHaveLength(relay.SESSION_LIMITS.ownerPerAccount);
+  });
+
+  it('given a session closed twice, then it frees one slot', async () => {
+    const relay = await fresh();
+    const until = new Date(Date.now() + 8_000);
+    const held = await fill(relay, ACCOUNT, until);
+    held[0].close();
+    held[0].close();
+    await sleep(500);
+
+    await relay.ownerRelay(84532, until, as(ACCOUNT));
+    await busy(relay, ACCOUNT, until);
+  });
+
+  it('given more sessions asked for at once than the share, then only the share opens', async () => {
+    const relay = await fresh();
+    const until = new Date(Date.now() + 5_000);
+
+    const results = await Promise.allSettled(
+      Array.from({ length: 20 }, () => relay.ownerRelay(84532, until, as(ACCOUNT)))
+    );
+
+    expect(results.filter((r) => r.status === 'fulfilled')).toHaveLength(relay.SESSION_LIMITS.ownerPerAccount);
+  });
+
+  it('given the account is full, then jaw_request_budget answers busy instead of throwing', async () => {
+    const relay = await fresh();
+    const { requestBudget } = await import('../tools/request-budget');
+    const until = new Date(Date.now() + 8_000);
+    await fill(relay, ACCOUNT, until);
+    const t = { ...as(ACCOUNT), connectionId: 'conn', chainId: 84532, sessionAddress: OTHER, scopes: [] };
+
+    const result = await requestBudget(t as never, '1', {
+      openWallet: relay.ownerRelay,
+      readPermission: async () => null as never,
+      clients: undefined as never,
+      sender: undefined as never,
+    });
+
+    expect(result.content[0].text).toBe('Too many owners are approving right now. Try again in a minute.');
+  });
+});
+
 describe('given authorizations hold every session of their pool', () => {
   it("when the owner's tools ask for a session, then theirs still opens, and a further authorization is busy", async () => {
     const until = new Date(Date.now() + 1_000);
