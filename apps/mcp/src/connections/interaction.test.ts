@@ -2,7 +2,7 @@ import { randomBytes } from 'node:crypto';
 import { eq } from 'drizzle-orm';
 import { hexToString, type Hex } from 'viem';
 import { generatePrivateKey, privateKeyToAddress } from 'viem/accounts';
-import { beforeAll, describe, expect, it } from 'vitest';
+import { beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import { getDb } from '@/db/client';
 import { connections, grants } from '@/db/schema';
 import { useTestDb } from '@/db/test-db';
@@ -26,6 +26,8 @@ import {
 
 setTestEnv();
 beforeAll(useTestDb);
+// setWallet is sticky, so a test that makes the chain unreadable must not hand that on.
+beforeEach(() => setWallet({ readPermission: approvedOnChain }));
 
 const rowOf = async (uid: string) =>
   (await getDb().select().from(connections).where(eq(connections.interactionUid, uid)))[0];
@@ -250,25 +252,18 @@ describe('connecting through the owner wallet', () => {
   });
 
   it('given the wallet has not answered yet, when the page reloads and the owner clicks again, then it hands out the same link and opens no second session', async () => {
-    let opened = 0;
-    const waiting: OpenWallet = async () => {
-      opened++;
-      return {
-        url: `http://keys.test/cli-bridge?session=s${opened}`,
-        run: () => new Promise(() => {}),
-        close: () => undefined,
-      };
-    };
-    setWallet({ openWallet: waiting });
+    const held = heldWallets();
+    setWallet({ openWallet: held.openWallet });
     const browser = new Browser();
     const start = await startAuthorization(browser);
     const again = await (await browser.get(`${ISSUER}/interaction/${start.uid}`)).text();
     const clicked = await (await browser.post(`${ISSUER}/interaction/${start.uid}/open`)).json();
-    expect(opened).toBe(1);
-    expect(clicked).toEqual({ url: 'http://keys.test/cli-bridge?session=s1' });
+    expect(held.opened()).toBe(1);
+    expect(clicked).toEqual({ url: 'http://keys.test/cli-bridge?session=h1' });
     // The ticket and the code come from the interaction, so a reload on another replica shows the same ones.
     expect(again).toContain(`"ticket":"${start.ticket}"`);
     expect(await stateOf(browser, start.uid!)).toEqual({ state: 'waiting' });
+    await held.release();
   });
 
   it('given an approved connection, when completion comes without the ticket of its page, then it is refused', async () => {
