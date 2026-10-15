@@ -1,8 +1,8 @@
 /**
- * Stable analytics names for the demo's four features. Deliberately decoupled
+ * Stable analytics names for the demo's three features. Deliberately decoupled
  * from the copy in `features.ts` — renaming a headline must not break a funnel.
  */
-export type FeatureName = 'sign-in' | 'send' | 'swap' | 'agent-delegation';
+export type FeatureName = 'sign-in' | 'send' | 'agent-delegation';
 
 /** Which SDK surface the event originated from. The demo only uses core. */
 export type SdkType = 'core';
@@ -31,10 +31,8 @@ export type CtaSurface = 'header' | 'mobile-intro' | 'mobile-menu' | 'finale' | 
 /** Shared shape of every event fired from inside a feature screen. */
 export interface FeatureContext {
   feature: FeatureName;
-  /** Position in the tour (1-4), so drop-off is orderable without a lookup. */
+  /** Position in the tour (1-3), so drop-off is orderable without a lookup. */
   featureId: number;
-  /** Variant key of the active screen (`happy`, `adversarial`, `swap`). */
+  /** Variant key of the active screen (`happy`). */
   variant: string;
-  /** The adversarial variant runs a deliberately flaggable payload. */
-  adversarial: boolean;
 }

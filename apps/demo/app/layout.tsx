@@ -24,7 +24,8 @@ const playfair = Playfair_Display({
 
 export const metadata: Metadata = {
   title: 'JAW Demo',
-  description: 'Walk through exactly what your users do: sign in, send, swap and delegate with a JAW smart account.',
+  description:
+    'Walk through exactly what your users do: sign in, send and delegate with a JAW smart account, paid in EURe.',
 };
 
 export default function RootLayout({

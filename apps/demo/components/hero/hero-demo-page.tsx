@@ -16,19 +16,16 @@ import { SocialApp } from '@/components/screens/social';
 import { DEMO_CHAIN_ID, getJaw, prewarmJaw, resetJaw, transportMode } from '@/lib/jaw';
 import { getAnalyticsClient } from '@/lib/analytics';
 import type { FeatureContext, SurfaceName } from '@/lib/analytics/events/types';
-import { connectVariant, featureRequest } from '@/lib/requests';
-import { useEthQuote, type SwapQuote } from '@/lib/use-eth-quote';
+import { featureRequest } from '@/lib/requests';
 import { useDialogEmbed } from '@/lib/use-dialog-embed';
 import { SplitsApp } from '@/components/screens/splits';
-import { SwapApp } from '@/components/screens/swap';
 import { AgentApp } from '@/components/screens/agent';
 
-type BaseAppProps = { onCta: () => void; quote: SwapQuote };
+type BaseAppProps = { onCta: () => void };
 
 const BASE_APPS: Record<PhoneAppKey, (props: BaseAppProps) => React.ReactElement> = {
   social: ({ onCta }) => <SocialApp onCta={onCta} />,
   splits: ({ onCta }) => <SplitsApp onCta={onCta} />,
-  swap: ({ onCta, quote }) => <SwapApp onCta={onCta} quote={quote} />,
   agent: ({ onCta }) => <AgentApp onCta={onCta} />,
 };
 
@@ -117,7 +114,6 @@ const featureCtx = (feat: Feat, variant: Variant): FeatureContext => ({
   feature: feat.analytics,
   featureId: feat.id,
   variant: variant.key,
-  adversarial: variant.key === 'adversarial',
 });
 
 const errMessage = (e: unknown) => (e instanceof Error && e.message ? e.message : 'Unknown error');
@@ -145,7 +141,7 @@ export function HeroDemoPage() {
   // Mobile-only: the intro page is shown until the visitor launches the demo.
   // Desktop always renders the demo — its pitch lives beside the phone.
   const [started, setStarted] = useState(false);
-  // Post-sign-up hold while /api/fund tops the account up with testnet USDC.
+  // Post-sign-up hold while /api/fund tops the account up with testnet EURe.
   const [funding, setFunding] = useState(false);
   const { areaRef, scale, phoneH, phoneW } = usePhoneFit();
   const frameH = phoneH + IOS_BEZEL * 2;
@@ -157,8 +153,6 @@ export function HeroDemoPage() {
   const [mounted, setMounted] = useState(false);
   useEffect(() => setMounted(true), []);
   const surface: SurfaceName = isMobile ? 'mobile' : 'desktop';
-  // Live 0.2 USDC → ETH quote for the Swapr screen.
-  const quote = useEthQuote(0.2);
   // Elements the real keys.jaw.id dialog gets pinned to: the phone screen on
   // desktop, the full-bleed demo area on mobile.
   const [mobileEl, setMobileEl] = useState<HTMLDivElement | null>(null);
@@ -229,9 +223,7 @@ export function HeroDemoPage() {
   };
   const pickVariant = (i: number) => {
     const picked = cur.variants[i];
-    // Only the deliberate toggle in the feature list lands here — how many
-    // visitors go looking for the adversarial payload is the clearest read on
-    // whether the security story lands.
+    // Only the deliberate toggle in the feature list lands here.
     if (picked) {
       getAnalyticsClient().track('DEMO_VARIANT_SELECTED', {
         feature: cur.analytics,
@@ -284,13 +276,11 @@ export function HeroDemoPage() {
     }
   };
   const Base = BASE_APPS[v.app || cur.app];
-  // Swapr and Agens screens are dark — flip the status bar / home indicator.
-  const activeApp = v.app || cur.app;
-  const darkScreen = activeApp === 'swap' || activeApp === 'agent';
+  // The Agens screen is dark: flip the status bar / home indicator.
+  const darkScreen = (v.app || cur.app) === 'agent';
 
-  // Every CTA opens the real keys.jaw.id dialog (contained in the phone). Each
-  // feature runs a genuine request; the adversarial variant runs a flaggable
-  // one (SIWE spoof / unlimited approval / unscoped grant).
+  // Every CTA opens the real keys.jaw.id dialog (contained in the phone), and
+  // each feature runs a genuine request.
   const onCta = async () => {
     // One request at a time: the CTA stays clickable until the dialog paints,
     // so a double-tap must not fire two wallet requests.
@@ -299,7 +289,6 @@ export function HeroDemoPage() {
     if (!jaw) return;
     const run = ++runRef.current;
     const fromId = cur.id;
-    const adversarial = v.key === 'adversarial';
     // Snapshot the screen this action started on: the request can outlive a
     // navigation and must still report the feature that fired it.
     const analytics = getAnalyticsClient();
@@ -319,14 +308,11 @@ export function HeroDemoPage() {
           await jaw.provider.disconnect();
           resetJaw()?.provider.setTheme(cur.theme ?? DEFAULT_THEME);
         }
-        await connectVariant(getJaw()!.provider, adversarial);
+        // A plain connect: onboarding creates the account and signs the user in.
+        await getJaw()!.provider.request({ method: 'eth_requestAccounts' });
         trackConnected(analytics);
-        // The adversarial SIWE dialog closes the instant the user accepts the
-        // risk and signs; hold a beat so the phishing warning they just
-        // acknowledged doesn't vanish into the next screen.
-        if (adversarial) await new Promise((r) => setTimeout(r, 1000));
-        // Fund the fresh account with testnet USDC so the send and swap
-        // features actually settle. The route skips accounts that already
+        // Fund the fresh account with testnet EURe so the send feature
+        // actually settles. The route skips accounts that already
         // hold enough; a failure surfaces as the inline error banner (the
         // outer catch) and keeps the user on this screen.
         const funded = (await jaw.provider.request({ method: 'eth_accounts' })) as string[];
@@ -355,7 +341,7 @@ export function HeroDemoPage() {
         }
         const addrs = (await jaw.provider.request({ method: 'eth_accounts' })) as string[];
         if (addrs?.[0]) analytics.identify(addrs[0]);
-        await featureRequest(jaw.provider, cur.id, adversarial, addrs?.[0] ?? '');
+        await featureRequest(jaw.provider, cur.id);
       }
       analytics.track('DEMO_ACTION_COMPLETED', ctx);
       // Only advance if the user hasn't navigated while the request ran.
@@ -400,7 +386,7 @@ export function HeroDemoPage() {
       />
 
       <div className="group/stage min-h-0 flex-1" data-pulse={open || fin || menu ? undefined : ''}>
-        <Base onCta={onCta} quote={quote} />
+        <Base onCta={onCta} />
       </div>
 
       <MobileMenu
@@ -485,7 +471,7 @@ export function HeroDemoPage() {
             Experience <span className="text-jaw-blue">your users&apos;</span> journey
           </h1>
           <p className="text-ink-2 mb-[26px] max-w-[600px] text-pretty text-[17px] leading-[1.55]">
-            A social feed, a bill split, an exchange, an AI agent. Four different designs, one invisible SDK. Every
+            A social feed, a bill split, an AI agent. Three different designs, one invisible SDK, paid in EURe. Every
             action settles onchain.
           </p>
           <div className="relative mb-8 flex flex-col gap-2" data-analytics-surface="feature-list">

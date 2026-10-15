@@ -1,8 +1,8 @@
 /**
- * /api/fund tops fresh accounts up with testnet USDC after sign-up. It is the
+ * /api/fund tops fresh accounts up with testnet EURe after sign-up. It is the
  * demo's one server dependency and a silent failure breaks every later screen
- * (send and swap have nothing to spend), so its outcome is tracked separately
- * from the wallet action that triggered it.
+ * (send has nothing to spend), so its outcome is tracked separately from the
+ * wallet action that triggered it.
  */
 export const DEMO_FUNDING_SETTLED = 'DEMO_FUNDING_SETTLED';
 export const DEMO_FUNDING_FAILED = 'DEMO_FUNDING_FAILED';

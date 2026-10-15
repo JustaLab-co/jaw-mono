@@ -103,8 +103,8 @@ export function SplitsApp({ onCta }: { onCta: () => void }) {
         <div className="mb-2 mt-[11px] grid grid-cols-2 gap-2.5">
           {(
             [
-              ['YOU OWE', '$72.50', red, 'm7 17 10-10', 'M17 7v10H7'],
-              ['OWED TO YOU', '$24.00', green, 'M17 7 7 17', 'M7 7v10h10'],
+              ['YOU OWE', '€72.50', red, 'm7 17 10-10', 'M17 7v10H7'],
+              ['OWED TO YOU', '€24.00', green, 'M17 7 7 17', 'M7 7v10h10'],
             ] as const
           ).map(([k, v, col, p1, p2]) => (
             <div key={k} className="rounded-[14px] border border-[rgba(22,35,63,.2)] px-3 py-2.5">
@@ -177,7 +177,7 @@ export function SplitsApp({ onCta }: { onCta: () => void }) {
               className="font-display mt-[3px] flex items-baseline justify-center gap-0.5 tracking-[-0.015em]"
               style={{ color: red }}
             >
-              <span className="mt-1 self-start text-[18px] font-semibold">$</span>
+              <span className="mt-1 self-start text-[18px] font-semibold">€</span>
               <span className="text-[34px] font-bold leading-[1.05]">72</span>
               <span className="text-[20px] font-semibold opacity-55">.50</span>
             </div>
@@ -186,7 +186,7 @@ export function SplitsApp({ onCta }: { onCta: () => void }) {
               <span className="h-[3px] w-[3px] rounded-full bg-[rgba(22,35,63,.22)]" />
               <span>4 slips</span>
               <span className="h-[3px] w-[3px] rounded-full bg-[rgba(22,35,63,.22)]" />
-              <span>USDC</span>
+              <span>EURe</span>
             </div>
           </div>
         </div>
@@ -200,7 +200,7 @@ export function SplitsApp({ onCta }: { onCta: () => void }) {
           <Row
             name="John Carter"
             slips="1 slip"
-            amt="$42.50"
+            amt="€42.50"
             c1="#64748B"
             c2="#334155"
             ini="KN"
@@ -209,7 +209,7 @@ export function SplitsApp({ onCta }: { onCta: () => void }) {
           <Row
             name="Sarah Park"
             slips="1 slip"
-            amt="$18.00"
+            amt="€18.00"
             c1="#E4677B"
             c2="#B91C3C"
             ini="SK"
@@ -218,7 +218,7 @@ export function SplitsApp({ onCta }: { onCta: () => void }) {
           <Row
             name="Youssef Bahri"
             slips="2 slips"
-            amt="$12.00"
+            amt="€12.00"
             c1="#7FA3C9"
             c2="#2F5D8C"
             ini="YB"

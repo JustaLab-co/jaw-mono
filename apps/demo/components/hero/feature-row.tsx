@@ -10,11 +10,8 @@ export function VariantPills({ variants, vi, setVi }: { variants: Variant[]; vi:
     <div className="relative z-[2] flex flex-wrap items-center gap-1.5 pb-1 pt-3.5">
       {variants.map((v, i) => {
         const on = i === vi;
-        const danger = v.key === 'adversarial';
         const tone = on
-          ? danger
-            ? 'border-red-line bg-red-bg text-red'
-            : 'border-jaw-blue bg-[rgba(8,81,255,.06)] text-jaw-blue'
+          ? 'border-jaw-blue bg-[rgba(8,81,255,.06)] text-jaw-blue'
           : 'border-line-2 bg-transparent text-ink-3';
         return (
           <button

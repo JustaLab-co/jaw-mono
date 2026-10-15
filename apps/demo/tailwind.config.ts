@@ -55,7 +55,7 @@ const config: Config = {
         'jd-spin': {
           to: { transform: 'rotate(360deg)' },
         },
-        // Coin flip for the funding overlay's USDC mark (needs a perspective
+        // Coin flip for the funding overlay's EURe mark (needs a perspective
         // on the parent to read as 3D).
         'jd-coin': {
           to: { transform: 'rotateY(360deg)' },

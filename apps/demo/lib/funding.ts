@@ -1,15 +1,14 @@
 // Demo funding config, shared by the /api/fund route and the client.
 
-// Circle's USDC on Base Sepolia (6 decimals) — same token the demo spends.
-export const USDC_ADDRESS = '0x036CbD53842c5426634e7929541eC2318f3dCF7e';
+export { EURE_ADDRESS, EURE_DECIMALS } from './eure';
 
-// The full tour spends 0.2 (splits) + 0.2 (swap) USDC plus ERC-20 paymaster
-// gas. An account holding at least this much can finish the tour — skip.
-export const ALREADY_FUNDED_USDC = '0.5';
+// The tour spends 2 EURe (send) plus EURe paymaster gas. An account holding
+// at least this much can finish the tour: skip.
+export const ALREADY_FUNDED_EURE = '3';
 // Top-up for fresh accounts: spends + gas headroom.
-export const FUND_AMOUNT_USDC = '1';
+export const FUND_AMOUNT_EURE = '5';
 // Refuse to fund below this treasury balance so the demo never half-funds.
-export const FUNDER_FLOOR_USDC = '2';
+export const FUNDER_FLOOR_EURE = '10';
 
 /** POST the address to /api/fund; resolves with {skipped} or {txHash}. */
 export async function fundAccount(address: string): Promise<{ skipped?: boolean; txHash?: string }> {

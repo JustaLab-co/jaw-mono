@@ -1,8 +1,9 @@
 import { JAW } from '@jaw.id/core';
 import { resolveKeysUrl } from './keys-url';
+import { ARB_SEPOLIA_ID } from './eure';
 
-/** Base Sepolia — the one chain the demo runs on. */
-export const DEMO_CHAIN_ID = 84532;
+/** Arbitrum Sepolia: the one chain the demo runs on. */
+export const DEMO_CHAIN_ID = ARB_SEPOLIA_ID;
 
 /**
  * Effective keys transport, for analytics. The demo asks for the iframe, but

@@ -14,24 +14,26 @@ import {
   TimeoutError,
 } from 'viem';
 import { privateKeyToAccount } from 'viem/accounts';
-import { baseSepolia } from 'viem/chains';
+import { arbitrumSepolia } from 'viem/chains';
 import { JAW_RPC_URL } from '@jaw.id/core';
-import { ALREADY_FUNDED_USDC, FUND_AMOUNT_USDC, FUNDER_FLOOR_USDC, USDC_ADDRESS } from '@/lib/funding';
+import { ALREADY_FUNDED_EURE, EURE_ADDRESS, EURE_DECIMALS, FUND_AMOUNT_EURE, FUNDER_FLOOR_EURE } from '@/lib/funding';
 
 export const runtime = 'nodejs';
 
 const TREASURY_PRIVATE_KEY = process.env.TREASURY_PRIVATE_KEY as `0x${string}` | undefined;
 
 // Default RPC: the JAW proxy, authenticated with the app's API key — the same
-// endpoint the SDK routes through. The BASE_SEPOLIA_RPC_URL* env vars are
+// endpoint the SDK routes through. The ARBITRUM_SEPOLIA_RPC_URL* env vars are
 // optional explicit overrides; when set they run first with the proxy as the
 // failover, since providers occasionally return transient internal-error
 // blips and viem's fallback transport can fail over instead of failing.
 const API_KEY = process.env.NEXT_PUBLIC_API_KEY;
-const jawProxyUrl = API_KEY ? `${JAW_RPC_URL}?chainId=${baseSepolia.id}&api-key=${API_KEY}` : undefined;
-const rpcUrls = [process.env.BASE_SEPOLIA_RPC_URL, process.env.BASE_SEPOLIA_RPC_URL_FALLBACK, jawProxyUrl].filter(
-  (u): u is string => typeof u === 'string' && u.length > 0
-);
+const jawProxyUrl = API_KEY ? `${JAW_RPC_URL}?chainId=${arbitrumSepolia.id}&api-key=${API_KEY}` : undefined;
+const rpcUrls = [
+  process.env.ARBITRUM_SEPOLIA_RPC_URL,
+  process.env.ARBITRUM_SEPOLIA_RPC_URL_FALLBACK,
+  jawProxyUrl,
+].filter((u): u is string => typeof u === 'string' && u.length > 0);
 
 // 0 urls -> http(undefined) uses viem's default public RPC. 1 url -> that
 // url. 2+ -> fail over between them.
@@ -92,46 +94,46 @@ export async function POST(request: Request) {
   }
 
   const account = privateKeyToAccount(TREASURY_PRIVATE_KEY);
-  const publicClient = createPublicClient({ chain: baseSepolia, transport });
+  const publicClient = createPublicClient({ chain: arbitrumSepolia, transport });
 
   try {
     // Skip funding if the account already holds enough to run the demo.
     const recipientBalance = await withRpcRetry(() =>
       publicClient.readContract({
-        address: USDC_ADDRESS,
+        address: EURE_ADDRESS,
         abi: erc20Abi,
         functionName: 'balanceOf',
         args: [getAddress(address)],
       })
     );
-    if (recipientBalance >= parseUnits(ALREADY_FUNDED_USDC, 6)) {
+    if (recipientBalance >= parseUnits(ALREADY_FUNDED_EURE, EURE_DECIMALS)) {
       return NextResponse.json({ skipped: true });
     }
 
     // Guardrail: refuse below a floor so the demo never half-funds an account.
     const funderBalance = await withRpcRetry(() =>
       publicClient.readContract({
-        address: USDC_ADDRESS,
+        address: EURE_ADDRESS,
         abi: erc20Abi,
         functionName: 'balanceOf',
         args: [account.address],
       })
     );
-    if (funderBalance < parseUnits(FUNDER_FLOOR_USDC, 6)) {
+    if (funderBalance < parseUnits(FUNDER_FLOOR_EURE, EURE_DECIMALS)) {
       return NextResponse.json({ error: 'Demo is out of testnet funds' }, { status: 503 });
     }
 
     const walletClient = createWalletClient({
       account,
-      chain: baseSepolia,
+      chain: arbitrumSepolia,
       transport,
     });
     const txHash = await withRpcRetry(() =>
       walletClient.writeContract({
-        address: USDC_ADDRESS,
+        address: EURE_ADDRESS,
         abi: erc20Abi,
         functionName: 'transfer',
-        args: [getAddress(address), parseUnits(FUND_AMOUNT_USDC, 6)],
+        args: [getAddress(address), parseUnits(FUND_AMOUNT_EURE, EURE_DECIMALS)],
       })
     );
     return NextResponse.json({ txHash });

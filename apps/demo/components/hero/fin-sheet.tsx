@@ -6,7 +6,7 @@ import { Icon } from '@/components/ui';
 // has slid up.
 const finFade = 'animate-hd-fin-fade [animation-delay:220ms]';
 
-// Finale sheet shown inside the phone after the fourth feature completes.
+// Finale sheet shown inside the phone after the last feature completes.
 export function FinSheet({ onRestart }: { onRestart: () => void }) {
   return (
     <div className="absolute inset-0 z-[60] flex items-end" data-analytics-surface="finale">
@@ -20,7 +20,7 @@ export function FinSheet({ onRestart }: { onRestart: () => void }) {
         </span>
         <div className={`mb-[7px] text-[20px] font-semibold tracking-[-0.025em] ${finFade}`}>Now build yours</div>
         <p className={`text-ink-2 mx-auto mb-[22px] max-w-[250px] text-[13.5px] leading-[1.55] ${finFade}`}>
-          Onboarding, payments, swaps, agent permissions. Embedded and self-custodial, in your design, under your brand.
+          Onboarding, payments, agent permissions. Embedded and self-custodial, in your design, under your brand.
         </p>
         <div className={`flex flex-col gap-[9px] ${finFade}`}>
           <a

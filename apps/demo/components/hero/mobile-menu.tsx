@@ -70,7 +70,6 @@ export function MobileMenu({
                       <div className="relative z-[1] mt-2 flex flex-wrap gap-1.5 pl-[26px]">
                         {f.variants.map((fv, i) => {
                           const vOn = on && i === activeVi;
-                          const danger = fv.key === 'adversarial';
                           return (
                             <button
                               key={fv.key}
@@ -81,9 +80,7 @@ export function MobileMenu({
                               }}
                               className={`cursor-pointer whitespace-nowrap rounded-full border px-2.5 py-1 font-mono text-[9.5px] uppercase tracking-[.08em] ${
                                 vOn
-                                  ? danger
-                                    ? 'border-red-line bg-red-bg text-red'
-                                    : 'border-jaw-blue text-jaw-blue bg-[rgba(8,81,255,.06)]'
+                                  ? 'border-jaw-blue text-jaw-blue bg-[rgba(8,81,255,.06)]'
                                   : 'border-line-2 text-ink-3'
                               }`}
                             >

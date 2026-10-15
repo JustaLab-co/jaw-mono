@@ -65,8 +65,8 @@ export function AgentApp({ onCta }: { onCta: () => void }) {
           <div className="mb-0.5 mt-2.5 flex flex-col gap-[5px] rounded-[10px] border border-white/10 bg-black/25 px-3 py-2.5">
             {(
               [
-                ['Scope', 'USDC + ETH spends'],
-                ['USDC cap', '25 / day'],
+                ['Scope', 'EURe + ETH spends'],
+                ['EURe cap', '25 / day'],
                 ['ETH cap', '0.01 / month'],
                 ['Expires', 'in 30 days'],
               ] as const

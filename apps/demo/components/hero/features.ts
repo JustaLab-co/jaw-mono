@@ -3,7 +3,7 @@
 import type { JawTheme } from '@jaw.id/core';
 import type { FeatureName } from '@/lib/analytics/events/types';
 
-export type PhoneAppKey = 'social' | 'splits' | 'swap' | 'agent';
+export type PhoneAppKey = 'social' | 'splits' | 'agent';
 
 export type Variant = {
   key: string;
@@ -28,7 +28,7 @@ export type Feat = {
   theme?: JawTheme;
 };
 
-// Four features; some have variants the user can switch between.
+// Three features, one path each.
 export const FEATS: Feat[] = [
   {
     id: 1,
@@ -50,12 +50,7 @@ export const FEATS: Feat[] = [
       {
         key: 'happy',
         label: 'Happy path',
-        desc: 'Onboarding is a single passkey prompt: it creates a hardware-secured account, claims a name, and signs the user in. No seed phrase, no extension, no ETH required.',
-      },
-      {
-        key: 'adversarial',
-        label: 'Adversarial',
-        desc: 'Same button, hostile payload. The sign-in message claims to be evil.com while the request comes from this site. JAW compares the two, flags the mismatch as phishing, and blocks one-tap signing unless you accept the risk.',
+        desc: 'Onboarding is a single passkey prompt: it creates a hardware-secured account, claims a name, and signs the user in. No seed phrase, no extension, no ETH required, on Arbitrum Sepolia.',
       },
     ],
   },
@@ -100,64 +95,12 @@ export const FEATS: Feat[] = [
       {
         key: 'happy',
         label: 'Happy path',
-        desc: 'Pay Sarah, John, and Youssef by name, in dollars, with one confirmation for all three. Fees are in dollars too. No gas token, no top-up.',
+        desc: 'Pay friends in euros with one confirmation for both transfers. The network fee is paid in EURe too. No gas token, no top-up.',
       },
     ],
   },
   {
     id: 3,
-    analytics: 'swap',
-    app: 'swap',
-    appLabel: 'Exchange',
-    accent: '#0F172A',
-    title: 'Swap',
-    teaser: 'Approve and swap in one signature.',
-    // Swapr goes graphite black (Uniswap-web dark) with the screen's pink
-    // CTA as primary.
-    theme: {
-      mode: 'dark',
-      colors: {
-        background: '#0D0E12',
-        foreground: '#F5F5F5',
-        card: '#20242E',
-        cardForeground: '#F5F5F5',
-        popover: '#0D0E12',
-        popoverForeground: '#F5F5F5',
-        primary: '#F43FA6',
-        primaryForeground: '#FFFFFF',
-        secondary: '#4A2138',
-        secondaryForeground: '#FF8ACD',
-        muted: '#20242E',
-        mutedForeground: '#85888F',
-        accent: '#4A2138',
-        accentForeground: '#FF8ACD',
-        border: '#2B303C',
-        input: '#3A4353',
-        ring: '#F43FA6',
-        scrim: '#000000',
-      },
-    },
-    variants: [
-      {
-        key: 'swap',
-        label: 'Swap',
-        app: 'swap',
-        appLabel: 'Exchange',
-        accent: '#0F172A',
-        desc: 'Approve and swap execute as one atomic call, decoded in plain language before signing rather than hidden behind a hash. If the swap fails, the approval never happened, and no allowance is left on the router.',
-      },
-      {
-        key: 'adversarial',
-        label: 'Adversarial',
-        app: 'swap',
-        appLabel: 'Exchange',
-        accent: '#0F172A',
-        desc: 'The same swap, but the approval is unlimited instead of the exact amount. JAW decodes the approve so the blank cheque to the router is visible before signing',
-      },
-    ],
-  },
-  {
-    id: 4,
     analytics: 'agent-delegation',
     app: 'agent',
     appLabel: 'AI agent',
@@ -195,12 +138,7 @@ export const FEATS: Feat[] = [
       {
         key: 'happy',
         label: 'Happy path',
-        desc: "An agent with your keys can do anything. An agent with a JAW permission can do exactly what you allowed: this token, this cap, this expiry. The limit lives onchain, in the account, so overspending isn't a risk to monitor. It's a transaction that reverts.",
-      },
-      {
-        key: 'adversarial',
-        label: 'Adversarial',
-        desc: 'A grant scoped to any contract and any function, effectively the whole account. JAW renders it as “Any contract / Any function” with a warning, so the blast radius is visible before the permission exists.',
+        desc: "An agent with your keys can do anything. An agent with a JAW permission can do exactly what you allowed: this token, 25 EURe a day, 30 days. The limit lives onchain, in the account, so overspending isn't a risk to monitor. It's a transaction that reverts.",
       },
     ],
   },

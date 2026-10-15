@@ -27,7 +27,7 @@ const LINKS = [
 
 // Mobile-only landing shown before the demo starts. Desktop puts the pitch
 // beside the phone; on a real phone the demo owns the whole screen, so this
-// page carries the headline, the four capabilities, and the launch CTA first.
+// page carries the headline, the three capabilities, and the launch CTA first.
 export function MobileIntro({ onLaunch, onMenu }: { onLaunch: () => void; onMenu: () => void }) {
   return (
     <div
@@ -41,8 +41,8 @@ export function MobileIntro({ onLaunch, onMenu }: { onLaunch: () => void; onMenu
           Experience <span className="text-jaw-blue">your users&apos;</span> journey
         </h1>
         <p className="text-ink-2 mb-5 text-pretty text-[14.5px] leading-[1.55]">
-          A social feed, a bill split, an exchange, an AI agent. Four different designs, one invisible SDK. Every action
-          settles onchain.
+          A social feed, a bill split, an AI agent. Three different designs, one invisible SDK, paid in EURe. Every
+          action settles onchain.
         </p>
       </div>
 
