@@ -11,8 +11,10 @@ import {
 } from '@jaw.id/core';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
-const created = vi.hoisted(() => ({ appNames: [] as string[] }));
-vi.mock('next/navigation', () => ({ useSearchParams: () => new URLSearchParams('session=s1&relay=ws://relay.test') }));
+const created = vi.hoisted(() => ({ appNames: [] as string[], session: 's1' }));
+vi.mock('next/navigation', () => ({
+  useSearchParams: () => new URLSearchParams(`session=${created.session}&relay=ws://relay.test`),
+}));
 vi.mock('@jaw.id/ui', () => ({ ReactUIHandler: class {} }));
 vi.mock('@jaw.id/core', async (original) => ({
   ...(await original<object>()),
@@ -50,17 +52,22 @@ const unb64 = (s: string) => Uint8Array.from(atob(s), (c) => c.charCodeAt(0));
 let host: HTMLDivElement;
 let root: Root;
 let secret: CryptoKey;
+let cliKeys: CryptoKeyPair;
 
-async function start() {
-  const cli = await generateKeyPair();
-  window.location.hash = `pk=${await exportKeyToHexString('public', cli.publicKey)}`;
-  await act(async () => root.render(<CLIBridgePage />));
-  await vi.waitFor(() => expect(FakeSocket.all).toHaveLength(1));
-  const ws = FakeSocket.all[0];
+async function connect(count: number, cli: CryptoKeyPair) {
+  await vi.waitFor(() => expect(FakeSocket.all).toHaveLength(count));
+  const ws = FakeSocket.all[count - 1];
   await act(async () => ws.onopen!());
   const pageKey = ws.sent[0].publicKey as string;
   secret = await deriveSharedSecret(cli.privateKey, await importKeyFromHexString('public', pageKey));
   return ws;
+}
+
+async function start() {
+  const cli = (cliKeys = await generateKeyPair());
+  window.location.hash = `pk=${await exportKeyToHexString('public', cli.publicKey)}`;
+  await act(async () => root.render(<CLIBridgePage />));
+  return connect(1, cli);
 }
 
 async function init(ws: FakeSocket, payload: Record<string, unknown>) {
@@ -92,6 +99,7 @@ beforeEach(() => {
   (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
   FakeSocket.all = [];
   created.appNames = [];
+  created.session = 's1';
   vi.stubGlobal('WebSocket', FakeSocket);
   host = document.createElement('div');
   document.body.append(host);
@@ -104,6 +112,21 @@ afterEach(() => {
 });
 
 describe('cli-bridge page app name', () => {
+  it('a new session on the same page takes the name of its client', async () => {
+    const first = await start();
+    await init(first, { appName: 'Claude' });
+    expect(host.querySelector('h1')!.textContent).toBe('Claude');
+
+    created.session = 's2';
+    await act(async () => root.render(<CLIBridgePage />));
+    expect(host.querySelector('h1')!.textContent).toBe('JAW CLI');
+    const second = await connect(2, cliKeys);
+    await init(second, { appName: 'Cursor' });
+
+    expect(host.querySelector('h1')!.textContent).toBe('Cursor');
+    expect(created.appNames).toEqual(['Claude', 'Cursor']);
+  });
+
   it('the page and the SDK carry the name the client gave, cleaned', async () => {
     const ws = await start();
 

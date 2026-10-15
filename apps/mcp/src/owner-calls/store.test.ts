@@ -68,7 +68,7 @@ async function open(connectionId: string, over: { key?: string; approveBy?: Date
     walletUrl: URL_A,
     approveBy: over.approveBy ?? inMinutes(10),
   });
-  if (!row) throw new Error('not inserted');
+  if (!row || row === 'account_busy') throw new Error('not inserted');
   return row;
 }
 

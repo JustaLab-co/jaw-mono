@@ -18,11 +18,11 @@ import {
   approvedOnChain,
   connect,
   fakeWallet,
+  managerAnswer,
   offlineSession,
   setTestEnv,
   walletAnswers,
   walletsSettled,
-  permissionReads,
 } from '@/connections/testkit';
 import { getDb } from '@/db/client';
 import { grants, payments } from '@/db/schema';
@@ -110,9 +110,8 @@ const node = {
     if (functionName === 'balanceOf') return balanceOf(args[0] as string);
     if (functionName === 'allowance') return 0n;
     if (functionName === 'authorizationState') return false;
-    const permission = permissionReads(functionName, args);
-    if (permission !== undefined) return permission;
-    throw new Error('this node only knows balances and nonces');
+    if (functionName === 'getHash' || functionName === 'getCurrentPeriod') return managerAnswer(functionName, args);
+    throw new Error('this node only knows balances, nonces and the permission');
   },
   waitForTransactionReceipt: async ({ hash }: { hash: Hex }) => {
     const paid = receipts.get(hash);

@@ -172,9 +172,16 @@ function summaryOf(row: OwnerCallRow): string {
         `Tell the owner what each call does: their review is the only check on this calldata. Follow it with jaw_send_calls_status and ${row.id}.`
       );
     case 'owner_declined':
-      return row.code === 'wrong_account'
-        ? 'The owner signed in with another account than this connection. Nothing was sent.'
-        : 'The owner declined the calls in the wallet. Nothing was sent.';
+      if (row.code === 'wrong_account') {
+        return 'The owner signed in with another account than this connection. Nothing was sent.';
+      }
+      if (row.code?.startsWith('wallet_error:')) {
+        return (
+          `The wallet refused the calls with ${row.code.replace('wallet_error:', '')} before sending them. ` +
+          'Nothing was sent. Use a new idempotencyKey to ask again.'
+        );
+      }
+      return 'The owner declined the calls in the wallet. Nothing was sent.';
     case 'expired':
       return `The owner did not approve before ${by}. Nothing was sent. Use a new idempotencyKey to ask again.`;
     case 'sent':
@@ -312,21 +319,25 @@ export async function sendCalls(t: Tenant, input: SendCallsInput, deps: OwnerCal
   const approveBy = new Date(Date.now() + APPROVE_WINDOW_MS);
   const wallet = await openWalletFor(t, approveBy, deps);
   if (!wallet) return walletBusy(key);
-  let row: OwnerCallRow | null = null;
+  let row: OwnerCallRow | 'account_busy' | null = null;
   try {
-    row = await insertOwnerCall({
-      connectionId: t.connectionId,
-      key,
-      requestHash: hash,
-      chainId,
-      account: t.account,
-      calls,
-      walletUrl: wallet.url,
-      approveBy,
-    });
+    row = await insertOwnerCall(
+      {
+        connectionId: t.connectionId,
+        key,
+        requestHash: hash,
+        chainId,
+        account: t.account,
+        calls,
+        walletUrl: wallet.url,
+        approveBy,
+      },
+      MAX_OPEN_PER_ACCOUNT
+    );
   } finally {
-    if (!row) wallet.close();
+    if (!row || row === 'account_busy') wallet.close();
   }
+  if (row === 'account_busy') return accountBusy();
   if (row) {
     follow(row, wallet);
     return answer(row);

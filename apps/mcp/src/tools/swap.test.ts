@@ -22,6 +22,7 @@ import {
   callTool,
   connect,
   fakeWallet,
+  managerAnswer,
   mcp,
   offlineSession,
   sessionFakes,
@@ -29,7 +30,6 @@ import {
   verifyLocally,
   walletAnswers,
   walletsSettled,
-  permissionReads,
 } from '@/connections/testkit';
 import { getDb } from '@/db/client';
 import { connections, grants, payments, settings, swaps } from '@/db/schema';
@@ -68,9 +68,8 @@ const node = {
     if (functionName === 'balanceOf') return balanceOf(args[0] as string);
     if (functionName === 'allowance') return 0n;
     if (functionName === 'authorizationState') return false;
-    const permission = permissionReads(functionName, args);
-    if (permission !== undefined) return permission;
-    throw new Error('this node only knows balances and nonces');
+    if (functionName === 'getHash' || functionName === 'getCurrentPeriod') return managerAnswer(functionName, args);
+    throw new Error('this node only knows balances, nonces and the permission');
   },
   waitForTransactionReceipt: async () => {
     throw new Error('no receipt yet');
@@ -911,7 +910,29 @@ describe('the owner approves the deposit', () => {
     }
   );
 
-  it.each([5710, -32000, undefined])(
+  it.each([4100, 4200, 4900, 4901, 5700, 5710, -32602])(
+    'given the deposit was asked, when the wallet refuses it with %i before submitting, then owner_declined with that code and the replay says nothing was sent',
+    async (code) => {
+      const { t } = await connected('1');
+
+      const { row } = await approve(
+        t,
+        sendingAs(t.account, async () => {
+          throw rejected(code);
+        })
+      );
+
+      expect(row).toMatchObject({ state: 'owner_declined', code: `wallet_error:${code}`, callsId: null });
+      const replay = (await run(t)).structuredContent;
+      expect(replay?.state).toBe('owner_declined');
+      expect(replay?.url).toBeUndefined();
+      expect(replay?.summary).toContain(`refused the deposit with ${code} before sending it`);
+      expect(replay?.summary).toMatch(/nothing was sent/i);
+      expect(opened).toHaveLength(1);
+    }
+  );
+
+  it.each([-32000, -32603, -32003, undefined])(
     'B32: given the deposit was asked, when the wallet answers it with error %s, then the row keeps the send marker and the replay says the deposit may be sent',
     async (code) => {
       const { t } = await connected('1');

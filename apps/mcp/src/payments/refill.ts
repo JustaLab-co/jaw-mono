@@ -145,6 +145,7 @@ function guarded(
 
 const LOST = 'the refill lost its lock while it moved money, so the payment was not signed';
 const UNRESERVED = 'the refill moved money but could not reserve the price, so the payment was not signed';
+const UNREADABLE = 'the budget could not be read from the chain';
 
 const timedOut = (reason: string): TopUpOutcome => ({ ok: false, code: 'timed_out', reason });
 
@@ -216,10 +217,8 @@ export function refillHook(c: RefillContext): EnsureFunds {
           });
           if (!verdict.ok) return { ok: false, code: verdict.code, reason: verdict.reason };
           const day = await readDaySpend(c.grant, c.payer, entries, sent, c.clients);
-          // Float already pulled is spendable without a refill, so an unreadable day refuses
-          // every payment, as jaw_transfer does.
-          if (!day)
-            return { ok: false, code: 'chain_unavailable', reason: 'the budget could not be read from the chain' };
+          // Transfers refuse on the same read, so neither half of the day spends what the other used.
+          if (!day) return { ok: false, code: 'chain_unavailable', reason: UNREADABLE };
           if (BigInt(requirement.amount) > dayLeft(BigInt(c.grant.allowance), day)) {
             const reason = `payment ${requirement.amount} would pass the ${c.grant.allowance} a day shared with transfers`;
             return { ok: false, code: 'budget_exhausted', reason };
