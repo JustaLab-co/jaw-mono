@@ -82,8 +82,8 @@ function swapRequestHash(r: SwapRequest): string {
   return createHash('sha256').update(JSON.stringify(canonical)).digest('hex');
 }
 
-async function write(where: SQL | undefined, set: SwapSet): Promise<SwapRow | undefined> {
-  const [row] = await getDb().update(swaps).set(set).where(where).returning();
+async function write(where: SQL | undefined, set: SwapSet, db: Tx = getDb()): Promise<SwapRow | undefined> {
+  const [row] = await db.update(swaps).set(set).where(where).returning();
   return row;
 }
 
@@ -221,8 +221,8 @@ export const failIfStale = (lease: SwapLease) => write(and(holdingQuote(lease), 
 
 export const renewQuoted = (lease: SwapLease) => write(holdingQuote(lease), { leaseUntil: leaseFromNow });
 
-export const releaseQuoted = (lease: SwapLease, set: SwapSet) =>
-  write(holdingQuote(lease), { ...set, leaseToken: null, leaseUntil: dbNow });
+export const releaseQuoted = (lease: SwapLease, set: SwapSet, db: Tx = getDb()) =>
+  write(holdingQuote(lease), { ...set, leaseToken: null, leaseUntil: dbNow }, db);
 
 export const release = (lease: SwapLease, set: SwapSet) =>
   write(and(held(lease), isNull(swaps.quoteId)), { ...set, leaseToken: null, leaseUntil: dbNow });
@@ -248,7 +248,7 @@ export const markSendStarted = (connectionId: string, id: string) =>
     code: SEND_STARTED,
   });
 
-export const reopenLink = (row: SwapRow, walletUrl: string) =>
+export const reopenLink = (row: SwapRow, walletUrl: string, db: Tx = getDb()) =>
   write(
     and(
       ofSwap(row.connectionId, row.id, ['awaiting_owner']),
@@ -256,7 +256,8 @@ export const reopenLink = (row: SwapRow, walletUrl: string) =>
       sql`${swaps.code} is distinct from ${SEND_STARTED}`,
       gt(swaps.approveBy, dbNow)
     ),
-    { walletUrl, code: null }
+    { walletUrl, code: null },
+    db
   );
 
 export const recordCallsId = (connectionId: string, id: string, callsId: string) =>

@@ -864,6 +864,28 @@ describe('jaw_send_calls refusals', () => {
       expect(await rowsOf(d.connectionId)).toEqual([]);
     });
 
+    it('given six connections of one account asking at once, when every one passed the count before any inserted, then three links stay open and the rest close their wallets', async () => {
+      const connections = await sameAccount(6);
+      let arrived = 0;
+      let release!: () => void;
+      const barrier = new Promise<void>((resolve) => (release = resolve));
+      const gated: OpenWallet = async (...args) => {
+        if (++arrived === connections.length) release();
+        await barrier;
+        return wallet()(...args);
+      };
+
+      const results = await Promise.all(connections.map((t) => send(t, {}, gated)));
+
+      const states = results.map((r) => r.structuredContent?.state ?? r[gateCode]);
+      expect(states.filter((s) => s === 'awaiting_owner')).toHaveLength(3);
+      expect(states.filter((s) => s === 'calls_in_progress')).toHaveLength(3);
+      expect(
+        await getDb().select().from(ownerCalls).where(eq(ownerCalls.account, connections[0].account))
+      ).toHaveLength(3);
+      expect(closed).toHaveLength(3);
+    });
+
     it('given three links open on one account, when another account asks, then it is served', async () => {
       const [a, b, c] = await sameAccount(3);
       for (const t of [a, b, c]) await send(t);
