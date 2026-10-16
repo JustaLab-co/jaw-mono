@@ -44,6 +44,11 @@ vi.mock('../hooks/useGasEstimation', () => ({
     isPayingWithErc20: false,
   }),
 }));
+// The grant screen reads token names over RPC before it settles; offline, that fails fast here
+// instead of after the transport's retries.
+vi.mock('../utils/publicClient', () => ({
+  getPublicClient: () => ({ readContract: () => Promise.reject(new Error('offline')) }),
+}));
 vi.mock('../hooks/useAssetPreview', () => ({ useAssetPreview: () => ({ assetsOut: [], assetsIn: [] }) }));
 vi.mock('../hooks/usePermissionExecution', () => ({
   usePermissionExecution: ({ permissionId }: { permissionId?: string }) => ({
@@ -64,22 +69,25 @@ const { ReactUIHandler } = await import('./ReactUIHandler');
 const ADD_FUNDS_REJECTION = 'Insufficient funds. The user opened Add funds; retry after the deposit.';
 
 const base = { id: 'req', timestamp: 0 };
+// Not the handler's default chain, so a wrapper that passes the default instead of the request's chain fails.
+const DEFAULT_CHAIN = 8453;
+const CHAIN = 84532;
 const sendCalls = (capabilities?: TransactionUIRequest['data']['capabilities']): TransactionUIRequest => ({
   ...base,
   type: 'wallet_sendCalls',
-  data: { version: '2.0.0', from: ALICE, chainId: 8453, calls: [{ to: BOB, value: '0x1' }], capabilities },
+  data: { version: '2.0.0', from: ALICE, chainId: CHAIN, calls: [{ to: BOB, value: '0x1' }], capabilities },
 });
 const sendTransaction: SendTransactionUIRequest = {
   ...base,
   type: 'eth_sendTransaction',
-  data: { from: ALICE, to: BOB, value: '0x1', chainId: 8453 },
+  data: { from: ALICE, to: BOB, value: '0x1', chainId: CHAIN },
 };
 const grant = (address: Address): PermissionUIRequest => ({
   ...base,
   type: 'wallet_grantPermissions',
   data: {
     address,
-    chainId: 8453,
+    chainId: CHAIN,
     expiry: 2_000_000_000,
     spender: BOB,
     permissions: { calls: [{ target: BOB, selector: '0xa9059cbb' }] },
@@ -88,13 +96,13 @@ const grant = (address: Address): PermissionUIRequest => ({
 const revoke: RevokePermissionUIRequest = {
   ...base,
   type: 'wallet_revokePermissions',
-  data: { permissionId: '0x01', address: ALICE, chainId: 8453 },
+  data: { permissionId: '0x01', address: ALICE, chainId: CHAIN },
 };
 
 /** Opens the request and returns its response, still pending while the dialog is up. */
-async function open(request: UIRequest) {
-  const handler = new ReactUIHandler();
-  handler.init({ apiKey: 'test-key', defaultChainId: 8453 } as Parameters<typeof handler.init>[0]);
+async function open(request: UIRequest, options?: ConstructorParameters<typeof ReactUIHandler>[0]) {
+  const handler = new ReactUIHandler(options);
+  handler.init({ apiKey: 'test-key', defaultChainId: DEFAULT_CHAIN } as Parameters<typeof handler.init>[0]);
   let response: UIResponse<unknown> | undefined;
   await act(async () => {
     void handler.request(request).then((r) => (response = r));
@@ -163,11 +171,22 @@ describe('a request blocked on funds', () => {
       expect(document.querySelectorAll('[data-slot="dialog-content"]')).toHaveLength(1);
       expect(document.body.textContent).toContain('Receive on');
       expect(document.body.textContent).toContain(ALICE);
-      expect(document.querySelector('[aria-label="QR code to receive on Base"]')).not.toBeNull();
+      expect(document.querySelector('[aria-label="QR code to receive on Base Sepolia"]')).not.toBeNull();
       expect(
         document.querySelector('[aria-label^="Works on"], [aria-label^="Accepted on"]')?.getAttribute('aria-label')
-      ).toBe('Accepted on Base');
+      ).toBe('Accepted on Base Sepolia');
       expect(response()).toBeUndefined();
+    }
+  );
+
+  it.each(blocked)(
+    'Given %s on a handler with an originLabel, When the user taps "Add funds", Then the header keeps that label',
+    async (_, request) => {
+      await open(request, { originLabel: 'via JAW bridge' });
+      await click('Add funds');
+
+      expect(document.body.textContent).toContain('Receive on');
+      expect(document.body.textContent).toContain('via JAW bridge');
     }
   );
 
@@ -211,7 +230,7 @@ describe('a request blocked on funds', () => {
 
 describe('wallet_addFunds called directly', () => {
   it('Given the Add Funds screen, When the user taps Done, Then it approves with null', async () => {
-    const addFunds: AddFundsUIRequest = { ...base, type: 'wallet_addFunds', data: { address: ALICE, chainId: 8453 } };
+    const addFunds: AddFundsUIRequest = { ...base, type: 'wallet_addFunds', data: { address: ALICE, chainId: CHAIN } };
     const response = await open(addFunds);
     await click('Done');
 

@@ -26,6 +26,8 @@ export interface AddFundsViewProps {
   /** Nullable because the handler config carries an explicit "no logo" as null. */
   appLogoUrl?: string | null;
   origin?: string;
+  /** Shown in place of the origin, as on the request dialogs (the wallet's own bridge page). */
+  originLabel?: string;
   /**
    * The user is done. The host decides what that settles: `wallet_addFunds`
    * resolves null, while a request that opened this view because it was short

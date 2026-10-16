@@ -168,20 +168,24 @@ export const PermissionDialog = ({
   const erc20CannotPay =
     isPayingWithErc20 && (!selectedFeeToken?.gasCostMaxFormatted || !selectedFeeToken?.isSelectable);
 
+  const amountsLoading =
+    isLoadingTokenInfo ||
+    // A grant that sends funds is not confirmable before the screen has shown how much.
+    (isGrant && prefundLoading) ||
+    gasFeeLoading;
+
   const canConfirm =
     !isProcessing &&
-    !isLoadingTokenInfo &&
+    !amountsLoading &&
     !isResolvingAddresses &&
-    // A grant that sends funds is not confirmable before the screen has shown how much.
-    !(isGrant && prefundLoading) &&
-    !gasFeeLoading &&
     !blockReason &&
     !missingCalls &&
     !revocationBlocks &&
     !erc20CannotPay;
 
   const fundsBlocked = feeBlockReason === 'funds';
-  const offerAddFunds = fundsBlocked && !!onAddFunds;
+  // A funds block read off a fee that is still loading may be stale, and Add funds ends the request.
+  const offerAddFunds = fundsBlocked && !amountsLoading && !!onAddFunds;
   let confirmLabel = isGrant ? 'Grant' : 'Revoke';
   if (fundsBlocked) confirmLabel = offerAddFunds ? 'Add funds' : 'Insufficient Funds';
 
