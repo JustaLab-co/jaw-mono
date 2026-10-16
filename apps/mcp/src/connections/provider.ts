@@ -6,7 +6,7 @@ import { PgAdapter, sessionKey, successorId } from './adapter';
 import { bridge, requestUrl } from './bridge';
 import { config, type Config } from './config';
 import { findActive } from './rows';
-import { ADVERTISED_SCOPES, CONNECTION_SCOPES, FIRST_PARTY_CLIENTS } from './scopes';
+import { CONNECTION_SCOPES, FIRST_PARTY_CLIENTS } from './scopes';
 import { seal } from './seal';
 
 const DAY = 24 * 60 * 60;
@@ -139,7 +139,7 @@ export function createProvider(cfg: Config, overrides: Partial<Configuration> = 
     await next();
     const body = ctx.body as { scopes_supported?: string[] } | undefined;
     if (ctx.oidc?.route === 'discovery' && body?.scopes_supported) {
-      body.scopes_supported = [...body.scopes_supported, ...ADVERTISED_SCOPES];
+      body.scopes_supported = [...body.scopes_supported, ...Object.keys(CONNECTION_SCOPES)];
     }
   });
   provider.use(async (ctx, next) => {

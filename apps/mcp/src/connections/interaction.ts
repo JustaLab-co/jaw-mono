@@ -95,7 +95,7 @@ export const connectMessage = (a: Asked, account: Address) =>
   [
     `Connect ${a.clientName} to ${new URL(config().issuer).host}`,
     ...(a.clientHost ? [`App domain: ${a.clientHost}`] : []),
-    `Allows: ${a.scopes.flatMap((s) => CONNECTION_SCOPES[s] ?? []).join('; ')}`,
+    `Allows: ${a.scopes.map((s) => CONNECTION_SCOPES[s]).join('; ')}`,
     `Code: ${codeOf(a.uid)}`,
     '',
     'Approve only if the page that sent you here shows this code.',

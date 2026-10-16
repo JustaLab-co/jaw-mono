@@ -747,13 +747,11 @@ describe('authorization server', () => {
     expect(res.headers.get('location')).toMatch(/^\/interaction\//);
   });
 
-  it('advertises the wallet scopes in the authorization server metadata, but not the deprecated wallet:send', async () => {
+  it('advertises the wallet scopes in the authorization server metadata', async () => {
     const { oauth } = await import('./provider');
     for (const path of ['openid-configuration', 'oauth-authorization-server']) {
       const res = await oauth(new Request(`${ISSUER}/.well-known/${path}`));
-      const supported = (await res.json()).scopes_supported;
-      expect(supported, path).toEqual(expect.arrayContaining(['wallet:read', 'x402:pay']));
-      expect(supported, path).not.toContain('wallet:send');
+      expect((await res.json()).scopes_supported, path).toEqual(expect.arrayContaining(['wallet:read', 'x402:pay']));
     }
   });
 

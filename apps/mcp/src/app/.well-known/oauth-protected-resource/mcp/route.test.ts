@@ -6,9 +6,9 @@ import { GET } from './route';
 setTestEnv();
 
 describe('the protected resource metadata', () => {
-  it('given the scopes the server defines, when it is fetched, then scopes_supported lists every one but the deprecated wallet:send', async () => {
+  it('given the scopes the server defines, when it is fetched, then scopes_supported lists every one', async () => {
     const res = await GET(new Request('http://localhost/.well-known/oauth-protected-resource/mcp') as never);
-    expect((await res.json()).scopes_supported).toEqual(['wallet:read', 'x402:pay']);
+    expect((await res.json()).scopes_supported).toEqual(Object.keys(CONNECTION_SCOPES));
   });
 
   it('given every scope it advertises, when the pages look it up in @jaw.id/agent, then each has a label', async () => {

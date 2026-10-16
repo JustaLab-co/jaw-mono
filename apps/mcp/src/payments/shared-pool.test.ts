@@ -165,7 +165,7 @@ afterEach(() => {
 });
 
 async function connected(perDay: string, float: bigint) {
-  const c = await connect(undefined, { scope: 'wallet:read wallet:send x402:pay' });
+  const c = await connect(undefined, { scope: 'wallet:read x402:pay' });
   const t = (await verifyBearer(c.access_token))?.extra?.tenant as Tenant;
   await getDb().delete(grants).where(eq(grants.connectionId, t.connectionId));
   await requestBudget(t, perDay, {

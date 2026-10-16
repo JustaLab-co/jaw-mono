@@ -22,9 +22,6 @@ One account can hold at most 20 active connections. The check runs after the own
 | ------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `wallet:read` (required, the default) | `jaw_status`, `jaw_discover`, `jaw_quote`, `jaw_add_funds`, `jaw_history`, `jaw_connections`, `jaw_revoke_connection`, `jaw_disconnect`, `jaw_swap_status`, `jaw_transfer`, `jaw_send_calls`, `jaw_send_calls_status` |
 | `x402:pay`                            | `jaw_request_budget`, `jaw_pay_and_fetch`, `jaw_swap`                                                                                                                                                                 |
-| `wallet:send` (deprecated)            | none                                                                                                                                                                                                                  |
-
-`wallet:send` is deprecated. The server still grants it to a client that asks, so older clients keep connecting, but it allows nothing and asks for no budget. The text the owner signs no longer names it, and `scopes_supported` no longer lists it. A connection that already holds it keeps working, and only `x402:pay` asks for a budget and its prefund.
 
 No scope implies another. A tool refused for a missing scope answers with an error naming the scope; the agent reconnects and asks for it, which makes a new connection, so a budget approved on the old one does not carry over.
 

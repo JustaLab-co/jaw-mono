@@ -971,10 +971,10 @@ describe('jaw_pay_and_fetch', () => {
     expect(refills).toEqual([]);
   });
 
-  it('given a token with wallet:read wallet:send on a connection with a budget, when it pays, then it is refused insufficient_scope naming x402:pay', async () => {
+  it('given a token with wallet:read alone on a connection with a budget, when it pays, then it is refused insufficient_scope naming x402:pay', async () => {
     const { t } = await connected('1');
     const result = await pay(
-      { ...t, scopes: ['wallet:read', 'wallet:send'] },
+      { ...t, scopes: ['wallet:read'] },
       { url: url('/exact'), idempotencyKey: 'no-pay-scope' },
       deps()
     );
@@ -989,7 +989,7 @@ describe('jaw_pay_and_fetch', () => {
     const { t } = await connected('1');
     await getDb().insert(settings).values({ key: 'payments_paused', value: true });
     try {
-      const result = await pay({ ...t, scopes: ['wallet:read', 'wallet:send'] }, { url: url('/exact') }, deps());
+      const result = await pay({ ...t, scopes: ['wallet:read'] }, { url: url('/exact') }, deps());
       expect(result.content[0].text).toMatch(/^insufficient_scope: /);
     } finally {
       await getDb().delete(settings).where(eq(settings.key, 'payments_paused'));

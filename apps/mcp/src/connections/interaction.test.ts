@@ -228,18 +228,6 @@ describe('connecting through the owner wallet', () => {
     expect(signed).toContain(`Account: ${signer.address}`);
   });
 
-  it('given a client that still asks for the deprecated wallet:send, then the signed text and the page offer no budget', async () => {
-    const asked: { method: string; params: unknown[] }[] = [];
-    setWallet({ openWallet: fakeWallet(walletAnswers(owner()), asked) });
-    const start = await startAuthorization(new Browser(), { scope: 'wallet:read wallet:send' });
-    await walletsSettled();
-    const signed = hexToString(asked[1].params[0] as Hex);
-    expect(signed).toContain('Allows: See your account, balances and payment history\n');
-    expect(signed).not.toMatch(/budget|Send USDC/);
-    expect(start.html).not.toContain('Approve a budget');
-    expect(asked.map((a) => a.method)).not.toContain('wallet_grantPermissions');
-  });
-
   it('given a budget approved from another account than the one that signed in, then no budget is stored', async () => {
     const [signing, granting] = [owner(), owner()];
     const [signIn, grant] = [walletAnswers(signing), walletAnswers(granting)];
