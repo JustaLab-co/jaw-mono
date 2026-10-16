@@ -40,7 +40,7 @@ const TOOLS: Record<string, { needs: ConnectionScope[]; args: object }> = {
   jaw_connections: { needs: ['wallet:read'], args: {} },
   jaw_revoke_connection: { needs: ['wallet:read'], args: { id: 'conn_nope' } },
   jaw_disconnect: { needs: ['wallet:read'], args: {} },
-  jaw_request_budget: { needs: ['x402:pay', 'wallet:send'], args: { perDay: '1' } },
+  jaw_request_budget: { needs: ['x402:pay'], args: { perDay: '1' } },
   jaw_pay_and_fetch: { needs: ['x402:pay'], args: { url: 'http://127.0.0.1:9/paid' } },
   jaw_swap: {
     needs: ['x402:pay'],
@@ -136,9 +136,33 @@ describe('the scopes an authorization grants', () => {
       const t = await tenantOf(c.access_token);
       const [row] = await getDb().select().from(connections).where(eq(connections.id, t.connectionId));
       expect(row.scopes).toEqual(scope.split(' '));
-      // A budget only for what spends: wallet:read alone asks the wallet for a signature instead.
+      // A budget only for x402:pay; without it the wallet is asked for a signature instead.
       const budgets = await getDb().select().from(grants).where(eq(grants.connectionId, t.connectionId));
-      expect(budgets).toHaveLength(scope === 'wallet:read' ? 0 : 1);
+      expect(budgets).toHaveLength(scope.includes('x402:pay') ? 1 : 0);
     }
   );
+});
+
+describe('a connection granted wallet:send before it was deprecated', () => {
+  it('given its refresh keeps every scope, then the new token still holds them', async () => {
+    const c = await connect(undefined, { scope: 'wallet:read x402:pay wallet:send' });
+    const kept = await refresh(c.refresh_token, 'wallet:read x402:pay wallet:send');
+    expect(kept.body.scope).toBe('wallet:read x402:pay wallet:send');
+    const result = await callTool(kept.body.access_token, 'jaw_status', {});
+    expect(result.isError).toBeFalsy();
+  });
+
+  it('given a budget and a token with wallet:read wallet:send, when it asks for a new budget, then it is refused and the wallet never opens', async () => {
+    const c = await connect(undefined, { scope: 'wallet:read x402:pay wallet:send' });
+    await walletsSettled();
+    const t = await tenantOf(c.access_token);
+    const narrowed = await refresh(c.refresh_token, 'wallet:read wallet:send');
+    const before = opened.count;
+
+    const result = await callTool(narrowed.body.access_token, 'jaw_request_budget', { perDay: '1' });
+
+    expect(refusedFor(result)).toBe('x402:pay');
+    expect(opened.count).toBe(before);
+    expect(await getDb().select().from(grants).where(eq(grants.connectionId, t.connectionId))).toHaveLength(1);
+  });
 });

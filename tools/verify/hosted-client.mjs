@@ -9,7 +9,7 @@ import { createServer } from 'node:http';
 import { createInterface } from 'node:readline/promises';
 
 const BASE = new URL(process.argv[2] ?? '').origin;
-const SCOPE = process.argv[3] ?? 'wallet:read x402:pay wallet:send';
+const SCOPE = process.argv[3] ?? 'wallet:read x402:pay';
 const RESOURCE = `${BASE}/mcp`;
 
 // The page the browser lands on after the wallet, in the look of the connect page.

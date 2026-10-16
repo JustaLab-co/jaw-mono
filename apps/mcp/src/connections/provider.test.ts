@@ -229,7 +229,7 @@ describe('authorization server', () => {
       iss: ISSUER,
       aud: RESOURCE,
       client_id: 'jaw-cli',
-      scope: 'wallet:read x402:pay wallet:send',
+      scope: 'wallet:read x402:pay',
     });
     const row = await findActive(claims.sub);
     expect(row?.account).toBe(c.signer.address);
@@ -747,13 +747,13 @@ describe('authorization server', () => {
     expect(res.headers.get('location')).toMatch(/^\/interaction\//);
   });
 
-  it('advertises the wallet scopes in the authorization server metadata', async () => {
+  it('advertises the wallet scopes in the authorization server metadata, but not the deprecated wallet:send', async () => {
     const { oauth } = await import('./provider');
     for (const path of ['openid-configuration', 'oauth-authorization-server']) {
       const res = await oauth(new Request(`${ISSUER}/.well-known/${path}`));
-      expect((await res.json()).scopes_supported, path).toEqual(
-        expect.arrayContaining(['wallet:read', 'x402:pay', 'wallet:send'])
-      );
+      const supported = (await res.json()).scopes_supported;
+      expect(supported, path).toEqual(expect.arrayContaining(['wallet:read', 'x402:pay']));
+      expect(supported, path).not.toContain('wallet:send');
     }
   });
 
