@@ -24,7 +24,7 @@ export const ADD_FUNDS_REJECTION = 'Insufficient funds. The user opened Add fund
  * Receive-only by design. There is no fiat rail, no third-party frame, and
  * nothing here reads a balance — the money usually arrives after the user has
  * closed this and gone to an exchange, so a "waiting" state would mostly be
- * wrong. Closing is the normal finish, which is why the only action is Done.
+ * wrong. Done is the only action, and the host decides what it settles.
  */
 export const AddFundsView = ({
   address,
