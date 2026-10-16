@@ -145,8 +145,9 @@ export const PermissionDialog = ({
     !erc20CannotPay;
 
   const fundsBlocked = feeBlockReason === 'funds';
-  // A funds block read off a fee that is still loading may be stale, and Add funds ends the request.
-  const offerAddFunds = fundsBlocked && !amountsLoading && !!onAddFunds;
+  // A funds block read off a fee or fee token list still loading may be stale, and Add funds ends
+  // the request.
+  const offerAddFunds = fundsBlocked && !amountsLoading && !feeTokensLoading && !!onAddFunds;
   let confirmLabel = isGrant ? 'Grant' : 'Revoke';
   if (fundsBlocked) confirmLabel = offerAddFunds ? 'Add funds' : 'Insufficient Funds';
 
