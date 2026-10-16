@@ -1,0 +1,81 @@
+# Mutations for FloatSlots.tla. Each is a plausible bug in float-lock.ts or
+# refill.ts and names the one property that must fail on it.
+
+mutation give frees a slot and also wakes a waiter (double give)
+detects SlotConservation
+- /\ UNCHANGED free
++ /\ free' = free + 1
+
+mutation take parks a caller while one slot is still free
+detects NoStrandedWaiter
+- /\ IF free > 0
++ /\ IF free > 1
+
+mutation the slot timer rejects without splicing the waiter out
+detects NoGrantAfterTimeout
+- /\ waiting' = SelectSeq(waiting, LAMBDA x : x # c)
++ /\ UNCHANGED waiting
+
+mutation the session cap checks > instead of >=
+detects SessionsCount
+- ELSE IF sessions[k] >= Cap
++ ELSE IF sessions[k] > Cap
+
+mutation the outer finally keeps a zero entry in sessions
+detects SessionsCount
+- /\ sessKeys' = IF sessions[k] - 1 > 0 THEN sessKeys ELSE sessKeys \ {k}
++ /\ sessKeys' = sessKeys
+
+mutation inTurn tail cleanup deletes the entry even when a later turn chained
+detects TurnExclusive
+- /\ latest' = IF latest[KeyOf(x[1], x[2])] = x[1]
++ /\ latest' = IF TRUE
+
+mutation the budget does not shrink (perCall): a late turn still enters withFloat
+detects NoOrphanFloat
+- \/ ~expired[c] /\ Goto(c, "wf_enter")
++ \/ Goto(c, "wf_enter")
+
+mutation give never wakes a waiter
+detects TakeSettles
+only slots=1 direct=3
+- ELSE LET h == Head(waiting) IN
+-           /\ waiting' = Tail(waiting)
+-           /\ stimer' = [stimer EXCEPT ![h] = FALSE]
+-           /\ pc' = [pc EXCEPT ![c] = After(c), ![h] = "granted"]
+-           /\ UNCHANGED free
++ ELSE /\ free' = free + 1
++           /\ Goto(c, After(c))
++           /\ UNCHANGED <<waiting, stimer>>
+
+mutation a rejected take never resumes into its finally
+detects AllAnswered
+- Reject(c) == /\ pc[c] = "rejected"
++ Reject(c) == /\ pc[c] = "rejected" /\ FALSE
+
+mutation inTurn tail cleanup never deletes the entry
+detects QueuesCleared
+- THEN [latest EXCEPT ![KeyOf(x[1], x[2])] = None]
++ THEN latest
+
+mutation a FloatBusy rejection skips the session decrement
+detects SessionsCleared
+- /\ Leave(c)
+-              /\ Goto(c, After(c))
++ /\ UNCHANGED sess
++              /\ Goto(c, After(c))
+
+mutation the slot timer never fires
+detects reach:TakeTimedOut
+- /\ pc[c] = "waitslot" /\ stimer[c] /\ expired[c]
++ /\ pc[c] = "waitslot" /\ stimer[c] /\ expired[c] /\ FALSE
+
+mutation the session cap is never reached
+detects reach:CapFull
+- ELSE IF sessions[k] >= Cap
++ ELSE IF sessions[k] >= 1
+
+mutation a settled run is not recorded, only its tail cleanup
+detects TypeOK
+- /\ settled' = settled \cup {<<c, kind>>}
++ /\ settled' = settled

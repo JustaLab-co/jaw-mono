@@ -1,5 +1,5 @@
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
-import { mcpError, mcpResult } from '../helpers.js';
+import { mcpError, mcpResult } from '@jaw.id/agent';
 import { shutdownDaemon } from '../../lib/bridge-singleton.js';
 import { loadRelaySession } from '../../lib/relay-session.js';
 import { loadConfig, redactConfig } from '../../lib/config.js';

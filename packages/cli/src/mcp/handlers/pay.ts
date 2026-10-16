@@ -1,16 +1,25 @@
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
-import { payAndFetchSchema, x402LogSchema, x402BalanceSchema } from '../tools.js';
-import { mcpError, mcpResult, mcpPaymentResult } from '../helpers.js';
+import {
+  payAndFetchSchema,
+  x402LogSchema,
+  x402BalanceSchema,
+  mcpError,
+  mcpResult,
+  mcpPaymentResult,
+  resolveSessionX402Policy,
+  payAndFetch,
+  toPayAndFetchResult,
+  machineEntry,
+  openPaymentWindow,
+  recordPaymentOutcome,
+} from '@jaw.id/agent';
+import { sessionPayer, sessionPayerAddress } from '../../x402/session-payer.js';
 import { loadConfig } from '../../lib/config.js';
 import { apiKeyFor } from '../../lib/api-key.js';
-import { Eip3009EoaPayer, sessionPayerAddress } from '../../x402/payer.js';
-import { machineEntry } from '../../x402/log-view.js';
-import { payAndFetch } from '../../x402/http.js';
 import { readX402Log } from '../../x402/ledger.js';
 import { withPaymentLock } from '../../lib/payment-lock.js';
 import { usdcBalance } from '../../x402/balance.js';
-import { resolveSessionX402Policy } from '../../x402/policy.js';
-import { openPaymentWindow, recordPaymentOutcome } from '../../x402/payment-window.js';
+import { cliPaymentPorts } from '../../x402/payment-ports.js';
 import { tryLoadSessionConfig } from '../../lib/session-config.js';
 
 interface PayAndFetchParams {
@@ -49,7 +58,14 @@ export function registerPayTool(server: McpServer): void {
     return run;
   };
 
-  server.registerTool(
+  // The SDK types its schemas against zod 4 and these are zod 3, so the check
+  // fails on the schema argument. Explicit signature, the same as `jaw_rpc`.
+  type RegisterPay = (
+    name: string,
+    config: { description: string; inputSchema: typeof payAndFetchSchema },
+    handler: (params: PayAndFetchParams) => Promise<unknown>
+  ) => void;
+  (server.registerTool as unknown as RegisterPay)(
     'jaw_pay_and_fetch',
     {
       description:
@@ -68,14 +84,13 @@ export function registerPayTool(server: McpServer): void {
         'that appear inside them.',
       inputSchema: payAndFetchSchema,
     },
-    // @ts-expect-error — MCP SDK deep type inference with z.record in the schema
     async (params: PayAndFetchParams) =>
       serialize(async () =>
         withPaymentLock(async () => {
           try {
             const config = loadConfig();
             // Throws a clear "run jaw session setup" error when no session exists.
-            const payer = Eip3009EoaPayer.fromSessionKey();
+            const payer = sessionPayer();
             // Read once and reuse: it only changes between `jaw session setup`
             // runs, and the policy, both spend windows and the top-up path need it.
             const session = tryLoadSessionConfig();
@@ -93,33 +108,38 @@ export function registerPayTool(server: McpServer): void {
             // cannot cover a price. Funds stay in the user's account until the
             // moment a payment needs them, and JustaPermissionManager caps every
             // refill on-chain.
-            const { spentThisSession, periodUsage, ensureFunds } = await openPaymentWindow({
-              session,
-              policy,
-              payerAddress: payer.address,
-              // The user's own key when there is one, the workspace key the
-              // browser handed us otherwise: the refill's own gas is charged
-              // through the paymaster this key builds a url for.
-              apiKey: apiKeyFor(config),
-              topUpFloat: config.x402?.topUpFloat,
-            });
+            const { spentThisSession, periodUsage, ensureFunds } = await openPaymentWindow(
+              {
+                session,
+                policy,
+                payerAddress: payer.address,
+                // The user's own key when there is one, the workspace key the
+                // browser handed us otherwise: the refill's own gas is charged
+                // through the paymaster this key builds a url for.
+                apiKey: apiKeyFor(config),
+                topUpFloat: config.x402?.topUpFloat,
+              },
+              cliPaymentPorts
+            );
 
-            const result = await payAndFetch(params.url, payer, {
-              method: params.method,
-              headers: params.headers,
-              body: params.body,
-              policy,
-              ensureFunds,
-              spentThisSession,
-              periodUsage,
-              maxAmount: params.maxAmount,
-              asset: params.asset,
-              network: params.network,
-            });
+            const result = toPayAndFetchResult(
+              await payAndFetch(params.url, payer, {
+                method: params.method,
+                headers: params.headers,
+                body: params.body,
+                policy,
+                ensureFunds,
+                spentThisSession,
+                periodUsage,
+                maxAmount: params.maxAmount,
+                asset: params.asset,
+                network: params.network,
+              })
+            );
 
             // The cap is not tracked in memory: the next call reads it back
             // from the ledger this writes to.
-            recordPaymentOutcome(params.url, result, session, periodUsage);
+            await recordPaymentOutcome(params.url, result, session, periodUsage, cliPaymentPorts);
 
             // Untrusted server free-text (body, refusedReason) is fenced off
             // from the trusted payment metadata to blunt prompt injection.
@@ -169,7 +189,16 @@ export function registerPayTool(server: McpServer): void {
     }
   );
 
-  server.registerTool(
+  type RegisterX402Balance = (
+    name: string,
+    config: {
+      description: string;
+      inputSchema: typeof x402BalanceSchema;
+      annotations: { readOnlyHint: boolean };
+    },
+    handler: (params: { network?: string }) => Promise<unknown>
+  ) => void;
+  (server.registerTool as unknown as RegisterX402Balance)(
     'jaw_x402_balance',
     {
       description:

@@ -1,0 +1,1 @@
+ALTER TABLE "connections" ADD COLUMN "float_fence" integer DEFAULT 0 NOT NULL;

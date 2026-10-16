@@ -1,6 +1,5 @@
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
-import { rpcMethodSchema } from '../tools.js';
-import { mcpError, mcpResult } from '../helpers.js';
+import { rpcMethodSchema, mcpError, mcpResult } from '@jaw.id/agent';
 import { getBridge } from '../../lib/bridge-singleton.js';
 import { SessionBridge } from '../../lib/session-bridge.js';
 import { supportsSessionMode } from '../../lib/rpc-classifier.js';

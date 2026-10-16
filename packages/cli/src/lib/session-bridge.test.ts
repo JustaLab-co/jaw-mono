@@ -342,7 +342,7 @@ describe('SessionBridge paymaster token', () => {
   // Engaging the ERC-20 paymaster without a token to name guarantees a failed
   // userOp, which is strictly worse than sending with no paymaster at all.
   it('leaves the paymaster unset on a chain the registry does not cover', () => {
-    const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    const warn = vi.spyOn(process.stderr, 'write').mockImplementation(() => true);
     const bridge = new SessionBridge({ apiKey: 'key-123', chainId: 999999 });
 
     expect(optionsOf(bridge).paymasterUrl).toBeUndefined();

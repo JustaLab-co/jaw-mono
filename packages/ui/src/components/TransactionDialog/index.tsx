@@ -15,9 +15,12 @@ import { reverseResolveWithAvatars, getDisplayAddress, getChainLabel, identityKe
 import { formatNativeValue, subscriptDecimal } from '../../utils/displayFormat';
 import { IdentityAvatar } from '../IdentityAvatar';
 import { AppAvatar } from '../AppAvatar';
+import { DialogAppHeader } from '../DialogAppHeader';
 import { TokenIcon } from '../TokenIcon';
 import { SubText } from '../SubText';
 import { AssetPreview } from './AssetPreview';
+import { AllowancePreview } from './AllowancePreview';
+import { allowanceChanges } from '../../utils/allowances';
 import { callTitle } from './DecodedCalldata';
 import { resolveBlockReason } from '../../utils/transactionFailure';
 import { isBlockingPermissionProblem, PERMISSION_PROBLEM_TEXT } from '../../utils/permissionExecution';
@@ -49,6 +52,8 @@ export const TransactionDialog = ({
   apiKey,
   appName,
   appLogoUrl,
+  origin,
+  originLabel,
   feeTokens,
   feeTokensLoading,
   selectedFeeToken,
@@ -287,6 +292,18 @@ export const TransactionDialog = ({
           {/* Pinned header. The close X comes from DialogShell, pinned over the top-right corner,
               so the title keeps clear of it. */}
           <div className="flex-none px-6 pt-6">
+            {appName && origin && (
+              <div className="mb-4">
+                <DialogAppHeader
+                  appName={appName}
+                  appLogoUrl={appLogoUrl}
+                  origin={origin}
+                  originLabel={originLabel}
+                  chainName={networkName}
+                  chainIcon={chainIcon}
+                />
+              </div>
+            )}
             <h2 className="text-foreground text-title-xl truncate pr-9">{title}</h2>
             {totalTransactions > 1 && currentTransaction?.description && (
               <p className="text-muted-foreground text-body mt-1">
@@ -415,6 +432,14 @@ export const TransactionDialog = ({
                 chainId={currentTransaction?.chainId}
               />
             )}
+
+            {/* Allowances move no balance, so the simulation above can't show them. */}
+            <AllowancePreview
+              changes={allowanceChanges(transactions)}
+              knownTokens={[...(assetsOut ?? []), ...(assetsIn ?? [])]}
+              chainId={currentTransaction?.chainId}
+              apiKey={apiKey}
+            />
 
             {/* Value (single, non-native) */}
             {isSingleTransaction && !isNativeSend && singleValue && (

@@ -1,27 +1,36 @@
 import { BaseCommand } from '../../base-command.js';
 import { keystoreExists } from '../../lib/keystore.js';
 import { loadConfig } from '../../lib/config.js';
+import { tryLoadSessionConfig, sessionFileStore } from '../../lib/session-config.js';
+import { sessionPayerAddress } from '../../x402/session-payer.js';
 import {
+  resolveSessionX402Policy,
+  sameLimit,
+  tightestLimit,
+  describePeriodPhrase,
+  parseBigInt,
+  parseNonNegativeBigInt,
+  USDC_BY_NETWORK,
+  gasReserve,
+  readLiveness,
+  type PermissionLiveness,
+  formatUsdc,
+  formatRemaining,
+  diagnose,
+  whyEip712DomainDisagrees,
+  reconcileSettlements,
+  recoverPermission,
+  currentLimitUsageOnChain,
   expiryInstant,
   isLegacySession,
   liveOrphans,
   sessionUsable,
-  tryLoadSessionConfig,
-} from '../../lib/session-config.js';
-import { sessionPayerAddress } from '../../x402/payer.js';
-import { usdcBalance } from '../../x402/balance.js';
-import { readX402Log, sumSpentSince, checkpointFigureReadable } from '../../x402/ledger.js';
-import { reconcileSettlements } from '../../x402/settlement.js';
-import { resolveSessionX402Policy, sameLimit, tightestLimit } from '../../x402/policy.js';
-import { currentLimitUsageOnChain } from '../../x402/spend-window.js';
-import { describePeriodPhrase } from '../../x402/period.js';
-import { parseBigInt, parseNonNegativeBigInt } from '../../x402/amount.js';
-import { USDC_BY_NETWORK } from '../../x402/asset-registry.js';
-import { gasReserve } from '../../x402/gas-reserve.js';
-import { whyEip712DomainDisagrees } from '../../x402/eip712-domain.js';
-import { formatUsdc, formatRemaining, diagnose } from '../../x402/status-report.js';
-import { readLiveness, type PermissionLiveness } from '../../x402/permission-onchain.js';
-import { recoverPermission } from '../../x402/permission-recovery.js';
+  sumSpentSince,
+  checkpointFigureReadable,
+} from '@jaw.id/agent';
+import { cliChainClients, usdcBalance } from '../../x402/balance.js';
+import { readX402Log, jsonlPaymentLog } from '../../x402/ledger.js';
+import { stderrLogger } from '../../lib/stderr-logger.js';
 import type { OutputFormat } from '../../lib/types.js';
 
 /**
@@ -102,7 +111,7 @@ export default class X402Status extends BaseCommand {
       ),
       // Recovered first for a session written before the struct was stored,
       // which is otherwise stuck reporting "cannot tell" forever.
-      recoverPermission(session, this.resolveApiKey(flags)),
+      recoverPermission(session, this.resolveApiKey(flags), { store: sessionFileStore }),
     ]);
     const [ownerBalance, payerBalance] = balances;
     // Threaded through the rest of the command, not just the liveness read.
@@ -110,7 +119,7 @@ export default class X402Status extends BaseCommand {
     // figure, because the on-chain read takes the struct off the session object
     // and that one was still the version loaded from disk.
     const current = recovered ? { ...session, permission: recovered } : session;
-    const liveness = await readLiveness(current);
+    const liveness = await readLiveness(current, { clients: cliChainClients });
 
     // Resolved from the recovered session, not the one loaded off disk. Seeded
     // from the grant exactly as the paying paths do: resolving from config
@@ -125,7 +134,11 @@ export default class X402Status extends BaseCommand {
     // Reconciled here too, and not only on the pay paths: an agent that pays
     // once and stops would otherwise leave that row costing its ceiling for
     // good, and this is the surface it still reaches.
-    const ledger = await reconcileSettlements(readX402Log());
+    const ledger = await reconcileSettlements(readX402Log(), {
+      clients: cliChainClients,
+      log: jsonlPaymentLog,
+      logger: stderrLogger,
+    });
     // A checkpoint whose figure will not parse stops `sumSpentSince`, which is
     // what keeps a payment from spending against a total known to be short. This
     // command spends nothing and is the one a user runs to find out what is
@@ -147,7 +160,9 @@ export default class X402Status extends BaseCommand {
     // pulls this CLI's ledger never saw.
     // Every limit on the payment token, each with its own window and its own
     // usage. Reducing them to one would report a month's budget as a day's.
-    const usage = await currentLimitUsageOnChain(countable, policy, payer, current);
+    const usage = await currentLimitUsageOnChain(countable, policy, payer, current, new Date(), {
+      clients: cliChainClients,
+    });
     // Joined onto the limits the policy holds, not read off the usage list. A
     // limit whose usage could not be computed is still enforced by
     // `checkPolicy`, and reporting only what has usage makes it invisible here:
@@ -213,7 +228,7 @@ export default class X402Status extends BaseCommand {
     // node to find out. This command is the one whose job is saying what is
     // wrong, so a registry entry that has drifted becomes loud here instead of
     // arriving as a payment the token rejected.
-    const domainDrift = asset ? await whyEip712DomainDisagrees(asset) : null;
+    const domainDrift = asset ? await whyEip712DomainDisagrees(asset, cliChainClients) : null;
     if (domainDrift) problems.push(domainDrift);
 
     if (format === 'json') {

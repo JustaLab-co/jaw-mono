@@ -1,0 +1,1 @@
+CREATE INDEX "oauth_payloads_wrap_sweep_index" ON "oauth_payloads" USING btree ("consumed_at") WHERE "oauth_payloads"."key_wrap" is not null;

@@ -3,15 +3,8 @@ import { BaseCommand } from '../../base-command.js';
 import { loadConfig } from '../../lib/config.js';
 import { getBridge } from '../../lib/bridge-singleton.js';
 import { deleteKeystore, keystoreExists } from '../../lib/keystore.js';
-import {
-  loadSessionConfig,
-  deleteSessionConfig,
-  liveOrphans,
-  saveRevokeProgress,
-  sessionLives,
-  type OrphanedPermission,
-} from '../../lib/session-config.js';
-import { sanitizeLine } from '../../lib/terminal.js';
+import { loadSessionConfig, deleteSessionConfig, saveRevokeProgress } from '../../lib/session-config.js';
+import { sanitizeLine, liveOrphans, sessionLives, type OrphanedPermission } from '@jaw.id/agent';
 import type { OutputFormat } from '../../lib/types.js';
 
 export default class SessionRevoke extends BaseCommand {

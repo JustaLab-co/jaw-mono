@@ -41,13 +41,17 @@ const h = vi.hoisted(() => ({
 vi.mock('../../lib/config.js', () => ({ loadConfig: () => h.config }));
 vi.mock('../../lib/api-key.js', () => ({ apiKeyFor: () => h.apiKey }));
 vi.mock('../../lib/session-config.js', () => ({ tryLoadSessionConfig: () => h.session }));
-vi.mock('../../x402/payer.js', () => ({
-  Eip3009EoaPayer: { fromSessionKey: () => ({ address: h.payer }) },
-}));
+vi.mock('../../x402/session-payer.js', () => ({ sessionPayer: () => ({ address: h.payer }) }));
 
-vi.mock('../../x402/payment-window.js', async (importOriginal) => ({
+vi.mock('@jaw.id/agent', async (importOriginal) => ({
   // The real recorder, so the ledger assertions below still see what it writes.
-  recordPaymentOutcome: (await importOriginal<typeof import('../../x402/payment-window.js')>()).recordPaymentOutcome,
+  ...(await importOriginal<typeof import('@jaw.id/agent')>()),
+  // The stub below already answers in the printed shape.
+  toPayAndFetchResult: (result: unknown) => result,
+  payAndFetch: async (_url: string, _payer: unknown, opts: Record<string, unknown>) => {
+    h.payOpts.push(opts);
+    return { payer: h.payer, status: 200, ...h.outcome };
+  },
   openPaymentWindow: async (input: Record<string, unknown>) => {
     h.windowInputs.push(input);
     return {
@@ -60,16 +64,11 @@ vi.mock('../../x402/payment-window.js', async (importOriginal) => ({
   },
 }));
 
-vi.mock('../../x402/http.js', () => ({
-  payAndFetch: async (_url: string, _payer: unknown, opts: Record<string, unknown>) => {
-    h.payOpts.push(opts);
-    return { payer: h.payer, status: 200, ...h.outcome };
-  },
-}));
-
 vi.mock('../../x402/ledger.js', () => ({
-  appendX402Log: (entry: Record<string, unknown>) => h.appended.push(entry),
-  compactX402Log: (starts: string[] | undefined) => h.compactions.push(starts),
+  jsonlPaymentLog: {
+    append: (entry: Record<string, unknown>) => h.appended.push(entry),
+    compact: (starts: string[] | undefined) => h.compactions.push(starts),
+  },
 }));
 
 vi.mock('../../lib/payment-lock.js', () => ({

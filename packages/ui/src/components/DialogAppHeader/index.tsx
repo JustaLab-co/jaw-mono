@@ -10,6 +10,8 @@ export interface DialogAppHeaderProps {
   appLogoUrl?: string | null;
   /** dApp origin, shown truncated to the hostname. */
   origin: string;
+  /** Shown in place of the host when the host would not say who is asking (the wallet's own bridge page). */
+  originLabel?: string;
   chainName?: string;
   chainIcon?: JSX.Element;
 }
@@ -34,7 +36,14 @@ export function formatOrigin(origin: string): string {
  * "Who's asking" header shared by the wallet dialogs: dApp logo (with a themed
  * border + chain badge), app name, and origin. Theme-adaptive via semantic tokens.
  */
-export function DialogAppHeader({ appName, appLogoUrl, origin, chainName, chainIcon }: DialogAppHeaderProps) {
+export function DialogAppHeader({
+  appName,
+  appLogoUrl,
+  origin,
+  originLabel,
+  chainName,
+  chainIcon,
+}: DialogAppHeaderProps) {
   const safeAppName = sanitizeDisplayName(appName ?? '') || 'dApp';
 
   const appAvatar = <AppAvatar appName={appName} appLogoUrl={appLogoUrl} />;
@@ -61,7 +70,7 @@ export function DialogAppHeader({ appName, appLogoUrl, origin, chainName, chainI
       </span>
       <span className="flex min-w-0 flex-col gap-1">
         <span className="text-foreground text-app truncate">{safeAppName}</span>
-        <span className="text-muted-foreground text-url truncate font-mono">{formatOrigin(origin)}</span>
+        <span className="text-muted-foreground text-url truncate font-mono">{originLabel ?? formatOrigin(origin)}</span>
       </span>
     </div>
   );

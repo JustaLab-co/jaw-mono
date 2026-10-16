@@ -1,0 +1,1 @@
+ALTER TABLE "oauth_payloads" ADD COLUMN "successor_key" text;

@@ -4,6 +4,7 @@ import * as path from 'node:path';
 import * as os from 'node:os';
 import { fileURLToPath } from 'node:url';
 import { Config } from '@oclif/core';
+import { X402_SCALAR_KEYS, X402_ARRAY_KEYS } from '@jaw.id/agent';
 
 const TEST_ROOT = path.join(os.tmpdir(), 'jaw-config-set-test');
 
@@ -15,7 +16,6 @@ vi.mock('../../lib/paths.js', () => {
 });
 
 const { default: ConfigSet } = await import('./set.js');
-const { X402_SCALAR_KEYS, X402_ARRAY_KEYS } = await import('../../x402/policy.js');
 
 let oclifConfig: Config;
 

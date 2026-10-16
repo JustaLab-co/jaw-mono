@@ -5,6 +5,7 @@ import { useEffect, useState, Suspense, useRef, useCallback } from 'react';
 import { JAW, Mode } from '@jaw.id/core';
 import { ReactUIHandler } from '@jaw.id/ui';
 import { resolveBridgeApiKey } from '../../lib/cli-api-key';
+import { DEFAULT_BRIDGE_APP_NAME, resolveBridgeAppName } from '../../lib/bridge-app-name';
 import {
   generateKeyPair,
   deriveSharedSecret,
@@ -79,9 +80,12 @@ function CLIBridgeContent() {
   const [state, setState] = useState<BridgeState>('connecting');
   const [error, setError] = useState('');
   const [lastMethod, setLastMethod] = useState<string | null>(null);
+  const [appName, setAppName] = useState(DEFAULT_BRIDGE_APP_NAME);
   const sdkRef = useRef<ReturnType<typeof JAW.create> | null>(null);
   /** What `sdkRef` was built from, so a second init can tell whether it still fits. */
   const sdkSignatureRef = useRef<string | null>(null);
+  /** The first name a client gave. A dialog may be open under it, so a later init cannot rename the page. */
+  const appNameRef = useRef<string | null>(null);
   const wsRef = useRef<WebSocket | null>(null);
   const sharedSecretRef = useRef<CryptoKey | null>(null);
 
@@ -207,6 +211,8 @@ function CLIBridgeContent() {
                 case 'init': {
                   const chainId = (inner.chainId as number) ?? 1;
                   const ens = inner.ens as string | undefined;
+                  const name = (appNameRef.current ??= resolveBridgeAppName(inner.appName));
+                  setAppName(name);
                   const paymasterUrl = inner.paymasterUrl as string | undefined;
                   // Only meaningful alongside the url it was written for; the CLI
                   // sends the two together or not at all.
@@ -220,7 +226,7 @@ function CLIBridgeContent() {
                   const sentApiKey = typeof inner.apiKey === 'string' ? inner.apiKey : '';
                   const apiKey = await resolveBridgeApiKey(sentApiKey);
                   if (!apiKey) {
-                    const reason = 'No API key: the CLI sent none and this deployment has none configured for it.';
+                    const reason = `No API key: ${name} sent none and this deployment has none configured for it.`;
                     setState('error');
                     setError(reason);
                     // Said across the channel as well, because this page is not
@@ -241,15 +247,15 @@ function CLIBridgeContent() {
                   // first SDK meant the browser kept signing under the key, the
                   // chain and the paymaster of the previous run while the CLI
                   // recorded the new ones, and neither side could see the gap.
-                  const signature = JSON.stringify({ chainId, ens, paymasterUrl, paymasterContext, apiKey });
+                  const signature = JSON.stringify({ chainId, ens, paymasterUrl, paymasterContext, apiKey, name });
                   if (!sdkRef.current || sdkSignatureRef.current !== signature) {
                     sdkSignatureRef.current = signature;
                     sdkRef.current = JAW.create({
-                      appName: 'JAW CLI',
+                      appName: name,
                       defaultChainId: chainId,
                       preference: {
                         mode: Mode.AppSpecific,
-                        uiHandler: new ReactUIHandler(),
+                        uiHandler: new ReactUIHandler({ originLabel: 'via JAW bridge' }),
                         showTestnets: true,
                       },
                       apiKey,
@@ -302,7 +308,7 @@ function CLIBridgeContent() {
 
           if (msg.type === 'error' && msg.code === 'session_expired') {
             setState('error');
-            setError('Session expired. Run a new CLI command to reconnect.');
+            setError('Session expired. Start a new session to reconnect.');
           }
         };
 
@@ -334,6 +340,8 @@ function CLIBridgeContent() {
 
     return () => {
       cancelled = true;
+      appNameRef.current = null;
+      setAppName(DEFAULT_BRIDGE_APP_NAME);
       if (beforeUnloadHandler) {
         window.removeEventListener('beforeunload', beforeUnloadHandler);
       }
@@ -350,7 +358,7 @@ function CLIBridgeContent() {
         <div className="max-w-md p-12 text-center">
           {/* eslint-disable-next-line @next/next/no-img-element */}
           <img src="/jaw-logo.png" alt="JAW" className="mx-auto mb-4 block h-12 w-12 opacity-80" />
-          <h1 className="text-foreground mb-4 text-xl font-semibold">JAW CLI</h1>
+          <h1 className="text-foreground mb-4 text-xl font-semibold">{DEFAULT_BRIDGE_APP_NAME}</h1>
           <p className="text-destructive text-base font-semibold">Error</p>
           <p className="text-muted-foreground mt-2 text-sm leading-relaxed">
             Missing required parameters: session, relay
@@ -365,7 +373,7 @@ function CLIBridgeContent() {
       <div className="max-w-md p-12 text-center">
         {/* eslint-disable-next-line @next/next/no-img-element */}
         <img src="/jaw-logo.png" alt="JAW" className="mx-auto mb-4 block h-12 w-12 opacity-80" />
-        <h1 className="text-foreground mb-4 text-xl font-semibold">JAW CLI</h1>
+        <h1 className="text-foreground mb-4 text-xl font-semibold">{appName}</h1>
 
         {state === 'connecting' && (
           <p className="text-muted-foreground mb-4 text-sm leading-relaxed">Connecting to relay...</p>
@@ -375,9 +383,9 @@ function CLIBridgeContent() {
           <>
             <p className="text-success text-base font-semibold">Connected</p>
             <p className="text-muted-foreground mt-2 text-sm leading-relaxed">
-              This tab is your CLI&apos;s signing backend.
+              This tab is the signing backend for {appName}.
               <br />
-              Keep it open while using the CLI.
+              Keep it open while it is in use.
             </p>
             {lastMethod && (
               <p className="text-muted-foreground bg-muted mt-4 rounded p-2 font-mono text-xs">
@@ -389,7 +397,7 @@ function CLIBridgeContent() {
 
         {state === 'disconnected' && (
           <p className="text-muted-foreground mt-2 text-sm leading-relaxed">
-            CLI disconnected. You can close this tab.
+            {appName} disconnected. You can close this tab.
           </p>
         )}
 

@@ -9,6 +9,9 @@
     "format:check": "prettier --check ."
   },
   "private": true,
+  "engines": {
+    "node": ">=22.13"
+  },
   "lint-staged": {
     "*.{ts,tsx,js,jsx,json,css,md,mdx,yml,yaml}": "prettier --write"
   },

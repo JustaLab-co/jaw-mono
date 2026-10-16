@@ -39,10 +39,11 @@ import {
   readPermissionState,
   readCurrentPeriods,
   toContractPermission,
-} from '../packages/cli/src/x402/permission-onchain.js';
-import { parseGrantedPermission, type GrantedPermission } from '../packages/cli/src/lib/session-config.js';
-import { currentPeriodWindow, normalizePeriod } from '../packages/cli/src/x402/period.js';
-import { USDC_BY_NETWORK } from '../packages/cli/src/x402/asset-registry.js';
+} from '../packages/agent/src/x402/permission-onchain.js';
+import { chainClients } from '../packages/agent/src/x402/balance.js';
+import { parseGrantedPermission, type GrantedPermission } from '../packages/agent/src/session/session-config.js';
+import { currentPeriodWindow, normalizePeriod } from '../packages/agent/src/x402/period.js';
+import { USDC_BY_NETWORK } from '../packages/agent/src/x402/asset-registry.js';
 
 const JAW_DIR = path.join(os.homedir(), '.jaw');
 
@@ -112,11 +113,15 @@ if (!permission) {
 check(toContractPermission(permission) !== null, 'the struct converts to the shape the contract hashes');
 
 // 1. The assertion everything else rests on.
-const state = await readPermissionState({
-  chainId: session.chainId,
-  permissionId: session.permissionId,
-  permission,
-});
+const deps = { clients: chainClients(config.apiKey) };
+const state = await readPermissionState(
+  {
+    chainId: session.chainId,
+    permissionId: session.permissionId,
+    permission,
+  },
+  deps
+);
 check(
   state.status === 'ok',
   'the rebuilt struct hashes to the granted permission',
@@ -132,12 +137,15 @@ if (state.status === 'ok') {
 }
 
 // 2. Two implementations of the same calendar.
-const limits = await readCurrentPeriods({
-  chainId: session.chainId,
-  permissionId: session.permissionId,
-  permission,
-  token: asset.address,
-});
+const limits = await readCurrentPeriods(
+  {
+    chainId: session.chainId,
+    permissionId: session.permissionId,
+    permission,
+    token: asset.address,
+  },
+  deps
+);
 check(limits.length > 0, 'the permission carries a limit on the registry USDC');
 
 // Every limit, because the contract charges every one of them and each keeps

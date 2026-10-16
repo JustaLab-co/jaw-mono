@@ -57,7 +57,16 @@ vi.mock('../x402/balance.js', async (importOriginal) => {
     // The payer probes the session EOA for an EIP-7702 delegation designator
     // before signing; a real client here would hit the stubbed global fetch
     // and eat the mocked 402/200 response sequence. No delegation in E2E.
-    publicClientFor: () => ({ getCode: async () => undefined }),
+    // Balance reads answer from the same stub `usdcBalance` does.
+    cliChainClients: {
+      publicClient: (chainId: number) => ({
+        getCode: async () => undefined,
+        readContract: async ({ functionName, args }: { functionName: string; args: [string] }) => {
+          if (functionName !== 'balanceOf') throw new Error(`unexpected read: ${functionName}`);
+          return BigInt((await usdcBalanceMock(`eip155:${chainId}`, args[0])).raw);
+        },
+      }),
+    },
   };
 });
 
@@ -622,6 +631,35 @@ describe('jaw_pay_and_fetch', () => {
       // The retry carried a real signed proof from the session key.
       const retryInit = fetchMock.mock.calls[1][1] as { headers: Record<string, string> };
       expect(retryInit.headers['PAYMENT-SIGNATURE']).toBeTruthy();
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it('given a seller advertising a ten year maxTimeoutSeconds, when it pays, then the proof expires within the hour', async () => {
+    const { saveKeystore } = await import('../lib/keystore.js');
+    saveKeystore(PK, '0xSmartAccount');
+    const challenge = JSON.parse(Buffer.from(CHALLENGE, 'base64').toString());
+    challenge.accepts[0].maxTimeoutSeconds = 10 * 365 * 86_400;
+    const forever = Buffer.from(JSON.stringify(challenge)).toString('base64');
+
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(mkRes(402, { 'PAYMENT-REQUIRED': forever }, '{}'))
+      .mockResolvedValueOnce(mkRes(200, { 'PAYMENT-RESPONSE': RECEIPT }, JSON.stringify({ data: 'ok' })));
+    vi.stubGlobal('fetch', fetchMock);
+    try {
+      const client = await connectClient();
+      const before = Math.floor(Date.now() / 1000);
+      const parsed = payResult(
+        await client.callTool({ name: 'jaw_pay_and_fetch', arguments: { url: 'https://api.example.com/paid' } })
+      );
+      expect(parsed.paid).toBe(true);
+      const retryInit = fetchMock.mock.calls[1][1] as { headers: Record<string, string> };
+      const proof = JSON.parse(Buffer.from(retryInit.headers['PAYMENT-SIGNATURE'], 'base64').toString());
+      const validBefore = Number(proof.payload.authorization.validBefore);
+      expect(validBefore).toBeGreaterThanOrEqual(before + 3600);
+      expect(validBefore).toBeLessThanOrEqual(Date.now() / 1000 + 3600);
     } finally {
       vi.unstubAllGlobals();
     }

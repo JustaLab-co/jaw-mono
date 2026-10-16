@@ -47,17 +47,23 @@ vi.mock('../../lib/config.js', () => ({
   },
 }));
 vi.mock('../../lib/session-config.js', () => ({
-  sessionUsable: (expiry: unknown, now: number = Date.now() / 1000) =>
-    typeof expiry === 'number' && Number.isFinite(expiry) && expiry > now,
-  expiryInstant: (expiry: unknown) =>
-    typeof expiry === 'number' && Number.isFinite(expiry) ? new Date(expiry * 1000) : null,
   tryLoadSessionConfig: () => h.session,
-  isLegacySession: () => false,
-  liveOrphans: () => [],
+  sessionFileStore: { saveRecovered: () => true },
 }));
-vi.mock('../../x402/payer.js', () => ({ sessionPayerAddress: () => h.payer }));
-vi.mock('../../x402/balance.js', () => ({ usdcBalance: async () => ({ formatted: '20' }) }));
-vi.mock('../../x402/permission-onchain.js', () => ({ readLiveness: async () => h.liveness.value }));
+vi.mock('../../x402/session-payer.js', () => ({ sessionPayerAddress: () => h.payer }));
+// No chain behind the reads: liveness comes back as not knowing.
+vi.mock('../../x402/balance.js', () => ({
+  usdcBalance: async () => ({ formatted: '20' }),
+  cliChainClients: {
+    publicClient: () => {
+      throw new Error('offline');
+    },
+  },
+}));
+vi.mock('@jaw.id/agent', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@jaw.id/agent')>()),
+  readLiveness: async () => h.liveness.value,
+}));
 
 const { default: X402Status } = await import('./status.js');
 

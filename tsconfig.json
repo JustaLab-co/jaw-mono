@@ -26,6 +26,12 @@
     },
     {
       "path": "./apps/demo"
+    },
+    {
+      "path": "./packages/agent"
+    },
+    {
+      "path": "./apps/mcp"
     }
   ]
 }

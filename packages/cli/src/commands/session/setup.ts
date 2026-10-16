@@ -10,20 +10,24 @@ import {
   loadSessionKey,
   tryLoadKeystoreAddress,
 } from '../../lib/keystore.js';
+import { saveSessionConfig, tryLoadSessionConfig } from '../../lib/session-config.js';
+import type { OutputFormat } from '../../lib/types.js';
 import {
+  type PermissionsConfig,
+  parsePermissionsConfig,
+  buildX402Permissions,
+  describeX402Grant,
+  DEFAULT_X402_LIMIT,
+  whyGrantExceedsCeiling,
+  whyOwnerCannotFundSession,
+  whySpenderCannotPay,
   liveOrphans,
   parseGrantedPermission,
   expiryInstant,
-  saveSessionConfig,
   sessionLives,
-  tryLoadSessionConfig,
   type OrphanedPermission,
-} from '../../lib/session-config.js';
-import type { OutputFormat, PermissionsConfig } from '../../lib/types.js';
-import { parsePermissionsConfig } from '../../lib/validation.js';
-import { buildX402Permissions, describeX402Grant, DEFAULT_X402_LIMIT } from '../../x402/grant-preset.js';
-import { whyOwnerCannotFundSession, whySpenderCannotPay } from '../../x402/funded-owner.js';
-import { whyGrantExceedsCeiling } from '../../x402/grant-ceiling.js';
+} from '@jaw.id/agent';
+import { usdcBaseUnits } from '../../x402/balance.js';
 
 export default class SessionSetup extends BaseCommand {
   static override description =
@@ -317,7 +321,11 @@ export default class SessionSetup extends BaseCommand {
         sessionAddress = account.address;
 
         if (flags.x402) {
-          const blocked = await whyOwnerCannotFundSession({ chainId, request: (m, p) => bridge.request(m, p) });
+          const blocked = await whyOwnerCannotFundSession({
+            chainId,
+            request: (m, p) => bridge.request(m, p),
+            readBalance: usdcBaseUnits,
+          });
           if (blocked) this.error(blocked);
         }
 
@@ -372,7 +380,7 @@ export default class SessionSetup extends BaseCommand {
       //      nothing, and warning there would send someone to move real funds
       //      for no reason.
       if (flags.x402) {
-        const unfunded = await whySpenderCannotPay({ chainId, spender: sessionAddress });
+        const unfunded = await whySpenderCannotPay({ chainId, spender: sessionAddress, readBalance: usdcBaseUnits });
         if (unfunded) this.logToStderr(`\nWarning: ${unfunded}`);
       }
 
