@@ -1,0 +1,88 @@
+name: Publish MCP Image
+
+# Builds apps/mcp/Dockerfile and pushes it to ECR as sha-<short sha>. Deploying
+# that tag happens outside this repository. The role and the repository come
+# from variables of the `release` environment, so nothing about the AWS account
+# lives in this file:
+#   AWS_REGION            the ECR region
+#   AWS_MCP_ECR_ROLE_ARN  a role GitHub OIDC may assume from this environment,
+#                         allowed to push to that one repository
+#   AWS_MCP_ECR_REPO      the repository name, without the registry
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - 'apps/mcp/**'
+      - 'packages/agent/**'
+      - 'packages/core/**'
+      - 'bun.lock'
+      - 'package.json'
+      - '.github/workflows/publish-mcp-image.yml'
+  workflow_dispatch:
+
+concurrency:
+  group: publish-mcp-image
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    environment: release
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      # The release environment only admits main; this makes a dispatch from any
+      # other ref fail loudly instead of waiting on the environment.
+      - name: Refuse non-main refs
+        if: github.ref_name != 'main'
+        run: |
+          echo "::error::Publish MCP Image only runs against main (got ${{ github.ref_name }})"
+          exit 1
+
+      - uses: actions/checkout@v4
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ vars.AWS_MCP_ECR_ROLE_ARN }}
+          aws-region: ${{ vars.AWS_REGION }}
+
+      - name: Log in to ECR
+        id: ecr
+        uses: aws-actions/amazon-ecr-login@v2
+        with:
+          mask-password: 'true'
+
+      - uses: docker/setup-buildx-action@v3
+
+      - name: Compute image tag
+        id: tag
+        run: echo "tag=sha-${GITHUB_SHA:0:7}" >> "$GITHUB_OUTPUT"
+
+      - name: Build and push
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: apps/mcp/Dockerfile
+          platforms: linux/amd64
+          push: true
+          provenance: false
+          tags: ${{ steps.ecr.outputs.registry }}/${{ vars.AWS_MCP_ECR_REPO }}:${{ steps.tag.outputs.tag }}
+          cache-from: type=gha,scope=mcp
+          cache-to: type=gha,mode=max,scope=mcp
+
+      - name: Publish image tag to summary
+        run: |
+          {
+            echo "### MCP image pushed"
+            echo ""
+            echo '```'
+            echo "${{ steps.tag.outputs.tag }}"
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
