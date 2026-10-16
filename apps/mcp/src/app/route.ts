@@ -39,6 +39,14 @@ a{color:inherit}
 `;
 }
 
+// A text/html media range with q > 0; `text/html;q=0` is a refusal.
+const acceptsHtml = (accept: string | null) =>
+  (accept ?? '').split(',').some((range) => {
+    const [type, ...params] = range.split(';').map((s) => s.trim().toLowerCase());
+    const q = params.find((p) => p.startsWith('q='));
+    return type === 'text/html' && (q === undefined || Number(q.slice(2)) > 0);
+  });
+
 const text = (url: string) =>
   `hi. i'm the jaw mcp server.
 add me as a connector to your favorite ai: ${url}
@@ -47,7 +55,7 @@ more at ${AGENTS_URL}
 
 export const GET = withEdge(
   async (req) => {
-    const wantsHtml = req.headers.get('accept')?.includes('text/html') ?? false;
+    const wantsHtml = acceptsHtml(req.headers.get('accept'));
     const url = mcpUrl();
     return new Response(wantsHtml ? html(url) : text(url), {
       headers: {

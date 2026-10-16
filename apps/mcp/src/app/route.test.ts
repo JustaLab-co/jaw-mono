@@ -20,7 +20,7 @@ describe('the root of the server', () => {
   });
 
   it('given a client that does not ask for html, when it fetches the root, then it gets the same note as plain text', async () => {
-    for (const accept of [undefined, '*/*', 'application/json']) {
+    for (const accept of [undefined, '*/*', 'application/json', 'text/html;q=0, text/plain']) {
       const res = await visit(accept);
       expect(res.status).toBe(200);
       expect(res.headers.get('content-type')).toMatch(/^text\/plain/);
