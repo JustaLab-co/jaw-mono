@@ -3,11 +3,12 @@ import { decodeFunctionData, erc20Abi, getAddress, type Address, type Hex } from
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { verifyBearer, type Tenant } from '@/connections/auth';
 import type { Ask, OpenWallet } from '@/connections/relay';
-import { callTool, connect, fakeWallet, setTestEnv, walletsSettled } from '@/connections/testkit';
+import { callTool, connect, fakeWallet, mcp, setTestEnv, walletsSettled } from '@/connections/testkit';
 import { getDb } from '@/db/client';
 import { ownerCalls, sends, settings } from '@/db/schema';
 import { TEST_PG_URL, useTestDb, useTestPostgres } from '@/db/test-db';
 import { fakeChain } from '@/owner-calls/chain-testkit';
+import { APPROVE_WINDOW_MS } from './owner-calls';
 import { transfer, type TransferInput } from './send';
 
 const USDC: Address = '0x036CbD53842c5426634e7929541eC2318f3dCF7e';
@@ -258,5 +259,17 @@ describe('jaw_transfer', () => {
     expect(JSON.parse(result.content.at(-1).text)).toEqual(result.structuredContent);
     expect(served.opened).toBe(1);
     expect(await rowsOf(t.connectionId)).toHaveLength(1);
+  });
+
+  it('given the tool list, then jaw_transfer and jaw_send_calls say one request awaits the owner at a time, and for how long', async () => {
+    const { token } = await connected();
+
+    const { tools } = (await mcp(token, { method: 'tools/list' })).json.result;
+
+    for (const name of ['jaw_transfer', 'jaw_send_calls']) {
+      const { description } = tools.find((tool: { name: string }) => tool.name === name);
+      expect(description, name).toContain('calls_in_progress');
+      expect(description, name).toContain(`${APPROVE_WINDOW_MS / 60_000} minutes`);
+    }
   });
 });

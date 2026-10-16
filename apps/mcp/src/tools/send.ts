@@ -14,7 +14,14 @@ import { z } from 'zod';
 import { tenant, type Tenant } from '@/connections/auth';
 import { reply } from '@/lib/fence';
 import { findByKey } from '@/owner-calls/store';
-import { idempotencyKey, ownerCallsOutput, sendCalls, type OwnerCallDeps, type SendResult } from './owner-calls';
+import {
+  idempotencyKey,
+  ONE_AT_A_TIME,
+  ownerCallsOutput,
+  sendCalls,
+  type OwnerCallDeps,
+  type SendResult,
+} from './owner-calls';
 import { resolveName } from './read';
 import { refusal } from './reply';
 
@@ -94,7 +101,8 @@ export function registerSendTools(server: McpServer) {
       description:
         "Ask the account owner to send USDC from the account to an address or ENS name. The owner reviews and signs the transfer in their JAW wallet and pays the gas; nothing comes out of this connection's budget. " +
         'Returns the resolved recipient address and a link for the owner right away; follow it with jaw_send_calls_status. ' +
-        'Send the same idempotencyKey to retry; a retry never asks twice.',
+        'Send the same idempotencyKey to retry; a retry never asks twice. ' +
+        ONE_AT_A_TIME,
       inputSchema: transferInput,
       outputSchema: output,
     },
