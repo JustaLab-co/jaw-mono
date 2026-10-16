@@ -1,5 +1,5 @@
 import { createHash, randomBytes } from 'node:crypto';
-import { compactDecrypt, decodeProtectedHeader } from 'jose';
+import { compactDecrypt, decodeProtectedHeader, exportJWK, generateKeyPair, SignJWT } from 'jose';
 import type { PGlite } from '@electric-sql/pglite';
 import type { Hex } from 'viem';
 import { privateKeyToAddress } from 'viem/accounts';
@@ -21,7 +21,7 @@ import {
 vi.mock('node:dns', async (original) => {
   const dns = await original<typeof import('node:dns')>();
   const lookup = ((host: string, opts: object, cb: (...a: unknown[]) => void) =>
-    host.endsWith('.example.test')
+    host.endsWith('.example.test') || host === 'chatgpt.com'
       ? cb(null, [{ address: '93.184.216.34', family: 4 }])
       : dns.lookup(host, opts, cb)) as typeof dns.lookup;
   return { ...dns, default: { ...dns, lookup }, lookup };
@@ -47,6 +47,38 @@ const LOOPBACK = 'https://claude.example.test/oauth/client-metadata';
 const NO_REFRESH = 'https://norefresh.example.test/agent.json';
 const KEYED = 'https://evil.example.test/keyed.json';
 const PUBLIC_KEYED = 'https://evil.example.test/public-keyed.json';
+// ChatGPT's published document, which authenticates at the token endpoint with private_key_jwt.
+const CHATGPT = 'https://chatgpt.com/oauth/client.json';
+const CHATGPT_JWKS = 'https://chatgpt.com/oauth/jwks.json';
+const CHATGPT_REDIRECT = 'https://chatgpt.com/connector_platform_oauth_redirect';
+const chatgpt = {
+  client_id: CHATGPT,
+  client_uri: 'https://chatgpt.com/',
+  redirect_uris: [CHATGPT_REDIRECT],
+  token_endpoint_auth_method: 'private_key_jwt',
+  token_endpoint_auth_methods_supported: ['none', 'private_key_jwt'],
+  grant_types: ['authorization_code', 'refresh_token'],
+  response_types: ['code'],
+  client_name: 'ChatGPT',
+  token_endpoint_auth_signing_alg: 'RS256',
+  jwks_uri: CHATGPT_JWKS,
+};
+const CHATGPT_KEYS_ELSEWHERE = 'https://evil.example.test/chatgpt-keys.json';
+const INLINE_KEYED = 'https://evil.example.test/inline-keyed.json';
+const chatgptKey = await generateKeyPair('RS256');
+const chatgptJwk = { ...(await exportJWK(chatgptKey.publicKey)), kid: 'cimd', alg: 'RS256', use: 'sig' };
+const chatgptAssertion = async () => ({
+  client_assertion_type: 'urn:ietf:params:oauth:client-assertion-type:jwt-bearer',
+  client_assertion: await new SignJWT({})
+    .setProtectedHeader({ alg: 'RS256', kid: 'cimd' })
+    .setIssuer(CHATGPT)
+    .setSubject(CHATGPT)
+    .setAudience(ISSUER)
+    .setJti(randomBytes(16).toString('hex'))
+    .setIssuedAt()
+    .setExpirationTime('1m')
+    .sign(chatgptKey.privateKey),
+});
 const metadata = {
   client_id: CIMD,
   client_name: 'Example Agent',
@@ -107,7 +139,20 @@ beforeAll(async () => {
                             client_id: String(url),
                             client_name: decodeURIComponent(String(url).slice(NAMED.length, -'.json'.length)),
                           })
-                        : new Response('not found', { status: 404 }),
+                        : String(url) === CHATGPT
+                          ? Response.json(chatgpt)
+                          : String(url) === CHATGPT_JWKS
+                            ? Response.json({ keys: [chatgptJwk] })
+                            : String(url) === CHATGPT_KEYS_ELSEWHERE
+                              ? Response.json({ ...chatgpt, client_id: CHATGPT_KEYS_ELSEWHERE })
+                              : String(url) === INLINE_KEYED
+                                ? Response.json({
+                                    ...metadata,
+                                    client_id: INLINE_KEYED,
+                                    token_endpoint_auth_method: 'private_key_jwt',
+                                    jwks: { keys: [chatgptJwk] },
+                                  })
+                                : new Response('not found', { status: 404 }),
   });
 });
 
@@ -326,6 +371,45 @@ describe('authorization server', () => {
       expect(start.uid).toBeUndefined();
     }
   );
+
+  it('given ChatGPT, when it connects and refreshes with private_key_jwt, then both succeed', async () => {
+    const c = await connect(undefined, {
+      clientId: CHATGPT,
+      redirectUri: CHATGPT_REDIRECT,
+      clientAuth: await chatgptAssertion(),
+    });
+    expect(c.status).toBe(200);
+    expect((await claimsOf(c.access_token)).client_id).toBe(CHATGPT);
+    const refreshed = await token({
+      grant_type: 'refresh_token',
+      refresh_token: c.refresh_token,
+      client_id: CHATGPT,
+      ...(await chatgptAssertion()),
+    });
+    expect(refreshed.status).toBe(200);
+  });
+
+  it('given ChatGPT, when its token request carries no client assertion, then invalid_client', async () => {
+    const c = await connect(undefined, { clientId: CHATGPT, redirectUri: CHATGPT_REDIRECT });
+    expect(c.status).toBe(401);
+    expect(c.error).toBe('invalid_client');
+  });
+
+  it("given another origin's document that points at ChatGPT's keys, when it asks to authorize, then it is refused", async () => {
+    const start = await startAuthorization(new Browser(), {
+      clientId: CHATGPT_KEYS_ELSEWHERE,
+      redirectUri: CHATGPT_REDIRECT,
+    });
+    expect(start.uid).toBeUndefined();
+  });
+
+  it('given a private_key_jwt client with inline keys, when it asks to authorize, then it is refused', async () => {
+    const start = await startAuthorization(new Browser(), {
+      clientId: INLINE_KEYED,
+      redirectUri: 'http://127.0.0.1:9100/cb',
+    });
+    expect(start.uid).toBeUndefined();
+  });
 
   it('refuses a redirect URI absent from the metadata document before consent', async () => {
     const start = await startAuthorization(new Browser(), {

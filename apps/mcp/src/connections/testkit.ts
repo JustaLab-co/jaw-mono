@@ -204,6 +204,8 @@ export interface Authorize {
   scope?: string | null;
   resource?: string;
   pkce?: boolean;
+  /** Client authentication sent with the code exchange, such as a client_assertion. */
+  clientAuth?: Record<string, string>;
 }
 
 export function pkcePair() {
@@ -311,6 +313,7 @@ export async function connect(
     client_id: a.clientId ?? 'jaw-cli',
     code_verifier: start.verifier,
     resource: RESOURCE,
+    ...a.clientAuth,
   });
   return { signer, uid: start.uid, ...issued.body, status: issued.status };
 }
