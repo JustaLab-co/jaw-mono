@@ -62,12 +62,35 @@ const chatgpt = {
   client_name: 'ChatGPT',
   token_endpoint_auth_signing_alg: 'RS256',
   jwks_uri: CHATGPT_JWKS,
+  logo_uri: 'https://persistent.oaistatic.com/sonic/misc/openai-logo.png',
 };
 const CHATGPT_KEYS_ELSEWHERE = 'https://evil.example.test/chatgpt-keys.json';
-const INLINE_KEYED = 'https://evil.example.test/inline-keyed.json';
+const CHATGPT_OTHER_KEYS = 'https://chatgpt.com/oauth/other-keys.json';
+const CHATGPT_INLINE_KEYS = 'https://chatgpt.com/oauth/inline-keys.json';
+const CHATGPT_PUBLIC_KEYED = 'https://chatgpt.com/oauth/public-keyed.json';
+const CHATGPT_NO_REFRESH = 'https://chatgpt.com/oauth/no-refresh.json';
 const chatgptKey = await generateKeyPair('RS256');
 const chatgptJwk = { ...(await exportJWK(chatgptKey.publicKey)), kid: 'cimd', alg: 'RS256', use: 'sig' };
-const chatgptAssertion = async () => ({
+const chatgptDocuments: Record<string, object> = {
+  [CHATGPT]: chatgpt,
+  [CHATGPT_JWKS]: { keys: [chatgptJwk] },
+  [CHATGPT_KEYS_ELSEWHERE]: { ...chatgpt, client_id: CHATGPT_KEYS_ELSEWHERE },
+  [CHATGPT_OTHER_KEYS]: { ...chatgpt, client_id: CHATGPT_OTHER_KEYS, jwks_uri: 'https://evil.example.test/jwks.json' },
+  [CHATGPT_INLINE_KEYS]: {
+    ...chatgpt,
+    client_id: CHATGPT_INLINE_KEYS,
+    jwks_uri: undefined,
+    jwks: { keys: [chatgptJwk] },
+  },
+  [CHATGPT_PUBLIC_KEYED]: {
+    ...chatgpt,
+    client_id: CHATGPT_PUBLIC_KEYED,
+    token_endpoint_auth_method: 'none',
+    token_endpoint_auth_signing_alg: undefined,
+  },
+  [CHATGPT_NO_REFRESH]: { ...chatgpt, client_id: CHATGPT_NO_REFRESH, grant_types: ['authorization_code'] },
+};
+const chatgptAssertion = async (key = chatgptKey.privateKey) => ({
   client_assertion_type: 'urn:ietf:params:oauth:client-assertion-type:jwt-bearer',
   client_assertion: await new SignJWT({})
     .setProtectedHeader({ alg: 'RS256', kid: 'cimd' })
@@ -77,7 +100,7 @@ const chatgptAssertion = async () => ({
     .setJti(randomBytes(16).toString('hex'))
     .setIssuedAt()
     .setExpirationTime('1m')
-    .sign(chatgptKey.privateKey),
+    .sign(key),
 });
 const metadata = {
   client_id: CIMD,
@@ -139,20 +162,9 @@ beforeAll(async () => {
                             client_id: String(url),
                             client_name: decodeURIComponent(String(url).slice(NAMED.length, -'.json'.length)),
                           })
-                        : String(url) === CHATGPT
-                          ? Response.json(chatgpt)
-                          : String(url) === CHATGPT_JWKS
-                            ? Response.json({ keys: [chatgptJwk] })
-                            : String(url) === CHATGPT_KEYS_ELSEWHERE
-                              ? Response.json({ ...chatgpt, client_id: CHATGPT_KEYS_ELSEWHERE })
-                              : String(url) === INLINE_KEYED
-                                ? Response.json({
-                                    ...metadata,
-                                    client_id: INLINE_KEYED,
-                                    token_endpoint_auth_method: 'private_key_jwt',
-                                    jwks: { keys: [chatgptJwk] },
-                                  })
-                                : new Response('not found', { status: 404 }),
+                        : Object.hasOwn(chatgptDocuments, String(url))
+                          ? Response.json(chatgptDocuments[String(url)])
+                          : new Response('not found', { status: 404 }),
   });
 });
 
@@ -369,6 +381,7 @@ describe('authorization server', () => {
     async (_, clientId) => {
       const start = await startAuthorization(new Browser(), { clientId, redirectUri: 'http://127.0.0.1:9100/cb' });
       expect(start.uid).toBeUndefined();
+      expect(await start.stopped?.text()).toMatch(/client is not allowed/);
     }
   );
 
@@ -395,20 +408,49 @@ describe('authorization server', () => {
     expect(c.error).toBe('invalid_client');
   });
 
-  it("given another origin's document that points at ChatGPT's keys, when it asks to authorize, then it is refused", async () => {
+  it('given ChatGPT, when its assertion is signed by a key outside its JWKS, then invalid_client', async () => {
+    const other = await generateKeyPair('RS256');
+    const c = await connect(undefined, {
+      clientId: CHATGPT,
+      redirectUri: CHATGPT_REDIRECT,
+      clientAuth: await chatgptAssertion(other.privateKey),
+    });
+    expect(c.status).toBe(401);
+    expect(c.error).toBe('invalid_client');
+  });
+
+  it('given ChatGPT, when it replays the assertion of its code exchange, then invalid_client', async () => {
+    const assertion = await chatgptAssertion();
+    const c = await connect(undefined, { clientId: CHATGPT, redirectUri: CHATGPT_REDIRECT, clientAuth: assertion });
+    expect(c.status).toBe(200);
+    const replayed = await token({
+      grant_type: 'refresh_token',
+      refresh_token: c.refresh_token,
+      client_id: CHATGPT,
+      ...assertion,
+    });
+    expect(replayed.status).toBe(401);
+    expect(replayed.body.error).toBe('invalid_client');
+  });
+
+  it.each([
+    ["another origin's document naming ChatGPT's keys", CHATGPT_KEYS_ELSEWHERE],
+    ['a chatgpt.com document naming other keys', CHATGPT_OTHER_KEYS],
+    ['a chatgpt.com private_key_jwt document with inline keys', CHATGPT_INLINE_KEYS],
+    ["a chatgpt.com public document naming ChatGPT's keys", CHATGPT_PUBLIC_KEYED],
+  ])('given %s, when it asks to authorize, then it is refused', async (_, clientId) => {
+    const start = await startAuthorization(new Browser(), { clientId, redirectUri: CHATGPT_REDIRECT });
+    expect(start.uid).toBeUndefined();
+    expect(await start.stopped?.text()).toMatch(/client is not allowed/);
+  });
+
+  it('given a chatgpt.com document whose grant_types omit refresh_token, when it asks to authorize, then it is refused', async () => {
     const start = await startAuthorization(new Browser(), {
-      clientId: CHATGPT_KEYS_ELSEWHERE,
+      clientId: CHATGPT_NO_REFRESH,
       redirectUri: CHATGPT_REDIRECT,
     });
     expect(start.uid).toBeUndefined();
-  });
-
-  it('given a private_key_jwt client with inline keys, when it asks to authorize, then it is refused', async () => {
-    const start = await startAuthorization(new Browser(), {
-      clientId: INLINE_KEYED,
-      redirectUri: 'http://127.0.0.1:9100/cb',
-    });
-    expect(start.uid).toBeUndefined();
+    expect(await start.stopped?.text()).toMatch(/refresh_token/);
   });
 
   it('refuses a redirect URI absent from the metadata document before consent', async () => {
