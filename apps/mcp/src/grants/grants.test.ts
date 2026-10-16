@@ -20,7 +20,7 @@ import { getDb } from '@/db/client';
 import { connections, grants } from '@/db/schema';
 import { TEST_PG_URL, useTestDb, useTestPostgres } from '@/db/test-db';
 import { endConnection } from '@/connections/rows';
-import { WalletBusy, type Wallet } from '@/connections/relay';
+import { WalletBusy, type OpenWallet, type Wallet } from '@/connections/relay';
 import { requestBudget } from '@/tools/request-budget';
 import { NO_PAY_SCOPE } from '@/tools/reply';
 import {
@@ -268,7 +268,9 @@ describe('jaw_request_budget', () => {
       run: async (work) => work(async () => release.promise as never),
       close: () => undefined,
     };
-    const deps = { openWallet: async () => waiting, readPermission: approvedOnChain, ...sessionFakes().deps };
+    let until: Date | undefined;
+    const openWallet: OpenWallet = async (_chainId, at) => ((until = at), waiting);
+    const deps = { openWallet, readPermission: approvedOnChain, ...sessionFakes().deps };
 
     const first = await requestBudget(t, '1', deps);
     const second = await requestBudget(t, '1', deps);
@@ -277,6 +279,7 @@ describe('jaw_request_budget', () => {
     expect('isError' in second && second.isError).toBe(true);
     expect(second.content[0].text).toContain(url);
     expect(second.content[0].text).toContain('still waiting');
+    expect(second.content[0].text).toContain(until!.toISOString());
 
     release.reject(new Error('owner left'));
     await walletsSettled();
