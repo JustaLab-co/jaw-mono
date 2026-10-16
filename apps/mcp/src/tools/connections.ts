@@ -5,7 +5,7 @@ import { erc20Abi, formatUnits, isAddressEqual, isHex, stringToHex, type Address
 import { z } from 'zod';
 import { chainClients } from '@/adapters/session-host';
 import { tenant, type Tenant } from '@/connections/auth';
-import { config } from '@/connections/config';
+import { APPROVE_WITHIN_MS, config } from '@/connections/config';
 import { ownerRelay, WalletBusy, type OpenWallet, type Wallet } from '@/connections/relay';
 import { endConnection, ownedBy, TopUpInFlight, type ConnectionRow } from '@/connections/rows';
 import { getDb } from '@/db/client';
@@ -112,7 +112,6 @@ export interface RevokeDeps {
 }
 
 const DEFAULTS: RevokeDeps = { openWallet: ownerRelay, verify: verifyOnChain, clients: chainClients };
-const CONFIRM_WITHIN_MS = 10 * 60_000;
 /** The link of the revoke still open, per connection it ends: asking again while it waits hands out the same one. */
 const open = new Map<string, Promise<string | undefined>>();
 
@@ -176,7 +175,7 @@ export async function revokeConnection(t: Tenant, id: string, deps = DEFAULTS) {
 /** Asks the owner to sign the revoke, and ends the connection once they do. Undefined when no session is free. */
 async function askOwner(t: Tenant, row: ConnectionRow, deps: RevokeDeps): Promise<string | undefined> {
   const id = row.id;
-  const until = new Date(Date.now() + CONFIRM_WITHIN_MS);
+  const until = new Date(Date.now() + APPROVE_WITHIN_MS);
   let wallet: Wallet;
   try {
     wallet = await deps.openWallet(t.chainId, until, t);

@@ -6,6 +6,7 @@ import { z } from 'zod';
 import { chainClients } from '@/adapters/session-host';
 import { tenant, type Tenant } from '@/connections/auth';
 import { revokeReplaced, sessionSender, type DisconnectDeps } from '@/connections/disconnect';
+import { APPROVE_WITHIN_MS } from '@/connections/config';
 import { ownerRelay, WalletBusy, type OpenWallet, type Wallet } from '@/connections/relay';
 import { CONNECTION_TTL_MS, isLive } from '@/connections/rows';
 import { spends } from '@/connections/scopes';
@@ -32,8 +33,6 @@ const DEFAULTS: BudgetDeps = {
 
 const output = z.object({ url: z.url(), summary: z.string() });
 
-/** How long the owner has to approve a budget once the link is handed out. */
-const APPROVE_WITHIN_MS = 10 * 60_000;
 /** The link of the request still open, per connection: asking again while it waits hands out the same one. */
 const open = new Map<string, string>();
 
@@ -42,7 +41,7 @@ export async function requestBudget(t: Tenant, perDay: string, deps = DEFAULTS) 
   const waiting = open.get(t.connectionId);
   if (waiting) {
     return refusal(
-      `A budget request is still waiting for the owner at ${waiting}. Ask again once they approve or it expires in ten minutes.`
+      `A budget request is still waiting for the owner at ${waiting}. Ask again once they approve or it expires in thirty minutes.`
     );
   }
   const usdc = usdcForNetwork(`eip155:${t.chainId}`);

@@ -336,3 +336,15 @@ describe('per-account connection cap', () => {
     expect(await stateOf(browser, start.uid!)).toEqual({ state: 'approved' });
   });
 });
+
+// Last: the session it opens counts against the client's share until the interaction ends.
+describe('the owner window', () => {
+  it('given the owner clicks Open JAW, then the wallet waits for them close to thirty minutes', async () => {
+    const held = heldWallets();
+    let until: Date | undefined;
+    setWallet({ openWallet: (chainId, at, client) => ((until = at), held.openWallet(chainId, at, client)) });
+    await startAuthorization(new Browser());
+    expect(until!.getTime() - Date.now()).toBeGreaterThan(28 * 60_000);
+    await held.release();
+  });
+});

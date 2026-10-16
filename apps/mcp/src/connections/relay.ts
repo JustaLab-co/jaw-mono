@@ -64,6 +64,9 @@ export function appNameOf(client?: RelayClient): string {
  */
 export const SESSION_LIMITS = { connect: 150, owner: 50, ownerPerAccount: 5 };
 
+// relay.jaw.id ends a session after 15 minutes with no message from either side.
+const KEEPALIVE_MS = 5 * 60_000;
+
 export class WalletBusy extends Error {
   constructor() {
     super('too many wallet sessions are open on this server');
@@ -136,12 +139,20 @@ async function startSession(release: () => void, chainId: number, until: Date, c
   url.hash = `pk=${await exportKeyToHex('public', keys.publicKey)}`;
 
   const ws = new WebSocket(`${relayUrl}?session=${encodeURIComponent(session)}&role=cli`);
+  const keepalive = setInterval(() => {
+    if (ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify({ type: 'ping' }));
+  }, KEEPALIVE_MS);
+  keepalive.unref();
+  const stop = () => {
+    clearInterval(keepalive);
+    release();
+  };
   // A socket closed while still connecting never fires `close`, so closing frees the slot itself.
   const end = () => {
     ws.close();
-    release();
+    stop();
   };
-  ws.addEventListener('close', release, { once: true });
+  ws.addEventListener('close', stop, { once: true });
   // Ends the session at its deadline even if nobody runs it.
   setTimeout(end, until.getTime() - Date.now()).unref();
   const inbox = new Inbox(ws, until);

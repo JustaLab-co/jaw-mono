@@ -242,7 +242,7 @@ const replacedOf = async (permissionId: string) =>
   (await getDb().select().from(grants).where(eq(grants.permissionId, permissionId)))[0].replacedAt;
 
 describe('jaw_request_budget', () => {
-  it('the wallet is given ten minutes to answer', async () => {
+  it('the wallet is given thirty minutes to answer', async () => {
     const { t, signer } = await connected();
     let until: Date | undefined;
     const answers = fakeWallet(walletAnswers(signer));
@@ -255,8 +255,8 @@ describe('jaw_request_budget', () => {
       ...sessionFakes().deps,
     });
     await walletsSettled();
-    expect(until!.getTime() - Date.now()).toBeGreaterThan(9.9 * 60_000);
-    expect(until!.getTime() - Date.now()).toBeLessThanOrEqual(10 * 60_000);
+    expect(until!.getTime() - Date.now()).toBeGreaterThan(29.9 * 60_000);
+    expect(until!.getTime() - Date.now()).toBeLessThanOrEqual(30 * 60_000);
   });
 
   it('a second request while the first waits gets the first link back as a refusal, and a third after it ends is served', async () => {
