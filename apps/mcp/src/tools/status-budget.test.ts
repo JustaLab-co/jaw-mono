@@ -19,6 +19,7 @@ import { useTestDb } from '@/db/test-db';
 
 const asked: { id: string }[] = [];
 const chain = { start: 1, end: 2_000_000_000, spend: 0n, held: 0n };
+const held = new Map<string, bigint>();
 
 // The permission manager answers for whichever permission is asked about: approved,
 // not revoked, nothing spent this period, so any spend in jaw_status comes from elsewhere unless a test sets `chain`.
@@ -26,10 +27,10 @@ vi.mock('@/lib/chain', async (original) => ({
   ...(await original<object>()),
   publicClientFor: () =>
     ({
-      readContract: async ({ functionName, args }: { functionName: string; args: [{ salt: bigint }] }) => {
+      readContract: async ({ functionName, args }: { functionName: string; args: [unknown] }) => {
         if (functionName === 'getHash') return asked[asked.length - 1].id;
         if (functionName === 'getCurrentPeriod') return chain;
-        if (functionName === 'balanceOf') return chain.held;
+        if (functionName === 'balanceOf') return held.get(String(args[0]).toLowerCase()) ?? chain.held;
         return functionName === 'isApproved';
       },
     }) as unknown as PublicClient,
@@ -37,7 +38,10 @@ vi.mock('@/lib/chain', async (original) => ({
 
 setTestEnv();
 beforeAll(useTestDb);
-beforeEach(() => Object.assign(chain, { start: 1, end: 2_000_000_000, spend: 0n, held: 0n }));
+beforeEach(() => {
+  Object.assign(chain, { start: 1, end: 2_000_000_000, spend: 0n, held: 0n });
+  held.clear();
+});
 
 /** The owner approves a new budget in their wallet; the chain mock then answers for it. */
 async function approve(c: Awaited<ReturnType<typeof connect>>, perDay: string) {
@@ -76,7 +80,6 @@ describe('jaw_status after a budget change', () => {
       perDay: { amount: '1000000' },
       spentToday: { amount: '0' },
       remainingToday: { amount: '300000' },
-      sendableToday: { amount: '1000000' },
     });
   });
 });
@@ -211,6 +214,24 @@ describe('given the session already holds float from an earlier pull', () => {
   });
 });
 
+describe('given the account holds 0.744 USDC and its payer 0.032 USDC of float', () => {
+  it('when jaw_status runs, then the balance is the account alone and the float is reported apart', async () => {
+    const c = await connect();
+    const t = (await verifyBearer(c.access_token))?.extra?.tenant as Tenant;
+    await approve(c, '1');
+    held.set(t.account.toLowerCase(), 744_000n);
+    held.set(t.sessionAddress.toLowerCase(), 32_000n);
+
+    const { structuredContent: out } = await callTool(c.access_token, 'jaw_status', {});
+
+    expect(out.balance).toMatchObject({ amount: '744000' });
+    expect(out.payer).toMatchObject({ address: t.sessionAddress, held: { amount: '32000' } });
+    expect(out.summary).toContain('The account holds 744000 base units of USDC.');
+    expect(out.summary).not.toContain('776000');
+    expect(out.summary).not.toContain('32000');
+  });
+});
+
 describe('given 1 USDC a day, float from an earlier window and 0.9 paid today', () => {
   it('when jaw_status runs, then remainingToday is what the daily cap still allows', async () => {
     const c = await connect();
@@ -269,7 +290,7 @@ describe('given 1 USDC a day and the reads jaw_status combines', () => {
     return status.structuredContent;
   }
 
-  it('when only a payment ran today, then it is spent and the rest is left for both actions', async () => {
+  it('when only a payment ran today, then it is spent and the rest is left', async () => {
     const out = await budgetAfter(async (t, id) => {
       await fundedRow(t, id, 'pay_onlypull', '100000', new Date());
       await paidRow(t, id, 'pay_onlypaid', '100000');
@@ -278,7 +299,6 @@ describe('given 1 USDC a day and the reads jaw_status combines', () => {
     expect(out.budget).toMatchObject({
       spentToday: { amount: '100000' },
       remainingToday: { amount: '900000' },
-      sendableToday: { amount: '900000' },
     });
     expect(out.summary).toContain('Ready to pay, 900000 base units left today.');
   });
@@ -290,7 +310,6 @@ describe('given 1 USDC a day and the reads jaw_status combines', () => {
     expect(out.budget).toMatchObject({
       spentToday: { amount: '10000' },
       remainingToday: { amount: '990000' },
-      sendableToday: { amount: '990000' },
     });
     expect(out.summary).toContain('Ready to pay, 990000 base units left today.');
   });
@@ -304,7 +323,6 @@ describe('given 1 USDC a day and the reads jaw_status combines', () => {
     expect(out.budget).toMatchObject({
       spentToday: { amount: '110000' },
       remainingToday: { amount: '890000' },
-      sendableToday: { amount: '890000' },
     });
   });
 
@@ -317,9 +335,8 @@ describe('given 1 USDC a day and the reads jaw_status combines', () => {
     expect(out.budget).toMatchObject({
       spentToday: { amount: '160000' },
       remainingToday: { amount: '840000' },
-      sendableToday: { amount: '790000' },
     });
-    expect(out.summary).toContain('840000 base units left today for payments, 790000 for transfers.');
+    expect(out.summary).toContain('Ready to pay, 840000 base units left today.');
   });
 
   it('when a transfer took 0.99 and the float holds more than is left, then 0.01 is left', async () => {
@@ -329,11 +346,10 @@ describe('given 1 USDC a day and the reads jaw_status combines', () => {
     expect(out.budget).toMatchObject({
       spentToday: { amount: '990000' },
       remainingToday: { amount: '10000' },
-      sendableToday: { amount: '10000' },
     });
   });
 
-  it('when 0.9 was paid today from an earlier day float, then a send is held to what the day has left', async () => {
+  it('when 0.9 was paid today from an earlier day float, then only what the day has left remains', async () => {
     const out = await budgetAfter(async (t, id) => {
       const now = Date.now();
       await fundedRow(t, id, 'pay_oldfloat', '900000', new Date(now - 2 * 3_600_000));
@@ -343,7 +359,6 @@ describe('given 1 USDC a day and the reads jaw_status combines', () => {
     expect(out.budget).toMatchObject({
       spentToday: { amount: '900000' },
       remainingToday: { amount: '100000' },
-      sendableToday: { amount: '100000' },
     });
   });
 });

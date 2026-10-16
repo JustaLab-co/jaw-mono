@@ -1854,7 +1854,7 @@ describe('given a 1 USDC/day budget and 1.5 USDC already in the payer', () => {
         expect(await rowOf(r.structuredContent!.paymentId)).toMatchObject({ reserved: null, topUpAmount: null });
       }
       const status = await callTool(c.access_token, 'jaw_status', {});
-      expect(status.structuredContent.balances.session.amount).toBe('600000');
+      expect(status.structuredContent.payer.held.amount).toBe('600000');
     }
   );
 });

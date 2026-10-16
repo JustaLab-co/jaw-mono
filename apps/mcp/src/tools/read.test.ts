@@ -79,8 +79,10 @@ describe('read tools', () => {
       chainId: 'eip155:84532',
       readiness: { status: 'not_ready', reason: 'no_grant' },
       budget: null,
-      balances: { account: null, session: null },
+      balance: null,
+      payer: { address: t.sessionAddress, held: null },
     });
+    expect(r.structuredContent).not.toHaveProperty('balances');
     expect(r.content[0].text).toContain('jaw_request_budget');
   });
 

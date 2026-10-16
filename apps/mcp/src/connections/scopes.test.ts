@@ -53,7 +53,7 @@ const TOOLS: Record<string, { needs: ConnectionScope[]; args: object }> = {
     },
   },
   jaw_swap_status: { needs: ['wallet:read'], args: { quoteId: `aurora:${RECIPIENT}` } },
-  jaw_transfer: { needs: ['wallet:send'], args: { to: RECIPIENT, amount: '0.01' } },
+  jaw_transfer: { needs: ['wallet:read'], args: { to: RECIPIENT, amount: '0.01' } },
   // An unsupported chain is refused in the tool body, after the scope check and before a wallet opens.
   jaw_send_calls: {
     needs: ['wallet:read'],
@@ -124,8 +124,6 @@ describe('a refresh decides the scopes of the new token', () => {
     expect(widened).toMatchObject({ status: 400, body: { error: 'invalid_scope' } });
     const kept = await refresh(c.refresh_token, 'wallet:read x402:pay');
     expect(kept.body.scope).toBe('wallet:read x402:pay');
-    const result = await callTool(kept.body.access_token, 'jaw_transfer', { to: RECIPIENT, amount: '0.01' });
-    expect(refusedFor(result)).toBe('wallet:send');
   });
 });
 

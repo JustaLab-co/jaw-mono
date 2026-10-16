@@ -83,7 +83,7 @@ const sendCallsInput = z.strictObject({
 });
 export type SendCallsInput = z.infer<typeof sendCallsInput>;
 
-const ownerCallsOutput = z.object({
+export const ownerCallsOutput = z.object({
   id: z.string(),
   idempotencyKey: z.string(),
   state: z.enum(['awaiting_owner', 'owner_declined', 'expired', 'sent', 'landed', 'reverted']),
@@ -100,7 +100,7 @@ const ownerCallsOutput = z.object({
 });
 type OwnerCallsOutput = z.infer<typeof ownerCallsOutput>;
 
-type SendResult = {
+export type SendResult = {
   content: { type: 'text'; text: string }[];
   structuredContent?: OwnerCallsOutput;
   isError?: boolean;

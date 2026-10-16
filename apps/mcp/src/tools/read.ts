@@ -40,9 +40,8 @@ type Readiness = z.infer<typeof readiness>;
 const budgetOutput = z.object({
   permissionId: z.string(),
   perDay: money,
-  spentToday: money.nullable().describe('What left this budget today: payments and transfers'),
+  spentToday: money.nullable().describe('What left this budget today'),
   remainingToday: money.nullable().describe('The most the next payment can spend today'),
-  sendableToday: money.nullable().describe('The most the next jaw_transfer can move today'),
   resetsAt: z.string().nullable(),
   expiresAt: z.string(),
 });
@@ -69,15 +68,11 @@ async function budgetOf(grant: Grant, t: Tenant, held: bigint | null) {
   const figure = (amount: bigint) => ({ amount: amount.toString(), asset });
   let spent = null;
   let payable = null;
-  let sendable = null;
   if (day) {
-    const pulled = day.refilled + day.sentFromAccount;
-    const left = dayLeft(allowance, day);
-    const pullable = floorZero(allowance - pulled);
+    const pullable = floorZero(allowance - day.refilled - day.sentFromAccount);
     const floatFundable = (held ?? 0n) + floorZero(pullable - earlier);
     spent = figure(day.paid + day.sentFromAccount);
-    payable = figure(least(left, floatFundable));
-    sendable = figure(least(left, pullable));
+    payable = figure(least(dayLeft(allowance, day), floatFundable));
   }
   return {
     liveness,
@@ -86,7 +81,6 @@ async function budgetOf(grant: Grant, t: Tenant, held: bigint | null) {
       perDay: { amount: grant.allowance, asset },
       spentToday: spent,
       remainingToday: payable,
-      sendableToday: sendable,
       resetsAt: (counted?.status === 'ok' && isoOf(counted.end + 1)) || null,
       expiresAt: grant.expiresAt.toISOString(),
     }),
@@ -118,9 +112,13 @@ async function balanceOf(network: string, owner: Address) {
 const statusOutput = z.object({
   account: z.string(),
   chainId: z.string().describe('CAIP-2'),
-  sessionAddress: z.string().describe('The address this connection pays from once it has a budget'),
   connectionExpiresAt: z.string().describe('When this connection expires; call jaw_disconnect before then'),
-  balances: z.object({ account: money.nullable(), session: money.nullable() }),
+  balance: money.nullable().describe("The account's USDC: the user's balance"),
+  payer: z
+    .object({ address: z.string(), held: money.nullable() })
+    .describe(
+      "Where this connection pays x402 services from, and the USDC its budget already moved there. Not part of the user's balance: never add it."
+    ),
   budget: budgetOutput.nullable(),
   readiness,
   summary: z.string(),
@@ -135,39 +133,37 @@ const NOT_READY: Record<NonNullable<Readiness['reason']>, string> = {
 
 function leftToday(budget: z.infer<typeof budgetOutput> | undefined) {
   const pay = budget?.remainingToday;
-  const send = budget?.sendableToday;
-  if (!pay) return '';
-  if (!send || send.amount === pay.amount) return `, ${pay.amount} base units left today`;
-  return `, ${pay.amount} base units left today for payments, ${send.amount} for transfers`;
+  return pay ? `, ${pay.amount} base units left today` : '';
 }
 
 const EXPIRY_WARN_MS = 48 * 60 * 60 * 1000;
 
 async function status(t: Tenant) {
   const network = caip2(t.chainId);
-  const [account, session, grant, conn] = await Promise.all([
+  const [balance, held, grant, conn] = await Promise.all([
     balanceOf(network, t.account),
     balanceOf(network, t.sessionAddress),
     currentGrant(t.connectionId),
     findActive(t.connectionId),
   ]);
-  const read = grant && (await budgetOf(grant, t, session && BigInt(session.amount)));
+  const read = grant && (await budgetOf(grant, t, held && BigInt(held.amount)));
   const ready = readinessOf(t, read?.liveness);
   const expiresAt = conn?.expiresAt ?? new Date();
   const nearExpiry = expiresAt.getTime() - Date.now() < EXPIRY_WARN_MS;
+  const holds = balance ? ` The account holds ${balance.amount} base units of USDC.` : '';
   const base =
     ready.status === 'ready'
-      ? `Connected as ${t.account} on ${network}. Ready to pay${leftToday(read?.budget)}.`
-      : `Connected as ${t.account} on ${network}. ${NOT_READY[ready.reason ?? 'no_grant']}`;
+      ? `Connected as ${t.account} on ${network}.${holds} Ready to pay${leftToday(read?.budget)}.`
+      : `Connected as ${t.account} on ${network}.${holds} ${NOT_READY[ready.reason ?? 'no_grant']}`;
   const summary = nearExpiry
     ? `${base} Connection expires ${expiresAt.toISOString()}; call jaw_disconnect soon.`
     : base;
   return statusOutput.parse({
     account: t.account,
     chainId: network,
-    sessionAddress: t.sessionAddress,
     connectionExpiresAt: expiresAt.toISOString(),
-    balances: { account, session },
+    balance,
+    payer: { address: t.sessionAddress, held },
     budget: read?.budget ?? null,
     readiness: ready,
     summary,
@@ -303,7 +299,7 @@ export function registerReadTools(server: McpServer) {
     'jaw_status',
     {
       description:
-        'The connected account, its USDC balances, and whether this connection can pay yet (with a link when not).',
+        "The connected account, its USDC balance, and whether this connection can pay x402 services yet (with a link when not). The balance is the account's alone.",
       inputSchema: z.strictObject({}),
       outputSchema: statusOutput,
       annotations: readOnly,
