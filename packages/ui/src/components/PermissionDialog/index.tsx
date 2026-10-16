@@ -44,6 +44,7 @@ export const PermissionDialog = ({
   apiKey,
   onConfirm,
   onCancel,
+  onAddFunds,
   isProcessing,
   status,
   isLoadingTokenInfo = false,
@@ -178,6 +179,11 @@ export const PermissionDialog = ({
     !missingCalls &&
     !revocationBlocks &&
     !erc20CannotPay;
+
+  const fundsBlocked = feeBlockReason === 'funds';
+  const offerAddFunds = fundsBlocked && !!onAddFunds;
+  let confirmLabel = isGrant ? 'Grant' : 'Revoke';
+  if (fundsBlocked) confirmLabel = offerAddFunds ? 'Add funds' : 'Insufficient Funds';
 
   const displayAddress = (address: string) => getDisplayAddress(resolvedAddresses[address], address);
   const truncateAddress = (address: string) => getDisplayAddress(undefined, address);
@@ -375,12 +381,12 @@ export const PermissionDialog = ({
                 {isGrant ? 'Cancel' : 'Keep it'}
               </Button>
               <Button
-                onClick={onConfirm}
-                disabled={!canConfirm}
-                variant={isGrant ? 'default' : 'destructive'}
+                onClick={offerAddFunds ? onAddFunds : onConfirm}
+                disabled={offerAddFunds ? isProcessing : !canConfirm}
+                variant={isGrant || offerAddFunds ? 'default' : 'destructive'}
                 className="rounded-box text-button h-10 flex-[56] font-semibold focus-visible:ring-1"
               >
-                {feeBlockReason === 'funds' && !revocationBlocks ? 'Insufficient Funds' : isGrant ? 'Grant' : 'Revoke'}
+                {confirmLabel}
               </Button>
             </div>
           </div>
