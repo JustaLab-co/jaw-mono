@@ -27,8 +27,9 @@ export interface AddFundsViewProps {
   appLogoUrl?: string | null;
   origin?: string;
   /**
-   * The user is done. Deposits land off-app, so this is a normal finish rather
-   * than a rejection, and the request resolves null.
+   * The user is done. The host decides what that settles: `wallet_addFunds`
+   * resolves null, while a request that opened this view because it was short
+   * of funds ends with a rejection so the caller retries after the deposit.
    */
   onDone: () => void;
 }
