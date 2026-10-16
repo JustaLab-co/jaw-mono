@@ -266,6 +266,19 @@ describe('connecting through the owner wallet', () => {
     await held.release();
   });
 
+  it('given the wallet session ended with nobody on it, when the owner clicks again, then a new session opens for the same page', async () => {
+    const held = heldWallets();
+    setWallet({ openWallet: held.openWallet });
+    const browser = new Browser();
+    const start = await startAuthorization(browser);
+    await held.release();
+
+    const clicked = await browser.post(`${ISSUER}/interaction/${start.uid}/open`);
+
+    expect(await clicked.json()).toEqual({ url: 'http://keys.test/cli-bridge?session=h2' });
+    expect(held.opened()).toBe(2);
+  });
+
   it('given an approved connection, when completion comes without the ticket of its page, then it is refused', async () => {
     setWallet({ openWallet: fakeWallet(walletAnswers(owner())) });
     const browser = new Browser();
@@ -334,5 +347,18 @@ describe('per-account connection cap', () => {
     const start = await startAuthorization(browser, { scope: 'wallet:read' });
     await walletsSettled();
     expect(await stateOf(browser, start.uid!)).toEqual({ state: 'approved' });
+  });
+});
+
+// Last: the session it opens counts against the client's share until the interaction ends.
+describe('the owner window', () => {
+  it('given the owner clicks Open JAW, then the wallet waits for them close to thirty minutes', async () => {
+    const held = heldWallets();
+    let until: Date | undefined;
+    setWallet({ openWallet: (chainId, at, client) => ((until = at), held.openWallet(chainId, at, client)) });
+    await startAuthorization(new Browser());
+    expect(until!.getTime() - Date.now()).toBeGreaterThan(28.9 * 60_000);
+    expect(until!.getTime() - Date.now()).toBeLessThanOrEqual(29 * 60_000);
+    await held.release();
   });
 });

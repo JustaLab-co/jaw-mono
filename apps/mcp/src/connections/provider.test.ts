@@ -5,7 +5,9 @@ import type { Hex } from 'viem';
 import { privateKeyToAddress } from 'viem/accounts';
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { useTestDb } from '@/db/test-db';
+import type { ReadPermission } from '@/grants/permission';
 import {
+  approvedOnChain,
   Browser,
   connect,
   follow,
@@ -526,6 +528,20 @@ describe('authorization server', () => {
     const [a, b] = [await claimsOf(first.access_token), await claimsOf(second.access_token)];
     expect(a.sub).not.toBe(b.sub);
     expect((await verifyBearer(second.access_token))?.extra?.tenant).toMatchObject({ account: second.signer.address });
+  });
+
+  it('given a second connection from the same browser approved twenty minutes in, then it still gets its tokens', async () => {
+    const browser = new Browser();
+    await connect(undefined, {}, browser);
+    // Twenty minutes pass while the owner approves in the wallet.
+    const late: ReadPermission = async (...args) => {
+      await db.query(
+        `update oauth_payloads set expires_at = expires_at - interval '20 minutes' where expires_at is not null`
+      );
+      return approvedOnChain(...args);
+    };
+    const second = await connect(undefined, {}, browser, late);
+    expect(second.status).toBe(200);
   });
 
   it('a database dump and the sealing keys recover no session key', async () => {

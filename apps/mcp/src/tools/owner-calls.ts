@@ -12,6 +12,7 @@ import {
 import { z } from 'zod';
 import { tenant, type Tenant } from '@/connections/auth';
 import { chainClients } from '@/adapters/session-host';
+import { APPROVE_WITHIN_MS } from '@/connections/config';
 import { ownerRelay, WalletBusy, type OpenWallet, type Wallet } from '@/connections/relay';
 import { findActive } from '@/connections/rows';
 import { keepLease, leaseHeld } from '@/connections/session-lease';
@@ -40,7 +41,6 @@ const MAX_CALLS = 10;
 const LINK_RATE_LIMIT = 10;
 const ACCOUNT_LINK_RATE_LIMIT = 20;
 const STATUS_RATE_LIMIT = 30;
-const APPROVE_WINDOW_MS = 10 * 60_000;
 const SENT_GRACE_MS = 10 * 60_000;
 
 const callInput = z.strictObject({
@@ -322,7 +322,7 @@ export async function sendCalls(t: Tenant, input: SendCallsInput, deps: OwnerCal
   if (open) return inProgress(open);
   if ((await countOpenLinks(t.account)) >= MAX_OPEN_PER_ACCOUNT) return accountBusy();
   if (!(await findActive(t.connectionId))) return connectionEnded();
-  const approveBy = new Date(Date.now() + APPROVE_WINDOW_MS);
+  const approveBy = new Date(Date.now() + APPROVE_WITHIN_MS);
   const wallet = await openWalletFor(t, approveBy, deps);
   if (!wallet) return walletBusy(key);
   let row: OwnerCallRow | null | typeof FULL = null;

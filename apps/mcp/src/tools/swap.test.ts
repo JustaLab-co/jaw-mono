@@ -736,7 +736,9 @@ describe('the owner window', () => {
   it.each([
     [300, 240_000],
     [660, 600_000],
-    [900, 600_000],
+    [900, 840_000],
+    [1860, 1_800_000],
+    [3600, 1_800_000],
   ])('given a quote TTL of %i s, when approve_by is set, then it is %i ms after the payment', (ttl, window) => {
     const paidAt = new Date('2026-10-13T12:00:00.000Z');
 

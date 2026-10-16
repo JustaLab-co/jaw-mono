@@ -4,7 +4,7 @@ import { databaseUnreachable, log } from '@/lib/edge';
 import { resolvesPublic, safeFetch } from '@/lib/safe-fetch';
 import { PgAdapter, sessionKey, successorId } from './adapter';
 import { bridge, requestUrl } from './bridge';
-import { config, type Config } from './config';
+import { APPROVE_WITHIN_MS, config, type Config } from './config';
 import { findActive } from './rows';
 import { CONNECTION_SCOPES, FIRST_PARTY_CLIENTS } from './scopes';
 import { seal } from './seal';
@@ -55,7 +55,13 @@ export function createProvider(cfg: Config, overrides: Partial<Configuration> = 
       const grantId = ctx.oidc.result?.consent?.grantId;
       return grantId ? ctx.oidc.provider.Grant.find(grantId) : undefined;
     },
-    ttl: { AuthorizationCode: 60, Interaction: 600, Session: 600, Grant: 30 * DAY, RefreshToken: 30 * DAY },
+    ttl: {
+      AuthorizationCode: 60,
+      Interaction: APPROVE_WITHIN_MS / 1000,
+      Session: APPROVE_WITHIN_MS / 1000,
+      Grant: 30 * DAY,
+      RefreshToken: 30 * DAY,
+    },
     interactions: { url: (_ctx, interaction) => `/interaction/${interaction.uid}`, policy },
     cookies: { keys: cfg.ring.keys.map((k) => k.cookie) },
     jwks: { keys: [cfg.ring.jwk as never] },
