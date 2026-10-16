@@ -2912,8 +2912,9 @@ function AddFundsDialogWrapper({
 // The Add Funds view a request blocked on funds can switch to. Offered only when the account
 // that is short is the connected one, the address Add Funds shows. Leaving it ends the request,
 // so the caller retries after the deposit and nothing is ever signed from it. Opening it is a
-// no-op while a submission is in flight, for the same reason `handleCancel` is.
-function useAddFundsView({
+// no-op while a submission is in flight, for the same reason `handleCancel` is. Once open, it
+// keeps the address and chain it opened with until the request settles, and settles it once.
+export function useAddFundsView({
   account,
   short,
   chainId,
@@ -2934,29 +2935,35 @@ function useAddFundsView({
   originLabel?: string;
   onReject: (error?: Error) => void;
 }) {
-  const [view, setView] = useState<'request' | 'add-funds'>('request');
-  const address = account?.address;
-  if (!address || address.toLowerCase() !== short?.toLowerCase()) {
-    return { addFundsView: null, onAddFunds: undefined };
-  }
-  if (view === 'request') {
+  const [target, setTarget] = useState<{ address: string; chainId: number } | null>(null);
+  const leftRef = useRef(false);
+
+  if (!target) {
+    const address = account?.address;
+    if (!address || address.toLowerCase() !== short?.toLowerCase()) {
+      return { addFundsView: null, onAddFunds: undefined };
+    }
     const onAddFunds = () => {
-      if (!submittingRef.current) setView('add-funds');
+      if (!submittingRef.current) setTarget({ address, chainId });
     };
     return { addFundsView: null, onAddFunds };
   }
 
-  const leave = () => onReject(UIError.userRejected(ADD_FUNDS_REJECTION));
+  const leave = () => {
+    if (leftRef.current) return;
+    leftRef.current = true;
+    onReject(UIError.userRejected(ADD_FUNDS_REJECTION));
+  };
   const addFundsView = (
     <AddFundsDialog
       open
       onOpenChange={(next) => {
         if (!next) leave();
       }}
-      address={address}
-      chainId={chainId}
+      address={target.address}
+      chainId={target.chainId}
       // Only a deposit on the request's chain unblocks it.
-      chains={[chainId]}
+      chains={[target.chainId]}
       mainnetRpcUrl={getMainnetRpcUrl(apiKey)}
       apiKey={apiKey}
       appName={appName}

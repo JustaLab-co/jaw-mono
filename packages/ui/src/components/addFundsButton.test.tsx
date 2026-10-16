@@ -11,6 +11,7 @@ vi.mock('./ShellDialog', () => ({ ShellDialog: ({ children }: { children: ReactN
 import { TransactionDialog } from './TransactionDialog';
 import { PermissionDialog } from './PermissionDialog';
 import { INSUFFICIENT_FUNDS_ERROR } from '../utils/transactionFailure';
+import type { FeeTokenOption } from './FeeTokenSelector';
 
 const ALICE = '0x71f2F1c2dc94cDaBFE29Cb355119f8683AE0969b';
 const SPENDER = '0x1111111111111111111111111111111111111111';
@@ -19,8 +20,14 @@ const SPENDER = '0x1111111111111111111111111111111111111111';
 const button = (html: string, label: string) => html.match(new RegExp(`<button[^>]*>${label}</button>`))?.[0];
 const DISABLED = / disabled=""/;
 
-type Loading = 'gasFeeLoading' | 'isLoadingTokenInfo' | 'prefundLoading';
-type Block = { gasEstimationError: string; onAddFunds?: () => void } & Partial<Record<Loading, boolean>>;
+type Loading = 'gasFeeLoading' | 'feeTokensLoading' | 'isLoadingTokenInfo' | 'prefundLoading';
+type Block = {
+  gasEstimationError: string;
+  onAddFunds?: () => void;
+  feeTokens?: FeeTokenOption[];
+  selectedFeeToken?: FeeTokenOption;
+  isPayingWithErc20?: boolean;
+} & Partial<Record<Loading, boolean>>;
 const FUNDS: Block = { gasEstimationError: INSUFFICIENT_FUNDS_ERROR, onAddFunds: () => undefined };
 
 const transaction = (block: Block) =>
@@ -64,10 +71,31 @@ const permission = (mode: 'grant' | 'revoke') => (block: Block) =>
     />
   );
 
-const PERMISSION_LOADING: Loading[] = ['gasFeeLoading', 'isLoadingTokenInfo'];
+const token = (symbol: string, isNative: boolean, isSelectable: boolean): FeeTokenOption => ({
+  uid: symbol,
+  symbol,
+  address: isNative ? '0x0000000000000000000000000000000000000000' : SPENDER,
+  decimals: isNative ? 18 : 6,
+  balance: isSelectable ? 10_000_000n : 0n,
+  balanceFormatted: isSelectable ? '10' : '0',
+  isNative,
+  isSelectable,
+  gasCostFormatted: '0.01',
+  gasCostMaxFormatted: '0.02',
+});
+const USDC = token('USDC', false, true);
+// The ETH estimate failed on prefund; the token list then shows USDC can pay the fee.
+const PAYS_WITH_USDC: Block = {
+  ...FUNDS,
+  feeTokens: [token('ETH', true, false), USDC],
+  selectedFeeToken: USDC,
+  isPayingWithErc20: true,
+};
+
+const PERMISSION_LOADING: Loading[] = ['gasFeeLoading', 'feeTokensLoading', 'isLoadingTokenInfo'];
 
 describe.each([
-  ['a transaction', transaction, 'Confirm', ['gasFeeLoading'] as Loading[]],
+  ['a transaction', transaction, 'Confirm', ['gasFeeLoading', 'feeTokensLoading'] as Loading[]],
   ['a grant', permission('grant'), 'Grant', [...PERMISSION_LOADING, 'prefundLoading'] as Loading[]],
   ['a revoke', permission('revoke'), 'Revoke', PERMISSION_LOADING],
 ])('the primary button of %s', (_, render, confirm, loading) => {
@@ -87,6 +115,14 @@ describe.each([
       expect(button(html, 'Insufficient Funds')).toMatch(DISABLED);
     }
   );
+
+  it('Given a funds block once the fee tokens load and USDC can pay, When it renders, Then it reads as today', () => {
+    const html = render(PAYS_WITH_USDC);
+
+    expect(button(html, 'Add funds')).toBeUndefined();
+    expect(button(html, 'Insufficient Funds')).toBeUndefined();
+    expect(button(html, confirm)).toBeDefined();
+  });
 
   it('Given a will-fail block, When it renders, Then it does not offer Add funds', () => {
     const html = render({ gasEstimationError: 'execution reverted', onAddFunds: () => undefined });
