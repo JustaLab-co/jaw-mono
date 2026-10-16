@@ -226,6 +226,32 @@ export type CeremonyApproval = {
 };
 
 /**
+ * The outcome of Account.setupRecovery and Account.cancelRecovery
+ */
+export type RecoverySetupResult = {
+    /**
+     * 'account': one userOp on the connected chain, landed before this returns.
+     * 'relay': one owner signature the backend fans out; poll `getAdminBatch`
+     * with `batchId` until no chain is in flight.
+     */
+    door: 'account' | 'relay';
+    /** The relayed batch; absent for the account door */
+    batchId?: Hex;
+    /** One entry per chain the operation targets */
+    chains: AdminBatchChain[];
+};
+
+/**
+ * What Account.getRecovery returns
+ */
+export type RecoveryState = {
+    /** The recovery config on every recovery-supported chain */
+    chains: RecoveryChainConfig[];
+    /** The account's ceremonies not executed on any chain, newest first */
+    pending: CeremonyListEntry[];
+};
+
+/**
  * The canonical MultiOwnable owner bytes: a 20-byte address padded to 32 bytes,
  * or a 64-byte passkey public key as it is. Commitments, subjects and
  * `ownerBytes` all take this form.
@@ -389,16 +415,21 @@ function assertThreshold(config: RecoveryConfig): void {
     }
 }
 
+type RecoveryChange =
+    | { kind: 'add'; method: Required<RecoveryMethodInput> }
+    | { kind: 'remove'; recoveryId: Hex }
+    | { kind: 'threshold'; threshold: number };
+
 /**
- * The minimal ordered batch that takes the on-chain config to the desired one.
+ * The minimal ordered change list from the on-chain config to the desired one.
  *
  * Adds come first, then a delay change as a remove plus an add of the same
  * commitment (the manager has no edit), then the threshold, then removals. The
  * threshold drops to 1 for the swap so the removal never falls below it, and is
- * set before the removals for the same reason. The batch is atomic on chain, so
- * no intermediate state ever exists there.
+ * set before the removals for the same reason. Both doors apply the list
+ * atomically, so no intermediate state ever exists on chain.
  */
-export function diffRecoveryConfig(current: RecoveryChainConfig, desired: RecoveryConfig): AdminOp[] {
+function planRecoveryChanges(current: RecoveryChainConfig, desired: RecoveryConfig): RecoveryChange[] {
     assertThreshold(desired);
 
     const registered = new Map(
@@ -407,10 +438,10 @@ export function diffRecoveryConfig(current: RecoveryChainConfig, desired: Recove
     const wanted = desired.recoveries.map(withProvider);
     const wantedKeys = new Set(wanted.map((method) => methodKey(method.provider, method.commitment)));
 
-    const ops: AdminOp[] = [];
+    const changes: RecoveryChange[] = [];
 
     for (const method of wanted) {
-        if (!registered.has(methodKey(method.provider, method.commitment))) ops.push(addRecoveryOp(method));
+        if (!registered.has(methodKey(method.provider, method.commitment))) changes.push({ kind: 'add', method });
     }
 
     const redelayed = wanted.filter((method) => {
@@ -418,20 +449,52 @@ export function diffRecoveryConfig(current: RecoveryChainConfig, desired: Recove
         return existing !== undefined && existing.delay !== method.delay;
     });
     if (redelayed.length > 0) {
-        ops.push(setThresholdOp(1));
+        changes.push({ kind: 'threshold', threshold: 1 });
         for (const method of redelayed) {
             const existing = registered.get(methodKey(method.provider, method.commitment));
-            if (existing) ops.push(removeRecoveryOp(existing.recoveryId), addRecoveryOp(method));
+            if (existing) changes.push({ kind: 'remove', recoveryId: existing.recoveryId }, { kind: 'add', method });
         }
     }
 
-    if (redelayed.length > 0 || current.threshold !== desired.threshold) ops.push(setThresholdOp(desired.threshold));
-
-    for (const [key, method] of registered) {
-        if (!wantedKeys.has(key)) ops.push(removeRecoveryOp(method.recoveryId));
+    if (redelayed.length > 0 || current.threshold !== desired.threshold) {
+        changes.push({ kind: 'threshold', threshold: desired.threshold });
     }
 
-    return ops;
+    for (const [key, method] of registered) {
+        if (!wantedKeys.has(key)) changes.push({ kind: 'remove', recoveryId: method.recoveryId });
+    }
+
+    return changes;
+}
+
+function changeToOp(change: RecoveryChange): AdminOp {
+    switch (change.kind) {
+        case 'add':
+            return addRecoveryOp(change.method);
+        case 'remove':
+            return removeRecoveryOp(change.recoveryId);
+        case 'threshold':
+            return setThresholdOp(change.threshold);
+    }
+}
+
+function changeToCall(account: Address, change: RecoveryChange): { to: Address; data: Hex } {
+    switch (change.kind) {
+        case 'add':
+            return buildAddRecoveryCall(account, change.method);
+        case 'remove':
+            return buildRemoveRecoveryCall(account, change.recoveryId);
+        case 'threshold':
+            return buildSetRecoveryThresholdCall(account, change.threshold);
+    }
+}
+
+/**
+ * The admin-door batch that takes the on-chain config to the desired one, as
+ * the owner signs it: one signature, relayed to every enrolled chain.
+ */
+export function diffRecoveryConfig(current: RecoveryChainConfig, desired: RecoveryConfig): AdminOp[] {
+    return planRecoveryChanges(current, desired).map(changeToOp);
 }
 
 /**
@@ -457,6 +520,17 @@ export function buildAddRecoveryCall(account: Address, method: RecoveryMethodInp
             abi: RECOVERY_MANAGER_ABI,
             functionName: 'addRecovery',
             args: [account, provider, commitment, delay],
+        }),
+    };
+}
+
+export function buildRemoveRecoveryCall(account: Address, recoveryId: Hex): { to: Address; data: Hex } {
+    return {
+        to: RECOVERY_MANAGER_ADDRESS,
+        data: encodeFunctionData({
+            abi: RECOVERY_MANAGER_ABI,
+            functionName: 'removeRecovery',
+            args: [account, recoveryId],
         }),
     };
 }
@@ -487,10 +561,11 @@ export function buildCancelRecoveryRequestCall(requestId: Hex): { to: Address; d
 }
 
 /**
- * The first setup on a chain, through the account door: one userOp that enrols
- * the manager when it is not an owner yet, registers every missing method and
- * sets the threshold. The account pays like for any userOp, so this works on a
- * chain where the account has no code yet and the relayer cannot go.
+ * The account door: one userOp that enrols the manager when it is not an owner
+ * yet, then applies every change the config needs, in the order the admin batch
+ * would. The account pays like for any userOp, so this works on a chain where
+ * the account has no code yet and the relayer cannot go. It is the first setup
+ * on a chain and, for accounts that cannot use the admin door, every edit.
  *
  * @param current - The chain's config from the configs read; absent when the
  * backend lists nothing for the chain, which reads as nothing registered.
@@ -500,22 +575,12 @@ export function buildRecoverySetupCalls(
     current: RecoveryChainConfig | undefined,
     desired: RecoveryConfig
 ): Array<{ to: Address; data: Hex }> {
-    assertThreshold(desired);
-
-    const registered = new Set(
-        (current?.recoveries ?? []).map((method) => methodKey(method.provider, method.commitment))
-    );
+    const base = current ?? { chainId: 0, deployed: false, enrolled: false, threshold: 0, recoveries: [] };
     const calls: Array<{ to: Address; data: Hex }> = [];
 
-    if (!current?.enrolled) calls.push(buildEnrollRecoveryCall(account));
+    if (!base.enrolled) calls.push(buildEnrollRecoveryCall(account));
 
-    for (const method of desired.recoveries.map(withProvider)) {
-        if (!registered.has(methodKey(method.provider, method.commitment)))
-            calls.push(buildAddRecoveryCall(account, method));
-    }
-
-    if ((current?.threshold ?? 0) !== desired.threshold)
-        calls.push(buildSetRecoveryThresholdCall(account, desired.threshold));
+    for (const change of planRecoveryChanges(base, desired)) calls.push(changeToCall(account, change));
 
     return calls;
 }

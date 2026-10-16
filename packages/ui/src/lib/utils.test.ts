@@ -7,7 +7,7 @@ import { cn } from './utils';
 // loader, so it can't be imported here. Evaluating the source in a CJS shim reads the real keys
 // rather than a copy of them, which is the whole point of the checks below.
 function loadTailwindConfig() {
-  const path = fileURLToPath(new URL('../../tailwind.config.js', import.meta.url));
+  const path = fileURLToPath(new URL('../../tailwind.config.cjs', import.meta.url));
   const src = readFileSync(path, 'utf8');
   const module = { exports: {} as Record<string, any> };
   new Function('module', 'exports', 'require', src)(module, module.exports, () => ({}));
@@ -38,7 +38,7 @@ describe('cn — custom type roles', () => {
   });
 
   it('keeps the roles list in step with the config', () => {
-    // A token added to tailwind.config.js but not to FONT_SIZE_ROLES would silently stop
+    // A token added to tailwind.config.cjs but not to FONT_SIZE_ROLES would silently stop
     // overriding component base sizes; the per-role cases above are what actually catch it.
     expect(FONT_SIZE_KEYS.length).toBeGreaterThan(0);
   });
