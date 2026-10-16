@@ -1,3 +1,13 @@
+## 1.7.0 (2026-10-16)
+
+### 🚀 Features
+
+- **mcp:** add the hosted MCP server with x402 budgets ([#367](https://github.com/JustaLab-co/jaw-mono/pull/367))
+
+### ❤️ Thank You
+
+- Mariano Aguero @mariano-aguero
+
 ## 1.6.4 (2026-10-14)
 
 ### 🧱 Updated Dependencies
