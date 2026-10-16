@@ -10,6 +10,7 @@ import { Eyebrow } from '../primitives';
 import { isNativeToken } from '../../utils/tokenBalance';
 import { isWildcard } from '../../utils/permissionExecution';
 import { getDisplayAddress } from '../../utils';
+import type { AddressIdentity } from '../../hooks/useAddressIdentities';
 import { isLongSpendAmount } from '../../utils/displayFormat';
 import type { CallPermission, SpendPermission, SpenderPrefundDisplay } from './types';
 
@@ -328,15 +329,13 @@ function ContractGroup({
  */
 export function AllowedCalls({
   calls,
-  resolvedAddresses,
-  resolvedAvatars,
+  identityOf,
   truncateAddress,
   tokenMeta,
   chainId,
 }: {
   calls: CallPermission[];
-  resolvedAddresses: Record<string, string>;
-  resolvedAvatars: Record<string, string>;
+  identityOf: (address: string) => AddressIdentity | undefined;
   truncateAddress: (address: string) => string;
   tokenMeta?: Record<string, { symbol: string }>;
   chainId?: number;
@@ -358,8 +357,8 @@ export function AllowedCalls({
               <ContractGroup
                 key={group.target}
                 group={group}
-                resolvedName={resolvedAddresses[group.target]}
-                avatarUrl={resolvedAvatars[group.target]}
+                resolvedName={identityOf(group.target)?.ensName ?? undefined}
+                avatarUrl={identityOf(group.target)?.ensAvatar ?? undefined}
                 truncatedAddress={truncateAddress(group.target)}
                 tokenSymbol={tokenMeta?.[group.target]?.symbol}
                 chainId={chainId}

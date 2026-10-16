@@ -29,6 +29,7 @@ import {
   isAddress,
   parseAbiItem,
   RpcError,
+  RpcRequestError,
   TimeoutError,
 } from 'viem';
 import { SUPPORTED_CHAINS } from '@jaw.id/core';
@@ -353,6 +354,7 @@ export async function applyFormat(
 // ============================================================================
 
 const tokenCache = new Map<string, TokenInfo | null>();
+const tokenCacheKey = (chainId: number, address: string) => `${chainId}:${address.toLowerCase()}`;
 
 /** The EIP-3668 `OffchainLookup` selector, as it arrives in a revert this client will not follow. */
 const OFFCHAIN_LOOKUP_SELECTOR = '0x556f1830';
@@ -375,8 +377,16 @@ export function isAnsweredReadFailure(err: unknown): boolean {
   if (reverted instanceof ContractFunctionRevertedError) return !reverted.raw?.startsWith(OFFCHAIN_LOOKUP_SELECTOR);
   if (err.walk((e) => e instanceof ContractFunctionZeroDataError)) return true;
   // Not a revert, so an error from the transport or the node's JSON-RPC layer (a 503, a
-  // timeout, a rate limit) is an outage. What is left is data that came back and did not decode.
-  return !err.walk((e) => e instanceof HttpRequestError || e instanceof TimeoutError || e instanceof RpcError);
+  // timeout, a rate limit) is an outage. A code viem does not map arrives as a bare
+  // RpcRequestError, which is not an RpcError. What is left is data that came back and did
+  // not decode.
+  return !err.walk(
+    (e) =>
+      e instanceof HttpRequestError ||
+      e instanceof TimeoutError ||
+      e instanceof RpcError ||
+      e instanceof RpcRequestError
+  );
 }
 
 /**
@@ -415,7 +425,7 @@ const ERC20_DECIMALS_SYMBOL = [
 export function createTokenResolver(chainId: number, apiKey?: string) {
   const client = getJawPublicClient(chainId, apiKey);
   return async function resolveToken(address: string): Promise<TokenInfo | null> {
-    const key = `${chainId}:${address.toLowerCase()}`;
+    const key = tokenCacheKey(chainId, address);
     if (tokenCache.has(key)) return tokenCache.get(key) ?? null;
     try {
       const [decimals, symbol] = await Promise.all([
@@ -444,8 +454,7 @@ export function createTokenResolver(chainId: number, apiKey?: string) {
 
 /** Whether a read has already proven the address on this chain is not an ERC-20. */
 export function isKnownNonToken(chainId: number, address: string): boolean {
-  const key = `${chainId}:${address.toLowerCase()}`;
-  return tokenCache.has(key) && tokenCache.get(key) === null;
+  return tokenCache.get(tokenCacheKey(chainId, address)) === null;
 }
 
 /** Native-coin symbol for a chain, sourced from viem's chain config via `SUPPORTED_CHAINS`. */

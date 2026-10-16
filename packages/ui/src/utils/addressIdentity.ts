@@ -41,7 +41,6 @@ export interface TokenIdentity {
 
 export interface ClearSigningIdentity {
   name: string;
-  icon: string;
 }
 
 export interface IdentitySources {
@@ -59,7 +58,13 @@ interface Answer<T> {
   value: T | null;
   /** Whether the answer is complete, so later callers may skip the request. */
   keep: boolean;
+  /** How long a kept answer holds before the next caller asks again. Unset: the session. */
+  ttlMs?: number;
 }
+
+// A name can appear mid-session: onboarding adds a subname and goes straight to Connect, before
+// the reverse index has it. A miss is kept this long, so the next dialog after that asks again.
+const ENS_MISS_TTL_MS = 60_000;
 
 interface Entry {
   /** The latest answer, kept or not. What callers render. */
@@ -68,6 +73,8 @@ interface Entry {
   answered: boolean;
   /** Whether the answer is complete, so later callers may skip the request. */
   kept: boolean;
+  /** When a kept answer stops counting as kept. Null: never. */
+  expiresAt: number | null;
   pending: Promise<unknown> | null;
   /** Changes on every update, so a subscriber can tell whether its own keys moved. */
   revision: number;
@@ -80,7 +87,14 @@ let revision = 0;
 let generation = 0;
 
 function update(key: string, change: Partial<Omit<Entry, 'revision'>>): void {
-  const entry = entries.get(key) ?? { value: null, answered: false, kept: false, pending: null, revision: 0 };
+  const entry = entries.get(key) ?? {
+    value: null,
+    answered: false,
+    kept: false,
+    expiresAt: null,
+    pending: null,
+    revision: 0,
+  };
   entries.set(key, { ...entry, ...change, revision: ++revision });
   listeners.forEach((listener) => listener());
 }
@@ -122,20 +136,39 @@ export function peekIdentity<S extends IdentitySource>(
   return { value: entry.value as IdentitySources[S] | null, loading: entry.pending !== null };
 }
 
+function isKept(entry: Entry | undefined): boolean {
+  return !!entry?.kept && (entry.expiresAt === null || Date.now() < entry.expiresAt);
+}
+
 function remember<T>(key: string, load: () => Promise<Answer<T>>): void {
   const entry = entries.get(key);
-  if (entry?.kept || entry?.pending) return;
+  if (isKept(entry) || entry?.pending) return;
 
   const started = generation;
-  const settle = (value: T | null, keep: boolean) => {
-    if (started === generation) update(key, { value, answered: true, kept: keep, pending: null });
+  const settle = (value: T | null, keep: boolean, ttlMs?: number) => {
+    if (started !== generation) return;
+    const expiresAt = keep && ttlMs !== undefined ? Date.now() + ttlMs : null;
+    update(key, { value, answered: true, kept: keep, expiresAt, pending: null });
   };
   const request = load().then(
-    ({ value, keep }) => settle(value, keep),
+    ({ value, keep, ttlMs }) => settle(value, keep, ttlMs),
     // Unreachable: show nothing for now, and keep nothing so the next caller asks again.
     () => settle(null, false)
   );
-  update(key, { pending: request });
+  if (entry?.answered) {
+    // A retry: what callers see changes from settled to loading, so they hear about it.
+    update(key, { pending: request });
+  } else {
+    // Still loading either way; recording the request changes nothing a caller renders.
+    entries.set(key, {
+      value: null,
+      answered: false,
+      kept: false,
+      expiresAt: null,
+      pending: request,
+      revision: entry?.revision ?? 0,
+    });
+  }
 }
 
 // ---- ENS -------------------------------------------------------------------
@@ -171,7 +204,7 @@ async function readEns(input: ReverseInput, { mainnetRpcUrl }: IdentityContext):
     throw new Error('Reverse resolution unanswered');
   }
   const identity = resolved[key];
-  if (!identity) return { value: null, keep: true };
+  if (!identity) return { value: null, keep: true, ttlMs: ENS_MISS_TTL_MS };
   // getChainLabel remembers its own answers, a failed lookup included, so the suffix here is
   // whatever every other name on the page carries.
   const label = await getChainLabel(input.chainId, mainnetRpcUrl);
@@ -251,7 +284,7 @@ async function readClearSigning({ address, chainId }: ReverseInput): Promise<Ans
   const path = (await getCalldataIndex())[caip10(chainId, address)];
   if (!path) return { value: null, keep: true };
   const name = await readContractName(path);
-  return { value: name ? { name, icon: tokenIconUrl(chainId, address) } : null, keep: true };
+  return { value: name ? { name } : null, keep: true };
 }
 
 // ---- Entry point -----------------------------------------------------------

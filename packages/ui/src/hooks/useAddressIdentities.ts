@@ -26,6 +26,7 @@ export interface AddressIdentity {
   tokenIcon: string | null;
   /** ERC-7730 contract name, e.g. "Uniswap V3 Router 2". */
   clearSigningName: string | null;
+  /** Null for now: ERC-7730 has no logo yet, and no other source covers these contracts. */
   clearSigningIcon: string | null;
   /** The best name available: ENS name, then clear-signing name, then token symbol, then the short address. */
   label: string;
@@ -59,7 +60,9 @@ function buildIdentity(input: ReverseInput, include: readonly IdentitySource[]):
     tokenSymbol: token.value?.symbol ?? null,
     tokenIcon: token.value?.icon ?? null,
     clearSigningName: clearSigning.value?.name ?? null,
-    clearSigningIcon: clearSigning.value?.icon ?? null,
+    // ERC-7730 descriptors carry no logo, and the token icon endpoint answers 404 for most
+    // contracts, so there is no source to point at yet.
+    clearSigningIcon: null,
     label: ens.value?.name ?? clearSigning.value?.name ?? token.value?.symbol ?? formatAddress(input.address),
     loading: { ens: ens.loading, token: token.loading, clearSigning: clearSigning.loading },
   };

@@ -75,7 +75,12 @@ async function fetchReverseBatch(
   if (withRecords) url.searchParams.set('records', 'true');
 
   const res = await fetch(url.toString());
-  if (!res.ok) throw new Error(`Reverse resolution failed: ${res.status}`);
+  if (!res.ok) {
+    // A 5xx or a 429 is an outage, worth asking again. Any other 4xx says the request
+    // itself is wrong, which asking again will not fix, so it reads as no names.
+    if (res.status >= 500 || res.status === 429) throw new Error(`Reverse resolution failed: ${res.status}`);
+    return {};
+  }
 
   const body = (await res.json()) as ReverseResponse;
   const data = body.result?.data;

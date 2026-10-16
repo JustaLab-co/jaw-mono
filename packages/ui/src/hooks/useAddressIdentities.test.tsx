@@ -26,6 +26,7 @@ const ROUTER = '0x4444444444444444444444444444444444444444';
 // resolved would answer from there.
 const MKR = '0x5555555555555555555555555555555555555555';
 const GATEWAY_TOKEN = '0x6666666666666666666666666666666666666666';
+const RATE_LIMITED_TOKEN = '0x7777777777777777777777777777777777777777';
 
 const SELECTOR = {
   decimals: toFunctionSelector('function decimals() view returns (uint8)'),
@@ -36,7 +37,10 @@ const SELECTOR = {
 interface Network {
   ens?: Record<string, { name: string; avatar?: boolean }>;
   ensDown?: boolean;
-  tokens?: Record<string, { name?: string; nameBehindGateway?: boolean; symbol: string; decimals: number }>;
+  tokens?: Record<
+    string,
+    { name?: string; nameBehindGateway?: boolean; nameRpcError?: boolean; symbol: string; decimals: number }
+  >;
   contracts?: Record<string, string>;
 }
 
@@ -59,6 +63,13 @@ function rpcRevert(id: number, data?: Hex) {
   });
 }
 
+// A JSON-RPC error code viem does not map, which it rethrows as a bare RpcRequestError.
+function rpcUnknownError(id: number) {
+  return new Response(JSON.stringify({ jsonrpc: '2.0', id, error: { code: -32029, message: 'rate limited' } }), {
+    status: 200,
+  });
+}
+
 // An EIP-3668 `OffchainLookup` revert: the read is refused, not answered.
 const OFFCHAIN_LOOKUP: Hex = `0x556f1830${'00'.repeat(160)}`;
 
@@ -69,7 +80,7 @@ function stubNetwork(network: Network): Calls {
   const ens = lower(network.ens) as Map<string, { name: string; avatar?: boolean }>;
   const tokens = lower(network.tokens) as Map<
     string,
-    { name?: string; nameBehindGateway?: boolean; symbol: string; decimals: number }
+    { name?: string; nameBehindGateway?: boolean; nameRpcError?: boolean; symbol: string; decimals: number }
   >;
 
   vi.stubGlobal(
@@ -129,6 +140,7 @@ function stubNetwork(network: Network): Calls {
         );
       }
       if (selector === SELECTOR.name && token.nameBehindGateway) return rpcRevert(body.id, OFFCHAIN_LOOKUP);
+      if (selector === SELECTOR.name && token.nameRpcError) return rpcUnknownError(body.id);
       if (selector === SELECTOR.name && token.name) {
         return rpcResult(body.id, encodeFunctionResult({ abi: erc20Abi, functionName: 'name', result: token.name }));
       }
@@ -206,7 +218,8 @@ describe('useAddressIdentity', () => {
       tokenSymbol: 'USDC',
       tokenIcon: tokenIconUrl(CHAIN, TOKEN),
       clearSigningName: 'Circle USDC',
-      clearSigningIcon: tokenIconUrl(CHAIN, TOKEN),
+      // No logo source for ERC-7730 contracts yet; the token endpoint 404s for most of them.
+      clearSigningIcon: null,
       label: 'usdc.eth',
       loading: { ens: false, token: false, clearSigning: false },
     });
@@ -394,6 +407,87 @@ describe('request cost', () => {
     await settle();
 
     expect(seen.get('b')?.tokenName).toBe('Gateway Token');
+  });
+
+  it('asks again for a name() the node refused with an unmapped JSON-RPC error', async () => {
+    stubNetwork({ tokens: { [RATE_LIMITED_TOKEN]: { nameRpcError: true, symbol: 'RL', decimals: 18 } } });
+    await render(createElement(Probe, { id: 'a', address: RATE_LIMITED_TOKEN }));
+    await settle();
+    expect(seen.get('a')).toMatchObject({ tokenName: null, tokenSymbol: 'RL' });
+
+    act(() => root.unmount());
+    root = createRoot(container);
+    vi.unstubAllGlobals();
+    stubNetwork({ tokens: { [RATE_LIMITED_TOKEN]: { name: 'Rate Limited', symbol: 'RL', decimals: 18 } } });
+    await render(createElement(Probe, { id: 'b', address: RATE_LIMITED_TOKEN }));
+    await settle();
+
+    expect(seen.get('b')?.tokenName).toBe('Rate Limited');
+  });
+
+  // Onboarding adds a subname and opens Connect straight away, before the reverse index has it.
+  it('asks again for a name it missed once a minute has passed', async () => {
+    vi.useFakeTimers({ toFake: ['Date'] });
+    try {
+      stubNetwork({});
+      await render(createElement(Probe, { id: 'a', address: ALICE, options: { ...OPTIONS, include: ['ens'] } }));
+      await settle();
+      act(() => root.unmount());
+
+      vi.unstubAllGlobals();
+      let calls = stubNetwork({ ens: { [ALICE]: { name: 'alice.eth' } } });
+      root = createRoot(container);
+      await render(createElement(Probe, { id: 'b', address: ALICE, options: { ...OPTIONS, include: ['ens'] } }));
+      await settle();
+      expect(calls.ens).toHaveLength(0);
+      act(() => root.unmount());
+
+      vi.setSystemTime(Date.now() + 60_001);
+      vi.unstubAllGlobals();
+      calls = stubNetwork({ ens: { [ALICE]: { name: 'alice.eth' } } });
+      root = createRoot(container);
+      await render(createElement(Probe, { id: 'c', address: ALICE, options: { ...OPTIONS, include: ['ens'] } }));
+      await settle();
+
+      expect(calls.ens).toHaveLength(1);
+      expect(seen.get('c')?.ensName).toBe('alice.eth');
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('keeps a name it found past that minute', async () => {
+    vi.useFakeTimers({ toFake: ['Date'] });
+    try {
+      stubNetwork({ ens: { [ALICE]: { name: 'alice.eth' } } });
+      await render(createElement(Probe, { id: 'a', address: ALICE, options: { ...OPTIONS, include: ['ens'] } }));
+      await settle();
+      act(() => root.unmount());
+
+      vi.setSystemTime(Date.now() + 60_001);
+      vi.unstubAllGlobals();
+      const calls = stubNetwork({});
+      root = createRoot(container);
+      await render(createElement(Probe, { id: 'b', address: ALICE, options: { ...OPTIONS, include: ['ens'] } }));
+      await settle();
+
+      expect(calls.ens).toHaveLength(0);
+      expect(seen.get('b')?.ensName).toBe('alice.eth');
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('renders a mount once while its first answer is on the way', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(() => new Promise(() => undefined))
+    );
+
+    await render(createElement(Probe, { id: 'a', address: ALICE }));
+    await settle();
+
+    expect(renders.get('a')).toBe(1);
   });
 
   it('upgrades a component that saw an outage once another one gets the answer', async () => {

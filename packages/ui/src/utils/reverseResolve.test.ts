@@ -138,6 +138,19 @@ describe('reverseResolveIdentities', () => {
     expect(await reverseResolveIdentities([input], RPC_URL)).toEqual({ resolved: {}, unanswered: [input] });
   });
 
+  it('reports the addresses of a rate-limited response as unanswered', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue({ ok: false, status: 429 }));
+
+    expect(await reverseResolveIdentities([input], RPC_URL)).toEqual({ resolved: {}, unanswered: [input] });
+  });
+
+  // Any other 4xx says the request itself is wrong; asking again would not change the answer.
+  it('reports a 400 as answered with no name', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue({ ok: false, status: 400 }));
+
+    expect(await reverseResolveIdentities([input], RPC_URL)).toEqual({ resolved: {}, unanswered: [] });
+  });
+
   it('reports the addresses of a failed request as unanswered', async () => {
     vi.stubGlobal('fetch', vi.fn().mockRejectedValue(new TypeError('Failed to fetch')));
 
