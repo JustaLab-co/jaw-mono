@@ -111,13 +111,10 @@ describe('audit events', () => {
   it('records a tool that threw as an error, once', async () => {
     const c = await connect();
     vi.spyOn(grantsStore, 'currentGrant').mockRejectedValueOnce(new Error('boom'));
-    const res = await call(c.access_token, 'jaw_transfer', {
-      to: '0x2222222222222222222222222222222222222222',
-      amount: '1',
-    });
+    const res = await call(c.access_token, 'jaw_status', {});
     expect(res.json.result.isError).toBe(true);
     const events = await eventsOf(await connectionOf(c.access_token));
-    expect(events.map((e) => [e.tool, e.outcome])).toEqual([['jaw_transfer', 'error']]);
+    expect(events.map((e) => [e.tool, e.outcome])).toEqual([['jaw_status', 'error']]);
   });
 
   it('records no arguments, tokens or signatures', async () => {

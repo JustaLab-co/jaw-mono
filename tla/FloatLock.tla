@@ -37,8 +37,6 @@
                                     flight (206)
      tools/connections.ts 170       revoke: withFloat + endConnection, the same
                                     shape as a disconnect with nothing to send
-     tools/send.ts 59-132           jaw_transfer: assertHeld then send; it moves
-                                    no float the caps read, so it is not a thread
 
    Assumptions:
    - Each turn runs on its own replica, so inTurn/queuedWithin and the per

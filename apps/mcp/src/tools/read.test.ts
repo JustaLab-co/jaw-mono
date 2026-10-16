@@ -79,13 +79,15 @@ describe('read tools', () => {
       chainId: 'eip155:84532',
       readiness: { status: 'not_ready', reason: 'no_grant' },
       budget: null,
-      balances: { account: null, session: null },
+      balance: null,
+      payer: { address: t.sessionAddress, held: null },
     });
+    expect(r.structuredContent).not.toHaveProperty('balances');
     expect(r.content[0].text).toContain('jaw_request_budget');
   });
 
-  it('given a token with wallet:read wallet:send, when jaw_status runs, then it is not ready for lack of x402:pay', async () => {
-    const c = await connect(undefined, { scope: 'wallet:read wallet:send' });
+  it('given a token with wallet:read alone, when jaw_status runs, then it is not ready for lack of x402:pay', async () => {
+    const c = await connect(undefined, { scope: 'wallet:read' });
     const r = await callTool(c.access_token, 'jaw_status', {});
     expect(r.structuredContent.readiness).toEqual({ status: 'not_ready', reason: 'no_scope' });
     expect(r.content[0].text).toContain('x402:pay');

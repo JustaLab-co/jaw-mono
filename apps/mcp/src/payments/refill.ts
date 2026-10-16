@@ -217,10 +217,10 @@ export function refillHook(c: RefillContext): EnsureFunds {
           });
           if (!verdict.ok) return { ok: false, code: verdict.code, reason: verdict.reason };
           const day = await readDaySpend(c.grant, c.payer, entries, sent, c.clients);
-          // Transfers refuse on the same read, so neither half of the day spends what the other used.
+          // The day counts the chain's whole spend under the permission, not only payments.
           if (!day) return { ok: false, code: 'chain_unavailable', reason: UNREADABLE };
           if (BigInt(requirement.amount) > dayLeft(BigInt(c.grant.allowance), day)) {
-            const reason = `payment ${requirement.amount} would pass the ${c.grant.allowance} a day shared with transfers`;
+            const reason = `payment ${requirement.amount} would pass the ${c.grant.allowance} a day`;
             return { ok: false, code: 'budget_exhausted', reason };
           }
           const refillMs = budget.left() - SEND_RESERVE_MS;

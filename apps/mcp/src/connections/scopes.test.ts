@@ -40,7 +40,7 @@ const TOOLS: Record<string, { needs: ConnectionScope[]; args: object }> = {
   jaw_connections: { needs: ['wallet:read'], args: {} },
   jaw_revoke_connection: { needs: ['wallet:read'], args: { id: 'conn_nope' } },
   jaw_disconnect: { needs: ['wallet:read'], args: {} },
-  jaw_request_budget: { needs: ['x402:pay', 'wallet:send'], args: { perDay: '1' } },
+  jaw_request_budget: { needs: ['x402:pay'], args: { perDay: '1' } },
   jaw_pay_and_fetch: { needs: ['x402:pay'], args: { url: 'http://127.0.0.1:9/paid' } },
   jaw_swap: {
     needs: ['x402:pay'],
@@ -53,7 +53,7 @@ const TOOLS: Record<string, { needs: ConnectionScope[]; args: object }> = {
     },
   },
   jaw_swap_status: { needs: ['wallet:read'], args: { quoteId: `aurora:${RECIPIENT}` } },
-  jaw_transfer: { needs: ['wallet:send'], args: { to: RECIPIENT, amount: '0.01' } },
+  jaw_transfer: { needs: ['wallet:read'], args: { to: RECIPIENT, amount: '0.01' } },
   // An unsupported chain is refused in the tool body, after the scope check and before a wallet opens.
   jaw_send_calls: {
     needs: ['wallet:read'],
@@ -62,7 +62,7 @@ const TOOLS: Record<string, { needs: ConnectionScope[]; args: object }> = {
   jaw_send_calls_status: { needs: ['wallet:read'], args: { id: `oc_${'A'.repeat(22)}` } },
 };
 
-const PROFILES = ['wallet:read', 'wallet:read x402:pay', 'wallet:read wallet:send', 'wallet:read x402:pay wallet:send'];
+const PROFILES = ['wallet:read', 'wallet:read x402:pay'];
 
 const refusedFor = (result: { content: { text: string }[] }) =>
   result.content[0].text.match(/not granted (\S+)\./)?.[1];
@@ -100,9 +100,9 @@ describe('the scope matrix', () => {
 });
 
 describe('a refresh decides the scopes of the new token', () => {
-  it('given all three scopes, when a refresh narrows to wallet:read wallet:send, then paying is refused', async () => {
-    const c = await connect(undefined, { scope: 'wallet:read x402:pay wallet:send' });
-    const narrowed = await refresh(c.refresh_token, 'wallet:read wallet:send');
+  it('given both scopes, when a refresh narrows to wallet:read, then paying is refused', async () => {
+    const c = await connect(undefined, { scope: 'wallet:read x402:pay' });
+    const narrowed = await refresh(c.refresh_token, 'wallet:read');
     const result = await callTool(narrowed.body.access_token, 'jaw_pay_and_fetch', { url: 'http://127.0.0.1:9/paid' });
     expect(result.content[0].text).toMatch(/^insufficient_scope: /);
     expect(refusedFor(result)).toBe('x402:pay');
@@ -118,14 +118,12 @@ describe('a refresh decides the scopes of the new token', () => {
     expect(res.status).toBe(401);
   });
 
-  it('given a connection granted wallet:read x402:pay, when a refresh asks for all three, then it is refused and the refresh token still works', async () => {
-    const c = await connect(undefined, { scope: 'wallet:read x402:pay' });
-    const widened = await refresh(c.refresh_token, 'wallet:read x402:pay wallet:send');
+  it('given a connection granted wallet:read, when a refresh asks for x402:pay too, then it is refused and the refresh token still works', async () => {
+    const c = await connect(undefined, { scope: 'wallet:read' });
+    const widened = await refresh(c.refresh_token, 'wallet:read x402:pay');
     expect(widened).toMatchObject({ status: 400, body: { error: 'invalid_scope' } });
-    const kept = await refresh(c.refresh_token, 'wallet:read x402:pay');
-    expect(kept.body.scope).toBe('wallet:read x402:pay');
-    const result = await callTool(kept.body.access_token, 'jaw_transfer', { to: RECIPIENT, amount: '0.01' });
-    expect(refusedFor(result)).toBe('wallet:send');
+    const kept = await refresh(c.refresh_token, 'wallet:read');
+    expect(kept.body.scope).toBe('wallet:read');
   });
 });
 
@@ -143,4 +141,22 @@ describe('the scopes an authorization grants', () => {
       expect(budgets).toHaveLength(scope === 'wallet:read' ? 0 : 1);
     }
   );
+});
+
+describe('the removed wallet:send scope', () => {
+  it('given an authorization that still asks for it, then the provider drops it and grants the rest', async () => {
+    const c = await connect(undefined, { scope: 'wallet:read wallet:send' });
+    expect(c.scope).toBe('wallet:read');
+    const t = await tenantOf(c.access_token);
+    expect(t.scopes).toEqual(['wallet:read']);
+    const [row] = await getDb().select().from(connections).where(eq(connections.id, t.connectionId));
+    expect(row.scopes).toEqual(['wallet:read']);
+    expect(await getDb().select().from(grants).where(eq(grants.connectionId, t.connectionId))).toEqual([]);
+  });
+
+  it('given a refresh that asks for it, then it is refused invalid_scope naming it', async () => {
+    const c = await connect(undefined, { scope: 'wallet:read x402:pay' });
+    const widened = await refresh(c.refresh_token, 'wallet:read x402:pay wallet:send');
+    expect(widened).toMatchObject({ status: 400, body: { error: 'invalid_scope', scope: 'wallet:send' } });
+  });
 });

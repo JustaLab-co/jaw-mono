@@ -971,10 +971,10 @@ describe('jaw_pay_and_fetch', () => {
     expect(refills).toEqual([]);
   });
 
-  it('given a token with wallet:read wallet:send on a connection with a budget, when it pays, then it is refused insufficient_scope naming x402:pay', async () => {
+  it('given a token with wallet:read alone on a connection with a budget, when it pays, then it is refused insufficient_scope naming x402:pay', async () => {
     const { t } = await connected('1');
     const result = await pay(
-      { ...t, scopes: ['wallet:read', 'wallet:send'] },
+      { ...t, scopes: ['wallet:read'] },
       { url: url('/exact'), idempotencyKey: 'no-pay-scope' },
       deps()
     );
@@ -989,7 +989,7 @@ describe('jaw_pay_and_fetch', () => {
     const { t } = await connected('1');
     await getDb().insert(settings).values({ key: 'payments_paused', value: true });
     try {
-      const result = await pay({ ...t, scopes: ['wallet:read', 'wallet:send'] }, { url: url('/exact') }, deps());
+      const result = await pay({ ...t, scopes: ['wallet:read'] }, { url: url('/exact') }, deps());
       expect(result.content[0].text).toMatch(/^insufficient_scope: /);
     } finally {
       await getDb().delete(settings).where(eq(settings.key, 'payments_paused'));
@@ -1854,7 +1854,7 @@ describe('given a 1 USDC/day budget and 1.5 USDC already in the payer', () => {
         expect(await rowOf(r.structuredContent!.paymentId)).toMatchObject({ reserved: null, topUpAmount: null });
       }
       const status = await callTool(c.access_token, 'jaw_status', {});
-      expect(status.structuredContent.balances.session.amount).toBe('600000');
+      expect(status.structuredContent.payer.held.amount).toBe('600000');
     }
   );
 });
