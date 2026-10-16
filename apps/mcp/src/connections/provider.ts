@@ -39,9 +39,9 @@ export function createProvider(cfg: Config, overrides: Partial<Configuration> = 
   const provider = new Provider(cfg.issuer, {
     adapter: (model: string) => new PgAdapter(model, cfg.ring),
     clients: [JAW_CLI],
-    // Every client is public, so one that declares no application_type is a native
-    // app: per RFC 8252 7.3 its loopback redirect may use any port, which a CIMD
-    // document that registers http://localhost/callback with no port relies on.
+    // A client that declares no application_type is a native app: per RFC 8252 7.3
+    // its loopback redirect may use any port, which a CIMD document that registers
+    // http://localhost/callback with no port relies on.
     clientDefaults: { id_token_signed_response_alg: 'EdDSA', application_type: 'native' },
     findAccount: async (_ctx, sub) =>
       (await findActive(sub)) ? { accountId: sub, claims: () => ({ sub }) } : undefined,
@@ -83,9 +83,11 @@ export function createProvider(cfg: Config, overrides: Partial<Configuration> = 
         // Public clients, or a known keyed one: a jwks_uri is fetched for every request it signs.
         allowClient: async (_ctx, client) => {
           const keys = KEYED_CLIENTS.get(new URL(client.clientId).origin);
-          const keyed = keys !== undefined && client.jwksUri === keys;
-          const method = keyed ? 'private_key_jwt' : 'none';
-          if (client.tokenEndpointAuthMethod !== method || (!keyed && client.jwksUri)) return false;
+          const allowed =
+            keys && client.jwksUri === keys
+              ? client.tokenEndpointAuthMethod === 'private_key_jwt'
+              : client.tokenEndpointAuthMethod === 'none' && !client.jwksUri;
+          if (!allowed) return false;
           if (hasUnstorableText(client.clientName ?? '')) return false;
           if (!client.grantTypeAllowed('refresh_token')) {
             throw new errors.InvalidClientMetadata('grant_types must include refresh_token');
