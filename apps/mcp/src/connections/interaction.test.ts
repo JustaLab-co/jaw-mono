@@ -266,6 +266,19 @@ describe('connecting through the owner wallet', () => {
     await held.release();
   });
 
+  it('given the wallet session ended with nobody on it, when the owner clicks again, then a new session opens for the same page', async () => {
+    const held = heldWallets();
+    setWallet({ openWallet: held.openWallet });
+    const browser = new Browser();
+    const start = await startAuthorization(browser);
+    await held.release();
+
+    const clicked = await browser.post(`${ISSUER}/interaction/${start.uid}/open`);
+
+    expect(await clicked.json()).toEqual({ url: 'http://keys.test/cli-bridge?session=h2' });
+    expect(held.opened()).toBe(2);
+  });
+
   it('given an approved connection, when completion comes without the ticket of its page, then it is refused', async () => {
     setWallet({ openWallet: fakeWallet(walletAnswers(owner())) });
     const browser = new Browser();

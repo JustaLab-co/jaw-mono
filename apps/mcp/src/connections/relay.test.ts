@@ -216,6 +216,68 @@ describe('a link the owner opens late', () => {
   });
 });
 
+describe('a session nobody opens for ten minutes', () => {
+  const JOIN_MS = 10 * 60_000;
+  afterEach(() => vi.useRealTimers());
+
+  it('given no browser joins within ten minutes, then the session ends and its slot opens another', async () => {
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'setInterval', 'clearInterval'] });
+    vi.resetModules();
+    const fresh = await import('./relay');
+    const until = new Date(Date.now() + 30 * 60_000);
+    const held = await Promise.all(
+      Array.from({ length: fresh.SESSION_LIMITS.connect }, () => fresh.connectRelay(84532, until))
+    );
+    const ids = held.map((w) => new URL(w.url).searchParams.get('session')!);
+    await vi.waitFor(() => expect(ids.every((id) => sessions.get(id)?.cli)).toBe(true));
+    await expect(fresh.connectRelay(84532, until)).rejects.toBeInstanceOf(fresh.WalletBusy);
+    const ended = held[0].run(async () => 'ran').catch((err: Error) => err.message);
+
+    await vi.advanceTimersByTimeAsync(JOIN_MS - 1_000);
+    await expect(fresh.connectRelay(84532, until)).rejects.toBeInstanceOf(fresh.WalletBusy);
+    await vi.advanceTimersByTimeAsync(1_000);
+
+    expect(await ended).toBe('the wallet session ended');
+    expect((await fresh.connectRelay(84532, until)).url).toMatch(/cli-bridge/);
+  });
+
+  it('given the browser joined, then the session runs past ten minutes', async () => {
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'setInterval', 'clearInterval'] });
+    const wallet = await connectRelay(84532, new Date(Date.now() + 30 * 60_000));
+    const session = new URL(wallet.url).searchParams.get('session')!;
+    const opened = await page(wallet.url, () => ({
+      success: true,
+      data: ['0x00000000000000000000000000000000000000bb'],
+    }));
+    await vi.waitFor(() => expect(sessions.get(session)?.browser).toBeDefined());
+    await new Promise((r) => setImmediate(r));
+
+    await vi.advanceTimersByTimeAsync(2 * JOIN_MS);
+
+    expect(await wallet.run((ask) => ask('eth_requestAccounts', []))).toEqual([
+      '0x00000000000000000000000000000000000000bb',
+    ]);
+    await opened.shutdown;
+  });
+  it('given a tool link nobody opens for ten minutes, then it still runs once the owner opens it', async () => {
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'setInterval', 'clearInterval'] });
+    const wallet = await openRelay(84532, 30 * 60_000);
+    const session = new URL(wallet.url).searchParams.get('session')!;
+    await vi.waitFor(() => expect(sessions.get(session)?.cli).toBeDefined());
+
+    await vi.advanceTimersByTimeAsync(2 * JOIN_MS);
+    const opened = await page(wallet.url, () => ({
+      success: true,
+      data: ['0x00000000000000000000000000000000000000cc'],
+    }));
+
+    expect(await wallet.run((ask) => ask('eth_requestAccounts', []))).toEqual([
+      '0x00000000000000000000000000000000000000cc',
+    ]);
+    await opened.shutdown;
+  });
+});
+
 describe('what the wallet page can get wrong', () => {
   it('given a refusal with no code, then the caller gets the message and no code', async () => {
     const wallet = await openRelay(84532);
