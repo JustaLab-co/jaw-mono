@@ -670,6 +670,7 @@ export class ReactUIHandler implements UIHandler {
             paymasters={this.config.paymasters}
             appName={this.config.appName}
             appLogoUrl={this.config.appLogoUrl}
+            originLabel={this.originLabel}
           />
         );
 
@@ -686,6 +687,7 @@ export class ReactUIHandler implements UIHandler {
             paymasters={this.config.paymasters}
             appName={this.config.appName}
             appLogoUrl={this.config.appLogoUrl}
+            originLabel={this.originLabel}
           />
         );
 
@@ -1778,6 +1780,7 @@ function TransactionDialogWrapper({
     apiKey,
     appName,
     appLogoUrl,
+    originLabel,
     onReject,
   });
   if (addFundsView) return addFundsView;
@@ -2150,6 +2153,7 @@ function SendTransactionDialogWrapper({
     apiKey,
     appName,
     appLogoUrl,
+    originLabel,
     onReject,
   });
   if (addFundsView) return addFundsView;
@@ -2206,6 +2210,7 @@ function PermissionDialogWrapper({
   paymasters,
   appName,
   appLogoUrl,
+  originLabel,
 }: {
   request: PermissionUIRequest;
   onApprove: (data: any) => void;
@@ -2216,6 +2221,7 @@ function PermissionDialogWrapper({
   paymasters?: Record<number, PaymasterConfig>;
   appName?: string;
   appLogoUrl?: string | null;
+  originLabel?: string;
 }) {
   const [open, setOpen] = useState(true);
   const [isProcessing, setIsProcessing] = useState(false);
@@ -2688,6 +2694,7 @@ function PermissionDialogWrapper({
     apiKey,
     appName,
     appLogoUrl,
+    originLabel,
     onReject,
   });
   if (addFundsView) return addFundsView;
@@ -2904,8 +2911,8 @@ function AddFundsDialogWrapper({
 
 // The Add Funds view a request blocked on funds can switch to. Offered only when the account
 // that is short is the connected one, the address Add Funds shows. Leaving it ends the request,
-// so the caller retries after the deposit and nothing is ever signed from it. Both are no-ops
-// while a submission is in flight, for the same reason `handleCancel` is.
+// so the caller retries after the deposit and nothing is ever signed from it. Opening it is a
+// no-op while a submission is in flight, for the same reason `handleCancel` is.
 function useAddFundsView({
   account,
   short,
@@ -2914,6 +2921,7 @@ function useAddFundsView({
   apiKey,
   appName,
   appLogoUrl,
+  originLabel,
   onReject,
 }: {
   account: Account | null;
@@ -2923,6 +2931,7 @@ function useAddFundsView({
   apiKey?: string;
   appName?: string;
   appLogoUrl?: string | null;
+  originLabel?: string;
   onReject: (error?: Error) => void;
 }) {
   const [view, setView] = useState<'request' | 'add-funds'>('request');
@@ -2937,9 +2946,7 @@ function useAddFundsView({
     return { addFundsView: null, onAddFunds };
   }
 
-  const leave = () => {
-    if (!submittingRef.current) onReject(UIError.userRejected(ADD_FUNDS_REJECTION));
-  };
+  const leave = () => onReject(UIError.userRejected(ADD_FUNDS_REJECTION));
   const addFundsView = (
     <AddFundsDialog
       open
@@ -2955,6 +2962,7 @@ function useAddFundsView({
       appName={appName}
       appLogoUrl={appLogoUrl}
       origin={typeof window !== 'undefined' ? window.location.origin : ''}
+      originLabel={originLabel}
       onDone={leave}
     />
   );
@@ -2972,6 +2980,7 @@ function RevokePermissionDialogWrapper({
   paymasters,
   appName,
   appLogoUrl,
+  originLabel,
 }: {
   request: RevokePermissionUIRequest;
   onApprove: (data: any) => void;
@@ -2982,6 +2991,7 @@ function RevokePermissionDialogWrapper({
   paymasters?: Record<number, PaymasterConfig>;
   appName?: string;
   appLogoUrl?: string | null;
+  originLabel?: string;
 }) {
   const [open, setOpen] = useState(true);
   const [isProcessing, setIsProcessing] = useState(false);
@@ -3422,6 +3432,7 @@ function RevokePermissionDialogWrapper({
     apiKey,
     appName,
     appLogoUrl,
+    originLabel,
     onReject,
   });
   if (addFundsView) return addFundsView;

@@ -133,7 +133,8 @@ export const TransactionDialog = ({
     isPayingWithErc20 && (!selectedFeeToken?.gasCostMaxFormatted || !selectedFeeToken?.isSelectable);
   const canConfirm = !isProcessing && !gasFeeLoading && !blockReason && !erc20CannotPay && !permissionBlocks;
 
-  const offerAddFunds = blockReason === 'funds' && !permissionBlocks && !!onAddFunds;
+  // A funds block read off a fee that is still loading may be stale, and Add funds ends the request.
+  const offerAddFunds = blockReason === 'funds' && !permissionBlocks && !gasFeeLoading && !!onAddFunds;
 
   // Reverts, but gas estimated fine, so it stays submittable: warn rather than block.
   const softRevertWarning = !blockReason && !permissionBlocks && !!assetPreviewWillRevert;

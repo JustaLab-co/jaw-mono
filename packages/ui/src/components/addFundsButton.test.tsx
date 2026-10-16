@@ -19,7 +19,8 @@ const SPENDER = '0x1111111111111111111111111111111111111111';
 const button = (html: string, label: string) => html.match(new RegExp(`<button[^>]*>${label}</button>`))?.[0];
 const DISABLED = / disabled=""/;
 
-type Block = { gasEstimationError: string; onAddFunds?: () => void };
+type Loading = 'gasFeeLoading' | 'isLoadingTokenInfo' | 'prefundLoading';
+type Block = { gasEstimationError: string; onAddFunds?: () => void } & Partial<Record<Loading, boolean>>;
 const FUNDS: Block = { gasEstimationError: INSUFFICIENT_FUNDS_ERROR, onAddFunds: () => undefined };
 
 const transaction = (block: Block) =>
@@ -63,17 +64,29 @@ const permission = (mode: 'grant' | 'revoke') => (block: Block) =>
     />
   );
 
+const PERMISSION_LOADING: Loading[] = ['gasFeeLoading', 'isLoadingTokenInfo'];
+
 describe.each([
-  ['a transaction', transaction, 'Confirm'],
-  ['a grant', permission('grant'), 'Grant'],
-  ['a revoke', permission('revoke'), 'Revoke'],
-])('the primary button of %s', (_, render, confirm) => {
+  ['a transaction', transaction, 'Confirm', ['gasFeeLoading'] as Loading[]],
+  ['a grant', permission('grant'), 'Grant', [...PERMISSION_LOADING, 'prefundLoading'] as Loading[]],
+  ['a revoke', permission('revoke'), 'Revoke', PERMISSION_LOADING],
+])('the primary button of %s', (_, render, confirm, loading) => {
   it('Given a funds block and onAddFunds, When it renders, Then it reads "Add funds" and is enabled', () => {
     const add = button(render(FUNDS), 'Add funds');
 
     expect(add).toBeDefined();
     expect(add).not.toMatch(DISABLED);
   });
+
+  it.each(loading)(
+    'Given a funds block while %s, When it renders, Then it stays the disabled "Insufficient Funds"',
+    (flag) => {
+      const html = render({ ...FUNDS, [flag]: true });
+
+      expect(button(html, 'Add funds')).toBeUndefined();
+      expect(button(html, 'Insufficient Funds')).toMatch(DISABLED);
+    }
+  );
 
   it('Given a will-fail block, When it renders, Then it does not offer Add funds', () => {
     const html = render({ gasEstimationError: 'execution reverted', onAddFunds: () => undefined });

@@ -35,6 +35,7 @@ export const AddFundsView = ({
   appName,
   appLogoUrl,
   origin,
+  originLabel,
   onDone,
 }: AddFundsViewProps) => {
   const chainName = SUPPORTED_CHAINS.find((c) => c.id === chainId)?.name ?? `Chain ${chainId}`;
@@ -66,6 +67,7 @@ export const AddFundsView = ({
           appName={appName}
           appLogoUrl={appLogoUrl}
           origin={origin ?? ''}
+          originLabel={originLabel}
           chainName={chainName}
           chainIcon={chainIcon}
         />
