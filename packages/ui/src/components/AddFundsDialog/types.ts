@@ -1,6 +1,9 @@
-export interface AddFundsDialogProps {
+export interface AddFundsDialogProps extends AddFundsViewProps {
   open: boolean;
   onOpenChange?: (open: boolean) => void;
+}
+
+export interface AddFundsViewProps {
   /**
    * The destination, resolved by the wallet from the session. Never a value the
    * dapp supplied — see `resolveDestination` in core.
