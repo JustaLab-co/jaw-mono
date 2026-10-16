@@ -344,7 +344,8 @@ describe('the owner window', () => {
     let until: Date | undefined;
     setWallet({ openWallet: (chainId, at, client) => ((until = at), held.openWallet(chainId, at, client)) });
     await startAuthorization(new Browser());
-    expect(until!.getTime() - Date.now()).toBeGreaterThan(28 * 60_000);
+    expect(until!.getTime() - Date.now()).toBeGreaterThan(28.9 * 60_000);
+    expect(until!.getTime() - Date.now()).toBeLessThanOrEqual(29 * 60_000);
     await held.release();
   });
 });

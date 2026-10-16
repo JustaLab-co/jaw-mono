@@ -179,7 +179,7 @@ describe('a link the owner opens late', () => {
   const RELAY_IDLE_MS = 15 * 60_000;
   afterEach(() => vi.useRealTimers());
 
-  it('given nobody opens it for longer than the relay idle limit, then the server speaks within every idle window and the session still runs', async () => {
+  it('given nobody opens it for longer than the relay idle limit, then the server speaks at least twice per idle window and the session still runs', async () => {
     vi.useFakeTimers({ toFake: ['setInterval', 'clearInterval'] });
     const wallet = await openRelay(84532, 40 * 60_000);
     const session = new URL(wallet.url).searchParams.get('session')!;
@@ -187,9 +187,9 @@ describe('a link the owner opens late', () => {
     await vi.waitFor(() => expect(sessions.get(session)?.cli).toBeDefined());
     await new Promise((r) => setTimeout(r, 100));
 
-    for (let window = 0; window < 2; window++) {
+    for (let window = 0; window < 4; window++) {
       const before = heard();
-      await vi.advanceTimersByTimeAsync(RELAY_IDLE_MS - 1_000);
+      await vi.advanceTimersByTimeAsync(RELAY_IDLE_MS / 2);
       await vi.waitFor(() => expect(heard()).toBeGreaterThan(before));
     }
     const opened = await page(wallet.url, () => ({
@@ -204,6 +204,15 @@ describe('a link the owner opens late', () => {
       '0x00000000000000000000000000000000000000aa',
     ]);
     await opened.shutdown;
+  });
+
+  it('given the session is closed, then the server sends nothing more', async () => {
+    vi.useFakeTimers({ toFake: ['setInterval', 'clearInterval'] });
+    const wallet = await openRelay(84532, 40 * 60_000);
+    const session = new URL(wallet.url).searchParams.get('session')!;
+    await vi.waitFor(() => expect(sessions.get(session)?.cli).toBeDefined());
+    wallet.close();
+    expect(vi.getTimerCount()).toBe(0);
   });
 });
 

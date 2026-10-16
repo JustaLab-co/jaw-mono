@@ -110,6 +110,7 @@ describe('jaw_revoke_connection', () => {
     await walletsSettled();
 
     expect(until!.getTime() - Date.now()).toBeGreaterThan(29 * 60_000);
+    expect(until!.getTime() - Date.now()).toBeLessThanOrEqual(30 * 60_000);
   });
 
   it('given a revoke of that connection still waiting for the owner, when asked again, then it hands back the same link and opens no other session', async () => {
