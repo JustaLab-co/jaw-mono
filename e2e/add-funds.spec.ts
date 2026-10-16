@@ -1,7 +1,7 @@
 import type { Page } from '@playwright/test';
 import { parseEther, toHex } from 'viem';
 
-import { Dapp, expect, test, type Network, type Passkey } from './fixtures';
+import { Dapp, expect, HTTPS, keys, test, type Dialog, type Network, type Passkey } from './fixtures';
 
 /**
  * A request the account cannot pay for offers Add funds instead of a dead
@@ -159,3 +159,117 @@ test.describe('add funds, app-specific', () => {
     await rejected(dapp, ADD_FUNDS_REJECTION);
   });
 });
+
+const addFunds = (dialog: Dialog) => dialog.getByRole('button', { name: 'Add funds', exact: true });
+const done = (dialog: Dialog) => dialog.getByRole('button', { name: 'Done', exact: true });
+
+test.describe('add funds, popup', () => {
+  test.skip(HTTPS, 'covers the popup; the embedded dialog renders the same screens');
+
+  test('a short request offers Add funds, and Done ends it so the dApp retries', async ({ dapp, network, passkey }) => {
+    holdings(network, 0n);
+    const { dialog, answer, settled } = await sendCalls(dapp);
+
+    await expect(addFunds(dialog)).toBeEnabled({ timeout: SETTLES });
+    await expect(dialog.getByRole('button', { name: 'Insufficient Funds' })).toHaveCount(0);
+
+    await addFunds(dialog).click();
+    await expect(dialog.getByText(passkey.account, { exact: true })).toBeVisible();
+    await expect(dialog.getByLabel('Accepted on Sepolia', { exact: true })).toBeVisible();
+    // Still pending: Add Funds ends the request only when the user leaves it.
+    expect(settled()).toBe(false);
+
+    await done(dialog).click();
+    expect(await answer).toEqual({ code: 4001, message: ADD_FUNDS_REJECTION });
+  });
+
+  test('cancelling a short request rejects it as usual', async ({ dapp, network }) => {
+    holdings(network, 0n);
+    const { dialog, answer } = await sendCalls(dapp);
+    await expect(addFunds(dialog)).toBeEnabled({ timeout: SETTLES });
+
+    await keys.button(dialog, 'Cancel').last().click();
+    expect(await answer).toEqual({ code: 4001, message: 'User rejected the request' });
+  });
+
+  // keys can't send an encrypted answer while the window unloads, so the SDK's
+  // own rejection is what arrives.
+  test('closing the popup from Add Funds rejects the request', async ({ dapp, network }) => {
+    holdings(network, 0n);
+    const { dialog, answer } = await sendCalls(dapp);
+    await addFunds(dialog).click({ timeout: SETTLES });
+    await expect(done(dialog)).toBeVisible();
+
+    await (dialog as Page).close();
+    expect(await answer).toMatchObject({ code: 4001 });
+  });
+
+  test('a request the account can pay shows Confirm and no Add funds', async ({ dapp, network }) => {
+    holdings(network, parseEther('1'));
+    const { dialog, answer } = await sendCalls(dapp);
+
+    await expect(keys.button(dialog, 'Confirm')).toBeEnabled({ timeout: SETTLES });
+    await expect(addFunds(dialog)).toHaveCount(0);
+
+    // Nothing is sent: the request ends the usual way.
+    await keys.button(dialog, 'Cancel').last().click();
+    expect(await answer).toMatchObject({ code: 4001 });
+  });
+
+  test('a grant the account cannot pay gas for offers Add funds too', async ({ dapp, network }) => {
+    holdings(network, 0n);
+    const { dialog, answer } = await request(dapp, 'wallet_grantPermissions', {
+      expiry: Math.floor(Date.now() / 1000) + 86_400,
+      spender: '0x000000000000000000000000000000000000e2e5',
+      permissions: { calls: [{ target: '0x3232323232323232323232323232323232323232', selector: '0xe0e0e0e0' }] },
+    });
+
+    await addFunds(dialog).click({ timeout: SETTLES });
+    await done(dialog).click();
+    expect(await answer).toEqual({ code: 4001, message: ADD_FUNDS_REJECTION });
+  });
+});
+
+type Answer = { result: unknown } | { code: number; message: string };
+
+const sendCalls = (dapp: Dapp) =>
+  request(dapp, 'wallet_sendCalls', {
+    calls: [{ to: '0x0000000000000000000000000000000000000000', value: toHex(VALUE), data: '0x' }],
+  });
+
+/**
+ * Connects through the playground, then sends one request through the provider
+ * the SDK announces over EIP-6963 and returns its dialog. The playground's
+ * Response panel shows only an error's message, and these tests need its code.
+ */
+async function request(dapp: Dapp, method: string, params: object) {
+  const connecting = await dapp.execute();
+  await keys.account(connecting).click();
+  await keys.button(connecting, 'Connect').click();
+  await expect(dapp.result()).toHaveText(/^OK/, { timeout: SETTLES });
+  await dapp.closed(connecting);
+
+  const opened = dapp.page.context().waitForEvent('page');
+  const answer = dapp.page.evaluate(
+    async ({ method, params }): Promise<Answer> => {
+      type Provider = { request: (args: { method: string; params: unknown[] }) => Promise<unknown> };
+      const provider = await new Promise<Provider>((resolve) => {
+        window.addEventListener('eip6963:announceProvider', (event) => {
+          const { info, provider } = (event as CustomEvent).detail;
+          if (info.rdns === 'keys.jaw.id') resolve(provider);
+        });
+        window.dispatchEvent(new Event('eip6963:requestProvider'));
+      });
+      try {
+        return { result: await provider.request({ method, params: [params] }) };
+      } catch (error) {
+        const { code, message } = error as { code: number; message: string };
+        return { code, message };
+      }
+    },
+    { method, params }
+  );
+  let done = false;
+  void answer.finally(() => (done = true));
+  return { dialog: (await opened) as Dialog, answer, settled: () => done };
+}
