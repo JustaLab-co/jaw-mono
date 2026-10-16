@@ -402,6 +402,26 @@ describe('authorization server', () => {
     expect(refreshed.status).toBe(200);
   });
 
+  it('given ChatGPT, when a refresh response was lost and it retries with a new assertion, then 200 with the same refresh token', async () => {
+    const c = await connect(undefined, {
+      clientId: CHATGPT,
+      redirectUri: CHATGPT_REDIRECT,
+      clientAuth: await chatgptAssertion(),
+    });
+    const refresh = async () =>
+      token({
+        grant_type: 'refresh_token',
+        refresh_token: c.refresh_token,
+        client_id: CHATGPT,
+        ...(await chatgptAssertion()),
+      });
+    const lost = await refresh();
+    expect(lost.status).toBe(200);
+    const retried = await refresh();
+    expect(retried.status).toBe(200);
+    expect(retried.body.refresh_token).toBe(lost.body.refresh_token);
+  });
+
   it('given ChatGPT, when its token request carries no client assertion, then invalid_client', async () => {
     const c = await connect(undefined, { clientId: CHATGPT, redirectUri: CHATGPT_REDIRECT });
     expect(c.status).toBe(401);
