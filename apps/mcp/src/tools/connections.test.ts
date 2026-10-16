@@ -104,7 +104,7 @@ describe('jaw_revoke_connection', () => {
     const id = (await tenantOf(other.access_token)).connectionId;
     const confirmed = confirmedBy(signer);
     let until: Date | undefined;
-    const openWallet: OpenWallet = (chainId, at) => ((until = at), confirmed.openWallet(chainId, at));
+    const openWallet: OpenWallet = (chainId, at, client) => ((until = at), confirmed.openWallet(chainId, at, client));
 
     await revokeConnection(await tenantOf(me.access_token), id, { ...confirmed, openWallet });
     await walletsSettled();
