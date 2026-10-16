@@ -30,7 +30,7 @@ a{color:inherit}
 </head>
 <body>
 <main>
-<p>hi. i'm the jaw mcp server. browsers aren't really my crowd.</p>
+<p>hi. i'm the jaw mcp server.</p>
 <p>add me as a connector to your favorite ai: <a href="${u}">${u}</a></p>
 <p>more at <a href="${AGENTS_URL}">jaw.id/agents</a></p>
 </main>
@@ -40,7 +40,7 @@ a{color:inherit}
 }
 
 const text = (url: string) =>
-  `hi. i'm the jaw mcp server. browsers aren't really my crowd.
+  `hi. i'm the jaw mcp server.
 add me as a connector to your favorite ai: ${url}
 more at ${AGENTS_URL}
 `;
