@@ -58,7 +58,7 @@ export function createProvider(cfg: Config, overrides: Partial<Configuration> = 
     ttl: {
       AuthorizationCode: 60,
       Interaction: APPROVE_WITHIN_MS / 1000,
-      Session: 600,
+      Session: APPROVE_WITHIN_MS / 1000,
       Grant: 30 * DAY,
       RefreshToken: 30 * DAY,
     },
