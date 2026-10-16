@@ -1,5 +1,5 @@
 import { eq } from 'drizzle-orm';
-import { decodeFunctionData, erc20Abi, type Address, type Hex } from 'viem';
+import { decodeFunctionData, erc20Abi, getAddress, type Address, type Hex } from 'viem';
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { verifyBearer, type Tenant } from '@/connections/auth';
 import type { Ask, OpenWallet } from '@/connections/relay';
@@ -47,6 +47,7 @@ beforeEach(() => {
   session.used = 0;
   served.opened = 0;
   names.clear();
+  asked = [];
 });
 afterEach(async () => {
   await walletsSettled();
@@ -127,7 +128,6 @@ describe('jaw_transfer', () => {
     expect(calls).toHaveLength(1);
     expect(calls[0].to.toLowerCase()).toBe(USDC.toLowerCase());
     expect(decodeFunctionData({ abi: erc20Abi, data: calls[0].data }).args).toEqual([BOB, 100_000n]);
-    asked = [];
   });
 
   it('given the same idempotency key again, then it answers the same request and opens no second link', async () => {
@@ -149,6 +149,70 @@ describe('jaw_transfer', () => {
     expect(other.isError).toBe(true);
     expect(other.content[0].text).toMatch(/^idempotency_conflict: /);
     expect(await rowsOf(t.connectionId)).toHaveLength(1);
+  });
+
+  it('given the same key for a name the resolver cannot read now, then it answers the stored request', async () => {
+    const { t } = await connected();
+    names.set('helloo.justan.id', BOB);
+    const first = await send(t, { to: 'helloo.justan.id', idempotencyKey: 'pay-hello' });
+    names.clear();
+
+    const again = await send(t, { to: 'helloo.justan.id', idempotencyKey: 'pay-hello' });
+
+    expect(again.isError).toBeFalsy();
+    expect(again.structuredContent).toMatchObject({ id: first.structuredContent!.id, recipient: { address: BOB } });
+  });
+
+  it('given the same key for a name that now resolves elsewhere, then it answers the stored request and its recipient', async () => {
+    const { t } = await connected();
+    names.set('helloo.justan.id', BOB);
+    const first = await send(t, { to: 'helloo.justan.id', idempotencyKey: 'pay-hello' });
+    names.set('helloo.justan.id', '0x3333333333333333333333333333333333333333');
+
+    const again = await send(t, { to: 'helloo.justan.id', idempotencyKey: 'pay-hello' });
+
+    expect(again.structuredContent).toMatchObject({ id: first.structuredContent!.id, recipient: { address: BOB } });
+    expect(await rowsOf(t.connectionId)).toHaveLength(1);
+  });
+
+  it('given the same key for another amount, then it is refused and opens no second link', async () => {
+    const { t } = await connected();
+    names.set('helloo.justan.id', BOB);
+
+    await send(t, { to: 'helloo.justan.id', idempotencyKey: 'pay-hello' });
+    const other = await send(t, { to: 'helloo.justan.id', idempotencyKey: 'pay-hello', amount: '0.2' });
+
+    expect(other.content[0].text).toMatch(/^idempotency_conflict: /);
+    expect(await rowsOf(t.connectionId)).toHaveLength(1);
+  });
+
+  it('given a transfer that reverted, when it is retried, then it answers an error naming the recipient', async () => {
+    const { t } = await connected();
+    await send(t, { idempotencyKey: 'pay-bob' });
+    const mine = eq(ownerCalls.connectionId, t.connectionId);
+    await getDb().update(ownerCalls).set({ state: 'sent', callsId: CALLS_ID }).where(mine);
+    await getDb()
+      .update(ownerCalls)
+      .set({ state: 'reverted', txHash: `0x${'ef'.repeat(32)}` })
+      .where(mine);
+
+    const again = await send(t, { idempotencyKey: 'pay-bob' });
+
+    expect(again.isError).toBe(true);
+    expect(again.structuredContent).toMatchObject({ state: 'reverted', recipient: { address: BOB } });
+    expect(again.content[0].text).toContain(`Transfer of 0.1 USDC to ${BOB}. Reverted on chain`);
+  });
+
+  it('given a mixed case address, then it is checksummed, and refused when the checksum is wrong', async () => {
+    const { t } = await connected();
+    const lower = '0xabcdef0123456789abcdef0123456789abcdef01';
+
+    const typo = await send(t, { to: lower.replace('0xab', '0xAB') });
+    const result = await send(t, { to: lower });
+
+    expect(typo).toMatchObject({ isError: true });
+    expect(typo.content[0].text).toContain('checksum');
+    expect(result.structuredContent).toMatchObject({ recipient: { address: getAddress(lower) } });
   });
 
   it('given a name that does not resolve, then it is refused by name and no link opens', async () => {

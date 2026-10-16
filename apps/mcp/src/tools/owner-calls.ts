@@ -67,6 +67,12 @@ const statusInput = z.strictObject({
 });
 export type SendCallsStatusInput = z.infer<typeof statusInput>;
 
+export const idempotencyKey = z
+  .string()
+  .regex(/^[A-Za-z0-9_.:-]{1,100}$/)
+  .optional()
+  .describe('Reuse it to retry this exact request; one is made up and returned when absent');
+
 const sendCallsInput = z.strictObject({
   chainId: z
     .number()
@@ -75,11 +81,7 @@ const sendCallsInput = z.strictObject({
     .optional()
     .describe("A chain the JAW wallet supports; defaults to this connection's chain"),
   calls: z.array(callInput).min(1).max(MAX_CALLS),
-  idempotencyKey: z
-    .string()
-    .regex(/^[A-Za-z0-9_.:-]{1,100}$/)
-    .optional()
-    .describe('Reuse it to retry this exact request; one is made up and returned when absent'),
+  idempotencyKey,
 });
 export type SendCallsInput = z.infer<typeof sendCallsInput>;
 
@@ -135,7 +137,7 @@ const inProgress = (open?: OwnerCallRow) =>
     'calls_in_progress',
     open
       ? `Request ${open.id} is still awaiting the owner on this connection under idempotencyKey ${open.idempotencyKey}. ` +
-          'Send that key with the same input to get its link, follow it with jaw_send_calls_status, or wait until it ends.'
+          'Send that key with the same input to the tool that opened it to get its link, follow it with jaw_send_calls_status, or wait until it ends.'
       : 'Another request is awaiting the owner on this connection. Try again shortly.'
   );
 

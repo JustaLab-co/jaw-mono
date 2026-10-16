@@ -1,10 +1,20 @@
 import { usdcForNetwork } from '@jaw.id/agent';
 import type { McpServer } from '@modelcontextprotocol/server';
-import { encodeFunctionData, erc20Abi, getAddress, isAddress, parseUnits, type Address } from 'viem';
+import {
+  decodeFunctionData,
+  encodeFunctionData,
+  erc20Abi,
+  getAddress,
+  isAddress,
+  parseUnits,
+  type Address,
+  type Hex,
+} from 'viem';
 import { z } from 'zod';
 import { tenant, type Tenant } from '@/connections/auth';
 import { reply } from '@/lib/fence';
-import { ownerCallsOutput, sendCalls, type OwnerCallDeps, type SendResult } from './owner-calls';
+import { findByKey } from '@/owner-calls/store';
+import { idempotencyKey, ownerCallsOutput, sendCalls, type OwnerCallDeps, type SendResult } from './owner-calls';
 import { resolveName } from './read';
 import { refusal } from './reply';
 
@@ -13,11 +23,7 @@ const AMOUNT = /^\d{1,9}(\.\d{1,6})?$/;
 const transferInput = z.strictObject({
   to: z.string().describe('The recipient: an address, or an ENS name such as alice.eth'),
   amount: z.string().regex(AMOUNT).describe('USDC, as a decimal such as "0.01"'),
-  idempotencyKey: z
-    .string()
-    .regex(/^[A-Za-z0-9_.:-]{1,100}$/)
-    .optional()
-    .describe('Reuse it to retry this exact transfer; one is made up and returned when absent'),
+  idempotencyKey,
 });
 export type TransferInput = z.infer<typeof transferInput>;
 
@@ -30,8 +36,25 @@ const output = ownerCallsOutput.extend({
 
 type Recipient = { address: Address; name: string | null };
 
-async function recipientOf(to: string): Promise<Recipient | string> {
-  if (isAddress(to, { strict: false })) return { address: getAddress(to), name: null };
+/** Who a request already stored under this key pays, so a retry does not resolve the name again. */
+async function storedRecipient(t: Tenant, key: string): Promise<Address | undefined> {
+  const calls = (await findByKey(t.connectionId, key))?.calls;
+  if (calls?.length !== 1) return undefined;
+  try {
+    const { functionName, args } = decodeFunctionData({ abi: erc20Abi, data: calls[0].data as Hex });
+    return functionName === 'transfer' ? args[0] : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+async function recipientOf(t: Tenant, to: string, key?: string): Promise<Recipient | string> {
+  if (isAddress(to, { strict: false })) {
+    if (!isAddress(to)) return `${to} fails its checksum. Check the address and send it again.`;
+    return { address: getAddress(to), name: null };
+  }
+  const stored = key && (await storedRecipient(t, key));
+  if (stored) return { address: getAddress(stored), name: null };
   const resolved = await resolveName(to).catch(() => undefined);
   if (!resolved) return `${to} could not be resolved as an ENS name right now. Try again, or give the address.`;
   if (!resolved.address) return `${resolved.name} does not resolve to an address.`;
@@ -48,7 +71,7 @@ export async function transfer(
   if (!usdc) return refusal("USDC is not supported on this connection's chain.");
   const units = parseUnits(amount, usdc.decimals);
   if (units === 0n) return refusal('A transfer of zero sends nothing.');
-  const recipient = await recipientOf(to);
+  const recipient = await recipientOf(t, to, idempotencyKey);
   if (typeof recipient === 'string') return refusal(recipient);
 
   const data = encodeFunctionData({ abi: erc20Abi, functionName: 'transfer', args: [recipient.address, units] });
