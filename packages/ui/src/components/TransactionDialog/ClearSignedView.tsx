@@ -1,7 +1,8 @@
-import { useEffect, useRef, useState } from 'react';
 import { ethAddress } from 'viem';
 import type { ClearSigningDisplay, DisplayRow } from '../../utils/clearSigning';
-import { reverseResolveWithAvatars, formatAddress, getChainLabel, identityKey } from '../../utils';
+import { useAddressIdentities } from '../../hooks/useAddressIdentities';
+import { formatAddress, identityKey } from '../../utils';
+import { ENS_ONLY } from '../../utils/addressIdentity';
 import { dateTone, formatUnixDate, groupNumber, isUnlimitedAmount } from '../../utils/displayFormat';
 import { TriangleAlert } from 'lucide-react';
 import { IdentityAvatar } from '../IdentityAvatar';
@@ -12,7 +13,7 @@ import { Tooltip, TooltipContent, TooltipTrigger } from '../ui/tooltip';
 interface ClearSignedViewProps {
   display: ClearSigningDisplay;
   chainId: number;
-  mainnetRpcUrl?: string;
+  mainnetRpcUrl: string;
 }
 
 function TokenAmountValue({ row, chainId }: { row: DisplayRow; chainId: number }) {
@@ -86,70 +87,10 @@ function AddressValue({
 }
 
 export const ClearSignedView = ({ display, chainId, mainnetRpcUrl }: ClearSignedViewProps) => {
-  const [resolved, setResolved] = useState<Record<string, string>>({});
-  const [avatars, setAvatars] = useState<Record<string, string>>({});
-  const attemptedRef = useRef<Set<string>>(new Set());
-
-  useEffect(() => {
-    if (!mainnetRpcUrl) return;
-    const addresses = display.rows
-      .filter((r) => r.kind === 'address' && r.rawValue)
-      .map((r) => (r.rawValue as string).toLowerCase());
-    // Keyed by chain: the @chainlabel suffix baked into a resolved name is chain-specific,
-    // so a chainId change must re-resolve rather than reuse the stale label.
-    const unique = [...new Set(addresses)].filter((a) => !attemptedRef.current.has(identityKey(a, chainId)));
-    if (unique.length === 0) return;
-
-    // An attempt only "counts" once it lands — the cleanup un-marks anything still in flight.
-    unique.forEach((a) => attemptedRef.current.add(identityKey(a, chainId)));
-    const unmark = () => unique.forEach((a) => attemptedRef.current.delete(identityKey(a, chainId)));
-
-    let cancelled = false;
-    // Set once this run's result has landed. After that the attempt "counts" — including
-    // for addresses that resolved to no name — so the cleanup must leave the marks alone
-    // or every unresolvable address gets re-queried on the next run.
-    let wrote = false;
-    reverseResolveWithAvatars(
-      unique.map((address) => ({ address, chainId })),
-      mainnetRpcUrl
-    )
-      .then(async (resolved) => {
-        if (cancelled) return;
-        const label = await getChainLabel(chainId, mainnetRpcUrl);
-        if (cancelled) return;
-        wrote = true;
-        const nextResolved: Record<string, string> = {};
-        const nextAvatars: Record<string, string> = {};
-        for (const address of unique) {
-          const identity = resolved[identityKey(address, chainId)];
-          if (!identity) continue;
-          nextResolved[address] = label ? `${identity.name}@${label}` : identity.name;
-          if (identity.avatar) nextAvatars[address] = identity.avatar;
-        }
-        setResolved((prev) => {
-          const next = { ...prev };
-          let changed = false;
-          for (const [address, value] of Object.entries(nextResolved)) {
-            if (next[address] !== value) {
-              next[address] = value;
-              changed = true;
-            }
-          }
-          return changed ? next : prev;
-        });
-        if (Object.keys(nextAvatars).length > 0) {
-          setAvatars((prev) => ({ ...prev, ...nextAvatars }));
-        }
-      })
-      .catch(unmark);
-    return () => {
-      cancelled = true;
-      // If this run never wrote its result, its "attempted" marks must not outlive it —
-      // otherwise the next run filters every address out as already-tried and resolution
-      // is blocked for good.
-      if (!wrote) unmark();
-    };
-  }, [display, mainnetRpcUrl, chainId]);
+  const rowAddresses = display.rows
+    .filter((r) => r.kind === 'address' && r.rawValue)
+    .map((r) => ({ address: r.rawValue as string, chainId }));
+  const identities = useAddressIdentities(rowAddresses, { mainnetRpcUrl, include: ENS_ONLY });
 
   const hasHeader = !!display.intent;
   const hasRows = display.rows.length > 0;
@@ -161,9 +102,9 @@ export const ClearSignedView = ({ display, chainId, mainnetRpcUrl }: ClearSigned
       {hasRows && (
         <div className="divide-border/40 flex flex-col divide-y">
           {display.rows.map((row, i) => {
-            const lookup = row.rawValue?.toLowerCase();
-            const resolvedName = lookup ? resolved[lookup] : undefined;
-            const avatarSrc = lookup ? avatars[lookup] : undefined;
+            const identity = row.rawValue ? identities[identityKey(row.rawValue, chainId)] : undefined;
+            const resolvedName = identity?.ensName ?? undefined;
+            const avatarSrc = identity?.ensAvatar ?? undefined;
             return (
               // Row-wise: label left, value right — one line each, value truncates.
               <div key={i} className="flex items-baseline justify-between gap-3 py-2 first:pt-0 last:pb-0">

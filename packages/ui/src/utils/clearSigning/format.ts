@@ -25,8 +25,11 @@ import {
   ContractFunctionRevertedError,
   ContractFunctionZeroDataError,
   formatUnits,
+  HttpRequestError,
   isAddress,
   parseAbiItem,
+  RpcError,
+  TimeoutError,
 } from 'viem';
 import { SUPPORTED_CHAINS } from '@jaw.id/core';
 import { getJawPublicClient } from '../publicClient';
@@ -355,35 +358,45 @@ const tokenCache = new Map<string, TokenInfo | null>();
 const OFFCHAIN_LOOKUP_SELECTOR = '0x556f1830';
 
 /**
- * Whether a failed `decimals()`/`symbol()` read proves the address is not an ERC-20,
- * as opposed to the RPC merely being unavailable.
+ * Whether a failed read was answered by the node — it reverted, found no code, or
+ * returned data that does not decode — as opposed to never reaching it.
  *
- * Only the former may be cached as `null`: `tokenCache` has no TTL, so caching a
- * transient failure blanks that token for the rest of the session — and because reads
- * now share one `aggregate3`, a single 503 would otherwise poison every token in the
- * batch at once.
+ * Only an answered failure may be remembered: `tokenCache` has no TTL, so caching a
+ * transient one blanks that token for the rest of the session, and because reads share
+ * one `aggregate3`, a single 503 would blank every token in the batch at once.
+ *
+ * One revert is excluded: the client refuses offchain lookups, so a contract whose data
+ * lives behind a CCIP-Read gateway reverts with `OffchainLookup`. That says the read was
+ * refused, not answered.
+ */
+export function isAnsweredReadFailure(err: unknown): boolean {
+  if (!(err instanceof BaseError)) return false;
+  const reverted = err.walk((e) => e instanceof ContractFunctionRevertedError);
+  if (reverted instanceof ContractFunctionRevertedError) return !reverted.raw?.startsWith(OFFCHAIN_LOOKUP_SELECTOR);
+  if (err.walk((e) => e instanceof ContractFunctionZeroDataError)) return true;
+  // Not a revert, so an error from the transport or the node's JSON-RPC layer (a 503, a
+  // timeout, a rate limit) is an outage. What is left is data that came back and did not decode.
+  return !err.walk((e) => e instanceof HttpRequestError || e instanceof TimeoutError || e instanceof RpcError);
+}
+
+/**
+ * Whether a failed `decimals()`/`symbol()` read proves the address is not an ERC-20.
  *
  * Both shapes are covered. A `success: false` entry in an `aggregate3` result throws a
  * `RawContractError`, but viem wraps it through `ExecutionRevertedError` (code 3) before
  * `getContractError` sees it, so the batched chain is
  * `ContractFunctionExecutionError -> ContractFunctionRevertedError -> ... -> RawContractError`;
  * an unbatched read of an address with no code decodes empty data into
- * `ContractFunctionZeroDataError`. Transport failures (`HttpRequestError`, `TimeoutError`)
- * match neither.
- *
- * One revert is excluded: the client refuses offchain lookups, so a token whose metadata
- * lives behind a CCIP-Read gateway reverts with `OffchainLookup` and arrives in the same
- * shape as a plain revert. That says the read was refused, not that the address has no
- * code, and caching it would blank the token for the rest of the session.
+ * `ContractFunctionZeroDataError`.
  */
 function isNotAToken(err: unknown): boolean {
-  if (!(err instanceof BaseError)) return false;
-  const reverted = err.walk((e) => e instanceof ContractFunctionRevertedError);
-  if (reverted instanceof ContractFunctionRevertedError && reverted.raw?.startsWith(OFFCHAIN_LOOKUP_SELECTOR)) {
-    return false;
-  }
-  return Boolean(
-    err.walk((e) => e instanceof ContractFunctionRevertedError || e instanceof ContractFunctionZeroDataError)
+  return (
+    isAnsweredReadFailure(err) &&
+    Boolean(
+      (err as BaseError).walk(
+        (e) => e instanceof ContractFunctionRevertedError || e instanceof ContractFunctionZeroDataError
+      )
+    )
   );
 }
 
@@ -427,6 +440,12 @@ export function createTokenResolver(chainId: number, apiKey?: string) {
       return null;
     }
   };
+}
+
+/** Whether a read has already proven the address on this chain is not an ERC-20. */
+export function isKnownNonToken(chainId: number, address: string): boolean {
+  const key = `${chainId}:${address.toLowerCase()}`;
+  return tokenCache.has(key) && tokenCache.get(key) === null;
 }
 
 /** Native-coin symbol for a chain, sourced from viem's chain config via `SUPPORTED_CHAINS`. */

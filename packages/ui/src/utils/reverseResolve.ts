@@ -75,7 +75,7 @@ async function fetchReverseBatch(
   if (withRecords) url.searchParams.set('records', 'true');
 
   const res = await fetch(url.toString());
-  if (!res.ok) return {};
+  if (!res.ok) throw new Error(`Reverse resolution failed: ${res.status}`);
 
   const body = (await res.json()) as ReverseResponse;
   const data = body.result?.data;
@@ -108,30 +108,39 @@ async function fetchReverseBatch(
   return resolved;
 }
 
+export interface ReverseResolution {
+  /** Keyed by {@link identityKey}; an address the service answered with no name is absent. */
+  resolved: Record<string, ResolvedIdentity>;
+  /** Addresses whose request failed, so whether they have a name is unknown. */
+  unanswered: ReverseInput[];
+}
+
 async function reverseResolve(
   inputs: ReverseInput[],
   rpcUrl: string,
   withRecords: boolean
-): Promise<Record<string, ResolvedIdentity>> {
+): Promise<ReverseResolution> {
   const unique = Array.from(new Map(inputs.map((i) => [identityKey(i.address, i.chainId), i])).values());
-  if (unique.length === 0) return {};
 
   const batches: ReverseInput[][] = [];
   for (let i = 0; i < unique.length; i += MAX_BATCH) {
     batches.push(unique.slice(i, i + MAX_BATCH));
   }
 
-  const results = await Promise.all(
-    batches.map((batch) => fetchReverseBatch(batch, rpcUrl, withRecords).catch(() => ({})))
-  );
-  return Object.assign({}, ...results);
+  const results = await Promise.allSettled(batches.map((batch) => fetchReverseBatch(batch, rpcUrl, withRecords)));
+  const resolution: ReverseResolution = { resolved: {}, unanswered: [] };
+  results.forEach((result, i) => {
+    if (result.status === 'fulfilled') Object.assign(resolution.resolved, result.value);
+    else resolution.unanswered.push(...batches[i]);
+  });
+  return resolution;
 }
 
 /** Reverse-resolve addresses to ENS names in one batched request (deduped, chunked at 50, parallel). Never rejects; unresolved addresses are omitted. Keyed by {@link identityKey}. */
 export async function reverseResolveAddresses(inputs: ReverseInput[], rpcUrl: string): Promise<Record<string, string>> {
-  const identities = await reverseResolve(inputs, rpcUrl, false);
+  const { resolved } = await reverseResolve(inputs, rpcUrl, false);
   const names: Record<string, string> = {};
-  for (const [key, identity] of Object.entries(identities)) {
+  for (const [key, identity] of Object.entries(resolved)) {
     names[key] = identity.name;
   }
   return names;
@@ -142,5 +151,14 @@ export async function reverseResolveWithAvatars(
   inputs: ReverseInput[],
   rpcUrl: string
 ): Promise<Record<string, ResolvedIdentity>> {
+  return (await reverseResolve(inputs, rpcUrl, true)).resolved;
+}
+
+/**
+ * Like {@link reverseResolveWithAvatars}, but says which addresses went unanswered instead of
+ * reading a failed request as "no name". For callers that keep the answer: a miss is worth
+ * keeping for the session, an outage is not.
+ */
+export function reverseResolveIdentities(inputs: ReverseInput[], rpcUrl: string): Promise<ReverseResolution> {
   return reverseResolve(inputs, rpcUrl, true);
 }

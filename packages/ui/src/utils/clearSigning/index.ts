@@ -15,6 +15,8 @@
 export * from './types';
 export * from './path';
 export * from './source';
-export * from './format';
+// Named, not `export *`: format.ts also holds read-failure helpers for this package's
+// identity cache, which are not part of the public surface.
+export { applyFormat, createTokenResolver, getNativeSymbol, getNativeDecimals } from './format';
 export * from './eip712';
 export * from './calldata';

@@ -1,6 +1,11 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { toCoinType } from 'viem';
-import { identityKey, reverseResolveAddresses, reverseResolveWithAvatars } from './reverseResolve';
+import {
+  identityKey,
+  reverseResolveAddresses,
+  reverseResolveWithAvatars,
+  reverseResolveIdentities,
+} from './reverseResolve';
 
 const ADDRESS = '0xfAbc9dDe6d43b39E087122A80f05E80615110b65';
 const EMOJI_ADDRESS = '0x00000000000000000000000000000000000000aa';
@@ -107,5 +112,63 @@ describe('one name per address and chain', () => {
     const names = await reverseResolveAddresses([{ address: ADDRESS, chainId: 1 }], RPC_URL);
 
     expect(names).toEqual({});
+  });
+});
+
+// A caller that keeps answers for the session must tell "no name" from "no answer":
+// filing an outage as a miss would hide a real name until the page reloads.
+describe('reverseResolveIdentities', () => {
+  const input = { address: ADDRESS, chainId: 1 };
+
+  it('answers like reverseResolveWithAvatars when the service is up', async () => {
+    stubFetch(slot(ADDRESS, 'alice.eth', 1, [{ key: 'avatar', value: 'https://x/a.png' }]));
+
+    const { resolved, unanswered } = await reverseResolveIdentities([input], RPC_URL);
+
+    expect(resolved[identityKey(ADDRESS, 1)]).toEqual({
+      name: 'alice.eth',
+      avatar: 'https://metadata.ens.domains/mainnet/avatar/alice.eth',
+    });
+    expect(unanswered).toEqual([]);
+  });
+
+  it('reports the addresses of a non-ok response as unanswered, not as having no name', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue({ ok: false, status: 503 }));
+
+    expect(await reverseResolveIdentities([input], RPC_URL)).toEqual({ resolved: {}, unanswered: [input] });
+  });
+
+  it('reports the addresses of a failed request as unanswered', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockRejectedValue(new TypeError('Failed to fetch')));
+
+    expect(await reverseResolveIdentities([input], RPC_URL)).toEqual({ resolved: {}, unanswered: [input] });
+  });
+
+  it('reports a clean miss as answered with no name', async () => {
+    stubFetch(null);
+
+    expect(await reverseResolveIdentities([input], RPC_URL)).toEqual({ resolved: {}, unanswered: [] });
+  });
+
+  // Past 50 addresses the lookup is split; one failed chunk must not throw away the others.
+  it('keeps the chunks that answered when another one fails', async () => {
+    const inputs = Array.from({ length: 51 }, (_, i) => ({
+      address: `0x${(i + 1).toString(16).padStart(40, '0')}`,
+      chainId: 1,
+    }));
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (url: string) => {
+        const asked = new URL(url).searchParams.getAll('address');
+        if (asked.length === 1) return { ok: false, status: 503 };
+        const data = asked.map((a) => slot(a.split('@')[0], 'named.eth', 1));
+        return { ok: true, json: async () => ({ result: { data } }) };
+      })
+    );
+
+    const { resolved, unanswered } = await reverseResolveIdentities(inputs, RPC_URL);
+
+    expect(Object.keys(resolved)).toHaveLength(50);
+    expect(unanswered).toEqual([inputs[50]]);
   });
 });

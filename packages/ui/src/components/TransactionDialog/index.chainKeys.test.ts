@@ -1,12 +1,14 @@
 // @vitest-environment jsdom
-// The dialog resolves one name per address and chain and hands both maps to every row.
-// Filed by address alone, a batch carrying the same `to` on two chains collapsed the two
-// answers onto one entry and rendered whichever landed last on both rows, one of them
-// under the other chain's label. This pins the write side; the read side is pinned in
-// DecodedCalldata.resolution.test.ts.
+// Every row names its address on the chain it is drawn for. Filed by address alone, a
+// batch carrying the same `to` on two chains collapsed the two answers onto one entry and
+// rendered whichever landed last on both rows, one of them under the other chain's label.
+// The calldata rows are pinned in DecodedCalldata.resolution.test.ts.
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { createElement, act } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
+import { toCoinType } from 'viem';
+
+import { clearAddressIdentityCache } from '../../utils/addressIdentity';
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
@@ -15,20 +17,29 @@ const MAINNET = 1;
 const BASE = 8453;
 const LABELS: Record<number, string> = { [MAINNET]: 'mainnet', [BASE]: 'base' };
 
-const reverseResolveWithAvatars = vi.fn(async (inputs: { address: string; chainId: number }[]) => {
-  const out: Record<string, { name: string }> = {};
-  for (const { address, chainId } of inputs) {
-    out[`${address.toLowerCase()}:${chainId}`] = { name: 'vitalik.eth' };
-  }
-  return out;
-});
-
-vi.mock('../../utils', async (importOriginal) => ({
-  ...(await importOriginal<typeof import('../../utils')>()),
-  reverseResolveWithAvatars: (...args: unknown[]) =>
-    (reverseResolveWithAvatars as unknown as (...a: unknown[]) => unknown)(...args),
+vi.mock('../../utils/resolveChainLabel', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('../../utils/resolveChainLabel')>()),
   getChainLabel: async (chainId: number) => LABELS[chainId] ?? null,
 }));
+
+/** Answer every reverse lookup with the same name, and record what was asked. */
+function stubNetwork() {
+  const ensRequests: URL[] = [];
+  vi.stubGlobal(
+    'fetch',
+    vi.fn(async (input: string) => {
+      const url = new URL(input);
+      if (!url.pathname.startsWith('/ens/v2/reverse')) return new Response('{}', { status: 200 });
+      ensRequests.push(url);
+      const data = url.searchParams.getAll('address').map((param) => {
+        const [address, chainId] = param.split('@eip155:');
+        return { address: address.toLowerCase(), name: 'vitalik.eth', coinType: Number(toCoinType(Number(chainId))) };
+      });
+      return new Response(JSON.stringify({ result: { data } }), { status: 200 });
+    })
+  );
+  return ensRequests;
+}
 
 // Network-bound or purely visual pieces. Everything that decides which name lands on
 // which row stays real: the effect, CallSections and PartyRow.
@@ -80,8 +91,11 @@ const props = {
 let container: HTMLDivElement;
 let root: Root;
 
+let ensRequests: URL[];
+
 beforeEach(() => {
-  reverseResolveWithAvatars.mockClear();
+  clearAddressIdentityCache();
+  ensRequests = stubNetwork();
   container = document.createElement('div');
   document.body.appendChild(container);
   root = createRoot(container);
@@ -90,16 +104,16 @@ beforeEach(() => {
 afterEach(() => {
   act(() => root.unmount());
   container.remove();
+  vi.unstubAllGlobals();
 });
 
-/** Flush the effect's promise chain (resolve -> getChainLabel -> setState). */
+/** Let the lookups answer and the resulting renders land. */
 async function settle() {
-  await act(async () => {
-    await Promise.resolve();
-    await Promise.resolve();
-    await Promise.resolve();
-    await Promise.resolve();
-  });
+  for (let i = 0; i < 10; i++) {
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    });
+  }
 }
 
 describe('TransactionDialog files names by address and chain', () => {
@@ -119,7 +133,8 @@ describe('TransactionDialog files names by address and chain', () => {
     });
     await settle();
 
-    const inputs = reverseResolveWithAvatars.mock.calls[0][0] as { address: string; chainId: number }[];
-    expect(inputs.filter((i) => i.address === TO).map((i) => i.chainId)).toEqual([MAINNET, BASE]);
+    expect(ensRequests).toHaveLength(1);
+    const asked = ensRequests[0].searchParams.getAll('address');
+    expect(asked.filter((a) => a.startsWith(TO))).toEqual([`${TO}@eip155:${MAINNET}`, `${TO}@eip155:${BASE}`]);
   });
 });

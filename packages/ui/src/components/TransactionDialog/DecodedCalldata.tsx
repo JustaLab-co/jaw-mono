@@ -1,9 +1,11 @@
-import { useState, useEffect, useRef, useMemo } from 'react';
+import { useMemo } from 'react';
 import type { Hex } from 'viem';
 import type { DecodeResult } from '../../hooks/useDecodedCalldata';
 import { Spinner } from '../ui/spinner';
 import { TriangleAlert } from 'lucide-react';
-import { reverseResolveWithAvatars, formatAddress, getChainLabel, identityKey } from '../../utils';
+import { useAddressIdentities } from '../../hooks/useAddressIdentities';
+import { formatAddress, identityKey } from '../../utils';
+import { ENS_ONLY } from '../../utils/addressIdentity';
 import { isUnlimitedAmount } from '../../utils/displayFormat';
 import { computeCalldataDigest } from '../../utils/erc8213';
 import { IdentityAvatar } from '../IdentityAvatar';
@@ -72,109 +74,22 @@ export interface DecodedCalldataProps {
   data: string;
   chainId: number;
   apiKey?: string;
-  resolvedAddresses?: Record<string, string>;
-  resolvedAvatars?: Record<string, string>;
-  mainnetRpcUrl?: string;
+  mainnetRpcUrl: string;
 }
 
 export const DecodedCalldataView = ({
   data,
   chainId,
-  resolvedAddresses,
-  resolvedAvatars,
   mainnetRpcUrl,
   decode,
 }: DecodedCalldataProps & { decode: DecodeResult }) => {
   const { clearSigned, decoded, isLoading } = decode;
-  const [localResolved, setLocalResolved] = useState<Record<string, string>>({});
-  const [localAvatars, setLocalAvatars] = useState<Record<string, string>>({});
-  const attemptedRef = useRef<Set<string>>(new Set());
 
-  // Reset local state when decoded data changes identity (new transaction)
-  const decodedIdRef = useRef(decoded);
-  useEffect(() => {
-    if (decodedIdRef.current !== decoded) {
-      decodedIdRef.current = decoded;
-      setLocalResolved({});
-      setLocalAvatars({});
-      attemptedRef.current = new Set();
-    }
-  }, [decoded]);
-
-  // Both sides are filed by {@link identityKey}, which lowercases the address, so a plain
-  // merge is enough and the local answer wins over the one the dialog passed down.
-  const allResolved = useMemo(() => ({ ...resolvedAddresses, ...localResolved }), [resolvedAddresses, localResolved]);
-  const allAvatars = useMemo(() => ({ ...resolvedAvatars, ...localAvatars }), [resolvedAvatars, localAvatars]);
-
-  // Keep a ref to allResolved so the effect can read it without re-triggering
-  const allResolvedRef = useRef(allResolved);
-  allResolvedRef.current = allResolved;
-
-  // Resolve address params that aren't already resolved
-  useEffect(() => {
-    if (!decoded || !mainnetRpcUrl) return;
-
-    const currentResolved = allResolvedRef.current;
-    const addressParams = decoded.params
-      .filter((p) => p.type === 'address' && p.rawValue)
-      .map((p) => p.rawValue!)
-      .filter((addr) => {
-        const lower = addr.toLowerCase();
-        return (
-          lower !== ZERO_ADDRESS && !currentResolved[identityKey(lower, chainId)] && !attemptedRef.current.has(lower)
-        );
-      });
-
-    // Deduplicate
-    const unique = [...new Set(addressParams)];
-    if (unique.length === 0) return;
-
-    // Mark as attempted immediately to prevent re-fetching. An attempt only "counts"
-    // once it lands — see the cleanup, which un-marks anything still in flight.
-    unique.forEach((addr) => attemptedRef.current.add(addr.toLowerCase()));
-    const unmark = () => unique.forEach((addr) => attemptedRef.current.delete(addr.toLowerCase()));
-
-    let cancelled = false;
-    // Set once this run's result has landed. After that the attempt "counts" — including
-    // for addresses that resolved to no name — so the cleanup must leave the marks alone
-    // or every unresolvable address gets re-queried on the next run.
-    let wrote = false;
-    reverseResolveWithAvatars(
-      unique.map((address) => ({ address, chainId })),
-      mainnetRpcUrl
-    )
-      .then(async (resolved) => {
-        if (cancelled) return;
-        const label = await getChainLabel(chainId, mainnetRpcUrl);
-        if (cancelled) return;
-        wrote = true;
-        const next: Record<string, string> = {};
-        const avatarByAddress: Record<string, string> = {};
-        for (const address of unique) {
-          const identity = resolved[identityKey(address, chainId)];
-          if (!identity) continue;
-          const key = identityKey(address, chainId);
-          next[key] = label ? `${identity.name}@${label}` : identity.name;
-          if (identity.avatar) avatarByAddress[key] = identity.avatar;
-        }
-        if (Object.keys(next).length > 0) {
-          setLocalResolved((prev) => ({ ...prev, ...next }));
-        }
-        if (Object.keys(avatarByAddress).length > 0) {
-          setLocalAvatars((prev) => ({ ...prev, ...avatarByAddress }));
-        }
-      })
-      .catch(unmark);
-    return () => {
-      cancelled = true;
-      // If this run never wrote its result, its "attempted" marks must not outlive it:
-      // the next run, which a StrictMode re-invoke or an rpcUrl change causes without a
-      // remount, would filter every address out as already-tried and block resolution for
-      // good. A chainId change is not one of those runs, since it rebuilds `decoded` and
-      // the reset above drops the marks with it.
-      if (!wrote) unmark();
-    };
-  }, [decoded, mainnetRpcUrl, chainId]);
+  // Address params, named on this call's chain. The zero address is a sentinel, not a party.
+  const paramAddresses = (decoded?.params ?? [])
+    .filter((p) => p.type === 'address' && p.rawValue && p.rawValue.toLowerCase() !== ZERO_ADDRESS)
+    .map((p) => ({ address: p.rawValue as string, chainId }));
+  const identities = useAddressIdentities(paramAddresses, { mainnetRpcUrl, include: ENS_ONLY });
 
   // Clear-signing hit: render the formatted view, with raw whatsabi details collapsed underneath.
   if (clearSigned && clearSigned.rows.length > 0) {
@@ -256,9 +171,9 @@ export const DecodedCalldataView = ({
       <div className="bg-secondary rounded-chip flex flex-col gap-1 p-2">
         {decoded.params.length === 0 && <p className="text-muted-foreground text-xs">No parameters</p>}
         {decoded.params.map((param, i) => {
-          const paramKey = param.rawValue ? identityKey(param.rawValue, chainId) : undefined;
-          const resolvedName = paramKey ? allResolved[paramKey] : undefined;
-          const resolvedAvatar = paramKey ? allAvatars[paramKey] : undefined;
+          const identity = param.rawValue ? identities[identityKey(param.rawValue, chainId)] : undefined;
+          const resolvedName = identity?.ensName;
+          const resolvedAvatar = identity?.ensAvatar;
           const unlimitedApproval = approveShape && i === 1 && isUnlimitedAmount(param.value);
           return (
             <div key={i} className="flex flex-col gap-1">
