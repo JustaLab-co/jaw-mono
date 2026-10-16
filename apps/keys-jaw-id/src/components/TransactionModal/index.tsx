@@ -25,7 +25,7 @@ import {
   JAW_RPC_URL,
 } from '@jaw.id/core';
 import { apiKeyFromChain } from '../../lib/api-key';
-import { useAddFundsView } from '../AddFundsModal/useAddFundsView';
+import { useAddFundsView } from '../RequestModals/useAddFundsView';
 
 // Transaction execution result
 export interface TransactionResult {

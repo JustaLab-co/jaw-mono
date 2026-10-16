@@ -25,12 +25,19 @@ const signer = {
   revokePermission: vi.fn(),
 };
 
+// A session handoff can swap the wallet address; a capabilities call that never
+// answers keeps the fee token list loading.
+const session = { walletAddress: ALICE, feeTokensPending: false };
+
 vi.mock('../../hooks', () => ({
-  useSessionAccount: () => ({ account: signer, isLoading: false, walletAddress: ALICE }),
+  useSessionAccount: () => ({ account: signer, isLoading: false, walletAddress: session.walletAddress }),
 }));
 vi.mock('@jaw.id/core', async (importActual) => {
   const actual = await importActual<typeof import('@jaw.id/core')>();
-  return { ...actual, handleGetCapabilitiesRequest: async () => ({}) };
+  return {
+    ...actual,
+    handleGetCapabilitiesRequest: () => (session.feeTokensPending ? new Promise(() => undefined) : Promise.resolve({})),
+  };
 });
 vi.mock('@jaw.id/ui', async (importActual) => {
   const actual = await importActual<typeof import('@jaw.id/ui')>();
@@ -94,6 +101,8 @@ const cases = {
 } satisfies Record<string, Case>;
 
 let root: Root | undefined;
+let rerender: () => Promise<void>;
+const requestClose = vi.fn();
 
 async function render({ type, params, tx }: Case) {
   const onReject = vi.fn(async () => undefined);
@@ -113,24 +122,26 @@ async function render({ type, params, tx }: Case) {
   document.body.appendChild(container);
   const mounted = createRoot(container);
   root = mounted;
-  await act(async () => {
-    mounted.render(
-      <RequestModals
-        pendingRequest={pendingRequest}
-        communicator={{ requestClose: () => undefined } as unknown as PopupCommunicator}
-        apiKey="test-key"
-        currentOrigin="https://dapp.example"
-        txData={tx}
-        setPhase={() => undefined}
-        setError={() => undefined}
-        scheduleClose={() => undefined}
-        finishDeliveredFlow={() => undefined}
-        closeDelayMs={0}
-        signDelivered={false}
-      />
-    );
-  });
-  await act(async () => new Promise((r) => setTimeout(r, 0)));
+  const tree = () => (
+    <RequestModals
+      pendingRequest={pendingRequest}
+      communicator={{ requestClose } as unknown as PopupCommunicator}
+      apiKey="test-key"
+      currentOrigin="https://dapp.example"
+      txData={tx}
+      setPhase={() => undefined}
+      setError={() => undefined}
+      scheduleClose={() => undefined}
+      finishDeliveredFlow={() => undefined}
+      closeDelayMs={0}
+      signDelivered={false}
+    />
+  );
+  rerender = async () => {
+    await act(async () => mounted.render(tree()));
+    await act(async () => new Promise((r) => setTimeout(r, 0)));
+  };
+  await rerender();
   return onReject;
 }
 
@@ -152,6 +163,8 @@ beforeEach(() => {
   vi.spyOn(console, 'error').mockImplementation(() => undefined);
   vi.spyOn(console, 'debug').mockImplementation(() => undefined);
   Object.values(signer).forEach((fn) => typeof fn === 'function' && fn.mockReset());
+  requestClose.mockReset();
+  Object.assign(session, { walletAddress: ALICE, feeTokensPending: false });
 });
 
 afterEach(async () => {
@@ -169,6 +182,17 @@ describe('a request blocked on funds', () => {
 
     expect(buttonNamed('Add funds')?.disabled).toBe(false);
   });
+
+  it.each(blocked)(
+    'Given %s blocked with funds while the fee tokens load, When it renders, Then it does not offer Add funds',
+    async (_, request) => {
+      session.feeTokensPending = true;
+      await render(request);
+
+      expect(buttonNamed('Add funds')).toBeUndefined();
+      expect(buttonNamed('Insufficient Funds')?.disabled).toBe(true);
+    }
+  );
 
   it.each([
     ['a call under a permissionId', { ...cases.wallet_sendCalls, tx: txData('wallet_sendCalls', '0x01') }],
@@ -217,6 +241,38 @@ describe('a request blocked on funds', () => {
       }
     );
   });
+
+  it.each(blocked)(
+    'Given %s on Add funds, When the session hands off to another address, Then it stays on the captured one, unsettled',
+    async (_, request) => {
+      const onReject = await render(request);
+      await click('Add funds');
+
+      session.walletAddress = BOB;
+      await rerender();
+
+      expect(document.body.textContent).toContain('Receive on');
+      expect(document.body.textContent).toContain(ALICE);
+      expect(document.body.textContent).not.toContain(BOB);
+      expect(onReject).not.toHaveBeenCalled();
+    }
+  );
+
+  it.each(blocked)(
+    'Given %s on Add funds, When the user leaves with Done, Done, X and Escape, Then it rejects and closes once',
+    async (_, request) => {
+      const onReject = await render(request);
+      await click('Add funds');
+
+      await leave.Done();
+      await leave.Done();
+      await leave.X();
+      await leave.Escape();
+
+      expect(onReject.mock.calls).toEqual([[ADD_FUNDS_REJECTION, 4001]]);
+      expect(requestClose).toHaveBeenCalledTimes(1);
+    }
+  );
 
   it.each(blocked)(
     'Given %s, When the user taps Cancel on the request view, Then it rejects with the current message',
