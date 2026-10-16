@@ -35,7 +35,7 @@ import {
   handleGetCapabilitiesRequest,
 } from '@jaw.id/core';
 import { apiKeyFromChain } from '../../lib/api-key';
-import { useAddFundsView } from '../AddFundsModal/useAddFundsView';
+import { useAddFundsView } from '../RequestModals/useAddFundsView';
 
 // Known function selectors mapping
 // Permission request data
