@@ -7,7 +7,7 @@ import {
   usdcForNetwork,
 } from '@jaw.id/agent';
 import type { McpServer } from '@modelcontextprotocol/server';
-import { createPublicClient, http, type Address } from 'viem';
+import { createPublicClient, formatUnits, http, type Address } from 'viem';
 import { normalize } from 'viem/ens';
 import { mainnet } from 'viem/chains';
 import { z } from 'zod';
@@ -150,7 +150,9 @@ async function status(t: Tenant) {
   const ready = readinessOf(t, read?.liveness);
   const expiresAt = conn?.expiresAt ?? new Date();
   const nearExpiry = expiresAt.getTime() - Date.now() < EXPIRY_WARN_MS;
-  const holds = balance ? ` The account holds ${balance.amount} base units of USDC.` : '';
+  const holds = balance
+    ? ` The account holds ${formatUnits(BigInt(balance.amount), 6)} USDC (${balance.amount} base units).`
+    : " The account's balance could not be read right now.";
   const base =
     ready.status === 'ready'
       ? `Connected as ${t.account} on ${network}.${holds} Ready to pay${leftToday(read?.budget)}.`

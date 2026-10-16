@@ -19,7 +19,7 @@ import { useTestDb } from '@/db/test-db';
 
 const asked: { id: string }[] = [];
 const chain = { start: 1, end: 2_000_000_000, spend: 0n, held: 0n };
-const held = new Map<string, bigint>();
+const held = new Map<string, bigint | Error>();
 
 // The permission manager answers for whichever permission is asked about: approved,
 // not revoked, nothing spent this period, so any spend in jaw_status comes from elsewhere unless a test sets `chain`.
@@ -30,7 +30,11 @@ vi.mock('@/lib/chain', async (original) => ({
       readContract: async ({ functionName, args }: { functionName: string; args: [unknown] }) => {
         if (functionName === 'getHash') return asked[asked.length - 1].id;
         if (functionName === 'getCurrentPeriod') return chain;
-        if (functionName === 'balanceOf') return held.get(String(args[0]).toLowerCase()) ?? chain.held;
+        if (functionName === 'balanceOf') {
+          const balance = held.get(String(args[0]).toLowerCase()) ?? chain.held;
+          if (balance instanceof Error) throw balance;
+          return balance;
+        }
         return functionName === 'isApproved';
       },
     }) as unknown as PublicClient,
@@ -226,9 +230,27 @@ describe('given the account holds 0.744 USDC and its payer 0.032 USDC of float',
 
     expect(out.balance).toMatchObject({ amount: '744000' });
     expect(out.payer).toMatchObject({ address: t.sessionAddress, held: { amount: '32000' } });
-    expect(out.summary).toContain('The account holds 744000 base units of USDC.');
+    expect(out.summary).toContain('The account holds 0.744 USDC (744000 base units).');
     expect(out.summary).not.toContain('776000');
     expect(out.summary).not.toContain('32000');
+  });
+});
+
+describe('given the account balance cannot be read and its payer holds 0.032 USDC of float', () => {
+  it('when jaw_status runs, then there is no balance and the float is not offered as one', async () => {
+    const c = await connect();
+    const t = (await verifyBearer(c.access_token))?.extra?.tenant as Tenant;
+    await approve(c, '1');
+    held.set(t.account.toLowerCase(), new Error('rpc down'));
+    held.set(t.sessionAddress.toLowerCase(), 32_000n);
+
+    const { structuredContent: out } = await callTool(c.access_token, 'jaw_status', {});
+
+    expect(out.balance).toBeNull();
+    expect(out.payer).toMatchObject({ held: { amount: '32000' } });
+    expect(out.summary).toContain("The account's balance could not be read right now.");
+    expect(out.summary).not.toContain('32000');
+    expect(out.summary).not.toContain('0.032');
   });
 });
 
