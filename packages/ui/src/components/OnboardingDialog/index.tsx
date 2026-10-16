@@ -10,9 +10,11 @@ import { AccountAvatar } from '../AccountAvatar';
 import { OnboardingDialogProps, LocalStorageAccount } from './types';
 import { selectDefaultAccount } from './selectDefaultAccount';
 import { backfillLocalAccountAddresses } from './accountHelpers';
-import { useState, useEffect, useMemo, useRef } from 'react';
+import { useState, useEffect, useMemo } from 'react';
 import { getJustaNameInstance } from '../../utils/justaNameInstance';
-import { reverseResolveWithAvatars, identityKey } from '../../utils/reverseResolve';
+import { useAddressIdentities } from '../../hooks/useAddressIdentities';
+import { ENS_ONLY } from '../../utils/addressIdentity';
+import { identityKey } from '../../utils/reverseResolve';
 import { cn } from '../../lib/utils';
 import { toCoinType } from 'viem';
 
@@ -415,52 +417,18 @@ export function OnboardingDialog({
   const addressOf = (account: LocalStorageAccount) =>
     account.address ?? (account.credentialId ? addressByCredentialId[account.credentialId] : undefined);
 
-  const [identityByAddress, setIdentityByAddress] = useState<Record<string, { name: string; avatar?: string }>>({});
-  const [settledAddresses, setSettledAddresses] = useState<ReadonlySet<string>>(new Set());
-  const attemptedAvatarsRef = useRef<Set<string>>(new Set());
+  // ENS always resolves on mainnet here, so a dApp chain switch does not ask again.
   const knownAddresses = accounts
-    .map((account) => addressOf(account)?.toLowerCase())
-    .filter((address): address is string => !!address);
-  const knownAddressKey = [...new Set(knownAddresses)].sort().join(',');
-  useEffect(() => {
-    const unique = knownAddressKey.split(',').filter((a) => a && !attemptedAvatarsRef.current.has(a));
-    if (unique.length === 0) return;
-    unique.forEach((address) => attemptedAvatarsRef.current.add(address));
-
-    let cancelled = false;
-    reverseResolveWithAvatars(
-      unique.map((address) => ({ address, chainId: 1 })),
-      mainnetRpcUrl
-    )
-      .then((resolved) => {
-        if (cancelled) return;
-        const next: Record<string, { name: string; avatar?: string }> = {};
-        for (const address of unique) {
-          const identity = resolved[identityKey(address, 1)];
-          if (identity?.name) next[address] = { name: identity.name, avatar: identity.avatar };
-        }
-        if (Object.keys(next).length > 0) {
-          setIdentityByAddress((prev) => ({ ...prev, ...next }));
-        }
-        setSettledAddresses((prev) => new Set([...prev, ...unique]));
-      })
-      .catch(() => {
-        // Blobs remain — but the addresses are settled, stop the skeleton
-        setSettledAddresses((prev) => new Set([...prev, ...unique]));
-      });
-    return () => {
-      cancelled = true;
-      unique.forEach((address) => attemptedAvatarsRef.current.delete(address));
-    };
-    // chainId is intentionally omitted: ENS always resolves on mainnet (chainId 1
-    // is hardcoded above), so a dApp chain switch must not re-fire this fetch.
-  }, [knownAddressKey, mainnetRpcUrl]);
+    .map((account) => addressOf(account))
+    .filter((address): address is string => !!address)
+    .map((address) => ({ address, chainId: 1 }));
+  const identities = useAddressIdentities(knownAddresses, { mainnetRpcUrl, include: ENS_ONLY });
   const identityOf = (account: LocalStorageAccount) => {
     const address = addressOf(account);
-    return address ? identityByAddress[address.toLowerCase()] : undefined;
+    return address ? identities[identityKey(address, 1)] : undefined;
   };
-  const avatarFor = (account: LocalStorageAccount) => identityOf(account)?.avatar;
-  const displayNameOf = (account: LocalStorageAccount) => identityOf(account)?.name ?? account.username;
+  const avatarFor = (account: LocalStorageAccount) => identityOf(account)?.ensAvatar ?? undefined;
+  const displayNameOf = (account: LocalStorageAccount) => identityOf(account)?.ensPlainName ?? account.username;
   /**
    * True while this account's final identity is still unknown: either its
    * address is being backfilled, or the address's reverse resolution hasn't
@@ -469,7 +437,7 @@ export function OnboardingDialog({
    */
   const identityPending = (account: LocalStorageAccount) => {
     const address = addressOf(account);
-    if (address) return !settledAddresses.has(address.toLowerCase());
+    if (address) return identityOf(account)?.loading.ens ?? true;
     return backfillInFlight && !!account.credentialId;
   };
 

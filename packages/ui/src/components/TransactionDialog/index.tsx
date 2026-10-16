@@ -4,14 +4,15 @@ import { Button } from '../ui/button';
 import { Accordion } from '../ui/accordion';
 import { ShellDialog } from '../ShellDialog';
 import { ProcessingScreen } from '../ProcessingScreen';
-import { useState, useEffect, useRef } from 'react';
+import { useEffect, useRef } from 'react';
 import { ethAddress } from 'viem';
 import { ArrowDown, LogIn } from 'lucide-react';
 import { TransactionDialogProps } from './types';
 import { useChainIconURI, useFeeTokenPrice } from '../../hooks';
+import { useAddressIdentity } from '../../hooks/useAddressIdentities';
+import { useReverseIdentity } from '../../hooks/useReverseIdentity';
 import { useDecodedCalldata } from '../../hooks/useDecodedCalldata';
-import { caip10, getDefaultDescriptorSource } from '../../utils/clearSigning';
-import { reverseResolveWithAvatars, getDisplayAddress, getChainLabel, identityKey } from '../../utils';
+import { getDisplayAddress } from '../../utils';
 import { formatNativeValue, subscriptDecimal } from '../../utils/displayFormat';
 import { IdentityAvatar } from '../IdentityAvatar';
 import { AppAvatar } from '../AppAvatar';
@@ -24,7 +25,7 @@ import { allowanceChanges } from '../../utils/allowances';
 import { callTitle } from './DecodedCalldata';
 import { resolveBlockReason } from '../../utils/transactionFailure';
 import { isBlockingPermissionProblem, PERMISSION_PROBLEM_TEXT } from '../../utils/permissionExecution';
-import { BatchStep, SingleCallData } from './CallSections';
+import { BatchStep, NAME_SOURCES, SingleCallData } from './CallSections';
 import { InlineWarning, PartyRow, Row, ValueAmount } from '../primitives';
 import { NetworkFeeRow } from '../NetworkFeeRow';
 
@@ -63,9 +64,6 @@ export const TransactionDialog = ({
   mainnetRpcUrl,
   nativeCurrencySymbol,
 }: TransactionDialogProps) => {
-  const [resolvedAddresses, setResolvedAddresses] = useState<Record<string, string>>({});
-  const [resolvedAvatars, setResolvedAvatars] = useState<Record<string, string>>({});
-
   const totalTransactions = transactions.length;
   const isSingleTransaction = totalTransactions === 1;
   const currentTransaction = transactions[0];
@@ -95,129 +93,17 @@ export const TransactionDialog = ({
     return () => el.removeEventListener('wheel', onWheel);
   }, [isProcessing, transactions]);
 
-  // Resolve wallet + transaction 'to' addresses to ENS names in one batched request.
-  useEffect(() => {
-    const inputs: { address: string; chainId: number }[] = [];
-    if (walletAddress && currentTransaction?.chainId) {
-      inputs.push({ address: walletAddress, chainId: currentTransaction.chainId });
-    }
-    if (onBehalfOf && currentTransaction?.chainId) {
-      inputs.push({ address: onBehalfOf, chainId: currentTransaction.chainId });
-    }
-    transactions.forEach((transaction) => {
-      if (transaction.to && transaction.chainId) {
-        inputs.push({ address: transaction.to, chainId: transaction.chainId });
-      }
-    });
-    if (inputs.length === 0) return;
-
-    let cancelled = false;
-    reverseResolveWithAvatars(inputs, mainnetRpcUrl)
-      .then(async (resolved) => {
-        if (cancelled) return;
-        const next: Record<string, string> = {};
-        const avatarsByKey: Record<string, string> = {};
-        for (const { address, chainId } of inputs) {
-          const identity = resolved[identityKey(address, chainId)];
-          if (!identity) continue;
-          const label = await getChainLabel(chainId, mainnetRpcUrl);
-          const key = identityKey(address, chainId);
-          next[key] = label ? `${identity.name}@${label}` : identity.name;
-          if (identity.avatar) avatarsByKey[key] = identity.avatar;
-        }
-        if (cancelled) return;
-        if (Object.keys(next).length > 0) {
-          setResolvedAddresses((prev) => ({ ...prev, ...next }));
-        }
-        if (Object.keys(avatarsByKey).length > 0) {
-          setResolvedAvatars((prev) => ({ ...prev, ...avatarsByKey }));
-        }
-      })
-      .catch(() => undefined);
-    return () => {
-      cancelled = true;
-    };
-  }, [walletAddress, onBehalfOf, transactions, currentTransaction?.chainId]);
-
-  // Resolve ERC-7730 `metadata.contractName` for every unique chain + `to` in the batch,
-  // filed under the same CAIP-10 key the registry index uses.
-  const [contractNames, setContractNames] = useState<Record<string, string>>({});
-  const txSignature = transactions
-    .filter((t) => !!t.to)
-    .map((t) => caip10(t.chainId, t.to))
-    .sort()
-    .join('|');
-  useEffect(() => {
-    if (!txSignature) return;
-    let cancelled = false;
-    (async () => {
-      const source = getDefaultDescriptorSource();
-      let index;
-      try {
-        index = await source.getCalldataIndex();
-      } catch (err) {
-        console.debug('[TransactionDialog] calldata index fetch failed:', err);
-        return;
-      }
-
-      // Keyed by chain and address, like the index itself: the same address is a
-      // different contract on every chain, so a descriptor found for one chain must not
-      // be reused as another chain's name.
-      const lookups = new Map<string, string>();
-      for (const t of transactions) {
-        if (!t.to) continue;
-        const key = caip10(t.chainId, t.to);
-        if (lookups.has(key)) continue;
-        const path = index[key];
-        if (path) lookups.set(key, path);
-      }
-
-      const results = await Promise.all(
-        Array.from(lookups, async ([addr, path]) => {
-          try {
-            const desc = await source.getDescriptor(path);
-            const name = desc.metadata?.contractName ?? desc.context?.$id;
-            return name ? ([addr, name] as const) : null;
-          } catch (err) {
-            console.debug('[TransactionDialog] descriptor fetch failed:', path, err);
-            return null;
-          }
-        })
-      );
-
-      if (cancelled) return;
-      const updates: Record<string, string> = {};
-      for (const r of results) if (r) updates[r[0]] = r[1];
-      if (Object.keys(updates).length > 0) {
-        setContractNames((prev) => ({ ...prev, ...updates }));
-      }
-    })();
-    return () => {
-      cancelled = true;
-    };
-  }, [txSignature]);
-
-  // Both maps are filed by address and chain, so a name read on one chain cannot be
-  // rendered on another chain's row. Every reader passes the chain of the row it draws,
-  // and the two helpers absorb the chain being unknown so the call sites stay plain.
-  const nameFor = (address: string | undefined, chainId: number | undefined): string | undefined =>
-    address && chainId ? resolvedAddresses[identityKey(address, chainId)] : undefined;
-  const avatarFor = (address: string | undefined, chainId: number | undefined): string | undefined =>
-    address && chainId ? resolvedAvatars[identityKey(address, chainId)] : undefined;
-
-  // Prefer ENS reverse-resolved name, then ERC-7730 contractName, then truncated address.
-  const displayContractAddress = (address: string | undefined, chainId: number | undefined): string => {
-    if (!address) return '';
-    const ens = nameFor(address, chainId);
-    if (ens) return ens;
-    const cn = chainId === undefined ? undefined : contractNames[caip10(chainId, address)];
-    if (cn) return cn;
-    return getDisplayAddress(undefined, address);
-  };
-
+  // Each party on the chain it is shown on. These and every batch step ask in the same
+  // commit, so they share one ENS request.
   const dialogChainId = currentTransaction?.chainId;
-  const displayWalletAddress = getDisplayAddress(nameFor(walletAddress, dialogChainId), walletAddress);
-  const displayToAddress = displayContractAddress(currentTransaction?.to, dialogChainId);
+  const wallet = useReverseIdentity(walletAddress, dialogChainId, mainnetRpcUrl);
+  const delegator = useReverseIdentity(onBehalfOf, dialogChainId, mainnetRpcUrl);
+  const recipient = useAddressIdentity(isSingleTransaction ? currentTransaction?.to : undefined, dialogChainId, {
+    mainnetRpcUrl,
+    apiKey,
+    include: NAME_SOURCES,
+  });
+  const displayWalletAddress = getDisplayAddress(wallet.name, walletAddress);
 
   const blockReason = resolveBlockReason({
     hasSelectablePaymentOption,
@@ -283,7 +169,7 @@ export const TransactionDialog = ({
       {isProcessing ? (
         <ProcessingScreen
           seedAddress={walletAddress}
-          avatarUrl={avatarFor(walletAddress, dialogChainId)}
+          avatarUrl={wallet.avatar ?? undefined}
           appAvatar={<AppAvatar appName={appName} appLogoUrl={appLogoUrl} />}
           title="Submitting transaction"
         />
@@ -347,7 +233,7 @@ export const TransactionDialog = ({
                 label="From"
                 value={displayWalletAddress}
                 address={walletAddress}
-                avatarUrl={avatarFor(walletAddress, dialogChainId)}
+                avatarUrl={wallet.avatar ?? undefined}
                 // Marks the signer as acting through a delegation rather than for itself.
                 badge={
                   isPermissioned ? (
@@ -364,13 +250,13 @@ export const TransactionDialog = ({
                     label="On behalf of"
                     value={
                       onBehalfOf
-                        ? getDisplayAddress(nameFor(onBehalfOf, dialogChainId), onBehalfOf)
+                        ? getDisplayAddress(delegator.name, onBehalfOf)
                         : onBehalfOfLoading
                           ? 'Loading…'
                           : 'Unknown'
                     }
                     address={onBehalfOf ?? ''}
-                    avatarUrl={avatarFor(onBehalfOf, dialogChainId)}
+                    avatarUrl={delegator.avatar ?? undefined}
                   />
                 </>
               )}
@@ -389,9 +275,9 @@ export const TransactionDialog = ({
                   )}
                   <PartyRow
                     label="To"
-                    value={displayToAddress}
+                    value={recipient?.label ?? ''}
                     address={currentTransaction.to}
-                    avatarUrl={avatarFor(currentTransaction.to, dialogChainId)}
+                    avatarUrl={recipient?.ensAvatar ?? undefined}
                   />
                 </>
               )}
@@ -462,8 +348,6 @@ export const TransactionDialog = ({
                   decode={singleCallDecode}
                   chainId={currentTransaction.chainId}
                   apiKey={apiKey}
-                  resolvedAddresses={resolvedAddresses}
-                  resolvedAvatars={resolvedAvatars}
                   mainnetRpcUrl={mainnetRpcUrl}
                 />
               </Accordion>
@@ -479,10 +363,7 @@ export const TransactionDialog = ({
                     index={index}
                     nativeSymbol={nativeSymbol}
                     nativeTokenPrice={nativeTokenPrice}
-                    displayContractAddress={displayContractAddress}
                     apiKey={apiKey}
-                    resolvedAddresses={resolvedAddresses}
-                    resolvedAvatars={resolvedAvatars}
                     mainnetRpcUrl={mainnetRpcUrl}
                   />
                 ))}

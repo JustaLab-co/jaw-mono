@@ -1,32 +1,45 @@
 // @vitest-environment jsdom
-// Addresses inside decoded calldata are marked "attempted" before their reverse-resolve
-// request lands, while the effect cleanup cancels the write. A second effect run without
-// a remount (StrictMode's double-invoke, an rpcUrl change) then filters every address out
-// as already-tried and resolution is blocked for good. These pin the retry.
+// Addresses inside decoded calldata are named through the shared identity hook. These pin
+// that they resolve, that StrictMode's double-invoked effects cannot strand them, that
+// views rendered together share one request, and that each view reads the name for its
+// own chain.
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { createElement, act, StrictMode } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
+import { toCoinType } from 'viem';
+
+import { clearAddressIdentityCache } from '../../utils/addressIdentity';
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
 const RECIPIENT = '0xd8dA6BF26964aF9D7eEd9e03E53415D37aA96045';
 const ENS_NAME = 'vitalik.eth';
+const LABELS: Record<number, string> = { 1: 'mainnet', 8453: 'base' };
 
-const identityKey = (address: string, chainId: number) => `${address.toLowerCase()}:${chainId}`;
-
-const reverseResolveWithAvatars = vi.fn(async (inputs: { address: string; chainId: number }[]) => {
-  const out: Record<string, { name: string }> = {};
-  for (const { address, chainId } of inputs) out[identityKey(address, chainId)] = { name: ENS_NAME };
-  return out;
-});
-
-vi.mock('../../utils', () => ({
-  reverseResolveWithAvatars: (...args: unknown[]) =>
-    (reverseResolveWithAvatars as unknown as (...a: unknown[]) => unknown)(...args),
-  identityKey: (address: string, chainId: number) => `${address.toLowerCase()}:${chainId}`,
-  getChainLabel: async () => null,
-  formatAddress: (a: string) => `${a.slice(0, 6)}...${a.slice(-4)}`,
+vi.mock('../../utils/resolveChainLabel', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('../../utils/resolveChainLabel')>()),
+  getChainLabel: async (chainId: number) => LABELS[chainId] ?? null,
 }));
+
+/** Answer every reverse lookup with the same name, and record what was asked. */
+function stubNetwork() {
+  const ensRequests: URL[] = [];
+  vi.stubGlobal(
+    'fetch',
+    vi.fn(async (input: string) => {
+      const url = new URL(input);
+      if (!url.pathname.startsWith('/ens/v2/reverse')) return new Response('{}', { status: 200 });
+      ensRequests.push(url);
+      const data = url.searchParams.getAll('address').map((param) => {
+        const [address, chainId] = param.split('@eip155:');
+        return { address: address.toLowerCase(), name: ENS_NAME, coinType: Number(toCoinType(Number(chainId))) };
+      });
+      return new Response(JSON.stringify({ result: { data } }), { status: 200 });
+    })
+  );
+  return ensRequests;
+}
+
 vi.mock('./ClearSignedView', () => ({ ClearSignedView: () => null }));
 vi.mock('../TokenIcon', () => ({ TokenIcon: () => null }));
 vi.mock('../IdentityAvatar', () => ({ IdentityAvatar: () => null }));
@@ -57,9 +70,11 @@ const props = {
 
 let container: HTMLDivElement;
 let root: Root;
+let ensRequests: URL[];
 
 beforeEach(() => {
-  reverseResolveWithAvatars.mockClear();
+  clearAddressIdentityCache();
+  ensRequests = stubNetwork();
   container = document.createElement('div');
   document.body.appendChild(container);
   root = createRoot(container);
@@ -68,15 +83,16 @@ beforeEach(() => {
 afterEach(() => {
   act(() => root.unmount());
   container.remove();
+  vi.unstubAllGlobals();
 });
 
-/** Flush the effect's promise chain (resolve -> getChainLabel -> setState). */
+/** Let the lookups answer and the resulting renders land. */
 async function settle() {
-  await act(async () => {
-    await Promise.resolve();
-    await Promise.resolve();
-    await Promise.resolve();
-  });
+  for (let i = 0; i < 10; i++) {
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    });
+  }
 }
 
 const countNames = () => (container.textContent?.split(ENS_NAME).length ?? 1) - 1;
@@ -88,11 +104,11 @@ describe('DecodedCalldataView address resolution', () => {
     });
     await settle();
 
-    expect(reverseResolveWithAvatars).toHaveBeenCalledTimes(1);
-    expect(container.textContent).toContain(ENS_NAME);
+    expect(ensRequests).toHaveLength(1);
+    expect(container.textContent).toContain(`${ENS_NAME}@base`);
   });
 
-  it('resolves calldata addresses when two calls are rendered together', async () => {
+  it('resolves both calls rendered together with one request', async () => {
     await act(async () => {
       root.render(
         createElement(
@@ -105,7 +121,7 @@ describe('DecodedCalldataView address resolution', () => {
     });
     await settle();
 
-    expect(reverseResolveWithAvatars).toHaveBeenCalledTimes(2);
+    expect(ensRequests).toHaveLength(1);
     expect(countNames()).toBe(2);
   });
 });
@@ -139,21 +155,16 @@ describe('DecodedCalldataView address resolution under StrictMode', () => {
   });
 });
 
-// The dialog hands the same map down to every row, and a batch can carry the same address
-// on rows the dialog draws for different chains. Filed by address alone, whichever answer
-// landed last was rendered on both rows, one of them under the other chain's label.
-describe('DecodedCalldataView reads the map on its own chain', () => {
-  const MAINNET_NAME = 'vitalik.eth@mainnet';
-  const BASE_NAME = 'vitalik.eth@base';
+// A batch can carry the same address on rows drawn for different chains. Filed by address
+// alone, whichever answer landed last was rendered on both rows, one of them under the
+// other chain's label.
+describe('DecodedCalldataView reads the name for its own chain', () => {
+  const MAINNET_NAME = `${ENS_NAME}@mainnet`;
+  const BASE_NAME = `${ENS_NAME}@base`;
 
-  const parentMap = {
-    [identityKey(RECIPIENT, 1)]: MAINNET_NAME,
-    [identityKey(RECIPIENT, 8453)]: BASE_NAME,
-  };
-
-  it('shows the name filed for its chain, not the other one', async () => {
+  it('shows the name read on its chain, not another one', async () => {
     await act(async () => {
-      root.render(createElement(DecodedCalldataView, { ...props, chainId: 1, resolvedAddresses: parentMap }));
+      root.render(createElement(DecodedCalldataView, { ...props, chainId: 1 }));
     });
     await settle();
 
@@ -161,24 +172,14 @@ describe('DecodedCalldataView reads the map on its own chain', () => {
     expect(container.textContent).not.toContain(BASE_NAME);
   });
 
-  it('renders one row per chain from the same map', async () => {
+  it('renders one row per chain, asking for the address on each', async () => {
     await act(async () => {
       root.render(
         createElement(
           'div',
           null,
-          createElement(DecodedCalldataView, {
-            ...props,
-            key: 'mainnet',
-            chainId: 1,
-            resolvedAddresses: parentMap,
-          }),
-          createElement(DecodedCalldataView, {
-            ...props,
-            key: 'base',
-            chainId: 8453,
-            resolvedAddresses: parentMap,
-          })
+          createElement(DecodedCalldataView, { ...props, key: 'mainnet', chainId: 1 }),
+          createElement(DecodedCalldataView, { ...props, key: 'base', chainId: 8453 })
         )
       );
     });
@@ -186,5 +187,9 @@ describe('DecodedCalldataView reads the map on its own chain', () => {
 
     expect(container.textContent).toContain(MAINNET_NAME);
     expect(container.textContent).toContain(BASE_NAME);
+    expect(ensRequests[0].searchParams.getAll('address')).toEqual([
+      `${RECIPIENT}@eip155:1`,
+      `${RECIPIENT}@eip155:8453`,
+    ]);
   });
 });
