@@ -143,8 +143,12 @@ async function startSession(release: () => void, chainId: number, until: Date, c
     if (ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify({ type: 'ping' }));
   }, KEEPALIVE_MS);
   keepalive.unref();
+  // Ends the session at its deadline even if nobody runs it.
+  const deadline = setTimeout(() => end(), until.getTime() - Date.now());
+  deadline.unref();
   const stop = () => {
     clearInterval(keepalive);
+    clearTimeout(deadline);
     release();
   };
   // A socket closed while still connecting never fires `close`, so closing frees the slot itself.
@@ -153,8 +157,6 @@ async function startSession(release: () => void, chainId: number, until: Date, c
     stop();
   };
   ws.addEventListener('close', stop, { once: true });
-  // Ends the session at its deadline even if nobody runs it.
-  setTimeout(end, until.getTime() - Date.now()).unref();
   const inbox = new Inbox(ws, until);
 
   return {

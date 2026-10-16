@@ -206,8 +206,8 @@ describe('a link the owner opens late', () => {
     await opened.shutdown;
   });
 
-  it('given the session is closed, then the server sends nothing more', async () => {
-    vi.useFakeTimers({ toFake: ['setInterval', 'clearInterval'] });
+  it('given the session is closed, then it leaves no timer behind', async () => {
+    vi.useFakeTimers({ toFake: ['setInterval', 'clearInterval', 'setTimeout', 'clearTimeout'] });
     const wallet = await openRelay(84532, 40 * 60_000);
     const session = new URL(wallet.url).searchParams.get('session')!;
     await vi.waitFor(() => expect(sessions.get(session)?.cli).toBeDefined());
