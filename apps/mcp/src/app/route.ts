@@ -26,12 +26,14 @@ body{margin:0;min-height:100vh;display:grid;place-items:center;font:15px/1.7 ui-
 main{max-width:36rem;padding:1rem}
 p{margin:0}
 a{color:inherit}
+.url{display:block;margin:.4rem 0 .9rem;padding:.5rem .75rem;border:1px solid color-mix(in srgb,CanvasText 20%,transparent);border-radius:6px;background:color-mix(in srgb,CanvasText 6%,Canvas);text-decoration:none;overflow-wrap:anywhere;user-select:all}
 </style>
 </head>
 <body>
 <main>
 <p>hi. i'm the jaw mcp server.</p>
-<p>add me as a connector to your favorite ai: <a href="${u}">${u}</a></p>
+<p>add me as a connector to your favorite ai:</p>
+<a class="url" href="${u}">${u}</a>
 <p>more at <a href="${AGENTS_URL}">jaw.id/agents</a></p>
 </main>
 </body>
@@ -49,7 +51,8 @@ const acceptsHtml = (accept: string | null) =>
 
 const text = (url: string) =>
   `hi. i'm the jaw mcp server.
-add me as a connector to your favorite ai: ${url}
+add me as a connector to your favorite ai:
+${url}
 more at ${AGENTS_URL}
 `;
 
