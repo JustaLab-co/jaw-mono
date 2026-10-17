@@ -31,7 +31,10 @@ describe('the root of the server', () => {
     }
   });
 
-  it('answers HEAD with 200', async () => {
-    expect((await visit('text/html', 'HEAD')).status).toBe(200);
+  it('answers HEAD with the headers GET would send and no body', async () => {
+    const res = await visit('text/html', 'HEAD');
+    expect(res.status).toBe(200);
+    expect(res.headers.get('content-type')).toMatch(/^text\/html/);
+    expect(await res.text()).toBe('');
   });
 });

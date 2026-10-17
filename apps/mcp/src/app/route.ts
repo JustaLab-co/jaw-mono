@@ -69,4 +69,9 @@ export const GET = withEdge(
   },
   { guarded: false }
 );
-export const HEAD = GET;
+// Same status and headers as GET, no body.
+export const HEAD: typeof GET = async (req, ctx) => {
+  const res = await GET(req, ctx);
+  await res.body?.cancel();
+  return new Response(null, { status: res.status, headers: res.headers });
+};
