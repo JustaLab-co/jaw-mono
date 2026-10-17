@@ -35,6 +35,7 @@ import {
   handleGetCapabilitiesRequest,
 } from '@jaw.id/core';
 import { apiKeyFromChain } from '../../lib/api-key';
+import { useAddFundsView } from '../RequestModals/useAddFundsView';
 
 // Known function selectors mapping
 // Permission request data
@@ -799,6 +800,20 @@ export const PermissionModal = ({
     }
   }, [isProcessing, onError, setSelectedFeeToken]);
 
+  const { addFundsView, onAddFunds } = useAddFundsView({
+    walletAddress,
+    short: permissionDetails?.address ?? walletAddress ?? undefined,
+    chainId: chain?.id,
+    submittingRef,
+    apiKey: extractedApiKey,
+    mainnetRpcUrl,
+    origin,
+    appName,
+    appLogoUrl,
+    onError,
+  });
+  if (addFundsView) return addFundsView;
+
   // Don't render if no permission details
   if (!permissionDetails) {
     return null;
@@ -832,6 +847,7 @@ export const PermissionModal = ({
       apiKey={extractedApiKey}
       onConfirm={handleConfirm}
       onCancel={handleCancel}
+      onAddFunds={onAddFunds}
       isProcessing={isProcessing}
       status={status}
       isLoadingTokenInfo={isLoadingTokenInfo || isLoadingPermissionDetails || isAccountLoading}

@@ -1,6 +1,9 @@
-export interface AddFundsDialogProps {
+export interface AddFundsDialogProps extends AddFundsViewProps {
   open: boolean;
   onOpenChange?: (open: boolean) => void;
+}
+
+export interface AddFundsViewProps {
   /**
    * The destination, resolved by the wallet from the session. Never a value the
    * dapp supplied — see `resolveDestination` in core.
@@ -23,9 +26,12 @@ export interface AddFundsDialogProps {
   /** Nullable because the handler config carries an explicit "no logo" as null. */
   appLogoUrl?: string | null;
   origin?: string;
+  /** Shown in place of the origin, as on the request dialogs (the wallet's own bridge page). */
+  originLabel?: string;
   /**
-   * The user is done. Deposits land off-app, so this is a normal finish rather
-   * than a rejection, and the request resolves null.
+   * The user is done. The host decides what that settles: `wallet_addFunds`
+   * resolves null, while a request that opened this view because it was short
+   * of funds ends with a rejection so the caller retries after the deposit.
    */
   onDone: () => void;
 }

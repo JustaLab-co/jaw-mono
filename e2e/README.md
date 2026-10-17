@@ -117,6 +117,10 @@ since neither side times out, so each test bounds that wait.
 - A request sent while the last dialog is still closing reuses it and shows its
   screen.
 
+### add-funds
+
+A request the account cannot pay for offers "Add funds" instead of a disabled "Insufficient Funds", and leaving the Add Funds view ends the request with 4001 and a message the dApp can retry on. The mocked chain decides "short": the native balance the account reports, ETH as the only fee token, and a bundler that answers AA21 when the balance can't cover the value and fee. The app-specific tests run the SDK's own dialog in the playground page with the passkey's account seeded on the playground origin, and read the error from the Response panel, which shows its message only. The popup tests send their requests through the provider the SDK announces over EIP-6963, so they check the code too, and are skipped over https.
+
 ### iframe-transport
 
 The embedded iframe in a real browser: `color-scheme: normal` so the dApp shows

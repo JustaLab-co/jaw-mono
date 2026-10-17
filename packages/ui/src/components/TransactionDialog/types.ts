@@ -51,6 +51,8 @@ export interface TransactionDialogProps {
   // Actions
   onConfirm: () => Promise<void>;
   onCancel: () => void;
+  /** Set when the host can show Add Funds: a funds block then offers it instead of a dead end. */
+  onAddFunds?: () => void;
   isProcessing: boolean;
 
   // Display utilities
