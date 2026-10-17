@@ -81,6 +81,8 @@ export interface PermissionDialogProps {
   // Actions
   onConfirm: () => void;
   onCancel: () => void;
+  /** Set when the host can show Add Funds: a funds block then offers it instead of a dead end. */
+  onAddFunds?: () => void;
 
   // Status
   isProcessing: boolean;

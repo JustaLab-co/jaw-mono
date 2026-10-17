@@ -124,6 +124,9 @@ export class Passkey {
   }
 }
 
+export type RpcCall = { id: number; method: string };
+export type RpcAnswer = { result: unknown } | { error: { code: number; message: string } };
+
 /**
  * Everything the SDK and keys ask api.justaname.id, answered in the test. The
  * RPC answers the three calls a sign-in makes for an undeployed account; the
@@ -133,6 +136,8 @@ export class Network {
   rpcDown = false;
   /** RPC calls answered with an error while rpcDown was set. */
   rpcFailures = 0;
+  /** A test's own answers, asked first. Returning undefined falls back to the defaults. */
+  answers?: (call: RpcCall) => RpcAnswer | undefined;
 
   async install(context: BrowserContext) {
     await context.route('https://api.justaname.id/**', async (route) => {
@@ -145,10 +150,10 @@ export class Network {
         return route.fulfill({ status: 503, body: 'down' });
       }
       const body = request.postDataJSON();
-      const answer = (call: { id: number; method: string }) => ({
+      const answer = (call: RpcCall) => ({
         jsonrpc: '2.0',
         id: call.id,
-        result: rpc(call.method),
+        ...(this.answers?.(call) ?? { result: rpc(call.method) }),
       });
       return route.fulfill({ json: Array.isArray(body) ? body.map(answer) : answer(body) });
     });
@@ -169,8 +174,8 @@ export class Dapp {
     private readonly context: BrowserContext
   ) {}
 
-  async open() {
-    await this.page.goto('/core');
+  async open(path = '/core') {
+    await this.page.goto(path);
     await expect(this.page.getByRole('button', { name: /^Execute/ }).last()).toBeEnabled();
   }
 
@@ -299,7 +304,8 @@ export class Dapp {
 export const keys = {
   accountScreen: (dialog: Dialog) => dialog.getByText('Welcome back.'),
   account: (dialog: Dialog) => dialog.getByText('e2e', { exact: true }),
-  button: (dialog: Dialog, name: 'Connect' | 'Sign' | 'Cancel') => dialog.getByRole('button', { name, exact: true }),
+  button: (dialog: Dialog, name: 'Connect' | 'Sign' | 'Confirm' | 'Cancel') =>
+    dialog.getByRole('button', { name, exact: true }),
   close: (dialog: Dialog) => dialog.getByRole('button', { name: 'Cancel', exact: true }).first(),
 };
 

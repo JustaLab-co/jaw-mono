@@ -1,6 +1,6 @@
 'use client';
 
-import React, { useMemo, useState, useEffect, useRef } from 'react';
+import React, { useMemo, useState, useEffect, useRef, type RefObject } from 'react';
 import { createRoot } from 'react-dom/client';
 import {
   UIHandler,
@@ -49,7 +49,7 @@ import { TransactionDialog } from '../components/TransactionDialog';
 import { PermissionDialog } from '../components/PermissionDialog';
 import { isWildcard } from '../components/PermissionDialog/Sections';
 import { ConnectDialog } from '../components/ConnectDialog';
-import { AddFundsDialog } from '../components/AddFundsDialog';
+import { AddFundsDialog, ADD_FUNDS_REJECTION } from '../components/AddFundsDialog';
 import { ResponsiveDialogAnchor } from '../components/DialogPresentation';
 import { type FeeTokenOption } from '../components/FeeTokenSelector';
 import { type LocalStorageAccount, type CreatedAccountData } from '../components/OnboardingDialog/types';
@@ -670,6 +670,7 @@ export class ReactUIHandler implements UIHandler {
             paymasters={this.config.paymasters}
             appName={this.config.appName}
             appLogoUrl={this.config.appLogoUrl}
+            originLabel={this.originLabel}
           />
         );
 
@@ -686,6 +687,7 @@ export class ReactUIHandler implements UIHandler {
             paymasters={this.config.paymasters}
             appName={this.config.appName}
             appLogoUrl={this.config.appLogoUrl}
+            originLabel={this.originLabel}
           />
         );
 
@@ -1770,6 +1772,19 @@ function TransactionDialogWrapper({
   // Determine if fee token selector should be shown (not sponsored and has fee tokens)
   const showFeeTokenSelector = !isSponsored && feeTokens.length > 0;
 
+  const { addFundsView, onAddFunds } = useAddFundsView({
+    account,
+    short: permissionId ? undefined : request.data.from,
+    chainId,
+    submittingRef,
+    apiKey,
+    appName,
+    appLogoUrl,
+    originLabel,
+    onReject,
+  });
+  if (addFundsView) return addFundsView;
+
   return (
     <TransactionDialog
       open={open}
@@ -1793,6 +1808,7 @@ function TransactionDialogWrapper({
       permissionProblem={permissionProblem}
       onConfirm={handleConfirm}
       onCancel={handleCancel}
+      onAddFunds={onAddFunds}
       isProcessing={isProcessing}
       networkName={networkName}
       mainnetRpcUrl={getMainnetRpcUrl(apiKey)}
@@ -2129,6 +2145,19 @@ function SendTransactionDialogWrapper({
   // Determine if fee token selector should be shown (not sponsored and has fee tokens)
   const showFeeTokenSelector = !isSponsored && feeTokens.length > 0;
 
+  const { addFundsView, onAddFunds } = useAddFundsView({
+    account,
+    short: request.data.from,
+    chainId,
+    submittingRef,
+    apiKey,
+    appName,
+    appLogoUrl,
+    originLabel,
+    onReject,
+  });
+  if (addFundsView) return addFundsView;
+
   return (
     <TransactionDialog
       open={open}
@@ -2149,6 +2178,7 @@ function SendTransactionDialogWrapper({
       assetPreviewRevertCause={assetPreviewRevertCause}
       onConfirm={handleConfirm}
       onCancel={handleCancel}
+      onAddFunds={onAddFunds}
       isProcessing={isProcessing}
       networkName={networkName}
       mainnetRpcUrl={getMainnetRpcUrl(apiKey)}
@@ -2180,6 +2210,7 @@ function PermissionDialogWrapper({
   paymasters,
   appName,
   appLogoUrl,
+  originLabel,
 }: {
   request: PermissionUIRequest;
   onApprove: (data: any) => void;
@@ -2190,6 +2221,7 @@ function PermissionDialogWrapper({
   paymasters?: Record<number, PaymasterConfig>;
   appName?: string;
   appLogoUrl?: string | null;
+  originLabel?: string;
 }) {
   const [open, setOpen] = useState(true);
   const [isProcessing, setIsProcessing] = useState(false);
@@ -2654,6 +2686,19 @@ function PermissionDialogWrapper({
     onReject(UIError.userRejected());
   };
 
+  const { addFundsView, onAddFunds } = useAddFundsView({
+    account,
+    short: request.data.address,
+    chainId,
+    submittingRef,
+    apiKey,
+    appName,
+    appLogoUrl,
+    originLabel,
+    onReject,
+  });
+  if (addFundsView) return addFundsView;
+
   return (
     <PermissionDialog
       open={open}
@@ -2678,6 +2723,7 @@ function PermissionDialogWrapper({
       appLogoUrl={appLogoUrl}
       onConfirm={handleConfirm}
       onCancel={handleCancel}
+      onAddFunds={onAddFunds}
       isProcessing={isProcessing}
       status={status}
       isLoadingTokenInfo={isLoadingTokenInfo}
@@ -2863,6 +2909,73 @@ function AddFundsDialogWrapper({
   );
 }
 
+// The Add Funds view a request blocked on funds can switch to. Offered only when the account
+// that is short is the connected one, the address Add Funds shows. Leaving it ends the request,
+// so the caller retries after the deposit and nothing is ever signed from it. Opening it is a
+// no-op while a submission is in flight, for the same reason `handleCancel` is. Once open, it
+// keeps the address and chain it opened with until the request settles, and settles it once.
+export function useAddFundsView({
+  account,
+  short,
+  chainId,
+  submittingRef,
+  apiKey,
+  appName,
+  appLogoUrl,
+  originLabel,
+  onReject,
+}: {
+  account: Account | null;
+  short: string | undefined;
+  chainId: number;
+  submittingRef: RefObject<boolean>;
+  apiKey?: string;
+  appName?: string;
+  appLogoUrl?: string | null;
+  originLabel?: string;
+  onReject: (error?: Error) => void;
+}) {
+  const [target, setTarget] = useState<{ address: string; chainId: number } | null>(null);
+  const leftRef = useRef(false);
+
+  if (!target) {
+    const address = account?.address;
+    if (!address || address.toLowerCase() !== short?.toLowerCase()) {
+      return { addFundsView: null, onAddFunds: undefined };
+    }
+    const onAddFunds = () => {
+      if (!submittingRef.current) setTarget({ address, chainId });
+    };
+    return { addFundsView: null, onAddFunds };
+  }
+
+  const leave = () => {
+    if (leftRef.current) return;
+    leftRef.current = true;
+    onReject(UIError.userRejected(ADD_FUNDS_REJECTION));
+  };
+  const addFundsView = (
+    <AddFundsDialog
+      open
+      onOpenChange={(next) => {
+        if (!next) leave();
+      }}
+      address={target.address}
+      chainId={target.chainId}
+      // Only a deposit on the request's chain unblocks it.
+      chains={[target.chainId]}
+      mainnetRpcUrl={getMainnetRpcUrl(apiKey)}
+      apiKey={apiKey}
+      appName={appName}
+      appLogoUrl={appLogoUrl}
+      origin={typeof window !== 'undefined' ? window.location.origin : ''}
+      originLabel={originLabel}
+      onDone={leave}
+    />
+  );
+  return { addFundsView, onAddFunds: undefined };
+}
+
 // RevokePermissionDialogWrapper - handles wallet_revokePermissions
 function RevokePermissionDialogWrapper({
   request,
@@ -2874,6 +2987,7 @@ function RevokePermissionDialogWrapper({
   paymasters,
   appName,
   appLogoUrl,
+  originLabel,
 }: {
   request: RevokePermissionUIRequest;
   onApprove: (data: any) => void;
@@ -2884,6 +2998,7 @@ function RevokePermissionDialogWrapper({
   paymasters?: Record<number, PaymasterConfig>;
   appName?: string;
   appLogoUrl?: string | null;
+  originLabel?: string;
 }) {
   const [open, setOpen] = useState(true);
   const [isProcessing, setIsProcessing] = useState(false);
@@ -3315,6 +3430,19 @@ function RevokePermissionDialogWrapper({
     onReject(UIError.userRejected());
   };
 
+  const { addFundsView, onAddFunds } = useAddFundsView({
+    account,
+    short: request.data.address,
+    chainId,
+    submittingRef,
+    apiKey,
+    appName,
+    appLogoUrl,
+    originLabel,
+    onReject,
+  });
+  if (addFundsView) return addFundsView;
+
   return (
     <PermissionDialog
       open={open}
@@ -3339,6 +3467,7 @@ function RevokePermissionDialogWrapper({
       appLogoUrl={appLogoUrl}
       onConfirm={handleConfirm}
       onCancel={handleCancel}
+      onAddFunds={onAddFunds}
       isProcessing={isProcessing}
       status={status}
       // Either half closes the gate: no Confirm until the permission AND its metadata land.
