@@ -11,7 +11,10 @@ import {
     getAdminBatch,
     getCeremony,
     getRecoveryConfig,
+    handleGetRecoveryRequest,
     listCeremonies,
+    normalizeCancelRecoveryParams,
+    normalizeSetupRecoveryParams,
     recoverTypedData,
     recoveryAdminTypedData,
     submitAdminBatch,
@@ -305,5 +308,297 @@ describe('buildRecoverySetupCalls', () => {
         const same = { recoveries: [A, B, C].map((commitment) => ({ commitment, delay: 60 })), threshold: 2 };
 
         expect(buildRecoverySetupCalls(ACCOUNT, ON_CHAIN, same)).toEqual([]);
+    });
+});
+
+describe('handleGetRecoveryRequest', () => {
+    const CONNECTED = '0x2222222222222222222222222222222222222222' as const;
+    const CHAIN: RecoveryChainConfig = {
+        chainId: 84_532,
+        deployed: true,
+        enrolled: true,
+        threshold: 1,
+        recoveries: [],
+    };
+    const PENDING = {
+        requestId: ID,
+        account: ACCOUNT,
+        subject: SUBJECT,
+        expiry: '2030-01-01T00:00:00.000Z',
+        chains: [],
+    };
+
+    beforeEach(() => {
+        vi.mocked(restCall).mockReset();
+        vi.mocked(restCall).mockImplementation(async (route: string) =>
+            route === 'GET_RECOVERY_CONFIG' ? ({ chains: [CHAIN] } as never) : ({ ceremonies: [PENDING] } as never)
+        );
+    });
+
+    function reads() {
+        return vi.mocked(restCall).mock.calls.map((call) => [...call]);
+    }
+
+    test('Given an address in params, When handled, Then both reads are for it and the state is composed', async () => {
+        const state = await handleGetRecoveryRequest(
+            { method: 'wallet_getRecovery', params: [{ address: ACCOUNT }] },
+            KEY
+        );
+
+        expect(state).toEqual({ chains: [CHAIN], pending: [PENDING] });
+        expect(reads()).toEqual([
+            ['GET_RECOVERY_CONFIG', 'GET', {}, { 'x-api-key': KEY }, { account: ACCOUNT }],
+            ['LIST_CEREMONIES', 'GET', { account: ACCOUNT, executed: 'false' }, { 'x-api-key': KEY }],
+        ]);
+    });
+
+    test('Given no address but a connected account, When handled, Then the connected address is injected', async () => {
+        await handleGetRecoveryRequest({ method: 'wallet_getRecovery', params: [] }, KEY, CONNECTED);
+
+        expect(reads().map((call) => call[4] ?? call[2])).toEqual([
+            { account: CONNECTED },
+            { account: CONNECTED, executed: 'false' },
+        ]);
+    });
+
+    test('Given an address in params and a connected account, When handled, Then the params win', async () => {
+        await handleGetRecoveryRequest(
+            { method: 'wallet_getRecovery', params: [{ address: ACCOUNT }] },
+            KEY,
+            CONNECTED
+        );
+
+        expect(reads()[0][4]).toEqual({ account: ACCOUNT });
+    });
+
+    test('Given no address and no connected account, When handled, Then it rejects with invalid params and nothing is read', async () => {
+        await expect(handleGetRecoveryRequest({ method: 'wallet_getRecovery', params: [] }, KEY)).rejects.toMatchObject(
+            { code: -32602, message: expect.stringContaining('address') }
+        );
+
+        expect(restCall).not.toHaveBeenCalled();
+    });
+
+    test('Given a malformed address, When handled, Then it rejects before anything is read', async () => {
+        await expect(
+            handleGetRecoveryRequest({ method: 'wallet_getRecovery', params: [{ address: '0xabc' }] }, KEY, CONNECTED)
+        ).rejects.toMatchObject({ code: -32602, message: expect.stringContaining('address') });
+
+        expect(restCall).not.toHaveBeenCalled();
+    });
+});
+
+/** Every input that must be refused before a signing window opens. */
+const REJECTED_IDS: [name: string, id: unknown][] = [
+    ['missing', undefined],
+    ['null', null],
+    ['empty string', ''],
+    ['bare 0x', '0x'],
+    ['too short', `0x${'ab'.repeat(31)}`],
+    ['too long', `0x${'ab'.repeat(33)}`],
+    ['no 0x prefix', 'ab'.repeat(32)],
+    ['non-hex characters', `0x${'zz'.repeat(32)}`],
+    ['a number', 1],
+    ['an object', {}],
+    // A BigInt must not crash the validator itself: a message that interpolated
+    // JSON.stringify(value) would throw on one, and `request` is in-process, so
+    // the dapp would see that TypeError instead of -32602.
+    ['a bigint', 1n],
+];
+
+describe('normalizeCancelRecoveryParams', () => {
+    it('accepts a 32-byte request id and passes the capabilities through', () => {
+        expect(normalizeCancelRecoveryParams([{ requestId: ID, capabilities: { foo: 1 } }])).toEqual({
+            requestId: ID,
+            capabilities: { foo: 1 },
+        });
+    });
+
+    it('leaves capabilities undefined when the dapp omits them', () => {
+        expect(normalizeCancelRecoveryParams([{ requestId: ID }])).toEqual({
+            requestId: ID,
+            capabilities: undefined,
+        });
+    });
+
+    it('accepts a lowercase, non-checksummed request id', () => {
+        const lower = `0x${'AB'.repeat(32)}`.toLowerCase();
+        expect(normalizeCancelRecoveryParams([{ requestId: lower }]).requestId).toBe(lower);
+    });
+
+    // The veto is about one ceremony, so a request that names no usable request
+    // id cannot succeed and must never open a dialog over nothing.
+    it.each(REJECTED_IDS)('rejects a request id that is %s with -32602', (_name, requestId) => {
+        expect(() => normalizeCancelRecoveryParams([{ requestId }])).toThrow(/must be a 32-byte hex value/);
+        try {
+            normalizeCancelRecoveryParams([{ requestId }]);
+        } catch (err) {
+            expect((err as { code?: number }).code).toBe(-32602);
+        }
+    });
+
+    it('rejects a malformed envelope', () => {
+        for (const params of [undefined, null, [], [null], ['0x'], {}]) {
+            expect(() => normalizeCancelRecoveryParams(params)).toThrow(/expected a single object parameter/);
+        }
+    });
+});
+
+const GUARDIAN = '0xabcdefabcdefabcdefabcdefabcdefabcdefabcd' as const;
+const PADDED_GUARDIAN = `0x${'00'.repeat(12)}${GUARDIAN.slice(2)}` as const;
+const PADDED_OTHER = `0x${'00'.repeat(12)}${'44'.repeat(20)}` as const;
+const OTHER_PROVIDER = '0x5555555555555555555555555555555555555555' as const;
+
+/** A valid proposed method, with overrides for the field under test. */
+function method(overrides: Record<string, unknown> = {}) {
+    return { commitment: GUARDIAN, delay: 60, ...overrides };
+}
+
+describe('normalizeSetupRecoveryParams', () => {
+    it.each([
+        ['no params', undefined],
+        ['null params', null],
+        ['an empty list', []],
+        ['a null entry', [null]],
+        ['an undefined entry', [undefined]],
+    ])('reads %s as "open the editor on the current config"', (_name, params) => {
+        expect(normalizeSetupRecoveryParams(params)).toEqual({});
+    });
+
+    it('reads an empty proposal as nothing proposed', () => {
+        expect(normalizeSetupRecoveryParams([{}])).toEqual({
+            recoveries: undefined,
+            threshold: undefined,
+            capabilities: undefined,
+        });
+    });
+
+    it('passes a proposal through, padding an address commitment to the 32 bytes the provider compares', () => {
+        const capabilities = { paymasterService: { url: 'https://pm.example' } };
+
+        expect(
+            normalizeSetupRecoveryParams([
+                {
+                    recoveries: [
+                        { commitment: GUARDIAN, delay: 172_800 },
+                        { commitment: SUBJECT, delay: 0 },
+                        { commitment: PADDED_OTHER, delay: 60, provider: OTHER_PROVIDER },
+                    ],
+                    threshold: 2,
+                    capabilities,
+                },
+            ])
+        ).toEqual({
+            recoveries: [
+                { commitment: PADDED_GUARDIAN, delay: 172_800 },
+                { commitment: SUBJECT, delay: 0 },
+                { commitment: PADDED_OTHER, delay: 60, provider: OTHER_PROVIDER },
+            ],
+            threshold: 2,
+            capabilities,
+        });
+    });
+
+    it('accepts a threshold alone, as a prefill over methods the user has yet to pick', () => {
+        expect(normalizeSetupRecoveryParams([{ threshold: 3 }])).toEqual({
+            recoveries: undefined,
+            threshold: 3,
+            capabilities: undefined,
+        });
+    });
+
+    it('accepts a threshold equal to the number of methods proposed', () => {
+        const params = [{ recoveries: [method(), method({ commitment: SUBJECT })], threshold: 2 }];
+        expect(normalizeSetupRecoveryParams(params).threshold).toBe(2);
+    });
+
+    it('does not read keys that are not part of the proposal', () => {
+        const normalized = normalizeSetupRecoveryParams([{ address: ACCOUNT, chainId: '0x1' }]);
+
+        expect(normalized).not.toHaveProperty('address');
+        expect(normalized).not.toHaveProperty('chainId');
+    });
+
+    it.each<[name: string, params: unknown, reason: RegExp]>([
+        ['an envelope that is not a list', {}, /expected a single object parameter/],
+        ['an entry that is not an object', ['0x'], /expected a single object parameter/],
+        ['recoveries that is not a list', [{ recoveries: 'nope' }], /recoveries must be an array/],
+        ['an empty recoveries list', [{ recoveries: [] }], /recoveries must not be empty/],
+        ['a method that is not an object', [{ recoveries: [1] }], /recoveries\[0\] must be an object/],
+        ['a missing commitment', [{ recoveries: [method({ commitment: undefined })] }], /commitment must be/],
+        [
+            'a commitment of 19 bytes',
+            [{ recoveries: [method({ commitment: `0x${'ab'.repeat(19)}` })] }],
+            /commitment must be/,
+        ],
+        [
+            'a commitment of 21 bytes',
+            [{ recoveries: [method({ commitment: `0x${'ab'.repeat(21)}` })] }],
+            /commitment must be/,
+        ],
+        [
+            'a commitment of 33 bytes',
+            [{ recoveries: [method({ commitment: `0x${'ab'.repeat(33)}` })] }],
+            /commitment must be/,
+        ],
+        [
+            'a commitment of 65 bytes',
+            [{ recoveries: [method({ commitment: `0x${'ab'.repeat(65)}` })] }],
+            /commitment must be/,
+        ],
+        [
+            'a commitment that is not hex',
+            [{ recoveries: [method({ commitment: `0x${'zz'.repeat(20)}` })] }],
+            /commitment must be/,
+        ],
+        ['a commitment that is a number', [{ recoveries: [method({ commitment: 1 })] }], /commitment must be/],
+        ['a missing delay', [{ recoveries: [method({ delay: undefined })] }], /delay must be/],
+        ['a negative delay', [{ recoveries: [method({ delay: -1 })] }], /delay must be/],
+        ['a fractional delay', [{ recoveries: [method({ delay: 1.5 })] }], /delay must be/],
+        ['a delay that is a string', [{ recoveries: [method({ delay: '60' })] }], /delay must be/],
+        ['a delay that is a bigint', [{ recoveries: [method({ delay: 60n })] }], /delay must be/],
+        ['a delay above uint32', [{ recoveries: [method({ delay: 2 ** 32 })] }], /delay must be/],
+        [
+            'a provider that is not an address',
+            [{ recoveries: [method({ provider: '0xabc' })] }],
+            /provider must be a 20-byte hex address/,
+        ],
+        ['the same method twice', [{ recoveries: [method(), method()] }], /recoveries\[1\] repeats an earlier method/],
+        [
+            'the same method spelled padded',
+            [{ recoveries: [method(), method({ commitment: PADDED_GUARDIAN })] }],
+            /repeats an earlier method/,
+        ],
+        [
+            'the same method in another case',
+            [{ recoveries: [method(), method({ commitment: `0x${GUARDIAN.slice(2).toUpperCase()}` })] }],
+            /repeats an earlier method/,
+        ],
+        [
+            'the same method with the default provider made explicit',
+            [{ recoveries: [method(), method({ provider: PROVIDER })] }],
+            /repeats an earlier method/,
+        ],
+        ['a threshold of zero', [{ threshold: 0 }], /threshold must be a positive integer/],
+        ['a negative threshold', [{ threshold: -1 }], /threshold must be a positive integer/],
+        ['a fractional threshold', [{ threshold: 1.5 }], /threshold must be a positive integer/],
+        ['a threshold that is a string', [{ threshold: '1' }], /threshold must be a positive integer/],
+        [
+            'a threshold above the methods proposed',
+            [{ recoveries: [method()], threshold: 2 }],
+            /threshold 2 exceeds the 1 recovery methods proposed/,
+        ],
+    ])('rejects %s with -32602', (_name, params, reason) => {
+        expect(() => normalizeSetupRecoveryParams(params)).toThrow(reason);
+        try {
+            normalizeSetupRecoveryParams(params);
+        } catch (err) {
+            expect((err as { code?: number }).code).toBe(-32602);
+        }
+    });
+
+    it('accepts a method whose provider differs from an otherwise identical one', () => {
+        const params = [{ recoveries: [method(), method({ provider: OTHER_PROVIDER })] }];
+        expect(normalizeSetupRecoveryParams(params).recoveries).toHaveLength(2);
     });
 });
