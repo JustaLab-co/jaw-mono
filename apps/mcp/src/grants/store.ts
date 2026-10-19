@@ -35,17 +35,22 @@ const toGrant = (row: typeof grants.$inferSelect): Grant => ({
   createdAt: row.createdAt,
 });
 
-/** The budget x402 payments, quotes, swaps and refills draw from: the newest live one. */
-export async function x402Budget(connectionId: string): Promise<Grant | undefined> {
-  const [row] = await getDb()
+/**
+ * The x402 budgets of the connection that can still be spent from, newest first.
+ * A budget replaced before a connection could hold several grants never is.
+ */
+export async function x402Budgets(connectionId: string): Promise<Grant[]> {
+  const rows = await getDb()
     .select()
     .from(grants)
-    // A budget replaced before a connection could hold several grants is never spent from.
     .where(and(live(connectionId), eq(grants.kind, 'x402-budget'), isNull(grants.replacedAt)))
-    .orderBy(desc(grants.createdAt))
-    .limit(1);
-  return row && toGrant(row);
+    .orderBy(desc(grants.createdAt));
+  return rows.map(toGrant);
 }
+
+/** The budget payments, quotes, swaps and refills draw from: the newest one. */
+export const x402Budget = async (connectionId: string): Promise<Grant | undefined> =>
+  (await x402Budgets(connectionId))[0];
 
 /** Every grant of the connection not yet revoked or expired, of any kind. */
 export async function liveGrants(connectionId: string, db: Tx = getDb()): Promise<Grant[]> {

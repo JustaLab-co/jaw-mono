@@ -9,6 +9,7 @@ import { isAddressEqual, isHex, numberToHex, toFunctionSelector, type Address, t
 import type { Tx } from '@/db/client';
 import { grants } from '@/db/schema';
 import { publicClientFor } from '@/lib/chain';
+import type { GrantKind } from './store';
 
 const TRANSFER_SIGNATURE = 'transfer(address,uint256)';
 
@@ -79,7 +80,8 @@ export type ReadPermission = (target: PermissionReadTarget) => Promise<Permissio
 export const readOnChain: ReadPermission = (target) =>
   readPermissionState(target, { clients: { publicClient: publicClientFor } });
 
-export type NewGrant = Omit<typeof grants.$inferInsert, 'connectionId' | 'createdAt'>;
+// The column's default is for a build from before it, still running mid-deploy; this one names the kind.
+export type NewGrant = Omit<typeof grants.$inferInsert, 'connectionId' | 'createdAt'> & { kind: GrantKind };
 
 type GrantRefusal = 'invalid_response' | 'grant_mismatch' | 'grant_not_found' | 'verification_unavailable';
 

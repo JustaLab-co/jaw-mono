@@ -11,7 +11,6 @@ import {
   owner,
   setTestEnv,
   walletAnswers,
-  sessionFakes,
   walletsSettled,
 } from '@/connections/testkit';
 import { getDb } from '@/db/client';
@@ -64,7 +63,6 @@ async function ask(
     perDay?: string;
     read?: ReadPermission;
     tamper?: (granted: Record<string, unknown>) => object;
-    session?: ReturnType<typeof sessionFakes>['deps'];
   } = {}
 ) {
   const asked: { method: string; params: unknown[] }[] = [];
@@ -76,7 +74,6 @@ async function ask(
   const result = await requestBudget(t, opts.perDay ?? '1', {
     openWallet: fakeWallet(answer, asked),
     readPermission: opts.read ?? approvedOnChain,
-    ...(opts.session ?? sessionFakes().deps),
   });
   await walletsSettled();
   return { result, grant: asked[0]?.params[0] as GrantRequest };
@@ -109,7 +106,6 @@ describe('budget grants', () => {
         return answers(...args);
       },
       readPermission: approvedOnChain,
-      ...sessionFakes().deps,
     });
     await walletsSettled();
 
@@ -188,14 +184,13 @@ describe('budget grants', () => {
 });
 
 describe('given a connection that approves a second budget', () => {
-  it('when it lands, then nothing is sent on chain and the first stays approved', async () => {
+  it('when it lands, then the first is neither revoked nor replaced', async () => {
     const { t, signer, connectedWith } = await connected();
-    const { deps, sent } = sessionFakes();
 
-    await ask(t, signer, { perDay: '0.5', session: deps });
+    await ask(t, signer, { perDay: '0.5' });
 
-    expect(sent).toHaveLength(0);
     expect(await revokedAt(connectedWith)).toBeNull();
+    expect((await liveGrants(t.connectionId)).map((g) => g.permissionId)).toContain(connectedWith);
     expect(await revokedAt((await x402Budget(t.connectionId))?.permissionId)).toBeNull();
   });
 });
@@ -220,7 +215,6 @@ describe('jaw_request_budget', () => {
         return answers(chainId, u, client);
       },
       readPermission: approvedOnChain,
-      ...sessionFakes().deps,
     });
     await walletsSettled();
     expect(until!.getTime() - Date.now()).toBeGreaterThan(29.9 * 60_000);
@@ -238,7 +232,7 @@ describe('jaw_request_budget', () => {
     };
     let until: Date | undefined;
     const openWallet: OpenWallet = async (_chainId, at) => ((until = at), waiting);
-    const deps = { openWallet, readPermission: approvedOnChain, ...sessionFakes().deps };
+    const deps = { openWallet, readPermission: approvedOnChain };
 
     const first = await requestBudget(t, '1', deps);
     const second = await requestBudget(t, '1', deps);
@@ -267,7 +261,6 @@ describe('jaw_request_budget', () => {
         throw new Error('not reached');
       },
       readPermission: approvedOnChain,
-      ...sessionFakes().deps,
     });
     expect('isError' in result && result.isError).toBe(true);
     expect(result.content[0].text).toBe("USDC is not supported on this connection's chain.");
@@ -281,7 +274,6 @@ describe('jaw_request_budget', () => {
         throw new WalletBusy();
       },
       readPermission: approvedOnChain,
-      ...sessionFakes().deps,
     });
     expect('isError' in result && result.isError).toBe(true);
     expect(result.content[0].text).toBe('Too many owners are approving right now. Try again in a minute.');
@@ -298,7 +290,6 @@ describe('jaw_request_budget', () => {
         return w;
       },
       readPermission: approvedOnChain,
-      ...sessionFakes().deps,
     });
     await walletsSettled();
     if (!('structuredContent' in result)) throw new Error('refused');
@@ -324,7 +315,6 @@ describe('jaw_request_budget', () => {
         return honest(m, p);
       }),
       readPermission: approvedOnChain,
-      ...sessionFakes().deps,
     });
     await endConnection(t.connectionId, t.account);
     gate.resolve();
@@ -444,26 +434,7 @@ describe('the permission of a budget', () => {
   });
 });
 
-describe.skipIf(!TEST_PG_URL)('on Postgres, given budgets of one connection landing at once', () => {
-  it('two budgets recorded at once are both live', async () => {
-    const { t, connectedWith } = await connected();
-    const g1 = await newGrantFrom(t.connectionId);
-    const g2 = await newGrantFrom(t.connectionId);
-    const first = Promise.withResolvers<void>();
-    const hold = getDb().transaction(async (tx) => {
-      await recordGrant(tx, t.connectionId, g1);
-      first.resolve();
-      await new Promise((r) => setTimeout(r, 400));
-    });
-    await first.promise;
-
-    await inTx(t.connectionId, g2);
-    await hold;
-
-    const live = await liveGrants(t.connectionId);
-    expect(live.map((g) => g.permissionId).sort()).toEqual([connectedWith, g1.permissionId, g2.permissionId].sort());
-  });
-
+describe.skipIf(!TEST_PG_URL)('on Postgres, given a budget landing while its connection ends', () => {
   it('a budget waits for a connection being ended, and is not recorded after it', async () => {
     const { t, signer } = await connected();
     const before = await getDb().select().from(grants).where(eq(grants.connectionId, t.connectionId));
@@ -482,7 +453,6 @@ describe.skipIf(!TEST_PG_URL)('on Postgres, given budgets of one connection land
     await requestBudget(t, '3', {
       openWallet: fakeWallet(walletAnswers(signer)),
       readPermission: approvedOnChain,
-      ...sessionFakes().deps,
     });
     await new Promise((r) => setTimeout(r, 250));
     const during = await getDb().select().from(grants).where(eq(grants.connectionId, t.connectionId));

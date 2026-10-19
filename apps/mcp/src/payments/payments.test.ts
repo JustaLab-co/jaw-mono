@@ -520,26 +520,29 @@ describe('jaw_session_x402_pay', () => {
     });
   });
 
-  it('given a lost answer and the budget it was signed under expired since, when the key is retried, then no_grant, the proof is not sent again, and no budget is suggested', async () => {
-    const { c, t } = await connected('1');
-    balances.set(t.sessionAddress.toLowerCase(), 1_000_000n);
-    dropNextLost = true;
-    const lost = await pay(t, { url: url('/lost'), idempotencyKey: 'expired-resend' }, deps());
-    expect(lost.structuredContent).toMatchObject({ state: 'signed', refusal: { code: 'no_response' } });
-    const signedUnder = (await rowOf(lost.structuredContent!.paymentId)).permissionId!;
-    await approveBudget(c, '1');
-    await getDb()
-      .update(grants)
-      .set({ expiresAt: new Date(Date.now() - 1000) })
-      .where(eq(grants.permissionId, signedUnder));
+  it.each([
+    ['expired', { expiresAt: new Date(Date.now() - 1000) }],
+    ['was replaced before a connection held several budgets', { replacedAt: new Date() }],
+  ])(
+    'given a lost answer and a budget that since %s, when the key is retried, then no_grant, the proof is not sent again, and no budget is suggested',
+    async (_name, ended) => {
+      const { c, t } = await connected('1');
+      balances.set(t.sessionAddress.toLowerCase(), 1_000_000n);
+      dropNextLost = true;
+      const lost = await pay(t, { url: url('/lost'), idempotencyKey: 'ended-resend' }, deps());
+      expect(lost.structuredContent).toMatchObject({ state: 'signed', refusal: { code: 'no_response' } });
+      const signedUnder = (await rowOf(lost.structuredContent!.paymentId)).permissionId!;
+      await approveBudget(c, '1');
+      await getDb().update(grants).set(ended).where(eq(grants.permissionId, signedUnder));
 
-    const again = await pay(t, { url: url('/lost'), idempotencyKey: 'expired-resend' }, deps());
+      const again = await pay(t, { url: url('/lost'), idempotencyKey: 'ended-resend' }, deps());
 
-    expect(again.structuredContent).toMatchObject({ refusal: { code: 'no_grant' } });
-    expect(again.structuredContent?.refusal?.next).toBeUndefined();
-    expect(seen).toHaveLength(1);
-    expect(await rowOf(lost.structuredContent!.paymentId)).toMatchObject({ state: 'signed', code: 'no_response' });
-  });
+      expect(again.structuredContent).toMatchObject({ refusal: { code: 'no_grant' } });
+      expect(again.structuredContent?.refusal?.next).toBeUndefined();
+      expect(seen).toHaveLength(1);
+      expect(await rowOf(lost.structuredContent!.paymentId)).toMatchObject({ state: 'signed', code: 'no_response' });
+    }
+  );
 
   it('given a lost answer and a chain that cannot be read, when the key is retried, then the proof is not sent again', async () => {
     const { t } = await connected('1');

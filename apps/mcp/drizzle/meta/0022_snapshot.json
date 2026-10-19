@@ -1,5 +1,5 @@
 {
-  "id": "00dec8b3-da79-4287-997b-f623bcbbcacd",
+  "id": "38c643a8-e340-4118-a498-b0c1e77ca17e",
   "prevId": "c5e46741-908c-4f4f-a563-61d3095d7b2b",
   "version": "7",
   "dialect": "postgresql",
@@ -291,7 +291,8 @@
           "name": "kind",
           "type": "text",
           "primaryKey": false,
-          "notNull": true
+          "notNull": true,
+          "default": "'x402-budget'"
         },
         "permission": {
           "name": "permission",

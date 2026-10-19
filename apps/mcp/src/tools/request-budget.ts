@@ -83,7 +83,8 @@ export async function requestBudget(t: Tenant, perDay: string, deps = DEFAULTS) 
     url: wallet.url,
     summary:
       `Ask the account owner to open ${wallet.url} and approve ${perDay} USDC a day in their wallet. ` +
-      'Once they do, payments draw from it with no further prompts; jaw_status shows the budget in force.',
+      'Once they do, payments draw from it with no further prompts; jaw_status shows the budget in force. ' +
+      'A budget approved earlier on this connection stays approved on chain until it expires or jaw_session_disconnect revokes it.',
   };
   return reply(out);
 }

@@ -111,7 +111,9 @@ export const grants = pgTable(
     allowance: text('allowance').notNull(),
     period: text('period', { enum: ['day'] }).notNull(),
     // What the grant is for: the daily USDC budget x402 payments draw from, or calls the agent asked for.
-    kind: text('kind', { enum: ['x402-budget', 'custom'] }).notNull(),
+    kind: text('kind', { enum: ['x402-budget', 'custom'] })
+      .notNull()
+      .default('x402-budget'),
     // The struct as approved: the permission manager answers only about a struct, never an id.
     permission: jsonb('permission').notNull(),
     expiresAt: timestamp('expires_at', { withTimezone: true }).notNull(),

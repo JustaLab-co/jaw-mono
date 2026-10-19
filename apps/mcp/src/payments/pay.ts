@@ -22,7 +22,7 @@ import { agentLogger, chainClients, payerFor, sessionOf, topUpExecutor, withoutU
 import type { Tenant } from '@/connections/auth';
 import { config } from '@/connections/config';
 import { countHit, isPaymentsPaused } from '@/db/settings';
-import { liveGrants, x402Budget, type Grant } from '@/grants/store';
+import { x402Budget, x402Budgets, type Grant } from '@/grants/store';
 import { errorLabel, log, RATE_WINDOW_MS } from '@/lib/edge';
 import { fenceText } from '@/lib/fence';
 import { safeFetch, watchCuts } from '@/lib/safe-fetch';
@@ -350,7 +350,7 @@ export async function pay(
   if (claimed.kind === 'resume') {
     // The proof goes out again only while the budget it was signed under is live,
     // which a newer budget no longer ends.
-    const signedUnder = (await liveGrants(t.connectionId)).find((g) => g.permissionId === claimed.row.permissionId);
+    const signedUnder = (await x402Budgets(t.connectionId)).find((g) => g.permissionId === claimed.row.permissionId);
     const stopped: Unreached | undefined = signedUnder
       ? await grantLive(signedUnder, deps)
       : { kind: 'unreached', code: 'no_grant', reason: 'the budget this payment was signed under ended' };
