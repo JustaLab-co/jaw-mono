@@ -1,3 +1,13 @@
+## 1.7.1 (2026-10-19)
+
+### 🩹 Fixes
+
+- **ui:** resolve ens, token and clear-signing names with one shared hook ([#486](https://github.com/JustaLab-co/jaw-mono/pull/486))
+
+### ❤️ Thank You
+
+- Leo Franklin @LeoFranklin015
+
 ## 1.7.0 (2026-10-16)
 
 ### 🚀 Features
