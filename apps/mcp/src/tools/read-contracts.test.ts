@@ -4,7 +4,9 @@ import {
   decodeFunctionData,
   encodeFunctionResult,
   erc20Abi,
+  HttpRequestError,
   parseAbi,
+  TimeoutError,
   type Hex,
   type PublicClient,
 } from 'viem';
@@ -119,6 +121,21 @@ describe('jaw_read_contracts', () => {
     for (const bad of [read('balanceOf', []), read('balanceOf', ['1.5']), read('balanceOf')]) {
       const out = await readContracts({ chainId: 8453, reads: [read('decimals'), bad] }, usdc);
       expect(out).toMatchObject({ isError: true, content: [{ text: expect.stringMatching(/^Read 1: .*not encode/) }] });
+    }
+  });
+
+  it('says the RPC is unavailable instead of failing every read', async () => {
+    const url = 'https://rpc.example';
+    for (const error of [new HttpRequestError({ url, status: 503 }), new TimeoutError({ body: {}, url })]) {
+      const request = async () => {
+        throw error;
+      };
+      const down = createPublicClient({ chain: base, transport: custom({ request }, { retryCount: 0 }) });
+      const out = await readContracts(
+        { chainId: 8453, reads: [read('decimals'), read('symbol')] },
+        () => down as unknown as PublicClient
+      );
+      expect(out).toMatchObject({ isError: true, content: [{ text: expect.stringContaining('RPC') }] });
     }
   });
 });

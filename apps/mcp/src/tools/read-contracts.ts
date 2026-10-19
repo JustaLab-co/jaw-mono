@@ -1,5 +1,15 @@
 import type { McpServer } from '@modelcontextprotocol/server';
-import { encodeFunctionData, getAbiItem, type Abi, type Address, type PublicClient } from 'viem';
+import {
+  BaseError,
+  encodeFunctionData,
+  getAbiItem,
+  HttpRequestError,
+  RpcRequestError,
+  TimeoutError,
+  type Abi,
+  type Address,
+  type PublicClient,
+} from 'viem';
 import { z } from 'zod';
 import { proxyChains, proxyClientFor } from '@/lib/chain';
 import { reply } from '@/lib/fence';
@@ -65,6 +75,11 @@ function encodeError(r: Read) {
   return undefined;
 }
 
+// With allowFailure, a failed request to the RPC is copied onto every read instead of thrown.
+const unreachable = (error: Error) =>
+  error instanceof BaseError &&
+  !!error.walk((e) => e instanceof HttpRequestError || e instanceof RpcRequestError || e instanceof TimeoutError);
+
 function failure(error: Error, read: Read) {
   const message = messageOf(error);
   if (message.includes('returned no data'))
@@ -98,6 +113,8 @@ export async function readContracts(args: { chainId: number; reads: Read[] }, cl
     })),
     allowFailure: true,
   });
+  if (settled.some((s) => s.status === 'failure' && unreachable(s.error)))
+    return refusal(`The RPC for chain ${chainId} is unavailable, so nothing was read. Try again shortly.`);
   const results = settled.map((s, i) =>
     s.status === 'success'
       ? { ok: true as const, value: plain(s.result) }
