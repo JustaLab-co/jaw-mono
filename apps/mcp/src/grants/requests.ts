@@ -1,5 +1,5 @@
 import { randomBytes } from 'node:crypto';
-import { and, desc, eq, gt, inArray, isNull, lte, or, sql, type SQL } from 'drizzle-orm';
+import { and, desc, eq, gt, inArray, isNull, lte, ne, or, sql, type SQL } from 'drizzle-orm';
 import type { PgUpdateSetSource } from 'drizzle-orm/pg-core';
 import type { Tenant } from '@/connections/auth';
 import { WalletBusy, type Ask, type OpenWallet, type Wallet } from '@/connections/relay';
@@ -32,16 +32,14 @@ const sameSign = (t: Tenant, idempotencyKey: string) =>
     eq(permissionRequests.idempotencyKey, idempotencyKey)
   );
 
-const blockers = (t: Tenant, req: LinkRequest) =>
+const heldByOthers = (t: Tenant, req: LinkRequest) =>
   req.method === 'revoke'
-    ? or(
-        ofConnection(t, req),
-        and(
-          eq(permissionRequests.method, 'revoke'),
-          sql`lower(${permissionRequests.permissionId}) = ${req.permissionId.toLowerCase()}`
-        )
+    ? and(
+        eq(permissionRequests.method, 'revoke'),
+        sql`lower(${permissionRequests.permissionId}) = ${req.permissionId.toLowerCase()}`,
+        ne(permissionRequests.connectionId, t.connectionId)
       )
-    : ofConnection(t, req);
+    : sql`false`;
 
 async function update(where: SQL | undefined, set: PgUpdateSetSource<typeof permissionRequests>, db: Tx = getDb()) {
   const [row] = await db
@@ -58,15 +56,21 @@ const lapsed = or(isNull(permissionRequests.sessionUntil), lte(permissionRequest
 const endCode = sql`case when ${permissionRequests.approveBy} <= ${dbNow} then null
   when ${permissionRequests.code} = ${ASKED} then ${LINK_LOST} else 'session_lost' end`;
 
-const closeDead = (same: SQL | undefined, db: Tx = getDb()) =>
-  update(
-    and(same, awaiting, or(lte(permissionRequests.approveBy, dbNow), lapsed)),
-    { state: 'expired', code: endCode },
-    db
-  );
+const pastWindow = lte(permissionRequests.approveBy, dbNow);
 
-async function findHeld(same: SQL | undefined): Promise<Held | undefined> {
-  const [row] = await getDb().select().from(permissionRequests).where(and(same, linkLive));
+const closeDead = (same: SQL | undefined, db: Tx = getDb()) =>
+  update(and(same, awaiting, or(pastWindow, lapsed)), { state: 'expired', code: endCode }, db);
+
+async function findHeld(t: Tenant, req: LinkRequest): Promise<Held | undefined> {
+  const [row] = await getDb()
+    .select()
+    .from(permissionRequests)
+    .where(
+      or(
+        and(ofConnection(t, req), linkLive),
+        and(heldByOthers(t, req), awaiting, gt(permissionRequests.approveBy, dbNow))
+      )
+    );
   return row && { waiting: row };
 }
 
@@ -79,6 +83,7 @@ async function lostLink(t: Tenant, req: LinkRequest, db: Tx) {
         ofConnection(t, req),
         eq(permissionRequests.state, 'expired'),
         eq(permissionRequests.code, LINK_LOST),
+        eq(permissionRequests.lostReported, false),
         gt(permissionRequests.approveBy, dbNow)
       )
     )
@@ -143,10 +148,9 @@ export type LinkRequest = {
 );
 
 export async function openLink(t: Tenant, req: LinkRequest, openWallet: OpenWallet): Promise<Opened> {
-  const blocking = blockers(t, req);
   const existing = async (): Promise<Held | undefined> => {
     const stored = req.method === 'sign' ? await currentSign(t, req.idempotencyKey) : undefined;
-    return stored ? { waiting: stored } : findHeld(blocking);
+    return stored ? { waiting: stored } : findHeld(t, req);
   };
   const held = await existing();
   if (held) return held;
@@ -163,7 +167,7 @@ export async function openLink(t: Tenant, req: LinkRequest, openWallet: OpenWall
   let row: PermissionRequestRow | undefined | typeof FULL;
   try {
     row = await withLinkSlot(t.account, undefined, async (tx) => {
-      await closeDead(blocking, tx);
+      await closeDead(or(ofConnection(t, req), and(heldByOthers(t, req), pastWindow)), tx);
       lost = await lostLink(t, req, tx);
       const [inserted] = await tx
         .insert(permissionRequests)
@@ -185,6 +189,7 @@ export async function openLink(t: Tenant, req: LinkRequest, openWallet: OpenWall
         })
         .onConflictDoNothing()
         .returning();
+      if (inserted && lost) await update(eq(permissionRequests.id, lost.id), { lostReported: true }, tx);
       return inserted;
     });
   } finally {

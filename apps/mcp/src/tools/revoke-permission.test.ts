@@ -451,6 +451,40 @@ describe('jaw_revoke_permission', () => {
     expect((await grantRow(budget)).revokedAt).not.toBeNull();
   });
 
+  it("given another connection's asked revoke whose lease lapsed, then this connection gets revoke_in_progress and the other link stays open", async () => {
+    const signer = owner();
+    const { t, budget } = await connected(signer);
+    const other = await connected(signer, 'wallet:read');
+    const { deps, opened, chain } = setup(signer);
+    const answers = walletAnswers(signer);
+    const asked: { method: string; params: unknown[] }[] = [];
+    const wait = held();
+    const wallet = fakeWallet(async (method, params) => {
+      if (method !== 'wallet_revokePermissions') return answers(method, params);
+      await wait.promise;
+      chain.revoked.add(budget.toLowerCase());
+      return { success: true };
+    }, asked);
+    const holding = deps();
+    const first = await revokePermission(t, { permissionId: budget }, { ...holding, openWallet: wallet });
+    await vi.waitFor(() => expect(asked.map((a) => a.method)).toContain('wallet_revokePermissions'));
+    await getDb()
+      .update(permissionRequests)
+      .set({ sessionUntil: sql`now() - interval '1 second'` })
+      .where(eq(permissionRequests.walletUrl, urlOf(first)!));
+
+    const theirs = await revokePermission(other.t, { permissionId: budget }, holding);
+    const firstRow = (await requestsOf(budget)).find((r) => r.walletUrl === urlOf(first));
+    wait.release();
+    await walletsSettled();
+
+    expect(theirs.content[0].text).toMatch(/^revoke_in_progress: /);
+    expect(urlOf(theirs)).toBeUndefined();
+    expect(opened()).toBe(0);
+    expect(firstRow).toMatchObject({ state: 'awaiting_owner', code: 'asked' });
+    expect((await requestsOf(budget)).find((r) => r.walletUrl === urlOf(first))).toMatchObject({ state: 'approved' });
+  });
+
   it('given three grant and revoke links waiting on the account, then a fourth link of any kind is refused', async () => {
     const signer = owner();
     const [a, b, c] = [await connected(signer), await connected(signer), await connected(signer)];

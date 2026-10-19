@@ -1,5 +1,5 @@
 {
-  "id": "6406dfe0-3843-4d82-aef0-f0804f4cae5e",
+  "id": "ee450259-612a-42b0-8774-af0ae574f6ad",
   "prevId": "9f28141b-e395-41eb-97b6-eb85fcf94aed",
   "version": "7",
   "dialect": "postgresql",
@@ -1153,6 +1153,13 @@
           "type": "text",
           "primaryKey": false,
           "notNull": false
+        },
+        "lost_reported": {
+          "name": "lost_reported",
+          "type": "boolean",
+          "primaryKey": false,
+          "notNull": true,
+          "default": false
         },
         "wallet_url": {
           "name": "wallet_url",

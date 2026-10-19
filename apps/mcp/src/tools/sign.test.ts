@@ -214,6 +214,50 @@ describe('jaw_sign', () => {
 
     it('given an unsupported chain, then it is refused', () => refused({ chainId: 999_999_999 }, 'unsupported_chain'));
 
+    const MAIL = {
+      domain: { name: 'Mail', version: '1', chainId: 84532, verifyingContract: WIRE.domain.verifyingContract },
+      types: {
+        Person: [
+          { name: 'name', type: 'string' },
+          { name: 'wallet', type: 'address' },
+        ],
+        Mail: [
+          { name: 'from', type: 'Person' },
+          { name: 'contents', type: 'string' },
+        ],
+      },
+      primaryType: 'Mail',
+      message: { from: { name: 'Bob', wallet: WIRE.message.owner }, contents: 'hi' },
+    };
+
+    it.each([
+      [
+        'a nested message value',
+        { ...MAIL, message: { ...MAIL.message, from: { ...MAIL.message.from, name: 'pay \u202eevil.example' } } },
+      ],
+      ['the domain name', { ...MAIL, domain: { ...MAIL.domain, name: 'USD \u202eCoin' } }],
+      [
+        'a field name',
+        {
+          ...MAIL,
+          types: { ...MAIL.types, Mail: [MAIL.types.Mail[0], { name: 'con\u202etents', type: 'string' }] },
+          message: { from: MAIL.message.from, 'con\u202etents': 'hi' },
+        },
+      ],
+    ])('given typed data with an invisible character in %s, then it is refused', async (_, typedData) => {
+      const { t } = await connected();
+      const result = await ask(t, { message: undefined, typedData }, idleWallet);
+      expect(result[gateCode]).toBe('invalid_typed_data');
+      expect(result.content[0].text).toMatch(/invisible/);
+      expect(opened).toEqual([]);
+    });
+
+    it('given the same typed data with no invisible character, then a link opens', async () => {
+      const { t } = await connected();
+      const result = await ask(t, { message: undefined, typedData: MAIL }, idleWallet);
+      expect(result.structuredContent!.state).toBe('awaiting_owner');
+    });
+
     it('given both a message and typed data, then the server rejects the input', async () => {
       const { token } = await connected();
       const result = await callTool(token, 'jaw_sign', { message: 'x', typedData: WIRE });
@@ -340,6 +384,46 @@ describe('jaw_sign', () => {
       expect(opened).toHaveLength(2);
     });
 
+    it('given its lease lapses after the owner was asked, then a new key opens a link whose reply names the lost one', async () => {
+      const { t, signer } = await connected();
+      const { wallet, release } = askedThenHeld(signer, async () => {
+        throw new Error('the process stopped');
+      });
+      const first = await ask(t, {}, wallet);
+      await vi.waitFor(() => expect(asked.map((a) => a.method)).toContain('wallet_sign'));
+      await lapse(first.structuredContent!.url!);
+
+      const fresh = await ask(t, { idempotencyKey: 'k2' }, idleWallet);
+      release();
+      await walletsSettled();
+
+      expect(fresh.structuredContent!.state).toBe('awaiting_owner');
+      expect(fresh.structuredContent!.summary).toMatch(/^link_lost: /);
+      expect(fresh.structuredContent!.summary).toContain(first.structuredContent!.url);
+      expect(fresh.structuredContent!.summary).toMatch(/not to approve/);
+    });
+
+    it('given a lost link named once, then the next new link does not name it again', async () => {
+      const { t, signer } = await connected();
+      const { wallet, release } = askedThenHeld(signer, async () => {
+        throw new Error('the process stopped');
+      });
+      const first = await ask(t, {}, wallet);
+      await vi.waitFor(() => expect(asked.map((a) => a.method)).toContain('wallet_sign'));
+      await lapse(first.structuredContent!.url!);
+      const second = await ask(t, { idempotencyKey: 'k2' }, idleWallet);
+      await lapse(second.structuredContent!.url!);
+
+      const third = await ask(t, { idempotencyKey: 'k3' }, idleWallet);
+      release();
+      await walletsSettled();
+
+      expect(second.structuredContent!.summary).toContain(first.structuredContent!.url);
+      expect(third.structuredContent!.state).toBe('awaiting_owner');
+      expect(third.structuredContent!.summary).not.toContain(first.structuredContent!.url);
+      expect(third.structuredContent!.summary).not.toMatch(/link_lost/);
+    });
+
     it('given the first session still runs and the owner answers there, then the same key returns the signature', async () => {
       const { t, signer } = await connected();
       const { wallet, release } = askedThenHeld(signer, () => signer.signMessage({ message: 'hello' }));
@@ -424,6 +508,35 @@ describe('jaw_sign', () => {
     await ask(t, { message: 'one' }, idleWallet);
 
     const result = await ask(t, { message: 'two' }, idleWallet);
+
+    expect(result[gateCode]).toBe('idempotency_conflict');
+    expect(opened).toHaveLength(1);
+  });
+
+  it('given a retry of the same typed data with its keys in another order, then it answers the same link', async () => {
+    const { t } = await connected();
+    const first = await ask(t, typed, idleWallet);
+    const { name, version, chainId, verifyingContract } = WIRE.domain;
+    const reordered = {
+      message: WIRE.message,
+      primaryType: WIRE.primaryType,
+      types: WIRE.types,
+      domain: { verifyingContract, chainId, version, name },
+    };
+
+    const again = await ask(t, { message: undefined, typedData: reordered }, idleWallet);
+
+    expect(again[gateCode]).toBeUndefined();
+    expect(again.structuredContent!.url).toBe(first.structuredContent!.url);
+    expect(opened).toHaveLength(1);
+  });
+
+  it('given the same key with typed data of another value, then it is an idempotency_conflict', async () => {
+    const { t } = await connected();
+    await ask(t, typed, idleWallet);
+    const other = { ...WIRE, message: { ...WIRE.message, value: '2000000' } };
+
+    const result = await ask(t, { message: undefined, typedData: other }, idleWallet);
 
     expect(result[gateCode]).toBe('idempotency_conflict');
     expect(opened).toHaveLength(1);

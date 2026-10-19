@@ -8,7 +8,7 @@
 - `sign-typed`: an EIP-712 permit goes to the owner and `verifyTypedData` accepts the signature.
 - `sign-screen`: the keys screen shows the permit's spender, amount and deadline.
 - `sign-decline`: the owner declines and the tool answers `owner_declined`.
-- `sign-malformed`: typed data with no `types`, an undefined `primaryType` or a value that does not fit its type gives `invalid_typed_data` before any link opens.
+- `sign-malformed`: typed data with no `types`, an undefined `primaryType`, a value that does not fit its type, or an invisible character in any string or key gives `invalid_typed_data` before any link opens.
 - `sign-expired`: a link nobody signs past 30 minutes answers `expired`.
 - `sign-cap`: three links open for one account, the fourth gives `account_busy`.
 - `sign-no-session`: no session key signature is recorded and the audit row names the connection.
@@ -17,9 +17,9 @@
 
 ## How to get to it (user POV)
 
-- An MCP client on the hosted server with `wallet:read`. `jaw_sign` takes exactly one of `message` (text, up to 8192 characters, no invisible or control characters besides line breaks and tabs) and `typedData` (`{ domain, types, primaryType, message }`), and optionally `chainId` and `idempotencyKey`.
+- An MCP client on the hosted server with `wallet:read`. `jaw_sign` takes exactly one of `message` (text, up to 8192 characters, no invisible or control characters besides line breaks and tabs) and `typedData` (`{ domain, types, primaryType, message }`, held to the same rule in every string and key at any depth), and optionally `chainId` and `idempotencyKey`.
 - The first call returns `state: awaiting_owner` with a `url`. The owner opens it within 30 minutes. The same call again, with the same key and input, returns `signed` with the `signature`, or `owner_declined`, `expired` or `failed`.
-- Requests are rows in `permission_requests` with `method = 'sign'`. A restart keeps the rows, not the link: the relay drops what the wallet sends while no process listens, so a restarted server cannot hear an answer given on a link it opened before. Once the lease of a link's session lapses (30 seconds after its process stops), the same key answers `expired` with code `session_lost` if the wallet was not asked yet, or `link_lost` if the owner was already asked. A relay session that drops after asking also ends `link_lost`. `link_lost` means the owner must not approve the old link; ask again with a new key for a new one. A signature the old process still hears before its next lease renewal (every 10 seconds) turns the row `signed`. A connection waits on one sign link at a time, and another key gets `sign_in_progress`.
+- Requests are rows in `permission_requests` with `method = 'sign'`. A restart keeps the rows, not the link: the relay drops what the wallet sends while no process listens, so a restarted server cannot hear an answer given on a link it opened before. Once the lease of a link's session lapses (30 seconds after its process stops), the same key answers `expired` with code `session_lost` if the wallet was not asked yet, or `link_lost` if the owner was already asked. A relay session that drops after asking also ends `link_lost`. `link_lost` means the owner must not approve the old link; ask again with a new key for a new one, whose summary names the lost link once. The same input with its JSON keys in another order is the same request. A signature the old process still hears before its next lease renewal (every 10 seconds) turns the row `signed`. A connection waits on one sign link at a time, and another key gets `sign_in_progress`.
 - By hand: `node tools/verify/hosted-client.mjs "$MCP_PUBLIC_URL" wallet:read`, then `sign-message '<text>' [key]` and `sign-typed '<json>' [key]`. Run the same line again to read the outcome.
 
 ## Driving it

@@ -126,7 +126,11 @@ function summaryOf(row: PermissionRequestRow): string {
   }
 }
 
-function answer(row: PermissionRequestRow): SignResult {
+const lostNote = (lost: PermissionRequestRow) =>
+  `link_lost: this server lost the session of the earlier sign link ${lost.walletUrl} after asking the owner, so it may never hear an answer given there. ` +
+  `Tell the owner not to approve that one; idempotencyKey ${lost.idempotencyKey} answers link_lost. `;
+
+function answer(row: PermissionRequestRow, lost?: PermissionRequestRow): SignResult {
   const ended = row.state !== 'awaiting_owner' && row.state !== 'approved';
   return reply(
     signOutput.parse({
@@ -139,7 +143,7 @@ function answer(row: PermissionRequestRow): SignResult {
       from: row.account,
       signature: row.signature ?? undefined,
       refusal: ended ? { code: row.code ?? row.state } : undefined,
-      summary: summaryOf(row),
+      summary: (lost ? lostNote(lost) : '') + summaryOf(row),
     })
   );
 }
@@ -175,6 +179,20 @@ function typedDataFault(data: Record<string, unknown>): string | undefined {
   return undefined;
 }
 
+function hidesText(root: unknown): boolean {
+  const queue = [root];
+  for (const value of queue) {
+    if (typeof value === 'string' && HIDDEN_FROM_OWNER.test(value)) return true;
+    if (typeof value === 'object' && value !== null) queue.push(...Object.entries(value).flat());
+  }
+  return false;
+}
+
+const sortedKeys = (_: string, value: unknown) =>
+  typeof value === 'object' && value !== null && !Array.isArray(value)
+    ? Object.fromEntries(Object.entries(value).sort(([a], [b]) => (a < b ? -1 : 1)))
+    : value;
+
 function requestOf(input: SignInput): Request | SignResult {
   if (input.message !== undefined) {
     if (HIDDEN_FROM_OWNER.test(input.message)) {
@@ -184,6 +202,9 @@ function requestOf(input: SignInput): Request | SignResult {
   }
   const data = input.typedData!;
   if (JSON.stringify(data).length > TYPED_DATA_MAX) return refuse('invalid_typed_data', 'The typed data is too large.');
+  if (hidesText(data)) {
+    return refuse('invalid_typed_data', 'The typed data has invisible or control characters the owner could not see.');
+  }
   const fault = typedDataFault(data);
   return fault ? refuse('invalid_typed_data', `The typed data is malformed: ${fault}.`) : { type: '0x01', data };
 }
@@ -198,7 +219,7 @@ export async function sign(t: Tenant, input: SignInput, deps: SignDeps = DEFAULT
 
   const idempotencyKey = input.idempotencyKey ?? `auto_${randomBytes(12).toString('base64url')}`;
   const requestHash = createHash('sha256')
-    .update(JSON.stringify([chainId, request]))
+    .update(JSON.stringify([chainId, request], sortedKeys))
     .digest('hex');
   const answerStored = (row: PermissionRequestRow) =>
     row.requestHash === requestHash
@@ -244,7 +265,8 @@ export async function sign(t: Tenant, input: SignInput, deps: SignDeps = DEFAULT
       `Too many owners are approving right now. Send idempotencyKey ${idempotencyKey} again in a minute.`
     );
   }
-  const row = 'opened' in opened ? opened.opened : opened.waiting;
+  if ('opened' in opened) return answer(opened.opened, opened.lost);
+  const row = opened.waiting;
   if (row.idempotencyKey !== idempotencyKey) {
     return refuse(
       'sign_in_progress',

@@ -2,6 +2,7 @@ import { sql } from 'drizzle-orm';
 import {
   bigint,
   bigserial,
+  boolean,
   check,
   index,
   integer,
@@ -380,6 +381,7 @@ export const permissionRequests = pgTable(
       .notNull()
       .default('awaiting_owner'),
     code: text('code'),
+    lostReported: boolean('lost_reported').notNull().default(false),
     walletUrl: text('wallet_url').notNull(),
     approveBy: timestamp('approve_by', { withTimezone: true }).notNull(),
     sessionUntil: timestamp('session_until', { withTimezone: true }),
