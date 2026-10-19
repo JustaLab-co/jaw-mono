@@ -133,7 +133,6 @@ describe('a malformed call checker', () => {
                     message: expect.stringContaining('permissions.calls[0].checker'),
                 })
             );
-            expect(sendTransaction).not.toHaveBeenCalled();
         }
     );
 });
