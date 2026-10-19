@@ -211,6 +211,7 @@ describe('read tools', () => {
       'jaw_revoke_permission',
       'jaw_send_calls',
       'jaw_session_disconnect',
+      'jaw_session_execute',
       'jaw_session_history',
       'jaw_session_x402_discover',
       'jaw_session_x402_pay',

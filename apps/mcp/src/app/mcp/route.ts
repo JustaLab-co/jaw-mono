@@ -13,6 +13,7 @@ import { registerOwnerCallTools } from '@/tools/owner-calls';
 import { registerSwapTools } from '@/tools/swap';
 import { registerConnectionTools } from '@/tools/connections';
 import { registerRevokeTool } from '@/tools/revoke-permission';
+import { registerSessionExecuteTool } from '@/tools/session-execute';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -26,6 +27,7 @@ const mcp = createMcpHandler(
     registerGrantTool(server);
     registerOwnerCallTools(server);
     registerPayTool(server);
+    registerSessionExecuteTool(server);
     registerSwapTools(server);
     registerHistoryTool(server);
     registerConnectionTools(server);

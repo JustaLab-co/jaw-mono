@@ -13,6 +13,7 @@ const SIGNERS = {
   jaw_session_x402_discover: 'session',
   jaw_session_history: 'session',
   jaw_session_disconnect: 'session',
+  jaw_session_execute: 'session',
   jaw_grant_permissions: 'owner',
   jaw_swap: 'owner',
   jaw_send_calls: 'owner',

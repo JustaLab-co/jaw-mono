@@ -183,6 +183,13 @@
       "when": 1792435058212,
       "tag": "0025_open_revoke_per_connection",
       "breakpoints": true
+    },
+    {
+      "idx": 26,
+      "version": "7",
+      "when": 1792440947794,
+      "tag": "0026_send_token",
+      "breakpoints": true
     }
   ]
 }

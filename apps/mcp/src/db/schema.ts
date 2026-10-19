@@ -211,6 +211,8 @@ export const sends = pgTable(
     permissionId: text('permission_id').notNull(),
     chainId: integer('chain_id').notNull(),
     sender: text('sender').notNull(),
+    /** What `amount` counts. Null on a run that moves no token, and on transfers recorded before rows named theirs. */
+    token: text('token'),
     amount: numeric('amount', { precision: 78, scale: 0 }).notNull(),
     periodStart: bigint('period_start', { mode: 'number' }).notNull(),
     fromBlock: bigint('from_block', { mode: 'bigint' }).notNull(),
@@ -225,12 +227,13 @@ export const sends = pgTable(
   },
   (t) => [
     index().on(t.permissionId, t.createdAt),
+    index().on(t.connectionId, t.createdAt),
     index()
       .on(t.leaseUntil)
       .where(sql`${t.state} = 'open'`),
     check(
       'send_shape',
-      sql`${t.amount} > 0 and (
+      sql`${t.amount} >= 0 and (
         (${t.state} = 'open' and ${t.finishedAt} is null)
         or (${t.state} = 'landed' and ${t.txHash} is not null and ${t.finishedAt} is not null)
         or (${t.state} = 'released' and ${t.finishedAt} is not null))`

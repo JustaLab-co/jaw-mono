@@ -143,6 +143,9 @@ const HELP = `Commands:
                                  calls '[{"to":"0x...","data":"0x..."}]' 8453 my-key
   calls-status <id>              jaw_get_calls_status, id is the oc_ id jaw_send_calls returned
   revoke <permission id> [chain] jaw_revoke_permission
+  execute <permission id> '<json array>' [chainId]
+                                 jaw_session_execute, the session key sends within a custom grant, e.g.
+                                 execute 0x... '[{"to":"0x...","data":"0x..."}]'
   disconnect                     jaw_session_disconnect
   call <tool> '<json>'           any tool with raw arguments
   quit`;
@@ -177,6 +180,12 @@ const commands = {
   'calls-status': (id) => call('jaw_get_calls_status', { id }),
   revoke: (permissionId, chainId) =>
     call('jaw_revoke_permission', { permissionId, ...(chainId && { chainId: Number(chainId) }) }),
+  execute: (permissionId, json, chainId) =>
+    call('jaw_session_execute', {
+      permissionId,
+      calls: JSON.parse(json),
+      ...(chainId && { chainId: Number(chainId) }),
+    }),
   disconnect: () => call('jaw_session_disconnect', {}),
   call: (name, ...json) => call(name, json.length ? JSON.parse(json.join(' ')) : {}),
 };
