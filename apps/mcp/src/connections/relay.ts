@@ -58,7 +58,7 @@ export function appNameOf(client?: RelayClient): string {
  * flood of authorizations cannot take the slots budget and revoke requests need.
  *
  * One account may hold `ownerPerAccount` of the owner pool: the three open links
- * the database allows for sends and swaps, plus a budget request and a revoke.
+ * the database allows for sends, swaps, grants and revokes, with room for sessions still closing.
  * Authorizations are not counted per account, as nobody is known yet when they open.
  * The count is per process; the database cap covers the replicas.
  */

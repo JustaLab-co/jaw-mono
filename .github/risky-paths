@@ -18,6 +18,7 @@ apps/mcp/src/reconciler/**
 apps/mcp/src/tools/pay-and-fetch.ts
 apps/mcp/src/tools/grant-permissions.ts
 apps/mcp/src/tools/connections.ts
+apps/mcp/src/tools/revoke-permission.ts
 apps/mcp/src/tools/swap.ts
 apps/mcp/src/swap/**
 apps/mcp/src/owner-calls/**

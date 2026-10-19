@@ -34,3 +34,4 @@ The maintained source for verifying what a user of the jaw CLI, the MCP server a
 | Swap from an agent        | hosted `jaw_swap`, `jaw_swap_status`                                     | [hosted-swap.md](hosted-swap.md)             |
 | Calls the owner signs     | hosted `jaw_send_calls`, `jaw_get_calls_status`                          | [hosted-send-calls.md](hosted-send-calls.md) |
 | Grants the owner approves | hosted `jaw_grant_permissions`                                           | [hosted-grants.md](hosted-grants.md)         |
+| Revokes the owner signs   | hosted `jaw_revoke_permission`, `jaw_connections`                        | [hosted-revoke.md](hosted-revoke.md)         |

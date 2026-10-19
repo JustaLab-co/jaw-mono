@@ -1,6 +1,6 @@
 import { and, count, eq, gt, ne, sql } from 'drizzle-orm';
 import { getDb, type Tx } from '@/db/client';
-import { ownerCalls, swaps } from '@/db/schema';
+import { ownerCalls, permissionRequests, swaps } from '@/db/schema';
 
 // Each open link holds a relay socket for up to its approval window, and the pool is shared by every user.
 export const MAX_OPEN_PER_ACCOUNT = 3;
@@ -8,9 +8,16 @@ export const FULL = 'full';
 
 const dbNow = sql`statement_timestamp()`;
 
+/** A grant or revoke link the owner can still answer: in its window, its process still renewing the lease. */
+export const linkLive = and(
+  eq(permissionRequests.state, 'awaiting_owner'),
+  gt(permissionRequests.approveBy, dbNow),
+  gt(permissionRequests.sessionUntil, dbNow)
+);
+
 /**
- * Links waiting on the owner for an account, owner calls and swaps together, since each
- * holds a socket of the same relay pool. `except` is a row being reopened.
+ * Links waiting on the owner for an account, owner calls, swaps, grants and revokes
+ * together, since each holds a socket of the same relay pool. `except` is a row being reopened.
  */
 export async function countOpenLinks(account: string, except?: string, db: Tx = getDb()): Promise<number> {
   const lowered = account.toLowerCase();
@@ -36,7 +43,11 @@ export async function countOpenLinks(account: string, except?: string, db: Tx = 
         except ? ne(swaps.id, except) : undefined
       )
     );
-  return calls.n + swapped.n;
+  const [asked] = await db
+    .select({ n: count() })
+    .from(permissionRequests)
+    .where(and(sql`lower(${permissionRequests.account}) = ${lowered}`, linkLive));
+  return calls.n + swapped.n + asked.n;
 }
 
 /**

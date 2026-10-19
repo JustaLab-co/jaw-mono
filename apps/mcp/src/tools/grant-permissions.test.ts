@@ -1,9 +1,10 @@
 import { PERMISSIONS_MANAGER_ADDRESS } from '@jaw.id/core';
-import { desc, eq } from 'drizzle-orm';
+import { and, desc, eq } from 'drizzle-orm';
 import { randomBytes } from 'node:crypto';
 import { beforeAll, describe, expect, it } from 'vitest';
 import { toFunctionSelector } from 'viem';
 import { verifyBearer, type Tenant } from '@/connections/auth';
+import type { OpenWallet } from '@/connections/relay';
 import {
   approvedOnChain,
   callTool,
@@ -15,7 +16,7 @@ import {
   walletsSettled,
 } from '@/connections/testkit';
 import { getDb } from '@/db/client';
-import { grants } from '@/db/schema';
+import { grants, permissionRequests } from '@/db/schema';
 import { TEST_PG_URL, useTestDb, useTestPostgres } from '@/db/test-db';
 import type { GrantRequest } from '@/grants/permission';
 import { LIVE_GRANTS_PER_CONNECTION, x402Budget } from '@/grants/store';
@@ -68,6 +69,12 @@ const newestRow = async (t: Tenant) =>
   )[0];
 
 const secondsOf = (d: Date) => Math.floor(d.getTime() / 1000);
+
+const requestsOf = (t: Tenant) =>
+  getDb()
+    .select()
+    .from(permissionRequests)
+    .where(and(eq(permissionRequests.connectionId, t.connectionId), eq(permissionRequests.method, 'grant')));
 
 const twoByTwo: GrantInput = {
   calls: [
@@ -355,5 +362,49 @@ describe('jaw_grant_permissions', () => {
 
     expect(result.isError).toBe(true);
     expect(result.content[0].text).toContain('Input validation error');
+  });
+
+  it('given an approval, then the owner link is recorded approved with the id the wallet granted', async () => {
+    const { t, signer } = await connected();
+
+    await grant(t, signer, twoByTwo);
+
+    const granted = await newestRow(t);
+    expect(await requestsOf(t)).toMatchObject([{ state: 'approved', permissionId: granted.permissionId }]);
+  });
+
+  it('given a wallet answer that is not what was asked, then the link records the id it answered, so it can be revoked', async () => {
+    const { t, signer } = await connected();
+    let answered: string | undefined;
+
+    await grant(t, signer, twoByTwo, (granted) => {
+      answered = granted.permissionId as string;
+      return { ...granted, spends: [] };
+    });
+
+    expect(await requestsOf(t)).toMatchObject([{ state: 'failed', code: 'grant_mismatch', permissionId: answered }]);
+  });
+
+  it('given a grant still waiting for the owner, when asked again, then it is refused with that link and no other wallet opens', async () => {
+    const { t, signer } = await connected();
+    let release = () => {};
+    const held = new Promise<void>((resolve) => (release = resolve));
+    const honest = walletAnswers(signer);
+    let opened = 0;
+    const deps = {
+      openWallet: (async (...args) => (
+        opened++, fakeWallet(async (method, params) => (await held, honest(method, params)))(...args)
+      )) as OpenWallet,
+      readPermission: approvedOnChain,
+    };
+
+    const first = await grantPermissions(t, twoByTwo, deps);
+    const again = await grantPermissions(t, twoByTwo, deps);
+    release();
+    await walletsSettled();
+
+    expect(opened).toBe(1);
+    const url = 'structuredContent' in first && first.structuredContent.url;
+    expect(again.content[0].text).toContain(`still waiting for the owner at ${url}`);
   });
 });

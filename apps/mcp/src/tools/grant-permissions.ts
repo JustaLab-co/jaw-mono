@@ -2,11 +2,11 @@ import { ANY_FN_SEL, ANY_TARGET, EMPTY_CALLDATA_FN_SEL } from '@jaw.id/core';
 import { usdcForNetwork } from '@jaw.id/agent';
 import type { McpServer } from '@modelcontextprotocol/server';
 import { and, eq } from 'drizzle-orm';
-import { isAddress, isAddressEqual, numberToHex, parseUnits, toFunctionSelector, type Address } from 'viem';
+import { isAddress, isAddressEqual, isHex, numberToHex, parseUnits, toFunctionSelector, type Address } from 'viem';
 import { z } from 'zod';
 import { tenant, type Tenant } from '@/connections/auth';
 import { APPROVE_WITHIN_MS } from '@/connections/config';
-import { ownerRelay, WalletBusy, type OpenWallet, type Wallet } from '@/connections/relay';
+import { ownerRelay, type Ask, type OpenWallet } from '@/connections/relay';
 import { isLive } from '@/connections/rows';
 import { spends } from '@/connections/scopes';
 import { getDb } from '@/db/client';
@@ -19,11 +19,11 @@ import {
   type GrantRequest,
   type ReadPermission,
 } from '@/grants/permission';
+import { openLink, type Outcome } from '@/grants/requests';
 import { liveGrants, LIVE_GRANTS_PER_CONNECTION, type GrantKind } from '@/grants/store';
-import { errorLabel, log } from '@/lib/edge';
 import { reply } from '@/lib/fence';
 import { forbiddenTargets } from './owner-calls';
-import { NO_PAY_SCOPE, refusal } from './reply';
+import { ACCOUNT_BUSY, NO_PAY_SCOPE, refusal } from './reply';
 
 const MAX_ENTRIES = 10;
 
@@ -95,9 +95,6 @@ const DEFAULTS: GrantDeps = { openWallet: ownerRelay, readPermission: readOnChai
 
 const output = z.object({ url: z.url(), expiresAt: z.string(), summary: z.string() });
 
-/** The link of the request still open, per connection: asking again while it waits hands out the same one. */
-const open = new Map<string, { url: string; until: Date }>();
-
 interface Asked {
   kind: GrantKind;
   grant: GrantRequest;
@@ -140,13 +137,29 @@ function asked(t: Tenant, input: GrantInput, expiry: number): Asked | string {
   return { kind: 'custom', grant, what: `${calls.length} call(s) and ${spent.length} spend limit(s)` };
 }
 
-export async function grantPermissions(t: Tenant, input: GrantInput, deps = DEFAULTS) {
-  const waiting = open.get(t.connectionId);
-  if (waiting) {
-    return refusal(
-      `A grant request is still waiting for the owner at ${waiting.url}. Ask again once they approve or it expires at ${waiting.until.toISOString()}.`
-    );
+/** Asks the wallet for the grant and records it once the chain shows it approved. */
+async function askGrant(t: Tenant, ask: Asked, walletAsk: Ask, read: ReadPermission): Promise<Outcome> {
+  const answer = await walletAsk('wallet_grantPermissions', [ask.grant]);
+  const answered = (answer as { permissionId?: unknown } | null)?.permissionId;
+  const permissionId = isHex(answered) ? answered : undefined;
+  const checked = await checkGranted(t.chainId, ask.grant, ask.kind, answer, read);
+  if (typeof checked === 'string') return { state: 'failed', code: checked, permissionId };
+  if (!isAddressEqual(checked.account as Address, t.account)) {
+    return { state: 'failed', code: 'wrong_account', permissionId };
   }
+  const recorded = await getDb().transaction(async (tx) => {
+    const [live] = await tx
+      .select({ id: connections.id })
+      .from(connections)
+      .where(and(eq(connections.id, t.connectionId), isLive()))
+      .for('update');
+    if (live) await recordGrant(tx, t.connectionId, checked);
+    return live !== undefined;
+  });
+  return recorded ? { state: 'approved', permissionId } : { state: 'failed', code: 'connection_ended', permissionId };
+}
+
+export async function grantPermissions(t: Tenant, input: GrantInput, deps = DEFAULTS) {
   if (input.x402Budget && (input.calls || input.spends || input.expiresAt)) {
     return refusal('x402Budget is a preset: pass it alone, or pass calls and spends without it.');
   }
@@ -169,43 +182,26 @@ export async function grantPermissions(t: Tenant, input: GrantInput, deps = DEFA
         'Wait for one to expire, or call jaw_session_disconnect, which revokes them all, and connect again.'
     );
   }
-  let wallet: Wallet;
-  try {
-    wallet = await deps.openWallet(t.chainId, until, t);
-  } catch (err) {
-    if (err instanceof WalletBusy) return refusal('Too many owners are approving right now. Try again in a minute.');
-    throw err;
+  const opened = await openLink(
+    t,
+    { method: 'grant', chainId: t.chainId, work: (walletAsk) => askGrant(t, ask, walletAsk, deps.readPermission) },
+    deps.openWallet
+  );
+  if (opened === 'wallet_busy') return refusal('Too many owners are approving right now. Try again in a minute.');
+  if (opened === 'account_busy') return refusal(ACCOUNT_BUSY);
+  if ('waiting' in opened) {
+    const { walletUrl, approveBy } = opened.waiting;
+    return refusal(
+      `A grant request is still waiting for the owner at ${walletUrl}. Ask again once they approve or it expires at ${approveBy.toISOString()}.`
+    );
   }
-  open.set(t.connectionId, { url: wallet.url, until });
-  void wallet
-    .run(async (walletAsk) => {
-      const checked = await checkGranted(
-        t.chainId,
-        ask.grant,
-        ask.kind,
-        await walletAsk('wallet_grantPermissions', [ask.grant]),
-        deps.readPermission
-      );
-      if (typeof checked === 'string') throw new Error(checked);
-      if (!isAddressEqual(checked.account as Address, t.account)) throw new Error('granted from another account');
-      await getDb().transaction(async (tx) => {
-        const [live] = await tx
-          .select({ id: connections.id })
-          .from(connections)
-          .where(and(eq(connections.id, t.connectionId), isLive()))
-          .for('update');
-        if (!live) throw new Error('connection ended');
-        await recordGrant(tx, t.connectionId, checked);
-      });
-    })
-    .catch((err: unknown) => log('warn', { msg: 'permissions not granted', error: errorLabel(err) }))
-    .finally(() => open.delete(t.connectionId));
+  const url = opened.opened.walletUrl;
   const ends = new Date(ask.grant.expiry * 1000).toISOString();
   return reply({
-    url: wallet.url,
+    url,
     expiresAt: ends,
     summary:
-      `Ask the account owner to open ${wallet.url} and approve ${ask.what} until ${ends} in their wallet. ` +
+      `Ask the account owner to open ${url} and approve ${ask.what} until ${ends} in their wallet. ` +
       'Once they do, the session key acts within it with no further prompts. ' +
       (ask.kind === 'x402-budget' ? 'jaw_status shows the budget in force. ' : '') +
       'A grant approved earlier on this connection stays approved on chain until it expires or jaw_session_disconnect revokes it.',

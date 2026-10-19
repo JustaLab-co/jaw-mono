@@ -12,7 +12,7 @@
 - `grant-mismatch`: a wallet answer that differs from the request in any call or spend records no row.
 - `grant-input`: the preset together with calls, spends or an expiry, spends without calls, a malformed function signature, a period the wallet does not take, an allowance of 2^160 or more and a yearly multiplier above 5461 are refused with no link.
 - `grant-cap`: a connection holding 5 live grants of either kind is refused before a link opens.
-- `grant-one-open`: a second request while one waits on the owner is refused with the waiting link.
+- `grant-one-open`: a second request while one waits on the owner is refused with the waiting link. The waiting link counts toward the account's three open owner links (hosted-revoke.md, `link-cap`).
 - `grant-old-name`: `jaw_request_budget` is an unknown tool.
 
 ## How to get to it (user POV)

@@ -21,7 +21,7 @@ import {
 import { beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { verifyBearer, type Tenant } from '@/connections/auth';
 import { disconnect, sweepOnReuse } from '@/connections/disconnect';
-import { endConnection } from '@/connections/rows';
+import { endConnection, revokeByGrant } from '@/connections/rows';
 import {
   approvedOnChain,
   callTool,
@@ -29,7 +29,6 @@ import {
   fakeWallet,
   managerAnswer,
   setTestEnv,
-  verifyLocally,
   walletAnswers,
   walletsSettled,
   sessionFakes,
@@ -38,16 +37,8 @@ import { floatHolder, getDb, setDb } from '@/db/client';
 import { connections, grants, payments, settings } from '@/db/schema';
 import { x402Budget } from '@/grants/store';
 import { reconcile } from '@/reconciler/run';
-import { revokeConnection } from '@/tools/connections';
 import { grantPermissions } from '@/tools/grant-permissions';
-import {
-  lockWaiters,
-  statusOnceParked,
-  TEST_PG_URL,
-  useTestDb,
-  useTestPostgres,
-  withRoleStatementTimeout,
-} from '@/db/test-db';
+import { lockWaiters, TEST_PG_URL, useTestDb, useTestPostgres, withRoleStatementTimeout } from '@/db/test-db';
 import { safeFetch } from '@/lib/safe-fetch';
 import { pay, type PayDeps } from './pay';
 import { rawBody, resent } from './render';
@@ -283,18 +274,11 @@ async function approveBudget(c: Awaited<ReturnType<typeof connect>>, perDay: str
   balances.set(c.signer.address.toLowerCase(), 5_000_000n);
 }
 
-/** Another app of the same owner, which ends `t`'s connection with jaw_revoke_connection, the owner confirming. */
-async function revoker(c: Awaited<ReturnType<typeof connect>>, t: Tenant) {
-  const other = await connect(c.signer, { scope: 'wallet:read' });
-  const asker = (await verifyBearer(other.access_token))?.extra?.tenant as Tenant;
-  const confirmed = {
-    openWallet: fakeWallet(walletAnswers(c.signer)),
-    verify: verifyLocally,
-    clients: sessionFakes().deps.clients,
-  };
+/** The client revoking its token at the OAuth server, which ends `t`'s connection. */
+async function revoker(t: Tenant) {
+  const [{ grantId }] = await getDb().select().from(connections).where(eq(connections.id, t.connectionId));
   return async () => {
-    await revokeConnection(asker, t.connectionId, confirmed);
-    await walletsSettled();
+    await revokeByGrant(grantId!);
     const [row] = await getDb().select().from(connections).where(eq(connections.id, t.connectionId));
     return { connection: { status: row.status } };
   };
@@ -1631,10 +1615,10 @@ describe('given a pay request that verified its bearer before the connection was
   });
 });
 
-describe('given a pay request that verified its bearer before another app of the owner revoked it', () => {
+describe('given a pay request that verified its bearer before its client revoked it', () => {
   it('when its refill turn comes after the revoke committed, then it refuses, reserves nothing and signs nothing', async () => {
-    const { c, t } = await connected('1');
-    const revoke = await revoker(c, t);
+    const { t } = await connected('1');
+    const revoke = await revoker(t);
     onProbe.set('/race', async () => {
       expect((await revoke())?.connection.status).toBe('revoked');
     });
@@ -1650,8 +1634,8 @@ describe('given a pay request that verified its bearer before another app of the
   });
 
   it('when the revoke commits after its refill, then the pay still settles', async () => {
-    const { c, t } = await connected('1');
-    const revoke = await revoker(c, t);
+    const { t } = await connected('1');
+    const revoke = await revoker(t);
     let revoked: Awaited<ReturnType<typeof revoke>> | undefined;
     onProof.set('/race', async () => {
       revoked = await revoke();
@@ -1664,16 +1648,18 @@ describe('given a pay request that verified its bearer before another app of the
 });
 
 describe.skipIf(!TEST_PG_URL)('on Postgres, given a pay inside its funding turn', () => {
-  it('when another app of the owner revokes it, then the revoke waits for the turn and the next pay refuses', async () => {
-    const { c, t } = await connected('1');
-    const revoke = await revoker(c, t);
+  it('when its client revokes it, then the revoke waits for the turn and the next pay refuses', async () => {
+    const { t } = await connected('1');
+    const revoke = await revoker(t);
     let revoking: ReturnType<typeof revoke> | undefined;
     let statusInTurn: string | undefined;
     const inTurn = (funder: Address): TopUpExecutor => ({
       request: async (method, params) => {
         if (!revoking) {
           revoking = revoke();
-          statusInTurn = await statusOnceParked(t.connectionId);
+          await sleep(500);
+          const [row] = await getDb().select().from(connections).where(eq(connections.id, t.connectionId));
+          statusInTurn = row.status;
         }
         return executor(funder).request(method, params);
       },
@@ -1711,9 +1697,9 @@ describe.skipIf(!TEST_PG_URL)('on Postgres, given a top-up in flight whose lock 
   const statusOf = async (id: string) =>
     (await getDb().select().from(connections).where(eq(connections.id, id)))[0].status;
 
-  it('when another app of the owner revokes it, then the connection stays active until the pay concludes, and that revoke then ends it', async () => {
-    const { c, t } = await connected('1');
-    const revoke = await revoker(c, t);
+  it('when its client revokes it, then the connection stays active until the pay concludes, and that revoke then ends it', async () => {
+    const { t } = await connected('1');
+    const revoke = await revoker(t);
     let revoking: ReturnType<typeof revoke> | undefined;
     let statusWhenLanded: string | undefined;
     const meanwhile = async () => {

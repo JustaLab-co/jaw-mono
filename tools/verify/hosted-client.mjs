@@ -142,7 +142,7 @@ const HELP = `Commands:
                                  jaw_send_calls, the owner approves in the wallet, e.g.
                                  calls '[{"to":"0x...","data":"0x..."}]' 8453 my-key
   calls-status <id>              jaw_get_calls_status, id is the oc_ id jaw_send_calls returned
-  revoke <connection id>         jaw_revoke_connection
+  revoke <permission id> [chain] jaw_revoke_permission
   disconnect                     jaw_session_disconnect
   call <tool> '<json>'           any tool with raw arguments
   quit`;
@@ -175,7 +175,8 @@ const commands = {
       ...(idempotencyKey && { idempotencyKey }),
     }),
   'calls-status': (id) => call('jaw_get_calls_status', { id }),
-  revoke: (connection) => call('jaw_revoke_connection', { id: connection }),
+  revoke: (permissionId, chainId) =>
+    call('jaw_revoke_permission', { permissionId, ...(chainId && { chainId: Number(chainId) }) }),
   disconnect: () => call('jaw_session_disconnect', {}),
   call: (name, ...json) => call(name, json.length ? JSON.parse(json.join(' ')) : {}),
 };

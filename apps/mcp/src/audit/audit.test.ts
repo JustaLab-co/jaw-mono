@@ -29,13 +29,16 @@ describe('audit events', () => {
   it('records one event per tool call with its tool, outcome and request id', async () => {
     const c = await connect();
     const ok = await call(c.access_token, 'jaw_connections', {});
-    const refused = await call(c.access_token, 'jaw_revoke_connection', { id: 'conn_nope' });
+    const refused = await call(c.access_token, 'jaw_revoke_permission', {
+      permissionId: `0x${'0'.repeat(64)}`,
+      chainId: 1,
+    });
     expect(refused.json.result.isError).toBe(true);
 
     const events = await eventsOf(await connectionOf(c.access_token));
     expect(events.map((e) => [e.tool, e.outcome, e.requestId])).toEqual([
       ['jaw_connections', 'ok', ok.headers.get('x-request-id')],
-      ['jaw_revoke_connection', 'error', refused.headers.get('x-request-id')],
+      ['jaw_revoke_permission', 'error', refused.headers.get('x-request-id')],
     ]);
   });
 

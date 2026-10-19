@@ -16,10 +16,10 @@ const SIGNERS = {
   jaw_grant_permissions: 'owner',
   jaw_swap: 'owner',
   jaw_send_calls: 'owner',
+  jaw_revoke_permission: 'owner',
   jaw_status: 'none',
   jaw_add_funds: 'none',
   jaw_connections: 'none',
-  jaw_revoke_connection: 'none',
   jaw_swap_status: 'none',
   jaw_get_calls_status: 'none',
 } as const;
@@ -32,6 +32,7 @@ const RENAMED_AWAY = [
   'jaw_disconnect',
   'jaw_send_calls_status',
   'jaw_request_budget',
+  'jaw_revoke_connection',
 ];
 
 describe('the pinned tool names', () => {

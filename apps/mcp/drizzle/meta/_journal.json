@@ -169,6 +169,13 @@
       "when": 1792419510202,
       "tag": "0023_grant_period",
       "breakpoints": true
+    },
+    {
+      "idx": 24,
+      "version": "7",
+      "when": 1792420733532,
+      "tag": "0024_permission_requests",
+      "breakpoints": true
     }
   ]
 }

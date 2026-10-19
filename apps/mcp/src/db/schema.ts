@@ -356,6 +356,49 @@ export const ownerCalls = pgTable(
   ]
 );
 
+// A grant or revoke link handed to the owner. The relay session lives in the
+// process that opened it, so a row whose lease lapsed holds no link any more.
+export const permissionRequests = pgTable(
+  'permission_requests',
+  {
+    id: text('id').primaryKey(),
+    connectionId: text('connection_id')
+      .notNull()
+      .references(() => connections.id),
+    method: text('method', { enum: ['grant', 'revoke'] }).notNull(),
+    chainId: integer('chain_id').notNull(),
+    account: text('account').notNull(),
+    // Revoke: the permission asked about. Grant: the one the wallet answered, once it does.
+    permissionId: text('permission_id'),
+    state: text('state', { enum: ['awaiting_owner', 'approved', 'owner_declined', 'expired', 'failed'] })
+      .notNull()
+      .default('awaiting_owner'),
+    code: text('code'),
+    walletUrl: text('wallet_url').notNull(),
+    approveBy: timestamp('approve_by', { withTimezone: true }).notNull(),
+    sessionUntil: timestamp('session_until', { withTimezone: true }),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+    updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [
+    index().on(t.connectionId, t.createdAt),
+    index('permission_requests_open_account_index')
+      .on(sql`lower(${t.account})`)
+      .where(sql`${t.state} = 'awaiting_owner'`),
+    uniqueIndex('permission_requests_open_grant_index')
+      .on(t.connectionId)
+      .where(sql`${t.method} = 'grant' and ${t.state} = 'awaiting_owner'`),
+    uniqueIndex('permission_requests_open_revoke_index')
+      .on(sql`lower(${t.permissionId})`)
+      .where(sql`${t.method} = 'revoke' and ${t.state} = 'awaiting_owner'`),
+    check(
+      'permission_request_shape',
+      sql`(${t.method} = 'revoke' and ${t.permissionId} is not null)
+        or (${t.method} = 'grant' and (${t.state} <> 'approved' or ${t.permissionId} is not null))`
+    ),
+  ]
+);
+
 // One row per tool call. Arguments and results are never stored: they can carry
 // seller headers, signatures and amounts the owner did not ask to keep.
 export const auditEvents = pgTable(
