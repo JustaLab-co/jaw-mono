@@ -5,7 +5,8 @@ import { connect, mcp, setTestEnv } from '@/connections/testkit';
 setTestEnv();
 beforeAll(useTestDb);
 
-// Who acts for each tool: the session key inside the owner's budget, the owner in the wallet, or nobody.
+// Pinned by hand. Only pay and disconnect read the session key, so nothing
+// observable tells quote, discover and history apart from non-session tools.
 const SIGNERS = {
   jaw_session_x402_pay: 'session',
   jaw_session_x402_quote: 'session',
@@ -32,8 +33,8 @@ const RENAMED_AWAY = [
   'jaw_send_calls_status',
 ];
 
-describe('the tool names', () => {
-  it('given the tools the server lists, then each one is in the signer table and the old names are gone', async () => {
+describe('the pinned tool names', () => {
+  it('given the tools the server lists, then the list is the pinned set and the old names are gone', async () => {
     const c = await connect(undefined, { scope: 'wallet:read' });
     const listed: string[] = (await mcp(c.access_token, { method: 'tools/list' })).json.result.tools.map(
       (t: { name: string }) => t.name
@@ -42,7 +43,10 @@ describe('the tool names', () => {
     for (const old of RENAMED_AWAY) expect(listed).not.toContain(old);
   });
 
-  it.each(Object.entries(SIGNERS))('given %s signed by %s, then the jaw_session_ prefix matches', (name, signer) => {
-    expect(name.startsWith('jaw_session_')).toBe(signer === 'session');
-  });
+  it.each(Object.entries(SIGNERS))(
+    'given the pinned name %s for actor %s, then the jaw_session_ prefix marks the session tools',
+    (name, signer) => {
+      expect(name.startsWith('jaw_session_')).toBe(signer === 'session');
+    }
+  );
 });
