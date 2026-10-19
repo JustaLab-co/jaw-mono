@@ -8,6 +8,7 @@ import {
   HttpRequestError,
   parseAbi,
   TimeoutError,
+  toHex,
   type Hex,
   type PublicClient,
 } from 'viem';
@@ -147,6 +148,90 @@ describe('jaw_read_contracts', () => {
       const out = await readContracts({ chainId: 8453, reads: [read('decimals'), bad] }, usdc);
       expect(out).toMatchObject({ isError: true, content: [{ text: expect.stringMatching(/^Read 1: .*not encode/) }] });
     }
+  });
+
+  it('reads a function that shares its name with an event or an error', async () => {
+    const paused = {
+      type: 'function',
+      name: 'paused',
+      inputs: [],
+      outputs: [{ type: 'bool' }],
+      stateMutability: 'view',
+    };
+    const answer = encodeFunctionResult({ abi: parseAbi(['function paused() view returns (bool)']), result: true });
+    for (const twin of [
+      { type: 'event', name: 'paused', inputs: [] },
+      { type: 'error', name: 'paused', inputs: [] },
+    ]) {
+      const out = await readContracts(
+        { chainId: 8453, reads: [{ address: USDC, abi: [twin, paused], functionName: 'paused' }] },
+        node(() => answer)
+      );
+      expect(values(out)).toEqual([{ ok: true, value: true }]);
+    }
+  });
+
+  it('keeps the revert text of a contract whose message mentions "returned no data"', async () => {
+    const text = 'returned no data, but this is a contract that reverted';
+    const reverts = node(() => ({
+      revert: encodeErrorResult({ abi: solidityError, errorName: 'Error', args: [text] }),
+    }));
+    const out = await readContracts({ chainId: 8453, reads: [read('decimals')] }, reverts);
+    expect(values(out)).toEqual([{ ok: false, error: fenced(text) }]);
+  });
+
+  it('refuses a JAW chain that has no multicall contract', async () => {
+    const out = await readContracts({ chainId: 4114, reads: [read('decimals')] });
+    expect(out).toMatchObject({ isError: true, content: [{ text: expect.stringContaining('no multicall') }] });
+  });
+
+  it('refuses an ABI nested too deep or with too many parameters, naming the read', async () => {
+    let deep: Record<string, unknown> = { type: 'uint8' };
+    for (let i = 0; i < 2000; i++) deep = { type: 'tuple', components: [deep] };
+    const wide = Array.from({ length: 5000 }, () => ({ type: 'uint256' }));
+    const fn = (outputs: unknown[]) => ({ type: 'function', name: 'f', inputs: [], outputs, stateMutability: 'view' });
+    const cases: [Read['abi'], RegExp][] = [
+      [[fn([deep])], /^Read 1: .*nested/],
+      [[fn(wide)], /^Read 1: .*parameters/],
+    ];
+    for (const [abi, reason] of cases) {
+      const out = await readContracts(
+        { chainId: 8453, reads: [read('decimals'), { address: USDC, abi, functionName: 'f' }] },
+        usdc
+      );
+      expect(out).toMatchObject({ isError: true, content: [{ text: expect.stringMatching(reason) }] });
+    }
+  });
+
+  it('caps a huge reply with a named marker on each cut value', async () => {
+    const abi = parseAbi(['function blob() view returns (bytes)', 'function many() view returns (string[])']);
+    const huge = node((_, data) => {
+      const { functionName } = decodeFunctionData({ abi, data });
+      if (functionName === 'blob')
+        return encodeFunctionResult({ abi, functionName, result: toHex(new Uint8Array(500_000).fill(0x41)) });
+      return encodeFunctionResult({ abi, functionName, result: Array(5000).fill('x'.repeat(3000)) });
+    });
+    const reads = ['blob', 'many'].map((functionName) => ({
+      address: USDC,
+      abi: abi as unknown as Read['abi'],
+      functionName,
+    }));
+    const out = await readContracts({ chainId: 8453, reads }, huge);
+    expect(JSON.stringify(out).length).toBeLessThan(400_000);
+    const [blob, many] = values(out) as { value: unknown }[];
+    expect(blob.value).toMatch(/^0x(41)+\[truncated: 500000 bytes in all\]$/);
+    const items = many.value as string[];
+    expect(items[0]).toMatch(/\[truncated: 3000 characters in all\]$/);
+    expect(items.at(-1)).toMatch(/^\[truncated: \d+ more items\]$/);
+  });
+
+  it('returns a normal batch of 100 reads whole', async () => {
+    const reads = Array.from({ length: 100 }, (_, i) =>
+      read(['decimals', 'symbol', 'balanceOf'][i % 3], i % 3 === 2 ? [HOLDER] : undefined)
+    );
+    const out = await readContracts({ chainId: 8453, reads }, usdc);
+    expect(JSON.stringify(out)).not.toContain('truncated');
+    expect(values(out)).toHaveLength(100);
   });
 
   it('says the RPC is unavailable instead of failing every read', async () => {
