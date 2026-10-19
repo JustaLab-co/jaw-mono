@@ -20,7 +20,7 @@ import { getDb } from '@/db/client';
 import { connections, grants } from '@/db/schema';
 import { TEST_PG_URL, useTestDb, useTestPostgres } from '@/db/test-db';
 import { endConnection } from '@/connections/rows';
-import { WalletBusy, type Wallet } from '@/connections/relay';
+import { WalletBusy, type OpenWallet, type Wallet } from '@/connections/relay';
 import { requestBudget } from '@/tools/request-budget';
 import { NO_PAY_SCOPE } from '@/tools/reply';
 import {
@@ -242,7 +242,7 @@ const replacedOf = async (permissionId: string) =>
   (await getDb().select().from(grants).where(eq(grants.permissionId, permissionId)))[0].replacedAt;
 
 describe('jaw_request_budget', () => {
-  it('the wallet is given ten minutes to answer', async () => {
+  it('the wallet is given thirty minutes to answer', async () => {
     const { t, signer } = await connected();
     let until: Date | undefined;
     const answers = fakeWallet(walletAnswers(signer));
@@ -255,8 +255,8 @@ describe('jaw_request_budget', () => {
       ...sessionFakes().deps,
     });
     await walletsSettled();
-    expect(until!.getTime() - Date.now()).toBeGreaterThan(9.9 * 60_000);
-    expect(until!.getTime() - Date.now()).toBeLessThanOrEqual(10 * 60_000);
+    expect(until!.getTime() - Date.now()).toBeGreaterThan(29.9 * 60_000);
+    expect(until!.getTime() - Date.now()).toBeLessThanOrEqual(30 * 60_000);
   });
 
   it('a second request while the first waits gets the first link back as a refusal, and a third after it ends is served', async () => {
@@ -268,7 +268,9 @@ describe('jaw_request_budget', () => {
       run: async (work) => work(async () => release.promise as never),
       close: () => undefined,
     };
-    const deps = { openWallet: async () => waiting, readPermission: approvedOnChain, ...sessionFakes().deps };
+    let until: Date | undefined;
+    const openWallet: OpenWallet = async (_chainId, at) => ((until = at), waiting);
+    const deps = { openWallet, readPermission: approvedOnChain, ...sessionFakes().deps };
 
     const first = await requestBudget(t, '1', deps);
     const second = await requestBudget(t, '1', deps);
@@ -277,6 +279,7 @@ describe('jaw_request_budget', () => {
     expect('isError' in second && second.isError).toBe(true);
     expect(second.content[0].text).toContain(url);
     expect(second.content[0].text).toContain('still waiting');
+    expect(second.content[0].text).toContain(until!.toISOString());
 
     release.reject(new Error('owner left'));
     await walletsSettled();

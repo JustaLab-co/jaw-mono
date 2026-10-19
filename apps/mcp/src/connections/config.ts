@@ -82,6 +82,8 @@ function baseUnits(name: string, value: string): bigint {
 }
 
 export const QUOTE_MARGIN_SEC = 60;
+/** How long the owner has to answer a wallet link once it is handed out. */
+export const APPROVE_WITHIN_MS = 30 * 60_000;
 
 function quoteTtl(value: string): number {
   if (!/^\d+$/.test(value) || Number(value) <= QUOTE_MARGIN_SEC) {

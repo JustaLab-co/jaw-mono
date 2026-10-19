@@ -97,6 +97,22 @@ describe('jaw_revoke_connection', () => {
     expect(await works(me.access_token)).toBe(true);
   });
 
+  it('given a revoke, then the owner has thirty minutes to confirm it', async () => {
+    const signer = owner();
+    const other = await connect(signer);
+    const me = await connect(signer, { scope: 'wallet:read' });
+    const id = (await tenantOf(other.access_token)).connectionId;
+    const confirmed = confirmedBy(signer);
+    let until: Date | undefined;
+    const openWallet: OpenWallet = (chainId, at, client) => ((until = at), confirmed.openWallet(chainId, at, client));
+
+    await revokeConnection(await tenantOf(me.access_token), id, { ...confirmed, openWallet });
+    await walletsSettled();
+
+    expect(until!.getTime() - Date.now()).toBeGreaterThan(29 * 60_000);
+    expect(until!.getTime() - Date.now()).toBeLessThanOrEqual(30 * 60_000);
+  });
+
   it('given a revoke of that connection still waiting for the owner, when asked again, then it hands back the same link and opens no other session', async () => {
     const signer = owner();
     const other = await connect(signer);

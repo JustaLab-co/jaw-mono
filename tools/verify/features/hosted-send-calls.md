@@ -23,7 +23,7 @@
 
 - An MCP client on the hosted server with any scope set; `wallet:read` is enough. `jaw_send_calls` takes `calls`, an array of 1 to 10 `{ to, data?, value? }` (`data` is hex calldata starting with the selector, omitted for a plain native transfer; `value` is wei as a decimal string, default 0), and optionally `chainId` (defaults to the connection's chain) and `idempotencyKey` (made up and returned when absent). `jaw_send_calls_status` takes the `id` (`oc_` and 22 characters) that `jaw_send_calls` returned.
 - The result of both tools holds `id`, `idempotencyKey`, `state`, `approveBy`, `chainId`, `from`, each call as `to`, `value` and `selector`, `totalValue` in wei, `callsId` and `txHash` once known, a `refusal` code and a `summary`. `url` is present only while `awaiting_owner` with no code on the row. States: `awaiting_owner`, `owner_declined`, `expired`, `sent`, `landed`, `reverted`.
-- The person sees the summary: the account owner opens the `url` within 10 minutes, the wallet asks for the account and then shows the calls as one atomic `wallet_sendCalls`, and the owner pays the gas in the wallet.
+- The person sees the summary: the account owner opens the `url` within 30 minutes, the wallet asks for the account and then shows the calls as one atomic `wallet_sendCalls`, and the owner pays the gas in the wallet.
 - By hand: `node tools/verify/hosted-client.mjs "$MCP_PUBLIC_URL" [scope]`, then `calls '<json array>' [chainId] [key]` and `calls-status <id>`.
 
 ## Driving it
@@ -79,5 +79,5 @@ Not driven here: `reverted` (the wallet usually refuses a batch that fails its s
 - The hosted client connects with all three scopes unless a scope is passed after the URL; pass `wallet:read` to check that no budget is needed.
 - One request is open per connection. Wait for it to end, decline it, or let it expire before trying a new key.
 - `expired` is not final for a request the wallet already took: if the wallet returns a calls id after `approveBy`, the row moves to `sent`.
-- The owner window is 10 minutes, the same as a budget request.
+- The owner window is 30 minutes, the same as a budget request.
 - Postgres runs on tmpfs; dump the `owner_calls` rows into `evidence/` before `down.sh`.

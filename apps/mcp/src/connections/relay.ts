@@ -64,6 +64,11 @@ export function appNameOf(client?: RelayClient): string {
  */
 export const SESSION_LIMITS = { connect: 150, owner: 50, ownerPerAccount: 5 };
 
+// relay.jaw.id ends a session after 15 minutes with no message from either side.
+const KEEPALIVE_MS = 5 * 60_000;
+// An authorization link nobody opened gives its slot back; another click on the page opens a new one.
+const JOIN_WITHIN_MS = 10 * 60_000;
+
 export class WalletBusy extends Error {
   constructor() {
     super('too many wallet sessions are open on this server');
@@ -77,8 +82,15 @@ interface Pool {
   open: number;
   perAccount?: number;
   byAccount: Map<string, number>;
+  /** How long a session waits for the browser to join before it ends. */
+  joinWithin?: number;
 }
-const connectPool: Pool = { limit: SESSION_LIMITS.connect, open: 0, byAccount: new Map() };
+const connectPool: Pool = {
+  limit: SESSION_LIMITS.connect,
+  open: 0,
+  byAccount: new Map(),
+  joinWithin: JOIN_WITHIN_MS,
+};
 const ownerPool: Pool = {
   limit: SESSION_LIMITS.owner,
   open: 0,
@@ -119,14 +131,20 @@ async function openRelay(pool: Pool, chainId: number, until: Date, client?: Rela
     else pool.byAccount.delete(account);
   };
   try {
-    return await startSession(release, chainId, until, client);
+    return await startSession(release, chainId, until, client, pool.joinWithin);
   } catch (err) {
     release();
     throw err;
   }
 }
 
-async function startSession(release: () => void, chainId: number, until: Date, client?: RelayClient): Promise<Wallet> {
+async function startSession(
+  release: () => void,
+  chainId: number,
+  until: Date,
+  client?: RelayClient,
+  joinWithin?: number
+): Promise<Wallet> {
   const { keysOrigin, relayUrl } = config();
   const keys = await generateKeyPair();
   const session = randomUUID();
@@ -136,15 +154,37 @@ async function startSession(release: () => void, chainId: number, until: Date, c
   url.hash = `pk=${await exportKeyToHex('public', keys.publicKey)}`;
 
   const ws = new WebSocket(`${relayUrl}?session=${encodeURIComponent(session)}&role=cli`);
+  const inbox = new Inbox(ws, until);
+  const keepalive = setInterval(() => {
+    if (ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify({ type: 'ping' }));
+  }, KEEPALIVE_MS);
+  keepalive.unref();
+  // Ends the session at its deadline even if nobody runs it.
+  const deadline = setTimeout(() => end(), until.getTime() - Date.now());
+  deadline.unref();
+  const unjoined =
+    joinWithin === undefined
+      ? undefined
+      : setTimeout(() => {
+          inbox.close(new Error('the wallet link was not opened in time'));
+          end();
+        }, joinWithin);
+  unjoined?.unref();
+  const stop = () => {
+    clearInterval(keepalive);
+    clearTimeout(deadline);
+    clearTimeout(unjoined);
+    release();
+  };
   // A socket closed while still connecting never fires `close`, so closing frees the slot itself.
   const end = () => {
     ws.close();
-    release();
+    stop();
   };
-  ws.addEventListener('close', release, { once: true });
-  // Ends the session at its deadline even if nobody runs it.
-  setTimeout(end, until.getTime() - Date.now()).unref();
-  const inbox = new Inbox(ws, until);
+  ws.addEventListener('close', stop, { once: true });
+  ws.addEventListener('message', (e) => {
+    if (typeOf(e.data) === 'browser_connected') clearTimeout(unjoined);
+  });
 
   return {
     url: url.toString(),
@@ -189,6 +229,14 @@ async function startSession(release: () => void, chainId: number, until: Date, c
   };
 }
 
+function typeOf(data: unknown): unknown {
+  try {
+    return (JSON.parse(String(data)) as Message).type;
+  } catch {
+    return undefined;
+  }
+}
+
 /** Messages from the relay, read in order by whoever is waiting for the next one that matters. */
 class Inbox {
   private queue: Message[] = [];
@@ -211,7 +259,8 @@ class Inbox {
     ws.addEventListener('close', () => this.close(new Error('the wallet session ended')));
   }
 
-  private close(err: Error) {
+  /** Ends every wait with `err`, unless the session already ended with another. */
+  close(err: Error) {
     this.closed ??= err;
     this.waiter?.();
   }
