@@ -220,7 +220,7 @@ export async function grantPermissions(t: Tenant, input: GrantInput, deps = DEFA
     summary:
       `Ask the account owner to open ${url} and approve ${ask.what} until ${ends} in their wallet. ` +
       'Once they do, the session key acts within it with no further prompts. ' +
-      (ask.kind === 'x402-budget' ? 'jaw_status shows the budget in force. ' : '') +
+      (ask.kind === 'x402-budget' ? 'jaw_session_status shows the budget in force. ' : '') +
       'A grant approved earlier on this connection stays approved on chain until it expires or jaw_session_disconnect revokes it.',
   });
 }

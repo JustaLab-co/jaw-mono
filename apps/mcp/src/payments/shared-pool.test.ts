@@ -233,11 +233,11 @@ describe('given 1 USDC a day and a counter the chain does not answer for', () =>
 });
 
 describe('given 1 USDC a day and a payment of 0.6', () => {
-  it('when jaw_status is read, then it counts the payment as spent and offers no transfer figure', async () => {
+  it('when jaw_session_status is read, then it counts the payment as spent and offers no transfer figure', async () => {
     const { t, token } = await connected('1', 2_000_000n);
     prices.set('/a', '600000');
     await pay(t, { url: url('/a') }, deps);
-    const status = await callTool(token, 'jaw_status', {});
+    const status = await callTool(token, 'jaw_session_status', {});
     expect(status.structuredContent.budget).toMatchObject({
       spentToday: { amount: '600000' },
       remainingToday: { amount: '400000' },
@@ -257,10 +257,10 @@ describe('given 1 USDC a day, 2 USDC of float, and an open transfer of 0.5 left 
     expect(seen).toHaveLength(0);
   });
 
-  it('when jaw_status is read, then it counts the transfer as spent today', async () => {
+  it('when jaw_session_status is read, then it counts the transfer as spent today', async () => {
     const { t, token } = await connected('1', 2_000_000n);
     await open(t);
-    const status = await callTool(token, 'jaw_status', {});
+    const status = await callTool(token, 'jaw_session_status', {});
     expect(status.structuredContent.budget).toMatchObject({ spentToday: { amount: '500000' } });
   });
 

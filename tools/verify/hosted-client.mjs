@@ -125,10 +125,14 @@ async function call(name, args) {
 
 const HELP = `Commands:
   tools                          list the server's tools
-  status                         jaw_status
+  status                         jaw_session_status
   connections                    jaw_connections
   history                        jaw_session_history
   funds                          jaw_add_funds
+  assets [chainIds,comma]        jaw_get_assets, every mainnet when left out
+  account-history                jaw_get_calls_history
+  permissions                    jaw_get_permissions
+  capabilities                   jaw_get_capabilities
   quote <url>                    jaw_session_x402_quote
   pay <url> [maxAmount]          jaw_session_x402_pay (maxAmount in base units)
   budget <perDay>                jaw_grant_permissions with the x402 budget preset, USDC per day
@@ -152,10 +156,14 @@ const HELP = `Commands:
 
 const commands = {
   tools: async () => console.log((await rpc('tools/list', {})).tools.map((t) => t.name).join('\n')),
-  status: () => call('jaw_status', {}),
+  status: () => call('jaw_session_status', {}),
   connections: () => call('jaw_connections', {}),
   history: () => call('jaw_session_history', {}),
   funds: () => call('jaw_add_funds', {}),
+  assets: (chainIds) => call('jaw_get_assets', chainIds ? { chainIds: chainIds.split(',').map(Number) } : {}),
+  'account-history': () => call('jaw_get_calls_history', {}),
+  permissions: () => call('jaw_get_permissions', {}),
+  capabilities: () => call('jaw_get_capabilities', {}),
   quote: (url) => call('jaw_session_x402_quote', { url }),
   pay: (url, maxAmount) => call('jaw_session_x402_pay', { url, ...(maxAmount && { maxAmount }) }),
   budget: (perDay) => call('jaw_grant_permissions', { x402Budget: { perDay } }),
