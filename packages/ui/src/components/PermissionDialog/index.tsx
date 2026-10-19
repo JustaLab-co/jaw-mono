@@ -353,3 +353,4 @@ export const PermissionDialog = ({
 
 export * from './types';
 export { isWildcard } from './Sections';
+export { toDialogCalls, type RequestedCall } from './calls';
