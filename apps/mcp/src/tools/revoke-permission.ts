@@ -1,14 +1,14 @@
 import { getPermissionFromRelay } from '@jaw.id/core';
 import { parseGrantedPermission, type GrantedPermission, type PermissionState } from '@jaw.id/agent';
 import type { McpServer } from '@modelcontextprotocol/server';
-import { and, isNull, sql } from 'drizzle-orm';
+import { and, eq, isNull, sql } from 'drizzle-orm';
 import { isAddressEqual, type Address, type Hex } from 'viem';
 import { z } from 'zod';
 import { tenant, type Tenant } from '@/connections/auth';
 import { APPROVE_WITHIN_MS, config, SUPPORTED_CHAINS } from '@/connections/config';
 import { ownerRelay, type Ask, type OpenWallet } from '@/connections/relay';
 import { getDb } from '@/db/client';
-import { grants } from '@/db/schema';
+import { grants, permissionRequests } from '@/db/schema';
 import { readOnChain, type ReadPermission } from '@/grants/permission';
 import { openLink, type Claim, type Outcome, type PermissionRequestRow } from '@/grants/requests';
 import { reply } from '@/lib/fence';
@@ -106,10 +106,23 @@ async function findPermission(t: Tenant, id: Hex, chainId: number, lookUp: LookU
 }
 
 const markRevoked = (id: string) =>
-  getDb()
-    .update(grants)
-    .set({ revokedAt: new Date() })
-    .where(and(sameId(id), isNull(grants.revokedAt)));
+  getDb().transaction(async (tx) => {
+    await tx
+      .update(grants)
+      .set({ revokedAt: new Date() })
+      .where(and(sameId(id), isNull(grants.revokedAt)));
+    await tx
+      .update(permissionRequests)
+      .set({ code: null, updatedAt: sql`statement_timestamp()` })
+      .where(
+        and(
+          eq(permissionRequests.method, 'revoke'),
+          sql`lower(${permissionRequests.permissionId}) = ${id.toLowerCase()}`,
+          eq(permissionRequests.state, 'approved'),
+          eq(permissionRequests.code, 'unconfirmed')
+        )
+      );
+  });
 
 const readState = (target: Target, read: ReadPermission) =>
   read(target).catch((): PermissionState => ({ status: 'unavailable' }));

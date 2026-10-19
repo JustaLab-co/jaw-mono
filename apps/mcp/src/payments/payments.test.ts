@@ -274,10 +274,10 @@ async function approveBudget(c: Awaited<ReturnType<typeof connect>>, perDay: str
   balances.set(c.signer.address.toLowerCase(), 5_000_000n);
 }
 
-async function revoker(t: Tenant) {
+async function revoker(t: Tenant, end = revokeByGrant) {
   const [{ grantId }] = await getDb().select().from(connections).where(eq(connections.id, t.connectionId));
   return async () => {
-    await revokeByGrant(grantId!);
+    await end(grantId!);
     const [row] = await getDb().select().from(connections).where(eq(connections.id, t.connectionId));
     return { connection: { status: row.status } };
   };
@@ -318,6 +318,41 @@ async function failUpdates(key: string, when: string, using = '') {
 async function otherReplica() {
   vi.resetModules();
   return (await import('./pay')).pay;
+}
+
+/**
+ * Another replica whose float lock tells `untilWaiting` once work queues behind the
+ * connection's turn, or tries the lock a second time after the first try gave up.
+ */
+async function watchedReplica(connectionId: string) {
+  let watch: ((how: 'queued' | 'tried') => void) | undefined;
+  vi.resetModules();
+  vi.doMock('./float-lock', async (original) => {
+    const real = await original<typeof import('./float-lock')>();
+    return {
+      ...real,
+      inTurn: <T>(key: string, work: () => Promise<T>) => {
+        const run = real.inTurn(key, work);
+        if (key === connectionId) watch?.('queued');
+        return run;
+      },
+      tryLockFloat: (tx: Parameters<typeof real.tryLockFloat>[0], id: string) => {
+        if (id === connectionId) watch?.('tried');
+        return real.tryLockFloat(tx, id);
+      },
+    };
+  });
+  const [{ pay }, { revokeByGrant }] = await Promise.all([import('./pay'), import('@/connections/rows')]);
+  vi.doUnmock('./float-lock');
+  const untilWaiting = () => {
+    let tries = 0;
+    return new Promise<void>((resolve) => {
+      watch = (how) => {
+        if (how === 'queued' || ++tries === 2) resolve();
+      };
+    });
+  };
+  return { pay, revokeByGrant, untilWaiting };
 }
 
 /** Resolves every waiter once `n` have arrived. */
@@ -1649,21 +1684,23 @@ describe('given a pay request that verified its bearer before its client revoked
 describe.skipIf(!TEST_PG_URL)('on Postgres, given a pay inside its funding turn', () => {
   it('when its client revokes it, then the revoke waits for the turn and the next pay refuses', async () => {
     const { t } = await connected('1');
-    const revoke = await revoker(t);
+    const replica = await watchedReplica(t.connectionId);
+    const revoke = await revoker(t, replica.revokeByGrant);
     let revoking: ReturnType<typeof revoke> | undefined;
     let statusInTurn: string | undefined;
     const inTurn = (funder: Address): TopUpExecutor => ({
       request: async (method, params) => {
         if (!revoking) {
+          const waiting = replica.untilWaiting();
           revoking = revoke();
-          await sleep(500);
+          await Promise.race([waiting, revoking]);
           const [row] = await getDb().select().from(connections).where(eq(connections.id, t.connectionId));
           statusInTurn = row.status;
         }
         return executor(funder).request(method, params);
       },
     });
-    const paid = await pay(
+    const paid = await replica.pay(
       t,
       { url: url('/race'), idempotencyKey: 'page-in-turn' },
       deps({ executor: (_t, grant) => inTurn(grant.account) })

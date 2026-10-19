@@ -236,6 +236,26 @@ describe('jaw_revoke_permission', () => {
     expect((await grantRow(budget)).revokedAt).toBeNull();
   });
 
+  it('given an unconfirmed revoke the chain now shows, when asked again, then the request and the grant settle revoked with no new link', async () => {
+    const { t, signer, budget } = await connected();
+    const { deps, chain, opened } = setup(signer);
+    const fresh = deps();
+    const lagging: RevokeDeps = {
+      ...fresh,
+      readPermission: async () => ({ status: 'ok', approved: true, revoked: false }),
+    };
+    await revokePermission(t, { permissionId: budget }, lagging);
+    await walletsSettled();
+    chain.revoked.add(budget.toLowerCase());
+
+    const again = await revokePermission(t, { permissionId: budget }, fresh);
+
+    expect(again.content[0].text).toMatch(/^already_revoked: /);
+    expect(opened()).toBe(1);
+    expect(await requestsOf(budget)).toMatchObject([{ state: 'approved', code: null }]);
+    expect((await grantRow(budget)).revokedAt).not.toBeNull();
+  });
+
   it("given another account's grant, then it is refused as unknown and no wallet opens", async () => {
     const theirs = await connected();
     const { t, signer } = await connected();
