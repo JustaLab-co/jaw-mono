@@ -100,7 +100,7 @@ export function registerBudgetTool(server: McpServer) {
     'jaw_request_budget',
     {
       description:
-        "Ask the account owner for a daily USDC budget, approved once in their JAW wallet. The budget covers USDC only: payments, refills and swap quotes run with no further prompts, up to it. For any other contract call use jaw_send_calls, which asks the owner each time. Returns a link for the owner. Ask again for a different amount; payments then draw from the newest budget, and the older ones stay approved until they expire or jaw_session_disconnect revokes them.",
+        'Ask the account owner for a daily USDC budget, approved once in their JAW wallet. The budget covers USDC only: payments, refills and swap quotes run with no further prompts, up to it. For any other contract call use jaw_send_calls, which asks the owner each time. Returns a link for the owner. Ask again for a different amount; payments then draw from the newest budget, and the older ones stay approved until they expire or jaw_session_disconnect revokes them.',
       inputSchema: z.strictObject({
         perDay: z.string().regex(PER_DAY).describe('USDC per day, as a decimal such as "1" or "0.5"'),
       }),
