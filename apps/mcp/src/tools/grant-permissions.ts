@@ -206,18 +206,17 @@ export async function grantPermissions(t: Tenant, input: GrantInput, deps = DEFA
       `A grant request is still waiting for the owner at ${walletUrl}. Ask again once they approve or it expires at ${approveBy.toISOString()}.`
     );
   }
-  if ('lost' in opened) {
-    return refusal(
-      `link_lost: the owner was asked for a grant at ${opened.lost.walletUrl}, and this server lost that session, so an answer given there no longer reaches it. ` +
-        'Tell the owner not to approve it there: a grant approved there is not recorded by this server. Ask again to open a new link.'
-    );
-  }
-  const url = opened.opened.walletUrl;
+  const { opened: row, lost } = opened;
+  const url = row.walletUrl;
   const ends = new Date(ask.grant.expiry * 1000).toISOString();
   return reply({
     url,
     expiresAt: ends,
     summary:
+      (lost
+        ? `link_lost: this server lost the session of the earlier grant link ${lost.walletUrl} after asking the owner, so it may never hear an answer given there. ` +
+          'Tell the owner not to approve that one: a grant approved there can go live on chain without this server recording it, and then only jaw_revoke_permission with its id from the wallet ends it. '
+        : '') +
       `Ask the account owner to open ${url} and approve ${ask.what} until ${ends} in their wallet. ` +
       'Once they do, the session key acts within it with no further prompts. ' +
       (ask.kind === 'x402-budget' ? 'jaw_session_status shows the budget in force. ' : '') +

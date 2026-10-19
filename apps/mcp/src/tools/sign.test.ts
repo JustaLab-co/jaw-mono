@@ -318,7 +318,7 @@ describe('jaw_sign', () => {
       return { wallet, release };
     };
 
-    it('given a restart after the owner was asked, then the same key answers link_lost at once and a new key opens a new link', async () => {
+    it('given its lease lapses after the owner was asked, then the same key answers link_lost and a new key opens a new link', async () => {
       const { t, signer } = await connected();
       const { wallet, release } = askedThenHeld(signer, async () => {
         throw new Error('the process stopped');
@@ -326,12 +326,11 @@ describe('jaw_sign', () => {
       const first = await ask(t, {}, wallet);
       await vi.waitFor(() => expect(asked.map((a) => a.method)).toContain('wallet_sign'));
 
-      vi.resetModules();
-      const restarted = await import('./sign');
       await lapse(first.structuredContent!.url!);
-      const again = await restarted.sign(t, { message: 'hello', idempotencyKey: 'k1' }, { openWallet: idleWallet });
-      const fresh = await restarted.sign(t, { message: 'hello', idempotencyKey: 'k2' }, { openWallet: idleWallet });
+      const again = await ask(t, {}, idleWallet);
+      const fresh = await ask(t, { idempotencyKey: 'k2' }, idleWallet);
       release();
+      await walletsSettled();
 
       expect(again.structuredContent).toMatchObject({ state: 'expired', refusal: { code: 'link_lost' } });
       expect(again.structuredContent!.url).toBeUndefined();
@@ -357,6 +356,22 @@ describe('jaw_sign', () => {
       expect(done.structuredContent!.state).toBe('signed');
       const signature = done.structuredContent!.signature as Hex;
       expect(await verifyMessage({ address: signer.address, message: 'hello', signature })).toBe(true);
+    });
+
+    it('given the relay session drops after the owner was asked, then the key answers link_lost', async () => {
+      const { t, signer } = await connected();
+      const dropped = approves(signer, {
+        wallet_sign: () => {
+          throw new Error('the wallet session ended');
+        },
+      });
+      await ask(t, {}, dropped);
+      await walletsSettled();
+
+      const later = await ask(t, {}, idleWallet);
+
+      expect(later.structuredContent).toMatchObject({ state: 'expired', refusal: { code: 'link_lost' } });
+      expect(later.structuredContent!.summary).toMatch(/not to approve/);
     });
 
     it('given the first session then ends with no answer, then the key still answers link_lost', async () => {

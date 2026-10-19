@@ -145,7 +145,7 @@ async function askRevoke(t: Tenant, target: Target, ask: Ask, claim: Claim, deps
   return { state: 'approved', code: 'unconfirmed' };
 }
 
-function answer(target: Target, row: PermissionRequestRow) {
+function answer(target: Target, row: PermissionRequestRow, lost?: PermissionRequestRow) {
   const { spender, spends } = target.permission;
   const tokens = spends.length ? ` and its limits on ${spends.map((s) => s.token).join(', ')}` : '';
   return reply({
@@ -156,6 +156,10 @@ function answer(target: Target, row: PermissionRequestRow) {
     connection: target.connectionId,
     approveBy: row.approveBy.toISOString(),
     summary:
+      (lost
+        ? `link_lost: this server lost the session of the earlier link ${lost.walletUrl} to revoke ${lost.permissionId} after asking the owner, so it may never hear an answer given there. ` +
+          'A revoke the owner already approved there still shows on chain, and asking for it again reads it as already_revoked. '
+        : '') +
       `Ask the account owner to open ${row.walletUrl} before ${row.approveBy.toISOString()} and revoke permission ${target.permissionId}, ` +
       `which lets ${spender} act for the account${tokens}. The owner pays the gas in the wallet. ` +
       'Once the chain shows it revoked, jaw_connections lists it revoked and nothing can spend under it.',
@@ -197,15 +201,7 @@ export async function revokePermission(t: Tenant, input: RevokeInput, deps = DEF
   );
   if (opened === 'wallet_busy') return refusal('Too many owners are approving right now. Try again in a minute.');
   if (opened === 'account_busy') return refusal(ACCOUNT_BUSY);
-  if ('opened' in opened) return answer(target, opened.opened);
-  if ('lost' in opened) {
-    const { lost } = opened;
-    const where = lost.connectionId === t.connectionId ? ` at ${lost.walletUrl}` : ' from another app';
-    return refusal(
-      `link_lost: the owner was asked to revoke ${lost.permissionId}${where}, and this server lost that session, so an answer given there no longer reaches it. ` +
-        'Tell the owner not to approve it there. Ask again to open a new link.'
-    );
-  }
+  if ('opened' in opened) return answer(target, opened.opened, opened.lost);
   const held = opened.waiting;
   const until = held.approveBy.toISOString();
   if (held.connectionId !== t.connectionId) {

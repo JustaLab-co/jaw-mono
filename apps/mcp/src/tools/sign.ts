@@ -98,9 +98,6 @@ const STATE = {
   failed: 'failed',
 } as const;
 
-const LOST_AFTER_ASKING =
-  'The server lost the wallet session after asking the owner, so an answer given on that link no longer reaches it. Tell the owner not to approve it there.';
-
 function summaryOf(row: PermissionRequestRow): string {
   const by = row.approveBy.toISOString();
   const what = row.signKind === 'message' ? 'the message' : 'the typed data';
@@ -118,7 +115,9 @@ function summaryOf(row: PermissionRequestRow): string {
         ? 'The owner signed in with another account than this connection. Nothing was signed.'
         : `The owner declined to sign ${what}. Nothing was signed.`;
     case 'expired':
-      if (row.code === LINK_LOST) return `${LOST_AFTER_ASKING} Ask again with a new idempotencyKey to open a new link.`;
+      if (row.code === LINK_LOST) {
+        return 'The server lost the wallet session after asking the owner, so it may never hear an answer given on that link. Tell the owner not to approve it there, and ask again with a new idempotencyKey to open a new link.';
+      }
       return row.code === 'session_lost'
         ? 'The server lost the wallet session before the owner was asked, so nothing was signed. Ask again with a new idempotencyKey.'
         : `The owner did not sign before ${by}. Use a new idempotencyKey to ask again.`;
@@ -243,12 +242,6 @@ export async function sign(t: Tenant, input: SignInput, deps: SignDeps = DEFAULT
     return refuse(
       'wallet_busy',
       `Too many owners are approving right now. Send idempotencyKey ${idempotencyKey} again in a minute.`
-    );
-  }
-  if ('lost' in opened) {
-    return refuse(
-      LINK_LOST,
-      `This connection asked the owner to sign under idempotencyKey ${opened.lost.idempotencyKey} at ${opened.lost.walletUrl}. ${LOST_AFTER_ASKING} Send this request again to open a new link.`
     );
   }
   const row = 'opened' in opened ? opened.opened : opened.waiting;

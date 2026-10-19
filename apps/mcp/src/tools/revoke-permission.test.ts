@@ -418,7 +418,7 @@ describe('jaw_revoke_permission', () => {
     expect(asked.filter((a) => a.method === 'wallet_revokePermissions')).toHaveLength(1);
   });
 
-  it('given the session already asked the owner when its lease lapsed, then the next ask answers link_lost, the one after opens a new link, and an answer in the first still settles', async () => {
+  it('given the session already asked the owner when its lease lapsed, then the next ask opens a new link that names the lost one, and an answer in the first still settles', async () => {
     const { t, signer, budget } = await connected();
     const { deps, opened, chain } = setup(signer);
     const answers = walletAnswers(signer);
@@ -439,15 +439,13 @@ describe('jaw_revoke_permission', () => {
       .where(eq(permissionRequests.walletUrl, urlOf(first)!));
 
     const again = await revokePermission(t, { permissionId: budget }, holding);
-    const third = await revokePermission(t, { permissionId: budget }, holding);
     wait.release();
     await walletsSettled();
 
-    expect(again.content[0].text).toMatch(/^link_lost: /);
-    expect(again.content[0].text).toContain(urlOf(first));
-    expect(again.content[0].text).toMatch(/not to approve/);
     expect(opened()).toBe(1);
-    expect(urlOf(third)).not.toBe(urlOf(first));
+    expect(urlOf(again)).not.toBe(urlOf(first));
+    expect(again.content[0].text).toMatch(/link_lost: /);
+    expect(again.content[0].text).toContain(urlOf(first));
     const firstRow = (await requestsOf(budget)).find((r) => r.walletUrl === urlOf(first));
     expect(firstRow).toMatchObject({ state: 'approved' });
     expect((await grantRow(budget)).revokedAt).not.toBeNull();

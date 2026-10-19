@@ -408,7 +408,7 @@ describe('jaw_grant_permissions', () => {
     expect(again.content[0].text).toContain(`still waiting for the owner at ${url}`);
   });
 
-  it('given a restart after the owner was asked, then the next ask answers link_lost and the one after opens a new link', async () => {
+  it('given the lease of an asked grant link lapses, then the next ask opens a new link that warns not to approve the old one', async () => {
     const { t, signer } = await connected();
     let release = () => {};
     const held = new Promise<void>((resolve) => (release = resolve));
@@ -427,21 +427,19 @@ describe('jaw_grant_permissions', () => {
     const url = 'structuredContent' in first && first.structuredContent.url;
     await vi.waitFor(() => expect(asked.map((a) => a.method)).toContain('wallet_grantPermissions'));
 
-    vi.resetModules();
-    const restarted = await import('./grant-permissions');
     await getDb()
       .update(permissionRequests)
       .set({ sessionUntil: sql`now() - interval '1 second'` })
       .where(eq(permissionRequests.walletUrl, String(url)));
-    const again = await restarted.grantPermissions(t, twoByTwo, deps);
-    const fresh = await restarted.grantPermissions(t, twoByTwo, deps);
+    const again = await grantPermissions(t, twoByTwo, deps);
     release();
     await walletsSettled();
 
-    expect(again.content[0].text).toMatch(/^link_lost: /);
-    expect(again.content[0].text).toContain(String(url));
-    expect(again.content[0].text).toMatch(/not to approve/);
-    expect('structuredContent' in fresh && fresh.structuredContent.url).not.toBe(url);
+    const summary = 'structuredContent' in again ? again.structuredContent.summary : again.content[0].text;
+    expect(summary).toMatch(/^link_lost: /);
+    expect(summary).toContain(String(url));
+    expect(summary).toMatch(/not to approve/);
+    expect('structuredContent' in again && again.structuredContent.url).not.toBe(url);
     expect(opened).toBe(2);
   });
 });

@@ -1,5 +1,5 @@
 import { randomBytes } from 'node:crypto';
-import { and, eq, gt, inArray, isNull, lte, or, sql, type SQL } from 'drizzle-orm';
+import { and, desc, eq, gt, inArray, isNull, lte, or, sql, type SQL } from 'drizzle-orm';
 import type { PgUpdateSetSource } from 'drizzle-orm/pg-core';
 import type { Tenant } from '@/connections/auth';
 import { WalletBusy, type Ask, type OpenWallet, type Wallet } from '@/connections/relay';
@@ -55,39 +55,46 @@ async function update(where: SQL | undefined, set: PgUpdateSetSource<typeof perm
 const ASKED = 'asked';
 export const LINK_LOST = 'link_lost';
 const lapsed = or(isNull(permissionRequests.sessionUntil), lte(permissionRequests.sessionUntil, dbNow));
+const endCode = sql`case when ${permissionRequests.approveBy} <= ${dbNow} then null
+  when ${permissionRequests.code} = ${ASKED} then ${LINK_LOST} else 'session_lost' end`;
 
-/**
- * Ends rows past their window, and rows whose process stopped renewing the lease.
- * The relay drops what the wallet sends while no process listens, so an owner
- * already asked on such a link can no longer be heard: `link_lost`.
- */
 const closeDead = (same: SQL | undefined, db: Tx = getDb()) =>
-  db
-    .update(permissionRequests)
-    .set({
-      state: 'expired',
-      code: sql`case when ${permissionRequests.approveBy} <= ${dbNow} then null
-        when ${permissionRequests.code} = ${ASKED} then ${LINK_LOST} else 'session_lost' end`,
-      updatedAt: dbNow,
-    })
-    .where(and(same, awaiting, or(lte(permissionRequests.approveBy, dbNow), lapsed)))
-    .returning();
+  update(
+    and(same, awaiting, or(lte(permissionRequests.approveBy, dbNow), lapsed)),
+    { state: 'expired', code: endCode },
+    db
+  );
 
 async function findHeld(same: SQL | undefined): Promise<Held | undefined> {
-  const closed = await closeDead(same);
   const [row] = await getDb().select().from(permissionRequests).where(and(same, linkLive));
-  if (row) return { waiting: row };
-  const lost = closed.find((r) => r.code === LINK_LOST);
-  return lost && { lost };
+  return row && { waiting: row };
+}
+
+async function lostLink(t: Tenant, req: LinkRequest, db: Tx) {
+  const [row] = await db
+    .select()
+    .from(permissionRequests)
+    .where(
+      and(
+        ofConnection(t, req),
+        eq(permissionRequests.state, 'expired'),
+        eq(permissionRequests.code, LINK_LOST),
+        gt(permissionRequests.approveBy, dbNow)
+      )
+    )
+    .orderBy(desc(permissionRequests.updatedAt))
+    .limit(1);
+  return row;
 }
 
 const ofRow = (row: PermissionRequestRow) => and(eq(permissionRequests.id, row.id), awaiting);
 
-function outcomeOf(err: unknown, row: PermissionRequestRow): Outcome {
+function outcomeOf(err: unknown, row: PermissionRequestRow, asked: boolean): Outcome {
   const code = (err as { code?: unknown } | undefined)?.code;
   if (code === USER_REJECTED) return { state: 'owner_declined' };
   if (typeof code === 'number') return { state: 'failed', code: `wallet_error:${code}` };
   if (Date.now() >= row.approveBy.getTime()) return { state: 'expired' };
+  if (asked) return { state: 'expired', code: LINK_LOST };
   return { state: 'failed', code: 'unexpected' };
 }
 
@@ -98,14 +105,13 @@ export async function currentSign(t: Tenant, idempotencyKey: string): Promise<Pe
   return row;
 }
 
+const givenUp = and(
+  eq(permissionRequests.state, 'expired'),
+  inArray(permissionRequests.code, ['session_lost', LINK_LOST])
+);
+
 async function settle(row: PermissionRequestRow, { state, code, permissionId, signature }: Outcome) {
-  // A row given up on while its session still ran takes what the wallet answered after all.
-  const answered = state !== 'expired' && code !== 'unexpected';
-  const lost = and(
-    eq(permissionRequests.state, 'expired'),
-    inArray(permissionRequests.code, ['session_lost', LINK_LOST])
-  );
-  await update(and(eq(permissionRequests.id, row.id), answered ? or(awaiting, lost) : awaiting), {
+  await update(and(eq(permissionRequests.id, row.id), or(awaiting, givenUp)), {
     state,
     code: code ?? null,
     sessionUntil: null,
@@ -114,9 +120,14 @@ async function settle(row: PermissionRequestRow, { state, code, permissionId, si
   });
 }
 
-type Held = { waiting: PermissionRequestRow } | { lost: PermissionRequestRow };
+type Held = { waiting: PermissionRequestRow };
 
-export type Opened = { opened: PermissionRequestRow } | Held | 'account_busy' | 'wallet_busy';
+/** `lost` is this connection's earlier link the server can no longer hear, which the owner must not approve. */
+export type Opened =
+  | { opened: PermissionRequestRow; lost?: PermissionRequestRow }
+  | Held
+  | 'account_busy'
+  | 'wallet_busy';
 
 /** Marks the row asked once, while its lease still holds. False when another link may have taken over. */
 export type Claim = () => Promise<boolean>;
@@ -148,10 +159,12 @@ export async function openLink(t: Tenant, req: LinkRequest, openWallet: OpenWall
     if (err instanceof WalletBusy) return 'wallet_busy';
     throw err;
   }
+  let lost: PermissionRequestRow | undefined;
   let row: PermissionRequestRow | undefined | typeof FULL;
   try {
     row = await withLinkSlot(t.account, undefined, async (tx) => {
       await closeDead(blocking, tx);
+      lost = await lostLink(t, req, tx);
       const [inserted] = await tx
         .insert(permissionRequests)
         .values({
@@ -179,7 +192,7 @@ export async function openLink(t: Tenant, req: LinkRequest, openWallet: OpenWall
   }
   if (row === FULL || !row) return (await existing()) ?? (row === FULL ? 'account_busy' : 'wallet_busy');
   follow(row, wallet, req.work);
-  return { opened: row };
+  return { opened: row, lost };
 }
 
 function follow(row: PermissionRequestRow, wallet: Wallet, work: LinkRequest['work']) {
@@ -191,13 +204,15 @@ function follow(row: PermissionRequestRow, wallet: Wallet, work: LinkRequest['wo
     },
     () => update(ofRow(row), { sessionUntil: null })
   );
+  let asked = false;
   const claim: Claim = async () => {
     const leased = and(ofRow(row), gt(permissionRequests.sessionUntil, dbNow), isNull(permissionRequests.code));
-    return (await update(leased, { code: ASKED })) !== undefined;
+    asked = (await update(leased, { code: ASKED })) !== undefined;
+    return asked;
   };
   const ended = (err: unknown) => {
     log('warn', { msg: 'permission request ended', permissionRequestId: row.id, error: errorLabel(err) });
-    return outcomeOf(err, row);
+    return outcomeOf(err, row, asked);
   };
   let answered = false;
   void wallet
