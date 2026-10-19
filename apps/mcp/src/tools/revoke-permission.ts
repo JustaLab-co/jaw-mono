@@ -198,7 +198,15 @@ export async function revokePermission(t: Tenant, input: RevokeInput, deps = DEF
   if (opened === 'wallet_busy') return refusal('Too many owners are approving right now. Try again in a minute.');
   if (opened === 'account_busy') return refusal(ACCOUNT_BUSY);
   if ('opened' in opened) return answer(target, opened.opened);
-  const held = 'waiting' in opened ? opened.waiting : opened.askedLost;
+  if ('lost' in opened) {
+    const { lost } = opened;
+    const where = lost.connectionId === t.connectionId ? ` at ${lost.walletUrl}` : ' from another app';
+    return refusal(
+      `link_lost: the owner was asked to revoke ${lost.permissionId}${where}, and this server lost that session, so an answer given there no longer reaches it. ` +
+        'Tell the owner not to approve it there. Ask again to open a new link.'
+    );
+  }
+  const held = opened.waiting;
   const until = held.approveBy.toISOString();
   if (held.connectionId !== t.connectionId) {
     return refusal(
@@ -208,11 +216,6 @@ export async function revokePermission(t: Tenant, input: RevokeInput, deps = DEF
   if (held.permissionId?.toLowerCase() !== target.permissionId.toLowerCase()) {
     return refusal(
       `revoke_in_progress: this connection already asked the owner to revoke ${held.permissionId}. Ask again once they answer or the link ends at ${until}.`
-    );
-  }
-  if ('askedLost' in opened) {
-    return refusal(
-      `revoke_in_progress: the owner was already asked to revoke ${held.permissionId} at ${held.walletUrl}, and this server lost that session. An answer given there still counts. Ask again after ${until}.`
     );
   }
   return answer(target, held);

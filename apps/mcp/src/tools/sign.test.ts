@@ -311,31 +311,69 @@ describe('jaw_sign', () => {
       expect(opened).toHaveLength(1);
     });
 
-    it('given the owner answers after all, then the same key returns the signature', async () => {
-      const { t, signer } = await connected();
+    const askedThenHeld = (signer: Signer, answer: () => Promise<unknown>) => {
       let release!: () => void;
       const answered = new Promise<void>((resolve) => (release = resolve));
-      const late = approves(signer, {
-        wallet_sign: async () => {
-          await answered;
-          return signer.signMessage({ message: 'hello' });
-        },
+      const wallet = approves(signer, { wallet_sign: () => answered.then(answer) });
+      return { wallet, release };
+    };
+
+    it('given a restart after the owner was asked, then the same key answers link_lost at once and a new key opens a new link', async () => {
+      const { t, signer } = await connected();
+      const { wallet, release } = askedThenHeld(signer, async () => {
+        throw new Error('the process stopped');
       });
-      const first = await ask(t, {}, late);
+      const first = await ask(t, {}, wallet);
+      await vi.waitFor(() => expect(asked.map((a) => a.method)).toContain('wallet_sign'));
+
+      vi.resetModules();
+      const restarted = await import('./sign');
+      await lapse(first.structuredContent!.url!);
+      const again = await restarted.sign(t, { message: 'hello', idempotencyKey: 'k1' }, { openWallet: idleWallet });
+      const fresh = await restarted.sign(t, { message: 'hello', idempotencyKey: 'k2' }, { openWallet: idleWallet });
+      release();
+
+      expect(again.structuredContent).toMatchObject({ state: 'expired', refusal: { code: 'link_lost' } });
+      expect(again.structuredContent!.url).toBeUndefined();
+      expect(again.structuredContent!.summary).toMatch(/not to approve/);
+      expect(fresh.structuredContent!.state).toBe('awaiting_owner');
+      expect(fresh.structuredContent!.url).not.toBe(first.structuredContent!.url);
+      expect(opened).toHaveLength(2);
+    });
+
+    it('given the first session still runs and the owner answers there, then the same key returns the signature', async () => {
+      const { t, signer } = await connected();
+      const { wallet, release } = askedThenHeld(signer, () => signer.signMessage({ message: 'hello' }));
+      const first = await ask(t, {}, wallet);
       await vi.waitFor(() => expect(asked.map((a) => a.method)).toContain('wallet_sign'));
       await lapse(first.structuredContent!.url!);
-      expect((await ask(t, {}, idleWallet)).structuredContent).toMatchObject({
-        state: 'awaiting_owner',
-        url: first.structuredContent!.url,
-      });
+      const lost = await ask(t, {}, idleWallet);
 
       release();
       await walletsSettled();
       const done = await ask(t, {}, idleWallet);
 
+      expect(lost.structuredContent).toMatchObject({ refusal: { code: 'link_lost' } });
       expect(done.structuredContent!.state).toBe('signed');
       const signature = done.structuredContent!.signature as Hex;
       expect(await verifyMessage({ address: signer.address, message: 'hello', signature })).toBe(true);
+    });
+
+    it('given the first session then ends with no answer, then the key still answers link_lost', async () => {
+      const { t, signer } = await connected();
+      const { wallet, release } = askedThenHeld(signer, async () => {
+        throw new Error('the wallet session ended');
+      });
+      const first = await ask(t, {}, wallet);
+      await vi.waitFor(() => expect(asked.map((a) => a.method)).toContain('wallet_sign'));
+      await lapse(first.structuredContent!.url!);
+      await ask(t, {}, idleWallet);
+
+      release();
+      await walletsSettled();
+      const later = await ask(t, {}, idleWallet);
+
+      expect(later.structuredContent).toMatchObject({ state: 'expired', refusal: { code: 'link_lost' } });
     });
   });
 

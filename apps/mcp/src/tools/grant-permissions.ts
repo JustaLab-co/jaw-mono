@@ -206,10 +206,10 @@ export async function grantPermissions(t: Tenant, input: GrantInput, deps = DEFA
       `A grant request is still waiting for the owner at ${walletUrl}. Ask again once they approve or it expires at ${approveBy.toISOString()}.`
     );
   }
-  if ('askedLost' in opened) {
-    const { walletUrl, approveBy } = opened.askedLost;
+  if ('lost' in opened) {
     return refusal(
-      `The owner was already asked for a grant at ${walletUrl}, and this server lost that session. An answer given there still counts. Ask again after ${approveBy.toISOString()}.`
+      `link_lost: the owner was asked for a grant at ${opened.lost.walletUrl}, and this server lost that session, so an answer given there no longer reaches it. ` +
+        'Tell the owner not to approve it there: a grant approved there is not recorded by this server. Ask again to open a new link.'
     );
   }
   const url = opened.opened.walletUrl;

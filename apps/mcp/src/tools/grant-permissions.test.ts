@@ -1,7 +1,7 @@
 import { PERMISSIONS_MANAGER_ADDRESS } from '@jaw.id/core';
-import { and, desc, eq } from 'drizzle-orm';
+import { and, desc, eq, sql } from 'drizzle-orm';
 import { randomBytes } from 'node:crypto';
-import { beforeAll, describe, expect, it } from 'vitest';
+import { beforeAll, describe, expect, it, vi } from 'vitest';
 import { toFunctionSelector } from 'viem';
 import { verifyBearer, type Tenant } from '@/connections/auth';
 import type { OpenWallet } from '@/connections/relay';
@@ -406,5 +406,42 @@ describe('jaw_grant_permissions', () => {
     expect(opened).toBe(1);
     const url = 'structuredContent' in first && first.structuredContent.url;
     expect(again.content[0].text).toContain(`still waiting for the owner at ${url}`);
+  });
+
+  it('given a restart after the owner was asked, then the next ask answers link_lost and the one after opens a new link', async () => {
+    const { t, signer } = await connected();
+    let release = () => {};
+    const held = new Promise<void>((resolve) => (release = resolve));
+    const honest = walletAnswers(signer);
+    let opened = 0;
+    const asked: { method: string; params: unknown[] }[] = [];
+    const wallet = fakeWallet(async (method, params) => {
+      if (method === 'wallet_grantPermissions') await held;
+      return honest(method, params);
+    }, asked);
+    const deps = {
+      openWallet: (async (...args) => (opened++, wallet(...args))) as OpenWallet,
+      readPermission: approvedOnChain,
+    };
+    const first = await grantPermissions(t, twoByTwo, deps);
+    const url = 'structuredContent' in first && first.structuredContent.url;
+    await vi.waitFor(() => expect(asked.map((a) => a.method)).toContain('wallet_grantPermissions'));
+
+    vi.resetModules();
+    const restarted = await import('./grant-permissions');
+    await getDb()
+      .update(permissionRequests)
+      .set({ sessionUntil: sql`now() - interval '1 second'` })
+      .where(eq(permissionRequests.walletUrl, String(url)));
+    const again = await restarted.grantPermissions(t, twoByTwo, deps);
+    const fresh = await restarted.grantPermissions(t, twoByTwo, deps);
+    release();
+    await walletsSettled();
+
+    expect(again.content[0].text).toMatch(/^link_lost: /);
+    expect(again.content[0].text).toContain(String(url));
+    expect(again.content[0].text).toMatch(/not to approve/);
+    expect('structuredContent' in fresh && fresh.structuredContent.url).not.toBe(url);
+    expect(opened).toBe(2);
   });
 });

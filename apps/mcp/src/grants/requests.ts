@@ -1,9 +1,9 @@
 import { randomBytes } from 'node:crypto';
-import { and, eq, gt, isNull, lte, or, sql, type SQL } from 'drizzle-orm';
+import { and, eq, gt, inArray, isNull, lte, or, sql, type SQL } from 'drizzle-orm';
 import type { PgUpdateSetSource } from 'drizzle-orm/pg-core';
 import type { Tenant } from '@/connections/auth';
 import { WalletBusy, type Ask, type OpenWallet, type Wallet } from '@/connections/relay';
-import { keepLease, leaseHeld, sessionLeaseEnd } from '@/connections/session-lease';
+import { keepLease, sessionLeaseEnd } from '@/connections/session-lease';
 import { USER_REJECTED } from '@/connections/wallet-codes';
 import { getDb, type Tx } from '@/db/client';
 import { permissionRequests } from '@/db/schema';
@@ -53,26 +53,32 @@ async function update(where: SQL | undefined, set: PgUpdateSetSource<typeof perm
 }
 
 const ASKED = 'asked';
-const lapsedBeforeAsk = and(
-  or(isNull(permissionRequests.sessionUntil), lte(permissionRequests.sessionUntil, dbNow)),
-  sql`${permissionRequests.code} is distinct from ${ASKED}`
-);
+export const LINK_LOST = 'link_lost';
+const lapsed = or(isNull(permissionRequests.sessionUntil), lte(permissionRequests.sessionUntil, dbNow));
 
+/**
+ * Ends rows past their window, and rows whose process stopped renewing the lease.
+ * The relay drops what the wallet sends while no process listens, so an owner
+ * already asked on such a link can no longer be heard: `link_lost`.
+ */
 const closeDead = (same: SQL | undefined, db: Tx = getDb()) =>
-  update(
-    and(same, awaiting, or(lte(permissionRequests.approveBy, dbNow), lapsedBeforeAsk)),
-    { state: 'expired', code: sql`case when ${permissionRequests.approveBy} > ${dbNow} then 'session_lost' end` },
-    db
-  );
+  db
+    .update(permissionRequests)
+    .set({
+      state: 'expired',
+      code: sql`case when ${permissionRequests.approveBy} <= ${dbNow} then null
+        when ${permissionRequests.code} = ${ASKED} then ${LINK_LOST} else 'session_lost' end`,
+      updatedAt: dbNow,
+    })
+    .where(and(same, awaiting, or(lte(permissionRequests.approveBy, dbNow), lapsed)))
+    .returning();
 
 async function findHeld(same: SQL | undefined): Promise<Held | undefined> {
-  const asked = and(awaiting, gt(permissionRequests.approveBy, dbNow), eq(permissionRequests.code, ASKED));
-  const [row] = await getDb()
-    .select()
-    .from(permissionRequests)
-    .where(and(same, or(linkLive, asked)));
-  if (!row) return undefined;
-  return leaseHeld(row.sessionUntil) ? { waiting: row } : { askedLost: row };
+  const closed = await closeDead(same);
+  const [row] = await getDb().select().from(permissionRequests).where(and(same, linkLive));
+  if (row) return { waiting: row };
+  const lost = closed.find((r) => r.code === LINK_LOST);
+  return lost && { lost };
 }
 
 const ofRow = (row: PermissionRequestRow) => and(eq(permissionRequests.id, row.id), awaiting);
@@ -93,9 +99,13 @@ export async function currentSign(t: Tenant, idempotencyKey: string): Promise<Pe
 }
 
 async function settle(row: PermissionRequestRow, { state, code, permissionId, signature }: Outcome) {
-  // A row given up on while its session still ran takes the answer that came after all.
-  const lost = and(eq(permissionRequests.state, 'expired'), eq(permissionRequests.code, 'session_lost'));
-  await update(and(eq(permissionRequests.id, row.id), or(awaiting, lost)), {
+  // A row given up on while its session still ran takes what the wallet answered after all.
+  const answered = state !== 'expired' && code !== 'unexpected';
+  const lost = and(
+    eq(permissionRequests.state, 'expired'),
+    inArray(permissionRequests.code, ['session_lost', LINK_LOST])
+  );
+  await update(and(eq(permissionRequests.id, row.id), answered ? or(awaiting, lost) : awaiting), {
     state,
     code: code ?? null,
     sessionUntil: null,
@@ -104,7 +114,7 @@ async function settle(row: PermissionRequestRow, { state, code, permissionId, si
   });
 }
 
-type Held = { waiting: PermissionRequestRow } | { askedLost: PermissionRequestRow };
+type Held = { waiting: PermissionRequestRow } | { lost: PermissionRequestRow };
 
 export type Opened = { opened: PermissionRequestRow } | Held | 'account_busy' | 'wallet_busy';
 

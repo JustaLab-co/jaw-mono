@@ -8,7 +8,14 @@ import { APPROVE_WITHIN_MS } from '@/connections/config';
 import { ownerRelay, type Ask, type OpenWallet } from '@/connections/relay';
 import { findActive } from '@/connections/rows';
 import { countHit } from '@/db/settings';
-import { currentSign, openLink, type Claim, type Outcome, type PermissionRequestRow } from '@/grants/requests';
+import {
+  currentSign,
+  LINK_LOST,
+  openLink,
+  type Claim,
+  type Outcome,
+  type PermissionRequestRow,
+} from '@/grants/requests';
 import { RATE_WINDOW_MS } from '@/lib/edge';
 import { reply } from '@/lib/fence';
 import { MAX_OPEN_PER_ACCOUNT } from '@/owner-calls/cap';
@@ -91,6 +98,9 @@ const STATE = {
   failed: 'failed',
 } as const;
 
+const LOST_AFTER_ASKING =
+  'The server lost the wallet session after asking the owner, so an answer given on that link no longer reaches it. Tell the owner not to approve it there.';
+
 function summaryOf(row: PermissionRequestRow): string {
   const by = row.approveBy.toISOString();
   const what = row.signKind === 'message' ? 'the message' : 'the typed data';
@@ -108,8 +118,9 @@ function summaryOf(row: PermissionRequestRow): string {
         ? 'The owner signed in with another account than this connection. Nothing was signed.'
         : `The owner declined to sign ${what}. Nothing was signed.`;
     case 'expired':
+      if (row.code === LINK_LOST) return `${LOST_AFTER_ASKING} Ask again with a new idempotencyKey to open a new link.`;
       return row.code === 'session_lost'
-        ? 'The server lost the wallet session before the owner answered. Send this key again in a minute: an answer already on its way still lands. Ask with a new idempotencyKey if it stays expired.'
+        ? 'The server lost the wallet session before the owner was asked, so nothing was signed. Ask again with a new idempotencyKey.'
         : `The owner did not sign before ${by}. Use a new idempotencyKey to ask again.`;
     case 'failed':
       return `The wallet could not sign (${row.code}). Nothing was signed. Use a new idempotencyKey to ask again.`;
@@ -234,7 +245,13 @@ export async function sign(t: Tenant, input: SignInput, deps: SignDeps = DEFAULT
       `Too many owners are approving right now. Send idempotencyKey ${idempotencyKey} again in a minute.`
     );
   }
-  const row = 'opened' in opened ? opened.opened : 'waiting' in opened ? opened.waiting : opened.askedLost;
+  if ('lost' in opened) {
+    return refuse(
+      LINK_LOST,
+      `This connection asked the owner to sign under idempotencyKey ${opened.lost.idempotencyKey} at ${opened.lost.walletUrl}. ${LOST_AFTER_ASKING} Send this request again to open a new link.`
+    );
+  }
+  const row = 'opened' in opened ? opened.opened : opened.waiting;
   if (row.idempotencyKey !== idempotencyKey) {
     return refuse(
       'sign_in_progress',

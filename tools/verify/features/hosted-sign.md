@@ -13,12 +13,13 @@
 - `sign-cap`: three links open for one account, the fourth gives `account_busy`.
 - `sign-no-session`: no session key signature is recorded and the audit row names the connection.
 - `sign-utf8`: a message with non-ASCII text shows the same text on the keys screen and the signature verifies.
+- `sign-restart`: the mcp container restarts after the owner opened the link; the same key answers `link_lost` with no `url` instead of waiting out the window.
 
 ## How to get to it (user POV)
 
 - An MCP client on the hosted server with `wallet:read`. `jaw_sign` takes exactly one of `message` (text, up to 8192 characters, no invisible or control characters besides line breaks and tabs) and `typedData` (`{ domain, types, primaryType, message }`), and optionally `chainId` and `idempotencyKey`.
 - The first call returns `state: awaiting_owner` with a `url`. The owner opens it within 30 minutes. The same call again, with the same key and input, returns `signed` with the `signature`, or `owner_declined`, `expired` or `failed`.
-- Requests are rows in `permission_requests` with `method = 'sign'`. A restart keeps them: the same key answers the same request, and once its session's lease lapses, one the wallet was not asked yet ends `expired` with code `session_lost`, which still turns `signed` if the owner's answer lands after all, and one already asked stays open with its link until its approval window ends. A connection waits on one sign link at a time, and another key gets `sign_in_progress`.
+- Requests are rows in `permission_requests` with `method = 'sign'`. A restart keeps the rows, not the link: the relay drops what the wallet sends while no process listens, so a restarted server cannot hear an answer given on a link it opened before. Once the lease of a link's session lapses (30 seconds after its process stops), the same key answers `expired` with code `session_lost` if the wallet was not asked yet, or `link_lost` if the owner was already asked. `link_lost` means the owner must not approve the old link; ask again with a new key for a new one. A signature the old session still receives while its process runs turns the row `signed`. A connection waits on one sign link at a time, and another key gets `sign_in_progress`.
 - By hand: `node tools/verify/hosted-client.mjs "$MCP_PUBLIC_URL" wallet:read`, then `sign-message '<text>' [key]` and `sign-typed '<json>' [key]`. Run the same line again to read the outcome.
 
 ## Driving it
@@ -43,11 +44,13 @@ node $S/hosted-client.mjs "$MCP_PUBLIC_URL" wallet:read
 - sign-cap: ask for four different messages under four keys on connections of one account. Pass: the fourth gives `account_busy`, and so does a `jaw_send_calls` on the account while the three wait.
 - sign-no-session: after sign-message, dump `audit_events` and the `grants` and `payments` rows with psql. Pass: an audit row for `jaw_sign` on the connection and no session key signature anywhere.
 - sign-utf8: `sign-message 'Firmo: ñandú, 日本語' u1`. Pass: the keys screen shows the same text and the signature verifies.
+- sign-restart: `sign-message 'restart me' r1`, open the `url` as the owner until the sign prompt shows, do not approve, restart the mcp container, wait 30 seconds, then the same line again. Pass: `expired` with `refusal.code` `link_lost`, no `url`, and a summary telling the owner not to approve the old link. `sign-message 'restart me' r2` then gives a new `url`.
 
 ## Risks
 
 - What the owner sees is what gets signed. The wallet must show the message or the typed data exactly as the tool sent it.
 - A session key must never sign. Nothing in `jaw_sign` may touch the session store or the budget.
+- A restart loses every open link. An answer given on a lost link is gone, and the tool must say so instead of waiting out the window.
 - Sign links share the account's cap of three with grant, revoke, `jaw_send_calls` and `jaw_swap` links, across replicas.
 
 ## What counts as evidence
