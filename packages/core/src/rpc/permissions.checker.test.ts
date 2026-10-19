@@ -12,6 +12,7 @@ import {
     decodeFunctionData,
     encodeAbiParameters,
     encodeEventTopics,
+    zeroAddress,
     type AbiParameter,
     type Address,
     type Hex,
@@ -98,5 +99,12 @@ describe('a call checker on wallet_grantPermissions', () => {
         const relayBody = vi.mocked(restCall).mock.calls[0][2] as { calls: Array<{ checker: Address }> };
         expect(relayBody.calls[0].checker).toBe(CHECKER);
         expect(response.calls[0].checker).toBe(CHECKER);
+    });
+
+    it('comes back as the zero address when the dapp asks for none, so the response always rebuilds the hash', async () => {
+        const response = await grant([{ target: TARGET, functionSignature: 'transfer(address,uint256)' }]);
+
+        expect(approvedPermission().calls[0].checker).toBe(zeroAddress);
+        expect(response.calls[0]).toHaveProperty('checker', zeroAddress);
     });
 });
