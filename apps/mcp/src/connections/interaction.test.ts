@@ -1,8 +1,9 @@
 import { randomBytes } from 'node:crypto';
+import { runInNewContext } from 'node:vm';
 import { eq } from 'drizzle-orm';
 import { hexToString, type Hex } from 'viem';
 import { generatePrivateKey, privateKeyToAddress } from 'viem/accounts';
-import { beforeAll, beforeEach, describe, expect, it } from 'vitest';
+import { beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { getDb } from '@/db/client';
 import { connections, grants } from '@/db/schema';
 import { useTestDb } from '@/db/test-db';
@@ -53,6 +54,27 @@ function heldWallets() {
     return { url: `http://keys.test/cli-bridge?session=h${opened}`, run: () => released, close: () => undefined };
   };
   return { openWallet, opened: () => opened, release: async () => (release(), await new Promise(setImmediate)) };
+}
+
+/** Runs the page's script in `browser`, with its status checks counted and its timers held until a test runs them. */
+function runPage(browser: Browser, html: string) {
+  const state = { textContent: '', className: '', replaceChildren: () => undefined };
+  const button: { onclick?: () => Promise<void> } = {};
+  const timers: (() => void)[] = [];
+  const navigated: string[] = [];
+  let checks = 0;
+  runInNewContext(html.match(/<script>([\s\S]*)<\/script>/)![1], {
+    document: { getElementById: (id: string) => (id === 'state' ? state : button) },
+    window: { open: () => ({ location: '', close: () => undefined }) },
+    fetch: (path: string, init?: RequestInit) => {
+      if (init?.method === 'POST') return browser.post(ISSUER + path);
+      checks++;
+      return browser.get(ISSUER + path);
+    },
+    setTimeout: (next: () => void) => timers.push(next),
+    location: { assign: (url: string) => navigated.push(url) },
+  });
+  return { state, timers, navigated, checks: () => checks, click: () => button.onclick!() };
 }
 
 describe('opening the wallet session', () => {
@@ -266,6 +288,67 @@ describe('connecting through the owner wallet', () => {
     await held.release();
   });
 
+  it('given the wallet session ended with nobody on it, when the owner clicks again, then a new session opens for the same page', async () => {
+    const held = heldWallets();
+    setWallet({ openWallet: held.openWallet });
+    const browser = new Browser();
+    const start = await startAuthorization(browser);
+    await held.release();
+
+    const clicked = await browser.post(`${ISSUER}/interaction/${start.uid}/open`);
+
+    expect(await clicked.json()).toEqual({ url: 'http://keys.test/cli-bridge?session=h2' });
+    expect(held.opened()).toBe(2);
+  });
+
+  it('given the wallet link was not opened in time, when the owner clicks Open JAW again and approves, then the page says why and goes on to complete', async () => {
+    const answers = fakeWallet(walletAnswers(owner()));
+    const late = {
+      url: 'http://keys.test/cli-bridge?session=late',
+      run: () => Promise.reject(new Error('the wallet link was not opened in time')),
+      close: () => undefined,
+    };
+    let opened = 0;
+    setWallet({ openWallet: async (...args) => (opened++ ? answers(...args) : late) });
+    const browser = new Browser();
+    const start = await startAuthorization(browser, { scope: 'wallet:read' });
+    await new Promise(setImmediate);
+    expect(await stateOf(browser, start.uid!)).toEqual({
+      state: 'failed',
+      reason: 'the wallet link was not opened in time',
+    });
+
+    const page = runPage(browser, start.html!);
+    await vi.waitFor(() => expect(page.state.className).toBe('bad'));
+    expect(page.state.textContent).toBe(
+      'Not connected: the wallet link was not opened in time. Click Open JAW wallet to try again.'
+    );
+    expect(page.timers).toEqual([]);
+
+    await page.click();
+    await walletsSettled();
+
+    await vi.waitFor(() => {
+      for (const next of page.timers.splice(0)) next();
+      expect(page.navigated).toEqual([`/interaction/${start.uid}/complete?ticket=${start.ticket}`]);
+    });
+  });
+
+  it('given the page is still checking on the wallet, when the owner clicks Open JAW again, then it keeps a single status check going', async () => {
+    const held = heldWallets();
+    setWallet({ openWallet: held.openWallet });
+    const browser = new Browser();
+    const start = await startAuthorization(browser, {}, { click: false });
+    const page = runPage(browser, start.html!);
+    await vi.waitFor(() => expect(page.timers).toHaveLength(1));
+
+    await page.click();
+    await page.click();
+
+    expect(page.checks()).toBe(1);
+    await held.release();
+  });
+
   it('given an approved connection, when completion comes without the ticket of its page, then it is refused', async () => {
     setWallet({ openWallet: fakeWallet(walletAnswers(owner())) });
     const browser = new Browser();
@@ -334,5 +417,18 @@ describe('per-account connection cap', () => {
     const start = await startAuthorization(browser, { scope: 'wallet:read' });
     await walletsSettled();
     expect(await stateOf(browser, start.uid!)).toEqual({ state: 'approved' });
+  });
+});
+
+// Last: the session it opens counts against the client's share until the interaction ends.
+describe('the owner window', () => {
+  it('given the owner clicks Open JAW, then the wallet waits for them close to thirty minutes', async () => {
+    const held = heldWallets();
+    let until: Date | undefined;
+    setWallet({ openWallet: (chainId, at, client) => ((until = at), held.openWallet(chainId, at, client)) });
+    await startAuthorization(new Browser());
+    expect(until!.getTime() - Date.now()).toBeGreaterThan(28.9 * 60_000);
+    expect(until!.getTime() - Date.now()).toBeLessThanOrEqual(29 * 60_000);
+    await held.release();
   });
 });

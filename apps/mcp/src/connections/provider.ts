@@ -4,7 +4,7 @@ import { databaseUnreachable, log } from '@/lib/edge';
 import { resolvesPublic, safeFetch } from '@/lib/safe-fetch';
 import { PgAdapter, sessionKey, successorId } from './adapter';
 import { bridge, requestUrl } from './bridge';
-import { config, type Config } from './config';
+import { APPROVE_WITHIN_MS, config, type Config } from './config';
 import { findActive } from './rows';
 import { CONNECTION_SCOPES, FIRST_PARTY_CLIENTS } from './scopes';
 import { seal } from './seal';
@@ -22,6 +22,9 @@ const JAW_CLI = {
   response_types: ['code' as const],
 };
 
+// Metadata document origins whose clients sign token requests, and the one JWKS each may name.
+const KEYED_CLIENTS = new Map([['https://chatgpt.com', 'https://chatgpt.com/oauth/jwks.json']]);
+
 export function createProvider(cfg: Config, overrides: Partial<Configuration> = {}): Provider {
   const policy = interactionPolicy.base();
   // No session reuse: every authorization goes through consent and makes its own connection.
@@ -36,9 +39,9 @@ export function createProvider(cfg: Config, overrides: Partial<Configuration> = 
   const provider = new Provider(cfg.issuer, {
     adapter: (model: string) => new PgAdapter(model, cfg.ring),
     clients: [JAW_CLI],
-    // Every client is public, so one that declares no application_type is a native
-    // app: per RFC 8252 7.3 its loopback redirect may use any port, which a CIMD
-    // document that registers http://localhost/callback with no port relies on.
+    // A client that declares no application_type is a native app: per RFC 8252 7.3
+    // its loopback redirect may use any port, which a CIMD document that registers
+    // http://localhost/callback with no port relies on.
     clientDefaults: { id_token_signed_response_alg: 'EdDSA', application_type: 'native' },
     findAccount: async (_ctx, sub) =>
       (await findActive(sub)) ? { accountId: sub, claims: () => ({ sub }) } : undefined,
@@ -55,7 +58,13 @@ export function createProvider(cfg: Config, overrides: Partial<Configuration> = 
       const grantId = ctx.oidc.result?.consent?.grantId;
       return grantId ? ctx.oidc.provider.Grant.find(grantId) : undefined;
     },
-    ttl: { AuthorizationCode: 60, Interaction: 600, Session: 600, Grant: 30 * DAY, RefreshToken: 30 * DAY },
+    ttl: {
+      AuthorizationCode: 60,
+      Interaction: APPROVE_WITHIN_MS / 1000,
+      Session: APPROVE_WITHIN_MS / 1000,
+      Grant: 30 * DAY,
+      RefreshToken: 30 * DAY,
+    },
     interactions: { url: (_ctx, interaction) => `/interaction/${interaction.uid}`, policy },
     cookies: { keys: cfg.ring.keys.map((k) => k.cookie) },
     jwks: { keys: [cfg.ring.jwk as never] },
@@ -77,9 +86,14 @@ export function createProvider(cfg: Config, overrides: Partial<Configuration> = 
         ack: 'draft-02',
         // The provider cuts a private socket only after connecting; the delay would tell whether the host is live.
         allowFetch: (_ctx, clientId) => resolvesPublic(new URL(clientId).hostname),
-        // Public clients only: a jwks_uri would be fetched for every request it signs.
+        // Public clients, or a known keyed one: a jwks_uri is fetched for every request it signs.
         allowClient: async (_ctx, client) => {
-          if (client.tokenEndpointAuthMethod !== 'none' || client.jwksUri) return false;
+          const keys = KEYED_CLIENTS.get(new URL(client.clientId).origin);
+          const allowed =
+            keys && client.jwksUri === keys
+              ? client.tokenEndpointAuthMethod === 'private_key_jwt'
+              : client.tokenEndpointAuthMethod === 'none' && !client.jwksUri;
+          if (!allowed) return false;
           if (hasUnstorableText(client.clientName ?? '')) return false;
           if (!client.grantTypeAllowed('refresh_token')) {
             throw new errors.InvalidClientMetadata('grant_types must include refresh_token');

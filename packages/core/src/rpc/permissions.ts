@@ -282,6 +282,8 @@ export type WalletGrantPermissionsResponse = {
 export type RevokePermissionApiResponse = {
     /** Indicates if the permission was revoked successfully */
     success: boolean;
+    /** True when the relay does not see the on-chain revoke yet; it removes the permission once it does */
+    pending?: boolean;
 };
 
 /**

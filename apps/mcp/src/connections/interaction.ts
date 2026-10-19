@@ -156,9 +156,8 @@ export const reasonOf = (err: unknown) => {
   if ((err as { code?: unknown })?.code === 4001) return 'turned down in the wallet';
   if (!(err instanceof Error)) return 'the wallet did not approve';
   // Raised by the relay session itself, so the text is this server's own.
-  if (err.message.startsWith('the wallet page refused:') || err.message === 'timed out waiting for the wallet') {
-    return err.message;
-  }
+  const own = ['timed out waiting for the wallet', 'the wallet link was not opened in time'];
+  if (err.message.startsWith('the wallet page refused:') || own.includes(err.message)) return err.message;
   return SHOWN.has(err.message) ? err.message : 'the wallet did not approve';
 };
 
@@ -377,17 +376,24 @@ document.getElementById('open').onclick = async () => {
     say((r && refused[r.status]) || 'This request expired. Start again from your app.', 'bad');
     return;
   }
+  say('Waiting for your wallet.');
+  if (!polling) poll();
   if (popup) return void (popup.location = url);
   const link = Object.assign(document.createElement('a'), { href: url, target: '_blank', textContent: 'Open the wallet' });
   state.replaceChildren(link);
 };
+let polling = false;
 const poll = async () => {
+  polling = true;
   const s = await fetch('/interaction/' + d.uid + '/status').then((r) => r.json()).catch(() => ({ state: 'waiting' }));
   if (s.state === 'approved') {
     say('Approved. Returning to your app…', 'ok');
     return location.assign('/interaction/' + d.uid + '/complete?ticket=' + d.ticket);
   }
-  if (s.state === 'failed') return say('Not connected: ' + s.reason + '. Reload this page to try again.', 'bad');
+  if (s.state === 'failed') {
+    polling = false;
+    return say('Not connected: ' + s.reason + '. Click Open JAW wallet to try again.', 'bad');
+  }
   setTimeout(poll, 2000);
 };
 poll();

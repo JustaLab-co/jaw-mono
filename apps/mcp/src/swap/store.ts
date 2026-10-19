@@ -1,7 +1,7 @@
 import { createHash, randomBytes } from 'node:crypto';
 import { and, eq, gt, inArray, isNotNull, isNull, lt, lte, not, or, sql, type SQL } from 'drizzle-orm';
 import type { PgUpdateSetSource } from 'drizzle-orm/pg-core';
-import { config, QUOTE_MARGIN_SEC } from '@/connections/config';
+import { APPROVE_WITHIN_MS, config, QUOTE_MARGIN_SEC } from '@/connections/config';
 import { sessionLeaseEnd } from '@/connections/session-lease';
 import { getDb, type Tx } from '@/db/client';
 import { payments, SWAP_DEPOSIT_ADDRESS_INDEX, swaps } from '@/db/schema';
@@ -59,8 +59,7 @@ const currentPayment = (where: SQL) =>
   sql`exists (select 1 from payments p
     where p.connection_id = ${swaps.connectionId} and p.idempotency_key = ${swaps.paymentKey} and ${where})`;
 
-const OWNER_WINDOW_MS = 10 * 60_000;
-const ownerWindowMs = (ttlSec: number) => Math.min(OWNER_WINDOW_MS, (ttlSec - QUOTE_MARGIN_SEC) * 1000);
+const ownerWindowMs = (ttlSec: number) => Math.min(APPROVE_WITHIN_MS, (ttlSec - QUOTE_MARGIN_SEC) * 1000);
 
 export const approveByOf = (paidAt: Date, ttlSec: number) => new Date(paidAt.getTime() + ownerWindowMs(ttlSec));
 

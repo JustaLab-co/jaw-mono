@@ -6,6 +6,7 @@ import { z } from 'zod';
 import { chainClients } from '@/adapters/session-host';
 import { tenant, type Tenant } from '@/connections/auth';
 import { revokeReplaced, sessionSender, type DisconnectDeps } from '@/connections/disconnect';
+import { APPROVE_WITHIN_MS } from '@/connections/config';
 import { ownerRelay, WalletBusy, type OpenWallet, type Wallet } from '@/connections/relay';
 import { CONNECTION_TTL_MS, isLive } from '@/connections/rows';
 import { spends } from '@/connections/scopes';
@@ -32,17 +33,15 @@ const DEFAULTS: BudgetDeps = {
 
 const output = z.object({ url: z.url(), summary: z.string() });
 
-/** How long the owner has to approve a budget once the link is handed out. */
-const APPROVE_WITHIN_MS = 10 * 60_000;
 /** The link of the request still open, per connection: asking again while it waits hands out the same one. */
-const open = new Map<string, string>();
+const open = new Map<string, { url: string; until: Date }>();
 
 /** Asks the owner's wallet for the permission, and makes it the connection's budget once the chain shows it. */
 export async function requestBudget(t: Tenant, perDay: string, deps = DEFAULTS) {
   const waiting = open.get(t.connectionId);
   if (waiting) {
     return refusal(
-      `A budget request is still waiting for the owner at ${waiting}. Ask again once they approve or it expires in ten minutes.`
+      `A budget request is still waiting for the owner at ${waiting.url}. Ask again once they approve or it expires at ${waiting.until.toISOString()}.`
     );
   }
   const usdc = usdcForNetwork(`eip155:${t.chainId}`);
@@ -56,14 +55,15 @@ export async function requestBudget(t: Tenant, perDay: string, deps = DEFAULTS) 
     allowance,
     expiry: Math.floor((Date.now() + CONNECTION_TTL_MS) / 1000),
   });
+  const until = new Date(Date.now() + APPROVE_WITHIN_MS);
   let wallet: Wallet;
   try {
-    wallet = await deps.openWallet(t.chainId, new Date(Date.now() + APPROVE_WITHIN_MS), t);
+    wallet = await deps.openWallet(t.chainId, until, t);
   } catch (err) {
     if (err instanceof WalletBusy) return refusal('Too many owners are approving right now. Try again in a minute.');
     throw err;
   }
-  open.set(t.connectionId, wallet.url);
+  open.set(t.connectionId, { url: wallet.url, until });
   void wallet
     .run(async (ask) => {
       const checked = await checkGranted(

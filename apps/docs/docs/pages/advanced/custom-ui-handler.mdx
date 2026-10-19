@@ -234,7 +234,7 @@ interface RevokePermissionUIRequest {
 }
 ```
 
-**Expected response data:** Revocation confirmation.
+**Expected response data:** the `RevokePermissionApiResponse` that `account.revokePermission` returned. Pass it through as is, so the dapp sees `pending` when the relay does not see the on-chain revoke yet.
 
 ### wallet_sign
 

@@ -153,8 +153,8 @@ describe('jaw_send_calls link', () => {
     });
     expect(out.id).toMatch(/^oc_[A-Za-z0-9_-]{22}$/);
     expect(out.url).toMatch(/^http:\/\/keys\.test\/cli-bridge/);
-    expect(Date.parse(out.approveBy) - Date.now()).toBeGreaterThan(9 * 60_000);
-    expect(Date.parse(out.approveBy) - Date.now()).toBeLessThanOrEqual(10 * 60_000);
+    expect(Date.parse(out.approveBy) - Date.now()).toBeGreaterThan(29 * 60_000);
+    expect(Date.parse(out.approveBy) - Date.now()).toBeLessThanOrEqual(30 * 60_000);
     expect(opened).toHaveLength(1);
     expect(opened[0].chainId).toBe(t.chainId);
     expect(opened[0].until.toISOString()).toBe(out.approveBy);
