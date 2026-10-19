@@ -129,6 +129,7 @@ const HELP = `Commands:
   connections                    jaw_connections
   history                        jaw_history
   funds                          jaw_add_funds
+  resolve <name|address>         jaw_resolve_name, an ENS name or an address
   quote <url>                    jaw_quote
   pay <url> [maxAmount]          jaw_pay_and_fetch (maxAmount in base units)
   budget <perDay>                jaw_request_budget, USDC only
@@ -152,6 +153,8 @@ const commands = {
   connections: () => call('jaw_connections', {}),
   history: () => call('jaw_history', {}),
   funds: () => call('jaw_add_funds', {}),
+  resolve: (value) =>
+    call('jaw_resolve_name', /^0x[0-9a-fA-F]{40}$/.test(value) ? { address: value } : { name: value }),
   quote: (url) => call('jaw_quote', { url }),
   pay: (url, maxAmount) => call('jaw_pay_and_fetch', { url, ...(maxAmount && { maxAmount }) }),
   budget: (perDay) => call('jaw_request_budget', { perDay }),
