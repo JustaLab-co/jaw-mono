@@ -193,6 +193,8 @@ describe('jaw_read_contracts', () => {
     const cases: [Read['abi'], RegExp][] = [
       [[fn([deep])], /^Read 1: .*nested/],
       [[fn(wide)], /^Read 1: .*parameters/],
+      [[fn([{ type: `uint8${'[]'.repeat(1000)}` }])], /^Read 1: .*nested/],
+      [[fn([{ type: 'tuple[2]'.concat('[]'.repeat(40)), components: [{ type: 'uint8' }] }])], /^Read 1: .*nested/],
     ];
     for (const [abi, reason] of cases) {
       const out = await readContracts(
@@ -223,6 +225,19 @@ describe('jaw_read_contracts', () => {
     const items = many.value as string[];
     expect(items[0]).toMatch(/\[truncated: 3000 characters in all\]$/);
     expect(items.at(-1)).toMatch(/^\[truncated: \d+ more items\]$/);
+  });
+
+  it('charges empty arrays against the reply budget', async () => {
+    const abi = parseAbi(['function empties() view returns (uint8[][])']);
+    const hostile = node((_, data) => {
+      const { functionName } = decodeFunctionData({ abi, data });
+      return encodeFunctionResult({ abi, functionName, result: Array.from({ length: 100_000 }, () => []) });
+    });
+    const reads = [{ address: USDC, abi: abi as unknown as Read['abi'], functionName: 'empties' }];
+    const out = await readContracts({ chainId: 8453, reads }, hostile);
+    expect(JSON.stringify(out).length).toBeLessThan(250_000);
+    const [only] = values(out) as { value: unknown[] }[];
+    expect(only.value.at(-1)).toMatch(/^\[truncated: \d+ more items\]$/);
   });
 
   it('returns a normal batch of 100 reads whole', async () => {

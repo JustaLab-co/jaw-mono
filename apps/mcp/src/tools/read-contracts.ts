@@ -71,9 +71,13 @@ function leaf(v: unknown, source: string): unknown {
 
 type Budget = { left: number };
 
+// Empty arrays and objects carry no leaf text, so each node is charged for its own brackets and comma.
+const NODE_COST = 4;
+
 function capped(v: unknown, source: string, budget: Budget): unknown {
   if (budget.left <= 0) return cut(`the reply reached ${OUTPUT_MAX} characters`);
   if (Array.isArray(v)) {
+    budget.left -= NODE_COST;
     const shown: unknown[] = [];
     for (const x of v) {
       if (budget.left <= 0) {
@@ -84,8 +88,10 @@ function capped(v: unknown, source: string, budget: Budget): unknown {
     }
     return shown;
   }
-  if (v && typeof v === 'object')
+  if (v && typeof v === 'object') {
+    budget.left -= NODE_COST;
     return Object.fromEntries(Object.entries(v).map(([k, x]) => [k, capped(x, source, budget)]));
+  }
   const out = leaf(v, source);
   budget.left -= String(out).length;
   return out;
@@ -93,18 +99,21 @@ function capped(v: unknown, source: string, budget: Budget): unknown {
 
 const functionsOf = (r: Read) => (r.abi as unknown as Abi).filter((item) => item.type === 'function');
 
-type Param = { components?: unknown } | null;
+type Param = { type?: unknown; components?: unknown } | null;
 
-// The walk stops at DEPTH_MAX, so a hostile ABI cannot exhaust the stack here or in viem's coder.
+const dimensions = (type: unknown) => (typeof type === 'string' ? (type.match(/\[\d*\]/g) ?? []).length : 0);
+
+// Each tuple level and each array dimension counts as one level, and the walk stops at DEPTH_MAX.
 function shapeError(r: Read): string | undefined {
   let params = 0;
   const walk = (list: unknown, depth: number): string | undefined => {
     if (!Array.isArray(list)) return undefined;
-    if (depth > DEPTH_MAX) return `its ABI is nested more than ${DEPTH_MAX} levels deep`;
     params += list.length;
     if (params > PARAMS_MAX) return `its ABI has more than ${PARAMS_MAX} parameters`;
     for (const p of list as Param[]) {
-      const error = walk(p?.components, depth + 1);
+      const level = depth + dimensions(p?.type);
+      if (level > DEPTH_MAX) return `its ABI is nested more than ${DEPTH_MAX} levels deep`;
+      const error = walk(p?.components, level + 1);
       if (error) return error;
     }
     return undefined;
