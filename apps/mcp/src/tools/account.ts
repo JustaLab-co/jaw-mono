@@ -15,6 +15,9 @@ import { reply } from '@/lib/fence';
 import { refusal } from './reply';
 
 const CHAINS_PER_REQUEST = 20;
+const CHUNK_DEADLINE_MS = 4000;
+const NO_ANSWER =
+  'no answer: the proxy leaves out a chain that is empty and one that timed out, so the balance is unknown';
 const ASSET_TYPES = ['native', 'erc20'];
 const caip2 = (chainId: number) => `eip155:${chainId}`;
 const readOnly = { readOnlyHint: true, openWorldHint: true };
@@ -91,8 +94,17 @@ const assetInput = z.strictObject({
 
 async function readChunk(account: string, ids: number[], assetTypes: string[] | undefined) {
   const params = [{ account, chainFilter: ids.map(hexStringFromNumber), assetTypeFilter: assetTypes ?? ASSET_TYPES }];
-  const raw = await handleGetAssetsRequest({ method: 'wallet_getAssets', params }, config().paymasterApiKey);
-  return assetsIn.parse(raw);
+  const read = handleGetAssetsRequest({ method: 'wallet_getAssets', params }, config().paymasterApiKey);
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const deadline = new Promise<never>((_, reject) => {
+    timer = setTimeout(() => reject(new Error(`timed out after ${CHUNK_DEADLINE_MS} ms`)), CHUNK_DEADLINE_MS);
+  });
+  try {
+    return assetsIn.parse(await Promise.race([read, deadline]));
+  } finally {
+    clearTimeout(timer);
+    read.catch(() => {});
+  }
 }
 
 const shown = (a: z.infer<typeof assetIn>): z.infer<typeof assetOut> => ({
@@ -131,7 +143,7 @@ export function registerAccountTools(server: McpServer) {
     'jaw_get_assets',
     {
       description:
-        "The connected account's native and token balances on every supported mainnet, or the chains you name. Testnets are never read. A chain the proxy could not answer for is named in `failed`; the rest still come back.",
+        "The connected account's native and token balances on every supported mainnet, or the chains you name. Testnets are never read. A chain the proxy did not answer for within 4 s, or left out, is named in `failed` and its balance is unknown, not zero; the rest still come back.",
       inputSchema: assetInput,
       outputSchema: assetsOutput,
       annotations: readOnly,
@@ -148,16 +160,26 @@ export function registerAccountTools(server: McpServer) {
           )
         )
       );
-      const chains = outcomes
-        .flatMap((o) => {
-          if (!('result' in o)) return [];
-          const answered = new Map(Object.entries(o.result).map(([hex, assets]) => [Number(hex), assets]));
-          return o.ids.map((id) => ({ chainId: caip2(id), assets: (answered.get(id) ?? []).map(shown) }));
-        })
+      const answered = outcomes.flatMap((o) => {
+        if (!('result' in o)) return [];
+        const byId = new Map(Object.entries(o.result).map(([hex, assets]) => [Number(hex), assets]));
+        return [{ ids: o.ids, byId }];
+      });
+      const chains = answered
+        .flatMap(({ ids, byId }) =>
+          ids
+            .filter((id) => byId.has(id))
+            .map((id) => ({ chainId: caip2(id), assets: (byId.get(id) ?? []).map(shown) }))
+        )
         .sort((a, b) => Number(a.chainId.slice(7)) - Number(b.chainId.slice(7)));
-      const failed = outcomes.flatMap((o) => ('error' in o ? [{ chainIds: o.ids.map(caip2), reason: o.error }] : []));
-      if (failed.length === outcomes.length) {
-        return refusal(`proxy_error: ${[...new Set(failed.map((f) => f.reason))].join('; ')}`);
+      const errored = outcomes.flatMap((o) => ('error' in o ? [{ chainIds: o.ids.map(caip2), reason: o.error }] : []));
+      const silent = answered.flatMap(({ ids, byId }) => {
+        const gone = ids.filter((id) => !byId.has(id));
+        return gone.length ? [{ chainIds: gone.map(caip2), reason: NO_ANSWER }] : [];
+      });
+      const failed = [...errored, ...silent];
+      if (errored.length === outcomes.length) {
+        return refusal(`proxy_error: ${[...new Set(errored.map((f) => f.reason))].join('; ')}`);
       }
       const count = chains.reduce((n, c) => n + c.assets.length, 0);
       const missing = failed.flatMap((f) => f.chainIds);
@@ -168,7 +190,7 @@ export function registerAccountTools(server: McpServer) {
           failed,
           summary:
             `${count} asset(s) on ${chains.length} chain(s).` +
-            (missing.length ? ` Could not read ${missing.join(', ')}: ask again for those chainIds.` : ''),
+            (missing.length ? ` Could not read ${missing.join(', ')}: their balance is unknown, not zero.` : ''),
         })
       );
     }

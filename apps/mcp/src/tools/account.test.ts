@@ -18,7 +18,7 @@ process.env.JAW_MCP_API_KEY = KEY;
 
 type Param = { chainFilter: string[]; account: string };
 type Rpc = { method: string; params: Param[] };
-type Answer = (rpc: Rpc, url: string) => Response | unknown;
+type Answer = (rpc: Rpc, url: string) => Response | unknown | Promise<unknown>;
 
 const seen: { rpc: Rpc; url: string }[] = [];
 let answer: Answer = () => [];
@@ -29,7 +29,7 @@ vi.stubGlobal('fetch', async (input: Parameters<typeof fetch>[0], init?: Request
   if (!url.startsWith(JAW_RPC_URL)) return realFetch(input, init);
   const rpc = JSON.parse(String(init?.body)) as Rpc;
   seen.push({ rpc, url });
-  const out = answer(rpc, url);
+  const out = await answer(rpc, url);
   return out instanceof Response ? out : Response.json({ jsonrpc: '2.0', id: 1, result: out });
 });
 
@@ -92,7 +92,7 @@ describe('jaw_get_assets', () => {
   it('given a chunk the proxy refuses, then the other chunk is returned and the lost chains are named without the key', async () => {
     answer = ({ params }, url) =>
       params[0].chainFilter.includes(hex(mainnets[0]))
-        ? { [hex(mainnets[0])]: [ether] }
+        ? Object.fromEntries(params[0].chainFilter.map((id) => [id, [ether]]))
         : new Response(`upstream said no to ${url}`, { status: 500 });
 
     const r = await callTool(token, 'jaw_get_assets', {});
@@ -252,16 +252,35 @@ describe('jaw_get_assets answers', () => {
     expect(all.structuredContent.chains.map((c: { chainId: string }) => c.chainId)).not.toContain('eip155:84532');
   });
 
-  it('given a chain the proxy leaves out of a good answer, then it is listed with no assets', async () => {
+  it('given a chain the proxy leaves out of a good answer, then it is unknown and never an empty balance', async () => {
     answer = () => ({ [hex(1)]: [ether] });
 
     const r = await callTool(token, 'jaw_get_assets', { chainIds: [1, 10] });
 
-    expect(r.structuredContent.chains).toEqual([
-      expect.objectContaining({ chainId: 'eip155:1' }),
-      { chainId: 'eip155:10', assets: [] },
+    expect(r.structuredContent.chains).toEqual([expect.objectContaining({ chainId: 'eip155:1' })]);
+    expect(r.structuredContent.failed).toEqual([
+      { chainIds: ['eip155:10'], reason: expect.stringContaining('no answer') },
     ]);
+    expect(r.structuredContent.summary).toContain('eip155:10');
   });
+
+  it('given a chunk the proxy never answers, then it is named as timed out and the rest comes back before 5 s', async () => {
+    answer = ({ params }) =>
+      params[0].chainFilter.includes(hex(mainnets[0]))
+        ? new Promise(() => {})
+        : Object.fromEntries(params[0].chainFilter.map((id) => [id, [ether]]));
+
+    const started = Date.now();
+    const r = await callTool(token, 'jaw_get_assets', {});
+
+    expect(Date.now() - started).toBeLessThan(5000);
+    expect(r.isError).toBeFalsy();
+    expect(r.structuredContent.chains).toHaveLength(mainnets.length - 20);
+    expect(r.structuredContent.failed).toEqual([
+      { chainIds: mainnets.slice(0, 20).map((id) => `eip155:${id}`), reason: expect.stringContaining('timed out') },
+    ]);
+    expect(JSON.stringify(r)).not.toContain(KEY);
+  }, 10_000);
 
   it('given duplicate chain ids, then each is asked once', async () => {
     answer = ({ params }) => ({ [params[0].chainFilter[0]]: [ether] });
