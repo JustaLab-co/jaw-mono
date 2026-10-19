@@ -220,7 +220,7 @@ describe('a session nobody opens for ten minutes', () => {
   const JOIN_MS = 10 * 60_000;
   afterEach(() => vi.useRealTimers());
 
-  it('given no browser joins within ten minutes, then the session ends and its slot opens another', async () => {
+  it('given no browser joins within ten minutes, then the session ends saying so and its slot opens another', async () => {
     vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'setInterval', 'clearInterval'] });
     vi.resetModules();
     const fresh = await import('./relay');
@@ -237,7 +237,7 @@ describe('a session nobody opens for ten minutes', () => {
     await expect(fresh.connectRelay(84532, until)).rejects.toBeInstanceOf(fresh.WalletBusy);
     await vi.advanceTimersByTimeAsync(1_000);
 
-    expect(await ended).toBe('the wallet session ended');
+    expect(await ended).toBe('the wallet link was not opened in time');
     expect((await fresh.connectRelay(84532, until)).url).toMatch(/cli-bridge/);
   });
 

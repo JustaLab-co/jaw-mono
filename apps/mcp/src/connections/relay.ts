@@ -154,6 +154,7 @@ async function startSession(
   url.hash = `pk=${await exportKeyToHex('public', keys.publicKey)}`;
 
   const ws = new WebSocket(`${relayUrl}?session=${encodeURIComponent(session)}&role=cli`);
+  const inbox = new Inbox(ws, until);
   const keepalive = setInterval(() => {
     if (ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify({ type: 'ping' }));
   }, KEEPALIVE_MS);
@@ -161,7 +162,13 @@ async function startSession(
   // Ends the session at its deadline even if nobody runs it.
   const deadline = setTimeout(() => end(), until.getTime() - Date.now());
   deadline.unref();
-  const unjoined = joinWithin === undefined ? undefined : setTimeout(() => end(), joinWithin);
+  const unjoined =
+    joinWithin === undefined
+      ? undefined
+      : setTimeout(() => {
+          inbox.close(new Error('the wallet link was not opened in time'));
+          end();
+        }, joinWithin);
   unjoined?.unref();
   const stop = () => {
     clearInterval(keepalive);
@@ -178,7 +185,6 @@ async function startSession(
   ws.addEventListener('message', (e) => {
     if (typeOf(e.data) === 'browser_connected') clearTimeout(unjoined);
   });
-  const inbox = new Inbox(ws, until);
 
   return {
     url: url.toString(),
@@ -253,7 +259,8 @@ class Inbox {
     ws.addEventListener('close', () => this.close(new Error('the wallet session ended')));
   }
 
-  private close(err: Error) {
+  /** Ends every wait with `err`, unless the session already ended with another. */
+  close(err: Error) {
     this.closed ??= err;
     this.waiter?.();
   }
