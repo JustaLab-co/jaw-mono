@@ -41,11 +41,12 @@ const chain = vi.hoisted(() => ({
   spent: 0n,
   revoked: false,
   head: 100n,
-  userOps: [] as { userOpHash: Hex; sender: Address; success: boolean; blockNumber: bigint }[],
+  userOps: [] as { userOpHash: Hex; sender: Address; success: boolean; blockNumber: bigint; txHash?: Hex }[],
 }));
 
 const bridge = vi.hoisted(() => ({
   sent: [] as { to: string; value: string; data: string }[][],
+  attempts: 0,
   outcome: 'landed' as 'landed' | 'pending' | { logs: { data: string; topics: string[] }[] },
   fail: undefined as Error | undefined,
   gate: undefined as Promise<void> | undefined,
@@ -58,6 +59,7 @@ vi.mock('@/adapters/session-host', async (original) => ({
   sessionBridge: () => ({
     request: async (method: string, params: unknown) => {
       if (method === 'wallet_sendCalls') {
+        bridge.attempts++;
         bridge.reached?.();
         if (bridge.gate) await bridge.gate;
         if (bridge.fail) throw bridge.fail;
@@ -90,10 +92,12 @@ vi.mock('@/adapters/session-host', async (original) => ({
 
 const node = vi.hoisted(() => ({
   getBlockNumber: async () => chain.head,
-  getLogs: async ({ args }: { args: { userOpHash?: Hex } }) =>
+  getLogs: async ({ args }: { args: { userOpHash?: Hex; sender?: Address } }) =>
     chain.userOps
-      .filter((op) => op.userOpHash === args.userOpHash)
-      .map((op) => ({ args: op, blockNumber: op.blockNumber, transactionHash: TX })),
+      .filter((op) =>
+        args.userOpHash ? op.userOpHash === args.userOpHash : op.sender.toLowerCase() === args.sender?.toLowerCase()
+      )
+      .map((op) => ({ args: op, blockNumber: op.blockNumber, transactionHash: op.txHash ?? TX })),
   readContract: async () => undefined as unknown,
 }));
 vi.mock('@/lib/chain', async (original) => ({
@@ -107,6 +111,7 @@ afterEach(async () => {
   Object.assign(chain, { spent: 0n, revoked: false, head: 100n, userOps: [] });
   Object.assign(bridge, {
     sent: [],
+    attempts: 0,
     outcome: 'landed',
     fail: undefined,
     gate: undefined,
@@ -161,8 +166,8 @@ const transfer = (to: Address, amount: bigint) => ({
   to: USDC,
   data: encodeFunctionData({ abi: erc20Abi, functionName: 'transfer', args: [to, amount] }),
 });
-const execute = (token: string, permissionId: string, calls: object[]) =>
-  callTool(token, 'jaw_session_execute', { permissionId, calls });
+const execute = (token: string, permissionId: string, calls: object[], idempotencyKey?: string) =>
+  callTool(token, 'jaw_session_execute', { permissionId, calls, ...(idempotencyKey && { idempotencyKey }) });
 const rowsOf = (connectionId: string) => getDb().select().from(sends).where(eq(sends.connectionId, connectionId));
 
 const MANAGER_ERRORS = parseAbi(['error JustaPermissionManager_ExceededSpendLimit(uint256 value, uint256 allowance)']);
@@ -257,7 +262,7 @@ describe('jaw_session_execute', () => {
     expect(bridge.sent).toEqual([]);
   });
 
-  it('names an ExceededSpendLimit the bundler reports after fit passed as over-limit, and releases the rows', async () => {
+  it('names an ExceededSpendLimit the bundler reports after fit passed as over-limit, and keeps no rows', async () => {
     const { c, t, permissionId } = await withCustomGrant();
     bridge.fail = new Error('Could not size the ERC-20 paymaster approval', {
       cause: { name: 'RpcRequestError', details: `execution reverted: ${overLimitRevert}` },
@@ -266,7 +271,7 @@ describe('jaw_session_execute', () => {
     const result = await execute(c.access_token, permissionId, [transfer(BOB, 1n)]);
 
     expect(result.content[0].text).toMatch(/^over-limit: .*Nothing was sent\.$/);
-    expect((await rowsOf(t.connectionId)).map((r) => r.state)).toEqual(['released']);
+    expect(await rowsOf(t.connectionId)).toEqual([]);
   });
 
   it('names an over-limit revert the EntryPoint logged for a userOp that reverted on chain', async () => {
@@ -301,14 +306,14 @@ describe('jaw_session_execute', () => {
     expect(next.content[0].text).toMatch(/^over-limit: /);
   });
 
-  it('given a failure before the bundler took the batch, then nothing was sent and the rows are released', async () => {
+  it('given a failure before the bundler took the batch, then nothing was sent and no rows are kept', async () => {
     const { c, t, permissionId } = await withCustomGrant();
     bridge.fail = new Error('the permission store did not answer');
 
     const result = await execute(c.access_token, permissionId, [transfer(BOB, 1n)]);
 
     expect(result.content[0].text).toMatch(/^Nothing was sent: /);
-    expect((await rowsOf(t.connectionId)).map((r) => r.state)).toEqual(['released']);
+    expect(await rowsOf(t.connectionId)).toEqual([]);
   });
 
   it('refuses a connection without x402:pay before reading any grant', async () => {
@@ -361,6 +366,123 @@ describe('jaw_session_execute', () => {
     expect(await rowsOf(t.connectionId)).toEqual([
       expect.objectContaining({ state: 'landed', txHash: TX, callsId: userOpHash }),
     ]);
+  });
+
+  it('given the same idempotencyKey and input after a run landed, then it returns that run and sends nothing', async () => {
+    const { c, permissionId } = await withCustomGrant();
+
+    const first = await execute(c.access_token, permissionId, [transfer(BOB, 250_000n)], 'pay-bob');
+    const again = await execute(c.access_token, permissionId, [transfer(BOB, 250_000n)], 'pay-bob');
+
+    expect(first.structuredContent).toMatchObject({ status: 'landed', idempotencyKey: 'pay-bob' });
+    expect(again.structuredContent).toEqual(first.structuredContent);
+    expect(bridge.attempts).toBe(1);
+  });
+
+  it('given the same idempotencyKey with other calls, then it is an idempotency_conflict and nothing is sent', async () => {
+    const { c, permissionId } = await withCustomGrant();
+    await execute(c.access_token, permissionId, [transfer(BOB, 250_000n)], 'pay-bob');
+
+    const other = await execute(c.access_token, permissionId, [transfer(CAROL, 250_000n)], 'pay-bob');
+
+    expect(other.isError).toBe(true);
+    expect(other.content[0].text).toMatch(/^idempotency_conflict: .*Nothing was sent\./);
+    expect(bridge.attempts).toBe(1);
+  });
+
+  it('given a retry with the same idempotencyKey after the answer was lost, then it does not send again', async () => {
+    const { c, t, permissionId } = await withCustomGrant();
+    bridge.fail = new Error('send failed', { cause: new HttpRequestError({ url: 'http://bundler.test' }) });
+    await execute(c.access_token, permissionId, [transfer(BOB, 100_000n)], 'pay-bob');
+    bridge.fail = undefined;
+
+    const retry = await execute(c.access_token, permissionId, [transfer(BOB, 100_000n)], 'pay-bob');
+
+    expect(retry.content[0].text).toMatch(/may have been sent/);
+    expect(bridge.attempts).toBe(1);
+    expect((await rowsOf(t.connectionId)).map((r) => r.state)).toEqual(['open']);
+  });
+
+  it('given the same idempotencyKey after nothing was sent, then the retry runs', async () => {
+    const { c, permissionId } = await withCustomGrant();
+    bridge.fail = new Error('the permission store did not answer');
+    await execute(c.access_token, permissionId, [transfer(BOB, 1n)], 'pay-bob');
+    bridge.fail = undefined;
+
+    const retry = await execute(c.access_token, permissionId, [transfer(BOB, 1n)], 'pay-bob');
+
+    expect(retry.structuredContent).toMatchObject({ status: 'landed' });
+    expect(bridge.attempts).toBe(2);
+  });
+
+  it('given two calls with one idempotencyKey at once, then one sends and the other returns its outcome', async () => {
+    const { c, permissionId } = await withCustomGrant();
+    const release = deferred();
+    const reached = deferred();
+    bridge.gate = release.promise;
+    bridge.reached = reached.resolve;
+
+    const first = execute(c.access_token, permissionId, [transfer(BOB, 1n)], 'pay-bob');
+    await reached.promise;
+    const second = execute(c.access_token, permissionId, [transfer(BOB, 1n)], 'pay-bob');
+    release.resolve();
+
+    const [a, b] = await Promise.all([first, second]);
+    expect(a.structuredContent).toMatchObject({ status: 'landed' });
+    expect(b.structuredContent?.userOpHash).toBe(a.structuredContent.userOpHash);
+    expect(bridge.attempts).toBe(1);
+  });
+
+  it('given two runs from the same sender that land, then the reconciler settles each row to its own receipt', async () => {
+    const { c, t, permissionId } = await withCustomGrant();
+    bridge.outcome = 'pending';
+    vi.useFakeTimers({ toFake: ['Date'] });
+    const first = await execute(c.access_token, permissionId, [transfer(BOB, 100_000n)]);
+    const second = await execute(c.access_token, permissionId, [transfer(CAROL, 200_000n)]);
+    const own = (r: typeof first, txHash: Hex) => ({
+      userOpHash: r.structuredContent.userOpHash as Hex,
+      sender: t.sessionAddress,
+      success: true,
+      blockNumber: 101n,
+      txHash,
+    });
+    const TX2: Hex = `0x${'d'.repeat(64)}`;
+    chain.userOps.push(own(second, TX2), own(first, TX));
+    chain.head = 120n;
+    vi.setSystemTime(Date.now() + 1_000);
+
+    await reconcile({ publicClient: () => node as unknown as PublicClient });
+
+    const rows = await rowsOf(t.connectionId);
+    expect(rows.find((r) => r.amount === '100000')).toMatchObject({ state: 'landed', txHash: TX });
+    expect(rows.find((r) => r.amount === '200000')).toMatchObject({ state: 'landed', txHash: TX2 });
+  });
+
+  it('given a lost run with no userOp hash, then the reconciler never lands it on another operation of the sender', async () => {
+    const { c, t, permissionId } = await withCustomGrant();
+    bridge.fail = new Error('send failed', { cause: new HttpRequestError({ url: 'http://bundler.test' }) });
+    await execute(c.access_token, permissionId, [transfer(BOB, 100_000n)]);
+    bridge.fail = undefined;
+    const other: Hex = `0x${'d'.repeat(64)}`;
+    chain.userOps.push({
+      userOpHash: `0x${'9'.repeat(64)}`,
+      sender: t.sessionAddress,
+      success: true,
+      blockNumber: 101n,
+      txHash: other,
+    });
+    chain.head = 120n;
+
+    await reconcile({ publicClient: () => node as unknown as PublicClient });
+    expect(await rowsOf(t.connectionId)).toEqual([expect.objectContaining({ state: 'open', txHash: null })]);
+
+    chain.head = 100n + 451n;
+    await getDb()
+      .update(sends)
+      .set({ leaseUntil: new Date(0) })
+      .where(eq(sends.connectionId, t.connectionId));
+    await reconcile({ publicClient: () => node as unknown as PublicClient });
+    expect(await rowsOf(t.connectionId)).toEqual([expect.objectContaining({ state: 'released', txHash: null })]);
   });
 });
 

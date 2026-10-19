@@ -1,3 +1,4 @@
+import { createHash, randomBytes } from 'node:crypto';
 import type { SessionBridge } from '@jaw.id/agent';
 import type { McpServer } from '@modelcontextprotocol/server';
 import { and, eq } from 'drizzle-orm';
@@ -7,6 +8,7 @@ import { chainClients, sessionBridge } from '@/adapters/session-host';
 import { tenant, type Tenant } from '@/connections/auth';
 import { isLive } from '@/connections/rows';
 import { spends } from '@/connections/scopes';
+import type { Tx } from '@/db/client';
 import { connections } from '@/db/schema';
 import { isPaymentsPaused } from '@/db/settings';
 import { ChainUnreadable, fit, spendOf, type Call, type Refusal } from '@/grants/fit';
@@ -15,7 +17,16 @@ import { unrevokedGrant, type LiveGrant } from '@/grants/store';
 import { errorLabel, log } from '@/lib/edge';
 import { reply } from '@/lib/fence';
 import { FloatBusy, FloatLost, inTurn, LOCK_WAIT_MS, withFloat } from '@/payments/float-lock';
-import { handToReconciler, noteCallsId, openSpends, recordSend, settleSend } from '@/payments/sends';
+import {
+  dropSends,
+  handToReconciler,
+  noteCallsId,
+  openSpends,
+  recordSend,
+  runOf,
+  settleSend,
+  type SendRow,
+} from '@/payments/sends';
 import { NO_PAY_SCOPE, refusal } from './reply';
 
 const MAX_CALLS = 10;
@@ -51,11 +62,17 @@ const executeInput = z.strictObject({
     )
     .min(1)
     .max(MAX_CALLS),
+  idempotencyKey: z
+    .string()
+    .regex(/^[A-Za-z0-9_.:-]{1,100}$/)
+    .optional()
+    .describe('Reuse it to retry this exact execute; one is made up and returned when absent'),
 });
 export type ExecuteInput = z.input<typeof executeInput>;
 
 const output = z.object({
   status: z.enum(['landed', 'reverted', 'unconfirmed']),
+  idempotencyKey: z.string(),
   userOpHash: z.string(),
   txHash: z.string().nullable(),
   summary: z.string(),
@@ -80,69 +97,140 @@ function described(r: Refusal, permissionId: string): string {
 
 const NOTHING_SENT = ' Nothing was sent.';
 const UNREADABLE = 'Nothing was sent: the grant could not be read from the chain right now. Try again in a moment.';
-const MAYBE_SENT =
-  'This execute failed and may have been sent anyway. Check jaw_session_history before sending again, or it may land twice.';
+const maybeSent = (key: string) =>
+  `This execute failed and may have been sent anyway. Send idempotencyKey ${key} again with the same calls: it returns this answer and never sends twice. ` +
+  'Check jaw_session_history before sending it under a new key, or it may land twice.';
+const NEVER_SEEN =
+  'This execute may have been sent, but its answer was lost and it was not seen on chain in time, so its spend is no longer held. ' +
+  "Check the account's balances before sending it under a new key.";
 
 type CallStatus = {
   status: number;
   receipts?: { transactionHash: Hex; logs?: { data: Hex; topics: Hex[] }[] }[];
 };
 
-async function receiptOf(bridge: SessionBridge, userOpHash: Hex): Promise<{ out: Outcome; refused?: Refusal }> {
+const landed = (idempotencyKey: string, userOpHash: string, txHash: string): Outcome => ({
+  status: 'landed',
+  idempotencyKey,
+  userOpHash,
+  txHash,
+  summary: `Landed in ${txHash}.`,
+});
+const reverted = (idempotencyKey: string, userOpHash: string, txHash: string | null): Outcome => ({
+  status: 'reverted',
+  idempotencyKey,
+  userOpHash,
+  txHash,
+  summary: `userOp ${userOpHash} did not succeed on chain; its calls moved nothing.`,
+});
+const unconfirmed = (idempotencyKey: string, userOpHash: string): Outcome => ({
+  status: 'unconfirmed',
+  idempotencyKey,
+  userOpHash,
+  txHash: null,
+  summary: `Submitted as userOp ${userOpHash} and not confirmed yet. jaw_session_history shows when it lands; the same idempotencyKey returns this run and never sends twice.`,
+});
+
+const answered = (out: Outcome) => ({ ...reply(out), isError: out.status === 'reverted' });
+
+async function receiptOf(
+  bridge: SessionBridge,
+  key: string,
+  userOpHash: Hex
+): Promise<{ out: Outcome; refused?: Refusal }> {
   for (const until = Date.now() + RECEIPT_MS; Date.now() < until; ) {
     const status = (await bridge.request('wallet_getCallsStatus', userOpHash).catch(() => undefined)) as
       | CallStatus
       | undefined;
     const txHash = status?.receipts?.[0]?.transactionHash ?? null;
-    if (status?.status === 200 && txHash) {
-      return { out: { status: 'landed', userOpHash, txHash, summary: `Landed in ${txHash}.` } };
-    }
+    if (status?.status === 200 && txHash) return { out: landed(key, userOpHash, txHash) };
     // 400 is a failure off chain with no receipt, which says nothing about inclusion.
     if (status && status.status >= 500) {
       const logs = (status.receipts ?? []).flatMap((r) => r.logs ?? []);
-      const summary = `userOp ${userOpHash} did not succeed on chain; its calls moved nothing.`;
-      return { out: { status: 'reverted', userOpHash, txHash, summary }, refused: refusalOfLogs(logs) };
+      return { out: reverted(key, userOpHash, txHash), refused: refusalOfLogs(logs) };
     }
     await new Promise((resolve) => setTimeout(resolve, 2_000));
   }
-  const summary = `Submitted as userOp ${userOpHash} and not confirmed yet. jaw_session_history shows when it lands; check it before sending again, or it may land twice.`;
-  return { out: { status: 'unconfirmed', userOpHash, txHash: null, summary } };
+  return { out: unconfirmed(key, userOpHash) };
+}
+
+/** What the run stored under this key ended as. Its rows share one userOp, so they share its fate. */
+function replayed(rows: SendRow[], key: string, hash: string): ToolResult | ReturnType<typeof answered> {
+  if (rows[0].requestHash !== hash) {
+    return refusal(`idempotency_conflict: idempotencyKey ${key} was used for another execute.${NOTHING_SENT}`);
+  }
+  const done = rows.find((r) => r.state === 'landed');
+  if (done) return answered(landed(key, done.callsId as string, done.txHash as string));
+  const { state, callsId } = rows.find((r) => r.state === 'open') ?? rows[0];
+  if (!callsId) return refusal(state === 'open' ? maybeSent(key) : NEVER_SEEN);
+  return answered(state === 'open' ? unconfirmed(key, callsId) : reverted(key, callsId, null));
 }
 
 const logFailure = (msg: string) => (err: unknown) => log('error', { msg, error: errorLabel(err) });
 
-const release = (ids: string[]) => Promise.all(ids.map((id) => settleSend(id, { state: 'released' })));
-
 function concluded(ids: string[], out: Outcome) {
   if (out.status === 'landed') {
-    return Promise.all(ids.map((id) => settleSend(id, { state: 'landed', txHash: out.txHash as Hex })));
+    const end = { state: 'landed' as const, txHash: out.txHash as Hex, callsId: out.userOpHash as Hex };
+    return Promise.all(ids.map((id) => settleSend(id, end)));
   }
-  if (out.status === 'reverted') return release(ids);
+  if (out.status === 'reverted') return Promise.all(ids.map((id) => settleSend(id, { state: 'released' })));
   return handToReconciler(ids);
 }
 
 // `lost`: the request may have reached the bundler and only its answer was lost.
 type Submitted = { sent: Hex } | { unsent: unknown } | { lost: unknown };
 
-async function submitUnder(
-  t: Tenant,
-  grant: LiveGrant,
-  calls: Call[],
-  bridge: SessionBridge
-): Promise<ToolResult | { ids: string[]; submitted: Submitted }> {
+function noteSubmitted(tx: Tx, ids: string[], submitted: Submitted) {
+  if ('sent' in submitted) return noteCallsId(tx, ids, submitted.sent);
+  if ('lost' in submitted) return handToReconciler(ids, tx);
+  return dropSends(tx, ids);
+}
+
+interface Run {
+  key: string;
+  hash: string;
+  permissionId: string;
+  chainId: number;
+  calls: Call[];
+}
+
+async function grantFor(t: Tenant, run: Run): Promise<ToolResult | { grant: LiveGrant; bridge: SessionBridge }> {
+  const grant = await unrevokedGrant(t.connectionId, run.permissionId);
+  if (!grant || grant.chainId !== run.chainId) {
+    return refusal(described({ reason: 'no-grant' }, run.permissionId) + NOTHING_SENT);
+  }
+  if (grant.kind === 'x402-budget') {
+    return refusal(
+      `no-grant: ${run.permissionId} is this connection's x402 budget, which pays x402 services only. Execute under a custom grant from jaw_grant_permissions.${NOTHING_SENT}`
+    );
+  }
+  const bridge = sessionBridge(t, grant);
+  if (!bridge) return refusal('This server has no paymaster key, so it cannot pay the fee to send.');
+  return { grant, bridge };
+}
+
+type Reserved = { ids: string[]; submitted: Submitted; bridge: SessionBridge };
+
+/** Held from the key lookup to the bundler's answer, so a key runs once and the next execute counts this one. */
+async function submitUnder(t: Tenant, run: Run): Promise<ToolResult | Reserved> {
   return withFloat(t.connectionId, LOCK_WAIT_MS, async (hold) => {
-    const live = await hold.tx(async (tx) => {
+    const stored = await hold.tx(async (tx) => {
       if (!(await hold.owns(tx))) throw new FloatLost();
-      const [row] = await tx
+      const rows = await runOf(tx, t.connectionId, run.key);
+      const [live] = await tx
         .select({ id: connections.id })
         .from(connections)
         .where(and(eq(connections.id, t.connectionId), isLive()));
-      return Boolean(row);
+      return { rows, live: Boolean(live) };
     });
-    if (!live) return refusal('This connection has ended, so nothing was sent.');
+    if (stored.rows.length > 0) return replayed(stored.rows, run.key, run.hash);
+    if (!stored.live) return refusal('This connection has ended, so nothing was sent.');
+    const found = await grantFor(t, run);
+    if (!('grant' in found)) return found;
+    const { grant, bridge } = found;
     const pending = await hold.tx((tx) => openSpends(grant.permissionId, tx));
     const nowSeconds = Math.floor(Date.now() / 1000);
-    const refused = await fit(grant, calls, { read: { clients: chainClients }, pending, nowSeconds });
+    const refused = await fit(grant, run.calls, { read: { clients: chainClients }, pending, nowSeconds });
     if (refused) return refusal(described(refused, grant.permissionId) + NOTHING_SENT);
     const head = await chainClients
       .publicClient(grant.chainId)
@@ -150,22 +238,33 @@ async function submitUnder(
       .catch(() => undefined);
     if (head === undefined) return refusal(UNREADABLE);
 
-    const spent = [...spendOf(calls, grant.account)];
+    const spent = [...spendOf(run.calls, grant.account)];
     const ids = await hold.tx(async (tx) => {
       if (!(await hold.owns(tx))) throw new FloatLost();
-      const row = { connectionId: t.connectionId, permissionId: grant.permissionId, chainId: grant.chainId };
-      const send = { ...row, sender: t.sessionAddress, periodStart: nowSeconds, fromBlock: head };
+      const send = {
+        connectionId: t.connectionId,
+        idempotencyKey: run.key,
+        requestHash: run.hash,
+        permissionId: grant.permissionId,
+        chainId: grant.chainId,
+        sender: t.sessionAddress,
+        periodStart: nowSeconds,
+        fromBlock: head,
+      };
       if (spent.length === 0) return [await recordSend(tx, { ...send, token: null, amount: 0n })];
       return Promise.all(spent.map(([token, amount]) => recordSend(tx, { ...send, token: token as Address, amount })));
     });
+    let submitted: Submitted;
     try {
       hold.assertHeld();
-      const wire = calls.map((c) => ({ to: c.to, value: numberToHex(c.value), data: c.data }));
+      const wire = run.calls.map((c) => ({ to: c.to, value: numberToHex(c.value), data: c.data }));
       const sent = (await bridge.request('wallet_sendCalls', [{ calls: wire }])) as { id: Hex };
-      return { ids, submitted: { sent: sent.id } };
+      submitted = { sent: sent.id };
     } catch (err) {
-      return { ids, submitted: lostInTransit(err) ? { lost: err } : { unsent: err } };
+      submitted = lostInTransit(err) ? { lost: err } : { unsent: err };
     }
+    await hold.tx((tx) => noteSubmitted(tx, ids, submitted)).catch(logFailure('execute submit write failed'));
+    return { ids, submitted, bridge };
   });
 }
 
@@ -180,52 +279,43 @@ function unsentReply(err: unknown, permissionId: string): ToolResult {
   );
 }
 
-/**
- * The float lock is held while the batch is checked, recorded and submitted, not while
- * its receipt is awaited: a later run counts this one's open rows until they settle.
- */
-async function executeUnder(t: Tenant, grant: LiveGrant, calls: Call[], bridge: SessionBridge) {
-  const reserved = await inTurn(t.connectionId, () => submitUnder(t, grant, calls, bridge));
+/** The receipt is awaited outside the float lock: a later run counts this one's open rows until they settle. */
+async function executeUnder(t: Tenant, run: Run) {
+  const reserved = await inTurn(t.connectionId, () => submitUnder(t, run));
   if (!('submitted' in reserved)) return reserved;
-  const { ids, submitted } = reserved;
-  if ('unsent' in submitted) {
-    await release(ids).catch(logFailure('execute conclusion write failed'));
-    return unsentReply(submitted.unsent, grant.permissionId);
-  }
+  const { ids, submitted, bridge } = reserved;
+  if ('unsent' in submitted) return unsentReply(submitted.unsent, run.permissionId);
   if ('lost' in submitted) {
-    await handToReconciler(ids).catch(logFailure('execute conclusion write failed'));
     log('warn', { msg: 'execute may have been submitted', error: errorLabel(submitted.lost) });
-    return refusal(MAYBE_SENT);
+    return refusal(maybeSent(run.key));
   }
-  await noteCallsId(ids, submitted.sent).catch(logFailure('execute userOp hash write failed'));
-  const { out, refused } = await receiptOf(bridge, submitted.sent);
+  const { out, refused } = await receiptOf(bridge, run.key, submitted.sent);
   await concluded(ids, out).catch(logFailure('execute conclusion write failed'));
-  if (refused) return refusal(`${described(refused, grant.permissionId)} ${out.summary}`);
-  return { ...reply(out), isError: out.status === 'reverted' };
+  if (refused) return refusal(`${described(refused, run.permissionId)} ${out.summary}`);
+  return answered(out);
 }
 
 export async function sessionExecute(t: Tenant, input: ExecuteInput) {
   if (!spends(t.scopes)) return refusal(NO_PAY_SCOPE);
   if (await isPaymentsPaused()) return refusal('Payments are paused on this server, so nothing was sent.');
   const chainId = input.chainId ?? t.chainId;
-  const grant = await unrevokedGrant(t.connectionId, input.permissionId);
-  if (!grant || grant.chainId !== chainId) {
-    return refusal(described({ reason: 'no-grant' }, input.permissionId) + NOTHING_SENT);
-  }
-  if (grant.kind === 'x402-budget') {
-    return refusal(
-      `no-grant: ${input.permissionId} is this connection's x402 budget, which pays x402 services only. Execute under a custom grant from jaw_grant_permissions.${NOTHING_SENT}`
-    );
-  }
-  const bridge = sessionBridge(t, grant);
-  if (!bridge) return refusal('This server has no paymaster key, so it cannot pay the fee to send.');
   const calls: Call[] = input.calls.map((c) => ({
     to: getAddress(c.to),
     value: BigInt(c.value ?? '0'),
-    data: (c.data ?? '0x') as Hex,
+    data: (c.data ?? '0x').toLowerCase() as Hex,
   }));
+  const hash = createHash('sha256')
+    .update(
+      JSON.stringify([
+        chainId,
+        input.permissionId.toLowerCase(),
+        calls.map((c) => [c.to.toLowerCase(), c.value.toString(), c.data]),
+      ])
+    )
+    .digest('hex');
+  const key = input.idempotencyKey ?? `auto_${randomBytes(12).toString('base64url')}`;
   try {
-    return await executeUnder(t, grant, calls, bridge);
+    return await executeUnder(t, { key, hash, permissionId: input.permissionId, chainId, calls });
   } catch (err) {
     if (err instanceof ChainUnreadable) return refusal(UNREADABLE);
     if (err instanceof FloatBusy) return refusal('A payment on this connection is in progress. Try again in a moment.');
@@ -240,7 +330,8 @@ export function registerSessionExecuteTool(server: McpServer) {
       description:
         'Send up to 10 contract calls as the session key, under a custom grant the owner approved with jaw_grant_permissions. No prompt to the owner: the grant is the limit. ' +
         'Before any userOp it checks every call against the grant and what each spend limit has left, and refuses by name: call-not-allowed, over-limit, expired or no-grant. ' +
-        "The x402 budget pays x402 services only and is refused here. The fee comes from the session key's own USDC, which the x402 budget funds.",
+        "The x402 budget pays x402 services only and is refused here. The fee comes from the session key's own USDC, which the x402 budget funds. " +
+        'Send the same idempotencyKey and calls to retry: a retry returns the first run and never sends twice.',
       inputSchema: executeInput,
       outputSchema: output,
     },

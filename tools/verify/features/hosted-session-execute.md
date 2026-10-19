@@ -13,14 +13,15 @@
 - `race`: two executes that together pass the limit. One lands and the other returns `over-limit:` within 1500 ms of its turn. A run holds the connection's float lock through its submit, not its receipt, and a run still `open` in `sends` counts against the next.
 - `history`: `jaw_session_history` lists each run under `executes`, one row per token moved, with `userOpHash`, `state` and `txHash`.
 - `reconciler`: a run whose receipt did not come back within 60 seconds stays `open` and is handed to the reconciler. `/api/cron/reconcile` settles it `landed` from the EntryPoint `UserOperationEvent`.
+- `idempotent`: the same `idempotencyKey` and calls again returns the first run's `userOpHash` and sends no second userOp; the same key with other calls returns `idempotency_conflict:`.
 - `pay-unaffected`: an x402 payment after an execute still pays from the x402 budget, and the custom grant's counter does not move.
 - `revert-mapped`: a permission manager revert after `fit` passed (`UnauthorizedCall`, `ExceededSpendLimit`, `AfterPermissionEnd`) comes back under the same names. Unit tests cover it (`session-execute.test.ts`), since a live drive cannot make the chain disagree with `fit`.
 
 ## How to get to it (user POV)
 
 - An MCP client on the hosted server with scope `x402:pay`, whose connection holds an x402 budget, so the session key has USDC for fees, and a custom grant from `jaw_grant_permissions`.
-- `jaw_session_execute` takes `permissionId`, optional `chainId` (the connection's by default) and `calls`, 1 to 10 `{ to, value?, data? }`. `value` is wei as a decimal integer and `data` is hex.
-- The result holds `status` (`landed`, `reverted` or `unconfirmed`), `userOpHash`, `txHash` and a `summary`.
+- `jaw_session_execute` takes `permissionId`, optional `chainId` (the connection's by default), optional `idempotencyKey` and `calls`, 1 to 10 `{ to, value?, data? }`. `value` is wei as a decimal integer and `data` is hex.
+- The result holds `status` (`landed`, `reverted` or `unconfirmed`), `idempotencyKey`, `userOpHash`, `txHash` and a `summary`.
 - By hand: `node tools/verify/hosted-client.mjs "$MCP_PUBLIC_URL"`, then `execute <permissionId> '<json array>'`.
 
 ## Driving it
@@ -38,4 +39,5 @@ Set up (Owner lane): `grant '{"calls":[{"target":"0x036CbD53842c5426634e7929541e
 - race: two clients on the same connection, each sending 0.015 USDC under a 0.02 a day grant, started together. Pass: one `landed`, the other `over-limit:`, one new transfer on chain.
 - history: `history` after execute-happy. Pass: `executes` holds the run with its `userOpHash` and `txHash`.
 - reconciler: with the stack's bundler slowed or a receipt past 60 seconds, the run answers `unconfirmed`, then `curl -H "Authorization: Bearer $JAW_MCP_CRON_SECRET" "$MCP_PUBLIC_URL/api/cron/reconcile"`. Pass: the report's `sends.landed` counts it and its row reads `landed` with the transaction hash.
+- idempotent: run execute-happy's call twice as `execute <id> '<calls>' '' r2`, then once more with another amount under the same key. Pass: both first answers carry the same `userOpHash`, the balance drops once, and the third is `idempotency_conflict:`.
 - pay-unaffected: `pay <seller url>` after execute-happy. Pass: the payment settles, and `getCurrentPeriod` for the custom grant reads the same spend as before it.

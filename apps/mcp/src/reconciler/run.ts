@@ -137,6 +137,8 @@ async function sendOutcome(row: SendRow, clients: ChainClients) {
   const client = clients.publicClient(row.chainId);
   const head = await client.getBlockNumber();
   const windowEnd = row.fromBlock + SEND_WINDOW_BLOCKS;
+  // An execute settles only by its own userOp hash: its sender also sends refills and other executes.
+  if (row.idempotencyKey && !row.callsId) return head >= windowEnd ? { state: 'released' as const } : undefined;
   const logs = await client.getLogs({
     address: entryPoint08Address,
     event: userOperationEvent,

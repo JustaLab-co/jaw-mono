@@ -18,6 +18,8 @@ const open = (id: string) => and(eq(sends.id, id), eq(sends.state, 'open'));
 
 export interface NewSend {
   connectionId: string;
+  idempotencyKey: string;
+  requestHash: string;
   permissionId: string;
   chainId: number;
   sender: Address;
@@ -40,21 +42,36 @@ export async function recordSend(tx: Tx, s: NewSend): Promise<string> {
   return id;
 }
 
-export async function noteCallsId(ids: string[], callsId: Hex): Promise<void> {
-  await getDb()
+export async function runOf(tx: Tx, connectionId: string, key: string): Promise<SendRow[]> {
+  return tx
+    .select()
+    .from(sends)
+    .where(and(eq(sends.connectionId, connectionId), eq(sends.idempotencyKey, key)));
+}
+
+/** A run that never reached the bundler leaves nothing behind, so its key can run again. */
+export async function dropSends(tx: Tx, ids: string[]): Promise<void> {
+  await tx.delete(sends).where(and(inArray(sends.id, ids), eq(sends.state, 'open')));
+}
+
+export async function noteCallsId(tx: Tx, ids: string[], callsId: Hex): Promise<void> {
+  await tx
     .update(sends)
     .set({ callsId })
     .where(and(inArray(sends.id, ids), eq(sends.state, 'open')));
 }
 
-export async function handToReconciler(ids: string[]): Promise<void> {
-  await getDb()
+export async function handToReconciler(ids: string[], tx: Tx = getDb()): Promise<void> {
+  await tx
     .update(sends)
     .set({ leaseUntil: dbNow })
     .where(and(inArray(sends.id, ids), eq(sends.state, 'open')));
 }
 
-export async function settleSend(id: string, end: { state: 'landed'; txHash: Hex } | { state: 'released' }) {
+export async function settleSend(
+  id: string,
+  end: { state: 'landed'; txHash: Hex; callsId?: Hex } | { state: 'released' }
+) {
   await getDb()
     .update(sends)
     .set({ ...end, finishedAt: dbNow, leaseUntil: dbNow })
