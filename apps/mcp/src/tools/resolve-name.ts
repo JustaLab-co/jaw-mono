@@ -1,12 +1,23 @@
 import type { McpServer } from '@modelcontextprotocol/server';
-import { createPublicClient, getAddress, http, isAddress, type PublicClient } from 'viem';
+import {
+  createPublicClient,
+  getAddress,
+  http,
+  isAddress,
+  isHex,
+  type CcipRequestParameters,
+  type PublicClient,
+  type Transport,
+} from 'viem';
 import { mainnet } from 'viem/chains';
 import { normalize } from 'viem/ens';
+import { FetchRefused } from '@jaw.id/agent';
 import { z } from 'zod';
 import { tenant } from '@/connections/auth';
 import { config } from '@/connections/config';
 import { errorLabel, log } from '@/lib/edge';
 import { reply } from '@/lib/fence';
+import { safeFetch } from '@/lib/safe-fetch';
 import { refusal } from './reply';
 
 const LOOKUP_MS = 8_000;
@@ -33,8 +44,31 @@ type Reason = z.infer<typeof reason>;
 
 export type EnsClient = Pick<PublicClient, 'getEnsAddress' | 'getEnsName'>;
 
-const mainnetClient = (): EnsClient =>
-  createPublicClient({ chain: mainnet, transport: http(config().mainnetRpcUrl, { timeout: LOOKUP_MS }) });
+// CCIP-Read gateway URLs come from resolver contracts, so they go through the guarded fetch.
+export async function ccipRequest({ data, sender, urls, requestOptions }: CcipRequestParameters) {
+  const guarded = safeFetch(new Set());
+  for (const url of urls) {
+    const get = url.includes('{data}');
+    const res = await guarded(url.replace('{sender}', sender.toLowerCase()).replace('{data}', data), {
+      method: get ? 'GET' : 'POST',
+      headers: get ? {} : { 'Content-Type': 'application/json' },
+      body: get ? undefined : JSON.stringify({ data, sender }),
+      signal: requestOptions?.signal,
+    }).catch((err) => {
+      if (err instanceof FetchRefused) throw err;
+      return null;
+    });
+    if (!res?.ok) continue;
+    const body = (await res.json().catch(() => null)) as { data?: unknown } | null;
+    if (isHex(body?.data)) return body.data;
+  }
+  throw new Error('no gateway answered');
+}
+
+export const ensClient = (transport: Transport): EnsClient =>
+  createPublicClient({ chain: mainnet, transport, ccipRead: { request: ccipRequest } });
+
+const mainnetClient = () => ensClient(http(config().mainnetRpcUrl, { timeout: LOOKUP_MS }));
 
 const unresolved = (why: Reason, summary: string, name: string | null = null, address: string | null = null) =>
   resolveOutput.parse({ name, address, chainId, reason: why, summary });

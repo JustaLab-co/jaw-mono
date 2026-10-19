@@ -1,7 +1,8 @@
-import { beforeAll, describe, expect, it } from 'vitest';
+import { beforeAll, describe, expect, it, vi } from 'vitest';
 import { useTestDb } from '@/db/test-db';
 import { callTool, connect, setTestEnv } from '@/connections/testkit';
-import { lookup, type EnsClient } from './resolve-name';
+import { custom, encodeErrorResult, offchainLookupAbiItem } from 'viem';
+import { ensClient, lookup, type EnsClient } from './resolve-name';
 
 setTestEnv();
 process.env.JAW_MCP_MAINNET_RPC_URL = 'http://127.0.0.1:9';
@@ -80,6 +81,38 @@ describe('lookup', () => {
     const r = await lookup({ name: 'vitalik.eth' }, down);
     expect(r).toMatchObject({ reason: 'lookup_failed' });
     expect(JSON.stringify(r)).not.toContain('gateway');
+  });
+});
+
+describe('ccip-read gateways', () => {
+  const resolverAnswering = (url: string) =>
+    custom({
+      request: async ({ method, params }) => {
+        if (method !== 'eth_call') throw new Error(`unexpected ${method}`);
+        const to = (params as [{ to: `0x${string}` }])[0].to;
+        const data = encodeErrorResult({
+          abi: [offchainLookupAbiItem],
+          errorName: 'OffchainLookup',
+          args: [to, [url], '0x1234', '0x12345678', '0x'],
+        });
+        throw Object.assign(new Error('execution reverted'), { code: 3, data });
+      },
+    });
+
+  it.each(['https://127.0.0.1/{sender}/{data}.json', 'https://169.254.169.254/gateway', 'https://[::1]/gateway'])(
+    'given a resolver that points the gateway at %s, refuses without connecting',
+    async (url) => {
+      const fetched = vi.spyOn(globalThis, 'fetch');
+      const r = await lookup({ name: 'vitalik.eth' }, ensClient(resolverAnswering(url)));
+      expect(r).toMatchObject({ reason: 'lookup_failed', address: null });
+      expect(fetched).not.toHaveBeenCalled();
+      fetched.mockRestore();
+    }
+  );
+
+  it('given a gateway over plain http, refuses', async () => {
+    const r = await lookup({ name: 'vitalik.eth' }, ensClient(resolverAnswering('http://example.com/gateway')));
+    expect(r).toMatchObject({ reason: 'lookup_failed' });
   });
 });
 
