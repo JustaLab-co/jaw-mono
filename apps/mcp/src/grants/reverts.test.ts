@@ -4,13 +4,14 @@ import {
   encodeEventTopics,
   HttpRequestError,
   parseAbi,
+  RpcRequestError,
   toFunctionSelector,
   type Address,
   type Hex,
 } from 'viem';
-import { entryPoint08Abi } from 'viem/account-abstraction';
+import { entryPoint08Abi, getUserOperationError } from 'viem/account-abstraction';
 import { describe, expect, it } from 'vitest';
-import { lostInTransit, refusalOfFailure, refusalOfLogs } from './reverts';
+import { mayHaveBeenSent, refusalOfFailure, refusalOfLogs } from './reverts';
 
 const CAROL: Address = '0x3333333333333333333333333333333333333333';
 const TRANSFER = toFunctionSelector('transfer(address,uint256)');
@@ -26,10 +27,23 @@ const overLimit = encodeErrorResult({
   args: [2_000_000n, 1_000_000n],
 });
 
+const rpcError = (error: { code: number; message: string; data?: unknown }) =>
+  new RpcRequestError({ body: {}, error, url: 'http://bundler.test' });
+const bundlerAnswered = (cause: Error) =>
+  getUserOperationError(
+    cause as never,
+    {
+      sender: CAROL,
+      nonce: 0n,
+      callData: '0x',
+      signature: '0x',
+    } as never
+  );
+
 describe('refusalOfFailure', () => {
   it('names an ExceededSpendLimit in the revert data a simulation failed with as over-limit', () => {
     const err = new Error('Could not size the ERC-20 paymaster approval', {
-      cause: { name: 'RpcRequestError', details: `UserOperation reverted during simulation with reason: ${overLimit}` },
+      cause: rpcError({ code: -32521, message: 'execution reverted', data: overLimit }),
     });
     expect(refusalOfFailure(err)).toEqual({ reason: 'over-limit', onChain: true });
   });
@@ -58,7 +72,17 @@ describe('refusalOfFailure', () => {
       errorName: 'JustaPermissionManager_AfterPermissionEnd',
       args: [1_800_000_000, 1_799_999_999],
     });
-    expect(refusalOfFailure({ details: `execution reverted: ${data}` })).toEqual({ reason: 'expired' });
+    expect(refusalOfFailure(rpcError({ code: -32521, message: 'execution reverted', data }))).toEqual({
+      reason: 'expired',
+    });
+  });
+
+  it('never reads the bundler message viem keeps as details, even when it reads like a manager error', () => {
+    const err = rpcError({
+      code: -32500,
+      message: `UserOperation reverted during simulation with reason: ${overLimit}`,
+    });
+    expect(refusalOfFailure(bundlerAnswered(err))).toBe(undefined);
   });
 
   it('never reads a message, which can quote the calldata the agent chose', () => {
@@ -66,15 +90,31 @@ describe('refusalOfFailure', () => {
   });
 
   it('names nothing in revert data that carries no manager error', () => {
-    expect(refusalOfFailure({ details: "AA21 didn't pay prefund 0xdeadbeefcafe" })).toBe(undefined);
+    expect(refusalOfFailure({ data: '0xdeadbeefcafe' })).toBe(undefined);
   });
 });
 
-describe('lostInTransit', () => {
-  it('tells a lost answer from a refusal the bundler sent back', () => {
-    const lost = new Error('send failed', { cause: new HttpRequestError({ url: 'http://bundler.test' }) });
-    expect(lostInTransit(lost)).toBe(true);
-    expect(lostInTransit(new Error('send failed', { cause: { name: 'RpcRequestError' } }))).toBe(false);
+describe('mayHaveBeenSent', () => {
+  it('counts any bundler answer to the userOp as maybe sent, unless its estimate reverted', () => {
+    expect(mayHaveBeenSent(bundlerAnswered(rpcError({ code: -32602, message: 'already known' })))).toBe(true);
+    expect(mayHaveBeenSent(bundlerAnswered(rpcError({ code: -32500, message: 'AA25 invalid account nonce' })))).toBe(
+      true
+    );
+    const reverted = rpcError({ code: -32521, message: 'execution reverted', data: overLimit });
+    expect(mayHaveBeenSent(bundlerAnswered(reverted))).toBe(false);
+    expect(mayHaveBeenSent(bundlerAnswered(rpcError({ code: -32521, message: 'execution reverted' })))).toBe(false);
+    const hexOnRefusal = rpcError({ code: -32500, message: 'AA25 invalid account nonce', data: '0xdeadbeef' });
+    expect(mayHaveBeenSent(bundlerAnswered(hexOnRefusal))).toBe(true);
+  });
+
+  it('counts a lost answer to the userOp as maybe sent, and any failure before the userOp existed as not', () => {
+    const lost = new HttpRequestError({ url: 'http://bundler.test', status: 502 });
+    expect(mayHaveBeenSent(bundlerAnswered(lost))).toBe(true);
+    const sizing = (cause: Error) => new Error('Could not size the ERC-20 paymaster approval', { cause });
+    const prefund = bundlerAnswered(rpcError({ code: -32500, message: 'AA21 did not pay prefund' }));
+    expect(mayHaveBeenSent(sizing(prefund))).toBe(false);
+    expect(mayHaveBeenSent(sizing(lost))).toBe(false);
+    expect(mayHaveBeenSent(new Error('the permission store did not answer', { cause: lost }))).toBe(false);
   });
 });
 

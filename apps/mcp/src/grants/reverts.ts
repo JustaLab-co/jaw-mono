@@ -1,4 +1,4 @@
-import { decodeErrorResult, decodeEventLog, parseAbi, toFunctionSelector, type Hex } from 'viem';
+import { decodeErrorResult, decodeEventLog, isHex, parseAbi, toFunctionSelector, type Hex } from 'viem';
 import { entryPoint08Abi } from 'viem/account-abstraction';
 import type { Refusal } from './fit';
 
@@ -56,8 +56,6 @@ function refusalWithin(blob: string): Refusal | undefined {
   return undefined;
 }
 
-const TRANSPORT_ERRORS = new Set(['TimeoutError', 'HttpRequestError', 'WebSocketRequestError', 'SocketClosedError']);
-
 function chainOf(failure: unknown): object[] {
   const errors: object[] = [];
   for (let at = failure; at && typeof at === 'object' && !errors.includes(at); at = (at as { cause?: unknown }).cause) {
@@ -66,24 +64,28 @@ function chainOf(failure: unknown): object[] {
   return errors;
 }
 
-/** Whether the request may have reached the bundler and only its answer was lost. */
-export const lostInTransit = (failure: unknown) =>
-  chainOf(failure).some((e) => TRANSPORT_ERRORS.has((e as { name?: string }).name ?? ''));
+function revertDataOf(e: object): Hex | undefined {
+  const { data } = e as { data?: unknown };
+  const blob = typeof data === 'string' ? data : (data as { revertData?: unknown } | undefined)?.revertData;
+  return typeof blob === 'string' && isHex(blob) ? blob : undefined;
+}
 
 /**
- * The refusal named by a manager revert in a failed send's revert data. Only the fields
- * a node or bundler answers with are read, never a message, which can quote the request.
+ * Anything thrown before the userOp is built does not have viem's UserOperationExecutionError on
+ * top. viem throws that same error from the last estimate and from eth_sendUserOperation, so past
+ * that point only a simulated revert, the bundler's -32521, proves nothing went out.
  */
+export function mayHaveBeenSent(failure: unknown): boolean {
+  const errors = chainOf(failure);
+  if ((errors[0] as { name?: string } | undefined)?.name !== 'UserOperationExecutionError') return false;
+  return !errors.some((e) => (e as { code?: unknown }).code === -32521);
+}
+
 export function refusalOfFailure(failure: unknown): Refusal | undefined {
   for (const e of chainOf(failure)) {
-    const { details, data } = e as { details?: unknown; data?: unknown };
-    for (const field of [details, data]) {
-      const text = typeof field === 'string' ? field : JSON.stringify(field ?? null);
-      for (const blob of text.match(/0x[0-9a-fA-F]{8,}/g) ?? []) {
-        const refused = refusalWithin(blob);
-        if (refused) return refused;
-      }
-    }
+    const data = revertDataOf(e);
+    const refused = data && refusalWithin(data);
+    if (refused) return refused;
   }
   return undefined;
 }

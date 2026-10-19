@@ -9,12 +9,13 @@ import {
   erc20Abi,
   HttpRequestError,
   parseAbi,
+  RpcRequestError,
   toFunctionSelector,
   type Address,
   type Hex,
   type PublicClient,
 } from 'viem';
-import { entryPoint08Abi } from 'viem/account-abstraction';
+import { entryPoint08Abi, getUserOperationError } from 'viem/account-abstraction';
 import { afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
 import { verifyBearer, type Tenant } from '@/connections/auth';
 import { callTool, connect, setTestEnv } from '@/connections/testkit';
@@ -24,6 +25,7 @@ import { lockWaiters, TEST_PG_URL, useTestDb, useTestPostgres } from '@/db/test-
 import { recordGrant } from '@/grants/permission';
 import { x402Budget } from '@/grants/store';
 import { reconcile } from '@/reconciler/run';
+import { ANY_TARGET } from '@jaw.id/core';
 import { RECEIPT_MS } from './session-execute';
 
 const USDC: Address = '0x036CbD53842c5426634e7929541eC2318f3dCF7e';
@@ -125,7 +127,7 @@ afterEach(async () => {
 
 const NOW = () => Math.floor(Date.now() / 1000);
 
-async function withCustomGrant(perDay = 1_000_000n, end = NOW() + 86_400) {
+async function withCustomGrant(perDay = 1_000_000n, end = NOW() + 86_400, target: Address = USDC) {
   const c = await connect();
   const t = (await verifyBearer(c.access_token))?.extra?.tenant as Tenant;
   const permissionId = `0x${randomBytes(32).toString('hex')}` as Hex;
@@ -135,7 +137,7 @@ async function withCustomGrant(perDay = 1_000_000n, end = NOW() + 86_400) {
     start: NOW() - 60,
     end,
     salt: '0x01',
-    calls: [{ target: USDC, selector: toFunctionSelector('transfer(address,uint256)') }],
+    calls: [{ target, selector: toFunctionSelector('transfer(address,uint256)') }],
     spends: [{ token: USDC, allowance: perDay.toString(), unit: 'day', multiplier: 1 }],
   };
   await getDb().transaction((tx) =>
@@ -176,6 +178,25 @@ const overLimitRevert = encodeErrorResult({
   errorName: 'JustaPermissionManager_ExceededSpendLimit',
   args: [1_500_000n, 1_000_000n],
 });
+
+const bundlerAnswered = (cause: Error) =>
+  getUserOperationError(
+    cause as never,
+    {
+      sender: BOB,
+      nonce: 0n,
+      callData: '0x',
+      signature: '0x',
+    } as never
+  );
+const bundlerSaid = (code: number, message: string) =>
+  bundlerAnswered(
+    new RpcRequestError({
+      body: { method: 'eth_sendUserOperation' },
+      error: { code, message },
+      url: 'http://bundler.test',
+    })
+  );
 
 describe('jaw_session_execute', () => {
   it('sends a transfer the custom grant allows with no owner prompt, records it landed, and history lists it', async () => {
@@ -265,13 +286,71 @@ describe('jaw_session_execute', () => {
   it('names an ExceededSpendLimit the bundler reports after fit passed as over-limit, and releases the rows', async () => {
     const { c, t, permissionId } = await withCustomGrant();
     bridge.fail = new Error('Could not size the ERC-20 paymaster approval', {
-      cause: { name: 'RpcRequestError', details: `execution reverted: ${overLimitRevert}` },
+      cause: new RpcRequestError({
+        body: {},
+        error: { code: -32521, message: 'execution reverted', data: overLimitRevert },
+        url: 'http://bundler.test',
+      }),
     });
 
     const result = await execute(c.access_token, permissionId, [transfer(BOB, 1n)]);
 
     expect(result.content[0].text).toMatch(/^over-limit: .*Nothing was sent\.$/);
     expect((await rowsOf(t.connectionId)).map((r) => r.state)).toEqual(['released']);
+  });
+
+  it('given a grant on ANY_TARGET, then a manager error in a revert is not named, since the agent chose the contract that reverted', async () => {
+    const { c, permissionId } = await withCustomGrant(1_000_000n, NOW() + 86_400, ANY_TARGET);
+    bridge.fail = new Error('Could not size the ERC-20 paymaster approval', {
+      cause: new RpcRequestError({
+        body: {},
+        error: { code: -32521, message: 'execution reverted', data: overLimitRevert },
+        url: 'http://bundler.test',
+      }),
+    });
+
+    const result = await execute(c.access_token, permissionId, [transfer(BOB, 1n)]);
+
+    expect(result.content[0].text).toMatch(/^Nothing was sent: the batch failed in simulation/);
+  });
+
+  it('given "already known" from the bundler, as a resend of an op it took answers, then the first reply says it may have been sent and the rows stay held', async () => {
+    const { c, t, permissionId } = await withCustomGrant();
+    bridge.fail = bundlerSaid(-32602, 'already known');
+
+    const result = await execute(c.access_token, permissionId, [transfer(BOB, 600_000n)]);
+
+    expect(result.content[0].text).toMatch(/may have been sent anyway.*jaw_session_history/);
+    expect(result.content[0].text).not.toMatch(/Nothing was sent/);
+    expect((await rowsOf(t.connectionId)).map((r) => r.state)).toEqual(['open']);
+    bridge.fail = undefined;
+    const next = await execute(c.access_token, permissionId, [transfer(CAROL, 600_000n)]);
+    expect(next.content[0].text).toMatch(/^over-limit: .* has 400000 left this period/);
+  });
+
+  it('given an AA25 nonce error from the bundler, then the first reply says it may have been sent and the rows stay held', async () => {
+    const { c, t, permissionId } = await withCustomGrant();
+    bridge.fail = bundlerSaid(-32500, 'AA25 invalid account nonce');
+
+    const result = await execute(c.access_token, permissionId, [transfer(BOB, 600_000n)]);
+
+    expect(result.content[0].text).toMatch(/may have been sent anyway/);
+    expect(result.content[0].text).not.toMatch(/Nothing was sent/);
+    expect((await rowsOf(t.connectionId)).map((r) => r.state)).toEqual(['open']);
+  });
+
+  it('given a 5xx on the send and the bundler then up again, then the reply says it may have been sent and the same key never sends again', async () => {
+    const { c, t, permissionId } = await withCustomGrant();
+    bridge.fail = bundlerAnswered(new HttpRequestError({ url: 'http://bundler.test', status: 502 }));
+
+    const first = await execute(c.access_token, permissionId, [transfer(BOB, 600_000n)], 'pay-bob');
+    bridge.fail = undefined;
+    const retry = await execute(c.access_token, permissionId, [transfer(BOB, 600_000n)], 'pay-bob');
+
+    expect(first.content[0].text).toMatch(/may have been sent anyway/);
+    expect(retry.content[0].text).toMatch(/may have been sent anyway/);
+    expect(bridge.attempts).toBe(1);
+    expect((await rowsOf(t.connectionId)).map((r) => r.state)).toEqual(['open']);
   });
 
   it('names an over-limit revert the EntryPoint logged for a userOp that reverted on chain', async () => {
@@ -293,9 +372,9 @@ describe('jaw_session_execute', () => {
 
   it('given a send whose answer was lost in transit, then it says it may have been sent and keeps the spend held', async () => {
     const { c, t, permissionId } = await withCustomGrant();
-    bridge.fail = new Error('send failed', {
-      cause: new HttpRequestError({ url: 'http://bundler.test', body: { callData: overLimitRevert } }),
-    });
+    bridge.fail = bundlerAnswered(
+      new HttpRequestError({ url: 'http://bundler.test', body: { callData: overLimitRevert } })
+    );
 
     const result = await execute(c.access_token, permissionId, [transfer(BOB, 600_000n)]);
 
@@ -392,7 +471,7 @@ describe('jaw_session_execute', () => {
 
   it('given a retry with the same idempotencyKey after the answer was lost, then it does not send again', async () => {
     const { c, t, permissionId } = await withCustomGrant();
-    bridge.fail = new Error('send failed', { cause: new HttpRequestError({ url: 'http://bundler.test' }) });
+    bridge.fail = bundlerAnswered(new HttpRequestError({ url: 'http://bundler.test' }));
     await execute(c.access_token, permissionId, [transfer(BOB, 100_000n)], 'pay-bob');
     bridge.fail = undefined;
 
@@ -403,9 +482,22 @@ describe('jaw_session_execute', () => {
     expect((await rowsOf(t.connectionId)).map((r) => r.state)).toEqual(['open']);
   });
 
-  it('given the same idempotencyKey after a failure the server read as unsent, then it still does not send again', async () => {
+  it('given the same idempotencyKey after the bundler answered "already known", then it says it may have been sent and does not send again', async () => {
+    const { c, t, permissionId } = await withCustomGrant();
+    bridge.fail = bundlerSaid(-32602, 'already known');
+    await execute(c.access_token, permissionId, [transfer(BOB, 1n)], 'pay-bob');
+    bridge.fail = undefined;
+
+    const retry = await execute(c.access_token, permissionId, [transfer(BOB, 1n)], 'pay-bob');
+
+    expect(retry.content[0].text).toMatch(/may have been sent anyway/);
+    expect(bridge.attempts).toBe(1);
+    expect((await rowsOf(t.connectionId)).map((r) => r.state)).toEqual(['open']);
+  });
+
+  it('given the same idempotencyKey after a failure before the userOp existed, then it still does not send again', async () => {
     const { c, permissionId } = await withCustomGrant();
-    bridge.fail = new Error('already known');
+    bridge.fail = new Error('the permission store did not answer');
     await execute(c.access_token, permissionId, [transfer(BOB, 1n)], 'pay-bob');
     bridge.fail = undefined;
 
@@ -487,7 +579,7 @@ describe('jaw_session_execute', () => {
 
   it('given a lost run with no userOp hash, then the reconciler never lands it on another operation of the sender', async () => {
     const { c, t, permissionId } = await withCustomGrant();
-    bridge.fail = new Error('send failed', { cause: new HttpRequestError({ url: 'http://bundler.test' }) });
+    bridge.fail = bundlerAnswered(new HttpRequestError({ url: 'http://bundler.test' }));
     await execute(c.access_token, permissionId, [transfer(BOB, 100_000n)]);
     bridge.fail = undefined;
     const other: Hex = `0x${'d'.repeat(64)}`;

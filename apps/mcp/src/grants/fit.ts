@@ -86,6 +86,9 @@ function callRefused(grant: LiveGrant, call: Call): Refusal | undefined {
   return allowed ? undefined : refused;
 }
 
+export const namesEveryTarget = (grant: LiveGrant, calls: Call[]) =>
+  calls.every((call) => grant.permission.calls.some((c) => isAddressEqual(c.target as Address, call.to)));
+
 export async function fit(grant: LiveGrant, calls: Call[], ctx: FitContext): Promise<Refusal | undefined> {
   for (const call of calls) {
     const refused = callRefused(grant, call);

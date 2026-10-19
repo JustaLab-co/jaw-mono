@@ -11,8 +11,8 @@ import { spends } from '@/connections/scopes';
 import type { Tx } from '@/db/client';
 import { connections } from '@/db/schema';
 import { isPaymentsPaused } from '@/db/settings';
-import { ChainUnreadable, fit, spendOf, type Call, type Refusal } from '@/grants/fit';
-import { lostInTransit, refusalOfFailure, refusalOfLogs } from '@/grants/reverts';
+import { ChainUnreadable, fit, namesEveryTarget, spendOf, type Call, type Refusal } from '@/grants/fit';
+import { mayHaveBeenSent, refusalOfFailure, refusalOfLogs } from '@/grants/reverts';
 import { unrevokedGrant, type LiveGrant } from '@/grants/store';
 import { errorLabel, log } from '@/lib/edge';
 import { reply } from '@/lib/fence';
@@ -100,8 +100,8 @@ const maybeSent = (key: string) =>
   `This execute failed and may have been sent anyway. Send idempotencyKey ${key} again with the same calls: it returns this answer and never sends twice. ` +
   'Check jaw_session_history before sending it under a new key, or it may land twice.';
 const NO_HASH =
-  'This key ran without a userOp hash on record: nothing was sent, or the answer was lost and it was not seen on chain in time. ' +
-  "Its spend is no longer held. Check the account's balances before sending it under a new idempotencyKey.";
+  'This key ran with no userOp hash on record, and its spend is no longer held. It may still have been sent: ' +
+  "check the account's balances and jaw_session_history before sending it under a new idempotencyKey.";
 const notSeen = (userOpHash: string) =>
   `userOp ${userOpHash} was not seen on chain in time, so its spend is no longer held; it may still land. ` +
   "Check the account's balances before sending it under a new idempotencyKey.";
@@ -177,12 +177,11 @@ function concluded(ids: string[], out: Outcome) {
   return handToReconciler(ids, undefined, callsId);
 }
 
-// `lost`: the request may have reached the bundler and only its answer was lost.
-type Submitted = { sent: Hex } | { unsent: unknown } | { lost: unknown };
+type Submitted = { sent: Hex } | { unsent: unknown } | { maybe: unknown };
 
 function noteSubmitted(tx: Tx, ids: string[], submitted: Submitted) {
   if ('sent' in submitted) return noteCallsId(tx, ids, submitted.sent);
-  if ('lost' in submitted) return handToReconciler(ids, tx);
+  if ('maybe' in submitted) return handToReconciler(ids, tx);
   return settleSends(ids, { state: 'released' }, tx);
 }
 
@@ -209,7 +208,7 @@ async function grantFor(t: Tenant, run: Run): Promise<ToolResult | { grant: Live
   return { grant, bridge };
 }
 
-type Reserved = { ids: string[]; submitted: Submitted; bridge: SessionBridge };
+type Reserved = { ids: string[]; submitted: Submitted; bridge: SessionBridge; trustsReverts: boolean };
 
 async function submitUnder(t: Tenant, run: Run): Promise<ToolResult | Reserved> {
   return withFloat(t.connectionId, LOCK_WAIT_MS, async (hold) => {
@@ -260,20 +259,20 @@ async function submitUnder(t: Tenant, run: Run): Promise<ToolResult | Reserved> 
       const sent = (await bridge.request('wallet_sendCalls', [{ calls: wire }])) as { id: Hex };
       submitted = { sent: sent.id };
     } catch (err) {
-      submitted = lostInTransit(err) ? { lost: err } : { unsent: err };
+      submitted = mayHaveBeenSent(err) ? { maybe: err } : { unsent: err };
     }
     await hold.tx((tx) => noteSubmitted(tx, ids, submitted)).catch(logFailure('execute submit write failed'));
-    return { ids, submitted, bridge };
+    return { ids, submitted, bridge, trustsReverts: namesEveryTarget(grant, run.calls) };
   });
 }
 
-function unsentReply(err: unknown, permissionId: string): ToolResult {
-  const named = refusalOfFailure(err);
-  if (named) return refusal(described(named, permissionId) + NOTHING_SENT);
+function unsentReply(err: unknown, permissionId: string, trustsReverts: boolean): ToolResult {
+  const refused = trustsReverts ? refusalOfFailure(err) : undefined;
+  if (refused) return refusal(described(refused, permissionId) + NOTHING_SENT);
   if (err instanceof FloatLost) return refusal('Nothing was sent: this execute lost its turn on the float. Try again.');
   log('warn', { msg: 'execute not submitted', error: errorLabel(err) });
   return refusal(
-    `Nothing was sent: the batch failed in simulation or the bundler refused it (${errorLabel(err)}). ` +
+    `Nothing was sent: the batch failed in simulation or before it reached the bundler (${errorLabel(err)}). ` +
       'Usually a call reverts, or the session key holds no USDC for its fee, which an x402 budget from jaw_grant_permissions funds.'
   );
 }
@@ -281,15 +280,15 @@ function unsentReply(err: unknown, permissionId: string): ToolResult {
 async function executeUnder(t: Tenant, run: Run) {
   const reserved = await inTurn(t.connectionId, () => submitUnder(t, run));
   if (!('submitted' in reserved)) return reserved;
-  const { ids, submitted, bridge } = reserved;
-  if ('unsent' in submitted) return unsentReply(submitted.unsent, run.permissionId);
-  if ('lost' in submitted) {
-    log('warn', { msg: 'execute may have been submitted', error: errorLabel(submitted.lost) });
+  const { ids, submitted, bridge, trustsReverts } = reserved;
+  if ('unsent' in submitted) return unsentReply(submitted.unsent, run.permissionId, trustsReverts);
+  if ('maybe' in submitted) {
+    log('warn', { msg: 'execute may have been submitted', error: errorLabel(submitted.maybe) });
     return refusal(maybeSent(run.key));
   }
   const { out, refused } = await receiptOf(bridge, run.key, submitted.sent);
   await concluded(ids, out).catch(logFailure('execute conclusion write failed'));
-  if (refused) return refusal(`${described(refused, run.permissionId)} ${out.summary}`);
+  if (refused && trustsReverts) return refusal(`${described(refused, run.permissionId)} ${out.summary}`);
   return answered(out);
 }
 
@@ -317,7 +316,7 @@ export async function sessionExecute(t: Tenant, input: ExecuteInput) {
   } catch (err) {
     if (err instanceof ChainUnreadable) return refusal(UNREADABLE);
     if (err instanceof FloatBusy) return refusal('A payment on this connection is in progress. Try again in a moment.');
-    return unsentReply(err, input.permissionId);
+    return unsentReply(err, input.permissionId, false);
   }
 }
 
