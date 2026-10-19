@@ -36,7 +36,12 @@ import { getTransactionReceipt } from 'viem/actions';
 import { restCall } from '../api/index.js';
 import { PERMISSIONS_MANAGER_ADDRESS } from '../constants.js';
 import type { Chain } from '../store/index.js';
-import { grantPermissions, SPEND_PERMISSIONS_MANAGER_ABI, type PermissionsDetail } from './permissions.js';
+import {
+    buildGrantPermissionCall,
+    grantPermissions,
+    SPEND_PERMISSIONS_MANAGER_ABI,
+    type PermissionsDetail,
+} from './permissions.js';
 
 const ACCOUNT: Address = '0x1111111111111111111111111111111111111111';
 const SPENDER: Address = '0x2222222222222222222222222222222222222222';
@@ -107,4 +112,28 @@ describe('a call checker on wallet_grantPermissions', () => {
         expect(approvedPermission().calls[0].checker).toBe(zeroAddress);
         expect(response.calls[0]).toHaveProperty('checker', zeroAddress);
     });
+});
+
+describe('a malformed call checker', () => {
+    // A garbage checker would still hash, to a permission the dapp can never
+    // rebuild or revoke, so it is refused before the screen estimates or signs.
+    it.each(['0x1234', 'not-an-address', '0x88888888888888888888888888888888888888zz'])(
+        'is refused as invalid params before anything is built: %s',
+        (checker) => {
+            const build = () =>
+                buildGrantPermissionCall(ACCOUNT, SPENDER, 2000000000, {
+                    calls: [
+                        { target: TARGET, functionSignature: 'transfer(address,uint256)', checker: checker as Address },
+                    ],
+                });
+
+            expect(build).toThrow(
+                expect.objectContaining({
+                    code: -32602,
+                    message: expect.stringContaining('permissions.calls[0].checker'),
+                })
+            );
+            expect(sendTransaction).not.toHaveBeenCalled();
+        }
+    );
 });

@@ -570,7 +570,7 @@ function apiPermissionsToPermission(
     const salt = BigInt('0x' + Array.from({ length: 64 }, () => Math.floor(Math.random() * 16).toString(16)).join(''));
 
     // Convert call permissions - compute selector from signature if not provided
-    const calls: CallPermission[] = (permissions.calls || []).map((call) => {
+    const calls: CallPermission[] = (permissions.calls || []).map((call, index) => {
         let selector: Hex;
 
         if (call.selector) {
@@ -585,10 +585,18 @@ function apiPermissionsToPermission(
             });
         }
 
+        // The checker is part of the permission hash, so a malformed one would
+        // grant a permission no caller can rebuild.
+        const checker = optionalHexAddress(
+            call.checker,
+            'wallet_grantPermissions',
+            `permissions.calls[${index}].checker`
+        );
+
         return {
             target: call.target,
             selector,
-            checker: call.checker ?? ZERO_ADDRESS,
+            checker: checker ?? ZERO_ADDRESS,
         };
     });
 
