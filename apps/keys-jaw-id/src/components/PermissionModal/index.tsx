@@ -13,6 +13,7 @@ import {
   usePermissionRevocation,
   useSpenderPrefund,
   describeSpenderPrefund,
+  toDialogCalls,
 } from '@jaw.id/ui';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { formatUnits, erc20Abi, type Address } from 'viem';
@@ -444,14 +445,11 @@ export const PermissionModal = ({
   // Signatures resolve asynchronously — an unresolved selector renders as raw hex, then upgrades.
   const callSignatures = useFunctionSignatures(callsData.map((call: any) => call.selector));
   const formattedCalls = useMemo(() => {
-    return callsData.map((call: any) => ({
-      target: call.target,
-      selector: call.selector,
-      functionSignature:
-        call.functionSignature ||
-        (call.selector ? (callSignatures[call.selector.toLowerCase()] ?? call.selector) : 'Unknown Function'),
-    }));
-  }, [callsData, callSignatures]);
+    const calls = toDialogCalls(callsData, callSignatures);
+    // A grant shows the checker it is about to sign. The revoke screens don't show checkers in
+    // either host yet, so this one leaves it out to match ReactUIHandler's.
+    return mode === 'grant' ? calls : calls.map(({ checker: _checker, ...call }) => call);
+  }, [callsData, callSignatures, mode]);
 
   // Grant date (revoke only) — the stored permission's `start`, mirroring how expiry uses `end`.
   const grantedDate = useMemo(() => {
