@@ -18,7 +18,6 @@ import {
   connect,
   fakeWallet,
   managerAnswer,
-  offlineSession,
   setTestEnv,
   walletAnswers,
   walletsSettled,
@@ -26,7 +25,7 @@ import {
 import { getDb } from '@/db/client';
 import { grants, payments, swaps } from '@/db/schema';
 import { TEST_PG_URL, useTestDb, useTestPostgres } from '@/db/test-db';
-import { currentGrant } from '@/grants/store';
+import { x402Budget } from '@/grants/store';
 import type { PayDeps } from '@/payments/pay';
 import { requestBudget } from '@/tools/request-budget';
 import { quote, swapRequest, type SwapInput } from './quote';
@@ -233,9 +232,9 @@ async function connected(perDay?: string): Promise<Connected> {
   balances.set(c.signer.address.toLowerCase(), 5_000_000n);
   const budget = async (day: string) => {
     const wallet = fakeWallet(walletAnswers(c.signer));
-    await requestBudget(t, day, { openWallet: wallet, readPermission: approvedOnChain, ...offlineSession });
+    await requestBudget(t, day, { openWallet: wallet, readPermission: approvedOnChain });
     await walletsSettled();
-    if (!(await currentGrant(t.connectionId))) throw new Error('no budget');
+    if (!(await x402Budget(t.connectionId))) throw new Error('no budget');
   };
   if (perDay) await budget(perDay);
   return { t, budget };
@@ -586,11 +585,29 @@ describe('answers that leave the swap quoting', () => {
     expect(signatures()).toBe(1);
   });
 
-  it('B29: given a lost answer and a budget replaced since, when the same key returns, then quoting with no_grant and the proof not sent again', async () => {
+  it('B29: given a lost answer and a newer budget since, when the same key returns, then the same proof buys the quote under the budget it was signed under', async () => {
     const { t, budget } = await connected('1');
     backend.loseNextAnswer = true;
     await quoted(t);
     await budget('2');
+
+    const { row } = await quoted(t);
+
+    expect(row).toMatchObject({ state: 'quoting', code: null, quoteId: expect.stringMatching(/^aurora:0x/) });
+    expect(paidHits()).toHaveLength(2);
+    expect(new Set(paidHits().map((h) => h.nonce)).size).toBe(1);
+  });
+
+  it('B29: given a lost answer and the budget it was signed under expired since, when the same key returns, then quoting with no_grant and the proof not sent again', async () => {
+    const { t, budget } = await connected('1');
+    backend.loseNextAnswer = true;
+    await quoted(t);
+    const signedUnder = (await x402Budget(t.connectionId))!.permissionId;
+    await budget('2');
+    await getDb()
+      .update(grants)
+      .set({ expiresAt: new Date(Date.now() - 1000) })
+      .where(eq(grants.permissionId, signedUnder));
 
     const { row } = await quoted(t);
 

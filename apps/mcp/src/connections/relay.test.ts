@@ -537,8 +537,6 @@ describe('the owner pool per account', () => {
     const result = await requestBudget(t as never, '1', {
       openWallet: relay.ownerRelay,
       readPermission: async () => null as never,
-      clients: undefined as never,
-      sender: undefined as never,
     });
 
     expect(result.content[0].text).toBe('Too many owners are approving right now. Try again in a minute.');

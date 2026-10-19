@@ -108,6 +108,31 @@ describe('jaw_session_disconnect', () => {
     expect(await listed(c.access_token)).toBe(401);
   });
 
+  it('given two live budgets, revokes both in the one batch that returns the float', async () => {
+    const { c, tenant, permissionId, permission } = await budgetConnection(async () => approved);
+    const [first] = await getDb().select().from(grants).where(eq(grants.permissionId, permissionId));
+    const second = `0x${randomBytes(32).toString('hex')}`;
+    await getDb()
+      .insert(grants)
+      .values({ ...first, permissionId: second, permission: { ...permission, salt: '0x7' }, createdAt: new Date() });
+    const { deps, sent } = fakes();
+
+    const result = await disconnect(tenant, deps);
+
+    expect(result.isError).toBeFalsy();
+    expect(sent).toHaveLength(1);
+    const revokes = sent[0]
+      .filter((call) => call.to === MANAGER)
+      .map((call) => decodeFunctionData({ abi: PERMISSION_MANAGER_ABI, data: call.data }))
+      .map((call) => (call.functionName === 'revokeAsSpender' ? call.args[0].salt : undefined));
+    expect(revokes.sort()).toEqual([BigInt(permission.salt), 7n].sort());
+    expect(args(sent[0][2]).args).toEqual([c.signer.address, 497_500n]);
+    expect(result.structuredContent?.revoked).toEqual(expect.arrayContaining([permissionId, second]));
+    expect(await revokedAt(permissionId)).not.toBeNull();
+    expect(await revokedAt(second)).not.toBeNull();
+    expect(await listed(c.access_token)).toBe(401);
+  });
+
   it.each([
     ['is not sent', undefined, 'Nothing was revoked: the transaction could not be sent. Try again.'],
     ['reverts', { status: 'reverted' }, 'Nothing was revoked: the transaction reverted. Try again.'],

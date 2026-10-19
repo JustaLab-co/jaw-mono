@@ -19,14 +19,13 @@ import {
   connect,
   fakeWallet,
   managerAnswer,
-  offlineSession,
   setTestEnv,
   walletAnswers,
   walletsSettled,
 } from '@/connections/testkit';
 import { getDb } from '@/db/client';
 import { grants, payments } from '@/db/schema';
-import { currentGrant } from '@/grants/store';
+import { x402Budget } from '@/grants/store';
 import { requestBudget } from '@/tools/request-budget';
 import { TEST_PG_URL, useTestPostgres } from '@/db/test-db';
 import { safeFetch } from '@/lib/safe-fetch';
@@ -177,9 +176,9 @@ async function connected(perDay: string): Promise<Tenant> {
   const t = (await verifyBearer(c.access_token))?.extra?.tenant as Tenant;
   await getDb().delete(grants).where(eq(grants.connectionId, t.connectionId));
   const wallet = fakeWallet(walletAnswers(c.signer));
-  await requestBudget(t, perDay, { openWallet: wallet, readPermission: approvedOnChain, ...offlineSession });
+  await requestBudget(t, perDay, { openWallet: wallet, readPermission: approvedOnChain });
   await walletsSettled();
-  if (!(await currentGrant(t.connectionId))) throw new Error('no budget');
+  if (!(await x402Budget(t.connectionId))) throw new Error('no budget');
   balances.set(c.signer.address.toLowerCase(), 5_000_000n);
   return t;
 }

@@ -3,9 +3,7 @@ import type { McpServer } from '@modelcontextprotocol/server';
 import { and, eq } from 'drizzle-orm';
 import { isAddressEqual, parseUnits } from 'viem';
 import { z } from 'zod';
-import { chainClients } from '@/adapters/session-host';
 import { tenant, type Tenant } from '@/connections/auth';
-import { revokeReplaced, sessionSender, type DisconnectDeps } from '@/connections/disconnect';
 import { APPROVE_WITHIN_MS } from '@/connections/config';
 import { ownerRelay, WalletBusy, type OpenWallet, type Wallet } from '@/connections/relay';
 import { CONNECTION_TTL_MS, isLive } from '@/connections/rows';
@@ -19,24 +17,19 @@ import { NO_PAY_SCOPE, refusal } from './reply';
 
 const PER_DAY = /^\d{1,9}(\.\d{1,6})?$/;
 
-export interface BudgetDeps extends Pick<DisconnectDeps, 'clients' | 'sender'> {
+export interface BudgetDeps {
   openWallet: OpenWallet;
   readPermission: ReadPermission;
 }
 
-const DEFAULTS: BudgetDeps = {
-  openWallet: ownerRelay,
-  readPermission: readOnChain,
-  clients: chainClients,
-  sender: sessionSender,
-};
+const DEFAULTS: BudgetDeps = { openWallet: ownerRelay, readPermission: readOnChain };
 
 const output = z.object({ url: z.url(), summary: z.string() });
 
 /** The link of the request still open, per connection: asking again while it waits hands out the same one. */
 const open = new Map<string, { url: string; until: Date }>();
 
-/** Asks the owner's wallet for the permission, and makes it the connection's budget once the chain shows it. */
+/** Asks the owner's wallet for the permission, and adds it to the connection's budgets once the chain shows it. */
 export async function requestBudget(t: Tenant, perDay: string, deps = DEFAULTS) {
   const waiting = open.get(t.connectionId);
   if (waiting) {
@@ -83,7 +76,6 @@ export async function requestBudget(t: Tenant, perDay: string, deps = DEFAULTS) 
         if (!live) throw new Error('connection ended');
         await recordGrant(tx, t.connectionId, checked);
       });
-      await revokeReplaced(t, deps);
     })
     .catch((err: unknown) => log('warn', { msg: 'budget not granted', error: errorLabel(err) }))
     .finally(() => open.delete(t.connectionId));
@@ -101,7 +93,7 @@ export function registerBudgetTool(server: McpServer) {
     'jaw_request_budget',
     {
       description:
-        "Ask the account owner for a daily USDC budget, approved once in their JAW wallet. The budget covers USDC only: payments, refills and swap quotes run with no further prompts, up to it. For any other contract call use jaw_send_calls, which asks the owner each time. Returns a link for the owner. Ask again for a different amount; the new budget replaces this connection's current one.",
+        "Ask the account owner for a daily USDC budget, approved once in their JAW wallet. The budget covers USDC only: payments, refills and swap quotes run with no further prompts, up to it. For any other contract call use jaw_send_calls, which asks the owner each time. Returns a link for the owner. Ask again for a different amount; payments then draw from the newest budget, and the older ones stay approved until they expire or jaw_session_disconnect revokes them.",
       inputSchema: z.strictObject({
         perDay: z.string().regex(PER_DAY).describe('USDC per day, as a decimal such as "1" or "0.5"'),
       }),

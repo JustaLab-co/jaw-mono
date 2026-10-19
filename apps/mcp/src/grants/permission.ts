@@ -4,7 +4,7 @@ import {
   type PermissionReadTarget,
   type PermissionState,
 } from '@jaw.id/agent';
-import { and, eq, isNull, ne, sql } from 'drizzle-orm';
+import { sql } from 'drizzle-orm';
 import { isAddressEqual, isHex, numberToHex, toFunctionSelector, type Address, type Hex } from 'viem';
 import type { Tx } from '@/db/client';
 import { grants } from '@/db/schema';
@@ -106,6 +106,8 @@ export async function checkGranted(
   const [spend] = grant.permissions.spends;
   return {
     permissionId,
+    // The only request grantMatches accepts today is the daily USDC budget.
+    kind: 'x402-budget',
     chainId,
     account: permission.account,
     spender: grant.spender,
@@ -117,19 +119,10 @@ export async function checkGranted(
   };
 }
 
-/** Stores a budget as the connection's current one; every older one is then to revoke. */
+/** Stores a grant beside the connection's others; a second approval of the same permission is a no-op. */
 export async function recordGrant(tx: Tx, connectionId: string, grant: NewGrant) {
-  // Budgets of one connection land one at a time, each seeing the one before it, so
-  // the newest is the only one left unreplaced. created_at is read under the lock.
-  await tx.execute(sql`select pg_advisory_xact_lock(hashtext(${connectionId}))`);
   await tx
     .insert(grants)
     .values({ ...grant, connectionId, createdAt: sql`clock_timestamp()` })
     .onConflictDoNothing();
-  await tx
-    .update(grants)
-    .set({ replacedAt: new Date() })
-    .where(
-      and(eq(grants.connectionId, connectionId), ne(grants.permissionId, grant.permissionId), isNull(grants.replacedAt))
-    );
 }

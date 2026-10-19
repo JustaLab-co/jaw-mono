@@ -9,9 +9,8 @@ import {
   setTestEnv,
   walletAnswers,
   walletsSettled,
-  offlineSession,
 } from '@/connections/testkit';
-import { currentGrant } from '@/grants/store';
+import { x402Budget } from '@/grants/store';
 import { requestBudget } from './request-budget';
 import { getDb } from '@/db/client';
 import { payments } from '@/db/schema';
@@ -43,15 +42,15 @@ beforeEach(() => Object.assign(chain, { start: 1, end: 2_000_000_000, spend: 0n,
 async function approve(c: Awaited<ReturnType<typeof connect>>, perDay: string) {
   const t = (await verifyBearer(c.access_token))?.extra?.tenant as Tenant;
   const wallet = fakeWallet(walletAnswers(c.signer));
-  await requestBudget(t, perDay, { openWallet: wallet, readPermission: approvedOnChain, ...offlineSession });
+  await requestBudget(t, perDay, { openWallet: wallet, readPermission: approvedOnChain });
   await walletsSettled();
-  const permissionId = (await currentGrant(t.connectionId))!.permissionId;
+  const permissionId = (await x402Budget(t.connectionId))!.permissionId;
   asked.push({ id: permissionId });
   return permissionId;
 }
 
 describe('jaw_status after a budget change', () => {
-  it('counts what the replaced budget pulled today in remainingToday', async () => {
+  it('counts what an older budget pulled today in remainingToday', async () => {
     const c = await connect();
     const t = (await verifyBearer(c.access_token))?.extra?.tenant as Tenant;
     const old = await approve(c, '2');

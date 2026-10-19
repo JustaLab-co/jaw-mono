@@ -1,11 +1,11 @@
 import { createHash, randomBytes } from 'node:crypto';
 import { currentPeriodWindow } from '@jaw.id/agent';
-import { desc, sql } from 'drizzle-orm';
+import { sql } from 'drizzle-orm';
 import { toFunctionSelector, verifyMessage, verifyTypedData, type Address, type Hex, type PublicClient } from 'viem';
 import { privateKeyToAccount, generatePrivateKey } from 'viem/accounts';
 import { getDb } from '@/db/client';
 import { grants } from '@/db/schema';
-import { currentGrant, type Grant } from '@/grants/store';
+import { x402Budget, type Grant } from '@/grants/store';
 import type { GrantRequest, ReadPermission } from '@/grants/permission';
 import type { SignedPayload } from '@/lib/chain';
 import { verifyBearer, type Tenant } from './auth';
@@ -30,19 +30,17 @@ export const approvedOnChain: ReadPermission = async () => ({ status: 'ok', appr
 
 /**
  * The permission manager's answer to `getHash` or `getCurrentPeriod` for a struct
- * from the grants table: it hashes to the spender's newest grant, and its counter
+ * from the grants table: it hashes to the spender's grant with that salt, and its counter
  * is the current day of the window with nothing pulled through the permission.
  */
 export async function managerAnswer(functionName: 'getHash' | 'getCurrentPeriod', args: readonly unknown[]) {
-  const permission = args[0] as { spender: Address; start: number; end: number };
+  const permission = args[0] as { spender: Address; start: number; end: number; salt: bigint };
   if (functionName === 'getHash') {
-    const [row] = await getDb()
-      .select({ id: grants.permissionId })
+    const rows = await getDb()
+      .select({ id: grants.permissionId, permission: grants.permission })
       .from(grants)
-      .where(sql`lower(${grants.spender}) = lower(${permission.spender})`)
-      .orderBy(desc(grants.createdAt))
-      .limit(1);
-    return row?.id;
+      .where(sql`lower(${grants.spender}) = lower(${permission.spender})`);
+    return rows.find((r) => BigInt((r.permission as { salt: string }).salt) === permission.salt)?.id;
   }
   const now = Math.floor(Date.now() / 1000);
   const day = currentPeriodWindow({ anchor: permission.start, unit: 'day', now, permissionEnd: permission.end });
@@ -66,7 +64,7 @@ export function walletAnswers(signer: ReturnType<typeof owner>, refuse: string[]
           spender: grant.spender,
           start: 1_780_000_000,
           end: grant.expiry,
-          salt: '0x2a',
+          salt: `0x${randomBytes(8).toString('hex')}`,
           calls: grant.permissions.calls.map((c) => ({
             target: c.target,
             selector: toFunctionSelector(c.functionSignature),
@@ -97,16 +95,6 @@ export const fakeWallet =
     },
     close: () => undefined,
   });
-
-/** For a test that never sends as the session: any send, or chain read around one, fails. */
-export const offlineSession: Pick<DisconnectDeps, 'clients' | 'sender'> = {
-  clients: {
-    publicClient: () => {
-      throw new Error('this test reads no chain');
-    },
-  },
-  sender: () => Promise.reject(new Error('this test sends nothing as the session')),
-};
 
 export const SENT_TX = `0x${'ab'.repeat(32)}` as Hex;
 export type SessionCall = { to: Address; data: Hex };
@@ -346,7 +334,7 @@ export const callTool = async (token: string, name: string, args: object) =>
 export async function budgetConnection(read: ReadPermission = approvedOnChain) {
   const c = await connect(owner(), {}, new Browser(), read);
   const tenant = (await verifyBearer(c.access_token))?.extra?.tenant as Tenant;
-  const grant = (await currentGrant(tenant.connectionId)) as Grant;
+  const grant = (await x402Budget(tenant.connectionId)) as Grant;
   return {
     c,
     tenant,

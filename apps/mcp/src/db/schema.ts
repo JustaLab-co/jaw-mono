@@ -110,11 +110,14 @@ export const grants = pgTable(
     token: text('token').notNull(),
     allowance: text('allowance').notNull(),
     period: text('period', { enum: ['day'] }).notNull(),
+    // What the grant is for: the daily USDC budget x402 payments draw from, or calls the agent asked for.
+    kind: text('kind', { enum: ['x402-budget', 'custom'] }).notNull(),
     // The struct as approved: the permission manager answers only about a struct, never an id.
     permission: jsonb('permission').notNull(),
     expiresAt: timestamp('expires_at', { withTimezone: true }).notNull(),
     createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
-    // A newer budget was approved, so this one should be revoked; revokedAt once the chain shows it.
+    // Set only on rows from before a connection could hold several grants: a newer budget
+    // replaced this one, so it is never spent from. revokedAt once the chain shows it revoked.
     replacedAt: timestamp('replaced_at', { withTimezone: true }),
     revokedAt: timestamp('revoked_at', { withTimezone: true }),
   },

@@ -15,7 +15,6 @@ import {
   connect,
   fakeWallet,
   managerAnswer,
-  offlineSession,
   setTestEnv,
   walletAnswers,
   walletsSettled,
@@ -23,7 +22,7 @@ import {
 import { getDb } from '@/db/client';
 import { grants, payments } from '@/db/schema';
 import { TEST_PG_URL, useTestDb, useTestPostgres } from '@/db/test-db';
-import { currentGrant } from '@/grants/store';
+import { x402Budget } from '@/grants/store';
 import { safeFetch } from '@/lib/safe-fetch';
 import { requestBudget } from '@/tools/request-budget';
 import { pay, type PayDeps } from './pay';
@@ -153,10 +152,9 @@ async function connected(perDay: string, float: bigint) {
   await requestBudget(t, perDay, {
     openWallet: fakeWallet(walletAnswers(c.signer)),
     readPermission: approvedOnChain,
-    ...offlineSession,
   });
   await walletsSettled();
-  if (!(await currentGrant(t.connectionId))) throw new Error('no budget');
+  if (!(await x402Budget(t.connectionId))) throw new Error('no budget');
   balances.set(t.sessionAddress.toLowerCase(), float);
   return t;
 }
@@ -246,7 +244,7 @@ describe('the daily cap at the end of a day', () => {
       .set({ createdAt: sql`now() - interval '1 day'`, topUpAmount: '1000000' })
       .where(eq(payments.id, id));
     await getDb().execute(sql`alter table payments enable trigger payments_guard`);
-    const grant = (await currentGrant(t.connectionId))!;
+    const grant = (await x402Budget(t.connectionId))!;
     const scope = { permissionId: grant.permissionId, payer: t.sessionAddress };
     const today = new Date(Date.now() - 60 * 60_000).toISOString();
 

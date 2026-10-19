@@ -25,7 +25,6 @@ import {
   fakeWallet,
   managerAnswer,
   mcp,
-  offlineSession,
   owner as newSigner,
   sessionFakes,
   setTestEnv,
@@ -37,7 +36,7 @@ import { getDb } from '@/db/client';
 import { connections, grants, payments, settings, swaps } from '@/db/schema';
 import { countHit } from '@/db/settings';
 import { TEST_PG_URL, useTestDb, useTestPostgres } from '@/db/test-db';
-import { currentGrant } from '@/grants/store';
+import { x402Budget } from '@/grants/store';
 import { guardTools, RATE_WINDOW_MS } from '@/lib/edge';
 import type { PayDeps } from '@/payments/pay';
 import { gateCode } from '@/payments/render';
@@ -252,9 +251,9 @@ async function connected(perDay?: string, scope = 'wallet:read x402:pay', signer
   balances.set(c.signer.address.toLowerCase(), 5_000_000n);
   const budget = async (day: string) => {
     const wallet = fakeWallet(walletAnswers(c.signer));
-    await requestBudget(t, day, { openWallet: wallet, readPermission: approvedOnChain, ...offlineSession });
+    await requestBudget(t, day, { openWallet: wallet, readPermission: approvedOnChain });
     await walletsSettled();
-    if (!(await currentGrant(t.connectionId))) throw new Error('no budget');
+    if (!(await x402Budget(t.connectionId))) throw new Error('no budget');
   };
   if (perDay) await budget(perDay);
   return { t, token: c.access_token, budget, signer: c.signer };

@@ -8,7 +8,7 @@ import { findActive } from '@/connections/rows';
 import { keepLease, leaseHeld, sessionLeaseEnd } from '@/connections/session-lease';
 import { ownerRelay, WalletBusy, type OpenWallet, type Wallet } from '@/connections/relay';
 import { countHit, isPaymentsPaused } from '@/db/settings';
-import { currentGrant } from '@/grants/store';
+import { x402Budget } from '@/grants/store';
 import { errorLabel, log, RATE_WINDOW_MS } from '@/lib/edge';
 import { fenceText, reply } from '@/lib/fence';
 import type { PayDeps } from '@/payments/pay';
@@ -183,7 +183,7 @@ async function refusedBeforePaying(t: Tenant, originChainId: number, key: string
   if ((await countHit(`swap:${t.connectionId}`, RATE_WINDOW_MS)) > SWAP_RATE_LIMIT) {
     return refuse('rate_limited', 'Too many swaps on this connection. Wait a minute.');
   }
-  if (!(await currentGrant(t.connectionId))) {
+  if (!(await x402Budget(t.connectionId))) {
     return refuse(
       'no_grant',
       'This connection has no budget to pay for the quote. Ask for one with jaw_request_budget.'

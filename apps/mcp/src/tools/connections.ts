@@ -42,8 +42,10 @@ async function viewsOf(t: Tenant, rows: (typeof connections.$inferSelect)[]): Pr
     : [];
   const now = new Date();
   return rows.map((row) => {
-    // Newest first, so the first unreplaced one is the budget in force.
-    const budget = budgets.find((g) => g.connectionId === row.id && !g.replacedAt && !g.revokedAt && g.expiresAt > now);
+    // Newest first, so the first live x402 budget is the one in force, as x402Budget picks it.
+    const budget = budgets.find(
+      (g) => g.connectionId === row.id && g.kind === 'x402-budget' && !g.replacedAt && !g.revokedAt && g.expiresAt > now
+    );
     return {
       id: row.id,
       current: row.id === t.connectionId,

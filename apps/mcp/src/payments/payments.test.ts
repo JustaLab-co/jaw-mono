@@ -32,12 +32,11 @@ import {
   verifyLocally,
   walletAnswers,
   walletsSettled,
-  offlineSession,
   sessionFakes,
 } from '@/connections/testkit';
 import { floatHolder, getDb, setDb } from '@/db/client';
 import { connections, grants, payments, settings } from '@/db/schema';
-import { currentGrant } from '@/grants/store';
+import { x402Budget } from '@/grants/store';
 import { reconcile } from '@/reconciler/run';
 import { revokeConnection } from '@/tools/connections';
 import { requestBudget } from '@/tools/request-budget';
@@ -278,9 +277,9 @@ async function connected(perDay?: string) {
 async function approveBudget(c: Awaited<ReturnType<typeof connect>>, perDay: string) {
   const t = (await verifyBearer(c.access_token))?.extra?.tenant as Tenant;
   const wallet = fakeWallet(walletAnswers(c.signer));
-  await requestBudget(t, perDay, { openWallet: wallet, readPermission: approvedOnChain, ...offlineSession });
+  await requestBudget(t, perDay, { openWallet: wallet, readPermission: approvedOnChain });
   await walletsSettled();
-  if (!(await currentGrant(t.connectionId))) throw new Error('no budget');
+  if (!(await x402Budget(t.connectionId))) throw new Error('no budget');
   balances.set(c.signer.address.toLowerCase(), 5_000_000n);
 }
 
@@ -501,14 +500,41 @@ describe('jaw_session_x402_pay', () => {
     expect(await rowOf(lost.structuredContent!.paymentId)).toMatchObject({ state: 'signed', code: 'no_response' });
   });
 
-  it('given a lost answer and a new budget approved since, when the key is retried, then no_grant, the proof is not sent again, and no budget is suggested', async () => {
+  it('given a lost answer and a newer budget approved since, when the key is retried, then the proof goes out again under the budget it was signed under', async () => {
     const { c, t } = await connected('1');
     balances.set(t.sessionAddress.toLowerCase(), 1_000_000n);
     dropNextLost = true;
-    const lost = await pay(t, { url: url('/lost'), idempotencyKey: 'replaced-resend' }, deps());
+    const lost = await pay(t, { url: url('/lost'), idempotencyKey: 'older-resend' }, deps());
     expect(lost.structuredContent).toMatchObject({ state: 'signed', refusal: { code: 'no_response' } });
+    const signedUnder = (await rowOf(lost.structuredContent!.paymentId)).permissionId;
     await approveBudget(c, '1');
-    const again = await pay(t, { url: url('/lost'), idempotencyKey: 'replaced-resend' }, deps());
+    expect((await x402Budget(t.connectionId))?.permissionId).not.toBe(signedUnder);
+
+    const again = await pay(t, { url: url('/lost'), idempotencyKey: 'older-resend' }, deps());
+
+    expect(again.structuredContent).toMatchObject({ state: 'settled' });
+    expect(seen.map((s) => s.signature)).toEqual([seen[0].signature, seen[0].signature]);
+    expect(await rowOf(lost.structuredContent!.paymentId)).toMatchObject({
+      state: 'settled',
+      permissionId: signedUnder,
+    });
+  });
+
+  it('given a lost answer and the budget it was signed under expired since, when the key is retried, then no_grant, the proof is not sent again, and no budget is suggested', async () => {
+    const { c, t } = await connected('1');
+    balances.set(t.sessionAddress.toLowerCase(), 1_000_000n);
+    dropNextLost = true;
+    const lost = await pay(t, { url: url('/lost'), idempotencyKey: 'expired-resend' }, deps());
+    expect(lost.structuredContent).toMatchObject({ state: 'signed', refusal: { code: 'no_response' } });
+    const signedUnder = (await rowOf(lost.structuredContent!.paymentId)).permissionId!;
+    await approveBudget(c, '1');
+    await getDb()
+      .update(grants)
+      .set({ expiresAt: new Date(Date.now() - 1000) })
+      .where(eq(grants.permissionId, signedUnder));
+
+    const again = await pay(t, { url: url('/lost'), idempotencyKey: 'expired-resend' }, deps());
+
     expect(again.structuredContent).toMatchObject({ refusal: { code: 'no_grant' } });
     expect(again.structuredContent?.refusal?.next).toBeUndefined();
     expect(seen).toHaveLength(1);

@@ -1,11 +1,14 @@
 import type { GrantedPermission } from '@jaw.id/agent';
-import { and, desc, eq, gt, sql } from 'drizzle-orm';
+import { and, desc, eq, gt, isNull, sql } from 'drizzle-orm';
 import type { Address, Hex } from 'viem';
-import { getDb } from '@/db/client';
+import { getDb, type Tx } from '@/db/client';
 import { grants } from '@/db/schema';
+
+export type GrantKind = (typeof grants.$inferSelect)['kind'];
 
 export interface Grant {
   permissionId: Hex;
+  kind: GrantKind;
   chainId: number;
   account: Address;
   spender: Address;
@@ -16,23 +19,36 @@ export interface Grant {
   createdAt: Date;
 }
 
-export async function currentGrant(connectionId: string): Promise<Grant | undefined> {
+const live = (connectionId: string) =>
+  and(eq(grants.connectionId, connectionId), isNull(grants.revokedAt), gt(grants.expiresAt, sql`now()`));
+
+const toGrant = (row: typeof grants.$inferSelect): Grant => ({
+  permissionId: row.permissionId as Hex,
+  kind: row.kind,
+  chainId: row.chainId,
+  account: row.account as Address,
+  spender: row.spender as Address,
+  token: row.token as Address,
+  allowance: row.allowance,
+  permission: row.permission as GrantedPermission,
+  expiresAt: row.expiresAt,
+  createdAt: row.createdAt,
+});
+
+/** The budget x402 payments, quotes, swaps and refills draw from: the newest live one. */
+export async function x402Budget(connectionId: string): Promise<Grant | undefined> {
   const [row] = await getDb()
     .select()
     .from(grants)
-    .where(and(eq(grants.connectionId, connectionId), gt(grants.expiresAt, sql`now()`)))
+    // A budget replaced before a connection could hold several grants is never spent from.
+    .where(and(live(connectionId), eq(grants.kind, 'x402-budget'), isNull(grants.replacedAt)))
     .orderBy(desc(grants.createdAt))
     .limit(1);
-  if (!row) return undefined;
-  return {
-    permissionId: row.permissionId as Hex,
-    chainId: row.chainId,
-    account: row.account as Address,
-    spender: row.spender as Address,
-    token: row.token as Address,
-    allowance: row.allowance,
-    permission: row.permission as GrantedPermission,
-    expiresAt: row.expiresAt,
-    createdAt: row.createdAt,
-  };
+  return row && toGrant(row);
+}
+
+/** Every grant of the connection not yet revoked or expired, of any kind. */
+export async function liveGrants(connectionId: string, db: Tx = getDb()): Promise<Grant[]> {
+  const rows = await db.select().from(grants).where(live(connectionId)).orderBy(desc(grants.createdAt));
+  return rows.map(toGrant);
 }

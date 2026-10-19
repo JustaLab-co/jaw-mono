@@ -3,7 +3,6 @@ import {
   toContractPermission,
   usdcForNetwork,
   type ChainClients,
-  type GrantedPermission,
   type PermissionState,
 } from '@jaw.id/agent';
 import {
@@ -13,7 +12,7 @@ import {
   jawPaymasterUrl,
   PERMISSIONS_MANAGER_ADDRESS,
 } from '@jaw.id/core';
-import { and, eq, gt, inArray, isNotNull, isNull, ne, sql } from 'drizzle-orm';
+import { and, eq, inArray, ne } from 'drizzle-orm';
 import { encodeFunctionData, erc20Abi, formatUnits, isAddressEqual, maxUint256, type Address, type Hex } from 'viem';
 import { privateKeyToAccount } from 'viem/accounts';
 import { z } from 'zod';
@@ -22,6 +21,7 @@ import { getDb } from '@/db/client';
 import { connections, grants } from '@/db/schema';
 import { isPaymentsPaused } from '@/db/settings';
 import { readOnChain, type ReadPermission } from '@/grants/permission';
+import { liveGrants, type Grant } from '@/grants/store';
 import { publicClientFor, rpcUrl } from '@/lib/chain';
 import { errorLabel, log } from '@/lib/edge';
 import { reply } from '@/lib/fence';
@@ -191,7 +191,7 @@ async function returnAndEnd(s: Session, deps: DisconnectDeps): Promise<Returned 
   try {
     return await withFloat(s.connectionId, deps.lockWaitMs ?? LOCK_WAIT_MS, async (hold) => {
       if (await hold.tx((tx) => topUpInFlight(tx, s.connectionId))) return REFUSALS.landing;
-      const returned = await returnFunds(hold, s, deps, 'everything');
+      const returned = await returnFunds(hold, s, deps);
       if (typeof returned === 'string') return returned;
       await hold.tx((tx) => endConnection(s.connectionId, s.account, new Date(), tx));
       return returned;
@@ -202,24 +202,9 @@ async function returnAndEnd(s: Session, deps: DisconnectDeps): Promise<Returned 
   }
 }
 
-/**
- * Revokes as spender the budgets a newer one replaced, so only the newest can be
- * spent. The float stays for payments. A replaced budget it could not revoke stays
- * marked replaced and unrevoked, and the next call picks it up.
- */
-export async function revokeReplaced(s: Session, deps = DEFAULTS): Promise<void> {
-  if (await isPaymentsPaused()) return;
-  const outcome = await withFloat(s.connectionId, deps.lockWaitMs ?? LOCK_WAIT_MS, (hold) =>
-    returnFunds(hold, s, deps, 'replaced')
-  ).catch((err: unknown) => errorLabel(err));
-  if (typeof outcome === 'string') log('warn', { msg: 'replaced budget not revoked', error: outcome });
-  else if (outcome.stillApproved.length)
-    log('warn', { msg: 'replaced budget not revoked: the float cannot pay the fee' });
-}
-
 /** Revokes every live budget of a session and returns its free float to the owner, under the float lock. */
 export const retire = (s: Session, deps = DEFAULTS): Promise<Returned | string> =>
-  withFloat(s.connectionId, deps.lockWaitMs ?? LOCK_WAIT_MS, (hold) => returnFunds(hold, s, deps, 'everything'));
+  withFloat(s.connectionId, deps.lockWaitMs ?? LOCK_WAIT_MS, (hold) => returnFunds(hold, s, deps));
 
 /**
  * Returns the float, revokes the budgets and ends a connection whose refresh
@@ -272,32 +257,14 @@ function summarize(t: Tenant, r: Returned): string {
 }
 
 /**
- * `everything` revokes every live budget and returns the free float to the owner.
- * `replaced` revokes only the budgets a newer one replaced and leaves the float.
- * Budgets the batch revoked, or the chain already shows revoked, are marked so.
+ * Revokes every live grant and returns the free float to the owner. Grants the
+ * batch revoked, or the chain already shows revoked, are marked so.
  */
-async function returnFunds(
-  hold: FloatHold,
-  t: Session,
-  deps: DisconnectDeps,
-  scope: 'everything' | 'replaced'
-): Promise<Returned | string> {
+async function returnFunds(hold: FloatHold, t: Session, deps: DisconnectDeps): Promise<Returned | string> {
   const usdc = usdcForNetwork(`eip155:${t.chainId}`);
   if (!usdc) return REFUSALS.chain;
-  const live = await hold.tx((tx) =>
-    tx
-      .select()
-      .from(grants)
-      .where(
-        and(
-          eq(grants.connectionId, t.connectionId),
-          isNull(grants.revokedAt),
-          gt(grants.expiresAt, sql`now()`),
-          scope === 'replaced' ? isNotNull(grants.replacedAt) : undefined
-        )
-      )
-  );
-  const returned = await sendBatch(hold, t, deps, live, usdc.address, scope === 'everything');
+  const live = await hold.tx((tx) => liveGrants(t.connectionId, tx));
+  const returned = await sendBatch(hold, t, deps, live, usdc.address);
   if (typeof returned === 'string') return returned;
   const ids = [...returned.revoked, ...returned.seenRevoked];
   if (ids.length) {
@@ -310,25 +277,23 @@ async function sendBatch(
   hold: FloatHold,
   t: Session,
   deps: DisconnectDeps,
-  live: (typeof grants.$inferSelect)[],
-  token: Address,
-  sweep: boolean
+  live: Grant[],
+  token: Address
 ): Promise<Returned | string> {
   const revokes: { permissionId: Hex; call: SessionCall }[] = [];
   const seenRevoked: Hex[] = [];
   for (const g of live) {
-    const permission = g.permission as GrantedPermission;
-    const struct = toContractPermission(permission);
+    const struct = toContractPermission(g.permission);
     const state = await deps
-      .readPermission({ chainId: g.chainId, permissionId: g.permissionId as Hex, permission })
+      .readPermission({ chainId: g.chainId, permissionId: g.permissionId, permission: g.permission })
       .catch((): PermissionState => ({ status: 'unavailable' }));
     if (!struct || state.status !== 'ok') return REFUSALS.chain;
     if (state.revoked) {
-      seenRevoked.push(g.permissionId as Hex);
+      seenRevoked.push(g.permissionId);
       continue;
     }
     const data = encodeFunctionData({ abi: PERMISSION_MANAGER_ABI, functionName: 'revokeAsSpender', args: [struct] });
-    revokes.push({ permissionId: g.permissionId as Hex, call: { to: PERMISSIONS_MANAGER_ADDRESS, data } });
+    revokes.push({ permissionId: g.permissionId, call: { to: PERMISSIONS_MANAGER_ADDRESS, data } });
   }
   // The balance and the nonces it is netted against are read at one block, as the refill does.
   const client = deps.clients.publicClient(t.chainId);
@@ -350,7 +315,7 @@ async function sendBatch(
     data: encodeFunctionData({ abi: erc20Abi, functionName: 'transfer', args: [t.account, amount] }),
   });
   const nothingSent = { revoked: [], swept: 0n, txHash: null, left: float, seenRevoked };
-  if (revokes.length === 0 && (!sweep || free === 0n)) return { ...nothingSent, stillApproved: [] };
+  if (revokes.length === 0 && free === 0n) return { ...nothingSent, stillApproved: [] };
 
   const sender = await deps.sender(t).catch((err) => {
     log('error', { msg: 'disconnect sender unavailable', error: errorLabel(err) });
@@ -359,7 +324,7 @@ async function sendBatch(
   if (!sender) return REFUSALS.notSent;
   const batch = (swept: bigint, reserve: bigint): SessionCall[] => [
     ...revokes.map((r) => r.call),
-    ...(sweep ? [transfer(swept)] : []),
+    transfer(swept),
     // Last, so it overwrites any allowance before it: the fee can take the reserve
     // and never what payments hold. A fee above it reverts the whole batch.
     {
@@ -422,14 +387,14 @@ async function sendBatch(
       return undefined;
     });
   };
-  let swept = sweep ? free - reserve : 0n;
+  let swept = free - reserve;
   let sent = await sendWith(reserve);
   // A fee over the reserve reverts with nothing moved; one more try at the ceiling.
   // A float under the ceiling cannot pay more, so the budgets go to the owner and the
   // connection still ends.
   if (sent?.status === 'reverted' && reserve < fee.max) {
     if (free <= fee.max) return (await tryRevokeOnly()) ?? leaveToOwner();
-    swept = sweep ? free - fee.max : 0n;
+    swept = free - fee.max;
     sent = await sendWith(fee.max);
   }
   if (!sent) return REFUSALS.notSent;

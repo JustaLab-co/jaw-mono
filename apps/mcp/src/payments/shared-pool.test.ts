@@ -11,7 +11,6 @@ import {
   callTool,
   connect,
   fakeWallet,
-  offlineSession,
   setTestEnv,
   walletAnswers,
   walletsSettled,
@@ -19,7 +18,7 @@ import {
 import { getDb } from '@/db/client';
 import { grants, sends } from '@/db/schema';
 import { TEST_PG_URL, useTestDb, useTestPostgres } from '@/db/test-db';
-import { currentGrant } from '@/grants/store';
+import { x402Budget } from '@/grants/store';
 import { safeFetch } from '@/lib/safe-fetch';
 import { reconcile } from '@/reconciler/run';
 import { requestBudget } from '@/tools/request-budget';
@@ -170,10 +169,9 @@ async function connected(perDay: string, float: bigint) {
   await requestBudget(t, perDay, {
     openWallet: fakeWallet(walletAnswers(c.signer)),
     readPermission: approvedOnChain,
-    ...offlineSession,
   });
   await walletsSettled();
-  const grant = await currentGrant(t.connectionId);
+  const grant = await x402Budget(t.connectionId);
   if (!grant) throw new Error('no budget');
   chain.permissionId = grant.permissionId;
   balances.set(t.sessionAddress.toLowerCase(), float);

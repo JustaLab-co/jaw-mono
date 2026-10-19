@@ -155,6 +155,13 @@
       "when": 1792084818360,
       "tag": "0021_owner_call_sent_block",
       "breakpoints": true
+    },
+    {
+      "idx": 22,
+      "version": "7",
+      "when": 1792415390316,
+      "tag": "0022_grant_kind",
+      "breakpoints": true
     }
   ]
 }
