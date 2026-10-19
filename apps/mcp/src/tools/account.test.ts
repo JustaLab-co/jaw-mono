@@ -59,15 +59,14 @@ afterEach(() => {
 });
 
 describe('jaw_get_assets', () => {
-  it('given more mainnets than one request holds, then it asks for them in chunks of 20 and merges the answers', async () => {
+  it('given many mainnets, then it asks for each chain in its own request and merges the answers', async () => {
     answer = ({ params }) => Object.fromEntries(params[0].chainFilter.map((id) => [id, [ether]]));
 
     const r = await callTool(token, 'jaw_get_assets', {});
 
-    expect(mainnets.length).toBeGreaterThan(20);
     const asked = seen.map((s) => s.rpc.params[0].chainFilter);
-    expect(asked.map((c) => c.length)).toEqual([20, 20, 5]);
-    expect(asked.flat()).toEqual(mainnets.map(hex));
+    expect(asked.every((c) => c.length === 1)).toBe(true);
+    expect(asked.flat().sort()).toEqual(mainnets.map(hex).sort());
     expect(seen.every((s) => s.rpc.method === 'wallet_getAssets' && s.rpc.params[0].account === account)).toBe(true);
     expect(r.structuredContent.chains.map((c: { chainId: string }) => c.chainId).sort()).toEqual(
       mainnets.map((id) => `eip155:${id}`).sort()
@@ -91,25 +90,24 @@ describe('jaw_get_assets', () => {
     ]);
   });
 
-  it('given a chunk the proxy refuses, then the other chunk is returned and the lost chains are named without the key', async () => {
+  it('given a chain the proxy refuses, then the others are returned and the lost chain is named without the key', async () => {
     answer = ({ params }, url) =>
-      params[0].chainFilter.includes(hex(mainnets[0]))
-        ? Object.fromEntries(params[0].chainFilter.map((id) => [id, [ether]]))
-        : new Response(`upstream said no to ${url}`, { status: 500 });
+      params[0].chainFilter[0] === hex(mainnets[3])
+        ? new Response(`upstream said no to ${url}`, { status: 500 })
+        : Object.fromEntries(params[0].chainFilter.map((id) => [id, [ether]]));
 
     const r = await callTool(token, 'jaw_get_assets', {});
 
     expect(r.isError).toBeFalsy();
-    expect(r.structuredContent.chains).toHaveLength(20);
+    expect(r.structuredContent.chains).toHaveLength(mainnets.length - 1);
     expect(r.structuredContent.failed).toEqual([
-      { chainIds: mainnets.slice(20, 40).map((id) => `eip155:${id}`), reason: expect.stringContaining('500') },
-      { chainIds: mainnets.slice(40).map((id) => `eip155:${id}`), reason: expect.stringContaining('500') },
+      { chainIds: [`eip155:${mainnets[3]}`], reason: expect.stringContaining('500') },
     ]);
-    expect(r.structuredContent.summary).toContain(`eip155:${mainnets[20]}`);
+    expect(r.structuredContent.summary).toContain(`eip155:${mainnets[3]}`);
     expect(JSON.stringify(r)).not.toContain(KEY);
   });
 
-  it('given every chunk fails, then it is an error that does not carry the key', async () => {
+  it('given every chain fails, then it is an error that does not carry the key', async () => {
     answer = (_rpc, url) => new Response(`down: ${url}`, { status: 502 });
 
     const r = await callTool(token, 'jaw_get_assets', {});
@@ -263,13 +261,14 @@ describe('jaw_get_assets answers', () => {
     expect(r.structuredContent.failed).toEqual([]);
     expect(r.structuredContent.unreported).toEqual(['eip155:10']);
     expect(r.structuredContent.summary).toContain('Not reported: eip155:10');
-    expect(r.structuredContent.summary).toContain('empty or not answered in time');
+    expect(r.structuredContent.summary).toContain('left them out of its answer');
     expect(r.structuredContent.summary).toContain('not known to be zero');
   });
 
-  it('given a chunk the proxy never answers, then it is named as timed out and the rest comes back before 5 s', async () => {
+  it('given two chains that hang and the rest answer, then the rest come back, the two time out, and it ends before 5 s', async () => {
+    const hung = [mainnets[0], mainnets[1]].map(hex);
     answer = ({ params }) =>
-      params[0].chainFilter.includes(hex(mainnets[0]))
+      hung.includes(params[0].chainFilter[0])
         ? new Promise(() => {})
         : Object.fromEntries(params[0].chainFilter.map((id) => [id, [ether]]));
 
@@ -278,10 +277,26 @@ describe('jaw_get_assets answers', () => {
 
     expect(Date.now() - started).toBeLessThan(5000);
     expect(r.isError).toBeFalsy();
-    expect(r.structuredContent.chains).toHaveLength(mainnets.length - 20);
-    expect(r.structuredContent.failed).toEqual([
-      { chainIds: mainnets.slice(0, 20).map((id) => `eip155:${id}`), reason: expect.stringContaining('timed out') },
-    ]);
+    expect(r.structuredContent.chains).toHaveLength(mainnets.length - 2);
+    expect(r.structuredContent.failed).toEqual(
+      [mainnets[0], mainnets[1]].map((id) => ({
+        chainIds: [`eip155:${id}`],
+        reason: expect.stringContaining('timed out'),
+      }))
+    );
+    expect(r.structuredContent.unreported).toEqual([]);
+    expect(JSON.stringify(r)).not.toContain(KEY);
+  }, 10_000);
+
+  it('given every chain hangs, then it is a proxy error before 5 s', async () => {
+    answer = () => new Promise(() => {});
+
+    const started = Date.now();
+    const r = await callTool(token, 'jaw_get_assets', {});
+
+    expect(Date.now() - started).toBeLessThan(5000);
+    expect(r.isError).toBe(true);
+    expect(r.content[0].text).toMatch(/^proxy_error: .*timed out/);
     expect(JSON.stringify(r)).not.toContain(KEY);
   }, 10_000);
 
@@ -290,8 +305,7 @@ describe('jaw_get_assets answers', () => {
 
     await callTool(token, 'jaw_get_assets', { chainIds: [1, 1, 8453] });
 
-    expect(seen).toHaveLength(1);
-    expect(seen[0].rpc.params[0].chainFilter).toEqual([hex(1), hex(8453)]);
+    expect(seen.map((s) => s.rpc.params[0].chainFilter)).toEqual([[hex(1)], [hex(8453)]]);
   });
 
   it('given a chain the proxy was not asked about, then it is left out', async () => {

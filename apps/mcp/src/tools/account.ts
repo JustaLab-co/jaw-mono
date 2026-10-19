@@ -14,8 +14,9 @@ import { config } from '@/connections/config';
 import { reply } from '@/lib/fence';
 import { refusal } from './reply';
 
-const CHAINS_PER_REQUEST = 20;
-const CHUNK_DEADLINE_MS = 4000;
+const CONCURRENCY = 10;
+const CHAIN_DEADLINE_MS = 4000;
+const CALL_BUDGET_MS = 4500;
 const ASSET_TYPES = ['native', 'erc20'];
 const caip2 = (chainId: number) => `eip155:${chainId}`;
 const readOnly = { readOnlyHint: true, openWorldHint: true };
@@ -91,12 +92,13 @@ const assetInput = z.strictObject({
     .describe('Both when left out'),
 });
 
-async function readChunk(account: string, ids: number[], assetTypes: string[] | undefined) {
-  const params = [{ account, chainFilter: ids.map(hexStringFromNumber), assetTypeFilter: assetTypes ?? ASSET_TYPES }];
+async function readChain(account: string, id: number, assetTypes: string[] | undefined, budgetMs: number) {
+  const params = [{ account, chainFilter: [hexStringFromNumber(id)], assetTypeFilter: assetTypes ?? ASSET_TYPES }];
   const read = handleGetAssetsRequest({ method: 'wallet_getAssets', params }, config().paymasterApiKey);
+  const limit = Math.max(0, Math.min(CHAIN_DEADLINE_MS, budgetMs));
   let timer: ReturnType<typeof setTimeout> | undefined;
   const deadline = new Promise<never>((_, reject) => {
-    timer = setTimeout(() => reject(new Error(`timed out after ${CHUNK_DEADLINE_MS} ms`)), CHUNK_DEADLINE_MS);
+    timer = setTimeout(() => reject(new Error(`timed out after ${limit} ms`)), limit);
   });
   try {
     return assetsIn.parse(await Promise.race([read, deadline]));
@@ -104,6 +106,19 @@ async function readChunk(account: string, ids: number[], assetTypes: string[] | 
     clearTimeout(timer);
     read.catch(() => {});
   }
+}
+
+async function mapLimited<T, R>(items: T[], limit: number, fn: (item: T) => Promise<R>) {
+  const out: R[] = new Array(items.length);
+  let next = 0;
+  const worker = async () => {
+    while (next < items.length) {
+      const i = next++;
+      out[i] = await fn(items[i]);
+    }
+  };
+  await Promise.all(Array.from({ length: Math.min(limit, items.length) }, worker));
+  return out;
 }
 
 const shown = (a: z.infer<typeof assetIn>): z.infer<typeof assetOut> => ({
@@ -125,11 +140,6 @@ function plain(value: unknown): unknown {
   return value;
 }
 
-const chunksOf = (ids: number[]) =>
-  Array.from({ length: Math.ceil(ids.length / CHAINS_PER_REQUEST) }, (_, i) =>
-    ids.slice(i * CHAINS_PER_REQUEST, (i + 1) * CHAINS_PER_REQUEST)
-  );
-
 const historyOutput = z.object({ calls: z.array(z.looseObject({})), summary: z.string() });
 const permissionsOutput = z.object({ permissions: z.array(z.looseObject({})), summary: z.string() });
 const capabilitiesOutput = z.object({
@@ -142,7 +152,7 @@ export function registerAccountTools(server: McpServer) {
     'jaw_get_assets',
     {
       description:
-        "The connected account's native and token balances on every supported mainnet, or the chains you name. Testnets are never read. A chunk of chains the proxy refused, or did not answer within 4 s, is named in `failed`. A chain the proxy left out of an answer that otherwise came back (it has nothing, or it did not answer in time) is listed in `unreported`: its balance is not known to be zero. The rest still come back.",
+        "The connected account's native and token balances on every supported mainnet, or the chains you name. Testnets are never read. Each chain is read on its own, so a chain the proxy refused or did not answer within 4 s is named in `failed` and every other chain still comes back. A chain whose answer left that chain out is listed in `unreported`: the proxy returned nothing for it, so its balance is not known to be zero.",
       inputSchema: assetInput,
       outputSchema: assetsOutput,
       annotations: readOnly,
@@ -151,12 +161,11 @@ export function registerAccountTools(server: McpServer) {
       const { account, chainId: own } = tenant(ctx);
       const bad = checkMainnets(asked, own);
       if (bad) return bad;
-      const outcomes = await Promise.all(
-        chunksOf([...new Set(asked ?? mainnetIds())]).map((ids) =>
-          readChunk(account, ids, assetTypes).then(
-            (result) => ({ ids, result }),
-            (err: unknown) => ({ ids, error: reasonOf(err) })
-          )
+      const started = Date.now();
+      const outcomes = await mapLimited([...new Set(asked ?? mainnetIds())], CONCURRENCY, (id) =>
+        readChain(account, id, assetTypes, CALL_BUDGET_MS - (Date.now() - started)).then(
+          (result) => ({ ids: [id], result }),
+          (err: unknown) => ({ ids: [id], error: reasonOf(err) })
         )
       );
       const answered = outcomes.flatMap((o) => {
@@ -188,7 +197,7 @@ export function registerAccountTools(server: McpServer) {
             `${count} asset(s) on ${chains.length} chain(s).` +
             (missing.length ? ` Could not read ${missing.join(', ')}: their balance is unknown, not zero.` : '') +
             (unreported.length
-              ? ` Not reported: ${unreported.join(', ')}. The proxy left them out (empty or not answered in time), so their balances are not known to be zero.`
+              ? ` Not reported: ${unreported.join(', ')}. The proxy left them out of its answer, so their balances are not known to be zero.`
               : ''),
         })
       );
