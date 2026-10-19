@@ -157,7 +157,7 @@ const CHAIN_SEARCHES_PER_RUN = 5;
 
 /**
  * Sent calls nobody asked about again. One batch per run: rows still waiting for a
- * receipt are read again next run, and `jaw_send_calls_status` concludes the same
+ * receipt are read again next run, and `jaw_get_calls_status` concludes the same
  * way, so whichever lands first wins. A row stuck at `send_started` has no calls
  * id to look up by, so it is left alone.
  */

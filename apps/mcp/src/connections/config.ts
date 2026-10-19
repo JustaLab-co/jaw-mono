@@ -13,7 +13,7 @@ export interface Config {
   chain: Chain;
   rpcUrl: string | undefined;
   mainnetRpcUrl: string | undefined;
-  /** Local verification only: hosts jaw_quote may reach without the SSRF checks. */
+  /** Local verification only: hosts jaw_session_x402_quote may reach without the SSRF checks. */
   insecureFetchHosts: ReadonlySet<string>;
   paymasterApiKey: string | undefined;
   /** Base units a refill brings the payer up to, so refills are rare; the grant's cap still bounds it. */

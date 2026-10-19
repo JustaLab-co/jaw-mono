@@ -88,7 +88,7 @@ export function registerConnectionTools(server: McpServer) {
     'jaw_revoke_connection',
     {
       description:
-        "End another app's connection to this account, once the owner confirms it in their wallet: its tokens stop working and its session key is gone, so its budget can no longer be spent. The float at its payer stays there, since only that key could move it; jaw_disconnect called from that app returns it instead. Returns a link for the owner; jaw_connections shows it revoked once they confirm. To end this connection, and return its float, use jaw_disconnect.",
+        "End another app's connection to this account, once the owner confirms it in their wallet: its tokens stop working and its session key is gone, so its budget can no longer be spent. The float at its payer stays there, since only that key could move it; jaw_session_disconnect called from that app returns it instead. Returns a link for the owner; jaw_connections shows it revoked once they confirm. To end this connection, and return its float, use jaw_session_disconnect.",
       inputSchema: z.strictObject({ id: z.string().max(64).describe('From jaw_connections') }),
       outputSchema: z.object({
         url: z.url(),
@@ -132,7 +132,7 @@ export const revokeMessage = (row: { id: string; clientName: string }, account: 
  */
 export async function revokeConnection(t: Tenant, id: string, deps = DEFAULTS) {
   if (id === t.connectionId)
-    return refusal('That is this connection. Use jaw_disconnect, which also returns its float.');
+    return refusal('That is this connection. Use jaw_session_disconnect, which also returns its float.');
   const [row] = await getDb()
     .select()
     .from(connections)
@@ -161,11 +161,11 @@ export async function revokeConnection(t: Tenant, id: string, deps = DEFAULTS) {
   // The key that could move it goes with the connection, and this server cannot open it.
   if (left === null) {
     said.push(
-      `Whatever float is at ${payer} stays there once it ends; jaw_disconnect called from that app returns it.`
+      `Whatever float is at ${payer} stays there once it ends; jaw_session_disconnect called from that app returns it.`
     );
   } else if (left > 0n) {
     said.push(
-      `${formatUnits(left, 6)} USDC stays at ${payer} once it ends, and nothing can move it. To get it back, call jaw_disconnect from that app instead, if it still works.`
+      `${formatUnits(left, 6)} USDC stays at ${payer} once it ends, and nothing can move it. To get it back, call jaw_session_disconnect from that app instead, if it still works.`
     );
   }
   const summary = said.join(' ');

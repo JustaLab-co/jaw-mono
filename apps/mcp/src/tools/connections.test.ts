@@ -51,7 +51,7 @@ describe('jaw_revoke_connection', () => {
     clients: sessionFakes(undefined, float).deps.clients,
   });
 
-  it('says how much float stays at the other connection once it ends, and that jaw_disconnect from it returns it', async () => {
+  it('says how much float stays at the other connection once it ends, and that jaw_session_disconnect from it returns it', async () => {
     const signer = owner();
     const other = await connect(signer);
     const me = await connect(signer, { scope: 'wallet:read' });
@@ -65,7 +65,7 @@ describe('jaw_revoke_connection', () => {
     });
     const text = asked.content[0].text;
     expect(text).toContain(`0.18 USDC stays at ${sessionAddress}`);
-    expect(text).toContain('jaw_disconnect');
+    expect(text).toContain('jaw_session_disconnect');
   });
 
   it('given the payer cannot be read, then it says the float may stay, without an amount', async () => {
@@ -195,13 +195,13 @@ describe('jaw_revoke_connection', () => {
     expect(await works(other.access_token)).toBe(true);
   });
 
-  it('refuses to end the connection the call comes from, pointing at jaw_disconnect', async () => {
+  it('refuses to end the connection the call comes from, pointing at jaw_session_disconnect', async () => {
     const me = await connect();
     const result = await callTool(me.access_token, 'jaw_revoke_connection', {
       id: (await tenantOf(me.access_token)).connectionId,
     });
     expect(result.isError).toBe(true);
-    expect(result.content[0].text).toContain('jaw_disconnect');
+    expect(result.content[0].text).toContain('jaw_session_disconnect');
   });
 
   it("refuses another account's connection as if it did not exist, before opening the wallet", async () => {

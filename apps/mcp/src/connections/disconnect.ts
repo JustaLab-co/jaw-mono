@@ -74,11 +74,11 @@ const REFUSALS = {
   chain: 'Nothing was revoked: the chain could not be read. Try again.',
   busy: 'A payment on this connection is in progress, so nothing was revoked. Try again in a moment.',
   landing:
-    'A payment is still refilling the payer, so the connection stays open. Call jaw_disconnect again in a moment; it returns what landed.',
+    'A payment is still refilling the payer, so the connection stays open. Call jaw_session_disconnect again in a moment; it returns what landed.',
   notSent: 'Nothing was revoked: the transaction could not be sent. Try again.',
   reverted: 'Nothing was revoked: the transaction reverted. Try again.',
   unconfirmed:
-    'The transaction was sent but is not confirmed yet. Call jaw_disconnect again in a minute to finish; it does not repeat what already landed.',
+    'The transaction was sent but is not confirmed yet. Call jaw_session_disconnect again in a minute to finish; it does not repeat what already landed.',
 };
 
 const FEE_MARGIN_BPS = 12_500n;

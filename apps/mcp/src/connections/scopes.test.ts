@@ -32,16 +32,16 @@ const UNSUPPORTED_ORIGIN_CHAIN = 324;
 // `needs` is any one of these scopes.
 const TOOLS: Record<string, { needs: ConnectionScope[]; args: object }> = {
   jaw_status: { needs: ['wallet:read'], args: {} },
-  jaw_quote: { needs: ['wallet:read'], args: { url: 'http://127.0.0.1:9/paid' } },
+  jaw_session_x402_quote: { needs: ['wallet:read'], args: { url: 'http://127.0.0.1:9/paid' } },
   jaw_add_funds: { needs: ['wallet:read'], args: {} },
   // No query, so it refuses before reaching the catalog.
-  jaw_discover: { needs: ['wallet:read'], args: {} },
-  jaw_history: { needs: ['wallet:read'], args: {} },
+  jaw_session_x402_discover: { needs: ['wallet:read'], args: {} },
+  jaw_session_history: { needs: ['wallet:read'], args: {} },
   jaw_connections: { needs: ['wallet:read'], args: {} },
   jaw_revoke_connection: { needs: ['wallet:read'], args: { id: 'conn_nope' } },
-  jaw_disconnect: { needs: ['wallet:read'], args: {} },
+  jaw_session_disconnect: { needs: ['wallet:read'], args: {} },
   jaw_request_budget: { needs: ['x402:pay'], args: { perDay: '1' } },
-  jaw_pay_and_fetch: { needs: ['x402:pay'], args: { url: 'http://127.0.0.1:9/paid' } },
+  jaw_session_x402_pay: { needs: ['x402:pay'], args: { url: 'http://127.0.0.1:9/paid' } },
   jaw_swap: {
     needs: ['x402:pay'],
     args: {
@@ -58,7 +58,7 @@ const TOOLS: Record<string, { needs: ConnectionScope[]; args: object }> = {
     needs: ['wallet:read'],
     args: { chainId: UNSUPPORTED_ORIGIN_CHAIN, calls: [{ to: RECIPIENT, data: '0xa9059cbb' }] },
   },
-  jaw_send_calls_status: { needs: ['wallet:read'], args: { id: `oc_${'A'.repeat(22)}` } },
+  jaw_get_calls_status: { needs: ['wallet:read'], args: { id: `oc_${'A'.repeat(22)}` } },
 };
 
 const PROFILES = ['wallet:read', 'wallet:read x402:pay'];
@@ -102,7 +102,9 @@ describe('a refresh decides the scopes of the new token', () => {
   it('given both scopes, when a refresh narrows to wallet:read, then paying is refused', async () => {
     const c = await connect(undefined, { scope: 'wallet:read x402:pay' });
     const narrowed = await refresh(c.refresh_token, 'wallet:read');
-    const result = await callTool(narrowed.body.access_token, 'jaw_pay_and_fetch', { url: 'http://127.0.0.1:9/paid' });
+    const result = await callTool(narrowed.body.access_token, 'jaw_session_x402_pay', {
+      url: 'http://127.0.0.1:9/paid',
+    });
     expect(result.content[0].text).toMatch(/^insufficient_scope: /);
     expect(refusedFor(result)).toBe('x402:pay');
   });

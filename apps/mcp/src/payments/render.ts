@@ -79,10 +79,10 @@ function summaryOf(row: PaymentRow, out: Omit<PayOutput, 'summary'>): string {
       return `Paid ${paid}. Settled${out.payment?.txHash ? ` in ${out.payment.txHash}` : ' on chain'}.${moved}`;
     case 'signed':
       return out.kind === 'paid'
-        ? `Paid ${paid}. Settlement is being confirmed; jaw_history shows it.${moved}`
+        ? `Paid ${paid}. Settlement is being confirmed; jaw_session_history shows it.${moved}`
         : `A payment was sent and no answer came back. Send the same idempotencyKey again to resend it; it will not pay twice.${moved}`;
     case 'unknown':
-      return `A payment may have reached the seller (${out.refusal?.code}). Whether it settled is being checked; jaw_history shows it.${moved}`;
+      return `A payment may have reached the seller (${out.refusal?.code}). Whether it settled is being checked; jaw_session_history shows it.${moved}`;
     default:
       if (out.payment) return `The signed payment expired unused. Nothing moved to the seller.${moved}`;
       return `Not paid: ${out.refusal?.code}. Nothing was sent.${raise}${moved}`;

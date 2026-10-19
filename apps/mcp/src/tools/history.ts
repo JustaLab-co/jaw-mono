@@ -46,7 +46,7 @@ const shown = (r: PaymentRow): z.infer<typeof row> => ({
 
 export function registerHistoryTool(server: McpServer) {
   server.registerTool(
-    'jaw_history',
+    'jaw_session_history',
     {
       description: 'The payments this connection made, newest first, with their state and transaction hash.',
       inputSchema: z.strictObject({

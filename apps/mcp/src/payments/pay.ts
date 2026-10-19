@@ -296,7 +296,7 @@ async function textUpTo(res: Response, max: number): Promise<string | undefined>
   return Buffer.byteLength(text) > max ? undefined : text;
 }
 
-/** One `jaw_pay_and_fetch` call, from the gates to an answer drawn from its row. */
+/** One `jaw_session_x402_pay` call, from the gates to an answer drawn from its row. */
 export async function pay(
   t: Tenant,
   input: PayInput,

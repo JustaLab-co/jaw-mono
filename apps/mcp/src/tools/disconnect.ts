@@ -5,7 +5,7 @@ import { disconnect, disconnectOutput } from '@/connections/disconnect';
 
 export function registerDisconnectTool(server: McpServer) {
   server.registerTool(
-    'jaw_disconnect',
+    'jaw_session_disconnect',
     {
       description:
         'End this connection. Revokes its budgets on chain, returns the USDC float to the account owner, ' +

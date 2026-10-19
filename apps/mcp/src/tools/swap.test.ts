@@ -2162,7 +2162,7 @@ describe('B28: the connection ends while the swap awaits the owner', () => {
       },
     ],
     [
-      'the agent calls jaw_disconnect',
+      'the agent calls jaw_session_disconnect',
       async (c) => async () => {
         const ended = await disconnect(c.t, { readPermission: approvedOnChain, ...sessionFakes().deps });
         expect(ended.isError).toBeFalsy();

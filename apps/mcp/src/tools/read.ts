@@ -115,7 +115,7 @@ const statusOutput = z.object({
   account: z.string(),
   chainId: z.string().describe('CAIP-2'),
   sessionAddress: z.string().describe('The address this connection pays from once it has a budget'),
-  connectionExpiresAt: z.string().describe('When this connection expires; call jaw_disconnect before then'),
+  connectionExpiresAt: z.string().describe('When this connection expires; call jaw_session_disconnect before then'),
   balances: z.object({ account: money.nullable(), session: money.nullable() }),
   budget: budgetOutput.nullable(),
   readiness,
@@ -153,7 +153,7 @@ async function status(t: Tenant) {
       ? `Connected as ${t.account} on ${network}. Ready to pay${leftToday(read?.budget)}.`
       : `Connected as ${t.account} on ${network}. ${NOT_READY[ready.reason ?? 'no_grant']}`;
   const summary = nearExpiry
-    ? `${base} Connection expires ${expiresAt.toISOString()}; call jaw_disconnect soon.`
+    ? `${base} Connection expires ${expiresAt.toISOString()}; call jaw_session_disconnect soon.`
     : base;
   return statusOutput.parse({
     account: t.account,
@@ -305,7 +305,7 @@ export function registerReadTools(server: McpServer) {
   );
 
   server.registerTool(
-    'jaw_quote',
+    'jaw_session_x402_quote',
     {
       description: 'The price of an x402 resource, without paying. Sends one request and reads the 402 challenge.',
       inputSchema: z.strictObject({ url: z.string().url().describe('The paid resource') }),

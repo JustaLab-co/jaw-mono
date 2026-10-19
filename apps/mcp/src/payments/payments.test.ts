@@ -403,7 +403,7 @@ async function logsOf(work: () => Promise<unknown>): Promise<string> {
   }
 }
 
-describe('jaw_pay_and_fetch', () => {
+describe('jaw_session_x402_pay', () => {
   it('pays from the float, answers with the fenced body, and settles the row from the receipt', async () => {
     const { t } = await connected('1');
     balances.set(t.sessionAddress.toLowerCase(), 1_000_000n);
@@ -1248,18 +1248,21 @@ describe('jaw_pay_and_fetch', () => {
     expect(refills).toEqual([105_000n]);
   });
 
-  it('lists payments newest first in jaw_history, scoped to the connection', async () => {
+  it('lists payments newest first in jaw_session_history, scoped to the connection', async () => {
     const { c, t } = await connected('1');
     balances.set(t.sessionAddress.toLowerCase(), 1_000_000n);
     await pay(t, { url: url('/exact'), idempotencyKey: 'h1' }, deps());
     await pay(t, { url: url('/exact'), idempotencyKey: 'h2' }, deps());
-    const listed = await callTool(c.access_token, 'jaw_history', { limit: 1 });
+    const listed = await callTool(c.access_token, 'jaw_session_history', { limit: 1 });
     expect(listed.structuredContent.payments).toHaveLength(1);
     expect(listed.structuredContent.payments[0]).toMatchObject({ idempotencyKey: 'h2', state: 'settled' });
-    const next = await callTool(c.access_token, 'jaw_history', { limit: 5, before: listed.structuredContent.next });
+    const next = await callTool(c.access_token, 'jaw_session_history', {
+      limit: 5,
+      before: listed.structuredContent.next,
+    });
     expect(next.structuredContent.payments.map((p: { idempotencyKey: string }) => p.idempotencyKey)).toEqual(['h1']);
     const stranger = await connected();
-    expect((await callTool(stranger.c.access_token, 'jaw_history', {})).structuredContent.payments).toEqual([]);
+    expect((await callTool(stranger.c.access_token, 'jaw_session_history', {})).structuredContent.payments).toEqual([]);
   });
 });
 
@@ -1480,14 +1483,14 @@ describe('the raw body kept for an internal caller', () => {
     }
   });
 
-  it('given jaw_pay_and_fetch, when an idempotency key claims the swap: namespace, then it is refused and nothing is claimed', async () => {
+  it('given jaw_session_x402_pay, when an idempotency key claims the swap: namespace, then it is refused and nothing is claimed', async () => {
     const { c } = await connected('1');
-    const swapKey = await callTool(c.access_token, 'jaw_pay_and_fetch', {
+    const swapKey = await callTool(c.access_token, 'jaw_session_x402_pay', {
       url: url('/free'),
       idempotencyKey: 'swap:abc:1',
     });
     expect(swapKey.isError).toBe(true);
-    await callTool(c.access_token, 'jaw_pay_and_fetch', { url: url('/free'), idempotencyKey: 'swap-abc-1' });
+    await callTool(c.access_token, 'jaw_session_x402_pay', { url: url('/free'), idempotencyKey: 'swap-abc-1' });
     const claimed = await getDb()
       .select({ key: payments.idempotencyKey })
       .from(payments)
@@ -1495,7 +1498,7 @@ describe('the raw body kept for an internal caller', () => {
     expect(claimed).toEqual([{ key: 'swap-abc-1' }]);
   });
 
-  it('given jaw_pay_and_fetch, when it pays, then its row keeps no raw body and its answer only the fenced one', async () => {
+  it('given jaw_session_x402_pay, when it pays, then its row keeps no raw body and its answer only the fenced one', async () => {
     const { t } = await connected('1');
     balances.set(t.sessionAddress.toLowerCase(), 1_000_000n);
     const result = await pay(t, { url: url('/exact'), idempotencyKey: 'raw-tool' }, deps());
@@ -1558,7 +1561,7 @@ describe('the raw body kept for an internal caller', () => {
 });
 
 describe('given a pay request that verified its bearer before the connection was disconnected', () => {
-  // What jaw_disconnect does once its batch landed: end the connection under the float lock.
+  // What jaw_session_disconnect does once its batch landed: end the connection under the float lock.
   const disconnect = (t: Tenant, held?: bigint[]) => () =>
     withFloat(t.connectionId, 1_000, (hold) =>
       hold.tx(async (tx) => {

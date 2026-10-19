@@ -81,7 +81,7 @@ async function holdPayment(t: Tenant, permissionId: string, reserved: string) {
     });
 }
 
-describe('jaw_disconnect', () => {
+describe('jaw_session_disconnect', () => {
   it('revokes the budget as spender, returns the float less what payments hold to the owner, then ends the tokens', async () => {
     const { c, tenant, permissionId, permission } = await budgetConnection(async () => approved);
     await holdPayment(tenant, permissionId, '20000');
@@ -223,7 +223,7 @@ describe('jaw_disconnect', () => {
 
   it('is a tool, and keeps the tokens with a fixed refusal when the chain cannot be read', async () => {
     const reader = await connect(undefined, { scope: 'wallet:read' });
-    const result = await callTool(reader.access_token, 'jaw_disconnect', {});
+    const result = await callTool(reader.access_token, 'jaw_session_disconnect', {});
     expect(result).toMatchObject({
       isError: true,
       content: [{ type: 'text', text: 'Nothing was revoked: the chain could not be read. Try again.' }],

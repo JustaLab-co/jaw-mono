@@ -1,14 +1,14 @@
 # Hosted send calls
 
-`jaw_send_calls` and `jaw_send_calls_status` in `apps/mcp` ask the account owner to approve up to 10 contract calls, run together from the account on one chain. The owner reviews and signs them in the wallet and pays the gas. Nothing comes out of the connection's USDC budget, and the session key never signs them. Both tools need `wallet:read` only.
+`jaw_send_calls` and `jaw_get_calls_status` in `apps/mcp` ask the account owner to approve up to 10 contract calls, run together from the account on one chain. The owner reviews and signs them in the wallet and pays the gas. Nothing comes out of the connection's USDC budget, and the session key never signs them. Both tools need `wallet:read` only.
 
 ## Sub-features
 
 - `calls-read-only`: a connection with only `wallet:read` and no budget gets a wallet link.
 - `calls-chain`: a chain the JAW wallet does not support gives `unsupported_chain` before any row or link.
 - `calls-target`: a call to the account itself, the permission manager or any EntryPoint (0.6 to 0.9) gives `call_target_refused` before any row or link.
-- `calls-paused`: with payments paused, a new `jaw_send_calls` is refused as `payments_paused` with no link, and `jaw_send_calls_status` keeps working.
-- `calls-happy`: link, owner approval, `sent` with a calls id, then `jaw_send_calls_status` until `landed` with a `txHash`.
+- `calls-paused`: with payments paused, a new `jaw_send_calls` is refused as `payments_paused` with no link, and `jaw_get_calls_status` keeps working.
+- `calls-happy`: link, owner approval, `sent` with a calls id, then `jaw_get_calls_status` until `landed` with a `txHash`.
 - `calls-sweep`: a `sent` request nobody asks about again is concluded as `landed` or `reverted` by the reconciler once it is a minute old, from the bundler receipt or, when the bundler has none ten minutes after the send, from the `UserOperationEvent` on chain (the row keeps `sent_block`, the head when it was sent, where that search starts); a `send_started` one with no calls id stays as it is.
 - `calls-decline`: the owner rejects the calls in the wallet and the state is `owner_declined`.
 - `calls-wrong-account`: the owner signs in with another account than the connection's; the state is `owner_declined` with code `wrong_account`.
@@ -21,7 +21,7 @@
 
 ## How to get to it (user POV)
 
-- An MCP client on the hosted server with any scope set; `wallet:read` is enough. `jaw_send_calls` takes `calls`, an array of 1 to 10 `{ to, data?, value? }` (`data` is hex calldata starting with the selector, omitted for a plain native transfer; `value` is wei as a decimal string, default 0), and optionally `chainId` (defaults to the connection's chain) and `idempotencyKey` (made up and returned when absent). `jaw_send_calls_status` takes the `id` (`oc_` and 22 characters) that `jaw_send_calls` returned.
+- An MCP client on the hosted server with any scope set; `wallet:read` is enough. `jaw_send_calls` takes `calls`, an array of 1 to 10 `{ to, data?, value? }` (`data` is hex calldata starting with the selector, omitted for a plain native transfer; `value` is wei as a decimal string, default 0), and optionally `chainId` (defaults to the connection's chain) and `idempotencyKey` (made up and returned when absent). `jaw_get_calls_status` takes the `id` (`oc_` and 22 characters) that `jaw_send_calls` returned.
 - The result of both tools holds `id`, `idempotencyKey`, `state`, `approveBy`, `chainId`, `from`, each call as `to`, `value` and `selector`, `totalValue` in wei, `callsId` and `txHash` once known, a `refusal` code and a `summary`. `url` is present only while `awaiting_owner` with no code on the row. States: `awaiting_owner`, `owner_declined`, `expired`, `sent`, `landed`, `reverted`.
 - The person sees the summary: the account owner opens the `url` within 30 minutes, the wallet asks for the account and then shows the calls as one atomic `wallet_sendCalls`, and the owner pays the gas in the wallet.
 - By hand: `node tools/verify/hosted-client.mjs "$MCP_PUBLIC_URL" [scope]`, then `calls '<json array>' [chainId] [key]` and `calls-status <id>`.

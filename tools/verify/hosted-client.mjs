@@ -127,10 +127,10 @@ const HELP = `Commands:
   tools                          list the server's tools
   status                         jaw_status
   connections                    jaw_connections
-  history                        jaw_history
+  history                        jaw_session_history
   funds                          jaw_add_funds
-  quote <url>                    jaw_quote
-  pay <url> [maxAmount]          jaw_pay_and_fetch (maxAmount in base units)
+  quote <url>                    jaw_session_x402_quote
+  pay <url> [maxAmount]          jaw_session_x402_pay (maxAmount in base units)
   budget <perDay>                jaw_request_budget, USDC only
   swap <originChain> <originToken> <destChain> <destToken> <amount> [recipient|-] [key]
                                  jaw_swap, amount in base units of originToken, 0x000...0 for the native coin,
@@ -139,9 +139,9 @@ const HELP = `Commands:
   calls '<json array>' [chainId] [key]
                                  jaw_send_calls, the owner approves in the wallet, e.g.
                                  calls '[{"to":"0x...","data":"0x..."}]' 8453 my-key
-  calls-status <id>              jaw_send_calls_status, id is the oc_ id jaw_send_calls returned
+  calls-status <id>              jaw_get_calls_status, id is the oc_ id jaw_send_calls returned
   revoke <connection id>         jaw_revoke_connection
-  disconnect                     jaw_disconnect
+  disconnect                     jaw_session_disconnect
   call <tool> '<json>'           any tool with raw arguments
   quit`;
 
@@ -149,10 +149,10 @@ const commands = {
   tools: async () => console.log((await rpc('tools/list', {})).tools.map((t) => t.name).join('\n')),
   status: () => call('jaw_status', {}),
   connections: () => call('jaw_connections', {}),
-  history: () => call('jaw_history', {}),
+  history: () => call('jaw_session_history', {}),
   funds: () => call('jaw_add_funds', {}),
-  quote: (url) => call('jaw_quote', { url }),
-  pay: (url, maxAmount) => call('jaw_pay_and_fetch', { url, ...(maxAmount && { maxAmount }) }),
+  quote: (url) => call('jaw_session_x402_quote', { url }),
+  pay: (url, maxAmount) => call('jaw_session_x402_pay', { url, ...(maxAmount && { maxAmount }) }),
   budget: (perDay) => call('jaw_request_budget', { perDay }),
   swap: (originChainId, originToken, destinationChainId, destinationToken, amount, recipient, idempotencyKey) =>
     call('jaw_swap', {
@@ -171,9 +171,9 @@ const commands = {
       ...(chainId && { chainId: Number(chainId) }),
       ...(idempotencyKey && { idempotencyKey }),
     }),
-  'calls-status': (id) => call('jaw_send_calls_status', { id }),
+  'calls-status': (id) => call('jaw_get_calls_status', { id }),
   revoke: (connection) => call('jaw_revoke_connection', { id: connection }),
-  disconnect: () => call('jaw_disconnect', {}),
+  disconnect: () => call('jaw_session_disconnect', {}),
   call: (name, ...json) => call(name, json.length ? JSON.parse(json.join(' ')) : {}),
 };
 

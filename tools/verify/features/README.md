@@ -32,4 +32,4 @@ The maintained source for verifying what a user of the jaw CLI, the MCP server a
 | Real settlement       | staging endpoint with the real session; passkey payment from the account | [live-settlement.md](live-settlement.md)     |
 | Hosted server         | `apps/mcp` over HTTP with Postgres                                       | [hosted-mcp.md](hosted-mcp.md)               |
 | Swap from an agent    | hosted `jaw_swap`, `jaw_swap_status`                                     | [hosted-swap.md](hosted-swap.md)             |
-| Calls the owner signs | hosted `jaw_send_calls`, `jaw_send_calls_status`                         | [hosted-send-calls.md](hosted-send-calls.md) |
+| Calls the owner signs | hosted `jaw_send_calls`, `jaw_get_calls_status`                          | [hosted-send-calls.md](hosted-send-calls.md) |
