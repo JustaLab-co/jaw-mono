@@ -70,8 +70,11 @@ Array of call permissions. Each permission:
 | `target`            | `0x${string}` | Yes      | Contract address                                       |
 | `functionSignature` | `string`      | No\*     | Function signature (e.g., "transfer(address,uint256)") |
 | `selector`          | `0x${string}` | No\*     | 4-byte function selector (0x...)                       |
+| `checker`           | `0x${string}` | No       | Contract that must approve each matching call          |
 
 \*Either `functionSignature` or `selector` is required.
+
+A `checker` is a contract the permission manager calls with `canExecute` before every call this rule matches, so it can check the call's arguments as well as the function. It is part of the permission hash and is shown on the grant screen. Leave it out for no checker. The response always includes it, as the zero address when none was set, so the permission can be rebuilt from the response alone.
 
 #### spends (Optional\*)
 
@@ -110,7 +113,8 @@ Returns permission grant result with generated permission ID.
   "calls": [
     {
       "target": "0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48",
-      "selector": "0xa9059cbb"
+      "selector": "0xa9059cbb",
+      "checker": "0x0000000000000000000000000000000000000000"
     }
   ],
   "spends": [
