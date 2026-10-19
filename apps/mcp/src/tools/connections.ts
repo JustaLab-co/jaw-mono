@@ -1,6 +1,7 @@
 import type { GrantedPermission } from '@jaw.id/agent';
 import type { McpServer } from '@modelcontextprotocol/server';
-import { and, desc, eq, inArray, isNotNull, ne, notExists, sql } from 'drizzle-orm';
+import { and, desc, eq, inArray, isNotNull, isNull, ne, notExists, sql } from 'drizzle-orm';
+import { alias } from 'drizzle-orm/pg-core';
 import { z } from 'zod';
 import { tenant, type Tenant } from '@/connections/auth';
 import { ownedBy } from '@/connections/rows';
@@ -57,6 +58,8 @@ function grantOf(g: GrantRow, now: Date): z.infer<typeof grantView> {
   };
 }
 
+const revokes = alias(permissionRequests, 'revokes');
+
 async function viewsOf(t: Tenant, rows: (typeof connections.$inferSelect)[]): Promise<View[]> {
   const ids = rows.map((r) => r.id);
   if (!ids.length) return [];
@@ -65,7 +68,20 @@ async function viewsOf(t: Tenant, rows: (typeof connections.$inferSelect)[]): Pr
     eq(permissionRequests.method, 'grant'),
     isNotNull(permissionRequests.permissionId),
     sql`${permissionRequests.code} is distinct from 'wrong_account'`,
-    notExists(getDb().select().from(grants).where(eq(grants.permissionId, permissionRequests.permissionId)))
+    notExists(getDb().select().from(grants).where(eq(grants.permissionId, permissionRequests.permissionId))),
+    notExists(
+      getDb()
+        .select()
+        .from(revokes)
+        .where(
+          and(
+            eq(revokes.method, 'revoke'),
+            sql`lower(${revokes.permissionId}) = lower(${permissionRequests.permissionId})`,
+            eq(revokes.state, 'approved'),
+            isNull(revokes.code)
+          )
+        )
+    )
   );
   const [held, orphans] = await Promise.all([
     getDb().select().from(grants).where(inArray(grants.connectionId, ids)).orderBy(desc(grants.createdAt)),

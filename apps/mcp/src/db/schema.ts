@@ -388,6 +388,9 @@ export const permissionRequests = pgTable(
     uniqueIndex('permission_requests_open_revoke_index')
       .on(sql`lower(${t.permissionId})`)
       .where(sql`${t.method} = 'revoke' and ${t.state} = 'awaiting_owner'`),
+    uniqueIndex('permission_requests_open_revoke_connection_index')
+      .on(t.connectionId)
+      .where(sql`${t.method} = 'revoke' and ${t.state} = 'awaiting_owner'`),
     check(
       'permission_request_shape',
       sql`(${t.method} = 'revoke' and ${t.permissionId} is not null)

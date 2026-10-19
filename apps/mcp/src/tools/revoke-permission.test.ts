@@ -1,8 +1,8 @@
 import { randomBytes } from 'node:crypto';
 import type { GrantedPermission } from '@jaw.id/agent';
-import { eq, sql } from 'drizzle-orm';
+import { and, eq, sql } from 'drizzle-orm';
 import { toFunctionSelector, type Hex } from 'viem';
-import { beforeAll, describe, expect, it } from 'vitest';
+import { beforeAll, describe, expect, it, vi } from 'vitest';
 import { verifyBearer, type Tenant } from '@/connections/auth';
 import type { OpenWallet } from '@/connections/relay';
 import {
@@ -159,6 +159,38 @@ describe('jaw_revoke_permission', () => {
     expect(await requestsOf(id)).toMatchObject([{ state: 'approved', connectionId: t.connectionId }]);
   });
 
+  it('given a grant the wallet answered but this server did not record, when it is revoked, then jaw_connections stops listing it as unrecorded', async () => {
+    const { c, t, signer } = await connected();
+    const id = randomId();
+    await getDb()
+      .insert(permissionRequests)
+      .values({
+        id: `pr_${t.connectionId}_orphan`,
+        connectionId: t.connectionId,
+        method: 'grant',
+        chainId: t.chainId,
+        account: t.account,
+        permissionId: id,
+        state: 'failed',
+        code: 'not_recorded',
+        walletUrl: 'http://keys.test/cli-bridge',
+        approveBy: new Date(),
+      });
+    const unrecorded = async () =>
+      (
+        (await callTool(c.access_token, 'jaw_connections', {})).structuredContent.connections as {
+          unrecorded: string[];
+        }[]
+      )[0].unrecorded;
+    expect(await unrecorded()).toEqual([id]);
+    const { deps } = setup(signer, async () => ({ permission: orphanOf(t.account), chainId: t.chainId }));
+
+    await revokePermission(t, { permissionId: id }, deps());
+    await walletsSettled();
+
+    expect(await unrecorded()).toEqual([]);
+  });
+
   it('given an id no permission of this account has, then it is refused by name and no wallet opens', async () => {
     const { t, signer } = await connected();
     const { deps, opened } = setup(signer);
@@ -193,6 +225,35 @@ describe('jaw_revoke_permission', () => {
 
     expect(second.content[0].text).toMatch(/^revoke_in_progress: /);
     expect(opened()).toBe(1);
+  });
+
+  it('given three revokes of different permissions from one connection racing past the first check, then one link opens and the others are refused', async () => {
+    const { t, signer } = await connected(owner(), 'wallet:read');
+    const ids = [randomId(), randomId(), randomId()];
+    const { deps } = setup(signer, async () => ({ permission: orphanOf(t.account), chainId: t.chainId }));
+    const wait = held();
+    const holding = deps({ held: wait.promise });
+    const allChecked = Promise.withResolvers<void>();
+    let checked = 0;
+    const openWallet: OpenWallet = async (...args) => {
+      if (++checked === ids.length) allChecked.resolve();
+      await allChecked.promise;
+      return holding.openWallet(...args);
+    };
+
+    const results = await Promise.all(
+      ids.map((permissionId) => revokePermission(t, { permissionId }, { ...holding, openWallet }))
+    );
+    const open = await getDb()
+      .select()
+      .from(permissionRequests)
+      .where(and(eq(permissionRequests.connectionId, t.connectionId), eq(permissionRequests.state, 'awaiting_owner')));
+    wait.release();
+    await walletsSettled();
+
+    expect(open).toHaveLength(1);
+    expect(results.filter((r) => urlOf(r))).toHaveLength(1);
+    expect(results.filter((r) => /^revoke_in_progress: /.test(r.content[0].text))).toHaveLength(2);
   });
 
   it.each<[string, (t: Tenant, deps: RevokeDeps) => RevokeDeps]>([
@@ -355,6 +416,37 @@ describe('jaw_revoke_permission', () => {
     expect(urlOf(again)).not.toBe(urlOf(first));
     expect(lost).toMatchObject({ state: 'expired', code: 'session_lost' });
     expect(asked.filter((a) => a.method === 'wallet_revokePermissions')).toHaveLength(1);
+  });
+
+  it('given the session already asked the owner when its lease lapsed, then a new ask opens no second link and the first answer still settles', async () => {
+    const { t, signer, budget } = await connected();
+    const { deps, opened, chain } = setup(signer);
+    const answers = walletAnswers(signer);
+    const asked: { method: string; params: unknown[] }[] = [];
+    const wait = held();
+    const wallet = fakeWallet(async (method, params) => {
+      if (method !== 'wallet_revokePermissions') return answers(method, params);
+      await wait.promise;
+      chain.revoked.add(budget.toLowerCase());
+      return { success: true };
+    }, asked);
+    const holding = deps();
+    const first = await revokePermission(t, { permissionId: budget }, { ...holding, openWallet: wallet });
+    await vi.waitFor(() => expect(asked.map((a) => a.method)).toContain('wallet_revokePermissions'));
+    await getDb()
+      .update(permissionRequests)
+      .set({ sessionUntil: sql`now() - interval '1 second'` })
+      .where(eq(permissionRequests.walletUrl, urlOf(first)!));
+
+    const again = await revokePermission(t, { permissionId: budget }, holding);
+    wait.release();
+    await walletsSettled();
+
+    expect(opened()).toBe(0);
+    expect(again.content[0].text).toMatch(/^revoke_in_progress: /);
+    expect(again.content[0].text).toContain(urlOf(first));
+    expect(await requestsOf(budget)).toMatchObject([{ state: 'approved' }]);
+    expect((await grantRow(budget)).revokedAt).not.toBeNull();
   });
 
   it('given three grant and revoke links waiting on the account, then a fourth link of any kind is refused', async () => {

@@ -241,9 +241,13 @@ describe('jaw_grant_permissions', () => {
     const { t, signer } = await connected();
     const release = Promise.withResolvers<void>();
     const url = 'http://keys.test/cli-bridge?session=waiting';
+    const ownerLeaves = async () => {
+      await release.promise;
+      throw new Error('owner left');
+    };
     const waiting: Wallet = {
       url,
-      run: async (work) => work(async () => release.promise as never),
+      run: async (work) => work(ownerLeaves),
       close: () => undefined,
     };
     let until: Date | undefined;
@@ -259,7 +263,7 @@ describe('jaw_grant_permissions', () => {
     expect(second.content[0].text).toContain('still waiting');
     expect(second.content[0].text).toContain(until!.toISOString());
 
-    release.reject(new Error('owner left'));
+    release.resolve();
     await walletsSettled();
     await vi.waitFor(async () => {
       const third = await grantPermissions(

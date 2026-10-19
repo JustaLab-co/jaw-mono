@@ -3,7 +3,7 @@ import { and, eq, gt, isNull, lte, or, sql, type SQL } from 'drizzle-orm';
 import type { PgUpdateSetSource } from 'drizzle-orm/pg-core';
 import type { Tenant } from '@/connections/auth';
 import { WalletBusy, type Ask, type OpenWallet, type Wallet } from '@/connections/relay';
-import { keepLease, sessionLeaseEnd } from '@/connections/session-lease';
+import { keepLease, leaseHeld, sessionLeaseEnd } from '@/connections/session-lease';
 import { USER_REJECTED } from '@/connections/wallet-codes';
 import { getDb, type Tx } from '@/db/client';
 import { permissionRequests } from '@/db/schema';
@@ -21,12 +21,18 @@ export interface Outcome {
 const dbNow = sql`statement_timestamp()`;
 const awaiting = eq(permissionRequests.state, 'awaiting_owner');
 
-const sameAs = (t: Tenant, req: LinkRequest) =>
+const ofConnection = (t: Tenant, req: LinkRequest) =>
+  and(eq(permissionRequests.method, req.method), eq(permissionRequests.connectionId, t.connectionId));
+
+const blockers = (t: Tenant, req: LinkRequest) =>
   req.method === 'grant'
-    ? and(eq(permissionRequests.method, 'grant'), eq(permissionRequests.connectionId, t.connectionId))
-    : and(
-        eq(permissionRequests.method, 'revoke'),
-        sql`lower(${permissionRequests.permissionId}) = ${req.permissionId.toLowerCase()}`
+    ? ofConnection(t, req)
+    : or(
+        ofConnection(t, req),
+        and(
+          eq(permissionRequests.method, 'revoke'),
+          sql`lower(${permissionRequests.permissionId}) = ${req.permissionId.toLowerCase()}`
+        )
       );
 
 async function update(where: SQL | undefined, set: PgUpdateSetSource<typeof permissionRequests>, db: Tx = getDb()) {
@@ -38,24 +44,27 @@ async function update(where: SQL | undefined, set: PgUpdateSetSource<typeof perm
   return row;
 }
 
+const ASKED = 'asked';
+const lapsedBeforeAsk = and(
+  or(isNull(permissionRequests.sessionUntil), lte(permissionRequests.sessionUntil, dbNow)),
+  sql`${permissionRequests.code} is distinct from ${ASKED}`
+);
+
 const closeDead = (same: SQL | undefined, db: Tx = getDb()) =>
   update(
-    and(
-      same,
-      awaiting,
-      or(
-        lte(permissionRequests.approveBy, dbNow),
-        isNull(permissionRequests.sessionUntil),
-        lte(permissionRequests.sessionUntil, dbNow)
-      )
-    ),
+    and(same, awaiting, or(lte(permissionRequests.approveBy, dbNow), lapsedBeforeAsk)),
     { state: 'expired', code: sql`case when ${permissionRequests.approveBy} > ${dbNow} then 'session_lost' end` },
     db
   );
 
-async function findLive(same: SQL | undefined): Promise<PermissionRequestRow | undefined> {
-  const [row] = await getDb().select().from(permissionRequests).where(and(same, linkLive));
-  return row;
+async function findHeld(same: SQL | undefined): Promise<Held | undefined> {
+  const asked = and(awaiting, gt(permissionRequests.approveBy, dbNow), eq(permissionRequests.code, ASKED));
+  const [row] = await getDb()
+    .select()
+    .from(permissionRequests)
+    .where(and(same, or(linkLive, asked)));
+  if (!row) return undefined;
+  return leaseHeld(row.sessionUntil) ? { waiting: row } : { askedLost: row };
 }
 
 const ofRow = (row: PermissionRequestRow) => and(eq(permissionRequests.id, row.id), awaiting);
@@ -79,11 +88,9 @@ async function settle(row: PermissionRequestRow, { state, code, permissionId }: 
   });
 }
 
-export type Opened =
-  | { opened: PermissionRequestRow }
-  | { waiting: PermissionRequestRow }
-  | 'account_busy'
-  | 'wallet_busy';
+type Held = { waiting: PermissionRequestRow } | { askedLost: PermissionRequestRow };
+
+export type Opened = { opened: PermissionRequestRow } | Held | 'account_busy' | 'wallet_busy';
 
 /** Marks the row asked once, while its lease still holds. False when another link may have taken over. */
 export type Claim = () => Promise<boolean>;
@@ -95,11 +102,9 @@ export type LinkRequest = {
 } & ({ method: 'grant' } | { method: 'revoke'; permissionId: string });
 
 export async function openLink(t: Tenant, req: LinkRequest, openWallet: OpenWallet): Promise<Opened> {
-  const same = sameAs(t, req);
-  // One revoke per connection too, so a read-only app cannot hold every owner slot of the account.
-  const mine = and(eq(permissionRequests.method, req.method), eq(permissionRequests.connectionId, t.connectionId));
-  const waiting = (await findLive(same)) ?? (req.method === 'revoke' ? await findLive(mine) : undefined);
-  if (waiting) return { waiting };
+  const blocking = blockers(t, req);
+  const held = await findHeld(blocking);
+  if (held) return held;
   if ((await countOpenLinks(t.account)) >= MAX_OPEN_PER_ACCOUNT) return 'account_busy';
   const { approveBy } = req;
   let wallet: Wallet;
@@ -112,7 +117,7 @@ export async function openLink(t: Tenant, req: LinkRequest, openWallet: OpenWall
   let row: PermissionRequestRow | undefined | typeof FULL;
   try {
     row = await withLinkSlot(t.account, undefined, async (tx) => {
-      await closeDead(same, tx);
+      await closeDead(blocking, tx);
       const [inserted] = await tx
         .insert(permissionRequests)
         .values({
@@ -134,10 +139,7 @@ export async function openLink(t: Tenant, req: LinkRequest, openWallet: OpenWall
     if (!row || row === FULL) wallet.close();
   }
   if (row === FULL) return 'account_busy';
-  if (!row) {
-    const raced = await findLive(same);
-    return raced ? { waiting: raced } : 'wallet_busy';
-  }
+  if (!row) return (await findHeld(blocking)) ?? 'wallet_busy';
   follow(row, wallet, req.work);
   return { opened: row };
 }
@@ -153,7 +155,7 @@ function follow(row: PermissionRequestRow, wallet: Wallet, work: LinkRequest['wo
   );
   const claim: Claim = async () => {
     const leased = and(ofRow(row), gt(permissionRequests.sessionUntil, dbNow), isNull(permissionRequests.code));
-    return (await update(leased, { code: 'asked' })) !== undefined;
+    return (await update(leased, { code: ASKED })) !== undefined;
   };
   const ended = (err: unknown) => {
     log('warn', { msg: 'permission request ended', permissionRequestId: row.id, error: errorLabel(err) });

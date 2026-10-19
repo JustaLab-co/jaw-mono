@@ -176,6 +176,13 @@
       "when": 1792420733532,
       "tag": "0024_permission_requests",
       "breakpoints": true
+    },
+    {
+      "idx": 25,
+      "version": "7",
+      "when": 1792435058212,
+      "tag": "0025_open_revoke_per_connection",
+      "breakpoints": true
     }
   ]
 }

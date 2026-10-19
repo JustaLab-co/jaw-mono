@@ -197,21 +197,25 @@ export async function revokePermission(t: Tenant, input: RevokeInput, deps = DEF
   );
   if (opened === 'wallet_busy') return refusal('Too many owners are approving right now. Try again in a minute.');
   if (opened === 'account_busy') return refusal(ACCOUNT_BUSY);
-  if ('waiting' in opened) {
-    const { connectionId, permissionId, approveBy } = opened.waiting;
-    const until = approveBy.toISOString();
-    if (connectionId !== t.connectionId) {
-      return refusal(
-        `revoke_in_progress: another app on this account asked the owner to revoke ${permissionId}; that link waits until ${until}.`
-      );
-    }
-    if (permissionId?.toLowerCase() !== target.permissionId.toLowerCase()) {
-      return refusal(
-        `revoke_in_progress: this connection already asked the owner to revoke ${permissionId}. Ask again once they answer or the link ends at ${until}.`
-      );
-    }
+  if ('opened' in opened) return answer(target, opened.opened);
+  const held = 'waiting' in opened ? opened.waiting : opened.askedLost;
+  const until = held.approveBy.toISOString();
+  if (held.connectionId !== t.connectionId) {
+    return refusal(
+      `revoke_in_progress: another app on this account asked the owner to revoke ${held.permissionId}; that link waits until ${until}.`
+    );
   }
-  return answer(target, 'opened' in opened ? opened.opened : opened.waiting);
+  if (held.permissionId?.toLowerCase() !== target.permissionId.toLowerCase()) {
+    return refusal(
+      `revoke_in_progress: this connection already asked the owner to revoke ${held.permissionId}. Ask again once they answer or the link ends at ${until}.`
+    );
+  }
+  if ('askedLost' in opened) {
+    return refusal(
+      `revoke_in_progress: the owner was already asked to revoke ${held.permissionId} at ${held.walletUrl}, and this server lost that session. An answer given there still counts. Ask again after ${until}.`
+    );
+  }
+  return answer(target, held);
 }
 
 export function registerRevokeTool(server: McpServer) {
