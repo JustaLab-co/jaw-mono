@@ -19,7 +19,7 @@ import {
   type GrantRequest,
   type ReadPermission,
 } from '@/grants/permission';
-import { openLink, type Claim, type Outcome } from '@/grants/requests';
+import { lostBefore, lostPreamble, openLink, type Claim, type Outcome } from '@/grants/requests';
 import { liveGrants, LIVE_GRANTS_PER_CONNECTION, type GrantKind } from '@/grants/store';
 import { errorLabel, log } from '@/lib/edge';
 import { reply } from '@/lib/fence';
@@ -200,23 +200,24 @@ export async function grantPermissions(t: Tenant, input: GrantInput, deps = DEFA
   );
   if (opened === 'wallet_busy') return refusal('Too many owners are approving right now. Try again in a minute.');
   if (opened === 'account_busy') return refusal(ACCOUNT_BUSY);
+  const row = 'waiting' in opened ? opened.waiting : opened.opened;
+  const lost = await lostBefore(row);
+  const warning = lost
+    ? lostPreamble(lost, 'grant') +
+      'Tell the owner not to approve that one: a grant approved there can go live on chain without this server recording it, and then only jaw_revoke_permission with its id from the wallet ends it. '
+    : '';
   if ('waiting' in opened) {
-    const { walletUrl, approveBy } = opened.waiting;
     return refusal(
-      `A grant request is still waiting for the owner at ${walletUrl}. Ask again once they approve or it expires at ${approveBy.toISOString()}.`
+      `${warning}A grant request is still waiting for the owner at ${row.walletUrl}. Ask again once they approve or it expires at ${row.approveBy.toISOString()}.`
     );
   }
-  const { opened: row, lost } = opened;
   const url = row.walletUrl;
   const ends = new Date(ask.grant.expiry * 1000).toISOString();
   return reply({
     url,
     expiresAt: ends,
     summary:
-      (lost
-        ? `link_lost: this server lost the session of the earlier grant link ${lost.walletUrl} after asking the owner, so it may never hear an answer given there. ` +
-          'Tell the owner not to approve that one: a grant approved there can go live on chain without this server recording it, and then only jaw_revoke_permission with its id from the wallet ends it. '
-        : '') +
+      warning +
       `Ask the account owner to open ${url} and approve ${ask.what} until ${ends} in their wallet. ` +
       'Once they do, the session key acts within it with no further prompts. ' +
       (ask.kind === 'x402-budget' ? 'jaw_session_status shows the budget in force. ' : '') +

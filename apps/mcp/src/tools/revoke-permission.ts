@@ -10,7 +10,14 @@ import { ownerRelay, type Ask, type OpenWallet } from '@/connections/relay';
 import { getDb } from '@/db/client';
 import { grants, permissionRequests } from '@/db/schema';
 import { readOnChain, type ReadPermission } from '@/grants/permission';
-import { openLink, type Claim, type Outcome, type PermissionRequestRow } from '@/grants/requests';
+import {
+  lostBefore,
+  lostPreamble,
+  openLink,
+  type Claim,
+  type Outcome,
+  type PermissionRequestRow,
+} from '@/grants/requests';
 import { reply } from '@/lib/fence';
 import { ACCOUNT_BUSY, refusal } from './reply';
 
@@ -145,7 +152,8 @@ async function askRevoke(t: Tenant, target: Target, ask: Ask, claim: Claim, deps
   return { state: 'approved', code: 'unconfirmed' };
 }
 
-function answer(target: Target, row: PermissionRequestRow, lost?: PermissionRequestRow) {
+async function answer(target: Target, row: PermissionRequestRow) {
+  const lost = await lostBefore(row);
   const { spender, spends } = target.permission;
   const tokens = spends.length ? ` and its limits on ${spends.map((s) => s.token).join(', ')}` : '';
   return reply({
@@ -157,8 +165,8 @@ function answer(target: Target, row: PermissionRequestRow, lost?: PermissionRequ
     approveBy: row.approveBy.toISOString(),
     summary:
       (lost
-        ? `link_lost: this server lost the session of the earlier link ${lost.walletUrl} to revoke ${lost.permissionId} after asking the owner, so it may never hear an answer given there. ` +
-          'A revoke the owner already approved there still shows on chain, and asking for it again reads it as already_revoked. '
+        ? lostPreamble(lost, 'revoke') +
+          `It asked to revoke ${lost.permissionId}. A revoke the owner already approved there still shows on chain, and asking for it again reads it as already_revoked. `
         : '') +
       `Ask the account owner to open ${row.walletUrl} before ${row.approveBy.toISOString()} and revoke permission ${target.permissionId}, ` +
       `which lets ${spender} act for the account${tokens}. The owner pays the gas in the wallet. ` +
@@ -201,7 +209,7 @@ export async function revokePermission(t: Tenant, input: RevokeInput, deps = DEF
   );
   if (opened === 'wallet_busy') return refusal('Too many owners are approving right now. Try again in a minute.');
   if (opened === 'account_busy') return refusal(ACCOUNT_BUSY);
-  if ('opened' in opened) return answer(target, opened.opened, opened.lost);
+  if ('opened' in opened) return answer(target, opened.opened);
   const held = opened.waiting;
   const until = held.approveBy.toISOString();
   if (held.connectionId !== t.connectionId) {

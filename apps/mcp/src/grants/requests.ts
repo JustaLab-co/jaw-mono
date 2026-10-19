@@ -32,14 +32,12 @@ const sameSign = (t: Tenant, idempotencyKey: string) =>
     eq(permissionRequests.idempotencyKey, idempotencyKey)
   );
 
-const heldByOthers = (t: Tenant, req: LinkRequest) =>
-  req.method === 'revoke'
-    ? and(
-        eq(permissionRequests.method, 'revoke'),
-        sql`lower(${permissionRequests.permissionId}) = ${req.permissionId.toLowerCase()}`,
-        ne(permissionRequests.connectionId, t.connectionId)
-      )
-    : sql`false`;
+const othersRevoke = (t: Tenant, permissionId: string) =>
+  and(
+    eq(permissionRequests.method, 'revoke'),
+    sql`lower(${permissionRequests.permissionId}) = ${permissionId.toLowerCase()}`,
+    ne(permissionRequests.connectionId, t.connectionId)
+  );
 
 async function update(where: SQL | undefined, set: PgUpdateSetSource<typeof permissionRequests>, db: Tx = getDb()) {
   const [row] = await db
@@ -62,17 +60,22 @@ const closeDead = (same: SQL | undefined, db: Tx = getDb()) =>
   update(and(same, awaiting, or(pastWindow, lapsed)), { state: 'expired', code: endCode }, db);
 
 async function findHeld(t: Tenant, req: LinkRequest): Promise<Held | undefined> {
+  const askedInWindow = and(awaiting, gt(permissionRequests.approveBy, dbNow), eq(permissionRequests.code, ASKED));
   const [row] = await getDb()
     .select()
     .from(permissionRequests)
     .where(
       or(
         and(ofConnection(t, req), linkLive),
-        and(heldByOthers(t, req), awaiting, gt(permissionRequests.approveBy, dbNow))
+        req.method === 'revoke' ? and(othersRevoke(t, req.permissionId), or(linkLive, askedInWindow)) : undefined
       )
-    );
+    )
+    .orderBy(desc(eq(permissionRequests.connectionId, t.connectionId)))
+    .limit(1);
   return row && { waiting: row };
 }
+
+const unnamed = sql`not exists (select 1 from ${permissionRequests} named where named.names_lost = ${permissionRequests.id})`;
 
 async function lostLink(t: Tenant, req: LinkRequest, db: Tx) {
   const [row] = await db
@@ -83,7 +86,7 @@ async function lostLink(t: Tenant, req: LinkRequest, db: Tx) {
         ofConnection(t, req),
         eq(permissionRequests.state, 'expired'),
         eq(permissionRequests.code, LINK_LOST),
-        eq(permissionRequests.lostReported, false),
+        unnamed,
         gt(permissionRequests.approveBy, dbNow)
       )
     )
@@ -91,6 +94,24 @@ async function lostLink(t: Tenant, req: LinkRequest, db: Tx) {
     .limit(1);
   return row;
 }
+
+export async function lostBefore(row: PermissionRequestRow): Promise<PermissionRequestRow | undefined> {
+  if (!row.namesLost || row.state !== 'awaiting_owner') return undefined;
+  const [lost] = await getDb()
+    .select()
+    .from(permissionRequests)
+    .where(
+      and(
+        eq(permissionRequests.id, row.namesLost),
+        eq(permissionRequests.code, LINK_LOST),
+        gt(permissionRequests.approveBy, dbNow)
+      )
+    );
+  return lost;
+}
+
+export const lostPreamble = (lost: PermissionRequestRow, what: string) =>
+  `link_lost: this server lost the session of the earlier ${what} link ${lost.walletUrl} after asking the owner, so it may never hear an answer given there. `;
 
 const ofRow = (row: PermissionRequestRow) => and(eq(permissionRequests.id, row.id), awaiting);
 
@@ -127,12 +148,7 @@ async function settle(row: PermissionRequestRow, { state, code, permissionId, si
 
 type Held = { waiting: PermissionRequestRow };
 
-/** `lost` is this connection's earlier link the server can no longer hear, which the owner must not approve. */
-export type Opened =
-  | { opened: PermissionRequestRow; lost?: PermissionRequestRow }
-  | Held
-  | 'account_busy'
-  | 'wallet_busy';
+export type Opened = { opened: PermissionRequestRow } | Held | 'account_busy' | 'wallet_busy';
 
 /** Marks the row asked once, while its lease still holds. False when another link may have taken over. */
 export type Claim = () => Promise<boolean>;
@@ -163,12 +179,15 @@ export async function openLink(t: Tenant, req: LinkRequest, openWallet: OpenWall
     if (err instanceof WalletBusy) return 'wallet_busy';
     throw err;
   }
-  let lost: PermissionRequestRow | undefined;
   let row: PermissionRequestRow | undefined | typeof FULL;
   try {
     row = await withLinkSlot(t.account, undefined, async (tx) => {
-      await closeDead(or(ofConnection(t, req), and(heldByOthers(t, req), pastWindow)), tx);
-      lost = await lostLink(t, req, tx);
+      const theirs = req.method === 'revoke' ? othersRevoke(t, req.permissionId) : undefined;
+      await closeDead(
+        or(ofConnection(t, req), theirs && and(theirs, or(pastWindow, isNull(permissionRequests.code)))),
+        tx
+      );
+      const lost = await lostLink(t, req, tx);
       const [inserted] = await tx
         .insert(permissionRequests)
         .values({
@@ -186,10 +205,10 @@ export async function openLink(t: Tenant, req: LinkRequest, openWallet: OpenWall
           walletUrl: wallet.url,
           approveBy,
           sessionUntil: sessionLeaseEnd,
+          namesLost: lost?.id,
         })
         .onConflictDoNothing()
         .returning();
-      if (inserted && lost) await update(eq(permissionRequests.id, lost.id), { lostReported: true }, tx);
       return inserted;
     });
   } finally {
@@ -197,7 +216,7 @@ export async function openLink(t: Tenant, req: LinkRequest, openWallet: OpenWall
   }
   if (row === FULL || !row) return (await existing()) ?? (row === FULL ? 'account_busy' : 'wallet_busy');
   follow(row, wallet, req.work);
-  return { opened: row, lost };
+  return { opened: row };
 }
 
 function follow(row: PermissionRequestRow, wallet: Wallet, work: LinkRequest['work']) {

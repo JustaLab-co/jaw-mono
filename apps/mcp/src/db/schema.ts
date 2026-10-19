@@ -2,7 +2,6 @@ import { sql } from 'drizzle-orm';
 import {
   bigint,
   bigserial,
-  boolean,
   check,
   index,
   integer,
@@ -381,7 +380,7 @@ export const permissionRequests = pgTable(
       .notNull()
       .default('awaiting_owner'),
     code: text('code'),
-    lostReported: boolean('lost_reported').notNull().default(false),
+    namesLost: text('names_lost'),
     walletUrl: text('wallet_url').notNull(),
     approveBy: timestamp('approve_by', { withTimezone: true }).notNull(),
     sessionUntil: timestamp('session_until', { withTimezone: true }),
@@ -405,6 +404,7 @@ export const permissionRequests = pgTable(
     uniqueIndex('permission_requests_open_sign_index')
       .on(t.connectionId)
       .where(sql`${t.method} = 'sign' and ${t.state} = 'awaiting_owner'`),
+    uniqueIndex('permission_requests_names_lost_index').on(t.namesLost),
     uniqueIndex('permission_requests_sign_key_index')
       .on(t.connectionId, t.idempotencyKey)
       .where(sql`${t.method} = 'sign'`),

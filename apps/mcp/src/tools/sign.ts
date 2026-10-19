@@ -11,6 +11,8 @@ import { countHit } from '@/db/settings';
 import {
   currentSign,
   LINK_LOST,
+  lostBefore,
+  lostPreamble,
   openLink,
   type Claim,
   type Outcome,
@@ -25,6 +27,7 @@ const LINK_RATE_LIMIT = 10;
 const ACCOUNT_LINK_RATE_LIMIT = 20;
 const MESSAGE_MAX = 8_192;
 const TYPED_DATA_MAX = 32_768;
+const HIDDEN_IN_NAME = /[\p{Cc}\p{Cf}\p{Zl}\p{Zp}\p{Default_Ignorable_Code_Point}]/u;
 const HIDDEN_FROM_OWNER = /(?![\t\n\r])[\p{Cc}\p{Cf}\p{Zl}\p{Zp}\p{Default_Ignorable_Code_Point}]/u;
 
 const signInput = z
@@ -126,11 +129,8 @@ function summaryOf(row: PermissionRequestRow): string {
   }
 }
 
-const lostNote = (lost: PermissionRequestRow) =>
-  `link_lost: this server lost the session of the earlier sign link ${lost.walletUrl} after asking the owner, so it may never hear an answer given there. ` +
-  `Tell the owner not to approve that one; idempotencyKey ${lost.idempotencyKey} answers link_lost. `;
-
-function answer(row: PermissionRequestRow, lost?: PermissionRequestRow): SignResult {
+async function answer(row: PermissionRequestRow): Promise<SignResult> {
+  const lost = await lostBefore(row);
   const ended = row.state !== 'awaiting_owner' && row.state !== 'approved';
   return reply(
     signOutput.parse({
@@ -143,7 +143,11 @@ function answer(row: PermissionRequestRow, lost?: PermissionRequestRow): SignRes
       from: row.account,
       signature: row.signature ?? undefined,
       refusal: ended ? { code: row.code ?? row.state } : undefined,
-      summary: (lost ? lostNote(lost) : '') + summaryOf(row),
+      summary:
+        (lost
+          ? lostPreamble(lost, 'sign') +
+            `Tell the owner not to approve that one; idempotencyKey ${lost.idempotencyKey} answers link_lost. `
+          : '') + summaryOf(row),
     })
   );
 }
@@ -179,11 +183,16 @@ function typedDataFault(data: Record<string, unknown>): string | undefined {
   return undefined;
 }
 
-function hidesText(root: unknown): boolean {
-  const queue = [root];
-  for (const value of queue) {
-    if (typeof value === 'string' && HIDDEN_FROM_OWNER.test(value)) return true;
-    if (typeof value === 'object' && value !== null) queue.push(...Object.entries(value).flat());
+/** Line breaks and tabs pass only in message values; names, types and the domain allow none. */
+function hidesText(data: Record<string, unknown>): boolean {
+  const queue: [unknown, RegExp][] = [[data, HIDDEN_IN_NAME]];
+  for (const [value, rule] of queue) {
+    if (typeof value === 'string' && rule.test(value)) return true;
+    if (typeof value !== 'object' || value === null) continue;
+    for (const [key, child] of Object.entries(value)) {
+      const inMessage = rule === HIDDEN_FROM_OWNER || (value === data && key === 'message');
+      queue.push([key, HIDDEN_IN_NAME], [child, inMessage ? HIDDEN_FROM_OWNER : HIDDEN_IN_NAME]);
+    }
   }
   return false;
 }
@@ -265,8 +274,7 @@ export async function sign(t: Tenant, input: SignInput, deps: SignDeps = DEFAULT
       `Too many owners are approving right now. Send idempotencyKey ${idempotencyKey} again in a minute.`
     );
   }
-  if ('opened' in opened) return answer(opened.opened, opened.lost);
-  const row = opened.waiting;
+  const row = 'opened' in opened ? opened.opened : opened.waiting;
   if (row.idempotencyKey !== idempotencyKey) {
     return refuse(
       'sign_in_progress',

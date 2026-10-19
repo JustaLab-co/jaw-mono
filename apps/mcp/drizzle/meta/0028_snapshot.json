@@ -1,5 +1,5 @@
 {
-  "id": "ee450259-612a-42b0-8774-af0ae574f6ad",
+  "id": "098ccae3-dcda-4ed4-8ba0-3642056153f3",
   "prevId": "9f28141b-e395-41eb-97b6-eb85fcf94aed",
   "version": "7",
   "dialect": "postgresql",
@@ -1154,12 +1154,11 @@
           "primaryKey": false,
           "notNull": false
         },
-        "lost_reported": {
-          "name": "lost_reported",
-          "type": "boolean",
+        "names_lost": {
+          "name": "names_lost",
+          "type": "text",
           "primaryKey": false,
-          "notNull": true,
-          "default": false
+          "notNull": false
         },
         "wallet_url": {
           "name": "wallet_url",
@@ -1292,6 +1291,21 @@
           ],
           "isUnique": true,
           "where": "\"permission_requests\".\"method\" = 'sign' and \"permission_requests\".\"state\" = 'awaiting_owner'",
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        },
+        "permission_requests_names_lost_index": {
+          "name": "permission_requests_names_lost_index",
+          "columns": [
+            {
+              "expression": "names_lost",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": true,
           "concurrently": false,
           "method": "btree",
           "with": {}

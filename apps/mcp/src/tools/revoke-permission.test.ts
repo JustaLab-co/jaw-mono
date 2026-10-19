@@ -485,6 +485,50 @@ describe('jaw_revoke_permission', () => {
     expect((await requestsOf(budget)).find((r) => r.walletUrl === urlOf(first))).toMatchObject({ state: 'approved' });
   });
 
+  it("given another connection's revoke whose lease lapsed before it asked the owner, then this connection opens a new link", async () => {
+    const signer = owner();
+    const { t, budget } = await connected(signer);
+    const other = await connected(signer, 'wallet:read');
+    const { deps, opened } = setup(signer);
+    const wait = held();
+    const first = await revokePermission(t, { permissionId: budget }, deps({ held: wait.promise }));
+    await getDb()
+      .update(permissionRequests)
+      .set({ sessionUntil: sql`now() - interval '1 second'` })
+      .where(eq(permissionRequests.walletUrl, urlOf(first)!));
+
+    const theirs = await revokePermission(other.t, { permissionId: budget }, deps());
+    const firstRow = (await requestsOf(budget)).find((r) => r.walletUrl === urlOf(first));
+    wait.release();
+    await walletsSettled();
+
+    expect(opened()).toBe(2);
+    expect(urlOf(theirs)).not.toBe(urlOf(first));
+    expect(firstRow).toMatchObject({ state: 'expired', code: 'session_lost' });
+  });
+
+  it("given another connection's asked revoke past its window, then this connection opens a new link and the old one ends expired", async () => {
+    const signer = owner();
+    const { t, budget } = await connected(signer);
+    const other = await connected(signer, 'wallet:read');
+    const { deps, opened } = setup(signer);
+    const wait = held();
+    const first = await revokePermission(t, { permissionId: budget }, deps({ held: wait.promise }));
+    await getDb()
+      .update(permissionRequests)
+      .set({ code: 'asked', approveBy: sql`now() - interval '1 second'` })
+      .where(eq(permissionRequests.walletUrl, urlOf(first)!));
+
+    const theirs = await revokePermission(other.t, { permissionId: budget }, deps());
+    const firstRow = (await requestsOf(budget)).find((r) => r.walletUrl === urlOf(first));
+    wait.release();
+    await walletsSettled();
+
+    expect(opened()).toBe(2);
+    expect(urlOf(theirs)).not.toBe(urlOf(first));
+    expect(firstRow).toMatchObject({ state: 'expired', code: null });
+  });
+
   it('given three grant and revoke links waiting on the account, then a fourth link of any kind is refused', async () => {
     const signer = owner();
     const [a, b, c] = [await connected(signer), await connected(signer), await connected(signer)];

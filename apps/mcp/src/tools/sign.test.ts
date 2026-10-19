@@ -244,6 +244,15 @@ describe('jaw_sign', () => {
           message: { from: MAIL.message.from, 'con\u202etents': 'hi' },
         },
       ],
+      [
+        'a field name with a line break',
+        {
+          ...MAIL,
+          types: { ...MAIL.types, Mail: [MAIL.types.Mail[0], { name: 'con\ntents', type: 'string' }] },
+          message: { from: MAIL.message.from, 'con\ntents': 'hi' },
+        },
+      ],
+      ['the domain name with a line break', { ...MAIL, domain: { ...MAIL.domain, name: 'Mail\nverified' } }],
     ])('given typed data with an invisible character in %s, then it is refused', async (_, typedData) => {
       const { t } = await connected();
       const result = await ask(t, { message: undefined, typedData }, idleWallet);
@@ -252,9 +261,10 @@ describe('jaw_sign', () => {
       expect(opened).toEqual([]);
     });
 
-    it('given the same typed data with no invisible character, then a link opens', async () => {
+    it('given typed data with a line break in a message value only, then a link opens', async () => {
       const { t } = await connected();
-      const result = await ask(t, { message: undefined, typedData: MAIL }, idleWallet);
+      const typedData = { ...MAIL, message: { ...MAIL.message, contents: 'hi\nthere' } };
+      const result = await ask(t, { message: undefined, typedData }, idleWallet);
       expect(result.structuredContent!.state).toBe('awaiting_owner');
     });
 
@@ -412,13 +422,16 @@ describe('jaw_sign', () => {
       await vi.waitFor(() => expect(asked.map((a) => a.method)).toContain('wallet_sign'));
       await lapse(first.structuredContent!.url!);
       const second = await ask(t, { idempotencyKey: 'k2' }, idleWallet);
-      await lapse(second.structuredContent!.url!);
 
+      const retried = await ask(t, { idempotencyKey: 'k2' }, idleWallet);
+      await lapse(second.structuredContent!.url!);
       const third = await ask(t, { idempotencyKey: 'k3' }, idleWallet);
       release();
       await walletsSettled();
 
       expect(second.structuredContent!.summary).toContain(first.structuredContent!.url);
+      expect(retried.structuredContent!.url).toBe(second.structuredContent!.url);
+      expect(retried.structuredContent!.summary).toContain(first.structuredContent!.url);
       expect(third.structuredContent!.state).toBe('awaiting_owner');
       expect(third.structuredContent!.summary).not.toContain(first.structuredContent!.url);
       expect(third.structuredContent!.summary).not.toMatch(/link_lost/);
