@@ -84,8 +84,8 @@ describe('read tools', () => {
     expect(r.content[0].text).toContain('jaw_request_budget');
   });
 
-  it('given a token with wallet:read wallet:send, when jaw_status runs, then it is not ready for lack of x402:pay', async () => {
-    const c = await connect(undefined, { scope: 'wallet:read wallet:send' });
+  it('given a token with wallet:read alone, when jaw_status runs, then it is not ready for lack of x402:pay', async () => {
+    const c = await connect(undefined, { scope: 'wallet:read' });
     const r = await callTool(c.access_token, 'jaw_status', {});
     expect(r.structuredContent.readiness).toEqual({ status: 'not_ready', reason: 'no_scope' });
     expect(r.content[0].text).toContain('x402:pay');
@@ -194,12 +194,6 @@ describe('read tools', () => {
     });
   });
 
-  it('jaw_transfer refuses a recipient name that does not normalize, before sending', async () => {
-    const r = await callTool(token, 'jaw_transfer', { to: 'a\u0000.eth', amount: '0.01' });
-    expect(r.isError).toBe(true);
-    expect(r.content[0].text).toContain('could not be resolved');
-  });
-
   it('refuses an account argument: tenancy comes from the token only', async () => {
     const r = await callTool(token, 'jaw_status', { account: '0x0000000000000000000000000000000000000001' });
     expect(r.isError).toBe(true);
@@ -224,7 +218,6 @@ describe('read tools', () => {
       'jaw_status',
       'jaw_swap',
       'jaw_swap_status',
-      'jaw_transfer',
     ]);
     expect(tools.every((t) => t.outputSchema)).toBe(true);
   });

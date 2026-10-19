@@ -1,9 +1,7 @@
-import { randomBytes } from 'node:crypto';
 import { and, eq, inArray, lt, ne, sql } from 'drizzle-orm';
-import type { Address, Hex } from 'viem';
+import type { Hex } from 'viem';
 import { getDb, type Tx } from '@/db/client';
 import { sends } from '@/db/schema';
-import { LEASE_MS } from './store';
 
 export type SendRow = typeof sends.$inferSelect;
 export interface RecordedSend {
@@ -14,37 +12,6 @@ export interface RecordedSend {
 const dbNow = sql`statement_timestamp()`;
 const twoDayPeriodsAgo = sql`now() - interval '2 days'`;
 const open = (id: string) => and(eq(sends.id, id), eq(sends.state, 'open'));
-
-export async function recordSend(
-  tx: Tx,
-  s: {
-    connectionId: string;
-    permissionId: string;
-    chainId: number;
-    sender: Address;
-    amount: bigint;
-    periodStart: number;
-    fromBlock: bigint;
-  }
-): Promise<string> {
-  const id = `send_${randomBytes(16).toString('base64url')}`;
-  await tx.insert(sends).values({
-    ...s,
-    id,
-    sender: s.sender.toLowerCase(),
-    amount: s.amount.toString(),
-    leaseUntil: sql`${dbNow} + ${LEASE_MS} * interval '1 millisecond'`,
-  });
-  return id;
-}
-
-export async function noteCallsId(id: string, callsId: Hex): Promise<void> {
-  await getDb().update(sends).set({ callsId }).where(open(id));
-}
-
-export async function handToReconciler(id: string): Promise<void> {
-  await getDb().update(sends).set({ leaseUntil: dbNow }).where(open(id));
-}
 
 export async function settleSend(id: string, end: { state: 'landed'; txHash: Hex } | { state: 'released' }) {
   await getDb()

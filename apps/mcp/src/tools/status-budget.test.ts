@@ -76,7 +76,6 @@ describe('jaw_status after a budget change', () => {
       perDay: { amount: '1000000' },
       spentToday: { amount: '0' },
       remainingToday: { amount: '300000' },
-      sendableToday: { amount: '1000000' },
     });
   });
 });
@@ -278,24 +277,22 @@ describe('given 1 USDC a day and the reads jaw_status combines', () => {
     expect(out.budget).toMatchObject({
       spentToday: { amount: '100000' },
       remainingToday: { amount: '900000' },
-      sendableToday: { amount: '900000' },
     });
     expect(out.summary).toContain('Ready to pay, 900000 base units left today.');
   });
 
-  it('when only a transfer of 0.01 ran, with float held from an earlier day, then it is spent', async () => {
+  it('when only 0.01 left the account, with float held from an earlier day, then it is spent', async () => {
     const out = await budgetAfter(async () => {
       Object.assign(chain, { spend: 10_000n, held: 28_143n });
     });
     expect(out.budget).toMatchObject({
       spentToday: { amount: '10000' },
       remainingToday: { amount: '990000' },
-      sendableToday: { amount: '990000' },
     });
     expect(out.summary).toContain('Ready to pay, 990000 base units left today.');
   });
 
-  it('when a payment and a transfer ran, then both are spent', async () => {
+  it('when a payment and a 0.01 spend outside it ran, then both are spent', async () => {
     const out = await budgetAfter(async (t, id) => {
       await fundedRow(t, id, 'pay_bothpull', '100000', new Date());
       await paidRow(t, id, 'pay_bothpaid', '100000');
@@ -304,11 +301,10 @@ describe('given 1 USDC a day and the reads jaw_status combines', () => {
     expect(out.budget).toMatchObject({
       spentToday: { amount: '110000' },
       remainingToday: { amount: '890000' },
-      sendableToday: { amount: '890000' },
     });
   });
 
-  it('when a refill, a payment out of it and a transfer ran, then the refill is not spent twice', async () => {
+  it('when a refill, a payment out of it and a 0.01 spend outside it ran, then the refill is not spent twice', async () => {
     const out = await budgetAfter(async (t, id) => {
       await fundedRow(t, id, 'pay_refillpull', '200000', new Date());
       await paidRow(t, id, 'pay_refillpaid', '150000');
@@ -317,19 +313,17 @@ describe('given 1 USDC a day and the reads jaw_status combines', () => {
     expect(out.budget).toMatchObject({
       spentToday: { amount: '160000' },
       remainingToday: { amount: '840000' },
-      sendableToday: { amount: '790000' },
     });
-    expect(out.summary).toContain('840000 base units left today for payments, 790000 for transfers.');
+    expect(out.summary).toContain('Ready to pay, 840000 base units left today.');
   });
 
-  it('when a transfer took 0.99 and the float holds more than is left, then 0.01 is left', async () => {
+  it('when 0.99 left the account outside payments and the float holds more than is left, then 0.01 is left', async () => {
     const out = await budgetAfter(async () => {
       Object.assign(chain, { spend: 990_000n, held: 28_143n });
     });
     expect(out.budget).toMatchObject({
       spentToday: { amount: '990000' },
       remainingToday: { amount: '10000' },
-      sendableToday: { amount: '10000' },
     });
   });
 
@@ -343,7 +337,6 @@ describe('given 1 USDC a day and the reads jaw_status combines', () => {
     expect(out.budget).toMatchObject({
       spentToday: { amount: '900000' },
       remainingToday: { amount: '100000' },
-      sendableToday: { amount: '100000' },
     });
   });
 });

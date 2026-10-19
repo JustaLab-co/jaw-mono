@@ -9,7 +9,7 @@ import { createServer } from 'node:http';
 import { createInterface } from 'node:readline/promises';
 
 const BASE = new URL(process.argv[2] ?? '').origin;
-const SCOPE = process.argv[3] ?? 'wallet:read x402:pay wallet:send';
+const SCOPE = process.argv[3] ?? 'wallet:read x402:pay';
 const RESOURCE = `${BASE}/mcp`;
 
 // The page the browser lands on after the wallet, in the look of the connect page.
@@ -132,7 +132,6 @@ const HELP = `Commands:
   quote <url>                    jaw_quote
   pay <url> [maxAmount]          jaw_pay_and_fetch (maxAmount in base units)
   budget <perDay>                jaw_request_budget, USDC only
-  transfer <to> <amount>         jaw_transfer, amount in USDC
   swap <originChain> <originToken> <destChain> <destToken> <amount> [recipient|-] [key]
                                  jaw_swap, amount in base units of originToken, 0x000...0 for the native coin,
                                  e.g. swap 8453 0x8335...2913 42161 0xaf88...5831 1000000
@@ -155,7 +154,6 @@ const commands = {
   quote: (url) => call('jaw_quote', { url }),
   pay: (url, maxAmount) => call('jaw_pay_and_fetch', { url, ...(maxAmount && { maxAmount }) }),
   budget: (perDay) => call('jaw_request_budget', { perDay }),
-  transfer: (to, amount) => call('jaw_transfer', { to, amount }),
   swap: (originChainId, originToken, destinationChainId, destinationToken, amount, recipient, idempotencyKey) =>
     call('jaw_swap', {
       originChainId: Number(originChainId),

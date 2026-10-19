@@ -41,7 +41,7 @@ export function budgetGrant(b: {
     expiry: b.expiry,
     chainId: numberToHex(b.chainId),
     permissions: {
-      // Refills, payments and jaw_transfer all go through the USDC transfer.
+      // Refills and payments go through the USDC transfer.
       calls: [{ target: b.token, functionSignature: TRANSFER_SIGNATURE }],
       spends: [{ token: b.token, allowance: b.allowance.toString(), unit: 'day', multiplier: 1 }],
     },

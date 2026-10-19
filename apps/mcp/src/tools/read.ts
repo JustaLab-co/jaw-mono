@@ -40,9 +40,8 @@ type Readiness = z.infer<typeof readiness>;
 const budgetOutput = z.object({
   permissionId: z.string(),
   perDay: money,
-  spentToday: money.nullable().describe('What left this budget today: payments and transfers'),
+  spentToday: money.nullable().describe('What left this budget today'),
   remainingToday: money.nullable().describe('The most the next payment can spend today'),
-  sendableToday: money.nullable().describe('The most the next jaw_transfer can move today'),
   resetsAt: z.string().nullable(),
   expiresAt: z.string(),
 });
@@ -69,7 +68,6 @@ async function budgetOf(grant: Grant, t: Tenant, held: bigint | null) {
   const figure = (amount: bigint) => ({ amount: amount.toString(), asset });
   let spent = null;
   let payable = null;
-  let sendable = null;
   if (day) {
     const pulled = day.refilled + day.sentFromAccount;
     const left = dayLeft(allowance, day);
@@ -77,7 +75,6 @@ async function budgetOf(grant: Grant, t: Tenant, held: bigint | null) {
     const floatFundable = (held ?? 0n) + floorZero(pullable - earlier);
     spent = figure(day.paid + day.sentFromAccount);
     payable = figure(least(left, floatFundable));
-    sendable = figure(least(left, pullable));
   }
   return {
     liveness,
@@ -86,7 +83,6 @@ async function budgetOf(grant: Grant, t: Tenant, held: bigint | null) {
       perDay: { amount: grant.allowance, asset },
       spentToday: spent,
       remainingToday: payable,
-      sendableToday: sendable,
       resetsAt: (counted?.status === 'ok' && isoOf(counted.end + 1)) || null,
       expiresAt: grant.expiresAt.toISOString(),
     }),
@@ -135,10 +131,7 @@ const NOT_READY: Record<NonNullable<Readiness['reason']>, string> = {
 
 function leftToday(budget: z.infer<typeof budgetOutput> | undefined) {
   const pay = budget?.remainingToday;
-  const send = budget?.sendableToday;
-  if (!pay) return '';
-  if (!send || send.amount === pay.amount) return `, ${pay.amount} base units left today`;
-  return `, ${pay.amount} base units left today for payments, ${send.amount} for transfers`;
+  return pay ? `, ${pay.amount} base units left today` : '';
 }
 
 const EXPIRY_WARN_MS = 48 * 60 * 60 * 1000;
@@ -282,7 +275,7 @@ const resolveOutput = z.object({
   summary: z.string(),
 });
 
-/** For jaw_transfer, which takes an ENS name. Not a tool: resolving a name is a service the agent pays for. */
+/** Resolves an ENS name on mainnet. Not a tool: resolving a name is a service the agent pays for. */
 export async function resolveName(name: string) {
   const normalized = normalize(name);
   const client = createPublicClient({ chain: mainnet, transport: http(config().mainnetRpcUrl) });
