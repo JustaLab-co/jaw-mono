@@ -134,7 +134,7 @@ async function askBudget(a: Asked, ask: Ask, account: Address, spender: Address,
     expiry: Math.floor((Date.now() + CONNECTION_TTL_MS) / 1000),
   });
   const answer = await ask('wallet_grantPermissions', [grant]);
-  const checked = await checkGranted(a.chainId, grant, answer, deps.readPermission);
+  const checked = await checkGranted(a.chainId, grant, 'x402-budget', answer, deps.readPermission);
   if (typeof checked === 'string') throw new Error(checked);
   if (!isAddressEqual(checked.account as Address, account)) throw new Error('grant_mismatch');
   return checked;

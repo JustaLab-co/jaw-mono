@@ -16,7 +16,7 @@ apps/mcp/src/db/**
 apps/mcp/drizzle/**
 apps/mcp/src/reconciler/**
 apps/mcp/src/tools/pay-and-fetch.ts
-apps/mcp/src/tools/request-budget.ts
+apps/mcp/src/tools/grant-permissions.ts
 apps/mcp/src/tools/connections.ts
 apps/mcp/src/tools/swap.ts
 apps/mcp/src/swap/**

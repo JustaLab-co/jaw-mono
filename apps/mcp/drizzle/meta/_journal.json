@@ -162,6 +162,13 @@
       "when": 1792416444275,
       "tag": "0022_grant_kind",
       "breakpoints": true
+    },
+    {
+      "idx": 23,
+      "version": "7",
+      "when": 1792418470278,
+      "tag": "0023_grant_period",
+      "breakpoints": true
     }
   ]
 }

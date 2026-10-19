@@ -69,7 +69,7 @@ beforeAll(async () => {
 });
 
 describe('read tools', () => {
-  it('given a connection whose budget is gone, jaw_status names the account and reads no_grant, pointing at jaw_request_budget', async () => {
+  it('given a connection whose budget is gone, jaw_status names the account and reads no_grant, pointing at jaw_grant_permissions', async () => {
     const c = await connect();
     const t = (await verifyBearer(c.access_token))?.extra?.tenant as Tenant;
     await getDb().delete(grants).where(eq(grants.connectionId, t.connectionId));
@@ -81,7 +81,7 @@ describe('read tools', () => {
       budget: null,
       balances: { account: null, session: null },
     });
-    expect(r.content[0].text).toContain('jaw_request_budget');
+    expect(r.content[0].text).toContain('jaw_grant_permissions');
   });
 
   it('given a token with wallet:read alone, when jaw_status runs, then it is not ready for lack of x402:pay', async () => {
@@ -207,7 +207,7 @@ describe('read tools', () => {
       'jaw_add_funds',
       'jaw_connections',
       'jaw_get_calls_status',
-      'jaw_request_budget',
+      'jaw_grant_permissions',
       'jaw_revoke_connection',
       'jaw_send_calls',
       'jaw_session_disconnect',

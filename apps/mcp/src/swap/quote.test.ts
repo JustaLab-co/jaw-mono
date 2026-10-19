@@ -27,7 +27,7 @@ import { grants, payments, swaps } from '@/db/schema';
 import { TEST_PG_URL, useTestDb, useTestPostgres } from '@/db/test-db';
 import { x402Budget } from '@/grants/store';
 import type { PayDeps } from '@/payments/pay';
-import { requestBudget } from '@/tools/request-budget';
+import { grantPermissions } from '@/tools/grant-permissions';
 import { quote, swapRequest, type SwapInput } from './quote';
 import { claimSwap, type SwapRow } from './store';
 
@@ -232,7 +232,7 @@ async function connected(perDay?: string): Promise<Connected> {
   balances.set(c.signer.address.toLowerCase(), 5_000_000n);
   const budget = async (day: string) => {
     const wallet = fakeWallet(walletAnswers(c.signer));
-    await requestBudget(t, day, { openWallet: wallet, readPermission: approvedOnChain });
+    await grantPermissions(t, { x402Budget: { perDay: day } }, { openWallet: wallet, readPermission: approvedOnChain });
     await walletsSettled();
     if (!(await x402Budget(t.connectionId))) throw new Error('no budget');
   };
@@ -480,7 +480,10 @@ describe('payment attempts', () => {
     const short = await quoted(t);
 
     expect(short.row).toMatchObject({ state: 'quoting', code: 'budget_exhausted', paymentAttempt: 1 });
-    expect(short.payment?.structuredContent?.refusal).toEqual({ code: 'budget_exhausted', next: 'jaw_request_budget' });
+    expect(short.payment?.structuredContent?.refusal).toEqual({
+      code: 'budget_exhausted',
+      next: 'jaw_grant_permissions',
+    });
     expect(short.row.paymentId).toBe(short.payment?.structuredContent?.paymentId);
     expect(paidHits()).toHaveLength(0);
 

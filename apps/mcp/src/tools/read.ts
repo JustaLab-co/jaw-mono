@@ -124,8 +124,8 @@ const statusOutput = z.object({
 
 const NOT_READY: Record<NonNullable<Readiness['reason']>, string> = {
   no_scope: 'Paying needs the x402:pay scope: reconnect and ask for it.',
-  no_grant: 'No budget yet: ask for one with jaw_request_budget.',
-  grant_revoked: 'The budget was revoked: ask for a new one with jaw_request_budget.',
+  no_grant: 'No budget yet: ask for one with jaw_grant_permissions and x402Budget.',
+  grant_revoked: 'The budget was revoked: ask for a new one with jaw_grant_permissions and x402Budget.',
   chain_unavailable: 'The budget could not be read from the chain right now.',
 };
 

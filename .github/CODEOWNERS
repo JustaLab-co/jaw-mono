@@ -56,7 +56,7 @@
 /apps/mcp/drizzle/                                   @Ghadi8 @mariano-aguero
 /apps/mcp/src/reconciler/                            @Ghadi8 @mariano-aguero
 /apps/mcp/src/tools/pay-and-fetch.ts                 @Ghadi8 @mariano-aguero
-/apps/mcp/src/tools/request-budget.ts                @Ghadi8 @mariano-aguero
+/apps/mcp/src/tools/grant-permissions.ts                @Ghadi8 @mariano-aguero
 /apps/mcp/src/tools/connections.ts                   @Ghadi8 @mariano-aguero
 /apps/mcp/src/tools/swap.ts                          @Ghadi8 @mariano-aguero
 /apps/mcp/src/swap/                                  @Ghadi8 @mariano-aguero

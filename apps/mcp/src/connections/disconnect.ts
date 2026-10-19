@@ -21,7 +21,7 @@ import { getDb } from '@/db/client';
 import { connections, grants } from '@/db/schema';
 import { isPaymentsPaused } from '@/db/settings';
 import { readOnChain, type ReadPermission } from '@/grants/permission';
-import { liveGrants, type Grant } from '@/grants/store';
+import { liveGrants, type LiveGrant } from '@/grants/store';
 import { publicClientFor, rpcUrl } from '@/lib/chain';
 import { errorLabel, log } from '@/lib/edge';
 import { reply } from '@/lib/fence';
@@ -284,7 +284,7 @@ async function sendBatch(
   hold: FloatHold,
   t: Session,
   deps: DisconnectDeps,
-  live: Grant[],
+  live: LiveGrant[],
   token: Address
 ): Promise<Returned | string> {
   const revokes: { permissionId: Hex; call: SessionCall }[] = [];

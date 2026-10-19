@@ -39,7 +39,7 @@ import { connections, grants, payments, settings } from '@/db/schema';
 import { x402Budget } from '@/grants/store';
 import { reconcile } from '@/reconciler/run';
 import { revokeConnection } from '@/tools/connections';
-import { requestBudget } from '@/tools/request-budget';
+import { grantPermissions } from '@/tools/grant-permissions';
 import {
   lockWaiters,
   statusOnceParked,
@@ -277,7 +277,7 @@ async function connected(perDay?: string) {
 async function approveBudget(c: Awaited<ReturnType<typeof connect>>, perDay: string) {
   const t = (await verifyBearer(c.access_token))?.extra?.tenant as Tenant;
   const wallet = fakeWallet(walletAnswers(c.signer));
-  await requestBudget(t, perDay, { openWallet: wallet, readPermission: approvedOnChain });
+  await grantPermissions(t, { x402Budget: { perDay } }, { openWallet: wallet, readPermission: approvedOnChain });
   await walletsSettled();
   if (!(await x402Budget(t.connectionId))) throw new Error('no budget');
   balances.set(c.signer.address.toLowerCase(), 5_000_000n);
@@ -888,10 +888,10 @@ describe('jaw_session_x402_pay', () => {
     const first = await pay(t, { url: url('/pricey'), idempotencyKey: 'pricey' }, deps());
     expect(first.structuredContent).toMatchObject({
       kind: 'refused',
-      refusal: { code: 'over_cap', next: 'jaw_request_budget' },
+      refusal: { code: 'over_cap', next: 'jaw_grant_permissions' },
       payerRefilled: false,
     });
-    expect(first.structuredContent?.summary).toContain('jaw_request_budget');
+    expect(first.structuredContent?.summary).toContain('jaw_grant_permissions');
     expect([seen.length, refills.length]).toEqual([0, 0]);
   });
 
@@ -955,7 +955,7 @@ describe('jaw_session_x402_pay', () => {
     expect(over.structuredContent).toMatchObject({
       kind: 'refused',
       state: 'failed',
-      refusal: { code: 'budget_exhausted', next: 'jaw_request_budget' },
+      refusal: { code: 'budget_exhausted', next: 'jaw_grant_permissions' },
       payerRefilled: false,
     });
     expect(seen).toHaveLength(1);
@@ -1880,7 +1880,7 @@ describe('given a 1 USDC/day budget and 1.5 USDC already in the payer', () => {
       ).finally(() => getDb().execute(sql`drop function slow_sign cascade`));
       const refused = results.filter((r) => r.structuredContent?.kind !== 'paid');
       expect(refused.map((r) => r.structuredContent?.refusal?.code)).toEqual(Array(3).fill('budget_exhausted'));
-      expect(refused.every((r) => r.structuredContent?.refusal?.next === 'jaw_request_budget')).toBe(true);
+      expect(refused.every((r) => r.structuredContent?.refusal?.next === 'jaw_grant_permissions')).toBe(true);
       expect(seen).toHaveLength(3);
       for (const r of refused) {
         expect(await rowOf(r.structuredContent!.paymentId)).toMatchObject({ reserved: null, topUpAmount: null });

@@ -18,6 +18,8 @@ export interface Tenant {
   clientName: string;
   scopes: ConnectionScope[];
   sessionAddress: Address;
+  /** When the connection ends. */
+  expiresAt: Date;
   sessionKey(): Hex;
 }
 
@@ -79,6 +81,7 @@ export async function verifyBearer(bearer: string | undefined): Promise<AuthInfo
     clientName: row.clientName,
     scopes: scopes as ConnectionScope[],
     sessionAddress: row.sessionAddress as Address,
+    expiresAt: row.expiresAt,
     sessionKey: () => open(config().ring, claims.sk, row.id),
   };
   return {

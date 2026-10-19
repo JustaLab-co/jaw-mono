@@ -131,7 +131,9 @@ const HELP = `Commands:
   funds                          jaw_add_funds
   quote <url>                    jaw_session_x402_quote
   pay <url> [maxAmount]          jaw_session_x402_pay (maxAmount in base units)
-  budget <perDay>                jaw_request_budget, USDC only
+  budget <perDay>                jaw_grant_permissions with the x402 budget preset, USDC per day
+  grant '<json>'                 jaw_grant_permissions with calls, spends and expiresAt, e.g.
+                                 grant '{"calls":[{"target":"0x...","functionSignature":"transfer(address,uint256)"}],"spends":[{"token":"0x...","allowance":"1000","unit":"week"}]}'
   swap <originChain> <originToken> <destChain> <destToken> <amount> [recipient|-] [key]
                                  jaw_swap, amount in base units of originToken, 0x000...0 for the native coin,
                                  e.g. swap 8453 0x8335...2913 42161 0xaf88...5831 1000000
@@ -153,7 +155,8 @@ const commands = {
   funds: () => call('jaw_add_funds', {}),
   quote: (url) => call('jaw_session_x402_quote', { url }),
   pay: (url, maxAmount) => call('jaw_session_x402_pay', { url, ...(maxAmount && { maxAmount }) }),
-  budget: (perDay) => call('jaw_request_budget', { perDay }),
+  budget: (perDay) => call('jaw_grant_permissions', { x402Budget: { perDay } }),
+  grant: (json) => call('jaw_grant_permissions', JSON.parse(json)),
   swap: (originChainId, originToken, destinationChainId, destinationToken, amount, recipient, idempotencyKey) =>
     call('jaw_swap', {
       originChainId: Number(originChainId),

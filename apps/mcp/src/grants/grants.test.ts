@@ -18,7 +18,7 @@ import { connections, grants } from '@/db/schema';
 import { TEST_PG_URL, useTestDb, useTestPostgres } from '@/db/test-db';
 import { endConnection } from '@/connections/rows';
 import { WalletBusy, type OpenWallet, type Wallet } from '@/connections/relay';
-import { requestBudget } from '@/tools/request-budget';
+import { grantPermissions } from '@/tools/grant-permissions';
 import { NO_PAY_SCOPE } from '@/tools/reply';
 import {
   budgetGrant,
@@ -71,10 +71,14 @@ async function ask(
     const granted = (await honest(method, params)) as Record<string, unknown>;
     return opts.tamper ? opts.tamper(granted) : granted;
   };
-  const result = await requestBudget(t, opts.perDay ?? '1', {
-    openWallet: fakeWallet(answer, asked),
-    readPermission: opts.read ?? approvedOnChain,
-  });
+  const result = await grantPermissions(
+    t,
+    { x402Budget: { perDay: opts.perDay ?? '1' } },
+    {
+      openWallet: fakeWallet(answer, asked),
+      readPermission: opts.read ?? approvedOnChain,
+    }
+  );
   await walletsSettled();
   return { result, grant: asked[0]?.params[0] as GrantRequest };
 }
@@ -100,13 +104,17 @@ describe('budget grants', () => {
     const opened: unknown[][] = [];
     const answers = fakeWallet(walletAnswers(signer));
 
-    await requestBudget(t, '1', {
-      openWallet: async (...args) => {
-        opened.push(args);
-        return answers(...args);
-      },
-      readPermission: approvedOnChain,
-    });
+    await grantPermissions(
+      t,
+      { x402Budget: { perDay: '1' } },
+      {
+        openWallet: async (...args) => {
+          opened.push(args);
+          return answers(...args);
+        },
+        readPermission: approvedOnChain,
+      }
+    );
     await walletsSettled();
 
     expect(opened).toHaveLength(1);
@@ -115,21 +123,25 @@ describe('budget grants', () => {
 
   it('given a token with wallet:read alone, when it asks for a budget, then it is refused naming x402:pay', async () => {
     const reader = await connect(undefined, { scope: 'wallet:read' });
-    const refused = await callTool(reader.access_token, 'jaw_request_budget', { perDay: '1' });
+    const refused = await callTool(reader.access_token, 'jaw_grant_permissions', { x402Budget: { perDay: '1' } });
     expect(refused.isError).toBe(true);
     expect(refused.content[0].text).toBe(NO_PAY_SCOPE);
   });
 
   it('refuses a zero budget and a malformed amount', async () => {
     const { c } = await connected();
-    expect((await callTool(c.access_token, 'jaw_request_budget', { perDay: '0' })).isError).toBe(true);
-    expect((await callTool(c.access_token, 'jaw_request_budget', { perDay: '1e3' })).isError).toBe(true);
+    expect((await callTool(c.access_token, 'jaw_grant_permissions', { x402Budget: { perDay: '0' } })).isError).toBe(
+      true
+    );
+    expect((await callTool(c.access_token, 'jaw_grant_permissions', { x402Budget: { perDay: '1e3' } })).isError).toBe(
+      true
+    );
   });
 
-  it('given a client that still passes calls, then the input is refused and the budget in force is unchanged', async () => {
+  it('given the preset with calls, then the input is refused and the budget in force is unchanged', async () => {
     const { c, t, connectedWith } = await connected();
-    const calls = [{ to: USDC, functionSignature: 'approve(address,uint256)' }];
-    const refused = await callTool(c.access_token, 'jaw_request_budget', { perDay: '1', calls });
+    const calls = [{ target: USDC, functionSignature: 'approve(address,uint256)' }];
+    const refused = await callTool(c.access_token, 'jaw_grant_permissions', { x402Budget: { perDay: '1' }, calls });
     expect(refused.isError).toBe(true);
     expect(refused.content[0].text).toContain('calls');
     expect(refused.structuredContent).toBeUndefined();
@@ -204,18 +216,22 @@ const newGrantFrom = async (
   return { ...rest, permissionId };
 };
 const inTx = (connectionId: string, g: NewGrant) => getDb().transaction((tx) => recordGrant(tx, connectionId, g));
-describe('jaw_request_budget', () => {
+describe('jaw_grant_permissions', () => {
   it('the wallet is given thirty minutes to answer', async () => {
     const { t, signer } = await connected();
     let until: Date | undefined;
     const answers = fakeWallet(walletAnswers(signer));
-    await requestBudget(t, '1', {
-      openWallet: async (chainId, u, client) => {
-        until = u;
-        return answers(chainId, u, client);
-      },
-      readPermission: approvedOnChain,
-    });
+    await grantPermissions(
+      t,
+      { x402Budget: { perDay: '1' } },
+      {
+        openWallet: async (chainId, u, client) => {
+          until = u;
+          return answers(chainId, u, client);
+        },
+        readPermission: approvedOnChain,
+      }
+    );
     await walletsSettled();
     expect(until!.getTime() - Date.now()).toBeGreaterThan(29.9 * 60_000);
     expect(until!.getTime() - Date.now()).toBeLessThanOrEqual(30 * 60_000);
@@ -234,8 +250,8 @@ describe('jaw_request_budget', () => {
     const openWallet: OpenWallet = async (_chainId, at) => ((until = at), waiting);
     const deps = { openWallet, readPermission: approvedOnChain };
 
-    const first = await requestBudget(t, '1', deps);
-    const second = await requestBudget(t, '1', deps);
+    const first = await grantPermissions(t, { x402Budget: { perDay: '1' } }, deps);
+    const second = await grantPermissions(t, { x402Budget: { perDay: '1' } }, deps);
 
     expect('structuredContent' in first && first.structuredContent.url).toBe(url);
     expect('isError' in second && second.isError).toBe(true);
@@ -246,7 +262,11 @@ describe('jaw_request_budget', () => {
     release.reject(new Error('owner left'));
     await walletsSettled();
     await vi.waitFor(async () => {
-      const third = await requestBudget(t, '1', { ...deps, openWallet: fakeWallet(walletAnswers(signer)) });
+      const third = await grantPermissions(
+        t,
+        { x402Budget: { perDay: '1' } },
+        { ...deps, openWallet: fakeWallet(walletAnswers(signer)) }
+      );
       expect('structuredContent' in third).toBe(true);
     });
     await walletsSettled();
@@ -255,13 +275,17 @@ describe('jaw_request_budget', () => {
   it('a chain without USDC is refused before a wallet opens', async () => {
     const { t } = await connected();
     let opened = 0;
-    const result = await requestBudget({ ...t, chainId: 999_999 }, '1', {
-      openWallet: async () => {
-        opened++;
-        throw new Error('not reached');
-      },
-      readPermission: approvedOnChain,
-    });
+    const result = await grantPermissions(
+      { ...t, chainId: 999_999 },
+      { x402Budget: { perDay: '1' } },
+      {
+        openWallet: async () => {
+          opened++;
+          throw new Error('not reached');
+        },
+        readPermission: approvedOnChain,
+      }
+    );
     expect('isError' in result && result.isError).toBe(true);
     expect(result.content[0].text).toBe("USDC is not supported on this connection's chain.");
     expect(opened).toBe(0);
@@ -269,12 +293,16 @@ describe('jaw_request_budget', () => {
 
   it('a full owner pool is told to try again, not thrown', async () => {
     const { t } = await connected();
-    const result = await requestBudget(t, '1', {
-      openWallet: async () => {
-        throw new WalletBusy();
-      },
-      readPermission: approvedOnChain,
-    });
+    const result = await grantPermissions(
+      t,
+      { x402Budget: { perDay: '1' } },
+      {
+        openWallet: async () => {
+          throw new WalletBusy();
+        },
+        readPermission: approvedOnChain,
+      }
+    );
     expect('isError' in result && result.isError).toBe(true);
     expect(result.content[0].text).toBe('Too many owners are approving right now. Try again in a minute.');
   });
@@ -283,23 +311,27 @@ describe('jaw_request_budget', () => {
     const { t, signer } = await connected();
     let walletUrl = '';
     const answers = fakeWallet(walletAnswers(signer));
-    const result = await requestBudget(t, '1.5', {
-      openWallet: async (...args) => {
-        const w = await answers(...args);
-        walletUrl = w.url;
-        return w;
-      },
-      readPermission: approvedOnChain,
-    });
+    const result = await grantPermissions(
+      t,
+      { x402Budget: { perDay: '1.5' } },
+      {
+        openWallet: async (...args) => {
+          const w = await answers(...args);
+          walletUrl = w.url;
+          return w;
+        },
+        readPermission: approvedOnChain,
+      }
+    );
     await walletsSettled();
     if (!('structuredContent' in result)) throw new Error('refused');
     expect(result.structuredContent.url).toBe(walletUrl);
-    expect(result.structuredContent.summary).toContain(`open ${walletUrl} and approve 1.5 USDC a day in their wallet`);
+    expect(result.structuredContent.summary).toContain(`open ${walletUrl} and approve 1.5 USDC a day until`);
   });
 
   it('a ten digit budget is refused by the schema', async () => {
     const { c } = await connected();
-    const result = await callTool(c.access_token, 'jaw_request_budget', { perDay: '1234567890' });
+    const result = await callTool(c.access_token, 'jaw_grant_permissions', { x402Budget: { perDay: '1234567890' } });
     expect(result.isError).toBe(true);
     expect(result.content[0].text).toContain('Input validation error');
   });
@@ -309,13 +341,17 @@ describe('jaw_request_budget', () => {
     const gate = Promise.withResolvers<void>();
     const honest = walletAnswers(signer);
     const before = await getDb().select().from(grants).where(eq(grants.connectionId, t.connectionId));
-    await requestBudget(t, '2', {
-      openWallet: fakeWallet(async (m, p) => {
-        await gate.promise;
-        return honest(m, p);
-      }),
-      readPermission: approvedOnChain,
-    });
+    await grantPermissions(
+      t,
+      { x402Budget: { perDay: '2' } },
+      {
+        openWallet: fakeWallet(async (m, p) => {
+          await gate.promise;
+          return honest(m, p);
+        }),
+        readPermission: approvedOnChain,
+      }
+    );
     await endConnection(t.connectionId, t.account);
     gate.resolve();
     await walletsSettled();
@@ -359,10 +395,16 @@ describe('the permission of a budget', () => {
     const { t, signer } = await connected();
     const { grant } = await ask(t, signer);
     const answer = await walletAnswers(signer)('wallet_grantPermissions', [grant]);
-    expect(await checkGranted(t.chainId, grant, { ...(answer as object), permissionId: 'nope' }, approvedOnChain)).toBe(
-      'invalid_response'
-    );
-    expect(await checkGranted(t.chainId, grant, answer, approvedOnChain)).toMatchObject({
+    expect(
+      await checkGranted(
+        t.chainId,
+        grant,
+        'x402-budget',
+        { ...(answer as object), permissionId: 'nope' },
+        approvedOnChain
+      )
+    ).toBe('invalid_response');
+    expect(await checkGranted(t.chainId, grant, 'x402-budget', answer, approvedOnChain)).toMatchObject({
       allowance: grant.permissions.spends[0].allowance,
     });
   });
@@ -376,7 +418,7 @@ describe('the permission of a budget', () => {
     const { t, signer } = await connected();
     const { grant } = await ask(t, signer);
     const answer = await walletAnswers(signer)('wallet_grantPermissions', [grant]);
-    expect(await checkGranted(t.chainId, grant, answer, onChain(state))).toBe(code);
+    expect(await checkGranted(t.chainId, grant, 'x402-budget', answer, onChain(state))).toBe(code);
   });
 
   it('recording the same budget twice is not an error', async () => {
@@ -428,13 +470,17 @@ describe('the permission of a budget', () => {
     for (let n = 1; n < LIVE_GRANTS_PER_CONNECTION; n++) await inTx(t.connectionId, await newGrantFrom(t.connectionId));
     let opened = 0;
 
-    const result = await requestBudget(t, '1', {
-      openWallet: async () => {
-        opened++;
-        throw new Error('not reached');
-      },
-      readPermission: approvedOnChain,
-    });
+    const result = await grantPermissions(
+      t,
+      { x402Budget: { perDay: '1' } },
+      {
+        openWallet: async () => {
+          opened++;
+          throw new Error('not reached');
+        },
+        readPermission: approvedOnChain,
+      }
+    );
 
     expect('isError' in result && result.isError).toBe(true);
     expect(result.content[0].text).toContain(`${LIVE_GRANTS_PER_CONNECTION} live grants`);
@@ -483,10 +529,14 @@ describe.skipIf(!TEST_PG_URL)('on Postgres, given a budget landing while its con
     });
     await ending.promise;
 
-    await requestBudget(t, '3', {
-      openWallet: fakeWallet(walletAnswers(signer)),
-      readPermission: approvedOnChain,
-    });
+    await grantPermissions(
+      t,
+      { x402Budget: { perDay: '3' } },
+      {
+        openWallet: fakeWallet(walletAnswers(signer)),
+        readPermission: approvedOnChain,
+      }
+    );
     await new Promise((r) => setTimeout(r, 250));
     const during = await getDb().select().from(grants).where(eq(grants.connectionId, t.connectionId));
     await holding;

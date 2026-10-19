@@ -7,29 +7,37 @@ import {
 import { eq, sql } from 'drizzle-orm';
 import { isAddressEqual, isHex, numberToHex, toFunctionSelector, type Address, type Hex } from 'viem';
 import type { Tx } from '@/db/client';
-import { connections, grants } from '@/db/schema';
+import { connections, grants, SPEND_UNITS } from '@/db/schema';
 import { publicClientFor } from '@/lib/chain';
 import { liveGrants, LIVE_GRANTS_PER_CONNECTION, type GrantKind } from './store';
 
 const TRANSFER_SIGNATURE = 'transfer(address,uint256)';
+
+export type SpendUnit = (typeof SPEND_UNITS)[number];
 
 export interface PermissionCall {
   target: Address;
   functionSignature: string;
 }
 
-/** `wallet_grantPermissions` as the wallet takes it: a daily USDC allowance, and the calls it may pay for. */
+export interface PermissionSpend {
+  token: Address;
+  /** Base units of the token, as a decimal string. */
+  allowance: string;
+  unit: SpendUnit;
+  multiplier: number;
+}
+
+/** `wallet_grantPermissions` as the wallet takes it. */
 export interface GrantRequest {
   spender: Address;
   expiry: number;
   chainId: Hex;
-  permissions: {
-    calls: PermissionCall[];
-    spends: { token: Address; allowance: string; unit: 'day'; multiplier: 1 }[];
-  };
-  capabilities: { prefundSpender: true };
+  permissions: { calls: PermissionCall[]; spends: PermissionSpend[] };
+  capabilities?: { prefundSpender: true };
 }
 
+/** The x402 budget: a daily USDC allowance, and the transfer that payments and refills go through. */
 export function budgetGrant(b: {
   chainId: number;
   spender: Address;
@@ -42,7 +50,6 @@ export function budgetGrant(b: {
     expiry: b.expiry,
     chainId: numberToHex(b.chainId),
     permissions: {
-      // Refills and payments go through the USDC transfer.
       calls: [{ target: b.token, functionSignature: TRANSFER_SIGNATURE }],
       spends: [{ token: b.token, allowance: b.allowance.toString(), unit: 'day', multiplier: 1 }],
     },
@@ -53,25 +60,23 @@ export function budgetGrant(b: {
 
 type Granted = NonNullable<ReturnType<typeof parseGrantedPermission>>;
 
+const callKey = (target: string, selector: string) => `${target.toLowerCase()}:${selector.toLowerCase()}`;
+const spendKey = (s: Granted['spends'][number]) =>
+  `${s.token.toLowerCase()}:${BigInt(s.allowance)}:${s.unit}:${s.multiplier}`;
+// Sorted, so the wallet's order does not matter, and joined whole, so a missing or repeated entry does.
+const sameKeys = (asked: string[], got: string[]) => asked.sort().join() === got.sort().join();
+
 /** Whether what the wallet granted is exactly what was asked. Start and salt are the wallet's. */
 function grantMatches(grant: GrantRequest, permission: Granted): boolean {
-  // Calls compare as sorted target:selector pairs, so the wallet's order does not matter.
-  const asked = grant.permissions.calls
-    .map((c) => `${c.target.toLowerCase()}:${toFunctionSelector(c.functionSignature)}`)
-    .sort();
-  const got = permission.calls.map((c) => `${c.target.toLowerCase()}:${c.selector.toLowerCase()}`).sort();
-  const [spend] = grant.permissions.spends;
-  const [granted] = permission.spends;
+  const { calls, spends } = grant.permissions;
   return (
     isAddressEqual(permission.spender as Address, grant.spender) &&
     permission.end === grant.expiry &&
-    asked.length === got.length &&
-    asked.every((c, i) => c === got[i]) &&
-    permission.spends.length === 1 &&
-    isAddressEqual(granted.token as Address, spend.token) &&
-    BigInt(granted.allowance) === BigInt(spend.allowance) &&
-    granted.unit === spend.unit &&
-    granted.multiplier === spend.multiplier
+    sameKeys(
+      calls.map((c) => callKey(c.target, toFunctionSelector(c.functionSignature))),
+      permission.calls.map((c) => callKey(c.target, c.selector))
+    ) &&
+    sameKeys(spends.map(spendKey), permission.spends.map(spendKey))
   );
 }
 
@@ -91,6 +96,7 @@ type GrantRefusal = 'invalid_response' | 'grant_mismatch' | 'grant_not_found' | 
 export async function checkGranted(
   chainId: number,
   grant: GrantRequest,
+  kind: GrantKind,
   answer: unknown,
   read: ReadPermission
 ): Promise<NewGrant | GrantRefusal> {
@@ -104,16 +110,17 @@ export async function checkGranted(
   if (state.status === 'unavailable') return 'verification_unavailable';
   if (state.status === 'mismatch') return 'grant_mismatch';
   if (!state.approved || state.revoked) return 'grant_not_found';
-  const [spend] = grant.permissions.spends;
+  const { spends } = grant.permissions;
+  const only = spends.length === 1 ? spends[0] : undefined;
   return {
     permissionId,
-    kind: 'x402-budget',
+    kind,
     chainId,
     account: permission.account,
     spender: grant.spender,
-    token: spend.token,
-    allowance: spend.allowance,
-    period: spend.unit,
+    token: only?.token ?? null,
+    allowance: only?.allowance ?? null,
+    period: only?.unit ?? null,
     permission,
     expiresAt: new Date(permission.end * 1000),
   };

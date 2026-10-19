@@ -47,7 +47,7 @@ describe('audit events', () => {
       state: 'failed',
       kind: 'refused',
       httpStatus: 402,
-      refusal: { code: 'budget_exhausted', next: 'jaw_request_budget' },
+      refusal: { code: 'budget_exhausted', next: 'jaw_grant_permissions' },
       payerRefilled: false,
       summary: 'Not paid: budget_exhausted. Nothing was sent.',
     } as const;

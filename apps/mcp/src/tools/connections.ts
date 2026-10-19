@@ -59,7 +59,11 @@ async function viewsOf(t: Tenant, rows: (typeof connections.$inferSelect)[]): Pr
       revokedAt: row.revokedAt?.toISOString() ?? null,
       payer: row.sessionAddress,
       budget: budget
-        ? { permissionId: budget.permissionId, perDay: budget.allowance, expiresAt: budget.expiresAt.toISOString() }
+        ? {
+            permissionId: budget.permissionId,
+            perDay: budget.allowance as string,
+            expiresAt: budget.expiresAt.toISOString(),
+          }
         : null,
     };
   });

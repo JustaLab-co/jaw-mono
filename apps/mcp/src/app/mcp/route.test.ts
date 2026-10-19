@@ -13,7 +13,7 @@ const SIGNERS = {
   jaw_session_x402_discover: 'session',
   jaw_session_history: 'session',
   jaw_session_disconnect: 'session',
-  jaw_request_budget: 'owner',
+  jaw_grant_permissions: 'owner',
   jaw_swap: 'owner',
   jaw_send_calls: 'owner',
   jaw_status: 'none',
@@ -31,6 +31,7 @@ const RENAMED_AWAY = [
   'jaw_history',
   'jaw_disconnect',
   'jaw_send_calls_status',
+  'jaw_request_budget',
 ];
 
 describe('the pinned tool names', () => {

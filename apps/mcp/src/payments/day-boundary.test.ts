@@ -24,7 +24,7 @@ import { grants, payments } from '@/db/schema';
 import { TEST_PG_URL, useTestDb, useTestPostgres } from '@/db/test-db';
 import { x402Budget } from '@/grants/store';
 import { safeFetch } from '@/lib/safe-fetch';
-import { requestBudget } from '@/tools/request-budget';
+import { grantPermissions } from '@/tools/grant-permissions';
 import { pay, type PayDeps } from './pay';
 import { entriesFor } from './store';
 
@@ -149,10 +149,14 @@ async function connected(perDay: string, float: bigint) {
   const c = await connect(undefined, { scope: 'wallet:read x402:pay' });
   const t = (await verifyBearer(c.access_token))?.extra?.tenant as Tenant;
   await getDb().delete(grants).where(eq(grants.connectionId, t.connectionId));
-  await requestBudget(t, perDay, {
-    openWallet: fakeWallet(walletAnswers(c.signer)),
-    readPermission: approvedOnChain,
-  });
+  await grantPermissions(
+    t,
+    { x402Budget: { perDay } },
+    {
+      openWallet: fakeWallet(walletAnswers(c.signer)),
+      readPermission: approvedOnChain,
+    }
+  );
   await walletsSettled();
   if (!(await x402Budget(t.connectionId))) throw new Error('no budget');
   balances.set(t.sessionAddress.toLowerCase(), float);

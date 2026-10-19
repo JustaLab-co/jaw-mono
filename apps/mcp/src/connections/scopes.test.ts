@@ -40,7 +40,7 @@ const TOOLS: Record<string, { needs: ConnectionScope[]; args: object }> = {
   jaw_connections: { needs: ['wallet:read'], args: {} },
   jaw_revoke_connection: { needs: ['wallet:read'], args: { id: 'conn_nope' } },
   jaw_session_disconnect: { needs: ['wallet:read'], args: {} },
-  jaw_request_budget: { needs: ['x402:pay'], args: { perDay: '1' } },
+  jaw_grant_permissions: { needs: ['x402:pay'], args: { x402Budget: { perDay: '1' } } },
   jaw_session_x402_pay: { needs: ['x402:pay'], args: { url: 'http://127.0.0.1:9/paid' } },
   jaw_swap: {
     needs: ['x402:pay'],

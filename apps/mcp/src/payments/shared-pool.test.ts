@@ -21,7 +21,7 @@ import { TEST_PG_URL, useTestDb, useTestPostgres } from '@/db/test-db';
 import { x402Budget } from '@/grants/store';
 import { safeFetch } from '@/lib/safe-fetch';
 import { reconcile } from '@/reconciler/run';
-import { requestBudget } from '@/tools/request-budget';
+import { grantPermissions } from '@/tools/grant-permissions';
 import { pay, type PayDeps } from './pay';
 
 const USDC: Address = '0x036CbD53842c5426634e7929541eC2318f3dCF7e';
@@ -166,10 +166,14 @@ async function connected(perDay: string, float: bigint) {
   const c = await connect(undefined, { scope: 'wallet:read x402:pay' });
   const t = (await verifyBearer(c.access_token))?.extra?.tenant as Tenant;
   await getDb().delete(grants).where(eq(grants.connectionId, t.connectionId));
-  await requestBudget(t, perDay, {
-    openWallet: fakeWallet(walletAnswers(c.signer)),
-    readPermission: approvedOnChain,
-  });
+  await grantPermissions(
+    t,
+    { x402Budget: { perDay } },
+    {
+      openWallet: fakeWallet(walletAnswers(c.signer)),
+      readPermission: approvedOnChain,
+    }
+  );
   await walletsSettled();
   const grant = await x402Budget(t.connectionId);
   if (!grant) throw new Error('no budget');
@@ -203,7 +207,7 @@ async function legacySend(
       leaseUntil: new Date(now.getTime() + (row.due ? -60_000 : 60_000)),
     });
 }
-const refused = { refusal: { code: 'budget_exhausted', next: 'jaw_request_budget' } };
+const refused = { refusal: { code: 'budget_exhausted', next: 'jaw_grant_permissions' } };
 
 describe('given 1 USDC a day and a counter the chain does not answer for', () => {
   it('when a payment of 0.6 comes from the float, then it is refused as chain_unavailable and nothing is signed', async () => {

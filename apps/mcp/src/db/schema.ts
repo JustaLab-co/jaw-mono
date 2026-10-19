@@ -14,6 +14,9 @@ import {
   uniqueIndex,
 } from 'drizzle-orm/pg-core';
 
+/** The periods `wallet_grantPermissions` takes for a spend limit. */
+export const SPEND_UNITS = ['minute', 'hour', 'day', 'week', 'month', 'year', 'forever'] as const;
+
 export const settings = pgTable('settings', {
   key: text('key').primaryKey(),
   value: jsonb('value').notNull(),
@@ -107,9 +110,10 @@ export const grants = pgTable(
     chainId: integer('chain_id').notNull(),
     account: text('account').notNull(),
     spender: text('spender').notNull(),
-    token: text('token').notNull(),
-    allowance: text('allowance').notNull(),
-    period: text('period', { enum: ['day'] }).notNull(),
+    // The grant's spend limit when it has exactly one, as every x402 budget does. The rest live in `permission`.
+    token: text('token'),
+    allowance: text('allowance'),
+    period: text('period', { enum: SPEND_UNITS }),
     kind: text('kind', { enum: ['x402-budget', 'custom'] })
       .notNull()
       .default('x402-budget'),
@@ -120,7 +124,13 @@ export const grants = pgTable(
     replacedAt: timestamp('replaced_at', { withTimezone: true }),
     revokedAt: timestamp('revoked_at', { withTimezone: true }),
   },
-  (t) => [index().on(t.connectionId, t.createdAt)]
+  (t) => [
+    index().on(t.connectionId, t.createdAt),
+    check(
+      'grant_budget_spend',
+      sql`${t.kind} <> 'x402-budget' or (${t.token} is not null and ${t.allowance} is not null and ${t.period} is not null)`
+    ),
+  ]
 );
 
 export const PAYER_TX_HASH_INDEX = 'payments_payer_tx_hash_index';

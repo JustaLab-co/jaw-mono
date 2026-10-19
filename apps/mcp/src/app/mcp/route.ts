@@ -8,7 +8,7 @@ import { registerDiscoverTool } from '@/tools/discover';
 import { registerDisconnectTool } from '@/tools/disconnect';
 import { registerHistoryTool } from '@/tools/history';
 import { registerPayTool } from '@/tools/pay-and-fetch';
-import { registerBudgetTool } from '@/tools/request-budget';
+import { registerGrantTool } from '@/tools/grant-permissions';
 import { registerOwnerCallTools } from '@/tools/owner-calls';
 import { registerSwapTools } from '@/tools/swap';
 import { registerConnectionTools } from '@/tools/connections';
@@ -22,7 +22,7 @@ const mcp = createMcpHandler(
     guardTools(server);
     registerReadTools(server);
     registerDiscoverTool(server);
-    registerBudgetTool(server);
+    registerGrantTool(server);
     registerOwnerCallTools(server);
     registerPayTool(server);
     registerSwapTools(server);
