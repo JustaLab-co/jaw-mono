@@ -217,6 +217,7 @@ describe('read tools', () => {
       'jaw_history',
       'jaw_pay_and_fetch',
       'jaw_quote',
+      'jaw_read_contracts',
       'jaw_request_budget',
       'jaw_revoke_connection',
       'jaw_send_calls',
