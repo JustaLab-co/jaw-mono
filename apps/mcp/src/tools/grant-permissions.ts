@@ -1,4 +1,4 @@
-import { ANY_TARGET } from '@jaw.id/core';
+import { ANY_FN_SEL, ANY_TARGET, EMPTY_CALLDATA_FN_SEL } from '@jaw.id/core';
 import { usdcForNetwork } from '@jaw.id/agent';
 import type { McpServer } from '@modelcontextprotocol/server';
 import { and, eq } from 'drizzle-orm';
@@ -26,6 +26,8 @@ import { forbiddenTargets } from './owner-calls';
 import { NO_PAY_SCOPE, refusal } from './reply';
 
 const MAX_ENTRIES = 10;
+
+const WILDCARD_SELECTORS = new Set<string>([ANY_FN_SEL, EMPTY_CALLDATA_FN_SEL]);
 
 const address = z.string().refine((a) => isAddress(a, { strict: false }), 'must be a 0x address');
 const signature = z
@@ -122,6 +124,10 @@ function asked(t: Tenant, input: GrantInput, expiry: number): Asked | string {
   const refused = input.calls.find((c) => forbidden.has(c.target.toLowerCase()));
   if (refused) {
     return `call_target_refused: a grant to call ${refused.target} is refused: the account itself, the permission manager, the EntryPoint contracts and the any-contract wildcard cannot be granted.`;
+  }
+  const wildcard = input.calls.find((c) => WILDCARD_SELECTORS.has(toFunctionSelector(c.functionSignature)));
+  if (wildcard) {
+    return `call_selector_refused: ${wildcard.functionSignature} hashes to a selector the permission manager reads as any function (or an empty call), so it cannot be granted.`;
   }
   const calls = input.calls.map((c) => ({ target: c.target as Address, functionSignature: c.functionSignature }));
   const spent = (input.spends ?? []).map((s) => ({ ...s, token: s.token as Address, multiplier: s.multiplier ?? 1 }));

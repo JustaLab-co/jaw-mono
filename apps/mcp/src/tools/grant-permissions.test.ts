@@ -2,6 +2,7 @@ import { PERMISSIONS_MANAGER_ADDRESS } from '@jaw.id/core';
 import { desc, eq } from 'drizzle-orm';
 import { randomBytes } from 'node:crypto';
 import { beforeAll, describe, expect, it } from 'vitest';
+import { toFunctionSelector } from 'viem';
 import { verifyBearer, type Tenant } from '@/connections/auth';
 import {
   approvedOnChain,
@@ -239,6 +240,22 @@ describe('jaw_grant_permissions', () => {
     expect(result.content[0].text).toMatch(/^call_target_refused: /);
     expect(opened).toBe(0);
   });
+
+  it.each([
+    ['any function', 'fba3b554e(uint256)', '0x32323232'],
+    ['an empty call', 'f31225173(uint256)', '0xe0e0e0e0'],
+  ])(
+    'given a signature that hashes to the selector for %s, then it is refused by name and no wallet opens',
+    async (_name, functionSignature, selector) => {
+      expect(toFunctionSelector(functionSignature)).toBe(selector);
+      const { t, signer } = await connected();
+
+      const { result, opened } = await grant(t, signer, { calls: [{ target: WETH, functionSignature }] });
+
+      expect(result.content[0].text).toMatch(/^call_selector_refused: /);
+      expect(opened).toBe(0);
+    }
+  );
 
   it.each<[string, GrantInput]>([
     ['the preset with calls', { x402Budget: { perDay: '1' }, calls: twoByTwo.calls }],
