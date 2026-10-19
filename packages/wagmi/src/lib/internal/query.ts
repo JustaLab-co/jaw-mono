@@ -84,6 +84,43 @@ export function getPermissionsQueryKey<config extends Config>(
 }
 
 // ============================================================================
+// getRecoveryQueryKey
+// ============================================================================
+
+export namespace getRecoveryQueryKey {
+  export type Parameters<config extends Config = Config> = {
+    address?: Address;
+    connector?: Connector;
+  };
+
+  export type Value<config extends Config = Config> = readonly [
+    'recovery',
+    {
+      address: Address | undefined;
+      connectorUid: string | undefined;
+    },
+  ];
+}
+
+/**
+ * Creates a query key for getRecovery.
+ * Used by useRecovery hook and for cache invalidation. Carries no chainId:
+ * recovery is account-level, so switching chains does not refetch.
+ */
+export function getRecoveryQueryKey<config extends Config>(
+  parameters: getRecoveryQueryKey.Parameters<config>
+): getRecoveryQueryKey.Value<config> {
+  const { address, connector } = parameters;
+  return [
+    'recovery',
+    {
+      address,
+      connectorUid: connector?.uid,
+    },
+  ] as const;
+}
+
+// ============================================================================
 // getAssetsQueryKey
 // ============================================================================
 
