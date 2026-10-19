@@ -206,6 +206,53 @@ export interface CallGroup {
   calls: CallPermission[];
 }
 
+const ZERO_ADDRESS = '0x0000000000000000000000000000000000000000';
+
+/** A call the permission manager also runs past a checker contract before executing it. */
+export function hasChecker(call: CallPermission): call is CallPermission & { checker: string } {
+  return !!call.checker && call.checker.toLowerCase() !== ZERO_ADDRESS;
+}
+
+/**
+ * One allowed function, plus the checker contract that has to approve each call to it. The SDK
+ * can't say what a given checker enforces, so it names the contract and says the rule is
+ * unverified; it never shows a description the checker gives of itself.
+ */
+export function CallRow({
+  call,
+  truncateAddress,
+}: {
+  call: CallPermission;
+  truncateAddress: (address: string) => string;
+}) {
+  return (
+    <li className="flex flex-col gap-1">
+      {isWildcard(call.selector) ? (
+        <span className="text-body-sm text-warning flex items-center gap-1.5 font-semibold">
+          <TriangleAlert className="size-3 flex-none" strokeWidth={2.4} />
+          Any function
+        </span>
+      ) : (
+        <span className="text-foreground text-body-sm flex gap-1.5 font-mono">
+          <span aria-hidden className="text-muted-foreground flex-none">
+            •
+          </span>
+          <span className="min-w-0 break-all">{call.functionSignature || call.selector}</span>
+        </span>
+      )}
+      {hasChecker(call) && (
+        <span className="text-warning text-body-xs flex items-center gap-1.5 pl-3">
+          <TriangleAlert className="size-3 flex-none" strokeWidth={2.4} />
+          <span className="min-w-0">
+            Extra rule enforced by <span className="font-mono">{truncateAddress(call.checker)}</span> · Unverified rule
+          </span>
+          <CopyButton value={call.checker} size={11} label="Copy rule contract address" />
+        </span>
+      )}
+    </li>
+  );
+}
+
 /** Group the flat call list by contract, preserving first-seen order. */
 export function groupCallsByTarget(calls: CallPermission[]): CallGroup[] {
   const groups = new Map<string, CallGroup>();
@@ -228,6 +275,7 @@ function ContractGroup({
   resolvedName,
   avatarUrl,
   truncatedAddress,
+  truncateAddress,
   tokenSymbol,
   chainId,
 }: {
@@ -235,6 +283,7 @@ function ContractGroup({
   resolvedName?: string;
   avatarUrl?: string;
   truncatedAddress: string;
+  truncateAddress: (address: string) => string;
   /** Set when the target is a known token — it then reads like the spend rows. */
   tokenSymbol?: string;
   chainId?: number;
@@ -301,21 +350,9 @@ function ContractGroup({
             </div>
           )}
           <ul className="bg-secondary rounded-chip flex flex-col gap-1 p-2">
-            {group.calls.map((call, i) =>
-              isWildcard(call.selector) ? (
-                <li key={i} className="text-body-sm text-warning flex items-center gap-1.5 font-semibold">
-                  <TriangleAlert className="size-3 flex-none" strokeWidth={2.4} />
-                  Any function
-                </li>
-              ) : (
-                <li key={i} className="text-foreground text-body-sm flex gap-1.5 font-mono">
-                  <span aria-hidden className="text-muted-foreground flex-none">
-                    •
-                  </span>
-                  <span className="min-w-0 break-all">{call.functionSignature || call.selector}</span>
-                </li>
-              )
-            )}
+            {group.calls.map((call, i) => (
+              <CallRow key={i} call={call} truncateAddress={truncateAddress} />
+            ))}
           </ul>
         </div>
       </AccordionContent>
@@ -341,6 +378,7 @@ export function AllowedCalls({
   chainId?: number;
 }) {
   const groups = groupCallsByTarget(calls);
+  const ruleCount = calls.filter(hasChecker).length;
 
   return (
     <Accordion type="single" collapsible>
@@ -349,6 +387,11 @@ export function AllowedCalls({
           <span className="flex flex-1 items-baseline gap-1.5">
             <Eyebrow>Allowed calls</Eyebrow>
             <span className="text-muted-foreground text-code font-mono font-medium">{calls.length}</span>
+            {ruleCount > 0 && (
+              <span className="text-warning text-code font-mono font-medium">
+                · {ruleCount} extra {ruleCount === 1 ? 'rule' : 'rules'}
+              </span>
+            )}
           </span>
         </AccordionTrigger>
         <AccordionContent className="border-border/40 border-t p-0">
@@ -360,6 +403,7 @@ export function AllowedCalls({
                 resolvedName={identityOf(group.target)?.ensName ?? undefined}
                 avatarUrl={identityOf(group.target)?.ensAvatar ?? undefined}
                 truncatedAddress={truncateAddress(group.target)}
+                truncateAddress={truncateAddress}
                 tokenSymbol={tokenMeta?.[group.target]?.symbol}
                 chainId={chainId}
               />
