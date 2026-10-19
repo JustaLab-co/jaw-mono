@@ -1,5 +1,5 @@
 import type { McpServer } from '@modelcontextprotocol/server';
-import { getAbiItem, type Abi, type Address, type PublicClient } from 'viem';
+import { encodeFunctionData, getAbiItem, type Abi, type Address, type PublicClient } from 'viem';
 import { z } from 'zod';
 import { proxyChains, proxyClientFor } from '@/lib/chain';
 import { reply } from '@/lib/fence';
@@ -53,8 +53,20 @@ function hasFunction(r: Read) {
   }
 }
 
+const messageOf = (error: Error) => (error as { shortMessage?: string }).shortMessage ?? error.message;
+
+// multicall swallows an encoding error and sends 0x, which then reads as "returned no data".
+function encodeError(r: Read) {
+  try {
+    encodeFunctionData({ abi: functionsOf(r), functionName: r.functionName, args: r.args });
+  } catch (e) {
+    return messageOf(e as Error);
+  }
+  return undefined;
+}
+
 function failure(error: Error, read: Read) {
-  const message = (error as { shortMessage?: string }).shortMessage ?? error.message;
+  const message = messageOf(error);
   if (message.includes('returned no data'))
     return `${read.address} returned no data: it is not a contract that has ${read.functionName}.`;
   return message;
@@ -69,6 +81,10 @@ export async function readContracts(args: { chainId: number; reads: Read[] }, cl
   const lacking = reads.findIndex((r) => !hasFunction(r));
   if (lacking !== -1)
     return refusal(`Read ${lacking}: the ABI has no function named "${reads[lacking].functionName}".`);
+  for (const [i, r] of reads.entries()) {
+    const error = encodeError(r);
+    if (error) return refusal(`Read ${i}: its args do not encode. ${error}`);
+  }
 
   const client = clientFor(chainId);
   if (!client.chain?.contracts?.multicall3)

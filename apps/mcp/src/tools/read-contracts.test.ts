@@ -114,4 +114,11 @@ describe('jaw_read_contracts', () => {
       expect(out).toMatchObject({ isError: true, content: [{ text: expect.stringMatching(/^Read 1: /) }] });
     }
   });
+
+  it('refuses a read whose args do not encode instead of calling the contract a non-contract', async () => {
+    for (const bad of [read('balanceOf', []), read('balanceOf', ['1.5']), read('balanceOf')]) {
+      const out = await readContracts({ chainId: 8453, reads: [read('decimals'), bad] }, usdc);
+      expect(out).toMatchObject({ isError: true, content: [{ text: expect.stringMatching(/^Read 1: .*not encode/) }] });
+    }
+  });
 });
