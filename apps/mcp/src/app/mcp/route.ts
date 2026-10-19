@@ -11,6 +11,7 @@ import { registerPayTool } from '@/tools/pay-and-fetch';
 import { registerBudgetTool } from '@/tools/request-budget';
 import { registerOwnerCallTools } from '@/tools/owner-calls';
 import { registerSendTools } from '@/tools/send';
+import { registerSignTool } from '@/tools/sign';
 import { registerSwapTools } from '@/tools/swap';
 import { registerConnectionTools } from '@/tools/connections';
 
@@ -26,6 +27,7 @@ const mcp = createMcpHandler(
     registerBudgetTool(server);
     registerSendTools(server);
     registerOwnerCallTools(server);
+    registerSignTool(server);
     registerPayTool(server);
     registerSwapTools(server);
     registerHistoryTool(server);
