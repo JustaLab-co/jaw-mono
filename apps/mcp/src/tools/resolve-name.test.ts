@@ -4,7 +4,7 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { useTestDb } from '@/db/test-db';
 import { callTool, connect, setTestEnv } from '@/connections/testkit';
 import { custom, encodeErrorResult, offchainLookupAbiItem } from 'viem';
-import { ccipRequest, ensClient, lookup, type EnsClient } from './resolve-name';
+import { ccipRequest, ccipRequestVia, ensClient, lookup, type EnsClient } from './resolve-name';
 
 const mainnetNode = { stall: false, requests: 0, closed: [] as Promise<void>[] };
 const rpc = createServer((req) => {
@@ -127,6 +127,28 @@ describe('ccip-read gateways', () => {
     });
     const late = ensClient(resolver, AbortSignal.abort());
     await expect(late.getEnsAddress({ name: 'vitalik.eth' })).rejects.toMatchObject({ cause: { name: 'AbortError' } });
+  });
+});
+
+describe('a gateway that never answers', () => {
+  it('given a deadline, aborts the gateway request instead of holding it open', async () => {
+    let gatewayClosed: Promise<unknown> = new Promise(() => {});
+    const hang: typeof fetch = (_url, init) => {
+      const signal = init?.signal;
+      const closed = new Promise((_, drop) => signal?.addEventListener('abort', () => drop(signal.reason)));
+      gatewayClosed = closed.catch(() => 'closed');
+      return closed as Promise<Response>;
+    };
+    const deadline = AbortSignal.timeout(50);
+    const answer = ccipRequestVia(hang, {
+      data: '0x1234',
+      sender: OTHER,
+      urls: ['https://gateway.example/{data}'],
+      requestOptions: { signal: deadline },
+    });
+    const stuck = new Promise((_, stop) => setTimeout(() => stop(new Error('gateway request still open')), 1_000));
+    await expect(Promise.race([gatewayClosed, stuck])).resolves.toBeDefined();
+    await expect(answer).rejects.toThrow('no gateway answered');
   });
 });
 

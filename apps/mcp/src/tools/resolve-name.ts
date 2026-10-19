@@ -45,8 +45,12 @@ type Reason = z.infer<typeof reason>;
 export type EnsClient = Pick<PublicClient, 'getEnsAddress' | 'getEnsName'>;
 
 // CCIP-Read gateway URLs come from resolver contracts, so they go through the guarded fetch.
-export async function ccipRequest({ data, sender, urls, requestOptions }: CcipRequestParameters) {
-  const guarded = safeFetch(new Set());
+export const ccipRequest = (params: CcipRequestParameters) => ccipRequestVia(safeFetch(new Set()), params);
+
+export async function ccipRequestVia(
+  guarded: typeof fetch,
+  { data, sender, urls, requestOptions }: CcipRequestParameters
+) {
   for (const url of urls) {
     requestOptions?.signal?.throwIfAborted();
     const get = url.includes('{data}');
