@@ -59,7 +59,7 @@ export type CallPermission = {
     target: Address;
     /** Function selector (4 bytes) */
     selector: Hex;
-    /** External validation contract address (internal only - defaults to zero address) */
+    /** Contract that must approve each matching call (`canExecute`), or the zero address for none */
     checker: Address;
 };
 
@@ -121,6 +121,12 @@ export type CallPermissionDetail = {
     selector?: Hex;
     /** Human-readable function signature (e.g., "transfer(address,uint256)") */
     functionSignature?: string;
+    /**
+     * Contract the permission manager asks to approve each matching call, via
+     * `canExecute`. Part of the permission hash. Defaults to the zero address,
+     * which means no checker. Always present on a grant response.
+     */
+    checker?: Address;
 };
 
 /**
@@ -388,6 +394,7 @@ export async function grantPermissions(
     const responseCalls: CallPermissionDetail[] = permission.calls.map((call) => ({
         target: call.target,
         selector: call.selector,
+        checker: call.checker,
     }));
 
     const responseSpends: SpendPermissionDetail[] = permission.spends.map((spend) => ({
@@ -581,7 +588,7 @@ function apiPermissionsToPermission(
         return {
             target: call.target,
             selector,
-            checker: ZERO_ADDRESS,
+            checker: call.checker ?? ZERO_ADDRESS,
         };
     });
 
