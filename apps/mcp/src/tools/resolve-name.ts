@@ -48,6 +48,7 @@ export type EnsClient = Pick<PublicClient, 'getEnsAddress' | 'getEnsName'>;
 export async function ccipRequest({ data, sender, urls, requestOptions }: CcipRequestParameters) {
   const guarded = safeFetch(new Set());
   for (const url of urls) {
+    requestOptions?.signal?.throwIfAborted();
     const get = url.includes('{data}');
     const res = await guarded(url.replace('{sender}', sender.toLowerCase()).replace('{data}', data), {
       method: get ? 'GET' : 'POST',
@@ -65,20 +66,28 @@ export async function ccipRequest({ data, sender, urls, requestOptions }: CcipRe
   throw new Error('no gateway answered');
 }
 
-export const ensClient = (transport: Transport): EnsClient =>
-  createPublicClient({ chain: mainnet, transport, ccipRead: { request: ccipRequest } });
+export const ensClient = (transport: Transport, signal?: AbortSignal): EnsClient =>
+  createPublicClient({
+    chain: mainnet,
+    transport,
+    ccipRead: { request: (args) => ccipRequest({ ...args, requestOptions: { signal } }) },
+  });
 
-const mainnetClient = () => ensClient(http(config().mainnetRpcUrl, { timeout: LOOKUP_MS }));
+const mainnetClient = (signal?: AbortSignal) =>
+  ensClient(http(config().mainnetRpcUrl, { timeout: LOOKUP_MS, fetchOptions: { signal } }), signal);
 
 const unresolved = (why: Reason, summary: string, name: string | null = null, address: string | null = null) =>
   resolveOutput.parse({ name, address, chainId, reason: why, summary });
 
 /** Throws when `name` does not normalize or the lookup fails. */
 export async function resolveName(name: string, client: EnsClient = mainnetClient()) {
-  const normalized = normalize(name);
-  const address = await client.getEnsAddress({ name: normalized });
-  if (!address) return unresolved('no_address', `${normalized} has no address.`, normalized);
-  return resolveOutput.parse({ name: normalized, address, chainId, summary: `${normalized} resolves to ${address}.` });
+  return addressOf(normalize(name), client);
+}
+
+async function addressOf(name: string, client: EnsClient): Promise<Resolved> {
+  const address = await client.getEnsAddress({ name });
+  if (!address) return unresolved('no_address', `${name} has no address.`, name);
+  return resolveOutput.parse({ name, address, chainId, summary: `${name} resolves to ${address}.` });
 }
 
 async function nameOf(address: string, client: EnsClient): Promise<Resolved> {
@@ -99,34 +108,39 @@ async function nameOf(address: string, client: EnsClient): Promise<Resolved> {
   return resolveOutput.parse({ name, address: owner, chainId, summary: `${owner} is ${name}.` });
 }
 
-const withTimeout = <T>(work: Promise<T>) =>
-  Promise.race([
-    work,
-    new Promise<never>((_, stop) => setTimeout(() => stop(new Error('lookup timed out')), LOOKUP_MS).unref()),
-  ]);
-
-async function settle(run: () => Promise<Resolved>): Promise<Resolved> {
+async function withDeadline(run: (signal: AbortSignal) => Promise<Resolved>, ms: number): Promise<Resolved> {
+  const deadline = new AbortController();
+  const timer = setTimeout(() => deadline.abort(new Error('lookup timed out')), ms);
+  const late = new Promise<never>((_, stop) =>
+    deadline.signal.addEventListener('abort', () => stop(deadline.signal.reason))
+  );
   try {
-    return await withTimeout(run());
+    return await Promise.race([run(deadline.signal), late]);
   } catch (err) {
     log('warn', { msg: 'ens lookup failed', error: errorLabel(err) });
     return unresolved('lookup_failed', 'The lookup could not finish right now. Try again.');
+  } finally {
+    clearTimeout(timer);
   }
 }
 
-/** A name returns its address and an address returns its primary name, both on Ethereum mainnet. */
-export async function lookup(input: { name: string } | { address: string }, client?: EnsClient): Promise<Resolved> {
+export async function lookup(
+  input: { name: string } | { address: string },
+  connect: (signal: AbortSignal) => EnsClient = mainnetClient,
+  ms = LOOKUP_MS
+): Promise<Resolved> {
   if ('address' in input) {
     if (!isAddress(input.address, { strict: false }))
       return unresolved('invalid_address', 'That is not a valid address.');
-    return settle(() => nameOf(input.address, client ?? mainnetClient()));
+    return withDeadline((signal) => nameOf(input.address, connect(signal)), ms);
   }
+  let name: string;
   try {
-    normalize(input.name);
+    name = normalize(input.name);
   } catch {
     return unresolved('invalid_name', `"${input.name.slice(0, 100)}" is not a valid ENS name.`);
   }
-  return settle(() => resolveName(input.name, client));
+  return withDeadline((signal) => addressOf(name, connect(signal)), ms);
 }
 
 // The call failed, as opposed to the lookup answering that there is nothing.

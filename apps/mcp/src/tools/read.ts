@@ -273,9 +273,6 @@ function addFunds(t: Tenant) {
   });
 }
 
-// jaw_transfer still imports it from here. Delete this line with send.ts.
-export { resolveName } from './resolve-name';
-
 const refusal = (text: string) => ({ content: [{ type: 'text' as const, text }], isError: true });
 const readOnly = { readOnlyHint: true, openWorldHint: true };
 
