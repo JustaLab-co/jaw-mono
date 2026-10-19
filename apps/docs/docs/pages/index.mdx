@@ -7,7 +7,7 @@ import { HomePage, Cards, Card } from 'vocs';
 
 <HomePage.Root>
   <HomePage.Logo />
-  <HomePage.Tagline>{'Passkey smart accounts for every app.'}</HomePage.Tagline>
+  <HomePage.Tagline>{'Passkey smart wallets for every app.'}</HomePage.Tagline>
   <HomePage.Description>
     {
       'No seed phrases, gas in stablecoins, ENS names and programmable permissions. ERC-4337 and EIP-7702 on EVM chains.'
@@ -27,39 +27,39 @@ import { HomePage, Cards, Card } from 'vocs';
 <Cards>
   <Card
     topRight="01"
+    title="AI-Assisted Coding"
+    description="llms.txt files and agent skills that teach your coding assistant the SDK."
+    to="/llms"
+  />
+  <Card
+    topRight="02"
     title="Get Started"
     description="Quickstart, choosing your setup and supported networks."
     to="/guides/quickstart"
   />
   <Card
-    topRight="02"
+    topRight="03"
     title="Core Concepts"
     description="Smart accounts, passkeys, ENS names and the permission layer."
     to="/concepts/smart-accounts"
   />
   <Card
-    topRight="03"
+    topRight="04"
     title="Integrations"
     description="Wagmi, Reown AppKit, the EIP-1193 provider and React Native."
     to="/integrations"
   />
   <Card
-    topRight="04"
+    topRight="05"
     title="Guides"
     description="Gas sponsoring, stablecoin payments, subscriptions, SIWE and EIP-7702."
     to="/guides/gas-sponsoring"
   />
   <Card
-    topRight="05"
+    topRight="06"
     title="Customization"
     description="Theming, your own wallet UI and a custom passkey server."
     to="/advanced"
-  />
-  <Card
-    topRight="06"
-    title="CLI and Agents"
-    description="The jaw CLI, the MCP server and paying for APIs with x402."
-    to="/cli"
   />
   <Card
     topRight="07"
@@ -85,12 +85,17 @@ import { HomePage, Cards, Card } from 'vocs';
     to="https://dashboard.jaw.id/"
   />
   <Card
-    icon="lucide:key-round"
-    title="keys.jaw.id"
-    description="Where CrossPlatform accounts sign in and approve."
-    to="https://keys.jaw.id/"
+    icon="lucide:flask-conical"
+    title="Playground"
+    description="Call the SDK methods from your browser before you integrate."
+    to="https://playground.jaw.id/"
   />
-  <Card icon="lucide:bot" title="Docs for LLMs" description="These docs as plain text for AI assistants." to="/llms" />
+  <Card
+    icon="lucide:monitor-play"
+    title="Demo"
+    description="Sign in, send, swap and delegate the way your users will."
+    to="https://demo.jaw.id/"
+  />
   <Card
     icon="lucide:network"
     title="Supported Networks"
