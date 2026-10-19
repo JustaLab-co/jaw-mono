@@ -4,6 +4,7 @@ import {
   encodeFunctionData,
   getAbiItem,
   HttpRequestError,
+  isHex,
   RpcRequestError,
   TimeoutError,
   type Abi,
@@ -12,7 +13,7 @@ import {
 } from 'viem';
 import { z } from 'zod';
 import { proxyChains, proxyClientFor } from '@/lib/chain';
-import { reply } from '@/lib/fence';
+import { fenceText, reply } from '@/lib/fence';
 import { refusal } from './reply';
 
 const MAX_READS = 100;
@@ -30,7 +31,10 @@ const input = z.strictObject({
 });
 
 const result = z.discriminatedUnion('ok', [
-  z.object({ ok: z.literal(true), value: z.unknown().describe('Decoded; integers as decimal strings') }),
+  z.object({
+    ok: z.literal(true),
+    value: z.unknown().describe('Decoded; integers as decimal strings, text fenced as untrusted'),
+  }),
   z.object({ ok: z.literal(false), error: z.string() }),
 ]);
 
@@ -43,11 +47,15 @@ const output = z.object({
 export type Read = z.infer<typeof readInput>;
 export type ClientFor = (chainId: number) => PublicClient;
 
-// JSON has no bigint, so integers come back as decimal strings.
-function plain(v: unknown): unknown {
+const TEXT_MAX = 2000;
+
+// JSON has no bigint, so integers come back as decimal strings. Any other string is the contract's
+// own text and is fenced, except hex (addresses, bytes), which cannot carry instructions.
+function plain(v: unknown, source: string): unknown {
   if (typeof v === 'bigint') return v.toString();
-  if (Array.isArray(v)) return v.map(plain);
-  if (v && typeof v === 'object') return Object.fromEntries(Object.entries(v).map(([k, x]) => [k, plain(x)]));
+  if (typeof v === 'string') return isHex(v) ? v : fenceText(source, v, TEXT_MAX);
+  if (Array.isArray(v)) return v.map((x) => plain(x, source));
+  if (v && typeof v === 'object') return Object.fromEntries(Object.entries(v).map(([k, x]) => [k, plain(x, source)]));
   return v;
 }
 
@@ -80,11 +88,11 @@ const unreachable = (error: Error) =>
   error instanceof BaseError &&
   !!error.walk((e) => e instanceof HttpRequestError || e instanceof RpcRequestError || e instanceof TimeoutError);
 
-function failure(error: Error, read: Read) {
+function failure(error: Error, read: Read, source: string) {
   const message = messageOf(error);
   if (message.includes('returned no data'))
     return `${read.address} returned no data: it is not a contract that has ${read.functionName}.`;
-  return message;
+  return fenceText(source, message, TEXT_MAX);
 }
 
 /** Runs the reads in one multicall. A read that fails carries its own error and does not stop the others. */
@@ -115,11 +123,12 @@ export async function readContracts(args: { chainId: number; reads: Read[] }, cl
   });
   if (settled.some((s) => s.status === 'failure' && unreachable(s.error)))
     return refusal(`The RPC for chain ${chainId} is unavailable, so nothing was read. Try again shortly.`);
-  const results = settled.map((s, i) =>
-    s.status === 'success'
-      ? { ok: true as const, value: plain(s.result) }
-      : { ok: false as const, error: failure(s.error, reads[i]) }
-  );
+  const results = settled.map((s, i) => {
+    const source = `${reads[i].address} on ${chainId}`;
+    return s.status === 'success'
+      ? { ok: true as const, value: plain(s.result, source) }
+      : { ok: false as const, error: failure(s.error, reads[i], source) };
+  });
   const returned = results.filter((r) => r.ok).length;
   return reply(output.parse({ chainId, results, summary: `${returned} of ${results.length} reads returned.` }));
 }
