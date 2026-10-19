@@ -1,0 +1,144 @@
+name: Deploy Preview
+
+# Vercel no longer builds a preview on every push (`git.deploymentEnabled` is
+# false in each app's vercel.json). Run this from the Actions tab, on main, with
+# a PR number to get a preview of that PR's head commit.
+#
+# The build runs on Vercel from the commit, with the project's Preview env, the
+# same as the old automatic previews. This job never checks out the PR's code,
+# so nothing from the branch runs next to VERCEL_TOKEN.
+on:
+  workflow_dispatch:
+    inputs:
+      pr:
+        description: 'Pull request number'
+        required: true
+        type: string
+      app:
+        description: 'App to deploy'
+        required: true
+        type: choice
+        default: all
+        options:
+          - all
+          - playground
+          - keys
+          - docs
+          - demo
+
+permissions:
+  contents: read
+
+jobs:
+  resolve:
+    runs-on: ubuntu-latest
+    outputs:
+      ref: ${{ steps.pr.outputs.ref }}
+      sha: ${{ steps.pr.outputs.sha }}
+      apps: ${{ steps.apps.outputs.apps }}
+    steps:
+      # The secrets live in the `release` environment, which only main may
+      # use. Picking another ref would fail there anyway; say why up front.
+      - name: Refuse non-main refs
+        if: github.ref_name != 'main'
+        run: |
+          echo "::error::Run Deploy Preview from main and pass the PR number (got ${{ github.ref_name }})"
+          exit 1
+
+      - name: Resolve pull request
+        id: pr
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR: ${{ inputs.pr }}
+        run: |
+          if ! [[ "$PR" =~ ^[0-9]+$ ]]; then
+            echo "::error::PR must be a number (got $PR)"
+            exit 1
+          fi
+          read -r head_repo ref sha < <(gh api "repos/$GITHUB_REPOSITORY/pulls/$PR" \
+            --jq '[.head.repo.full_name, .head.ref, .head.sha] | @tsv')
+          # Vercel builds from this repository, so a fork's branch does not exist there.
+          if [ "$head_repo" != "$GITHUB_REPOSITORY" ]; then
+            echo "::error::PR #$PR comes from $head_repo; previews only build branches of $GITHUB_REPOSITORY"
+            exit 1
+          fi
+          echo "ref=$ref" >> "$GITHUB_OUTPUT"
+          echo "sha=$sha" >> "$GITHUB_OUTPUT"
+
+      - name: Pick apps
+        id: apps
+        env:
+          APP: ${{ inputs.app }}
+        run: |
+          if [ "$APP" = all ]; then
+            APP='playground keys docs demo'
+          fi
+          # Each app's project id is the secret VERCEL_PROJECT_ID_<APP>.
+          apps=$(for a in $APP; do echo "$a"; done \
+            | jq -R '{name: ., secret: ("VERCEL_PROJECT_ID_" + ascii_upcase)}' | jq -sc .)
+          echo "apps=$apps" >> "$GITHUB_OUTPUT"
+
+  deploy:
+    needs: resolve
+    runs-on: ubuntu-latest
+    environment: release
+    timeout-minutes: 30
+    permissions:
+      contents: read
+      pull-requests: write
+    strategy:
+      fail-fast: false
+      matrix:
+        app: ${{ fromJSON(needs.resolve.outputs.apps) }}
+    steps:
+      - name: Deploy to Vercel
+        id: deploy
+        env:
+          VERCEL_TOKEN: ${{ secrets.VERCEL_TOKEN }}
+          TEAM_ID: ${{ secrets.VERCEL_ORG_ID }}
+          PROJECT_ID: ${{ secrets[matrix.app.secret] }}
+          APP: ${{ matrix.app.name }}
+          REF: ${{ needs.resolve.outputs.ref }}
+          SHA: ${{ needs.resolve.outputs.sha }}
+          REPO_ID: ${{ github.repository_id }}
+        run: |
+          if [ -z "$PROJECT_ID" ]; then
+            echo "::error::No Vercel project id for $APP"
+            exit 1
+          fi
+          body=$(jq -n --arg name "$APP" --arg project "$PROJECT_ID" \
+            --arg ref "$REF" --arg sha "$SHA" --arg repoId "$REPO_ID" \
+            '{name: $name, project: $project, gitSource: {type: "github", repoId: $repoId, ref: $ref, sha: $sha}}')
+          created=$(curl -sS --fail-with-body -X POST \
+            "https://api.vercel.com/v13/deployments?teamId=$TEAM_ID&skipAutoDetectionConfirmation=1" \
+            -H "Authorization: Bearer $VERCEL_TOKEN" -H 'Content-Type: application/json' \
+            -d "$body")
+          id=$(jq -r .id <<<"$created")
+          echo "Inspect: $(jq -r .inspectorUrl <<<"$created")"
+
+          while :; do
+            state=$(curl -sS --fail-with-body \
+              "https://api.vercel.com/v13/deployments/$id?teamId=$TEAM_ID" \
+              -H "Authorization: Bearer $VERCEL_TOKEN" | jq -r .readyState)
+            echo "$APP: $state"
+            case "$state" in
+              READY) break ;;
+              ERROR|CANCELED) echo "::error::$APP preview ended $state"; exit 1 ;;
+            esac
+            sleep 10
+          done
+
+          url="https://$(jq -r .url <<<"$created")"
+          echo "url=$url" >> "$GITHUB_OUTPUT"
+          echo "**$APP**: $url ($SHA)" >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Comment on the pull request
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR: ${{ inputs.pr }}
+          APP: ${{ matrix.app.name }}
+          URL: ${{ steps.deploy.outputs.url }}
+          SHA: ${{ needs.resolve.outputs.sha }}
+        run: |
+          gh pr comment "$PR" --repo "$GITHUB_REPOSITORY" \
+            --body "Preview of **$APP** at \`${SHA:0:7}\`: $URL"
