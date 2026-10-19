@@ -6,10 +6,11 @@
 
 - `revoke-own`: this connection's x402 budget, once revoked, leaves the next payment with no budget.
 - `revoke-other`: another connection's grant on the same account revokes the same way, and `jaw_connections` lists it `revoked`.
-- `revoke-orphan`: a permission live on chain with no `grants` row (approved while the server failed to record it) is read from the permission store and revoked. The `permission_requests` row records the outcome.
-- `revoke-refusals`: an unknown id, another account's permission, a chain it was not granted on, one already revoked and one already ended are each refused by name (`unknown_permission`, `wrong_chain`, `already_revoked`, `expired`) before any link opens.
+- `revoke-orphan`: a permission live on chain with no `grants` row (approved while the server failed to record it) is read from the permission store and revoked. `jaw_connections` lists such ids under each connection's `unrecorded`, and the `permission_requests` row records the outcome.
+- `revoke-refusals`: an unknown id, another account's permission, a chain it was not granted on, one already revoked, one already ended and a recorded grant the permission store does not hold are each refused by name (`unknown_permission`, `wrong_chain`, `already_revoked`, `expired`, `not_in_store`) before any link opens.
 - `revoke-declined`: the owner rejects in the wallet. The grant stays live and the request row reads `owner_declined`.
-- `revoke-one-open`: asking again for a permission whose revoke waits, from any connection of the account, returns the same link.
+- `revoke-one-open`: asking again from the same connection for a permission whose revoke waits returns the same link. Another connection, or a second permission from the same connection, is refused as `revoke_in_progress` with no link.
+- `revoke-unconfirmed`: the wallet answered but the chain did not show the revoke within about 15 seconds. The request reads `approved` with code `unconfirmed`, and asking again marks the grant revoked once the chain shows it.
 - `link-cap`: grant and revoke links count toward the account's three open owner links with `jaw_send_calls` and `jaw_swap`. A fourth link of any kind is refused as `account_busy`.
 - `revoke-old-name`: `jaw_revoke_connection` is an unknown tool.
 

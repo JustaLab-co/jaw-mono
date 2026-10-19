@@ -19,8 +19,9 @@ import {
   type GrantRequest,
   type ReadPermission,
 } from '@/grants/permission';
-import { openLink, type Outcome } from '@/grants/requests';
+import { openLink, type Claim, type Outcome } from '@/grants/requests';
 import { liveGrants, LIVE_GRANTS_PER_CONNECTION, type GrantKind } from '@/grants/store';
+import { errorLabel, log } from '@/lib/edge';
 import { reply } from '@/lib/fence';
 import { forbiddenTargets } from './owner-calls';
 import { ACCOUNT_BUSY, NO_PAY_SCOPE, refusal } from './reply';
@@ -137,8 +138,8 @@ function asked(t: Tenant, input: GrantInput, expiry: number): Asked | string {
   return { kind: 'custom', grant, what: `${calls.length} call(s) and ${spent.length} spend limit(s)` };
 }
 
-/** Asks the wallet for the grant and records it once the chain shows it approved. */
-async function askGrant(t: Tenant, ask: Asked, walletAsk: Ask, read: ReadPermission): Promise<Outcome> {
+async function askGrant(t: Tenant, ask: Asked, walletAsk: Ask, claim: Claim, read: ReadPermission): Promise<Outcome> {
+  if (!(await claim())) return { state: 'expired', code: 'session_lost' };
   const answer = await walletAsk('wallet_grantPermissions', [ask.grant]);
   const answered = (answer as { permissionId?: unknown } | null)?.permissionId;
   const permissionId = isHex(answered) ? answered : undefined;
@@ -147,16 +148,21 @@ async function askGrant(t: Tenant, ask: Asked, walletAsk: Ask, read: ReadPermiss
   if (!isAddressEqual(checked.account as Address, t.account)) {
     return { state: 'failed', code: 'wrong_account', permissionId };
   }
-  const recorded = await getDb().transaction(async (tx) => {
-    const [live] = await tx
-      .select({ id: connections.id })
-      .from(connections)
-      .where(and(eq(connections.id, t.connectionId), isLive()))
-      .for('update');
-    if (live) await recordGrant(tx, t.connectionId, checked);
-    return live !== undefined;
-  });
-  return recorded ? { state: 'approved', permissionId } : { state: 'failed', code: 'connection_ended', permissionId };
+  try {
+    const recorded = await getDb().transaction(async (tx) => {
+      const [live] = await tx
+        .select({ id: connections.id })
+        .from(connections)
+        .where(and(eq(connections.id, t.connectionId), isLive()))
+        .for('update');
+      if (live) await recordGrant(tx, t.connectionId, checked);
+      return live !== undefined;
+    });
+    return recorded ? { state: 'approved', permissionId } : { state: 'failed', code: 'connection_ended', permissionId };
+  } catch (err) {
+    log('warn', { msg: 'granted permission not recorded', permissionId, error: errorLabel(err) });
+    return { state: 'failed', code: 'not_recorded', permissionId };
+  }
 }
 
 export async function grantPermissions(t: Tenant, input: GrantInput, deps = DEFAULTS) {
@@ -184,7 +190,12 @@ export async function grantPermissions(t: Tenant, input: GrantInput, deps = DEFA
   }
   const opened = await openLink(
     t,
-    { method: 'grant', chainId: t.chainId, work: (walletAsk) => askGrant(t, ask, walletAsk, deps.readPermission) },
+    {
+      method: 'grant',
+      chainId: t.chainId,
+      approveBy: until,
+      work: (walletAsk, claim) => askGrant(t, ask, walletAsk, claim, deps.readPermission),
+    },
     deps.openWallet
   );
   if (opened === 'wallet_busy') return refusal('Too many owners are approving right now. Try again in a minute.');

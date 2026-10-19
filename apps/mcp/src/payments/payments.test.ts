@@ -274,7 +274,6 @@ async function approveBudget(c: Awaited<ReturnType<typeof connect>>, perDay: str
   balances.set(c.signer.address.toLowerCase(), 5_000_000n);
 }
 
-/** The client revoking its token at the OAuth server, which ends `t`'s connection. */
 async function revoker(t: Tenant) {
   const [{ grantId }] = await getDb().select().from(connections).where(eq(connections.id, t.connectionId));
   return async () => {

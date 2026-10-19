@@ -5,12 +5,12 @@ import { and, isNull, sql } from 'drizzle-orm';
 import { isAddressEqual, type Address, type Hex } from 'viem';
 import { z } from 'zod';
 import { tenant, type Tenant } from '@/connections/auth';
-import { config, SUPPORTED_CHAINS } from '@/connections/config';
+import { APPROVE_WITHIN_MS, config, SUPPORTED_CHAINS } from '@/connections/config';
 import { ownerRelay, type Ask, type OpenWallet } from '@/connections/relay';
 import { getDb } from '@/db/client';
 import { grants } from '@/db/schema';
 import { readOnChain, type ReadPermission } from '@/grants/permission';
-import { openLink, type Outcome, type PermissionRequestRow } from '@/grants/requests';
+import { openLink, type Claim, type Outcome, type PermissionRequestRow } from '@/grants/requests';
 import { reply } from '@/lib/fence';
 import { ACCOUNT_BUSY, refusal } from './reply';
 
@@ -38,7 +38,6 @@ const output = z.object({
   summary: z.string(),
 });
 
-/** A permission as JAW's permission store holds it, which is what the owner's wallet revokes from. */
 export type StoredPermission = { permission: GrantedPermission; chainId: number } | 'not_found' | 'unavailable';
 export type LookUp = (permissionId: Hex) => Promise<StoredPermission>;
 
@@ -46,13 +45,15 @@ export const fromStore: LookUp = async (permissionId) => {
   try {
     const stored = await getPermissionFromRelay(permissionId, config().paymasterApiKey);
     const permission = parseGrantedPermission(stored);
-    return permission ? { permission, chainId: Number(stored.chainId) } : 'not_found';
+    const chainId = Number.parseInt(stored.chainId, 16);
+    return permission && Number.isSafeInteger(chainId) ? { permission, chainId } : 'not_found';
   } catch (err) {
     const status =
       (err as { status?: number })?.status ?? (err as { response?: { status?: number } })?.response?.status;
     if (status === 404) return 'not_found';
     const message = err instanceof Error ? err.message : '';
-    return status === undefined && /not\s*found/i.test(message) ? 'not_found' : 'unavailable';
+    const missing = /not\s*found|does not exist|no such permission/i.test(message);
+    return status === undefined && missing ? 'not_found' : 'unavailable';
   }
 };
 
@@ -60,15 +61,14 @@ export interface RevokeDeps {
   openWallet: OpenWallet;
   readPermission: ReadPermission;
   lookUp: LookUp;
-  /** How long to wait between reads of the chain after the wallet says it revoked. */
-  settleMs: number;
+  rereadMs: number;
 }
 
 const DEFAULTS: RevokeDeps = {
   openWallet: ownerRelay,
   readPermission: readOnChain,
   lookUp: fromStore,
-  settleMs: 2_500,
+  rereadMs: 2_500,
 };
 const SETTLE_READS = 6;
 
@@ -84,17 +84,20 @@ const unknown = (id: string) =>
 
 const sameId = (id: string) => sql`lower(${grants.permissionId}) = ${id.toLowerCase()}`;
 
-/** The permission on this account, from this server's grants first, else from JAW's permission store. */
-async function find(t: Tenant, id: Hex, chainId: number, lookUp: LookUp): Promise<Target | string> {
+async function findPermission(t: Tenant, id: Hex, chainId: number, lookUp: LookUp): Promise<Target | string> {
   const [row] = await getDb()
     .select()
     .from(grants)
     .where(and(sameId(id), sql`lower(${grants.account}) = ${t.account.toLowerCase()}`));
   if (row?.revokedAt) return `already_revoked: permission ${id} was revoked at ${row.revokedAt.toISOString()}.`;
-  const found = row ? { permission: row.permission as GrantedPermission, chainId: row.chainId } : await lookUp(id);
-  if (found === 'unavailable') {
+  const stored = await lookUp(id);
+  if (stored === 'unavailable') {
     return 'lookup_unavailable: the permission store could not be read right now. Try again in a minute.';
   }
+  if (stored === 'not_found' && row) {
+    return `not_in_store: the wallet revokes from JAW's permission store, which does not hold ${id}. It stays approved until it expires, or until jaw_session_disconnect from its connection revokes it.`;
+  }
+  const found = row ? { permission: row.permission as GrantedPermission, chainId: row.chainId } : stored;
   if (found === 'not_found' || !isAddressEqual(found.permission.account as Address, t.account)) return unknown(id);
   if (found.chainId !== chainId) {
     return `wrong_chain: permission ${id} was granted on chain ${found.chainId}, not ${chainId}. Pass chainId ${found.chainId}.`;
@@ -111,12 +114,12 @@ const markRevoked = (id: string) =>
 const readState = (target: Target, read: ReadPermission) =>
   read(target).catch((): PermissionState => ({ status: 'unavailable' }));
 
-/** Asks the wallet to revoke, then waits for the chain to show it before calling it done. */
-async function askRevoke(t: Tenant, target: Target, ask: Ask, deps: RevokeDeps): Promise<Outcome> {
+async function askRevoke(t: Tenant, target: Target, ask: Ask, claim: Claim, deps: RevokeDeps): Promise<Outcome> {
   const [account] = (await ask('eth_requestAccounts', [])) as unknown[];
   if (typeof account !== 'string' || !isAddressEqual(account as Address, t.account)) {
     return { state: 'failed', code: 'wrong_account' };
   }
+  if (!(await claim())) return { state: 'expired', code: 'session_lost' };
   await ask('wallet_revokePermissions', [{ id: target.permissionId, address: t.account }]);
   for (let read = 0; read < SETTLE_READS; read++) {
     const state = await readState(target, deps.readPermission);
@@ -124,9 +127,9 @@ async function askRevoke(t: Tenant, target: Target, ask: Ask, deps: RevokeDeps):
       await markRevoked(target.permissionId);
       return { state: 'approved' };
     }
-    await new Promise((resolve) => setTimeout(resolve, deps.settleMs));
+    await new Promise((resolve) => setTimeout(resolve, deps.rereadMs));
   }
-  return { state: 'failed', code: 'not_seen_on_chain' };
+  return { state: 'approved', code: 'unconfirmed' };
 }
 
 function answer(target: Target, row: PermissionRequestRow) {
@@ -146,14 +149,10 @@ function answer(target: Target, row: PermissionRequestRow) {
   });
 }
 
-/**
- * Revoking is the owner's call, made in their wallet: any connection may ask,
- * for any permission granted from the account, this server's or not.
- */
 export async function revokePermission(t: Tenant, input: RevokeInput, deps = DEFAULTS) {
   const chainId = input.chainId ?? t.chainId;
   if (!SUPPORTED_CHAINS[chainId]) return refusal(`unsupported_chain: chain ${chainId} is not one this server reads.`);
-  const target = await find(t, input.permissionId as Hex, chainId, deps.lookUp);
+  const target = await findPermission(t, input.permissionId as Hex, chainId, deps.lookUp);
   if (typeof target === 'string') return refusal(target);
   if (target.permission.end * 1000 <= Date.now()) {
     return refusal(`expired: permission ${target.permissionId} already ended, so there is nothing to revoke.`);
@@ -162,7 +161,12 @@ export async function revokePermission(t: Tenant, input: RevokeInput, deps = DEF
   if (state.status === 'unavailable') {
     return refusal('chain_unreadable: the chain could not be read for this permission. Try again in a minute.');
   }
-  if (state.status === 'mismatch' || !state.approved) return refusal(unknown(target.permissionId));
+  if (state.status === 'mismatch') {
+    return refusal(
+      `permission_mismatch: the stored permission ${target.permissionId} does not hash to its id on chain, so it cannot be revoked from here.`
+    );
+  }
+  if (!state.approved) return refusal(unknown(target.permissionId));
   if (state.revoked) {
     await markRevoked(target.permissionId);
     return refusal(`already_revoked: permission ${target.permissionId} is already revoked on chain.`);
@@ -172,13 +176,28 @@ export async function revokePermission(t: Tenant, input: RevokeInput, deps = DEF
     {
       method: 'revoke',
       chainId,
+      approveBy: new Date(Date.now() + APPROVE_WITHIN_MS),
       permissionId: target.permissionId,
-      work: (ask) => askRevoke(t, target, ask, deps),
+      work: (ask, claim) => askRevoke(t, target, ask, claim, deps),
     },
     deps.openWallet
   );
   if (opened === 'wallet_busy') return refusal('Too many owners are approving right now. Try again in a minute.');
   if (opened === 'account_busy') return refusal(ACCOUNT_BUSY);
+  if ('waiting' in opened) {
+    const { connectionId, permissionId, approveBy } = opened.waiting;
+    const until = approveBy.toISOString();
+    if (connectionId !== t.connectionId) {
+      return refusal(
+        `revoke_in_progress: another app on this account asked the owner to revoke ${permissionId}; that link waits until ${until}.`
+      );
+    }
+    if (permissionId?.toLowerCase() !== target.permissionId.toLowerCase()) {
+      return refusal(
+        `revoke_in_progress: this connection already asked the owner to revoke ${permissionId}. Ask again once they answer or the link ends at ${until}.`
+      );
+    }
+  }
   return answer(target, 'opened' in opened ? opened.opened : opened.waiting);
 }
 

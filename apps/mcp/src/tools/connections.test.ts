@@ -3,7 +3,7 @@ import { beforeAll, describe, expect, it } from 'vitest';
 import { verifyBearer, type Tenant } from '@/connections/auth';
 import { callTool, connect, owner, setTestEnv } from '@/connections/testkit';
 import { getDb } from '@/db/client';
-import { grants } from '@/db/schema';
+import { grants, permissionRequests } from '@/db/schema';
 import { useTestDb } from '@/db/test-db';
 import { x402Budget } from '@/grants/store';
 
@@ -59,5 +59,33 @@ describe('jaw_connections', () => {
 
     expect((result.structuredContent.connections as Listed[])[0].grants).toMatchObject([{ status: 'revoked' }]);
     expect(result.structuredContent.summary).toContain('0 live grant(s)');
+  });
+
+  it('given a grant the wallet answered but this server did not record, then its id is listed as unrecorded', async () => {
+    const c = await connect();
+    const t = await tenantOf(c.access_token);
+    const budget = (await x402Budget(t.connectionId))!;
+    const orphan = `0x${'ab'.repeat(32)}`;
+    const request = (id: string, permissionId: string, state: 'failed' | 'approved') => ({
+      id,
+      connectionId: t.connectionId,
+      method: 'grant' as const,
+      chainId: t.chainId,
+      account: t.account,
+      permissionId,
+      state,
+      walletUrl: 'http://keys.test/cli-bridge',
+      approveBy: new Date(),
+    });
+    await getDb()
+      .insert(permissionRequests)
+      .values([
+        { ...request(`pr_${t.connectionId}_a`, orphan, 'failed'), code: 'not_recorded' },
+        request(`pr_${t.connectionId}_b`, budget.permissionId, 'approved'),
+      ]);
+
+    const result = await callTool(c.access_token, 'jaw_connections', {});
+
+    expect((result.structuredContent.connections as { unrecorded: string[] }[])[0].unrecorded).toEqual([orphan]);
   });
 });

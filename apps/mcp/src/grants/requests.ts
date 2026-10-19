@@ -1,8 +1,7 @@
 import { randomBytes } from 'node:crypto';
-import { and, eq, isNull, lte, or, sql, type SQL } from 'drizzle-orm';
+import { and, eq, gt, isNull, lte, or, sql, type SQL } from 'drizzle-orm';
 import type { PgUpdateSetSource } from 'drizzle-orm/pg-core';
 import type { Tenant } from '@/connections/auth';
-import { APPROVE_WITHIN_MS } from '@/connections/config';
 import { WalletBusy, type Ask, type OpenWallet, type Wallet } from '@/connections/relay';
 import { keepLease, sessionLeaseEnd } from '@/connections/session-lease';
 import { USER_REJECTED } from '@/connections/wallet-codes';
@@ -12,26 +11,22 @@ import { errorLabel, log } from '@/lib/edge';
 import { countOpenLinks, FULL, linkLive, MAX_OPEN_PER_ACCOUNT, withLinkSlot } from '@/owner-calls/cap';
 
 export type PermissionRequestRow = typeof permissionRequests.$inferSelect;
-type Method = PermissionRequestRow['method'];
 
-/**
- * How a request ended, as the owner's wallet and the chain told it. A grant keeps
- * the id the wallet answered even when it was not recorded, so it can be revoked.
- */
-export type Outcome =
-  | { state: 'approved'; permissionId?: string }
-  | { state: 'owner_declined' | 'expired' | 'failed'; code: string | null; permissionId?: string };
+export interface Outcome {
+  state: Exclude<PermissionRequestRow['state'], 'awaiting_owner'>;
+  code?: string;
+  permissionId?: string;
+}
 
 const dbNow = sql`statement_timestamp()`;
 const awaiting = eq(permissionRequests.state, 'awaiting_owner');
 
-/** The requests one request competes with: one grant per connection, one revoke per permission. */
-const sameAs = (t: Tenant, method: Method, permissionId?: string) =>
-  method === 'grant'
+const sameAs = (t: Tenant, req: LinkRequest) =>
+  req.method === 'grant'
     ? and(eq(permissionRequests.method, 'grant'), eq(permissionRequests.connectionId, t.connectionId))
     : and(
         eq(permissionRequests.method, 'revoke'),
-        sql`lower(${permissionRequests.permissionId}) = ${permissionId!.toLowerCase()}`
+        sql`lower(${permissionRequests.permissionId}) = ${req.permissionId.toLowerCase()}`
       );
 
 async function update(where: SQL | undefined, set: PgUpdateSetSource<typeof permissionRequests>, db: Tx = getDb()) {
@@ -43,7 +38,6 @@ async function update(where: SQL | undefined, set: PgUpdateSetSource<typeof perm
   return row;
 }
 
-/** Ends waiting rows nobody can answer any more, so they stop holding the one-open slot. */
 const closeDead = (same: SQL | undefined, db: Tx = getDb()) =>
   update(
     and(
@@ -68,16 +62,21 @@ const ofRow = (row: PermissionRequestRow) => and(eq(permissionRequests.id, row.i
 
 function outcomeOf(err: unknown, row: PermissionRequestRow): Outcome {
   const code = (err as { code?: unknown } | undefined)?.code;
-  if (code === USER_REJECTED) return { state: 'owner_declined', code: null };
+  if (code === USER_REJECTED) return { state: 'owner_declined' };
   if (typeof code === 'number') return { state: 'failed', code: `wallet_error:${code}` };
-  if (Date.now() >= row.approveBy.getTime()) return { state: 'expired', code: null };
+  if (Date.now() >= row.approveBy.getTime()) return { state: 'expired' };
   return { state: 'failed', code: 'unexpected' };
 }
 
-async function settle(row: PermissionRequestRow, outcome: Outcome) {
-  const { state, permissionId } = outcome;
-  const code = 'code' in outcome ? outcome.code : null;
-  await update(ofRow(row), { state, code, sessionUntil: null, ...(permissionId && { permissionId }) });
+async function settle(row: PermissionRequestRow, { state, code, permissionId }: Outcome) {
+  // A row given up on while its session still ran takes the answer that came after all.
+  const lost = and(eq(permissionRequests.state, 'expired'), eq(permissionRequests.code, 'session_lost'));
+  await update(and(eq(permissionRequests.id, row.id), or(awaiting, lost)), {
+    state,
+    code: code ?? null,
+    sessionUntil: null,
+    ...(permissionId && { permissionId }),
+  });
 }
 
 export type Opened =
@@ -86,26 +85,23 @@ export type Opened =
   | 'account_busy'
   | 'wallet_busy';
 
-export interface LinkRequest {
-  method: Method;
-  chainId: number;
-  /** The permission a revoke is about. */
-  permissionId?: string;
-  /** Talks to the owner's wallet once the link is open, and says how it ended. */
-  work: (ask: Ask) => Promise<Outcome>;
-}
+/** Marks the row asked once, while its lease still holds. False when another link may have taken over. */
+export type Claim = () => Promise<boolean>;
 
-/**
- * Opens an owner link for a grant or a revoke, counted in the account's link cap
- * with owner calls and swaps. A link already waiting for the same thing is
- * handed back instead of opening another.
- */
+export type LinkRequest = {
+  chainId: number;
+  approveBy: Date;
+  work: (ask: Ask, claim: Claim) => Promise<Outcome>;
+} & ({ method: 'grant' } | { method: 'revoke'; permissionId: string });
+
 export async function openLink(t: Tenant, req: LinkRequest, openWallet: OpenWallet): Promise<Opened> {
-  const same = sameAs(t, req.method, req.permissionId);
-  const waiting = await findLive(same);
+  const same = sameAs(t, req);
+  // One revoke per connection too, so a read-only app cannot hold every owner slot of the account.
+  const mine = and(eq(permissionRequests.method, req.method), eq(permissionRequests.connectionId, t.connectionId));
+  const waiting = (await findLive(same)) ?? (req.method === 'revoke' ? await findLive(mine) : undefined);
   if (waiting) return { waiting };
   if ((await countOpenLinks(t.account)) >= MAX_OPEN_PER_ACCOUNT) return 'account_busy';
-  const approveBy = new Date(Date.now() + APPROVE_WITHIN_MS);
+  const { approveBy } = req;
   let wallet: Wallet;
   try {
     wallet = await openWallet(req.chainId, approveBy, t);
@@ -125,7 +121,7 @@ export async function openLink(t: Tenant, req: LinkRequest, openWallet: OpenWall
           method: req.method,
           chainId: req.chainId,
           account: t.account,
-          permissionId: req.permissionId,
+          permissionId: req.method === 'revoke' ? req.permissionId : null,
           walletUrl: wallet.url,
           approveBy,
           sessionUntil: sessionLeaseEnd,
@@ -148,19 +144,34 @@ export async function openLink(t: Tenant, req: LinkRequest, openWallet: OpenWall
 
 function follow(row: PermissionRequestRow, wallet: Wallet, work: LinkRequest['work']) {
   const stop = keepLease(
-    () => update(ofRow(row), { sessionUntil: sessionLeaseEnd }),
+    async () => {
+      const held = await update(ofRow(row), { sessionUntil: sessionLeaseEnd });
+      if (!held) wallet.close();
+      return held;
+    },
     () => update(ofRow(row), { sessionUntil: null })
   );
+  const claim: Claim = async () => {
+    const leased = and(ofRow(row), gt(permissionRequests.sessionUntil, dbNow), isNull(permissionRequests.code));
+    return (await update(leased, { code: 'asked' })) !== undefined;
+  };
   const ended = (err: unknown) => {
-    log('warn', { msg: 'permission request ended', requestId: row.id, error: errorLabel(err) });
+    log('warn', { msg: 'permission request ended', permissionRequestId: row.id, error: errorLabel(err) });
     return outcomeOf(err, row);
   };
-  // Settled inside the session when the wallet answers, outside it when the session itself fails.
+  let answered = false;
   void wallet
-    .run(async (ask) => settle(row, await work(ask).catch(ended)))
-    .catch((err: unknown) => settle(row, ended(err)))
+    .run(async (ask) => {
+      const outcome = await work(ask, claim).catch(ended);
+      answered = true;
+      await settle(row, outcome);
+    })
+    .catch((err: unknown) => {
+      if (answered) throw err;
+      return settle(row, ended(err));
+    })
     .catch((err: unknown) =>
-      log('warn', { msg: 'permission request not settled', requestId: row.id, error: errorLabel(err) })
+      log('warn', { msg: 'permission request not settled', permissionRequestId: row.id, error: errorLabel(err) })
     )
     .finally(stop);
 }

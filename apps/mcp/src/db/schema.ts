@@ -356,8 +356,6 @@ export const ownerCalls = pgTable(
   ]
 );
 
-// A grant or revoke link handed to the owner. The relay session lives in the
-// process that opened it, so a row whose lease lapsed holds no link any more.
 export const permissionRequests = pgTable(
   'permission_requests',
   {
@@ -368,7 +366,6 @@ export const permissionRequests = pgTable(
     method: text('method', { enum: ['grant', 'revoke'] }).notNull(),
     chainId: integer('chain_id').notNull(),
     account: text('account').notNull(),
-    // Revoke: the permission asked about. Grant: the one the wallet answered, once it does.
     permissionId: text('permission_id'),
     state: text('state', { enum: ['awaiting_owner', 'approved', 'owner_declined', 'expired', 'failed'] })
       .notNull()

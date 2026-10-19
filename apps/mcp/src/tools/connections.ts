@@ -1,11 +1,11 @@
 import type { GrantedPermission } from '@jaw.id/agent';
 import type { McpServer } from '@modelcontextprotocol/server';
-import { and, desc, eq, inArray, ne } from 'drizzle-orm';
+import { and, desc, eq, inArray, isNotNull, ne, notExists, sql } from 'drizzle-orm';
 import { z } from 'zod';
 import { tenant, type Tenant } from '@/connections/auth';
 import { ownedBy } from '@/connections/rows';
 import { getDb } from '@/db/client';
-import { connections, grants, SPEND_UNITS } from '@/db/schema';
+import { connections, grants, permissionRequests, SPEND_UNITS } from '@/db/schema';
 import { reply } from '@/lib/fence';
 
 const grantView = z.object({
@@ -35,6 +35,11 @@ const connectionView = z.object({
   revokedAt: z.string().nullable(),
   payer: z.string().nullable().describe("The connection's session address, which holds its float"),
   grants: z.array(grantView).describe('Newest first. jaw_revoke_permission takes a permissionId from here'),
+  unrecorded: z
+    .array(z.string())
+    .describe(
+      'permissionIds the wallet answered for this connection that this server did not record, which may be live on chain; jaw_revoke_permission revokes them'
+    ),
 });
 
 type View = z.infer<typeof connectionView>;
@@ -54,9 +59,18 @@ function grantOf(g: GrantRow, now: Date): z.infer<typeof grantView> {
 
 async function viewsOf(t: Tenant, rows: (typeof connections.$inferSelect)[]): Promise<View[]> {
   const ids = rows.map((r) => r.id);
-  const held = ids.length
-    ? await getDb().select().from(grants).where(inArray(grants.connectionId, ids)).orderBy(desc(grants.createdAt))
-    : [];
+  if (!ids.length) return [];
+  const answered = and(
+    inArray(permissionRequests.connectionId, ids),
+    eq(permissionRequests.method, 'grant'),
+    isNotNull(permissionRequests.permissionId),
+    sql`${permissionRequests.code} is distinct from 'wrong_account'`,
+    notExists(getDb().select().from(grants).where(eq(grants.permissionId, permissionRequests.permissionId)))
+  );
+  const [held, orphans] = await Promise.all([
+    getDb().select().from(grants).where(inArray(grants.connectionId, ids)).orderBy(desc(grants.createdAt)),
+    getDb().select().from(permissionRequests).where(answered).orderBy(desc(permissionRequests.createdAt)),
+  ]);
   const now = new Date();
   return rows.map((row) => ({
     id: row.id,
@@ -69,6 +83,7 @@ async function viewsOf(t: Tenant, rows: (typeof connections.$inferSelect)[]): Pr
     revokedAt: row.revokedAt?.toISOString() ?? null,
     payer: row.sessionAddress,
     grants: held.filter((g) => g.connectionId === row.id).map((g) => grantOf(g, now)),
+    unrecorded: orphans.filter((r) => r.connectionId === row.id).map((r) => r.permissionId!),
   }));
 }
 

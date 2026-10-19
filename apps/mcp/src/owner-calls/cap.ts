@@ -8,17 +8,12 @@ export const FULL = 'full';
 
 const dbNow = sql`statement_timestamp()`;
 
-/** A grant or revoke link the owner can still answer: in its window, its process still renewing the lease. */
 export const linkLive = and(
   eq(permissionRequests.state, 'awaiting_owner'),
   gt(permissionRequests.approveBy, dbNow),
   gt(permissionRequests.sessionUntil, dbNow)
 );
 
-/**
- * Links waiting on the owner for an account, owner calls, swaps, grants and revokes
- * together, since each holds a socket of the same relay pool. `except` is a row being reopened.
- */
 export async function countOpenLinks(account: string, except?: string, db: Tx = getDb()): Promise<number> {
   const lowered = account.toLowerCase();
   const [calls] = await db

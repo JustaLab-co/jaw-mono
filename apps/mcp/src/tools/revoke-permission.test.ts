@@ -39,8 +39,7 @@ async function connected(signer = owner(), scope?: string) {
   return { c, t, signer, budget: (await x402Budget(t.connectionId))?.permissionId as Hex };
 }
 
-/** The chain as the permission manager answers it, revoked once the owner's wallet revokes. */
-function chainOf() {
+function fakeChain() {
   const revoked = new Set<string>();
   const read: ReadPermission = async ({ permissionId }) => ({
     status: 'ok',
@@ -56,8 +55,14 @@ interface WalletOptions {
   signer?: ReturnType<typeof owner>;
 }
 
-function setup(signer: ReturnType<typeof owner>, lookUp: LookUp = async () => 'not_found') {
-  const chain = chainOf();
+/** JAW's permission store, holding every permission this server recorded. */
+const storeOfGrants: LookUp = async (id) => {
+  const row = await grantRow(id);
+  return row ? { permission: row.permission as GrantedPermission, chainId: row.chainId } : 'not_found';
+};
+
+function setup(signer: ReturnType<typeof owner>, lookUp: LookUp = storeOfGrants) {
+  const chain = fakeChain();
   const asked: { method: string; params: unknown[] }[] = [];
   let opened = 0;
   const deps = (o: WalletOptions = {}): RevokeDeps => {
@@ -71,7 +76,7 @@ function setup(signer: ReturnType<typeof owner>, lookUp: LookUp = async () => 'n
       return answers(method, params);
     }, asked);
     const openWallet: OpenWallet = async (...args) => (opened++, wallet(...args));
-    return { openWallet, readPermission: chain.read, lookUp, settleMs: 1 };
+    return { openWallet, readPermission: chain.read, lookUp, rereadMs: 1 };
   };
   return { chain, asked, deps, opened: () => opened };
 }
@@ -164,6 +169,73 @@ describe('jaw_revoke_permission', () => {
     expect(opened()).toBe(0);
   });
 
+  it('given a recorded grant the permission store does not hold, then it is refused by name and no wallet opens', async () => {
+    const { t, signer, budget } = await connected();
+    const { deps, opened } = setup(signer, async () => 'not_found');
+
+    const result = await revokePermission(t, { permissionId: budget }, deps());
+
+    expect(result.content[0].text).toMatch(/^not_in_store: /);
+    expect(opened()).toBe(0);
+  });
+
+  it('given this connection already waits on a revoke of another permission, then a second is refused and no wallet opens', async () => {
+    const signer = owner();
+    const mine = await connected(signer);
+    const other = await connected(signer);
+    const { deps, opened } = setup(signer);
+    const wait = held();
+
+    await revokePermission(mine.t, { permissionId: mine.budget }, deps({ held: wait.promise }));
+    const second = await revokePermission(mine.t, { permissionId: other.budget }, deps({ held: wait.promise }));
+    wait.release();
+    await walletsSettled();
+
+    expect(second.content[0].text).toMatch(/^revoke_in_progress: /);
+    expect(opened()).toBe(1);
+  });
+
+  it.each<[string, (t: Tenant, deps: RevokeDeps) => RevokeDeps]>([
+    ['the permission store cannot be read', (_t, deps) => ({ ...deps, lookUp: async () => 'unavailable' })],
+    [
+      'the chain cannot be read',
+      (t, deps) => ({
+        ...deps,
+        lookUp: async () => ({ permission: orphanOf(t.account), chainId: t.chainId }),
+        readPermission: async () => ({ status: 'unavailable' }),
+      }),
+    ],
+    [
+      'the permission already ended',
+      (t, deps) => ({ ...deps, lookUp: async () => ({ permission: orphanOf(t.account, 1_000), chainId: t.chainId }) }),
+    ],
+  ])('given %s, then it is refused by name and no wallet opens', async (_name, change) => {
+    const { t, signer } = await connected();
+    const { deps, opened } = setup(signer);
+
+    const result = await revokePermission(t, { permissionId: randomId() }, change(t, deps()));
+
+    expect(result.content[0].text).toMatch(/^(lookup_unavailable|chain_unreadable|expired): /);
+    expect(opened()).toBe(0);
+  });
+
+  it('given the wallet revoked but the chain does not show it yet, then the request reads approved and unconfirmed', async () => {
+    const { t, signer, budget } = await connected();
+    const { deps } = setup(signer);
+    const fresh = deps();
+    let reads = 0;
+    const lagging: RevokeDeps = {
+      ...fresh,
+      readPermission: async () => ({ status: 'ok', approved: true, revoked: reads++ > 100 }),
+    };
+
+    await revokePermission(t, { permissionId: budget }, lagging);
+    await walletsSettled();
+
+    expect(await requestsOf(budget)).toMatchObject([{ state: 'approved', code: 'unconfirmed' }]);
+    expect((await grantRow(budget)).revokedAt).toBeNull();
+  });
+
   it("given another account's grant, then it is refused as unknown and no wallet opens", async () => {
     const theirs = await connected();
     const { t, signer } = await connected();
@@ -225,7 +297,7 @@ describe('jaw_revoke_permission', () => {
     expect((await grantRow(budget)).revokedAt).not.toBeNull();
   });
 
-  it('given a revoke still waiting for the owner, when asked again from any connection, then the same link comes back and no other opens', async () => {
+  it('given a revoke still waiting for the owner, when this connection asks again, then the same link comes back, and another app gets no link', async () => {
     const signer = owner();
     const { t, budget } = await connected(signer);
     const other = await connected(signer, 'wallet:read');
@@ -233,17 +305,20 @@ describe('jaw_revoke_permission', () => {
     const wait = held();
 
     const first = await revokePermission(t, { permissionId: budget }, deps({ held: wait.promise }));
-    const again = await revokePermission(other.t, { permissionId: budget }, deps({ held: wait.promise }));
+    const again = await revokePermission(t, { permissionId: budget }, deps({ held: wait.promise }));
+    const theirs = await revokePermission(other.t, { permissionId: budget }, deps({ held: wait.promise }));
     wait.release();
     await walletsSettled();
 
     expect(opened()).toBe(1);
     expect(urlOf(again)).toBe(urlOf(first));
+    expect(theirs.content[0].text).toMatch(/^revoke_in_progress: /);
+    expect(urlOf(theirs)).toBeUndefined();
   });
 
-  it('given the process holding a waiting revoke died, then the link is let go and a new ask opens a fresh one', async () => {
+  it('given the process holding a waiting revoke stopped renewing its lease, then a new ask opens a fresh link and the old session never asks the wallet', async () => {
     const { t, signer, budget } = await connected();
-    const { deps, opened } = setup(signer);
+    const { deps, opened, asked } = setup(signer);
     const wait = held();
     const first = await revokePermission(t, { permissionId: budget }, deps({ held: wait.promise }));
     await getDb()
@@ -252,14 +327,14 @@ describe('jaw_revoke_permission', () => {
       .where(eq(permissionRequests.walletUrl, urlOf(first)!));
 
     const again = await revokePermission(t, { permissionId: budget }, deps());
+    const lost = (await requestsOf(budget)).find((r) => r.walletUrl === urlOf(first));
     wait.release();
     await walletsSettled();
 
     expect(opened()).toBe(2);
     expect(urlOf(again)).not.toBe(urlOf(first));
-    const rows = await requestsOf(budget);
-    expect(rows.find((r) => r.walletUrl === urlOf(first))).toMatchObject({ state: 'expired', code: 'session_lost' });
-    expect(rows.find((r) => r.walletUrl === urlOf(again))).toMatchObject({ state: 'approved' });
+    expect(lost).toMatchObject({ state: 'expired', code: 'session_lost' });
+    expect(asked.filter((a) => a.method === 'wallet_revokePermissions')).toHaveLength(1);
   });
 
   it('given three grant and revoke links waiting on the account, then a fourth link of any kind is refused', async () => {
@@ -271,13 +346,13 @@ describe('jaw_revoke_permission', () => {
     const grantWallet: OpenWallet = (...args) => holding.openWallet(...args);
 
     await revokePermission(a.t, { permissionId: a.budget }, holding);
-    await revokePermission(a.t, { permissionId: b.budget }, holding);
+    await revokePermission(b.t, { permissionId: b.budget }, holding);
     await grantPermissions(
       c.t,
       { x402Budget: { perDay: '1' } },
       { openWallet: grantWallet, readPermission: approvedOnChain }
     );
-    const revoke = await revokePermission(b.t, { permissionId: c.budget }, holding);
+    const revoke = await revokePermission(c.t, { permissionId: c.budget }, holding);
     const send = await sendCalls(
       c.t,
       { calls: [{ to: USDC }] },
