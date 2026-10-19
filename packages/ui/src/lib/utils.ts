@@ -3,7 +3,7 @@ import { createContext } from 'react';
 import { extendTailwindMerge } from 'tailwind-merge';
 
 /**
- * The design-spec type roles from `tailwind.config.cjs`. tailwind-merge only knows Tailwind's own
+ * The design-spec type roles from `tailwind.config.js`. tailwind-merge only knows Tailwind's own
  * `text-xs…text-9xl`, so without this a component's base `text-sm` and an override's `text-heading`
  * both survive the merge — and since Tailwind emits `.text-sm` *after* our custom keys, the base
  * silently wins and the token does nothing. Every key added to `fontSize` belongs here too.
