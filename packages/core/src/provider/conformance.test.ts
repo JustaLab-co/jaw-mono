@@ -33,6 +33,7 @@ import { handleGetCallsStatusRequest } from '../rpc/wallet_getCallStatus.js';
 import { handleGetAssetsRequest } from '../rpc/wallet_getAssets.js';
 import {
     handleGetPermissionsRequest,
+    handleGetRecoveryRequest,
     handleGetCapabilitiesRequest,
     handleGetCallsHistoryRequest,
 } from '../rpc/index.js';
@@ -53,6 +54,7 @@ vi.mock('../rpc/wallet_getAssets.js', () => ({ handleGetAssetsRequest: vi.fn() }
 vi.mock('../rpc/index.js', async (importOriginal) => ({
     ...(await importOriginal<typeof import('../rpc/index.js')>()),
     handleGetPermissionsRequest: vi.fn(),
+    handleGetRecoveryRequest: vi.fn(),
     handleGetCapabilitiesRequest: vi.fn(),
     handleGetCallsHistoryRequest: vi.fn(),
 }));
@@ -105,6 +107,7 @@ const WITHOUT_SESSION: Record<string, NoSessionOutcome> = {
     wallet_getCallsStatus: { kind: 'delegates', handler: () => handleGetCallsStatusRequest as Mock },
     wallet_getCallsHistory: { kind: 'delegates', handler: () => handleGetCallsHistoryRequest as Mock },
     wallet_getPermissions: { kind: 'delegates', handler: () => handleGetPermissionsRequest as Mock },
+    wallet_getRecovery: { kind: 'delegates', handler: () => handleGetRecoveryRequest as Mock },
     wallet_getCapabilities: { kind: 'delegates', handler: () => handleGetCapabilitiesRequest as Mock },
 
     // Establish the session.
@@ -116,6 +119,8 @@ const WITHOUT_SESSION: Record<string, NoSessionOutcome> = {
     wallet_sign: { kind: 'ephemeral' },
     wallet_grantPermissions: { kind: 'ephemeral' },
     wallet_revokePermissions: { kind: 'ephemeral' },
+    wallet_setupRecovery: { kind: 'ephemeral' },
+    wallet_cancelRecovery: { kind: 'ephemeral' },
     // Signs nothing, but the receive screen has no address to show without an
     // account, so it resolves one through the same throwaway signer.
     wallet_addFunds: { kind: 'ephemeral' },

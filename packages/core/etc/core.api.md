@@ -342,6 +342,19 @@ export interface CallStatusResponse {
 }
 
 // @public
+export interface CancelRecoveryUIRequest extends BaseUIRequest {
+    // (undocumented)
+    data: {
+        address: Address;
+        chainId: number;
+        requestId: `0x${string}`;
+        capabilities?: RequestCapabilities;
+    };
+    // (undocumented)
+    type: 'wallet_cancelRecovery';
+}
+
+// @public
 export function cancelRequestOp(requestId: Hex): AdminOp;
 
 // @public (undocumented)
@@ -786,6 +799,9 @@ export function handleGetCapabilitiesRequest(request: RequestArguments, apiKey: 
 // @public
 export function handleGetPermissionsRequest(request: RequestArguments, apiKey: string | undefined, connectedAddress?: Address_2): Promise<unknown>;
 
+// @public
+export function handleGetRecoveryRequest(request: RequestArguments, apiKey: string | undefined, connectedAddress?: Address_2): Promise<RecoveryState>;
+
 // Warning: (ae-forgotten-export) The symbol "HexString" needs to be exported by the entry point index.d.ts
 //
 // @public
@@ -1078,10 +1094,32 @@ export type NativePasskeyGetFn = (options: NativePasskeyGetOptions) => Promise<N
 export function normalizeAddFundsParams(params: unknown): NormalizedAddFundsParams;
 
 // @public
+export function normalizeCancelRecoveryParams(params: unknown): NormalizedCancelRecoveryParams;
+
+// @public
 export interface NormalizedAddFundsParams {
     chainId?: `0x${string}`;
     chains?: `0x${string}`[];
 }
+
+// @public
+export interface NormalizedCancelRecoveryParams {
+    // (undocumented)
+    capabilities?: RequestCapabilities;
+    // (undocumented)
+    requestId: Hex;
+}
+
+// @public
+export interface NormalizedSetupRecoveryParams {
+    // (undocumented)
+    capabilities?: RequestCapabilities;
+    recoveries?: RecoveryMethodInput[];
+    threshold?: number;
+}
+
+// @public
+export function normalizeSetupRecoveryParams(params: unknown): NormalizedSetupRecoveryParams;
 
 // @public (undocumented)
 export interface PasskeyAccount {
@@ -1853,6 +1891,20 @@ export interface ServerErrorOptions<T> extends EthereumErrorOptions<T> {
 export function setThresholdOp(threshold: number): AdminOp;
 
 // @public
+export interface SetupRecoveryUIRequest extends BaseUIRequest {
+    // (undocumented)
+    data: {
+        address: Address;
+        chainId: number;
+        recoveries?: RecoveryMethodInput[];
+        threshold?: number;
+        capabilities?: RequestCapabilities;
+    };
+    // (undocumented)
+    type: 'wallet_setupRecovery';
+}
+
+// @public
 export const SIGNATURE_RECOVERY_PROVIDER_ABI: readonly [{
     readonly name: "verify";
     readonly type: "function";
@@ -2242,10 +2294,10 @@ export interface UIHandlerOptions {
 }
 
 // @public
-export type UIRequest = ConnectUIRequest | SignatureUIRequest | TypedDataUIRequest | TransactionUIRequest | SendTransactionUIRequest | PermissionUIRequest | RevokePermissionUIRequest | WalletSignUIRequest | AddFundsUIRequest;
+export type UIRequest = ConnectUIRequest | SignatureUIRequest | TypedDataUIRequest | TransactionUIRequest | SendTransactionUIRequest | PermissionUIRequest | RevokePermissionUIRequest | SetupRecoveryUIRequest | CancelRecoveryUIRequest | WalletSignUIRequest | AddFundsUIRequest;
 
 // @public
-export type UIRequestType = 'wallet_connect' | 'wallet_sendCalls' | 'eth_sendTransaction' | 'wallet_grantPermissions' | 'wallet_revokePermissions' | 'personal_sign' | 'eth_signTypedData_v4' | 'wallet_sign' | 'wallet_addFunds';
+export type UIRequestType = 'wallet_connect' | 'wallet_sendCalls' | 'eth_sendTransaction' | 'wallet_grantPermissions' | 'wallet_revokePermissions' | 'wallet_setupRecovery' | 'wallet_cancelRecovery' | 'personal_sign' | 'eth_signTypedData_v4' | 'wallet_sign' | 'wallet_addFunds';
 
 // @public
 export interface UIResponse<T = unknown> {
@@ -2289,6 +2341,17 @@ export type ViemRPCParams<M extends string> = ExtractParams<WalletRpcSchema, M>;
 //
 // @public
 export type ViemRPCReturnType<M extends string> = ExtractReturnType<WalletRpcSchema, M>;
+
+// @public
+export type WalletCancelRecoveryRequest = {
+    method: 'wallet_cancelRecovery';
+    params: [
+        {
+        requestId: Hex;
+        capabilities?: RequestCapabilities;
+    }
+    ];
+};
 
 // @public
 export type WalletConnectCapabilities = {
@@ -2349,6 +2412,16 @@ export type WalletGetCallsHistoryResponse = CallsHistoryItem[];
 export type WalletGetPermissionsResponse = StorePermissionApiResponse[];
 
 // @public
+export type WalletGetRecoveryRequest = {
+    method: 'wallet_getRecovery';
+    params?: [
+        {
+        address?: Address_2;
+    }
+    ];
+};
+
+// @public
 export type WalletGrantPermissionsRequest = {
     method: 'wallet_grantPermissions';
     params: [
@@ -2383,6 +2456,18 @@ export type WalletRevokePermissionsRequest = {
         {
         address?: Address_2;
         id: Hex;
+        capabilities?: RequestCapabilities;
+    }
+    ];
+};
+
+// @public
+export type WalletSetupRecoveryRequest = {
+    method: 'wallet_setupRecovery';
+    params?: [
+        {
+        recoveries?: RecoveryMethodInput[];
+        threshold?: number;
         capabilities?: RequestCapabilities;
     }
     ];

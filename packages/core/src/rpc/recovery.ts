@@ -14,6 +14,9 @@ import { RECOVERY_MANAGER_ADDRESS, SIGNATURE_RECOVERY_PROVIDER_ADDRESS } from '.
 import { abi as justanAccountAbi } from '../account/toJustanAccount.js';
 import { restCall } from '../api/index.js';
 import { standardErrors } from '../errors/errors.js';
+import type { RequestArguments } from '../provider/index.js';
+import type { RequestCapabilities } from './permissions.js';
+import { isHexString, isRecord, optionalHexAddress, requireHexBytes32, requireParamsObject } from './paramUtils.js';
 
 /**
  * How long a signed admin batch stays submittable, in seconds. The backend
@@ -250,6 +253,73 @@ export type RecoveryState = {
     /** The account's ceremonies not executed on any chain, newest first */
     pending: CeremonyListEntry[];
 };
+
+/**
+ * Request parameters for wallet_setupRecovery
+ *
+ * Every field is a prefill for the wallet's recovery editor: the dApp proposes,
+ * the user edits and confirms, and the wallet signs the config the user saw.
+ * No params opens the editor on the account's current config; a dApp proposing
+ * itself as a guardian sends `recoveries`. The config is account-level, so
+ * there is no chainId: a first setup lands on the connected chain and an edit
+ * reaches every enrolled chain.
+ */
+export type WalletSetupRecoveryRequest = {
+    method: 'wallet_setupRecovery';
+    params?: [
+        {
+            /** Methods to propose; the user may edit them */
+            recoveries?: RecoveryMethodInput[];
+            /** Approvals a recovery needs; the user may edit it */
+            threshold?: number;
+            /** Optional capabilities including paymaster service for the account-door userOp */
+            capabilities?: RequestCapabilities;
+        },
+    ];
+};
+
+/**
+ * Request parameters for wallet_cancelRecovery: the veto
+ */
+export type WalletCancelRecoveryRequest = {
+    method: 'wallet_cancelRecovery';
+    params: [
+        {
+            /** The ceremony's request id, the same on every chain */
+            requestId: Hex;
+            /** Optional capabilities including paymaster service for the account-door userOp */
+            capabilities?: RequestCapabilities;
+        },
+    ];
+};
+
+/**
+ * Request parameters for wallet_getRecovery
+ */
+export type WalletGetRecoveryRequest = {
+    method: 'wallet_getRecovery';
+    params?: [
+        {
+            /** The account to read; the connected account when omitted */
+            address?: Address;
+        },
+    ];
+};
+
+/** A wallet_setupRecovery request after validation. */
+export interface NormalizedSetupRecoveryParams {
+    /** The proposed methods, commitments in their canonical form (see toOwnerBytes); absent when none were proposed */
+    recoveries?: RecoveryMethodInput[];
+    /** The proposed threshold; absent when none was proposed */
+    threshold?: number;
+    capabilities?: RequestCapabilities;
+}
+
+/** A wallet_cancelRecovery request after validation: the request id is guaranteed present. */
+export interface NormalizedCancelRecoveryParams {
+    requestId: Hex;
+    capabilities?: RequestCapabilities;
+}
 
 /**
  * The canonical MultiOwnable owner bytes: a 20-byte address padded to 32 bytes,
@@ -648,6 +718,163 @@ export async function listCeremonies(
         apiKeyHeaders(apiKey)
     );
     return response.ceremonies;
+}
+
+const SETUP_METHOD = 'wallet_setupRecovery';
+const CANCEL_METHOD = 'wallet_cancelRecovery';
+const GET_METHOD = 'wallet_getRecovery';
+
+/** The largest delay the manager stores: `addRecovery` takes a uint32 */
+const MAX_RECOVERY_DELAY = 0xffffffff;
+
+/**
+ * A commitment as a dApp may send it: a 20-byte address, padded here to the
+ * 32 bytes the signature provider compares against, or a 32-byte or 64-byte
+ * value kept as it is. Refused here rather than inside an open dialog.
+ */
+function requireCommitment(value: unknown, method: string, field: string): Hex {
+    if (isHexString(value)) {
+        const length = size(value);
+        if (length === 20) return pad(value, { size: 32 });
+        if (length === 32 || length === 64) return value;
+    }
+    throw standardErrors.rpc.invalidParams(
+        `${method}: ${field} must be a 20-byte address, a 32-byte padded address or a 64-byte public key`
+    );
+}
+
+function requireDelay(value: unknown, method: string, field: string): number {
+    // Bounded to the uint32 the manager stores: the ABI encoder would otherwise
+    // throw an untyped error from inside the dialog instead of -32602 here.
+    if (typeof value !== 'number' || !Number.isSafeInteger(value) || value < 0 || value > MAX_RECOVERY_DELAY) {
+        throw standardErrors.rpc.invalidParams(
+            `${method}: ${field} must be a whole number of seconds between 0 and ${MAX_RECOVERY_DELAY}`
+        );
+    }
+    return value;
+}
+
+function optionalThreshold(value: unknown, method: string): number | undefined {
+    if (value === undefined || value === null) return undefined;
+    if (typeof value !== 'number' || !Number.isSafeInteger(value) || value < 1) {
+        throw standardErrors.rpc.invalidParams(`${method}: threshold must be a positive integer`);
+    }
+    return value;
+}
+
+/**
+ * The proposed methods. An empty list is refused: a config with no methods can
+ * never be valid, since the threshold must be at least one. A method repeated
+ * within the list is refused too, because the manager rejects the second add.
+ */
+function optionalRecoveries(value: unknown, method: string): RecoveryMethodInput[] | undefined {
+    if (value === undefined || value === null) return undefined;
+    if (!Array.isArray(value)) {
+        throw standardErrors.rpc.invalidParams(`${method}: recoveries must be an array`);
+    }
+    if (value.length === 0) {
+        throw standardErrors.rpc.invalidParams(`${method}: recoveries must not be empty`);
+    }
+
+    const seen = new Set<string>();
+    return value.map((entry, index) => {
+        const field = `recoveries[${index}]`;
+        if (!isRecord(entry)) {
+            throw standardErrors.rpc.invalidParams(`${method}: ${field} must be an object`);
+        }
+        const commitment = requireCommitment(entry.commitment, method, `${field}.commitment`);
+        const delay = requireDelay(entry.delay, method, `${field}.delay`);
+        const provider = optionalHexAddress(entry.provider, method, `${field}.provider`);
+
+        const key = methodKey(provider ?? SIGNATURE_RECOVERY_PROVIDER_ADDRESS, commitment);
+        if (seen.has(key)) {
+            throw standardErrors.rpc.invalidParams(`${method}: ${field} repeats an earlier method`);
+        }
+        seen.add(key);
+
+        return { commitment, delay, ...(provider && { provider }) };
+    });
+}
+
+/**
+ * Validates wallet_setupRecovery params. Runs in `validateSigningRequest`, so a
+ * malformed proposal is refused with -32602 before any dialog opens, in both
+ * modes.
+ *
+ * Absent params are legal, as for `wallet_addFunds`: `wallet_setupRecovery`
+ * with no arguments means "open the recovery editor on the current config",
+ * which is the common case. Keys unrelated to the proposal, such as an
+ * `address` or a `chainId`, are not read.
+ */
+export function normalizeSetupRecoveryParams(params: unknown): NormalizedSetupRecoveryParams {
+    if (params === undefined || params === null) return {};
+    if (!Array.isArray(params)) {
+        throw standardErrors.rpc.invalidParams(`${SETUP_METHOD}: expected a single object parameter`);
+    }
+    if (params.length === 0 || params[0] === undefined || params[0] === null) return {};
+    if (!isRecord(params[0])) {
+        throw standardErrors.rpc.invalidParams(`${SETUP_METHOD}: expected a single object parameter`);
+    }
+
+    const envelope = params[0];
+    const recoveries = optionalRecoveries(envelope.recoveries, SETUP_METHOD);
+    const threshold = optionalThreshold(envelope.threshold, SETUP_METHOD);
+
+    // Checked only when both halves were proposed. A threshold alone is a
+    // prefill over methods the user has yet to pick.
+    if (recoveries && threshold !== undefined && threshold > recoveries.length) {
+        throw standardErrors.rpc.invalidParams(
+            `${SETUP_METHOD}: threshold ${threshold} exceeds the ${recoveries.length} recovery methods proposed`
+        );
+    }
+
+    return { recoveries, threshold, capabilities: envelope.capabilities as RequestCapabilities | undefined };
+}
+
+/**
+ * Validates wallet_cancelRecovery params.
+ *
+ * The veto is about one ceremony, so a missing request id is a malformed
+ * request, not an absence: refused here with -32602 before any dialog opens,
+ * the way `wallet_revokePermissions` refuses a missing permission id.
+ */
+export function normalizeCancelRecoveryParams(params: unknown): NormalizedCancelRecoveryParams {
+    const envelope = requireParamsObject(params, CANCEL_METHOD);
+    return {
+        requestId: requireHexBytes32(envelope.requestId, CANCEL_METHOD, 'requestId'),
+        capabilities: envelope.capabilities as RequestCapabilities | undefined,
+    };
+}
+
+/**
+ * Handle wallet_getRecovery request
+ *
+ * Reads the account named in the params, or the connected account when the
+ * params name none; refuses when there is neither, as `wallet_getPermissions`
+ * does. The address is checked before it goes into a request path.
+ *
+ * @param request - The wallet_getRecovery request
+ * @param apiKey - API key for the recovery backend, if the caller has one
+ * @param connectedAddress - Optional connected account address to inject if no address in params
+ * @returns The config on every supported chain and the ceremonies not executed anywhere
+ */
+export async function handleGetRecoveryRequest(
+    request: RequestArguments,
+    apiKey: string | undefined,
+    connectedAddress?: Address
+): Promise<RecoveryState> {
+    const params = request.params;
+    const requested = Array.isArray(params) && isRecord(params[0]) ? params[0].address : undefined;
+    const address = optionalHexAddress(requested, GET_METHOD, 'address') ?? connectedAddress;
+    if (!address) {
+        throw standardErrors.rpc.invalidParams({ message: `${GET_METHOD} requires an address parameter` });
+    }
+
+    const [{ chains }, pending] = await Promise.all([
+        getRecoveryConfig(address, apiKey),
+        listCeremonies(address, { executed: false }, apiKey),
+    ]);
+    return { chains, pending };
 }
 
 const ADMIN_OP_COMPONENTS = [
