@@ -1,13 +1,21 @@
 name: Deploy Preview
 
 # Vercel no longer builds a preview on every push (`git.deploymentEnabled` is
-# false in each app's vercel.json). Run this from the Actions tab, on main, with
-# a PR number to get a preview of that PR's head commit.
+# false in each app's vercel.json). Two ways to get a preview of a PR's head
+# commit:
+#   - add the `preview` label to the PR: deploys every app, then removes the
+#     label so adding it again deploys the newer commit;
+#   - run this from the Actions tab, on main, with the PR number and one app.
+#
+# The label runs through pull_request_target, which runs this file as it is on
+# main with main as the ref, so the `release` environment accepts it.
 #
 # The build runs on Vercel from the commit, with the project's Preview env, the
 # same as the old automatic previews. This job never checks out the PR's code,
 # so nothing from the branch runs next to VERCEL_TOKEN.
 on:
+  pull_request_target:
+    types: [labeled]
   workflow_dispatch:
     inputs:
       pr:
@@ -31,8 +39,13 @@ permissions:
 
 jobs:
   resolve:
+    if: github.event_name == 'workflow_dispatch' || github.event.label.name == 'preview'
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: write
     outputs:
+      pr: ${{ steps.pr.outputs.pr }}
       ref: ${{ steps.pr.outputs.ref }}
       sha: ${{ steps.pr.outputs.sha }}
       apps: ${{ steps.apps.outputs.apps }}
@@ -49,7 +62,7 @@ jobs:
         id: pr
         env:
           GH_TOKEN: ${{ github.token }}
-          PR: ${{ inputs.pr }}
+          PR: ${{ inputs.pr || github.event.pull_request.number }}
         run: |
           if ! [[ "$PR" =~ ^[0-9]+$ ]]; then
             echo "::error::PR must be a number (got $PR)"
@@ -62,13 +75,21 @@ jobs:
             echo "::error::PR #$PR comes from $head_repo; previews only build branches of $GITHUB_REPOSITORY"
             exit 1
           fi
+          echo "pr=$PR" >> "$GITHUB_OUTPUT"
           echo "ref=$ref" >> "$GITHUB_OUTPUT"
           echo "sha=$sha" >> "$GITHUB_OUTPUT"
+
+      - name: Remove the preview label
+        if: github.event_name == 'pull_request_target'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR: ${{ github.event.pull_request.number }}
+        run: gh api -X DELETE "repos/$GITHUB_REPOSITORY/issues/$PR/labels/preview" --silent
 
       - name: Pick apps
         id: apps
         env:
-          APP: ${{ inputs.app }}
+          APP: ${{ inputs.app || 'all' }}
         run: |
           if [ "$APP" = all ]; then
             APP='playground keys docs demo'
@@ -135,7 +156,7 @@ jobs:
       - name: Comment on the pull request
         env:
           GH_TOKEN: ${{ github.token }}
-          PR: ${{ inputs.pr }}
+          PR: ${{ needs.resolve.outputs.pr }}
           APP: ${{ matrix.app.name }}
           URL: ${{ steps.deploy.outputs.url }}
           SHA: ${{ needs.resolve.outputs.sha }}
