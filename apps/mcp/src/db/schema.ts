@@ -211,7 +211,6 @@ export const sends = pgTable(
     permissionId: text('permission_id').notNull(),
     chainId: integer('chain_id').notNull(),
     sender: text('sender').notNull(),
-    /** What `amount` counts. Null on a run that moves no token, and on transfers recorded before rows named theirs. */
     token: text('token'),
     amount: numeric('amount', { precision: 78, scale: 0 }).notNull(),
     periodStart: bigint('period_start', { mode: 'number' }).notNull(),

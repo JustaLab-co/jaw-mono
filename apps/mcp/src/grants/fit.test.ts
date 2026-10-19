@@ -5,13 +5,12 @@ import {
   encodeErrorResult,
   encodeFunctionData,
   erc20Abi,
-  parseAbi,
   toFunctionSelector,
   type Address,
   type Hex,
 } from 'viem';
 import { describe, expect, it } from 'vitest';
-import { ChainUnreadable, fit, refusalOfRevert, spendOf, type Call } from './fit';
+import { ChainUnreadable, fit, spendOf, type Call } from './fit';
 import type { LiveGrant } from './store';
 
 const ACCOUNT: Address = '0x1111111111111111111111111111111111111111';
@@ -59,7 +58,6 @@ interface FakeChain {
   spent?: Record<string, bigint>;
 }
 
-/** The permission manager as the chain answers it: the permission approved, each limit's counter in `spent`. */
 function chain(c: FakeChain = {}): ReadDeps {
   return {
     manager: PERMISSIONS_MANAGER_ADDRESS,
@@ -200,6 +198,17 @@ describe('fit', () => {
   it('throws rather than refuse or pass when the chain does not answer', async () => {
     await expect(fit(grantOf(), [transfer(BOB, 1n)], at(chain({ down: true })))).rejects.toThrow(ChainUnreadable);
   });
+
+  it('leaves an approve on a contract with no limit to the chain, which skips it on an ERC-721', async () => {
+    const approve = toFunctionSelector('approve(address,uint256)');
+    const grant = grantOf({ calls: [{ target: CAROL, selector: approve }] });
+    const nft: Call = {
+      to: CAROL,
+      value: 0n,
+      data: encodeFunctionData({ abi: erc20Abi, functionName: 'approve', args: [BOB, 5n] }),
+    };
+    expect(await fit(grant, [nft], at(chain()))).toBe(undefined);
+  });
 });
 
 describe('spendOf', () => {
@@ -226,52 +235,5 @@ describe('spendOf', () => {
     const upper = transfer(BOB, 2n);
     upper.data = `0x${upper.data.slice(2).toUpperCase()}`;
     expect(spendOf([upper], ACCOUNT)).toEqual(new Map([[USDC.toLowerCase(), 2n]]));
-  });
-});
-
-const MANAGER_ERRORS = parseAbi([
-  'error JustaPermissionManager_UnauthorizedCall(address target, bytes4 selector)',
-  'error JustaPermissionManager_ExceededSpendLimit(uint256 value, uint256 allowance)',
-  'error JustaPermissionManager_AfterPermissionEnd(uint48 currentTimestamp, uint48 end)',
-]);
-
-describe('refusalOfRevert', () => {
-  it('names an ExceededSpendLimit the bundler reports in simulation as over-limit', () => {
-    const data = encodeErrorResult({
-      abi: MANAGER_ERRORS,
-      errorName: 'JustaPermissionManager_ExceededSpendLimit',
-      args: [2_000_000n, 1_000_000n],
-    });
-    const err = new Error('Could not size the ERC-20 paymaster approval', {
-      cause: { message: `UserOperation reverted during simulation with reason: ${data}` },
-    });
-    expect(refusalOfRevert(err)).toEqual({ reason: 'over-limit' });
-  });
-
-  it('names an UnauthorizedCall wrapped in a revert of the account as call-not-allowed', () => {
-    const inner = encodeErrorResult({
-      abi: MANAGER_ERRORS,
-      errorName: 'JustaPermissionManager_UnauthorizedCall',
-      args: [CAROL, TRANSFER],
-    });
-    const wrapped = encodeErrorResult({
-      abi: parseAbi(['error ExecutionFailed(bytes reason)']),
-      errorName: 'ExecutionFailed',
-      args: [inner],
-    });
-    expect(refusalOfRevert(wrapped)).toEqual({ reason: 'call-not-allowed', target: CAROL, selector: TRANSFER });
-  });
-
-  it('names an AfterPermissionEnd as expired', () => {
-    const data = encodeErrorResult({
-      abi: MANAGER_ERRORS,
-      errorName: 'JustaPermissionManager_AfterPermissionEnd',
-      args: [NOW, NOW - 1],
-    });
-    expect(refusalOfRevert({ details: `execution reverted: ${data}` })).toEqual({ reason: 'expired' });
-  });
-
-  it('names nothing in a failure that carries no manager error', () => {
-    expect(refusalOfRevert(new Error("AA21 didn't pay prefund 0xdeadbeefcafe"))).toBe(undefined);
   });
 });

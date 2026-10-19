@@ -3,7 +3,8 @@ import { and, desc, eq, inArray, lt, ne, sql } from 'drizzle-orm';
 import type { Address, Hex } from 'viem';
 import { getDb, type Tx } from '@/db/client';
 import { sends } from '@/db/schema';
-import { LEASE_MS } from './store';
+// Past any run's submit and receipt wait, so the reconciler never takes a row a live run still holds.
+const SEND_LEASE_MS = 10 * 60_000;
 
 export type SendRow = typeof sends.$inferSelect;
 export interface RecordedSend {
@@ -34,7 +35,7 @@ export async function recordSend(tx: Tx, s: NewSend): Promise<string> {
     sender: s.sender.toLowerCase(),
     token: s.token?.toLowerCase() ?? null,
     amount: s.amount.toString(),
-    leaseUntil: sql`${dbNow} + ${LEASE_MS} * interval '1 millisecond'`,
+    leaseUntil: sql`${dbNow} + ${SEND_LEASE_MS} * interval '1 millisecond'`,
   });
   return id;
 }
@@ -60,7 +61,6 @@ export async function settleSend(id: string, end: { state: 'landed'; txHash: Hex
     .where(open(id));
 }
 
-/** What open sends under the permission move, by lowercase token: sent or about to be, and maybe not counted on chain yet. */
 export async function openSpends(permissionId: string, tx: Tx): Promise<Map<string, bigint>> {
   const rows = await tx
     .select({ token: sends.token, amount: sends.amount })

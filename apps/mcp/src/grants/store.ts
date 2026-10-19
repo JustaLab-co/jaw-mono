@@ -56,7 +56,6 @@ export async function x402Budgets(connectionId: string): Promise<Grant[]> {
 export const x402Budget = async (connectionId: string): Promise<Grant | undefined> =>
   (await x402Budgets(connectionId))[0];
 
-/** The connection's grant by id, past its end or not, unless revoked. */
 export async function unrevokedGrant(connectionId: string, permissionId: string): Promise<LiveGrant | undefined> {
   const [row] = await getDb()
     .select()

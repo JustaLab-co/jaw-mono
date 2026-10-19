@@ -10,7 +10,7 @@
 - `expired`: a grant past its end returns `expired:`.
 - `no-grant`: an unknown `permissionId`, one revoked, or one on another chain returns `no-grant:`.
 - `x402-refused`: the x402 budget's `permissionId` returns `no-grant:` naming it as the x402 budget, which pays x402 only.
-- `race`: two executes that together pass the limit. One lands and the other returns `over-limit:`. Runs take the connection's float lock in turn and hold it to the receipt, and a run still `open` in `sends` counts against the next.
+- `race`: two executes that together pass the limit. One lands and the other returns `over-limit:` within 1500 ms of its turn. A run holds the connection's float lock through its submit, not its receipt, and a run still `open` in `sends` counts against the next.
 - `history`: `jaw_session_history` lists each run under `executes`, one row per token moved, with `userOpHash`, `state` and `txHash`.
 - `reconciler`: a run whose receipt did not come back within 60 seconds stays `open` and is handed to the reconciler. `/api/cron/reconcile` settles it `landed` from the EntryPoint `UserOperationEvent`.
 - `pay-unaffected`: an x402 payment after an execute still pays from the x402 budget, and the custom grant's counter does not move.
@@ -18,7 +18,7 @@
 
 ## How to get to it (user POV)
 
-- An MCP client on the hosted server whose connection holds an x402 budget, so the session key has USDC for fees, and a custom grant from `jaw_grant_permissions`.
+- An MCP client on the hosted server with scope `x402:pay`, whose connection holds an x402 budget, so the session key has USDC for fees, and a custom grant from `jaw_grant_permissions`.
 - `jaw_session_execute` takes `permissionId`, optional `chainId` (the connection's by default) and `calls`, 1 to 10 `{ to, value?, data? }`. `value` is wei as a decimal integer and `data` is hex.
 - The result holds `status` (`landed`, `reverted` or `unconfirmed`), `userOpHash`, `txHash` and a `summary`.
 - By hand: `node tools/verify/hosted-client.mjs "$MCP_PUBLIC_URL"`, then `execute <permissionId> '<json array>'`.

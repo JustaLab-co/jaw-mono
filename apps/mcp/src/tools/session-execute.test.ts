@@ -2,15 +2,19 @@ import { randomBytes } from 'node:crypto';
 import { eq } from 'drizzle-orm';
 import {
   decodeFunctionData,
+  encodeAbiParameters,
   encodeErrorResult,
+  encodeEventTopics,
   encodeFunctionData,
   erc20Abi,
+  HttpRequestError,
   parseAbi,
   toFunctionSelector,
   type Address,
   type Hex,
   type PublicClient,
 } from 'viem';
+import { entryPoint08Abi } from 'viem/account-abstraction';
 import { afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
 import { verifyBearer, type Tenant } from '@/connections/auth';
 import { callTool, connect, setTestEnv } from '@/connections/testkit';
@@ -20,6 +24,7 @@ import { lockWaiters, TEST_PG_URL, useTestDb, useTestPostgres } from '@/db/test-
 import { recordGrant } from '@/grants/permission';
 import { x402Budget } from '@/grants/store';
 import { reconcile } from '@/reconciler/run';
+import { RECEIPT_MS } from './session-execute';
 
 const USDC: Address = '0x036CbD53842c5426634e7929541eC2318f3dCF7e';
 const BOB: Address = '0x2222222222222222222222222222222222222222';
@@ -32,10 +37,6 @@ const deferred = () => {
   return { promise, resolve };
 };
 
-/**
- * The chain as the permission manager and the bundler see it. A batch that lands adds
- * what it transferred to the period's counter, as the manager would.
- */
 const chain = vi.hoisted(() => ({
   spent: 0n,
   revoked: false,
@@ -45,12 +46,11 @@ const chain = vi.hoisted(() => ({
 
 const bridge = vi.hoisted(() => ({
   sent: [] as { to: string; value: string; data: string }[][],
-  /** What wallet_getCallsStatus answers: landed, reverted on chain with these logs, or nothing yet. */
-  outcome: 'landed' as 'landed' | 'pending' | { logs: string[] },
+  outcome: 'landed' as 'landed' | 'pending' | { logs: { data: string; topics: string[] }[] },
   fail: undefined as Error | undefined,
-  /** Holds wallet_sendCalls until resolved, and says when a send got there. */
   gate: undefined as Promise<void> | undefined,
   reached: undefined as (() => void) | undefined,
+  receiptGate: undefined as Promise<void> | undefined,
 }));
 
 vi.mock('@/adapters/session-host', async (original) => ({
@@ -65,17 +65,17 @@ vi.mock('@/adapters/session-host', async (original) => ({
         bridge.sent.push(calls);
         return { id: `0x${bridge.sent.length.toString(16).padStart(64, '0')}` };
       }
+      if (bridge.receiptGate) await bridge.receiptGate;
       const id = params as Hex;
       const calls = bridge.sent[Number(BigInt(id)) - 1];
       if (bridge.outcome === 'pending') {
-        // Nothing lands: the clock runs past the receipt wait, so the next poll is the last.
-        vi.setSystemTime(Date.now() + 61_000);
+        vi.setSystemTime(Date.now() + RECEIPT_MS + 1_000);
         return undefined;
       }
       if (bridge.outcome !== 'landed') {
         return {
           status: 500,
-          receipts: [{ transactionHash: TX, logs: bridge.outcome.logs.map((data) => ({ data })) }],
+          receipts: [{ transactionHash: TX, logs: bridge.outcome.logs }],
         };
       }
       if (!chain.userOps.some((op) => op.userOpHash === id)) {
@@ -105,7 +105,14 @@ setTestEnv();
 beforeAll(TEST_PG_URL ? useTestPostgres : useTestDb);
 afterEach(async () => {
   Object.assign(chain, { spent: 0n, revoked: false, head: 100n, userOps: [] });
-  Object.assign(bridge, { sent: [], outcome: 'landed', fail: undefined, gate: undefined, reached: undefined });
+  Object.assign(bridge, {
+    sent: [],
+    outcome: 'landed',
+    fail: undefined,
+    gate: undefined,
+    reached: undefined,
+    receiptGate: undefined,
+  });
   vi.useRealTimers();
   vi.restoreAllMocks();
   await getDb().delete(settings);
@@ -113,7 +120,6 @@ afterEach(async () => {
 
 const NOW = () => Math.floor(Date.now() / 1000);
 
-/** A connection whose owner also approved a custom grant: USDC transfers, `perDay` base units a day. */
 async function withCustomGrant(perDay = 1_000_000n, end = NOW() + 86_400) {
   const c = await connect();
   const t = (await verifyBearer(c.access_token))?.extra?.tenant as Tenant;
@@ -253,7 +259,9 @@ describe('jaw_session_execute', () => {
 
   it('names an ExceededSpendLimit the bundler reports after fit passed as over-limit, and releases the rows', async () => {
     const { c, t, permissionId } = await withCustomGrant();
-    bridge.fail = new Error(`Could not size the ERC-20 paymaster approval: execution reverted: ${overLimitRevert}`);
+    bridge.fail = new Error('Could not size the ERC-20 paymaster approval', {
+      cause: { name: 'RpcRequestError', details: `execution reverted: ${overLimitRevert}` },
+    });
 
     const result = await execute(c.access_token, permissionId, [transfer(BOB, 1n)]);
 
@@ -261,15 +269,52 @@ describe('jaw_session_execute', () => {
     expect((await rowsOf(t.connectionId)).map((r) => r.state)).toEqual(['released']);
   });
 
-  it('names an over-limit revert in the logs of a userOp that reverted on chain', async () => {
+  it('names an over-limit revert the EntryPoint logged for a userOp that reverted on chain', async () => {
     const { c, t, permissionId } = await withCustomGrant();
-    bridge.outcome = { logs: [`0x${'0'.repeat(64)}${overLimitRevert.slice(2)}`] };
+    const topics = encodeEventTopics({
+      abi: entryPoint08Abi,
+      eventName: 'UserOperationRevertReason',
+      args: { userOpHash: `0x${'1'.repeat(64)}`, sender: t.sessionAddress },
+    }) as Hex[];
+    const data = encodeAbiParameters([{ type: 'uint256' }, { type: 'bytes' }], [0n, overLimitRevert]);
+    bridge.outcome = { logs: [{ topics, data }] };
 
     const result = await execute(c.access_token, permissionId, [transfer(BOB, 1n)]);
 
     expect(result.isError).toBe(true);
-    expect(result.content[0].text).toMatch(/^over-limit: .*reverted on chain/);
+    expect(result.content[0].text).toMatch(/^over-limit: .*did not succeed on chain/);
     expect((await rowsOf(t.connectionId)).map((r) => r.state)).toEqual(['released']);
+  });
+
+  it('given a send whose answer was lost in transit, then it says it may have been sent and keeps the spend held', async () => {
+    const { c, t, permissionId } = await withCustomGrant();
+    bridge.fail = new Error('send failed', {
+      cause: new HttpRequestError({ url: 'http://bundler.test', body: { callData: overLimitRevert } }),
+    });
+
+    const result = await execute(c.access_token, permissionId, [transfer(BOB, 600_000n)]);
+
+    expect(result.content[0].text).toMatch(/may have been sent anyway/);
+    expect(await rowsOf(t.connectionId)).toEqual([expect.objectContaining({ state: 'open', amount: '600000' })]);
+    bridge.fail = undefined;
+    const next = await execute(c.access_token, permissionId, [transfer(CAROL, 600_000n)]);
+    expect(next.content[0].text).toMatch(/^over-limit: /);
+  });
+
+  it('given a failure before the bundler took the batch, then nothing was sent and the rows are released', async () => {
+    const { c, t, permissionId } = await withCustomGrant();
+    bridge.fail = new Error('the permission store did not answer');
+
+    const result = await execute(c.access_token, permissionId, [transfer(BOB, 1n)]);
+
+    expect(result.content[0].text).toMatch(/^Nothing was sent: /);
+    expect((await rowsOf(t.connectionId)).map((r) => r.state)).toEqual(['released']);
+  });
+
+  it('refuses a connection without x402:pay before reading any grant', async () => {
+    const c = await connect(undefined, { scope: 'wallet:read' });
+    const result = await execute(c.access_token, `0x${'e'.repeat(64)}`, [transfer(BOB, 1n)]);
+    expect(result.content[0].text).toMatch(/x402:pay/);
   });
 
   it('given two executes that together pass the limit, when the second comes while the first is sending, then the first lands and the second is over-limit', async () => {
@@ -281,10 +326,15 @@ describe('jaw_session_execute', () => {
 
     const first = execute(c.access_token, permissionId, [transfer(BOB, 600_000n)]);
     await reached.promise;
+    const landing = deferred();
+    bridge.receiptGate = landing.promise;
     const second = execute(c.access_token, permissionId, [transfer(CAROL, 600_000n)]);
     release.resolve();
 
-    const [a, b] = await Promise.all([first, second]);
+    // The first waits on its receipt, outside the lock: only its open row stands for its spend.
+    const b = await second;
+    landing.resolve();
+    const a = await first;
     expect(a).toMatchObject({ structuredContent: { status: 'landed' } });
     expect(b.content[0].text).toMatch(/^over-limit: .* has 400000 left this period/);
     expect(bridge.sent).toHaveLength(1);
@@ -305,7 +355,7 @@ describe('jaw_session_execute', () => {
     const userOpHash = first.structuredContent.userOpHash as Hex;
     chain.userOps.push({ userOpHash, sender: t.sessionAddress, success: true, blockNumber: 101n });
     chain.head = 120n;
-    // The database runs on the test's clock, which the row's handover to the reconciler stopped at.
+    // PGlite runs on the test's clock, which stopped where the row was handed to the reconciler.
     vi.setSystemTime(Date.now() + 1_000);
     await reconcile({ publicClient: () => node as unknown as PublicClient });
     expect(await rowsOf(t.connectionId)).toEqual([
@@ -329,9 +379,13 @@ describe.skipIf(!TEST_PG_URL)('jaw_session_execute across replicas', () => {
     await reached.promise;
     const second = there.sessionExecute(t, { permissionId, calls: [transfer(CAROL, 600_000n)] });
     while ((await lockWaiters(t.connectionId)) === 0) await new Promise((resolve) => setImmediate(resolve));
+    const landing = deferred();
+    bridge.receiptGate = landing.promise;
     release.resolve();
 
-    const [a, b] = await Promise.all([first, second]);
+    const b = await second;
+    landing.resolve();
+    const a = await first;
     expect(a).toMatchObject({ structuredContent: { status: 'landed' } });
     expect(b.content[0].text).toMatch(/^over-limit: .* has 400000 left this period/);
     expect(bridge.sent).toHaveLength(1);

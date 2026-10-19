@@ -6,18 +6,20 @@ import { z } from 'zod';
 import { chainClients, sessionBridge } from '@/adapters/session-host';
 import { tenant, type Tenant } from '@/connections/auth';
 import { isLive } from '@/connections/rows';
+import { spends } from '@/connections/scopes';
 import { connections } from '@/db/schema';
 import { isPaymentsPaused } from '@/db/settings';
-import { ChainUnreadable, fit, refusalOfRevert, spendOf, type Call, type Refusal } from '@/grants/fit';
+import { ChainUnreadable, fit, spendOf, type Call, type Refusal } from '@/grants/fit';
+import { lostInTransit, refusalOfFailure, refusalOfLogs } from '@/grants/reverts';
 import { unrevokedGrant, type LiveGrant } from '@/grants/store';
 import { errorLabel, log } from '@/lib/edge';
 import { reply } from '@/lib/fence';
 import { FloatBusy, FloatLost, inTurn, LOCK_WAIT_MS, withFloat } from '@/payments/float-lock';
 import { handToReconciler, noteCallsId, openSpends, recordSend, settleSend } from '@/payments/sends';
-import { refusal } from './reply';
+import { NO_PAY_SCOPE, refusal } from './reply';
 
 const MAX_CALLS = 10;
-const RECEIPT_MS = 60_000;
+export const RECEIPT_MS = 60_000;
 
 const executeInput = z.strictObject({
   permissionId: z
@@ -59,15 +61,16 @@ const output = z.object({
   summary: z.string(),
 });
 type Outcome = z.infer<typeof output>;
+type ToolResult = ReturnType<typeof refusal>;
 
 function described(r: Refusal, permissionId: string): string {
   switch (r.reason) {
     case 'call-not-allowed':
       return `call-not-allowed: grant ${permissionId} does not allow calling ${r.selector} on ${r.target}.`;
     case 'over-limit':
-      return r.token
-        ? `over-limit: the batch moves ${r.spend} base units of ${r.token}, and grant ${permissionId} has ${r.left} left this period.`
-        : `over-limit: the permission manager refused the batch as past a spend limit of grant ${permissionId}.`;
+      return 'onChain' in r
+        ? `over-limit: the permission manager refused the batch for spending past, or without, a spend limit of grant ${permissionId}.`
+        : `over-limit: the batch moves ${r.spend} base units of ${r.token}, and grant ${permissionId} has ${r.left} left this period.`;
     case 'expired':
       return `expired: grant ${permissionId} is outside its time window. Ask the owner for a new one with jaw_grant_permissions.`;
     case 'no-grant':
@@ -77,13 +80,13 @@ function described(r: Refusal, permissionId: string): string {
 
 const NOTHING_SENT = ' Nothing was sent.';
 const UNREADABLE = 'Nothing was sent: the grant could not be read from the chain right now. Try again in a moment.';
+const MAYBE_SENT =
+  'This execute failed and may have been sent anyway. Check jaw_session_history before sending again, or it may land twice.';
 
-// Core sizes the paymaster approval by simulating the batch, which is where a batch the
-// permission refuses reverts, and throws this before anything reaches the bundler.
-const refusedInSimulation = (err: unknown) =>
-  err instanceof Error && err.message.includes('Could not size the ERC-20 paymaster approval');
-
-type CallStatus = { status: number; receipts?: { transactionHash: Hex; logs?: { data: Hex }[] }[] };
+type CallStatus = {
+  status: number;
+  receipts?: { transactionHash: Hex; logs?: { data: Hex; topics: Hex[] }[] }[];
+};
 
 async function receiptOf(bridge: SessionBridge, userOpHash: Hex): Promise<{ out: Outcome; refused?: Refusal }> {
   for (const until = Date.now() + RECEIPT_MS; Date.now() < until; ) {
@@ -94,10 +97,11 @@ async function receiptOf(bridge: SessionBridge, userOpHash: Hex): Promise<{ out:
     if (status?.status === 200 && txHash) {
       return { out: { status: 'landed', userOpHash, txHash, summary: `Landed in ${txHash}.` } };
     }
-    if (status && status.status >= 400) {
-      const logs = (status.receipts ?? []).flatMap((r) => r.logs ?? []).map((l) => l.data);
-      const summary = `userOp ${userOpHash} reverted on chain. Nothing moved but its fee.`;
-      return { out: { status: 'reverted', userOpHash, txHash, summary }, refused: refusalOfRevert(logs.join(' ')) };
+    // 400 is a failure off chain with no receipt, which says nothing about inclusion.
+    if (status && status.status >= 500) {
+      const logs = (status.receipts ?? []).flatMap((r) => r.logs ?? []);
+      const summary = `userOp ${userOpHash} did not succeed on chain; its calls moved nothing.`;
+      return { out: { status: 'reverted', userOpHash, txHash, summary }, refused: refusalOfLogs(logs) };
     }
     await new Promise((resolve) => setTimeout(resolve, 2_000));
   }
@@ -107,21 +111,25 @@ async function receiptOf(bridge: SessionBridge, userOpHash: Hex): Promise<{ out:
 
 const logFailure = (msg: string) => (err: unknown) => log('error', { msg, error: errorLabel(err) });
 
+const release = (ids: string[]) => Promise.all(ids.map((id) => settleSend(id, { state: 'released' })));
+
 function concluded(ids: string[], out: Outcome) {
   if (out.status === 'landed') {
     return Promise.all(ids.map((id) => settleSend(id, { state: 'landed', txHash: out.txHash as Hex })));
   }
-  if (out.status === 'reverted') return Promise.all(ids.map((id) => settleSend(id, { state: 'released' })));
+  if (out.status === 'reverted') return release(ids);
   return handToReconciler(ids);
 }
 
-/**
- * Sends the batch as the session key under a custom grant once `fit` passes it. The
- * float lock is held to the receipt, so the next run reads this one's spend on chain,
- * and a run left open counts against the next through its `sends` rows: two runs that
- * together pass a limit cannot both send.
- */
-async function executeUnder(t: Tenant, grant: LiveGrant, calls: Call[], bridge: SessionBridge) {
+// `lost`: the request may have reached the bundler and only its answer was lost.
+type Submitted = { sent: Hex } | { unsent: unknown } | { lost: unknown };
+
+async function submitUnder(
+  t: Tenant,
+  grant: LiveGrant,
+  calls: Call[],
+  bridge: SessionBridge
+): Promise<ToolResult | { ids: string[]; submitted: Submitted }> {
   return withFloat(t.connectionId, LOCK_WAIT_MS, async (hold) => {
     const live = await hold.tx(async (tx) => {
       if (!(await hold.owns(tx))) throw new FloatLost();
@@ -150,36 +158,54 @@ async function executeUnder(t: Tenant, grant: LiveGrant, calls: Call[], bridge: 
       if (spent.length === 0) return [await recordSend(tx, { ...send, token: null, amount: 0n })];
       return Promise.all(spent.map(([token, amount]) => recordSend(tx, { ...send, token: token as Address, amount })));
     });
-    let submitting = false;
     try {
       hold.assertHeld();
-      submitting = true;
       const wire = calls.map((c) => ({ to: c.to, value: numberToHex(c.value), data: c.data }));
       const sent = (await bridge.request('wallet_sendCalls', [{ calls: wire }])) as { id: Hex };
-      await noteCallsId(ids, sent.id).catch(logFailure('execute userOp hash write failed'));
-      const { out, refused: onChain } = await receiptOf(bridge, sent.id);
-      await concluded(ids, out).catch(logFailure('execute conclusion write failed'));
-      if (onChain) return refusal(`${described(onChain, grant.permissionId)} ${out.summary}`);
-      return { ...reply(out), isError: out.status === 'reverted' };
+      return { ids, submitted: { sent: sent.id } };
     } catch (err) {
-      const named = refusalOfRevert(err);
-      const unsent = !submitting || named !== undefined || refusedInSimulation(err);
-      await Promise.all(
-        unsent ? ids.map((id) => settleSend(id, { state: 'released' })) : [handToReconciler(ids)]
-      ).catch(logFailure('execute conclusion write failed'));
-      if (named) return refusal(described(named, grant.permissionId) + NOTHING_SENT);
-      if (!unsent) {
-        log('warn', { msg: 'execute may have been submitted', error: errorLabel(err) });
-        return refusal(
-          'This execute failed and may have been sent anyway. Check jaw_session_history before sending again, or it may land twice.'
-        );
-      }
-      throw err;
+      return { ids, submitted: lostInTransit(err) ? { lost: err } : { unsent: err } };
     }
   });
 }
 
+function unsentReply(err: unknown, permissionId: string): ToolResult {
+  const named = refusalOfFailure(err);
+  if (named) return refusal(described(named, permissionId) + NOTHING_SENT);
+  if (err instanceof FloatLost) return refusal('Nothing was sent: this execute lost its turn on the float. Try again.');
+  log('warn', { msg: 'execute not submitted', error: errorLabel(err) });
+  return refusal(
+    `Nothing was sent: the batch failed in simulation or the bundler refused it (${errorLabel(err)}). ` +
+      'Usually a call reverts, or the session key holds no USDC for its fee, which an x402 budget from jaw_grant_permissions funds.'
+  );
+}
+
+/**
+ * The float lock is held while the batch is checked, recorded and submitted, not while
+ * its receipt is awaited: a later run counts this one's open rows until they settle.
+ */
+async function executeUnder(t: Tenant, grant: LiveGrant, calls: Call[], bridge: SessionBridge) {
+  const reserved = await inTurn(t.connectionId, () => submitUnder(t, grant, calls, bridge));
+  if (!('submitted' in reserved)) return reserved;
+  const { ids, submitted } = reserved;
+  if ('unsent' in submitted) {
+    await release(ids).catch(logFailure('execute conclusion write failed'));
+    return unsentReply(submitted.unsent, grant.permissionId);
+  }
+  if ('lost' in submitted) {
+    await handToReconciler(ids).catch(logFailure('execute conclusion write failed'));
+    log('warn', { msg: 'execute may have been submitted', error: errorLabel(submitted.lost) });
+    return refusal(MAYBE_SENT);
+  }
+  await noteCallsId(ids, submitted.sent).catch(logFailure('execute userOp hash write failed'));
+  const { out, refused } = await receiptOf(bridge, submitted.sent);
+  await concluded(ids, out).catch(logFailure('execute conclusion write failed'));
+  if (refused) return refusal(`${described(refused, grant.permissionId)} ${out.summary}`);
+  return { ...reply(out), isError: out.status === 'reverted' };
+}
+
 export async function sessionExecute(t: Tenant, input: ExecuteInput) {
+  if (!spends(t.scopes)) return refusal(NO_PAY_SCOPE);
   if (await isPaymentsPaused()) return refusal('Payments are paused on this server, so nothing was sent.');
   const chainId = input.chainId ?? t.chainId;
   const grant = await unrevokedGrant(t.connectionId, input.permissionId);
@@ -199,18 +225,11 @@ export async function sessionExecute(t: Tenant, input: ExecuteInput) {
     data: (c.data ?? '0x') as Hex,
   }));
   try {
-    // In turn behind this connection's other float work on this replica, so a second
-    // execute waits for the first's receipt instead of finding the lock taken.
-    return await inTurn(t.connectionId, () => executeUnder(t, grant, calls, bridge));
+    return await executeUnder(t, grant, calls, bridge);
   } catch (err) {
     if (err instanceof ChainUnreadable) return refusal(UNREADABLE);
     if (err instanceof FloatBusy) return refusal('A payment on this connection is in progress. Try again in a moment.');
-    if (err instanceof FloatLost)
-      return refusal('Nothing was sent: this execute lost its turn on the float. Try again.');
-    log('warn', { msg: 'execute not submitted', error: errorLabel(err) });
-    return refusal(
-      `Nothing was sent: the batch failed before reaching the chain. If ${t.sessionAddress} holds no USDC, that is why: it pays its own fee, and an x402 budget from jaw_grant_permissions funds it.`
-    );
+    return unsentReply(err, input.permissionId);
   }
 }
 
@@ -221,7 +240,7 @@ export function registerSessionExecuteTool(server: McpServer) {
       description:
         'Send up to 10 contract calls as the session key, under a custom grant the owner approved with jaw_grant_permissions. No prompt to the owner: the grant is the limit. ' +
         'Before any userOp it checks every call against the grant and what each spend limit has left, and refuses by name: call-not-allowed, over-limit, expired or no-grant. ' +
-        "The x402 budget pays x402 services only and is refused here. The fee comes from the session key's own USDC.",
+        "The x402 budget pays x402 services only and is refused here. The fee comes from the session key's own USDC, which the x402 budget funds.",
       inputSchema: executeInput,
       outputSchema: output,
     },
