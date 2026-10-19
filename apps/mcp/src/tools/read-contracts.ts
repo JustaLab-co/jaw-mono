@@ -69,8 +69,9 @@ function leaf(v: unknown, source: string): unknown {
   return v.length > TEXT_MAX ? `${v.slice(0, TEXT_MAX)}${cut(`${(v.length - 2) / 2} bytes in all`)}` : v;
 }
 
-// Every value in the batch draws on one budget, so a contract cannot flood the reply.
-function plain(v: unknown, source: string, budget: { left: number }): unknown {
+type Budget = { left: number };
+
+function capped(v: unknown, source: string, budget: Budget): unknown {
   if (budget.left <= 0) return cut(`the reply reached ${OUTPUT_MAX} characters`);
   if (Array.isArray(v)) {
     const shown: unknown[] = [];
@@ -79,12 +80,12 @@ function plain(v: unknown, source: string, budget: { left: number }): unknown {
         shown.push(cut(`${v.length - shown.length} more items`));
         break;
       }
-      shown.push(plain(x, source, budget));
+      shown.push(capped(x, source, budget));
     }
     return shown;
   }
   if (v && typeof v === 'object')
-    return Object.fromEntries(Object.entries(v).map(([k, x]) => [k, plain(x, source, budget)]));
+    return Object.fromEntries(Object.entries(v).map(([k, x]) => [k, capped(x, source, budget)]));
   const out = leaf(v, source);
   budget.left -= String(out).length;
   return out;
@@ -185,7 +186,7 @@ export async function readContracts(args: { chainId: number; reads: Read[] }, cl
   const results = settled.map((s, i) => {
     const source = `${reads[i].address} on ${chainId}`;
     return s.status === 'success'
-      ? { ok: true as const, value: plain(s.result, source, budget) }
+      ? { ok: true as const, value: capped(s.result, source, budget) }
       : { ok: false as const, error: failure(s.error, reads[i], source) };
   });
   const returned = results.filter((r) => r.ok).length;
