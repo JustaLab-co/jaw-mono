@@ -11,6 +11,7 @@ import { registerHistoryTool } from '@/tools/history';
 import { registerPayTool } from '@/tools/pay-and-fetch';
 import { registerGrantTool } from '@/tools/grant-permissions';
 import { registerOwnerCallTools } from '@/tools/owner-calls';
+import { registerSignTool } from '@/tools/sign';
 import { registerSwapTools } from '@/tools/swap';
 import { registerConnectionTools } from '@/tools/connections';
 import { registerRevokeTool } from '@/tools/revoke-permission';
@@ -28,6 +29,7 @@ const mcp = createMcpHandler(
     registerDiscoverTool(server);
     registerGrantTool(server);
     registerOwnerCallTools(server);
+    registerSignTool(server);
     registerPayTool(server);
     registerSessionExecuteTool(server);
     registerSwapTools(server);

@@ -227,6 +227,7 @@ describe('read tools', () => {
       'jaw_session_x402_discover',
       'jaw_session_x402_pay',
       'jaw_session_x402_quote',
+      'jaw_sign',
       'jaw_swap',
       'jaw_swap_status',
     ]);

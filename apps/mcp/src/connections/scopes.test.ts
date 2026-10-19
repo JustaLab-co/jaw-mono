@@ -74,6 +74,7 @@ const TOOLS: Record<string, { needs: ConnectionScope[]; args: object }> = {
   jaw_get_capabilities: { needs: ['wallet:read'], args: { chainIds: [TESTNET] } },
   jaw_get_calls_history: { needs: ['wallet:read'], args: {} },
   jaw_get_permissions: { needs: ['wallet:read'], args: {} },
+  jaw_sign: { needs: ['wallet:read'], args: { message: 'hello', chainId: UNSUPPORTED_ORIGIN_CHAIN } },
 };
 
 const PROFILES = ['wallet:read', 'wallet:read x402:pay'];
