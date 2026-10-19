@@ -16,6 +16,7 @@ export interface Outcome {
   state: Exclude<PermissionRequestRow['state'], 'awaiting_owner'>;
   code?: string;
   permissionId?: string;
+  signature?: string;
 }
 
 const dbNow = sql`statement_timestamp()`;
@@ -24,16 +25,23 @@ const awaiting = eq(permissionRequests.state, 'awaiting_owner');
 const ofConnection = (t: Tenant, req: LinkRequest) =>
   and(eq(permissionRequests.method, req.method), eq(permissionRequests.connectionId, t.connectionId));
 
+const sameSign = (t: Tenant, idempotencyKey: string) =>
+  and(
+    eq(permissionRequests.method, 'sign'),
+    eq(permissionRequests.connectionId, t.connectionId),
+    eq(permissionRequests.idempotencyKey, idempotencyKey)
+  );
+
 const blockers = (t: Tenant, req: LinkRequest) =>
-  req.method === 'grant'
-    ? ofConnection(t, req)
-    : or(
+  req.method === 'revoke'
+    ? or(
         ofConnection(t, req),
         and(
           eq(permissionRequests.method, 'revoke'),
           sql`lower(${permissionRequests.permissionId}) = ${req.permissionId.toLowerCase()}`
         )
-      );
+      )
+    : ofConnection(t, req);
 
 async function update(where: SQL | undefined, set: PgUpdateSetSource<typeof permissionRequests>, db: Tx = getDb()) {
   const [row] = await db
@@ -77,7 +85,14 @@ function outcomeOf(err: unknown, row: PermissionRequestRow): Outcome {
   return { state: 'failed', code: 'unexpected' };
 }
 
-async function settle(row: PermissionRequestRow, { state, code, permissionId }: Outcome) {
+export async function currentSign(t: Tenant, idempotencyKey: string): Promise<PermissionRequestRow | undefined> {
+  const same = sameSign(t, idempotencyKey);
+  await closeDead(same);
+  const [row] = await getDb().select().from(permissionRequests).where(same);
+  return row;
+}
+
+async function settle(row: PermissionRequestRow, { state, code, permissionId, signature }: Outcome) {
   // A row given up on while its session still ran takes the answer that came after all.
   const lost = and(eq(permissionRequests.state, 'expired'), eq(permissionRequests.code, 'session_lost'));
   await update(and(eq(permissionRequests.id, row.id), or(awaiting, lost)), {
@@ -85,6 +100,7 @@ async function settle(row: PermissionRequestRow, { state, code, permissionId }: 
     code: code ?? null,
     sessionUntil: null,
     ...(permissionId && { permissionId }),
+    ...(signature && { signature }),
   });
 }
 
@@ -99,11 +115,19 @@ export type LinkRequest = {
   chainId: number;
   approveBy: Date;
   work: (ask: Ask, claim: Claim) => Promise<Outcome>;
-} & ({ method: 'grant' } | { method: 'revoke'; permissionId: string });
+} & (
+  | { method: 'grant' }
+  | { method: 'revoke'; permissionId: string }
+  | { method: 'sign'; idempotencyKey: string; requestHash: string; signKind: 'message' | 'typedData' }
+);
 
 export async function openLink(t: Tenant, req: LinkRequest, openWallet: OpenWallet): Promise<Opened> {
   const blocking = blockers(t, req);
-  const held = await findHeld(blocking);
+  const existing = async (): Promise<Held | undefined> => {
+    const stored = req.method === 'sign' ? await currentSign(t, req.idempotencyKey) : undefined;
+    return stored ? { waiting: stored } : findHeld(blocking);
+  };
+  const held = await existing();
   if (held) return held;
   if ((await countOpenLinks(t.account)) >= MAX_OPEN_PER_ACCOUNT) return 'account_busy';
   const { approveBy } = req;
@@ -127,6 +151,11 @@ export async function openLink(t: Tenant, req: LinkRequest, openWallet: OpenWall
           chainId: req.chainId,
           account: t.account,
           permissionId: req.method === 'revoke' ? req.permissionId : null,
+          ...(req.method === 'sign' && {
+            idempotencyKey: req.idempotencyKey,
+            requestHash: req.requestHash,
+            signKind: req.signKind,
+          }),
           walletUrl: wallet.url,
           approveBy,
           sessionUntil: sessionLeaseEnd,
@@ -138,8 +167,7 @@ export async function openLink(t: Tenant, req: LinkRequest, openWallet: OpenWall
   } finally {
     if (!row || row === FULL) wallet.close();
   }
-  if (row === FULL) return 'account_busy';
-  if (!row) return (await findHeld(blocking)) ?? 'wallet_busy';
+  if (row === FULL || !row) return (await existing()) ?? (row === FULL ? 'account_busy' : 'wallet_busy');
   follow(row, wallet, req.work);
   return { opened: row };
 }

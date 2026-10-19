@@ -1,14 +1,15 @@
 import { randomBytes } from 'node:crypto';
-import { eq } from 'drizzle-orm';
+import { eq, sql } from 'drizzle-orm';
 import { verifyMessage, verifyTypedData, type Hex } from 'viem';
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { verifyBearer, type Tenant } from '@/connections/auth';
 import { WalletBusy, type Ask, type OpenWallet, type Wallet } from '@/connections/relay';
 import { callTool, connect, fakeWallet, owner as newSigner, setTestEnv, walletsSettled } from '@/connections/testkit';
 import { getDb } from '@/db/client';
-import { auditEvents } from '@/db/schema';
+import { auditEvents, permissionRequests } from '@/db/schema';
 import { TEST_PG_URL, useTestDb, useTestPostgres } from '@/db/test-db';
 import { gateCode } from '@/payments/render';
+import { sendCalls } from './owner-calls';
 import { sign, type SignInput } from './sign';
 
 setTestEnv();
@@ -40,7 +41,6 @@ const TYPED = {
     deadline: 1_900_000_000n,
   },
 } as const;
-// What crosses the wire: JSON has no bigint.
 const WIRE = JSON.parse(JSON.stringify(TYPED, (_, v) => (typeof v === 'bigint' ? v.toString() : v)));
 
 let opened: Date[] = [];
@@ -61,7 +61,6 @@ const busy: OpenWallet = async () => {
 
 type Wanted = { request: { type: string; data: { message: string } & typeof TYPED } };
 
-// The owner's wallet signs with the account's own key, as the real one does through its passkey.
 const approves =
   (signer: Signer, over: Record<string, () => unknown> = {}): OpenWallet =>
   async (chainId, until) => {
@@ -225,16 +224,146 @@ describe('jaw_sign', () => {
 
   it('given a link nobody opened past its window, then the key answers expired', async () => {
     const { t } = await connected();
-    expect((await ask(t, { idempotencyKey: 'late' }, idleWallet)).structuredContent!.state).toBe('awaiting_owner');
+    const first = await ask(t, { idempotencyKey: 'late' }, idleWallet);
+    expect(first.structuredContent!.state).toBe('awaiting_owner');
+    await getDb()
+      .update(permissionRequests)
+      .set({ approveBy: sql`now() - interval '1 second'` })
+      .where(eq(permissionRequests.walletUrl, first.structuredContent!.url!));
 
-    vi.useFakeTimers({ now: Date.now() + 31 * 60_000, toFake: ['Date'] });
+    const later = await ask(t, { idempotencyKey: 'late' }, idleWallet);
+
+    expect(later.structuredContent).toMatchObject({ state: 'expired', refusal: { code: 'expired' } });
+    expect(later.structuredContent!.url).toBeUndefined();
+  });
+
+  it('given the relay session ends with the window, then the key answers expired', async () => {
+    const { t } = await connected();
+    const endsWithWindow: OpenWallet = async (_chainId, until) => ({
+      url: `http://keys.test/cli-bridge?session=ends-${randomBytes(4).toString('hex')}`,
+      run: async () => {
+        vi.setSystemTime(until.getTime() + 1_000);
+        throw new Error('relay session closed');
+      },
+      close: () => {},
+    });
+
+    vi.useFakeTimers({ now: Date.now(), toFake: ['Date'] });
     try {
-      const later = await ask(t, { idempotencyKey: 'late' }, idleWallet);
-      expect(later.structuredContent).toMatchObject({ state: 'expired' });
-      expect(later.structuredContent!.url).toBeUndefined();
+      const first = await ask(t, { idempotencyKey: 'ends' }, endsWithWindow);
+      await vi.waitFor(async () => {
+        const [row] = await getDb()
+          .select()
+          .from(permissionRequests)
+          .where(eq(permissionRequests.walletUrl, first.structuredContent!.url!));
+        expect(row.state).not.toBe('awaiting_owner');
+      });
     } finally {
       vi.useRealTimers();
     }
+    const later = await ask(t, { idempotencyKey: 'ends' }, idleWallet);
+
+    expect(later.structuredContent).toMatchObject({ state: 'expired', refusal: { code: 'expired' } });
+  });
+
+  it('given a server restart while the link waits, then the same key answers the same link', async () => {
+    const { t } = await connected();
+    const first = await ask(t, {}, idleWallet);
+
+    vi.resetModules();
+    const restarted = await import('./sign');
+    const again = await restarted.sign(t, { message: 'hello', idempotencyKey: 'k1' }, { openWallet: idleWallet });
+
+    expect(again.structuredContent!.url).toBe(first.structuredContent!.url);
+    expect(opened).toHaveLength(1);
+  });
+
+  it('given a server restart after the owner signed, then the same key still returns the signature', async () => {
+    const { t, signer } = await connected();
+    await ask(t, {}, approves(signer));
+    await walletsSettled();
+
+    vi.resetModules();
+    const restarted = await import('./sign');
+    const again = await restarted.sign(t, { message: 'hello', idempotencyKey: 'k1' }, { openWallet: idleWallet });
+
+    expect(again.structuredContent!.state).toBe('signed');
+    const signature = again.structuredContent!.signature as Hex;
+    expect(await verifyMessage({ address: signer.address, message: 'hello', signature })).toBe(true);
+  });
+
+  describe('a link whose session stopped renewing its lease', () => {
+    const lapse = (url: string) =>
+      getDb()
+        .update(permissionRequests)
+        .set({ sessionUntil: sql`now() - interval '1 second'` })
+        .where(eq(permissionRequests.walletUrl, url));
+
+    it('given the same key again, then it answers expired with session_lost and opens no second link', async () => {
+      const { t } = await connected();
+      const first = await ask(t, {}, idleWallet);
+      await lapse(first.structuredContent!.url!);
+
+      const again = await ask(t, {}, idleWallet);
+
+      expect(again.structuredContent).toMatchObject({ state: 'expired', refusal: { code: 'session_lost' } });
+      expect(again.structuredContent!.summary).toMatch(/lost the wallet session/);
+      expect(opened).toHaveLength(1);
+    });
+
+    it('given the owner answers after all, then the same key returns the signature', async () => {
+      const { t, signer } = await connected();
+      let release!: () => void;
+      const answered = new Promise<void>((resolve) => (release = resolve));
+      const late = approves(signer, {
+        wallet_sign: async () => {
+          await answered;
+          return signer.signMessage({ message: 'hello' });
+        },
+      });
+      const first = await ask(t, {}, late);
+      await vi.waitFor(() => expect(asked.map((a) => a.method)).toContain('wallet_sign'));
+      await lapse(first.structuredContent!.url!);
+      expect((await ask(t, {}, idleWallet)).structuredContent).toMatchObject({
+        state: 'awaiting_owner',
+        url: first.structuredContent!.url,
+      });
+
+      release();
+      await walletsSettled();
+      const done = await ask(t, {}, idleWallet);
+
+      expect(done.structuredContent!.state).toBe('signed');
+      const signature = done.structuredContent!.signature as Hex;
+      expect(await verifyMessage({ address: signer.address, message: 'hello', signature })).toBe(true);
+    });
+  });
+
+  it('given a sign link waiting on this connection, when another key asks, then sign_in_progress and no wallet opens', async () => {
+    const { t } = await connected();
+    await ask(t, { idempotencyKey: 'first' }, idleWallet);
+
+    const second = await ask(t, { idempotencyKey: 'second', message: 'other' }, idleWallet);
+
+    expect(second[gateCode]).toBe('sign_in_progress');
+    expect(second.content[0].text).toMatch(/idempotencyKey first/);
+    expect(opened).toHaveLength(1);
+  });
+
+  it('given two links waiting on the account, when the same key asks twice at once, then both answer one link', async () => {
+    const signer = newSigner();
+    const [a, b, c] = [await connected(signer), await connected(signer), await connected(signer)];
+    await ask(a.t, { idempotencyKey: 'a' }, idleWallet);
+    await ask(b.t, { idempotencyKey: 'b' }, idleWallet);
+
+    const [x, y] = await Promise.all([
+      ask(c.t, { idempotencyKey: 'c' }, idleWallet),
+      ask(c.t, { idempotencyKey: 'c' }, idleWallet),
+    ]);
+
+    expect(x[gateCode]).toBeUndefined();
+    expect(y[gateCode]).toBeUndefined();
+    expect(y.structuredContent!.url).toBe(x.structuredContent!.url);
   });
 
   it('given the same key with other input, then it is an idempotency_conflict and no second link opens', async () => {
@@ -286,6 +415,21 @@ describe('jaw_sign', () => {
 
       expect(results.filter((r) => r[gateCode] === 'account_busy')).toHaveLength(1);
     });
+  });
+
+  it('given three sign links waiting on the account, then jaw_send_calls is refused as account_busy', async () => {
+    const signer = newSigner();
+    const [a, b, c] = [await connected(signer), await connected(signer), await connected(signer)];
+    for (const [i, { t }] of [a, b, c].entries()) await ask(t, { idempotencyKey: `s${i}` }, idleWallet);
+
+    const send = await sendCalls(
+      c.t,
+      { calls: [{ to: TYPED.domain.verifyingContract }] },
+      { openWallet: idleWallet, receipt: async () => null, clients: {} as never }
+    );
+
+    expect(send.content[0].text).toMatch(/^account_busy: /);
+    expect(opened).toHaveLength(3);
   });
 
   it('given a call through the server, then the audit row names the connection', async () => {

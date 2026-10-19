@@ -18,7 +18,7 @@
 
 - An MCP client on the hosted server with `wallet:read`. `jaw_sign` takes exactly one of `message` (text, up to 8192 characters, no invisible or control characters besides line breaks and tabs) and `typedData` (`{ domain, types, primaryType, message }`), and optionally `chainId` and `idempotencyKey`.
 - The first call returns `state: awaiting_owner` with a `url`. The owner opens it within 30 minutes. The same call again, with the same key and input, returns `signed` with the `signature`, or `owner_declined`, `expired` or `failed`.
-- Requests live in the server process. A restart drops them, and the same key then asks the owner again.
+- Requests are rows in `permission_requests` with `method = 'sign'`. A restart keeps them: the same key answers the same request, and once its session's lease lapses, one the wallet was not asked yet ends `expired` with code `session_lost`, which still turns `signed` if the owner's answer lands after all, and one already asked stays open with its link until its approval window ends. A connection waits on one sign link at a time, and another key gets `sign_in_progress`.
 - By hand: `node tools/verify/hosted-client.mjs "$MCP_PUBLIC_URL" wallet:read`, then `sign-message '<text>' [key]` and `sign-typed '<json>' [key]`. Run the same line again to read the outcome.
 
 ## Driving it
@@ -39,8 +39,8 @@ node $S/hosted-client.mjs "$MCP_PUBLIC_URL" wallet:read
 - sign-screen: before approving the permit, read the keys screen. Pass: it shows the spender, the amount and the deadline.
 - sign-decline: reject in the wallet, run the line again. Pass: `owner_declined`, no `signature`.
 - sign-malformed: `sign-typed '{"primaryType":"Permit","message":{}}' bad`. Pass: `invalid_typed_data`, no link.
-- sign-expired: ask, do not open the link, wait past `approveBy` with `$S/run-bounded.sh`, run the line again. Pass: `expired`, no `url`.
-- sign-cap: ask for four different messages under four keys on connections of one account. Pass: the fourth gives `account_busy`.
+- sign-expired: ask, do not open the link, wait past `approveBy` with `$S/run-bounded.sh`, run the line again. Pass: `expired` with `refusal.code` `expired`, no `url`.
+- sign-cap: ask for four different messages under four keys on connections of one account. Pass: the fourth gives `account_busy`, and so does a `jaw_send_calls` on the account while the three wait.
 - sign-no-session: after sign-message, dump `audit_events` and the `grants` and `payments` rows with psql. Pass: an audit row for `jaw_sign` on the connection and no session key signature anywhere.
 - sign-utf8: `sign-message 'Firmo: ñandú, 日本語' u1`. Pass: the keys screen shows the same text and the signature verifies.
 
@@ -48,7 +48,7 @@ node $S/hosted-client.mjs "$MCP_PUBLIC_URL" wallet:read
 
 - What the owner sees is what gets signed. The wallet must show the message or the typed data exactly as the tool sent it.
 - A session key must never sign. Nothing in `jaw_sign` may touch the session store or the budget.
-- The link cap counts sign links in the process only. Replicas do not see each other's sign links.
+- Sign links share the account's cap of three with grant, revoke, `jaw_send_calls` and `jaw_swap` links, across replicas.
 
 ## What counts as evidence
 
