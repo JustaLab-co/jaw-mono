@@ -1,6 +1,6 @@
 import type { CallPermission } from './types';
 
-/** A call as a grant request carries it: a selector, a signature, or both. */
+/** A call as a grant request carries it: a selector, a signature or both, and an optional checker. */
 export interface RequestedCall {
   target: string;
   selector?: string;

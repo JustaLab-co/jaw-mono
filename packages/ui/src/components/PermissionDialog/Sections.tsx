@@ -1,6 +1,7 @@
 'use client';
 
 import { TriangleAlert } from 'lucide-react';
+import { zeroAddress } from 'viem';
 import { Accordion, AccordionContent, AccordionItem, AccordionTrigger } from '../ui/accordion';
 import { AccountAvatar } from '../AccountAvatar';
 import { TokenIcon } from '../TokenIcon';
@@ -206,11 +207,9 @@ export interface CallGroup {
   calls: CallPermission[];
 }
 
-const ZERO_ADDRESS = '0x0000000000000000000000000000000000000000';
-
 /** A call the permission manager also runs past a checker contract before executing it. */
 export function hasChecker(call: CallPermission): call is CallPermission & { checker: string } {
-  return !!call.checker && call.checker.toLowerCase() !== ZERO_ADDRESS;
+  return !!call.checker && call.checker.toLowerCase() !== zeroAddress;
 }
 
 /**
@@ -274,7 +273,6 @@ function ContractGroup({
   group,
   resolvedName,
   avatarUrl,
-  truncatedAddress,
   truncateAddress,
   tokenSymbol,
   chainId,
@@ -282,7 +280,6 @@ function ContractGroup({
   group: CallGroup;
   resolvedName?: string;
   avatarUrl?: string;
-  truncatedAddress: string;
   truncateAddress: (address: string) => string;
   /** Set when the target is a known token — it then reads like the spend rows. */
   tokenSymbol?: string;
@@ -330,10 +327,12 @@ function ContractGroup({
             ) : tokenSymbol || resolvedName ? (
               <>
                 <span className="text-foreground text-body-sm truncate font-medium">{tokenSymbol ?? resolvedName}</span>
-                <span className="text-muted-foreground text-code mt-1 font-mono">{truncatedAddress}</span>
+                <span className="text-muted-foreground text-code mt-1 font-mono">{truncateAddress(group.target)}</span>
               </>
             ) : (
-              <span className="text-foreground text-body-xs truncate font-mono font-medium">{truncatedAddress}</span>
+              <span className="text-foreground text-body-xs truncate font-mono font-medium">
+                {truncateAddress(group.target)}
+              </span>
             )}
           </span>
           <span className={`text-code flex-none font-mono ${anyFunction ? 'text-warning' : 'text-muted-foreground'}`}>
@@ -402,7 +401,6 @@ export function AllowedCalls({
                 group={group}
                 resolvedName={identityOf(group.target)?.ensName ?? undefined}
                 avatarUrl={identityOf(group.target)?.ensAvatar ?? undefined}
-                truncatedAddress={truncateAddress(group.target)}
                 truncateAddress={truncateAddress}
                 tokenSymbol={tokenMeta?.[group.target]?.symbol}
                 chainId={chainId}
