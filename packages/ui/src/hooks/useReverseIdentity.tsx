@@ -1,7 +1,5 @@
-import { useState, useEffect } from 'react';
-
-import { reverseResolveWithAvatars, identityKey } from '../utils/reverseResolve';
-import { getChainLabel } from '../utils/resolveChainLabel';
+import { ENS_ONLY } from '../utils/addressIdentity';
+import { useAddressIdentity } from './useAddressIdentities';
 
 export interface ReverseIdentity {
   /** Reverse-resolved primary ENS name (suffixed `@chainlabel` off-mainnet), or null. */
@@ -21,44 +19,20 @@ export interface ReverseIdentity {
 /**
  * Reverse-resolves an address to its primary ENS name + avatar. Returns nulls
  * until (or unless) resolution succeeds, so callers render the address first and
- * upgrade in place — e.g. `name ?? formatAddress(address)`. Shared by every
- * dialog that shows an account (Connect, Signature, …) so the resolution/cancel
- * logic lives in one place.
+ * upgrade in place — e.g. `name ?? formatAddress(address)`.
+ *
+ * The ENS-only view of {@link useAddressIdentity}, so it shares that hook's batching
+ * and session cache.
  */
 export function useReverseIdentity(
   address: string | undefined,
   chainId: number | undefined,
   mainnetRpcUrl: string
 ): ReverseIdentity {
-  const [name, setName] = useState<string | null>(null);
-  const [plainName, setPlainName] = useState<string | null>(null);
-  const [avatar, setAvatar] = useState<string | null>(null);
-
-  useEffect(() => {
-    setName(null);
-    setPlainName(null);
-    setAvatar(null);
-    if (!address || !chainId) return;
-    let cancelled = false;
-    reverseResolveWithAvatars([{ address, chainId }], mainnetRpcUrl)
-      .then(async (resolved) => {
-        if (cancelled) return;
-        const identity = resolved[identityKey(address, chainId)];
-        if (identity) {
-          const label = await getChainLabel(chainId, mainnetRpcUrl);
-          if (cancelled) return;
-          setName(label ? `${identity.name}@${label}` : identity.name);
-          setPlainName(identity.name);
-          setAvatar(identity.avatar ?? null);
-        }
-      })
-      .catch(() => {
-        // Silently fall back to the address + blob
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, [address, chainId, mainnetRpcUrl]);
-
-  return { name, plainName, avatar };
+  const identity = useAddressIdentity(address, chainId, { mainnetRpcUrl, include: ENS_ONLY });
+  return {
+    name: identity?.ensName ?? null,
+    plainName: identity?.ensPlainName ?? null,
+    avatar: identity?.ensAvatar ?? null,
+  };
 }

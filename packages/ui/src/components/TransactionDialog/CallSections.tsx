@@ -4,10 +4,10 @@ import { Code } from 'lucide-react';
 import { AccordionContent, AccordionItem, AccordionTrigger } from '../ui/accordion';
 import { CopyButton } from '../CopyButton';
 import { Eyebrow, PartyRow, Row, ValueAmount } from '../primitives';
+import { useAddressIdentity, type IdentitySource } from '../../hooks/useAddressIdentities';
 import { useDecodedCalldata, type DecodeResult } from '../../hooks/useDecodedCalldata';
 import { formatNativeValue } from '../../utils/displayFormat';
 import { DecodedCalldataView, callLabel } from './DecodedCalldata';
-import { identityKey } from '../../utils';
 import type { TransactionData } from './types';
 
 /**
@@ -19,12 +19,13 @@ export function stepFallbackLabel(index: number, hasData: boolean, value: string
   return !hasData && value ? 'Transfer' : `Call ${index + 1}`;
 }
 
+/** Who a call goes to reads by name only: ENS, else the clear-signing name. Token reads would show nothing here. */
+export const NAME_SOURCES: readonly IdentitySource[] = ['ens', 'clearSigning'];
+
 interface DecodeContext {
   chainId: number;
   apiKey?: string;
-  resolvedAddresses?: Record<string, string>;
-  resolvedAvatars?: Record<string, string>;
-  mainnetRpcUrl?: string;
+  mainnetRpcUrl: string;
 }
 
 /** The single-transaction calldata card, folded behind the decoded call name. */
@@ -65,16 +66,19 @@ export function BatchStep({
   index,
   nativeSymbol,
   nativeTokenPrice,
-  displayContractAddress,
   ...ctx
 }: Omit<DecodeContext, 'chainId'> & {
   transaction: TransactionData;
   index: number;
   nativeSymbol: string;
   nativeTokenPrice: number;
-  displayContractAddress: (address: string | undefined, chainId: number | undefined) => string;
 }) {
   const decode = useDecodedCalldata(transaction.to, transaction.data, transaction.chainId, ctx.apiKey);
+  const target = useAddressIdentity(transaction.to, transaction.chainId, {
+    mainnetRpcUrl: ctx.mainnetRpcUrl,
+    apiKey: ctx.apiKey,
+    include: NAME_SOURCES,
+  });
   const value = formatNativeValue(transaction.value);
   const hasData = !!transaction.data && transaction.data !== '0x';
 
@@ -102,11 +106,9 @@ export function BatchStep({
           <div className="border-border rounded-box border p-3">
             <PartyRow
               label="Interacting with"
-              value={displayContractAddress(transaction.to, transaction.chainId)}
+              value={target?.label ?? ''}
               address={transaction.to}
-              avatarUrl={
-                transaction.to ? ctx.resolvedAvatars?.[identityKey(transaction.to, transaction.chainId)] : undefined
-              }
+              avatarUrl={target?.ensAvatar ?? undefined}
             />
           </div>
 
