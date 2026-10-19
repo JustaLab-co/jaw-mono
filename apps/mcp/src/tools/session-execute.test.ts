@@ -262,7 +262,7 @@ describe('jaw_session_execute', () => {
     expect(bridge.sent).toEqual([]);
   });
 
-  it('names an ExceededSpendLimit the bundler reports after fit passed as over-limit, and keeps no rows', async () => {
+  it('names an ExceededSpendLimit the bundler reports after fit passed as over-limit, and releases the rows', async () => {
     const { c, t, permissionId } = await withCustomGrant();
     bridge.fail = new Error('Could not size the ERC-20 paymaster approval', {
       cause: { name: 'RpcRequestError', details: `execution reverted: ${overLimitRevert}` },
@@ -271,7 +271,7 @@ describe('jaw_session_execute', () => {
     const result = await execute(c.access_token, permissionId, [transfer(BOB, 1n)]);
 
     expect(result.content[0].text).toMatch(/^over-limit: .*Nothing was sent\.$/);
-    expect(await rowsOf(t.connectionId)).toEqual([]);
+    expect((await rowsOf(t.connectionId)).map((r) => r.state)).toEqual(['released']);
   });
 
   it('names an over-limit revert the EntryPoint logged for a userOp that reverted on chain', async () => {
@@ -306,14 +306,14 @@ describe('jaw_session_execute', () => {
     expect(next.content[0].text).toMatch(/^over-limit: /);
   });
 
-  it('given a failure before the bundler took the batch, then nothing was sent and no rows are kept', async () => {
+  it('given a failure before the bundler took the batch, then nothing was sent and the rows are released', async () => {
     const { c, t, permissionId } = await withCustomGrant();
     bridge.fail = new Error('the permission store did not answer');
 
     const result = await execute(c.access_token, permissionId, [transfer(BOB, 1n)]);
 
     expect(result.content[0].text).toMatch(/^Nothing was sent: /);
-    expect(await rowsOf(t.connectionId)).toEqual([]);
+    expect((await rowsOf(t.connectionId)).map((r) => r.state)).toEqual(['released']);
   });
 
   it('refuses a connection without x402:pay before reading any grant', async () => {
@@ -403,16 +403,43 @@ describe('jaw_session_execute', () => {
     expect((await rowsOf(t.connectionId)).map((r) => r.state)).toEqual(['open']);
   });
 
-  it('given the same idempotencyKey after nothing was sent, then the retry runs', async () => {
+  it('given the same idempotencyKey after a failure the server read as unsent, then it still does not send again', async () => {
     const { c, permissionId } = await withCustomGrant();
-    bridge.fail = new Error('the permission store did not answer');
+    bridge.fail = new Error('already known');
     await execute(c.access_token, permissionId, [transfer(BOB, 1n)], 'pay-bob');
     bridge.fail = undefined;
 
     const retry = await execute(c.access_token, permissionId, [transfer(BOB, 1n)], 'pay-bob');
 
-    expect(retry.structuredContent).toMatchObject({ status: 'landed' });
-    expect(bridge.attempts).toBe(2);
+    expect(retry.content[0].text).toMatch(/new idempotencyKey/);
+    expect(bridge.attempts).toBe(1);
+  });
+
+  it('given the same idempotencyKey after the userOp reverted on chain, then it replays the revert with its transaction', async () => {
+    const { c, permissionId } = await withCustomGrant();
+    bridge.outcome = { logs: [] };
+    await execute(c.access_token, permissionId, [transfer(BOB, 1n)], 'pay-bob');
+
+    const retry = await execute(c.access_token, permissionId, [transfer(BOB, 1n)], 'pay-bob');
+
+    expect(retry.structuredContent).toMatchObject({ status: 'reverted', txHash: TX });
+    expect(bridge.attempts).toBe(1);
+  });
+
+  it('given a run the reconciler released for not being seen in its window, then its key does not replay it as moved nothing', async () => {
+    const { c, permissionId } = await withCustomGrant();
+    bridge.outcome = 'pending';
+    vi.useFakeTimers({ toFake: ['Date'] });
+    await execute(c.access_token, permissionId, [transfer(BOB, 1n)], 'pay-bob');
+    chain.head = 100n + 451n;
+    vi.setSystemTime(Date.now() + 1_000);
+    await reconcile({ publicClient: () => node as unknown as PublicClient });
+
+    const retry = await execute(c.access_token, permissionId, [transfer(BOB, 1n)], 'pay-bob');
+
+    expect(retry.content[0].text).toMatch(/not seen on chain in time.*may still land/);
+    expect(retry.content[0].text).not.toMatch(/moved nothing/);
+    expect(bridge.attempts).toBe(1);
   });
 
   it('given two calls with one idempotencyKey at once, then one sends and the other returns its outcome', async () => {
@@ -487,6 +514,30 @@ describe('jaw_session_execute', () => {
 });
 
 describe.skipIf(!TEST_PG_URL)('jaw_session_execute across replicas', () => {
+  it('given one idempotencyKey on two replicas, when the second waits on the float lock while the first sends, then it returns the first run and sends nothing', async () => {
+    const { t, permissionId } = await withCustomGrant();
+    const here = await import('./session-execute');
+    vi.resetModules();
+    const there = await import('./session-execute');
+    const release = deferred();
+    const reached = deferred();
+    bridge.gate = release.promise;
+    bridge.reached = reached.resolve;
+    const input = { permissionId, calls: [transfer(BOB, 1n)], idempotencyKey: 'pay-bob' };
+
+    const first = here.sessionExecute(t, input);
+    await reached.promise;
+    const second = there.sessionExecute(t, input);
+    while ((await lockWaiters(t.connectionId)) === 0) await new Promise((resolve) => setImmediate(resolve));
+    release.resolve();
+
+    const [a, b] = await Promise.all([first, second]);
+    const userOpHash = `0x${'1'.padStart(64, '0')}`;
+    expect(a).toMatchObject({ structuredContent: { status: 'landed', userOpHash } });
+    expect(b).toMatchObject({ structuredContent: { userOpHash } });
+    expect(bridge.attempts).toBe(1);
+  });
+
   it('given the second execute on another replica, when it waits on the float lock while the first sends, then it reads the landed spend and is over-limit', async () => {
     const { t, permissionId } = await withCustomGrant();
     const here = await import('./session-execute');

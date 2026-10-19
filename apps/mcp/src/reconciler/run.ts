@@ -15,7 +15,7 @@ import { errorLabel, log } from '@/lib/edge';
 import { conclude, sentBefore } from '@/owner-calls/store';
 import { canSearchChain, readReceipt, searchChain, type ReadReceipt } from '@/owner-calls/receipt';
 import { chainAnswer, type ChainAnswer } from '@/payments/confirm';
-import { claimOpenSends, settleSend, type SendRow } from '@/payments/sends';
+import { claimOpenSends, settleSends, type SendEnd, type SendRow } from '@/payments/sends';
 import { claimUnresolved, expire, markAlerted, settle, txHashTaken, type PaymentRow } from '@/payments/store';
 
 export const RECONCILE_AFTER_MS = 60_000;
@@ -122,7 +122,7 @@ async function reconcileSends(clients: ChainClients, report: Report) {
           report.sends.open++;
           continue;
         }
-        await settleSend(row.id, end);
+        await settleSends([row.id], end);
         report.sends[end.state]++;
       } catch (err) {
         log('error', { msg: `reconcile ${row.id} failed`, error: errorLabel(err) });
@@ -133,12 +133,12 @@ async function reconcileSends(clients: ChainClients, report: Report) {
   }
 }
 
-async function sendOutcome(row: SendRow, clients: ChainClients) {
+async function sendOutcome(row: SendRow, clients: ChainClients): Promise<SendEnd | undefined> {
   const client = clients.publicClient(row.chainId);
   const head = await client.getBlockNumber();
   const windowEnd = row.fromBlock + SEND_WINDOW_BLOCKS;
-  // An execute settles only by its own userOp hash: its sender also sends refills and other executes.
-  if (row.idempotencyKey && !row.callsId) return head >= windowEnd ? { state: 'released' as const } : undefined;
+  const fromTransfer = row.idempotencyKey === null;
+  if (!fromTransfer && !row.callsId) return head >= windowEnd ? { state: 'released' } : undefined;
   const logs = await client.getLogs({
     address: entryPoint08Address,
     event: userOperationEvent,
@@ -148,8 +148,9 @@ async function sendOutcome(row: SendRow, clients: ChainClients) {
     strict: true,
   });
   const landed = logs.find((l) => l.args.success);
-  if (landed) return { state: 'landed' as const, txHash: landed.transactionHash };
-  if ((row.callsId && logs.length > 0) || head >= windowEnd) return { state: 'released' as const };
+  if (landed) return { state: 'landed', txHash: landed.transactionHash };
+  if (row.callsId && logs.length > 0) return { state: 'released', txHash: logs[0].transactionHash };
+  if (head >= windowEnd) return { state: 'released' };
   return undefined;
 }
 

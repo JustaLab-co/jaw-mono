@@ -18,13 +18,12 @@ import { errorLabel, log } from '@/lib/edge';
 import { reply } from '@/lib/fence';
 import { FloatBusy, FloatLost, inTurn, LOCK_WAIT_MS, withFloat } from '@/payments/float-lock';
 import {
-  dropSends,
   handToReconciler,
   noteCallsId,
   openSpends,
   recordSend,
   runOf,
-  settleSend,
+  settleSends,
   type SendRow,
 } from '@/payments/sends';
 import { NO_PAY_SCOPE, refusal } from './reply';
@@ -100,9 +99,12 @@ const UNREADABLE = 'Nothing was sent: the grant could not be read from the chain
 const maybeSent = (key: string) =>
   `This execute failed and may have been sent anyway. Send idempotencyKey ${key} again with the same calls: it returns this answer and never sends twice. ` +
   'Check jaw_session_history before sending it under a new key, or it may land twice.';
-const NEVER_SEEN =
-  'This execute may have been sent, but its answer was lost and it was not seen on chain in time, so its spend is no longer held. ' +
-  "Check the account's balances before sending it under a new key.";
+const NO_HASH =
+  'This key ran without a userOp hash on record: nothing was sent, or the answer was lost and it was not seen on chain in time. ' +
+  "Its spend is no longer held. Check the account's balances before sending it under a new idempotencyKey.";
+const notSeen = (userOpHash: string) =>
+  `userOp ${userOpHash} was not seen on chain in time, so its spend is no longer held; it may still land. ` +
+  "Check the account's balances before sending it under a new idempotencyKey.";
 
 type CallStatus = {
   status: number;
@@ -154,27 +156,25 @@ async function receiptOf(
   return { out: unconfirmed(key, userOpHash) };
 }
 
-/** What the run stored under this key ended as. Its rows share one userOp, so they share its fate. */
 function replayed(rows: SendRow[], key: string, hash: string): ToolResult | ReturnType<typeof answered> {
   if (rows[0].requestHash !== hash) {
     return refusal(`idempotency_conflict: idempotencyKey ${key} was used for another execute.${NOTHING_SENT}`);
   }
   const done = rows.find((r) => r.state === 'landed');
   if (done) return answered(landed(key, done.callsId as string, done.txHash as string));
-  const { state, callsId } = rows.find((r) => r.state === 'open') ?? rows[0];
-  if (!callsId) return refusal(state === 'open' ? maybeSent(key) : NEVER_SEEN);
-  return answered(state === 'open' ? unconfirmed(key, callsId) : reverted(key, callsId, null));
+  const { state, callsId, txHash } = rows.find((r) => r.state === 'open') ?? rows[0];
+  if (state === 'open') return callsId ? answered(unconfirmed(key, callsId)) : refusal(maybeSent(key));
+  if (!callsId) return refusal(NO_HASH);
+  return txHash ? answered(reverted(key, callsId, txHash)) : refusal(notSeen(callsId));
 }
 
 const logFailure = (msg: string) => (err: unknown) => log('error', { msg, error: errorLabel(err) });
 
 function concluded(ids: string[], out: Outcome) {
-  if (out.status === 'landed') {
-    const end = { state: 'landed' as const, txHash: out.txHash as Hex, callsId: out.userOpHash as Hex };
-    return Promise.all(ids.map((id) => settleSend(id, end)));
-  }
-  if (out.status === 'reverted') return Promise.all(ids.map((id) => settleSend(id, { state: 'released' })));
-  return handToReconciler(ids);
+  const callsId = out.userOpHash as Hex;
+  if (out.status === 'landed') return settleSends(ids, { state: 'landed', txHash: out.txHash as Hex, callsId });
+  if (out.status === 'reverted') return settleSends(ids, { state: 'released', txHash: out.txHash as Hex | null });
+  return handToReconciler(ids, undefined, callsId);
 }
 
 // `lost`: the request may have reached the bundler and only its answer was lost.
@@ -183,7 +183,7 @@ type Submitted = { sent: Hex } | { unsent: unknown } | { lost: unknown };
 function noteSubmitted(tx: Tx, ids: string[], submitted: Submitted) {
   if ('sent' in submitted) return noteCallsId(tx, ids, submitted.sent);
   if ('lost' in submitted) return handToReconciler(ids, tx);
-  return dropSends(tx, ids);
+  return settleSends(ids, { state: 'released' }, tx);
 }
 
 interface Run {
@@ -211,7 +211,6 @@ async function grantFor(t: Tenant, run: Run): Promise<ToolResult | { grant: Live
 
 type Reserved = { ids: string[]; submitted: Submitted; bridge: SessionBridge };
 
-/** Held from the key lookup to the bundler's answer, so a key runs once and the next execute counts this one. */
 async function submitUnder(t: Tenant, run: Run): Promise<ToolResult | Reserved> {
   return withFloat(t.connectionId, LOCK_WAIT_MS, async (hold) => {
     const stored = await hold.tx(async (tx) => {
@@ -279,7 +278,6 @@ function unsentReply(err: unknown, permissionId: string): ToolResult {
   );
 }
 
-/** The receipt is awaited outside the float lock: a later run counts this one's open rows until they settle. */
 async function executeUnder(t: Tenant, run: Run) {
   const reserved = await inTurn(t.connectionId, () => submitUnder(t, run));
   if (!('submitted' in reserved)) return reserved;

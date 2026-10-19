@@ -14,7 +14,6 @@ export interface RecordedSend {
 
 const dbNow = sql`statement_timestamp()`;
 const twoDayPeriodsAgo = sql`now() - interval '2 days'`;
-const open = (id: string) => and(eq(sends.id, id), eq(sends.state, 'open'));
 
 export interface NewSend {
   connectionId: string;
@@ -49,11 +48,6 @@ export async function runOf(tx: Tx, connectionId: string, key: string): Promise<
     .where(and(eq(sends.connectionId, connectionId), eq(sends.idempotencyKey, key)));
 }
 
-/** A run that never reached the bundler leaves nothing behind, so its key can run again. */
-export async function dropSends(tx: Tx, ids: string[]): Promise<void> {
-  await tx.delete(sends).where(and(inArray(sends.id, ids), eq(sends.state, 'open')));
-}
-
 export async function noteCallsId(tx: Tx, ids: string[], callsId: Hex): Promise<void> {
   await tx
     .update(sends)
@@ -61,21 +55,20 @@ export async function noteCallsId(tx: Tx, ids: string[], callsId: Hex): Promise<
     .where(and(inArray(sends.id, ids), eq(sends.state, 'open')));
 }
 
-export async function handToReconciler(ids: string[], tx: Tx = getDb()): Promise<void> {
+export async function handToReconciler(ids: string[], tx: Tx = getDb(), callsId?: Hex): Promise<void> {
   await tx
     .update(sends)
-    .set({ leaseUntil: dbNow })
+    .set({ leaseUntil: dbNow, ...(callsId && { callsId }) })
     .where(and(inArray(sends.id, ids), eq(sends.state, 'open')));
 }
 
-export async function settleSend(
-  id: string,
-  end: { state: 'landed'; txHash: Hex; callsId?: Hex } | { state: 'released' }
-) {
-  await getDb()
+export type SendEnd = { state: 'landed'; txHash: Hex; callsId?: Hex } | { state: 'released'; txHash?: Hex | null };
+
+export async function settleSends(ids: string[], end: SendEnd, tx: Tx = getDb()) {
+  await tx
     .update(sends)
     .set({ ...end, finishedAt: dbNow, leaseUntil: dbNow })
-    .where(open(id));
+    .where(and(inArray(sends.id, ids), eq(sends.state, 'open')));
 }
 
 export async function openSpends(permissionId: string, tx: Tx): Promise<Map<string, bigint>> {

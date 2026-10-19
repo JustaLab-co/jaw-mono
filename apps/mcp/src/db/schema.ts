@@ -211,7 +211,6 @@ export const sends = pgTable(
     permissionId: text('permission_id').notNull(),
     chainId: integer('chain_id').notNull(),
     sender: text('sender').notNull(),
-    // Null only on jaw_transfer rows, which the reconciler still finds by sender.
     idempotencyKey: text('idempotency_key'),
     requestHash: text('request_hash'),
     token: text('token'),

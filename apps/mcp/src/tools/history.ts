@@ -25,7 +25,10 @@ const row = z.object({
 const executeRow = z.object({
   sendId: z.string(),
   permissionId: z.string(),
-  state: z.enum(['open', 'landed', 'released']).describe('open until it lands or is released unsent'),
+  idempotencyKey: z.string().nullable(),
+  state: z
+    .enum(['open', 'landed', 'released'])
+    .describe('open until it lands; released when it reverted, was never sent, or was not seen on chain in time'),
   token: z.string().nullable().describe('What amount counts; null when the run moved no token'),
   amount: z.string().describe('Base units of token'),
   userOpHash: z.string().nullable(),
@@ -45,6 +48,7 @@ const historyOutput = z.object({
 const executeShown = (r: SendRow): z.infer<typeof executeRow> => ({
   sendId: r.id,
   permissionId: r.permissionId,
+  idempotencyKey: r.idempotencyKey,
   state: r.state,
   token: r.token,
   amount: r.amount,
