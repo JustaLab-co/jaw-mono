@@ -102,4 +102,16 @@ describe('jaw_read_contracts', () => {
     const out = await readContracts({ chainId: 8453, reads: [read('decimals'), read('nope')] }, usdc);
     expect(out).toMatchObject({ isError: true, content: [{ text: expect.stringContaining('"nope"') }] });
   });
+
+  it('refuses an event name or an unmatchable selector instead of failing the call', async () => {
+    const selector: Read = {
+      address: USDC,
+      abi: [{ type: 'function', name: 'decimals' }],
+      functionName: '0x313ce567',
+    };
+    for (const bad of [read('Transfer'), selector]) {
+      const out = await readContracts({ chainId: 8453, reads: [read('decimals'), bad] }, usdc);
+      expect(out).toMatchObject({ isError: true, content: [{ text: expect.stringMatching(/^Read 1: /) }] });
+    }
+  });
 });

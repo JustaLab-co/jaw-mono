@@ -42,6 +42,16 @@ function plain(v: unknown): unknown {
 }
 
 const abiOf = (r: Read) => r.abi as unknown as Abi;
+const functionsOf = (r: Read) => abiOf(r).filter((item) => item.type === 'function');
+
+// A hex name is matched as a selector, which throws on a fragment with no inputs.
+function hasFunction(r: Read) {
+  try {
+    return !!getAbiItem({ abi: functionsOf(r), name: r.functionName });
+  } catch {
+    return false;
+  }
+}
 
 function failure(error: Error, read: Read) {
   const message = (error as { shortMessage?: string }).shortMessage ?? error.message;
@@ -56,7 +66,7 @@ export async function readContracts(args: { chainId: number; reads: Read[] }, cl
   const chains = proxyChains().map((c) => c.id);
   if (!chains.includes(chainId))
     return refusal(`Chain ${chainId} is not one JAW supports. Supported: ${chains.join(', ')}.`);
-  const lacking = reads.findIndex((r) => !getAbiItem({ abi: abiOf(r), name: r.functionName }));
+  const lacking = reads.findIndex((r) => !hasFunction(r));
   if (lacking !== -1)
     return refusal(`Read ${lacking}: the ABI has no function named "${reads[lacking].functionName}".`);
 
