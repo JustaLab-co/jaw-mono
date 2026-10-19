@@ -28,7 +28,6 @@ export interface PermissionSpend {
   multiplier: number;
 }
 
-/** `wallet_grantPermissions` as the wallet takes it. */
 export interface GrantRequest {
   spender: Address;
   expiry: number;
@@ -37,7 +36,6 @@ export interface GrantRequest {
   capabilities?: { prefundSpender: true };
 }
 
-/** The x402 budget: a daily USDC allowance, and the transfer that payments and refills go through. */
 export function budgetGrant(b: {
   chainId: number;
   spender: Address;
@@ -63,7 +61,6 @@ type Granted = NonNullable<ReturnType<typeof parseGrantedPermission>>;
 const callKey = (target: string, selector: string) => `${target.toLowerCase()}:${selector.toLowerCase()}`;
 const spendKey = (s: Granted['spends'][number]) =>
   `${s.token.toLowerCase()}:${BigInt(s.allowance)}:${s.unit}:${s.multiplier}`;
-// Sorted, so the wallet's order does not matter, and joined whole, so a missing or repeated entry does.
 const sameKeys = (asked: string[], got: string[]) => asked.sort().join() === got.sort().join();
 
 /** Whether what the wallet granted is exactly what was asked. Start and salt are the wallet's. */

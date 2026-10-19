@@ -1,3 +1,4 @@
+import { ANY_TARGET } from '@jaw.id/core';
 import { usdcForNetwork } from '@jaw.id/agent';
 import type { McpServer } from '@modelcontextprotocol/server';
 import { and, eq } from 'drizzle-orm';
@@ -21,6 +22,7 @@ import {
 import { liveGrants, LIVE_GRANTS_PER_CONNECTION, type GrantKind } from '@/grants/store';
 import { errorLabel, log } from '@/lib/edge';
 import { reply } from '@/lib/fence';
+import { forbiddenTargets } from './owner-calls';
 import { NO_PAY_SCOPE, refusal } from './reply';
 
 const MAX_ENTRIES = 10;
@@ -56,15 +58,21 @@ const grantInput = z.strictObject({
     .describe('The contract functions the session key may call, each a target and a function signature'),
   spends: z
     .array(
-      z.strictObject({
-        token: address,
-        allowance: z
-          .string()
-          .regex(/^[1-9]\d{0,77}$/)
-          .describe('Base units of the token per period, as a decimal integer'),
-        unit: z.enum(SPEND_UNITS),
-        multiplier: z.number().int().min(1).max(65535).default(1).describe('Periods per limit, default 1'),
-      })
+      z
+        .strictObject({
+          token: address,
+          allowance: z
+            .string()
+            .regex(/^[1-9]\d{0,48}$/)
+            .refine((a) => BigInt(a) < 2n ** 160n, 'must fit the 160 bits a spend limit holds')
+            .describe('Base units of the token per period, as a decimal integer'),
+          unit: z.enum(SPEND_UNITS),
+          multiplier: z.number().int().min(1).max(65535).default(1).describe('Periods per limit, default 1'),
+        })
+        .refine(
+          (s) => s.unit !== 'year' || s.multiplier <= 5461,
+          'a yearly limit is held as months, so its multiplier is at most 5461'
+        )
     )
     .max(MAX_ENTRIES)
     .optional()
@@ -91,16 +99,11 @@ const open = new Map<string, { url: string; until: Date }>();
 interface Asked {
   kind: GrantKind;
   grant: GrantRequest;
-  /** What the owner is asked to approve, in the words of the summary. */
   what: string;
 }
 
-/** The request the input names, or why it cannot be asked. */
 function asked(t: Tenant, input: GrantInput, expiry: number): Asked | string {
   if (input.x402Budget) {
-    if (input.calls || input.spends || input.expiresAt) {
-      return 'x402Budget is a preset: pass it alone, or pass calls and spends without it.';
-    }
     const usdc = usdcForNetwork(`eip155:${t.chainId}`);
     if (!usdc) return "USDC is not supported on this connection's chain.";
     const allowance = parseUnits(input.x402Budget.perDay, usdc.decimals);
@@ -115,6 +118,11 @@ function asked(t: Tenant, input: GrantInput, expiry: number): Asked | string {
     return { kind: 'x402-budget', grant, what: `${input.x402Budget.perDay} USDC a day` };
   }
   if (!input.calls) return 'Pass x402Budget for the payment budget, or calls (and any spends) for a custom grant.';
+  const forbidden = forbiddenTargets(t).add(ANY_TARGET.toLowerCase());
+  const refused = input.calls.find((c) => forbidden.has(c.target.toLowerCase()));
+  if (refused) {
+    return `call_target_refused: a grant to call ${refused.target} is refused: the account itself, the permission manager, the EntryPoint contracts and the any-contract wildcard cannot be granted.`;
+  }
   const calls = input.calls.map((c) => ({ target: c.target as Address, functionSignature: c.functionSignature }));
   const spent = (input.spends ?? []).map((s) => ({ ...s, token: s.token as Address, multiplier: s.multiplier ?? 1 }));
   const grant: GrantRequest = {
@@ -133,12 +141,20 @@ export async function grantPermissions(t: Tenant, input: GrantInput, deps = DEFA
       `A grant request is still waiting for the owner at ${waiting.url}. Ask again once they approve or it expires at ${waiting.until.toISOString()}.`
     );
   }
+  if (input.x402Budget && (input.calls || input.spends || input.expiresAt)) {
+    return refusal('x402Budget is a preset: pass it alone, or pass calls and spends without it.');
+  }
   const requested = input.expiresAt ? new Date(input.expiresAt) : t.expiresAt;
   if (requested.getTime() <= Date.now()) {
     return refusal(`expiry_in_past: the expiry ${requested.toISOString()} has already passed. Ask for a later one.`);
   }
-  // A grant never outlives the connection whose session key holds it.
+  const until = new Date(Date.now() + APPROVE_WITHIN_MS);
   const expiresAt = requested < t.expiresAt ? requested : t.expiresAt;
+  if (expiresAt <= until) {
+    return refusal(
+      `expiry_too_soon: the grant would end at ${expiresAt.toISOString()}, before the owner's ${APPROVE_WITHIN_MS / 60_000} minutes to approve it are up. Ask for a later expiry.`
+    );
+  }
   const ask = asked(t, input, Math.floor(expiresAt.getTime() / 1000));
   if (typeof ask === 'string') return refusal(ask);
   if ((await liveGrants(t.connectionId)).length >= LIVE_GRANTS_PER_CONNECTION) {
@@ -147,7 +163,6 @@ export async function grantPermissions(t: Tenant, input: GrantInput, deps = DEFA
         'Wait for one to expire, or call jaw_session_disconnect, which revokes them all, and connect again.'
     );
   }
-  const until = new Date(Date.now() + APPROVE_WITHIN_MS);
   let wallet: Wallet;
   try {
     wallet = await deps.openWallet(t.chainId, until, t);
@@ -166,7 +181,7 @@ export async function grantPermissions(t: Tenant, input: GrantInput, deps = DEFA
         deps.readPermission
       );
       if (typeof checked === 'string') throw new Error(checked);
-      if (!isAddressEqual(checked.account as `0x${string}`, t.account)) throw new Error('granted from another account');
+      if (!isAddressEqual(checked.account as Address, t.account)) throw new Error('granted from another account');
       await getDb().transaction(async (tx) => {
         const [live] = await tx
           .select({ id: connections.id })
@@ -185,7 +200,8 @@ export async function grantPermissions(t: Tenant, input: GrantInput, deps = DEFA
     expiresAt: ends,
     summary:
       `Ask the account owner to open ${wallet.url} and approve ${ask.what} until ${ends} in their wallet. ` +
-      'Once they do, the session key acts within it with no further prompts; jaw_status shows the x402 budget in force. ' +
+      'Once they do, the session key acts within it with no further prompts. ' +
+      (ask.kind === 'x402-budget' ? 'jaw_status shows the budget in force. ' : '') +
       'A grant approved earlier on this connection stays approved on chain until it expires or jaw_session_disconnect revokes it.',
   });
 }

@@ -287,7 +287,7 @@ async function replay(t: Tenant, row: OwnerCallRow, hash: string, deps: OwnerCal
 
 const ENTRY_POINTS = [entryPoint06Address, entryPoint07Address, entryPoint08Address, entryPoint09Address];
 
-const forbiddenTargets = (t: Tenant) =>
+export const forbiddenTargets = (t: Tenant) =>
   new Set([t.account, PERMISSIONS_MANAGER_ADDRESS, ...ENTRY_POINTS].map((a) => a.toLowerCase()));
 
 export async function sendCalls(t: Tenant, input: SendCallsInput, deps: OwnerCallDeps = DEFAULTS): Promise<SendResult> {

@@ -18,7 +18,6 @@ export interface Tenant {
   clientName: string;
   scopes: ConnectionScope[];
   sessionAddress: Address;
-  /** When the connection ends. */
   expiresAt: Date;
   sessionKey(): Hex;
 }

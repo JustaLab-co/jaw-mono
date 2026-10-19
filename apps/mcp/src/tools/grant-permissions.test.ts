@@ -1,4 +1,6 @@
+import { PERMISSIONS_MANAGER_ADDRESS } from '@jaw.id/core';
 import { desc, eq } from 'drizzle-orm';
+import { randomBytes } from 'node:crypto';
 import { beforeAll, describe, expect, it } from 'vitest';
 import { verifyBearer, type Tenant } from '@/connections/auth';
 import {
@@ -33,7 +35,6 @@ async function connected() {
   return { c, t, signer, connectedWith: (await x402Budget(t.connectionId))?.permissionId };
 }
 
-/** Asks through a wallet that approves, or answers as `tamper` rewrites it, and waits for it to settle. */
 async function grant(
   t: Tenant,
   signer: ReturnType<typeof owner>,
@@ -199,6 +200,46 @@ describe('jaw_grant_permissions', () => {
     expect(after).toHaveLength(before.length);
   });
 
+  it('given a wallet answer with one call more than asked, then no grant is recorded', async () => {
+    const { t, signer } = await connected();
+    const before = await getDb().select().from(grants).where(eq(grants.connectionId, t.connectionId));
+
+    await grant(t, signer, twoByTwo, (granted) => ({
+      ...granted,
+      calls: [...(granted.calls as object[]), { target: WETH, selector: '0x23b872dd' }],
+    }));
+
+    const after = await getDb().select().from(grants).where(eq(grants.connectionId, t.connectionId));
+    expect(after).toHaveLength(before.length);
+  });
+
+  it('given an expiry inside the time the owner has to approve, then it is refused by name and no wallet opens', async () => {
+    const { t, signer } = await connected();
+
+    const { result, opened } = await grant(t, signer, {
+      ...twoByTwo,
+      expiresAt: new Date(Date.now() + 10 * 60_000).toISOString(),
+    });
+
+    expect(result.content[0].text).toMatch(/^expiry_too_soon: /);
+    expect(opened).toBe(0);
+  });
+
+  it.each([
+    ['the any-contract wildcard', () => '0x3232323232323232323232323232323232323232'],
+    ['the permission manager', () => PERMISSIONS_MANAGER_ADDRESS],
+    ['the account itself', (t: Tenant) => t.account],
+  ])('given a call to %s, then it is refused by name and no wallet opens', async (_name, target) => {
+    const { t, signer } = await connected();
+
+    const { result, opened } = await grant(t, signer, {
+      calls: [{ target: target(t), functionSignature: 'transfer(address,uint256)' }],
+    });
+
+    expect(result.content[0].text).toMatch(/^call_target_refused: /);
+    expect(opened).toBe(0);
+  });
+
   it.each<[string, GrantInput]>([
     ['the preset with calls', { x402Budget: { perDay: '1' }, calls: twoByTwo.calls }],
     [
@@ -243,6 +284,56 @@ describe('jaw_grant_permissions', () => {
     const result = await callTool(c.access_token, 'jaw_grant_permissions', {
       ...twoByTwo,
       spends: [{ token: WETH, allowance: '1', unit: 'fortnight' }],
+    });
+
+    expect(result.isError).toBe(true);
+    expect(result.content[0].text).toContain('Input validation error');
+  });
+
+  it('given an allowance past what a spend limit holds on chain, then the schema refuses it', async () => {
+    const { c } = await connected();
+
+    const result = await callTool(c.access_token, 'jaw_grant_permissions', {
+      ...twoByTwo,
+      spends: [{ token: WETH, allowance: (2n ** 160n).toString(), unit: 'week' }],
+    });
+
+    expect(result.isError).toBe(true);
+    expect(result.content[0].text).toContain('Input validation error');
+  });
+
+  it.each([
+    ['without its token', { token: null }],
+    ['with a weekly period', { period: 'week' as const }],
+  ])('given a budget row %s, then the database refuses it', async (_name, change) => {
+    const { t } = await connected();
+    const [row] = await getDb().select().from(grants).where(eq(grants.connectionId, t.connectionId));
+
+    const insert = getDb()
+      .insert(grants)
+      .values({ ...row, ...change, permissionId: `0x${randomBytes(32).toString('hex')}` });
+
+    await expect(insert).rejects.toThrow();
+  });
+
+  it('given a custom grant shaped like a daily USDC budget, then x402 payments still draw from the budget', async () => {
+    const { t, signer, connectedWith } = await connected();
+
+    await grant(t, signer, {
+      calls: [{ target: USDC, functionSignature: 'transfer(address,uint256)' }],
+      spends: [{ token: USDC, allowance: '9000000', unit: 'day' }],
+    });
+
+    expect(await newestRow(t)).toMatchObject({ kind: 'custom', token: USDC, period: 'day' });
+    expect((await x402Budget(t.connectionId))?.permissionId).toBe(connectedWith);
+  });
+
+  it('given a yearly limit whose months overflow the multiplier, then the schema refuses it', async () => {
+    const { c } = await connected();
+
+    const result = await callTool(c.access_token, 'jaw_grant_permissions', {
+      ...twoByTwo,
+      spends: [{ token: WETH, allowance: '1', unit: 'year', multiplier: 5462 }],
     });
 
     expect(result.isError).toBe(true);

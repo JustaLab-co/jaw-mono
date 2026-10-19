@@ -17,7 +17,6 @@ export interface LiveGrant {
   createdAt: Date;
 }
 
-/** An x402 budget: one USDC spend, whose token and allowance every budget row holds. */
 export interface Grant extends LiveGrant {
   token: Address;
   allowance: string;

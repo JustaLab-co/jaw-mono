@@ -7,9 +7,10 @@
 - `grant-preset`: `x402Budget` asks for the same USDC transfer call and daily USDC spend the connect page asks for, with `prefundSpender`, and the row reads `kind = x402-budget` and `period = day`.
 - `grant-custom`: calls and spends give a row with `kind = custom`. With one spend the row holds its token, allowance and period; with several they are null and the struct in `permission` holds them all.
 - `grant-clamp`: an `expiresAt` later than the connection's end asks the wallet for the connection's end, and the result's `expiresAt` says so.
-- `grant-past`: an `expiresAt` already past is refused as `expiry_in_past` before any link opens.
+- `grant-past`: an `expiresAt` already past is refused as `expiry_in_past`, and one that ends inside the 30 minutes the owner has to approve as `expiry_too_soon`, before any link opens.
+- `grant-target`: a call to the account itself, the permission manager, an EntryPoint or the any-contract wildcard `0x3232...3232` is refused as `call_target_refused` before any link opens.
 - `grant-mismatch`: a wallet answer that differs from the request in any call or spend records no row.
-- `grant-input`: the preset together with calls, spends or an expiry, spends without calls, a malformed function signature, and a period the wallet does not take are refused with no link.
+- `grant-input`: the preset together with calls, spends or an expiry, spends without calls, a malformed function signature, a period the wallet does not take, an allowance of 2^160 or more and a yearly multiplier above 5461 are refused with no link.
 - `grant-cap`: a connection holding 5 live grants of either kind is refused before a link opens.
 - `grant-one-open`: a second request while one waits on the owner is refused with the waiting link.
 - `grant-old-name`: `jaw_request_budget` is an unknown tool.
@@ -28,7 +29,8 @@ Preconditions: baseline preconditions of this map; Docker running; `JAW_KEYS_URL
 - grant-preset: `budget 1`, approve in the wallet. Pass: the newest `grants` row reads `kind = x402-budget`, `period = day`, `allowance = 1000000`, the USDC token, and `expires_at` equal to the connection's `expires_at` to the second.
 - grant-custom: `grant '{"calls":[{"target":"0x4200000000000000000000000000000000000006","functionSignature":"transfer(address,uint256)"}],"spends":[{"token":"0x4200000000000000000000000000000000000006","allowance":"1000000000000000","unit":"week"}]}'`, approve. Pass: keys.jaw.id shows WETH, the weekly limit and the expiry, and the row reads `kind = custom`, `period = week`.
 - grant-clamp: the grant above with `"expiresAt"` 90 days out. Pass: the result's `expiresAt` equals the connection's `expires_at`.
-- grant-past: the grant above with `"expiresAt"` an hour ago. Pass: the answer starts with `expiry_in_past:` and no `url` is returned.
+- grant-past: the grant above with `"expiresAt"` an hour ago, then ten minutes ahead. Pass: the answers start with `expiry_in_past:` and `expiry_too_soon:`, and no `url` is returned.
+- grant-target: `grant` with a call whose `target` is the connected account, then `0x3232323232323232323232323232323232323232`. Pass: `call_target_refused:` each time, no `url`.
 - grant-input: `grant '{"x402Budget":{"perDay":"1"},"calls":[...]}'`, then `grant '{"spends":[...]}'`. Pass: each is refused with no `url`.
 - grant-cap: approve grants until the connection holds 5 live ones, then ask again. Pass: refused naming 5 live grants, no `url`.
 - grant-one-open: ask, do not open the link, ask again. Pass: refused with the first `url`.

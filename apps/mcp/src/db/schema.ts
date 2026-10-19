@@ -14,7 +14,6 @@ import {
   uniqueIndex,
 } from 'drizzle-orm/pg-core';
 
-/** The periods `wallet_grantPermissions` takes for a spend limit. */
 export const SPEND_UNITS = ['minute', 'hour', 'day', 'week', 'month', 'year', 'forever'] as const;
 
 export const settings = pgTable('settings', {
@@ -110,7 +109,6 @@ export const grants = pgTable(
     chainId: integer('chain_id').notNull(),
     account: text('account').notNull(),
     spender: text('spender').notNull(),
-    // The grant's spend limit when it has exactly one, as every x402 budget does. The rest live in `permission`.
     token: text('token'),
     allowance: text('allowance'),
     period: text('period', { enum: SPEND_UNITS }),
@@ -128,7 +126,7 @@ export const grants = pgTable(
     index().on(t.connectionId, t.createdAt),
     check(
       'grant_budget_spend',
-      sql`${t.kind} <> 'x402-budget' or (${t.token} is not null and ${t.allowance} is not null and ${t.period} is not null)`
+      sql`${t.kind} <> 'x402-budget' or (${t.token} is not null and ${t.allowance} is not null and ${t.period} = 'day')`
     ),
   ]
 );

@@ -1,5 +1,5 @@
 {
-  "id": "b19ccc26-217b-4227-b8f4-512ce63f1fa2",
+  "id": "c82c4b50-f2ee-4e24-9bef-1be05b051d01",
   "prevId": "38c643a8-e340-4118-a498-b0c1e77ca17e",
   "version": "7",
   "dialect": "postgresql",
@@ -366,7 +366,7 @@
       "checkConstraints": {
         "grant_budget_spend": {
           "name": "grant_budget_spend",
-          "value": "\"grants\".\"kind\" <> 'x402-budget' or (\"grants\".\"token\" is not null and \"grants\".\"allowance\" is not null and \"grants\".\"period\" is not null)"
+          "value": "\"grants\".\"kind\" <> 'x402-budget' or (\"grants\".\"token\" is not null and \"grants\".\"allowance\" is not null and \"grants\".\"period\" = 'day')"
         }
       },
       "isRLSEnabled": false
