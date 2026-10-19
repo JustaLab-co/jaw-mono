@@ -214,13 +214,33 @@ describe('jaw_session_disconnect', () => {
     expect(await listed(c.access_token)).toBe(401);
   });
 
-  it('refuses while the chain cannot say whether a budget is live, and revokes nothing', async () => {
-    const { c, tenant } = await budgetConnection(async () => approved);
-    const { deps, sent } = fakes({ readPermission: async () => ({ status: 'unavailable' }) });
+  it('given a budget the chain cannot read, it revokes the others, returns the float and names the unread one', async () => {
+    const { c, tenant, permissionId, permission } = await budgetConnection(async () => approved);
+    const [first] = await getDb().select().from(grants).where(eq(grants.permissionId, permissionId));
+    const unreadable = `0x${randomBytes(32).toString('hex')}`;
+    await getDb()
+      .insert(grants)
+      .values({
+        ...first,
+        permissionId: unreadable,
+        permission: { ...permission, salt: '0x7' },
+        createdAt: new Date(),
+      });
+    const { deps, sent } = fakes({
+      readPermission: async (target) => (target.permissionId === unreadable ? { status: 'unavailable' } : approved),
+    });
 
-    expect((await disconnect(tenant, deps)).isError).toBe(true);
-    expect(sent).toEqual([]);
-    expect(await listed(c.access_token)).toBe(200);
+    const result = await disconnect(tenant, deps);
+
+    expect(result.isError).toBeFalsy();
+    expect(sent).toHaveLength(1);
+    expect(sent[0].filter((call) => call.to === MANAGER)).toHaveLength(1);
+    expect(args(sent[0][1]).args).toEqual([c.signer.address, 497_500n]);
+    expect(result.structuredContent).toMatchObject({ revoked: [permissionId], unread: [unreadable], swept: '497500' });
+    expect(result.structuredContent?.summary).toContain('could not be read');
+    expect(await revokedAt(permissionId)).not.toBeNull();
+    expect(await revokedAt(unreadable)).toBeNull();
+    expect(await listed(c.access_token)).toBe(401);
   });
 
   it('disconnects a read-only connection without sending anything', async () => {

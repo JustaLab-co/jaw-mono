@@ -19,6 +19,8 @@ export interface Grant {
   createdAt: Date;
 }
 
+export const LIVE_GRANTS_PER_CONNECTION = 5;
+
 const live = and(isNull(grants.revokedAt), gt(grants.expiresAt, sql`now()`));
 export const spendableBudget = and(live, eq(grants.kind, 'x402-budget'), isNull(grants.replacedAt));
 

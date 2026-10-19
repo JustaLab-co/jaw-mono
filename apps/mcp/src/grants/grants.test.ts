@@ -28,7 +28,7 @@ import {
   type NewGrant,
   type ReadPermission,
 } from './permission';
-import { liveGrants, x402Budget } from './store';
+import { liveGrants, LIVE_GRANTS_PER_CONNECTION, x402Budget } from './store';
 
 setTestEnv();
 beforeAll(TEST_PG_URL ? useTestPostgres : useTestDb);
@@ -421,6 +421,39 @@ describe('the permission of a budget', () => {
       [custom.permissionId, 'custom'],
       [connectedWith, 'x402-budget'],
     ]);
+  });
+
+  it('a connection at the cap of live grants is refused before a wallet opens, naming the cap', async () => {
+    const { t } = await connected();
+    for (let n = 1; n < LIVE_GRANTS_PER_CONNECTION; n++) await inTx(t.connectionId, await newGrantFrom(t.connectionId));
+    let opened = 0;
+
+    const result = await requestBudget(t, '1', {
+      openWallet: async () => {
+        opened++;
+        throw new Error('not reached');
+      },
+      readPermission: approvedOnChain,
+    });
+
+    expect('isError' in result && result.isError).toBe(true);
+    expect(result.content[0].text).toContain(`${LIVE_GRANTS_PER_CONNECTION} live grants`);
+    expect(opened).toBe(0);
+  });
+
+  it('a grant past the cap is not recorded, and an expired one no longer counts against it', async () => {
+    const { t } = await connected();
+    for (let n = 1; n < LIVE_GRANTS_PER_CONNECTION; n++) await inTx(t.connectionId, await newGrantFrom(t.connectionId));
+
+    await expect(inTx(t.connectionId, await newGrantFrom(t.connectionId))).rejects.toThrow(/live grants/);
+    expect(await liveGrants(t.connectionId)).toHaveLength(LIVE_GRANTS_PER_CONNECTION);
+
+    const [oldest] = (await liveGrants(t.connectionId)).slice(-1);
+    await getDb()
+      .update(grants)
+      .set({ expiresAt: new Date(Date.now() - 1000) })
+      .where(eq(grants.permissionId, oldest.permissionId));
+    await expect(inTx(t.connectionId, await newGrantFrom(t.connectionId))).resolves.toBeUndefined();
   });
 
   it('a budget replaced before a connection held several grants is never the x402 budget, and is still live to revoke', async () => {

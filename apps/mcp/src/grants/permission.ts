@@ -4,12 +4,12 @@ import {
   type PermissionReadTarget,
   type PermissionState,
 } from '@jaw.id/agent';
-import { sql } from 'drizzle-orm';
+import { eq, sql } from 'drizzle-orm';
 import { isAddressEqual, isHex, numberToHex, toFunctionSelector, type Address, type Hex } from 'viem';
 import type { Tx } from '@/db/client';
-import { grants } from '@/db/schema';
+import { connections, grants } from '@/db/schema';
 import { publicClientFor } from '@/lib/chain';
-import type { GrantKind } from './store';
+import { liveGrants, LIVE_GRANTS_PER_CONNECTION, type GrantKind } from './store';
 
 const TRANSFER_SIGNATURE = 'transfer(address,uint256)';
 
@@ -120,6 +120,10 @@ export async function checkGranted(
 }
 
 export async function recordGrant(tx: Tx, connectionId: string, grant: NewGrant) {
+  await tx.select({ id: connections.id }).from(connections).where(eq(connections.id, connectionId)).for('update');
+  if ((await liveGrants(connectionId, tx)).length >= LIVE_GRANTS_PER_CONNECTION) {
+    throw new Error(`the connection already holds ${LIVE_GRANTS_PER_CONNECTION} live grants`);
+  }
   await tx
     .insert(grants)
     .values({ ...grant, connectionId, createdAt: sql`clock_timestamp()` })

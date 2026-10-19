@@ -10,6 +10,7 @@ import {
 } from '@jaw.id/agent';
 import { afterAll, afterEach, describe, expect, it, vi } from 'vitest';
 import WebSocket, { WebSocketServer } from 'ws';
+import { useTestDb } from '@/db/test-db';
 import { setTestEnv } from './testkit';
 
 // A relay that pairs the two roles of a session and forwards what each sends, as relay.jaw.id does.
@@ -528,6 +529,7 @@ describe('the owner pool per account', () => {
   });
 
   it('given the account is full, then jaw_request_budget answers busy instead of throwing', async () => {
+    await useTestDb();
     const relay = await fresh();
     const { requestBudget } = await import('../tools/request-budget');
     const until = new Date(Date.now() + 8_000);

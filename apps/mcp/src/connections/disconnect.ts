@@ -60,6 +60,9 @@ export const disconnectOutput = z.object({
   stillApproved: z
     .array(z.string())
     .describe('Budgets left approved on chain because the payer could not pay the fee; the owner revokes them'),
+  unread: z
+    .array(z.string())
+    .describe('Grants left approved on chain because the chain could not be read for them; the owner revokes them'),
   swept: z.string().describe('USDC base units returned to the account'),
   txHash: z.string().nullable(),
   left: z.string().nullable().describe('USDC base units still in the payer'),
@@ -148,6 +151,7 @@ const DEFAULTS: DisconnectDeps = { readPermission: readOnChain, clients: chainCl
 interface Returned {
   revoked: Hex[];
   stillApproved: Hex[];
+  unread: Hex[];
   swept: bigint;
   txHash: Hex | null;
   left: bigint | null;
@@ -174,6 +178,7 @@ export async function disconnect(t: Tenant, deps = DEFAULTS): Promise<Reply> {
   const out: Output = {
     revoked: outcome.revoked,
     stillApproved: outcome.stillApproved,
+    unread: outcome.unread,
     swept: outcome.swept.toString(),
     txHash: outcome.txHash,
     left: outcome.left?.toString() ?? null,
@@ -249,6 +254,12 @@ function summarize(t: Tenant, r: Returned): string {
         'Nothing can spend from them: the session key went with this connection.'
     );
   }
+  if (r.unread.length) {
+    said.push(
+      `${r.unread.length} grant(s) could not be read on chain, so they were not revoked and stay approved until they expire or the owner revokes them in their wallet. ` +
+        'Nothing can spend from them: the session key went with this connection.'
+    );
+  }
   if (r.left) {
     const why = r.revoked.length && r.swept === 0n ? ': too little to sweep after the fee' : '';
     said.push(`${usdc(r.left)} stays in the payer ${t.sessionAddress}${why}.`);
@@ -278,12 +289,16 @@ async function sendBatch(
 ): Promise<Returned | string> {
   const revokes: { permissionId: Hex; call: SessionCall }[] = [];
   const seenRevoked: Hex[] = [];
+  const unread: Hex[] = [];
   for (const g of live) {
     const struct = toContractPermission(g.permission);
     const state = await deps
       .readPermission({ chainId: g.chainId, permissionId: g.permissionId, permission: g.permission })
       .catch((): PermissionState => ({ status: 'unavailable' }));
-    if (!struct || state.status !== 'ok') return REFUSALS.chain;
+    if (!struct || state.status !== 'ok') {
+      unread.push(g.permissionId);
+      continue;
+    }
     if (state.revoked) {
       seenRevoked.push(g.permissionId);
       continue;
@@ -310,7 +325,7 @@ async function sendBatch(
     to: token,
     data: encodeFunctionData({ abi: erc20Abi, functionName: 'transfer', args: [t.account, amount] }),
   });
-  const nothingSent = { revoked: [], swept: 0n, txHash: null, left: float, seenRevoked };
+  const nothingSent = { revoked: [], swept: 0n, txHash: null, left: float, seenRevoked, unread };
   if (revokes.length === 0 && free === 0n) return { ...nothingSent, stillApproved: [] };
 
   const sender = await deps.sender(t).catch((err) => {
@@ -371,6 +386,7 @@ async function sendBatch(
       txHash: result.txHash,
       left,
       seenRevoked,
+      unread,
     };
   };
 
@@ -398,5 +414,5 @@ async function sendBatch(
 
   const revoked = revokes.map((r) => r.permissionId);
   const left = await balanceAt().catch(() => null);
-  return { revoked, stillApproved: [], swept, txHash: sent.txHash, left, seenRevoked };
+  return { revoked, stillApproved: [], swept, txHash: sent.txHash, left, seenRevoked, unread };
 }

@@ -11,6 +11,7 @@ import { spends } from '@/connections/scopes';
 import { getDb } from '@/db/client';
 import { connections } from '@/db/schema';
 import { budgetGrant, checkGranted, readOnChain, recordGrant, type ReadPermission } from '@/grants/permission';
+import { liveGrants, LIVE_GRANTS_PER_CONNECTION } from '@/grants/store';
 import { errorLabel, log } from '@/lib/edge';
 import { reply } from '@/lib/fence';
 import { NO_PAY_SCOPE, refusal } from './reply';
@@ -40,6 +41,12 @@ export async function requestBudget(t: Tenant, perDay: string, deps = DEFAULTS) 
   if (!usdc) return refusal("USDC is not supported on this connection's chain.");
   const allowance = parseUnits(perDay, usdc.decimals);
   if (allowance === 0n) return refusal('A budget of zero would refuse every payment.');
+  if ((await liveGrants(t.connectionId)).length >= LIVE_GRANTS_PER_CONNECTION) {
+    return refusal(
+      `This connection already holds ${LIVE_GRANTS_PER_CONNECTION} live grants, the most one connection may hold. ` +
+        'Wait for one to expire, or call jaw_session_disconnect, which revokes them all, and connect again.'
+    );
+  }
   const grant = budgetGrant({
     chainId: t.chainId,
     spender: t.sessionAddress,
@@ -71,7 +78,7 @@ export async function requestBudget(t: Tenant, perDay: string, deps = DEFAULTS) 
           .select({ id: connections.id })
           .from(connections)
           .where(and(eq(connections.id, t.connectionId), isLive()))
-          .for('share');
+          .for('update');
         if (!live) throw new Error('connection ended');
         await recordGrant(tx, t.connectionId, checked);
       });
