@@ -80,7 +80,6 @@ export type ReadPermission = (target: PermissionReadTarget) => Promise<Permissio
 export const readOnChain: ReadPermission = (target) =>
   readPermissionState(target, { clients: { publicClient: publicClientFor } });
 
-// The column's default is for a build from before it, still running mid-deploy; this one names the kind.
 export type NewGrant = Omit<typeof grants.$inferInsert, 'connectionId' | 'createdAt'> & { kind: GrantKind };
 
 type GrantRefusal = 'invalid_response' | 'grant_mismatch' | 'grant_not_found' | 'verification_unavailable';
@@ -108,7 +107,6 @@ export async function checkGranted(
   const [spend] = grant.permissions.spends;
   return {
     permissionId,
-    // The only request grantMatches accepts today is the daily USDC budget.
     kind: 'x402-budget',
     chainId,
     account: permission.account,
@@ -121,7 +119,6 @@ export async function checkGranted(
   };
 }
 
-/** Stores a grant beside the connection's others; a second approval of the same permission is a no-op. */
 export async function recordGrant(tx: Tx, connectionId: string, grant: NewGrant) {
   await tx
     .insert(grants)

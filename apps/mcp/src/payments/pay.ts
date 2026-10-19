@@ -348,8 +348,6 @@ export async function pay(
   const confirm = { clients: deps.clients, later: deps.later };
 
   if (claimed.kind === 'resume') {
-    // The proof goes out again only while the budget it was signed under is live,
-    // which a newer budget no longer ends.
     const signedUnder = (await x402Budgets(t.connectionId)).find((g) => g.permissionId === claimed.row.permissionId);
     const stopped: Unreached | undefined = signedUnder
       ? await grantLive(signedUnder, deps)

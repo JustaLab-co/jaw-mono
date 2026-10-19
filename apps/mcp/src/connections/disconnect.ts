@@ -256,10 +256,6 @@ function summarize(t: Tenant, r: Returned): string {
   return said.join(' ');
 }
 
-/**
- * Revokes every live grant and returns the free float to the owner. Grants the
- * batch revoked, or the chain already shows revoked, are marked so.
- */
 async function returnFunds(hold: FloatHold, t: Session, deps: DisconnectDeps): Promise<Returned | string> {
   const usdc = usdcForNetwork(`eip155:${t.chainId}`);
   if (!usdc) return REFUSALS.chain;

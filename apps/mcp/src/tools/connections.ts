@@ -10,6 +10,7 @@ import { ownerRelay, WalletBusy, type OpenWallet, type Wallet } from '@/connecti
 import { endConnection, ownedBy, TopUpInFlight, type ConnectionRow } from '@/connections/rows';
 import { getDb } from '@/db/client';
 import { connections, grants } from '@/db/schema';
+import { spendableBudget } from '@/grants/store';
 import { FloatBusy, LOCK_WAIT_MS, withFloat } from '@/payments/float-lock';
 import { LEASE_MS } from '@/payments/store';
 import { verifyOnChain, type VerifySignature } from '@/lib/chain';
@@ -38,14 +39,15 @@ type View = z.infer<typeof connectionView>;
 async function viewsOf(t: Tenant, rows: (typeof connections.$inferSelect)[]): Promise<View[]> {
   const ids = rows.map((r) => r.id);
   const budgets = ids.length
-    ? await getDb().select().from(grants).where(inArray(grants.connectionId, ids)).orderBy(desc(grants.createdAt))
+    ? await getDb()
+        .select()
+        .from(grants)
+        .where(and(inArray(grants.connectionId, ids), spendableBudget))
+        .orderBy(desc(grants.createdAt))
     : [];
   const now = new Date();
   return rows.map((row) => {
-    // Newest first, so the first live x402 budget is the one in force, as x402Budget picks it.
-    const budget = budgets.find(
-      (g) => g.connectionId === row.id && g.kind === 'x402-budget' && !g.replacedAt && !g.revokedAt && g.expiresAt > now
-    );
+    const budget = budgets.find((g) => g.connectionId === row.id);
     return {
       id: row.id,
       current: row.id === t.connectionId,

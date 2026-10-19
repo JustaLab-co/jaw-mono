@@ -29,7 +29,6 @@ const output = z.object({ url: z.url(), summary: z.string() });
 /** The link of the request still open, per connection: asking again while it waits hands out the same one. */
 const open = new Map<string, { url: string; until: Date }>();
 
-/** Asks the owner's wallet for the permission, and adds it to the connection's budgets once the chain shows it. */
 export async function requestBudget(t: Tenant, perDay: string, deps = DEFAULTS) {
   const waiting = open.get(t.connectionId);
   if (waiting) {
