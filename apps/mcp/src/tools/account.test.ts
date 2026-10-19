@@ -73,6 +73,8 @@ describe('jaw_get_assets', () => {
       mainnets.map((id) => `eip155:${id}`).sort()
     );
     expect(r.structuredContent.failed).toEqual([]);
+    expect(r.structuredContent.unreported).toEqual([]);
+    expect(r.structuredContent.summary).not.toContain('Not reported');
   });
 
   it('given a token on a mainnet other than Base, then it lists it with decimals, symbol, name and a decimal balance', async () => {
@@ -258,10 +260,11 @@ describe('jaw_get_assets answers', () => {
     const r = await callTool(token, 'jaw_get_assets', { chainIds: [1, 10] });
 
     expect(r.structuredContent.chains).toEqual([expect.objectContaining({ chainId: 'eip155:1' })]);
-    expect(r.structuredContent.failed).toEqual([
-      { chainIds: ['eip155:10'], reason: expect.stringContaining('no answer') },
-    ]);
-    expect(r.structuredContent.summary).toContain('eip155:10');
+    expect(r.structuredContent.failed).toEqual([]);
+    expect(r.structuredContent.unreported).toEqual(['eip155:10']);
+    expect(r.structuredContent.summary).toContain('Not reported: eip155:10');
+    expect(r.structuredContent.summary).toContain('empty or not answered in time');
+    expect(r.structuredContent.summary).toContain('not known to be zero');
   });
 
   it('given a chunk the proxy never answers, then it is named as timed out and the rest comes back before 5 s', async () => {

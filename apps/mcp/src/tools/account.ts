@@ -16,8 +16,6 @@ import { refusal } from './reply';
 
 const CHAINS_PER_REQUEST = 20;
 const CHUNK_DEADLINE_MS = 4000;
-const NO_ANSWER =
-  'no answer: the proxy leaves out a chain that is empty and one that timed out, so the balance is unknown';
 const ASSET_TYPES = ['native', 'erc20'];
 const caip2 = (chainId: number) => `eip155:${chainId}`;
 const readOnly = { readOnlyHint: true, openWorldHint: true };
@@ -80,6 +78,7 @@ const assetsOutput = z.object({
   account: z.string(),
   chains: z.array(z.object({ chainId: z.string().describe('CAIP-2'), assets: z.array(assetOut) })),
   failed: z.array(z.object({ chainIds: z.array(z.string()), reason: z.string() })),
+  unreported: z.array(z.string()).describe('CAIP-2 chains the proxy left out of an answer: not known to be zero'),
   summary: z.string(),
 });
 
@@ -143,7 +142,7 @@ export function registerAccountTools(server: McpServer) {
     'jaw_get_assets',
     {
       description:
-        "The connected account's native and token balances on every supported mainnet, or the chains you name. Testnets are never read. A chain the proxy did not answer for within 4 s, or left out, is named in `failed` and its balance is unknown, not zero; the rest still come back.",
+        "The connected account's native and token balances on every supported mainnet, or the chains you name. Testnets are never read. A chunk of chains the proxy refused, or did not answer within 4 s, is named in `failed`. A chain the proxy left out of an answer that otherwise came back (it has nothing, or it did not answer in time) is listed in `unreported`: its balance is not known to be zero. The rest still come back.",
       inputSchema: assetInput,
       outputSchema: assetsOutput,
       annotations: readOnly,
@@ -173,24 +172,24 @@ export function registerAccountTools(server: McpServer) {
         )
         .sort((a, b) => Number(a.chainId.slice(7)) - Number(b.chainId.slice(7)));
       const errored = outcomes.flatMap((o) => ('error' in o ? [{ chainIds: o.ids.map(caip2), reason: o.error }] : []));
-      const silent = answered.flatMap(({ ids, byId }) => {
-        const gone = ids.filter((id) => !byId.has(id));
-        return gone.length ? [{ chainIds: gone.map(caip2), reason: NO_ANSWER }] : [];
-      });
-      const failed = [...errored, ...silent];
+      const unreported = answered.flatMap(({ ids, byId }) => ids.filter((id) => !byId.has(id)).map(caip2));
       if (errored.length === outcomes.length) {
         return refusal(`proxy_error: ${[...new Set(errored.map((f) => f.reason))].join('; ')}`);
       }
       const count = chains.reduce((n, c) => n + c.assets.length, 0);
-      const missing = failed.flatMap((f) => f.chainIds);
+      const missing = errored.flatMap((f) => f.chainIds);
       return reply(
         assetsOutput.parse({
           account,
           chains,
-          failed,
+          failed: errored,
+          unreported,
           summary:
             `${count} asset(s) on ${chains.length} chain(s).` +
-            (missing.length ? ` Could not read ${missing.join(', ')}: their balance is unknown, not zero.` : ''),
+            (missing.length ? ` Could not read ${missing.join(', ')}: their balance is unknown, not zero.` : '') +
+            (unreported.length
+              ? ` Not reported: ${unreported.join(', ')}. The proxy left them out (empty or not answered in time), so their balances are not known to be zero.`
+              : ''),
         })
       );
     }
