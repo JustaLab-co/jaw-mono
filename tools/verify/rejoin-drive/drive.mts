@@ -1,7 +1,7 @@
 // Drives the hosted server's rejoin against the real relay and the real cli-bridge page. No passkey is needed:
 // eth_chainId is answered by the page without a dialog.
 //
-//   JAW_LIVE_RELAY_URL=wss://relay.jaw.id JAW_LIVE_KEYS_URL=https://keys.jaw.id \
+//   JAW_LIVE_RELAY_URL=ws://localhost:18080 JAW_LIVE_KEYS_URL=http://localhost:13002 \
 //     bunx tsx --tsconfig apps/mcp/tsconfig.json tools/verify/rejoin-drive/drive.mts
 import assert from 'node:assert/strict';
 import { randomUUID } from 'node:crypto';
