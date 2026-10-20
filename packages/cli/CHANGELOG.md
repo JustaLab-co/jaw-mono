@@ -1,3 +1,9 @@
+## 0.5.1 (2026-10-19)
+
+### 🧱 Updated Dependencies
+
+- Updated @jaw.id/core to 1.7.0
+
 ## 0.5.0 (2026-10-16)
 
 ### 🚀 Features
