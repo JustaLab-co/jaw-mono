@@ -103,7 +103,7 @@ const liveDeps = (): PayDeps => ({
 /** The probe never answered, or the grant was gone: nothing was signed. */
 type Unreached = {
   kind: 'unreached';
-  code: 'blocked_url' | 'unreachable' | 'no_grant' | 'grant_revoked' | 'chain_unavailable';
+  code: 'blocked_url' | 'unreachable' | 'no_grant' | 'grant_revoked' | 'chain_unavailable' | 'store_failed';
   reason: string;
 };
 
@@ -142,6 +142,17 @@ async function liveBudget(connectionId: string, deps: PayDeps): Promise<Grant | 
     refused ??= stopped;
   }
   return refused ?? { kind: 'unreached', code: 'no_grant', reason: 'the budget ended while this payment waited' };
+}
+
+/** The row charged to the budget that pays it, when that is not the one it was claimed under. */
+async function charged(row: PaymentRow, token: string, chosen: Grant | Unreached): Promise<Grant | Unreached> {
+  if (chosen.kind === 'unreached' || chosen.permissionId === row.permissionId) return chosen;
+  try {
+    await chargeTo(row.id, token, chosen.permissionId);
+    return chosen;
+  } catch (err) {
+    return { kind: 'unreached', code: 'store_failed', reason: errorMessage(err) };
+  }
 }
 
 export const thrown = (err: unknown): Unreached => ({
@@ -377,10 +388,7 @@ export async function pay(
 
   const { row, token } = claimed;
   let signed = false;
-  const chosen = await liveBudget(t.connectionId, deps);
-  if (chosen.kind !== 'unreached' && chosen.permissionId !== row.permissionId) {
-    await chargeTo(row.id, token, chosen.permissionId);
-  }
+  const chosen = await charged(row, token, await liveBudget(t.connectionId, deps));
   const outcome: Outcome =
     chosen.kind === 'unreached'
       ? chosen

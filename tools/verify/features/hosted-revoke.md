@@ -13,6 +13,7 @@
 - `revoke-unconfirmed`: the wallet answered but the chain did not show the revoke within about 15 seconds. The request reads `approved` with code `unconfirmed`, and asking again marks the grant revoked once the chain shows it.
 - `link-cap`: grant and revoke links count toward the account's three open owner links with `jaw_send_calls` and `jaw_swap`. A fourth link of any kind is refused as `account_busy`.
 - `revoke-old-name`: `jaw_revoke_connection` is an unknown tool.
+- `revoke-in-wallet`: a budget the owner revoked in the wallet, which the server never heard of, is recorded revoked by the next payment or the next reconciler run. The payment is made from the connection's next live budget instead of failing `grant_revoked`.
 
 ## How to get to it (user POV)
 
@@ -30,4 +31,5 @@ Preconditions: baseline preconditions of this map; Docker running; `JAW_KEYS_URL
 - revoke-declined: `revoke <id>`, reject in the wallet. Pass: the grant is still listed `live`; the request row reads `owner_declined`.
 - link-cap: open three links without approving them (`budget 1` on three connections, or revokes of three ids), then ask a fourth. Pass: `account_busy:`, no `url`.
 - revoke-old-name: `call jaw_revoke_connection '{"id":"x"}'`. Pass: an unknown-tool error.
+- revoke-in-wallet: with two budgets (`budget 1` twice), revoke the newer one by `revoke <id>` and approve, then clear its `revoked_at` with psql so the server holds it live while the chain says revoked, as after a revoke made in the wallet. `pay $SELLER/exact`. Pass: `paid`, the `payments` row's `permission_id` is the older budget, and the newer one's `revoked_at` is set again. Clear it once more and wait for the server's own reconciler run, every 60 seconds (the stack sets no cron secret; with one, `/api/cron/reconcile` runs the same sweep and reports `grantsRevoked`). Pass: `revoked_at` is set within two runs.
 - After revoke-own, `disconnect`. Pass: it ends with no revoke error for the grant already revoked.

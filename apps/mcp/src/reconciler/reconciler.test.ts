@@ -508,7 +508,8 @@ describe('cron and metrics routes', () => {
     const gauge = async () =>
       (await (await call('metrics', 'cron-secret')).text()).match(/^jaw_mcp_wraps_past_window .*$/m)?.[0];
     expect(await gauge()).toBe('jaw_mcp_wraps_past_window 2');
-    await call('cron', 'cron-secret');
+    const res = await call('cron', 'cron-secret');
+    expect(await res.json()).toHaveProperty('grantsRevoked', expect.any(Number));
     expect(await gauge()).toBe('jaw_mcp_wraps_past_window 0');
   });
 });
@@ -847,7 +848,7 @@ describe('given grants the owner may have revoked in the wallet', () => {
       return answers[permissionId] ?? { status: 'ok', approved: true, revoked: false };
     }, 10_000);
 
-    expect(count).toBeGreaterThanOrEqual(1);
+    expect(count).toBe(1);
     expect(await revokedAtOf(revoked)).toBeInstanceOf(Date);
     for (const id of [unread, unapproved, mismatched, live, expired]) expect(await revokedAtOf(id)).toBeNull();
     expect(await revokedAtOf(marked)).toEqual(earlier);
