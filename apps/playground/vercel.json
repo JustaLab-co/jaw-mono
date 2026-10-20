@@ -4,5 +4,5 @@
   "installCommand": "cd ../../ && bun install --frozen-lockfile",
   "buildCommand": "cd ../../ && bunx nx run-many -t build -p @jaw.id/core @jaw.id/wagmi @jaw.id/ui && bunx nx build @jaw-mono/playground",
   "outputDirectory": ".next",
-  "git": { "deploymentEnabled": { "main": false } }
+  "git": { "deploymentEnabled": false }
 }

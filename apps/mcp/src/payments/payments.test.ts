@@ -132,7 +132,10 @@ const seller = createServer(async (req, res) => {
     dropNextLost = false;
     return void req.socket.destroy();
   }
-  if (path === '/slow') await new Promise((r) => setTimeout(r, 100));
+  if (path === '/slow') {
+    await new Promise((r) => setTimeout(r, 100));
+    balances.set(from.toLowerCase(), balanceOf(from) - BigInt(PRICES[path]));
+  }
   // Settles on chain, but names no transaction the server can read back yet.
   if (path === '/unconfirmed') {
     used.add(nonce.toLowerCase());
@@ -963,9 +966,21 @@ describe('jaw_session_x402_pay', () => {
   it('reserves the float for concurrent payments even when the server cannot refill', async () => {
     const { t } = await connected('1');
     balances.set(t.sessionAddress.toLowerCase(), 5_000n);
+    // The first signed payment stays unsettled until the other payment has answered, so
+    // only its reservation, not a spent balance, keeps the other from signing.
+    let release!: () => void;
+    const answered = new Promise<void>((r) => (release = r));
+    let held = false;
+    onProof.set('/slow', async () => {
+      if (held) return;
+      held = true;
+      await answered;
+    });
     const results = await Promise.all(
       [1, 2].map((n) =>
-        pay(t, { url: url('/slow'), idempotencyKey: `norefill-${n}` }, deps({ executor: () => undefined }))
+        pay(t, { url: url('/slow'), idempotencyKey: `norefill-${n}` }, deps({ executor: () => undefined })).finally(
+          release
+        )
       )
     );
     expect(results.map((r) => r.structuredContent?.kind).sort()).toEqual(['paid', 'refused']);

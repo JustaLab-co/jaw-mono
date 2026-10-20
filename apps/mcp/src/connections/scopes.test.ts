@@ -39,6 +39,7 @@ const TESTNET = 11155111;
 // `needs` is any one of these scopes.
 const TOOLS: Record<string, { needs: ConnectionScope[]; args: object }> = {
   jaw_session_status: { needs: ['wallet:read'], args: {} },
+  jaw_resolve_name: { needs: ['wallet:read'], args: { name: 'a\u0000.eth' } },
   jaw_session_x402_quote: { needs: ['wallet:read'], args: { url: 'http://127.0.0.1:9/paid' } },
   jaw_add_funds: { needs: ['wallet:read'], args: {} },
   // No query, so it refuses before reaching the catalog.
