@@ -23,6 +23,8 @@ export async function startRelay() {
     const id = url.searchParams.get('session')!;
     const role = url.searchParams.get('role') as 'cli' | 'browser';
     const pair = sessions.get(id) ?? {};
+    // As jaw-relay does, a second cli replaces the first.
+    if (role === 'cli') pair.cli?.close(4003, 'replaced');
     pair[role] = ws;
     sessions.set(id, pair);
     if (role === 'browser') pair.cli?.send(JSON.stringify({ type: 'browser_connected' }));

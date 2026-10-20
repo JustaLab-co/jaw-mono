@@ -157,6 +157,27 @@ describe('owner calls whose server restarted after the send started', () => {
     expect(await sent(id)).toMatchObject({ callsId: CALLS_ID });
   });
 
+  it('given an old process still waiting on the page, when a resumer joins the session, then the relay drops the old socket and its run ends', async () => {
+    const t = await connected();
+    const owned = deciding(t);
+    let ended = false;
+    const openWallet: OwnerCallDeps['openWallet'] = async (...args) => {
+      const wallet = await stallsAfter(9).openWallet(...args);
+      return { ...wallet, run: (work, joined) => wallet.run(work, joined).finally(() => (ended = true)) };
+    };
+    const first = await sendCalls(t, { calls: [CALL] }, depsOf(openWallet));
+    const id = first.structuredContent!.id;
+    const page = await replayingPage(first.structuredContent!.url!, owned.answer);
+    await vi.waitFor(() => expect(page.ids).toHaveLength(2));
+    await lapse(id);
+
+    await Promise.all(await resumeOwnerCalls(clients));
+
+    await vi.waitFor(() => expect(ended).toBe(true));
+    owned.decide();
+    expect(await sent(id)).toMatchObject({ callsId: CALLS_ID });
+  });
+
   it('given a resumer took the row, when the old process hears the account refused with a code, then it writes nothing and the resumed send goes on', async () => {
     const { id, page, server, decide, signIn } = await sendStartedThenRestarted({ stallAt: 1, holdAccounts: true });
     await resumeOwnerCalls(clients);
