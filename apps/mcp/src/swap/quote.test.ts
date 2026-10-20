@@ -511,6 +511,24 @@ describe('payment attempts', () => {
     expect(paidHits()).toHaveLength(0);
   });
 
+  it('given over_cap, when the backend asks 5000 again and the same key comes, then a new attempt buys the quote once', async () => {
+    const { t } = await connected('1');
+    backend.price = '5001';
+    await quoted(t);
+
+    backend.price = '5000';
+    const { row } = await quoted(t);
+
+    expect(row).toMatchObject({ state: 'quoting', code: null, paymentAttempt: 2, paymentKey: `swap:${row.id}:2` });
+    expect(row.quoteId).toMatch(/^aurora:0x/);
+    const rows = await paymentsOf(t.connectionId);
+    expect(rows.map((p) => [p.idempotencyKey, p.state])).toEqual([
+      [`swap:${row.id}:1`, 'failed'],
+      [`swap:${row.id}:2`, expect.stringMatching(/^(signed|settled)$/)],
+    ]);
+    expect(signatures()).toBe(1);
+  });
+
   it('given no budget on the connection, when the quote is bought, then quoting with no_grant and the key free to retry at once', async () => {
     const { t } = await connected();
 
