@@ -1121,6 +1121,7 @@ export function resolveDestination(accounts: readonly Address[]): Address;
 // @public
 export type RevokePermissionApiResponse = {
     success: boolean;
+    pending?: boolean;
 };
 
 // @public

@@ -1,9 +1,18 @@
 import { randomBytes } from 'node:crypto';
 import { createServer } from 'node:http';
 import type { AddressInfo } from 'node:net';
-import type { ChainClients } from '@jaw.id/agent';
+import type { ChainClients, TopUpExecutor } from '@jaw.id/agent';
 import { eq } from 'drizzle-orm';
-import { encodeAbiParameters, encodeEventTopics, parseAbi, type Address, type Hex, type PublicClient } from 'viem';
+import {
+  decodeFunctionData,
+  encodeAbiParameters,
+  encodeEventTopics,
+  erc20Abi,
+  parseAbi,
+  type Address,
+  type Hex,
+  type PublicClient,
+} from 'viem';
 import { afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
 import { verifyBearer, type Tenant } from '@/connections/auth';
 import {
@@ -16,7 +25,7 @@ import {
   walletsSettled,
 } from '@/connections/testkit';
 import { getDb } from '@/db/client';
-import { grants, sends } from '@/db/schema';
+import { grants, payments, sends } from '@/db/schema';
 import { TEST_PG_URL, useTestDb, useTestPostgres } from '@/db/test-db';
 import { x402Budget } from '@/grants/store';
 import { safeFetch } from '@/lib/safe-fetch';
@@ -34,6 +43,7 @@ const receipts = new Map<Hex, { from: Address; nonce: Hex }>();
 const balances = new Map<string, bigint>();
 const balanceOf = (a: string) => balances.get(a.toLowerCase()) ?? 0n;
 const used = new Set<string>();
+const permitted = new Set<string>();
 
 const seller = createServer((req, res) => {
   const path = new URL(req.url ?? '/', 'http://seller').pathname;
@@ -43,13 +53,13 @@ const seller = createServer((req, res) => {
   if (!signed) {
     const accepts = [
       {
-        scheme: 'exact',
+        scheme: path.startsWith('/upto') ? 'upto' : 'exact',
         network: 'eip155:84532',
         amount: price,
         asset: USDC,
         payTo: PAY_TO,
         maxTimeoutSeconds: 300,
-        extra: { name: 'USDC', version: '2' },
+        extra: { name: 'USDC', version: '2', facilitatorAddress: PAY_TO },
       },
     ];
     const challenge = { x402Version: 2, resource: { url: `http://${req.headers.host}${path}` }, accepts };
@@ -58,7 +68,7 @@ const seller = createServer((req, res) => {
       .end('{}');
   }
   const proof = JSON.parse(Buffer.from(String(signed), 'base64').toString());
-  const { nonce, from } = proof.payload.authorization;
+  const { nonce, from } = proof.payload.authorization ?? proof.payload.permit2Authorization;
   seen.push(nonce);
   used.add(nonce.toLowerCase());
   balances.set(from.toLowerCase(), balanceOf(from) - BigInt(price));
@@ -105,7 +115,7 @@ const node = {
       case 'balanceOf':
         return balanceOf(args[0] as string);
       case 'allowance':
-        return 0n;
+        return permitted.has(String(args[0]).toLowerCase()) ? 2n ** 160n : 0n;
       case 'authorizationState':
         return used.has(String(args[1]).toLowerCase());
     }
@@ -140,6 +150,7 @@ vi.mock('@/lib/chain', async (original) => ({
 }));
 
 setTestEnv();
+process.env.JAW_MCP_API_KEY = 'paymaster-test-key';
 process.env.JAW_MCP_INSECURE_FETCH_HOSTS = SELLER;
 process.env.JAW_MCP_RPC_URL = 'http://127.0.0.1:9';
 
@@ -236,6 +247,312 @@ describe('given 1 USDC a day and a payment of 0.6', () => {
       remainingToday: { amount: '400000' },
     });
     expect(status.structuredContent.budget).not.toHaveProperty('sendableToday');
+  });
+});
+
+const refused = { refusal: { code: 'budget_exhausted', next: 'jaw_grant_permissions' } };
+
+describe('given 1 USDC a day, 2 USDC of float, and a payment of 0.6 already made', () => {
+  const quote = (token: string, path: string) => callTool(token, 'jaw_session_x402_quote', { url: url(path) });
+
+  it('when the quote asks exactly what is left, then the quote is ready and the payment settles', async () => {
+    const { t, token } = await connected('1', 2_000_000n);
+    prices.set('/a', '600000');
+    prices.set('/left', '400000');
+    await pay(t, { url: url('/a') }, deps);
+    const quoted = await quote(token, '/left');
+    expect(quoted.structuredContent).toMatchObject({
+      readiness: { status: 'ready' },
+      budget: { remainingToday: { amount: '400000' } },
+    });
+    const paid = await pay(t, { url: url('/left') }, deps);
+    expect(paid.structuredContent).toMatchObject({ state: 'settled', kind: 'paid' });
+    expect(seen).toHaveLength(2);
+  });
+
+  it('when the quote asks one base unit more, then the quote says over_allowance and the payment is refused unsigned', async () => {
+    const { t, token } = await connected('1', 2_000_000n);
+    prices.set('/a', '600000');
+    prices.set('/over', '400001');
+    await pay(t, { url: url('/a') }, deps);
+    const quoted = await quote(token, '/over');
+    expect(quoted.structuredContent.readiness).toEqual({ status: 'not_ready', reason: 'over_allowance' });
+    const paid = await pay(t, { url: url('/over') }, deps);
+    expect(paid.structuredContent).toMatchObject(refused);
+    expect(seen).toHaveLength(1);
+  });
+});
+
+describe('given 1 USDC a day, an empty float and an account that can refill it', () => {
+  const quote = (token: string, path: string) => callTool(token, 'jaw_session_x402_quote', { url: url(path) });
+  const refilling: TopUpExecutor = {
+    request: async (method, params) => {
+      if (method === 'wallet_getCallsStatus') return { status: 200 };
+      const [{ calls }] = params as [{ calls: [{ data: Hex }] }];
+      const [to, amount] = decodeFunctionData({ abi: erc20Abi, data: calls[0].data }).args as [Address, bigint];
+      balances.set(to.toLowerCase(), balanceOf(to) + amount);
+      return { id: '0xrefill' };
+    },
+  };
+  const withRefill: PayDeps = { ...deps, executor: () => refilling };
+
+  it('when the quote asks exactly what is left after the refill fee, then the quote is ready and the payment settles', async () => {
+    const { t, token } = await connected('1', 0n);
+    balances.set(t.account.toLowerCase(), 5_000_000n);
+    prices.set('/left', '990000');
+    const quoted = await quote(token, '/left');
+    expect(quoted.structuredContent).toMatchObject({
+      readiness: { status: 'ready' },
+      budget: { remainingToday: { amount: '990000' } },
+    });
+    const paid = await pay(t, { url: url('/left') }, withRefill);
+    expect(paid.structuredContent).toMatchObject({ state: 'settled', kind: 'paid' });
+    expect(seen).toHaveLength(1);
+  });
+
+  it('when the quote asks one base unit more, then the quote says over_allowance and the payment is refused unsigned', async () => {
+    const { t, token } = await connected('1', 0n);
+    balances.set(t.account.toLowerCase(), 5_000_000n);
+    prices.set('/over', '990001');
+    const quoted = await quote(token, '/over');
+    expect(quoted.structuredContent.readiness).toEqual({ status: 'not_ready', reason: 'over_allowance' });
+    const paid = await pay(t, { url: url('/over') }, withRefill);
+    expect(paid.structuredContent).toMatchObject(refused);
+    expect(seen).toHaveLength(0);
+  });
+});
+
+describe('given 1 USDC a day and an empty float, for a price of 0.005 that a refill of 0.015 covers with its fee', () => {
+  const quote = (token: string, path: string) => callTool(token, 'jaw_session_x402_quote', { url: url(path) });
+  const refilling: TopUpExecutor = {
+    request: async (method, params) => {
+      if (method === 'wallet_getCallsStatus') return { status: 200 };
+      const [{ calls }] = params as [{ calls: [{ data: Hex }] }];
+      const [to, amount] = decodeFunctionData({ abi: erc20Abi, data: calls[0].data }).args as [Address, bigint];
+      balances.set(to.toLowerCase(), balanceOf(to) + amount);
+      return { id: '0xrefill' };
+    },
+  };
+  const withRefill: PayDeps = { ...deps, executor: () => refilling };
+
+  it('when the account holds exactly 0.015, then the quote is ready and the payment settles', async () => {
+    const { t, token } = await connected('1', 0n);
+    balances.set(t.account.toLowerCase(), 15_000n);
+    prices.set('/small', '5000');
+    const quoted = await quote(token, '/small');
+    expect(quoted.structuredContent.readiness).toEqual({ status: 'ready' });
+    const paid = await pay(t, { url: url('/small') }, withRefill);
+    expect(paid.structuredContent).toMatchObject({ state: 'settled', kind: 'paid' });
+  });
+
+  it('when the account holds one base unit less, then the quote says balance_low and the payment is refused unsigned', async () => {
+    const { t, token } = await connected('1', 0n);
+    balances.set(t.account.toLowerCase(), 14_999n);
+    prices.set('/small', '5000');
+    const quoted = await quote(token, '/small');
+    expect(quoted.structuredContent.readiness).toEqual({ status: 'not_ready', reason: 'balance_low' });
+    expect(quoted.structuredContent.summary).toContain(t.account);
+    const paid = await pay(t, { url: url('/small') }, withRefill);
+    expect(paid.structuredContent).toMatchObject({ refusal: { code: 'balance_low' } });
+    expect(seen).toHaveLength(0);
+  });
+});
+
+describe('given 1 USDC a day, an empty float, and an upto price whose Permit2 approval is still owed', () => {
+  const quote = (token: string, path: string) => callTool(token, 'jaw_session_x402_quote', { url: url(path) });
+  const approvals: string[] = [];
+  const approving = (owner: Address): TopUpExecutor => ({
+    request: async (method, params) => {
+      if (method === 'wallet_getCallsStatus') return { status: 200 };
+      const [{ calls }] = params as [{ calls: [{ data: Hex }] }];
+      const [to, amount] = decodeFunctionData({ abi: erc20Abi, data: calls[0].data }).args as [Address, bigint];
+      balances.set(to.toLowerCase(), balanceOf(to) + amount);
+      return { id: '0xrefill' };
+    },
+    approvePermit2: async (token) => {
+      approvals.push(token);
+      permitted.add(owner.toLowerCase());
+      return '0xapproval';
+    },
+  });
+  const withApproval: PayDeps = { ...deps, executor: (t) => approving(t.sessionAddress) };
+  afterEach(() => void (approvals.length = 0));
+
+  it('when the price leaves room for the 0.1 approval gas and the refill fee, then the quote is ready and pay approves and signs', async () => {
+    const { t, token } = await connected('1', 0n);
+    balances.set(t.account.toLowerCase(), 5_000_000n);
+    prices.set('/upto-edge', '890000');
+    const quoted = await quote(token, '/upto-edge');
+    expect(quoted.structuredContent.readiness).toEqual({ status: 'ready' });
+    expect(quoted.structuredContent.summary).toContain('Permit2');
+    const paid = await pay(t, { url: url('/upto-edge') }, withApproval);
+    expect(paid.structuredContent?.refusal).toBeUndefined();
+    expect(approvals).toEqual([USDC]);
+    expect(seen).toHaveLength(1);
+  });
+
+  it('when the price is one base unit more, then the quote says over_allowance and pay refuses before approving or signing', async () => {
+    const { t, token } = await connected('1', 0n);
+    balances.set(t.account.toLowerCase(), 5_000_000n);
+    prices.set('/upto-over', '890001');
+    const quoted = await quote(token, '/upto-over');
+    expect(quoted.structuredContent.readiness).toEqual({ status: 'not_ready', reason: 'over_allowance' });
+    const paid = await pay(t, { url: url('/upto-over') }, withApproval);
+    expect(paid.structuredContent).toMatchObject(refused);
+    expect(approvals).toEqual([]);
+    expect(seen).toHaveLength(0);
+  });
+});
+
+describe('quote and pay at the edge of what a budget can pay', () => {
+  const quote = (token: string, path: string) => callTool(token, 'jaw_session_x402_quote', { url: url(path) });
+  // Refills the session from the account, and the permission's on-chain counter counts it.
+  const counting: TopUpExecutor = {
+    request: async (method, params) => {
+      if (method === 'wallet_getCallsStatus') return { status: 200 };
+      const [{ calls }] = params as [{ calls: [{ data: Hex }] }];
+      const [to, amount] = decodeFunctionData({ abi: erc20Abi, data: calls[0].data }).args as [Address, bigint];
+      balances.set(to.toLowerCase(), balanceOf(to) + amount);
+      chain.spend += amount;
+      return { id: '0xrefill' };
+    },
+  };
+  const withRefill: PayDeps = { ...deps, executor: () => counting };
+  const funded = async (perDay: string, float: bigint) => {
+    const c = await connected(perDay, float);
+    balances.set(c.t.account.toLowerCase(), 5_000_000n);
+    return c;
+  };
+
+  describe('given 1 USDC a day, 0.1 paid through a refill of 0.2, so 0.1 of float is left and 0.8 can still be pulled', () => {
+    const spendFirst = async (t: Tenant) => {
+      prices.set('/first', '100000');
+      const first = await pay(t, { url: url('/first') }, withRefill);
+      expect(first.structuredContent).toMatchObject({ state: 'settled' });
+    };
+
+    it('when the quote asks the float plus all the cap less the refill fee, then it is ready and pay settles', async () => {
+      const { t, token } = await funded('1', 0n);
+      await spendFirst(t);
+      prices.set('/rest', '890000');
+      const quoted = await quote(token, '/rest');
+      expect(quoted.structuredContent).toMatchObject({
+        readiness: { status: 'ready' },
+        budget: { remainingToday: { amount: '890000' } },
+      });
+      const paid = await pay(t, { url: url('/rest') }, withRefill);
+      expect(paid.structuredContent).toMatchObject({ state: 'settled', kind: 'paid' });
+    });
+
+    it('when the quote asks one base unit more, then it is over_allowance and pay refuses unsigned', async () => {
+      const { t, token } = await funded('1', 0n);
+      await spendFirst(t);
+      prices.set('/rest', '890001');
+      const quoted = await quote(token, '/rest');
+      expect(quoted.structuredContent.readiness).toEqual({ status: 'not_ready', reason: 'over_allowance' });
+      const paid = await pay(t, { url: url('/rest') }, withRefill);
+      expect(paid.structuredContent).toMatchObject(refused);
+      expect(seen).toHaveLength(1);
+    });
+  });
+
+  describe('given 5 USDC a day and 5 USDC of float, under the 1 USDC a payment that pay allows', () => {
+    it('when the quote asks exactly 1 USDC, then it is ready and pay settles', async () => {
+      const { t, token } = await funded('5', 5_000_000n);
+      prices.set('/one', '1000000');
+      const quoted = await quote(token, '/one');
+      expect(quoted.structuredContent.readiness).toEqual({ status: 'ready' });
+      const paid = await pay(t, { url: url('/one') }, withRefill);
+      expect(paid.structuredContent).toMatchObject({ state: 'settled', kind: 'paid' });
+    });
+
+    it('when the quote asks one base unit more, then it is over_cap with its price and pay refuses over_cap unsigned', async () => {
+      const { t, token } = await funded('5', 5_000_000n);
+      prices.set('/more', '1000001');
+      const quoted = await quote(token, '/more');
+      expect(quoted.structuredContent).toMatchObject({
+        kind: 'paid',
+        price: { amount: '1000001' },
+        readiness: { status: 'not_ready', reason: 'over_cap' },
+      });
+      expect(quoted.structuredContent.summary).toContain('1000000');
+      const paid = await pay(t, { url: url('/more') }, withRefill);
+      expect(paid.structuredContent).toMatchObject({ refusal: { code: 'over_cap' } });
+      expect(seen).toHaveLength(0);
+    });
+  });
+
+  describe('given 1 USDC a day, 2 USDC of float, and a transfer of 0.5 recorded before the chain counter shows it', () => {
+    it('when the quote asks the 0.5 the day has left, then it is ready and pay settles from the float', async () => {
+      const { t, token } = await funded('1', 2_000_000n);
+      await landedLegacySend(t);
+      prices.set('/half', '500000');
+      const quoted = await quote(token, '/half');
+      expect(quoted.structuredContent.readiness).toEqual({ status: 'ready' });
+      const paid = await pay(t, { url: url('/half') }, withRefill);
+      expect(paid.structuredContent).toMatchObject({ state: 'settled', kind: 'paid' });
+    });
+
+    it('when the quote asks one base unit more, then it is over_allowance and pay refuses unsigned', async () => {
+      const { t, token } = await funded('1', 2_000_000n);
+      await landedLegacySend(t);
+      prices.set('/half', '500001');
+      const quoted = await quote(token, '/half');
+      expect(quoted.structuredContent.readiness).toEqual({ status: 'not_ready', reason: 'over_allowance' });
+      const paid = await pay(t, { url: url('/half') }, withRefill);
+      expect(paid.structuredContent).toMatchObject(refused);
+      expect(seen).toHaveLength(0);
+    });
+  });
+
+  describe('given 0.5 USDC a day and 0.3 of float that a payment signed under an earlier budget still holds', () => {
+    const holding = async (t: Tenant) => {
+      await getDb()
+        .insert(payments)
+        .values({
+          id: `pay_${randomBytes(12).toString('base64url')}`,
+          connectionId: t.connectionId,
+          idempotencyKey: `held-${randomBytes(6).toString('hex')}`,
+          requestHash: 'h',
+          permissionId: `0x${'c'.repeat(64)}`,
+          payer: t.sessionAddress.toLowerCase(),
+          url: 'https://seller.example/held',
+          state: 'signed',
+          leaseUntil: new Date(),
+          topUpAmount: '300000',
+          authorized: '300000',
+          nonce: `0x${randomBytes(32).toString('hex')}`,
+          network: 'eip155:84532',
+          scheme: 'exact',
+          deadline: new Date(Date.now() + 10 * 60_000),
+          authorization: {},
+          signedAt: new Date(),
+        });
+    };
+
+    it('when the quote asks what the cap leaves after that hold, then it is ready and pay settles', async () => {
+      const { t, token } = await funded('0.5', 300_000n);
+      await holding(t);
+      prices.set('/after-hold', '190000');
+      const quoted = await quote(token, '/after-hold');
+      expect(quoted.structuredContent).toMatchObject({
+        readiness: { status: 'ready' },
+        budget: { remainingToday: { amount: '190000' } },
+      });
+      const paid = await pay(t, { url: url('/after-hold') }, withRefill);
+      expect(paid.structuredContent).toMatchObject({ state: 'settled', kind: 'paid' });
+    });
+
+    it('when the quote asks one base unit more, then it is over_allowance and pay refuses unsigned', async () => {
+      const { t, token } = await funded('0.5', 300_000n);
+      await holding(t);
+      prices.set('/after-hold', '190001');
+      const quoted = await quote(token, '/after-hold');
+      expect(quoted.structuredContent.readiness).toEqual({ status: 'not_ready', reason: 'over_allowance' });
+      const paid = await pay(t, { url: url('/after-hold') }, withRefill);
+      expect(paid.structuredContent).toMatchObject(refused);
+      expect(seen).toHaveLength(0);
+    });
   });
 });
 
