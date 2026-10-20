@@ -16,6 +16,7 @@ type Resumable = {
   relay: string | null;
   approveBy: Date | null;
   updatedAt: Date;
+  resumeFailures: number;
 };
 
 export interface Rejoin<R extends Resumable> {
@@ -66,6 +67,7 @@ async function resumeOne<R extends Resumable>(
 ) {
   const row = await take(found);
   if (!row) return;
+  if (row.resumeFailures >= REJOIN_TRIES) return void (await lost(row));
   const connection = await findActive(row.connectionId);
   if (!connection) return void (await connectionEnded(row));
   const t = tokenlessTenant(connection);

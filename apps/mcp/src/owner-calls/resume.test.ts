@@ -223,6 +223,17 @@ describe('owner calls whose server restarted after the send started', () => {
     expect(await sent(id)).toMatchObject({ callsId: CALLS_ID });
   });
 
+  it('given the relay drops this server after it rejoined, then the call keeps its relay session and counts one failed rejoin', async () => {
+    const { id, url, page } = await sendStartedThenRestarted();
+    await Promise.all(await resumeOwnerCalls(clients));
+    await vi.waitFor(() => expect(page.ids).toHaveLength(4));
+
+    relay.sessions.get(new URL(url).searchParams.get('session')!)!.cli!.close();
+
+    await vi.waitFor(async () => expect((await rowOf(id)).resumeFailures).toBe(1));
+    expect((await rowOf(id)).relay).not.toBeNull();
+  });
+
   it('given an old process still waiting on the page, when a resumer joins the session, then the relay drops the old socket and its run ends', async () => {
     const t = await connected();
     const owned = deciding(t);
@@ -489,9 +500,40 @@ describe('which owner calls a resume picks', () => {
     });
     relay.refused.add(id.slice('oc_'.length));
 
-    for (let tick = 0; tick < 5; tick++) await Promise.all(await resumeOwnerCalls(clients));
+    for (let tick = 0; tick < 5; tick++) {
+      await lapse(id);
+      await Promise.all(await resumeOwnerCalls(clients));
+    }
 
     expect(await rowOf(id)).toMatchObject({ relay: null, resumeFailures: 5, sessionUntil: null });
+  });
+
+  it('given the relay is down, when status reads come in quick succession, then they do not use up the five tries', async () => {
+    const pair = generateKeyPairSync('ec', { namedCurve: 'P-256' });
+    const id = await waitingCall({
+      minutesAgo: 3_000,
+      sealed: {
+        key: pair.privateKey.export({ format: 'der', type: 'pkcs8' }).toString('hex'),
+        peer: pair.publicKey.export({ format: 'der', type: 'spki' }).toString('hex'),
+      },
+    });
+    relay.refused.add(id.slice('oc_'.length));
+
+    for (let read = 0; read < 5; read++) await Promise.all(await resumeOwnerCalls(clients));
+
+    const row = await rowOf(id);
+    expect(row).toMatchObject({ resumeFailures: 1, relay: expect.any(String) });
+    expect(row.sessionUntil!.getTime()).toBeGreaterThan(Date.now() + 20_000);
+  });
+
+  it('given the five tries were used and ending the wait failed, when a tick finds the row, then the wait ends at once', async () => {
+    const id = await waitingCall({ minutesAgo: 3_000 });
+    await getDb().update(ownerCalls).set({ resumeFailures: 5 }).where(eq(ownerCalls.id, id));
+
+    await Promise.all(await resumeOwnerCalls(clients));
+
+    expect(await rowOf(id)).toMatchObject({ relay: null, sessionUntil: null });
+    expect(relay.sessions.has(id.slice('oc_'.length))).toBe(false);
   });
 
   it('given a lease that ended inside the stall grace, then no resume takes it over until the grace passes', async () => {

@@ -8,8 +8,15 @@ import { leasedSwaps, type SwapRow } from './store';
 
 export type SwapRunDeps = { pollMs?: number; backend?: BackendDeps };
 
-export const followSwap = (account: Address, row: SwapRow, wallet: Wallet, deps: SwapRunDeps) =>
-  followOwner(leasedSwaps, row, wallet, (ask) => approve(ask, row, account, deps.pollMs, deps.backend), 'swapId');
+export const followSwap = (account: Address, row: SwapRow, wallet: Wallet, deps: SwapRunDeps, resumed = false) =>
+  followOwner(
+    leasedSwaps,
+    row,
+    wallet,
+    (ask) => approve(ask, row, account, deps.pollMs, deps.backend),
+    'swapId',
+    resumed
+  );
 
 const rejoin = (deps: SwapRunDeps): Rejoin<SwapRow> => ({
   idField: 'swapId',
@@ -17,7 +24,7 @@ const rejoin = (deps: SwapRunDeps): Rejoin<SwapRow> => ({
   release: leasedSwaps.release,
   failed: leasedSwaps.failed,
   lost: leasedSwaps.end,
-  start: (row, t) => (wallet) => followSwap(t.account, row, wallet, deps),
+  start: (row, t) => (wallet) => followSwap(t.account, row, wallet, deps, true),
 });
 
 export const swapsWaiting = (deps: SwapRunDeps = {}) => waitingIn(leasedSwaps.toResume, rejoin(deps));

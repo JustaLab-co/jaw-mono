@@ -6,8 +6,8 @@ import { approve } from './approve';
 import { followOwner } from './follow';
 import { leasedCalls, type OwnerCallRow } from './store';
 
-export const followCalls = (row: OwnerCallRow, wallet: Wallet, clients: ChainClients) =>
-  followOwner(leasedCalls, row, wallet, (ask) => approve(ask, row, clients), 'ownerCallId');
+export const followCalls = (row: OwnerCallRow, wallet: Wallet, clients: ChainClients, resumed = false) =>
+  followOwner(leasedCalls, row, wallet, (ask) => approve(ask, row, clients), 'ownerCallId', resumed);
 
 const rejoin = (clients: ChainClients): Rejoin<OwnerCallRow> => ({
   idField: 'ownerCallId',
@@ -15,7 +15,7 @@ const rejoin = (clients: ChainClients): Rejoin<OwnerCallRow> => ({
   release: leasedCalls.release,
   failed: leasedCalls.failed,
   lost: leasedCalls.end,
-  start: (row) => (wallet) => followCalls(row, wallet, clients),
+  start: (row) => (wallet) => followCalls(row, wallet, clients, true),
 });
 
 export const callsWaiting = (clients: ChainClients = chainClients) => waitingIn(leasedCalls.toResume, rejoin(clients));

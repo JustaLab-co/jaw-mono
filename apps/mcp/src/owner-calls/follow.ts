@@ -9,14 +9,16 @@ type Held = { id: string; leaseHolder: string | null };
 
 /**
  * Runs an owner calls or swap approval on `wallet` while this process holds the row.
- * A run that fails on the way, not on an answer, keeps the stored relay session for the next tick.
+ * A run that fails on the way, not on an answer, keeps the stored relay session for the next tick,
+ * and counts as a failed rejoin when it was a resumed run.
  */
 export function followOwner<R extends Held>(
   leased: Leased<R>,
   row: R,
   wallet: Wallet,
   work: (ask: Ask) => Promise<void>,
-  idField: 'ownerCallId' | 'swapId'
+  idField: 'ownerCallId' | 'swapId',
+  resumed = false
 ): void {
   let rejoinable = false;
   const stop = keepLease(
@@ -25,7 +27,7 @@ export function followOwner<R extends Held>(
       if (!held && (await leased.holderOf(row)) !== row.leaseHolder) wallet.close();
       return held;
     },
-    () => (rejoinable ? leased.release(row) : leased.end(row))
+    () => (rejoinable ? (resumed ? leased.miss(row) : leased.release(row)) : leased.end(row))
   );
   void wallet
     .run(work, (resume) => leased.saveRelay(row, sealResume(config().ring, resume, row.id)))

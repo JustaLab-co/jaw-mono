@@ -1,4 +1,4 @@
-import { and, asc, eq, gt, inArray, isNotNull, isNull, lt, lte, or, sql, type SQL } from 'drizzle-orm';
+import { and, asc, eq, gt, inArray, isNotNull, isNull, lte, or, sql, type SQL } from 'drizzle-orm';
 import type { PgColumn, PgTable } from 'drizzle-orm/pg-core';
 import { heldSince, sessionLeaseEnd } from '@/connections/session-lease';
 import { randomToken } from '@/lib/token';
@@ -17,6 +17,8 @@ type LeasedTable = PgTable & {
 
 /** Rejoins that may fail before a row is left to the rules of a lost link. */
 export const REJOIN_TRIES = 5;
+/** After a failed rejoin the row waits this long, times the failures so far, before the next try. */
+const REJOIN_BACKOFF_MS = 30_000;
 
 type Held = { id: string; leaseHolder: string | null };
 
@@ -38,9 +40,14 @@ export function leasedRows<R extends Held>(table: LeasedTable) {
     awaiting,
     gt(table.approveBy, dbNow),
     or(isNull(table.sessionUntil), lte(table.sessionUntil, heldSince)),
-    isNotNull(table.relay),
-    lt(table.resumeFailures, REJOIN_TRIES)
+    isNotNull(table.relay)
   );
+  const end = (row: R) => write(and(heldBy(row), open), { sessionUntil: null, relay: null });
+  const failed = (row: R) =>
+    write(and(heldBy(row), open), {
+      sessionUntil: sql`statement_timestamp() + ${REJOIN_BACKOFF_MS} * (${table.resumeFailures} + 1) * interval '1 millisecond'`,
+      resumeFailures: sql`${table.resumeFailures} + 1`,
+    });
   return {
     heldBy,
     resumable,
@@ -57,9 +64,13 @@ export function leasedRows<R extends Held>(table: LeasedTable) {
       write(and(eq(table.id, row.id), resumable), { leaseHolder: randomToken(), sessionUntil: sessionLeaseEnd }),
     renew: (row: R) => write(and(heldBy(row), awaiting), { sessionUntil: sessionLeaseEnd }),
     release: (row: R) => write(and(heldBy(row), open), { sessionUntil: null }),
-    end: (row: R) => write(and(heldBy(row), open), { sessionUntil: null, relay: null }),
-    failed: (row: R) =>
-      write(and(heldBy(row), open), { sessionUntil: null, resumeFailures: sql`${table.resumeFailures} + 1` }),
+    end,
+    failed,
+    /** Counts a failed rejoin and, on the last try, ends the wait for a resume. */
+    miss: async (row: R) => {
+      const counted = (await failed(row)) as { resumeFailures: number } | undefined;
+      if (counted && counted.resumeFailures >= REJOIN_TRIES) await end(row);
+    },
     saveRelay: (row: R, relay: string) => write(and(heldBy(row), awaiting), { relay }),
     holderOf: async (row: R) => {
       const [found] = await getDb().select({ holder: table.leaseHolder }).from(table).where(eq(table.id, row.id));
