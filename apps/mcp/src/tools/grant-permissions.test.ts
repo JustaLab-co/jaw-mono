@@ -433,7 +433,7 @@ describe('jaw_grant_permissions', () => {
 
     await getDb()
       .update(permissionRequests)
-      .set({ sessionUntil: sql`now() - interval '1 second'` })
+      .set({ sessionUntil: sql`now() - interval '61 seconds'` })
       .where(eq(permissionRequests.walletUrl, String(url)));
     const again = await grantPermissions(t, twoByTwo, deps);
     release();

@@ -405,7 +405,7 @@ describe('jaw_revoke_permission', () => {
     const first = await revokePermission(t, { permissionId: budget }, deps({ held: wait.promise }));
     await getDb()
       .update(permissionRequests)
-      .set({ sessionUntil: sql`now() - interval '1 second'` })
+      .set({ sessionUntil: sql`now() - interval '61 seconds'` })
       .where(eq(permissionRequests.walletUrl, urlOf(first)!));
 
     const again = await revokePermission(t, { permissionId: budget }, deps());
@@ -436,7 +436,7 @@ describe('jaw_revoke_permission', () => {
     await vi.waitFor(() => expect(asked.map((a) => a.method)).toContain('wallet_revokePermissions'));
     await getDb()
       .update(permissionRequests)
-      .set({ sessionUntil: sql`now() - interval '1 second'` })
+      .set({ sessionUntil: sql`now() - interval '61 seconds'` })
       .where(eq(permissionRequests.walletUrl, urlOf(first)!));
 
     const again = await revokePermission(t, { permissionId: budget }, holding);
@@ -471,7 +471,7 @@ describe('jaw_revoke_permission', () => {
     await vi.waitFor(() => expect(asked.map((a) => a.method)).toContain('wallet_revokePermissions'));
     await getDb()
       .update(permissionRequests)
-      .set({ sessionUntil: sql`now() - interval '1 second'` })
+      .set({ sessionUntil: sql`now() - interval '61 seconds'` })
       .where(eq(permissionRequests.walletUrl, urlOf(first)!));
 
     const theirs = await revokePermission(other.t, { permissionId: budget }, holding);
@@ -495,7 +495,7 @@ describe('jaw_revoke_permission', () => {
     const first = await revokePermission(t, { permissionId: budget }, deps({ held: wait.promise }));
     await getDb()
       .update(permissionRequests)
-      .set({ sessionUntil: sql`now() - interval '1 second'` })
+      .set({ sessionUntil: sql`now() - interval '61 seconds'` })
       .where(eq(permissionRequests.walletUrl, urlOf(first)!));
 
     const theirs = await revokePermission(other.t, { permissionId: budget }, deps());
