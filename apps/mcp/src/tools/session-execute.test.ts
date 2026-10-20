@@ -694,51 +694,58 @@ describe('jaw_session_execute', () => {
     expect(await statusOf()).toBe('revoked');
   });
 
-  it('given a submit that hangs past its bound, then it answers may have been sent and the rows stay held', async () => {
-    const { c, t, permissionId } = await withCustomGrant();
-    let reached = false;
-    bridge.gate = new Promise(() => {});
-    bridge.reached = () => (reached = true);
-    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+  // Faked timers stall the Postgres driver, and the bound does not depend on the database.
+  it.skipIf(TEST_PG_URL)(
+    'given a submit that hangs past its bound, then it answers may have been sent and the rows stay held',
+    async () => {
+      const { c, t, permissionId } = await withCustomGrant();
+      let reached = false;
+      bridge.gate = new Promise(() => {});
+      bridge.reached = () => (reached = true);
+      vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
 
-    const result = execute(c.access_token, permissionId, [transfer(BOB, 1n)]);
-    while (!reached) await vi.advanceTimersByTimeAsync(50);
-    await vi.advanceTimersByTimeAsync(60_001);
-    vi.useRealTimers();
+      const result = execute(c.access_token, permissionId, [transfer(BOB, 1n)]);
+      while (!reached) await vi.advanceTimersByTimeAsync(50);
+      await vi.advanceTimersByTimeAsync(60_001);
+      vi.useRealTimers();
 
-    expect((await result).content[0].text).toMatch(/may have been sent anyway/);
-    expect(await rowsOf(t.connectionId)).toEqual([expect.objectContaining({ state: 'open', callsId: null })]);
-  });
+      expect((await result).content[0].text).toMatch(/may have been sent anyway/);
+      expect(await rowsOf(t.connectionId)).toEqual([expect.objectContaining({ state: 'open', callsId: null })]);
+    }
+  );
 
-  it('given a submit that answers after its bound, then its userOp hash is recorded on the open rows and the reconciler settles the run by it', async () => {
-    const { c, t, permissionId } = await withCustomGrant();
-    let reached = false;
-    const release = deferred();
-    bridge.gate = release.promise;
-    bridge.reached = () => (reached = true);
-    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+  it.skipIf(TEST_PG_URL)(
+    'given a submit that answers after its bound, then its userOp hash is recorded on the open rows and the reconciler settles the run by it',
+    async () => {
+      const { c, t, permissionId } = await withCustomGrant();
+      let reached = false;
+      const release = deferred();
+      bridge.gate = release.promise;
+      bridge.reached = () => (reached = true);
+      vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
 
-    const result = execute(c.access_token, permissionId, [transfer(BOB, 1n)]);
-    while (!reached) await vi.advanceTimersByTimeAsync(50);
-    await vi.advanceTimersByTimeAsync(60_001);
-    vi.useRealTimers();
-    expect((await result).content[0].text).toMatch(/may have been sent anyway/);
+      const result = execute(c.access_token, permissionId, [transfer(BOB, 1n)]);
+      while (!reached) await vi.advanceTimersByTimeAsync(50);
+      await vi.advanceTimersByTimeAsync(60_001);
+      vi.useRealTimers();
+      expect((await result).content[0].text).toMatch(/may have been sent anyway/);
 
-    release.resolve();
-    const userOpHash: Hex = `0x${'1'.padStart(64, '0')}`;
-    await vi.waitFor(async () =>
-      expect(await rowsOf(t.connectionId)).toEqual([expect.objectContaining({ state: 'open', callsId: userOpHash })])
-    );
+      release.resolve();
+      const userOpHash: Hex = `0x${'1'.padStart(64, '0')}`;
+      await vi.waitFor(async () =>
+        expect(await rowsOf(t.connectionId)).toEqual([expect.objectContaining({ state: 'open', callsId: userOpHash })])
+      );
 
-    chain.userOps.push({ userOpHash, sender: t.sessionAddress, success: true, blockNumber: 101n });
-    chain.head = 120n;
-    vi.useFakeTimers({ toFake: ['Date'] });
-    vi.setSystemTime(Date.now() + 1_000);
-    await reconcile({ publicClient: () => node as unknown as PublicClient });
-    expect(await rowsOf(t.connectionId)).toEqual([
-      expect.objectContaining({ state: 'landed', txHash: TX, callsId: userOpHash }),
-    ]);
-  });
+      chain.userOps.push({ userOpHash, sender: t.sessionAddress, success: true, blockNumber: 101n });
+      chain.head = 120n;
+      vi.useFakeTimers({ toFake: ['Date'] });
+      vi.setSystemTime(Date.now() + 1_000);
+      await reconcile({ publicClient: () => node as unknown as PublicClient });
+      expect(await rowsOf(t.connectionId)).toEqual([
+        expect.objectContaining({ state: 'landed', txHash: TX, callsId: userOpHash }),
+      ]);
+    }
+  );
 
   it('given a landed run the logs cannot show, then it holds its spend for ten minutes after it landed and no longer', async () => {
     const { c, t, permissionId } = await withCustomGrant();
