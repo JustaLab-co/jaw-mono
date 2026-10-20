@@ -258,11 +258,41 @@ describe('jaw_get_calls_history', () => {
           leaseUntil: now,
           finishedAt: now,
         });
-      answer = () => [pending(hash(0xd1)), pending(hash(0xd2)), pending(hash(0xd3))];
+      await getDb()
+        .insert(sends)
+        .values({
+          id: 'send_released',
+          connectionId: t.connectionId,
+          permissionId: '0x01',
+          chainId: t.chainId,
+          sender: t.sessionAddress.toLowerCase(),
+          amount: '0',
+          periodStart: 0,
+          fromBlock: 1n,
+          state: 'released',
+          callsId: hash(0xd4),
+          txHash: hash(0xb5),
+          leaseUntil: now,
+          finishedAt: now,
+        });
+      await getDb()
+        .insert(ownerCalls)
+        .values({
+          ...base,
+          id: 'oc_sent_hash',
+          idempotencyKey: 'k2',
+          connectionId: t.connectionId,
+          state: 'sent',
+          callsId: hash(0xd5),
+          txHash: hash(0xb6),
+        });
+      answer = () => [0xd1, 0xd2, 0xd3, 0xd4, 0xd5].map((n) => pending(hash(n)));
 
       const r = await callTool(token, 'jaw_get_calls_history', {});
 
       expect(r.structuredContent.calls.map((c: { thisConnection?: unknown }) => c.thisConnection)).toEqual([
+        undefined,
+        undefined,
         undefined,
         undefined,
         undefined,

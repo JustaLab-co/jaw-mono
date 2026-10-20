@@ -63,6 +63,7 @@ async function landedHere(connectionId: string, calls: { id?: unknown; status?: 
         .where(
           and(
             eq(sends.connectionId, connectionId),
+            eq(sends.state, 'landed'),
             isNotNull(sends.txHash),
             inArray(sql<string>`lower(${sends.callsId})`, ids)
           )
@@ -73,6 +74,7 @@ async function landedHere(connectionId: string, calls: { id?: unknown; status?: 
         .where(
           and(
             eq(ownerCalls.connectionId, connectionId),
+            inArray(ownerCalls.state, ['landed', 'reverted']),
             isNotNull(ownerCalls.txHash),
             inArray(sql<string>`lower(${ownerCalls.callsId})`, ids)
           )
