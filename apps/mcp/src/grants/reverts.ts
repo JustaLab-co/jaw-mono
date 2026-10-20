@@ -1,5 +1,5 @@
-import { decodeErrorResult, decodeEventLog, isHex, parseAbi, toFunctionSelector, type Hex } from 'viem';
-import { entryPoint08Abi } from 'viem/account-abstraction';
+import { decodeErrorResult, decodeEventLog, isHex, parseAbi, toFunctionSelector, type Address, type Hex } from 'viem';
+import { entryPoint08Abi, entryPoint08Address } from 'viem/account-abstraction';
 import type { Refusal } from './fit';
 
 const SIGNATURES = [
@@ -90,17 +90,22 @@ export function refusalOfFailure(failure: unknown): Refusal | undefined {
   return undefined;
 }
 
-/** The refusal named by the revert reason the EntryPoint logged for a userOp that reverted. */
-export function refusalOfLogs(logs: { data: Hex; topics: Hex[] }[]): Refusal | undefined {
+/** The refusal named by the revert reason the EntryPoint logged for this userOp; its bundle may hold others. */
+export function refusalOfLogs(
+  logs: { address: Address; data: Hex; topics: Hex[] }[],
+  userOpHash: Hex
+): Refusal | undefined {
   for (const log of logs) {
-    let reason: Hex;
+    if (log.address.toLowerCase() !== entryPoint08Address.toLowerCase()) continue;
+    let args: { userOpHash: Hex; revertReason: Hex };
     try {
       const event = decodeEventLog({ abi: entryPoint08Abi, eventName: 'UserOperationRevertReason', ...log } as never);
-      reason = (event.args as { revertReason: Hex }).revertReason;
+      args = event.args as typeof args;
     } catch {
       continue;
     }
-    const refused = refusalWithin(reason);
+    if (args.userOpHash.toLowerCase() !== userOpHash.toLowerCase()) continue;
+    const refused = refusalWithin(args.revertReason);
     if (refused) return refused;
   }
   return undefined;

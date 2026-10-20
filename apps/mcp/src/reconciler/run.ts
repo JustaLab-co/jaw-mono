@@ -141,18 +141,16 @@ async function sendOutcome(row: SendRow, clients: ChainClients): Promise<SendEnd
   const client = clients.publicClient(row.chainId);
   const head = await client.getBlockNumber();
   const windowEnd = row.fromBlock + SEND_WINDOW_BLOCKS;
-  const fromTransfer = row.idempotencyKey === null;
-  if (!fromTransfer && !row.callsId) return head >= windowEnd ? { state: 'released' } : undefined;
+  if (!row.callsId) return head >= windowEnd ? { state: 'released' } : undefined;
   const logs = await client.getLogs({
     address: entryPoint08Address,
     event: userOperationEvent,
-    args: row.callsId ? { userOpHash: row.callsId as Hex } : { sender: row.sender as Address },
+    args: { userOpHash: row.callsId as Hex },
     fromBlock: row.fromBlock,
     toBlock: head < windowEnd ? head : windowEnd,
     strict: true,
   });
-  // Searched by sender, a revert may be another operation's: only a success is this row's.
-  const end = endOf(row.callsId ? logs : logs.filter((l) => l.args.success));
+  const end = endOf(logs);
   if (end) return end;
   if (head >= windowEnd) return { state: 'released' };
   return undefined;

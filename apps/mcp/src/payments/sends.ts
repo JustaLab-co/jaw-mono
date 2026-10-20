@@ -13,6 +13,9 @@ export interface RecordedSend {
   amount: bigint;
   periodStart: number;
 }
+export interface OpenSpend extends RecordedSend {
+  token: string;
+}
 
 const dbNow = sql`statement_timestamp()`;
 const twoDayPeriodsAgo = sql`now() - interval '2 days'`;
@@ -64,7 +67,9 @@ export async function handToReconciler(ids: string[], tx: Tx = getDb(), callsId?
     .where(and(inArray(sends.id, ids), eq(sends.state, 'open')));
 }
 
-export type SendEnd = { state: 'landed'; txHash: Hex; callsId?: Hex } | { state: 'released'; txHash?: Hex | null };
+export type SendEnd =
+  | { state: 'landed'; txHash: Hex; callsId?: Hex }
+  | { state: 'released'; txHash?: Hex | null; callsId?: Hex };
 
 export async function settleSends(ids: string[], end: SendEnd, tx: Tx = getDb()) {
   await tx
@@ -98,16 +103,14 @@ export async function heldSpends(
   permissionId: string,
   tx: Tx,
   seen: ReadonlySet<string> = new Set()
-): Promise<Map<string, bigint>> {
+): Promise<OpenSpend[]> {
   const rows = await tx
-    .select({ id: sends.id, token: sends.token, amount: sends.amount })
+    .select({ id: sends.id, token: sends.token, amount: sends.amount, periodStart: sends.periodStart })
     .from(sends)
     .where(unsure(permissionId));
-  const spent = new Map<string, bigint>();
-  for (const { id, token, amount } of rows) {
-    if (token && !seen.has(id)) spent.set(token, (spent.get(token) ?? 0n) + BigInt(amount));
-  }
-  return spent;
+  return rows.flatMap(({ id, token, amount, periodStart }) =>
+    token && !seen.has(id) ? [{ token, amount: BigInt(amount), periodStart }] : []
+  );
 }
 
 // Some RPC providers cap eth_getLogs at 500 blocks.

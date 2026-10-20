@@ -15,7 +15,7 @@ import {
   type Hex,
   type PublicClient,
 } from 'viem';
-import { entryPoint08Abi, getUserOperationError } from 'viem/account-abstraction';
+import { entryPoint08Abi, entryPoint08Address, getUserOperationError } from 'viem/account-abstraction';
 import { afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
 import { verifyBearer, type Tenant } from '@/connections/auth';
 import { revokeByGrant } from '@/connections/rows';
@@ -26,6 +26,7 @@ import { lockWaiters, TEST_PG_URL, useTestDb, useTestPostgres } from '@/db/test-
 import { recordGrant } from '@/grants/permission';
 import { claim } from '@/payments/store';
 import { x402Budget } from '@/grants/store';
+import * as sendStore from '@/payments/sends';
 import { reconcile } from '@/reconciler/run';
 import { ANY_TARGET } from '@jaw.id/core';
 import { RECEIPT_MS } from './session-execute';
@@ -51,7 +52,7 @@ const chain = vi.hoisted(() => ({
 const bridge = vi.hoisted(() => ({
   sent: [] as { to: string; value: string; data: string }[][],
   attempts: 0,
-  outcome: 'landed' as 'landed' | 'pending' | { logs: { data: string; topics: string[] }[] },
+  outcome: 'landed' as 'landed' | 'pending' | { logs: { address: string; data: string; topics: string[] }[] },
   fail: undefined as Error | undefined,
   gate: undefined as Promise<void> | undefined,
   reached: undefined as (() => void) | undefined,
@@ -162,7 +163,9 @@ async function withCustomGrant(perDay = 1_000_000n, end = NOW() + 86_400, target
     if (functionName === 'getHash') return permissionId;
     if (functionName === 'isApproved') return true;
     if (functionName === 'isRevoked') return chain.revoked;
-    if (functionName === 'getCurrentPeriod') return { start: NOW() - 60, end: NOW() + 3_600, spend: chain.spent };
+    if (functionName === 'getCurrentPeriod') {
+      return { start: permission.start, end: permission.start + 86_400, spend: chain.spent };
+    }
     throw new Error(`this node does not answer ${functionName}`);
   }) as typeof node.readContract;
   return { c, t, permissionId };
@@ -357,21 +360,37 @@ describe('jaw_session_execute', () => {
     expect((await rowsOf(t.connectionId)).map((r) => r.state)).toEqual(['open']);
   });
 
-  it('names an over-limit revert the EntryPoint logged for a userOp that reverted on chain', async () => {
-    const { c, t, permissionId } = await withCustomGrant();
-    const topics = encodeEventTopics({
+  const revertLog = (userOpHash: Hex, sender: Address) => ({
+    address: entryPoint08Address,
+    topics: encodeEventTopics({
       abi: entryPoint08Abi,
       eventName: 'UserOperationRevertReason',
-      args: { userOpHash: `0x${'1'.repeat(64)}`, sender: t.sessionAddress },
-    }) as Hex[];
-    const data = encodeAbiParameters([{ type: 'uint256' }, { type: 'bytes' }], [0n, overLimitRevert]);
-    bridge.outcome = { logs: [{ topics, data }] };
+      args: { userOpHash, sender },
+    }) as Hex[],
+    data: encodeAbiParameters([{ type: 'uint256' }, { type: 'bytes' }], [0n, overLimitRevert]),
+  });
+  const FIRST_OP: Hex = `0x${'1'.padStart(64, '0')}`;
+
+  it('names an over-limit revert the EntryPoint logged for a userOp that reverted on chain', async () => {
+    const { c, t, permissionId } = await withCustomGrant();
+    bridge.outcome = { logs: [revertLog(FIRST_OP, t.sessionAddress)] };
 
     const result = await execute(c.access_token, permissionId, [transfer(BOB, 1n)]);
 
     expect(result.isError).toBe(true);
     expect(result.content[0].text).toMatch(/^over-limit: .*did not succeed on chain/);
     expect((await rowsOf(t.connectionId)).map((r) => r.state)).toEqual(['released']);
+  });
+
+  it('given a reverted userOp bundled with another account whose userOp was refused, then it names no refusal', async () => {
+    const { c, permissionId } = await withCustomGrant();
+    bridge.outcome = { logs: [revertLog(`0x${'2'.repeat(64)}`, CAROL)] };
+
+    const result = await execute(c.access_token, permissionId, [transfer(BOB, 1n)]);
+
+    expect(result.isError).toBe(true);
+    expect(result.content[0].text).not.toMatch(/over-limit/);
+    expect(result.structuredContent).toMatchObject({ status: 'reverted', userOpHash: FIRST_OP });
   });
 
   it('given a send whose answer was lost in transit, then it says it may have been sent and keeps the spend held', async () => {
@@ -622,7 +641,7 @@ describe('jaw_session_execute', () => {
     // The pinned read sees the period as of the log read; only later blocks hold the run.
     node.readContract = (async (args: { functionName: string; blockNumber?: bigint }) => {
       if (args.functionName !== 'getCurrentPeriod') return answers(args);
-      return { start: NOW() - 60, end: NOW() + 3_600, spend: args.blockNumber === undefined ? chain.spent : 0n };
+      return { start: NOW() - 3_600, end: NOW() + 3_600, spend: args.blockNumber === undefined ? chain.spent : 0n };
     }) as typeof node.readContract;
     vi.spyOn(node, 'getLogs').mockImplementation(async () => {
       await getDb()
@@ -855,6 +874,24 @@ describe('jaw_session_execute', () => {
     expect(bridge.attempts).toBe(1);
   });
 
+  it('given the userOp hash write at submit failed, when the userOp reverts, then its key still replays the revert', async () => {
+    const { c, t, permissionId } = await withCustomGrant();
+    bridge.outcome = { logs: [] };
+    vi.spyOn(console, 'log').mockImplementation(() => undefined);
+    const write = vi.spyOn(sendStore, 'noteCallsId').mockRejectedValueOnce(new Error('db blip'));
+    const first = await execute(c.access_token, permissionId, [transfer(BOB, 1n)], 'pay-bob');
+
+    const retry = await execute(c.access_token, permissionId, [transfer(BOB, 1n)], 'pay-bob');
+
+    expect(write).toHaveBeenCalledTimes(1);
+    const userOpHash = first.structuredContent.userOpHash;
+    expect(retry.structuredContent).toMatchObject({ status: 'reverted', userOpHash, txHash: TX });
+    expect(await rowsOf(t.connectionId)).toEqual([
+      expect.objectContaining({ state: 'released', callsId: userOpHash, txHash: TX }),
+    ]);
+    expect(bridge.attempts).toBe(1);
+  });
+
   it('given a run the reconciler released for not being seen in its window, then its key does not replay it as moved nothing', async () => {
     const { c, permissionId } = await withCustomGrant();
     bridge.outcome = 'pending';
@@ -939,34 +976,6 @@ describe('jaw_session_execute', () => {
       .where(eq(sends.connectionId, t.connectionId));
     await reconcile({ publicClient: () => node as unknown as PublicClient });
     expect(await rowsOf(t.connectionId)).toEqual([expect.objectContaining({ state: 'released', txHash: null })]);
-  });
-
-  it('given a row found by its sender, when only another operation of the sender reverted, then the reconciler leaves it open', async () => {
-    const { t, permissionId } = await withCustomGrant();
-    await getDb()
-      .insert(sends)
-      .values({
-        id: 'send_by_sender',
-        connectionId: t.connectionId,
-        permissionId,
-        chainId: t.chainId,
-        sender: t.sessionAddress.toLowerCase(),
-        amount: '1',
-        periodStart: NOW(),
-        fromBlock: 100n,
-        leaseUntil: new Date(0),
-      });
-    chain.userOps.push({
-      userOpHash: `0x${'9'.repeat(64)}`,
-      sender: t.sessionAddress,
-      success: false,
-      blockNumber: 101n,
-    });
-    chain.head = 120n;
-
-    await reconcile({ publicClient: () => node as unknown as PublicClient });
-
-    expect(await rowsOf(t.connectionId)).toEqual([expect.objectContaining({ state: 'open', txHash: null })]);
   });
 });
 
