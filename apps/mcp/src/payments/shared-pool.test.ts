@@ -482,6 +482,29 @@ describe('quote and pay at the edge of what a budget can pay', () => {
     });
   });
 
+  describe('given 1 USDC a day, 2 USDC of float, and a transfer of 0.5 recorded before the chain counter shows it', () => {
+    it('when the quote asks the 0.5 the day has left, then it is ready and pay settles from the float', async () => {
+      const { t, token } = await funded('1', 2_000_000n);
+      await landedLegacySend(t);
+      prices.set('/half', '500000');
+      const quoted = await quote(token, '/half');
+      expect(quoted.structuredContent.readiness).toEqual({ status: 'ready' });
+      const paid = await pay(t, { url: url('/half') }, withRefill);
+      expect(paid.structuredContent).toMatchObject({ state: 'settled', kind: 'paid' });
+    });
+
+    it('when the quote asks one base unit more, then it is over_allowance and pay refuses unsigned', async () => {
+      const { t, token } = await funded('1', 2_000_000n);
+      await landedLegacySend(t);
+      prices.set('/half', '500001');
+      const quoted = await quote(token, '/half');
+      expect(quoted.structuredContent.readiness).toEqual({ status: 'not_ready', reason: 'over_allowance' });
+      const paid = await pay(t, { url: url('/half') }, withRefill);
+      expect(paid.structuredContent).toMatchObject(refused);
+      expect(seen).toHaveLength(0);
+    });
+  });
+
   describe('given 0.5 USDC a day and 0.3 of float that a payment signed under an earlier budget still holds', () => {
     const holding = async (t: Tenant) => {
       await getDb()
