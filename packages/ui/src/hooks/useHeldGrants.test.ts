@@ -109,6 +109,22 @@ describe('totalsOf', () => {
     ]);
   });
 
+  it('given the same token and unit over different multipliers, when summed, then keeps them apart', () => {
+    const held = totalsOf([row(), row({ spends: [{ token: USDC, allowance: '5', unit: 'day', multiplier: 2 }] })]);
+    expect(held.totals.map((t) => [t.multiplier, t.allowance])).toEqual([
+      [1, 1_000_000n],
+      [2, 5n],
+    ]);
+  });
+
+  it('given forever grants with different multipliers, when summed, then they are one total', () => {
+    const forever = (multiplier: number) =>
+      row({ spends: [{ token: USDC, allowance: '2', unit: 'forever', multiplier }] });
+    expect(totalsOf([forever(1), forever(3)]).totals).toEqual([
+      { token: USDC, unit: 'forever', multiplier: 1, allowance: 4n },
+    ]);
+  });
+
   it('given a calls-only grant, when summed, then counts it with no total', () => {
     expect(totalsOf([row({ spends: [] })])).toEqual({ count: 1, totals: [] });
   });
@@ -159,6 +175,7 @@ describe('useHeldGrants', () => {
       status: 'ready',
       held: { count: 2, totals: [{ token: USDC, unit: 'day', multiplier: 1, allowance: 2_000_000n }] },
       tokenInfo: { [USDC]: { decimals: 6, symbol: 'USDC' } },
+      tokenInfoSettled: true,
     });
   });
 
@@ -178,6 +195,24 @@ describe('useHeldGrants', () => {
     await render();
 
     expect(readContract.mock.calls[0][0].args[0].spends[0]).toMatchObject({ unit: 4, multiplier: 24 });
+  });
+
+  it('given a real index row, when checked on chain, then isRevoked gets the struct the SDK approved', async () => {
+    getPermissions.mockResolvedValue([{ ...INDEX_ROW, end: NOW + 60 }]);
+    await render();
+
+    expect(readContract.mock.calls[0][0]).toMatchObject({
+      functionName: 'isRevoked',
+      args: [
+        {
+          account: '0x6ca44a56b06869530c953dFa7868973be1456769',
+          salt: BigInt(INDEX_ROW.salt),
+          end: NOW + 60,
+          spends: [{ allowance: 1_000_000n, unit: 2, multiplier: 1 }],
+          calls: [{ selector: '0xa9059cbb', checker: '0x0000000000000000000000000000000000000000' }],
+        },
+      ],
+    });
   });
 
   it('given the chain read fails, when the screen opens, then keeps the grant rather than understate', async () => {
@@ -210,29 +245,9 @@ describe('useHeldGrants', () => {
       functionName === 'isRevoked' ? false : new Promise(() => undefined)
     );
     await render();
-    expect(state).toMatchObject({ status: 'ready', held: { count: 1 }, tokenInfo: {} });
+    expect(state).toMatchObject({ status: 'ready', held: { count: 1 }, tokenInfo: {}, tokenInfoSettled: false });
 
     await act(async () => vi.advanceTimersByTime(8_000));
-    expect(state).toMatchObject({ status: 'ready', held: { count: 1 }, tokenInfo: {} });
-  });
-});
-
-describe('contractPermission', () => {
-  const REVOKE_ABI = parseAbi([
-    'struct CallPermission { address target; bytes4 selector; address checker; }',
-    'struct SpendLimit { address token; uint160 allowance; uint8 unit; uint16 multiplier; }',
-    'struct Permission { address account; address spender; uint48 start; uint48 end; uint256 salt; CallPermission[] calls; SpendLimit[] spends; }',
-    'function revoke(Permission permission)',
-  ]);
-  const encoded = (r: StorePermissionApiResponse) =>
-    encodeFunctionData({ abi: REVOKE_ABI, functionName: 'revoke', args: [contractPermission(r)] });
-
-  it.each([
-    ['an index row as the API returns it', INDEX_ROW],
-    ['a weekly grant', row({ spends: [{ token: USDC, allowance: '7', unit: 'week', multiplier: 3 }] })],
-    ['a yearly grant', row({ spends: [{ token: USDC, allowance: '1', unit: 'year', multiplier: 2 }] })],
-    ['a forever grant', row({ spends: [{ token: USDC, allowance: '5', unit: 'forever', multiplier: 1 }] })],
-  ])('given %s, then rebuilds the struct the SDK approved, byte for byte', (_, r) => {
-    expect(encoded(r)).toBe(buildRevokePermissionCall(r).data);
+    expect(state).toMatchObject({ status: 'ready', held: { count: 1 }, tokenInfo: {}, tokenInfoSettled: true });
   });
 });

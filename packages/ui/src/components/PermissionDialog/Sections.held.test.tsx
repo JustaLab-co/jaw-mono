@@ -21,7 +21,7 @@ describe('the grant screen shows what the spender already holds', () => {
     expect(html).toMatch(/>2<\/span>/);
     expect(html).toContain('USDC');
     expect(html).toContain('/day');
-    expect(html).toContain('This request adds to it');
+    expect(html).toContain('Live grants to the same key right now');
   });
 
   it('given grants with no spend limit, then still counts them', () => {
@@ -34,7 +34,7 @@ describe('the grant screen shows what the spender already holds', () => {
   it('given nothing live, then says none were found without claiming zero', () => {
     const html = markup({ status: 'ready', count: 0, totals: [] });
 
-    expect(html).toContain('No other active grants to this key were found.');
+    expect(html).toContain('No active grants to this key were found.');
     expect(html).not.toContain('Already granted to this key');
   });
 
@@ -54,6 +54,20 @@ describe('the grant screen shows what the spender already holds', () => {
     expect(html).toContain('Couldn&#x27;t check what this key already holds');
     expect(html).toContain('its total is unknown');
     expect(html).not.toMatch(/>0</);
+  });
+
+  it('given a held row whose token is still being named, then shows a placeholder, not an unknown-decimals warning', () => {
+    const html = markup({
+      status: 'ready',
+      count: 1,
+      tokensLoading: true,
+      totals: [
+        { amount: '5', token: '', tokenAddress: USDC, duration: '1 day', limit: '5 base units', decimalsUnknown: true },
+      ],
+    });
+
+    expect(html).toContain('Already granted to this key');
+    expect(html).not.toContain('decimals unknown');
   });
 
   it('given the lookup is running, then holds the section open', () => {

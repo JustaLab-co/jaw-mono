@@ -215,7 +215,7 @@ export function HeldGrantsNotice({
   if (!held) return null;
 
   if (held.status === 'ready' && held.count === 0) {
-    return <p className="text-muted-foreground text-body-sm">No other active grants to this key were found.</p>;
+    return <p className="text-muted-foreground text-body-sm">No active grants to this key were found.</p>;
   }
 
   if (held.status === 'unreadable') {
@@ -248,12 +248,18 @@ export function HeldGrantsNotice({
           <p className="text-muted-foreground text-body-sm px-3 py-2">No spend limits</p>
         ) : (
           held.totals.map((total, i) => (
-            <SpendRow key={i} spend={total} chainId={chainId} nativeSymbol={nativeSymbol} />
+            <SpendRow
+              key={i}
+              spend={total}
+              chainId={chainId}
+              nativeSymbol={nativeSymbol}
+              isLoading={held.tokensLoading && !total.token}
+            />
           ))
         )}
       </div>
       <p className="text-muted-foreground text-body-sm pl-3">
-        Live grants to the same key, summed per token. This request adds to it.
+        Live grants to the same key right now, summed per token.
       </p>
     </div>
   );

@@ -138,6 +138,7 @@ describe('ReactUIHandler shows what the spender already holds next to the grant'
     expect(dialogProps.heldGrants).toEqual({
       status: 'ready',
       count: 2,
+      tokensLoading: false,
       totals: [expect.objectContaining({ amount: '1.5', token: 'USDC', duration: '1 day' })],
     });
   });
@@ -173,7 +174,7 @@ describe('ReactUIHandler shows what the spender already holds next to the grant'
     expect(settledOnce()).toBe(true);
   });
 
-  it('given a held token whose metadata hangs, then its row shows the address and Confirm is not held', async () => {
+  it('given a held token whose metadata hangs, then its row waits and Confirm is not held', async () => {
     wethHangs = true;
     getPermissions.mockResolvedValue([indexed(SPENDER, '5', WETH)]);
     await openGrant();
@@ -181,7 +182,8 @@ describe('ReactUIHandler shows what the spender already holds next to the grant'
     expect(dialogProps.heldGrants).toEqual({
       status: 'ready',
       count: 1,
-      totals: [expect.objectContaining({ tokenAddress: WETH, token: '', amount: '5', decimalsUnknown: true })],
+      tokensLoading: true,
+      totals: [expect.objectContaining({ tokenAddress: WETH, token: '' })],
     });
     expect(dialogProps.isLoadingTokenInfo).toBe(false);
     expect(dialogProps.spends?.[0].token).toBe('USDC');
@@ -195,6 +197,7 @@ describe('ReactUIHandler shows what the spender already holds next to the grant'
     expect(dialogProps.heldGrants).toEqual({
       status: 'ready',
       count: 1,
+      tokensLoading: false,
       totals: [expect.objectContaining({ token: 'WETH', amount: '1' })],
     });
     expect(settledOnce()).toBe(true);

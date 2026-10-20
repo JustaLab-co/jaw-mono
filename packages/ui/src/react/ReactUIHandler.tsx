@@ -2546,7 +2546,7 @@ function PermissionDialogWrapper({
   const toSpendRow = useCallback(
     (
       spend: { token: string; allowance: string | bigint; unit: string; multiplier?: number },
-      info: { decimals: number | null; symbol: string } | undefined = tokenInfoMap[spend.token]
+      info: { decimals: number | null; symbol: string } | undefined
     ) => {
       const tokenInfo =
         info ||
@@ -2563,7 +2563,7 @@ function PermissionDialogWrapper({
 
       // Format duration with multiplier (defaults to 1 if not provided)
       const multiplier = spend.multiplier ?? 1;
-      const duration = `${multiplier} ${spend.unit}${multiplier > 1 ? 's' : ''}`;
+      const duration = spend.unit === 'forever' ? 'forever' : `${multiplier} ${spend.unit}${multiplier > 1 ? 's' : ''}`;
 
       return {
         amount,
@@ -2574,19 +2574,27 @@ function PermissionDialogWrapper({
         limit,
       };
     },
-    [tokenInfoMap, viemChain, nativeSymbol]
+    [viemChain, nativeSymbol]
   );
-  const spends = useMemo(() => spendsData.map((spend) => toSpendRow(spend)), [spendsData, toSpendRow]);
+  const spends = useMemo(
+    () => spendsData.map((spend) => toSpendRow(spend, tokenInfoMap[spend.token])),
+    [spendsData, tokenInfoMap, toSpendRow]
+  );
   const heldGrants = useMemo(
     () =>
       held.status === 'ready'
         ? {
             status: 'ready' as const,
             count: held.held.count,
-            totals: held.held.totals.map((total) => toSpendRow(total, held.tokenInfo[total.token.toLowerCase()])),
+            tokensLoading: !held.tokenInfoSettled,
+            totals: held.held.totals.map((total) => {
+              const token = total.token.toLowerCase();
+              const known = Object.entries(tokenInfoMap).find(([address]) => address.toLowerCase() === token)?.[1];
+              return toSpendRow(total, held.tokenInfo[token] ?? known);
+            }),
           }
         : held,
-    [held, toSpendRow]
+    [held, tokenInfoMap, toSpendRow]
   );
 
   // Format call permissions. Signatures resolve asynchronously — a selector with no signature yet

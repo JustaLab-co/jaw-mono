@@ -29,7 +29,7 @@ export type SpenderPrefundDisplay =
 export type HeldGrantsDisplay =
   | { status: 'loading' }
   | { status: 'unreadable' }
-  | { status: 'ready'; count: number; totals: SpendPermission[] };
+  | { status: 'ready'; count: number; totals: SpendPermission[]; tokensLoading?: boolean };
 
 export interface CallPermission {
   target: string;

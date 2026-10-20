@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react';
-import { erc20Abi, isAddressEqual, numberToHex, parseAbi, zeroAddress, type Address, type Hex } from 'viem';
+import { decodeFunctionData, erc20Abi, isAddressEqual, numberToHex, parseAbi, type Address } from 'viem';
 import {
+  buildRevokePermissionCall,
   handleGetPermissionsRequest,
   PERMISSIONS_MANAGER_ADDRESS,
   type SpendPeriod,
@@ -26,7 +27,7 @@ export type HeldTokenInfo = Record<string, { decimals: number; symbol: string }>
 export type HeldGrantsState =
   | { status: 'loading' }
   | { status: 'unreadable' }
-  | { status: 'ready'; held: HeldGrants; tokenInfo: HeldTokenInfo };
+  | { status: 'ready'; held: HeldGrants; tokenInfo: HeldTokenInfo; tokenInfoSettled: boolean };
 
 const LOOKUP_TIMEOUT_MS = 8_000;
 
@@ -35,12 +36,8 @@ const MANAGER_ABI = parseAbi([
   'struct SpendLimit { address token; uint160 allowance; uint8 unit; uint16 multiplier; }',
   'struct Permission { address account; address spender; uint48 start; uint48 end; uint256 salt; CallPermission[] calls; SpendLimit[] spends; }',
   'function isRevoked(Permission permission) view returns (bool)',
+  'function revoke(Permission permission)',
 ]);
-
-// The contract's PeriodUnit by declaration order. It has no year: the SDK grants
-// one as twelve months, so the struct is rebuilt the same way or it hashes to
-// a permission that does not exist.
-const PERIOD_UNIT = { minute: 0, hour: 1, day: 2, week: 3, month: 4, forever: 5 } as const;
 
 export function liveForSpender(
   rows: StorePermissionApiResponse[],
@@ -59,14 +56,15 @@ export function totalsOf(rows: StorePermissionApiResponse[]): HeldGrants {
   const totals = new Map<string, HeldTotal>();
   for (const row of rows) {
     for (const spend of row.spends) {
-      const key = `${spend.token.toLowerCase()}:${spend.unit}:${spend.multiplier}`;
+      const multiplier = spend.unit === 'forever' ? 1 : spend.multiplier;
+      const key = `${spend.token.toLowerCase()}:${spend.unit}:${multiplier}`;
       const total = totals.get(key);
       if (total) total.allowance += BigInt(spend.allowance);
       else
         totals.set(key, {
           token: spend.token as Address,
           unit: spend.unit,
-          multiplier: spend.multiplier,
+          multiplier,
           allowance: BigInt(spend.allowance),
         });
     }
@@ -74,48 +72,30 @@ export function totalsOf(rows: StorePermissionApiResponse[]): HeldGrants {
   return { count: rows.length, totals: [...totals.values()] };
 }
 
-export function contractPermission(row: StorePermissionApiResponse) {
-  return {
-    account: row.account as Address,
-    spender: row.spender as Address,
-    start: row.start,
-    end: row.end,
-    salt: BigInt(row.salt),
-    calls: row.calls.map((call) => ({
-      target: call.target as Address,
-      selector: call.selector as Hex,
-      checker: (call.checker as Address) || zeroAddress,
-    })),
-    spends: row.spends.map((spend) => {
-      const year = spend.unit === 'year';
-      return {
-        token: spend.token as Address,
-        allowance: BigInt(spend.allowance),
-        unit: PERIOD_UNIT[year ? 'month' : (spend.unit as keyof typeof PERIOD_UNIT)],
-        multiplier: year ? spend.multiplier * 12 : spend.multiplier,
-      };
-    }),
-  };
-}
+// The struct core approved, taken from core's own revoke call rather than rebuilt here.
+const approvedStruct = (row: StorePermissionApiResponse) =>
+  decodeFunctionData({ abi: MANAGER_ABI, data: buildRevokePermissionCall(row).data }).args[0];
 
 async function dropProvenRevoked(rows: StorePermissionApiResponse[], chainId: number, rpcUrl: string) {
   const client = getPublicClient(chainId, rpcUrl);
   const revoked = await Promise.all(
-    rows.map((row) =>
-      client
-        .readContract({
+    rows.map(async (row) => {
+      try {
+        return await client.readContract({
           address: PERMISSIONS_MANAGER_ADDRESS as Address,
           abi: MANAGER_ABI,
           functionName: 'isRevoked',
-          args: [contractPermission(row)],
-        })
-        .catch(() => false)
-    )
+          args: [approvedStruct(row)],
+        });
+      } catch {
+        return false;
+      }
+    })
   );
   return rows.filter((_, i) => !revoked[i]);
 }
 
-async function readHeld(args: UseHeldGrantsArgs & { address: Address; spender: Address }): Promise<HeldGrants> {
+async function readHeld(args: UseHeldGrantsArgs): Promise<HeldGrants> {
   const rows = (await handleGetPermissionsRequest(
     { method: 'wallet_getPermissions', params: [{ address: args.address, chainId: numberToHex(args.chainId) }] },
     args.apiKey
@@ -153,8 +133,8 @@ async function readTokenInfo(totals: HeldTotal[], chainId: number, rpcUrl: strin
 }
 
 export interface UseHeldGrantsArgs {
-  address?: Address;
-  spender?: Address;
+  address: Address;
+  spender: Address;
   chainId: number;
   apiKey?: string;
   rpcUrl?: string;
@@ -165,10 +145,6 @@ export function useHeldGrants({ address, spender, chainId, apiKey, rpcUrl }: Use
 
   useEffect(() => {
     setState({ status: 'loading' });
-    if (!address || !spender) {
-      setState({ status: 'unreadable' });
-      return;
-    }
     let cancelled = false;
     const timer = setTimeout(() => {
       cancelled = true;
@@ -178,10 +154,13 @@ export function useHeldGrants({ address, spender, chainId, apiKey, rpcUrl }: Use
       .then(async (held) => {
         if (cancelled) return;
         clearTimeout(timer);
-        setState({ status: 'ready', held, tokenInfo: {} });
-        if (!rpcUrl || held.totals.length === 0) return;
+        if (!rpcUrl || held.totals.length === 0) {
+          setState({ status: 'ready', held, tokenInfo: {}, tokenInfoSettled: true });
+          return;
+        }
+        setState({ status: 'ready', held, tokenInfo: {}, tokenInfoSettled: false });
         const tokenInfo = await within(readTokenInfo(held.totals, chainId, rpcUrl), {});
-        if (!cancelled) setState({ status: 'ready', held, tokenInfo });
+        if (!cancelled) setState({ status: 'ready', held, tokenInfo, tokenInfoSettled: true });
       })
       .catch((error: unknown) => {
         console.warn('[useHeldGrants] Could not read the spender grants:', error);
