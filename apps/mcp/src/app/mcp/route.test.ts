@@ -29,6 +29,7 @@ const SIGNERS = {
   jaw_get_permissions: 'none',
   jaw_get_capabilities: 'none',
   jaw_read_contracts: 'none',
+  jaw_resolve_name: 'none',
 } as const;
 
 const RENAMED_AWAY = [

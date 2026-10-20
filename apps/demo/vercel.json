@@ -4,5 +4,5 @@
   "installCommand": "cd ../../ && bun install --frozen-lockfile",
   "buildCommand": "cd ../../ && bunx nx build @jaw.id/core && bunx nx build @jaw-mono/demo",
   "outputDirectory": ".next",
-  "git": { "deploymentEnabled": { "main": false } }
+  "git": { "deploymentEnabled": false }
 }
