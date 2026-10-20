@@ -1,6 +1,6 @@
 import { randomBytes } from 'node:crypto';
 import type { ChainClients, ReadDeps } from '@jaw.id/agent';
-import { and, desc, eq, inArray, isNotNull, lt, ne, or, sql } from 'drizzle-orm';
+import { and, desc, eq, inArray, isNotNull, lt, ne, or, sql, type SQL } from 'drizzle-orm';
 import { getAbiItem, type Address, type Hex } from 'viem';
 import { entryPoint08Abi, entryPoint08Address } from 'viem/account-abstraction';
 import { getDb, type Tx } from '@/db/client';
@@ -82,9 +82,9 @@ export async function settleSends(ids: string[], end: SendEnd, tx: Tx = getDb())
 // counts as held unless the logs read to the pinned block show it.
 const LANDED_UNSURE_MS = SEND_LEASE_MS;
 
-const unsure = (permissionId: string) =>
+const unsure = (permission: SQL) =>
   and(
-    sql`lower(${sends.permissionId}) = ${permissionId.toLowerCase()}`,
+    permission,
     or(
       eq(sends.state, 'open'),
       and(
@@ -107,7 +107,7 @@ export async function heldSpends(
   const rows = await tx
     .select({ id: sends.id, token: sends.token, amount: sends.amount, periodStart: sends.periodStart })
     .from(sends)
-    .where(unsure(permissionId));
+    .where(unsure(eq(sends.permissionId, permissionId)));
   return rows.flatMap(({ id, token, amount, periodStart }) =>
     token && !seen.has(id) ? [{ token, amount: BigInt(amount), periodStart }] : []
   );
@@ -157,7 +157,8 @@ export async function chainView(
     .where(
       and(
         eq(sends.connectionId, connectionId),
-        unsure(permissionId),
+        // The caller's id, in whatever case it was given; the connection narrows the rows.
+        unsure(sql`lower(${sends.permissionId}) = ${permissionId.toLowerCase()}`),
         eq(sends.chainId, chainId),
         isNotNull(sends.callsId)
       )
