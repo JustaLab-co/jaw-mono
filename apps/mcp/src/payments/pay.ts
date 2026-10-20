@@ -22,7 +22,7 @@ import { agentLogger, chainClients, payerFor, sessionOf, topUpExecutor, withoutU
 import type { Tenant } from '@/connections/auth';
 import { config } from '@/connections/config';
 import { countHit, isPaymentsPaused } from '@/db/settings';
-import { currentGrant, type Grant } from '@/grants/store';
+import { x402Budget, x402Budgets, type Grant } from '@/grants/store';
 import { errorLabel, log, RATE_WINDOW_MS } from '@/lib/edge';
 import { fenceText } from '@/lib/fence';
 import { safeFetch, watchCuts } from '@/lib/safe-fetch';
@@ -296,7 +296,7 @@ async function textUpTo(res: Response, max: number): Promise<string | undefined>
   return Buffer.byteLength(text) > max ? undefined : text;
 }
 
-/** One `jaw_pay_and_fetch` call, from the gates to an answer drawn from its row. */
+/** One `jaw_session_x402_pay` call, from the gates to an answer drawn from its row. */
 export async function pay(
   t: Tenant,
   input: PayInput,
@@ -322,7 +322,7 @@ export async function pay(
     maxAmount: input.maxAmount,
   };
   const key = input.idempotencyKey ?? `auto_${randomBytes(12).toString('base64url')}`;
-  const grant = await currentGrant(t.connectionId);
+  const grant = await x402Budget(t.connectionId);
   const claimed = await claim(
     { connectionId: t.connectionId, payer: t.sessionAddress, permissionId: grant?.permissionId },
     key,
@@ -334,7 +334,10 @@ export async function pay(
     case 'busy':
       return gate('in_progress', 'A call with this idempotency key is still running. Try again shortly.');
     case 'no_grant':
-      return gate('no_grant', 'This connection has no budget yet. Ask for one with jaw_request_budget.');
+      return gate(
+        'no_grant',
+        'This connection has no budget yet. Ask for one with jaw_grant_permissions and x402Budget.'
+      );
     case 'stored':
       return render(claimed.row, claimed.row.fenced ?? []);
   }
@@ -348,11 +351,10 @@ export async function pay(
   const confirm = { clients: deps.clients, later: deps.later };
 
   if (claimed.kind === 'resume') {
-    // The proof goes out again only while the budget it was signed under is live.
-    const stopped: Unreached | undefined =
-      grant?.permissionId === claimed.row.permissionId
-        ? await grantLive(grant, deps)
-        : { kind: 'unreached', code: 'no_grant', reason: 'the budget this payment was signed under ended' };
+    const signedUnder = (await x402Budgets(t.connectionId)).find((g) => g.permissionId === claimed.row.permissionId);
+    const stopped: Unreached | undefined = signedUnder
+      ? await grantLive(signedUnder, deps)
+      : { kind: 'unreached', code: 'no_grant', reason: 'the budget this payment was signed under ended' };
     return resend(claimed.row, claimed.token, stopped, payer, sent, confirm, cuts.lastCut, tap.last);
   }
 

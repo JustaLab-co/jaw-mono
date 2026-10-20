@@ -4,17 +4,20 @@ import { clientOf, connectionKey, withConnection } from '@/connections/auth';
 import { guardTools, withEdge } from '@/lib/edge';
 import { countUnauthorized } from '@/lib/metrics';
 import { registerReadTools } from '@/tools/read';
+import { registerAccountTools } from '@/tools/account';
 import { registerReadContractsTool } from '@/tools/read-contracts';
 import { registerResolveNameTool } from '@/tools/resolve-name';
 import { registerDiscoverTool } from '@/tools/discover';
 import { registerDisconnectTool } from '@/tools/disconnect';
 import { registerHistoryTool } from '@/tools/history';
 import { registerPayTool } from '@/tools/pay-and-fetch';
-import { registerBudgetTool } from '@/tools/request-budget';
+import { registerGrantTool } from '@/tools/grant-permissions';
 import { registerOwnerCallTools } from '@/tools/owner-calls';
-import { registerSendTools } from '@/tools/send';
+import { registerSignTool } from '@/tools/sign';
 import { registerSwapTools } from '@/tools/swap';
 import { registerConnectionTools } from '@/tools/connections';
+import { registerRevokeTool } from '@/tools/revoke-permission';
+import { registerSessionExecuteTool } from '@/tools/session-execute';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -24,16 +27,19 @@ const mcp = createMcpHandler(
     auditTools(server);
     guardTools(server);
     registerReadTools(server);
+    registerAccountTools(server);
     registerReadContractsTool(server);
     registerResolveNameTool(server);
     registerDiscoverTool(server);
-    registerBudgetTool(server);
-    registerSendTools(server);
+    registerGrantTool(server);
     registerOwnerCallTools(server);
+    registerSignTool(server);
     registerPayTool(server);
+    registerSessionExecuteTool(server);
     registerSwapTools(server);
     registerHistoryTool(server);
     registerConnectionTools(server);
+    registerRevokeTool(server);
     registerDisconnectTool(server);
   },
   {

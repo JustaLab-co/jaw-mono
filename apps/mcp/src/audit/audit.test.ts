@@ -29,13 +29,16 @@ describe('audit events', () => {
   it('records one event per tool call with its tool, outcome and request id', async () => {
     const c = await connect();
     const ok = await call(c.access_token, 'jaw_connections', {});
-    const refused = await call(c.access_token, 'jaw_revoke_connection', { id: 'conn_nope' });
+    const refused = await call(c.access_token, 'jaw_revoke_permission', {
+      permissionId: `0x${'0'.repeat(64)}`,
+      chainId: 1,
+    });
     expect(refused.json.result.isError).toBe(true);
 
     const events = await eventsOf(await connectionOf(c.access_token));
     expect(events.map((e) => [e.tool, e.outcome, e.requestId])).toEqual([
       ['jaw_connections', 'ok', ok.headers.get('x-request-id')],
-      ['jaw_revoke_connection', 'error', refused.headers.get('x-request-id')],
+      ['jaw_revoke_permission', 'error', refused.headers.get('x-request-id')],
     ]);
   });
 
@@ -47,7 +50,7 @@ describe('audit events', () => {
       state: 'failed',
       kind: 'refused',
       httpStatus: 402,
-      refusal: { code: 'budget_exhausted', next: 'jaw_request_budget' },
+      refusal: { code: 'budget_exhausted', next: 'jaw_grant_permissions' },
       payerRefilled: false,
       summary: 'Not paid: budget_exhausted. Nothing was sent.',
     } as const;
@@ -55,10 +58,10 @@ describe('audit events', () => {
       content: [{ type: 'text', text: structuredContent.summary }],
       structuredContent,
     });
-    await call(c.access_token, 'jaw_pay_and_fetch', { url: 'https://seller.example.test/x' });
+    await call(c.access_token, 'jaw_session_x402_pay', { url: 'https://seller.example.test/x' });
 
     const events = await eventsOf(await connectionOf(c.access_token));
-    expect(events.map((e) => [e.tool, e.outcome])).toEqual([['jaw_pay_and_fetch', 'budget_exhausted']]);
+    expect(events.map((e) => [e.tool, e.outcome])).toEqual([['jaw_session_x402_pay', 'budget_exhausted']]);
   });
 
   it('records a payment that may have reached the seller as unknown, not as refused', async () => {
@@ -79,8 +82,8 @@ describe('audit events', () => {
     vi.spyOn(payments, 'pay')
       .mockResolvedValueOnce(answer('signed', 'no_response'))
       .mockResolvedValueOnce(answer('unknown', 'seller_error'));
-    await call(c.access_token, 'jaw_pay_and_fetch', { url: 'https://seller.example.test/x' });
-    await call(c.access_token, 'jaw_pay_and_fetch', { url: 'https://seller.example.test/x' });
+    await call(c.access_token, 'jaw_session_x402_pay', { url: 'https://seller.example.test/x' });
+    await call(c.access_token, 'jaw_session_x402_pay', { url: 'https://seller.example.test/x' });
 
     const events = await eventsOf(await connectionOf(c.access_token));
     expect(events.map((e) => e.outcome)).toEqual(['unknown', 'unknown']);
@@ -91,39 +94,36 @@ describe('audit events', () => {
     await getDb()
       .delete(grants)
       .where(eq(grants.connectionId, await connectionOf(c.access_token)));
-    const res = await call(c.access_token, 'jaw_pay_and_fetch', { url: 'https://seller.example.test/x' });
+    const res = await call(c.access_token, 'jaw_session_x402_pay', { url: 'https://seller.example.test/x' });
     expect(res.json.result.isError).toBe(true);
     expect(res.json.result.content[0].text).toMatch(/^no_grant: /);
 
     const events = await eventsOf(await connectionOf(c.access_token));
-    expect(events.map((e) => [e.tool, e.outcome])).toEqual([['jaw_pay_and_fetch', 'no_grant']]);
+    expect(events.map((e) => [e.tool, e.outcome])).toEqual([['jaw_session_x402_pay', 'no_grant']]);
   });
 
   it('records a quote that found no price as ok, since nothing is paid', async () => {
     const c = await connect();
-    const res = await call(c.access_token, 'jaw_quote', { url: 'https://169.254.169.254/latest' });
+    const res = await call(c.access_token, 'jaw_session_x402_quote', { url: 'https://169.254.169.254/latest' });
     expect(res.json.result.structuredContent.refusal.code).toBe('unreachable');
 
     const events = await eventsOf(await connectionOf(c.access_token));
-    expect(events.map((e) => [e.tool, e.outcome])).toEqual([['jaw_quote', 'ok']]);
+    expect(events.map((e) => [e.tool, e.outcome])).toEqual([['jaw_session_x402_quote', 'ok']]);
   });
 
   it('records a tool that threw as an error, once', async () => {
     const c = await connect();
-    vi.spyOn(grantsStore, 'currentGrant').mockRejectedValueOnce(new Error('boom'));
-    const res = await call(c.access_token, 'jaw_transfer', {
-      to: '0x2222222222222222222222222222222222222222',
-      amount: '1',
-    });
+    vi.spyOn(grantsStore, 'x402Budget').mockRejectedValueOnce(new Error('boom'));
+    const res = await call(c.access_token, 'jaw_session_status', {});
     expect(res.json.result.isError).toBe(true);
     const events = await eventsOf(await connectionOf(c.access_token));
-    expect(events.map((e) => [e.tool, e.outcome])).toEqual([['jaw_transfer', 'error']]);
+    expect(events.map((e) => [e.tool, e.outcome])).toEqual([['jaw_session_status', 'error']]);
   });
 
   it('records no arguments, tokens or signatures', async () => {
     const c = await connect();
     const secret = 'seller-session-0123456789abcdef';
-    await call(c.access_token, 'jaw_quote', { url: `https://169.254.169.254/x?token=${secret}` });
+    await call(c.access_token, 'jaw_session_x402_quote', { url: `https://169.254.169.254/x?token=${secret}` });
 
     const dump = JSON.stringify((await pg.query('select * from audit_events')).rows);
     expect(dump).not.toContain(secret);

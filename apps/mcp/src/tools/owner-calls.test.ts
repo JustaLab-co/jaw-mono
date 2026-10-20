@@ -1265,7 +1265,7 @@ async function sentRow() {
   return { t, token, id: first.structuredContent!.id };
 }
 
-describe('jaw_send_calls_status', () => {
+describe('jaw_get_calls_status', () => {
   it('given a sent row whose receipt succeeded, then landed with the tx hash and the row is concluded', async () => {
     const { t, id } = await sentRow();
     const receipt = vi.fn<ReadReceipt>(async () => ({ success: true, txHash: TX }));
@@ -1308,12 +1308,12 @@ describe('jaw_send_calls_status', () => {
     expect(result.structuredContent!.summary).not.toContain('could not be read');
   });
 
-  it('given the tools list, then jaw_send_calls_status is an open-world read', async () => {
+  it('given the tools list, then jaw_get_calls_status is an open-world read', async () => {
     const { token } = await connected();
 
     const { json } = await mcp(token, { method: 'tools/list' });
 
-    const status = json.result.tools.find((x: { name: string }) => x.name === 'jaw_send_calls_status');
+    const status = json.result.tools.find((x: { name: string }) => x.name === 'jaw_get_calls_status');
     expect(status.annotations).toMatchObject({ openWorldHint: true });
   });
 
@@ -1323,7 +1323,7 @@ describe('jaw_send_calls_status', () => {
     const result = await check(t, id);
 
     expect(result.structuredContent).toMatchObject({ state: 'sent', callsId: CALLS_ID });
-    expect(result.structuredContent!.summary).toContain('call jaw_send_calls_status again');
+    expect(result.structuredContent!.summary).toContain('call jaw_get_calls_status again');
     expect((await rowsOf(t.connectionId))[0].state).toBe('sent');
   });
 
@@ -1508,7 +1508,7 @@ describe('jaw_send_calls_status', () => {
   it('given a wallet:read token, then the tool is served and answers an unknown id with not_found', async () => {
     const { token } = await connected('wallet:read');
 
-    const result = await callTool(token, 'jaw_send_calls_status', { id: `oc_${'A'.repeat(22)}` });
+    const result = await callTool(token, 'jaw_get_calls_status', { id: `oc_${'A'.repeat(22)}` });
 
     expect(result.content[0].text).toMatch(/^not_found: /);
   });
@@ -1518,7 +1518,7 @@ describe('jaw_send_calls_status', () => {
     async (id) => {
       const { token } = await connected('wallet:read');
 
-      const result = await callTool(token, 'jaw_send_calls_status', { id });
+      const result = await callTool(token, 'jaw_get_calls_status', { id });
 
       expect(result.isError).toBe(true);
       expect(result.content[0].text).toMatch(/Input validation error/);

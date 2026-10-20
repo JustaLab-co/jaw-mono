@@ -67,7 +67,7 @@ describe('/mcp behind OAuth', () => {
       grant_type: 'refresh_token',
       refresh_token: c.refresh_token,
       client_id: 'jaw-cli',
-      scope: 'wallet:send',
+      scope: 'x402:pay',
     });
     const res = await rpc(initialize, narrowed.body.access_token);
     expect(res.status).toBe(401);

@@ -21,7 +21,7 @@ import {
 import { beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { verifyBearer, type Tenant } from '@/connections/auth';
 import { disconnect, sweepOnReuse } from '@/connections/disconnect';
-import { endConnection } from '@/connections/rows';
+import { endConnection, revokeByGrant } from '@/connections/rows';
 import {
   approvedOnChain,
   callTool,
@@ -29,26 +29,16 @@ import {
   fakeWallet,
   managerAnswer,
   setTestEnv,
-  verifyLocally,
   walletAnswers,
   walletsSettled,
-  offlineSession,
   sessionFakes,
 } from '@/connections/testkit';
 import { floatHolder, getDb, setDb } from '@/db/client';
 import { connections, grants, payments, settings } from '@/db/schema';
-import { currentGrant } from '@/grants/store';
+import { x402Budget } from '@/grants/store';
 import { reconcile } from '@/reconciler/run';
-import { revokeConnection } from '@/tools/connections';
-import { requestBudget } from '@/tools/request-budget';
-import {
-  lockWaiters,
-  statusOnceParked,
-  TEST_PG_URL,
-  useTestDb,
-  useTestPostgres,
-  withRoleStatementTimeout,
-} from '@/db/test-db';
+import { grantPermissions } from '@/tools/grant-permissions';
+import { lockWaiters, TEST_PG_URL, useTestDb, useTestPostgres, withRoleStatementTimeout } from '@/db/test-db';
 import { safeFetch } from '@/lib/safe-fetch';
 import { pay, type PayDeps } from './pay';
 import { rawBody, resent } from './render';
@@ -281,24 +271,16 @@ async function connected(perDay?: string) {
 async function approveBudget(c: Awaited<ReturnType<typeof connect>>, perDay: string) {
   const t = (await verifyBearer(c.access_token))?.extra?.tenant as Tenant;
   const wallet = fakeWallet(walletAnswers(c.signer));
-  await requestBudget(t, perDay, { openWallet: wallet, readPermission: approvedOnChain, ...offlineSession });
+  await grantPermissions(t, { x402Budget: { perDay } }, { openWallet: wallet, readPermission: approvedOnChain });
   await walletsSettled();
-  if (!(await currentGrant(t.connectionId))) throw new Error('no budget');
+  if (!(await x402Budget(t.connectionId))) throw new Error('no budget');
   balances.set(c.signer.address.toLowerCase(), 5_000_000n);
 }
 
-/** Another app of the same owner, which ends `t`'s connection with jaw_revoke_connection, the owner confirming. */
-async function revoker(c: Awaited<ReturnType<typeof connect>>, t: Tenant) {
-  const other = await connect(c.signer, { scope: 'wallet:read' });
-  const asker = (await verifyBearer(other.access_token))?.extra?.tenant as Tenant;
-  const confirmed = {
-    openWallet: fakeWallet(walletAnswers(c.signer)),
-    verify: verifyLocally,
-    clients: sessionFakes().deps.clients,
-  };
+async function revoker(t: Tenant, end = revokeByGrant) {
+  const [{ grantId }] = await getDb().select().from(connections).where(eq(connections.id, t.connectionId));
   return async () => {
-    await revokeConnection(asker, t.connectionId, confirmed);
-    await walletsSettled();
+    await end(grantId!);
     const [row] = await getDb().select().from(connections).where(eq(connections.id, t.connectionId));
     return { connection: { status: row.status } };
   };
@@ -339,6 +321,41 @@ async function failUpdates(key: string, when: string, using = '') {
 async function otherReplica() {
   vi.resetModules();
   return (await import('./pay')).pay;
+}
+
+/**
+ * Another replica whose float lock tells `untilWaiting` once work queues behind the
+ * connection's turn, or tries the lock a second time after the first try gave up.
+ */
+async function watchedReplica(connectionId: string) {
+  let watch: ((how: 'queued' | 'tried') => void) | undefined;
+  vi.resetModules();
+  vi.doMock('./float-lock', async (original) => {
+    const real = await original<typeof import('./float-lock')>();
+    return {
+      ...real,
+      inTurn: <T>(key: string, work: () => Promise<T>) => {
+        const run = real.inTurn(key, work);
+        if (key === connectionId) watch?.('queued');
+        return run;
+      },
+      tryLockFloat: (tx: Parameters<typeof real.tryLockFloat>[0], id: string) => {
+        if (id === connectionId) watch?.('tried');
+        return real.tryLockFloat(tx, id);
+      },
+    };
+  });
+  const [{ pay }, { revokeByGrant }] = await Promise.all([import('./pay'), import('@/connections/rows')]);
+  vi.doUnmock('./float-lock');
+  const untilWaiting = () => {
+    let tries = 0;
+    return new Promise<void>((resolve) => {
+      watch = (how) => {
+        if (how === 'queued' || ++tries === 2) resolve();
+      };
+    });
+  };
+  return { pay, revokeByGrant, untilWaiting };
 }
 
 /** Resolves every waiter once `n` have arrived. */
@@ -406,7 +423,7 @@ async function logsOf(work: () => Promise<unknown>): Promise<string> {
   }
 }
 
-describe('jaw_pay_and_fetch', () => {
+describe('jaw_session_x402_pay', () => {
   it('pays from the float, answers with the fenced body, and settles the row from the receipt', async () => {
     const { t } = await connected('1');
     balances.set(t.sessionAddress.toLowerCase(), 1_000_000n);
@@ -504,19 +521,49 @@ describe('jaw_pay_and_fetch', () => {
     expect(await rowOf(lost.structuredContent!.paymentId)).toMatchObject({ state: 'signed', code: 'no_response' });
   });
 
-  it('given a lost answer and a new budget approved since, when the key is retried, then no_grant, the proof is not sent again, and no budget is suggested', async () => {
+  it('given a lost answer and a newer budget approved since, when the key is retried, then the proof goes out again under the budget it was signed under', async () => {
     const { c, t } = await connected('1');
     balances.set(t.sessionAddress.toLowerCase(), 1_000_000n);
     dropNextLost = true;
-    const lost = await pay(t, { url: url('/lost'), idempotencyKey: 'replaced-resend' }, deps());
+    const lost = await pay(t, { url: url('/lost'), idempotencyKey: 'older-resend' }, deps());
     expect(lost.structuredContent).toMatchObject({ state: 'signed', refusal: { code: 'no_response' } });
+    const signedUnder = (await rowOf(lost.structuredContent!.paymentId)).permissionId;
     await approveBudget(c, '1');
-    const again = await pay(t, { url: url('/lost'), idempotencyKey: 'replaced-resend' }, deps());
-    expect(again.structuredContent).toMatchObject({ refusal: { code: 'no_grant' } });
-    expect(again.structuredContent?.refusal?.next).toBeUndefined();
-    expect(seen).toHaveLength(1);
-    expect(await rowOf(lost.structuredContent!.paymentId)).toMatchObject({ state: 'signed', code: 'no_response' });
+    expect((await x402Budget(t.connectionId))?.permissionId).not.toBe(signedUnder);
+
+    const again = await pay(t, { url: url('/lost'), idempotencyKey: 'older-resend' }, deps());
+
+    expect(again.structuredContent).toMatchObject({ state: 'settled' });
+    expect(seen.map((s) => s.signature)).toEqual([seen[0].signature, seen[0].signature]);
+    expect(await rowOf(lost.structuredContent!.paymentId)).toMatchObject({
+      state: 'settled',
+      permissionId: signedUnder,
+    });
   });
+
+  it.each([
+    ['expired', { expiresAt: new Date(Date.now() - 1000) }],
+    ['was replaced before a connection held several budgets', { replacedAt: new Date() }],
+  ])(
+    'given a lost answer and a budget that since %s, when the key is retried, then no_grant, the proof is not sent again, and no budget is suggested',
+    async (_name, ended) => {
+      const { c, t } = await connected('1');
+      balances.set(t.sessionAddress.toLowerCase(), 1_000_000n);
+      dropNextLost = true;
+      const lost = await pay(t, { url: url('/lost'), idempotencyKey: 'ended-resend' }, deps());
+      expect(lost.structuredContent).toMatchObject({ state: 'signed', refusal: { code: 'no_response' } });
+      const signedUnder = (await rowOf(lost.structuredContent!.paymentId)).permissionId!;
+      await approveBudget(c, '1');
+      await getDb().update(grants).set(ended).where(eq(grants.permissionId, signedUnder));
+
+      const again = await pay(t, { url: url('/lost'), idempotencyKey: 'ended-resend' }, deps());
+
+      expect(again.structuredContent).toMatchObject({ refusal: { code: 'no_grant' } });
+      expect(again.structuredContent?.refusal?.next).toBeUndefined();
+      expect(seen).toHaveLength(1);
+      expect(await rowOf(lost.structuredContent!.paymentId)).toMatchObject({ state: 'signed', code: 'no_response' });
+    }
+  );
 
   it('given a lost answer and a chain that cannot be read, when the key is retried, then the proof is not sent again', async () => {
     const { t } = await connected('1');
@@ -862,10 +909,10 @@ describe('jaw_pay_and_fetch', () => {
     const first = await pay(t, { url: url('/pricey'), idempotencyKey: 'pricey' }, deps());
     expect(first.structuredContent).toMatchObject({
       kind: 'refused',
-      refusal: { code: 'over_cap', next: 'jaw_request_budget' },
+      refusal: { code: 'over_cap', next: 'jaw_grant_permissions' },
       payerRefilled: false,
     });
-    expect(first.structuredContent?.summary).toContain('jaw_request_budget');
+    expect(first.structuredContent?.summary).toContain('jaw_grant_permissions');
     expect([seen.length, refills.length]).toEqual([0, 0]);
   });
 
@@ -941,7 +988,7 @@ describe('jaw_pay_and_fetch', () => {
     expect(over.structuredContent).toMatchObject({
       kind: 'refused',
       state: 'failed',
-      refusal: { code: 'budget_exhausted', next: 'jaw_request_budget' },
+      refusal: { code: 'budget_exhausted', next: 'jaw_grant_permissions' },
       payerRefilled: false,
     });
     expect(seen).toHaveLength(1);
@@ -986,10 +1033,10 @@ describe('jaw_pay_and_fetch', () => {
     expect(refills).toEqual([]);
   });
 
-  it('given a token with wallet:read wallet:send on a connection with a budget, when it pays, then it is refused insufficient_scope naming x402:pay', async () => {
+  it('given a token with wallet:read alone on a connection with a budget, when it pays, then it is refused insufficient_scope naming x402:pay', async () => {
     const { t } = await connected('1');
     const result = await pay(
-      { ...t, scopes: ['wallet:read', 'wallet:send'] },
+      { ...t, scopes: ['wallet:read'] },
       { url: url('/exact'), idempotencyKey: 'no-pay-scope' },
       deps()
     );
@@ -1004,7 +1051,7 @@ describe('jaw_pay_and_fetch', () => {
     const { t } = await connected('1');
     await getDb().insert(settings).values({ key: 'payments_paused', value: true });
     try {
-      const result = await pay({ ...t, scopes: ['wallet:read', 'wallet:send'] }, { url: url('/exact') }, deps());
+      const result = await pay({ ...t, scopes: ['wallet:read'] }, { url: url('/exact') }, deps());
       expect(result.content[0].text).toMatch(/^insufficient_scope: /);
     } finally {
       await getDb().delete(settings).where(eq(settings.key, 'payments_paused'));
@@ -1263,18 +1310,21 @@ describe('jaw_pay_and_fetch', () => {
     expect(refills).toEqual([105_000n]);
   });
 
-  it('lists payments newest first in jaw_history, scoped to the connection', async () => {
+  it('lists payments newest first in jaw_session_history, scoped to the connection', async () => {
     const { c, t } = await connected('1');
     balances.set(t.sessionAddress.toLowerCase(), 1_000_000n);
     await pay(t, { url: url('/exact'), idempotencyKey: 'h1' }, deps());
     await pay(t, { url: url('/exact'), idempotencyKey: 'h2' }, deps());
-    const listed = await callTool(c.access_token, 'jaw_history', { limit: 1 });
+    const listed = await callTool(c.access_token, 'jaw_session_history', { limit: 1 });
     expect(listed.structuredContent.payments).toHaveLength(1);
     expect(listed.structuredContent.payments[0]).toMatchObject({ idempotencyKey: 'h2', state: 'settled' });
-    const next = await callTool(c.access_token, 'jaw_history', { limit: 5, before: listed.structuredContent.next });
+    const next = await callTool(c.access_token, 'jaw_session_history', {
+      limit: 5,
+      before: listed.structuredContent.next,
+    });
     expect(next.structuredContent.payments.map((p: { idempotencyKey: string }) => p.idempotencyKey)).toEqual(['h1']);
     const stranger = await connected();
-    expect((await callTool(stranger.c.access_token, 'jaw_history', {})).structuredContent.payments).toEqual([]);
+    expect((await callTool(stranger.c.access_token, 'jaw_session_history', {})).structuredContent.payments).toEqual([]);
   });
 });
 
@@ -1495,14 +1545,14 @@ describe('the raw body kept for an internal caller', () => {
     }
   });
 
-  it('given jaw_pay_and_fetch, when an idempotency key claims the swap: namespace, then it is refused and nothing is claimed', async () => {
+  it('given jaw_session_x402_pay, when an idempotency key claims the swap: namespace, then it is refused and nothing is claimed', async () => {
     const { c } = await connected('1');
-    const swapKey = await callTool(c.access_token, 'jaw_pay_and_fetch', {
+    const swapKey = await callTool(c.access_token, 'jaw_session_x402_pay', {
       url: url('/free'),
       idempotencyKey: 'swap:abc:1',
     });
     expect(swapKey.isError).toBe(true);
-    await callTool(c.access_token, 'jaw_pay_and_fetch', { url: url('/free'), idempotencyKey: 'swap-abc-1' });
+    await callTool(c.access_token, 'jaw_session_x402_pay', { url: url('/free'), idempotencyKey: 'swap-abc-1' });
     const claimed = await getDb()
       .select({ key: payments.idempotencyKey })
       .from(payments)
@@ -1510,7 +1560,7 @@ describe('the raw body kept for an internal caller', () => {
     expect(claimed).toEqual([{ key: 'swap-abc-1' }]);
   });
 
-  it('given jaw_pay_and_fetch, when it pays, then its row keeps no raw body and its answer only the fenced one', async () => {
+  it('given jaw_session_x402_pay, when it pays, then its row keeps no raw body and its answer only the fenced one', async () => {
     const { t } = await connected('1');
     balances.set(t.sessionAddress.toLowerCase(), 1_000_000n);
     const result = await pay(t, { url: url('/exact'), idempotencyKey: 'raw-tool' }, deps());
@@ -1573,7 +1623,7 @@ describe('the raw body kept for an internal caller', () => {
 });
 
 describe('given a pay request that verified its bearer before the connection was disconnected', () => {
-  // What jaw_disconnect does once its batch landed: end the connection under the float lock.
+  // What jaw_session_disconnect does once its batch landed: end the connection under the float lock.
   const disconnect = (t: Tenant, held?: bigint[]) => () =>
     withFloat(t.connectionId, 1_000, (hold) =>
       hold.tx(async (tx) => {
@@ -1614,10 +1664,10 @@ describe('given a pay request that verified its bearer before the connection was
   });
 });
 
-describe('given a pay request that verified its bearer before another app of the owner revoked it', () => {
+describe('given a pay request that verified its bearer before its client revoked it', () => {
   it('when its refill turn comes after the revoke committed, then it refuses, reserves nothing and signs nothing', async () => {
-    const { c, t } = await connected('1');
-    const revoke = await revoker(c, t);
+    const { t } = await connected('1');
+    const revoke = await revoker(t);
     onProbe.set('/race', async () => {
       expect((await revoke())?.connection.status).toBe('revoked');
     });
@@ -1633,8 +1683,8 @@ describe('given a pay request that verified its bearer before another app of the
   });
 
   it('when the revoke commits after its refill, then the pay still settles', async () => {
-    const { c, t } = await connected('1');
-    const revoke = await revoker(c, t);
+    const { t } = await connected('1');
+    const revoke = await revoker(t);
     let revoked: Awaited<ReturnType<typeof revoke>> | undefined;
     onProof.set('/race', async () => {
       revoked = await revoke();
@@ -1647,21 +1697,25 @@ describe('given a pay request that verified its bearer before another app of the
 });
 
 describe.skipIf(!TEST_PG_URL)('on Postgres, given a pay inside its funding turn', () => {
-  it('when another app of the owner revokes it, then the revoke waits for the turn and the next pay refuses', async () => {
-    const { c, t } = await connected('1');
-    const revoke = await revoker(c, t);
+  it('when its client revokes it, then the revoke waits for the turn and the next pay refuses', async () => {
+    const { t } = await connected('1');
+    const replica = await watchedReplica(t.connectionId);
+    const revoke = await revoker(t, replica.revokeByGrant);
     let revoking: ReturnType<typeof revoke> | undefined;
     let statusInTurn: string | undefined;
     const inTurn = (funder: Address): TopUpExecutor => ({
       request: async (method, params) => {
         if (!revoking) {
+          const waiting = replica.untilWaiting();
           revoking = revoke();
-          statusInTurn = await statusOnceParked(t.connectionId);
+          await Promise.race([waiting, revoking]);
+          const [row] = await getDb().select().from(connections).where(eq(connections.id, t.connectionId));
+          statusInTurn = row.status;
         }
         return executor(funder).request(method, params);
       },
     });
-    const paid = await pay(
+    const paid = await replica.pay(
       t,
       { url: url('/race'), idempotencyKey: 'page-in-turn' },
       deps({ executor: (_t, grant) => inTurn(grant.account) })
@@ -1694,9 +1748,9 @@ describe.skipIf(!TEST_PG_URL)('on Postgres, given a top-up in flight whose lock 
   const statusOf = async (id: string) =>
     (await getDb().select().from(connections).where(eq(connections.id, id)))[0].status;
 
-  it('when another app of the owner revokes it, then the connection stays active until the pay concludes, and that revoke then ends it', async () => {
-    const { c, t } = await connected('1');
-    const revoke = await revoker(c, t);
+  it('when its client revokes it, then the connection stays active until the pay concludes, and that revoke then ends it', async () => {
+    const { t } = await connected('1');
+    const revoke = await revoker(t);
     let revoking: ReturnType<typeof revoke> | undefined;
     let statusWhenLanded: string | undefined;
     const meanwhile = async () => {
@@ -1847,7 +1901,7 @@ describe('given a 1 USDC/day budget and 1.5 USDC already in the payer', () => {
   });
 
   it.skipIf(!TEST_PG_URL)(
-    'when six 0.3 payments run at once across two replicas on Postgres, with each signature landing after the next turn, then three are paid, the rest refuse budget_exhausted holding nothing, and jaw_status shows what is left',
+    'when six 0.3 payments run at once across two replicas on Postgres, with each signature landing after the next turn, then three are paid, the rest refuse budget_exhausted holding nothing, and jaw_session_status shows what is left',
     async () => {
       const { c, t } = await connected('1');
       balances.set(t.sessionAddress.toLowerCase(), 1_500_000n);
@@ -1863,13 +1917,13 @@ describe('given a 1 USDC/day budget and 1.5 USDC already in the payer', () => {
       ).finally(() => getDb().execute(sql`drop function slow_sign cascade`));
       const refused = results.filter((r) => r.structuredContent?.kind !== 'paid');
       expect(refused.map((r) => r.structuredContent?.refusal?.code)).toEqual(Array(3).fill('budget_exhausted'));
-      expect(refused.every((r) => r.structuredContent?.refusal?.next === 'jaw_request_budget')).toBe(true);
+      expect(refused.every((r) => r.structuredContent?.refusal?.next === 'jaw_grant_permissions')).toBe(true);
       expect(seen).toHaveLength(3);
       for (const r of refused) {
         expect(await rowOf(r.structuredContent!.paymentId)).toMatchObject({ reserved: null, topUpAmount: null });
       }
-      const status = await callTool(c.access_token, 'jaw_status', {});
-      expect(status.structuredContent.balances.session.amount).toBe('600000');
+      const status = await callTool(c.access_token, 'jaw_session_status', {});
+      expect(status.structuredContent.float.amount).toBe('600000');
     }
   );
 });

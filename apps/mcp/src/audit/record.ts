@@ -17,7 +17,7 @@ function outcomeOf(tool: string, answer: Answer): string {
   if (answer[gateCode]) return answer[gateCode];
   if (answer.isError) return 'error';
   const payment = answer.structuredContent;
-  if (tool !== 'jaw_pay_and_fetch' || !payment?.refusal) return 'ok';
+  if (tool !== 'jaw_session_x402_pay' || !payment?.refusal) return 'ok';
   return payment.state === 'signed' || payment.state === 'unknown' ? 'unknown' : payment.refusal.code;
 }
 

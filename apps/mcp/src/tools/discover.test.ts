@@ -32,7 +32,7 @@ const catalog =
     return { mode: 'search' as const, count: services.length, partialResults: false, services };
   };
 
-describe('jaw_discover', () => {
+describe('jaw_session_x402_discover', () => {
   it("searches on the connection's chain and lists only what it can pay there", async () => {
     const asked: DiscoverParams[] = [];
     const find = catalog(

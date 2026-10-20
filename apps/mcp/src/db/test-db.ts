@@ -1,7 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import { join } from 'node:path';
 import { PGlite } from '@electric-sql/pglite';
-import { eq, sql } from 'drizzle-orm';
+import { sql } from 'drizzle-orm';
 import { drizzle } from 'drizzle-orm/pglite';
 import { migrate } from 'drizzle-orm/pglite/migrator';
 import { drizzle as drizzlePg } from 'drizzle-orm/postgres-js';
@@ -85,20 +85,6 @@ export async function lockWaiters(connectionId: string): Promise<number> {
       and database = (select oid from pg_database where datname = current_database())
       and ((classid::bigint << 32) | objid::bigint) = hashtext(${`refill:${connectionId}`})`);
   return n;
-}
-
-/** The connection's status once something waits on its float lock, or once it ended without waiting. */
-export async function statusOnceParked(connectionId: string): Promise<string> {
-  for (let i = 0; i < 100; i++) {
-    const parked = (await lockWaiters(connectionId)) > 0;
-    const [row] = await getDb()
-      .select({ status: schema.connections.status })
-      .from(schema.connections)
-      .where(eq(schema.connections.id, connectionId));
-    if (parked || row.status === 'revoked') return row.status;
-    await new Promise((r) => setTimeout(r, 50));
-  }
-  throw new Error('nothing waited on the float lock and the connection did not end');
 }
 
 /** Runs fn with the owner_calls guard trigger off, and puts it back even when fn throws. */
