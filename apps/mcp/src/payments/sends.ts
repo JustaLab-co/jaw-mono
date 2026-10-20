@@ -11,6 +11,9 @@ export interface RecordedSend {
   amount: bigint;
   periodStart: number;
 }
+export interface OpenSpend extends RecordedSend {
+  token: string;
+}
 
 const dbNow = sql`statement_timestamp()`;
 const twoDayPeriodsAgo = sql`now() - interval '2 days'`;
@@ -62,7 +65,9 @@ export async function handToReconciler(ids: string[], tx: Tx = getDb(), callsId?
     .where(and(inArray(sends.id, ids), eq(sends.state, 'open')));
 }
 
-export type SendEnd = { state: 'landed'; txHash: Hex; callsId?: Hex } | { state: 'released'; txHash?: Hex | null };
+export type SendEnd =
+  | { state: 'landed'; txHash: Hex; callsId?: Hex }
+  | { state: 'released'; txHash?: Hex | null; callsId?: Hex };
 
 export async function settleSends(ids: string[], end: SendEnd, tx: Tx = getDb()) {
   await tx
@@ -71,16 +76,14 @@ export async function settleSends(ids: string[], end: SendEnd, tx: Tx = getDb())
     .where(and(inArray(sends.id, ids), eq(sends.state, 'open')));
 }
 
-export async function openSpends(permissionId: string, tx: Tx): Promise<Map<string, bigint>> {
+export async function openSpends(permissionId: string, tx: Tx): Promise<OpenSpend[]> {
   const rows = await tx
-    .select({ token: sends.token, amount: sends.amount })
+    .select({ token: sends.token, amount: sends.amount, periodStart: sends.periodStart })
     .from(sends)
     .where(and(eq(sends.permissionId, permissionId), eq(sends.state, 'open')));
-  const spent = new Map<string, bigint>();
-  for (const { token, amount } of rows) {
-    if (token) spent.set(token, (spent.get(token) ?? 0n) + BigInt(amount));
-  }
-  return spent;
+  return rows.flatMap(({ token, amount, periodStart }) =>
+    token ? [{ token, amount: BigInt(amount), periodStart }] : []
+  );
 }
 
 export async function sendHistory(connectionId: string, limit: number): Promise<SendRow[]> {
