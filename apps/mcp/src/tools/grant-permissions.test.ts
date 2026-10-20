@@ -4,7 +4,7 @@ import { randomBytes } from 'node:crypto';
 import { beforeAll, describe, expect, it, vi } from 'vitest';
 import { toFunctionSelector } from 'viem';
 import { verifyBearer, type Tenant } from '@/connections/auth';
-import type { OpenWallet } from '@/connections/relay';
+import { WalletBusy, type OpenWallet } from '@/connections/relay';
 import {
   approvedOnChain,
   callTool,
@@ -404,6 +404,33 @@ describe('jaw_grant_permissions', () => {
     await walletsSettled();
 
     expect(opened).toBe(1);
+    const url = 'structuredContent' in first && first.structuredContent.url;
+    expect(again.content[0].text).toContain(`still waiting for the owner at ${url}`);
+  });
+
+  it('given a grant opening its link while another ask finds the wallet pool full, then the other is told that link is waiting', async () => {
+    const { t, signer } = await connected();
+    let release = () => {};
+    const held = new Promise<void>((resolve) => (release = resolve));
+    const honest = walletAnswers(signer);
+    const holding = {
+      openWallet: fakeWallet(async (method, params) => (await held, honest(method, params))),
+      readPermission: approvedOnChain,
+    };
+    let opener!: ReturnType<typeof grantPermissions>;
+    const fullOnceOpened = {
+      openWallet: (async () => {
+        await (opener = grantPermissions(t, twoByTwo, holding));
+        throw new WalletBusy();
+      }) as OpenWallet,
+      readPermission: approvedOnChain,
+    };
+
+    const again = await grantPermissions(t, twoByTwo, fullOnceOpened);
+    const first = await opener;
+    release();
+    await walletsSettled();
+
     const url = 'structuredContent' in first && first.structuredContent.url;
     expect(again.content[0].text).toContain(`still waiting for the owner at ${url}`);
   });

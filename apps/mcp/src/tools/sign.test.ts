@@ -95,6 +95,7 @@ const rejected = () => {
 
 beforeAll(TEST_PG_URL ? useTestPostgres : useTestDb);
 beforeEach(() => {
+  turn.beforeCount = undefined;
   opened = [];
   asked = [];
 });
@@ -536,27 +537,27 @@ describe('jaw_sign', () => {
     const [a, b, c] = [await connected(signer), await connected(signer), await connected(signer)];
     await ask(a.t, { idempotencyKey: 'a' }, idleWallet);
     await ask(b.t, { idempotencyKey: 'b' }, idleWallet);
-    let first!: ReturnType<typeof ask>;
-    turn.beforeCount = () => (first = ask(c.t, { idempotencyKey: 'c' }, idleWallet));
+    let opener!: ReturnType<typeof ask>;
+    turn.beforeCount = () => (opener = ask(c.t, { idempotencyKey: 'c' }, idleWallet));
 
     const retry = await ask(c.t, { idempotencyKey: 'c' }, idleWallet);
 
     expect(retry[gateCode]).toBeUndefined();
-    expect(retry.structuredContent!.url).toBe((await first).structuredContent!.url);
+    expect(retry.structuredContent!.url).toBe((await opener).structuredContent!.url);
   });
 
   it('given the same key opens its link while a retry of it finds the wallet pool full, then the retry answers that link', async () => {
     const { t } = await connected();
-    let first!: ReturnType<typeof ask>;
+    let opener!: ReturnType<typeof ask>;
     const fullOnceOpened: OpenWallet = async () => {
-      await (first = ask(t, {}, idleWallet));
+      await (opener = ask(t, {}, idleWallet));
       throw new WalletBusy();
     };
 
     const retry = await ask(t, {}, fullOnceOpened);
 
     expect(retry[gateCode]).toBeUndefined();
-    expect(retry.structuredContent!.url).toBe((await first).structuredContent!.url);
+    expect(retry.structuredContent!.url).toBe((await opener).structuredContent!.url);
   });
 
   it('given the same key with other input, then it is an idempotency_conflict and no second link opens', async () => {
