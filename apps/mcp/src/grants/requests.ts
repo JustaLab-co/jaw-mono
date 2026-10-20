@@ -1,9 +1,9 @@
 import { randomBytes } from 'node:crypto';
-import { and, desc, eq, gt, inArray, isNull, lte, ne, or, sql, type SQL } from 'drizzle-orm';
+import { and, desc, eq, gt, isNull, lte, ne, or, sql, type SQL } from 'drizzle-orm';
 import type { PgUpdateSetSource } from 'drizzle-orm/pg-core';
 import type { Tenant } from '@/connections/auth';
 import { WalletBusy, type Ask, type OpenWallet, type Wallet } from '@/connections/relay';
-import { keepLease, sessionLeaseEnd } from '@/connections/session-lease';
+import { heldSince, keepLease, sessionLeaseEnd } from '@/connections/session-lease';
 import { USER_REJECTED } from '@/connections/wallet-codes';
 import { getDb, type Tx } from '@/db/client';
 import { permissionRequests } from '@/db/schema';
@@ -50,7 +50,7 @@ async function update(where: SQL | undefined, set: PgUpdateSetSource<typeof perm
 
 const ASKED = 'asked';
 export const LINK_LOST = 'link_lost';
-const lapsed = or(isNull(permissionRequests.sessionUntil), lte(permissionRequests.sessionUntil, dbNow));
+const lapsed = or(isNull(permissionRequests.sessionUntil), lte(permissionRequests.sessionUntil, heldSince));
 const endCode = sql`case when ${permissionRequests.approveBy} <= ${dbNow} then null
   when ${permissionRequests.code} = ${ASKED} then ${LINK_LOST} else 'session_lost' end`;
 
@@ -59,8 +59,24 @@ const pastWindow = lte(permissionRequests.approveBy, dbNow);
 const closeDead = (same: SQL | undefined, db: Tx = getDb()) =>
   update(and(same, awaiting, or(pastWindow, lapsed)), { state: 'expired', code: endCode }, db);
 
+const askedInWindow = and(awaiting, gt(permissionRequests.approveBy, dbNow), eq(permissionRequests.code, ASKED));
+// Other connections wait on an asked revoke until its window ends, since the owner may still revoke there.
+const notAskedRevoke = or(
+  ne(permissionRequests.method, 'revoke'),
+  sql`${permissionRequests.code} is distinct from ${ASKED}`,
+  pastWindow
+);
+
+export async function closeLapsedLinks(): Promise<number> {
+  const ended = await getDb()
+    .update(permissionRequests)
+    .set({ state: 'expired', code: endCode, updatedAt: dbNow })
+    .where(and(awaiting, lapsed, notAskedRevoke))
+    .returning({ id: permissionRequests.id });
+  return ended.length;
+}
+
 async function findHeld(t: Tenant, req: LinkRequest): Promise<Held | undefined> {
-  const askedInWindow = and(awaiting, gt(permissionRequests.approveBy, dbNow), eq(permissionRequests.code, ASKED));
   const [row] = await getDb()
     .select()
     .from(permissionRequests)
@@ -131,13 +147,12 @@ export async function currentSign(t: Tenant, idempotencyKey: string): Promise<Pe
   return row;
 }
 
-const givenUp = and(
-  eq(permissionRequests.state, 'expired'),
-  inArray(permissionRequests.code, ['session_lost', LINK_LOST])
-);
+// An answer the owner gave still stands on a row that ended while its process could not renew.
+const answered = (state: Outcome['state']) => state === 'approved' || state === 'owner_declined';
 
 async function settle(row: PermissionRequestRow, { state, code, permissionId, signature }: Outcome) {
-  await update(and(eq(permissionRequests.id, row.id), or(awaiting, givenUp)), {
+  const open = answered(state) ? or(awaiting, eq(permissionRequests.state, 'expired')) : awaiting;
+  await update(and(eq(permissionRequests.id, row.id), open), {
     state,
     code: code ?? null,
     sessionUntil: null,
@@ -230,7 +245,7 @@ function follow(row: PermissionRequestRow, wallet: Wallet, work: LinkRequest['wo
   );
   let asked = false;
   const claim: Claim = async () => {
-    const leased = and(ofRow(row), gt(permissionRequests.sessionUntil, dbNow), isNull(permissionRequests.code));
+    const leased = and(ofRow(row), gt(permissionRequests.sessionUntil, heldSince), isNull(permissionRequests.code));
     asked = (await update(leased, { code: ASKED })) !== undefined;
     return asked;
   };
