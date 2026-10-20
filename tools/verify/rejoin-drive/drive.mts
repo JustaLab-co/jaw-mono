@@ -24,10 +24,16 @@ const say = (...a: unknown[]) => console.log(new Date().toISOString().slice(11, 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
 const sent: string[] = [];
+let dropAfterNextSend = false;
 const wsSend = WebSocket.prototype.send;
 WebSocket.prototype.send = function (data: Parameters<typeof wsSend>[0]) {
   sent.push(String(data));
-  return wsSend.call(this, data);
+  wsSend.call(this, data);
+  // The server goes away right after its request leaves, with no shutdown, as a restart does.
+  if (dropAfterNextSend) {
+    dropAfterNextSend = false;
+    this.close();
+  }
 };
 
 const browser = await chromium.launch();
@@ -38,19 +44,12 @@ try {
   await (await browser.newPage()).goto(wallet.url);
 
   type Resume = Parameters<NonNullable<Parameters<typeof wallet.run>[1]>>[0];
-  let sentAtJoin = 0;
   const joined = new Promise<Resume>((resolve) => {
     wallet
       .run(
-        async (ask) => {
-          const asked = ask('eth_chainId', []);
-          while (sent.length === sentAtJoin) await sleep(5);
-          // The server goes away right after asking, with no shutdown, as a restart does.
-          wallet.close();
-          return asked;
-        },
+        (ask) => ask('eth_chainId', []),
         (resume) => {
-          sentAtJoin = sent.length;
+          dropAfterNextSend = true;
           resolve(resume);
         }
       )
