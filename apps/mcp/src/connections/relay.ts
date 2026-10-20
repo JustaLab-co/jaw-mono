@@ -8,19 +8,13 @@ import {
   importKeyFromHex,
   type EncryptedEnvelope,
 } from '@jaw.id/agent';
+import { errorLabel, log } from '@/lib/edge';
 import { config } from './config';
 import { FIRST_PARTY_CLIENTS } from './scopes';
+import type { RelayResume } from './seal';
 
 /** A request to the owner's wallet, answered with what the wallet returns or thrown with why it refused. */
 export type Ask = (method: string, params: unknown[]) => Promise<unknown>;
-
-export interface RelayResume {
-  session: string;
-  key: string;
-  peer: string;
-  chainId: number;
-  appName: string;
-}
 
 /** A wallet session the owner opens at `url`. `run` asks it things, then closes it. */
 export interface Wallet {
@@ -168,7 +162,12 @@ async function startSession(
         await page.send({ type: 'init', ...init });
         const ready = await page.read((m) => m.type === 'ready');
         if (ready.replays === true) {
-          await joined?.({ session, key: await exportKeyToHex('private', keys.privateKey), peer, ...init });
+          // A session that cannot be resumed is how every session ran before replays, so the owner is still asked.
+          try {
+            await joined?.({ session, key: await exportKeyToHex('private', keys.privateKey), peer, ...init });
+          } catch (err) {
+            log('warn', { msg: 'relay session not saved', error: errorLabel(err) });
+          }
         }
         const result = await work(page.ask);
         // Closes the wallet tab.
@@ -275,6 +274,8 @@ export const resumeWallet = (resume: RelayResume, until: Date, client?: RelayCli
 
 async function rejoin(release: () => void, resume: RelayResume, until: Date): Promise<Wallet | undefined> {
   const { session, key, peer, chainId, appName } = resume;
+  const ours = createPrivateKey({ key: Buffer.from(key, 'hex'), format: 'der', type: 'pkcs8' });
+  const url = linkOf(session, createPublicKey(ours).export({ format: 'der', type: 'spki' }).toString('hex'));
   const { ws, inbox, end } = connect(session, until, release);
   const soon = () => new Date(Math.min(until.getTime(), Date.now() + REJOIN_WITHIN_MS));
   const status = await inbox
@@ -287,10 +288,9 @@ async function rejoin(release: () => void, resume: RelayResume, until: Date): Pr
     end();
     return undefined;
   }
-  const ours = createPrivateKey({ key: Buffer.from(key, 'hex'), format: 'der', type: 'pkcs8' });
 
   return {
-    url: linkOf(session, createPublicKey(ours).export({ format: 'der', type: 'spki' }).toString('hex')),
+    url,
     run: async (work) => {
       try {
         const secret = await deriveSharedSecret(
