@@ -11,7 +11,7 @@
 - `grant-target`: a call to the account itself, the permission manager, an EntryPoint or the any-contract wildcard `0x3232...3232` is refused as `call_target_refused` before any link opens.
 - `grant-mismatch`: a wallet answer that differs from the request in any call or spend records no row.
 - `grant-input`: the preset together with calls, spends or an expiry, spends without calls, a malformed function signature, a period the wallet does not take, an allowance of 2^160 or more and a yearly multiplier above 5461 are refused with no link.
-- `grant-cap`: a connection holding 5 live grants of either kind is refused before a link opens. A replaced budget still approved on chain counts, so the server retries its revoke before refusing.
+- `grant-cap`: a connection holding 5 live grants of either kind is refused before a link opens. A new budget does not count the current budget it replaces. A replaced budget still approved on chain counts, so the server retries its revoke before refusing.
 - `grant-replace`: an approved `x402Budget` replaces the connection's current budget: the older row gets `replaced_at`, and the server revokes it on chain with `revokeAsSpender` from the payer, without sweeping the float, then sets `revoked_at`. A revoke it cannot send leaves the row replaced and unrevoked, listed by `jaw_connections` as `replaced`. A custom grant replaces nothing.
 - `grant-totals`: the link reply sums what the connection's live grants let the session key move per token and period, and says when the request replaces the current budget.
 - `grant-one-open`: a second request while one waits on the owner is refused with the waiting link. The waiting link counts toward the account's three open owner links (hosted-revoke.md, `link-cap`).

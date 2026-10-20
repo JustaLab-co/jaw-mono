@@ -9,7 +9,7 @@ import { isAddressEqual, isHex, numberToHex, toFunctionSelector, type Address, t
 import type { Tx } from '@/db/client';
 import { connections, grants, SPEND_UNITS } from '@/db/schema';
 import { publicClientFor } from '@/lib/chain';
-import { liveGrants, LIVE_GRANTS_PER_CONNECTION, type GrantKind } from './store';
+import { grantsBeside, LIVE_GRANTS_PER_CONNECTION, type GrantKind } from './store';
 
 const TRANSFER_SIGNATURE = 'transfer(address,uint256)';
 
@@ -125,7 +125,7 @@ export async function checkGranted(
 
 export async function recordGrant(tx: Tx, connectionId: string, grant: NewGrant) {
   await tx.select({ id: connections.id }).from(connections).where(eq(connections.id, connectionId)).for('update');
-  if ((await liveGrants(connectionId, tx)).length >= LIVE_GRANTS_PER_CONNECTION) {
+  if ((await grantsBeside(connectionId, grant.kind, tx)) >= LIVE_GRANTS_PER_CONNECTION) {
     throw new Error(`the connection already holds ${LIVE_GRANTS_PER_CONNECTION} live grants`);
   }
   const inserted = await tx

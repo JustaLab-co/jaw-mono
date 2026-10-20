@@ -18,7 +18,7 @@ import {
 } from '@/connections/testkit';
 import type { DisconnectDeps } from '@/connections/disconnect';
 import { getDb } from '@/db/client';
-import { connections, grants, permissionRequests, settings } from '@/db/schema';
+import { connections, grants, payments, permissionRequests, settings } from '@/db/schema';
 import { TEST_PG_URL, useTestDb, useTestPostgres } from '@/db/test-db';
 import { endConnection } from '@/connections/rows';
 import { WalletBusy, type OpenWallet, type Wallet } from '@/connections/relay';
@@ -261,6 +261,29 @@ describe('given a connection that approves a second budget', () => {
     expect(await rowOf(connectedWith)).toMatchObject({ replacedAt: expect.any(Date), revokedAt: null });
   });
 
+  it('when a refill is still landing in the payer, then the first stays replaced and approved, and nothing is sent', async () => {
+    const { t, signer, connectedWith } = await connected();
+    const { deps, sent } = sessionFakes();
+    await getDb()
+      .insert(payments)
+      .values({
+        id: `pay_${randomBytes(8).toString('hex')}`,
+        connectionId: t.connectionId,
+        idempotencyKey: randomBytes(8).toString('hex'),
+        requestHash: 'h',
+        permissionId: connectedWith,
+        payer: t.sessionAddress.toLowerCase(),
+        url: 'https://seller.example/x',
+        leaseUntil: new Date(Date.now() + 60_000),
+        topUpAmount: '105000',
+      });
+
+    await ask(t, signer, { perDay: '0.5', session: deps });
+
+    expect(sent).toHaveLength(0);
+    expect(await rowOf(connectedWith)).toMatchObject({ replacedAt: expect.any(Date), revokedAt: null });
+  });
+
   it('when the revoke lands, then the owner link was already settled approved', async () => {
     const { t, signer } = await connected();
     const { deps } = sessionFakes();
@@ -305,6 +328,19 @@ describe('given a connection that approves a second budget', () => {
     expect((await x402Budget(t.connectionId))?.permissionId).toBe(newer);
   });
 
+  it('given the cap full with the budget among the grants, when a new budget is asked, then it is approved in its place', async () => {
+    const { t, signer, connectedWith } = await connected();
+    for (let n = 1; n < LIVE_GRANTS_PER_CONNECTION; n++) await ask(t, signer, { input: CUSTOM });
+    const { deps, sent } = sessionFakes();
+
+    const { grant } = await ask(t, signer, { perDay: '2', session: deps });
+
+    expect(grant).toBeDefined();
+    expect((await x402Budget(t.connectionId))?.allowance).toBe('2000000');
+    expect(decoded(sent[0])).toEqual(['revokeAsSpender', 'approve']);
+    expect(await revokedAt(connectedWith)).toEqual(expect.any(Date));
+  });
+
   it('given the cap full with a replaced budget left approved, when a grant is asked, then the revoke is retried and the wallet opens', async () => {
     const { t, signer, connectedWith } = await connected();
     for (let n = 2; n < LIVE_GRANTS_PER_CONNECTION; n++) await ask(t, signer, { input: CUSTOM });
@@ -329,7 +365,7 @@ describe('the link reply', () => {
 
     const summary = 'structuredContent' in result ? result.structuredContent.summary : '';
     expect(summary).toContain(
-      'The 2 live grant(s) on this connection already let the session key move up to 7 base units of 0x4200000000000000000000000000000000000006 per week, 1 USDC per day.'
+      'The 2 grant(s) approved on chain for this connection already let the session key move up to 7 base units of 0x4200000000000000000000000000000000000006 per week, 1 USDC per day.'
     );
     expect(summary).toContain('replaces the current one');
   });
@@ -351,7 +387,7 @@ describe('the link reply', () => {
     const { result } = await ask(t, signer, { input: CUSTOM });
 
     const summary = 'structuredContent' in result ? result.structuredContent.summary : '';
-    expect(summary).toContain('No live grant on this connection lets the session key move tokens yet.');
+    expect(summary).toContain('No grant approved on chain for this connection lets the session key move tokens yet.');
     expect(summary).not.toContain('replaces');
   });
 });
@@ -364,6 +400,10 @@ const newGrantFrom = async (
   const { connectionId: _c, createdAt: _a, replacedAt: _r, revokedAt: _v, ...rest } = row;
   return { ...rest, permissionId };
 };
+const customFrom = async (connectionId: string): Promise<NewGrant> => ({
+  ...(await newGrantFrom(connectionId)),
+  kind: 'custom',
+});
 const inTx = (connectionId: string, g: NewGrant) => getDb().transaction((tx) => recordGrant(tx, connectionId, g));
 describe('jaw_grant_permissions', () => {
   it('the wallet is given thirty minutes to answer', async () => {
@@ -620,20 +660,16 @@ describe('the permission of a budget', () => {
 
   it('a connection at the cap of live grants is refused before a wallet opens, naming the cap', async () => {
     const { t } = await connected();
-    for (let n = 1; n < LIVE_GRANTS_PER_CONNECTION; n++) await inTx(t.connectionId, await newGrantFrom(t.connectionId));
+    for (let n = 1; n < LIVE_GRANTS_PER_CONNECTION; n++) await inTx(t.connectionId, await customFrom(t.connectionId));
     let opened = 0;
 
-    const result = await grantPermissions(
-      t,
-      { x402Budget: { perDay: '1' } },
-      {
-        openWallet: async () => {
-          opened++;
-          throw new Error('not reached');
-        },
-        readPermission: approvedOnChain,
-      }
-    );
+    const result = await grantPermissions(t, CUSTOM, {
+      openWallet: async () => {
+        opened++;
+        throw new Error('not reached');
+      },
+      readPermission: approvedOnChain,
+    });
 
     expect('isError' in result && result.isError).toBe(true);
     expect(result.content[0].text).toContain(`${LIVE_GRANTS_PER_CONNECTION} live grants`);
@@ -642,9 +678,9 @@ describe('the permission of a budget', () => {
 
   it('a grant past the cap is not recorded, and an expired one no longer counts against it', async () => {
     const { t } = await connected();
-    for (let n = 1; n < LIVE_GRANTS_PER_CONNECTION; n++) await inTx(t.connectionId, await newGrantFrom(t.connectionId));
+    for (let n = 1; n < LIVE_GRANTS_PER_CONNECTION; n++) await inTx(t.connectionId, await customFrom(t.connectionId));
 
-    await expect(inTx(t.connectionId, await newGrantFrom(t.connectionId))).rejects.toThrow(/live grants/);
+    await expect(inTx(t.connectionId, await customFrom(t.connectionId))).rejects.toThrow(/live grants/);
     expect(await liveGrants(t.connectionId)).toHaveLength(LIVE_GRANTS_PER_CONNECTION);
 
     const [oldest] = (await liveGrants(t.connectionId)).slice(-1);
@@ -652,7 +688,7 @@ describe('the permission of a budget', () => {
       .update(grants)
       .set({ expiresAt: new Date(Date.now() - 1000) })
       .where(eq(grants.permissionId, oldest.permissionId));
-    await expect(inTx(t.connectionId, await newGrantFrom(t.connectionId))).resolves.toBeUndefined();
+    await expect(inTx(t.connectionId, await customFrom(t.connectionId))).resolves.toBeUndefined();
   });
 
   it('a replaced budget is never the x402 budget, and is still live to revoke', async () => {

@@ -221,6 +221,9 @@ export async function openLink(t: Tenant, req: LinkRequest, openWallet: OpenWall
   return { opened: row };
 }
 
+/** Follow-up work of settled links still running. */
+export const followUps = new Set<Promise<void>>();
+
 function follow(row: PermissionRequestRow, wallet: Wallet, { work, settled }: LinkRequest) {
   const stop = keepLease(
     async () => {
@@ -240,13 +243,12 @@ function follow(row: PermissionRequestRow, wallet: Wallet, { work, settled }: Li
     log('warn', { msg: 'permission request ended', permissionRequestId: row.id, error: errorLabel(err) });
     return outcomeOf(err, row, asked);
   };
-  let answered = false;
+  let answered: Outcome | undefined;
   void wallet
     .run(async (ask) => {
       const outcome = await work(ask, claim).catch(ended);
-      answered = true;
+      answered = outcome;
       await settle(row, outcome);
-      await settled?.(outcome);
     })
     .catch((err: unknown) => {
       if (answered) throw err;
@@ -255,5 +257,19 @@ function follow(row: PermissionRequestRow, wallet: Wallet, { work, settled }: Li
     .catch((err: unknown) =>
       log('warn', { msg: 'permission request not settled', permissionRequestId: row.id, error: errorLabel(err) })
     )
-    .finally(stop);
+    .finally(stop)
+    // After the wallet session ends, so the owner's page closes and its relay slot frees at once.
+    .then(() => {
+      if (!answered || !settled) return;
+      const after: Promise<void> = settled(answered)
+        .catch((err: unknown) =>
+          log('warn', {
+            msg: 'permission request follow-up failed',
+            permissionRequestId: row.id,
+            error: errorLabel(err),
+          })
+        )
+        .finally(() => followUps.delete(after));
+      followUps.add(after);
+    });
 }

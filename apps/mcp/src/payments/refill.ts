@@ -202,7 +202,12 @@ export function refillHook(c: RefillContext): EnsureFunds {
               .from(grants)
               .where(and(eq(grants.permissionId, c.grant.permissionId), isNotNull(grants.replacedAt)))
           );
-          if (replaced) return { ok: false, code: 'not_allowed', reason: 'a newer budget replaced this one' };
+          if (replaced)
+            return {
+              ok: false,
+              code: 'not_allowed',
+              reason: 'a newer budget replaced the one this payment chose; pay again',
+            };
           // The balance and the nonces it is netted against are read at one block, so a
           // payment mined between two reads is neither in the balance nor held, never both.
           const client = c.clients.publicClient(c.grant.chainId);

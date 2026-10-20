@@ -5,6 +5,7 @@ import { toFunctionSelector, verifyMessage, verifyTypedData, type Address, type 
 import { privateKeyToAccount, generatePrivateKey } from 'viem/accounts';
 import { getDb } from '@/db/client';
 import { grants } from '@/db/schema';
+import { followUps } from '@/grants/requests';
 import { x402Budget, type Grant } from '@/grants/store';
 import type { GrantRequest, ReadPermission } from '@/grants/permission';
 import type { SignedPayload } from '@/lib/chain';
@@ -114,9 +115,12 @@ export function sessionFakes(outcome: Sent = { status: 'landed', txHash: SENT_TX
 
 /** Waits for every wallet session the server started to finish, including ones started meanwhile. */
 export const walletsSettled = async () => {
-  while (runs.size) await Promise.all(runs);
-  // Then what the server chained after each run, such as freeing its slot.
-  await new Promise((resolve) => setImmediate(resolve));
+  do {
+    while (runs.size) await Promise.all(runs);
+    // Then what the server chained after each run, such as freeing its slot or its follow-up.
+    await new Promise((resolve) => setImmediate(resolve));
+    await Promise.all(followUps);
+  } while (runs.size || followUps.size);
 };
 
 let interactionDeps: InteractionDeps = {

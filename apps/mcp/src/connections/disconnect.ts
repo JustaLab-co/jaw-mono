@@ -152,6 +152,16 @@ export async function sessionSender(t: Session): Promise<SessionSender> {
 
 const DEFAULTS: DisconnectDeps = { readPermission: readOnChain, clients: chainClients, sender: sessionSender };
 
+const NOTHING_REVOKED: Returned = {
+  revoked: [],
+  stillApproved: [],
+  unread: [],
+  swept: 0n,
+  txHash: null,
+  left: null,
+  seenRevoked: [],
+};
+
 interface Returned {
   revoked: Hex[];
   stillApproved: Hex[];
@@ -222,9 +232,13 @@ export const retire = (s: Session, deps = DEFAULTS): Promise<Returned | string> 
  */
 export async function revokeReplaced(s: Session, deps = DEFAULTS): Promise<Returned | string> {
   if (await isPaymentsPaused()) return REFUSALS.paused;
-  return withFloat(s.connectionId, deps.lockWaitMs ?? LOCK_WAIT_MS, (hold) =>
-    returnFunds(hold, s, deps, 'replaced')
-  ).catch((err: unknown) => (err instanceof FloatBusy ? REFUSALS.busy : errorLabel(err)));
+  // Read first, so a connection with nothing to revoke never waits on the float lock.
+  if ((await replacedBudgets(s.connectionId)).length === 0) return NOTHING_REVOKED;
+  return withFloat(s.connectionId, deps.lockWaitMs ?? LOCK_WAIT_MS, async (hold) => {
+    // A top-up still landing pulls under a budget this would revoke.
+    if (await hold.tx((tx) => topUpInFlight(tx, s.connectionId))) return REFUSALS.landing;
+    return returnFunds(hold, s, deps, 'replaced');
+  }).catch((err: unknown) => (err instanceof FloatBusy ? REFUSALS.busy : errorLabel(err)));
 }
 
 /**
@@ -298,9 +312,7 @@ async function returnFunds(
   const live = await hold.tx((tx) =>
     scope === 'everything' ? liveGrants(t.connectionId, tx) : replacedBudgets(t.connectionId, tx)
   );
-  if (scope === 'replaced' && live.length === 0) {
-    return { revoked: [], stillApproved: [], unread: [], swept: 0n, txHash: null, left: null, seenRevoked: [] };
-  }
+  if (scope === 'replaced' && live.length === 0) return NOTHING_REVOKED;
   const returned = await sendBatch(hold, t, deps, live, usdc.address, scope === 'everything');
   if (typeof returned === 'string') return returned;
   const ids = [...returned.revoked, ...returned.seenRevoked];

@@ -31,7 +31,14 @@ import {
   type ReadPermission,
 } from '@/grants/permission';
 import { lostBefore, lostPreamble, openLink, type Claim, type Outcome } from '@/grants/requests';
-import { liveGrants, LIVE_GRANTS_PER_CONNECTION, x402Budget, type GrantKind, type LiveGrant } from '@/grants/store';
+import {
+  grantsBeside,
+  liveGrants,
+  LIVE_GRANTS_PER_CONNECTION,
+  x402Budget,
+  type GrantKind,
+  type LiveGrant,
+} from '@/grants/store';
 import { errorLabel, log } from '@/lib/edge';
 import { reply } from '@/lib/fence';
 import { forbiddenTargets } from './owner-calls';
@@ -202,13 +209,13 @@ function liveTotals(t: Tenant, held: LiveGrant[]): string {
     const sum = sums.get(key) ?? { token, per, amount: 0n };
     sums.set(key, { ...sum, amount: sum.amount + BigInt(allowance) });
   }
-  if (!sums.size) return 'No live grant on this connection lets the session key move tokens yet. ';
+  if (!sums.size) return 'No grant approved on chain for this connection lets the session key move tokens yet. ';
   const lines = [...sums.values()].map(({ token, per, amount }) =>
     usdc && isAddressEqual(token as Address, usdc.address)
       ? `${formatUnits(amount, usdc.decimals)} USDC ${per}`
       : `${amount} base units of ${token} ${per}`
   );
-  return `The ${held.length} live grant(s) on this connection already let the session key move up to ${lines.join(', ')}. `;
+  return `The ${held.length} grant(s) approved on chain for this connection already let the session key move up to ${lines.join(', ')}. `;
 }
 
 export async function grantPermissions(t: Tenant, input: GrantInput, deps = DEFAULTS) {
@@ -228,17 +235,14 @@ export async function grantPermissions(t: Tenant, input: GrantInput, deps = DEFA
   }
   const ask = asked(t, input, Math.floor(expiresAt.getTime() / 1000));
   if (typeof ask === 'string') return refusal(ask);
-  let held = await liveGrants(t.connectionId);
-  if (held.length >= LIVE_GRANTS_PER_CONNECTION) {
-    await revokeOlder(t, deps);
-    held = await liveGrants(t.connectionId);
-  }
-  if (held.length >= LIVE_GRANTS_PER_CONNECTION) {
+  if ((await grantsBeside(t.connectionId, ask.kind)) >= LIVE_GRANTS_PER_CONNECTION) await revokeOlder(t, deps);
+  if ((await grantsBeside(t.connectionId, ask.kind)) >= LIVE_GRANTS_PER_CONNECTION) {
     return refusal(
       `This connection already holds ${LIVE_GRANTS_PER_CONNECTION} live grants, the most one connection may hold. ` +
         'Wait for one to expire, revoke one listed by jaw_connections with jaw_revoke_permission, or call jaw_session_disconnect, which revokes them all, and connect again.'
     );
   }
+  const held = await liveGrants(t.connectionId);
   const replacing = ask.kind === 'x402-budget' && (await x402Budget(t.connectionId)) !== undefined;
   const opened = await openLink(
     t,
