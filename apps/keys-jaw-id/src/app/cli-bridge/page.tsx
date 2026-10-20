@@ -89,8 +89,11 @@ function CLIBridgeContent() {
   const appNameRef = useRef<string | null>(null);
   const wsRef = useRef<WebSocket | null>(null);
   const sharedSecretRef = useRef<CryptoKey | null>(null);
-  /** Every answer given in this relay session, by request id. */
-  const answersRef = useRef(new Map<string, { request: string; answer: Promise<RpcResponse> }>());
+  /**
+   * Every answer given in this relay session, by request id. An id is final,
+   * refusals and errors included: a client that wants to try again sends a new id.
+   */
+  const answersRef = useRef(new Map<string, { request: string; reply: Promise<RpcResponse> }>());
 
   const sessionId = searchParams.get('session');
   const relayUrl = searchParams.get('relay');
@@ -117,22 +120,22 @@ function CLIBridgeContent() {
 
   // A client that lost its connection asks again under the same id, so it
   // gets the answer already given instead of a second dialog.
-  const handleRpcRequest = useCallback(async (id: string, method: string, params: unknown) => {
-    if (!sdkRef.current || !sharedSecretRef.current || !wsRef.current) return;
+  const handleRpcRequest = useCallback(async (id: string, method: string, rawParams: unknown) => {
+    const sdk = sdkRef.current;
+    const secret = sharedSecretRef.current;
+    const ws = wsRef.current;
+    if (!sdk || !secret || !ws) return;
 
+    const params = Array.isArray(rawParams) ? rawParams : rawParams !== undefined ? [rawParams] : [];
     const request = JSON.stringify({ method, params });
     let given = answersRef.current.get(id);
     if (!given) {
-      given = { request, answer: answer(sdkRef.current, id, method, params) };
+      given = { request, reply: ask(sdk, id, method, params) };
       answersRef.current.set(id, given);
       setLastMethod(method);
     }
-    const reply = given.request === request ? await given.answer : reused(id);
-
-    if (sharedSecretRef.current && wsRef.current) {
-      const envelope = await encryptAndSerialize(sharedSecretRef.current, reply);
-      wsRef.current.send(JSON.stringify(envelope));
-    }
+    const reply = given.request === request ? await given.reply : idReused(id);
+    ws.send(JSON.stringify(await encryptAndSerialize(secret, reply)));
   }, []);
 
   useEffect(() => {
@@ -271,7 +274,10 @@ function CLIBridgeContent() {
                 }
 
                 case 'rpc_request':
-                  handleRpcRequest(inner.id as string, inner.method as string, inner.params);
+                  if (typeof inner.id !== 'string' || !inner.id) break;
+                  handleRpcRequest(inner.id, inner.method as string, inner.params).catch((err) =>
+                    console.error('[cli-bridge] Failed to answer request:', err)
+                  );
                   break;
 
                 case 'shutdown':
@@ -398,15 +404,14 @@ function CLIBridgeContent() {
 
 type RpcResponse = Record<string, unknown> & { type: 'rpc_response'; id: string };
 
-async function answer(
+async function ask(
   sdk: ReturnType<typeof JAW.create>,
   id: string,
   method: string,
-  params: unknown
+  params: unknown[]
 ): Promise<RpcResponse> {
   try {
-    const normalizedParams = Array.isArray(params) ? params : params !== undefined ? [params] : [];
-    const result = await sdk.provider.request({ method, params: normalizedParams });
+    const result = await sdk.provider.request({ method, params });
     const address = extractAddress(method, result);
     return { type: 'rpc_response', id, success: true, data: result, ...(address ? { address } : {}) };
   } catch (err) {
@@ -418,7 +423,7 @@ async function answer(
 }
 
 /** An id already answered for another request is refused, so an answer never covers a request it was not given for. */
-const reused = (id: string): RpcResponse => ({
+const idReused = (id: string): RpcResponse => ({
   type: 'rpc_response',
   id,
   success: false,

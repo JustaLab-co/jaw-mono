@@ -290,10 +290,9 @@ describe('cli-bridge page answers a repeated request', () => {
     await deliver(ws, sign);
     await act(async () => approve('0xsig'));
 
-    await vi.waitFor(async () => expect((await answers(ws, 'r1')).length).toBeGreaterThan(0));
-    for (const answer of await answers(ws, 'r1')) {
-      expect(answer).toEqual({ type: 'rpc_response', id: 'r1', success: true, data: '0xsig' });
-    }
+    await vi.waitFor(async () => expect(await answers(ws, 'r1')).toHaveLength(2));
+    const signed = { type: 'rpc_response', id: 'r1', success: true, data: '0xsig' };
+    expect(await answers(ws, 'r1')).toEqual([signed, signed]);
     expect(asked).toHaveBeenCalledTimes(1);
   });
 
@@ -346,6 +345,37 @@ describe('cli-bridge page answers a repeated request', () => {
 
     await vi.waitFor(async () => expect(await answers(second, 'r1')).toHaveLength(1));
     expect(asked).toHaveBeenCalledTimes(2);
+  });
+
+  it('a request with no id never reaches the wallet', async () => {
+    const asked = vi.fn(async () => '0xsig');
+    created.request = asked;
+    const ws = await start();
+    await init(ws, { appName: 'Claude' });
+    const sent = ws.sent.length;
+
+    await deliver(ws, { type: 'rpc_request', method: 'personal_sign', params: ['0x68656c6c6f', '0xabc'] });
+    await deliver(ws, { ...sign, id: 'r2' });
+
+    await vi.waitFor(async () => expect(await answers(ws, 'r2')).toHaveLength(1));
+    expect(ws.sent).toHaveLength(sent + 1);
+    expect(asked).toHaveBeenCalledTimes(1);
+  });
+
+  it('a request repeated with its params unwrapped is the same request', async () => {
+    const asked = vi.fn(async () => '0x14a34');
+    created.request = asked;
+    const ws = await start();
+    await init(ws, { appName: 'Claude' });
+    await deliver(ws, { type: 'rpc_request', id: 'r3', method: 'eth_chainId' });
+    await vi.waitFor(async () => expect(await answers(ws, 'r3')).toHaveLength(1));
+
+    await deliver(ws, { type: 'rpc_request', id: 'r3', method: 'eth_chainId', params: [] });
+
+    await vi.waitFor(async () => expect(await answers(ws, 'r3')).toHaveLength(2));
+    const [, again] = await answers(ws, 'r3');
+    expect(again).toEqual({ type: 'rpc_response', id: 'r3', success: true, data: '0x14a34' });
+    expect(asked).toHaveBeenCalledTimes(1);
   });
 
   it('distinct ids each reach the wallet', async () => {
