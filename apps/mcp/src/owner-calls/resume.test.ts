@@ -7,10 +7,12 @@ import { replayingPage, stallsAfter, startRelay } from '@/connections/fake-relay
 import { sealResume, type RelayResume } from '@/connections/seal';
 import { connect, owner, setTestEnv, walletsSettled } from '@/connections/testkit';
 import { getDb } from '@/db/client';
-import { connections, ownerCalls } from '@/db/schema';
+import { connections, ownerCalls, permissionRequests } from '@/db/schema';
 import { TEST_PG_URL, useTestDb, useTestPostgres, withoutOwnerCallsGuard } from '@/db/test-db';
 import { sendCalls, sendCallsStatus, type OwnerCallDeps } from '@/tools/owner-calls';
-import { resumeOwnerCalls } from './resume';
+import { resumeTick } from '@/connections/resume';
+import { requestsWaiting } from '@/grants/resume';
+import { callsWaiting, resumeOwnerCalls } from './resume';
 import { fakeChain } from './chain-testkit';
 import { SEND_STARTED } from './store';
 
@@ -351,18 +353,65 @@ async function waitingCall(
   return `oc_${id}`;
 }
 
+async function waitingRequest(minutesAgo: number) {
+  const call = await waitingCall();
+  const id = `pr_${call.slice('oc_'.length)}`;
+  const [row] = await getDb().select().from(ownerCalls).where(eq(ownerCalls.id, call));
+  await getDb().update(ownerCalls).set({ relay: null }).where(eq(ownerCalls.id, call));
+  await getDb()
+    .insert(permissionRequests)
+    .values({
+      id,
+      connectionId: row.connectionId,
+      method: 'sign',
+      chainId: 84532,
+      account: row.account,
+      idempotencyKey: id,
+      requestHash: id,
+      signKind: 'message',
+      walletUrl: row.walletUrl,
+      approveBy: new Date(Date.now() + 60_000),
+      code: 'asked',
+      payload: '{}',
+      relay: 'r1.retired.x.y',
+      updatedAt: new Date(Date.now() - minutesAgo * 60_000),
+    });
+  return id;
+}
+
+const waitingRequests = async (ids: string[]) =>
+  (
+    await Promise.all(
+      ids.map(async (id) => (await getDb().select().from(permissionRequests).where(eq(permissionRequests.id, id)))[0])
+    )
+  )
+    .filter((r) => r.relay !== null)
+    .map((r) => r.id);
+
 const waiting = async (ids: string[]) =>
   (await Promise.all(ids.map(rowOf))).filter((r) => r.relay !== null).map((r) => r.id);
 
 describe('which owner calls a resume picks', () => {
-  it('given eleven waiting calls, then one tick resumes the ten that waited longest and hands back their runs', async () => {
+  it('given six waiting calls, then one tick resumes the five that waited longest and hands back their runs', async () => {
     const batch = randomBytes(4).toString('hex');
     const ids: string[] = [];
-    for (let i = 10; i < 21; i++) ids.push(await waitingCall({ id: `${batch}${i}`, minutesAgo: 20 + i }));
+    for (let i = 10; i < 16; i++) ids.push(await waitingCall({ id: `${batch}${i}`, minutesAgo: 20 + i }));
 
     await Promise.all(await resumeOwnerCalls(clients));
 
     expect(await waiting(ids)).toEqual([ids[0]]);
+  });
+
+  it('given calls and permission requests waiting, then one tick resumes five in all, the longest waiting first', async () => {
+    const calls: string[] = [];
+    for (let i = 0; i < 4; i++) calls.push(await waitingCall({ minutesAgo: 1_000 + i }));
+    const requests: string[] = [];
+    for (let i = 0; i < 3; i++) requests.push(await waitingRequest(2_000 + i));
+
+    await Promise.all(await resumeTick([requestsWaiting, callsWaiting(clients)]));
+
+    expect(await waiting(calls)).toEqual(calls.slice(0, 2));
+    expect(await waitingRequests(requests)).toEqual([]);
   });
 
   it('given a status read of one call, then only that call is resumed', async () => {

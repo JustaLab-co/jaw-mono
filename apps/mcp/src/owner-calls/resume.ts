@@ -1,7 +1,7 @@
 import type { ChainClients } from '@jaw.id/agent';
 import { chainClients } from '@/adapters/session-host';
 import type { Wallet } from '@/connections/relay';
-import { resumeEach, resumeRow, RESUMES_PER_TICK, type Rejoin } from '@/connections/resume';
+import { resumeRow, resumeTick, waitingIn, type Rejoin } from '@/connections/resume';
 import { approve } from './approve';
 import { followOwner } from './follow';
 import { leasedCalls, type OwnerCallRow } from './store';
@@ -17,7 +17,8 @@ const rejoin = (clients: ChainClients): Rejoin<OwnerCallRow> => ({
   start: (row) => (wallet) => followCalls(row, wallet, clients),
 });
 
-export const resumeOwnerCalls = (clients: ChainClients = chainClients) =>
-  resumeEach(() => leasedCalls.toResume(RESUMES_PER_TICK), rejoin(clients));
+export const callsWaiting = (clients: ChainClients = chainClients) => waitingIn(leasedCalls.toResume, rejoin(clients));
+
+export const resumeOwnerCalls = (clients?: ChainClients) => resumeTick([callsWaiting(clients)]);
 
 export const resumeCall = (row: OwnerCallRow, clients: ChainClients) => resumeRow(row, rejoin(clients));

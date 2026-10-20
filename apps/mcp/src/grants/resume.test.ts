@@ -412,10 +412,10 @@ describe('a revoke request whose server restarted', () => {
 });
 
 describe('the resumes one tick starts', () => {
-  it('given eleven requests that keep failing to resume, then a tick starts the ten tried longest ago and the next starts the last', async () => {
+  it('given six requests that keep failing to resume, then a tick starts the five tried longest ago and the next starts the last', async () => {
     const newest = await failingRow(1);
     const older: string[] = [];
-    for (let i = 0; i < 10; i++) older.push(await failingRow(10));
+    for (let i = 0; i < 5; i++) older.push(await failingRow(10));
     const all = [newest, ...older];
     const before = new Map((await rowsById(all)).map((r) => [r.id, r.updatedAt.getTime()]));
     const tried = async () => (await rowsById(all)).filter((r) => r.updatedAt.getTime() > before.get(r.id)!);

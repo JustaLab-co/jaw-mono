@@ -9,7 +9,7 @@ import { getDb } from '@/db/client';
 import { connections, grants, permissionRequests } from '@/db/schema';
 import { errorLabel, log } from '@/lib/edge';
 import { checkGranted, readOnChain, recordGrant, type GrantRequest, type ReadPermission } from './permission';
-import { resumeOpen, type Claim, type Outcome, type Rebuild } from './requests';
+import { waitingRequests, type Claim, type Outcome, type Rebuild } from './requests';
 import type { GrantKind } from './store';
 
 export type SignRequest = { type: '0x45'; data: { message: string } } | { type: '0x01'; data: Record<string, unknown> };
@@ -181,4 +181,4 @@ async function askRevoke(t: Tenant, target: RevokeTarget, ask: Ask, claim: Claim
 
 const REBUILDS = { sign: signWork, grant: grantWork(readOnChain), revoke: revokeWork(REVOKE_READS) };
 
-export const resumeRequests = () => resumeOpen(REBUILDS);
+export const requestsWaiting = waitingRequests(REBUILDS);

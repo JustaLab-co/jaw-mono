@@ -5,7 +5,8 @@ import { resumeWallet, WalletBusy, type Wallet } from './relay';
 import { findActive, type ConnectionRow } from './rows';
 import { openResume } from './seal';
 
-export const RESUMES_PER_TICK = 10;
+// The relay takes 20 new connections a minute from one IP, and fresh links share them.
+export const REJOINS_PER_TICK_UNDER_RELAY_IP_LIMIT = 5;
 
 export type Lost = 'connection_ended' | 'unopenable' | 'page_gone';
 
@@ -15,6 +16,7 @@ type Resumable = {
   walletUrl: string | null;
   relay: string | null;
   approveBy: Date | null;
+  updatedAt: Date;
 };
 
 export interface Rejoin<R extends Resumable> {
@@ -26,9 +28,23 @@ export interface Rejoin<R extends Resumable> {
   start: (row: R, t: Tenant) => ((wallet: Wallet) => void) | undefined;
 }
 
-export async function resumeEach<R extends Resumable>(find: () => Promise<R[]>, rejoin: Rejoin<R>) {
+type Waiting = { updatedAt: Date; resume: () => Promise<void> };
+
+/** The rows of one table waiting for a resume, oldest first. */
+export type WaitingIn = (limit: number) => Promise<Waiting[]>;
+
+export const waitingIn =
+  <R extends Resumable>(find: (limit: number) => Promise<R[]>, rejoin: Rejoin<R>): WaitingIn =>
+  async (limit) =>
+    (await find(limit)).map((row) => ({ updatedAt: row.updatedAt, resume: () => resumeRow(row, rejoin) }));
+
+/** Starts the resumes that waited longest across every table, at most the cap in all. */
+export async function resumeTick(tables: WaitingIn[]): Promise<Promise<void>[]> {
+  const cap = REJOINS_PER_TICK_UNDER_RELAY_IP_LIMIT;
   try {
-    return (await find()).map((row) => resumeRow(row, rejoin));
+    const waiting = (await Promise.all(tables.map((find) => find(cap)))).flat();
+    waiting.sort((a, b) => a.updatedAt.getTime() - b.updatedAt.getTime());
+    return waiting.slice(0, cap).map((w) => w.resume());
   } catch (err) {
     log('warn', { msg: 'relay sessions to resume not read', error: errorLabel(err) });
     return [];

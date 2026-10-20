@@ -4,7 +4,7 @@ import type { PgUpdateSetSource } from 'drizzle-orm/pg-core';
 import type { Tenant } from '@/connections/auth';
 import { config } from '@/connections/config';
 import { PageGone, WalletBusy, type Ask, type OpenWallet, type Wallet } from '@/connections/relay';
-import { resumeEach, resumeRow, RESUMES_PER_TICK, type Lost, type Rejoin } from '@/connections/resume';
+import { resumeRow, resumeTick, waitingIn, type Lost, type Rejoin } from '@/connections/resume';
 import { sealResume, type RelayResume } from '@/connections/seal';
 import { heldSince, keepLease, sessionLeaseEnd } from '@/connections/session-lease';
 import { USER_REJECTED } from '@/connections/wallet-codes';
@@ -342,15 +342,17 @@ const rejoinWith = (rebuildOf: (row: PermissionRequestRow) => Rebuild): Rejoin<P
   },
 });
 
-export const resumeOpen = (rebuilds: Rebuilds) =>
-  resumeEach(
-    () =>
+export const waitingRequests = (rebuilds: Rebuilds) =>
+  waitingIn(
+    (limit) =>
       leased.toResume(
-        RESUMES_PER_TICK,
+        limit,
         inArray(permissionRequests.method, Object.keys(rebuilds) as PermissionRequestRow['method'][])
       ),
     rejoinWith((row) => rebuilds[row.method]!)
   );
+
+export const resumeOpen = (rebuilds: Rebuilds) => resumeTick([waitingRequests(rebuilds)]);
 
 export const resumeRequest = (row: PermissionRequestRow, rebuild: Rebuild) =>
   resumeRow(

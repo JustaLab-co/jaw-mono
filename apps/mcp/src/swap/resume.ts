@@ -1,6 +1,6 @@
 import type { Address } from 'viem';
 import type { Wallet } from '@/connections/relay';
-import { resumeEach, resumeRow, RESUMES_PER_TICK, type Rejoin } from '@/connections/resume';
+import { resumeRow, resumeTick, waitingIn, type Rejoin } from '@/connections/resume';
 import { followOwner } from '@/owner-calls/follow';
 import { approve } from './approve';
 import type { BackendDeps } from './backend';
@@ -19,7 +19,8 @@ const rejoin = (deps: SwapRunDeps): Rejoin<SwapRow> => ({
   start: (row, t) => (wallet) => followSwap(t.account, row, wallet, deps),
 });
 
-export const resumeSwaps = (deps: SwapRunDeps = {}) =>
-  resumeEach(() => leasedSwaps.toResume(RESUMES_PER_TICK), rejoin(deps));
+export const swapsWaiting = (deps: SwapRunDeps = {}) => waitingIn(leasedSwaps.toResume, rejoin(deps));
+
+export const resumeSwaps = (deps?: SwapRunDeps) => resumeTick([swapsWaiting(deps)]);
 
 export const resumeSwap = (row: SwapRow, deps: SwapRunDeps) => resumeRow(row, rejoin(deps));
