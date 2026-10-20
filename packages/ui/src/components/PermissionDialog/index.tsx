@@ -19,7 +19,7 @@ import { resolveBlockReason } from '../../utils/transactionFailure';
 import { isBlockingRevocationProblem, REVOCATION_PROBLEM_TEXT } from '../../utils/permissionExecution';
 import { PermissionDialogProps } from './types';
 import { InlineWarning, PartyRow } from '../primitives';
-import { AllowedCalls, MetaCard, SpendLimits, SpenderPrefundNotice, isWildcard } from './Sections';
+import { AllowedCalls, HeldGrantsNotice, MetaCard, SpendLimits, SpenderPrefundNotice, isWildcard } from './Sections';
 
 export const PermissionDialog = ({
   open,
@@ -36,6 +36,7 @@ export const PermissionDialog = ({
   calls = [],
   prefund,
   prefundLoading = false,
+  heldGrants,
   tokenMeta,
   expiryDate,
   grantedDate,
@@ -279,6 +280,8 @@ export const PermissionDialog = ({
             )}
 
             {isGrant && <SpenderPrefundNotice prefund={prefund} isLoading={prefundLoading} />}
+
+            {isGrant && <HeldGrantsNotice held={heldGrants} chainId={chainId} nativeSymbol={nativeSymbol} />}
 
             {metaRows.length > 0 && <MetaCard rows={metaRows} />}
 

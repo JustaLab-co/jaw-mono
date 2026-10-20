@@ -12,7 +12,7 @@ import { isWildcard } from '../../utils/permissionExecution';
 import { getDisplayAddress } from '../../utils';
 import type { AddressIdentity } from '../../hooks/useAddressIdentities';
 import { isLongSpendAmount } from '../../utils/displayFormat';
-import type { CallPermission, SpendPermission, SpenderPrefundDisplay } from './types';
+import type { CallPermission, HeldGrantsDisplay, SpendPermission, SpenderPrefundDisplay } from './types';
 
 export { isWildcard };
 
@@ -197,6 +197,64 @@ export function SpendLimits({
           <SpendRow key={i} spend={spend} chainId={chainId} nativeSymbol={nativeSymbol} isLoading={isLoading} />
         ))}
       </div>
+    </div>
+  );
+}
+
+const HELD_HEADING = 'Already granted to this key';
+
+/**
+ * What the spender already holds from this account, next to what it asks for now, so a second
+ * grant cannot quietly raise what it may spend.
+ */
+export function HeldGrantsNotice({
+  held,
+  chainId,
+  nativeSymbol,
+}: {
+  held?: HeldGrantsDisplay;
+  chainId?: number;
+  nativeSymbol: string;
+}) {
+  if (!held || (held.status === 'ready' && held.count === 0)) return null;
+
+  if (held.status === 'unknown') {
+    return (
+      <p className="text-muted-foreground text-body-sm">
+        Couldn&apos;t check what this key already holds from your account, so its total is unknown. It may hold more
+        than this request.
+      </p>
+    );
+  }
+
+  if (held.status === 'loading') {
+    return (
+      <div className="flex flex-col gap-2">
+        <div className="pl-3">
+          <Eyebrow>{HELD_HEADING}</Eyebrow>
+        </div>
+        <div className="border-border rounded-box border px-3 py-2">
+          <Skeleton className="bg-muted rounded-xs h-3.5 w-32" />
+        </div>
+      </div>
+    );
+  }
+
+  return (
+    <div className="flex flex-col gap-2">
+      <SectionHeading label={HELD_HEADING} count={held.count} />
+      <div className="border-border rounded-box overflow-hidden border">
+        {held.totals.length === 0 ? (
+          <p className="text-muted-foreground text-body-sm px-3 py-2">No spend limits</p>
+        ) : (
+          held.totals.map((total, i) => (
+            <SpendRow key={i} spend={total} chainId={chainId} nativeSymbol={nativeSymbol} />
+          ))
+        )}
+      </div>
+      <p className="text-muted-foreground text-body-sm pl-3">
+        Live grants to the same key, summed per token. This request adds to it.
+      </p>
     </div>
   );
 }

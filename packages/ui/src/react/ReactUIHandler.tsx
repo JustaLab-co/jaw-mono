@@ -1,6 +1,6 @@
 'use client';
 
-import React, { useMemo, useState, useEffect, useRef } from 'react';
+import React, { useCallback, useMemo, useState, useEffect, useRef } from 'react';
 import { createRoot } from 'react-dom/client';
 import {
   UIHandler,
@@ -60,6 +60,7 @@ import {
 import { useChainIconURI } from '../hooks/useChainIconURI';
 import { useGasEstimation } from '../hooks/useGasEstimation';
 import { useSpenderPrefund, describeSpenderPrefund } from '../hooks/useSpenderPrefund';
+import { useHeldGrants } from '../hooks/useHeldGrants';
 import { useAssetPreview } from '../hooks/useAssetPreview';
 import { usePermissionExecution } from '../hooks/usePermissionExecution';
 import { usePermissionRevocation } from '../hooks/usePermissionRevocation';
@@ -2326,6 +2327,15 @@ function PermissionDialogWrapper({
     [chainId, apiKey, computedPaymasterUrl]
   );
 
+  const held = useHeldGrants({
+    address: request.data.address as Address,
+    spender: request.data.spender as Address,
+    chainId,
+    apiKey,
+    rpcUrl: chain.rpcUrl,
+  });
+  const heldTokens = useMemo(() => (held.status === 'ready' ? held.held.totals.map((t) => t.token) : []), [held]);
+
   // Get spends array from request (now using spends plural)
   // Memoized because both keys are optional: `?? []` on an absent key returns a new array every
   // render, and these feed effect dependency arrays. A calls-only grant otherwise re-triggered the
@@ -2341,7 +2351,7 @@ function PermissionDialogWrapper({
     // definition, so an empty URL would resolve to the chain's public RPC instead of
     // the proxy. Nothing to read without a configured endpoint.
     const rpcUrl = chain.rpcUrl;
-    if ((spendsData.length === 0 && callsData.length === 0) || !rpcUrl) {
+    if ((spendsData.length === 0 && callsData.length === 0 && heldTokens.length === 0) || !rpcUrl) {
       setIsLoadingTokenInfo(false);
       return;
     }
@@ -2359,6 +2369,7 @@ function PermissionDialogWrapper({
         new Set([
           ...spendsData.map((spend) => spend.token),
           ...callsData.map((call) => call.target).filter((t) => t && !isWildcard(t)),
+          ...heldTokens,
         ])
       ) as string[];
 
@@ -2408,7 +2419,7 @@ function PermissionDialogWrapper({
     return () => {
       isMounted = false;
     };
-  }, [chainId, spendsData, callsData, chain.rpcUrl, viemChain]);
+  }, [chainId, spendsData, callsData, heldTokens, chain.rpcUrl, viemChain]);
 
   // Fetch fee tokens from capabilities (same pattern as TransactionDialogWrapper)
   useEffect(() => {
@@ -2534,37 +2545,44 @@ function PermissionDialogWrapper({
 
   // Note: Gas estimation is now handled by useGasEstimation hook
 
-  // Convert to SpendPermission array format expected by PermissionDialog
-  const spends = useMemo(
+  // A spend limit as the screen shows it: the request's own, and the totals the spender already holds.
+  const toSpendRow = useCallback(
+    (spend: { token: string; allowance: string | bigint; unit: string; multiplier?: number }) => {
+      const tokenInfo =
+        tokenInfoMap[spend.token] ||
+        (isNativeToken(spend.token)
+          ? {
+              decimals: viemChain?.nativeCurrency?.decimals ?? 18,
+              symbol: nativeSymbol,
+            }
+          : { decimals: null, symbol: '' });
+
+      const allowance = BigInt(spend.allowance);
+      const { amount, decimalsUnknown } = formatSpendAmount(allowance, tokenInfo.decimals);
+      const limit = decimalsUnknown ? `${amount} base units` : `${amount} ${tokenInfo.symbol}`;
+
+      // Format duration with multiplier (defaults to 1 if not provided)
+      const multiplier = spend.multiplier ?? 1;
+      const duration = `${multiplier} ${spend.unit}${multiplier > 1 ? 's' : ''}`;
+
+      return {
+        amount,
+        decimalsUnknown,
+        token: isNativeToken(spend.token) ? `Native (${nativeSymbol})` : tokenInfo.symbol,
+        tokenAddress: spend.token,
+        duration,
+        limit,
+      };
+    },
+    [tokenInfoMap, viemChain, nativeSymbol]
+  );
+  const spends = useMemo(() => spendsData.map((spend) => toSpendRow(spend)), [spendsData, toSpendRow]);
+  const heldGrants = useMemo(
     () =>
-      spendsData.map((spend) => {
-        const tokenInfo =
-          tokenInfoMap[spend.token] ||
-          (isNativeToken(spend.token)
-            ? {
-                decimals: viemChain?.nativeCurrency?.decimals ?? 18,
-                symbol: nativeSymbol,
-              }
-            : { decimals: null, symbol: '' });
-
-        const allowance = BigInt(spend.allowance);
-        const { amount, decimalsUnknown } = formatSpendAmount(allowance, tokenInfo.decimals);
-        const limit = decimalsUnknown ? `${amount} base units` : `${amount} ${tokenInfo.symbol}`;
-
-        // Format duration with multiplier (defaults to 1 if not provided)
-        const multiplier = spend.multiplier ?? 1;
-        const duration = `${multiplier} ${spend.unit}${multiplier > 1 ? 's' : ''}`;
-
-        return {
-          amount,
-          decimalsUnknown,
-          token: isNativeToken(spend.token) ? `Native (${nativeSymbol})` : tokenInfo.symbol,
-          tokenAddress: spend.token,
-          duration,
-          limit,
-        };
-      }),
-    [spendsData, tokenInfoMap, viemChain, nativeSymbol]
+      held.status === 'ready'
+        ? { status: 'ready' as const, count: held.held.count, totals: held.held.totals.map(toSpendRow) }
+        : held,
+    [held, toSpendRow]
   );
 
   // Format call permissions. Signatures resolve asynchronously — a selector with no signature yet
@@ -2669,6 +2687,7 @@ function PermissionDialogWrapper({
       calls={calls}
       prefund={prefundDisplay}
       prefundLoading={prefundLoading}
+      heldGrants={heldGrants}
       tokenMeta={tokenInfoMap}
       expiryDate={expiryDate}
       networkName={networkName}
