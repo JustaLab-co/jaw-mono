@@ -45,6 +45,7 @@ node $S/hosted-client.mjs "$MCP_PUBLIC_URL" wallet:read
 - sign-cap: ask for four different messages under four keys on connections of one account. Pass: the fourth gives `account_busy`, and so does a `jaw_send_calls` on the account while the three wait.
 - sign-no-session: after sign-message, dump `audit_events` and the `grants` and `payments` rows with psql. Pass: an audit row for `jaw_sign` on the connection and no session key signature anywhere.
 - sign-utf8: `sign-message 'Firmo: ñandú, 日本語' u1`. Pass: the keys screen shows the same text and the signature verifies.
+- sign-retention: after sign-message, set its row back with psql (`update permission_requests set updated_at = now() - interval '8 days' where idempotency_key = 'm1'`), then wait for the server's reconcile loop (30 seconds in the stack). Pass: the row is gone, and `sign-message 'hello from jaw' m1` gives a new `url`.
 - sign-restart: `sign-message 'restart me' r1`, open the `url` as the owner until the sign prompt shows, do not approve, restart the mcp container, wait 90 seconds, then the same line again. Pass: `expired` with `refusal.code` `link_lost`, no `url`, and a summary telling the owner not to approve the old link. `sign-message 'restart me' r2` then gives a new `url`.
 
 ## Risks

@@ -609,6 +609,23 @@ describe('jaw_revoke_permission', () => {
 
     expect(answers[10].content[0].text).toMatch(/^rate_limited: /);
   });
+
+  it("given another connection's revoke of a permission waiting, when this connection asks about it many times, then none is rate_limited", async () => {
+    await clearOfMinuteEdge();
+    const signer = owner();
+    const holder = await connected(signer);
+    const asker = await connected(signer, 'wallet:read');
+    const { deps } = setup(signer);
+    const wait = held();
+    await revokePermission(holder.t, { permissionId: holder.budget }, deps({ held: wait.promise }));
+
+    const answers = [];
+    for (let i = 0; i < 12; i++) answers.push(await revokePermission(asker.t, { permissionId: holder.budget }, deps()));
+    wait.release();
+    await walletsSettled();
+
+    expect(answers.map((a) => a.content[0].text.split(':')[0])).toEqual(Array(12).fill('revoke_in_progress'));
+  });
 });
 
 /** The limit counts per wall-clock minute, so a run that straddles one would split its count. */
