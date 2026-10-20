@@ -36,3 +36,4 @@ The maintained source for verifying what a user of the jaw CLI, the MCP server a
 | Grants the owner approves | hosted `jaw_grant_permissions`                                           | [hosted-grants.md](hosted-grants.md)                   |
 | Revokes the owner signs   | hosted `jaw_revoke_permission`, `jaw_connections`                        | [hosted-revoke.md](hosted-revoke.md)                   |
 | Session key sends         | hosted `jaw_session_execute`, `jaw_session_history`                      | [hosted-session-execute.md](hosted-session-execute.md) |
+| Messages the owner signs  | hosted `jaw_sign`                                                        | [hosted-sign.md](hosted-sign.md)                       |

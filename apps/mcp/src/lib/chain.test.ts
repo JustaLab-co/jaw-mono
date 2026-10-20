@@ -22,7 +22,7 @@ afterAll(() => {
 
 setTestEnv();
 process.env.JAW_MCP_RPC_URL = `http://127.0.0.1:${(node.address() as AddressInfo).port}`;
-const { publicClientFor, verifyOnChain } = await import('./chain');
+const { isProxyChain, proxyChains, proxyClientFor, publicClientFor, verifyOnChain } = await import('./chain');
 
 describe('publicClientFor', () => {
   it('builds a client for the chain the signature was made on, not the configured one', () => {
@@ -32,6 +32,24 @@ describe('publicClientFor', () => {
 
   it('refuses a chain the server does not support', () => {
     expect(() => publicClientFor(1)).toThrow('not supported');
+  });
+});
+
+describe('isProxyChain', () => {
+  it('accepts every chain JAW serves, testnets included', () => {
+    for (const { id } of proxyChains()) expect(isProxyChain(id)).toBe(true);
+    for (const id of [8453, 84532, 1, 11155111]) expect(isProxyChain(id)).toBe(true);
+  });
+
+  it('refuses a chain JAW does not serve', () => {
+    for (const id of [0, 324, 1337, 792703809]) expect(isProxyChain(id)).toBe(false);
+  });
+});
+
+describe('proxyClientFor', () => {
+  it('builds a client for a JAW chain and refuses any other', () => {
+    expect(proxyClientFor(84532).chain?.id).toBe(84532);
+    expect(() => proxyClientFor(1337)).toThrow('chain 1337 is not supported');
   });
 });
 

@@ -146,6 +146,10 @@ const HELP = `Commands:
                                  jaw_send_calls, the owner approves in the wallet, e.g.
                                  calls '[{"to":"0x...","data":"0x..."}]' 8453 my-key
   calls-status <id>              jaw_get_calls_status, id is the oc_ id jaw_send_calls returned
+  sign-message '<text>' [key]    jaw_sign, the owner signs the text in the wallet; run it again with the same key to read the signature
+  sign-typed '<json>' [key]      jaw_sign with EIP-712 typed data { domain, types, primaryType, message }
+  read <chainId> '<json reads>'  jaw_read_contracts, e.g.
+                                 read 8453 '[{"address":"0x...","abi":[...],"functionName":"decimals"}]'
   revoke <permission id> [chain] jaw_revoke_permission
   execute <permission id> '<json array>' [chainId] [key]
                                  jaw_session_execute, the session key sends within a custom grant, e.g.
@@ -186,6 +190,10 @@ const commands = {
       ...(idempotencyKey && { idempotencyKey }),
     }),
   'calls-status': (id) => call('jaw_get_calls_status', { id }),
+  'sign-message': (message, idempotencyKey) => call('jaw_sign', { message, ...(idempotencyKey && { idempotencyKey }) }),
+  'sign-typed': (json, idempotencyKey) =>
+    call('jaw_sign', { typedData: JSON.parse(json), ...(idempotencyKey && { idempotencyKey }) }),
+  read: (chainId, json) => call('jaw_read_contracts', { chainId: Number(chainId), reads: JSON.parse(json) }),
   revoke: (permissionId, chainId) =>
     call('jaw_revoke_permission', { permissionId, ...(chainId && { chainId: Number(chainId) }) }),
   execute: (permissionId, json, chainId, idempotencyKey) =>

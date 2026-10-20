@@ -218,6 +218,7 @@ describe('read tools', () => {
       'jaw_get_capabilities',
       'jaw_get_permissions',
       'jaw_grant_permissions',
+      'jaw_read_contracts',
       'jaw_revoke_permission',
       'jaw_send_calls',
       'jaw_session_disconnect',
@@ -227,6 +228,7 @@ describe('read tools', () => {
       'jaw_session_x402_discover',
       'jaw_session_x402_pay',
       'jaw_session_x402_quote',
+      'jaw_sign',
       'jaw_swap',
       'jaw_swap_status',
     ]);

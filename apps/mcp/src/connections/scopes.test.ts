@@ -43,6 +43,16 @@ const TOOLS: Record<string, { needs: ConnectionScope[]; args: object }> = {
   jaw_add_funds: { needs: ['wallet:read'], args: {} },
   // No query, so it refuses before reaching the catalog.
   jaw_session_x402_discover: { needs: ['wallet:read'], args: {} },
+  // An unknown chain, so it refuses before reaching a node.
+  jaw_read_contracts: {
+    needs: ['wallet:read'],
+    args: {
+      chainId: 1337,
+      reads: [
+        { address: '0x0000000000000000000000000000000000000001', abi: [{ type: 'function' }], functionName: 'x' },
+      ],
+    },
+  },
   jaw_session_history: { needs: ['wallet:read'], args: {} },
   jaw_connections: { needs: ['wallet:read'], args: {} },
   jaw_revoke_permission: { needs: ['wallet:read'], args: { permissionId: `0x${'0'.repeat(64)}`, chainId: 1 } },
@@ -74,6 +84,7 @@ const TOOLS: Record<string, { needs: ConnectionScope[]; args: object }> = {
   jaw_get_capabilities: { needs: ['wallet:read'], args: { chainIds: [TESTNET] } },
   jaw_get_calls_history: { needs: ['wallet:read'], args: {} },
   jaw_get_permissions: { needs: ['wallet:read'], args: {} },
+  jaw_sign: { needs: ['wallet:read'], args: { message: 'hello', chainId: UNSUPPORTED_ORIGIN_CHAIN } },
 };
 
 const PROFILES = ['wallet:read', 'wallet:read x402:pay'];

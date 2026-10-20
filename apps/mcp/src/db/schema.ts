@@ -233,6 +233,7 @@ export const sends = pgTable(
     index()
       .on(t.leaseUntil)
       .where(sql`${t.state} = 'open'`),
+    check('send_open_keyed', sql`${t.state} <> 'open' or ${t.idempotencyKey} is not null`),
     check(
       'send_shape',
       sql`${t.amount} >= 0 and (${t.idempotencyKey} is null) = (${t.requestHash} is null) and (
@@ -368,14 +369,19 @@ export const permissionRequests = pgTable(
     connectionId: text('connection_id')
       .notNull()
       .references(() => connections.id),
-    method: text('method', { enum: ['grant', 'revoke'] }).notNull(),
+    method: text('method', { enum: ['grant', 'revoke', 'sign'] }).notNull(),
     chainId: integer('chain_id').notNull(),
     account: text('account').notNull(),
     permissionId: text('permission_id'),
+    idempotencyKey: text('idempotency_key'),
+    requestHash: text('request_hash'),
+    signKind: text('sign_kind', { enum: ['message', 'typedData'] }),
+    signature: text('signature'),
     state: text('state', { enum: ['awaiting_owner', 'approved', 'owner_declined', 'expired', 'failed'] })
       .notNull()
       .default('awaiting_owner'),
     code: text('code'),
+    namesLost: text('names_lost'),
     walletUrl: text('wallet_url').notNull(),
     approveBy: timestamp('approve_by', { withTimezone: true }).notNull(),
     sessionUntil: timestamp('session_until', { withTimezone: true }),
@@ -396,10 +402,19 @@ export const permissionRequests = pgTable(
     uniqueIndex('permission_requests_open_revoke_connection_index')
       .on(t.connectionId)
       .where(sql`${t.method} = 'revoke' and ${t.state} = 'awaiting_owner'`),
+    uniqueIndex('permission_requests_open_sign_index')
+      .on(t.connectionId)
+      .where(sql`${t.method} = 'sign' and ${t.state} = 'awaiting_owner'`),
+    uniqueIndex('permission_requests_names_lost_index').on(t.namesLost),
+    uniqueIndex('permission_requests_sign_key_index')
+      .on(t.connectionId, t.idempotencyKey)
+      .where(sql`${t.method} = 'sign'`),
     check(
       'permission_request_shape',
       sql`(${t.method} = 'revoke' and ${t.permissionId} is not null)
-        or (${t.method} = 'grant' and (${t.state} <> 'approved' or ${t.permissionId} is not null))`
+        or (${t.method} = 'grant' and (${t.state} <> 'approved' or ${t.permissionId} is not null))
+        or (${t.method} = 'sign' and ${t.idempotencyKey} is not null and ${t.requestHash} is not null
+          and ${t.signKind} is not null and (${t.state} <> 'approved' or ${t.signature} is not null))`
     ),
   ]
 );

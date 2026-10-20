@@ -19,6 +19,7 @@ const SIGNERS = {
   jaw_send_calls: 'owner',
   jaw_revoke_permission: 'owner',
   jaw_session_status: 'session',
+  jaw_sign: 'owner',
   jaw_add_funds: 'none',
   jaw_connections: 'none',
   jaw_swap_status: 'none',
@@ -27,6 +28,7 @@ const SIGNERS = {
   jaw_get_calls_history: 'none',
   jaw_get_permissions: 'none',
   jaw_get_capabilities: 'none',
+  jaw_read_contracts: 'none',
 } as const;
 
 const RENAMED_AWAY = [
