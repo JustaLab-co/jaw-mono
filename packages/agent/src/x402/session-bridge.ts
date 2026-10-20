@@ -3,6 +3,7 @@ import { expiryInstant, isLegacySession, sessionUsable, type SessionConfig } fro
 import { usdcForNetwork } from './asset-registry.js';
 import { PERMIT2_ADDRESS } from './permit2.js';
 import { whyFeeTokenDisagrees } from './fee-token.js';
+import type { SendCallsOptions } from '@jaw.id/core';
 import type { Logger, SessionHost } from '../ports.js';
 
 // JAW's ERC-20 paymaster, mirrored from core's `jawPaymasterUrl`. Kept as a
@@ -114,6 +115,15 @@ export interface SessionBridgeOptions {
   paymasterContext?: Record<string, unknown>;
 }
 
+/** Awaited with the userOp hash after signing and before the send; a rejection stops the send. */
+export type OnUserOpSigned = NonNullable<SendCallsOptions['onSigned']>;
+
+interface SessionCall {
+  to: string;
+  value?: string;
+  data?: string;
+}
+
 /** Lazily resolved Account instance + session config */
 interface InitializedSession {
   account: {
@@ -137,19 +147,29 @@ export class SessionBridge {
 
   /**
    * Run an operation, and once more under a fresh key if the proxy refused this
-   * one and the host has another to offer.
+   * one and the host has another to offer. Never once a signed userOp was
+   * handed on to be sent: it may be with the bundler, and a second could land too.
    */
-  private async underCurrentKey<T>(op: () => Promise<T>): Promise<T> {
+  private async underCurrentKey<T>(
+    op: (onSigned: OnUserOpSigned) => Promise<T>,
+    onSigned?: OnUserOpSigned
+  ): Promise<T> {
+    let signed = false;
+    const track: OnUserOpSigned = async (hash) => {
+      await onSigned?.(hash);
+      signed = true;
+    };
     try {
-      return await op();
+      return await op(track);
     } catch (err) {
+      if (signed) throw err;
       const fresh = await this.options.host.freshApiKey(err, this.options.apiKey);
       if (!fresh || fresh === this.options.apiKey) throw err;
       const given = { ...this.given, apiKey: fresh };
       this.options = { ...given, ...resolvePaymaster(given) };
       // The account holds the paymaster url with the old key in it.
       this.session = null;
-      return await op();
+      return await op(track);
     }
   }
 
@@ -258,11 +278,11 @@ export class SessionBridge {
    * that turns this into an arbitrary transfer, which matters because an agent
    * reaches the tools that reach this.
    */
-  approvePermit2(token: `0x${string}`): Promise<string> {
-    return this.underCurrentKey(() => this.approvePermit2Now(token));
+  approvePermit2(token: `0x${string}`, onSigned?: OnUserOpSigned): Promise<string> {
+    return this.underCurrentKey((track) => this.approvePermit2Now(token, track), onSigned);
   }
 
-  private async approvePermit2Now(token: `0x${string}`): Promise<string> {
+  private async approvePermit2Now(token: `0x${string}`, onSigned: OnUserOpSigned): Promise<string> {
     const { account, config } = await this.getSession();
     const usdc = usdcForNetwork(`eip155:${config.chainId}`);
     if (!usdc || token.toLowerCase() !== usdc.address.toLowerCase()) {
@@ -281,7 +301,7 @@ export class SessionBridge {
       // No permissionId: this is the session acting for itself.
       // Same shape tolerance the funder applies: `{ id, chainId }` from
       // Account.sendCalls, or a bare id from an older bridge.
-      const sent: unknown = await account.sendCalls([{ to: usdc.address, data }]);
+      const sent: unknown = await account.sendCalls([{ to: usdc.address, data }], { onSigned });
       const id = typeof sent === 'string' ? sent : (sent as { id?: string } | null)?.id;
       if (!id) throw new Error('approval submitted but no call id was returned');
       return id;
@@ -290,11 +310,12 @@ export class SessionBridge {
     }
   }
 
-  request(method: string, params?: unknown): Promise<unknown> {
-    return this.underCurrentKey(() => this.dispatch(method, params));
+  /** `onSigned` gets the hash of a `wallet_sendCalls` userOp before it is sent. */
+  request(method: string, params?: unknown, onSigned?: OnUserOpSigned): Promise<unknown> {
+    return this.underCurrentKey((track) => this.dispatch(method, params, track), onSigned);
   }
 
-  private async dispatch(method: string, params?: unknown): Promise<unknown> {
+  private async dispatch(method: string, params: unknown, onSigned: OnUserOpSigned): Promise<unknown> {
     const { account, config } = await this.getSession();
 
     switch (method) {
@@ -304,16 +325,12 @@ export class SessionBridge {
 
       case 'wallet_sendCalls': {
         const payload = Array.isArray(params) ? params[0] : params;
-        const { calls } = payload as {
-          calls: Array<{ to: string; value?: string; data?: string }>;
-        };
-        const sendOptions = { permissionId: config.permissionId as `0x${string}` };
-
+        const { calls } = payload as { calls: SessionCall[] };
         // Always charged, never sponsored. The grant leaves the session enough
         // to pay for its first op and every refill leaves `gasReserve` behind
         // for the next one, so the sender can be charged.
         try {
-          return await account.sendCalls(calls, sendOptions);
+          return await account.sendCalls(calls, { permissionId: config.permissionId, onSigned });
         } catch (err) {
           throw explainUnchargeableSender(err, config.sessionAddress);
         }
