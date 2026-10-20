@@ -408,7 +408,7 @@ describe('jaw_grant_permissions', () => {
     expect(again.content[0].text).toContain(`still waiting for the owner at ${url}`);
   });
 
-  it('given the waiting grant has a saved relay session and its lease lapsed, when asked again, then the refusal says the server is reconnecting', async () => {
+  it('given the waiting grant has a saved relay session and its lease lapsed inside the stall grace, when asked again, then the refusal says the server is reconnecting', async () => {
     const { t, signer } = await connected();
     let release = () => {};
     const held = new Promise<void>((resolve) => (release = resolve));
@@ -418,9 +418,10 @@ describe('jaw_grant_permissions', () => {
       readPermission: approvedOnChain,
     };
     await grantPermissions(t, twoByTwo, deps);
+    // Inside the grace no rejoin starts, so the read sees the row exactly as written.
     await getDb()
       .update(permissionRequests)
-      .set({ relay: 'saved', sessionUntil: sql`now() - interval '61 seconds'` })
+      .set({ relay: 'saved', sessionUntil: sql`now() - interval '30 seconds'` })
       .where(eq(permissionRequests.connectionId, t.connectionId));
 
     const again = await grantPermissions(t, twoByTwo, deps);
