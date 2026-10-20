@@ -1,4 +1,4 @@
-import { getSupportedChains } from '@jaw.id/core';
+import { isProxyChain } from '@/lib/chain';
 import { encodeFunctionData, erc20Abi, getAddress, isAddressEqual, zeroAddress, type Address, type Hex } from 'viem';
 import { z } from 'zod';
 
@@ -50,7 +50,7 @@ const quoteShape = z.object({
 });
 
 export function isSupportedOriginChain(chainId: number): boolean {
-  return getSupportedChains(true).some((chain) => chain.id === chainId);
+  return isProxyChain(chainId);
 }
 
 export async function checkQuote(

@@ -22,9 +22,15 @@ export class ChainUnreadable extends Error {
   }
 }
 
+export interface Pending {
+  token: string;
+  amount: bigint;
+  periodStart: number;
+}
+
 export interface FitContext {
   read: ReadDeps;
-  pending: Map<string, bigint>;
+  pending: Pending[];
   nowSeconds: number;
 }
 
@@ -118,7 +124,10 @@ export async function fit(grant: LiveGrant, calls: Call[], ctx: FitContext): Pro
     for (const { allowance, period } of limits[i]) {
       if (period.status === 'outside-window') return { reason: 'expired' };
       if (period.status === 'unavailable') throw new ChainUnreadable();
-      const used = period.spend + (ctx.pending.get(token) ?? 0n);
+      const held = ctx.pending
+        .filter((p) => p.token === token && p.periodStart >= period.start && p.periodStart < period.end)
+        .reduce((sum, p) => sum + p.amount, 0n);
+      const used = period.spend + held;
       const left = BigInt(allowance) > used ? BigInt(allowance) - used : 0n;
       if (spend > left) return { ...overLimit, left };
     }
