@@ -208,6 +208,7 @@ function CLIBridgeContent() {
               switch (inner.type) {
                 case 'init': {
                   clearTimeout(unanswered);
+                  setState('connected');
                   const chainId = (inner.chainId as number) ?? 1;
                   const ens = inner.ens as string | undefined;
                   const name = (appNameRef.current ??= resolveBridgeAppName(inner.appName));
