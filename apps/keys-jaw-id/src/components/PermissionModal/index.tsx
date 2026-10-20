@@ -13,6 +13,7 @@ import {
   usePermissionRevocation,
   useSpenderPrefund,
   describeSpenderPrefund,
+  useHeldGrantsDisplay,
 } from '@jaw.id/ui';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { formatUnits, erc20Abi, type Address } from 'viem';
@@ -482,6 +483,20 @@ export const PermissionModal = ({
     return describeSpenderPrefund(prefundQuote, key ? tokenInfoMap[key] : undefined);
   }, [prefundQuote, tokenInfoMap]);
 
+  const heldGrants = useHeldGrantsDisplay({
+    address: mode === 'grant' ? (permissionDetails?.address as Address | undefined) : undefined,
+    spender:
+      mode === 'grant' && permissionDetails && 'spender' in permissionDetails
+        ? (permissionDetails.spender as Address)
+        : undefined,
+    chainId: chain?.id ?? 0,
+    apiKey: extractedApiKey,
+    rpcUrl: chain?.rpcUrl,
+    nativeSymbol: viemChain?.nativeCurrency?.symbol ?? 'ETH',
+    nativeDecimals: viemChain?.nativeCurrency?.decimals ?? 18,
+    known: tokenInfoMap,
+  });
+
   // Spender address
   const spenderAddress = useMemo(() => {
     if (mode === 'revoke' && fetchedPermissionData?.spender) {
@@ -824,6 +839,7 @@ export const PermissionModal = ({
       spends={formattedSpends}
       prefund={mode === 'grant' ? prefundDisplay : undefined}
       prefundLoading={mode === 'grant' && prefundLoading}
+      heldGrants={heldGrants}
       tokenMeta={tokenInfoMap}
       calls={formattedCalls}
       expiryDate={expiryDate}
