@@ -130,10 +130,24 @@ async function sendRecorded<T>(
   }
 }
 
-const mismatch = (signed: Hex | undefined, sent: string | undefined) => {
-  if (signed && sent && sent !== signed)
-    log('error', { msg: `bundler returned another userOp hash than ${signed}`, callsId: sent });
-};
+/** The bundler's hash wins over the signed one, as it does for execute rows, and the mismatch is logged. */
+async function keepSent(
+  hold: FloatHold,
+  rowId: string,
+  field: 'topUpBatchId' | 'approvalBatchId',
+  signed: Hex | undefined,
+  sent: string
+) {
+  if (sent === signed) return;
+  if (signed) log('error', { msg: `bundler returned another userOp hash than ${signed}`, callsId: sent });
+  await hold
+    .tx(async (tx) => {
+      if (signed) await forgetBatch(tx, rowId, field, signed);
+      const trace = field === 'topUpBatchId' ? { batchId: sent } : { approvalBatchId: sent };
+      await recordTopUp(tx, rowId, { ok: true, ...trace });
+    })
+    .catch(logFailure('batch id write failed'));
+}
 
 function guarded(
   executor: TopUpExecutor,
@@ -176,12 +190,7 @@ function guarded(
           }
         );
         const batchId = typeof sent === 'string' ? sent : (sent as { id?: string } | null)?.id;
-        mismatch(signed, batchId);
-        if (batchId) {
-          await hold
-            .tx((tx) => recordTopUp(tx, rowId, { ok: true, batchId }))
-            .catch(logFailure('top-up batch id write failed'));
-        }
+        if (batchId) await keepSent(hold, rowId, 'topUpBatchId', signed, batchId);
         return sent;
       },
       approvePermit2:
@@ -196,7 +205,7 @@ function guarded(
               if (batchId) await forgetBatch(tx, rowId, 'approvalBatchId', batchId);
             }
           );
-          mismatch(signed, sent);
+          await keepSent(hold, rowId, 'approvalBatchId', signed, sent);
           return sent;
         }),
     },

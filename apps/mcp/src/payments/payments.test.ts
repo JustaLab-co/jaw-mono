@@ -900,6 +900,29 @@ describe('jaw_session_x402_pay', () => {
     },
   });
 
+  it('given the bundler answers a top-up with another hash than the one signed, then the row keeps the bundler hash and it is logged', async () => {
+    const { t } = await connected('1');
+    const signedHash: Hex = `0x${'1'.repeat(64)}`;
+    const lines = await logsOf(async () => {
+      const result = await pay(
+        t,
+        { url: url('/exact'), idempotencyKey: 'topup-mismatch' },
+        deps({
+          executor: (_t, g) => ({
+            request: async (method, params, onSigned) => {
+              if (method !== 'wallet_sendCalls') return executor(g.account).request(method, params);
+              await onSigned?.(signedHash);
+              await executor(g.account).request(method, params);
+              return { id: `0x${'2'.repeat(64)}` };
+            },
+          }),
+        })
+      );
+      expect(await rowOf(result.structuredContent!.paymentId)).toMatchObject({ topUpBatchId: `0x${'2'.repeat(64)}` });
+    });
+    expect(lines).toContain(`bundler returned another userOp hash than ${signedHash}`);
+  });
+
   it('given the top-up hash cannot be written, then the top-up is not sent and the row keeps no amount', async () => {
     const { t } = await connected('1');
     const drop = await failUpdates('hash-fails', 'new.top_up_batch_id is not null');
