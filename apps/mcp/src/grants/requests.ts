@@ -157,6 +157,8 @@ export type LinkRequest = {
   chainId: number;
   approveBy: Date;
   work: (ask: Ask, claim: Claim) => Promise<Outcome>;
+  /** Runs once the outcome is stored, so slow follow-up work never holds the row open. */
+  settled?: (outcome: Outcome) => Promise<void>;
 } & (
   | { method: 'grant' }
   | { method: 'revoke'; permissionId: string }
@@ -215,11 +217,11 @@ export async function openLink(t: Tenant, req: LinkRequest, openWallet: OpenWall
     if (!row || row === FULL) wallet.close();
   }
   if (row === FULL || !row) return (await existing()) ?? (row === FULL ? 'account_busy' : 'wallet_busy');
-  follow(row, wallet, req.work);
+  follow(row, wallet, req);
   return { opened: row };
 }
 
-function follow(row: PermissionRequestRow, wallet: Wallet, work: LinkRequest['work']) {
+function follow(row: PermissionRequestRow, wallet: Wallet, { work, settled }: LinkRequest) {
   const stop = keepLease(
     async () => {
       const held = await update(ofRow(row), { sessionUntil: sessionLeaseEnd });
@@ -244,6 +246,7 @@ function follow(row: PermissionRequestRow, wallet: Wallet, work: LinkRequest['wo
       const outcome = await work(ask, claim).catch(ended);
       answered = true;
       await settle(row, outcome);
+      await settled?.(outcome);
     })
     .catch((err: unknown) => {
       if (answered) throw err;

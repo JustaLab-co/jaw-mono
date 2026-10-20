@@ -185,13 +185,11 @@ async function askGrant(t: Tenant, ask: Asked, walletAsk: Ask, claim: Claim, dep
       if (live) await recordGrant(tx, t.connectionId, checked);
       return live !== undefined;
     });
-    if (!recorded) return { state: 'failed', code: 'connection_ended', permissionId };
+    return recorded ? { state: 'approved', permissionId } : { state: 'failed', code: 'connection_ended', permissionId };
   } catch (err) {
     log('warn', { msg: 'granted permission not recorded', permissionId, error: errorLabel(err) });
     return { state: 'failed', code: 'not_recorded', permissionId };
   }
-  await revokeOlder(t, deps);
-  return { state: 'approved', permissionId };
 }
 
 /** What the connection's live grants let the session key move, summed per token and period. */
@@ -199,7 +197,7 @@ function liveTotals(t: Tenant, held: LiveGrant[]): string {
   const usdc = usdcForNetwork(`eip155:${t.chainId}`);
   const sums = new Map<string, { token: string; per: string; amount: bigint }>();
   for (const { token, unit, multiplier, allowance } of held.flatMap((g) => g.permission.spends)) {
-    const per = multiplier === 1 ? unit : `${multiplier} ${unit}s`;
+    const per = unit === 'forever' ? 'in total' : multiplier === 1 ? `per ${unit}` : `per ${multiplier} ${unit}s`;
     const key = `${token.toLowerCase()}:${per}`;
     const sum = sums.get(key) ?? { token, per, amount: 0n };
     sums.set(key, { ...sum, amount: sum.amount + BigInt(allowance) });
@@ -207,8 +205,8 @@ function liveTotals(t: Tenant, held: LiveGrant[]): string {
   if (!sums.size) return 'No live grant on this connection lets the session key move tokens yet. ';
   const lines = [...sums.values()].map(({ token, per, amount }) =>
     usdc && isAddressEqual(token as Address, usdc.address)
-      ? `${formatUnits(amount, usdc.decimals)} USDC per ${per}`
-      : `${amount} base units of ${token} per ${per}`
+      ? `${formatUnits(amount, usdc.decimals)} USDC ${per}`
+      : `${amount} base units of ${token} ${per}`
   );
   return `The ${held.length} live grant(s) on this connection already let the session key move up to ${lines.join(', ')}. `;
 }
@@ -249,6 +247,9 @@ export async function grantPermissions(t: Tenant, input: GrantInput, deps = DEFA
       chainId: t.chainId,
       approveBy: until,
       work: (walletAsk, claim) => askGrant(t, ask, walletAsk, claim, deps),
+      settled: async ({ state }) => {
+        if (state === 'approved') await revokeOlder(t, deps);
+      },
     },
     deps.openWallet
   );

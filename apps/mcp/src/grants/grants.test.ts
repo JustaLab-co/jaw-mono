@@ -18,7 +18,7 @@ import {
 } from '@/connections/testkit';
 import type { DisconnectDeps } from '@/connections/disconnect';
 import { getDb } from '@/db/client';
-import { connections, grants } from '@/db/schema';
+import { connections, grants, permissionRequests, settings } from '@/db/schema';
 import { TEST_PG_URL, useTestDb, useTestPostgres } from '@/db/test-db';
 import { endConnection } from '@/connections/rows';
 import { WalletBusy, type OpenWallet, type Wallet } from '@/connections/relay';
@@ -247,6 +247,41 @@ describe('given a connection that approves a second budget', () => {
     expect(listed.structuredContent.summary).toContain('jaw_revoke_permission');
   });
 
+  it('when payments are paused, then the first stays replaced and approved, and nothing is sent', async () => {
+    const { t, signer, connectedWith } = await connected();
+    const { deps, sent } = sessionFakes();
+    await getDb().insert(settings).values({ key: 'payments_paused', value: true });
+    try {
+      await ask(t, signer, { perDay: '0.5', session: deps });
+    } finally {
+      await getDb().delete(settings).where(eq(settings.key, 'payments_paused'));
+    }
+
+    expect(sent).toHaveLength(0);
+    expect(await rowOf(connectedWith)).toMatchObject({ replacedAt: expect.any(Date), revokedAt: null });
+  });
+
+  it('when the revoke lands, then the owner link was already settled approved', async () => {
+    const { t, signer } = await connected();
+    const { deps } = sessionFakes();
+    const states: string[] = [];
+    const watching = {
+      ...deps,
+      sender: async (s: Parameters<typeof deps.sender>[0]) => {
+        const [row] = await getDb()
+          .select()
+          .from(permissionRequests)
+          .where(eq(permissionRequests.connectionId, t.connectionId));
+        states.push(row.state);
+        return deps.sender(s);
+      },
+    };
+
+    await ask(t, signer, { perDay: '0.5', session: watching });
+
+    expect(states).toEqual(['approved']);
+  });
+
   it('when a custom grant lands instead, then the budget is neither replaced nor revoked', async () => {
     const { t, signer, connectedWith } = await connected();
     const { deps, sent } = sessionFakes();
@@ -297,6 +332,16 @@ describe('the link reply', () => {
       'The 2 live grant(s) on this connection already let the session key move up to 7 base units of 0x4200000000000000000000000000000000000006 per week, 1 USDC per day.'
     );
     expect(summary).toContain('replaces the current one');
+  });
+
+  it('given a limit for all time, then the reply says in total', async () => {
+    const { t, signer } = await connected();
+    await ask(t, signer, { input: { ...CUSTOM, spends: [{ ...CUSTOM.spends[0], unit: 'forever' as const }] } });
+
+    const { result } = await ask(t, signer, { input: CUSTOM });
+
+    const summary = 'structuredContent' in result ? result.structuredContent.summary : '';
+    expect(summary).toContain('7 base units of 0x4200000000000000000000000000000000000006 in total');
   });
 
   it('given only custom grants, when a custom grant is asked, then it does not speak of replacing a budget', async () => {
@@ -552,13 +597,13 @@ describe('the permission of a budget', () => {
   });
 
   it('a revoked budget is neither the x402 budget nor live', async () => {
-    const { t } = await connected();
+    const { t, connectedWith } = await connected();
     const newer = await newGrantFrom(t.connectionId);
     await inTx(t.connectionId, newer);
     await getDb().update(grants).set({ revokedAt: new Date() }).where(eq(grants.permissionId, newer.permissionId));
 
     expect(await x402Budget(t.connectionId)).toBeUndefined();
-    expect((await liveGrants(t.connectionId)).map((g) => g.permissionId)).not.toContain(newer.permissionId);
+    expect((await liveGrants(t.connectionId)).map((g) => g.permissionId)).toEqual([connectedWith]);
   });
 
   it('a custom grant is live but never the x402 budget, however new', async () => {
@@ -616,6 +661,7 @@ describe('the permission of a budget', () => {
     await inTx(t.connectionId, newer);
 
     expect((await x402Budget(t.connectionId))?.permissionId).toBe(newer.permissionId);
+    expect(await rowOf(connectedWith)).toMatchObject({ replacedAt: expect.any(Date) });
     expect((await liveGrants(t.connectionId)).map((g) => g.permissionId)).toContain(connectedWith);
   });
 });
