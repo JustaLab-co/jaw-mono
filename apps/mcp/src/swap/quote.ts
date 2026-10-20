@@ -1,14 +1,13 @@
 import { getAddress, isAddress, type Address } from 'viem';
 import type { Tenant } from '@/connections/auth';
 import { config } from '@/connections/config';
-import { pay, type PayDeps } from '@/payments/pay';
-import { gateCode, rawBody, resent, type PayResult } from '@/payments/render';
-import { findPayment } from '@/payments/store';
+import { errorLabel, log } from '@/lib/edge';
+import { fenceText } from '@/lib/fence';
+import { refusal, safeFetch } from '@/lib/safe-fetch';
 import { checkQuote, type QuoteRequest } from './check';
 import {
   depositAddressReused,
   isDepositAddressTaken,
-  nextAttempt,
   release,
   writeHeld,
   type SwapLease,
@@ -16,7 +15,7 @@ import {
   type SwapRow,
 } from './store';
 
-const QUOTE_PRICE = '5000';
+const BODY_MAX = 8_000;
 
 export type SwapInput = {
   originChainId: number;
@@ -27,9 +26,15 @@ export type SwapInput = {
   recipient?: string;
 };
 
-export type QuoteStep = { kind: 'done'; row: SwapRow; payment?: PayResult } | { kind: 'lease_lost' };
+export type QuoteStep = { kind: 'done'; row: SwapRow } | { kind: 'lease_lost' };
 
-type Paid = NonNullable<PayResult['structuredContent']>;
+export type QuoteDeps = { fetch: typeof fetch; apiKey: string; timeoutMs: number };
+
+const liveDeps = (): QuoteDeps => ({
+  fetch: safeFetch(config().insecureFetchHosts),
+  apiKey: config().swapApiKey ?? '',
+  timeoutMs: 15_000,
+});
 
 const lowerHex = (value: string) => (/^0x[0-9a-fA-F]{40}$/.test(value) ? value.toLowerCase() : value);
 
@@ -59,20 +64,37 @@ function quoteUrl(row: SwapRow): string {
   return `${config().swapUrl}/swap/quote?${query}`;
 }
 
-export async function quote(t: Tenant, held: { row: SwapRow; token: string }, deps?: PayDeps): Promise<QuoteStep> {
+type Answer = { kind: 'answered'; status: number; body: string } | { kind: 'unreachable' };
+
+async function ask(url: string, deps: QuoteDeps): Promise<Answer> {
+  try {
+    const res = await deps.fetch(url, {
+      headers: { 'x-api-key': deps.apiKey },
+      signal: AbortSignal.timeout(deps.timeoutMs),
+    });
+    return { kind: 'answered', status: res.status, body: await res.text() };
+  } catch (err) {
+    log('warn', { msg: 'swap quote unreachable', error: errorLabel(err) });
+    return { kind: 'unreachable' };
+  }
+}
+
+export async function quote(t: Tenant, held: { row: SwapRow; token: string }, deps = liveDeps()): Promise<QuoteStep> {
   if (held.row.quoteId) return { kind: 'done', row: held.row };
   const lease = { connectionId: t.connectionId, id: held.row.id, token: held.token };
   const request = quoteRequestOf(held.row);
   if (!request) return stepOf(await writeHeld(lease, { state: 'quote_failed', code: 'invalid_request' }));
-  const row = (await nextAttempt(lease)) ?? held.row;
-  const payment = await pay(t, { url: quoteUrl(row), maxAmount: QUOTE_PRICE, idempotencyKey: row.paymentKey }, deps, {
-    keepBody: true,
-  });
-  return stepOf(await conclude(lease, request, payment), payment);
+  const url = quoteUrl(held.row);
+  if (refusal(new URL(url), config().insecureFetchHosts)) {
+    return stepOf(await writeHeld(lease, { state: 'quote_failed', code: 'insecure_url' }));
+  }
+  // The backend's quote lives from when it was asked, so the owner window counts from here.
+  const askedAt = new Date();
+  const answer = await ask(url, deps);
+  return stepOf(await conclude(lease, request, url, askedAt, answer));
 }
 
-const stepOf = (row: SwapRow | undefined, payment?: PayResult): QuoteStep =>
-  row ? { kind: 'done', row, payment } : { kind: 'lease_lost' };
+const stepOf = (row: SwapRow | undefined): QuoteStep => (row ? { kind: 'done', row } : { kind: 'lease_lost' });
 
 function quoteRequestOf(row: SwapRow): QuoteRequest | undefined {
   if (!isAddress(row.originToken, { strict: false }) || !isAddress(row.depositor, { strict: false })) return undefined;
@@ -84,60 +106,51 @@ function quoteRequestOf(row: SwapRow): QuoteRequest | undefined {
   };
 }
 
-async function conclude(lease: SwapLease, request: QuoteRequest, payment: PayResult): Promise<SwapRow | undefined> {
-  const out = payment.structuredContent;
-  if (!out) return release(lease, { code: payment[gateCode] });
-  const raw = payment[rawBody];
-  if (out.kind === 'paid' && out.httpStatus === 200 && raw !== undefined) return keepQuote(lease, request, out, raw);
-  const final = finalCodeOf(out, payment[resent] === true);
-  if (final) return finalWrite(lease, out, 'quote_failed', final);
-  const code = out.kind === 'free' ? 'backend_unavailable' : (out.refusal?.code ?? null);
-  return release(lease, { code, paymentId: out.paymentId });
+// A key the backend does not take is this server's setting, not the caller's input, so the
+// swap stays quoting and the same key quotes once the setting is fixed.
+const KEY_REFUSED = new Set([401, 402, 403]);
+
+async function conclude(lease: SwapLease, request: QuoteRequest, url: string, askedAt: Date, answer: Answer) {
+  if (answer.kind === 'unreachable') return release(lease, { code: 'backend_unavailable' });
+  const { status, body } = answer;
+  const fenced = body ? fenceText(new URL(url).host, body, BODY_MAX) : null;
+  if (status === 200) return keepQuote(lease, request, askedAt, body, fenced);
+  if (KEY_REFUSED.has(status)) {
+    log('error', { msg: 'swap backend refused the swap api key', status });
+    return release(lease, { code: 'backend_unavailable' });
+  }
+  if (status >= 500) return release(lease, { code: 'backend_unavailable' });
+  const code = status >= 400 ? 'quote_unavailable' : 'quote_invalid';
+  return writeHeld(lease, { state: 'quote_failed', code, quoteFenced: fenced });
 }
 
-const UNRETRYABLE_REFUSALS = new Map([
-  ['network_mismatch', 'wrong_chain'],
-  ['insecure_url', 'insecure_url'],
-]);
-
-function finalCodeOf(out: Paid, afterResend: boolean): string | undefined {
-  const unretryable = out.refusal && UNRETRYABLE_REFUSALS.get(out.refusal.code);
-  if (unretryable) return unretryable;
-  if (out.kind === 'free') return (out.httpStatus ?? 0) >= 500 ? undefined : 'quote_unavailable';
-  if (out.kind === 'paid') return 'quote_invalid';
-  if (out.kind !== 'failed' || out.state !== 'unknown') return undefined;
-  if (out.httpStatus !== 402) return 'quote_invalid';
-  return afterResend ? 'quote_lost' : undefined;
-}
-
-async function keepQuote(lease: SwapLease, request: QuoteRequest, out: Paid, raw: string) {
-  const checked = await checkQuote(request, dataOf(raw), isDepositAddressTaken);
+async function keepQuote(
+  lease: SwapLease,
+  request: QuoteRequest,
+  askedAt: Date,
+  body: string,
+  fenced: string | null
+): Promise<SwapRow | undefined> {
+  const checked = await checkQuote(request, dataOf(body), isDepositAddressTaken);
   if (!checked.ok) {
     const state = checked.code === 'quote_invalid' ? 'quote_failed' : 'quote_rejected';
-    return finalWrite(lease, out, state, checked.code);
+    return writeHeld(lease, { state, code: checked.code, quoteFenced: fenced });
   }
-  const paid = await findPayment(out.paymentId);
   try {
     return await writeHeld(lease, {
       code: null,
-      paymentId: out.paymentId,
-      paidAt: paid?.signedAt,
+      quotedAt: askedAt,
       quoteId: checked.quoteId,
       depositAddress: checked.depositAddress,
       quote: checked.quote,
       call: checked.call,
-      quoteFenced: fencedOf(out),
+      quoteFenced: fenced,
     });
   } catch (err) {
     if (!depositAddressReused(err)) throw err;
-    return finalWrite(lease, out, 'quote_rejected', 'deposit_address_reused');
+    return writeHeld(lease, { state: 'quote_rejected', code: 'deposit_address_reused', quoteFenced: fenced });
   }
 }
-
-const finalWrite = (lease: SwapLease, out: Paid, state: 'quote_failed' | 'quote_rejected', code: string) =>
-  writeHeld(lease, { state, code, paymentId: out.paymentId, quoteFenced: fencedOf(out) });
-
-const fencedOf = (out: Paid) => out.response?.join('\n');
 
 function dataOf(raw: string): unknown {
   try {

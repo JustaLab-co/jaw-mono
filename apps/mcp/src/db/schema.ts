@@ -286,7 +286,8 @@ export const swaps = pgTable(
     paymentAttempt: integer('payment_attempt').notNull().default(1),
     paymentKey: text('payment_key').notNull(),
     paymentId: text('payment_id'),
-    paidAt: timestamp('paid_at', { withTimezone: true }),
+    /** When the quote was asked for. The column keeps its name from when the quote was paid for. */
+    quotedAt: timestamp('paid_at', { withTimezone: true }),
     quoteId: text('quote_id').unique(),
     depositAddress: text('deposit_address'),
     quote: jsonb('quote'),
