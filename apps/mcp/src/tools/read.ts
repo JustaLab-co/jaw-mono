@@ -7,9 +7,7 @@ import {
   usdcForNetwork,
 } from '@jaw.id/agent';
 import type { McpServer } from '@modelcontextprotocol/server';
-import { createPublicClient, http, type Address } from 'viem';
-import { normalize } from 'viem/ens';
-import { mainnet } from 'viem/chains';
+import type { Address } from 'viem';
 import { z } from 'zod';
 import { tenant, type Tenant } from '@/connections/auth';
 import { config } from '@/connections/config';
@@ -265,26 +263,6 @@ function addFunds(t: Tenant) {
     // EIP-681 ERC-20 transfer: a wallet that opens it sends USDC, not ETH, to the account.
     paymentUri: `ethereum:${usdc.address}@${t.chainId}/transfer?address=${t.account}`,
     summary: `Send USDC on ${network} to ${t.account}.`,
-  });
-}
-
-const resolveOutput = z.object({
-  name: z.string(),
-  address: z.string().nullable(),
-  chainId: z.string(),
-  summary: z.string(),
-});
-
-/** Resolves an ENS name on mainnet. Not a tool: resolving a name is a service the agent pays for. */
-export async function resolveName(name: string) {
-  const normalized = normalize(name);
-  const client = createPublicClient({ chain: mainnet, transport: http(config().mainnetRpcUrl) });
-  const address = await client.getEnsAddress({ name: normalized });
-  return resolveOutput.parse({
-    name: normalized,
-    address: address ?? null,
-    chainId: caip2(mainnet.id),
-    summary: address ? `Resolves to ${address}.` : 'The name has no address.',
   });
 }
 

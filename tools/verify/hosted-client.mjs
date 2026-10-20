@@ -129,6 +129,7 @@ const HELP = `Commands:
   connections                    jaw_connections
   history                        jaw_history
   funds                          jaw_add_funds
+  resolve <name|address>         jaw_resolve_name, an ENS name or an address
   quote <url>                    jaw_quote
   pay <url> [maxAmount]          jaw_pay_and_fetch (maxAmount in base units)
   budget <perDay>                jaw_request_budget, USDC only
@@ -140,6 +141,8 @@ const HELP = `Commands:
                                  jaw_send_calls, the owner approves in the wallet, e.g.
                                  calls '[{"to":"0x...","data":"0x..."}]' 8453 my-key
   calls-status <id>              jaw_send_calls_status, id is the oc_ id jaw_send_calls returned
+  read <chainId> '<json reads>'  jaw_read_contracts, e.g.
+                                 read 8453 '[{"address":"0x...","abi":[...],"functionName":"decimals"}]'
   revoke <connection id>         jaw_revoke_connection
   disconnect                     jaw_disconnect
   call <tool> '<json>'           any tool with raw arguments
@@ -151,6 +154,8 @@ const commands = {
   connections: () => call('jaw_connections', {}),
   history: () => call('jaw_history', {}),
   funds: () => call('jaw_add_funds', {}),
+  resolve: (value) =>
+    call('jaw_resolve_name', /^0x[0-9a-fA-F]{40}$/.test(value) ? { address: value } : { name: value }),
   quote: (url) => call('jaw_quote', { url }),
   pay: (url, maxAmount) => call('jaw_pay_and_fetch', { url, ...(maxAmount && { maxAmount }) }),
   budget: (perDay) => call('jaw_request_budget', { perDay }),
@@ -172,6 +177,7 @@ const commands = {
       ...(idempotencyKey && { idempotencyKey }),
     }),
   'calls-status': (id) => call('jaw_send_calls_status', { id }),
+  read: (chainId, json) => call('jaw_read_contracts', { chainId: Number(chainId), reads: JSON.parse(json) }),
   revoke: (connection) => call('jaw_revoke_connection', { id: connection }),
   disconnect: () => call('jaw_disconnect', {}),
   call: (name, ...json) => call(name, json.length ? JSON.parse(json.join(' ')) : {}),

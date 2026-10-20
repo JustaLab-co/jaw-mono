@@ -24,6 +24,7 @@ apps/mcp/src/owner-calls/**
 apps/mcp/src/tools/owner-calls.ts
 apps/mcp/src/adapters/session-host.ts
 apps/mcp/src/lib/safe-fetch.ts
+apps/mcp/src/tools/resolve-name.ts
 apps/mcp/src/lib/cron.ts
 apps/mcp/src/app/api/cron/**
 apps/mcp/src/app/interaction/**
