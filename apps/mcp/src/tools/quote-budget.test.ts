@@ -38,8 +38,6 @@ vi.mock('@/lib/chain', async (original) => ({
     }) as unknown as PublicClient,
 }));
 
-// /price/<base units> answers a 402 for that amount of USDC; anything else is free.
-// /two offers a cheaper option in another token next to 5000 USDC.
 const option = (amount: string, asset: string) => ({
   scheme: 'exact',
   network: 'eip155:84532',

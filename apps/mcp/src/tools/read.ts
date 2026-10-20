@@ -246,7 +246,6 @@ const quoteOutput = z.object({
 
 type BudgetRead = Awaited<ReturnType<typeof budgetOf>>;
 
-// Ready only when the budget can pay this price today, as jaw_session_status counts it.
 function quoteReadiness(t: Tenant, read: BudgetRead | undefined, price: bigint): Readiness {
   const ready = readinessOf(t, read?.liveness);
   const left = read?.budget.remainingToday;
@@ -273,7 +272,7 @@ async function quote(t: Tenant, url: string) {
   };
   const grant = await x402Budget(t.connectionId);
   const cuts = watchCuts(safeFetch(config().insecureFetchHosts));
-  // The budget's token only, as a payment would choose.
+  // A payment takes only the budget's token, so price that option and not a cheaper one.
   const priced = payAndFetch(url, payer, { dryRun: true, network, asset: grant?.token, fetch: cuts.fetch }).catch(
     () => {
       // One answer for every failure: telling a refused address from a failed lookup
