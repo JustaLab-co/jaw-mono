@@ -5,6 +5,7 @@ import { guardTools, withEdge } from '@/lib/edge';
 import { countUnauthorized } from '@/lib/metrics';
 import { registerReadTools } from '@/tools/read';
 import { registerReadContractsTool } from '@/tools/read-contracts';
+import { registerResolveNameTool } from '@/tools/resolve-name';
 import { registerDiscoverTool } from '@/tools/discover';
 import { registerDisconnectTool } from '@/tools/disconnect';
 import { registerHistoryTool } from '@/tools/history';
@@ -24,6 +25,7 @@ const mcp = createMcpHandler(
     guardTools(server);
     registerReadTools(server);
     registerReadContractsTool(server);
+    registerResolveNameTool(server);
     registerDiscoverTool(server);
     registerBudgetTool(server);
     registerSendTools(server);

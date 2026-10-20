@@ -15,7 +15,7 @@ import { dayLeft, readDaySpend } from '@/payments/day-spend';
 import { FloatBusy, FloatLost, LOCK_WAIT_MS, withFloat } from '@/payments/float-lock';
 import { handToReconciler, noteCallsId, recordedSends, recordSend, settleSend } from '@/payments/sends';
 import { entriesFor } from '@/payments/store';
-import { resolveName } from './read';
+import { resolveName } from './resolve-name';
 import { NO_SEND_SCOPE, refusal } from './reply';
 
 const AMOUNT = /^\d{1,9}(\.\d{1,6})?$/;
