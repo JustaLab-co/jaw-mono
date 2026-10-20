@@ -159,7 +159,9 @@ async function withCustomGrant(perDay = 1_000_000n, end = NOW() + 86_400, target
     if (functionName === 'getHash') return permissionId;
     if (functionName === 'isApproved') return true;
     if (functionName === 'isRevoked') return chain.revoked;
-    if (functionName === 'getCurrentPeriod') return { start: NOW() - 60, end: NOW() + 3_600, spend: chain.spent };
+    if (functionName === 'getCurrentPeriod') {
+      return { start: permission.start, end: permission.start + 86_400, spend: chain.spent };
+    }
     throw new Error(`this node does not answer ${functionName}`);
   }) as typeof node.readContract;
   return { c, t, permissionId };
