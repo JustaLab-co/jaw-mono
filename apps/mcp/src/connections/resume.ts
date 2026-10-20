@@ -17,36 +17,37 @@ export type Lost = 'connection_ended' | 'unopenable' | 'page_gone';
 type Resumable = { id: string; connectionId: string; relay: string | null; approveBy: Date | null };
 
 export interface Rejoin<R extends Resumable> {
+  idField: 'permissionRequestId' | 'ownerCallId' | 'swapId';
   take: (row: R) => Promise<R | undefined>;
   release: (row: R) => Promise<unknown>;
   lost: (row: R, why: Lost) => Promise<unknown>;
-  follow: (row: R, wallet: Wallet, t: Tenant) => void;
+  /** Undefined when the stored work cannot be rebuilt. */
+  start: (row: R, t: Tenant) => ((wallet: Wallet) => void) | undefined;
 }
 
-export async function resumeEach<R extends Resumable>(
-  idField: 'permissionRequestId' | 'ownerCallId' | 'swapId',
-  find: () => Promise<R[]>,
-  rejoin: Rejoin<R>
-) {
+export async function resumeEach<R extends Resumable>(find: () => Promise<R[]>, rejoin: Rejoin<R>) {
   try {
-    for (const row of await find()) {
-      void resumeOne(row, rejoin).catch((err: unknown) =>
-        log('warn', { msg: 'relay session not resumed', [idField]: row.id, error: errorLabel(err) })
-      );
-    }
+    return (await find()).map((row) => resumeRow(row, rejoin));
   } catch (err) {
     log('warn', { msg: 'relay sessions to resume not read', error: errorLabel(err) });
+    return [];
   }
 }
 
-async function resumeOne<R extends Resumable>(found: R, { take, release, lost, follow }: Rejoin<R>) {
+export const resumeRow = <R extends Resumable>(row: R, rejoin: Rejoin<R>): Promise<void> =>
+  resumeOne(row, rejoin).catch((err: unknown) =>
+    log('warn', { msg: 'relay session not resumed', [rejoin.idField]: row.id, error: errorLabel(err) })
+  );
+
+async function resumeOne<R extends Resumable>(found: R, { take, release, lost, start }: Rejoin<R>) {
   const row = await take(found);
   if (!row) return;
   const connection = await findActive(row.connectionId);
-  if (!connection) return lost(row, 'connection_ended');
-  const relay = openResume(config().ring, row.relay!, row.id);
-  if (!relay) return lost(row, 'unopenable');
+  if (!connection) return void (await lost(row, 'connection_ended'));
   const t = tokenlessTenant(connection);
+  const relay = openResume(config().ring, row.relay!, row.id);
+  const run = relay && start(row, t);
+  if (!run) return void (await lost(row, 'unopenable'));
   let wallet: Wallet | undefined;
   try {
     wallet = await resumeWallet(relay, row.approveBy!, t);
@@ -55,8 +56,8 @@ async function resumeOne<R extends Resumable>(found: R, { take, release, lost, f
     if (err instanceof WalletBusy) return;
     throw err;
   }
-  if (!wallet) return lost(row, 'page_gone');
-  return follow(row, wallet, t);
+  if (!wallet) return void (await lost(row, 'page_gone'));
+  run(wallet);
 }
 
 const NOT_THE_REQUEST = -32600;

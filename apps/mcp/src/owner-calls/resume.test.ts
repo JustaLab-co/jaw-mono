@@ -1,5 +1,5 @@
 import { randomBytes } from 'node:crypto';
-import { eq } from 'drizzle-orm';
+import { eq, sql } from 'drizzle-orm';
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import { verifyBearer, type Tenant } from '@/connections/auth';
 import { replayingPage, stallsAfter, startRelay } from '@/connections/fake-relay';
@@ -177,5 +177,84 @@ describe('owner calls whose server restarted after the send started', () => {
 
     await vi.waitFor(async () => expect((await rowOf(id)).relay).toBeNull());
     expect(page.ids).toHaveLength(2);
+  });
+});
+
+async function waitingCall(
+  over: { connectionId?: string; minutesAgo?: number; lapsedSeconds?: number; id?: string } = {}
+) {
+  const id = over.id ?? randomBytes(8).toString('hex');
+  const connectionId = over.connectionId ?? `c_${id}`;
+  if (!over.connectionId) {
+    await getDb()
+      .insert(connections)
+      .values({
+        id: connectionId,
+        status: 'active',
+        account: `0x${'ab'.repeat(20)}`,
+        chainId: 84532,
+        clientId: 'jaw-cli',
+        clientName: 'JAW CLI',
+        scopes: ['wallet:read'],
+        interactionUid: `i_${id}`,
+        expiresAt: new Date(Date.now() + 86_400_000),
+        grantId: `g_${id}`,
+        activatedAt: new Date(),
+      });
+  }
+  await getDb()
+    .insert(ownerCalls)
+    .values({
+      id: `oc_${id}`,
+      connectionId,
+      idempotencyKey: id,
+      requestHash: id,
+      chainId: 84532,
+      account: `0x${'ab'.repeat(20)}`,
+      calls: [CALL],
+      walletUrl: 'http://keys.test/cli-bridge',
+      approveBy: new Date(Date.now() + 600_000),
+      code: SEND_STARTED,
+      leaseHolder: id,
+      sessionUntil: sql`statement_timestamp() - ${over.lapsedSeconds ?? 120} * interval '1 second'`,
+      relay: 'r1.retired.x.y',
+      updatedAt: new Date(Date.now() - (over.minutesAgo ?? 1) * 60_000),
+    });
+  return `oc_${id}`;
+}
+
+const waiting = async (ids: string[]) =>
+  (await Promise.all(ids.map(rowOf))).filter((r) => r.relay !== null).map((r) => r.id);
+
+describe('which owner calls a resume picks', () => {
+  it('given eleven waiting calls, then one tick resumes the ten that waited longest and hands back their runs', async () => {
+    const batch = randomBytes(4).toString('hex');
+    const ids: string[] = [];
+    for (let i = 10; i < 21; i++) ids.push(await waitingCall({ id: `${batch}${i}`, minutesAgo: 20 + i }));
+
+    await Promise.all(await resumeOwnerCalls(clients));
+
+    expect(await waiting(ids)).toEqual([ids[0]]);
+  });
+
+  it('given a status read of one call, then only that call is resumed', async () => {
+    const t = await connected();
+    const read = await waitingCall({ connectionId: t.connectionId });
+    const other = await waitingCall();
+
+    await sendCallsStatus(t, { id: read }, depsOf(stallsAfter(9).openWallet));
+    await vi.waitFor(async () => expect((await rowOf(read)).relay).toBeNull());
+    await quiet();
+
+    expect(await waiting([other])).toEqual([other]);
+  });
+
+  it('given a lease that ended inside the stall grace, then no resume takes it over until the grace passes', async () => {
+    const held = await waitingCall({ lapsedSeconds: 30, minutesAgo: 600 });
+    const free = await waitingCall({ lapsedSeconds: 61, minutesAgo: 600 });
+
+    await Promise.all(await resumeOwnerCalls(clients));
+
+    expect(await waiting([held, free])).toEqual([held]);
   });
 });

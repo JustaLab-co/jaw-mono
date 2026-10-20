@@ -14,7 +14,7 @@ import {
   lostBefore,
   lostPreamble,
   openLink,
-  resumeOpen,
+  resumeRequest,
   type Claim,
   type Outcome,
   type PermissionRequestRow,
@@ -221,7 +221,7 @@ export async function revokePermission(t: Tenant, input: RevokeInput, deps = DEF
   if (opened === 'wallet_busy') return refusal('Too many owners are approving right now. Try again in a minute.');
   if (opened === 'account_busy') return refusal(ACCOUNT_BUSY);
   if ('opened' in opened) return answer(target, opened.opened);
-  void resumeOpen({ revoke: resumeRevoke });
+  if (opened.waiting.relay) void resumeRequest(opened.waiting, revokeWork(deps));
   const held = opened.waiting;
   const until = held.approveBy.toISOString();
   if (held.connectionId !== t.connectionId) {

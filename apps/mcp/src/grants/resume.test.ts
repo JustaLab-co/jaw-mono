@@ -1,26 +1,30 @@
 import { randomBytes } from 'node:crypto';
-import { eq, sql } from 'drizzle-orm';
+import type { GrantedPermission } from '@jaw.id/agent';
+import { eq, inArray, sql } from 'drizzle-orm';
 import type { Hex } from 'viem';
-import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
+import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
 import { verifyBearer, type Tenant } from '@/connections/auth';
+import { config } from '@/connections/config';
 import { replayingPage, stallsAfter, startRelay } from '@/connections/fake-relay';
+import { ownerRelay, type Ask } from '@/connections/relay';
+import { sealResume } from '@/connections/seal';
 import { approvedOnChain, connect, owner, setTestEnv, walletAnswers, walletsSettled } from '@/connections/testkit';
 import { getDb } from '@/db/client';
 import { connections, grants, permissionRequests } from '@/db/schema';
 import { TEST_PG_URL, useTestDb, useTestPostgres } from '@/db/test-db';
 import { grantPermissions, grantWork } from '@/tools/grant-permissions';
+import { revokePermission, type RevokeDeps } from '@/tools/revoke-permission';
 import { resumeSign, sign } from '@/tools/sign';
-import { checkGranted, recordGrant, type GrantRequest } from './permission';
-import { resumeOpen, type PermissionRequestRow } from './requests';
-import { LIVE_GRANTS_PER_CONNECTION } from './store';
+import { checkGranted, recordGrant, type GrantRequest, type ReadPermission } from './permission';
+import { closeLapsedLinks, resumeOpen } from './requests';
+import { LIVE_GRANTS_PER_CONNECTION, x402Budget } from './store';
 
 const relay = await startRelay();
 setTestEnv();
 process.env.JAW_RELAY_URL = relay.url;
 beforeAll(TEST_PG_URL ? useTestPostgres : useTestDb);
 afterAll(() => relay.close());
-
-type Signer = ReturnType<typeof owner>;
+afterEach(() => vi.useRealTimers());
 
 async function connected() {
   const signer = owner();
@@ -29,12 +33,20 @@ async function connected() {
   return { signer, t: (await verifyBearer(c.access_token))?.extra?.tenant as Tenant };
 }
 
+function deciding(answer: Ask) {
+  let decide!: () => void;
+  const decided = new Promise<void>((r) => (decide = r));
+  const asked = async (method: string, params: unknown) => {
+    if (method !== 'eth_requestAccounts') await decided;
+    return answer(method, params as unknown[]);
+  };
+  return { answer: asked, decide };
+}
+
 const rowOf = async (id: string) =>
   (await getDb().select().from(permissionRequests).where(eq(permissionRequests.id, id)))[0];
-const signRow = async (t: Tenant, key: string) =>
-  (await getDb().select().from(permissionRequests).where(eq(permissionRequests.idempotencyKey, key))).find(
-    (r) => r.connectionId === t.connectionId
-  )!;
+const rowsOf = (t: Tenant) =>
+  getDb().select().from(permissionRequests).where(eq(permissionRequests.connectionId, t.connectionId));
 const lapse = (id: string) =>
   getDb().update(permissionRequests).set({ sessionUntil: null }).where(eq(permissionRequests.id, id));
 const settled = (id: string) =>
@@ -46,32 +58,24 @@ const settled = (id: string) =>
     },
     { timeout: 10_000 }
   );
+const pause = (ms = 300) => new Promise((r) => setTimeout(r, ms));
+const resumeSigns = async () => Promise.all(await resumeOpen({ sign: resumeSign }));
 
-function deciding(signer: Signer, message: string) {
-  let decide!: () => void;
-  const decided = new Promise<void>((r) => (decide = r));
-  const answer = async (method: string) => {
-    if (method === 'eth_requestAccounts') return [signer.address];
-    await decided;
-    return signer.signMessage({ message });
-  };
-  return { answer, decide };
-}
-
-async function askedThenRestarted(message = 'sign in', opts: { replays?: boolean } = {}) {
+async function askedThenRestarted(message = 'sign in', opts: { replays?: boolean; stallAt?: number } = {}) {
   const { signer, t } = await connected();
   const key = `k_${randomBytes(4).toString('hex')}`;
-  const owned = deciding(signer, message);
-  const server = stallsAfter(2);
+  const owned = deciding(async (method) =>
+    method === 'eth_requestAccounts' ? [signer.address] : signer.signMessage({ message })
+  );
+  const stallAt = opts.stallAt ?? 2;
+  const server = stallsAfter(stallAt);
   const first = await sign(t, { message, idempotencyKey: key }, { openWallet: server.openWallet });
   const page = await replayingPage(first.structuredContent!.url!, owned.answer, opts);
-  await vi.waitFor(() => expect(page.ids).toHaveLength(2));
-  const row = await signRow(t, key);
+  await vi.waitFor(() => expect(page.ids).toHaveLength(stallAt));
+  const [row] = await rowsOf(t);
   await lapse(row.id);
   return { signer, t, key, message, row, page, server, decide: owned.decide };
 }
-
-const resumeSigns = () => resumeOpen({ sign: resumeSign });
 
 describe('a sign request whose server restarted', () => {
   it.each(['while the server was down', 'after the server rejoined'])(
@@ -110,7 +114,7 @@ describe('a sign request whose server restarted', () => {
     expect((await rowOf(row.id)).relay).toBeNull();
 
     await resumeSigns();
-    await new Promise((r) => setTimeout(r, 300));
+    await pause();
 
     expect(page.ids).toHaveLength(2);
   });
@@ -120,7 +124,7 @@ describe('a sign request whose server restarted', () => {
 
     await Promise.all([resumeSigns(), resumeSigns()]);
     await vi.waitFor(() => expect(page.ids).toHaveLength(4));
-    await new Promise((r) => setTimeout(r, 500));
+    await pause(500);
 
     expect(page.ids).toHaveLength(4);
     expect(page.inits()).toBe(2);
@@ -134,11 +138,56 @@ describe('a sign request whose server restarted', () => {
     await vi.waitFor(() => expect(page.ids).toHaveLength(4));
 
     server.wake(Object.assign(new Error('User rejected the request'), { code: 4001 }));
-    await new Promise((r) => setTimeout(r, 300));
+    await pause();
     expect((await rowOf(row.id)).state).toBe('awaiting_owner');
     decide();
 
     expect(await settled(row.id)).toMatchObject({ state: 'approved' });
+  });
+
+  it('given a resumer took the lease before the old process claimed the row, when the old process wakes up, then its claim fails and it asks nothing more', async () => {
+    const { row, page, server, decide } = await askedThenRestarted('sign in', { stallAt: 1 });
+    await resumeSigns();
+    await vi.waitFor(() => expect(page.ids).toHaveLength(3));
+
+    server.wake();
+    await pause();
+
+    expect(page.ids).toHaveLength(3);
+    decide();
+    expect(await settled(row.id)).toMatchObject({ state: 'approved' });
+  });
+
+  it('given a resumer took the lease, when the old process renews, then it loses the link and closes its session', async () => {
+    vi.useFakeTimers({ toFake: ['setInterval', 'clearInterval'] });
+    const { page, server } = await askedThenRestarted();
+    await resumeSigns();
+    await vi.waitFor(() => expect(page.ids).toHaveLength(4));
+
+    await vi.advanceTimersByTimeAsync(10_000);
+
+    await vi.waitFor(() => expect(server.closed()).toBe(true));
+  });
+
+  it('given another process holds the row when the page becomes ready, then this process stores no relay session', async () => {
+    const { signer, t } = await connected();
+    const first = await sign(t, { message: 'hi', idempotencyKey: 'late' }, { openWallet: ownerRelay });
+    const [row] = await rowsOf(t);
+    await getDb().update(permissionRequests).set({ leaseHolder: 'another' }).where(eq(permissionRequests.id, row.id));
+
+    const page = await replayingPage(first.structuredContent!.url!, async () => [signer.address]);
+    await vi.waitFor(() => expect(page.ids).toHaveLength(1));
+    await pause();
+
+    expect((await rowOf(row.id)).relay).toBeNull();
+  });
+
+  it('given the reconciler sweeps lapsed links, then a row waiting for its resume is left open', async () => {
+    const { row } = await askedThenRestarted();
+
+    await closeLapsedLinks();
+
+    expect(await rowOf(row.id)).toMatchObject({ state: 'awaiting_owner', relay: expect.any(String) });
   });
 
   it('given the connection ended meanwhile, when the server rejoins, then the row ends connection_ended and the page is not asked again', async () => {
@@ -167,6 +216,16 @@ describe('a sign request whose server restarted', () => {
     expect(page.ids).toHaveLength(2);
   });
 
+  it('given a stored payload that does not parse, then the row ends link_lost and no session is opened on the relay', async () => {
+    const { row, page } = await askedThenRestarted();
+    await getDb().update(permissionRequests).set({ payload: '{' }).where(eq(permissionRequests.id, row.id));
+
+    await resumeSigns();
+
+    expect(await settled(row.id)).toMatchObject({ state: 'expired', code: 'link_lost', relay: null });
+    expect(page.inits()).toBe(1);
+  });
+
   it('given the page refuses a resumed ask as another request under its id, then the row ends link_lost, not as a wallet error', async () => {
     const { row } = await askedThenRestarted();
     const payload = JSON.parse(row.payload!) as { request: { data: { message: string } } };
@@ -182,21 +241,36 @@ describe('a sign request whose server restarted', () => {
   });
 });
 
+const CUSTOM = { calls: [{ target: `0x${'12'.repeat(20)}`, functionSignature: 'transfer(address,uint256)' }] };
+
 describe('a grant request whose server restarted', () => {
+  it('given the page is still open, when the agent asks again, then it waits on the same link, resumes it, and the grant the owner approves is recorded', async () => {
+    const { signer, t } = await connected();
+    const owned = deciding(walletAnswers(signer));
+    const deps = { openWallet: stallsAfter(1).openWallet, readPermission: approvedOnChain };
+    await grantPermissions(t, CUSTOM, deps);
+    const [row] = await rowsOf(t);
+    const page = await replayingPage(row.walletUrl, owned.answer);
+    await vi.waitFor(() => expect(page.ids).toHaveLength(1));
+    await lapse(row.id);
+
+    const again = await grantPermissions(t, CUSTOM, deps);
+    expect(again.content[0].text).toContain(`still waiting for the owner at ${row.walletUrl}`);
+    await vi.waitFor(() => expect(page.ids).toHaveLength(2));
+    owned.decide();
+
+    const done = await settled(row.id);
+    expect(done).toMatchObject({ state: 'approved', permissionId: expect.stringMatching(/^0x/) });
+    expect(await getDb().select().from(grants).where(eq(grants.permissionId, done.permissionId!))).toHaveLength(1);
+    expect(page.asked()).toBe(1);
+  });
+
   it('given the grant the owner approved is already recorded and fills the connection, when the server rejoins, then the row ends approved', async () => {
     const { signer, t } = await connected();
     let answered: Record<string, unknown> | undefined;
     const honest = walletAnswers(signer);
-    const server = stallsAfter(1);
-    await grantPermissions(
-      t,
-      { calls: [{ target: `0x${'12'.repeat(20)}`, functionSignature: 'transfer(address,uint256)' }] },
-      { openWallet: server.openWallet, readPermission: approvedOnChain }
-    );
-    const [row] = await getDb()
-      .select()
-      .from(permissionRequests)
-      .where(eq(permissionRequests.connectionId, t.connectionId));
+    await grantPermissions(t, CUSTOM, { openWallet: stallsAfter(1).openWallet, readPermission: approvedOnChain });
+    const [row] = await rowsOf(t);
     const page = await replayingPage(row.walletUrl, async (method, params) => {
       answered = (await honest(method, params as unknown[])) as Record<string, unknown>;
       return answered;
@@ -213,7 +287,7 @@ describe('a grant request whose server restarted', () => {
     });
     await lapse(row.id);
 
-    await resumeOpen({ grant: grantWork(approvedOnChain) });
+    await Promise.all(await resumeOpen({ grant: grantWork(approvedOnChain) }));
 
     expect(await settled(row.id)).toMatchObject({ state: 'approved', permissionId: answered!.permissionId });
     expect(page.asked()).toBe(1);
@@ -225,22 +299,72 @@ describe('a grant request whose server restarted', () => {
   });
 });
 
-describe('the resumes one tick starts', () => {
-  it('given eleven resumable requests, then one tick starts ten and the next starts the last', async () => {
-    const ids: string[] = [];
-    for (let i = 0; i < 11; i++) ids.push(await resumableRow());
-    const ended = async () =>
-      (await Promise.all(ids.map(rowOf))).filter((r: PermissionRequestRow) => r.state !== 'awaiting_owner').length;
+describe('a revoke request whose server restarted', () => {
+  it('given the page is still open, when the agent asks again, then it waits on the same link, resumes it, and the revoke the owner approves is recorded', async () => {
+    const { signer, t } = await connected();
+    const permissionId = (await x402Budget(t.connectionId))!.permissionId as Hex;
+    const revoked = new Set<string>();
+    const readPermission: ReadPermission = async ({ permissionId: id }) => ({
+      status: 'ok',
+      approved: true,
+      revoked: revoked.has(id.toLowerCase()),
+    });
+    const honest = walletAnswers(signer);
+    const owned = deciding(async (method, params) => {
+      if (method !== 'wallet_revokePermissions') return honest(method, params);
+      revoked.add((params[0] as { id: string }).id.toLowerCase());
+      return { success: true };
+    });
+    const deps: RevokeDeps = {
+      openWallet: stallsAfter(2).openWallet,
+      readPermission,
+      rereadMs: 1,
+      lookUp: async (id) => {
+        const [g] = await getDb().select().from(grants).where(eq(grants.permissionId, id));
+        return { permission: g.permission as GrantedPermission, chainId: g.chainId };
+      },
+    };
+    await revokePermission(t, { permissionId }, deps);
+    const [row] = await rowsOf(t);
+    const page = await replayingPage(row.walletUrl, owned.answer);
+    await vi.waitFor(() => expect(page.ids).toHaveLength(2));
+    await lapse(row.id);
 
-    await resumeSigns();
-    await vi.waitFor(async () => expect(await ended()).toBe(10));
+    const again = await revokePermission(t, { permissionId }, deps);
+    expect('structuredContent' in again && again.structuredContent?.url).toBe(row.walletUrl);
+    await vi.waitFor(() => expect(page.ids).toHaveLength(4));
+    owned.decide();
 
-    await resumeSigns();
-    await vi.waitFor(async () => expect(await ended()).toBe(11));
+    expect(await settled(row.id)).toMatchObject({ state: 'approved', code: null });
+    expect(
+      (await getDb().select().from(grants).where(eq(grants.permissionId, permissionId)))[0].revokedAt
+    ).not.toBeNull();
+    expect(page.asked()).toBe(2);
   });
 });
 
-async function resumableRow(): Promise<string> {
+describe('the resumes one tick starts', () => {
+  it('given eleven requests that keep failing to resume, then a tick starts the ten tried longest ago and the next starts the last', async () => {
+    const newest = await failingRow(1);
+    const older: string[] = [];
+    for (let i = 0; i < 10; i++) older.push(await failingRow(10));
+    const all = [newest, ...older];
+    const before = new Map((await rowsById(all)).map((r) => [r.id, r.updatedAt.getTime()]));
+    const tried = async () => (await rowsById(all)).filter((r) => r.updatedAt.getTime() > before.get(r.id)!);
+
+    await resumeSigns();
+    expect((await tried()).map((r) => r.id).sort()).toEqual([...older].sort());
+
+    await resumeSigns();
+    expect((await tried()).map((r) => r.id)).toContain(newest);
+    await getDb().delete(permissionRequests).where(inArray(permissionRequests.id, all));
+  });
+});
+
+const rowsById = (ids: string[]) =>
+  getDb().select().from(permissionRequests).where(inArray(permissionRequests.id, ids));
+
+async function failingRow(minutesAgo: number): Promise<string> {
   const id = randomBytes(8).toString('hex');
   await getDb()
     .insert(connections)
@@ -252,15 +376,18 @@ async function resumableRow(): Promise<string> {
       clientId: 'jaw-cli',
       clientName: 'JAW CLI',
       scopes: ['wallet:read'],
+      sessionAddress: `0x${'cd'.repeat(20)}`,
       interactionUid: `i_${id}`,
       expiresAt: new Date(Date.now() + 86_400_000),
       grantId: `g_${id}`,
       activatedAt: new Date(),
     });
+  const rowId = `pr_${id}`;
+  const resume = { session: id, key: 'zz', peer: '00', chainId: 84532, appName: 'JAW CLI' };
   await getDb()
     .insert(permissionRequests)
     .values({
-      id: `pr_${id}`,
+      id: rowId,
       connectionId: `c_${id}`,
       method: 'sign',
       chainId: 84532,
@@ -272,7 +399,8 @@ async function resumableRow(): Promise<string> {
       approveBy: new Date(Date.now() + 60_000),
       code: 'asked',
       payload: '{}',
-      relay: 'r1.retired.x.y',
+      relay: sealResume(config().ring, resume, rowId),
+      updatedAt: new Date(Date.now() - minutesAgo * 60_000),
     });
-  return `pr_${id}`;
+  return rowId;
 }

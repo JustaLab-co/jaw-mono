@@ -84,18 +84,14 @@ interface Pool {
   /** How long a session waits for the browser to join before it ends. */
   joinWithin?: number;
 }
-const connectPool: Pool = {
-  limit: SESSION_LIMITS.connect,
-  open: 0,
-  byAccount: new Map(),
-  joinWithin: JOIN_WITHIN_MS,
-};
-const ownerPool: Pool = {
-  limit: SESSION_LIMITS.owner,
-  open: 0,
-  perAccount: SESSION_LIMITS.ownerPerAccount,
-  byAccount: new Map(),
-};
+// Next compiles instrumentation apart from the routes, so each gets its own copy of this module.
+const POOLS = Symbol.for('jaw-mcp/relay-pools');
+const pools = ((globalThis as { [POOLS]?: { connect: Pool; owner: Pool } })[POOLS] ??= {
+  connect: { limit: SESSION_LIMITS.connect, open: 0, byAccount: new Map(), joinWithin: JOIN_WITHIN_MS },
+  owner: { limit: SESSION_LIMITS.owner, open: 0, perAccount: SESSION_LIMITS.ownerPerAccount, byAccount: new Map() },
+});
+const connectPool = pools.connect;
+const ownerPool = pools.owner;
 
 export const connectRelay: OpenWallet = (chainId, until, client) =>
   withSlot(connectPool, client, (release) => startSession(release, chainId, until, client, connectPool.joinWithin));

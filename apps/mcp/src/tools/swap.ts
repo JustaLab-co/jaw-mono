@@ -4,7 +4,7 @@ import { zeroAddress, type Address } from 'viem';
 import { z } from 'zod';
 import { tenant, type Tenant } from '@/connections/auth';
 import { config } from '@/connections/config';
-import { otherRequestAsGone, newHolder, resumeEach } from '@/connections/resume';
+import { newHolder, otherRequestAsGone, resumeEach, resumeRow, type Rejoin } from '@/connections/resume';
 import { findActive } from '@/connections/rows';
 import { sealResume } from '@/connections/seal';
 import { keepLease, leaseHeld, sessionLeaseEnd } from '@/connections/session-lease';
@@ -449,16 +449,18 @@ function follow(t: Tenant, row: SwapRow, wallet: Wallet, deps: RunDeps, resumed 
     .finally(stop);
 }
 
-export const resumeSwaps = (deps: RunDeps = {}) =>
-  resumeEach('swapId', toResume, {
-    take: takeToResume,
-    release: releaseSession,
-    lost: endSession,
-    follow: (row, wallet, t) => follow(t, row, wallet, deps, true),
-  });
+const rejoin = (deps: RunDeps): Rejoin<SwapRow> => ({
+  idField: 'swapId',
+  take: takeToResume,
+  release: releaseSession,
+  lost: endSession,
+  start: (row, t) => (wallet) => follow(t, row, wallet, deps, true),
+});
+
+export const resumeSwaps = (deps: RunDeps = {}) => resumeEach(toResume, rejoin(deps));
 
 async function replay(t: Tenant, row: SwapRow, key: string, deps: SwapDeps): Promise<SwapResult> {
-  if (row.state === 'awaiting_owner') void resumeSwaps(deps);
+  if (row.relay) void resumeRow(row, rejoin(deps));
   const linkDead = row.state === 'awaiting_owner' && row.code !== SEND_STARTED && !leaseHeld(row.sessionUntil);
   if (!linkDead || row.relay) return answer(row);
   if (!(await findActive(t.connectionId))) return connectionEnded();
@@ -509,7 +511,7 @@ export async function swapStatus(
   const row = await findByQuoteId(t.connectionId, quoteId);
   if (!row) return refuse('not_found', 'No swap on this connection has that quoteId.');
   if (!FOLLOWED.includes(row.state)) return answer(row);
-  if (row.state === 'awaiting_owner') void resumeSwaps(deps);
+  if (row.relay) void resumeRow(row, rejoin(deps));
   const read = await track(row, deps.backend);
   return answer((await findByQuoteId(t.connectionId, quoteId)) ?? row, read);
 }

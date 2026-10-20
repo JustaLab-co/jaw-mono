@@ -1,9 +1,9 @@
 import { createHash, randomBytes } from 'node:crypto';
-import { and, eq, gt, inArray, isNotNull, isNull, lt, lte, not, or, sql, type SQL } from 'drizzle-orm';
+import { and, asc, eq, gt, inArray, isNotNull, isNull, lt, lte, not, or, sql, type SQL } from 'drizzle-orm';
 import type { PgUpdateSetSource } from 'drizzle-orm/pg-core';
 import { APPROVE_WITHIN_MS, config, QUOTE_MARGIN_SEC } from '@/connections/config';
 import { RESUMES_PER_TICK } from '@/connections/resume';
-import { sessionLeaseEnd } from '@/connections/session-lease';
+import { heldSince, sessionLeaseEnd } from '@/connections/session-lease';
 import { getDb, type Tx } from '@/db/client';
 import { payments, SWAP_DEPOSIT_ADDRESS_INDEX, swaps } from '@/db/schema';
 import { LEASE_MS } from '@/payments/store';
@@ -291,9 +291,15 @@ export const recordCallsId = (row: SwapRow, callsId: string) =>
 
 export const recordCode = (row: SwapRow, code: string) => write(heldBy(row, ['awaiting_owner', 'expired']), { code });
 
-const resumable = and(eq(swaps.state, 'awaiting_owner'), gt(swaps.approveBy, dbNow), lapsed, isNotNull(swaps.relay));
+const resumable = and(
+  eq(swaps.state, 'awaiting_owner'),
+  gt(swaps.approveBy, dbNow),
+  or(isNull(swaps.sessionUntil), lte(swaps.sessionUntil, heldSince)),
+  isNotNull(swaps.relay)
+);
 
-export const toResume = () => getDb().select().from(swaps).where(resumable).limit(RESUMES_PER_TICK);
+export const toResume = () =>
+  getDb().select().from(swaps).where(resumable).orderBy(asc(swaps.updatedAt)).limit(RESUMES_PER_TICK);
 
 export const takeToResume = (row: SwapRow) =>
   write(and(eq(swaps.id, row.id), resumable), { leaseToken: newToken(), sessionUntil: sessionLeaseEnd });

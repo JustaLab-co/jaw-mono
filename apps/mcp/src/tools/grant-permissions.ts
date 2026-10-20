@@ -23,7 +23,7 @@ import {
   lostBefore,
   lostPreamble,
   openLink,
-  resumeOpen,
+  resumeRequest,
   type Claim,
   type Outcome,
   type Rebuild,
@@ -233,7 +233,7 @@ export async function grantPermissions(t: Tenant, input: GrantInput, deps = DEFA
       'Tell the owner not to approve that one: a grant approved there can go live on chain without this server recording it, and then only jaw_revoke_permission with its id from the wallet ends it. '
     : '';
   if ('waiting' in opened) {
-    void resumeOpen({ grant: resumeGrant });
+    if (row.relay) void resumeRequest(row, grantWork(deps.readPermission));
     return refusal(
       `${warning}A grant request is still waiting for the owner at ${row.walletUrl}. Ask again once they approve or it expires at ${row.approveBy.toISOString()}.`
     );

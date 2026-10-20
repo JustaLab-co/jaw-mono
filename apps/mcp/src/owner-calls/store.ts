@@ -1,8 +1,8 @@
 import { randomBytes } from 'node:crypto';
-import { and, eq, gt, inArray, isNotNull, isNull, lt, lte, or, sql, type SQL } from 'drizzle-orm';
+import { and, asc, eq, gt, inArray, isNotNull, isNull, lt, lte, or, sql, type SQL } from 'drizzle-orm';
 import type { PgUpdateSetSource } from 'drizzle-orm/pg-core';
 import { newHolder, RESUMES_PER_TICK } from '@/connections/resume';
-import { sessionLeaseEnd } from '@/connections/session-lease';
+import { heldSince, sessionLeaseEnd } from '@/connections/session-lease';
 import { getDb, type Tx } from '@/db/client';
 import { ownerCalls } from '@/db/schema';
 
@@ -152,11 +152,12 @@ export const sentBefore = (ageMs: number, limit: number) =>
 const resumable = and(
   eq(ownerCalls.state, 'awaiting_owner'),
   gt(ownerCalls.approveBy, dbNow),
-  lapsed,
+  or(isNull(ownerCalls.sessionUntil), lte(ownerCalls.sessionUntil, heldSince)),
   isNotNull(ownerCalls.relay)
 );
 
-export const toResume = () => getDb().select().from(ownerCalls).where(resumable).limit(RESUMES_PER_TICK);
+export const toResume = () =>
+  getDb().select().from(ownerCalls).where(resumable).orderBy(asc(ownerCalls.updatedAt)).limit(RESUMES_PER_TICK);
 
 export const takeToResume = (row: OwnerCallRow) =>
   write(and(eq(ownerCalls.id, row.id), resumable), { leaseHolder: newHolder(), sessionUntil: sessionLeaseEnd });

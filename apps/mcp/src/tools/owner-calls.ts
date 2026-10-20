@@ -14,7 +14,7 @@ import { tenant, type Tenant } from '@/connections/auth';
 import { chainClients } from '@/adapters/session-host';
 import { APPROVE_WITHIN_MS, config } from '@/connections/config';
 import { ownerRelay, WalletBusy, type OpenWallet, type Wallet } from '@/connections/relay';
-import { otherRequestAsGone, resumeEach } from '@/connections/resume';
+import { otherRequestAsGone, resumeEach, resumeRow, type Rejoin } from '@/connections/resume';
 import { findActive } from '@/connections/rows';
 import { sealResume } from '@/connections/seal';
 import { keepLease, leaseHeld } from '@/connections/session-lease';
@@ -291,7 +291,7 @@ async function replay(t: Tenant, row: OwnerCallRow, hash: string, deps: OwnerCal
   if (row.requestHash !== hash) {
     return refuse('idempotency_conflict', 'This idempotency key was used for another request. Nothing was sent.');
   }
-  if (row.state === 'awaiting_owner') void resumeOwnerCalls(deps.clients);
+  if (row.relay) void resumeRow(row, rejoin(deps.clients));
   const linkDead = row.state === 'awaiting_owner' && row.code !== SEND_STARTED && !leaseHeld(row.sessionUntil);
   if (!linkDead || row.relay) return answer(row);
   const refused = await refusedBeforeLink(t);
@@ -300,13 +300,15 @@ async function replay(t: Tenant, row: OwnerCallRow, hash: string, deps: OwnerCal
   return reopen(t, row, deps);
 }
 
-export const resumeOwnerCalls = (clients: ChainClients = chainClients) =>
-  resumeEach('ownerCallId', toResume, {
-    take: takeToResume,
-    release: releaseSession,
-    lost: endSession,
-    follow: (row, wallet) => follow(row, wallet, clients, true),
-  });
+const rejoin = (clients: ChainClients): Rejoin<OwnerCallRow> => ({
+  idField: 'ownerCallId',
+  take: takeToResume,
+  release: releaseSession,
+  lost: endSession,
+  start: (row) => (wallet) => follow(row, wallet, clients, true),
+});
+
+export const resumeOwnerCalls = (clients: ChainClients = chainClients) => resumeEach(toResume, rejoin(clients));
 
 const ENTRY_POINTS = [entryPoint06Address, entryPoint07Address, entryPoint08Address, entryPoint09Address];
 
@@ -390,7 +392,7 @@ export async function sendCallsStatus(
   await expirePast(t.connectionId);
   const row = await findById(t.connectionId, id);
   if (!row) return refuse('not_found', 'No request on this connection has that id.');
-  if (row.state === 'awaiting_owner') void resumeOwnerCalls(deps.clients);
+  if (row.relay) void resumeRow(row, rejoin(deps.clients));
   if (row.state !== 'sent' || !row.callsId) return answer(row);
   let mined: Receipt | null;
   try {
