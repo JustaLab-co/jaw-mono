@@ -51,6 +51,7 @@ export type MethodCategory =
   | 'wallet'
   | 'capability'
   | 'permission'
+  | 'recovery'
   | 'asset'
   | 'utility';
 
@@ -62,6 +63,7 @@ export const CATEGORIES: MethodCategory[] = [
   'wallet',
   'capability',
   'permission',
+  'recovery',
   'asset',
   'utility',
 ];
@@ -74,6 +76,7 @@ export const CATEGORY_LABELS: Record<MethodCategory, string> = {
   wallet: 'Wallet',
   capability: 'Capability',
   permission: 'Permission',
+  recovery: 'Recovery',
   asset: 'Asset',
   utility: 'Utility',
 };
@@ -86,6 +89,7 @@ export const CATEGORY_COLORS: Record<MethodCategory, string> = {
   wallet: 'bg-pink-100 text-pink-800 dark:bg-pink-900 dark:text-pink-200',
   capability: 'bg-cyan-100 text-cyan-800 dark:bg-cyan-900 dark:text-cyan-200',
   permission: 'bg-amber-100 text-amber-800 dark:bg-amber-900 dark:text-amber-200',
+  recovery: 'bg-sky-100 text-sky-800 dark:bg-sky-900 dark:text-sky-200',
   asset: 'bg-teal-100 text-teal-800 dark:bg-teal-900 dark:text-teal-200',
   utility: 'bg-rose-100 text-rose-800 dark:bg-rose-900 dark:text-rose-200',
 };
@@ -118,6 +122,7 @@ export type WagmiHookType =
   | 'useGrantPermissions'
   | 'useRevokePermissions'
   | 'usePermissions'
+  | 'useRecovery'
   | 'useGetAssets'
   | 'useCapabilities'
   | 'useGetCallsHistory'
@@ -1023,6 +1028,41 @@ const { data: permissions, isLoading, refetch } = usePermissions(${
     });
 
 console.log('Permissions:', permissions);`,
+    buildParams: (params) => ({
+      address: params.address || undefined,
+    }),
+  },
+  // ===== Recovery Methods =====
+  {
+    id: 'wallet_getRecovery',
+    name: 'useRecovery',
+    method: 'wallet_getRecovery',
+    hookType: 'useRecovery',
+    category: 'recovery',
+    description: 'Recovery config on every supported chain, and the ceremonies not executed anywhere',
+    requiresConnection: false,
+    parameters: [
+      {
+        name: 'address',
+        type: 'address',
+        label: 'ENS or Address',
+        description: 'Account address (optional if connected)',
+        required: false,
+        autoFill: 'address',
+      },
+    ],
+    getCodeSnippet: (params) => `import { useRecovery } from '@jaw.id/wagmi';
+
+// Works without wallet connection when address is provided
+const { data: recovery, isLoading, refetch } = useRecovery(${
+      params.address
+        ? `{
+  address: '${params.address}',
+}`
+        : ''
+    });
+
+console.log('Recovery:', recovery);`,
     buildParams: (params) => ({
       address: params.address || undefined,
     }),

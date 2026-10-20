@@ -36,6 +36,7 @@ import {
   useRevokePermissions,
   useAddFunds,
   usePermissions,
+  useRecovery,
   useGetAssets,
   useCapabilities,
   useSign,
@@ -105,12 +106,16 @@ function WagmiPageContent({
 
   // State for query addresses (allows querying for arbitrary addresses)
   const [permissionsAddress, setPermissionsAddress] = useState<string | undefined>();
+  const [recoveryAddress, setRecoveryAddress] = useState<string | undefined>();
   const [assetsAddress, setAssetsAddress] = useState<string | undefined>();
   const [capabilitiesAddress, setCapabilitiesAddress] = useState<string | undefined>();
   const [callsHistoryAddress, setCallsHistoryAddress] = useState<string | undefined>();
 
   const { data: permissions, refetch: refetchPermissions } = usePermissions({
     address: (permissionsAddress || address) as Address | undefined,
+  });
+  const { refetch: refetchRecovery } = useRecovery({
+    address: (recoveryAddress || address) as Address | undefined,
   });
   const { data: assets, refetch: refetchAssets } = useGetAssets({
     address: (assetsAddress || address) as Address | undefined,
@@ -320,6 +325,16 @@ function WagmiPageContent({
             break;
           }
 
+          case 'useRecovery': {
+            const targetAddress = (params.address as string) || address;
+            if (targetAddress) {
+              flushSync(() => setRecoveryAddress(targetAddress));
+            }
+            const { data } = await refetchRecovery();
+            result = data;
+            break;
+          }
+
           case 'useGetAssets': {
             const targetAddress = (params.address as string) || address;
             if (targetAddress) {
@@ -437,6 +452,8 @@ function WagmiPageContent({
       setPermissionsAddress,
       refetchPermissions,
       permissions,
+      setRecoveryAddress,
+      refetchRecovery,
       setAssetsAddress,
       refetchAssets,
       assets,
