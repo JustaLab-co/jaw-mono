@@ -57,8 +57,19 @@ export type PayResult = {
   [resent]?: true;
 };
 
-/** Refusals a larger budget would fix. over_cap is not one: the per-payment cap stays whatever the budget. */
+/** Refusals a larger budget would fix. */
 export const RAISE = new Set(['budget_exhausted', 'no_grant', 'grant_revoked']);
+
+export const RAISE_HINT = ' Ask for a larger budget with jaw_grant_permissions and x402Budget.';
+
+/** What the agent can do about a refusal, as one sentence after the summary. */
+function hintOf(refusal: PayOutput['refusal']): string {
+  if (refusal?.next) return RAISE_HINT;
+  if (refusal?.code === 'over_cap') {
+    return " The price is over the most one payment may spend, the server's cap or a maxAmount sent with this call; a larger budget does not raise it.";
+  }
+  return '';
+}
 
 export const gate = (code: string, text: string): PayResult => ({
   content: [{ type: 'text', text: `${code}: ${text}` }],
@@ -70,11 +81,7 @@ function summaryOf(row: PaymentRow, out: Omit<PayOutput, 'summary'>): string {
   const moved = out.payerRefilled ? ' Funds moved into the payer first.' : '';
   const paid = `${out.payment?.amount} base units to ${out.payment?.payTo}`;
   if (out.kind === 'free') return `Free: answered ${out.httpStatus} without a payment.`;
-  const raise = out.refusal?.next
-    ? ' Ask for a larger budget with jaw_grant_permissions and x402Budget.'
-    : out.refusal?.code === 'over_cap'
-      ? ' The price is over the most one payment may spend, which a larger budget does not raise.'
-      : '';
+  const raise = hintOf(out.refusal);
   if (row.kind === null) return 'Paying now. Ask again in a few seconds.';
   switch (row.state) {
     case 'pending':

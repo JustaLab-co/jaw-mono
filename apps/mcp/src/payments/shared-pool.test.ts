@@ -506,33 +506,35 @@ describe('quote and pay at the edge of what a budget can pay', () => {
     });
   });
 
+  // A payment signed and not settled yet, which holds float until it lands.
+  const signedRow = (t: Tenant, row: { permissionId: string; topUpAmount: string; authorized: string }) =>
+    getDb()
+      .insert(payments)
+      .values({
+        id: `pay_${randomBytes(12).toString('base64url')}`,
+        connectionId: t.connectionId,
+        idempotencyKey: `signed-${randomBytes(6).toString('hex')}`,
+        requestHash: 'h',
+        payer: t.sessionAddress.toLowerCase(),
+        url: 'https://seller.example/signed',
+        state: 'signed',
+        leaseUntil: new Date(),
+        nonce: `0x${randomBytes(32).toString('hex')}`,
+        network: 'eip155:84532',
+        scheme: 'exact',
+        deadline: new Date(Date.now() + 10 * 60_000),
+        authorization: {},
+        signedAt: new Date(),
+        ...row,
+      });
+
   describe('given 1 USDC a day and a 0.6 payment signed but not settled, out of a 0.7 refill still at the session', () => {
     const pending = async (t: Tenant) => {
-      await getDb()
-        .insert(payments)
-        .values({
-          id: `pay_${randomBytes(12).toString('base64url')}`,
-          connectionId: t.connectionId,
-          idempotencyKey: `pending-${randomBytes(6).toString('hex')}`,
-          requestHash: 'h',
-          permissionId: chain.permissionId,
-          payer: t.sessionAddress.toLowerCase(),
-          url: 'https://seller.example/pending',
-          state: 'signed',
-          leaseUntil: new Date(),
-          topUpAmount: '700000',
-          authorized: '600000',
-          nonce: `0x${randomBytes(32).toString('hex')}`,
-          network: 'eip155:84532',
-          scheme: 'exact',
-          deadline: new Date(Date.now() + 10 * 60_000),
-          authorization: {},
-          signedAt: new Date(),
-        });
+      await signedRow(t, { permissionId: chain.permissionId, topUpAmount: '700000', authorized: '600000' });
       chain.spend = 700_000n;
     };
 
-    it('when the quote asks what is left once the pending 0.6 is held back, then it is ready and pay settles', async () => {
+    it('when the quote asks 0.39, what the pending 0.6 leaves less the refill fee, then it is ready and pay settles', async () => {
       const { t, token } = await funded('1', 700_000n);
       await pending(t);
       prices.set('/second', '390000');
@@ -558,29 +560,8 @@ describe('quote and pay at the edge of what a budget can pay', () => {
   });
 
   describe('given 0.5 USDC a day and 0.3 of float that a payment signed under an earlier budget still holds', () => {
-    const holding = async (t: Tenant) => {
-      await getDb()
-        .insert(payments)
-        .values({
-          id: `pay_${randomBytes(12).toString('base64url')}`,
-          connectionId: t.connectionId,
-          idempotencyKey: `held-${randomBytes(6).toString('hex')}`,
-          requestHash: 'h',
-          permissionId: `0x${'c'.repeat(64)}`,
-          payer: t.sessionAddress.toLowerCase(),
-          url: 'https://seller.example/held',
-          state: 'signed',
-          leaseUntil: new Date(),
-          topUpAmount: '300000',
-          authorized: '300000',
-          nonce: `0x${randomBytes(32).toString('hex')}`,
-          network: 'eip155:84532',
-          scheme: 'exact',
-          deadline: new Date(Date.now() + 10 * 60_000),
-          authorization: {},
-          signedAt: new Date(),
-        });
-    };
+    const holding = (t: Tenant) =>
+      signedRow(t, { permissionId: `0x${'c'.repeat(64)}`, topUpAmount: '300000', authorized: '300000' });
 
     it('when the quote asks what the cap leaves after that hold, then it is ready and pay settles', async () => {
       const { t, token } = await funded('0.5', 300_000n);

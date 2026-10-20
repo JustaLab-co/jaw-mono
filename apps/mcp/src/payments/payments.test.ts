@@ -914,8 +914,21 @@ describe('jaw_session_x402_pay', () => {
     });
     expect(first.structuredContent?.refusal).not.toHaveProperty('next');
     expect(first.structuredContent?.summary).not.toContain('jaw_grant_permissions');
-    expect(first.structuredContent?.summary).toContain('a larger budget does not raise');
+    expect(first.structuredContent?.summary).not.toContain('retry');
     expect([seen.length, refills.length]).toEqual([0, 0]);
+  });
+
+  it('given a maxAmount under the price, when the agent pays and then sends the same key again, then over_cap naming maxAmount both times and nothing signed', async () => {
+    const { t } = await connected('1');
+    const input = { url: url('/exact'), maxAmount: '4999', idempotencyKey: 'capped' };
+    const first = await pay(t, input, deps());
+    const again = await pay(t, input, deps());
+    for (const answer of [first, again]) {
+      expect(answer.structuredContent).toMatchObject({ kind: 'refused', refusal: { code: 'over_cap' } });
+      expect(answer.structuredContent?.refusal).not.toHaveProperty('next');
+      expect(answer.structuredContent?.summary).toContain('maxAmount');
+    }
+    expect(seen).toHaveLength(0);
   });
 
   it('refills to the float target, so the next payments need no refill', async () => {
@@ -1371,13 +1384,14 @@ describe('the raw body kept for an internal caller', () => {
   });
 
   it('given keepBody and a refusal the key may retry, when the seller sent a body, then the call answers and keeps no raw body', async () => {
-    const { t } = await connected('5');
-    const result = await pay(t, { url: url('/pricey'), idempotencyKey: 'raw-refused' }, deps(), { keepBody: true });
-    expect(result.structuredContent).toMatchObject({ kind: 'refused', refusal: { code: 'over_cap' } });
+    const { t } = await connected('1');
+    periodDown = true;
+    const result = await pay(t, { url: url('/exact'), idempotencyKey: 'raw-refused' }, deps(), { keepBody: true });
+    expect(result.structuredContent).toMatchObject({ kind: 'refused', refusal: { code: 'chain_unavailable' } });
     expect(result[rawBody]).toBeUndefined();
     expect(await rowOf(result.structuredContent!.paymentId)).toMatchObject({
       state: 'pending',
-      code: 'over_cap',
+      code: 'chain_unavailable',
       body: null,
     });
   });

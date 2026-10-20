@@ -96,6 +96,7 @@ const backend = {
   hits: [] as { url: URL; nonce?: Hex }[],
   lose: 0,
   probe: '' as '' | 'down' | 'other-asset',
+  price: '5000',
 };
 const b64 = (v: unknown) => Buffer.from(JSON.stringify(v)).toString('base64');
 const transfer = (to: Address, amount: bigint) =>
@@ -106,7 +107,7 @@ function challenge(url: URL, asset: Address = USDC): Response {
     {
       scheme: 'exact',
       network: 'eip155:84532',
-      amount: '5000',
+      amount: backend.price,
       asset,
       payTo: PAY_TO,
       maxTimeoutSeconds: 300,
@@ -235,6 +236,7 @@ beforeEach(() => {
   backend.hits.length = 0;
   backend.lose = 0;
   backend.probe = '';
+  backend.price = '5000';
   opened = [];
   asked = [];
   closed = [];
@@ -2052,6 +2054,17 @@ describe('a quote refused before anything was signed', () => {
     expect(fresh.structuredContent).toMatchObject({ state: 'awaiting_owner' });
     expect(backend.hits.slice(hits).every((h) => h.url.origin === 'https://quote.test')).toBe(true);
     expect((await paymentsOf(t.connectionId)).filter((p) => p.signedAt)).toHaveLength(1);
+  });
+
+  it('given a backend asking more than a swap pays for its quote, then over_cap without pointing at a larger budget, nothing signed', async () => {
+    const { t } = await connected('1');
+    backend.price = '5001';
+
+    const result = await run(t);
+
+    expect(result.structuredContent?.refusal).toEqual({ code: 'over_cap' });
+    expect(result.structuredContent?.summary).not.toContain('jaw_grant_permissions');
+    expect(paidHits()).toHaveLength(0);
   });
 
   it('given budget_exhausted, when the same key comes with the same budget, then a new attempt refused the same way, nothing signed, and the summary names a larger budget', async () => {

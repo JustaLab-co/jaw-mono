@@ -12,7 +12,7 @@ import { x402Budget } from '@/grants/store';
 import { errorLabel, log, RATE_WINDOW_MS } from '@/lib/edge';
 import { fenceText, reply } from '@/lib/fence';
 import type { PayDeps } from '@/payments/pay';
-import { gateCode, RAISE } from '@/payments/render';
+import { gateCode, RAISE, RAISE_HINT } from '@/payments/render';
 import { findPayment, stateOf } from '@/payments/store';
 import { approve } from '@/swap/approve';
 import type { BackendAnswer, BackendDeps } from '@/swap/backend';
@@ -200,9 +200,12 @@ function summaryOf(row: SwapRow): string {
   const quote = row.quote as CheckedQuote['quote'] | null;
   switch (row.state) {
     case 'quoting': {
-      const raise =
-        row.code && RAISE.has(row.code) ? ' Ask for a larger budget with jaw_grant_permissions and x402Budget.' : '';
-      return `No quote yet (${row.code}). Nothing was deposited. Send the same idempotencyKey again to retry.${raise}`;
+      const raise = row.code && RAISE.has(row.code) ? RAISE_HINT : '';
+      const capped =
+        row.code === 'over_cap'
+          ? ' The quote costs more than a swap pays for one; a larger budget does not raise that.'
+          : '';
+      return `No quote yet (${row.code}). Nothing was deposited. Send the same idempotencyKey again to retry.${raise}${capped}`;
     }
     case 'quote_failed':
     case 'quote_rejected':
