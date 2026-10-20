@@ -170,7 +170,8 @@ async function answer(target: Target, row: PermissionRequestRow) {
         : '') +
       `Ask the account owner to open ${row.walletUrl} before ${row.approveBy.toISOString()} and revoke permission ${target.permissionId}, ` +
       `which lets ${spender} act for the account${tokens}. The owner pays the gas in the wallet. ` +
-      'Once the chain shows it revoked, jaw_connections lists it revoked and nothing can spend under it.',
+      'Once the chain shows it revoked, jaw_connections lists it revoked and nothing can spend under it. ' +
+      'Right after showing the link, check jaw_connections on your own about every 30 seconds until that time; do not wait for the owner to say they revoked it.',
   });
 }
 

@@ -81,6 +81,7 @@ const TOOLS: Record<string, { needs: ConnectionScope[]; args: object }> = {
     args: { chainId: UNSUPPORTED_ORIGIN_CHAIN, calls: [{ to: RECIPIENT, data: '0xa9059cbb' }] },
   },
   jaw_get_calls_status: { needs: ['wallet:read'], args: { id: `oc_${'A'.repeat(22)}` } },
+  jaw_get_sign_status: { needs: ['wallet:read'], args: { id: `pr_${'A'.repeat(22)}` } },
   jaw_get_assets: { needs: ['wallet:read'], args: { chainIds: [TESTNET] } },
   jaw_get_capabilities: { needs: ['wallet:read'], args: { chainIds: [TESTNET] } },
   jaw_get_calls_history: { needs: ['wallet:read'], args: {} },

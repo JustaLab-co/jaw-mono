@@ -5,6 +5,7 @@
 ## Sub-features
 
 - `sign-message`: a plain message goes to the owner and the signature verifies against the account with `verifyMessage`.
+- `sign-wait`: right after the link, `jaw_get_sign_status` with the `id` and `waitSeconds` 45 answers `signed` with the `signature` as soon as the owner approves, with nobody telling the agent.
 - `sign-typed`: an EIP-712 permit goes to the owner and `verifyTypedData` accepts the signature.
 - `sign-screen`: the keys screen shows the permit's spender, amount and deadline.
 - `sign-decline`: the owner declines and the tool answers `owner_declined`.
@@ -17,10 +18,10 @@
 
 ## How to get to it (user POV)
 
-- An MCP client on the hosted server with `wallet:read`. `jaw_sign` takes exactly one of `message` (text, up to 8192 characters, no invisible or control characters besides line breaks and tabs) and `typedData` (`{ domain, types, primaryType, message }`, held to the same rule in every string and key at any depth, where line breaks and tabs pass only in message values), and optionally `chainId` and `idempotencyKey`.
+- An MCP client on the hosted server with `wallet:read`. `jaw_sign` takes exactly one of `message` (text, up to 8192 characters, no invisible or control characters besides line breaks and tabs) and `typedData` (`{ domain, types, primaryType, message }`, held to the same rule in every string and key at any depth, where line breaks and tabs pass only in message values), and optionally `chainId` and `idempotencyKey`. `jaw_get_sign_status` takes the `id` (`pr_` and 22 characters) and optionally `waitSeconds` (0 to 45).
 - The first call returns `state: awaiting_owner` with a `url`. The owner opens it within 30 minutes. The same call again, with the same key and input, returns `signed` with the `signature`, or `owner_declined`, `expired` or `failed`.
 - Requests are rows in `permission_requests` with `method = 'sign'`. A restart keeps the rows, not the link: the relay drops what the wallet sends while no process listens, so a restarted server cannot hear an answer given on a link it opened before. Once the lease of a link's session lapses (90 seconds after its process stops: the 30 second lease and a minute of grace for a database stall), the same key answers `expired` with code `session_lost` if the wallet was not asked yet, or `link_lost` if the owner was already asked. A relay session that drops after asking also ends `link_lost`. `link_lost` means the owner must not approve the old link; ask again with a new key for a new one, whose replies name the lost link; no later link names it again. The same input with its JSON keys in another order is the same request. A signature the old process still hears before its next lease renewal (every 10 seconds) turns the row `signed`. A connection waits on one sign link at a time, and another key gets `sign_in_progress`.
-- By hand: `node tools/verify/hosted-client.mjs "$MCP_PUBLIC_URL" wallet:read`, then `sign-message '<text>' [key]` and `sign-typed '<json>' [key]`. Run the same line again to read the outcome.
+- By hand: `node tools/verify/hosted-client.mjs "$MCP_PUBLIC_URL" wallet:read`, then `sign-message '<text>' [key]` and `sign-typed '<json>' [key]`, and `sign-status <id> [wait]` to read the outcome.
 
 ## Driving it
 
@@ -36,6 +37,7 @@ node $S/hosted-client.mjs "$MCP_PUBLIC_URL" wallet:read
 ```
 
 - sign-message: `sign-message 'hello from jaw' m1`, open the `url` as the owner and approve, then the same line again. Pass: `signed`, and viem `verifyMessage` on Base Sepolia accepts the signature for the connected account.
+- sign-wait: `sign-message 'wait for me' w1`, then at once `sign-status <id> 45`, and open the `url` as the owner and approve while it waits. Pass: the wait answers `signed` with a `signature` that `verifyMessage` accepts, before 45 seconds and with no other input.
 - sign-typed: `sign-typed '<permit json>' t1` with a USDC permit (owner the account, a spender, a value, a nonce, a deadline), approve, run it again. Pass: `verifyTypedData` accepts the signature.
 - sign-screen: before approving the permit, read the keys screen. Pass: it shows the spender, the amount and the deadline.
 - sign-decline: reject in the wallet, run the line again. Pass: `owner_declined`, no `signature`.

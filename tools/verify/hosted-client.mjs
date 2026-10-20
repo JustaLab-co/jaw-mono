@@ -110,18 +110,27 @@ async function rpc(method, params, retried = false) {
     return rpc(method, params, true);
   }
   const text = await res.text();
-  const line = text.split('\n').find((l) => l.startsWith('data: '));
-  if (!line) throw new Error(`/mcp ${res.status}: ${text.slice(0, 300)}`);
-  const msg = JSON.parse(line.slice(6));
+  const messages = text
+    .split('\n')
+    .filter((l) => l.startsWith('data: '))
+    .map((l) => JSON.parse(l.slice(6)));
+  for (const m of messages.filter((m) => m.method === 'notifications/progress')) {
+    console.log(`progress ${m.params.progress}/${m.params.total}: ${m.params.message ?? ''}`);
+  }
+  const msg = messages.find((m) => m.id === id);
+  if (!msg) throw new Error(`/mcp ${res.status}: ${text.slice(0, 300)}`);
   if (msg.error) throw new Error(msg.error.message);
   return msg.result;
 }
 
-async function call(name, args) {
-  const result = await rpc('tools/call', { name, arguments: args });
+async function call(name, args, meta) {
+  const result = await rpc('tools/call', { name, arguments: args, ...(meta && { _meta: meta }) });
   console.log(result.isError ? `\x1b[31m${result.content[0].text}\x1b[0m` : result.content[0].text);
   if (result.structuredContent) console.log(JSON.stringify(result.structuredContent, null, 2));
 }
+
+const statusOf = (name, id, wait) =>
+  wait ? call(name, { id, waitSeconds: Number(wait) }, { progressToken: `p${id}` }) : call(name, { id });
 
 const HELP = `Commands:
   tools                          list the server's tools
@@ -146,8 +155,9 @@ const HELP = `Commands:
   calls '<json array>' [chainId] [key]
                                  jaw_send_calls, the owner approves in the wallet, e.g.
                                  calls '[{"to":"0x...","data":"0x..."}]' 8453 my-key
-  calls-status <id>              jaw_get_calls_status, id is the oc_ id jaw_send_calls returned
-  sign-message '<text>' [key]    jaw_sign, the owner signs the text in the wallet; run it again with the same key to read the signature
+  calls-status <id> [wait]       jaw_get_calls_status, id is the oc_ id jaw_send_calls returned; wait is seconds, up to 45
+  sign-message '<text>' [key]    jaw_sign, the owner signs the text in the wallet
+  sign-status <id> [wait]        jaw_get_sign_status, id is the pr_ id jaw_sign returned; wait is seconds, up to 45
   sign-typed '<json>' [key]      jaw_sign with EIP-712 typed data { domain, types, primaryType, message }
   read <chainId> '<json reads>'  jaw_read_contracts, e.g.
                                  read 8453 '[{"address":"0x...","abi":[...],"functionName":"decimals"}]'
@@ -192,7 +202,8 @@ const commands = {
       ...(chainId && { chainId: Number(chainId) }),
       ...(idempotencyKey && { idempotencyKey }),
     }),
-  'calls-status': (id) => call('jaw_get_calls_status', { id }),
+  'calls-status': (id, wait) => statusOf('jaw_get_calls_status', id, wait),
+  'sign-status': (id, wait) => statusOf('jaw_get_sign_status', id, wait),
   'sign-message': (message, idempotencyKey) => call('jaw_sign', { message, ...(idempotencyKey && { idempotencyKey }) }),
   'sign-typed': (json, idempotencyKey) =>
     call('jaw_sign', { typedData: JSON.parse(json), ...(idempotencyKey && { idempotencyKey }) }),
