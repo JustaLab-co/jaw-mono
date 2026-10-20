@@ -117,11 +117,11 @@ const REVOKED: Unreached = {
 
 // A revoke on chain stops payments within this long, without a chain read on every call.
 const LIVE_FOR_MS = 30_000;
-const checked = new Map<string, { until: number; refused?: Unreached }>();
+const chainAnswers = new Map<string, { until: number; refused?: Unreached }>();
 
 /** Whether the grant is still approved and not revoked on chain, the permission manager's own answer. */
 async function grantLive(grant: Grant, read: ReadPermission): Promise<Unreached | undefined> {
-  const last = checked.get(grant.permissionId);
+  const last = chainAnswers.get(grant.permissionId);
   if (last && last.until > Date.now()) return last.refused;
   const state = await read({
     chainId: grant.chainId,
@@ -139,7 +139,7 @@ async function grantLive(grant: Grant, read: ReadPermission): Promise<Unreached 
   const refused = state.status === 'mismatch' || !state.approved || state.revoked ? REVOKED : undefined;
   // Not approved can come from a node behind the one that approved the grant, so that is asked again.
   if (state.status === 'mismatch' || state.approved) {
-    checked.set(grant.permissionId, { until: Date.now() + LIVE_FOR_MS, refused });
+    chainAnswers.set(grant.permissionId, { until: Date.now() + LIVE_FOR_MS, refused });
   }
   return refused;
 }
