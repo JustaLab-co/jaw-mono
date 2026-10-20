@@ -11,6 +11,7 @@ import { getDb } from '@/db/client';
 import { auditEvents, connections, grants, oauthPayloads, ownerCalls, payments, rateLimits, swaps } from '@/db/schema';
 import { isPaymentsPaused } from '@/db/settings';
 import { readOnChain, type ReadPermission } from '@/grants/permission';
+import { closeLapsedLinks } from '@/grants/requests';
 import { recordRevoked, sampleLiveGrants } from '@/grants/store';
 import { errorLabel, log } from '@/lib/edge';
 import { conclude, sentBefore } from '@/owner-calls/store';
@@ -33,6 +34,7 @@ export interface Report {
   alerted: number;
   sends: { landed: number; released: number; open: number };
   ownerCalls: { landed: number; reverted: number; open: number };
+  links: { expired: number };
 }
 
 /**
@@ -53,6 +55,7 @@ export async function reconcile(
     alerted: 0,
     sends: { landed: 0, released: 0, open: 0 },
     ownerCalls: { landed: 0, reverted: 0, open: 0 },
+    links: { expired: 0 },
   };
   await reconcileSends(clients, report);
   await reconcileOwnerCalls(receipt, clients, now, report);
@@ -66,7 +69,20 @@ export async function reconcile(
         log('error', { msg: `reconcile ${row.id} failed`, error: err instanceof Error ? err.name : 'unknown' });
       }
     }
-    if (rows.length < BATCH) return report;
+    if (rows.length < BATCH) break;
+  }
+  await closeLinks(report);
+  return report;
+}
+
+async function closeLinks(report: Report) {
+  try {
+    report.links.expired = await closeLapsedLinks();
+    // Many at once means processes stopped renewing together: a restart, or a database outage over the grace.
+    if (report.links.expired)
+      log('warn', { msg: `${report.links.expired} owner links ended with no process holding them` });
+  } catch (err) {
+    log('error', { msg: 'lapsed owner links not closed', error: errorLabel(err) });
   }
 }
 
