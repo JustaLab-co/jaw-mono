@@ -33,7 +33,7 @@ const money = z.object({
 });
 const readiness = z.object({
   status: z.enum(['ready', 'not_ready']),
-  reason: z.enum(['no_scope', 'no_grant', 'grant_revoked', 'chain_unavailable']).optional(),
+  reason: z.enum(['no_scope', 'no_grant', 'grant_revoked', 'chain_unavailable', 'over_allowance']).optional(),
   link: z.string().url().optional(),
 });
 type Readiness = z.infer<typeof readiness>;
@@ -98,11 +98,6 @@ function readinessOf(t: Tenant, liveness: Awaited<ReturnType<typeof readLiveness
   return { status: 'not_ready', reason: 'grant_revoked' };
 }
 
-async function readinessFor(t: Tenant): Promise<Readiness> {
-  const grant = await x402Budget(t.connectionId);
-  return readinessOf(t, grant && (await budgetOf(grant, t, null)).liveness);
-}
-
 const fenced = (source: string, text: string) => ({ type: 'text' as const, text: fenceText(source, text, 2000) });
 
 async function balanceOf(network: string, owner: Address) {
@@ -150,6 +145,7 @@ const NOT_READY: Record<NonNullable<Readiness['reason']>, string> = {
   no_grant: 'No budget yet: ask for one with jaw_grant_permissions and x402Budget.',
   grant_revoked: 'The budget was revoked: ask for a new one with jaw_grant_permissions and x402Budget.',
   chain_unavailable: 'The budget could not be read from the chain right now.',
+  over_allowance: 'The price is over what the budget can pay today.',
 };
 
 function leftToday(budget: z.infer<typeof budgetOutput> | undefined) {
@@ -240,9 +236,33 @@ const quoteOutput = z.object({
     .literal(true)
     .optional()
     .describe('Present when the free body was over 1 MB and was cut there before it was read'),
+  budget: z
+    .object({ permissionId: z.string(), remainingToday: money.nullable() })
+    .optional()
+    .describe('The budget a payment would come from, on a paid quote'),
   readiness,
   summary: z.string(),
 });
+
+type BudgetRead = Awaited<ReturnType<typeof budgetOf>>;
+
+// Ready only when the budget can pay this price today, as jaw_session_status counts it.
+function quoteReadiness(t: Tenant, read: BudgetRead | undefined, price: bigint): Readiness {
+  const ready = readinessOf(t, read?.liveness);
+  const left = read?.budget.remainingToday;
+  if (ready.status !== 'ready') return ready;
+  if (!left) return { status: 'not_ready', reason: 'chain_unavailable' };
+  return price > BigInt(left.amount) ? { status: 'not_ready', reason: 'over_allowance' } : ready;
+}
+
+function fitSummary(read: BudgetRead | undefined, ready: Readiness) {
+  const left = read?.budget.remainingToday;
+  if (!read || !left) return '';
+  const { permissionId } = read.budget;
+  return ready.reason === 'over_allowance'
+    ? ` Budget ${permissionId} has ${left.amount} base units left today, not enough to pay it.`
+    : ` Within budget ${permissionId}, which has ${left.amount} base units left today.`;
+}
 
 async function quote(t: Tenant, url: string) {
   const network = caip2(t.chainId);
@@ -251,13 +271,23 @@ async function quote(t: Tenant, url: string) {
     address: t.sessionAddress,
     pay: () => Promise.reject(new Error('a quote never pays')),
   };
-  const base = { url, readiness: await readinessFor(t) };
+  const grant = await x402Budget(t.connectionId);
   const cuts = watchCuts(safeFetch(config().insecureFetchHosts));
-  const outcome = await payAndFetch(url, payer, { dryRun: true, network, fetch: cuts.fetch }).catch(() => {
-    // One answer for every failure: telling a refused address from a failed lookup
-    // would tell a client which internal names resolve.
-    return { kind: 'unreachable' as const, code: 'unreachable', reason: 'The URL could not be fetched.' };
-  });
+  // The budget's token only, as a payment would choose.
+  const priced = payAndFetch(url, payer, { dryRun: true, network, asset: grant?.token, fetch: cuts.fetch }).catch(
+    () => {
+      // One answer for every failure: telling a refused address from a failed lookup
+      // would tell a client which internal names resolve.
+      return { kind: 'unreachable' as const, code: 'unreachable', reason: 'The URL could not be fetched.' };
+    }
+  );
+  const reading = grant
+    ? balanceOf(caip2(grant.chainId), t.sessionAddress).then((float) =>
+        budgetOf(grant, t, float && BigInt(float.amount))
+      )
+    : undefined;
+  const [outcome, read] = await Promise.all([priced, reading]);
+  const base = { url, readiness: readinessOf(t, read?.liveness) };
   if (outcome.kind === 'unreachable') {
     return {
       out: quoteOutput.parse({
@@ -272,15 +302,20 @@ async function quote(t: Tenant, url: string) {
     const p = outcome.wouldPay;
     const asset = usdcForNetwork(p.network);
     const shown = asset && asset.address.toLowerCase() === p.asset.toLowerCase() ? asset.usdcName : p.asset;
+    const readiness = quoteReadiness(t, read, BigInt(p.amount));
     return {
       out: quoteOutput.parse({
         ...base,
+        readiness,
         kind: 'paid',
         price: { amount: p.amount, asset: caip19(p.network, p.asset) },
         chainId: p.network,
         scheme: p.scheme,
         payTo: p.payTo,
-        summary: `Costs ${p.amount} base units of ${shown} on ${p.network}. Not paid.`,
+        ...(read && {
+          budget: { permissionId: read.budget.permissionId, remainingToday: read.budget.remainingToday },
+        }),
+        summary: `Costs ${p.amount} base units of ${shown} on ${p.network}. Not paid.${fitSummary(read, readiness)}`,
       }),
     };
   }
