@@ -3,7 +3,7 @@ import type { Address } from 'viem';
 import { errorLabel, log } from '@/lib/edge';
 import type { Tenant } from './auth';
 import { config } from './config';
-import { PageGone, resumeWallet, WalletBusy, type Ask, type Wallet } from './relay';
+import { resumeWallet, WalletBusy, type Wallet } from './relay';
 import { findActive, type ConnectionRow } from './rows';
 import type { ConnectionScope } from './scopes';
 import { openResume } from './seal';
@@ -68,15 +68,6 @@ async function resumeOne<R extends Resumable>(found: R, { take, release, lost, s
 }
 
 const sessionOf = (walletUrl: string) => new URL(walletUrl).searchParams.get('session');
-
-const NOT_THE_REQUEST = -32600;
-
-export const otherRequestAsGone =
-  (ask: Ask): Ask =>
-  (method, params) =>
-    ask(method, params).catch((err: unknown) => {
-      throw (err as { code?: unknown }).code === NOT_THE_REQUEST ? new PageGone() : err;
-    });
 
 const tokenlessTenant = (c: ConnectionRow): Tenant => ({
   connectionId: c.id,

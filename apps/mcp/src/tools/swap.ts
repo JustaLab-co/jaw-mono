@@ -4,7 +4,7 @@ import { zeroAddress, type Address } from 'viem';
 import { z } from 'zod';
 import { tenant, type Tenant } from '@/connections/auth';
 import { config } from '@/connections/config';
-import { newHolder, otherRequestAsGone, resumeEach, resumeRow, type Rejoin } from '@/connections/resume';
+import { newHolder, resumeEach, resumeRow, type Rejoin } from '@/connections/resume';
 import { findActive } from '@/connections/rows';
 import { sealResume } from '@/connections/seal';
 import { keepLease, leaseHeld, sessionLeaseEnd } from '@/connections/session-lease';
@@ -431,7 +431,7 @@ async function reopen(t: Tenant, row: SwapRow, key: string, deps: SwapDeps): Pro
 
 type RunDeps = Pick<SwapDeps, 'pollMs' | 'backend'>;
 
-function follow(t: Tenant, row: SwapRow, wallet: Wallet, deps: RunDeps, resumed = false): void {
+function follow(t: Tenant, row: SwapRow, wallet: Wallet, deps: RunDeps): void {
   const stop = keepLease(
     async () => {
       const held = await renewSession(row);
@@ -442,7 +442,7 @@ function follow(t: Tenant, row: SwapRow, wallet: Wallet, deps: RunDeps, resumed 
   );
   void wallet
     .run(
-      (ask) => approve(resumed ? otherRequestAsGone(ask) : ask, row, t.account, deps.pollMs, deps.backend),
+      (ask) => approve(ask, row, t.account, deps.pollMs, deps.backend),
       (resume) => saveRelay(row, sealResume(config().ring, resume, row.id))
     )
     .catch((err: unknown) => log('warn', { msg: 'swap approval ended', swapId: row.id, error: errorLabel(err) }))
@@ -454,7 +454,7 @@ const rejoin = (deps: RunDeps): Rejoin<SwapRow> => ({
   take: takeToResume,
   release: releaseSession,
   lost: endSession,
-  start: (row, t) => (wallet) => follow(t, row, wallet, deps, true),
+  start: (row, t) => (wallet) => follow(t, row, wallet, deps),
 });
 
 export const resumeSwaps = (deps: RunDeps = {}) => resumeEach(toResume, rejoin(deps));

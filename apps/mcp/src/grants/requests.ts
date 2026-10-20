@@ -4,15 +4,7 @@ import type { PgUpdateSetSource } from 'drizzle-orm/pg-core';
 import type { Tenant } from '@/connections/auth';
 import { config } from '@/connections/config';
 import { PageGone, WalletBusy, type Ask, type OpenWallet, type Wallet } from '@/connections/relay';
-import {
-  otherRequestAsGone,
-  newHolder,
-  resumeEach,
-  resumeRow,
-  RESUMES_PER_TICK,
-  type Lost,
-  type Rejoin,
-} from '@/connections/resume';
+import { newHolder, resumeEach, resumeRow, RESUMES_PER_TICK, type Lost, type Rejoin } from '@/connections/resume';
 import { sealResume, type RelayResume } from '@/connections/seal';
 import { heldSince, keepLease, sessionLeaseEnd } from '@/connections/session-lease';
 import { USER_REJECTED } from '@/connections/wallet-codes';
@@ -260,7 +252,7 @@ export async function openLink(t: Tenant, req: LinkRequest, openWallet: OpenWall
   return { opened: row };
 }
 
-function follow(row: PermissionRequestRow, wallet: Wallet, work: Work, resumed = false) {
+function follow(row: PermissionRequestRow, wallet: Wallet, work: Work) {
   const mine = and(heldBy(row), awaiting);
   const stop = keepLease(
     async () => {
@@ -288,7 +280,7 @@ function follow(row: PermissionRequestRow, wallet: Wallet, work: Work, resumed =
   let answered = false;
   void wallet
     .run(async (ask) => {
-      const outcome = await work(resumed ? otherRequestAsGone(ask) : ask, claim).catch(ended);
+      const outcome = await work(ask, claim).catch(ended);
       answered = true;
       await settle(row, outcome);
     }, joined)
@@ -331,7 +323,7 @@ const rejoinWith = (rebuildOf: (row: PermissionRequestRow) => Rebuild): Rejoin<P
     const payload = parsed(row.payload);
     if (payload === undefined) return undefined;
     const work = rebuildOf(row)(t, payload);
-    return (wallet) => follow(row, wallet, work, true);
+    return (wallet) => follow(row, wallet, work);
   },
 });
 

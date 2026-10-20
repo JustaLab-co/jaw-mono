@@ -252,12 +252,15 @@ function converse(
     const answer = await read((m) => m.type === 'rpc_response' && m.id === id);
     if (answer.success) return answer.data;
     const error = answer.error as { code?: number; message?: string } | undefined;
+    // A rejoined page refuses an id it answered for another request: what happened there cannot be told.
+    if (peer !== undefined && error?.code === NOT_THE_REQUEST) throw new PageGone();
     throw Object.assign(new Error(error?.message ?? 'the wallet refused'), { code: error?.code });
   };
   return { send, read, ask };
 }
 
 const REJOIN_WITHIN_MS = 15_000;
+const NOT_THE_REQUEST = -32600;
 
 export class PageGone extends Error {
   constructor() {

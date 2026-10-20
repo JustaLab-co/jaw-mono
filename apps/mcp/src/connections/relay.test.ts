@@ -784,13 +784,20 @@ describe('a session the server can rejoin', () => {
     await expect(run).rejects.toBeInstanceOf(PageGone);
   });
 
-  it('given a resumed ask that is not the request first sent under its id, then the caller gets the page refusal code -32600', async () => {
+  it('given a resumed ask that is not the request first sent under its id, then the run ends as page gone, since what happened there cannot be told', async () => {
     const { wallet, resume } = await restarted(never);
     const resumed = await resumeWallet(resume, wallet.url, soon());
 
-    await expect(resumed!.run((ask) => ask('personal_sign', ['0x69', '0xaa']))).rejects.toMatchObject({
-      code: -32600,
+    await expect(resumed!.run((ask) => ask('personal_sign', ['0x69', '0xaa']))).rejects.toBeInstanceOf(PageGone);
+  });
+
+  it('given a first run whose page refuses an ask with -32600, then the caller gets that code', async () => {
+    const wallet = await openRelay(84532);
+    await replayingPage(wallet.url, async () => {
+      throw Object.assign(new Error('invalid'), { code: -32600 });
     });
+
+    await expect(wallet.run(sign)).rejects.toMatchObject({ code: -32600 });
   });
 
   it('given saving the session fails, then the run still asks the owner and answers', async () => {

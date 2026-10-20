@@ -14,7 +14,7 @@ import { tenant, type Tenant } from '@/connections/auth';
 import { chainClients } from '@/adapters/session-host';
 import { APPROVE_WITHIN_MS, config } from '@/connections/config';
 import { ownerRelay, WalletBusy, type OpenWallet, type Wallet } from '@/connections/relay';
-import { otherRequestAsGone, resumeEach, resumeRow, type Rejoin } from '@/connections/resume';
+import { resumeEach, resumeRow, type Rejoin } from '@/connections/resume';
 import { findActive } from '@/connections/rows';
 import { sealResume } from '@/connections/seal';
 import { keepLease, leaseHeld } from '@/connections/session-lease';
@@ -226,7 +226,7 @@ function answer(row: OwnerCallRow, note = ''): SendResult {
   return { ...reply(out), isError: row.state === 'reverted' };
 }
 
-function follow(row: OwnerCallRow, wallet: Wallet, clients: ChainClients, resumed = false): void {
+function follow(row: OwnerCallRow, wallet: Wallet, clients: ChainClients): void {
   const stop = keepLease(
     async () => {
       const held = await renewSession(row);
@@ -237,7 +237,7 @@ function follow(row: OwnerCallRow, wallet: Wallet, clients: ChainClients, resume
   );
   void wallet
     .run(
-      (ask) => approve(resumed ? otherRequestAsGone(ask) : ask, row, clients),
+      (ask) => approve(ask, row, clients),
       (resume) => saveRelay(row, sealResume(config().ring, resume, row.id))
     )
     .catch((err: unknown) =>
@@ -305,7 +305,7 @@ const rejoin = (clients: ChainClients): Rejoin<OwnerCallRow> => ({
   take: takeToResume,
   release: releaseSession,
   lost: endSession,
-  start: (row) => (wallet) => follow(row, wallet, clients, true),
+  start: (row) => (wallet) => follow(row, wallet, clients),
 });
 
 export const resumeOwnerCalls = (clients: ChainClients = chainClients) => resumeEach(toResume, rejoin(clients));
