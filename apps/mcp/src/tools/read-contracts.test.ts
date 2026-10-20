@@ -15,6 +15,7 @@ import {
 import { base } from 'viem/chains';
 import { describe, expect, it } from 'vitest';
 import { setTestEnv } from '@/connections/testkit';
+import { proxyChains } from '@/lib/chain';
 import { readContracts, type Read } from './read-contracts';
 
 setTestEnv();
@@ -117,6 +118,17 @@ describe('jaw_read_contracts', () => {
   it('names a non-contract address instead of returning nothing', async () => {
     const out = await readContracts({ chainId: 8453, reads: [read('decimals', undefined, EOA)] }, usdc);
     expect(values(out)).toEqual([{ ok: false, error: expect.stringContaining('not a contract') }]);
+  });
+
+  it('lists every chain JAW serves in the refusal', async () => {
+    const out = await readContracts({ chainId: 1337, reads: [read('decimals')] });
+    const text = (out as { content: { text: string }[] }).content[0].text;
+    expect(text).toBe(
+      `Chain 1337 is not one JAW supports. Supported: ${proxyChains()
+        .map((c) => c.id)
+        .join(', ')}.`
+    );
+    expect(proxyChains().length).toBeGreaterThan(1);
   });
 
   it('refuses a chain JAW does not serve without opening a client', async () => {
