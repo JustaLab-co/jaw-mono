@@ -200,6 +200,7 @@ function summaryOf(row: OwnerCallRow): string {
 }
 
 function answer(row: OwnerCallRow, note = ''): SendResult {
+  if (row.relay) void resumeCall(row);
   const out = ownerCallsOutput.parse({
     id: row.id,
     idempotencyKey: row.idempotencyKey,
@@ -263,7 +264,6 @@ async function replay(t: Tenant, row: OwnerCallRow, hash: string, deps: OwnerCal
   if (row.requestHash !== hash) {
     return refuse('idempotency_conflict', 'This idempotency key was used for another request. Nothing was sent.');
   }
-  if (row.relay) void resumeCall(row, deps.clients);
   const linkDead = row.state === 'awaiting_owner' && row.code !== SEND_STARTED && !leaseHeld(row.sessionUntil);
   if (!linkDead || row.relay) return answer(row);
   const refused = await refusedBeforeLink(t);
@@ -354,7 +354,6 @@ export async function sendCallsStatus(
   await expirePast(t.connectionId);
   const row = await findById(t.connectionId, id);
   if (!row) return refuse('not_found', 'No request on this connection has that id.');
-  if (row.relay) void resumeCall(row, deps.clients);
   if (row.state !== 'sent' || !row.callsId) return answer(row);
   let mined: Receipt | null;
   try {

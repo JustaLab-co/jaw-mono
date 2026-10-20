@@ -22,4 +22,4 @@ export const callsWaiting = (clients: ChainClients = chainClients) => waitingIn(
 
 export const resumeOwnerCalls = (clients?: ChainClients) => resumeTick([callsWaiting(clients)]);
 
-export const resumeCall = (row: OwnerCallRow, clients: ChainClients) => resumeRow(row, rejoin(clients));
+export const resumeCall = (row: OwnerCallRow, clients: ChainClients = chainClients) => resumeRow(row, rejoin(clients));

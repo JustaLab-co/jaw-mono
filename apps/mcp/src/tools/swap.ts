@@ -311,6 +311,7 @@ function readNote(read: BackendAnswer | undefined): string {
 }
 
 async function answer(row: SwapRow, read?: BackendAnswer): Promise<SwapResult> {
+  if (row.relay) void resumeSwap(row);
   const backendText = read && untrustedBackendText(read);
   const response = [row.quoteFenced, backendText && fenceText('the swap backend', backendText, 400)].filter(
     (text): text is string => !!text
@@ -423,7 +424,6 @@ async function reopen(t: Tenant, row: SwapRow, key: string, deps: SwapDeps): Pro
 }
 
 async function replay(t: Tenant, row: SwapRow, key: string, deps: SwapDeps): Promise<SwapResult> {
-  if (row.relay) void resumeSwap(row, deps);
   const linkDead = row.state === 'awaiting_owner' && row.code !== SEND_STARTED && !leaseHeld(row.sessionUntil);
   if (!linkDead || row.relay) return answer(row);
   if (!(await findActive(t.connectionId))) return connectionEnded();
@@ -474,7 +474,6 @@ export async function swapStatus(
   const row = await findByQuoteId(t.connectionId, quoteId);
   if (!row) return refuse('not_found', 'No swap on this connection has that quoteId.');
   if (!FOLLOWED.includes(row.state)) return answer(row);
-  if (row.relay) void resumeSwap(row, deps);
   const read = await track(row, deps.backend);
   return answer((await findByQuoteId(t.connectionId, quoteId)) ?? row, read);
 }

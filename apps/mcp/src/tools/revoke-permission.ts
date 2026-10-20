@@ -10,7 +10,7 @@ import { ownerRelay, type OpenWallet } from '@/connections/relay';
 import { getDb } from '@/db/client';
 import { grants } from '@/db/schema';
 import type { ReadPermission } from '@/grants/permission';
-import { lostBefore, lostPreamble, openLink, resumeRequest, type PermissionRequestRow } from '@/grants/requests';
+import { lostBefore, lostPreamble, openLink, type PermissionRequestRow } from '@/grants/requests';
 import { markRevoked, readState, REVOKE_READS, revokeWork, sameId, type RevokeTarget } from '@/grants/resume';
 import { reply } from '@/lib/fence';
 import { ACCOUNT_BUSY, refusal } from './reply';
@@ -151,7 +151,6 @@ export async function revokePermission(t: Tenant, input: RevokeInput, deps = DEF
   if (opened === 'wallet_busy') return refusal('Too many owners are approving right now. Try again in a minute.');
   if (opened === 'account_busy') return refusal(ACCOUNT_BUSY);
   if ('opened' in opened) return answer(target, opened.opened);
-  if (opened.waiting.relay) void resumeRequest(opened.waiting, revokeWork(deps));
   const held = opened.waiting;
   const until = held.approveBy.toISOString();
   if (held.connectionId !== t.connectionId) {

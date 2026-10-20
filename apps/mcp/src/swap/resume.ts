@@ -24,4 +24,4 @@ export const swapsWaiting = (deps: SwapRunDeps = {}) => waitingIn(leasedSwaps.to
 
 export const resumeSwaps = (deps?: SwapRunDeps) => resumeTick([swapsWaiting(deps)]);
 
-export const resumeSwap = (row: SwapRow, deps: SwapRunDeps) => resumeRow(row, rejoin(deps));
+export const resumeSwap = (row: SwapRow, deps: SwapRunDeps = {}) => resumeRow(row, rejoin(deps));

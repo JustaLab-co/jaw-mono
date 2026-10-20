@@ -96,7 +96,7 @@ async function findHeld(t: Tenant, req: LinkRequest): Promise<Held | undefined> 
     )
     .orderBy(desc(eq(permissionRequests.connectionId, t.connectionId)))
     .limit(1);
-  return row && { waiting: row };
+  return row && { waiting: rejoinIfWaiting(row, req.rebuild) };
 }
 
 const unnamed = sql`not exists (select 1 from ${permissionRequests} named where named.names_lost = ${permissionRequests.id})`;
@@ -152,11 +152,21 @@ function outcomeOf(err: unknown, row: PermissionRequestRow, asked: boolean): Out
   return { state: 'failed', code: 'unexpected' };
 }
 
-export async function currentSign(t: Tenant, idempotencyKey: string): Promise<PermissionRequestRow | undefined> {
+/** Reading a request that waits for its resume starts that resume. */
+function rejoinIfWaiting<R extends PermissionRequestRow | undefined>(row: R, rebuild: Rebuild): R {
+  if (row?.relay) void resumeRequest(row, rebuild);
+  return row;
+}
+
+export async function currentSign(
+  t: Tenant,
+  idempotencyKey: string,
+  rebuild: Rebuild
+): Promise<PermissionRequestRow | undefined> {
   const same = sameSign(t, idempotencyKey);
   await closeDead(same);
   const [row] = await getDb().select().from(permissionRequests).where(same);
-  return row;
+  return rejoinIfWaiting(row, rebuild);
 }
 
 // An answer the owner gave still stands on a row that ended while its process could not renew.
@@ -205,7 +215,7 @@ export async function openLink(t: Tenant, req: LinkRequest, openWallet: OpenWall
   const work = req.rebuild(t, req.payload);
   if (!work) throw new Error(`the ${req.method} request does not match what a resume rebuilds`);
   const existing = async (): Promise<Held | undefined> => {
-    const stored = req.method === 'sign' ? await currentSign(t, req.idempotencyKey) : undefined;
+    const stored = req.method === 'sign' ? await currentSign(t, req.idempotencyKey, req.rebuild) : undefined;
     return stored ? { waiting: stored } : findHeld(t, req);
   };
   const held = await existing();

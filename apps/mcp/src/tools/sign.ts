@@ -13,7 +13,6 @@ import {
   lostBefore,
   lostPreamble,
   openLink,
-  resumeRequest,
   type PermissionRequestRow,
 } from '@/grants/requests';
 import { signWork, type SignPayload, type SignRequest } from '@/grants/resume';
@@ -214,8 +213,7 @@ export async function sign(t: Tenant, input: SignInput, deps: SignDeps = DEFAULT
     row.requestHash === requestHash
       ? answer(row)
       : refuse('idempotency_conflict', 'This idempotency key was used for another request. Nothing was signed.');
-  const stored = await currentSign(t, idempotencyKey);
-  if (stored?.relay) void resumeRequest(stored, signWork);
+  const stored = await currentSign(t, idempotencyKey, signWork);
   if (stored) return answerStored(stored);
 
   if ((await countHit(`owner-sign:${t.connectionId}`, RATE_WINDOW_MS)) > LINK_RATE_LIMIT) {
