@@ -41,11 +41,11 @@ The first link, opened while the server is up, shows the app name and "This tab 
 
 `apps/mcp/src/connections/relay.ts` rejoins a session after the hosted server restarts (`resumeWallet`). `tools/verify/rejoin-drive/drive.mts` runs that code against the real relay and the real cli-bridge page, with no passkey: `eth_chainId` is answered by the page without a dialog.
 
-Preconditions: Playwright's Chromium installed, `bun install` done, and a keys origin whose page speaks to the relay you name (`https://keys.jaw.id` with `wss://relay.jaw.id`).
+Preconditions: Playwright's Chromium installed, `bun install` done, and a keys page that replays answers. Until that page is deployed, use the local relay and the keys app on `next dev` as above.
 
 ```bash
-JAW_LIVE_RELAY_URL=wss://relay.jaw.id JAW_LIVE_KEYS_URL=https://keys.jaw.id \
+JAW_LIVE_RELAY_URL=ws://localhost:18080 JAW_LIVE_KEYS_URL=http://localhost:13002 \
   bunx tsx --tsconfig apps/mcp/tsconfig.json tools/verify/rejoin-drive/drive.mts
 ```
 
-It opens an `ownerRelay` session and opens the link in Chromium. After `joined` it asks `eth_chainId` and closes the server side without the `shutdown`, as a restart does. It then calls `resumeWallet` with the saved resume and runs work that asks the same `eth_chainId`. The output shows the answer, and the two `rpc_request` ids, both `<session>:0`. The drive then opens two `role=cli` sockets on one session and prints the close code of the first, which the real relay sets to `4003`. It exits non-zero on any mismatch. If the page answers before the server closes, it prints that the race was lost; run it again.
+It opens an `ownerRelay` session and opens the link in Chromium. After `joined` it asks `eth_chainId` and closes the server socket as soon as that request leaves, without the `shutdown`, as a restart does, so the first run ends without an answer. It then calls `resumeWallet` with the saved resume and runs work that asks the same `eth_chainId`. The output shows the answer, and the two `rpc_request` ids, both `<session>:0`. The drive then opens two `role=cli` sockets on one session and prints the close code of the first, which the real relay sets to `4003`. It exits non-zero on any mismatch.
