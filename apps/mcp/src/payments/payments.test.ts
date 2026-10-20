@@ -1886,7 +1886,7 @@ describe('given a 1 USDC/day budget and 1.5 USDC already in the payer', () => {
   });
 
   it.skipIf(!TEST_PG_URL)(
-    'when six 0.3 payments run at once across two replicas on Postgres, with each signature landing after the next turn, then three are paid, the rest refuse budget_exhausted holding nothing, and jaw_status shows what is left',
+    'when six 0.3 payments run at once across two replicas on Postgres, with each signature landing after the next turn, then three are paid, the rest refuse budget_exhausted holding nothing, and jaw_session_status shows what is left',
     async () => {
       const { c, t } = await connected('1');
       balances.set(t.sessionAddress.toLowerCase(), 1_500_000n);
@@ -1907,8 +1907,8 @@ describe('given a 1 USDC/day budget and 1.5 USDC already in the payer', () => {
       for (const r of refused) {
         expect(await rowOf(r.structuredContent!.paymentId)).toMatchObject({ reserved: null, topUpAmount: null });
       }
-      const status = await callTool(c.access_token, 'jaw_status', {});
-      expect(status.structuredContent.balances.session.amount).toBe('600000');
+      const status = await callTool(c.access_token, 'jaw_session_status', {});
+      expect(status.structuredContent.float.amount).toBe('600000');
     }
   );
 });

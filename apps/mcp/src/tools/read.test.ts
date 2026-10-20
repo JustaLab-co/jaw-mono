@@ -69,50 +69,51 @@ beforeAll(async () => {
 });
 
 describe('read tools', () => {
-  it('given a connection whose budget is gone, jaw_status names the account and reads no_grant, pointing at jaw_grant_permissions', async () => {
+  it('given a connection whose budget is gone, jaw_session_status names the account and reads no_grant, pointing at jaw_grant_permissions', async () => {
     const c = await connect();
     const t = (await verifyBearer(c.access_token))?.extra?.tenant as Tenant;
     await getDb().delete(grants).where(eq(grants.connectionId, t.connectionId));
-    const r = await callTool(c.access_token, 'jaw_status', {});
+    const r = await callTool(c.access_token, 'jaw_session_status', {});
     expect(r.structuredContent).toMatchObject({
       account: c.signer.address,
       chainId: 'eip155:84532',
       readiness: { status: 'not_ready', reason: 'no_grant' },
       budget: null,
-      balances: { account: null, session: null },
+      float: null,
+      grants: [],
     });
     expect(r.content[0].text).toContain('jaw_grant_permissions');
   });
 
-  it('given a token with wallet:read alone, when jaw_status runs, then it is not ready for lack of x402:pay', async () => {
+  it('given a token with wallet:read alone, when jaw_session_status runs, then it is not ready for lack of x402:pay', async () => {
     const c = await connect(undefined, { scope: 'wallet:read' });
-    const r = await callTool(c.access_token, 'jaw_status', {});
+    const r = await callTool(c.access_token, 'jaw_session_status', {});
     expect(r.structuredContent.readiness).toEqual({ status: 'not_ready', reason: 'no_scope' });
     expect(r.content[0].text).toContain('x402:pay');
     expect(r.content[0].text).not.toContain('Ready to pay');
   });
 
-  it('given a client that reads only text, when jaw_status answers, then the last text block is the structured content as JSON', async () => {
-    const r = await callTool(token, 'jaw_status', {});
+  it('given a client that reads only text, when jaw_session_status answers, then the last text block is the structured content as JSON', async () => {
+    const r = await callTool(token, 'jaw_session_status', {});
     expect(r.content[0].text).toBe(r.structuredContent.summary);
     expect(JSON.parse(r.content.at(-1).text)).toEqual(r.structuredContent);
   });
 
-  it('jaw_status includes connectionExpiresAt', async () => {
-    const r = await callTool(token, 'jaw_status', {});
+  it('jaw_session_status includes connectionExpiresAt', async () => {
+    const r = await callTool(token, 'jaw_session_status', {});
     expect(r.structuredContent.connectionExpiresAt).toEqual(expect.any(String));
     const expiry = new Date(r.structuredContent.connectionExpiresAt);
     expect(expiry.getTime()).toBeGreaterThan(Date.now());
   });
 
-  it('jaw_status warns when the connection expires within 48 hours', async () => {
+  it('jaw_session_status warns when the connection expires within 48 hours', async () => {
     const c = await connect();
     const t = (await verifyBearer(c.access_token))?.extra?.tenant as Tenant;
     await getDb()
       .update(connections)
       .set({ expiresAt: new Date(Date.now() + 12 * 60 * 60 * 1000) })
       .where(eq(connections.id, t.connectionId));
-    const r = await callTool(c.access_token, 'jaw_status', {});
+    const r = await callTool(c.access_token, 'jaw_session_status', {});
     expect(r.content[0].text).toContain('jaw_session_disconnect');
     expect(r.content[0].text).toContain('expires');
   });
@@ -195,9 +196,14 @@ describe('read tools', () => {
   });
 
   it('refuses an account argument: tenancy comes from the token only', async () => {
-    const r = await callTool(token, 'jaw_status', { account: '0x0000000000000000000000000000000000000001' });
+    const r = await callTool(token, 'jaw_session_status', { account: '0x0000000000000000000000000000000000000001' });
     expect(r.isError).toBe(true);
     expect(JSON.stringify(r)).not.toContain(account);
+  });
+
+  it('given the old name jaw_status, then the server does not know it', async () => {
+    const { json } = await mcp(token, { method: 'tools/call', params: { name: 'jaw_status', arguments: {} } });
+    expect(json.error?.message ?? json.result?.content?.[0]?.text).toMatch(/not found|unknown/i);
   });
 
   it('lists every tool with an output schema', async () => {
@@ -206,16 +212,23 @@ describe('read tools', () => {
     expect(tools.map((t) => t.name).sort()).toEqual([
       'jaw_add_funds',
       'jaw_connections',
+      'jaw_get_assets',
+      'jaw_get_calls_history',
       'jaw_get_calls_status',
+      'jaw_get_capabilities',
+      'jaw_get_permissions',
       'jaw_grant_permissions',
+      'jaw_read_contracts',
       'jaw_revoke_permission',
       'jaw_send_calls',
       'jaw_session_disconnect',
+      'jaw_session_execute',
       'jaw_session_history',
+      'jaw_session_status',
       'jaw_session_x402_discover',
       'jaw_session_x402_pay',
       'jaw_session_x402_quote',
-      'jaw_status',
+      'jaw_sign',
       'jaw_swap',
       'jaw_swap_status',
     ]);

@@ -19,8 +19,6 @@ import { useTestDb } from '@/db/test-db';
 const asked: { id: string }[] = [];
 const chain = { start: 1, end: 2_000_000_000, spend: 0n, held: 0n };
 
-// The permission manager answers for whichever permission is asked about: approved,
-// not revoked, nothing spent this period, so any spend in jaw_status comes from elsewhere unless a test sets `chain`.
 vi.mock('@/lib/chain', async (original) => ({
   ...(await original<object>()),
   publicClientFor: () =>
@@ -49,7 +47,7 @@ async function approve(c: Awaited<ReturnType<typeof connect>>, perDay: string) {
   return permissionId;
 }
 
-describe('jaw_status after a budget change', () => {
+describe('jaw_session_status after a budget change', () => {
   it('counts what an older budget pulled today in remainingToday', async () => {
     const c = await connect();
     const t = (await verifyBearer(c.access_token))?.extra?.tenant as Tenant;
@@ -70,7 +68,7 @@ describe('jaw_status after a budget change', () => {
       finishedAt: new Date(),
     });
     await approve(c, '1');
-    const status = await callTool(c.access_token, 'jaw_status', {});
+    const status = await callTool(c.access_token, 'jaw_session_status', {});
     expect(status.structuredContent.budget).toMatchObject({
       perDay: { amount: '1000000' },
       spentToday: { amount: '0' },
@@ -80,7 +78,7 @@ describe('jaw_status after a budget change', () => {
 });
 
 describe('given a budget of 0.03 USDC with 0.025 already funded into the float today', () => {
-  it('when jaw_status runs, then remainingToday is what pay can still pull', async () => {
+  it('when jaw_session_status runs, then remainingToday is what pay can still pull', async () => {
     const c = await connect();
     const t = (await verifyBearer(c.access_token))?.extra?.tenant as Tenant;
     const current = await approve(c, '0.03');
@@ -99,7 +97,7 @@ describe('given a budget of 0.03 USDC with 0.025 already funded into the float t
       topUpAmount: '25000',
       finishedAt: new Date(),
     });
-    const status = await callTool(c.access_token, 'jaw_status', {});
+    const status = await callTool(c.access_token, 'jaw_session_status', {});
     expect(status.structuredContent.budget).toMatchObject({
       perDay: { amount: '30000' },
       spentToday: { amount: '0' },
@@ -128,13 +126,13 @@ async function fundedRow(t: Tenant, permissionId: string, id: string, amount: st
 }
 
 describe('given the chain counts more spent today than the ledger topped up', () => {
-  it('when jaw_status runs, then remainingToday follows the chain and the difference is spent', async () => {
+  it('when jaw_session_status runs, then remainingToday follows the chain and the difference is spent', async () => {
     const c = await connect();
     const t = (await verifyBearer(c.access_token))?.extra?.tenant as Tenant;
     const current = await approve(c, '0.05');
     await fundedRow(t, current, 'pay_chainahead', '10000', new Date());
     Object.assign(chain, { start: 1, spend: 20_000n });
-    const status = await callTool(c.access_token, 'jaw_status', {});
+    const status = await callTool(c.access_token, 'jaw_session_status', {});
     expect(status.structuredContent.budget).toMatchObject({
       spentToday: { amount: '10000' },
       remainingToday: { amount: '30000' },
@@ -143,14 +141,14 @@ describe('given the chain counts more spent today than the ledger topped up', ()
 });
 
 describe('given a top-up dated before the current window started', () => {
-  it('when jaw_status runs, then that top-up is not counted', async () => {
+  it('when jaw_session_status runs, then that top-up is not counted', async () => {
     const c = await connect();
     const t = (await verifyBearer(c.access_token))?.extra?.tenant as Tenant;
     const current = await approve(c, '0.05');
     const now = Date.now();
     await fundedRow(t, current, 'pay_beforewindow', '25000', new Date(now - 2 * 3_600_000));
     Object.assign(chain, { start: Math.floor(now / 1000) - 3600, spend: 0n });
-    const status = await callTool(c.access_token, 'jaw_status', {});
+    const status = await callTool(c.access_token, 'jaw_session_status', {});
     expect(status.structuredContent.budget).toMatchObject({
       spentToday: { amount: '0' },
       remainingToday: { amount: '50000' },
@@ -159,13 +157,13 @@ describe('given a top-up dated before the current window started', () => {
 });
 
 describe('given a window start past the range a Date can hold', () => {
-  it('when jaw_status runs, then it still answers and counts every top-up', async () => {
+  it('when jaw_session_status runs, then it still answers and counts every top-up', async () => {
     const c = await connect();
     const t = (await verifyBearer(c.access_token))?.extra?.tenant as Tenant;
     const current = await approve(c, '0.05');
     await fundedRow(t, current, 'pay_unreadablestart', '25000', new Date());
     Object.assign(chain, { start: 99_999_999_999_999, end: 99_999_999_999_999, spend: 0n });
-    const status = await callTool(c.access_token, 'jaw_status', {});
+    const status = await callTool(c.access_token, 'jaw_session_status', {});
     expect(status.structuredContent.budget).toMatchObject({
       spentToday: { amount: '0' },
       remainingToday: { amount: '25000' },
@@ -195,11 +193,11 @@ async function paidRow(t: Tenant, permissionId: string, id: string, amount: stri
 }
 
 describe('given the session already holds float from an earlier pull', () => {
-  it('when jaw_status runs, then the summary reports only what is left today', async () => {
+  it('when jaw_session_status runs, then the summary reports only what is left today', async () => {
     const c = await connect();
     await approve(c, '0.05');
     chain.held = 28_143n;
-    const status = await callTool(c.access_token, 'jaw_status', {});
+    const status = await callTool(c.access_token, 'jaw_session_status', {});
     expect(status.structuredContent.budget).toMatchObject({
       spentToday: { amount: '0' },
       remainingToday: { amount: '50000' },
@@ -210,7 +208,7 @@ describe('given the session already holds float from an earlier pull', () => {
 });
 
 describe('given 1 USDC a day, float from an earlier window and 0.9 paid today', () => {
-  it('when jaw_status runs, then remainingToday is what the daily cap still allows', async () => {
+  it('when jaw_session_status runs, then remainingToday is what the daily cap still allows', async () => {
     const c = await connect();
     const t = (await verifyBearer(c.access_token))?.extra?.tenant as Tenant;
     const current = await approve(c, '1');
@@ -218,7 +216,7 @@ describe('given 1 USDC a day, float from an earlier window and 0.9 paid today', 
     await fundedRow(t, current, 'pay_earlierfloat', '1500000', new Date(now - 2 * 3_600_000));
     Object.assign(chain, { start: Math.floor(now / 1000) - 3600, spend: 0n, held: 600_000n });
     for (const id of ['pay_today1', 'pay_today2', 'pay_today3']) await paidRow(t, current, id, '300000');
-    const status = await callTool(c.access_token, 'jaw_status', {});
+    const status = await callTool(c.access_token, 'jaw_session_status', {});
     expect(status.structuredContent.budget).toMatchObject({
       spentToday: { amount: '900000' },
       remainingToday: { amount: '100000' },
@@ -228,13 +226,13 @@ describe('given 1 USDC a day, float from an earlier window and 0.9 paid today', 
 });
 
 describe('given 1 USDC pulled today into the float and nothing paid yet', () => {
-  it('when jaw_status runs, then the whole day is still left', async () => {
+  it('when jaw_session_status runs, then the whole day is still left', async () => {
     const c = await connect();
     const t = (await verifyBearer(c.access_token))?.extra?.tenant as Tenant;
     const current = await approve(c, '1');
     await fundedRow(t, current, 'pay_fullpull', '1000000', new Date());
     Object.assign(chain, { spend: 1_000_000n, held: 1_000_000n });
-    const status = await callTool(c.access_token, 'jaw_status', {});
+    const status = await callTool(c.access_token, 'jaw_session_status', {});
     expect(status.structuredContent.budget).toMatchObject({
       spentToday: { amount: '0' },
       remainingToday: { amount: '1000000' },
@@ -243,14 +241,14 @@ describe('given 1 USDC pulled today into the float and nothing paid yet', () => 
 });
 
 describe('given 1 USDC pulled today, 0.69 paid and 0.29 left in the float', () => {
-  it('when jaw_status runs, then remainingToday is the float, since nothing more can be pulled', async () => {
+  it('when jaw_session_status runs, then remainingToday is the float, since nothing more can be pulled', async () => {
     const c = await connect();
     const t = (await verifyBearer(c.access_token))?.extra?.tenant as Tenant;
     const current = await approve(c, '1');
     await fundedRow(t, current, 'pay_g1pull', '1000000', new Date());
     await paidRow(t, current, 'pay_g1paid', '690000');
     Object.assign(chain, { spend: 1_000_000n, held: 290_000n });
-    const status = await callTool(c.access_token, 'jaw_status', {});
+    const status = await callTool(c.access_token, 'jaw_session_status', {});
     expect(status.structuredContent.budget).toMatchObject({
       spentToday: { amount: '690000' },
       remainingToday: { amount: '290000' },
@@ -258,12 +256,12 @@ describe('given 1 USDC pulled today, 0.69 paid and 0.29 left in the float', () =
   });
 });
 
-describe('given 1 USDC a day and the reads jaw_status combines', () => {
+describe('given 1 USDC a day and the reads jaw_session_status combines', () => {
   async function budgetAfter(setup: (t: Tenant, permissionId: string) => Promise<void>) {
     const c = await connect();
     const t = (await verifyBearer(c.access_token))?.extra?.tenant as Tenant;
     await setup(t, await approve(c, '1'));
-    const status = await callTool(c.access_token, 'jaw_status', {});
+    const status = await callTool(c.access_token, 'jaw_session_status', {});
     return status.structuredContent;
   }
 

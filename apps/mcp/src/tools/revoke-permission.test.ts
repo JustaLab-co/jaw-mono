@@ -418,7 +418,7 @@ describe('jaw_revoke_permission', () => {
     expect(asked.filter((a) => a.method === 'wallet_revokePermissions')).toHaveLength(1);
   });
 
-  it('given the session already asked the owner when its lease lapsed, then a new ask opens no second link and the first answer still settles', async () => {
+  it('given the session already asked the owner when its lease lapsed, then the next ask opens a new link that names the lost one, and an answer in the first still settles', async () => {
     const { t, signer, budget } = await connected();
     const { deps, opened, chain } = setup(signer);
     const answers = walletAnswers(signer);
@@ -442,11 +442,91 @@ describe('jaw_revoke_permission', () => {
     wait.release();
     await walletsSettled();
 
-    expect(opened()).toBe(0);
-    expect(again.content[0].text).toMatch(/^revoke_in_progress: /);
+    expect(opened()).toBe(1);
+    expect(urlOf(again)).not.toBe(urlOf(first));
+    expect(again.content[0].text).toMatch(/link_lost: /);
     expect(again.content[0].text).toContain(urlOf(first));
-    expect(await requestsOf(budget)).toMatchObject([{ state: 'approved' }]);
+    const firstRow = (await requestsOf(budget)).find((r) => r.walletUrl === urlOf(first));
+    expect(firstRow).toMatchObject({ state: 'approved' });
     expect((await grantRow(budget)).revokedAt).not.toBeNull();
+  });
+
+  it("given another connection's asked revoke whose lease lapsed, then this connection gets revoke_in_progress and the other link stays open", async () => {
+    const signer = owner();
+    const { t, budget } = await connected(signer);
+    const other = await connected(signer, 'wallet:read');
+    const { deps, opened, chain } = setup(signer);
+    const answers = walletAnswers(signer);
+    const asked: { method: string; params: unknown[] }[] = [];
+    const wait = held();
+    const wallet = fakeWallet(async (method, params) => {
+      if (method !== 'wallet_revokePermissions') return answers(method, params);
+      await wait.promise;
+      chain.revoked.add(budget.toLowerCase());
+      return { success: true };
+    }, asked);
+    const holding = deps();
+    const first = await revokePermission(t, { permissionId: budget }, { ...holding, openWallet: wallet });
+    await vi.waitFor(() => expect(asked.map((a) => a.method)).toContain('wallet_revokePermissions'));
+    await getDb()
+      .update(permissionRequests)
+      .set({ sessionUntil: sql`now() - interval '1 second'` })
+      .where(eq(permissionRequests.walletUrl, urlOf(first)!));
+
+    const theirs = await revokePermission(other.t, { permissionId: budget }, holding);
+    const firstRow = (await requestsOf(budget)).find((r) => r.walletUrl === urlOf(first));
+    wait.release();
+    await walletsSettled();
+
+    expect(theirs.content[0].text).toMatch(/^revoke_in_progress: /);
+    expect(urlOf(theirs)).toBeUndefined();
+    expect(opened()).toBe(0);
+    expect(firstRow).toMatchObject({ state: 'awaiting_owner', code: 'asked' });
+    expect((await requestsOf(budget)).find((r) => r.walletUrl === urlOf(first))).toMatchObject({ state: 'approved' });
+  });
+
+  it("given another connection's revoke whose lease lapsed before it asked the owner, then this connection opens a new link", async () => {
+    const signer = owner();
+    const { t, budget } = await connected(signer);
+    const other = await connected(signer, 'wallet:read');
+    const { deps, opened } = setup(signer);
+    const wait = held();
+    const first = await revokePermission(t, { permissionId: budget }, deps({ held: wait.promise }));
+    await getDb()
+      .update(permissionRequests)
+      .set({ sessionUntil: sql`now() - interval '1 second'` })
+      .where(eq(permissionRequests.walletUrl, urlOf(first)!));
+
+    const theirs = await revokePermission(other.t, { permissionId: budget }, deps());
+    const firstRow = (await requestsOf(budget)).find((r) => r.walletUrl === urlOf(first));
+    wait.release();
+    await walletsSettled();
+
+    expect(opened()).toBe(2);
+    expect(urlOf(theirs)).not.toBe(urlOf(first));
+    expect(firstRow).toMatchObject({ state: 'expired', code: 'session_lost' });
+  });
+
+  it("given another connection's asked revoke past its window, then this connection opens a new link and the old one ends expired", async () => {
+    const signer = owner();
+    const { t, budget } = await connected(signer);
+    const other = await connected(signer, 'wallet:read');
+    const { deps, opened } = setup(signer);
+    const wait = held();
+    const first = await revokePermission(t, { permissionId: budget }, deps({ held: wait.promise }));
+    await getDb()
+      .update(permissionRequests)
+      .set({ code: 'asked', approveBy: sql`now() - interval '1 second'` })
+      .where(eq(permissionRequests.walletUrl, urlOf(first)!));
+
+    const theirs = await revokePermission(other.t, { permissionId: budget }, deps());
+    const firstRow = (await requestsOf(budget)).find((r) => r.walletUrl === urlOf(first));
+    wait.release();
+    await walletsSettled();
+
+    expect(opened()).toBe(2);
+    expect(urlOf(theirs)).not.toBe(urlOf(first));
+    expect(firstRow).toMatchObject({ state: 'expired', code: null });
   });
 
   it('given three grant and revoke links waiting on the account, then a fourth link of any kind is refused', async () => {

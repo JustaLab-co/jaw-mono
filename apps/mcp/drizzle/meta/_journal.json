@@ -183,6 +183,34 @@
       "when": 1792435058212,
       "tag": "0025_open_revoke_per_connection",
       "breakpoints": true
+    },
+    {
+      "idx": 26,
+      "version": "7",
+      "when": 1792440947794,
+      "tag": "0026_send_token",
+      "breakpoints": true
+    },
+    {
+      "idx": 27,
+      "version": "7",
+      "when": 1792441002813,
+      "tag": "0027_send_idempotency",
+      "breakpoints": true
+    },
+    {
+      "idx": 28,
+      "version": "7",
+      "when": 1792451562065,
+      "tag": "0028_sign_requests",
+      "breakpoints": true
+    },
+    {
+      "idx": 29,
+      "version": "7",
+      "when": 1792455884665,
+      "tag": "0029_send_open_keyed",
+      "breakpoints": true
     }
   ]
 }
