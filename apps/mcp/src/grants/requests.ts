@@ -185,13 +185,14 @@ export async function openLink(t: Tenant, req: LinkRequest, openWallet: OpenWall
   };
   const held = await existing();
   if (held) return held;
-  if ((await countOpenLinks(t.account)) >= MAX_OPEN_PER_ACCOUNT) return 'account_busy';
+  // A request racing this one may have stored the link since: answer it rather than refuse.
+  if ((await countOpenLinks(t.account)) >= MAX_OPEN_PER_ACCOUNT) return (await existing()) ?? 'account_busy';
   const { approveBy } = req;
   let wallet: Wallet;
   try {
     wallet = await openWallet(req.chainId, approveBy, t);
   } catch (err) {
-    if (err instanceof WalletBusy) return 'wallet_busy';
+    if (err instanceof WalletBusy) return (await existing()) ?? 'wallet_busy';
     throw err;
   }
   let row: PermissionRequestRow | undefined | typeof FULL;
