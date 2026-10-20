@@ -1,5 +1,5 @@
 import { randomBytes } from 'node:crypto';
-import { eq } from 'drizzle-orm';
+import { eq, sql } from 'drizzle-orm';
 import {
   decodeFunctionData,
   encodeAbiParameters,
@@ -667,7 +667,7 @@ describe('jaw_session_execute', () => {
       .where(eq(connections.id, t.connectionId));
     const statusOf = async () =>
       (await getDb().select().from(connections).where(eq(connections.id, t.connectionId)))[0].status;
-    vi.useFakeTimers({ toFake: ['Date'] });
+    // Recorded on the database clock, a second before its two-minute submit window ends.
     await getDb()
       .insert(sends)
       .values({
@@ -682,13 +682,12 @@ describe('jaw_session_execute', () => {
         periodStart: NOW(),
         fromBlock: 100n,
         leaseUntil: new Date(Date.now() + 10 * 60_000),
+        createdAt: sql`now() - interval '119 seconds'`,
       });
 
     const ended = revokeByGrant(grantId as string, 0);
-    await new Promise((resolve) => setTimeout(resolve, 600));
+    await new Promise((resolve) => setTimeout(resolve, 300));
     const withinWindow = await statusOf();
-    // PGlite runs on the test's clock: past the window the run is the reconciler's.
-    vi.setSystemTime(Date.now() + 2 * 60_000 + 1_000);
     await ended;
 
     expect(withinWindow).toBe('active');

@@ -24,7 +24,7 @@
      payments/store.ts              reserve 200, addTopUp 221, recordTopUp 211,
                                     writeTopUpAhead 233 (only while the
                                     connection is active, under a share lock on
-                                    its row), sendInFlight 255 (under an update
+                                    its row), sendInFlight 259 (under an update
                                     lock on it), entriesFor 359
      connections/disconnect.ts 161-407  disconnect and sweepOnReuse, both
                                     through returnAndEnd (188-201):
@@ -37,17 +37,17 @@
                                     flight (206)
      tools/connections.ts 170       revoke: withFloat + endConnection, the same
                                     shape as a disconnect with nothing to send
-     tools/session-execute.ts 226-290  submitUnder: chainView under a 2 s
-                                    bound, then the settle writes (230-236),
+     tools/session-execute.ts 227-291  submitUnder: chainView under a 2 s
+                                    bound, then the settle writes (231-237),
                                     owns() and the live check in one tx
-                                    (237-240), heldSpends (246), fit reads the
-                                    chain at the logged block (248), owns(),
+                                    (238-241), heldSpends (247), fit reads the
+                                    chain at the logged block (249), owns(),
                                     the live check and recordSend in one tx
-                                    (262-277), assertHeld (281), send (283),
-                                    noteSubmitted with no owns() (288); the
+                                    (263-278), assertHeld (282), send (284),
+                                    noteSubmitted with no owns() (289); the
                                     receipt and its conclusion run after the
-                                    lock (313-314)
-     payments/store.ts 255          sendInFlight also counts an execute whose
+                                    lock (314-315)
+     payments/store.ts 259          sendInFlight also counts an execute whose
                                     rows are open with no userOp hash yet and a
                                     live lease: recorded, not yet submitted
 
@@ -333,7 +333,7 @@ EndBusy(d) == /\ pc[d] = "end"
 
 (* Execute turn, session-execute.ts *)
 
-\* chainView, then the settle writes (230-236). The read sees which runs the chain
+\* chainView, then the settle writes (231-237). The read sees which runs the chain
 \* logged by its head, and fit's period read is pinned to that head: snap is what
 \* moved by then. The writes settle the open ones, or fail and leave them open. A read
 \* that fails or runs past its bound sees nothing and pins nothing.
@@ -349,28 +349,28 @@ Settle(e) == /\ pc[e] = "settle"
              /\ Go(e, "replay")
              /\ UNCHANGED <<funded, outcome, lock, db, chain, op, pend>>
 
-\* owns() and the live check in one tx (237-240): FloatLost, or nothing sent on an ended connection.
+\* owns() and the live check in one tx (238-241): FloatLost, or nothing sent on an ended connection.
 Replay(e) == /\ pc[e] = "replay"
              /\ IF ~Owns(e) THEN Leave(e, "error")
                 ELSE IF ~live THEN Leave(e, "refused")
                 ELSE Go(e, "pending") /\ UNCHANGED outcome
              /\ UNCHANGED <<funded, lock, db, chain, exec>>
 
-\* heldSpends in its own tx (246): open runs and landed ones the read did not see,
+\* heldSpends in its own tx (247): open runs and landed ones the read did not see,
 \* since a receipt can land a run after the read, at a block past its head.
 Pending(e) == /\ pc[e] = "pending"
               /\ pend' = [pend EXCEPT ![e] = {x \in Execs : row[x] \in {"open", "landed"} /\ x \notin seen[e]}]
               /\ Go(e, "fit")
               /\ UNCHANGED <<funded, outcome, lock, db, chain, row, op, seen, snap, pinned>>
 
-\* fit reads the period spend from the chain (248), at the pinned head when there is one.
+\* fit reads the period spend from the chain (249), at the pinned head when there is one.
 Fit(e) == /\ pc[e] = "fit"
           /\ IF (IF pinned[e] THEN snap[e] ELSE ExecSpent) + Cardinality(pend[e]) + 1 > ExecCap
                THEN Leave(e, "refused")
                ELSE Go(e, "record") /\ UNCHANGED outcome
           /\ UNCHANGED <<funded, lock, db, chain, exec>>
 
-\* owns(), the live check, then recordSend in one tx (262-277): not owning throws
+\* owns(), the live check, then recordSend in one tx (263-278): not owning throws
 \* FloatLost, and an ended connection records nothing. owns() holds the connection
 \* row, so an end waits on this tx and then sees the rows in flight.
 Record(e) == /\ pc[e] = "record"
@@ -382,7 +382,7 @@ Record(e) == /\ pc[e] = "record"
                        /\ UNCHANGED row
              /\ UNCHANGED <<funded, lock, db, chain, op, pend, seen, snap, pinned>>
 
-\* assertHeld (281): FloatLost is unsent, and noteSubmitted releases the rows.
+\* assertHeld (282): FloatLost is unsent, and noteSubmitted releases the rows.
 AssertExec(e) == /\ pc[e] = "assertExec"
                  /\ IF lost[e]
                       THEN /\ row' = [row EXCEPT ![e] = "released"]
@@ -391,7 +391,7 @@ AssertExec(e) == /\ pc[e] = "assertExec"
                            /\ UNCHANGED <<row, outcome>>
                  /\ UNCHANGED <<funded, lock, db, chain, op, pend, seen, snap, pinned>>
 
-\* wallet_sendCalls (283): the bundler takes it, or a failure before it did
+\* wallet_sendCalls (284): the bundler takes it, or a failure before it did
 \* releases the rows. A maybe-sent failure keeps them open, as a send does.
 Submit(e) == /\ pc[e] = "submit"
              /\ \/ /\ op' = [op EXCEPT ![e] = "sent"]
