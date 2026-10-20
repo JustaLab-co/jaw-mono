@@ -758,6 +758,16 @@ describe('the send marker and a reopened link', () => {
     expect(await markSendStarted(row)).toBeUndefined();
   });
 
+  it('given a link a relay session can still rejoin, then the table refuses a new url written past the store', async () => {
+    const row = await awaiting(await newConnection());
+    await getDb().update(swaps).set({ relay: 'r1.kid.iv.sealed' }).where(eq(swaps.id, row.id));
+    const write = getDb()
+      .update(swaps)
+      .set({ walletUrl: 'https://keys.test/cli-bridge#new' })
+      .where(eq(swaps.id, row.id));
+    expect(await refusalOf(write)).toMatch(/written once/);
+  });
+
   it('given a link a relay session can still rejoin, when it would reopen, then nothing is written', async () => {
     const row = await awaiting(await newConnection());
     await getDb().update(swaps).set({ relay: 'r1.kid.iv.sealed' }).where(eq(swaps.id, row.id));

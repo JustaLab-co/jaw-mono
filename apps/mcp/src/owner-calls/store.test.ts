@@ -232,6 +232,13 @@ describe('reopenLink', () => {
     expect((await rowOf(row.id)).walletUrl).toBe(URL_A);
   });
 
+  it('given a link a relay session can still rejoin, then the table refuses a new url written past the store', async () => {
+    const row = await open(await newConnection());
+    await lapseLease(row.id);
+    await set(row.id, { relay: 'r1.kid.iv.sealed' });
+    expect(await refusalOf(set(row.id, { walletUrl: URL_B }))).toMatch(/written once/);
+  });
+
   it('given a link a relay session can still rejoin, then it does not reopen', async () => {
     const row = await open(await newConnection());
     await lapseLease(row.id);

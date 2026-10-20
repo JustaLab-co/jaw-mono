@@ -226,12 +226,14 @@ describe('owner calls whose server restarted after the send started', () => {
     expect(await sent(id)).toMatchObject({ callsId: CALLS_ID });
   });
 
-  it('given an old replica gave the row a new link and started the send there, when this server resumes the first link, then that tab is not asked to send and nothing is stored to resume', async () => {
+  it('given an old replica gave the row a new link before the table guarded it and started the send there, when this server resumes the first link, then that tab is not asked to send and nothing is stored to resume', async () => {
     const { id, page } = await sendStartedThenRestarted({ stallAt: 1 });
-    await getDb()
-      .update(ownerCalls)
-      .set({ walletUrl: 'http://keys.test/cli-bridge?session=new-link', code: SEND_STARTED, sessionUntil: null })
-      .where(eq(ownerCalls.id, id));
+    await withoutOwnerCallsGuard(() =>
+      getDb()
+        .update(ownerCalls)
+        .set({ walletUrl: 'http://keys.test/cli-bridge?session=new-link', code: SEND_STARTED, sessionUntil: null })
+        .where(eq(ownerCalls.id, id))
+    );
 
     await Promise.all(await resumeOwnerCalls(clients));
     await quiet();
