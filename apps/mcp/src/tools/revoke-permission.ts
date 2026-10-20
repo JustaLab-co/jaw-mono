@@ -22,6 +22,7 @@ import {
 import { fromStore, markRevoked, readState, UNCONFIRMED, type LookUp } from '@/grants/revokes';
 import { RATE_WINDOW_MS } from '@/lib/edge';
 import { reply } from '@/lib/fence';
+import { LINK_RATE_LIMIT } from '@/owner-calls/cap';
 import { ACCOUNT_BUSY, refusal } from './reply';
 
 const revokeInput = z.strictObject({
@@ -62,7 +63,6 @@ const DEFAULTS: RevokeDeps = {
   rereadMs: 2_500,
 };
 const SETTLE_READS = 6;
-const LINK_RATE_LIMIT = 10;
 
 interface Target {
   permissionId: Hex;

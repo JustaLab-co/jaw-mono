@@ -218,6 +218,13 @@
       "when": 1792468250245,
       "tag": "0030_unconfirmed_revokes",
       "breakpoints": true
+    },
+    {
+      "idx": 31,
+      "version": "7",
+      "when": 1792468307087,
+      "tag": "0031_ended_sign_requests",
+      "breakpoints": true
     }
   ]
 }

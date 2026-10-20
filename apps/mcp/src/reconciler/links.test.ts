@@ -464,4 +464,25 @@ describe('reconciler: owner link requests', () => {
       .where(eq(permissionRequests.method, 'sign'));
     expect(n).toBe(2);
   });
+
+  it('given a sign request purged a week after it ended, when its key is sent again, then a new link opens for the owner', async () => {
+    const old = { method: 'sign' as const, idempotencyKey: 'week-old', requestHash: 'h', signKind: 'message' as const };
+    await row({ ...old, state: 'approved', signature: '0x01', updatedAt: new Date(Date.now() - 8 * 86_400_000) });
+    const idle = async (): Promise<Wallet> => ({
+      url: 'http://keys.test/cli-bridge?session=new',
+      run: () => new Promise(() => {}),
+      close: () => {},
+    });
+    const ask = () => sign(t, { message: 'again', idempotencyKey: 'week-old' }, { openWallet: idle });
+
+    const before = await ask();
+    await purge();
+    const after = await ask();
+
+    expect(before.content[0].text).toMatch(/^idempotency_conflict: /);
+    expect(after.structuredContent).toMatchObject({
+      state: 'awaiting_owner',
+      url: 'http://keys.test/cli-bridge?session=new',
+    });
+  });
 });

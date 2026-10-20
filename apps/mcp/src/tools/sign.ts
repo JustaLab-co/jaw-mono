@@ -21,11 +21,9 @@ import {
 import { isProxyChain } from '@/lib/chain';
 import { RATE_WINDOW_MS } from '@/lib/edge';
 import { reply } from '@/lib/fence';
-import { MAX_OPEN_PER_ACCOUNT } from '@/owner-calls/cap';
+import { ACCOUNT_LINK_RATE_LIMIT, LINK_RATE_LIMIT, MAX_OPEN_PER_ACCOUNT } from '@/owner-calls/cap';
 import { gateCode } from '@/payments/render';
 
-const LINK_RATE_LIMIT = 10;
-const ACCOUNT_LINK_RATE_LIMIT = 20;
 const MESSAGE_MAX = 8_192;
 const TYPED_DATA_MAX = 32_768;
 const HIDDEN_IN_NAME = /[\p{Cc}\p{Cf}\p{Zl}\p{Zp}\p{Default_Ignorable_Code_Point}]/u;
