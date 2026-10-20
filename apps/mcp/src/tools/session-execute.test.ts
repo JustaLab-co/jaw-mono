@@ -1,5 +1,5 @@
 import { randomBytes } from 'node:crypto';
-import { eq } from 'drizzle-orm';
+import { eq, sql } from 'drizzle-orm';
 import {
   decodeFunctionData,
   encodeAbiParameters,
@@ -20,13 +20,14 @@ import { afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
 import { verifyBearer, type Tenant } from '@/connections/auth';
 import { callTool, connect, setTestEnv } from '@/connections/testkit';
 import { getDb } from '@/db/client';
-import { sends, settings } from '@/db/schema';
+import { connections, sends, settings } from '@/db/schema';
 import { lockWaiters, TEST_PG_URL, useTestDb, useTestPostgres } from '@/db/test-db';
 import { recordGrant } from '@/grants/permission';
 import { x402Budget } from '@/grants/store';
 import * as sendStore from '@/payments/sends';
 import { reconcile } from '@/reconciler/run';
 import { ANY_TARGET } from '@jaw.id/core';
+import { LOCK_WAIT_MS } from '@/payments/float-lock';
 import { RECEIPT_MS } from './session-execute';
 
 const USDC: Address = '0x036CbD53842c5426634e7929541eC2318f3dCF7e';
@@ -47,32 +48,45 @@ const chain = vi.hoisted(() => ({
   userOps: [] as { userOpHash: Hex; sender: Address; success: boolean; blockNumber: bigint; txHash?: Hex }[],
 }));
 
+type Wire = { to: string; value: string; data: string };
 const bridge = vi.hoisted(() => ({
-  sent: [] as { to: string; value: string; data: string }[][],
+  signed: [] as Wire[][],
+  sent: [] as Wire[][],
   attempts: 0,
   outcome: 'landed' as 'landed' | 'pending' | { logs: { address: string; data: string; topics: string[] }[] },
+  failBeforeSigning: undefined as Error | undefined,
+  beforeSigned: undefined as (() => Promise<void>) | undefined,
+  answeredHash: undefined as Hex | undefined,
   fail: undefined as Error | undefined,
   gate: undefined as Promise<void> | undefined,
   reached: undefined as (() => void) | undefined,
   receiptGate: undefined as Promise<void> | undefined,
 }));
 
+const hashOf = (n: number): Hex => `0x${n.toString(16).padStart(64, '0')}`;
+
+async function sendCalls(calls: Wire[], onSigned: (hash: Hex) => Promise<void>) {
+  bridge.attempts++;
+  bridge.reached?.();
+  if (bridge.gate) await bridge.gate;
+  if (bridge.failBeforeSigning) throw bridge.failBeforeSigning;
+  bridge.signed.push(calls);
+  const id = hashOf(bridge.signed.length);
+  await bridge.beforeSigned?.();
+  await onSigned(id);
+  if (bridge.fail) throw bridge.fail;
+  bridge.sent.push(calls);
+  return { id: bridge.answeredHash ?? id, chainId: 84532 };
+}
+
 vi.mock('@/adapters/session-host', async (original) => ({
   ...(await original<object>()),
   sessionBridge: () => ({
-    request: async (method: string, params: unknown) => {
-      if (method === 'wallet_sendCalls') {
-        bridge.attempts++;
-        bridge.reached?.();
-        if (bridge.gate) await bridge.gate;
-        if (bridge.fail) throw bridge.fail;
-        const calls = (params as [{ calls: { to: string; value: string; data: string }[] }])[0].calls;
-        bridge.sent.push(calls);
-        return { id: `0x${bridge.sent.length.toString(16).padStart(64, '0')}` };
-      }
+    request: async (method: string, params: unknown, onSigned: (hash: Hex) => Promise<void>) => {
+      if (method === 'wallet_sendCalls') return sendCalls((params as [{ calls: Wire[] }])[0].calls, onSigned);
       if (bridge.receiptGate) await bridge.receiptGate;
       const id = params as Hex;
-      const calls = bridge.sent[Number(BigInt(id)) - 1];
+      const calls = bridge.signed[Number(BigInt(id)) - 1];
       if (bridge.outcome === 'pending') {
         vi.setSystemTime(Date.now() + RECEIPT_MS + 1_000);
         return undefined;
@@ -103,6 +117,18 @@ const node = vi.hoisted(() => ({
       .map((op) => ({ args: op, blockNumber: op.blockNumber, transactionHash: op.txHash ?? TX })),
   readContract: async () => undefined as unknown,
 }));
+const writes = vi.hoisted(() => ({ failHash: false }));
+vi.mock('@/payments/sends', async (original) => {
+  const sends = await original<typeof import('@/payments/sends')>();
+  return {
+    ...sends,
+    noteCallsId: async (...args: Parameters<typeof sends.noteCallsId>) => {
+      if (writes.failHash) throw new Error('the database did not answer');
+      return sends.noteCallsId(...args);
+    },
+  };
+});
+
 vi.mock('@/lib/chain', async (original) => ({
   ...(await original<object>()),
   publicClientFor: () => node as unknown as PublicClient,
@@ -112,10 +138,15 @@ setTestEnv();
 beforeAll(TEST_PG_URL ? useTestPostgres : useTestDb);
 afterEach(async () => {
   Object.assign(chain, { spent: 0n, revoked: false, head: 100n, userOps: [] });
+  writes.failHash = false;
   Object.assign(bridge, {
+    signed: [],
     sent: [],
     attempts: 0,
     outcome: 'landed',
+    failBeforeSigning: undefined,
+    beforeSigned: undefined,
+    answeredHash: undefined,
     fail: undefined,
     gate: undefined,
     reached: undefined,
@@ -166,6 +197,9 @@ async function withCustomGrant(perDay = 1_000_000n, end = NOW() + 86_400, target
   }) as typeof node.readContract;
   return { c, t, permissionId };
 }
+
+const clients = { publicClient: () => node as unknown as PublicClient };
+const noReceipt = async () => null;
 
 const transfer = (to: Address, amount: bigint) => ({
   to: USDC,
@@ -288,7 +322,7 @@ describe('jaw_session_execute', () => {
 
   it('names an ExceededSpendLimit the bundler reports after fit passed as over-limit, and releases the rows', async () => {
     const { c, t, permissionId } = await withCustomGrant();
-    bridge.fail = new Error('Could not size the ERC-20 paymaster approval', {
+    bridge.failBeforeSigning = new Error('Could not size the ERC-20 paymaster approval', {
       cause: new RpcRequestError({
         body: {},
         error: { code: -32521, message: 'execution reverted', data: overLimitRevert },
@@ -304,7 +338,7 @@ describe('jaw_session_execute', () => {
 
   it('given a grant on ANY_TARGET, then a manager error in a revert is not named, since the agent chose the contract that reverted', async () => {
     const { c, permissionId } = await withCustomGrant(1_000_000n, NOW() + 86_400, ANY_TARGET);
-    bridge.fail = new Error('Could not size the ERC-20 paymaster approval', {
+    bridge.failBeforeSigning = new Error('Could not size the ERC-20 paymaster approval', {
       cause: new RpcRequestError({
         body: {},
         error: { code: -32521, message: 'execution reverted', data: overLimitRevert },
@@ -342,7 +376,7 @@ describe('jaw_session_execute', () => {
     expect((await rowsOf(t.connectionId)).map((r) => r.state)).toEqual(['open']);
   });
 
-  it('given a 5xx on the send and the bundler then up again, then the reply says it may have been sent and the same key never sends again', async () => {
+  it('given a 5xx on the send and the bundler then up again, then the reply says it may have been sent as its userOp and the same key never sends again', async () => {
     const { c, t, permissionId } = await withCustomGrant();
     bridge.fail = bundlerAnswered(new HttpRequestError({ url: 'http://bundler.test', status: 502 }));
 
@@ -350,8 +384,8 @@ describe('jaw_session_execute', () => {
     bridge.fail = undefined;
     const retry = await execute(c.access_token, permissionId, [transfer(BOB, 600_000n)], 'pay-bob');
 
-    expect(first.content[0].text).toMatch(/may have been sent anyway/);
-    expect(retry.content[0].text).toMatch(/may have been sent anyway/);
+    expect(first.content[0].text).toMatch(`may have been sent anyway as userOp ${hashOf(1)}`);
+    expect(retry.structuredContent).toMatchObject({ status: 'unconfirmed', userOpHash: hashOf(1) });
     expect(bridge.attempts).toBe(1);
     expect((await rowsOf(t.connectionId)).map((r) => r.state)).toEqual(['open']);
   });
@@ -406,7 +440,7 @@ describe('jaw_session_execute', () => {
 
   it('given a failure before the bundler took the batch, then nothing was sent and the rows are released', async () => {
     const { c, t, permissionId } = await withCustomGrant();
-    bridge.fail = new Error('the permission store did not answer');
+    bridge.failBeforeSigning = new Error('the permission store did not answer');
 
     const result = await execute(c.access_token, permissionId, [transfer(BOB, 1n)]);
 
@@ -488,7 +522,7 @@ describe('jaw_session_execute', () => {
     expect(bridge.attempts).toBe(1);
   });
 
-  it('given a retry with the same idempotencyKey after the answer was lost, then it does not send again', async () => {
+  it('given a retry with the same idempotencyKey after the answer was lost, then it follows the signed userOp and does not send again', async () => {
     const { c, t, permissionId } = await withCustomGrant();
     bridge.fail = bundlerAnswered(new HttpRequestError({ url: 'http://bundler.test' }));
     await execute(c.access_token, permissionId, [transfer(BOB, 100_000n)], 'pay-bob');
@@ -496,12 +530,12 @@ describe('jaw_session_execute', () => {
 
     const retry = await execute(c.access_token, permissionId, [transfer(BOB, 100_000n)], 'pay-bob');
 
-    expect(retry.content[0].text).toMatch(/may have been sent/);
+    expect(retry.structuredContent).toMatchObject({ status: 'unconfirmed', userOpHash: hashOf(1) });
     expect(bridge.attempts).toBe(1);
     expect((await rowsOf(t.connectionId)).map((r) => r.state)).toEqual(['open']);
   });
 
-  it('given the same idempotencyKey after the bundler answered "already known", then it says it may have been sent and does not send again', async () => {
+  it('given the same idempotencyKey after the bundler answered "already known", then it follows the signed userOp and does not send again', async () => {
     const { c, t, permissionId } = await withCustomGrant();
     bridge.fail = bundlerSaid(-32602, 'already known');
     await execute(c.access_token, permissionId, [transfer(BOB, 1n)], 'pay-bob');
@@ -509,20 +543,33 @@ describe('jaw_session_execute', () => {
 
     const retry = await execute(c.access_token, permissionId, [transfer(BOB, 1n)], 'pay-bob');
 
-    expect(retry.content[0].text).toMatch(/may have been sent anyway/);
+    expect(retry.structuredContent).toMatchObject({ status: 'unconfirmed', userOpHash: hashOf(1) });
     expect(bridge.attempts).toBe(1);
     expect((await rowsOf(t.connectionId)).map((r) => r.state)).toEqual(['open']);
   });
 
   it('given the same idempotencyKey after a failure before the userOp existed, then it still does not send again', async () => {
     const { c, permissionId } = await withCustomGrant();
-    bridge.fail = new Error('the permission store did not answer');
+    bridge.failBeforeSigning = new Error('the permission store did not answer');
     await execute(c.access_token, permissionId, [transfer(BOB, 1n)], 'pay-bob');
-    bridge.fail = undefined;
+    bridge.failBeforeSigning = undefined;
 
     const retry = await execute(c.access_token, permissionId, [transfer(BOB, 1n)], 'pay-bob');
 
     expect(retry.content[0].text).toMatch(/new idempotencyKey/);
+    expect(bridge.attempts).toBe(1);
+  });
+
+  it('given a run left open before its userOp was signed, then its key says nothing was sent and does not send again', async () => {
+    const { c, t, permissionId } = await withCustomGrant();
+    bridge.failBeforeSigning = new Error('the process stopped');
+    await execute(c.access_token, permissionId, [transfer(BOB, 1n)], 'pay-bob');
+    bridge.failBeforeSigning = undefined;
+    await getDb().update(sends).set({ state: 'open', finishedAt: null }).where(eq(sends.connectionId, t.connectionId));
+
+    const retry = await execute(c.access_token, permissionId, [transfer(BOB, 1n)], 'pay-bob');
+
+    expect(retry.content[0].text).toMatch(/^This key's run sent nothing/);
     expect(bridge.attempts).toBe(1);
   });
 
@@ -537,16 +584,20 @@ describe('jaw_session_execute', () => {
     expect(bridge.attempts).toBe(1);
   });
 
-  it('given the userOp hash write at submit failed, when the userOp reverts, then its key still replays the revert', async () => {
+  it('given the userOp hash write after the send failed, when the userOp reverts, then its key still replays the revert', async () => {
     const { c, t, permissionId } = await withCustomGrant();
     bridge.outcome = { logs: [] };
     vi.spyOn(console, 'log').mockImplementation(() => undefined);
-    const write = vi.spyOn(sendStore, 'noteCallsId').mockRejectedValueOnce(new Error('db blip'));
+    const noteCallsId = sendStore.noteCallsId;
+    const write = vi
+      .spyOn(sendStore, 'noteCallsId')
+      .mockImplementationOnce(noteCallsId)
+      .mockRejectedValueOnce(new Error('db blip'));
     const first = await execute(c.access_token, permissionId, [transfer(BOB, 1n)], 'pay-bob');
 
     const retry = await execute(c.access_token, permissionId, [transfer(BOB, 1n)], 'pay-bob');
 
-    expect(write).toHaveBeenCalledTimes(1);
+    expect(write).toHaveBeenCalledTimes(2);
     const userOpHash = first.structuredContent.userOpHash;
     expect(retry.structuredContent).toMatchObject({ status: 'reverted', userOpHash, txHash: TX });
     expect(await rowsOf(t.connectionId)).toEqual([
@@ -562,13 +613,58 @@ describe('jaw_session_execute', () => {
     await execute(c.access_token, permissionId, [transfer(BOB, 1n)], 'pay-bob');
     chain.head = 100n + 451n;
     vi.setSystemTime(Date.now() + 1_000);
-    await reconcile({ publicClient: () => node as unknown as PublicClient });
+    await reconcile(clients, new Date(), noReceipt, async () => false);
 
     const retry = await execute(c.access_token, permissionId, [transfer(BOB, 1n)], 'pay-bob');
 
     expect(retry.content[0].text).toMatch(/not seen on chain in time.*may still land/);
     expect(retry.content[0].text).not.toMatch(/moved nothing/);
     expect(bridge.attempts).toBe(1);
+  });
+
+  it('given a run past its log window that the bundler still holds, then the reconciler keeps its spend held', async () => {
+    const { c, t, permissionId } = await withCustomGrant();
+    bridge.outcome = 'pending';
+    vi.useFakeTimers({ toFake: ['Date'] });
+    await execute(c.access_token, permissionId, [transfer(BOB, 1n)]);
+    chain.head = 100n + 451n;
+    vi.setSystemTime(Date.now() + 1_000);
+    const asked: string[] = [];
+
+    await reconcile(clients, new Date(), noReceipt, async (_chainId, callsId) => {
+      asked.push(callsId);
+      return true;
+    });
+
+    expect(asked).toEqual([hashOf(1)]);
+    expect(await rowsOf(t.connectionId)).toEqual([expect.objectContaining({ state: 'open', callsId: hashOf(1) })]);
+
+    chain.head = 100n + 901n;
+    await getDb()
+      .update(sends)
+      .set({ leaseUntil: new Date(0) })
+      .where(eq(sends.connectionId, t.connectionId));
+    await reconcile(clients, new Date(), noReceipt, async () => true);
+    expect(await rowsOf(t.connectionId)).toEqual([expect.objectContaining({ state: 'released' })]);
+  });
+
+  it('given a run that landed after its log window, then the reconciler settles it from the bundler receipt', async () => {
+    const { c, t, permissionId } = await withCustomGrant();
+    bridge.outcome = 'pending';
+    vi.useFakeTimers({ toFake: ['Date'] });
+    await execute(c.access_token, permissionId, [transfer(BOB, 1n)]);
+    chain.head = 100n + 451n;
+    vi.setSystemTime(Date.now() + 1_000);
+    const late: Hex = `0x${'e'.repeat(64)}`;
+
+    await reconcile(
+      clients,
+      new Date(),
+      async (_chainId, callsId) => (callsId === hashOf(1) ? { success: true, txHash: late } : null),
+      async () => false
+    );
+
+    expect(await rowsOf(t.connectionId)).toEqual([expect.objectContaining({ state: 'landed', txHash: late })]);
   });
 
   it('given two calls with one idempotencyKey at once, then one sends and the other returns its outcome', async () => {
@@ -614,31 +710,75 @@ describe('jaw_session_execute', () => {
     expect(rows.find((r) => r.amount === '200000')).toMatchObject({ state: 'landed', txHash: TX2 });
   });
 
-  it('given a lost run with no userOp hash, then the reconciler never lands it on another operation of the sender', async () => {
+  it('given a send whose answer was lost, then its rows keep the signed userOp hash and the reconciler lands them on that op alone', async () => {
     const { c, t, permissionId } = await withCustomGrant();
     bridge.fail = bundlerAnswered(new HttpRequestError({ url: 'http://bundler.test' }));
     await execute(c.access_token, permissionId, [transfer(BOB, 100_000n)]);
     bridge.fail = undefined;
+    expect(await rowsOf(t.connectionId)).toEqual([expect.objectContaining({ state: 'open', callsId: hashOf(1) })]);
     const other: Hex = `0x${'d'.repeat(64)}`;
-    chain.userOps.push({
-      userOpHash: `0x${'9'.repeat(64)}`,
-      sender: t.sessionAddress,
-      success: true,
-      blockNumber: 101n,
-      txHash: other,
-    });
+    const own = { sender: t.sessionAddress, success: true, blockNumber: 101n };
+    chain.userOps.push({ ...own, userOpHash: `0x${'9'.repeat(64)}`, txHash: other });
     chain.head = 120n;
 
     await reconcile({ publicClient: () => node as unknown as PublicClient });
     expect(await rowsOf(t.connectionId)).toEqual([expect.objectContaining({ state: 'open', txHash: null })]);
 
-    chain.head = 100n + 451n;
+    chain.userOps.push({ ...own, userOpHash: hashOf(1), txHash: TX });
     await getDb()
       .update(sends)
       .set({ leaseUntil: new Date(0) })
       .where(eq(sends.connectionId, t.connectionId));
     await reconcile({ publicClient: () => node as unknown as PublicClient });
-    expect(await rowsOf(t.connectionId)).toEqual([expect.objectContaining({ state: 'released', txHash: null })]);
+    expect(await rowsOf(t.connectionId)).toEqual([expect.objectContaining({ state: 'landed', txHash: TX })]);
+  });
+
+  it('given a bundler error before the userOp was signed, then nothing was sent and the rows are released', async () => {
+    const { c, t, permissionId } = await withCustomGrant();
+    bridge.failBeforeSigning = bundlerAnswered(new HttpRequestError({ url: 'http://bundler.test', status: 502 }));
+
+    const result = await execute(c.access_token, permissionId, [transfer(BOB, 1n)]);
+
+    expect(result.content[0].text).toMatch(/^Nothing was sent: /);
+    expect(await rowsOf(t.connectionId)).toEqual([expect.objectContaining({ state: 'released', callsId: null })]);
+  });
+
+  it('given the bundler refuses the signed userOp in simulation, then nothing was sent and its key replays that, not a hash that may land', async () => {
+    const { c, t, permissionId } = await withCustomGrant(1_000_000n, NOW() + 86_400, ANY_TARGET);
+    bridge.fail = bundlerSaid(-32521, 'execution reverted');
+
+    const first = await execute(c.access_token, permissionId, [transfer(BOB, 1n)], 'pay-bob');
+    bridge.fail = undefined;
+    const retry = await execute(c.access_token, permissionId, [transfer(BOB, 1n)], 'pay-bob');
+
+    expect(first.content[0].text).toMatch(/^Nothing was sent: /);
+    expect(await rowsOf(t.connectionId)).toEqual([expect.objectContaining({ state: 'released', callsId: null })]);
+    expect(retry.content[0].text).toMatch(/^This key's run sent nothing/);
+    expect(bridge.attempts).toBe(1);
+  });
+
+  it('given the bundler answers with another hash than the one signed, then it is logged and the rows keep the bundler hash', async () => {
+    const { c, t, permissionId } = await withCustomGrant();
+    bridge.answeredHash = `0x${'a'.repeat(64)}`;
+    bridge.outcome = 'pending';
+    vi.useFakeTimers({ toFake: ['Date'] });
+    const logged = vi.spyOn(console, 'log');
+
+    await execute(c.access_token, permissionId, [transfer(BOB, 1n)]);
+
+    expect(logged.mock.calls.flat().join('\n')).toContain('bundler returned another userOp hash');
+    expect(await rowsOf(t.connectionId)).toEqual([expect.objectContaining({ callsId: `0x${'a'.repeat(64)}` })]);
+  });
+
+  it('given the signed userOp hash cannot be recorded, then it is never sent and the rows are released', async () => {
+    const { c, t, permissionId } = await withCustomGrant();
+    writes.failHash = true;
+
+    const result = await execute(c.access_token, permissionId, [transfer(BOB, 1n)]);
+
+    expect(result.content[0].text).toMatch(/^Nothing was sent: /);
+    expect(bridge.sent).toEqual([]);
+    expect(await rowsOf(t.connectionId)).toEqual([expect.objectContaining({ state: 'released', callsId: null })]);
   });
 });
 
@@ -691,5 +831,59 @@ describe.skipIf(!TEST_PG_URL)('jaw_session_execute across replicas', () => {
     expect(a).toMatchObject({ structuredContent: { status: 'landed' } });
     expect(b.content[0].text).toMatch(/^over-limit: .* has 400000 left this period/);
     expect(bridge.sent).toHaveLength(1);
+  });
+
+  it('given its rows were settled while the userOp was being signed, then the hash has nowhere to go and nothing is sent', async () => {
+    const { c, t, permissionId } = await withCustomGrant();
+    bridge.beforeSigned = async () => {
+      await getDb()
+        .update(sends)
+        .set({ state: 'released', finishedAt: new Date() })
+        .where(eq(sends.connectionId, t.connectionId));
+    };
+
+    const result = await execute(c.access_token, permissionId, [transfer(BOB, 1n)]);
+
+    expect(result.content[0].text).toMatch(/^Nothing was sent: /);
+    expect(bridge.sent).toEqual([]);
+  });
+
+  it('given the hash write waits past its lock timeout, then nothing is sent and the reply says the turn was lost', async () => {
+    const { c, t, permissionId } = await withCustomGrant();
+    const release = deferred();
+    const locked = deferred();
+    let holding: Promise<unknown> | undefined;
+    bridge.beforeSigned = async () => {
+      holding = getDb().transaction(async (tx) => {
+        await tx.select().from(connections).where(eq(connections.id, t.connectionId)).for('update');
+        locked.resolve();
+        await release.promise;
+      });
+      await locked.promise;
+      // Held just past the hash write's lock wait, so nothing after it waits on this row.
+      setTimeout(release.resolve, LOCK_WAIT_MS + 1_000);
+    };
+
+    const result = await execute(c.access_token, permissionId, [transfer(BOB, 1n)]);
+    await holding;
+
+    expect(result.content[0].text).toMatch(/lost its turn on the float/);
+    expect(bridge.sent).toEqual([]);
+  }, 120_000);
+
+  it('given another holder took the float while the userOp was being signed, then its hash is not recorded and nothing is sent', async () => {
+    const { c, t, permissionId } = await withCustomGrant();
+    bridge.beforeSigned = async () => {
+      await getDb()
+        .update(connections)
+        .set({ floatFence: sql`${connections.floatFence} + 1` })
+        .where(eq(connections.id, t.connectionId));
+    };
+
+    const result = await execute(c.access_token, permissionId, [transfer(BOB, 1n)]);
+
+    expect(result.content[0].text).toMatch(/lost its turn on the float/);
+    expect(bridge.sent).toEqual([]);
+    expect(await rowsOf(t.connectionId)).toEqual([expect.objectContaining({ state: 'released', callsId: null })]);
   });
 });

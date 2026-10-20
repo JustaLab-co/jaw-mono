@@ -20,17 +20,31 @@ const answer = z.union([
   }),
 ]);
 
-/** Null while the bundler has no receipt; throws when the RPC cannot be read. */
-export const readReceipt: ReadReceipt = async (chainId, callsId) => {
+async function askBundler(chainId: number, method: string, callsId: string): Promise<unknown> {
   const res = await fetch(rpcUrl(chainId), {
     method: 'POST',
     headers: { 'content-type': 'application/json' },
-    body: JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'eth_getUserOperationReceipt', params: [callsId] }),
+    body: JSON.stringify({ jsonrpc: '2.0', id: 1, method, params: [callsId] }),
     signal: AbortSignal.timeout(RPC_TIMEOUT_MS),
   });
   if (!res.ok) throw new Error(`bundler answered ${res.status}`);
-  const { result } = answer.parse(await res.json());
+  return res.json();
+}
+
+/** Null while the bundler has no receipt; throws when the RPC cannot be read. */
+export const readReceipt: ReadReceipt = async (chainId, callsId) => {
+  const { result } = answer.parse(await askBundler(chainId, 'eth_getUserOperationReceipt', callsId));
   return result && { success: result.success, txHash: result.receipt.transactionHash };
+};
+
+/** Whether the bundler still knows the operation; throws when the RPC cannot be read. */
+export type ReadKnown = (chainId: number, callsId: string) => Promise<boolean>;
+
+export const readKnown: ReadKnown = async (chainId, callsId) => {
+  const { result } = z
+    .object({ result: z.unknown() })
+    .parse(await askBundler(chainId, 'eth_getUserOperationByHash', callsId));
+  return result != null;
 };
 
 // The bundler answers for a recent user operation only; past that, the chain is the record.

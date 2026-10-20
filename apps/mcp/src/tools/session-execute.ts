@@ -96,12 +96,10 @@ function described(r: Refusal, permissionId: string): string {
 
 const NOTHING_SENT = ' Nothing was sent.';
 const UNREADABLE = 'Nothing was sent: the grant could not be read from the chain right now. Try again in a moment.';
-const maybeSent = (key: string) =>
-  `This execute failed and may have been sent anyway. Send idempotencyKey ${key} again with the same calls: it returns this answer and never sends twice. ` +
+const maybeSent = (key: string, userOpHash: Hex) =>
+  `This execute failed and may have been sent anyway as userOp ${userOpHash}. Send idempotencyKey ${key} again with the same calls to follow it: it never sends twice. ` +
   'Check jaw_session_history before sending it under a new key, or it may land twice.';
-const NO_HASH =
-  'This key ran with no userOp hash on record, and its spend is no longer held. It may still have been sent: ' +
-  "check the account's balances and jaw_session_history before sending it under a new idempotencyKey.";
+const NOTHING_WENT_OUT = "This key's run sent nothing. Send it again under a new idempotencyKey.";
 const notSeen = (userOpHash: string) =>
   `userOp ${userOpHash} was not seen on chain in time, so its spend is no longer held; it may still land. ` +
   "Check the account's balances before sending it under a new idempotencyKey.";
@@ -130,7 +128,7 @@ const unconfirmed = (idempotencyKey: string, userOpHash: string): Outcome => ({
   idempotencyKey,
   userOpHash,
   txHash: null,
-  summary: `Submitted as userOp ${userOpHash} and not confirmed yet. jaw_session_history shows when it lands; the same idempotencyKey returns this run and never sends twice.`,
+  summary: `userOp ${userOpHash} is signed and not confirmed on chain yet. jaw_session_history shows when it lands; the same idempotencyKey returns this run and never sends twice.`,
 });
 
 const answered = (out: Outcome) => ({ ...reply(out), isError: out.status === 'reverted' });
@@ -163,8 +161,8 @@ function replayed(rows: SendRow[], key: string, hash: string): ToolResult | Retu
   const done = rows.find((r) => r.state === 'landed');
   if (done) return answered(landed(key, done.callsId as string, done.txHash as string));
   const { state, callsId, txHash } = rows.find((r) => r.state === 'open') ?? rows[0];
-  if (state === 'open') return callsId ? answered(unconfirmed(key, callsId)) : refusal(maybeSent(key));
-  if (!callsId) return refusal(NO_HASH);
+  if (!callsId) return refusal(NOTHING_WENT_OUT);
+  if (state === 'open') return answered(unconfirmed(key, callsId));
   return txHash ? answered(reverted(key, callsId, txHash)) : refusal(notSeen(callsId));
 }
 
@@ -178,12 +176,16 @@ function concluded(ids: string[], out: Outcome) {
   return handToReconciler(ids, undefined, callsId);
 }
 
-type Submitted = { sent: Hex } | { unsent: unknown } | { maybe: unknown };
+type Submitted = { sent: Hex } | { unsent: unknown } | { maybe: unknown; userOpHash: Hex };
 
-function noteSubmitted(tx: Tx, ids: string[], submitted: Submitted) {
-  if ('sent' in submitted) return noteCallsId(tx, ids, submitted.sent);
+async function noteSubmitted(tx: Tx, ids: string[], submitted: Submitted): Promise<void> {
+  if ('sent' in submitted) {
+    await noteCallsId(tx, ids, submitted.sent);
+    return;
+  }
   if ('maybe' in submitted) return handToReconciler(ids, tx);
-  return settleSends(ids, { state: 'released' }, tx);
+  // A hash on a released row reads as "may still land" on replay.
+  return settleSends(ids, { state: 'released', callsId: null }, tx);
 }
 
 interface Run {
@@ -254,13 +256,24 @@ async function submitUnder(t: Tenant, run: Run): Promise<ToolResult | Reserved> 
       return Promise.all(spent.map(([token, amount]) => recordSend(tx, { ...send, token: token as Address, amount })));
     });
     let submitted: Submitted;
+    const recorded: { userOpHash?: Hex } = {};
     try {
       hold.assertHeld();
       const wire = run.calls.map((c) => ({ to: c.to, value: numberToHex(c.value), data: c.data }));
-      const sent = (await bridge.request('wallet_sendCalls', [{ calls: wire }])) as { id: Hex };
+      const sent = (await bridge.request('wallet_sendCalls', [{ calls: wire }], async (userOpHash) => {
+        await hold.tx(async (tx) => {
+          if (!(await hold.owns(tx))) throw new FloatLost();
+          if ((await noteCallsId(tx, ids, userOpHash)) !== ids.length) throw new Error('the run rows were settled');
+        });
+        recorded.userOpHash = userOpHash;
+      })) as { id: Hex };
+      if (sent.id !== recorded.userOpHash) {
+        log('error', { msg: `bundler returned another userOp hash than ${recorded.userOpHash}`, callsId: sent.id });
+      }
       submitted = { sent: sent.id };
     } catch (err) {
-      submitted = mayHaveBeenSent(err) ? { maybe: err } : { unsent: err };
+      submitted =
+        recorded.userOpHash && mayHaveBeenSent(err) ? { maybe: err, userOpHash: recorded.userOpHash } : { unsent: err };
     }
     await hold.tx((tx) => noteSubmitted(tx, ids, submitted)).catch(logFailure('execute submit write failed'));
     return { ids, submitted, bridge, trustsReverts: namesEveryTarget(grant, run.calls) };
@@ -270,7 +283,8 @@ async function submitUnder(t: Tenant, run: Run): Promise<ToolResult | Reserved> 
 function unsentReply(err: unknown, permissionId: string, trustsReverts: boolean): ToolResult {
   const refused = trustsReverts ? refusalOfFailure(err) : undefined;
   if (refused) return refusal(described(refused, permissionId) + NOTHING_SENT);
-  if (err instanceof FloatLost) return refusal('Nothing was sent: this execute lost its turn on the float. Try again.');
+  if (err instanceof FloatLost || err instanceof FloatBusy)
+    return refusal('Nothing was sent: this execute lost its turn on the float. Try again.');
   log('warn', { msg: 'execute not submitted', error: errorLabel(err) });
   return refusal(
     `Nothing was sent: the batch failed in simulation or before it reached the bundler (${errorLabel(err)}). ` +
@@ -285,7 +299,7 @@ async function executeUnder(t: Tenant, run: Run) {
   if ('unsent' in submitted) return unsentReply(submitted.unsent, run.permissionId, trustsReverts);
   if ('maybe' in submitted) {
     log('warn', { msg: 'execute may have been submitted', error: errorLabel(submitted.maybe) });
-    return refusal(maybeSent(run.key));
+    return refusal(maybeSent(run.key, submitted.userOpHash));
   }
   const { out, refused } = await receiptOf(bridge, run.key, submitted.sent);
   await concluded(ids, out).catch(logFailure('execute conclusion write failed'));

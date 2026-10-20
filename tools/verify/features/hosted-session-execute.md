@@ -15,6 +15,7 @@
 - `reconciler`: a run whose receipt did not come back within 60 seconds stays `open` and is handed to the reconciler. `/api/cron/reconcile` settles it `landed` from the EntryPoint `UserOperationEvent`.
 - `idempotent`: the same `idempotencyKey` and calls again returns the first run's `userOpHash` and sends no second userOp; the same key with other calls returns `idempotency_conflict:`.
 - `pay-unaffected`: an x402 payment after an execute still pays from the x402 budget, and the custom grant's counter does not move.
+- `lost-answer`: the bundler takes the userOp and its answer never comes back. The reply says it may have been sent and names the userOp hash, the `sends` row stays `open` with that hash in `calls_id` before the send, and the reconciler settles it `landed` from that hash alone, never from another operation of the sender. The same key then replays the landed run.
 - `revert-mapped`: a permission manager revert after `fit` passed (`UnauthorizedCall`, `ExceededSpendLimit`, `AfterPermissionEnd`) comes back under the same names. Unit tests cover it (`session-execute.test.ts`), since a live drive cannot make the chain disagree with `fit`.
 
 ## How to get to it (user POV)
@@ -40,4 +41,5 @@ Set up (Owner lane): `grant '{"calls":[{"target":"0x036CbD53842c5426634e7929541e
 - history: `history` after execute-happy. Pass: `executes` holds the run with its `userOpHash` and `txHash`.
 - reconciler: with the stack's bundler slowed or a receipt past 60 seconds, the run answers `unconfirmed`, then `curl -H "Authorization: Bearer $JAW_MCP_CRON_SECRET" "$MCP_PUBLIC_URL/api/cron/reconcile"`. Pass: the report's `sends.landed` counts it and its row reads `landed` with the transaction hash.
 - idempotent: run execute-happy's call twice as `execute <id> '<calls>' '' r2`, then once more with another amount under the same key. Pass: both first answers carry the same `userOpHash`, the balance drops once, and the third is `idempotency_conflict:`.
+- lost-answer: start the stack with `JAW_VERIFY_LOSE_SEND=1` added to the `hosted-up.sh` line, set up the grant, then `docker compose -p "$COMPOSE_PROJECT" -f $S/compose.yaml exec -T mcp touch /tmp/lose-send` and execute a transfer under key `lost-1`. Pass: the reply says it may have been sent as userOp `<hash>`; `docker compose ... logs mcp | grep lose-send` shows the bundler answered that same hash; `sends` shows `lost-1` `open` with `calls_id` = `<hash>`; within one reconcile tick the row reads `landed` with a `tx_hash` whose `UserOperationEvent` carries `<hash>`; `execute` again under `lost-1` answers `landed` with no second send.
 - pay-unaffected: `pay <seller url>` after execute-happy. Pass: the payment settles, and `getCurrentPeriod` for the custom grant reads the same spend as before it.
