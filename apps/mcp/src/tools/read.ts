@@ -24,7 +24,7 @@ import { config } from '@/connections/config';
 import { findActive } from '@/connections/rows';
 import { getDb } from '@/db/client';
 import { liveGrants, x402Budget, type Grant, type LiveGrant } from '@/grants/store';
-import { dayLeft, daySpendOf, isoOf } from '@/payments/day-spend';
+import { dayLeft, daySpendOf, isoOf, pullRoom } from '@/payments/day-spend';
 import { stillHeld } from '@/payments/refill';
 import { chainView, heldSpends, LOGGED_READ_MS, readAt, recordedSends, type OpenSpend } from '@/payments/sends';
 import { entriesFor, holdingRows, pulledUnderOtherGrants } from '@/payments/store';
@@ -108,9 +108,8 @@ async function budgetOf(grant: Grant, t: Tenant, balance: bigint | null) {
   let payable = null;
   let room: Room | undefined;
   if (day) {
-    const pulled = day.refilled + day.sentFromAccount;
     const held = balance === null ? null : floorZero(balance - holds);
-    room = { left: dayLeft(allowance, day), held, cap: floorZero(floorZero(allowance - pulled) - earlier) };
+    room = { left: dayLeft(allowance, day), held, cap: pullRoom(allowance, day, earlier) };
     spent = figure(day.paid + day.sentFromAccount);
     payable = figure(least(room.left, (held ?? 0n) + floorZero(room.cap - refillFee(grant))));
   }
