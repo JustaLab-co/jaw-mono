@@ -11,6 +11,7 @@
 - `revoke-declined`: the owner rejects in the wallet. The grant stays live and the request row reads `owner_declined`.
 - `revoke-one-open`: asking again from the same connection for a permission whose revoke waits returns the same link. Another connection, or a second permission from the same connection, is refused as `revoke_in_progress` with no link.
 - `revoke-unconfirmed`: the wallet answered but the chain did not show the revoke within about 15 seconds. The request reads `approved` with code `unconfirmed`, and asking again marks the grant revoked once the chain shows it.
+- `link-sweep`: a waiting grant, revoke or sign link that no server has renewed for over 90 seconds is ended by the reconciler (`expired`, with `link_lost` when the owner was already asked, `session_lost` when not, no code past its window; an asked revoke stays until its window ends, since other connections wait on it), counted under `links.expired` in the cron's report. A link whose server still renews it is left alone, even past its window.
 - `link-cap`: grant and revoke links count toward the account's three open owner links with `jaw_send_calls` and `jaw_swap`. A fourth link of any kind is refused as `account_busy`.
 - `revoke-old-name`: `jaw_revoke_connection` is an unknown tool.
 
@@ -29,5 +30,6 @@ Preconditions: baseline preconditions of this map; Docker running; `JAW_KEYS_URL
 - revoke-refusals: `revoke 0x<64 random hex>`, then `revoke <a budget id> 8453`. Pass: `unknown_permission:` and `wrong_chain:`, no `url`.
 - revoke-declined: `revoke <id>`, reject in the wallet. Pass: the grant is still listed `live`; the request row reads `owner_declined`.
 - link-cap: open three links without approving them (`budget 1` on three connections, or revokes of three ids), then ask a fourth. Pass: `account_busy:`, no `url`.
+- link-sweep: open a link, stop the mcp container, start it again, wait 90 seconds plus one reconcile loop. Pass: its row reads `expired` with the matching code.
 - revoke-old-name: `call jaw_revoke_connection '{"id":"x"}'`. Pass: an unknown-tool error.
 - After revoke-own, `disconnect`. Pass: it ends with no revoke error for the grant already revoked.
