@@ -36,3 +36,16 @@ $S/down.sh "$RUN"
 ```
 
 The first link, opened while the server is up, shows the app name and "This tab is the signing backend". The second link is taken from the connect page, then the server restarts, then the link opens: after 20 seconds it reads "This link is no longer active. Ask the agent for a new one."
+
+## Hosted rejoin
+
+`apps/mcp/src/connections/relay.ts` rejoins a session after the hosted server restarts (`resumeWallet`). `tools/verify/rejoin-drive/drive.mts` runs that code against the real relay and the real cli-bridge page, with no passkey: `eth_chainId` is answered by the page without a dialog.
+
+Preconditions: Playwright's Chromium installed, `bun install` done, and a keys origin whose page speaks to the relay you name (`https://keys.jaw.id` with `wss://relay.jaw.id`).
+
+```bash
+JAW_LIVE_RELAY_URL=wss://relay.jaw.id JAW_LIVE_KEYS_URL=https://keys.jaw.id \
+  bunx tsx --tsconfig apps/mcp/tsconfig.json tools/verify/rejoin-drive/drive.mts
+```
+
+It opens an `ownerRelay` session and opens the link in Chromium. After `joined` it asks `eth_chainId` and closes the server side without the `shutdown`, as a restart does. It then calls `resumeWallet` with the saved resume and runs work that asks the same `eth_chainId`. The output shows the answer, and the two `rpc_request` ids, both `<session>:0`. The drive then opens two `role=cli` sockets on one session and prints the close code of the first, which the real relay sets to `4003`. It exits non-zero on any mismatch. If the page answers before the server closes, it prints that the race was lost; run it again.
