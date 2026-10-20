@@ -9,7 +9,8 @@ import { connect, owner, setTestEnv, walletsSettled } from '@/connections/testki
 import { getDb } from '@/db/client';
 import { connections, ownerCalls } from '@/db/schema';
 import { TEST_PG_URL, useTestDb, useTestPostgres, withoutOwnerCallsGuard } from '@/db/test-db';
-import { resumeOwnerCalls, sendCalls, sendCallsStatus, type OwnerCallDeps } from '@/tools/owner-calls';
+import { sendCalls, sendCallsStatus, type OwnerCallDeps } from '@/tools/owner-calls';
+import { resumeOwnerCalls } from './resume';
 import { fakeChain } from './chain-testkit';
 import { SEND_STARTED } from './store';
 

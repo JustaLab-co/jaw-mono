@@ -8,7 +8,8 @@ import { connect, owner, setTestEnv, walletsSettled } from '@/connections/testki
 import { getDb } from '@/db/client';
 import { swaps } from '@/db/schema';
 import { TEST_PG_URL, useTestDb, useTestPostgres } from '@/db/test-db';
-import { resumeSwaps, swap, swapStatus, type SwapToolInput } from '@/tools/swap';
+import { swap, swapStatus, type SwapToolInput } from '@/tools/swap';
+import { resumeSwaps } from './resume';
 import { swapRequest } from './quote';
 import { claimSwap, SEND_STARTED, writeHeld } from './store';
 

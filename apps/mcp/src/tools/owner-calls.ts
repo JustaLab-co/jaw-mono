@@ -14,16 +14,14 @@ import { tenant, type Tenant } from '@/connections/auth';
 import { chainClients } from '@/adapters/session-host';
 import { APPROVE_WITHIN_MS } from '@/connections/config';
 import { ownerRelay, WalletBusy, type OpenWallet, type Wallet } from '@/connections/relay';
-import { resumeEach, resumeRow, RESUMES_PER_TICK, type Rejoin } from '@/connections/resume';
 import { findActive } from '@/connections/rows';
 import { leaseHeld } from '@/connections/session-lease';
 import { countHit, isPaymentsPaused } from '@/db/settings';
 import { isProxyChain } from '@/lib/chain';
 import { errorLabel, log, RATE_WINDOW_MS } from '@/lib/edge';
 import { reply } from '@/lib/fence';
-import { approve } from '@/owner-calls/approve';
-import { followOwner } from '@/owner-calls/follow';
 import { readReceipt, receiptOf, type ReadReceipt, type Receipt } from '@/owner-calls/receipt';
+import { followCalls, resumeCall } from '@/owner-calls/resume';
 import { countOpenLinks, FULL, MAX_OPEN_PER_ACCOUNT, withLinkSlot } from '@/owner-calls/cap';
 import {
   conclude,
@@ -32,7 +30,6 @@ import {
   findByKey,
   findOpen,
   insertOwnerCall,
-  leasedCalls,
   reopenLink,
   SEND_STARTED,
   type OwnerCallRow,
@@ -221,9 +218,6 @@ function answer(row: OwnerCallRow, note = ''): SendResult {
   return { ...reply(out), isError: row.state === 'reverted' };
 }
 
-const follow = (row: OwnerCallRow, wallet: Wallet, clients: ChainClients) =>
-  followOwner(leasedCalls, row, wallet, (ask) => approve(ask, row, clients), 'ownerCallId');
-
 async function refusedBeforeLink(t: Tenant): Promise<SendResult | undefined> {
   if (await isPaymentsPaused()) {
     return refuse(
@@ -261,7 +255,7 @@ async function reopen(t: Tenant, row: OwnerCallRow, deps: OwnerCallDeps): Promis
     if (!reopened || reopened === FULL) wallet.close();
   }
   if (reopened === FULL) return accountBusy();
-  if (reopened) follow(reopened, wallet, deps.clients);
+  if (reopened) followCalls(reopened, wallet, deps.clients);
   return answer(reopened ?? (await findById(t.connectionId, row.id)) ?? row);
 }
 
@@ -269,7 +263,7 @@ async function replay(t: Tenant, row: OwnerCallRow, hash: string, deps: OwnerCal
   if (row.requestHash !== hash) {
     return refuse('idempotency_conflict', 'This idempotency key was used for another request. Nothing was sent.');
   }
-  if (row.relay) void resumeRow(row, rejoin(deps.clients));
+  if (row.relay) void resumeCall(row, deps.clients);
   const linkDead = row.state === 'awaiting_owner' && row.code !== SEND_STARTED && !leaseHeld(row.sessionUntil);
   if (!linkDead || row.relay) return answer(row);
   const refused = await refusedBeforeLink(t);
@@ -277,17 +271,6 @@ async function replay(t: Tenant, row: OwnerCallRow, hash: string, deps: OwnerCal
   if (!(await findActive(t.connectionId))) return connectionEnded();
   return reopen(t, row, deps);
 }
-
-const rejoin = (clients: ChainClients): Rejoin<OwnerCallRow> => ({
-  idField: 'ownerCallId',
-  take: leasedCalls.take,
-  release: leasedCalls.release,
-  lost: leasedCalls.end,
-  start: (row) => (wallet) => follow(row, wallet, clients),
-});
-
-export const resumeOwnerCalls = (clients: ChainClients = chainClients) =>
-  resumeEach(() => leasedCalls.toResume(RESUMES_PER_TICK), rejoin(clients));
 
 const ENTRY_POINTS = [entryPoint06Address, entryPoint07Address, entryPoint08Address, entryPoint09Address];
 
@@ -351,7 +334,7 @@ export async function sendCalls(t: Tenant, input: SendCallsInput, deps: OwnerCal
   }
   if (row === FULL) return accountBusy();
   if (row) {
-    follow(row, wallet, deps.clients);
+    followCalls(row, wallet, deps.clients);
     return answer(row);
   }
   const raced = await findByKey(t.connectionId, key);
@@ -371,7 +354,7 @@ export async function sendCallsStatus(
   await expirePast(t.connectionId);
   const row = await findById(t.connectionId, id);
   if (!row) return refuse('not_found', 'No request on this connection has that id.');
-  if (row.relay) void resumeRow(row, rejoin(deps.clients));
+  if (row.relay) void resumeCall(row, deps.clients);
   if (row.state !== 'sent' || !row.callsId) return answer(row);
   let mined: Receipt | null;
   try {

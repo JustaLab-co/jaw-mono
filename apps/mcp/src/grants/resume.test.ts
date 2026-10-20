@@ -12,9 +12,10 @@ import { approvedOnChain, connect, owner, setTestEnv, walletAnswers, walletsSett
 import { getDb } from '@/db/client';
 import { connections, grants, permissionRequests } from '@/db/schema';
 import { TEST_PG_URL, useTestDb, useTestPostgres } from '@/db/test-db';
-import { grantPermissions, grantWork } from '@/tools/grant-permissions';
+import { grantPermissions } from '@/tools/grant-permissions';
 import { revokePermission, type RevokeDeps } from '@/tools/revoke-permission';
-import { resumeSign, sign } from '@/tools/sign';
+import { sign } from '@/tools/sign';
+import { grantWork, signWork } from './resume';
 import { checkGranted, recordGrant, type GrantRequest, type ReadPermission } from './permission';
 import { closeLapsedLinks, resumeOpen } from './requests';
 import { LIVE_GRANTS_PER_CONNECTION, x402Budget } from './store';
@@ -59,7 +60,7 @@ const settled = (id: string) =>
     { timeout: 10_000 }
   );
 const pause = (ms = 300) => new Promise((r) => setTimeout(r, ms));
-const resumeSigns = async () => Promise.all(await resumeOpen({ sign: resumeSign }));
+const resumeSigns = async () => Promise.all(await resumeOpen({ sign: signWork }));
 
 async function askedThenRestarted(message = 'sign in', opts: { replays?: boolean; stallAt?: number } = {}) {
   const { signer, t } = await connected();

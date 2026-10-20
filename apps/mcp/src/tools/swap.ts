@@ -4,7 +4,6 @@ import { zeroAddress, type Address } from 'viem';
 import { z } from 'zod';
 import { tenant, type Tenant } from '@/connections/auth';
 import { config } from '@/connections/config';
-import { resumeEach, resumeRow, RESUMES_PER_TICK, type Rejoin } from '@/connections/resume';
 import { findActive } from '@/connections/rows';
 import { leaseHeld, sessionLeaseEnd } from '@/connections/session-lease';
 import { ownerRelay, WalletBusy, type OpenWallet, type Wallet } from '@/connections/relay';
@@ -16,8 +15,6 @@ import type { PayDeps } from '@/payments/pay';
 import { gateCode, RAISE } from '@/payments/render';
 import { findPayment, stateOf } from '@/payments/store';
 import { randomToken } from '@/lib/token';
-import { followOwner } from '@/owner-calls/follow';
-import { approve } from '@/swap/approve';
 import type { BackendAnswer, BackendDeps } from '@/swap/backend';
 import { isSupportedOriginChain, type CheckedQuote } from '@/swap/check';
 import { countOpenLinks, FULL, MAX_OPEN_PER_ACCOUNT, withLinkSlot } from '@/owner-calls/cap';
@@ -33,13 +30,13 @@ import {
   nextStepPays,
   releaseQuoted,
   renewQuoted,
-  leasedSwaps,
   reopenLink,
   SEND_STARTED,
   type SwapLease,
   type SwapRow,
   type SwapState,
 } from '@/swap/store';
+import { followSwap, resumeSwap } from '@/swap/resume';
 import { track } from '@/swap/track';
 import { NO_PAY_SCOPE } from './reply';
 
@@ -400,7 +397,7 @@ async function openLink(t: Tenant, lease: SwapLease, key: string, deps: SwapDeps
     return accountBusy(key);
   }
   if (!waiting) return takenOver(key);
-  follow(t, waiting, wallet, deps);
+  followSwap(t.account, waiting, wallet, deps);
   return answer(waiting);
 }
 
@@ -421,28 +418,12 @@ async function reopen(t: Tenant, row: SwapRow, key: string, deps: SwapDeps): Pro
   }
   if (waiting === FULL) return accountBusy(key);
   if (!waiting) return answer((await findById(t.connectionId, row.id)) ?? row);
-  follow(t, waiting, wallet, deps);
+  followSwap(t.account, waiting, wallet, deps);
   return answer(waiting);
 }
 
-type RunDeps = Pick<SwapDeps, 'pollMs' | 'backend'>;
-
-const follow = (t: Tenant, row: SwapRow, wallet: Wallet, deps: RunDeps) =>
-  followOwner(leasedSwaps, row, wallet, (ask) => approve(ask, row, t.account, deps.pollMs, deps.backend), 'swapId');
-
-const rejoin = (deps: RunDeps): Rejoin<SwapRow> => ({
-  idField: 'swapId',
-  take: leasedSwaps.take,
-  release: leasedSwaps.release,
-  lost: leasedSwaps.end,
-  start: (row, t) => (wallet) => follow(t, row, wallet, deps),
-});
-
-export const resumeSwaps = (deps: RunDeps = {}) =>
-  resumeEach(() => leasedSwaps.toResume(RESUMES_PER_TICK), rejoin(deps));
-
 async function replay(t: Tenant, row: SwapRow, key: string, deps: SwapDeps): Promise<SwapResult> {
-  if (row.relay) void resumeRow(row, rejoin(deps));
+  if (row.relay) void resumeSwap(row, deps);
   const linkDead = row.state === 'awaiting_owner' && row.code !== SEND_STARTED && !leaseHeld(row.sessionUntil);
   if (!linkDead || row.relay) return answer(row);
   if (!(await findActive(t.connectionId))) return connectionEnded();
@@ -493,7 +474,7 @@ export async function swapStatus(
   const row = await findByQuoteId(t.connectionId, quoteId);
   if (!row) return refuse('not_found', 'No swap on this connection has that quoteId.');
   if (!FOLLOWED.includes(row.state)) return answer(row);
-  if (row.relay) void resumeRow(row, rejoin(deps));
+  if (row.relay) void resumeSwap(row, deps);
   const read = await track(row, deps.backend);
   return answer((await findByQuoteId(t.connectionId, quoteId)) ?? row, read);
 }

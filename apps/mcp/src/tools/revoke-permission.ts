@@ -1,25 +1,17 @@
 import { getPermissionFromRelay } from '@jaw.id/core';
-import { parseGrantedPermission, type GrantedPermission, type PermissionState } from '@jaw.id/agent';
+import { parseGrantedPermission, type GrantedPermission } from '@jaw.id/agent';
 import type { McpServer } from '@modelcontextprotocol/server';
-import { and, eq, isNull, sql } from 'drizzle-orm';
+import { and, sql } from 'drizzle-orm';
 import { isAddressEqual, type Address, type Hex } from 'viem';
 import { z } from 'zod';
 import { tenant, type Tenant } from '@/connections/auth';
 import { APPROVE_WITHIN_MS, config, SUPPORTED_CHAINS } from '@/connections/config';
-import { ownerRelay, type Ask, type OpenWallet } from '@/connections/relay';
+import { ownerRelay, type OpenWallet } from '@/connections/relay';
 import { getDb } from '@/db/client';
-import { grants, permissionRequests } from '@/db/schema';
-import { readOnChain, type ReadPermission } from '@/grants/permission';
-import {
-  lostBefore,
-  lostPreamble,
-  openLink,
-  resumeRequest,
-  type Claim,
-  type Outcome,
-  type PermissionRequestRow,
-  type Rebuild,
-} from '@/grants/requests';
+import { grants } from '@/db/schema';
+import type { ReadPermission } from '@/grants/permission';
+import { lostBefore, lostPreamble, openLink, resumeRequest, type PermissionRequestRow } from '@/grants/requests';
+import { markRevoked, readState, REVOKE_READS, revokeWork, sameId, type RevokeTarget } from '@/grants/resume';
 import { reply } from '@/lib/fence';
 import { ACCOUNT_BUSY, refusal } from './reply';
 
@@ -73,25 +65,11 @@ export interface RevokeDeps {
   rereadMs: number;
 }
 
-const DEFAULTS: RevokeDeps = {
-  openWallet: ownerRelay,
-  readPermission: readOnChain,
-  lookUp: fromStore,
-  rereadMs: 2_500,
-};
-const SETTLE_READS = 6;
-
-interface Target {
-  permissionId: Hex;
-  chainId: number;
-  permission: GrantedPermission;
-  connectionId: string | null;
-}
+const DEFAULTS: RevokeDeps = { openWallet: ownerRelay, lookUp: fromStore, ...REVOKE_READS };
+type Target = RevokeTarget;
 
 const unknown = (id: string) =>
   `unknown_permission: no permission ${id} was granted from this account. jaw_connections lists the ones this server holds.`;
-
-const sameId = (id: string) => sql`lower(${grants.permissionId}) = ${id.toLowerCase()}`;
 
 async function findPermission(t: Tenant, id: Hex, chainId: number, lookUp: LookUp): Promise<Target | string> {
   const [row] = await getDb()
@@ -112,54 +90,6 @@ async function findPermission(t: Tenant, id: Hex, chainId: number, lookUp: LookU
     return `wrong_chain: permission ${id} was granted on chain ${found.chainId}, not ${chainId}. Pass chainId ${found.chainId}.`;
   }
   return { permissionId: id, chainId, permission: found.permission, connectionId: row?.connectionId ?? null };
-}
-
-const markRevoked = (id: string) =>
-  getDb().transaction(async (tx) => {
-    await tx
-      .update(grants)
-      .set({ revokedAt: new Date() })
-      .where(and(sameId(id), isNull(grants.revokedAt)));
-    await tx
-      .update(permissionRequests)
-      .set({ code: null, updatedAt: sql`statement_timestamp()` })
-      .where(
-        and(
-          eq(permissionRequests.method, 'revoke'),
-          sql`lower(${permissionRequests.permissionId}) = ${id.toLowerCase()}`,
-          eq(permissionRequests.state, 'approved'),
-          eq(permissionRequests.code, 'unconfirmed')
-        )
-      );
-  });
-
-const readState = (target: Target, read: ReadPermission) =>
-  read(target).catch((): PermissionState => ({ status: 'unavailable' }));
-
-const revokeWork =
-  (deps: RevokeDeps): Rebuild =>
-  (t, target) =>
-  (ask, claim) =>
-    askRevoke(t, target as Target, ask, claim, deps);
-
-export const resumeRevoke = revokeWork(DEFAULTS);
-
-async function askRevoke(t: Tenant, target: Target, ask: Ask, claim: Claim, deps: RevokeDeps): Promise<Outcome> {
-  const [account] = (await ask('eth_requestAccounts', [])) as unknown[];
-  if (typeof account !== 'string' || !isAddressEqual(account as Address, t.account)) {
-    return { state: 'failed', code: 'wrong_account' };
-  }
-  if (!(await claim())) return { state: 'expired', code: 'session_lost' };
-  await ask('wallet_revokePermissions', [{ id: target.permissionId, address: t.account }]);
-  for (let read = 0; read < SETTLE_READS; read++) {
-    const state = await readState(target, deps.readPermission);
-    if (state.status === 'ok' && state.revoked) {
-      await markRevoked(target.permissionId);
-      return { state: 'approved' };
-    }
-    await new Promise((resolve) => setTimeout(resolve, deps.rereadMs));
-  }
-  return { state: 'approved', code: 'unconfirmed' };
 }
 
 async function answer(target: Target, row: PermissionRequestRow) {
