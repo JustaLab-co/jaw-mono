@@ -313,6 +313,7 @@ describe('what the wallet page can get wrong', () => {
 });
 
 describe('the pool of sessions', () => {
+  afterEach(() => vi.useRealTimers());
   // A pool is process-wide, so each test fills its own copy of the module.
   const fresh = () => {
     vi.resetModules();
@@ -358,13 +359,17 @@ describe('the pool of sessions', () => {
   });
 
   it('given sessions nobody runs, then their slots are free at their deadline', async () => {
+    // The clock stands still while the pool fills, so every session has the same deadline.
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'Date'] });
     const relay = await fresh();
     const until = new Date(Date.now() + 700);
     for (let i = 0; i < relay.SESSION_LIMITS.owner; i++) await relay.ownerRelay(84532, until);
+    await vi.advanceTimersByTimeAsync(699);
     await expect(relay.ownerRelay(84532, until)).rejects.toBeInstanceOf(relay.WalletBusy);
-    await sleep(300);
 
-    await opensAgain(relay);
+    await vi.advanceTimersByTimeAsync(1);
+
+    expect((await relay.ownerRelay(84532, new Date(Date.now() + 500))).url).toMatch(/cli-bridge/);
   });
 
   it('given sessions closed before their socket opened, then their slots are free', async () => {
@@ -402,6 +407,7 @@ describe('the pool of sessions', () => {
 });
 
 describe('the owner pool per account', () => {
+  afterEach(() => vi.useRealTimers());
   const fresh = () => {
     vi.resetModules();
     return import('./relay');
@@ -488,12 +494,16 @@ describe('the owner pool per account', () => {
   });
 
   it('given sessions nobody runs, then the slots are free at their deadline', async () => {
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'Date'] });
     const relay = await fresh();
-    await fill(relay, ACCOUNT, new Date(Date.now() + 600));
-    await busy(relay, ACCOUNT, new Date(Date.now() + 600));
-    await sleep(300);
+    const until = new Date(Date.now() + 600);
+    await fill(relay, ACCOUNT, until);
+    await vi.advanceTimersByTimeAsync(599);
+    await busy(relay, ACCOUNT, until);
 
-    await opensAgain(relay, ACCOUNT);
+    await vi.advanceTimersByTimeAsync(1);
+
+    expect((await relay.ownerRelay(84532, new Date(Date.now() + 500), as(ACCOUNT))).url).toMatch(/cli-bridge/);
   });
 
   it('given sessions closed before their socket opened, then the slots are free', async () => {
