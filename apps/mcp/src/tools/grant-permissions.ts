@@ -19,7 +19,15 @@ import {
   type GrantRequest,
   type ReadPermission,
 } from '@/grants/permission';
-import { lostBefore, lostPreamble, openLink, type Claim, type Outcome } from '@/grants/requests';
+import {
+  lostBefore,
+  lostPreamble,
+  openLink,
+  resumeOpen,
+  type Claim,
+  type Outcome,
+  type Rebuild,
+} from '@/grants/requests';
 import { liveGrants, LIVE_GRANTS_PER_CONNECTION, type GrantKind } from '@/grants/store';
 import { errorLabel, log } from '@/lib/edge';
 import { reply } from '@/lib/fence';
@@ -138,7 +146,23 @@ function asked(t: Tenant, input: GrantInput, expiry: number): Asked | string {
   return { kind: 'custom', grant, what: `${calls.length} call(s) and ${spent.length} spend limit(s)` };
 }
 
-async function askGrant(t: Tenant, ask: Asked, walletAsk: Ask, claim: Claim, read: ReadPermission): Promise<Outcome> {
+type GrantPayload = Pick<Asked, 'kind' | 'grant'>;
+
+export const grantWork =
+  (read: ReadPermission): Rebuild =>
+  (t, payload) =>
+  (walletAsk, claim) =>
+    askGrant(t, payload as GrantPayload, walletAsk, claim, read);
+
+export const resumeGrant = grantWork(readOnChain);
+
+async function askGrant(
+  t: Tenant,
+  ask: GrantPayload,
+  walletAsk: Ask,
+  claim: Claim,
+  read: ReadPermission
+): Promise<Outcome> {
   if (!(await claim())) return { state: 'expired', code: 'session_lost' };
   const answer = await walletAsk('wallet_grantPermissions', [ask.grant]);
   const answered = (answer as { permissionId?: unknown } | null)?.permissionId;
@@ -188,13 +212,15 @@ export async function grantPermissions(t: Tenant, input: GrantInput, deps = DEFA
         'Wait for one to expire, or call jaw_session_disconnect, which revokes them all, and connect again.'
     );
   }
+  const payload: GrantPayload = { kind: ask.kind, grant: ask.grant };
   const opened = await openLink(
     t,
     {
       method: 'grant',
       chainId: t.chainId,
       approveBy: until,
-      work: (walletAsk, claim) => askGrant(t, ask, walletAsk, claim, deps.readPermission),
+      payload,
+      work: grantWork(deps.readPermission)(t, payload),
     },
     deps.openWallet
   );
@@ -207,6 +233,7 @@ export async function grantPermissions(t: Tenant, input: GrantInput, deps = DEFA
       'Tell the owner not to approve that one: a grant approved there can go live on chain without this server recording it, and then only jaw_revoke_permission with its id from the wallet ends it. '
     : '';
   if ('waiting' in opened) {
+    void resumeOpen({ grant: resumeGrant });
     return refusal(
       `${warning}A grant request is still waiting for the owner at ${row.walletUrl}. Ask again once they approve or it expires at ${row.approveBy.toISOString()}.`
     );

@@ -4,7 +4,7 @@ import {
   type PermissionReadTarget,
   type PermissionState,
 } from '@jaw.id/agent';
-import { eq, sql } from 'drizzle-orm';
+import { and, eq, sql } from 'drizzle-orm';
 import { isAddressEqual, isHex, numberToHex, toFunctionSelector, type Address, type Hex } from 'viem';
 import type { Tx } from '@/db/client';
 import { connections, grants, SPEND_UNITS } from '@/db/schema';
@@ -125,6 +125,11 @@ export async function checkGranted(
 
 export async function recordGrant(tx: Tx, connectionId: string, grant: NewGrant) {
   await tx.select({ id: connections.id }).from(connections).where(eq(connections.id, connectionId)).for('update');
+  const [recorded] = await tx
+    .select({ id: grants.permissionId })
+    .from(grants)
+    .where(and(eq(grants.permissionId, grant.permissionId), eq(grants.connectionId, connectionId)));
+  if (recorded) return;
   if ((await liveGrants(connectionId, tx)).length >= LIVE_GRANTS_PER_CONNECTION) {
     throw new Error(`the connection already holds ${LIVE_GRANTS_PER_CONNECTION} live grants`);
   }

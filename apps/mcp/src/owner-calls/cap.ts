@@ -1,4 +1,4 @@
-import { and, count, eq, gt, ne, sql } from 'drizzle-orm';
+import { and, count, eq, gt, isNotNull, ne, or, sql } from 'drizzle-orm';
 import { getDb, type Tx } from '@/db/client';
 import { ownerCalls, permissionRequests, swaps } from '@/db/schema';
 
@@ -8,10 +8,12 @@ export const FULL = 'full';
 
 const dbNow = sql`statement_timestamp()`;
 
+export const awaitsResume = isNotNull(permissionRequests.relay);
+
 export const linkLive = and(
   eq(permissionRequests.state, 'awaiting_owner'),
   gt(permissionRequests.approveBy, dbNow),
-  gt(permissionRequests.sessionUntil, dbNow)
+  or(gt(permissionRequests.sessionUntil, dbNow), awaitsResume)
 );
 
 export async function countOpenLinks(account: string, except?: string, db: Tx = getDb()): Promise<number> {

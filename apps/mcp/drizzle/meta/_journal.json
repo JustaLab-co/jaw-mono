@@ -211,6 +211,13 @@
       "when": 1792455884665,
       "tag": "0029_send_open_keyed",
       "breakpoints": true
+    },
+    {
+      "idx": 30,
+      "version": "7",
+      "when": 1792494576427,
+      "tag": "0030_request_resume",
+      "breakpoints": true
     }
   ]
 }

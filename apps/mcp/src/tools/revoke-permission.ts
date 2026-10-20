@@ -14,9 +14,11 @@ import {
   lostBefore,
   lostPreamble,
   openLink,
+  resumeOpen,
   type Claim,
   type Outcome,
   type PermissionRequestRow,
+  type Rebuild,
 } from '@/grants/requests';
 import { reply } from '@/lib/fence';
 import { ACCOUNT_BUSY, refusal } from './reply';
@@ -134,6 +136,14 @@ const markRevoked = (id: string) =>
 const readState = (target: Target, read: ReadPermission) =>
   read(target).catch((): PermissionState => ({ status: 'unavailable' }));
 
+const revokeWork =
+  (deps: RevokeDeps): Rebuild =>
+  (t, target) =>
+  (ask, claim) =>
+    askRevoke(t, target as Target, ask, claim, deps);
+
+export const resumeRevoke = revokeWork(DEFAULTS);
+
 async function askRevoke(t: Tenant, target: Target, ask: Ask, claim: Claim, deps: RevokeDeps): Promise<Outcome> {
   const [account] = (await ask('eth_requestAccounts', [])) as unknown[];
   if (typeof account !== 'string' || !isAddressEqual(account as Address, t.account)) {
@@ -203,13 +213,15 @@ export async function revokePermission(t: Tenant, input: RevokeInput, deps = DEF
       chainId,
       approveBy: new Date(Date.now() + APPROVE_WITHIN_MS),
       permissionId: target.permissionId,
-      work: (ask, claim) => askRevoke(t, target, ask, claim, deps),
+      payload: target,
+      work: revokeWork(deps)(t, target),
     },
     deps.openWallet
   );
   if (opened === 'wallet_busy') return refusal('Too many owners are approving right now. Try again in a minute.');
   if (opened === 'account_busy') return refusal(ACCOUNT_BUSY);
   if ('opened' in opened) return answer(target, opened.opened);
+  void resumeOpen({ revoke: resumeRevoke });
   const held = opened.waiting;
   const until = held.approveBy.toISOString();
   if (held.connectionId !== t.connectionId) {
