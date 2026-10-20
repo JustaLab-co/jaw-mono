@@ -2,10 +2,10 @@ import { randomBytes } from 'node:crypto';
 import type { ChainClients } from '@jaw.id/agent';
 import { eq } from 'drizzle-orm';
 import type { Hex } from 'viem';
-import { beforeAll, beforeEach, describe, expect, it } from 'vitest';
+import { beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { verifyBearer, type Tenant } from '@/connections/auth';
-import type { Wallet } from '@/connections/relay';
-import { connect, owner, setTestEnv } from '@/connections/testkit';
+import type { Ask, Wallet } from '@/connections/relay';
+import { connect, fakeWallet, owner, setTestEnv, walletsSettled } from '@/connections/testkit';
 import { getDb } from '@/db/client';
 import { permissionRequests } from '@/db/schema';
 import { TEST_PG_URL, useTestDb, useTestPostgres } from '@/db/test-db';
@@ -23,12 +23,12 @@ const noReceipt = async () => null;
 
 const run = () => reconcile(noChain, new Date(), noReceipt);
 
+const signer = owner();
 let t: Tenant;
 let other: Tenant;
 const tenantOf = async (token: string) => (await verifyBearer(token))?.extra?.tenant as Tenant;
 beforeAll(async () => {
   await (TEST_PG_URL ? useTestPostgres() : useTestDb());
-  const signer = owner();
   t = await tenantOf((await connect(signer)).access_token);
   other = await tenantOf((await connect(signer)).access_token);
 });
@@ -161,5 +161,88 @@ describe('reconciler: owner link requests', () => {
 
     expect(result.structuredContent?.summary).toMatch(/^link_lost: .*cli-bridge\?pr_/);
     expect((await rowOf(lost)).state).toBe('expired');
+  });
+
+  const signRow = async () =>
+    (await getDb().select().from(permissionRequests).where(eq(permissionRequests.connectionId, t.connectionId)))[0];
+
+  /** A wallet whose `method` waits for `release`, answering or failing as told. */
+  function slowWallet(method: string, answer: (method: string) => unknown) {
+    let release = () => {};
+    const held = new Promise<void>((resolve) => (release = resolve));
+    const ask: Ask = async (m) => {
+      if (m === 'eth_requestAccounts' && method !== m) return [signer.address];
+      await held;
+      return answer(m);
+    };
+    return { openWallet: fakeWallet(ask), release };
+  }
+
+  it('given a link whose lease ended seconds ago, as in a database stall, when its connection asks again, then the same link stays and no new one opens', async () => {
+    const held = await row({
+      method: 'sign',
+      idempotencyKey: 'held',
+      requestHash: 'h',
+      signKind: 'message',
+      sessionUntil: secondsFromNow(-10),
+    });
+    let opened = 0;
+    const idle = async (): Promise<Wallet> => (
+      opened++, { url: 'http://keys.test/x', run: () => new Promise(() => {}), close: () => {} }
+    );
+
+    const result = await sign(t, { message: 'other', idempotencyKey: 'other' }, { openWallet: idle });
+
+    expect(result.content[0].text).toMatch(/^sign_in_progress: /);
+    expect(opened).toBe(0);
+    expect(await rowOf(held)).toMatchObject({ state: 'awaiting_owner' });
+  });
+
+  it('given the owner signs after the link was ended past its window, then the signature still settles the request', async () => {
+    const wallet = slowWallet('wallet_sign', () => '0xabcdef');
+    await sign(t, { message: 'late', idempotencyKey: 'late' }, wallet);
+    await vi.waitFor(async () => expect((await signRow()).code).toBe('asked'));
+    await getDb()
+      .update(permissionRequests)
+      .set({ state: 'expired', code: null })
+      .where(eq(permissionRequests.connectionId, t.connectionId));
+
+    wallet.release();
+    await walletsSettled();
+
+    expect(await signRow()).toMatchObject({ state: 'approved', signature: '0xabcdef' });
+  });
+
+  it('given the reconciler ended a link before its wallet session failed, then the failure does not replace session_lost', async () => {
+    const wallet = slowWallet('eth_requestAccounts', () => {
+      throw new Error('the wallet session ended');
+    });
+    await sign(t, { message: 'gone', idempotencyKey: 'gone' }, wallet);
+    await getDb()
+      .update(permissionRequests)
+      .set({ sessionUntil: secondsFromNow(-61) })
+      .where(eq(permissionRequests.connectionId, t.connectionId));
+    await run();
+
+    wallet.release();
+    await walletsSettled();
+
+    expect(await signRow()).toMatchObject({ state: 'expired', code: 'session_lost' });
+  });
+
+  it('given a session whose lease lapsed seconds ago in a stall, when the wallet answers, then it still asks the owner and the signature settles', async () => {
+    const wallet = slowWallet('eth_requestAccounts', (m) =>
+      m === 'eth_requestAccounts' ? [signer.address] : '0xbeef'
+    );
+    await sign(t, { message: 'stall', idempotencyKey: 'stall' }, wallet);
+    await getDb()
+      .update(permissionRequests)
+      .set({ sessionUntil: secondsFromNow(-10) })
+      .where(eq(permissionRequests.connectionId, t.connectionId));
+
+    wallet.release();
+    await walletsSettled();
+
+    expect(await signRow()).toMatchObject({ state: 'approved', signature: '0xbeef' });
   });
 });

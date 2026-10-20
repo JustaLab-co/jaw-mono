@@ -77,6 +77,9 @@ export async function reconcile(
 async function closeLinks(report: Report) {
   try {
     report.links.expired = await closeLapsedLinks();
+    // Many at once means processes stopped renewing together: a restart, or a database outage over the grace.
+    if (report.links.expired)
+      log('warn', { msg: `${report.links.expired} owner links ended with no process holding them` });
   } catch (err) {
     log('error', { msg: 'lapsed owner links not closed', error: errorLabel(err) });
   }
