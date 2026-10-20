@@ -15,7 +15,7 @@ import type { RelayResume } from './seal';
 import { setTestEnv } from './testkit';
 
 const relay = await startRelay();
-const { seen, fromServer, sessions, silent, cliJoined } = relay;
+const { seen, fromServer, sessions, silent, cliJoined, dropped } = relay;
 
 setTestEnv();
 process.env.JAW_RELAY_URL = relay.url;
@@ -745,6 +745,33 @@ describe('a session the server can rejoin', () => {
     await vi.advanceTimersByTimeAsync(15_000);
 
     expect(await resumed).toBeUndefined();
+    vi.useRealTimers();
+    await vi.waitFor(() => expect(sessions.get(resume.session)?.cli).toBeUndefined());
+  });
+
+  it('given the relay connection fails during the rejoin, then it throws instead of saying the page is gone', async () => {
+    const { wallet, resume } = await restarted(never);
+    dropped.add(resume.session);
+
+    await expect(resumeWallet(resume, wallet.url, soon())).rejects.toThrow();
+    await vi.waitFor(() => expect(sessions.get(resume.session)?.cli).toBeUndefined());
+  });
+
+  it('given joined never settles, when 5 seconds pass, then the run goes on without being saved and warns', async () => {
+    const wallet = await openRelay(84532);
+    const opened = await replayingPage(wallet.url, async () => '0xsig');
+    const logged = vi.spyOn(console, 'log').mockImplementation(() => undefined);
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'Date'] });
+
+    const run = wallet.run(sign, never);
+    await vi.waitFor(() => expect(opened.inits()).toBe(1));
+    await new Promise((r) => setImmediate(r));
+    expect(opened.ids).toHaveLength(0);
+    await vi.advanceTimersByTimeAsync(5_000);
+
+    expect(await run).toBe('0xsig');
+    expect(logged.mock.calls.flat().join('\n')).toContain('relay session not saved');
+    logged.mockRestore();
   });
 
   it('given the page does not answer the init again, when 15 seconds pass, then the run ends as page gone', async () => {

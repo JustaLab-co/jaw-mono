@@ -323,7 +323,8 @@ describe('a grant request whose server restarted', () => {
     await lapse(row.id);
 
     const again = await grantPermissions(t, CUSTOM, deps);
-    expect(again.content[0].text).toContain(`still waiting for the owner at ${row.walletUrl}`);
+    expect(again.content[0].text).toContain(`open at ${row.walletUrl}`);
+    expect(again.content[0].text).toContain("reconnecting to the owner's open link");
     await vi.waitFor(() => expect(page.ids).toHaveLength(2));
     owned.decide();
 

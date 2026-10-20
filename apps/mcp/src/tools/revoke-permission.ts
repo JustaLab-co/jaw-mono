@@ -10,7 +10,14 @@ import { ownerRelay, type OpenWallet } from '@/connections/relay';
 import { getDb } from '@/db/client';
 import { grants } from '@/db/schema';
 import type { ReadPermission } from '@/grants/permission';
-import { lostBefore, lostPreamble, openLink, type PermissionRequestRow } from '@/grants/requests';
+import {
+  lostBefore,
+  lostPreamble,
+  openLink,
+  RECONNECTING,
+  reconnecting,
+  type PermissionRequestRow,
+} from '@/grants/requests';
 import { markRevoked, readState, REVOKE_READS, revokeWork, sameId, type RevokeTarget } from '@/grants/resume';
 import { reply } from '@/lib/fence';
 import { ACCOUNT_BUSY, refusal } from './reply';
@@ -155,12 +162,12 @@ export async function revokePermission(t: Tenant, input: RevokeInput, deps = DEF
   const until = held.approveBy.toISOString();
   if (held.connectionId !== t.connectionId) {
     return refusal(
-      `revoke_in_progress: another app on this account asked the owner to revoke ${held.permissionId}; that link waits until ${until}.`
+      `revoke_in_progress: another app on this account asked the owner to revoke ${held.permissionId}; that link waits until ${until}.${reconnecting(held) ? RECONNECTING : ''}`
     );
   }
   if (held.permissionId?.toLowerCase() !== target.permissionId.toLowerCase()) {
     return refusal(
-      `revoke_in_progress: this connection already asked the owner to revoke ${held.permissionId}. Ask again once they answer or the link ends at ${until}.`
+      `revoke_in_progress: this connection already asked the owner to revoke ${held.permissionId}. Ask again once they answer or the link ends at ${until}.${reconnecting(held) ? RECONNECTING : ''}`
     );
   }
   return answer(target, held);

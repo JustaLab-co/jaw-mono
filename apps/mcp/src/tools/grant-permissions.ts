@@ -9,7 +9,7 @@ import { ownerRelay, type OpenWallet } from '@/connections/relay';
 import { spends } from '@/connections/scopes';
 import { SPEND_UNITS } from '@/db/schema';
 import { budgetGrant, readOnChain, type GrantRequest, type ReadPermission } from '@/grants/permission';
-import { lostBefore, lostPreamble, openLink } from '@/grants/requests';
+import { lostBefore, lostPreamble, openLink, RECONNECTING, reconnecting } from '@/grants/requests';
 import { grantWork, type GrantPayload } from '@/grants/resume';
 import { liveGrants, LIVE_GRANTS_PER_CONNECTION, type GrantKind } from '@/grants/store';
 import { reply } from '@/lib/fence';
@@ -172,8 +172,11 @@ export async function grantPermissions(t: Tenant, input: GrantInput, deps = DEFA
       'Tell the owner not to approve that one: a grant approved there can go live on chain without this server recording it, and then only jaw_revoke_permission with its id from the wallet ends it. '
     : '';
   if ('waiting' in opened) {
+    const state = reconnecting(row)
+      ? `open at ${row.walletUrl}.${RECONNECTING}`
+      : `still waiting for the owner at ${row.walletUrl}.`;
     return refusal(
-      `${warning}A grant request is still waiting for the owner at ${row.walletUrl}. Ask again once they approve or it expires at ${row.approveBy.toISOString()}.`
+      `${warning}A grant request is ${state} Ask again once they approve or it expires at ${row.approveBy.toISOString()}.`
     );
   }
   const url = row.walletUrl;

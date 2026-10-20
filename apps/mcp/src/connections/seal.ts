@@ -19,6 +19,7 @@ export interface RelayResume {
   chainId: number;
   appName: string;
 }
+export type SealedResume = string & { readonly __brand: 'SealedResume' };
 export type Wrapped = string & { readonly __brand: 'Wrapped' };
 
 interface RingKey {
@@ -94,9 +95,9 @@ export function open(ring: KeyRing, sealed: Sealed, id: string): Hex {
   return `0x${decrypt(ring, sealed, 'v1', id, (k) => k.seal).toString('hex')}`;
 }
 
-export function sealResume(ring: KeyRing, resume: RelayResume, rowId: string): string {
+export function sealResume(ring: KeyRing, resume: RelayResume, rowId: string): SealedResume {
   const { kid, relay } = ring.keys[0];
-  return encrypt('r1', kid, relay, Buffer.from(JSON.stringify(resume)), rowId);
+  return encrypt('r1', kid, relay, Buffer.from(JSON.stringify(resume)), rowId) as SealedResume;
 }
 
 const relayResume = z.object({

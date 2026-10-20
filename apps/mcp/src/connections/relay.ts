@@ -160,7 +160,8 @@ async function startSession(
         if (ready.replays === true) {
           // A session that cannot be resumed is how every session ran before replays, so the owner is still asked.
           try {
-            await joined?.({ session, key: await exportKeyToHex('private', keys.privateKey), peer, ...init });
+            const saved = joined?.({ session, key: await exportKeyToHex('private', keys.privateKey), peer, ...init });
+            await within(JOINED_WITHIN_MS, Promise.resolve(saved));
           } catch (err) {
             log('warn', { msg: 'relay session not saved', error: errorLabel(err) });
           }
@@ -261,6 +262,16 @@ function converse(
 
 const REJOIN_WITHIN_MS = 15_000;
 const NOT_THE_REQUEST = -32600;
+// Saving the session must not hold the first ask back.
+const JOINED_WITHIN_MS = 5_000;
+
+function within<T>(ms: number, work: Promise<T>): Promise<T> {
+  let timer: ReturnType<typeof setTimeout>;
+  const late = new Promise<never>((_, reject) => {
+    timer = setTimeout(() => reject(new Error('timed out')), ms);
+  });
+  return Promise.race([work, late]).finally(() => clearTimeout(timer));
+}
 
 export class PageGone extends Error {
   constructor() {
@@ -268,7 +279,7 @@ export class PageGone extends Error {
   }
 }
 
-/** Rejoins the session behind `url`, the link the owner already has open. */
+/** Rejoins the session behind `url`, the link the owner already has open. Undefined means the page is gone. */
 export const resumeWallet = (
   resume: RelayResume,
   url: string,
