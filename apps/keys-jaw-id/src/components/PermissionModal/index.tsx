@@ -484,7 +484,7 @@ export const PermissionModal = ({
   }, [prefundQuote, tokenInfoMap]);
 
   const heldGrants = useHeldGrantsDisplay({
-    address: mode === 'grant' ? (permissionDetails?.address as Address | undefined) : undefined,
+    address: permissionDetails?.address as Address | undefined,
     spender:
       mode === 'grant' && permissionDetails && 'spender' in permissionDetails
         ? (permissionDetails.spender as Address)

@@ -195,8 +195,7 @@ function heldRow(
     decimalsUnknown,
     token: isNative ? `Native (${native.symbol})` : token.symbol,
     tokenAddress: total.token,
-    duration:
-      total.unit === 'forever' ? 'forever' : `${total.multiplier} ${total.unit}${total.multiplier > 1 ? 's' : ''}`,
+    duration: `${total.multiplier} ${total.unit}${total.multiplier > 1 ? 's' : ''}`,
     limit: decimalsUnknown ? `${amount} base units` : `${amount} ${token.symbol}`,
   };
 }
