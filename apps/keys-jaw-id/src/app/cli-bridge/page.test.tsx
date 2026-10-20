@@ -514,6 +514,7 @@ describe('cli-bridge page with nobody on the other side', () => {
         </StrictMode>
       )
     );
+    expect(host.textContent).toContain('Connecting to relay...');
 
     const ws = await connect(FakeSocket.all.length || 1, cli);
     const ready = await init(ws, { appName: 'Claude' });
