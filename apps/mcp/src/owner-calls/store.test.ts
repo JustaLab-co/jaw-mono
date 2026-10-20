@@ -232,6 +232,13 @@ describe('reopenLink', () => {
     expect((await rowOf(row.id)).walletUrl).toBe(URL_A);
   });
 
+  it('given a link a relay session can still rejoin, then it does not reopen', async () => {
+    const row = await open(await newConnection());
+    await lapseLease(row.id);
+    await set(row.id, { relay: 'r1.kid.iv.sealed' });
+    expect(await reopenLink(row, URL_B)).toBeUndefined();
+  });
+
   it('given a stale url, then the link does not reopen', async () => {
     const row = await open(await newConnection());
     await reopenLink(row, URL_B);

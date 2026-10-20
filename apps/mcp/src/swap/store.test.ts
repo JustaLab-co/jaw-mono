@@ -757,6 +757,12 @@ describe('the send marker and a reopened link', () => {
     expect(await markSendStarted(row)).toBeUndefined();
   });
 
+  it('given a link a relay session can still rejoin, when it would reopen, then nothing is written', async () => {
+    const row = await awaiting(await newConnection());
+    await getDb().update(swaps).set({ relay: 'r1.kid.iv.sealed' }).where(eq(swaps.id, row.id));
+    expect(await reopenLink(row, 'https://keys.test/cli-bridge#new')).toBeUndefined();
+  });
+
   it('given an awaiting_owner row with a wallet error, when its link reopens, then the new url is written and the code cleared', async () => {
     const row = await awaiting(await newConnection());
     await getDb().update(swaps).set({ code: 'wallet_error:5710' }).where(eq(swaps.id, row.id));

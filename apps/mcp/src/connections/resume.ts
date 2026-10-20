@@ -14,7 +14,13 @@ export const newHolder = () => randomBytes(16).toString('base64url');
 
 export type Lost = 'connection_ended' | 'unopenable' | 'page_gone';
 
-type Resumable = { id: string; connectionId: string; relay: string | null; approveBy: Date | null };
+type Resumable = {
+  id: string;
+  connectionId: string;
+  walletUrl: string | null;
+  relay: string | null;
+  approveBy: Date | null;
+};
 
 export interface Rejoin<R extends Resumable> {
   idField: 'permissionRequestId' | 'ownerCallId' | 'swapId';
@@ -46,7 +52,8 @@ async function resumeOne<R extends Resumable>(found: R, { take, release, lost, s
   if (!connection) return void (await lost(row, 'connection_ended'));
   const t = tokenlessTenant(connection);
   const relay = openResume(config().ring, row.relay!, row.id);
-  const run = relay && start(row, t);
+  const sameLink = relay !== undefined && relay.session === sessionOf(row.walletUrl!);
+  const run = sameLink && start(row, t);
   if (!run) return void (await lost(row, 'unopenable'));
   let wallet: Wallet | undefined;
   try {
@@ -59,6 +66,8 @@ async function resumeOne<R extends Resumable>(found: R, { take, release, lost, s
   if (!wallet) return void (await lost(row, 'page_gone'));
   run(wallet);
 }
+
+const sessionOf = (walletUrl: string) => new URL(walletUrl).searchParams.get('session');
 
 const NOT_THE_REQUEST = -32600;
 

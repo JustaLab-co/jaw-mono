@@ -106,8 +106,8 @@ export async function replayingPage(
 }
 
 export function stallsAfter(n: number) {
-  let wake!: (err?: unknown) => void;
-  const woken = new Promise<void>((resolve, reject) => (wake = (err) => (err ? reject(err) : resolve())));
+  let wake!: (err?: unknown, late?: unknown) => void;
+  const woken = new Promise<unknown>((resolve, reject) => (wake = (err, late) => (err ? reject(err) : resolve(late))));
   let closed = false;
   const openWallet: OpenWallet = async (chainId, until, client) => {
     const wallet = await ownerRelay(chainId, until, client);
@@ -124,8 +124,8 @@ export function stallsAfter(n: number) {
             if (++sent < n) return ask(method, params);
             const answer = ask(method, params);
             answer.catch(() => undefined);
-            await woken;
-            return answer;
+            const late = await woken;
+            return late === undefined ? answer : late;
           });
         }, joined),
     };

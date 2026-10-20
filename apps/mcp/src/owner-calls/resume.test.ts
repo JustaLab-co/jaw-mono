@@ -6,7 +6,7 @@ import { replayingPage, stallsAfter, startRelay } from '@/connections/fake-relay
 import { connect, owner, setTestEnv, walletsSettled } from '@/connections/testkit';
 import { getDb } from '@/db/client';
 import { connections, ownerCalls } from '@/db/schema';
-import { TEST_PG_URL, useTestDb, useTestPostgres } from '@/db/test-db';
+import { TEST_PG_URL, useTestDb, useTestPostgres, withoutOwnerCallsGuard } from '@/db/test-db';
 import { resumeOwnerCalls, sendCalls, sendCallsStatus, type OwnerCallDeps } from '@/tools/owner-calls';
 import { fakeChain } from './chain-testkit';
 import { SEND_STARTED } from './store';
@@ -47,31 +47,35 @@ const sent = (id: string) =>
   );
 const quiet = () => new Promise((r) => setTimeout(r, 300));
 
-function deciding(t: Tenant, refuseAccounts?: number) {
+function deciding(t: Tenant, refuseAccounts?: number, holdAccounts = false) {
   let decide!: () => void;
   const decided = new Promise<void>((r) => (decide = r));
+  let signIn!: () => void;
+  const signedIn = new Promise<void>((r) => (signIn = r));
+  if (!holdAccounts) signIn();
   const answer = async (method: string) => {
     if (method === 'eth_requestAccounts') {
+      await signedIn;
       if (refuseAccounts) throw Object.assign(new Error('refused'), { code: refuseAccounts });
       return [t.account];
     }
     await decided;
     return { id: CALLS_ID };
   };
-  return { answer, decide };
+  return { answer, decide, signIn };
 }
 
-async function sendStartedThenRestarted(opts: { replays?: boolean; stallAt?: number } = {}) {
+async function sendStartedThenRestarted(opts: { replays?: boolean; stallAt?: number; holdAccounts?: boolean } = {}) {
   const t = await connected();
   const key = `k_${randomBytes(4).toString('hex')}`;
-  const owned = deciding(t);
+  const owned = deciding(t, undefined, opts.holdAccounts);
   const server = stallsAfter(opts.stallAt ?? 2);
   const first = await sendCalls(t, { calls: [CALL], idempotencyKey: key }, depsOf(server.openWallet));
   const id = first.structuredContent!.id;
   const page = await replayingPage(first.structuredContent!.url!, owned.answer, opts);
   await vi.waitFor(() => expect(page.ids).toHaveLength(opts.stallAt ?? 2));
   await lapse(id);
-  return { t, key, id, url: first.structuredContent!.url!, page, server, decide: owned.decide };
+  return { t, key, id, url: first.structuredContent!.url!, page, server, decide: owned.decide, signIn: owned.signIn };
 }
 
 describe('owner calls whose server restarted after the send started', () => {
@@ -149,6 +153,74 @@ describe('owner calls whose server restarted after the send started', () => {
     decide();
 
     expect(await sent(id)).toMatchObject({ callsId: CALLS_ID });
+  });
+
+  it('given a resumer took the row, when the old process hears the account refused with a code, then it writes nothing and the resumed send goes on', async () => {
+    const { id, page, server, decide, signIn } = await sendStartedThenRestarted({ stallAt: 1, holdAccounts: true });
+    await resumeOwnerCalls(clients);
+    await vi.waitFor(() => expect(page.ids).toHaveLength(2));
+
+    server.wake(Object.assign(new Error('refused'), { code: -32000 }));
+    await quiet();
+    signIn();
+    decide();
+
+    expect(await sent(id)).toMatchObject({ callsId: CALLS_ID });
+  });
+
+  it('given a resumer took the row, when the old process hears another calls id, then the row keeps the one the resumed run heard', async () => {
+    const { id, page, server, decide } = await sendStartedThenRestarted();
+    await resumeOwnerCalls(clients);
+    await vi.waitFor(() => expect(page.ids).toHaveLength(4));
+
+    server.wake(undefined, { id: `0x${'0d'.repeat(32)}` });
+    await quiet();
+    decide();
+
+    expect(await sent(id)).toMatchObject({ callsId: CALLS_ID });
+  });
+
+  it('given an old replica gave the row a new link and started the send there, when this server resumes the first link, then that tab is not asked to send and nothing is stored to resume', async () => {
+    const { id, page } = await sendStartedThenRestarted({ stallAt: 1 });
+    await getDb()
+      .update(ownerCalls)
+      .set({ walletUrl: 'http://keys.test/cli-bridge?session=new-link', code: SEND_STARTED, sessionUntil: null })
+      .where(eq(ownerCalls.id, id));
+
+    await Promise.all(await resumeOwnerCalls(clients));
+    await quiet();
+
+    expect(page.ids).toHaveLength(1);
+    expect(await rowOf(id)).toMatchObject({ state: 'awaiting_owner', code: SEND_STARTED, relay: null });
+  });
+
+  it('given the owner declined the calls, then nothing is stored to resume', async () => {
+    const t = await connected();
+    const first = await sendCalls(t, { calls: [CALL] }, depsOf(stallsAfter(9).openWallet));
+    const id = first.structuredContent!.id;
+    await replayingPage(first.structuredContent!.url!, async (method) => {
+      if (method === 'eth_requestAccounts') return [t.account];
+      throw Object.assign(new Error('User rejected the request'), { code: 4001 });
+    });
+
+    await vi.waitFor(async () => expect((await rowOf(id)).state).toBe('owner_declined'));
+    await quiet();
+
+    expect((await rowOf(id)).relay).toBeNull();
+  });
+
+  it('given calls whose window passed while they waited for a resume, when their status is read, then they are expired with nothing stored to resume', async () => {
+    const { t, id } = await sendStartedThenRestarted();
+    await withoutOwnerCallsGuard(() =>
+      getDb()
+        .update(ownerCalls)
+        .set({ approveBy: sql`statement_timestamp() - interval '1 minute'` })
+        .where(eq(ownerCalls.id, id))
+    );
+
+    await sendCallsStatus(t, { id }, depsOf(stallsAfter(9).openWallet));
+
+    expect(await rowOf(id)).toMatchObject({ state: 'expired', relay: null });
   });
 
   it('given the wallet refused the account with a code, then the row keeps the code and no relay session to resume', async () => {

@@ -49,7 +49,7 @@ async function quoted(t: Tenant, key: string) {
   return claim.row.id;
 }
 
-async function depositAskedThenRestarted({ stallAt = 2, approved = false } = {}) {
+async function depositAskedThenRestarted({ stallAt = 2, approved = false, declines = false } = {}) {
   const c = await connect(owner());
   await walletsSettled();
   const t = (await verifyBearer(c.access_token))?.extra?.tenant as Tenant;
@@ -63,12 +63,13 @@ async function depositAskedThenRestarted({ stallAt = 2, approved = false } = {})
     if (method === 'eth_requestAccounts') return [t.account];
     if (method === 'wallet_getCallsStatus') return { status: 400 };
     await decided;
+    if (declines) throw Object.assign(new Error('User rejected the request'), { code: 4001 });
     return { id: '0xcalls' };
   });
   if (approved) decide();
   await vi.waitFor(() => expect(page.ids).toHaveLength(stallAt));
   await lapse(id);
-  return { t, id, quoteId: first.structuredContent!.quoteId!, page, decide };
+  return { t, id, key, quoteId: first.structuredContent!.quoteId!, page, server, decide };
 }
 
 describe('a swap deposit whose server restarted after the send started', () => {
@@ -94,6 +95,45 @@ describe('a swap deposit whose server restarted after the send started', () => {
       expect(page.asked()).toBe(3);
     }
   );
+
+  it('given a resumer took the swap, when the old process hears another calls id, then the swap keeps the one the resumed run heard', async () => {
+    const { id, page, server, decide } = await depositAskedThenRestarted();
+    await resumeSwaps();
+    await vi.waitFor(() => expect(page.ids).toHaveLength(4));
+
+    server.wake(undefined, { id: '0xold' });
+    await quiet();
+    decide();
+
+    await vi.waitFor(async () => expect(await rowOf(id)).toMatchObject({ state: 'deposit_sent' }));
+    expect((await rowOf(id)).callsId).toBe('0xcalls');
+  });
+
+  it('given the owner declined the deposit, then nothing is stored to resume', async () => {
+    const { id, page, decide } = await depositAskedThenRestarted({ declines: true });
+    await resumeSwaps();
+    await vi.waitFor(() => expect(page.ids).toHaveLength(4));
+    decide();
+
+    await vi.waitFor(async () => expect((await rowOf(id)).state).toBe('owner_declined'));
+    await quiet();
+
+    expect((await rowOf(id)).relay).toBeNull();
+  });
+
+  it('given a swap whose window passed while it waited for a resume, when the same key comes, then it is expired with nothing stored to resume', async () => {
+    const { t, id, key } = await depositAskedThenRestarted();
+    await getDb().execute(sql`alter table swaps disable trigger swaps_guard`);
+    await getDb()
+      .update(swaps)
+      .set({ approveBy: sql`statement_timestamp() - interval '1 minute'` })
+      .where(eq(swaps.id, id));
+    await getDb().execute(sql`alter table swaps enable trigger swaps_guard`);
+
+    await swap(t, { ...input, idempotencyKey: key }, { openWallet: stallsAfter(9).openWallet, pollMs: 0 });
+
+    expect(await rowOf(id)).toMatchObject({ state: 'expired', relay: null });
+  });
 
   it('given the calls id was recorded and the wallet was being polled, when the server restarts, then nothing is asked again', async () => {
     const { id, page } = await depositAskedThenRestarted({ stallAt: 3, approved: true });

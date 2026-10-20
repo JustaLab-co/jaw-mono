@@ -1,8 +1,8 @@
-import { createHash, randomBytes } from 'node:crypto';
+import { createHash } from 'node:crypto';
 import { and, asc, eq, gt, inArray, isNotNull, isNull, lt, lte, not, or, sql, type SQL } from 'drizzle-orm';
 import type { PgUpdateSetSource } from 'drizzle-orm/pg-core';
 import { APPROVE_WITHIN_MS, config, QUOTE_MARGIN_SEC } from '@/connections/config';
-import { RESUMES_PER_TICK } from '@/connections/resume';
+import { newHolder, RESUMES_PER_TICK } from '@/connections/resume';
 import { heldSince, sessionLeaseEnd } from '@/connections/session-lease';
 import { getDb, type Tx } from '@/db/client';
 import { payments, SWAP_DEPOSIT_ADDRESS_INDEX, swaps } from '@/db/schema';
@@ -88,7 +88,6 @@ async function write(where: SQL | undefined, set: SwapSet, db: Tx = getDb()): Pr
   return row;
 }
 
-const newToken = () => randomBytes(16).toString('base64url');
 const leaseFromNow = sql`${dbNow} + ${LEASE_MS} * interval '1 millisecond'`;
 
 async function find(connectionId: string, key: string): Promise<SwapRow | undefined> {
@@ -100,8 +99,8 @@ async function find(connectionId: string, key: string): Promise<SwapRow | undefi
 }
 
 async function insert(connectionId: string, key: string, hash: string, request: SwapRequest) {
-  const id = `swp_${newToken()}`;
-  const token = newToken();
+  const id = `swp_${newHolder()}`;
+  const token = newHolder();
   const [row] = await getDb()
     .insert(swaps)
     .values({
@@ -129,7 +128,7 @@ async function waitForQuotePaymentWriters(tx: Tx, connectionId: string): Promise
 }
 
 const expirePast = (where: SQL) =>
-  write(and(where, eq(swaps.state, 'awaiting_owner'), lt(swaps.approveBy, dbNow)), { state: 'expired' });
+  write(and(where, eq(swaps.state, 'awaiting_owner'), lt(swaps.approveBy, dbNow)), { state: 'expired', relay: null });
 
 async function freeStale(connectionId: string): Promise<void> {
   const ofConnection = eq(swaps.connectionId, connectionId);
@@ -160,7 +159,7 @@ async function answer(row: SwapRow, hash: string): Promise<SwapClaim> {
   if (row.requestHash !== hash) return { kind: 'conflict' };
   if (row.state === 'awaiting_owner') return { kind: 'stored', row: (await expirePast(eq(swaps.id, row.id))) ?? row };
   if (row.state !== 'quoting') return { kind: 'stored', row };
-  const token = newToken();
+  const token = newHolder();
   const taken = await write(and(eq(swaps.id, row.id), eq(swaps.state, 'quoting'), not(leaseLive)), {
     leaseToken: token,
     leaseUntil: leaseFromNow,
@@ -270,7 +269,7 @@ export const reopenLink = (row: SwapRow, walletUrl: string, db: Tx = getDb()) =>
       gt(swaps.approveBy, dbNow),
       unclaimed
     ),
-    { walletUrl, code: null, sessionUntil: sessionLeaseEnd, leaseToken: newToken() },
+    { walletUrl, code: null, sessionUntil: sessionLeaseEnd, leaseToken: newHolder() },
     db
   );
 
@@ -284,7 +283,7 @@ export const releaseSession = (row: SwapRow) => write(heldBy(row, ['awaiting_own
 export const saveRelay = (row: SwapRow, relay: string) => write(heldBy(row, ['awaiting_owner']), { relay });
 
 export const decline = (row: SwapRow, code: string) =>
-  write(heldBy(row, ['awaiting_owner']), { state: 'owner_declined', code });
+  write(heldBy(row, ['awaiting_owner']), { state: 'owner_declined', code, relay: null });
 
 export const recordCallsId = (row: SwapRow, callsId: string) =>
   write(heldBy(row, ['awaiting_owner', 'expired']), { state: 'deposit_sent', callsId, code: null, relay: null });
@@ -302,7 +301,7 @@ export const toResume = () =>
   getDb().select().from(swaps).where(resumable).orderBy(asc(swaps.updatedAt)).limit(RESUMES_PER_TICK);
 
 export const takeToResume = (row: SwapRow) =>
-  write(and(eq(swaps.id, row.id), resumable), { leaseToken: newToken(), sessionUntil: sessionLeaseEnd });
+  write(and(eq(swaps.id, row.id), resumable), { leaseToken: newHolder(), sessionUntil: sessionLeaseEnd });
 
 export const DEPOSIT_FAILED = 'deposit_failed';
 export const DEPOSIT_REVERTED = 'deposit_reverted';
@@ -348,10 +347,13 @@ export async function recordBackend(connectionId: string, id: string, status: Kn
   const following = ofSwap(connectionId, id, ['awaiting_owner', 'expired', 'deposit_sent', 'submitted']);
   if (status.state === 'pending_deposit') {
     await write(following, seen);
-    await write(and(ofSwap(connectionId, id, ['awaiting_owner']), lt(swaps.approveBy, dbNow)), { state: 'expired' });
+    await write(and(ofSwap(connectionId, id, ['awaiting_owner']), lt(swaps.approveBy, dbNow)), {
+      state: 'expired',
+      relay: null,
+    });
     return;
   }
-  await write(following, { ...seen, state: 'submitted', code: null });
+  await write(following, { ...seen, state: 'submitted', code: null, relay: null });
   if (status.state !== 'submitted') await write(ofSwap(connectionId, id, ['submitted']), { state: status.state });
 }
 

@@ -75,7 +75,7 @@ export async function expirePast(connectionId: string): Promise<void> {
       eq(ownerCalls.state, 'awaiting_owner'),
       lt(ownerCalls.approveBy, dbNow)
     ),
-    { state: 'expired' }
+    { state: 'expired', relay: null }
   );
 }
 
@@ -113,7 +113,7 @@ export const setCode = (row: OwnerCallRow, code: string) =>
   write(and(heldBy(row, ['awaiting_owner']), sql`${ownerCalls.code} is distinct from ${SEND_STARTED}`), { code });
 
 export const decline = (row: OwnerCallRow, code: string) =>
-  write(heldBy(row, ['awaiting_owner']), { state: 'owner_declined', code });
+  write(heldBy(row, ['awaiting_owner']), { state: 'owner_declined', code, relay: null });
 
 export async function markSendStarted(row: OwnerCallRow): Promise<boolean> {
   const written = await write(
