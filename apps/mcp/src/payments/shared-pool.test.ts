@@ -246,6 +246,37 @@ describe('given 1 USDC a day and a payment of 0.6', () => {
   });
 });
 
+describe('given 1 USDC a day, 2 USDC of float, and a payment of 0.6 already made', () => {
+  const quote = (token: string, path: string) => callTool(token, 'jaw_session_x402_quote', { url: url(path) });
+
+  it('when the quote asks exactly what is left, then the quote is ready and the payment settles', async () => {
+    const { t, token } = await connected('1', 2_000_000n);
+    prices.set('/a', '600000');
+    prices.set('/left', '400000');
+    await pay(t, { url: url('/a') }, deps);
+    const quoted = await quote(token, '/left');
+    expect(quoted.structuredContent).toMatchObject({
+      readiness: { status: 'ready' },
+      budget: { remainingToday: { amount: '400000' } },
+    });
+    const paid = await pay(t, { url: url('/left') }, deps);
+    expect(paid.structuredContent).toMatchObject({ state: 'settled', kind: 'paid' });
+    expect(seen).toHaveLength(2);
+  });
+
+  it('when the quote asks one base unit more, then the quote says over_allowance and the payment is refused unsigned', async () => {
+    const { t, token } = await connected('1', 2_000_000n);
+    prices.set('/a', '600000');
+    prices.set('/over', '400001');
+    await pay(t, { url: url('/a') }, deps);
+    const quoted = await quote(token, '/over');
+    expect(quoted.structuredContent.readiness).toEqual({ status: 'not_ready', reason: 'over_allowance' });
+    const paid = await pay(t, { url: url('/over') }, deps);
+    expect(paid.structuredContent).toMatchObject(refused);
+    expect(seen).toHaveLength(1);
+  });
+});
+
 describe('given 1 USDC a day, 2 USDC of float, and an open transfer of 0.5 left by the removed tool', () => {
   const open = (t: Tenant) => legacySend(t, { callsId: CALLS_ID, due: true });
 
