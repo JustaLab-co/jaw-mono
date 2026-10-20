@@ -854,16 +854,26 @@ describe('given grants the owner may have revoked in the wallet', () => {
     expect(read).not.toContain(marked);
   });
 
-  it('when the chain cannot be read, then the sweep stops at the first read, records nothing and reports it failed', async () => {
-    const [revoked] = await grantRows([{}, {}]);
+  it('when the chain cannot be read, then the sweep stops after three reads in a row, records nothing and reports it failed', async () => {
+    const [revoked] = await grantRows([{}, {}, {}, {}]);
     let reads = 0;
     const count = await sweepRevokedGrants(async () => {
       reads++;
       throw new Error('node down');
     }, 10_000);
     expect(count).toBeNull();
-    expect(reads).toBe(1);
+    expect(reads).toBe(3);
     expect(await revokedAtOf(revoked)).toBeNull();
+  });
+
+  it('when one grant cannot be read, then the sweep reads past it and records the revoked ones', async () => {
+    const [unreadable, revoked] = await grantRows([{}, {}]);
+    const count = await sweepRevokedGrants(async ({ permissionId }) => {
+      if (permissionId === unreadable) throw new Error('no client for this chain');
+      return { status: 'ok', approved: true, revoked: permissionId === revoked };
+    }, 10_000);
+    expect(count).toBe(1);
+    expect(await revokedAtOf(revoked)).toBeInstanceOf(Date);
   });
 
   it('when another caller recorded the revoke first, then the sweep does not count it again', async () => {

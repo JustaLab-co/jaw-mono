@@ -137,28 +137,36 @@ async function grantLive(grant: Grant, read: ReadPermission): Promise<Unreached 
     });
   }
   const refused = state.status === 'mismatch' || !state.approved || state.revoked ? REVOKED : undefined;
-  checked.set(grant.permissionId, { until: Date.now() + LIVE_FOR_MS, refused });
+  // Not approved can come from a node behind the one that approved the grant, so that is asked again.
+  if (state.status === 'mismatch' || state.approved) {
+    checked.set(grant.permissionId, { until: Date.now() + LIVE_FOR_MS, refused });
+  }
   return refused;
 }
 type Outcome = PaymentOutcome | Unreached;
 
-async function liveBudget(budgets: Grant[], read: ReadPermission): Promise<Grant | Unreached> {
-  const answers = await Promise.all(budgets.map((b) => grantLive(b, read)));
-  let refused: Unreached | undefined;
-  for (const [i, stopped] of answers.entries()) {
-    if (!stopped) return budgets[i];
-    if (stopped.code === 'chain_unavailable') return stopped;
-    refused ??= stopped;
+/** Why a payment cannot be made, and the budget the choice stopped at. */
+type Stop = Unreached & { at?: Grant };
+
+/** Newest first: an older budget is read only when every newer one refused. */
+async function liveBudget(budgets: Grant[], read: ReadPermission): Promise<Grant | Stop> {
+  for (const budget of budgets) {
+    const stopped = await grantLive(budget, read);
+    if (!stopped) return budget;
+    if (stopped.code === 'chain_unavailable') return { ...stopped, at: budget };
   }
-  return refused ?? { kind: 'unreached', code: 'no_grant', reason: 'the budget ended while this payment waited' };
+  if (budgets.length > 0) return { ...REVOKED, at: budgets[0] };
+  return { kind: 'unreached', code: 'no_grant', reason: 'the budget ended while this payment waited' };
 }
 
-/** The budget the next payment draws from: the newest live one, or the newest when none is. */
+/** The budget the next payment draws from, or the one whose chain answer stops it. */
 export async function payingBudget(connectionId: string, read: ReadPermission): Promise<Grant | undefined> {
-  const budgets = await x402Budgets(connectionId);
-  const chosen = await liveBudget(budgets, read);
-  return chosen.kind === 'unreached' ? budgets[0] : chosen;
+  const chosen = await liveBudget(await x402Budgets(connectionId), read);
+  return chosen.kind === 'unreached' ? chosen.at : chosen;
 }
+
+const withoutBudget = (chosen: Grant | Stop): Grant | Unreached =>
+  chosen.kind === 'unreached' ? { kind: chosen.kind, code: chosen.code, reason: chosen.reason } : chosen;
 
 /** The row charged to the budget that pays it, when that is not the one it was claimed under. */
 async function charged(row: PaymentRow, token: string, chosen: Grant | Unreached): Promise<Grant | Unreached> {
@@ -406,7 +414,7 @@ export async function pay(
 
   const { row, token } = claimed;
   let signed = false;
-  const chosen = await charged(row, token, await liveBudget(budgets, deps.readPermission));
+  const chosen = await charged(row, token, withoutBudget(await liveBudget(budgets, deps.readPermission)));
   const outcome: Outcome =
     chosen.kind === 'unreached'
       ? chosen

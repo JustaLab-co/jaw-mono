@@ -190,6 +190,8 @@ async function reconcileOwnerCalls(receipt: ReadReceipt, clients: ChainClients, 
 }
 
 const GRANTS_PER_SWEEP = 25;
+// Unreadable this many times in a row reads as an outage, not as one grant the chain cannot answer for.
+const OUTAGE_AFTER = 3;
 
 export async function sweepRevokedGrants(
   read: ReadPermission = readOnChain,
@@ -197,12 +199,17 @@ export async function sweepRevokedGrants(
 ): Promise<number | null> {
   try {
     let recorded = 0;
+    let unread = 0;
     // One at a time: the payment path reads the same RPC, and a burst can get it rate limited.
     for (const g of await sampleLiveGrants(limit)) {
       const state = await read({ chainId: g.chainId, permissionId: g.permissionId, permission: g.permission }).catch(
         (): PermissionState => ({ status: 'unavailable' })
       );
-      if (state.status === 'unavailable') return null;
+      if (state.status === 'unavailable') {
+        if (++unread === OUTAGE_AFTER) return null;
+        continue;
+      }
+      unread = 0;
       if (state.status === 'ok' && state.revoked) recorded += await recordRevoked([g.permissionId]);
     }
     return recorded;

@@ -119,7 +119,7 @@ function outcomeOf(err: unknown, row: PermissionRequestRow, asked: boolean): Out
   const code = (err as { code?: unknown } | undefined)?.code;
   if (code === USER_REJECTED) return { state: 'owner_declined' };
   if (typeof code === 'number') return { state: 'failed', code: `wallet_error:${code}` };
-  if (err instanceof WalletRefused) return { state: 'failed', code: 'wallet_error' };
+  if (err instanceof WalletRefused) return { state: 'failed', code: 'wallet_error:unknown' };
   if (Date.now() >= row.approveBy.getTime()) return { state: 'expired' };
   if (asked) return { state: 'expired', code: LINK_LOST };
   return { state: 'failed', code: 'unexpected' };

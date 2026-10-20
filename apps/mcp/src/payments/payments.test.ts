@@ -1473,22 +1473,38 @@ describe('given three budgets on one connection, the newest revoked in the walle
   });
 });
 
-describe('given a newer budget the chain answers is not approved', () => {
-  it('when two payments run within half a minute, then the newer one is read from the chain once', async () => {
+describe('given two budgets, when two payments run within half a minute', () => {
+  async function readsOfNewer(newerAnswers: PermissionState) {
     const { c, t } = await connected('1');
+    const older = (await x402Budget(t.connectionId))!.permissionId;
     await approveBudget(c, '1');
     const newer = (await x402Budget(t.connectionId))!.permissionId;
     balances.set(t.sessionAddress.toLowerCase(), 1_000_000n);
     const fresh = await otherReplica();
-    let newerReads = 0;
+    const reads = { newer: 0, older: 0 };
     const read: PayDeps['readPermission'] = async ({ permissionId }) => {
-      if (permissionId !== newer) return { status: 'ok', approved: true, revoked: false };
-      newerReads++;
-      return { status: 'ok', approved: false, revoked: false };
+      if (permissionId === older) {
+        reads.older++;
+        return { status: 'ok', approved: true, revoked: false };
+      }
+      reads.newer++;
+      return newerAnswers;
     };
-    await fresh(t, { url: url('/exact'), idempotencyKey: 'cached-1' }, deps({ readPermission: read }));
-    await fresh(t, { url: url('/exact'), idempotencyKey: 'cached-2' }, deps({ readPermission: read }));
-    expect(newerReads).toBe(1);
+    await fresh(t, { url: url('/exact'), idempotencyKey: `reads-1-${newer}` }, deps({ readPermission: read }));
+    await fresh(t, { url: url('/exact'), idempotencyKey: `reads-2-${newer}` }, deps({ readPermission: read }));
+    return reads;
+  }
+
+  it('given the newer one is live, then the older one is never read', async () => {
+    expect(await readsOfNewer({ status: 'ok', approved: true, revoked: false })).toEqual({ newer: 1, older: 0 });
+  });
+
+  it('given the newer one hashes to another id, then it is read once', async () => {
+    expect((await readsOfNewer({ status: 'mismatch' })).newer).toBe(1);
+  });
+
+  it('given the newer one reads not approved, then it is read again, since a node behind may have said so', async () => {
+    expect((await readsOfNewer({ status: 'ok', approved: false, revoked: false })).newer).toBe(2);
   });
 });
 

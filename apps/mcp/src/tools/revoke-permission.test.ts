@@ -354,7 +354,7 @@ describe('jaw_revoke_permission', () => {
     expect(await requestsOf(budget)).toMatchObject([{ state: 'owner_declined' }]);
   });
 
-  it('given the wallet answers the sign-in with an error that has no code, then the request reads wallet_error, not unexpected', async () => {
+  it('given the wallet answers the sign-in with an error that has no code, then the request reads wallet_error:unknown, not unexpected', async () => {
     const { t, signer, budget } = await connected();
     const refusing: OpenWallet = fakeWallet(async () => {
       throw new WalletRefused('The passkey prompt was dismissed');
@@ -365,7 +365,7 @@ describe('jaw_revoke_permission', () => {
     await walletsSettled();
 
     expect((await grantRow(budget)).revokedAt).toBeNull();
-    expect(await requestsOf(budget)).toMatchObject([{ state: 'failed', code: 'wallet_error' }]);
+    expect(await requestsOf(budget)).toMatchObject([{ state: 'failed', code: 'wallet_error:unknown' }]);
   });
 
   it('given the wallet is signed in to another account, then nothing is revoked', async () => {

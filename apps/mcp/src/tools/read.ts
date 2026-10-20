@@ -192,9 +192,10 @@ async function grantOf(g: LiveGrant): Promise<z.infer<typeof grantOut>> {
 
 async function status(t: Tenant) {
   const network = caip2(t.chainId);
-  const [float, grant, held, conn] = await Promise.all([
+  // First, so a budget it finds revoked is not listed live beside it.
+  const grant = await payingBudget(t.connectionId, readOnChain);
+  const [float, held, conn] = await Promise.all([
     balanceOf(network, t.sessionAddress),
-    payingBudget(t.connectionId, readOnChain),
     liveGrants(t.connectionId),
     findActive(t.connectionId),
   ]);

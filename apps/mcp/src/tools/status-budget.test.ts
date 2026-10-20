@@ -18,6 +18,7 @@ import { useTestDb } from '@/db/test-db';
 
 const asked: { id: string; salt: bigint }[] = [];
 const revokedInWallet = new Set<string>();
+const unreadable = new Set<string>();
 const idOf = (salt: bigint) => asked.find((a) => a.salt === salt)?.id ?? asked[asked.length - 1].id;
 const chain = { start: 1, end: 2_000_000_000, spend: 0n, held: 0n };
 
@@ -26,6 +27,7 @@ vi.mock('@/lib/chain', async (original) => ({
   publicClientFor: () =>
     ({
       readContract: async ({ functionName, args }: { functionName: string; args: [{ salt: bigint }] }) => {
+        if (unreadable.has(idOf(args[0].salt))) throw new Error('node down');
         if (functionName === 'getHash') return idOf(args[0].salt);
         if (functionName === 'isRevoked') return revokedInWallet.has(idOf(args[0].salt));
         if (functionName === 'getCurrentPeriod') return chain;
@@ -89,6 +91,23 @@ describe('given two budgets and the newer one revoked in the wallet', () => {
     const status = await callTool(c.access_token, 'jaw_session_status', {});
     expect(status.structuredContent.readiness).toMatchObject({ status: 'ready' });
     expect(status.structuredContent.budget).toMatchObject({ permissionId: older, perDay: { amount: '2000000' } });
+  });
+});
+
+describe('given three budgets, the newest revoked in the wallet and the middle one unreadable', () => {
+  it('when jaw_session_status runs, then it says the chain is unavailable, as a payment would', async () => {
+    const c = await connect();
+    await approve(c, '3');
+    const middle = await approve(c, '2');
+    const newest = await approve(c, '1');
+    revokedInWallet.add(newest);
+    unreadable.add(middle);
+    try {
+      const status = await callTool(c.access_token, 'jaw_session_status', {});
+      expect(status.structuredContent.readiness).toMatchObject({ status: 'not_ready', reason: 'chain_unavailable' });
+    } finally {
+      unreadable.delete(middle);
+    }
   });
 });
 
