@@ -1,3 +1,17 @@
+## 1.8.0 (2026-10-19)
+
+### 🚀 Features
+
+- **core:** add pending to the revoke permission response ([#429](https://github.com/JustaLab-co/jaw-mono/pull/429))
+
+### 🧱 Updated Dependencies
+
+- Updated @jaw.id/core to 1.7.0
+
+### ❤️ Thank You
+
+- Mariano Aguero
+
 ## 1.7.1 (2026-10-19)
 
 ### 🩹 Fixes
