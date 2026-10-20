@@ -446,3 +446,39 @@ describe('cli-bridge page answers a repeated request', () => {
     expect(asked).toHaveBeenCalledTimes(2);
   });
 });
+
+describe('cli-bridge page with nobody on the other side', () => {
+  afterEach(() => vi.useRealTimers());
+
+  it('given no server answers the key exchange, the page says the link is no longer active', async () => {
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+    const ws = await start();
+
+    await act(async () => vi.advanceTimersByTime(20_000));
+    await act(async () => ws.onclose?.());
+
+    expect(host.textContent).toContain('This link is no longer active. Ask the agent for a new one.');
+    expect(ws.close).toHaveBeenCalled();
+  });
+
+  it('given the server sends init in time, the page stays connected', async () => {
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+    const ws = await start();
+    await init(ws, { appName: 'Claude' });
+
+    await act(async () => vi.advanceTimersByTime(60_000));
+
+    expect(host.textContent).toContain('This tab is the signing backend for Claude.');
+    expect(ws.close).not.toHaveBeenCalled();
+  });
+
+  it('just before the wait ends the page still waits', async () => {
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+    const ws = await start();
+
+    await act(async () => vi.advanceTimersByTime(19_000));
+
+    expect(host.textContent).not.toContain('no longer active');
+    expect(ws.close).not.toHaveBeenCalled();
+  });
+});

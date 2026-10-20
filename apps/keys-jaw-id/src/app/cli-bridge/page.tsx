@@ -145,6 +145,7 @@ function CLIBridgeContent() {
     let ws: WebSocket | null = null;
     let beforeUnloadHandler: (() => void) | null = null;
     let cancelled = false;
+    let unanswered: ReturnType<typeof setTimeout> | undefined;
     answersRef.current = new Map();
 
     (async () => {
@@ -176,6 +177,14 @@ function CLIBridgeContent() {
               publicKey: browserPublicKeyHex,
             })
           );
+          // The relay keeps no queue: when the server that made this link is
+          // gone, the key exchange reaches nobody and nothing ever comes back.
+          unanswered = setTimeout(() => {
+            setState('error');
+            setError('This link is no longer active. Ask the agent for a new one.');
+            ws!.onclose = null;
+            ws!.close();
+          }, SERVER_WAIT_MS);
         };
 
         ws.onmessage = async (event) => {
@@ -196,6 +205,7 @@ function CLIBridgeContent() {
 
               switch (inner.type) {
                 case 'init': {
+                  clearTimeout(unanswered);
                   const chainId = (inner.chainId as number) ?? 1;
                   const ens = inner.ens as string | undefined;
                   const name = (appNameRef.current ??= resolveBridgeAppName(inner.appName));
@@ -334,6 +344,7 @@ function CLIBridgeContent() {
 
     return () => {
       cancelled = true;
+      clearTimeout(unanswered);
       appNameRef.current = null;
       setAppName(DEFAULT_BRIDGE_APP_NAME);
       if (beforeUnloadHandler) {
@@ -405,6 +416,9 @@ function CLIBridgeContent() {
     </div>
   );
 }
+
+// A live server sends init as soon as the key exchange reaches it.
+const SERVER_WAIT_MS = 20_000;
 
 // A server re-asks within the 30 minute approval window, so the oldest answers
 // can go once a long session of reads would otherwise keep them all.
