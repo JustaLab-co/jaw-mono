@@ -233,6 +233,7 @@ export const sends = pgTable(
     index()
       .on(t.leaseUntil)
       .where(sql`${t.state} = 'open'`),
+    check('send_open_keyed', sql`${t.state} <> 'open' or ${t.idempotencyKey} is not null`),
     check(
       'send_shape',
       sql`${t.amount} >= 0 and (${t.idempotencyKey} is null) = (${t.requestHash} is null) and (

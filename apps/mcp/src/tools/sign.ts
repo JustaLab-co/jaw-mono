@@ -1,5 +1,4 @@
 import { createHash, randomBytes } from 'node:crypto';
-import { getSupportedChains } from '@jaw.id/core';
 import type { McpServer } from '@modelcontextprotocol/server';
 import { hashTypedData, toHex } from 'viem';
 import { z } from 'zod';
@@ -18,6 +17,7 @@ import {
   type Outcome,
   type PermissionRequestRow,
 } from '@/grants/requests';
+import { isProxyChain } from '@/lib/chain';
 import { RATE_WINDOW_MS } from '@/lib/edge';
 import { reply } from '@/lib/fence';
 import { MAX_OPEN_PER_ACCOUNT } from '@/owner-calls/cap';
@@ -220,7 +220,7 @@ function requestOf(input: SignInput): Request | SignResult {
 
 export async function sign(t: Tenant, input: SignInput, deps: SignDeps = DEFAULTS): Promise<SignResult> {
   const chainId = input.chainId ?? t.chainId;
-  if (!getSupportedChains(true).some((chain) => chain.id === chainId)) {
+  if (!isProxyChain(chainId)) {
     return refuse('unsupported_chain', `Chain ${chainId} is not one the JAW wallet supports.`);
   }
   const request = requestOf(input);
