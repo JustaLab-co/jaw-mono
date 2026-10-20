@@ -143,3 +143,45 @@ only end refills=1 revoke=1
 - /\ lockOwner # None
 -                /\ ~InFlight
 + /\ lockOwner # None
+
+mutation fit counts what moved on chain and ignores the open rows
+detects ExecCapHolds
+only exec execs=2 drops=0
+- /\ IF ExecSpent + Cardinality(pend[e]) + 1 > ExecCap
++ /\ IF ExecSpent + 1 > ExecCap
+
+mutation the execute records its rows without owns(), after another turn took the lock
+detects ExecCapHolds
+only exec execs=2 drops=1
+- /\ IF Owns(e)
++ /\ IF TRUE
+
+mutation a row is released while its userOp may still land, as a block window running out would
+detects ExecCapHolds
+only exec execs=2 drops=0
+- /\ op[e] \in {"landed", "reverted"}
++ /\ op[e] \in {"sent", "landed", "reverted"}
+
+mutation the execute sends with no row recorded
+detects ExecRecorded
+only exec execs=2 drops=0
+- /\ row' = [row EXCEPT ![e] = "open"]
++ /\ UNCHANGED row
+
+mutation the settle read sees a run landed and leaves its row open, as before settleLogged
+detects CountedOnce
+only exec execs=2 drops=0
+- /\ row' = [x \in Execs |-> IF row[x] = "open" /\ op[x] = "landed" THEN "landed"
++ /\ row' = [x \in Execs |-> IF FALSE THEN "landed"
+
+mutation the record tx skips the live check, so an end between the checks and the record is missed
+detects NoExecAfterEnd
+only exec execs=1 revoke=1
+- /\ IF Owns(e) /\ live
++ /\ IF Owns(e)
+
+mutation an end ignores an execute recorded and not yet submitted
+detects NoExecAfterEnd
+only exec execs=2 disc=1 drops=1
+- InFlight == (\E r \in Refills : topUp[r] = 1 /\ ~visible[r] /\ pc[r] # "done") \/ ExecInFlight
++ InFlight == (\E r \in Refills : topUp[r] = 1 /\ ~visible[r] /\ pc[r] # "done")
