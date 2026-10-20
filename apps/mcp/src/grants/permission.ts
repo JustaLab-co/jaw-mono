@@ -4,7 +4,7 @@ import {
   type PermissionReadTarget,
   type PermissionState,
 } from '@jaw.id/agent';
-import { and, eq, sql } from 'drizzle-orm';
+import { and, eq, isNull, sql } from 'drizzle-orm';
 import { isAddressEqual, isHex, numberToHex, toFunctionSelector, type Address, type Hex } from 'viem';
 import type { Tx } from '@/db/client';
 import { connections, grants, SPEND_UNITS } from '@/db/schema';
@@ -128,13 +128,18 @@ export async function recordGrant(tx: Tx, connectionId: string, grant: NewGrant)
   const [recorded] = await tx
     .select({ id: grants.permissionId })
     .from(grants)
-    .where(and(eq(grants.permissionId, grant.permissionId), eq(grants.connectionId, connectionId)));
+    .where(
+      and(eq(grants.permissionId, grant.permissionId), eq(grants.connectionId, connectionId), isNull(grants.revokedAt))
+    );
   if (recorded) return;
   if ((await liveGrants(connectionId, tx)).length >= LIVE_GRANTS_PER_CONNECTION) {
     throw new Error(`the connection already holds ${LIVE_GRANTS_PER_CONNECTION} live grants`);
   }
-  await tx
+  const inserted = await tx
     .insert(grants)
     .values({ ...grant, connectionId, createdAt: sql`clock_timestamp()` })
-    .onConflictDoNothing();
+    .onConflictDoNothing()
+    .returning({ id: grants.permissionId });
+  if (inserted.length === 0)
+    throw new Error('a grant with that id was already revoked or belongs to another connection');
 }
