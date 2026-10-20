@@ -133,6 +133,7 @@ const HELP = `Commands:
   account-history                jaw_get_calls_history
   permissions                    jaw_get_permissions
   capabilities                   jaw_get_capabilities
+  resolve <name|address>         jaw_resolve_name, an ENS name or an address
   quote <url>                    jaw_session_x402_quote
   pay <url> [maxAmount]          jaw_session_x402_pay (maxAmount in base units)
   budget <perDay>                jaw_grant_permissions with the x402 budget preset, USDC per day
@@ -168,6 +169,8 @@ const commands = {
   'account-history': () => call('jaw_get_calls_history', {}),
   permissions: () => call('jaw_get_permissions', {}),
   capabilities: () => call('jaw_get_capabilities', {}),
+  resolve: (value) =>
+    call('jaw_resolve_name', /^0x[0-9a-fA-F]{40}$/.test(value) ? { address: value } : { name: value }),
   quote: (url) => call('jaw_session_x402_quote', { url }),
   pay: (url, maxAmount) => call('jaw_session_x402_pay', { url, ...(maxAmount && { maxAmount }) }),
   budget: (perDay) => call('jaw_grant_permissions', { x402Budget: { perDay } }),
