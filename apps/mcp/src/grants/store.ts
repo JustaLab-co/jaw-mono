@@ -53,6 +53,27 @@ export async function x402Budgets(connectionId: string): Promise<Grant[]> {
   return rows.map(toBudget);
 }
 
+/** The budget a signed payment was charged to, while it has not ended, whether or not it was revoked since. */
+export async function budgetSignedUnder(
+  connectionId: string,
+  permissionId: string | null
+): Promise<(Grant & { revokedAt: Date | null }) | undefined> {
+  if (!permissionId) return undefined;
+  const [row] = await getDb()
+    .select()
+    .from(grants)
+    .where(
+      and(
+        eq(grants.connectionId, connectionId),
+        eq(grants.permissionId, permissionId),
+        eq(grants.kind, 'x402-budget'),
+        isNull(grants.replacedAt),
+        gt(grants.expiresAt, sql`now()`)
+      )
+    );
+  return row && { ...toBudget(row), revokedAt: row.revokedAt };
+}
+
 export const x402Budget = async (connectionId: string): Promise<Grant | undefined> =>
   (await x402Budgets(connectionId))[0];
 
@@ -89,10 +110,13 @@ export async function sampleLiveGrants(limit: number): Promise<LiveGrant[]> {
   return rows.map(toLive);
 }
 
-export async function recordRevoked(permissionIds: string[], db: Tx = getDb()): Promise<void> {
-  if (permissionIds.length === 0) return;
-  await db
+/** How many of them were not recorded revoked before. */
+export async function recordRevoked(permissionIds: string[], db: Tx = getDb()): Promise<number> {
+  if (permissionIds.length === 0) return 0;
+  const rows = await db
     .update(grants)
     .set({ revokedAt: new Date() })
-    .where(and(inArray(grants.permissionId, permissionIds), isNull(grants.revokedAt)));
+    .where(and(inArray(grants.permissionId, permissionIds), isNull(grants.revokedAt)))
+    .returning({ permissionId: grants.permissionId });
+  return rows.length;
 }

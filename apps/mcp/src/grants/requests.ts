@@ -2,7 +2,7 @@ import { randomBytes } from 'node:crypto';
 import { and, desc, eq, gt, inArray, isNull, lte, ne, or, sql, type SQL } from 'drizzle-orm';
 import type { PgUpdateSetSource } from 'drizzle-orm/pg-core';
 import type { Tenant } from '@/connections/auth';
-import { WalletBusy, type Ask, type OpenWallet, type Wallet } from '@/connections/relay';
+import { WalletBusy, WalletRefused, type Ask, type OpenWallet, type Wallet } from '@/connections/relay';
 import { keepLease, sessionLeaseEnd } from '@/connections/session-lease';
 import { USER_REJECTED } from '@/connections/wallet-codes';
 import { getDb, type Tx } from '@/db/client';
@@ -119,6 +119,7 @@ function outcomeOf(err: unknown, row: PermissionRequestRow, asked: boolean): Out
   const code = (err as { code?: unknown } | undefined)?.code;
   if (code === USER_REJECTED) return { state: 'owner_declined' };
   if (typeof code === 'number') return { state: 'failed', code: `wallet_error:${code}` };
+  if (err instanceof WalletRefused) return { state: 'failed', code: 'wallet_error' };
   if (Date.now() >= row.approveBy.getTime()) return { state: 'expired' };
   if (asked) return { state: 'expired', code: LINK_LOST };
   return { state: 'failed', code: 'unexpected' };

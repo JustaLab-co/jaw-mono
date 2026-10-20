@@ -16,7 +16,9 @@ import { getDb } from '@/db/client';
 import { payments } from '@/db/schema';
 import { useTestDb } from '@/db/test-db';
 
-const asked: { id: string }[] = [];
+const asked: { id: string; salt: bigint }[] = [];
+const revokedInWallet = new Set<string>();
+const idOf = (salt: bigint) => asked.find((a) => a.salt === salt)?.id ?? asked[asked.length - 1].id;
 const chain = { start: 1, end: 2_000_000_000, spend: 0n, held: 0n };
 
 vi.mock('@/lib/chain', async (original) => ({
@@ -24,7 +26,8 @@ vi.mock('@/lib/chain', async (original) => ({
   publicClientFor: () =>
     ({
       readContract: async ({ functionName, args }: { functionName: string; args: [{ salt: bigint }] }) => {
-        if (functionName === 'getHash') return asked[asked.length - 1].id;
+        if (functionName === 'getHash') return idOf(args[0].salt);
+        if (functionName === 'isRevoked') return revokedInWallet.has(idOf(args[0].salt));
         if (functionName === 'getCurrentPeriod') return chain;
         if (functionName === 'balanceOf') return chain.held;
         return functionName === 'isApproved';
@@ -42,9 +45,9 @@ async function approve(c: Awaited<ReturnType<typeof connect>>, perDay: string) {
   const wallet = fakeWallet(walletAnswers(c.signer));
   await grantPermissions(t, { x402Budget: { perDay } }, { openWallet: wallet, readPermission: approvedOnChain });
   await walletsSettled();
-  const permissionId = (await x402Budget(t.connectionId))!.permissionId;
-  asked.push({ id: permissionId });
-  return permissionId;
+  const grant = (await x402Budget(t.connectionId))!;
+  asked.push({ id: grant.permissionId, salt: BigInt(grant.permission.salt) });
+  return grant.permissionId;
 }
 
 describe('jaw_session_status after a budget change', () => {
@@ -74,6 +77,18 @@ describe('jaw_session_status after a budget change', () => {
       spentToday: { amount: '0' },
       remainingToday: { amount: '300000' },
     });
+  });
+});
+
+describe('given two budgets and the newer one revoked in the wallet', () => {
+  it('when jaw_session_status runs, then it is ready and describes the older budget, the one payments draw from', async () => {
+    const c = await connect();
+    const older = await approve(c, '2');
+    const newer = await approve(c, '1');
+    revokedInWallet.add(newer);
+    const status = await callTool(c.access_token, 'jaw_session_status', {});
+    expect(status.structuredContent.readiness).toMatchObject({ status: 'ready' });
+    expect(status.structuredContent.budget).toMatchObject({ permissionId: older, perDay: { amount: '2000000' } });
   });
 });
 

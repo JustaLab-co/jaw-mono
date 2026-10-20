@@ -196,16 +196,16 @@ export async function sweepRevokedGrants(
   limit = GRANTS_PER_SWEEP
 ): Promise<number | null> {
   try {
-    const revoked: string[] = [];
+    let recorded = 0;
     // One at a time: the payment path reads the same RPC, and a burst can get it rate limited.
     for (const g of await sampleLiveGrants(limit)) {
       const state = await read({ chainId: g.chainId, permissionId: g.permissionId, permission: g.permission }).catch(
         (): PermissionState => ({ status: 'unavailable' })
       );
-      if (state.status === 'ok' && state.revoked) revoked.push(g.permissionId);
+      if (state.status === 'unavailable') return null;
+      if (state.status === 'ok' && state.revoked) recorded += await recordRevoked([g.permissionId]);
     }
-    await recordRevoked(revoked);
-    return revoked.length;
+    return recorded;
   } catch (err) {
     log('error', { msg: 'grant sweep failed', error: errorLabel(err) });
     return null;

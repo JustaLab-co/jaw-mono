@@ -10,9 +10,9 @@ const run = withEdge(
   async (req) => {
     if (!hasCronSecret(req)) return Response.json({ error: 'unauthorized' }, { status: 401 });
     await sweepWraps();
-    const grantsRevoked = await sweepRevokedGrants();
     const report = await reconcile();
     await purge();
+    const grantsRevoked = await sweepRevokedGrants();
     return Response.json({ ...report, grantsRevoked });
   },
   { guarded: false }

@@ -16,7 +16,9 @@ import { tenant, type Tenant } from '@/connections/auth';
 import { config } from '@/connections/config';
 import { findActive } from '@/connections/rows';
 import { getDb } from '@/db/client';
-import { liveGrants, x402Budget, type Grant, type LiveGrant } from '@/grants/store';
+import { readOnChain } from '@/grants/permission';
+import { liveGrants, type Grant, type LiveGrant } from '@/grants/store';
+import { payingBudget } from '@/payments/pay';
 import { dayLeft, daySpendOf, isoOf } from '@/payments/day-spend';
 import { openSpends, recordedSends } from '@/payments/sends';
 import { entriesFor, pulledUnderOtherGrants } from '@/payments/store';
@@ -99,7 +101,7 @@ function readinessOf(t: Tenant, liveness: Awaited<ReturnType<typeof readLiveness
 }
 
 async function readinessFor(t: Tenant): Promise<Readiness> {
-  const grant = await x402Budget(t.connectionId);
+  const grant = await payingBudget(t.connectionId, readOnChain);
   return readinessOf(t, grant && (await budgetOf(grant, t, null)).liveness);
 }
 
@@ -192,7 +194,7 @@ async function status(t: Tenant) {
   const network = caip2(t.chainId);
   const [float, grant, held, conn] = await Promise.all([
     balanceOf(network, t.sessionAddress),
-    x402Budget(t.connectionId),
+    payingBudget(t.connectionId, readOnChain),
     liveGrants(t.connectionId),
     findActive(t.connectionId),
   ]);

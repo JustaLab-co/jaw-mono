@@ -20,9 +20,9 @@ function reconcileEvery(seconds: number) {
     running = true;
     try {
       await sweepWraps();
-      await sweepRevokedGrants();
       await reconcile();
       await purge();
+      await sweepRevokedGrants();
     } catch (err) {
       log('error', { msg: 'reconcile run failed', error: err instanceof Error ? err.name : 'unknown' });
     } finally {

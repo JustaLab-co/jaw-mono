@@ -109,12 +109,13 @@ describe('a wallet session over the relay', () => {
     await expect(wallet.run((ask) => ask('eth_requestAccounts', []))).rejects.toThrow();
   });
 
-  it('given the caller closes the session before handing out its link, then running it is refused', async () => {
+  it('given the caller closes the session before handing out its link, then running it is refused, named as closed by this server', async () => {
     const wallet = await openRelay(84532);
     wallet.close();
-    await expect(wallet.run((ask) => ask('eth_requestAccounts', []))).rejects.toThrow(
-      /the relay connection failed|the wallet session ended/
-    );
+    await expect(wallet.run((ask) => ask('eth_requestAccounts', []))).rejects.toMatchObject({
+      name: 'WalletSessionClosed',
+      message: 'the wallet session ended',
+    });
   });
 
   it('keeps the key out of what the relay sees: the public key rides the fragment, every message is ciphertext', async () => {
@@ -132,6 +133,7 @@ describe('a wallet session over the relay', () => {
     const wallet = await openRelay(84532);
     await page(wallet.url, () => ({ success: false, error: { code: 4001, message: 'User rejected the request' } }));
     await expect(wallet.run((ask) => ask('wallet_grantPermissions', [{}]))).rejects.toMatchObject({
+      name: 'WalletRefused',
       message: 'User rejected the request',
       code: 4001,
     });
@@ -144,9 +146,10 @@ describe('a wallet session over the relay', () => {
       () => ({ success: true, data: null }),
       () => ({ type: 'error', reason: 'No API key' })
     );
-    await expect(wallet.run((ask) => ask('eth_requestAccounts', []))).rejects.toThrow(
-      'the wallet page refused: No API key'
-    );
+    await expect(wallet.run((ask) => ask('eth_requestAccounts', []))).rejects.toMatchObject({
+      name: 'WalletPageRefused',
+      message: 'the wallet page refused: No API key',
+    });
   });
 });
 
@@ -179,6 +182,15 @@ describe('a link the owner opens late', () => {
   // relay.jaw.id ends a session after 15 minutes without a message from either side.
   const RELAY_IDLE_MS = 15 * 60_000;
   afterEach(() => vi.useRealTimers());
+
+  it('given the relay drops the server socket, then the run ends named as closed by the relay', async () => {
+    const wallet = await openRelay(84532);
+    const session = new URL(wallet.url).searchParams.get('session')!;
+    await vi.waitFor(() => expect(sessions.get(session)?.cli).toBeDefined());
+    const ran = wallet.run((ask) => ask('eth_requestAccounts', []));
+    sessions.get(session)!.cli!.terminate();
+    await expect(ran).rejects.toMatchObject({ name: 'RelayClosed', message: 'the wallet session ended' });
+  });
 
   it('given nobody opens it for longer than the relay idle limit, then the server speaks at least twice per idle window and the session still runs', async () => {
     vi.useFakeTimers({ toFake: ['setInterval', 'clearInterval'] });
@@ -232,13 +244,13 @@ describe('a session nobody opens for ten minutes', () => {
     const ids = held.map((w) => new URL(w.url).searchParams.get('session')!);
     await vi.waitFor(() => expect(ids.every((id) => sessions.get(id)?.cli)).toBe(true));
     await expect(fresh.connectRelay(84532, until)).rejects.toBeInstanceOf(fresh.WalletBusy);
-    const ended = held[0].run(async () => 'ran').catch((err: Error) => err.message);
+    const ended = held[0].run(async () => 'ran').catch((err: Error) => `${err.name}: ${err.message}`);
 
     await vi.advanceTimersByTimeAsync(JOIN_MS - 1_000);
     await expect(fresh.connectRelay(84532, until)).rejects.toBeInstanceOf(fresh.WalletBusy);
     await vi.advanceTimersByTimeAsync(1_000);
 
-    expect(await ended).toBe('the wallet link was not opened in time');
+    expect(await ended).toBe('WalletLinkUnopened: the wallet link was not opened in time');
     expect((await fresh.connectRelay(84532, until)).url).toMatch(/cli-bridge/);
   });
 
@@ -306,9 +318,10 @@ describe('what the wallet page can get wrong', () => {
 
   it('given nobody opens the link before its deadline, then the caller is told it timed out', async () => {
     const wallet = await openRelay(84532, 300);
-    await expect(wallet.run((ask) => ask('eth_requestAccounts', []))).rejects.toThrow(
-      'timed out waiting for the wallet'
-    );
+    await expect(wallet.run((ask) => ask('eth_requestAccounts', []))).rejects.toMatchObject({
+      name: 'WalletTimedOut',
+      message: 'timed out waiting for the wallet',
+    });
   });
 });
 

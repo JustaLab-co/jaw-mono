@@ -74,6 +74,10 @@ describe('prepare', () => {
     expect(sweepRevokedGrants).toHaveBeenCalledTimes(1);
     expect(reconcile).toHaveBeenCalledTimes(1);
     expect(purge).toHaveBeenCalledTimes(1);
+    // Payments settle first: the grant sweep reads the chain and can take a while when it is slow.
+    expect(vi.mocked(sweepRevokedGrants).mock.invocationCallOrder[0]).toBeGreaterThan(
+      vi.mocked(purge).mock.invocationCallOrder[0]
+    );
   });
 
   it('uses the configured period', async () => {

@@ -509,7 +509,7 @@ describe('cron and metrics routes', () => {
       (await (await call('metrics', 'cron-secret')).text()).match(/^jaw_mcp_wraps_past_window .*$/m)?.[0];
     expect(await gauge()).toBe('jaw_mcp_wraps_past_window 2');
     const res = await call('cron', 'cron-secret');
-    expect(await res.json()).toHaveProperty('grantsRevoked', expect.any(Number));
+    expect(await res.json()).toHaveProperty('grantsRevoked');
     expect(await gauge()).toBe('jaw_mcp_wraps_past_window 0');
   });
 });
@@ -826,8 +826,7 @@ describe('given grants the owner may have revoked in the wallet', () => {
 
   it('when the sweep runs, then only the one revoked on chain is marked, and expired or already revoked ones are not read', async () => {
     const earlier = new Date(Date.now() - 3_600_000);
-    const [revoked, unread, unapproved, mismatched, live, expired, marked] = await grantRows([
-      {},
+    const [revoked, unapproved, mismatched, live, expired, marked] = await grantRows([
       {},
       {},
       {},
@@ -837,24 +836,44 @@ describe('given grants the owner may have revoked in the wallet', () => {
     ]);
     const answers: Record<string, PermissionState> = {
       [revoked]: { status: 'ok', approved: true, revoked: true },
-      [unread]: { status: 'unavailable' },
       [unapproved]: { status: 'ok', approved: false, revoked: false },
       [mismatched]: { status: 'mismatch' },
     };
     const read: string[] = [];
     const count = await sweepRevokedGrants(async ({ permissionId }) => {
       read.push(permissionId);
-      if (permissionId === unread) throw new Error('node down');
       return answers[permissionId] ?? { status: 'ok', approved: true, revoked: false };
     }, 10_000);
 
     expect(count).toBe(1);
     expect(await revokedAtOf(revoked)).toBeInstanceOf(Date);
-    for (const id of [unread, unapproved, mismatched, live, expired]) expect(await revokedAtOf(id)).toBeNull();
+    for (const id of [unapproved, mismatched, live, expired]) expect(await revokedAtOf(id)).toBeNull();
     expect(await revokedAtOf(marked)).toEqual(earlier);
-    expect(read).toEqual(expect.arrayContaining([revoked, unread, unapproved, mismatched, live]));
+    expect(read).toEqual(expect.arrayContaining([revoked, unapproved, mismatched, live]));
     expect(read).not.toContain(expired);
     expect(read).not.toContain(marked);
+  });
+
+  it('when the chain cannot be read, then the sweep stops at the first read, records nothing and reports it failed', async () => {
+    const [revoked] = await grantRows([{}, {}]);
+    let reads = 0;
+    const count = await sweepRevokedGrants(async () => {
+      reads++;
+      throw new Error('node down');
+    }, 10_000);
+    expect(count).toBeNull();
+    expect(reads).toBe(1);
+    expect(await revokedAtOf(revoked)).toBeNull();
+  });
+
+  it('when another caller recorded the revoke first, then the sweep does not count it again', async () => {
+    const [revoked] = await grantRows([{}]);
+    const read = async ({ permissionId }: { permissionId: string }): Promise<PermissionState> => {
+      if (permissionId !== revoked) return { status: 'ok', approved: true, revoked: false };
+      await recordRevoked([revoked]);
+      return { status: 'ok', approved: true, revoked: true };
+    };
+    expect(await sweepRevokedGrants(read, 10_000)).toBe(0);
   });
 
   it('when the sample is smaller than the live grants, then it reads no more than the limit', async () => {

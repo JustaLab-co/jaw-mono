@@ -66,6 +66,20 @@ const KEEPALIVE_MS = 5 * 60_000;
 // An authorization link nobody opened gives its slot back; another click on the page opens a new one.
 const JOIN_WITHIN_MS = 10 * 60_000;
 
+/** Named, because the log keeps only an error's name: the name says how the session ended. */
+const ending = (name: string, message: string) => Object.assign(new Error(message), { name });
+
+/** The wallet answered a request with an error, with or without a code. */
+export class WalletRefused extends Error {
+  override name = 'WalletRefused';
+  constructor(
+    message: string,
+    readonly code?: number
+  ) {
+    super(message);
+  }
+}
+
 export class WalletBusy extends Error {
   constructor() {
     super('too many wallet sessions are open on this server');
@@ -157,13 +171,16 @@ async function startSession(
   }, KEEPALIVE_MS);
   keepalive.unref();
   // Ends the session at its deadline even if nobody runs it.
-  const deadline = setTimeout(() => end(), until.getTime() - Date.now());
+  const deadline = setTimeout(() => {
+    inbox.close(ending('WalletTimedOut', 'timed out waiting for the wallet'));
+    end();
+  }, until.getTime() - Date.now());
   deadline.unref();
   const unjoined =
     joinWithin === undefined
       ? undefined
       : setTimeout(() => {
-          inbox.close(new Error('the wallet link was not opened in time'));
+          inbox.close(ending('WalletLinkUnopened', 'the wallet link was not opened in time'));
           end();
         }, joinWithin);
   unjoined?.unref();
@@ -175,6 +192,7 @@ async function startSession(
   };
   // A socket closed while still connecting never fires `close`, so closing frees the slot itself.
   const end = () => {
+    inbox.close(ending('WalletSessionClosed', 'the wallet session ended'));
     ws.close();
     stop();
   };
@@ -198,7 +216,9 @@ async function startSession(
           for (;;) {
             const m = await inbox.next((m) => m.type === 'encrypted');
             const inner = await decryptMessage(secret, m as unknown as EncryptedEnvelope).catch(() => undefined);
-            if (inner?.type === 'error') throw new Error(`the wallet page refused: ${String(inner.reason)}`);
+            if (inner?.type === 'error') {
+              throw ending('WalletPageRefused', `the wallet page refused: ${String(inner.reason)}`);
+            }
             if (inner && want(inner)) return inner;
           }
         };
@@ -212,7 +232,7 @@ async function startSession(
           const answer = await read((m) => m.type === 'rpc_response' && m.id === id);
           if (answer.success) return answer.data;
           const error = answer.error as { code?: number; message?: string } | undefined;
-          throw Object.assign(new Error(error?.message ?? 'the wallet refused'), { code: error?.code });
+          throw new WalletRefused(error?.message ?? 'the wallet refused', error?.code);
         };
         const result = await work(ask);
         // Closes the wallet tab.
@@ -252,8 +272,8 @@ class Inbox {
       }
       this.waiter?.();
     });
-    ws.addEventListener('error', () => this.close(new Error('the relay connection failed')));
-    ws.addEventListener('close', () => this.close(new Error('the wallet session ended')));
+    ws.addEventListener('error', () => this.close(ending('RelayFailed', 'the relay connection failed')));
+    ws.addEventListener('close', () => this.close(ending('RelayClosed', 'the wallet session ended')));
   }
 
   /** Ends every wait with `err`, unless the session already ended with another. */
@@ -269,7 +289,7 @@ class Inbox {
       this.queue = [];
       if (this.closed) throw this.closed;
       const left = this.until.getTime() - Date.now();
-      if (left <= 0) throw new Error('timed out waiting for the wallet');
+      if (left <= 0) throw ending('WalletTimedOut', 'timed out waiting for the wallet');
       await new Promise<void>((resolve) => {
         const timer = setTimeout(resolve, left);
         this.waiter = () => {
