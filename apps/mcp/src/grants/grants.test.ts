@@ -321,9 +321,7 @@ describe('given a connection that approves a second budget', () => {
     await ask(t, signer, { perDay: '0.5' });
     const newer = (await x402Budget(t.connectionId))?.permissionId;
 
-    const older = await rowOf(connectedWith);
-    const { connectionId: _c, createdAt: _a, replacedAt: _r, revokedAt: _v, ...again } = older;
-    await getDb().transaction((tx) => recordGrant(tx, t.connectionId, again));
+    await inTx(t.connectionId, await newGrantFrom(t.connectionId, connectedWith));
 
     expect((await x402Budget(t.connectionId))?.permissionId).toBe(newer);
   });
