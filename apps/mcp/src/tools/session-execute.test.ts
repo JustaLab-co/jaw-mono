@@ -18,9 +18,10 @@ import {
 import { entryPoint08Abi, getUserOperationError } from 'viem/account-abstraction';
 import { afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
 import { verifyBearer, type Tenant } from '@/connections/auth';
+import { revokeByGrant } from '@/connections/rows';
 import { callTool, connect, setTestEnv } from '@/connections/testkit';
 import { getDb } from '@/db/client';
-import { sends, settings } from '@/db/schema';
+import { connections, sends, settings } from '@/db/schema';
 import { lockWaiters, TEST_PG_URL, useTestDb, useTestPostgres } from '@/db/test-db';
 import { recordGrant } from '@/grants/permission';
 import { claim } from '@/payments/store';
@@ -584,6 +585,50 @@ describe('jaw_session_execute', () => {
     const rows = await rowsOf(t.connectionId);
     expect(rows.find((r) => r.callsId === logged)).toMatchObject({ state: 'landed' });
     expect(rows.find((r) => r.callsId === second.structuredContent.userOpHash)).toMatchObject({ state: 'open' });
+  });
+
+  it('given an execute recorded and not yet submitted, when its connection is revoked, then the end waits for the submit', async () => {
+    const { c, t, permissionId } = await withCustomGrant();
+    const [{ grantId }] = await getDb()
+      .select({ grantId: connections.grantId })
+      .from(connections)
+      .where(eq(connections.id, t.connectionId));
+    const release = deferred();
+    const reached = deferred();
+    bridge.gate = release.promise;
+    bridge.reached = reached.resolve;
+    const statusOf = async () =>
+      (await getDb().select().from(connections).where(eq(connections.id, t.connectionId)))[0].status;
+
+    const sent = execute(c.access_token, permissionId, [transfer(BOB, 1n)]);
+    await reached.promise;
+    const ended = revokeByGrant(grantId as string, 0);
+    await new Promise((resolve) => setTimeout(resolve, 600));
+    const whileInFlight = await statusOf();
+    release.resolve();
+    await Promise.all([sent, ended]);
+
+    expect(whileInFlight).toBe('active');
+    expect(await statusOf()).toBe('revoked');
+    expect(bridge.sent).toHaveLength(1);
+  });
+
+  it('given the connection ends while the batch is checked, then nothing is recorded or sent', async () => {
+    const { c, t, permissionId } = await withCustomGrant();
+    // The head read right after fit is where an end lands between the checks and the record.
+    vi.spyOn(node, 'getBlockNumber').mockImplementation(async () => {
+      await getDb()
+        .update(connections)
+        .set({ status: 'revoked', revokedAt: new Date() })
+        .where(eq(connections.id, t.connectionId));
+      return chain.head;
+    });
+
+    const result = await execute(c.access_token, permissionId, [transfer(BOB, 1n)]);
+
+    expect(result.content[0].text).toMatch(/connection has ended/);
+    expect(bridge.attempts).toBe(0);
+    expect(await rowsOf(t.connectionId)).toEqual([]);
   });
 
   it('given an unconfirmed run that has since landed, then the session status counts its spend once in what is left', async () => {

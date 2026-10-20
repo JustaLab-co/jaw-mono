@@ -258,8 +258,10 @@ async function submitUnder(t: Tenant, run: Run): Promise<ToolResult | Reserved> 
     if (head === undefined) return refusal(UNREADABLE);
 
     const spent = [...spendOf(run.calls, grant.account)];
+    // owns() holds the connection row, so an end waits on this tx and then sees the rows in flight.
     const ids = await hold.tx(async (tx) => {
       if (!(await hold.owns(tx))) throw new FloatLost();
+      if (!(await liveIn(tx, t.connectionId))) return undefined;
       const send = {
         connectionId: t.connectionId,
         idempotencyKey: run.key,
@@ -273,6 +275,7 @@ async function submitUnder(t: Tenant, run: Run): Promise<ToolResult | Reserved> 
       if (spent.length === 0) return [await recordSend(tx, { ...send, token: null, amount: 0n })];
       return Promise.all(spent.map(([token, amount]) => recordSend(tx, { ...send, token: token as Address, amount })));
     });
+    if (!ids) return refusal(ENDED);
     let submitted: Submitted;
     try {
       hold.assertHeld();
