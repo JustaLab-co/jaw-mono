@@ -11,7 +11,7 @@ import {
 import { afterAll, afterEach, describe, expect, it, vi } from 'vitest';
 import WebSocket, { WebSocketServer } from 'ws';
 import { useTestDb } from '@/db/test-db';
-import type { RelayResume } from './relay';
+import type { RelayResume } from './seal';
 import { setTestEnv } from './testkit';
 
 // A relay that pairs the two roles of a session and forwards what each sends, as relay.jaw.id does.
@@ -816,14 +816,61 @@ describe('a session the server can rejoin', () => {
     expect(opened.ids).toHaveLength(1);
   });
 
-  it('given the page reloaded with a new key, when the server rejoins, then the run ends as page gone and nothing is asked again', async () => {
+  it('given the page reloaded with a new key, when the server rejoins, then the run ends as page gone at once and nothing is asked again', async () => {
     const { wallet, opened, resume } = await restarted(never);
     const resumed = await resumeWallet(resume, soon());
     opened.close();
     const reloaded = await replayingPage(wallet.url, async () => '0xother');
+    const started = Date.now();
 
     await expect(resumed!.run(sign)).rejects.toBeInstanceOf(PageGone);
+    expect(Date.now() - started).toBeLessThan(5_000);
     expect(reloaded.ids).toEqual([]);
+  });
+
+  it('given the page reloads with a new key while a resumed ask waits on the owner, then the run ends as page gone', async () => {
+    const { wallet, opened, resume } = await restarted(never);
+    const resumed = await resumeWallet(resume, soon());
+
+    const run = resumed!.run(async (ask) => {
+      const asked = sign(ask);
+      await vi.waitFor(() => expect(opened.ids).toHaveLength(2));
+      opened.close();
+      await replayingPage(wallet.url, async () => '0xother');
+      return asked;
+    });
+
+    await expect(run).rejects.toBeInstanceOf(PageGone);
+  });
+
+  it('given a resumed ask that is not the request first sent under its id, then the caller gets the page refusal code -32600', async () => {
+    const { resume } = await restarted(never);
+    const resumed = await resumeWallet(resume, soon());
+
+    await expect(resumed!.run((ask) => ask('personal_sign', ['0x69', '0xaa']))).rejects.toMatchObject({
+      code: -32600,
+    });
+  });
+
+  it('given a stored key that does not parse, when the server rejoins, then it is refused and leaves no socket on the relay', async () => {
+    const corrupt = { ...(await restarted(never)).resume, key: 'zz' };
+    await vi.waitFor(() => expect(sessions.get(corrupt.session)?.cli).toBeUndefined());
+
+    await expect(resumeWallet(corrupt, soon())).rejects.toThrow();
+    await new Promise((r) => setTimeout(r, 200));
+    expect(sessions.get(corrupt.session)?.cli).toBeUndefined();
+  });
+
+  it('given saving the session fails, then the run still asks the owner and answers', async () => {
+    const wallet = await openRelay(84532);
+    const opened = await replayingPage(wallet.url, async () => '0xsig');
+
+    const answer = await wallet.run(sign, () => {
+      throw new Error('database down');
+    });
+
+    expect(answer).toBe('0xsig');
+    expect(opened.asked()).toBe(1);
   });
 
   it('given the owner pool is full, then a rejoin is busy', async () => {

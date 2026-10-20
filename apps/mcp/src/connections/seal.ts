@@ -1,8 +1,15 @@
 import { createCipheriv, createDecipheriv, createHash, createPrivateKey, hkdfSync, randomBytes } from 'node:crypto';
 import type { Hex } from 'viem';
-import type { RelayResume } from './relay';
 
 export type Sealed = string & { readonly __brand: 'Sealed' };
+
+export interface RelayResume {
+  session: string;
+  key: string;
+  peer: string;
+  chainId: number;
+  appName: string;
+}
 export type Wrapped = string & { readonly __brand: 'Wrapped' };
 
 interface RingKey {
@@ -78,12 +85,12 @@ export function open(ring: KeyRing, sealed: Sealed, id: string): Hex {
   return `0x${decrypt(ring, sealed, 'v1', id, (k) => k.seal).toString('hex')}`;
 }
 
-export function sealRelay(ring: KeyRing, resume: RelayResume, rowId: string): string {
+export function sealResume(ring: KeyRing, resume: RelayResume, rowId: string): string {
   const { kid, relay } = ring.keys[0];
   return encrypt('r1', kid, relay, Buffer.from(JSON.stringify(resume)), rowId);
 }
 
-export function openRelay(ring: KeyRing, blob: string, rowId: string): RelayResume | undefined {
+export function openResume(ring: KeyRing, blob: string, rowId: string): RelayResume | undefined {
   try {
     return JSON.parse(decrypt(ring, blob, 'r1', rowId, (k) => k.relay).toString()) as RelayResume;
   } catch {

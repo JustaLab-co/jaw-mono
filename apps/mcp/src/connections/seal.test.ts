@@ -1,7 +1,7 @@
 import { randomBytes } from 'node:crypto';
 import { generatePrivateKey } from 'viem/accounts';
 import { describe, expect, it } from 'vitest';
-import { nextRefreshId, open, openRelay, parseKeyRing, seal, sealRelay, unwrap, wrap } from './seal';
+import { type Sealed, nextRefreshId, open, openResume, parseKeyRing, seal, sealResume, unwrap, wrap } from './seal';
 
 const key = () => randomBytes(32).toString('base64url');
 
@@ -91,24 +91,31 @@ describe('a sealed relay session', () => {
 
   it('given it is sealed for a row, then that row opens it and the private key never shows', () => {
     const ring = parseKeyRing(a);
-    const blob = sealRelay(ring, resume, 'req_1');
+    const blob = sealResume(ring, resume, 'req_1');
 
     expect(blob).not.toContain(resume.key);
-    expect(openRelay(ring, blob, 'req_1')).toEqual(resume);
+    expect(openResume(ring, blob, 'req_1')).toEqual(resume);
   });
 
   it('given it is moved to another row, tampered with, or its key left the ring, then it does not open', () => {
     const ring = parseKeyRing(a);
-    const blob = sealRelay(ring, resume, 'req_1');
+    const blob = sealResume(ring, resume, 'req_1');
     const last = blob.at(-1) === 'A' ? 'B' : 'A';
 
-    expect(openRelay(ring, blob, 'req_2')).toBeUndefined();
-    expect(openRelay(ring, blob.slice(0, -1) + last, 'req_1')).toBeUndefined();
-    expect(openRelay(parseKeyRing(b), blob, 'req_1')).toBeUndefined();
+    expect(openResume(ring, blob, 'req_2')).toBeUndefined();
+    expect(openResume(ring, blob.slice(0, -1) + last, 'req_1')).toBeUndefined();
+    expect(openResume(parseKeyRing(b), blob, 'req_1')).toBeUndefined();
+  });
+
+  it('given a sealed session relabelled as a sealed connection key, then the connection key ring purpose does not open it', () => {
+    const ring = parseKeyRing(a);
+    const relabelled = sealResume(ring, resume, 'req_1').replace(/^r1\./, 'v1.') as Sealed;
+
+    expect(() => open(ring, relabelled, 'req_1')).toThrow();
   });
 
   it('given a connection key sealed for the same id, then it does not open as a relay session', () => {
     const ring = parseKeyRing(a);
-    expect(openRelay(ring, seal(ring, generatePrivateKey(), 'req_1'), 'req_1')).toBeUndefined();
+    expect(openResume(ring, seal(ring, generatePrivateKey(), 'req_1'), 'req_1')).toBeUndefined();
   });
 });
