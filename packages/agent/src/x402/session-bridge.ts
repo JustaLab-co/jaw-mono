@@ -3,7 +3,6 @@ import { expiryInstant, isLegacySession, sessionUsable, type SessionConfig } fro
 import { usdcForNetwork } from './asset-registry.js';
 import { PERMIT2_ADDRESS } from './permit2.js';
 import { whyFeeTokenDisagrees } from './fee-token.js';
-import type { SendCallsOptions } from '@jaw.id/core';
 import type { Logger, SessionHost } from '../ports.js';
 
 // JAW's ERC-20 paymaster, mirrored from core's `jawPaymasterUrl`. Kept as a
@@ -116,7 +115,7 @@ export interface SessionBridgeOptions {
 }
 
 /** Awaited with the userOp hash after signing and before the send; a rejection stops the send. */
-export type OnUserOpSigned = NonNullable<SendCallsOptions['onSigned']>;
+export type OnUserOpSigned = (userOpHash: `0x${string}`) => void | Promise<void>;
 
 interface SessionCall {
   to: string;
