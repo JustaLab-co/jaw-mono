@@ -240,6 +240,22 @@ describe('a sign request whose server restarted', () => {
     }
   );
 
+  it.each([
+    ['a relay session the key ring cannot open', { relay: 'r1.retired.x.y' }],
+    ['a payload that is not a sign request', { payload: '{}' }],
+  ])(
+    'given a request the owner was never asked to sign, when %s is found, then it ends session_lost, not link_lost',
+    async (_, set) => {
+      const { row } = await askedThenRestarted('sign in', { stallAt: 1 });
+      expect(row.code).toBeNull();
+      await getDb().update(permissionRequests).set(set).where(eq(permissionRequests.id, row.id));
+
+      await resumeSigns();
+
+      expect(await settled(row.id)).toMatchObject({ state: 'expired', code: 'session_lost' });
+    }
+  );
+
   it('given the page refuses a resumed ask as another request under its id, then the row ends link_lost, not as a wallet error', async () => {
     const { row } = await askedThenRestarted();
     const payload = JSON.parse(row.payload!) as { request: { data: { message: string } } };

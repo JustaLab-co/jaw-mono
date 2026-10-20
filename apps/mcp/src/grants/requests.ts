@@ -300,11 +300,8 @@ function follow(row: PermissionRequestRow, wallet: Wallet, work: Work) {
     .finally(stop);
 }
 
-const lostAs = (row: PermissionRequestRow, why: Lost): Outcome => {
-  if (why === 'connection_ended') return { state: 'failed', code: 'connection_ended' };
-  if (why === 'unopenable') return { state: 'expired', code: LINK_LOST };
-  return pageGone(row.code === ASKED);
-};
+const lostAs = (row: PermissionRequestRow, why: Lost): Outcome =>
+  why === 'connection_ended' ? { state: 'failed', code: 'connection_ended' } : pageGone(row.code === ASKED);
 
 const parsed = (payload: string | null): unknown => {
   try {
