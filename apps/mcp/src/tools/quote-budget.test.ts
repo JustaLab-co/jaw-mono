@@ -20,7 +20,7 @@ import { grantPermissions } from '@/tools/grant-permissions';
 
 const USDC = '0x036CbD53842c5426634e7929541eC2318f3dCF7e';
 const asked: { id: string }[] = [];
-const chain = { start: 1, end: 2_000_000_000, spend: 0n, held: 0n, periodReadable: true };
+const chain = { start: 1, end: 2_000_000_000, spend: 0n, held: 0n, periodReadable: true, approved: true };
 
 vi.mock('@/lib/chain', async (original) => ({
   ...(await original<object>()),
@@ -33,7 +33,7 @@ vi.mock('@/lib/chain', async (original) => ({
           return chain;
         }
         if (functionName === 'balanceOf') return chain.held;
-        return functionName === 'isApproved';
+        return functionName === 'isApproved' && chain.approved;
       },
     }) as unknown as PublicClient,
 }));
@@ -53,7 +53,9 @@ const seller = createServer((req, res) => {
     ? [option(price, USDC)]
     : req.url === '/two'
       ? [option('1', '0x3333333333333333333333333333333333333333'), option('5000', USDC)]
-      : undefined;
+      : req.url === '/other'
+        ? [option('1', '0x3333333333333333333333333333333333333333')]
+        : undefined;
   if (!accepts) {
     res.end('free');
     return;
@@ -67,7 +69,9 @@ const SELLER = `127.0.0.1:${(seller.address() as AddressInfo).port}`;
 setTestEnv();
 process.env.JAW_MCP_INSECURE_FETCH_HOSTS = SELLER;
 beforeAll(useTestDb);
-beforeEach(() => Object.assign(chain, { start: 1, end: 2_000_000_000, spend: 0n, held: 0n, periodReadable: true }));
+beforeEach(() =>
+  Object.assign(chain, { start: 1, end: 2_000_000_000, spend: 0n, held: 0n, periodReadable: true, approved: true })
+);
 
 async function withBudget(perDay: string) {
   const c = await connect();
@@ -115,6 +119,21 @@ describe('given a budget of 0.5 USDC a day', () => {
     });
   });
 
+  it('when the seller offers only a token the budget does not hold, then the quote is refused as asset_mismatch', async () => {
+    const { token } = await withBudget('0.5');
+    const r = await quote(token, '/other');
+    expect(r.structuredContent).toMatchObject({ kind: 'refused', refusal: { code: 'asset_mismatch' } });
+  });
+
+  it('when the owner revoked it on chain, then a paid quote is not ready, carries no budget and does not say it fits', async () => {
+    const { token } = await withBudget('0.5');
+    chain.approved = false;
+    const r = await quote(token, '/price/5000');
+    expect(r.structuredContent.readiness).toEqual({ status: 'not_ready', reason: 'grant_revoked' });
+    expect(r.structuredContent.budget).toBeUndefined();
+    expect(r.structuredContent.summary).not.toContain('budget');
+  });
+
   it('when the day cannot be read from the chain, then a paid quote is not ready for chain_unavailable', async () => {
     const { token } = await withBudget('0.5');
     chain.periodReadable = false;
@@ -128,6 +147,17 @@ describe('given a budget of 0.5 USDC a day', () => {
     expect(r.structuredContent.kind).toBe('free');
     expect(r.structuredContent.readiness).toEqual({ status: 'ready' });
     expect(r.structuredContent.budget).toBeUndefined();
+  });
+});
+
+describe('given a budget of 1 USDC a day', () => {
+  it('when the quote is 5000 base units, then it is ready with 1000000 left today', async () => {
+    const { token, permissionId } = await withBudget('1');
+    const r = await quote(token, '/price/5000');
+    expect(r.structuredContent).toMatchObject({
+      readiness: { status: 'ready' },
+      budget: { permissionId, remainingToday: { amount: '1000000' } },
+    });
   });
 });
 

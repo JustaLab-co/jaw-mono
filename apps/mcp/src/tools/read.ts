@@ -302,6 +302,7 @@ async function quote(t: Tenant, url: string) {
     const asset = usdcForNetwork(p.network);
     const shown = asset && asset.address.toLowerCase() === p.asset.toLowerCase() ? asset.usdcName : p.asset;
     const readiness = quoteReadiness(t, read, BigInt(p.amount));
+    const usable = base.readiness.status === 'ready' ? read : undefined;
     return {
       out: quoteOutput.parse({
         ...base,
@@ -311,10 +312,10 @@ async function quote(t: Tenant, url: string) {
         chainId: p.network,
         scheme: p.scheme,
         payTo: p.payTo,
-        ...(read && {
-          budget: { permissionId: read.budget.permissionId, remainingToday: read.budget.remainingToday },
+        ...(usable && {
+          budget: { permissionId: usable.budget.permissionId, remainingToday: usable.budget.remainingToday },
         }),
-        summary: `Costs ${p.amount} base units of ${shown} on ${p.network}. Not paid.${fitSummary(read, readiness)}`,
+        summary: `Costs ${p.amount} base units of ${shown} on ${p.network}. Not paid.${fitSummary(usable, readiness)}`,
       }),
     };
   }
