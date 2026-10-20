@@ -1,23 +1,32 @@
 import {
   balanceReader,
+  currentLimitUsageOnChain,
+  firstOperationCost,
+  gasReserve,
   type OnChainPeriod,
+  PERMIT2_ADDRESS,
   payAndFetch,
+  type PaymentOutcome,
   readCurrentPeriods,
   readLiveness,
+  resolveSessionX402Policy,
+  sumSpentSince,
   usdcBalance,
   usdcForNetwork,
 } from '@jaw.id/agent';
 import type { McpServer } from '@modelcontextprotocol/server';
-import type { Address } from 'viem';
+import { erc20Abi, type Address } from 'viem';
 import { z } from 'zod';
+import { chainClients, sessionOf } from '@/adapters/session-host';
 import { tenant, type Tenant } from '@/connections/auth';
 import { config } from '@/connections/config';
 import { findActive } from '@/connections/rows';
 import { getDb } from '@/db/client';
 import { liveGrants, x402Budget, type Grant, type LiveGrant } from '@/grants/store';
 import { dayLeft, daySpendOf, isoOf } from '@/payments/day-spend';
+import { stillHeld } from '@/payments/refill';
 import { openSpends, recordedSends, type OpenSpend } from '@/payments/sends';
-import { entriesFor, pulledUnderOtherGrants } from '@/payments/store';
+import { entriesFor, holdingRows, pulledUnderOtherGrants } from '@/payments/store';
 import { publicClientFor } from '@/lib/chain';
 import { fenceText, reply } from '@/lib/fence';
 import { safeFetch, watchCuts } from '@/lib/safe-fetch';
@@ -35,6 +44,18 @@ const readiness = z.object({
   link: z.string().url().optional(),
 });
 type Readiness = z.infer<typeof readiness>;
+const quoteReadinessOut = readiness.extend({
+  reason: z
+    .enum([
+      ...readiness.shape.reason.unwrap().options,
+      'over_allowance',
+      'over_cap',
+      'balance_low',
+      'funding_unavailable',
+    ])
+    .optional(),
+});
+type QuoteReadiness = z.infer<typeof quoteReadinessOut>;
 
 const budgetOutput = z.object({
   permissionId: z.string(),
@@ -50,15 +71,32 @@ const clients = { clients: { publicClient: publicClientFor } };
 const floorZero = (n: bigint) => (n > 0n ? n : 0n);
 const least = (a: bigint, b: bigint) => (a < b ? a : b);
 
-// A session balance that could not be read counts as empty.
-async function budgetOf(grant: Grant, t: Tenant, held: bigint | null) {
+/**
+ * What today leaves: the day's allowance, the float at the session address that no
+ * other payment holds (null when unread), and what a refill may still pull.
+ */
+interface Room {
+  left: bigint;
+  held: bigint | null;
+  cap: bigint;
+}
+
+// A refill pays the fee for its own transfer, so the cap has to hold that on top of what it pulls.
+function refillFee(grant: Grant) {
+  const usdc = usdcForNetwork(caip2(grant.chainId));
+  return usdc ? firstOperationCost(usdc) : 0n;
+}
+
+// remainingToday counts a session balance that could not be read as empty.
+async function budgetOf(grant: Grant, t: Tenant, balance: bigint | null) {
   const target = { chainId: grant.chainId, permissionId: grant.permissionId, permission: grant.permission };
-  const [liveness, periods, earlier, entries, sent] = await Promise.all([
+  const [liveness, periods, earlier, entries, sent, holds] = await Promise.all([
     readLiveness(target, clients),
     readCurrentPeriods({ ...target, token: grant.token }, clients),
     pulledUnderOtherGrants(getDb(), t.connectionId, grant.permissionId),
     entriesFor(grant.permissionId),
     recordedSends(grant.permissionId),
+    holdingRows(getDb(), t.sessionAddress, '').then((rows) => stillHeld(rows, chainClients, undefined)),
   ]);
   const asset = caip19(caip2(grant.chainId), grant.token);
   const counted = periods[0]?.period;
@@ -67,16 +105,17 @@ async function budgetOf(grant: Grant, t: Tenant, held: bigint | null) {
   const figure = (amount: bigint) => ({ amount: amount.toString(), asset });
   let spent = null;
   let payable = null;
+  let room: Room | undefined;
   if (day) {
     const pulled = day.refilled + day.sentFromAccount;
-    const left = dayLeft(allowance, day);
-    const pullable = floorZero(allowance - pulled);
-    const floatFundable = (held ?? 0n) + floorZero(pullable - earlier);
+    const held = balance === null ? null : floorZero(balance - holds);
+    room = { left: dayLeft(allowance, day), held, cap: floorZero(floorZero(allowance - pulled) - earlier) };
     spent = figure(day.paid + day.sentFromAccount);
-    payable = figure(least(left, floatFundable));
+    payable = figure(least(room.left, (held ?? 0n) + floorZero(room.cap - refillFee(grant))));
   }
   return {
     liveness,
+    room,
     budget: budgetOutput.parse({
       permissionId: grant.permissionId,
       perDay: { amount: grant.allowance, asset },
@@ -94,11 +133,6 @@ function readinessOf(t: Tenant, liveness: Awaited<ReturnType<typeof readLiveness
   if (liveness === 'active') return { status: 'ready' };
   if (liveness === 'unknown') return { status: 'not_ready', reason: 'chain_unavailable' };
   return { status: 'not_ready', reason: 'grant_revoked' };
-}
-
-async function readinessFor(t: Tenant): Promise<Readiness> {
-  const grant = await x402Budget(t.connectionId);
-  return readinessOf(t, grant && (await budgetOf(grant, t, null)).liveness);
 }
 
 const fenced = (source: string, text: string) => ({ type: 'text' as const, text: fenceText(source, text, 2000) });
@@ -243,9 +277,105 @@ const quoteOutput = z.object({
     .literal(true)
     .optional()
     .describe('Present when the free body was over 1 MB and was cut there before it was read'),
-  readiness,
+  budget: z
+    .object({ permissionId: z.string(), remainingToday: money.nullable() })
+    .optional()
+    .describe('The budget a payment would come from, on a paid quote'),
+  readiness: quoteReadinessOut,
   summary: z.string(),
 });
+
+type BudgetRead = Awaited<ReturnType<typeof budgetOf>>;
+
+type Price = { amount: string; asset: string; network: string; scheme: string; payTo: string };
+type Fit = { readiness: QuoteReadiness; approvalOwed: boolean };
+type Terms = Awaited<ReturnType<typeof termsOf>>;
+
+const UNREADABLE: QuoteReadiness = { status: 'not_ready', reason: 'chain_unavailable' };
+const NO_FUNDING: QuoteReadiness = { status: 'not_ready', reason: 'funding_unavailable' };
+// Pay's own refusals at selection that a larger budget, not a retry, answers.
+const CAPPED: Record<string, QuoteReadiness> = {
+  budget_exhausted: { status: 'not_ready', reason: 'over_allowance' },
+  over_cap: { status: 'not_ready', reason: 'over_cap' },
+};
+
+/** The policy and usage pay measures a price against, built as payWithinGrant builds them. */
+async function termsOf(grant: Grant, payer: Address) {
+  const session = sessionOf(grant);
+  const policy = resolveSessionX402Policy(undefined, session);
+  const entries = await entriesFor(grant.permissionId);
+  const periodUsage = await currentLimitUsageOnChain(entries, policy, payer, session, new Date(), clients);
+  return { policy, periodUsage, spentThisSession: sumSpentSince(entries, { payer }, session.createdAt) };
+}
+
+/** Whether an upto payment must first approve Permit2 for the session, which pay reads the same way. */
+async function permit2Owed(grant: Grant, owner: Address, price: bigint): Promise<boolean | undefined> {
+  const allowance = await publicClientFor(grant.chainId)
+    .readContract({ address: grant.token, abi: erc20Abi, functionName: 'allowance', args: [owner, PERMIT2_ADDRESS] })
+    .catch(() => undefined);
+  return allowance === undefined ? undefined : allowance < price;
+}
+
+// Pay's funding checks after selection, in its order: the day, the refill the float needs, the account behind it.
+async function fitOf(t: Tenant, grant: Grant, room: Room | undefined, p: Price): Promise<Fit> {
+  const fit = (readiness: QuoteReadiness, approvalOwed = false): Fit => ({ readiness, approvalOwed });
+  if (!room || room.held === null) return fit(UNREADABLE);
+  const price = BigInt(p.amount);
+  const over: QuoteReadiness = { status: 'not_ready', reason: 'over_allowance' };
+  if (price > room.left) return fit(over);
+  const owed = p.scheme === 'upto' ? await permit2Owed(grant, t.sessionAddress, price) : false;
+  if (owed === undefined) return fit(UNREADABLE);
+  // Without a paymaster key the server can neither refill the session nor approve Permit2.
+  const canFund = Boolean(config().paymasterApiKey);
+  if (owed && !canFund) return fit(NO_FUNDING, owed);
+  const usdc = usdcForNetwork(caip2(grant.chainId));
+  const needed = owed && usdc ? price + gasReserve(usdc) : price;
+  if (room.held >= needed) return fit({ status: 'ready' }, owed);
+  if (!canFund) return fit(NO_FUNDING, owed);
+  const pull = needed - room.held + refillFee(grant);
+  if (pull > room.cap) return fit(over, owed);
+  const funds = await balanceOf(caip2(grant.chainId), grant.account);
+  if (!funds) return fit(UNREADABLE, owed);
+  return fit(BigInt(funds.amount) < pull ? { status: 'not_ready', reason: 'balance_low' } : { status: 'ready' }, owed);
+}
+
+function fitSummary(read: BudgetRead, grant: Grant, terms: Terms, { readiness, approvalOwed }: Fit) {
+  const { permissionId, remainingToday } = read.budget;
+  const left = remainingToday ? `${remainingToday.amount} base units` : 'an unknown amount';
+  const approval = approvalOwed ? ' A first upto payment also pays the gas to approve Permit2 from it.' : '';
+  switch (readiness.reason) {
+    case undefined:
+      return ` Within budget ${permissionId}, which has ${left} left today.${approval}`;
+    case 'over_allowance':
+      return ` Budget ${permissionId} has ${left} left today, not enough to pay it.${approval}`;
+    case 'over_cap':
+      return ` Budget ${permissionId} lets one payment spend at most ${terms.policy.maxAmountPerPayment} base units.`;
+    case 'balance_low':
+      return ` The account ${grant.account} holds too little USDC to refill the session for it: send USDC there (jaw_add_funds).`;
+    case 'funding_unavailable':
+      return ' This server cannot refill the session or approve Permit2, so it pays only from the float already there.';
+    default:
+      return ` ${NOT_READY[readiness.reason]}`;
+  }
+}
+
+type Priced = { price: Price; capped?: QuoteReadiness };
+
+// The option pay would take: the one the dry run chose, or the cheapest of the budget's token when pay's caps refused it.
+function pricedOf(outcome: PaymentOutcome, grant: Grant | undefined, network: string): Priced | undefined {
+  if (outcome.kind === 'would-pay') return { price: outcome.wouldPay };
+  const capped = outcome.kind === 'refused' ? CAPPED[outcome.refusal.code] : undefined;
+  if (!grant || !capped || outcome.kind !== 'refused' || !outcome.challenge) return undefined;
+  const [option] = outcome.challenge.accepts
+    .filter((a) => a.network === network && a.asset.toLowerCase() === grant.token.toLowerCase())
+    .sort((a, b) => (BigInt(a.amount) < BigInt(b.amount) ? -1 : 1));
+  return option && { price: option, capped };
+}
+
+async function fitFor(t: Tenant, grant: Grant, read: BudgetRead, priced: Priced): Promise<Fit> {
+  if (priced.capped) return { readiness: priced.capped, approvalOwed: false };
+  return fitOf(t, grant, read.room, priced.price);
+}
 
 async function quote(t: Tenant, url: string) {
   const network = caip2(t.chainId);
@@ -254,13 +384,20 @@ async function quote(t: Tenant, url: string) {
     address: t.sessionAddress,
     pay: () => Promise.reject(new Error('a quote never pays')),
   };
-  const base = { url, readiness: await readinessFor(t) };
+  const grant = await x402Budget(t.connectionId);
+  const [float, terms] = grant
+    ? await Promise.all([balanceOf(caip2(grant.chainId), t.sessionAddress), termsOf(grant, t.sessionAddress)])
+    : [null, undefined];
   const cuts = watchCuts(safeFetch(config().insecureFetchHosts));
-  const outcome = await payAndFetch(url, payer, { dryRun: true, network, fetch: cuts.fetch }).catch(() => {
+  // Selected under the policy a payment runs, so the quote prices the option pay would take.
+  const probe = payAndFetch(url, payer, { dryRun: true, network, ...terms, fetch: cuts.fetch }).catch(() => {
     // One answer for every failure: telling a refused address from a failed lookup
     // would tell a client which internal names resolve.
     return { kind: 'unreachable' as const, code: 'unreachable', reason: 'The URL could not be fetched.' };
   });
+  const [outcome, read] = await Promise.all([probe, grant && budgetOf(grant, t, float && BigInt(float.amount))]);
+  const ready = readinessOf(t, read?.liveness);
+  const base = { url, readiness: ready };
   if (outcome.kind === 'unreachable') {
     return {
       out: quoteOutput.parse({
@@ -271,19 +408,26 @@ async function quote(t: Tenant, url: string) {
       }),
     };
   }
-  if (outcome.kind === 'would-pay') {
-    const p = outcome.wouldPay;
+  const priced = pricedOf(outcome, grant, network);
+  if (priced) {
+    const p = priced.price;
     const asset = usdcForNetwork(p.network);
     const shown = asset && asset.address.toLowerCase() === p.asset.toLowerCase() ? asset.usdcName : p.asset;
+    const usable = grant && terms && read && ready.status === 'ready' ? { grant, terms, read } : undefined;
+    const fit = usable && (await fitFor(t, usable.grant, usable.read, priced));
     return {
       out: quoteOutput.parse({
         ...base,
+        readiness: fit?.readiness ?? ready,
         kind: 'paid',
         price: { amount: p.amount, asset: caip19(p.network, p.asset) },
         chainId: p.network,
         scheme: p.scheme,
         payTo: p.payTo,
-        summary: `Costs ${p.amount} base units of ${shown} on ${p.network}. Not paid.`,
+        ...(usable && {
+          budget: { permissionId: usable.read.budget.permissionId, remainingToday: usable.read.budget.remainingToday },
+        }),
+        summary: `Costs ${p.amount} base units of ${shown} on ${p.network}. Not paid.${usable && fit ? fitSummary(usable.read, usable.grant, usable.terms, fit) : ''}`,
       }),
     };
   }
@@ -351,7 +495,9 @@ export function registerReadTools(server: McpServer) {
   server.registerTool(
     'jaw_session_x402_quote',
     {
-      description: 'The price of an x402 resource, without paying. Sends one request and reads the 402 challenge.',
+      description:
+        'The price of an x402 resource, without paying. Sends one request and reads the 402 challenge. ' +
+        'readiness says whether jaw_session_x402_pay would pay it from this budget right now, and why not; it reserves nothing.',
       inputSchema: z.strictObject({ url: z.string().url().describe('The paid resource') }),
       outputSchema: quoteOutput,
       annotations: readOnly,

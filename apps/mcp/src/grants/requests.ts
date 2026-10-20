@@ -8,7 +8,7 @@ import { PageGone, resumeWallet, WalletBusy, type Ask, type OpenWallet, type Wal
 import { findActive, type ConnectionRow } from '@/connections/rows';
 import type { ConnectionScope } from '@/connections/scopes';
 import { openResume, sealResume, type RelayResume } from '@/connections/seal';
-import { keepLease, sessionLeaseEnd } from '@/connections/session-lease';
+import { heldSince, keepLease, sessionLeaseEnd } from '@/connections/session-lease';
 import { USER_REJECTED } from '@/connections/wallet-codes';
 import { getDb, type Tx } from '@/db/client';
 import { permissionRequests } from '@/db/schema';
@@ -56,7 +56,7 @@ async function update(where: SQL | undefined, set: PgUpdateSetSource<typeof perm
 
 const ASKED = 'asked';
 export const LINK_LOST = 'link_lost';
-const lapsed = or(isNull(permissionRequests.sessionUntil), lte(permissionRequests.sessionUntil, dbNow));
+const lapsed = or(isNull(permissionRequests.sessionUntil), lte(permissionRequests.sessionUntil, heldSince));
 const endCode = sql`case when ${permissionRequests.approveBy} <= ${dbNow} then null
   when ${permissionRequests.code} = ${ASKED} then ${LINK_LOST} else 'session_lost' end`;
 
@@ -66,8 +66,24 @@ const abandoned = and(lapsed, isNull(permissionRequests.relay));
 const closeDead = (same: SQL | undefined, db: Tx = getDb()) =>
   update(and(same, awaiting, or(pastWindow, abandoned)), { state: 'expired', code: endCode, relay: null }, db);
 
+const askedInWindow = and(awaiting, gt(permissionRequests.approveBy, dbNow), eq(permissionRequests.code, ASKED));
+// Other connections wait on an asked revoke until its window ends, since the owner may still revoke there.
+const notAskedRevoke = or(
+  ne(permissionRequests.method, 'revoke'),
+  sql`${permissionRequests.code} is distinct from ${ASKED}`,
+  pastWindow
+);
+
+export async function closeLapsedLinks(): Promise<number> {
+  const ended = await getDb()
+    .update(permissionRequests)
+    .set({ state: 'expired', code: endCode, relay: null, updatedAt: dbNow })
+    .where(and(awaiting, or(abandoned, and(lapsed, pastWindow)), notAskedRevoke))
+    .returning({ id: permissionRequests.id });
+  return ended.length;
+}
+
 async function findHeld(t: Tenant, req: LinkRequest): Promise<Held | undefined> {
-  const askedInWindow = and(awaiting, gt(permissionRequests.approveBy, dbNow), eq(permissionRequests.code, ASKED));
   const [row] = await getDb()
     .select()
     .from(permissionRequests)
@@ -144,13 +160,12 @@ export async function currentSign(t: Tenant, idempotencyKey: string): Promise<Pe
   return row;
 }
 
-const givenUp = and(
-  eq(permissionRequests.state, 'expired'),
-  inArray(permissionRequests.code, ['session_lost', LINK_LOST])
-);
+// An answer the owner gave still stands on a row that ended while its process could not renew.
+const answered = (state: Outcome['state']) => state === 'approved' || state === 'owner_declined';
 
 async function settle(row: PermissionRequestRow, { state, code, permissionId, signature }: Outcome) {
-  await update(and(heldBy(row), or(awaiting, givenUp)), {
+  const open = answered(state) ? or(awaiting, eq(permissionRequests.state, 'expired')) : awaiting;
+  await update(and(heldBy(row), open), {
     state,
     code: code ?? null,
     sessionUntil: null,
@@ -257,7 +272,7 @@ function follow(row: PermissionRequestRow, wallet: Wallet, work: Work, resumed =
   const claim: Claim = async () => {
     const leased = and(
       mine,
-      gt(permissionRequests.sessionUntil, dbNow),
+      gt(permissionRequests.sessionUntil, heldSince),
       or(isNull(permissionRequests.code), eq(permissionRequests.code, ASKED))
     );
     asked = (await update(leased, { code: ASKED })) !== undefined;
