@@ -74,12 +74,8 @@
           "name": "audit_events_connection_id_connections_id_fk",
           "tableFrom": "audit_events",
           "tableTo": "connections",
-          "columnsFrom": [
-            "connection_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
+          "columnsFrom": ["connection_id"],
+          "columnsTo": ["id"],
           "onDelete": "no action",
           "onUpdate": "no action"
         }
@@ -222,16 +218,12 @@
         "connections_interaction_uid_unique": {
           "name": "connections_interaction_uid_unique",
           "nullsNotDistinct": false,
-          "columns": [
-            "interaction_uid"
-          ]
+          "columns": ["interaction_uid"]
         },
         "connections_grant_id_unique": {
           "name": "connections_grant_id_unique",
           "nullsNotDistinct": false,
-          "columns": [
-            "grant_id"
-          ]
+          "columns": ["grant_id"]
         }
       },
       "policies": {},
@@ -362,12 +354,8 @@
           "name": "grants_connection_id_connections_id_fk",
           "tableFrom": "grants",
           "tableTo": "connections",
-          "columnsFrom": [
-            "connection_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
+          "columnsFrom": ["connection_id"],
+          "columnsTo": ["id"],
           "onDelete": "no action",
           "onUpdate": "no action"
         }
@@ -699,12 +687,8 @@
           "name": "owner_calls_connection_id_connections_id_fk",
           "tableFrom": "owner_calls",
           "tableTo": "connections",
-          "columnsFrom": [
-            "connection_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
+          "columnsFrom": ["connection_id"],
+          "columnsTo": ["id"],
           "onDelete": "no action",
           "onUpdate": "no action"
         }
@@ -1072,12 +1056,8 @@
           "name": "payments_connection_id_connections_id_fk",
           "tableFrom": "payments",
           "tableTo": "connections",
-          "columnsFrom": [
-            "connection_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
+          "columnsFrom": ["connection_id"],
+          "columnsTo": ["id"],
           "onDelete": "no action",
           "onUpdate": "no action"
         }
@@ -1358,12 +1338,8 @@
           "name": "permission_requests_connection_id_connections_id_fk",
           "tableFrom": "permission_requests",
           "tableTo": "connections",
-          "columnsFrom": [
-            "connection_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
+          "columnsFrom": ["connection_id"],
+          "columnsTo": ["id"],
           "onDelete": "no action",
           "onUpdate": "no action"
         }
@@ -1423,10 +1399,7 @@
       "compositePrimaryKeys": {
         "rate_limits_key_window_start_pk": {
           "name": "rate_limits_key_window_start_pk",
-          "columns": [
-            "key",
-            "window_start"
-          ]
+          "columns": ["key", "window_start"]
         }
       },
       "uniqueConstraints": {},
@@ -1629,12 +1602,8 @@
           "name": "sends_connection_id_connections_id_fk",
           "tableFrom": "sends",
           "tableTo": "connections",
-          "columnsFrom": [
-            "connection_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
+          "columnsFrom": ["connection_id"],
+          "columnsTo": ["id"],
           "onDelete": "no action",
           "onUpdate": "no action"
         }
@@ -1998,12 +1967,8 @@
           "name": "swaps_connection_id_connections_id_fk",
           "tableFrom": "swaps",
           "tableTo": "connections",
-          "columnsFrom": [
-            "connection_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
+          "columnsFrom": ["connection_id"],
+          "columnsTo": ["id"],
           "onDelete": "no action",
           "onUpdate": "no action"
         }
@@ -2013,9 +1978,7 @@
         "swaps_quote_id_unique": {
           "name": "swaps_quote_id_unique",
           "nullsNotDistinct": false,
-          "columns": [
-            "quote_id"
-          ]
+          "columns": ["quote_id"]
         }
       },
       "policies": {},
