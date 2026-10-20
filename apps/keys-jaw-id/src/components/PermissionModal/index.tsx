@@ -24,6 +24,7 @@ import {
   type WalletGrantPermissionsRequest,
   type WalletRevokePermissionsRequest,
   type WalletGrantPermissionsResponse,
+  type RevokePermissionApiResponse,
   type SpendPeriod,
   buildGrantPermissionCall,
   buildRevokePermissionCall,
@@ -51,7 +52,7 @@ export interface PermissionModalProps {
   origin?: string;
   appName?: string;
   appLogoUrl?: string;
-  onSuccess?: (result: WalletGrantPermissionsResponse | { success: boolean }) => void;
+  onSuccess?: (result: WalletGrantPermissionsResponse | RevokePermissionApiResponse) => void;
   onError?: (error: Error, errorCode?: number) => void;
 }
 
@@ -763,7 +764,7 @@ export const PermissionModal = ({
         }
 
         // Account.revokePermission with paymaster URL and context for ERC-20 payment
-        await account.revokePermission(
+        const result = await account.revokePermission(
           permissionDetails.permissionId,
           computedPaymasterUrl,
           computedPaymasterContext,
@@ -772,7 +773,8 @@ export const PermissionModal = ({
 
         console.log('Permission revoked');
         setStatus('Permission revoked successfully!');
-        onSuccess?.({ success: true });
+        // The revoke has mined, so it succeeded even if the relay had no row left to remove.
+        onSuccess?.(result.pending ? { success: true, pending: true } : { success: true });
       }
     } catch (error) {
       console.error('Error in permission operation:', error);
