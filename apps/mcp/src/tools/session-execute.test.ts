@@ -23,6 +23,7 @@ import { getDb } from '@/db/client';
 import { sends, settings } from '@/db/schema';
 import { lockWaiters, TEST_PG_URL, useTestDb, useTestPostgres } from '@/db/test-db';
 import { recordGrant } from '@/grants/permission';
+import { claim } from '@/payments/store';
 import { x402Budget } from '@/grants/store';
 import { reconcile } from '@/reconciler/run';
 import { ANY_TARGET } from '@jaw.id/core';
@@ -445,6 +446,61 @@ describe('jaw_session_execute', () => {
     expect(await rowsOf(t.connectionId)).toEqual([
       expect.objectContaining({ state: 'landed', txHash: TX, callsId: userOpHash }),
     ]);
+  });
+
+  it('given more executes than a page, then executesNext pages through them with no overlap and no payments', async () => {
+    const { c, t, permissionId } = await withCustomGrant();
+    for (const amount of [1n, 2n, 3n]) await execute(c.access_token, permissionId, [transfer(BOB, amount)]);
+    const owner = { connectionId: t.connectionId, payer: t.sessionAddress, permissionId };
+    await claim(owner, 'a-payment', { url: 'https://seller.test/paid', method: 'GET', headers: {} });
+
+    const first = await callTool(c.access_token, 'jaw_session_history', { limit: 2 });
+    const next = first.structuredContent.executesNext as string;
+    const second = await callTool(c.access_token, 'jaw_session_history', { limit: 2, executesBefore: next });
+
+    const amounts = (page: typeof first) =>
+      (page.structuredContent.executes as { amount: string }[]).map((r) => r.amount);
+    expect(amounts(first)).toEqual(['3', '2']);
+    expect(amounts(second)).toEqual(['1']);
+    expect(second.structuredContent).not.toHaveProperty('executesNext');
+    expect(first.structuredContent.payments).toHaveLength(1);
+    expect(second.structuredContent.payments).toEqual([]);
+    const paymentsOnly = await callTool(c.access_token, 'jaw_session_history', { before: 'pay_none' });
+    expect(paymentsOnly.structuredContent.executes).toEqual([]);
+  });
+
+  it("given another connection's send id as executesBefore, then the page is empty", async () => {
+    const other = await withCustomGrant();
+    await execute(other.c.access_token, other.permissionId, [transfer(BOB, 1n)]);
+    const mine = await withCustomGrant();
+    await execute(mine.c.access_token, mine.permissionId, [transfer(BOB, 1n)]);
+    const [row] = await rowsOf(mine.t.connectionId);
+
+    const page = await callTool(other.c.access_token, 'jaw_session_history', { executesBefore: row.id });
+
+    expect(page.structuredContent.executes).toEqual([]);
+  });
+
+  it("given another connection's payment id as before, then the payments page is empty", async () => {
+    const paid = { url: 'https://seller.test/paid', method: 'GET' as const, headers: {} };
+    const mine = await withCustomGrant();
+    await claim(
+      { connectionId: mine.t.connectionId, payer: mine.t.sessionAddress, permissionId: mine.permissionId },
+      'mine',
+      paid
+    );
+    const other = await withCustomGrant();
+    await claim(
+      { connectionId: other.t.connectionId, payer: other.t.sessionAddress, permissionId: other.permissionId },
+      'theirs',
+      paid
+    );
+    const theirs = await callTool(other.c.access_token, 'jaw_session_history', {});
+    const foreign = (theirs.structuredContent.payments as { paymentId: string }[])[0].paymentId;
+
+    const page = await callTool(mine.c.access_token, 'jaw_session_history', { before: foreign });
+
+    expect(page.structuredContent.payments).toEqual([]);
   });
 
   it('given the same idempotencyKey and input after a run landed, then it returns that run and sends nothing', async () => {

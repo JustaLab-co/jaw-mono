@@ -83,11 +83,14 @@ export async function openSpends(permissionId: string, tx: Tx): Promise<Map<stri
   return spent;
 }
 
-export async function sendHistory(connectionId: string, limit: number): Promise<SendRow[]> {
+export async function sendHistory(connectionId: string, limit: number, before?: string): Promise<SendRow[]> {
+  const anchor = before
+    ? sql`(${sends.createdAt}, ${sends.id}) < (select created_at, id from sends where id = ${before} and connection_id = ${connectionId})`
+    : undefined;
   return getDb()
     .select()
     .from(sends)
-    .where(eq(sends.connectionId, connectionId))
+    .where(and(eq(sends.connectionId, connectionId), anchor))
     .orderBy(desc(sends.createdAt), desc(sends.id))
     .limit(limit);
 }

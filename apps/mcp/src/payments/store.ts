@@ -455,7 +455,7 @@ export async function pulledUnderOtherGrants(tx: Tx, connectionId: string, permi
 /** Newest first. The cursor is a payment id; the order is read from its row, at full precision. */
 export async function history(connectionId: string, limit: number, before?: string) {
   const anchor = before
-    ? sql`(${payments.createdAt}, ${payments.id}) < (select created_at, id from payments where id = ${before})`
+    ? sql`(${payments.createdAt}, ${payments.id}) < (select created_at, id from payments where id = ${before} and connection_id = ${connectionId})`
     : undefined;
   return getDb()
     .select()
