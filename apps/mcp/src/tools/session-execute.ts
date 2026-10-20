@@ -292,13 +292,21 @@ async function submitUnder(t: Tenant, run: Run): Promise<ToolResult | Reserved> 
     });
     if (!ids) return refusal(ENDED);
     let submitted: Submitted;
+    let request: Promise<{ id: Hex }> | undefined;
     try {
       hold.assertHeld();
       const wire = run.calls.map((c) => ({ to: c.to, value: numberToHex(c.value), data: c.data }));
-      const sent = (await bounded(bridge.request('wallet_sendCalls', [{ calls: wire }]))) as { id: Hex };
-      submitted = { sent: sent.id };
+      request = bridge.request('wallet_sendCalls', [{ calls: wire }]) as Promise<{ id: Hex }>;
+      submitted = { sent: (await bounded(request)).id };
     } catch (err) {
       submitted = err instanceof SubmitTimedOut || mayHaveBeenSent(err) ? { maybe: err } : { unsent: err };
+      // A submit that answers past its bound leaves its hash on the open rows for the reconciler.
+      if (err instanceof SubmitTimedOut) {
+        request?.then(
+          (late) => handToReconciler(ids, undefined, late.id).catch(logFailure('execute late submit write failed')),
+          () => {}
+        );
+      }
     }
     await hold.tx((tx) => noteSubmitted(tx, ids, submitted)).catch(logFailure('execute submit write failed'));
     return { ids, submitted, bridge, trustsReverts: namesEveryTarget(grant, run.calls) };
