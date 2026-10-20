@@ -7,6 +7,7 @@
 - `replay-flag`: `ready` holds `replays: true`.
 - `replay-rejoin`: the server leaves right after asking, the relay drops the answer, the server rejoins the same session and asks again under the same id; the answer arrives.
 - `replay-conflict`: the same id with other params answers `success: false` with code `-32600`, never the stored answer.
+- `stale-link`: a link whose server went away (a restart of the hosted server, a CLI that exited) gets no `init` within 20 seconds of the key exchange; the page says "This link is no longer active. Ask the agent for a new one." and closes its socket.
 
 ## Driving it
 
@@ -18,3 +19,17 @@ node tools/verify/bridge-replay.mjs ws://localhost:18080 http://localhost:13002
 ```
 
 A page with the change prints `"replays":true` on `ready`, `none (the relay dropped it)` after the rejoin, then the answer, then the `-32600` refusal. The same drive against the page before the change prints no `replays` and answers the tampered request with `success: true`, because that page runs every request it gets. Kill the dev server and the relay by the PIDs you started.
+
+### Stale link on the hosted server
+
+Preconditions: the baseline preconditions of the map, Docker running, and the keys app on `next dev` as above. The hosted server builds its links on that keys app, and the page reaches the relay the server uses.
+
+```bash
+S=tools/verify
+RUN=$($S/up.sh | tail -1)
+JAW_KEYS_URL=http://localhost:13002 $S/hosted-up.sh "$RUN"
+node $S/bridge-stale-link.mjs "$RUN"
+$S/down.sh "$RUN"
+```
+
+The first link, opened while the server is up, shows the app name and "This tab is the signing backend". The second link is taken from the connect page, then the server restarts, then the link opens: after 20 seconds it reads "This link is no longer active. Ask the agent for a new one."
