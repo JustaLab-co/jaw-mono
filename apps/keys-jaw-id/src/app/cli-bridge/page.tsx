@@ -29,6 +29,7 @@ import {
  * 5. CLI sends encrypted init (apiKey, chainId, etc.)
  * 6. Page initializes JAW SDK, sends encrypted ready
  * 7. CLI sends encrypted RPC requests, page executes and sends encrypted responses
+ * 8. A request repeated under the same id gets the answer already given
  */
 
 type BridgeState = 'connecting' | 'connected' | 'disconnected' | 'error';
@@ -88,6 +89,8 @@ function CLIBridgeContent() {
   const appNameRef = useRef<string | null>(null);
   const wsRef = useRef<WebSocket | null>(null);
   const sharedSecretRef = useRef<CryptoKey | null>(null);
+  /** Every answer given in this relay session, by request id. */
+  const answersRef = useRef(new Map<string, { request: string; answer: Promise<RpcResponse> }>());
 
   const sessionId = searchParams.get('session');
   const relayUrl = searchParams.get('relay');
@@ -112,44 +115,23 @@ function CLIBridgeContent() {
     }
   }, []);
 
+  // A client that lost its connection asks again under the same id, so it
+  // gets the answer already given instead of a second dialog.
   const handleRpcRequest = useCallback(async (id: string, method: string, params: unknown) => {
     if (!sdkRef.current || !sharedSecretRef.current || !wsRef.current) return;
 
-    setLastMethod(method);
+    const request = JSON.stringify({ method, params });
+    let given = answersRef.current.get(id);
+    if (!given) {
+      given = { request, answer: answer(sdkRef.current, id, method, params) };
+      answersRef.current.set(id, given);
+      setLastMethod(method);
+    }
+    const reply = given.request === request ? await given.answer : reused(id);
 
-    try {
-      const normalizedParams = Array.isArray(params) ? params : params !== undefined ? [params] : [];
-
-      const result = await sdkRef.current.provider.request({
-        method,
-        params: normalizedParams,
-      });
-
-      const address = extractAddress(method, result);
-
-      const envelope = await encryptAndSerialize(sharedSecretRef.current, {
-        type: 'rpc_response',
-        id,
-        success: true,
-        data: result,
-        ...(address ? { address } : {}),
-      });
-
+    if (sharedSecretRef.current && wsRef.current) {
+      const envelope = await encryptAndSerialize(sharedSecretRef.current, reply);
       wsRef.current.send(JSON.stringify(envelope));
-    } catch (err) {
-      const errObj = err as { code?: number; message?: string };
-      const errCode = errObj?.code ?? -32000;
-      const errMsg = errObj?.message ?? (err instanceof Error ? err.message : String(err));
-
-      if (sharedSecretRef.current && wsRef.current) {
-        const envelope = await encryptAndSerialize(sharedSecretRef.current, {
-          type: 'rpc_response',
-          id,
-          success: false,
-          error: { code: errCode, message: errMsg },
-        });
-        wsRef.current.send(JSON.stringify(envelope));
-      }
     }
   }, []);
 
@@ -159,6 +141,7 @@ function CLIBridgeContent() {
     let ws: WebSocket | null = null;
     let beforeUnloadHandler: (() => void) | null = null;
     let cancelled = false;
+    answersRef.current = new Map();
 
     (async () => {
       try {
@@ -280,6 +263,7 @@ function CLIBridgeContent() {
                   const readyEnvelope = await encryptAndSerialize(sharedSecretRef.current!, {
                     type: 'ready',
                     chainId,
+                    replays: true,
                     ...(sentApiKey ? {} : { apiKey }),
                   });
                   ws!.send(JSON.stringify(readyEnvelope));
@@ -411,6 +395,35 @@ function CLIBridgeContent() {
     </div>
   );
 }
+
+type RpcResponse = Record<string, unknown> & { type: 'rpc_response'; id: string };
+
+async function answer(
+  sdk: ReturnType<typeof JAW.create>,
+  id: string,
+  method: string,
+  params: unknown
+): Promise<RpcResponse> {
+  try {
+    const normalizedParams = Array.isArray(params) ? params : params !== undefined ? [params] : [];
+    const result = await sdk.provider.request({ method, params: normalizedParams });
+    const address = extractAddress(method, result);
+    return { type: 'rpc_response', id, success: true, data: result, ...(address ? { address } : {}) };
+  } catch (err) {
+    const errObj = err as { code?: number; message?: string };
+    const code = errObj?.code ?? -32000;
+    const message = errObj?.message ?? (err instanceof Error ? err.message : String(err));
+    return { type: 'rpc_response', id, success: false, error: { code, message } };
+  }
+}
+
+/** An id already answered for another request is refused, so an answer never covers a request it was not given for. */
+const reused = (id: string): RpcResponse => ({
+  type: 'rpc_response',
+  id,
+  success: false,
+  error: { code: -32600, message: 'this request id was already used for a different request' },
+});
 
 function extractAddress(method: string, result: unknown): string | undefined {
   if (method !== 'wallet_connect' && method !== 'eth_requestAccounts') return;

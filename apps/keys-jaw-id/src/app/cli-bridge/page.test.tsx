@@ -11,7 +11,12 @@ import {
 } from '@jaw.id/core';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
-const created = vi.hoisted(() => ({ appNames: [] as string[], handlerOptions: [] as unknown[], session: 's1' }));
+const created = vi.hoisted(() => ({
+  appNames: [] as string[],
+  handlerOptions: [] as unknown[],
+  session: 's1',
+  request: (async () => null) as (args: { method: string; params: unknown[] }) => Promise<unknown>,
+}));
 vi.mock('next/navigation', () => ({
   useSearchParams: () => new URLSearchParams(`session=${created.session}&relay=ws://relay.test`),
 }));
@@ -27,7 +32,7 @@ vi.mock('@jaw.id/core', async (original) => ({
   JAW: {
     create: (config: { appName: string }) => {
       created.appNames.push(config.appName);
-      return { provider: { request: async () => null } };
+      return { provider: { request: (args: { method: string; params: unknown[] }) => created.request(args) } };
     },
   },
 }));
@@ -107,6 +112,7 @@ beforeEach(() => {
   created.appNames = [];
   created.handlerOptions = [];
   created.session = 's1';
+  created.request = async () => null;
   vi.stubGlobal('WebSocket', FakeSocket);
   host = document.createElement('div');
   document.body.append(host);
@@ -195,5 +201,163 @@ describe('cli-bridge page app name', () => {
     await act(async () => ws.onclose!());
 
     expect(host.textContent).toContain('Claude disconnected. You can close this tab.');
+  });
+});
+
+async function deliver(ws: FakeSocket, payload: Record<string, unknown>) {
+  const { iv, cipherText } = await encrypt(secret, JSON.stringify(payload));
+  await act(async () => {
+    await ws.onmessage!({ data: JSON.stringify({ type: 'encrypted', iv: b64(iv), ciphertext: b64(cipherText) }) });
+  });
+}
+
+async function answers(ws: FakeSocket, id: string) {
+  const opened = await Promise.all(
+    ws.sent
+      .filter((m) => m.type === 'encrypted')
+      .map(async (m) =>
+        JSON.parse(
+          await decrypt(secret, {
+            iv: unb64(m.iv as string),
+            cipherText: unb64(m.ciphertext as string).buffer as ArrayBuffer,
+          })
+        )
+      )
+  );
+  return opened.filter((m) => m.type === 'rpc_response' && m.id === id);
+}
+
+describe('cli-bridge page answers a repeated request', () => {
+  const sign = { type: 'rpc_request', id: 'r1', method: 'personal_sign', params: ['0x68656c6c6f', '0xabc'] };
+
+  it('tells the client it may ask again', async () => {
+    const ws = await start();
+
+    const ready = await init(ws, { appName: 'Claude' });
+
+    expect(ready).toMatchObject({ type: 'ready', replays: true });
+  });
+
+  it('given an answered request, the same id and request get the same answer and the wallet is asked once', async () => {
+    const asked = vi.fn(async () => '0xsig');
+    created.request = asked;
+    const ws = await start();
+    await init(ws, { appName: 'Claude' });
+    await deliver(ws, sign);
+    await vi.waitFor(async () => expect(await answers(ws, 'r1')).toHaveLength(1));
+
+    await deliver(ws, sign);
+
+    await vi.waitFor(async () => expect(await answers(ws, 'r1')).toHaveLength(2));
+    const [first, again] = await answers(ws, 'r1');
+    expect(again).toEqual(first);
+    expect(again).toEqual({ type: 'rpc_response', id: 'r1', success: true, data: '0xsig' });
+    expect(asked).toHaveBeenCalledTimes(1);
+  });
+
+  it('given a declined request, the same id gets the same refusal without a new dialog', async () => {
+    const asked = vi.fn(async () => {
+      throw Object.assign(new Error('User rejected the request.'), { code: 4001 });
+    });
+    created.request = asked;
+    const ws = await start();
+    await init(ws, { appName: 'Claude' });
+    await deliver(ws, sign);
+    await vi.waitFor(async () => expect(await answers(ws, 'r1')).toHaveLength(1));
+
+    await deliver(ws, sign);
+
+    await vi.waitFor(async () => expect(await answers(ws, 'r1')).toHaveLength(2));
+    const [, again] = await answers(ws, 'r1');
+    expect(again).toEqual({
+      type: 'rpc_response',
+      id: 'r1',
+      success: false,
+      error: { code: 4001, message: 'User rejected the request.' },
+    });
+    expect(asked).toHaveBeenCalledTimes(1);
+  });
+
+  it('given a request still in the wallet, the same id waits for that answer instead of a second dialog', async () => {
+    let approve!: (sig: string) => void;
+    const asked = vi.fn(() => new Promise<unknown>((resolve) => (approve = resolve)));
+    created.request = asked;
+    const ws = await start();
+    await init(ws, { appName: 'Claude' });
+    await deliver(ws, sign);
+    await vi.waitFor(() => expect(asked).toHaveBeenCalledTimes(1));
+
+    await deliver(ws, sign);
+    await act(async () => approve('0xsig'));
+
+    await vi.waitFor(async () => expect((await answers(ws, 'r1')).length).toBeGreaterThan(0));
+    for (const answer of await answers(ws, 'r1')) {
+      expect(answer).toEqual({ type: 'rpc_response', id: 'r1', success: true, data: '0xsig' });
+    }
+    expect(asked).toHaveBeenCalledTimes(1);
+  });
+
+  it('given an answered request, the same id with other params is refused and the wallet is not asked', async () => {
+    const asked = vi.fn(async () => '0xsig');
+    created.request = asked;
+    const ws = await start();
+    await init(ws, { appName: 'Claude' });
+    await deliver(ws, sign);
+    await vi.waitFor(async () => expect(await answers(ws, 'r1')).toHaveLength(1));
+
+    await deliver(ws, { ...sign, params: ['0x6576696c', '0xabc'] });
+
+    await vi.waitFor(async () => expect(await answers(ws, 'r1')).toHaveLength(2));
+    const [, refused] = await answers(ws, 'r1');
+    expect(refused).toMatchObject({ type: 'rpc_response', id: 'r1', success: false, error: { code: -32600 } });
+    expect(refused.data).toBeUndefined();
+    expect(asked).toHaveBeenCalledTimes(1);
+  });
+
+  it('given an answered request, the same id with another method is refused', async () => {
+    const asked = vi.fn(async () => '0xsig');
+    created.request = asked;
+    const ws = await start();
+    await init(ws, { appName: 'Claude' });
+    await deliver(ws, sign);
+    await vi.waitFor(async () => expect(await answers(ws, 'r1')).toHaveLength(1));
+
+    await deliver(ws, { ...sign, method: 'eth_signTypedData_v4' });
+
+    await vi.waitFor(async () => expect(await answers(ws, 'r1')).toHaveLength(2));
+    const [, refused] = await answers(ws, 'r1');
+    expect(refused).toMatchObject({ success: false, error: { code: -32600 } });
+    expect(asked).toHaveBeenCalledTimes(1);
+  });
+
+  it('a new session does not answer from the answers of the last one', async () => {
+    const asked = vi.fn(async () => '0xsig');
+    created.request = asked;
+    const first = await start();
+    await init(first, { appName: 'Claude' });
+    await deliver(first, sign);
+    await vi.waitFor(async () => expect(await answers(first, 'r1')).toHaveLength(1));
+
+    created.session = 's2';
+    await act(async () => root.render(<CLIBridgePage />));
+    const second = await connect(2, cliKeys);
+    await init(second, { appName: 'Claude' });
+    await deliver(second, sign);
+
+    await vi.waitFor(async () => expect(await answers(second, 'r1')).toHaveLength(1));
+    expect(asked).toHaveBeenCalledTimes(2);
+  });
+
+  it('distinct ids each reach the wallet', async () => {
+    const asked = vi.fn(async () => '0xsig');
+    created.request = asked;
+    const ws = await start();
+    await init(ws, { appName: 'Claude' });
+
+    await deliver(ws, sign);
+    await deliver(ws, { ...sign, id: 'r2' });
+
+    await vi.waitFor(async () => expect(await answers(ws, 'r2')).toHaveLength(1));
+    expect(asked).toHaveBeenCalledTimes(2);
   });
 });
