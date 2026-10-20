@@ -127,11 +127,12 @@ function CLIBridgeContent() {
     if (!sdk || !secret || !ws) return;
 
     const params = Array.isArray(rawParams) ? rawParams : rawParams !== undefined ? [rawParams] : [];
-    const request = JSON.stringify({ method, params });
+    const request = canonical({ method, params });
     let given = answersRef.current.get(id);
     if (!given) {
       given = { request, reply: ask(sdk, id, method, params) };
       answersRef.current.set(id, given);
+      if (answersRef.current.size > ANSWERS_KEPT) answersRef.current.delete(answersRef.current.keys().next().value!);
       setLastMethod(method);
     }
     const reply = given.request === request ? await given.reply : idReused(id);
@@ -274,7 +275,10 @@ function CLIBridgeContent() {
                 }
 
                 case 'rpc_request':
-                  if (typeof inner.id !== 'string' || !inner.id) break;
+                  if (typeof inner.id !== 'string' || !inner.id) {
+                    console.error('[cli-bridge] Dropped a request with no string id');
+                    break;
+                  }
                   handleRpcRequest(inner.id, inner.method as string, inner.params).catch((err) =>
                     console.error('[cli-bridge] Failed to answer request:', err)
                   );
@@ -400,6 +404,21 @@ function CLIBridgeContent() {
       </div>
     </div>
   );
+}
+
+// A server re-asks within the 30 minute approval window, so the oldest answers
+// can go once a long session of reads would otherwise keep them all.
+const ANSWERS_KEPT = 500;
+
+/** JSON with object keys sorted, so a request rebuilt from storage in another key order is still the same request. */
+function canonical(value: unknown): string {
+  if (Array.isArray(value)) return `[${value.map(canonical).join(',')}]`;
+  if (value && typeof value === 'object') {
+    const entries = Object.entries(value).filter(([, v]) => v !== undefined);
+    entries.sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0));
+    return `{${entries.map(([k, v]) => `${JSON.stringify(k)}:${canonical(v)}`).join(',')}}`;
+  }
+  return JSON.stringify(value) ?? 'null';
 }
 
 type RpcResponse = Record<string, unknown> & { type: 'rpc_response'; id: string };

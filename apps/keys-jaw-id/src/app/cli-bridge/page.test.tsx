@@ -378,6 +378,61 @@ describe('cli-bridge page answers a repeated request', () => {
     expect(asked).toHaveBeenCalledTimes(1);
   });
 
+  it('a request repeated with its object params in another key order is the same request', async () => {
+    const asked = vi.fn(async () => ({ id: '0xbatch' }));
+    created.request = asked;
+    const ws = await start();
+    await init(ws, { appName: 'Claude' });
+    const calls = { version: '2.0', chainId: '0x14a34', calls: [{ to: '0x1', value: '0x0', data: '0x' }] };
+    await deliver(ws, { type: 'rpc_request', id: 'r4', method: 'wallet_sendCalls', params: [calls] });
+    await vi.waitFor(async () => expect(await answers(ws, 'r4')).toHaveLength(1));
+
+    const reordered = { calls: [{ data: '0x', value: '0x0', to: '0x1' }], chainId: '0x14a34', version: '2.0' };
+    await deliver(ws, { type: 'rpc_request', id: 'r4', method: 'wallet_sendCalls', params: [reordered] });
+
+    await vi.waitFor(async () => expect(await answers(ws, 'r4')).toHaveLength(2));
+    const [, again] = await answers(ws, 'r4');
+    expect(again).toEqual({ type: 'rpc_response', id: 'r4', success: true, data: { id: '0xbatch' } });
+    expect(asked).toHaveBeenCalledTimes(1);
+  });
+
+  it('the same calls in another order are another request', async () => {
+    const asked = vi.fn(async () => ({ id: '0xbatch' }));
+    created.request = asked;
+    const ws = await start();
+    await init(ws, { appName: 'Claude' });
+    const [a, b] = [
+      { to: '0x1', data: '0x' },
+      { to: '0x2', data: '0x' },
+    ];
+    await deliver(ws, { type: 'rpc_request', id: 'r5', method: 'wallet_sendCalls', params: [{ calls: [a, b] }] });
+    await vi.waitFor(async () => expect(await answers(ws, 'r5')).toHaveLength(1));
+
+    await deliver(ws, { type: 'rpc_request', id: 'r5', method: 'wallet_sendCalls', params: [{ calls: [b, a] }] });
+
+    await vi.waitFor(async () => expect(await answers(ws, 'r5')).toHaveLength(2));
+    const [, refused] = await answers(ws, 'r5');
+    expect(refused).toMatchObject({ success: false, error: { code: -32600 } });
+    expect(asked).toHaveBeenCalledTimes(1);
+  });
+
+  it('keeps the last 500 answers of a session', async () => {
+    const asked = vi.fn(async () => '0x14a34');
+    created.request = asked;
+    const ws = await start();
+    await init(ws, { appName: 'Claude' });
+    const read = (id: string) => ({ type: 'rpc_request', id, method: 'eth_chainId', params: [] });
+    for (let i = 0; i <= 500; i++) await deliver(ws, read(`q${i}`));
+    await vi.waitFor(async () => expect(await answers(ws, 'q500')).toHaveLength(1));
+
+    await deliver(ws, read('q1'));
+    await vi.waitFor(async () => expect(await answers(ws, 'q1')).toHaveLength(2));
+    expect(asked).toHaveBeenCalledTimes(501);
+    await deliver(ws, read('q0'));
+    await vi.waitFor(async () => expect(await answers(ws, 'q0')).toHaveLength(2));
+    expect(asked).toHaveBeenCalledTimes(502);
+  });
+
   it('distinct ids each reach the wallet', async () => {
     const asked = vi.fn(async () => '0xsig');
     created.request = asked;
