@@ -1,5 +1,5 @@
 import { randomBytes } from 'node:crypto';
-import { and, desc, eq, gt, inArray, isNull, lte, ne, or, sql, type SQL } from 'drizzle-orm';
+import { and, asc, desc, eq, gt, inArray, isNull, lte, ne, or, sql, type SQL } from 'drizzle-orm';
 import type { PgUpdateSetSource } from 'drizzle-orm/pg-core';
 import type { Address } from 'viem';
 import type { Tenant } from '@/connections/auth';
@@ -304,23 +304,34 @@ const RESUMES_PER_TICK = 10;
 
 const resumable = and(awaiting, gt(permissionRequests.approveBy, dbNow), lapsed, awaitsResume);
 
-export async function resumeOpen(rebuilds: Rebuilds): Promise<void> {
+export async function resumeOpen(rebuilds: Rebuilds): Promise<Promise<void>[]> {
   try {
     const methods = Object.keys(rebuilds) as PermissionRequestRow['method'][];
     const rows = await getDb()
       .select()
       .from(permissionRequests)
       .where(and(resumable, inArray(permissionRequests.method, methods)))
+      .orderBy(asc(permissionRequests.updatedAt))
       .limit(RESUMES_PER_TICK);
-    for (const row of rows) {
-      void resume(row, rebuilds[row.method]!).catch((err: unknown) =>
-        log('warn', { msg: 'permission request not resumed', permissionRequestId: row.id, error: errorLabel(err) })
-      );
-    }
+    return rows.map((row) => resumeRequest(row, rebuilds[row.method]!));
   } catch (err) {
     log('warn', { msg: 'permission requests not resumed', error: errorLabel(err) });
+    return [];
   }
 }
+
+export const resumeRequest = (row: PermissionRequestRow, rebuild: Rebuild): Promise<void> =>
+  resume(row, rebuild).catch((err: unknown) =>
+    log('warn', { msg: 'permission request not resumed', permissionRequestId: row.id, error: errorLabel(err) })
+  );
+
+const parsed = (payload: string | null): unknown => {
+  try {
+    return JSON.parse(payload ?? '');
+  } catch {
+    return undefined;
+  }
+};
 
 async function resume(found: PermissionRequestRow, rebuild: Rebuild) {
   const row = await update(and(eq(permissionRequests.id, found.id), resumable), {
@@ -331,8 +342,10 @@ async function resume(found: PermissionRequestRow, rebuild: Rebuild) {
   const connection = await findActive(row.connectionId);
   if (!connection) return settle(row, { state: 'failed', code: 'connection_ended' });
   const relay = openResume(config().ring, row.relay!, row.id);
-  if (!relay) return settle(row, { state: 'expired', code: LINK_LOST });
+  const payload = parsed(row.payload);
+  if (!relay || payload === undefined) return settle(row, { state: 'expired', code: LINK_LOST });
   const t = tokenlessTenant(connection);
+  const work = rebuild(t, payload);
   let wallet: Wallet | undefined;
   try {
     wallet = await resumeWallet(relay, row.approveBy, t);
@@ -342,7 +355,7 @@ async function resume(found: PermissionRequestRow, rebuild: Rebuild) {
     throw err;
   }
   if (!wallet) return settle(row, pageGone(row.code === ASKED));
-  follow(row, wallet, rebuild(t, JSON.parse(row.payload!)), true);
+  follow(row, wallet, work, true);
 }
 
 const tokenlessTenant = (c: ConnectionRow): Tenant => ({
