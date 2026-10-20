@@ -18,6 +18,7 @@ export async function startRelay() {
   const sessions = new Map<string, { cli?: WebSocket; browser?: WebSocket }>();
   const silent = new Set<string>();
   const refused = new Set<string>();
+  const cliWaiters = new Map<string, () => void>();
   const relay = new WebSocketServer({ port: 0, host: '127.0.0.1' });
   relay.on('connection', (ws, req) => {
     const url = new URL(req.url ?? '/', 'ws://relay');
@@ -29,6 +30,7 @@ export async function startRelay() {
     if (role === 'cli') pair.cli?.close(4003, 'replaced');
     pair[role] = ws;
     sessions.set(id, pair);
+    if (role === 'cli') cliWaiters.get(id)?.();
     if (role === 'browser') pair.cli?.send(JSON.stringify({ type: 'browser_connected' }));
     if (role === 'cli' && !silent.has(id))
       ws.send(JSON.stringify({ type: 'status', browserConnected: pair.browser?.readyState === WebSocket.OPEN }));
@@ -50,6 +52,9 @@ export async function startRelay() {
     sessions,
     silent,
     refused,
+    /** Resolves once this server's side of the session reached the relay. */
+    cliJoined: (id: string) =>
+      sessions.get(id)?.cli ? Promise.resolve() : new Promise<void>((r) => cliWaiters.set(id, r)),
     close: () => relay.close(),
   };
 }
