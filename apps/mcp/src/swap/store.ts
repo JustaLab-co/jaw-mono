@@ -281,8 +281,9 @@ export const { renew: renewSession, end: endSession } = leasedSwaps;
 export const decline = (row: SwapRow, code: string) =>
   write(heldBy(row, ['awaiting_owner']), { state: 'owner_declined', code, relay: null });
 
+/** Written by whichever run hears the calls id, holder or not: the trigger keeps it write-once. */
 export const recordCallsId = (row: SwapRow, callsId: string) =>
-  write(heldBy(row, ['awaiting_owner', 'expired']), { state: 'deposit_sent', callsId, code: null, relay: null });
+  move(row.connectionId, row.id, ['awaiting_owner', 'expired'], 'deposit_sent', { callsId, code: null, relay: null });
 
 /** `unlessRejoinable` leaves a row that keeps a relay session to its next resume. */
 export const recordCode = (row: SwapRow, code: string, { unlessRejoinable = false } = {}) =>

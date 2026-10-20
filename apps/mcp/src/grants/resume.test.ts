@@ -158,12 +158,25 @@ describe('a sign request whose server restarted', () => {
     expect(await settled(row.id)).toMatchObject({ state: 'approved' });
   });
 
-  it('given a resumer took the lease, when the old process wakes up and the owner declined there, then it writes nothing and the resumed answer stands', async () => {
+  it('given a resumer took the lease, when the old process hears the signature first, then that answer is recorded', async () => {
+    const { signer, message, row, page, server } = await askedThenRestarted();
+    await resumeSigns();
+    await vi.waitFor(() => expect(page.ids).toHaveLength(4));
+
+    server.wake(undefined, await signer.signMessage({ message }));
+
+    expect(await settled(row.id)).toMatchObject({
+      state: 'approved',
+      signature: await signer.signMessage({ message }),
+    });
+  });
+
+  it('given a resumer took the lease, when the old process hears a wallet error, then it writes nothing and the resumed answer stands', async () => {
     const { row, page, server, decide } = await askedThenRestarted();
     await resumeSigns();
     await vi.waitFor(() => expect(page.ids).toHaveLength(4));
 
-    server.wake(Object.assign(new Error('User rejected the request'), { code: 4001 }));
+    server.wake(Object.assign(new Error('wallet failed'), { code: -32603 }));
     await pause();
     expect((await rowOf(row.id)).state).toBe('awaiting_owner');
     decide();

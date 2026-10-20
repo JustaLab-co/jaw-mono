@@ -214,14 +214,12 @@ describe('owner calls whose server restarted after the send started', () => {
     expect(await sent(id)).toMatchObject({ callsId: CALLS_ID });
   });
 
-  it('given a resumer took the row, when the old process hears another calls id, then the row keeps the one the resumed run heard', async () => {
-    const { id, page, server, decide } = await sendStartedThenRestarted();
+  it('given a resumer took the row, when the old process hears the calls id first, then the row records it', async () => {
+    const { id, page, server } = await sendStartedThenRestarted();
     await resumeOwnerCalls(clients);
     await vi.waitFor(() => expect(page.ids).toHaveLength(4));
 
-    server.wake(undefined, { id: `0x${'0d'.repeat(32)}` });
-    await quiet();
-    decide();
+    server.wake(undefined, { id: CALLS_ID });
 
     expect(await sent(id)).toMatchObject({ callsId: CALLS_ID });
   });

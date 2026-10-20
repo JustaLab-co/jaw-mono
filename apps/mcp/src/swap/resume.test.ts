@@ -93,21 +93,18 @@ describe('a swap deposit whose server restarted after the send started', () => {
       );
       expect((await rowOf(id)).relay).toBeNull();
       expect(page.ids.slice(2, 4)).toEqual(page.ids.slice(0, 2));
-      expect(page.asked()).toBe(3);
+      await vi.waitFor(() => expect(page.asked()).toBe(3));
     }
   );
 
-  it('given a resumer took the swap, when the old process hears another calls id, then the swap keeps the one the resumed run heard', async () => {
-    const { id, page, server, decide } = await depositAskedThenRestarted();
+  it('given a resumer took the swap, when the old process hears the calls id first, then the swap records it', async () => {
+    const { id, page, server } = await depositAskedThenRestarted();
     await resumeSwaps();
     await vi.waitFor(() => expect(page.ids).toHaveLength(4));
 
-    server.wake(undefined, { id: '0xold' });
-    await quiet();
-    decide();
+    server.wake(undefined, { id: '0xcalls' });
 
-    await vi.waitFor(async () => expect(await rowOf(id)).toMatchObject({ state: 'deposit_sent' }));
-    expect((await rowOf(id)).callsId).toBe('0xcalls');
+    await vi.waitFor(async () => expect(await rowOf(id)).toMatchObject({ state: 'deposit_sent', callsId: '0xcalls' }));
   });
 
   it('given the owner declined the deposit, then nothing is stored to resume', async () => {

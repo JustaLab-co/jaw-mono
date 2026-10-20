@@ -130,9 +130,18 @@ export async function markSendStarted(row: OwnerCallRow): Promise<boolean> {
   return written !== undefined;
 }
 
-/** `sentBlock` is the chain head when the call was sent; null when it could not be read. */
+/**
+ * `sentBlock` is the chain head when the call was sent; null when it could not be read.
+ * Written by whichever run hears the calls id, holder or not: the trigger keeps it write-once.
+ */
 export const markSent = (row: OwnerCallRow, callsId: string, sentBlock: bigint | null = null) =>
-  write(heldBy(row, ['awaiting_owner', 'expired']), { state: 'sent', callsId, sentBlock, code: null, relay: null });
+  write(ofCall(row.connectionId, row.id, ['awaiting_owner', 'expired']), {
+    state: 'sent',
+    callsId,
+    sentBlock,
+    code: null,
+    relay: null,
+  });
 
 export const conclude = (connectionId: string, id: string, state: 'landed' | 'reverted', txHash: string) =>
   write(ofCall(connectionId, id, ['sent']), { state, txHash });

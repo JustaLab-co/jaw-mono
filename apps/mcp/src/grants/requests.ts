@@ -163,8 +163,11 @@ export async function currentSign(t: Tenant, idempotencyKey: string): Promise<Pe
 const answered = (state: Outcome['state']) => state === 'approved' || state === 'owner_declined';
 
 async function settle(row: PermissionRequestRow, { state, code, permissionId, signature }: Outcome) {
-  const open = answered(state) ? or(awaiting, eq(permissionRequests.state, 'expired')) : awaiting;
-  await update(and(heldBy(row), open), {
+  // The owner's answer is recorded by whichever run heard it; anything else only by the run that holds the row.
+  const mine = answered(state)
+    ? and(eq(permissionRequests.id, row.id), or(awaiting, eq(permissionRequests.state, 'expired')))
+    : and(heldBy(row), awaiting);
+  await update(mine, {
     state,
     code: code ?? null,
     sessionUntil: null,
