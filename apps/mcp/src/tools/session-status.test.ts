@@ -114,7 +114,7 @@ describe('jaw_session_status limits', () => {
         sender: t.account,
         token: USDC,
         amount: 150_000n,
-        periodStart: NOW() - 60,
+        periodStart: NOW(),
         fromBlock: 1n,
       })
     );
@@ -123,5 +123,30 @@ describe('jaw_session_status limits', () => {
 
     const custom = (r.structuredContent.grants as Shown[]).find((g) => g.permissionId === customId)!;
     expect(custom.limits[0].left).toBe('250000');
+  });
+
+  it('given an execute still open from an earlier period, then the limit does not count it', async () => {
+    const { c, customId } = await twoGrants();
+    chain.spend.set(customId, 100_000n);
+    const t = (await verifyBearer(c.access_token))?.extra?.tenant as Tenant;
+    await getDb().transaction((tx) =>
+      recordSend(tx, {
+        connectionId: t.connectionId,
+        idempotencyKey: 'k-earlier',
+        requestHash: 'h',
+        permissionId: customId,
+        chainId: t.chainId,
+        sender: t.account,
+        token: USDC,
+        amount: 150_000n,
+        periodStart: NOW() - 86_400,
+        fromBlock: 1n,
+      })
+    );
+
+    const r = await callTool(c.access_token, 'jaw_session_status', {});
+
+    const custom = (r.structuredContent.grants as Shown[]).find((g) => g.permissionId === customId)!;
+    expect(custom.limits[0].left).toBe('400000');
   });
 });
