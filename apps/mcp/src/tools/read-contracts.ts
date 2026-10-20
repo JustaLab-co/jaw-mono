@@ -13,7 +13,7 @@ import {
   type PublicClient,
 } from 'viem';
 import { z } from 'zod';
-import { proxyChains, proxyClientFor } from '@/lib/chain';
+import { isProxyChain, proxyChains, proxyClientFor } from '@/lib/chain';
 import { fenceText, reply } from '@/lib/fence';
 import { refusal } from './reply';
 
@@ -162,9 +162,10 @@ function failure(error: Error, read: Read, source: string) {
 /** Runs the reads in one multicall. A read that fails carries its own error and does not stop the others. */
 export async function readContracts(args: { chainId: number; reads: Read[] }, clientFor: ClientFor = proxyClientFor) {
   const { chainId, reads } = args;
-  const chains = proxyChains().map((c) => c.id);
-  if (!chains.includes(chainId))
-    return refusal(`Chain ${chainId} is not one JAW supports. Supported: ${chains.join(', ')}.`);
+  if (!isProxyChain(chainId)) {
+    const supported = proxyChains().map((c) => c.id);
+    return refusal(`Chain ${chainId} is not one JAW supports. Supported: ${supported.join(', ')}.`);
+  }
   for (const [i, r] of reads.entries()) {
     const error = shapeError(r);
     if (error) return refusal(`Read ${i}: ${error}.`);
