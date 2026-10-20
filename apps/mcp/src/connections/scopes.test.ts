@@ -1,3 +1,4 @@
+import { JAW_RPC_URL } from '@jaw.id/core';
 import { eq } from 'drizzle-orm';
 import { afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
 import { getDb } from '@/db/client';
@@ -17,6 +18,11 @@ vi.mock('./relay', async (original) => ({
   },
 }));
 
+const realFetch = globalThis.fetch;
+vi.stubGlobal('fetch', (input: Parameters<typeof fetch>[0], init?: RequestInit) =>
+  String(input).startsWith(JAW_RPC_URL) ? Response.json({ jsonrpc: '2.0', id: 1, result: [] }) : realFetch(input, init)
+);
+
 setTestEnv();
 process.env.JAW_MCP_RPC_URL = 'http://127.0.0.1:9';
 process.env.JAW_MCP_MAINNET_RPC_URL = 'http://127.0.0.1:9';
@@ -28,15 +34,16 @@ afterEach(async () => {
 
 const RECIPIENT = '0x2222222222222222222222222222222222222222';
 const UNSUPPORTED_ORIGIN_CHAIN = 324;
+const TESTNET = 11155111;
 
 // `needs` is any one of these scopes.
 const TOOLS: Record<string, { needs: ConnectionScope[]; args: object }> = {
-  jaw_status: { needs: ['wallet:read'], args: {} },
+  jaw_session_status: { needs: ['wallet:read'], args: {} },
   jaw_resolve_name: { needs: ['wallet:read'], args: { name: 'a\u0000.eth' } },
-  jaw_quote: { needs: ['wallet:read'], args: { url: 'http://127.0.0.1:9/paid' } },
+  jaw_session_x402_quote: { needs: ['wallet:read'], args: { url: 'http://127.0.0.1:9/paid' } },
   jaw_add_funds: { needs: ['wallet:read'], args: {} },
   // No query, so it refuses before reaching the catalog.
-  jaw_discover: { needs: ['wallet:read'], args: {} },
+  jaw_session_x402_discover: { needs: ['wallet:read'], args: {} },
   // An unknown chain, so it refuses before reaching a node.
   jaw_read_contracts: {
     needs: ['wallet:read'],
@@ -47,12 +54,16 @@ const TOOLS: Record<string, { needs: ConnectionScope[]; args: object }> = {
       ],
     },
   },
-  jaw_history: { needs: ['wallet:read'], args: {} },
+  jaw_session_history: { needs: ['wallet:read'], args: {} },
   jaw_connections: { needs: ['wallet:read'], args: {} },
-  jaw_revoke_connection: { needs: ['wallet:read'], args: { id: 'conn_nope' } },
-  jaw_disconnect: { needs: ['wallet:read'], args: {} },
-  jaw_request_budget: { needs: ['x402:pay'], args: { perDay: '1' } },
-  jaw_pay_and_fetch: { needs: ['x402:pay'], args: { url: 'http://127.0.0.1:9/paid' } },
+  jaw_revoke_permission: { needs: ['wallet:read'], args: { permissionId: `0x${'0'.repeat(64)}`, chainId: 1 } },
+  jaw_session_disconnect: { needs: ['wallet:read'], args: {} },
+  jaw_session_execute: {
+    needs: ['x402:pay'],
+    args: { permissionId: `0x${'0'.repeat(64)}`, calls: [{ to: RECIPIENT }] },
+  },
+  jaw_grant_permissions: { needs: ['x402:pay'], args: { x402Budget: { perDay: '1' } } },
+  jaw_session_x402_pay: { needs: ['x402:pay'], args: { url: 'http://127.0.0.1:9/paid' } },
   jaw_swap: {
     needs: ['x402:pay'],
     args: {
@@ -69,7 +80,12 @@ const TOOLS: Record<string, { needs: ConnectionScope[]; args: object }> = {
     needs: ['wallet:read'],
     args: { chainId: UNSUPPORTED_ORIGIN_CHAIN, calls: [{ to: RECIPIENT, data: '0xa9059cbb' }] },
   },
-  jaw_send_calls_status: { needs: ['wallet:read'], args: { id: `oc_${'A'.repeat(22)}` } },
+  jaw_get_calls_status: { needs: ['wallet:read'], args: { id: `oc_${'A'.repeat(22)}` } },
+  jaw_get_assets: { needs: ['wallet:read'], args: { chainIds: [TESTNET] } },
+  jaw_get_capabilities: { needs: ['wallet:read'], args: { chainIds: [TESTNET] } },
+  jaw_get_calls_history: { needs: ['wallet:read'], args: {} },
+  jaw_get_permissions: { needs: ['wallet:read'], args: {} },
+  jaw_sign: { needs: ['wallet:read'], args: { message: 'hello', chainId: UNSUPPORTED_ORIGIN_CHAIN } },
 };
 
 const PROFILES = ['wallet:read', 'wallet:read x402:pay'];
@@ -113,7 +129,9 @@ describe('a refresh decides the scopes of the new token', () => {
   it('given both scopes, when a refresh narrows to wallet:read, then paying is refused', async () => {
     const c = await connect(undefined, { scope: 'wallet:read x402:pay' });
     const narrowed = await refresh(c.refresh_token, 'wallet:read');
-    const result = await callTool(narrowed.body.access_token, 'jaw_pay_and_fetch', { url: 'http://127.0.0.1:9/paid' });
+    const result = await callTool(narrowed.body.access_token, 'jaw_session_x402_pay', {
+      url: 'http://127.0.0.1:9/paid',
+    });
     expect(result.content[0].text).toMatch(/^insufficient_scope: /);
     expect(refusedFor(result)).toBe('x402:pay');
   });
@@ -123,7 +141,7 @@ describe('a refresh decides the scopes of the new token', () => {
     const narrowed = await refresh(c.refresh_token, 'x402:pay');
     const res = await mcp(narrowed.body.access_token, {
       method: 'tools/call',
-      params: { name: 'jaw_status', arguments: {} },
+      params: { name: 'jaw_session_status', arguments: {} },
     });
     expect(res.status).toBe(401);
   });

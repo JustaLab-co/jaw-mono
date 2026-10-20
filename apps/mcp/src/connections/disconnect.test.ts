@@ -81,7 +81,7 @@ async function holdPayment(t: Tenant, permissionId: string, reserved: string) {
     });
 }
 
-describe('jaw_disconnect', () => {
+describe('jaw_session_disconnect', () => {
   it('revokes the budget as spender, returns the float less what payments hold to the owner, then ends the tokens', async () => {
     const { c, tenant, permissionId, permission } = await budgetConnection(async () => approved);
     await holdPayment(tenant, permissionId, '20000');
@@ -105,6 +105,31 @@ describe('jaw_disconnect', () => {
     expect(result.structuredContent).toMatchObject({ revoked: [permissionId], swept: '477500', txHash: TX });
 
     expect(await revokedAt(permissionId)).not.toBeNull();
+    expect(await listed(c.access_token)).toBe(401);
+  });
+
+  it('given two live budgets, revokes both in the one batch that returns the float', async () => {
+    const { c, tenant, permissionId, permission } = await budgetConnection(async () => approved);
+    const [first] = await getDb().select().from(grants).where(eq(grants.permissionId, permissionId));
+    const second = `0x${randomBytes(32).toString('hex')}`;
+    await getDb()
+      .insert(grants)
+      .values({ ...first, permissionId: second, permission: { ...permission, salt: '0x7' }, createdAt: new Date() });
+    const { deps, sent } = fakes();
+
+    const result = await disconnect(tenant, deps);
+
+    expect(result.isError).toBeFalsy();
+    expect(sent).toHaveLength(1);
+    const revokes = sent[0]
+      .filter((call) => call.to === MANAGER)
+      .map((call) => decodeFunctionData({ abi: PERMISSION_MANAGER_ABI, data: call.data }))
+      .map((call) => (call.functionName === 'revokeAsSpender' ? call.args[0].salt : undefined));
+    expect(revokes.sort()).toEqual([BigInt(permission.salt), 7n].sort());
+    expect(args(sent[0][2]).args).toEqual([c.signer.address, 497_500n]);
+    expect(result.structuredContent?.revoked).toEqual(expect.arrayContaining([permissionId, second]));
+    expect(await revokedAt(permissionId)).not.toBeNull();
+    expect(await revokedAt(second)).not.toBeNull();
     expect(await listed(c.access_token)).toBe(401);
   });
 
@@ -189,13 +214,33 @@ describe('jaw_disconnect', () => {
     expect(await listed(c.access_token)).toBe(401);
   });
 
-  it('refuses while the chain cannot say whether a budget is live, and revokes nothing', async () => {
-    const { c, tenant } = await budgetConnection(async () => approved);
-    const { deps, sent } = fakes({ readPermission: async () => ({ status: 'unavailable' }) });
+  it('given a budget the chain cannot read, it revokes the others, returns the float and names the unread one', async () => {
+    const { c, tenant, permissionId, permission } = await budgetConnection(async () => approved);
+    const [first] = await getDb().select().from(grants).where(eq(grants.permissionId, permissionId));
+    const unreadable = `0x${randomBytes(32).toString('hex')}`;
+    await getDb()
+      .insert(grants)
+      .values({
+        ...first,
+        permissionId: unreadable,
+        permission: { ...permission, salt: '0x7' },
+        createdAt: new Date(),
+      });
+    const { deps, sent } = fakes({
+      readPermission: async (target) => (target.permissionId === unreadable ? { status: 'unavailable' } : approved),
+    });
 
-    expect((await disconnect(tenant, deps)).isError).toBe(true);
-    expect(sent).toEqual([]);
-    expect(await listed(c.access_token)).toBe(200);
+    const result = await disconnect(tenant, deps);
+
+    expect(result.isError).toBeFalsy();
+    expect(sent).toHaveLength(1);
+    expect(sent[0].filter((call) => call.to === MANAGER)).toHaveLength(1);
+    expect(args(sent[0][1]).args).toEqual([c.signer.address, 497_500n]);
+    expect(result.structuredContent).toMatchObject({ revoked: [permissionId], unread: [unreadable], swept: '497500' });
+    expect(result.structuredContent?.summary).toContain('could not be read');
+    expect(await revokedAt(permissionId)).not.toBeNull();
+    expect(await revokedAt(unreadable)).toBeNull();
+    expect(await listed(c.access_token)).toBe(401);
   });
 
   it('disconnects a read-only connection without sending anything', async () => {
@@ -223,7 +268,7 @@ describe('jaw_disconnect', () => {
 
   it('is a tool, and keeps the tokens with a fixed refusal when the chain cannot be read', async () => {
     const reader = await connect(undefined, { scope: 'wallet:read' });
-    const result = await callTool(reader.access_token, 'jaw_disconnect', {});
+    const result = await callTool(reader.access_token, 'jaw_session_disconnect', {});
     expect(result).toMatchObject({
       isError: true,
       content: [{ type: 'text', text: 'Nothing was revoked: the chain could not be read. Try again.' }],

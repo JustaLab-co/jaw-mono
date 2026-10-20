@@ -11,7 +11,7 @@ import type { Hex } from 'viem';
 import { privateKeyToAccount } from 'viem/accounts';
 import type { Tenant } from '@/connections/auth';
 import { config } from '@/connections/config';
-import type { Grant } from '@/grants/store';
+import type { Grant, LiveGrant } from '@/grants/store';
 import { publicClientFor } from '@/lib/chain';
 import { log } from '@/lib/edge';
 
@@ -22,7 +22,7 @@ export const withoutUrls = (text: string) => text.replace(/[a-z][a-z0-9+.-]*:\/\
 
 export const agentLogger: Logger = { warn: (message) => log('warn', { msg: withoutUrls(message) }) };
 
-export function sessionOf(grant: Grant): SessionConfig {
+export function sessionOf(grant: LiveGrant): SessionConfig {
   return {
     ownerAddress: grant.account,
     sessionAddress: grant.spender,
@@ -42,7 +42,7 @@ export function payerFor(t: Tenant, clients: ChainClients): Payer {
 export const topUpExecutor = (t: Tenant, grant: Grant): TopUpExecutor | undefined => sessionBridge(t, grant);
 
 /** Sends calls as the session key through the grant. Undefined without a paymaster key to pay the fee with. */
-export function sessionBridge(t: Tenant, grant: Grant): SessionBridge | undefined {
+export function sessionBridge(t: Tenant, grant: LiveGrant): SessionBridge | undefined {
   const apiKey = config().paymasterApiKey;
   if (!apiKey) return undefined;
   const session = sessionOf(grant);

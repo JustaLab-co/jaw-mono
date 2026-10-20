@@ -8,7 +8,7 @@ import { findActive } from '@/connections/rows';
 import { keepLease, leaseHeld, sessionLeaseEnd } from '@/connections/session-lease';
 import { ownerRelay, WalletBusy, type OpenWallet, type Wallet } from '@/connections/relay';
 import { countHit, isPaymentsPaused } from '@/db/settings';
-import { currentGrant } from '@/grants/store';
+import { x402Budget } from '@/grants/store';
 import { errorLabel, log, RATE_WINDOW_MS } from '@/lib/edge';
 import { fenceText, reply } from '@/lib/fence';
 import type { PayDeps } from '@/payments/pay';
@@ -112,7 +112,7 @@ const swapOutput = z.object({
     .optional(),
   quotePayment: z.object({ paymentId: z.string(), state: z.string() }).optional(),
   backend: z.object({ state: z.string(), checkedAt: z.string() }).optional(),
-  refusal: z.object({ code: z.string(), next: z.literal('jaw_request_budget').optional() }).optional(),
+  refusal: z.object({ code: z.string(), next: z.literal('jaw_grant_permissions').optional() }).optional(),
   response: z
     .array(z.string())
     .optional()
@@ -183,10 +183,10 @@ async function refusedBeforePaying(t: Tenant, originChainId: number, key: string
   if ((await countHit(`swap:${t.connectionId}`, RATE_WINDOW_MS)) > SWAP_RATE_LIMIT) {
     return refuse('rate_limited', 'Too many swaps on this connection. Wait a minute.');
   }
-  if (!(await currentGrant(t.connectionId))) {
+  if (!(await x402Budget(t.connectionId))) {
     return refuse(
       'no_grant',
-      'This connection has no budget to pay for the quote. Ask for one with jaw_request_budget.'
+      'This connection has no budget to pay for the quote. Ask for one with jaw_grant_permissions and x402Budget.'
     );
   }
   if (!isSupportedOriginChain(originChainId)) {
@@ -200,7 +200,8 @@ function summaryOf(row: SwapRow): string {
   const quote = row.quote as CheckedQuote['quote'] | null;
   switch (row.state) {
     case 'quoting': {
-      const raise = row.code && RAISE.has(row.code) ? ' Ask for a larger budget with jaw_request_budget.' : '';
+      const raise =
+        row.code && RAISE.has(row.code) ? ' Ask for a larger budget with jaw_grant_permissions and x402Budget.' : '';
       return `No quote yet (${row.code}). Nothing was deposited. Send the same idempotencyKey again to retry.${raise}`;
     }
     case 'quote_failed':
@@ -342,7 +343,7 @@ async function answer(row: SwapRow, read?: BackendAnswer): Promise<SwapResult> {
         ? { state: row.backendState, checkedAt: row.checkedAt.toISOString() }
         : undefined,
     refusal: row.code
-      ? { code: row.code, ...(RAISE.has(row.code) && { next: 'jaw_request_budget' as const }) }
+      ? { code: row.code, ...(RAISE.has(row.code) && { next: 'jaw_grant_permissions' as const }) }
       : undefined,
     response: response.length ? response : undefined,
     summary: readNote(read) + summaryOf(row),

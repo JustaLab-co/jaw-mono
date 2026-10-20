@@ -45,6 +45,9 @@ export function publicClientFor(chainId: number): PublicClient {
 /** Every chain JAW serves, testnets included. */
 export const proxyChains = () => getSupportedChains(true);
 
+/** Whether JAW serves this chain. */
+export const isProxyChain = (chainId: number) => proxyChains().some((c) => c.id === chainId);
+
 const proxied = new Map<number, PublicClient>();
 
 /** A read client for any JAW chain, through JAW's RPC proxy. The payment paths keep `publicClientFor`. */

@@ -14,6 +14,8 @@ import {
   uniqueIndex,
 } from 'drizzle-orm/pg-core';
 
+export const SPEND_UNITS = ['minute', 'hour', 'day', 'week', 'month', 'year', 'forever'] as const;
+
 export const settings = pgTable('settings', {
   key: text('key').primaryKey(),
   value: jsonb('value').notNull(),
@@ -107,18 +109,26 @@ export const grants = pgTable(
     chainId: integer('chain_id').notNull(),
     account: text('account').notNull(),
     spender: text('spender').notNull(),
-    token: text('token').notNull(),
-    allowance: text('allowance').notNull(),
-    period: text('period', { enum: ['day'] }).notNull(),
+    token: text('token'),
+    allowance: text('allowance'),
+    period: text('period', { enum: SPEND_UNITS }),
+    kind: text('kind', { enum: ['x402-budget', 'custom'] })
+      .notNull()
+      .default('x402-budget'),
     // The struct as approved: the permission manager answers only about a struct, never an id.
     permission: jsonb('permission').notNull(),
     expiresAt: timestamp('expires_at', { withTimezone: true }).notNull(),
     createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
-    // A newer budget was approved, so this one should be revoked; revokedAt once the chain shows it.
     replacedAt: timestamp('replaced_at', { withTimezone: true }),
     revokedAt: timestamp('revoked_at', { withTimezone: true }),
   },
-  (t) => [index().on(t.connectionId, t.createdAt)]
+  (t) => [
+    index().on(t.connectionId, t.createdAt),
+    check(
+      'grant_budget_spend',
+      sql`${t.kind} <> 'x402-budget' or (${t.token} is not null and ${t.allowance} is not null and ${t.period} = 'day')`
+    ),
+  ]
 );
 
 export const PAYER_TX_HASH_INDEX = 'payments_payer_tx_hash_index';
@@ -201,6 +211,9 @@ export const sends = pgTable(
     permissionId: text('permission_id').notNull(),
     chainId: integer('chain_id').notNull(),
     sender: text('sender').notNull(),
+    idempotencyKey: text('idempotency_key'),
+    requestHash: text('request_hash'),
+    token: text('token'),
     amount: numeric('amount', { precision: 78, scale: 0 }).notNull(),
     periodStart: bigint('period_start', { mode: 'number' }).notNull(),
     fromBlock: bigint('from_block', { mode: 'bigint' }).notNull(),
@@ -215,12 +228,15 @@ export const sends = pgTable(
   },
   (t) => [
     index().on(t.permissionId, t.createdAt),
+    index().on(t.connectionId, t.createdAt),
+    index().on(t.connectionId, t.idempotencyKey),
     index()
       .on(t.leaseUntil)
       .where(sql`${t.state} = 'open'`),
+    check('send_open_keyed', sql`${t.state} <> 'open' or ${t.idempotencyKey} is not null`),
     check(
       'send_shape',
-      sql`${t.amount} > 0 and (
+      sql`${t.amount} >= 0 and (${t.idempotencyKey} is null) = (${t.requestHash} is null) and (
         (${t.state} = 'open' and ${t.finishedAt} is null)
         or (${t.state} = 'landed' and ${t.txHash} is not null and ${t.finishedAt} is not null)
         or (${t.state} = 'released' and ${t.finishedAt} is not null))`
@@ -342,6 +358,63 @@ export const ownerCalls = pgTable(
       sql`jsonb_array_length(${t.calls}) between 1 and 10
         and (${t.state} <> 'sent' or ${t.callsId} is not null)
         and (${t.state} not in ('landed', 'reverted') or (${t.callsId} is not null and ${t.txHash} is not null))`
+    ),
+  ]
+);
+
+export const permissionRequests = pgTable(
+  'permission_requests',
+  {
+    id: text('id').primaryKey(),
+    connectionId: text('connection_id')
+      .notNull()
+      .references(() => connections.id),
+    method: text('method', { enum: ['grant', 'revoke', 'sign'] }).notNull(),
+    chainId: integer('chain_id').notNull(),
+    account: text('account').notNull(),
+    permissionId: text('permission_id'),
+    idempotencyKey: text('idempotency_key'),
+    requestHash: text('request_hash'),
+    signKind: text('sign_kind', { enum: ['message', 'typedData'] }),
+    signature: text('signature'),
+    state: text('state', { enum: ['awaiting_owner', 'approved', 'owner_declined', 'expired', 'failed'] })
+      .notNull()
+      .default('awaiting_owner'),
+    code: text('code'),
+    namesLost: text('names_lost'),
+    walletUrl: text('wallet_url').notNull(),
+    approveBy: timestamp('approve_by', { withTimezone: true }).notNull(),
+    sessionUntil: timestamp('session_until', { withTimezone: true }),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+    updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [
+    index().on(t.connectionId, t.createdAt),
+    index('permission_requests_open_account_index')
+      .on(sql`lower(${t.account})`)
+      .where(sql`${t.state} = 'awaiting_owner'`),
+    uniqueIndex('permission_requests_open_grant_index')
+      .on(t.connectionId)
+      .where(sql`${t.method} = 'grant' and ${t.state} = 'awaiting_owner'`),
+    uniqueIndex('permission_requests_open_revoke_index')
+      .on(sql`lower(${t.permissionId})`)
+      .where(sql`${t.method} = 'revoke' and ${t.state} = 'awaiting_owner'`),
+    uniqueIndex('permission_requests_open_revoke_connection_index')
+      .on(t.connectionId)
+      .where(sql`${t.method} = 'revoke' and ${t.state} = 'awaiting_owner'`),
+    uniqueIndex('permission_requests_open_sign_index')
+      .on(t.connectionId)
+      .where(sql`${t.method} = 'sign' and ${t.state} = 'awaiting_owner'`),
+    uniqueIndex('permission_requests_names_lost_index').on(t.namesLost),
+    uniqueIndex('permission_requests_sign_key_index')
+      .on(t.connectionId, t.idempotencyKey)
+      .where(sql`${t.method} = 'sign'`),
+    check(
+      'permission_request_shape',
+      sql`(${t.method} = 'revoke' and ${t.permissionId} is not null)
+        or (${t.method} = 'grant' and (${t.state} <> 'approved' or ${t.permissionId} is not null))
+        or (${t.method} = 'sign' and ${t.idempotencyKey} is not null and ${t.requestHash} is not null
+          and ${t.signKind} is not null and (${t.state} <> 'approved' or ${t.signature} is not null))`
     ),
   ]
 );

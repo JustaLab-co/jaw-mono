@@ -6,7 +6,7 @@
 
 - `db-up`: Postgres for the run answers and accepts migrations.
 - `mcp-up`: the server is up behind its OAuth gate.
-- `mcp-pay`: `jaw_pay_and_fetch` over HTTP pays the local seller and writes a `payments` row.
+- `mcp-pay`: `jaw_session_x402_pay` over HTTP pays the local seller and writes a `payments` row.
 - `mcp-swap-quote`: the server pays the seller's swap quote at `JAW_MCP_SWAP_URL`.
 
 ## How to get to it (user POV)

@@ -125,14 +125,20 @@ async function call(name, args) {
 
 const HELP = `Commands:
   tools                          list the server's tools
-  status                         jaw_status
+  status                         jaw_session_status
   connections                    jaw_connections
-  history                        jaw_history
+  history                        jaw_session_history
   funds                          jaw_add_funds
+  assets [chainIds,comma]        jaw_get_assets, every mainnet when left out
+  account-history                jaw_get_calls_history
+  permissions                    jaw_get_permissions
+  capabilities                   jaw_get_capabilities
   resolve <name|address>         jaw_resolve_name, an ENS name or an address
-  quote <url>                    jaw_quote
-  pay <url> [maxAmount]          jaw_pay_and_fetch (maxAmount in base units)
-  budget <perDay>                jaw_request_budget, USDC only
+  quote <url>                    jaw_session_x402_quote
+  pay <url> [maxAmount]          jaw_session_x402_pay (maxAmount in base units)
+  budget <perDay>                jaw_grant_permissions with the x402 budget preset, USDC per day
+  grant '<json>'                 jaw_grant_permissions with calls, spends and expiresAt, e.g.
+                                 grant '{"calls":[{"target":"0x...","functionSignature":"transfer(address,uint256)"}],"spends":[{"token":"0x...","allowance":"1000","unit":"week"}]}'
   swap <originChain> <originToken> <destChain> <destToken> <amount> [recipient|-] [key]
                                  jaw_swap, amount in base units of originToken, 0x000...0 for the native coin,
                                  e.g. swap 8453 0x8335...2913 42161 0xaf88...5831 1000000
@@ -140,25 +146,35 @@ const HELP = `Commands:
   calls '<json array>' [chainId] [key]
                                  jaw_send_calls, the owner approves in the wallet, e.g.
                                  calls '[{"to":"0x...","data":"0x..."}]' 8453 my-key
-  calls-status <id>              jaw_send_calls_status, id is the oc_ id jaw_send_calls returned
+  calls-status <id>              jaw_get_calls_status, id is the oc_ id jaw_send_calls returned
+  sign-message '<text>' [key]    jaw_sign, the owner signs the text in the wallet; run it again with the same key to read the signature
+  sign-typed '<json>' [key]      jaw_sign with EIP-712 typed data { domain, types, primaryType, message }
   read <chainId> '<json reads>'  jaw_read_contracts, e.g.
                                  read 8453 '[{"address":"0x...","abi":[...],"functionName":"decimals"}]'
-  revoke <connection id>         jaw_revoke_connection
-  disconnect                     jaw_disconnect
+  revoke <permission id> [chain] jaw_revoke_permission
+  execute <permission id> '<json array>' [chainId] [key]
+                                 jaw_session_execute, the session key sends within a custom grant, e.g.
+                                 execute 0x... '[{"to":"0x...","data":"0x..."}]' '' my-key
+  disconnect                     jaw_session_disconnect
   call <tool> '<json>'           any tool with raw arguments
   quit`;
 
 const commands = {
   tools: async () => console.log((await rpc('tools/list', {})).tools.map((t) => t.name).join('\n')),
-  status: () => call('jaw_status', {}),
+  status: () => call('jaw_session_status', {}),
   connections: () => call('jaw_connections', {}),
-  history: () => call('jaw_history', {}),
+  history: () => call('jaw_session_history', {}),
   funds: () => call('jaw_add_funds', {}),
+  assets: (chainIds) => call('jaw_get_assets', chainIds ? { chainIds: chainIds.split(',').map(Number) } : {}),
+  'account-history': () => call('jaw_get_calls_history', {}),
+  permissions: () => call('jaw_get_permissions', {}),
+  capabilities: () => call('jaw_get_capabilities', {}),
   resolve: (value) =>
     call('jaw_resolve_name', /^0x[0-9a-fA-F]{40}$/.test(value) ? { address: value } : { name: value }),
-  quote: (url) => call('jaw_quote', { url }),
-  pay: (url, maxAmount) => call('jaw_pay_and_fetch', { url, ...(maxAmount && { maxAmount }) }),
-  budget: (perDay) => call('jaw_request_budget', { perDay }),
+  quote: (url) => call('jaw_session_x402_quote', { url }),
+  pay: (url, maxAmount) => call('jaw_session_x402_pay', { url, ...(maxAmount && { maxAmount }) }),
+  budget: (perDay) => call('jaw_grant_permissions', { x402Budget: { perDay } }),
+  grant: (json) => call('jaw_grant_permissions', JSON.parse(json)),
   swap: (originChainId, originToken, destinationChainId, destinationToken, amount, recipient, idempotencyKey) =>
     call('jaw_swap', {
       originChainId: Number(originChainId),
@@ -176,10 +192,21 @@ const commands = {
       ...(chainId && { chainId: Number(chainId) }),
       ...(idempotencyKey && { idempotencyKey }),
     }),
-  'calls-status': (id) => call('jaw_send_calls_status', { id }),
+  'calls-status': (id) => call('jaw_get_calls_status', { id }),
+  'sign-message': (message, idempotencyKey) => call('jaw_sign', { message, ...(idempotencyKey && { idempotencyKey }) }),
+  'sign-typed': (json, idempotencyKey) =>
+    call('jaw_sign', { typedData: JSON.parse(json), ...(idempotencyKey && { idempotencyKey }) }),
   read: (chainId, json) => call('jaw_read_contracts', { chainId: Number(chainId), reads: JSON.parse(json) }),
-  revoke: (connection) => call('jaw_revoke_connection', { id: connection }),
-  disconnect: () => call('jaw_disconnect', {}),
+  revoke: (permissionId, chainId) =>
+    call('jaw_revoke_permission', { permissionId, ...(chainId && { chainId: Number(chainId) }) }),
+  execute: (permissionId, json, chainId, idempotencyKey) =>
+    call('jaw_session_execute', {
+      permissionId,
+      calls: JSON.parse(json),
+      ...(chainId && { chainId: Number(chainId) }),
+      ...(idempotencyKey && { idempotencyKey }),
+    }),
+  disconnect: () => call('jaw_session_disconnect', {}),
   call: (name, ...json) => call(name, json.length ? JSON.parse(json.join(' ')) : {}),
 };
 

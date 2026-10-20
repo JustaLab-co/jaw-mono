@@ -22,7 +22,7 @@ export const payOutput = z.object({
   refusal: z
     .object({
       code: z.string(),
-      next: z.literal('jaw_request_budget').optional(),
+      next: z.literal('jaw_grant_permissions').optional(),
     })
     .optional(),
   topUp: z.object({ amount: z.string().optional(), batchId: z.string().optional() }).optional(),
@@ -70,7 +70,7 @@ function summaryOf(row: PaymentRow, out: Omit<PayOutput, 'summary'>): string {
   const moved = out.payerRefilled ? ' Funds moved into the payer first.' : '';
   const paid = `${out.payment?.amount} base units to ${out.payment?.payTo}`;
   if (out.kind === 'free') return `Free: answered ${out.httpStatus} without a payment.`;
-  const raise = out.refusal?.next ? ' Ask for a larger budget with jaw_request_budget.' : '';
+  const raise = out.refusal?.next ? ' Ask for a larger budget with jaw_grant_permissions and x402Budget.' : '';
   if (row.kind === null) return 'Paying now. Ask again in a few seconds.';
   switch (row.state) {
     case 'pending':
@@ -79,10 +79,10 @@ function summaryOf(row: PaymentRow, out: Omit<PayOutput, 'summary'>): string {
       return `Paid ${paid}. Settled${out.payment?.txHash ? ` in ${out.payment.txHash}` : ' on chain'}.${moved}`;
     case 'signed':
       return out.kind === 'paid'
-        ? `Paid ${paid}. Settlement is being confirmed; jaw_history shows it.${moved}`
+        ? `Paid ${paid}. Settlement is being confirmed; jaw_session_history shows it.${moved}`
         : `A payment was sent and no answer came back. Send the same idempotencyKey again to resend it; it will not pay twice.${moved}`;
     case 'unknown':
-      return `A payment may have reached the seller (${out.refusal?.code}). Whether it settled is being checked; jaw_history shows it.${moved}`;
+      return `A payment may have reached the seller (${out.refusal?.code}). Whether it settled is being checked; jaw_session_history shows it.${moved}`;
     default:
       if (out.payment) return `The signed payment expired unused. Nothing moved to the seller.${moved}`;
       return `Not paid: ${out.refusal?.code}. Nothing was sent.${raise}${moved}`;
@@ -113,7 +113,7 @@ export function render(row: PaymentRow, fenced: string[], truncated = false): Pa
       refusal: {
         code: row.code,
         // A proof already sent stays tied to its own budget, so a new one does not pay it.
-        ...(RAISE.has(row.code) && !maybeSent && { next: 'jaw_request_budget' as const }),
+        ...(RAISE.has(row.code) && !maybeSent && { next: 'jaw_grant_permissions' as const }),
       },
     }),
     ...((row.topUpAmount || row.topUpBatchId) && {
