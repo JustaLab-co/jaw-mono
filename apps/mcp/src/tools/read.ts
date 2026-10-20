@@ -1,7 +1,9 @@
 import {
   balanceReader,
   firstOperationCost,
+  gasReserve,
   type OnChainPeriod,
+  PERMIT2_ADDRESS,
   payAndFetch,
   readCurrentPeriods,
   readLiveness,
@@ -9,7 +11,7 @@ import {
   usdcForNetwork,
 } from '@jaw.id/agent';
 import type { McpServer } from '@modelcontextprotocol/server';
-import { createPublicClient, http, type Address } from 'viem';
+import { createPublicClient, erc20Abi, http, type Address } from 'viem';
 import { normalize } from 'viem/ens';
 import { mainnet } from 'viem/chains';
 import { z } from 'zod';
@@ -39,7 +41,7 @@ const readiness = z.object({
 });
 type Readiness = z.infer<typeof readiness>;
 const quoteReadinessOut = readiness.extend({
-  reason: z.enum([...readiness.shape.reason.unwrap().options, 'over_allowance']).optional(),
+  reason: z.enum([...readiness.shape.reason.unwrap().options, 'over_allowance', 'balance_low']).optional(),
 });
 type QuoteReadiness = z.infer<typeof quoteReadinessOut>;
 
@@ -56,6 +58,19 @@ const clients = { clients: { publicClient: publicClientFor } };
 
 const floorZero = (n: bigint) => (n > 0n ? n : 0n);
 const least = (a: bigint, b: bigint) => (a < b ? a : b);
+
+/** What today leaves: the day's allowance, the float at the session address, and what a refill may still pull. */
+interface Room {
+  left: bigint;
+  held: bigint;
+  cap: bigint;
+}
+
+// A refill pays the fee for its own transfer, so the cap has to hold that on top of what it pulls.
+function refillFee(grant: Grant) {
+  const usdc = usdcForNetwork(caip2(grant.chainId));
+  return usdc ? firstOperationCost(usdc) : 0n;
+}
 
 // A session balance that could not be read counts as empty.
 async function budgetOf(grant: Grant, t: Tenant, held: bigint | null) {
@@ -74,19 +89,16 @@ async function budgetOf(grant: Grant, t: Tenant, held: bigint | null) {
   const figure = (amount: bigint) => ({ amount: amount.toString(), asset });
   let spent = null;
   let payable = null;
+  let room: Room | undefined;
   if (day) {
     const pulled = day.refilled + day.sentFromAccount;
-    const left = dayLeft(allowance, day);
-    const pullable = floorZero(allowance - pulled);
-    // A refill pays the fee for its own transfer, so the cap has to hold that on top of what it pulls.
-    const usdc = usdcForNetwork(caip2(grant.chainId));
-    const refillFee = usdc ? firstOperationCost(usdc) : 0n;
-    const floatFundable = (held ?? 0n) + floorZero(pullable - earlier - refillFee);
+    room = { left: dayLeft(allowance, day), held: held ?? 0n, cap: floorZero(floorZero(allowance - pulled) - earlier) };
     spent = figure(day.paid + day.sentFromAccount);
-    payable = figure(least(left, floatFundable));
+    payable = figure(least(room.left, room.held + floorZero(room.cap - refillFee(grant))));
   }
   return {
     liveness,
+    room,
     budget: budgetOutput.parse({
       permissionId: grant.permissionId,
       perDay: { amount: grant.allowance, asset },
@@ -253,21 +265,54 @@ const quoteOutput = z.object({
 
 type BudgetRead = Awaited<ReturnType<typeof budgetOf>>;
 
-function quoteReadiness(t: Tenant, read: BudgetRead | undefined, price: bigint): QuoteReadiness {
-  const ready = readinessOf(t, read?.liveness);
-  const left = read?.budget.remainingToday;
-  if (ready.status !== 'ready') return ready;
-  if (!left) return { status: 'not_ready', reason: 'chain_unavailable' };
-  return price > BigInt(left.amount) ? { status: 'not_ready', reason: 'over_allowance' } : ready;
+type Price = { amount: string; scheme: string };
+type Fit = { readiness: QuoteReadiness; approvalOwed: boolean };
+
+const UNREADABLE: QuoteReadiness = { status: 'not_ready', reason: 'chain_unavailable' };
+
+/** Whether an upto payment must first approve Permit2 for the session, which pay reads the same way. */
+async function permit2Owed(grant: Grant, owner: Address, price: bigint): Promise<boolean | undefined> {
+  const allowance = await publicClientFor(grant.chainId)
+    .readContract({ address: grant.token, abi: erc20Abi, functionName: 'allowance', args: [owner, PERMIT2_ADDRESS] })
+    .catch(() => undefined);
+  return allowance === undefined ? undefined : allowance < price;
 }
 
-function fitSummary(read: BudgetRead | undefined, ready: QuoteReadiness) {
+// Pay's checks before it signs, in its order: the day, the refill the float needs, the account behind it.
+async function fitOf(t: Tenant, grant: Grant, read: BudgetRead | undefined, p: Price): Promise<Fit> {
+  const fit = (readiness: QuoteReadiness, approvalOwed = false): Fit => ({ readiness, approvalOwed });
+  const ready = readinessOf(t, read?.liveness);
+  const room = read?.room;
+  if (ready.status !== 'ready') return fit(ready);
+  if (!room) return fit(UNREADABLE);
+  const price = BigInt(p.amount);
+  const over: QuoteReadiness = { status: 'not_ready', reason: 'over_allowance' };
+  if (price > room.left) return fit(over);
+  const owed = p.scheme === 'upto' ? await permit2Owed(grant, t.sessionAddress, price) : false;
+  if (owed === undefined) return fit(UNREADABLE);
+  const usdc = usdcForNetwork(caip2(grant.chainId));
+  const needed = owed && usdc ? price + gasReserve(usdc) : price;
+  if (room.held >= needed) return fit(ready, owed);
+  const pull = needed - room.held + refillFee(grant);
+  if (pull > room.cap) return fit(over, owed);
+  const funds = await balanceOf(caip2(grant.chainId), grant.account);
+  if (!funds) return fit(UNREADABLE, owed);
+  return fit(BigInt(funds.amount) < pull ? { status: 'not_ready', reason: 'balance_low' } : ready, owed);
+}
+
+function fitSummary(read: BudgetRead | undefined, grant: Grant, { readiness, approvalOwed }: Fit) {
   const left = read?.budget.remainingToday;
   if (!read || !left) return '';
   const { permissionId } = read.budget;
-  return ready.reason === 'over_allowance'
-    ? ` Budget ${permissionId} has ${left.amount} base units left today, not enough to pay it.`
-    : ` Within budget ${permissionId}, which has ${left.amount} base units left today.`;
+  const approval = approvalOwed
+    ? ' It also pays the gas to approve Permit2 first, held back from the same budget.'
+    : '';
+  if (readiness.reason === 'balance_low') {
+    return ` The account ${grant.account} holds too little USDC to refill the session for it: send USDC there (jaw_add_funds).`;
+  }
+  return readiness.reason === 'over_allowance'
+    ? ` Budget ${permissionId} has ${left.amount} base units left today, not enough to pay it.${approval}`
+    : ` Within budget ${permissionId}, which has ${left.amount} base units left today.${approval}`;
 }
 
 async function quote(t: Tenant, url: string) {
@@ -308,12 +353,12 @@ async function quote(t: Tenant, url: string) {
     const p = outcome.wouldPay;
     const asset = usdcForNetwork(p.network);
     const shown = asset && asset.address.toLowerCase() === p.asset.toLowerCase() ? asset.usdcName : p.asset;
-    const readiness = quoteReadiness(t, read, BigInt(p.amount));
+    const fit = grant ? await fitOf(t, grant, read, p) : { readiness: base.readiness, approvalOwed: false };
     const usable = base.readiness.status === 'ready' ? read : undefined;
     return {
       out: quoteOutput.parse({
         ...base,
-        readiness,
+        readiness: fit.readiness,
         kind: 'paid',
         price: { amount: p.amount, asset: caip19(p.network, p.asset) },
         chainId: p.network,
@@ -322,7 +367,7 @@ async function quote(t: Tenant, url: string) {
         ...(usable && {
           budget: { permissionId: usable.budget.permissionId, remainingToday: usable.budget.remainingToday },
         }),
-        summary: `Costs ${p.amount} base units of ${shown} on ${p.network}. Not paid.${fitSummary(usable, readiness)}`,
+        summary: `Costs ${p.amount} base units of ${shown} on ${p.network}. Not paid.${grant ? fitSummary(usable, grant, fit) : ''}`,
       }),
     };
   }

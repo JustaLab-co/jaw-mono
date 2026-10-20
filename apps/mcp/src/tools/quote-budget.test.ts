@@ -21,46 +21,59 @@ import { grantPermissions } from '@/tools/grant-permissions';
 
 const USDC = '0x036CbD53842c5426634e7929541eC2318f3dCF7e';
 const asked: { id: string }[] = [];
-const chain = {
+const sessions = new Set<string>();
+const initial = {
   start: 1,
   end: 2_000_000_000,
   spend: 0n,
   held: 0n,
+  permit2: 0n as bigint | undefined,
+  funds: 5_000_000n as bigint | undefined,
   periodReadable: true,
   approved: true,
   livenessReadable: true,
+};
+const chain = { ...initial };
+const unreadable = (n: bigint | undefined) => {
+  if (n === undefined) throw new Error('rpc down');
+  return n;
 };
 
 vi.mock('@/lib/chain', async (original) => ({
   ...(await original<object>()),
   publicClientFor: () =>
     ({
-      readContract: async ({ functionName }: { functionName: string }) => {
+      readContract: async ({ functionName, args }: { functionName: string; args: readonly unknown[] }) => {
         if (functionName === 'getHash') return asked[asked.length - 1].id;
         if (functionName === 'getCurrentPeriod') {
           if (!chain.periodReadable) throw new Error('rpc down');
           return chain;
         }
-        if (functionName === 'balanceOf') return chain.held;
+        if (functionName === 'balanceOf')
+          return sessions.has(String(args[0]).toLowerCase()) ? chain.held : unreadable(chain.funds);
+        if (functionName === 'allowance') {
+          if (chain.permit2 === undefined) throw new Error('rpc down');
+          return chain.permit2;
+        }
         if (functionName === 'isApproved' && !chain.livenessReadable) throw new Error('rpc down');
         return functionName === 'isApproved' && chain.approved;
       },
     }) as unknown as PublicClient,
 }));
 
-const option = (amount: string, asset: string) => ({
-  scheme: 'exact',
+const option = (amount: string, asset: string, scheme = 'exact') => ({
+  scheme,
   network: 'eip155:84532',
   amount,
   asset,
   payTo: '0x2222222222222222222222222222222222222222',
   maxTimeoutSeconds: 300,
-  extra: { name: 'USDC', version: '2' },
+  extra: { name: 'USDC', version: '2', facilitatorAddress: '0x2222222222222222222222222222222222222222' },
 });
 const seller = createServer((req, res) => {
-  const price = req.url?.match(/^\/price\/(\d+)$/)?.[1];
+  const price = req.url?.match(/^\/(?:price|upto)\/(\d+)$/)?.[1];
   const accepts = price
-    ? [option(price, USDC)]
+    ? [option(price, USDC, req.url?.startsWith('/upto') ? 'upto' : 'exact')]
     : req.url === '/two'
       ? [option('1', '0x3333333333333333333333333333333333333333'), option('5000', USDC)]
       : req.url === '/other'
@@ -79,17 +92,7 @@ const SELLER = `127.0.0.1:${(seller.address() as AddressInfo).port}`;
 setTestEnv();
 process.env.JAW_MCP_INSECURE_FETCH_HOSTS = SELLER;
 beforeAll(useTestDb);
-beforeEach(() =>
-  Object.assign(chain, {
-    start: 1,
-    end: 2_000_000_000,
-    spend: 0n,
-    held: 0n,
-    periodReadable: true,
-    approved: true,
-    livenessReadable: true,
-  })
-);
+beforeEach(() => Object.assign(chain, initial));
 
 async function withBudget(perDay: string) {
   const c = await connect();
@@ -99,6 +102,7 @@ async function withBudget(perDay: string) {
   await walletsSettled();
   const permissionId = (await x402Budget(t.connectionId))!.permissionId;
   asked.push({ id: permissionId });
+  sessions.add(t.sessionAddress.toLowerCase());
   return { token: c.access_token, t, permissionId };
 }
 
@@ -165,6 +169,21 @@ describe('given a budget of 0.5 USDC a day', () => {
     expect(r.structuredContent.readiness).toEqual({ status: 'not_ready', reason: 'chain_unavailable' });
     expect(r.structuredContent.budget).toBeUndefined();
     expect(r.structuredContent.summary).not.toContain('budget');
+  });
+
+  it('when the account behind the budget cannot be read and the float needs a refill, then the quote is not ready for chain_unavailable', async () => {
+    const { token } = await withBudget('0.5');
+    chain.funds = undefined;
+    const r = await quote(token, '/price/5000');
+    expect(r.structuredContent.readiness).toEqual({ status: 'not_ready', reason: 'chain_unavailable' });
+  });
+
+  it('when an upto price cannot read the Permit2 allowance, then the quote is not ready for chain_unavailable', async () => {
+    const { token } = await withBudget('0.5');
+    chain.permit2 = undefined;
+    const r = await quote(token, '/upto/5000');
+    expect(r.structuredContent).toMatchObject({ scheme: 'upto' });
+    expect(r.structuredContent.readiness).toEqual({ status: 'not_ready', reason: 'chain_unavailable' });
   });
 
   it('when the day cannot be read from the chain, then a paid quote is not ready for chain_unavailable', async () => {
