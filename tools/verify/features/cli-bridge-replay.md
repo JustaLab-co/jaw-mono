@@ -8,6 +8,7 @@
 - `replay-rejoin`: the server leaves right after asking, the relay drops the answer, the server rejoins the same session and asks again under the same id; the answer arrives.
 - `replay-conflict`: the same id with other params answers `success: false` with code `-32600`, never the stored answer.
 - `stale-link`: a link whose server went away (a restart of the hosted server, a CLI that exited) gets no `init` within 20 seconds of the key exchange; the page says "This link is no longer active. Ask the agent for a new one." and closes its socket.
+- `keyless-link`: a link opened again (a reload, a second tab) has no key, because the page strips it once read; it shows the same message instead of "Connecting to relay..." forever.
 
 ## Driving it
 
@@ -22,13 +23,15 @@ A page with the change prints `"replays":true` on `ready`, `none (the relay drop
 
 ### Stale link on the hosted server
 
-Preconditions: the baseline preconditions of the map, Docker running, and the keys app on `next dev` as above. The hosted server builds its links on that keys app, and the page reaches the relay the server uses.
+Preconditions: the baseline preconditions of the map, Docker running, the local relay on 18080, and the keys app on `next dev` as above with `JAW_CLI_API_KEY` set, so the live link gets past `init`. The hosted server builds its links on that keys app, and `relay-forward.sh` lets the container reach the local relay at the same `ws://localhost:18080` the page uses.
 
 ```bash
 S=tools/verify
 RUN=$($S/up.sh | tail -1)
-JAW_KEYS_URL=http://localhost:13002 $S/hosted-up.sh "$RUN"
+JAW_KEYS_URL=http://localhost:13002 JAW_RELAY_URL=ws://localhost:18080 $S/hosted-up.sh "$RUN"
+$S/relay-forward.sh "$RUN"
 node $S/bridge-stale-link.mjs "$RUN"
+docker rm -f "$(sed -n 's/^COMPOSE_PROJECT=//p' "$RUN/run.env")-relay-forward"
 $S/down.sh "$RUN"
 ```
 

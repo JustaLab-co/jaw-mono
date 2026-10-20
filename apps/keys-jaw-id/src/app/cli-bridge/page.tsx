@@ -115,6 +115,10 @@ function CLIBridgeContent() {
       cliPublicKeyRef.current = pk;
       setCliPublicKeyHex(pk);
       window.history.replaceState(null, '', window.location.pathname + window.location.search);
+    } else {
+      // The key is stripped once read, so a reload or a second open has none.
+      setState('error');
+      setError(LINK_GONE);
     }
   }, []);
 
@@ -181,9 +185,7 @@ function CLIBridgeContent() {
           // gone, the key exchange reaches nobody and nothing ever comes back.
           unanswered = setTimeout(() => {
             setState('error');
-            setError('This link is no longer active. Ask the agent for a new one.');
-            ws!.onclose = null;
-            ws!.close();
+            setError(LINK_GONE);
           }, SERVER_WAIT_MS);
         };
 
@@ -317,10 +319,12 @@ function CLIBridgeContent() {
         };
 
         ws.onclose = () => {
+          clearTimeout(unanswered);
           if (!cancelled) setState('disconnected');
         };
 
         ws.onerror = () => {
+          clearTimeout(unanswered);
           if (!cancelled) {
             setState('error');
             setError('Relay connection failed');
@@ -416,6 +420,8 @@ function CLIBridgeContent() {
     </div>
   );
 }
+
+const LINK_GONE = 'This link is no longer active. Ask the agent for a new one.';
 
 // A live server sends init as soon as the key exchange reaches it.
 const SERVER_WAIT_MS = 20_000;

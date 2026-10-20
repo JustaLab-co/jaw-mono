@@ -4,7 +4,13 @@ import { afterAll, describe, expect, it } from 'vitest';
 import type { lookup } from 'node:dns';
 import { isPrivate, publicOnly, resolvesPublic, safeFetch, watchCuts } from './safe-fetch';
 
+const hung: Promise<void>[] = [];
 const server = createServer((req, res) => {
+  if (req.url === '/hang' || req.url === '/partial') {
+    hung.push(new Promise((closed) => req.socket.on('close', () => closed())));
+    if (req.url === '/partial') res.writeHead(200).write('part');
+    return;
+  }
   if (req.url === '/redirect') return void res.writeHead(302, { location: 'http://169.254.169.254/' }).end();
   if (req.url === '/large') return void res.writeHead(200, { 'content-length': '1000001' }).end('x'.repeat(1_000_001));
   res.writeHead(402, { 'payment-required': 'abc' }).end('body');
@@ -55,6 +61,18 @@ describe('safeFetch', () => {
     await watched.fetch(`http://127.0.0.1:${port}/exact`);
     expect(watched.lastCut()).toBe(false);
   });
+
+  it.each(['/hang', '/partial'])(
+    'given a server that stalls at %s, when the signal aborts, then the socket closes',
+    async (path) => {
+      const res = guarded(`http://127.0.0.1:${port}${path}`, { signal: AbortSignal.timeout(100) });
+      const read = res.then((r) => r.text());
+      await expect(read).rejects.toMatchObject({ name: 'AbortError' });
+      await expect(
+        Promise.race([hung.at(-1), new Promise((_, late) => setTimeout(late, 1_000))])
+      ).resolves.toBeUndefined();
+    }
+  );
 
   it('never follows a redirect', async () => {
     const res = await guarded(`http://127.0.0.1:${port}/redirect`);

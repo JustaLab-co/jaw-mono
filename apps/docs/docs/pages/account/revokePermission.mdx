@@ -49,8 +49,8 @@ Target account address to revoke the permission on. The signer must be a registe
 interface RevokePermissionApiResponse {
   /** Whether the revocation was successful */
   success: boolean;
-  /** Transaction hash if on-chain revocation was needed */
-  transactionHash?: Hex;
+  /** True when the relay does not see the on-chain revoke yet; it removes the permission once it does */
+  pending?: boolean;
 }
 ```
 
