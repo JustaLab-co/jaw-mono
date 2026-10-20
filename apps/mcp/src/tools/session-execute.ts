@@ -1,5 +1,5 @@
 import { createHash, randomBytes } from 'node:crypto';
-import type { SessionBridge } from '@jaw.id/agent';
+import { within, type SessionBridge } from '@jaw.id/agent';
 import type { McpServer } from '@modelcontextprotocol/server';
 import { and, eq } from 'drizzle-orm';
 import { getAddress, isAddress, numberToHex, type Address, type Hex } from 'viem';
@@ -22,6 +22,9 @@ import {
   noteCallsId,
   openSpends,
   recordSend,
+  loggedEnds,
+  LOGGED_READ_MS,
+  readAt,
   runOf,
   settleSends,
   type SendRow,
@@ -208,27 +211,45 @@ async function grantFor(t: Tenant, run: Run): Promise<ToolResult | { grant: Live
   return { grant, bridge };
 }
 
+const ENDED = 'This connection has ended, so nothing was sent.';
+
+async function liveIn(tx: Tx, connectionId: string): Promise<boolean> {
+  const [live] = await tx
+    .select({ id: connections.id })
+    .from(connections)
+    .where(and(eq(connections.id, connectionId), isLive()));
+  return live !== undefined;
+}
+
 type Reserved = { ids: string[]; submitted: Submitted; bridge: SessionBridge; trustsReverts: boolean };
 
 async function submitUnder(t: Tenant, run: Run): Promise<ToolResult | Reserved> {
   return withFloat(t.connectionId, LOCK_WAIT_MS, async (hold) => {
+    // A run left unconfirmed may have landed since. Settled first, its key replays it landed
+    // and the next fit counts its spend on chain only. A read past its bound settles nothing.
+    const logged = await within(
+      loggedEnds(t.connectionId, run.permissionId, run.chainId, chainClients),
+      LOGGED_READ_MS
+    ).catch((err: unknown) => void logFailure('execute settle read failed')(err));
+    for (const { id, end } of logged?.ends ?? []) {
+      await settleSends([id], end).catch(logFailure('execute settle write failed'));
+    }
     const stored = await hold.tx(async (tx) => {
       if (!(await hold.owns(tx))) throw new FloatLost();
-      const rows = await runOf(tx, t.connectionId, run.key);
-      const [live] = await tx
-        .select({ id: connections.id })
-        .from(connections)
-        .where(and(eq(connections.id, t.connectionId), isLive()));
-      return { rows, live: Boolean(live) };
+      return { rows: await runOf(tx, t.connectionId, run.key), live: await liveIn(tx, t.connectionId) };
     });
     if (stored.rows.length > 0) return replayed(stored.rows, run.key, run.hash);
-    if (!stored.live) return refusal('This connection has ended, so nothing was sent.');
+    if (!stored.live) return refusal(ENDED);
     const found = await grantFor(t, run);
     if (!('grant' in found)) return found;
     const { grant, bridge } = found;
     const pending = await hold.tx((tx) => openSpends(grant.permissionId, tx));
     const nowSeconds = Math.floor(Date.now() / 1000);
-    const refused = await fit(grant, run.calls, { read: { clients: chainClients }, pending, nowSeconds });
+    const refused = await fit(grant, run.calls, {
+      read: readAt(chainClients, grant.chainId, logged?.head),
+      pending,
+      nowSeconds,
+    });
     if (refused) return refusal(described(refused, grant.permissionId) + NOTHING_SENT);
     const head = await chainClients
       .publicClient(grant.chainId)

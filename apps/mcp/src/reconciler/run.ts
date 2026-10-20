@@ -1,7 +1,7 @@
 import type { ChainClients } from '@jaw.id/agent';
 import { and, eq, isNotNull, isNull, lt, ne, sql } from 'drizzle-orm';
-import { getAbiItem, type Address, type Hex } from 'viem';
-import { entryPoint08Abi, entryPoint08Address } from 'viem/account-abstraction';
+import type { Address, Hex } from 'viem';
+import { entryPoint08Address } from 'viem/account-abstraction';
 import { chainClients } from '@/adapters/session-host';
 import { config } from '@/connections/config';
 import { retire, sessionSender, type DisconnectDeps } from '@/connections/disconnect';
@@ -15,7 +15,15 @@ import { errorLabel, log } from '@/lib/edge';
 import { conclude, sentBefore } from '@/owner-calls/store';
 import { canSearchChain, readReceipt, searchChain, type ReadReceipt } from '@/owner-calls/receipt';
 import { chainAnswer, type ChainAnswer } from '@/payments/confirm';
-import { claimOpenSends, settleSends, type SendEnd, type SendRow } from '@/payments/sends';
+import {
+  claimOpenSends,
+  endOf,
+  SEND_WINDOW_BLOCKS,
+  settleSends,
+  userOperationEvent,
+  type SendEnd,
+  type SendRow,
+} from '@/payments/sends';
 import { claimUnresolved, expire, markAlerted, settle, txHashTaken, type PaymentRow } from '@/payments/store';
 
 export const RECONCILE_AFTER_MS = 60_000;
@@ -108,10 +116,6 @@ async function apply(row: PaymentRow, answer: ChainAnswer, now: Date, report: Re
   report.alerted++;
 }
 
-// Some RPC providers cap eth_getLogs at 500 blocks.
-const SEND_WINDOW_BLOCKS = 450n;
-const userOperationEvent = getAbiItem({ abi: entryPoint08Abi, name: 'UserOperationEvent' });
-
 async function reconcileSends(clients: ChainClients, report: Report) {
   for (;;) {
     const rows = await claimOpenSends(CLAIM_MS, BATCH);
@@ -147,9 +151,9 @@ async function sendOutcome(row: SendRow, clients: ChainClients): Promise<SendEnd
     toBlock: head < windowEnd ? head : windowEnd,
     strict: true,
   });
-  const landed = logs.find((l) => l.args.success);
-  if (landed) return { state: 'landed', txHash: landed.transactionHash };
-  if (row.callsId && logs.length > 0) return { state: 'released', txHash: logs[0].transactionHash };
+  // Searched by sender, a revert may be another operation's: only a success is this row's.
+  const end = endOf(row.callsId ? logs : logs.filter((l) => l.args.success));
+  if (end) return end;
   if (head >= windowEnd) return { state: 'released' };
   return undefined;
 }

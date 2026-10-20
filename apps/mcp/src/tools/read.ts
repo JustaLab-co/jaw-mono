@@ -6,6 +6,7 @@ import {
   readLiveness,
   usdcBalance,
   usdcForNetwork,
+  within,
 } from '@jaw.id/agent';
 import type { McpServer } from '@modelcontextprotocol/server';
 import { createPublicClient, http, type Address } from 'viem';
@@ -18,7 +19,7 @@ import { findActive } from '@/connections/rows';
 import { getDb } from '@/db/client';
 import { liveGrants, x402Budget, type Grant, type LiveGrant } from '@/grants/store';
 import { dayLeft, daySpendOf, isoOf } from '@/payments/day-spend';
-import { openSpends, recordedSends } from '@/payments/sends';
+import { loggedEnds, LOGGED_READ_MS, openSpends, readAt, recordedSends } from '@/payments/sends';
 import { entriesFor, pulledUnderOtherGrants } from '@/payments/store';
 import { publicClientFor } from '@/lib/chain';
 import { fenceText, reply } from '@/lib/fence';
@@ -164,13 +165,19 @@ function leftOf(period: OnChainPeriod, allowance: bigint, inFlight: bigint) {
   return period.status === 'ok' ? floorZero(allowance - period.spend - inFlight).toString() : '0';
 }
 
-async function grantOf(g: LiveGrant): Promise<z.infer<typeof grantOut>> {
+// A run the logs show ended counts in the period spend read at their block, not again as open.
+async function grantOf(connectionId: string, g: LiveGrant): Promise<z.infer<typeof grantOut>> {
   const target = { chainId: g.chainId, permissionId: g.permissionId, permission: g.permission };
   const tokens = [...new Set(g.permission.spends.map((s) => s.token.toLowerCase()))];
+  const logged = await within(
+    loggedEnds(connectionId, g.permissionId, g.chainId, clients.clients),
+    LOGGED_READ_MS
+  ).catch(() => undefined);
+  const read = readAt(clients.clients, g.chainId, logged?.head);
   const [liveness, periods, open] = await Promise.all([
-    readLiveness(target, clients),
-    Promise.all(tokens.map((token) => readCurrentPeriods({ ...target, token }, clients))),
-    openSpends(g.permissionId, getDb()),
+    readLiveness(target, read),
+    Promise.all(tokens.map((token) => readCurrentPeriods({ ...target, token }, read))),
+    openSpends(g.permissionId, getDb(), new Set(logged?.ends.map((e) => e.id))),
   ]);
   return {
     permissionId: g.permissionId,
@@ -198,7 +205,7 @@ async function status(t: Tenant) {
   ]);
   const [read, shown] = await Promise.all([
     grant && budgetOf(grant, t, float && BigInt(float.amount)),
-    Promise.all(held.map(grantOf)),
+    Promise.all(held.map((g) => grantOf(t.connectionId, g))),
   ]);
   const grants = shown.map((g) =>
     g.permissionId === grant?.permissionId

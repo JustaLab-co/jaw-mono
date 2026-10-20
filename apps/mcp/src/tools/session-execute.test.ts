@@ -95,10 +95,12 @@ vi.mock('@/adapters/session-host', async (original) => ({
 
 const node = vi.hoisted(() => ({
   getBlockNumber: async () => chain.head,
-  getLogs: async ({ args }: { args: { userOpHash?: Hex; sender?: Address } }) =>
+  getLogs: async ({ args }: { args: { userOpHash?: Hex | Hex[]; sender?: Address } }) =>
     chain.userOps
       .filter((op) =>
-        args.userOpHash ? op.userOpHash === args.userOpHash : op.sender.toLowerCase() === args.sender?.toLowerCase()
+        args.userOpHash
+          ? [args.userOpHash].flat().includes(op.userOpHash)
+          : op.sender.toLowerCase() === args.sender?.toLowerCase()
       )
       .map((op) => ({ args: op, blockNumber: op.blockNumber, transactionHash: op.txHash ?? TX })),
   readContract: async () => undefined as unknown,
@@ -448,6 +450,199 @@ describe('jaw_session_execute', () => {
     ]);
   });
 
+  it('given an unconfirmed run that has since landed, when the next execute fits in what is left on chain, then it sends and the first row is landed', async () => {
+    const { c, t, permissionId } = await withCustomGrant();
+    bridge.outcome = 'pending';
+    vi.useFakeTimers({ toFake: ['Date'] });
+    const first = await execute(c.access_token, permissionId, [transfer(BOB, 600_000n)]);
+    const userOpHash = first.structuredContent.userOpHash as Hex;
+    chain.userOps.push({ userOpHash, sender: t.sessionAddress, success: true, blockNumber: 101n });
+    chain.spent = 600_000n;
+    bridge.outcome = 'landed';
+
+    const second = await execute(c.access_token, permissionId, [transfer(CAROL, 300_000n)]);
+
+    expect(second.structuredContent).toMatchObject({ status: 'landed' });
+    expect(bridge.sent).toHaveLength(2);
+    const rows = await rowsOf(t.connectionId);
+    expect(rows.find((r) => r.callsId === userOpHash)).toMatchObject({ state: 'landed', txHash: TX });
+  });
+
+  it('given an unconfirmed run that has since reverted on chain, then its row is released and holds nothing against the next execute', async () => {
+    const { c, t, permissionId } = await withCustomGrant();
+    bridge.outcome = 'pending';
+    vi.useFakeTimers({ toFake: ['Date'] });
+    const first = await execute(c.access_token, permissionId, [transfer(BOB, 600_000n)]);
+    const userOpHash = first.structuredContent.userOpHash as Hex;
+    const reverted: Hex = `0x${'d'.repeat(64)}`;
+    chain.userOps.push({ userOpHash, sender: t.sessionAddress, success: false, blockNumber: 101n, txHash: reverted });
+    bridge.outcome = 'landed';
+
+    const second = await execute(c.access_token, permissionId, [transfer(CAROL, 600_000n)]);
+
+    expect(second.structuredContent).toMatchObject({ status: 'landed' });
+    const rows = await rowsOf(t.connectionId);
+    expect(rows.find((r) => r.callsId === userOpHash)).toMatchObject({ state: 'released', txHash: reverted });
+  });
+
+  it('given an unconfirmed run and logs that cannot be read, then its open row still counts and stays open', async () => {
+    const { c, t, permissionId } = await withCustomGrant();
+    bridge.outcome = 'pending';
+    vi.useFakeTimers({ toFake: ['Date'] });
+    const first = await execute(c.access_token, permissionId, [transfer(BOB, 600_000n)]);
+    chain.userOps.push({
+      userOpHash: first.structuredContent.userOpHash as Hex,
+      sender: t.sessionAddress,
+      success: true,
+      blockNumber: 101n,
+    });
+    chain.spent = 600_000n;
+    vi.spyOn(node, 'getLogs').mockRejectedValue(new Error('logs unavailable'));
+
+    const second = await execute(c.access_token, permissionId, [transfer(CAROL, 300_000n)]);
+
+    expect(second.content[0].text).toMatch(/^over-limit: .* has 0 left this period/);
+    expect(bridge.sent).toHaveLength(1);
+    expect(await rowsOf(t.connectionId)).toEqual([expect.objectContaining({ state: 'open' })]);
+  });
+
+  it('given a node behind the block where a run was logged landed, then the period read fails and nothing more is sent', async () => {
+    const { c, t, permissionId } = await withCustomGrant();
+    bridge.outcome = 'pending';
+    vi.useFakeTimers({ toFake: ['Date'] });
+    const first = await execute(c.access_token, permissionId, [transfer(BOB, 600_000n)]);
+    chain.userOps.push({
+      userOpHash: first.structuredContent.userOpHash as Hex,
+      sender: t.sessionAddress,
+      success: true,
+      blockNumber: chain.head,
+    });
+    const answers = node.readContract as (args: unknown) => Promise<unknown>;
+    // The node serving reads has not seen the run: its latest period is empty, and the logged block is ahead of it.
+    node.readContract = (async (args: { functionName: string; blockNumber?: bigint }) => {
+      if (args.blockNumber !== undefined) throw new Error('block not found');
+      return args.functionName === 'getCurrentPeriod'
+        ? { start: NOW() - 60, end: NOW() + 3_600, spend: 0n }
+        : answers(args);
+    }) as typeof node.readContract;
+    bridge.outcome = 'landed';
+
+    const second = await execute(c.access_token, permissionId, [transfer(CAROL, 600_000n)]);
+
+    expect(second.content[0].text).toMatch(/could not be read from the chain/);
+    expect(bridge.sent).toHaveLength(1);
+  });
+
+  it('given a log read that hangs, then the execute answers once the read times out and the open row still counts', async () => {
+    const { c, t, permissionId } = await withCustomGrant();
+    bridge.outcome = 'pending';
+    vi.useFakeTimers({ toFake: ['Date'] });
+    await execute(c.access_token, permissionId, [transfer(BOB, 600_000n)]);
+    chain.spent = 600_000n;
+    vi.spyOn(node, 'getLogs').mockReturnValue(new Promise(() => {}));
+
+    const second = await execute(c.access_token, permissionId, [transfer(CAROL, 300_000n)]);
+
+    expect(second.content[0].text).toMatch(/^over-limit: .* has 0 left this period/);
+    expect(await rowsOf(t.connectionId)).toEqual([expect.objectContaining({ state: 'open' })]);
+  });
+
+  it('given an unconfirmed run past its block window, then the next execute leaves it open for the reconciler', async () => {
+    const { c, t, permissionId } = await withCustomGrant();
+    bridge.outcome = 'pending';
+    vi.useFakeTimers({ toFake: ['Date'] });
+    const first = await execute(c.access_token, permissionId, [transfer(BOB, 600_000n)]);
+    chain.userOps.push({
+      userOpHash: first.structuredContent.userOpHash as Hex,
+      sender: t.sessionAddress,
+      success: true,
+      blockNumber: 101n,
+    });
+    chain.spent = 600_000n;
+    chain.head = 600n;
+
+    const second = await execute(c.access_token, permissionId, [transfer(CAROL, 300_000n)]);
+
+    expect(second.content[0].text).toMatch(/^over-limit: /);
+    expect(await rowsOf(t.connectionId)).toEqual([expect.objectContaining({ state: 'open' })]);
+  });
+
+  it('given two unconfirmed runs and only one logged, then only that one settles and the other still counts', async () => {
+    const { c, t, permissionId } = await withCustomGrant();
+    bridge.outcome = 'pending';
+    vi.useFakeTimers({ toFake: ['Date'] });
+    const first = await execute(c.access_token, permissionId, [transfer(BOB, 300_000n)]);
+    const second = await execute(c.access_token, permissionId, [transfer(CAROL, 300_000n)]);
+    const logged = first.structuredContent.userOpHash as Hex;
+    chain.userOps.push({ userOpHash: logged, sender: t.sessionAddress, success: true, blockNumber: 101n });
+    chain.spent = 300_000n;
+    bridge.outcome = 'landed';
+
+    const third = await execute(c.access_token, permissionId, [transfer(BOB, 300_000n)]);
+
+    expect(third.structuredContent).toMatchObject({ status: 'landed' });
+    const rows = await rowsOf(t.connectionId);
+    expect(rows.find((r) => r.callsId === logged)).toMatchObject({ state: 'landed' });
+    expect(rows.find((r) => r.callsId === second.structuredContent.userOpHash)).toMatchObject({ state: 'open' });
+  });
+
+  it('given an unconfirmed run that has since landed, then the session status counts its spend once in what is left', async () => {
+    const { c, t, permissionId } = await withCustomGrant();
+    bridge.outcome = 'pending';
+    vi.useFakeTimers({ toFake: ['Date'] });
+    const first = await execute(c.access_token, permissionId, [transfer(BOB, 600_000n)]);
+    chain.userOps.push({
+      userOpHash: first.structuredContent.userOpHash as Hex,
+      sender: t.sessionAddress,
+      success: true,
+      blockNumber: 101n,
+    });
+    chain.spent = 600_000n;
+
+    const status = await callTool(c.access_token, 'jaw_session_status', {});
+
+    const grant = (status.structuredContent.grants as { permissionId: string; limits: { left: string }[] }[]).find(
+      (g) => g.permissionId === permissionId
+    );
+    expect(grant?.limits[0].left).toBe('400000');
+  });
+
+  it('given an unconfirmed run that has since landed, when its idempotencyKey is sent again, then it replays the run landed and sends nothing', async () => {
+    const { c, t, permissionId } = await withCustomGrant();
+    bridge.outcome = 'pending';
+    vi.useFakeTimers({ toFake: ['Date'] });
+    const first = await execute(c.access_token, permissionId, [transfer(BOB, 600_000n)], 'late');
+    const userOpHash = first.structuredContent.userOpHash as Hex;
+    chain.userOps.push({ userOpHash, sender: t.sessionAddress, success: true, blockNumber: 101n });
+
+    const again = await execute(c.access_token, permissionId, [transfer(BOB, 600_000n)], 'late');
+
+    expect(again.structuredContent).toMatchObject({ status: 'landed', userOpHash, txHash: TX });
+    expect(bridge.attempts).toBe(1);
+  });
+
+  it("given another connection's payment id as before, then the payments page is empty", async () => {
+    const paid = { url: 'https://seller.test/paid', method: 'GET' as const, headers: {} };
+    const mine = await withCustomGrant();
+    await claim(
+      { connectionId: mine.t.connectionId, payer: mine.t.sessionAddress, permissionId: mine.permissionId },
+      'mine',
+      paid
+    );
+    const other = await withCustomGrant();
+    await claim(
+      { connectionId: other.t.connectionId, payer: other.t.sessionAddress, permissionId: other.permissionId },
+      'theirs',
+      paid
+    );
+    const theirs = await callTool(other.c.access_token, 'jaw_session_history', {});
+    const foreign = (theirs.structuredContent.payments as { paymentId: string }[])[0].paymentId;
+
+    const page = await callTool(mine.c.access_token, 'jaw_session_history', { before: foreign });
+
+    expect(page.structuredContent.payments).toEqual([]);
+  });
+
   it('given more executes than a page, then executesNext pages through them with no overlap and no payments', async () => {
     const { c, t, permissionId } = await withCustomGrant();
     for (const amount of [1n, 2n, 3n]) await execute(c.access_token, permissionId, [transfer(BOB, amount)]);
@@ -479,28 +674,6 @@ describe('jaw_session_execute', () => {
     const page = await callTool(other.c.access_token, 'jaw_session_history', { executesBefore: row.id });
 
     expect(page.structuredContent.executes).toEqual([]);
-  });
-
-  it("given another connection's payment id as before, then the payments page is empty", async () => {
-    const paid = { url: 'https://seller.test/paid', method: 'GET' as const, headers: {} };
-    const mine = await withCustomGrant();
-    await claim(
-      { connectionId: mine.t.connectionId, payer: mine.t.sessionAddress, permissionId: mine.permissionId },
-      'mine',
-      paid
-    );
-    const other = await withCustomGrant();
-    await claim(
-      { connectionId: other.t.connectionId, payer: other.t.sessionAddress, permissionId: other.permissionId },
-      'theirs',
-      paid
-    );
-    const theirs = await callTool(other.c.access_token, 'jaw_session_history', {});
-    const foreign = (theirs.structuredContent.payments as { paymentId: string }[])[0].paymentId;
-
-    const page = await callTool(mine.c.access_token, 'jaw_session_history', { before: foreign });
-
-    expect(page.structuredContent.payments).toEqual([]);
   });
 
   it('given the same idempotencyKey and input after a run landed, then it returns that run and sends nothing', async () => {
@@ -658,6 +831,34 @@ describe('jaw_session_execute', () => {
       .where(eq(sends.connectionId, t.connectionId));
     await reconcile({ publicClient: () => node as unknown as PublicClient });
     expect(await rowsOf(t.connectionId)).toEqual([expect.objectContaining({ state: 'released', txHash: null })]);
+  });
+
+  it('given a row found by its sender, when only another operation of the sender reverted, then the reconciler leaves it open', async () => {
+    const { t, permissionId } = await withCustomGrant();
+    await getDb()
+      .insert(sends)
+      .values({
+        id: 'send_by_sender',
+        connectionId: t.connectionId,
+        permissionId,
+        chainId: t.chainId,
+        sender: t.sessionAddress.toLowerCase(),
+        amount: '1',
+        periodStart: NOW(),
+        fromBlock: 100n,
+        leaseUntil: new Date(0),
+      });
+    chain.userOps.push({
+      userOpHash: `0x${'9'.repeat(64)}`,
+      sender: t.sessionAddress,
+      success: false,
+      blockNumber: 101n,
+    });
+    chain.head = 120n;
+
+    await reconcile({ publicClient: () => node as unknown as PublicClient });
+
+    expect(await rowsOf(t.connectionId)).toEqual([expect.objectContaining({ state: 'open', txHash: null })]);
   });
 });
 
