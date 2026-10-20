@@ -30,7 +30,7 @@ Preconditions: baseline preconditions of this map; Docker running; `JAW_KEYS_URL
 - revoke-refusals: `revoke 0x<64 random hex>`, then `revoke <a budget id> 8453`. Pass: `unknown_permission:` and `wrong_chain:`, no `url`.
 - revoke-declined: `revoke <id>`, reject in the wallet. Pass: the grant is still listed `live`; the request row reads `owner_declined`.
 - link-cap: open three links without approving them (`budget 1` on three connections, or revokes of three ids), then ask a fourth. Pass: `account_busy:`, no `url`.
-- revoke-unconfirmed sweep: after revoke-own, set the row back with psql (`update permission_requests set code = 'unconfirmed' ...; update grants set revoked_at = null ...`), then wait for the server's reconcile loop (30 seconds in the stack). Pass: the row's code is null and `revoked_at` is set again from the chain read.
+- revoke-unconfirmed sweep: after revoke-own, set the row back with psql (`update permission_requests set code = 'unconfirmed', updated_at = now() - interval '6 minutes' ...; update grants set revoked_at = null ...`, since a row is read again at most every five minutes), then wait for the server's reconcile loop (30 seconds in the stack). Pass: the row's code is null and `revoked_at` is set again from the chain read.
 - link-sweep: open a link, stop the mcp container, start it again, wait 90 seconds plus one reconcile loop. Pass: its row reads `expired` with the matching code.
 - revoke-old-name: `call jaw_revoke_connection '{"id":"x"}'`. Pass: an unknown-tool error.
 - After revoke-own, `disconnect`. Pass: it ends with no revoke error for the grant already revoked.

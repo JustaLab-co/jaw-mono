@@ -388,6 +388,14 @@ describe('reconciler: owner link requests', () => {
     expect(await rowOf(id)).toMatchObject({ state: 'failed', code: 'revoke_not_seen' });
   });
 
+  it('given a revoke settled over a day ago, then giving up on unconfirmed ones leaves it settled', async () => {
+    const id = await unconfirmedRevoke(budget, { code: null, createdAt: minutesAgo(25 * 60) });
+
+    await run();
+
+    expect(await rowOf(id)).toMatchObject({ state: 'approved', code: null });
+  });
+
   it('given a revoke that ended revoke_not_seen, when the chain later shows it revoked, then marking it revoked settles the request', async () => {
     const id = await unconfirmedRevoke(budget, { createdAt: minutesAgo(25 * 60) });
     await run();
