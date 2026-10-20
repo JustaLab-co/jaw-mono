@@ -1,4 +1,4 @@
-import { createPrivateKey, createPublicKey, randomUUID } from 'node:crypto';
+import { randomUUID } from 'node:crypto';
 import {
   decryptMessage,
   deriveSharedSecret,
@@ -265,13 +265,16 @@ export class PageGone extends Error {
   }
 }
 
-export const resumeWallet = (resume: RelayResume, until: Date, client?: RelayClient): Promise<Wallet | undefined> =>
-  withSlot(ownerPool, client, (release) => rejoin(release, resume, until));
+/** Rejoins the session behind `url`, the link the owner already has open. */
+export const resumeWallet = (
+  resume: RelayResume,
+  url: string,
+  until: Date,
+  client?: RelayClient
+): Promise<Wallet | undefined> => withSlot(ownerPool, client, (release) => rejoin(release, resume, url, until));
 
-async function rejoin(release: () => void, resume: RelayResume, until: Date): Promise<Wallet | undefined> {
+async function rejoin(release: () => void, resume: RelayResume, url: string, until: Date): Promise<Wallet | undefined> {
   const { session, key, peer, chainId, appName } = resume;
-  const ours = createPrivateKey({ key: Buffer.from(key, 'hex'), format: 'der', type: 'pkcs8' });
-  const url = linkOf(session, createPublicKey(ours).export({ format: 'der', type: 'spki' }).toString('hex'));
   const { ws, inbox, end } = connect(session, until, release);
   const soon = () => new Date(Math.min(until.getTime(), Date.now() + REJOIN_WITHIN_MS));
   const status = await inbox

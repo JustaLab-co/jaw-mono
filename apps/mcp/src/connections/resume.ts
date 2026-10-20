@@ -57,7 +57,7 @@ async function resumeOne<R extends Resumable>(found: R, { take, release, lost, s
   if (!run) return void (await lost(row, 'unopenable'));
   let wallet: Wallet | undefined;
   try {
-    wallet = await resumeWallet(relay, row.approveBy!, t);
+    wallet = await resumeWallet(relay, row.walletUrl!, row.approveBy!, t);
   } catch (err) {
     await release(row);
     if (err instanceof WalletBusy) return;

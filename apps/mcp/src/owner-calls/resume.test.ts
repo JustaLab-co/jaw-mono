@@ -2,7 +2,9 @@ import { randomBytes } from 'node:crypto';
 import { eq, sql } from 'drizzle-orm';
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import { verifyBearer, type Tenant } from '@/connections/auth';
+import { config } from '@/connections/config';
 import { replayingPage, stallsAfter, startRelay } from '@/connections/fake-relay';
+import { sealResume, type RelayResume } from '@/connections/seal';
 import { connect, owner, setTestEnv, walletsSettled } from '@/connections/testkit';
 import { getDb } from '@/db/client';
 import { connections, ownerCalls } from '@/db/schema';
@@ -253,7 +255,13 @@ describe('owner calls whose server restarted after the send started', () => {
 });
 
 async function waitingCall(
-  over: { connectionId?: string; minutesAgo?: number; lapsedSeconds?: number; id?: string } = {}
+  over: {
+    connectionId?: string;
+    minutesAgo?: number;
+    lapsedSeconds?: number;
+    id?: string;
+    sealed?: Partial<RelayResume>;
+  } = {}
 ) {
   const id = over.id ?? randomBytes(8).toString('hex');
   const connectionId = over.connectionId ?? `c_${id}`;
@@ -284,12 +292,18 @@ async function waitingCall(
       chainId: 84532,
       account: `0x${'ab'.repeat(20)}`,
       calls: [CALL],
-      walletUrl: 'http://keys.test/cli-bridge',
+      walletUrl: `http://keys.test/cli-bridge?session=${id}`,
       approveBy: new Date(Date.now() + 600_000),
       code: SEND_STARTED,
       leaseHolder: id,
       sessionUntil: sql`statement_timestamp() - ${over.lapsedSeconds ?? 120} * interval '1 second'`,
-      relay: 'r1.retired.x.y',
+      relay: over.sealed
+        ? sealResume(
+            config().ring,
+            { session: id, key: 'zz', peer: '00', chainId: 84532, appName: 'JAW CLI', ...over.sealed },
+            `oc_${id}`
+          )
+        : 'r1.retired.x.y',
       updatedAt: new Date(Date.now() - (over.minutesAgo ?? 1) * 60_000),
     });
   return `oc_${id}`;
@@ -319,6 +333,15 @@ describe('which owner calls a resume picks', () => {
     await quiet();
 
     expect(await waiting([other])).toEqual([other]);
+  });
+
+  it('given a stored relay session that opens but holds no usable key, then it is not retried: nothing is stored to resume and no socket opens', async () => {
+    const id = await waitingCall({ sealed: { key: 'zz' }, minutesAgo: 900 });
+
+    await Promise.all(await resumeOwnerCalls(clients));
+
+    expect((await rowOf(id)).relay).toBeNull();
+    expect(relay.sessions.has(id.slice('oc_'.length))).toBe(false);
   });
 
   it('given a lease that ended inside the stall grace, then no resume takes it over until the grace passes', async () => {
