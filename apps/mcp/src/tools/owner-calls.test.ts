@@ -24,9 +24,8 @@ import {
   walletsSettled,
 } from '@/connections/testkit';
 import { getDb } from '@/db/client';
-import { grants, ownerCalls, sends, settings } from '@/db/schema';
-import { countHit } from '@/db/settings';
-import { TEST_PG_URL, useTestDb, useTestPostgres, withoutOwnerCallsGuard } from '@/db/test-db';
+import { grants, ownerCalls, rateLimits, sends, settings } from '@/db/schema';
+import { hitsThisWindow, TEST_PG_URL, useTestDb, useTestPostgres, withoutOwnerCallsGuard } from '@/db/test-db';
 import { RATE_WINDOW_MS } from '@/lib/edge';
 import { gateCode } from '@/payments/render';
 import { SEND_STARTED } from '@/owner-calls/store';
@@ -890,7 +889,7 @@ describe('jaw_send_calls refusals', () => {
 
   it('given nine links this minute, when the tenth opens, then it is served', async () => {
     const { t } = await connected();
-    for (let i = 0; i < 9; i++) await countHit(`owner-calls:${t.connectionId}`, RATE_WINDOW_MS);
+    await hitsThisWindow(`owner-calls:${t.connectionId}`, 9, RATE_WINDOW_MS);
 
     const result = await send(t);
 
@@ -899,7 +898,7 @@ describe('jaw_send_calls refusals', () => {
 
   it('given ten hits on the connection counter this minute, when a link is asked for, then rate_limited and nothing is stored', async () => {
     const { t } = await connected();
-    for (let i = 0; i < 10; i++) await countHit(`owner-calls:${t.connectionId}`, RATE_WINDOW_MS);
+    await hitsThisWindow(`owner-calls:${t.connectionId}`, 10, RATE_WINDOW_MS);
 
     const result = await send(t);
 
@@ -1069,8 +1068,8 @@ describe('jaw_send_calls refusals', () => {
       const { t: first } = await connected('wallet:read', signer);
       const { t: second } = await connected('wallet:read', signer);
       const { t: third } = await connected('wallet:read', signer);
-      for (let i = 0; i < 10; i++) await countHit(accountKey(first), RATE_WINDOW_MS);
-      for (let i = 0; i < 10; i++) await countHit(accountKey(second), RATE_WINDOW_MS);
+      await hitsThisWindow(accountKey(first), 10, RATE_WINDOW_MS);
+      await hitsThisWindow(accountKey(second), 10, RATE_WINDOW_MS);
 
       const result = await send(third);
 
@@ -1087,12 +1086,16 @@ describe('jaw_send_calls refusals', () => {
       await send(first);
       await send(second);
 
-      expect(await countHit(accountKey(first), RATE_WINDOW_MS)).toBe(3);
+      const [{ hits }] = await getDb()
+        .select({ hits: sql<number>`sum(${rateLimits.count})::int` })
+        .from(rateLimits)
+        .where(eq(rateLimits.key, accountKey(first)));
+      expect(hits).toBe(2);
     });
 
     it('given nineteen links this minute on the account, when the twentieth opens, then it is served', async () => {
       const { t } = await connected();
-      for (let i = 0; i < 19; i++) await countHit(accountKey(t), RATE_WINDOW_MS);
+      await hitsThisWindow(accountKey(t), 19, RATE_WINDOW_MS);
 
       const result = await send(t);
 
@@ -1102,7 +1105,7 @@ describe('jaw_send_calls refusals', () => {
     it('given links on another account, then they do not count', async () => {
       const { t } = await connected();
       const { t: stranger } = await connected();
-      for (let i = 0; i < 25; i++) await countHit(accountKey(stranger), RATE_WINDOW_MS);
+      await hitsThisWindow(accountKey(stranger), 25, RATE_WINDOW_MS);
 
       const result = await send(t);
 
@@ -1488,7 +1491,7 @@ describe('jaw_get_calls_status', () => {
 
   it('given 29 reads this minute, when the 30th comes, then it answers', async () => {
     const { t, id } = await sentRow();
-    for (let i = 0; i < 29; i++) await countHit(`owner-calls-status:${t.connectionId}`, RATE_WINDOW_MS);
+    await hitsThisWindow(`owner-calls-status:${t.connectionId}`, 29, RATE_WINDOW_MS);
 
     const result = await check(t, id);
 
@@ -1498,7 +1501,7 @@ describe('jaw_get_calls_status', () => {
 
   it('given more than 30 reads this minute, then rate_limited', async () => {
     const { t, id } = await sentRow();
-    for (let i = 0; i < 30; i++) await countHit(`owner-calls-status:${t.connectionId}`, RATE_WINDOW_MS);
+    await hitsThisWindow(`owner-calls-status:${t.connectionId}`, 30, RATE_WINDOW_MS);
 
     const result = await check(t, id);
 
