@@ -4,7 +4,7 @@ import type { PgUpdateSetSource } from 'drizzle-orm/pg-core';
 import type { Tenant } from '@/connections/auth';
 import { config } from '@/connections/config';
 import { PageGone, WalletBusy, type Ask, type OpenWallet, type Wallet } from '@/connections/relay';
-import { resumeRow, resumeTick, waitingIn, type Lost, type Rejoin } from '@/connections/resume';
+import { resumeRow, resumeTick, waitingIn, type Rejoin } from '@/connections/resume';
 import { sealResume, type RelayResume } from '@/connections/seal';
 import { heldSince, keepLease, sessionLeaseEnd } from '@/connections/session-lease';
 import { USER_REJECTED } from '@/connections/wallet-codes';
@@ -328,9 +328,6 @@ function follow(row: PermissionRequestRow, wallet: Wallet, work: Work) {
     .finally(stop);
 }
 
-const lostAs = (row: PermissionRequestRow, why: Lost): Outcome =>
-  why === 'connection_ended' ? { state: 'failed', code: 'connection_ended' } : pageGone(row.code === ASKED);
-
 const parsed = (payload: string | null): unknown => {
   try {
     return JSON.parse(payload ?? '');
@@ -344,7 +341,8 @@ const rejoinWith = (rebuildOf: (row: PermissionRequestRow) => Rebuild): Rejoin<P
   take: leased.take,
   release: leased.release,
   failed: leased.failed,
-  lost: (row, why) => settle(row, lostAs(row, why)),
+  lost: (row) => settle(row, pageGone(row.code === ASKED)),
+  connectionEnded: (row) => settle(row, { state: 'failed', code: 'connection_ended' }),
   start: (row, t) => {
     const payload = parsed(row.payload);
     if (payload === undefined) return undefined;

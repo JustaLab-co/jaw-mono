@@ -9,8 +9,6 @@ import { REJOIN_TRIES } from '@/db/leased';
 // The relay takes 20 new connections a minute from one IP, and fresh links share them.
 export const REJOINS_PER_TICK_UNDER_RELAY_IP_LIMIT = 5;
 
-export type Lost = 'connection_ended' | 'unopenable' | 'page_gone';
-
 type Resumable = {
   id: string;
   connectionId: string;
@@ -26,7 +24,10 @@ export interface Rejoin<R extends Resumable> {
   release: (row: R) => Promise<unknown>;
   /** Gives the row back with one more failed rejoin counted; returns it as written. */
   failed: (row: R) => Promise<(R & { resumeFailures: number }) | undefined>;
-  lost: (row: R, why: Lost) => Promise<unknown>;
+  /** Ends the wait for a resume: the page is gone, or the stored session cannot be used. */
+  lost: (row: R) => Promise<unknown>;
+  /** How the row ends when its connection ended; `lost` when absent. */
+  connectionEnded?: (row: R) => Promise<unknown>;
   /** Undefined when the stored work cannot be rebuilt. */
   start: (row: R, t: Tenant) => ((wallet: Wallet) => void) | undefined;
 }
@@ -59,26 +60,29 @@ export const resumeRow = <R extends Resumable>(row: R, rejoin: Rejoin<R>): Promi
     log('warn', { msg: 'relay session not resumed', [rejoin.idField]: row.id, error: errorLabel(err) })
   );
 
-async function resumeOne<R extends Resumable>(found: R, { take, release, failed, lost, start }: Rejoin<R>) {
+async function resumeOne<R extends Resumable>(
+  found: R,
+  { take, release, failed, lost, connectionEnded = lost, start }: Rejoin<R>
+) {
   const row = await take(found);
   if (!row) return;
   const connection = await findActive(row.connectionId);
-  if (!connection) return void (await lost(row, 'connection_ended'));
+  if (!connection) return void (await connectionEnded(row));
   const t = tokenlessTenant(connection);
   const relay = openResume(config().ring, row.relay!, row.id);
   const sameLink = relay !== undefined && relay.session === sessionOf(row.walletUrl!);
   const run = sameLink && start(row, t);
-  if (!run) return void (await lost(row, 'unopenable'));
+  if (!run) return void (await lost(row));
   let wallet: Wallet | undefined;
   try {
     wallet = await resumeWallet(relay, row.walletUrl!, row.approveBy!, t);
   } catch (err) {
     if (err instanceof WalletBusy) return void (await release(row));
     const counted = await failed(row);
-    if (counted && counted.resumeFailures >= REJOIN_TRIES) await lost(row, 'unopenable');
+    if (counted && counted.resumeFailures >= REJOIN_TRIES) await lost(row);
     throw err;
   }
-  if (!wallet) return void (await lost(row, 'page_gone'));
+  if (!wallet) return void (await lost(row));
   run(wallet);
 }
 
