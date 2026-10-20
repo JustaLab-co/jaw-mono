@@ -10,7 +10,7 @@ import {
   type Hex,
 } from 'viem';
 import { describe, expect, it } from 'vitest';
-import { ChainUnreadable, fit, spendOf, type Call } from './fit';
+import { ChainUnreadable, fit, spendOf, type Call, type Pending } from './fit';
 import type { LiveGrant } from './store';
 
 const ACCOUNT: Address = '0x1111111111111111111111111111111111111111';
@@ -56,6 +56,7 @@ interface FakeChain {
   down?: boolean;
   ended?: boolean;
   spent?: Record<string, bigint>;
+  windows?: Record<number, { start: number; end: number }>;
 }
 
 function chain(c: FakeChain = {}): ReadDeps {
@@ -77,13 +78,14 @@ function chain(c: FakeChain = {}): ReadDeps {
           }),
         });
       }
-      const token = (args[1] as { token: Address }).token.toLowerCase();
-      return { start: NOW - 3600, end: NOW + 82_800, spend: c.spent?.[token] ?? 0n };
+      const limit = args[1] as { token: Address; unit: number };
+      const span = c.windows?.[limit.unit] ?? { start: NOW - 3600, end: NOW + 82_800 };
+      return { ...span, spend: c.spent?.[limit.token.toLowerCase()] ?? 0n };
     },
   };
 }
 
-const at = (read: ReadDeps, pending = new Map<string, bigint>()) => ({ read, pending, nowSeconds: NOW });
+const at = (read: ReadDeps, pending: Pending[] = []) => ({ read, pending, nowSeconds: NOW });
 
 describe('fit', () => {
   it('passes a transfer the grant allows within what the limit has left', async () => {
@@ -164,9 +166,24 @@ describe('fit', () => {
   });
 
   it('counts what open sends under the grant still hold as spent', async () => {
-    const pending = new Map([[USDC.toLowerCase(), 700_000n]]);
+    const pending = [{ token: USDC.toLowerCase(), amount: 700_000n, periodStart: NOW - 60 }];
     expect(await fit(grantOf(), [transfer(BOB, 400_000n)], at(chain(), pending))).toMatchObject({
       reason: 'over-limit',
+      left: 300_000n,
+    });
+  });
+
+  it('counts an open send only against the limits whose current period it was recorded in', async () => {
+    const yesterday = [{ token: USDC.toLowerCase(), amount: 700_000n, periodStart: NOW - 3601 }];
+    const day = { token: USDC, allowance: '1000000', unit: 'day', multiplier: 1 };
+    const week = { ...day, unit: 'week' };
+    const read = chain({ windows: { 3: { start: NOW - 3 * 86_400, end: NOW + 4 * 86_400 } } });
+
+    expect(await fit(grantOf(), [transfer(BOB, 400_000n)], at(read, yesterday))).toBe(undefined);
+    expect(await fit(grantOf({ spends: [day, week] }), [transfer(BOB, 400_000n)], at(read, yesterday))).toEqual({
+      reason: 'over-limit',
+      token: USDC,
+      spend: 400_000n,
       left: 300_000n,
     });
   });

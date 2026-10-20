@@ -218,6 +218,7 @@ describe('read tools', () => {
       'jaw_get_capabilities',
       'jaw_get_permissions',
       'jaw_grant_permissions',
+      'jaw_read_contracts',
       'jaw_revoke_permission',
       'jaw_send_calls',
       'jaw_session_disconnect',
