@@ -1,14 +1,13 @@
-import { getPermissionFromRelay } from '@jaw.id/core';
-import { parseGrantedPermission, type GrantedPermission, type PermissionState } from '@jaw.id/agent';
+import type { GrantedPermission } from '@jaw.id/agent';
 import type { McpServer } from '@modelcontextprotocol/server';
-import { and, eq, isNull, sql } from 'drizzle-orm';
+import { and, sql } from 'drizzle-orm';
 import { isAddressEqual, type Address, type Hex } from 'viem';
 import { z } from 'zod';
 import { tenant, type Tenant } from '@/connections/auth';
-import { APPROVE_WITHIN_MS, config, SUPPORTED_CHAINS } from '@/connections/config';
+import { APPROVE_WITHIN_MS, SUPPORTED_CHAINS } from '@/connections/config';
 import { ownerRelay, type Ask, type OpenWallet } from '@/connections/relay';
 import { getDb } from '@/db/client';
-import { grants, permissionRequests } from '@/db/schema';
+import { grants } from '@/db/schema';
 import { readOnChain, type ReadPermission } from '@/grants/permission';
 import {
   lostBefore,
@@ -18,6 +17,7 @@ import {
   type Outcome,
   type PermissionRequestRow,
 } from '@/grants/requests';
+import { fromStore, markRevoked, readState, UNCONFIRMED, type LookUp } from '@/grants/revokes';
 import { reply } from '@/lib/fence';
 import { ACCOUNT_BUSY, refusal } from './reply';
 
@@ -44,25 +44,6 @@ const output = z.object({
   approveBy: z.string(),
   summary: z.string(),
 });
-
-export type StoredPermission = { permission: GrantedPermission; chainId: number } | 'not_found' | 'unavailable';
-export type LookUp = (permissionId: Hex) => Promise<StoredPermission>;
-
-export const fromStore: LookUp = async (permissionId) => {
-  try {
-    const stored = await getPermissionFromRelay(permissionId, config().paymasterApiKey);
-    const permission = parseGrantedPermission(stored);
-    const chainId = Number.parseInt(stored.chainId, 16);
-    return permission && Number.isSafeInteger(chainId) ? { permission, chainId } : 'not_found';
-  } catch (err) {
-    const status =
-      (err as { status?: number })?.status ?? (err as { response?: { status?: number } })?.response?.status;
-    if (status === 404) return 'not_found';
-    const message = err instanceof Error ? err.message : '';
-    const missing = /not\s*found|does not exist|no such permission/i.test(message);
-    return status === undefined && missing ? 'not_found' : 'unavailable';
-  }
-};
 
 export interface RevokeDeps {
   openWallet: OpenWallet;
@@ -112,28 +93,6 @@ async function findPermission(t: Tenant, id: Hex, chainId: number, lookUp: LookU
   return { permissionId: id, chainId, permission: found.permission, connectionId: row?.connectionId ?? null };
 }
 
-const markRevoked = (id: string) =>
-  getDb().transaction(async (tx) => {
-    await tx
-      .update(grants)
-      .set({ revokedAt: new Date() })
-      .where(and(sameId(id), isNull(grants.revokedAt)));
-    await tx
-      .update(permissionRequests)
-      .set({ code: null, updatedAt: sql`statement_timestamp()` })
-      .where(
-        and(
-          eq(permissionRequests.method, 'revoke'),
-          sql`lower(${permissionRequests.permissionId}) = ${id.toLowerCase()}`,
-          eq(permissionRequests.state, 'approved'),
-          eq(permissionRequests.code, 'unconfirmed')
-        )
-      );
-  });
-
-const readState = (target: Target, read: ReadPermission) =>
-  read(target).catch((): PermissionState => ({ status: 'unavailable' }));
-
 async function askRevoke(t: Tenant, target: Target, ask: Ask, claim: Claim, deps: RevokeDeps): Promise<Outcome> {
   const [account] = (await ask('eth_requestAccounts', [])) as unknown[];
   if (typeof account !== 'string' || !isAddressEqual(account as Address, t.account)) {
@@ -149,7 +108,7 @@ async function askRevoke(t: Tenant, target: Target, ask: Ask, claim: Claim, deps
     }
     await new Promise((resolve) => setTimeout(resolve, deps.rereadMs));
   }
-  return { state: 'approved', code: 'unconfirmed' };
+  return { state: 'approved', code: UNCONFIRMED };
 }
 
 async function answer(target: Target, row: PermissionRequestRow) {

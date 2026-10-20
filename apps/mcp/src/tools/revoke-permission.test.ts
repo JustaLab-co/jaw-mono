@@ -22,7 +22,8 @@ import type { ReadPermission } from '@/grants/permission';
 import { x402Budget } from '@/grants/store';
 import { grantPermissions } from './grant-permissions';
 import { sendCalls } from './owner-calls';
-import { revokePermission, type LookUp, type RevokeDeps } from './revoke-permission';
+import type { LookUp } from '@/grants/revokes';
+import { revokePermission, type RevokeDeps } from './revoke-permission';
 
 setTestEnv();
 beforeAll(TEST_PG_URL ? useTestPostgres : useTestDb);

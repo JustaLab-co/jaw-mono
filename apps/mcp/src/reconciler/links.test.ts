@@ -1,5 +1,5 @@
 import { randomBytes } from 'node:crypto';
-import type { ChainClients } from '@jaw.id/agent';
+import type { ChainClients, GrantedPermission } from '@jaw.id/agent';
 import { eq } from 'drizzle-orm';
 import type { Hex } from 'viem';
 import { beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -7,8 +7,11 @@ import { verifyBearer, type Tenant } from '@/connections/auth';
 import type { Ask, Wallet } from '@/connections/relay';
 import { connect, fakeWallet, owner, setTestEnv, walletsSettled } from '@/connections/testkit';
 import { getDb } from '@/db/client';
-import { permissionRequests } from '@/db/schema';
+import { grants, permissionRequests } from '@/db/schema';
 import { TEST_PG_URL, useTestDb, useTestPostgres } from '@/db/test-db';
+import type { ReadPermission } from '@/grants/permission';
+import { x402Budget } from '@/grants/store';
+import type { LookUp } from '@/grants/revokes';
 import { sign } from '@/tools/sign';
 import { reconcile } from './run';
 
@@ -21,18 +24,43 @@ const noChain: ChainClients = {
 };
 const noReceipt = async () => null;
 
-const run = () => reconcile(noChain, new Date(), noReceipt);
+const revokedIds = new Set<string>();
+const read: string[] = [];
+let unreadable = false;
+const chain: ReadPermission = async ({ permissionId }) => {
+  read.push(permissionId.toLowerCase());
+  if (unreadable) return { status: 'unavailable' };
+  return { status: 'ok', approved: true, revoked: revokedIds.has(permissionId.toLowerCase()) };
+};
+const stored = new Map<string, GrantedPermission>();
+const looked: string[] = [];
+let storeHangs = false;
+const store: LookUp = async (id) => {
+  looked.push(id.toLowerCase());
+  if (storeHangs) return new Promise(() => {});
+  const permission = stored.get(id.toLowerCase());
+  return permission ? { permission, chainId: 8453 } : 'not_found';
+};
+const run = () => reconcile(noChain, new Date(), noReceipt, { readPermission: chain, lookUp: store });
 
 const signer = owner();
 let t: Tenant;
 let other: Tenant;
+let budget: Hex;
 const tenantOf = async (token: string) => (await verifyBearer(token))?.extra?.tenant as Tenant;
 beforeAll(async () => {
   await (TEST_PG_URL ? useTestPostgres() : useTestDb());
   t = await tenantOf((await connect(signer)).access_token);
   other = await tenantOf((await connect(signer)).access_token);
+  budget = (await x402Budget(t.connectionId))?.permissionId as Hex;
 });
 beforeEach(async () => {
+  revokedIds.clear();
+  read.length = 0;
+  unreadable = false;
+  stored.clear();
+  looked.length = 0;
+  storeHangs = false;
   await getDb().delete(permissionRequests);
 });
 
@@ -59,6 +87,9 @@ async function row(over: Partial<typeof permissionRequests.$inferInsert>) {
 
 const rowOf = async (id: string) =>
   (await getDb().select().from(permissionRequests).where(eq(permissionRequests.id, id)))[0];
+
+const unconfirmedRevoke = (permissionId: string, updatedAt = new Date()) =>
+  row({ method: 'revoke', permissionId, state: 'approved', code: 'unconfirmed', updatedAt });
 
 describe('reconciler: owner link requests', () => {
   it('given a link past its window whose server stopped renewing it, when the reconciler runs, then it reads expired with no code', async () => {
@@ -261,5 +292,97 @@ describe('reconciler: owner link requests', () => {
     await walletsSettled();
 
     expect(await signRow()).toMatchObject({ state: 'approved', signature: '0xbeef' });
+  });
+
+  it('given more unconfirmed revokes than a batch, then one run reads at most fifty', async () => {
+    for (let i = 0; i < 51; i++) await unconfirmedRevoke(randomId());
+
+    await run();
+
+    expect(looked).toHaveLength(50);
+  });
+
+  it('given the permission store never answers, then the run still ends and the revoke stays unconfirmed', async () => {
+    storeHangs = true;
+    const id = await unconfirmedRevoke(randomId());
+
+    const report = await run();
+
+    expect(report.links.revoked).toBe(0);
+    expect(await rowOf(id)).toMatchObject({ code: 'unconfirmed' });
+  }, 20_000);
+
+  it('given an unconfirmed revoke the chain now shows, then the request settles and the grant reads revoked', async () => {
+    const id = await unconfirmedRevoke(budget);
+    revokedIds.add(budget.toLowerCase());
+
+    const report = await run();
+
+    expect(await rowOf(id)).toMatchObject({ state: 'approved', code: null });
+    const [grant] = await getDb().select().from(grants).where(eq(grants.permissionId, budget));
+    expect(grant.revokedAt).not.toBeNull();
+    expect(report.links.revoked).toBe(1);
+  });
+
+  it('given an unconfirmed revoke whose grant already reads revoked, then the request settles without reading the chain', async () => {
+    const id = await unconfirmedRevoke(budget);
+    await getDb().update(grants).set({ revokedAt: new Date() }).where(eq(grants.permissionId, budget));
+
+    await run();
+
+    expect(read).toEqual([]);
+    expect(await rowOf(id)).toMatchObject({ code: null });
+    await getDb().update(grants).set({ revokedAt: null }).where(eq(grants.permissionId, budget));
+  });
+
+  it('given an unconfirmed revoke of a permission this server holds no grant for, then it reads the store copy on chain', async () => {
+    const theirs = randomId();
+    const [mine] = await getDb().select().from(grants).where(eq(grants.permissionId, budget));
+    stored.set(theirs.toLowerCase(), mine.permission as GrantedPermission);
+    const id = await unconfirmedRevoke(theirs);
+    revokedIds.add(theirs.toLowerCase());
+
+    await run();
+
+    expect(read).toContain(theirs.toLowerCase());
+    expect(await rowOf(id)).toMatchObject({ code: null });
+  });
+
+  it('given an unconfirmed revoke the chain does not show or cannot read, then it stays unconfirmed', async () => {
+    const id = await unconfirmedRevoke(budget);
+
+    await run();
+    unreadable = true;
+    revokedIds.add(budget.toLowerCase());
+    await run();
+
+    expect(read).toEqual([budget.toLowerCase(), budget.toLowerCase()]);
+    expect(await rowOf(id)).toMatchObject({ state: 'approved', code: 'unconfirmed' });
+    const [grant] = await getDb().select().from(grants).where(eq(grants.permissionId, budget));
+    expect(grant.revokedAt).toBeNull();
+  });
+
+  it("given an unconfirmed revoke asked from another account than the grant's, then that grant is not read for it", async () => {
+    const id = await row({
+      method: 'revoke',
+      permissionId: budget,
+      state: 'approved',
+      code: 'unconfirmed',
+      account: `0x${randomBytes(20).toString('hex')}`,
+    });
+    revokedIds.add(budget.toLowerCase());
+
+    await run();
+
+    expect(read).toEqual([]);
+    expect(await rowOf(id)).toMatchObject({ code: 'unconfirmed' });
+  });
+
+  it('given an unconfirmed revoke older than a day, then the chain is not read for it', async () => {
+    await unconfirmedRevoke(budget, new Date(Date.now() - 25 * 3_600_000));
+
+    await run();
+
+    expect(read).toEqual([]);
   });
 });
