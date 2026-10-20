@@ -2,6 +2,7 @@ import { createHash, randomBytes } from 'node:crypto';
 import { and, eq, gt, inArray, isNotNull, isNull, lt, lte, not, or, sql, type SQL } from 'drizzle-orm';
 import type { PgUpdateSetSource } from 'drizzle-orm/pg-core';
 import { APPROVE_WITHIN_MS, config, QUOTE_MARGIN_SEC } from '@/connections/config';
+import { RESUMES_PER_TICK } from '@/connections/resume';
 import { sessionLeaseEnd } from '@/connections/session-lease';
 import { getDb, type Tx } from '@/db/client';
 import { payments, SWAP_DEPOSIT_ADDRESS_INDEX, swaps } from '@/db/schema';
@@ -222,7 +223,7 @@ export const failIfStale = (lease: SwapLease) => write(and(holdingQuote(lease), 
 export const renewQuoted = (lease: SwapLease) => write(holdingQuote(lease), { leaseUntil: leaseFromNow });
 
 export const releaseQuoted = (lease: SwapLease, set: SwapSet, db: Tx = getDb()) =>
-  write(holdingQuote(lease), { ...set, leaseToken: null, leaseUntil: dbNow }, db);
+  write(holdingQuote(lease), { leaseToken: null, leaseUntil: dbNow, ...set }, db);
 
 export const release = (lease: SwapLease, set: SwapSet) =>
   write(and(held(lease), isNull(swaps.quoteId)), { ...set, leaseToken: null, leaseUntil: dbNow });
@@ -243,12 +244,23 @@ export const move = (connectionId: string, id: string, from: SwapState[], to: Sw
 
 export const SEND_STARTED = 'send_started';
 
-export const markSendStarted = (connectionId: string, id: string) =>
-  write(and(ofSwap(connectionId, id, ['awaiting_owner']), isNull(swaps.code), gt(swaps.approveBy, dbNow)), {
-    code: SEND_STARTED,
-  });
+const heldBy = (row: SwapRow, states: SwapState[]) =>
+  and(ofSwap(row.connectionId, row.id, states), eq(swaps.leaseToken, row.leaseToken!));
 
-/** Reopens only when no process holds the link: the lease is empty or lapsed. */
+export const markSendStarted = (row: SwapRow) =>
+  write(
+    and(
+      heldBy(row, ['awaiting_owner']),
+      or(isNull(swaps.code), eq(swaps.code, SEND_STARTED)),
+      gt(swaps.approveBy, dbNow)
+    ),
+    { code: SEND_STARTED }
+  );
+
+const lapsed = or(isNull(swaps.sessionUntil), lte(swaps.sessionUntil, dbNow));
+
+const unclaimed = and(lapsed, isNull(swaps.relay));
+
 export const reopenLink = (row: SwapRow, walletUrl: string, db: Tx = getDb()) =>
   write(
     and(
@@ -256,24 +268,35 @@ export const reopenLink = (row: SwapRow, walletUrl: string, db: Tx = getDb()) =>
       eq(swaps.walletUrl, row.walletUrl!),
       sql`${swaps.code} is distinct from ${SEND_STARTED}`,
       gt(swaps.approveBy, dbNow),
-      or(isNull(swaps.sessionUntil), lte(swaps.sessionUntil, dbNow))
+      unclaimed
     ),
-    { walletUrl, code: null, sessionUntil: sessionLeaseEnd },
+    { walletUrl, code: null, sessionUntil: sessionLeaseEnd, leaseToken: newToken() },
     db
   );
 
-const ofSession = (row: SwapRow) =>
-  and(ofSwap(row.connectionId, row.id, ['awaiting_owner']), eq(swaps.walletUrl, row.walletUrl!));
+export const renewSession = (row: SwapRow) => write(heldBy(row, ['awaiting_owner']), { sessionUntil: sessionLeaseEnd });
 
-export const renewSession = (row: SwapRow) => write(ofSession(row), { sessionUntil: sessionLeaseEnd });
+export const endSession = (row: SwapRow) =>
+  write(heldBy(row, ['awaiting_owner', 'expired']), { sessionUntil: null, relay: null });
 
-export const endSession = (row: SwapRow) => write(ofSession(row), { sessionUntil: null });
+export const releaseSession = (row: SwapRow) => write(heldBy(row, ['awaiting_owner']), { sessionUntil: null });
 
-export const recordCallsId = (connectionId: string, id: string, callsId: string) =>
-  move(connectionId, id, ['awaiting_owner', 'expired'], 'deposit_sent', { callsId, code: null });
+export const saveRelay = (row: SwapRow, relay: string) => write(heldBy(row, ['awaiting_owner']), { relay });
 
-export const recordCode = (connectionId: string, id: string, code: string) =>
-  write(ofSwap(connectionId, id, ['awaiting_owner', 'expired']), { code });
+export const decline = (row: SwapRow, code: string) =>
+  write(heldBy(row, ['awaiting_owner']), { state: 'owner_declined', code });
+
+export const recordCallsId = (row: SwapRow, callsId: string) =>
+  write(heldBy(row, ['awaiting_owner', 'expired']), { state: 'deposit_sent', callsId, code: null, relay: null });
+
+export const recordCode = (row: SwapRow, code: string) => write(heldBy(row, ['awaiting_owner', 'expired']), { code });
+
+const resumable = and(eq(swaps.state, 'awaiting_owner'), gt(swaps.approveBy, dbNow), lapsed, isNotNull(swaps.relay));
+
+export const toResume = () => getDb().select().from(swaps).where(resumable).limit(RESUMES_PER_TICK);
+
+export const takeToResume = (row: SwapRow) =>
+  write(and(eq(swaps.id, row.id), resumable), { leaseToken: newToken(), sessionUntil: sessionLeaseEnd });
 
 export const DEPOSIT_FAILED = 'deposit_failed';
 export const DEPOSIT_REVERTED = 'deposit_reverted';

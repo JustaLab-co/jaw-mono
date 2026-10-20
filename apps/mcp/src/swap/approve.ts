@@ -9,8 +9,8 @@ import type { DepositCall } from './check';
 import {
   DEPOSIT_FAILED,
   DEPOSIT_REVERTED,
+  decline as declineHeld,
   markSendStarted,
-  move,
   recordCallsId,
   recordCode,
   recordSentCode,
@@ -51,7 +51,7 @@ export async function approve(
     await decline(row, 'wrong_account');
     return;
   }
-  if (!(await markSendStarted(row.connectionId, row.id))) return;
+  if (!(await markSendStarted(row))) return;
   let answer: unknown;
   try {
     answer = await ask('wallet_sendCalls', [
@@ -104,16 +104,16 @@ const includes = (accounts: unknown, account: Address) =>
   Array.isArray(accounts) && accounts.some((a) => typeof a === 'string' && a.toLowerCase() === account.toLowerCase());
 
 async function decline(row: SwapRow, code: string): Promise<void> {
-  if (await move(row.connectionId, row.id, ['awaiting_owner'], 'owner_declined', { code })) return;
-  await recordCode(row.connectionId, row.id, code);
+  if (await declineHeld(row, code)) return;
+  await recordCode(row, code);
 }
 
 async function keepCallsId(row: SwapRow, callsId: string): Promise<SwapRow | undefined> {
   try {
-    return await recordCallsId(row.connectionId, row.id, callsId);
+    return await recordCallsId(row, callsId);
   } catch (err) {
     log('warn', { msg: 'swap calls id not written, retrying', swapId: row.id, callsId, error: errorLabel(err) });
-    return recordCallsId(row.connectionId, row.id, callsId);
+    return recordCallsId(row, callsId);
   }
 }
 
@@ -124,10 +124,10 @@ async function recordRefusal(row: SwapRow, err: unknown): Promise<void> {
     return;
   }
   if (typeof code === 'number') {
-    await recordCode(row.connectionId, row.id, `wallet_error:${code}`);
+    await recordCode(row, `wallet_error:${code}`);
     return;
   }
   if (Date.now() < (row.approveBy as Date).getTime() - SESSION_END_MARGIN_MS) {
-    await recordCode(row.connectionId, row.id, 'wallet_error:unknown');
+    await recordCode(row, 'wallet_error:unknown');
   }
 }

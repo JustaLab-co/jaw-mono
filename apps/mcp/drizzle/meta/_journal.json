@@ -218,6 +218,13 @@
       "when": 1792494576427,
       "tag": "0030_request_resume",
       "breakpoints": true
+    },
+    {
+      "idx": 31,
+      "version": "7",
+      "when": 1792508690196,
+      "tag": "0031_call_resume",
+      "breakpoints": true
     }
   ]
 }

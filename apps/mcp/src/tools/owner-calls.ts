@@ -12,9 +12,11 @@ import {
 import { z } from 'zod';
 import { tenant, type Tenant } from '@/connections/auth';
 import { chainClients } from '@/adapters/session-host';
-import { APPROVE_WITHIN_MS } from '@/connections/config';
+import { APPROVE_WITHIN_MS, config } from '@/connections/config';
 import { ownerRelay, WalletBusy, type OpenWallet, type Wallet } from '@/connections/relay';
+import { otherRequestAsGone, resumeEach } from '@/connections/resume';
 import { findActive } from '@/connections/rows';
+import { sealResume } from '@/connections/seal';
 import { keepLease, leaseHeld } from '@/connections/session-lease';
 import { countHit, isPaymentsPaused } from '@/db/settings';
 import { isProxyChain } from '@/lib/chain';
@@ -31,9 +33,13 @@ import {
   findOpen,
   insertOwnerCall,
   endSession,
+  releaseSession,
   renewSession,
   reopenLink,
+  saveRelay,
   SEND_STARTED,
+  takeToResume,
+  toResume,
   type OwnerCallRow,
 } from '@/owner-calls/store';
 import { gateCode } from '@/payments/render';
@@ -220,13 +226,20 @@ function answer(row: OwnerCallRow, note = ''): SendResult {
   return { ...reply(out), isError: row.state === 'reverted' };
 }
 
-function follow(row: OwnerCallRow, wallet: Wallet, clients: ChainClients): void {
+function follow(row: OwnerCallRow, wallet: Wallet, clients: ChainClients, resumed = false): void {
   const stop = keepLease(
-    () => renewSession(row),
+    async () => {
+      const held = await renewSession(row);
+      if (!held && (await findById(row.connectionId, row.id))?.leaseHolder !== row.leaseHolder) wallet.close();
+      return held;
+    },
     () => endSession(row)
   );
   void wallet
-    .run((ask) => approve(ask, row, clients))
+    .run(
+      (ask) => approve(resumed ? otherRequestAsGone(ask) : ask, row, clients),
+      (resume) => saveRelay(row, sealResume(config().ring, resume, row.id))
+    )
     .catch((err: unknown) =>
       log('warn', { msg: 'owner calls approval ended', ownerCallId: row.id, error: errorLabel(err) })
     )
@@ -278,13 +291,22 @@ async function replay(t: Tenant, row: OwnerCallRow, hash: string, deps: OwnerCal
   if (row.requestHash !== hash) {
     return refuse('idempotency_conflict', 'This idempotency key was used for another request. Nothing was sent.');
   }
+  if (row.state === 'awaiting_owner') void resumeOwnerCalls(deps.clients);
   const linkDead = row.state === 'awaiting_owner' && row.code !== SEND_STARTED && !leaseHeld(row.sessionUntil);
-  if (!linkDead) return answer(row);
+  if (!linkDead || row.relay) return answer(row);
   const refused = await refusedBeforeLink(t);
   if (refused) return refused;
   if (!(await findActive(t.connectionId))) return connectionEnded();
   return reopen(t, row, deps);
 }
+
+export const resumeOwnerCalls = (clients: ChainClients = chainClients) =>
+  resumeEach('ownerCallId', toResume, {
+    take: takeToResume,
+    release: releaseSession,
+    lost: endSession,
+    follow: (row, wallet) => follow(row, wallet, clients, true),
+  });
 
 const ENTRY_POINTS = [entryPoint06Address, entryPoint07Address, entryPoint08Address, entryPoint09Address];
 
@@ -368,6 +390,7 @@ export async function sendCallsStatus(
   await expirePast(t.connectionId);
   const row = await findById(t.connectionId, id);
   if (!row) return refuse('not_found', 'No request on this connection has that id.');
+  if (row.state === 'awaiting_owner') void resumeOwnerCalls(deps.clients);
   if (row.state !== 'sent' || !row.callsId) return answer(row);
   let mined: Receipt | null;
   try {

@@ -422,7 +422,7 @@ describe('the swaps guard', () => {
     if (['owner_declined', 'expired'].includes(state)) {
       return (await move(connectionId, row.id, ['awaiting_owner'], state))!;
     }
-    const sent = (await recordCallsId(connectionId, row.id, '0xcalls'))!;
+    const sent = (await recordCallsId(row, '0xcalls'))!;
     if (state === 'deposit_sent') return sent;
     const submitted = (await move(connectionId, row.id, ['deposit_sent'], 'submitted'))!;
     if (state === 'submitted') return submitted;
@@ -455,7 +455,7 @@ describe('the swaps guard', () => {
   it('given a swap, when it runs from quote to completed, then each step lands and only the last one finishes it', async () => {
     const connectionId = await newConnection();
     const row = await awaiting(connectionId);
-    expect((await recordCallsId(connectionId, row.id, '0xcalls'))?.finishedAt).toBeNull();
+    expect((await recordCallsId(row, '0xcalls'))?.finishedAt).toBeNull();
     expect((await move(connectionId, row.id, ['deposit_sent'], 'submitted'))?.finishedAt).toBeNull();
     expect(await move(connectionId, row.id, ['submitted'], 'completed')).toMatchObject({
       state: 'completed',
@@ -474,7 +474,7 @@ describe('the swaps guard', () => {
     const row = await rowIn('awaiting_owner');
     const stranger = await newConnection();
     expect(await move(stranger, row.id, ['awaiting_owner'], 'owner_declined')).toBeUndefined();
-    expect(await recordCallsId(stranger, row.id, '0xcalls')).toBeUndefined();
+    expect(await recordCallsId({ ...row, connectionId: stranger }, '0xcalls')).toBeUndefined();
     expect(await rowOf(row.id)).toMatchObject({ state: 'awaiting_owner', callsId: null });
   });
 
@@ -491,7 +491,7 @@ describe('the swaps guard', () => {
 
   it('given a row that expired, when the wallet answers a calls id, then it moves to deposit_sent (B33)', async () => {
     const row = await rowIn('expired');
-    expect(await recordCallsId(row.connectionId, row.id, '0xlate')).toMatchObject({
+    expect(await recordCallsId(row, '0xlate')).toMatchObject({
       state: 'deposit_sent',
       callsId: '0xlate',
     });
@@ -508,7 +508,7 @@ describe('the swaps guard', () => {
 
   it('given a row in a final state, when a calls id arrives, then nothing is written', async () => {
     const row = await rowIn('owner_declined');
-    expect(await recordCallsId(row.connectionId, row.id, '0xcalls')).toBeUndefined();
+    expect(await recordCallsId(row, '0xcalls')).toBeUndefined();
     expect((await rowOf(row.id)).state).toBe('owner_declined');
   });
 
@@ -726,7 +726,7 @@ describe.skipIf(!TEST_PG_URL)('on Postgres, the sweep racing the quote payment (
 describe('the send marker and a reopened link', () => {
   it('given an awaiting_owner row before approve_by with no code, when the send starts, then it holds the marker', async () => {
     const row = await awaiting(await newConnection());
-    expect(await markSendStarted(row.connectionId, row.id)).toMatchObject({
+    expect(await markSendStarted(row)).toMatchObject({
       state: 'awaiting_owner',
       code: SEND_STARTED,
     });
@@ -734,21 +734,27 @@ describe('the send marker and a reopened link', () => {
 
   it.each([
     ['approve_by has passed', sql`now() - interval '1 second'`, { code: null }],
-    ['it already holds the marker', undefined, { code: SEND_STARTED }],
     ['it holds a wallet error', undefined, { code: 'wallet_error:5710' }],
   ])(
     'given an awaiting_owner row where %s, when the send starts, then no marker is written',
     async (_, approveBy, set) => {
       const row = await awaiting(await newConnection(), approveBy);
       await getDb().update(swaps).set(set).where(eq(swaps.id, row.id));
-      expect(await markSendStarted(row.connectionId, row.id)).toBeUndefined();
+      expect(await markSendStarted(row)).toBeUndefined();
     }
   );
+
+  it('given the marker this run wrote, when the send starts again, then it passes, and a run that lost the row is refused', async () => {
+    const row = await awaiting(await newConnection());
+    await markSendStarted(row);
+    expect(await markSendStarted(row)).toMatchObject({ code: SEND_STARTED });
+    expect(await markSendStarted({ ...row, leaseToken: 'another process' })).toBeUndefined();
+  });
 
   it('given an expired row, when the send starts, then no marker is written', async () => {
     const row = await awaiting(await newConnection());
     await move(row.connectionId, row.id, ['awaiting_owner'], 'expired');
-    expect(await markSendStarted(row.connectionId, row.id)).toBeUndefined();
+    expect(await markSendStarted(row)).toBeUndefined();
   });
 
   it('given an awaiting_owner row with a wallet error, when its link reopens, then the new url is written and the code cleared', async () => {
@@ -775,8 +781,8 @@ describe('the send marker and a reopened link', () => {
 
   it('given a send marker, when the calls id is recorded, then the marker is cleared', async () => {
     const row = await awaiting(await newConnection());
-    await markSendStarted(row.connectionId, row.id);
-    expect(await recordCallsId(row.connectionId, row.id, '0xcalls')).toMatchObject({
+    await markSendStarted(row);
+    expect(await recordCallsId(row, '0xcalls')).toMatchObject({
       state: 'deposit_sent',
       code: null,
     });

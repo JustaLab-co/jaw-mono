@@ -289,7 +289,7 @@ async function openCall() {
 /** A sent owner call, `age` ms past its last write on the database clock. */
 async function sentCall(age: number, callsId: string = CALLS_ID) {
   const id = await openCall();
-  await markSent(t.connectionId, id, callsId);
+  await markSent(await callOf(id), callsId);
   await ageCall(id, age);
   return id;
 }
@@ -374,9 +374,9 @@ describe('sent owner calls', () => {
 
   it('touches no call that is not sent, including one that started sending and has no calls id', async () => {
     const declined = await openCall();
-    await decline(t.connectionId, declined, 'owner_declined');
+    await decline(await callOf(declined), 'owner_declined');
     const started = await openCall();
-    await markSendStarted(t.connectionId, started);
+    await markSendStarted(await callOf(started));
     await Promise.all([declined, started].map((id) => ageCall(id, OLD)));
     const before = await Promise.all([declined, started].map(callOf));
     const receipt = receiptFor({ [CALLS_ID]: { success: true, txHash: MINED } });

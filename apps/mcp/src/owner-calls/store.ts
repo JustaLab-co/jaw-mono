@@ -1,6 +1,7 @@
 import { randomBytes } from 'node:crypto';
 import { and, eq, gt, inArray, isNotNull, isNull, lt, lte, or, sql, type SQL } from 'drizzle-orm';
 import type { PgUpdateSetSource } from 'drizzle-orm/pg-core';
+import { newHolder, RESUMES_PER_TICK } from '@/connections/resume';
 import { sessionLeaseEnd } from '@/connections/session-lease';
 import { getDb, type Tx } from '@/db/client';
 import { ownerCalls } from '@/db/schema';
@@ -46,6 +47,7 @@ export async function insertOwnerCall(input: NewOwnerCall, db: Tx = getDb()): Pr
       walletUrl: input.walletUrl,
       approveBy: input.approveBy,
       sessionUntil: sessionLeaseEnd,
+      leaseHolder: newHolder(),
     })
     .onConflictDoNothing()
     .returning();
@@ -77,7 +79,10 @@ export async function expirePast(connectionId: string): Promise<void> {
   );
 }
 
-/** Reopens only when no process holds the link: the lease is empty or lapsed. */
+const lapsed = or(isNull(ownerCalls.sessionUntil), lte(ownerCalls.sessionUntil, dbNow));
+
+const unclaimed = and(lapsed, isNull(ownerCalls.relay));
+
 export const reopenLink = (row: OwnerCallRow, walletUrl: string, db: Tx = getDb()) =>
   write(
     and(
@@ -85,38 +90,46 @@ export const reopenLink = (row: OwnerCallRow, walletUrl: string, db: Tx = getDb(
       eq(ownerCalls.walletUrl, row.walletUrl),
       sql`${ownerCalls.code} is distinct from ${SEND_STARTED}`,
       gt(ownerCalls.approveBy, dbNow),
-      or(isNull(ownerCalls.sessionUntil), lte(ownerCalls.sessionUntil, dbNow))
+      unclaimed
     ),
-    { walletUrl, code: null, sessionUntil: sessionLeaseEnd },
+    { walletUrl, code: null, sessionUntil: sessionLeaseEnd, leaseHolder: newHolder() },
     db
   );
 
-const ofSession = (row: OwnerCallRow) =>
-  and(ofCall(row.connectionId, row.id, ['awaiting_owner']), eq(ownerCalls.walletUrl, row.walletUrl));
+const heldBy = (row: OwnerCallRow, states: OwnerCallState[]) =>
+  and(ofCall(row.connectionId, row.id, states), eq(ownerCalls.leaseHolder, row.leaseHolder!));
 
-export const renewSession = (row: OwnerCallRow) => write(ofSession(row), { sessionUntil: sessionLeaseEnd });
+export const renewSession = (row: OwnerCallRow) =>
+  write(heldBy(row, ['awaiting_owner']), { sessionUntil: sessionLeaseEnd });
 
-export const endSession = (row: OwnerCallRow) => write(ofSession(row), { sessionUntil: null });
+export const endSession = (row: OwnerCallRow) =>
+  write(heldBy(row, ['awaiting_owner', 'expired']), { sessionUntil: null, relay: null });
 
-export const setCode = (connectionId: string, id: string, code: string) =>
-  write(and(ofCall(connectionId, id, ['awaiting_owner']), sql`${ownerCalls.code} is distinct from ${SEND_STARTED}`), {
-    code,
-  });
+export const releaseSession = (row: OwnerCallRow) => write(heldBy(row, ['awaiting_owner']), { sessionUntil: null });
 
-export const decline = (connectionId: string, id: string, code: string) =>
-  write(ofCall(connectionId, id, ['awaiting_owner']), { state: 'owner_declined', code });
+export const saveRelay = (row: OwnerCallRow, relay: string) => write(heldBy(row, ['awaiting_owner']), { relay });
 
-export async function markSendStarted(connectionId: string, id: string): Promise<boolean> {
-  const row = await write(
-    and(ofCall(connectionId, id, ['awaiting_owner']), isNull(ownerCalls.code), gt(ownerCalls.approveBy, dbNow)),
+export const setCode = (row: OwnerCallRow, code: string) =>
+  write(and(heldBy(row, ['awaiting_owner']), sql`${ownerCalls.code} is distinct from ${SEND_STARTED}`), { code });
+
+export const decline = (row: OwnerCallRow, code: string) =>
+  write(heldBy(row, ['awaiting_owner']), { state: 'owner_declined', code });
+
+export async function markSendStarted(row: OwnerCallRow): Promise<boolean> {
+  const written = await write(
+    and(
+      heldBy(row, ['awaiting_owner']),
+      or(isNull(ownerCalls.code), eq(ownerCalls.code, SEND_STARTED)),
+      gt(ownerCalls.approveBy, dbNow)
+    ),
     { code: SEND_STARTED }
   );
-  return row !== undefined;
+  return written !== undefined;
 }
 
 /** `sentBlock` is the chain head when the call was sent; null when it could not be read. */
-export const markSent = (connectionId: string, id: string, callsId: string, sentBlock: bigint | null = null) =>
-  write(ofCall(connectionId, id, ['awaiting_owner', 'expired']), { state: 'sent', callsId, sentBlock, code: null });
+export const markSent = (row: OwnerCallRow, callsId: string, sentBlock: bigint | null = null) =>
+  write(heldBy(row, ['awaiting_owner', 'expired']), { state: 'sent', callsId, sentBlock, code: null, relay: null });
 
 export const conclude = (connectionId: string, id: string, state: 'landed' | 'reverted', txHash: string) =>
   write(ofCall(connectionId, id, ['sent']), { state, txHash });
@@ -135,3 +148,15 @@ export const sentBefore = (ageMs: number, limit: number) =>
     )
     .orderBy(sql`random()`)
     .limit(limit);
+
+const resumable = and(
+  eq(ownerCalls.state, 'awaiting_owner'),
+  gt(ownerCalls.approveBy, dbNow),
+  lapsed,
+  isNotNull(ownerCalls.relay)
+);
+
+export const toResume = () => getDb().select().from(ownerCalls).where(resumable).limit(RESUMES_PER_TICK);
+
+export const takeToResume = (row: OwnerCallRow) =>
+  write(and(eq(ownerCalls.id, row.id), resumable), { leaseHolder: newHolder(), sessionUntil: sessionLeaseEnd });
