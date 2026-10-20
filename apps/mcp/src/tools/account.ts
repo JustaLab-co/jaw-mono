@@ -63,7 +63,6 @@ async function landedHere(connectionId: string, calls: { id?: unknown; status?: 
         .where(
           and(
             eq(sends.connectionId, connectionId),
-            eq(sends.state, 'landed'),
             isNotNull(sends.txHash),
             inArray(sql<string>`lower(${sends.callsId})`, ids)
           )
@@ -74,7 +73,6 @@ async function landedHere(connectionId: string, calls: { id?: unknown; status?: 
         .where(
           and(
             eq(ownerCalls.connectionId, connectionId),
-            inArray(ownerCalls.state, ['landed', 'reverted']),
             isNotNull(ownerCalls.txHash),
             inArray(sql<string>`lower(${ownerCalls.callsId})`, ids)
           )
@@ -280,7 +278,7 @@ export function registerAccountTools(server: McpServer) {
         const here = await landedHere(connectionId, calls);
         const marked = calls.map((c) => {
           const note = here.get(String(c.id).toLowerCase());
-          return c.status === PENDING && note ? { ...c, thisConnection: note } : c;
+          return note ? { ...c, thisConnection: note } : c;
         });
         const settledHere = marked.filter((c) => 'thisConnection' in c).length;
         return reply(

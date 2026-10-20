@@ -201,7 +201,7 @@ describe('jaw_get_calls_history', () => {
     it('then each row carries what this connection recorded, apart from the proxy fields, and the summary says so', async () => {
       const t = (await verifyBearer(token))?.extra?.tenant as Tenant;
       await landed(t);
-      answer = () => [pending(hash(0xa1)), pending(hash(0xa2)), pending(hash(0xa3))];
+      answer = () => [pending(hash(0xa1).toUpperCase().replace('0X', '0x')), pending(hash(0xa2)), pending(hash(0xa3))];
 
       const r = await callTool(token, 'jaw_get_calls_history', {});
 
@@ -211,6 +211,84 @@ describe('jaw_get_calls_history', () => {
       expect(owner.thisConnection).toEqual({ state: 'landed', transactionHash: hash(0xb2) });
       expect(unknown.thisConnection).toBeUndefined();
       expect(r.structuredContent.summary).toContain('still lists 2 as pending');
+    });
+
+    it("then a row in another state or on another connection's record is not marked", async () => {
+      const t = (await verifyBearer(token))?.extra?.tenant as Tenant;
+      const other = (await verifyBearer((await connect(undefined, { scope: 'wallet:read' })).access_token))?.extra
+        ?.tenant as Tenant;
+      const base = {
+        idempotencyKey: 'k',
+        requestHash: 'h',
+        chainId: t.chainId,
+        account: t.account,
+        calls: [{ to: t.account, data: '0x', value: '0' }],
+        walletUrl: 'http://keys.test/cli-bridge',
+        approveBy: new Date(),
+      };
+      await getDb()
+        .insert(ownerCalls)
+        .values([
+          { ...base, id: 'oc_sent', connectionId: t.connectionId, state: 'sent', callsId: hash(0xd1) },
+          {
+            ...base,
+            id: 'oc_other',
+            connectionId: other.connectionId,
+            state: 'landed',
+            callsId: hash(0xd2),
+            txHash: hash(0xb3),
+            finishedAt: new Date(),
+          },
+        ]);
+      const now = new Date();
+      await getDb()
+        .insert(sends)
+        .values({
+          id: 'send_other',
+          connectionId: other.connectionId,
+          permissionId: '0x01',
+          chainId: other.chainId,
+          sender: other.sessionAddress.toLowerCase(),
+          amount: '0',
+          periodStart: 0,
+          fromBlock: 1n,
+          state: 'landed',
+          callsId: hash(0xd3),
+          txHash: hash(0xb4),
+          leaseUntil: now,
+          finishedAt: now,
+        });
+      answer = () => [pending(hash(0xd1)), pending(hash(0xd2)), pending(hash(0xd3))];
+
+      const r = await callTool(token, 'jaw_get_calls_history', {});
+
+      expect(r.structuredContent.calls.map((c: { thisConnection?: unknown }) => c.thisConnection)).toEqual([
+        undefined,
+        undefined,
+        undefined,
+      ]);
+    });
+
+    it('then a database failure leaves the proxy answer as it is', async () => {
+      answer = () => [pending(hash(0xa1))];
+      const db = getDb();
+      const select = db.select.bind(db) as (...a: unknown[]) => { from: (table: unknown) => unknown };
+      const broken = vi.spyOn(db, 'select').mockImplementation(((...a: unknown[]) => {
+        const query = select(...a);
+        return {
+          ...query,
+          from: (table: unknown) => {
+            if (table === sends) throw new Error('db down');
+            return query.from(table);
+          },
+        };
+      }) as never);
+
+      const r = await callTool(token, 'jaw_get_calls_history', {});
+      broken.mockRestore();
+
+      expect(r.isError).toBeFalsy();
+      expect(r.structuredContent.calls).toEqual([pending(hash(0xa1))]);
     });
 
     it('then a bundle the proxy has settled is left as it is', async () => {
