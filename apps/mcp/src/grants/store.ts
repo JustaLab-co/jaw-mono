@@ -1,5 +1,5 @@
 import type { GrantedPermission } from '@jaw.id/agent';
-import { and, desc, eq, gt, isNull, sql } from 'drizzle-orm';
+import { and, desc, eq, gt, inArray, isNull, sql } from 'drizzle-orm';
 import type { Address, Hex } from 'viem';
 import { getDb, type Tx } from '@/db/client';
 import { grants } from '@/db/schema';
@@ -77,4 +77,22 @@ export async function liveGrants(connectionId: string, db: Tx = getDb()): Promis
     .where(and(eq(grants.connectionId, connectionId), live))
     .orderBy(desc(grants.createdAt));
   return rows.map(toLive);
+}
+
+export async function sampleLiveGrants(limit: number): Promise<LiveGrant[]> {
+  const rows = await getDb()
+    .select()
+    .from(grants)
+    .where(live)
+    .orderBy(sql`random()`)
+    .limit(limit);
+  return rows.map(toLive);
+}
+
+export async function recordRevoked(permissionIds: string[], db: Tx = getDb()): Promise<void> {
+  if (permissionIds.length === 0) return;
+  await db
+    .update(grants)
+    .set({ revokedAt: new Date() })
+    .where(and(inArray(grants.permissionId, permissionIds), isNull(grants.revokedAt)));
 }

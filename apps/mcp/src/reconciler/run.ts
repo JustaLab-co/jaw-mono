@@ -1,4 +1,4 @@
-import type { ChainClients } from '@jaw.id/agent';
+import type { ChainClients, PermissionState } from '@jaw.id/agent';
 import { and, eq, isNotNull, isNull, lt, ne, sql } from 'drizzle-orm';
 import { getAbiItem, type Address, type Hex } from 'viem';
 import { entryPoint08Abi, entryPoint08Address } from 'viem/account-abstraction';
@@ -10,7 +10,8 @@ import { open, type Sealed } from '@/connections/seal';
 import { getDb } from '@/db/client';
 import { auditEvents, connections, grants, oauthPayloads, ownerCalls, payments, rateLimits, swaps } from '@/db/schema';
 import { isPaymentsPaused } from '@/db/settings';
-import { readOnChain } from '@/grants/permission';
+import { readOnChain, type ReadPermission } from '@/grants/permission';
+import { recordRevoked, sampleLiveGrants } from '@/grants/store';
 import { errorLabel, log } from '@/lib/edge';
 import { conclude, sentBefore } from '@/owner-calls/store';
 import { canSearchChain, readReceipt, searchChain, type ReadReceipt } from '@/owner-calls/receipt';
@@ -186,6 +187,34 @@ async function reconcileOwnerCalls(receipt: ReadReceipt, clients: ChainClients, 
       }
     })
   );
+}
+
+const GRANTS_PER_SWEEP = 25;
+
+export async function sweepRevokedGrants(
+  read: ReadPermission = readOnChain,
+  limit = GRANTS_PER_SWEEP
+): Promise<number | null> {
+  try {
+    const sample = await sampleLiveGrants(limit);
+    const revoked = (
+      await Promise.all(
+        sample.map(async (g) => {
+          const state = await read({
+            chainId: g.chainId,
+            permissionId: g.permissionId,
+            permission: g.permission,
+          }).catch((): PermissionState => ({ status: 'unavailable' }));
+          return state.status === 'ok' && state.revoked ? [g.permissionId] : [];
+        })
+      )
+    ).flat();
+    await recordRevoked(revoked);
+    return revoked.length;
+  } catch (err) {
+    log('error', { msg: 'grant sweep failed', error: errorLabel(err) });
+    return null;
+  }
 }
 
 const SESSION_DEPS: DisconnectDeps = { readPermission: readOnChain, clients: chainClients, sender: sessionSender };

@@ -2,7 +2,7 @@ import { sweepWraps } from './connections/adapter';
 import { config } from './connections/config';
 import { runMigrations } from './db/migrate';
 import { log } from './lib/edge';
-import { purge, reconcile } from './reconciler/run';
+import { purge, reconcile, sweepRevokedGrants } from './reconciler/run';
 
 /** Every minute unless set, 0 turns it off. A value that is not seconds keeps the default. */
 export function reconcileSeconds(value: string | undefined): number {
@@ -20,6 +20,7 @@ function reconcileEvery(seconds: number) {
     running = true;
     try {
       await sweepWraps();
+      await sweepRevokedGrants();
       await reconcile();
       await purge();
     } catch (err) {

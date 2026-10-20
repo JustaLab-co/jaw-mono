@@ -2,12 +2,16 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 vi.mock('./db/migrate', () => ({ runMigrations: vi.fn(async () => {}) }));
 vi.mock('./connections/adapter', () => ({ sweepWraps: vi.fn(async () => {}) }));
-vi.mock('./reconciler/run', () => ({ reconcile: vi.fn(async () => {}), purge: vi.fn(async () => {}) }));
+vi.mock('./reconciler/run', () => ({
+  reconcile: vi.fn(async () => {}),
+  purge: vi.fn(async () => {}),
+  sweepRevokedGrants: vi.fn(async () => 0),
+}));
 
 import { sweepWraps } from './connections/adapter';
 import { runMigrations } from './db/migrate';
 import { prepare, reconcileSeconds } from './instrumentation-node';
-import { purge, reconcile } from './reconciler/run';
+import { purge, reconcile, sweepRevokedGrants } from './reconciler/run';
 
 describe('reconcileSeconds', () => {
   it('reconciles every minute unless set, and not at all on 0', () => {
@@ -67,6 +71,7 @@ describe('prepare', () => {
 
     await vi.advanceTimersByTimeAsync(1_000);
     expect(sweepWraps).toHaveBeenCalledTimes(1);
+    expect(sweepRevokedGrants).toHaveBeenCalledTimes(1);
     expect(reconcile).toHaveBeenCalledTimes(1);
     expect(purge).toHaveBeenCalledTimes(1);
   });

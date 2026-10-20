@@ -2,7 +2,7 @@ import { randomUUID } from 'node:crypto';
 import { join } from 'node:path';
 import { createServer } from 'node:http';
 import { createServer as createTcpServer, connect as tcpConnect, type AddressInfo, type Socket } from 'node:net';
-import { FetchRefused, type ChainClients, type TopUpExecutor } from '@jaw.id/agent';
+import { FetchRefused, type ChainClients, type PermissionState, type TopUpExecutor } from '@jaw.id/agent';
 import { eq, inArray, sql } from 'drizzle-orm';
 import fc from 'fast-check';
 import postgres from 'postgres';
@@ -1310,6 +1310,96 @@ describe('jaw_session_x402_pay', () => {
     expect(next.structuredContent.payments.map((p: { idempotencyKey: string }) => p.idempotencyKey)).toEqual(['h1']);
     const stranger = await connected();
     expect((await callTool(stranger.c.access_token, 'jaw_session_history', {})).structuredContent.payments).toEqual([]);
+  });
+});
+
+describe('given two budgets on one connection, the newer one changed in the wallet', () => {
+  async function twoBudgets() {
+    const { c, t } = await connected('1');
+    const older = (await x402Budget(t.connectionId))!.permissionId;
+    await approveBudget(c, '1');
+    const newer = (await x402Budget(t.connectionId))!.permissionId;
+    balances.set(t.sessionAddress.toLowerCase(), 1_000_000n);
+    return { t, older, newer };
+  }
+  const answering =
+    (id: string, state: PermissionState): PayDeps['readPermission'] =>
+    async ({ permissionId }) =>
+      permissionId === id ? state : { status: 'ok', approved: true, revoked: false };
+  const revokedAtOf = async (id: string) =>
+    (await getDb().select().from(grants).where(eq(grants.permissionId, id)))[0].revokedAt;
+
+  it('when the newer one was revoked, then the payment is made from the older one and the newer one is recorded revoked', async () => {
+    const { t, older, newer } = await twoBudgets();
+    const read = answering(newer, { status: 'ok', approved: true, revoked: true });
+    const result = await pay(t, { url: url('/exact'), idempotencyKey: 'falls-back' }, deps({ readPermission: read }));
+    expect(result.structuredContent).toMatchObject({ kind: 'paid' });
+    expect((await rowOf(result.structuredContent!.paymentId)).permissionId).toBe(older);
+    expect(await revokedAtOf(newer)).toBeInstanceOf(Date);
+    expect(await revokedAtOf(older)).toBeNull();
+    expect((await x402Budget(t.connectionId))?.permissionId).toBe(older);
+  });
+
+  it('when the newer one reads not approved but not revoked, then the older one pays and the newer one is not recorded revoked', async () => {
+    const { t, older, newer } = await twoBudgets();
+    const read = answering(newer, { status: 'ok', approved: false, revoked: false });
+    const result = await pay(t, { url: url('/exact'), idempotencyKey: 'unapproved' }, deps({ readPermission: read }));
+    expect(result.structuredContent).toMatchObject({ kind: 'paid' });
+    expect((await rowOf(result.structuredContent!.paymentId)).permissionId).toBe(older);
+    expect(await revokedAtOf(newer)).toBeNull();
+  });
+
+  it('when the newer one cannot be read, then it is refused chain_unavailable and nothing is signed from the older one', async () => {
+    const { t, newer } = await twoBudgets();
+    const read = answering(newer, { status: 'unavailable' });
+    const result = await pay(t, { url: url('/exact'), idempotencyKey: 'unread' }, deps({ readPermission: read }));
+    expect(result.structuredContent).toMatchObject({ state: 'failed', refusal: { code: 'chain_unavailable' } });
+    expect((await rowOf(result.structuredContent!.paymentId)).permissionId).toBe(newer);
+    expect(seen).toEqual([]);
+    expect(await revokedAtOf(newer)).toBeNull();
+  });
+  it('when a payment signed under the newer one lost its answer and the newer one was revoked since, then the retry is refused grant_revoked, sends nothing, and leaves the older one alone', async () => {
+    const { t, older, newer } = await twoBudgets();
+    dropNextLost = true;
+    const lost = await pay(t, { url: url('/lost'), idempotencyKey: 'resume-revoked' }, deps());
+    expect(lost.structuredContent).toMatchObject({ state: 'signed', refusal: { code: 'no_response' } });
+    const later = await otherReplica();
+    const read = answering(newer, { status: 'ok', approved: true, revoked: true });
+    const again = await later(
+      t,
+      { url: url('/lost'), idempotencyKey: 'resume-revoked' },
+      deps({ readPermission: read })
+    );
+    expect(again.structuredContent).toMatchObject({ refusal: { code: 'grant_revoked' } });
+    expect(seen).toHaveLength(1);
+    expect((await rowOf(lost.structuredContent!.paymentId)).permissionId).toBe(newer);
+    expect(await revokedAtOf(newer)).toBeInstanceOf(Date);
+    expect(await revokedAtOf(older)).toBeNull();
+  });
+
+  it('when a stored payment is replayed while the chain cannot be read, then the replay answers from its row', async () => {
+    const { t } = await twoBudgets();
+    const first = await pay(t, { url: url('/exact'), idempotencyKey: 'replay-down' }, deps());
+    expect(first.structuredContent).toMatchObject({ kind: 'paid' });
+    const later = await otherReplica();
+    const down = deps({ readPermission: async () => ({ status: 'unavailable' }) });
+    const again = await later(t, { url: url('/exact'), idempotencyKey: 'replay-down' }, down);
+    expect(again.structuredContent).toMatchObject({ kind: 'paid', paymentId: first.structuredContent!.paymentId });
+  });
+});
+
+describe('given the only budget was revoked in the wallet', () => {
+  it('when the agent pays, then it is refused grant_revoked and recorded revoked, and the next payment finds no budget', async () => {
+    const { t } = await connected('1');
+    const id = (await x402Budget(t.connectionId))!.permissionId;
+    const revoked = deps({ readPermission: async () => ({ status: 'ok', approved: true, revoked: true }) });
+    const first = await pay(t, { url: url('/exact'), idempotencyKey: 'only-revoked' }, revoked);
+    expect(first.structuredContent).toMatchObject({ state: 'failed', refusal: { code: 'grant_revoked' } });
+    const [row] = await getDb().select().from(grants).where(eq(grants.permissionId, id));
+    expect(row.revokedAt).toBeInstanceOf(Date);
+    const next = await pay(t, { url: url('/exact'), idempotencyKey: 'only-revoked-2' }, revoked);
+    expect(next.content[0].text).toMatch(/^no_grant/);
+    expect(seen).toEqual([]);
   });
 });
 

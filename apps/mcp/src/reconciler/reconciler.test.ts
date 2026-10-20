@@ -1,5 +1,5 @@
 import { createHash, randomBytes } from 'node:crypto';
-import type { ChainClients } from '@jaw.id/agent';
+import type { ChainClients, PermissionState } from '@jaw.id/agent';
 import { and, count, eq, inArray, isNotNull, sql } from 'drizzle-orm';
 import { PERMISSION_MANAGER_ABI } from '@jaw.id/agent';
 import {
@@ -40,7 +40,8 @@ import type { ReadReceipt } from '@/owner-calls/receipt';
 import { decline, insertOwnerCall, markSent, markSendStarted } from '@/owner-calls/store';
 import { sendCallsStatus } from '@/tools/owner-calls';
 import { render } from '@/payments/render';
-import { purge, reconcile, RECONCILE_AFTER_MS } from './run';
+import { recordRevoked } from '@/grants/store';
+import { purge, reconcile, RECONCILE_AFTER_MS, sweepRevokedGrants } from './run';
 
 setTestEnv();
 process.env.JAW_MCP_CRON_SECRET = 'cron-secret';
@@ -794,5 +795,89 @@ describe('sent owner calls the bundler no longer answers for', () => {
     } finally {
       logged.mockRestore();
     }
+  });
+});
+
+describe('given grants the owner may have revoked in the wallet', () => {
+  async function grantRows(over: { expiresAt?: Date; revokedAt?: Date }[]) {
+    const c = await connect();
+    const { connectionId, account } = (await verifyBearer(c.access_token))?.extra?.tenant as Tenant;
+    const ids = over.map(() => hex32());
+    await getDb()
+      .insert(grants)
+      .values(
+        over.map((o, i) => ({
+          permissionId: ids[i],
+          connectionId,
+          chainId: 84532,
+          account,
+          spender: payer,
+          kind: 'custom' as const,
+          permission: { id: ids[i] },
+          expiresAt: o.expiresAt ?? new Date(Date.now() + 86_400_000),
+          revokedAt: o.revokedAt,
+        }))
+      );
+    return ids;
+  }
+  const revokedAtOf = async (id: string) =>
+    (await getDb().select().from(grants).where(eq(grants.permissionId, id)))[0].revokedAt;
+
+  it('when the sweep runs, then only the one revoked on chain is marked, and expired or already revoked ones are not read', async () => {
+    const earlier = new Date(Date.now() - 3_600_000);
+    const [revoked, unread, unapproved, mismatched, live, expired, marked] = await grantRows([
+      {},
+      {},
+      {},
+      {},
+      {},
+      { expiresAt: new Date(Date.now() - 60_000) },
+      { revokedAt: earlier },
+    ]);
+    const answers: Record<string, PermissionState> = {
+      [revoked]: { status: 'ok', approved: true, revoked: true },
+      [unread]: { status: 'unavailable' },
+      [unapproved]: { status: 'ok', approved: false, revoked: false },
+      [mismatched]: { status: 'mismatch' },
+    };
+    const read: string[] = [];
+    const count = await sweepRevokedGrants(async ({ permissionId }) => {
+      read.push(permissionId);
+      if (permissionId === unread) throw new Error('node down');
+      return answers[permissionId] ?? { status: 'ok', approved: true, revoked: false };
+    }, 10_000);
+
+    expect(count).toBeGreaterThanOrEqual(1);
+    expect(await revokedAtOf(revoked)).toBeInstanceOf(Date);
+    for (const id of [unread, unapproved, mismatched, live, expired]) expect(await revokedAtOf(id)).toBeNull();
+    expect(await revokedAtOf(marked)).toEqual(earlier);
+    expect(read).toEqual(expect.arrayContaining([revoked, unread, unapproved, mismatched, live]));
+    expect(read).not.toContain(expired);
+    expect(read).not.toContain(marked);
+  });
+
+  it('when the sample is smaller than the live grants, then it reads no more than the limit', async () => {
+    await grantRows([{}, {}, {}]);
+    const read: string[] = [];
+    await sweepRevokedGrants(async ({ permissionId }) => {
+      read.push(permissionId);
+      return { status: 'ok', approved: true, revoked: false };
+    }, 2);
+    expect(read).toHaveLength(2);
+  });
+
+  it('when a grant already recorded revoked is recorded again, then it keeps the first time', async () => {
+    const earlier = new Date(Date.now() - 3_600_000);
+    const [marked] = await grantRows([{ revokedAt: earlier }]);
+    await recordRevoked([marked]);
+    expect(await revokedAtOf(marked)).toEqual(earlier);
+  });
+
+  it('when the store cannot be read, then the sweep reports it failed and does not throw', async () => {
+    const spy = vi.spyOn(getDb(), 'select').mockImplementationOnce(() => {
+      throw new Error('db down');
+    });
+    await expect(sweepRevokedGrants(async () => ({ status: 'unavailable' }))).resolves.toBeNull();
+    spy.mockRestore();
   });
 });

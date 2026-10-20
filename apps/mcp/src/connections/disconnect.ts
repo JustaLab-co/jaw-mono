@@ -12,16 +12,16 @@ import {
   jawPaymasterUrl,
   PERMISSIONS_MANAGER_ADDRESS,
 } from '@jaw.id/core';
-import { and, eq, inArray, ne } from 'drizzle-orm';
+import { and, eq, ne } from 'drizzle-orm';
 import { encodeFunctionData, erc20Abi, formatUnits, isAddressEqual, maxUint256, type Address, type Hex } from 'viem';
 import { privateKeyToAccount } from 'viem/accounts';
 import { z } from 'zod';
 import { chainClients } from '@/adapters/session-host';
 import { getDb } from '@/db/client';
-import { connections, grants } from '@/db/schema';
+import { connections } from '@/db/schema';
 import { isPaymentsPaused } from '@/db/settings';
 import { readOnChain, type ReadPermission } from '@/grants/permission';
-import { liveGrants, type LiveGrant } from '@/grants/store';
+import { liveGrants, recordRevoked, type LiveGrant } from '@/grants/store';
 import { publicClientFor, rpcUrl } from '@/lib/chain';
 import { errorLabel, log } from '@/lib/edge';
 import { reply } from '@/lib/fence';
@@ -278,9 +278,7 @@ async function returnFunds(hold: FloatHold, t: Session, deps: DisconnectDeps): P
   const returned = await sendBatch(hold, t, deps, live, usdc.address);
   if (typeof returned === 'string') return returned;
   const ids = [...returned.revoked, ...returned.seenRevoked];
-  if (ids.length) {
-    await hold.tx((tx) => tx.update(grants).set({ revokedAt: new Date() }).where(inArray(grants.permissionId, ids)));
-  }
+  if (ids.length) await hold.tx((tx) => recordRevoked(ids, tx));
   return returned;
 }
 
