@@ -4,6 +4,7 @@ import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import { verifyBearer, type Tenant } from '@/connections/auth';
 import { config } from '@/connections/config';
 import { replayingPage, stallsAfter, startRelay } from '@/connections/fake-relay';
+import { ownerRelay, WalletBusy, type Wallet } from '@/connections/relay';
 import { sealResume, type RelayResume } from '@/connections/seal';
 import { connect, owner, setTestEnv, walletsSettled } from '@/connections/testkit';
 import { getDb } from '@/db/client';
@@ -132,6 +133,46 @@ describe('owner calls whose server restarted after the send started', () => {
 
     await vi.waitFor(async () => expect((await rowOf(id)).relay).toBeNull());
     expect(await rowOf(id)).toMatchObject({ state: 'awaiting_owner', code: SEND_STARTED });
+  });
+
+  it('given the resumed send is refused as another request under its id, then the row keeps the may-have-sent marker and nothing is stored to resume', async () => {
+    const { id, page } = await sendStartedThenRestarted();
+    await withoutOwnerCallsGuard(() =>
+      getDb()
+        .update(ownerCalls)
+        .set({ calls: [{ ...CALL, value: '6' }] })
+        .where(eq(ownerCalls.id, id))
+    );
+
+    await Promise.all(await resumeOwnerCalls(clients));
+
+    await vi.waitFor(async () => expect((await rowOf(id)).relay).toBeNull());
+    expect(await rowOf(id)).toMatchObject({ state: 'awaiting_owner', code: SEND_STARTED });
+    expect(page.asked()).toBe(2);
+  });
+
+  it('given the owner pool is full for the account, when a tick resumes, then the lease is given back and a later tick resumes it', async () => {
+    const { t, id, decide } = await sendStartedThenRestarted();
+    const held: Wallet[] = [];
+    const until = new Date(Date.now() + 60_000);
+    for (;;) {
+      const opened = await ownerRelay(84532, until, t).catch((err: unknown) => err);
+      if (opened instanceof WalletBusy) break;
+      held.push(opened as Wallet);
+    }
+
+    await Promise.all(await resumeOwnerCalls(clients));
+    expect(await rowOf(id)).toMatchObject({ sessionUntil: null, relay: expect.any(String), resumeFailures: 0 });
+
+    for (const wallet of held) wallet.close();
+    await vi.waitFor(async () => {
+      await getDb().update(ownerCalls).set({ sessionUntil: null }).where(eq(ownerCalls.id, id));
+      await Promise.all(await resumeOwnerCalls(clients));
+      expect((await rowOf(id)).sessionUntil).not.toBeNull();
+    });
+    decide();
+
+    expect(await sent(id)).toMatchObject({ callsId: CALLS_ID });
   });
 
   it('given two processes resume at once, then only one asks the page again', async () => {

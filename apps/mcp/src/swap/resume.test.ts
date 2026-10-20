@@ -70,7 +70,16 @@ async function depositAskedThenRestarted({ stallAt = 2, approved = false, declin
   if (approved) decide();
   await vi.waitFor(() => expect(page.ids).toHaveLength(stallAt));
   await lapse(id);
-  return { t, id, key, quoteId: first.structuredContent!.quoteId!, page, server, decide };
+  return {
+    t,
+    id,
+    key,
+    url: first.structuredContent!.url!,
+    quoteId: first.structuredContent!.quoteId!,
+    page,
+    server,
+    decide,
+  };
 }
 
 describe('a swap deposit whose server restarted after the send started', () => {
@@ -131,6 +140,34 @@ describe('a swap deposit whose server restarted after the send started', () => {
     await swap(t, { ...input, idempotencyKey: key }, { openWallet: stallsAfter(9).openWallet, pollMs: 0 });
 
     expect(await rowOf(id)).toMatchObject({ state: 'expired', relay: null });
+  });
+
+  it('given the page was closed, when the server rejoins, then the swap keeps the may-have-sent marker and nothing is stored to resume', async () => {
+    const { id, page, url } = await depositAskedThenRestarted();
+    page.close();
+    await vi.waitFor(() =>
+      expect(relay.sessions.get(new URL(url).searchParams.get('session')!)?.browser).toBeUndefined()
+    );
+
+    await Promise.all(await resumeSwaps());
+
+    expect(await rowOf(id)).toMatchObject({ state: 'awaiting_owner', code: SEND_STARTED, relay: null });
+  });
+
+  it('given the resumed deposit is refused as another request under its id, then the swap keeps the may-have-sent marker and nothing is stored to resume', async () => {
+    const { id, page } = await depositAskedThenRestarted();
+    await getDb().execute(sql`alter table swaps disable trigger swaps_guard`);
+    await getDb()
+      .update(swaps)
+      .set({ call: { chainId: 84532, to: USDC, data: '0xa9059cbb00', value: '0' } })
+      .where(eq(swaps.id, id));
+    await getDb().execute(sql`alter table swaps enable trigger swaps_guard`);
+
+    await Promise.all(await resumeSwaps());
+
+    await vi.waitFor(async () => expect((await rowOf(id)).relay).toBeNull());
+    expect(await rowOf(id)).toMatchObject({ state: 'awaiting_owner', code: SEND_STARTED });
+    expect(page.asked()).toBe(2);
   });
 
   it('given the calls id was recorded and the wallet was being polled, when the server restarts, then nothing is asked again', async () => {
