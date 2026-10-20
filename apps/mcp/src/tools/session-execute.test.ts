@@ -694,6 +694,39 @@ describe('jaw_session_execute', () => {
     expect(await statusOf()).toBe('revoked');
   });
 
+  it('given a submit that hangs past its bound, then it answers may have been sent and the rows stay held', async () => {
+    const { c, t, permissionId } = await withCustomGrant();
+    let reached = false;
+    bridge.gate = new Promise(() => {});
+    bridge.reached = () => (reached = true);
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+
+    const result = execute(c.access_token, permissionId, [transfer(BOB, 1n)]);
+    while (!reached) await vi.advanceTimersByTimeAsync(50);
+    await vi.advanceTimersByTimeAsync(60_001);
+    vi.useRealTimers();
+
+    expect((await result).content[0].text).toMatch(/may have been sent anyway/);
+    expect(await rowsOf(t.connectionId)).toEqual([expect.objectContaining({ state: 'open', callsId: null })]);
+  });
+
+  it('given a landed run the logs cannot show, then it holds its spend for ten minutes after it landed and no longer', async () => {
+    const { c, t, permissionId } = await withCustomGrant();
+    await execute(c.access_token, permissionId, [transfer(BOB, 600_000n)]);
+    // Past its block window, the logs read leaves the run unseen.
+    chain.head = 100n + 451n;
+
+    const recent = await execute(c.access_token, permissionId, [transfer(CAROL, 300_000n)]);
+    await getDb()
+      .update(sends)
+      .set({ finishedAt: sql`now() - interval '11 minutes'` })
+      .where(eq(sends.connectionId, t.connectionId));
+    const aged = await execute(c.access_token, permissionId, [transfer(CAROL, 300_000n)]);
+
+    expect(recent.content[0].text).toMatch(/^over-limit: /);
+    expect(aged.structuredContent).toMatchObject({ status: 'landed' });
+  });
+
   it('given the connection ends while the batch is checked, then nothing is recorded or sent', async () => {
     const { c, t, permissionId } = await withCustomGrant();
     // The head read right after fit is where an end lands between the checks and the record.

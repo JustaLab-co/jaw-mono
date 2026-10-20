@@ -249,7 +249,7 @@ export async function writeTopUpAhead(tx: Tx, id: string, amount: bigint): Promi
 
 // An execute submits within this of recording its rows, the bound a top-up's lease
 // gives a refill. Past it the run is the reconciler's, whose claims hold no end.
-const EXECUTE_SUBMIT_MS = 2 * 60_000;
+export const EXECUTE_SUBMIT_MS = 2 * 60_000;
 
 /**
  * Locks the connection row, then says whether a turn still running may still move

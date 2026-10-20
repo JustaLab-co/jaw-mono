@@ -17,6 +17,7 @@ import { unrevokedGrant, type LiveGrant } from '@/grants/store';
 import { errorLabel, log } from '@/lib/edge';
 import { reply } from '@/lib/fence';
 import { FloatBusy, FloatLost, inTurn, LOCK_WAIT_MS, withFloat } from '@/payments/float-lock';
+import { EXECUTE_SUBMIT_MS } from '@/payments/store';
 import {
   handToReconciler,
   noteCallsId,
@@ -214,6 +215,19 @@ async function grantFor(t: Tenant, run: Run): Promise<ToolResult | { grant: Live
 
 const ENDED = 'This connection has ended, so nothing was sent.';
 
+// Half the window an end waits on a recorded execute, so a submit still running is
+// answered as maybe sent well before an end may pass it.
+const SUBMIT_MS = EXECUTE_SUBMIT_MS / 2;
+class SubmitTimedOut extends Error {}
+
+function bounded<T>(work: Promise<T>): Promise<T> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const late = new Promise<never>((_, reject) => {
+    timer = setTimeout(() => reject(new SubmitTimedOut()), SUBMIT_MS);
+  });
+  return Promise.race([work, late]).finally(() => clearTimeout(timer));
+}
+
 async function liveIn(tx: Tx, connectionId: string): Promise<boolean> {
   const [live] = await tx
     .select({ id: connections.id })
@@ -281,10 +295,10 @@ async function submitUnder(t: Tenant, run: Run): Promise<ToolResult | Reserved> 
     try {
       hold.assertHeld();
       const wire = run.calls.map((c) => ({ to: c.to, value: numberToHex(c.value), data: c.data }));
-      const sent = (await bridge.request('wallet_sendCalls', [{ calls: wire }])) as { id: Hex };
+      const sent = (await bounded(bridge.request('wallet_sendCalls', [{ calls: wire }]))) as { id: Hex };
       submitted = { sent: sent.id };
     } catch (err) {
-      submitted = mayHaveBeenSent(err) ? { maybe: err } : { unsent: err };
+      submitted = err instanceof SubmitTimedOut || mayHaveBeenSent(err) ? { maybe: err } : { unsent: err };
     }
     await hold.tx((tx) => noteSubmitted(tx, ids, submitted)).catch(logFailure('execute submit write failed'));
     return { ids, submitted, bridge, trustsReverts: namesEveryTarget(grant, run.calls) };
