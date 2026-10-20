@@ -19,7 +19,7 @@ const transfer = (checker?: string): CallPermission => ({
 /**
  * A checker is part of the permission the user signs: the manager asks it to approve every
  * matching call. The SDK knows nothing about what a given checker enforces, so the screen names
- * the contract and says the rule is unverified, rather than leaving it out.
+ * the contract that enforces the rule, rather than leaving it out.
  */
 describe('a call checker on the grant screen', () => {
   const row = (call: CallPermission) =>
@@ -29,13 +29,13 @@ describe('a call checker on the grant screen', () => {
       </ul>
     );
 
-  it('names the contract that enforces the extra rule, and says it is unverified', () => {
+  it('names the contract that enforces the extra rule', () => {
     const html = row(transfer(CHECKER));
 
     expect(html).toContain('transfer(address,uint256)');
     expect(html).toContain('Extra rule enforced by');
     expect(html).toContain('0x8888…8888');
-    expect(html).toContain('Unverified rule');
+    expect(html).not.toContain('Unverified');
   });
 
   it('still shows the rule on an any-function call, where it guards every call to the contract', () => {
@@ -56,7 +56,6 @@ describe('a call checker on the grant screen', () => {
 
     expect(html).toContain('Extra rule enforced by');
     expect(html).toContain('0x8888…8888');
-    expect(html).toContain('Unverified rule');
   });
 
   it('names a checker once on the collapsed card, however many calls it guards', () => {

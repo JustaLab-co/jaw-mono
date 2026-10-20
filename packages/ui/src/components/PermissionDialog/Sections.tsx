@@ -214,7 +214,7 @@ export function hasChecker(call: CallPermission): call is CallPermission & { che
 
 /**
  * The checker contract named as an extra rule. The SDK can't say what a given checker enforces,
- * so it names the contract and says the rule is unverified.
+ * so it names the contract.
  */
 function CheckerNotice({
   checker,
@@ -227,7 +227,7 @@ function CheckerNotice({
     <span className="text-warning text-body-xs flex items-center gap-1.5">
       <TriangleAlert className="size-3 flex-none" strokeWidth={2.4} />
       <span className="min-w-0">
-        Extra rule enforced by <span className="font-mono">{truncateAddress(checker)}</span> · Unverified rule
+        Extra rule enforced by <span className="font-mono">{truncateAddress(checker)}</span>
       </span>
       <CopyButton value={checker} size={11} label="Copy rule contract address" />
     </span>
@@ -236,8 +236,8 @@ function CheckerNotice({
 
 /**
  * One allowed function, plus the checker contract that has to approve each call to it. The SDK
- * can't say what a given checker enforces, so it names the contract and says the rule is
- * unverified; it never shows a description the checker gives of itself.
+ * can't say what a given checker enforces, so it names the contract; it never shows a
+ * description the checker gives of itself.
  */
 export function CallRow({
   call,
