@@ -904,15 +904,17 @@ describe('jaw_session_x402_pay', () => {
     expect(lines).toContain('top-up refused on-chain (the permission refused the transfer)');
   });
 
-  it('given a 5 USDC/day budget and a 2 USDC price, when the agent pays, then over_cap pointing at a larger budget, nothing signed or pulled', async () => {
+  it('given a 5 USDC/day budget and a 2 USDC price, when the agent pays, then over_cap without pointing at a larger budget, nothing signed or pulled', async () => {
     const { t } = await connected('5');
     const first = await pay(t, { url: url('/pricey'), idempotencyKey: 'pricey' }, deps());
     expect(first.structuredContent).toMatchObject({
       kind: 'refused',
-      refusal: { code: 'over_cap', next: 'jaw_grant_permissions' },
+      refusal: { code: 'over_cap' },
       payerRefilled: false,
     });
-    expect(first.structuredContent?.summary).toContain('jaw_grant_permissions');
+    expect(first.structuredContent?.refusal).not.toHaveProperty('next');
+    expect(first.structuredContent?.summary).not.toContain('jaw_grant_permissions');
+    expect(first.structuredContent?.summary).toContain('a larger budget does not raise');
     expect([seen.length, refills.length]).toEqual([0, 0]);
   });
 
