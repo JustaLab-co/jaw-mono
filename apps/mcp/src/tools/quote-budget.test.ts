@@ -113,19 +113,25 @@ describe('given a budget of 0.5 USDC a day', () => {
       kind: 'paid',
       price: { amount: '1000000' },
       readiness: { status: 'not_ready', reason: 'over_allowance' },
-      budget: { permissionId, remainingToday: { amount: '500000', asset: `eip155:84532/erc20:${USDC}` } },
+      budget: { permissionId, remainingToday: { amount: '490000', asset: `eip155:84532/erc20:${USDC}` } },
     });
     expect(r.structuredContent.summary).toContain(permissionId);
-    expect(r.structuredContent.summary).toContain('500000');
+    expect(r.structuredContent.summary).toContain('490000');
   });
 
-  it('when the quote is exactly 0.5 USDC, then it is ready', async () => {
+  it('when the quote is exactly what is left, 0.01 under the day for the refill fee, then it is ready', async () => {
     const { token, permissionId } = await withBudget('0.5');
-    const r = await quote(token, '/price/500000');
+    const r = await quote(token, '/price/490000');
     expect(r.structuredContent).toMatchObject({
       readiness: { status: 'ready' },
-      budget: { permissionId, remainingToday: { amount: '500000' } },
+      budget: { permissionId, remainingToday: { amount: '490000' } },
     });
+  });
+
+  it('when the quote is the whole 0.5 USDC and the float is empty, then it is over the allowance: the refill pays its own fee', async () => {
+    const { token } = await withBudget('0.5');
+    const r = await quote(token, '/price/500000');
+    expect(r.structuredContent.readiness).toEqual({ status: 'not_ready', reason: 'over_allowance' });
   });
 
   it('when the seller also offers a cheaper token the budget does not hold, then the quote prices the USDC option', async () => {
@@ -178,18 +184,18 @@ describe('given a budget of 0.5 USDC a day', () => {
 });
 
 describe('given a budget of 1 USDC a day', () => {
-  it('when the quote is 5000 base units, then it is ready with 1000000 left today', async () => {
+  it('when the quote is 5000 base units, then it is ready with 990000 left today after the refill fee', async () => {
     const { token, permissionId } = await withBudget('1');
     const r = await quote(token, '/price/5000');
     expect(r.structuredContent).toMatchObject({
       readiness: { status: 'ready' },
-      budget: { permissionId, remainingToday: { amount: '1000000' } },
+      budget: { permissionId, remainingToday: { amount: '990000' } },
     });
   });
 });
 
 describe('given a budget of 0.03 USDC with 0.025 funded into the float today and 0.02 still held there', () => {
-  it('when the quote is 0.025 USDC, then the float counts, it is ready, and it agrees with jaw_session_status', async () => {
+  it('when the quote is the 0.02 held, then the float counts, it is ready, and it agrees with jaw_session_status', async () => {
     const { token, t, permissionId } = await withBudget('0.03');
     await getDb().insert(payments).values({
       id: 'pay_quotefloat',
@@ -207,11 +213,11 @@ describe('given a budget of 0.03 USDC with 0.025 funded into the float today and
       finishedAt: new Date(),
     });
     Object.assign(chain, { spend: 25_000n, held: 20_000n });
-    const r = await quote(token, '/price/25000');
+    const r = await quote(token, '/price/20000');
     const status = await callTool(token, 'jaw_session_status', {});
     expect(r.structuredContent).toMatchObject({
       readiness: { status: 'ready' },
-      budget: { permissionId, remainingToday: { amount: '25000' } },
+      budget: { permissionId, remainingToday: { amount: '20000' } },
     });
     expect(status.structuredContent.budget.remainingToday).toEqual(r.structuredContent.budget.remainingToday);
   });

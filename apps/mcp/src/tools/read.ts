@@ -1,5 +1,6 @@
 import {
   balanceReader,
+  firstOperationCost,
   type OnChainPeriod,
   payAndFetch,
   readCurrentPeriods,
@@ -77,7 +78,10 @@ async function budgetOf(grant: Grant, t: Tenant, held: bigint | null) {
     const pulled = day.refilled + day.sentFromAccount;
     const left = dayLeft(allowance, day);
     const pullable = floorZero(allowance - pulled);
-    const floatFundable = (held ?? 0n) + floorZero(pullable - earlier);
+    // A refill pays the fee for its own transfer, so the cap has to hold that on top of what it pulls.
+    const usdc = usdcForNetwork(caip2(grant.chainId));
+    const refillFee = usdc ? firstOperationCost(usdc) : 0n;
+    const floatFundable = (held ?? 0n) + floorZero(pullable - earlier - refillFee);
     spent = figure(day.paid + day.sentFromAccount);
     payable = figure(least(left, floatFundable));
   }
