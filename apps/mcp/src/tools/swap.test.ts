@@ -33,8 +33,7 @@ import {
   walletsSettled,
 } from '@/connections/testkit';
 import { getDb } from '@/db/client';
-import { connections, grants, payments, settings, swaps } from '@/db/schema';
-import { countHit } from '@/db/settings';
+import { connections, grants, payments, rateLimits, settings, swaps } from '@/db/schema';
 import { TEST_PG_URL, useTestDb, useTestPostgres } from '@/db/test-db';
 import { x402Budget } from '@/grants/store';
 import { guardTools, RATE_WINDOW_MS } from '@/lib/edge';
@@ -282,9 +281,25 @@ const sessionEnded = (connectionId: string) =>
 const paymentsOf = (connectionId: string) =>
   getDb().select().from(payments).where(eq(payments.connectionId, connectionId));
 const paidHits = () => backend.hits.filter((h) => h.nonce);
-const swapsThisMinute = async (t: Tenant, count: number) => {
-  for (let i = 0; i < count; i++) await countHit(`swap:${t.connectionId}`, RATE_WINDOW_MS);
+/**
+ * Adds `count` hits on `key` to the rate window open now and to the next one, so a
+ * run that starts after the minute turns still finds them.
+ */
+const hitsThisMinute = async (key: string, count: number) => {
+  const now = sql`to_timestamp(floor(extract(epoch from statement_timestamp()) * 1000 / ${RATE_WINDOW_MS}) * ${RATE_WINDOW_MS} / 1000.0)`;
+  const next = sql`${now} + ${RATE_WINDOW_MS} * interval '1 millisecond'`;
+  await getDb()
+    .insert(rateLimits)
+    .values([
+      { key, windowStart: now, count },
+      { key, windowStart: next, count },
+    ])
+    .onConflictDoUpdate({
+      target: [rateLimits.key, rateLimits.windowStart],
+      set: { count: sql`${rateLimits.count} + excluded.count` },
+    });
 };
+const swapsThisMinute = (t: Tenant, count: number) => hitsThisMinute(`swap:${t.connectionId}`, count);
 const rewrite = async (id: string, set: { paidAt?: SQL; leaseUntil?: SQL; approveBy?: SQL }) => {
   await getDb().execute(sql`alter table swaps disable trigger swaps_guard`);
   await getDb().update(swaps).set(set).where(eq(swaps.id, id));
@@ -1838,7 +1853,7 @@ describe('jaw_swap_status', () => {
   it('given thirty status reads this minute, when one more runs, then rate_limited with no backend call', async () => {
     const { t } = await connected('1');
     const quoteId = await started(t);
-    for (let i = 0; i < 30; i++) await countHit(`swap-status:${t.connectionId}`, RATE_WINDOW_MS);
+    await hitsThisMinute(`swap-status:${t.connectionId}`, 30);
 
     const result = await status(t, quoteId);
 
