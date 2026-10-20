@@ -77,7 +77,7 @@ describe('jaw_session_status after a budget change', () => {
     expect(status.structuredContent.budget).toMatchObject({
       perDay: { amount: '1000000' },
       spentToday: { amount: '0' },
-      remainingToday: { amount: '300000' },
+      remainingToday: { amount: '290000' },
     });
   });
 });
@@ -91,6 +91,15 @@ describe('given two budgets and the newer one revoked in the wallet', () => {
     const status = await callTool(c.access_token, 'jaw_session_status', {});
     expect(status.structuredContent.readiness).toMatchObject({ status: 'ready' });
     expect(status.structuredContent.budget).toMatchObject({ permissionId: older, perDay: { amount: '2000000' } });
+  });
+
+  it('when jaw_session_x402_quote runs, then it is ready, judged on the older budget as a payment would be', async () => {
+    const c = await connect();
+    await approve(c, '2');
+    const newer = await approve(c, '1');
+    revokedInWallet.add(newer);
+    const quote = await callTool(c.access_token, 'jaw_session_x402_quote', { url: 'https://169.254.169.254/latest' });
+    expect(quote.structuredContent.readiness).toMatchObject({ status: 'ready' });
   });
 });
 
@@ -135,7 +144,7 @@ describe('given a budget of 0.03 USDC with 0.025 already funded into the float t
     expect(status.structuredContent.budget).toMatchObject({
       perDay: { amount: '30000' },
       spentToday: { amount: '0' },
-      remainingToday: { amount: '5000' },
+      remainingToday: { amount: '0' },
     });
   });
 });
@@ -169,7 +178,7 @@ describe('given the chain counts more spent today than the ledger topped up', ()
     const status = await callTool(c.access_token, 'jaw_session_status', {});
     expect(status.structuredContent.budget).toMatchObject({
       spentToday: { amount: '10000' },
-      remainingToday: { amount: '30000' },
+      remainingToday: { amount: '20000' },
     });
   });
 });
@@ -185,7 +194,7 @@ describe('given a top-up dated before the current window started', () => {
     const status = await callTool(c.access_token, 'jaw_session_status', {});
     expect(status.structuredContent.budget).toMatchObject({
       spentToday: { amount: '0' },
-      remainingToday: { amount: '50000' },
+      remainingToday: { amount: '40000' },
     });
   });
 });
@@ -200,7 +209,7 @@ describe('given a window start past the range a Date can hold', () => {
     const status = await callTool(c.access_token, 'jaw_session_status', {});
     expect(status.structuredContent.budget).toMatchObject({
       spentToday: { amount: '0' },
-      remainingToday: { amount: '25000' },
+      remainingToday: { amount: '15000' },
       resetsAt: null,
     });
   });
@@ -307,9 +316,9 @@ describe('given 1 USDC a day and the reads jaw_session_status combines', () => {
     });
     expect(out.budget).toMatchObject({
       spentToday: { amount: '100000' },
-      remainingToday: { amount: '900000' },
+      remainingToday: { amount: '890000' },
     });
-    expect(out.summary).toContain('Ready to pay, 900000 base units left today.');
+    expect(out.summary).toContain('Ready to pay, 890000 base units left today.');
   });
 
   it('when only 0.01 left the account, with float held from an earlier day, then it is spent', async () => {
@@ -331,7 +340,7 @@ describe('given 1 USDC a day and the reads jaw_session_status combines', () => {
     });
     expect(out.budget).toMatchObject({
       spentToday: { amount: '110000' },
-      remainingToday: { amount: '890000' },
+      remainingToday: { amount: '880000' },
     });
   });
 
@@ -343,9 +352,9 @@ describe('given 1 USDC a day and the reads jaw_session_status combines', () => {
     });
     expect(out.budget).toMatchObject({
       spentToday: { amount: '160000' },
-      remainingToday: { amount: '840000' },
+      remainingToday: { amount: '830000' },
     });
-    expect(out.summary).toContain('Ready to pay, 840000 base units left today.');
+    expect(out.summary).toContain('Ready to pay, 830000 base units left today.');
   });
 
   it('when 0.99 left the account outside payments and the float holds more than is left, then 0.01 is left', async () => {
