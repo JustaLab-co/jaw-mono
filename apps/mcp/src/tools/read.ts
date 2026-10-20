@@ -19,7 +19,7 @@ import { findActive } from '@/connections/rows';
 import { getDb } from '@/db/client';
 import { liveGrants, x402Budget, type Grant, type LiveGrant } from '@/grants/store';
 import { dayLeft, daySpendOf, isoOf } from '@/payments/day-spend';
-import { loggedEnds, LOGGED_READ_MS, openSpends, readAt, recordedSends } from '@/payments/sends';
+import { chainView, heldSpends, LOGGED_READ_MS, readAt, recordedSends } from '@/payments/sends';
 import { entriesFor, pulledUnderOtherGrants } from '@/payments/store';
 import { publicClientFor } from '@/lib/chain';
 import { fenceText, reply } from '@/lib/fence';
@@ -165,19 +165,18 @@ function leftOf(period: OnChainPeriod, allowance: bigint, inFlight: bigint) {
   return period.status === 'ok' ? floorZero(allowance - period.spend - inFlight).toString() : '0';
 }
 
-// A run the logs show ended counts in the period spend read at their block, not again as open.
+// A run the logs show counts in the period spend read at their block, not again as held.
 async function grantOf(connectionId: string, g: LiveGrant): Promise<z.infer<typeof grantOut>> {
   const target = { chainId: g.chainId, permissionId: g.permissionId, permission: g.permission };
   const tokens = [...new Set(g.permission.spends.map((s) => s.token.toLowerCase()))];
-  const logged = await within(
-    loggedEnds(connectionId, g.permissionId, g.chainId, clients.clients),
-    LOGGED_READ_MS
-  ).catch(() => undefined);
-  const read = readAt(clients.clients, g.chainId, logged?.head);
+  const view = await within(chainView(connectionId, g.permissionId, g.chainId, clients.clients), LOGGED_READ_MS).catch(
+    () => undefined
+  );
+  const read = readAt(clients.clients, g.chainId, view?.head);
   const [liveness, periods, open] = await Promise.all([
     readLiveness(target, read),
     Promise.all(tokens.map((token) => readCurrentPeriods({ ...target, token }, read))),
-    openSpends(g.permissionId, getDb(), new Set(logged?.ends.map((e) => e.id))),
+    heldSpends(g.permissionId, getDb(), view?.seen),
   ]);
   return {
     permissionId: g.permissionId,

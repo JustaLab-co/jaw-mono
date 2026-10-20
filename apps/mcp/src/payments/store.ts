@@ -247,6 +247,10 @@ export async function writeTopUpAhead(tx: Tx, id: string, amount: bigint): Promi
   await addTopUp(tx, id, amount);
 }
 
+// An execute submits within this of recording its rows, the bound a top-up's lease
+// gives a refill. Past it the run is the reconciler's, whose claims hold no end.
+const EXECUTE_SUBMIT_MS = 2 * 60_000;
+
 /**
  * Locks the connection row, then says whether a turn still running may still move
  * money: a top-up written ahead of its send, until the turn reserves or its call
@@ -277,7 +281,7 @@ export async function sendInFlight(tx: Tx, connectionId: string): Promise<boolea
         eq(sends.state, 'open'),
         isNotNull(sends.idempotencyKey),
         isNull(sends.callsId),
-        sql`${sends.leaseUntil} > ${dbNow}`
+        sql`${sends.createdAt} > ${dbNow} - ${EXECUTE_SUBMIT_MS} * interval '1 millisecond'`
       )
     )
     .limit(1);

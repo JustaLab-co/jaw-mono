@@ -20,9 +20,9 @@ import { FloatBusy, FloatLost, inTurn, LOCK_WAIT_MS, withFloat } from '@/payment
 import {
   handToReconciler,
   noteCallsId,
-  openSpends,
   recordSend,
-  loggedEnds,
+  chainView,
+  heldSpends,
   LOGGED_READ_MS,
   readAt,
   runOf,
@@ -227,11 +227,11 @@ async function submitUnder(t: Tenant, run: Run): Promise<ToolResult | Reserved> 
   return withFloat(t.connectionId, LOCK_WAIT_MS, async (hold) => {
     // A run left unconfirmed may have landed since. Settled first, its key replays it landed
     // and the next fit counts its spend on chain only. A read past its bound settles nothing.
-    const logged = await within(
-      loggedEnds(t.connectionId, run.permissionId, run.chainId, chainClients),
+    const view = await within(
+      chainView(t.connectionId, run.permissionId, run.chainId, chainClients),
       LOGGED_READ_MS
     ).catch((err: unknown) => void logFailure('execute settle read failed')(err));
-    for (const { id, end } of logged?.ends ?? []) {
+    for (const { id, end } of view?.ends ?? []) {
       await settleSends([id], end).catch(logFailure('execute settle write failed'));
     }
     const stored = await hold.tx(async (tx) => {
@@ -243,10 +243,10 @@ async function submitUnder(t: Tenant, run: Run): Promise<ToolResult | Reserved> 
     const found = await grantFor(t, run);
     if (!('grant' in found)) return found;
     const { grant, bridge } = found;
-    const pending = await hold.tx((tx) => openSpends(grant.permissionId, tx));
+    const pending = await hold.tx((tx) => heldSpends(grant.permissionId, tx, view?.seen));
     const nowSeconds = Math.floor(Date.now() / 1000);
     const refused = await fit(grant, run.calls, {
-      read: readAt(chainClients, grant.chainId, logged?.head),
+      read: readAt(chainClients, grant.chainId, view?.head),
       pending,
       nowSeconds,
     });

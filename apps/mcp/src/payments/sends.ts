@@ -1,6 +1,6 @@
 import { randomBytes } from 'node:crypto';
 import type { ChainClients, ReadDeps } from '@jaw.id/agent';
-import { and, desc, eq, inArray, isNotNull, lt, ne, sql } from 'drizzle-orm';
+import { and, desc, eq, inArray, isNotNull, lt, ne, or, sql } from 'drizzle-orm';
 import { getAbiItem, type Address, type Hex } from 'viem';
 import { entryPoint08Abi, entryPoint08Address } from 'viem/account-abstraction';
 import { getDb, type Tx } from '@/db/client';
@@ -73,19 +73,39 @@ export async function settleSends(ids: string[], end: SendEnd, tx: Tx = getDb())
     .where(and(inArray(sends.id, ids), eq(sends.state, 'open')));
 }
 
-/** What open runs under the grant hold, less the runs `ended` names, which the logs already settled. */
-export async function openSpends(
+// A run that landed can be ahead of the node a later read asks, so for this long it
+// counts as held unless the logs read to the pinned block show it.
+const LANDED_UNSURE_MS = SEND_LEASE_MS;
+
+const unsure = (permissionId: string) =>
+  and(
+    sql`lower(${sends.permissionId}) = ${permissionId.toLowerCase()}`,
+    or(
+      eq(sends.state, 'open'),
+      and(
+        eq(sends.state, 'landed'),
+        sql`${sends.finishedAt} > ${dbNow} - ${LANDED_UNSURE_MS} * interval '1 millisecond'`
+      )
+    )
+  );
+
+/**
+ * What runs under the grant hold that a period read may not show: the open ones and
+ * the recently landed ones, less the runs `seen` names, which the logs show by the
+ * block that read is pinned to.
+ */
+export async function heldSpends(
   permissionId: string,
   tx: Tx,
-  ended: ReadonlySet<string> = new Set()
+  seen: ReadonlySet<string> = new Set()
 ): Promise<Map<string, bigint>> {
   const rows = await tx
     .select({ id: sends.id, token: sends.token, amount: sends.amount })
     .from(sends)
-    .where(and(eq(sends.permissionId, permissionId), eq(sends.state, 'open')));
+    .where(unsure(permissionId));
   const spent = new Map<string, bigint>();
   for (const { id, token, amount } of rows) {
-    if (token && !ended.has(id)) spent.set(token, (spent.get(token) ?? 0n) + BigInt(amount));
+    if (token && !seen.has(id)) spent.set(token, (spent.get(token) ?? 0n) + BigInt(amount));
   }
   return spent;
 }
@@ -108,32 +128,34 @@ export function endOf(logs: LoggedOp[]): SendEnd | undefined {
 // Well under LOCK_WAIT_MS, so a slow log read cannot leave the turns queued on the float lock busy.
 export const LOGGED_READ_MS = 2_000;
 
-export interface Logged {
-  /** The block the logs were read to. */
+export interface ChainView {
+  /** The block the logs were read to, and the block a period read is pinned to. */
   head: bigint;
+  /** Runs whose userOp the logs show by `head`: in the period spend read there, or reverted. */
+  seen: Set<string>;
+  /** How the open ones among them end. */
   ends: { id: string; end: SendEnd }[];
 }
 
 /**
- * How this connection's open runs under the grant end, from what the EntryPoint
- * logged up to `head`. It writes nothing. A run not logged yet, or past its block
- * window, has no end here and stays open for the reconciler.
+ * Reads the EntryPoint logs, up to the head, for this connection's runs under the
+ * grant that a period read may not show. It writes nothing. A run past its block
+ * window is left unseen, so it stays held, and the reconciler settles it.
  */
-export async function loggedEnds(
+export async function chainView(
   connectionId: string,
   permissionId: string,
   chainId: number,
   clients: ChainClients
-): Promise<Logged | undefined> {
+): Promise<ChainView | undefined> {
   const rows = await getDb()
-    .select({ id: sends.id, callsId: sends.callsId, fromBlock: sends.fromBlock })
+    .select({ id: sends.id, state: sends.state, callsId: sends.callsId, fromBlock: sends.fromBlock })
     .from(sends)
     .where(
       and(
         eq(sends.connectionId, connectionId),
-        sql`lower(${sends.permissionId}) = ${permissionId.toLowerCase()}`,
+        unsure(permissionId),
         eq(sends.chainId, chainId),
-        eq(sends.state, 'open'),
         isNotNull(sends.callsId)
       )
     );
@@ -150,11 +172,15 @@ export async function loggedEnds(
     toBlock: head,
     strict: true,
   });
-  const ends = inWindow.flatMap((row) => {
+  const seen = new Set<string>();
+  const ends: ChainView['ends'] = [];
+  for (const row of inWindow) {
     const end = endOf(logs.filter((l) => l.args.userOpHash.toLowerCase() === row.callsId?.toLowerCase()));
-    return end ? [{ id: row.id, end }] : [];
-  });
-  return { head, ends };
+    if (!end) continue;
+    seen.add(row.id);
+    if (row.state === 'open') ends.push({ id: row.id, end });
+  }
+  return { head, seen, ends };
 }
 
 // At the block the logs were read to, a run they settled is in the period spend.

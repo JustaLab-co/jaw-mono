@@ -613,6 +613,69 @@ describe('jaw_session_execute', () => {
     expect(bridge.sent).toHaveLength(1);
   });
 
+  it('given a run whose receipt lands it after the log read, at a block past it, then it still counts and the next is over-limit', async () => {
+    const { c, t, permissionId } = await withCustomGrant();
+    bridge.outcome = 'pending';
+    vi.useFakeTimers({ toFake: ['Date'] });
+    await execute(c.access_token, permissionId, [transfer(BOB, 600_000n)]);
+    const answers = node.readContract as (args: unknown) => Promise<unknown>;
+    // The pinned read sees the period as of the log read; only later blocks hold the run.
+    node.readContract = (async (args: { functionName: string; blockNumber?: bigint }) => {
+      if (args.functionName !== 'getCurrentPeriod') return answers(args);
+      return { start: NOW() - 60, end: NOW() + 3_600, spend: args.blockNumber === undefined ? chain.spent : 0n };
+    }) as typeof node.readContract;
+    vi.spyOn(node, 'getLogs').mockImplementation(async () => {
+      await getDb()
+        .update(sends)
+        .set({ state: 'landed', txHash: TX, finishedAt: new Date() })
+        .where(eq(sends.connectionId, t.connectionId));
+      chain.spent = 600_000n;
+      return [];
+    });
+    bridge.outcome = 'landed';
+
+    const second = await execute(c.access_token, permissionId, [transfer(CAROL, 600_000n)]);
+
+    expect(second.content[0].text).toMatch(/^over-limit: .* has 400000 left this period/);
+    expect(bridge.sent).toHaveLength(1);
+  });
+
+  it('given rows an execute recorded and never submitted, then a revoke waits until their submit window passes', async () => {
+    const { t, permissionId } = await withCustomGrant();
+    const [{ grantId }] = await getDb()
+      .select({ grantId: connections.grantId })
+      .from(connections)
+      .where(eq(connections.id, t.connectionId));
+    const statusOf = async () =>
+      (await getDb().select().from(connections).where(eq(connections.id, t.connectionId)))[0].status;
+    vi.useFakeTimers({ toFake: ['Date'] });
+    await getDb()
+      .insert(sends)
+      .values({
+        id: 'send_crashed',
+        connectionId: t.connectionId,
+        idempotencyKey: 'crashed',
+        requestHash: 'h',
+        permissionId,
+        chainId: t.chainId,
+        sender: t.sessionAddress.toLowerCase(),
+        amount: '1',
+        periodStart: NOW(),
+        fromBlock: 100n,
+        leaseUntil: new Date(Date.now() + 10 * 60_000),
+      });
+
+    const ended = revokeByGrant(grantId as string, 0);
+    await new Promise((resolve) => setTimeout(resolve, 600));
+    const withinWindow = await statusOf();
+    // PGlite runs on the test's clock: past the window the run is the reconciler's.
+    vi.setSystemTime(Date.now() + 2 * 60_000 + 1_000);
+    await ended;
+
+    expect(withinWindow).toBe('active');
+    expect(await statusOf()).toBe('revoked');
+  });
+
   it('given the connection ends while the batch is checked, then nothing is recorded or sent', async () => {
     const { c, t, permissionId } = await withCustomGrant();
     // The head read right after fit is where an end lands between the checks and the record.

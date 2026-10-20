@@ -37,10 +37,10 @@
                                     flight (206)
      tools/connections.ts 170       revoke: withFloat + endConnection, the same
                                     shape as a disconnect with nothing to send
-     tools/session-execute.ts 226-290  submitUnder: loggedEnds under a 2 s
+     tools/session-execute.ts 226-290  submitUnder: chainView under a 2 s
                                     bound, then the settle writes (230-236),
                                     owns() and the live check in one tx
-                                    (237-240), openSpends (246), fit reads the
+                                    (237-240), heldSpends (246), fit reads the
                                     chain at the logged block (248), owns(),
                                     the live check and recordSend in one tx
                                     (262-277), assertHeld (281), send (283),
@@ -85,16 +85,17 @@
      so the catch (268-275) runs.
    - An execute spends a custom grant, not the float, so it shares only the lock
      with the other turns. Each execute moves one unit of the grant's limit
-     ExecCap. ExecSpent is what moved on chain and ExecOpen the open rows: fit
-     refuses when ExecSpent + ExecOpen + 1 > ExecCap, as fit.ts adds openSpends
-     to the period spend. The permission manager's own limit is left out, so
+     ExecCap. ExecSpent is what moved on chain and pend the runs heldSpends
+     counts: fit refuses when the period spend plus pend plus 1 passes ExecCap,
+     as fit.ts adds heldSpends to the period spend. The permission manager's own limit is left out, so
      ExecCapHolds checks the server's check alone.
    - A submitted userOp lands or reverts later, at any time (ExecLand). Its rows
      settle only from what the chain logged (ExecConclude): the receipt after
      the lock, settleLogged, or the reconciler, each guarded by state = 'open'.
-   - The chain is one consistent view: fit reads the chain at the block the
-     settle read logs to, and a node behind it fails the read, so the two reads
-     agree. Nothing reorgs. A run that was
+   - Fit reads the chain at the block the settle read logged to, and a node behind
+     it fails the read. A landed row counts as held unless that read saw it; the
+     code drops landed rows from held ten minutes after they land, past any node's
+     lag, which the model leaves out by holding them for good. Nothing reorgs. A run that was
      never seen in its block window is not released here, though the reconciler
      does release it (the third execute mutation shows what that costs).
    - Fairness: weak fairness on each thread's steps, which include the
@@ -111,13 +112,13 @@ VARIABLES pc, funded, outcome,
           lockOwner, sess, lost, drops, fence, took,
           live, topUp, visible,
           revokedOnChain, moved, lateSend, staleTopUp,
-          row, op, pend, seen
+          row, op, pend, seen, snap, pinned
 
 turn == <<pc, funded, outcome>>
 lock == <<lockOwner, sess, lost, drops, fence, took>>
 db == <<live, topUp, visible>>
 chain == <<revokedOnChain, moved, lateSend, staleTopUp>>
-exec == <<row, op, pend, seen>>
+exec == <<row, op, pend, seen, snap, pinned>>
 vars == <<turn, lock, db, chain, exec>>
 
 Failed == {"refused", "busy", "error", "funding_failed"}
@@ -126,7 +127,6 @@ Committed == Cardinality({r \in Refills : visible[r]}) * Price
 ExecInFlight == \E e \in Execs : row[e] = "open" /\ pc[e] \in {"assertExec", "submit"}
 InFlight == (\E r \in Refills : topUp[r] = 1 /\ ~visible[r] /\ pc[r] # "done") \/ ExecInFlight
 ExecSpent == Cardinality({e \in Execs : op[e] = "landed"})
-ExecOpen == Cardinality({e \in Execs : row[e] = "open"})
 
 Init == /\ pc = [t \in Threads |-> IF t \in Revokes THEN "poll" ELSE "wait"]
         /\ funded = [r \in Refills |-> FALSE]
@@ -148,6 +148,8 @@ Init == /\ pc = [t \in Threads |-> IF t \in Revokes THEN "poll" ELSE "wait"]
         /\ op = [e \in Execs |-> "none"]
         /\ pend = [e \in Execs |-> {}]
         /\ seen = [e \in Execs |-> {}]
+        /\ snap = [e \in Execs |-> 0]
+        /\ pinned = [e \in Execs |-> FALSE]
 
 Go(t, p) == pc' = [pc EXCEPT ![t] = p]
 Say(t, o) == outcome' = [outcome EXCEPT ![t] = o]
@@ -331,15 +333,19 @@ EndBusy(d) == /\ pc[d] = "end"
 
 (* Execute turn, session-execute.ts *)
 
-\* loggedEnds and the settle writes (230-236): every open row whose userOp the chain logged settles from
-\* it. seen is what the read saw landed. A read that fails or runs past its bound
-\* settles nothing and sees nothing.
+\* chainView, then the settle writes (230-236). The read sees which runs the chain
+\* logged by its head, and fit's period read is pinned to that head: snap is what
+\* moved by then. The writes settle the open ones, or fail and leave them open. A read
+\* that fails or runs past its bound sees nothing and pins nothing.
 Settle(e) == /\ pc[e] = "settle"
-             /\ \/ /\ row' = [x \in Execs |-> IF row[x] = "open" /\ op[x] = "landed" THEN "landed"
-                                              ELSE IF row[x] = "open" /\ op[x] = "reverted" THEN "released"
-                                              ELSE row[x]]
-                   /\ seen' = [seen EXCEPT ![e] = {x \in Execs : op[x] = "landed"}]
-                \/ UNCHANGED <<row, seen>>
+             /\ \/ /\ seen' = [seen EXCEPT ![e] = {x \in Execs : op[x] \in {"landed", "reverted"}}]
+                   /\ snap' = [snap EXCEPT ![e] = ExecSpent]
+                   /\ pinned' = [pinned EXCEPT ![e] = TRUE]
+                   /\ \/ row' = [x \in Execs |-> IF row[x] = "open" /\ op[x] = "landed" THEN "landed"
+                                                 ELSE IF row[x] = "open" /\ op[x] = "reverted" THEN "released"
+                                                 ELSE row[x]]
+                      \/ UNCHANGED row
+                \/ UNCHANGED <<row, seen, snap, pinned>>
              /\ Go(e, "replay")
              /\ UNCHANGED <<funded, outcome, lock, db, chain, op, pend>>
 
@@ -350,15 +356,16 @@ Replay(e) == /\ pc[e] = "replay"
                 ELSE Go(e, "pending") /\ UNCHANGED outcome
              /\ UNCHANGED <<funded, lock, db, chain, exec>>
 
-\* openSpends in its own tx (246).
+\* heldSpends in its own tx (246): open runs and landed ones the read did not see,
+\* since a receipt can land a run after the read, at a block past its head.
 Pending(e) == /\ pc[e] = "pending"
-              /\ pend' = [pend EXCEPT ![e] = {x \in Execs : row[x] = "open"}]
+              /\ pend' = [pend EXCEPT ![e] = {x \in Execs : row[x] \in {"open", "landed"} /\ x \notin seen[e]}]
               /\ Go(e, "fit")
-              /\ UNCHANGED <<funded, outcome, lock, db, chain, row, op, seen>>
+              /\ UNCHANGED <<funded, outcome, lock, db, chain, row, op, seen, snap, pinned>>
 
-\* fit reads the period spend from the chain (248), after the open rows.
+\* fit reads the period spend from the chain (248), at the pinned head when there is one.
 Fit(e) == /\ pc[e] = "fit"
-          /\ IF ExecSpent + Cardinality(pend[e]) + 1 > ExecCap
+          /\ IF (IF pinned[e] THEN snap[e] ELSE ExecSpent) + Cardinality(pend[e]) + 1 > ExecCap
                THEN Leave(e, "refused")
                ELSE Go(e, "record") /\ UNCHANGED outcome
           /\ UNCHANGED <<funded, lock, db, chain, exec>>
@@ -373,7 +380,7 @@ Record(e) == /\ pc[e] = "record"
                        /\ UNCHANGED outcome
                   ELSE /\ Leave(e, IF Owns(e) THEN "refused" ELSE "error")
                        /\ UNCHANGED row
-             /\ UNCHANGED <<funded, lock, db, chain, op, pend, seen>>
+             /\ UNCHANGED <<funded, lock, db, chain, op, pend, seen, snap, pinned>>
 
 \* assertHeld (281): FloatLost is unsent, and noteSubmitted releases the rows.
 AssertExec(e) == /\ pc[e] = "assertExec"
@@ -382,7 +389,7 @@ AssertExec(e) == /\ pc[e] = "assertExec"
                            /\ Leave(e, "error")
                       ELSE /\ Go(e, "submit")
                            /\ UNCHANGED <<row, outcome>>
-                 /\ UNCHANGED <<funded, lock, db, chain, op, pend, seen>>
+                 /\ UNCHANGED <<funded, lock, db, chain, op, pend, seen, snap, pinned>>
 
 \* wallet_sendCalls (283): the bundler takes it, or a failure before it did
 \* releases the rows. A maybe-sent failure keeps them open, as a send does.
@@ -393,18 +400,18 @@ Submit(e) == /\ pc[e] = "submit"
                 \/ /\ row' = [row EXCEPT ![e] = "released"]
                    /\ Leave(e, "error")
                    /\ UNCHANGED op
-             /\ UNCHANGED <<funded, lock, db, chain, pend, seen>>
+             /\ UNCHANGED <<funded, lock, db, chain, pend, seen, snap, pinned>>
 
 \* The userOp lands later, or reverts: on a grant revoked on chain it moves nothing.
 ExecLand(e) == /\ op[e] = "sent"
                /\ op' = [op EXCEPT ![e] = IF revokedOnChain THEN "reverted" ELSE "landed"]
-               /\ UNCHANGED <<turn, lock, db, chain, row, pend, seen>>
+               /\ UNCHANGED <<turn, lock, db, chain, row, pend, seen, snap, pinned>>
 
 \* The receipt, settleLogged or the reconciler settle a row from what the chain logged.
 ExecConclude(e) == /\ row[e] = "open"
                    /\ op[e] \in {"landed", "reverted"}
                    /\ row' = [row EXCEPT ![e] = IF op[e] = "landed" THEN "landed" ELSE "released"]
-                   /\ UNCHANGED <<turn, lock, db, chain, op, pend, seen>>
+                   /\ UNCHANGED <<turn, lock, db, chain, op, pend, seen, snap, pinned>>
 
 (* revokeByGrant, rows.ts:157-180 *)
 
@@ -491,6 +498,8 @@ TypeOK == /\ pc \in [Threads -> {"wait", "poll", "check", "assert212", "addTopUp
           /\ op \in [Execs -> {"none", "sent", "landed", "reverted"}]
           /\ pend \in [Execs -> SUBSET Execs]
           /\ seen \in [Execs -> SUBSET Execs]
+          /\ snap \in [Execs -> 0..Cardinality(Execs)]
+          /\ pinned \in [Execs -> BOOLEAN]
 
 \* (a) The prices of turns that return ok never pass the cap checkCaps enforces.
 CapHolds == Cardinality({r \in Refills : outcome[r] = "ok"}) * Price <= Cap

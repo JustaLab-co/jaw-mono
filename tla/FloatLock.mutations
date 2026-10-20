@@ -147,8 +147,8 @@ only end refills=1 revoke=1
 mutation fit counts what moved on chain and ignores the open rows
 detects ExecCapHolds
 only exec execs=2 drops=0
-- /\ IF ExecSpent + Cardinality(pend[e]) + 1 > ExecCap
-+ /\ IF ExecSpent + 1 > ExecCap
+- /\ IF (IF pinned[e] THEN snap[e] ELSE ExecSpent) + Cardinality(pend[e]) + 1 > ExecCap
++ /\ IF (IF pinned[e] THEN snap[e] ELSE ExecSpent) + 1 > ExecCap
 
 mutation the execute records its rows without owns(), after another turn took the lock
 detects ExecCapHolds
@@ -168,11 +168,17 @@ only exec execs=2 drops=0
 - /\ row' = [row EXCEPT ![e] = "open"]
 + /\ UNCHANGED row
 
-mutation the settle read sees a run landed and leaves its row open, as before settleLogged
+mutation fit counts as held a run the pinned read already has, the double count
 detects CountedOnce
 only exec execs=2 drops=0
-- /\ row' = [x \in Execs |-> IF row[x] = "open" /\ op[x] = "landed" THEN "landed"
-+ /\ row' = [x \in Execs |-> IF FALSE THEN "landed"
+- /\ pend' = [pend EXCEPT ![e] = {x \in Execs : row[x] \in {"open", "landed"} /\ x \notin seen[e]}]
++ /\ pend' = [pend EXCEPT ![e] = {x \in Execs : row[x] \in {"open", "landed"}}]
+
+mutation held counts open rows only, so a run its receipt landed after the read counts nowhere
+detects ExecCapHolds
+only exec execs=2 drops=0
+- /\ pend' = [pend EXCEPT ![e] = {x \in Execs : row[x] \in {"open", "landed"} /\ x \notin seen[e]}]
++ /\ pend' = [pend EXCEPT ![e] = {x \in Execs : row[x] = "open" /\ x \notin seen[e]}]
 
 mutation the record tx skips the live check, so an end between the checks and the record is missed
 detects NoExecAfterEnd
