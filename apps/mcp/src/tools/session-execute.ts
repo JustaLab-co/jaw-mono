@@ -173,7 +173,8 @@ const logFailure = (msg: string) => (err: unknown) => log('error', { msg, error:
 function concluded(ids: string[], out: Outcome) {
   const callsId = out.userOpHash as Hex;
   if (out.status === 'landed') return settleSends(ids, { state: 'landed', txHash: out.txHash as Hex, callsId });
-  if (out.status === 'reverted') return settleSends(ids, { state: 'released', txHash: out.txHash as Hex | null });
+  if (out.status === 'reverted')
+    return settleSends(ids, { state: 'released', txHash: out.txHash as Hex | null, callsId });
   return handToReconciler(ids, undefined, callsId);
 }
 

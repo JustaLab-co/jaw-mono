@@ -24,6 +24,7 @@ import { sends, settings } from '@/db/schema';
 import { lockWaiters, TEST_PG_URL, useTestDb, useTestPostgres } from '@/db/test-db';
 import { recordGrant } from '@/grants/permission';
 import { x402Budget } from '@/grants/store';
+import * as sendStore from '@/payments/sends';
 import { reconcile } from '@/reconciler/run';
 import { ANY_TARGET } from '@jaw.id/core';
 import { RECEIPT_MS } from './session-execute';
@@ -531,6 +532,24 @@ describe('jaw_session_execute', () => {
     const retry = await execute(c.access_token, permissionId, [transfer(BOB, 1n)], 'pay-bob');
 
     expect(retry.structuredContent).toMatchObject({ status: 'reverted', txHash: TX });
+    expect(bridge.attempts).toBe(1);
+  });
+
+  it('given the userOp hash write at submit failed, when the userOp reverts, then its key still replays the revert', async () => {
+    const { c, t, permissionId } = await withCustomGrant();
+    bridge.outcome = { logs: [] };
+    vi.spyOn(console, 'log').mockImplementation(() => undefined);
+    const write = vi.spyOn(sendStore, 'noteCallsId').mockRejectedValueOnce(new Error('db blip'));
+    const first = await execute(c.access_token, permissionId, [transfer(BOB, 1n)], 'pay-bob');
+
+    const retry = await execute(c.access_token, permissionId, [transfer(BOB, 1n)], 'pay-bob');
+
+    expect(write).toHaveBeenCalledTimes(1);
+    const userOpHash = first.structuredContent.userOpHash;
+    expect(retry.structuredContent).toMatchObject({ status: 'reverted', userOpHash, txHash: TX });
+    expect(await rowsOf(t.connectionId)).toEqual([
+      expect.objectContaining({ state: 'released', callsId: userOpHash, txHash: TX }),
+    ]);
     expect(bridge.attempts).toBe(1);
   });
 

@@ -62,7 +62,9 @@ export async function handToReconciler(ids: string[], tx: Tx = getDb(), callsId?
     .where(and(inArray(sends.id, ids), eq(sends.state, 'open')));
 }
 
-export type SendEnd = { state: 'landed'; txHash: Hex; callsId?: Hex } | { state: 'released'; txHash?: Hex | null };
+export type SendEnd =
+  | { state: 'landed'; txHash: Hex; callsId?: Hex }
+  | { state: 'released'; txHash?: Hex | null; callsId?: Hex };
 
 export async function settleSends(ids: string[], end: SendEnd, tx: Tx = getDb()) {
   await tx
