@@ -472,6 +472,15 @@ describe('cli-bridge page with nobody on the other side', () => {
     expect(ws.close).not.toHaveBeenCalled();
   });
 
+  it('given a link opened again without its key, the page says the link is no longer active', async () => {
+    window.location.hash = '';
+
+    await act(async () => root.render(<CLIBridgePage />));
+
+    expect(host.textContent).toContain('This link is no longer active. Ask the agent for a new one.');
+    expect(FakeSocket.all).toHaveLength(0);
+  });
+
   it('just before the wait ends the page still waits', async () => {
     vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
     const ws = await start();

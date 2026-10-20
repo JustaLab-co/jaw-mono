@@ -23,7 +23,7 @@ const keys = new URL(env.KEYS_URL).origin;
 const log = (...a) => console.log(new Date().toISOString().slice(11, 23), ...a);
 const compose = (...args) =>
   execFileSync('docker', ['compose', '-p', env.COMPOSE_PROJECT, '-f', 'tools/verify/compose.yaml', ...args], {
-    stdio: ['ignore', 'pipe', 'inherit'],
+    stdio: ['ignore', 'pipe', 'pipe'],
   }).toString();
 
 const browser = await chromium.launch();
@@ -31,11 +31,7 @@ const browser = await chromium.launch();
 /** Runs the connect page up to the wallet link and returns it without opening it. */
 async function walletLink() {
   const ctx = await browser.newContext();
-  let link;
-  await ctx.route(`${keys}/**`, (route) => {
-    link ??= route.request().url();
-    return route.abort();
-  });
+  await ctx.route(`${keys}/cli-bridge**`, (route) => route.abort());
   const page = await ctx.newPage();
   const params = new URLSearchParams({
     client_id: 'jaw-cli',
@@ -48,11 +44,12 @@ async function walletLink() {
     code_challenge_method: 'S256',
   });
   await page.goto(`${base}/oauth/authorize?${params}`);
+  const opened = page.waitForResponse((r) => r.url().endsWith('/open') && r.request().method() === 'POST');
   await page.click('#open');
-  for (let i = 0; i < 100 && !link; i++) await page.waitForTimeout(100);
+  const { url } = await (await opened).json();
   await ctx.close();
-  if (!link) throw new Error('the connect page gave no wallet link');
-  return link;
+  if (!url) throw new Error('the connect page gave no wallet link');
+  return url;
 }
 
 /** Opens a link on the real wallet page and reports what it says after `ms`. */
