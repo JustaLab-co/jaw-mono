@@ -1,8 +1,4 @@
 // @vitest-environment jsdom
-// The grant screen reads what the spender already holds from the account
-// itself, so the app asking for more cannot understate it. The dialog is
-// stubbed: under test is what the wrapper shows and that the grant it sends is
-// the request, untouched by the read.
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { act } from 'react';
 
@@ -128,11 +124,11 @@ describe('ReactUIHandler shows what the spender already holds next to the grant'
     });
   });
 
-  it('given the lookup fails, then the screen is told the total is unknown', async () => {
+  it('given the lookup fails, then the screen is told the total is unreadable', async () => {
     getPermissions.mockRejectedValue(new Error('500'));
     await openGrant();
 
-    expect(dialogProps.heldGrants).toEqual({ status: 'unknown' });
+    expect(dialogProps.heldGrants).toEqual({ status: 'unreadable' });
   });
 
   it('given held grants on screen, when approved, then grants exactly the request', async () => {

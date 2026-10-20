@@ -26,13 +26,9 @@ export type SpenderPrefundDisplay =
   | { kind: 'transfer'; amount: string; symbol: string }
   | { kind: 'below-one-operation'; operationCost: string; symbol: string };
 
-/**
- * What the spender already holds from this account, as the wallet read it. `unknown` means the
- * read failed: the screen says so rather than show nothing, which would read as zero.
- */
 export type HeldGrantsDisplay =
   | { status: 'loading' }
-  | { status: 'unknown' }
+  | { status: 'unreadable' }
   | { status: 'ready'; count: number; totals: SpendPermission[] };
 
 export interface CallPermission {
@@ -75,7 +71,6 @@ export interface PermissionDialogProps {
   prefund?: SpenderPrefundDisplay | null;
   /** Grant only: the prefund is still being sized, so Confirm waits for it. */
   prefundLoading?: boolean;
-  /** Grant only: the live grants this spender already holds. Display only, and never gates Confirm. */
   heldGrants?: HeldGrantsDisplay;
 
   // Period and expiry

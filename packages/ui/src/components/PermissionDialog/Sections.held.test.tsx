@@ -9,10 +9,6 @@ const USDC = '0x036cbd53842c5426634e7929541ec2318f3dcf7e';
 const markup = (held?: HeldGrantsDisplay) =>
   renderToStaticMarkup(<HeldGrantsNotice held={held} chainId={84532} nativeSymbol="ETH" />);
 
-/**
- * Approving a second grant to the same key raised what it could spend with nothing on the
- * screen to say so. The screen now shows what the key already holds next to the new request.
- */
 describe('the grant screen shows what the spender already holds', () => {
   it('given live grants, then states their count and the total per token and period', () => {
     const html = markup({
@@ -41,7 +37,7 @@ describe('the grant screen shows what the spender already holds', () => {
   });
 
   it('given the lookup failed, then says the total is unknown, never zero', () => {
-    const html = markup({ status: 'unknown' });
+    const html = markup({ status: 'unreadable' });
 
     expect(html).toContain('Couldn&#x27;t check what this key already holds');
     expect(html).toContain('its total is unknown');

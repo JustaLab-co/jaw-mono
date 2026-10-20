@@ -8,7 +8,6 @@ import {
 } from '@jaw.id/core';
 import { getPublicClient } from '../utils/publicClient';
 
-/** One token and period across every live grant to the spender, summed. */
 export interface HeldTotal {
   token: Address;
   unit: SpendPeriod;
@@ -17,13 +16,11 @@ export interface HeldTotal {
 }
 
 export interface HeldGrants {
-  /** Live grants to the spender, spend limits or not. */
   count: number;
   totals: HeldTotal[];
 }
 
-/** `unknown` is never zero: the screen says it could not check. */
-export type HeldGrantsState = { status: 'loading' } | { status: 'unknown' } | { status: 'ready'; held: HeldGrants };
+export type HeldGrantsState = { status: 'loading' } | { status: 'unreadable' } | { status: 'ready'; held: HeldGrants };
 
 const LOOKUP_TIMEOUT_MS = 8_000;
 
@@ -39,7 +36,6 @@ const MANAGER_ABI = parseAbi([
 // a permission that does not exist.
 const PERIOD_UNIT = { minute: 0, hour: 1, day: 2, week: 3, month: 4, forever: 5 } as const;
 
-/** The index rows still live for this spender on this chain, once each. */
 export function liveForSpender(
   rows: StorePermissionApiResponse[],
   { spender, chainId, now }: { spender: Address; chainId: number; now: number }
@@ -96,12 +92,7 @@ function contractPermission(row: StorePermissionApiResponse) {
   };
 }
 
-/**
- * The index is not told about a revocation the spender sends itself, so the
- * chain has the last word. A row whose read fails is kept: a total that is too
- * high is honest about the risk, one that is too low is not.
- */
-async function dropRevoked(rows: StorePermissionApiResponse[], chainId: number, rpcUrl: string) {
+async function dropProvenRevoked(rows: StorePermissionApiResponse[], chainId: number, rpcUrl: string) {
   const client = getPublicClient(chainId, rpcUrl);
   const revoked = await Promise.all(
     rows.map((row) =>
@@ -124,7 +115,7 @@ async function readHeld(args: UseHeldGrantsArgs & { address: Address; spender: A
     args.apiKey
   )) as StorePermissionApiResponse[];
   const live = liveForSpender(rows, { spender: args.spender, chainId: args.chainId, now: Date.now() / 1000 });
-  return totalsOf(args.rpcUrl ? await dropRevoked(live, args.chainId, args.rpcUrl) : live);
+  return totalsOf(args.rpcUrl ? await dropProvenRevoked(live, args.chainId, args.rpcUrl) : live);
 }
 
 export interface UseHeldGrantsArgs {
@@ -135,30 +126,25 @@ export interface UseHeldGrantsArgs {
   rpcUrl?: string;
 }
 
-/**
- * What the spender already holds from this account, read by the wallet itself
- * so the app asking for more cannot understate it. Display only: nothing here
- * reaches the grant that is signed.
- */
 export function useHeldGrants({ address, spender, chainId, apiKey, rpcUrl }: UseHeldGrantsArgs): HeldGrantsState {
   const [state, setState] = useState<HeldGrantsState>({ status: 'loading' });
 
   useEffect(() => {
     setState({ status: 'loading' });
     if (!address || !spender) {
-      setState({ status: 'unknown' });
+      setState({ status: 'unreadable' });
       return;
     }
     let cancelled = false;
     const timer = setTimeout(() => {
       cancelled = true;
-      setState({ status: 'unknown' });
+      setState({ status: 'unreadable' });
     }, LOOKUP_TIMEOUT_MS);
     readHeld({ address, spender, chainId, apiKey, rpcUrl })
       .then((held) => !cancelled && setState({ status: 'ready', held }))
       .catch((error: unknown) => {
         console.warn('[useHeldGrants] Could not read the spender grants:', error);
-        if (!cancelled) setState({ status: 'unknown' });
+        if (!cancelled) setState({ status: 'unreadable' });
       })
       .finally(() => clearTimeout(timer));
     return () => {

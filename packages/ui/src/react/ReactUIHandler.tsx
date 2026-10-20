@@ -2545,7 +2545,6 @@ function PermissionDialogWrapper({
 
   // Note: Gas estimation is now handled by useGasEstimation hook
 
-  // A spend limit as the screen shows it: the request's own, and the totals the spender already holds.
   const toSpendRow = useCallback(
     (spend: { token: string; allowance: string | bigint; unit: string; multiplier?: number }) => {
       const tokenInfo =

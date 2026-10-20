@@ -203,10 +203,6 @@ export function SpendLimits({
 
 const HELD_HEADING = 'Already granted to this key';
 
-/**
- * What the spender already holds from this account, next to what it asks for now, so a second
- * grant cannot quietly raise what it may spend.
- */
 export function HeldGrantsNotice({
   held,
   chainId,
@@ -218,7 +214,7 @@ export function HeldGrantsNotice({
 }) {
   if (!held || (held.status === 'ready' && held.count === 0)) return null;
 
-  if (held.status === 'unknown') {
+  if (held.status === 'unreadable') {
     return (
       <p className="text-muted-foreground text-body-sm">
         Couldn&apos;t check what this key already holds from your account, so its total is unknown. It may hold more

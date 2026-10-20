@@ -163,19 +163,19 @@ describe('useHeldGrants', () => {
     expect(state).toMatchObject({ status: 'ready', held: { count: 1 } });
   });
 
-  it('given the index lookup fails, when the screen opens, then reports unknown, not zero', async () => {
+  it('given the index lookup fails, when the screen opens, then reports unreadable, not zero', async () => {
     getPermissions.mockRejectedValue(new Error('500'));
     await render();
 
-    expect(state).toEqual({ status: 'unknown' });
+    expect(state).toEqual({ status: 'unreadable' });
   });
 
-  it('given the index never answers, when the timeout passes, then reports unknown', async () => {
+  it('given the index never answers, when the timeout passes, then reports unreadable', async () => {
     getPermissions.mockReturnValue(new Promise(() => undefined));
     await render();
     expect(state).toEqual({ status: 'loading' });
 
     await act(async () => vi.advanceTimersByTime(8_000));
-    expect(state).toEqual({ status: 'unknown' });
+    expect(state).toEqual({ status: 'unreadable' });
   });
 });
