@@ -98,6 +98,31 @@ describe('a sign request whose server restarted', () => {
     }
   );
 
+  it('given the relay drops this server while the owner decides, then the request keeps its relay session and the next tick resumes it to approved', async () => {
+    const { signer, t } = await connected();
+    const message = 'sign in';
+    const owned = deciding(async (method) =>
+      method === 'eth_requestAccounts' ? [signer.address] : signer.signMessage({ message })
+    );
+    const first = await sign(t, { message }, { openWallet: stallsAfter(9).openWallet });
+    const page = await replayingPage(first.structuredContent!.url!, owned.answer);
+    await vi.waitFor(() => expect(page.ids).toHaveLength(2));
+    const [row] = await rowsOf(t);
+
+    relay.sessions.get(new URL(first.structuredContent!.url!).searchParams.get('session')!)!.cli!.close();
+    await vi.waitFor(async () => expect((await rowOf(row.id)).sessionUntil).toBeNull());
+    expect(await rowOf(row.id)).toMatchObject({ state: 'awaiting_owner', relay: expect.any(String) });
+    await getDb()
+      .update(permissionRequests)
+      .set({ sessionUntil: sql`statement_timestamp() - interval '2 minutes'` })
+      .where(eq(permissionRequests.id, row.id));
+
+    await resumeSigns();
+    owned.decide();
+
+    expect(await settled(row.id)).toMatchObject({ state: 'approved' });
+  });
+
   it('given the page was closed, when the server rejoins, then the row ends link_lost and nothing is stored to resume', async () => {
     const { row, page } = await askedThenRestarted();
     page.close();

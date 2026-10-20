@@ -104,8 +104,16 @@ const heldBy = (row: OwnerCallRow, states: OwnerCallState[]) =>
 
 export const { renew: renewSession, end: endSession } = leasedCalls;
 
-export const setCode = (row: OwnerCallRow, code: string) =>
-  write(and(heldBy(row, ['awaiting_owner']), sql`${ownerCalls.code} is distinct from ${SEND_STARTED}`), { code });
+/** `unlessRejoinable` leaves a row that keeps a relay session to its next resume. */
+export const setCode = (row: OwnerCallRow, code: string, { unlessRejoinable = false } = {}) =>
+  write(
+    and(
+      heldBy(row, ['awaiting_owner']),
+      sql`${ownerCalls.code} is distinct from ${SEND_STARTED}`,
+      unlessRejoinable ? isNull(ownerCalls.relay) : undefined
+    ),
+    { code }
+  );
 
 export const decline = (row: OwnerCallRow, code: string) =>
   write(heldBy(row, ['awaiting_owner']), { state: 'owner_declined', code, relay: null });

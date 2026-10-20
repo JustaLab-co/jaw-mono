@@ -282,16 +282,31 @@ function follow(row: PermissionRequestRow, wallet: Wallet, work: Work) {
     log('warn', { msg: 'permission request ended', permissionRequestId: row.id, error: errorLabel(err) });
     return outcomeOf(err, row, asked);
   };
-  const joined = (resume: RelayResume) => leased.saveRelay(row, sealResume(config().ring, resume, row.id));
+  let rejoinable = row.relay !== null;
+  const joined = async (resume: RelayResume) => {
+    if (await leased.saveRelay(row, sealResume(config().ring, resume, row.id))) rejoinable = true;
+  };
+  // A run that fails on the way, not on an answer, leaves the row to the next resume.
+  const onTheWay = (err: unknown) =>
+    rejoinable && !(err instanceof PageGone) && typeof (err as { code?: unknown } | undefined)?.code !== 'number';
   let answered = false;
   void wallet
     .run(async (ask) => {
-      const outcome = await work(ask, claim).catch(ended);
+      const outcome = await work(ask, claim).catch((err: unknown) => {
+        if (onTheWay(err)) throw err;
+        return ended(err);
+      });
       answered = true;
       await settle(row, outcome);
     }, joined)
     .catch((err: unknown) => {
       if (answered) throw err;
+      if (onTheWay(err))
+        return log('warn', {
+          msg: 'permission request left to resume',
+          permissionRequestId: row.id,
+          error: errorLabel(err),
+        });
       return settle(row, ended(err));
     })
     .catch((err: unknown) =>

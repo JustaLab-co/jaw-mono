@@ -65,6 +65,7 @@ export async function approve(
     ]);
   } catch (err) {
     const code = codeOf(err);
+    if (typeof code !== 'number') throw err;
     if (code === USER_REJECTED) await decline(row, 'owner_declined');
     else if (refusedBeforeSubmit(code)) await decline(row, `wallet_error:${code}`);
     return;
@@ -128,6 +129,7 @@ async function recordRefusal(row: SwapRow, err: unknown): Promise<void> {
     return;
   }
   if (Date.now() < (row.approveBy as Date).getTime() - SESSION_END_MARGIN_MS) {
-    await recordCode(row, 'wallet_error:unknown');
+    await recordCode(row, 'wallet_error:unknown', { unlessRejoinable: true });
   }
+  throw err;
 }

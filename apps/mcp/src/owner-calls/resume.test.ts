@@ -158,6 +158,28 @@ describe('owner calls whose server restarted after the send started', () => {
     expect(await sent(id)).toMatchObject({ callsId: CALLS_ID });
   });
 
+  it('given the relay drops this server while the owner decides, then the call keeps its relay session and the next tick resumes it to sent', async () => {
+    const t = await connected();
+    const owned = deciding(t);
+    const first = await sendCalls(t, { calls: [CALL] }, depsOf(stallsAfter(9).openWallet));
+    const id = first.structuredContent!.id;
+    const page = await replayingPage(first.structuredContent!.url!, owned.answer);
+    await vi.waitFor(() => expect(page.ids).toHaveLength(2));
+
+    relay.sessions.get(new URL(first.structuredContent!.url!).searchParams.get('session')!)!.cli!.close();
+    await vi.waitFor(async () => expect((await rowOf(id)).sessionUntil).toBeNull());
+    expect((await rowOf(id)).relay).not.toBeNull();
+    await getDb()
+      .update(ownerCalls)
+      .set({ sessionUntil: sql`statement_timestamp() - interval '2 minutes'` })
+      .where(eq(ownerCalls.id, id));
+
+    await Promise.all(await resumeOwnerCalls(clients));
+    owned.decide();
+
+    expect(await sent(id)).toMatchObject({ callsId: CALLS_ID });
+  });
+
   it('given an old process still waiting on the page, when a resumer joins the session, then the relay drops the old socket and its run ends', async () => {
     const t = await connected();
     const owned = deciding(t);

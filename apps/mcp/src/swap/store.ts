@@ -284,7 +284,9 @@ export const decline = (row: SwapRow, code: string) =>
 export const recordCallsId = (row: SwapRow, callsId: string) =>
   write(heldBy(row, ['awaiting_owner', 'expired']), { state: 'deposit_sent', callsId, code: null, relay: null });
 
-export const recordCode = (row: SwapRow, code: string) => write(heldBy(row, ['awaiting_owner', 'expired']), { code });
+/** `unlessRejoinable` leaves a row that keeps a relay session to its next resume. */
+export const recordCode = (row: SwapRow, code: string, { unlessRejoinable = false } = {}) =>
+  write(and(heldBy(row, ['awaiting_owner', 'expired']), unlessRejoinable ? isNull(swaps.relay) : undefined), { code });
 
 export const DEPOSIT_FAILED = 'deposit_failed';
 export const DEPOSIT_REVERTED = 'deposit_reverted';
