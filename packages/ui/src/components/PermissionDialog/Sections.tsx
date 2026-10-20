@@ -213,6 +213,28 @@ export function hasChecker(call: CallPermission): call is CallPermission & { che
 }
 
 /**
+ * The checker contract named as an extra rule. The SDK can't say what a given checker enforces,
+ * so it names the contract and says the rule is unverified.
+ */
+function CheckerNotice({
+  checker,
+  truncateAddress,
+}: {
+  checker: string;
+  truncateAddress: (address: string) => string;
+}) {
+  return (
+    <span className="text-warning text-body-xs flex items-center gap-1.5">
+      <TriangleAlert className="size-3 flex-none" strokeWidth={2.4} />
+      <span className="min-w-0">
+        Extra rule enforced by <span className="font-mono">{truncateAddress(checker)}</span> · Unverified rule
+      </span>
+      <CopyButton value={checker} size={11} label="Copy rule contract address" />
+    </span>
+  );
+}
+
+/**
  * One allowed function, plus the checker contract that has to approve each call to it. The SDK
  * can't say what a given checker enforces, so it names the contract and says the rule is
  * unverified; it never shows a description the checker gives of itself.
@@ -240,12 +262,8 @@ export function CallRow({
         </span>
       )}
       {hasChecker(call) && (
-        <span className="text-warning text-body-xs flex items-center gap-1.5 pl-3">
-          <TriangleAlert className="size-3 flex-none" strokeWidth={2.4} />
-          <span className="min-w-0">
-            Extra rule enforced by <span className="font-mono">{truncateAddress(call.checker)}</span> · Unverified rule
-          </span>
-          <CopyButton value={call.checker} size={11} label="Copy rule contract address" />
+        <span className="pl-3">
+          <CheckerNotice checker={call.checker} truncateAddress={truncateAddress} />
         </span>
       )}
     </li>
@@ -377,7 +395,9 @@ export function AllowedCalls({
   chainId?: number;
 }) {
   const groups = groupCallsByTarget(calls);
-  const ruleCount = calls.filter(hasChecker).length;
+  // Each distinct checker once, in first-seen order. Outside the disclosure, because the user signs
+  // these rules and should see them without opening anything.
+  const checkers = [...new Map(calls.filter(hasChecker).map((c) => [c.checker.toLowerCase(), c.checker])).values()];
 
   return (
     <Accordion type="single" collapsible>
@@ -386,13 +406,17 @@ export function AllowedCalls({
           <span className="flex flex-1 items-baseline gap-1.5">
             <Eyebrow>Allowed calls</Eyebrow>
             <span className="text-muted-foreground text-code font-mono font-medium">{calls.length}</span>
-            {ruleCount > 0 && (
-              <span className="text-warning text-code font-mono font-medium">
-                · {ruleCount} extra {ruleCount === 1 ? 'rule' : 'rules'}
-              </span>
-            )}
           </span>
         </AccordionTrigger>
+        {checkers.length > 0 && (
+          <ul className="border-border/40 flex flex-col gap-1 border-t px-3 py-2">
+            {checkers.map((checker) => (
+              <li key={checker}>
+                <CheckerNotice checker={checker} truncateAddress={truncateAddress} />
+              </li>
+            ))}
+          </ul>
+        )}
         <AccordionContent className="border-border/40 border-t p-0">
           <Accordion type="multiple">
             {groups.map((group) => (

@@ -49,12 +49,26 @@ describe('a call checker on the grant screen', () => {
     expect(row(transfer(checker))).not.toContain('Extra rule');
   });
 
-  it('counts the extra rules on the collapsed card, so they show before anything is opened', () => {
+  it('names the checker contract on the collapsed card, so it shows before anything is opened', () => {
     const html = renderToStaticMarkup(
       <AllowedCalls calls={[transfer(CHECKER), transfer()]} identityOf={() => undefined} truncateAddress={truncate} />
     );
 
-    expect(html).toContain('1 extra rule');
+    expect(html).toContain('Extra rule enforced by');
+    expect(html).toContain('0x8888…8888');
+    expect(html).toContain('Unverified rule');
+  });
+
+  it('names a checker once on the collapsed card, however many calls it guards', () => {
+    const html = renderToStaticMarkup(
+      <AllowedCalls
+        calls={[transfer(CHECKER), { ...transfer(CHECKER), selector: '0x095ea7b3' }]}
+        identityOf={() => undefined}
+        truncateAddress={truncate}
+      />
+    );
+
+    expect(html.split('Extra rule enforced by').length - 1).toBe(1);
   });
 
   it('says nothing about rules on a collapsed card without any', () => {
@@ -62,6 +76,6 @@ describe('a call checker on the grant screen', () => {
       <AllowedCalls calls={[transfer(), transfer(ZERO)]} identityOf={() => undefined} truncateAddress={truncate} />
     );
 
-    expect(html).not.toContain('extra rule');
+    expect(html).not.toContain('Extra rule');
   });
 });
