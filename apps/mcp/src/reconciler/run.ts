@@ -153,19 +153,18 @@ async function sendOutcome(row: SendRow, clients: ChainClients): Promise<SendEnd
   const client = clients.publicClient(row.chainId);
   const head = await client.getBlockNumber();
   const windowEnd = row.fromBlock + SEND_WINDOW_BLOCKS;
-  const fromTransfer = row.idempotencyKey === null;
-  if (!fromTransfer && !row.callsId) return head >= windowEnd ? { state: 'released' } : undefined;
+  if (!row.callsId) return head >= windowEnd ? { state: 'released' } : undefined;
   const logs = await client.getLogs({
     address: entryPoint08Address,
     event: userOperationEvent,
-    args: row.callsId ? { userOpHash: row.callsId as Hex } : { sender: row.sender as Address },
+    args: { userOpHash: row.callsId as Hex },
     fromBlock: row.fromBlock,
     toBlock: head < windowEnd ? head : windowEnd,
     strict: true,
   });
   const landed = logs.find((l) => l.args.success);
   if (landed) return { state: 'landed', txHash: landed.transactionHash };
-  if (row.callsId && logs.length > 0) return { state: 'released', txHash: logs[0].transactionHash };
+  if (logs.length > 0) return { state: 'released', txHash: logs[0].transactionHash };
   if (head >= windowEnd) return { state: 'released' };
   return undefined;
 }
