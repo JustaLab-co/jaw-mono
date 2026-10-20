@@ -1,4 +1,4 @@
-import { and, asc, eq, gt, inArray, isNotNull, isNull, lte, or, sql, type SQL } from 'drizzle-orm';
+import { and, asc, eq, gt, inArray, isNotNull, isNull, lt, lte, or, sql, type SQL } from 'drizzle-orm';
 import type { PgColumn, PgTable } from 'drizzle-orm/pg-core';
 import { heldSince, sessionLeaseEnd } from '@/connections/session-lease';
 import { randomToken } from '@/lib/token';
@@ -12,7 +12,11 @@ type LeasedTable = PgTable & {
   relay: PgColumn;
   leaseHolder: PgColumn;
   updatedAt: PgColumn;
+  resumeFailures: PgColumn;
 };
+
+/** Rejoins that may fail before a row is left to the rules of a lost link. */
+export const REJOIN_TRIES = 5;
 
 type Held = { id: string; leaseHolder: string | null };
 
@@ -34,7 +38,8 @@ export function leasedRows<R extends Held>(table: LeasedTable) {
     awaiting,
     gt(table.approveBy, dbNow),
     or(isNull(table.sessionUntil), lte(table.sessionUntil, heldSince)),
-    isNotNull(table.relay)
+    isNotNull(table.relay),
+    lt(table.resumeFailures, REJOIN_TRIES)
   );
   return {
     heldBy,
@@ -53,6 +58,8 @@ export function leasedRows<R extends Held>(table: LeasedTable) {
     renew: (row: R) => write(and(heldBy(row), awaiting), { sessionUntil: sessionLeaseEnd }),
     release: (row: R) => write(and(heldBy(row), open), { sessionUntil: null }),
     end: (row: R) => write(and(heldBy(row), open), { sessionUntil: null, relay: null }),
+    failed: (row: R) =>
+      write(and(heldBy(row), open), { sessionUntil: null, resumeFailures: sql`${table.resumeFailures} + 1` }),
     saveRelay: (row: R, relay: string) => write(and(heldBy(row), awaiting), { relay }),
     holderOf: async (row: R) => {
       const [found] = await getDb().select({ holder: table.leaseHolder }).from(table).where(eq(table.id, row.id));

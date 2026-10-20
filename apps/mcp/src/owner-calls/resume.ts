@@ -13,6 +13,7 @@ const rejoin = (clients: ChainClients): Rejoin<OwnerCallRow> => ({
   idField: 'ownerCallId',
   take: leasedCalls.take,
   release: leasedCalls.release,
+  failed: leasedCalls.failed,
   lost: leasedCalls.end,
   start: (row) => (wallet) => followCalls(row, wallet, clients),
 });

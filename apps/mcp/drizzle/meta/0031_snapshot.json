@@ -1,5 +1,5 @@
 {
-  "id": "2624744a-c96d-4d8e-bc7f-272d74ee6aae",
+  "id": "acca0309-309c-432e-a821-b8a6f4c3952b",
   "prevId": "2455d8b7-ebce-4265-8902-588e0ddb82d0",
   "version": "7",
   "dialect": "postgresql",
@@ -588,6 +588,13 @@
           "type": "text",
           "primaryKey": false,
           "notNull": false
+        },
+        "resume_failures": {
+          "name": "resume_failures",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "default": 0
         },
         "calls_id": {
           "name": "calls_id",
@@ -1207,6 +1214,13 @@
           "type": "text",
           "primaryKey": false,
           "notNull": false
+        },
+        "resume_failures": {
+          "name": "resume_failures",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "default": 0
         },
         "created_at": {
           "name": "created_at",
@@ -1864,6 +1878,13 @@
           "type": "text",
           "primaryKey": false,
           "notNull": false
+        },
+        "resume_failures": {
+          "name": "resume_failures",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "default": 0
         },
         "calls_id": {
           "name": "calls_id",

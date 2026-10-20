@@ -17,12 +17,14 @@ export async function startRelay() {
   const fromServer = new Map<string, number>();
   const sessions = new Map<string, { cli?: WebSocket; browser?: WebSocket }>();
   const silent = new Set<string>();
+  const refused = new Set<string>();
   const relay = new WebSocketServer({ port: 0, host: '127.0.0.1' });
   relay.on('connection', (ws, req) => {
     const url = new URL(req.url ?? '/', 'ws://relay');
     const id = url.searchParams.get('session')!;
     const role = url.searchParams.get('role') as 'cli' | 'browser';
     const pair = sessions.get(id) ?? {};
+    if (refused.has(id)) return ws.close();
     // As jaw-relay does, a second cli replaces the first.
     if (role === 'cli') pair.cli?.close(4003, 'replaced');
     pair[role] = ws;
@@ -47,6 +49,7 @@ export async function startRelay() {
     fromServer,
     sessions,
     silent,
+    refused,
     close: () => relay.close(),
   };
 }

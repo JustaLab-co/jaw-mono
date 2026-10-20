@@ -4,6 +4,7 @@ import { config } from './config';
 import { resumeWallet, WalletBusy, type Wallet } from './relay';
 import { findActive, type ConnectionRow } from './rows';
 import { openResume } from './seal';
+import { REJOIN_TRIES } from '@/db/leased';
 
 // The relay takes 20 new connections a minute from one IP, and fresh links share them.
 export const REJOINS_PER_TICK_UNDER_RELAY_IP_LIMIT = 5;
@@ -23,6 +24,8 @@ export interface Rejoin<R extends Resumable> {
   idField: 'permissionRequestId' | 'ownerCallId' | 'swapId';
   take: (row: R) => Promise<R | undefined>;
   release: (row: R) => Promise<unknown>;
+  /** Gives the row back with one more failed rejoin counted; returns it as written. */
+  failed: (row: R) => Promise<(R & { resumeFailures: number }) | undefined>;
   lost: (row: R, why: Lost) => Promise<unknown>;
   /** Undefined when the stored work cannot be rebuilt. */
   start: (row: R, t: Tenant) => ((wallet: Wallet) => void) | undefined;
@@ -56,7 +59,7 @@ export const resumeRow = <R extends Resumable>(row: R, rejoin: Rejoin<R>): Promi
     log('warn', { msg: 'relay session not resumed', [rejoin.idField]: row.id, error: errorLabel(err) })
   );
 
-async function resumeOne<R extends Resumable>(found: R, { take, release, lost, start }: Rejoin<R>) {
+async function resumeOne<R extends Resumable>(found: R, { take, release, failed, lost, start }: Rejoin<R>) {
   const row = await take(found);
   if (!row) return;
   const connection = await findActive(row.connectionId);
@@ -70,8 +73,9 @@ async function resumeOne<R extends Resumable>(found: R, { take, release, lost, s
   try {
     wallet = await resumeWallet(relay, row.walletUrl!, row.approveBy!, t);
   } catch (err) {
-    await release(row);
-    if (err instanceof WalletBusy) return;
+    if (err instanceof WalletBusy) return void (await release(row));
+    const counted = await failed(row);
+    if (counted && counted.resumeFailures >= REJOIN_TRIES) await lost(row, 'unopenable');
     throw err;
   }
   if (!wallet) return void (await lost(row, 'page_gone'));

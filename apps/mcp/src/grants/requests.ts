@@ -333,6 +333,7 @@ const rejoinWith = (rebuildOf: (row: PermissionRequestRow) => Rebuild): Rejoin<P
   idField: 'permissionRequestId',
   take: leased.take,
   release: leased.release,
+  failed: leased.failed,
   lost: (row, why) => settle(row, lostAs(row, why)),
   start: (row, t) => {
     const payload = parsed(row.payload);

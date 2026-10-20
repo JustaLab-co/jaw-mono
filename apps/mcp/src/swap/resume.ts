@@ -15,6 +15,7 @@ const rejoin = (deps: SwapRunDeps): Rejoin<SwapRow> => ({
   idField: 'swapId',
   take: leasedSwaps.take,
   release: leasedSwaps.release,
+  failed: leasedSwaps.failed,
   lost: leasedSwaps.end,
   start: (row, t) => (wallet) => followSwap(t.account, row, wallet, deps),
 });

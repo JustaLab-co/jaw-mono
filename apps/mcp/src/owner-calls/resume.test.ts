@@ -1,4 +1,4 @@
-import { randomBytes } from 'node:crypto';
+import { generateKeyPairSync, randomBytes } from 'node:crypto';
 import { eq, sql } from 'drizzle-orm';
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import { verifyBearer, type Tenant } from '@/connections/auth';
@@ -433,6 +433,22 @@ describe('which owner calls a resume picks', () => {
 
     expect((await rowOf(id)).relay).toBeNull();
     expect(relay.sessions.has(id.slice('oc_'.length))).toBe(false);
+  });
+
+  it("given a call whose rejoin keeps failing, then after five tries it is left to today's rules and frees its slot", async () => {
+    const pair = generateKeyPairSync('ec', { namedCurve: 'P-256' });
+    const id = await waitingCall({
+      minutesAgo: 3_000,
+      sealed: {
+        key: pair.privateKey.export({ format: 'der', type: 'pkcs8' }).toString('hex'),
+        peer: pair.publicKey.export({ format: 'der', type: 'spki' }).toString('hex'),
+      },
+    });
+    relay.refused.add(id.slice('oc_'.length));
+
+    for (let tick = 0; tick < 5; tick++) await Promise.all(await resumeOwnerCalls(clients));
+
+    expect(await rowOf(id)).toMatchObject({ relay: null, resumeFailures: 5, sessionUntil: null });
   });
 
   it('given a lease that ended inside the stall grace, then no resume takes it over until the grace passes', async () => {
