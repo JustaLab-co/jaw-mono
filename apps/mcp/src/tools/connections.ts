@@ -109,7 +109,7 @@ export function registerConnectionTools(server: McpServer) {
     {
       description:
         'Every app connected to this account through this server, this one included, with the grants each one holds by permissionId: kind, spend limits, expiry and whether it is live, expired or revoked. ' +
-        'jaw_revoke_permission revokes one; jaw_status shows what is left of the x402 budget today.',
+        'jaw_revoke_permission revokes one; jaw_session_status shows what is left of the x402 budget today.',
       inputSchema: z.strictObject({}),
       outputSchema: z.object({ connections: z.array(connectionView), summary: z.string() }),
       annotations: { readOnlyHint: true },
