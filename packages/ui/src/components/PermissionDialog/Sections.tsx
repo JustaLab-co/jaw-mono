@@ -22,7 +22,7 @@ export { isWildcard };
  */
 export function spendRate(duration?: string): string {
   const value = duration?.trim();
-  if (!value || /^forever$/i.test(value)) return '';
+  if (!value || /(^|\s)forever$/i.test(value)) return '';
   const match = /^(\d+)\s+(.+)$/.exec(value);
   if (!match) return `/${value.toLowerCase()}`;
   const [, count, unit] = match;
@@ -212,7 +212,11 @@ export function HeldGrantsNotice({
   chainId?: number;
   nativeSymbol: string;
 }) {
-  if (!held || (held.status === 'ready' && held.count === 0)) return null;
+  if (!held) return null;
+
+  if (held.status === 'ready' && held.count === 0) {
+    return <p className="text-muted-foreground text-body-sm">No other active grants to this key were found.</p>;
+  }
 
   if (held.status === 'unreadable') {
     return (

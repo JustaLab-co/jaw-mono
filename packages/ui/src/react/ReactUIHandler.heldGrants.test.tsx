@@ -15,10 +15,16 @@ vi.mock('@jaw.id/core', async (importActual) => {
   };
 });
 
+const WETH = '0x4200000000000000000000000000000000000006';
+let wethHangs = false;
 vi.mock('../utils/publicClient', () => ({
   getPublicClient: () => ({
-    readContract: async ({ functionName }: { functionName: string }) =>
-      ({ decimals: 6, symbol: 'USDC', isRevoked: false })[functionName],
+    readContract: async ({ functionName, address }: { functionName: string; address: string }) => {
+      if (functionName === 'isRevoked') return false;
+      if (address.toLowerCase() === WETH)
+        return wethHangs ? new Promise(() => undefined) : { decimals: 18, symbol: 'WETH' }[functionName];
+      return { decimals: 6, symbol: 'USDC' }[functionName];
+    },
   }),
 }));
 
@@ -36,14 +42,24 @@ vi.mock('../hooks/useGasEstimation', () => ({
   }),
 }));
 
-type DialogProps = { onConfirm?: () => void; heldGrants?: unknown };
+type DialogProps = {
+  onConfirm?: () => void;
+  heldGrants?: unknown;
+  isLoadingTokenInfo?: boolean;
+  spends?: Array<{ token: string }>;
+};
 let dialogProps: DialogProps = {};
+let loadingHistory: boolean[] = [];
 vi.mock('../components/PermissionDialog', () => ({
   PermissionDialog: (props: DialogProps) => {
     dialogProps = props;
+    loadingHistory.push(!!props.isLoadingTokenInfo);
     return null;
   },
 }));
+
+/** Once the request's own token info settled, it never went back to loading. */
+const settledOnce = () => loadingHistory.slice(loadingHistory.indexOf(false)).every((loading) => !loading);
 
 const { ReactUIHandler } = await import('./ReactUIHandler');
 
@@ -67,7 +83,7 @@ const REQUEST = {
   },
 };
 
-const indexed = (spender: string, allowance: string) => ({
+const indexed = (spender: string, allowance: string, token = USDC) => ({
   permissionId: `0x${Math.random().toString(16).slice(2).padEnd(64, '0')}`,
   account: ACCOUNT.toLowerCase(),
   spender: spender.toLowerCase(),
@@ -77,7 +93,7 @@ const indexed = (spender: string, allowance: string) => ({
   calls: [
     { target: USDC.toLowerCase(), selector: '0xa9059cbb', checker: '0x0000000000000000000000000000000000000000' },
   ],
-  spends: [{ token: USDC.toLowerCase(), allowance, unit: 'day', multiplier: 1 }],
+  spends: [{ token: token.toLowerCase(), allowance, unit: 'day', multiplier: 1 }],
   chainId: '0x14a34',
 });
 
@@ -102,6 +118,8 @@ beforeEach(() => {
   grantPermissions.mockResolvedValue({ permissionId: '0xabc' });
   getPermissions.mockReset();
   dialogProps = {};
+  loadingHistory = [];
+  wethHangs = false;
 });
 afterEach(() => {
   document.body.innerHTML = '';
@@ -143,5 +161,42 @@ describe('ReactUIHandler shows what the spender already holds next to the grant'
       SPENDER,
       { spends: REQUEST.data.permissions.spends, calls: REQUEST.data.permissions.calls },
     ]);
+  });
+
+  it('given the held read hangs, then Confirm is not held and the request rows stay resolved', async () => {
+    getPermissions.mockReturnValue(new Promise(() => undefined));
+    await openGrant();
+
+    expect(dialogProps.heldGrants).toEqual({ status: 'loading' });
+    expect(dialogProps.isLoadingTokenInfo).toBe(false);
+    expect(dialogProps.spends?.[0].token).toBe('USDC');
+    expect(settledOnce()).toBe(true);
+  });
+
+  it('given a held token whose metadata hangs, then its row shows the address and Confirm is not held', async () => {
+    wethHangs = true;
+    getPermissions.mockResolvedValue([indexed(SPENDER, '5', WETH)]);
+    await openGrant();
+
+    expect(dialogProps.heldGrants).toEqual({
+      status: 'ready',
+      count: 1,
+      totals: [expect.objectContaining({ tokenAddress: WETH, token: '', amount: '5', decimalsUnknown: true })],
+    });
+    expect(dialogProps.isLoadingTokenInfo).toBe(false);
+    expect(dialogProps.spends?.[0].token).toBe('USDC');
+    expect(settledOnce()).toBe(true);
+  });
+
+  it('given a held token outside the request, then its row is named once its metadata lands', async () => {
+    getPermissions.mockResolvedValue([indexed(SPENDER, '1000000000000000000', WETH)]);
+    await openGrant();
+
+    expect(dialogProps.heldGrants).toEqual({
+      status: 'ready',
+      count: 1,
+      totals: [expect.objectContaining({ token: 'WETH', amount: '1' })],
+    });
+    expect(settledOnce()).toBe(true);
   });
 });

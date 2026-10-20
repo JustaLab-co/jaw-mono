@@ -2,7 +2,8 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { act, createElement } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
-import type { StorePermissionApiResponse } from '@jaw.id/core';
+import { encodeFunctionData, parseAbi } from 'viem';
+import { buildRevokePermissionCall, type StorePermissionApiResponse } from '@jaw.id/core';
 
 const getPermissions = vi.fn();
 const readContract = vi.fn();
@@ -13,7 +14,7 @@ vi.mock('@jaw.id/core', async (importActual) => ({
 }));
 vi.mock('../utils/publicClient', () => ({ getPublicClient: () => ({ readContract }) }));
 
-const { useHeldGrants, liveForSpender, totalsOf } = await import('./useHeldGrants');
+const { useHeldGrants, liveForSpender, totalsOf, contractPermission } = await import('./useHeldGrants');
 type State = ReturnType<typeof useHeldGrants>;
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
@@ -24,6 +25,25 @@ const OTHER = '0x3333333333333333333333333333333333333333' as const;
 const USDC = '0x036cbd53842c5426634e7929541ec2318f3dcf7e' as const;
 const CHAIN = 84532;
 const NOW = 1_800_000_000;
+
+// One row of a real wallet_getPermissions answer on Base Sepolia, allowance in hex.
+const INDEX_ROW: StorePermissionApiResponse = {
+  permissionId: '0x2196dd16ab725a46663273ac61f97e99969edcf3a3c3edaa523898b29cdee8b3',
+  account: '0x6ca44a56b06869530c953dfa7868973be1456769',
+  spender: '0x65c8f80520052212f80dfc4b4474a89b5b4bb0c7',
+  start: 1792452382,
+  end: 1795044352,
+  salt: '0x160ef24b5c1fd98738d69e86e0fee0412200c44e72f8951fd2b11ddd1cf08424',
+  spends: [{ token: '0x036cbd53842c5426634e7929541ec2318f3dcf7e', allowance: '0xf4240', unit: 'day', multiplier: 1 }],
+  calls: [
+    {
+      target: '0x036cbd53842c5426634e7929541ec2318f3dcf7e',
+      selector: '0xa9059cbb',
+      checker: '0x0000000000000000000000000000000000000000',
+    },
+  ],
+  chainId: '0x14a34',
+};
 
 let n = 0;
 function row(over: Partial<StorePermissionApiResponse> = {}): StorePermissionApiResponse {
@@ -94,6 +114,8 @@ describe('totalsOf', () => {
   });
 });
 
+const META: Record<string, unknown> = { isRevoked: false, decimals: 6, symbol: 'USDC' };
+
 describe('useHeldGrants', () => {
   let root: Root | null = null;
   let state: State | null = null;
@@ -113,7 +135,7 @@ describe('useHeldGrants', () => {
   beforeEach(() => {
     vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'Date'] });
     vi.setSystemTime(NOW * 1000);
-    readContract.mockResolvedValue(false);
+    readContract.mockImplementation(async ({ functionName }: { functionName: string }) => META[functionName]);
   });
 
   afterEach(() => {
@@ -136,13 +158,16 @@ describe('useHeldGrants', () => {
     expect(state).toEqual({
       status: 'ready',
       held: { count: 2, totals: [{ token: USDC, unit: 'day', multiplier: 1, allowance: 2_000_000n }] },
+      tokenInfo: { [USDC]: { decimals: 6, symbol: 'USDC' } },
     });
   });
 
   it('given the chain reports one grant revoked, when the screen opens, then leaves it out', async () => {
     const revoked = row({ salt: '0x0bad' });
     getPermissions.mockResolvedValue([row(), revoked]);
-    readContract.mockImplementation(async ({ args: [p] }) => p.salt === 0xbadn);
+    readContract.mockImplementation(async ({ functionName, args }) =>
+      functionName === 'isRevoked' ? args[0].salt === 0xbadn : META[functionName]
+    );
     await render();
 
     expect(state).toMatchObject({ status: 'ready', held: { count: 1 } });
@@ -177,5 +202,37 @@ describe('useHeldGrants', () => {
 
     await act(async () => vi.advanceTimersByTime(8_000));
     expect(state).toEqual({ status: 'unreadable' });
+  });
+
+  it('given the token metadata never answers, when the timeout passes, then the totals stay shown without it', async () => {
+    getPermissions.mockResolvedValue([row()]);
+    readContract.mockImplementation(async ({ functionName }: { functionName: string }) =>
+      functionName === 'isRevoked' ? false : new Promise(() => undefined)
+    );
+    await render();
+    expect(state).toMatchObject({ status: 'ready', held: { count: 1 }, tokenInfo: {} });
+
+    await act(async () => vi.advanceTimersByTime(8_000));
+    expect(state).toMatchObject({ status: 'ready', held: { count: 1 }, tokenInfo: {} });
+  });
+});
+
+describe('contractPermission', () => {
+  const REVOKE_ABI = parseAbi([
+    'struct CallPermission { address target; bytes4 selector; address checker; }',
+    'struct SpendLimit { address token; uint160 allowance; uint8 unit; uint16 multiplier; }',
+    'struct Permission { address account; address spender; uint48 start; uint48 end; uint256 salt; CallPermission[] calls; SpendLimit[] spends; }',
+    'function revoke(Permission permission)',
+  ]);
+  const encoded = (r: StorePermissionApiResponse) =>
+    encodeFunctionData({ abi: REVOKE_ABI, functionName: 'revoke', args: [contractPermission(r)] });
+
+  it.each([
+    ['an index row as the API returns it', INDEX_ROW],
+    ['a weekly grant', row({ spends: [{ token: USDC, allowance: '7', unit: 'week', multiplier: 3 }] })],
+    ['a yearly grant', row({ spends: [{ token: USDC, allowance: '1', unit: 'year', multiplier: 2 }] })],
+    ['a forever grant', row({ spends: [{ token: USDC, allowance: '5', unit: 'forever', multiplier: 1 }] })],
+  ])('given %s, then rebuilds the struct the SDK approved, byte for byte', (_, r) => {
+    expect(encoded(r)).toBe(buildRevokePermissionCall(r).data);
   });
 });

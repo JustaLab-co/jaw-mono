@@ -1,7 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import { renderToStaticMarkup } from 'react-dom/server';
 
-import { HeldGrantsNotice } from './Sections';
+import { HeldGrantsNotice, spendRate } from './Sections';
 import type { HeldGrantsDisplay } from './types';
 
 const USDC = '0x036cbd53842c5426634e7929541ec2318f3dcf7e';
@@ -31,9 +31,21 @@ describe('the grant screen shows what the spender already holds', () => {
     expect(html).toContain('No spend limits');
   });
 
-  it('given nothing live, then renders nothing', () => {
-    expect(markup({ status: 'ready', count: 0, totals: [] })).toBe('');
+  it('given nothing live, then says none were found without claiming zero', () => {
+    const html = markup({ status: 'ready', count: 0, totals: [] });
+
+    expect(html).toContain('No other active grants to this key were found.');
+    expect(html).not.toContain('Already granted to this key');
+  });
+
+  it('given no read at all, then renders nothing', () => {
     expect(markup(undefined)).toBe('');
+  });
+
+  it('given a forever limit, then shows no period', () => {
+    expect(spendRate('1 forever')).toBe('');
+    expect(spendRate('forever')).toBe('');
+    expect(spendRate('1 day')).toBe('/day');
   });
 
   it('given the lookup failed, then says the total is unknown, never zero', () => {

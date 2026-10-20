@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { isAddressEqual, numberToHex, parseAbi, zeroAddress, type Address, type Hex } from 'viem';
+import { erc20Abi, isAddressEqual, numberToHex, parseAbi, zeroAddress, type Address, type Hex } from 'viem';
 import {
   handleGetPermissionsRequest,
   PERMISSIONS_MANAGER_ADDRESS,
@@ -7,6 +7,7 @@ import {
   type StorePermissionApiResponse,
 } from '@jaw.id/core';
 import { getPublicClient } from '../utils/publicClient';
+import { isNativeToken } from '../utils/tokenBalance';
 
 export interface HeldTotal {
   token: Address;
@@ -20,7 +21,12 @@ export interface HeldGrants {
   totals: HeldTotal[];
 }
 
-export type HeldGrantsState = { status: 'loading' } | { status: 'unreadable' } | { status: 'ready'; held: HeldGrants };
+export type HeldTokenInfo = Record<string, { decimals: number; symbol: string }>;
+
+export type HeldGrantsState =
+  | { status: 'loading' }
+  | { status: 'unreadable' }
+  | { status: 'ready'; held: HeldGrants; tokenInfo: HeldTokenInfo };
 
 const LOOKUP_TIMEOUT_MS = 8_000;
 
@@ -68,7 +74,7 @@ export function totalsOf(rows: StorePermissionApiResponse[]): HeldGrants {
   return { count: rows.length, totals: [...totals.values()] };
 }
 
-function contractPermission(row: StorePermissionApiResponse) {
+export function contractPermission(row: StorePermissionApiResponse) {
   return {
     account: row.account as Address,
     spender: row.spender as Address,
@@ -118,6 +124,34 @@ async function readHeld(args: UseHeldGrantsArgs & { address: Address; spender: A
   return totalsOf(args.rpcUrl ? await dropProvenRevoked(live, args.chainId, args.rpcUrl) : live);
 }
 
+function within<T>(work: Promise<T>, fallback: T): Promise<T> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const late = new Promise<T>((resolve) => {
+    timer = setTimeout(() => resolve(fallback), LOOKUP_TIMEOUT_MS);
+  });
+  return Promise.race([work, late]).finally(() => clearTimeout(timer));
+}
+
+async function readTokenInfo(totals: HeldTotal[], chainId: number, rpcUrl: string): Promise<HeldTokenInfo> {
+  const client = getPublicClient(chainId, rpcUrl);
+  const tokens = [...new Set(totals.map((t) => t.token.toLowerCase()))].filter((t) => !isNativeToken(t));
+  const info: HeldTokenInfo = {};
+  await Promise.all(
+    tokens.map(async (token) => {
+      try {
+        const [decimals, symbol] = await Promise.all([
+          client.readContract({ address: token as Address, abi: erc20Abi, functionName: 'decimals' }),
+          client.readContract({ address: token as Address, abi: erc20Abi, functionName: 'symbol' }),
+        ]);
+        info[token] = { decimals, symbol };
+      } catch {
+        // Left out: the row keeps the address and the raw allowance.
+      }
+    })
+  );
+  return info;
+}
+
 export interface UseHeldGrantsArgs {
   address?: Address;
   spender?: Address;
@@ -141,7 +175,14 @@ export function useHeldGrants({ address, spender, chainId, apiKey, rpcUrl }: Use
       setState({ status: 'unreadable' });
     }, LOOKUP_TIMEOUT_MS);
     readHeld({ address, spender, chainId, apiKey, rpcUrl })
-      .then((held) => !cancelled && setState({ status: 'ready', held }))
+      .then(async (held) => {
+        if (cancelled) return;
+        clearTimeout(timer);
+        setState({ status: 'ready', held, tokenInfo: {} });
+        if (!rpcUrl || held.totals.length === 0) return;
+        const tokenInfo = await within(readTokenInfo(held.totals, chainId, rpcUrl), {});
+        if (!cancelled) setState({ status: 'ready', held, tokenInfo });
+      })
       .catch((error: unknown) => {
         console.warn('[useHeldGrants] Could not read the spender grants:', error);
         if (!cancelled) setState({ status: 'unreadable' });

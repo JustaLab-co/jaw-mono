@@ -2334,7 +2334,6 @@ function PermissionDialogWrapper({
     apiKey,
     rpcUrl: chain.rpcUrl,
   });
-  const heldTokens = useMemo(() => (held.status === 'ready' ? held.held.totals.map((t) => t.token) : []), [held]);
 
   // Get spends array from request (now using spends plural)
   // Memoized because both keys are optional: `?? []` on an absent key returns a new array every
@@ -2351,7 +2350,7 @@ function PermissionDialogWrapper({
     // definition, so an empty URL would resolve to the chain's public RPC instead of
     // the proxy. Nothing to read without a configured endpoint.
     const rpcUrl = chain.rpcUrl;
-    if ((spendsData.length === 0 && callsData.length === 0 && heldTokens.length === 0) || !rpcUrl) {
+    if ((spendsData.length === 0 && callsData.length === 0) || !rpcUrl) {
       setIsLoadingTokenInfo(false);
       return;
     }
@@ -2369,7 +2368,6 @@ function PermissionDialogWrapper({
         new Set([
           ...spendsData.map((spend) => spend.token),
           ...callsData.map((call) => call.target).filter((t) => t && !isWildcard(t)),
-          ...heldTokens,
         ])
       ) as string[];
 
@@ -2419,7 +2417,7 @@ function PermissionDialogWrapper({
     return () => {
       isMounted = false;
     };
-  }, [chainId, spendsData, callsData, heldTokens, chain.rpcUrl, viemChain]);
+  }, [chainId, spendsData, callsData, chain.rpcUrl, viemChain]);
 
   // Fetch fee tokens from capabilities (same pattern as TransactionDialogWrapper)
   useEffect(() => {
@@ -2546,9 +2544,12 @@ function PermissionDialogWrapper({
   // Note: Gas estimation is now handled by useGasEstimation hook
 
   const toSpendRow = useCallback(
-    (spend: { token: string; allowance: string | bigint; unit: string; multiplier?: number }) => {
+    (
+      spend: { token: string; allowance: string | bigint; unit: string; multiplier?: number },
+      info: { decimals: number | null; symbol: string } | undefined = tokenInfoMap[spend.token]
+    ) => {
       const tokenInfo =
-        tokenInfoMap[spend.token] ||
+        info ||
         (isNativeToken(spend.token)
           ? {
               decimals: viemChain?.nativeCurrency?.decimals ?? 18,
@@ -2579,7 +2580,11 @@ function PermissionDialogWrapper({
   const heldGrants = useMemo(
     () =>
       held.status === 'ready'
-        ? { status: 'ready' as const, count: held.held.count, totals: held.held.totals.map(toSpendRow) }
+        ? {
+            status: 'ready' as const,
+            count: held.held.count,
+            totals: held.held.totals.map((total) => toSpendRow(total, held.tokenInfo[total.token.toLowerCase()])),
+          }
         : held,
     [held, toSpendRow]
   );
