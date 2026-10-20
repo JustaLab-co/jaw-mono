@@ -133,6 +133,14 @@ describe('the keys popup grant screen shows what the spender already holds', () 
     expect(dialogProps.heldGrants).toMatchObject({ status: 'ready', count: 1 });
   });
 
+  it('given a request naming another account, then reads for that account, not the connected one', async () => {
+    const other = '0x2222222222222222222222222222222222222222';
+    getPermissions.mockResolvedValue([]);
+    await open({ ...GRANT, params: [{ ...GRANT.params[0], address: other }] });
+
+    expect(getPermissions.mock.calls[0][0]).toMatchObject({ params: [{ address: other }] });
+  });
+
   it('given no chain yet, then nothing is read rather than reporting none found', async () => {
     await open(GRANT, null);
 
