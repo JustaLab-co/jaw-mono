@@ -27,6 +27,12 @@ const openRelay = (chainId: number, ms = 30_000, client?: { clientId: string; cl
   ownerRelay(chainId, new Date(Date.now() + ms), client);
 afterAll(() => relay.close());
 
+const freshRelay = () => {
+  delete (globalThis as Record<symbol, unknown>)[Symbol.for('jaw-mcp/relay-pools')];
+  vi.resetModules();
+  return import('./relay');
+};
+
 type Answer = (method: string, params: unknown) => { success: true; data: unknown } | { success: false; error: object };
 
 /** The cli-bridge page: opens the link, agrees the key, answers init and each request, and records the shutdown. */
@@ -208,8 +214,7 @@ describe('a session nobody opens for ten minutes', () => {
 
   it('given no browser joins within ten minutes, then the session ends saying so and its slot opens another', async () => {
     vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'setInterval', 'clearInterval'] });
-    vi.resetModules();
-    const fresh = await import('./relay');
+    const fresh = await freshRelay();
     const until = new Date(Date.now() + 30 * 60_000);
     const held = await Promise.all(
       Array.from({ length: fresh.SESSION_LIMITS.connect }, () => fresh.connectRelay(84532, until))
@@ -299,16 +304,23 @@ describe('what the wallet page can get wrong', () => {
 
 describe('the pool of sessions', () => {
   // A pool is process-wide, so each test fills its own copy of the module.
-  const fresh = () => {
-    vi.resetModules();
-    return import('./relay');
-  };
+  const fresh = freshRelay;
   const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
   const opensAgain = (relay: Awaited<ReturnType<typeof fresh>>, ms = 500) =>
     vi.waitFor(
       async () => expect((await relay.ownerRelay(84532, new Date(Date.now() + ms))).url).toMatch(/cli-bridge/),
       { timeout: 3_000 }
     );
+
+  it('given the module loaded twice, as Next loads it for instrumentation and for the routes, then both count one owner pool', async () => {
+    const one = await fresh();
+    vi.resetModules();
+    const two = await import('./relay');
+    const until = new Date(Date.now() + 3_000);
+    for (let i = 0; i < one.SESSION_LIMITS.owner; i++) await one.ownerRelay(84532, until);
+
+    await expect(two.ownerRelay(84532, until)).rejects.toBeInstanceOf(two.WalletBusy);
+  });
 
   it('given authorizations beyond the owner limit, then all of them open', async () => {
     const relay = await fresh();
@@ -387,10 +399,7 @@ describe('the pool of sessions', () => {
 });
 
 describe('the owner pool per account', () => {
-  const fresh = () => {
-    vi.resetModules();
-    return import('./relay');
-  };
+  const fresh = freshRelay;
   const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
   const ACCOUNT = '0xAbCdEf0000000000000000000000000000000001';
   const OTHER = '0x0000000000000000000000000000000000000002';
@@ -807,8 +816,7 @@ describe('a session the server can rejoin', () => {
 
   it('given the owner pool is full, then a rejoin is busy', async () => {
     const { resume } = await restarted(never);
-    vi.resetModules();
-    const fresh = await import('./relay');
+    const fresh = await freshRelay();
     for (let i = 0; i < fresh.SESSION_LIMITS.owner; i++) await fresh.ownerRelay(84532, soon());
 
     await expect(fresh.resumeWallet(resume, soon())).rejects.toBeInstanceOf(fresh.WalletBusy);
