@@ -137,6 +137,8 @@ interface LogFields {
   error?: string;
   swapId?: string;
   ownerCallId?: string;
+  permissionRequestId?: string;
+  permissionId?: string;
   callsId?: string;
   /** USDC base units, as strings because JSON has no bigint. */
   fee?: { expected: string; reserve: string; max: string };

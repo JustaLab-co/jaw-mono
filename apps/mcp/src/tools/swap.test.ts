@@ -18,6 +18,7 @@ import { disconnect } from '@/connections/disconnect';
 import { endConnection } from '@/connections/rows';
 import { SESSION_RENEW_MS } from '@/connections/session-lease';
 import { WalletBusy, type Ask, type OpenWallet, type Wallet } from '@/connections/relay';
+import { revokeByGrant } from '@/connections/rows';
 import {
   approvedOnChain,
   callTool,
@@ -28,7 +29,6 @@ import {
   owner as newSigner,
   sessionFakes,
   setTestEnv,
-  verifyLocally,
   walletAnswers,
   walletsSettled,
 } from '@/connections/testkit';
@@ -44,10 +44,9 @@ import type { BackendDeps } from '@/swap/backend';
 import { swapRequest } from '@/swap/quote';
 import { approveByOf, claimSwap, type SwapRow } from '@/swap/store';
 import { purge } from '@/reconciler/run';
-import { revokeConnection } from './connections';
 import { fakeChain } from '@/owner-calls/chain-testkit';
 import { sendCalls } from './owner-calls';
-import { requestBudget } from './request-budget';
+import { grantPermissions } from '@/tools/grant-permissions';
 import { registerSwapTools, swap, swapStatus, type SwapToolInput } from './swap';
 
 const USDC: Address = '0x036CbD53842c5426634e7929541eC2318f3dCF7e';
@@ -251,7 +250,7 @@ async function connected(perDay?: string, scope = 'wallet:read x402:pay', signer
   balances.set(c.signer.address.toLowerCase(), 5_000_000n);
   const budget = async (day: string) => {
     const wallet = fakeWallet(walletAnswers(c.signer));
-    await requestBudget(t, day, { openWallet: wallet, readPermission: approvedOnChain });
+    await grantPermissions(t, { x402Budget: { perDay: day } }, { openWallet: wallet, readPermission: approvedOnChain });
     await walletsSettled();
     if (!(await x402Budget(t.connectionId))) throw new Error('no budget');
   };
@@ -296,13 +295,13 @@ const leaseLapsed = sql`statement_timestamp() - interval '1 second'`;
 const pausePayments = () => getDb().insert(settings).values({ key: 'payments_paused', value: true });
 
 describe('jaw_swap gates', () => {
-  it('B2: given a connection without a budget, when jaw_swap runs, then no_grant pointing to jaw_request_budget, no row and no request to the backend', async () => {
+  it('B2: given a connection without a budget, when jaw_swap runs, then no_grant pointing to jaw_grant_permissions, no row and no request to the backend', async () => {
     const { t } = await connected();
 
     const result = await run(t);
 
     expect(result[gateCode]).toBe('no_grant');
-    expect(result.content[0].text).toContain('jaw_request_budget');
+    expect(result.content[0].text).toContain('jaw_grant_permissions');
     expect(await swapsOf(t.connectionId)).toEqual([]);
     expect(backend.hits).toEqual([]);
   });
@@ -592,7 +591,7 @@ describe('replays of the same idempotency key', () => {
     const short = await run(t);
     expect(short.structuredContent).toMatchObject({
       state: 'quoting',
-      refusal: { code: 'budget_exhausted', next: 'jaw_request_budget' },
+      refusal: { code: 'budget_exhausted', next: 'jaw_grant_permissions' },
     });
     await budget('1');
     await pausePayments();
@@ -2063,8 +2062,8 @@ describe('a quote refused before anything was signed', () => {
 
     const [row] = await swapsOf(t.connectionId);
     expect(row).toMatchObject({ state: 'quoting', code: 'budget_exhausted', paymentAttempt: 2 });
-    expect(again.structuredContent?.refusal).toEqual({ code: 'budget_exhausted', next: 'jaw_request_budget' });
-    expect(again.structuredContent?.summary).toContain('jaw_request_budget');
+    expect(again.structuredContent?.refusal).toEqual({ code: 'budget_exhausted', next: 'jaw_grant_permissions' });
+    expect(again.structuredContent?.summary).toContain('jaw_grant_permissions');
     const rows = await paymentsOf(t.connectionId);
     expect(rows.map((p) => [p.idempotencyKey, p.state]).sort()).toEqual([
       [`swap:${row.id}:1`, 'failed'],
@@ -2146,18 +2145,11 @@ describe('B28: the connection ends while the swap awaits the owner', () => {
 
   const ends: [string, PrepareEnd][] = [
     [
-      'the owner revokes it from another app',
-      async (c) => {
-        const other = await tenantOf((await connect(c.signer, { scope: 'wallet:read' })).access_token);
-        return async () => {
-          const asked = await revokeConnection(other, c.t.connectionId, {
-            openWallet: fakeWallet(walletAnswers(c.signer)),
-            verify: verifyLocally,
-            clients: sessionFakes().deps.clients,
-          });
-          expect('structuredContent' in asked).toBe(true);
-          await untilEnded(c.token);
-        };
+      'its client revokes its token',
+      async (c) => async () => {
+        const [{ grantId }] = await getDb().select().from(connections).where(eq(connections.id, c.t.connectionId));
+        await revokeByGrant(grantId!);
+        await untilEnded(c.token);
       },
     ],
     [

@@ -13,24 +13,34 @@ const SIGNERS = {
   jaw_session_x402_discover: 'session',
   jaw_session_history: 'session',
   jaw_session_disconnect: 'session',
-  jaw_request_budget: 'owner',
+  jaw_session_execute: 'session',
+  jaw_grant_permissions: 'owner',
   jaw_swap: 'owner',
   jaw_send_calls: 'owner',
-  jaw_status: 'none',
+  jaw_revoke_permission: 'owner',
+  jaw_session_status: 'session',
+  jaw_sign: 'owner',
   jaw_add_funds: 'none',
   jaw_connections: 'none',
-  jaw_revoke_connection: 'none',
   jaw_swap_status: 'none',
   jaw_get_calls_status: 'none',
+  jaw_get_assets: 'none',
+  jaw_get_calls_history: 'none',
+  jaw_get_permissions: 'none',
+  jaw_get_capabilities: 'none',
+  jaw_read_contracts: 'none',
 } as const;
 
 const RENAMED_AWAY = [
+  'jaw_status',
   'jaw_pay_and_fetch',
   'jaw_quote',
   'jaw_discover',
   'jaw_history',
   'jaw_disconnect',
   'jaw_send_calls_status',
+  'jaw_request_budget',
+  'jaw_revoke_connection',
 ];
 
 describe('the pinned tool names', () => {

@@ -1,6 +1,6 @@
 import { createHash, randomBytes } from 'node:crypto';
 import type { ChainClients } from '@jaw.id/agent';
-import { getSupportedChains, PERMISSIONS_MANAGER_ADDRESS } from '@jaw.id/core';
+import { PERMISSIONS_MANAGER_ADDRESS } from '@jaw.id/core';
 import type { McpServer } from '@modelcontextprotocol/server';
 import { getAddress } from 'viem';
 import {
@@ -17,6 +17,7 @@ import { ownerRelay, WalletBusy, type OpenWallet, type Wallet } from '@/connecti
 import { findActive } from '@/connections/rows';
 import { keepLease, leaseHeld } from '@/connections/session-lease';
 import { countHit, isPaymentsPaused } from '@/db/settings';
+import { isProxyChain } from '@/lib/chain';
 import { errorLabel, log, RATE_WINDOW_MS } from '@/lib/edge';
 import { reply } from '@/lib/fence';
 import { approve } from '@/owner-calls/approve';
@@ -287,12 +288,12 @@ async function replay(t: Tenant, row: OwnerCallRow, hash: string, deps: OwnerCal
 
 const ENTRY_POINTS = [entryPoint06Address, entryPoint07Address, entryPoint08Address, entryPoint09Address];
 
-const forbiddenTargets = (t: Tenant) =>
+export const forbiddenTargets = (t: Tenant) =>
   new Set([t.account, PERMISSIONS_MANAGER_ADDRESS, ...ENTRY_POINTS].map((a) => a.toLowerCase()));
 
 export async function sendCalls(t: Tenant, input: SendCallsInput, deps: OwnerCallDeps = DEFAULTS): Promise<SendResult> {
   const chainId = input.chainId ?? t.chainId;
-  if (!getSupportedChains(true).some((chain) => chain.id === chainId)) {
+  if (!isProxyChain(chainId)) {
     return refuse('unsupported_chain', `Chain ${chainId} is not one the JAW wallet supports.`);
   }
   const forbidden = forbiddenTargets(t);

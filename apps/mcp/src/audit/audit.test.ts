@@ -29,13 +29,16 @@ describe('audit events', () => {
   it('records one event per tool call with its tool, outcome and request id', async () => {
     const c = await connect();
     const ok = await call(c.access_token, 'jaw_connections', {});
-    const refused = await call(c.access_token, 'jaw_revoke_connection', { id: 'conn_nope' });
+    const refused = await call(c.access_token, 'jaw_revoke_permission', {
+      permissionId: `0x${'0'.repeat(64)}`,
+      chainId: 1,
+    });
     expect(refused.json.result.isError).toBe(true);
 
     const events = await eventsOf(await connectionOf(c.access_token));
     expect(events.map((e) => [e.tool, e.outcome, e.requestId])).toEqual([
       ['jaw_connections', 'ok', ok.headers.get('x-request-id')],
-      ['jaw_revoke_connection', 'error', refused.headers.get('x-request-id')],
+      ['jaw_revoke_permission', 'error', refused.headers.get('x-request-id')],
     ]);
   });
 
@@ -47,7 +50,7 @@ describe('audit events', () => {
       state: 'failed',
       kind: 'refused',
       httpStatus: 402,
-      refusal: { code: 'budget_exhausted', next: 'jaw_request_budget' },
+      refusal: { code: 'budget_exhausted', next: 'jaw_grant_permissions' },
       payerRefilled: false,
       summary: 'Not paid: budget_exhausted. Nothing was sent.',
     } as const;
@@ -111,10 +114,10 @@ describe('audit events', () => {
   it('records a tool that threw as an error, once', async () => {
     const c = await connect();
     vi.spyOn(grantsStore, 'x402Budget').mockRejectedValueOnce(new Error('boom'));
-    const res = await call(c.access_token, 'jaw_status', {});
+    const res = await call(c.access_token, 'jaw_session_status', {});
     expect(res.json.result.isError).toBe(true);
     const events = await eventsOf(await connectionOf(c.access_token));
-    expect(events.map((e) => [e.tool, e.outcome])).toEqual([['jaw_status', 'error']]);
+    expect(events.map((e) => [e.tool, e.outcome])).toEqual([['jaw_session_status', 'error']]);
   });
 
   it('records no arguments, tokens or signatures', async () => {

@@ -1,23 +1,98 @@
-import { and, eq, inArray, lt, ne, sql } from 'drizzle-orm';
-import type { Hex } from 'viem';
+import { randomBytes } from 'node:crypto';
+import { and, desc, eq, inArray, lt, ne, sql } from 'drizzle-orm';
+import type { Address, Hex } from 'viem';
 import { getDb, type Tx } from '@/db/client';
 import { sends } from '@/db/schema';
+// Past any run's submit and receipt wait, so the reconciler never takes a row a live run still holds.
+const SEND_LEASE_MS = 10 * 60_000;
 
 export type SendRow = typeof sends.$inferSelect;
 export interface RecordedSend {
   amount: bigint;
   periodStart: number;
 }
+export interface OpenSpend extends RecordedSend {
+  token: string;
+}
 
 const dbNow = sql`statement_timestamp()`;
 const twoDayPeriodsAgo = sql`now() - interval '2 days'`;
-const open = (id: string) => and(eq(sends.id, id), eq(sends.state, 'open'));
 
-export async function settleSend(id: string, end: { state: 'landed'; txHash: Hex } | { state: 'released' }) {
-  await getDb()
+export interface NewSend {
+  connectionId: string;
+  idempotencyKey: string;
+  requestHash: string;
+  permissionId: string;
+  chainId: number;
+  sender: Address;
+  token: Address | null;
+  amount: bigint;
+  periodStart: number;
+  fromBlock: bigint;
+}
+
+export async function recordSend(tx: Tx, s: NewSend): Promise<string> {
+  const id = `send_${randomBytes(16).toString('base64url')}`;
+  await tx.insert(sends).values({
+    ...s,
+    id,
+    sender: s.sender.toLowerCase(),
+    token: s.token?.toLowerCase() ?? null,
+    amount: s.amount.toString(),
+    leaseUntil: sql`${dbNow} + ${SEND_LEASE_MS} * interval '1 millisecond'`,
+  });
+  return id;
+}
+
+export async function runOf(tx: Tx, connectionId: string, key: string): Promise<SendRow[]> {
+  return tx
+    .select()
+    .from(sends)
+    .where(and(eq(sends.connectionId, connectionId), eq(sends.idempotencyKey, key)));
+}
+
+export async function noteCallsId(tx: Tx, ids: string[], callsId: Hex): Promise<void> {
+  await tx
+    .update(sends)
+    .set({ callsId })
+    .where(and(inArray(sends.id, ids), eq(sends.state, 'open')));
+}
+
+export async function handToReconciler(ids: string[], tx: Tx = getDb(), callsId?: Hex): Promise<void> {
+  await tx
+    .update(sends)
+    .set({ leaseUntil: dbNow, ...(callsId && { callsId }) })
+    .where(and(inArray(sends.id, ids), eq(sends.state, 'open')));
+}
+
+export type SendEnd =
+  | { state: 'landed'; txHash: Hex; callsId?: Hex }
+  | { state: 'released'; txHash?: Hex | null; callsId?: Hex };
+
+export async function settleSends(ids: string[], end: SendEnd, tx: Tx = getDb()) {
+  await tx
     .update(sends)
     .set({ ...end, finishedAt: dbNow, leaseUntil: dbNow })
-    .where(open(id));
+    .where(and(inArray(sends.id, ids), eq(sends.state, 'open')));
+}
+
+export async function openSpends(permissionId: string, tx: Tx): Promise<OpenSpend[]> {
+  const rows = await tx
+    .select({ token: sends.token, amount: sends.amount, periodStart: sends.periodStart })
+    .from(sends)
+    .where(and(eq(sends.permissionId, permissionId), eq(sends.state, 'open')));
+  return rows.flatMap(({ token, amount, periodStart }) =>
+    token ? [{ token, amount: BigInt(amount), periodStart }] : []
+  );
+}
+
+export async function sendHistory(connectionId: string, limit: number): Promise<SendRow[]> {
+  return getDb()
+    .select()
+    .from(sends)
+    .where(eq(sends.connectionId, connectionId))
+    .orderBy(desc(sends.createdAt), desc(sends.id))
+    .limit(limit);
 }
 
 export async function recordedSends(permissionId: string, tx: Tx = getDb()): Promise<RecordedSend[]> {

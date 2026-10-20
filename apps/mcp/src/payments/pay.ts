@@ -334,7 +334,10 @@ export async function pay(
     case 'busy':
       return gate('in_progress', 'A call with this idempotency key is still running. Try again shortly.');
     case 'no_grant':
-      return gate('no_grant', 'This connection has no budget yet. Ask for one with jaw_request_budget.');
+      return gate(
+        'no_grant',
+        'This connection has no budget yet. Ask for one with jaw_grant_permissions and x402Budget.'
+      );
     case 'stored':
       return render(claimed.row, claimed.row.fenced ?? []);
   }

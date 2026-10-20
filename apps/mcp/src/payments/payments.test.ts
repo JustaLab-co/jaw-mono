@@ -21,7 +21,7 @@ import {
 import { beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { verifyBearer, type Tenant } from '@/connections/auth';
 import { disconnect, sweepOnReuse } from '@/connections/disconnect';
-import { endConnection } from '@/connections/rows';
+import { endConnection, revokeByGrant } from '@/connections/rows';
 import {
   approvedOnChain,
   callTool,
@@ -29,7 +29,6 @@ import {
   fakeWallet,
   managerAnswer,
   setTestEnv,
-  verifyLocally,
   walletAnswers,
   walletsSettled,
   sessionFakes,
@@ -38,16 +37,8 @@ import { floatHolder, getDb, setDb } from '@/db/client';
 import { connections, grants, payments, settings } from '@/db/schema';
 import { x402Budget } from '@/grants/store';
 import { reconcile } from '@/reconciler/run';
-import { revokeConnection } from '@/tools/connections';
-import { requestBudget } from '@/tools/request-budget';
-import {
-  lockWaiters,
-  statusOnceParked,
-  TEST_PG_URL,
-  useTestDb,
-  useTestPostgres,
-  withRoleStatementTimeout,
-} from '@/db/test-db';
+import { grantPermissions } from '@/tools/grant-permissions';
+import { lockWaiters, TEST_PG_URL, useTestDb, useTestPostgres, withRoleStatementTimeout } from '@/db/test-db';
 import { safeFetch } from '@/lib/safe-fetch';
 import { pay, type PayDeps } from './pay';
 import { rawBody, resent } from './render';
@@ -277,24 +268,16 @@ async function connected(perDay?: string) {
 async function approveBudget(c: Awaited<ReturnType<typeof connect>>, perDay: string) {
   const t = (await verifyBearer(c.access_token))?.extra?.tenant as Tenant;
   const wallet = fakeWallet(walletAnswers(c.signer));
-  await requestBudget(t, perDay, { openWallet: wallet, readPermission: approvedOnChain });
+  await grantPermissions(t, { x402Budget: { perDay } }, { openWallet: wallet, readPermission: approvedOnChain });
   await walletsSettled();
   if (!(await x402Budget(t.connectionId))) throw new Error('no budget');
   balances.set(c.signer.address.toLowerCase(), 5_000_000n);
 }
 
-/** Another app of the same owner, which ends `t`'s connection with jaw_revoke_connection, the owner confirming. */
-async function revoker(c: Awaited<ReturnType<typeof connect>>, t: Tenant) {
-  const other = await connect(c.signer, { scope: 'wallet:read' });
-  const asker = (await verifyBearer(other.access_token))?.extra?.tenant as Tenant;
-  const confirmed = {
-    openWallet: fakeWallet(walletAnswers(c.signer)),
-    verify: verifyLocally,
-    clients: sessionFakes().deps.clients,
-  };
+async function revoker(t: Tenant, end = revokeByGrant) {
+  const [{ grantId }] = await getDb().select().from(connections).where(eq(connections.id, t.connectionId));
   return async () => {
-    await revokeConnection(asker, t.connectionId, confirmed);
-    await walletsSettled();
+    await end(grantId!);
     const [row] = await getDb().select().from(connections).where(eq(connections.id, t.connectionId));
     return { connection: { status: row.status } };
   };
@@ -335,6 +318,41 @@ async function failUpdates(key: string, when: string, using = '') {
 async function otherReplica() {
   vi.resetModules();
   return (await import('./pay')).pay;
+}
+
+/**
+ * Another replica whose float lock tells `untilWaiting` once work queues behind the
+ * connection's turn, or tries the lock a second time after the first try gave up.
+ */
+async function watchedReplica(connectionId: string) {
+  let watch: ((how: 'queued' | 'tried') => void) | undefined;
+  vi.resetModules();
+  vi.doMock('./float-lock', async (original) => {
+    const real = await original<typeof import('./float-lock')>();
+    return {
+      ...real,
+      inTurn: <T>(key: string, work: () => Promise<T>) => {
+        const run = real.inTurn(key, work);
+        if (key === connectionId) watch?.('queued');
+        return run;
+      },
+      tryLockFloat: (tx: Parameters<typeof real.tryLockFloat>[0], id: string) => {
+        if (id === connectionId) watch?.('tried');
+        return real.tryLockFloat(tx, id);
+      },
+    };
+  });
+  const [{ pay }, { revokeByGrant }] = await Promise.all([import('./pay'), import('@/connections/rows')]);
+  vi.doUnmock('./float-lock');
+  const untilWaiting = () => {
+    let tries = 0;
+    return new Promise<void>((resolve) => {
+      watch = (how) => {
+        if (how === 'queued' || ++tries === 2) resolve();
+      };
+    });
+  };
+  return { pay, revokeByGrant, untilWaiting };
 }
 
 /** Resolves every waiter once `n` have arrived. */
@@ -888,10 +906,10 @@ describe('jaw_session_x402_pay', () => {
     const first = await pay(t, { url: url('/pricey'), idempotencyKey: 'pricey' }, deps());
     expect(first.structuredContent).toMatchObject({
       kind: 'refused',
-      refusal: { code: 'over_cap', next: 'jaw_request_budget' },
+      refusal: { code: 'over_cap', next: 'jaw_grant_permissions' },
       payerRefilled: false,
     });
-    expect(first.structuredContent?.summary).toContain('jaw_request_budget');
+    expect(first.structuredContent?.summary).toContain('jaw_grant_permissions');
     expect([seen.length, refills.length]).toEqual([0, 0]);
   });
 
@@ -955,7 +973,7 @@ describe('jaw_session_x402_pay', () => {
     expect(over.structuredContent).toMatchObject({
       kind: 'refused',
       state: 'failed',
-      refusal: { code: 'budget_exhausted', next: 'jaw_request_budget' },
+      refusal: { code: 'budget_exhausted', next: 'jaw_grant_permissions' },
       payerRefilled: false,
     });
     expect(seen).toHaveLength(1);
@@ -1631,10 +1649,10 @@ describe('given a pay request that verified its bearer before the connection was
   });
 });
 
-describe('given a pay request that verified its bearer before another app of the owner revoked it', () => {
+describe('given a pay request that verified its bearer before its client revoked it', () => {
   it('when its refill turn comes after the revoke committed, then it refuses, reserves nothing and signs nothing', async () => {
-    const { c, t } = await connected('1');
-    const revoke = await revoker(c, t);
+    const { t } = await connected('1');
+    const revoke = await revoker(t);
     onProbe.set('/race', async () => {
       expect((await revoke())?.connection.status).toBe('revoked');
     });
@@ -1650,8 +1668,8 @@ describe('given a pay request that verified its bearer before another app of the
   });
 
   it('when the revoke commits after its refill, then the pay still settles', async () => {
-    const { c, t } = await connected('1');
-    const revoke = await revoker(c, t);
+    const { t } = await connected('1');
+    const revoke = await revoker(t);
     let revoked: Awaited<ReturnType<typeof revoke>> | undefined;
     onProof.set('/race', async () => {
       revoked = await revoke();
@@ -1664,21 +1682,25 @@ describe('given a pay request that verified its bearer before another app of the
 });
 
 describe.skipIf(!TEST_PG_URL)('on Postgres, given a pay inside its funding turn', () => {
-  it('when another app of the owner revokes it, then the revoke waits for the turn and the next pay refuses', async () => {
-    const { c, t } = await connected('1');
-    const revoke = await revoker(c, t);
+  it('when its client revokes it, then the revoke waits for the turn and the next pay refuses', async () => {
+    const { t } = await connected('1');
+    const replica = await watchedReplica(t.connectionId);
+    const revoke = await revoker(t, replica.revokeByGrant);
     let revoking: ReturnType<typeof revoke> | undefined;
     let statusInTurn: string | undefined;
     const inTurn = (funder: Address): TopUpExecutor => ({
       request: async (method, params) => {
         if (!revoking) {
+          const waiting = replica.untilWaiting();
           revoking = revoke();
-          statusInTurn = await statusOnceParked(t.connectionId);
+          await Promise.race([waiting, revoking]);
+          const [row] = await getDb().select().from(connections).where(eq(connections.id, t.connectionId));
+          statusInTurn = row.status;
         }
         return executor(funder).request(method, params);
       },
     });
-    const paid = await pay(
+    const paid = await replica.pay(
       t,
       { url: url('/race'), idempotencyKey: 'page-in-turn' },
       deps({ executor: (_t, grant) => inTurn(grant.account) })
@@ -1711,9 +1733,9 @@ describe.skipIf(!TEST_PG_URL)('on Postgres, given a top-up in flight whose lock 
   const statusOf = async (id: string) =>
     (await getDb().select().from(connections).where(eq(connections.id, id)))[0].status;
 
-  it('when another app of the owner revokes it, then the connection stays active until the pay concludes, and that revoke then ends it', async () => {
-    const { c, t } = await connected('1');
-    const revoke = await revoker(c, t);
+  it('when its client revokes it, then the connection stays active until the pay concludes, and that revoke then ends it', async () => {
+    const { t } = await connected('1');
+    const revoke = await revoker(t);
     let revoking: ReturnType<typeof revoke> | undefined;
     let statusWhenLanded: string | undefined;
     const meanwhile = async () => {
@@ -1864,7 +1886,7 @@ describe('given a 1 USDC/day budget and 1.5 USDC already in the payer', () => {
   });
 
   it.skipIf(!TEST_PG_URL)(
-    'when six 0.3 payments run at once across two replicas on Postgres, with each signature landing after the next turn, then three are paid, the rest refuse budget_exhausted holding nothing, and jaw_status shows what is left',
+    'when six 0.3 payments run at once across two replicas on Postgres, with each signature landing after the next turn, then three are paid, the rest refuse budget_exhausted holding nothing, and jaw_session_status shows what is left',
     async () => {
       const { c, t } = await connected('1');
       balances.set(t.sessionAddress.toLowerCase(), 1_500_000n);
@@ -1880,13 +1902,13 @@ describe('given a 1 USDC/day budget and 1.5 USDC already in the payer', () => {
       ).finally(() => getDb().execute(sql`drop function slow_sign cascade`));
       const refused = results.filter((r) => r.structuredContent?.kind !== 'paid');
       expect(refused.map((r) => r.structuredContent?.refusal?.code)).toEqual(Array(3).fill('budget_exhausted'));
-      expect(refused.every((r) => r.structuredContent?.refusal?.next === 'jaw_request_budget')).toBe(true);
+      expect(refused.every((r) => r.structuredContent?.refusal?.next === 'jaw_grant_permissions')).toBe(true);
       expect(seen).toHaveLength(3);
       for (const r of refused) {
         expect(await rowOf(r.structuredContent!.paymentId)).toMatchObject({ reserved: null, topUpAmount: null });
       }
-      const status = await callTool(c.access_token, 'jaw_status', {});
-      expect(status.structuredContent.balances.session.amount).toBe('600000');
+      const status = await callTool(c.access_token, 'jaw_session_status', {});
+      expect(status.structuredContent.float.amount).toBe('600000');
     }
   );
 });
