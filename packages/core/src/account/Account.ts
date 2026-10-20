@@ -116,6 +116,12 @@ export interface SendCallsOptions {
     permissionId?: Hex;
     /** Override account address — execute on behalf of a different account this passkey owns */
     from?: Address;
+    /**
+     * Called with the userOp hash once the userOp is signed, before it goes to
+     * the bundler. A rejection stops the send, so nothing goes out with a hash
+     * the caller failed to keep.
+     */
+    onSigned?: (userOpHash: Hash) => void | Promise<void>;
 }
 
 /**
@@ -1002,7 +1008,8 @@ export class Account {
                 paymaster.context,
                 localAccount,
                 approvalCall ?? undefined,
-                permissionCall
+                permissionCall,
+                options.onSigned
             );
         } else {
             // Standard execution (EIP-7702 handled inside sendSmartAccountCalls)
@@ -1020,7 +1027,8 @@ export class Account {
                 this._chain,
                 paymaster.url,
                 paymaster.context,
-                localAccount
+                localAccount,
+                options?.onSigned
             );
         }
 

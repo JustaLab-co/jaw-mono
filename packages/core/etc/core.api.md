@@ -1198,6 +1198,7 @@ export const SDK_VERSION: string;
 // @public
 export interface SendCallsOptions {
     from?: Address_2;
+    onSigned?: (userOpHash: Hash) => void | Promise<void>;
     permissionId?: Hex;
 }
 
