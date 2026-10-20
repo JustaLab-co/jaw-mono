@@ -213,6 +213,23 @@ describe('reconciler: owner link requests', () => {
     expect(await signRow()).toMatchObject({ state: 'approved', signature: '0xabcdef' });
   });
 
+  it('given the owner declines after the link was ended, then the request reads owner_declined', async () => {
+    const wallet = slowWallet('wallet_sign', () => {
+      throw Object.assign(new Error('User rejected the request'), { code: 4001 });
+    });
+    await sign(t, { message: 'no', idempotencyKey: 'no' }, wallet);
+    await vi.waitFor(async () => expect((await signRow()).code).toBe('asked'));
+    await getDb()
+      .update(permissionRequests)
+      .set({ state: 'expired', code: 'link_lost' })
+      .where(eq(permissionRequests.connectionId, t.connectionId));
+
+    wallet.release();
+    await walletsSettled();
+
+    expect(await signRow()).toMatchObject({ state: 'owner_declined' });
+  });
+
   it('given the reconciler ended a link before its wallet session failed, then the failure does not replace session_lost', async () => {
     const wallet = slowWallet('eth_requestAccounts', () => {
       throw new Error('the wallet session ended');

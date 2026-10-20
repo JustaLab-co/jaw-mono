@@ -3,8 +3,8 @@ import { errorLabel, log } from '@/lib/edge';
 
 export const SESSION_LEASE_MS = 30_000;
 export const SESSION_RENEW_MS = 10_000;
-// A lease that ended less than this ago may belong to a process whose renewals a database stall
-// held up, so nothing takes its link over before then.
+// A grant, revoke or sign link whose lease ended less than this ago may belong to a process whose
+// renewals a database stall held up, so nothing takes it over before then.
 export const SESSION_STALL_GRACE_MS = 60_000;
 
 /** The database clock decides, so replicas with skewed clocks agree on who holds a link. */
