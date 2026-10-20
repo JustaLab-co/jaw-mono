@@ -648,6 +648,31 @@ describe('jaw_session_execute', () => {
     expect(await rowsOf(t.connectionId)).toEqual([expect.objectContaining({ state: 'released' })]);
   });
 
+  it('given the bundler cannot be read, then the reconciler keeps the run open through one more window and releases it after', async () => {
+    const { c, t, permissionId } = await withCustomGrant();
+    bridge.outcome = 'pending';
+    vi.useFakeTimers({ toFake: ['Date'] });
+    vi.spyOn(console, 'log').mockImplementation(() => undefined);
+    await execute(c.access_token, permissionId, [transfer(BOB, 1n)]);
+    const down = async () => {
+      throw new Error('bundler down');
+    };
+    const sweep = async (head: bigint) => {
+      chain.head = head;
+      vi.setSystemTime(Date.now() + 1_000);
+      await getDb()
+        .update(sends)
+        .set({ leaseUntil: new Date(0) })
+        .where(eq(sends.connectionId, t.connectionId));
+      await reconcile(clients, new Date(), down, down);
+    };
+
+    await sweep(100n + 451n);
+    expect(await rowsOf(t.connectionId)).toEqual([expect.objectContaining({ state: 'open' })]);
+    await sweep(100n + 901n);
+    expect(await rowsOf(t.connectionId)).toEqual([expect.objectContaining({ state: 'released' })]);
+  });
+
   it('given a run that landed after its log window, then the reconciler settles it from the bundler receipt', async () => {
     const { c, t, permissionId } = await withCustomGrant();
     bridge.outcome = 'pending';

@@ -177,11 +177,15 @@ async function sendOutcome(row: SendRow, clients: ChainClients, bundler: Bundler
   if (logs.length > 0) return { state: 'released', txHash: logs[0].transactionHash };
   if (head < windowEnd) return undefined;
   // The window bounds the log search only: the bundler can still hold the op, or have mined it since.
-  const mined = await bundler.receipt(row.chainId, row.callsId);
+  // Past one more window the row is released even when the bundler cannot be read, so an op it never
+  // drops, or an outage, does not hold the spend for good.
+  const last = head >= windowEnd + SEND_WINDOW_BLOCKS;
+  const mined = await bundler.receipt(row.chainId, row.callsId).catch((err) => {
+    if (last) return null;
+    throw err;
+  });
   if (mined) return { state: mined.success ? 'landed' : 'released', txHash: mined.txHash as Hex };
-  // One more window at most, so an op the bundler never drops does not hold its spend for good.
-  const held = head < windowEnd + SEND_WINDOW_BLOCKS && (await bundler.known(row.chainId, row.callsId));
-  return held ? undefined : { state: 'released' };
+  return !last && (await bundler.known(row.chainId, row.callsId)) ? undefined : { state: 'released' };
 }
 
 // Each chain search can take dozens of log reads. The rows come in random order, so a few rows
