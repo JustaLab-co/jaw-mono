@@ -20,7 +20,7 @@ import { readOnChain } from '@/grants/permission';
 import { liveGrants, type Grant, type LiveGrant } from '@/grants/store';
 import { payingBudget } from '@/payments/pay';
 import { dayLeft, daySpendOf, isoOf } from '@/payments/day-spend';
-import { openSpends, recordedSends } from '@/payments/sends';
+import { openSpends, recordedSends, type OpenSpend } from '@/payments/sends';
 import { entriesFor, pulledUnderOtherGrants } from '@/payments/store';
 import { publicClientFor } from '@/lib/chain';
 import { fenceText, reply } from '@/lib/fence';
@@ -161,9 +161,14 @@ function leftToday(budget: z.infer<typeof budgetOutput> | undefined) {
 
 const EXPIRY_WARN_MS = 48 * 60 * 60 * 1000;
 
-function leftOf(period: OnChainPeriod, allowance: bigint, inFlight: bigint) {
+function leftOf(period: OnChainPeriod, allowance: bigint, open: OpenSpend[], token: string) {
   if (period.status === 'unavailable') return null;
-  return period.status === 'ok' ? floorZero(allowance - period.spend - inFlight).toString() : '0';
+  if (period.status !== 'ok') return '0';
+  // Same rule as fit: an open send holds allowance only in the period it was recorded in.
+  const held = open
+    .filter((p) => p.token.toLowerCase() === token && p.periodStart >= period.start && p.periodStart < period.end)
+    .reduce((sum, p) => sum + p.amount, 0n);
+  return floorZero(allowance - period.spend - held).toString();
 }
 
 async function grantOf(g: LiveGrant): Promise<z.infer<typeof grantOut>> {
@@ -185,7 +190,7 @@ async function grantOf(g: LiveGrant): Promise<z.infer<typeof grantOut>> {
       unit,
       multiplier,
       allowance,
-      left: leftOf(period, BigInt(allowance), open.get(token.toLowerCase()) ?? 0n),
+      left: leftOf(period, BigInt(allowance), open, token.toLowerCase()),
     })),
   };
 }

@@ -204,6 +204,13 @@
       "when": 1792451562065,
       "tag": "0028_sign_requests",
       "breakpoints": true
+    },
+    {
+      "idx": 29,
+      "version": "7",
+      "when": 1792455884665,
+      "tag": "0029_send_open_keyed",
+      "breakpoints": true
     }
   ]
 }
