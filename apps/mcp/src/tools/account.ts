@@ -8,9 +8,12 @@ import {
 } from '@jaw.id/core';
 import { sanitizeLine } from '@jaw.id/agent';
 import type { McpServer } from '@modelcontextprotocol/server';
+import { and, eq, inArray, isNotNull, sql } from 'drizzle-orm';
 import { z } from 'zod';
 import { tenant } from '@/connections/auth';
 import { config } from '@/connections/config';
+import { getDb } from '@/db/client';
+import { ownerCalls, sends } from '@/db/schema';
 import { reply } from '@/lib/fence';
 import { refusal } from './reply';
 
@@ -41,6 +44,48 @@ function reasonOf(err: unknown) {
   if (err instanceof z.ZodError) return 'The proxy answered with an unexpected shape.';
   const message = typeof err === 'object' && err !== null && 'message' in err ? String(err.message) : 'request failed';
   return sanitizeLine(scrub(message), 200);
+}
+
+const PENDING = 100;
+
+// The proxy settles a bundle once the bundler or the chain answers, and can lag for hours. What this
+// connection already saw land is shown beside the proxy's row, never in place of it.
+async function landedHere(connectionId: string, calls: { id?: unknown; status?: unknown }[]) {
+  const ids = calls.flatMap((c) => (c.status === PENDING && typeof c.id === 'string' ? [c.id.toLowerCase()] : []));
+  const seen = new Map<string, { state: string; transactionHash: string }>();
+  if (!ids.length) return seen;
+  try {
+    const db = getDb();
+    const [session, owner] = await Promise.all([
+      db
+        .select({ id: sends.callsId, txHash: sends.txHash })
+        .from(sends)
+        .where(
+          and(
+            eq(sends.connectionId, connectionId),
+            eq(sends.state, 'landed'),
+            isNotNull(sends.txHash),
+            inArray(sql<string>`lower(${sends.callsId})`, ids)
+          )
+        ),
+      db
+        .select({ id: ownerCalls.callsId, txHash: ownerCalls.txHash, state: ownerCalls.state })
+        .from(ownerCalls)
+        .where(
+          and(
+            eq(ownerCalls.connectionId, connectionId),
+            inArray(ownerCalls.state, ['landed', 'reverted']),
+            isNotNull(ownerCalls.txHash),
+            inArray(sql<string>`lower(${ownerCalls.callsId})`, ids)
+          )
+        ),
+    ]);
+    for (const row of session) seen.set(row.id!.toLowerCase(), { state: 'landed', transactionHash: row.txHash! });
+    for (const row of owner) seen.set(row.id!.toLowerCase(), { state: row.state, transactionHash: row.txHash! });
+  } catch {
+    // The proxy's answer stands on its own.
+  }
+  return seen;
 }
 
 const failure = (err: unknown) => refusal(`proxy_error: ${reasonOf(err)}`);
@@ -207,7 +252,8 @@ export function registerAccountTools(server: McpServer) {
   server.registerTool(
     'jaw_get_calls_history',
     {
-      description: "The connected account's call bundles as the JAW proxy recorded them, newest first, on every chain.",
+      description:
+        "The connected account's call bundles as the JAW proxy recorded them, newest first, on every chain. The proxy settles a bundle (status 200 or 500, with a transactionHash) only after the bundler or the chain confirms it, which can take minutes to hours: until then it stays 100 with a null transactionHash. A bundle this connection sent and saw mined while the proxy still says 100 carries thisConnection with the mined state and hash.",
       inputSchema: z.strictObject({
         chainId: z.number().int().positive().optional(),
         limit: z.number().int().min(1).max(50).optional(),
@@ -218,7 +264,7 @@ export function registerAccountTools(server: McpServer) {
       annotations: readOnly,
     },
     async (args, ctx) => {
-      const { account } = tenant(ctx);
+      const { account, connectionId } = tenant(ctx);
       try {
         const calls = z
           .array(z.looseObject({}))
@@ -231,7 +277,22 @@ export function registerAccountTools(server: McpServer) {
               )
             )
           );
-        return reply(historyOutput.parse({ calls, summary: `${calls.length} call bundle(s).` }));
+        const here = await landedHere(connectionId, calls);
+        const marked = calls.map((c) => {
+          const note = here.get(String(c.id).toLowerCase());
+          return c.status === PENDING && note ? { ...c, thisConnection: note } : c;
+        });
+        const settledHere = marked.filter((c) => 'thisConnection' in c).length;
+        return reply(
+          historyOutput.parse({
+            calls: marked,
+            summary:
+              `${calls.length} call bundle(s).` +
+              (settledHere
+                ? ` The proxy still lists ${settledHere} as pending (100) that this connection saw mined: ${settledHere === 1 ? 'it is' : 'they are'} marked thisConnection.`
+                : ''),
+          })
+        );
       } catch (err) {
         return failure(err);
       }
