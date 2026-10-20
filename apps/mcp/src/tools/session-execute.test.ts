@@ -15,7 +15,7 @@ import {
   type Hex,
   type PublicClient,
 } from 'viem';
-import { entryPoint08Abi, getUserOperationError } from 'viem/account-abstraction';
+import { entryPoint08Abi, entryPoint08Address, getUserOperationError } from 'viem/account-abstraction';
 import { afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
 import { verifyBearer, type Tenant } from '@/connections/auth';
 import { callTool, connect, setTestEnv } from '@/connections/testkit';
@@ -49,7 +49,7 @@ const chain = vi.hoisted(() => ({
 const bridge = vi.hoisted(() => ({
   sent: [] as { to: string; value: string; data: string }[][],
   attempts: 0,
-  outcome: 'landed' as 'landed' | 'pending' | { logs: { data: string; topics: string[] }[] },
+  outcome: 'landed' as 'landed' | 'pending' | { logs: { address: string; data: string; topics: string[] }[] },
   fail: undefined as Error | undefined,
   gate: undefined as Promise<void> | undefined,
   reached: undefined as (() => void) | undefined,
@@ -353,21 +353,37 @@ describe('jaw_session_execute', () => {
     expect((await rowsOf(t.connectionId)).map((r) => r.state)).toEqual(['open']);
   });
 
-  it('names an over-limit revert the EntryPoint logged for a userOp that reverted on chain', async () => {
-    const { c, t, permissionId } = await withCustomGrant();
-    const topics = encodeEventTopics({
+  const revertLog = (userOpHash: Hex, sender: Address) => ({
+    address: entryPoint08Address,
+    topics: encodeEventTopics({
       abi: entryPoint08Abi,
       eventName: 'UserOperationRevertReason',
-      args: { userOpHash: `0x${'1'.repeat(64)}`, sender: t.sessionAddress },
-    }) as Hex[];
-    const data = encodeAbiParameters([{ type: 'uint256' }, { type: 'bytes' }], [0n, overLimitRevert]);
-    bridge.outcome = { logs: [{ topics, data }] };
+      args: { userOpHash, sender },
+    }) as Hex[],
+    data: encodeAbiParameters([{ type: 'uint256' }, { type: 'bytes' }], [0n, overLimitRevert]),
+  });
+  const FIRST_OP: Hex = `0x${'1'.padStart(64, '0')}`;
+
+  it('names an over-limit revert the EntryPoint logged for a userOp that reverted on chain', async () => {
+    const { c, t, permissionId } = await withCustomGrant();
+    bridge.outcome = { logs: [revertLog(FIRST_OP, t.sessionAddress)] };
 
     const result = await execute(c.access_token, permissionId, [transfer(BOB, 1n)]);
 
     expect(result.isError).toBe(true);
     expect(result.content[0].text).toMatch(/^over-limit: .*did not succeed on chain/);
     expect((await rowsOf(t.connectionId)).map((r) => r.state)).toEqual(['released']);
+  });
+
+  it('given a reverted userOp bundled with another account whose userOp was refused, then it names no refusal', async () => {
+    const { c, permissionId } = await withCustomGrant();
+    bridge.outcome = { logs: [revertLog(`0x${'2'.repeat(64)}`, CAROL)] };
+
+    const result = await execute(c.access_token, permissionId, [transfer(BOB, 1n)]);
+
+    expect(result.isError).toBe(true);
+    expect(result.content[0].text).not.toMatch(/over-limit/);
+    expect(result.structuredContent).toMatchObject({ status: 'reverted', userOpHash: FIRST_OP });
   });
 
   it('given a send whose answer was lost in transit, then it says it may have been sent and keeps the spend held', async () => {

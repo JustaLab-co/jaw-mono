@@ -108,7 +108,7 @@ const notSeen = (userOpHash: string) =>
 
 type CallStatus = {
   status: number;
-  receipts?: { transactionHash: Hex; logs?: { data: Hex; topics: Hex[] }[] }[];
+  receipts?: { transactionHash: Hex; logs?: { address: Address; data: Hex; topics: Hex[] }[] }[];
 };
 
 const landed = (idempotencyKey: string, userOpHash: string, txHash: string): Outcome => ({
@@ -149,7 +149,7 @@ async function receiptOf(
     // 400 is a failure off chain with no receipt, which says nothing about inclusion.
     if (status && status.status >= 500) {
       const logs = (status.receipts ?? []).flatMap((r) => r.logs ?? []);
-      return { out: reverted(key, userOpHash, txHash), refused: refusalOfLogs(logs) };
+      return { out: reverted(key, userOpHash, txHash), refused: refusalOfLogs(logs, userOpHash) };
     }
     await new Promise((resolve) => setTimeout(resolve, 2_000));
   }
