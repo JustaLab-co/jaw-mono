@@ -59,8 +59,30 @@ const pastWindow = lte(permissionRequests.approveBy, dbNow);
 const closeDead = (same: SQL | undefined, db: Tx = getDb()) =>
   update(and(same, awaiting, or(pastWindow, lapsed)), { state: 'expired', code: endCode }, db);
 
+const askedInWindow = and(awaiting, gt(permissionRequests.approveBy, dbNow), eq(permissionRequests.code, ASKED));
+// Other connections wait on an asked revoke until its window ends, since the owner may still revoke there.
+const notAskedRevoke = or(
+  ne(permissionRequests.method, 'revoke'),
+  sql`${permissionRequests.code} is distinct from ${ASKED}`,
+  pastWindow
+);
+
+const STALLED_RENEWAL_GRACE = sql`interval '60 seconds'`;
+const noServerHolds = or(
+  isNull(permissionRequests.sessionUntil),
+  lte(permissionRequests.sessionUntil, sql`${dbNow} - ${STALLED_RENEWAL_GRACE}`)
+);
+
+export async function closeLapsedLinks(): Promise<number> {
+  const ended = await getDb()
+    .update(permissionRequests)
+    .set({ state: 'expired', code: endCode, updatedAt: dbNow })
+    .where(and(awaiting, noServerHolds, notAskedRevoke))
+    .returning({ id: permissionRequests.id });
+  return ended.length;
+}
+
 async function findHeld(t: Tenant, req: LinkRequest): Promise<Held | undefined> {
-  const askedInWindow = and(awaiting, gt(permissionRequests.approveBy, dbNow), eq(permissionRequests.code, ASKED));
   const [row] = await getDb()
     .select()
     .from(permissionRequests)
