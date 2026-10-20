@@ -20,15 +20,17 @@ One account can hold at most 20 active connections. The check runs after the own
 
 ## Scopes
 
-| Scope                                 | Tools                                                                                                                                                                                                                     |
-| ------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `wallet:read` (required, the default) | `jaw_status`, `jaw_discover`, `jaw_quote`, `jaw_add_funds`, `jaw_history`, `jaw_connections`, `jaw_revoke_connection`, `jaw_disconnect`, `jaw_swap_status`, `jaw_send_calls`, `jaw_send_calls_status`, `jaw_resolve_name` |
-| `x402:pay`                            | `jaw_request_budget`, `jaw_pay_and_fetch`, `jaw_swap`                                                                                                                                                                     |
-| `wallet:send`                         | `jaw_request_budget`, `jaw_transfer`                                                                                                                                                                                      |
+| Scope                                 | Tools                                                                                                                                                                                                                                           |
+| ------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `wallet:read` (required, the default) | `jaw_status`, `jaw_discover`, `jaw_read_contracts`, `jaw_quote`, `jaw_add_funds`, `jaw_history`, `jaw_connections`, `jaw_revoke_connection`, `jaw_disconnect`, `jaw_swap_status`, `jaw_send_calls`, `jaw_send_calls_status`, `jaw_resolve_name` |
+| `x402:pay`                            | `jaw_request_budget`, `jaw_pay_and_fetch`, `jaw_swap`                                                                                                                                                                                           |
+| `wallet:send`                         | `jaw_request_budget`, `jaw_transfer`                                                                                                                                                                                                            |
 
 No scope implies another. A tool refused for a missing scope answers with an error naming the scope; the agent reconnects and asks for it, which makes a new connection, so a budget approved on the old one does not carry over.
 
 A payment or transfer past what the budget has left is refused and points at `jaw_request_budget`, which returns a wallet link for the owner to approve a new one. The new budget replaces the connection's current one, and the session key then revokes the old one on chain, paying the fee from its float. A replaced budget it cannot revoke is retried after the next budget lands, and `jaw_disconnect` revokes it with the rest. Other contract calls stay outside the budget. `jaw_send_calls` asks the owner to approve up to 10 calls on one chain: it returns a wallet link, and the owner reviews and signs them in the wallet and pays the gas. `jaw_send_calls_status` follows the request until it is mined. Signatures are not offered: a session key never signs for the account.
+
+`jaw_read_contracts` batches view-function reads (up to 100) on any chain JAW supports, through the JAW RPC proxy, and returns each decoded value or its own error.
 
 `jaw_discover` searches the x402 Bazaar for services payable on the connection's chain, as the CLI's does. `jaw_resolve_name` takes an ENS name or an address and returns the other side on Ethereum mainnet, with CCIP-Read on, so offchain names such as JustaName subnames resolve. An address answers with its primary name only when that name resolves back to it. When nothing comes back it names a reason. `jaw_transfer` still takes an ENS name and resolves it on the server.
 

@@ -37,6 +37,16 @@ const TOOLS: Record<string, { needs: ConnectionScope[]; args: object }> = {
   jaw_add_funds: { needs: ['wallet:read'], args: {} },
   // No query, so it refuses before reaching the catalog.
   jaw_discover: { needs: ['wallet:read'], args: {} },
+  // An unknown chain, so it refuses before reaching a node.
+  jaw_read_contracts: {
+    needs: ['wallet:read'],
+    args: {
+      chainId: 1337,
+      reads: [
+        { address: '0x0000000000000000000000000000000000000001', abi: [{ type: 'function' }], functionName: 'x' },
+      ],
+    },
+  },
   jaw_history: { needs: ['wallet:read'], args: {} },
   jaw_connections: { needs: ['wallet:read'], args: {} },
   jaw_revoke_connection: { needs: ['wallet:read'], args: { id: 'conn_nope' } },

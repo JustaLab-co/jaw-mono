@@ -1,4 +1,4 @@
-import { JAW_RPC_URL } from '@jaw.id/core';
+import { getSupportedChains, JAW_RPC_URL } from '@jaw.id/core';
 import {
   createPublicClient,
   http,
@@ -39,6 +39,22 @@ export function publicClientFor(chainId: number): PublicClient {
   const { chain: configured, rpcUrl } = config();
   const client = createPublicClient({ chain, transport: http(chain.id === configured.id ? rpcUrl : undefined) });
   clients.set(chainId, client);
+  return client;
+}
+
+/** Every chain JAW serves, testnets included. */
+export const proxyChains = () => getSupportedChains(true);
+
+const proxied = new Map<number, PublicClient>();
+
+/** A read client for any JAW chain, through JAW's RPC proxy. The payment paths keep `publicClientFor`. */
+export function proxyClientFor(chainId: number): PublicClient {
+  const cached = proxied.get(chainId);
+  if (cached) return cached;
+  const chain = proxyChains().find((c) => c.id === chainId);
+  if (!chain) throw new Error(`chain ${chainId} is not supported`);
+  const client = createPublicClient({ chain, transport: http(rpcUrl(chainId)) });
+  proxied.set(chainId, client);
   return client;
 }
 
