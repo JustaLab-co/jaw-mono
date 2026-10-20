@@ -26,6 +26,7 @@ export type MethodCategory =
   | 'wallet'
   | 'capability'
   | 'permission'
+  | 'recovery'
   | 'asset'
   | 'utility';
 
@@ -49,6 +50,7 @@ export const CATEGORY_COLORS: Record<MethodCategory, string> = {
   wallet: 'bg-indigo-100 text-indigo-800 dark:bg-indigo-900 dark:text-indigo-200',
   capability: 'bg-cyan-100 text-cyan-800 dark:bg-cyan-900 dark:text-cyan-200',
   permission: 'bg-yellow-100 text-yellow-800 dark:bg-yellow-900 dark:text-yellow-200',
+  recovery: 'bg-teal-100 text-teal-800 dark:bg-teal-900 dark:text-teal-200',
   asset: 'bg-emerald-100 text-emerald-800 dark:bg-emerald-900 dark:text-emerald-200',
   utility: 'bg-rose-100 text-rose-800 dark:bg-rose-900 dark:text-rose-200',
 };
@@ -61,6 +63,7 @@ export const CATEGORY_LABELS: Record<MethodCategory, string> = {
   wallet: 'Wallet',
   capability: 'Capability',
   permission: 'Permission',
+  recovery: 'Recovery',
   asset: 'Asset',
   utility: 'Utility',
 };
@@ -1049,6 +1052,39 @@ console.log('Permissions:', permissions);`,
     ],
   },
 
+  // ===== Recovery Methods =====
+  {
+    id: 'wallet_getRecovery',
+    name: 'wallet_getRecovery',
+    method: 'wallet_getRecovery',
+    category: 'recovery',
+    description: 'Recovery config on every supported chain, and the ceremonies not executed anywhere',
+    requiresConnection: false,
+    parameters: [
+      {
+        name: 'address',
+        type: 'address',
+        label: 'ENS or Address',
+        description: 'Account address (optional if connected)',
+        required: false,
+        autoFill: 'address',
+      },
+    ],
+    getCodeSnippet: (params) => `const recovery = await jaw.provider.request({
+  method: 'wallet_getRecovery',
+  params: [{
+    address: '${params.address || 'account'}',
+  }],
+});
+
+console.log('Recovery:', recovery);`,
+    buildParams: (params, context) => [
+      {
+        address: params.address || context.address,
+      },
+    ],
+  },
+
   // ===== Asset Methods =====
   {
     id: 'wallet_getAssets',
@@ -1169,6 +1205,7 @@ export const CATEGORIES: MethodCategory[] = [
   'wallet',
   'capability',
   'permission',
+  'recovery',
   'asset',
   'utility',
 ];
