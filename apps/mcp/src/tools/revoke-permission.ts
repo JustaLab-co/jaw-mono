@@ -14,6 +14,8 @@ import {
   lostBefore,
   lostPreamble,
   openLink,
+  RECONNECTING,
+  reconnecting,
   resumeRequest,
   type Claim,
   type Outcome,
@@ -226,12 +228,12 @@ export async function revokePermission(t: Tenant, input: RevokeInput, deps = DEF
   const until = held.approveBy.toISOString();
   if (held.connectionId !== t.connectionId) {
     return refusal(
-      `revoke_in_progress: another app on this account asked the owner to revoke ${held.permissionId}; that link waits until ${until}.`
+      `revoke_in_progress: another app on this account asked the owner to revoke ${held.permissionId}; that link waits until ${until}.${reconnecting(held) ? RECONNECTING : ''}`
     );
   }
   if (held.permissionId?.toLowerCase() !== target.permissionId.toLowerCase()) {
     return refusal(
-      `revoke_in_progress: this connection already asked the owner to revoke ${held.permissionId}. Ask again once they answer or the link ends at ${until}.`
+      `revoke_in_progress: this connection already asked the owner to revoke ${held.permissionId}. Ask again once they answer or the link ends at ${until}.${reconnecting(held) ? RECONNECTING : ''}`
     );
   }
   return answer(target, held);

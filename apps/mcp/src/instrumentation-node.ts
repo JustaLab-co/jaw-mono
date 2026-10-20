@@ -6,7 +6,7 @@ import { log } from './lib/edge';
 import { purge, reconcile } from './reconciler/run';
 import { resumeGrant } from './tools/grant-permissions';
 import { resumeRevoke } from './tools/revoke-permission';
-import { resumeSign } from './tools/sign';
+import { signWork } from './tools/sign';
 
 /** Every minute unless set, 0 turns it off. A value that is not seconds keeps the default. */
 export function reconcileSeconds(value: string | undefined): number {
@@ -20,7 +20,7 @@ export function reconcileSeconds(value: string | undefined): number {
 function reconcileEvery(seconds: number) {
   let running = false;
   setInterval(async () => {
-    void resumeOpen({ sign: resumeSign, grant: resumeGrant, revoke: resumeRevoke });
+    void resumeOpen({ sign: signWork, grant: resumeGrant, revoke: resumeRevoke });
     if (running) return;
     running = true;
     try {

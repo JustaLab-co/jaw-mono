@@ -8,7 +8,7 @@ import { PageGone, resumeWallet, WalletBusy, type Ask, type OpenWallet, type Wal
 import { findActive, type ConnectionRow } from '@/connections/rows';
 import type { ConnectionScope } from '@/connections/scopes';
 import { openResume, sealResume, type RelayResume } from '@/connections/seal';
-import { heldSince, keepLease, sessionLeaseEnd } from '@/connections/session-lease';
+import { heldSince, keepLease, leaseHeld, sessionLeaseEnd } from '@/connections/session-lease';
 import { USER_REJECTED } from '@/connections/wallet-codes';
 import { getDb, type Tx } from '@/db/client';
 import { permissionRequests } from '@/db/schema';
@@ -255,6 +255,10 @@ export async function openLink(t: Tenant, req: LinkRequest, openWallet: OpenWall
   follow(row, wallet, req.work);
   return { opened: row };
 }
+
+/** A saved relay session whose process stopped renewing: the server is rejoining the owner's open link. */
+export const reconnecting = (row: PermissionRequestRow) => row.relay !== null && !leaseHeld(row.sessionUntil);
+export const RECONNECTING = " This server is reconnecting to the owner's open link.";
 
 const newHolder = () => randomBytes(16).toString('base64url');
 

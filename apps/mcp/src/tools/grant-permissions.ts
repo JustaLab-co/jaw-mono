@@ -23,6 +23,8 @@ import {
   lostBefore,
   lostPreamble,
   openLink,
+  RECONNECTING,
+  reconnecting,
   resumeRequest,
   type Claim,
   type Outcome,
@@ -234,8 +236,11 @@ export async function grantPermissions(t: Tenant, input: GrantInput, deps = DEFA
     : '';
   if ('waiting' in opened) {
     if (row.relay) void resumeRequest(row, grantWork(deps.readPermission));
+    const state = reconnecting(row)
+      ? `open at ${row.walletUrl}.${RECONNECTING}`
+      : `still waiting for the owner at ${row.walletUrl}.`;
     return refusal(
-      `${warning}A grant request is still waiting for the owner at ${row.walletUrl}. Ask again once they approve or it expires at ${row.approveBy.toISOString()}.`
+      `${warning}A grant request is ${state} Ask again once they approve or it expires at ${row.approveBy.toISOString()}.`
     );
   }
   const url = row.walletUrl;
