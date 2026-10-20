@@ -24,13 +24,6 @@ const liveRefreshTokens = async (connectionId: string) =>
       where c.id = ${connectionId} and p.model = 'RefreshToken' and p.consumed_at is null`)
   )[0].n;
 
-const lockWaiters = async () =>
-  (
-    await getDb().execute<{ n: number }>(sql`
-      select count(*)::int as n from pg_stat_activity
-      where datname = current_database() and wait_event_type = 'Lock'`)
-  )[0].n;
-
 /**
  * Starts the refreshes while the connection's refresh tokens are locked, and lets
  * them go only once every one waits on that lock, so each round races at the rotation.
@@ -41,8 +34,23 @@ async function racing<T>(connectionId: string, refreshes: (() => Promise<T>)[]):
     await tx.execute(sql`
       select p.key from oauth_payloads p join connections c on p.grant_id = c.grant_id
       where c.id = ${connectionId} and p.model = 'RefreshToken' for update of p`);
-    answers = Promise.all(refreshes.map((r) => r()));
-    await vi.waitFor(async () => expect(await lockWaiters()).toBe(refreshes.length), { timeout: 20_000 });
+    const pending = refreshes.map((r) => r());
+    answers = Promise.all(pending);
+    // Waiters behind the first queue on its tuple lock, so they are counted by what they wait in.
+    const waiting = async () =>
+      (
+        await getDb().execute<{ n: number }>(sql`
+          select count(*)::int as n from pg_stat_activity
+          where datname = current_database() and wait_event_type = 'Lock' and query like '%oauth_payloads%for update%'`)
+      )[0].n;
+    // A refresh that answers while the tokens are locked never reached the rotation.
+    const early = Promise.race(pending).then((a) => {
+      throw new Error(`a refresh answered before the lock: ${JSON.stringify(a)}`);
+    });
+    await Promise.race([
+      vi.waitFor(async () => expect(await waiting()).toBe(refreshes.length), { timeout: 20_000 }),
+      early,
+    ]);
   });
   return answers;
 }

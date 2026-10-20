@@ -369,7 +369,9 @@ describe('the pool of sessions', () => {
 
     await vi.advanceTimersByTimeAsync(1);
 
-    expect((await relay.ownerRelay(84532, new Date(Date.now() + 500))).url).toMatch(/cli-bridge/);
+    const reopened = await relay.ownerRelay(84532, new Date(Date.now() + 500));
+    reopened.close();
+    expect(reopened.url).toMatch(/cli-bridge/);
   });
 
   it('given sessions closed before their socket opened, then their slots are free', async () => {
@@ -503,7 +505,9 @@ describe('the owner pool per account', () => {
 
     await vi.advanceTimersByTimeAsync(1);
 
-    expect((await relay.ownerRelay(84532, new Date(Date.now() + 500), as(ACCOUNT))).url).toMatch(/cli-bridge/);
+    const reopened = await relay.ownerRelay(84532, new Date(Date.now() + 500), as(ACCOUNT));
+    reopened.close();
+    expect(reopened.url).toMatch(/cli-bridge/);
   });
 
   it('given sessions closed before their socket opened, then the slots are free', async () => {
