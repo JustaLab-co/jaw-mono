@@ -491,6 +491,7 @@ describe('jaw_get_sign_status', () => {
     expect(summary).toContain(`call jaw_get_sign_status with ${id} and waitSeconds 30`);
     expect(summary).toContain(`until ${first.structuredContent!.approveBy}`);
     expect(summary).toContain('Do not wait for the owner to say they signed');
+    expect(summary).toContain(`send jaw_sign again with idempotencyKey ${first.structuredContent!.idempotencyKey}`);
   });
 
   it('given the tools list, then jaw_get_sign_status takes an id and a bounded wait', async () => {

@@ -135,6 +135,7 @@ function summaryOf(row: PermissionRequestRow, followUp: boolean): string {
         `Ask the owner to open ${row.walletUrl} before ${by} and review ${what} from ${row.account}. ` +
         'The owner sees it in their wallet and signs there; this connection never signs it. ' +
         `Right after showing the link, call jaw_get_sign_status with ${row.id} and waitSeconds ${SUGGESTED_WAIT_SECONDS}, and again each time it answers awaiting_owner, until ${by}. ` +
+        `Without that tool, send jaw_sign again with idempotencyKey ${row.idempotencyKey} and the same input. ` +
         'Do not wait for the owner to say they signed.'
       );
     case 'approved':

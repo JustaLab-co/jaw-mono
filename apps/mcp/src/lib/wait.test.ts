@@ -68,6 +68,15 @@ describe('waitFor', () => {
     expect(Date.now() - started).toBeLessThan(1_000);
   });
 
+  it('given a reread still running at the deadline, then the wait answers the last value without waiting for it', async () => {
+    let reads = 0;
+    const read = () => (++reads === 1 ? Promise.resolve(false) : new Promise<boolean>(() => {}));
+    const started = Date.now();
+
+    expect(await wait('c1', 0.2, read, {}, 50)).toBe(false);
+    expect(Date.now() - started).toBeLessThan(3_000);
+  });
+
   it('given a reread that throws, then the wait keeps the last value and reads again', async () => {
     let reads = 0;
     const read = async () => {

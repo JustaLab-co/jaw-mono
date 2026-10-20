@@ -6,6 +6,8 @@ export const MAX_WAIT_SECONDS = 45;
 /** What the summaries ask for, leaving room for the reads around the wait and for clients that time out sooner. */
 export const SUGGESTED_WAIT_SECONDS = 30;
 export const POLL_MS = 2_000;
+/** How long a reread that started before the deadline may run past it. */
+export const READ_GRACE_MS = 2_000;
 export const MAX_POLLING = 50;
 export const MAX_POLLING_PER_KEY = 2;
 
@@ -79,6 +81,11 @@ export async function waitFor<T>(
   if (settled(first) || Date.now() >= until) return first;
   const release = pollSlot(key);
   const tick = () => void progress?.().catch(() => undefined);
+  const LATE = Symbol('late');
+  let lateTimer: ReturnType<typeof setTimeout> | undefined;
+  const late = new Promise<typeof LATE>((resolve) => {
+    lateTimer = setTimeout(() => resolve(LATE), until + READ_GRACE_MS - Date.now());
+  });
   let value = first;
   let failed = false;
   try {
@@ -90,7 +97,9 @@ export async function waitFor<T>(
         continue;
       }
       try {
-        value = await read();
+        const next = await Promise.race([read(), late]);
+        if (next === LATE) break;
+        value = next;
       } catch (err) {
         if (!failed) log('warn', { msg: 'wait reread failed', error: errorLabel(err) });
         failed = true;
@@ -100,6 +109,7 @@ export async function waitFor<T>(
       tick();
     }
   } finally {
+    clearTimeout(lateTimer);
     release?.();
   }
   return value;
