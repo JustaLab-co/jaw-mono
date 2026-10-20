@@ -37,7 +37,7 @@ test('other tenants still get status, revoke and health while six connections qu
     return n >= 12;
   });
   const [status, revoked, health] = await Promise.all([
-    timed(() => tool(other.access_token, 'jaw_status', {}, 'mcp1')),
+    timed(() => tool(other.access_token, 'jaw_session_status', {}, 'mcp1')),
     timed(() => revoke(victim.refresh_token, 'mcp1')),
     timed(() => send('/api/health', { replica: 'mcp1' })),
   ]);

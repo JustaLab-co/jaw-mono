@@ -150,7 +150,7 @@ const SHOWN = new Set([
   'bad_signature',
   'already_connected',
   'another_account_signed_in_first',
-  'too many active connections; revoke one first',
+  'too many active connections; disconnect one from its app, or wait for one to expire',
 ]);
 export const reasonOf = (err: unknown) => {
   if ((err as { code?: unknown })?.code === 4001) return 'turned down in the wallet';
@@ -217,7 +217,7 @@ async function start(a: Asked, deps: InteractionDeps, keys: string[]): Promise<J
     .run(async (ask) => {
       const account = await signIn(a, ask, deps);
       if ((await countLive(account)) >= CONNECTIONS_PER_ACCOUNT) {
-        throw new Error('too many active connections; revoke one first');
+        throw new Error('too many active connections; disconnect one from its app, or wait for one to expire');
       }
       const { id, spender } = await pending(a, account);
       const grant = spends(a.scopes) ? await askBudget(a, ask, account, spender, deps) : undefined;

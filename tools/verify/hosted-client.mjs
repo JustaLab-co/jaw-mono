@@ -125,10 +125,14 @@ async function call(name, args) {
 
 const HELP = `Commands:
   tools                          list the server's tools
-  status                         jaw_status
+  status                         jaw_session_status
   connections                    jaw_connections
   history                        jaw_session_history
   funds                          jaw_add_funds
+  assets [chainIds,comma]        jaw_get_assets, every mainnet when left out
+  account-history                jaw_get_calls_history
+  permissions                    jaw_get_permissions
+  capabilities                   jaw_get_capabilities
   quote <url>                    jaw_session_x402_quote
   pay <url> [maxAmount]          jaw_session_x402_pay (maxAmount in base units)
   budget <perDay>                jaw_grant_permissions with the x402 budget preset, USDC per day
@@ -142,17 +146,28 @@ const HELP = `Commands:
                                  jaw_send_calls, the owner approves in the wallet, e.g.
                                  calls '[{"to":"0x...","data":"0x..."}]' 8453 my-key
   calls-status <id>              jaw_get_calls_status, id is the oc_ id jaw_send_calls returned
-  revoke <connection id>         jaw_revoke_connection
+  sign-message '<text>' [key]    jaw_sign, the owner signs the text in the wallet; run it again with the same key to read the signature
+  sign-typed '<json>' [key]      jaw_sign with EIP-712 typed data { domain, types, primaryType, message }
+  read <chainId> '<json reads>'  jaw_read_contracts, e.g.
+                                 read 8453 '[{"address":"0x...","abi":[...],"functionName":"decimals"}]'
+  revoke <permission id> [chain] jaw_revoke_permission
+  execute <permission id> '<json array>' [chainId] [key]
+                                 jaw_session_execute, the session key sends within a custom grant, e.g.
+                                 execute 0x... '[{"to":"0x...","data":"0x..."}]' '' my-key
   disconnect                     jaw_session_disconnect
   call <tool> '<json>'           any tool with raw arguments
   quit`;
 
 const commands = {
   tools: async () => console.log((await rpc('tools/list', {})).tools.map((t) => t.name).join('\n')),
-  status: () => call('jaw_status', {}),
+  status: () => call('jaw_session_status', {}),
   connections: () => call('jaw_connections', {}),
   history: () => call('jaw_session_history', {}),
   funds: () => call('jaw_add_funds', {}),
+  assets: (chainIds) => call('jaw_get_assets', chainIds ? { chainIds: chainIds.split(',').map(Number) } : {}),
+  'account-history': () => call('jaw_get_calls_history', {}),
+  permissions: () => call('jaw_get_permissions', {}),
+  capabilities: () => call('jaw_get_capabilities', {}),
   quote: (url) => call('jaw_session_x402_quote', { url }),
   pay: (url, maxAmount) => call('jaw_session_x402_pay', { url, ...(maxAmount && { maxAmount }) }),
   budget: (perDay) => call('jaw_grant_permissions', { x402Budget: { perDay } }),
@@ -175,7 +190,19 @@ const commands = {
       ...(idempotencyKey && { idempotencyKey }),
     }),
   'calls-status': (id) => call('jaw_get_calls_status', { id }),
-  revoke: (connection) => call('jaw_revoke_connection', { id: connection }),
+  'sign-message': (message, idempotencyKey) => call('jaw_sign', { message, ...(idempotencyKey && { idempotencyKey }) }),
+  'sign-typed': (json, idempotencyKey) =>
+    call('jaw_sign', { typedData: JSON.parse(json), ...(idempotencyKey && { idempotencyKey }) }),
+  read: (chainId, json) => call('jaw_read_contracts', { chainId: Number(chainId), reads: JSON.parse(json) }),
+  revoke: (permissionId, chainId) =>
+    call('jaw_revoke_permission', { permissionId, ...(chainId && { chainId: Number(chainId) }) }),
+  execute: (permissionId, json, chainId, idempotencyKey) =>
+    call('jaw_session_execute', {
+      permissionId,
+      calls: JSON.parse(json),
+      ...(chainId && { chainId: Number(chainId) }),
+      ...(idempotencyKey && { idempotencyKey }),
+    }),
   disconnect: () => call('jaw_session_disconnect', {}),
   call: (name, ...json) => call(name, json.length ? JSON.parse(json.join(' ')) : {}),
 };

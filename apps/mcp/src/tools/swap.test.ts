@@ -18,6 +18,7 @@ import { disconnect } from '@/connections/disconnect';
 import { endConnection } from '@/connections/rows';
 import { SESSION_RENEW_MS } from '@/connections/session-lease';
 import { WalletBusy, type Ask, type OpenWallet, type Wallet } from '@/connections/relay';
+import { revokeByGrant } from '@/connections/rows';
 import {
   approvedOnChain,
   callTool,
@@ -28,7 +29,6 @@ import {
   owner as newSigner,
   sessionFakes,
   setTestEnv,
-  verifyLocally,
   walletAnswers,
   walletsSettled,
 } from '@/connections/testkit';
@@ -44,7 +44,6 @@ import type { BackendDeps } from '@/swap/backend';
 import { swapRequest } from '@/swap/quote';
 import { approveByOf, claimSwap, type SwapRow } from '@/swap/store';
 import { purge } from '@/reconciler/run';
-import { revokeConnection } from './connections';
 import { fakeChain } from '@/owner-calls/chain-testkit';
 import { sendCalls } from './owner-calls';
 import { grantPermissions } from '@/tools/grant-permissions';
@@ -2146,18 +2145,11 @@ describe('B28: the connection ends while the swap awaits the owner', () => {
 
   const ends: [string, PrepareEnd][] = [
     [
-      'the owner revokes it from another app',
-      async (c) => {
-        const other = await tenantOf((await connect(c.signer, { scope: 'wallet:read' })).access_token);
-        return async () => {
-          const asked = await revokeConnection(other, c.t.connectionId, {
-            openWallet: fakeWallet(walletAnswers(c.signer)),
-            verify: verifyLocally,
-            clients: sessionFakes().deps.clients,
-          });
-          expect('structuredContent' in asked).toBe(true);
-          await untilEnded(c.token);
-        };
+      'its client revokes its token',
+      async (c) => async () => {
+        const [{ grantId }] = await getDb().select().from(connections).where(eq(connections.id, c.t.connectionId));
+        await revokeByGrant(grantId!);
+        await untilEnded(c.token);
       },
     ],
     [

@@ -59,10 +59,14 @@ export const disconnectOutput = z.object({
   revoked: z.array(z.string()).describe('Budgets revoked on chain as spender by this call'),
   stillApproved: z
     .array(z.string())
-    .describe('Budgets left approved on chain because the payer could not pay the fee; the owner revokes them'),
+    .describe(
+      'Budgets left approved on chain because the payer could not pay the fee; jaw_revoke_permission revokes them'
+    ),
   unread: z
     .array(z.string())
-    .describe('Grants left approved on chain because the chain could not be read for them; the owner revokes them'),
+    .describe(
+      'Grants left approved on chain because the chain could not be read for them; jaw_revoke_permission revokes them'
+    ),
   swept: z.string().describe('USDC base units returned to the account'),
   txHash: z.string().nullable(),
   left: z.string().nullable().describe('USDC base units still in the payer'),
@@ -256,7 +260,7 @@ function summarize(t: Tenant, r: Returned): string {
   }
   if (r.unread.length) {
     said.push(
-      `${r.unread.length} grant(s) could not be read on chain, so they were not revoked and stay approved until they expire or the owner revokes them in their wallet. ` +
+      `${r.unread.length} grant(s) could not be read on chain, so they were not revoked and stay approved until they expire or the owner revokes them through jaw_revoke_permission. ` +
         'Nothing can spend from them: the session key went with this connection.'
     );
   }

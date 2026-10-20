@@ -18,10 +18,13 @@ apps/mcp/src/reconciler/**
 apps/mcp/src/tools/pay-and-fetch.ts
 apps/mcp/src/tools/grant-permissions.ts
 apps/mcp/src/tools/connections.ts
+apps/mcp/src/tools/revoke-permission.ts
+apps/mcp/src/tools/session-execute.ts
 apps/mcp/src/tools/swap.ts
 apps/mcp/src/swap/**
 apps/mcp/src/owner-calls/**
 apps/mcp/src/tools/owner-calls.ts
+apps/mcp/src/tools/sign.ts
 apps/mcp/src/adapters/session-host.ts
 apps/mcp/src/lib/safe-fetch.ts
 apps/mcp/src/lib/cron.ts
