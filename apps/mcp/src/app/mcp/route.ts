@@ -6,6 +6,7 @@ import { countUnauthorized } from '@/lib/metrics';
 import { registerReadTools } from '@/tools/read';
 import { registerAccountTools } from '@/tools/account';
 import { registerReadContractsTool } from '@/tools/read-contracts';
+import { registerResolveNameTool } from '@/tools/resolve-name';
 import { registerDiscoverTool } from '@/tools/discover';
 import { registerDisconnectTool } from '@/tools/disconnect';
 import { registerHistoryTool } from '@/tools/history';
@@ -28,6 +29,7 @@ const mcp = createMcpHandler(
     registerReadTools(server);
     registerAccountTools(server);
     registerReadContractsTool(server);
+    registerResolveNameTool(server);
     registerDiscoverTool(server);
     registerGrantTool(server);
     registerOwnerCallTools(server);
