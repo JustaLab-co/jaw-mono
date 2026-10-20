@@ -21,7 +21,7 @@ import {
 import { isProxyChain } from '@/lib/chain';
 import { RATE_WINDOW_MS } from '@/lib/edge';
 import { reply } from '@/lib/fence';
-import { MAX_WAIT_SECONDS, waiterOf, waitFor, type Waiter } from '@/lib/wait';
+import { MAX_WAIT_SECONDS, SUGGESTED_WAIT_SECONDS, waiterOf, waitFor, type Waiter } from '@/lib/wait';
 import { MAX_OPEN_PER_ACCOUNT } from '@/owner-calls/cap';
 import { gateCode } from '@/payments/render';
 
@@ -101,7 +101,6 @@ type Request = { type: '0x45'; data: { message: string } } | { type: '0x01'; dat
 
 export interface SignDeps {
   openWallet: OpenWallet;
-  pollMs?: number;
 }
 
 const DEFAULTS: SignDeps = { openWallet: ownerRelay };
@@ -120,15 +119,22 @@ const STATE = {
   failed: 'failed',
 } as const;
 
-function summaryOf(row: PermissionRequestRow): string {
+/** `followUp` is a status read: the agent already showed the link, so it is not asked to again. */
+function summaryOf(row: PermissionRequestRow, followUp: boolean): string {
   const by = row.approveBy.toISOString();
   const what = row.signKind === 'message' ? 'the message' : 'the typed data';
   switch (row.state) {
     case 'awaiting_owner':
+      if (followUp) {
+        return (
+          `The owner has not answered the link yet. Call jaw_get_sign_status with ${row.id} and waitSeconds ${SUGGESTED_WAIT_SECONDS} again, until ${by}. ` +
+          'Do not ask the owner whether they signed, and do not show the link again unless they ask for it.'
+        );
+      }
       return (
         `Ask the owner to open ${row.walletUrl} before ${by} and review ${what} from ${row.account}. ` +
         'The owner sees it in their wallet and signs there; this connection never signs it. ' +
-        `Right after showing the link, call jaw_get_sign_status with ${row.id} and waitSeconds ${MAX_WAIT_SECONDS}, and again each time it answers awaiting_owner, until ${by}. ` +
+        `Right after showing the link, call jaw_get_sign_status with ${row.id} and waitSeconds ${SUGGESTED_WAIT_SECONDS}, and again each time it answers awaiting_owner, until ${by}. ` +
         'Do not wait for the owner to say they signed.'
       );
     case 'approved':
@@ -149,7 +155,7 @@ function summaryOf(row: PermissionRequestRow): string {
   }
 }
 
-async function answer(row: PermissionRequestRow): Promise<SignResult> {
+async function answer(row: PermissionRequestRow, followUp = false): Promise<SignResult> {
   const lost = await lostBefore(row);
   const ended = row.state !== 'awaiting_owner' && row.state !== 'approved';
   return reply(
@@ -167,7 +173,7 @@ async function answer(row: PermissionRequestRow): Promise<SignResult> {
         (lost
           ? lostPreamble(lost, 'sign') +
             `Tell the owner not to approve that one; idempotencyKey ${lost.idempotencyKey} answers link_lost. `
-          : '') + summaryOf(row),
+          : '') + summaryOf(row, followUp),
     })
   );
 }
@@ -307,18 +313,19 @@ export async function sign(t: Tenant, input: SignInput, deps: SignDeps = DEFAULT
 export async function signStatus(
   t: Tenant,
   { id, waitSeconds = 0 }: SignStatusInput,
-  deps: Pick<SignDeps, 'pollMs'> = DEFAULTS,
+  deps: { pollMs?: number } = {},
   waiter: Waiter = {}
 ): Promise<SignResult> {
   if ((await countHit(`owner-sign-status:${t.connectionId}`, RATE_WINDOW_MS)) > STATUS_RATE_LIMIT) {
     return refuse('rate_limited', 'Too many status reads on this connection. Wait a minute.');
   }
+  const until = Date.now() + waitSeconds * 1000;
   const read = async () => {
     const row = await signById(t, id);
-    return row ? answer(row) : refuse('not_found', 'No sign request on this connection has that id.');
+    return row ? answer(row, true) : refuse('not_found', 'No sign request on this connection has that id.');
   };
   const settled = (r: SignResult) => r.structuredContent?.state !== 'awaiting_owner';
-  return waitFor(t.connectionId, await read(), waitSeconds, read, settled, waiter, deps.pollMs);
+  return waitFor(await read(), { key: `sign:${t.connectionId}`, until, read, settled, pollMs: deps.pollMs }, waiter);
 }
 
 export function registerSignTool(server: McpServer) {
@@ -327,7 +334,7 @@ export function registerSignTool(server: McpServer) {
     {
       description:
         'Ask the account owner to sign a message (EIP-191) or EIP-712 typed data with the account. The owner sees it on keys.jaw.id and approves with their passkey; this connection never signs it. ' +
-        `Returns a link for the owner right away. Right after showing it, call jaw_get_sign_status with the id and waitSeconds ${MAX_WAIT_SECONDS} and repeat until approveBy, without waiting for the owner to say they signed. ` +
+        `Returns a link for the owner right away. Right after showing it, call jaw_get_sign_status with the id and waitSeconds ${SUGGESTED_WAIT_SECONDS} (up to ${MAX_WAIT_SECONDS}) and repeat until approveBy, without waiting for the owner to say they signed. ` +
         'Pass exactly one of message and typedData. Tell the owner in plain words what signing it allows: their review is the only check, and a signature can authorize payments or approvals.',
       inputSchema: signInput,
       outputSchema: signOutput,
@@ -342,8 +349,7 @@ export function registerSignTool(server: McpServer) {
         `With waitSeconds it answers as soon as the owner does, or after that many seconds (at most ${MAX_WAIT_SECONDS}), sending progress while it waits.`,
       inputSchema: statusInput,
       outputSchema: signOutput,
-      annotations: { readOnlyHint: true },
     },
-    async (input, ctx) => signStatus(tenant(ctx), input, DEFAULTS, waiterOf(ctx, input.waitSeconds ?? 0))
+    async (input, ctx) => signStatus(tenant(ctx), input, {}, waiterOf(ctx, input.waitSeconds ?? 0))
   );
 }

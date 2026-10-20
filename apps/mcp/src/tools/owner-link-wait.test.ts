@@ -8,6 +8,7 @@ import {
   callTool,
   connect,
   fakeWallet,
+  ISSUER,
   mcp,
   owner as newSigner,
   setTestEnv,
@@ -174,6 +175,81 @@ describe('jaw_get_calls_status with waitSeconds', () => {
     expect(value.structuredContent).toMatchObject({ state: 'sent', callsId: CALLS_ID });
   });
 
+  it('given a link that expired while the wallet was sending, then the wait goes on until the calls id lands', async () => {
+    const { t } = await connected();
+    const { id, answered } = await sendGated(t);
+    await vi.waitFor(async () => {
+      const [row] = await getDb().select().from(ownerCalls).where(eq(ownerCalls.id, id));
+      expect(row.code).toBe(SEND_STARTED);
+    });
+    await withoutOwnerCallsGuard(() =>
+      getDb()
+        .update(ownerCalls)
+        .set({ approveBy: sql`statement_timestamp() - interval '1 second'` })
+        .where(eq(ownerCalls.id, id))
+    );
+    setTimeout(answered.open, 300);
+
+    const { value, ms } = await timed(() => callsStatus(t, id, 10));
+
+    expect(value.structuredContent).toMatchObject({ state: 'sent', callsId: CALLS_ID });
+    expect(ms).toBeGreaterThanOrEqual(250);
+  });
+
+  it('given a status read while the owner has not answered, then the summary asks for another wait, not for the link to be shown again', async () => {
+    const { t } = await connected();
+    const first = await sendCalls(
+      t,
+      { calls: [{ to: TARGET, value: '1' }], idempotencyKey: 'unopened' },
+      { openWallet: idleWallet, receipt: async () => null, clients: quietChain }
+    );
+    const id = first.structuredContent!.id;
+
+    const summary = (await callsStatus(t, id, 0)).structuredContent!.summary;
+
+    expect(summary).toContain(`Call jaw_get_calls_status with ${id} and waitSeconds 30 again`);
+    expect(summary).not.toContain('Ask the owner to open');
+  });
+
+  it('given the client drops the HTTP request, then its wait ends and gives its polling slot back', async () => {
+    const { t, token } = await connected();
+    const { id, answered } = await sendGated(t);
+    const { POST } = await import('@/app/mcp/route');
+    const dropped = [0, 1].map(() => {
+      const abort = new AbortController();
+      setTimeout(() => abort.abort(), 300);
+      const body = {
+        jsonrpc: '2.0',
+        id: 1,
+        method: 'tools/call',
+        params: { name: 'jaw_get_calls_status', arguments: { id, waitSeconds: 30 } },
+      };
+      return POST(
+        new Request(`${ISSUER}/mcp`, {
+          method: 'POST',
+          headers: {
+            'content-type': 'application/json',
+            accept: 'application/json, text/event-stream',
+            authorization: `Bearer ${token}`,
+          },
+          body: JSON.stringify(body),
+          signal: abort.signal,
+        }),
+        { params: Promise.resolve({}) }
+      )
+        .then((res) => res.text())
+        .catch(() => undefined);
+    });
+    await new Promise((resolve) => setTimeout(resolve, 800));
+    setTimeout(answered.open, 100);
+
+    const { value, ms } = await timed(() => callsStatus(t, id, 10));
+
+    expect(value.structuredContent).toMatchObject({ state: 'sent', callsId: CALLS_ID });
+    expect(ms).toBeLessThan(3_000);
+    await Promise.all(dropped);
+  });
+
   it('given sent calls past their grace with no receipt, then it answers at once so the agent checks the chain', async () => {
     const { t } = await connected();
     const { id, answered } = await sendGated(t);
@@ -235,7 +311,7 @@ describe('jaw_get_calls_status with waitSeconds', () => {
     const { id, first } = await sendGated(t);
 
     const summary = first.structuredContent!.summary;
-    expect(summary).toContain(`call jaw_get_calls_status with ${id} and waitSeconds 45`);
+    expect(summary).toContain(`call jaw_get_calls_status with ${id} and waitSeconds 30`);
     expect(summary).toContain(`until ${first.structuredContent!.approveBy}`);
     expect(summary).toContain('Do not wait for the owner to say they approved');
   });
@@ -328,6 +404,30 @@ describe('jaw_get_sign_status', () => {
     expect(ms).toBeLessThan(5_000);
   });
 
+  it('given two calls waits polling on the connection, when the owner signs mid-wait, then the sign wait still answers at once', async () => {
+    const { t, signer } = await connected();
+    const calls = await sendGated(t);
+    const { id, answered } = await askGated(t, signer);
+    const busy = [callsStatus(t, calls.id, 2), callsStatus(t, calls.id, 2)];
+    setTimeout(answered.open, 150);
+
+    const { value, ms } = await timed(() => status(t, id, 10));
+
+    expect(value.structuredContent!.state).toBe('signed');
+    expect(ms).toBeLessThan(1_500);
+    await Promise.all(busy);
+  });
+
+  it('given a status read while the owner has not signed, then the summary asks for another wait, not for the link to be shown again', async () => {
+    const { t, signer } = await connected();
+    const { id } = await askGated(t, signer);
+
+    const summary = (await status(t, id)).structuredContent!.summary;
+
+    expect(summary).toContain(`Call jaw_get_sign_status with ${id} and waitSeconds 30 again`);
+    expect(summary).not.toContain('Ask the owner to open');
+  });
+
   it('given 30 sign status reads in the last minute on the connection, then the next is rate_limited', async () => {
     const { t, signer } = await connected();
     const { id } = await askGated(t, signer);
@@ -388,7 +488,7 @@ describe('jaw_get_sign_status', () => {
     const { id, first } = await askGated(t, signer);
 
     const summary = first.structuredContent!.summary;
-    expect(summary).toContain(`call jaw_get_sign_status with ${id} and waitSeconds 45`);
+    expect(summary).toContain(`call jaw_get_sign_status with ${id} and waitSeconds 30`);
     expect(summary).toContain(`until ${first.structuredContent!.approveBy}`);
     expect(summary).toContain('Do not wait for the owner to say they signed');
   });

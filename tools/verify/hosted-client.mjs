@@ -91,6 +91,7 @@ async function token(body) {
 let tokens;
 let id = 0;
 async function rpc(method, params, retried = false) {
+  const mine = ++id;
   const res = await fetch(RESOURCE, {
     method: 'POST',
     headers: {
@@ -98,7 +99,7 @@ async function rpc(method, params, retried = false) {
       accept: 'application/json, text/event-stream',
       authorization: `Bearer ${tokens.access_token}`,
     },
-    body: JSON.stringify({ jsonrpc: '2.0', id: ++id, method, params }),
+    body: JSON.stringify({ jsonrpc: '2.0', id: mine, method, params }),
   });
   if (res.status === 401 && !retried) {
     tokens = await token({
@@ -117,7 +118,7 @@ async function rpc(method, params, retried = false) {
   for (const m of messages.filter((m) => m.method === 'notifications/progress')) {
     console.log(`progress ${m.params.progress}/${m.params.total}: ${m.params.message ?? ''}`);
   }
-  const msg = messages.find((m) => m.id === id);
+  const msg = messages.find((m) => m.id === mine);
   if (!msg) throw new Error(`/mcp ${res.status}: ${text.slice(0, 300)}`);
   if (msg.error) throw new Error(msg.error.message);
   return msg.result;

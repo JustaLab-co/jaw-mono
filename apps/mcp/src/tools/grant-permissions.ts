@@ -220,7 +220,7 @@ export async function grantPermissions(t: Tenant, input: GrantInput, deps = DEFA
       warning +
       `Ask the account owner to open ${url} and approve ${ask.what} until ${ends} in their wallet, before ${row.approveBy.toISOString()}. ` +
       'Once they do, the session key acts within it with no further prompts. ' +
-      'Right after showing the link, check jaw_session_status on your own about every 30 seconds until that time to see the grant in force; do not wait for the owner to say they approved. ' +
+      'Right after showing the link, call jaw_session_status yourself to see the grant in force, and again on each later turn until that time; do not wait for the owner to say they approved. ' +
       'A grant approved earlier on this connection stays approved on chain until it expires or jaw_session_disconnect revokes it.',
   });
 }

@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
-import { MAX_POLLING, MAX_POLLING_PER_CONNECTION, waitFor } from './wait';
+import { MAX_POLLING, MAX_POLLING_PER_KEY, waitFor, type Waiter } from './wait';
 
 const POLL = 20;
 
@@ -9,8 +9,8 @@ function source(changeAt = Infinity) {
   return { counter, read };
 }
 const settled = (v: boolean) => v;
-const wait = (id: string, seconds: number, read: () => Promise<boolean>, waiter = {}) =>
-  waitFor(id, false, seconds, read, settled, waiter, POLL);
+const wait = (key: string, seconds: number, read: () => Promise<boolean>, waiter: Waiter = {}, pollMs = POLL) =>
+  waitFor(false, { key, until: Date.now() + seconds * 1000, read, settled, pollMs }, waiter);
 
 describe('waitFor', () => {
   it('given a value that changes on the third reread, then it answers with it before the deadline', async () => {
@@ -25,7 +25,7 @@ describe('waitFor', () => {
   it('given a first value already settled, then it never rereads', async () => {
     const { counter, read } = source();
 
-    expect(await waitFor('c1', true, 5, read, settled, {}, POLL)).toBe(true);
+    expect(await waitFor(true, { key: 'c1', until: Date.now() + 5_000, read, settled, pollMs: POLL })).toBe(true);
     expect(counter.reads).toBe(0);
   });
 
@@ -53,7 +53,7 @@ describe('waitFor', () => {
     setTimeout(() => abort.abort(), 50);
     const started = Date.now();
 
-    await waitFor('c1', false, 10, source().read, settled, { signal: abort.signal }, 5_000);
+    await wait('c1', 10, source().read, { signal: abort.signal }, 5_000);
 
     expect(Date.now() - started).toBeLessThan(1_000);
   });
@@ -62,7 +62,7 @@ describe('waitFor', () => {
     const { counter, read } = source();
     const started = Date.now();
 
-    await waitFor('c1', false, 10, read, settled, { signal: AbortSignal.abort() }, 5_000);
+    await wait('c1', 10, read, { signal: AbortSignal.abort() }, 5_000);
 
     expect(counter.reads).toBe(0);
     expect(Date.now() - started).toBeLessThan(1_000);
@@ -85,13 +85,12 @@ describe('waitFor', () => {
     }
   });
 
-  it('given a progress callback, then it hears growing seconds after each reread that did not settle', async () => {
-    const seen: number[] = [];
+  it('given a progress callback, then it hears after each reread that did not settle', async () => {
+    let ticks = 0;
 
-    await wait('c1', 5, source(4).read, { progress: async (s: number) => void seen.push(s) });
+    await wait('c1', 5, source(4).read, { progress: async () => void ticks++ });
 
-    expect(seen).toHaveLength(3);
-    expect(seen).toEqual([...seen].sort((a, b) => a - b));
+    expect(ticks).toBe(3);
   });
 
   it('given a progress callback that fails, then the wait still answers', async () => {
@@ -102,8 +101,8 @@ describe('waitFor', () => {
     expect(await wait('c1', 5, source(2).read, { progress })).toBe(true);
   });
 
-  it(`given ${MAX_POLLING_PER_CONNECTION} waits polling on one connection, then a third only sleeps and reads once, and another connection still polls`, async () => {
-    const held = Array.from({ length: MAX_POLLING_PER_CONNECTION }, () => wait('busy', 0.4, source().read));
+  it(`given ${MAX_POLLING_PER_KEY} waits polling on one key, then a third reads once at the end, and another key still polls`, async () => {
+    const held = Array.from({ length: MAX_POLLING_PER_KEY }, () => wait('busy', 0.4, source().read));
     const third = source();
     const other = source();
 
@@ -111,6 +110,15 @@ describe('waitFor', () => {
 
     expect(third.counter.reads).toBe(1);
     expect(other.counter.reads).toBeGreaterThan(3);
+  });
+
+  it('given a wait past the cap, then it still sends progress while it sleeps', async () => {
+    const held = Array.from({ length: MAX_POLLING_PER_KEY }, () => wait('full', 0.4, source().read));
+    let ticks = 0;
+
+    await Promise.all([...held, wait('full', 0.2, source().read, { progress: async () => void ticks++ })]);
+
+    expect(ticks).toBeGreaterThan(3);
   });
 
   it(`given ${MAX_POLLING} waits polling in the process, then the next one only sleeps and reads once`, async () => {
@@ -123,7 +131,7 @@ describe('waitFor', () => {
   });
 
   it('given waits that ended, then their polling slots are free again', async () => {
-    await Promise.all(Array.from({ length: MAX_POLLING_PER_CONNECTION }, () => wait('again', 0.05, source().read)));
+    await Promise.all(Array.from({ length: MAX_POLLING_PER_KEY }, () => wait('again', 0.05, source().read)));
     const after = source();
 
     await wait('again', 0.2, after.read);
