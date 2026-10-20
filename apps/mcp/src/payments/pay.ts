@@ -22,7 +22,7 @@ import { agentLogger, chainClients, payerFor, sessionOf, topUpExecutor, withoutU
 import type { Tenant } from '@/connections/auth';
 import { config } from '@/connections/config';
 import { countHit, isPaymentsPaused } from '@/db/settings';
-import { x402Budget, x402Budgets, type Grant } from '@/grants/store';
+import { signedUnder, x402Budget, type Grant } from '@/grants/store';
 import { errorLabel, log, RATE_WINDOW_MS } from '@/lib/edge';
 import { fenceText } from '@/lib/fence';
 import { safeFetch, watchCuts } from '@/lib/safe-fetch';
@@ -351,10 +351,13 @@ export async function pay(
   const confirm = { clients: deps.clients, later: deps.later };
 
   if (claimed.kind === 'resume') {
-    const signedUnder = (await x402Budgets(t.connectionId)).find((g) => g.permissionId === claimed.row.permissionId);
-    const stopped: Unreached | undefined = signedUnder
-      ? await grantLive(signedUnder, deps)
-      : { kind: 'unreached', code: 'no_grant', reason: 'the budget this payment was signed under ended' };
+    const under = claimed.row.permissionId ? await signedUnder(t.connectionId, claimed.row.permissionId) : undefined;
+    let stopped: Unreached | undefined = {
+      kind: 'unreached',
+      code: 'no_grant',
+      reason: 'the budget this payment was signed under ended',
+    };
+    if (under) stopped = under.replaced ? undefined : await grantLive(under.grant, deps);
     return resend(claimed.row, claimed.token, stopped, payer, sent, confirm, cuts.lastCut, tap.last);
   }
 

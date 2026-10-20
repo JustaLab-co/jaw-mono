@@ -12,11 +12,11 @@ import {
   type TopUpOutcome,
   type X402Policy,
 } from '@jaw.id/agent';
-import { and, eq } from 'drizzle-orm';
+import { and, eq, isNotNull } from 'drizzle-orm';
 import { decodeFunctionData, erc20Abi, isAddressEqual, type Address, type Hex } from 'viem';
 import { sessionOf } from '@/adapters/session-host';
 import { isLive } from '@/connections/rows';
-import { connections } from '@/db/schema';
+import { connections, grants } from '@/db/schema';
 import type { Grant } from '@/grants/store';
 import { errorLabel, log } from '@/lib/edge';
 import { nonceUsed } from './confirm';
@@ -195,6 +195,14 @@ export function refillHook(c: RefillContext): EnsureFunds {
             return Boolean(row);
           });
           if (!live) return { ok: false, code: 'not_allowed', reason: 'this connection has ended' };
+          // A budget replaced since this payment chose it may be revoked by now, so its refill would revert.
+          const [replaced] = await hold.tx((tx) =>
+            tx
+              .select({ id: grants.permissionId })
+              .from(grants)
+              .where(and(eq(grants.permissionId, c.grant.permissionId), isNotNull(grants.replacedAt)))
+          );
+          if (replaced) return { ok: false, code: 'not_allowed', reason: 'a newer budget replaced this one' };
           // The balance and the nonces it is netted against are read at one block, so a
           // payment mined between two reads is neither in the balance nor held, never both.
           const client = c.clients.publicClient(c.grant.chainId);

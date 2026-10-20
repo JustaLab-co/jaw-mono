@@ -4,7 +4,7 @@ import {
   type PermissionReadTarget,
   type PermissionState,
 } from '@jaw.id/agent';
-import { eq, sql } from 'drizzle-orm';
+import { and, eq, isNull, ne, sql } from 'drizzle-orm';
 import { isAddressEqual, isHex, numberToHex, toFunctionSelector, type Address, type Hex } from 'viem';
 import type { Tx } from '@/db/client';
 import { connections, grants, SPEND_UNITS } from '@/db/schema';
@@ -128,8 +128,23 @@ export async function recordGrant(tx: Tx, connectionId: string, grant: NewGrant)
   if ((await liveGrants(connectionId, tx)).length >= LIVE_GRANTS_PER_CONNECTION) {
     throw new Error(`the connection already holds ${LIVE_GRANTS_PER_CONNECTION} live grants`);
   }
-  await tx
+  const inserted = await tx
     .insert(grants)
     .values({ ...grant, connectionId, createdAt: sql`clock_timestamp()` })
-    .onConflictDoNothing();
+    .onConflictDoNothing()
+    .returning({ permissionId: grants.permissionId });
+  if (!inserted.length || grant.kind !== 'x402-budget') return;
+  // Payments draw from the newest budget only, so an older one is exposure with no use.
+  await tx
+    .update(grants)
+    .set({ replacedAt: new Date() })
+    .where(
+      and(
+        eq(grants.connectionId, connectionId),
+        eq(grants.kind, 'x402-budget'),
+        ne(grants.permissionId, grant.permissionId),
+        isNull(grants.replacedAt),
+        isNull(grants.revokedAt)
+      )
+    );
 }

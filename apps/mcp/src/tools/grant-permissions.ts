@@ -2,9 +2,20 @@ import { ANY_FN_SEL, ANY_TARGET, EMPTY_CALLDATA_FN_SEL } from '@jaw.id/core';
 import { usdcForNetwork } from '@jaw.id/agent';
 import type { McpServer } from '@modelcontextprotocol/server';
 import { and, eq } from 'drizzle-orm';
-import { isAddress, isAddressEqual, isHex, numberToHex, parseUnits, toFunctionSelector, type Address } from 'viem';
+import {
+  formatUnits,
+  isAddress,
+  isAddressEqual,
+  isHex,
+  numberToHex,
+  parseUnits,
+  toFunctionSelector,
+  type Address,
+} from 'viem';
 import { z } from 'zod';
+import { chainClients } from '@/adapters/session-host';
 import { tenant, type Tenant } from '@/connections/auth';
+import { revokeReplaced, sessionSender, type DisconnectDeps } from '@/connections/disconnect';
 import { APPROVE_WITHIN_MS } from '@/connections/config';
 import { ownerRelay, type Ask, type OpenWallet } from '@/connections/relay';
 import { isLive } from '@/connections/rows';
@@ -20,7 +31,7 @@ import {
   type ReadPermission,
 } from '@/grants/permission';
 import { lostBefore, lostPreamble, openLink, type Claim, type Outcome } from '@/grants/requests';
-import { liveGrants, LIVE_GRANTS_PER_CONNECTION, type GrantKind } from '@/grants/store';
+import { liveGrants, LIVE_GRANTS_PER_CONNECTION, x402Budget, type GrantKind, type LiveGrant } from '@/grants/store';
 import { errorLabel, log } from '@/lib/edge';
 import { reply } from '@/lib/fence';
 import { forbiddenTargets } from './owner-calls';
@@ -90,9 +101,15 @@ export type GrantInput = z.input<typeof grantInput>;
 interface GrantDeps {
   openWallet: OpenWallet;
   readPermission: ReadPermission;
+  /** What revokes replaced budgets as spender. Without it they stay replaced until the disconnect. */
+  session?: Pick<DisconnectDeps, 'clients' | 'sender'>;
 }
 
-const DEFAULTS: GrantDeps = { openWallet: ownerRelay, readPermission: readOnChain };
+const DEFAULTS: GrantDeps = {
+  openWallet: ownerRelay,
+  readPermission: readOnChain,
+  session: { clients: chainClients, sender: sessionSender },
+};
 
 const output = z.object({ url: z.url(), expiresAt: z.string(), summary: z.string() });
 
@@ -138,12 +155,22 @@ function asked(t: Tenant, input: GrantInput, expiry: number): Asked | string {
   return { kind: 'custom', grant, what: `${calls.length} call(s) and ${spent.length} spend limit(s)` };
 }
 
-async function askGrant(t: Tenant, ask: Asked, walletAsk: Ask, claim: Claim, read: ReadPermission): Promise<Outcome> {
+/** Revokes the budgets a newer one replaced. One left approved stays replaced, so nothing pays from it. */
+async function revokeOlder(t: Tenant, deps: GrantDeps) {
+  if (!deps.session) return;
+  const outcome = await revokeReplaced(t, { readPermission: deps.readPermission, ...deps.session }).catch(errorLabel);
+  if (typeof outcome === 'string') log('warn', { msg: 'replaced budget not revoked', error: outcome });
+  else if (outcome.stillApproved.length || outcome.unread.length) {
+    log('warn', { msg: 'replaced budget not revoked', error: [...outcome.stillApproved, ...outcome.unread].join(',') });
+  }
+}
+
+async function askGrant(t: Tenant, ask: Asked, walletAsk: Ask, claim: Claim, deps: GrantDeps): Promise<Outcome> {
   if (!(await claim())) return { state: 'expired', code: 'session_lost' };
   const answer = await walletAsk('wallet_grantPermissions', [ask.grant]);
   const answered = (answer as { permissionId?: unknown } | null)?.permissionId;
   const permissionId = isHex(answered) ? answered : undefined;
-  const checked = await checkGranted(t.chainId, ask.grant, ask.kind, answer, read);
+  const checked = await checkGranted(t.chainId, ask.grant, ask.kind, answer, deps.readPermission);
   if (typeof checked === 'string') return { state: 'failed', code: checked, permissionId };
   if (!isAddressEqual(checked.account as Address, t.account)) {
     return { state: 'failed', code: 'wrong_account', permissionId };
@@ -158,11 +185,32 @@ async function askGrant(t: Tenant, ask: Asked, walletAsk: Ask, claim: Claim, rea
       if (live) await recordGrant(tx, t.connectionId, checked);
       return live !== undefined;
     });
-    return recorded ? { state: 'approved', permissionId } : { state: 'failed', code: 'connection_ended', permissionId };
+    if (!recorded) return { state: 'failed', code: 'connection_ended', permissionId };
   } catch (err) {
     log('warn', { msg: 'granted permission not recorded', permissionId, error: errorLabel(err) });
     return { state: 'failed', code: 'not_recorded', permissionId };
   }
+  await revokeOlder(t, deps);
+  return { state: 'approved', permissionId };
+}
+
+/** What the connection's live grants let the session key move, summed per token and period. */
+function liveTotals(t: Tenant, held: LiveGrant[]): string {
+  const usdc = usdcForNetwork(`eip155:${t.chainId}`);
+  const sums = new Map<string, { token: string; per: string; amount: bigint }>();
+  for (const { token, unit, multiplier, allowance } of held.flatMap((g) => g.permission.spends)) {
+    const per = multiplier === 1 ? unit : `${multiplier} ${unit}s`;
+    const key = `${token.toLowerCase()}:${per}`;
+    const sum = sums.get(key) ?? { token, per, amount: 0n };
+    sums.set(key, { ...sum, amount: sum.amount + BigInt(allowance) });
+  }
+  if (!sums.size) return 'No live grant on this connection lets the session key move tokens yet. ';
+  const lines = [...sums.values()].map(({ token, per, amount }) =>
+    usdc && isAddressEqual(token as Address, usdc.address)
+      ? `${formatUnits(amount, usdc.decimals)} USDC per ${per}`
+      : `${amount} base units of ${token} per ${per}`
+  );
+  return `The ${held.length} live grant(s) on this connection already let the session key move up to ${lines.join(', ')}. `;
 }
 
 export async function grantPermissions(t: Tenant, input: GrantInput, deps = DEFAULTS) {
@@ -182,19 +230,25 @@ export async function grantPermissions(t: Tenant, input: GrantInput, deps = DEFA
   }
   const ask = asked(t, input, Math.floor(expiresAt.getTime() / 1000));
   if (typeof ask === 'string') return refusal(ask);
-  if ((await liveGrants(t.connectionId)).length >= LIVE_GRANTS_PER_CONNECTION) {
+  let held = await liveGrants(t.connectionId);
+  if (held.length >= LIVE_GRANTS_PER_CONNECTION) {
+    await revokeOlder(t, deps);
+    held = await liveGrants(t.connectionId);
+  }
+  if (held.length >= LIVE_GRANTS_PER_CONNECTION) {
     return refusal(
       `This connection already holds ${LIVE_GRANTS_PER_CONNECTION} live grants, the most one connection may hold. ` +
-        'Wait for one to expire, or call jaw_session_disconnect, which revokes them all, and connect again.'
+        'Wait for one to expire, revoke one listed by jaw_connections with jaw_revoke_permission, or call jaw_session_disconnect, which revokes them all, and connect again.'
     );
   }
+  const replacing = ask.kind === 'x402-budget' && (await x402Budget(t.connectionId)) !== undefined;
   const opened = await openLink(
     t,
     {
       method: 'grant',
       chainId: t.chainId,
       approveBy: until,
-      work: (walletAsk, claim) => askGrant(t, ask, walletAsk, claim, deps.readPermission),
+      work: (walletAsk, claim) => askGrant(t, ask, walletAsk, claim, deps),
     },
     deps.openWallet
   );
@@ -220,8 +274,11 @@ export async function grantPermissions(t: Tenant, input: GrantInput, deps = DEFA
       warning +
       `Ask the account owner to open ${url} and approve ${ask.what} until ${ends} in their wallet. ` +
       'Once they do, the session key acts within it with no further prompts. ' +
-      (ask.kind === 'x402-budget' ? 'jaw_session_status shows the budget in force. ' : '') +
-      'A grant approved earlier on this connection stays approved on chain until it expires or jaw_session_disconnect revokes it.',
+      liveTotals(t, held) +
+      (replacing
+        ? 'Approving this budget replaces the current one, which this server then revokes on chain; jaw_session_status shows the budget in force. '
+        : '') +
+      'Other grants approved earlier on this connection stay approved on chain until they expire or jaw_session_disconnect revokes them.',
   });
 }
 
@@ -233,6 +290,7 @@ export function registerGrantTool(server: McpServer) {
         'Ask the account owner to grant this session key a permission, approved once in their JAW wallet. ' +
         'Pass x402Budget for the payment budget: a daily USDC allowance that payments, refills and swap quotes draw from with no further prompts; payments use the newest one. ' +
         'Or pass calls, the contract functions the session key may call, and spends, how much of each token it may move per period, for a custom grant. ' +
+        'A new x402Budget replaces the current one, which the server then revokes on chain. ' +
         'The grant ends at expiresAt, or with the connection when that comes first. A connection holds at most 5 live grants. Returns a link for the owner. For a one-off contract call use jaw_send_calls, which asks the owner each time.',
       inputSchema: grantInput,
       outputSchema: output,

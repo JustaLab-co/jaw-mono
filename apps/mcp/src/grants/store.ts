@@ -1,5 +1,5 @@
 import type { GrantedPermission } from '@jaw.id/agent';
-import { and, desc, eq, gt, isNull, sql } from 'drizzle-orm';
+import { and, desc, eq, gt, isNotNull, isNull, or, sql } from 'drizzle-orm';
 import type { Address, Hex } from 'viem';
 import { getDb, type Tx } from '@/db/client';
 import { grants } from '@/db/schema';
@@ -44,17 +44,40 @@ const toBudget = (row: typeof grants.$inferSelect): Grant => ({
   allowance: row.allowance as string,
 });
 
-export async function x402Budgets(connectionId: string): Promise<Grant[]> {
-  const rows = await getDb()
+/**
+ * The budget a payment was signed under, while its proof may go out again:
+ * unexpired, and unrevoked unless a newer budget replaced it, which the owner did
+ * not revoke. The proof spends the payer's float, not the budget.
+ */
+export async function signedUnder(
+  connectionId: string,
+  permissionId: string
+): Promise<{ grant: Grant; replaced: boolean } | undefined> {
+  const [row] = await getDb()
+    .select()
+    .from(grants)
+    .where(
+      and(
+        eq(grants.connectionId, connectionId),
+        eq(grants.permissionId, permissionId),
+        eq(grants.kind, 'x402-budget'),
+        gt(grants.expiresAt, sql`now()`),
+        or(isNull(grants.revokedAt), isNotNull(grants.replacedAt))
+      )
+    );
+  return row && { grant: toBudget(row), replaced: row.replacedAt !== null };
+}
+
+/** The budget payments draw from: the newest one, as every older one is replaced. */
+export async function x402Budget(connectionId: string): Promise<Grant | undefined> {
+  const [row] = await getDb()
     .select()
     .from(grants)
     .where(and(eq(grants.connectionId, connectionId), spendableBudget))
-    .orderBy(desc(grants.createdAt));
-  return rows.map(toBudget);
+    .orderBy(desc(grants.createdAt))
+    .limit(1);
+  return row && toBudget(row);
 }
-
-export const x402Budget = async (connectionId: string): Promise<Grant | undefined> =>
-  (await x402Budgets(connectionId))[0];
 
 export async function unrevokedGrant(connectionId: string, permissionId: string): Promise<LiveGrant | undefined> {
   const [row] = await getDb()
@@ -76,5 +99,16 @@ export async function liveGrants(connectionId: string, db: Tx = getDb()): Promis
     .from(grants)
     .where(and(eq(grants.connectionId, connectionId), live))
     .orderBy(desc(grants.createdAt));
+  return rows.map(toLive);
+}
+
+/** Budgets a newer one replaced that are still approved, as far as this server knows. */
+export async function replacedBudgets(connectionId: string, db: Tx = getDb()): Promise<LiveGrant[]> {
+  const rows = await db
+    .select()
+    .from(grants)
+    .where(
+      and(eq(grants.connectionId, connectionId), live, eq(grants.kind, 'x402-budget'), isNotNull(grants.replacedAt))
+    );
   return rows.map(toLive);
 }

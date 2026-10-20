@@ -538,10 +538,25 @@ describe('jaw_session_x402_pay', () => {
     });
   });
 
-  it.each([
-    ['expired', { expiresAt: new Date(Date.now() - 1000) }],
-    ['was replaced before a connection held several budgets', { replacedAt: new Date() }],
-  ])(
+  it('given a lost answer and a newer budget whose approval revoked the older on chain, when the key is retried, then the proof goes out again', async () => {
+    const { c, t } = await connected('1');
+    balances.set(t.sessionAddress.toLowerCase(), 1_000_000n);
+    dropNextLost = true;
+    const lost = await pay(t, { url: url('/lost'), idempotencyKey: 'replaced-resend' }, deps());
+    expect(lost.structuredContent).toMatchObject({ state: 'signed', refusal: { code: 'no_response' } });
+    const signedUnder = (await rowOf(lost.structuredContent!.paymentId)).permissionId!;
+    await approveBudget(c, '1');
+    await getDb().update(grants).set({ revokedAt: new Date() }).where(eq(grants.permissionId, signedUnder));
+    const later = await otherReplica();
+    const revoked = deps({ readPermission: async () => ({ status: 'ok', approved: true, revoked: true }) });
+
+    const again = await later(t, { url: url('/lost'), idempotencyKey: 'replaced-resend' }, revoked);
+
+    expect(again.structuredContent).toMatchObject({ state: 'settled' });
+    expect(seen.map((s) => s.signature)).toEqual([seen[0].signature, seen[0].signature]);
+  });
+
+  it.each([['expired', { expiresAt: new Date(Date.now() - 1000) }]])(
     'given a lost answer and a budget that since %s, when the key is retried, then no_grant, the proof is not sent again, and no budget is suggested',
     async (_name, ended) => {
       const { c, t } = await connected('1');
@@ -1604,6 +1619,21 @@ describe('the raw body kept for an internal caller', () => {
     expect(await refusalOf(getDb().execute(sql`update payments set body = 'early' where id = ${id}`))).toMatch(
       /payment_body/
     );
+  });
+});
+
+describe('given a pay request that chose a budget', () => {
+  it('when a newer budget replaced the one it chose before its refill turn, then it refuses, pulls nothing and signs nothing', async () => {
+    const { c, t } = await connected('1');
+    onProbe.set('/race', () => approveBudget(c, '2'));
+    const result = await pay(t, { url: url('/race'), idempotencyKey: 'replaced-refill' }, deps());
+    expect(result.structuredContent).toMatchObject({
+      kind: 'refused',
+      payerRefilled: false,
+      refusal: { code: 'not_allowed' },
+    });
+    expect(refills).toEqual([]);
+    expect(seen).toHaveLength(0);
   });
 });
 

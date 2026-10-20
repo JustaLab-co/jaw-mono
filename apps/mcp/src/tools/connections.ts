@@ -12,7 +12,11 @@ import { reply } from '@/lib/fence';
 const grantView = z.object({
   permissionId: z.string(),
   kind: z.enum(['x402-budget', 'custom']),
-  status: z.enum(['live', 'expired', 'revoked']),
+  status: z
+    .enum(['live', 'replaced', 'expired', 'revoked'])
+    .describe(
+      'replaced: a newer x402 budget took its place, so no new payment draws from it, but the server has not revoked it and it stays approved on chain; jaw_revoke_permission revokes it'
+    ),
   spends: z.array(
     z.object({
       token: z.string(),
@@ -46,12 +50,18 @@ const connectionView = z.object({
 type View = z.infer<typeof connectionView>;
 type GrantRow = typeof grants.$inferSelect;
 
+function statusOf(g: GrantRow, now: Date): z.infer<typeof grantView>['status'] {
+  if (g.revokedAt) return 'revoked';
+  if (g.expiresAt <= now) return 'expired';
+  return g.replacedAt ? 'replaced' : 'live';
+}
+
 function grantOf(g: GrantRow, now: Date): z.infer<typeof grantView> {
   const { spends } = g.permission as GrantedPermission;
   return {
     permissionId: g.permissionId,
     kind: g.kind,
-    status: g.revokedAt ? 'revoked' : g.expiresAt <= now ? 'expired' : 'live',
+    status: statusOf(g, now),
     spends: spends.map((s) => ({ ...s, allowance: BigInt(s.allowance).toString() })),
     expiresAt: g.expiresAt.toISOString(),
     revokedAt: g.revokedAt?.toISOString() ?? null,
@@ -108,7 +118,7 @@ export function registerConnectionTools(server: McpServer) {
     'jaw_connections',
     {
       description:
-        'Every app connected to this account through this server, this one included, with the grants each one holds by permissionId: kind, spend limits, expiry and whether it is live, expired or revoked. ' +
+        'Every app connected to this account through this server, this one included, with the grants each one holds by permissionId: kind, spend limits, expiry and whether it is live, replaced, expired or revoked. ' +
         'jaw_revoke_permission revokes one; jaw_session_status shows what is left of the x402 budget today.',
       inputSchema: z.strictObject({}),
       outputSchema: z.object({ connections: z.array(connectionView), summary: z.string() }),
@@ -123,10 +133,15 @@ export function registerConnectionTools(server: McpServer) {
         .orderBy(desc(connections.createdAt));
       const views = await viewsOf(t, rows);
       const active = views.filter((v) => v.status === 'active').length;
-      const live = views.flatMap((v) => v.grants).filter((g) => g.status === 'live').length;
+      const held = views.flatMap((v) => v.grants);
+      const live = held.filter((g) => g.status === 'live').length;
+      const replaced = held.filter((g) => g.status === 'replaced').map((g) => g.permissionId);
+      const unrevoked = replaced.length
+        ? ` ${replaced.length} replaced budget(s) are still approved on chain: ${replaced.join(', ')}. jaw_revoke_permission revokes them.`
+        : '';
       return reply({
         connections: views,
-        summary: `${views.length} connection(s), ${active} active, holding ${live} live grant(s).`,
+        summary: `${views.length} connection(s), ${active} active, holding ${live} live grant(s).${unrevoked}`,
       });
     }
   );
