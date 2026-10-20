@@ -397,16 +397,17 @@ describe('jaw_revoke_permission', () => {
     expect(urlOf(theirs)).toBeUndefined();
   });
 
-  it('given a waiting revoke has a saved relay session and its lease lapsed, when another app asks, then the refusal says the server is reconnecting', async () => {
+  it('given a waiting revoke has a saved relay session and its lease lapsed inside the stall grace, when another app asks, then the refusal says the server is reconnecting', async () => {
     const signer = owner();
     const { t, budget } = await connected(signer);
     const other = await connected(signer, 'wallet:read');
     const { deps } = setup(signer);
     const wait = held();
     await revokePermission(t, { permissionId: budget }, deps({ held: wait.promise }));
+    // Inside the grace no rejoin starts, so the read sees the row exactly as written.
     await getDb()
       .update(permissionRequests)
-      .set({ relay: 'saved', sessionUntil: sql`now() - interval '61 seconds'` })
+      .set({ relay: 'saved', sessionUntil: sql`now() - interval '30 seconds'` })
       .where(eq(permissionRequests.connectionId, t.connectionId));
 
     const theirs = await revokePermission(other.t, { permissionId: budget }, deps({ held: wait.promise }));
