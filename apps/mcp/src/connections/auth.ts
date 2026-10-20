@@ -2,25 +2,15 @@ import type { ConnectionScope } from './scopes';
 import { bearerAuthChallengeResponse, OAuthError, OAuthErrorCode, type AuthInfo } from '@modelcontextprotocol/server';
 import { compactDecrypt, decodeProtectedHeader } from 'jose';
 import { withMcpAuth } from 'mcp-handler';
-import type { Address, Hex } from 'viem';
 import { errorLabel, ipKey, log } from '@/lib/edge';
 import { config } from './config';
-import { findActive, type ConnectionRow } from './rows';
+import { findActive } from './rows';
 import { open, type Sealed } from './seal';
+import { tenantOf, type Tenant } from './tenant';
 
 export const RESOURCE_METADATA_PATH = '/.well-known/oauth-protected-resource/mcp';
 
-export interface Tenant {
-  connectionId: string;
-  account: Address;
-  chainId: number;
-  clientId: string;
-  clientName: string;
-  scopes: ConnectionScope[];
-  sessionAddress: Address;
-  expiresAt: Date;
-  sessionKey(): Hex;
-}
+export type { Tenant } from './tenant';
 
 interface Claims {
   jti: string;
@@ -58,18 +48,6 @@ export async function connectionKey(req: Request): Promise<string | undefined> {
   const claims = bearer ? await decrypt(bearer) : undefined;
   return claims ? `conn:${claims.sub}` : ipKey(req);
 }
-
-export const tenantOf = (row: ConnectionRow, scopes: ConnectionScope[], sessionKey: () => Hex): Tenant => ({
-  connectionId: row.id,
-  account: row.account as Address,
-  chainId: row.chainId,
-  clientId: row.clientId,
-  clientName: row.clientName,
-  scopes,
-  sessionAddress: row.sessionAddress as Address,
-  expiresAt: row.expiresAt,
-  sessionKey,
-});
 
 export async function clientOf(req: Request): Promise<string> {
   const bearer = bearerOf(req);

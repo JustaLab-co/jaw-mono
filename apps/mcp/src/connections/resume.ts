@@ -1,5 +1,5 @@
 import { errorLabel, log } from '@/lib/edge';
-import { tenantOf, type Tenant } from './auth';
+import { tenantOf, type Tenant } from './tenant';
 import { config } from './config';
 import { resumeWallet, WalletBusy, type Wallet } from './relay';
 import { findActive, type ConnectionRow } from './rows';
