@@ -1,5 +1,6 @@
 import {
   balanceReader,
+  type OnChainPeriod,
   payAndFetch,
   readCurrentPeriods,
   readLiveness,
@@ -15,9 +16,9 @@ import { tenant, type Tenant } from '@/connections/auth';
 import { config } from '@/connections/config';
 import { findActive } from '@/connections/rows';
 import { getDb } from '@/db/client';
-import { currentGrant, type Grant } from '@/grants/store';
+import { liveGrants, x402Budget, type Grant, type LiveGrant } from '@/grants/store';
 import { dayLeft, daySpendOf, isoOf } from '@/payments/day-spend';
-import { recordedSends } from '@/payments/sends';
+import { openSpends, recordedSends, type OpenSpend } from '@/payments/sends';
 import { entriesFor, pulledUnderOtherGrants } from '@/payments/store';
 import { publicClientFor } from '@/lib/chain';
 import { fenceText, reply } from '@/lib/fence';
@@ -98,7 +99,7 @@ function readinessOf(t: Tenant, liveness: Awaited<ReturnType<typeof readLiveness
 }
 
 async function readinessFor(t: Tenant): Promise<Readiness> {
-  const grant = await currentGrant(t.connectionId);
+  const grant = await x402Budget(t.connectionId);
   return readinessOf(t, grant && (await budgetOf(grant, t, null)).liveness);
 }
 
@@ -111,12 +112,34 @@ async function balanceOf(network: string, owner: Address) {
     .catch(() => null);
 }
 
+const limitOut = z.object({
+  asset: z.string().describe('CAIP-19 asset id'),
+  unit: z.string(),
+  multiplier: z.number(),
+  allowance: z.string().describe('Base units per period'),
+  left: z
+    .string()
+    .nullable()
+    .describe(
+      'Base units the session key can still spend under this limit this period, executes in flight counted; null when unreadable. An x402 budget reports its `budget.remainingToday`'
+    ),
+});
+const grantOut = z.object({
+  permissionId: z.string(),
+  kind: z.enum(['x402-budget', 'custom']),
+  chainId: z.string().describe('CAIP-2'),
+  active: z.boolean().nullable().describe('The chain still approves it; null when the chain could not be read'),
+  expiresAt: z.string(),
+  limits: z.array(limitOut),
+});
+
 const statusOutput = z.object({
   account: z.string(),
   chainId: z.string().describe('CAIP-2'),
   sessionAddress: z.string().describe('The address this connection pays from once it has a budget'),
   connectionExpiresAt: z.string().describe('When this connection expires; call jaw_session_disconnect before then'),
-  balances: z.object({ account: money.nullable(), session: money.nullable() }),
+  float: money.nullable().describe('USDC held at the session address, which pays before the account is pulled from'),
+  grants: z.array(grantOut).describe('Every live grant on this connection, with what each limit has left'),
   budget: budgetOutput.nullable(),
   readiness,
   summary: z.string(),
@@ -124,8 +147,8 @@ const statusOutput = z.object({
 
 const NOT_READY: Record<NonNullable<Readiness['reason']>, string> = {
   no_scope: 'Paying needs the x402:pay scope: reconnect and ask for it.',
-  no_grant: 'No budget yet: ask for one with jaw_request_budget.',
-  grant_revoked: 'The budget was revoked: ask for a new one with jaw_request_budget.',
+  no_grant: 'No budget yet: ask for one with jaw_grant_permissions and x402Budget.',
+  grant_revoked: 'The budget was revoked: ask for a new one with jaw_grant_permissions and x402Budget.',
   chain_unavailable: 'The budget could not be read from the chain right now.',
 };
 
@@ -136,15 +159,57 @@ function leftToday(budget: z.infer<typeof budgetOutput> | undefined) {
 
 const EXPIRY_WARN_MS = 48 * 60 * 60 * 1000;
 
+function leftOf(period: OnChainPeriod, allowance: bigint, open: OpenSpend[], token: string) {
+  if (period.status === 'unavailable') return null;
+  if (period.status !== 'ok') return '0';
+  // Same rule as fit: an open send holds allowance only in the period it was recorded in.
+  const held = open
+    .filter((p) => p.token.toLowerCase() === token && p.periodStart >= period.start && p.periodStart < period.end)
+    .reduce((sum, p) => sum + p.amount, 0n);
+  return floorZero(allowance - period.spend - held).toString();
+}
+
+async function grantOf(g: LiveGrant): Promise<z.infer<typeof grantOut>> {
+  const target = { chainId: g.chainId, permissionId: g.permissionId, permission: g.permission };
+  const tokens = [...new Set(g.permission.spends.map((s) => s.token.toLowerCase()))];
+  const [liveness, periods, open] = await Promise.all([
+    readLiveness(target, clients),
+    Promise.all(tokens.map((token) => readCurrentPeriods({ ...target, token }, clients))),
+    openSpends(g.permissionId, getDb()),
+  ]);
+  return {
+    permissionId: g.permissionId,
+    kind: g.kind,
+    chainId: caip2(g.chainId),
+    active: liveness === 'unknown' || liveness === 'mismatch' ? null : liveness === 'active',
+    expiresAt: g.expiresAt.toISOString(),
+    limits: periods.flat().map(({ token, unit, multiplier, allowance, period }) => ({
+      asset: caip19(caip2(g.chainId), token),
+      unit,
+      multiplier,
+      allowance,
+      left: leftOf(period, BigInt(allowance), open, token.toLowerCase()),
+    })),
+  };
+}
+
 async function status(t: Tenant) {
   const network = caip2(t.chainId);
-  const [account, session, grant, conn] = await Promise.all([
-    balanceOf(network, t.account),
+  const [float, grant, held, conn] = await Promise.all([
     balanceOf(network, t.sessionAddress),
-    currentGrant(t.connectionId),
+    x402Budget(t.connectionId),
+    liveGrants(t.connectionId),
     findActive(t.connectionId),
   ]);
-  const read = grant && (await budgetOf(grant, t, session && BigInt(session.amount)));
+  const [read, shown] = await Promise.all([
+    grant && budgetOf(grant, t, float && BigInt(float.amount)),
+    Promise.all(held.map(grantOf)),
+  ]);
+  const grants = shown.map((g) =>
+    g.permissionId === grant?.permissionId
+      ? { ...g, limits: g.limits.map((l) => ({ ...l, left: read?.budget.remainingToday?.amount ?? null })) }
+      : g
+  );
   const ready = readinessOf(t, read?.liveness);
   const expiresAt = conn?.expiresAt ?? new Date();
   const nearExpiry = expiresAt.getTime() - Date.now() < EXPIRY_WARN_MS;
@@ -160,7 +225,8 @@ async function status(t: Tenant) {
     chainId: network,
     sessionAddress: t.sessionAddress,
     connectionExpiresAt: expiresAt.toISOString(),
-    balances: { account, session },
+    float,
+    grants,
     budget: read?.budget ?? null,
     readiness: ready,
     summary,
@@ -293,10 +359,10 @@ const readOnly = { readOnlyHint: true, openWorldHint: true };
 
 export function registerReadTools(server: McpServer) {
   server.registerTool(
-    'jaw_status',
+    'jaw_session_status',
     {
       description:
-        'The connected account, its USDC balances, and whether this connection can pay yet (with a link when not).',
+        'This connection: its expiry, every live grant with what each limit has left, the USDC float at its session address, and whether it can pay yet (with a link when not). Balances are in jaw_get_assets.',
       inputSchema: z.strictObject({}),
       outputSchema: statusOutput,
       annotations: readOnly,

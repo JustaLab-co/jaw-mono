@@ -1,217 +1,91 @@
-import { randomBytes } from 'node:crypto';
+import { eq } from 'drizzle-orm';
 import { beforeAll, describe, expect, it } from 'vitest';
 import { verifyBearer, type Tenant } from '@/connections/auth';
-import {
-  callTool,
-  connect,
-  fakeWallet,
-  mcp,
-  owner,
-  sessionFakes,
-  setTestEnv,
-  verifyLocally,
-  walletAnswers,
-  walletsSettled,
-} from '@/connections/testkit';
-import type { OpenWallet } from '@/connections/relay';
-import { revokeConnection } from './connections';
+import { callTool, connect, owner, setTestEnv } from '@/connections/testkit';
 import { getDb } from '@/db/client';
-import { payments } from '@/db/schema';
+import { grants, permissionRequests } from '@/db/schema';
 import { useTestDb } from '@/db/test-db';
+import { x402Budget } from '@/grants/store';
 
 setTestEnv();
 beforeAll(useTestDb);
 
 const tenantOf = async (token: string) => (await verifyBearer(token))?.extra?.tenant as Tenant;
-const works = async (token: string) => (await mcp(token, { method: 'tools/list' })).status === 200;
+
+interface Listed {
+  id: string;
+  current: boolean;
+  grants: { permissionId: string; kind: string; status: string; spends: object[]; expiresAt: string }[];
+}
 
 describe('jaw_connections', () => {
-  it("lists every connection of this account, marks this one, shows each budget, and no other account's", async () => {
+  it("lists every connection of this account with its grants by permissionId, marks this one, and no other account's", async () => {
     const signer = owner();
     const paying = await connect(signer, { scope: 'wallet:read x402:pay' });
     const reading = await connect(signer, { scope: 'wallet:read' });
     await connect(owner());
-
-    const result = await callTool(reading.access_token, 'jaw_connections', {});
-    const listed = result.structuredContent.connections as { id: string; current: boolean; budget: object | null }[];
     const [payingId, readingId] = [
       (await tenantOf(paying.access_token)).connectionId,
       (await tenantOf(reading.access_token)).connectionId,
     ];
+    const budget = (await x402Budget(payingId))!;
+
+    const result = await callTool(reading.access_token, 'jaw_connections', {});
+    const listed = result.structuredContent.connections as Listed[];
+
     expect(listed.map((c) => c.id).sort()).toEqual([payingId, readingId].sort());
-    expect(listed.find((c) => c.id === readingId)).toMatchObject({ current: true, budget: null });
-    expect(listed.find((c) => c.id === payingId)).toMatchObject({ current: false, budget: { perDay: '1000000' } });
-  });
-});
-
-describe('jaw_revoke_connection', () => {
-  const confirmedBy = (signer: ReturnType<typeof owner>, float = 0n) => ({
-    openWallet: fakeWallet(walletAnswers(signer)),
-    verify: verifyLocally,
-    clients: sessionFakes(undefined, float).deps.clients,
-  });
-
-  it('says how much float stays at the other connection once it ends, and that jaw_session_disconnect from it returns it', async () => {
-    const signer = owner();
-    const other = await connect(signer);
-    const me = await connect(signer, { scope: 'wallet:read' });
-    const { connectionId, sessionAddress } = await tenantOf(other.access_token);
-
-    const asked = await revokeConnection(await tenantOf(me.access_token), connectionId, confirmedBy(signer, 180_000n));
-
-    expect('structuredContent' in asked && asked.structuredContent).toMatchObject({
-      payer: sessionAddress,
-      left: '180000',
+    expect(listed.find((c) => c.id === readingId)).toMatchObject({ current: true, grants: [] });
+    expect(listed.find((c) => c.id === payingId)).toMatchObject({
+      current: false,
+      grants: [
+        {
+          permissionId: budget.permissionId,
+          kind: 'x402-budget',
+          status: 'live',
+          spends: [{ token: budget.token, allowance: '1000000', unit: 'day', multiplier: 1 }],
+          expiresAt: budget.expiresAt.toISOString(),
+        },
+      ],
     });
-    const text = asked.content[0].text;
-    expect(text).toContain(`0.18 USDC stays at ${sessionAddress}`);
-    expect(text).toContain('jaw_session_disconnect');
   });
 
-  it('given the payer cannot be read, then it says the float may stay, without an amount', async () => {
-    const signer = owner();
-    const other = await connect(signer);
-    const me = await connect(signer, { scope: 'wallet:read' });
-    const { connectionId, sessionAddress } = await tenantOf(other.access_token);
-    const unreadable = { publicClient: () => ({ readContract: () => Promise.reject(new Error('node down')) }) };
+  it('given a grant revoked on chain, then it is listed revoked and not counted live', async () => {
+    const c = await connect();
+    const t = await tenantOf(c.access_token);
+    const budget = (await x402Budget(t.connectionId))!;
+    await getDb().update(grants).set({ revokedAt: new Date() }).where(eq(grants.permissionId, budget.permissionId));
 
-    const asked = await revokeConnection(await tenantOf(me.access_token), connectionId, {
-      ...confirmedBy(signer),
-      clients: unreadable as never,
+    const result = await callTool(c.access_token, 'jaw_connections', {});
+
+    expect((result.structuredContent.connections as Listed[])[0].grants).toMatchObject([{ status: 'revoked' }]);
+    expect(result.structuredContent.summary).toContain('0 live grant(s)');
+  });
+
+  it('given a grant the wallet answered but this server did not record, then its id is listed as unrecorded', async () => {
+    const c = await connect();
+    const t = await tenantOf(c.access_token);
+    const budget = (await x402Budget(t.connectionId))!;
+    const orphan = `0x${'ab'.repeat(32)}`;
+    const request = (id: string, permissionId: string, state: 'failed' | 'approved') => ({
+      id,
+      connectionId: t.connectionId,
+      method: 'grant' as const,
+      chainId: t.chainId,
+      account: t.account,
+      permissionId,
+      state,
+      walletUrl: 'http://keys.test/cli-bridge',
+      approveBy: new Date(),
     });
-
-    expect('structuredContent' in asked && asked.structuredContent).toMatchObject({ left: null });
-    expect(asked.content[0].text).toContain(`Whatever float is at ${sessionAddress} stays there`);
-  });
-
-  it('ends another connection of the same owner once the owner confirms in the wallet: its tokens stop working', async () => {
-    const signer = owner();
-    const other = await connect(signer);
-    const me = await connect(signer, { scope: 'wallet:read' });
-    const id = (await tenantOf(other.access_token)).connectionId;
-
-    const asked = await revokeConnection(await tenantOf(me.access_token), id, confirmedBy(signer));
-    expect('structuredContent' in asked && asked.structuredContent.url).toMatch(/cli-bridge/);
-    await walletsSettled();
-    expect(await works(other.access_token)).toBe(false);
-    expect(await works(me.access_token)).toBe(true);
-  });
-
-  it('given a revoke, then the owner has thirty minutes to confirm it', async () => {
-    const signer = owner();
-    const other = await connect(signer);
-    const me = await connect(signer, { scope: 'wallet:read' });
-    const id = (await tenantOf(other.access_token)).connectionId;
-    const confirmed = confirmedBy(signer);
-    let until: Date | undefined;
-    const openWallet: OpenWallet = (chainId, at, client) => ((until = at), confirmed.openWallet(chainId, at, client));
-
-    await revokeConnection(await tenantOf(me.access_token), id, { ...confirmed, openWallet });
-    await walletsSettled();
-
-    expect(until!.getTime() - Date.now()).toBeGreaterThan(29 * 60_000);
-    expect(until!.getTime() - Date.now()).toBeLessThanOrEqual(30 * 60_000);
-  });
-
-  it('given a revoke of that connection still waiting for the owner, when asked again, then it hands back the same link and opens no other session', async () => {
-    const signer = owner();
-    const other = await connect(signer);
-    const me = await connect(signer, { scope: 'wallet:read' });
-    const t = await tenantOf(me.access_token);
-    const id = (await tenantOf(other.access_token)).connectionId;
-    let answer = () => {};
-    const answered = new Promise<void>((resolve) => (answer = () => resolve()));
-    const signs = walletAnswers(signer);
-    let opened = 0;
-    const waiting = {
-      ...confirmedBy(signer),
-      openWallet: ((chainId, until) => {
-        opened++;
-        return fakeWallet(async (method, params) => answered.then(() => signs(method, params)))(chainId, until);
-      }) as OpenWallet,
-    };
-
-    const [first, again] = await Promise.all([revokeConnection(t, id, waiting), revokeConnection(t, id, waiting)]);
-    const later = await revokeConnection(t, id, waiting);
-    answer();
-    await walletsSettled();
-
-    expect(opened).toBe(1);
-    const url = 'structuredContent' in first && first.structuredContent.url;
-    expect(url).toMatch(/cli-bridge/);
-    expect('structuredContent' in again && again.structuredContent.url).toBe(url);
-    expect('structuredContent' in later && later.structuredContent.url).toBe(url);
-    expect(await works(other.access_token)).toBe(false);
-  });
-
-  it('given a top-up of the other connection still landing, when the owner confirms, then it ends once the top-up lease is over', async () => {
-    const signer = owner();
-    const other = await connect(signer);
-    const me = await connect(signer, { scope: 'wallet:read' });
-    const theirs = await tenantOf(other.access_token);
     await getDb()
-      .insert(payments)
-      .values({
-        id: `pay_${randomBytes(8).toString('hex')}`,
-        connectionId: theirs.connectionId,
-        idempotencyKey: randomBytes(8).toString('hex'),
-        requestHash: 'h',
-        payer: theirs.sessionAddress.toLowerCase(),
-        url: 'https://seller.example/x',
-        leaseUntil: new Date(Date.now() + 1_500),
-        topUpAmount: '105000',
-      });
+      .insert(permissionRequests)
+      .values([
+        { ...request(`pr_${t.connectionId}_a`, orphan, 'failed'), code: 'not_recorded' },
+        request(`pr_${t.connectionId}_b`, budget.permissionId, 'approved'),
+      ]);
 
-    await revokeConnection(await tenantOf(me.access_token), theirs.connectionId, confirmedBy(signer));
-    await walletsSettled();
+    const result = await callTool(c.access_token, 'jaw_connections', {});
 
-    expect(await works(other.access_token)).toBe(false);
-  });
-
-  it('given the wallet is signed in to another account, then nothing is revoked', async () => {
-    const signer = owner();
-    const other = await connect(signer);
-    const me = await connect(signer, { scope: 'wallet:read' });
-    await revokeConnection(
-      await tenantOf(me.access_token),
-      (await tenantOf(other.access_token)).connectionId,
-      confirmedBy(owner())
-    );
-    await walletsSettled();
-    expect(await works(other.access_token)).toBe(true);
-  });
-
-  it('given the owner turns it down in the wallet, then nothing is revoked', async () => {
-    const signer = owner();
-    const other = await connect(signer);
-    const me = await connect(signer, { scope: 'wallet:read' });
-    const declined = { ...confirmedBy(signer), openWallet: fakeWallet(walletAnswers(signer, ['personal_sign'])) };
-    await revokeConnection(
-      await tenantOf(me.access_token),
-      (await tenantOf(other.access_token)).connectionId,
-      declined
-    );
-    await walletsSettled();
-    expect(await works(other.access_token)).toBe(true);
-  });
-
-  it('refuses to end the connection the call comes from, pointing at jaw_session_disconnect', async () => {
-    const me = await connect();
-    const result = await callTool(me.access_token, 'jaw_revoke_connection', {
-      id: (await tenantOf(me.access_token)).connectionId,
-    });
-    expect(result.isError).toBe(true);
-    expect(result.content[0].text).toContain('jaw_session_disconnect');
-  });
-
-  it("refuses another account's connection as if it did not exist, before opening the wallet", async () => {
-    const theirs = await connect(owner());
-    const me = await connect(owner());
-    const result = await callTool(me.access_token, 'jaw_revoke_connection', {
-      id: (await tenantOf(theirs.access_token)).connectionId,
-    });
-    expect(result.isError).toBe(true);
-    expect(result.content[0].text).toBe('No active connection with that id for this account.');
-    expect(await works(theirs.access_token)).toBe(true);
+    expect((result.structuredContent.connections as { unrecorded: string[] }[])[0].unrecorded).toEqual([orphan]);
   });
 });

@@ -22,7 +22,7 @@ export const payOutput = z.object({
   refusal: z
     .object({
       code: z.string(),
-      next: z.literal('jaw_request_budget').optional(),
+      next: z.literal('jaw_grant_permissions').optional(),
     })
     .optional(),
   topUp: z.object({ amount: z.string().optional(), batchId: z.string().optional() }).optional(),
@@ -70,7 +70,7 @@ function summaryOf(row: PaymentRow, out: Omit<PayOutput, 'summary'>): string {
   const moved = out.payerRefilled ? ' Funds moved into the payer first.' : '';
   const paid = `${out.payment?.amount} base units to ${out.payment?.payTo}`;
   if (out.kind === 'free') return `Free: answered ${out.httpStatus} without a payment.`;
-  const raise = out.refusal?.next ? ' Ask for a larger budget with jaw_request_budget.' : '';
+  const raise = out.refusal?.next ? ' Ask for a larger budget with jaw_grant_permissions and x402Budget.' : '';
   if (row.kind === null) return 'Paying now. Ask again in a few seconds.';
   switch (row.state) {
     case 'pending':
@@ -113,7 +113,7 @@ export function render(row: PaymentRow, fenced: string[], truncated = false): Pa
       refusal: {
         code: row.code,
         // A proof already sent stays tied to its own budget, so a new one does not pay it.
-        ...(RAISE.has(row.code) && !maybeSent && { next: 'jaw_request_budget' as const }),
+        ...(RAISE.has(row.code) && !maybeSent && { next: 'jaw_grant_permissions' as const }),
       },
     }),
     ...((row.topUpAmount || row.topUpBatchId) && {

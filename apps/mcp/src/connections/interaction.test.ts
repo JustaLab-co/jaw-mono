@@ -405,7 +405,7 @@ describe('per-account connection cap', () => {
     await walletsSettled();
     expect(await stateOf(browser, start.uid!)).toEqual({
       state: 'failed',
-      reason: 'too many active connections; revoke one first',
+      reason: 'too many active connections; disconnect one from its app, or wait for one to expire',
     });
   });
 

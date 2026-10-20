@@ -2,6 +2,7 @@ import type { McpServer } from '@modelcontextprotocol/server';
 import { z } from 'zod';
 import { tenant } from '@/connections/auth';
 import { reply } from '@/lib/fence';
+import { sendHistory, type SendRow } from '@/payments/sends';
 import { history, stateOf, type PaymentRow } from '@/payments/store';
 
 const row = z.object({
@@ -21,10 +22,39 @@ const row = z.object({
   createdAt: z.string(),
 });
 
+const executeRow = z.object({
+  sendId: z.string(),
+  permissionId: z.string(),
+  idempotencyKey: z.string().nullable(),
+  state: z
+    .enum(['open', 'landed', 'released'])
+    .describe('open until it lands; released when it reverted, was never sent, or was not seen on chain in time'),
+  token: z.string().nullable().describe('What amount counts; null when the run moved no token'),
+  amount: z.string().describe('Base units of token'),
+  userOpHash: z.string().nullable(),
+  txHash: z.string().nullable(),
+  createdAt: z.string(),
+});
+
 const historyOutput = z.object({
   payments: z.array(row),
   next: z.string().optional().describe('Pass as `before` for the next page'),
+  executes: z
+    .array(executeRow)
+    .describe('The newest session executes, one row per token a run moved; on the first page only'),
   summary: z.string(),
+});
+
+const executeShown = (r: SendRow): z.infer<typeof executeRow> => ({
+  sendId: r.id,
+  permissionId: r.permissionId,
+  idempotencyKey: r.idempotencyKey,
+  state: r.state,
+  token: r.token,
+  amount: r.amount,
+  userOpHash: r.callsId,
+  txHash: r.txHash,
+  createdAt: r.createdAt.toISOString(),
 });
 
 const shown = (r: PaymentRow): z.infer<typeof row> => ({
@@ -48,7 +78,8 @@ export function registerHistoryTool(server: McpServer) {
   server.registerTool(
     'jaw_session_history',
     {
-      description: 'The payments this connection made, newest first, with their state and transaction hash.',
+      description:
+        'The payments and session executes this connection made, newest first, with their state and transaction hash.',
       inputSchema: z.strictObject({
         limit: z.number().int().min(1).max(50).optional(),
         before: z.string().optional().describe('The `next` value of the previous page'),
@@ -57,13 +88,17 @@ export function registerHistoryTool(server: McpServer) {
       annotations: { readOnlyHint: true },
     },
     async ({ limit = 20, before }, ctx) => {
-      const rows = await history(tenant(ctx).connectionId, limit, before);
+      const { connectionId } = tenant(ctx);
+      const rows = await history(connectionId, limit, before);
+      const executes = before ? [] : await sendHistory(connectionId, limit);
       const settled = rows.filter((r) => r.state === 'settled' && r.kind === 'paid').length;
+      const landed = executes.filter((r) => r.state === 'landed').length;
       return reply(
         historyOutput.parse({
           payments: rows.map(shown),
           ...(rows.length === limit && { next: rows[rows.length - 1].id }),
-          summary: `${rows.length} payments, ${settled} settled.`,
+          executes: executes.map(executeShown),
+          summary: `${rows.length} payments, ${settled} settled. ${executes.length} execute rows, ${landed} landed.`,
         })
       );
     }

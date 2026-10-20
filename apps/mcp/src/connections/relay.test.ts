@@ -10,6 +10,7 @@ import {
 } from '@jaw.id/agent';
 import { afterAll, afterEach, describe, expect, it, vi } from 'vitest';
 import WebSocket, { WebSocketServer } from 'ws';
+import { useTestDb } from '@/db/test-db';
 import { setTestEnv } from './testkit';
 
 // A relay that pairs the two roles of a session and forwards what each sends, as relay.jaw.id does.
@@ -527,19 +528,29 @@ describe('the owner pool per account', () => {
     expect(results.filter((r) => r.status === 'fulfilled')).toHaveLength(relay.SESSION_LIMITS.ownerPerAccount);
   });
 
-  it('given the account is full, then jaw_request_budget answers busy instead of throwing', async () => {
+  it('given the account is full, then jaw_grant_permissions answers busy instead of throwing', async () => {
+    await useTestDb();
     const relay = await fresh();
-    const { requestBudget } = await import('../tools/request-budget');
+    const { grantPermissions } = await import('../tools/grant-permissions');
     const until = new Date(Date.now() + 8_000);
     await fill(relay, ACCOUNT, until);
-    const t = { ...as(ACCOUNT), connectionId: 'conn', chainId: 84532, sessionAddress: OTHER, scopes: [] };
+    const t = {
+      ...as(ACCOUNT),
+      connectionId: 'conn',
+      chainId: 84532,
+      sessionAddress: OTHER,
+      scopes: [],
+      expiresAt: new Date(Date.now() + 86_400_000),
+    };
 
-    const result = await requestBudget(t as never, '1', {
-      openWallet: relay.ownerRelay,
-      readPermission: async () => null as never,
-      clients: undefined as never,
-      sender: undefined as never,
-    });
+    const result = await grantPermissions(
+      t as never,
+      { x402Budget: { perDay: '1' } },
+      {
+        openWallet: relay.ownerRelay,
+        readPermission: async () => null as never,
+      }
+    );
 
     expect(result.content[0].text).toBe('Too many owners are approving right now. Try again in a minute.');
   });
