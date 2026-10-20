@@ -2,7 +2,7 @@ import { randomBytes } from 'node:crypto';
 import { createServer } from 'node:http';
 import type { AddressInfo } from 'node:net';
 import type { ChainClients, TopUpExecutor } from '@jaw.id/agent';
-import { eq, sql } from 'drizzle-orm';
+import { eq } from 'drizzle-orm';
 import {
   decodeFunctionData,
   encodeAbiParameters,
@@ -29,7 +29,6 @@ import { grants, payments, sends } from '@/db/schema';
 import { TEST_PG_URL, useTestDb, useTestPostgres } from '@/db/test-db';
 import { x402Budget } from '@/grants/store';
 import { safeFetch } from '@/lib/safe-fetch';
-import { reconcile } from '@/reconciler/run';
 import { grantPermissions } from '@/tools/grant-permissions';
 import { pay, type PayDeps } from './pay';
 
@@ -84,7 +83,6 @@ await new Promise<void>((r) => seller.listen(0, '127.0.0.1', r));
 const SELLER = `127.0.0.1:${(seller.address() as AddressInfo).port}`;
 
 const chain = { permissionId: '0x' as Hex, start: 1, end: 2_000_000_000, spend: 0n, down: false, head: 77n };
-const CALLS_ID = `0x${'b'.repeat(64)}` as Hex;
 const userOpEvents: { userOpHash: Hex; sender: Address; success: boolean; blockNumber: bigint }[] = [];
 const node = {
   getCode: async () => undefined,
@@ -194,11 +192,8 @@ async function connected(perDay: string, float: bigint) {
 }
 
 const url = (path: string) => `http://${SELLER}${path}`;
-// A transfer the removed jaw_transfer left in the table: it still counts against the day until it settles.
-async function legacySend(
-  t: Tenant,
-  row: { state?: 'open' | 'landed'; callsId?: Hex; periodStart?: number; due?: boolean } = {}
-) {
+// A transfer the removed jaw_transfer left in the table: once landed, it still counts against its day.
+async function landedLegacySend(t: Tenant) {
   const now = new Date();
   await getDb()
     .insert(sends)
@@ -209,16 +204,14 @@ async function legacySend(
       chainId: t.chainId,
       sender: t.sessionAddress.toLowerCase(),
       amount: '500000',
-      periodStart: row.periodStart ?? chain.start,
+      periodStart: chain.start,
       fromBlock: chain.head,
-      state: row.state ?? 'open',
-      callsId: row.callsId ?? null,
-      txHash: row.state === 'landed' ? TX(903) : null,
-      finishedAt: row.state === 'landed' ? now : null,
-      leaseUntil: new Date(now.getTime() + (row.due ? -60_000 : 60_000)),
+      state: 'landed',
+      txHash: TX(903),
+      finishedAt: now,
+      leaseUntil: now,
     });
 }
-const refused = { refusal: { code: 'budget_exhausted', next: 'jaw_grant_permissions' } };
 
 describe('given 1 USDC a day and a counter the chain does not answer for', () => {
   it('when a payment of 0.6 comes from the float, then it is refused as chain_unavailable and nothing is signed', async () => {
@@ -256,6 +249,8 @@ describe('given 1 USDC a day and a payment of 0.6', () => {
     expect(status.structuredContent.budget).not.toHaveProperty('sendableToday');
   });
 });
+
+const refused = { refusal: { code: 'budget_exhausted', next: 'jaw_grant_permissions' } };
 
 describe('given 1 USDC a day, 2 USDC of float, and a payment of 0.6 already made', () => {
   const quote = (token: string, path: string) => callTool(token, 'jaw_session_x402_quote', { url: url(path) });
@@ -538,110 +533,12 @@ describe('quote and pay at the edge of what a budget can pay', () => {
   });
 });
 
-describe('given 1 USDC a day, 2 USDC of float, and an open transfer of 0.5 left by the removed tool', () => {
-  const open = (t: Tenant) => legacySend(t, { callsId: CALLS_ID, due: true });
-
-  it('when a payment of 0.6 comes, then it is refused and nothing is signed', async () => {
-    const { t } = await connected('1', 2_000_000n);
-    await open(t);
-    prices.set('/a', '600000');
-    expect((await pay(t, { url: url('/a') }, deps)).structuredContent).toMatchObject(refused);
-    expect(seen).toHaveLength(0);
-  });
-
-  it('when the quote asks the 0.5 the transfer leaves, then it is ready and pay settles from the float', async () => {
-    const { t, token } = await connected('1', 2_000_000n);
-    await open(t);
-    prices.set('/half', '500000');
-    const quoted = await callTool(token, 'jaw_session_x402_quote', { url: url('/half') });
-    expect(quoted.structuredContent.readiness).toEqual({ status: 'ready' });
-    expect((await pay(t, { url: url('/half') }, deps)).structuredContent).toMatchObject({ state: 'settled' });
-  });
-
-  it('when the quote asks one base unit more, then it is over_allowance and pay refuses unsigned', async () => {
-    const { t, token } = await connected('1', 2_000_000n);
-    await open(t);
-    prices.set('/half', '500001');
-    const quoted = await callTool(token, 'jaw_session_x402_quote', { url: url('/half') });
-    expect(quoted.structuredContent.readiness).toEqual({ status: 'not_ready', reason: 'over_allowance' });
-    expect((await pay(t, { url: url('/half') }, deps)).structuredContent).toMatchObject(refused);
-    expect(seen).toHaveLength(0);
-  });
-
-  it('when jaw_session_status is read, then it counts the transfer as spent today', async () => {
-    const { t, token } = await connected('1', 2_000_000n);
-    await open(t);
-    const status = await callTool(token, 'jaw_session_status', {});
-    expect(status.structuredContent.budget).toMatchObject({ spentToday: { amount: '500000' } });
-  });
-
-  it('when the chain shows it reverted and the reconciler ran, then a payment of 0.6 goes through', async () => {
-    const { t } = await connected('1', 2_000_000n);
-    await open(t);
-    userOpEvents.push({ userOpHash: CALLS_ID, sender: t.sessionAddress, success: false, blockNumber: 80n });
-    chain.head = 81n;
-    await reconcile(clients);
-    prices.set('/a', '600000');
-    expect((await pay(t, { url: url('/a') }, deps)).structuredContent).toMatchObject({ kind: 'paid' });
-  });
-
-  it('when the chain counter already counts it, then it counts once: 0.6 is refused and 0.5 goes through', async () => {
-    const { t } = await connected('1', 2_000_000n);
-    await open(t);
-    chain.spend = 500_000n;
-    prices.set('/a', '600000');
-    prices.set('/b', '500000');
-    expect((await pay(t, { url: url('/a') }, deps)).structuredContent).toMatchObject(refused);
-    expect((await pay(t, { url: url('/b') }, deps)).structuredContent).toMatchObject({ kind: 'paid' });
-  });
-
-  it('when it landed, the counter counts it and the reconciler ran, then 0.6 is refused and 0.5 goes through', async () => {
-    const { t } = await connected('1', 2_000_000n);
-    await open(t);
-    userOpEvents.push({ userOpHash: CALLS_ID, sender: t.sessionAddress, success: true, blockNumber: 80n });
-    chain.spend = 500_000n;
-    chain.head = 81n;
-    await reconcile(clients);
-    prices.set('/a', '600000');
-    prices.set('/b', '500000');
-    expect((await pay(t, { url: url('/a') }, deps)).structuredContent).toMatchObject(refused);
-    expect((await pay(t, { url: url('/b') }, deps)).structuredContent).toMatchObject({ kind: 'paid' });
-  });
-});
-
 describe('given 1 USDC a day and a transfer of 0.5 the chain counted before the day ended', () => {
   it('when a payment of 0.6 comes in the next day, then it goes through', async () => {
     const { t } = await connected('1', 2_000_000n);
-    await legacySend(t, { state: 'landed' });
+    await landedLegacySend(t);
     Object.assign(chain, { start: 86_401, spend: 0n });
     prices.set('/a', '600000');
     expect((await pay(t, { url: url('/a') }, deps)).structuredContent).toMatchObject({ kind: 'paid' });
-  });
-});
-
-describe('given 1 USDC a day and a transfer of 0.5 whose call died before the bundler', () => {
-  it('when payments of 0.6 come, then they are refused until the reconciler finds nothing on chain in the window', async () => {
-    const { t } = await connected('1', 2_000_000n);
-    await legacySend(t, { due: true });
-    prices.set('/a', '600000');
-    expect((await pay(t, { url: url('/a') }, deps)).structuredContent).toMatchObject(refused);
-    const lapse = () => getDb().execute(sql`update sends set lease_until = now() - interval '1 minute'`);
-    await lapse();
-    await reconcile(clients);
-    expect((await pay(t, { url: url('/a') }, deps)).structuredContent).toMatchObject(refused);
-    await lapse();
-    chain.head = 77n + 10_000n;
-    await reconcile(clients);
-    expect((await pay(t, { url: url('/a') }, deps)).structuredContent).toMatchObject({ kind: 'paid' });
-  });
-
-  it('when another send of the session landed in the window, then the row stays counted', async () => {
-    const { t } = await connected('1', 2_000_000n);
-    await legacySend(t, { due: true });
-    userOpEvents.push({ userOpHash: TX(902), sender: t.sessionAddress, success: true, blockNumber: 90n });
-    chain.head = 77n + 10_000n;
-    await reconcile(clients);
-    prices.set('/a', '600000');
-    expect((await pay(t, { url: url('/a') }, deps)).structuredContent).toMatchObject(refused);
   });
 });

@@ -9,7 +9,7 @@ import {
   type Address,
   type Hex,
 } from 'viem';
-import { entryPoint08Abi, getUserOperationError } from 'viem/account-abstraction';
+import { entryPoint08Abi, entryPoint08Address, getUserOperationError } from 'viem/account-abstraction';
 import { describe, expect, it } from 'vitest';
 import { mayHaveBeenSent, refusalOfFailure, refusalOfLogs } from './reverts';
 
@@ -119,15 +119,35 @@ describe('mayHaveBeenSent', () => {
 });
 
 describe('refusalOfLogs', () => {
-  it('names the revert reason the EntryPoint logged for the userOp, and nothing in other logs', () => {
-    const userOpHash: Hex = `0x${'1'.repeat(64)}`;
-    const topics = encodeEventTopics({
+  const OURS: Hex = `0x${'1'.repeat(64)}`;
+  const THEIRS: Hex = `0x${'2'.repeat(64)}`;
+  const revertLog = (userOpHash: Hex, reason: Hex, address: Address = entryPoint08Address) => ({
+    address,
+    topics: encodeEventTopics({
       abi: entryPoint08Abi,
       eventName: 'UserOperationRevertReason',
       args: { userOpHash, sender: CAROL },
-    }) as Hex[];
-    const data = encodeAbiParameters([{ type: 'uint256' }, { type: 'bytes' }], [0n, overLimit]);
-    expect(refusalOfLogs([{ topics, data }])).toEqual({ reason: 'over-limit', onChain: true });
-    expect(refusalOfLogs([{ topics: [], data: overLimit }])).toBe(undefined);
+    }) as Hex[],
+    data: encodeAbiParameters([{ type: 'uint256' }, { type: 'bytes' }], [0n, reason]),
+  });
+  const callNotAllowed = encodeErrorResult({
+    abi: MANAGER_ERRORS,
+    errorName: 'JustaPermissionManager_UnauthorizedCall',
+    args: [CAROL, TRANSFER],
+  });
+
+  it('names the revert reason the EntryPoint logged for the userOp, and nothing in other logs', () => {
+    expect(refusalOfLogs([revertLog(OURS, overLimit)], OURS)).toEqual({ reason: 'over-limit', onChain: true });
+    expect(refusalOfLogs([{ address: entryPoint08Address, topics: [], data: overLimit }], OURS)).toBe(undefined);
+  });
+
+  it('names only the revert logged for this userOp when the bundle holds another reverted userOp', () => {
+    const bundle = [revertLog(THEIRS, overLimit), revertLog(OURS, callNotAllowed)];
+    expect(refusalOfLogs(bundle, OURS)).toEqual({ reason: 'call-not-allowed', target: CAROL, selector: TRANSFER });
+    expect(refusalOfLogs([revertLog(THEIRS, overLimit)], OURS)).toBe(undefined);
+  });
+
+  it('names nothing from a revert log for this userOp that the EntryPoint did not emit', () => {
+    expect(refusalOfLogs([revertLog(OURS, overLimit, CAROL)], OURS)).toBe(undefined);
   });
 });
