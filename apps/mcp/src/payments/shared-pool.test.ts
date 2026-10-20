@@ -25,7 +25,7 @@ import {
   walletsSettled,
 } from '@/connections/testkit';
 import { getDb } from '@/db/client';
-import { grants, sends } from '@/db/schema';
+import { grants, payments, sends } from '@/db/schema';
 import { TEST_PG_URL, useTestDb, useTestPostgres } from '@/db/test-db';
 import { x402Budget } from '@/grants/store';
 import { safeFetch } from '@/lib/safe-fetch';
@@ -152,6 +152,7 @@ vi.mock('@/lib/chain', async (original) => ({
 }));
 
 setTestEnv();
+process.env.JAW_MCP_API_KEY = 'paymaster-test-key';
 process.env.JAW_MCP_INSECURE_FETCH_HOSTS = SELLER;
 process.env.JAW_MCP_RPC_URL = 'http://127.0.0.1:9';
 
@@ -408,6 +409,135 @@ describe('given 1 USDC a day, an empty float, and an upto price whose Permit2 ap
   });
 });
 
+describe('quote and pay at the edge of what a budget can pay', () => {
+  const quote = (token: string, path: string) => callTool(token, 'jaw_session_x402_quote', { url: url(path) });
+  // Refills the session from the account, and the permission's on-chain counter counts it.
+  const counting: TopUpExecutor = {
+    request: async (method, params) => {
+      if (method === 'wallet_getCallsStatus') return { status: 200 };
+      const [{ calls }] = params as [{ calls: [{ data: Hex }] }];
+      const [to, amount] = decodeFunctionData({ abi: erc20Abi, data: calls[0].data }).args as [Address, bigint];
+      balances.set(to.toLowerCase(), balanceOf(to) + amount);
+      chain.spend += amount;
+      return { id: '0xrefill' };
+    },
+  };
+  const withRefill: PayDeps = { ...deps, executor: () => counting };
+  const funded = async (perDay: string, float: bigint) => {
+    const c = await connected(perDay, float);
+    balances.set(c.t.account.toLowerCase(), 5_000_000n);
+    return c;
+  };
+
+  describe('given 1 USDC a day, 0.1 paid through a refill of 0.2, so 0.1 of float is left and 0.8 can still be pulled', () => {
+    const spendFirst = async (t: Tenant) => {
+      prices.set('/first', '100000');
+      const first = await pay(t, { url: url('/first') }, withRefill);
+      expect(first.structuredContent).toMatchObject({ state: 'settled' });
+    };
+
+    it('when the quote asks the float plus all the cap less the refill fee, then it is ready and pay settles', async () => {
+      const { t, token } = await funded('1', 0n);
+      await spendFirst(t);
+      prices.set('/rest', '890000');
+      const quoted = await quote(token, '/rest');
+      expect(quoted.structuredContent).toMatchObject({
+        readiness: { status: 'ready' },
+        budget: { remainingToday: { amount: '890000' } },
+      });
+      const paid = await pay(t, { url: url('/rest') }, withRefill);
+      expect(paid.structuredContent).toMatchObject({ state: 'settled', kind: 'paid' });
+    });
+
+    it('when the quote asks one base unit more, then it is over_allowance and pay refuses unsigned', async () => {
+      const { t, token } = await funded('1', 0n);
+      await spendFirst(t);
+      prices.set('/rest', '890001');
+      const quoted = await quote(token, '/rest');
+      expect(quoted.structuredContent.readiness).toEqual({ status: 'not_ready', reason: 'over_allowance' });
+      const paid = await pay(t, { url: url('/rest') }, withRefill);
+      expect(paid.structuredContent).toMatchObject(refused);
+      expect(seen).toHaveLength(1);
+    });
+  });
+
+  describe('given 5 USDC a day and 5 USDC of float, under the 1 USDC a payment that pay allows', () => {
+    it('when the quote asks exactly 1 USDC, then it is ready and pay settles', async () => {
+      const { t, token } = await funded('5', 5_000_000n);
+      prices.set('/one', '1000000');
+      const quoted = await quote(token, '/one');
+      expect(quoted.structuredContent.readiness).toEqual({ status: 'ready' });
+      const paid = await pay(t, { url: url('/one') }, withRefill);
+      expect(paid.structuredContent).toMatchObject({ state: 'settled', kind: 'paid' });
+    });
+
+    it('when the quote asks one base unit more, then it is over_cap with its price and pay refuses over_cap unsigned', async () => {
+      const { t, token } = await funded('5', 5_000_000n);
+      prices.set('/more', '1000001');
+      const quoted = await quote(token, '/more');
+      expect(quoted.structuredContent).toMatchObject({
+        kind: 'paid',
+        price: { amount: '1000001' },
+        readiness: { status: 'not_ready', reason: 'over_cap' },
+      });
+      expect(quoted.structuredContent.summary).toContain('1000000');
+      const paid = await pay(t, { url: url('/more') }, withRefill);
+      expect(paid.structuredContent).toMatchObject({ refusal: { code: 'over_cap' } });
+      expect(seen).toHaveLength(0);
+    });
+  });
+
+  describe('given 0.5 USDC a day and 0.3 of float that a payment signed under an earlier budget still holds', () => {
+    const holding = async (t: Tenant) => {
+      await getDb()
+        .insert(payments)
+        .values({
+          id: `pay_${randomBytes(12).toString('base64url')}`,
+          connectionId: t.connectionId,
+          idempotencyKey: `held-${randomBytes(6).toString('hex')}`,
+          requestHash: 'h',
+          permissionId: `0x${'c'.repeat(64)}`,
+          payer: t.sessionAddress.toLowerCase(),
+          url: 'https://seller.example/held',
+          state: 'signed',
+          leaseUntil: new Date(),
+          topUpAmount: '300000',
+          authorized: '300000',
+          nonce: `0x${randomBytes(32).toString('hex')}`,
+          network: 'eip155:84532',
+          scheme: 'exact',
+          deadline: new Date(Date.now() + 10 * 60_000),
+          authorization: {},
+          signedAt: new Date(),
+        });
+    };
+
+    it('when the quote asks what the cap leaves after that hold, then it is ready and pay settles', async () => {
+      const { t, token } = await funded('0.5', 300_000n);
+      await holding(t);
+      prices.set('/after-hold', '190000');
+      const quoted = await quote(token, '/after-hold');
+      expect(quoted.structuredContent).toMatchObject({
+        readiness: { status: 'ready' },
+        budget: { remainingToday: { amount: '190000' } },
+      });
+      const paid = await pay(t, { url: url('/after-hold') }, withRefill);
+      expect(paid.structuredContent).toMatchObject({ state: 'settled', kind: 'paid' });
+    });
+
+    it('when the quote asks one base unit more, then it is over_allowance and pay refuses unsigned', async () => {
+      const { t, token } = await funded('0.5', 300_000n);
+      await holding(t);
+      prices.set('/after-hold', '190001');
+      const quoted = await quote(token, '/after-hold');
+      expect(quoted.structuredContent.readiness).toEqual({ status: 'not_ready', reason: 'over_allowance' });
+      const paid = await pay(t, { url: url('/after-hold') }, withRefill);
+      expect(paid.structuredContent).toMatchObject(refused);
+      expect(seen).toHaveLength(0);
+    });
+  });
+});
+
 describe('given 1 USDC a day, 2 USDC of float, and an open transfer of 0.5 left by the removed tool', () => {
   const open = (t: Tenant) => legacySend(t, { callsId: CALLS_ID, due: true });
 
@@ -416,6 +546,25 @@ describe('given 1 USDC a day, 2 USDC of float, and an open transfer of 0.5 left 
     await open(t);
     prices.set('/a', '600000');
     expect((await pay(t, { url: url('/a') }, deps)).structuredContent).toMatchObject(refused);
+    expect(seen).toHaveLength(0);
+  });
+
+  it('when the quote asks the 0.5 the transfer leaves, then it is ready and pay settles from the float', async () => {
+    const { t, token } = await connected('1', 2_000_000n);
+    await open(t);
+    prices.set('/half', '500000');
+    const quoted = await callTool(token, 'jaw_session_x402_quote', { url: url('/half') });
+    expect(quoted.structuredContent.readiness).toEqual({ status: 'ready' });
+    expect((await pay(t, { url: url('/half') }, deps)).structuredContent).toMatchObject({ state: 'settled' });
+  });
+
+  it('when the quote asks one base unit more, then it is over_allowance and pay refuses unsigned', async () => {
+    const { t, token } = await connected('1', 2_000_000n);
+    await open(t);
+    prices.set('/half', '500001');
+    const quoted = await callTool(token, 'jaw_session_x402_quote', { url: url('/half') });
+    expect(quoted.structuredContent.readiness).toEqual({ status: 'not_ready', reason: 'over_allowance' });
+    expect((await pay(t, { url: url('/half') }, deps)).structuredContent).toMatchObject(refused);
     expect(seen).toHaveLength(0);
   });
 

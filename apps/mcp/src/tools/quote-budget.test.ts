@@ -30,6 +30,7 @@ const initial = {
   permit2: 0n as bigint | undefined,
   funds: 5_000_000n as bigint | undefined,
   periodReadable: true,
+  floatReadable: true,
   approved: true,
   livenessReadable: true,
 };
@@ -50,7 +51,9 @@ vi.mock('@/lib/chain', async (original) => ({
           return chain;
         }
         if (functionName === 'balanceOf')
-          return sessions.has(String(args[0]).toLowerCase()) ? chain.held : unreadable(chain.funds);
+          return sessions.has(String(args[0]).toLowerCase())
+            ? unreadable(chain.floatReadable ? chain.held : undefined)
+            : unreadable(chain.funds);
         if (functionName === 'allowance') {
           if (chain.permit2 === undefined) throw new Error('rpc down');
           return chain.permit2;
@@ -90,6 +93,7 @@ await new Promise<void>((r) => seller.listen(0, '127.0.0.1', r));
 const SELLER = `127.0.0.1:${(seller.address() as AddressInfo).port}`;
 
 setTestEnv();
+process.env.JAW_MCP_API_KEY = 'paymaster-test-key';
 process.env.JAW_MCP_INSECURE_FETCH_HOSTS = SELLER;
 beforeAll(useTestDb);
 beforeEach(() => Object.assign(chain, initial));
@@ -147,10 +151,10 @@ describe('given a budget of 0.5 USDC a day', () => {
     });
   });
 
-  it('when the seller offers only a token the budget does not hold, then the quote is refused as asset_mismatch', async () => {
+  it('when the seller offers only a token the budget does not hold, then the quote is refused not_allowed, under the policy pay applies', async () => {
     const { token } = await withBudget('0.5');
     const r = await quote(token, '/other');
-    expect(r.structuredContent).toMatchObject({ kind: 'refused', refusal: { code: 'asset_mismatch' } });
+    expect(r.structuredContent).toMatchObject({ kind: 'refused', refusal: { code: 'not_allowed' } });
   });
 
   it('when the owner revoked it on chain, then a paid quote is not ready, carries no budget and does not say it fits', async () => {
@@ -176,6 +180,7 @@ describe('given a budget of 0.5 USDC a day', () => {
     chain.funds = undefined;
     const r = await quote(token, '/price/5000');
     expect(r.structuredContent.readiness).toEqual({ status: 'not_ready', reason: 'chain_unavailable' });
+    expect(r.structuredContent.summary).not.toContain('Within');
   });
 
   it('when an upto price cannot read the Permit2 allowance, then the quote is not ready for chain_unavailable', async () => {
@@ -184,6 +189,15 @@ describe('given a budget of 0.5 USDC a day', () => {
     const r = await quote(token, '/upto/5000');
     expect(r.structuredContent).toMatchObject({ scheme: 'upto' });
     expect(r.structuredContent.readiness).toEqual({ status: 'not_ready', reason: 'chain_unavailable' });
+    expect(r.structuredContent.summary).not.toContain('Within');
+  });
+
+  it('when the session float cannot be read, then a price the float would have paid is not ready for chain_unavailable', async () => {
+    const { token } = await withBudget('0.5');
+    Object.assign(chain, { held: 500_000n, floatReadable: false });
+    const r = await quote(token, '/price/495000');
+    expect(r.structuredContent.readiness).toEqual({ status: 'not_ready', reason: 'chain_unavailable' });
+    expect(r.structuredContent.summary).not.toContain('Within');
   });
 
   it('when the day cannot be read from the chain, then a paid quote is not ready for chain_unavailable', async () => {
