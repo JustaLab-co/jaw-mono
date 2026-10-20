@@ -186,8 +186,6 @@ function CLIBridgeContent() {
           unanswered = setTimeout(() => {
             setState('error');
             setError(LINK_GONE);
-            ws!.onclose = null;
-            ws!.close();
           }, SERVER_WAIT_MS);
         };
 
@@ -321,10 +319,12 @@ function CLIBridgeContent() {
         };
 
         ws.onclose = () => {
+          clearTimeout(unanswered);
           if (!cancelled) setState('disconnected');
         };
 
         ws.onerror = () => {
+          clearTimeout(unanswered);
           if (!cancelled) {
             setState('error');
             setError('Relay connection failed');

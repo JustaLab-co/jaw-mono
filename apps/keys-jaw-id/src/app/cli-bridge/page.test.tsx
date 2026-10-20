@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { act } from 'react';
+import { act, StrictMode } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import {
   decrypt,
@@ -455,10 +455,10 @@ describe('cli-bridge page with nobody on the other side', () => {
     const ws = await start();
 
     await act(async () => vi.advanceTimersByTime(20_000));
-    await act(async () => ws.onclose?.());
 
     expect(host.textContent).toContain('This link is no longer active. Ask the agent for a new one.');
-    expect(ws.close).toHaveBeenCalled();
+    // Left open: a client told the page left would open another tab.
+    expect(ws.close).not.toHaveBeenCalled();
   });
 
   it('given the server sends init in time, the page stays connected', async () => {
@@ -479,6 +479,46 @@ describe('cli-bridge page with nobody on the other side', () => {
 
     expect(host.textContent).toContain('This link is no longer active. Ask the agent for a new one.');
     expect(FakeSocket.all).toHaveLength(0);
+  });
+
+  it('given the relay drops before the wait ends, the page blames the relay, not the link', async () => {
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+    const ws = await start();
+    await act(async () => ws.onclose!());
+
+    await act(async () => vi.advanceTimersByTime(20_000));
+
+    expect(host.textContent).toContain('disconnected');
+    expect(host.textContent).not.toContain('no longer active');
+  });
+
+  it('given the relay connection fails before the wait ends, the page keeps the relay error', async () => {
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+    const ws = await start();
+    await act(async () => ws.onerror!());
+
+    await act(async () => vi.advanceTimersByTime(20_000));
+
+    expect(host.textContent).toContain('Relay connection failed');
+    expect(host.textContent).not.toContain('no longer active');
+  });
+
+  it('given a link opened under StrictMode, the page keeps its key and connects', async () => {
+    const cli = (cliKeys = await generateKeyPair());
+    window.location.hash = `pk=${await exportKeyToHexString('public', cli.publicKey)}`;
+
+    await act(async () =>
+      root.render(
+        <StrictMode>
+          <CLIBridgePage />
+        </StrictMode>
+      )
+    );
+
+    const ws = await connect(FakeSocket.all.length || 1, cli);
+    const ready = await init(ws, { appName: 'Claude' });
+    expect(ready.type).toBe('ready');
+    expect(host.textContent).not.toContain('no longer active');
   });
 
   it('just before the wait ends the page still waits', async () => {
