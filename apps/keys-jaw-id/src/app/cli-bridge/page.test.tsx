@@ -516,9 +516,22 @@ describe('cli-bridge page with nobody on the other side', () => {
     );
     expect(host.textContent).toContain('Connecting to relay...');
 
-    const ws = await connect(FakeSocket.all.length || 1, cli);
+    await vi.waitFor(() => expect(FakeSocket.all.length).toBeGreaterThan(0));
+    const ws = await connect(FakeSocket.all.length, cli);
     const ready = await init(ws, { appName: 'Claude' });
     expect(ready.type).toBe('ready');
+    expect(host.textContent).not.toContain('no longer active');
+  });
+
+  it('given init arrives after the page gave up, the page is connected again', async () => {
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+    const ws = await start();
+    await act(async () => vi.advanceTimersByTime(20_000));
+    expect(host.textContent).toContain('no longer active');
+
+    await init(ws, { appName: 'Claude' });
+
+    expect(host.textContent).toContain('This tab is the signing backend for Claude.');
     expect(host.textContent).not.toContain('no longer active');
   });
 
