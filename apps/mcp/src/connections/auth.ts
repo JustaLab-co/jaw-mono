@@ -5,7 +5,7 @@ import { withMcpAuth } from 'mcp-handler';
 import type { Address, Hex } from 'viem';
 import { errorLabel, ipKey, log } from '@/lib/edge';
 import { config } from './config';
-import { findActive } from './rows';
+import { findActive, type ConnectionRow } from './rows';
 import { open, type Sealed } from './seal';
 
 export const RESOURCE_METADATA_PATH = '/.well-known/oauth-protected-resource/mcp';
@@ -59,6 +59,18 @@ export async function connectionKey(req: Request): Promise<string | undefined> {
   return claims ? `conn:${claims.sub}` : ipKey(req);
 }
 
+export const tenantOf = (row: ConnectionRow, scopes: ConnectionScope[], sessionKey: () => Hex): Tenant => ({
+  connectionId: row.id,
+  account: row.account as Address,
+  chainId: row.chainId,
+  clientId: row.clientId,
+  clientName: row.clientName,
+  scopes,
+  sessionAddress: row.sessionAddress as Address,
+  expiresAt: row.expiresAt,
+  sessionKey,
+});
+
 export async function clientOf(req: Request): Promise<string> {
   const bearer = bearerOf(req);
   return (bearer && (await decrypt(bearer, true))?.client_id) || 'unknown';
@@ -72,17 +84,7 @@ export async function verifyBearer(bearer: string | undefined): Promise<AuthInfo
   if (!claims || !scopes.includes('wallet:read')) return undefined;
   const row = await findActive(claims.sub);
   if (!row?.sessionAddress || row.clientId !== claims.client_id) return undefined;
-  const tenant: Tenant = {
-    connectionId: row.id,
-    account: row.account as Address,
-    chainId: row.chainId,
-    clientId: row.clientId,
-    clientName: row.clientName,
-    scopes: scopes as ConnectionScope[],
-    sessionAddress: row.sessionAddress as Address,
-    expiresAt: row.expiresAt,
-    sessionKey: () => open(config().ring, claims.sk, row.id),
-  };
+  const tenant = tenantOf(row, scopes as ConnectionScope[], () => open(config().ring, claims.sk, row.id));
   return {
     token: claims.jti,
     clientId: claims.client_id,

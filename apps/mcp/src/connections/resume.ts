@@ -1,11 +1,9 @@
 import { randomBytes } from 'node:crypto';
-import type { Address } from 'viem';
 import { errorLabel, log } from '@/lib/edge';
-import type { Tenant } from './auth';
+import { tenantOf, type Tenant } from './auth';
 import { config } from './config';
 import { resumeWallet, WalletBusy, type Wallet } from './relay';
 import { findActive, type ConnectionRow } from './rows';
-import type { ConnectionScope } from './scopes';
 import { openResume } from './seal';
 
 export const RESUMES_PER_TICK = 10;
@@ -69,16 +67,8 @@ async function resumeOne<R extends Resumable>(found: R, { take, release, lost, s
 
 const sessionOf = (walletUrl: string) => new URL(walletUrl).searchParams.get('session');
 
-const tokenlessTenant = (c: ConnectionRow): Tenant => ({
-  connectionId: c.id,
-  account: c.account as Address,
-  chainId: c.chainId,
-  clientId: c.clientId,
-  clientName: c.clientName,
-  scopes: c.scopes as ConnectionScope[],
-  sessionAddress: c.sessionAddress as Address,
-  expiresAt: c.expiresAt,
-  sessionKey: () => {
+// No scopes, so a scope check on a resumed run fails closed.
+const tokenlessTenant = (c: ConnectionRow): Tenant =>
+  tenantOf(c, [], () => {
     throw new Error('a resumed request has no session key');
-  },
-});
+  });
