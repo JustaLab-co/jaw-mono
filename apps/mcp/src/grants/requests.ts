@@ -221,7 +221,7 @@ export async function openLink(t: Tenant, req: LinkRequest, openWallet: OpenWall
   return { opened: row };
 }
 
-/** Follow-up work of settled links still running. */
+/** Work the server still runs after it answered, such as what a settled link triggers. */
 export const followUps = new Set<Promise<void>>();
 
 function follow(row: PermissionRequestRow, wallet: Wallet, { work, settled }: LinkRequest) {
@@ -244,11 +244,17 @@ function follow(row: PermissionRequestRow, wallet: Wallet, { work, settled }: Li
     return outcomeOf(err, row, asked);
   };
   let answered: Outcome | undefined;
+  // Counted from the moment the outcome is stored, so nothing waiting on followUps misses it.
+  let after: PromiseWithResolvers<void> | undefined;
   void wallet
     .run(async (ask) => {
       const outcome = await work(ask, claim).catch(ended);
       answered = outcome;
       await settle(row, outcome);
+      if (settled) {
+        after = Promise.withResolvers();
+        followUps.add(after.promise);
+      }
     })
     .catch((err: unknown) => {
       if (answered) throw err;
@@ -259,17 +265,13 @@ function follow(row: PermissionRequestRow, wallet: Wallet, { work, settled }: Li
     )
     .finally(stop)
     // After the wallet session ends, so the owner's page closes and its relay slot frees at once.
-    .then(() => {
-      if (!answered || !settled) return;
-      const after: Promise<void> = settled(answered)
-        .catch((err: unknown) =>
-          log('warn', {
-            msg: 'permission request follow-up failed',
-            permissionRequestId: row.id,
-            error: errorLabel(err),
-          })
-        )
-        .finally(() => followUps.delete(after));
-      followUps.add(after);
+    .then(() => answered && settled?.(answered))
+    .catch((err: unknown) =>
+      log('warn', { msg: 'permission request follow-up failed', permissionRequestId: row.id, error: errorLabel(err) })
+    )
+    .finally(() => {
+      if (!after) return;
+      followUps.delete(after.promise);
+      after.resolve();
     });
 }

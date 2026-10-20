@@ -14,6 +14,7 @@ import {
   setTestEnv,
   walletAnswers,
   walletsSettled,
+  offlineSession,
 } from '@/connections/testkit';
 import { getDb } from '@/db/client';
 import { grants, permissionRequests } from '@/db/schema';
@@ -52,6 +53,7 @@ async function grant(
   }, asked);
   const result = await grantPermissions(t, input, {
     openWallet: async (...args) => (opened++, wallet(...args)),
+    session: offlineSession,
     readPermission: approvedOnChain,
   });
   await walletsSettled();
@@ -395,6 +397,7 @@ describe('jaw_grant_permissions', () => {
       openWallet: (async (...args) => (
         opened++, fakeWallet(async (method, params) => (await held, honest(method, params)))(...args)
       )) as OpenWallet,
+      session: offlineSession,
       readPermission: approvedOnChain,
     };
 
@@ -421,6 +424,7 @@ describe('jaw_grant_permissions', () => {
     }, asked);
     const deps = {
       openWallet: (async (...args) => (opened++, wallet(...args))) as OpenWallet,
+      session: offlineSession,
       readPermission: approvedOnChain,
     };
     const first = await grantPermissions(t, twoByTwo, deps);

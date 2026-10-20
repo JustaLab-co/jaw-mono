@@ -14,6 +14,7 @@ import {
   setTestEnv,
   walletAnswers,
   walletsSettled,
+  offlineSession,
 } from '@/connections/testkit';
 import { getDb } from '@/db/client';
 import { grants, sends } from '@/db/schema';
@@ -169,6 +170,7 @@ async function connected(perDay: string, float: bigint) {
     { x402Budget: { perDay } },
     {
       openWallet: fakeWallet(walletAnswers(c.signer)),
+      session: offlineSession,
       readPermission: approvedOnChain,
     }
   );

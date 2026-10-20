@@ -32,6 +32,7 @@ import {
   walletAnswers,
   walletsSettled,
   sessionFakes,
+  offlineSession,
 } from '@/connections/testkit';
 import { floatHolder, getDb, setDb } from '@/db/client';
 import { connections, grants, payments, settings } from '@/db/schema';
@@ -268,7 +269,11 @@ async function connected(perDay?: string) {
 async function approveBudget(c: Awaited<ReturnType<typeof connect>>, perDay: string) {
   const t = (await verifyBearer(c.access_token))?.extra?.tenant as Tenant;
   const wallet = fakeWallet(walletAnswers(c.signer));
-  await grantPermissions(t, { x402Budget: { perDay } }, { openWallet: wallet, readPermission: approvedOnChain });
+  await grantPermissions(
+    t,
+    { x402Budget: { perDay } },
+    { openWallet: wallet, session: offlineSession, readPermission: approvedOnChain }
+  );
   await walletsSettled();
   if (!(await x402Budget(t.connectionId))) throw new Error('no budget');
   balances.set(c.signer.address.toLowerCase(), 5_000_000n);

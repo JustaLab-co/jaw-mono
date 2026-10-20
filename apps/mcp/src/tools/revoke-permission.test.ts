@@ -14,6 +14,7 @@ import {
   setTestEnv,
   walletAnswers,
   walletsSettled,
+  offlineSession,
 } from '@/connections/testkit';
 import { getDb } from '@/db/client';
 import { grants, permissionRequests } from '@/db/schema';
@@ -542,7 +543,7 @@ describe('jaw_revoke_permission', () => {
     await grantPermissions(
       c.t,
       { x402Budget: { perDay: '1' } },
-      { openWallet: grantWallet, readPermission: approvedOnChain }
+      { openWallet: grantWallet, session: offlineSession, readPermission: approvedOnChain }
     );
     const revoke = await revokePermission(c.t, { permissionId: c.budget }, holding);
     const send = await sendCalls(

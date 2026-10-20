@@ -22,6 +22,7 @@ import {
   setTestEnv,
   walletAnswers,
   walletsSettled,
+  offlineSession,
 } from '@/connections/testkit';
 import { getDb } from '@/db/client';
 import { grants, payments } from '@/db/schema';
@@ -176,7 +177,11 @@ async function connected(perDay: string): Promise<Tenant> {
   const t = (await verifyBearer(c.access_token))?.extra?.tenant as Tenant;
   await getDb().delete(grants).where(eq(grants.connectionId, t.connectionId));
   const wallet = fakeWallet(walletAnswers(c.signer));
-  await grantPermissions(t, { x402Budget: { perDay } }, { openWallet: wallet, readPermission: approvedOnChain });
+  await grantPermissions(
+    t,
+    { x402Budget: { perDay } },
+    { openWallet: wallet, session: offlineSession, readPermission: approvedOnChain }
+  );
   await walletsSettled();
   if (!(await x402Budget(t.connectionId))) throw new Error('no budget');
   balances.set(c.signer.address.toLowerCase(), 5_000_000n);

@@ -30,7 +30,7 @@ import {
   type GrantRequest,
   type ReadPermission,
 } from '@/grants/permission';
-import { lostBefore, lostPreamble, openLink, type Claim, type Outcome } from '@/grants/requests';
+import { followUps, lostBefore, lostPreamble, openLink, type Claim, type Outcome } from '@/grants/requests';
 import {
   grantsBeside,
   liveGrants,
@@ -108,8 +108,8 @@ export type GrantInput = z.input<typeof grantInput>;
 interface GrantDeps {
   openWallet: OpenWallet;
   readPermission: ReadPermission;
-  /** What revokes replaced budgets as spender. Without it they stay replaced until the disconnect. */
-  session?: Pick<DisconnectDeps, 'clients' | 'sender'>;
+  /** What revokes replaced budgets as spender. */
+  session: Pick<DisconnectDeps, 'clients' | 'sender' | 'lockWaitMs'>;
 }
 
 const DEFAULTS: GrantDeps = {
@@ -164,7 +164,6 @@ function asked(t: Tenant, input: GrantInput, expiry: number): Asked | string {
 
 /** Revokes the budgets a newer one replaced. One left approved stays replaced, so nothing pays from it. */
 async function revokeOlder(t: Tenant, deps: GrantDeps) {
-  if (!deps.session) return;
   const outcome = await revokeReplaced(t, { readPermission: deps.readPermission, ...deps.session }).catch(errorLabel);
   if (typeof outcome === 'string') log('warn', { msg: 'replaced budget not revoked', error: outcome });
   else if (outcome.stillApproved.length || outcome.unread.length) {
@@ -285,6 +284,33 @@ export async function grantPermissions(t: Tenant, input: GrantInput, deps = DEFA
         : '') +
       'Other grants approved earlier on this connection stay approved on chain until they expire or jaw_session_disconnect revokes them.',
   });
+}
+
+const RETRY_EVERY_MS = 5 * 60_000;
+const RETRY_LOCK_WAIT_MS = 1_000;
+const lastRetry = new Map<string, number>();
+
+/**
+ * After any tool call, retries in the background the revoke of a budget a newer
+ * one replaced, at most every few minutes per connection. Only a request holds
+ * the session key, so no timer can do it.
+ */
+export function retryReplacedRevokes(server: McpServer, deps = DEFAULTS): void {
+  const register = server.registerTool.bind(server) as (...args: unknown[]) => unknown;
+  server.registerTool = ((name: string, config: unknown, handler: (...args: unknown[]) => unknown) =>
+    register(name, config, async (...args: unknown[]) => {
+      const result = await handler(...args);
+      const t = tenant(args.at(-1) as Parameters<typeof tenant>[0]);
+      if ((lastRetry.get(t.connectionId) ?? 0) <= Date.now() - RETRY_EVERY_MS) {
+        lastRetry.set(t.connectionId, Date.now());
+        const after: Promise<void> = revokeOlder(t, {
+          ...deps,
+          session: { ...deps.session, lockWaitMs: RETRY_LOCK_WAIT_MS },
+        }).finally(() => followUps.delete(after));
+        followUps.add(after);
+      }
+      return result;
+    })) as typeof server.registerTool;
 }
 
 export function registerGrantTool(server: McpServer) {

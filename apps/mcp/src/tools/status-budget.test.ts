@@ -9,6 +9,7 @@ import {
   setTestEnv,
   walletAnswers,
   walletsSettled,
+  offlineSession,
 } from '@/connections/testkit';
 import { x402Budget } from '@/grants/store';
 import { grantPermissions } from '@/tools/grant-permissions';
@@ -40,7 +41,11 @@ beforeEach(() => Object.assign(chain, { start: 1, end: 2_000_000_000, spend: 0n,
 async function approve(c: Awaited<ReturnType<typeof connect>>, perDay: string) {
   const t = (await verifyBearer(c.access_token))?.extra?.tenant as Tenant;
   const wallet = fakeWallet(walletAnswers(c.signer));
-  await grantPermissions(t, { x402Budget: { perDay } }, { openWallet: wallet, readPermission: approvedOnChain });
+  await grantPermissions(
+    t,
+    { x402Budget: { perDay } },
+    { openWallet: wallet, session: offlineSession, readPermission: approvedOnChain }
+  );
   await walletsSettled();
   const permissionId = (await x402Budget(t.connectionId))!.permissionId;
   asked.push({ id: permissionId });

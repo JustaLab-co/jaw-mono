@@ -1,6 +1,9 @@
 import { PERMISSION_MANAGER_ABI, type PermissionState } from '@jaw.id/agent';
+import type { McpServer } from '@modelcontextprotocol/server';
 import { PERMISSIONS_MANAGER_ADDRESS } from '@jaw.id/core';
-import { eq } from 'drizzle-orm';
+import { eq, sql } from 'drizzle-orm';
+import { readFileSync } from 'node:fs';
+import { join } from 'node:path';
 import { decodeFunctionData, erc20Abi } from 'viem';
 import { randomBytes } from 'node:crypto';
 import { beforeAll, describe, expect, it, vi } from 'vitest';
@@ -15,6 +18,7 @@ import {
   setTestEnv,
   walletAnswers,
   walletsSettled,
+  offlineSession,
 } from '@/connections/testkit';
 import type { DisconnectDeps } from '@/connections/disconnect';
 import { getDb } from '@/db/client';
@@ -22,7 +26,7 @@ import { connections, grants, payments, permissionRequests, settings } from '@/d
 import { TEST_PG_URL, useTestDb, useTestPostgres } from '@/db/test-db';
 import { endConnection } from '@/connections/rows';
 import { WalletBusy, type OpenWallet, type Wallet } from '@/connections/relay';
-import { grantPermissions } from '@/tools/grant-permissions';
+import { grantPermissions, retryReplacedRevokes } from '@/tools/grant-permissions';
 import { NO_PAY_SCOPE } from '@/tools/reply';
 import {
   budgetGrant,
@@ -33,6 +37,7 @@ import {
   type ReadPermission,
 } from './permission';
 import { liveGrants, LIVE_GRANTS_PER_CONNECTION, x402Budget } from './store';
+import { withFloat } from '@/payments/float-lock';
 
 setTestEnv();
 beforeAll(TEST_PG_URL ? useTestPostgres : useTestDb);
@@ -67,7 +72,7 @@ async function ask(
     perDay?: string;
     read?: ReadPermission;
     tamper?: (granted: Record<string, unknown>) => object;
-    session?: Pick<DisconnectDeps, 'clients' | 'sender'>;
+    session?: Pick<DisconnectDeps, 'clients' | 'sender' | 'lockWaitMs'>;
     input?: Parameters<typeof grantPermissions>[1];
   } = {}
 ) {
@@ -80,7 +85,7 @@ async function ask(
   const result = await grantPermissions(t, opts.input ?? { x402Budget: { perDay: opts.perDay ?? '1' } }, {
     openWallet: fakeWallet(answer, asked),
     readPermission: opts.read ?? approvedOnChain,
-    session: opts.session,
+    session: opts.session ?? offlineSession,
   });
   await walletsSettled();
   return { result, grant: asked[0]?.params[0] as GrantRequest };
@@ -115,6 +120,7 @@ describe('budget grants', () => {
           opened.push(args);
           return answers(...args);
         },
+        session: offlineSession,
         readPermission: approvedOnChain,
       }
     );
@@ -305,6 +311,28 @@ describe('given a connection that approves a second budget', () => {
     expect(states).toEqual(['approved']);
   });
 
+  it('when the revoke runs, then the owner wallet session has already ended', async () => {
+    const { t, signer } = await connected();
+    const { deps } = sessionFakes();
+    let ended = false;
+    const seen: boolean[] = [];
+    const answers = fakeWallet(walletAnswers(signer));
+    const openWallet: OpenWallet = async (...args) => {
+      const wallet = await answers(...args);
+      return { ...wallet, run: (work) => wallet.run(work).finally(() => (ended = true)) };
+    };
+    const sender = async (s: Parameters<typeof deps.sender>[0]) => (seen.push(ended), deps.sender(s));
+
+    await grantPermissions(
+      t,
+      { x402Budget: { perDay: '0.5' } },
+      { openWallet, readPermission: approvedOnChain, session: { ...deps, sender } }
+    );
+    await walletsSettled();
+
+    expect(seen).toEqual([true]);
+  });
+
   it('when a custom grant lands instead, then the budget is neither replaced nor revoked', async () => {
     const { t, signer, connectedWith } = await connected();
     const { deps, sent } = sessionFakes();
@@ -351,6 +379,52 @@ describe('given a connection that approves a second budget', () => {
     expect(grant).toBeDefined();
     expect(decoded(sent[0])).toEqual(['revokeAsSpender', 'approve']);
     expect(await revokedAt(connectedWith)).toEqual(expect.any(Date));
+  });
+});
+
+describe('given a replaced budget left approved on chain', () => {
+  /** A server whose one tool answers at once, wrapped by the retry, with the tool's handler. */
+  function serverWith(session: Pick<DisconnectDeps, 'clients' | 'sender'>) {
+    const handlers = new Map<string, (...args: unknown[]) => Promise<unknown>>();
+    const server = {
+      registerTool: (name: string, _config: unknown, handler: (...args: unknown[]) => Promise<unknown>) =>
+        handlers.set(name, handler),
+    } as unknown as McpServer;
+    retryReplacedRevokes(server, {
+      openWallet: fakeWallet(walletAnswers(owner())),
+      readPermission: approvedOnChain,
+      session,
+    });
+    (server.registerTool as (...args: unknown[]) => unknown)('jaw_any', { description: 'any' }, async () => 'answered');
+    return (t: Tenant) => handlers.get('jaw_any')!({}, { http: { authInfo: { extra: { tenant: t } } } });
+  }
+
+  it('when the connection calls any tool, then it answers and the revoke is retried in the background', async () => {
+    const { t, signer, connectedWith } = await connected();
+    await ask(t, signer, { perDay: '0.5', session: sessionFakes(undefined, 0n).deps });
+    const { deps, sent } = sessionFakes();
+
+    expect(await serverWith(deps)(t)).toBe('answered');
+    await walletsSettled();
+
+    expect(decoded(sent[0])).toEqual(['revokeAsSpender', 'approve']);
+    expect(await revokedAt(connectedWith)).toEqual(expect.any(Date));
+  });
+
+  it('when the retry cannot pay the fee, then the next tool call within minutes does not try again', async () => {
+    const { t, signer } = await connected();
+    await ask(t, signer, { perDay: '0.5', session: sessionFakes(undefined, 0n).deps });
+    const { deps } = sessionFakes(undefined, 0n);
+    let reads = 0;
+    const counted = { ...deps, clients: { publicClient: (id: number) => (reads++, deps.clients.publicClient(id)) } };
+    const call = serverWith(counted);
+
+    await call(t);
+    await walletsSettled();
+    await call(t);
+    await walletsSettled();
+
+    expect(reads).toBe(1);
   });
 });
 
@@ -416,6 +490,7 @@ describe('jaw_grant_permissions', () => {
           until = u;
           return answers(chainId, u, client);
         },
+        session: offlineSession,
         readPermission: approvedOnChain,
       }
     );
@@ -439,7 +514,7 @@ describe('jaw_grant_permissions', () => {
     };
     let until: Date | undefined;
     const openWallet: OpenWallet = async (_chainId, at) => ((until = at), waiting);
-    const deps = { openWallet, readPermission: approvedOnChain };
+    const deps = { openWallet, session: offlineSession, readPermission: approvedOnChain };
 
     const first = await grantPermissions(t, { x402Budget: { perDay: '1' } }, deps);
     const second = await grantPermissions(t, { x402Budget: { perDay: '1' } }, deps);
@@ -474,6 +549,7 @@ describe('jaw_grant_permissions', () => {
           opened++;
           throw new Error('not reached');
         },
+        session: offlineSession,
         readPermission: approvedOnChain,
       }
     );
@@ -491,6 +567,7 @@ describe('jaw_grant_permissions', () => {
         openWallet: async () => {
           throw new WalletBusy();
         },
+        session: offlineSession,
         readPermission: approvedOnChain,
       }
     );
@@ -511,6 +588,7 @@ describe('jaw_grant_permissions', () => {
           walletUrl = w.url;
           return w;
         },
+        session: offlineSession,
         readPermission: approvedOnChain,
       }
     );
@@ -540,6 +618,7 @@ describe('jaw_grant_permissions', () => {
           await gate.promise;
           return honest(m, p);
         }),
+        session: offlineSession,
         readPermission: approvedOnChain,
       }
     );
@@ -666,6 +745,7 @@ describe('the permission of a budget', () => {
         opened++;
         throw new Error('not reached');
       },
+      session: offlineSession,
       readPermission: approvedOnChain,
     });
 
@@ -700,6 +780,50 @@ describe('the permission of a budget', () => {
   });
 });
 
+describe('the migration that keeps one budget per connection', () => {
+  it('marks every budget but the newest replaced, and leaves custom and revoked grants alone', async () => {
+    const { t, connectedWith } = await connected();
+    const newer = await newGrantFrom(t.connectionId);
+    const custom = await customFrom(t.connectionId);
+    await getDb()
+      .insert(grants)
+      .values([
+        { ...newer, connectionId: t.connectionId, createdAt: new Date(Date.now() + 1_000) },
+        { ...custom, connectionId: t.connectionId, createdAt: new Date(Date.now() + 2_000) },
+      ]);
+    expect(await rowOf(connectedWith)).toMatchObject({ replacedAt: null });
+
+    const migration = readFileSync(join(__dirname, '../../drizzle/0032_replace_older_budgets.sql'), 'utf8');
+    await getDb().execute(sql.raw(migration));
+
+    expect(await rowOf(connectedWith)).toMatchObject({ replacedAt: expect.any(Date) });
+    expect(await rowOf(newer.permissionId)).toMatchObject({ replacedAt: null });
+    expect(await rowOf(custom.permissionId)).toMatchObject({ replacedAt: null });
+    expect((await x402Budget(t.connectionId))?.permissionId).toBe(newer.permissionId);
+  });
+});
+
+describe.skipIf(!TEST_PG_URL)('on Postgres, given a payment holding the float', () => {
+  it('when a newer budget lands, then the revoke gives up as busy and the first stays replaced and approved', async () => {
+    const { t, signer, connectedWith } = await connected();
+    const { deps, sent } = sessionFakes();
+    const release = Promise.withResolvers<void>();
+    const holding = Promise.withResolvers<void>();
+    const held = withFloat(t.connectionId, 5_000, async () => {
+      holding.resolve();
+      await release.promise;
+    });
+    await holding.promise;
+
+    await ask(t, signer, { perDay: '0.5', session: { ...deps, lockWaitMs: 200 } });
+    release.resolve();
+    await held;
+
+    expect(sent).toHaveLength(0);
+    expect(await rowOf(connectedWith)).toMatchObject({ replacedAt: expect.any(Date), revokedAt: null });
+  });
+});
+
 describe.skipIf(!TEST_PG_URL)('on Postgres, given a budget landing while its connection ends', () => {
   it('a budget waits for a connection being ended, and is not recorded after it', async () => {
     const { t, signer } = await connected();
@@ -721,6 +845,7 @@ describe.skipIf(!TEST_PG_URL)('on Postgres, given a budget landing while its con
       { x402Budget: { perDay: '3' } },
       {
         openWallet: fakeWallet(walletAnswers(signer)),
+        session: offlineSession,
         readPermission: approvedOnChain,
       }
     );

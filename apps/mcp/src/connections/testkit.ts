@@ -92,6 +92,16 @@ export const fakeWallet =
     close: () => undefined,
   });
 
+/** For a test that never sends as the session: any send, or chain read around one, fails. */
+export const offlineSession: Pick<DisconnectDeps, 'clients' | 'sender'> = {
+  clients: {
+    publicClient: () => {
+      throw new Error('this test reads no chain');
+    },
+  },
+  sender: () => Promise.reject(new Error('this test sends nothing as the session')),
+};
+
 export const SENT_TX = `0x${'ab'.repeat(32)}` as Hex;
 export type SessionCall = { to: Address; data: Hex };
 

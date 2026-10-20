@@ -11,7 +11,7 @@ import {
 import { afterAll, afterEach, describe, expect, it, vi } from 'vitest';
 import WebSocket, { WebSocketServer } from 'ws';
 import { useTestDb } from '@/db/test-db';
-import { setTestEnv } from './testkit';
+import { offlineSession, setTestEnv } from './testkit';
 
 // A relay that pairs the two roles of a session and forwards what each sends, as relay.jaw.id does.
 const seen: string[] = [];
@@ -548,6 +548,7 @@ describe('the owner pool per account', () => {
       { x402Budget: { perDay: '1' } },
       {
         openWallet: relay.ownerRelay,
+        session: offlineSession,
         readPermission: async () => null as never,
       }
     );
