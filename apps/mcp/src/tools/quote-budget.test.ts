@@ -7,6 +7,7 @@ import {
   approvedOnChain,
   callTool,
   connect,
+  mcp,
   fakeWallet,
   setTestEnv,
   walletAnswers,
@@ -20,7 +21,15 @@ import { grantPermissions } from '@/tools/grant-permissions';
 
 const USDC = '0x036CbD53842c5426634e7929541eC2318f3dCF7e';
 const asked: { id: string }[] = [];
-const chain = { start: 1, end: 2_000_000_000, spend: 0n, held: 0n, periodReadable: true, approved: true };
+const chain = {
+  start: 1,
+  end: 2_000_000_000,
+  spend: 0n,
+  held: 0n,
+  periodReadable: true,
+  approved: true,
+  livenessReadable: true,
+};
 
 vi.mock('@/lib/chain', async (original) => ({
   ...(await original<object>()),
@@ -33,6 +42,7 @@ vi.mock('@/lib/chain', async (original) => ({
           return chain;
         }
         if (functionName === 'balanceOf') return chain.held;
+        if (functionName === 'isApproved' && !chain.livenessReadable) throw new Error('rpc down');
         return functionName === 'isApproved' && chain.approved;
       },
     }) as unknown as PublicClient,
@@ -70,7 +80,15 @@ setTestEnv();
 process.env.JAW_MCP_INSECURE_FETCH_HOSTS = SELLER;
 beforeAll(useTestDb);
 beforeEach(() =>
-  Object.assign(chain, { start: 1, end: 2_000_000_000, spend: 0n, held: 0n, periodReadable: true, approved: true })
+  Object.assign(chain, {
+    start: 1,
+    end: 2_000_000_000,
+    spend: 0n,
+    held: 0n,
+    periodReadable: true,
+    approved: true,
+    livenessReadable: true,
+  })
 );
 
 async function withBudget(perDay: string) {
@@ -134,6 +152,15 @@ describe('given a budget of 0.5 USDC a day', () => {
     expect(r.structuredContent.summary).not.toContain('budget');
   });
 
+  it('when whether the chain still approves it cannot be read, then a paid quote is not ready, carries no budget and does not say it fits', async () => {
+    const { token } = await withBudget('0.5');
+    chain.livenessReadable = false;
+    const r = await quote(token, '/price/5000');
+    expect(r.structuredContent.readiness).toEqual({ status: 'not_ready', reason: 'chain_unavailable' });
+    expect(r.structuredContent.budget).toBeUndefined();
+    expect(r.structuredContent.summary).not.toContain('budget');
+  });
+
   it('when the day cannot be read from the chain, then a paid quote is not ready for chain_unavailable', async () => {
     const { token } = await withBudget('0.5');
     chain.periodReadable = false;
@@ -187,5 +214,17 @@ describe('given a budget of 0.03 USDC with 0.025 funded into the float today and
       budget: { permissionId, remainingToday: { amount: '25000' } },
     });
     expect(status.structuredContent.budget.remainingToday).toEqual(r.structuredContent.budget.remainingToday);
+  });
+});
+
+describe('given the tool list', () => {
+  it('when a client reads the output schemas, then only jaw_session_x402_quote can answer over_allowance', async () => {
+    const { token } = await withBudget('0.5');
+    const { json } = await mcp(token, { method: 'tools/list' });
+    const reasons = (name: string) =>
+      json.result.tools.find((t: { name: string }) => t.name === name).outputSchema.properties.readiness.properties
+        .reason.enum;
+    expect(reasons('jaw_session_x402_quote')).toContain('over_allowance');
+    expect(reasons('jaw_session_status')).not.toContain('over_allowance');
   });
 });

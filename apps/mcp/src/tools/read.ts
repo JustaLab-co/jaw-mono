@@ -33,10 +33,14 @@ const money = z.object({
 });
 const readiness = z.object({
   status: z.enum(['ready', 'not_ready']),
-  reason: z.enum(['no_scope', 'no_grant', 'grant_revoked', 'chain_unavailable', 'over_allowance']).optional(),
+  reason: z.enum(['no_scope', 'no_grant', 'grant_revoked', 'chain_unavailable']).optional(),
   link: z.string().url().optional(),
 });
 type Readiness = z.infer<typeof readiness>;
+const quoteReadinessOut = readiness.extend({
+  reason: z.enum([...readiness.shape.reason.unwrap().options, 'over_allowance']).optional(),
+});
+type QuoteReadiness = z.infer<typeof quoteReadinessOut>;
 
 const budgetOutput = z.object({
   permissionId: z.string(),
@@ -145,7 +149,6 @@ const NOT_READY: Record<NonNullable<Readiness['reason']>, string> = {
   no_grant: 'No budget yet: ask for one with jaw_grant_permissions and x402Budget.',
   grant_revoked: 'The budget was revoked: ask for a new one with jaw_grant_permissions and x402Budget.',
   chain_unavailable: 'The budget could not be read from the chain right now.',
-  over_allowance: 'The price is over what the budget can pay today.',
 };
 
 function leftToday(budget: z.infer<typeof budgetOutput> | undefined) {
@@ -240,13 +243,13 @@ const quoteOutput = z.object({
     .object({ permissionId: z.string(), remainingToday: money.nullable() })
     .optional()
     .describe('The budget a payment would come from, on a paid quote'),
-  readiness,
+  readiness: quoteReadinessOut,
   summary: z.string(),
 });
 
 type BudgetRead = Awaited<ReturnType<typeof budgetOf>>;
 
-function quoteReadiness(t: Tenant, read: BudgetRead | undefined, price: bigint): Readiness {
+function quoteReadiness(t: Tenant, read: BudgetRead | undefined, price: bigint): QuoteReadiness {
   const ready = readinessOf(t, read?.liveness);
   const left = read?.budget.remainingToday;
   if (ready.status !== 'ready') return ready;
@@ -254,7 +257,7 @@ function quoteReadiness(t: Tenant, read: BudgetRead | undefined, price: bigint):
   return price > BigInt(left.amount) ? { status: 'not_ready', reason: 'over_allowance' } : ready;
 }
 
-function fitSummary(read: BudgetRead | undefined, ready: Readiness) {
+function fitSummary(read: BudgetRead | undefined, ready: QuoteReadiness) {
   const left = read?.budget.remainingToday;
   if (!read || !left) return '';
   const { permissionId } = read.budget;
