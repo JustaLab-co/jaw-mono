@@ -227,6 +227,19 @@ describe('a sign request whose server restarted', () => {
     expect(page.inits()).toBe(1);
   });
 
+  it.each(['{}', '{"chainId":84532,"request":{"type":"0x45"}}'])(
+    'given a stored payload %s that is not a sign request, then the row ends and no session is opened on the relay',
+    async (payload) => {
+      const { row, page } = await askedThenRestarted();
+      await getDb().update(permissionRequests).set({ payload }).where(eq(permissionRequests.id, row.id));
+
+      await resumeSigns();
+
+      expect(await settled(row.id)).toMatchObject({ state: 'expired', relay: null });
+      expect(page.inits()).toBe(1);
+    }
+  );
+
   it('given the page refuses a resumed ask as another request under its id, then the row ends link_lost, not as a wallet error', async () => {
     const { row } = await askedThenRestarted();
     const payload = JSON.parse(row.payload!) as { request: { data: { message: string } } };

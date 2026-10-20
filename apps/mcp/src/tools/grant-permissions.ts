@@ -159,7 +159,7 @@ export async function grantPermissions(t: Tenant, input: GrantInput, deps = DEFA
       chainId: t.chainId,
       approveBy: until,
       payload,
-      work: grantWork(deps.readPermission)(t, payload),
+      rebuild: grantWork(deps.readPermission),
     },
     deps.openWallet
   );

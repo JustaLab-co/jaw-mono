@@ -183,14 +183,15 @@ export type Claim = () => Promise<boolean>;
 
 export type Work = (ask: Ask, claim: Claim) => Promise<Outcome>;
 
-export type Rebuild = (t: Tenant, payload: unknown) => Work;
+/** Undefined when the stored payload is not one this method sent. */
+export type Rebuild = (t: Tenant, payload: unknown) => Work | undefined;
 export type Rebuilds = Partial<Record<PermissionRequestRow['method'], Rebuild>>;
 
 export type LinkRequest = {
   chainId: number;
   approveBy: Date;
   payload: unknown;
-  work: Work;
+  rebuild: Rebuild;
 } & (
   | { method: 'grant' }
   | { method: 'revoke'; permissionId: string }
@@ -198,6 +199,8 @@ export type LinkRequest = {
 );
 
 export async function openLink(t: Tenant, req: LinkRequest, openWallet: OpenWallet): Promise<Opened> {
+  const work = req.rebuild(t, req.payload);
+  if (!work) throw new Error(`the ${req.method} request does not match what a resume rebuilds`);
   const existing = async (): Promise<Held | undefined> => {
     const stored = req.method === 'sign' ? await currentSign(t, req.idempotencyKey) : undefined;
     return stored ? { waiting: stored } : findHeld(t, req);
@@ -251,7 +254,7 @@ export async function openLink(t: Tenant, req: LinkRequest, openWallet: OpenWall
     if (!row || row === FULL) wallet.close();
   }
   if (row === FULL || !row) return (await existing()) ?? (row === FULL ? 'account_busy' : 'wallet_busy');
-  follow(row, wallet, req.work);
+  follow(row, wallet, work);
   return { opened: row };
 }
 
@@ -320,7 +323,7 @@ const rejoinWith = (rebuildOf: (row: PermissionRequestRow) => Rebuild): Rejoin<P
     const payload = parsed(row.payload);
     if (payload === undefined) return undefined;
     const work = rebuildOf(row)(t, payload);
-    return (wallet) => follow(row, wallet, work);
+    return work && ((wallet) => follow(row, wallet, work));
   },
 });
 

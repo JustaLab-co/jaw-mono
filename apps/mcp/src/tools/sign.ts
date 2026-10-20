@@ -241,7 +241,7 @@ export async function sign(t: Tenant, input: SignInput, deps: SignDeps = DEFAULT
       chainId,
       approveBy: new Date(Date.now() + APPROVE_WITHIN_MS),
       payload,
-      work: signWork(t, payload),
+      rebuild: signWork,
     },
     deps.openWallet
   );

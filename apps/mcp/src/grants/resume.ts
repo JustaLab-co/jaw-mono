@@ -1,4 +1,4 @@
-import type { GrantedPermission, PermissionState } from '@jaw.id/agent';
+import { parseGrantedPermission, type GrantedPermission, type PermissionState } from '@jaw.id/agent';
 import { and, eq, isNull, sql } from 'drizzle-orm';
 import { isAddressEqual, isHex, toHex, type Address, type Hex } from 'viem';
 import { z } from 'zod';
@@ -37,7 +37,42 @@ const hasAccount = (accounts: unknown, account: string) =>
 
 export type SignPayload = { chainId: number; request: SignRequest };
 
-export const signWork: Rebuild = (t, payload) => (ask, claim) => approveSign(ask, claim, t, payload as SignPayload);
+const hex = z.string().regex(/^0x[0-9a-fA-F]*$/);
+const address = z.string().regex(/^0x[0-9a-fA-F]{40}$/);
+
+const signPayload = z.object({
+  chainId: z.number().int().positive(),
+  request: z.union([
+    z.object({ type: z.literal('0x45'), data: z.object({ message: z.string() }) }),
+    z.object({ type: z.literal('0x01'), data: z.record(z.string(), z.unknown()) }),
+  ]),
+});
+
+const grantPayload = z.object({
+  kind: z.enum(['x402-budget', 'custom']),
+  grant: z.object({
+    spender: address,
+    expiry: z.number().int(),
+    chainId: hex,
+    permissions: z.object({
+      calls: z.array(z.object({ target: address, functionSignature: z.string() })),
+      spends: z.array(z.object({ token: address, allowance: z.string(), unit: z.string(), multiplier: z.number() })),
+    }),
+    capabilities: z.object({ prefundSpender: z.literal(true) }).optional(),
+  }),
+});
+
+const revokePayload = z.object({
+  permissionId: z.string().regex(/^0x[0-9a-fA-F]{64}$/),
+  chainId: z.number().int().positive(),
+  permission: z.unknown(),
+  connectionId: z.string().nullable(),
+});
+
+export const signWork: Rebuild = (t, payload) => {
+  const sent = signPayload.safeParse(payload).data;
+  return sent && ((ask, claim) => approveSign(ask, claim, t, sent));
+};
 
 async function approveSign(ask: Ask, claim: Claim, t: Tenant, { chainId, request }: SignPayload): Promise<Outcome> {
   if (!hasAccount(await ask('eth_requestAccounts', []), t.account)) {
@@ -56,9 +91,10 @@ export type GrantPayload = { kind: GrantKind; grant: GrantRequest };
 
 export const grantWork =
   (read: ReadPermission): Rebuild =>
-  (t, payload) =>
-  (walletAsk, claim) =>
-    askGrant(t, payload as GrantPayload, walletAsk, claim, read);
+  (t, payload) => {
+    const sent = grantPayload.safeParse(payload).data as GrantPayload | undefined;
+    return sent && ((walletAsk, claim) => askGrant(t, sent, walletAsk, claim, read));
+  };
 
 async function askGrant(
   t: Tenant,
@@ -117,9 +153,13 @@ export const readState = (target: RevokeTarget, read: ReadPermission) =>
 
 export const revokeWork =
   (deps: RevokeReads): Rebuild =>
-  (t, target) =>
-  (ask, claim) =>
-    askRevoke(t, target as RevokeTarget, ask, claim, deps);
+  (t, payload) => {
+    const sent = revokePayload.safeParse(payload).data;
+    const permission = sent && parseGrantedPermission(sent.permission);
+    if (!sent || !permission) return undefined;
+    const target = { ...sent, permissionId: sent.permissionId as Hex, permission };
+    return (ask, claim) => askRevoke(t, target, ask, claim, deps);
+  };
 
 async function askRevoke(t: Tenant, target: RevokeTarget, ask: Ask, claim: Claim, deps: RevokeReads): Promise<Outcome> {
   const [account] = (await ask('eth_requestAccounts', [])) as unknown[];

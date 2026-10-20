@@ -144,7 +144,7 @@ export async function revokePermission(t: Tenant, input: RevokeInput, deps = DEF
       approveBy: new Date(Date.now() + APPROVE_WITHIN_MS),
       permissionId: target.permissionId,
       payload: target,
-      work: revokeWork(deps)(t, target),
+      rebuild: revokeWork(deps),
     },
     deps.openWallet
   );
