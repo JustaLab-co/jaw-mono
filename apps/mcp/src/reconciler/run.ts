@@ -37,7 +37,7 @@ export interface Report {
   links: { expired: number; revoked: number };
 }
 
-const REVOKE_READS: RevokeReads = { readPermission: readOnChain, lookUp: fromStore };
+const REVOKE_READS: RevokeReads = { readPermission: readOnChain, lookUp: fromStore, lookUpMs: 10_000 };
 
 /**
  * Resolves every signed or unknown row older than the window and not held by a

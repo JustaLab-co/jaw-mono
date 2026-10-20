@@ -1,6 +1,6 @@
 import { getPermissionFromRelay } from '@jaw.id/core';
 import { parseGrantedPermission, type GrantedPermission, type PermissionState } from '@jaw.id/agent';
-import { and, eq, gt, isNull, sql } from 'drizzle-orm';
+import { and, eq, inArray, isNull, lte, or, sql } from 'drizzle-orm';
 import type { Hex } from 'viem';
 import { config } from '@/connections/config';
 import { getDb } from '@/db/client';
@@ -9,15 +9,17 @@ import { errorLabel, log } from '@/lib/edge';
 import type { ReadPermission } from './permission';
 
 export const UNCONFIRMED = 'unconfirmed';
-const UNCONFIRMED_READ_WINDOW = sql`interval '1 day'`;
+const NOT_SEEN = 'revoke_not_seen';
+const READ_FOR = sql`interval '1 day'`;
+const READ_EVERY = sql`interval '5 minutes'`;
 const UNCONFIRMED_BATCH = 50;
-const LOOK_UP_MS = 10_000;
 
 export type StoredPermission = { permission: GrantedPermission; chainId: number } | 'not_found' | 'unavailable';
 export type LookUp = (permissionId: Hex) => Promise<StoredPermission>;
 export interface RevokeReads {
   readPermission: ReadPermission;
   lookUp: LookUp;
+  lookUpMs: number;
 }
 
 export const fromStore: LookUp = async (permissionId) => {
@@ -39,7 +41,12 @@ export const fromStore: LookUp = async (permissionId) => {
 export const readState = (target: Parameters<ReadPermission>[0], read: ReadPermission) =>
   read(target).catch((): PermissionState => ({ status: 'unavailable' }));
 
-/** Marks the grant revoked and settles its unconfirmed revoke requests. Returns how many requests it settled. */
+const revokeOf = (id: string) =>
+  and(eq(permissionRequests.method, 'revoke'), sql`lower(${permissionRequests.permissionId}) = ${id.toLowerCase()}`);
+const unconfirmed = and(eq(permissionRequests.state, 'approved'), eq(permissionRequests.code, UNCONFIRMED));
+const notSeen = and(eq(permissionRequests.state, 'failed'), eq(permissionRequests.code, NOT_SEEN));
+
+/** Marks the grant revoked and settles its revoke requests the chain had not shown. Returns how many it settled. */
 export const markRevoked = (id: string) =>
   getDb().transaction(async (tx) => {
     await tx
@@ -48,22 +55,15 @@ export const markRevoked = (id: string) =>
       .where(and(sql`lower(${grants.permissionId}) = ${id.toLowerCase()}`, isNull(grants.revokedAt)));
     const settled = await tx
       .update(permissionRequests)
-      .set({ code: null, updatedAt: sql`statement_timestamp()` })
-      .where(
-        and(
-          eq(permissionRequests.method, 'revoke'),
-          sql`lower(${permissionRequests.permissionId}) = ${id.toLowerCase()}`,
-          eq(permissionRequests.state, 'approved'),
-          eq(permissionRequests.code, UNCONFIRMED)
-        )
-      )
+      .set({ state: 'approved', code: null, updatedAt: sql`statement_timestamp()` })
+      .where(and(revokeOf(id), or(unconfirmed, notSeen)))
       .returning({ id: permissionRequests.id });
     return settled.length;
   });
 
-const lookUpWithin = (lookUp: LookUp, id: Hex): Promise<StoredPermission> => {
+const lookUpWithin = ({ lookUp, lookUpMs }: RevokeReads, id: Hex): Promise<StoredPermission> => {
   let timer: NodeJS.Timeout | undefined;
-  const late = new Promise<'unavailable'>((resolve) => (timer = setTimeout(() => resolve('unavailable'), LOOK_UP_MS)));
+  const late = new Promise<'unavailable'>((resolve) => (timer = setTimeout(() => resolve('unavailable'), lookUpMs)));
   return Promise.race([lookUp(id), late]).finally(() => clearTimeout(timer));
 };
 
@@ -74,9 +74,7 @@ async function revokedOnChain(
 ): Promise<boolean> {
   if (grant?.revokedAt) return true;
   const permissionId = request.permissionId as Hex;
-  const stored = grant
-    ? { permission: grant.permission as GrantedPermission }
-    : await lookUpWithin(deps.lookUp, permissionId);
+  const stored = grant ? { permission: grant.permission as GrantedPermission } : await lookUpWithin(deps, permissionId);
   if (typeof stored === 'string') return false;
   const state = await readState(
     { permissionId, chainId: request.chainId, permission: stored.permission },
@@ -86,34 +84,60 @@ async function revokedOnChain(
 }
 
 /**
- * Revokes the wallet approved but the chain did not show in time, read again for a day.
+ * Revokes the wallet approved but the chain did not show in time. Each is read again at most every
+ * five minutes for a day, claimed so concurrent runs split them, then ends `failed` as revoke_not_seen.
  * The grant row of the same account gives the permission, else the permission store.
  */
 export async function settleUnconfirmedRevokes(deps: RevokeReads): Promise<number> {
-  const rows = await getDb()
-    .select({ request: permissionRequests, grant: grants })
-    .from(permissionRequests)
-    .leftJoin(
-      grants,
-      and(
-        sql`lower(${grants.permissionId}) = lower(${permissionRequests.permissionId})`,
-        sql`lower(${grants.account}) = lower(${permissionRequests.account})`
-      )
-    )
+  const db = getDb();
+  const given = await db
+    .update(permissionRequests)
+    .set({ state: 'failed', code: NOT_SEEN, updatedAt: sql`statement_timestamp()` })
     .where(
       and(
         eq(permissionRequests.method, 'revoke'),
-        eq(permissionRequests.state, 'approved'),
-        eq(permissionRequests.code, UNCONFIRMED),
-        gt(permissionRequests.updatedAt, sql`now() - ${UNCONFIRMED_READ_WINDOW}`)
+        unconfirmed,
+        lte(permissionRequests.createdAt, sql`now() - ${READ_FOR}`)
+      )
+    )
+    .returning({ id: permissionRequests.id });
+  if (given.length) log('warn', { msg: `${given.length} approved revokes never showed on chain` });
+  const due = db
+    .select({ id: permissionRequests.id })
+    .from(permissionRequests)
+    .where(
+      and(
+        eq(permissionRequests.method, 'revoke'),
+        unconfirmed,
+        lte(permissionRequests.updatedAt, sql`now() - ${READ_EVERY}`)
       )
     )
     .orderBy(sql`random()`)
-    .limit(UNCONFIRMED_BATCH);
+    .limit(UNCONFIRMED_BATCH)
+    .for('update', { skipLocked: true });
+  const claimed = await db
+    .update(permissionRequests)
+    .set({ updatedAt: sql`statement_timestamp()` })
+    .where(inArray(permissionRequests.id, due))
+    .returning();
+  if (!claimed.length) return 0;
+  const byPermission = new Map(claimed.map((r) => [(r.permissionId as string).toLowerCase(), r]));
+  const held = await db
+    .select()
+    .from(grants)
+    .where(inArray(sql`lower(${grants.permissionId})`, [...byPermission.keys()]));
+  const grantOf = (r: typeof permissionRequests.$inferSelect) =>
+    held.find(
+      (g) =>
+        g.permissionId.toLowerCase() === r.permissionId?.toLowerCase() &&
+        g.account.toLowerCase() === r.account.toLowerCase()
+    ) ?? null;
   const settled = await Promise.all(
-    rows.map(async ({ request, grant }) => {
+    [...byPermission.values()].map(async (request) => {
       try {
-        return (await revokedOnChain(request, grant, deps)) ? await markRevoked(request.permissionId as string) : 0;
+        return (await revokedOnChain(request, grantOf(request), deps))
+          ? await markRevoked(request.permissionId as string)
+          : 0;
       } catch (err) {
         log('warn', { msg: `revoke request ${request.id} not settled`, error: errorLabel(err) });
         return 0;

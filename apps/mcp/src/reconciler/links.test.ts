@@ -1,6 +1,6 @@
 import { randomBytes } from 'node:crypto';
 import type { ChainClients, GrantedPermission } from '@jaw.id/agent';
-import { eq } from 'drizzle-orm';
+import { eq, sql } from 'drizzle-orm';
 import type { Hex } from 'viem';
 import { beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { verifyBearer, type Tenant } from '@/connections/auth';
@@ -11,7 +11,7 @@ import { grants, permissionRequests } from '@/db/schema';
 import { TEST_PG_URL, useTestDb, useTestPostgres } from '@/db/test-db';
 import type { ReadPermission } from '@/grants/permission';
 import { x402Budget } from '@/grants/store';
-import type { LookUp } from '@/grants/revokes';
+import { markRevoked, type LookUp } from '@/grants/revokes';
 import { sign } from '@/tools/sign';
 import { reconcile } from './run';
 
@@ -41,7 +41,7 @@ const store: LookUp = async (id) => {
   const permission = stored.get(id.toLowerCase());
   return permission ? { permission, chainId: 8453 } : 'not_found';
 };
-const run = () => reconcile(noChain, new Date(), noReceipt, { readPermission: chain, lookUp: store });
+const run = () => reconcile(noChain, new Date(), noReceipt, { readPermission: chain, lookUp: store, lookUpMs: 50 });
 
 const signer = owner();
 let t: Tenant;
@@ -62,6 +62,7 @@ beforeEach(async () => {
   looked.length = 0;
   storeHangs = false;
   await getDb().delete(permissionRequests);
+  await getDb().update(grants).set({ revokedAt: null });
 });
 
 const secondsFromNow = (s: number) => new Date(Date.now() + s * 1000);
@@ -88,8 +89,14 @@ async function row(over: Partial<typeof permissionRequests.$inferInsert>) {
 const rowOf = async (id: string) =>
   (await getDb().select().from(permissionRequests).where(eq(permissionRequests.id, id)))[0];
 
-const unconfirmedRevoke = (permissionId: string, updatedAt = new Date()) =>
-  row({ method: 'revoke', permissionId, state: 'approved', code: 'unconfirmed', updatedAt });
+const minutesAgo = (m: number) => new Date(Date.now() - m * 60_000);
+/** Answered six minutes ago, so a run reads it. */
+const unconfirmedRevoke = (permissionId: string, over: Partial<typeof permissionRequests.$inferInsert> = {}) =>
+  row({ method: 'revoke', permissionId, state: 'approved', code: 'unconfirmed', updatedAt: minutesAgo(6), ...over });
+const readAgainLater = () =>
+  getDb()
+    .update(permissionRequests)
+    .set({ updatedAt: minutesAgo(6) });
 
 describe('reconciler: owner link requests', () => {
   it('given a link past its window whose server stopped renewing it, when the reconciler runs, then it reads expired with no code', async () => {
@@ -310,7 +317,7 @@ describe('reconciler: owner link requests', () => {
 
     expect(report.links.revoked).toBe(0);
     expect(await rowOf(id)).toMatchObject({ code: 'unconfirmed' });
-  }, 20_000);
+  });
 
   it('given an unconfirmed revoke the chain now shows, then the request settles and the grant reads revoked', async () => {
     const id = await unconfirmedRevoke(budget);
@@ -332,7 +339,6 @@ describe('reconciler: owner link requests', () => {
 
     expect(read).toEqual([]);
     expect(await rowOf(id)).toMatchObject({ code: null });
-    await getDb().update(grants).set({ revokedAt: null }).where(eq(grants.permissionId, budget));
   });
 
   it('given an unconfirmed revoke of a permission this server holds no grant for, then it reads the store copy on chain', async () => {
@@ -354,6 +360,7 @@ describe('reconciler: owner link requests', () => {
     await run();
     unreadable = true;
     revokedIds.add(budget.toLowerCase());
+    await readAgainLater();
     await run();
 
     expect(read).toEqual([budget.toLowerCase(), budget.toLowerCase()]);
@@ -363,13 +370,7 @@ describe('reconciler: owner link requests', () => {
   });
 
   it("given an unconfirmed revoke asked from another account than the grant's, then that grant is not read for it", async () => {
-    const id = await row({
-      method: 'revoke',
-      permissionId: budget,
-      state: 'approved',
-      code: 'unconfirmed',
-      account: `0x${randomBytes(20).toString('hex')}`,
-    });
+    const id = await unconfirmedRevoke(budget, { account: `0x${randomBytes(20).toString('hex')}` });
     revokedIds.add(budget.toLowerCase());
 
     await run();
@@ -378,11 +379,60 @@ describe('reconciler: owner link requests', () => {
     expect(await rowOf(id)).toMatchObject({ code: 'unconfirmed' });
   });
 
-  it('given an unconfirmed revoke older than a day, then the chain is not read for it', async () => {
-    await unconfirmedRevoke(budget, new Date(Date.now() - 25 * 3_600_000));
+  it('given an unconfirmed revoke asked over a day ago, then it is no longer read and ends failed as revoke_not_seen', async () => {
+    const id = await unconfirmedRevoke(budget, { createdAt: minutesAgo(25 * 60) });
 
     await run();
 
     expect(read).toEqual([]);
+    expect(await rowOf(id)).toMatchObject({ state: 'failed', code: 'revoke_not_seen' });
+  });
+
+  it('given a revoke that ended revoke_not_seen, when the chain later shows it revoked, then marking it revoked settles the request', async () => {
+    const id = await unconfirmedRevoke(budget, { createdAt: minutesAgo(25 * 60) });
+    await run();
+
+    expect(await markRevoked(budget)).toBe(1);
+
+    expect(await rowOf(id)).toMatchObject({ state: 'approved', code: null });
+  });
+
+  it('given an unconfirmed revoke read moments ago, when two runs start together and again right after, then the chain is read once', async () => {
+    await unconfirmedRevoke(budget);
+
+    await Promise.all([run(), run()]);
+    await run();
+
+    expect(read).toEqual([budget.toLowerCase()]);
+  });
+
+  it.skipIf(!TEST_PG_URL)(
+    'given another run holds one unconfirmed revoke, then this run passes it by and reads the rest',
+    async () => {
+      const id = await unconfirmedRevoke(budget);
+      const free = randomId();
+      await unconfirmedRevoke(free);
+
+      await getDb().transaction(async (tx) => {
+        await tx.execute(sql`select id from permission_requests where id = ${id} for update`);
+        await run();
+      });
+
+      expect(read).toEqual([]);
+      expect(looked).toEqual([free.toLowerCase()]);
+    }
+  );
+
+  it('given two connections waiting on the same unconfirmed revoke, then one read settles both', async () => {
+    const mine = await unconfirmedRevoke(budget);
+    const theirs = await unconfirmedRevoke(budget, { connectionId: other.connectionId });
+    revokedIds.add(budget.toLowerCase());
+
+    const report = await run();
+
+    expect(read).toEqual([budget.toLowerCase()]);
+    expect(report.links.revoked).toBe(2);
+    expect(await rowOf(mine)).toMatchObject({ code: null });
+    expect(await rowOf(theirs)).toMatchObject({ code: null });
   });
 });
