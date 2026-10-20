@@ -1,6 +1,6 @@
 'use client';
 
-import React, { useCallback, useMemo, useState, useEffect, useRef } from 'react';
+import React, { useMemo, useState, useEffect, useRef } from 'react';
 import { createRoot } from 'react-dom/client';
 import {
   UIHandler,
@@ -60,7 +60,7 @@ import {
 import { useChainIconURI } from '../hooks/useChainIconURI';
 import { useGasEstimation } from '../hooks/useGasEstimation';
 import { useSpenderPrefund, describeSpenderPrefund } from '../hooks/useSpenderPrefund';
-import { useHeldGrants } from '../hooks/useHeldGrants';
+import { useHeldGrantsDisplay } from '../hooks/useHeldGrants';
 import { useAssetPreview } from '../hooks/useAssetPreview';
 import { usePermissionExecution } from '../hooks/usePermissionExecution';
 import { usePermissionRevocation } from '../hooks/usePermissionRevocation';
@@ -2327,14 +2327,6 @@ function PermissionDialogWrapper({
     [chainId, apiKey, computedPaymasterUrl]
   );
 
-  const held = useHeldGrants({
-    address: request.data.address as Address,
-    spender: request.data.spender as Address,
-    chainId,
-    apiKey,
-    rpcUrl: chain.rpcUrl,
-  });
-
   // Get spends array from request (now using spends plural)
   // Memoized because both keys are optional: `?? []` on an absent key returns a new array every
   // render, and these feed effect dependency arrays. A calls-only grant otherwise re-triggered the
@@ -2543,59 +2535,48 @@ function PermissionDialogWrapper({
 
   // Note: Gas estimation is now handled by useGasEstimation hook
 
-  const toSpendRow = useCallback(
-    (
-      spend: { token: string; allowance: string | bigint; unit: string; multiplier?: number },
-      info: { decimals: number | null; symbol: string } | undefined
-    ) => {
-      const tokenInfo =
-        info ||
-        (isNativeToken(spend.token)
-          ? {
-              decimals: viemChain?.nativeCurrency?.decimals ?? 18,
-              symbol: nativeSymbol,
-            }
-          : { decimals: null, symbol: '' });
-
-      const allowance = BigInt(spend.allowance);
-      const { amount, decimalsUnknown } = formatSpendAmount(allowance, tokenInfo.decimals);
-      const limit = decimalsUnknown ? `${amount} base units` : `${amount} ${tokenInfo.symbol}`;
-
-      // Format duration with multiplier (defaults to 1 if not provided)
-      const multiplier = spend.multiplier ?? 1;
-      const duration = spend.unit === 'forever' ? 'forever' : `${multiplier} ${spend.unit}${multiplier > 1 ? 's' : ''}`;
-
-      return {
-        amount,
-        decimalsUnknown,
-        token: isNativeToken(spend.token) ? `Native (${nativeSymbol})` : tokenInfo.symbol,
-        tokenAddress: spend.token,
-        duration,
-        limit,
-      };
-    },
-    [viemChain, nativeSymbol]
-  );
+  // Convert to SpendPermission array format expected by PermissionDialog
   const spends = useMemo(
-    () => spendsData.map((spend) => toSpendRow(spend, tokenInfoMap[spend.token])),
-    [spendsData, tokenInfoMap, toSpendRow]
-  );
-  const heldGrants = useMemo(
     () =>
-      held.status === 'ready'
-        ? {
-            status: 'ready' as const,
-            count: held.held.count,
-            tokensLoading: !held.tokenInfoSettled,
-            totals: held.held.totals.map((total) => {
-              const token = total.token.toLowerCase();
-              const known = Object.entries(tokenInfoMap).find(([address]) => address.toLowerCase() === token)?.[1];
-              return toSpendRow(total, held.tokenInfo[token] ?? known);
-            }),
-          }
-        : held,
-    [held, tokenInfoMap, toSpendRow]
+      spendsData.map((spend) => {
+        const tokenInfo =
+          tokenInfoMap[spend.token] ||
+          (isNativeToken(spend.token)
+            ? {
+                decimals: viemChain?.nativeCurrency?.decimals ?? 18,
+                symbol: nativeSymbol,
+              }
+            : { decimals: null, symbol: '' });
+
+        const allowance = BigInt(spend.allowance);
+        const { amount, decimalsUnknown } = formatSpendAmount(allowance, tokenInfo.decimals);
+        const limit = decimalsUnknown ? `${amount} base units` : `${amount} ${tokenInfo.symbol}`;
+
+        // Format duration with multiplier (defaults to 1 if not provided)
+        const multiplier = spend.multiplier ?? 1;
+        const duration = `${multiplier} ${spend.unit}${multiplier > 1 ? 's' : ''}`;
+
+        return {
+          amount,
+          decimalsUnknown,
+          token: isNativeToken(spend.token) ? `Native (${nativeSymbol})` : tokenInfo.symbol,
+          tokenAddress: spend.token,
+          duration,
+          limit,
+        };
+      }),
+    [spendsData, tokenInfoMap, viemChain, nativeSymbol]
   );
+  const heldGrants = useHeldGrantsDisplay({
+    address: request.data.address as Address,
+    spender: request.data.spender as Address,
+    chainId,
+    apiKey,
+    rpcUrl: chain.rpcUrl,
+    nativeSymbol,
+    nativeDecimals: viemChain?.nativeCurrency?.decimals ?? 18,
+    known: tokenInfoMap,
+  });
 
   // Format call permissions. Signatures resolve asynchronously — a selector with no signature yet
   // renders as its raw hex and upgrades in place.

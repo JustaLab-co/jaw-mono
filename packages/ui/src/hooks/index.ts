@@ -9,6 +9,7 @@ export * from './useAddressIdentities';
 export * from './useFeeTokenPrice';
 export * from './useGasEstimation';
 export * from './useSpenderPrefund';
+export { useHeldGrantsDisplay, type UseHeldGrantsDisplayArgs } from './useHeldGrants';
 export * from './useAssetPreview';
 export * from './usePermissionExecution';
 export * from './usePermissionRevocation';

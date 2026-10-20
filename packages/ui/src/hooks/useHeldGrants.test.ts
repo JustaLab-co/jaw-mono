@@ -2,8 +2,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { act, createElement } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
-import { encodeFunctionData, parseAbi } from 'viem';
-import { buildRevokePermissionCall, type StorePermissionApiResponse } from '@jaw.id/core';
+import type { StorePermissionApiResponse } from '@jaw.id/core';
 
 const getPermissions = vi.fn();
 const readContract = vi.fn();
@@ -14,7 +13,7 @@ vi.mock('@jaw.id/core', async (importActual) => ({
 }));
 vi.mock('../utils/publicClient', () => ({ getPublicClient: () => ({ readContract }) }));
 
-const { useHeldGrants, liveForSpender, totalsOf, contractPermission } = await import('./useHeldGrants');
+const { useHeldGrants, useHeldGrantsDisplay, liveForSpender, totalsOf } = await import('./useHeldGrants');
 type State = ReturnType<typeof useHeldGrants>;
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
@@ -213,6 +212,27 @@ describe('useHeldGrants', () => {
         },
       ],
     });
+  });
+
+  it('given no spender, when the screen opens, then nothing is read and no section is shown', async () => {
+    let display: unknown = 'unset';
+    function NoSpender() {
+      display = useHeldGrantsDisplay({
+        address: ACCOUNT,
+        spender: undefined,
+        chainId: CHAIN,
+        nativeSymbol: 'ETH',
+        nativeDecimals: 18,
+        known: {},
+      });
+      return null;
+    }
+    const mounted = createRoot(document.createElement('div'));
+    root = mounted;
+    await act(async () => mounted.render(createElement(NoSpender)));
+
+    expect(display).toBeUndefined();
+    expect(getPermissions).not.toHaveBeenCalled();
   });
 
   it('given the chain read fails, when the screen opens, then keeps the grant rather than understate', async () => {

@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { decodeFunctionData, erc20Abi, isAddressEqual, numberToHex, parseAbi, type Address } from 'viem';
 import {
   buildRevokePermissionCall,
@@ -9,6 +9,8 @@ import {
 } from '@jaw.id/core';
 import { getPublicClient } from '../utils/publicClient';
 import { isNativeToken } from '../utils/tokenBalance';
+import { formatSpendAmount } from '../utils/displayFormat';
+import type { HeldGrantsDisplay, SpendPermission } from '../components/PermissionDialog/types';
 
 export interface HeldTotal {
   token: Address;
@@ -95,7 +97,7 @@ async function dropProvenRevoked(rows: StorePermissionApiResponse[], chainId: nu
   return rows.filter((_, i) => !revoked[i]);
 }
 
-async function readHeld(args: UseHeldGrantsArgs): Promise<HeldGrants> {
+async function readHeld(args: UseHeldGrantsArgs & { address: Address; spender: Address }): Promise<HeldGrants> {
   const rows = (await handleGetPermissionsRequest(
     { method: 'wallet_getPermissions', params: [{ address: args.address, chainId: numberToHex(args.chainId) }] },
     args.apiKey
@@ -133,8 +135,9 @@ async function readTokenInfo(totals: HeldTotal[], chainId: number, rpcUrl: strin
 }
 
 export interface UseHeldGrantsArgs {
-  address: Address;
-  spender: Address;
+  /** Absent on a screen that grants nothing, such as a revoke: no read happens. */
+  address: Address | undefined;
+  spender: Address | undefined;
   chainId: number;
   apiKey?: string;
   rpcUrl?: string;
@@ -145,6 +148,7 @@ export function useHeldGrants({ address, spender, chainId, apiKey, rpcUrl }: Use
 
   useEffect(() => {
     setState({ status: 'loading' });
+    if (!address || !spender) return;
     let cancelled = false;
     const timer = setTimeout(() => {
       cancelled = true;
@@ -174,4 +178,60 @@ export function useHeldGrants({ address, spender, chainId, apiKey, rpcUrl }: Use
   }, [address, spender, chainId, apiKey, rpcUrl]);
 
   return state;
+}
+
+type TokenMeta = { decimals: number | null; symbol: string };
+
+function heldRow(
+  total: HeldTotal,
+  meta: TokenMeta | undefined,
+  native: { symbol: string; decimals: number }
+): SpendPermission {
+  const isNative = isNativeToken(total.token);
+  const token = isNative ? native : (meta ?? { decimals: null, symbol: '' });
+  const { amount, decimalsUnknown } = formatSpendAmount(total.allowance, token.decimals);
+  return {
+    amount,
+    decimalsUnknown,
+    token: isNative ? `Native (${native.symbol})` : token.symbol,
+    tokenAddress: total.token,
+    duration:
+      total.unit === 'forever' ? 'forever' : `${total.multiplier} ${total.unit}${total.multiplier > 1 ? 's' : ''}`,
+    limit: decimalsUnknown ? `${amount} base units` : `${amount} ${token.symbol}`,
+  };
+}
+
+export interface UseHeldGrantsDisplayArgs extends UseHeldGrantsArgs {
+  nativeSymbol: string;
+  nativeDecimals: number;
+  /** Token metadata the screen already resolved for the request, keyed by address in any case. */
+  known: Record<string, TokenMeta>;
+}
+
+/** What `PermissionDialog` takes as `heldGrants`, or undefined when there is no grant to read for. */
+export function useHeldGrantsDisplay({
+  nativeSymbol,
+  nativeDecimals,
+  known,
+  ...args
+}: UseHeldGrantsDisplayArgs): HeldGrantsDisplay | undefined {
+  const held = useHeldGrants(args);
+  const reading = !!args.address && !!args.spender;
+  return useMemo(() => {
+    if (!reading) return undefined;
+    if (held.status !== 'ready') return held;
+    const lowerKnown = Object.fromEntries(
+      Object.entries(known).map(([address, meta]) => [address.toLowerCase(), meta])
+    );
+    const native = { symbol: nativeSymbol, decimals: nativeDecimals };
+    return {
+      status: 'ready',
+      count: held.held.count,
+      tokensLoading: !held.tokenInfoSettled,
+      totals: held.held.totals.map((total) => {
+        const token = total.token.toLowerCase();
+        return heldRow(total, held.tokenInfo[token] ?? lowerKnown[token], native);
+      }),
+    };
+  }, [reading, held, known, nativeSymbol, nativeDecimals]);
 }
