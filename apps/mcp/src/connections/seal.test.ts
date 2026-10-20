@@ -1,7 +1,7 @@
 import { randomBytes } from 'node:crypto';
 import { generatePrivateKey } from 'viem/accounts';
 import { describe, expect, it } from 'vitest';
-import { nextRefreshId, open, parseKeyRing, seal, unwrap, wrap } from './seal';
+import { nextRefreshId, open, openRelay, parseKeyRing, seal, sealRelay, unwrap, wrap } from './seal';
 
 const key = () => randomBytes(32).toString('base64url');
 
@@ -76,5 +76,39 @@ describe('sealing key ring', () => {
     expect(k.jwe.equals(k.seal)).toBe(false);
     expect(parseKeyRing(a).jwk).toEqual(ring.jwk);
     expect(ring.jwk).toMatchObject({ kty: 'OKP', crv: 'Ed25519' });
+  });
+});
+
+describe('a sealed relay session', () => {
+  const [a, b] = [key(), key()];
+  const resume = {
+    session: 'b3c1a2d4-0000-4000-8000-000000000001',
+    key: randomBytes(138).toString('hex'),
+    peer: randomBytes(91).toString('hex'),
+    chainId: 84532,
+    appName: 'Agent (via JAW MCP)',
+  };
+
+  it('given it is sealed for a row, then that row opens it and the private key never shows', () => {
+    const ring = parseKeyRing(a);
+    const blob = sealRelay(ring, resume, 'req_1');
+
+    expect(blob).not.toContain(resume.key);
+    expect(openRelay(ring, blob, 'req_1')).toEqual(resume);
+  });
+
+  it('given it is moved to another row, tampered with, or its key left the ring, then it does not open', () => {
+    const ring = parseKeyRing(a);
+    const blob = sealRelay(ring, resume, 'req_1');
+    const last = blob.at(-1) === 'A' ? 'B' : 'A';
+
+    expect(openRelay(ring, blob, 'req_2')).toBeUndefined();
+    expect(openRelay(ring, blob.slice(0, -1) + last, 'req_1')).toBeUndefined();
+    expect(openRelay(parseKeyRing(b), blob, 'req_1')).toBeUndefined();
+  });
+
+  it('given a connection key sealed for the same id, then it does not open as a relay session', () => {
+    const ring = parseKeyRing(a);
+    expect(openRelay(ring, seal(ring, generatePrivateKey(), 'req_1'), 'req_1')).toBeUndefined();
   });
 });
