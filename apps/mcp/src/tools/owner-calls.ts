@@ -12,17 +12,17 @@ import {
 import { z } from 'zod';
 import { tenant, type Tenant } from '@/connections/auth';
 import { chainClients } from '@/adapters/session-host';
-import { APPROVE_WITHIN_MS, config } from '@/connections/config';
+import { APPROVE_WITHIN_MS } from '@/connections/config';
 import { ownerRelay, WalletBusy, type OpenWallet, type Wallet } from '@/connections/relay';
-import { resumeEach, resumeRow, type Rejoin } from '@/connections/resume';
+import { resumeEach, resumeRow, RESUMES_PER_TICK, type Rejoin } from '@/connections/resume';
 import { findActive } from '@/connections/rows';
-import { sealResume } from '@/connections/seal';
-import { keepLease, leaseHeld } from '@/connections/session-lease';
+import { leaseHeld } from '@/connections/session-lease';
 import { countHit, isPaymentsPaused } from '@/db/settings';
 import { isProxyChain } from '@/lib/chain';
 import { errorLabel, log, RATE_WINDOW_MS } from '@/lib/edge';
 import { reply } from '@/lib/fence';
 import { approve } from '@/owner-calls/approve';
+import { followOwner } from '@/owner-calls/follow';
 import { readReceipt, receiptOf, type ReadReceipt, type Receipt } from '@/owner-calls/receipt';
 import { countOpenLinks, FULL, MAX_OPEN_PER_ACCOUNT, withLinkSlot } from '@/owner-calls/cap';
 import {
@@ -32,14 +32,9 @@ import {
   findByKey,
   findOpen,
   insertOwnerCall,
-  endSession,
-  releaseSession,
-  renewSession,
+  leasedCalls,
   reopenLink,
-  saveRelay,
   SEND_STARTED,
-  takeToResume,
-  toResume,
   type OwnerCallRow,
 } from '@/owner-calls/store';
 import { gateCode } from '@/payments/render';
@@ -226,25 +221,8 @@ function answer(row: OwnerCallRow, note = ''): SendResult {
   return { ...reply(out), isError: row.state === 'reverted' };
 }
 
-function follow(row: OwnerCallRow, wallet: Wallet, clients: ChainClients): void {
-  const stop = keepLease(
-    async () => {
-      const held = await renewSession(row);
-      if (!held && (await findById(row.connectionId, row.id))?.leaseHolder !== row.leaseHolder) wallet.close();
-      return held;
-    },
-    () => endSession(row)
-  );
-  void wallet
-    .run(
-      (ask) => approve(ask, row, clients),
-      (resume) => saveRelay(row, sealResume(config().ring, resume, row.id))
-    )
-    .catch((err: unknown) =>
-      log('warn', { msg: 'owner calls approval ended', ownerCallId: row.id, error: errorLabel(err) })
-    )
-    .finally(stop);
-}
+const follow = (row: OwnerCallRow, wallet: Wallet, clients: ChainClients) =>
+  followOwner(leasedCalls, row, wallet, (ask) => approve(ask, row, clients), 'ownerCallId');
 
 async function refusedBeforeLink(t: Tenant): Promise<SendResult | undefined> {
   if (await isPaymentsPaused()) {
@@ -302,13 +280,14 @@ async function replay(t: Tenant, row: OwnerCallRow, hash: string, deps: OwnerCal
 
 const rejoin = (clients: ChainClients): Rejoin<OwnerCallRow> => ({
   idField: 'ownerCallId',
-  take: takeToResume,
-  release: releaseSession,
-  lost: endSession,
+  take: leasedCalls.take,
+  release: leasedCalls.release,
+  lost: leasedCalls.end,
   start: (row) => (wallet) => follow(row, wallet, clients),
 });
 
-export const resumeOwnerCalls = (clients: ChainClients = chainClients) => resumeEach(toResume, rejoin(clients));
+export const resumeOwnerCalls = (clients: ChainClients = chainClients) =>
+  resumeEach(() => leasedCalls.toResume(RESUMES_PER_TICK), rejoin(clients));
 
 const ENTRY_POINTS = [entryPoint06Address, entryPoint07Address, entryPoint08Address, entryPoint09Address];
 

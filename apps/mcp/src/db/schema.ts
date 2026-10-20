@@ -295,6 +295,7 @@ export const swaps = pgTable(
     walletUrl: text('wallet_url'),
     approveBy: timestamp('approve_by', { withTimezone: true }),
     sessionUntil: timestamp('session_until', { withTimezone: true }),
+    leaseHolder: text('lease_holder'),
     relay: text('relay'),
     callsId: text('calls_id'),
     txHash: text('tx_hash'),

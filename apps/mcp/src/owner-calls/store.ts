@@ -1,10 +1,11 @@
 import { randomBytes } from 'node:crypto';
-import { and, asc, eq, gt, inArray, isNotNull, isNull, lt, lte, or, sql, type SQL } from 'drizzle-orm';
+import { and, eq, gt, inArray, isNotNull, isNull, lt, lte, or, sql, type SQL } from 'drizzle-orm';
 import type { PgUpdateSetSource } from 'drizzle-orm/pg-core';
-import { newHolder, RESUMES_PER_TICK } from '@/connections/resume';
-import { heldSince, sessionLeaseEnd } from '@/connections/session-lease';
+import { sessionLeaseEnd } from '@/connections/session-lease';
 import { getDb, type Tx } from '@/db/client';
+import { leasedRows } from '@/db/leased';
 import { ownerCalls } from '@/db/schema';
+import { randomToken } from '@/lib/token';
 
 export type OwnerCallRow = typeof ownerCalls.$inferSelect;
 export type OwnerCallState = OwnerCallRow['state'];
@@ -24,6 +25,8 @@ export interface NewOwnerCall {
 }
 
 const dbNow = sql`statement_timestamp()`;
+
+export const leasedCalls = leasedRows<OwnerCallRow>(ownerCalls);
 
 async function write(where: SQL | undefined, set: CallSet, db: Tx = getDb()): Promise<OwnerCallRow | undefined> {
   const [row] = await db.update(ownerCalls).set(set).where(where).returning();
@@ -47,7 +50,7 @@ export async function insertOwnerCall(input: NewOwnerCall, db: Tx = getDb()): Pr
       walletUrl: input.walletUrl,
       approveBy: input.approveBy,
       sessionUntil: sessionLeaseEnd,
-      leaseHolder: newHolder(),
+      leaseHolder: randomToken(),
     })
     .onConflictDoNothing()
     .returning();
@@ -92,22 +95,14 @@ export const reopenLink = (row: OwnerCallRow, walletUrl: string, db: Tx = getDb(
       gt(ownerCalls.approveBy, dbNow),
       unclaimed
     ),
-    { walletUrl, code: null, sessionUntil: sessionLeaseEnd, leaseHolder: newHolder() },
+    { walletUrl, code: null, sessionUntil: sessionLeaseEnd, leaseHolder: randomToken() },
     db
   );
 
 const heldBy = (row: OwnerCallRow, states: OwnerCallState[]) =>
-  and(ofCall(row.connectionId, row.id, states), eq(ownerCalls.leaseHolder, row.leaseHolder!));
+  and(ofCall(row.connectionId, row.id, states), leasedCalls.heldBy(row));
 
-export const renewSession = (row: OwnerCallRow) =>
-  write(heldBy(row, ['awaiting_owner']), { sessionUntil: sessionLeaseEnd });
-
-export const endSession = (row: OwnerCallRow) =>
-  write(heldBy(row, ['awaiting_owner', 'expired']), { sessionUntil: null, relay: null });
-
-export const releaseSession = (row: OwnerCallRow) => write(heldBy(row, ['awaiting_owner']), { sessionUntil: null });
-
-export const saveRelay = (row: OwnerCallRow, relay: string) => write(heldBy(row, ['awaiting_owner']), { relay });
+export const { renew: renewSession, end: endSession } = leasedCalls;
 
 export const setCode = (row: OwnerCallRow, code: string) =>
   write(and(heldBy(row, ['awaiting_owner']), sql`${ownerCalls.code} is distinct from ${SEND_STARTED}`), { code });
@@ -148,16 +143,3 @@ export const sentBefore = (ageMs: number, limit: number) =>
     )
     .orderBy(sql`random()`)
     .limit(limit);
-
-const resumable = and(
-  eq(ownerCalls.state, 'awaiting_owner'),
-  gt(ownerCalls.approveBy, dbNow),
-  or(isNull(ownerCalls.sessionUntil), lte(ownerCalls.sessionUntil, heldSince)),
-  isNotNull(ownerCalls.relay)
-);
-
-export const toResume = () =>
-  getDb().select().from(ownerCalls).where(resumable).orderBy(asc(ownerCalls.updatedAt)).limit(RESUMES_PER_TICK);
-
-export const takeToResume = (row: OwnerCallRow) =>
-  write(and(eq(ownerCalls.id, row.id), resumable), { leaseHolder: newHolder(), sessionUntil: sessionLeaseEnd });

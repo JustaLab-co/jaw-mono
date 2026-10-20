@@ -4,18 +4,19 @@ import { zeroAddress, type Address } from 'viem';
 import { z } from 'zod';
 import { tenant, type Tenant } from '@/connections/auth';
 import { config } from '@/connections/config';
-import { newHolder, resumeEach, resumeRow, type Rejoin } from '@/connections/resume';
+import { resumeEach, resumeRow, RESUMES_PER_TICK, type Rejoin } from '@/connections/resume';
 import { findActive } from '@/connections/rows';
-import { sealResume } from '@/connections/seal';
-import { keepLease, leaseHeld, sessionLeaseEnd } from '@/connections/session-lease';
+import { leaseHeld, sessionLeaseEnd } from '@/connections/session-lease';
 import { ownerRelay, WalletBusy, type OpenWallet, type Wallet } from '@/connections/relay';
 import { countHit, isPaymentsPaused } from '@/db/settings';
 import { x402Budget } from '@/grants/store';
-import { errorLabel, log, RATE_WINDOW_MS } from '@/lib/edge';
+import { RATE_WINDOW_MS } from '@/lib/edge';
 import { fenceText, reply } from '@/lib/fence';
 import type { PayDeps } from '@/payments/pay';
 import { gateCode, RAISE } from '@/payments/render';
 import { findPayment, stateOf } from '@/payments/store';
+import { randomToken } from '@/lib/token';
+import { followOwner } from '@/owner-calls/follow';
 import { approve } from '@/swap/approve';
 import type { BackendAnswer, BackendDeps } from '@/swap/backend';
 import { isSupportedOriginChain, type CheckedQuote } from '@/swap/check';
@@ -32,14 +33,9 @@ import {
   nextStepPays,
   releaseQuoted,
   renewQuoted,
-  endSession,
-  releaseSession,
-  renewSession,
+  leasedSwaps,
   reopenLink,
-  saveRelay,
   SEND_STARTED,
-  takeToResume,
-  toResume,
   type SwapLease,
   type SwapRow,
   type SwapState,
@@ -391,7 +387,7 @@ async function openLink(t: Tenant, lease: SwapLease, key: string, deps: SwapDeps
           walletUrl: wallet.url,
           approveBy,
           sessionUntil: sessionLeaseEnd,
-          leaseToken: newHolder(),
+          leaseHolder: randomToken(),
         },
         tx
       )
@@ -431,33 +427,19 @@ async function reopen(t: Tenant, row: SwapRow, key: string, deps: SwapDeps): Pro
 
 type RunDeps = Pick<SwapDeps, 'pollMs' | 'backend'>;
 
-function follow(t: Tenant, row: SwapRow, wallet: Wallet, deps: RunDeps): void {
-  const stop = keepLease(
-    async () => {
-      const held = await renewSession(row);
-      if (!held && (await findById(row.connectionId, row.id))?.leaseToken !== row.leaseToken) wallet.close();
-      return held;
-    },
-    () => endSession(row)
-  );
-  void wallet
-    .run(
-      (ask) => approve(ask, row, t.account, deps.pollMs, deps.backend),
-      (resume) => saveRelay(row, sealResume(config().ring, resume, row.id))
-    )
-    .catch((err: unknown) => log('warn', { msg: 'swap approval ended', swapId: row.id, error: errorLabel(err) }))
-    .finally(stop);
-}
+const follow = (t: Tenant, row: SwapRow, wallet: Wallet, deps: RunDeps) =>
+  followOwner(leasedSwaps, row, wallet, (ask) => approve(ask, row, t.account, deps.pollMs, deps.backend), 'swapId');
 
 const rejoin = (deps: RunDeps): Rejoin<SwapRow> => ({
   idField: 'swapId',
-  take: takeToResume,
-  release: releaseSession,
-  lost: endSession,
+  take: leasedSwaps.take,
+  release: leasedSwaps.release,
+  lost: leasedSwaps.end,
   start: (row, t) => (wallet) => follow(t, row, wallet, deps),
 });
 
-export const resumeSwaps = (deps: RunDeps = {}) => resumeEach(toResume, rejoin(deps));
+export const resumeSwaps = (deps: RunDeps = {}) =>
+  resumeEach(() => leasedSwaps.toResume(RESUMES_PER_TICK), rejoin(deps));
 
 async function replay(t: Tenant, row: SwapRow, key: string, deps: SwapDeps): Promise<SwapResult> {
   if (row.relay) void resumeRow(row, rejoin(deps));

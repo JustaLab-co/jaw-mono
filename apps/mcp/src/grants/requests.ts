@@ -1,18 +1,20 @@
 import { randomBytes } from 'node:crypto';
-import { and, asc, desc, eq, gt, inArray, isNull, lte, ne, or, sql, type SQL } from 'drizzle-orm';
+import { and, desc, eq, gt, inArray, isNull, lte, ne, or, sql, type SQL } from 'drizzle-orm';
 import type { PgUpdateSetSource } from 'drizzle-orm/pg-core';
 import type { Tenant } from '@/connections/auth';
 import { config } from '@/connections/config';
 import { PageGone, WalletBusy, type Ask, type OpenWallet, type Wallet } from '@/connections/relay';
-import { newHolder, resumeEach, resumeRow, RESUMES_PER_TICK, type Lost, type Rejoin } from '@/connections/resume';
+import { resumeEach, resumeRow, RESUMES_PER_TICK, type Lost, type Rejoin } from '@/connections/resume';
 import { sealResume, type RelayResume } from '@/connections/seal';
 import { heldSince, keepLease, sessionLeaseEnd } from '@/connections/session-lease';
 import { USER_REJECTED } from '@/connections/wallet-codes';
 import { getDb, type Tx } from '@/db/client';
+import { leasedRows } from '@/db/leased';
 import { permissionRequests } from '@/db/schema';
 import { canonical } from '@/lib/canonical';
 import { errorLabel, log } from '@/lib/edge';
-import { awaitsResume, countOpenLinks, FULL, linkLive, MAX_OPEN_PER_ACCOUNT, withLinkSlot } from '@/owner-calls/cap';
+import { randomToken } from '@/lib/token';
+import { countOpenLinks, FULL, linkLive, MAX_OPEN_PER_ACCOUNT, withLinkSlot } from '@/owner-calls/cap';
 
 export type PermissionRequestRow = typeof permissionRequests.$inferSelect;
 
@@ -24,6 +26,7 @@ export interface Outcome {
 }
 
 const dbNow = sql`statement_timestamp()`;
+const leased = leasedRows<PermissionRequestRow>(permissionRequests);
 const awaiting = eq(permissionRequests.state, 'awaiting_owner');
 
 const ofConnection = (t: Tenant, req: LinkRequest) =>
@@ -236,7 +239,7 @@ export async function openLink(t: Tenant, req: LinkRequest, openWallet: OpenWall
           walletUrl: wallet.url,
           approveBy,
           sessionUntil: sessionLeaseEnd,
-          leaseHolder: newHolder(),
+          leaseHolder: randomToken(),
           payload: canonical(req.payload),
           namesLost: lost?.id,
         })
@@ -256,11 +259,11 @@ function follow(row: PermissionRequestRow, wallet: Wallet, work: Work) {
   const mine = and(heldBy(row), awaiting);
   const stop = keepLease(
     async () => {
-      const held = await update(mine, { sessionUntil: sessionLeaseEnd });
+      const held = await leased.renew(row);
       if (!held) wallet.close();
       return held;
     },
-    () => update(mine, { sessionUntil: null })
+    () => leased.release(row)
   );
   let asked = row.code === ASKED;
   const claim: Claim = async () => {
@@ -276,7 +279,7 @@ function follow(row: PermissionRequestRow, wallet: Wallet, work: Work) {
     log('warn', { msg: 'permission request ended', permissionRequestId: row.id, error: errorLabel(err) });
     return outcomeOf(err, row, asked);
   };
-  const joined = (resume: RelayResume) => update(mine, { relay: sealResume(config().ring, resume, row.id) });
+  const joined = (resume: RelayResume) => leased.saveRelay(row, sealResume(config().ring, resume, row.id));
   let answered = false;
   void wallet
     .run(async (ask) => {
@@ -294,8 +297,6 @@ function follow(row: PermissionRequestRow, wallet: Wallet, work: Work) {
     .finally(stop);
 }
 
-const resumable = and(awaiting, gt(permissionRequests.approveBy, dbNow), lapsed, awaitsResume);
-
 const lostAs = (row: PermissionRequestRow, why: Lost): Outcome => {
   if (why === 'connection_ended') return { state: 'failed', code: 'connection_ended' };
   if (why === 'unopenable') return { state: 'expired', code: LINK_LOST };
@@ -312,12 +313,8 @@ const parsed = (payload: string | null): unknown => {
 
 const rejoinWith = (rebuildOf: (row: PermissionRequestRow) => Rebuild): Rejoin<PermissionRequestRow> => ({
   idField: 'permissionRequestId',
-  take: (found) =>
-    update(and(eq(permissionRequests.id, found.id), resumable), {
-      leaseHolder: newHolder(),
-      sessionUntil: sessionLeaseEnd,
-    }),
-  release: (row) => update(heldBy(row), { sessionUntil: null }),
+  take: leased.take,
+  release: leased.release,
   lost: (row, why) => settle(row, lostAs(row, why)),
   start: (row, t) => {
     const payload = parsed(row.payload);
@@ -330,14 +327,10 @@ const rejoinWith = (rebuildOf: (row: PermissionRequestRow) => Rebuild): Rejoin<P
 export const resumeOpen = (rebuilds: Rebuilds) =>
   resumeEach(
     () =>
-      getDb()
-        .select()
-        .from(permissionRequests)
-        .where(
-          and(resumable, inArray(permissionRequests.method, Object.keys(rebuilds) as PermissionRequestRow['method'][]))
-        )
-        .orderBy(asc(permissionRequests.updatedAt))
-        .limit(RESUMES_PER_TICK),
+      leased.toResume(
+        RESUMES_PER_TICK,
+        inArray(permissionRequests.method, Object.keys(rebuilds) as PermissionRequestRow['method'][])
+      ),
     rejoinWith((row) => rebuilds[row.method]!)
   );
 

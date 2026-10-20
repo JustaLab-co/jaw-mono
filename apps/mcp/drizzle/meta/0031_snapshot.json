@@ -1,5 +1,5 @@
 {
-  "id": "ea95b350-59b3-4318-a8be-b538d61ec9c4",
+  "id": "2624744a-c96d-4d8e-bc7f-272d74ee6aae",
   "prevId": "2455d8b7-ebce-4265-8902-588e0ddb82d0",
   "version": "7",
   "dialect": "postgresql",
@@ -1850,6 +1850,12 @@
         "session_until": {
           "name": "session_until",
           "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "lease_holder": {
+          "name": "lease_holder",
+          "type": "text",
           "primaryKey": false,
           "notNull": false
         },

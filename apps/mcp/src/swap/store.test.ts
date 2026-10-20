@@ -102,6 +102,7 @@ const linkOf = (approveBy: SQL = sql`now() + interval '4 minutes'`) => ({
   ...quoteOf(),
   walletUrl: 'https://keys.test/cli-bridge#s',
   approveBy,
+  leaseHolder: 'the run that opened the link',
 });
 
 async function awaiting(connectionId: string, approveBy?: SQL) {
@@ -748,7 +749,7 @@ describe('the send marker and a reopened link', () => {
     const row = await awaiting(await newConnection());
     await markSendStarted(row);
     expect(await markSendStarted(row)).toMatchObject({ code: SEND_STARTED });
-    expect(await markSendStarted({ ...row, leaseToken: 'another process' })).toBeUndefined();
+    expect(await markSendStarted({ ...row, leaseHolder: 'another process' })).toBeUndefined();
   });
 
   it('given an expired row, when the send starts, then no marker is written', async () => {

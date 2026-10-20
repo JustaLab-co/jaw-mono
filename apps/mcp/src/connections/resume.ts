@@ -1,4 +1,3 @@
-import { randomBytes } from 'node:crypto';
 import { errorLabel, log } from '@/lib/edge';
 import { tenantOf, type Tenant } from './auth';
 import { config } from './config';
@@ -7,8 +6,6 @@ import { findActive, type ConnectionRow } from './rows';
 import { openResume } from './seal';
 
 export const RESUMES_PER_TICK = 10;
-
-export const newHolder = () => randomBytes(16).toString('base64url');
 
 export type Lost = 'connection_ended' | 'unopenable' | 'page_gone';
 
