@@ -484,9 +484,10 @@ export const PermissionModal = ({
   }, [prefundQuote, tokenInfoMap]);
 
   const heldGrants = useHeldGrantsDisplay({
-    address: permissionDetails?.address as Address | undefined,
+    // A grant request may leave `address` out; the grant then signs from the connected wallet.
+    address: (permissionDetails?.address ?? walletAddress ?? undefined) as Address | undefined,
     spender:
-      mode === 'grant' && permissionDetails && 'spender' in permissionDetails
+      chain && mode === 'grant' && permissionDetails && 'spender' in permissionDetails
         ? (permissionDetails.spender as Address)
         : undefined,
     chainId: chain?.id ?? 0,

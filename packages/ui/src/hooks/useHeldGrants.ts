@@ -135,7 +135,7 @@ async function readTokenInfo(totals: HeldTotal[], chainId: number, rpcUrl: strin
 }
 
 export interface UseHeldGrantsArgs {
-  /** Absent on a screen that grants nothing, such as a revoke: no read happens. */
+  /** Either absent means no read: a revoke screen, or one still waiting for its account or chain. */
   address: Address | undefined;
   spender: Address | undefined;
   chainId: number;

@@ -19,7 +19,7 @@ vi.mock('../../../../../packages/ui/src/utils/publicClient', () => ({
   }),
 }));
 
-type DialogProps = { heldGrants?: unknown; mode?: string };
+type DialogProps = { heldGrants?: unknown; mode?: string; isLoadingTokenInfo?: boolean };
 let dialogProps: DialogProps = {};
 vi.mock('@jaw.id/ui', async (importActual) => ({
   ...(await importActual<typeof import('@jaw.id/ui')>()),
@@ -86,14 +86,14 @@ const GRANT = {
 
 let root: Root | null = null;
 
-async function open(permissionRequest: unknown) {
+async function open(permissionRequest: unknown, chain: unknown = CHAIN) {
   const mounted = createRoot(document.createElement('div'));
   root = mounted;
   await act(async () =>
     mounted.render(
       <PermissionModal
         permissionRequest={permissionRequest as never}
-        chain={CHAIN as never}
+        chain={chain as never}
         apiKey="test-key"
         origin="https://app.example"
       />
@@ -123,6 +123,29 @@ describe('the keys popup grant screen shows what the spender already holds', () 
       tokensLoading: false,
       totals: [expect.objectContaining({ amount: '1.5', token: 'USDC', duration: '1 day' })],
     });
+  });
+
+  it('given a grant request with no address, then reads for the connected wallet it signs from', async () => {
+    getPermissions.mockResolvedValue([indexed('0xf4240')]);
+    await open({ ...GRANT, params: [{ ...GRANT.params[0], address: undefined }] });
+
+    expect(getPermissions.mock.calls[0][0]).toMatchObject({ params: [{ address: ACCOUNT }] });
+    expect(dialogProps.heldGrants).toMatchObject({ status: 'ready', count: 1 });
+  });
+
+  it('given no chain yet, then nothing is read rather than reporting none found', async () => {
+    await open(GRANT, null);
+
+    expect(getPermissions).not.toHaveBeenCalled();
+    expect(dialogProps.heldGrants).toBeUndefined();
+  });
+
+  it('given the held read hangs, then the token info gate that holds Grant is not held by it', async () => {
+    getPermissions.mockReturnValue(new Promise(() => undefined));
+    await open(GRANT);
+
+    expect(dialogProps.heldGrants).toEqual({ status: 'loading' });
+    expect(dialogProps.isLoadingTokenInfo).toBe(false);
   });
 
   it('given the lookup fails, then the screen is told the total is unreadable', async () => {
