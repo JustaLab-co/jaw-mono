@@ -16,7 +16,7 @@
 - `calls-conflict`: the same key with different calls gives `idempotency_conflict`.
 - `calls-one-open`: a second key while a request is `awaiting_owner` gives `calls_in_progress` naming the open request and its key.
 - `calls-reopen`: the server restarts while `awaiting_owner` and the owner has not started; the same key gives a new link.
-- `calls-marker`: the wallet was asked to send and no calls id came back; the request reads "may have sent" and never reopens.
+- `calls-marker`: the wallet was asked to send and no calls id came back; the request reads "may have sent" and never reopens. With a keys page that replays answers, a server that restarted rejoins the same tab and records the calls id the owner's approval gives, before or after the restart; a tab that was closed leaves the row "may have sent".
 - `calls-expired`: the owner does not approve before `approveBy`; the state is `expired`.
 
 ## How to get to it (user POV)
