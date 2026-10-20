@@ -1,13 +1,11 @@
 import { randomBytes } from 'node:crypto';
 import { and, desc, eq, gt, inArray, isNull, lte, ne, or, sql, type SQL } from 'drizzle-orm';
 import type { PgUpdateSetSource } from 'drizzle-orm/pg-core';
-import type { Address } from 'viem';
 import type { Tenant } from '@/connections/auth';
 import { config } from '@/connections/config';
-import { PageGone, resumeWallet, WalletBusy, type Ask, type OpenWallet, type Wallet } from '@/connections/relay';
-import { findActive, type ConnectionRow } from '@/connections/rows';
-import type { ConnectionScope } from '@/connections/scopes';
-import { openResume, sealResume, type RelayResume } from '@/connections/seal';
+import { PageGone, WalletBusy, type Ask, type OpenWallet, type Wallet } from '@/connections/relay';
+import { otherRequestAsGone, newHolder, resumeEach, RESUMES_PER_TICK, type Lost } from '@/connections/resume';
+import { sealResume, type RelayResume } from '@/connections/seal';
 import { keepLease, sessionLeaseEnd } from '@/connections/session-lease';
 import { USER_REJECTED } from '@/connections/wallet-codes';
 import { getDb, type Tx } from '@/db/client';
@@ -125,12 +123,10 @@ const heldBy = (row: PermissionRequestRow) =>
 
 const pageGone = (asked: boolean): Outcome => ({ state: 'expired', code: asked ? LINK_LOST : 'session_lost' });
 
-const NOT_THE_REQUEST = -32600;
-
-function outcomeOf(err: unknown, row: PermissionRequestRow, asked: boolean, resumed: boolean): Outcome {
+function outcomeOf(err: unknown, row: PermissionRequestRow, asked: boolean): Outcome {
   const code = (err as { code?: unknown } | undefined)?.code;
   if (code === USER_REJECTED) return { state: 'owner_declined' };
-  if (err instanceof PageGone || (resumed && code === NOT_THE_REQUEST)) return pageGone(asked);
+  if (err instanceof PageGone) return pageGone(asked);
   if (typeof code === 'number') return { state: 'failed', code: `wallet_error:${code}` };
   if (Date.now() >= row.approveBy.getTime()) return { state: 'expired' };
   if (asked) return { state: 'expired', code: LINK_LOST };
@@ -241,8 +237,6 @@ export async function openLink(t: Tenant, req: LinkRequest, openWallet: OpenWall
   return { opened: row };
 }
 
-const newHolder = () => randomBytes(16).toString('base64url');
-
 function follow(row: PermissionRequestRow, wallet: Wallet, work: Work, resumed = false) {
   const mine = and(heldBy(row), awaiting);
   const stop = keepLease(
@@ -265,13 +259,13 @@ function follow(row: PermissionRequestRow, wallet: Wallet, work: Work, resumed =
   };
   const ended = (err: unknown) => {
     log('warn', { msg: 'permission request ended', permissionRequestId: row.id, error: errorLabel(err) });
-    return outcomeOf(err, row, asked, resumed);
+    return outcomeOf(err, row, asked);
   };
   const joined = (resume: RelayResume) => update(mine, { relay: sealResume(config().ring, resume, row.id) });
   let answered = false;
   void wallet
     .run(async (ask) => {
-      const outcome = await work(ask, claim).catch(ended);
+      const outcome = await work(resumed ? otherRequestAsGone(ask) : ask, claim).catch(ended);
       answered = true;
       await settle(row, outcome);
     }, joined)
@@ -285,61 +279,33 @@ function follow(row: PermissionRequestRow, wallet: Wallet, work: Work, resumed =
     .finally(stop);
 }
 
-const RESUMES_PER_TICK = 10;
-
 const resumable = and(awaiting, gt(permissionRequests.approveBy, dbNow), lapsed, awaitsResume);
 
-export async function resumeOpen(rebuilds: Rebuilds): Promise<void> {
-  try {
-    const methods = Object.keys(rebuilds) as PermissionRequestRow['method'][];
-    const rows = await getDb()
-      .select()
-      .from(permissionRequests)
-      .where(and(resumable, inArray(permissionRequests.method, methods)))
-      .limit(RESUMES_PER_TICK);
-    for (const row of rows) {
-      void resume(row, rebuilds[row.method]!).catch((err: unknown) =>
-        log('warn', { msg: 'permission request not resumed', permissionRequestId: row.id, error: errorLabel(err) })
-      );
+const lostAs = (row: PermissionRequestRow, why: Lost): Outcome => {
+  if (why === 'connection_ended') return { state: 'failed', code: 'connection_ended' };
+  if (why === 'unopenable') return { state: 'expired', code: LINK_LOST };
+  return pageGone(row.code === ASKED);
+};
+
+export const resumeOpen = (rebuilds: Rebuilds) =>
+  resumeEach(
+    'permissionRequestId',
+    () =>
+      getDb()
+        .select()
+        .from(permissionRequests)
+        .where(
+          and(resumable, inArray(permissionRequests.method, Object.keys(rebuilds) as PermissionRequestRow['method'][]))
+        )
+        .limit(RESUMES_PER_TICK),
+    {
+      take: (found) =>
+        update(and(eq(permissionRequests.id, found.id), resumable), {
+          leaseHolder: newHolder(),
+          sessionUntil: sessionLeaseEnd,
+        }),
+      release: (row) => update(heldBy(row), { sessionUntil: null }),
+      lost: (row, why) => settle(row, lostAs(row, why)),
+      follow: (row, wallet, t) => follow(row, wallet, rebuilds[row.method]!(t, JSON.parse(row.payload!)), true),
     }
-  } catch (err) {
-    log('warn', { msg: 'permission requests not resumed', error: errorLabel(err) });
-  }
-}
-
-async function resume(found: PermissionRequestRow, rebuild: Rebuild) {
-  const row = await update(and(eq(permissionRequests.id, found.id), resumable), {
-    leaseHolder: newHolder(),
-    sessionUntil: sessionLeaseEnd,
-  });
-  if (!row) return;
-  const connection = await findActive(row.connectionId);
-  if (!connection) return settle(row, { state: 'failed', code: 'connection_ended' });
-  const relay = openResume(config().ring, row.relay!, row.id);
-  if (!relay) return settle(row, { state: 'expired', code: LINK_LOST });
-  const t = tokenlessTenant(connection);
-  let wallet: Wallet | undefined;
-  try {
-    wallet = await resumeWallet(relay, row.approveBy, t);
-  } catch (err) {
-    await update(heldBy(row), { sessionUntil: null });
-    if (err instanceof WalletBusy) return;
-    throw err;
-  }
-  if (!wallet) return settle(row, pageGone(row.code === ASKED));
-  follow(row, wallet, rebuild(t, JSON.parse(row.payload!)), true);
-}
-
-const tokenlessTenant = (c: ConnectionRow): Tenant => ({
-  connectionId: c.id,
-  account: c.account as Address,
-  chainId: c.chainId,
-  clientId: c.clientId,
-  clientName: c.clientName,
-  scopes: c.scopes as ConnectionScope[],
-  sessionAddress: c.sessionAddress as Address,
-  expiresAt: c.expiresAt,
-  sessionKey: () => {
-    throw new Error('a resumed request has no session key');
-  },
-});
+  );

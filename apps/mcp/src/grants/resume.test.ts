@@ -3,8 +3,7 @@ import { eq, sql } from 'drizzle-orm';
 import type { Hex } from 'viem';
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import { verifyBearer, type Tenant } from '@/connections/auth';
-import { replayingPage, startRelay } from '@/connections/fake-relay';
-import { ownerRelay, type OpenWallet } from '@/connections/relay';
+import { replayingPage, stallsAfter, startRelay } from '@/connections/fake-relay';
 import { approvedOnChain, connect, owner, setTestEnv, walletAnswers, walletsSettled } from '@/connections/testkit';
 import { getDb } from '@/db/client';
 import { connections, grants, permissionRequests } from '@/db/schema';
@@ -28,27 +27,6 @@ async function connected() {
   const c = await connect(signer);
   await walletsSettled();
   return { signer, t: (await verifyBearer(c.access_token))?.extra?.tenant as Tenant };
-}
-
-function stallsAfter(n: number) {
-  let wake!: (err: unknown) => void;
-  const woken = new Promise<never>((_, reject) => (wake = reject));
-  const openWallet: OpenWallet = async (chainId, until, client) => {
-    const wallet = await ownerRelay(chainId, until, client);
-    return {
-      ...wallet,
-      run: (work, joined) =>
-        wallet.run((ask) => {
-          let sent = 0;
-          return work(async (method, params) => {
-            if (++sent < n) return ask(method, params);
-            void ask(method, params).catch(() => undefined);
-            return woken;
-          });
-        }, joined),
-    };
-  };
-  return { openWallet, wake };
 }
 
 const rowOf = async (id: string) =>

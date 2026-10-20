@@ -10,6 +10,7 @@ import {
 } from '@jaw.id/agent';
 import WebSocket, { WebSocketServer } from 'ws';
 import { canonical } from '@/lib/canonical';
+import { ownerRelay, type OpenWallet } from './relay';
 
 export async function startRelay() {
   const seen: string[] = [];
@@ -102,4 +103,25 @@ export async function replayingPage(
     mute: () => (mute = true),
     close: () => ws.close(),
   };
+}
+
+export function stallsAfter(n: number) {
+  let wake!: (err: unknown) => void;
+  const woken = new Promise<never>((_, reject) => (wake = reject));
+  const openWallet: OpenWallet = async (chainId, until, client) => {
+    const wallet = await ownerRelay(chainId, until, client);
+    return {
+      ...wallet,
+      run: (work, joined) =>
+        wallet.run((ask) => {
+          let sent = 0;
+          return work(async (method, params) => {
+            if (++sent < n) return ask(method, params);
+            void ask(method, params).catch(() => undefined);
+            return woken;
+          });
+        }, joined),
+    };
+  };
+  return { openWallet, wake };
 }
