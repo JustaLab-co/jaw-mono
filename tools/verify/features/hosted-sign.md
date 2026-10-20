@@ -13,6 +13,7 @@
 - `sign-cap`: three links open for one account, the fourth gives `account_busy`.
 - `sign-no-session`: no session key signature is recorded and the audit row names the connection.
 - `sign-utf8`: a message with non-ASCII text shows the same text on the keys screen and the signature verifies.
+- `sign-retention`: a sign request that ended over 7 days ago is deleted by the cron's purge, signature included. The same key then opens a new link.
 - `sign-restart`: the mcp container restarts after the owner opened the link; the same key answers `link_lost` with no `url` instead of waiting out the window.
 
 ## How to get to it (user POV)

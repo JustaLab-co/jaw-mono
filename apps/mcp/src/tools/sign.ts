@@ -10,6 +10,7 @@ import { countHit } from '@/db/settings';
 import {
   currentSign,
   LINK_LOST,
+  SIGN_KEPT_DAYS,
   lostBefore,
   lostPreamble,
   openLink,
@@ -52,7 +53,9 @@ const signInput = z
       .string()
       .regex(/^[A-Za-z0-9_.:-]{1,100}$/)
       .optional()
-      .describe('Send it again with the same input to read the outcome; one is made up and returned when absent'),
+      .describe(
+        `Send it again with the same input to read the outcome, for ${SIGN_KEPT_DAYS} days after it ends; one is made up and returned when absent`
+      ),
   })
   .refine((v) => (v.message === undefined) !== (v.typedData === undefined), {
     message: 'Send exactly one of message and typedData',
