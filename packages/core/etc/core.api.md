@@ -847,6 +847,9 @@ export function isActionableHttpRequestError(errorObject: unknown): errorObject 
 export function isDelegatedToImplementation(client: Client, eoaAddress: Address_2, implementationAddress: Address_2): Promise<boolean>;
 
 // @public
+export function isFirstRecoverySetup(current: RecoveryChainConfig): boolean;
+
+// @public
 export function isMobile(userAgent?: string): boolean;
 
 // @public
@@ -1061,6 +1064,9 @@ export interface Message {
 // @public (undocumented)
 export type MessageID = UUID;
 
+// @public
+export function minimumRecoveryDelay(recoveries: RecoveryMethodInput[], threshold: number): number | null;
+
 // @public (undocumented)
 export const Mode: {
     readonly CrossPlatform: "CrossPlatform";
@@ -1114,8 +1120,8 @@ export interface NormalizedCancelRecoveryParams {
 export interface NormalizedSetupRecoveryParams {
     // (undocumented)
     capabilities?: RequestCapabilities;
-    recoveries?: RecoveryMethodInput[];
-    threshold?: number;
+    recoveries: RecoveryMethodInput[];
+    threshold: number;
 }
 
 // @public
@@ -1270,6 +1276,9 @@ export interface PersonalSignRequestData {
     // (undocumented)
     type: '0x45';
 }
+
+// @public
+export function planRecoveryChanges(current: RecoveryChainConfig, desired: RecoveryConfig): RecoveryChange[];
 
 // @public (undocumented)
 export interface ProviderConnectInfo {
@@ -1690,6 +1699,18 @@ export type RecoveryChainConfig = {
 };
 
 // @public
+export type RecoveryChange = {
+    kind: 'add';
+    method: Required<RecoveryMethodInput>;
+} | {
+    kind: 'remove';
+    recoveryId: Hex;
+} | {
+    kind: 'threshold';
+    threshold: number;
+};
+
+// @public
 export type RecoveryConfig = {
     recoveries: RecoveryMethodInput[];
     threshold: number;
@@ -1896,8 +1917,8 @@ export interface SetupRecoveryUIRequest extends BaseUIRequest {
     data: {
         address: Address;
         chainId: number;
-        recoveries?: RecoveryMethodInput[];
-        threshold?: number;
+        recoveries: RecoveryMethodInput[];
+        threshold: number;
         capabilities?: RequestCapabilities;
     };
     // (undocumented)
@@ -2464,10 +2485,10 @@ export type WalletRevokePermissionsRequest = {
 // @public
 export type WalletSetupRecoveryRequest = {
     method: 'wallet_setupRecovery';
-    params?: [
+    params: [
         {
-        recoveries?: RecoveryMethodInput[];
-        threshold?: number;
+        recoveries: RecoveryMethodInput[];
+        threshold: number;
         capabilities?: RequestCapabilities;
     }
     ];
