@@ -12,6 +12,7 @@ import { auditEvents, connections, grants, oauthPayloads, ownerCalls, payments, 
 import { isPaymentsPaused } from '@/db/settings';
 import { readOnChain } from '@/grants/permission';
 import { closeLapsedLinks } from '@/grants/requests';
+import { fromStore, settleUnconfirmedRevokes, type RevokeReads } from '@/grants/revokes';
 import { errorLabel, log } from '@/lib/edge';
 import { conclude, sentBefore } from '@/owner-calls/store';
 import { canSearchChain, readReceipt, searchChain, type ReadReceipt } from '@/owner-calls/receipt';
@@ -33,8 +34,10 @@ export interface Report {
   alerted: number;
   sends: { landed: number; released: number; open: number };
   ownerCalls: { landed: number; reverted: number; open: number };
-  links: { expired: number };
+  links: { expired: number; revoked: number };
 }
+
+const REVOKE_READS: RevokeReads = { readPermission: readOnChain, lookUp: fromStore, lookUpMs: 10_000 };
 
 /**
  * Resolves every signed or unknown row older than the window and not held by a
@@ -45,7 +48,8 @@ export interface Report {
 export async function reconcile(
   clients: ChainClients = chainClients,
   now = new Date(),
-  receipt: ReadReceipt = readReceipt
+  receipt: ReadReceipt = readReceipt,
+  revokeReads: RevokeReads = REVOKE_READS
 ): Promise<Report> {
   const report: Report = {
     settled: 0,
@@ -54,7 +58,7 @@ export async function reconcile(
     alerted: 0,
     sends: { landed: 0, released: 0, open: 0 },
     ownerCalls: { landed: 0, reverted: 0, open: 0 },
-    links: { expired: 0 },
+    links: { expired: 0, revoked: 0 },
   };
   await reconcileSends(clients, report);
   await reconcileOwnerCalls(receipt, clients, now, report);
@@ -70,11 +74,11 @@ export async function reconcile(
     }
     if (rows.length < BATCH) break;
   }
-  await closeLinks(report);
+  await reconcileLinks(revokeReads, report);
   return report;
 }
 
-async function closeLinks(report: Report) {
+async function reconcileLinks(deps: RevokeReads, report: Report) {
   try {
     report.links.expired = await closeLapsedLinks();
     // Many at once means processes stopped renewing together: a restart, or a database outage over the grace.
@@ -82,6 +86,11 @@ async function closeLinks(report: Report) {
       log('warn', { msg: `${report.links.expired} owner links ended with no process holding them` });
   } catch (err) {
     log('error', { msg: 'lapsed owner links not closed', error: errorLabel(err) });
+  }
+  try {
+    report.links.revoked = await settleUnconfirmedRevokes(deps);
+  } catch (err) {
+    log('error', { msg: 'unconfirmed revokes not read', error: errorLabel(err) });
   }
 }
 
