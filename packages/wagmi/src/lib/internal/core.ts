@@ -281,10 +281,10 @@ export namespace setupRecovery {
   export type Parameters<config extends Config = Config> = {
     address?: Address;
     connector?: Connector;
-    /** Methods to propose in the wallet's recovery editor; the user may edit them */
-    recoveries?: RecoveryMethodInput[];
-    /** Approvals a recovery needs, to propose; the user may edit it */
-    threshold?: number;
+    /** Every recovery method the config should hold; a method left out is removed */
+    recoveries: RecoveryMethodInput[];
+    /** Approvals a recovery needs, between 1 and the number of methods */
+    threshold: number;
     /** Optional capabilities, such as a paymaster service for the account-door userOp */
     capabilities?: RequestCapabilities;
   };
@@ -295,9 +295,11 @@ export namespace setupRecovery {
 
 /**
  * Sets up or edits recovery for the connected account.
- * This calls wallet_setupRecovery on the connected wallet, which opens its
- * recovery editor: on the current config when nothing is proposed, or
- * prefilled with the proposal. The user edits and confirms.
+ * This calls wallet_setupRecovery on the connected wallet, which shows the
+ * account's current config and the changes, as for a permission grant. The
+ * user approves or declines; nothing on the screen is editable, so the app
+ * passes the whole end state (letting its users pick guardians in its own UI
+ * when it wants them to).
  *
  * Recovery is account-level: the config is the same on every enrolled chain,
  * and a first setup lands on the connected chain. There is no chainId here;
@@ -305,19 +307,18 @@ export namespace setupRecovery {
  *
  * @example
  * ```ts
- * // Open the editor on the current config
- * await Actions.setupRecovery(config);
- *
- * // Propose this app as a guardian
  * await Actions.setupRecovery(config, {
- *   recoveries: [{ commitment: '0x...', delay: 48 * 3600 }],
- *   threshold: 1,
+ *   recoveries: [
+ *     { commitment: '0x...', delay: 48 * 3600 },
+ *     { commitment: '0x...', delay: 48 * 3600 },
+ *   ],
+ *   threshold: 2,
  * });
  * ```
  */
 export async function setupRecovery<config extends Config>(
   config: config,
-  parameters: setupRecovery.Parameters<config> = {}
+  parameters: setupRecovery.Parameters<config>
 ): Promise<setupRecovery.ReturnType> {
   const { address, connector, recoveries, threshold, capabilities } = parameters;
 
