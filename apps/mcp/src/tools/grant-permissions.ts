@@ -208,7 +208,7 @@ export async function grantPermissions(t: Tenant, input: GrantInput, deps = DEFA
     : '';
   if ('waiting' in opened) {
     return refusal(
-      `${warning}A grant request is still waiting for the owner at ${row.walletUrl}. Ask again once they approve or it expires at ${row.approveBy.toISOString()}.`
+      `${warning}A grant request is still waiting for the owner at ${row.walletUrl}. Check jaw_session_status on your own to see it in force, or ask again once it expires at ${row.approveBy.toISOString()}.`
     );
   }
   const url = row.walletUrl;
@@ -218,9 +218,9 @@ export async function grantPermissions(t: Tenant, input: GrantInput, deps = DEFA
     expiresAt: ends,
     summary:
       warning +
-      `Ask the account owner to open ${url} and approve ${ask.what} until ${ends} in their wallet. ` +
+      `Ask the account owner to open ${url} and approve ${ask.what} until ${ends} in their wallet, before ${row.approveBy.toISOString()}. ` +
       'Once they do, the session key acts within it with no further prompts. ' +
-      (ask.kind === 'x402-budget' ? 'jaw_session_status shows the budget in force. ' : '') +
+      'Right after showing the link, call jaw_session_status yourself to see the grant in force, and again on each later turn until that time; do not wait for the owner to say they approved. ' +
       'A grant approved earlier on this connection stays approved on chain until it expires or jaw_session_disconnect revokes it.',
   });
 }

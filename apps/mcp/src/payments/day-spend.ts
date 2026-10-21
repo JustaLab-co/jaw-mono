@@ -48,6 +48,10 @@ export function daySpendOf(
 
 export const dayLeft = (allowance: bigint, day: DaySpend) => floorZero(allowance - day.paid - day.sentFromAccount);
 
+/** What a refill may still pull under the budget today: less what it refilled, sent, and earlier budgets pulled. */
+export const pullRoom = (allowance: bigint, day: DaySpend, earlier: bigint) =>
+  floorZero(floorZero(allowance - day.refilled - day.sentFromAccount) - earlier);
+
 export async function readDaySpend(
   grant: Grant,
   payer: Address,

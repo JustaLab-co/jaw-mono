@@ -9,6 +9,7 @@
 - `calls-target`: a call to the account itself, the permission manager or any EntryPoint (0.6 to 0.9) gives `call_target_refused` before any row or link.
 - `calls-paused`: with payments paused, a new `jaw_send_calls` is refused as `payments_paused` with no link, and `jaw_get_calls_status` keeps working.
 - `calls-happy`: link, owner approval, `sent` with a calls id, then `jaw_get_calls_status` until `landed` with a `txHash`.
+- `calls-wait`: right after the link, `jaw_get_calls_status` with `waitSeconds` 45 answers `sent` with the calls id as soon as the owner approves, and a second wait answers `landed` with the `txHash`, with nobody telling the agent the approval is done. With a `progressToken` the client gets progress notifications while it waits.
 - `calls-sweep`: a `sent` request nobody asks about again is concluded as `landed` or `reverted` by the reconciler once it is a minute old, from the bundler receipt or, when the bundler has none ten minutes after the send, from the `UserOperationEvent` on chain (the row keeps `sent_block`, the head when it was sent, where that search starts); a `send_started` one with no calls id stays as it is.
 - `calls-decline`: the owner rejects the calls in the wallet and the state is `owner_declined`.
 - `calls-wrong-account`: the owner signs in with another account than the connection's; the state is `owner_declined` with code `wrong_account`.
@@ -21,10 +22,10 @@
 
 ## How to get to it (user POV)
 
-- An MCP client on the hosted server with any scope set; `wallet:read` is enough. `jaw_send_calls` takes `calls`, an array of 1 to 10 `{ to, data?, value? }` (`data` is hex calldata starting with the selector, omitted for a plain native transfer; `value` is wei as a decimal string, default 0), and optionally `chainId` (defaults to the connection's chain) and `idempotencyKey` (made up and returned when absent). `jaw_get_calls_status` takes the `id` (`oc_` and 22 characters) that `jaw_send_calls` returned.
+- An MCP client on the hosted server with any scope set; `wallet:read` is enough. `jaw_send_calls` takes `calls`, an array of 1 to 10 `{ to, data?, value? }` (`data` is hex calldata starting with the selector, omitted for a plain native transfer; `value` is wei as a decimal string, default 0), and optionally `chainId` (defaults to the connection's chain) and `idempotencyKey` (made up and returned when absent). `jaw_get_calls_status` takes the `id` (`oc_` and 22 characters) that `jaw_send_calls` returned, and optionally `waitSeconds` (0 to 45).
 - The result of both tools holds `id`, `idempotencyKey`, `state`, `approveBy`, `chainId`, `from`, each call as `to`, `value` and `selector`, `totalValue` in wei, `callsId` and `txHash` once known, a `refusal` code and a `summary`. `url` is present only while `awaiting_owner` with no code on the row. States: `awaiting_owner`, `owner_declined`, `expired`, `sent`, `landed`, `reverted`.
 - The person sees the summary: the account owner opens the `url` within 30 minutes, the wallet asks for the account and then shows the calls as one atomic `wallet_sendCalls`, and the owner pays the gas in the wallet.
-- By hand: `node tools/verify/hosted-client.mjs "$MCP_PUBLIC_URL" [scope]`, then `calls '<json array>' [chainId] [key]` and `calls-status <id>`.
+- By hand: `node tools/verify/hosted-client.mjs "$MCP_PUBLIC_URL" [scope]`, then `calls '<json array>' [chainId] [key]` and `calls-status <id> [wait]`.
 
 ## Driving it
 
@@ -46,6 +47,7 @@ A call that moves something visible on Base Sepolia is a USDC transfer of 0.01 t
 - calls-target: `calls` with `to` set to the connected account, then to the permission manager, then to each EntryPoint: `0x5FF137D4b0FDCD49DcA30c7CF57E578a026d2789` (0.6), `0x0000000071727De22E5E9d8BAf0edAc6f37da032` (0.7), `0x4337084D9E255Ff0702461CF8895CE9E3b5Ff108` (0.8) and `0x433709009B8330FDa32311DF1C2AFA402eD8D009` (0.9). Pass: `call_target_refused` each time, no `owner_calls` row.
 - calls-paused: set `payments_paused` with psql, then `calls` with a new key: `payments_paused`, no row. `calls-status` on an earlier id still answers.
 - calls-happy: `calls`, open the `url` as the owner and approve, then `calls-status <id>` until it changes. Pass: `sent` with a `callsId`, then `landed` with a `txHash`, and the Base Sepolia receipt of that transaction shows the USDC transfer from the account.
+- calls-wait: `calls '<json array>'`, then at once `calls-status <id> 45`, and open the `url` as the owner and approve while it waits. Pass: progress lines, then `sent` with a `callsId` before 45 seconds with no other input; a second `calls-status <id> 45` answers `landed` with a `txHash`.
 - calls-decline: reject in the wallet, then `calls-status <id>`. Pass: `owner_declined`, no `callsId`, the summary says nothing was sent.
 - calls-wrong-account: open the `url` and sign in with another passkey account. Pass: `owner_declined` with `refusal.code` `wrong_account`, and the wallet was never asked to send.
 - calls-retry: `calls '<json>' 84532 k1` twice while the link is live. Pass: the same `id` and `url`, one `owner_calls` row.

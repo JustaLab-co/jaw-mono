@@ -22,7 +22,8 @@ import type { ReadPermission } from '@/grants/permission';
 import { x402Budget } from '@/grants/store';
 import { grantPermissions } from './grant-permissions';
 import { sendCalls } from './owner-calls';
-import { revokePermission, type LookUp, type RevokeDeps } from './revoke-permission';
+import type { LookUp } from '@/grants/revokes';
+import { revokePermission, type RevokeDeps } from './revoke-permission';
 
 setTestEnv();
 beforeAll(TEST_PG_URL ? useTestPostgres : useTestDb);
@@ -137,6 +138,9 @@ describe('jaw_revoke_permission', () => {
     await walletsSettled();
 
     expect('structuredContent' in result && result.structuredContent?.connection).toBe(other.t.connectionId);
+    expect('structuredContent' in result && result.structuredContent?.summary).toContain(
+      'call jaw_connections yourself'
+    );
     const listed = await callTool(me.c.access_token, 'jaw_connections', {});
     const theirs = (listed.structuredContent.connections as { id: string; grants: object[] }[]).find(
       (c) => c.id === other.t.connectionId
@@ -561,4 +565,74 @@ describe('jaw_revoke_permission', () => {
     expect(revoke.content[0].text).toMatch(/^account_busy: /);
     expect(send.content[0].text).toMatch(/^account_busy: /);
   });
+
+  it('given ten revoke calls in a minute on one connection, when an eleventh comes, then it is rate_limited before the permission store is read', async () => {
+    await clearOfMinuteEdge();
+    const { t, signer } = await connected();
+    let lookUps = 0;
+    const { deps } = setup(signer, async () => (lookUps++, 'not_found'));
+
+    const answers = [];
+    for (let i = 0; i < 10; i++) answers.push(await revokePermission(t, { permissionId: randomId() }, deps()));
+    const over = await revokePermission(t, { permissionId: randomId() }, deps());
+
+    expect(answers.map((a) => a.content[0].text.split(':')[0])).toEqual(Array(10).fill('unknown_permission'));
+    expect(over.content[0].text).toMatch(/^rate_limited: /);
+    expect(lookUps).toBe(10);
+  });
+
+  it('given a revoke link waiting for the owner, when the agent asks again many times, then each gets the same link and none is rate_limited', async () => {
+    await clearOfMinuteEdge();
+    const { t, signer, budget } = await connected();
+    const { deps, opened } = setup(signer);
+    const wait = held();
+    const holding = deps({ held: wait.promise });
+
+    const answers = [];
+    for (let i = 0; i < 15; i++) answers.push(await revokePermission(t, { permissionId: budget }, holding));
+    wait.release();
+    await walletsSettled();
+
+    expect(new Set(answers.map(urlOf)).size).toBe(1);
+    expect(urlOf(answers[0])).toMatch(/cli-bridge/);
+    expect(opened()).toBe(1);
+  });
+
+  it('given a revoke of one permission waiting, when the connection asks about eleven others, then the eleventh is rate_limited', async () => {
+    await clearOfMinuteEdge();
+    const { t, signer, budget } = await connected();
+    const { deps } = setup(signer);
+    const wait = held();
+    await revokePermission(t, { permissionId: budget }, deps({ held: wait.promise }));
+
+    const answers = [];
+    for (let i = 0; i < 11; i++) answers.push(await revokePermission(t, { permissionId: randomId() }, deps()));
+    wait.release();
+    await walletsSettled();
+
+    expect(answers[10].content[0].text).toMatch(/^rate_limited: /);
+  });
+
+  it("given another connection's revoke of a permission waiting, when this connection asks about it many times, then none is rate_limited", async () => {
+    await clearOfMinuteEdge();
+    const signer = owner();
+    const holder = await connected(signer);
+    const asker = await connected(signer, 'wallet:read');
+    const { deps } = setup(signer);
+    const wait = held();
+    await revokePermission(holder.t, { permissionId: holder.budget }, deps({ held: wait.promise }));
+
+    const answers = [];
+    for (let i = 0; i < 12; i++) answers.push(await revokePermission(asker.t, { permissionId: holder.budget }, deps()));
+    wait.release();
+    await walletsSettled();
+
+    expect(answers.map((a) => a.content[0].text.split(':')[0])).toEqual(Array(12).fill('revoke_in_progress'));
+  });
 });
+
+/** The limit counts per wall-clock minute, so a run that straddles one would split its count. */
+async function clearOfMinuteEdge() {
+  const intoMinute = Date.now() % 60_000;
+  if (intoMinute > 50_000) await new Promise((resolve) => setTimeout(resolve, 60_500 - intoMinute));
+}

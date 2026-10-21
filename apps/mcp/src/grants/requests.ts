@@ -22,7 +22,7 @@ export interface Outcome {
 const dbNow = sql`statement_timestamp()`;
 const awaiting = eq(permissionRequests.state, 'awaiting_owner');
 
-const ofConnection = (t: Tenant, req: LinkRequest) =>
+const ofConnection = (t: Tenant, req: LinkKind) =>
   and(eq(permissionRequests.method, req.method), eq(permissionRequests.connectionId, t.connectionId));
 
 const sameSign = (t: Tenant, idempotencyKey: string) =>
@@ -67,6 +67,8 @@ const notAskedRevoke = or(
   pastWindow
 );
 
+export const SIGN_KEPT_DAYS = 7;
+
 export async function closeLapsedLinks(): Promise<number> {
   const ended = await getDb()
     .update(permissionRequests)
@@ -76,7 +78,7 @@ export async function closeLapsedLinks(): Promise<number> {
   return ended.length;
 }
 
-async function findHeld(t: Tenant, req: LinkRequest): Promise<Held | undefined> {
+async function findHeld(t: Tenant, req: LinkKind): Promise<Held | undefined> {
   const [row] = await getDb()
     .select()
     .from(permissionRequests)
@@ -140,12 +142,22 @@ function outcomeOf(err: unknown, row: PermissionRequestRow, asked: boolean): Out
   return { state: 'failed', code: 'unexpected' };
 }
 
-export async function currentSign(t: Tenant, idempotencyKey: string): Promise<PermissionRequestRow | undefined> {
-  const same = sameSign(t, idempotencyKey);
+async function readSign(same: SQL | undefined): Promise<PermissionRequestRow | undefined> {
   await closeDead(same);
   const [row] = await getDb().select().from(permissionRequests).where(same);
   return row;
 }
+
+export const currentSign = (t: Tenant, idempotencyKey: string) => readSign(sameSign(t, idempotencyKey));
+
+export const signById = (t: Tenant, id: string) =>
+  readSign(
+    and(
+      eq(permissionRequests.method, 'sign'),
+      eq(permissionRequests.connectionId, t.connectionId),
+      eq(permissionRequests.id, id)
+    )
+  );
 
 // An answer the owner gave still stands on a row that ended while its process could not renew.
 const answered = (state: Outcome['state']) => state === 'approved' || state === 'owner_declined';
@@ -168,15 +180,21 @@ export type Opened = { opened: PermissionRequestRow } | Held | 'account_busy' | 
 /** Marks the row asked once, while its lease still holds. False when another link may have taken over. */
 export type Claim = () => Promise<boolean>;
 
+type LinkKind =
+  | { method: 'grant' }
+  | { method: 'revoke'; permissionId: string }
+  | { method: 'sign'; idempotencyKey: string; requestHash: string; signKind: 'message' | 'typedData' };
+
 export type LinkRequest = {
   chainId: number;
   approveBy: Date;
   work: (ask: Ask, claim: Claim) => Promise<Outcome>;
-} & (
-  | { method: 'grant' }
-  | { method: 'revoke'; permissionId: string }
-  | { method: 'sign'; idempotencyKey: string; requestHash: string; signKind: 'message' | 'typedData' }
-);
+} & LinkKind;
+
+/** Whether a revoke of this permission already waits, so asking again opens nothing. */
+export const revokeHeld = async (t: Tenant, permissionId: string) =>
+  (await findHeld(t, { method: 'revoke', permissionId }))?.waiting.permissionId?.toLowerCase() ===
+  permissionId.toLowerCase();
 
 export async function openLink(t: Tenant, req: LinkRequest, openWallet: OpenWallet): Promise<Opened> {
   const existing = async (): Promise<Held | undefined> => {

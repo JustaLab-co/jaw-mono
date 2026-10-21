@@ -506,6 +506,30 @@ describe('quote and pay at the edge of what a budget can pay', () => {
     });
   });
 
+  describe('given 1 USDC a day, an empty float, and a transfer of 0.5 recorded before the chain counter shows it', () => {
+    it('when the quote asks the 0.5 left less the refill fee, then it is ready and pay refills and settles', async () => {
+      const { t, token } = await funded('1', 0n);
+      await landedLegacySend(t);
+      prices.set('/rest', '490000');
+      const quoted = await quote(token, '/rest');
+      expect(quoted.structuredContent.readiness).toEqual({ status: 'ready' });
+      const paid = await pay(t, { url: url('/rest') }, withRefill);
+      expect(paid.structuredContent).toMatchObject({ state: 'settled', kind: 'paid' });
+    });
+
+    it('when the quote asks one base unit more, then it is over_allowance and pay refuses before it refills', async () => {
+      const { t, token } = await funded('1', 0n);
+      await landedLegacySend(t);
+      prices.set('/rest', '490001');
+      const quoted = await quote(token, '/rest');
+      expect(quoted.structuredContent.readiness).toEqual({ status: 'not_ready', reason: 'over_allowance' });
+      const paid = await pay(t, { url: url('/rest') }, withRefill);
+      expect(paid.structuredContent).toMatchObject(refused);
+      expect(seen).toHaveLength(0);
+      expect(balanceOf(t.sessionAddress)).toBe(0n);
+    });
+  });
+
   // A payment signed and not settled yet, which holds float until it lands.
   const signedRow = (t: Tenant, row: { permissionId: string; topUpAmount: string; authorized: string }) =>
     getDb()

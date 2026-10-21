@@ -37,11 +37,14 @@ const executeRow = z.object({
 });
 
 const historyOutput = z.object({
-  payments: z.array(row),
+  payments: z.array(row).describe('Empty on a page asked for by `executesBefore` alone'),
   next: z.string().optional().describe('Pass as `before` for the next page'),
   executes: z
     .array(executeRow)
-    .describe('The newest session executes, one row per token a run moved; on the first page only'),
+    .describe(
+      'The newest session executes, one row per token a run moved; empty on a page asked for by `before` alone'
+    ),
+  executesNext: z.string().optional().describe('Pass as `executesBefore` for the next page of executes'),
   summary: z.string(),
 });
 
@@ -79,18 +82,21 @@ export function registerHistoryTool(server: McpServer) {
     'jaw_session_history',
     {
       description:
-        'The payments and session executes this connection made, newest first, with their state and transaction hash.',
+        'The payments and session executes this connection made, newest first, with their state and transaction hash. ' +
+        'Each list pages on its own cursor: `before` takes `next` for payments, `executesBefore` takes `executesNext` for executes.',
       inputSchema: z.strictObject({
         limit: z.number().int().min(1).max(50).optional(),
         before: z.string().optional().describe('The `next` value of the previous page'),
+        executesBefore: z.string().optional().describe('The `executesNext` value of the previous page'),
       }),
       outputSchema: historyOutput,
       annotations: { readOnlyHint: true },
     },
-    async ({ limit = 20, before }, ctx) => {
+    async ({ limit = 20, before, executesBefore }, ctx) => {
       const { connectionId } = tenant(ctx);
-      const rows = await history(connectionId, limit, before);
-      const executes = before ? [] : await sendHistory(connectionId, limit);
+      // Each list pages on its own cursor: a page asked for by one cursor alone leaves the other list out.
+      const rows = executesBefore && !before ? [] : await history(connectionId, limit, before);
+      const executes = before && !executesBefore ? [] : await sendHistory(connectionId, limit, executesBefore);
       const settled = rows.filter((r) => r.state === 'settled' && r.kind === 'paid').length;
       const landed = executes.filter((r) => r.state === 'landed').length;
       return reply(
@@ -98,6 +104,7 @@ export function registerHistoryTool(server: McpServer) {
           payments: rows.map(shown),
           ...(rows.length === limit && { next: rows[rows.length - 1].id }),
           executes: executes.map(executeShown),
+          ...(executes.length === limit && { executesNext: executes[executes.length - 1].id }),
           summary: `${rows.length} payments, ${settled} settled. ${executes.length} execute rows, ${landed} landed.`,
         })
       );
