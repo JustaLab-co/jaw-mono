@@ -78,7 +78,12 @@ function revertDataOf(e: object): Hex | undefined {
 export function mayHaveBeenSent(failure: unknown): boolean {
   const errors = chainOf(failure);
   if ((errors[0] as { name?: string } | undefined)?.name !== 'UserOperationExecutionError') return false;
-  return !errors.some((e) => (e as { code?: unknown }).code === -32521);
+  return !refusedInSimulation(failure);
+}
+
+/** The bundler's -32521: it simulated the userOp, saw it revert, and kept nothing. */
+export function refusedInSimulation(failure: unknown): boolean {
+  return chainOf(failure).some((e) => (e as { code?: unknown }).code === -32521);
 }
 
 export function refusalOfFailure(failure: unknown): Refusal | undefined {

@@ -14,10 +14,12 @@ import {
   erc20Abi,
   isAddressEqual,
   parseAbi,
+  RpcRequestError,
   type Address,
   type Hex,
   type PublicClient,
 } from 'viem';
+import { getUserOperationError } from 'viem/account-abstraction';
 import { beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { verifyBearer, type Tenant } from '@/connections/auth';
 import { disconnect, sweepOnReuse } from '@/connections/disconnect';
@@ -854,6 +856,140 @@ describe('jaw_session_x402_pay', () => {
     const after = await pay(t, { url: url('/exact'), idempotencyKey: 'lost-reply-new' }, deps());
     expect(after.structuredContent).toMatchObject({ refusal: { code: 'budget_exhausted' } });
     expect(refills).toEqual([2_000_000n]);
+  });
+
+  it('given a top-up whose answer is lost after it was signed, then the row keeps the amount and the signed hash', async () => {
+    const { t } = await connected('1');
+    const signedHash: Hex = `0x${'5'.repeat(64)}`;
+    const lost = (funder: Address): TopUpExecutor => ({
+      request: async (method, params, onSigned) => {
+        if (method !== 'wallet_sendCalls') return { status: 200 };
+        await onSigned?.(signedHash);
+        await executor(funder).request(method, params);
+        throw new Error('bundler reply lost');
+      },
+    });
+
+    const result = await pay(
+      t,
+      { url: url('/exact'), idempotencyKey: 'lost-signed' },
+      deps({ executor: (_t, grant) => lost(grant.account) })
+    );
+
+    expect(await rowOf(result.structuredContent!.paymentId)).toMatchObject({
+      topUpAmount: refills[0].toString(),
+      topUpBatchId: signedHash,
+    });
+  });
+
+  const refusedInSimulation = () =>
+    getUserOperationError(
+      new RpcRequestError({
+        body: { method: 'eth_sendUserOperation' },
+        error: { code: -32521, message: 'execution reverted' },
+        url: 'http://bundler.test',
+      }) as never,
+      { sender: '0x2222222222222222222222222222222222222222', nonce: 0n, callData: '0x', signature: '0x' } as never
+    );
+  const signing = (funder: Address, signedHash: Hex, after: () => Promise<unknown>): TopUpExecutor => ({
+    request: async (method, params, onSigned) => {
+      if (method !== 'wallet_sendCalls') return executor(funder).request(method, params);
+      await onSigned?.(signedHash);
+      return after();
+    },
+  });
+
+  it('given the bundler answers a top-up with another hash than the one signed, then the row keeps the bundler hash and it is logged', async () => {
+    const { t } = await connected('1');
+    const signedHash: Hex = `0x${'1'.repeat(64)}`;
+    const lines = await logsOf(async () => {
+      const result = await pay(
+        t,
+        { url: url('/exact'), idempotencyKey: 'topup-mismatch' },
+        deps({
+          executor: (_t, g) => ({
+            request: async (method, params, onSigned) => {
+              if (method !== 'wallet_sendCalls') return executor(g.account).request(method, params);
+              await onSigned?.(signedHash);
+              await executor(g.account).request(method, params);
+              return { id: `0x${'2'.repeat(64)}` };
+            },
+          }),
+        })
+      );
+      expect(await rowOf(result.structuredContent!.paymentId)).toMatchObject({ topUpBatchId: `0x${'2'.repeat(64)}` });
+    });
+    expect(lines).toContain(`bundler returned another userOp hash than ${signedHash}`);
+  });
+
+  it('given the top-up hash cannot be written, then the top-up is not sent and the row keeps no amount', async () => {
+    const { t } = await connected('1');
+    const drop = await failUpdates('hash-fails', 'new.top_up_batch_id is not null');
+    let result: Awaited<ReturnType<typeof pay>> | undefined;
+    try {
+      result = await pay(
+        t,
+        { url: url('/exact'), idempotencyKey: 'hash-fails' },
+        deps({ executor: (_t, g) => signing(g.account, `0x${'7'.repeat(64)}`, async () => ({ id: '0xsent' })) })
+      );
+    } finally {
+      await drop();
+    }
+    expect(refills).toEqual([]);
+    expect(await rowOf(result!.structuredContent!.paymentId)).toMatchObject({ topUpAmount: null, topUpBatchId: null });
+  });
+
+  it('given the bundler refuses a signed top-up in simulation, then the row keeps neither its amount nor its hash', async () => {
+    const { t } = await connected('1');
+    const result = await pay(
+      t,
+      { url: url('/exact'), idempotencyKey: 'topup-refused' },
+      deps({
+        executor: (_t, g) =>
+          signing(g.account, `0x${'8'.repeat(64)}`, async () => {
+            throw refusedInSimulation();
+          }),
+      })
+    );
+    expect(result.structuredContent).toMatchObject({ payerRefilled: false });
+    expect(await rowOf(result.structuredContent!.paymentId)).toMatchObject({ topUpAmount: null, topUpBatchId: null });
+  });
+
+  it('given the bundler refuses a signed Permit2 approval in simulation, then the row keeps no approval hash', async () => {
+    const { t } = await connected('1');
+    const approving = (funder: Address): TopUpExecutor => ({
+      ...executor(funder),
+      approvePermit2: async (_token, onSigned) => {
+        await onSigned?.(`0x${'9'.repeat(64)}`);
+        throw refusedInSimulation();
+      },
+    });
+    const result = await pay(
+      t,
+      { url: url('/upto'), idempotencyKey: 'approval-refused' },
+      deps({ executor: (_t, g) => approving(g.account) })
+    );
+    expect(await rowOf(result.structuredContent!.paymentId)).toMatchObject({ approvalBatchId: null });
+  });
+
+  it('given a Permit2 approval whose answer is lost after it was signed, then the row keeps the signed hash', async () => {
+    const { t } = await connected('1');
+    const signedHash: Hex = `0x${'6'.repeat(64)}`;
+    const approving = (funder: Address): TopUpExecutor => ({
+      ...executor(funder),
+      approvePermit2: async (_token, onSigned) => {
+        await onSigned?.(signedHash);
+        throw new Error('bundler reply lost');
+      },
+    });
+
+    const result = await pay(
+      t,
+      { url: url('/upto'), idempotencyKey: 'approval-lost' },
+      deps({ executor: (_t, grant) => approving(grant.account) })
+    );
+
+    expect(await rowOf(result.structuredContent!.paymentId)).toMatchObject({ approvalBatchId: signedHash });
   });
 
   it('given a top-up send that returns no id, then the row keeps the amount and money moved', async () => {
@@ -2380,6 +2516,30 @@ describe.skipIf(!TEST_PG_URL)('on Postgres, given a funded turn whose reservatio
       reserved: null,
       topUpAmount: refills[0].toString(),
     });
+  });
+});
+
+describe.skipIf(!TEST_PG_URL)('on Postgres, given another holder took the float while the top-up was signed', () => {
+  it('then its hash is not written, the top-up is not sent and the row keeps no amount', async () => {
+    const { t } = await connected('1');
+    const taken = (funder: Address): TopUpExecutor => ({
+      request: async (method, params, onSigned) => {
+        if (method !== 'wallet_sendCalls') return executor(funder).request(method, params);
+        await getDb()
+          .update(connections)
+          .set({ floatFence: sql`${connections.floatFence} + 1` })
+          .where(eq(connections.id, t.connectionId));
+        await onSigned?.(`0x${'4'.repeat(64)}`);
+        return executor(funder).request(method, params);
+      },
+    });
+    const result = await pay(
+      t,
+      { url: url('/exact'), idempotencyKey: 'fence-moved' },
+      deps({ executor: (_t, g) => taken(g.account) })
+    );
+    expect(refills).toEqual([]);
+    expect(await rowOf(result.structuredContent!.paymentId)).toMatchObject({ topUpAmount: null, topUpBatchId: null });
   });
 });
 
