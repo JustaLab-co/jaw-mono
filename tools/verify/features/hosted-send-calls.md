@@ -19,6 +19,8 @@
 - `calls-reopen`: the server restarts while `awaiting_owner` and the owner has not started; the same key gives a new link.
 - `calls-marker`: the wallet was asked to send and no calls id came back; the request reads "may have sent" and never reopens. With a keys page that replays answers, a server that restarted rejoins the same tab and records the calls id the owner's approval gives, before or after the restart; a tab that was closed leaves the row "may have sent".
 - `calls-expired`: the owner does not approve before `approveBy`; the state is `expired`.
+- `calls-sim-revert`: a batch whose call reverts in a dry run on the proxy, paying the fee in the chain's USDC, gives `simulated_revert` naming the call before any row or link.
+- `calls-sim-no-eth`: an owner with no native coin and some USDC sends a valid USDC transfer; the dry run does not refuse it and the link opens as before.
 
 ## How to get to it (user POV)
 
@@ -55,6 +57,8 @@ A call that moves something visible on Base Sepolia is a USDC transfer of 0.01 t
 - calls-one-open: while `k1` is `awaiting_owner`, `calls '<json>' 84532 k2`. Pass: `calls_in_progress` naming the `k1` request and key, no new row.
 - calls-reopen: `calls`, do not open the link, restart the mcp container, then `calls` again with the same key. Pass: the same `id`, a different `url`, state `awaiting_owner`, one row. Approve through the new link and follow with `calls-status` to `landed`.
 - calls-marker: `calls`, open the `url` as the owner and let the wallet reach the calls prompt without approving, then restart the mcp container. The row now carries the code `send_started`, written before the wallet is asked to send. Pass: `calls` with the same key answers `awaiting_owner` with no `url` and a summary saying the wallet may have sent these calls, and `calls-status` says the same. After 10 minutes past `approveBy` (wait with `$S/run-bounded.sh`) the summary says nothing was seen and the account must be checked before sending again.
+- calls-sim-revert: start the stack with `JAW_MCP_API_KEY` set, since the dry run goes through the proxy. `cast call 0x036CbD53842c5426634e7929541eC2318f3dCF7e 'balanceOf(address)(uint256)' <account> --rpc-url https://sepolia.base.org`, then `calls '[{"to":"0x036CbD53842c5426634e7929541eC2318f3dCF7e","data":"<transfer of that balance plus 1>"}]' 84532 sim-revert`. Pass: `simulated_revert` naming call 0 with the proxy reason fenced, the owner's wallet shows no prompt, and `select count(*) from owner_calls where idempotency_key = 'sim-revert'` in the postgres container answers 0.
+- calls-sim-no-eth: with an owner account holding 0 ETH and some USDC on 84532 (`cast balance <account> --rpc-url https://sepolia.base.org` answers 0), `calls` with a transfer of 0.01 USDC and key `sim-no-eth`. Pass: `awaiting_owner` with a `url`, and `select count(*) from owner_calls where idempotency_key = 'sim-no-eth'` answers 1. Approve and follow with `calls-status` to `landed`: the wallet pays the fee in USDC.
 - calls-expired: `calls`, do not open the link, wait past `approveBy` with `$S/run-bounded.sh`, then `calls-status <id>`. Pass: `expired`, no `url`, and `calls` with the same key answers the same `expired` row without a new link.
 
 A run shows these states across its drives: `awaiting_owner`, `sent`, `landed`, `owner_declined`, `expired`. A drive that does not reach one of them for lack of the owner step is not counted as passing it.

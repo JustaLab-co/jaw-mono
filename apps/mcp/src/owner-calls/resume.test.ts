@@ -10,7 +10,7 @@ import { connect, owner, setTestEnv, walletsSettled } from '@/connections/testki
 import { getDb } from '@/db/client';
 import { connections, ownerCalls, permissionRequests } from '@/db/schema';
 import { TEST_PG_URL, useTestDb, useTestPostgres, withoutOwnerCallsGuard } from '@/db/test-db';
-import { sendCalls, sendCallsStatus, type OwnerCallDeps } from '@/tools/owner-calls';
+import { sendCalls, sendCallsStatus, type SendCallsDeps } from '@/tools/owner-calls';
 import { resumeTick } from '@/connections/resume';
 import { requestsWaiting } from '@/grants/resume';
 import { callsWaiting, resumeOwnerCalls } from './resume';
@@ -34,10 +34,11 @@ async function connected() {
   return (await verifyBearer(c.access_token))?.extra?.tenant as Tenant;
 }
 
-const depsOf = (openWallet: OwnerCallDeps['openWallet']): OwnerCallDeps => ({
+const depsOf = (openWallet: SendCallsDeps['openWallet']): SendCallsDeps => ({
   openWallet,
   receipt: async () => null,
   clients,
+  simulate: async () => ({ status: 'success' }),
 });
 
 const rowOf = async (id: string) => (await getDb().select().from(ownerCalls).where(eq(ownerCalls.id, id)))[0];
@@ -238,7 +239,7 @@ describe('owner calls whose server restarted after the send started', () => {
     const t = await connected();
     const owned = deciding(t);
     let ended = false;
-    const openWallet: OwnerCallDeps['openWallet'] = async (...args) => {
+    const openWallet: SendCallsDeps['openWallet'] = async (...args) => {
       const wallet = await stallsAfter(9).openWallet(...args);
       return { ...wallet, run: (work, joined) => wallet.run(work, joined).finally(() => (ended = true)) };
     };

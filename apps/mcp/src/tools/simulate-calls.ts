@@ -68,6 +68,8 @@ const proxyResult = z.discriminatedUnion('status', [
 
 export type Input = z.infer<typeof input>;
 export type ClientFor = (chainId: number) => PublicClient;
+export type Simulation = z.infer<typeof proxyResult> | { status: 'failed'; error: unknown } | { status: 'unexpected' };
+export type SimulateArgs = Pick<Input, 'chainId' | 'calls' | 'permissionId' | 'paymaster'> & { sender: string };
 
 const NOTHING_SENT = 'Nothing was signed or sent.';
 const NOT_DECIDED = 'The simulation did not run, so nothing was decided.';
@@ -83,7 +85,7 @@ export function simulationClient(_chainId: number, url = simulationUrl(), timeou
   return createPublicClient({ transport: http(url, { retryCount: 0, timeout }) });
 }
 
-function untrusted(text: string) {
+export function untrusted(text: string) {
   const clean = scrub(text);
   const fenced = fenceText('the JAW proxy', clean, TEXT_MAX);
   return clean.length > TEXT_MAX ? `${fenced}\n[truncated: ${clean.length} characters in all]` : fenced;
@@ -120,6 +122,9 @@ function refuseFailure(error: unknown) {
   return refusal(`${NOT_DECIDED} Try again shortly.`);
 }
 
+export const callInBatch = (callIndex: number | undefined, count: number) =>
+  callIndex !== undefined && callIndex >= 0 && callIndex < count ? callIndex : undefined;
+
 function present(found: z.infer<typeof proxyResult>, base: { chainId: number; sender: string }, count: number) {
   if (found.status === 'success')
     return {
@@ -134,8 +139,7 @@ function present(found: z.infer<typeof proxyResult>, base: { chainId: number; se
       reason: untrusted(found.reason),
       summary: `The simulation could not decide. This is not a failure of the calls: they were neither passed nor failed. ${NOTHING_SENT}`,
     };
-  const at =
-    found.callIndex !== undefined && found.callIndex >= 0 && found.callIndex < count ? found.callIndex : undefined;
+  const at = callInBatch(found.callIndex, count);
   return {
     ...base,
     status: found.status,
@@ -149,9 +153,31 @@ function present(found: z.infer<typeof proxyResult>, base: { chainId: number; se
   };
 }
 
+export async function simulate(a: SimulateArgs, clientFor: ClientFor = simulationClient): Promise<Simulation> {
+  const params = {
+    chainId: toHex(a.chainId),
+    sender: a.sender,
+    calls: a.calls.map(({ to, value, data }) => ({
+      to,
+      ...(value !== undefined && { value: toHex(BigInt(value)) }),
+      data,
+    })),
+    ...(a.permissionId && { permissionId: a.permissionId }),
+    ...(a.paymaster && { paymaster: a.paymaster }),
+  };
+  let raw: unknown;
+  try {
+    raw = await clientFor(a.chainId).request({ method: 'wallet_simulateCalls', params: [params] } as never);
+  } catch (error) {
+    return { status: 'failed', error };
+  }
+  const found = proxyResult.safeParse(raw);
+  return found.success ? found.data : { status: 'unexpected' };
+}
+
 /** Dry-runs the batch on the JAW proxy. Nothing is signed or sent. */
 export async function simulateCalls(args: Input, account: Address, clientFor: ClientFor = simulationClient) {
-  const { chainId, calls, permissionId, paymaster } = args;
+  const { chainId, calls } = args;
   const sender = args.sender ?? account;
   if (!isProxyChain(chainId)) {
     const supported = proxyChains().map((c) => c.id);
@@ -160,26 +186,11 @@ export async function simulateCalls(args: Input, account: Address, clientFor: Cl
   const bad = badAddress(args, sender);
   if (bad) return refusal(`${bad} is not a valid address. Use the 0x form, with a correct checksum when mixed case.`);
 
-  const params = {
-    chainId: toHex(chainId),
-    sender,
-    calls: calls.map(({ to, value, data }) => ({
-      to,
-      ...(value !== undefined && { value: toHex(BigInt(value)) }),
-      data,
-    })),
-    ...(permissionId && { permissionId }),
-    ...(paymaster && { paymaster }),
-  };
-  let raw: unknown;
-  try {
-    raw = await clientFor(chainId).request({ method: 'wallet_simulateCalls', params: [params] } as never);
-  } catch (error) {
-    return refuseFailure(error);
-  }
-  const found = proxyResult.safeParse(raw);
-  if (!found.success) return refusal('The proxy answered with an unexpected shape, so nothing was decided.');
-  return reply(output.parse(present(found.data, { chainId, sender }, calls.length)));
+  const found = await simulate({ ...args, sender }, clientFor);
+  if (found.status === 'failed') return refuseFailure(found.error);
+  if (found.status === 'unexpected')
+    return refusal('The proxy answered with an unexpected shape, so nothing was decided.');
+  return reply(output.parse(present(found, { chainId, sender }, calls.length)));
 }
 
 export function registerSimulateCallsTool(server: McpServer) {

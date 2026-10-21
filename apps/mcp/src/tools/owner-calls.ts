@@ -1,8 +1,8 @@
 import { createHash, randomBytes } from 'node:crypto';
-import type { ChainClients } from '@jaw.id/agent';
+import { usdcForNetwork, type ChainClients } from '@jaw.id/agent';
 import { PERMISSIONS_MANAGER_ADDRESS } from '@jaw.id/core';
 import type { McpServer } from '@modelcontextprotocol/server';
-import { getAddress } from 'viem';
+import { getAddress, type Address } from 'viem';
 import {
   entryPoint06Address,
   entryPoint07Address,
@@ -43,6 +43,7 @@ import {
   type OwnerCallRow,
 } from '@/owner-calls/store';
 import { gateCode } from '@/payments/render';
+import { callInBatch, simulate, untrusted, type SimulateArgs, type Simulation } from './simulate-calls';
 
 const MAX_CALLS = 10;
 const STATUS_RATE_LIMIT = 30;
@@ -126,7 +127,11 @@ export interface OwnerCallDeps {
   pollMs?: number;
 }
 
-const DEFAULTS: OwnerCallDeps = { openWallet: ownerRelay, receipt: readReceipt, clients: chainClients };
+export interface SendCallsDeps extends OwnerCallDeps {
+  simulate: (a: SimulateArgs) => Promise<Simulation>;
+}
+
+const DEFAULTS: SendCallsDeps = { openWallet: ownerRelay, receipt: readReceipt, clients: chainClients, simulate };
 
 const refuse = (code: string, text: string): SendResult => ({
   content: [{ type: 'text', text: `${code}: ${text}` }],
@@ -295,12 +300,29 @@ async function replay(t: Tenant, row: OwnerCallRow, hash: string, deps: OwnerCal
   return reopen(t, row, deps);
 }
 
+async function simulatedRevert(chainId: number, sender: Address, calls: SimulateArgs['calls'], deps: SendCallsDeps) {
+  const usdc = usdcForNetwork(`eip155:${chainId}`);
+  if (!usdc) return undefined;
+  const found = await deps.simulate({ chainId, sender, calls, paymaster: { mode: 'erc20', token: usdc.address } });
+  if (found.status === 'failed') {
+    log('warn', { msg: 'owner calls simulation failed', error: errorLabel(found.error) });
+  }
+  if (found.status !== 'reverted') return undefined;
+  const at = callInBatch(found.callIndex, calls.length);
+  if (at === undefined) return undefined;
+  return refuse(
+    'simulated_revert',
+    `Call ${at} (from 0) would revert, so no link opened and nothing was sent. ` +
+      `Fix the calls, or send the same idempotencyKey again once they would pass.\n${untrusted(found.reason)}`
+  );
+}
+
 const ENTRY_POINTS = [entryPoint06Address, entryPoint07Address, entryPoint08Address, entryPoint09Address];
 
 export const forbiddenTargets = (t: Tenant) =>
   new Set([t.account, PERMISSIONS_MANAGER_ADDRESS, ...ENTRY_POINTS].map((a) => a.toLowerCase()));
 
-export async function sendCalls(t: Tenant, input: SendCallsInput, deps: OwnerCallDeps = DEFAULTS): Promise<SendResult> {
+export async function sendCalls(t: Tenant, input: SendCallsInput, deps: SendCallsDeps = DEFAULTS): Promise<SendResult> {
   const chainId = input.chainId ?? t.chainId;
   if (!isProxyChain(chainId)) {
     return refuse('unsupported_chain', `Chain ${chainId} is not one the JAW wallet supports.`);
@@ -337,6 +359,8 @@ export async function sendCalls(t: Tenant, input: SendCallsInput, deps: OwnerCal
   };
   if ((await countOpenLinks(t.account)) >= MAX_OPEN_PER_ACCOUNT) return refuseUnlessStored(accountBusy());
   if (!(await findActive(t.connectionId))) return connectionEnded();
+  const reverted = await simulatedRevert(chainId, t.account, calls, deps);
+  if (reverted) return refuseUnlessStored(reverted);
   const approveBy = new Date(Date.now() + APPROVE_WITHIN_MS);
   const wallet = await openWalletFor(t, approveBy, deps);
   if (!wallet) return refuseUnlessStored(walletBusy(key));

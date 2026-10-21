@@ -2236,7 +2236,12 @@ describe('owner links per account, swaps and calls together', () => {
     sendCalls(
       t,
       { calls: [{ to: PAY_TO, value: '1' }], idempotencyKey: key },
-      { openWallet: recordingWallet(), receipt: async () => null, clients: fakeChain({ head: 1_000_000n }).clients }
+      {
+        openWallet: recordingWallet(),
+        receipt: async () => null,
+        clients: fakeChain({ head: 1_000_000n }).clients,
+        simulate: async () => ({ status: 'success' }),
+      }
     );
 
   it('given three links open on one account, when another connection asks to swap, then account_busy before anything is asked', async () => {

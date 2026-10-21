@@ -82,7 +82,12 @@ async function sendGated(t: Tenant, answer: () => unknown = () => ({ id: CALLS_I
   const first = await sendCalls(
     t,
     { calls: [{ to: TARGET, value: '1' }], idempotencyKey: `k-${randomBytes(4).toString('hex')}` },
-    { openWallet: fakeWallet(ask), receipt: async () => null, clients: quietChain }
+    {
+      openWallet: fakeWallet(ask),
+      receipt: async () => null,
+      clients: quietChain,
+      simulate: async () => ({ status: 'success' }),
+    }
   );
   return { id: first.structuredContent!.id, first, answered };
 }
@@ -201,7 +206,12 @@ describe('jaw_get_calls_status with waitSeconds', () => {
     const first = await sendCalls(
       t,
       { calls: [{ to: TARGET, value: '1' }], idempotencyKey: 'unopened' },
-      { openWallet: idleWallet, receipt: async () => null, clients: quietChain }
+      {
+        openWallet: idleWallet,
+        receipt: async () => null,
+        clients: quietChain,
+        simulate: async () => ({ status: 'success' }),
+      }
     );
     const id = first.structuredContent!.id;
 
