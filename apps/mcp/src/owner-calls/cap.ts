@@ -1,17 +1,21 @@
 import { and, count, eq, gt, ne, sql } from 'drizzle-orm';
+import { heldSince } from '@/connections/session-lease';
 import { getDb, type Tx } from '@/db/client';
 import { ownerCalls, permissionRequests, swaps } from '@/db/schema';
 
 // Each open link holds a relay socket for up to its approval window, and the pool is shared by every user.
 export const MAX_OPEN_PER_ACCOUNT = 3;
 export const FULL = 'full';
+// New owner links one connection, and one account, may open per minute.
+export const LINK_RATE_LIMIT = 10;
+export const ACCOUNT_LINK_RATE_LIMIT = 20;
 
 const dbNow = sql`statement_timestamp()`;
 
 export const linkLive = and(
   eq(permissionRequests.state, 'awaiting_owner'),
   gt(permissionRequests.approveBy, dbNow),
-  gt(permissionRequests.sessionUntil, dbNow)
+  gt(permissionRequests.sessionUntil, heldSince)
 );
 
 export async function countOpenLinks(account: string, except?: string, db: Tx = getDb()): Promise<number> {

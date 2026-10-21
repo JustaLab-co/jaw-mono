@@ -92,14 +92,14 @@ describe('SessionBridge', () => {
     const bridge = new SessionBridge({ apiKey: 'test', chainId: 84532 });
     const calls = [{ to: '0xTarget', value: '0x0' }];
     await bridge.request('wallet_sendCalls', [{ calls }]);
-    expect(mockSendCalls).toHaveBeenCalledWith(calls, { permissionId: '0xPermId' });
+    expect(mockSendCalls).toHaveBeenCalledWith(calls, { permissionId: '0xPermId', onSigned: expect.any(Function) });
   });
 
   it('wallet_sendCalls handles direct object format from CLI', async () => {
     const bridge = new SessionBridge({ apiKey: 'test', chainId: 84532 });
     const calls = [{ to: '0xTarget', value: '0x0' }];
     await bridge.request('wallet_sendCalls', { calls });
-    expect(mockSendCalls).toHaveBeenCalledWith(calls, { permissionId: '0xPermId' });
+    expect(mockSendCalls).toHaveBeenCalledWith(calls, { permissionId: '0xPermId', onSigned: expect.any(Function) });
   });
 
   it('wallet_getCallsStatus forwards batchId', async () => {
@@ -384,7 +384,7 @@ describe('approvePermit2', () => {
     const [calls, options] = mockSendCalls.mock.calls.at(-1) as [Array<{ to: string; data: `0x${string}` }>, unknown];
     // No permissionId: routed through the manager it would revert, since the
     // grant permits `transfer` and the manager checks every selector.
-    expect(options).toBeUndefined();
+    expect(options).toEqual({ onSigned: expect.any(Function) });
     expect(calls).toHaveLength(1);
     expect(calls[0].to).toBe(BASE_SEPOLIA_USDC);
 

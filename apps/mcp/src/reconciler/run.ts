@@ -1,21 +1,41 @@
 import type { ChainClients } from '@jaw.id/agent';
 import { and, eq, isNotNull, isNull, lt, ne, sql } from 'drizzle-orm';
-import { getAbiItem, type Address, type Hex } from 'viem';
-import { entryPoint08Abi, entryPoint08Address } from 'viem/account-abstraction';
+import type { Address, Hex } from 'viem';
+import { entryPoint08Address } from 'viem/account-abstraction';
 import { chainClients } from '@/adapters/session-host';
 import { config } from '@/connections/config';
 import { retire, sessionSender, type DisconnectDeps } from '@/connections/disconnect';
 import { claimSealedKey, endConnection, restoreSealedKey } from '@/connections/rows';
 import { open, type Sealed } from '@/connections/seal';
 import { getDb } from '@/db/client';
-import { auditEvents, connections, grants, oauthPayloads, ownerCalls, payments, rateLimits, swaps } from '@/db/schema';
+import {
+  auditEvents,
+  connections,
+  grants,
+  oauthPayloads,
+  ownerCalls,
+  payments,
+  permissionRequests,
+  rateLimits,
+  swaps,
+} from '@/db/schema';
 import { isPaymentsPaused } from '@/db/settings';
 import { readOnChain } from '@/grants/permission';
+import { closeLapsedLinks, SIGN_KEPT_DAYS } from '@/grants/requests';
+import { fromStore, settleUnconfirmedRevokes, type RevokeReads } from '@/grants/revokes';
 import { errorLabel, log } from '@/lib/edge';
 import { conclude, sentBefore } from '@/owner-calls/store';
 import { canSearchChain, readReceipt, searchChain, type ReadReceipt } from '@/owner-calls/receipt';
 import { chainAnswer, type ChainAnswer } from '@/payments/confirm';
-import { claimOpenSends, settleSends, type SendEnd, type SendRow } from '@/payments/sends';
+import {
+  claimOpenSends,
+  endOf,
+  SEND_WINDOW_BLOCKS,
+  settleSends,
+  userOperationEvent,
+  type SendEnd,
+  type SendRow,
+} from '@/payments/sends';
 import { claimUnresolved, expire, markAlerted, settle, txHashTaken, type PaymentRow } from '@/payments/store';
 
 export const RECONCILE_AFTER_MS = 60_000;
@@ -32,7 +52,10 @@ export interface Report {
   alerted: number;
   sends: { landed: number; released: number; open: number };
   ownerCalls: { landed: number; reverted: number; open: number };
+  links: { expired: number; revoked: number };
 }
+
+const REVOKE_READS: RevokeReads = { readPermission: readOnChain, lookUp: fromStore, lookUpMs: 10_000 };
 
 /**
  * Resolves every signed or unknown row older than the window and not held by a
@@ -43,7 +66,8 @@ export interface Report {
 export async function reconcile(
   clients: ChainClients = chainClients,
   now = new Date(),
-  receipt: ReadReceipt = readReceipt
+  receipt: ReadReceipt = readReceipt,
+  revokeReads: RevokeReads = REVOKE_READS
 ): Promise<Report> {
   const report: Report = {
     settled: 0,
@@ -52,6 +76,7 @@ export async function reconcile(
     alerted: 0,
     sends: { landed: 0, released: 0, open: 0 },
     ownerCalls: { landed: 0, reverted: 0, open: 0 },
+    links: { expired: 0, revoked: 0 },
   };
   await reconcileSends(clients, report);
   await reconcileOwnerCalls(receipt, clients, now, report);
@@ -65,7 +90,25 @@ export async function reconcile(
         log('error', { msg: `reconcile ${row.id} failed`, error: err instanceof Error ? err.name : 'unknown' });
       }
     }
-    if (rows.length < BATCH) return report;
+    if (rows.length < BATCH) break;
+  }
+  await reconcileLinks(revokeReads, report);
+  return report;
+}
+
+async function reconcileLinks(deps: RevokeReads, report: Report) {
+  try {
+    report.links.expired = await closeLapsedLinks();
+    // Many at once means processes stopped renewing together: a restart, or a database outage over the grace.
+    if (report.links.expired)
+      log('warn', { msg: `${report.links.expired} owner links ended with no process holding them` });
+  } catch (err) {
+    log('error', { msg: 'lapsed owner links not closed', error: errorLabel(err) });
+  }
+  try {
+    report.links.revoked = await settleUnconfirmedRevokes(deps);
+  } catch (err) {
+    log('error', { msg: 'unconfirmed revokes not read', error: errorLabel(err) });
   }
 }
 
@@ -108,10 +151,6 @@ async function apply(row: PaymentRow, answer: ChainAnswer, now: Date, report: Re
   report.alerted++;
 }
 
-// Some RPC providers cap eth_getLogs at 500 blocks.
-const SEND_WINDOW_BLOCKS = 450n;
-const userOperationEvent = getAbiItem({ abi: entryPoint08Abi, name: 'UserOperationEvent' });
-
 async function reconcileSends(clients: ChainClients, report: Report) {
   for (;;) {
     const rows = await claimOpenSends(CLAIM_MS, BATCH);
@@ -146,9 +185,8 @@ async function sendOutcome(row: SendRow, clients: ChainClients): Promise<SendEnd
     toBlock: head < windowEnd ? head : windowEnd,
     strict: true,
   });
-  const landed = logs.find((l) => l.args.success);
-  if (landed) return { state: 'landed', txHash: landed.transactionHash };
-  if (logs.length > 0) return { state: 'released', txHash: logs[0].transactionHash };
+  const end = endOf(logs);
+  if (end) return end;
   if (head >= windowEnd) return { state: 'released' };
   return undefined;
 }
@@ -195,6 +233,15 @@ export async function purge(deps = SESSION_DEPS): Promise<void> {
   await db.delete(oauthPayloads).where(lt(oauthPayloads.expiresAt, dayAgo));
   await db.delete(rateLimits).where(lt(rateLimits.windowStart, sql`now() - interval '1 hour'`));
   await db.delete(auditEvents).where(lt(auditEvents.createdAt, sql`now() - interval '90 days'`));
+  await db
+    .delete(permissionRequests)
+    .where(
+      and(
+        eq(permissionRequests.method, 'sign'),
+        ne(permissionRequests.state, 'awaiting_owner'),
+        lt(permissionRequests.updatedAt, sql`now() - ${SIGN_KEPT_DAYS} * interval '1 day'`)
+      )
+    );
   await retireAbandoned(deps);
   await retireUnexchanged(deps);
   await db

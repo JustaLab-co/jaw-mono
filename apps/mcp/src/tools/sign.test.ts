@@ -350,7 +350,7 @@ describe('jaw_sign', () => {
     const lapse = (url: string) =>
       getDb()
         .update(permissionRequests)
-        .set({ sessionUntil: sql`now() - interval '1 second'` })
+        .set({ sessionUntil: sql`now() - interval '61 seconds'` })
         .where(eq(permissionRequests.walletUrl, url));
 
     it('given the same key again, then it answers expired with session_lost and opens no second link', async () => {

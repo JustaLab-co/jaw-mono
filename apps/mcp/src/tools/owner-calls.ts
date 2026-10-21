@@ -22,7 +22,14 @@ import { errorLabel, log, RATE_WINDOW_MS } from '@/lib/edge';
 import { reply } from '@/lib/fence';
 import { approve } from '@/owner-calls/approve';
 import { readReceipt, receiptOf, type ReadReceipt, type Receipt } from '@/owner-calls/receipt';
-import { countOpenLinks, FULL, MAX_OPEN_PER_ACCOUNT, withLinkSlot } from '@/owner-calls/cap';
+import {
+  ACCOUNT_LINK_RATE_LIMIT,
+  countOpenLinks,
+  FULL,
+  LINK_RATE_LIMIT,
+  MAX_OPEN_PER_ACCOUNT,
+  withLinkSlot,
+} from '@/owner-calls/cap';
 import {
   conclude,
   expirePast,
@@ -39,8 +46,6 @@ import {
 import { gateCode } from '@/payments/render';
 
 const MAX_CALLS = 10;
-const LINK_RATE_LIMIT = 10;
-const ACCOUNT_LINK_RATE_LIMIT = 20;
 const STATUS_RATE_LIMIT = 30;
 const SENT_GRACE_MS = 10 * 60_000;
 
