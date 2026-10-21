@@ -71,6 +71,22 @@ export const findById = (connectionId: string, id: string) =>
 export const findOpen = (connectionId: string) =>
   find(and(eq(ownerCalls.connectionId, connectionId), eq(ownerCalls.state, 'awaiting_owner'))!);
 
+export async function hasInFlight(account: string, chainId: number, graceMs: number): Promise<boolean> {
+  const [row] = await getDb()
+    .select({ id: ownerCalls.id })
+    .from(ownerCalls)
+    .where(
+      and(
+        sql`lower(${ownerCalls.account}) = ${account.toLowerCase()}`,
+        eq(ownerCalls.chainId, chainId),
+        or(eq(ownerCalls.state, 'sent'), eq(ownerCalls.code, SEND_STARTED)),
+        gt(ownerCalls.approveBy, sql`${dbNow} - ${graceMs} * interval '1 millisecond'`)
+      )
+    )
+    .limit(1);
+  return row !== undefined;
+}
+
 export async function expirePast(connectionId: string): Promise<void> {
   await write(
     and(

@@ -37,6 +37,7 @@ import {
   findById,
   findByKey,
   findOpen,
+  hasInFlight,
   insertOwnerCall,
   reopenLink,
   SEND_STARTED,
@@ -300,21 +301,35 @@ async function replay(t: Tenant, row: OwnerCallRow, hash: string, deps: OwnerCal
   return reopen(t, row, deps);
 }
 
+function logUndecided(found: Exclude<Simulation, { status: 'success' }>) {
+  const error = found.status === 'failed' ? found.error : undefined;
+  const rpcCode = (error as { code?: unknown } | undefined)?.code;
+  log('warn', {
+    msg: 'owner calls simulation failed',
+    simulation: found.status,
+    ...(error !== undefined && { error: errorLabel(error) }),
+    ...(typeof rpcCode === 'number' && { rpcCode }),
+  });
+}
+
 async function simulatedRevert(chainId: number, sender: Address, calls: SimulateArgs['calls'], deps: SendCallsDeps) {
   const usdc = usdcForNetwork(`eip155:${chainId}`);
   if (!usdc) return undefined;
+  if (await hasInFlight(sender, chainId, SENT_GRACE_MS)) return undefined;
   const found = await deps.simulate({ chainId, sender, calls, paymaster: { mode: 'erc20', token: usdc.address } });
-  if (found.status === 'failed') {
-    log('warn', { msg: 'owner calls simulation failed', error: errorLabel(found.error) });
+  if (found.status === 'success') return undefined;
+  if (found.status === 'reverted') {
+    const at = callInBatch(found.callIndex, calls.length);
+    if (at !== undefined)
+      return refuse(
+        'simulated_revert',
+        `Call ${at} (from 0) would revert, so no link opened and nothing was sent. ` +
+          `Fix the calls, or send the same idempotencyKey again once they would pass. ` +
+          `jaw_simulate_calls shows the full answer of the proxy.\n${untrusted(found.reason)}`
+      );
   }
-  if (found.status !== 'reverted') return undefined;
-  const at = callInBatch(found.callIndex, calls.length);
-  if (at === undefined) return undefined;
-  return refuse(
-    'simulated_revert',
-    `Call ${at} (from 0) would revert, so no link opened and nothing was sent. ` +
-      `Fix the calls, or send the same idempotencyKey again once they would pass.\n${untrusted(found.reason)}`
-  );
+  logUndecided(found);
+  return undefined;
 }
 
 const ENTRY_POINTS = [entryPoint06Address, entryPoint07Address, entryPoint08Address, entryPoint09Address];
@@ -357,10 +372,10 @@ export async function sendCalls(t: Tenant, input: SendCallsInput, deps: SendCall
     const raced = await findByKey(t.connectionId, key);
     return raced ? replay(t, raced, hash, deps) : refusal;
   };
-  if ((await countOpenLinks(t.account)) >= MAX_OPEN_PER_ACCOUNT) return refuseUnlessStored(accountBusy());
-  if (!(await findActive(t.connectionId))) return connectionEnded();
   const reverted = await simulatedRevert(chainId, t.account, calls, deps);
   if (reverted) return refuseUnlessStored(reverted);
+  if ((await countOpenLinks(t.account)) >= MAX_OPEN_PER_ACCOUNT) return refuseUnlessStored(accountBusy());
+  if (!(await findActive(t.connectionId))) return connectionEnded();
   const approveBy = new Date(Date.now() + APPROVE_WITHIN_MS);
   const wallet = await openWalletFor(t, approveBy, deps);
   if (!wallet) return refuseUnlessStored(walletBusy(key));
