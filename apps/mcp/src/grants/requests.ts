@@ -205,7 +205,8 @@ export async function openLink(t: Tenant, req: LinkRequest, openWallet: OpenWall
   };
   const held = await existing();
   if (held) return held;
-  if ((await countOpenLinks(t.account)) >= MAX_OPEN_PER_ACCOUNT) return 'account_busy';
+  // The same request asked concurrently may have taken the last slot.
+  if ((await countOpenLinks(t.account)) >= MAX_OPEN_PER_ACCOUNT) return (await existing()) ?? 'account_busy';
   const { approveBy } = req;
   let wallet: Wallet;
   try {
