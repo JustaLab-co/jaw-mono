@@ -57,6 +57,21 @@ vi.mock('@/lib/chain', async (original) => ({
   publicClientFor: () => node as unknown as PublicClient,
 }));
 
+// Holds the next request between its own key's check and counting the account's links.
+const turn = vi.hoisted(() => ({ beforeCount: undefined as undefined | (() => Promise<unknown>) }));
+vi.mock('@/owner-calls/cap', async (original) => {
+  const cap = await original<typeof import('@/owner-calls/cap')>();
+  return {
+    ...cap,
+    countOpenLinks: async (...args: Parameters<typeof cap.countOpenLinks>) => {
+      const wait = turn.beforeCount;
+      turn.beforeCount = undefined;
+      await wait?.();
+      return cap.countOpenLinks(...args);
+    },
+  };
+});
+
 setTestEnv();
 process.env.JAW_MCP_RPC_URL = 'http://127.0.0.1:9';
 
@@ -222,6 +237,7 @@ const recordingWallet =
 
 beforeAll(TEST_PG_URL ? useTestPostgres : useTestDb);
 beforeEach(() => {
+  turn.beforeCount = undefined;
   Object.assign(deposits, {
     state: 'PENDING_DEPOSIT',
     txHash: undefined,
@@ -2327,6 +2343,26 @@ describe('owner links per account, swaps and calls together', () => {
     expect(paidHits()).toHaveLength(0);
     expect(await swapsOf(d.connectionId)).toEqual([]);
     expect(opened).toHaveLength(openedBefore);
+  });
+
+  it('given two links open on one account, when the same key opens the third while a retry of it is checking, then the retry answers that swap and pays nothing more', async () => {
+    const [a, b, c] = await sameAccount(3);
+    await call(a, 'k');
+    await call(b, 'k');
+    const paid = paidHits().length;
+    let opener!: ReturnType<typeof run>;
+    turn.beforeCount = () => (opener = run(c));
+
+    const retry = await run(c);
+    const first = await opener;
+
+    expect(retry[gateCode]).toBeUndefined();
+    expect(retry.structuredContent).toMatchObject({
+      state: 'awaiting_owner',
+      quoteId: first.structuredContent!.quoteId,
+      url: first.structuredContent!.url,
+    });
+    expect(paidHits()).toHaveLength(paid + 1);
   });
 
   it('given a swap and two calls open on one account, when a third connection sends calls, then account_busy', async () => {

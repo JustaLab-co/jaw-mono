@@ -442,7 +442,8 @@ export async function swap(t: Tenant, input: SwapToolInput, deps: SwapDeps = DEF
   const request = swapRequest(t, { ...input, originToken: input.originToken as Address });
   if (await nextStepPays(t.connectionId, key, request)) {
     const refused = await refusedBeforePaying(t, input.originChainId, key);
-    if (refused) return refused;
+    // A request racing this one may have stored this key since the check above; replaying it pays nothing.
+    if (refused && (await nextStepPays(t.connectionId, key, request))) return refused;
   }
   const claim = await claimSwap(t.connectionId, key, request);
   switch (claim.kind) {
