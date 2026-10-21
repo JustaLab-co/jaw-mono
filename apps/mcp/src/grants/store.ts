@@ -1,5 +1,5 @@
 import type { GrantedPermission } from '@jaw.id/agent';
-import { and, desc, eq, gt, inArray, isNull, sql } from 'drizzle-orm';
+import { and, desc, eq, gt, inArray, isNotNull, isNull, ne, or, sql } from 'drizzle-orm';
 import type { Address, Hex } from 'viem';
 import { getDb, type Tx } from '@/db/client';
 import { grants } from '@/db/schema';
@@ -53,11 +53,15 @@ export async function x402Budgets(connectionId: string): Promise<Grant[]> {
   return rows.map(toBudget);
 }
 
-/** The budget a signed payment was charged to, while it has not ended, whether or not it was revoked since. */
+/**
+ * The budget a signed payment was charged to, while it has not ended, whether or not
+ * it was revoked or replaced since. A proof signed under a replaced budget spends the
+ * payer's float, not the budget, so it may go out again.
+ */
 export async function budgetSignedUnder(
   connectionId: string,
   permissionId: string | null
-): Promise<(Grant & { revokedAt: Date | null }) | undefined> {
+): Promise<(Grant & { revokedAt: Date | null; replaced: boolean }) | undefined> {
   if (!permissionId) return undefined;
   const [row] = await getDb()
     .select()
@@ -67,11 +71,10 @@ export async function budgetSignedUnder(
         eq(grants.connectionId, connectionId),
         eq(grants.permissionId, permissionId),
         eq(grants.kind, 'x402-budget'),
-        isNull(grants.replacedAt),
         gt(grants.expiresAt, sql`now()`)
       )
     );
-  return row && { ...toBudget(row), revokedAt: row.revokedAt };
+  return row && { ...toBudget(row), revokedAt: row.revokedAt, replaced: row.replacedAt !== null };
 }
 
 export const x402Budget = async (connectionId: string): Promise<Grant | undefined> =>
@@ -97,6 +100,28 @@ export async function liveGrants(connectionId: string, db: Tx = getDb()): Promis
     .from(grants)
     .where(and(eq(grants.connectionId, connectionId), live))
     .orderBy(desc(grants.createdAt));
+  return rows.map(toLive);
+}
+
+/** Live grants that count toward the cap beside a new one of `kind`: a new budget replaces the current one. */
+export async function grantsBeside(connectionId: string, kind: GrantKind, db: Tx = getDb()): Promise<number> {
+  const replacedByIt =
+    kind === 'x402-budget' ? or(ne(grants.kind, 'x402-budget'), isNotNull(grants.replacedAt)) : undefined;
+  const rows = await db
+    .select({ id: grants.permissionId })
+    .from(grants)
+    .where(and(eq(grants.connectionId, connectionId), live, replacedByIt));
+  return rows.length;
+}
+
+/** Budgets a newer one replaced that are still approved, as far as this server knows. */
+export async function replacedBudgets(connectionId: string, db: Tx = getDb()): Promise<LiveGrant[]> {
+  const rows = await db
+    .select()
+    .from(grants)
+    .where(
+      and(eq(grants.connectionId, connectionId), live, eq(grants.kind, 'x402-budget'), isNotNull(grants.replacedAt))
+    );
   return rows.map(toLive);
 }
 

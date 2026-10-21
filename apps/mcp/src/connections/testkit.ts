@@ -5,6 +5,7 @@ import { toFunctionSelector, verifyMessage, verifyTypedData, type Address, type 
 import { privateKeyToAccount, generatePrivateKey } from 'viem/accounts';
 import { getDb } from '@/db/client';
 import { grants } from '@/db/schema';
+import { followUps } from '@/grants/requests';
 import { x402Budget, type Grant } from '@/grants/store';
 import type { GrantRequest, ReadPermission } from '@/grants/permission';
 import type { SignedPayload } from '@/lib/chain';
@@ -92,6 +93,16 @@ export const fakeWallet =
     close: () => undefined,
   });
 
+/** For a test that never sends as the session: any send, or chain read around one, fails. */
+export const offlineSession: Pick<DisconnectDeps, 'clients' | 'sender'> = {
+  clients: {
+    publicClient: () => {
+      throw new Error('this test reads no chain');
+    },
+  },
+  sender: () => Promise.reject(new Error('this test sends nothing as the session')),
+};
+
 export const SENT_TX = `0x${'ab'.repeat(32)}` as Hex;
 export type SessionCall = { to: Address; data: Hex };
 
@@ -115,9 +126,12 @@ export function sessionFakes(outcome: Sent = { status: 'landed', txHash: SENT_TX
 
 /** Waits for every wallet session the server started to finish, including ones started meanwhile. */
 export const walletsSettled = async () => {
-  while (runs.size) await Promise.all(runs);
-  // Then what the server chained after each run, such as freeing its slot.
-  await new Promise((resolve) => setImmediate(resolve));
+  do {
+    while (runs.size) await Promise.all(runs);
+    // Then what the server chained after each run, such as freeing its slot or its follow-up.
+    await new Promise((resolve) => setImmediate(resolve));
+    await Promise.all(followUps);
+  } while (runs.size || followUps.size);
 };
 
 let interactionDeps: InteractionDeps = {
@@ -330,7 +344,7 @@ export async function grantBudget(
   await grantPermissions(
     t,
     { x402Budget: { perDay } },
-    { openWallet: fakeWallet(walletAnswers(signer)), readPermission: read }
+    { openWallet: fakeWallet(walletAnswers(signer)), readPermission: read, session: offlineSession }
   );
   await walletsSettled();
   return x402Budget(t.connectionId);

@@ -21,7 +21,7 @@ import { getDb } from '@/db/client';
 import { connections } from '@/db/schema';
 import { isPaymentsPaused } from '@/db/settings';
 import { readOnChain, type ReadPermission } from '@/grants/permission';
-import { liveGrants, recordRevoked, type LiveGrant } from '@/grants/store';
+import { liveGrants, recordRevoked, replacedBudgets, type LiveGrant } from '@/grants/store';
 import { publicClientFor, rpcUrl } from '@/lib/chain';
 import { errorLabel, log } from '@/lib/edge';
 import { reply } from '@/lib/fence';
@@ -152,6 +152,16 @@ export async function sessionSender(t: Session): Promise<SessionSender> {
 
 const DEFAULTS: DisconnectDeps = { readPermission: readOnChain, clients: chainClients, sender: sessionSender };
 
+const NOTHING_REVOKED: Returned = {
+  revoked: [],
+  stillApproved: [],
+  unread: [],
+  swept: 0n,
+  txHash: null,
+  left: null,
+  seenRevoked: [],
+};
+
 interface Returned {
   revoked: Hex[];
   stillApproved: Hex[];
@@ -200,7 +210,7 @@ async function returnAndEnd(s: Session, deps: DisconnectDeps): Promise<Returned 
   try {
     return await withFloat(s.connectionId, deps.lockWaitMs ?? LOCK_WAIT_MS, async (hold) => {
       if (await hold.tx((tx) => sendInFlight(tx, s.connectionId))) return REFUSALS.landing;
-      const returned = await returnFunds(hold, s, deps);
+      const returned = await returnFunds(hold, s, deps, 'everything');
       if (typeof returned === 'string') return returned;
       await hold.tx((tx) => endConnection(s.connectionId, s.account, new Date(), tx));
       return returned;
@@ -213,7 +223,23 @@ async function returnAndEnd(s: Session, deps: DisconnectDeps): Promise<Returned 
 
 /** Revokes every live budget of a session and returns its free float to the owner, under the float lock. */
 export const retire = (s: Session, deps = DEFAULTS): Promise<Returned | string> =>
-  withFloat(s.connectionId, deps.lockWaitMs ?? LOCK_WAIT_MS, (hold) => returnFunds(hold, s, deps));
+  withFloat(s.connectionId, deps.lockWaitMs ?? LOCK_WAIT_MS, (hold) => returnFunds(hold, s, deps, 'everything'));
+
+/**
+ * Revokes as spender the budgets a newer one replaced, and leaves the float for
+ * payments. One it could not revoke stays replaced and unrevoked, for the next
+ * call or the disconnect to pick up.
+ */
+export async function revokeReplaced(s: Session, deps = DEFAULTS): Promise<Returned | string> {
+  if (await isPaymentsPaused()) return REFUSALS.paused;
+  // Read first, so a connection with nothing to revoke never waits on the float lock.
+  if ((await replacedBudgets(s.connectionId)).length === 0) return NOTHING_REVOKED;
+  return withFloat(s.connectionId, deps.lockWaitMs ?? LOCK_WAIT_MS, async (hold) => {
+    // A payment or execute still in flight may pull under a budget this would revoke.
+    if (await hold.tx((tx) => sendInFlight(tx, s.connectionId))) return REFUSALS.landing;
+    return returnFunds(hold, s, deps, 'replaced');
+  }).catch((err: unknown) => (err instanceof FloatBusy ? REFUSALS.busy : errorLabel(err)));
+}
 
 /**
  * Returns the float, revokes the budgets and ends a connection whose refresh
@@ -271,11 +297,23 @@ function summarize(t: Tenant, r: Returned): string {
   return said.join(' ');
 }
 
-async function returnFunds(hold: FloatHold, t: Session, deps: DisconnectDeps): Promise<Returned | string> {
+/**
+ * `everything` revokes every live grant and returns the free float to the owner.
+ * `replaced` revokes only the budgets a newer one replaced and leaves the float.
+ */
+async function returnFunds(
+  hold: FloatHold,
+  t: Session,
+  deps: DisconnectDeps,
+  scope: 'everything' | 'replaced'
+): Promise<Returned | string> {
   const usdc = usdcForNetwork(`eip155:${t.chainId}`);
   if (!usdc) return REFUSALS.chain;
-  const live = await hold.tx((tx) => liveGrants(t.connectionId, tx));
-  const returned = await sendBatch(hold, t, deps, live, usdc.address);
+  const live = await hold.tx((tx) =>
+    scope === 'everything' ? liveGrants(t.connectionId, tx) : replacedBudgets(t.connectionId, tx)
+  );
+  if (scope === 'replaced' && live.length === 0) return NOTHING_REVOKED;
+  const returned = await sendBatch(hold, t, deps, live, usdc.address, scope === 'everything');
   if (typeof returned === 'string') return returned;
   const ids = [...returned.revoked, ...returned.seenRevoked];
   if (ids.length) await hold.tx((tx) => recordRevoked(ids, tx));
@@ -287,7 +325,8 @@ async function sendBatch(
   t: Session,
   deps: DisconnectDeps,
   live: LiveGrant[],
-  token: Address
+  token: Address,
+  sweep: boolean
 ): Promise<Returned | string> {
   const revokes: { permissionId: Hex; call: SessionCall }[] = [];
   const seenRevoked: Hex[] = [];
@@ -328,7 +367,7 @@ async function sendBatch(
     data: encodeFunctionData({ abi: erc20Abi, functionName: 'transfer', args: [t.account, amount] }),
   });
   const nothingSent = { revoked: [], swept: 0n, txHash: null, left: float, seenRevoked, unread };
-  if (revokes.length === 0 && free === 0n) return { ...nothingSent, stillApproved: [] };
+  if (revokes.length === 0 && (!sweep || free === 0n)) return { ...nothingSent, stillApproved: [] };
 
   const sender = await deps.sender(t).catch((err) => {
     log('error', { msg: 'disconnect sender unavailable', error: errorLabel(err) });
@@ -337,7 +376,7 @@ async function sendBatch(
   if (!sender) return REFUSALS.notSent;
   const batch = (swept: bigint, reserve: bigint): SessionCall[] => [
     ...revokes.map((r) => r.call),
-    transfer(swept),
+    ...(sweep ? [transfer(swept)] : []),
     // Last, so it overwrites any allowance before it: the fee can take the reserve
     // and never what payments hold. A fee above it reverts the whole batch.
     {
@@ -401,14 +440,14 @@ async function sendBatch(
       return undefined;
     });
   };
-  let swept = free - reserve;
+  let swept = sweep ? free - reserve : 0n;
   let sent = await sendWith(reserve);
   // A fee over the reserve reverts with nothing moved; one more try at the ceiling.
   // A float under the ceiling cannot pay more, so the budgets go to the owner and the
   // connection still ends.
   if (sent?.status === 'reverted' && reserve < fee.max) {
     if (free <= fee.max) return (await tryRevokeOnly()) ?? leaveToOwner();
-    swept = free - fee.max;
+    swept = sweep ? free - fee.max : 0n;
     sent = await sendWith(fee.max);
   }
   if (!sent) return REFUSALS.notSent;

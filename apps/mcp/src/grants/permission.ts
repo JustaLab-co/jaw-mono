@@ -4,12 +4,12 @@ import {
   type PermissionReadTarget,
   type PermissionState,
 } from '@jaw.id/agent';
-import { and, eq, isNull, sql } from 'drizzle-orm';
+import { and, eq, isNull, ne, sql } from 'drizzle-orm';
 import { isAddressEqual, isHex, numberToHex, toFunctionSelector, type Address, type Hex } from 'viem';
 import type { Tx } from '@/db/client';
 import { connections, grants, SPEND_UNITS } from '@/db/schema';
 import { publicClientFor } from '@/lib/chain';
-import { liveGrants, LIVE_GRANTS_PER_CONNECTION, type GrantKind } from './store';
+import { grantsBeside, LIVE_GRANTS_PER_CONNECTION, type GrantKind } from './store';
 
 const TRANSFER_SIGNATURE = 'transfer(address,uint256)';
 
@@ -132,14 +132,28 @@ export async function recordGrant(tx: Tx, connectionId: string, grant: NewGrant)
       and(eq(grants.permissionId, grant.permissionId), eq(grants.connectionId, connectionId), isNull(grants.revokedAt))
     );
   if (recorded) return;
-  if ((await liveGrants(connectionId, tx)).length >= LIVE_GRANTS_PER_CONNECTION) {
+  if ((await grantsBeside(connectionId, grant.kind, tx)) >= LIVE_GRANTS_PER_CONNECTION) {
     throw new Error(`the connection already holds ${LIVE_GRANTS_PER_CONNECTION} live grants`);
   }
   const inserted = await tx
     .insert(grants)
     .values({ ...grant, connectionId, createdAt: sql`clock_timestamp()` })
     .onConflictDoNothing()
-    .returning({ id: grants.permissionId });
+    .returning({ permissionId: grants.permissionId });
   if (inserted.length === 0)
     throw new Error('a grant with that id was already revoked or belongs to another connection');
+  if (grant.kind !== 'x402-budget') return;
+  // Payments draw from the newest budget only, so an older one is exposure with no use.
+  await tx
+    .update(grants)
+    .set({ replacedAt: new Date() })
+    .where(
+      and(
+        eq(grants.connectionId, connectionId),
+        eq(grants.kind, 'x402-budget'),
+        ne(grants.permissionId, grant.permissionId),
+        isNull(grants.replacedAt),
+        isNull(grants.revokedAt)
+      )
+    );
 }

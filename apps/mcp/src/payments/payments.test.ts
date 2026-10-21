@@ -34,6 +34,7 @@ import {
   walletAnswers,
   walletsSettled,
   sessionFakes,
+  offlineSession,
 } from '@/connections/testkit';
 import { floatHolder, getDb, setDb } from '@/db/client';
 import { connections, grants, payments, settings } from '@/db/schema';
@@ -272,7 +273,11 @@ async function connected(perDay?: string) {
 async function approveBudget(c: Awaited<ReturnType<typeof connect>>, perDay: string) {
   const t = (await verifyBearer(c.access_token))?.extra?.tenant as Tenant;
   const wallet = fakeWallet(walletAnswers(c.signer));
-  await grantPermissions(t, { x402Budget: { perDay } }, { openWallet: wallet, readPermission: approvedOnChain });
+  await grantPermissions(
+    t,
+    { x402Budget: { perDay } },
+    { openWallet: wallet, session: offlineSession, readPermission: approvedOnChain }
+  );
   await walletsSettled();
   if (!(await x402Budget(t.connectionId))) throw new Error('no budget');
   balances.set(c.signer.address.toLowerCase(), 5_000_000n);
@@ -542,10 +547,25 @@ describe('jaw_session_x402_pay', () => {
     });
   });
 
-  it.each([
-    ['expired', { expiresAt: new Date(Date.now() - 1000) }],
-    ['was replaced before a connection held several budgets', { replacedAt: new Date() }],
-  ])(
+  it('given a lost answer and a newer budget whose approval revoked the older on chain, when the key is retried, then the proof goes out again', async () => {
+    const { c, t } = await connected('1');
+    balances.set(t.sessionAddress.toLowerCase(), 1_000_000n);
+    dropNextLost = true;
+    const lost = await pay(t, { url: url('/lost'), idempotencyKey: 'replaced-resend' }, deps());
+    expect(lost.structuredContent).toMatchObject({ state: 'signed', refusal: { code: 'no_response' } });
+    const signedUnder = (await rowOf(lost.structuredContent!.paymentId)).permissionId!;
+    await approveBudget(c, '1');
+    await getDb().update(grants).set({ revokedAt: new Date() }).where(eq(grants.permissionId, signedUnder));
+    const later = await otherReplica();
+    const revoked = deps({ readPermission: async () => ({ status: 'ok', approved: true, revoked: true }) });
+
+    const again = await later(t, { url: url('/lost'), idempotencyKey: 'replaced-resend' }, revoked);
+
+    expect(again.structuredContent).toMatchObject({ state: 'settled' });
+    expect(seen.map((s) => s.signature)).toEqual([seen[0].signature, seen[0].signature]);
+  });
+
+  it.each([['expired', { expiresAt: new Date(Date.now() - 1000) }]])(
     'given a lost answer and a budget that since %s, when the key is retried, then no_grant, the proof is not sent again, and no budget is suggested',
     async (_name, ended) => {
       const { c, t } = await connected('1');
@@ -1478,14 +1498,14 @@ describe('jaw_session_x402_pay', () => {
   });
 });
 
-describe('given two budgets on one connection, the newer one changed in the wallet', () => {
+describe('given a budget a newer one replaced, and the newer one changed in the wallet', () => {
   async function twoBudgets() {
     const { c, t } = await connected('1');
     const older = (await x402Budget(t.connectionId))!.permissionId;
     await approveBudget(c, '1');
     const newer = (await x402Budget(t.connectionId))!.permissionId;
     balances.set(t.sessionAddress.toLowerCase(), 1_000_000n);
-    return { t, older, newer };
+    return { c, t, older, newer };
   }
   const answering =
     (id: string, state: PermissionState): PayDeps['readPermission'] =>
@@ -1493,50 +1513,58 @@ describe('given two budgets on one connection, the newer one changed in the wall
       permissionId === id ? state : { status: 'ok', approved: true, revoked: false };
   const revokedAtOf = async (id: string) =>
     (await getDb().select().from(grants).where(eq(grants.permissionId, id)))[0].revokedAt;
+  const replacedAtOf = async (id: string) =>
+    (await getDb().select().from(grants).where(eq(grants.permissionId, id)))[0].replacedAt;
 
-  it('when the newer one was revoked, then the payment is made from the older one and the newer one is recorded revoked', async () => {
+  it('when the newer one was revoked, then nothing is signed from the replaced one: grant_revoked points at a new budget, and the newer one is recorded revoked', async () => {
     const { t, older, newer } = await twoBudgets();
     const read = answering(newer, { status: 'ok', approved: true, revoked: true });
-    const result = await pay(t, { url: url('/exact'), idempotencyKey: 'falls-back' }, deps({ readPermission: read }));
-    expect(result.structuredContent).toMatchObject({ kind: 'paid' });
-    expect((await rowOf(result.structuredContent!.paymentId)).permissionId).toBe(older);
+    const result = await pay(t, { url: url('/exact'), idempotencyKey: 'no-fallback' }, deps({ readPermission: read }));
+    expect(result.structuredContent).toMatchObject({
+      state: 'failed',
+      refusal: { code: 'grant_revoked', next: 'jaw_grant_permissions' },
+    });
+    expect(result.structuredContent!.summary).toContain('jaw_grant_permissions');
+    expect(seen).toEqual([]);
+    expect((await rowOf(result.structuredContent!.paymentId)).permissionId).toBe(newer);
     expect(await revokedAtOf(newer)).toBeInstanceOf(Date);
-    expect(await revokedAtOf(older)).toBeNull();
-    expect((await x402Budget(t.connectionId))?.permissionId).toBe(older);
+    expect(await replacedAtOf(older)).toBeInstanceOf(Date);
+    expect(await x402Budget(t.connectionId)).toBeUndefined();
   });
 
   it.each([
     ['reads not approved but not revoked', { status: 'ok', approved: false, revoked: false }],
     ['hashes to another id', { status: 'mismatch' }],
   ] as const)(
-    'when the newer one %s, then the older one pays and the newer one is not recorded revoked',
+    'when the newer one %s, then the replaced one does not pay: grant_revoked, and the newer one is not recorded revoked',
     async (_name, state) => {
-      const { t, older, newer } = await twoBudgets();
+      const { t, newer } = await twoBudgets();
       const result = await pay(t, { url: url('/exact') }, deps({ readPermission: answering(newer, state) }));
-      expect(result.structuredContent).toMatchObject({ kind: 'paid' });
-      expect((await rowOf(result.structuredContent!.paymentId)).permissionId).toBe(older);
+      expect(result.structuredContent).toMatchObject({
+        state: 'failed',
+        refusal: { code: 'grant_revoked', next: 'jaw_grant_permissions' },
+      });
+      expect(seen).toEqual([]);
+      expect((await rowOf(result.structuredContent!.paymentId)).permissionId).toBe(newer);
       expect(await revokedAtOf(newer)).toBeNull();
     }
   );
 
-  it('when the row cannot be charged to the older one, then nothing is signed and the same key pays once the store answers', async () => {
-    const { t, older, newer } = await twoBudgets();
+  it('when the newer one was revoked and the owner approves a new budget, then the next payment draws from the new one, never the replaced one', async () => {
+    const { c, t, older, newer } = await twoBudgets();
     const read = answering(newer, { status: 'ok', approved: true, revoked: true });
-    const restore = await failUpdates('recharge', 'new.permission_id <> old.permission_id');
-    let first;
-    try {
-      first = await pay(t, { url: url('/exact'), idempotencyKey: 'recharge' }, deps({ readPermission: read }));
-    } finally {
-      await restore();
-    }
-    expect(first.structuredContent).toMatchObject({ state: 'failed', refusal: { code: 'store_failed' } });
-    expect(seen).toEqual([]);
-    const again = await pay(t, { url: url('/exact'), idempotencyKey: 'recharge' }, deps({ readPermission: read }));
-    expect(again.structuredContent).toMatchObject({ kind: 'paid' });
-    expect((await rowOf(again.structuredContent!.paymentId)).permissionId).toBe(older);
+    const refused = await pay(t, { url: url('/exact'), idempotencyKey: 'before-new' }, deps({ readPermission: read }));
+    expect(refused.structuredContent).toMatchObject({ refusal: { code: 'grant_revoked' } });
+    await approveBudget(c, '1');
+    const latest = (await x402Budget(t.connectionId))!.permissionId;
+    expect([older, newer]).not.toContain(latest);
+
+    const paid = await pay(t, { url: url('/exact'), idempotencyKey: 'after-new' }, deps({ readPermission: read }));
+    expect(paid.structuredContent).toMatchObject({ kind: 'paid' });
+    expect((await rowOf(paid.structuredContent!.paymentId)).permissionId).toBe(latest);
   });
 
-  it('when the newer one cannot be read, then it is refused chain_unavailable and nothing is signed from the older one', async () => {
+  it('when the newer one cannot be read, then it is refused chain_unavailable and nothing is signed from the replaced one', async () => {
     const { t, older, newer } = await twoBudgets();
     const read = answering(newer, { status: 'unavailable' });
     const result = await pay(t, { url: url('/exact'), idempotencyKey: 'unread' }, deps({ readPermission: read }));
@@ -1598,7 +1626,7 @@ describe('given two budgets on one connection, the newer one changed in the wall
   });
 });
 
-describe('given three budgets on one connection, the newest revoked in the wallet', () => {
+describe('given two older budgets the newest replaced, and the newest revoked in the wallet', () => {
   async function threeBudgets() {
     const { c, t } = await connected('1');
     const oldest = (await x402Budget(t.connectionId))!.permissionId;
@@ -1610,34 +1638,38 @@ describe('given three budgets on one connection, the newest revoked in the walle
     return { t, oldest, middle, newest };
   }
 
-  it('when the middle one cannot be read, then it is refused chain_unavailable and the oldest does not pay', async () => {
-    const { t, oldest, middle, newest } = await threeBudgets();
-    const read: PayDeps['readPermission'] = async ({ permissionId }) =>
-      permissionId === newest
+  it('when a replaced one cannot be read, then it is never read: the refusal is grant_revoked, not chain_unavailable', async () => {
+    const { t, middle, newest } = await threeBudgets();
+    const reads: string[] = [];
+    const read: PayDeps['readPermission'] = async ({ permissionId }) => {
+      reads.push(permissionId);
+      return permissionId === newest
         ? { status: 'ok', approved: true, revoked: true }
         : permissionId === middle
           ? { status: 'unavailable' }
           : { status: 'ok', approved: true, revoked: false };
+    };
     const result = await pay(t, { url: url('/exact') }, deps({ readPermission: read }));
-    expect(result.structuredContent).toMatchObject({ state: 'failed', refusal: { code: 'chain_unavailable' } });
+    expect(result.structuredContent).toMatchObject({
+      state: 'failed',
+      refusal: { code: 'grant_revoked', next: 'jaw_grant_permissions' },
+    });
     expect(seen).toEqual([]);
-    expect((await rowOf(result.structuredContent!.paymentId)).permissionId).not.toBe(oldest);
+    expect(reads).toEqual([newest]);
   });
 
-  it('when the middle one is not approved, then the oldest pays and the refusal of the newest is not what the agent sees', async () => {
+  it('when the replaced ones still read approved on chain, then neither pays', async () => {
     const { t, oldest, middle, newest } = await threeBudgets();
     const read: PayDeps['readPermission'] = async ({ permissionId }) =>
       permissionId === newest
         ? { status: 'ok', approved: true, revoked: true }
-        : permissionId === middle
-          ? { status: 'ok', approved: false, revoked: false }
-          : { status: 'ok', approved: true, revoked: false };
+        : { status: 'ok', approved: true, revoked: false };
     const result = await pay(t, { url: url('/exact') }, deps({ readPermission: read }));
-    expect(result.structuredContent).toMatchObject({ kind: 'paid' });
-    expect((await rowOf(result.structuredContent!.paymentId)).permissionId).toBe(oldest);
+    expect(result.structuredContent).toMatchObject({ state: 'failed', refusal: { code: 'grant_revoked' } });
+    expect(seen).toEqual([]);
+    expect([oldest, middle]).not.toContain((await rowOf(result.structuredContent!.paymentId)).permissionId);
   });
 });
-
 describe('given two budgets, when two payments run within half a minute', () => {
   async function readsOfNewer(newerAnswers: PermissionState) {
     const { c, t } = await connected('1');
@@ -1980,6 +2012,21 @@ describe('the raw body kept for an internal caller', () => {
     expect(await refusalOf(getDb().execute(sql`update payments set body = 'early' where id = ${id}`))).toMatch(
       /payment_body/
     );
+  });
+});
+
+describe('given a pay request that chose a budget', () => {
+  it('when a newer budget replaced the one it chose before its refill turn, then it refuses, pulls nothing and signs nothing', async () => {
+    const { c, t } = await connected('1');
+    onProbe.set('/race', () => approveBudget(c, '2'));
+    const result = await pay(t, { url: url('/race'), idempotencyKey: 'replaced-refill' }, deps());
+    expect(result.structuredContent).toMatchObject({
+      kind: 'refused',
+      payerRefilled: false,
+      refusal: { code: 'not_allowed' },
+    });
+    expect(refills).toEqual([]);
+    expect(seen).toHaveLength(0);
   });
 });
 

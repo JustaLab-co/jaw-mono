@@ -11,7 +11,7 @@ import { registerDiscoverTool } from '@/tools/discover';
 import { registerDisconnectTool } from '@/tools/disconnect';
 import { registerHistoryTool } from '@/tools/history';
 import { registerPayTool } from '@/tools/pay-and-fetch';
-import { registerGrantTool } from '@/tools/grant-permissions';
+import { registerGrantTool, retryReplacedRevokes } from '@/tools/grant-permissions';
 import { registerOwnerCallTools } from '@/tools/owner-calls';
 import { registerSignTool } from '@/tools/sign';
 import { registerSwapTools } from '@/tools/swap';
@@ -25,6 +25,7 @@ export const dynamic = 'force-dynamic';
 const mcp = createMcpHandler(
   (server) => {
     auditTools(server);
+    retryReplacedRevokes(server);
     guardTools(server);
     registerReadTools(server);
     registerAccountTools(server);

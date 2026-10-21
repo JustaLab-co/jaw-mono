@@ -220,6 +220,8 @@ export type LinkRequest = {
   approveBy: Date;
   payload: unknown;
   rebuild: Rebuild;
+  /** Runs once the outcome is stored, so slow follow-up work never holds the row open. */
+  settled?: (outcome: Outcome) => Promise<void>;
 } & LinkKind;
 
 /** Whether a revoke of this permission already waits, so asking again opens nothing. */
@@ -285,7 +287,7 @@ export async function openLink(t: Tenant, req: LinkRequest, openWallet: OpenWall
     if (!row || row === FULL) wallet.close();
   }
   if (row === FULL || !row) return refuse(row === FULL ? 'account_busy' : 'wallet_busy');
-  follow(row, wallet, work);
+  follow(row, wallet, work, false, req.settled);
   return { opened: row };
 }
 
@@ -293,7 +295,16 @@ export async function openLink(t: Tenant, req: LinkRequest, openWallet: OpenWall
 export const reconnecting = (row: PermissionRequestRow) => row.relay !== null && !leaseHeld(row.sessionUntil);
 export const RECONNECTING = " This server is reconnecting to the owner's open link.";
 
-function follow(row: PermissionRequestRow, wallet: Wallet, work: Work, resumed = false) {
+/** Work the server still runs after it answered, such as what a settled link triggers. */
+export const followUps = new Set<Promise<void>>();
+
+function follow(
+  row: PermissionRequestRow,
+  wallet: Wallet,
+  work: Work,
+  resumed = false,
+  settled?: LinkRequest['settled']
+) {
   const mine = and(heldBy(row), awaiting);
   const stop = keepLease(
     async () => {
@@ -325,15 +336,21 @@ function follow(row: PermissionRequestRow, wallet: Wallet, work: Work, resumed =
   // A run that fails on the way, not on an answer, leaves the row to the next resume.
   const onTheWay = (err: unknown) =>
     rejoinable && !(err instanceof PageGone) && typeof (err as { code?: unknown } | undefined)?.code !== 'number';
-  let answered = false;
+  let answered: Outcome | undefined;
+  // Counted from the moment the outcome is stored, so nothing waiting on followUps misses it.
+  let after: PromiseWithResolvers<void> | undefined;
   void wallet
     .run(async (ask) => {
       const outcome = await work(ask, claim).catch((err: unknown) => {
         if (onTheWay(err)) throw err;
         return ended(err);
       });
-      answered = true;
+      answered = outcome;
       await settle(row, outcome);
+      if (settled) {
+        after = Promise.withResolvers();
+        followUps.add(after.promise);
+      }
     }, joined)
     .catch((err: unknown) => {
       if (answered) throw err;
@@ -348,7 +365,17 @@ function follow(row: PermissionRequestRow, wallet: Wallet, work: Work, resumed =
     .catch((err: unknown) =>
       log('warn', { msg: 'permission request not settled', permissionRequestId: row.id, error: errorLabel(err) })
     )
-    .finally(stop);
+    .finally(stop)
+    // After the wallet session ends, so the owner's page closes and its relay slot frees at once.
+    .then(() => answered && settled?.(answered))
+    .catch((err: unknown) =>
+      log('warn', { msg: 'permission request follow-up failed', permissionRequestId: row.id, error: errorLabel(err) })
+    )
+    .finally(() => {
+      if (!after) return;
+      followUps.delete(after.promise);
+      after.resolve();
+    });
 }
 
 const parsed = (payload: string | null): unknown => {

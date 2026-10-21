@@ -12,6 +12,7 @@ import {
   setTestEnv,
   walletAnswers,
   walletsSettled,
+  offlineSession,
 } from '@/connections/testkit';
 import { getDb } from '@/db/client';
 import { payments } from '@/db/schema';
@@ -102,7 +103,11 @@ async function withBudget(perDay: string) {
   const c = await connect();
   const t = (await verifyBearer(c.access_token))?.extra?.tenant as Tenant;
   const wallet = fakeWallet(walletAnswers(c.signer));
-  await grantPermissions(t, { x402Budget: { perDay } }, { openWallet: wallet, readPermission: approvedOnChain });
+  await grantPermissions(
+    t,
+    { x402Budget: { perDay } },
+    { openWallet: wallet, readPermission: approvedOnChain, session: offlineSession }
+  );
   await walletsSettled();
   const permissionId = (await x402Budget(t.connectionId))!.permissionId;
   asked.push({ id: permissionId });

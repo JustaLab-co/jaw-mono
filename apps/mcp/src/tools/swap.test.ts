@@ -30,6 +30,7 @@ import {
   setTestEnv,
   walletAnswers,
   walletsSettled,
+  offlineSession,
 } from '@/connections/testkit';
 import { getDb } from '@/db/client';
 import { connections, grants, payments, settings, swaps } from '@/db/schema';
@@ -231,7 +232,11 @@ async function connected(
   balances.set(c.signer.address.toLowerCase(), 5_000_000n);
   const budget = async (day: string) => {
     const wallet = fakeWallet(walletAnswers(c.signer));
-    await grantPermissions(t, { x402Budget: { perDay: day } }, { openWallet: wallet, readPermission: approvedOnChain });
+    await grantPermissions(
+      t,
+      { x402Budget: { perDay: day } },
+      { openWallet: wallet, session: offlineSession, readPermission: approvedOnChain }
+    );
     await walletsSettled();
     if (!(await x402Budget(t.connectionId))) throw new Error('no budget');
   };

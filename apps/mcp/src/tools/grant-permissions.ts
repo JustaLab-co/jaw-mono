@@ -1,17 +1,35 @@
 import { ANY_FN_SEL, ANY_TARGET, EMPTY_CALLDATA_FN_SEL } from '@jaw.id/core';
 import { usdcForNetwork } from '@jaw.id/agent';
 import type { McpServer } from '@modelcontextprotocol/server';
-import { isAddress, numberToHex, parseUnits, toFunctionSelector, type Address } from 'viem';
+import {
+  formatUnits,
+  isAddress,
+  isAddressEqual,
+  numberToHex,
+  parseUnits,
+  toFunctionSelector,
+  type Address,
+} from 'viem';
 import { z } from 'zod';
+import { chainClients } from '@/adapters/session-host';
 import { tenant, type Tenant } from '@/connections/auth';
+import { revokeReplaced, sessionSender, type DisconnectDeps } from '@/connections/disconnect';
 import { APPROVE_WITHIN_MS } from '@/connections/config';
 import { ownerRelay, type OpenWallet } from '@/connections/relay';
 import { spends } from '@/connections/scopes';
 import { SPEND_UNITS } from '@/db/schema';
 import { budgetGrant, readOnChain, type GrantRequest, type ReadPermission } from '@/grants/permission';
-import { lostBefore, lostPreamble, openLink, RECONNECTING, reconnecting } from '@/grants/requests';
+import { followUps, lostBefore, lostPreamble, openLink, RECONNECTING, reconnecting } from '@/grants/requests';
 import { grantWork, type GrantPayload } from '@/grants/resume';
-import { liveGrants, LIVE_GRANTS_PER_CONNECTION, type GrantKind } from '@/grants/store';
+import {
+  grantsBeside,
+  liveGrants,
+  LIVE_GRANTS_PER_CONNECTION,
+  x402Budget,
+  type GrantKind,
+  type LiveGrant,
+} from '@/grants/store';
+import { errorLabel, log } from '@/lib/edge';
 import { reply } from '@/lib/fence';
 import { forbiddenTargets } from './owner-calls';
 import { ACCOUNT_BUSY, NO_PAY_SCOPE, refusal } from './reply';
@@ -80,9 +98,15 @@ export type GrantInput = z.input<typeof grantInput>;
 interface GrantDeps {
   openWallet: OpenWallet;
   readPermission: ReadPermission;
+  /** What revokes replaced budgets as spender. */
+  session: Pick<DisconnectDeps, 'clients' | 'sender' | 'lockWaitMs'>;
 }
 
-const DEFAULTS: GrantDeps = { openWallet: ownerRelay, readPermission: readOnChain };
+const DEFAULTS: GrantDeps = {
+  openWallet: ownerRelay,
+  readPermission: readOnChain,
+  session: { clients: chainClients, sender: sessionSender },
+};
 
 const output = z.object({ url: z.url(), expiresAt: z.string(), summary: z.string() });
 
@@ -128,6 +152,34 @@ function asked(t: Tenant, input: GrantInput, expiry: number): Asked | string {
   return { kind: 'custom', grant, what: `${calls.length} call(s) and ${spent.length} spend limit(s)` };
 }
 
+/** Revokes the budgets a newer one replaced. One left approved stays replaced, so nothing pays from it. */
+async function revokeOlder(t: Tenant, deps: GrantDeps) {
+  const outcome = await revokeReplaced(t, { readPermission: deps.readPermission, ...deps.session }).catch(errorLabel);
+  if (typeof outcome === 'string') log('warn', { msg: 'replaced budget not revoked', error: outcome });
+  else if (outcome.stillApproved.length || outcome.unread.length) {
+    log('warn', { msg: 'replaced budget not revoked', error: [...outcome.stillApproved, ...outcome.unread].join(',') });
+  }
+}
+
+/** What the connection's live grants let the session key move, summed per token and period. */
+function liveTotals(t: Tenant, held: LiveGrant[]): string {
+  const usdc = usdcForNetwork(`eip155:${t.chainId}`);
+  const sums = new Map<string, { token: string; per: string; amount: bigint }>();
+  for (const { token, unit, multiplier, allowance } of held.flatMap((g) => g.permission.spends)) {
+    const per = unit === 'forever' ? 'in total' : multiplier === 1 ? `per ${unit}` : `per ${multiplier} ${unit}s`;
+    const key = `${token.toLowerCase()}:${per}`;
+    const sum = sums.get(key) ?? { token, per, amount: 0n };
+    sums.set(key, { ...sum, amount: sum.amount + BigInt(allowance) });
+  }
+  if (!sums.size) return 'No grant approved on chain for this connection lets the session key move tokens yet. ';
+  const lines = [...sums.values()].map(({ token, per, amount }) =>
+    usdc && isAddressEqual(token as Address, usdc.address)
+      ? `${formatUnits(amount, usdc.decimals)} USDC ${per}`
+      : `${amount} base units of ${token} ${per}`
+  );
+  return `The ${held.length} grant(s) approved on chain for this connection already let the session key move up to ${lines.join(', ')}. `;
+}
+
 export async function grantPermissions(t: Tenant, input: GrantInput, deps = DEFAULTS) {
   if (input.x402Budget && (input.calls || input.spends || input.expiresAt)) {
     return refusal('x402Budget is a preset: pass it alone, or pass calls and spends without it.');
@@ -145,12 +197,15 @@ export async function grantPermissions(t: Tenant, input: GrantInput, deps = DEFA
   }
   const ask = asked(t, input, Math.floor(expiresAt.getTime() / 1000));
   if (typeof ask === 'string') return refusal(ask);
-  if ((await liveGrants(t.connectionId)).length >= LIVE_GRANTS_PER_CONNECTION) {
+  if ((await grantsBeside(t.connectionId, ask.kind)) >= LIVE_GRANTS_PER_CONNECTION) await revokeOlder(t, deps);
+  if ((await grantsBeside(t.connectionId, ask.kind)) >= LIVE_GRANTS_PER_CONNECTION) {
     return refusal(
       `This connection already holds ${LIVE_GRANTS_PER_CONNECTION} live grants, the most one connection may hold. ` +
-        'Wait for one to expire, or call jaw_session_disconnect, which revokes them all, and connect again.'
+        'Wait for one to expire, revoke one listed by jaw_connections with jaw_revoke_permission, or call jaw_session_disconnect, which revokes them all, and connect again.'
     );
   }
+  const held = await liveGrants(t.connectionId);
+  const replacing = ask.kind === 'x402-budget' && (await x402Budget(t.connectionId)) !== undefined;
   const payload: GrantPayload = { kind: ask.kind, grant: ask.grant };
   const opened = await openLink(
     t,
@@ -160,6 +215,9 @@ export async function grantPermissions(t: Tenant, input: GrantInput, deps = DEFA
       approveBy: until,
       payload,
       rebuild: grantWork(deps.readPermission),
+      settled: async ({ state }) => {
+        if (state === 'approved') await revokeOlder(t, deps);
+      },
     },
     deps.openWallet
   );
@@ -188,9 +246,41 @@ export async function grantPermissions(t: Tenant, input: GrantInput, deps = DEFA
       warning +
       `Ask the account owner to open ${url} and approve ${ask.what} until ${ends} in their wallet, before ${row.approveBy.toISOString()}. ` +
       'Once they do, the session key acts within it with no further prompts. ' +
+      liveTotals(t, held) +
+      (replacing
+        ? 'Approving this budget replaces the current one, which this server then tries to revoke on chain. ' +
+          'Nothing pays from a replaced budget, but if the revoke fee cannot be paid it stays approved on chain until it expires or jaw_revoke_permission revokes it. '
+        : '') +
       'Right after showing the link, call jaw_session_status yourself to see the grant in force, and again on each later turn until that time; do not wait for the owner to say they approved. ' +
-      'A grant approved earlier on this connection stays approved on chain until it expires or jaw_session_disconnect revokes it.',
+      'Other grants approved earlier on this connection stay approved on chain until they expire or jaw_session_disconnect revokes them.',
   });
+}
+
+const RETRY_EVERY_MS = 5 * 60_000;
+const RETRY_LOCK_WAIT_MS = 1_000;
+const lastRetry = new Map<string, number>();
+
+/**
+ * After any tool call, retries in the background the revoke of a budget a newer
+ * one replaced, at most every few minutes per connection. Only a request holds
+ * the session key, so no timer can do it.
+ */
+export function retryReplacedRevokes(server: McpServer, deps = DEFAULTS): void {
+  const register = server.registerTool.bind(server) as (...args: unknown[]) => unknown;
+  server.registerTool = ((name: string, config: unknown, handler: (...args: unknown[]) => unknown) =>
+    register(name, config, async (...args: unknown[]) => {
+      const result = await handler(...args);
+      const t = tenant(args.at(-1) as Parameters<typeof tenant>[0]);
+      if ((lastRetry.get(t.connectionId) ?? 0) <= Date.now() - RETRY_EVERY_MS) {
+        lastRetry.set(t.connectionId, Date.now());
+        const after: Promise<void> = revokeOlder(t, {
+          ...deps,
+          session: { ...deps.session, lockWaitMs: RETRY_LOCK_WAIT_MS },
+        }).finally(() => followUps.delete(after));
+        followUps.add(after);
+      }
+      return result;
+    })) as typeof server.registerTool;
 }
 
 export function registerGrantTool(server: McpServer) {
@@ -199,8 +289,9 @@ export function registerGrantTool(server: McpServer) {
     {
       description:
         'Ask the account owner to grant this session key a permission, approved once in their JAW wallet. ' +
-        'Pass x402Budget for the payment budget: a daily USDC allowance that payments, refills and swap quotes draw from with no further prompts; payments use the newest one still approved on chain. ' +
+        'Pass x402Budget for the payment budget: a daily USDC allowance that payments, refills and swap quotes draw from with no further prompts; payments use the newest one only. ' +
         'Or pass calls, the contract functions the session key may call, and spends, how much of each token it may move per period, for a custom grant. ' +
+        'A new x402Budget replaces the current one, which the server then tries to revoke on chain; nothing pays from a replaced budget, but if the revoke fee cannot be paid it stays approved on chain until it expires or jaw_revoke_permission revokes it. ' +
         'The grant ends at expiresAt, or with the connection when that comes first. A connection holds at most 5 live grants. Returns a link for the owner. For a one-off contract call use jaw_send_calls, which asks the owner each time.',
       inputSchema: grantInput,
       outputSchema: output,

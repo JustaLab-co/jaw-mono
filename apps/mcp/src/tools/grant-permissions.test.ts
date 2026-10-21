@@ -11,10 +11,12 @@ import {
   grantBudget,
   connect,
   fakeWallet,
+  mcp,
   owner,
   setTestEnv,
   walletAnswers,
   walletsSettled,
+  offlineSession,
 } from '@/connections/testkit';
 import { getDb } from '@/db/client';
 import { grants, permissionRequests } from '@/db/schema';
@@ -54,6 +56,7 @@ async function grant(
   }, asked);
   const result = await grantPermissions(t, input, {
     openWallet: async (...args) => (opened++, wallet(...args)),
+    session: offlineSession,
     readPermission: approvedOnChain,
   });
   await walletsSettled();
@@ -113,6 +116,28 @@ describe('jaw_grant_permissions', () => {
       period: 'day',
     });
     expect((await x402Budget(t.connectionId))?.allowance).toBe('2500000');
+  });
+
+  it('given a budget in force, when a new one is asked, then the reply says the revoke of the current one is only tried', async () => {
+    const { t, signer } = await connected();
+
+    const { result } = await grant(t, signer, { x402Budget: { perDay: '2' } });
+
+    const summary = 'structuredContent' in result ? result.structuredContent.summary : '';
+    expect(summary).toContain('replaces the current one, which this server then tries to revoke on chain');
+    expect(summary).toContain('stays approved on chain until it expires or jaw_revoke_permission revokes it');
+    expect(summary).not.toContain('then revokes');
+  });
+
+  it('when a client lists the tools, then the description says the revoke of a replaced budget is only tried', async () => {
+    const { c } = await connected();
+
+    const { json } = await mcp(c.access_token, { method: 'tools/list' });
+
+    const { description } = json.result.tools.find((t: { name: string }) => t.name === 'jaw_grant_permissions');
+    expect(description).toContain('replaces the current one, which the server then tries to revoke on chain');
+    expect(description).toContain('stays approved on chain until it expires or jaw_revoke_permission revokes it');
+    expect(description).not.toContain('then revokes');
   });
 
   it('given two calls and two spends, then the wallet is asked for exactly those, and a custom row keeps them all', async () => {
@@ -397,6 +422,7 @@ describe('jaw_grant_permissions', () => {
       openWallet: (async (...args) => (
         opened++, fakeWallet(async (method, params) => (await held, honest(method, params)))(...args)
       )) as OpenWallet,
+      session: offlineSession,
       readPermission: approvedOnChain,
     };
 
@@ -418,6 +444,7 @@ describe('jaw_grant_permissions', () => {
     const deps = {
       openWallet: fakeWallet(async (method, params) => (await held, honest(method, params))) as OpenWallet,
       readPermission: approvedOnChain,
+      session: offlineSession,
     };
     await grantPermissions(t, twoByTwo, deps);
     // Inside the grace no rejoin starts, so the read sees the row exactly as written.
@@ -442,6 +469,7 @@ describe('jaw_grant_permissions', () => {
     const holding = {
       openWallet: fakeWallet(async (method, params) => (await held, honest(method, params))),
       readPermission: approvedOnChain,
+      session: offlineSession,
     };
     let opener!: ReturnType<typeof grantPermissions>;
     const fullOnceOpened = {
@@ -450,6 +478,7 @@ describe('jaw_grant_permissions', () => {
         throw new WalletBusy();
       }) as OpenWallet,
       readPermission: approvedOnChain,
+      session: offlineSession,
     };
 
     const again = await grantPermissions(t, twoByTwo, fullOnceOpened);
@@ -474,6 +503,7 @@ describe('jaw_grant_permissions', () => {
     }, asked);
     const deps = {
       openWallet: (async (...args) => (opened++, wallet(...args))) as OpenWallet,
+      session: offlineSession,
       readPermission: approvedOnChain,
     };
     const first = await grantPermissions(t, twoByTwo, deps);

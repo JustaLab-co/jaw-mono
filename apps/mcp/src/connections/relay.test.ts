@@ -12,7 +12,7 @@ import WebSocket from 'ws';
 import { useTestDb } from '@/db/test-db';
 import { replayingPage, startRelay } from './fake-relay';
 import type { RelayResume } from './seal';
-import { setTestEnv } from './testkit';
+import { offlineSession, setTestEnv } from './testkit';
 
 const relay = await startRelay();
 const { seen, fromServer, sessions, silent, cliJoined, dropped } = relay;
@@ -571,6 +571,7 @@ describe('the owner pool per account', () => {
       { x402Budget: { perDay: '1' } },
       {
         openWallet: relay.ownerRelay,
+        session: offlineSession,
         readPermission: async () => null as never,
       }
     );

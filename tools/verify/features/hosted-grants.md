@@ -12,7 +12,9 @@
 - `grant-target`: a call to the account itself, the permission manager, an EntryPoint or the any-contract wildcard `0x3232...3232` is refused as `call_target_refused` before any link opens.
 - `grant-mismatch`: a wallet answer that differs from the request in any call or spend records no row.
 - `grant-input`: the preset together with calls, spends or an expiry, spends without calls, a malformed function signature, a period the wallet does not take, an allowance of 2^160 or more and a yearly multiplier above 5461 are refused with no link.
-- `grant-cap`: a connection holding 5 live grants of either kind is refused before a link opens.
+- `grant-cap`: a connection holding 5 live grants of either kind is refused before a link opens. A new budget does not count the current budget it replaces. A replaced budget still approved on chain counts, so the server retries its revoke before refusing.
+- `grant-replace`: an approved `x402Budget` replaces the connection's current budget: the older row gets `replaced_at`, and the server revokes it on chain with `revokeAsSpender` from the payer, without sweeping the float, then sets `revoked_at`. A revoke it cannot send leaves the row replaced and unrevoked, listed by `jaw_connections` as `replaced`, and the connection's next tool call retries it in the background, at most every five minutes. A custom grant replaces nothing.
+- `grant-totals`: the link reply sums what the connection's live grants let the session key move per token and period, and says when the request replaces the current budget.
 - `grant-one-open`: a second request while one waits on the owner is refused with the waiting link. The waiting link counts toward the account's three open owner links (hosted-revoke.md, `link-cap`).
 - `grant-old-name`: `jaw_request_budget` is an unknown tool.
 
@@ -33,6 +35,7 @@ Preconditions: baseline preconditions of this map; Docker running; `JAW_KEYS_URL
 - grant-past: the grant above with `"expiresAt"` an hour ago, then ten minutes ahead. Pass: the answers start with `expiry_in_past:` and `expiry_too_soon:`, and no `url` is returned.
 - grant-target: `grant` with a call whose `target` is the connected account, then `0x3232323232323232323232323232323232323232`. Pass: `call_target_refused:` each time, no `url`.
 - grant-input: `grant '{"x402Budget":{"perDay":"1"},"calls":[...]}'`, then `grant '{"spends":[...]}'`. Pass: each is refused with no `url`.
+- grant-replace: connect with the default budget, then `budget 2` and approve. Pass: the older row reads `replaced_at` and `revoked_at` set, a session userOp from the payer calls `revokeAsSpender` on the permission manager and moves no USDC to the account, `jaw_session_status` shows the 2 USDC budget, and the reply named 1 USDC per day and the replacement.
 - grant-cap: approve grants until the connection holds 5 live ones, then ask again. Pass: refused naming 5 live grants, no `url`.
 - grant-one-open: ask, do not open the link, ask again. Pass: refused with the first `url`.
 - grant-old-name: `call jaw_request_budget '{"perDay":"1"}'`. Pass: an unknown-tool error.

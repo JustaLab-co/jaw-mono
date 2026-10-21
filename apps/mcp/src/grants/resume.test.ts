@@ -12,6 +12,7 @@ import {
   approvedOnChain,
   connect,
   grantBudget,
+  offlineSession,
   owner,
   setTestEnv,
   walletAnswers,
@@ -354,7 +355,7 @@ describe('a grant request whose server restarted', () => {
   it('given the page is still open, when the agent asks again, then it waits on the same link, resumes it, and the grant the owner approves is recorded', async () => {
     const { signer, t } = await connected();
     const owned = deciding(walletAnswers(signer));
-    const deps = { openWallet: stallsAfter(1).openWallet, readPermission: approvedOnChain };
+    const deps = { openWallet: stallsAfter(1).openWallet, readPermission: approvedOnChain, session: offlineSession };
     await grantPermissions(t, CUSTOM, deps);
     const [row] = await rowsOf(t);
     const page = await replayingPage(row.walletUrl, owned.answer);
@@ -377,7 +378,11 @@ describe('a grant request whose server restarted', () => {
     const { signer, t } = await connected();
     let answered: Record<string, unknown> | undefined;
     const honest = walletAnswers(signer);
-    await grantPermissions(t, CUSTOM, { openWallet: stallsAfter(1).openWallet, readPermission: approvedOnChain });
+    await grantPermissions(t, CUSTOM, {
+      openWallet: stallsAfter(1).openWallet,
+      readPermission: approvedOnChain,
+      session: offlineSession,
+    });
     const [row] = await rowsOf(t);
     const page = await replayingPage(row.walletUrl, async (method, params) => {
       answered = (await honest(method, params as unknown[])) as Record<string, unknown>;

@@ -13,6 +13,7 @@ import {
   setTestEnv,
   walletAnswers,
   walletsSettled,
+  offlineSession,
 } from '@/connections/testkit';
 import { getDb } from '@/db/client';
 import { grants } from '@/db/schema';
@@ -170,6 +171,7 @@ async function connected(perDay: string, float: bigint) {
     {
       openWallet: fakeWallet(walletAnswers(c.signer)),
       readPermission: approvedOnChain,
+      session: offlineSession,
     }
   );
   await walletsSettled();
