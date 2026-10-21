@@ -232,14 +232,15 @@ export async function openLink(t: Tenant, req: LinkRequest, openWallet: OpenWall
   };
   const held = await existing();
   if (held) return held;
-  // The same request asked concurrently may have taken the last slot.
-  if ((await countOpenLinks(t.account)) >= MAX_OPEN_PER_ACCOUNT) return (await existing()) ?? 'account_busy';
+  // A request racing this one may have stored its link since the check above: answer it rather than refuse.
+  const refuse = async (code: 'account_busy' | 'wallet_busy') => (await existing()) ?? code;
+  if ((await countOpenLinks(t.account)) >= MAX_OPEN_PER_ACCOUNT) return refuse('account_busy');
   const { approveBy } = req;
   let wallet: Wallet;
   try {
     wallet = await openWallet(req.chainId, approveBy, t);
   } catch (err) {
-    if (err instanceof WalletBusy) return 'wallet_busy';
+    if (err instanceof WalletBusy) return refuse('wallet_busy');
     throw err;
   }
   let row: PermissionRequestRow | undefined | typeof FULL;
@@ -279,7 +280,7 @@ export async function openLink(t: Tenant, req: LinkRequest, openWallet: OpenWall
   } finally {
     if (!row || row === FULL) wallet.close();
   }
-  if (row === FULL || !row) return (await existing()) ?? (row === FULL ? 'account_busy' : 'wallet_busy');
+  if (row === FULL || !row) return refuse(row === FULL ? 'account_busy' : 'wallet_busy');
   follow(row, wallet, req.work);
   return { opened: row };
 }

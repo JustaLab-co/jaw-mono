@@ -12,6 +12,21 @@ import { gateCode } from '@/payments/render';
 import { sendCalls } from './owner-calls';
 import { sign, type SignInput } from './sign';
 
+// Holds the next request between reading its own link and counting the account's links.
+const turn = vi.hoisted(() => ({ beforeCount: undefined as undefined | (() => Promise<unknown>) }));
+vi.mock('@/owner-calls/cap', async (original) => {
+  const cap = await original<typeof import('@/owner-calls/cap')>();
+  return {
+    ...cap,
+    countOpenLinks: async (...args: Parameters<typeof cap.countOpenLinks>) => {
+      const wait = turn.beforeCount;
+      turn.beforeCount = undefined;
+      await wait?.();
+      return cap.countOpenLinks(...args);
+    },
+  };
+});
+
 setTestEnv();
 
 type Signer = ReturnType<typeof newSigner>;
@@ -80,6 +95,7 @@ const rejected = () => {
 
 beforeAll(TEST_PG_URL ? useTestPostgres : useTestDb);
 beforeEach(() => {
+  turn.beforeCount = undefined;
   opened = [];
   asked = [];
 });
@@ -514,6 +530,34 @@ describe('jaw_sign', () => {
     expect(x[gateCode]).toBeUndefined();
     expect(y[gateCode]).toBeUndefined();
     expect(y.structuredContent!.url).toBe(x.structuredContent!.url);
+  });
+
+  it('given two links waiting on the account, when the same key opens its third while a retry of it is checking, then the retry answers that link', async () => {
+    const signer = newSigner();
+    const [a, b, c] = [await connected(signer), await connected(signer), await connected(signer)];
+    await ask(a.t, { idempotencyKey: 'a' }, idleWallet);
+    await ask(b.t, { idempotencyKey: 'b' }, idleWallet);
+    let opener!: ReturnType<typeof ask>;
+    turn.beforeCount = () => (opener = ask(c.t, { idempotencyKey: 'c' }, idleWallet));
+
+    const retry = await ask(c.t, { idempotencyKey: 'c' }, idleWallet);
+
+    expect(retry[gateCode]).toBeUndefined();
+    expect(retry.structuredContent!.url).toBe((await opener).structuredContent!.url);
+  });
+
+  it('given the same key opens its link while a retry of it finds the wallet pool full, then the retry answers that link', async () => {
+    const { t } = await connected();
+    let opener!: ReturnType<typeof ask>;
+    const fullOnceOpened: OpenWallet = async () => {
+      await (opener = ask(t, {}, idleWallet));
+      throw new WalletBusy();
+    };
+
+    const retry = await ask(t, {}, fullOnceOpened);
+
+    expect(retry[gateCode]).toBeUndefined();
+    expect(retry.structuredContent!.url).toBe((await opener).structuredContent!.url);
   });
 
   it('given the same key with other input, then it is an idempotency_conflict and no second link opens', async () => {

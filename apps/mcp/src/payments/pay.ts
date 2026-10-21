@@ -204,9 +204,9 @@ function fencedOf(url: string, o: Outcome): string[] {
   return fenced;
 }
 
-// Final even unsigned: a larger budget, not a retry, is what pays it; a refill
-// that threw may have moved money that no trace shows.
-const FINAL_UNSIGNED = new Set(['budget_exhausted', 'funding_failed']);
+// Final even unsigned: the same request under the same key would be refused again,
+// and a refill that threw may have moved money that no trace shows.
+const FINAL_UNSIGNED = new Set(['budget_exhausted', 'over_cap', 'funding_failed']);
 
 /** Where the outcome leaves a row. `signed` says whether an authorization for it exists. */
 function conclusionOf(o: Outcome, signed: boolean, settled: Settled | undefined, noRetry: boolean): Conclusion {

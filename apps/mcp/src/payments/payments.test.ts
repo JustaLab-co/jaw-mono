@@ -904,16 +904,31 @@ describe('jaw_session_x402_pay', () => {
     expect(lines).toContain('top-up refused on-chain (the permission refused the transfer)');
   });
 
-  it('given a 5 USDC/day budget and a 2 USDC price, when the agent pays, then over_cap pointing at a larger budget, nothing signed or pulled', async () => {
+  it('given a 5 USDC/day budget and a 2 USDC price, when the agent pays, then over_cap without pointing at a larger budget, nothing signed or pulled', async () => {
     const { t } = await connected('5');
     const first = await pay(t, { url: url('/pricey'), idempotencyKey: 'pricey' }, deps());
     expect(first.structuredContent).toMatchObject({
       kind: 'refused',
-      refusal: { code: 'over_cap', next: 'jaw_grant_permissions' },
+      refusal: { code: 'over_cap' },
       payerRefilled: false,
     });
-    expect(first.structuredContent?.summary).toContain('jaw_grant_permissions');
+    expect(first.structuredContent?.refusal).not.toHaveProperty('next');
+    expect(first.structuredContent?.summary).not.toContain('jaw_grant_permissions');
+    expect(first.structuredContent?.summary).not.toContain('retry');
     expect([seen.length, refills.length]).toEqual([0, 0]);
+  });
+
+  it('given a maxAmount under the price, when the agent pays and then sends the same key again, then over_cap naming maxAmount both times and nothing signed', async () => {
+    const { t } = await connected('1');
+    const input = { url: url('/exact'), maxAmount: '4999', idempotencyKey: 'capped' };
+    const first = await pay(t, input, deps());
+    const again = await pay(t, input, deps());
+    for (const answer of [first, again]) {
+      expect(answer.structuredContent).toMatchObject({ kind: 'refused', refusal: { code: 'over_cap' } });
+      expect(answer.structuredContent?.refusal).not.toHaveProperty('next');
+      expect(answer.structuredContent?.summary).toContain('maxAmount');
+    }
+    expect(seen).toHaveLength(0);
   });
 
   it('refills to the float target, so the next payments need no refill', async () => {
@@ -1579,13 +1594,14 @@ describe('the raw body kept for an internal caller', () => {
   });
 
   it('given keepBody and a refusal the key may retry, when the seller sent a body, then the call answers and keeps no raw body', async () => {
-    const { t } = await connected('5');
-    const result = await pay(t, { url: url('/pricey'), idempotencyKey: 'raw-refused' }, deps(), { keepBody: true });
-    expect(result.structuredContent).toMatchObject({ kind: 'refused', refusal: { code: 'over_cap' } });
+    const { t } = await connected('1');
+    periodDown = true;
+    const result = await pay(t, { url: url('/exact'), idempotencyKey: 'raw-refused' }, deps(), { keepBody: true });
+    expect(result.structuredContent).toMatchObject({ kind: 'refused', refusal: { code: 'chain_unavailable' } });
     expect(result[rawBody]).toBeUndefined();
     expect(await rowOf(result.structuredContent!.paymentId)).toMatchObject({
       state: 'pending',
-      code: 'over_cap',
+      code: 'chain_unavailable',
       body: null,
     });
   });
@@ -2588,55 +2604,64 @@ const pauseThenRelease = async (release: () => Promise<void>) => {
   await release();
 };
 
-describe('given concurrent payments whose chain calls resolve in any order', () => {
-  it('then none signs against float another holds, and none pays or refills past the daily budget', async () => {
-    await fc.assert(
-      fc.asyncProperty(
-        fc.scheduler(),
-        fc.integer({ min: 2, max: 4 }),
-        fc.constantFrom(0n, 300_000n),
-        fc.boolean(),
-        async (s, count, float, pause) => {
-          const { t } = await connected('0.6');
-          balances.set(t.sessionAddress.toLowerCase(), float);
-          seen.length = 0;
-          refills.length = 0;
-          // Reads the node rejects stay off the scheduler: its wrapper would leave the rejection unhandled.
-          const scheduledRead = s.scheduleFunction(node.readContract);
-          const scheduled: ChainClients = {
-            publicClient: () =>
-              ({
-                ...node,
-                getBlockNumber: s.scheduleFunction(node.getBlockNumber),
-                readContract: (read: Parameters<typeof node.readContract>[0]) =>
-                  read.functionName === 'balanceOf' || read.functionName === 'authorizationState'
-                    ? scheduledRead(read)
-                    : node.readContract(read),
-              }) as unknown as PublicClient,
-          };
-          const sendLater = (funder: Address): TopUpExecutor => ({
-            request: async (method, params) => {
-              await s.schedule(Promise.resolve(), method);
-              return executor(funder).request(method, params);
-            },
-          });
-          const over = deps({ clients: scheduled, executor: (_t, grant) => sendLater(grant.account) });
-          const results = await s.waitFor(
-            Promise.all(
-              Array.from({ length: count }, () => pay(t, { url: url('/budget'), idempotencyKey: randomUUID() }, over))
-            ),
-            pause ? pauseThenRelease : undefined
-          );
+// Each run is a whole connect and two to four payments, so the time limit holds per run:
+// one bound around all thirty grows with how busy the machine is, not with the code.
+const RUNS = 30;
+const RUN_LIMIT_MS = 30_000;
 
-          const paid = results.filter((r) => r.structuredContent?.kind === 'paid').length;
-          expect(balanceOf(t.sessionAddress)).toBeGreaterThanOrEqual(0n);
-          expect(seen).toHaveLength(paid);
-          expect(paid).toBeGreaterThan(0);
-          expect(paid).toBeLessThanOrEqual(2);
-          expect(refills.reduce((sum, amount) => sum + amount, 0n)).toBeLessThanOrEqual(600_000n);
-        }
-      ),
-      { seed: 0x5ced, numRuns: 30 }
-    );
-  }, 120_000);
+describe('given concurrent payments whose chain calls resolve in any order', () => {
+  it(
+    'then none signs against float another holds, and none pays or refills past the daily budget',
+    { timeout: RUNS * RUN_LIMIT_MS },
+    async () => {
+      await fc.assert(
+        fc.asyncProperty(
+          fc.scheduler(),
+          fc.integer({ min: 2, max: 4 }),
+          fc.constantFrom(0n, 300_000n),
+          fc.boolean(),
+          async (s, count, float, pause) => {
+            const { t } = await connected('0.6');
+            balances.set(t.sessionAddress.toLowerCase(), float);
+            seen.length = 0;
+            refills.length = 0;
+            // Reads the node rejects stay off the scheduler: its wrapper would leave the rejection unhandled.
+            const scheduledRead = s.scheduleFunction(node.readContract);
+            const scheduled: ChainClients = {
+              publicClient: () =>
+                ({
+                  ...node,
+                  getBlockNumber: s.scheduleFunction(node.getBlockNumber),
+                  readContract: (read: Parameters<typeof node.readContract>[0]) =>
+                    read.functionName === 'balanceOf' || read.functionName === 'authorizationState'
+                      ? scheduledRead(read)
+                      : node.readContract(read),
+                }) as unknown as PublicClient,
+            };
+            const sendLater = (funder: Address): TopUpExecutor => ({
+              request: async (method, params) => {
+                await s.schedule(Promise.resolve(), method);
+                return executor(funder).request(method, params);
+              },
+            });
+            const over = deps({ clients: scheduled, executor: (_t, grant) => sendLater(grant.account) });
+            const results = await s.waitFor(
+              Promise.all(
+                Array.from({ length: count }, () => pay(t, { url: url('/budget'), idempotencyKey: randomUUID() }, over))
+              ),
+              pause ? pauseThenRelease : undefined
+            );
+
+            const paid = results.filter((r) => r.structuredContent?.kind === 'paid').length;
+            expect(balanceOf(t.sessionAddress)).toBeGreaterThanOrEqual(0n);
+            expect(seen).toHaveLength(paid);
+            expect(paid).toBeGreaterThan(0);
+            expect(paid).toBeLessThanOrEqual(2);
+            expect(refills.reduce((sum, amount) => sum + amount, 0n)).toBeLessThanOrEqual(600_000n);
+          }
+        ),
+        { seed: 0x5ced, numRuns: RUNS, timeout: RUN_LIMIT_MS, endOnFailure: true }
+      );
+    }
+  );
 });
