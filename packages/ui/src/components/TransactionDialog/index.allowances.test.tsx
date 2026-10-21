@@ -37,13 +37,11 @@ const render = (data: string[]) =>
   );
 
 describe('TransactionDialog allowances', () => {
-  it('shows an unlimited approve found in a later call of the batch', () => {
+  // A token approval in the batch is one of its calls, listed with the others. It gets no card of
+  // its own: one titled "Permissions granted" read as a JAW permission, which an approval is not.
+  it('gives an approve in the batch no card of its own', () => {
     const html = render([approveMax]);
-    expect(html).toContain('Permissions granted');
-    expect(html).toContain('Unlimited');
-  });
-
-  it('shows no permission card when no call grants one', () => {
-    expect(render(['0x'])).not.toContain('Permissions granted');
+    expect(html).not.toContain('Permissions granted');
+    expect(html).not.toContain('Unlimited');
   });
 });
