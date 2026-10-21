@@ -37,3 +37,4 @@ The maintained source for verifying what a user of the jaw CLI, the MCP server a
 | Revokes the owner signs   | hosted `jaw_revoke_permission`, `jaw_connections`                        | [hosted-revoke.md](hosted-revoke.md)                   |
 | Session key sends         | hosted `jaw_session_execute`, `jaw_session_history`                      | [hosted-session-execute.md](hosted-session-execute.md) |
 | Messages the owner signs  | hosted `jaw_sign`                                                        | [hosted-sign.md](hosted-sign.md)                       |
+| Bridge answer replay      | keys.jaw.id `/cli-bridge` over the relay                                 | [cli-bridge-replay.md](cli-bridge-replay.md)           |
