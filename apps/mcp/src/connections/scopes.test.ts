@@ -54,6 +54,11 @@ const TOOLS: Record<string, { needs: ConnectionScope[]; args: object }> = {
       ],
     },
   },
+  // An unknown chain, so it refuses before reaching the proxy.
+  jaw_simulate_calls: {
+    needs: ['wallet:read'],
+    args: { chainId: 1337, calls: [{ to: RECIPIENT }] },
+  },
   jaw_session_history: { needs: ['wallet:read'], args: {} },
   jaw_connections: { needs: ['wallet:read'], args: {} },
   jaw_revoke_permission: { needs: ['wallet:read'], args: { permissionId: `0x${'0'.repeat(64)}`, chainId: 1 } },
