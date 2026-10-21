@@ -1,4 +1,4 @@
-import { randomUUID } from 'node:crypto';
+import { createPrivateKey, createPublicKey, randomUUID } from 'node:crypto';
 import {
   decryptMessage,
   deriveSharedSecret,
@@ -8,8 +8,10 @@ import {
   importKeyFromHex,
   type EncryptedEnvelope,
 } from '@jaw.id/agent';
+import { errorLabel, log } from '@/lib/edge';
 import { config } from './config';
 import { FIRST_PARTY_CLIENTS } from './scopes';
+import type { RelayResume } from './seal';
 
 /** A request to the owner's wallet, answered with what the wallet returns or thrown with why it refused. */
 export type Ask = (method: string, params: unknown[]) => Promise<unknown>;
@@ -17,7 +19,7 @@ export type Ask = (method: string, params: unknown[]) => Promise<unknown>;
 /** A wallet session the owner opens at `url`. `run` asks it things, then closes it. */
 export interface Wallet {
   url: string;
-  run<T>(work: (ask: Ask) => Promise<T>): Promise<T>;
+  run<T>(work: (ask: Ask) => Promise<T>, joined?: (resume: RelayResume) => unknown): Promise<T>;
   close(): void;
 }
 
@@ -95,22 +97,12 @@ const ownerPool: Pool = {
   byAccount: new Map(),
 };
 
-export const connectRelay: OpenWallet = (chainId, until, client) => openRelay(connectPool, chainId, until, client);
-export const ownerRelay: OpenWallet = (chainId, until, client) => openRelay(ownerPool, chainId, until, client);
+export const connectRelay: OpenWallet = (chainId, until, client) =>
+  withSlot(connectPool, client, (release) => startSession(release, chainId, until, client, connectPool.joinWithin));
+export const ownerRelay: OpenWallet = (chainId, until, client) =>
+  withSlot(ownerPool, client, (release) => startSession(release, chainId, until, client));
 
-/**
- * A session on JAW's relay, the channel `jaw session setup` uses. The owner opens
- * keys.jaw.id/cli-bridge, and every request runs through the wallet's own
- * dialogs. Messages are encrypted end to end under a key agreed through the
- * public key in the link's fragment, which never reaches the relay.
- *
- * Nothing in it carries this server's key: whoever holds the link can read the
- * session, and the page takes the key of its own deployment.
- *
- * The socket is opened here, before the link is handed out, so the relay knows
- * this side is waiting when the page connects.
- */
-async function openRelay(pool: Pool, chainId: number, until: Date, client?: RelayClient): Promise<Wallet> {
+async function withSlot<T>(pool: Pool, client: RelayClient | undefined, start: (release: () => void) => Promise<T>) {
   const account = pool.perAccount ? client?.account?.toLowerCase() : undefined;
   const mine = account ? (pool.byAccount.get(account) ?? 0) : 0;
   if (pool.open >= pool.limit || mine >= (pool.perAccount ?? Infinity)) throw new WalletBusy();
@@ -128,13 +120,25 @@ async function openRelay(pool: Pool, chainId: number, until: Date, client?: Rela
     else pool.byAccount.delete(account);
   };
   try {
-    return await startSession(release, chainId, until, client, pool.joinWithin);
+    return await start(release);
   } catch (err) {
     release();
     throw err;
   }
 }
 
+/**
+ * A session on JAW's relay, the channel `jaw session setup` uses. The owner opens
+ * keys.jaw.id/cli-bridge, and every request runs through the wallet's own
+ * dialogs. Messages are encrypted end to end under a key agreed through the
+ * public key in the link's fragment, which never reaches the relay.
+ *
+ * Nothing in it carries this server's key: whoever holds the link can read the
+ * session, and the page takes the key of its own deployment.
+ *
+ * The socket is opened here, before the link is handed out, so the relay knows
+ * this side is waiting when the page connects.
+ */
 async function startSession(
   release: () => void,
   chainId: number,
@@ -142,15 +146,44 @@ async function startSession(
   client?: RelayClient,
   joinWithin?: number
 ): Promise<Wallet> {
-  const { keysOrigin, relayUrl } = config();
   const keys = await generateKeyPair();
   const session = randomUUID();
-  const url = new URL('/cli-bridge', keysOrigin);
-  url.searchParams.set('session', session);
-  url.searchParams.set('relay', relayUrl);
-  url.hash = `pk=${await exportKeyToHex('public', keys.publicKey)}`;
+  const { ws, inbox, end } = connect(session, until, release, joinWithin);
 
-  const ws = new WebSocket(`${relayUrl}?session=${encodeURIComponent(session)}&role=cli`);
+  return {
+    url: linkOf(session, await exportKeyToHex('public', keys.publicKey)),
+    run: async (work, joined) => {
+      try {
+        const hello = await inbox.next((m) => m.type === 'key_exchange' && typeof m.publicKey === 'string');
+        const peer = String(hello.publicKey);
+        const secret = await deriveSharedSecret(keys.privateKey, await importKeyFromHex('public', peer));
+        const page = converse(ws, inbox, secret, session);
+        const init = { chainId, appName: appNameOf(client) };
+        await page.send({ type: 'init', ...init });
+        const ready = await page.read((m) => m.type === 'ready');
+        if (ready.replays === true) {
+          // A session that cannot be resumed is how every session ran before replays, so the owner is still asked.
+          try {
+            const saved = joined?.({ session, key: await exportKeyToHex('private', keys.privateKey), peer, ...init });
+            await within(JOINED_WITHIN_MS, Promise.resolve(saved));
+          } catch (err) {
+            log('warn', { msg: 'relay session not saved', error: errorLabel(err) });
+          }
+        }
+        const result = await work(page.ask);
+        // Closes the wallet tab.
+        await page.send({ type: 'shutdown' }).catch(() => undefined);
+        return result;
+      } finally {
+        end();
+      }
+    },
+    close: end,
+  };
+}
+
+function connect(session: string, until: Date, release: () => void, joinWithin?: number) {
+  const ws = new WebSocket(`${config().relayUrl}?session=${encodeURIComponent(session)}&role=cli`);
   const inbox = new Inbox(ws, until);
   const keepalive = setInterval(() => {
     if (ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify({ type: 'ping' }));
@@ -182,41 +215,105 @@ async function startSession(
   ws.addEventListener('message', (e) => {
     if (typeOf(e.data) === 'browser_connected') clearTimeout(unjoined);
   });
+  return { ws, inbox, end };
+}
+
+function linkOf(session: string, publicKey: string): string {
+  const { keysOrigin, relayUrl } = config();
+  const url = new URL('/cli-bridge', keysOrigin);
+  url.searchParams.set('session', session);
+  url.searchParams.set('relay', relayUrl);
+  url.hash = `pk=${publicKey}`;
+  return url.toString();
+}
+
+function converse(
+  ws: WebSocket,
+  inbox: Inbox,
+  secret: Awaited<ReturnType<typeof deriveSharedSecret>>,
+  session: string,
+  peer?: string
+) {
+  const send = async (payload: Message) =>
+    ws.send(JSON.stringify({ type: 'encrypted', ...(await encryptMessage(secret, payload)) }));
+  const read = async (want: (inner: Message) => boolean, by?: Date) => {
+    const wanted = (m: Message) => m.type === 'encrypted' || (peer !== undefined && m.type === 'key_exchange');
+    for (;;) {
+      const m = by ? await inbox.within(wanted, by) : await inbox.next(wanted);
+      if (!m) throw new PageGone();
+      if (m.type === 'key_exchange') {
+        if (m.publicKey !== peer) throw new PageGone();
+        continue;
+      }
+      const inner = await decryptMessage(secret, m as unknown as EncryptedEnvelope).catch(() => undefined);
+      if (inner?.type === 'error') throw new Error(`the wallet page refused: ${String(inner.reason)}`);
+      if (inner && want(inner)) return inner;
+    }
+  };
+  let asked = 0;
+  const ask: Ask = async (method, params) => {
+    const id = `${session}:${asked++}`;
+    await send({ type: 'rpc_request', id, method, params });
+    const answer = await read((m) => m.type === 'rpc_response' && m.id === id);
+    if (answer.success) return answer.data;
+    const error = answer.error as { code?: number; message?: string } | undefined;
+    throw Object.assign(new Error(error?.message ?? 'the wallet refused'), { code: error?.code });
+  };
+  return { send, read, ask };
+}
+
+const REJOIN_WITHIN_MS = 15_000;
+// Saving the session must not hold the first ask back.
+const JOINED_WITHIN_MS = 5_000;
+
+function within<T>(ms: number, work: Promise<T>): Promise<T> {
+  let timer: ReturnType<typeof setTimeout>;
+  const late = new Promise<never>((_, reject) => {
+    timer = setTimeout(() => reject(new Error('timed out')), ms);
+  });
+  return Promise.race([work, late]).finally(() => clearTimeout(timer));
+}
+
+export class PageGone extends Error {
+  constructor() {
+    super('the wallet page is gone');
+  }
+}
+
+/** Rejoins a session the server held before it restarted. Undefined means the page is gone. */
+export const resumeWallet = (resume: RelayResume, until: Date, client?: RelayClient): Promise<Wallet | undefined> =>
+  withSlot(ownerPool, client, (release) => rejoin(release, resume, until));
+
+async function rejoin(release: () => void, resume: RelayResume, until: Date): Promise<Wallet | undefined> {
+  const { session, key, peer, chainId, appName } = resume;
+  const ours = createPrivateKey({ key: Buffer.from(key, 'hex'), format: 'der', type: 'pkcs8' });
+  const url = linkOf(session, createPublicKey(ours).export({ format: 'der', type: 'spki' }).toString('hex'));
+  const { ws, inbox, end } = connect(session, until, release);
+  const soon = () => new Date(Math.min(until.getTime(), Date.now() + REJOIN_WITHIN_MS));
+  const status = await inbox
+    .within((m) => m.type === 'status', soon())
+    .catch((err: unknown) => {
+      end();
+      throw err;
+    });
+  if (status?.browserConnected !== true) {
+    end();
+    return undefined;
+  }
 
   return {
-    url: url.toString(),
+    url,
     run: async (work) => {
       try {
-        const peer = await inbox.next((m) => m.type === 'key_exchange' && typeof m.publicKey === 'string');
         const secret = await deriveSharedSecret(
-          keys.privateKey,
-          await importKeyFromHex('public', String(peer.publicKey))
+          await importKeyFromHex('private', key),
+          await importKeyFromHex('public', peer)
         );
-        const send = async (payload: Message) =>
-          ws.send(JSON.stringify({ type: 'encrypted', ...(await encryptMessage(secret, payload)) }));
-        const read = async (want: (inner: Message) => boolean) => {
-          for (;;) {
-            const m = await inbox.next((m) => m.type === 'encrypted');
-            const inner = await decryptMessage(secret, m as unknown as EncryptedEnvelope).catch(() => undefined);
-            if (inner?.type === 'error') throw new Error(`the wallet page refused: ${String(inner.reason)}`);
-            if (inner && want(inner)) return inner;
-          }
-        };
-
-        await send({ type: 'init', chainId, appName: appNameOf(client) });
-        await read((m) => m.type === 'ready');
-
-        const ask: Ask = async (method, params) => {
-          const id = randomUUID();
-          await send({ type: 'rpc_request', id, method, params });
-          const answer = await read((m) => m.type === 'rpc_response' && m.id === id);
-          if (answer.success) return answer.data;
-          const error = answer.error as { code?: number; message?: string } | undefined;
-          throw Object.assign(new Error(error?.message ?? 'the wallet refused'), { code: error?.code });
-        };
-        const result = await work(ask);
-        // Closes the wallet tab.
-        await send({ type: 'shutdown' }).catch(() => undefined);
+        const page = converse(ws, inbox, secret, session, peer);
+        await page.send({ type: 'init', chainId, appName });
+        await page.read((m) => m.type === 'ready', soon());
+        const result = await work(page.ask);
+        await page.send({ type: 'shutdown' }).catch(() => undefined);
         return result;
       } finally {
         end();
@@ -263,13 +360,19 @@ class Inbox {
   }
 
   async next(want: (m: Message) => boolean): Promise<Message> {
+    const m = await this.within(want, this.until);
+    if (!m) throw new Error('timed out waiting for the wallet');
+    return m;
+  }
+
+  async within(want: (m: Message) => boolean, by: Date): Promise<Message | undefined> {
     for (;;) {
       const at = this.queue.findIndex(want);
       if (at !== -1) return this.queue.splice(0, at + 1)[at];
       this.queue = [];
       if (this.closed) throw this.closed;
-      const left = this.until.getTime() - Date.now();
-      if (left <= 0) throw new Error('timed out waiting for the wallet');
+      const left = Math.min(by.getTime(), this.until.getTime()) - Date.now();
+      if (left <= 0) return undefined;
       await new Promise<void>((resolve) => {
         const timer = setTimeout(resolve, left);
         this.waiter = () => {
