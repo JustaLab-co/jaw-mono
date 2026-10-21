@@ -2,7 +2,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { setTestEnv } from '@/connections/testkit';
 import { fakeChain, type FakeEvent } from './chain-testkit';
 import type { OwnerCallRow } from './store';
-import { findUserOpEvent, readReceipt, receiptOf } from './receipt';
+import { findUserOpEvent, readKnown, readReceipt, receiptOf } from './receipt';
 
 setTestEnv();
 
@@ -22,6 +22,36 @@ function rpc(answer: () => Response | Promise<Response>) {
 const result = (value: unknown) => Response.json({ jsonrpc: '2.0', id: 1, result: value });
 
 afterEach(() => vi.unstubAllGlobals());
+
+describe('readKnown', () => {
+  it('given an operation the bundler holds, then it asks by hash on that chain and answers yes', async () => {
+    const seen = rpc(() => result({ userOperation: {}, blockNumber: null }));
+
+    expect(await readKnown(8453, CALLS_ID)).toBe(true);
+    expect(seen[0].url).toContain('chainId=8453');
+    expect(seen[0].body).toMatchObject({ method: 'eth_getUserOperationByHash', params: [CALLS_ID] });
+  });
+
+  it('given an operation the bundler does not know, then it answers no', async () => {
+    rpc(() => result(null));
+
+    expect(await readKnown(8453, CALLS_ID)).toBe(false);
+  });
+
+  it('given the bundler cannot be read, then it throws rather than answering no', async () => {
+    rpc(() => new Response('down', { status: 502 }));
+
+    await expect(readKnown(8453, CALLS_ID)).rejects.toThrow('bundler answered 502');
+  });
+
+  it('given a JSON-RPC error with a 2xx status, then it throws rather than answering no', async () => {
+    rpc(() =>
+      Response.json({ jsonrpc: '2.0', id: 1, error: { code: -32005, message: 'rate limited' } }, { status: 201 })
+    );
+
+    await expect(readKnown(8453, CALLS_ID)).rejects.toThrow();
+  });
+});
 
 describe('readReceipt', () => {
   it('posts JSON to the bundler', async () => {

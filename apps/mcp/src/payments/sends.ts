@@ -53,11 +53,14 @@ export async function runOf(tx: Tx, connectionId: string, key: string): Promise<
     .where(and(eq(sends.connectionId, connectionId), eq(sends.idempotencyKey, key)));
 }
 
-export async function noteCallsId(tx: Tx, ids: string[], callsId: Hex): Promise<void> {
-  await tx
+/** How many of the rows were still open to take the hash. */
+export async function noteCallsId(tx: Tx, ids: string[], callsId: Hex): Promise<number> {
+  const noted = await tx
     .update(sends)
     .set({ callsId })
-    .where(and(inArray(sends.id, ids), eq(sends.state, 'open')));
+    .where(and(inArray(sends.id, ids), eq(sends.state, 'open')))
+    .returning({ id: sends.id });
+  return noted.length;
 }
 
 export async function handToReconciler(ids: string[], tx: Tx = getDb(), callsId?: Hex): Promise<void> {
@@ -69,7 +72,7 @@ export async function handToReconciler(ids: string[], tx: Tx = getDb(), callsId?
 
 export type SendEnd =
   | { state: 'landed'; txHash: Hex; callsId?: Hex }
-  | { state: 'released'; txHash?: Hex | null; callsId?: Hex };
+  | { state: 'released'; txHash?: Hex | null; callsId?: Hex | null };
 
 export async function settleSends(ids: string[], end: SendEnd, tx: Tx = getDb()) {
   await tx
