@@ -67,7 +67,7 @@ function quoteUrl(row: SwapRow): string {
   return `${config().swapUrl}/${route}?${query}`;
 }
 
-type Answer = { kind: 'answered'; status: number; body: string } | { kind: 'unreachable' };
+type Answer = { kind: 'answered'; status: number; body: string; scrubbed: string } | { kind: 'unreachable' };
 
 async function ask(url: string, deps: QuoteDeps): Promise<Answer> {
   try {
@@ -76,7 +76,8 @@ async function ask(url: string, deps: QuoteDeps): Promise<Answer> {
       signal: AbortSignal.timeout(deps.timeoutMs),
     });
     const body = await res.text();
-    return { kind: 'answered', status: res.status, body: deps.apiKey ? body.split(deps.apiKey).join('[key]') : body };
+    const scrubbed = deps.apiKey ? body.split(deps.apiKey).join('[key]') : body;
+    return { kind: 'answered', status: res.status, body, scrubbed };
   } catch (err) {
     log('warn', { msg: 'swap quote unreachable', error: errorLabel(err) });
     return { kind: 'unreachable' };
@@ -95,7 +96,16 @@ export async function quote(t: Tenant, held: { row: SwapRow; token: string }, de
   // The backend's quote lives from when it was asked, so the owner window counts from here.
   const askedAt = new Date();
   const answer = await ask(url, deps);
-  return stepOf(await conclude(lease, request, url, askedAt, answer));
+  const row = await conclude(lease, request, url, askedAt, answer);
+  if (row?.code === 'quote_unsupported_provider') {
+    log('warn', {
+      msg: 'swap quote from an unsupported provider',
+      provider: (row.quote as { provider: string }).provider,
+      originChainId: row.originChainId,
+      destinationChainId: row.destinationChainId,
+    });
+  }
+  return stepOf(row);
 }
 
 const stepOf = (row: SwapRow | undefined): QuoteStep => (row ? { kind: 'done', row } : { kind: 'lease_lost' });
@@ -116,8 +126,8 @@ const KEY_REFUSED = new Set([401, 402, 403]);
 
 async function conclude(lease: SwapLease, request: QuoteRequest, url: string, askedAt: Date, answer: Answer) {
   if (answer.kind === 'unreachable') return release(lease, { code: 'backend_unavailable' });
-  const { status, body } = answer;
-  const fenced = body ? fenceText(new URL(url).host, body, BODY_MAX) : null;
+  const { status, body, scrubbed } = answer;
+  const fenced = scrubbed ? fenceText(new URL(url).host, scrubbed, BODY_MAX) : null;
   if (status === 200) return keepQuote(lease, request, askedAt, body, fenced);
   if (KEY_REFUSED.has(status)) {
     log('error', { msg: 'swap backend refused the swap api key', status });
@@ -164,8 +174,9 @@ async function keepQuote(
 function nonAuroraProvider(data: unknown): string | undefined {
   const { provider, quoteId } = (data ?? {}) as { provider?: unknown; quoteId?: unknown };
   if (typeof provider !== 'string') return undefined;
-  if (provider === 'aurora' && String(quoteId).startsWith('aurora:')) return undefined;
-  return PROVIDER_NAME.test(provider) ? provider : 'unknown';
+  const prefix = typeof quoteId === 'string' && quoteId.includes(':') ? quoteId.split(':')[0] : '';
+  if (provider === 'aurora' && prefix === 'aurora') return undefined;
+  return [prefix, provider].find((name) => name !== 'aurora' && PROVIDER_NAME.test(name)) ?? 'unknown';
 }
 
 function dataOf(raw: string): unknown {

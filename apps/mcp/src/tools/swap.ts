@@ -204,10 +204,13 @@ function summaryOf(row: SwapRow): string {
     case 'quote_failed':
     case 'quote_rejected':
       if (row.code === 'quote_unsupported_provider') {
-        const { provider } = row.quote as { provider: string };
+        const provider = (row.quote as { provider?: string } | null)?.provider ?? 'another provider';
+        const from = provider === 'unknown' ? 'an unrecognised provider' : provider;
         return (
-          `No swap: the quote came from ${provider}, not Aurora. Aurora could not quote this pair or was not tried first, ` +
-          'and this tool signs only Aurora routes. Nothing was sent.'
+          `No swap: the quote came from ${from}, and this tool signs only Aurora quotes. Nothing was sent. ` +
+          'Why Aurora did not answer is not known from here. It may not route this pair, may be down for a moment, ' +
+          "or may not be first in the backend's provider order. " +
+          'Try once more later with a new idempotencyKey; if it repeats, Aurora cannot quote this swap now.'
         );
       }
       return `No swap: ${row.state} (${row.code}). Nothing was deposited.`;

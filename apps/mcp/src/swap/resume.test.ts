@@ -1,4 +1,6 @@
 import { randomBytes } from 'node:crypto';
+import { createServer } from 'node:http';
+import type { AddressInfo } from 'node:net';
 import { eq, sql } from 'drizzle-orm';
 import { getAddress, type Address } from 'viem';
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
@@ -14,10 +16,22 @@ import { swapRequest } from './quote';
 import { claimSwap, SEND_STARTED, writeHeld } from './store';
 
 const relay = await startRelay();
+const swapBackendPaths: string[] = [];
+const swapBackend = createServer((req, res) => {
+  swapBackendPaths.push(new URL(req.url!, 'http://swap.test').pathname);
+  res.writeHead(404).end();
+});
+await new Promise<void>((r) => swapBackend.listen(0, '127.0.0.1', r));
+const SWAP_HOST = `127.0.0.1:${(swapBackend.address() as AddressInfo).port}`;
 setTestEnv();
 process.env.JAW_RELAY_URL = relay.url;
+process.env.JAW_MCP_INSECURE_FETCH_HOSTS = SWAP_HOST;
+process.env.JAW_MCP_SWAP_URL = `http://${SWAP_HOST}/proxy/v2`;
 beforeAll(TEST_PG_URL ? useTestPostgres : useTestDb);
-afterAll(() => relay.close());
+afterAll(() => {
+  relay.close();
+  swapBackend.close();
+});
 
 const USDC: Address = '0x036CbD53842c5426634e7929541eC2318f3dCF7e';
 const input: SwapToolInput = {
@@ -105,6 +119,18 @@ describe('a swap deposit whose server restarted after the send started', () => {
       await vi.waitFor(() => expect(page.asked()).toBe(3));
     }
   );
+
+  it('given a swap resumed after the restart, when the owner approves, then no quote is asked again', async () => {
+    swapBackendPaths.length = 0;
+    const { t, id, key, page, decide } = await depositAskedThenRestarted();
+    await resumeSwaps();
+    await vi.waitFor(() => expect(page.ids).toHaveLength(4));
+    await swap(t, { ...input, idempotencyKey: key }, { openWallet: stallsAfter(9).openWallet, pollMs: 0 });
+    decide();
+
+    await vi.waitFor(async () => expect(await rowOf(id)).toMatchObject({ state: 'deposit_sent', callsId: '0xcalls' }));
+    expect(swapBackendPaths.filter((path) => /\/(move-asset|swap)\/quote$/.test(path))).toEqual([]);
+  });
 
   it('given a resumer took the swap, when the old process hears the calls id first, then the swap records it', async () => {
     const { id, page, server } = await depositAskedThenRestarted();

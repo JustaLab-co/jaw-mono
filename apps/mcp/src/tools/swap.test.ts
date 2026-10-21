@@ -2084,6 +2084,53 @@ describe('a quote another provider answered', () => {
       }
     }
   );
+
+  it('given a quote from relay, when jaw_swap runs and the same key comes again, then the summary says only Aurora quotes are signed and why is not known, and the replay asks the backend nothing', async () => {
+    const { t } = await connected();
+    backend.answer = relayAnswer;
+
+    const first = await run(t);
+    const hits = backend.hits.length;
+    const again = await run(t);
+
+    const summary = first.structuredContent?.summary;
+    expect(summary).toContain('from relay');
+    expect(summary).toContain('only Aurora quotes');
+    expect(summary).toContain('not known from here');
+    expect(summary).toContain('new idempotencyKey');
+    expect(again.structuredContent).toMatchObject({ refusal: { code: 'quote_unsupported_provider' }, summary });
+    expect(backend.hits).toHaveLength(hits);
+  });
+
+  it.each([
+    ['relay:0x1792', 'from relay'],
+    ['not an id', 'from an unrecognised provider'],
+  ])(
+    'given a quote naming aurora with quote id %s, when jaw_swap runs, then the summary says it came %s and never from aurora',
+    async (quoteId, from) => {
+      const { t } = await connected();
+      backend.answer = { result: { data: { ...relayAnswer.result.data, provider: 'aurora', quoteId } } };
+
+      const summary = (await run(t)).structuredContent?.summary;
+
+      expect(summary).toContain(from);
+      expect(summary).not.toContain('from aurora');
+    }
+  );
+
+  it('given a stored unsupported provider refusal with no quote kept, when the same key comes, then the summary still answers', async () => {
+    const { t } = await connected();
+    backend.answer = relayAnswer;
+    await run(t);
+    const [row] = await swapsOf(t.connectionId);
+    await getDb().execute(sql`alter table swaps disable trigger swaps_guard`);
+    await getDb().update(swaps).set({ quote: null }).where(eq(swaps.id, row.id));
+    await getDb().execute(sql`alter table swaps enable trigger swaps_guard`);
+
+    const result = await run(t);
+
+    expect(result.structuredContent?.summary).toContain('from another provider');
+  });
 });
 
 describe('B28: the connection ends while the swap awaits the owner', () => {
