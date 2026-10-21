@@ -4,7 +4,7 @@ import { runMigrations } from './db/migrate';
 import { resumeTick } from './connections/resume';
 import { requestsWaiting } from './grants/resume';
 import { log } from './lib/edge';
-import { purge, reconcile } from './reconciler/run';
+import { purge, reconcile, sweepRevokedGrants } from './reconciler/run';
 import { callsWaiting } from './owner-calls/resume';
 import { swapsWaiting } from './swap/resume';
 
@@ -27,6 +27,7 @@ function reconcileEvery(seconds: number) {
       await sweepWraps();
       await reconcile();
       await purge();
+      await sweepRevokedGrants();
     } catch (err) {
       log('error', { msg: 'reconcile run failed', error: err instanceof Error ? err.name : 'unknown' });
     } finally {

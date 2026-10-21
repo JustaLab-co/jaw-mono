@@ -3,7 +3,7 @@ import { and, desc, eq, gt, inArray, isNull, lte, ne, or, sql, type SQL } from '
 import type { PgUpdateSetSource } from 'drizzle-orm/pg-core';
 import type { Tenant } from '@/connections/auth';
 import { config } from '@/connections/config';
-import { PageGone, WalletBusy, type Ask, type OpenWallet, type Wallet } from '@/connections/relay';
+import { PageGone, WalletBusy, WalletRefused, type Ask, type OpenWallet, type Wallet } from '@/connections/relay';
 import { resumeRow, resumeTick, waitingIn, type Rejoin } from '@/connections/resume';
 import { sealResume, type RelayResume } from '@/connections/seal';
 import { heldSince, keepLease, leaseHeld, sessionLeaseEnd } from '@/connections/session-lease';
@@ -29,7 +29,7 @@ const dbNow = sql`statement_timestamp()`;
 const leased = leasedRows<PermissionRequestRow>(permissionRequests);
 const awaiting = eq(permissionRequests.state, 'awaiting_owner');
 
-const ofConnection = (t: Tenant, req: LinkRequest) =>
+const ofConnection = (t: Tenant, req: LinkKind) =>
   and(eq(permissionRequests.method, req.method), eq(permissionRequests.connectionId, t.connectionId));
 
 const sameSign = (t: Tenant, idempotencyKey: string) =>
@@ -75,6 +75,8 @@ const notAskedRevoke = or(
   pastWindow
 );
 
+export const SIGN_KEPT_DAYS = 7;
+
 export async function closeLapsedLinks(): Promise<number> {
   const ended = await getDb()
     .update(permissionRequests)
@@ -84,7 +86,7 @@ export async function closeLapsedLinks(): Promise<number> {
   return ended.length;
 }
 
-async function findHeld(t: Tenant, req: LinkRequest): Promise<Held | undefined> {
+async function findHeld(t: Tenant, req: LinkKind, rebuild?: Rebuild): Promise<Held | undefined> {
   const [row] = await getDb()
     .select()
     .from(permissionRequests)
@@ -96,7 +98,7 @@ async function findHeld(t: Tenant, req: LinkRequest): Promise<Held | undefined> 
     )
     .orderBy(desc(eq(permissionRequests.connectionId, t.connectionId)))
     .limit(1);
-  return row && { waiting: rejoinIfWaiting(row, req.rebuild) };
+  return row && { waiting: rebuild ? rejoinIfWaiting(row, rebuild) : row };
 }
 
 const unnamed = sql`not exists (select 1 from ${permissionRequests} named where named.names_lost = ${permissionRequests.id})`;
@@ -147,6 +149,7 @@ function outcomeOf(err: unknown, row: PermissionRequestRow, asked: boolean): Out
   if (code === USER_REJECTED) return { state: 'owner_declined' };
   if (err instanceof PageGone) return pageGone(asked);
   if (typeof code === 'number') return { state: 'failed', code: `wallet_error:${code}` };
+  if (err instanceof WalletRefused) return { state: 'failed', code: 'wallet_error:unknown' };
   if (Date.now() >= row.approveBy.getTime()) return { state: 'expired' };
   if (asked) return { state: 'expired', code: LINK_LOST };
   return { state: 'failed', code: 'unexpected' };
@@ -158,16 +161,23 @@ function rejoinIfWaiting<R extends PermissionRequestRow | undefined>(row: R, reb
   return row;
 }
 
-export async function currentSign(
-  t: Tenant,
-  idempotencyKey: string,
-  rebuild: Rebuild
-): Promise<PermissionRequestRow | undefined> {
-  const same = sameSign(t, idempotencyKey);
+async function readSign(same: SQL | undefined): Promise<PermissionRequestRow | undefined> {
   await closeDead(same);
   const [row] = await getDb().select().from(permissionRequests).where(same);
-  return rejoinIfWaiting(row, rebuild);
+  return row;
 }
+
+export const currentSign = async (t: Tenant, idempotencyKey: string, rebuild: Rebuild) =>
+  rejoinIfWaiting(await readSign(sameSign(t, idempotencyKey)), rebuild);
+
+export const signById = (t: Tenant, id: string) =>
+  readSign(
+    and(
+      eq(permissionRequests.method, 'sign'),
+      eq(permissionRequests.connectionId, t.connectionId),
+      eq(permissionRequests.id, id)
+    )
+  );
 
 // An answer the owner gave still stands on a row that ended while its process could not renew.
 const answered = (state: Outcome['state']) => state === 'approved' || state === 'owner_declined';
@@ -200,34 +210,41 @@ export type Work = (ask: Ask, claim: Claim) => Promise<Outcome>;
 export type Rebuild = (t: Tenant, payload: unknown) => Work | undefined;
 export type Rebuilds = Partial<Record<PermissionRequestRow['method'], Rebuild>>;
 
+type LinkKind =
+  | { method: 'grant' }
+  | { method: 'revoke'; permissionId: string }
+  | { method: 'sign'; idempotencyKey: string; requestHash: string; signKind: 'message' | 'typedData' };
+
 export type LinkRequest = {
   chainId: number;
   approveBy: Date;
   payload: unknown;
   rebuild: Rebuild;
-} & (
-  | { method: 'grant' }
-  | { method: 'revoke'; permissionId: string }
-  | { method: 'sign'; idempotencyKey: string; requestHash: string; signKind: 'message' | 'typedData' }
-);
+} & LinkKind;
+
+/** Whether a revoke of this permission already waits, so asking again opens nothing. */
+export const revokeHeld = async (t: Tenant, permissionId: string) =>
+  (await findHeld(t, { method: 'revoke', permissionId }))?.waiting.permissionId?.toLowerCase() ===
+  permissionId.toLowerCase();
 
 export async function openLink(t: Tenant, req: LinkRequest, openWallet: OpenWallet): Promise<Opened> {
   const work = req.rebuild(t, req.payload);
   if (!work) throw new Error(`the ${req.method} request does not match what a resume rebuilds`);
   const existing = async (): Promise<Held | undefined> => {
     const stored = req.method === 'sign' ? await currentSign(t, req.idempotencyKey, req.rebuild) : undefined;
-    return stored ? { waiting: stored } : findHeld(t, req);
+    return stored ? { waiting: stored } : findHeld(t, req, req.rebuild);
   };
   const held = await existing();
   if (held) return held;
-  // The same request asked concurrently may have taken the last slot.
-  if ((await countOpenLinks(t.account)) >= MAX_OPEN_PER_ACCOUNT) return (await existing()) ?? 'account_busy';
+  // A request racing this one may have stored its link since the check above: answer it rather than refuse.
+  const refuse = async (code: 'account_busy' | 'wallet_busy') => (await existing()) ?? code;
+  if ((await countOpenLinks(t.account)) >= MAX_OPEN_PER_ACCOUNT) return refuse('account_busy');
   const { approveBy } = req;
   let wallet: Wallet;
   try {
     wallet = await openWallet(req.chainId, approveBy, t);
   } catch (err) {
-    if (err instanceof WalletBusy) return 'wallet_busy';
+    if (err instanceof WalletBusy) return refuse('wallet_busy');
     throw err;
   }
   let row: PermissionRequestRow | undefined | typeof FULL;
@@ -267,7 +284,7 @@ export async function openLink(t: Tenant, req: LinkRequest, openWallet: OpenWall
   } finally {
     if (!row || row === FULL) wallet.close();
   }
-  if (row === FULL || !row) return (await existing()) ?? (row === FULL ? 'account_busy' : 'wallet_busy');
+  if (row === FULL || !row) return refuse(row === FULL ? 'account_busy' : 'wallet_busy');
   follow(row, wallet, work);
   return { opened: row };
 }

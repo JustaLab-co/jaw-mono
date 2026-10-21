@@ -22,7 +22,7 @@ import { agentLogger, chainClients, payerFor, sessionOf, topUpExecutor, withoutU
 import type { Tenant } from '@/connections/auth';
 import { config } from '@/connections/config';
 import { countHit, isPaymentsPaused } from '@/db/settings';
-import { x402Budget, x402Budgets, type Grant } from '@/grants/store';
+import { budgetSignedUnder, recordRevoked, x402Budgets, type Grant } from '@/grants/store';
 import { errorLabel, log, RATE_WINDOW_MS } from '@/lib/edge';
 import { fenceText } from '@/lib/fence';
 import { safeFetch, watchCuts } from '@/lib/safe-fetch';
@@ -30,6 +30,7 @@ import { confirmByReceipt, type Settled } from './confirm';
 import { refillHook } from './refill';
 import { gate, render, resent, type PayResult } from './render';
 import {
+  chargeTo,
   claim,
   entriesFor,
   findPayment,
@@ -102,30 +103,81 @@ const liveDeps = (): PayDeps => ({
 /** The probe never answered, or the grant was gone: nothing was signed. */
 type Unreached = {
   kind: 'unreached';
-  code: 'blocked_url' | 'unreachable' | 'no_grant' | 'grant_revoked' | 'chain_unavailable';
+  code: 'blocked_url' | 'unreachable' | 'no_grant' | 'grant_revoked' | 'chain_unavailable' | 'store_failed';
   reason: string;
+};
+
+type ReadPermission = PayDeps['readPermission'];
+
+const REVOKED: Unreached = {
+  kind: 'unreached',
+  code: 'grant_revoked',
+  reason: 'the budget is no longer approved on chain',
 };
 
 // A revoke on chain stops payments within this long, without a chain read on every call.
 const LIVE_FOR_MS = 30_000;
-const liveUntil = new Map<string, number>();
+const chainAnswers = new Map<string, { until: number; refused?: Unreached }>();
 
 /** Whether the grant is still approved and not revoked on chain, the permission manager's own answer. */
-async function grantLive(grant: Grant, deps: PayDeps): Promise<Unreached | undefined> {
-  if ((liveUntil.get(grant.permissionId) ?? 0) > Date.now()) return undefined;
-  const state = await deps
-    .readPermission({ chainId: grant.chainId, permissionId: grant.permissionId, permission: grant.permission })
-    .catch((): PermissionState => ({ status: 'unavailable' }));
+async function grantLive(grant: Grant, read: ReadPermission): Promise<Unreached | undefined> {
+  const last = chainAnswers.get(grant.permissionId);
+  if (last && last.until > Date.now()) return last.refused;
+  const state = await read({
+    chainId: grant.chainId,
+    permissionId: grant.permissionId,
+    permission: grant.permission,
+  }).catch((): PermissionState => ({ status: 'unavailable' }));
   if (state.status === 'unavailable') {
     return { kind: 'unreached', code: 'chain_unavailable', reason: 'the budget could not be read from the chain' };
   }
-  if (state.status === 'mismatch' || !state.approved || state.revoked) {
-    return { kind: 'unreached', code: 'grant_revoked', reason: 'the budget is no longer approved on chain' };
+  if (state.status === 'ok' && state.revoked) {
+    await recordRevoked([grant.permissionId]).catch((err: unknown) => {
+      log('warn', { msg: `grant ${grant.permissionId} revoked on chain, not recorded`, error: errorLabel(err) });
+    });
   }
-  liveUntil.set(grant.permissionId, Date.now() + LIVE_FOR_MS);
-  return undefined;
+  const refused = state.status === 'mismatch' || !state.approved || state.revoked ? REVOKED : undefined;
+  // Not approved can come from a node behind the one that approved the grant, so that is asked again.
+  if (state.status === 'mismatch' || state.approved) {
+    chainAnswers.set(grant.permissionId, { until: Date.now() + LIVE_FOR_MS, refused });
+  }
+  return refused;
 }
 type Outcome = PaymentOutcome | Unreached;
+
+/** Why a payment cannot be made, and the budget the choice stopped at. */
+type Stop = Unreached & { at?: Grant };
+
+/** Newest first: an older budget is read only when every newer one refused. */
+async function liveBudget(budgets: Grant[], read: ReadPermission): Promise<Grant | Stop> {
+  for (const budget of budgets) {
+    const stopped = await grantLive(budget, read);
+    if (!stopped) return budget;
+    if (stopped.code === 'chain_unavailable') return { ...stopped, at: budget };
+  }
+  if (budgets.length > 0) return { ...REVOKED, at: budgets[0] };
+  return { kind: 'unreached', code: 'no_grant', reason: 'the budget ended while this payment waited' };
+}
+
+/** The budget the next payment draws from, or the one whose chain answer stops it. */
+export async function payingBudget(connectionId: string, read: ReadPermission): Promise<Grant | undefined> {
+  const chosen = await liveBudget(await x402Budgets(connectionId), read);
+  return chosen.kind === 'unreached' ? chosen.at : chosen;
+}
+
+const withoutBudget = (chosen: Grant | Stop): Grant | Unreached =>
+  chosen.kind === 'unreached' ? { kind: chosen.kind, code: chosen.code, reason: chosen.reason } : chosen;
+
+/** The row charged to the budget that pays it, when that is not the one it was claimed under. */
+async function charged(row: PaymentRow, token: string, chosen: Grant | Unreached): Promise<Grant | Unreached> {
+  if (chosen.kind === 'unreached' || chosen.permissionId === row.permissionId) return chosen;
+  try {
+    await chargeTo(row.id, token, chosen.permissionId);
+    return chosen;
+  } catch (err) {
+    return { kind: 'unreached', code: 'store_failed', reason: errorMessage(err) };
+  }
+}
 
 export const thrown = (err: unknown): Unreached => ({
   kind: 'unreached',
@@ -152,9 +204,9 @@ function fencedOf(url: string, o: Outcome): string[] {
   return fenced;
 }
 
-// Final even unsigned: a larger budget, not a retry, is what pays it; a refill
-// that threw may have moved money that no trace shows.
-const FINAL_UNSIGNED = new Set(['budget_exhausted', 'funding_failed']);
+// Final even unsigned: the same request under the same key would be refused again,
+// and a refill that threw may have moved money that no trace shows.
+const FINAL_UNSIGNED = new Set(['budget_exhausted', 'over_cap', 'funding_failed']);
 
 /** Where the outcome leaves a row. `signed` says whether an authorization for it exists. */
 function conclusionOf(o: Outcome, signed: boolean, settled: Settled | undefined, noRetry: boolean): Conclusion {
@@ -322,9 +374,9 @@ export async function pay(
     maxAmount: input.maxAmount,
   };
   const key = input.idempotencyKey ?? `auto_${randomBytes(12).toString('base64url')}`;
-  const grant = await x402Budget(t.connectionId);
+  const budgets = await x402Budgets(t.connectionId);
   const claimed = await claim(
-    { connectionId: t.connectionId, payer: t.sessionAddress, permissionId: grant?.permissionId },
+    { connectionId: t.connectionId, payer: t.sessionAddress, permissionId: budgets[0]?.permissionId },
     key,
     request
   );
@@ -351,19 +403,22 @@ export async function pay(
   const confirm = { clients: deps.clients, later: deps.later };
 
   if (claimed.kind === 'resume') {
-    const signedUnder = (await x402Budgets(t.connectionId)).find((g) => g.permissionId === claimed.row.permissionId);
-    const stopped: Unreached | undefined = signedUnder
-      ? await grantLive(signedUnder, deps)
-      : { kind: 'unreached', code: 'no_grant', reason: 'the budget this payment was signed under ended' };
+    const signedUnder = await budgetSignedUnder(t.connectionId, claimed.row.permissionId);
+    const stopped: Unreached | undefined = !signedUnder
+      ? { kind: 'unreached', code: 'no_grant', reason: 'the budget this payment was signed under ended' }
+      : signedUnder.revokedAt
+        ? REVOKED
+        : await grantLive(signedUnder, deps.readPermission);
     return resend(claimed.row, claimed.token, stopped, payer, sent, confirm, cuts.lastCut, tap.last);
   }
 
   const { row, token } = claimed;
   let signed = false;
-  const outcome: Outcome = grant
-    ? ((await grantLive(grant, deps)) ??
-      (await payWithinGrant(t, grant, row, token, request, payer, sent, deps, () => (signed = true))))
-    : { kind: 'unreached', code: 'no_grant', reason: 'the budget ended while this payment waited' };
+  const chosen = await charged(row, token, withoutBudget(await liveBudget(budgets, deps.readPermission)));
+  const outcome: Outcome =
+    chosen.kind === 'unreached'
+      ? chosen
+      : await payWithinGrant(t, chosen, row, token, request, payer, sent, deps, () => (signed = true));
   const done = await concludeSend(row, token, outcome, {
     signed,
     signedAt: new Date(started),

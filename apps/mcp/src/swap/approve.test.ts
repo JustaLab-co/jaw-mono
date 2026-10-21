@@ -114,7 +114,7 @@ async function awaitingOwner(call: SwapRow['call'], approveBy: Date): Promise<Sw
       quote: {},
       quoteFenced: '',
       call,
-      paidAt: new Date(),
+      quotedAt: new Date(),
       walletUrl: 'https://keys.test/cli-bridge',
       approveBy,
     })

@@ -1,6 +1,6 @@
 {
-  "id": "2455d8b7-ebce-4265-8902-588e0ddb82d0",
-  "prevId": "20560335-9fe2-421e-86ea-4fb7f298111d",
+  "id": "00a2ba16-d751-4828-b388-9b15f2e858b8",
+  "prevId": "6c27a7fd-a30b-48a4-9d43-d25cf1b255e2",
   "version": "7",
   "dialect": "postgresql",
   "tables": {
@@ -576,6 +576,25 @@
           "type": "timestamp with time zone",
           "primaryKey": false,
           "notNull": false
+        },
+        "lease_holder": {
+          "name": "lease_holder",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "relay": {
+          "name": "relay",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "resume_failures": {
+          "name": "resume_failures",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "default": 0
         },
         "calls_id": {
           "name": "calls_id",
@@ -1196,6 +1215,13 @@
           "primaryKey": false,
           "notNull": false
         },
+        "resume_failures": {
+          "name": "resume_failures",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "default": 0
+        },
         "created_at": {
           "name": "created_at",
           "type": "timestamp with time zone",
@@ -1324,6 +1350,38 @@
             }
           ],
           "isUnique": true,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        },
+        "permission_requests_ended_sign_index": {
+          "name": "permission_requests_ended_sign_index",
+          "columns": [
+            {
+              "expression": "updated_at",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "where": "\"permission_requests\".\"method\" = 'sign' and \"permission_requests\".\"state\" <> 'awaiting_owner'",
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        },
+        "permission_requests_unconfirmed_index": {
+          "name": "permission_requests_unconfirmed_index",
+          "columns": [
+            {
+              "expression": "updated_at",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "where": "\"permission_requests\".\"method\" = 'revoke' and \"permission_requests\".\"state\" = 'approved' and \"permission_requests\".\"code\" = 'unconfirmed'",
           "concurrently": false,
           "method": "btree",
           "with": {}
@@ -1840,6 +1898,25 @@
           "type": "timestamp with time zone",
           "primaryKey": false,
           "notNull": false
+        },
+        "lease_holder": {
+          "name": "lease_holder",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "relay": {
+          "name": "relay",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "resume_failures": {
+          "name": "resume_failures",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "default": 0
         },
         "calls_id": {
           "name": "calls_id",

@@ -27,9 +27,12 @@ export const isPaused = () => flag('paused');
 
 export const isPaymentsPaused = () => flag('payments_paused');
 
+/** The start of the window open now. The database clock decides, so replicas with skewed clocks share it. */
+export const windowStartOf = (windowMs: number) =>
+  sql`to_timestamp(floor(extract(epoch from statement_timestamp()) * 1000 / ${windowMs}) * ${windowMs} / 1000.0)`;
+
 export async function countHit(key: string, windowMs: number): Promise<number> {
-  // The window comes from the database clock, so replicas with skewed clocks share it.
-  const windowStart = sql`to_timestamp(floor(extract(epoch from statement_timestamp()) * 1000 / ${windowMs}) * ${windowMs} / 1000.0)`;
+  const windowStart = windowStartOf(windowMs);
   const db = getDb();
   // Old windows are swept now and then rather than on every request.
   if (Math.random() < 0.01) {

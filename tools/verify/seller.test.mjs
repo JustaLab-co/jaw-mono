@@ -135,6 +135,35 @@ test('given a network override, the 402 advertises it until reset', async () => 
   assert.equal(unb64(again.headers.get('payment-required')).accepts[0].network, 'eip155:84532');
 });
 
+test('given the allowlisted api key and no payment, the quote answers 200 with a fresh deposit address and no receipt', async () => {
+  const headers = { 'x-api-key': 'verify-swap-key' };
+  const a = await fetch(quoteUrl(ERC20_QUERY), { headers });
+  const b = await fetch(quoteUrl(ERC20_QUERY), { headers });
+  assert.equal(a.status, 200);
+  assert.equal(a.headers.get('payment-response'), null);
+  const [qa, qb] = [(await a.json()).result.data, (await b.json()).result.data];
+  assert.match(qa.quoteId, /^aurora:0x[0-9a-fA-F]{40}$/);
+  const deposit = getAddress(qa.quoteId.slice(7));
+  const data = encodeFunctionData({
+    abi: erc20Abi,
+    functionName: 'transfer',
+    args: [deposit, BigInt(ERC20_QUERY.amount)],
+  });
+  assert.equal(qa.transactions[0].data, data);
+  assert.notEqual(qa.quoteId, qb.quoteId);
+});
+
+test('given another api key, the quote answers the 402 challenge', async () => {
+  const res = await fetch(quoteUrl(ERC20_QUERY), { headers: { 'x-api-key': 'not-listed' } });
+  assert.equal(res.status, 402);
+});
+
+test('given the allowlisted api key and an invalid query, the quote answers 400 in the backend envelope', async () => {
+  const res = await fetch(quoteUrl({ ...ERC20_QUERY, amount: '0' }), { headers: { 'x-api-key': 'verify-swap-key' } });
+  assert.equal(res.status, 400);
+  assert.equal((await res.json()).result.data, null);
+});
+
 test('given an invalid query and no payment, the quote still answers the 402 challenge', async () => {
   const res = await fetch(quoteUrl({ ...ERC20_QUERY, amount: '0' }));
   assert.equal(res.status, 402);

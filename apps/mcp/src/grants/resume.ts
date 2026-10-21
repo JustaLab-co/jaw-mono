@@ -1,15 +1,16 @@
-import { parseGrantedPermission, type GrantedPermission, type PermissionState } from '@jaw.id/agent';
-import { and, eq, isNull, sql } from 'drizzle-orm';
+import { parseGrantedPermission, type GrantedPermission } from '@jaw.id/agent';
+import { and, eq, sql } from 'drizzle-orm';
 import { isAddressEqual, isHex, toHex, type Address, type Hex } from 'viem';
 import { z } from 'zod';
 import type { Tenant } from '@/connections/auth';
 import type { Ask } from '@/connections/relay';
 import { isLive } from '@/connections/rows';
 import { getDb } from '@/db/client';
-import { connections, grants, permissionRequests } from '@/db/schema';
+import { connections, grants } from '@/db/schema';
 import { errorLabel, log } from '@/lib/edge';
 import { checkGranted, readOnChain, recordGrant, type GrantRequest, type ReadPermission } from './permission';
 import { waitingRequests, type Claim, type Outcome, type Rebuild } from './requests';
+import { markRevoked, readState, UNCONFIRMED } from './revokes';
 import type { GrantKind } from './store';
 
 export type SignRequest = { type: '0x45'; data: { message: string } } | { type: '0x01'; data: Record<string, unknown> };
@@ -129,28 +130,6 @@ async function askGrant(
   }
 }
 
-export const markRevoked = (id: string) =>
-  getDb().transaction(async (tx) => {
-    await tx
-      .update(grants)
-      .set({ revokedAt: new Date() })
-      .where(and(sameId(id), isNull(grants.revokedAt)));
-    await tx
-      .update(permissionRequests)
-      .set({ code: null, updatedAt: sql`statement_timestamp()` })
-      .where(
-        and(
-          eq(permissionRequests.method, 'revoke'),
-          sql`lower(${permissionRequests.permissionId}) = ${id.toLowerCase()}`,
-          eq(permissionRequests.state, 'approved'),
-          eq(permissionRequests.code, 'unconfirmed')
-        )
-      );
-  });
-
-export const readState = (target: RevokeTarget, read: ReadPermission) =>
-  read(target).catch((): PermissionState => ({ status: 'unavailable' }));
-
 export const revokeWork =
   (deps: RevokeReads): Rebuild =>
   (t, payload) => {
@@ -176,7 +155,7 @@ async function askRevoke(t: Tenant, target: RevokeTarget, ask: Ask, claim: Claim
     }
     await new Promise((resolve) => setTimeout(resolve, deps.rereadMs));
   }
-  return { state: 'approved', code: 'unconfirmed' };
+  return { state: 'approved', code: UNCONFIRMED };
 }
 
 const REBUILDS = { sign: signWork, grant: grantWork(readOnChain), revoke: revokeWork(REVOKE_READS) };

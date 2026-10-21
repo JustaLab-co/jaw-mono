@@ -1,13 +1,13 @@
-import { getPermissionFromRelay } from '@jaw.id/core';
-import { parseGrantedPermission, type GrantedPermission } from '@jaw.id/agent';
+import type { GrantedPermission } from '@jaw.id/agent';
 import type { McpServer } from '@modelcontextprotocol/server';
 import { and, sql } from 'drizzle-orm';
 import { isAddressEqual, type Address, type Hex } from 'viem';
 import { z } from 'zod';
 import { tenant, type Tenant } from '@/connections/auth';
-import { APPROVE_WITHIN_MS, config, SUPPORTED_CHAINS } from '@/connections/config';
+import { APPROVE_WITHIN_MS, SUPPORTED_CHAINS } from '@/connections/config';
 import { ownerRelay, type OpenWallet } from '@/connections/relay';
 import { getDb } from '@/db/client';
+import { countHit } from '@/db/settings';
 import { grants } from '@/db/schema';
 import type { ReadPermission } from '@/grants/permission';
 import {
@@ -16,10 +16,14 @@ import {
   openLink,
   RECONNECTING,
   reconnecting,
+  revokeHeld,
   type PermissionRequestRow,
 } from '@/grants/requests';
-import { markRevoked, readState, REVOKE_READS, revokeWork, sameId, type RevokeTarget } from '@/grants/resume';
+import { REVOKE_READS, revokeWork, sameId, type RevokeTarget } from '@/grants/resume';
+import { fromStore, markRevoked, readState, type LookUp } from '@/grants/revokes';
+import { RATE_WINDOW_MS } from '@/lib/edge';
 import { reply } from '@/lib/fence';
+import { LINK_RATE_LIMIT } from '@/owner-calls/cap';
 import { ACCOUNT_BUSY, refusal } from './reply';
 
 const revokeInput = z.strictObject({
@@ -45,25 +49,6 @@ const output = z.object({
   approveBy: z.string(),
   summary: z.string(),
 });
-
-export type StoredPermission = { permission: GrantedPermission; chainId: number } | 'not_found' | 'unavailable';
-export type LookUp = (permissionId: Hex) => Promise<StoredPermission>;
-
-export const fromStore: LookUp = async (permissionId) => {
-  try {
-    const stored = await getPermissionFromRelay(permissionId, config().paymasterApiKey);
-    const permission = parseGrantedPermission(stored);
-    const chainId = Number.parseInt(stored.chainId, 16);
-    return permission && Number.isSafeInteger(chainId) ? { permission, chainId } : 'not_found';
-  } catch (err) {
-    const status =
-      (err as { status?: number })?.status ?? (err as { response?: { status?: number } })?.response?.status;
-    if (status === 404) return 'not_found';
-    const message = err instanceof Error ? err.message : '';
-    const missing = /not\s*found|does not exist|no such permission/i.test(message);
-    return status === undefined && missing ? 'not_found' : 'unavailable';
-  }
-};
 
 export interface RevokeDeps {
   openWallet: OpenWallet;
@@ -117,13 +102,20 @@ async function answer(target: Target, row: PermissionRequestRow) {
         : '') +
       `Ask the account owner to open ${row.walletUrl} before ${row.approveBy.toISOString()} and revoke permission ${target.permissionId}, ` +
       `which lets ${spender} act for the account${tokens}. The owner pays the gas in the wallet. ` +
-      'Once the chain shows it revoked, jaw_connections lists it revoked and nothing can spend under it.',
+      'Once the chain shows it revoked, jaw_connections lists it revoked and nothing can spend under it. ' +
+      'Right after showing the link, call jaw_connections yourself to see it revoked, and again on each later turn until that time; do not wait for the owner to say they revoked it.',
   });
 }
 
 export async function revokePermission(t: Tenant, input: RevokeInput, deps = DEFAULTS) {
   const chainId = input.chainId ?? t.chainId;
   if (!SUPPORTED_CHAINS[chainId]) return refusal(`unsupported_chain: chain ${chainId} is not one this server reads.`);
+  if (
+    !(await revokeHeld(t, input.permissionId)) &&
+    (await countHit(`owner-revoke:${t.connectionId}`, RATE_WINDOW_MS)) > LINK_RATE_LIMIT
+  ) {
+    return refusal('rate_limited: too many revoke requests on this connection. Wait a minute.');
+  }
   const target = await findPermission(t, input.permissionId as Hex, chainId, deps.lookUp);
   if (typeof target === 'string') return refusal(target);
   if (target.permission.end * 1000 <= Date.now()) {

@@ -176,7 +176,7 @@ export async function grantPermissions(t: Tenant, input: GrantInput, deps = DEFA
       ? `open at ${row.walletUrl}.${RECONNECTING}`
       : `still waiting for the owner at ${row.walletUrl}.`;
     return refusal(
-      `${warning}A grant request is ${state} Ask again once they approve or it expires at ${row.approveBy.toISOString()}.`
+      `${warning}A grant request is ${state} Check jaw_session_status on your own to see it in force, or ask again once it expires at ${row.approveBy.toISOString()}.`
     );
   }
   const url = row.walletUrl;
@@ -186,9 +186,9 @@ export async function grantPermissions(t: Tenant, input: GrantInput, deps = DEFA
     expiresAt: ends,
     summary:
       warning +
-      `Ask the account owner to open ${url} and approve ${ask.what} until ${ends} in their wallet. ` +
+      `Ask the account owner to open ${url} and approve ${ask.what} until ${ends} in their wallet, before ${row.approveBy.toISOString()}. ` +
       'Once they do, the session key acts within it with no further prompts. ' +
-      (ask.kind === 'x402-budget' ? 'jaw_session_status shows the budget in force. ' : '') +
+      'Right after showing the link, call jaw_session_status yourself to see the grant in force, and again on each later turn until that time; do not wait for the owner to say they approved. ' +
       'A grant approved earlier on this connection stays approved on chain until it expires or jaw_session_disconnect revokes it.',
   });
 }
@@ -199,7 +199,7 @@ export function registerGrantTool(server: McpServer) {
     {
       description:
         'Ask the account owner to grant this session key a permission, approved once in their JAW wallet. ' +
-        'Pass x402Budget for the payment budget: a daily USDC allowance that payments, refills and swap quotes draw from with no further prompts; payments use the newest one. ' +
+        'Pass x402Budget for the payment budget: a daily USDC allowance that payments, refills and swap quotes draw from with no further prompts; payments use the newest one still approved on chain. ' +
         'Or pass calls, the contract functions the session key may call, and spends, how much of each token it may move per period, for a custom grant. ' +
         'The grant ends at expiresAt, or with the connection when that comes first. A connection holds at most 5 live grants. Returns a link for the owner. For a one-off contract call use jaw_send_calls, which asks the owner each time.',
       inputSchema: grantInput,

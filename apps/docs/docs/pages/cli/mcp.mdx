@@ -29,18 +29,19 @@ Environment variables in the MCP config follow the same resolution order as the 
 
 ## Available Tools
 
-| Tool                 | Description                                                          |
-| -------------------- | -------------------------------------------------------------------- |
-| `jaw_rpc`            | Execute any RPC method (`method`, `params?`, `chainId?`, `session?`) |
-| `jaw_config_show`    | Display current configuration (secrets redacted)                     |
-| `jaw_config_set`     | Update a configuration value (`key`, `value`)                        |
-| `jaw_status`         | Check relay session status and configuration in use                  |
-| `jaw_session_status` | Check local session-key (auto mode) status                           |
-| `jaw_disconnect`     | Close relay session and browser tab                                  |
-| `jaw_pay_and_fetch`  | Fetch a URL, paying an x402 `402` challenge in USDC if one appears   |
-| `jaw_discover`       | Search the x402 Bazaar for paid services (read only, never spends)   |
-| `jaw_x402_balance`   | The session payer's USDC balance on a network                        |
-| `jaw_x402_log`       | The local ledger of every payment attempt                            |
+| Tool                    | Description                                                          |
+| ----------------------- | -------------------------------------------------------------------- |
+| `jaw_rpc`               | Execute any RPC method (`method`, `params?`, `chainId?`, `session?`) |
+| `jaw_config_show`       | Display current configuration (secrets redacted)                     |
+| `jaw_config_set`        | Update a configuration value (`key`, `value`)                        |
+| `jaw_status`            | Check relay session status and configuration in use                  |
+| `jaw_session_status`    | Check local session-key (auto mode) status                           |
+| `jaw_grant_permissions` | Ask the owner for an x402 budget (`x402Budget?`, `chainId?`)         |
+| `jaw_disconnect`        | Close relay session and browser tab                                  |
+| `jaw_pay_and_fetch`     | Fetch a URL, paying an x402 `402` challenge in USDC if one appears   |
+| `jaw_discover`          | Search the x402 Bazaar for paid services (read only, never spends)   |
+| `jaw_x402_balance`      | The session payer's USDC balance on a network                        |
+| `jaw_x402_log`          | The local ledger of every payment attempt                            |
 
 ### jaw_rpc
 
@@ -62,7 +63,7 @@ The chain is resolved in this order: the `chainId` argument, the `JAW_CHAIN_ID` 
 
 #### Autonomous signing with session keys
 
-If a session key exists (created with [`jaw session setup`](/cli/auto-mode)), pass `session: true` to sign without opening the browser:
+If a session key exists (created with `jaw_grant_permissions` or [`jaw session setup`](/cli/auto-mode)), pass `session: true` to sign without opening the browser:
 
 ```json
 {
@@ -89,6 +90,21 @@ Valid keys: `apiKey`, `defaultChain`, `ens`, `sessionExpiry`
 
 The `x402` spending limits are **not** settable here. An agent must not be able to raise its own caps, so those keys are only writable by a human at the terminal. The same goes for `keysUrl` and `relayUrl`, which decide where signing requests are sent: set them with `jaw config set`. See [Paying for APIs](/cli/x402#configuring-the-policy).
 
+### jaw_grant_permissions
+
+Asks the account owner for an x402 payment budget, the way the hosted MCP server does. The agent calls it when a payment first needs a session, so nothing has to be set up in a terminal beforehand.
+
+```json
+{
+  "x402Budget": { "perDay": "5" },
+  "chainId": 84532
+}
+```
+
+It creates the session key and opens the browser for the owner to approve a daily USDC allowance with their passkey. `perDay` defaults to 10 USDC, and the chain resolves the same way as for `jaw_rpc`. The wallet URL is also sent to the client as a progress notification, or as a log message when the request has no progress token, so the agent can show it when no browser opens. The call returns once the owner answers or the approval times out.
+
+The grant is the x402 preset only: a USDC transfer capped per day. It lasts `sessionExpiry` days (7 by default), never more than 30. It is refused without opening anything when a session is already active, since replacing one takes `jaw session setup` at a terminal, and when the budget is over the [grant ceiling](/cli/x402#configuring-the-policy). Only one grant waits for the owner at a time.
+
 ### jaw_pay_and_fetch
 
 Fetches a URL. If it is free, it comes back as is. If it answers `402`, the agent pays in USDC and retries.
@@ -100,7 +116,7 @@ Fetches a URL. If it is free, it comes back as is. If it answers `402`, the agen
 }
 ```
 
-Requires a session with an x402 permission ([`jaw session setup --x402`](/cli/x402#setup)). Every payment is bounded by the configured policy plus the optional `maxAmount` for the call. An over cap, wrong asset, wrong network or disallowed recipient payment is refused, never silently paid.
+Requires a session with an x402 permission, from `jaw_grant_permissions` or [`jaw session setup --x402`](/cli/x402#setup). Every payment is bounded by the configured policy plus the optional `maxAmount` for the call. An over cap, wrong asset, wrong network or disallowed recipient payment is refused, never silently paid.
 
 Read [Paying for APIs](/cli/x402) for funding and limits, including which of the two accounts to fund.
 

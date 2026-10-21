@@ -4,16 +4,14 @@ import { getAddress } from 'viem';
 import { beforeAll, describe, expect, it } from 'vitest';
 import { setTestEnv } from '@/connections/testkit';
 import { getDb } from '@/db/client';
-import { connections, payments, swaps } from '@/db/schema';
+import { connections, swaps } from '@/db/schema';
 import { TEST_PG_URL, useTestDb, useTestPostgres } from '@/db/test-db';
-import { claim as claimPayment } from '@/payments/store';
 import { purge } from '@/reconciler/run';
 import {
   claimSwap,
   depositAddressReused,
   isDepositAddressTaken,
   move,
-  nextAttempt,
   markSendStarted,
   recordCallsId,
   release,
@@ -86,7 +84,7 @@ function quoteOf(address = freshAddress()) {
     quote: { inputAmount: '1000000', expectedOutputAmount: '990000', minOutputAmount: '980000' },
     quoteFenced: '<<fenced quote>>',
     call: { chainId: 8453, to: USDC, data: '0xa9059cbb', value: '0' },
-    paidAt: new Date(),
+    quotedAt: new Date(),
   };
 }
 
@@ -125,39 +123,6 @@ const refusalOf = (write: Promise<unknown>) =>
     () => 'written',
     (e: Error & { cause?: Error }) => e.cause?.message ?? e.message
   );
-
-const lapsePayments = (connectionId: string) =>
-  getDb()
-    .update(payments)
-    .set({ leaseUntil: sql`now() - interval '1 second'` })
-    .where(eq(payments.connectionId, connectionId));
-
-async function paymentFor(row: SwapRow) {
-  const claimed = await claimPayment(
-    { connectionId: row.connectionId, payer: ACCOUNT, permissionId: 'perm' },
-    row.paymentKey,
-    { url: 'http://backend.test/proxy/v2/swap/quote', method: 'GET', headers: {} }
-  );
-  if (claimed.kind !== 'run') throw new Error(`payment ${claimed.kind}`);
-  return claimed.row.id;
-}
-
-const failPayment = (id: string) =>
-  getDb()
-    .update(payments)
-    .set({ state: 'failed', kind: 'failed', code: 'budget_exhausted', finishedAt: new Date() })
-    .where(eq(payments.id, id));
-
-const signed = () => ({
-  state: 'signed' as const,
-  nonce: `0x${randomBytes(32).toString('hex')}`,
-  authorization: { resource: 'quote' },
-  authorized: '5000',
-  deadline: sql`now() + interval '10 minutes'`,
-  signedAt: new Date(),
-});
-
-const signPayment = (id: string) => getDb().update(payments).set(signed()).where(eq(payments.id, id));
 
 describe('claiming a swap by its idempotency key', () => {
   it('given a new key, when it is claimed, then the row is quoting on attempt 1 under the key swap:<id>:1', async () => {
@@ -229,29 +194,18 @@ describe('one open swap per connection (B18)', () => {
     expect((await rowOf(old.id)).state).toBe('expired');
   });
 
-  it('given a quoting swap with a lapsed lease and nothing signed, when another key is claimed, then it is abandoned and the new key runs', async () => {
+  it('given a quoting swap with a lapsed lease and no quote, when another key is claimed, then it is abandoned and the new key runs', async () => {
     const connectionId = await newConnection();
     const old = await quoting(connectionId);
-    await paymentFor(old.row);
     await lapse(old.row.id);
-    await lapsePayments(connectionId);
     expect((await claimSwap(connectionId, 'other', request)).kind).toBe('run');
     expect(await rowOf(old.row.id)).toMatchObject({ state: 'abandoned', finishedAt: expect.any(Date) });
   });
 
-  it('given a quoting swap with a lapsed lease whose quote payment was signed, when another key is claimed, then it stays open', async () => {
+  it('given a quoting swap with a lapsed lease holding a quote inside its owner window, when another key is claimed, then it stays open', async () => {
     const connectionId = await newConnection();
     const old = await quoting(connectionId);
-    await signPayment(await paymentFor(old.row));
-    await lapse(old.row.id);
-    expect(await claimSwap(connectionId, 'other', request)).toMatchObject({ kind: 'open', row: { id: old.row.id } });
-    expect((await rowOf(old.row.id)).state).toBe('quoting');
-  });
-
-  it('given a quoting swap with a lapsed lease whose quote payment is pending under a live lease, when another key is claimed, then it stays open', async () => {
-    const connectionId = await newConnection();
-    const old = await quoting(connectionId);
-    await paymentFor(old.row);
+    await writeHeld(leaseOf(old.row, old.token), quoteOf());
     await lapse(old.row.id);
     expect(await claimSwap(connectionId, 'other', request)).toMatchObject({ kind: 'open', row: { id: old.row.id } });
     expect((await rowOf(old.row.id)).state).toBe('quoting');
@@ -318,15 +272,13 @@ describe('the purge of approvals never completed', () => {
 });
 
 describe('lease writes', () => {
-  it('given a lease of another connection, when the row is written, released or moved to a new attempt, then nothing changes', async () => {
+  it('given a lease of another connection, when the row is written or released, then nothing changes', async () => {
     const { row, token } = await quoting(await newConnection());
-    await failPayment(await paymentFor(row));
     const foreign = { ...leaseOf(row, token), connectionId: await newConnection() };
 
     expect(await writeHeld(foreign, { code: 'foreign' })).toBeUndefined();
     expect(await release(foreign, { code: 'foreign' })).toBeUndefined();
-    expect(await nextAttempt(foreign)).toBeUndefined();
-    expect(await rowOf(row.id)).toMatchObject({ code: null, leaseToken: token, paymentAttempt: 1 });
+    expect(await rowOf(row.id)).toMatchObject({ code: null, leaseToken: token });
   });
 
   it('given a row holding its quote, when the lease is released, then the row keeps its quote and its lease', async () => {
@@ -338,40 +290,7 @@ describe('lease writes', () => {
   });
 });
 
-describe('payment attempts', () => {
-  it('given the current payment is still pending, when a new attempt is asked, then the row keeps its attempt', async () => {
-    const { row, token } = await quoting(await newConnection());
-    await paymentFor(row);
-    expect(await nextAttempt(leaseOf(row, token))).toBeUndefined();
-    expect((await rowOf(row.id)).paymentAttempt).toBe(1);
-  });
-
-  it('given the current payment failed unpaid, when a new attempt is asked, then the row moves to attempt 2 under swap:<id>:2', async () => {
-    const { row, token } = await quoting(await newConnection());
-    await writeHeld(leaseOf(row, token), { paymentId: await paymentFor(row), code: 'budget_exhausted' });
-    await failPayment((await rowOf(row.id)).paymentId!);
-    const next = await nextAttempt(leaseOf(row, token));
-    expect(next).toMatchObject({ paymentAttempt: 2, paymentKey: `swap:${row.id}:2`, paymentId: null, code: null });
-  });
-
-  it('given the current payment was answered free, when a new attempt is asked, then the row moves to attempt 2', async () => {
-    const { row, token } = await quoting(await newConnection());
-    const paymentId = await paymentFor(row);
-    await getDb()
-      .update(payments)
-      .set({ state: 'settled', kind: 'free', httpStatus: 503, finishedAt: new Date() })
-      .where(eq(payments.id, paymentId));
-    expect(await nextAttempt(leaseOf(row, token))).toMatchObject({ paymentAttempt: 2 });
-  });
-
-  it('given a row holding a quote whose payment later failed, when a new attempt is asked, then the row keeps its attempt', async () => {
-    const { row, token } = await quoting(await newConnection());
-    await failPayment(await paymentFor(row));
-    await writeHeld(leaseOf(row, token), quoteOf());
-    expect(await nextAttempt(leaseOf(row, token))).toBeUndefined();
-    expect((await rowOf(row.id)).paymentAttempt).toBe(1);
-  });
-
+describe('the payment attempt columns', () => {
   it('given a quoting row, when the attempt skips a number or the key does not follow it, then the database refuses', async () => {
     const { row } = await quoting(await newConnection());
     const write = (set: Partial<SwapRow>) => refusalOf(getDb().update(swaps).set(set).where(eq(swaps.id, row.id)));
@@ -548,7 +467,7 @@ describe('the swaps guard', () => {
     ['quote id', { quoteId: null }],
     ['deposit address', { depositAddress: freshAddress() }],
     ['fenced quote', { quoteFenced: 'other' }],
-    ['paid at', { paidAt: new Date(0) }],
+    ['paid at', { quotedAt: new Date(0) }],
     ['approve by', { approveBy: new Date(0) }],
     ['quote', { quote: { inputAmount: '1' } }],
   ])('given an awaiting_owner row, when its %s is rewritten, then the database refuses', async (_, set) => {
@@ -675,53 +594,6 @@ describe.skipIf(!TEST_PG_URL)('on Postgres, claims racing for the open-swap slot
       expect((await rowOf(old.id)).state).toBe('expired');
     }
   });
-});
-
-describe.skipIf(!TEST_PG_URL)('on Postgres, the sweep racing the quote payment (B18)', () => {
-  const lockWaiters = async () => {
-    const [{ n }] = await getDb().execute<{ n: number }>(
-      sql`select count(*)::int as n from pg_stat_activity where datname = current_database() and wait_event_type = 'Lock'`
-    );
-    return n;
-  };
-
-  async function untilBlockedOrDone(claim: Promise<unknown>) {
-    let done = false;
-    const end = () => (done = true);
-    void claim.then(end, end);
-    for (let i = 0; i < 100 && !done && (await lockWaiters()) === 0; i++) await new Promise((r) => setTimeout(r, 50));
-  }
-
-  it.each([
-    ['signed', signed],
-    ['taken under a new lease', () => ({ leaseUntil: sql`now() + interval '2 minutes'` })],
-  ])(
-    'given a quoting swap and its payment both past their leases, when the payment is %s while another key sweeps, then the swap stays open',
-    async (_, set) => {
-      const connectionId = await newConnection();
-      const old = await quoting(connectionId);
-      const paymentId = await paymentFor(old.row);
-      await lapse(old.row.id);
-      await lapsePayments(connectionId);
-
-      let commit!: () => void;
-      let written!: () => void;
-      const wrote = new Promise<void>((r) => (written = r));
-      const payment = getDb().transaction(async (tx) => {
-        await tx.update(payments).set(set()).where(eq(payments.id, paymentId));
-        written();
-        await new Promise<void>((r) => (commit = r));
-      });
-      await wrote;
-      const claim = claimSwap(connectionId, 'other', request);
-      await untilBlockedOrDone(claim);
-      commit();
-      await payment;
-
-      expect(await claim).toMatchObject({ kind: 'open', row: { id: old.row.id } });
-      expect((await rowOf(old.row.id)).state).toBe('quoting');
-    }
-  );
 });
 
 describe('the send marker and a reopened link', () => {

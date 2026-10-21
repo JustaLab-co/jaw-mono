@@ -4,8 +4,9 @@ import { and, eq, sql } from 'drizzle-orm';
 import { toFunctionSelector, type Hex } from 'viem';
 import { beforeAll, describe, expect, it, vi } from 'vitest';
 import { verifyBearer, type Tenant } from '@/connections/auth';
-import type { OpenWallet } from '@/connections/relay';
+import { WalletBusy, WalletRefused, type OpenWallet } from '@/connections/relay';
 import {
+  grantBudget,
   approvedOnChain,
   callTool,
   connect,
@@ -15,6 +16,7 @@ import {
   walletAnswers,
   walletsSettled,
 } from '@/connections/testkit';
+import { spends } from '@/connections/scopes';
 import { getDb } from '@/db/client';
 import { grants, permissionRequests } from '@/db/schema';
 import { TEST_PG_URL, useTestDb, useTestPostgres } from '@/db/test-db';
@@ -22,7 +24,8 @@ import type { ReadPermission } from '@/grants/permission';
 import { x402Budget } from '@/grants/store';
 import { grantPermissions } from './grant-permissions';
 import { sendCalls } from './owner-calls';
-import { revokePermission, type LookUp, type RevokeDeps } from './revoke-permission';
+import type { LookUp } from '@/grants/revokes';
+import { revokePermission, type RevokeDeps } from './revoke-permission';
 
 setTestEnv();
 beforeAll(TEST_PG_URL ? useTestPostgres : useTestDb);
@@ -36,7 +39,8 @@ const tenantOf = async (token: string) => (await verifyBearer(token))?.extra?.te
 async function connected(signer = owner(), scope?: string) {
   const c = await connect(signer, scope ? { scope } : {});
   const t = await tenantOf(c.access_token);
-  return { c, t, signer, budget: (await x402Budget(t.connectionId))?.permissionId as Hex };
+  const budget = spends(t.scopes) ? await grantBudget(t, signer) : undefined;
+  return { c, t, signer, budget: budget?.permissionId as Hex };
 }
 
 function fakeChain() {
@@ -91,7 +95,12 @@ const requestsOf = (permissionId: string) =>
   getDb()
     .select()
     .from(permissionRequests)
-    .where(sql`lower(${permissionRequests.permissionId}) = ${permissionId.toLowerCase()}`);
+    .where(
+      and(
+        eq(permissionRequests.method, 'revoke'),
+        sql`lower(${permissionRequests.permissionId}) = ${permissionId.toLowerCase()}`
+      )
+    );
 
 const grantRow = async (permissionId: string) =>
   (await getDb().select().from(grants).where(eq(grants.permissionId, permissionId)))[0];
@@ -137,6 +146,9 @@ describe('jaw_revoke_permission', () => {
     await walletsSettled();
 
     expect('structuredContent' in result && result.structuredContent?.connection).toBe(other.t.connectionId);
+    expect('structuredContent' in result && result.structuredContent?.summary).toContain(
+      'call jaw_connections yourself'
+    );
     const listed = await callTool(me.c.access_token, 'jaw_connections', {});
     const theirs = (listed.structuredContent.connections as { id: string; grants: object[] }[]).find(
       (c) => c.id === other.t.connectionId
@@ -354,6 +366,20 @@ describe('jaw_revoke_permission', () => {
     expect(await requestsOf(budget)).toMatchObject([{ state: 'owner_declined' }]);
   });
 
+  it('given the wallet answers the sign-in with an error that has no code, then the request reads wallet_error:unknown, not unexpected', async () => {
+    const { t, signer, budget } = await connected();
+    const refusing: OpenWallet = fakeWallet(async () => {
+      throw new WalletRefused('The passkey prompt was dismissed');
+    });
+    const { deps } = setup(signer);
+
+    await revokePermission(t, { permissionId: budget }, { ...deps(), openWallet: refusing });
+    await walletsSettled();
+
+    expect((await grantRow(budget)).revokedAt).toBeNull();
+    expect(await requestsOf(budget)).toMatchObject([{ state: 'failed', code: 'wallet_error:unknown' }]);
+  });
+
   it('given the wallet is signed in to another account, then nothing is revoked', async () => {
     const { t, signer, budget } = await connected();
     const { deps, asked } = setup(signer);
@@ -416,6 +442,27 @@ describe('jaw_revoke_permission', () => {
 
     expect(theirs.content[0].text).toMatch(/^revoke_in_progress: /);
     expect(theirs.content[0].text).toContain('reconnecting to the owner');
+  });
+
+  it('given a revoke opening its link while another ask finds the wallet pool full, then the other gets that link', async () => {
+    const signer = owner();
+    const { t, budget } = await connected(signer);
+    const { deps } = setup(signer);
+    const wait = held();
+    const holding = deps({ held: wait.promise });
+    let opener!: ReturnType<typeof revokePermission>;
+    const fullOnceOpened: OpenWallet = async () => {
+      await (opener = revokePermission(t, { permissionId: budget }, holding));
+      throw new WalletBusy();
+    };
+
+    const again = await revokePermission(t, { permissionId: budget }, { ...holding, openWallet: fullOnceOpened });
+    const first = await opener;
+    wait.release();
+    await walletsSettled();
+
+    expect(urlOf(first)).toBeTruthy();
+    expect(urlOf(again)).toBe(urlOf(first));
   });
 
   it('given the process holding a waiting revoke stopped renewing its lease, then a new ask opens a fresh link and the old session never asks the wallet', async () => {
@@ -582,4 +629,74 @@ describe('jaw_revoke_permission', () => {
     expect(revoke.content[0].text).toMatch(/^account_busy: /);
     expect(send.content[0].text).toMatch(/^account_busy: /);
   });
+
+  it('given ten revoke calls in a minute on one connection, when an eleventh comes, then it is rate_limited before the permission store is read', async () => {
+    await clearOfMinuteEdge();
+    const { t, signer } = await connected();
+    let lookUps = 0;
+    const { deps } = setup(signer, async () => (lookUps++, 'not_found'));
+
+    const answers = [];
+    for (let i = 0; i < 10; i++) answers.push(await revokePermission(t, { permissionId: randomId() }, deps()));
+    const over = await revokePermission(t, { permissionId: randomId() }, deps());
+
+    expect(answers.map((a) => a.content[0].text.split(':')[0])).toEqual(Array(10).fill('unknown_permission'));
+    expect(over.content[0].text).toMatch(/^rate_limited: /);
+    expect(lookUps).toBe(10);
+  });
+
+  it('given a revoke link waiting for the owner, when the agent asks again many times, then each gets the same link and none is rate_limited', async () => {
+    await clearOfMinuteEdge();
+    const { t, signer, budget } = await connected();
+    const { deps, opened } = setup(signer);
+    const wait = held();
+    const holding = deps({ held: wait.promise });
+
+    const answers = [];
+    for (let i = 0; i < 15; i++) answers.push(await revokePermission(t, { permissionId: budget }, holding));
+    wait.release();
+    await walletsSettled();
+
+    expect(new Set(answers.map(urlOf)).size).toBe(1);
+    expect(urlOf(answers[0])).toMatch(/cli-bridge/);
+    expect(opened()).toBe(1);
+  });
+
+  it('given a revoke of one permission waiting, when the connection asks about eleven others, then the eleventh is rate_limited', async () => {
+    await clearOfMinuteEdge();
+    const { t, signer, budget } = await connected();
+    const { deps } = setup(signer);
+    const wait = held();
+    await revokePermission(t, { permissionId: budget }, deps({ held: wait.promise }));
+
+    const answers = [];
+    for (let i = 0; i < 11; i++) answers.push(await revokePermission(t, { permissionId: randomId() }, deps()));
+    wait.release();
+    await walletsSettled();
+
+    expect(answers[10].content[0].text).toMatch(/^rate_limited: /);
+  });
+
+  it("given another connection's revoke of a permission waiting, when this connection asks about it many times, then none is rate_limited", async () => {
+    await clearOfMinuteEdge();
+    const signer = owner();
+    const holder = await connected(signer);
+    const asker = await connected(signer, 'wallet:read');
+    const { deps } = setup(signer);
+    const wait = held();
+    await revokePermission(holder.t, { permissionId: holder.budget }, deps({ held: wait.promise }));
+
+    const answers = [];
+    for (let i = 0; i < 12; i++) answers.push(await revokePermission(asker.t, { permissionId: holder.budget }, deps()));
+    wait.release();
+    await walletsSettled();
+
+    expect(answers.map((a) => a.content[0].text.split(':')[0])).toEqual(Array(12).fill('revoke_in_progress'));
+  });
 });
+
+/** The limit counts per wall-clock minute, so a run that straddles one would split its count. */
+async function clearOfMinuteEdge() {
+  const intoMinute = Date.now() % 60_000;
+  if (intoMinute > 50_000) await new Promise((resolve) => setTimeout(resolve, 60_500 - intoMinute));
+}

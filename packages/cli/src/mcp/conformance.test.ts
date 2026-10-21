@@ -54,6 +54,16 @@ const CONTRACT: Record<string, ToolContract> = {
   jaw_status: { args: {}, required: [], readOnly: true },
   jaw_disconnect: { args: {}, required: [], readOnly: false },
   jaw_session_status: { args: {}, required: [], readOnly: true },
+  jaw_grant_permissions: {
+    // The x402 preset and nothing else: no calls, no spends, no expiry. The
+    // grant ceiling and the expiry clamp bound what is left.
+    args: {
+      x402Budget: { type: 'object' },
+      chainId: { type: 'integer', exclusiveMinimum: 0 },
+    },
+    required: [],
+    readOnly: false,
+  },
   jaw_pay_and_fetch: {
     args: {
       url: { type: 'string', format: 'uri' },

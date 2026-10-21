@@ -10,9 +10,11 @@ import { countHit } from '@/db/settings';
 import {
   currentSign,
   LINK_LOST,
+  SIGN_KEPT_DAYS,
   lostBefore,
   lostPreamble,
   openLink,
+  signById,
   type PermissionRequestRow,
 } from '@/grants/requests';
 import { signWork, type SignPayload, type SignRequest } from '@/grants/resume';
@@ -20,11 +22,11 @@ import { canonical } from '@/lib/canonical';
 import { isProxyChain } from '@/lib/chain';
 import { RATE_WINDOW_MS } from '@/lib/edge';
 import { reply } from '@/lib/fence';
-import { MAX_OPEN_PER_ACCOUNT } from '@/owner-calls/cap';
+import { MAX_WAIT_SECONDS, SUGGESTED_WAIT_SECONDS, waiterOf, waitFor, type Waiter } from '@/lib/wait';
+import { ACCOUNT_LINK_RATE_LIMIT, LINK_RATE_LIMIT, MAX_OPEN_PER_ACCOUNT } from '@/owner-calls/cap';
 import { gateCode } from '@/payments/render';
 
-const LINK_RATE_LIMIT = 10;
-const ACCOUNT_LINK_RATE_LIMIT = 20;
+const STATUS_RATE_LIMIT = 30;
 const MESSAGE_MAX = 8_192;
 const TYPED_DATA_MAX = 32_768;
 const HIDDEN_IN_NAME = /[\p{Cc}\p{Cf}\p{Zl}\p{Zp}\p{Default_Ignorable_Code_Point}]/u;
@@ -52,12 +54,29 @@ const signInput = z
       .string()
       .regex(/^[A-Za-z0-9_.:-]{1,100}$/)
       .optional()
-      .describe('Send it again with the same input to read the outcome; one is made up and returned when absent'),
+      .describe(
+        `Send it again with the same input to read the outcome, for ${SIGN_KEPT_DAYS} days after it ends; one is made up and returned when absent`
+      ),
   })
   .refine((v) => (v.message === undefined) !== (v.typedData === undefined), {
     message: 'Send exactly one of message and typedData',
   });
 export type SignInput = z.infer<typeof signInput>;
+
+const statusInput = z.strictObject({
+  id: z
+    .string()
+    .regex(/^pr_[A-Za-z0-9_-]{22}$/)
+    .describe('The id jaw_sign returned'),
+  waitSeconds: z
+    .number()
+    .int()
+    .min(0)
+    .max(MAX_WAIT_SECONDS)
+    .optional()
+    .describe(`Wait up to this many seconds (at most ${MAX_WAIT_SECONDS}) for the owner to answer before answering`),
+});
+export type SignStatusInput = z.infer<typeof statusInput>;
 
 const signOutput = z.object({
   id: z.string(),
@@ -101,15 +120,24 @@ const STATE = {
   failed: 'failed',
 } as const;
 
-function summaryOf(row: PermissionRequestRow): string {
+/** `followUp` is a status read: the agent already showed the link, so it is not asked to again. */
+function summaryOf(row: PermissionRequestRow, followUp: boolean): string {
   const by = row.approveBy.toISOString();
   const what = row.signKind === 'message' ? 'the message' : 'the typed data';
   switch (row.state) {
     case 'awaiting_owner':
+      if (followUp) {
+        return (
+          `The owner has not answered the link yet. Call jaw_get_sign_status with ${row.id} and waitSeconds ${SUGGESTED_WAIT_SECONDS} again, until ${by}. ` +
+          'Do not ask the owner whether they signed, and do not show the link again unless they ask for it.'
+        );
+      }
       return (
         `Ask the owner to open ${row.walletUrl} before ${by} and review ${what} from ${row.account}. ` +
         'The owner sees it in their wallet and signs there; this connection never signs it. ' +
-        `Send jaw_sign again with idempotencyKey ${row.idempotencyKey} and the same input to read the signature.`
+        `Right after showing the link, call jaw_get_sign_status with ${row.id} and waitSeconds ${SUGGESTED_WAIT_SECONDS}, and again each time it answers awaiting_owner, until ${by}. ` +
+        `Without that tool, send jaw_sign again with idempotencyKey ${row.idempotencyKey} and the same input. ` +
+        'Do not wait for the owner to say they signed.'
       );
     case 'approved':
       return `The owner signed ${what} in the wallet.`;
@@ -129,7 +157,7 @@ function summaryOf(row: PermissionRequestRow): string {
   }
 }
 
-async function answer(row: PermissionRequestRow): Promise<SignResult> {
+async function answer(row: PermissionRequestRow, followUp = false): Promise<SignResult> {
   const lost = await lostBefore(row);
   const ended = row.state !== 'awaiting_owner' && row.state !== 'approved';
   return reply(
@@ -147,7 +175,7 @@ async function answer(row: PermissionRequestRow): Promise<SignResult> {
         (lost
           ? lostPreamble(lost, 'sign') +
             `Tell the owner not to approve that one; idempotencyKey ${lost.idempotencyKey} answers link_lost. `
-          : '') + summaryOf(row),
+          : '') + summaryOf(row, followUp),
     })
   );
 }
@@ -259,10 +287,28 @@ export async function sign(t: Tenant, input: SignInput, deps: SignDeps = DEFAULT
   if (row.idempotencyKey !== idempotencyKey) {
     return refuse(
       'sign_in_progress',
-      `This connection already asked the owner to sign under idempotencyKey ${row.idempotencyKey}, until ${row.approveBy.toISOString()}. Read it with that key, or ask again once it ends.`
+      `This connection already asked the owner to sign under idempotencyKey ${row.idempotencyKey}, until ${row.approveBy.toISOString()}. Read it with jaw_get_sign_status and ${row.id}, or ask again once it ends.`
     );
   }
   return answerStored(row);
+}
+
+export async function signStatus(
+  t: Tenant,
+  { id, waitSeconds = 0 }: SignStatusInput,
+  deps: { pollMs?: number } = {},
+  waiter: Waiter = {}
+): Promise<SignResult> {
+  if ((await countHit(`owner-sign-status:${t.connectionId}`, RATE_WINDOW_MS)) > STATUS_RATE_LIMIT) {
+    return refuse('rate_limited', 'Too many status reads on this connection. Wait a minute.');
+  }
+  const until = Date.now() + waitSeconds * 1000;
+  const read = async () => {
+    const row = await signById(t, id);
+    return row ? answer(row, true) : refuse('not_found', 'No sign request on this connection has that id.');
+  };
+  const settled = (r: SignResult) => r.structuredContent?.state !== 'awaiting_owner';
+  return waitFor(await read(), { key: `sign:${t.connectionId}`, until, read, settled, pollMs: deps.pollMs }, waiter);
 }
 
 export function registerSignTool(server: McpServer) {
@@ -271,11 +317,22 @@ export function registerSignTool(server: McpServer) {
     {
       description:
         'Ask the account owner to sign a message (EIP-191) or EIP-712 typed data with the account. The owner sees it on keys.jaw.id and approves with their passkey; this connection never signs it. ' +
-        'Returns a link for the owner right away. Send the same idempotencyKey and input again to read the signature once the owner approves. ' +
+        `Returns a link for the owner right away. Right after showing it, call jaw_get_sign_status with the id and waitSeconds ${SUGGESTED_WAIT_SECONDS} (up to ${MAX_WAIT_SECONDS}) and repeat until approveBy, without waiting for the owner to say they signed. ` +
         'Pass exactly one of message and typedData. Tell the owner in plain words what signing it allows: their review is the only check, and a signature can authorize payments or approvals.',
       inputSchema: signInput,
       outputSchema: signOutput,
     },
     async (input, ctx) => sign(tenant(ctx), input)
+  );
+  server.registerTool(
+    'jaw_get_sign_status',
+    {
+      description:
+        'Follow a jaw_sign request on this connection by its id: whether the owner signed, declined or let the link expire, and the signature once signed. ' +
+        `With waitSeconds it answers as soon as the owner does, or after that many seconds (at most ${MAX_WAIT_SECONDS}), sending progress while it waits.`,
+      inputSchema: statusInput,
+      outputSchema: signOutput,
+    },
+    async (input, ctx) => signStatus(tenant(ctx), input, {}, waiterOf(ctx, input.waitSeconds ?? 0))
   );
 }

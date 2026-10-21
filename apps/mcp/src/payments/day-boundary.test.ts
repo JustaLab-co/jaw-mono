@@ -35,8 +35,8 @@ const AUTHORIZATION_USED = parseAbi(['event AuthorizationUsed(address indexed au
 
 interface Route {
   price: string;
-  /** Held before the 402 is answered. */
-  stallMs?: number;
+  /** Awaited before the 402 is answered. */
+  beforeChallenge?: () => Promise<void>;
   /** Answers the probe with a challenge nobody can pay. */
   malformed?: boolean;
 }
@@ -50,7 +50,7 @@ const seller = createServer(async (req, res) => {
   if (!route) return void res.writeHead(404).end();
   const signed = req.headers['payment-signature'];
   if (!signed) {
-    if (route.stallMs) await new Promise((r) => setTimeout(r, route.stallMs));
+    await route.beforeChallenge?.();
     const accepts = route.malformed
       ? [{ scheme: 'exact', network: 'eip155:84532', amount: '-1', asset: USDC, payTo: PAY_TO }]
       : [
@@ -165,7 +165,8 @@ async function connected(perDay: string, float: bigint) {
 
 /**
  * Moves the budget's anchor so its current day ends `ms` from now. The end is
- * also given on the database's clock, which stamps `createdAt`.
+ * also given on the database's clock, which stamps `createdAt`. Each test moves it
+ * after the step that must land before the end, so a slow machine cannot miss it.
  */
 async function dayEndsIn(t: Tenant, ms: number): Promise<{ boundary: number; onDbClock: number }> {
   const endsAt = Date.now() + ms;
@@ -189,10 +190,15 @@ const rowOf = async (id: string) => (await getDb().select().from(payments).where
 describe('the daily cap at the end of a day', () => {
   it('given a seller that holds its 402 across the end of the day, when the next payment would pass the cap of the new day, then it is refused', async () => {
     const t = await connected('1', 2_000_000n);
-    const { boundary, onDbClock } = await dayEndsIn(t, 3_000);
-    routes.set('/stall', { price: '600000', stallMs: boundary - Date.now() + 1_500 });
+    let boundary = 0;
+    let onDbClock = 0;
+    // The row is claimed before the probe, so the day ends after the claim and before the signature.
+    const endTheDay = async () => {
+      ({ boundary, onDbClock } = await dayEndsIn(t, 1_500));
+      await until(boundary);
+    };
+    routes.set('/stall', { price: '600000', beforeChallenge: endTheDay });
     routes.set('/next', { price: '600000' });
-    // Claimed before the boundary, signed after it.
     const a = await pay(t, { url: url('/stall'), idempotencyKey: 'straddle-a' }, deps);
     expect(a.structuredContent).toMatchObject({ kind: 'paid' });
     const rowA = await rowOf(a.structuredContent!.paymentId);
@@ -206,11 +212,11 @@ describe('the daily cap at the end of a day', () => {
 
   it('given a key refused yesterday and retried today, when the next payment would pass the cap of today, then it is refused', async () => {
     const t = await connected('1', 2_000_000n);
-    const { boundary, onDbClock } = await dayEndsIn(t, 2_000);
     routes.set('/flaky', { price: '600000', malformed: true });
     routes.set('/next', { price: '600000' });
     const first = await pay(t, { url: url('/flaky'), idempotencyKey: 'stale' }, deps);
     expect(first.structuredContent).toMatchObject({ refusal: { code: 'malformed_challenge' } });
+    const { boundary, onDbClock } = await dayEndsIn(t, 1_500);
     await until(boundary);
     routes.set('/flaky', { price: '600000' });
     const retried = await pay(t, { url: url('/flaky'), idempotencyKey: 'stale' }, deps);
@@ -223,11 +229,11 @@ describe('the daily cap at the end of a day', () => {
 
   it('given a payment signed before the day ends, when the next payment comes after it ends, then it is paid', async () => {
     const t = await connected('1', 2_000_000n);
-    const { boundary } = await dayEndsIn(t, 2_000);
     routes.set('/early', { price: '600000' });
     routes.set('/next', { price: '600000' });
     const a = await pay(t, { url: url('/early'), idempotencyKey: 'early-a' }, deps);
     expect(a.structuredContent).toMatchObject({ kind: 'paid' });
+    const { boundary } = await dayEndsIn(t, 1_500);
     expect((await rowOf(a.structuredContent!.paymentId)).signedAt!.getTime()).toBeLessThan(boundary);
     await until(boundary);
     // Yesterday's 0.6 is not today's: the new day starts with the whole cap.
@@ -260,11 +266,11 @@ describe('the daily cap at the end of a day', () => {
 
   it('given a key claimed yesterday whose reservation is live today, when the next payment would pass the cap of today, then it is refused', async () => {
     const t = await connected('1', 2_000_000n);
-    const { boundary, onDbClock } = await dayEndsIn(t, 2_000);
     routes.set('/flaky', { price: '600000', malformed: true });
     routes.set('/next', { price: '600000' });
     const first = await pay(t, { url: url('/flaky'), idempotencyKey: 'held' }, deps);
     expect(first.structuredContent).toMatchObject({ refusal: { code: 'malformed_challenge' } });
+    const { boundary, onDbClock } = await dayEndsIn(t, 1_500);
     expect((await rowOf(first.structuredContent!.paymentId)).createdAt.getTime()).toBeLessThan(onDbClock);
     await until(boundary);
     // A retry of the key holds 0.6 between reserving and signing, as the refill leaves it.

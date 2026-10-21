@@ -1,7 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import { z } from 'zod';
 import { supportsSessionMode } from '../lib/rpc-classifier.js';
-import { payAndFetchSchema, rpcMethodSchema } from '@jaw.id/agent';
+import { grantPermissionsSchema, payAndFetchSchema, rpcMethodSchema } from '@jaw.id/agent';
 
 describe('payAndFetch url schema', () => {
   const url = z.object(payAndFetchSchema).shape.url;
@@ -22,6 +22,26 @@ describe('payAndFetch url schema', () => {
     ]) {
       expect(url.safeParse(bad).success, bad).toBe(false);
     }
+  });
+});
+
+describe('grant x402Budget schema', () => {
+  const budget = z.object(grantPermissionsSchema).shape.x402Budget;
+
+  it('accepts a decimal USDC amount per day', () => {
+    for (const perDay of ['1', '0.5', '10', '999999999', '0.000001', '123456789.123456']) {
+      expect(budget.safeParse({ perDay }).success, perDay).toBe(true);
+    }
+  });
+
+  it('rejects amounts that are not a plain decimal with at most 9 integer and 6 fraction digits', () => {
+    for (const perDay of ['', '1e3', '-1', '+1', '1.', '.5', '0x10', '1,5', ' 1', '1/day', '1234567890', '0.0000001']) {
+      expect(budget.safeParse({ perDay }).success, perDay).toBe(false);
+    }
+  });
+
+  it('rejects any key besides perDay', () => {
+    expect(budget.safeParse({ perDay: '1', perWeek: '1' }).success).toBe(false);
   });
 });
 

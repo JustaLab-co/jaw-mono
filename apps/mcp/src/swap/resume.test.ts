@@ -43,7 +43,7 @@ async function quoted(t: Tenant, key: string) {
       depositAddress: deposit,
       quote: { inputAmount: '1000000', expectedOutputAmount: '990000', minOutputAmount: '980000' },
       call: { chainId: 84532, to: USDC, data: '0xa9059cbb', value: '0' },
-      paidAt: new Date(),
+      quotedAt: new Date(),
       leaseUntil: sql`statement_timestamp()`,
     }
   );

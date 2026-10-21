@@ -113,7 +113,7 @@ describe('audit events', () => {
 
   it('records a tool that threw as an error, once', async () => {
     const c = await connect();
-    vi.spyOn(grantsStore, 'x402Budget').mockRejectedValueOnce(new Error('boom'));
+    vi.spyOn(grantsStore, 'x402Budgets').mockRejectedValueOnce(new Error('boom'));
     const res = await call(c.access_token, 'jaw_session_status', {});
     expect(res.json.result.isError).toBe(true);
     const events = await eventsOf(await connectionOf(c.access_token));

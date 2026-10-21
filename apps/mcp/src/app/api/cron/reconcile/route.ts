@@ -1,7 +1,7 @@
 import { sweepWraps } from '@/connections/adapter';
 import { hasCronSecret } from '@/lib/cron';
 import { withEdge } from '@/lib/edge';
-import { purge, reconcile } from '@/reconciler/run';
+import { purge, reconcile, sweepRevokedGrants } from '@/reconciler/run';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -12,7 +12,8 @@ const run = withEdge(
     await sweepWraps();
     const report = await reconcile();
     await purge();
-    return Response.json(report);
+    const grantsRevoked = await sweepRevokedGrants();
+    return Response.json({ ...report, grantsRevoked });
   },
   { guarded: false }
 );

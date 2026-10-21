@@ -24,9 +24,8 @@ import {
   walletsSettled,
 } from '@/connections/testkit';
 import { getDb } from '@/db/client';
-import { grants, ownerCalls, sends, settings } from '@/db/schema';
-import { countHit } from '@/db/settings';
-import { TEST_PG_URL, useTestDb, useTestPostgres, withoutOwnerCallsGuard } from '@/db/test-db';
+import { grants, ownerCalls, rateLimits, sends, settings } from '@/db/schema';
+import { hitsThisWindow, TEST_PG_URL, useTestDb, useTestPostgres, withoutOwnerCallsGuard } from '@/db/test-db';
 import { RATE_WINDOW_MS } from '@/lib/edge';
 import { gateCode } from '@/payments/render';
 import { SEND_STARTED } from '@/owner-calls/store';
@@ -44,6 +43,21 @@ vi.mock('@/connections/relay', async (original) => ({
     return { url: 'http://keys.test/cli-bridge?session=served', run: () => new Promise(() => {}), close: () => {} };
   },
 }));
+
+// Holds the next request between reading its own key and counting the account's links.
+const turn = vi.hoisted(() => ({ beforeCount: undefined as undefined | (() => Promise<unknown>) }));
+vi.mock('@/owner-calls/cap', async (original) => {
+  const cap = await original<typeof import('@/owner-calls/cap')>();
+  return {
+    ...cap,
+    countOpenLinks: async (...args: Parameters<typeof cap.countOpenLinks>) => {
+      const wait = turn.beforeCount;
+      turn.beforeCount = undefined;
+      await wait?.();
+      return cap.countOpenLinks(...args);
+    },
+  };
+});
 
 setTestEnv();
 process.env.JAW_MCP_RPC_URL = 'http://127.0.0.1:9';
@@ -94,6 +108,7 @@ const quietChain = fakeChain({ head: 1_000_000n }).clients;
 
 beforeAll(TEST_PG_URL ? useTestPostgres : useTestDb);
 beforeEach(() => {
+  turn.beforeCount = undefined;
   served.clients = [];
   opened = [];
   asked = [];
@@ -839,6 +854,20 @@ describe('jaw_send_calls refusals', () => {
     expect(await rowsOf(t.connectionId)).toEqual([]);
   });
 
+  it('given the same key opens its link while a retry of it finds the owner pool full, then the retry answers that link', async () => {
+    const { t } = await connected();
+    let opener!: ReturnType<typeof send>;
+    const fullOnceOpened: OpenWallet = async () => {
+      await (opener = send(t));
+      throw new WalletBusy();
+    };
+
+    const retry = await send(t, {}, fullOnceOpened);
+
+    expect(retry[gateCode]).toBeUndefined();
+    expect(retry.structuredContent!.url).toBe((await opener).structuredContent!.url);
+  });
+
   it('given a link that would reopen and the owner pool is full, then wallet_busy', async () => {
     const { t } = await connected();
     await send(t, {}, wallet(undefined, ended));
@@ -891,7 +920,7 @@ describe('jaw_send_calls refusals', () => {
 
   it('given nine links this minute, when the tenth opens, then it is served', async () => {
     const { t } = await connected();
-    for (let i = 0; i < 9; i++) await countHit(`owner-calls:${t.connectionId}`, RATE_WINDOW_MS);
+    await hitsThisWindow(`owner-calls:${t.connectionId}`, 9, RATE_WINDOW_MS);
 
     const result = await send(t);
 
@@ -900,7 +929,7 @@ describe('jaw_send_calls refusals', () => {
 
   it('given ten hits on the connection counter this minute, when a link is asked for, then rate_limited and nothing is stored', async () => {
     const { t } = await connected();
-    for (let i = 0; i < 10; i++) await countHit(`owner-calls:${t.connectionId}`, RATE_WINDOW_MS);
+    await hitsThisWindow(`owner-calls:${t.connectionId}`, 10, RATE_WINDOW_MS);
 
     const result = await send(t);
 
@@ -914,6 +943,36 @@ describe('jaw_send_calls refusals', () => {
       const signer = newSigner();
       return Promise.all(Array.from({ length: n }, () => connected('wallet:read', signer).then((c) => c.t)));
     };
+
+    it('given two links open on the account, when the same key opens the third while a retry of it is checking, then the retry answers that link', async () => {
+      const [a, b, c] = await sameAccount(3);
+      await send(a);
+      await send(b);
+      let opener!: ReturnType<typeof send>;
+      turn.beforeCount = () => (opener = send(c));
+
+      const retry = await send(c);
+
+      expect(retry[gateCode]).toBeUndefined();
+      expect(retry.structuredContent!.url).toBe((await opener).structuredContent!.url);
+    });
+
+    it('given two links open on the account, when the same key opens the third while a retry of it opens its wallet, then the retry answers that link and closes its wallet', async () => {
+      const [a, b, c] = await sameAccount(3);
+      await send(a);
+      await send(b);
+      let opener!: ReturnType<typeof send>;
+      const openerFirst: OpenWallet = async (chainId, until) => {
+        await (opener = send(c));
+        return wallet()(chainId, until);
+      };
+
+      const retry = await send(c, {}, openerFirst);
+
+      expect(retry[gateCode]).toBeUndefined();
+      expect(retry.structuredContent!.url).toBe((await opener).structuredContent!.url);
+      expect(closed).toHaveLength(1);
+    });
 
     it('given three links open across connections of one account, when a fourth connection asks, then account_busy and no wallet opens', async () => {
       const [a, b, c, d] = await sameAccount(4);
@@ -1070,8 +1129,8 @@ describe('jaw_send_calls refusals', () => {
       const { t: first } = await connected('wallet:read', signer);
       const { t: second } = await connected('wallet:read', signer);
       const { t: third } = await connected('wallet:read', signer);
-      for (let i = 0; i < 10; i++) await countHit(accountKey(first), RATE_WINDOW_MS);
-      for (let i = 0; i < 10; i++) await countHit(accountKey(second), RATE_WINDOW_MS);
+      await hitsThisWindow(accountKey(first), 10, RATE_WINDOW_MS);
+      await hitsThisWindow(accountKey(second), 10, RATE_WINDOW_MS);
 
       const result = await send(third);
 
@@ -1088,12 +1147,16 @@ describe('jaw_send_calls refusals', () => {
       await send(first);
       await send(second);
 
-      expect(await countHit(accountKey(first), RATE_WINDOW_MS)).toBe(3);
+      const [{ hits }] = await getDb()
+        .select({ hits: sql<number>`sum(${rateLimits.count})::int` })
+        .from(rateLimits)
+        .where(eq(rateLimits.key, accountKey(first)));
+      expect(hits).toBe(2);
     });
 
     it('given nineteen links this minute on the account, when the twentieth opens, then it is served', async () => {
       const { t } = await connected();
-      for (let i = 0; i < 19; i++) await countHit(accountKey(t), RATE_WINDOW_MS);
+      await hitsThisWindow(accountKey(t), 19, RATE_WINDOW_MS);
 
       const result = await send(t);
 
@@ -1103,7 +1166,7 @@ describe('jaw_send_calls refusals', () => {
     it('given links on another account, then they do not count', async () => {
       const { t } = await connected();
       const { t: stranger } = await connected();
-      for (let i = 0; i < 25; i++) await countHit(accountKey(stranger), RATE_WINDOW_MS);
+      await hitsThisWindow(accountKey(stranger), 25, RATE_WINDOW_MS);
 
       const result = await send(t);
 
@@ -1489,7 +1552,7 @@ describe('jaw_get_calls_status', () => {
 
   it('given 29 reads this minute, when the 30th comes, then it answers', async () => {
     const { t, id } = await sentRow();
-    for (let i = 0; i < 29; i++) await countHit(`owner-calls-status:${t.connectionId}`, RATE_WINDOW_MS);
+    await hitsThisWindow(`owner-calls-status:${t.connectionId}`, 29, RATE_WINDOW_MS);
 
     const result = await check(t, id);
 
@@ -1499,7 +1562,7 @@ describe('jaw_get_calls_status', () => {
 
   it('given more than 30 reads this minute, then rate_limited', async () => {
     const { t, id } = await sentRow();
-    for (let i = 0; i < 30; i++) await countHit(`owner-calls-status:${t.connectionId}`, RATE_WINDOW_MS);
+    await hitsThisWindow(`owner-calls-status:${t.connectionId}`, 30, RATE_WINDOW_MS);
 
     const result = await check(t, id);
 
