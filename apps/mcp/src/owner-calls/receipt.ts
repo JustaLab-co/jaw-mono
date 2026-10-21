@@ -41,8 +41,10 @@ export const readReceipt: ReadReceipt = async (chainId, callsId) => {
 export type ReadKnown = (chainId: number, callsId: string) => Promise<boolean>;
 
 export const readKnown: ReadKnown = async (chainId, callsId) => {
+  // A JSON-RPC error body comes with a 2xx status too, and has no result to read as "unknown".
   const { result } = z
     .object({ result: z.unknown() })
+    .refine((body) => 'result' in body, 'bundler answered without a result')
     .parse(await askBundler(chainId, 'eth_getUserOperationByHash', callsId));
   return result != null;
 };
