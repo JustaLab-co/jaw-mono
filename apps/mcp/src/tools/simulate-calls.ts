@@ -79,10 +79,8 @@ export function simulationUrl() {
 }
 
 /** One request, no retries, so one tool call is one simulation on the proxy. */
-export function simulationClient(chainId: number, url = simulationUrl(), timeout = TIMEOUT_MS): PublicClient {
-  const chain = proxyChains().find((c) => c.id === chainId);
-  if (!chain) throw new Error(`chain ${chainId} is not supported`);
-  return createPublicClient({ chain, transport: http(url, { retryCount: 0, timeout }) });
+export function simulationClient(_chainId: number, url = simulationUrl(), timeout = TIMEOUT_MS): PublicClient {
+  return createPublicClient({ transport: http(url, { retryCount: 0, timeout }) });
 }
 
 function untrusted(text: string) {
@@ -104,7 +102,7 @@ function badAddress(a: Input, sender: string) {
     ['The sender', sender] as const,
     ...(a.paymaster?.mode === 'erc20' ? [['The paymaster token', a.paymaster.token] as const] : []),
   ];
-  return named.find(([, address]) => !isAddress(address, { strict: true }))?.[0];
+  return named.find(([, address]) => !isAddress(address))?.[0];
 }
 
 type RpcFailure = { code: number; details?: string };
@@ -168,7 +166,7 @@ export async function simulateCalls(args: Input, account: Address, clientFor: Cl
     calls: calls.map(({ to, value, data }) => ({
       to,
       ...(value !== undefined && { value: toHex(BigInt(value)) }),
-      ...(data !== undefined && { data }),
+      data,
     })),
     ...(permissionId && { permissionId }),
     ...(paymaster && { paymaster }),

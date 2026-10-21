@@ -1,8 +1,10 @@
 import { createServer, type IncomingMessage, type Server } from 'node:http';
 import type { AddressInfo } from 'node:net';
-import { afterEach, describe, expect, it } from 'vitest';
+import { BaseError } from 'viem';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { setTestEnv } from '@/connections/testkit';
 import { proxyChains } from '@/lib/chain';
+import { scrub } from '@/lib/scrub';
 import {
   registerSimulateCallsTool,
   simulateCalls,
@@ -12,12 +14,14 @@ import {
 } from './simulate-calls';
 
 setTestEnv();
+// The key has characters that url-encoding changes, so the encoded form is distinct from the bare one.
+const SECRET = 'sk_live/s3cr3t@x';
+process.env.JAW_MCP_API_KEY = SECRET;
 
 const ACCOUNT = '0x1111111111111111111111111111111111111111';
 const OTHER = '0x2222222222222222222222222222222222222222';
 const USDC = '0x036CbD53842c5426634e7929541eC2318f3dCF7e';
 const PERMISSION = `0x${'ab'.repeat(32)}`;
-const SECRET = 'sk_live_s3cr3t';
 const CHAIN = 84532;
 
 type Rpc = { method: string; params: [Record<string, unknown>] };
@@ -25,6 +29,7 @@ type Answer = { status?: number; body?: unknown; hang?: boolean };
 
 const open: Server[] = [];
 afterEach(() => {
+  vi.restoreAllMocks();
   for (const s of open.splice(0)) s.close();
 });
 
@@ -190,6 +195,25 @@ describe('jaw_simulate_calls', () => {
       expect(JSON.stringify(out)).toContain('api-key=[key]');
     });
 
+    it('given text with the key bare, url-encoded and under another api-key value, then none of the secret comes out', () => {
+      expect(scrub(`a ${SECRET} b`)).toBe('a [key] b');
+      expect(scrub(`a ${encodeURIComponent(SECRET)} b`)).toBe('a [key] b');
+      expect(scrub('x?api-key=other-value&y=1')).toBe('x?api-key=[key]&y=1');
+    });
+
+    it('given a reason of exactly 2000 characters, then it is not marked truncated', async () => {
+      const p = await proxy(result({ status: 'error', reason: 'x'.repeat(2000) }));
+      const out = done(await simulateCalls(input(), ACCOUNT, p.clientFor));
+      expect((out.structuredContent as { reason: string }).reason).not.toContain('truncated');
+    });
+
+    it('given revertData of exactly 2048 bytes, then it is passed through whole', async () => {
+      const revertData = `0x${'ab'.repeat(2048)}`;
+      const p = await proxy(result({ status: 'reverted', callIndex: 0, reason: 'x', revertData }));
+      const out = done(await simulateCalls(input(), ACCOUNT, p.clientFor));
+      expect((out.structuredContent as { revertData: string }).revertData).toBe(revertData);
+    });
+
     it('given revertData past 2 KB, then it is cut with a truncation marker', async () => {
       const revertData = `0x${'ab'.repeat(3000)}`;
       const p = await proxy(result({ status: 'reverted', callIndex: 0, reason: 'x', revertData }));
@@ -205,6 +229,10 @@ describe('jaw_simulate_calls', () => {
       const url = new URL(simulationUrl());
       expect(`${url.origin}${url.pathname}`).toBe('https://api.justaname.id/proxy/v1/rpc/handle');
       expect(url.searchParams.has('chainId')).toBe(false);
+    });
+
+    it('given a configured api key, then the default url carries it as api-key', () => {
+      expect(simulationUrl()).toBe(`https://api.justaname.id/proxy/v1/rpc/handle?api-key=${SECRET}`);
     });
 
     it('given the default client, then it waits longer than the proxy deadline of 10 s', () => {
@@ -307,6 +335,20 @@ describe('jaw_simulate_calls', () => {
       expect(text).not.toContain(SECRET);
     });
 
+    it('given a -32602 with no details, then the refusal says no reason was given', async () => {
+      const failing = () => ({ request: () => Promise.reject(Object.assign(new BaseError('x'), { code: -32602 })) });
+      const text = refused(await simulateCalls(input(), ACCOUNT, failing as never));
+      expect(text).toContain('rejected the request');
+      expect(text).toContain('no reason given');
+    });
+
+    it('given a request that throws a plain Error, then it refuses with nothing decided instead of throwing', async () => {
+      const failing = () => ({ request: () => Promise.reject(new Error('socket hang up')) });
+      expect(refused(await simulateCalls(input(), ACCOUNT, failing as never))).toBe(
+        'The simulation did not run, so nothing was decided. Try again shortly.'
+      );
+    });
+
     it('given the proxy answers -32601, then it refuses saying the proxy does not simulate yet', async () => {
       const p = await proxy(rpcError(-32601, 'Method not found'));
       expect(refused(await simulateCalls(input(), ACCOUNT, p.clientFor))).toBe(
@@ -371,6 +413,21 @@ describe('jaw_simulate_calls', () => {
       expect(seen[0].config.annotations?.readOnlyHint).toBe(true);
       expect(seen[0].config.description).toContain('not a failure');
       expect(seen[0].config.description).toContain('permissionId');
+    });
+
+    it('given the handler runs for a connection, then the connected account is the sender', async () => {
+      let handler: (args: Input, ctx: unknown) => Promise<unknown> = async () => undefined;
+      registerSimulateCallsTool({
+        registerTool: (_: string, __: unknown, fn: typeof handler) => (handler = fn),
+      } as never);
+      const fetched = vi.spyOn(globalThis, 'fetch').mockResolvedValue(
+        new Response(JSON.stringify({ jsonrpc: '2.0', id: 1, result: { status: 'success' } }), {
+          headers: { 'content-type': 'application/json' },
+        })
+      );
+      await handler(input(), { http: { authInfo: { extra: { tenant: { account: ACCOUNT } } } } });
+      const sent = JSON.parse((fetched.mock.calls[0][1] as RequestInit).body as string) as Rpc;
+      expect(sent.params[0].sender).toBe(ACCOUNT);
     });
   });
 });
