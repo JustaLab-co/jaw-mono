@@ -280,7 +280,9 @@ export async function grantPermissions(t: Tenant, input: GrantInput, deps = DEFA
       'Once they do, the session key acts within it with no further prompts. ' +
       liveTotals(t, held) +
       (replacing
-        ? 'Approving this budget replaces the current one, which this server then revokes on chain; jaw_session_status shows the budget in force. '
+        ? 'Approving this budget replaces the current one, which this server then tries to revoke on chain. ' +
+          'Nothing pays from a replaced budget, but if the revoke fee cannot be paid it stays approved on chain until it expires or jaw_revoke_permission revokes it. ' +
+          'jaw_session_status shows the budget in force. '
         : '') +
       'Other grants approved earlier on this connection stay approved on chain until they expire or jaw_session_disconnect revokes them.',
   });
@@ -321,7 +323,7 @@ export function registerGrantTool(server: McpServer) {
         'Ask the account owner to grant this session key a permission, approved once in their JAW wallet. ' +
         'Pass x402Budget for the payment budget: a daily USDC allowance that payments, refills and swap quotes draw from with no further prompts; payments use the newest one. ' +
         'Or pass calls, the contract functions the session key may call, and spends, how much of each token it may move per period, for a custom grant. ' +
-        'A new x402Budget replaces the current one, which the server then revokes on chain. ' +
+        'A new x402Budget replaces the current one, which the server then tries to revoke on chain; nothing pays from a replaced budget, but if the revoke fee cannot be paid it stays approved on chain until it expires or jaw_revoke_permission revokes it. ' +
         'The grant ends at expiresAt, or with the connection when that comes first. A connection holds at most 5 live grants. Returns a link for the owner. For a one-off contract call use jaw_send_calls, which asks the owner each time.',
       inputSchema: grantInput,
       outputSchema: output,

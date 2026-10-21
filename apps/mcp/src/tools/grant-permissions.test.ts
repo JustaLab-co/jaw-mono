@@ -10,6 +10,7 @@ import {
   callTool,
   connect,
   fakeWallet,
+  mcp,
   owner,
   setTestEnv,
   walletAnswers,
@@ -113,6 +114,28 @@ describe('jaw_grant_permissions', () => {
       period: 'day',
     });
     expect((await x402Budget(t.connectionId))?.allowance).toBe('2500000');
+  });
+
+  it('given a budget in force, when a new one is asked, then the reply says the revoke of the current one is only tried', async () => {
+    const { t, signer } = await connected();
+
+    const { result } = await grant(t, signer, { x402Budget: { perDay: '2' } });
+
+    const summary = 'structuredContent' in result ? result.structuredContent.summary : '';
+    expect(summary).toContain('replaces the current one, which this server then tries to revoke on chain');
+    expect(summary).toContain('stays approved on chain until it expires or jaw_revoke_permission revokes it');
+    expect(summary).not.toContain('then revokes');
+  });
+
+  it('when a client lists the tools, then the description says the revoke of a replaced budget is only tried', async () => {
+    const { c } = await connected();
+
+    const { json } = await mcp(c.access_token, { method: 'tools/list' });
+
+    const { description } = json.result.tools.find((t: { name: string }) => t.name === 'jaw_grant_permissions');
+    expect(description).toContain('replaces the current one, which the server then tries to revoke on chain');
+    expect(description).toContain('stays approved on chain until it expires or jaw_revoke_permission revokes it');
+    expect(description).not.toContain('then revokes');
   });
 
   it('given two calls and two spends, then the wallet is asked for exactly those, and a custom row keeps them all', async () => {
