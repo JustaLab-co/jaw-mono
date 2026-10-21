@@ -808,7 +808,7 @@ describe('the migration that keeps one budget per connection', () => {
       ]);
     expect(await rowOf(connectedWith)).toMatchObject({ replacedAt: null });
 
-    const migration = readFileSync(join(__dirname, '../../drizzle/0033_replace_older_budgets.sql'), 'utf8');
+    const migration = readFileSync(join(__dirname, '../../drizzle/0034_replace_older_budgets.sql'), 'utf8');
     await getDb().execute(sql.raw(migration));
 
     expect(await rowOf(connectedWith)).toMatchObject({ replacedAt: expect.any(Date) });

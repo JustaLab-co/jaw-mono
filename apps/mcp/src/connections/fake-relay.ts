@@ -10,12 +10,15 @@ import {
 } from '@jaw.id/agent';
 import WebSocket, { WebSocketServer } from 'ws';
 import { canonical } from '@/lib/canonical';
+import { ownerRelay, type OpenWallet } from './relay';
 
 export async function startRelay() {
   const seen: string[] = [];
   const fromServer = new Map<string, number>();
   const sessions = new Map<string, { cli?: WebSocket; browser?: WebSocket }>();
   const silent = new Set<string>();
+  const refused = new Set<string>();
+  const cliWaiters = new Map<string, () => void>();
   const dropped = new Set<string>();
   const relay = new WebSocketServer({ port: 0, host: '127.0.0.1' });
   relay.on('connection', (ws, req) => {
@@ -23,8 +26,12 @@ export async function startRelay() {
     const id = url.searchParams.get('session')!;
     const role = url.searchParams.get('role') as 'cli' | 'browser';
     const pair = sessions.get(id) ?? {};
+    if (refused.has(id)) return ws.close();
+    // As jaw-relay does, a second cli replaces the first.
+    if (role === 'cli') pair.cli?.close(4003, 'replaced');
     pair[role] = ws;
     sessions.set(id, pair);
+    if (role === 'cli') cliWaiters.get(id)?.();
     if (role === 'cli' && dropped.has(id)) {
       delete pair.cli;
       ws.terminate();
@@ -50,6 +57,10 @@ export async function startRelay() {
     fromServer,
     sessions,
     silent,
+    refused,
+    /** Resolves once this server's side of the session reached the relay. */
+    cliJoined: (id: string) =>
+      sessions.get(id)?.cli ? Promise.resolve() : new Promise<void>((r) => cliWaiters.set(id, r)),
     dropped,
     close: () => relay.close(),
   };
@@ -109,4 +120,32 @@ export async function replayingPage(
     mute: () => (mute = true),
     close: () => ws.close(),
   };
+}
+
+export function stallsAfter(n: number) {
+  let wake!: (err?: unknown, late?: unknown) => void;
+  const woken = new Promise<unknown>((resolve, reject) => (wake = (err, late) => (err ? reject(err) : resolve(late))));
+  let closed = false;
+  const openWallet: OpenWallet = async (chainId, until, client) => {
+    const wallet = await ownerRelay(chainId, until, client);
+    return {
+      url: wallet.url,
+      close: () => {
+        closed = true;
+        wallet.close();
+      },
+      run: (work, joined) =>
+        wallet.run((ask) => {
+          let sent = 0;
+          return work(async (method, params) => {
+            if (++sent < n) return ask(method, params);
+            const answer = ask(method, params);
+            answer.catch(() => undefined);
+            const late = await woken;
+            return late === undefined ? answer : late;
+          });
+        }, joined),
+    };
+  };
+  return { openWallet, wake, closed: () => closed };
 }

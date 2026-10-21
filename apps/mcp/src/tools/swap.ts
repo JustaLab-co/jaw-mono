@@ -5,14 +5,14 @@ import { z } from 'zod';
 import { tenant, type Tenant } from '@/connections/auth';
 import { config } from '@/connections/config';
 import { findActive } from '@/connections/rows';
-import { keepLease, leaseHeld, sessionLeaseEnd } from '@/connections/session-lease';
+import { leaseHeld, sessionLeaseEnd } from '@/connections/session-lease';
 import { ownerRelay, WalletBusy, type OpenWallet, type Wallet } from '@/connections/relay';
 import { countHit } from '@/db/settings';
-import { errorLabel, log, RATE_WINDOW_MS } from '@/lib/edge';
+import { RATE_WINDOW_MS } from '@/lib/edge';
 import { fenceText, reply } from '@/lib/fence';
 import { gateCode } from '@/payments/render';
 import { findPayment, stateOf } from '@/payments/store';
-import { approve } from '@/swap/approve';
+import { randomToken } from '@/lib/token';
 import type { BackendAnswer, BackendDeps } from '@/swap/backend';
 import { isSupportedOriginChain, type CheckedQuote } from '@/swap/check';
 import { countOpenLinks, FULL, MAX_OPEN_PER_ACCOUNT, withLinkSlot } from '@/owner-calls/cap';
@@ -28,8 +28,6 @@ import {
   nextStepQuotes,
   releaseQuoted,
   renewQuoted,
-  endSession,
-  renewSession,
   reopenLink,
   SEND_STARTED,
   type SwapLease,
@@ -37,6 +35,7 @@ import {
   type SwapState,
   type SwapRequest,
 } from '@/swap/store';
+import { followSwap, resumeSwap } from '@/swap/resume';
 import { track } from '@/swap/track';
 
 const SOLANA = 792703809;
@@ -311,6 +310,7 @@ function readNote(read: BackendAnswer | undefined): string {
 }
 
 async function answer(row: SwapRow, read?: BackendAnswer): Promise<SwapResult> {
+  if (row.relay) void resumeSwap(row);
   const backendText = read && untrustedBackendText(read);
   const response = [row.quoteFenced, backendText && fenceText('the swap backend', backendText, 400)].filter(
     (text): text is string => !!text
@@ -376,7 +376,14 @@ async function openLink(t: Tenant, lease: SwapLease, key: string, deps: SwapDeps
     waiting = await withLinkSlot(t.account, undefined, (tx) =>
       releaseQuoted(
         lease,
-        { state: 'awaiting_owner', code: null, walletUrl: wallet.url, approveBy, sessionUntil: sessionLeaseEnd },
+        {
+          state: 'awaiting_owner',
+          code: null,
+          walletUrl: wallet.url,
+          approveBy,
+          sessionUntil: sessionLeaseEnd,
+          leaseHolder: randomToken(),
+        },
         tx
       )
     );
@@ -388,7 +395,7 @@ async function openLink(t: Tenant, lease: SwapLease, key: string, deps: SwapDeps
     return accountBusy(key);
   }
   if (!waiting) return takenOver(key);
-  follow(t, waiting, wallet, deps);
+  followSwap(t.account, waiting, wallet, deps);
   return answer(waiting);
 }
 
@@ -409,24 +416,13 @@ async function reopen(t: Tenant, row: SwapRow, key: string, deps: SwapDeps): Pro
   }
   if (waiting === FULL) return accountBusy(key);
   if (!waiting) return answer((await findById(t.connectionId, row.id)) ?? row);
-  follow(t, waiting, wallet, deps);
+  followSwap(t.account, waiting, wallet, deps);
   return answer(waiting);
-}
-
-function follow(t: Tenant, row: SwapRow, wallet: Wallet, deps: SwapDeps): void {
-  const stop = keepLease(
-    () => renewSession(row),
-    () => endSession(row)
-  );
-  void wallet
-    .run((ask) => approve(ask, row, t.account, deps.pollMs, deps.backend))
-    .catch((err: unknown) => log('warn', { msg: 'swap approval ended', swapId: row.id, error: errorLabel(err) }))
-    .finally(stop);
 }
 
 async function replay(t: Tenant, row: SwapRow, key: string, deps: SwapDeps): Promise<SwapResult> {
   const linkDead = row.state === 'awaiting_owner' && row.code !== SEND_STARTED && !leaseHeld(row.sessionUntil);
-  if (!linkDead) return answer(row);
+  if (!linkDead || row.relay) return answer(row);
   if (!(await findActive(t.connectionId))) return connectionEnded();
   return reopen(t, row, key, deps);
 }

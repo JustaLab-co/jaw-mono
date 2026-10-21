@@ -595,8 +595,9 @@ describe('jaw_send_calls approval', () => {
           threw++;
           throw new Error('relay closed');
         };
-        sessions.push(work(owner(t.account, { eth_requestAccounts: fail })));
-        return new Promise(() => {});
+        const session = work(owner(t.account, { eth_requestAccounts: fail }));
+        sessions.push(session);
+        return session;
       },
     });
 

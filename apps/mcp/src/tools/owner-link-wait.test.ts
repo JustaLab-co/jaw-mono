@@ -460,7 +460,7 @@ describe('jaw_get_sign_status', () => {
         chainId: t.chainId,
         approveBy: new Date(Date.now() + 60_000),
         payload: {},
-        work: () => new Promise(() => {}),
+        rebuild: () => () => new Promise(() => {}),
       },
       idleWallet
     );

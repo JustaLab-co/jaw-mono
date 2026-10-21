@@ -21,10 +21,10 @@ export async function approve(ask: Ask, row: OwnerCallRow, clients: ChainClients
     return;
   }
   if (!includes(accounts, row.account)) {
-    await decline(row.connectionId, row.id, 'wrong_account');
+    await decline(row, 'wrong_account');
     return;
   }
-  if (!(await markSendStarted(row.connectionId, row.id))) return;
+  if (!(await markSendStarted(row))) return;
   let answer: unknown;
   try {
     answer = await ask('wallet_sendCalls', [
@@ -38,8 +38,9 @@ export async function approve(ask: Ask, row: OwnerCallRow, clients: ChainClients
     ]);
   } catch (err) {
     const code = codeOf(err);
-    if (code === USER_REJECTED) await decline(row.connectionId, row.id, 'owner_declined');
-    else if (refusedBeforeSubmit(code)) await decline(row.connectionId, row.id, `wallet_error:${code}`);
+    if (typeof code !== 'number') throw err;
+    if (code === USER_REJECTED) await decline(row, 'owner_declined');
+    else if (refusedBeforeSubmit(code)) await decline(row, `wallet_error:${code}`);
     return;
   }
   const callsId = sent.safeParse(answer).data?.id;
@@ -68,24 +69,25 @@ async function headOf(row: OwnerCallRow, clients: ChainClients): Promise<bigint 
 
 async function keepCallsId(row: OwnerCallRow, callsId: string, head: bigint | null): Promise<void> {
   try {
-    await markSent(row.connectionId, row.id, callsId, head);
+    await markSent(row, callsId, head);
   } catch (err) {
     log('warn', { msg: 'owner calls id not written, retrying', ownerCallId: row.id, callsId, error: errorLabel(err) });
-    await markSent(row.connectionId, row.id, callsId, head);
+    await markSent(row, callsId, head);
   }
 }
 
 async function recordRefusal(row: OwnerCallRow, err: unknown): Promise<void> {
   const code = codeOf(err);
   if (code === USER_REJECTED) {
-    await decline(row.connectionId, row.id, 'owner_declined');
+    await decline(row, 'owner_declined');
     return;
   }
   if (typeof code === 'number') {
-    await setCode(row.connectionId, row.id, `wallet_error:${code}`);
+    await setCode(row, `wallet_error:${code}`);
     return;
   }
   if (Date.now() < row.approveBy.getTime() - SESSION_END_MARGIN_MS) {
-    await setCode(row.connectionId, row.id, 'wallet_error:unknown');
+    await setCode(row, 'wallet_error:unknown', { unlessRejoinable: true });
   }
+  throw err;
 }

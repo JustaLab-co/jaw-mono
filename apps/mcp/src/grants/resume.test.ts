@@ -5,8 +5,8 @@ import type { Hex } from 'viem';
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
 import { verifyBearer, type Tenant } from '@/connections/auth';
 import { config } from '@/connections/config';
-import { replayingPage, startRelay } from '@/connections/fake-relay';
-import { ownerRelay, type Ask, type OpenWallet } from '@/connections/relay';
+import { replayingPage, stallsAfter, startRelay } from '@/connections/fake-relay';
+import { ownerRelay, type Ask } from '@/connections/relay';
 import { sealResume } from '@/connections/seal';
 import {
   approvedOnChain,
@@ -21,9 +21,10 @@ import {
 import { getDb } from '@/db/client';
 import { connections, grants, permissionRequests } from '@/db/schema';
 import { TEST_PG_URL, useTestDb, useTestPostgres } from '@/db/test-db';
-import { grantPermissions, grantWork } from '@/tools/grant-permissions';
+import { grantPermissions } from '@/tools/grant-permissions';
 import { revokePermission, type RevokeDeps } from '@/tools/revoke-permission';
-import { signWork, sign } from '@/tools/sign';
+import { sign } from '@/tools/sign';
+import { grantWork, signWork } from './resume';
 import { checkGranted, recordGrant, type GrantRequest, type ReadPermission } from './permission';
 import { closeLapsedLinks, resumeOpen } from './requests';
 import { LIVE_GRANTS_PER_CONNECTION } from './store';
@@ -40,34 +41,6 @@ async function connected() {
   const c = await connect(signer);
   await walletsSettled();
   return { signer, t: (await verifyBearer(c.access_token))?.extra?.tenant as Tenant };
-}
-
-function stallsAfter(n: number) {
-  let wake!: (err?: unknown) => void;
-  const woken = new Promise<void>((resolve, reject) => (wake = (err) => (err ? reject(err) : resolve())));
-  let closed = false;
-  const openWallet: OpenWallet = async (chainId, until, client) => {
-    const wallet = await ownerRelay(chainId, until, client);
-    return {
-      url: wallet.url,
-      close: () => {
-        closed = true;
-        wallet.close();
-      },
-      run: (work, joined) =>
-        wallet.run((ask) => {
-          let sent = 0;
-          return work(async (method, params) => {
-            if (++sent < n) return ask(method, params);
-            const answer = ask(method, params);
-            answer.catch(() => undefined);
-            await woken;
-            return answer;
-          });
-        }, joined),
-    };
-  };
-  return { openWallet, wake, closed: () => closed };
 }
 
 function deciding(answer: Ask) {
@@ -96,7 +69,7 @@ const settled = (id: string) =>
     { timeout: 10_000 }
   );
 const pause = (ms = 300) => new Promise((r) => setTimeout(r, ms));
-const signWorks = async () => Promise.all(await resumeOpen({ sign: signWork }));
+const resumeSigns = async () => Promise.all(await resumeOpen({ sign: signWork }));
 
 async function askedThenRestarted(message = 'sign in', opts: { replays?: boolean; stallAt?: number } = {}) {
   const { signer, t } = await connected();
@@ -134,6 +107,62 @@ describe('a sign request whose server restarted', () => {
     }
   );
 
+  it('given the relay drops this server while the owner decides, then the request keeps its relay session and the next tick resumes it to approved', async () => {
+    const { signer, t } = await connected();
+    const message = 'sign in';
+    const owned = deciding(async (method) =>
+      method === 'eth_requestAccounts' ? [signer.address] : signer.signMessage({ message })
+    );
+    const first = await sign(t, { message }, { openWallet: stallsAfter(9).openWallet });
+    const page = await replayingPage(first.structuredContent!.url!, owned.answer);
+    await vi.waitFor(() => expect(page.ids).toHaveLength(2));
+    const [row] = await rowsOf(t);
+
+    relay.sessions.get(new URL(first.structuredContent!.url!).searchParams.get('session')!)!.cli!.close();
+    await vi.waitFor(async () => expect((await rowOf(row.id)).sessionUntil).toBeNull());
+    expect(await rowOf(row.id)).toMatchObject({ state: 'awaiting_owner', relay: expect.any(String) });
+    await getDb()
+      .update(permissionRequests)
+      .set({ sessionUntil: sql`statement_timestamp() - interval '2 minutes'` })
+      .where(eq(permissionRequests.id, row.id));
+
+    await resumeSigns();
+    owned.decide();
+
+    expect(await settled(row.id)).toMatchObject({ state: 'approved' });
+  });
+
+  it('given the relay drops every resumed run after it rejoins, then each drop counts a failed rejoin and the fifth ends the wait for a resume', async () => {
+    const { signer, t } = await connected();
+    const never = new Promise<never>(() => {});
+    const first = await sign(t, { message: 'sign in' }, { openWallet: stallsAfter(9).openWallet });
+    const url = first.structuredContent!.url!;
+    const session = new URL(url).searchParams.get('session')!;
+    const page = await replayingPage(url, async (method) =>
+      method === 'eth_requestAccounts' ? [signer.address] : never
+    );
+    await vi.waitFor(() => expect(page.ids).toHaveLength(2));
+    const [row] = await rowsOf(t);
+    relay.sessions.get(session)!.cli!.close();
+    await vi.waitFor(async () => expect((await rowOf(row.id)).sessionUntil).toBeNull());
+
+    const failures: number[] = [];
+    for (let i = 1; i <= 5; i++) {
+      const inits = page.inits();
+      await resumeSigns();
+      await vi.waitFor(() => expect(page.inits()).toBeGreaterThan(inits));
+      await vi.waitFor(() => expect(relay.sessions.get(session)?.cli).toBeDefined());
+      relay.sessions.get(session)!.cli!.close();
+      await vi.waitFor(async () => expect((await rowOf(row.id)).resumeFailures).toBe(i));
+      failures.push((await rowOf(row.id)).resumeFailures);
+      await lapse(row.id);
+    }
+
+    expect(failures).toEqual([1, 2, 3, 4, 5]);
+    expect(await rowOf(row.id)).toMatchObject({ state: 'awaiting_owner', relay: null });
+    expect(await resumeSigns()).toEqual([]);
+  });
+
   it('given the page was closed, when the server rejoins, then the row ends link_lost and nothing is stored to resume', async () => {
     const { row, page } = await askedThenRestarted();
     page.close();
@@ -141,7 +170,7 @@ describe('a sign request whose server restarted', () => {
       expect(relay.sessions.get(row.walletUrl.match(/session=([^&]+)/)![1])?.browser).toBeUndefined()
     );
 
-    await signWorks();
+    await resumeSigns();
 
     expect(await settled(row.id)).toMatchObject({ state: 'expired', code: 'link_lost', relay: null });
   });
@@ -150,7 +179,7 @@ describe('a sign request whose server restarted', () => {
     const { row, page } = await askedThenRestarted('sign in', { replays: false });
     expect((await rowOf(row.id)).relay).toBeNull();
 
-    await signWorks();
+    await resumeSigns();
     await pause();
 
     expect(page.ids).toHaveLength(2);
@@ -159,7 +188,7 @@ describe('a sign request whose server restarted', () => {
   it('given two processes resume at once, then only one asks the page again', async () => {
     const { row, page, decide } = await askedThenRestarted();
 
-    await Promise.all([signWorks(), signWorks()]);
+    await Promise.all([resumeSigns(), resumeSigns()]);
     await vi.waitFor(() => expect(page.ids).toHaveLength(4));
     await pause(500);
 
@@ -169,12 +198,25 @@ describe('a sign request whose server restarted', () => {
     expect(await settled(row.id)).toMatchObject({ state: 'approved' });
   });
 
-  it('given a resumer took the lease, when the old process wakes up and the owner declined there, then it writes nothing and the resumed answer stands', async () => {
-    const { row, page, server, decide } = await askedThenRestarted();
-    await signWorks();
+  it('given a resumer took the lease, when the old process hears the signature first, then that answer is recorded', async () => {
+    const { signer, message, row, page, server } = await askedThenRestarted();
+    await resumeSigns();
     await vi.waitFor(() => expect(page.ids).toHaveLength(4));
 
-    server.wake(Object.assign(new Error('User rejected the request'), { code: 4001 }));
+    server.wake(undefined, await signer.signMessage({ message }));
+
+    expect(await settled(row.id)).toMatchObject({
+      state: 'approved',
+      signature: await signer.signMessage({ message }),
+    });
+  });
+
+  it('given a resumer took the lease, when the old process hears a wallet error, then it writes nothing and the resumed answer stands', async () => {
+    const { row, page, server, decide } = await askedThenRestarted();
+    await resumeSigns();
+    await vi.waitFor(() => expect(page.ids).toHaveLength(4));
+
+    server.wake(Object.assign(new Error('wallet failed'), { code: -32603 }));
     await pause();
     expect((await rowOf(row.id)).state).toBe('awaiting_owner');
     decide();
@@ -184,7 +226,7 @@ describe('a sign request whose server restarted', () => {
 
   it('given a resumer took the lease before the old process claimed the row, when the old process wakes up, then its claim fails and it asks nothing more', async () => {
     const { row, page, server, decide } = await askedThenRestarted('sign in', { stallAt: 1 });
-    await signWorks();
+    await resumeSigns();
     await vi.waitFor(() => expect(page.ids).toHaveLength(3));
 
     server.wake();
@@ -198,7 +240,7 @@ describe('a sign request whose server restarted', () => {
   it('given a resumer took the lease, when the old process renews, then it loses the link and closes its session', async () => {
     vi.useFakeTimers({ toFake: ['setInterval', 'clearInterval'] });
     const { page, server } = await askedThenRestarted();
-    await signWorks();
+    await resumeSigns();
     await vi.waitFor(() => expect(page.ids).toHaveLength(4));
 
     await vi.advanceTimersByTimeAsync(10_000);
@@ -234,7 +276,7 @@ describe('a sign request whose server restarted', () => {
       .set({ status: 'revoked', revokedAt: new Date() })
       .where(eq(connections.id, t.connectionId));
 
-    await signWorks();
+    await resumeSigns();
 
     expect(await settled(row.id)).toMatchObject({ state: 'failed', code: 'connection_ended', relay: null });
     expect(page.ids).toHaveLength(2);
@@ -247,7 +289,7 @@ describe('a sign request whose server restarted', () => {
       .set({ relay: `r1.retired.${randomBytes(12).toString('base64url')}.${randomBytes(40).toString('base64url')}` })
       .where(eq(permissionRequests.id, row.id));
 
-    await signWorks();
+    await resumeSigns();
 
     expect(await settled(row.id)).toMatchObject({ state: 'expired', code: 'link_lost', relay: null });
     expect(page.ids).toHaveLength(2);
@@ -257,11 +299,40 @@ describe('a sign request whose server restarted', () => {
     const { row, page } = await askedThenRestarted();
     await getDb().update(permissionRequests).set({ payload: '{' }).where(eq(permissionRequests.id, row.id));
 
-    await signWorks();
+    await resumeSigns();
 
     expect(await settled(row.id)).toMatchObject({ state: 'expired', code: 'link_lost', relay: null });
     expect(page.inits()).toBe(1);
   });
+
+  it.each(['{}', '{"chainId":84532,"request":{"type":"0x45"}}'])(
+    'given a stored payload %s that is not a sign request, then the row ends and no session is opened on the relay',
+    async (payload) => {
+      const { row, page } = await askedThenRestarted();
+      await getDb().update(permissionRequests).set({ payload }).where(eq(permissionRequests.id, row.id));
+
+      await resumeSigns();
+
+      expect(await settled(row.id)).toMatchObject({ state: 'expired', relay: null });
+      expect(page.inits()).toBe(1);
+    }
+  );
+
+  it.each([
+    ['a relay session the key ring cannot open', { relay: 'r1.retired.x.y' }],
+    ['a payload that is not a sign request', { payload: '{}' }],
+  ])(
+    'given a request the owner was never asked to sign, when %s is found, then it ends session_lost, not link_lost',
+    async (_, set) => {
+      const { row } = await askedThenRestarted('sign in', { stallAt: 1 });
+      expect(row.code).toBeNull();
+      await getDb().update(permissionRequests).set(set).where(eq(permissionRequests.id, row.id));
+
+      await resumeSigns();
+
+      expect(await settled(row.id)).toMatchObject({ state: 'expired', code: 'session_lost' });
+    }
+  );
 
   it('given the page refuses a resumed ask as another request under its id, then the row ends link_lost, not as a wallet error', async () => {
     const { row } = await askedThenRestarted();
@@ -272,7 +343,7 @@ describe('a sign request whose server restarted', () => {
       .set({ payload: JSON.stringify(payload) })
       .where(eq(permissionRequests.id, row.id));
 
-    await signWorks();
+    await resumeSigns();
 
     expect(await settled(row.id)).toMatchObject({ state: 'expired', code: 'link_lost' });
   });
@@ -386,18 +457,18 @@ describe('a revoke request whose server restarted', () => {
 });
 
 describe('the resumes one tick starts', () => {
-  it('given eleven requests that keep failing to resume, then a tick starts the ten tried longest ago and the next starts the last', async () => {
+  it('given six requests that keep failing to resume, then a tick starts the five tried longest ago and the next starts the last', async () => {
     const newest = await failingRow(1);
     const older: string[] = [];
-    for (let i = 0; i < 10; i++) older.push(await failingRow(10));
+    for (let i = 0; i < 5; i++) older.push(await failingRow(10));
     const all = [newest, ...older];
     const before = new Map((await rowsById(all)).map((r) => [r.id, r.updatedAt.getTime()]));
     const tried = async () => (await rowsById(all)).filter((r) => r.updatedAt.getTime() > before.get(r.id)!);
 
-    await signWorks();
+    await resumeSigns();
     expect((await tried()).map((r) => r.id).sort()).toEqual([...older].sort());
 
-    await signWorks();
+    await resumeSigns();
     expect((await tried()).map((r) => r.id)).toContain(newest);
     await getDb().delete(permissionRequests).where(inArray(permissionRequests.id, all));
   });
