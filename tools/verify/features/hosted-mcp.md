@@ -8,6 +8,7 @@
 - `mcp-up`: the server is up behind its OAuth gate.
 - `mcp-pay`: `jaw_session_x402_pay` over HTTP pays the local seller and writes a `payments` row.
 - `mcp-swap-quote`: the server pays the seller's swap quote at `JAW_MCP_SWAP_URL`.
+- `mcp-defi`: `jaw_get_defi_positions` reads the account's DeFi positions from the proxy at `JAW_MCP_PORTFOLIO_URL`.
 - `mcp-quote-budget`: `jaw_session_x402_quote` names the budget a payment would use and is ready only when the price fits what that budget has left today.
 
 ## How to get to it (user POV)
@@ -25,6 +26,7 @@ Preconditions: Docker running; baseline preconditions for the seller.
 - mcp-pay: needs a person to approve the budget in the wallet, so it is driven by hand. Start the stack with `JAW_KEYS_URL=https://keys.jaw.id`, run `node $S/hosted-client.mjs "$MCP_PUBLIC_URL"`, approve a budget (`budget 1`), then `pay http://localhost:$PORT/exact`. The pass condition is a `paid` result, a `seller.log` payment row with `"signatureValid":true`, and a `payments` row in state `settled` for the same idempotency key.
 - mcp-swap-quote: in the same client, `call jaw_swap '<json>'` gets the quote through `JAW_MCP_SWAP_URL` with the swap api key. The pass condition is a `seller.log` `quote` row with `"by":"api-key"` on `/proxy/v2/swap/quote` and no `payment` row for it. An `insecure_url` result means the server points at a host other than localhost.
 - mcp-quote-budget: in the same client, after `budget 0.5`, `quote http://localhost:$PORT/one` answers `readiness` `not_ready` with reason `over_allowance`, and its `budget` carries the permission id and `remainingToday` 490000 while the session float is empty (the day less the 0.01 a refill pays for its own transfer), the same figure `status` shows. `quote http://localhost:$PORT/exact` answers `ready`. With the account behind the budget emptied, a quote that needs a refill answers `balance_low`, and `quote http://localhost:$PORT/overcap` (2 USDC) answers `over_cap`, the per-payment cap pay applies; `pay http://localhost:$PORT/overcap` is then refused `over_cap` with no `next`, since a larger budget does not raise that cap. `seller.log` gets only `challenge` rows.
+- mcp-defi: the route is not on prod until jan-back-mono#1258 ships, so point the server at a local proxy built from that branch: start the stack with `JAW_MCP_PORTFOLIO_URL=http://localhost:<proxy port>/proxy/v2`, `JAW_MCP_INSECURE_FETCH_HOSTS=localhost:<proxy port>` and `JAW_MCP_API_KEY` set to a key the proxy accepts. In the client, `call jaw_get_defi_positions '{"chainIds":[1]}'` on a connection whose account holds DeFi positions on Ethereum. The pass condition is `positions` with CAIP-2 chain ids and a `totalValueUsd`, and a proxy log row for `GET /proxy/v2/portfolio/defi` with `x-api-key` and no `api-key` in the query. `chainIds: [14]` answers `unsupported` with no proxy request, a testnet id is refused with `not_a_mainnet`, and the same call with `JAW_MCP_API_KEY` unset is refused with `no_api_key`.
 
 ## Gotchas
 
