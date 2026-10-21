@@ -1783,7 +1783,10 @@ describe('CrossPlatformSigner', () => {
             );
         });
 
-        it('should send keys the validated recovery proposal on the session chain', async () => {
+        // Cross-Platform takes the same contract as App-Specific, as permissions
+        // do: the validated end state travels to keys, where the screen shows it
+        // for approval.
+        it('should send keys the validated recovery config on the session chain', async () => {
             // Arrange - an address commitment: keys must receive it padded to
             // the 32 bytes the provider compares, as validation produced it. The
             // envelope names the session chain, because recovery is
@@ -1817,9 +1820,10 @@ describe('CrossPlatformSigner', () => {
             });
 
             const guardian = '0xabcdefabcdefabcdefabcdefabcdefabcdefabcd';
+            const capabilities = { paymasterService: { url: 'https://pm.example' } };
             const request: RequestArguments = {
                 method: 'wallet_setupRecovery',
-                params: [{ recoveries: [{ commitment: guardian, delay: 172_800 }], threshold: 1 }],
+                params: [{ recoveries: [{ commitment: guardian, delay: 172_800 }], threshold: 1, capabilities }],
             };
 
             // Act
@@ -1837,7 +1841,7 @@ describe('CrossPlatformSigner', () => {
                                     { commitment: `0x${'00'.repeat(12)}${guardian.slice(2)}`, delay: 172_800 },
                                 ],
                                 threshold: 1,
-                                capabilities: undefined,
+                                capabilities,
                             },
                         ],
                     },
