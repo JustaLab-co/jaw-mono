@@ -648,7 +648,12 @@ describe('jaw_sign', () => {
     const send = await sendCalls(
       c.t,
       { calls: [{ to: TYPED.domain.verifyingContract }] },
-      { openWallet: idleWallet, receipt: async () => null, clients: {} as never }
+      {
+        openWallet: idleWallet,
+        receipt: async () => null,
+        clients: {} as never,
+        simulate: async () => ({ status: 'success' }),
+      }
     );
 
     expect(send.content[0].text).toMatch(/^account_busy: /);

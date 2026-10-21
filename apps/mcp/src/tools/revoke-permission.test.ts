@@ -621,6 +621,7 @@ describe('jaw_revoke_permission', () => {
         openWallet: holding.openWallet,
         receipt: async () => null,
         clients: {} as never,
+        simulate: async () => ({ status: 'success' }),
       }
     );
     wait.release();

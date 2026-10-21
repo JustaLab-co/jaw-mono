@@ -141,6 +141,8 @@ interface LogFields {
   permissionId?: string;
   callsId?: string;
   code?: string;
+  simulation?: string;
+  rpcCode?: number;
   /** USDC base units, as strings because JSON has no bigint. */
   fee?: { expected: string; reserve: string; max: string };
 }
