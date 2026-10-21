@@ -1,4 +1,5 @@
 import { type McpServer, ResourceTemplate } from '@modelcontextprotocol/sdk/server/mcp.js';
+import { DEFAULT_X402_LIMIT } from '@jaw.id/agent';
 
 const DOCS_BASE = 'https://docs.jaw.id/api-reference';
 
@@ -32,7 +33,20 @@ WHAT IT IS
 An HTTP server can answer a request with "402 Payment Required". These tools let
 you pay that automatically from the JAW wallet's session key and get the resource.
 
+FIRST STEP
+Payments need a session. Call jaw_session_status; if exists is false, call
+jaw_grant_permissions to ask the owner for a daily USDC budget. The owner
+approves it in their wallet, and the call returns once they have answered. If no
+browser opens, show the user the wallet URL the tool sends as a notification.
+Do this when a payment first needs it, not up front.
+
 TOOLS
+- jaw_grant_permissions { x402Budget?: { perDay }, chainId? }
+  Creates the session key and asks the owner to approve perDay USDC a day
+  (default ${DEFAULT_X402_LIMIT}) on the chain. Blocks until the owner answers. Refused when a
+  session is already active (pay with it) or when the budget is over the grant
+  ceiling the user set in a terminal. It never replaces an active session; that
+  takes the user running jaw session setup.
 - jaw_discover { query?, network?, maxUsdPrice?, curatedOnly?, limit?, payTo? }
   Search the x402 Bazaar (Coinbase's public catalog of paid services) for
   services to pay. Returns each service's url, price, and how to call it,
@@ -142,8 +156,8 @@ export function registerResources(server: McpServer): void {
     'jaw://x402',
     {
       description:
-        'How to pay for HTTP resources with x402 (USDC): the jaw_pay_and_fetch / jaw_x402_balance / ' +
-        'jaw_x402_log tools, which account to fund, and the spending limits. Read this before paying.',
+        'How to pay for HTTP resources with x402 (USDC): the jaw_grant_permissions / jaw_pay_and_fetch / ' +
+        'jaw_x402_balance / jaw_x402_log tools, which account to fund, and the spending limits. Read this before paying.',
       mimeType: 'text/plain',
     },
     async () => ({

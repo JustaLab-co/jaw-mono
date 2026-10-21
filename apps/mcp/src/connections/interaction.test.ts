@@ -3,17 +3,15 @@ import { runInNewContext } from 'node:vm';
 import { eq } from 'drizzle-orm';
 import { hexToString, type Hex } from 'viem';
 import { generatePrivateKey, privateKeyToAddress } from 'viem/accounts';
-import { beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
+import { beforeAll, describe, expect, it, vi } from 'vitest';
 import { getDb } from '@/db/client';
 import { connections, grants } from '@/db/schema';
 import { useTestDb } from '@/db/test-db';
-import type { GrantRequest } from '@/grants/permission';
 import { config } from './config';
 import { CONNECTIONS_PER_ACCOUNT, SESSIONS_PER_CLIENT, SESSIONS_PER_IP } from './interaction';
 import type { OpenWallet } from './relay';
 import { open, type Sealed } from './seal';
 import {
-  approvedOnChain,
   Browser,
   fakeWallet,
   ISSUER,
@@ -27,8 +25,6 @@ import {
 
 setTestEnv();
 beforeAll(useTestDb);
-// setWallet is sticky, so a test that makes the chain unreadable must not hand that on.
-beforeEach(() => setWallet({ readPermission: approvedOnChain }));
 
 const rowOf = async (uid: string) =>
   (await getDb().select().from(connections).where(eq(connections.interactionUid, uid)))[0];
@@ -161,17 +157,17 @@ describe('connecting through the owner wallet', () => {
     expect(row.clientId).toBe('jaw-cli');
   });
 
-  it('given a spending scope, then after the sign-in the wallet is asked for the default daily budget with the session key as spender', async () => {
+  it('given a spending scope, then the wallet is asked to sign in, never for a budget, and the session key is kept for a budget granted later', async () => {
     const asked: { method: string; params: unknown[] }[] = [];
     setWallet({ openWallet: fakeWallet(walletAnswers(owner()), asked) });
-    const start = await startAuthorization(new Browser(), { scope: 'wallet:read x402:pay' });
+    const browser = new Browser();
+    const start = await startAuthorization(browser, { scope: 'wallet:read x402:pay' });
     await walletsSettled();
-    expect(asked.map((a) => a.method)).toEqual(['eth_requestAccounts', 'personal_sign', 'wallet_grantPermissions']);
-    const grant = asked[2].params[0] as GrantRequest;
+    expect(asked.map((a) => a.method)).toEqual(['eth_requestAccounts', 'personal_sign']);
+    expect(await stateOf(browser, start.uid!)).toEqual({ state: 'approved' });
     const row = await rowOf(start.uid!);
-    expect(grant.spender).toBe(row.sessionAddress);
-    expect(grant.permissions.spends[0].allowance).toBe('1000000');
-    expect(await getDb().select().from(grants).where(eq(grants.connectionId, row.id))).toHaveLength(1);
+    expect(keptKey(row)).toBe(row.sessionAddress);
+    expect(await budgetsOf(row.id)).toEqual([]);
   });
 
   it('given a sign-in signed by another key, then nothing is stored and the page says it failed', async () => {
@@ -189,52 +185,6 @@ describe('connecting through the owner wallet', () => {
     expect(await stateOf(browser, start.uid!)).toEqual({ state: 'failed', reason: 'bad_signature' });
   });
 
-  it('given the owner turns the budget down, then no budget is stored and the page says it failed', async () => {
-    setWallet({ openWallet: fakeWallet(walletAnswers(owner(), ['wallet_grantPermissions'])) });
-    const browser = new Browser();
-    const start = await startAuthorization(browser);
-    await walletsSettled();
-    expect(await budgetsOf((await rowOf(start.uid!)).id)).toEqual([]);
-    expect((await stateOf(browser, start.uid!)).state).toBe('failed');
-  });
-
-  it('given the wallet granted the budget but the chain cannot confirm it yet, then the spender key is kept and the connection cannot be completed', async () => {
-    const asked: { method: string; params: unknown[] }[] = [];
-    setWallet({
-      openWallet: fakeWallet(walletAnswers(owner()), asked),
-      readPermission: async () => ({ status: 'unavailable' }),
-    });
-    const browser = new Browser();
-    const start = await startAuthorization(browser);
-    await walletsSettled();
-    const row = await rowOf(start.uid!);
-    // The grant sent its prefund to this address: only a key the server keeps can move it back.
-    expect(keptKey(row)).toBe((asked[2].params[0] as GrantRequest).spender);
-    expect(await stateOf(browser, start.uid!)).toEqual({ state: 'failed', reason: 'verification_unavailable' });
-    const res = await browser.get(`${ISSUER}/interaction/${start.uid}/complete?ticket=${start.ticket}`);
-    expect(res.status).toBe(400);
-  });
-
-  it('given a failed approval, when the owner clicks again and approves, then the budget names the same spender', async () => {
-    const asked: { method: string; params: unknown[] }[] = [];
-    setWallet({
-      openWallet: fakeWallet(walletAnswers(owner()), asked),
-      readPermission: async () => ({ status: 'unavailable' }),
-    });
-    const browser = new Browser();
-    const start = await startAuthorization(browser);
-    await walletsSettled();
-    setWallet({ readPermission: approvedOnChain });
-    await browser.post(`${ISSUER}/interaction/${start.uid}/open`);
-    await walletsSettled();
-    const spenders = asked
-      .filter((a) => a.method === 'wallet_grantPermissions')
-      .map((a) => (a.params[0] as GrantRequest).spender);
-    expect(spenders).toHaveLength(2);
-    expect(spenders[1]).toBe(spenders[0]);
-    expect(await stateOf(browser, start.uid!)).toEqual({ state: 'approved' });
-  });
-
   it('signs a text that names the app and what it asks for, with the code the page shows', async () => {
     const asked: { method: string; params: unknown[] }[] = [];
     const signer = owner();
@@ -248,21 +198,6 @@ describe('connecting through the owner wallet', () => {
     expect(signed).toContain('Connect JAW CLI to mcp.test');
     expect(signed).toContain('Pay x402 services');
     expect(signed).toContain(`Account: ${signer.address}`);
-  });
-
-  it('given a budget approved from another account than the one that signed in, then no budget is stored', async () => {
-    const [signing, granting] = [owner(), owner()];
-    const [signIn, grant] = [walletAnswers(signing), walletAnswers(granting)];
-    setWallet({
-      openWallet: fakeWallet(async (method, params) =>
-        method === 'wallet_grantPermissions' ? grant(method, params) : signIn(method, params)
-      ),
-    });
-    const browser = new Browser();
-    const start = await startAuthorization(browser);
-    await walletsSettled();
-    expect(await budgetsOf((await rowOf(start.uid!)).id)).toEqual([]);
-    expect(await stateOf(browser, start.uid!)).toEqual({ state: 'failed', reason: 'grant_mismatch' });
   });
 
   it('says the owner turned it down when the wallet answers 4001', async () => {

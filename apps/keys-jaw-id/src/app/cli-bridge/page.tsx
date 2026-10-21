@@ -29,6 +29,7 @@ import {
  * 5. CLI sends encrypted init (apiKey, chainId, etc.)
  * 6. Page initializes JAW SDK, sends encrypted ready
  * 7. CLI sends encrypted RPC requests, page executes and sends encrypted responses
+ * 8. A request repeated under the same id gets the answer already given
  */
 
 type BridgeState = 'connecting' | 'connected' | 'disconnected' | 'error';
@@ -88,6 +89,11 @@ function CLIBridgeContent() {
   const appNameRef = useRef<string | null>(null);
   const wsRef = useRef<WebSocket | null>(null);
   const sharedSecretRef = useRef<CryptoKey | null>(null);
+  /**
+   * Every answer given in this relay session, by request id. An id is final,
+   * refusals and errors included: a client that wants to try again sends a new id.
+   */
+  const answersRef = useRef(new Map<string, { request: string; reply: Promise<RpcResponse> }>());
 
   const sessionId = searchParams.get('session');
   const relayUrl = searchParams.get('relay');
@@ -109,48 +115,32 @@ function CLIBridgeContent() {
       cliPublicKeyRef.current = pk;
       setCliPublicKeyHex(pk);
       window.history.replaceState(null, '', window.location.pathname + window.location.search);
+    } else {
+      // The key is stripped once read, so a reload or a second open has none.
+      setState('error');
+      setError(LINK_GONE);
     }
   }, []);
 
-  const handleRpcRequest = useCallback(async (id: string, method: string, params: unknown) => {
-    if (!sdkRef.current || !sharedSecretRef.current || !wsRef.current) return;
+  // A client that lost its connection asks again under the same id, so it
+  // gets the answer already given instead of a second dialog.
+  const handleRpcRequest = useCallback(async (id: string, method: string, rawParams: unknown) => {
+    const sdk = sdkRef.current;
+    const secret = sharedSecretRef.current;
+    const ws = wsRef.current;
+    if (!sdk || !secret || !ws) return;
 
-    setLastMethod(method);
-
-    try {
-      const normalizedParams = Array.isArray(params) ? params : params !== undefined ? [params] : [];
-
-      const result = await sdkRef.current.provider.request({
-        method,
-        params: normalizedParams,
-      });
-
-      const address = extractAddress(method, result);
-
-      const envelope = await encryptAndSerialize(sharedSecretRef.current, {
-        type: 'rpc_response',
-        id,
-        success: true,
-        data: result,
-        ...(address ? { address } : {}),
-      });
-
-      wsRef.current.send(JSON.stringify(envelope));
-    } catch (err) {
-      const errObj = err as { code?: number; message?: string };
-      const errCode = errObj?.code ?? -32000;
-      const errMsg = errObj?.message ?? (err instanceof Error ? err.message : String(err));
-
-      if (sharedSecretRef.current && wsRef.current) {
-        const envelope = await encryptAndSerialize(sharedSecretRef.current, {
-          type: 'rpc_response',
-          id,
-          success: false,
-          error: { code: errCode, message: errMsg },
-        });
-        wsRef.current.send(JSON.stringify(envelope));
-      }
+    const params = Array.isArray(rawParams) ? rawParams : rawParams !== undefined ? [rawParams] : [];
+    const request = canonical({ method, params });
+    let given = answersRef.current.get(id);
+    if (!given) {
+      given = { request, reply: ask(sdk, id, method, params) };
+      answersRef.current.set(id, given);
+      if (answersRef.current.size > ANSWERS_KEPT) answersRef.current.delete(answersRef.current.keys().next().value!);
+      setLastMethod(method);
     }
+    const reply = given.request === request ? await given.reply : idReused(id);
+    ws.send(JSON.stringify(await encryptAndSerialize(secret, reply)));
   }, []);
 
   useEffect(() => {
@@ -159,6 +149,8 @@ function CLIBridgeContent() {
     let ws: WebSocket | null = null;
     let beforeUnloadHandler: (() => void) | null = null;
     let cancelled = false;
+    let unanswered: ReturnType<typeof setTimeout> | undefined;
+    answersRef.current = new Map();
 
     (async () => {
       try {
@@ -189,6 +181,12 @@ function CLIBridgeContent() {
               publicKey: browserPublicKeyHex,
             })
           );
+          // The relay keeps no queue: when the server that made this link is
+          // gone, the key exchange reaches nobody and nothing ever comes back.
+          unanswered = setTimeout(() => {
+            setState('error');
+            setError(LINK_GONE);
+          }, SERVER_WAIT_MS);
         };
 
         ws.onmessage = async (event) => {
@@ -209,6 +207,8 @@ function CLIBridgeContent() {
 
               switch (inner.type) {
                 case 'init': {
+                  clearTimeout(unanswered);
+                  setState('connected');
                   const chainId = (inner.chainId as number) ?? 1;
                   const ens = inner.ens as string | undefined;
                   const name = (appNameRef.current ??= resolveBridgeAppName(inner.appName));
@@ -280,6 +280,7 @@ function CLIBridgeContent() {
                   const readyEnvelope = await encryptAndSerialize(sharedSecretRef.current!, {
                     type: 'ready',
                     chainId,
+                    replays: true,
                     ...(sentApiKey ? {} : { apiKey }),
                   });
                   ws!.send(JSON.stringify(readyEnvelope));
@@ -287,7 +288,13 @@ function CLIBridgeContent() {
                 }
 
                 case 'rpc_request':
-                  handleRpcRequest(inner.id as string, inner.method as string, inner.params);
+                  if (typeof inner.id !== 'string' || !inner.id) {
+                    console.error('[cli-bridge] Dropped a request with no string id');
+                    break;
+                  }
+                  handleRpcRequest(inner.id, inner.method as string, inner.params).catch((err) =>
+                    console.error('[cli-bridge] Failed to answer request:', err)
+                  );
                   break;
 
                 case 'shutdown':
@@ -313,10 +320,12 @@ function CLIBridgeContent() {
         };
 
         ws.onclose = () => {
+          clearTimeout(unanswered);
           if (!cancelled) setState('disconnected');
         };
 
         ws.onerror = () => {
+          clearTimeout(unanswered);
           if (!cancelled) {
             setState('error');
             setError('Relay connection failed');
@@ -340,6 +349,7 @@ function CLIBridgeContent() {
 
     return () => {
       cancelled = true;
+      clearTimeout(unanswered);
       appNameRef.current = null;
       setAppName(DEFAULT_BRIDGE_APP_NAME);
       if (beforeUnloadHandler) {
@@ -411,6 +421,54 @@ function CLIBridgeContent() {
     </div>
   );
 }
+
+const LINK_GONE = 'This link is no longer active. Ask the agent for a new one.';
+
+// A live server sends init as soon as the key exchange reaches it.
+const SERVER_WAIT_MS = 20_000;
+
+// A server re-asks within the 30 minute approval window, so the oldest answers
+// can go once a long session of reads would otherwise keep them all.
+const ANSWERS_KEPT = 500;
+
+/** JSON with object keys sorted, so a request rebuilt from storage in another key order is still the same request. */
+function canonical(value: unknown): string {
+  if (Array.isArray(value)) return `[${value.map(canonical).join(',')}]`;
+  if (value && typeof value === 'object') {
+    const entries = Object.entries(value).filter(([, v]) => v !== undefined);
+    entries.sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0));
+    return `{${entries.map(([k, v]) => `${JSON.stringify(k)}:${canonical(v)}`).join(',')}}`;
+  }
+  return JSON.stringify(value) ?? 'null';
+}
+
+type RpcResponse = Record<string, unknown> & { type: 'rpc_response'; id: string };
+
+async function ask(
+  sdk: ReturnType<typeof JAW.create>,
+  id: string,
+  method: string,
+  params: unknown[]
+): Promise<RpcResponse> {
+  try {
+    const result = await sdk.provider.request({ method, params });
+    const address = extractAddress(method, result);
+    return { type: 'rpc_response', id, success: true, data: result, ...(address ? { address } : {}) };
+  } catch (err) {
+    const errObj = err as { code?: number; message?: string };
+    const code = errObj?.code ?? -32000;
+    const message = errObj?.message ?? (err instanceof Error ? err.message : String(err));
+    return { type: 'rpc_response', id, success: false, error: { code, message } };
+  }
+}
+
+/** An id already answered for another request is refused, so an answer never covers a request it was not given for. */
+const idReused = (id: string): RpcResponse => ({
+  type: 'rpc_response',
+  id,
+  success: false,
+  error: { code: -32600, message: 'this request id was already used for a different request' },
+});
 
 function extractAddress(method: string, result: unknown): string | undefined {
   if (method !== 'wallet_connect' && method !== 'eth_requestAccounts') return;

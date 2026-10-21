@@ -9,10 +9,15 @@ import { registerDiscoverTool } from './handlers/discover.js';
 import { registerResources } from './handlers/resources.js';
 
 export function createMcpServer(version = '0.0.0'): McpServer {
-  const server = new McpServer({
-    name: 'jaw',
-    version,
-  });
+  const server = new McpServer(
+    {
+      name: 'jaw',
+      version,
+    },
+    // jaw_grant_permissions sends the wallet URL as a log message when the
+    // request carries no progress token.
+    { capabilities: { logging: {} } }
+  );
 
   registerRpcTool(server);
   registerConfigTools(server);

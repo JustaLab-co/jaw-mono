@@ -217,6 +217,7 @@ describe('read tools', () => {
       'jaw_get_calls_status',
       'jaw_get_capabilities',
       'jaw_get_permissions',
+      'jaw_get_sign_status',
       'jaw_grant_permissions',
       'jaw_read_contracts',
       'jaw_resolve_name',

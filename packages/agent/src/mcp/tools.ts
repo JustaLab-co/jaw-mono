@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { DEFAULT_X402_LIMIT } from '../grants/grant-preset.js';
 
 /**
  * Single generic RPC method schema.
@@ -28,8 +29,8 @@ export const rpcMethodSchema = {
     .boolean()
     .optional()
     .describe(
-      'Sign with the local session key instead of opening the browser (requires `jaw session setup`; ' +
-        'check jaw_session_status first). Supported methods only: eth_requestAccounts, eth_accounts, ' +
+      'Sign with the local session key instead of opening the browser (requires a session from ' +
+        'jaw_grant_permissions or `jaw session setup`; check jaw_session_status first). Supported methods only: eth_requestAccounts, eth_accounts, ' +
         'wallet_sendCalls, wallet_getCallsStatus. personal_sign and eth_signTypedData_v4 are browser ' +
         'only: a signature made by the session key never passes the spend caps or the ledger. ' +
         'Defaults to the JAW_SESSION env var.'
@@ -41,6 +42,25 @@ export const configSetSchema = {
   // changes them, through `jaw config set`.
   key: z.enum(['apiKey', 'defaultChain', 'ens', 'sessionExpiry']).describe('Config key'),
   value: z.string().describe('Config value'),
+};
+
+export const grantPermissionsSchema = {
+  x402Budget: z
+    .object({
+      perDay: z
+        .string()
+        .regex(/^\d{1,9}(\.\d{1,6})?$/)
+        .describe('USDC per day, as a decimal such as "1" or "0.5"'),
+    })
+    .strict()
+    .optional()
+    .describe(`The daily USDC allowance payments and refills draw from (default ${DEFAULT_X402_LIMIT}).`),
+  chainId: z
+    .number()
+    .int()
+    .positive()
+    .optional()
+    .describe('Chain to grant on (default: JAW_CHAIN_ID, then the configured default chain). E.g. 8453 for Base.'),
 };
 
 const httpUrl = z

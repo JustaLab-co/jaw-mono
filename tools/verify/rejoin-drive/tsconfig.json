@@ -1,0 +1,12 @@
+{
+  "extends": "../../../apps/mcp/tsconfig.json",
+  "compilerOptions": {
+    "composite": false,
+    "declaration": false,
+    "declarationMap": false,
+    "incremental": false,
+    "plugins": []
+  },
+  "include": ["drive.mts"],
+  "exclude": []
+}

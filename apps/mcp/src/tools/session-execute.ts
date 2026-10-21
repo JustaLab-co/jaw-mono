@@ -1,5 +1,5 @@
 import { createHash, randomBytes } from 'node:crypto';
-import type { SessionBridge } from '@jaw.id/agent';
+import { within, type SessionBridge } from '@jaw.id/agent';
 import type { McpServer } from '@modelcontextprotocol/server';
 import { and, eq } from 'drizzle-orm';
 import { getAddress, isAddress, numberToHex, type Address, type Hex } from 'viem';
@@ -17,11 +17,15 @@ import { unrevokedGrant, type LiveGrant } from '@/grants/store';
 import { errorLabel, log } from '@/lib/edge';
 import { reply } from '@/lib/fence';
 import { FloatBusy, FloatLost, inTurn, LOCK_WAIT_MS, withFloat } from '@/payments/float-lock';
+import { EXECUTE_SUBMIT_MS } from '@/payments/store';
 import {
   handToReconciler,
   noteCallsId,
-  openSpends,
   recordSend,
+  chainView,
+  heldSpends,
+  LOGGED_READ_MS,
+  readAt,
   runOf,
   settleSends,
   type SendRow,
@@ -96,8 +100,10 @@ function described(r: Refusal, permissionId: string): string {
 
 const NOTHING_SENT = ' Nothing was sent.';
 const UNREADABLE = 'Nothing was sent: the grant could not be read from the chain right now. Try again in a moment.';
-const maybeSent = (key: string, userOpHash: Hex) =>
-  `This execute failed and may have been sent anyway as userOp ${userOpHash}. Send idempotencyKey ${key} again with the same calls to follow it: it never sends twice. ` +
+const maybeSent = (key: string, userOpHash?: Hex) =>
+  (userOpHash
+    ? `This execute failed and may have been sent anyway as userOp ${userOpHash}. Send idempotencyKey ${key} again with the same calls to follow it: it never sends twice. `
+    : `This execute failed and may have been sent anyway. Send idempotencyKey ${key} again with the same calls: it returns this answer and never sends twice. `) +
   'Check jaw_session_history before sending it under a new key, or it may land twice.';
 const NOTHING_WENT_OUT = "This key's run sent nothing. Send it again under a new idempotencyKey.";
 const notSeen = (userOpHash: string) =>
@@ -176,7 +182,7 @@ function concluded(ids: string[], out: Outcome) {
   return handToReconciler(ids, undefined, callsId);
 }
 
-type Submitted = { sent: Hex } | { unsent: unknown } | { maybe: unknown; userOpHash: Hex };
+type Submitted = { sent: Hex } | { unsent: unknown } | { maybe: unknown; userOpHash?: Hex };
 
 async function noteSubmitted(tx: Tx, ids: string[], submitted: Submitted): Promise<void> {
   if ('sent' in submitted) {
@@ -211,27 +217,58 @@ async function grantFor(t: Tenant, run: Run): Promise<ToolResult | { grant: Live
   return { grant, bridge };
 }
 
+const ENDED = 'This connection has ended, so nothing was sent.';
+
+// Half the window an end waits on a recorded execute, so a submit still running is
+// answered as maybe sent well before an end may pass it.
+const SUBMIT_MS = EXECUTE_SUBMIT_MS / 2;
+class SubmitTimedOut extends Error {}
+
+function bounded<T>(work: Promise<T>): Promise<T> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const late = new Promise<never>((_, reject) => {
+    timer = setTimeout(() => reject(new SubmitTimedOut()), SUBMIT_MS);
+  });
+  return Promise.race([work, late]).finally(() => clearTimeout(timer));
+}
+
+async function liveIn(tx: Tx, connectionId: string): Promise<boolean> {
+  const [live] = await tx
+    .select({ id: connections.id })
+    .from(connections)
+    .where(and(eq(connections.id, connectionId), isLive()));
+  return live !== undefined;
+}
+
 type Reserved = { ids: string[]; submitted: Submitted; bridge: SessionBridge; trustsReverts: boolean };
 
 async function submitUnder(t: Tenant, run: Run): Promise<ToolResult | Reserved> {
   return withFloat(t.connectionId, LOCK_WAIT_MS, async (hold) => {
+    // A run left unconfirmed may have landed since. Settled first, its key replays it landed
+    // and the next fit counts its spend on chain only. A read past its bound settles nothing.
+    const view = await within(
+      chainView(t.connectionId, run.permissionId, run.chainId, chainClients),
+      LOGGED_READ_MS
+    ).catch((err: unknown) => void logFailure('execute settle read failed')(err));
+    for (const { id, end } of view?.ends ?? []) {
+      await settleSends([id], end).catch(logFailure('execute settle write failed'));
+    }
     const stored = await hold.tx(async (tx) => {
       if (!(await hold.owns(tx))) throw new FloatLost();
-      const rows = await runOf(tx, t.connectionId, run.key);
-      const [live] = await tx
-        .select({ id: connections.id })
-        .from(connections)
-        .where(and(eq(connections.id, t.connectionId), isLive()));
-      return { rows, live: Boolean(live) };
+      return { rows: await runOf(tx, t.connectionId, run.key), live: await liveIn(tx, t.connectionId) };
     });
     if (stored.rows.length > 0) return replayed(stored.rows, run.key, run.hash);
-    if (!stored.live) return refusal('This connection has ended, so nothing was sent.');
+    if (!stored.live) return refusal(ENDED);
     const found = await grantFor(t, run);
     if (!('grant' in found)) return found;
     const { grant, bridge } = found;
-    const pending = await hold.tx((tx) => openSpends(grant.permissionId, tx));
+    const pending = await hold.tx((tx) => heldSpends(grant.permissionId, tx, view?.seen));
     const nowSeconds = Math.floor(Date.now() / 1000);
-    const refused = await fit(grant, run.calls, { read: { clients: chainClients }, pending, nowSeconds });
+    const refused = await fit(grant, run.calls, {
+      read: readAt(chainClients, grant.chainId, view?.head),
+      pending,
+      nowSeconds,
+    });
     if (refused) return refusal(described(refused, grant.permissionId) + NOTHING_SENT);
     const head = await chainClients
       .publicClient(grant.chainId)
@@ -240,8 +277,10 @@ async function submitUnder(t: Tenant, run: Run): Promise<ToolResult | Reserved> 
     if (head === undefined) return refusal(UNREADABLE);
 
     const spent = [...spendOf(run.calls, grant.account)];
+    // owns() holds the connection row, so an end waits on this tx and then sees the rows in flight.
     const ids = await hold.tx(async (tx) => {
       if (!(await hold.owns(tx))) throw new FloatLost();
+      if (!(await liveIn(tx, t.connectionId))) return undefined;
       const send = {
         connectionId: t.connectionId,
         idempotencyKey: run.key,
@@ -255,25 +294,42 @@ async function submitUnder(t: Tenant, run: Run): Promise<ToolResult | Reserved> 
       if (spent.length === 0) return [await recordSend(tx, { ...send, token: null, amount: 0n })];
       return Promise.all(spent.map(([token, amount]) => recordSend(tx, { ...send, token: token as Address, amount })));
     });
+    if (!ids) return refusal(ENDED);
     let submitted: Submitted;
+    let request: Promise<{ id: Hex }> | undefined;
     const recorded: { userOpHash?: Hex } = {};
+    // Set synchronously, so a submit past its bound either started signing or never will.
+    let signing = false;
+    let abandoned = false;
     try {
       hold.assertHeld();
       const wire = run.calls.map((c) => ({ to: c.to, value: numberToHex(c.value), data: c.data }));
-      const sent = (await bridge.request('wallet_sendCalls', [{ calls: wire }], async (userOpHash) => {
+      request = bridge.request('wallet_sendCalls', [{ calls: wire }], async (userOpHash) => {
+        if (abandoned) throw new SubmitTimedOut();
+        signing = true;
         await hold.tx(async (tx) => {
           if (!(await hold.owns(tx))) throw new FloatLost();
           if ((await noteCallsId(tx, ids, userOpHash)) !== ids.length) throw new Error('the run rows were settled');
         });
         recorded.userOpHash = userOpHash;
-      })) as { id: Hex };
+      }) as Promise<{ id: Hex }>;
+      const sent = await bounded(request);
       if (sent.id !== recorded.userOpHash) {
         log('error', { msg: `bundler returned another userOp hash than ${recorded.userOpHash}`, callsId: sent.id });
       }
       submitted = { sent: sent.id };
     } catch (err) {
-      submitted =
-        recorded.userOpHash && mayHaveBeenSent(err) ? { maybe: err, userOpHash: recorded.userOpHash } : { unsent: err };
+      // A submit past its bound that has not started signing never will: its hook throws first.
+      if (err instanceof SubmitTimedOut && !signing) abandoned = true;
+      const maybe = err instanceof SubmitTimedOut ? signing : Boolean(recorded.userOpHash) && mayHaveBeenSent(err);
+      submitted = maybe ? { maybe: err, userOpHash: recorded.userOpHash } : { unsent: err };
+      // A submit that answers past its bound leaves its hash on the open rows for the reconciler.
+      if (err instanceof SubmitTimedOut) {
+        request?.then(
+          (late) => handToReconciler(ids, undefined, late.id).catch(logFailure('execute late submit write failed')),
+          () => {}
+        );
+      }
     }
     await hold.tx((tx) => noteSubmitted(tx, ids, submitted)).catch(logFailure('execute submit write failed'));
     return { ids, submitted, bridge, trustsReverts: namesEveryTarget(grant, run.calls) };

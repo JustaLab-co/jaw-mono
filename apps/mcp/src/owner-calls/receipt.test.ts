@@ -43,6 +43,14 @@ describe('readKnown', () => {
 
     await expect(readKnown(8453, CALLS_ID)).rejects.toThrow('bundler answered 502');
   });
+
+  it('given a JSON-RPC error with a 2xx status, then it throws rather than answering no', async () => {
+    rpc(() =>
+      Response.json({ jsonrpc: '2.0', id: 1, error: { code: -32005, message: 'rate limited' } }, { status: 201 })
+    );
+
+    await expect(readKnown(8453, CALLS_ID)).rejects.toThrow();
+  });
 });
 
 describe('readReceipt', () => {
