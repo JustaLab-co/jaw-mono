@@ -27,6 +27,8 @@ export interface SessionGrantInput {
   apiKeyFlag?: string;
   /** Called right before the browser opens. */
   onBrowser?: () => void;
+  /** Called with the wallet URL when a new browser session is opened. */
+  onUrl?: (url: string) => void;
 }
 
 export interface SessionGrantResult {
@@ -71,6 +73,7 @@ export async function grantSession(input: SessionGrantInput): Promise<SessionGra
     apiKey: input.apiKey,
     chainId,
     ens: config.ens,
+    onUrl: input.onUrl,
   });
 
   // Everything from here to the grant is inside the block that closes the

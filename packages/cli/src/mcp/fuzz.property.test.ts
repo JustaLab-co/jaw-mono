@@ -157,6 +157,7 @@ const TOOLS = [
   'jaw_status',
   'jaw_disconnect',
   'jaw_session_status',
+  'jaw_grant_permissions',
   'jaw_pay_and_fetch',
   'jaw_x402_log',
   'jaw_x402_balance',
@@ -207,6 +208,7 @@ const KEYS = [
   'curatedOnly',
   'maxUsdPrice',
   'x402',
+  'x402Budget',
   'constructor',
 ];
 const args = fc.oneof(
@@ -244,6 +246,13 @@ const shapedCall = fc.oneof(
       { url: fc.oneof(hostileText, fc.webUrl(), fc.string()), maxAmount: fc.oneof(hostileText, fc.string()) },
       { requiredKeys: ['url'] }
     ),
+  }),
+  fc.record({
+    name: fc.constant('jaw_grant_permissions'),
+    arguments: fc.record({
+      x402Budget: fc.record({ perDay: fc.oneof(hostileText, fc.constantFrom('1', '0.5', '999999999'), fc.string()) }),
+      chainId: fc.oneof(fc.constantFrom(84532, 8453, 1), fc.integer()),
+    }),
   })
 );
 // A plain paid fetch, so the generated 402 challenges reach the policy, the
