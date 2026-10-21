@@ -16,9 +16,11 @@ import { and, eq, isNotNull } from 'drizzle-orm';
 import { decodeFunctionData, erc20Abi, isAddressEqual, type Address, type Hex } from 'viem';
 import { sessionOf } from '@/adapters/session-host';
 import { isLive } from '@/connections/rows';
+import type { Tx } from '@/db/client';
 import { connections, grants } from '@/db/schema';
 import type { Grant } from '@/grants/store';
 import { errorLabel, log } from '@/lib/edge';
+import { refusedInSimulation } from '@/grants/reverts';
 import { nonceUsed } from './confirm';
 import { dayLeft, pullRoom, readDaySpend } from './day-spend';
 import { FloatBusy, FloatLost, inTurn, withFloat, type FloatHold } from './float-lock';
@@ -27,6 +29,7 @@ import {
   addTopUp,
   assertOwned,
   entriesFor,
+  forgetBatch,
   holdingRows,
   pulledUnderOtherGrants,
   recordTopUp,
@@ -93,6 +96,59 @@ function transferAmount(params: unknown): bigint {
 
 const logFailure = (msg: string) => (err: unknown) => log('error', { msg, error: errorLabel(err) });
 
+/**
+ * Sends with the batch id on the row before the userOp goes out. `undo` runs only when it
+ * provably did not go out: the id could not be written, or the bundler refused it in simulation.
+ */
+async function sendRecorded<T>(
+  hold: FloatHold,
+  send: (onSigned: (batchId: Hex) => Promise<void>) => Promise<T>,
+  record: (tx: Tx, batchId: Hex) => Promise<void>,
+  undo: (tx: Tx, batchId: Hex | undefined) => Promise<void>
+): Promise<{ sent: T; signed: Hex | undefined }> {
+  let recorded: Hex | undefined;
+  let unwritten = false;
+  try {
+    const sent = await send(async (batchId) => {
+      try {
+        await hold.tx(async (tx) => {
+          if (!(await hold.owns(tx))) throw new FloatLost();
+          await record(tx, batchId);
+        });
+      } catch (err) {
+        unwritten = true;
+        throw err;
+      }
+      recorded = batchId;
+    });
+    return { sent, signed: recorded };
+  } catch (err) {
+    if (unwritten || (recorded && refusedInSimulation(err))) {
+      await hold.tx((tx) => undo(tx, recorded)).catch(logFailure('unsent batch undo failed'));
+    }
+    throw err;
+  }
+}
+
+/** The bundler's hash wins over the signed one, as it does for execute rows, and the mismatch is logged. */
+async function keepSent(
+  hold: FloatHold,
+  rowId: string,
+  field: 'topUpBatchId' | 'approvalBatchId',
+  signed: Hex | undefined,
+  sent: string
+) {
+  if (sent === signed) return;
+  if (signed) log('error', { msg: `bundler returned another userOp hash than ${signed}`, callsId: sent });
+  await hold
+    .tx(async (tx) => {
+      if (signed) await forgetBatch(tx, rowId, field, signed);
+      const trace = field === 'topUpBatchId' ? { batchId: sent } : { approvalBatchId: sent };
+      await recordTopUp(tx, rowId, { ok: true, ...trace });
+    })
+    .catch(logFailure('batch id write failed'));
+}
+
 function guarded(
   executor: TopUpExecutor,
   hold: FloatHold,
@@ -123,21 +179,34 @@ function guarded(
           await hold.tx((tx) => addTopUp(tx, rowId, -amount)).catch(logFailure('top-up subtract failed'));
           throw err;
         }
-        // A send that throws may still land, so the amount stays on the row.
-        const sent = await executor.request(method, params);
+        // A send that throws may still land, so the amount stays on the row, with its hash.
+        const { sent, signed } = await sendRecorded(
+          hold,
+          (onSigned) => executor.request(method, params, onSigned),
+          (tx, batchId) => recordTopUp(tx, rowId, { ok: true, batchId }),
+          async (tx, batchId) => {
+            await addTopUp(tx, rowId, -amount);
+            if (batchId) await forgetBatch(tx, rowId, 'topUpBatchId', batchId);
+          }
+        );
         const batchId = typeof sent === 'string' ? sent : (sent as { id?: string } | null)?.id;
-        if (batchId) {
-          await hold
-            .tx((tx) => recordTopUp(tx, rowId, { ok: true, batchId }))
-            .catch(logFailure('top-up batch id write failed'));
-        }
+        if (batchId) await keepSent(hold, rowId, 'topUpBatchId', signed, batchId);
         return sent;
       },
       approvePermit2:
         approve &&
         (async (token) => {
           hold.assertHeld();
-          return approve(token);
+          const { sent, signed } = await sendRecorded(
+            hold,
+            (onSigned) => approve(token, onSigned),
+            (tx, approvalBatchId) => recordTopUp(tx, rowId, { ok: true, approvalBatchId }),
+            async (tx, batchId) => {
+              if (batchId) await forgetBatch(tx, rowId, 'approvalBatchId', batchId);
+            }
+          );
+          await keepSent(hold, rowId, 'approvalBatchId', signed, sent);
+          return sent;
         }),
     },
   };

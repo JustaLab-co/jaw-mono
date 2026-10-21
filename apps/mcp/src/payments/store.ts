@@ -233,6 +233,19 @@ export async function recordTopUp(tx: Tx, id: string, funded: TopUpOutcome): Pro
     .where(eq(payments.id, id));
 }
 
+/** Takes a batch id off the row when that userOp never went out. */
+export async function forgetBatch(
+  tx: Tx,
+  id: string,
+  field: 'topUpBatchId' | 'approvalBatchId',
+  batchId: string
+): Promise<void> {
+  await tx
+    .update(payments)
+    .set({ [field]: null })
+    .where(and(eq(payments.id, id), eq(payments[field], batchId)));
+}
+
 export async function addTopUp(tx: Tx, id: string, delta: bigint): Promise<void> {
   await tx
     .update(payments)
