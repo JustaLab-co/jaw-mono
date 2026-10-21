@@ -5,12 +5,11 @@ import type { Hex } from 'viem';
 import { beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { verifyBearer, type Tenant } from '@/connections/auth';
 import type { Ask, Wallet } from '@/connections/relay';
-import { connect, fakeWallet, owner, setTestEnv, walletsSettled } from '@/connections/testkit';
+import { grantBudget, connect, fakeWallet, owner, setTestEnv, walletsSettled } from '@/connections/testkit';
 import { getDb } from '@/db/client';
 import { grants, permissionRequests } from '@/db/schema';
 import { TEST_PG_URL, useTestDb, useTestPostgres } from '@/db/test-db';
 import type { ReadPermission } from '@/grants/permission';
-import { x402Budget } from '@/grants/store';
 import { markRevoked, type LookUp } from '@/grants/revokes';
 import { sign } from '@/tools/sign';
 import { purge, reconcile } from './run';
@@ -52,7 +51,7 @@ beforeAll(async () => {
   await (TEST_PG_URL ? useTestPostgres() : useTestDb());
   t = await tenantOf((await connect(signer)).access_token);
   other = await tenantOf((await connect(signer)).access_token);
-  budget = (await x402Budget(t.connectionId))?.permissionId as Hex;
+  budget = (await grantBudget(t, signer))?.permissionId as Hex;
 });
 beforeEach(async () => {
   revokedIds.clear();

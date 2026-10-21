@@ -165,9 +165,9 @@ describe('the scopes an authorization grants', () => {
       const t = await tenantOf(c.access_token);
       const [row] = await getDb().select().from(connections).where(eq(connections.id, t.connectionId));
       expect(row.scopes).toEqual(scope.split(' '));
-      // A budget only for what spends: wallet:read alone asks the wallet for a signature instead.
+      // No scope asks for a budget at connect; jaw_grant_permissions does, when the agent needs one.
       const budgets = await getDb().select().from(grants).where(eq(grants.connectionId, t.connectionId));
-      expect(budgets).toHaveLength(scope === 'wallet:read' ? 0 : 1);
+      expect(budgets).toEqual([]);
     }
   );
 });

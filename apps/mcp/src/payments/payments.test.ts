@@ -259,11 +259,10 @@ beforeEach(() => {
   periodDown = false;
 });
 
-/** A connection whose only budget is `perDay`, or none: the one approved when connecting is dropped. */
+/** A connection whose only budget is `perDay`, or none. */
 async function connected(perDay?: string) {
   const c = await connect(undefined, { scope: 'wallet:read x402:pay' });
   const t = (await verifyBearer(c.access_token))?.extra?.tenant as Tenant;
-  await getDb().delete(grants).where(eq(grants.connectionId, t.connectionId));
   if (perDay) await approveBudget(c, perDay);
   return { c, t };
 }

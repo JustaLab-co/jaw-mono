@@ -43,9 +43,9 @@ export async function pendingFor(c: PendingConnection): Promise<ConnectionRow | 
   return row && isAddressEqual(row.account as Address, c.account) ? row : undefined;
 }
 
-/** Makes a pending connection claimable with the ticket of its page, once the owner approved everything. */
-export async function armTicket(uid: string, ticketHash: string, tx: Tx): Promise<boolean> {
-  const rows = await tx
+/** Makes a pending connection claimable with the ticket of its page, once the owner signed in. */
+export async function armTicket(uid: string, ticketHash: string): Promise<boolean> {
+  const rows = await getDb()
     .update(connections)
     .set({ ticketHash })
     .where(and(eq(connections.interactionUid, uid), eq(connections.status, 'pending')))
