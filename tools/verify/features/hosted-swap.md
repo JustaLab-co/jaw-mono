@@ -13,7 +13,7 @@
 - `swap-decline`: the owner rejects the deposit and the state is `owner_declined`.
 - `swap-retry`: the same key twice answers from the row with one quote request.
 - `swap-reopen`: the server restarts while `awaiting_owner` and the owner has not started; the same key gives a new link and no new quote.
-- `swap-marker`: the wallet was asked to send and no calls id came back; the swap reads "may have sent", never reopens, and status resolves it from the backend.
+- `swap-marker`: the wallet was asked to send and no calls id came back; the swap reads "may have sent", never reopens, and status resolves it from the backend. With a keys page that replays answers, a server that restarted rejoins the same tab and records the deposit's calls id from the owner's approval instead.
 - `swap-restart`: the server restarts while `awaiting_owner`; status reads the backend afterwards.
 - `swap-submit`: a failed submit leaves `deposit_sent`; the next status retries it.
 

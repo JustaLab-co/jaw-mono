@@ -99,11 +99,12 @@ const set = (id: string, values: Partial<typeof ownerCalls.$inferInsert>) =>
 const STATES = ['awaiting_owner', 'owner_declined', 'expired', 'sent', 'landed', 'reverted'] as const;
 
 async function rowIn(state: (typeof STATES)[number]): Promise<OwnerCallRow> {
-  const { connectionId, id } = await open(await newConnection());
+  const row = await open(await newConnection());
+  const { connectionId, id } = row;
   if (state === 'expired') await lapse(id);
-  if (state === 'owner_declined') await decline(connectionId, id, 'owner_declined');
+  if (state === 'owner_declined') await decline(row, 'owner_declined');
   if (state === 'expired') await expirePast(connectionId);
-  if (['sent', 'landed', 'reverted'].includes(state)) await markSent(connectionId, id, '0xcalls');
+  if (['sent', 'landed', 'reverted'].includes(state)) await markSent(row, '0xcalls');
   if (state === 'landed' || state === 'reverted') await conclude(connectionId, id, state, '0xtx');
   return rowOf(id);
 }
@@ -158,7 +159,7 @@ describe('insert and find', () => {
   it('given a finished request, then another can open and findOpen skips the finished one', async () => {
     const connectionId = await newConnection();
     const first = await open(connectionId);
-    await decline(connectionId, first.id, 'owner_declined');
+    await decline(first, 'owner_declined');
     expect(await findOpen(connectionId)).toBeUndefined();
     await open(connectionId);
   });
@@ -204,14 +205,14 @@ describe('reopenLink', () => {
   it('given a link with a wallet error, then it takes a new url and clears the code', async () => {
     const row = await open(await newConnection());
     await lapseLease(row.id);
-    await setCode(row.connectionId, row.id, 'wallet_error:-32000');
+    await setCode(row, 'wallet_error:-32000');
     const reopened = await reopenLink(row, URL_B);
     expect(reopened).toMatchObject({ walletUrl: URL_B, code: null, approveBy: row.approveBy });
   });
 
   it('given a row the wallet was asked to send, then the link does not reopen', async () => {
     const row = await open(await newConnection());
-    await markSendStarted(row.connectionId, row.id);
+    await markSendStarted(row);
     expect(await reopenLink(row, URL_B)).toBeUndefined();
     expect((await rowOf(row.id)).walletUrl).toBe(URL_A);
   });
@@ -231,6 +232,20 @@ describe('reopenLink', () => {
     expect((await rowOf(row.id)).walletUrl).toBe(URL_A);
   });
 
+  it('given a link a relay session can still rejoin, then the table refuses a new url written past the store', async () => {
+    const row = await open(await newConnection());
+    await lapseLease(row.id);
+    await set(row.id, { relay: 'r1.kid.iv.sealed' });
+    expect(await refusalOf(set(row.id, { walletUrl: URL_B }))).toMatch(/written once/);
+  });
+
+  it('given a link a relay session can still rejoin, then it does not reopen', async () => {
+    const row = await open(await newConnection());
+    await lapseLease(row.id);
+    await set(row.id, { relay: 'r1.kid.iv.sealed' });
+    expect(await reopenLink(row, URL_B)).toBeUndefined();
+  });
+
   it('given a stale url, then the link does not reopen', async () => {
     const row = await open(await newConnection());
     await reopenLink(row, URL_B);
@@ -241,65 +256,66 @@ describe('reopenLink', () => {
 describe('setCode and decline', () => {
   it('given an awaiting row, then the code is recorded', async () => {
     const row = await open(await newConnection());
-    expect((await setCode(row.connectionId, row.id, 'wallet_error:4100'))?.code).toBe('wallet_error:4100');
+    expect((await setCode(row, 'wallet_error:4100'))?.code).toBe('wallet_error:4100');
   });
 
   it('given an expired or sent row, then the code is not written', async () => {
     for (const state of ['expired', 'sent'] as const) {
       const row = await rowIn(state);
-      expect(await setCode(row.connectionId, row.id, 'wallet_error:1')).toBeUndefined();
+      expect(await setCode(row, 'wallet_error:1')).toBeUndefined();
     }
   });
 
   it('given a row the wallet was asked to send, then the marker is not replaced', async () => {
     const row = await open(await newConnection());
-    await markSendStarted(row.connectionId, row.id);
-    expect(await setCode(row.connectionId, row.id, 'wallet_error:1')).toBeUndefined();
+    await markSendStarted(row);
+    expect(await setCode(row, 'wallet_error:1')).toBeUndefined();
     expect((await rowOf(row.id)).code).toBe(SEND_STARTED);
   });
 
   it('given an awaiting row, when declined, then it is owner_declined, finished, and keeps the code', async () => {
     const row = await open(await newConnection());
-    const declined = await decline(row.connectionId, row.id, 'wrong_account');
+    const declined = await decline(row, 'wrong_account');
     expect(declined).toMatchObject({ state: 'owner_declined', code: 'wrong_account', finishedAt: expect.any(Date) });
   });
 
   it('given a sent row, when declined, then nothing is written', async () => {
     const row = await rowIn('sent');
-    expect(await decline(row.connectionId, row.id, 'owner_declined')).toBeUndefined();
+    expect(await decline(row, 'owner_declined')).toBeUndefined();
   });
 
   it('given an expired row, when declined, then nothing is written and it stays expired', async () => {
     const row = await rowIn('expired');
-    expect(await decline(row.connectionId, row.id, 'owner_declined')).toBeUndefined();
+    expect(await decline(row, 'owner_declined')).toBeUndefined();
     expect((await rowOf(row.id)).state).toBe('expired');
   });
 });
 
 describe('markSendStarted', () => {
-  it('given a live awaiting row with no code, then the marker is written once', async () => {
+  it('given a live awaiting row with no code, then the marker is written, passes the run that holds the row again and refuses any other', async () => {
     const row = await open(await newConnection());
-    expect(await markSendStarted(row.connectionId, row.id)).toBe(true);
+    expect(await markSendStarted(row)).toBe(true);
     expect((await rowOf(row.id)).code).toBe(SEND_STARTED);
-    expect(await markSendStarted(row.connectionId, row.id)).toBe(false);
+    expect(await markSendStarted(row)).toBe(true);
+    expect(await markSendStarted({ ...row, leaseHolder: 'another process' })).toBe(false);
   });
 
   it('given a row past approve_by that nobody expired, then the marker is refused', async () => {
     const row = await open(await newConnection());
     await lapse(row.id);
-    expect(await markSendStarted(row.connectionId, row.id)).toBe(false);
+    expect(await markSendStarted(row)).toBe(false);
     expect((await rowOf(row.id)).code).toBeNull();
   });
 
   it('given a row with a wallet error, then the marker is refused', async () => {
     const row = await open(await newConnection());
-    await setCode(row.connectionId, row.id, 'wallet_error:1');
-    expect(await markSendStarted(row.connectionId, row.id)).toBe(false);
+    await setCode(row, 'wallet_error:1');
+    expect(await markSendStarted(row)).toBe(false);
   });
 
   it('given a row of another connection, then the marker is refused', async () => {
     const row = await open(await newConnection());
-    expect(await markSendStarted(await newConnection(), row.id)).toBe(false);
+    expect(await markSendStarted({ ...row, connectionId: await newConnection() })).toBe(false);
   });
 });
 
@@ -308,26 +324,26 @@ describe('markSent and conclude', () => {
     'given a %s row, then the calls id moves it to sent',
     async (from) => {
       const row = await rowIn(from);
-      await markSendStarted(row.connectionId, row.id);
-      const sent = await markSent(row.connectionId, row.id, '0xcalls');
+      await markSendStarted(row);
+      const sent = await markSent(row, '0xcalls');
       expect(sent).toMatchObject({ state: 'sent', callsId: '0xcalls', code: null });
     }
   );
 
   it('given a head block, then markSent stores it with the move to sent', async () => {
     const row = await rowIn('awaiting_owner');
-    const sent = await markSent(row.connectionId, row.id, '0xcalls', 48_153_900n);
+    const sent = await markSent(row, '0xcalls', 48_153_900n);
     expect(sent).toMatchObject({ state: 'sent', sentBlock: 48_153_900n });
   });
 
   it('given no head block, then markSent still moves the row to sent with a null sent block', async () => {
     const row = await rowIn('awaiting_owner');
-    expect(await markSent(row.connectionId, row.id, '0xcalls', null)).toMatchObject({ state: 'sent', sentBlock: null });
+    expect(await markSent(row, '0xcalls', null)).toMatchObject({ state: 'sent', sentBlock: null });
   });
 
   it('given a declined row, then markSent writes nothing', async () => {
     const row = await rowIn('owner_declined');
-    expect(await markSent(row.connectionId, row.id, '0xcalls')).toBeUndefined();
+    expect(await markSent(row, '0xcalls')).toBeUndefined();
   });
 
   it.each(['landed', 'reverted'] as const)(
@@ -405,7 +421,7 @@ describe('the guard', () => {
     );
     expect(await ageMinutes()).toBeGreaterThan(59);
 
-    await setCode(row.connectionId, row.id, 'wallet_error:1');
+    await setCode(row, 'wallet_error:1');
 
     expect(await ageMinutes()).toBeLessThan(1);
   });
@@ -458,7 +474,7 @@ describe('the guard', () => {
 
   it('given a sent row with a sent block, when it concludes, then the sent block stays', async () => {
     const row = await rowIn('awaiting_owner');
-    await markSent(row.connectionId, row.id, '0xcalls', 77n);
+    await markSent(row, '0xcalls', 77n);
     expect(await conclude(row.connectionId, row.id, 'landed', '0xtx')).toMatchObject({ sentBlock: 77n });
   });
 

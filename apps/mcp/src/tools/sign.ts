@@ -1,10 +1,10 @@
 import { createHash, randomBytes } from 'node:crypto';
 import type { McpServer } from '@modelcontextprotocol/server';
-import { hashTypedData, toHex } from 'viem';
+import { hashTypedData } from 'viem';
 import { z } from 'zod';
 import { tenant, type Tenant } from '@/connections/auth';
 import { APPROVE_WITHIN_MS } from '@/connections/config';
-import { ownerRelay, type Ask, type OpenWallet } from '@/connections/relay';
+import { ownerRelay, type OpenWallet } from '@/connections/relay';
 import { findActive } from '@/connections/rows';
 import { countHit } from '@/db/settings';
 import {
@@ -14,13 +14,10 @@ import {
   lostBefore,
   lostPreamble,
   openLink,
-  resumeRequest,
   signById,
-  type Claim,
-  type Outcome,
   type PermissionRequestRow,
-  type Rebuild,
 } from '@/grants/requests';
+import { signWork, type SignPayload, type SignRequest } from '@/grants/resume';
 import { canonical } from '@/lib/canonical';
 import { isProxyChain } from '@/lib/chain';
 import { RATE_WINDOW_MS } from '@/lib/edge';
@@ -101,7 +98,7 @@ type SignResult = {
   [gateCode]?: string;
 };
 
-type Request = { type: '0x45'; data: { message: string } } | { type: '0x01'; data: Record<string, unknown> };
+type Request = SignRequest;
 
 export interface SignDeps {
   openWallet: OpenWallet;
@@ -183,26 +180,6 @@ async function answer(row: PermissionRequestRow, followUp = false): Promise<Sign
   );
 }
 
-const hasAccount = (accounts: unknown, account: string) =>
-  Array.isArray(accounts) && accounts.some((a) => typeof a === 'string' && a.toLowerCase() === account.toLowerCase());
-
-type SignPayload = { chainId: number; request: Request };
-
-export const signWork: Rebuild = (t, payload) => (ask, claim) => approve(ask, claim, t, payload as SignPayload);
-
-async function approve(ask: Ask, claim: Claim, t: Tenant, { chainId, request }: SignPayload): Promise<Outcome> {
-  if (!hasAccount(await ask('eth_requestAccounts', []), t.account)) {
-    return { state: 'owner_declined', code: 'wrong_account' };
-  }
-  if (!(await claim())) return { state: 'expired', code: 'session_lost' };
-  const signed = await ask('wallet_sign', [{ address: t.account, chainId: toHex(chainId), request }]);
-  const signature = z
-    .string()
-    .regex(/^0x[0-9a-fA-F]+$/)
-    .safeParse(signed).data;
-  return signature ? { state: 'approved', signature } : { state: 'failed', code: 'wallet_answer_unreadable' };
-}
-
 function typedDataFault(data: Record<string, unknown>): string | undefined {
   const { types, primaryType } = data;
   if (typeof types !== 'object' || types === null || Array.isArray(types))
@@ -264,8 +241,7 @@ export async function sign(t: Tenant, input: SignInput, deps: SignDeps = DEFAULT
     row.requestHash === requestHash
       ? answer(row)
       : refuse('idempotency_conflict', 'This idempotency key was used for another request. Nothing was signed.');
-  const stored = await currentSign(t, idempotencyKey);
-  if (stored?.relay) void resumeRequest(stored, signWork);
+  const stored = await currentSign(t, idempotencyKey, signWork);
   if (stored) return answerStored(stored);
 
   if ((await countHit(`owner-sign:${t.connectionId}`, RATE_WINDOW_MS)) > LINK_RATE_LIMIT) {
@@ -291,7 +267,7 @@ export async function sign(t: Tenant, input: SignInput, deps: SignDeps = DEFAULT
       chainId,
       approveBy: new Date(Date.now() + APPROVE_WITHIN_MS),
       payload,
-      work: signWork(t, payload),
+      rebuild: signWork,
     },
     deps.openWallet
   );

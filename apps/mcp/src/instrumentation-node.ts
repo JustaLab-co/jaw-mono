@@ -1,12 +1,12 @@
 import { sweepWraps } from './connections/adapter';
 import { config } from './connections/config';
 import { runMigrations } from './db/migrate';
-import { resumeOpen } from './grants/requests';
+import { resumeTick } from './connections/resume';
+import { requestsWaiting } from './grants/resume';
 import { log } from './lib/edge';
 import { purge, reconcile, sweepRevokedGrants } from './reconciler/run';
-import { resumeGrant } from './tools/grant-permissions';
-import { resumeRevoke } from './tools/revoke-permission';
-import { signWork } from './tools/sign';
+import { callsWaiting } from './owner-calls/resume';
+import { swapsWaiting } from './swap/resume';
 
 /** Every minute unless set, 0 turns it off. A value that is not seconds keeps the default. */
 export function reconcileSeconds(value: string | undefined): number {
@@ -20,7 +20,7 @@ export function reconcileSeconds(value: string | undefined): number {
 function reconcileEvery(seconds: number) {
   let running = false;
   setInterval(async () => {
-    void resumeOpen({ sign: signWork, grant: resumeGrant, revoke: resumeRevoke });
+    void resumeTick([requestsWaiting, callsWaiting(), swapsWaiting()]);
     if (running) return;
     running = true;
     try {

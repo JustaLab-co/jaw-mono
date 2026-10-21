@@ -232,6 +232,13 @@
       "when": 1792581131798,
       "tag": "0032_request_resume",
       "breakpoints": true
+    },
+    {
+      "idx": 33,
+      "version": "7",
+      "when": 1792588200979,
+      "tag": "0033_call_resume",
+      "breakpoints": true
     }
   ]
 }

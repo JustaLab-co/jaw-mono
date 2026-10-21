@@ -1,4 +1,13 @@
-import { createCipheriv, createDecipheriv, createHash, createPrivateKey, hkdfSync, randomBytes } from 'node:crypto';
+import {
+  createCipheriv,
+  createDecipheriv,
+  createHash,
+  createPrivateKey,
+  createPublicKey,
+  hkdfSync,
+  randomBytes,
+} from 'node:crypto';
+import { z } from 'zod';
 import type { Hex } from 'viem';
 
 export type Sealed = string & { readonly __brand: 'Sealed' };
@@ -91,9 +100,21 @@ export function sealResume(ring: KeyRing, resume: RelayResume, rowId: string): S
   return encrypt('r1', kid, relay, Buffer.from(JSON.stringify(resume)), rowId) as SealedResume;
 }
 
+const relayResume = z.object({
+  session: z.string().min(1),
+  key: z.string().regex(/^[0-9a-f]+$/),
+  peer: z.string().regex(/^[0-9a-f]+$/),
+  chainId: z.number().int().positive(),
+  appName: z.string(),
+});
+
+/** Undefined when the blob does not open here or holds keys that do not load. */
 export function openResume(ring: KeyRing, blob: string, rowId: string): RelayResume | undefined {
   try {
-    return JSON.parse(decrypt(ring, blob, 'r1', rowId, (k) => k.relay).toString()) as RelayResume;
+    const resume = relayResume.parse(JSON.parse(decrypt(ring, blob, 'r1', rowId, (k) => k.relay).toString()));
+    createPrivateKey({ key: Buffer.from(resume.key, 'hex'), format: 'der', type: 'pkcs8' });
+    createPublicKey({ key: Buffer.from(resume.peer, 'hex'), format: 'der', type: 'spki' });
+    return resume;
   } catch {
     return undefined;
   }

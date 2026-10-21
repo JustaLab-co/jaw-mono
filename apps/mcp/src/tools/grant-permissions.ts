@@ -1,37 +1,17 @@
 import { ANY_FN_SEL, ANY_TARGET, EMPTY_CALLDATA_FN_SEL } from '@jaw.id/core';
 import { usdcForNetwork } from '@jaw.id/agent';
 import type { McpServer } from '@modelcontextprotocol/server';
-import { and, eq } from 'drizzle-orm';
-import { isAddress, isAddressEqual, isHex, numberToHex, parseUnits, toFunctionSelector, type Address } from 'viem';
+import { isAddress, numberToHex, parseUnits, toFunctionSelector, type Address } from 'viem';
 import { z } from 'zod';
 import { tenant, type Tenant } from '@/connections/auth';
 import { APPROVE_WITHIN_MS } from '@/connections/config';
-import { ownerRelay, type Ask, type OpenWallet } from '@/connections/relay';
-import { isLive } from '@/connections/rows';
+import { ownerRelay, type OpenWallet } from '@/connections/relay';
 import { spends } from '@/connections/scopes';
-import { getDb } from '@/db/client';
-import { connections, SPEND_UNITS } from '@/db/schema';
-import {
-  budgetGrant,
-  checkGranted,
-  readOnChain,
-  recordGrant,
-  type GrantRequest,
-  type ReadPermission,
-} from '@/grants/permission';
-import {
-  lostBefore,
-  lostPreamble,
-  openLink,
-  RECONNECTING,
-  reconnecting,
-  resumeRequest,
-  type Claim,
-  type Outcome,
-  type Rebuild,
-} from '@/grants/requests';
+import { SPEND_UNITS } from '@/db/schema';
+import { budgetGrant, readOnChain, type GrantRequest, type ReadPermission } from '@/grants/permission';
+import { lostBefore, lostPreamble, openLink, RECONNECTING, reconnecting } from '@/grants/requests';
+import { grantWork, type GrantPayload } from '@/grants/resume';
 import { liveGrants, LIVE_GRANTS_PER_CONNECTION, type GrantKind } from '@/grants/store';
-import { errorLabel, log } from '@/lib/edge';
 import { reply } from '@/lib/fence';
 import { forbiddenTargets } from './owner-calls';
 import { ACCOUNT_BUSY, NO_PAY_SCOPE, refusal } from './reply';
@@ -148,49 +128,6 @@ function asked(t: Tenant, input: GrantInput, expiry: number): Asked | string {
   return { kind: 'custom', grant, what: `${calls.length} call(s) and ${spent.length} spend limit(s)` };
 }
 
-type GrantPayload = Pick<Asked, 'kind' | 'grant'>;
-
-export const grantWork =
-  (read: ReadPermission): Rebuild =>
-  (t, payload) =>
-  (walletAsk, claim) =>
-    askGrant(t, payload as GrantPayload, walletAsk, claim, read);
-
-export const resumeGrant = grantWork(readOnChain);
-
-async function askGrant(
-  t: Tenant,
-  ask: GrantPayload,
-  walletAsk: Ask,
-  claim: Claim,
-  read: ReadPermission
-): Promise<Outcome> {
-  if (!(await claim())) return { state: 'expired', code: 'session_lost' };
-  const answer = await walletAsk('wallet_grantPermissions', [ask.grant]);
-  const answered = (answer as { permissionId?: unknown } | null)?.permissionId;
-  const permissionId = isHex(answered) ? answered : undefined;
-  const checked = await checkGranted(t.chainId, ask.grant, ask.kind, answer, read);
-  if (typeof checked === 'string') return { state: 'failed', code: checked, permissionId };
-  if (!isAddressEqual(checked.account as Address, t.account)) {
-    return { state: 'failed', code: 'wrong_account', permissionId };
-  }
-  try {
-    const recorded = await getDb().transaction(async (tx) => {
-      const [live] = await tx
-        .select({ id: connections.id })
-        .from(connections)
-        .where(and(eq(connections.id, t.connectionId), isLive()))
-        .for('update');
-      if (live) await recordGrant(tx, t.connectionId, checked);
-      return live !== undefined;
-    });
-    return recorded ? { state: 'approved', permissionId } : { state: 'failed', code: 'connection_ended', permissionId };
-  } catch (err) {
-    log('warn', { msg: 'granted permission not recorded', permissionId, error: errorLabel(err) });
-    return { state: 'failed', code: 'not_recorded', permissionId };
-  }
-}
-
 export async function grantPermissions(t: Tenant, input: GrantInput, deps = DEFAULTS) {
   if (input.x402Budget && (input.calls || input.spends || input.expiresAt)) {
     return refusal('x402Budget is a preset: pass it alone, or pass calls and spends without it.');
@@ -222,7 +159,7 @@ export async function grantPermissions(t: Tenant, input: GrantInput, deps = DEFA
       chainId: t.chainId,
       approveBy: until,
       payload,
-      work: grantWork(deps.readPermission)(t, payload),
+      rebuild: grantWork(deps.readPermission),
     },
     deps.openWallet
   );
@@ -235,7 +172,6 @@ export async function grantPermissions(t: Tenant, input: GrantInput, deps = DEFA
       'Tell the owner not to approve that one: a grant approved there can go live on chain without this server recording it, and then only jaw_revoke_permission with its id from the wallet ends it. '
     : '';
   if ('waiting' in opened) {
-    if (row.relay) void resumeRequest(row, grantWork(deps.readPermission));
     const state = reconnecting(row)
       ? `open at ${row.walletUrl}.${RECONNECTING}`
       : `still waiting for the owner at ${row.walletUrl}.`;

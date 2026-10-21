@@ -15,14 +15,14 @@ import { chainClients } from '@/adapters/session-host';
 import { APPROVE_WITHIN_MS } from '@/connections/config';
 import { ownerRelay, WalletBusy, type OpenWallet, type Wallet } from '@/connections/relay';
 import { findActive } from '@/connections/rows';
-import { keepLease, leaseHeld } from '@/connections/session-lease';
+import { leaseHeld } from '@/connections/session-lease';
 import { countHit, isPaymentsPaused } from '@/db/settings';
 import { isProxyChain } from '@/lib/chain';
 import { errorLabel, log, RATE_WINDOW_MS } from '@/lib/edge';
 import { reply } from '@/lib/fence';
 import { MAX_WAIT_SECONDS, SUGGESTED_WAIT_SECONDS, waiterOf, waitFor, type Waiter } from '@/lib/wait';
-import { approve } from '@/owner-calls/approve';
 import { readReceipt, receiptOf, type ReadReceipt, type Receipt } from '@/owner-calls/receipt';
+import { followCalls, resumeCall } from '@/owner-calls/resume';
 import {
   ACCOUNT_LINK_RATE_LIMIT,
   countOpenLinks,
@@ -38,8 +38,6 @@ import {
   findByKey,
   findOpen,
   insertOwnerCall,
-  endSession,
-  renewSession,
   reopenLink,
   SEND_STARTED,
   type OwnerCallRow,
@@ -225,6 +223,7 @@ function summaryOf(row: OwnerCallRow, followUp: boolean): string {
 }
 
 function answer(row: OwnerCallRow, note = '', followUp = false): SendResult {
+  if (row.relay) void resumeCall(row);
   const out = ownerCallsOutput.parse({
     id: row.id,
     idempotencyKey: row.idempotencyKey,
@@ -241,19 +240,6 @@ function answer(row: OwnerCallRow, note = '', followUp = false): SendResult {
     summary: note + summaryOf(row, followUp),
   });
   return { ...reply(out), isError: row.state === 'reverted' };
-}
-
-function follow(row: OwnerCallRow, wallet: Wallet, clients: ChainClients): void {
-  const stop = keepLease(
-    () => renewSession(row),
-    () => endSession(row)
-  );
-  void wallet
-    .run((ask) => approve(ask, row, clients))
-    .catch((err: unknown) =>
-      log('warn', { msg: 'owner calls approval ended', ownerCallId: row.id, error: errorLabel(err) })
-    )
-    .finally(stop);
 }
 
 async function refusedBeforeLink(t: Tenant): Promise<SendResult | undefined> {
@@ -293,7 +279,7 @@ async function reopen(t: Tenant, row: OwnerCallRow, deps: OwnerCallDeps): Promis
     if (!reopened || reopened === FULL) wallet.close();
   }
   if (reopened === FULL) return accountBusy();
-  if (reopened) follow(reopened, wallet, deps.clients);
+  if (reopened) followCalls(reopened, wallet, deps.clients);
   return answer(reopened ?? (await findById(t.connectionId, row.id)) ?? row);
 }
 
@@ -302,7 +288,7 @@ async function replay(t: Tenant, row: OwnerCallRow, hash: string, deps: OwnerCal
     return refuse('idempotency_conflict', 'This idempotency key was used for another request. Nothing was sent.');
   }
   const linkDead = row.state === 'awaiting_owner' && row.code !== SEND_STARTED && !leaseHeld(row.sessionUntil);
-  if (!linkDead) return answer(row);
+  if (!linkDead || row.relay) return answer(row);
   const refused = await refusedBeforeLink(t);
   if (refused) return refused;
   if (!(await findActive(t.connectionId))) return connectionEnded();
@@ -376,7 +362,7 @@ export async function sendCalls(t: Tenant, input: SendCallsInput, deps: OwnerCal
   }
   if (row === FULL) return refuseUnlessStored(accountBusy());
   if (row) {
-    follow(row, wallet, deps.clients);
+    followCalls(row, wallet, deps.clients);
     return answer(row);
   }
   const raced = await findByKey(t.connectionId, key);

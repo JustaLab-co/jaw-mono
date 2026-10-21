@@ -62,7 +62,7 @@ try {
   say('joined, session', resume.session);
   await sleep(3000);
 
-  const resumed = await resumeWallet(resume, until);
+  const resumed = await resumeWallet(resume, wallet.url, until);
   assert(resumed, 'the page is still open, so the server can resume');
   const answer = await resumed.run((ask) => ask('eth_chainId', []));
   say('answer after the restart', answer);

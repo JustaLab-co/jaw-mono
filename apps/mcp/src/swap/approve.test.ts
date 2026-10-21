@@ -99,6 +99,7 @@ async function awaitingOwner(call: SwapRow['call'], approveBy: Date): Promise<Sw
       idempotencyKey: id,
       requestHash: id,
       paymentKey: `swap:${id}:1`,
+      leaseHolder: id,
       leaseUntil: new Date(),
       originChainId: 8453,
       originToken: USDC,

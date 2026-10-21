@@ -1,4 +1,4 @@
-import { createPrivateKey, createPublicKey, randomUUID } from 'node:crypto';
+import { randomUUID } from 'node:crypto';
 import {
   decryptMessage,
   deriveSharedSecret,
@@ -273,12 +273,15 @@ function converse(
     const answer = await read((m) => m.type === 'rpc_response' && m.id === id);
     if (answer.success) return answer.data;
     const error = answer.error as { code?: number; message?: string } | undefined;
+    // A rejoined page refuses an id it answered for another request: what happened there cannot be told.
+    if (peer !== undefined && error?.code === NOT_THE_REQUEST) throw new PageGone();
     throw new WalletRefused(error?.message ?? 'the wallet refused', error?.code);
   };
   return { send, read, ask };
 }
 
 const REJOIN_WITHIN_MS = 15_000;
+const NOT_THE_REQUEST = -32600;
 // Saving the session must not hold the first ask back.
 const JOINED_WITHIN_MS = 5_000;
 
@@ -296,14 +299,16 @@ export class PageGone extends Error {
   }
 }
 
-/** Rejoins a session the server held before it restarted. Undefined means the page is gone. */
-export const resumeWallet = (resume: RelayResume, until: Date, client?: RelayClient): Promise<Wallet | undefined> =>
-  withSlot(ownerPool, client, (release) => rejoin(release, resume, until));
+/** Rejoins the session behind `url`, the link the owner already has open. Undefined means the page is gone. */
+export const resumeWallet = (
+  resume: RelayResume,
+  url: string,
+  until: Date,
+  client?: RelayClient
+): Promise<Wallet | undefined> => withSlot(ownerPool, client, (release) => rejoin(release, resume, url, until));
 
-async function rejoin(release: () => void, resume: RelayResume, until: Date): Promise<Wallet | undefined> {
+async function rejoin(release: () => void, resume: RelayResume, url: string, until: Date): Promise<Wallet | undefined> {
   const { session, key, peer, chainId, appName } = resume;
-  const ours = createPrivateKey({ key: Buffer.from(key, 'hex'), format: 'der', type: 'pkcs8' });
-  const url = linkOf(session, createPublicKey(ours).export({ format: 'der', type: 'spki' }).toString('hex'));
   const { ws, inbox, end } = connect(session, until, release);
   const soon = () => new Date(Math.min(until.getTime(), Date.now() + REJOIN_WITHIN_MS));
   const status = await inbox

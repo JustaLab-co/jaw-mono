@@ -1,4 +1,4 @@
-import { randomBytes } from 'node:crypto';
+import { generateKeyPairSync, randomBytes } from 'node:crypto';
 import { generatePrivateKey } from 'viem/accounts';
 import { describe, expect, it } from 'vitest';
 import { type Sealed, nextRefreshId, open, openResume, parseKeyRing, seal, sealResume, unwrap, wrap } from './seal';
@@ -81,10 +81,11 @@ describe('sealing key ring', () => {
 
 describe('a sealed relay session', () => {
   const [a, b] = [key(), key()];
+  const pair = generateKeyPairSync('ec', { namedCurve: 'P-256' });
   const resume = {
     session: 'b3c1a2d4-0000-4000-8000-000000000001',
-    key: randomBytes(138).toString('hex'),
-    peer: randomBytes(91).toString('hex'),
+    key: pair.privateKey.export({ format: 'der', type: 'pkcs8' }).toString('hex'),
+    peer: pair.publicKey.export({ format: 'der', type: 'spki' }).toString('hex'),
     chainId: 84532,
     appName: 'Agent (via JAW MCP)',
   };
@@ -105,6 +106,17 @@ describe('a sealed relay session', () => {
     expect(openResume(ring, blob, 'req_2')).toBeUndefined();
     expect(openResume(ring, blob.slice(0, -1) + last, 'req_1')).toBeUndefined();
     expect(openResume(parseKeyRing(b), blob, 'req_1')).toBeUndefined();
+  });
+
+  it.each([
+    ['a private key that does not load', { key: randomBytes(138).toString('hex') }],
+    ['a page key that does not load', { peer: randomBytes(91).toString('hex') }],
+    ['no chain', { chainId: undefined }],
+  ])('given it opens but holds %s, then it does not open', (_, over) => {
+    const ring = parseKeyRing(a);
+    expect(
+      openResume(ring, sealResume(ring, { ...resume, ...over } as typeof resume, 'req_1'), 'req_1')
+    ).toBeUndefined();
   });
 
   it('given a sealed session relabelled as a sealed connection key, then the connection key ring purpose does not open it', () => {
