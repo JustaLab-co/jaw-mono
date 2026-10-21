@@ -321,11 +321,16 @@ export async function sendCalls(t: Tenant, input: SendCallsInput, deps: OwnerCal
   if (gated) return gated;
   const open = await findOpen(t.connectionId);
   if (open) return inProgress(open);
-  if ((await countOpenLinks(t.account)) >= MAX_OPEN_PER_ACCOUNT) return accountBusy();
+  // A request racing this one may have stored this key since the check above: answer it rather than refuse.
+  const refuseUnlessStored = async (refusal: SendResult) => {
+    const raced = await findByKey(t.connectionId, key);
+    return raced ? replay(t, raced, hash, deps) : refusal;
+  };
+  if ((await countOpenLinks(t.account)) >= MAX_OPEN_PER_ACCOUNT) return refuseUnlessStored(accountBusy());
   if (!(await findActive(t.connectionId))) return connectionEnded();
   const approveBy = new Date(Date.now() + APPROVE_WITHIN_MS);
   const wallet = await openWalletFor(t, approveBy, deps);
-  if (!wallet) return walletBusy(key);
+  if (!wallet) return refuseUnlessStored(walletBusy(key));
   let row: OwnerCallRow | null | typeof FULL = null;
   try {
     row = await withLinkSlot(t.account, undefined, (tx) =>
@@ -346,7 +351,7 @@ export async function sendCalls(t: Tenant, input: SendCallsInput, deps: OwnerCal
   } finally {
     if (!row || row === FULL) wallet.close();
   }
-  if (row === FULL) return accountBusy();
+  if (row === FULL) return refuseUnlessStored(accountBusy());
   if (row) {
     follow(row, wallet, deps.clients);
     return answer(row);

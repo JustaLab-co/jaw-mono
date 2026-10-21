@@ -44,6 +44,21 @@ vi.mock('@/connections/relay', async (original) => ({
   },
 }));
 
+// Holds the next request between reading its own key and counting the account's links.
+const turn = vi.hoisted(() => ({ beforeCount: undefined as undefined | (() => Promise<unknown>) }));
+vi.mock('@/owner-calls/cap', async (original) => {
+  const cap = await original<typeof import('@/owner-calls/cap')>();
+  return {
+    ...cap,
+    countOpenLinks: async (...args: Parameters<typeof cap.countOpenLinks>) => {
+      const wait = turn.beforeCount;
+      turn.beforeCount = undefined;
+      await wait?.();
+      return cap.countOpenLinks(...args);
+    },
+  };
+});
+
 setTestEnv();
 process.env.JAW_MCP_RPC_URL = 'http://127.0.0.1:9';
 
@@ -93,6 +108,7 @@ const quietChain = fakeChain({ head: 1_000_000n }).clients;
 
 beforeAll(TEST_PG_URL ? useTestPostgres : useTestDb);
 beforeEach(() => {
+  turn.beforeCount = undefined;
   served.clients = [];
   opened = [];
   asked = [];
@@ -837,6 +853,20 @@ describe('jaw_send_calls refusals', () => {
     expect(await rowsOf(t.connectionId)).toEqual([]);
   });
 
+  it('given the same key opens its link while a retry of it finds the owner pool full, then the retry answers that link', async () => {
+    const { t } = await connected();
+    let opener!: ReturnType<typeof send>;
+    const fullOnceOpened: OpenWallet = async () => {
+      await (opener = send(t));
+      throw new WalletBusy();
+    };
+
+    const retry = await send(t, {}, fullOnceOpened);
+
+    expect(retry[gateCode]).toBeUndefined();
+    expect(retry.structuredContent!.url).toBe((await opener).structuredContent!.url);
+  });
+
   it('given a link that would reopen and the owner pool is full, then wallet_busy', async () => {
     const { t } = await connected();
     await send(t, {}, wallet(undefined, ended));
@@ -912,6 +942,19 @@ describe('jaw_send_calls refusals', () => {
       const signer = newSigner();
       return Promise.all(Array.from({ length: n }, () => connected('wallet:read', signer).then((c) => c.t)));
     };
+
+    it('given two links open on the account, when the same key opens the third while a retry of it is checking, then the retry answers that link', async () => {
+      const [a, b, c] = await sameAccount(3);
+      await send(a);
+      await send(b);
+      let opener!: ReturnType<typeof send>;
+      turn.beforeCount = () => (opener = send(c));
+
+      const retry = await send(c);
+
+      expect(retry[gateCode]).toBeUndefined();
+      expect(retry.structuredContent!.url).toBe((await opener).structuredContent!.url);
+    });
 
     it('given three links open across connections of one account, when a fourth connection asks, then account_busy and no wallet opens', async () => {
       const [a, b, c, d] = await sameAccount(4);
