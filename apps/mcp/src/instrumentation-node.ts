@@ -3,7 +3,7 @@ import { config } from './connections/config';
 import { runMigrations } from './db/migrate';
 import { resumeOpen } from './grants/requests';
 import { log } from './lib/edge';
-import { purge, reconcile } from './reconciler/run';
+import { purge, reconcile, sweepRevokedGrants } from './reconciler/run';
 import { resumeGrant } from './tools/grant-permissions';
 import { resumeRevoke } from './tools/revoke-permission';
 import { signWork } from './tools/sign';
@@ -27,6 +27,7 @@ function reconcileEvery(seconds: number) {
       await sweepWraps();
       await reconcile();
       await purge();
+      await sweepRevokedGrants();
     } catch (err) {
       log('error', { msg: 'reconcile run failed', error: err instanceof Error ? err.name : 'unknown' });
     } finally {

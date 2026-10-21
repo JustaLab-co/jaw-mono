@@ -35,6 +35,7 @@ import {
   type SwapLease,
   type SwapRow,
   type SwapState,
+  type SwapRequest,
 } from '@/swap/store';
 import { track } from '@/swap/track';
 
@@ -177,7 +178,12 @@ function invalidInput(input: SwapToolInput): string | undefined {
   return 'An EVM destination needs a hex destinationToken and, when given, a hex recipient.';
 }
 
-async function refusedBeforeQuoting(t: Tenant, originChainId: number, key: string): Promise<SwapResult | undefined> {
+async function refusedBeforeQuoting(
+  t: Tenant,
+  originChainId: number,
+  key: string,
+  request: SwapRequest
+): Promise<SwapResult | undefined> {
   if (!config().swapApiKey) return refuse('swap_unavailable', 'Swaps are not set up on this server.');
   if ((await countHit(`swap:${t.connectionId}`, RATE_WINDOW_MS)) > SWAP_RATE_LIMIT) {
     return refuse('rate_limited', 'Too many swaps on this connection. Wait a minute.');
@@ -185,7 +191,10 @@ async function refusedBeforeQuoting(t: Tenant, originChainId: number, key: strin
   if (!isSupportedOriginChain(originChainId)) {
     return refuse('unsupported_origin_chain', `Chain ${originChainId} is not one the JAW wallet can send from.`);
   }
-  if ((await countOpenLinks(t.account)) >= MAX_OPEN_PER_ACCOUNT) return accountBusy(key);
+  if ((await countOpenLinks(t.account)) >= MAX_OPEN_PER_ACCOUNT) {
+    // A request racing this one may have stored this key since the caller's check; replaying it opens no new link.
+    return (await nextStepQuotes(t.connectionId, key, request)) ? accountBusy(key) : undefined;
+  }
   return undefined;
 }
 
@@ -428,7 +437,7 @@ export async function swap(t: Tenant, input: SwapToolInput, deps: SwapDeps = DEF
   const key = input.idempotencyKey ?? `auto_${randomBytes(12).toString('base64url')}`;
   const request = swapRequest(t, { ...input, originToken: input.originToken as Address });
   if (await nextStepQuotes(t.connectionId, key, request)) {
-    const refused = await refusedBeforeQuoting(t, input.originChainId, key);
+    const refused = await refusedBeforeQuoting(t, input.originChainId, key, request);
     if (refused) return refused;
   }
   const claim = await claimSwap(t.connectionId, key, request);

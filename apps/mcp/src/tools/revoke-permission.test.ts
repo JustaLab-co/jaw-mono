@@ -4,7 +4,7 @@ import { and, eq, sql } from 'drizzle-orm';
 import { toFunctionSelector, type Hex } from 'viem';
 import { beforeAll, describe, expect, it, vi } from 'vitest';
 import { verifyBearer, type Tenant } from '@/connections/auth';
-import type { OpenWallet } from '@/connections/relay';
+import { WalletBusy, WalletRefused, type OpenWallet } from '@/connections/relay';
 import {
   approvedOnChain,
   callTool,
@@ -358,6 +358,20 @@ describe('jaw_revoke_permission', () => {
     expect(await requestsOf(budget)).toMatchObject([{ state: 'owner_declined' }]);
   });
 
+  it('given the wallet answers the sign-in with an error that has no code, then the request reads wallet_error:unknown, not unexpected', async () => {
+    const { t, signer, budget } = await connected();
+    const refusing: OpenWallet = fakeWallet(async () => {
+      throw new WalletRefused('The passkey prompt was dismissed');
+    });
+    const { deps } = setup(signer);
+
+    await revokePermission(t, { permissionId: budget }, { ...deps(), openWallet: refusing });
+    await walletsSettled();
+
+    expect((await grantRow(budget)).revokedAt).toBeNull();
+    expect(await requestsOf(budget)).toMatchObject([{ state: 'failed', code: 'wallet_error:unknown' }]);
+  });
+
   it('given the wallet is signed in to another account, then nothing is revoked', async () => {
     const { t, signer, budget } = await connected();
     const { deps, asked } = setup(signer);
@@ -420,6 +434,27 @@ describe('jaw_revoke_permission', () => {
 
     expect(theirs.content[0].text).toMatch(/^revoke_in_progress: /);
     expect(theirs.content[0].text).toContain('reconnecting to the owner');
+  });
+
+  it('given a revoke opening its link while another ask finds the wallet pool full, then the other gets that link', async () => {
+    const signer = owner();
+    const { t, budget } = await connected(signer);
+    const { deps } = setup(signer);
+    const wait = held();
+    const holding = deps({ held: wait.promise });
+    let opener!: ReturnType<typeof revokePermission>;
+    const fullOnceOpened: OpenWallet = async () => {
+      await (opener = revokePermission(t, { permissionId: budget }, holding));
+      throw new WalletBusy();
+    };
+
+    const again = await revokePermission(t, { permissionId: budget }, { ...holding, openWallet: fullOnceOpened });
+    const first = await opener;
+    wait.release();
+    await walletsSettled();
+
+    expect(urlOf(first)).toBeTruthy();
+    expect(urlOf(again)).toBe(urlOf(first));
   });
 
   it('given the process holding a waiting revoke stopped renewing its lease, then a new ask opens a fresh link and the old session never asks the wallet', async () => {

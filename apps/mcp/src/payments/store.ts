@@ -173,6 +173,15 @@ export async function markSigned(id: string, token: string, a: SignedAuthorizati
   if (rows.length !== 1) throw new Error('the payment row is no longer held by this call');
 }
 
+export async function chargeTo(id: string, token: string, permissionId: string): Promise<void> {
+  const rows = await getDb()
+    .update(payments)
+    .set({ permissionId })
+    .where(owned(id, token))
+    .returning({ id: payments.id });
+  if (rows.length !== 1) throw new Error('the payment row is no longer held by this call');
+}
+
 function hashIndexViolated(err: unknown): boolean {
   const e = (err as { cause?: { code?: unknown; constraint_name?: unknown } }).cause;
   return e?.code === '23505' && e.constraint_name === PAYER_TX_HASH_INDEX;

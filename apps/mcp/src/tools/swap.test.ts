@@ -33,8 +33,7 @@ import {
 } from '@/connections/testkit';
 import { getDb } from '@/db/client';
 import { connections, grants, payments, settings, swaps } from '@/db/schema';
-import { countHit } from '@/db/settings';
-import { TEST_PG_URL, useTestDb, useTestPostgres } from '@/db/test-db';
+import { hitsThisWindow, TEST_PG_URL, useTestDb, useTestPostgres } from '@/db/test-db';
 import { x402Budget } from '@/grants/store';
 import { guardTools, RATE_WINDOW_MS } from '@/lib/edge';
 import { gateCode } from '@/payments/render';
@@ -56,6 +55,21 @@ vi.mock('@/lib/chain', async (original) => ({
   ...(await original<object>()),
   publicClientFor: () => node as unknown as PublicClient,
 }));
+
+// Holds the next request between its own key's check and counting the account's links.
+const turn = vi.hoisted(() => ({ beforeCount: undefined as undefined | (() => Promise<unknown>) }));
+vi.mock('@/owner-calls/cap', async (original) => {
+  const cap = await original<typeof import('@/owner-calls/cap')>();
+  return {
+    ...cap,
+    countOpenLinks: async (...args: Parameters<typeof cap.countOpenLinks>) => {
+      const wait = turn.beforeCount;
+      turn.beforeCount = undefined;
+      await wait?.();
+      return cap.countOpenLinks(...args);
+    },
+  };
+});
 
 setTestEnv();
 process.env.JAW_MCP_RPC_URL = 'http://127.0.0.1:9';
@@ -184,6 +198,7 @@ const recordingWallet =
 
 beforeAll(TEST_PG_URL ? useTestPostgres : useTestDb);
 beforeEach(() => {
+  turn.beforeCount = undefined;
   Object.assign(deposits, {
     state: 'PENDING_DEPOSIT',
     txHash: undefined,
@@ -248,9 +263,7 @@ const sessionEnded = (connectionId: string) =>
 const paymentsOf = (connectionId: string) =>
   getDb().select().from(payments).where(eq(payments.connectionId, connectionId));
 const quotesGiven = () => backend.hits.filter((h) => h.quoted);
-const swapsThisMinute = async (t: Tenant, count: number) => {
-  for (let i = 0; i < count; i++) await countHit(`swap:${t.connectionId}`, RATE_WINDOW_MS);
-};
+const swapsThisMinute = (t: Tenant, count: number) => hitsThisWindow(`swap:${t.connectionId}`, count, RATE_WINDOW_MS);
 const rewrite = async (id: string, set: { quotedAt?: SQL; leaseUntil?: SQL; approveBy?: SQL }) => {
   await getDb().execute(sql`alter table swaps disable trigger swaps_guard`);
   await getDb().update(swaps).set(set).where(eq(swaps.id, id));
@@ -1775,7 +1788,7 @@ describe('jaw_swap_status', () => {
   it('given thirty status reads this minute, when one more runs, then rate_limited with no backend call', async () => {
     const { t } = await connected();
     const quoteId = await started(t);
-    for (let i = 0; i < 30; i++) await countHit(`swap-status:${t.connectionId}`, RATE_WINDOW_MS);
+    await hitsThisWindow(`swap-status:${t.connectionId}`, 30, RATE_WINDOW_MS);
 
     const result = await status(t, quoteId);
 
@@ -2232,6 +2245,26 @@ describe('owner links per account, swaps and calls together', () => {
     expect(backend.hits).toHaveLength(0);
     expect(await swapsOf(d.connectionId)).toEqual([]);
     expect(opened).toHaveLength(openedBefore);
+  });
+
+  it('given two links open on one account, when the same key opens the third while a retry of it is checking, then the retry answers that swap and asks for no second quote', async () => {
+    const [a, b, c] = await sameAccount(3);
+    await call(a, 'k');
+    await call(b, 'k');
+    const paid = quotesGiven().length;
+    let opener!: ReturnType<typeof run>;
+    turn.beforeCount = () => (opener = run(c));
+
+    const retry = await run(c);
+    const first = await opener;
+
+    expect(retry[gateCode]).toBeUndefined();
+    expect(retry.structuredContent).toMatchObject({
+      state: 'awaiting_owner',
+      quoteId: first.structuredContent!.quoteId,
+      url: first.structuredContent!.url,
+    });
+    expect(quotesGiven()).toHaveLength(paid + 1);
   });
 
   it('given a swap and two calls open on one account, when a third connection sends calls, then account_busy', async () => {

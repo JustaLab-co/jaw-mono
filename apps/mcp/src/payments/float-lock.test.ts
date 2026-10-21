@@ -23,6 +23,7 @@ describe.skipIf(!TEST_PG_URL)('on Postgres, the float lock', () => {
     await teardown();
   });
 
+  // Only client backends: Postgres starts autovacuum workers in this database on its own schedule.
   const activity = async () =>
     (
       await probe`
@@ -31,7 +32,8 @@ describe.skipIf(!TEST_PG_URL)('on Postgres, the float lock', () => {
             (select pid from pg_locks where locktype = 'advisory' and granted))::int as holding,
           count(*) filter (where wait_event_type = 'Lock')::int as waiting,
           count(*)::int as sessions
-        from pg_stat_activity where datname = current_database() and pid <> pg_backend_pid()`
+        from pg_stat_activity
+        where datname = current_database() and backend_type = 'client backend' and pid <> pg_backend_pid()`
     )[0];
 
   async function holding(ids: string[]) {
@@ -61,7 +63,7 @@ describe.skipIf(!TEST_PG_URL)('on Postgres, the float lock', () => {
     }
   });
 
-  it('given a hold whose session is terminated, then the work learns it lost the float and the next hold locks at once', async () => {
+  it('given a hold whose session is terminated, then the work learns it lost the float and the lock is free for the next hold', async () => {
     const id = randomUUID();
     let lost: unknown;
     await withFloat(id, 5_000, async (hold) => {
@@ -78,9 +80,10 @@ describe.skipIf(!TEST_PG_URL)('on Postgres, the float lock', () => {
       }
     });
     expect(lost).toBeInstanceOf(FloatLost);
-    const started = Date.now();
-    await withFloat(id, 1_000, async () => undefined);
-    expect(Date.now() - started).toBeLessThan(500);
+    const [{ free }] = await probe`select pg_try_advisory_lock(hashtext(${`refill:${id}`})) as free`;
+    expect(free).toBe(true);
+    await probe`select pg_advisory_unlock(hashtext(${`refill:${id}`}))`;
+    expect(await withFloat(id, 1_000, async () => 'held')).toBe('held');
   });
 
   it('given the lock held, when a wait shorter than the connect asks for it, then it is busy, never canceled', async () => {
@@ -104,10 +107,10 @@ describe.skipIf(!TEST_PG_URL)('on Postgres, the float lock', () => {
     const waiter = withFloat(id, 5_000, async () => 'waited');
     try {
       for (let i = 0; i < 100 && (await activity()).waiting < 1; i++) await sleep(20);
-      const started = Date.now();
       const third = await withFloat(id, 5_000, async () => 'ran').catch((e: unknown) => e);
-      expect(Date.now() - started).toBeLessThan(500);
+      // Refused for the queue it would join, not after waiting for the lock.
       expect(third).toBeInstanceOf(FloatBusy);
+      expect((third as FloatBusy).message).toBe('this connection already holds the float and has a waiter');
       expect(await withFloat(randomUUID(), 1_000, async () => 'other')).toBe('other');
     } finally {
       await release();

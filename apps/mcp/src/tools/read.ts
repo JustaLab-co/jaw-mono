@@ -23,7 +23,9 @@ import { tenant, type Tenant } from '@/connections/auth';
 import { config } from '@/connections/config';
 import { findActive } from '@/connections/rows';
 import { getDb } from '@/db/client';
-import { liveGrants, x402Budget, type Grant, type LiveGrant } from '@/grants/store';
+import { readOnChain } from '@/grants/permission';
+import { liveGrants, type Grant, type LiveGrant } from '@/grants/store';
+import { payingBudget } from '@/payments/pay';
 import { dayLeft, daySpendOf, isoOf, pullRoom } from '@/payments/day-spend';
 import { stillHeld } from '@/payments/refill';
 import { chainView, heldSpends, LOGGED_READ_MS, readAt, recordedSends, type OpenSpend } from '@/payments/sends';
@@ -232,9 +234,10 @@ async function grantOf(connectionId: string, g: LiveGrant): Promise<z.infer<type
 
 async function status(t: Tenant) {
   const network = caip2(t.chainId);
-  const [float, grant, held, conn] = await Promise.all([
+  // First, so a budget it finds revoked is not listed live beside it.
+  const grant = await payingBudget(t.connectionId, readOnChain);
+  const [float, held, conn] = await Promise.all([
     balanceOf(network, t.sessionAddress),
-    x402Budget(t.connectionId),
     liveGrants(t.connectionId),
     findActive(t.connectionId),
   ]);
@@ -298,7 +301,7 @@ type Terms = Awaited<ReturnType<typeof termsOf>>;
 
 const UNREADABLE: QuoteReadiness = { status: 'not_ready', reason: 'chain_unavailable' };
 const NO_FUNDING: QuoteReadiness = { status: 'not_ready', reason: 'funding_unavailable' };
-// Pay's own refusals at selection that a larger budget, not a retry, answers.
+// Pay's own refusals at selection that still leave the quote a price to show.
 const CAPPED: Record<string, QuoteReadiness> = {
   budget_exhausted: { status: 'not_ready', reason: 'over_allowance' },
   over_cap: { status: 'not_ready', reason: 'over_cap' },
@@ -354,7 +357,7 @@ function fitSummary(read: BudgetRead, grant: Grant, terms: Terms, { readiness, a
     case 'over_allowance':
       return ` Budget ${permissionId} has ${left} left today, not enough to pay it.${approval}`;
     case 'over_cap':
-      return ` Budget ${permissionId} lets one payment spend at most ${terms.policy.maxAmountPerPayment} base units.`;
+      return ` One payment may spend at most ${terms.policy.maxAmountPerPayment} base units, whatever the budget.`;
     case 'balance_low':
       return ` The account ${grant.account} holds too little USDC to refill the session for it: send USDC there (jaw_add_funds).`;
     case 'funding_unavailable':
@@ -389,7 +392,7 @@ async function quote(t: Tenant, url: string) {
     address: t.sessionAddress,
     pay: () => Promise.reject(new Error('a quote never pays')),
   };
-  const grant = await x402Budget(t.connectionId);
+  const grant = await payingBudget(t.connectionId, readOnChain);
   const [float, terms] = grant
     ? await Promise.all([balanceOf(caip2(grant.chainId), t.sessionAddress), termsOf(grant, t.sessionAddress)])
     : [null, undefined];

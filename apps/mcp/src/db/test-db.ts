@@ -9,6 +9,8 @@ import { migrate as migratePg } from 'drizzle-orm/postgres-js/migrator';
 import postgres from 'postgres';
 import { floatHolder, getDb, setDb, type Db } from './client';
 import * as schema from './schema';
+import { rateLimits } from './schema';
+import { windowStartOf } from './settings';
 
 const migrationsFolder = join(__dirname, '../../drizzle');
 
@@ -95,4 +97,22 @@ export async function withoutOwnerCallsGuard(fn: () => Promise<unknown>): Promis
   } finally {
     await getDb().execute(sql`alter table owner_calls enable trigger owner_calls_guard`);
   }
+}
+
+/**
+ * Adds `count` hits on `key` to the rate window open now and to the next one, so a
+ * call made after the window turns still finds them.
+ */
+export async function hitsThisWindow(key: string, count: number, windowMs: number): Promise<void> {
+  const now = windowStartOf(windowMs);
+  await getDb()
+    .insert(rateLimits)
+    .values([
+      { key, windowStart: now, count },
+      { key, windowStart: sql`${now} + ${windowMs} * interval '1 millisecond'`, count },
+    ])
+    .onConflictDoUpdate({
+      target: [rateLimits.key, rateLimits.windowStart],
+      set: { count: sql`${rateLimits.count} + excluded.count` },
+    });
 }

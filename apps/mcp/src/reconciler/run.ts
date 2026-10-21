@@ -1,4 +1,4 @@
-import type { ChainClients } from '@jaw.id/agent';
+import type { ChainClients, PermissionState } from '@jaw.id/agent';
 import { and, eq, isNotNull, isNull, lt, ne, sql } from 'drizzle-orm';
 import type { Address, Hex } from 'viem';
 import { entryPoint08Address } from 'viem/account-abstraction';
@@ -20,9 +20,10 @@ import {
   swaps,
 } from '@/db/schema';
 import { isPaymentsPaused } from '@/db/settings';
-import { readOnChain } from '@/grants/permission';
+import { readOnChain, type ReadPermission } from '@/grants/permission';
 import { closeLapsedLinks, SIGN_KEPT_DAYS } from '@/grants/requests';
 import { fromStore, settleUnconfirmedRevokes, type RevokeReads } from '@/grants/revokes';
+import { recordRevoked, sampleLiveGrants } from '@/grants/store';
 import { errorLabel, log } from '@/lib/edge';
 import { conclude, sentBefore } from '@/owner-calls/store';
 import { canSearchChain, readReceipt, searchChain, type ReadReceipt } from '@/owner-calls/receipt';
@@ -223,6 +224,36 @@ async function reconcileOwnerCalls(receipt: ReadReceipt, clients: ChainClients, 
       }
     })
   );
+}
+
+const GRANTS_PER_SWEEP = 25;
+// Unreadable this many times in a row reads as an outage, not as one grant the chain cannot answer for.
+const OUTAGE_AFTER = 3;
+
+export async function sweepRevokedGrants(
+  read: ReadPermission = readOnChain,
+  limit = GRANTS_PER_SWEEP
+): Promise<number | null> {
+  try {
+    let recorded = 0;
+    let unread = 0;
+    // One at a time: the payment path reads the same RPC, and a burst can get it rate limited.
+    for (const g of await sampleLiveGrants(limit)) {
+      const state = await read({ chainId: g.chainId, permissionId: g.permissionId, permission: g.permission }).catch(
+        (): PermissionState => ({ status: 'unavailable' })
+      );
+      if (state.status === 'unavailable') {
+        if (++unread === OUTAGE_AFTER) return null;
+        continue;
+      }
+      unread = 0;
+      if (state.status === 'ok' && state.revoked) recorded += await recordRevoked([g.permissionId]);
+    }
+    return recorded;
+  } catch (err) {
+    log('error', { msg: 'grant sweep failed', error: errorLabel(err) });
+    return null;
+  }
 }
 
 const SESSION_DEPS: DisconnectDeps = { readPermission: readOnChain, clients: chainClients, sender: sessionSender };
