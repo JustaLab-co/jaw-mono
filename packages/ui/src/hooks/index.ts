@@ -11,6 +11,8 @@ export * from './useSpenderPrefund';
 export * from './useAssetPreview';
 export * from './usePermissionExecution';
 export * from './usePermissionRevocation';
+export * from './useRecoveryConfig';
+export * from './useRecoveryRelayStatus';
 export * from './useFunctionSignatures';
 export * from './useDecodedCalldata';
 export * from './useClearSigningTypedData';
