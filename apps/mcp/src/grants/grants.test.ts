@@ -9,6 +9,7 @@ import { randomBytes } from 'node:crypto';
 import { beforeAll, describe, expect, it, vi } from 'vitest';
 import { verifyBearer, type Tenant } from '@/connections/auth';
 import {
+  grantBudget,
   approvedOnChain,
   callTool,
   connect,
@@ -21,6 +22,7 @@ import {
   offlineSession,
 } from '@/connections/testkit';
 import type { DisconnectDeps } from '@/connections/disconnect';
+import { spends } from '@/connections/scopes';
 import { getDb } from '@/db/client';
 import { connections, grants, payments, permissionRequests, settings } from '@/db/schema';
 import { TEST_PG_URL, useTestDb, useTestPostgres } from '@/db/test-db';
@@ -61,7 +63,8 @@ async function connected(scope = 'wallet:read x402:pay') {
   const signer = owner();
   const c = await connect(signer, { scope });
   const t = (await verifyBearer(c.access_token))?.extra?.tenant as Tenant;
-  return { c, t, signer, connectedWith: (await x402Budget(t.connectionId))?.permissionId };
+  const budget = spends(t.scopes) ? await grantBudget(t, signer) : undefined;
+  return { c, t, signer, connectedWith: budget?.permissionId };
 }
 
 /** Asks for a budget through a wallet that answers as `answer` says, and waits for it to settle. */
@@ -596,6 +599,8 @@ describe('jaw_grant_permissions', () => {
     if (!('structuredContent' in result)) throw new Error('refused');
     expect(result.structuredContent.url).toBe(walletUrl);
     expect(result.structuredContent.summary).toContain(`open ${walletUrl} and approve 1.5 USDC a day until`);
+    expect(result.structuredContent.summary).toContain('call jaw_session_status yourself');
+    expect(result.structuredContent.summary).toContain('do not wait for the owner to say they approved');
   });
 
   it('a ten digit budget is refused by the schema', async () => {
@@ -698,6 +703,16 @@ describe('the permission of a budget', () => {
     await expect(inTx(t.connectionId, g)).resolves.toBeUndefined();
   });
 
+  it('given a grant of that id was already revoked, when it is recorded again, then it is not recorded as approved', async () => {
+    const { t } = await connected();
+    const g = await newGrantFrom(t.connectionId);
+    await inTx(t.connectionId, g);
+    await getDb().update(grants).set({ revokedAt: new Date() }).where(eq(grants.permissionId, g.permissionId));
+
+    await expect(inTx(t.connectionId, g)).rejects.toThrow(/revoked/);
+    expect((await liveGrants(t.connectionId)).map((l) => l.permissionId)).not.toContain(g.permissionId);
+  });
+
   it('when the newest budget expires, then x402 payments do not fall back to the one it replaced', async () => {
     const { t, connectedWith } = await connected();
     const newer = await newGrantFrom(t.connectionId);
@@ -793,7 +808,7 @@ describe('the migration that keeps one budget per connection', () => {
       ]);
     expect(await rowOf(connectedWith)).toMatchObject({ replacedAt: null });
 
-    const migration = readFileSync(join(__dirname, '../../drizzle/0032_replace_older_budgets.sql'), 'utf8');
+    const migration = readFileSync(join(__dirname, '../../drizzle/0033_replace_older_budgets.sql'), 'utf8');
     await getDb().execute(sql.raw(migration));
 
     expect(await rowOf(connectedWith)).toMatchObject({ replacedAt: expect.any(Date) });

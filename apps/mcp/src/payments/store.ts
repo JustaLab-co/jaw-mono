@@ -5,7 +5,7 @@ import type { Address } from 'viem';
 import { getDb, type Tx } from '@/db/client';
 import { errorLabel, log } from '@/lib/edge';
 import { EXPIRY_MARGIN_MS } from './confirm';
-import { connections, PAYER_TX_HASH_INDEX, payments } from '@/db/schema';
+import { connections, PAYER_TX_HASH_INDEX, payments, sends } from '@/db/schema';
 
 export type PaymentRow = typeof payments.$inferSelect;
 export type PaymentState = PaymentRow['state'];
@@ -173,6 +173,15 @@ export async function markSigned(id: string, token: string, a: SignedAuthorizati
   if (rows.length !== 1) throw new Error('the payment row is no longer held by this call');
 }
 
+export async function chargeTo(id: string, token: string, permissionId: string): Promise<void> {
+  const rows = await getDb()
+    .update(payments)
+    .set({ permissionId })
+    .where(owned(id, token))
+    .returning({ id: payments.id });
+  if (rows.length !== 1) throw new Error('the payment row is no longer held by this call');
+}
+
 function hashIndexViolated(err: unknown): boolean {
   const e = (err as { cause?: { code?: unknown; constraint_name?: unknown } }).cause;
   return e?.code === '23505' && e.constraint_name === PAYER_TX_HASH_INDEX;
@@ -247,12 +256,16 @@ export async function writeTopUpAhead(tx: Tx, id: string, amount: bigint): Promi
   await addTopUp(tx, id, amount);
 }
 
+// An execute submits within this of recording its rows, the bound a top-up's lease
+// gives a refill. Past it the run is the reconciler's, whose claims hold no end.
+export const EXECUTE_SUBMIT_MS = 2 * 60_000;
+
 /**
- * Locks the connection row, then says whether a turn still running wrote a
- * top-up ahead of its send: until the turn reserves or its call ends, that
- * money may still land in the payer.
+ * Locks the connection row, then says whether a turn still running may still move
+ * money: a top-up written ahead of its send, until the turn reserves or its call
+ * ends, or an execute recorded and not yet submitted.
  */
-export async function topUpInFlight(tx: Tx, connectionId: string): Promise<boolean> {
+export async function sendInFlight(tx: Tx, connectionId: string): Promise<boolean> {
   await tx.select({ id: connections.id }).from(connections).where(eq(connections.id, connectionId)).for('update');
   const [row] = await tx
     .select({ id: payments.id })
@@ -267,7 +280,21 @@ export async function topUpInFlight(tx: Tx, connectionId: string): Promise<boole
       )
     )
     .limit(1);
-  return row !== undefined;
+  if (row) return true;
+  const [execute] = await tx
+    .select({ id: sends.id })
+    .from(sends)
+    .where(
+      and(
+        eq(sends.connectionId, connectionId),
+        eq(sends.state, 'open'),
+        isNotNull(sends.idempotencyKey),
+        isNull(sends.callsId),
+        sql`${sends.createdAt} > ${dbNow} - ${EXECUTE_SUBMIT_MS} * interval '1 millisecond'`
+      )
+    )
+    .limit(1);
+  return execute !== undefined;
 }
 
 const holding = sql`((${payments.state} = 'pending' and ${leaseLive} and ${payments.reserved} is not null)
@@ -455,7 +482,7 @@ export async function pulledUnderOtherGrants(tx: Tx, connectionId: string, permi
 /** Newest first. The cursor is a payment id; the order is read from its row, at full precision. */
 export async function history(connectionId: string, limit: number, before?: string) {
   const anchor = before
-    ? sql`(${payments.createdAt}, ${payments.id}) < (select created_at, id from payments where id = ${before})`
+    ? sql`(${payments.createdAt}, ${payments.id}) < (select created_at, id from payments where id = ${before} and connection_id = ${connectionId})`
     : undefined;
   return getDb()
     .select()

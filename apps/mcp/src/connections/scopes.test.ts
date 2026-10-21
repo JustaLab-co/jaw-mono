@@ -65,7 +65,7 @@ const TOOLS: Record<string, { needs: ConnectionScope[]; args: object }> = {
   jaw_grant_permissions: { needs: ['x402:pay'], args: { x402Budget: { perDay: '1' } } },
   jaw_session_x402_pay: { needs: ['x402:pay'], args: { url: 'http://127.0.0.1:9/paid' } },
   jaw_swap: {
-    needs: ['x402:pay'],
+    needs: ['wallet:read'],
     args: {
       originChainId: UNSUPPORTED_ORIGIN_CHAIN,
       originToken: RECIPIENT,
@@ -81,6 +81,7 @@ const TOOLS: Record<string, { needs: ConnectionScope[]; args: object }> = {
     args: { chainId: UNSUPPORTED_ORIGIN_CHAIN, calls: [{ to: RECIPIENT, data: '0xa9059cbb' }] },
   },
   jaw_get_calls_status: { needs: ['wallet:read'], args: { id: `oc_${'A'.repeat(22)}` } },
+  jaw_get_sign_status: { needs: ['wallet:read'], args: { id: `pr_${'A'.repeat(22)}` } },
   jaw_get_assets: { needs: ['wallet:read'], args: { chainIds: [TESTNET] } },
   jaw_get_capabilities: { needs: ['wallet:read'], args: { chainIds: [TESTNET] } },
   jaw_get_calls_history: { needs: ['wallet:read'], args: {} },
@@ -164,9 +165,9 @@ describe('the scopes an authorization grants', () => {
       const t = await tenantOf(c.access_token);
       const [row] = await getDb().select().from(connections).where(eq(connections.id, t.connectionId));
       expect(row.scopes).toEqual(scope.split(' '));
-      // A budget only for what spends: wallet:read alone asks the wallet for a signature instead.
+      // No scope asks for a budget at connect; jaw_grant_permissions does, when the agent needs one.
       const budgets = await getDb().select().from(grants).where(eq(grants.connectionId, t.connectionId));
-      expect(budgets).toHaveLength(scope === 'wallet:read' ? 0 : 1);
+      expect(budgets).toEqual([]);
     }
   );
 });

@@ -12,26 +12,26 @@ import {
   jawPaymasterUrl,
   PERMISSIONS_MANAGER_ADDRESS,
 } from '@jaw.id/core';
-import { and, eq, inArray, ne } from 'drizzle-orm';
+import { and, eq, ne } from 'drizzle-orm';
 import { encodeFunctionData, erc20Abi, formatUnits, isAddressEqual, maxUint256, type Address, type Hex } from 'viem';
 import { privateKeyToAccount } from 'viem/accounts';
 import { z } from 'zod';
 import { chainClients } from '@/adapters/session-host';
 import { getDb } from '@/db/client';
-import { connections, grants } from '@/db/schema';
+import { connections } from '@/db/schema';
 import { isPaymentsPaused } from '@/db/settings';
 import { readOnChain, type ReadPermission } from '@/grants/permission';
-import { liveGrants, replacedBudgets, type LiveGrant } from '@/grants/store';
+import { liveGrants, recordRevoked, replacedBudgets, type LiveGrant } from '@/grants/store';
 import { publicClientFor, rpcUrl } from '@/lib/chain';
 import { errorLabel, log } from '@/lib/edge';
 import { reply } from '@/lib/fence';
 import { FloatBusy, LOCK_WAIT_MS, withFloat, type FloatHold } from '@/payments/float-lock';
 import { stillHeld } from '@/payments/refill';
-import { holdingRows, LEASE_MS, topUpInFlight } from '@/payments/store';
+import { holdingRows, LEASE_MS, sendInFlight } from '@/payments/store';
 import { refusal } from '@/tools/reply';
 import type { Tenant } from './auth';
 import { config, SUPPORTED_CHAINS } from './config';
-import { endConnection, TopUpInFlight } from './rows';
+import { endConnection, SendInFlight } from './rows';
 
 type SessionCall = { to: Address; data: Hex };
 export type Sent = { status: 'landed'; txHash: Hex } | { status: 'reverted' } | { status: 'unconfirmed' };
@@ -81,7 +81,7 @@ const REFUSALS = {
   chain: 'Nothing was revoked: the chain could not be read. Try again.',
   busy: 'A payment on this connection is in progress, so nothing was revoked. Try again in a moment.',
   landing:
-    'A payment is still refilling the payer, so the connection stays open. Call jaw_session_disconnect again in a moment; it returns what landed.',
+    'A payment or an execute is still in flight, so the connection stays open. Call jaw_session_disconnect again in a moment; it returns what landed.',
   notSent: 'Nothing was revoked: the transaction could not be sent. Try again.',
   reverted: 'Nothing was revoked: the transaction reverted. Try again.',
   unconfirmed:
@@ -204,19 +204,19 @@ export async function disconnect(t: Tenant, deps = DEFAULTS): Promise<Reply> {
 
 /**
  * Returns the float and ends the connection under the float lock. While a top-up
- * may still land in the payer it does neither and answers `REFUSALS.landing`.
+ * or an execute may still move money it does neither and answers `REFUSALS.landing`.
  */
 async function returnAndEnd(s: Session, deps: DisconnectDeps): Promise<Returned | string> {
   try {
     return await withFloat(s.connectionId, deps.lockWaitMs ?? LOCK_WAIT_MS, async (hold) => {
-      if (await hold.tx((tx) => topUpInFlight(tx, s.connectionId))) return REFUSALS.landing;
+      if (await hold.tx((tx) => sendInFlight(tx, s.connectionId))) return REFUSALS.landing;
       const returned = await returnFunds(hold, s, deps, 'everything');
       if (typeof returned === 'string') return returned;
       await hold.tx((tx) => endConnection(s.connectionId, s.account, new Date(), tx));
       return returned;
     });
   } catch (err) {
-    if (err instanceof TopUpInFlight) return REFUSALS.landing;
+    if (err instanceof SendInFlight) return REFUSALS.landing;
     throw err;
   }
 }
@@ -235,8 +235,8 @@ export async function revokeReplaced(s: Session, deps = DEFAULTS): Promise<Retur
   // Read first, so a connection with nothing to revoke never waits on the float lock.
   if ((await replacedBudgets(s.connectionId)).length === 0) return NOTHING_REVOKED;
   return withFloat(s.connectionId, deps.lockWaitMs ?? LOCK_WAIT_MS, async (hold) => {
-    // A top-up still landing pulls under a budget this would revoke.
-    if (await hold.tx((tx) => topUpInFlight(tx, s.connectionId))) return REFUSALS.landing;
+    // A payment or execute still in flight may pull under a budget this would revoke.
+    if (await hold.tx((tx) => sendInFlight(tx, s.connectionId))) return REFUSALS.landing;
     return returnFunds(hold, s, deps, 'replaced');
   }).catch((err: unknown) => (err instanceof FloatBusy ? REFUSALS.busy : errorLabel(err)));
 }
@@ -316,9 +316,7 @@ async function returnFunds(
   const returned = await sendBatch(hold, t, deps, live, usdc.address, scope === 'everything');
   if (typeof returned === 'string') return returned;
   const ids = [...returned.revoked, ...returned.seenRevoked];
-  if (ids.length) {
-    await hold.tx((tx) => tx.update(grants).set({ revokedAt: new Date() }).where(inArray(grants.permissionId, ids)));
-  }
+  if (ids.length) await hold.tx((tx) => recordRevoked(ids, tx));
   return returned;
 }
 

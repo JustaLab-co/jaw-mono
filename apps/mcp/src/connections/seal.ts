@@ -2,12 +2,22 @@ import { createCipheriv, createDecipheriv, createHash, createPrivateKey, hkdfSyn
 import type { Hex } from 'viem';
 
 export type Sealed = string & { readonly __brand: 'Sealed' };
+
+export interface RelayResume {
+  session: string;
+  key: string;
+  peer: string;
+  chainId: number;
+  appName: string;
+}
+export type SealedResume = string & { readonly __brand: 'SealedResume' };
 export type Wrapped = string & { readonly __brand: 'Wrapped' };
 
 interface RingKey {
   kid: string;
   seal: Buffer;
   jwe: Buffer;
+  relay: Buffer;
   cookie: string;
 }
 
@@ -36,6 +46,7 @@ export function parseKeyRing(env: string | undefined): KeyRing {
       kid: createHash('sha256').update(seal).digest('hex').slice(0, 16),
       seal,
       jwe: derive(raw, 'jwe'),
+      relay: derive(raw, 'relay'),
       cookie: derive(raw, 'cookie').toString('base64url'),
     };
   }) as [RingKey, ...RingKey[]];
@@ -46,32 +57,46 @@ export function parseKeyRing(env: string | undefined): KeyRing {
   return { keys, jwk };
 }
 
-function encrypt(version: string, kid: string, key: Buffer, privateKey: Hex, id: string): string {
+const bytes = (hex: Hex) => Buffer.from(hex.slice(2), 'hex');
+
+function encrypt(version: string, kid: string, key: Buffer, plain: Buffer, id: string): string {
   const iv = randomBytes(12);
   const cipher = createCipheriv('aes-256-gcm', key, iv).setAAD(Buffer.from(id));
-  const body = Buffer.concat([cipher.update(privateKey.slice(2), 'hex'), cipher.final(), cipher.getAuthTag()]);
+  const body = Buffer.concat([cipher.update(plain), cipher.final(), cipher.getAuthTag()]);
   return `${version}.${kid}.${iv.toString('base64url')}.${body.toString('base64url')}`;
 }
 
-function decrypt(ring: KeyRing, blob: string, expected: string, id: string, keyOf: (k: RingKey) => Buffer): Hex {
+function decrypt(ring: KeyRing, blob: string, expected: string, id: string, keyOf: (k: RingKey) => Buffer): Buffer {
   const [version, kid, iv, body] = blob.split('.');
   const key = ring.keys.find((k) => k.kid === kid);
   if (version !== expected || !key || !iv || !body) throw new Error('sealed key cannot be opened');
   const data = Buffer.from(body, 'base64url');
   const decipher = createDecipheriv('aes-256-gcm', keyOf(key), Buffer.from(iv, 'base64url')).setAAD(Buffer.from(id));
   decipher.setAuthTag(data.subarray(-16));
-  const plain = Buffer.concat([decipher.update(data.subarray(0, -16)), decipher.final()]);
-  return `0x${plain.toString('hex')}`;
+  return Buffer.concat([decipher.update(data.subarray(0, -16)), decipher.final()]);
 }
 
 // The connection id is the AAD, so a sealed key cannot move to another connection.
 export function seal(ring: KeyRing, privateKey: Hex, id: string): Sealed {
   const { kid, seal: key } = ring.keys[0];
-  return encrypt('v1', kid, key, privateKey, id) as Sealed;
+  return encrypt('v1', kid, key, bytes(privateKey), id) as Sealed;
 }
 
 export function open(ring: KeyRing, sealed: Sealed, id: string): Hex {
-  return decrypt(ring, sealed, 'v1', id, (k) => k.seal);
+  return `0x${decrypt(ring, sealed, 'v1', id, (k) => k.seal).toString('hex')}`;
+}
+
+export function sealResume(ring: KeyRing, resume: RelayResume, rowId: string): SealedResume {
+  const { kid, relay } = ring.keys[0];
+  return encrypt('r1', kid, relay, Buffer.from(JSON.stringify(resume)), rowId) as SealedResume;
+}
+
+export function openResume(ring: KeyRing, blob: string, rowId: string): RelayResume | undefined {
+  try {
+    return JSON.parse(decrypt(ring, blob, 'r1', rowId, (k) => k.relay).toString()) as RelayResume;
+  } catch {
+    return undefined;
+  }
 }
 
 // Neither the ring nor the refresh token opens a wrapped key alone, and the
@@ -81,11 +106,11 @@ const wrapKey = (k: RingKey, refreshToken: string) =>
 
 export function wrap(ring: KeyRing, privateKey: Hex, id: string, refreshToken: string): Wrapped {
   const newest = ring.keys[0];
-  return encrypt('w1', newest.kid, wrapKey(newest, refreshToken), privateKey, id) as Wrapped;
+  return encrypt('w1', newest.kid, wrapKey(newest, refreshToken), bytes(privateKey), id) as Wrapped;
 }
 
 export function unwrap(ring: KeyRing, wrapped: Wrapped, id: string, refreshToken: string): Hex {
-  return decrypt(ring, wrapped, 'w1', id, (k) => wrapKey(k, refreshToken));
+  return `0x${decrypt(ring, wrapped, 'w1', id, (k) => wrapKey(k, refreshToken)).toString('hex')}`;
 }
 
 // The id of the token a refresh rotates to, the same for every request presenting

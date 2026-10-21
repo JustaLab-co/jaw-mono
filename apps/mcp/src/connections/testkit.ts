@@ -9,6 +9,7 @@ import { followUps } from '@/grants/requests';
 import { x402Budget, type Grant } from '@/grants/store';
 import type { GrantRequest, ReadPermission } from '@/grants/permission';
 import type { SignedPayload } from '@/lib/chain';
+import { grantPermissions } from '@/tools/grant-permissions';
 import { verifyBearer, type Tenant } from './auth';
 import type { DisconnectDeps, Sent } from './disconnect';
 import { abort, complete, hop, openSession, status, type InteractionDeps } from './interaction';
@@ -136,7 +137,6 @@ export const walletsSettled = async () => {
 let interactionDeps: InteractionDeps = {
   openWallet: fakeWallet(walletAnswers(owner())),
   verify: (a) => verifyLocally(a),
-  readPermission: approvedOnChain,
 };
 
 /** The wallet the next authorization opens, and how it is checked. */
@@ -288,13 +288,8 @@ export async function follow(browser: Browser, url: string, redirectUri = REDIRE
 }
 
 /** An authorization the owner approves in their wallet, through to the tokens. */
-export async function connect(
-  signer = owner(),
-  a: Authorize = {},
-  browser = new Browser(),
-  read: ReadPermission = approvedOnChain
-) {
-  browser.wallet = { ...interactionDeps, openWallet: fakeWallet(walletAnswers(signer)), readPermission: read };
+export async function connect(signer = owner(), a: Authorize = {}, browser = new Browser()) {
+  browser.wallet = { ...interactionDeps, openWallet: fakeWallet(walletAnswers(signer)) };
   const start = await startAuthorization(browser, a);
   if (!start.uid || !start.ticket) throw new Error('authorization did not reach the wallet');
   await walletsSettled();
@@ -339,11 +334,28 @@ export async function mcp(token: string | undefined, body: object, route?: Route
 export const callTool = async (token: string, name: string, args: object) =>
   (await mcp(token, { method: 'tools/call', params: { name, arguments: args } })).json?.result;
 
-/** A connection whose owner approved the default daily budget when connecting, the chain read faked by `read`. */
+/** The owner of `t` approves a daily budget of `perDay` USDC through jaw_grant_permissions. */
+export async function grantBudget(
+  t: Tenant,
+  signer: ReturnType<typeof owner>,
+  perDay = '1',
+  read: ReadPermission = approvedOnChain
+) {
+  await grantPermissions(
+    t,
+    { x402Budget: { perDay } },
+    { openWallet: fakeWallet(walletAnswers(signer)), readPermission: read, session: offlineSession }
+  );
+  await walletsSettled();
+  return x402Budget(t.connectionId);
+}
+
+/** A connection whose owner approved a daily budget of 1 USDC, the chain read faked by `read`. */
 export async function budgetConnection(read: ReadPermission = approvedOnChain) {
-  const c = await connect(owner(), {}, new Browser(), read);
+  const signer = owner();
+  const c = await connect(signer);
   const tenant = (await verifyBearer(c.access_token))?.extra?.tenant as Tenant;
-  const grant = (await x402Budget(tenant.connectionId)) as Grant;
+  const grant = (await grantBudget(tenant, signer, '1', read)) as Grant;
   return {
     c,
     tenant,

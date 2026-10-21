@@ -480,6 +480,7 @@ describe('quote and pay at the edge of what a budget can pay', () => {
       expect(quoted.structuredContent.summary).toContain('1000000');
       const paid = await pay(t, { url: url('/more') }, withRefill);
       expect(paid.structuredContent).toMatchObject({ refusal: { code: 'over_cap' } });
+      expect(paid.structuredContent?.refusal).not.toHaveProperty('next');
       expect(seen).toHaveLength(0);
     });
   });
@@ -507,30 +508,86 @@ describe('quote and pay at the edge of what a budget can pay', () => {
     });
   });
 
-  describe('given 0.5 USDC a day and 0.3 of float that a payment signed under an earlier budget still holds', () => {
-    const holding = async (t: Tenant) => {
-      await getDb()
-        .insert(payments)
-        .values({
-          id: `pay_${randomBytes(12).toString('base64url')}`,
-          connectionId: t.connectionId,
-          idempotencyKey: `held-${randomBytes(6).toString('hex')}`,
-          requestHash: 'h',
-          permissionId: `0x${'c'.repeat(64)}`,
-          payer: t.sessionAddress.toLowerCase(),
-          url: 'https://seller.example/held',
-          state: 'signed',
-          leaseUntil: new Date(),
-          topUpAmount: '300000',
-          authorized: '300000',
-          nonce: `0x${randomBytes(32).toString('hex')}`,
-          network: 'eip155:84532',
-          scheme: 'exact',
-          deadline: new Date(Date.now() + 10 * 60_000),
-          authorization: {},
-          signedAt: new Date(),
-        });
+  describe('given 1 USDC a day, an empty float, and a transfer of 0.5 recorded before the chain counter shows it', () => {
+    it('when the quote asks the 0.5 left less the refill fee, then it is ready and pay refills and settles', async () => {
+      const { t, token } = await funded('1', 0n);
+      await landedLegacySend(t);
+      prices.set('/rest', '490000');
+      const quoted = await quote(token, '/rest');
+      expect(quoted.structuredContent.readiness).toEqual({ status: 'ready' });
+      const paid = await pay(t, { url: url('/rest') }, withRefill);
+      expect(paid.structuredContent).toMatchObject({ state: 'settled', kind: 'paid' });
+    });
+
+    it('when the quote asks one base unit more, then it is over_allowance and pay refuses before it refills', async () => {
+      const { t, token } = await funded('1', 0n);
+      await landedLegacySend(t);
+      prices.set('/rest', '490001');
+      const quoted = await quote(token, '/rest');
+      expect(quoted.structuredContent.readiness).toEqual({ status: 'not_ready', reason: 'over_allowance' });
+      const paid = await pay(t, { url: url('/rest') }, withRefill);
+      expect(paid.structuredContent).toMatchObject(refused);
+      expect(seen).toHaveLength(0);
+      expect(balanceOf(t.sessionAddress)).toBe(0n);
+    });
+  });
+
+  // A payment signed and not settled yet, which holds float until it lands.
+  const signedRow = (t: Tenant, row: { permissionId: string; topUpAmount: string; authorized: string }) =>
+    getDb()
+      .insert(payments)
+      .values({
+        id: `pay_${randomBytes(12).toString('base64url')}`,
+        connectionId: t.connectionId,
+        idempotencyKey: `signed-${randomBytes(6).toString('hex')}`,
+        requestHash: 'h',
+        payer: t.sessionAddress.toLowerCase(),
+        url: 'https://seller.example/signed',
+        state: 'signed',
+        leaseUntil: new Date(),
+        nonce: `0x${randomBytes(32).toString('hex')}`,
+        network: 'eip155:84532',
+        scheme: 'exact',
+        deadline: new Date(Date.now() + 10 * 60_000),
+        authorization: {},
+        signedAt: new Date(),
+        ...row,
+      });
+
+  describe('given 1 USDC a day and a 0.6 payment signed but not settled, out of a 0.7 refill still at the session', () => {
+    const pending = async (t: Tenant) => {
+      await signedRow(t, { permissionId: chain.permissionId, topUpAmount: '700000', authorized: '600000' });
+      chain.spend = 700_000n;
     };
+
+    it('when the quote asks 0.39, what the pending 0.6 leaves less the refill fee, then it is ready and pay settles', async () => {
+      const { t, token } = await funded('1', 700_000n);
+      await pending(t);
+      prices.set('/second', '390000');
+      const quoted = await quote(token, '/second');
+      expect(quoted.structuredContent).toMatchObject({
+        readiness: { status: 'ready' },
+        budget: { remainingToday: { amount: '390000' } },
+      });
+      const paid = await pay(t, { url: url('/second') }, withRefill);
+      expect(paid.structuredContent).toMatchObject({ state: 'settled', kind: 'paid' });
+    });
+
+    it('when the quote asks 0.4, then it is over_allowance and pay refuses unsigned', async () => {
+      const { t, token } = await funded('1', 700_000n);
+      await pending(t);
+      prices.set('/second', '400000');
+      const quoted = await quote(token, '/second');
+      expect(quoted.structuredContent.readiness).toEqual({ status: 'not_ready', reason: 'over_allowance' });
+      const paid = await pay(t, { url: url('/second') }, withRefill);
+      expect(paid.structuredContent).toMatchObject(refused);
+      expect(seen).toHaveLength(0);
+    });
+  });
+
+  describe('given 0.5 USDC a day and 0.3 of float that a payment signed under an earlier budget still holds', () => {
+    const holding = (t: Tenant) =>
+      signedRow(t, { permissionId: `0x${'c'.repeat(64)}`, topUpAmount: '300000', authorized: '300000' });
 
     it('when the quote asks what the cap leaves after that hold, then it is ready and pay settles', async () => {
       const { t, token } = await funded('0.5', 300_000n);

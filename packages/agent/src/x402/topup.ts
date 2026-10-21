@@ -8,6 +8,7 @@ import { firstOperationCost, gasReserve } from './gas-reserve.js';
 import { type BalanceReader, balanceReader } from './balance.js';
 import type { ChainClients, Logger } from '../ports.js';
 import type { RefusalCode } from './outcome.js';
+import type { OnUserOpSigned } from './session-bridge.js';
 
 /**
  * Permission top-up (flow 2b): when the session payer EOA can't cover a
@@ -33,7 +34,8 @@ import type { RefusalCode } from './outcome.js';
 
 /** The slice of the session auto-mode bridge the funder needs. */
 export interface TopUpExecutor {
-  request(method: string, params?: unknown): Promise<unknown>;
+  /** `onSigned` gets the hash of a `wallet_sendCalls` userOp before it is sent. */
+  request(method: string, params?: unknown, onSigned?: OnUserOpSigned): Promise<unknown>;
   /**
    * Approve Permit2 to move `token` on the payer's own behalf, returning the
    * batch id. Deliberately narrow and deliberately separate from `request`: it
@@ -49,7 +51,7 @@ export interface TopUpExecutor {
  * allowance check hands it back once it has established the session can do it,
  * which keeps the caller from having to assert it a second time.
  */
-export type GrantApproval = (token: `0x${string}`) => Promise<string>;
+export type GrantApproval = (token: `0x${string}`, onSigned?: OnUserOpSigned) => Promise<string>;
 
 /** Reads an ERC-20 allowance. Injected for tests. */
 export type AllowanceReader = (asset: UsdcAsset, owner: `0x${string}`, spender: `0x${string}`) => Promise<bigint>;

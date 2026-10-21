@@ -13,6 +13,7 @@ import {
   sumSpentSince,
   usdcBalance,
   usdcForNetwork,
+  within,
 } from '@jaw.id/agent';
 import type { McpServer } from '@modelcontextprotocol/server';
 import { erc20Abi, type Address } from 'viem';
@@ -22,10 +23,12 @@ import { tenant, type Tenant } from '@/connections/auth';
 import { config } from '@/connections/config';
 import { findActive } from '@/connections/rows';
 import { getDb } from '@/db/client';
-import { liveGrants, x402Budget, type Grant, type LiveGrant } from '@/grants/store';
-import { dayLeft, daySpendOf, isoOf } from '@/payments/day-spend';
+import { readOnChain } from '@/grants/permission';
+import { liveGrants, type Grant, type LiveGrant } from '@/grants/store';
+import { payingBudget } from '@/payments/pay';
+import { dayLeft, daySpendOf, isoOf, pullRoom } from '@/payments/day-spend';
 import { stillHeld } from '@/payments/refill';
-import { openSpends, recordedSends, type OpenSpend } from '@/payments/sends';
+import { chainView, heldSpends, LOGGED_READ_MS, readAt, recordedSends, type OpenSpend } from '@/payments/sends';
 import { entriesFor, holdingRows, pulledUnderOtherGrants } from '@/payments/store';
 import { publicClientFor } from '@/lib/chain';
 import { fenceText, reply } from '@/lib/fence';
@@ -107,9 +110,8 @@ async function budgetOf(grant: Grant, t: Tenant, balance: bigint | null) {
   let payable = null;
   let room: Room | undefined;
   if (day) {
-    const pulled = day.refilled + day.sentFromAccount;
     const held = balance === null ? null : floorZero(balance - holds);
-    room = { left: dayLeft(allowance, day), held, cap: floorZero(floorZero(allowance - pulled) - earlier) };
+    room = { left: dayLeft(allowance, day), held, cap: pullRoom(allowance, day, earlier) };
     spent = figure(day.paid + day.sentFromAccount);
     payable = figure(least(room.left, (held ?? 0n) + floorZero(room.cap - refillFee(grant))));
   }
@@ -201,13 +203,18 @@ function leftOf(period: OnChainPeriod, allowance: bigint, open: OpenSpend[], tok
   return floorZero(allowance - period.spend - held).toString();
 }
 
-async function grantOf(g: LiveGrant): Promise<z.infer<typeof grantOut>> {
+// A run the logs show counts in the period spend read at their block, not again as held.
+async function grantOf(connectionId: string, g: LiveGrant): Promise<z.infer<typeof grantOut>> {
   const target = { chainId: g.chainId, permissionId: g.permissionId, permission: g.permission };
   const tokens = [...new Set(g.permission.spends.map((s) => s.token.toLowerCase()))];
+  const view = await within(chainView(connectionId, g.permissionId, g.chainId, clients.clients), LOGGED_READ_MS).catch(
+    () => undefined
+  );
+  const read = readAt(clients.clients, g.chainId, view?.head);
   const [liveness, periods, open] = await Promise.all([
-    readLiveness(target, clients),
-    Promise.all(tokens.map((token) => readCurrentPeriods({ ...target, token }, clients))),
-    openSpends(g.permissionId, getDb()),
+    readLiveness(target, read),
+    Promise.all(tokens.map((token) => readCurrentPeriods({ ...target, token }, read))),
+    heldSpends(g.permissionId, getDb(), view?.seen),
   ]);
   return {
     permissionId: g.permissionId,
@@ -227,15 +234,16 @@ async function grantOf(g: LiveGrant): Promise<z.infer<typeof grantOut>> {
 
 async function status(t: Tenant) {
   const network = caip2(t.chainId);
-  const [float, grant, held, conn] = await Promise.all([
+  // First, so a budget it finds revoked is not listed live beside it.
+  const grant = await payingBudget(t.connectionId, readOnChain);
+  const [float, held, conn] = await Promise.all([
     balanceOf(network, t.sessionAddress),
-    x402Budget(t.connectionId),
     liveGrants(t.connectionId),
     findActive(t.connectionId),
   ]);
   const [read, shown] = await Promise.all([
     grant && budgetOf(grant, t, float && BigInt(float.amount)),
-    Promise.all(held.map(grantOf)),
+    Promise.all(held.map((g) => grantOf(t.connectionId, g))),
   ]);
   const grants = shown.map((g) =>
     g.permissionId === grant?.permissionId
@@ -293,7 +301,7 @@ type Terms = Awaited<ReturnType<typeof termsOf>>;
 
 const UNREADABLE: QuoteReadiness = { status: 'not_ready', reason: 'chain_unavailable' };
 const NO_FUNDING: QuoteReadiness = { status: 'not_ready', reason: 'funding_unavailable' };
-// Pay's own refusals at selection that a larger budget, not a retry, answers.
+// Pay's own refusals at selection that still leave the quote a price to show.
 const CAPPED: Record<string, QuoteReadiness> = {
   budget_exhausted: { status: 'not_ready', reason: 'over_allowance' },
   over_cap: { status: 'not_ready', reason: 'over_cap' },
@@ -349,7 +357,7 @@ function fitSummary(read: BudgetRead, grant: Grant, terms: Terms, { readiness, a
     case 'over_allowance':
       return ` Budget ${permissionId} has ${left} left today, not enough to pay it.${approval}`;
     case 'over_cap':
-      return ` Budget ${permissionId} lets one payment spend at most ${terms.policy.maxAmountPerPayment} base units.`;
+      return ` One payment may spend at most ${terms.policy.maxAmountPerPayment} base units, whatever the budget.`;
     case 'balance_low':
       return ` The account ${grant.account} holds too little USDC to refill the session for it: send USDC there (jaw_add_funds).`;
     case 'funding_unavailable':
@@ -384,7 +392,7 @@ async function quote(t: Tenant, url: string) {
     address: t.sessionAddress,
     pay: () => Promise.reject(new Error('a quote never pays')),
   };
-  const grant = await x402Budget(t.connectionId);
+  const grant = await payingBudget(t.connectionId, readOnChain);
   const [float, terms] = grant
     ? await Promise.all([balanceOf(caip2(grant.chainId), t.sessionAddress), termsOf(grant, t.sessionAddress)])
     : [null, undefined];

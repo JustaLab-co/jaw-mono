@@ -25,7 +25,7 @@
         "executor": "nx:run-commands",
         "options": {
           "cwd": "{projectRoot}",
-          "command": "tsc --noEmit -p tsconfig.json"
+          "command": "tsc --noEmit -p tsconfig.json && tsc --noEmit -p ../../tools/verify/rejoin-drive/tsconfig.json"
         },
         "dependsOn": [
           "^build"

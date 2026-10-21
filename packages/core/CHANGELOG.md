@@ -1,3 +1,13 @@
+## 1.7.1 (2026-10-21)
+
+### 🩹 Fixes
+
+- **core:** hand sendCalls callers the userop hash before sending ([#524](https://github.com/JustaLab-co/jaw-mono/pull/524))
+
+### ❤️ Thank You
+
+- Mariano Aguero
+
 ## 1.7.0 (2026-10-19)
 
 ### 🚀 Features

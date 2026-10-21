@@ -30,7 +30,18 @@ import {
   type GrantRequest,
   type ReadPermission,
 } from '@/grants/permission';
-import { followUps, lostBefore, lostPreamble, openLink, type Claim, type Outcome } from '@/grants/requests';
+import {
+  followUps,
+  lostBefore,
+  lostPreamble,
+  openLink,
+  RECONNECTING,
+  reconnecting,
+  resumeRequest,
+  type Claim,
+  type Outcome,
+  type Rebuild,
+} from '@/grants/requests';
 import {
   grantsBeside,
   liveGrants,
@@ -171,12 +182,28 @@ async function revokeOlder(t: Tenant, deps: GrantDeps) {
   }
 }
 
-async function askGrant(t: Tenant, ask: Asked, walletAsk: Ask, claim: Claim, deps: GrantDeps): Promise<Outcome> {
+type GrantPayload = Pick<Asked, 'kind' | 'grant'>;
+
+export const grantWork =
+  (read: ReadPermission): Rebuild =>
+  (t, payload) =>
+  (walletAsk, claim) =>
+    askGrant(t, payload as GrantPayload, walletAsk, claim, read);
+
+export const resumeGrant = grantWork(readOnChain);
+
+async function askGrant(
+  t: Tenant,
+  ask: GrantPayload,
+  walletAsk: Ask,
+  claim: Claim,
+  read: ReadPermission
+): Promise<Outcome> {
   if (!(await claim())) return { state: 'expired', code: 'session_lost' };
   const answer = await walletAsk('wallet_grantPermissions', [ask.grant]);
   const answered = (answer as { permissionId?: unknown } | null)?.permissionId;
   const permissionId = isHex(answered) ? answered : undefined;
-  const checked = await checkGranted(t.chainId, ask.grant, ask.kind, answer, deps.readPermission);
+  const checked = await checkGranted(t.chainId, ask.grant, ask.kind, answer, read);
   if (typeof checked === 'string') return { state: 'failed', code: checked, permissionId };
   if (!isAddressEqual(checked.account as Address, t.account)) {
     return { state: 'failed', code: 'wrong_account', permissionId };
@@ -243,13 +270,15 @@ export async function grantPermissions(t: Tenant, input: GrantInput, deps = DEFA
   }
   const held = await liveGrants(t.connectionId);
   const replacing = ask.kind === 'x402-budget' && (await x402Budget(t.connectionId)) !== undefined;
+  const payload: GrantPayload = { kind: ask.kind, grant: ask.grant };
   const opened = await openLink(
     t,
     {
       method: 'grant',
       chainId: t.chainId,
       approveBy: until,
-      work: (walletAsk, claim) => askGrant(t, ask, walletAsk, claim, deps),
+      payload,
+      work: grantWork(deps.readPermission)(t, payload),
       settled: async ({ state }) => {
         if (state === 'approved') await revokeOlder(t, deps);
       },
@@ -265,8 +294,12 @@ export async function grantPermissions(t: Tenant, input: GrantInput, deps = DEFA
       'Tell the owner not to approve that one: a grant approved there can go live on chain without this server recording it, and then only jaw_revoke_permission with its id from the wallet ends it. '
     : '';
   if ('waiting' in opened) {
+    if (row.relay) void resumeRequest(row, grantWork(deps.readPermission));
+    const state = reconnecting(row)
+      ? `open at ${row.walletUrl}.${RECONNECTING}`
+      : `still waiting for the owner at ${row.walletUrl}.`;
     return refusal(
-      `${warning}A grant request is still waiting for the owner at ${row.walletUrl}. Ask again once they approve or it expires at ${row.approveBy.toISOString()}.`
+      `${warning}A grant request is ${state} Check jaw_session_status on your own to see it in force, or ask again once it expires at ${row.approveBy.toISOString()}.`
     );
   }
   const url = row.walletUrl;
@@ -276,14 +309,14 @@ export async function grantPermissions(t: Tenant, input: GrantInput, deps = DEFA
     expiresAt: ends,
     summary:
       warning +
-      `Ask the account owner to open ${url} and approve ${ask.what} until ${ends} in their wallet. ` +
+      `Ask the account owner to open ${url} and approve ${ask.what} until ${ends} in their wallet, before ${row.approveBy.toISOString()}. ` +
       'Once they do, the session key acts within it with no further prompts. ' +
       liveTotals(t, held) +
       (replacing
         ? 'Approving this budget replaces the current one, which this server then tries to revoke on chain. ' +
-          'Nothing pays from a replaced budget, but if the revoke fee cannot be paid it stays approved on chain until it expires or jaw_revoke_permission revokes it. ' +
-          'jaw_session_status shows the budget in force. '
+          'Nothing pays from a replaced budget, but if the revoke fee cannot be paid it stays approved on chain until it expires or jaw_revoke_permission revokes it. '
         : '') +
+      'Right after showing the link, call jaw_session_status yourself to see the grant in force, and again on each later turn until that time; do not wait for the owner to say they approved. ' +
       'Other grants approved earlier on this connection stay approved on chain until they expire or jaw_session_disconnect revokes them.',
   });
 }
@@ -321,7 +354,7 @@ export function registerGrantTool(server: McpServer) {
     {
       description:
         'Ask the account owner to grant this session key a permission, approved once in their JAW wallet. ' +
-        'Pass x402Budget for the payment budget: a daily USDC allowance that payments, refills and swap quotes draw from with no further prompts; payments use the newest one. ' +
+        'Pass x402Budget for the payment budget: a daily USDC allowance that payments, refills and swap quotes draw from with no further prompts; payments use the newest one still approved on chain. ' +
         'Or pass calls, the contract functions the session key may call, and spends, how much of each token it may move per period, for a custom grant. ' +
         'A new x402Budget replaces the current one, which the server then tries to revoke on chain; nothing pays from a replaced budget, but if the revoke fee cannot be paid it stays approved on chain until it expires or jaw_revoke_permission revokes it. ' +
         'The grant ends at expiresAt, or with the connection when that comes first. A connection holds at most 5 live grants. Returns a link for the owner. For a one-off contract call use jaw_send_calls, which asks the owner each time.',

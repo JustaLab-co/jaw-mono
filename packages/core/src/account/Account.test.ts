@@ -639,6 +639,7 @@ describe('Account', () => {
 
             const permissionId =
                 '0xabc123def456789012345678901234567890123456789012345678901234567890' as `0x${string}`;
+            const onSigned = vi.fn();
             const result = await account.sendCalls(
                 [
                     {
@@ -646,7 +647,7 @@ describe('Account', () => {
                         value: 100000000000000000n,
                     },
                 ],
-                { permissionId }
+                { permissionId, onSigned }
             );
 
             expect(result.id).toBe(mockUserOpHash);
@@ -669,7 +670,8 @@ describe('Account', () => {
                 undefined,
                 // The permission-manager call, built up here so the paymaster
                 // approval is sized over the shape that actually goes out.
-                { to: '0x0000000000000000000000000000000000009999', value: 0n, data: '0xbeefbeef' }
+                { to: '0x0000000000000000000000000000000000009999', value: 0n, data: '0xbeefbeef' },
+                onSigned
             );
             expect(storeCallStatus).toHaveBeenCalledWith(mockUserOpHash, 1, 'test-api-key');
             expect(waitForReceiptInBackground).toHaveBeenCalledWith(mockUserOpHash, 1, 'test-api-key');

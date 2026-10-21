@@ -20,7 +20,7 @@ import { connections, grants } from '@/db/schema';
 import type { Grant } from '@/grants/store';
 import { errorLabel, log } from '@/lib/edge';
 import { nonceUsed } from './confirm';
-import { dayLeft, readDaySpend } from './day-spend';
+import { dayLeft, pullRoom, readDaySpend } from './day-spend';
 import { FloatBusy, FloatLost, inTurn, withFloat, type FloatHold } from './float-lock';
 import { recordedSends } from './sends';
 import {
@@ -237,6 +237,9 @@ export function refillHook(c: RefillContext): EnsureFunds {
           }
           const refillMs = budget.left() - SEND_RESERVE_MS;
           if (refillMs < MIN_REFILL_MS) return timedOut('the refill waited too long to still send');
+          // A send recorded before the counter shows it takes room the policy's ceiling cannot see.
+          const ceiling = topUpCeiling(c.policy, { periodUsage, spentThisSession });
+          const room = pullRoom(BigInt(c.grant.allowance), day, earlier);
           let pinned = block;
           hold.assertHeld();
           const guard = guarded(c.executor ?? noRefill, hold, c.rowId);
@@ -244,7 +247,7 @@ export function refillHook(c: RefillContext): EnsureFunds {
             clients: c.clients,
             logger: c.logger,
             sessionChainId: c.grant.chainId,
-            maxTopUp: topUpCeiling(c.policy, { periodUsage, spentThisSession }),
+            maxTopUp: ceiling === undefined || room < ceiling ? room : ceiling,
             funderAddress: c.grant.account,
             floatTarget: c.floatTarget,
             timeoutMs: refillMs,

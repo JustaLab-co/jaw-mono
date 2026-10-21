@@ -4,10 +4,11 @@ import { randomBytes } from 'node:crypto';
 import { beforeAll, describe, expect, it, vi } from 'vitest';
 import { toFunctionSelector } from 'viem';
 import { verifyBearer, type Tenant } from '@/connections/auth';
-import type { OpenWallet } from '@/connections/relay';
+import { WalletBusy, type OpenWallet } from '@/connections/relay';
 import {
   approvedOnChain,
   callTool,
+  grantBudget,
   connect,
   fakeWallet,
   mcp,
@@ -32,11 +33,12 @@ const WETH = '0x4200000000000000000000000000000000000006';
 const ROUTER = '0x2626664c2603336E57B271c5C0b26F421741e481';
 const DAY_MS = 86_400_000;
 
-async function connected() {
+async function connected(withBudget = true) {
   const signer = owner();
   const c = await connect(signer);
   const t = (await verifyBearer(c.access_token))?.extra?.tenant as Tenant;
-  return { c, t, signer, connectedWith: (await x402Budget(t.connectionId))?.permissionId };
+  const budget = withBudget ? await grantBudget(t, signer) : undefined;
+  return { c, t, signer, connectedWith: budget?.permissionId };
 }
 
 async function grant(
@@ -390,7 +392,7 @@ describe('jaw_grant_permissions', () => {
   });
 
   it('given an approval, then the owner link is recorded approved with the id the wallet granted', async () => {
-    const { t, signer } = await connected();
+    const { t, signer } = await connected(false);
 
     await grant(t, signer, twoByTwo);
 
@@ -399,7 +401,7 @@ describe('jaw_grant_permissions', () => {
   });
 
   it('given a wallet answer that is not what was asked, then the link records the id it answered, so it can be revoked', async () => {
-    const { t, signer } = await connected();
+    const { t, signer } = await connected(false);
     let answered: string | undefined;
 
     await grant(t, signer, twoByTwo, (granted) => {
@@ -430,6 +432,60 @@ describe('jaw_grant_permissions', () => {
     await walletsSettled();
 
     expect(opened).toBe(1);
+    const url = 'structuredContent' in first && first.structuredContent.url;
+    expect(again.content[0].text).toContain(`still waiting for the owner at ${url}`);
+  });
+
+  it('given the waiting grant has a saved relay session and its lease lapsed inside the stall grace, when asked again, then the refusal says the server is reconnecting', async () => {
+    const { t, signer } = await connected();
+    let release = () => {};
+    const held = new Promise<void>((resolve) => (release = resolve));
+    const honest = walletAnswers(signer);
+    const deps = {
+      openWallet: fakeWallet(async (method, params) => (await held, honest(method, params))) as OpenWallet,
+      readPermission: approvedOnChain,
+      session: offlineSession,
+    };
+    await grantPermissions(t, twoByTwo, deps);
+    // Inside the grace no rejoin starts, so the read sees the row exactly as written.
+    await getDb()
+      .update(permissionRequests)
+      .set({ relay: 'saved', sessionUntil: sql`now() - interval '30 seconds'` })
+      .where(eq(permissionRequests.connectionId, t.connectionId));
+
+    const again = await grantPermissions(t, twoByTwo, deps);
+    release();
+    await walletsSettled();
+
+    expect(again.content[0].text).toContain('reconnecting to the owner');
+    expect(again.content[0].text).not.toContain('still waiting for the owner');
+  });
+
+  it('given a grant opening its link while another ask finds the wallet pool full, then the other is told that link is waiting', async () => {
+    const { t, signer } = await connected();
+    let release = () => {};
+    const held = new Promise<void>((resolve) => (release = resolve));
+    const honest = walletAnswers(signer);
+    const holding = {
+      openWallet: fakeWallet(async (method, params) => (await held, honest(method, params))),
+      readPermission: approvedOnChain,
+      session: offlineSession,
+    };
+    let opener!: ReturnType<typeof grantPermissions>;
+    const fullOnceOpened = {
+      openWallet: (async () => {
+        await (opener = grantPermissions(t, twoByTwo, holding));
+        throw new WalletBusy();
+      }) as OpenWallet,
+      readPermission: approvedOnChain,
+      session: offlineSession,
+    };
+
+    const again = await grantPermissions(t, twoByTwo, fullOnceOpened);
+    const first = await opener;
+    release();
+    await walletsSettled();
+
     const url = 'structuredContent' in first && first.structuredContent.url;
     expect(again.content[0].text).toContain(`still waiting for the owner at ${url}`);
   });

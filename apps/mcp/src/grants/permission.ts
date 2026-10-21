@@ -125,6 +125,13 @@ export async function checkGranted(
 
 export async function recordGrant(tx: Tx, connectionId: string, grant: NewGrant) {
   await tx.select({ id: connections.id }).from(connections).where(eq(connections.id, connectionId)).for('update');
+  const [recorded] = await tx
+    .select({ id: grants.permissionId })
+    .from(grants)
+    .where(
+      and(eq(grants.permissionId, grant.permissionId), eq(grants.connectionId, connectionId), isNull(grants.revokedAt))
+    );
+  if (recorded) return;
   if ((await grantsBeside(connectionId, grant.kind, tx)) >= LIVE_GRANTS_PER_CONNECTION) {
     throw new Error(`the connection already holds ${LIVE_GRANTS_PER_CONNECTION} live grants`);
   }
@@ -133,7 +140,9 @@ export async function recordGrant(tx: Tx, connectionId: string, grant: NewGrant)
     .values({ ...grant, connectionId, createdAt: sql`clock_timestamp()` })
     .onConflictDoNothing()
     .returning({ permissionId: grants.permissionId });
-  if (!inserted.length || grant.kind !== 'x402-budget') return;
+  if (inserted.length === 0)
+    throw new Error('a grant with that id was already revoked or belongs to another connection');
+  if (grant.kind !== 'x402-budget') return;
   // Payments draw from the newest budget only, so an older one is exposure with no use.
   await tx
     .update(grants)
