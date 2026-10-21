@@ -2434,7 +2434,7 @@ describe('given concurrent payments whose chain calls resolve in any order', () 
             expect(refills.reduce((sum, amount) => sum + amount, 0n)).toBeLessThanOrEqual(600_000n);
           }
         ),
-        { seed: 0x5ced, numRuns: RUNS, timeout: RUN_LIMIT_MS }
+        { seed: 0x5ced, numRuns: RUNS, timeout: RUN_LIMIT_MS, endOnFailure: true }
       );
     }
   );

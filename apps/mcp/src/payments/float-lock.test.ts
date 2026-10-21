@@ -63,7 +63,7 @@ describe.skipIf(!TEST_PG_URL)('on Postgres, the float lock', () => {
     }
   });
 
-  it('given a hold whose session is terminated, then the work learns it lost the float and the next hold locks at once', async () => {
+  it('given a hold whose session is terminated, then the work learns it lost the float and the lock is free for the next hold', async () => {
     const id = randomUUID();
     let lost: unknown;
     await withFloat(id, 5_000, async (hold) => {
