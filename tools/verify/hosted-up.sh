@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Starts Postgres and the apps/mcp container for this run.
 # Appends COMPOSE_PROJECT, DATABASE_URL, MCP_URL and JAW_VERIFY_CRON_SECRET_FILE to run.env.
-# Usage: [JAW_KEYS_URL=http://localhost:<keys port>] [JAW_VERIFY_MCP_IMAGE=<tag>] hosted-up.sh <run-dir>
+# Usage: [JAW_KEYS_URL=http://localhost:<keys port>] [JAW_VERIFY_MCP_IMAGE=<tag>] [JAW_VERIFY_LOSE_SEND=1] hosted-up.sh <run-dir>
 set -euo pipefail
 RUN=${1:?run dir}; . "$RUN/run.env"
 DIR=$(cd "$(dirname "$0")" && pwd)
@@ -32,7 +32,9 @@ BUILD=--build
 if [ -n "${JAW_VERIFY_MCP_IMAGE:-}" ]; then export MCP_IMAGE=$JAW_VERIFY_MCP_IMAGE; BUILD=--no-build
 else export MCP_IMAGE=jaw-verify-mcp:$PROJECT; fi
 printf 'head: %s\ntree: clean\n' "$HEAD_SHA" >"$RUN/evidence/compose-up.log"
-REPO=$CTX docker compose -p "$PROJECT" -f "$DIR/compose.yaml" $PROFILE up -d $BUILD --wait >>"$RUN/evidence/compose-up.log" 2>&1 \
+# JAW_VERIFY_LOSE_SEND=1 drops one bundler answer on demand, see compose.lose-send.yaml.
+EXTRA=; [ "${JAW_VERIFY_LOSE_SEND:-}" = 1 ] && EXTRA="-f $DIR/compose.lose-send.yaml"
+REPO=$CTX docker compose -p "$PROJECT" -f "$DIR/compose.yaml" $EXTRA $PROFILE up -d $BUILD --wait >>"$RUN/evidence/compose-up.log" 2>&1 \
   || { tail -20 "$RUN/evidence/compose-up.log" >&2; exit 1; }
 PG=$(docker compose -p "$PROJECT" -f "$DIR/compose.yaml" port postgres 5432 | sed 's/.*://')
 { echo "COMPOSE_PROJECT=$PROJECT"; echo "DATABASE_URL=postgres://jaw:jaw@localhost:$PG/jaw_mcp"; } >>"$RUN/run.env"

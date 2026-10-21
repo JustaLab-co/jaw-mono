@@ -26,7 +26,14 @@ import { fromStore, settleUnconfirmedRevokes, type RevokeReads } from '@/grants/
 import { recordRevoked, sampleLiveGrants } from '@/grants/store';
 import { errorLabel, log } from '@/lib/edge';
 import { conclude, sentBefore } from '@/owner-calls/store';
-import { canSearchChain, readReceipt, searchChain, type ReadReceipt } from '@/owner-calls/receipt';
+import {
+  canSearchChain,
+  readKnown,
+  readReceipt,
+  searchChain,
+  type ReadKnown,
+  type ReadReceipt,
+} from '@/owner-calls/receipt';
 import { chainAnswer, type ChainAnswer } from '@/payments/confirm';
 import {
   claimOpenSends,
@@ -68,7 +75,8 @@ export async function reconcile(
   clients: ChainClients = chainClients,
   now = new Date(),
   receipt: ReadReceipt = readReceipt,
-  revokeReads: RevokeReads = REVOKE_READS
+  revokeReads: RevokeReads = REVOKE_READS,
+  known: ReadKnown = readKnown
 ): Promise<Report> {
   const report: Report = {
     settled: 0,
@@ -79,7 +87,7 @@ export async function reconcile(
     ownerCalls: { landed: 0, reverted: 0, open: 0 },
     links: { expired: 0, revoked: 0 },
   };
-  await reconcileSends(clients, report);
+  await reconcileSends(clients, { receipt, known }, report);
   await reconcileOwnerCalls(receipt, clients, now, report);
   for (;;) {
     const rows = await claimUnresolved(new Date(now.getTime() - RECONCILE_AFTER_MS), CLAIM_MS, BATCH);
@@ -152,12 +160,14 @@ async function apply(row: PaymentRow, answer: ChainAnswer, now: Date, report: Re
   report.alerted++;
 }
 
-async function reconcileSends(clients: ChainClients, report: Report) {
+type Bundler = { receipt: ReadReceipt; known: ReadKnown };
+
+async function reconcileSends(clients: ChainClients, bundler: Bundler, report: Report) {
   for (;;) {
     const rows = await claimOpenSends(CLAIM_MS, BATCH);
     for (const row of rows) {
       try {
-        const end = await sendOutcome(row, clients);
+        const end = await sendOutcome(row, clients, bundler);
         if (!end) {
           report.sends.open++;
           continue;
@@ -173,7 +183,7 @@ async function reconcileSends(clients: ChainClients, report: Report) {
   }
 }
 
-async function sendOutcome(row: SendRow, clients: ChainClients): Promise<SendEnd | undefined> {
+async function sendOutcome(row: SendRow, clients: ChainClients, bundler: Bundler): Promise<SendEnd | undefined> {
   const client = clients.publicClient(row.chainId);
   const head = await client.getBlockNumber();
   const windowEnd = row.fromBlock + SEND_WINDOW_BLOCKS;
@@ -188,8 +198,17 @@ async function sendOutcome(row: SendRow, clients: ChainClients): Promise<SendEnd
   });
   const end = endOf(logs);
   if (end) return end;
-  if (head >= windowEnd) return { state: 'released' };
-  return undefined;
+  if (head < windowEnd) return undefined;
+  // The window bounds the log search only: the bundler can still hold the op, or have mined it since.
+  // Past one more window the row is released even when the bundler cannot be read, so an op it never
+  // drops, or an outage, does not hold the spend for good.
+  const last = head >= windowEnd + SEND_WINDOW_BLOCKS;
+  const mined = await bundler.receipt(row.chainId, row.callsId).catch((err) => {
+    if (last) return null;
+    throw err;
+  });
+  if (mined) return { state: mined.success ? 'landed' : 'released', txHash: mined.txHash as Hex };
+  return !last && (await bundler.known(row.chainId, row.callsId)) ? undefined : { state: 'released' };
 }
 
 // Each chain search can take dozens of log reads. The rows come in random order, so a few rows
