@@ -408,6 +408,30 @@ describe('jaw_grant_permissions', () => {
     expect(again.content[0].text).toContain(`still waiting for the owner at ${url}`);
   });
 
+  it('given the waiting grant has a saved relay session and its lease lapsed inside the stall grace, when asked again, then the refusal says the server is reconnecting', async () => {
+    const { t, signer } = await connected();
+    let release = () => {};
+    const held = new Promise<void>((resolve) => (release = resolve));
+    const honest = walletAnswers(signer);
+    const deps = {
+      openWallet: fakeWallet(async (method, params) => (await held, honest(method, params))) as OpenWallet,
+      readPermission: approvedOnChain,
+    };
+    await grantPermissions(t, twoByTwo, deps);
+    // Inside the grace no rejoin starts, so the read sees the row exactly as written.
+    await getDb()
+      .update(permissionRequests)
+      .set({ relay: 'saved', sessionUntil: sql`now() - interval '30 seconds'` })
+      .where(eq(permissionRequests.connectionId, t.connectionId));
+
+    const again = await grantPermissions(t, twoByTwo, deps);
+    release();
+    await walletsSettled();
+
+    expect(again.content[0].text).toContain('reconnecting to the owner');
+    expect(again.content[0].text).not.toContain('still waiting for the owner');
+  });
+
   it('given a grant opening its link while another ask finds the wallet pool full, then the other is told that link is waiting', async () => {
     const { t, signer } = await connected();
     let release = () => {};

@@ -331,6 +331,8 @@ describe('jaw_grant_permissions', () => {
     if (!('structuredContent' in result)) throw new Error('refused');
     expect(result.structuredContent.url).toBe(walletUrl);
     expect(result.structuredContent.summary).toContain(`open ${walletUrl} and approve 1.5 USDC a day until`);
+    expect(result.structuredContent.summary).toContain('call jaw_session_status yourself');
+    expect(result.structuredContent.summary).toContain('do not wait for the owner to say they approved');
   });
 
   it('a ten digit budget is refused by the schema', async () => {
@@ -430,6 +432,16 @@ describe('the permission of a budget', () => {
     const g = await newGrantFrom(t.connectionId);
     await inTx(t.connectionId, g);
     await expect(inTx(t.connectionId, g)).resolves.toBeUndefined();
+  });
+
+  it('given a grant of that id was already revoked, when it is recorded again, then it is not recorded as approved', async () => {
+    const { t } = await connected();
+    const g = await newGrantFrom(t.connectionId);
+    await inTx(t.connectionId, g);
+    await getDb().update(grants).set({ revokedAt: new Date() }).where(eq(grants.permissionId, g.permissionId));
+
+    await expect(inTx(t.connectionId, g)).rejects.toThrow(/revoked/);
+    expect((await liveGrants(t.connectionId)).map((l) => l.permissionId)).not.toContain(g.permissionId);
   });
 
   it('when the newest budget expires, then x402 payments draw from the older live one', async () => {

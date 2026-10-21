@@ -138,6 +138,9 @@ describe('jaw_revoke_permission', () => {
     await walletsSettled();
 
     expect('structuredContent' in result && result.structuredContent?.connection).toBe(other.t.connectionId);
+    expect('structuredContent' in result && result.structuredContent?.summary).toContain(
+      'call jaw_connections yourself'
+    );
     const listed = await callTool(me.c.access_token, 'jaw_connections', {});
     const theirs = (listed.structuredContent.connections as { id: string; grants: object[] }[]).find(
       (c) => c.id === other.t.connectionId
@@ -396,6 +399,27 @@ describe('jaw_revoke_permission', () => {
     expect(urlOf(again)).toBe(urlOf(first));
     expect(theirs.content[0].text).toMatch(/^revoke_in_progress: /);
     expect(urlOf(theirs)).toBeUndefined();
+  });
+
+  it('given a waiting revoke has a saved relay session and its lease lapsed inside the stall grace, when another app asks, then the refusal says the server is reconnecting', async () => {
+    const signer = owner();
+    const { t, budget } = await connected(signer);
+    const other = await connected(signer, 'wallet:read');
+    const { deps } = setup(signer);
+    const wait = held();
+    await revokePermission(t, { permissionId: budget }, deps({ held: wait.promise }));
+    // Inside the grace no rejoin starts, so the read sees the row exactly as written.
+    await getDb()
+      .update(permissionRequests)
+      .set({ relay: 'saved', sessionUntil: sql`now() - interval '30 seconds'` })
+      .where(eq(permissionRequests.connectionId, t.connectionId));
+
+    const theirs = await revokePermission(other.t, { permissionId: budget }, deps({ held: wait.promise }));
+    wait.release();
+    await walletsSettled();
+
+    expect(theirs.content[0].text).toMatch(/^revoke_in_progress: /);
+    expect(theirs.content[0].text).toContain('reconnecting to the owner');
   });
 
   it('given a revoke opening its link while another ask finds the wallet pool full, then the other gets that link', async () => {

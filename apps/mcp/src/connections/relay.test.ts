@@ -1,4 +1,3 @@
-import type { AddressInfo } from 'node:net';
 import {
   decryptMessage,
   deriveSharedSecret,
@@ -9,47 +8,17 @@ import {
   type EncryptedEnvelope,
 } from '@jaw.id/agent';
 import { afterAll, afterEach, describe, expect, it, vi } from 'vitest';
-import WebSocket, { WebSocketServer } from 'ws';
+import WebSocket from 'ws';
 import { useTestDb } from '@/db/test-db';
+import { replayingPage, startRelay } from './fake-relay';
 import type { RelayResume } from './seal';
 import { setTestEnv } from './testkit';
 
-// A relay that pairs the two roles of a session and forwards what each sends, as relay.jaw.id does.
-const seen: string[] = [];
-const fromServer = new Map<string, number>();
-const relay = new WebSocketServer({ port: 0, host: '127.0.0.1' });
-const sessions = new Map<string, { cli?: WebSocket; browser?: WebSocket }>();
-const silent = new Set<string>();
-const dropped = new Set<string>();
-relay.on('connection', (ws, req) => {
-  const url = new URL(req.url ?? '/', 'ws://relay');
-  const id = url.searchParams.get('session')!;
-  const role = url.searchParams.get('role') as 'cli' | 'browser';
-  const pair = sessions.get(id) ?? {};
-  pair[role] = ws;
-  sessions.set(id, pair);
-  if (role === 'cli' && dropped.has(id)) {
-    delete pair.cli;
-    ws.terminate();
-    return;
-  }
-  if (role === 'browser') pair.cli?.send(JSON.stringify({ type: 'browser_connected' }));
-  if (role === 'cli' && !silent.has(id))
-    ws.send(JSON.stringify({ type: 'status', browserConnected: pair.browser?.readyState === WebSocket.OPEN }));
-  ws.on('close', () => {
-    if (pair[role] === ws) delete pair[role];
-  });
-  ws.on('message', (data) => {
-    seen.push(String(data));
-    if (role === 'cli') fromServer.set(id, (fromServer.get(id) ?? 0) + 1);
-    const to = role === 'cli' ? pair.browser : pair.cli;
-    if (to?.readyState === WebSocket.OPEN) to.send(String(data));
-  });
-});
-await new Promise((r) => relay.once('listening', r));
+const relay = await startRelay();
+const { seen, fromServer, sessions, silent, dropped } = relay;
 
 setTestEnv();
-process.env.JAW_RELAY_URL = `ws://127.0.0.1:${(relay.address() as AddressInfo).port}`;
+process.env.JAW_RELAY_URL = relay.url;
 process.env.JAW_MCP_API_KEY = 'server-secret-key';
 const { appNameOf, connectRelay, ownerRelay, PageGone, resumeWallet, SESSION_LIMITS, WalletBusy } = await import(
   './relay'
@@ -57,6 +26,12 @@ const { appNameOf, connectRelay, ownerRelay, PageGone, resumeWallet, SESSION_LIM
 const openRelay = (chainId: number, ms = 30_000, client?: { clientId: string; clientName: string }) =>
   ownerRelay(chainId, new Date(Date.now() + ms), client);
 afterAll(() => relay.close());
+
+const freshRelay = () => {
+  delete (globalThis as Record<symbol, unknown>)[Symbol.for('jaw-mcp/relay-pools')];
+  vi.resetModules();
+  return import('./relay');
+};
 
 type Answer = (method: string, params: unknown) => { success: true; data: unknown } | { success: false; error: object };
 
@@ -239,8 +214,7 @@ describe('a session nobody opens for ten minutes', () => {
 
   it('given no browser joins within ten minutes, then the session ends saying so and its slot opens another', async () => {
     vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'setInterval', 'clearInterval'] });
-    vi.resetModules();
-    const fresh = await import('./relay');
+    const fresh = await freshRelay();
     const until = new Date(Date.now() + 30 * 60_000);
     const held = await Promise.all(
       Array.from({ length: fresh.SESSION_LIMITS.connect }, () => fresh.connectRelay(84532, until))
@@ -331,16 +305,23 @@ describe('what the wallet page can get wrong', () => {
 describe('the pool of sessions', () => {
   afterEach(() => vi.useRealTimers());
   // A pool is process-wide, so each test fills its own copy of the module.
-  const fresh = () => {
-    vi.resetModules();
-    return import('./relay');
-  };
+  const fresh = freshRelay;
   const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
   const opensAgain = (relay: Awaited<ReturnType<typeof fresh>>, ms = 500) =>
     vi.waitFor(
       async () => expect((await relay.ownerRelay(84532, new Date(Date.now() + ms))).url).toMatch(/cli-bridge/),
       { timeout: 3_000 }
     );
+
+  it('given the module loaded twice, as Next loads it for instrumentation and for the routes, then both count one owner pool', async () => {
+    const one = await fresh();
+    vi.resetModules();
+    const two = await import('./relay');
+    const until = new Date(Date.now() + 3_000);
+    for (let i = 0; i < one.SESSION_LIMITS.owner; i++) await one.ownerRelay(84532, until);
+
+    await expect(two.ownerRelay(84532, until)).rejects.toBeInstanceOf(two.WalletBusy);
+  });
 
   it('given authorizations beyond the owner limit, then all of them open', async () => {
     const relay = await fresh();
@@ -426,10 +407,7 @@ describe('the pool of sessions', () => {
 
 describe('the owner pool per account', () => {
   afterEach(() => vi.useRealTimers());
-  const fresh = () => {
-    vi.resetModules();
-    return import('./relay');
-  };
+  const fresh = freshRelay;
   const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
   const ACCOUNT = '0xAbCdEf0000000000000000000000000000000001';
   const OTHER = '0x0000000000000000000000000000000000000002';
@@ -680,49 +658,6 @@ describe('given authorizations hold every session of their pool', () => {
   });
 });
 
-async function replayingPage(link: string, owner: () => Promise<unknown>) {
-  const url = new URL(link);
-  const keys = await generateKeyPair();
-  const secret = await deriveSharedSecret(
-    keys.privateKey,
-    await importKeyFromHex('public', url.hash.slice('#pk='.length))
-  );
-  const publicKey = await exportKeyToHex('public', keys.publicKey);
-  const ws = new WebSocket(`${url.searchParams.get('relay')}?session=${url.searchParams.get('session')}&role=browser`);
-  const send = async (payload: Record<string, unknown>) =>
-    ws.send(JSON.stringify({ type: 'encrypted', ...(await encryptMessage(secret, payload)) }));
-  const answers = new Map<string, { request: string; reply: Promise<object> }>();
-  const ids: string[] = [];
-  let inits = 0;
-  let mute = false;
-  ws.on('message', async (data) => {
-    const inner = await decryptMessage(secret, JSON.parse(String(data)) as EncryptedEnvelope).catch(() => undefined);
-    if (inner?.type === 'init') inits++;
-    if (inner?.type === 'init' && !mute) await send({ type: 'ready', replays: true });
-    if (inner?.type !== 'rpc_request') return;
-    const id = String(inner.id);
-    ids.push(id);
-    const request = JSON.stringify([inner.method, inner.params]);
-    if (!answers.has(id)) answers.set(id, { request, reply: owner().then((data) => ({ success: true, data })) });
-    const first = answers.get(id)!;
-    const reply =
-      first.request === request
-        ? await first.reply
-        : { success: false, error: { code: -32600, message: 'not the request' } };
-    await send({ type: 'rpc_response', id, ...reply });
-  });
-  await new Promise((r) => ws.once('open', r));
-  ws.send(JSON.stringify({ type: 'key_exchange', publicKey }));
-  return {
-    publicKey,
-    ids,
-    asked: () => answers.size,
-    inits: () => inits,
-    mute: () => (mute = true),
-    close: () => ws.close(),
-  };
-}
-
 const sign = (ask: (method: string, params: unknown[]) => Promise<unknown>) => ask('personal_sign', ['0x68', '0xaa']);
 const never = () => new Promise<never>(() => {});
 const soon = () => new Date(Date.now() + 60_000);
@@ -923,8 +858,7 @@ describe('a session the server can rejoin', () => {
 
   it('given the owner pool is full, then a rejoin is busy', async () => {
     const { resume } = await restarted(never);
-    vi.resetModules();
-    const fresh = await import('./relay');
+    const fresh = await freshRelay();
     for (let i = 0; i < fresh.SESSION_LIMITS.owner; i++) await fresh.ownerRelay(84532, soon());
 
     await expect(fresh.resumeWallet(resume, soon())).rejects.toBeInstanceOf(fresh.WalletBusy);

@@ -14,10 +14,14 @@ import {
   lostBefore,
   lostPreamble,
   openLink,
+  RECONNECTING,
+  reconnecting,
+  resumeRequest,
   revokeHeld,
   type Claim,
   type Outcome,
   type PermissionRequestRow,
+  type Rebuild,
 } from '@/grants/requests';
 import { fromStore, markRevoked, readState, UNCONFIRMED, type LookUp } from '@/grants/revokes';
 import { RATE_WINDOW_MS } from '@/lib/edge';
@@ -97,6 +101,14 @@ async function findPermission(t: Tenant, id: Hex, chainId: number, lookUp: LookU
   return { permissionId: id, chainId, permission: found.permission, connectionId: row?.connectionId ?? null };
 }
 
+const revokeWork =
+  (deps: RevokeDeps): Rebuild =>
+  (t, target) =>
+  (ask, claim) =>
+    askRevoke(t, target as Target, ask, claim, deps);
+
+export const resumeRevoke = revokeWork(DEFAULTS);
+
 async function askRevoke(t: Tenant, target: Target, ask: Ask, claim: Claim, deps: RevokeDeps): Promise<Outcome> {
   const [account] = (await ask('eth_requestAccounts', [])) as unknown[];
   if (typeof account !== 'string' || !isAddressEqual(account as Address, t.account)) {
@@ -133,7 +145,8 @@ async function answer(target: Target, row: PermissionRequestRow) {
         : '') +
       `Ask the account owner to open ${row.walletUrl} before ${row.approveBy.toISOString()} and revoke permission ${target.permissionId}, ` +
       `which lets ${spender} act for the account${tokens}. The owner pays the gas in the wallet. ` +
-      'Once the chain shows it revoked, jaw_connections lists it revoked and nothing can spend under it.',
+      'Once the chain shows it revoked, jaw_connections lists it revoked and nothing can spend under it. ' +
+      'Right after showing the link, call jaw_connections yourself to see it revoked, and again on each later turn until that time; do not wait for the owner to say they revoked it.',
   });
 }
 
@@ -172,23 +185,25 @@ export async function revokePermission(t: Tenant, input: RevokeInput, deps = DEF
       chainId,
       approveBy: new Date(Date.now() + APPROVE_WITHIN_MS),
       permissionId: target.permissionId,
-      work: (ask, claim) => askRevoke(t, target, ask, claim, deps),
+      payload: target,
+      work: revokeWork(deps)(t, target),
     },
     deps.openWallet
   );
   if (opened === 'wallet_busy') return refusal('Too many owners are approving right now. Try again in a minute.');
   if (opened === 'account_busy') return refusal(ACCOUNT_BUSY);
   if ('opened' in opened) return answer(target, opened.opened);
+  if (opened.waiting.relay) void resumeRequest(opened.waiting, revokeWork(deps));
   const held = opened.waiting;
   const until = held.approveBy.toISOString();
   if (held.connectionId !== t.connectionId) {
     return refusal(
-      `revoke_in_progress: another app on this account asked the owner to revoke ${held.permissionId}; that link waits until ${until}.`
+      `revoke_in_progress: another app on this account asked the owner to revoke ${held.permissionId}; that link waits until ${until}.${reconnecting(held) ? RECONNECTING : ''}`
     );
   }
   if (held.permissionId?.toLowerCase() !== target.permissionId.toLowerCase()) {
     return refusal(
-      `revoke_in_progress: this connection already asked the owner to revoke ${held.permissionId}. Ask again once they answer or the link ends at ${until}.`
+      `revoke_in_progress: this connection already asked the owner to revoke ${held.permissionId}. Ask again once they answer or the link ends at ${until}.${reconnecting(held) ? RECONNECTING : ''}`
     );
   }
   return answer(target, held);

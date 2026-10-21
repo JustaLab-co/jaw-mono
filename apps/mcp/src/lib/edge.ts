@@ -140,6 +140,7 @@ interface LogFields {
   permissionRequestId?: string;
   permissionId?: string;
   callsId?: string;
+  code?: string;
   /** USDC base units, as strings because JSON has no bigint. */
   fee?: { expected: string; reserve: string; max: string };
 }
