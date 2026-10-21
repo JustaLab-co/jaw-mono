@@ -5,7 +5,7 @@ import { getDb, type Tx } from '@/db/client';
 import { connections, oauthPayloads } from '@/db/schema';
 import { log } from '@/lib/edge';
 import { inTurn, tryLockFloat } from '@/payments/float-lock';
-import { PAY_LIMIT_MS, topUpInFlight } from '@/payments/store';
+import { PAY_LIMIT_MS, sendInFlight } from '@/payments/store';
 import type { Sealed } from './seal';
 
 export type ConnectionRow = typeof connections.$inferSelect;
@@ -151,8 +151,8 @@ const RETRY_MS = 250;
  * Ends the connection of a grant the provider destroyed, after the funding turn in
  * flight. It never refuses: the provider already deleted the tokens, so a connection
  * left live could not be ended by its client again. Past the wait it ends without
- * the float lock, but never under a top-up that may still land: that lasts at most
- * until the lease of the call that sent it.
+ * the float lock, but never under a top-up that may still land or an execute not yet
+ * submitted: either lasts at most until the lease of the call that wrote it.
  */
 export async function revokeByGrant(grantId: string, waitMs = PAY_LIMIT_MS) {
   const active = and(eq(connections.grantId, grantId), eq(connections.status, 'active'));
@@ -168,7 +168,7 @@ export async function revokeByGrant(grantId: string, waitMs = PAY_LIMIT_MS) {
       const ended = await getDb().transaction(async (tx) => {
         const locked = await tryLockFloat(tx, row.id);
         if (!locked && Date.now() < deadline) return false;
-        if (await topUpInFlight(tx, row.id)) return false;
+        if (await sendInFlight(tx, row.id)) return false;
         if (!locked) log('error', { msg: `ended connection ${row.id} without the float lock` });
         await tx.update(connections).set({ status: 'revoked', revokedAt: new Date() }).where(active);
         return true;
@@ -181,10 +181,10 @@ export async function revokeByGrant(grantId: string, waitMs = PAY_LIMIT_MS) {
 
 export const ownedBy = (account: Address) => sql`lower(${connections.account}) = ${account.toLowerCase()}`;
 
-/** A top-up of the connection may still land in its payer, so it was not ended. */
-export class TopUpInFlight extends Error {
+/** A top-up or an execute of the connection may still move money, so it was not ended. */
+export class SendInFlight extends Error {
   constructor() {
-    super('a top-up of this connection may still land in its payer');
+    super('a top-up or an execute of this connection may still move money');
   }
 }
 
@@ -193,7 +193,7 @@ export class TopUpInFlight extends Error {
  * the refresh tokens, with the key wraps they carry, are deleted, so the session
  * key cannot be opened again. Budgets on chain are revoked separately. Undefined
  * when the account has no such connection; an ended one is returned as it is.
- * Throws TopUpInFlight while a top-up may still land in the payer.
+ * Throws SendInFlight while a top-up or an execute may still move money.
  */
 export async function endConnection(id: string, account: Address, now = new Date(), db: Tx = getDb()) {
   return db.transaction(async (tx) => {
@@ -203,7 +203,7 @@ export async function endConnection(id: string, account: Address, now = new Date
       .where(and(eq(connections.id, id), ownedBy(account), ne(connections.status, 'pending')))
       .for('update');
     if (!found?.grantId || found.status === 'revoked') return found;
-    if (await topUpInFlight(tx, id)) throw new TopUpInFlight();
+    if (await sendInFlight(tx, id)) throw new SendInFlight();
     const [ended] = await tx
       .update(connections)
       .set({ status: 'revoked', revokedAt: now })

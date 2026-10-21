@@ -10,6 +10,7 @@ import { countHit } from '@/db/settings';
 import {
   currentSign,
   LINK_LOST,
+  SIGN_KEPT_DAYS,
   lostBefore,
   lostPreamble,
   openLink,
@@ -22,12 +23,10 @@ import { isProxyChain } from '@/lib/chain';
 import { RATE_WINDOW_MS } from '@/lib/edge';
 import { reply } from '@/lib/fence';
 import { MAX_WAIT_SECONDS, SUGGESTED_WAIT_SECONDS, waiterOf, waitFor, type Waiter } from '@/lib/wait';
-import { MAX_OPEN_PER_ACCOUNT } from '@/owner-calls/cap';
+import { ACCOUNT_LINK_RATE_LIMIT, LINK_RATE_LIMIT, MAX_OPEN_PER_ACCOUNT } from '@/owner-calls/cap';
 import { gateCode } from '@/payments/render';
 
-const LINK_RATE_LIMIT = 10;
 const STATUS_RATE_LIMIT = 30;
-const ACCOUNT_LINK_RATE_LIMIT = 20;
 const MESSAGE_MAX = 8_192;
 const TYPED_DATA_MAX = 32_768;
 const HIDDEN_IN_NAME = /[\p{Cc}\p{Cf}\p{Zl}\p{Zp}\p{Default_Ignorable_Code_Point}]/u;
@@ -55,7 +54,9 @@ const signInput = z
       .string()
       .regex(/^[A-Za-z0-9_.:-]{1,100}$/)
       .optional()
-      .describe('Send it again with the same input to read the outcome; one is made up and returned when absent'),
+      .describe(
+        `Send it again with the same input to read the outcome, for ${SIGN_KEPT_DAYS} days after it ends; one is made up and returned when absent`
+      ),
   })
   .refine((v) => (v.message === undefined) !== (v.typedData === undefined), {
     message: 'Send exactly one of message and typedData',

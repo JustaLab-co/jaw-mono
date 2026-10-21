@@ -44,8 +44,11 @@ Optional settings for call execution.
 interface SendCallsOptions {
   permissionId?: Hex;
   from?: Address;
+  onSigned?: (userOpHash: Hash) => void | Promise<void>;
 }
 ```
+
+`onSigned` is called with the userOp hash once the userOp is signed and before it goes to the bundler. It is awaited, and a rejection stops the send. Record the hash here when you need to find the operation on chain even if the bundler's answer is lost.
 
 ### paymasterUrlOverride (optional)
 
