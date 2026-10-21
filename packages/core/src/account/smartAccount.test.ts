@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { type Hex, type Address } from 'viem';
+import { HttpRequestError, type Hex, type Address } from 'viem';
 
 vi.mock('viem/actions', () => ({
     getCode: vi.fn(),
@@ -88,7 +88,12 @@ vi.mock('viem/account-abstraction', async (importOriginal) => ({
 
 import { getBlockNumber, getCode, getLogs, getTransactionReceipt, multicall, readContract } from 'viem/actions';
 import { http } from 'viem';
-import { createBundlerClient, createPaymasterClient } from 'viem/account-abstraction';
+import {
+    createBundlerClient,
+    createPaymasterClient,
+    formatUserOperationRequest,
+    getUserOperationHash,
+} from 'viem/account-abstraction';
 import { toJustanAccount } from './toJustanAccount.js';
 import { createPaymasterFunctions } from './paymaster.js';
 import { getPermissionFromRelay, encodeExecuteBatchWithPermission } from '../rpc/permissions.js';
@@ -97,6 +102,7 @@ import {
     createSmartAccountForAddress,
     findOwnerIndex,
     getBundlerClient,
+    sendCalls,
     sendCallsWithPermission,
     sendTransaction,
 } from './smartAccount.js';
@@ -334,6 +340,132 @@ describe('getBundlerClient — paymaster resolution', () => {
     });
 });
 
+const ENTRY_POINT = '0x4337084D9E255Ff0702461CF8895CE9E3b5Ff108' as Address;
+const SIGNER = {
+    entryPoint: { address: ENTRY_POINT, version: '0.8' },
+    signUserOperation: vi.fn(async () => '0x5151' as Hex),
+} as never;
+const PREPARED = {
+    sender: '0x5e55105e55105e55105e55105e55105e55105e55' as Address,
+    nonce: 7n,
+    callData: '0xca11' as Hex,
+    callGasLimit: 100_000n,
+    verificationGasLimit: 200_000n,
+    preVerificationGas: 50_000n,
+    maxFeePerGas: 3n,
+    maxPriorityFeePerGas: 1n,
+    signature: '0x' as Hex,
+};
+const AUTHORIZED = {
+    ...PREPARED,
+    factory: '0x7702' as Address,
+    factoryData: '0x' as Hex,
+    authorization: {
+        address: '0x000000000000000000000000000000000000d313' as Address,
+        chainId: 84532,
+        nonce: 3,
+        r: `0x${'1'.repeat(64)}` as Hex,
+        s: `0x${'2'.repeat(64)}` as Hex,
+        yParity: 1,
+    },
+};
+const hashOf = (userOp: object) =>
+    getUserOperationHash({
+        chainId: 84532,
+        entryPointAddress: ENTRY_POINT,
+        entryPointVersion: '0.8',
+        userOperation: { ...userOp, signature: '0x5151' } as never,
+    });
+
+describe('sendCalls hands over the userOp hash before the send', () => {
+    const CHAIN = { id: 84532, rpcUrl: 'https://rpc.example' } as never;
+    const CALLS = [{ to: MOCK_TARGET_ADDRESS, data: '0xabcd' as Hex }];
+    let order: string[];
+    let request: ReturnType<typeof vi.fn>;
+    const onSigned = vi.fn(async () => {
+        order.push('signed');
+    });
+    const bundlerWith = (prepared: object) =>
+        vi.mocked(createBundlerClient).mockReturnValue({
+            prepareUserOperation: vi.fn(async (params: object) => ({ ...prepared, ...params })),
+            request,
+        } as never);
+
+    beforeEach(() => {
+        vi.clearAllMocks();
+        order = [];
+        request = vi.fn(async () => {
+            order.push('send');
+            return '0xuserophash';
+        });
+        bundlerWith(PREPARED);
+        vi.mocked(encodeExecuteBatchWithPermission).mockReturnValue('0xencodedhere' as Hex);
+    });
+
+    it.each([
+        ['without a permission', () => sendCalls(SIGNER, CALLS, CHAIN, undefined, undefined, undefined, onSigned)],
+        [
+            'under a permission',
+            () =>
+                sendCallsWithPermission(
+                    SIGNER,
+                    CALLS,
+                    CHAIN,
+                    '0xabc123',
+                    'key',
+                    undefined,
+                    undefined,
+                    undefined,
+                    undefined,
+                    { to: MOCK_TARGET_ADDRESS, value: 0n, data: '0xbeef' },
+                    onSigned
+                ),
+        ],
+    ])(
+        'given a caller waiting for the hash, when it sends %s, then it gets the hash of the signed op before the send',
+        async (_, run) => {
+            await run();
+
+            expect(order).toEqual(['signed', 'send']);
+            expect(request).toHaveBeenCalledWith(
+                {
+                    method: 'eth_sendUserOperation',
+                    params: [formatUserOperationRequest({ ...PREPARED, signature: '0x5151' }), ENTRY_POINT],
+                },
+                { retryCount: 0 }
+            );
+            expect(onSigned).toHaveBeenCalledWith(hashOf(PREPARED));
+        }
+    );
+
+    it('given an EIP-7702 authorization on the op, then the hash and the send both carry it', async () => {
+        bundlerWith(AUTHORIZED);
+
+        await sendCalls(SIGNER, CALLS, CHAIN, undefined, undefined, undefined, onSigned);
+
+        expect(onSigned).toHaveBeenCalledWith(hashOf(AUTHORIZED));
+        expect(hashOf(AUTHORIZED)).not.toBe(hashOf({ ...AUTHORIZED, authorization: undefined }));
+        expect(request.mock.calls[0][0].params[0]).toMatchObject({
+            eip7702Auth: { address: AUTHORIZED.authorization.address },
+        });
+    });
+
+    it('given the caller fails to take the hash, then nothing goes to the bundler', async () => {
+        onSigned.mockRejectedValueOnce(new Error('could not record the hash'));
+
+        await expect(sendCalls(SIGNER, CALLS, CHAIN, undefined, undefined, undefined, onSigned)).rejects.toThrow(
+            'could not record the hash'
+        );
+        expect(request).not.toHaveBeenCalled();
+    });
+
+    it('given the bundler fails the send, then the error is the userOp execution error a caller can classify', async () => {
+        request.mockRejectedValueOnce(new HttpRequestError({ url: 'https://rpc.example', details: 'socket hang up' }));
+
+        await expect(sendCalls(SIGNER, CALLS, CHAIN)).rejects.toMatchObject({ name: 'UserOperationExecutionError' });
+    });
+});
+
 // The ERC-20 approval is sized over the permission-manager call the caller builds
 // with `buildPermissionManagerCall`. That only means anything if the call it sized
 // is the one that goes out, rather than one re-encoded here.
@@ -352,18 +484,21 @@ describe('sendCallsWithPermission — the sized call is the sent one', () => {
         data: '0xbeefbeef' as Hex,
     };
 
-    let sendUserOperation: ReturnType<typeof vi.fn>;
+    let prepareUserOperation: ReturnType<typeof vi.fn>;
 
     beforeEach(() => {
         vi.clearAllMocks();
-        sendUserOperation = vi.fn().mockResolvedValue('0xuserophash');
-        vi.mocked(createBundlerClient).mockReturnValue({ sendUserOperation } as never);
+        prepareUserOperation = vi.fn(async (params: object) => ({ ...PREPARED, ...params }));
+        vi.mocked(createBundlerClient).mockReturnValue({
+            prepareUserOperation,
+            request: vi.fn().mockResolvedValue('0xuserophash'),
+        } as never);
         vi.mocked(encodeExecuteBatchWithPermission).mockReturnValue('0xencodedhere' as Hex);
     });
 
     it('sends the caller-built permission call, without fetching the permission twice', async () => {
         await sendCallsWithPermission(
-            {} as never,
+            SIGNER,
             CALLS,
             CHAIN,
             PERMISSION_ID,
@@ -378,14 +513,14 @@ describe('sendCallsWithPermission — the sized call is the sent one', () => {
         expect(getPermissionFromRelay).not.toHaveBeenCalled();
         // Approval first, at the spender level: the permission manager checks each
         // call in its batch against the permission and would reject `approve`.
-        expect(sendUserOperation.mock.calls[0][0].calls).toEqual([APPROVAL, PERMISSION_CALL]);
+        expect(prepareUserOperation.mock.calls[0][0].calls).toEqual([APPROVAL, PERMISSION_CALL]);
     });
 
     it('builds the permission call itself when the caller passed none', async () => {
-        await sendCallsWithPermission({} as never, CALLS, CHAIN, PERMISSION_ID, 'test-key');
+        await sendCallsWithPermission(SIGNER, CALLS, CHAIN, PERMISSION_ID, 'test-key');
 
         expect(getPermissionFromRelay).toHaveBeenCalledWith(PERMISSION_ID, 'test-key');
-        expect(sendUserOperation.mock.calls[0][0].calls).toEqual([
+        expect(prepareUserOperation.mock.calls[0][0].calls).toEqual([
             { to: '0xf1b40E3D5701C04d86F7828f0EB367B9C90901D8', value: 0n, data: '0xencodedhere' },
         ]);
     });

@@ -43,7 +43,11 @@ export async function approve(ask: Ask, row: OwnerCallRow, clients: ChainClients
     return;
   }
   const callsId = sent.safeParse(answer).data?.id;
-  if (callsId !== undefined) await keepCallsId(row, callsId, await headOf(row, clients));
+  if (callsId === undefined) {
+    log('warn', { msg: 'owner calls answer unreadable', ownerCallId: row.id, code: 'wallet_answer_unreadable' });
+    return;
+  }
+  await keepCallsId(row, callsId, await headOf(row, clients));
 }
 
 const codeOf = (err: unknown) => (err as { code?: unknown } | undefined)?.code;

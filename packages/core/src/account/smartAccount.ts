@@ -1,5 +1,6 @@
 import {
     Address,
+    type BaseError,
     Client,
     getAddress,
     Hash,
@@ -33,6 +34,10 @@ import {
     SmartAccount,
     createBundlerClient,
     createPaymasterClient,
+    formatUserOperationRequest,
+    getUserOperationError,
+    getUserOperationHash,
+    type UserOperation,
     WebAuthnAccount,
 } from 'viem/account-abstraction';
 import { Chain } from '../store/index.js';
@@ -402,6 +407,40 @@ export async function sendTransaction(
     return receipt.receipt.transactionHash;
 }
 
+type OnUserOpSigned = (userOpHash: Hash) => void | Promise<void>;
+
+// Three steps rather than viem's one, so the caller has the hash even when the
+// answer to eth_sendUserOperation is lost after the bundler took the op.
+async function submitUserOperation(
+    bundlerClient: BundlerClient<Transport, ViemChain>,
+    smartAccount: SmartAccount,
+    chainId: number,
+    calls: Array<{ to: Address; value: bigint; data: Hex }>,
+    authorization: PreparedCalls['authorization'],
+    onSigned?: OnUserOpSigned
+): Promise<Hash> {
+    // The union over entry point versions does not narrow here; viem casts the same way.
+    const prepared = (await bundlerClient.prepareUserOperation({
+        account: smartAccount,
+        calls,
+        ...(authorization ? { authorization } : {}),
+    })) as UserOperation;
+    const userOperation = { ...prepared, signature: await smartAccount.signUserOperation(prepared) };
+    const { address, version } = smartAccount.entryPoint;
+    await onSigned?.(
+        getUserOperationHash({ chainId, entryPointAddress: address, entryPointVersion: version, userOperation })
+    );
+    // Sent as signed: viem's sendUserOperation would prepare it again when the client has an account.
+    try {
+        return await bundlerClient.request(
+            { method: 'eth_sendUserOperation', params: [formatUserOperationRequest(userOperation), address] },
+            { retryCount: 0 }
+        );
+    } catch (err) {
+        throw getUserOperationError(err as BaseError, userOperation);
+    }
+}
+
 export async function sendCalls(
     smartAccount: SmartAccount,
     calls: Array<{
@@ -412,7 +451,8 @@ export async function sendCalls(
     chain: Chain,
     paymasterUrlOverride?: string,
     paymasterContextOverride?: Record<string, unknown>,
-    localAccount?: LocalAccount
+    localAccount?: LocalAccount,
+    onSigned?: OnUserOpSigned
 ): Promise<BundledTransactionResult> {
     const bundlerClient = getBundlerClient(chain, paymasterUrlOverride, paymasterContextOverride);
 
@@ -423,11 +463,14 @@ export async function sendCalls(
         localAccount
     );
 
-    const userOpHash = await bundlerClient.sendUserOperation({
-        account: smartAccount,
-        calls: finalCalls,
-        ...(authorization ? { authorization } : {}),
-    });
+    const userOpHash = await submitUserOperation(
+        bundlerClient,
+        smartAccount,
+        chain.id,
+        finalCalls,
+        authorization,
+        onSigned
+    );
 
     return {
         id: userOpHash,
@@ -500,7 +543,8 @@ export async function sendCallsWithPermission(
     paymasterContextOverride?: Record<string, unknown>,
     localAccount?: LocalAccount,
     approvalCall?: { to: Address; value?: bigint; data: Hex },
-    permissionCall?: { to: Address; value: bigint; data: Hex }
+    permissionCall?: { to: Address; value: bigint; data: Hex },
+    onSigned?: OnUserOpSigned
 ): Promise<BundledTransactionResult> {
     // A caller that sized an ERC-20 paymaster approval already built this call to
     // size it over; reuse it rather than fetching the permission a second time and
@@ -534,11 +578,14 @@ export async function sendCallsWithPermission(
 
     const bundlerClient = getBundlerClient(chain, paymasterUrlOverride, paymasterContextOverride);
 
-    const userOpHash = await bundlerClient.sendUserOperation({
-        account: smartAccount,
-        calls: finalCalls,
-        ...(authorization ? { authorization } : {}),
-    });
+    const userOpHash = await submitUserOperation(
+        bundlerClient,
+        smartAccount,
+        chain.id,
+        finalCalls,
+        authorization,
+        onSigned
+    );
 
     return {
         id: userOpHash,

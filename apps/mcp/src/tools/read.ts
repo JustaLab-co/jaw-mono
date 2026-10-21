@@ -13,6 +13,7 @@ import {
   sumSpentSince,
   usdcBalance,
   usdcForNetwork,
+  within,
 } from '@jaw.id/agent';
 import type { McpServer } from '@modelcontextprotocol/server';
 import { erc20Abi, type Address } from 'viem';
@@ -25,9 +26,9 @@ import { getDb } from '@/db/client';
 import { readOnChain } from '@/grants/permission';
 import { liveGrants, type Grant, type LiveGrant } from '@/grants/store';
 import { payingBudget } from '@/payments/pay';
-import { dayLeft, daySpendOf, isoOf } from '@/payments/day-spend';
+import { dayLeft, daySpendOf, isoOf, pullRoom } from '@/payments/day-spend';
 import { stillHeld } from '@/payments/refill';
-import { openSpends, recordedSends, type OpenSpend } from '@/payments/sends';
+import { chainView, heldSpends, LOGGED_READ_MS, readAt, recordedSends, type OpenSpend } from '@/payments/sends';
 import { entriesFor, holdingRows, pulledUnderOtherGrants } from '@/payments/store';
 import { publicClientFor } from '@/lib/chain';
 import { fenceText, reply } from '@/lib/fence';
@@ -109,9 +110,8 @@ async function budgetOf(grant: Grant, t: Tenant, balance: bigint | null) {
   let payable = null;
   let room: Room | undefined;
   if (day) {
-    const pulled = day.refilled + day.sentFromAccount;
     const held = balance === null ? null : floorZero(balance - holds);
-    room = { left: dayLeft(allowance, day), held, cap: floorZero(floorZero(allowance - pulled) - earlier) };
+    room = { left: dayLeft(allowance, day), held, cap: pullRoom(allowance, day, earlier) };
     spent = figure(day.paid + day.sentFromAccount);
     payable = figure(least(room.left, (held ?? 0n) + floorZero(room.cap - refillFee(grant))));
   }
@@ -203,13 +203,18 @@ function leftOf(period: OnChainPeriod, allowance: bigint, open: OpenSpend[], tok
   return floorZero(allowance - period.spend - held).toString();
 }
 
-async function grantOf(g: LiveGrant): Promise<z.infer<typeof grantOut>> {
+// A run the logs show counts in the period spend read at their block, not again as held.
+async function grantOf(connectionId: string, g: LiveGrant): Promise<z.infer<typeof grantOut>> {
   const target = { chainId: g.chainId, permissionId: g.permissionId, permission: g.permission };
   const tokens = [...new Set(g.permission.spends.map((s) => s.token.toLowerCase()))];
+  const view = await within(chainView(connectionId, g.permissionId, g.chainId, clients.clients), LOGGED_READ_MS).catch(
+    () => undefined
+  );
+  const read = readAt(clients.clients, g.chainId, view?.head);
   const [liveness, periods, open] = await Promise.all([
-    readLiveness(target, clients),
-    Promise.all(tokens.map((token) => readCurrentPeriods({ ...target, token }, clients))),
-    openSpends(g.permissionId, getDb()),
+    readLiveness(target, read),
+    Promise.all(tokens.map((token) => readCurrentPeriods({ ...target, token }, read))),
+    heldSpends(g.permissionId, getDb(), view?.seen),
   ]);
   return {
     permissionId: g.permissionId,
@@ -238,7 +243,7 @@ async function status(t: Tenant) {
   ]);
   const [read, shown] = await Promise.all([
     grant && budgetOf(grant, t, float && BigInt(float.amount)),
-    Promise.all(held.map(grantOf)),
+    Promise.all(held.map((g) => grantOf(t.connectionId, g))),
   ]);
   const grants = shown.map((g) =>
     g.permissionId === grant?.permissionId

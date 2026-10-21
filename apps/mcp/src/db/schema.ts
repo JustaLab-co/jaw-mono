@@ -286,7 +286,8 @@ export const swaps = pgTable(
     paymentAttempt: integer('payment_attempt').notNull().default(1),
     paymentKey: text('payment_key').notNull(),
     paymentId: text('payment_id'),
-    paidAt: timestamp('paid_at', { withTimezone: true }),
+    /** When the quote was asked for. The column keeps its name from when the quote was paid for. */
+    quotedAt: timestamp('paid_at', { withTimezone: true }),
     quoteId: text('quote_id').unique(),
     depositAddress: text('deposit_address'),
     quote: jsonb('quote'),
@@ -385,6 +386,9 @@ export const permissionRequests = pgTable(
     walletUrl: text('wallet_url').notNull(),
     approveBy: timestamp('approve_by', { withTimezone: true }).notNull(),
     sessionUntil: timestamp('session_until', { withTimezone: true }),
+    leaseHolder: text('lease_holder'),
+    payload: text('payload'),
+    relay: text('relay'),
     createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
     updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
   },
@@ -406,6 +410,12 @@ export const permissionRequests = pgTable(
       .on(t.connectionId)
       .where(sql`${t.method} = 'sign' and ${t.state} = 'awaiting_owner'`),
     uniqueIndex('permission_requests_names_lost_index').on(t.namesLost),
+    index('permission_requests_ended_sign_index')
+      .on(t.updatedAt)
+      .where(sql`${t.method} = 'sign' and ${t.state} <> 'awaiting_owner'`),
+    index('permission_requests_unconfirmed_index')
+      .on(t.updatedAt)
+      .where(sql`${t.method} = 'revoke' and ${t.state} = 'approved' and ${t.code} = 'unconfirmed'`),
     uniqueIndex('permission_requests_sign_key_index')
       .on(t.connectionId, t.idempotencyKey)
       .where(sql`${t.method} = 'sign'`),

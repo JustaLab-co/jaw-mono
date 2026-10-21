@@ -1,4 +1,3 @@
-import type { AddressInfo } from 'node:net';
 import {
   decryptMessage,
   deriveSharedSecret,
@@ -9,38 +8,30 @@ import {
   type EncryptedEnvelope,
 } from '@jaw.id/agent';
 import { afterAll, afterEach, describe, expect, it, vi } from 'vitest';
-import WebSocket, { WebSocketServer } from 'ws';
+import WebSocket from 'ws';
 import { useTestDb } from '@/db/test-db';
+import { replayingPage, startRelay } from './fake-relay';
+import type { RelayResume } from './seal';
 import { setTestEnv } from './testkit';
 
-// A relay that pairs the two roles of a session and forwards what each sends, as relay.jaw.id does.
-const seen: string[] = [];
-const fromServer = new Map<string, number>();
-const relay = new WebSocketServer({ port: 0, host: '127.0.0.1' });
-const sessions = new Map<string, { cli?: WebSocket; browser?: WebSocket }>();
-relay.on('connection', (ws, req) => {
-  const url = new URL(req.url ?? '/', 'ws://relay');
-  const id = url.searchParams.get('session')!;
-  const role = url.searchParams.get('role') as 'cli' | 'browser';
-  const pair = sessions.get(id) ?? {};
-  pair[role] = ws;
-  sessions.set(id, pair);
-  if (role === 'browser') pair.cli?.send(JSON.stringify({ type: 'browser_connected' }));
-  ws.on('message', (data) => {
-    seen.push(String(data));
-    if (role === 'cli') fromServer.set(id, (fromServer.get(id) ?? 0) + 1);
-    (role === 'cli' ? pair.browser : pair.cli)?.send(String(data));
-  });
-});
-await new Promise((r) => relay.once('listening', r));
+const relay = await startRelay();
+const { seen, fromServer, sessions, silent, dropped } = relay;
 
 setTestEnv();
-process.env.JAW_RELAY_URL = `ws://127.0.0.1:${(relay.address() as AddressInfo).port}`;
+process.env.JAW_RELAY_URL = relay.url;
 process.env.JAW_MCP_API_KEY = 'server-secret-key';
-const { appNameOf, connectRelay, ownerRelay, SESSION_LIMITS, WalletBusy } = await import('./relay');
+const { appNameOf, connectRelay, ownerRelay, PageGone, resumeWallet, SESSION_LIMITS, WalletBusy } = await import(
+  './relay'
+);
 const openRelay = (chainId: number, ms = 30_000, client?: { clientId: string; clientName: string }) =>
   ownerRelay(chainId, new Date(Date.now() + ms), client);
 afterAll(() => relay.close());
+
+const freshRelay = () => {
+  delete (globalThis as Record<symbol, unknown>)[Symbol.for('jaw-mcp/relay-pools')];
+  vi.resetModules();
+  return import('./relay');
+};
 
 type Answer = (method: string, params: unknown) => { success: true; data: unknown } | { success: false; error: object };
 
@@ -235,8 +226,7 @@ describe('a session nobody opens for ten minutes', () => {
 
   it('given no browser joins within ten minutes, then the session ends saying so and its slot opens another', async () => {
     vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'setInterval', 'clearInterval'] });
-    vi.resetModules();
-    const fresh = await import('./relay');
+    const fresh = await freshRelay();
     const until = new Date(Date.now() + 30 * 60_000);
     const held = await Promise.all(
       Array.from({ length: fresh.SESSION_LIMITS.connect }, () => fresh.connectRelay(84532, until))
@@ -327,16 +317,23 @@ describe('what the wallet page can get wrong', () => {
 
 describe('the pool of sessions', () => {
   // A pool is process-wide, so each test fills its own copy of the module.
-  const fresh = () => {
-    vi.resetModules();
-    return import('./relay');
-  };
+  const fresh = freshRelay;
   const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
   const opensAgain = (relay: Awaited<ReturnType<typeof fresh>>, ms = 500) =>
     vi.waitFor(
       async () => expect((await relay.ownerRelay(84532, new Date(Date.now() + ms))).url).toMatch(/cli-bridge/),
       { timeout: 3_000 }
     );
+
+  it('given the module loaded twice, as Next loads it for instrumentation and for the routes, then both count one owner pool', async () => {
+    const one = await fresh();
+    vi.resetModules();
+    const two = await import('./relay');
+    const until = new Date(Date.now() + 3_000);
+    for (let i = 0; i < one.SESSION_LIMITS.owner; i++) await one.ownerRelay(84532, until);
+
+    await expect(two.ownerRelay(84532, until)).rejects.toBeInstanceOf(two.WalletBusy);
+  });
 
   it('given authorizations beyond the owner limit, then all of them open', async () => {
     const relay = await fresh();
@@ -415,10 +412,7 @@ describe('the pool of sessions', () => {
 });
 
 describe('the owner pool per account', () => {
-  const fresh = () => {
-    vi.resetModules();
-    return import('./relay');
-  };
+  const fresh = freshRelay;
   const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
   const ACCOUNT = '0xAbCdEf0000000000000000000000000000000001';
   const OTHER = '0x0000000000000000000000000000000000000002';
@@ -660,5 +654,212 @@ describe('given authorizations hold every session of their pool', () => {
       expect(String(long?.appName)).toHaveLength(64);
       expect(String(long?.appName)).toMatch(/^A+ \(via JAW MCP\)$/);
     });
+  });
+});
+
+const sign = (ask: (method: string, params: unknown[]) => Promise<unknown>) => ask('personal_sign', ['0x68', '0xaa']);
+const never = () => new Promise<never>(() => {});
+const soon = () => new Date(Date.now() + 60_000);
+
+async function restarted(owner: () => Promise<unknown>) {
+  const wallet = await openRelay(84532, 60_000);
+  const opened = await replayingPage(wallet.url, owner);
+  let resume: RelayResume | undefined;
+  const first = wallet.run(sign, (r) => {
+    resume = r;
+  });
+  await vi.waitFor(() => expect(opened.ids).toHaveLength(1));
+  wallet.close();
+  await first.catch(() => undefined);
+  return { wallet, opened, resume: resume! };
+}
+
+describe('a session the server can rejoin', () => {
+  afterEach(() => vi.useRealTimers());
+
+  it('given a page that replays, when it is ready, then joined gets the session, the page key and the init, before the first ask', async () => {
+    const wallet = await openRelay(84532, 30_000, { clientId: 'x', clientName: 'Agent' });
+    const opened = await replayingPage(wallet.url, async () => '0xsig');
+    const joined: { resume: RelayResume; asked: number }[] = [];
+
+    await wallet.run(sign, (resume) => {
+      joined.push({ resume, asked: opened.ids.length });
+    });
+
+    expect(joined).toHaveLength(1);
+    expect(joined[0].asked).toBe(0);
+    expect(joined[0].resume).toMatchObject({
+      session: new URL(wallet.url).searchParams.get('session'),
+      peer: opened.publicKey,
+      chainId: 84532,
+      appName: 'Agent (via JAW MCP)',
+    });
+  });
+
+  it('given a page that does not say it replays, then joined never fires and the run still answers', async () => {
+    const wallet = await openRelay(84532);
+    await page(wallet.url, () => ({ success: true, data: '0xsig' }));
+    const joined = vi.fn();
+
+    expect(await wallet.run(sign, joined)).toBe('0xsig');
+    expect(joined).not.toHaveBeenCalled();
+  });
+
+  it('given two asks in a run, then their ids are the session and the count from zero', async () => {
+    const wallet = await openRelay(84532);
+    const opened = await replayingPage(wallet.url, async () => '0xsig');
+    const session = new URL(wallet.url).searchParams.get('session');
+
+    await wallet.run(async (ask) => [await sign(ask), await sign(ask)]);
+
+    expect(opened.ids).toEqual([`${session}:0`, `${session}:1`]);
+  });
+
+  it.each(['while the server was down', 'after the server rejoined'])(
+    'given the server restarted while the owner was deciding, when the owner answers %s, then the rejoined server collects that answer and the owner was asked once',
+    async (when) => {
+      let approve!: (sig: string) => void;
+      const decided = new Promise((r) => (approve = r));
+      const { wallet, opened, resume } = await restarted(() => decided);
+      if (when === 'while the server was down') approve('0xsig');
+
+      const resumed = await resumeWallet(resume, soon());
+      expect(resumed?.url).toBe(wallet.url);
+      const answer = resumed!.run(sign);
+      await vi.waitFor(() => expect(opened.ids).toHaveLength(2));
+      approve('0xsig');
+
+      expect(await answer).toBe('0xsig');
+      expect(opened.ids).toEqual([`${resume.session}:0`, `${resume.session}:0`]);
+      expect(opened.asked()).toBe(1);
+    }
+  );
+
+  it('given the page was closed, when the server rejoins, then there is no wallet to resume', async () => {
+    const { opened, resume } = await restarted(never);
+    opened.close();
+    await vi.waitFor(() => expect(sessions.get(resume.session)?.browser).toBeUndefined());
+
+    expect(await resumeWallet(resume, soon())).toBeUndefined();
+    await vi.waitFor(() => expect(sessions.get(resume.session)?.cli).toBeUndefined());
+  });
+
+  it('given the relay sends no status, when 15 seconds pass, then there is no wallet to resume', async () => {
+    const { resume } = await restarted(never);
+    silent.add(resume.session);
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'Date'] });
+
+    const resumed = resumeWallet(resume, soon());
+    await vi.waitFor(() => expect(sessions.get(resume.session)?.cli?.readyState).toBe(WebSocket.OPEN));
+    await vi.advanceTimersByTimeAsync(15_000);
+
+    expect(await resumed).toBeUndefined();
+    vi.useRealTimers();
+    await vi.waitFor(() => expect(sessions.get(resume.session)?.cli).toBeUndefined());
+  });
+
+  it('given the relay connection fails during the rejoin, then it throws instead of saying the page is gone', async () => {
+    const { resume } = await restarted(never);
+    dropped.add(resume.session);
+
+    await expect(resumeWallet(resume, soon())).rejects.toThrow();
+    await vi.waitFor(() => expect(sessions.get(resume.session)?.cli).toBeUndefined());
+  });
+
+  it('given joined never settles, when 5 seconds pass, then the run goes on without being saved and warns', async () => {
+    const wallet = await openRelay(84532);
+    const opened = await replayingPage(wallet.url, async () => '0xsig');
+    const logged = vi.spyOn(console, 'log').mockImplementation(() => undefined);
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'Date'] });
+
+    const run = wallet.run(sign, never);
+    await vi.waitFor(() => expect(opened.inits()).toBe(1));
+    await new Promise((r) => setImmediate(r));
+    expect(opened.ids).toHaveLength(0);
+    await vi.advanceTimersByTimeAsync(5_000);
+
+    expect(await run).toBe('0xsig');
+    expect(logged.mock.calls.flat().join('\n')).toContain('relay session not saved');
+    logged.mockRestore();
+  });
+
+  it('given the page does not answer the init again, when 15 seconds pass, then the run ends as page gone', async () => {
+    const { opened, resume } = await restarted(never);
+    opened.mute();
+    const resumed = await resumeWallet(resume, soon());
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'Date'] });
+
+    const run = resumed!.run(sign).catch((err: unknown) => err);
+    await vi.waitFor(() => expect(opened.inits()).toBe(2));
+    await new Promise((r) => setImmediate(r));
+    await vi.advanceTimersByTimeAsync(15_000);
+
+    expect(await run).toBeInstanceOf(PageGone);
+    expect(opened.ids).toHaveLength(1);
+  });
+
+  it('given the page reloaded with a new key, when the server rejoins, then the run ends as page gone at once and nothing is asked again', async () => {
+    const { wallet, opened, resume } = await restarted(never);
+    const resumed = await resumeWallet(resume, soon());
+    opened.close();
+    const reloaded = await replayingPage(wallet.url, async () => '0xother');
+    const started = Date.now();
+
+    await expect(resumed!.run(sign)).rejects.toBeInstanceOf(PageGone);
+    expect(Date.now() - started).toBeLessThan(5_000);
+    expect(reloaded.ids).toEqual([]);
+  });
+
+  it('given the page reloads with a new key while a resumed ask waits on the owner, then the run ends as page gone', async () => {
+    const { wallet, opened, resume } = await restarted(never);
+    const resumed = await resumeWallet(resume, soon());
+
+    const run = resumed!.run(async (ask) => {
+      const asked = sign(ask);
+      await vi.waitFor(() => expect(opened.ids).toHaveLength(2));
+      opened.close();
+      await replayingPage(wallet.url, async () => '0xother');
+      return asked;
+    });
+
+    await expect(run).rejects.toBeInstanceOf(PageGone);
+  });
+
+  it('given a resumed ask that is not the request first sent under its id, then the caller gets the page refusal code -32600', async () => {
+    const { resume } = await restarted(never);
+    const resumed = await resumeWallet(resume, soon());
+
+    await expect(resumed!.run((ask) => ask('personal_sign', ['0x69', '0xaa']))).rejects.toMatchObject({
+      code: -32600,
+    });
+  });
+
+  it('given a stored key that does not parse, when the server rejoins, then it is refused and leaves no socket on the relay', async () => {
+    const corrupt = { ...(await restarted(never)).resume, key: 'zz' };
+    await vi.waitFor(() => expect(sessions.get(corrupt.session)?.cli).toBeUndefined());
+
+    await expect(resumeWallet(corrupt, soon())).rejects.toThrow();
+    await new Promise((r) => setTimeout(r, 200));
+    expect(sessions.get(corrupt.session)?.cli).toBeUndefined();
+  });
+
+  it('given saving the session fails, then the run still asks the owner and answers', async () => {
+    const wallet = await openRelay(84532);
+    const opened = await replayingPage(wallet.url, async () => '0xsig');
+
+    const answer = await wallet.run(sign, () => {
+      throw new Error('database down');
+    });
+
+    expect(answer).toBe('0xsig');
+    expect(opened.asked()).toBe(1);
+  });
+
+  it('given the owner pool is full, then a rejoin is busy', async () => {
+    const { resume } = await restarted(never);
+    const fresh = await freshRelay();
+    for (let i = 0; i < fresh.SESSION_LIMITS.owner; i++) await fresh.ownerRelay(84532, soon());
+
+    await expect(fresh.resumeWallet(resume, soon())).rejects.toBeInstanceOf(fresh.WalletBusy);
   });
 });
