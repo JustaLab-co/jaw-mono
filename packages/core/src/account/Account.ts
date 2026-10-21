@@ -66,6 +66,7 @@ import {
     diffRecoveryConfig,
     getCeremony,
     getRecoveryConfig,
+    isFirstRecoverySetup,
     listCeremonies,
     randomSalt,
     recoveryAdminTypedData,
@@ -1483,7 +1484,7 @@ export class Account {
 
         // An EIP-7702 key is not among the account's registered owners, which is
         // what the admin door checks; the account door is its only door.
-        if (!current.enrolled || current.recoveries.length === 0 || this._localAccount) {
+        if (isFirstRecoverySetup(current) || this._localAccount) {
             const calls = buildRecoverySetupCalls(this.address, current, config);
             return await this.sendRecoveryCalls(calls, paymasterUrlOverride, paymasterContextOverride);
         }
