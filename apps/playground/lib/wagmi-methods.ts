@@ -7,7 +7,12 @@ import { SUPPORTED_CHAINS } from '@jaw.id/core';
 // The example list and its parser live in rpc-methods so both registries offer
 // the same demo — the two registries duplicate their chain OPTIONS because the
 // sentinels differ, but this pair has no such split.
-import { DEPOSIT_CHAINS_EXAMPLE, parseDepositChains } from './rpc-methods';
+import {
+  DEPOSIT_CHAINS_EXAMPLE,
+  RECOVERY_SETUP_PARAMETERS,
+  parseDepositChains,
+  recoverySetupParams,
+} from './rpc-methods';
 
 /**
  * Chains for a parameter that names ONE chain, where omitting it falls back to
@@ -122,6 +127,7 @@ export type WagmiHookType =
   | 'useGrantPermissions'
   | 'useRevokePermissions'
   | 'usePermissions'
+  | 'useSetupRecovery'
   | 'useRecovery'
   | 'useGetAssets'
   | 'useCapabilities'
@@ -1033,6 +1039,22 @@ console.log('Permissions:', permissions);`,
     }),
   },
   // ===== Recovery Methods =====
+  {
+    id: 'wallet_setupRecovery',
+    name: 'useSetupRecovery',
+    method: 'wallet_setupRecovery',
+    hookType: 'useSetupRecovery',
+    category: 'recovery',
+    description: 'Ask the wallet to approve a recovery config: the guardians, their waits and the threshold',
+    requiresConnection: true,
+    parameters: RECOVERY_SETUP_PARAMETERS,
+    getCodeSnippet: (params) => `import { useSetupRecovery } from '@jaw.id/wagmi';
+
+const { mutate: setupRecovery } = useSetupRecovery();
+
+setupRecovery(${JSON.stringify(recoverySetupParams(params), null, 2)});`,
+    buildParams: (params) => recoverySetupParams(params),
+  },
   {
     id: 'wallet_getRecovery',
     name: 'useRecovery',

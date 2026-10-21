@@ -34,6 +34,7 @@ import {
   useDisconnect,
   useGrantPermissions,
   useRevokePermissions,
+  useSetupRecovery,
   useAddFunds,
   usePermissions,
   useRecovery,
@@ -65,6 +66,7 @@ const NEEDS_PASSKEY_APPROVAL: ReadonlySet<WagmiMethod['hookType']> = new Set([
   'useSendCalls',
   'useGrantPermissions',
   'useRevokePermissions',
+  'useSetupRecovery',
 ]);
 
 interface WagmiPageContentProps {
@@ -101,6 +103,7 @@ function WagmiPageContent({
   // handleExecute, which runMethod already brackets with runningMethodId.
   const { mutateAsync: grantPermissions } = useGrantPermissions();
   const { mutateAsync: revokePermissions } = useRevokePermissions();
+  const { mutateAsync: setupRecovery } = useSetupRecovery();
   const { mutateAsync: addFunds } = useAddFunds();
   const { mutateAsync: sign } = useSign();
 
@@ -307,6 +310,10 @@ function WagmiPageContent({
             });
             break;
 
+          case 'useSetupRecovery':
+            result = await setupRecovery(params as Parameters<typeof setupRecovery>[0]);
+            break;
+
           case 'useAddFunds':
             // Resolves null: the screen closing is the whole outcome.
             result = await addFunds({
@@ -449,6 +456,7 @@ function WagmiPageContent({
       capabilities,
       grantPermissions,
       revokePermissions,
+      setupRecovery,
       setPermissionsAddress,
       refetchPermissions,
       permissions,
