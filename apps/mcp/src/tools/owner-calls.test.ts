@@ -956,6 +956,23 @@ describe('jaw_send_calls refusals', () => {
       expect(retry.structuredContent!.url).toBe((await opener).structuredContent!.url);
     });
 
+    it('given two links open on the account, when the same key opens the third while a retry of it opens its wallet, then the retry answers that link and closes its wallet', async () => {
+      const [a, b, c] = await sameAccount(3);
+      await send(a);
+      await send(b);
+      let opener!: ReturnType<typeof send>;
+      const openerFirst: OpenWallet = async (chainId, until) => {
+        await (opener = send(c));
+        return wallet()(chainId, until);
+      };
+
+      const retry = await send(c, {}, openerFirst);
+
+      expect(retry[gateCode]).toBeUndefined();
+      expect(retry.structuredContent!.url).toBe((await opener).structuredContent!.url);
+      expect(closed).toHaveLength(1);
+    });
+
     it('given three links open across connections of one account, when a fourth connection asks, then account_busy and no wallet opens', async () => {
       const [a, b, c, d] = await sameAccount(4);
       for (const t of [a, b, c]) await send(t);
