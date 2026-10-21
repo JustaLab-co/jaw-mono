@@ -1,3 +1,13 @@
+## 0.6.0 (2026-10-21)
+
+### 🚀 Features
+
+- **cli:** let the agent ask for an x402 budget ([#535](https://github.com/JustaLab-co/jaw-mono/pull/535))
+
+### ❤️ Thank You
+
+- Mariano Aguero
+
 ## 0.5.3 (2026-10-21)
 
 ### 🩹 Fixes
