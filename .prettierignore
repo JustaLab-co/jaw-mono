@@ -38,6 +38,3 @@ pnpm-lock.yaml
 
 # Binary / generated assets
 **/*.iife.js
-
-# Real proxy payload kept compact
-apps/mcp/src/tools/defi-golden

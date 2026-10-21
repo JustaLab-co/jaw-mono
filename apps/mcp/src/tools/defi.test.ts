@@ -1,9 +1,10 @@
 import { readFileSync } from 'node:fs';
 import { createServer, type IncomingMessage, type Server } from 'node:http';
-import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import type { McpServer } from '@modelcontextprotocol/server';
+import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import { callTool, connect, setTestEnv } from '@/connections/testkit';
 import { useTestDb } from '@/db/test-db';
-import { defiPositions, type DefiDeps, type DefiOutput } from './defi';
+import { defiPositions, portfolioUrl, type DefiDeps, type DefiOutput } from './defi';
 
 const golden = (name: string) =>
   JSON.parse(readFileSync(new URL(`./defi-golden/${name}.json`, import.meta.url), 'utf8'));
@@ -90,8 +91,7 @@ function fake(answer: (call: number) => Response | Promise<Response>) {
   return { sent, deps };
 }
 const json = (body: unknown, status = 200) => Response.json(body, { status });
-const run = (deps: DefiDeps, chainIds?: number[], chainId = 8453) =>
-  defiPositions({ account: ACCOUNT, chainId }, chainIds, deps);
+const run = (deps: DefiDeps, chainIds?: number[]) => defiPositions({ account: ACCOUNT }, chainIds, deps);
 const out = (r: Awaited<ReturnType<typeof run>>) => (r as { structuredContent: DefiOutput }).structuredContent;
 const text = (r: Awaited<ReturnType<typeof run>>) => (r as { content: { text: string }[] }).content[0].text;
 const chainsOf = (s: Sent) => s.url.searchParams.getAll('chainIds').map(Number);
@@ -192,7 +192,7 @@ describe('jaw_get_defi_positions', () => {
   it("given the connection's own testnet chain, then it is refused too", async () => {
     const { deps, sent } = fake(() => json(ok([])));
 
-    const r = (await run(deps, [BASE_SEPOLIA], BASE_SEPOLIA)) as { isError: boolean; content: { text: string }[] };
+    const r = (await run(deps, [BASE_SEPOLIA])) as { isError: boolean; content: { text: string }[] };
 
     expect(r.isError).toBe(true);
     expect(r.content[0].text).toMatch(/^not_a_mainnet: 84532/);
@@ -322,14 +322,15 @@ describe('jaw_get_defi_positions', () => {
 
     expect(p).toMatchObject({
       name: null,
-      type: null,
       protocol: { name: null, url: null },
       valueUsd: null,
       valueUsdChange1d: null,
       rewardsValueUsd: null,
       compositeSymbol: null,
     });
+    expect(p).not.toHaveProperty('type');
     expect(p.deposits[0]).toEqual({
+      category: 'deposit',
       symbol: null,
       name: null,
       address: null,
@@ -353,19 +354,113 @@ describe('jaw_get_defi_positions', () => {
     expect(out(r).summary).toContain('1 position(s) have no USD value and are not in the total');
   });
 
-  it('given more than 100 positions and 20 tokens in a list, then both are cut and the summary says how many were left out', async () => {
+  it('given more than 50 positions and 20 tokens in a list, then both are cut and the summary says how many were left out', async () => {
     const many = Array.from({ length: 25 }, (_, i) => token({ symbol: `T${i}` }));
-    const all = Array.from({ length: 103 }, (_, i) =>
-      position({ id: `p${i}`, valueUsd: 1 }, i === 0 ? { deposits: many } : {})
+    const all = Array.from({ length: 53 }, (_, i) =>
+      position({ id: `p${i}`, valueUsd: i === 0 ? 100 : 1 }, i === 0 ? { deposits: many } : {})
     );
     const { deps } = fake(() => json(ok(all)));
 
     const r = await run(deps);
 
-    expect(out(r).positions).toHaveLength(100);
+    expect(out(r).positions).toHaveLength(50);
     expect(out(r).positions[0].deposits).toHaveLength(20);
-    expect(out(r).omitted).toEqual({ positions: 3, tokens: 5 });
+    expect(out(r).omitted).toMatchObject({ positions: 3, tokens: 5 });
     expect(out(r).summary).toContain('3 more position(s) and 5 more token(s) left out');
+  });
+
+  it('given positions on several chains, then the 50 worth most are kept in the proxy order and the rest are counted with their USD', async () => {
+    const on = (idNumeric: number, values: (number | null)[]) =>
+      values.map((valueUsd, i) =>
+        position({ id: `${idNumeric}-${i}`, chain: { id: 'x', idNumeric, name: 'X', iconUrl: null }, valueUsd })
+      );
+    const one = Array.from({ length: 30 }, (_, i) => i + 1);
+    const ten = Array.from({ length: 30 }, (_, i) => 1000 + i);
+    const { deps } = fake(() => json(ok([...on(1, one), ...on(10, ten), ...on(8453, Array(10).fill(null))])));
+
+    const r = await run(deps, [1, 10, 8453]);
+
+    const shown = out(r).positions;
+    expect(shown).toHaveLength(50);
+    expect(shown.map((p) => p.chainId)).toEqual([...Array(20).fill('eip155:1'), ...Array(30).fill('eip155:10')]);
+    expect(shown.slice(0, 20).map((p) => p.valueUsd)).toEqual(one.slice(10));
+    expect(out(r).omitted).toMatchObject({ positions: 20, valueUsd: 55 });
+    expect(out(r).unpriced).toBe(10);
+    expect(out(r).summary).toContain('20 more position(s)');
+    expect(out(r).summary).toContain('55 USD');
+  });
+
+  it('given a position worth 0 and one with no value past the cap, then the zero stays and the unknown goes', async () => {
+    const worth = [...Array(49).fill(5), 0, null];
+    const { deps } = fake(() => json(ok(worth.map((valueUsd, i) => position({ id: `p${i}`, valueUsd })))));
+
+    const shown = out(await run(deps)).positions;
+
+    expect(shown).toHaveLength(50);
+    expect(shown.map((p) => p.valueUsd)).toEqual(worth.slice(0, 50));
+  });
+
+  it('given positions too big for 32 KB, then the least valuable go first and the answer stays under the cap', async () => {
+    const wide = Array.from({ length: 20 }, (_, i) =>
+      token({ symbol: `S${i}`.padEnd(32, 'x'), name: 'n'.repeat(64), valueUsd: 1 })
+    );
+    const all = Array.from({ length: 10 }, (_, i) =>
+      position({ id: `p${i}`, valueUsd: i + 1 }, { deposits: wide, rewards: wide, loans: wide })
+    );
+    const { deps } = fake(() => json(ok(all)));
+
+    const r = await run(deps);
+
+    const shown = out(r).positions;
+    const left = 10 - shown.length;
+    expect(Buffer.byteLength(JSON.stringify(shown))).toBeLessThanOrEqual(32 * 1024);
+    expect(shown.length).toBeGreaterThan(0);
+    expect(left).toBeGreaterThan(0);
+    expect(shown.map((p) => p.valueUsd)).toEqual(
+      Array.from({ length: shown.length }, (_, i) => 10 - shown.length + 1 + i)
+    );
+    expect(out(r).omitted.positions).toBe(left);
+    expect(out(r).omitted.valueUsd).toBe((left * (left + 1)) / 2);
+  });
+
+  it('given a 409 that lists every chain, then it names each failed chain and asks for fewer chainIds on timeouts', async () => {
+    const detail =
+      'FailedToFetchDefiPositionsException: Failed to fetch DeFi positions for address 0xd8dA6BF26964aF9D7eEd9e03E53415D37aA96045: chain 1: timeout of 8000ms exceeded; chain 10: timeout of 8000ms exceeded; chain 56: Request failed with status code 502';
+    const { deps } = fake(() => json({ statusCode: 409, result: { data: null, error: detail } }, 409));
+
+    const r = (await run(deps)) as { isError: boolean; content: { text: string }[] };
+
+    expect(r.isError).toBe(true);
+    const t = r.content[0].text;
+    expect(t).toMatch(/^all_chains_failed: /);
+    expect(t).toContain('eip155:1, eip155:10: timeout of 8000ms exceeded');
+    expect(t).toContain('eip155:56: Request failed with status code 502');
+    expect(t).toContain('unknown, not empty');
+    expect(t).toContain('fewer chainIds');
+    expect(t).not.toContain('FailedToFetch');
+  });
+
+  it('given a 409 whose errors are not timeouts, then it does not suggest fewer chainIds and keeps the key out', async () => {
+    const error = `Failed to fetch DeFi positions for address 0x1: chain 1: bad api-key=${KEY}`;
+    const { deps } = fake(() => json({ statusCode: 409, result: { data: null, error } }, 409));
+
+    const r = (await run(deps)) as { isError: boolean; content: { text: string }[] };
+
+    expect(r.content[0].text).toContain('eip155:1: bad api-key=[key]');
+    expect(r.content[0].text).not.toContain('fewer chainIds');
+  });
+
+  it('given a payload with a token category, then each token carries it and no position has a type', async () => {
+    const { deps } = fake(() =>
+      json(ok([position({}, { rewards: [token({ category: 'reward' })], loans: [token({ category: 'locked' })] })]))
+    );
+
+    const p = out(await run(deps)).positions[0];
+
+    expect(p).not.toHaveProperty('type');
+    expect(p.deposits[0].category).toBe('deposit');
+    expect(p.loans[0].category).toBe('locked');
+    expect(p.rewards[0].category).toBe('reward');
   });
 
   it('given names carrying instructions, then the model gets them fenced as untrusted and the fields are one clean line', async () => {
@@ -461,5 +556,80 @@ describe('jaw_get_defi_positions through the server', () => {
 
     expect(r.isError).toBe(true);
     expect(hits).toHaveLength(0);
+  });
+
+  it('given a proxy answer over 1 MB, then it is refused as too large and asks for fewer chainIds', async () => {
+    localBody = ok([position({ name: 'x'.repeat(1_100_000) })]);
+
+    const r = await callTool(bearer, 'jaw_get_defi_positions', { chainIds: [1] });
+
+    expect(r.isError).toBe(true);
+    expect(r.content[0].text).toMatch(/^too_large: /);
+    expect(r.content[0].text).toContain('fewer chainIds');
+  });
+
+  it('given a call, then the proxy is given 20 seconds', async () => {
+    localBody = ok([]);
+    const timeout = vi.spyOn(AbortSignal, 'timeout');
+
+    await callTool(bearer, 'jaw_get_defi_positions', { chainIds: [1] });
+
+    expect(timeout).toHaveBeenCalledWith(20_000);
+    timeout.mockRestore();
+  });
+});
+
+describe('portfolioUrl', () => {
+  const none = new Set<string>();
+
+  it.each([
+    ['https://api.justaname.id/proxy/v2', 'https://api.justaname.id/proxy/v2'],
+    ['https://api.justaname.id/proxy/v2///', 'https://api.justaname.id/proxy/v2'],
+  ])('given %s, then it is accepted as %s', (value, expected) => {
+    expect(portfolioUrl(value, none)).toEqual({ url: expected });
+  });
+
+  it('given a local host listed in the insecure hosts, then http is accepted', () => {
+    expect(portfolioUrl('http://127.0.0.1:4000/proxy/v2', new Set(['127.0.0.1:4000']))).toEqual({
+      url: 'http://127.0.0.1:4000/proxy/v2',
+    });
+  });
+
+  it.each([
+    ['not a URL', 'not a url', /no query or hash/],
+    ['a query', 'https://api.justaname.id/proxy/v2?a=1', /no query or hash/],
+    ['a hash', 'https://api.justaname.id/proxy/v2#x', /no query or hash/],
+    ['plain http', 'http://api.justaname.id/proxy/v2', /only https/],
+    ['a private address', 'https://10.0.0.5/proxy/v2', /private address/],
+    ['localhost over https, not listed', 'https://localhost/proxy/v2', /host is local/],
+    ['a .test name over https, not listed', 'https://proxy.test/proxy/v2', /host is local/],
+    ['a loopback address over https, not listed', 'https://127.0.0.1:8443/proxy/v2', /private address/],
+  ])('given %s, then it is refused', (_name, value, why) => {
+    const r = portfolioUrl(value, none);
+
+    expect(r).toHaveProperty('error');
+    expect((r as { error: string }).error).toMatch(why);
+    expect((r as { error: string }).error).toContain('JAW_MCP_PORTFOLIO_URL');
+  });
+
+  it('given a misconfigured URL, then the tool refuses as server_misconfigured without calling the proxy', async () => {
+    const before = hits.length;
+    const was = process.env.JAW_MCP_PORTFOLIO_URL;
+    process.env.JAW_MCP_PORTFOLIO_URL = 'https://api.justaname.id/proxy/v2?a=1';
+    vi.resetModules();
+    const { registerDefiTool } = await import('./defi');
+    let handler: (args: object, ctx: object) => Promise<{ isError: boolean; content: { text: string }[] }> = vi.fn();
+    registerDefiTool({
+      registerTool: (_name: string, _def: object, h: typeof handler) => (handler = h),
+    } as unknown as McpServer);
+
+    const r = await handler({}, {});
+
+    process.env.JAW_MCP_PORTFOLIO_URL = was;
+    expect(r.isError).toBe(true);
+    expect(r.content[0].text).toMatch(
+      /^server_misconfigured: JAW_MCP_PORTFOLIO_URL must be a URL with no query or hash/
+    );
+    expect(hits).toHaveLength(before);
   });
 });
