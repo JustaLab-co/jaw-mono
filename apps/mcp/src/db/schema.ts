@@ -406,6 +406,9 @@ export const permissionRequests = pgTable(
       .on(t.connectionId)
       .where(sql`${t.method} = 'sign' and ${t.state} = 'awaiting_owner'`),
     uniqueIndex('permission_requests_names_lost_index').on(t.namesLost),
+    index('permission_requests_ended_sign_index')
+      .on(t.updatedAt)
+      .where(sql`${t.method} = 'sign' and ${t.state} <> 'awaiting_owner'`),
     index('permission_requests_unconfirmed_index')
       .on(t.updatedAt)
       .where(sql`${t.method} = 'revoke' and ${t.state} = 'approved' and ${t.code} = 'unconfirmed'`),

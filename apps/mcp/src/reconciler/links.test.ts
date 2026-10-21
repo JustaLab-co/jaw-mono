@@ -13,7 +13,7 @@ import type { ReadPermission } from '@/grants/permission';
 import { x402Budget } from '@/grants/store';
 import { markRevoked, type LookUp } from '@/grants/revokes';
 import { sign } from '@/tools/sign';
-import { reconcile } from './run';
+import { purge, reconcile } from './run';
 
 setTestEnv();
 
@@ -442,5 +442,47 @@ describe('reconciler: owner link requests', () => {
     expect(report.links.revoked).toBe(2);
     expect(await rowOf(mine)).toMatchObject({ code: null });
     expect(await rowOf(theirs)).toMatchObject({ code: null });
+  });
+
+  it('given sign requests that ended over a week ago, when the purge runs, then only those are deleted', async () => {
+    const sign = { method: 'sign' as const, requestHash: 'h', signKind: 'message' as const };
+    const weekAgo = new Date(Date.now() - 8 * 86_400_000);
+    const old = await row({ ...sign, idempotencyKey: 'old', state: 'approved', signature: '0x01', updatedAt: weekAgo });
+    const recent = await row({ ...sign, idempotencyKey: 'recent', state: 'approved', signature: '0x02' });
+    const waiting = await row({ ...sign, idempotencyKey: 'waiting', updatedAt: weekAgo });
+    const oldGrant = await row({ state: 'owner_declined', updatedAt: weekAgo });
+
+    await purge();
+
+    expect(await rowOf(old)).toBeUndefined();
+    expect(await rowOf(recent)).toBeDefined();
+    expect(await rowOf(waiting)).toBeDefined();
+    expect(await rowOf(oldGrant)).toBeDefined();
+    const [{ n }] = await getDb()
+      .select({ n: sql<number>`count(*)::int` })
+      .from(permissionRequests)
+      .where(eq(permissionRequests.method, 'sign'));
+    expect(n).toBe(2);
+  });
+
+  it('given a sign request purged a week after it ended, when its key is sent again, then a new link opens for the owner', async () => {
+    const old = { method: 'sign' as const, idempotencyKey: 'week-old', requestHash: 'h', signKind: 'message' as const };
+    await row({ ...old, state: 'approved', signature: '0x01', updatedAt: new Date(Date.now() - 8 * 86_400_000) });
+    const idle = async (): Promise<Wallet> => ({
+      url: 'http://keys.test/cli-bridge?session=new',
+      run: () => new Promise(() => {}),
+      close: () => {},
+    });
+    const ask = () => sign(t, { message: 'again', idempotencyKey: 'week-old' }, { openWallet: idle });
+
+    const before = await ask();
+    await purge();
+    const after = await ask();
+
+    expect(before.content[0].text).toMatch(/^idempotency_conflict: /);
+    expect(after.structuredContent).toMatchObject({
+      state: 'awaiting_owner',
+      url: 'http://keys.test/cli-bridge?session=new',
+    });
   });
 });

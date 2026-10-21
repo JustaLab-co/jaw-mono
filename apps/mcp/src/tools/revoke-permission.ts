@@ -7,18 +7,22 @@ import { tenant, type Tenant } from '@/connections/auth';
 import { APPROVE_WITHIN_MS, SUPPORTED_CHAINS } from '@/connections/config';
 import { ownerRelay, type Ask, type OpenWallet } from '@/connections/relay';
 import { getDb } from '@/db/client';
+import { countHit } from '@/db/settings';
 import { grants } from '@/db/schema';
 import { readOnChain, type ReadPermission } from '@/grants/permission';
 import {
   lostBefore,
   lostPreamble,
   openLink,
+  revokeHeld,
   type Claim,
   type Outcome,
   type PermissionRequestRow,
 } from '@/grants/requests';
 import { fromStore, markRevoked, readState, UNCONFIRMED, type LookUp } from '@/grants/revokes';
+import { RATE_WINDOW_MS } from '@/lib/edge';
 import { reply } from '@/lib/fence';
+import { LINK_RATE_LIMIT } from '@/owner-calls/cap';
 import { ACCOUNT_BUSY, refusal } from './reply';
 
 const revokeInput = z.strictObject({
@@ -136,6 +140,12 @@ async function answer(target: Target, row: PermissionRequestRow) {
 export async function revokePermission(t: Tenant, input: RevokeInput, deps = DEFAULTS) {
   const chainId = input.chainId ?? t.chainId;
   if (!SUPPORTED_CHAINS[chainId]) return refusal(`unsupported_chain: chain ${chainId} is not one this server reads.`);
+  if (
+    !(await revokeHeld(t, input.permissionId)) &&
+    (await countHit(`owner-revoke:${t.connectionId}`, RATE_WINDOW_MS)) > LINK_RATE_LIMIT
+  ) {
+    return refusal('rate_limited: too many revoke requests on this connection. Wait a minute.');
+  }
   const target = await findPermission(t, input.permissionId as Hex, chainId, deps.lookUp);
   if (typeof target === 'string') return refusal(target);
   if (target.permission.end * 1000 <= Date.now()) {
