@@ -287,18 +287,19 @@ jaw mcp
 
 ### MCP Tools
 
-| Tool                 | Description                                                                                                         |
-| -------------------- | ------------------------------------------------------------------------------------------------------------------- |
-| `jaw_rpc`            | Execute any JAW.id wallet RPC method. Opens the browser for a passkey on anything that uses the account.            |
-| `jaw_pay_and_fetch`  | Fetch an HTTP resource, paying an x402 challenge with the local session key when one appears. No browser.           |
-| `jaw_x402_log`       | Read the local payment ledger: every attempt, paid, failed or refused, with amount, asset, network, nonce and hash. |
-| `jaw_x402_balance`   | The session payer's USDC balance on a network. The payment float, not the budget.                                   |
-| `jaw_discover`       | Search the x402 Bazaar for payable endpoints. The catalog is fenced as untrusted.                                   |
-| `jaw_session_status` | The local session: address, owner, permission id, chain, expiry, and what the chain says about the permission.      |
-| `jaw_status`         | Whether a browser-paired relay session exists, and the configuration in use.                                        |
-| `jaw_disconnect`     | Close the relay session and the browser tab.                                                                        |
-| `jaw_config_show`    | Show the current CLI configuration, secrets redacted.                                                               |
-| `jaw_config_set`     | Set a CLI configuration value.                                                                                      |
+| Tool                    | Description                                                                                                                  |
+| ----------------------- | ---------------------------------------------------------------------------------------------------------------------------- |
+| `jaw_rpc`               | Execute any JAW.id wallet RPC method. Opens the browser for a passkey on anything that uses the account.                     |
+| `jaw_pay_and_fetch`     | Fetch an HTTP resource, paying an x402 challenge with the local session key when one appears. No browser.                    |
+| `jaw_grant_permissions` | Ask the owner for a daily USDC budget: creates the session key and waits for the wallet approval. Bounded by `grantCeiling`. |
+| `jaw_x402_log`          | Read the local payment ledger: every attempt, paid, failed or refused, with amount, asset, network, nonce and hash.          |
+| `jaw_x402_balance`      | The session payer's USDC balance on a network. The payment float, not the budget.                                            |
+| `jaw_discover`          | Search the x402 Bazaar for payable endpoints. The catalog is fenced as untrusted.                                            |
+| `jaw_session_status`    | The local session: address, owner, permission id, chain, expiry, and what the chain says about the permission.               |
+| `jaw_status`            | Whether a browser-paired relay session exists, and the configuration in use.                                                 |
+| `jaw_disconnect`        | Close the relay session and the browser tab.                                                                                 |
+| `jaw_config_show`       | Show the current CLI configuration, secrets redacted.                                                                        |
+| `jaw_config_set`        | Set a CLI configuration value.                                                                                               |
 
 ### MCP Resources
 

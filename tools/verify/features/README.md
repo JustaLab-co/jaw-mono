@@ -29,6 +29,7 @@ The maintained source for verifying what a user of the jaw CLI, the MCP server a
 | Pay for a resource        | `jaw x402 pay`                                                           | [x402-pay.md](x402-pay.md)                             |
 | Readiness and history     | `jaw x402 status`, `jaw x402 log`                                        | [x402-status-log.md](x402-status-log.md)               |
 | Pay from an agent         | MCP `jaw_pay_and_fetch`, `jaw_x402_log`, `jaw_status`                    | [mcp-pay-and-fetch.md](mcp-pay-and-fetch.md)           |
+| Budget from an agent      | MCP `jaw_grant_permissions`                                              | [mcp-grant.md](mcp-grant.md)                           |
 | Real settlement           | staging endpoint with the real session; passkey payment from the account | [live-settlement.md](live-settlement.md)               |
 | Hosted server             | `apps/mcp` over HTTP with Postgres                                       | [hosted-mcp.md](hosted-mcp.md)                         |
 | Swap from an agent        | hosted `jaw_swap`, `jaw_swap_status`                                     | [hosted-swap.md](hosted-swap.md)                       |

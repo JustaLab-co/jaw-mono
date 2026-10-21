@@ -146,13 +146,13 @@ Set `allowedPayTo` to the recipients you expect. It pins where funds can go even
 
 These keys are deliberately unreachable from the MCP tools. An agent must not be able to raise its own spending caps, only a human at a terminal.
 
-The same split covers what an agent may ask to be granted. An agent with shell access can run `jaw session setup --x402 --limit` itself, and without a bound the browser approval screen is the only check on the number it picks. Set a ceiling once, at a terminal:
+The same split covers what an agent may ask to be granted. An agent can ask for a budget through the `jaw_grant_permissions` MCP tool, and one with shell access can run `jaw session setup --x402 --limit` itself. Without a bound, the browser approval screen is the only check on the number it picks. Set a ceiling once, at a terminal:
 
 ```bash
 jaw config set grantCeiling 10/day
 ```
 
-A grant is refused when it asks for more than that allowance, or when it resets more often than that period, since the same allowance on a shorter period is more money over the same time. It is checked against the resolved permission, so a hand-written `--permissions` is bounded by it too. The ceiling is an amount of USDC, so with one set, a spend it cannot be priced against is refused rather than waved through: another token, or a chain with no USDC in the registry. Unset means no ceiling.
+A grant is refused when it asks for more than that allowance, or when it resets more often than that period, since the same allowance on a shorter period is more money over the same time. It is checked against the resolved permission, so a hand-written `--permissions` is bounded by it too, and so is every `jaw_grant_permissions` call, before a key is created or the browser opens. The MCP tools cannot change it. The ceiling is an amount of USDC, so with one set, a spend it cannot be priced against is refused rather than waved through: another token, or a chain with no USDC in the registry. Unset means no ceiling.
 
 :::info
 The ceiling only reaches grants made from this machine, so treat it as a convenience for terminal users rather than the control. An agent driving the wallet from a host with no terminal is not bounded by it. What stands in front of every grant either way is the browser approval, which is where the human signs.

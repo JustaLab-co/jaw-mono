@@ -37,6 +37,8 @@ export interface BridgeOptions {
   ens?: string;
   timeout?: number;
   connectTimeout?: number;
+  /** Called with the approval URL before a new browser session is opened. */
+  onUrl?: (url: string) => void;
 }
 
 /**
@@ -166,6 +168,7 @@ async function connectBridge(
     openBrowser
       ? async () => {
           const bridgeUrl = buildBridgeUrl(keysUrl, relaySession.session, relayUrl, relaySession.publicKey);
+          options.onUrl?.(bridgeUrl);
           // Over SSH, in a container, or under a test driver, there is no
           // browser worth opening and `open` either does nothing or opens one on
           // the wrong machine, leaving the command waiting on an approval nobody

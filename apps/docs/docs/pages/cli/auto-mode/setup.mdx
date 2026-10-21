@@ -13,6 +13,10 @@ Use the [Config Generator](/cli/configuration) to build your config.
 
 ## Create a Session
 
+:::info
+An agent using the [MCP server](/cli/mcp) does not need this step for payments. It calls `jaw_grant_permissions` when a payment first needs a session, and the owner approves a daily USDC budget in the browser. Run `jaw session setup` for any other scope, or to replace a session that is still active.
+:::
+
 ```bash
 jaw session setup --chain 84532
 ```
