@@ -8,6 +8,7 @@ import { WalletBusy, type OpenWallet } from '@/connections/relay';
 import {
   approvedOnChain,
   callTool,
+  grantBudget,
   connect,
   fakeWallet,
   owner,
@@ -30,11 +31,12 @@ const WETH = '0x4200000000000000000000000000000000000006';
 const ROUTER = '0x2626664c2603336E57B271c5C0b26F421741e481';
 const DAY_MS = 86_400_000;
 
-async function connected() {
+async function connected(withBudget = true) {
   const signer = owner();
   const c = await connect(signer);
   const t = (await verifyBearer(c.access_token))?.extra?.tenant as Tenant;
-  return { c, t, signer, connectedWith: (await x402Budget(t.connectionId))?.permissionId };
+  const budget = withBudget ? await grantBudget(t, signer) : undefined;
+  return { c, t, signer, connectedWith: budget?.permissionId };
 }
 
 async function grant(
@@ -365,7 +367,7 @@ describe('jaw_grant_permissions', () => {
   });
 
   it('given an approval, then the owner link is recorded approved with the id the wallet granted', async () => {
-    const { t, signer } = await connected();
+    const { t, signer } = await connected(false);
 
     await grant(t, signer, twoByTwo);
 
@@ -374,7 +376,7 @@ describe('jaw_grant_permissions', () => {
   });
 
   it('given a wallet answer that is not what was asked, then the link records the id it answered, so it can be revoked', async () => {
-    const { t, signer } = await connected();
+    const { t, signer } = await connected(false);
     let answered: string | undefined;
 
     await grant(t, signer, twoByTwo, (granted) => {

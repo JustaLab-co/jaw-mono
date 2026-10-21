@@ -4,6 +4,7 @@ import { randomBytes } from 'node:crypto';
 import { beforeAll, describe, expect, it, vi } from 'vitest';
 import { verifyBearer, type Tenant } from '@/connections/auth';
 import {
+  grantBudget,
   approvedOnChain,
   callTool,
   connect,
@@ -13,6 +14,7 @@ import {
   walletAnswers,
   walletsSettled,
 } from '@/connections/testkit';
+import { spends } from '@/connections/scopes';
 import { getDb } from '@/db/client';
 import { connections, grants } from '@/db/schema';
 import { TEST_PG_URL, useTestDb, useTestPostgres } from '@/db/test-db';
@@ -52,7 +54,8 @@ async function connected(scope = 'wallet:read x402:pay') {
   const signer = owner();
   const c = await connect(signer, { scope });
   const t = (await verifyBearer(c.access_token))?.extra?.tenant as Tenant;
-  return { c, t, signer, connectedWith: (await x402Budget(t.connectionId))?.permissionId };
+  const budget = spends(t.scopes) ? await grantBudget(t, signer) : undefined;
+  return { c, t, signer, connectedWith: budget?.permissionId };
 }
 
 /** Asks for a budget through a wallet that answers as `answer` says, and waits for it to settle. */

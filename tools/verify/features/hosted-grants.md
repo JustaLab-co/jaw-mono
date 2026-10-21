@@ -4,7 +4,7 @@
 
 ## Sub-features
 
-- `grant-preset`: `x402Budget` asks for the same USDC transfer call and daily USDC spend the connect page asks for, with `prefundSpender`, and the row reads `kind = x402-budget` and `period = day`.
+- `grant-preset`: `x402Budget` asks for a USDC transfer call and a daily USDC spend, with `prefundSpender`, and the row reads `kind = x402-budget` and `period = day`.
 - `grant-custom`: calls and spends give a row with `kind = custom`. With one spend the row holds its token, allowance and period; with several they are null and the struct in `permission` holds them all.
 - `grant-link-sweep`: a waiting grant link no server renews any more is ended by the reconciler, as `link-sweep` in hosted-revoke.md describes.
 - `grant-clamp`: an `expiresAt` later than the connection's end asks the wallet for the connection's end, and the result's `expiresAt` says so.

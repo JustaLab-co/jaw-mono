@@ -19,7 +19,7 @@ import { entryPoint08Abi, entryPoint08Address, getUserOperationError } from 'vie
 import { afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
 import { verifyBearer, type Tenant } from '@/connections/auth';
 import { revokeByGrant } from '@/connections/rows';
-import { callTool, connect, setTestEnv } from '@/connections/testkit';
+import { owner, grantBudget, callTool, connect, setTestEnv } from '@/connections/testkit';
 import { getDb } from '@/db/client';
 import { connections, sends, settings } from '@/db/schema';
 import { lockWaiters, TEST_PG_URL, useTestDb, useTestPostgres } from '@/db/test-db';
@@ -133,8 +133,10 @@ afterEach(async () => {
 const NOW = () => Math.floor(Date.now() / 1000);
 
 async function withCustomGrant(perDay = 1_000_000n, end = NOW() + 86_400, target: Address = USDC) {
-  const c = await connect();
+  const signer = owner();
+  const c = await connect(signer);
   const t = (await verifyBearer(c.access_token))?.extra?.tenant as Tenant;
+  await grantBudget(t, signer);
   const permissionId = `0x${randomBytes(32).toString('hex')}` as Hex;
   const permission = {
     account: t.account,

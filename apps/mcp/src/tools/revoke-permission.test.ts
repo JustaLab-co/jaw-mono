@@ -6,6 +6,7 @@ import { beforeAll, describe, expect, it, vi } from 'vitest';
 import { verifyBearer, type Tenant } from '@/connections/auth';
 import { WalletBusy, WalletRefused, type OpenWallet } from '@/connections/relay';
 import {
+  grantBudget,
   approvedOnChain,
   callTool,
   connect,
@@ -15,6 +16,7 @@ import {
   walletAnswers,
   walletsSettled,
 } from '@/connections/testkit';
+import { spends } from '@/connections/scopes';
 import { getDb } from '@/db/client';
 import { grants, permissionRequests } from '@/db/schema';
 import { TEST_PG_URL, useTestDb, useTestPostgres } from '@/db/test-db';
@@ -37,7 +39,8 @@ const tenantOf = async (token: string) => (await verifyBearer(token))?.extra?.te
 async function connected(signer = owner(), scope?: string) {
   const c = await connect(signer, scope ? { scope } : {});
   const t = await tenantOf(c.access_token);
-  return { c, t, signer, budget: (await x402Budget(t.connectionId))?.permissionId as Hex };
+  const budget = spends(t.scopes) ? await grantBudget(t, signer) : undefined;
+  return { c, t, signer, budget: budget?.permissionId as Hex };
 }
 
 function fakeChain() {
@@ -92,7 +95,12 @@ const requestsOf = (permissionId: string) =>
   getDb()
     .select()
     .from(permissionRequests)
-    .where(sql`lower(${permissionRequests.permissionId}) = ${permissionId.toLowerCase()}`);
+    .where(
+      and(
+        eq(permissionRequests.method, 'revoke'),
+        sql`lower(${permissionRequests.permissionId}) = ${permissionId.toLowerCase()}`
+      )
+    );
 
 const grantRow = async (permissionId: string) =>
   (await getDb().select().from(grants).where(eq(grants.permissionId, permissionId)))[0];

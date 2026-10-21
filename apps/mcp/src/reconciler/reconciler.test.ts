@@ -1,7 +1,7 @@
 import { createHash, randomBytes } from 'node:crypto';
 import type { ChainClients, PermissionState } from '@jaw.id/agent';
 import { and, count, eq, inArray, isNotNull, sql } from 'drizzle-orm';
-import { PERMISSION_MANAGER_ABI } from '@jaw.id/agent';
+import { PERMISSION_MANAGER_ABI, usdcForNetwork } from '@jaw.id/agent';
 import {
   decodeFunctionData,
   encodeAbiParameters,
@@ -32,9 +32,11 @@ import {
   ISSUER,
 } from '@/connections/testkit';
 import { takeSealedKey } from '@/connections/rows';
+import { spends } from '@/connections/scopes';
 import { getDb } from '@/db/client';
 import { auditEvents, connections, grants, oauthPayloads, ownerCalls, payments } from '@/db/schema';
 import { useTestDb, withoutOwnerCallsGuard } from '@/db/test-db';
+import { budgetGrant, checkGranted, recordGrant } from '@/grants/permission';
 import { fakeChain, type FakeEvent } from '@/owner-calls/chain-testkit';
 import type { ReadReceipt } from '@/owner-calls/receipt';
 import { decline, insertOwnerCall, markSent, markSendStarted } from '@/owner-calls/store';
@@ -515,12 +517,14 @@ describe('cron and metrics routes', () => {
 });
 
 describe('given an approval the owner never completed, past its expiry', () => {
-  /** A pending connection whose owner signed in and, with `scope` that spends, granted the budget. */
+  /** A pending connection whose owner signed in and, with `scope` that spends, holds a budget from connecting. */
   async function abandoned(scope = 'wallet:read x402:pay') {
     const signer = owner();
     setWallet({ openWallet: fakeWallet(walletAnswers(signer)) });
     const start = await startAuthorization(new Browser(), { scope });
     await walletsSettled();
+    const [pending] = await getDb().select().from(connections).where(eq(connections.interactionUid, start.uid!));
+    if (spends(pending.scopes)) await connectBudget(pending, signer);
     const [row] = await getDb()
       .update(connections)
       .set({ expiresAt: new Date(Date.now() - 1_000) })
@@ -579,6 +583,21 @@ describe('given an approval the owner never completed, past its expiry', () => {
   });
 });
 
+/** A budget granted while connecting, which connections made before connect stopped asking for one still hold. */
+async function connectBudget(row: typeof connections.$inferSelect, signer: ReturnType<typeof owner>) {
+  const grant = budgetGrant({
+    chainId: row.chainId,
+    spender: row.sessionAddress as Address,
+    token: usdcForNetwork(`eip155:${row.chainId}`)!.address,
+    allowance: 1_000_000n,
+    expiry: Math.floor(row.expiresAt.getTime() / 1000),
+  });
+  const answer = await walletAnswers(signer)('wallet_grantPermissions', [grant]);
+  const checked = await checkGranted(row.chainId, grant, 'x402-budget', answer, approvedOnChain);
+  if (typeof checked === 'string') throw new Error(checked);
+  await getDb().transaction((tx) => recordGrant(tx, row.id, checked));
+}
+
 describe('given an activated connection whose code was never exchanged, past the exchange window', () => {
   /** An active connection the owner completed but whose authorization code was never exchanged. */
   async function activeNeverExchanged(scope = 'wallet:read x402:pay') {
@@ -587,12 +606,13 @@ describe('given an activated connection whose code was never exchanged, past the
     browser.wallet = {
       openWallet: fakeWallet(walletAnswers(signer)),
       verify: verifyLocally,
-      readPermission: approvedOnChain,
     };
     const start = await startAuthorization(browser, { scope });
     if (!start.uid || !start.ticket) throw new Error('did not reach the wallet');
     await walletsSettled();
     await follow(browser, `${ISSUER}/interaction/${start.uid}/complete?ticket=${start.ticket}`);
+    const [connected] = await getDb().select().from(connections).where(eq(connections.interactionUid, start.uid!));
+    if (spends(connected.scopes)) await connectBudget(connected, signer);
     // 181 seconds: past the 180 s exchange window (60 s AuthorizationCode TTL + 120 s margin).
     const [row] = await getDb()
       .update(connections)
@@ -636,7 +656,6 @@ describe('given an activated connection whose code was never exchanged, past the
     browser.wallet = {
       openWallet: fakeWallet(walletAnswers(signer)),
       verify: verifyLocally,
-      readPermission: approvedOnChain,
     };
     const start = await startAuthorization(browser, {});
     if (!start.uid || !start.ticket) throw new Error('did not reach the wallet');
@@ -666,7 +685,6 @@ describe('given an activated connection whose code was never exchanged, past the
     browser.wallet = {
       openWallet: fakeWallet(walletAnswers(signer)),
       verify: verifyLocally,
-      readPermission: approvedOnChain,
     };
     const start = await startAuthorization(browser, { scope: 'wallet:read x402:pay' });
     if (!start.uid || !start.ticket) throw new Error('did not reach the wallet');

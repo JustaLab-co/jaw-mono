@@ -18,8 +18,6 @@ export interface Config {
   paymasterApiKey: string | undefined;
   /** Base units a refill brings the payer up to, so refills are rare; the grant's cap still bounds it. */
   floatTarget: bigint;
-  /** USDC base units per day a connection that pays asks for when it connects. */
-  dailyBudget: bigint;
   swapUrl: string;
   /** Sent as x-api-key on swap quotes; the backend lists it in X402_ALLOWED_API_KEYS so a quote costs nothing. */
   swapApiKey: string | undefined;
@@ -53,7 +51,6 @@ export function config(): Config {
     insecureFetchHosts,
     paymasterApiKey: process.env.JAW_MCP_API_KEY || undefined,
     floatTarget: baseUnits('JAW_MCP_FLOAT_TARGET', process.env.JAW_MCP_FLOAT_TARGET || '250000'),
-    dailyBudget: baseUnits('JAW_MCP_DAILY_BUDGET', process.env.JAW_MCP_DAILY_BUDGET || '1000000'),
     swapUrl: swapUrl(process.env.JAW_MCP_SWAP_URL || 'https://api.justaname.id/proxy/v2', insecureFetchHosts),
     swapApiKey: process.env.JAW_MCP_SWAP_API_KEY || undefined,
     swapQuoteTtlSec: quoteTtl(process.env.JAW_MCP_SWAP_QUOTE_TTL_SEC || '300'),

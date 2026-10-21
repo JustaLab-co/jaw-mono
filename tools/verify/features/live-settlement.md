@@ -11,7 +11,7 @@ A payment that a real facilitator settles on Base Sepolia: the only proof that s
 ## How to get to it (user POV)
 
 - Terminal with a real session: `jaw x402 pay https://api-staging.justaname.id/ens/v2/resolve?ens=vitalik.eth --pay`.
-- Passkey: keys.jaw.id signing for the smart account, through `jaw rpc call eth_signTypedData_v4`. The hosted server has no such step: it pays within the budget the owner approved when connecting.
+- Passkey: keys.jaw.id signing for the smart account, through `jaw rpc call eth_signTypedData_v4`. The hosted server has no such step: it pays within the budget the owner approved through `jaw_grant_permissions`.
 
 ## Driving it with live-pay.sh and passkey-pay.mjs
 

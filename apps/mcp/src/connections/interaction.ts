@@ -1,20 +1,19 @@
 import { createHash, createHmac, randomBytes } from 'node:crypto';
 import type { ServerResponse } from 'node:http';
-import { sanitizeLine, usdcForNetwork } from '@jaw.id/agent';
+import { sanitizeLine } from '@jaw.id/agent';
 import { eq } from 'drizzle-orm';
-import { isAddress, isAddressEqual, isHex, stringToHex, type Address } from 'viem';
+import { isAddress, isHex, stringToHex, type Address } from 'viem';
 import { generatePrivateKey, privateKeyToAddress } from 'viem/accounts';
 import { getDb } from '@/db/client';
 import { connections } from '@/db/schema';
-import { budgetGrant, checkGranted, readOnChain, recordGrant, type ReadPermission } from '@/grants/permission';
 import { verifyOnChain, type VerifySignature } from '@/lib/chain';
 import { errorLabel, ipKey, log } from '@/lib/edge';
 import { bridge } from './bridge';
 import { config } from './config';
 import { provider } from './provider';
 import { connectRelay, type Ask, type OpenWallet } from './relay';
-import { activate, armTicket, CONNECTION_TTL_MS, countLive, findClaimable, pendingFor } from './rows';
-import { CONNECTION_SCOPES, FIRST_PARTY_CLIENTS, spends, type ConnectionScope } from './scopes';
+import { activate, armTicket, countLive, findClaimable, pendingFor } from './rows';
+import { CONNECTION_SCOPES, FIRST_PARTY_CLIENTS, type ConnectionScope } from './scopes';
 import { seal } from './seal';
 
 const UID = /^[A-Za-z0-9_-]{10,64}$/;
@@ -27,10 +26,9 @@ const COMPLETE_WITHIN_MS = 60_000;
 export interface InteractionDeps {
   openWallet: OpenWallet;
   verify: VerifySignature;
-  readPermission: ReadPermission;
 }
 
-const DEFAULTS: InteractionDeps = { openWallet: connectRelay, verify: verifyOnChain, readPermission: readOnChain };
+const DEFAULTS: InteractionDeps = { openWallet: connectRelay, verify: verifyOnChain };
 
 interface Asked {
   uid: string;
@@ -122,31 +120,9 @@ async function signIn(a: Asked, ask: Ask, deps: InteractionDeps): Promise<Addres
   return account;
 }
 
-/** The budget the account granted the spender, as the chain confirms it. */
-async function askBudget(a: Asked, ask: Ask, account: Address, spender: Address, deps: InteractionDeps) {
-  const usdc = usdcForNetwork(`eip155:${a.chainId}`);
-  if (!usdc) throw new Error('no USDC on this chain');
-  const grant = budgetGrant({
-    chainId: a.chainId,
-    spender,
-    token: usdc.address,
-    allowance: config().dailyBudget,
-    expiry: Math.floor((Date.now() + CONNECTION_TTL_MS) / 1000),
-  });
-  const answer = await ask('wallet_grantPermissions', [grant]);
-  const checked = await checkGranted(a.chainId, grant, 'x402-budget', answer, deps.readPermission);
-  if (typeof checked === 'string') throw new Error(checked);
-  if (!isAddressEqual(checked.account as Address, account)) throw new Error('grant_mismatch');
-  return checked;
-}
-
 // What the page may say about a failure: the refusals this module raises, never
 // another error's message, which can quote a query and its parameters.
 const SHOWN = new Set([
-  'invalid_response',
-  'grant_mismatch',
-  'grant_not_found',
-  'verification_unavailable',
   'bad_signature',
   'already_connected',
   'another_account_signed_in_first',
@@ -206,7 +182,6 @@ async function pending(a: Asked, account: Address) {
     expiresAt: a.expiresAt,
   });
   if (!row) throw new Error('another_account_signed_in_first');
-  return { id: row.id, spender: row.sessionAddress as Address };
 }
 
 async function start(a: Asked, deps: InteractionDeps, keys: string[]): Promise<Job> {
@@ -219,12 +194,8 @@ async function start(a: Asked, deps: InteractionDeps, keys: string[]): Promise<J
       if ((await countLive(account)) >= CONNECTIONS_PER_ACCOUNT) {
         throw new Error('too many active connections; disconnect one from its app, or wait for one to expire');
       }
-      const { id, spender } = await pending(a, account);
-      const grant = spends(a.scopes) ? await askBudget(a, ask, account, spender, deps) : undefined;
-      await getDb().transaction(async (tx) => {
-        if (grant) await recordGrant(tx, id, grant);
-        if (!(await armTicket(a.uid, sha256(ticketOf(a.uid)), tx))) throw new Error('already_connected');
-      });
+      await pending(a, account);
+      if (!(await armTicket(a.uid, sha256(ticketOf(a.uid))))) throw new Error('already_connected');
     })
     .catch((err: unknown) => {
       job.failed = reasonOf(err);
@@ -335,13 +306,7 @@ function page(status: number, error: string, asked?: Asked): Response {
 }
 
 function connectBody(a: Asked): string {
-  const budget = Number(config().dailyBudget) / 1e6;
-  const steps = spends(a.scopes)
-    ? [
-        'Sign in with your passkey.',
-        `Approve a budget of up to ${budget} USDC a day. Payments within it need nothing more from you.`,
-      ]
-    : ['Sign in with your passkey.'];
+  const steps = ['Sign in with your passkey.', 'Sign the message that shows the code below.'];
   // JSON in a script: "<" escaped so nothing in it can close the tag.
   const data = JSON.stringify({ uid: a.uid, ticket: ticketOf(a.uid) }).replace(/</g, '\\u003c');
   const from = a.clientHost

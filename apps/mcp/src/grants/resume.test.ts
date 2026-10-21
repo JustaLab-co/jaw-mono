@@ -8,7 +8,15 @@ import { config } from '@/connections/config';
 import { replayingPage, startRelay } from '@/connections/fake-relay';
 import { ownerRelay, type Ask, type OpenWallet } from '@/connections/relay';
 import { sealResume } from '@/connections/seal';
-import { approvedOnChain, connect, owner, setTestEnv, walletAnswers, walletsSettled } from '@/connections/testkit';
+import {
+  approvedOnChain,
+  connect,
+  grantBudget,
+  owner,
+  setTestEnv,
+  walletAnswers,
+  walletsSettled,
+} from '@/connections/testkit';
 import { getDb } from '@/db/client';
 import { connections, grants, permissionRequests } from '@/db/schema';
 import { TEST_PG_URL, useTestDb, useTestPostgres } from '@/db/test-db';
@@ -17,7 +25,7 @@ import { revokePermission, type RevokeDeps } from '@/tools/revoke-permission';
 import { signWork, sign } from '@/tools/sign';
 import { checkGranted, recordGrant, type GrantRequest, type ReadPermission } from './permission';
 import { closeLapsedLinks, resumeOpen } from './requests';
-import { LIVE_GRANTS_PER_CONNECTION, x402Budget } from './store';
+import { LIVE_GRANTS_PER_CONNECTION } from './store';
 
 const relay = await startRelay();
 setTestEnv();
@@ -331,7 +339,7 @@ describe('a grant request whose server restarted', () => {
 describe('a revoke request whose server restarted', () => {
   it('given the page is still open, when the agent asks again, then it waits on the same link, resumes it, and the revoke the owner approves is recorded', async () => {
     const { signer, t } = await connected();
-    const permissionId = (await x402Budget(t.connectionId))!.permissionId as Hex;
+    const permissionId = (await grantBudget(t, signer))!.permissionId as Hex;
     const revoked = new Set<string>();
     const readPermission: ReadPermission = async ({ permissionId: id }) => ({
       status: 'ok',
@@ -354,7 +362,7 @@ describe('a revoke request whose server restarted', () => {
       },
     };
     await revokePermission(t, { permissionId }, deps);
-    const [row] = await rowsOf(t);
+    const row = (await rowsOf(t)).find((r) => r.method === 'revoke')!;
     const page = await replayingPage(row.walletUrl, owned.answer);
     await vi.waitFor(() => expect(page.ids).toHaveLength(2));
     await lapse(row.id);
