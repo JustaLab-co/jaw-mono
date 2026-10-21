@@ -459,6 +459,7 @@ describe('jaw_get_sign_status', () => {
         method: 'grant',
         chainId: t.chainId,
         approveBy: new Date(Date.now() + 60_000),
+        payload: {},
         work: () => new Promise(() => {}),
       },
       idleWallet

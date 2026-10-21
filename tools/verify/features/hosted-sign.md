@@ -15,7 +15,7 @@
 - `sign-no-session`: no session key signature is recorded and the audit row names the connection.
 - `sign-utf8`: a message with non-ASCII text shows the same text on the keys screen and the signature verifies.
 - `sign-retention`: a sign request that ended over 7 days ago is deleted by the cron's purge, signature included. The same key then opens a new link.
-- `sign-restart`: the mcp container restarts after the owner opened the link; the same key answers `link_lost` with no `url` instead of waiting out the window.
+- `sign-restart`: the mcp container restarts after the owner opened the link. With a keys page that replays answers (`replays: true` on `ready`), the restarted server rejoins the same tab and collects the owner's answer, given before or after the restart. With an older page, or a tab that was closed, the same key answers `link_lost` with no `url` instead of waiting out the window.
 
 ## How to get to it (user POV)
 
@@ -48,7 +48,7 @@ node $S/hosted-client.mjs "$MCP_PUBLIC_URL" wallet:read
 - sign-no-session: after sign-message, dump `audit_events` and the `grants` and `payments` rows with psql. Pass: an audit row for `jaw_sign` on the connection and no session key signature anywhere.
 - sign-utf8: `sign-message 'Firmo: ñandú, 日本語' u1`. Pass: the keys screen shows the same text and the signature verifies.
 - sign-retention: after sign-message, set its row back with psql (`update permission_requests set updated_at = now() - interval '8 days' where idempotency_key = 'm1'`), then wait for the server's reconcile loop (30 seconds in the stack). Pass: the row is gone, and `sign-message 'hello from jaw' m1` gives a new `url`.
-- sign-restart: `sign-message 'restart me' r1`, open the `url` as the owner until the sign prompt shows, do not approve, restart the mcp container, wait 90 seconds, then the same line again. Pass: `expired` with `refusal.code` `link_lost`, no `url`, and a summary telling the owner not to approve the old link. `sign-message 'restart me' r2` then gives a new `url`.
+- sign-restart: `sign-message 'restart me' r1`, open the `url` as the owner until the sign prompt shows, do not approve, restart the mcp container, wait 90 seconds, then the same line again. Pass with a page that replays: approve in the same tab after the restart, and the same line ends `approved` with the signature. Pass with the tab closed before the restart: `expired` with `refusal.code` `link_lost`, no `url`, and a summary telling the owner not to approve the old link; `sign-message 'restart me' r2` then gives a new `url`. The approving path needs a passkey on a keys page that replays, which waits for that page's deploy.
 
 ## Risks
 

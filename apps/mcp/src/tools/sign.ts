@@ -14,11 +14,14 @@ import {
   lostBefore,
   lostPreamble,
   openLink,
+  resumeRequest,
   signById,
   type Claim,
   type Outcome,
   type PermissionRequestRow,
+  type Rebuild,
 } from '@/grants/requests';
+import { canonical } from '@/lib/canonical';
 import { isProxyChain } from '@/lib/chain';
 import { RATE_WINDOW_MS } from '@/lib/edge';
 import { reply } from '@/lib/fence';
@@ -183,7 +186,11 @@ async function answer(row: PermissionRequestRow, followUp = false): Promise<Sign
 const hasAccount = (accounts: unknown, account: string) =>
   Array.isArray(accounts) && accounts.some((a) => typeof a === 'string' && a.toLowerCase() === account.toLowerCase());
 
-async function approve(ask: Ask, claim: Claim, t: Tenant, chainId: number, request: Request): Promise<Outcome> {
+type SignPayload = { chainId: number; request: Request };
+
+export const signWork: Rebuild = (t, payload) => (ask, claim) => approve(ask, claim, t, payload as SignPayload);
+
+async function approve(ask: Ask, claim: Claim, t: Tenant, { chainId, request }: SignPayload): Promise<Outcome> {
   if (!hasAccount(await ask('eth_requestAccounts', []), t.account)) {
     return { state: 'owner_declined', code: 'wrong_account' };
   }
@@ -225,11 +232,6 @@ function hidesText(data: Record<string, unknown>): boolean {
   return false;
 }
 
-const sortedKeys = (_: string, value: unknown) =>
-  typeof value === 'object' && value !== null && !Array.isArray(value)
-    ? Object.fromEntries(Object.entries(value).sort(([a], [b]) => (a < b ? -1 : 1)))
-    : value;
-
 function requestOf(input: SignInput): Request | SignResult {
   if (input.message !== undefined) {
     if (HIDDEN_FROM_OWNER.test(input.message)) {
@@ -256,13 +258,14 @@ export async function sign(t: Tenant, input: SignInput, deps: SignDeps = DEFAULT
 
   const idempotencyKey = input.idempotencyKey ?? `auto_${randomBytes(12).toString('base64url')}`;
   const requestHash = createHash('sha256')
-    .update(JSON.stringify([chainId, request], sortedKeys))
+    .update(canonical([chainId, request]))
     .digest('hex');
   const answerStored = (row: PermissionRequestRow) =>
     row.requestHash === requestHash
       ? answer(row)
       : refuse('idempotency_conflict', 'This idempotency key was used for another request. Nothing was signed.');
   const stored = await currentSign(t, idempotencyKey);
+  if (stored?.relay) void resumeRequest(stored, signWork);
   if (stored) return answerStored(stored);
 
   if ((await countHit(`owner-sign:${t.connectionId}`, RATE_WINDOW_MS)) > LINK_RATE_LIMIT) {
@@ -277,6 +280,7 @@ export async function sign(t: Tenant, input: SignInput, deps: SignDeps = DEFAULT
       'This connection has ended, so no approval link opens. Connect again to ask the owner.'
     );
   }
+  const payload: SignPayload = { chainId, request };
   const opened = await openLink(
     t,
     {
@@ -286,7 +290,8 @@ export async function sign(t: Tenant, input: SignInput, deps: SignDeps = DEFAULT
       signKind: request.type === '0x45' ? 'message' : 'typedData',
       chainId,
       approveBy: new Date(Date.now() + APPROVE_WITHIN_MS),
-      work: (ask, claim) => approve(ask, claim, t, chainId, request),
+      payload,
+      work: signWork(t, payload),
     },
     deps.openWallet
   );
