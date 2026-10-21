@@ -148,7 +148,7 @@ type Outcome = PaymentOutcome | Unreached;
 /** Why a payment cannot be made, and the budget the choice stopped at. */
 type Stop = Unreached & { at?: Grant };
 
-/** Newest first: an older budget is read only when every newer one refused. */
+/** Newest first. A budget a newer one replaced is not among them, so only the newest is read. */
 async function liveBudget(budgets: Grant[], read: ReadPermission): Promise<Grant | Stop> {
   for (const budget of budgets) {
     const stopped = await grantLive(budget, read);

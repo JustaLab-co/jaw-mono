@@ -87,39 +87,41 @@ describe('jaw_session_status after a budget change', () => {
   });
 });
 
-describe('given two budgets and the newer one revoked in the wallet', () => {
-  it('when jaw_session_status runs, then it is ready and describes the older budget, the one payments draw from', async () => {
+describe('given a budget a newer one replaced, and the newer one revoked in the wallet', () => {
+  it('when jaw_session_status runs, then it is not ready, says the budget was revoked and points at jaw_grant_permissions, not at the replaced one', async () => {
     const c = await connect();
     const older = await approve(c, '2');
     const newer = await approve(c, '1');
     revokedInWallet.add(newer);
     const status = await callTool(c.access_token, 'jaw_session_status', {});
-    expect(status.structuredContent.readiness).toMatchObject({ status: 'ready' });
-    expect(status.structuredContent.budget).toMatchObject({ permissionId: older, perDay: { amount: '2000000' } });
+    expect(status.structuredContent.readiness).toMatchObject({ status: 'not_ready', reason: 'grant_revoked' });
+    expect(status.structuredContent.summary).toContain('ask for a new one with jaw_grant_permissions');
+    expect(status.structuredContent.budget?.permissionId).not.toBe(older);
   });
 
-  it('when jaw_session_x402_quote runs, then it is ready, judged on the older budget as a payment would be', async () => {
+  it('when jaw_session_x402_quote runs, then it is not ready for the same reason, as a payment would be', async () => {
     const c = await connect();
     await approve(c, '2');
     const newer = await approve(c, '1');
     revokedInWallet.add(newer);
     const quote = await callTool(c.access_token, 'jaw_session_x402_quote', { url: 'https://169.254.169.254/latest' });
-    expect(quote.structuredContent.readiness).toMatchObject({ status: 'ready' });
+    expect(quote.structuredContent.readiness).toMatchObject({ status: 'not_ready', reason: 'grant_revoked' });
   });
 });
 
-describe('given three budgets, the newest revoked in the wallet and the middle one unreadable', () => {
-  it('when jaw_session_status runs, then it says the chain is unavailable, as a payment would', async () => {
+describe('given two older budgets the newest replaced, and the newest unreadable', () => {
+  it('when jaw_session_status runs, then it says the chain is unavailable, as a payment would, and an unreadable replaced one does not change that', async () => {
     const c = await connect();
     await approve(c, '3');
     const middle = await approve(c, '2');
     const newest = await approve(c, '1');
-    revokedInWallet.add(newest);
+    unreadable.add(newest);
     unreadable.add(middle);
     try {
       const status = await callTool(c.access_token, 'jaw_session_status', {});
       expect(status.structuredContent.readiness).toMatchObject({ status: 'not_ready', reason: 'chain_unavailable' });
     } finally {
+      unreadable.delete(newest);
       unreadable.delete(middle);
     }
   });
