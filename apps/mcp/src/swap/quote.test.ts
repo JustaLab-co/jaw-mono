@@ -41,7 +41,19 @@ type Hit = { url: URL; apiKey: string | null };
 
 const backend = {
   key: KEY,
-  mode: '' as '' | '400' | '422' | '502' | 'down' | 'invalid' | '203' | 'trailing-bytes' | '401' | '402' | '403',
+  mode: '' as
+    | ''
+    | '400'
+    | '422'
+    | '502'
+    | '503'
+    | 'down'
+    | 'invalid'
+    | '203'
+    | 'trailing-bytes'
+    | '401'
+    | '402'
+    | '403',
   answer: undefined as unknown,
   tamper: undefined as ((quote: Record<string, unknown>) => void) | undefined,
   deposit: undefined as Address | undefined,
@@ -97,6 +109,7 @@ const quoteBackend: typeof fetch = async (input, init) => {
     return envelope(422, null, `NoProviderAvailable: aurora=amount is too low for bridge; relay=bad key ${apiKey}`);
   }
   if (backend.mode === '502') return envelope(502, null, 'NoProviderAvailable: aurora=amount too low; relay=HTTP 429');
+  if (backend.mode === '503') return envelope(503, null, 'upstream unavailable');
   for (const status of [401, 402, 403]) {
     if (backend.mode === String(status)) return new Response('{}', { status });
   }
@@ -471,6 +484,7 @@ describe('quote_failed codes', () => {
 
 describe('answers that leave the swap quoting', () => {
   it.each([
+    ['answers 503', '503'],
     ['answers 502 NoProviderAvailable', '502'],
     ['cannot be reached', 'down'],
   ] as const)(
