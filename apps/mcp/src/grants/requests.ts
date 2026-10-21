@@ -276,7 +276,7 @@ export async function openLink(t: Tenant, req: LinkRequest, openWallet: OpenWall
 export const reconnecting = (row: PermissionRequestRow) => row.relay !== null && !leaseHeld(row.sessionUntil);
 export const RECONNECTING = " This server is reconnecting to the owner's open link.";
 
-function follow(row: PermissionRequestRow, wallet: Wallet, work: Work) {
+function follow(row: PermissionRequestRow, wallet: Wallet, work: Work, resumed = false) {
   const mine = and(heldBy(row), awaiting);
   const stop = keepLease(
     async () => {
@@ -284,7 +284,8 @@ function follow(row: PermissionRequestRow, wallet: Wallet, work: Work) {
       if (!held) wallet.close();
       return held;
     },
-    () => leased.release(row)
+    // A resumed run that ends without settling counts as a failed rejoin, so the backoff and the try cap apply.
+    () => (resumed ? leased.miss(row) : leased.release(row))
   );
   let asked = row.code === ASKED;
   const claim: Claim = async () => {
@@ -352,7 +353,7 @@ const rejoinWith = (rebuildOf: (row: PermissionRequestRow) => Rebuild): Rejoin<P
     const payload = parsed(row.payload);
     if (payload === undefined) return undefined;
     const work = rebuildOf(row)(t, payload);
-    return work && ((wallet) => follow(row, wallet, work));
+    return work && ((wallet) => follow(row, wallet, work, true));
   },
 });
 

@@ -123,6 +123,37 @@ describe('a sign request whose server restarted', () => {
     expect(await settled(row.id)).toMatchObject({ state: 'approved' });
   });
 
+  it('given the relay drops every resumed run after it rejoins, then each drop counts a failed rejoin and the fifth ends the wait for a resume', async () => {
+    const { signer, t } = await connected();
+    const never = new Promise<never>(() => {});
+    const first = await sign(t, { message: 'sign in' }, { openWallet: stallsAfter(9).openWallet });
+    const url = first.structuredContent!.url!;
+    const session = new URL(url).searchParams.get('session')!;
+    const page = await replayingPage(url, async (method) =>
+      method === 'eth_requestAccounts' ? [signer.address] : never
+    );
+    await vi.waitFor(() => expect(page.ids).toHaveLength(2));
+    const [row] = await rowsOf(t);
+    relay.sessions.get(session)!.cli!.close();
+    await vi.waitFor(async () => expect((await rowOf(row.id)).sessionUntil).toBeNull());
+
+    const failures: number[] = [];
+    for (let i = 1; i <= 5; i++) {
+      const inits = page.inits();
+      await resumeSigns();
+      await vi.waitFor(() => expect(page.inits()).toBeGreaterThan(inits));
+      await vi.waitFor(() => expect(relay.sessions.get(session)?.cli).toBeDefined());
+      relay.sessions.get(session)!.cli!.close();
+      await vi.waitFor(async () => expect((await rowOf(row.id)).resumeFailures).toBe(i));
+      failures.push((await rowOf(row.id)).resumeFailures);
+      await lapse(row.id);
+    }
+
+    expect(failures).toEqual([1, 2, 3, 4, 5]);
+    expect(await rowOf(row.id)).toMatchObject({ state: 'awaiting_owner', relay: null });
+    expect(await resumeSigns()).toEqual([]);
+  });
+
   it('given the page was closed, when the server rejoins, then the row ends link_lost and nothing is stored to resume', async () => {
     const { row, page } = await askedThenRestarted();
     page.close();
