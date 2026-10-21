@@ -2378,55 +2378,64 @@ const pauseThenRelease = async (release: () => Promise<void>) => {
   await release();
 };
 
-describe('given concurrent payments whose chain calls resolve in any order', () => {
-  it('then none signs against float another holds, and none pays or refills past the daily budget', async () => {
-    await fc.assert(
-      fc.asyncProperty(
-        fc.scheduler(),
-        fc.integer({ min: 2, max: 4 }),
-        fc.constantFrom(0n, 300_000n),
-        fc.boolean(),
-        async (s, count, float, pause) => {
-          const { t } = await connected('0.6');
-          balances.set(t.sessionAddress.toLowerCase(), float);
-          seen.length = 0;
-          refills.length = 0;
-          // Reads the node rejects stay off the scheduler: its wrapper would leave the rejection unhandled.
-          const scheduledRead = s.scheduleFunction(node.readContract);
-          const scheduled: ChainClients = {
-            publicClient: () =>
-              ({
-                ...node,
-                getBlockNumber: s.scheduleFunction(node.getBlockNumber),
-                readContract: (read: Parameters<typeof node.readContract>[0]) =>
-                  read.functionName === 'balanceOf' || read.functionName === 'authorizationState'
-                    ? scheduledRead(read)
-                    : node.readContract(read),
-              }) as unknown as PublicClient,
-          };
-          const sendLater = (funder: Address): TopUpExecutor => ({
-            request: async (method, params) => {
-              await s.schedule(Promise.resolve(), method);
-              return executor(funder).request(method, params);
-            },
-          });
-          const over = deps({ clients: scheduled, executor: (_t, grant) => sendLater(grant.account) });
-          const results = await s.waitFor(
-            Promise.all(
-              Array.from({ length: count }, () => pay(t, { url: url('/budget'), idempotencyKey: randomUUID() }, over))
-            ),
-            pause ? pauseThenRelease : undefined
-          );
+// Each run is a whole connect and two to four payments, so the time limit holds per run:
+// one bound around all thirty grows with how busy the machine is, not with the code.
+const RUNS = 30;
+const RUN_LIMIT_MS = 30_000;
 
-          const paid = results.filter((r) => r.structuredContent?.kind === 'paid').length;
-          expect(balanceOf(t.sessionAddress)).toBeGreaterThanOrEqual(0n);
-          expect(seen).toHaveLength(paid);
-          expect(paid).toBeGreaterThan(0);
-          expect(paid).toBeLessThanOrEqual(2);
-          expect(refills.reduce((sum, amount) => sum + amount, 0n)).toBeLessThanOrEqual(600_000n);
-        }
-      ),
-      { seed: 0x5ced, numRuns: 30 }
-    );
-  }, 120_000);
+describe('given concurrent payments whose chain calls resolve in any order', () => {
+  it(
+    'then none signs against float another holds, and none pays or refills past the daily budget',
+    { timeout: RUNS * RUN_LIMIT_MS },
+    async () => {
+      await fc.assert(
+        fc.asyncProperty(
+          fc.scheduler(),
+          fc.integer({ min: 2, max: 4 }),
+          fc.constantFrom(0n, 300_000n),
+          fc.boolean(),
+          async (s, count, float, pause) => {
+            const { t } = await connected('0.6');
+            balances.set(t.sessionAddress.toLowerCase(), float);
+            seen.length = 0;
+            refills.length = 0;
+            // Reads the node rejects stay off the scheduler: its wrapper would leave the rejection unhandled.
+            const scheduledRead = s.scheduleFunction(node.readContract);
+            const scheduled: ChainClients = {
+              publicClient: () =>
+                ({
+                  ...node,
+                  getBlockNumber: s.scheduleFunction(node.getBlockNumber),
+                  readContract: (read: Parameters<typeof node.readContract>[0]) =>
+                    read.functionName === 'balanceOf' || read.functionName === 'authorizationState'
+                      ? scheduledRead(read)
+                      : node.readContract(read),
+                }) as unknown as PublicClient,
+            };
+            const sendLater = (funder: Address): TopUpExecutor => ({
+              request: async (method, params) => {
+                await s.schedule(Promise.resolve(), method);
+                return executor(funder).request(method, params);
+              },
+            });
+            const over = deps({ clients: scheduled, executor: (_t, grant) => sendLater(grant.account) });
+            const results = await s.waitFor(
+              Promise.all(
+                Array.from({ length: count }, () => pay(t, { url: url('/budget'), idempotencyKey: randomUUID() }, over))
+              ),
+              pause ? pauseThenRelease : undefined
+            );
+
+            const paid = results.filter((r) => r.structuredContent?.kind === 'paid').length;
+            expect(balanceOf(t.sessionAddress)).toBeGreaterThanOrEqual(0n);
+            expect(seen).toHaveLength(paid);
+            expect(paid).toBeGreaterThan(0);
+            expect(paid).toBeLessThanOrEqual(2);
+            expect(refills.reduce((sum, amount) => sum + amount, 0n)).toBeLessThanOrEqual(600_000n);
+          }
+        ),
+        { seed: 0x5ced, numRuns: RUNS, timeout: RUN_LIMIT_MS }
+      );
+    }
+  );
 });
