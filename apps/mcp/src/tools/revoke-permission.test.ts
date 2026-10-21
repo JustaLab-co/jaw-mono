@@ -4,7 +4,7 @@ import { and, eq, sql } from 'drizzle-orm';
 import { toFunctionSelector, type Hex } from 'viem';
 import { beforeAll, describe, expect, it, vi } from 'vitest';
 import { verifyBearer, type Tenant } from '@/connections/auth';
-import { WalletBusy, type OpenWallet } from '@/connections/relay';
+import { WalletBusy, WalletRefused, type OpenWallet } from '@/connections/relay';
 import {
   approvedOnChain,
   callTool,
@@ -356,6 +356,20 @@ describe('jaw_revoke_permission', () => {
     expect((await grantRow(budget)).revokedAt).toBeNull();
     expect((await x402Budget(t.connectionId))?.permissionId).toBe(budget);
     expect(await requestsOf(budget)).toMatchObject([{ state: 'owner_declined' }]);
+  });
+
+  it('given the wallet answers the sign-in with an error that has no code, then the request reads wallet_error:unknown, not unexpected', async () => {
+    const { t, signer, budget } = await connected();
+    const refusing: OpenWallet = fakeWallet(async () => {
+      throw new WalletRefused('The passkey prompt was dismissed');
+    });
+    const { deps } = setup(signer);
+
+    await revokePermission(t, { permissionId: budget }, { ...deps(), openWallet: refusing });
+    await walletsSettled();
+
+    expect((await grantRow(budget)).revokedAt).toBeNull();
+    expect(await requestsOf(budget)).toMatchObject([{ state: 'failed', code: 'wallet_error:unknown' }]);
   });
 
   it('given the wallet is signed in to another account, then nothing is revoked', async () => {

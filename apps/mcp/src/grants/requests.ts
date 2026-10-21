@@ -4,7 +4,15 @@ import type { PgUpdateSetSource } from 'drizzle-orm/pg-core';
 import type { Address } from 'viem';
 import type { Tenant } from '@/connections/auth';
 import { config } from '@/connections/config';
-import { PageGone, resumeWallet, WalletBusy, type Ask, type OpenWallet, type Wallet } from '@/connections/relay';
+import {
+  PageGone,
+  resumeWallet,
+  WalletBusy,
+  WalletRefused,
+  type Ask,
+  type OpenWallet,
+  type Wallet,
+} from '@/connections/relay';
 import { findActive, type ConnectionRow } from '@/connections/rows';
 import type { ConnectionScope } from '@/connections/scopes';
 import { openResume, sealResume, type RelayResume } from '@/connections/seal';
@@ -150,6 +158,7 @@ function outcomeOf(err: unknown, row: PermissionRequestRow, asked: boolean, resu
   if (code === USER_REJECTED) return { state: 'owner_declined' };
   if (err instanceof PageGone || (resumed && code === NOT_THE_REQUEST)) return pageGone(asked);
   if (typeof code === 'number') return { state: 'failed', code: `wallet_error:${code}` };
+  if (err instanceof WalletRefused) return { state: 'failed', code: 'wallet_error:unknown' };
   if (Date.now() >= row.approveBy.getTime()) return { state: 'expired' };
   if (asked) return { state: 'expired', code: LINK_LOST };
   return { state: 'failed', code: 'unexpected' };

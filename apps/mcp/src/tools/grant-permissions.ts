@@ -263,7 +263,7 @@ export function registerGrantTool(server: McpServer) {
     {
       description:
         'Ask the account owner to grant this session key a permission, approved once in their JAW wallet. ' +
-        'Pass x402Budget for the payment budget: a daily USDC allowance that payments, refills and swap quotes draw from with no further prompts; payments use the newest one. ' +
+        'Pass x402Budget for the payment budget: a daily USDC allowance that payments, refills and swap quotes draw from with no further prompts; payments use the newest one still approved on chain. ' +
         'Or pass calls, the contract functions the session key may call, and spends, how much of each token it may move per period, for a custom grant. ' +
         'The grant ends at expiresAt, or with the connection when that comes first. A connection holds at most 5 live grants. Returns a link for the owner. For a one-off contract call use jaw_send_calls, which asks the owner each time.',
       inputSchema: grantInput,

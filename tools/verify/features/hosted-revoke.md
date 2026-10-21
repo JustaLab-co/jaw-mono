@@ -15,6 +15,7 @@
 - `link-sweep`: a waiting grant, revoke or sign link that no server has renewed for over 90 seconds is ended by the reconciler (`expired`, with `link_lost` when the owner was already asked, `session_lost` when not, no code past its window; an asked revoke stays until its window ends, since other connections wait on it), counted under `links.expired` in the cron's report. A link whose server still renews it is left alone, even past its window, and so is a link that holds a relay session waiting to be rejoined after a restart, until its window ends.
 - `link-cap`: grant and revoke links count toward the account's three open owner links with `jaw_send_calls` and `jaw_swap`. A fourth link of any kind is refused as `account_busy`.
 - `revoke-old-name`: `jaw_revoke_connection` is an unknown tool.
+- `revoke-in-wallet`: a budget the owner revoked in the wallet, which the server never heard of, is recorded revoked by the next payment or the next reconciler run. The payment is made from the connection's next live budget instead of failing `grant_revoked`.
 
 ## How to get to it (user POV)
 
@@ -35,4 +36,5 @@ Preconditions: baseline preconditions of this map; Docker running; `JAW_KEYS_URL
 - revoke-unconfirmed sweep: after revoke-own, set the row back with psql (`update permission_requests set code = 'unconfirmed', updated_at = now() - interval '6 minutes' ...; update grants set revoked_at = null ...`, since a row is read again at most every five minutes), then wait for the server's reconcile loop (30 seconds in the stack). Pass: the row's code is null and `revoked_at` is set again from the chain read.
 - link-sweep: open a link, stop the mcp container, start it again, wait 90 seconds plus one reconcile loop. Pass: its row reads `expired` with the matching code.
 - revoke-old-name: `call jaw_revoke_connection '{"id":"x"}'`. Pass: an unknown-tool error.
+- revoke-in-wallet: with two budgets (`budget 1` twice), revoke the newer one by `revoke <id>` and approve, then clear its `revoked_at` with psql so the server holds it live while the chain says revoked, as after a revoke made in the wallet. Pay only once 30 seconds have passed since the last payment, `status` or `quote`, because the server trusts a budget it read live for that long. `pay $SELLER/exact`. Pass: `paid`, the `payments` row's `permission_id` is the older budget, and the newer one's `revoked_at` is set again. Clear it once more and wait for the server's own reconciler run, every 60 seconds (the stack sets no cron secret; with one, `/api/cron/reconcile` runs the same sweep and reports `grantsRevoked`). Pass: `revoked_at` is set within two runs.
 - After revoke-own, `disconnect`. Pass: it ends with no revoke error for the grant already revoked.
