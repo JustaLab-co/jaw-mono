@@ -331,6 +331,8 @@ describe('jaw_grant_permissions', () => {
     if (!('structuredContent' in result)) throw new Error('refused');
     expect(result.structuredContent.url).toBe(walletUrl);
     expect(result.structuredContent.summary).toContain(`open ${walletUrl} and approve 1.5 USDC a day until`);
+    expect(result.structuredContent.summary).toContain('call jaw_session_status yourself');
+    expect(result.structuredContent.summary).toContain('do not wait for the owner to say they approved');
   });
 
   it('a ten digit budget is refused by the schema', async () => {

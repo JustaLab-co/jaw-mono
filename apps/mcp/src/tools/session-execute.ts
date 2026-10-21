@@ -1,5 +1,5 @@
 import { createHash, randomBytes } from 'node:crypto';
-import type { SessionBridge } from '@jaw.id/agent';
+import { within, type SessionBridge } from '@jaw.id/agent';
 import type { McpServer } from '@modelcontextprotocol/server';
 import { and, eq } from 'drizzle-orm';
 import { getAddress, isAddress, numberToHex, type Address, type Hex } from 'viem';
@@ -17,11 +17,15 @@ import { unrevokedGrant, type LiveGrant } from '@/grants/store';
 import { errorLabel, log } from '@/lib/edge';
 import { reply } from '@/lib/fence';
 import { FloatBusy, FloatLost, inTurn, LOCK_WAIT_MS, withFloat } from '@/payments/float-lock';
+import { EXECUTE_SUBMIT_MS } from '@/payments/store';
 import {
   handToReconciler,
   noteCallsId,
-  openSpends,
   recordSend,
+  chainView,
+  heldSpends,
+  LOGGED_READ_MS,
+  readAt,
   runOf,
   settleSends,
   type SendRow,
@@ -209,27 +213,58 @@ async function grantFor(t: Tenant, run: Run): Promise<ToolResult | { grant: Live
   return { grant, bridge };
 }
 
+const ENDED = 'This connection has ended, so nothing was sent.';
+
+// Half the window an end waits on a recorded execute, so a submit still running is
+// answered as maybe sent well before an end may pass it.
+const SUBMIT_MS = EXECUTE_SUBMIT_MS / 2;
+class SubmitTimedOut extends Error {}
+
+function bounded<T>(work: Promise<T>): Promise<T> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const late = new Promise<never>((_, reject) => {
+    timer = setTimeout(() => reject(new SubmitTimedOut()), SUBMIT_MS);
+  });
+  return Promise.race([work, late]).finally(() => clearTimeout(timer));
+}
+
+async function liveIn(tx: Tx, connectionId: string): Promise<boolean> {
+  const [live] = await tx
+    .select({ id: connections.id })
+    .from(connections)
+    .where(and(eq(connections.id, connectionId), isLive()));
+  return live !== undefined;
+}
+
 type Reserved = { ids: string[]; submitted: Submitted; bridge: SessionBridge; trustsReverts: boolean };
 
 async function submitUnder(t: Tenant, run: Run): Promise<ToolResult | Reserved> {
   return withFloat(t.connectionId, LOCK_WAIT_MS, async (hold) => {
+    // A run left unconfirmed may have landed since. Settled first, its key replays it landed
+    // and the next fit counts its spend on chain only. A read past its bound settles nothing.
+    const view = await within(
+      chainView(t.connectionId, run.permissionId, run.chainId, chainClients),
+      LOGGED_READ_MS
+    ).catch((err: unknown) => void logFailure('execute settle read failed')(err));
+    for (const { id, end } of view?.ends ?? []) {
+      await settleSends([id], end).catch(logFailure('execute settle write failed'));
+    }
     const stored = await hold.tx(async (tx) => {
       if (!(await hold.owns(tx))) throw new FloatLost();
-      const rows = await runOf(tx, t.connectionId, run.key);
-      const [live] = await tx
-        .select({ id: connections.id })
-        .from(connections)
-        .where(and(eq(connections.id, t.connectionId), isLive()));
-      return { rows, live: Boolean(live) };
+      return { rows: await runOf(tx, t.connectionId, run.key), live: await liveIn(tx, t.connectionId) };
     });
     if (stored.rows.length > 0) return replayed(stored.rows, run.key, run.hash);
-    if (!stored.live) return refusal('This connection has ended, so nothing was sent.');
+    if (!stored.live) return refusal(ENDED);
     const found = await grantFor(t, run);
     if (!('grant' in found)) return found;
     const { grant, bridge } = found;
-    const pending = await hold.tx((tx) => openSpends(grant.permissionId, tx));
+    const pending = await hold.tx((tx) => heldSpends(grant.permissionId, tx, view?.seen));
     const nowSeconds = Math.floor(Date.now() / 1000);
-    const refused = await fit(grant, run.calls, { read: { clients: chainClients }, pending, nowSeconds });
+    const refused = await fit(grant, run.calls, {
+      read: readAt(chainClients, grant.chainId, view?.head),
+      pending,
+      nowSeconds,
+    });
     if (refused) return refusal(described(refused, grant.permissionId) + NOTHING_SENT);
     const head = await chainClients
       .publicClient(grant.chainId)
@@ -238,8 +273,10 @@ async function submitUnder(t: Tenant, run: Run): Promise<ToolResult | Reserved> 
     if (head === undefined) return refusal(UNREADABLE);
 
     const spent = [...spendOf(run.calls, grant.account)];
+    // owns() holds the connection row, so an end waits on this tx and then sees the rows in flight.
     const ids = await hold.tx(async (tx) => {
       if (!(await hold.owns(tx))) throw new FloatLost();
+      if (!(await liveIn(tx, t.connectionId))) return undefined;
       const send = {
         connectionId: t.connectionId,
         idempotencyKey: run.key,
@@ -253,14 +290,23 @@ async function submitUnder(t: Tenant, run: Run): Promise<ToolResult | Reserved> 
       if (spent.length === 0) return [await recordSend(tx, { ...send, token: null, amount: 0n })];
       return Promise.all(spent.map(([token, amount]) => recordSend(tx, { ...send, token: token as Address, amount })));
     });
+    if (!ids) return refusal(ENDED);
     let submitted: Submitted;
+    let request: Promise<{ id: Hex }> | undefined;
     try {
       hold.assertHeld();
       const wire = run.calls.map((c) => ({ to: c.to, value: numberToHex(c.value), data: c.data }));
-      const sent = (await bridge.request('wallet_sendCalls', [{ calls: wire }])) as { id: Hex };
-      submitted = { sent: sent.id };
+      request = bridge.request('wallet_sendCalls', [{ calls: wire }]) as Promise<{ id: Hex }>;
+      submitted = { sent: (await bounded(request)).id };
     } catch (err) {
-      submitted = mayHaveBeenSent(err) ? { maybe: err } : { unsent: err };
+      submitted = err instanceof SubmitTimedOut || mayHaveBeenSent(err) ? { maybe: err } : { unsent: err };
+      // A submit that answers past its bound leaves its hash on the open rows for the reconciler.
+      if (err instanceof SubmitTimedOut) {
+        request?.then(
+          (late) => handToReconciler(ids, undefined, late.id).catch(logFailure('execute late submit write failed')),
+          () => {}
+        );
+      }
     }
     await hold.tx((tx) => noteSubmitted(tx, ids, submitted)).catch(logFailure('execute submit write failed'));
     return { ids, submitted, bridge, trustsReverts: namesEveryTarget(grant, run.calls) };
