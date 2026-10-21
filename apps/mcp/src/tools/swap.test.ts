@@ -46,6 +46,8 @@ import { fakeChain } from '@/owner-calls/chain-testkit';
 import { sendCalls } from './owner-calls';
 import { grantPermissions } from '@/tools/grant-permissions';
 import { registerSwapTools, swap, swapStatus, type SwapToolInput } from './swap';
+import acrossAnswer from '@/swap/fixtures/prod-across-quote.json';
+import relayAnswer from '@/swap/fixtures/prod-relay-quote.json';
 
 const USDC: Address = '0x036CbD53842c5426634e7929541eC2318f3dCF7e';
 const PAY_TO: Address = '0x2222222222222222222222222222222222222222';
@@ -98,6 +100,7 @@ const backend = {
   hits: [] as { url: URL; apiKey: string | null; quoted: boolean }[],
   lose: 0,
   onAsked: undefined as (() => Promise<void>) | undefined,
+  answer: undefined as unknown,
 };
 const transfer = (to: Address, amount: bigint) =>
   encodeFunctionData({ abi: erc20Abi, functionName: 'transfer', args: [to, amount] });
@@ -109,6 +112,7 @@ const auroraErc20Backend: typeof fetch = async (input, init) => {
   const hit = { url, apiKey, quoted: false };
   backend.hits.push(hit);
   if (apiKey !== SWAP_KEY) return new Response('{}', { status: 402, headers: { 'payment-required': 'e30=' } });
+  if (backend.answer) return Response.json(backend.answer);
   await backend.onAsked?.();
   if (backend.lose > 0) {
     backend.lose--;
@@ -212,6 +216,7 @@ beforeEach(() => {
   backend.hits.length = 0;
   backend.lose = 0;
   backend.onAsked = undefined;
+  backend.answer = undefined;
   opened = [];
   asked = [];
   closed = [];
@@ -764,6 +769,20 @@ describe('the owner approves the deposit', () => {
       submitAttempts: 1,
       backendState: 'KNOWN_DEPOSIT_TX',
     });
+  });
+
+  it('given an Aurora quote from move-asset/quote, when the owner approves, status reads it to completed and the key comes again, then the only quote request is that first one', async () => {
+    const { t } = await connected();
+    const { row } = await approve(t, sendingAs(t.account, approved));
+    deposits.state = 'SUCCESS';
+
+    const done = await swapStatus(t, { quoteId: row.quoteId! }, { backend: backendDeps });
+    const again = await run(t);
+
+    expect(submits()).toHaveLength(1);
+    expect(done.structuredContent).toMatchObject({ state: 'completed' });
+    expect(again.structuredContent).toMatchObject({ state: 'completed', quoteId: row.quoteId });
+    expect(backend.hits.map((h) => h.url.pathname)).toEqual(['/proxy/v2/move-asset/quote']);
   });
 
   it.each([['down' as const], [500], [400]])(
@@ -2035,6 +2054,36 @@ describe('a quote the backend did not give', () => {
     expect(await paymentsOf(t.connectionId)).toEqual([]);
     expect(opened).toEqual([]);
   });
+});
+
+describe('a quote another provider answered', () => {
+  it.each([
+    ['across', acrossAnswer],
+    ['relay', relayAnswer],
+  ] as const)(
+    'given move-asset/quote answers the captured prod quote from %s, when jaw_swap runs, then quote_unsupported_provider naming it, no wallet opened, no call stored and none of its calldata echoed',
+    async (provider, answer) => {
+      const { t } = await connected();
+      backend.answer = answer;
+
+      const result = await run(t);
+
+      const [row] = await swapsOf(t.connectionId);
+      expect(result.structuredContent).toMatchObject({
+        state: 'quote_rejected',
+        refusal: { code: 'quote_unsupported_provider' },
+      });
+      expect(result.structuredContent?.summary).toContain(`from ${provider}`);
+      expect(result.structuredContent?.summary).toContain('Nothing was sent');
+      expect(opened).toEqual([]);
+      expect(row).toMatchObject({ call: null, depositAddress: null, walletUrl: null });
+      const text = JSON.stringify(result).toLowerCase();
+      for (const tx of answer.result.data.transactions) {
+        expect(text).not.toContain(tx.to.toLowerCase());
+        expect(text).not.toContain(tx.data.slice(10, 74).toLowerCase());
+      }
+    }
+  );
 });
 
 describe('B28: the connection ends while the swap awaits the owner', () => {

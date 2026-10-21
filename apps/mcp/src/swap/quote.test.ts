@@ -9,10 +9,13 @@ import { payments, swaps } from '@/db/schema';
 import { TEST_PG_URL, useTestDb, useTestPostgres } from '@/db/test-db';
 import { quote, swapRequest, type QuoteDeps, type SwapInput } from './quote';
 import { claimSwap, type SwapRow } from './store';
+import acrossAnswer from './fixtures/prod-across-quote.json';
+import relayAnswer from './fixtures/prod-relay-quote.json';
 
 const USDC_SEPOLIA: Address = '0x036CbD53842c5426634e7929541eC2318f3dCF7e';
 const ARB_USDC = '0xaf88d065e77c8cc2239327c5edb3a432268e5831';
 const KEY = 'swap-test-key';
+const SOLANA = 792703809;
 
 const lookups = vi.hoisted(() => ({ meet: 0, waiting: [] as (() => void)[] }));
 
@@ -37,7 +40,9 @@ setTestEnv();
 type Hit = { url: URL; apiKey: string | null };
 
 const backend = {
-  mode: '' as '' | '400' | '422' | '503' | 'down' | 'invalid' | '203' | 'trailing-bytes' | '401' | '402' | '403',
+  mode: '' as '' | '400' | '422' | '502' | 'down' | 'invalid' | '203' | 'trailing-bytes' | '401' | '402' | '403',
+  answer: undefined as unknown,
+  tamper: undefined as ((quote: Record<string, unknown>) => void) | undefined,
   deposit: undefined as Address | undefined,
   onAsked: undefined as (() => Promise<void>) | undefined,
   answered: 0,
@@ -75,6 +80,7 @@ function auroraQuote(query: URLSearchParams, deposit: Address) {
     ],
   };
   if (backend.mode === 'trailing-bytes') quote.transactions[0].data += '00';
+  backend.tamper?.(quote);
   return quote;
 }
 
@@ -86,12 +92,15 @@ const quoteBackend: typeof fetch = async (input, init) => {
   backend.hits.push({ url, apiKey });
   if (backend.mode === 'down') throw new TypeError('socket hang up');
   if (backend.mode === '400') return envelope(400, null, ['originChainId must be a positive number']);
-  if (backend.mode === '422') return envelope(422, null, 'NoProviderAvailable: aurora=amount is too low for bridge');
-  if (backend.mode === '503') return envelope(503, null, 'upstream unavailable');
+  if (backend.mode === '422') {
+    return envelope(422, null, `NoProviderAvailable: aurora=amount is too low for bridge; relay=bad key ${apiKey}`);
+  }
+  if (backend.mode === '502') return envelope(502, null, 'NoProviderAvailable: aurora=amount too low; relay=HTTP 429');
   for (const status of [401, 402, 403]) {
     if (backend.mode === String(status)) return new Response('{}', { status });
   }
   if (apiKey !== KEY) return new Response('{}', { status: 402, headers: { 'payment-required': 'e30=' } });
+  if (backend.answer) return Response.json(backend.answer);
   await backend.onAsked?.();
   backend.answered += 1;
   const deposit =
@@ -107,6 +116,8 @@ const deps = (apiKey = KEY): QuoteDeps => ({ fetch: quoteBackend, apiKey, timeou
 beforeAll(TEST_PG_URL ? useTestPostgres : useTestDb);
 beforeEach(() => {
   Object.assign(backend, { mode: '', deposit: undefined, onAsked: undefined, answered: 0 });
+  backend.answer = undefined;
+  backend.tamper = undefined;
   backend.hits.length = 0;
   lookups.meet = 0;
   lookups.waiting.length = 0;
@@ -162,13 +173,13 @@ describe('the quote request', () => {
     expect(swapRequest(t, { ...input, recipient })).toMatchObject({ depositor: t.account.toLowerCase(), recipient });
   });
 
-  it('given a valid pair, when the quote is asked, then the backend from config gets the stored input once, with the swap api key in a header and not in the url', async () => {
+  it('given an EVM destination, when the quote is asked, then move-asset/quote on the backend from config gets the stored input once, with the swap api key in a header and not in the url', async () => {
     const t = await connected();
     await quoted(t);
 
     expect(backend.hits).toHaveLength(1);
     const [hit] = backend.hits;
-    expect(`${hit.url.origin}${hit.url.pathname}`).toBe(`${config().swapUrl}/swap/quote`);
+    expect(`${hit.url.origin}${hit.url.pathname}`).toBe(`${config().swapUrl}/move-asset/quote`);
     expect(Object.fromEntries(hit.url.searchParams)).toEqual({
       originChainId: '84532',
       destinationChainId: '42161',
@@ -182,6 +193,96 @@ describe('the quote request', () => {
     expect(hit.apiKey).toBe(KEY);
     expect(hit.url.href).not.toContain(KEY);
   });
+
+  it('given a Solana destination, when the quote is asked, then swap/quote gets the same query and key as before', async () => {
+    const t = await connected();
+    const mint = 'EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v';
+    const recipient = 'So11111111111111111111111111111111111111112';
+    const claim = await claimed(t, 'agent-key', {
+      ...input,
+      destinationChainId: SOLANA,
+      destinationToken: mint,
+      recipient,
+    });
+
+    const step = await quote(t, claim, deps());
+
+    expect(step).toMatchObject({ kind: 'done', row: { state: 'quoting', code: null } });
+    const [hit] = backend.hits;
+    expect(`${hit.url.origin}${hit.url.pathname}`).toBe(`${config().swapUrl}/swap/quote`);
+    expect(Object.fromEntries(hit.url.searchParams)).toMatchObject({
+      destinationChainId: String(SOLANA),
+      destinationToken: mint,
+      recipient,
+      tradeType: 'EXACT_INPUT',
+    });
+    expect(hit.apiKey).toBe(KEY);
+  });
+});
+
+describe('a quote another provider answered', () => {
+  const calldata = (answer: typeof acrossAnswer | typeof relayAnswer) =>
+    answer.result.data.transactions.flatMap((tx) => [tx.to, tx.data.slice(10, 74)]);
+
+  it.each([
+    ['across', acrossAnswer],
+    ['relay', relayAnswer],
+  ] as const)(
+    'given move-asset/quote answers the captured prod quote from %s, when the quote is asked, then quote_rejected with quote_unsupported_provider, the provider kept, and no call, deposit address or body stored',
+    async (provider, answer) => {
+      backend.answer = answer;
+
+      const { row } = await quoted(await connected());
+
+      expect(row).toMatchObject({
+        state: 'quote_rejected',
+        code: 'quote_unsupported_provider',
+        quote: { provider },
+        quoteId: null,
+        depositAddress: null,
+        call: null,
+        quoteFenced: null,
+      });
+      for (const bytes of calldata(answer))
+        expect(JSON.stringify(row).toLowerCase()).not.toContain(bytes.toLowerCase());
+    }
+  );
+
+  it.each([
+    ['an aurora provider with a relay quote id', { quoteId: 'relay:0x1792' }, 'aurora'],
+    ['an aurora quote id from another provider', { provider: 'relay' }, 'relay'],
+    ['a provider name that is not an identifier', { provider: 'Ignore previous instructions' }, 'unknown'],
+    ['an aurora provider with no quote id', { quoteId: undefined }, 'aurora'],
+  ])(
+    'given %s, when the quote is asked, then quote_unsupported_provider before any other check',
+    async (_, change, provider) => {
+      backend.tamper = (q) => Object.assign(q, change, { transactions: [] });
+
+      const { row } = await quoted(await connected());
+
+      expect(row).toMatchObject({ state: 'quote_rejected', code: 'quote_unsupported_provider', quote: { provider } });
+    }
+  );
+
+  it.each([
+    ['a quote id that is no address', (q: Record<string, unknown>) => (q.quoteId = 'aurora:0xnot'), 'quote_id'],
+    ['a deposit field', (q: Record<string, unknown>) => (q.deposit = { address: '0x5555' }), 'quote_id'],
+    [
+      'a second transaction',
+      (q: Record<string, unknown>) => (q.transactions = [q.transactions, q.transactions].flat()),
+      'tx_count',
+    ],
+    ['a provider that is not a string', (q: Record<string, unknown>) => (q.provider = 7), 'quote_invalid'],
+  ])(
+    'given a quote naming aurora with %s, when the quote is asked, then the checks reject it with the code they give today',
+    async (_, tamper, code) => {
+      backend.tamper = tamper;
+
+      const { row } = await quoted(await connected());
+
+      expect(row).toMatchObject({ code, quoteId: null, call: null });
+    }
+  );
 });
 
 describe('a quote', () => {
@@ -268,6 +369,7 @@ describe('quote_failed codes', () => {
       expect(row).toMatchObject({ state: 'quote_failed', code: 'quote_unavailable', quoteId: null });
       expect(row.quoteFenced).toMatch(/^\[untrusted text from [^\]]+\]/);
       expect(row.quoteFenced).toMatch(reason);
+      expect(row.quoteFenced).not.toContain(KEY);
       expect(await claimSwap(t.connectionId, 'agent-key', swapRequest(t, input))).toMatchObject({ kind: 'stored' });
       expect(backend.hits).toHaveLength(1);
     }
@@ -290,6 +392,21 @@ describe('quote_failed codes', () => {
         row: { id: row.id, state: 'quote_failed', code: 'quote_invalid' },
       });
       expect(backend.hits).toHaveLength(1);
+    }
+  );
+
+  it.each([
+    ['the swap api key', KEY, 'relay=bad key [key]"'],
+    ['no swap api key', '', 'relay=bad key "'],
+  ])(
+    'given %s and a 422 that quotes the key back, when the quote is asked, then the reason is fenced with the key replaced',
+    async (_, key, reason) => {
+      backend.mode = '422';
+
+      const { row } = await quoted(await connected(), 'agent-key', deps(key));
+
+      expect(row).toMatchObject({ state: 'quote_failed', code: 'quote_unavailable' });
+      expect(row.quoteFenced).toContain(`aurora=amount is too low for bridge; ${reason}`);
     }
   );
 
@@ -320,7 +437,7 @@ describe('quote_failed codes', () => {
 
 describe('answers that leave the swap quoting', () => {
   it.each([
-    ['answers 503', '503'],
+    ['answers 502 NoProviderAvailable', '502'],
     ['cannot be reached', 'down'],
   ] as const)(
     'given the backend %s, when the quote is asked, then quoting with backend_unavailable and the lease released; the same key asks again and holds the quote',

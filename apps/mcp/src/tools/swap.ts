@@ -16,7 +16,7 @@ import { randomToken } from '@/lib/token';
 import type { BackendAnswer, BackendDeps } from '@/swap/backend';
 import { isSupportedOriginChain, type CheckedQuote } from '@/swap/check';
 import { countOpenLinks, FULL, MAX_OPEN_PER_ACCOUNT, withLinkSlot } from '@/owner-calls/cap';
-import { quote, swapRequest, type QuoteDeps } from '@/swap/quote';
+import { quote, SOLANA, swapRequest, type QuoteDeps } from '@/swap/quote';
 import {
   approveByOf,
   claimSwap,
@@ -38,7 +38,6 @@ import {
 import { followSwap, resumeSwap } from '@/swap/resume';
 import { track } from '@/swap/track';
 
-const SOLANA = 792703809;
 const SWAP_RATE_LIMIT = 10;
 const STATUS_RATE_LIMIT = 30;
 const HEX_ADDRESS = /^0x[0-9a-fA-F]{40}$/;
@@ -204,6 +203,13 @@ function summaryOf(row: SwapRow): string {
       return `No quote yet (${row.code}). Nothing was deposited. Send the same idempotencyKey again to retry.`;
     case 'quote_failed':
     case 'quote_rejected':
+      if (row.code === 'quote_unsupported_provider') {
+        const { provider } = row.quote as { provider: string };
+        return (
+          `No swap: the quote came from ${provider}, not Aurora. Aurora could not quote this pair or was not tried first, ` +
+          'and this tool signs only Aurora routes. Nothing was sent.'
+        );
+      }
       return `No swap: ${row.state} (${row.code}). Nothing was deposited.`;
     case 'owner_declined':
       if (row.code === 'wrong_account') {

@@ -67,6 +67,7 @@ Seller routes (all Base Sepolia USDC unless noted, `payTo` 0x2222...2222): `/exa
 The seller also answers the three routes of JAW's swap backend that the hosted server calls, in the backend's `{ statusCode, result: { data, error } }` envelope. The hosted stack points `JAW_MCP_SWAP_URL` at `http://localhost:$PORT/proxy/v2` by default.
 
 - `GET /proxy/v2/swap/quote`: an unpaid request gets the 402 even with an invalid query, as the backend validates after the challenge; a paid request with an invalid query gets its 400. A valid unpaid one gets a 402 for 5000 USDC base units on `eip155:84532`. A paid request answers a quote built like the backend's Aurora mapper: `quoteId` is `aurora:<depositAddress>` and the one `deposit` transaction is `transfer(depositAddress, amount)` on the origin token, or the amount sent to the deposit address for the zero address. The deposit address is the last 20 bytes of the keccak of the payment nonce, so every paid quote gets a new one and a test that signed the payment can compute it. A resent proof answers 402 unless it carries the same `Idempotency-Key`, which replays the first answer. A request with `x-api-key: verify-swap-key`, the backend's `X402_ALLOWED_API_KEYS` here, gets the same quote with no payment and a fresh random deposit address, or its 400 for an invalid query; the hosted stack gives the server that key as `JAW_MCP_SWAP_API_KEY`, so its quotes log a `quote` row with `"by":"api-key"` and no `payment` row.
+- `GET /proxy/v2/move-asset/quote`: free, no guard, EVM addresses only. Answers the same Aurora quote, or in modes `across` and `relay` the quote prod gave from that provider (`apps/mcp/src/swap/fixtures`). `/swap/quote` also takes a base58 `destinationToken` and `recipient` for destination chain `792703809`.
 - `POST /proxy/v2/move-asset/deposit/submit` and `GET /proxy/v2/move-asset/deposit/status`: free, `provider=aurora` (any other answers 501). Status is `PENDING_DEPOSIT` until a submit, which answers `KNOWN_DEPOSIT_TX`; the reads after it give `PROCESSING`, then `SUCCESS` for good. A state that is not one of the seven comes back as `PROCESSING` with `rawState`, as the mapper does. Submit answers HTTP 201 with `statusCode: 200` in the body, as Nest does without `@HttpCode`. Status carries `txHash` only after a submit.
 
 `POST {SELLER}/_swap` changes the stub until the next call, with any of:
@@ -78,7 +79,7 @@ The seller also answers the three routes of JAW's swap backend that the hosted s
 - `expire=<address>`: the quote expired, so submits for it answer 500 and status stays `PENDING_DEPOSIT`.
 - A JSON body of `{ "reset": true }`: every switch above goes back to its default. The seller also starts from the defaults.
 
-The stub is EVM-only: the backend also accepts Solana deposit addresses and signatures, and the stub refuses them with a 400.
+The stub's deposit routes are EVM-only: the backend also accepts Solana deposit addresses and signatures, and the stub refuses them with a 400.
 
 Drives for the swap tools are in [features/hosted-swap.md](features/hosted-swap.md), and for the owner-signed calls in [features/hosted-send-calls.md](features/hosted-send-calls.md).
 

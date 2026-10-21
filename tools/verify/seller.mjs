@@ -153,11 +153,20 @@ async function acceptOrRefuse(req, res, path, route) {
 // Swap backend stub: the routes of jan-back-mono apps/proxy/src/api/v2/swap and
 // move-asset, answering in its { statusCode, result: { data, error } } envelope.
 const QUOTE = '/proxy/v2/swap/quote';
+const MOVE_QUOTE = '/proxy/v2/move-asset/quote';
 const SUBMIT = '/proxy/v2/move-asset/deposit/submit';
 const STATUS = '/proxy/v2/move-asset/deposit/status';
 const OTHER = '0x3333333333333333333333333333333333333333';
 const HEX_ADDRESS = /^0x[0-9a-fA-F]{40}$/;
 const POSITIVE = /^[1-9][0-9]*$/;
+const BASE58 = /^[1-9A-HJ-NP-Za-km-z]{32,44}$/;
+const SOLANA = '792703809';
+const PROD_QUOTES = Object.fromEntries(
+  ['across', 'relay'].map((p) => [
+    p,
+    fs.readFileSync(`${repo}/apps/mcp/src/swap/fixtures/prod-${p}-quote.json`, 'utf8'),
+  ])
+);
 const KNOWN_STATES = new Set([
   'PENDING_DEPOSIT',
   'KNOWN_DEPOSIT_TX',
@@ -205,6 +214,7 @@ const MODES = new Set([
   'input-amount',
   'deposit-self',
   'reused',
+  ...Object.keys(PROD_QUOTES),
   ...Object.keys(QUOTE_TAMPERS),
 ]);
 
@@ -228,12 +238,15 @@ function track(address) {
   return deposits.get(key);
 }
 
-function quoteErrors(q) {
+function quoteErrors(q, { solana = false } = {}) {
   const errors = [];
   for (const k of ['originChainId', 'destinationChainId'])
     if (!POSITIVE.test(q[k] ?? '')) errors.push(`${k} must be a positive number`);
-  for (const k of ['originToken', 'destinationToken', 'depositor', 'recipient'])
-    if (!HEX_ADDRESS.test(q[k] ?? '')) errors.push(`${k} must be an EVM address`);
+  const toSolana = solana && q.destinationChainId === SOLANA;
+  for (const k of ['originToken', 'destinationToken', 'depositor', 'recipient']) {
+    const shape = toSolana && (k === 'destinationToken' || k === 'recipient') ? BASE58 : HEX_ADDRESS;
+    if (!shape.test(q[k] ?? '')) errors.push(`${k} must be an EVM address`);
+  }
   if (!POSITIVE.test(q.amount ?? ''))
     errors.push('amount must be a positive integer string (no leading zeros, no zero)');
   if (q.tradeType !== undefined && q.tradeType !== 'EXACT_INPUT' && q.tradeType !== 'EXACT_OUTPUT')
@@ -295,7 +308,7 @@ function paidQuote(query, nonce) {
 
 async function quote(req, res, url) {
   const query = Object.fromEntries(url.searchParams);
-  const errors = quoteErrors(query);
+  const errors = quoteErrors(query, { solana: true });
   const keyed = req.headers['x-api-key'] === SWAP_API_KEY;
   if (errors.length && (keyed || req.headers['payment-signature'])) {
     log({ path: QUOTE, event: 'refused', status: 400 });
@@ -324,6 +337,27 @@ async function quote(req, res, url) {
   if (key) replays.set(key, out);
   log({ path: QUOTE, event: 'quote', mode: swap.mode, quoteId: out.data?.quoteId ?? null });
   answer(res, out.status, out.data, out.error, out.headers);
+}
+
+function moveQuote(res, url) {
+  const query = Object.fromEntries(url.searchParams);
+  const errors = quoteErrors(query);
+  if (errors.length) {
+    log({ path: MOVE_QUOTE, event: 'refused', status: 400 });
+    return answer(res, 400, null, errors);
+  }
+  if (swap.mode === '422' || swap.mode === '502') {
+    log({ path: MOVE_QUOTE, event: 'refused', status: Number(swap.mode) });
+    return answer(res, Number(swap.mode), null, NO_PROVIDER[swap.mode]);
+  }
+  const other = PROD_QUOTES[swap.mode];
+  if (other) {
+    log({ path: MOVE_QUOTE, event: 'quote', mode: swap.mode });
+    return res.writeHead(200, { 'content-type': 'application/json' }).end(other);
+  }
+  const out = paidQuote(query, `0x${randomBytes(32).toString('hex')}`);
+  log({ path: MOVE_QUOTE, event: 'quote', mode: swap.mode, quoteId: out.data?.quoteId ?? null });
+  answer(res, out.status, out.data, out.error);
 }
 
 function depositStatus(address, t, raw) {
@@ -435,6 +469,7 @@ http
       return res.writeHead(204).end();
     }
     if (path === QUOTE && req.method === 'GET') return quote(req, res, url);
+    if (path === MOVE_QUOTE && req.method === 'GET') return moveQuote(res, url);
     if ((path === SUBMIT && req.method === 'POST') || (path === STATUS && req.method === 'GET'))
       return deposit(req, res, url, path);
     const route = ROUTES[path];

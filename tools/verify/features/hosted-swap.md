@@ -1,11 +1,14 @@
 # Hosted swap
 
-`jaw_swap` and `jaw_swap_status` in `apps/mcp` swap or bridge the account's funds across chains. The server gets a quote with its own swap api key, which the backend lets through without payment, and checks it. The connection needs `wallet:read` only and no budget. The account owner then approves the one deposit transaction in the wallet and pays its gas. The session key never signs the deposit.
+`jaw_swap` and `jaw_swap_status` in `apps/mcp` swap or bridge the account's funds across chains. The server gets a quote with its own swap api key and checks it: an EVM destination from `/move-asset/quote`, which has no guard, and a Solana one from `/swap/quote`, which lets that key through without payment. Only a quote Aurora answered is ever shown to the owner. The connection needs `wallet:read` only and no budget. The account owner then approves the one deposit transaction in the wallet and pays its gas. The session key never signs the deposit.
 
 ## Sub-features
 
 - `swap-key`: a connection with `wallet:read` only and no budget gets a quote, and nothing is paid.
-- `swap-key-refused`: a key the backend does not list leaves the swap `quoting` with `backend_unavailable` and an error log line.
+- `swap-key-refused`: on a Solana destination, a key the backend does not list leaves the swap `quoting` with `backend_unavailable` and an error log line.
+- `swap-move-asset`: an EVM destination quotes through `/move-asset/quote` and the Aurora quote runs the whole flow.
+- `swap-solana`: a Solana destination quotes through `/swap/quote`.
+- `swap-other-provider`: a quote Across or Relay answered ends `quote_rejected` with `quote_unsupported_provider` and no wallet prompt.
 - `swap-origin`: an origin chain outside JAW's list gives `unsupported_origin_chain` before any request to the backend.
 - `swap-paused`: with payments paused, `jaw_swap` still quotes and `jaw_swap_status` keeps working.
 - `swap-check-<mode>`: each way a quote can break the checks ends in `quote_rejected` with its code and no wallet link.
@@ -39,11 +42,14 @@ node $S/hosted-client.mjs "$MCP_PUBLIC_URL"
 
 Control the stub with `curl -s -X POST "$SELLER/_swap?<switch>"` (switches in ../README.md, "Swap backend stub") and reset it with a JSON body of `{"reset":true}`. Run each drive from a fresh connection unless it says otherwise.
 
-- swap-key: connect with `wallet:read` only and no budget, then `swap`. Pass: `awaiting_owner` with a `url`, one `quote` row with `"by":"api-key"` in `seller.log`, no `challenge` or `payment` row, and no `payments` row for the connection.
-- swap-key-refused: restart the mcp container with `JAW_MCP_SWAP_API_KEY=not-listed`, then `swap`. Pass: `quoting` with `backend_unavailable`, one `challenge` row in `seller.log`, no `payment` row, and the container log line `swap backend refused the swap api key`. Restart with the default key and send the same key: `awaiting_owner`.
+- swap-key: connect with `wallet:read` only and no budget, then `swap`. Pass: `awaiting_owner` with a `url`, one `quote` row on `/proxy/v2/move-asset/quote` in `seller.log`, no `challenge` or `payment` row, and no `payments` row for the connection.
+- swap-move-asset: swap-happy with an EVM destination. Pass: every `quote` row in `seller.log` is on `/proxy/v2/move-asset/quote`, none on `/proxy/v2/swap/quote`, and reopen, status and submit add none.
+- swap-solana: `swap 84532 <USDC> 792703809 EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v <amount> <base58 recipient>`. Pass: `awaiting_owner`, one `quote` row on `/proxy/v2/swap/quote` with `"by":"api-key"`, no `payment` row.
+- swap-other-provider: `mode=across`, then `swap`; again with `mode=relay`. Pass: `quote_rejected` with `quote_unsupported_provider`, a summary naming the provider, no `url`, no `response` and none of the quote's calldata in the output, the `swaps` row with no `call`, and no wallet prompt.
+- swap-key-refused: restart the mcp container with `JAW_MCP_SWAP_API_KEY=not-listed`, then `swap` to a Solana destination as in swap-solana. Pass: `quoting` with `backend_unavailable`, one `challenge` row in `seller.log`, no `payment` row, and the container log line `swap backend refused the swap api key`. Restart with the default key and send the same key: `awaiting_owner`.
 - swap-origin: `swap` with an origin chain outside JAW's list. Pass: `unsupported_origin_chain`, no request in `seller.log`.
 - swap-paused: set `payments_paused` with psql, then `swap`: `awaiting_owner`, as the quote is not paid.
-- swap-check-<mode>: one drive per mode (`two-tx`, `no-tx`, `wrong-chain`, `quote-id`, `provider`, `deposit-field`, `tx-to`, `tx-value`, `tx-data`, `trailing-bytes`, `input-amount`, `output-amount`, `zero-min`, `deposit-self`, `reused`). Pass: `quote_rejected` with the mode's code, one `quote` row with `"by":"api-key"`, no `url`.
+- swap-check-<mode>: one drive per mode (`two-tx`, `no-tx`, `wrong-chain`, `quote-id`, `provider`, `deposit-field`, `tx-to`, `tx-value`, `tx-data`, `trailing-bytes`, `input-amount`, `output-amount`, `zero-min`, `deposit-self`, `reused`). Pass: `quote_rejected` with the mode's code, one `quote` row, no `url`. `quote-id` and `provider` name another provider, so their code is `quote_unsupported_provider`.
 - swap-happy: `swap`, open the `url` as the owner and approve, then `swap-status <quoteId>` repeatedly. The stub walks `PENDING_DEPOSIT`, `PROCESSING`, `SUCCESS`. Pass: `completed`, a `submit` row in `seller.log`, a `swaps` row in `completed`, and the Sepolia receipt of the transfer to the deposit address.
 - swap-decline: reject in the wallet. Pass: `owner_declined`, no `txHash`.
 - swap-retry: `swap` twice with the same key while the link is live. Pass: same `swapId`, `quoteId` and `url`, one `quote` row.
@@ -61,9 +67,10 @@ Not driven here: the 240 s owner window expiring without a restart, concurrent c
 - The deposit moves the owner's funds outside any budget. A session key must never sign it, and a link must not open again once the wallet was asked to send: a row with the `send_started` marker never reopens, and an unmarked one reopens only when no session for it is live in the process, with no new quote.
 - The quote body is untrusted input to a signing screen. The call shown to the owner must equal the `transfer` of the amount to the deposit address, byte for byte.
 - A restart or a retry must never ask a second quote for a swap that holds one, and a marked swap must never be abandoned as unsent. Check the marker survives and that status, not a new swap, settles it.
-- Nothing pays for a quote. Check `seller.log` has no `payment` row on `/proxy/v2/swap/quote` and the `payments` table has no row for the connection.
+- Nothing pays for a quote. Check `seller.log` has no `payment` row on `/proxy/v2/swap/quote` or `/proxy/v2/move-asset/quote` and the `payments` table has no row for the connection. `/move-asset/quote` has no guard, so a quote there does not prove the key is listed; swap-key-refused runs on a Solana destination for that.
+- `/move-asset/quote` answers whichever provider quotes first. Until prod lists Aurora first, an EVM swap there ends `quote_unsupported_provider`.
 - The swap api key goes in the `x-api-key` header only, never in the URL or a log line.
-- The stub is EVM-only and answers quotes with a fresh random deposit address. It proves the tool's flow, not Aurora's behavior.
+- The stub answers quotes with a fresh random deposit address, takes a Solana destination on `/swap/quote` only, and answers Across and Relay with quotes captured from prod. It proves the tool's flow, not Aurora's behavior.
 
 ## What counts as evidence
 

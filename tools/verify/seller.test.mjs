@@ -68,6 +68,14 @@ const ERC20_QUERY = {
 };
 const NATIVE_QUERY = { ...ERC20_QUERY, originToken: '0x0000000000000000000000000000000000000000' };
 const quoteUrl = (query) => `${base}/proxy/v2/swap/quote?${new URLSearchParams(query)}`;
+const moveQuoteUrl = (query) => `${base}/proxy/v2/move-asset/quote?${new URLSearchParams(query)}`;
+const SOLANA_QUERY = {
+  ...ERC20_QUERY,
+  destinationChainId: '792703809',
+  destinationToken: 'EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v',
+  recipient: 'So11111111111111111111111111111111111111112',
+};
+const fixture = (p) => JSON.parse(fs.readFileSync(`${repo}/apps/mcp/src/swap/fixtures/prod-${p}-quote.json`, 'utf8'));
 
 async function proof(nonce = toHex(crypto.getRandomValues(new Uint8Array(32)))) {
   const authorization = {
@@ -244,6 +252,46 @@ test('given mode 422 or 502, the quote refuses before the challenge in the NoPro
     assert.match(body.result.error, /^NoProviderAvailable: aurora=/);
   }
   await control({ mode: '' });
+});
+
+test('given an EVM query with no key and no payment, move-asset/quote answers an Aurora quote', async () => {
+  const res = await fetch(moveQuoteUrl(ERC20_QUERY));
+  assert.equal(res.status, 200);
+  assert.equal(res.headers.get('payment-required'), null);
+  const { data } = (await res.json()).result;
+  assert.equal(data.provider, 'aurora');
+  assert.match(data.quoteId, /^aurora:0x[0-9a-fA-F]{40}$/);
+});
+
+test('given mode across or relay, move-asset/quote answers the quote captured from prod as it came', async () => {
+  for (const provider of ['across', 'relay']) {
+    await control({ mode: provider });
+    const res = await fetch(moveQuoteUrl(ERC20_QUERY));
+    assert.equal(res.status, 200);
+    assert.deepEqual(await res.json(), fixture(provider));
+  }
+  await control({ mode: '' });
+});
+
+test('given mode 422 or 502, move-asset/quote answers the NoProviderAvailable envelope', async () => {
+  for (const status of [422, 502]) {
+    await control({ mode: String(status) });
+    const res = await fetch(moveQuoteUrl(ERC20_QUERY));
+    assert.equal(res.status, status);
+    assert.match((await res.json()).result.error, /^NoProviderAvailable: aurora=/);
+  }
+  await control({ mode: '' });
+});
+
+test('given a Solana destination, move-asset/quote refuses it and swap/quote with the key quotes it', async () => {
+  assert.equal((await fetch(moveQuoteUrl(SOLANA_QUERY))).status, 400);
+  const res = await fetch(quoteUrl(SOLANA_QUERY), { headers: { 'x-api-key': 'verify-swap-key' } });
+  assert.equal(res.status, 200);
+  assert.equal((await res.json()).result.data.provider, 'aurora');
+  const evm = await fetch(quoteUrl({ ...SOLANA_QUERY, destinationChainId: '42161' }), {
+    headers: { 'x-api-key': 'verify-swap-key' },
+  });
+  assert.equal(evm.status, 400);
 });
 
 test('given mode invalid, a paid quote answers 200 with a body that is not a quote', async () => {
@@ -447,6 +495,7 @@ test('every swap route and control call is logged', () => {
   const paths = new Set(logRows().map((r) => r.path));
   for (const p of [
     '/proxy/v2/swap/quote',
+    '/proxy/v2/move-asset/quote',
     '/proxy/v2/move-asset/deposit/submit',
     '/proxy/v2/move-asset/deposit/status',
     '/_swap',

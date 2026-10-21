@@ -16,6 +16,8 @@ import {
 } from './store';
 
 const BODY_MAX = 8_000;
+export const SOLANA = 792703809;
+const PROVIDER_NAME = /^[a-z0-9-]{1,32}$/i;
 
 export type SwapInput = {
   originChainId: number;
@@ -61,7 +63,8 @@ function quoteUrl(row: SwapRow): string {
     recipient: row.recipient,
     tradeType: 'EXACT_INPUT',
   });
-  return `${config().swapUrl}/swap/quote?${query}`;
+  const route = row.destinationChainId === SOLANA ? 'swap/quote' : 'move-asset/quote';
+  return `${config().swapUrl}/${route}?${query}`;
 }
 
 type Answer = { kind: 'answered'; status: number; body: string } | { kind: 'unreachable' };
@@ -72,7 +75,8 @@ async function ask(url: string, deps: QuoteDeps): Promise<Answer> {
       headers: { 'x-api-key': deps.apiKey },
       signal: AbortSignal.timeout(deps.timeoutMs),
     });
-    return { kind: 'answered', status: res.status, body: await res.text() };
+    const body = await res.text();
+    return { kind: 'answered', status: res.status, body: deps.apiKey ? body.split(deps.apiKey).join('[key]') : body };
   } catch (err) {
     log('warn', { msg: 'swap quote unreachable', error: errorLabel(err) });
     return { kind: 'unreachable' };
@@ -131,7 +135,12 @@ async function keepQuote(
   body: string,
   fenced: string | null
 ): Promise<SwapRow | undefined> {
-  const checked = await checkQuote(request, dataOf(body), isDepositAddressTaken);
+  const data = dataOf(body);
+  const provider = nonAuroraProvider(data);
+  if (provider) {
+    return writeHeld(lease, { state: 'quote_rejected', code: 'quote_unsupported_provider', quote: { provider } });
+  }
+  const checked = await checkQuote(request, data, isDepositAddressTaken);
   if (!checked.ok) {
     const state = checked.code === 'quote_invalid' ? 'quote_failed' : 'quote_rejected';
     return writeHeld(lease, { state, code: checked.code, quoteFenced: fenced });
@@ -150,6 +159,13 @@ async function keepQuote(
     if (!depositAddressReused(err)) throw err;
     return writeHeld(lease, { state: 'quote_rejected', code: 'deposit_address_reused', quoteFenced: fenced });
   }
+}
+
+function nonAuroraProvider(data: unknown): string | undefined {
+  const { provider, quoteId } = (data ?? {}) as { provider?: unknown; quoteId?: unknown };
+  if (typeof provider !== 'string') return undefined;
+  if (provider === 'aurora' && String(quoteId).startsWith('aurora:')) return undefined;
+  return PROVIDER_NAME.test(provider) ? provider : 'unknown';
 }
 
 function dataOf(raw: string): unknown {
