@@ -138,6 +138,9 @@ describe('jaw_revoke_permission', () => {
     await walletsSettled();
 
     expect('structuredContent' in result && result.structuredContent?.connection).toBe(other.t.connectionId);
+    expect('structuredContent' in result && result.structuredContent?.summary).toContain(
+      'call jaw_connections yourself'
+    );
     const listed = await callTool(me.c.access_token, 'jaw_connections', {});
     const theirs = (listed.structuredContent.connections as { id: string; grants: object[] }[]).find(
       (c) => c.id === other.t.connectionId

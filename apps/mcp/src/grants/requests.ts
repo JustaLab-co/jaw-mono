@@ -142,12 +142,22 @@ function outcomeOf(err: unknown, row: PermissionRequestRow, asked: boolean): Out
   return { state: 'failed', code: 'unexpected' };
 }
 
-export async function currentSign(t: Tenant, idempotencyKey: string): Promise<PermissionRequestRow | undefined> {
-  const same = sameSign(t, idempotencyKey);
+async function readSign(same: SQL | undefined): Promise<PermissionRequestRow | undefined> {
   await closeDead(same);
   const [row] = await getDb().select().from(permissionRequests).where(same);
   return row;
 }
+
+export const currentSign = (t: Tenant, idempotencyKey: string) => readSign(sameSign(t, idempotencyKey));
+
+export const signById = (t: Tenant, id: string) =>
+  readSign(
+    and(
+      eq(permissionRequests.method, 'sign'),
+      eq(permissionRequests.connectionId, t.connectionId),
+      eq(permissionRequests.id, id)
+    )
+  );
 
 // An answer the owner gave still stands on a row that ended while its process could not renew.
 const answered = (state: Outcome['state']) => state === 'approved' || state === 'owner_declined';
