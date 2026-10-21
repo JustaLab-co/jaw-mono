@@ -21,12 +21,12 @@ const CONCURRENCY = 10;
 const CHAIN_DEADLINE_MS = 4000;
 const CALL_BUDGET_MS = 4500;
 const ASSET_TYPES = ['native', 'erc20'];
-const caip2 = (chainId: number) => `eip155:${chainId}`;
-const readOnly = { readOnlyHint: true, openWorldHint: true };
+export const caip2 = (chainId: number) => `eip155:${chainId}`;
+export const readOnly = { readOnlyHint: true, openWorldHint: true };
 
-const mainnetIds = () => getSupportedChains(false).map((c) => c.id);
+export const mainnetIds = () => getSupportedChains(false).map((c) => c.id);
 
-const chainIds = z
+export const chainIds = z
   .array(z.number().int().positive())
   .min(1)
   .max(60)
@@ -34,13 +34,13 @@ const chainIds = z
   .describe('Mainnet chain ids to read; every supported mainnet when left out');
 
 // The key rides in the proxy URL, so an error that quotes the URL must not carry it out.
-function scrub(text: string) {
+export function scrub(text: string) {
   const key = config().paymasterApiKey;
   const bare = key ? text.split(key).join('[key]').split(encodeURIComponent(key)).join('[key]') : text;
   return bare.replace(/api-key=[^&\s"']*/gi, 'api-key=[key]');
 }
 
-function reasonOf(err: unknown) {
+export function reasonOf(err: unknown) {
   if (err instanceof z.ZodError) return 'The proxy answered with an unexpected shape.';
   const message = typeof err === 'object' && err !== null && 'message' in err ? String(err.message) : 'request failed';
   return sanitizeLine(scrub(message), 200);
