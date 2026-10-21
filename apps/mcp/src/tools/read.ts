@@ -298,7 +298,7 @@ type Terms = Awaited<ReturnType<typeof termsOf>>;
 
 const UNREADABLE: QuoteReadiness = { status: 'not_ready', reason: 'chain_unavailable' };
 const NO_FUNDING: QuoteReadiness = { status: 'not_ready', reason: 'funding_unavailable' };
-// Pay's own refusals at selection that a larger budget, not a retry, answers.
+// Pay's own refusals at selection that still leave the quote a price to show.
 const CAPPED: Record<string, QuoteReadiness> = {
   budget_exhausted: { status: 'not_ready', reason: 'over_allowance' },
   over_cap: { status: 'not_ready', reason: 'over_cap' },
@@ -354,7 +354,7 @@ function fitSummary(read: BudgetRead, grant: Grant, terms: Terms, { readiness, a
     case 'over_allowance':
       return ` Budget ${permissionId} has ${left} left today, not enough to pay it.${approval}`;
     case 'over_cap':
-      return ` Budget ${permissionId} lets one payment spend at most ${terms.policy.maxAmountPerPayment} base units.`;
+      return ` One payment may spend at most ${terms.policy.maxAmountPerPayment} base units, whatever the budget.`;
     case 'balance_low':
       return ` The account ${grant.account} holds too little USDC to refill the session for it: send USDC there (jaw_add_funds).`;
     case 'funding_unavailable':
