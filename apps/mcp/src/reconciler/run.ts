@@ -1,17 +1,29 @@
-import type { ChainClients } from '@jaw.id/agent';
+import type { ChainClients, PermissionState } from '@jaw.id/agent';
 import { and, eq, isNotNull, isNull, lt, ne, sql } from 'drizzle-orm';
-import { getAbiItem, type Address, type Hex } from 'viem';
-import { entryPoint08Abi, entryPoint08Address } from 'viem/account-abstraction';
+import type { Address, Hex } from 'viem';
+import { entryPoint08Address } from 'viem/account-abstraction';
 import { chainClients } from '@/adapters/session-host';
 import { config } from '@/connections/config';
 import { retire, sessionSender, type DisconnectDeps } from '@/connections/disconnect';
 import { claimSealedKey, endConnection, restoreSealedKey } from '@/connections/rows';
 import { open, type Sealed } from '@/connections/seal';
 import { getDb } from '@/db/client';
-import { auditEvents, connections, grants, oauthPayloads, ownerCalls, payments, rateLimits, swaps } from '@/db/schema';
+import {
+  auditEvents,
+  connections,
+  grants,
+  oauthPayloads,
+  ownerCalls,
+  payments,
+  permissionRequests,
+  rateLimits,
+  swaps,
+} from '@/db/schema';
 import { isPaymentsPaused } from '@/db/settings';
-import { readOnChain } from '@/grants/permission';
-import { closeLapsedLinks } from '@/grants/requests';
+import { readOnChain, type ReadPermission } from '@/grants/permission';
+import { closeLapsedLinks, SIGN_KEPT_DAYS } from '@/grants/requests';
+import { fromStore, settleUnconfirmedRevokes, type RevokeReads } from '@/grants/revokes';
+import { recordRevoked, sampleLiveGrants } from '@/grants/store';
 import { errorLabel, log } from '@/lib/edge';
 import { conclude, sentBefore } from '@/owner-calls/store';
 import {
@@ -23,7 +35,15 @@ import {
   type ReadReceipt,
 } from '@/owner-calls/receipt';
 import { chainAnswer, type ChainAnswer } from '@/payments/confirm';
-import { claimOpenSends, settleSends, type SendEnd, type SendRow } from '@/payments/sends';
+import {
+  claimOpenSends,
+  endOf,
+  SEND_WINDOW_BLOCKS,
+  settleSends,
+  userOperationEvent,
+  type SendEnd,
+  type SendRow,
+} from '@/payments/sends';
 import { claimUnresolved, expire, markAlerted, settle, txHashTaken, type PaymentRow } from '@/payments/store';
 
 export const RECONCILE_AFTER_MS = 60_000;
@@ -40,8 +60,10 @@ export interface Report {
   alerted: number;
   sends: { landed: number; released: number; open: number };
   ownerCalls: { landed: number; reverted: number; open: number };
-  links: { expired: number };
+  links: { expired: number; revoked: number };
 }
+
+const REVOKE_READS: RevokeReads = { readPermission: readOnChain, lookUp: fromStore, lookUpMs: 10_000 };
 
 /**
  * Resolves every signed or unknown row older than the window and not held by a
@@ -53,6 +75,7 @@ export async function reconcile(
   clients: ChainClients = chainClients,
   now = new Date(),
   receipt: ReadReceipt = readReceipt,
+  revokeReads: RevokeReads = REVOKE_READS,
   known: ReadKnown = readKnown
 ): Promise<Report> {
   const report: Report = {
@@ -62,7 +85,7 @@ export async function reconcile(
     alerted: 0,
     sends: { landed: 0, released: 0, open: 0 },
     ownerCalls: { landed: 0, reverted: 0, open: 0 },
-    links: { expired: 0 },
+    links: { expired: 0, revoked: 0 },
   };
   await reconcileSends(clients, { receipt, known }, report);
   await reconcileOwnerCalls(receipt, clients, now, report);
@@ -78,11 +101,11 @@ export async function reconcile(
     }
     if (rows.length < BATCH) break;
   }
-  await closeLinks(report);
+  await reconcileLinks(revokeReads, report);
   return report;
 }
 
-async function closeLinks(report: Report) {
+async function reconcileLinks(deps: RevokeReads, report: Report) {
   try {
     report.links.expired = await closeLapsedLinks();
     // Many at once means processes stopped renewing together: a restart, or a database outage over the grace.
@@ -90,6 +113,11 @@ async function closeLinks(report: Report) {
       log('warn', { msg: `${report.links.expired} owner links ended with no process holding them` });
   } catch (err) {
     log('error', { msg: 'lapsed owner links not closed', error: errorLabel(err) });
+  }
+  try {
+    report.links.revoked = await settleUnconfirmedRevokes(deps);
+  } catch (err) {
+    log('error', { msg: 'unconfirmed revokes not read', error: errorLabel(err) });
   }
 }
 
@@ -132,10 +160,6 @@ async function apply(row: PaymentRow, answer: ChainAnswer, now: Date, report: Re
   report.alerted++;
 }
 
-// Some RPC providers cap eth_getLogs at 500 blocks.
-const SEND_WINDOW_BLOCKS = 450n;
-const userOperationEvent = getAbiItem({ abi: entryPoint08Abi, name: 'UserOperationEvent' });
-
 type Bundler = { receipt: ReadReceipt; known: ReadKnown };
 
 async function reconcileSends(clients: ChainClients, bundler: Bundler, report: Report) {
@@ -172,9 +196,8 @@ async function sendOutcome(row: SendRow, clients: ChainClients, bundler: Bundler
     toBlock: head < windowEnd ? head : windowEnd,
     strict: true,
   });
-  const landed = logs.find((l) => l.args.success);
-  if (landed) return { state: 'landed', txHash: landed.transactionHash };
-  if (logs.length > 0) return { state: 'released', txHash: logs[0].transactionHash };
+  const end = endOf(logs);
+  if (end) return end;
   if (head < windowEnd) return undefined;
   // The window bounds the log search only: the bundler can still hold the op, or have mined it since.
   // Past one more window the row is released even when the bundler cannot be read, so an op it never
@@ -222,6 +245,36 @@ async function reconcileOwnerCalls(receipt: ReadReceipt, clients: ChainClients, 
   );
 }
 
+const GRANTS_PER_SWEEP = 25;
+// Unreadable this many times in a row reads as an outage, not as one grant the chain cannot answer for.
+const OUTAGE_AFTER = 3;
+
+export async function sweepRevokedGrants(
+  read: ReadPermission = readOnChain,
+  limit = GRANTS_PER_SWEEP
+): Promise<number | null> {
+  try {
+    let recorded = 0;
+    let unread = 0;
+    // One at a time: the payment path reads the same RPC, and a burst can get it rate limited.
+    for (const g of await sampleLiveGrants(limit)) {
+      const state = await read({ chainId: g.chainId, permissionId: g.permissionId, permission: g.permission }).catch(
+        (): PermissionState => ({ status: 'unavailable' })
+      );
+      if (state.status === 'unavailable') {
+        if (++unread === OUTAGE_AFTER) return null;
+        continue;
+      }
+      unread = 0;
+      if (state.status === 'ok' && state.revoked) recorded += await recordRevoked([g.permissionId]);
+    }
+    return recorded;
+  } catch (err) {
+    log('error', { msg: 'grant sweep failed', error: errorLabel(err) });
+    return null;
+  }
+}
+
 const SESSION_DEPS: DisconnectDeps = { readPermission: readOnChain, clients: chainClients, sender: sessionSender };
 
 export async function purge(deps = SESSION_DEPS): Promise<void> {
@@ -230,6 +283,15 @@ export async function purge(deps = SESSION_DEPS): Promise<void> {
   await db.delete(oauthPayloads).where(lt(oauthPayloads.expiresAt, dayAgo));
   await db.delete(rateLimits).where(lt(rateLimits.windowStart, sql`now() - interval '1 hour'`));
   await db.delete(auditEvents).where(lt(auditEvents.createdAt, sql`now() - interval '90 days'`));
+  await db
+    .delete(permissionRequests)
+    .where(
+      and(
+        eq(permissionRequests.method, 'sign'),
+        ne(permissionRequests.state, 'awaiting_owner'),
+        lt(permissionRequests.updatedAt, sql`now() - ${SIGN_KEPT_DAYS} * interval '1 day'`)
+      )
+    );
   await retireAbandoned(deps);
   await retireUnexchanged(deps);
   await db

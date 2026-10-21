@@ -1,7 +1,7 @@
 import { createHash, randomBytes } from 'node:crypto';
-import type { ChainClients } from '@jaw.id/agent';
+import type { ChainClients, PermissionState } from '@jaw.id/agent';
 import { and, count, eq, inArray, isNotNull, sql } from 'drizzle-orm';
-import { PERMISSION_MANAGER_ABI } from '@jaw.id/agent';
+import { PERMISSION_MANAGER_ABI, usdcForNetwork } from '@jaw.id/agent';
 import {
   decodeFunctionData,
   encodeAbiParameters,
@@ -32,15 +32,18 @@ import {
   ISSUER,
 } from '@/connections/testkit';
 import { takeSealedKey } from '@/connections/rows';
+import { spends } from '@/connections/scopes';
 import { getDb } from '@/db/client';
 import { auditEvents, connections, grants, oauthPayloads, ownerCalls, payments } from '@/db/schema';
 import { useTestDb, withoutOwnerCallsGuard } from '@/db/test-db';
+import { budgetGrant, checkGranted, recordGrant } from '@/grants/permission';
 import { fakeChain, type FakeEvent } from '@/owner-calls/chain-testkit';
 import type { ReadReceipt } from '@/owner-calls/receipt';
 import { decline, insertOwnerCall, markSent, markSendStarted } from '@/owner-calls/store';
 import { sendCallsStatus } from '@/tools/owner-calls';
 import { render } from '@/payments/render';
-import { purge, reconcile, RECONCILE_AFTER_MS } from './run';
+import { recordRevoked } from '@/grants/store';
+import { purge, reconcile, RECONCILE_AFTER_MS, sweepRevokedGrants } from './run';
 
 setTestEnv();
 process.env.JAW_MCP_CRON_SECRET = 'cron-secret';
@@ -507,18 +510,21 @@ describe('cron and metrics routes', () => {
     const gauge = async () =>
       (await (await call('metrics', 'cron-secret')).text()).match(/^jaw_mcp_wraps_past_window .*$/m)?.[0];
     expect(await gauge()).toBe('jaw_mcp_wraps_past_window 2');
-    await call('cron', 'cron-secret');
+    const res = await call('cron', 'cron-secret');
+    expect(await res.json()).toHaveProperty('grantsRevoked');
     expect(await gauge()).toBe('jaw_mcp_wraps_past_window 0');
   });
 });
 
 describe('given an approval the owner never completed, past its expiry', () => {
-  /** A pending connection whose owner signed in and, with `scope` that spends, granted the budget. */
+  /** A pending connection whose owner signed in and, with `scope` that spends, holds a budget from connecting. */
   async function abandoned(scope = 'wallet:read x402:pay') {
     const signer = owner();
     setWallet({ openWallet: fakeWallet(walletAnswers(signer)) });
     const start = await startAuthorization(new Browser(), { scope });
     await walletsSettled();
+    const [pending] = await getDb().select().from(connections).where(eq(connections.interactionUid, start.uid!));
+    if (spends(pending.scopes)) await connectBudget(pending, signer);
     const [row] = await getDb()
       .update(connections)
       .set({ expiresAt: new Date(Date.now() - 1_000) })
@@ -577,6 +583,21 @@ describe('given an approval the owner never completed, past its expiry', () => {
   });
 });
 
+/** A budget granted while connecting, which connections made before connect stopped asking for one still hold. */
+async function connectBudget(row: typeof connections.$inferSelect, signer: ReturnType<typeof owner>) {
+  const grant = budgetGrant({
+    chainId: row.chainId,
+    spender: row.sessionAddress as Address,
+    token: usdcForNetwork(`eip155:${row.chainId}`)!.address,
+    allowance: 1_000_000n,
+    expiry: Math.floor(row.expiresAt.getTime() / 1000),
+  });
+  const answer = await walletAnswers(signer)('wallet_grantPermissions', [grant]);
+  const checked = await checkGranted(row.chainId, grant, 'x402-budget', answer, approvedOnChain);
+  if (typeof checked === 'string') throw new Error(checked);
+  await getDb().transaction((tx) => recordGrant(tx, row.id, checked));
+}
+
 describe('given an activated connection whose code was never exchanged, past the exchange window', () => {
   /** An active connection the owner completed but whose authorization code was never exchanged. */
   async function activeNeverExchanged(scope = 'wallet:read x402:pay') {
@@ -585,12 +606,13 @@ describe('given an activated connection whose code was never exchanged, past the
     browser.wallet = {
       openWallet: fakeWallet(walletAnswers(signer)),
       verify: verifyLocally,
-      readPermission: approvedOnChain,
     };
     const start = await startAuthorization(browser, { scope });
     if (!start.uid || !start.ticket) throw new Error('did not reach the wallet');
     await walletsSettled();
     await follow(browser, `${ISSUER}/interaction/${start.uid}/complete?ticket=${start.ticket}`);
+    const [connected] = await getDb().select().from(connections).where(eq(connections.interactionUid, start.uid!));
+    if (spends(connected.scopes)) await connectBudget(connected, signer);
     // 181 seconds: past the 180 s exchange window (60 s AuthorizationCode TTL + 120 s margin).
     const [row] = await getDb()
       .update(connections)
@@ -634,7 +656,6 @@ describe('given an activated connection whose code was never exchanged, past the
     browser.wallet = {
       openWallet: fakeWallet(walletAnswers(signer)),
       verify: verifyLocally,
-      readPermission: approvedOnChain,
     };
     const start = await startAuthorization(browser, {});
     if (!start.uid || !start.ticket) throw new Error('did not reach the wallet');
@@ -664,7 +685,6 @@ describe('given an activated connection whose code was never exchanged, past the
     browser.wallet = {
       openWallet: fakeWallet(walletAnswers(signer)),
       verify: verifyLocally,
-      readPermission: approvedOnChain,
     };
     const start = await startAuthorization(browser, { scope: 'wallet:read x402:pay' });
     if (!start.uid || !start.ticket) throw new Error('did not reach the wallet');
@@ -794,5 +814,118 @@ describe('sent owner calls the bundler no longer answers for', () => {
     } finally {
       logged.mockRestore();
     }
+  });
+});
+
+describe('given grants the owner may have revoked in the wallet', () => {
+  async function grantRows(over: { expiresAt?: Date; revokedAt?: Date }[]) {
+    const c = await connect();
+    const { connectionId, account } = (await verifyBearer(c.access_token))?.extra?.tenant as Tenant;
+    const ids = over.map(() => hex32());
+    await getDb()
+      .insert(grants)
+      .values(
+        over.map((o, i) => ({
+          permissionId: ids[i],
+          connectionId,
+          chainId: 84532,
+          account,
+          spender: payer,
+          kind: 'custom' as const,
+          permission: { id: ids[i] },
+          expiresAt: o.expiresAt ?? new Date(Date.now() + 86_400_000),
+          revokedAt: o.revokedAt,
+        }))
+      );
+    return ids;
+  }
+  const revokedAtOf = async (id: string) =>
+    (await getDb().select().from(grants).where(eq(grants.permissionId, id)))[0].revokedAt;
+
+  it('when the sweep runs, then only the one revoked on chain is marked, and expired or already revoked ones are not read', async () => {
+    const earlier = new Date(Date.now() - 3_600_000);
+    const [revoked, unapproved, mismatched, live, expired, marked] = await grantRows([
+      {},
+      {},
+      {},
+      {},
+      { expiresAt: new Date(Date.now() - 60_000) },
+      { revokedAt: earlier },
+    ]);
+    const answers: Record<string, PermissionState> = {
+      [revoked]: { status: 'ok', approved: true, revoked: true },
+      [unapproved]: { status: 'ok', approved: false, revoked: false },
+      [mismatched]: { status: 'mismatch' },
+    };
+    const read: string[] = [];
+    const count = await sweepRevokedGrants(async ({ permissionId }) => {
+      read.push(permissionId);
+      return answers[permissionId] ?? { status: 'ok', approved: true, revoked: false };
+    }, 10_000);
+
+    expect(count).toBe(1);
+    expect(await revokedAtOf(revoked)).toBeInstanceOf(Date);
+    for (const id of [unapproved, mismatched, live, expired]) expect(await revokedAtOf(id)).toBeNull();
+    expect(await revokedAtOf(marked)).toEqual(earlier);
+    expect(read).toEqual(expect.arrayContaining([revoked, unapproved, mismatched, live]));
+    expect(read).not.toContain(expired);
+    expect(read).not.toContain(marked);
+  });
+
+  it('when the chain cannot be read, then the sweep stops after three reads in a row, records nothing and reports it failed', async () => {
+    const [revoked] = await grantRows([{}, {}, {}, {}]);
+    let reads = 0;
+    const count = await sweepRevokedGrants(async () => {
+      reads++;
+      throw new Error('node down');
+    }, 10_000);
+    expect(count).toBeNull();
+    expect(reads).toBe(3);
+    expect(await revokedAtOf(revoked)).toBeNull();
+  });
+
+  it('when one grant cannot be read, then the sweep reads past it and records the revoked ones', async () => {
+    const [unreadable, revoked] = await grantRows([{}, {}]);
+    const count = await sweepRevokedGrants(async ({ permissionId }) => {
+      if (permissionId === unreadable) throw new Error('no client for this chain');
+      return { status: 'ok', approved: true, revoked: permissionId === revoked };
+    }, 10_000);
+    expect(count).toBe(1);
+    expect(await revokedAtOf(revoked)).toBeInstanceOf(Date);
+  });
+
+  it('when another caller recorded the revoke first, then the sweep does not count it again', async () => {
+    const [revoked] = await grantRows([{}]);
+    const read = async ({ permissionId }: { permissionId: string }): Promise<PermissionState> => {
+      if (permissionId !== revoked) return { status: 'ok', approved: true, revoked: false };
+      await recordRevoked([revoked]);
+      return { status: 'ok', approved: true, revoked: true };
+    };
+    expect(await sweepRevokedGrants(read, 10_000)).toBe(0);
+  });
+
+  it('when the sample is smaller than the live grants, then it reads no more than the limit', async () => {
+    await grantRows([{}, {}, {}]);
+    const read: string[] = [];
+    await sweepRevokedGrants(async ({ permissionId }) => {
+      read.push(permissionId);
+      return { status: 'ok', approved: true, revoked: false };
+    }, 2);
+    expect(read).toHaveLength(2);
+  });
+
+  it('when a grant already recorded revoked is recorded again, then it keeps the first time', async () => {
+    const earlier = new Date(Date.now() - 3_600_000);
+    const [marked] = await grantRows([{ revokedAt: earlier }]);
+    await recordRevoked([marked]);
+    expect(await revokedAtOf(marked)).toEqual(earlier);
+  });
+
+  it('when the store cannot be read, then the sweep reports it failed and does not throw', async () => {
+    const spy = vi.spyOn(getDb(), 'select').mockImplementationOnce(() => {
+      throw new Error('db down');
+    });
+    await expect(sweepRevokedGrants(async () => ({ status: 'unavailable' }))).resolves.toBeNull();
+    spy.mockRestore();
   });
 });

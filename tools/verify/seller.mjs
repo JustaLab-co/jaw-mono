@@ -3,6 +3,7 @@
 // Usage: node seller.mjs <repo-root> <port> <log-file>
 import http from 'node:http';
 import fs from 'node:fs';
+import { randomBytes } from 'node:crypto';
 import { createRequire } from 'node:module';
 
 const [repo, port, logFile] = process.argv.slice(2);
@@ -210,6 +211,9 @@ const MODES = new Set([
 const freshSwap = () => ({ mode: '', network: SEPOLIA, submitFails: 0, pinned: '', lastDeposit: null });
 const swap = freshSwap();
 const quoteRoute = { scheme: 'exact', amount: '5000', spent: new Set() };
+// The backend's X402_ALLOWED_API_KEYS: a request with this x-api-key gets the quote with no payment.
+// compose.yaml gives the hosted server the same key as JAW_MCP_SWAP_API_KEY.
+const SWAP_API_KEY = 'verify-swap-key';
 const replays = new Map();
 const deposits = new Map();
 
@@ -292,7 +296,8 @@ function paidQuote(query, nonce) {
 async function quote(req, res, url) {
   const query = Object.fromEntries(url.searchParams);
   const errors = quoteErrors(query);
-  if (errors.length && req.headers['payment-signature']) {
+  const keyed = req.headers['x-api-key'] === SWAP_API_KEY;
+  if (errors.length && (keyed || req.headers['payment-signature'])) {
     log({ path: QUOTE, event: 'refused', status: 400 });
     return answer(res, 400, null, errors);
   }
@@ -305,6 +310,11 @@ async function quote(req, res, url) {
     log({ path: QUOTE, event: 'replay', key });
     const { status, data, error, headers } = replays.get(key);
     return answer(res, status, data, error, headers);
+  }
+  if (keyed) {
+    const out = paidQuote(query, `0x${randomBytes(32).toString('hex')}`);
+    log({ path: QUOTE, event: 'quote', by: 'api-key', mode: swap.mode, quoteId: out.data?.quoteId ?? null });
+    return answer(res, out.status, out.data, out.error);
   }
   const chainId = Number(swap.network.split(':')[1]);
   const route = { ...quoteRoute, network: swap.network, asset: USDC_BY_CHAIN[chainId] ?? USDC };

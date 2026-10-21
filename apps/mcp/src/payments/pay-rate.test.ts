@@ -1,6 +1,6 @@
 import { beforeAll, describe, expect, it, vi } from 'vitest';
 import { verifyBearer, type Tenant } from '@/connections/auth';
-import { connect, setTestEnv } from '@/connections/testkit';
+import { owner, grantBudget, connect, setTestEnv } from '@/connections/testkit';
 import { useTestDb } from '@/db/test-db';
 import { pay, PAY_RATE_LIMIT, type PayDeps } from './pay';
 
@@ -24,8 +24,10 @@ describe('the per-connection pay rate limit', () => {
     [PAY_RATE_LIMIT + 1, true],
   ])('given hit %i on a connection in one window, when it pays, then rate_limited is %s', async (count, limited) => {
     hits.count = 0;
-    const c = await connect(undefined, { scope: 'wallet:read x402:pay' });
+    const signer = owner();
+    const c = await connect(signer, { scope: 'wallet:read x402:pay' });
     const t = (await verifyBearer(c.access_token))?.extra?.tenant as Tenant;
+    await grantBudget(t, signer);
     hits.count = count;
 
     const unreadable = { readPermission: async () => ({ status: 'unavailable' }) } as unknown as PayDeps;

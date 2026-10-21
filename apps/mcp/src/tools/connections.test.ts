@@ -1,11 +1,10 @@
 import { eq } from 'drizzle-orm';
 import { beforeAll, describe, expect, it } from 'vitest';
 import { verifyBearer, type Tenant } from '@/connections/auth';
-import { callTool, connect, owner, setTestEnv } from '@/connections/testkit';
+import { grantBudget, callTool, connect, owner, setTestEnv } from '@/connections/testkit';
 import { getDb } from '@/db/client';
 import { grants, permissionRequests } from '@/db/schema';
 import { useTestDb } from '@/db/test-db';
-import { x402Budget } from '@/grants/store';
 
 setTestEnv();
 beforeAll(useTestDb);
@@ -28,7 +27,7 @@ describe('jaw_connections', () => {
       (await tenantOf(paying.access_token)).connectionId,
       (await tenantOf(reading.access_token)).connectionId,
     ];
-    const budget = (await x402Budget(payingId))!;
+    const budget = (await grantBudget(await tenantOf(paying.access_token), signer))!;
 
     const result = await callTool(reading.access_token, 'jaw_connections', {});
     const listed = result.structuredContent.connections as Listed[];
@@ -50,9 +49,10 @@ describe('jaw_connections', () => {
   });
 
   it('given a grant revoked on chain, then it is listed revoked and not counted live', async () => {
-    const c = await connect();
+    const signer = owner();
+    const c = await connect(signer);
     const t = await tenantOf(c.access_token);
-    const budget = (await x402Budget(t.connectionId))!;
+    const budget = (await grantBudget(t, signer))!;
     await getDb().update(grants).set({ revokedAt: new Date() }).where(eq(grants.permissionId, budget.permissionId));
 
     const result = await callTool(c.access_token, 'jaw_connections', {});
@@ -62,9 +62,10 @@ describe('jaw_connections', () => {
   });
 
   it('given a grant the wallet answered but this server did not record, then its id is listed as unrecorded', async () => {
-    const c = await connect();
+    const signer = owner();
+    const c = await connect(signer);
     const t = await tenantOf(c.access_token);
-    const budget = (await x402Budget(t.connectionId))!;
+    const budget = (await grantBudget(t, signer))!;
     const orphan = `0x${'ab'.repeat(32)}`;
     const request = (id: string, permissionId: string, state: 'failed' | 'approved') => ({
       id,

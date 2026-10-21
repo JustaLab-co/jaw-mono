@@ -5,9 +5,7 @@ import type { Hex } from 'viem';
 import { privateKeyToAddress } from 'viem/accounts';
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { useTestDb } from '@/db/test-db';
-import type { ReadPermission } from '@/grants/permission';
 import {
-  approvedOnChain,
   Browser,
   connect,
   follow,
@@ -15,8 +13,10 @@ import {
   REDIRECT,
   RESOURCE,
   setTestEnv,
+  setWallet,
   startAuthorization,
   token,
+  verifyLocally,
   walletsSettled,
 } from './testkit';
 
@@ -680,13 +680,15 @@ describe('authorization server', () => {
     const browser = new Browser();
     await connect(undefined, {}, browser);
     // Twenty minutes pass while the owner approves in the wallet.
-    const late: ReadPermission = async (...args) => {
-      await db.query(
-        `update oauth_payloads set expires_at = expires_at - interval '20 minutes' where expires_at is not null`
-      );
-      return approvedOnChain(...args);
-    };
-    const second = await connect(undefined, {}, browser, late);
+    setWallet({
+      verify: async (a) => {
+        await db.query(
+          `update oauth_payloads set expires_at = expires_at - interval '20 minutes' where expires_at is not null`
+        );
+        return verifyLocally(a);
+      },
+    });
+    const second = await connect(undefined, {}, browser).finally(() => setWallet({ verify: verifyLocally }));
     expect(second.status).toBe(200);
   });
 

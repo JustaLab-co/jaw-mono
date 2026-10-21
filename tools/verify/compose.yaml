@@ -36,11 +36,12 @@ services:
       JAW_MCP_API_KEY: ${JAW_MCP_API_KEY:-}
       JAW_MCP_INSECURE_FETCH_HOSTS: ${JAW_MCP_INSECURE_FETCH_HOSTS:-},localhost:${PORT}
       JAW_MCP_SWAP_URL: ${JAW_MCP_SWAP_URL:-http://localhost:${PORT}/proxy/v2}
+      # The key the seller's swap stub lets through without payment.
+      JAW_MCP_SWAP_API_KEY: ${JAW_MCP_SWAP_API_KEY:-verify-swap-key}
       JAW_MCP_SWAP_QUOTE_TTL_SEC: ${JAW_MCP_SWAP_QUOTE_TTL_SEC:-}
       # Settles signed payments whose receipt came after the call answered.
       JAW_MCP_RECONCILE_EVERY: ${JAW_MCP_RECONCILE_EVERY:-30}
       JAW_RELAY_URL: ${JAW_RELAY_URL:-}
-      JAW_MCP_DAILY_BUDGET: ${JAW_MCP_DAILY_BUDGET:-}
     ports: ['${MCP_PORT:-0}:3000']
     extra_hosts: ['host.docker.internal:host-gateway']
     depends_on:
