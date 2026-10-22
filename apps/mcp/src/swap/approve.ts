@@ -16,6 +16,7 @@ import {
   recordCode,
   recordSentCode,
   recordTxHash,
+  declineUnsent,
   type SwapRow,
 } from './store';
 import { providerOf, submit } from './track';
@@ -53,11 +54,11 @@ export async function approve(
 ): Promise<void> {
   const calls = callsOf(row);
   if (!calls) {
-    await decline(row, CALL_INVALID);
+    await declineUnsent(row, CALL_INVALID);
     return;
   }
   if (!config().swapProviders.has(providerOf(row))) {
-    await decline(row, PROVIDER_DISABLED);
+    await declineUnsent(row, PROVIDER_DISABLED);
     return;
   }
   let accounts: unknown;

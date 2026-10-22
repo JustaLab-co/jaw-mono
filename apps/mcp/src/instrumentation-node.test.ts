@@ -98,10 +98,25 @@ describe('prepare', () => {
     expect(runMigrations).toHaveBeenCalledWith('postgres://test');
   });
 
+  it('given JAW_MCP_SWAP_PROVIDERS in mixed case with spaces, when the server boots, then it starts and config answers every later call', async () => {
+    process.env.JAW_MCP_SWAP_PROVIDERS = ' Aurora , across';
+    const exit = vi.spyOn(process, 'exit').mockImplementation(() => undefined as never);
+    vi.resetModules();
+    const fresh = await import('./instrumentation-node');
+    const { config } = await import('./connections/config');
+
+    await fresh.prepare();
+
+    expect(exit).not.toHaveBeenCalled();
+    expect(config().swapProviders).toEqual(new Set(['aurora', 'across']));
+    expect(config()).toBe(config());
+  });
+
   it.each([
     ['JAW_MCP_PUBLIC_URL', undefined, 'JAW_MCP_PUBLIC_URL is not set'],
     ['JAW_MCP_SEALING_KEYS', undefined, 'JAW_MCP_SEALING_KEYS'],
     ['JAW_MCP_FLOAT_TARGET', '0.25', 'JAW_MCP_FLOAT_TARGET must be whole base units'],
+    ['JAW_MCP_SWAP_PROVIDERS', 'aurora,uniswap', 'JAW_MCP_SWAP_PROVIDERS must be a comma list'],
   ])('given %s set to %s, then it logs why and exits before migrating', async (name, value, error) => {
     if (value === undefined) delete process.env[name];
     else process.env[name] = value;

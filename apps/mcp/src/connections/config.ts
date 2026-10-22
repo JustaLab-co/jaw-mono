@@ -113,7 +113,7 @@ function swapUrl(value: string, insecureFetchHosts: ReadonlySet<string>): string
 const PROVIDERS: readonly Provider[] = ['aurora', 'across', 'relay'];
 
 function swapProviders(value: string): ReadonlySet<Provider> {
-  const names = value.split(',');
+  const names = value.split(',').map((name) => name.trim().toLowerCase());
   if (!names.every((name) => (PROVIDERS as readonly string[]).includes(name))) {
     throw new Error('JAW_MCP_SWAP_PROVIDERS must be a comma list of aurora, across and relay, such as aurora');
   }

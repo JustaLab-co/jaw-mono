@@ -180,10 +180,15 @@ describe('the owner session for a swap', () => {
     value: '0',
   };
 
-  async function ownerOpens(call: unknown, state: SwapRow['state'] = 'awaiting_owner', quote: object = {}) {
+  async function ownerOpens(
+    call: unknown,
+    state: SwapRow['state'] = 'awaiting_owner',
+    quote: object = {},
+    code: string | null = null
+  ) {
     const approveBy = new Date(Date.now() + 30_000);
     const row = await awaitingOwner(call as SwapRow['call'], approveBy, quote);
-    await getDb().update(swaps).set({ state }).where(eq(swaps.id, row.id));
+    await getDb().update(swaps).set({ state, code }).where(eq(swaps.id, row.id));
     const wallet = await ownerRelay(84532, approveBy);
     const opened = await page(wallet.url, (method) => {
       if (method === 'eth_requestAccounts') return [ACCOUNT];
@@ -293,6 +298,21 @@ describe('the owner session for a swap', () => {
     expect(after).toMatchObject({ state: 'expired', code: CALL_INVALID, callsId: null });
   });
 
+  it.each(['awaiting_owner', 'expired'] as const)(
+    'given a row %s whose send already started and whose call does not read, when its session runs again, then the wallet is asked nothing and the row keeps send_started',
+    async (state) => {
+      const { requests, after } = await ownerOpens(
+        [{ kind: 'deposit', ...transfer }, approval],
+        state,
+        {},
+        'send_started'
+      );
+
+      expect(requests).toEqual([]);
+      expect(after).toMatchObject({ state, code: 'send_started', callsId: null });
+    }
+  );
+
   describe('given a provider switched off after the quote', () => {
     const batch = () => [approval, { kind: 'deposit', ...transfer }];
 
@@ -319,6 +339,16 @@ describe('the owner session for a swap', () => {
       expect(requests).toEqual([]);
       expect(after).toMatchObject({ state: 'expired', code: 'provider_disabled', callsId: null });
     });
+
+    it.each(['awaiting_owner', 'expired'] as const)(
+      'when the session of an Across row %s whose send already started runs again, then the wallet is asked nothing and the row keeps send_started',
+      async (state) => {
+        const { requests, after } = await ownerOpens(batch(), state, { provider: 'across' }, 'send_started');
+
+        expect(requests).toEqual([]);
+        expect(after).toMatchObject({ state, code: 'send_started', callsId: null });
+      }
+    );
 
     it('when aurora is switched off and the owner opens the link of a legacy row, then it is declined with provider_disabled', async () => {
       config().swapProviders = new Set(['across', 'relay']);

@@ -135,13 +135,15 @@ describe('JAW_MCP_SWAP_PROVIDERS', () => {
     ['aurora,across,relay', ['aurora', 'across', 'relay']],
     ['relay,across', ['across', 'relay']],
     ['across', ['across']],
+    ['aurora, across', ['aurora', 'across']],
+    ['Aurora,Across', ['aurora', 'across']],
   ])('given %j, then those providers are signed', async (value, providers) => {
     process.env.JAW_MCP_SWAP_PROVIDERS = value;
     const { config } = await import('./config');
     expect(config().swapProviders).toEqual(new Set(providers));
   });
 
-  it.each(['uniswap', 'aurora,', 'Across', 'aurora, across', ','])(
+  it.each(['uniswap', 'aurora,', 'aurora,,across', ' ', ','])(
     'given %j, then it refuses to start naming the variable',
     async (value) => {
       process.env.JAW_MCP_SWAP_PROVIDERS = value;

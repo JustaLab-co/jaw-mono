@@ -210,6 +210,8 @@ export const SEND_STARTED = 'send_started';
 const heldBy = (row: SwapRow, states: SwapState[]) =>
   and(ofSwap(row.connectionId, row.id, states), leasedSwaps.heldBy(row));
 
+const unsent = sql`${swaps.code} is distinct from ${SEND_STARTED}`;
+
 export const markSendStarted = (row: SwapRow) =>
   write(
     and(
@@ -229,7 +231,7 @@ export const reopenLink = (row: SwapRow, walletUrl: string, db: Tx = getDb()) =>
     and(
       ofSwap(row.connectionId, row.id, ['awaiting_owner']),
       eq(swaps.walletUrl, row.walletUrl!),
-      sql`${swaps.code} is distinct from ${SEND_STARTED}`,
+      unsent,
       gt(swaps.approveBy, dbNow),
       unclaimed
     ),
@@ -241,6 +243,10 @@ export const { renew: renewSession, end: endSession } = leasedSwaps;
 
 export const decline = (row: SwapRow, code: string) =>
   write(heldBy(row, ['awaiting_owner']), { state: 'owner_declined', code, relay: null });
+
+export const declineUnsent = async (row: SwapRow, code: string) =>
+  (await write(and(heldBy(row, ['awaiting_owner']), unsent), { state: 'owner_declined', code, relay: null })) ??
+  write(and(heldBy(row, ['expired']), unsent), { code });
 
 /** Written by whichever run hears the calls id, holder or not: the trigger keeps it write-once. */
 export const recordCallsId = (row: SwapRow, callsId: string) =>

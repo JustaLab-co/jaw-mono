@@ -42,6 +42,7 @@ import { gateCode } from '@/payments/render';
 import type { BackendDeps } from '@/swap/backend';
 import { swapRequest, type QuoteDeps } from '@/swap/quote';
 import { CALL_INVALID, callsOf } from '@/swap/calls';
+import { approve } from '@/swap/approve';
 import { approveByOf, claimSwap, type SwapRow } from '@/swap/store';
 import { purge } from '@/reconciler/run';
 import { fakeChain } from '@/owner-calls/chain-testkit';
@@ -1420,6 +1421,43 @@ describe('jaw_swap_status', () => {
     expect(summary).toContain('Across refunds the deposit as WETH to the account on chain 84532. ');
   });
 
+  it('given an Across row stored without deadline or app fee, when jaw_swap_status answers, then the summary falls back to generic terms', async () => {
+    const { t, quoteId, row } = await providerRow('across');
+    await rewrite(row.id, { ...termsOf(row, { provider: 'across' }), call: [approvalOf(POOL), callTo(POOL)] });
+
+    const summary = (await status(t, quoteId)).structuredContent?.summary ?? '';
+
+    expect(summary).toContain(`to the Across SpokePool ${POOL} and the deposit into it. `);
+    expect(summary).toContain(
+      'if no relayer fills it in time, Across refunds the deposit to the account on chain 84532. '
+    );
+    expect(summary).not.toMatch(/undefined|app fee|Invalid/);
+  });
+
+  it('given an Across row whose stored calls do not read, when jaw_swap_status answers, then the summary names the SpokePool without an address', async () => {
+    const { t, quoteId, row } = await providerRow('across');
+    await rewrite(row.id, { ...termsOf(row, { provider: 'across', deadline: DEADLINE, appFee: '0' }), call: [] });
+
+    const summary = (await status(t, quoteId)).structuredContent?.summary ?? '';
+
+    expect(summary).toContain('an approval of exactly 1000000 base units of ');
+    expect(summary).toContain(' to the Across SpokePool and the deposit into it. ');
+    expect(summary).not.toMatch(/undefined/);
+  });
+
+  it('given a Relay row stored without an order id, when jaw_swap_status answers, then the summary names no order', async () => {
+    const { t, quoteId, row } = await providerRow('relay');
+    await rewrite(row.id, {
+      ...termsOf(row, { provider: 'relay' }),
+      call: [approvalOf(DEPOSITORY), callTo(DEPOSITORY)],
+    });
+
+    const summary = (await status(t, quoteId)).structuredContent?.summary ?? '';
+
+    expect(summary).toContain(`to the Relay Depository ${DEPOSITORY} and the deposit into it. `);
+    expect(summary).not.toMatch(/undefined|for order/);
+  });
+
   it('given a Relay ERC-20 row awaiting the owner, when jaw_swap_status answers, then the summary names the approval to the Depository, the order and that settlement is Relay protocol trust', async () => {
     const { t, quoteId, row } = await providerRow('relay');
     await rewrite(row.id, {
@@ -1756,6 +1794,29 @@ describe('jaw_swap_status', () => {
     expect(summary).toContain(row.depositAddress);
     expect(summary).not.toMatch(/may have sent|did not approve|nothing was sent|was not sent/i);
   });
+
+  it.each([
+    ['its provider switched off', () => (config().swapProviders = new Set(['across']))],
+    ['its call no longer reading', (id: string) => rewrite(id, { call: [] })],
+  ] as const)(
+    'given the send marker, when the owner session runs again with %s, then the wallet is asked nothing, the row keeps the marker, the summary says it may be sent and status still follows it',
+    async (_, change) => {
+      const { t } = await connected();
+      const quoteId = await started(t, noCallsId(t.account));
+      await change((await rowOf(t)).id);
+      const asked: string[] = [];
+
+      await approve(async (method) => asked.push(method), await rowOf(t), t.account, 0);
+
+      expect(asked).toEqual([]);
+      expect(await rowOf(t)).toMatchObject({ state: 'awaiting_owner', code: 'send_started' });
+      const summary = (await run(t)).structuredContent?.summary ?? '';
+      expect(summary).toMatch(/may have sent the deposit/i);
+      expect(summary).not.toMatch(/nothing was sent|asked nothing/i);
+      deposits.state = 'PROCESSING';
+      expect((await status(t, quoteId)).structuredContent).toMatchObject({ state: 'submitted' });
+    }
+  );
 
   it('given the send marker past the grace window, when the backend cannot be read, then the summary still says the deposit may be sent, not that it was not seen', async () => {
     const { t } = await connected();

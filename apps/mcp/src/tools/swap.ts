@@ -247,8 +247,8 @@ function summaryOf(row: SwapRow): string {
       }
       const open = `Ask the account owner to open ${row.walletUrl} before ${row.approveBy?.toISOString()} and approve`;
       const provider = providerOf(row);
-      if (provider !== 'aurora') {
-        return `${open}, ${bridgeTerms(row, provider, quote!)}Follow it with jaw_swap_status and ${row.quoteId}.`;
+      if (provider !== 'aurora' && quote) {
+        return `${open}, ${bridgeTerms(row, provider, quote)}Follow it with jaw_swap_status and ${row.quoteId}.`;
       }
       return (
         `${open} one transfer of ${row.amount} base units of ${tokenName(row.originToken)} on chain ${row.originChainId} ` +
@@ -337,8 +337,9 @@ function bridgeTerms(row: SwapRow, provider: 'across' | 'relay', quote: CheckedQ
   const native = row.originToken === zeroAddress;
   const contract =
     provider === 'relay' ? 'Relay Depository' : native ? 'Across SpokePoolPeriphery' : 'Across SpokePool';
-  const to = `${contract} ${callsOf(row)?.at(-1)?.to}`;
-  const order = provider === 'relay' ? ` for order ${quote.orderId}` : '';
+  const target = callsOf(row)?.at(-1)?.to;
+  const to = target ? `${contract} ${target}` : contract;
+  const order = provider === 'relay' && quote.orderId ? ` for order ${quote.orderId}` : '';
   const signed = native
     ? `on chain ${row.originChainId}, one deposit of ${row.amount} base units of the native coin to the ${to}${order}. `
     : `in one batch on chain ${row.originChainId}, an approval of exactly ${row.amount} base units of ${row.originToken} ` +
@@ -346,10 +347,11 @@ function bridgeTerms(row: SwapRow, provider: 'across' | 'relay', quote: CheckedQ
   const out = `at least ${quote.minOutputAmount} base units of ${tokenName(row.destinationToken)} on chain ${row.destinationChainId} to ${row.recipient}`;
   const fill = `expected in about ${quote.expectedFillTimeSec} s`;
   if (provider === 'across') {
-    const deadline = new Date(quote.deadline! * 1000).toISOString();
+    const fee = quote.appFee === undefined ? '' : `, after an app fee of ${quote.appFee} base units`;
+    const by = quote.deadline === undefined ? 'in time' : `by ${new Date(quote.deadline * 1000).toISOString()}`;
     return (
-      `${signed}${GAS}Across delivers ${out}, after an app fee of ${quote.appFee} base units, ${fill}; ` +
-      `if no relayer fills it by ${deadline}, Across refunds the deposit${asWeth(row)} to the account on chain ${row.originChainId}. `
+      `${signed}${GAS}Across delivers ${out}${fee}, ${fill}; ` +
+      `if no relayer fills it ${by}, Across refunds the deposit${asWeth(row)} to the account on chain ${row.originChainId}. `
     );
   }
   return (
