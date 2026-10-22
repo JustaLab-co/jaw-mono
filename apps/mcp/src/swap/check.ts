@@ -90,6 +90,7 @@ export function isSupportedOriginChain(chainId: number): boolean {
 export type CheckDeps = {
   isDepositAddressTaken: (depositAddress: Address) => Promise<boolean>;
   now: () => number;
+  ownerWindowSec: number;
 };
 
 export async function checkQuote(request: QuoteRequest, body: unknown, deps: CheckDeps): Promise<CheckResult> {
@@ -99,7 +100,7 @@ export async function checkQuote(request: QuoteRequest, body: unknown, deps: Che
     case 'aurora':
       return checkAurora(request, parsed.data, deps.isDepositAddressTaken);
     case 'across':
-      return checkAcross(request, parsed.data, deps.now());
+      return checkAcross(request, parsed.data, deps.now(), deps.ownerWindowSec);
     default:
       return { ok: false, code: 'quote_id' };
   }

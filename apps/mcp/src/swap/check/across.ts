@@ -11,6 +11,7 @@ import {
   parseAbi,
   parseAbiParameters,
   zeroAddress,
+  zeroHash,
   type Address,
   type Hex,
 } from 'viem';
@@ -26,6 +27,9 @@ const emitterAbi = parseAbi(['function emitData(bytes data)']);
 const instructionsAbi = parseAbiParameters(
   '((address target, bytes callData, uint256 value)[] calls, address fallbackRecipient)'
 );
+const metadataAbi = parseAbiParameters(
+  'uint8, uint8, uint8, address, uint256, uint256, uint256, uint256, string, uint256, bool, address, address'
+);
 
 type Call = { target: Address; callData: Hex; value: bigint };
 type Instructions = { calls: readonly Call[]; fallbackRecipient: Address };
@@ -33,6 +37,10 @@ type Instructions = { calls: readonly Call[]; fallbackRecipient: Address };
 const DEPOSIT = '0xad5425c6';
 const SWAP_AND_BRIDGE = '0x110560ad';
 const MAX_FILL_SECONDS = 21_600;
+const FILL_MARGIN_SECONDS = 600;
+// SpokePool.depositQuoteTimeBuffer on Base and Base Sepolia: older quoteTimestamps revert the deposit.
+const QUOTE_TIME_BUFFER_SECONDS = 3600;
+const QUOTE_TIME_MARGIN_SECONDS = 300;
 const MAX_EXCLUSIVITY_SECONDS = 60;
 const quoteIdPattern = /^across:[A-Za-z0-9-]{1,64}$/;
 const baseUnits = /^[1-9][0-9]*$/;
@@ -42,7 +50,12 @@ const tagSuffix = /^(1dc0de[0-9a-f]{4})?73c0de$/;
 const sameHex = (a: string, b: string) => a.toLowerCase() === b.toLowerCase();
 const word = (address: string) => pad(address.toLowerCase() as Hex, { size: 32 });
 
-export function checkAcross(request: QuoteRequest, quote: BackendQuote, now: number): CheckResult {
+export function checkAcross(
+  request: QuoteRequest,
+  quote: BackendQuote,
+  now: number,
+  ownerWindowSec: number
+): CheckResult {
   const fail = (code: CheckCode) => ({ ok: false as const, code });
 
   if (!quoteIdPattern.test(quote.quoteId) || quote.deposit !== undefined) return fail('quote_id');
@@ -79,14 +92,18 @@ export function checkAcross(request: QuoteRequest, quote: BackendQuote, now: num
   if (!args) return fail('tx_data');
 
   const [depositor, recipient, inputToken, outputToken, inputAmount, outputAmount, destinationChainId] = args;
-  const { 9: fillDeadline, 10: exclusivity, 11: message } = args;
+  const { 7: exclusiveRelayer, 8: quoteTimestamp, 9: fillDeadline, 10: exclusivity, 11: message } = args;
   if (depositor !== word(request.account)) return fail('depositor');
   if (inputToken !== word(request.originToken) || inputAmount !== BigInt(request.amount)) return fail('input_amount');
   if (destinationChainId !== BigInt(request.destinationChainId)) return fail('destination_chain');
   if (isAddressEqual(request.destinationToken as Address, zeroAddress)) return fail('output_token');
   if (outputToken !== word(request.destinationToken)) return fail('output_token');
-  if (fillDeadline <= now || fillDeadline > now + MAX_FILL_SECONDS) return fail('deadline');
+  const approveBy = now + ownerWindowSec;
+  if (fillDeadline < approveBy + FILL_MARGIN_SECONDS || fillDeadline > now + MAX_FILL_SECONDS) return fail('deadline');
+  if (quoteTimestamp > now) return fail('deadline');
+  if (quoteTimestamp + QUOTE_TIME_BUFFER_SECONDS < approveBy + QUOTE_TIME_MARGIN_SECONDS) return fail('deadline');
   if (exclusivity > MAX_EXCLUSIVITY_SECONDS) return fail('exclusivity');
+  if (exclusivity === 0 && exclusiveRelayer !== zeroHash) return fail('exclusivity');
 
   let fee = 0n;
   if (message === '0x') {
@@ -165,24 +182,30 @@ function instructions(message: Hex): Instructions | undefined {
 
 function feeOf(program: Instructions, request: QuoteRequest, across: AcrossContracts): bigint | undefined {
   if (!isAddressEqual(program.fallbackRecipient, zeroAddress)) return undefined;
-  const drain = encodeFunctionData({
-    abi: handlerAbi,
-    functionName: 'drainLeftoverTokens',
-    args: [getAddress(request.destinationToken), getAddress(request.recipient)],
-  });
-  let fee = 0n;
-  const kinds = program.calls.map((call) => {
-    if (call.value !== 0n) return 'X';
-    const transfer = sameHex(call.target, request.destinationToken) ? feeTransfer(call.callData) : undefined;
-    if (transfer !== undefined) {
-      fee = transfer;
-      return 'F';
-    }
-    if (isAddressEqual(call.target, across.multicallHandler) && sameHex(call.callData, drain)) return 'D';
-    if (across.eventEmitter && isAddressEqual(call.target, across.eventEmitter) && isEmit(call.callData)) return 'E';
-    return 'X';
-  });
-  return /^F?D{1,2}E{0,2}$/.test(kinds.join('')) ? fee : undefined;
+  const [transfer, ...rest] = program.calls;
+  if (!transfer || transfer.value !== 0n || !sameHex(transfer.target, request.destinationToken)) return undefined;
+
+  const token = getAddress(request.destinationToken);
+  const recipient = getAddress(request.recipient);
+  const drain = {
+    target: across.multicallHandler,
+    callData: encodeFunctionData({ abi: handlerAbi, functionName: 'drainLeftoverTokens', args: [token, recipient] }),
+  };
+  const expected = [drain, drain];
+  if (across.eventEmitter) {
+    const metadata = [1, 0, 1, token, 0n, 0n, 0n, 0n, 'none', 0n, true, recipient, APP_FEE.recipient] as const;
+    const data = encodeAbiParameters(metadataAbi, metadata);
+    const callData = encodeFunctionData({ abi: emitterAbi, functionName: 'emitData', args: [data] });
+    expected.push({ target: across.eventEmitter, callData });
+  }
+  if (rest.length !== expected.length) return undefined;
+  const exact = rest.every(
+    (call, i) =>
+      call.value === 0n &&
+      isAddressEqual(call.target, expected[i].target) &&
+      sameHex(call.callData, expected[i].callData)
+  );
+  return exact ? feeTransfer(transfer.callData) : undefined;
 }
 
 function feeTransfer(data: Hex): bigint | undefined {
@@ -192,15 +215,6 @@ function feeTransfer(data: Hex): bigint | undefined {
     return sameHex(encodeFunctionData({ abi: erc20Abi, ...decoded }), data) ? decoded.args[1] : undefined;
   } catch {
     return undefined;
-  }
-}
-
-function isEmit(data: Hex): boolean {
-  try {
-    const { args } = decodeFunctionData({ abi: emitterAbi, data });
-    return sameHex(encodeFunctionData({ abi: emitterAbi, functionName: 'emitData', args }), data);
-  } catch {
-    return false;
   }
 }
 

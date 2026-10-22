@@ -14,6 +14,7 @@ import {
   type Address,
   type Hex,
 } from 'viem';
+import { ownerWindowMs } from '@/connections/config';
 import { callsOf } from '../calls';
 import { checkQuote, type CheckCode, type QuoteRequest } from '../check';
 import degenToUsdc from '../fixtures/across-degen-to-usdc.json';
@@ -38,10 +39,12 @@ const ARB_WETH = getAddress('0x82af49447d8a07e3bd95bd0d56f35241523fbab1');
 const BASE_POOL = getAddress('0x09aea4b2242abc8bb4bb78d537a67a245a7bec64');
 const PERIPHERY = getAddress('0x97ccdbea4632140639ad5ea9b944aa034eb15fd4');
 const HANDLER = getAddress('0x0f7ae28de1c8532170ad4ee566b5801485c13a0e');
+const EMITTER = getAddress('0xbf75133b48b0a42ab9374027902e83c5e2949034');
 const FEE_RECIPIENT = getAddress('0xc529edd6d47c60923902514c7c0b3993ae42c2ec');
 const BASE_SEPOLIA_USDC = getAddress('0x036cbd53842c5426634e7929541ec2318f3dcf7e');
 const BASE_SEPOLIA_POOL = getAddress('0x82b564983ae7274c86695917bbf8c99ecb6f0f8f');
 const SEPOLIA_USDC = getAddress('0x1c7d4b196cb0c7b01d743fbc6116a902379c7238');
+const OWNER_WINDOW_SEC = ownerWindowMs(300) / 1000;
 
 type Tx = { chainId: number; to: string; data: string; value: string };
 type Body = {
@@ -131,6 +134,10 @@ const depositAbi = parseAbi([
   'function deposit(bytes32 depositor, bytes32 recipient, bytes32 inputToken, bytes32 outputToken, uint256 inputAmount, uint256 outputAmount, uint256 destinationChainId, bytes32 exclusiveRelayer, uint32 quoteTimestamp, uint32 fillDeadline, uint32 exclusivityParameter, bytes message)',
 ]);
 const handlerAbi = parseAbi(['function drainLeftoverTokens(address token, address destination)']);
+const emitterAbi = parseAbi(['function emitData(bytes data)']);
+const metadataAbi = parseAbiParameters(
+  'uint8, uint8, uint8, address, uint256, uint256, uint256, uint256, string, uint256, bool, address, address'
+);
 const instructionsAbi = parseAbiParameters(
   '((address target, bytes callData, uint256 value)[] calls, address fallbackRecipient)'
 );
@@ -193,6 +200,15 @@ const drainCall = (token: Address = ARB_USDC, to: Address = ACCOUNT, target: Add
   callData: encodeFunctionData({ abi: handlerAbi, functionName: 'drainLeftoverTokens', args: [token, to] }),
   value: 0n,
 });
+const emitCall = (recipient: Address = ACCOUNT, provider = 'none'): Call => {
+  const metadata = [1, 0, 1, ARB_USDC, 0n, 0n, 0n, 0n, provider, 0n, true, recipient, FEE_RECIPIENT] as const;
+  const data = encodeAbiParameters(metadataAbi, metadata);
+  return {
+    target: EMITTER,
+    callData: encodeFunctionData({ abi: emitterAbi, functionName: 'emitData', args: [data] }),
+    value: 0n,
+  };
+};
 const approveData = (spender: Address, amount: bigint) =>
   encodeFunctionData({ abi: erc20Abi, functionName: 'approve', args: [spender, amount] });
 
@@ -229,6 +245,7 @@ function testnet(withEmit: boolean): Case {
   return withCalls(c, (calls) => [
     feeCall(24965n, FEE_RECIPIENT, SEPOLIA_USDC),
     drainCall(SEPOLIA_USDC),
+    drainCall(SEPOLIA_USDC),
     ...(withEmit ? [calls[3]] : []),
   ]);
 }
@@ -252,15 +269,21 @@ function wethToNative(): Case {
   });
 }
 
-async function outcome(c: Case): Promise<'pass' | CheckCode> {
-  const result = await checkQuote(c.request, c.body, { isDepositAddressTaken: async () => false, now: () => c.now });
+const depsOf = (c: Case, ownerWindowSec = OWNER_WINDOW_SEC) => ({
+  isDepositAddressTaken: async () => false,
+  now: () => c.now,
+  ownerWindowSec,
+});
+
+async function outcome(c: Case, ownerWindowSec = OWNER_WINDOW_SEC): Promise<'pass' | CheckCode> {
+  const result = await checkQuote(c.request, c.body, depsOf(c, ownerWindowSec));
   if (!result.ok) return result.code;
   expect(callsOf({ call: result.calls })).toEqual(result.calls);
   return 'pass';
 }
 
 async function accepted(c: Case) {
-  const result = await checkQuote(c.request, c.body, { isDepositAddressTaken: async () => false, now: () => c.now });
+  const result = await checkQuote(c.request, c.body, depsOf(c));
   if (!result.ok) throw new Error(`expected the quote to pass, got ${result.code}`);
   expect(callsOf({ call: result.calls })).toEqual(result.calls);
   return result;
@@ -345,17 +368,24 @@ describe('given an Across ERC-20 quote that passes', () => {
     ['a quoteId of 64 characters', () => edited(fee(), (c) => (c.body.quoteId = `across:${'a'.repeat(64)}`))],
     ['the integrator tag before the Across tag', () => tagged('1dc0de016173c0de')],
     ['a fillDeadline exactly 6 hours away', () => withDeposit(fee(), (a) => (a.fillDeadline = fee().now + 21600))],
-    ['an exclusivity of 60 seconds', () => withDeposit(fee(), (a) => (a.exclusivityParameter = 60))],
     [
-      'no fee call and the output equal to the minimum',
-      () =>
-        minOutput(
-          withCalls(fee(), (c) => c.slice(1)),
-          '9986164'
-        ),
+      'a fillDeadline exactly the owner window plus 10 minutes away',
+      () => withDeposit(fee(), (a) => (a.fillDeadline = fee().now + OWNER_WINDOW_SEC + 600)),
     ],
-    ['one drain and no emitData', () => withCalls(fee(), (c) => c.slice(0, 2))],
-    ['two emitData calls', () => withCalls(fee(), (c) => [...c, c[3]])],
+    [
+      'an exclusivity of 60 seconds for one relayer',
+      () =>
+        withDeposit(fee(), (a) => {
+          a.exclusivityParameter = 60;
+          a.exclusiveRelayer = word(OTHER);
+        }),
+    ],
+    ['a quoteTimestamp equal to now', () => withDeposit(fee(), (a) => (a.quoteTimestamp = fee().now))],
+    [
+      'a quoteTimestamp the SpokePool still takes 5 minutes after the owner window ends',
+      () => withDeposit(fee(), (a) => (a.quoteTimestamp = fee().now + OWNER_WINDOW_SEC + 300 - 3600)),
+    ],
+    ['the emitData payload rebuilt from the request', () => withCalls(fee(), (c) => [c[0], c[1], c[2], emitCall()])],
   ])('when it has %s, then it passes', async (_, make) => {
     expect(await outcome(make())).toBe('pass');
   });
@@ -429,8 +459,11 @@ const refusals: Array<[string, () => Case, CheckCode]> = [
     'route_unsupported',
   ],
   [
-    'a destination swap message on a same-asset request',
-    () => ({ ...live('usdc_to_arb'), request: fee().request }),
+    'a destination swap message on a same-asset request, its hour-old quoteTimestamp moved to now',
+    () => {
+      const c = { ...live('usdc_to_arb'), request: fee().request };
+      return withDeposit(c, (a) => (a.quoteTimestamp = c.now));
+    },
     'route_unsupported',
   ],
   ['no transaction', () => edited(fee(), (c) => (c.body.transactions = [])), 'tx_count'],
@@ -508,6 +541,26 @@ const refusals: Array<[string, () => Case, CheckCode]> = [
   ['a message with the user as recipient', () => withDeposit(fee(), (a) => (a.recipient = word(ACCOUNT))), 'recipient'],
   ['a fillDeadline already passed', () => withDeposit(fee(), (a) => (a.fillDeadline = fee().now)), 'deadline'],
   [
+    'a fillDeadline 1 second short of the owner window plus 10 minutes',
+    () => withDeposit(fee(), (a) => (a.fillDeadline = fee().now + OWNER_WINDOW_SEC + 599)),
+    'deadline',
+  ],
+  [
+    'a quoteTimestamp 1 second ahead of now',
+    () => withDeposit(fee(), (a) => (a.quoteTimestamp = fee().now + 1)),
+    'deadline',
+  ],
+  [
+    'a quoteTimestamp 1 second too old for the SpokePool 5 minutes after the owner window ends',
+    () => withDeposit(fee(), (a) => (a.quoteTimestamp = fee().now + OWNER_WINDOW_SEC + 299 - 3600)),
+    'deadline',
+  ],
+  [
+    'an exclusive relayer with no exclusivity window',
+    () => withDeposit(fee(), (a) => (a.exclusiveRelayer = word(ATTACKER))),
+    'exclusivity',
+  ],
+  [
     'a fillDeadline over 6 hours away',
     () => withDeposit(fee(), (a) => (a.fillDeadline = fee().now + 21601)),
     'deadline',
@@ -525,6 +578,15 @@ const refusals: Array<[string, () => Case, CheckCode]> = [
   ['an emitData on a chain with no emitter', () => testnet(true), 'message_program'],
 ];
 
+describe('given a longer owner window', () => {
+  it('when the quote TTL is 600 s, then a fillDeadline that clears the 240 s window is refused against the 540 s one', async () => {
+    const c = () => withDeposit(fee(), (a) => (a.fillDeadline = fee().now + OWNER_WINDOW_SEC + 600));
+
+    expect(await outcome(c(), OWNER_WINDOW_SEC)).toBe('pass');
+    expect(await outcome(c(), 540)).toBe('deadline');
+  });
+});
+
 describe('given an Across quote that breaks one rule', () => {
   it.each(refusals.map(([what, make, code]) => [what, code, make] as const))(
     'when it has %s, then it is refused with %s',
@@ -540,17 +602,24 @@ describe('given the fee message program [fee, drain, drain, emitData]', () => {
     ['the fee paid in another token', (c) => [feeCall(24965n, FEE_RECIPIENT, OTHER), ...c.slice(1)]],
     ['the fee call carrying value', (c) => [{ ...c[0], value: 1n }, ...c.slice(1)]],
     ['two fee calls', (c) => [c[0], ...c]],
-    ['a drain to another address', (c) => [c[0], drainCall(ARB_USDC, ATTACKER), c[3]]],
-    ['a drain of another token', (c) => [c[0], drainCall(OTHER), c[3]]],
-    ['a drain through another contract', (c) => [c[0], drainCall(ARB_USDC, ACCOUNT, OTHER), c[3]]],
-    ['a drain carrying value', (c) => [c[0], { ...c[1], value: 1n }, c[3]]],
+    ['a drain to another address', (c) => [c[0], c[1], drainCall(ARB_USDC, ATTACKER), c[3]]],
+    ['a drain of another token', (c) => [c[0], c[1], drainCall(OTHER), c[3]]],
+    ['a drain through another contract', (c) => [c[0], c[1], drainCall(ARB_USDC, ACCOUNT, OTHER), c[3]]],
+    ['a drain carrying value', (c) => [c[0], { ...c[1], value: 1n }, c[2], c[3]]],
     ['no drain', (c) => [c[0], c[3]]],
-    ['three drains', (c) => [c[0], c[1], c[1], c[1], c[3]]],
+    ['one drain', (c) => [c[0], c[1], c[3]]],
+    ['a repeated drain', (c) => [c[0], c[1], c[1], c[1], c[3]]],
+    ['no fee call', (c) => c.slice(1)],
+    ['no emitData', (c) => c.slice(0, 3)],
+    ['an extra emitData', (c) => [...c, c[3]]],
+    ['emitData naming another recipient', (c) => [...c.slice(0, 3), emitCall(ATTACKER)]],
+    ['emitData naming a swap provider', (c) => [...c.slice(0, 3), emitCall(ACCOUNT, 'uniswap/universal-router-02')]],
+    ['no calls', () => []],
     ['the fee after the drains', (c) => [c[1], c[0], c[3]]],
     ['emitData before the drain', (c) => [c[0], c[3], c[1]]],
     ['three emitData calls', (c) => [...c, c[3], c[3]]],
-    ['emitData on another contract', (c) => [c[0], c[1], { ...c[3], target: OTHER }]],
-    ['emitData with a trailing byte', (c) => [c[0], c[1], { ...c[3], callData: `${c[3].callData}ff` }]],
+    ['emitData on another contract', (c) => [...c.slice(0, 3), { ...c[3], target: OTHER }]],
+    ['emitData with a trailing byte', (c) => [...c.slice(0, 3), { ...c[3], callData: `${c[3].callData}ff` }]],
     ['an extra transfer at the end', (c) => [...c, feeCall(1n, ACCOUNT)]],
     [
       'an approve in place of the fee transfer',
@@ -559,6 +628,14 @@ describe('given the fee message program [fee, drain, drain, emitData]', () => {
     ['the fee transfer with a trailing byte', (c) => [{ ...c[0], callData: `${c[0].callData}00` }, ...c.slice(1)]],
   ])('when the message has %s, then it is refused with message_program', async (_, edit) => {
     expect(await outcome(withCalls(fee(), edit))).toBe('message_program');
+  });
+
+  it('when the recipient is not the account, then the drains and the emitData payload name the recipient', async () => {
+    const toOther = () => edited(fee(), (c) => (c.request.recipient = OTHER.toLowerCase()));
+    const drains = [drainCall(ARB_USDC, OTHER), drainCall(ARB_USDC, OTHER)];
+
+    expect(await outcome(withCalls(toOther(), (c) => [c[0], ...drains, emitCall(OTHER)]))).toBe('pass');
+    expect(await outcome(withCalls(toOther(), (c) => [c[0], ...drains, emitCall(ACCOUNT)]))).toBe('message_program');
   });
 
   it('when the fallbackRecipient is not zero, then it is refused with message_program', async () => {

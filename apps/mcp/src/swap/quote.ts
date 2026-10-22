@@ -1,6 +1,6 @@
 import { getAddress, isAddress, type Address } from 'viem';
 import type { Tenant } from '@/connections/auth';
-import { config } from '@/connections/config';
+import { config, ownerWindowMs } from '@/connections/config';
 import { errorLabel, log } from '@/lib/edge';
 import { fenceText } from '@/lib/fence';
 import { refusal, safeFetch } from '@/lib/safe-fetch';
@@ -156,6 +156,7 @@ async function keepQuote(
   const checked = await checkQuote(request, data, {
     isDepositAddressTaken,
     now: () => Math.floor(Date.now() / 1000),
+    ownerWindowSec: ownerWindowMs(config().swapQuoteTtlSec) / 1000,
   });
   if (!checked.ok) {
     const state = checked.code === 'quote_invalid' ? 'quote_failed' : 'quote_rejected';

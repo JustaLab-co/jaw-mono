@@ -69,7 +69,7 @@ function backendQuoteJson(request: QuoteRequest, deposit: Address = depositAddre
 }
 
 const unused = async () => false;
-const deps = { isDepositAddressTaken: unused, now: () => 0 };
+const deps = { isDepositAddressTaken: unused, now: () => 0, ownerWindowSec: 240 };
 
 async function accepted(request: QuoteRequest, body: unknown) {
   const result = await checkQuote(request, body, deps);

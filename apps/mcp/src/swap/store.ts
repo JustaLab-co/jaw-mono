@@ -1,7 +1,7 @@
 import { createHash } from 'node:crypto';
 import { and, eq, gt, inArray, isNotNull, isNull, lt, lte, not, or, sql, type SQL } from 'drizzle-orm';
 import type { PgUpdateSetSource } from 'drizzle-orm/pg-core';
-import { APPROVE_WITHIN_MS, config, QUOTE_MARGIN_SEC } from '@/connections/config';
+import { config, ownerWindowMs } from '@/connections/config';
 import { sessionLeaseEnd } from '@/connections/session-lease';
 import { getDb, type Tx } from '@/db/client';
 import { leasedRows } from '@/db/leased';
@@ -59,8 +59,6 @@ const dbNow = sql`statement_timestamp()`;
 
 export const leasedSwaps = leasedRows<SwapRow>(swaps);
 const leaseLive = sql<boolean>`${swaps.leaseUntil} > ${dbNow}`;
-
-const ownerWindowMs = (ttlSec: number) => Math.min(APPROVE_WITHIN_MS, (ttlSec - QUOTE_MARGIN_SEC) * 1000);
 
 export const approveByOf = (quotedAt: Date, ttlSec: number) => new Date(quotedAt.getTime() + ownerWindowMs(ttlSec));
 
