@@ -26,6 +26,7 @@
 - The result of both tools holds `swapId`, `idempotencyKey`, `state`, `quoteId` (`aurora:<deposit address>`), `approveBy`, the `deposit` call and its `txHash` once known, the `backend` state, a `refusal` code and a `summary`; the quote body and backend text come back fenced in `response`. `url` is present only while `awaiting_owner` with no code on the row. `jaw_swap_status` takes the `quoteId`, needs `wallet:read` only, and reads the backend by deposit address, with no transaction hash needed. States: `quoting`, `quote_failed`, `quote_rejected`, `abandoned`, `awaiting_owner`, `owner_declined`, `expired`, `deposit_sent`, `submitted`, `completed`, `refunded`, `failed`.
 - The person sees the summary: the account owner opens the `url`, the wallet asks for the account and then for one transfer of the amount to the deposit address, and the owner pays its gas in USDC or the chain's native coin.
 - By hand: `node tools/verify/hosted-client.mjs "$MCP_PUBLIC_URL"`, then `swap <originChain> <originToken> <destChain> <destToken> <amount> [recipient|-] [key]` and `swap-status <quoteId>`.
+- Allowlist against the live sources: `bun tools/verify/swap-allowlist.mts` diffs `apps/mcp/src/swap/allowlist.ts` against Across `deployed-addresses.json`, the AcrossEventEmitter files and Relay `/chains`, and exits 1 on any difference. It needs the network and is not part of the test suite.
 
 ## Driving it
 

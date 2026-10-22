@@ -5,7 +5,8 @@ export type AcrossContracts = {
   periphery: Address;
   multicallHandler: Address;
   eventEmitter?: Address;
-  wrappedNative: Address;
+  /** SpokePool.wrappedNativeToken(); absent on Arc, whose gas token is USDC and whose SpokePool answers zero. */
+  wrappedNative?: Address;
 };
 
 export type RelayContracts = {
@@ -17,7 +18,7 @@ export type RelayContracts = {
   solvers: readonly Address[];
 };
 
-export type ChainContracts = { across?: AcrossContracts; relay?: RelayContracts };
+export type ChainContracts = { testnet?: true; across?: AcrossContracts; relay?: RelayContracts };
 
 export const ALLOWLIST: Readonly<Record<number, ChainContracts>> = {
   1: {
@@ -312,7 +313,6 @@ export const ALLOWLIST: Readonly<Record<number, ChainContracts>> = {
       periphery: '0xE791A2669bef779Ff7A4A9CF789F8Ee2CA20a32c',
       multicallHandler: '0xA07480456C4EbaD7626e4FdF4a180709E238547b',
       eventEmitter: '0x446Fe2Be6a8D90fA89F30f3d0A686aAFfe621237',
-      wrappedNative: '0x0000000000000000000000000000000000000000',
     },
     relay: {
       depository: '0x4cD00E387622C35bDDB9b4c962C136462338BC31',
@@ -369,6 +369,7 @@ export const ALLOWLIST: Readonly<Record<number, ChainContracts>> = {
     },
   },
   11155111: {
+    testnet: true,
     across: {
       spokePool: '0x5ef6C01E11889d86803e0B23e3cB3F9E9d97B662',
       periphery: '0x10D8b8DaA26d307489803e10477De69C0492B610',
@@ -383,6 +384,7 @@ export const ALLOWLIST: Readonly<Record<number, ChainContracts>> = {
     },
   },
   84532: {
+    testnet: true,
     across: {
       spokePool: '0x82B564983aE7274c86695917BBf8C99ECb6F0F8F',
       periphery: '0x10D8b8DaA26d307489803e10477De69C0492B610',
@@ -397,6 +399,7 @@ export const ALLOWLIST: Readonly<Record<number, ChainContracts>> = {
     },
   },
   11155420: {
+    testnet: true,
     across: {
       spokePool: '0x4e8E101924eDE233C13e2D8622DC8aED2872d505',
       periphery: '0x10D8b8DaA26d307489803e10477De69C0492B610',
@@ -405,6 +408,7 @@ export const ALLOWLIST: Readonly<Record<number, ChainContracts>> = {
     },
   },
   421614: {
+    testnet: true,
     across: {
       spokePool: '0x7E63A5f1a8F0B4d0934B2f2327DAED3F6bb2ee75',
       periphery: '0x10D8b8DaA26d307489803e10477De69C0492B610',
@@ -504,11 +508,31 @@ export const ASSETS: Readonly<Record<number, Readonly<Record<Address, Asset>>>> 
 /** Largest accepted gap between amount and minOutputAmount, decimals adjusted, fees and slippage included. */
 export const MAX_ROUTE_COST_BPS = 300n;
 
+// The backend owns the fee: MOVE_ASSET_FEE_RECIPIENT and MOVE_ASSET_FEE_BPS in jan-back-mono apps/proxy.
 export const APP_FEE = { recipient: '0xC529EDD6D47C60923902514C7C0B3993ae42C2ec', maxBps: 25n } as const;
 
+const ACROSS_ADDRESSES =
+  'https://raw.githubusercontent.com/across-protocol/contracts/master/broadcast/deployed-addresses.json';
+const ACROSS_DEPLOYMENTS = 'https://raw.githubusercontent.com/across-protocol/contracts/master/deployments';
+
 export const SOURCES = {
-  across: 'https://raw.githubusercontent.com/across-protocol/contracts/master/broadcast/deployed-addresses.json',
-  acrossEventEmitter: 'https://github.com/across-protocol/contracts/tree/master/deployments',
+  across: ACROSS_ADDRESSES,
+  /** Avalanche and Arc have no deployments folder; their emitter is listed in deployed-addresses.json. */
+  acrossEventEmitter: {
+    1: `${ACROSS_DEPLOYMENTS}/mainnet/AcrossEventEmitter.json`,
+    8453: `${ACROSS_DEPLOYMENTS}/base/AcrossEventEmitter.json`,
+    10: `${ACROSS_DEPLOYMENTS}/optimism/AcrossEventEmitter.json`,
+    42161: `${ACROSS_DEPLOYMENTS}/arbitrum/AcrossEventEmitter.json`,
+    59144: `${ACROSS_DEPLOYMENTS}/linea/AcrossEventEmitter.json`,
+    56: `${ACROSS_DEPLOYMENTS}/bsc/AcrossEventEmitter.json`,
+    137: `${ACROSS_DEPLOYMENTS}/polygon/AcrossEventEmitter.json`,
+    57073: `${ACROSS_DEPLOYMENTS}/ink/AcrossEventEmitter.json`,
+    1868: `${ACROSS_DEPLOYMENTS}/soneium/AcrossEventEmitter.json`,
+    130: `${ACROSS_DEPLOYMENTS}/unichain/AcrossEventEmitter.json`,
+    143: `${ACROSS_DEPLOYMENTS}/monad/AcrossEventEmitter.json`,
+    43114: ACROSS_ADDRESSES,
+    5042: ACROSS_ADDRESSES,
+  } as Readonly<Record<number, string>>,
   relay: 'https://api.relay.link/chains',
   relayTestnets: 'https://api.testnets.relay.link/chains',
   usdc: 'https://developers.circle.com/stablecoins/usdc-contract-addresses',
