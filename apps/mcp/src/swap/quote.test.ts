@@ -7,7 +7,8 @@ import { connect, setTestEnv } from '@/connections/testkit';
 import { getDb } from '@/db/client';
 import { payments, swaps } from '@/db/schema';
 import { TEST_PG_URL, useTestDb, useTestPostgres } from '@/db/test-db';
-import { quote, swapRequest, type QuoteDeps, type SwapInput } from './quote';
+import { callsOf } from './calls';
+import { quote, quoteRequestOf, swapRequest, type QuoteDeps, type SwapInput } from './quote';
 import { claimSwap, type SwapRow } from './store';
 import acrossAnswer from './fixtures/prod-across-quote.json';
 import relayAnswer from './fixtures/prod-relay-quote.json';
@@ -322,7 +323,22 @@ describe('a quote another provider answered', () => {
 });
 
 describe('a quote', () => {
-  it('given a connection with wallet:read only and no budget, when the quote is asked, then the row holds the checked quote, its call and when it was asked, and nothing is paid', async () => {
+  it('given an EVM swap, when its quote request is built, then it carries the destination chain, token and recipient of the row', async () => {
+    const t = await connected();
+    const { row } = await claimed(t);
+
+    expect(quoteRequestOf(row)).toEqual({
+      originChainId: 84532,
+      originToken: USDC_SEPOLIA,
+      amount: '1000000',
+      account: getAddress(t.account),
+      destinationChainId: 42161,
+      destinationToken: ARB_USDC,
+      recipient: t.account.toLowerCase(),
+    });
+  });
+
+  it('given a connection with wallet:read only and no budget, when the quote is asked, then the row holds the checked quote, its calls and when it was asked, and nothing is paid', async () => {
     const t = await connected();
     expect(t.scopes).toEqual(['wallet:read']);
     const claim = await claimed(t);
@@ -337,11 +353,20 @@ describe('a quote', () => {
       state: 'quoting',
       code: null,
       quoteId: `aurora:${deposit}`,
-      call: { chainId: 84532, to: getAddress(USDC_SEPOLIA), data: transfer(deposit, 1_000_000n), value: '0' },
-      quote: { inputAmount: '1000000', expectedOutputAmount: '995000', minOutputAmount: '990025' },
+      call: [
+        {
+          kind: 'deposit',
+          chainId: 84532,
+          to: getAddress(USDC_SEPOLIA),
+          data: transfer(deposit, 1_000_000n),
+          value: '0',
+        },
+      ],
+      quote: { provider: 'aurora', inputAmount: '1000000', expectedOutputAmount: '995000', minOutputAmount: '990025' },
       paymentId: null,
       leaseToken: claim.token,
     });
+    expect(callsOf(row)).toEqual(row.call);
     expect(row.quotedAt!.getTime()).toBeGreaterThanOrEqual(before);
     expect(row.quotedAt!.getTime()).toBeLessThanOrEqual(Date.now());
     expect(row.quoteFenced).toMatch(/^\[untrusted text from [^\]]+\][\s\S]*aurora:0x/);
@@ -452,7 +477,7 @@ describe('quote_failed codes', () => {
     const { row } = await quoted(await connected(), 'agent-key', deps('a9059cbb'));
 
     expect(row.quoteId).toMatch(/^aurora:0x/);
-    expect((row.call as { data: string }).data).toMatch(/^0xa9059cbb/);
+    expect(callsOf(row)?.[0].data).toMatch(/^0xa9059cbb/);
     expect(row.quoteFenced).toContain('[key]');
     expect(row.quoteFenced).not.toContain('a9059cbb');
   });

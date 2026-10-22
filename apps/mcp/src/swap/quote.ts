@@ -110,13 +110,16 @@ export async function quote(t: Tenant, held: { row: SwapRow; token: string }, de
 
 const stepOf = (row: SwapRow | undefined): QuoteStep => (row ? { kind: 'done', row } : { kind: 'lease_lost' });
 
-function quoteRequestOf(row: SwapRow): QuoteRequest | undefined {
+export function quoteRequestOf(row: SwapRow): QuoteRequest | undefined {
   if (!isAddress(row.originToken, { strict: false }) || !isAddress(row.depositor, { strict: false })) return undefined;
   return {
     originChainId: row.originChainId,
     originToken: getAddress(row.originToken),
     amount: row.amount,
     account: getAddress(row.depositor),
+    destinationChainId: row.destinationChainId,
+    destinationToken: row.destinationToken,
+    recipient: row.recipient,
   };
 }
 
@@ -162,7 +165,7 @@ async function keepQuote(
       quoteId: checked.quoteId,
       depositAddress: checked.depositAddress,
       quote: checked.quote,
-      call: checked.call,
+      call: checked.calls,
       quoteFenced: fenced,
     });
   } catch (err) {

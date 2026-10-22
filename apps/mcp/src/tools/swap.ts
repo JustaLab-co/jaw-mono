@@ -104,8 +104,13 @@ const swapOutput = z.object({
     minOutputAmount: z.string().optional(),
   }),
   expectedFillTimeSec: z.number().optional(),
+  provider: z.string().optional(),
+  calls: z
+    .array(z.object({ kind: z.string(), to: z.string(), value: z.string() }))
+    .optional()
+    .describe('What the owner approves, in order, in one batch on the origin chain'),
   deposit: z
-    .object({ address: z.string(), to: z.string(), value: z.string(), txHash: z.string().optional() })
+    .object({ address: z.string().optional(), to: z.string(), value: z.string(), txHash: z.string().optional() })
     .optional(),
   quotePayment: z
     .object({ paymentId: z.string(), state: z.string() })
@@ -339,7 +344,8 @@ async function answer(row: SwapRow, read?: BackendAnswer): Promise<SwapResult> {
   );
   const quote = row.quote as CheckedQuote['quote'] | null;
   const payment = row.paymentId ? await findPayment(row.paymentId) : undefined;
-  const deposit = callsOf(row)?.at(-1);
+  const calls = callsOf(row);
+  const deposit = calls?.at(-1);
   const out = swapOutput.parse({
     swapId: row.id,
     idempotencyKey: row.idempotencyKey,
@@ -356,8 +362,10 @@ async function answer(row: SwapRow, read?: BackendAnswer): Promise<SwapResult> {
       minOutputAmount: quote?.minOutputAmount,
     },
     expectedFillTimeSec: quote?.expectedFillTimeSec,
+    provider: row.quoteId?.split(':')[0],
+    calls: calls?.map(({ kind, to, value }) => ({ kind, to, value })),
     deposit: deposit && {
-      address: row.depositAddress,
+      address: row.depositAddress ?? undefined,
       to: deposit.to,
       value: deposit.value,
       txHash: row.txHash ?? undefined,
