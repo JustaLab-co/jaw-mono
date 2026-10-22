@@ -182,7 +182,12 @@ const depositBackend: typeof fetch = async (input, init) => {
   };
   return Response.json({ statusCode: 200, result: { data, error: null } }, { status: route === 'submit' ? 201 : 200 });
 };
-const backendDeps: BackendDeps = { fetch: depositBackend, baseUrl: 'https://backend.test/proxy/v2', timeoutMs: 1_000 };
+const backendDeps: BackendDeps = {
+  fetch: depositBackend,
+  baseUrl: 'https://backend.test/proxy/v2',
+  timeoutMs: 1_000,
+  apiKey: SWAP_KEY,
+};
 
 const quoteDeps: QuoteDeps = { fetch: auroraErc20Backend, apiKey: SWAP_KEY, timeoutMs: 1_000 };
 
@@ -1321,6 +1326,23 @@ describe('jaw_swap_status', () => {
     expect(result.structuredContent).toMatchObject({ quoteId, provider: 'across' });
   });
 
+  it('given an across row the owner has not sent, when jaw_swap_status runs, then the backend is not read; once sent without a hash, the summary says it cannot be followed yet', async () => {
+    const { t } = await connected();
+    const quoteId = await started(t);
+    const row = await rowOf(t);
+    await rewrite(row.id, { quote: { ...(row.quote as object), provider: 'across' } });
+
+    const unsent = await status(t, quoteId);
+    await rewrite(row.id, { state: 'deposit_sent', callsId: '0xcalls' });
+    const sent = await status(t, quoteId);
+
+    expect(unsent.structuredContent).toMatchObject({ state: 'awaiting_owner' });
+    expect(sent.structuredContent?.summary).toMatch(
+      /^The deposit cannot be followed yet \(hash_unknown\); check the owner's account on chain 84532\. /
+    );
+    expect(deposits.hits).toEqual([]);
+  });
+
   it('given a row holding an approve then the deposit, when jaw_swap_status answers, then its deposit is the deposit call, not the approve', async () => {
     const { t } = await connected();
     const quoteId = await started(t);
@@ -1933,6 +1955,22 @@ describe('jaw_swap_status', () => {
 
     expect(malformed.isError).toBe(true);
     expect(missing.content[0].text).toMatch(/^not_found/);
+  });
+
+  it.each([
+    [`relay:0x${'ab'.repeat(32)}`, /^not_found/],
+    ['across:d3f1-9a2b', /^not_found/],
+    [`relay:0x${'ab'.repeat(31)}`, undefined],
+    [`across:${'a'.repeat(65)}`, undefined],
+    ['across:a b', undefined],
+  ])('given quoteId %s, when jaw_swap_status is called on the route, then it is %s', async (quoteId, answer) => {
+    const { token } = await connected(undefined, 'wallet:read');
+
+    const result = await callTool(token, 'jaw_swap_status', { quoteId });
+
+    if (answer) expect(result.content[0].text).toMatch(answer);
+    else expect([result.isError, result.content[0].text]).toEqual([true, expect.not.stringMatching(/^not_found/)]);
+    expect(deposits.hits).toEqual([]);
   });
 });
 

@@ -13,7 +13,7 @@ import { fenceText, reply } from '@/lib/fence';
 import { gateCode } from '@/payments/render';
 import { findPayment, stateOf } from '@/payments/store';
 import { randomToken } from '@/lib/token';
-import type { BackendAnswer, BackendDeps } from '@/swap/backend';
+import type { BackendDeps } from '@/swap/backend';
 import { CALL_INVALID, callsOf } from '@/swap/calls';
 import { isSupportedOriginChain, type CheckedQuote } from '@/swap/check';
 import { countOpenLinks, FULL, MAX_OPEN_PER_ACCOUNT, withLinkSlot } from '@/owner-calls/cap';
@@ -37,7 +37,7 @@ import {
   type SwapRequest,
 } from '@/swap/store';
 import { followSwap, resumeSwap } from '@/swap/resume';
-import { track } from '@/swap/track';
+import { track, type TrackAnswer } from '@/swap/track';
 
 const SWAP_RATE_LIMIT = 10;
 const STATUS_RATE_LIMIT = 30;
@@ -71,7 +71,7 @@ export type SwapToolInput = z.infer<typeof swapInput>;
 const swapStatusInput = z.strictObject({
   quoteId: z
     .string()
-    .regex(/^aurora:0x[0-9a-fA-F]{40}$/)
+    .regex(/^(aurora:0x[0-9a-fA-F]{40}|across:[A-Za-z0-9-]{1,64}|relay:0x[0-9a-fA-F]{64})$/)
     .describe('The quoteId jaw_swap returned'),
 });
 
@@ -318,7 +318,7 @@ const notSeen = (row: SwapRow) =>
   `Check the owner's account on chain ${row.originChainId} before swapping these funds again. ` +
   'A deposit that lands later still shows in jaw_swap_status.';
 
-function untrustedBackendText(read: BackendAnswer): string | undefined {
+function untrustedBackendText(read: TrackAnswer): string | undefined {
   if (!read.ok) return read.code === 'http_error' ? read.untrustedError : undefined;
   const { status } = read;
   const lines = [
@@ -328,15 +328,19 @@ function untrustedBackendText(read: BackendAnswer): string | undefined {
   return lines.length ? lines.join('\n') : undefined;
 }
 
-function readNote(read: BackendAnswer | undefined): string {
+const UNREAD_DEPOSIT = new Set(['hash_unknown', 'receipt_missing', 'deposit_not_found', 'deposit_ambiguous']);
+
+function readNote(row: SwapRow, read: TrackAnswer | undefined): string {
   if (!read) return '';
+  if (!read.ok && UNREAD_DEPOSIT.has(read.code))
+    return `The deposit cannot be followed yet (${read.code}); check the owner's account on chain ${row.originChainId}. `;
   if (!read.ok) return `The swap backend could not be read (${read.code}); this is the swap as last stored. `;
   if (read.status.state === 'unknown')
     return 'The swap backend answered a state this server does not know, shown fenced in response. ';
   return '';
 }
 
-async function answer(row: SwapRow, read?: BackendAnswer): Promise<SwapResult> {
+async function answer(row: SwapRow, read?: TrackAnswer): Promise<SwapResult> {
   if (row.relay) void resumeSwap(row);
   const backendText = read && untrustedBackendText(read);
   const response = [row.quoteFenced, backendText && fenceText('the swap backend', backendText, 400)].filter(
@@ -377,7 +381,7 @@ async function answer(row: SwapRow, read?: BackendAnswer): Promise<SwapResult> {
         : undefined,
     refusal: row.code ? { code: row.code } : undefined,
     response: response.length ? response : undefined,
-    summary: readNote(read) + summaryOf(row),
+    summary: readNote(row, read) + summaryOf(row),
   });
   return reply(out);
 }

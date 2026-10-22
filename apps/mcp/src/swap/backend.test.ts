@@ -3,12 +3,14 @@ import { createServer } from 'node:http';
 import type { AddressInfo } from 'node:net';
 import { afterEach, describe, expect, it, onTestFinished, vi } from 'vitest';
 import { setTestEnv } from '@/connections/testkit';
-import { depositStatus, submitDeposit, type BackendDeps } from './backend';
+import { depositStatus, submitDeposit, type BackendDeps, type TrackKey } from './backend';
 
 const BASE = 'https://backend.test/proxy/v2';
 const CHECKSUMMED_DEPOSIT: Address = '0x742149f6aB17d7d2FD3A29ae2782b26EDa9c6F82';
 const LOWERCASE_DEPOSIT: Address = '0x742149f6ab17d7d2fd3a29ae2782b26eda9c6f82';
 const TX: Hex = `0x${'ab'.repeat(32)}`;
+const API_KEY = 'mcp-swap-key';
+const AURORA: TrackKey = { provider: 'aurora', depositAddress: CHECKSUMMED_DEPOSIT };
 
 type Seen = { url: string; method: string; headers: Headers; body?: string; signal?: AbortSignal };
 
@@ -25,7 +27,7 @@ function backend(answer: (seen: Seen) => Response | Promise<Response>) {
     seen.push(call);
     return answer(call);
   };
-  const deps: BackendDeps = { fetch, baseUrl: BASE, timeoutMs: 10_000 };
+  const deps: BackendDeps = { fetch, baseUrl: BASE, timeoutMs: 10_000, apiKey: API_KEY };
   return { deps, seen };
 }
 
@@ -51,7 +53,7 @@ describe('submitDeposit', () => {
   it('given a deposit hash, when submitted, then it posts provider aurora, the address and the hash as JSON', async () => {
     const { deps, seen } = backend(() => created('KNOWN_DEPOSIT_TX', { txHash: TX }));
 
-    await submitDeposit({ depositAddress: CHECKSUMMED_DEPOSIT, txHash: TX }, deps);
+    await submitDeposit(AURORA, TX, 8453, deps);
 
     expect(seen).toHaveLength(1);
     expect(seen[0].url).toBe(`${BASE}/move-asset/deposit/submit`);
@@ -67,7 +69,7 @@ describe('submitDeposit', () => {
   it('given the backend accepts the hash, when submitted, then it answers the status the backend returned', async () => {
     const { deps } = backend(() => created('KNOWN_DEPOSIT_TX', { txHash: TX }));
 
-    const answer = await submitDeposit({ depositAddress: CHECKSUMMED_DEPOSIT, txHash: TX }, deps);
+    const answer = await submitDeposit(AURORA, TX, 8453, deps);
 
     expect(answer).toEqual({
       ok: true,
@@ -83,7 +85,7 @@ describe('submitDeposit', () => {
       )
     );
 
-    const answer = await submitDeposit({ depositAddress: CHECKSUMMED_DEPOSIT, txHash: TX }, deps);
+    const answer = await submitDeposit(AURORA, TX, 8453, deps);
 
     expect(answer).toEqual({ ok: false, code: 'http_error', httpStatus: 400 });
   });
@@ -91,7 +93,7 @@ describe('submitDeposit', () => {
   it('given the network fails, when submitted, then it answers unreachable without throwing', async () => {
     const { deps } = backend(() => Promise.reject(new TypeError('fetch failed')));
 
-    const answer = await submitDeposit({ depositAddress: CHECKSUMMED_DEPOSIT, txHash: TX }, deps);
+    const answer = await submitDeposit(AURORA, TX, 8453, deps);
 
     expect(answer).toEqual({ ok: false, code: 'unreachable' });
   });
@@ -102,7 +104,7 @@ describe('submitDeposit', () => {
         new Promise<Response>((_, reject) => signal?.addEventListener('abort', () => reject(signal.reason)))
     );
 
-    const answer = await submitDeposit({ depositAddress: CHECKSUMMED_DEPOSIT, txHash: TX }, { ...deps, timeoutMs: 20 });
+    const answer = await submitDeposit(AURORA, TX, 8453, { ...deps, timeoutMs: 20 });
 
     expect(seen[0].signal?.aborted).toBe(true);
     expect(answer).toEqual({ ok: false, code: 'unreachable' });
@@ -113,7 +115,7 @@ describe('depositStatus', () => {
   it('given a deposit address, when read, then it gets the status with provider aurora and the address in the query', async () => {
     const { deps, seen } = backend(() => status('PENDING_DEPOSIT'));
 
-    await depositStatus(CHECKSUMMED_DEPOSIT, deps);
+    await depositStatus(AURORA, deps);
 
     expect(seen).toHaveLength(1);
     expect(seen[0].method).toBe('GET');
@@ -133,7 +135,7 @@ describe('depositStatus', () => {
   ])('given the backend state %s, when read, then the swap state is %s', async (backendState, state) => {
     const { deps } = backend(() => status(backendState));
 
-    const answer = await depositStatus(CHECKSUMMED_DEPOSIT, deps);
+    const answer = await depositStatus(AURORA, deps);
 
     expect(answer).toEqual({ ok: true, status: { state, backendState } });
   });
@@ -141,7 +143,7 @@ describe('depositStatus', () => {
   it('given a state outside the seven, when read, then it answers unknown with the raw value apart from backendState', async () => {
     const { deps } = backend(() => status('BRIDGING'));
 
-    const answer = await depositStatus(CHECKSUMMED_DEPOSIT, deps);
+    const answer = await depositStatus(AURORA, deps);
 
     expect(answer).toEqual({ ok: true, status: { state: 'unknown', untrustedState: 'BRIDGING' } });
   });
@@ -149,7 +151,7 @@ describe('depositStatus', () => {
   it('given a lowercase state, when read, then it is not taken as one of the seven', async () => {
     const { deps } = backend(() => status('success'));
 
-    const answer = await depositStatus(CHECKSUMMED_DEPOSIT, deps);
+    const answer = await depositStatus(AURORA, deps);
 
     expect(answer).toEqual({ ok: true, status: { state: 'unknown', untrustedState: 'success' } });
   });
@@ -157,7 +159,7 @@ describe('depositStatus', () => {
   it('given the backend found the deposit hash on the origin chain, when read, then the hash and rawState come back', async () => {
     const { deps } = backend(() => status('PROCESSING', { txHash: TX, rawState: 'BRIDGING' }));
 
-    const answer = await depositStatus(CHECKSUMMED_DEPOSIT, deps);
+    const answer = await depositStatus(AURORA, deps);
 
     expect(answer).toEqual({
       ok: true,
@@ -168,7 +170,7 @@ describe('depositStatus', () => {
   it('given the address in a different case, when the backend answers checksummed, then it is the same deposit', async () => {
     const { deps } = backend(() => status('SUCCESS'));
 
-    const answer = await depositStatus(LOWERCASE_DEPOSIT, deps);
+    const answer = await depositStatus({ provider: 'aurora', depositAddress: LOWERCASE_DEPOSIT }, deps);
 
     expect(answer).toEqual({ ok: true, status: { state: 'completed', backendState: 'SUCCESS' } });
   });
@@ -178,7 +180,7 @@ describe('depositStatus', () => {
       envelope({ provider: 'aurora', depositAddress: `0x${'11'.repeat(20)}`, state: 'SUCCESS' })
     );
 
-    const answer = await depositStatus(CHECKSUMMED_DEPOSIT, deps);
+    const answer = await depositStatus(AURORA, deps);
 
     expect(answer).toEqual({ ok: false, code: 'invalid_response' });
   });
@@ -188,7 +190,7 @@ describe('depositStatus', () => {
       envelope({ provider: 'across', depositAddress: CHECKSUMMED_DEPOSIT, state: 'SUCCESS' })
     );
 
-    const answer = await depositStatus(CHECKSUMMED_DEPOSIT, deps);
+    const answer = await depositStatus(AURORA, deps);
 
     expect(answer).toEqual({ ok: false, code: 'invalid_response' });
   });
@@ -215,7 +217,7 @@ describe('depositStatus', () => {
   ])('given %s, when read, then that field is dropped and the %s status is kept', async (_, state, extra, kept) => {
     const { deps } = backend(() => status(state, extra));
 
-    const answer = await depositStatus(CHECKSUMMED_DEPOSIT, deps);
+    const answer = await depositStatus(AURORA, deps);
 
     expect(answer).toEqual({ ok: true, status: kept });
   });
@@ -223,7 +225,7 @@ describe('depositStatus', () => {
   it('given a state past 256 characters, when read, then it answers invalid_response', async () => {
     const { deps } = backend(() => status('X'.repeat(257)));
 
-    const answer = await depositStatus(CHECKSUMMED_DEPOSIT, deps);
+    const answer = await depositStatus(AURORA, deps);
 
     expect(answer).toEqual({ ok: false, code: 'invalid_response' });
   });
@@ -231,7 +233,7 @@ describe('depositStatus', () => {
   it('given a 2xx body that is not JSON, when read, then it answers invalid_response', async () => {
     const { deps } = backend(() => new Response('<html>gateway</html>', { status: 200 }));
 
-    const answer = await depositStatus(CHECKSUMMED_DEPOSIT, deps);
+    const answer = await depositStatus(AURORA, deps);
 
     expect(answer).toEqual({ ok: false, code: 'invalid_response' });
   });
@@ -239,7 +241,7 @@ describe('depositStatus', () => {
   it('given a 2xx envelope with no data and an error, when read, then it answers invalid_response', async () => {
     const { deps } = backend(() => Response.json({ statusCode: 200, result: { data: null, error: 'boom' } }));
 
-    const answer = await depositStatus(CHECKSUMMED_DEPOSIT, deps);
+    const answer = await depositStatus(AURORA, deps);
 
     expect(answer).toEqual({ ok: false, code: 'invalid_response' });
   });
@@ -249,7 +251,7 @@ describe('depositStatus', () => {
       Response.json({ provider: 'aurora', depositAddress: CHECKSUMMED_DEPOSIT, state: 'SUCCESS' })
     );
 
-    const answer = await depositStatus(CHECKSUMMED_DEPOSIT, deps);
+    const answer = await depositStatus(AURORA, deps);
 
     expect(answer).toEqual({ ok: false, code: 'invalid_response' });
   });
@@ -262,7 +264,7 @@ describe('depositStatus', () => {
       )
     );
 
-    const answer = await depositStatus(CHECKSUMMED_DEPOSIT, deps);
+    const answer = await depositStatus(AURORA, deps);
 
     expect(answer).toEqual({
       ok: false,
@@ -277,7 +279,7 @@ describe('depositStatus', () => {
       Response.json({ statusCode: 500, message: 'Internal server error' }, { status: 500 })
     );
 
-    const answer = await depositStatus(CHECKSUMMED_DEPOSIT, deps);
+    const answer = await depositStatus(AURORA, deps);
 
     expect(answer).toEqual({ ok: false, code: 'http_error', httpStatus: 500 });
   });
@@ -287,7 +289,7 @@ describe('depositStatus', () => {
       Response.json({ statusCode: 502, result: { data: null, error: 'x'.repeat(257) } }, { status: 502 })
     );
 
-    const answer = await depositStatus(CHECKSUMMED_DEPOSIT, deps);
+    const answer = await depositStatus(AURORA, deps);
 
     expect(answer).toEqual({ ok: false, code: 'http_error', httpStatus: 502 });
   });
@@ -295,7 +297,7 @@ describe('depositStatus', () => {
   it('given the network fails, when read, then it answers unreachable without throwing', async () => {
     const { deps } = backend(() => Promise.reject(new Error('ECONNRESET')));
 
-    const answer = await depositStatus(CHECKSUMMED_DEPOSIT, deps);
+    const answer = await depositStatus(AURORA, deps);
 
     expect(answer).toEqual({ ok: false, code: 'unreachable' });
   });
@@ -308,7 +310,7 @@ describe('logging', () => {
       Response.json({ statusCode: 501, result: { data: null, error: 'secret backend text' } }, { status: 501 })
     );
 
-    await depositStatus(CHECKSUMMED_DEPOSIT, deps);
+    await depositStatus(AURORA, deps);
 
     expect(lines).toHaveLength(1);
     expect(JSON.parse(lines[0])).toMatchObject({ level: 'warn', msg: 'swap backend http error', status: 501 });
@@ -327,7 +329,7 @@ describe('logging', () => {
     const lines = logLines();
     const { deps } = backend(answer);
 
-    await depositStatus(CHECKSUMMED_DEPOSIT, deps);
+    await depositStatus(AURORA, deps);
 
     expect(lines).toHaveLength(1);
     expect(JSON.parse(lines[0])).toMatchObject({ level: 'warn', msg: 'swap backend invalid response' });
@@ -363,8 +365,90 @@ describe('live dependencies', () => {
     vi.resetModules();
     const live = await import('./backend');
 
-    const answer = await live.depositStatus(CHECKSUMMED_DEPOSIT);
+    const answer = await live.depositStatus(AURORA);
 
     expect(answer).toEqual({ ok: false, code: 'http_error', httpStatus: 302 });
   });
+});
+
+describe('per provider', () => {
+  const REQUEST_ID: Hex = `0x${'0a'.repeat(32)}`;
+  const RELAY: TrackKey = { provider: 'relay', requestId: REQUEST_ID };
+  const ACROSS: TrackKey = { provider: 'across', originChainId: 8453, depositId: '6362227' };
+  const relayStatus = (state: string, extra: Record<string, unknown> = {}) =>
+    envelope({ provider: 'relay', requestId: REQUEST_ID, state, ...extra });
+  const acrossStatus = (state: string, extra: Record<string, unknown> = {}) =>
+    envelope({ provider: 'across', originChainId: 8453, depositId: '6362227', state, ...extra });
+
+  it.each([
+    ['aurora', AURORA, { provider: 'aurora', depositAddress: CHECKSUMMED_DEPOSIT }],
+    ['relay', RELAY, { provider: 'relay', requestId: REQUEST_ID }],
+    ['across', ACROSS, { provider: 'across', originChainId: '8453', depositId: '6362227' }],
+  ])(
+    'given a %s key, when status is read, then the query names that key and the MCP api key is sent',
+    async (_, key, query) => {
+      const { deps, seen } = backend(() => status('PENDING_DEPOSIT'));
+
+      await depositStatus(key, deps);
+
+      expect(Object.fromEntries(new URL(seen[0].url).searchParams)).toEqual(query);
+      expect(seen[0].headers.get('x-api-key')).toBe(API_KEY);
+    }
+  );
+
+  it.each([
+    ['aurora', AURORA, { provider: 'aurora', depositAddress: CHECKSUMMED_DEPOSIT, txHash: TX }],
+    ['relay', RELAY, { provider: 'relay', requestId: REQUEST_ID, txHash: TX, originChainId: 8453 }],
+    ['across', ACROSS, { provider: 'across', originChainId: 8453, depositId: '6362227', txHash: TX }],
+  ])(
+    'given a %s key, when submitted, then the body names that key and the hash and the MCP api key is sent',
+    async (_, key, body) => {
+      const { deps, seen } = backend(() => created('KNOWN_DEPOSIT_TX'));
+
+      await submitDeposit(key, TX, 8453, deps);
+
+      expect(JSON.parse(seen[0].body ?? '')).toEqual(body);
+      expect(seen[0].headers.get('x-api-key')).toBe(API_KEY);
+    }
+  );
+
+  it('given a relay status echoing the request id in upper case, when read, then it is the same request', async () => {
+    const { deps } = backend(() => relayStatus('SUCCESS', { requestId: REQUEST_ID.toUpperCase().replace('0X', '0x') }));
+
+    expect(await depositStatus(RELAY, deps)).toEqual({
+      ok: true,
+      status: { state: 'completed', backendState: 'SUCCESS' },
+    });
+  });
+
+  it.each([
+    ['a relay status for another request id', RELAY, relayStatus('SUCCESS', { requestId: `0x${'0b'.repeat(32)}` })],
+    ['a relay status with no request id', RELAY, envelope({ provider: 'relay', state: 'SUCCESS' })],
+    ['an across status for another deposit id', ACROSS, acrossStatus('SUCCESS', { depositId: '6362228' })],
+    ['an across status for another origin chain', ACROSS, acrossStatus('SUCCESS', { originChainId: 42161 })],
+    ['an across status with the chain as a string', ACROSS, acrossStatus('SUCCESS', { originChainId: '8453' })],
+    ['an aurora status for a relay key', RELAY, status('SUCCESS', { requestId: REQUEST_ID })],
+  ])('given %s, when read, then it answers invalid_response', async (_, key, answer) => {
+    const { deps } = backend(() => answer);
+
+    expect(await depositStatus(key, deps)).toEqual({ ok: false, code: 'invalid_response' });
+  });
+
+  it.each([
+    ['PROCESSING', 'no_tx', 'submitted'],
+    ['PROCESSING', 'failure', 'submitted'],
+    ['PROCESSING', 'expired', 'submitted'],
+    ['PENDING_DEPOSIT', 'not_found', 'pending_deposit'],
+    ['SUCCESS', 'actions_failed', 'completed'],
+  ])(
+    'given across %s with rawState %s, when read, then the swap state is %s and the rawState comes back',
+    async (backendState, rawState, state) => {
+      const { deps } = backend(() => acrossStatus(backendState, { rawState }));
+
+      expect(await depositStatus(ACROSS, deps)).toEqual({
+        ok: true,
+        status: { state, backendState, untrustedRawState: rawState },
+      });
+    }
+  );
 });
