@@ -1,7 +1,7 @@
 import { encodeFunctionData, erc20Abi, getAddress, isAddressEqual, zeroAddress, type Address } from 'viem';
 import type { BackendQuote, CheckCode, CheckResult, QuoteRequest, SwapCall } from '../check';
+import { amountsCode } from './shared';
 
-const baseUnits = /^[1-9][0-9]*$/;
 const auroraQuoteId = /^aurora:(0x[0-9a-fA-F]{40})$/;
 
 export async function checkAurora(
@@ -19,10 +19,9 @@ export async function checkAurora(
   const [tx] = quote.transactions;
   if (tx.chainId !== request.originChainId) return fail('tx_chain');
 
-  if (!baseUnits.test(request.amount) || quote.inputAmount !== request.amount) return fail('input_amount');
+  const amounts = amountsCode(request, quote);
+  if (amounts) return fail(amounts);
   const { expectedOutputAmount, minOutputAmount } = quote;
-  if (!baseUnits.test(expectedOutputAmount) || !baseUnits.test(minOutputAmount)) return fail('output_amount');
-  if (BigInt(minOutputAmount) > BigInt(expectedOutputAmount)) return fail('output_amount');
 
   if ([request.account, request.originToken, zeroAddress].some((a) => isAddressEqual(a, depositAddress))) {
     return fail('deposit_address');

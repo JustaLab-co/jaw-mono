@@ -1,8 +1,8 @@
 import { hashStruct, pad, type Address, type Hex } from 'viem';
 import { z } from 'zod';
-import { ALLOWLIST, MAX_ROUTE_COST_BPS, TESTNET_MAX_ROUTE_COST_BPS, type RelayContracts } from '../allowlist';
+import { MAX_ROUTE_COST_BPS, TESTNET_MAX_ROUTE_COST_BPS, type RelayContracts } from '../allowlist';
 import type { BackendQuote, CheckCode, QuoteRequest } from '../check';
-import { clearsFloor, sameAsset } from './assets';
+import { amountsCode, floorCode, routeOf } from './shared';
 
 // EIP-712 types of a Relay order, from relay-settlement packages/sdk/src/order/index.ts.
 const ORDER_TYPES = {
@@ -126,7 +126,6 @@ export function relayOrderId(data: unknown): Hex | undefined {
 export type RelayOrderResult = { ok: true; orderId: Hex; deadline: number } | { ok: false; code: CheckCode };
 
 const relayQuoteId = /^relay:0x[0-9a-fA-F]{64}$/;
-const baseUnits = /^[1-9][0-9]*$/;
 const MAX_ORDER_LIFETIME_SEC = 7 * 86_400 + 3_600;
 
 const same = (a: string, b: string) => a.toLowerCase() === b.toLowerCase();
@@ -135,21 +134,17 @@ export function checkRelayOrder(request: QuoteRequest, quote: BackendQuote, now:
   const fail = (code: CheckCode) => ({ ok: false as const, code });
 
   if (!relayQuoteId.test(quote.quoteId) || quote.deposit !== undefined) return fail('quote_id');
-  if (!baseUnits.test(request.amount) || quote.inputAmount !== request.amount) return fail('input_amount');
-  const { expectedOutputAmount, minOutputAmount } = quote;
-  if (!baseUnits.test(expectedOutputAmount) || !baseUnits.test(minOutputAmount)) return fail('output_amount');
-  if (BigInt(minOutputAmount) > BigInt(expectedOutputAmount)) return fail('output_amount');
+  const amounts = amountsCode(request, quote);
+  if (amounts) return fail(amounts);
 
-  const origin = ALLOWLIST[request.originChainId];
-  const destination = ALLOWLIST[request.destinationChainId];
-  if (!origin?.relay) return fail('unsupported_chain');
-  if (!destination?.relay || origin.testnet !== destination.testnet) return fail('destination_chain');
+  const route = routeOf(request, 'relay');
+  if (!route.ok) return route;
+  const { origin, destination } = route;
   if (request.originChainId === request.destinationChainId) return fail('destination_chain');
 
-  const pair = sameAsset(request);
-  if (!pair) return fail('route_unsupported');
   const maxCostBps = origin.testnet ? TESTNET_MAX_ROUTE_COST_BPS : MAX_ROUTE_COST_BPS;
-  if (!clearsFloor(request, BigInt(minOutputAmount), pair, maxCostBps)) return fail('output_floor');
+  const floor = floorCode(request, BigInt(quote.minOutputAmount), maxCostBps);
+  if (floor) return fail(floor);
 
   if (quote.relayOrder === undefined) return fail('order_missing');
   const parsed = relayOrder.safeParse(quote.relayOrder);

@@ -15,9 +15,9 @@ import {
   type Address,
   type Hex,
 } from 'viem';
-import { ALLOWLIST, APP_FEE, type AcrossContracts } from '../allowlist';
+import { APP_FEE, MAX_ROUTE_COST_BPS, type AcrossContracts } from '../allowlist';
 import type { BackendQuote, CheckCode, CheckResult, QuoteRequest, SwapCall } from '../check';
-import { clearsFloor, sameAsset } from './assets';
+import { amountsCode, floorCode, routeOf } from './shared';
 
 const depositAbi = parseAbi([
   'function deposit(bytes32 depositor, bytes32 recipient, bytes32 inputToken, bytes32 outputToken, uint256 inputAmount, uint256 outputAmount, uint256 destinationChainId, bytes32 exclusiveRelayer, uint32 quoteTimestamp, uint32 fillDeadline, uint32 exclusivityParameter, bytes message)',
@@ -53,7 +53,6 @@ const QUOTE_TIME_BUFFER_SECONDS = 3600;
 const QUOTE_TIME_MARGIN_SECONDS = 300;
 const MAX_EXCLUSIVITY_SECONDS = 60;
 const quoteIdPattern = /^across:[A-Za-z0-9-]{1,64}$/;
-const baseUnits = /^[1-9][0-9]*$/;
 // Across appends an optional integrator tag and its own tag after the ABI payload.
 const tagSuffix = /^(1dc0de[0-9a-f]{4})?73c0de$/;
 
@@ -73,19 +72,15 @@ export function checkAcross(
     return fail('quote_id');
   }
 
-  if (!baseUnits.test(request.amount) || quote.inputAmount !== request.amount) return fail('input_amount');
-  const { expectedOutputAmount, minOutputAmount } = quote;
-  if (!baseUnits.test(expectedOutputAmount) || !baseUnits.test(minOutputAmount)) return fail('output_amount');
-  const min = BigInt(minOutputAmount);
-  if (min > BigInt(expectedOutputAmount)) return fail('output_amount');
+  const amounts = amountsCode(request, quote);
+  if (amounts) return fail(amounts);
+  const min = BigInt(quote.minOutputAmount);
 
-  const origin = ALLOWLIST[request.originChainId];
-  const destination = ALLOWLIST[request.destinationChainId];
-  if (!origin?.across) return fail('unsupported_chain');
-  if (!destination?.across || origin.testnet !== destination.testnet) return fail('destination_chain');
-  const pair = sameAsset(request);
-  if (!pair) return fail('route_unsupported');
-  if (!clearsFloor(request, min, pair)) return fail('output_floor');
+  const route = routeOf(request, 'across');
+  if (!route.ok) return route;
+  const { origin, destination } = route;
+  const floor = floorCode(request, min, MAX_ROUTE_COST_BPS);
+  if (floor) return fail(floor);
 
   const nativeIn = isAddressEqual(request.originToken, zeroAddress);
   const nativeOut = isAddressEqual(request.destinationToken as Address, zeroAddress);
@@ -164,8 +159,8 @@ export function checkAcross(
     quote: {
       provider: 'across',
       inputAmount: quote.inputAmount,
-      expectedOutputAmount,
-      minOutputAmount,
+      expectedOutputAmount: quote.expectedOutputAmount,
+      minOutputAmount: quote.minOutputAmount,
       expectedFillTimeSec: quote.expectedFillTimeSec,
       ...(feesUsd !== undefined ? { feesUsd } : {}),
       deadline: fillDeadline,
