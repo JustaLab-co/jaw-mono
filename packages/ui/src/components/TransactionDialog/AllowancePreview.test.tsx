@@ -57,7 +57,7 @@ describe('AllowancePreview', () => {
 
   it('shows an unlimited approval with the warning on the card and on the amount', () => {
     const html = render([change({ unlimited: true })]);
-    expect(html).toContain('Permissions granted');
+    expect(html).toContain('Token approvals');
     expect(cardWarns(html)).toBe(true);
     expect(amount(html).text).toBe('Unlimited');
     expect(amountWarns(html)).toBe(true);

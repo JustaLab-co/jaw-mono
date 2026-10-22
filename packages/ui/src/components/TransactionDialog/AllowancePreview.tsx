@@ -108,7 +108,7 @@ export const AllowancePreview = ({ changes, knownTokens, chainId, apiKey }: Allo
     <div className={`rounded-box overflow-hidden border ${hasWarning ? 'border-warning/60' : 'border-border'}`}>
       <div className="border-border/40 bg-secondary/40 flex items-center gap-2 border-b p-3">
         {hasWarning && <TriangleAlert className="text-warning size-3 flex-none" strokeWidth={2.7} />}
-        <span className="text-foreground text-heading">Permissions granted</span>
+        <span className="text-foreground text-heading">Token approvals</span>
       </div>
       <div className="divide-border/40 flex flex-col divide-y">
         {changes.map((change, i) => (
