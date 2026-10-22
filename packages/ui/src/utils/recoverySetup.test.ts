@@ -2,7 +2,6 @@ import { describe, expect, it } from 'vitest';
 import {
   SIGNATURE_RECOVERY_PROVIDER_ADDRESS,
   computeRecoveryId,
-  planRecoveryChanges,
   toOwnerBytes,
   type RecoveryChainConfig,
 } from '@jaw.id/core';
@@ -12,7 +11,7 @@ import {
   recoveryMethodAddress,
   recoveryMethodLabel,
   recoveryRelayState,
-  summarizeRecoveryChanges,
+  recoveryGuardianRows,
 } from './recoverySetup';
 
 const HOUR = 3600;
@@ -95,7 +94,7 @@ describe('recoveryRelayState', () => {
   });
 });
 
-describe('summarizeRecoveryChanges', () => {
+describe('recoveryGuardianRows', () => {
   const current: RecoveryChainConfig = {
     chainId: 84_532,
     deployed: true,
@@ -103,54 +102,51 @@ describe('summarizeRecoveryChanges', () => {
     threshold: 2,
     recoveries: [registered(ALICE), registered(BOB)],
   };
-  const summary = (recoveries: { commitment: `0x${string}`; delay: number }[], threshold: number) =>
-    summarizeRecoveryChanges(current, planRecoveryChanges(current, { recoveries, threshold }));
+  const rows = (recoveries: { commitment: `0x${string}`; delay: number }[]) =>
+    recoveryGuardianRows(current, recoveries).map(({ method, change, fromDelay }) => ({
+      commitment: method.commitment,
+      change,
+      ...(fromDelay !== undefined && { fromDelay }),
+    }));
 
-  it('lists an added guardian once', () => {
-    expect(
-      summary(
-        [
-          { commitment: ALICE, delay: 48 * HOUR },
-          { commitment: BOB, delay: 48 * HOUR },
-          { commitment: CAROL, delay: 48 * HOUR },
-        ],
-        2
-      )
-    ).toEqual([{ kind: 'add', method: { commitment: CAROL, delay: 48 * HOUR, provider: PROVIDER } }]);
+  // One list: the guardians after the change first, the ones it removes after them.
+  it('lists the end state with what is new marked, then what goes', () => {
+    expect(rows([{ commitment: CAROL, delay: 48 * HOUR }])).toEqual([
+      { commitment: CAROL, change: 'added' },
+      { commitment: ALICE, change: 'removed' },
+      { commitment: BOB, change: 'removed' },
+    ]);
   });
 
-  // The planner swaps a wait as a remove, an add and a threshold of one in between: the user
-  // changed one wait, so one line, and the threshold they did not touch is not listed.
-  it('reads a remove and re-add of the same guardian as one changed wait', () => {
+  it('leaves a guardian that stays unmarked', () => {
     expect(
-      summary(
-        [
-          { commitment: ALICE, delay: 72 * HOUR },
-          { commitment: BOB, delay: 48 * HOUR },
-        ],
-        2
-      )
+      rows([
+        { commitment: ALICE, delay: 48 * HOUR },
+        { commitment: BOB, delay: 48 * HOUR },
+        { commitment: CAROL, delay: 48 * HOUR },
+      ])
     ).toEqual([
-      { kind: 'delay', method: { commitment: ALICE, delay: 72 * HOUR, provider: PROVIDER }, from: 48 * HOUR },
+      { commitment: ALICE, change: null },
+      { commitment: BOB, change: null },
+      { commitment: CAROL, change: 'added' },
     ]);
   });
 
-  it('lists a removal and the threshold it lowers', () => {
-    expect(summary([{ commitment: ALICE, delay: 48 * HOUR }], 1)).toEqual([
-      { kind: 'remove', method: registered(BOB) },
-      { kind: 'threshold', from: 2, to: 1 },
-    ]);
-  });
-
-  it('lists nothing when nothing changed', () => {
+  it('marks a new wait with the old one', () => {
     expect(
-      summary(
-        [
-          { commitment: ALICE, delay: 48 * HOUR },
-          { commitment: BOB, delay: 48 * HOUR },
-        ],
-        2
-      )
-    ).toEqual([]);
+      rows([
+        { commitment: ALICE, delay: 72 * HOUR },
+        { commitment: BOB, delay: 48 * HOUR },
+      ])
+    ).toEqual([
+      { commitment: ALICE, change: 'delay', fromDelay: 48 * HOUR },
+      { commitment: BOB, change: null },
+    ]);
+  });
+
+  it('lists a first setup with nothing marked', () => {
+    expect(recoveryGuardianRows(null, [{ commitment: CAROL, delay: 48 * HOUR }]).map((row) => row.change)).toEqual([
+      null,
+    ]);
   });
 });

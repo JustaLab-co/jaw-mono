@@ -2,45 +2,73 @@ import { describe, it, expect } from 'vitest';
 import { renderToStaticMarkup } from 'react-dom/server';
 import { SIGNATURE_RECOVERY_PROVIDER_ADDRESS } from '@jaw.id/core';
 
-import { ChangeList, GuardianList, NetworkStatusList, RecoverySummary } from './Sections';
+import { GuardianList, NetworkStatusList, RecoveryTerms } from './Sections';
 
 const HOUR = 3600;
 const PROVIDER = SIGNATURE_RECOVERY_PROVIDER_ADDRESS;
 const CAROL = `0x${'00'.repeat(12)}${'cc'.repeat(20)}` as const;
 
 const ALICE = `0x${'00'.repeat(12)}${'aa'.repeat(20)}` as const;
+const BOB = `0x${'00'.repeat(12)}${'bb'.repeat(20)}` as const;
 
 /**
- * The screen displays and approves, as the permission screen does: nothing on it is editable.
+ * One list, as the team picked (option 1): the guardians after the change, new ones marked, then
+ * the ones it removes, struck through. Nothing on it is editable.
  */
-describe('the guardian list shows the config, read-only', () => {
-  const markup = () =>
+describe('the guardian list shows the end state and what changes', () => {
+  const markup = (props: Partial<Parameters<typeof GuardianList>[0]> = {}) =>
     renderToStaticMarkup(
       <GuardianList
-        label="Guardians"
-        methods={[
-          { commitment: ALICE, delay: 48 * HOUR, provider: PROVIDER },
-          { commitment: CAROL, delay: 72 * HOUR, provider: PROVIDER },
+        rows={[
+          { method: { commitment: CAROL, delay: 48 * HOUR, provider: PROVIDER }, change: 'added' },
+          {
+            method: { commitment: ALICE, delay: 72 * HOUR, provider: PROVIDER },
+            change: 'delay',
+            fromDelay: 48 * HOUR,
+          },
+          { method: { commitment: BOB, delay: 48 * HOUR, provider: PROVIDER }, change: 'removed' },
         ]}
-        threshold={2}
+        approvals={{ from: { threshold: 2, count: 2 }, to: { threshold: 1, count: 2 } }}
         mainnetRpcUrl="https://rpc"
+        {...props}
       />
     );
 
-  it('shows each guardian with how it approves and its wait', () => {
+  it('marks an added guardian', () => {
+    expect(markup()).toContain('Added');
+  });
+
+  it('strikes a removed guardian through and marks it', () => {
     const html = markup();
 
-    expect(html).toContain('0xaaaa...aaaa');
-    expect(html).toContain('Wallet');
-    expect(html).toContain('48h');
-    expect(html).toContain('72h');
+    expect(html).toContain('Removed');
+    expect(html).toContain('line-through');
   });
 
-  it('shows the approvals the config needs', () => {
-    expect(markup()).toContain('2 of 2');
+  it('shows a new wait against the old one', () => {
+    expect(markup()).toContain('48h → 72h');
   });
 
-  it('offers nothing to edit: no input, no remove, no wait or threshold control', () => {
+  it('shows the approvals as before and after, the new value highlighted', () => {
+    const html = markup();
+
+    expect(html).toContain('2/2');
+    expect(html).toContain('1/2');
+    expect(html).toContain('bg-warning');
+  });
+
+  it('shows the approvals alone when they do not change', () => {
+    const html = markup({
+      rows: [{ method: { commitment: CAROL, delay: 48 * HOUR, provider: PROVIDER }, change: null }],
+      approvals: { from: { threshold: 1, count: 1 }, to: { threshold: 1, count: 1 } },
+    });
+
+    expect(html).toContain('1/1');
+    expect(html).not.toContain('→');
+    expect(html).not.toContain('bg-warning');
+  });
+
+  it('offers nothing to edit: no input, no button', () => {
     const html = markup();
 
     expect(html).not.toContain('<input');
@@ -48,19 +76,24 @@ describe('the guardian list shows the config, read-only', () => {
   });
 });
 
-/** Where the owner learns how long they have to veto, and where the change lands. */
-describe('the summary states the time to cancel and the networks', () => {
-  const markup = (minimumDelay: number) =>
+/** One line under the list: how long the owner has to cancel, where, and who pays. */
+describe('the terms say how long a recovery waits', () => {
+  const markup = (minimumDelay: number, feesPaidByJaw = false) =>
     renderToStaticMarkup(
-      <RecoverySummary minimumDelay={minimumDelay} networkLabel="Network" networks="Base Sepolia" />
+      <RecoveryTerms minimumDelay={minimumDelay} networks="Base Sepolia" feesPaidByJaw={feesPaidByJaw} />
     );
 
-  it('says the guaranteed minimum and the network', () => {
+  it('says the wait, the network, and nothing about fees on a first setup', () => {
     const html = markup(48 * HOUR);
 
-    expect(html).toContain('at least 48h');
+    expect(html).toContain('48h');
+    expect(html).toContain('you can cancel it before then');
     expect(html).toContain('Base Sepolia');
-    expect(html).not.toContain('Short veto window');
+    expect(html).not.toContain('fees paid by JAW');
+  });
+
+  it('says JAW pays for an edit', () => {
+    expect(markup(48 * HOUR, true)).toContain('fees paid by JAW');
   });
 
   it('advises on a short veto window', () => {
@@ -68,32 +101,10 @@ describe('the summary states the time to cancel and the networks', () => {
   });
 
   it('says when recovery can complete instantly', () => {
-    expect(markup(0)).toContain('No waiting period');
-  });
-});
+    const html = markup(0);
 
-describe('the change list reads like the edit, not like the ops', () => {
-  const markup = (changes: Parameters<typeof ChangeList>[0]['changes']) =>
-    renderToStaticMarkup(<ChangeList changes={changes} mainnetRpcUrl="https://rpc" />);
-
-  it('shows an added guardian with its wait', () => {
-    const html = markup([{ kind: 'add', method: { commitment: CAROL, delay: 48 * HOUR, provider: PROVIDER } }]);
-
-    expect(html).toContain('aria-label="Added"');
-    expect(html).toContain('0xcccc...cccc');
-    expect(html).toContain('48h');
-  });
-
-  it('shows a changed wait as from and to', () => {
-    const html = markup([
-      { kind: 'delay', method: { commitment: CAROL, delay: 72 * HOUR, provider: PROVIDER }, from: 48 * HOUR },
-    ]);
-
-    expect(html).toContain('48h → 72h');
-  });
-
-  it('shows a new threshold as from and to', () => {
-    expect(markup([{ kind: 'threshold', from: 2, to: 1 }])).toContain('Approvals needed 2 → 1');
+    expect(html).toContain('instantly');
+    expect(html).toContain('No waiting period');
   });
 });
 
