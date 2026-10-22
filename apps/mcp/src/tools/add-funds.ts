@@ -1,7 +1,8 @@
+import { handleGetCapabilitiesRequest } from '@jaw.id/core';
 import type { McpServer } from '@modelcontextprotocol/server';
 import { z } from 'zod';
 import { tenant, type Tenant } from '@/connections/auth';
-import { APPROVE_WITHIN_MS } from '@/connections/config';
+import { APPROVE_WITHIN_MS, config } from '@/connections/config';
 import { ownerRelay, type OpenWallet } from '@/connections/relay';
 import { countHit } from '@/db/settings';
 import { addFundsHeld, openLink, type PermissionRequestRow } from '@/grants/requests';
@@ -10,6 +11,7 @@ import { caip2, isProxyChain } from '@/lib/chain';
 import { RATE_WINDOW_MS } from '@/lib/edge';
 import { reply } from '@/lib/fence';
 import { LINK_RATE_LIMIT, MAX_ADD_FUNDS_PER_ACCOUNT } from '@/owner-calls/cap';
+import { reasonOf } from './account';
 import { refusal } from './reply';
 
 const input = z.strictObject({
@@ -18,7 +20,9 @@ const input = z.strictObject({
     .int()
     .positive()
     .optional()
-    .describe("A chain the JAW wallet supports; defaults to this connection's chain"),
+    .describe(
+      "A chain jaw_get_capabilities lists for this account, mainnets only on a mainnet server; defaults to this connection's chain"
+    ),
 });
 
 const output = z.object({
@@ -31,9 +35,20 @@ const output = z.object({
 
 export interface AddFundsDeps {
   openWallet: OpenWallet;
+  /** The chains the proxy lists capabilities for, as jaw_get_capabilities reads them. */
+  capabilityChains: (account: string, showTestnets: boolean) => Promise<number[]>;
 }
 
-const DEFAULTS: AddFundsDeps = { openWallet: ownerRelay };
+const capabilityChains: AddFundsDeps['capabilityChains'] = async (account, showTestnets) =>
+  Object.keys(
+    await handleGetCapabilitiesRequest(
+      { method: 'wallet_getCapabilities', params: [account] },
+      config().paymasterApiKey,
+      showTestnets
+    )
+  ).map(Number);
+
+const DEFAULTS: AddFundsDeps = { openWallet: ownerRelay, capabilityChains };
 
 const withoutWallet = (t: Tenant, chainId: number) =>
   `Without the wallet, anyone can send funds on ${caip2(chainId)} to ${t.account}.`;
@@ -60,10 +75,27 @@ function answer(t: Tenant, chainId: number, row: PermissionRequestRow) {
   );
 }
 
-export async function addFunds(t: Tenant, args: { chainId?: number } = {}, deps = DEFAULTS) {
+export async function addFunds(t: Tenant, args: { chainId?: number } = {}, given: Partial<AddFundsDeps> = {}) {
+  const deps = { ...DEFAULTS, ...given };
   const chainId = args.chainId ?? t.chainId;
-  if (!isProxyChain(chainId)) {
-    return refusal(`unsupported_chain: Chain ${chainId} is not one the JAW wallet supports.`);
+  if (chainId !== t.chainId) {
+    const unsupported = `unsupported_chain: Chain ${chainId} is not one the JAW wallet supports here.`;
+    if (!isProxyChain(chainId)) return refusal(unsupported);
+    // A mainnet server takes mainnets only, as jaw_get_assets reads balances on those and the connection's chain.
+    let listed: number[];
+    try {
+      listed = await deps.capabilityChains(t.account, config().chain.testnet === true);
+    } catch (err) {
+      return refusedWithAddress(
+        t,
+        t.chainId,
+        `proxy_error: Chain ${chainId} could not be checked: ${reasonOf(err).replace(/\.?$/, '.')} Ask again, or leave chainId out for this connection's chain.`
+      );
+    }
+    if (!listed.includes(chainId)) {
+      const others = listed.filter((id) => id !== t.chainId);
+      return refusal(`${unsupported} Supported: ${others.join(', ')}, and this connection's chain ${t.chainId}.`);
+    }
   }
   if (
     !(await addFundsHeld(t)) &&

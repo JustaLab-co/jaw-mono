@@ -34,7 +34,7 @@ const chainIds = z
   .optional()
   .describe('Mainnet chain ids to read; every supported mainnet when left out');
 
-function reasonOf(err: unknown) {
+export function reasonOf(err: unknown) {
   if (err instanceof z.ZodError) return 'The proxy answered with an unexpected shape.';
   const message = typeof err === 'object' && err !== null && 'message' in err ? String(err.message) : 'request failed';
   return sanitizeLine(scrub(message), 200);

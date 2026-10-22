@@ -1,5 +1,6 @@
 import { eq } from 'drizzle-orm';
-import { beforeAll, describe, expect, it } from 'vitest';
+import { base } from 'viem/chains';
+import { afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
 import { verifyBearer, type Tenant } from '@/connections/auth';
 import { WalletBusy, type Ask, type OpenWallet } from '@/connections/relay';
 import { callTool, connect, fakeWallet, owner, setTestEnv, walletAnswers, walletsSettled } from '@/connections/testkit';
@@ -11,8 +12,30 @@ import { MAX_ADD_FUNDS_PER_ACCOUNT } from '@/owner-calls/cap';
 import { sendCalls } from './owner-calls';
 import { addFunds, type AddFundsDeps } from './add-funds';
 
+// The server's own chain, swapped for a mainnet in the tests that need one.
+const deployment = vi.hoisted(() => ({ chain: undefined as undefined | import('viem').Chain }));
+vi.mock('@/connections/config', async (original) => {
+  const mod = await original<typeof import('@/connections/config')>();
+  return { ...mod, config: () => ({ ...mod.config(), ...(deployment.chain && { chain: deployment.chain }) }) };
+});
+
 setTestEnv();
 beforeAll(TEST_PG_URL ? useTestPostgres : useTestDb);
+afterEach(() => (deployment.chain = undefined));
+
+const MAINNETS = [8453, 1, 10];
+const TESTNETS = [84532, 11155111];
+
+/** The proxy's answer: mainnets only unless testnets are asked for, as wallet_getCapabilities filters them. */
+function capabilities(o: { fail?: Error } = {}) {
+  const asked: { account: string; showTestnets: boolean }[] = [];
+  const capabilityChains: AddFundsDeps['capabilityChains'] = async (account, showTestnets) => {
+    asked.push({ account, showTestnets });
+    if (o.fail) throw o.fail;
+    return showTestnets ? [...MAINNETS, ...TESTNETS] : MAINNETS;
+  };
+  return { asked, capabilityChains };
+}
 
 async function connected(signer = owner()) {
   const c = await connect(signer, { scope: 'wallet:read' });
@@ -38,7 +61,7 @@ function setup(signer: ReturnType<typeof owner>) {
       return method === 'wallet_addFunds' ? null : answers(method, params);
     }, asked);
     const openWallet: OpenWallet = async (...args) => (chains.push(args[0]), wallet(...args));
-    return { openWallet };
+    return { openWallet, capabilityChains: capabilities().capabilityChains };
   };
   return { asked, deps, opened: () => chains.length, chains };
 }
@@ -110,6 +133,80 @@ describe('jaw_add_funds', () => {
 
     expect(refused(result)).toBe(true);
     expect(textOf(result)).toMatch(/^unsupported_chain: Chain 324 /);
+    expect(opened()).toBe(0);
+    expect(await rowsOf(t)).toEqual([]);
+  });
+
+  it("given no chainId, then the connection's chain needs no capabilities lookup", async () => {
+    const { t, signer } = await connected();
+    const { deps } = setup(signer);
+    const lookup = capabilities({ fail: new Error('must not be asked') });
+
+    const result = await addFunds(t, {}, { ...deps(), capabilityChains: lookup.capabilityChains });
+    const named = await addFunds(t, { chainId: t.chainId }, { ...deps(), capabilityChains: lookup.capabilityChains });
+    await walletsSettled();
+
+    expect(refused(result)).toBe(false);
+    expect(refused(named)).toBe(false);
+    expect(lookup.asked).toEqual([]);
+  });
+
+  it('given a mainnet server and a testnet chainId, then it is refused unsupported_chain, the proxy is asked for mainnets only and no wallet opens', async () => {
+    deployment.chain = base;
+    const { t, signer } = await connected();
+    const { deps, opened } = setup(signer);
+    const lookup = capabilities();
+
+    const result = await addFunds(t, { chainId: 11155111 }, { ...deps(), capabilityChains: lookup.capabilityChains });
+
+    expect(refused(result)).toBe(true);
+    expect(textOf(result)).toMatch(/^unsupported_chain: Chain 11155111 /);
+    expect(textOf(result)).toContain(
+      `Supported: ${MAINNETS.filter((id) => id !== t.chainId).join(', ')}, and this connection's chain ${t.chainId}.`
+    );
+    expect(lookup.asked).toEqual([{ account: t.account, showTestnets: false }]);
+    expect(opened()).toBe(0);
+    expect(await rowsOf(t)).toEqual([]);
+  });
+
+  it('given a mainnet server and a mainnet chainId, then the link opens on that chain', async () => {
+    deployment.chain = base;
+    const { t, signer } = await connected();
+    const { deps, chains } = setup(signer);
+    const lookup = capabilities();
+
+    const result = await addFunds(t, { chainId: 10 }, { ...deps(), capabilityChains: lookup.capabilityChains });
+    await walletsSettled();
+
+    expect(refused(result)).toBe(false);
+    expect('structuredContent' in result && result.structuredContent?.chains).toEqual(['eip155:10']);
+    expect(lookup.asked).toEqual([{ account: t.account, showTestnets: false }]);
+    expect(chains).toEqual([10]);
+  });
+
+  it('given a testnet server, then the proxy is asked with testnets and a testnet chainId opens', async () => {
+    const { t, signer } = await connected();
+    const { deps, chains } = setup(signer);
+    const lookup = capabilities();
+
+    const result = await addFunds(t, { chainId: 11155111 }, { ...deps(), capabilityChains: lookup.capabilityChains });
+    await walletsSettled();
+
+    expect(refused(result)).toBe(false);
+    expect(lookup.asked).toEqual([{ account: t.account, showTestnets: true }]);
+    expect(chains).toEqual([11155111]);
+  });
+
+  it("given the capabilities lookup fails, then it is refused proxy_error with the address on the connection's chain and no wallet opens", async () => {
+    const { t, signer } = await connected();
+    const { deps, opened } = setup(signer);
+    const lookup = capabilities({ fail: new Error('proxy down') });
+
+    const result = await addFunds(t, { chainId: 8453 }, { ...deps(), capabilityChains: lookup.capabilityChains });
+
+    expect(refused(result)).toBe(true);
+    expect(textOf(result)).toMatch(/^proxy_error: Chain 8453 could not be checked: proxy down\. /);
+    expect(textOf(result)).toContain(`anyone can send funds on eip155:${t.chainId} to ${t.account}`);
     expect(opened()).toBe(0);
     expect(await rowsOf(t)).toEqual([]);
   });
@@ -237,7 +334,11 @@ describe('jaw_add_funds', () => {
       throw new WalletBusy();
     };
 
-    const result = await addFunds(t, { chainId: 8453 }, { openWallet: busy });
+    const result = await addFunds(
+      t,
+      { chainId: 8453 },
+      { openWallet: busy, capabilityChains: capabilities().capabilityChains }
+    );
 
     expect(refused(result)).toBe(true);
     expect(textOf(result)).toMatch(/^Too many owners are approving right now\. /);
