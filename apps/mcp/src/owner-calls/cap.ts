@@ -4,6 +4,7 @@ import { getDb, type Tx } from '@/db/client';
 import { ownerCalls, permissionRequests, swaps } from '@/db/schema';
 
 // Each open link holds a relay socket for up to its approval window, and the pool is shared by every user.
+// Add Funds links move no funds, so they never take a slot; one per connection and the rate limit bound them.
 export const MAX_OPEN_PER_ACCOUNT = 3;
 export const FULL = 'full';
 // New owner links one connection, and one account, may open per minute.
@@ -47,7 +48,9 @@ export async function countOpenLinks(account: string, except?: string, db: Tx = 
   const [asked] = await db
     .select({ n: count() })
     .from(permissionRequests)
-    .where(and(sql`lower(${permissionRequests.account}) = ${lowered}`, linkLive));
+    .where(
+      and(sql`lower(${permissionRequests.account}) = ${lowered}`, ne(permissionRequests.method, 'add_funds'), linkLive)
+    );
   return calls.n + swapped.n + asked.n;
 }
 

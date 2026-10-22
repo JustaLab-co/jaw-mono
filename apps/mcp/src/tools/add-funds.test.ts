@@ -1,7 +1,7 @@
 import { eq } from 'drizzle-orm';
 import { beforeAll, describe, expect, it } from 'vitest';
 import { verifyBearer, type Tenant } from '@/connections/auth';
-import type { Ask, OpenWallet } from '@/connections/relay';
+import { WalletBusy, type Ask, type OpenWallet } from '@/connections/relay';
 import { callTool, connect, fakeWallet, owner, setTestEnv, walletAnswers, walletsSettled } from '@/connections/testkit';
 import { USER_REJECTED } from '@/connections/wallet-codes';
 import { getDb } from '@/db/client';
@@ -135,7 +135,7 @@ describe('jaw_add_funds', () => {
     expect(await rowsOf(t)).toMatchObject([{ chainId: t.chainId }]);
   });
 
-  it("given the account's open links are all taken, then the refusal is account_busy and still names the address on the asked chain", async () => {
+  it('given three other links waiting on the account, then an Add Funds link still opens', async () => {
     const signer = owner();
     const others = [await connected(signer), await connected(signer), await connected(signer)];
     const { t } = await connected(signer);
@@ -156,14 +156,48 @@ describe('jaw_add_funds', () => {
       expect(r.isError ?? false).toBe(false);
     }
 
-    const result = await addFunds(t, { chainId: 8453 }, deps());
+    const result = await addFunds(t, { chainId: 8453 }, deps({ held: wait.promise }));
     wait.release();
     await walletsSettled();
 
+    expect(refused(result)).toBe(false);
+    expect(urlOf(result)).toMatch(/cli-bridge/);
+    expect(opened()).toBe(1);
+  });
+
+  it('given Add Funds links waiting on three connections, then jaw_send_calls on the account still opens', async () => {
+    const signer = owner();
+    const waiting = [await connected(signer), await connected(signer), await connected(signer)];
+    const { t } = await connected(signer);
+    const { deps } = setup(signer);
+    const wait = held();
+    const holding = deps({ held: wait.promise });
+    for (const w of waiting) expect(refused(await addFunds(w.t, {}, holding))).toBe(false);
+
+    const send = await sendCalls(
+      t,
+      { calls: [{ to: '0x000000000000000000000000000000000000dEaD' }] },
+      { openWallet: holding.openWallet, receipt: async () => null, clients: {} as never }
+    );
+    wait.release();
+    await walletsSettled();
+
+    expect(send.isError ?? false).toBe(false);
+    expect(send.content[0].text).not.toMatch(/^account_busy: /);
+  });
+
+  it('given the wallet pool is full, then the refusal is wallet_busy and still names the address on the asked chain', async () => {
+    const { t } = await connected();
+    const busy: OpenWallet = async () => {
+      throw new WalletBusy();
+    };
+
+    const result = await addFunds(t, { chainId: 8453 }, { openWallet: busy });
+
     expect(refused(result)).toBe(true);
-    expect(textOf(result)).toMatch(/^account_busy: /);
+    expect(textOf(result)).toMatch(/^Too many owners are approving right now\. /);
     expect(textOf(result)).toContain(`anyone can send funds on eip155:8453 to ${t.account}`);
-    expect(opened()).toBe(0);
+    expect(await rowsOf(t)).toEqual([]);
   });
 
   it('given the wallet is signed in to another account, then the screen is never shown and the request reads wrong_account', async () => {
