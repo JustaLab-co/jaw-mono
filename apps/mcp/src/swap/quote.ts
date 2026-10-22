@@ -4,10 +4,11 @@ import { config, ownerWindowMs } from '@/connections/config';
 import { errorLabel, log } from '@/lib/edge';
 import { fenceText } from '@/lib/fence';
 import { refusal, safeFetch } from '@/lib/safe-fetch';
-import { checkQuote, type QuoteRequest } from './check';
+import { checkQuote, type CheckCode, type QuoteRequest } from './check';
 import {
   depositAddressReused,
   isDepositAddressTaken,
+  isOrderTaken,
   release,
   writeHeld,
   type SwapLease,
@@ -127,6 +128,8 @@ export function quoteRequestOf(row: SwapRow): QuoteRequest | undefined {
 // swap stays quoting and the same key quotes once the setting is fixed.
 const KEY_REFUSED = new Set([401, 402, 403]);
 
+const ALLOWLIST_DRIFT: ReadonlySet<CheckCode> = new Set(['solver_unknown', 'router_mismatch']);
+
 async function conclude(lease: SwapLease, request: QuoteRequest, url: string, askedAt: Date, answer: Answer) {
   if (answer.kind === 'unreachable') return release(lease, { code: 'backend_unavailable' });
   const { status, body, scrubbed } = answer;
@@ -155,10 +158,20 @@ async function keepQuote(
   }
   const checked = await checkQuote(request, data, {
     isDepositAddressTaken,
+    isOrderTaken,
     now: () => Math.floor(Date.now() / 1000),
     ownerWindowSec: ownerWindowMs(config().swapQuoteTtlSec) / 1000,
   });
   if (!checked.ok) {
+    if (ALLOWLIST_DRIFT.has(checked.code)) {
+      log('warn', {
+        msg: 'swap quote refused on allowlist drift',
+        provider: (data as { provider: string }).provider,
+        originChainId: request.originChainId,
+        destinationChainId: request.destinationChainId,
+        code: checked.code,
+      });
+    }
     const state = checked.code === 'quote_invalid' ? 'quote_failed' : 'quote_rejected';
     return writeHeld(lease, { state, code: checked.code, quoteFenced: fenced });
   }

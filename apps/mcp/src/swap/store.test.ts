@@ -11,6 +11,7 @@ import {
   claimSwap,
   depositAddressReused,
   isDepositAddressTaken,
+  isOrderTaken,
   move,
   markSendStarted,
   recordCallsId,
@@ -546,6 +547,21 @@ describe('deposit addresses', () => {
     expect(await isDepositAddressTaken(address.toLowerCase())).toBe(true);
     expect(await isDepositAddressTaken(address.toUpperCase().replace('0X', '0x'))).toBe(true);
     expect(await isDepositAddressTaken(freshAddress())).toBe(false);
+  });
+});
+
+describe('relay order ids', () => {
+  const orderId = () => `0x${randomBytes(32).toString('hex')}`;
+
+  it('given a swap whose quote holds a Relay order id, when the id is looked up in any case, then it is taken and another id is not', async () => {
+    const held = orderId();
+    const { row, token } = await quoting(await newConnection());
+    const quoted = quoteOf();
+    await writeHeld(leaseOf(row, token), { ...quoted, quote: { ...quoted.quote, orderId: held } });
+
+    expect(await isOrderTaken(held)).toBe(true);
+    expect(await isOrderTaken(held.toUpperCase().replace('0X', '0x'))).toBe(true);
+    expect(await isOrderTaken(orderId())).toBe(false);
   });
 });
 

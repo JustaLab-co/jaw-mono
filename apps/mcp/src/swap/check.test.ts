@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
 import { encodeFunctionData, erc20Abi, getAddress, zeroAddress, type Address } from 'viem';
 import { callsOf } from './calls';
-import { checkQuote, isSupportedOriginChain, type QuoteRequest } from './check';
+import { checkQuote, isSupportedOriginChain, type CheckDeps, type QuoteRequest } from './check';
 
 const account = getAddress('0x1111111111111111111111111111111111111111');
 const usdc = getAddress('0x833589fcd6edb6e08f4c7c32d4f71b54bda02913');
@@ -69,7 +69,7 @@ function backendQuoteJson(request: QuoteRequest, deposit: Address = depositAddre
 }
 
 const unused = async () => false;
-const deps = { isDepositAddressTaken: unused, now: () => 0, ownerWindowSec: 240 };
+const deps: CheckDeps = { isDepositAddressTaken: unused, isOrderTaken: unused, now: () => 1_792_676_780, ownerWindowSec: 240 };
 
 async function accepted(request: QuoteRequest, body: unknown) {
   const result = await checkQuote(request, body, deps);

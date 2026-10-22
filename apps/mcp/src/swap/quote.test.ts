@@ -8,8 +8,9 @@ import { getDb } from '@/db/client';
 import { payments, swaps } from '@/db/schema';
 import { TEST_PG_URL, useTestDb, useTestPostgres } from '@/db/test-db';
 import { callsOf } from './calls';
+import type { CheckDeps } from './check';
 import { quote, quoteRequestOf, swapRequest, type QuoteDeps, type SwapInput } from './quote';
-import { claimSwap, type SwapRow } from './store';
+import { claimSwap, writeHeld, type SwapRow } from './store';
 import acrossAnswer from './fixtures/prod-across-quote.json';
 import relayAnswer from './fixtures/prod-relay-quote.json';
 
@@ -32,6 +33,19 @@ vi.mock('./store', async (original) => {
         if (lookups.waiting.length === lookups.meet) lookups.waiting.forEach((r) => r());
       });
       return taken;
+    },
+  };
+});
+
+const checks = vi.hoisted(() => ({ code: undefined as string | undefined, deps: undefined as CheckDeps | undefined }));
+
+vi.mock('./check', async (original) => {
+  const real = await original<typeof import('./check')>();
+  return {
+    ...real,
+    checkQuote: async (...args: Parameters<typeof real.checkQuote>) => {
+      checks.deps = args[2];
+      return checks.code ? { ok: false, code: checks.code } : real.checkQuote(...args);
     },
   };
 });
@@ -136,6 +150,8 @@ beforeEach(() => {
   backend.hits.length = 0;
   lookups.meet = 0;
   lookups.waiting.length = 0;
+  checks.code = undefined;
+  checks.deps = undefined;
 });
 afterEach(() => vi.restoreAllMocks());
 
@@ -628,5 +644,74 @@ describe('deposit addresses raced', () => {
         expect.objectContaining({ state: 'quote_rejected', code: 'deposit_address_reused', quoteId: null }),
       ])
     );
+  });
+});
+
+describe('the checks the quote runs', () => {
+  const warnings = (logged: { mock: { calls: unknown[][] } }) =>
+    logged.mock.calls.map(([line]) => JSON.parse(String(line))).filter((line) => line.level === 'warn');
+
+  it('given another swap whose quote holds a Relay order id, when a quote is checked, then the order lookup passed to the checks finds it', async () => {
+    const orderId = `0x${'cd'.repeat(32)}` as const;
+    const other = await connected();
+    const { row, token } = await claimed(other);
+    await writeHeld(
+      { connectionId: other.connectionId, id: row.id, token },
+      {
+        quoteId: `relay:0x${'ef'.repeat(32)}`,
+        quote: { provider: 'relay', orderId },
+        call: [],
+        quoteFenced: '<<fenced quote>>',
+        quotedAt: new Date(),
+      }
+    );
+
+    await quoted(await connected());
+
+    expect(await checks.deps!.isOrderTaken(orderId)).toBe(true);
+    expect(await checks.deps!.isOrderTaken(`0x${'12'.repeat(32)}` as const)).toBe(false);
+  });
+
+  it('given a quote, when it is checked, then the clock passed to the checks reads unix seconds', async () => {
+    const before = Math.floor(Date.now() / 1000);
+
+    await quoted(await connected());
+
+    const now = checks.deps!.now();
+    expect(now).toBeGreaterThanOrEqual(before);
+    expect(now).toBeLessThanOrEqual(Math.floor(Date.now() / 1000));
+  });
+
+  it.each(['solver_unknown', 'router_mismatch'])(
+    'given the checks refuse the quote with %s, when the quote is asked, then the row is quote_rejected and a warning names only the provider, the chains and the code',
+    async (code) => {
+      const logged = vi.spyOn(console, 'log').mockImplementation(() => undefined);
+      checks.code = code;
+
+      const { row } = await quoted(await connected());
+
+      expect(row).toMatchObject({ state: 'quote_rejected', code, call: null });
+      expect(warnings(logged)).toEqual([
+        {
+          level: 'warn',
+          time: expect.any(String),
+          msg: 'swap quote refused on allowlist drift',
+          provider: 'aurora',
+          originChainId: 84532,
+          destinationChainId: 42161,
+          code,
+        },
+      ]);
+    }
+  );
+
+  it('given the checks refuse the quote with tx_to, when the quote is asked, then no warning is logged', async () => {
+    const logged = vi.spyOn(console, 'log').mockImplementation(() => undefined);
+    checks.code = 'tx_to';
+
+    const { row } = await quoted(await connected());
+
+    expect(row).toMatchObject({ state: 'quote_rejected', code: 'tx_to' });
+    expect(warnings(logged)).toEqual([]);
   });
 });

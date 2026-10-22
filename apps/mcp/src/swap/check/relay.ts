@@ -1,7 +1,20 @@
-import { hashStruct, pad, type Address, type Hex } from 'viem';
+import {
+  decodeFunctionData,
+  encodeFunctionData,
+  erc20Abi,
+  getAddress,
+  hashStruct,
+  isAddressEqual,
+  pad,
+  parseAbi,
+  toFunctionSelector,
+  zeroAddress,
+  type Address,
+  type Hex,
+} from 'viem';
 import { z } from 'zod';
-import { MAX_ROUTE_COST_BPS, TESTNET_MAX_ROUTE_COST_BPS, type RelayContracts } from '../allowlist';
-import type { BackendQuote, CheckCode, QuoteRequest } from '../check';
+import { ALLOWLIST, MAX_ROUTE_COST_BPS, TESTNET_MAX_ROUTE_COST_BPS, type RelayContracts } from '../allowlist';
+import type { BackendQuote, CheckCode, CheckDeps, CheckResult, QuoteRequest, SwapCall } from '../check';
 import { amountsCode, floorCode, routeOf } from './shared';
 
 // EIP-712 types of a Relay order, from relay-settlement packages/sdk/src/order/index.ts.
@@ -209,5 +222,116 @@ function termsCode(
   if (!solverSide.relay.solvers.some((solver) => same(solver, order.solver))) return 'solver_unknown';
 
   if (output.calls.length !== 0) return 'order_calls';
+  return undefined;
+}
+
+const DEPOSITORY_ABI = parseAbi([
+  'function depositNative(address depositor, bytes32 id)',
+  'function depositErc20(address depositor, address token, uint256 amount, bytes32 id)',
+]);
+const DEPOSIT_NATIVE = toFunctionSelector(DEPOSITORY_ABI[0]);
+const DEPOSIT_ERC20 = toFunctionSelector(DEPOSITORY_ABI[1]);
+// ApprovalProxy.transferAndMulticall: an origin swap through Relay's router, not verifiable from calldata.
+const TRANSFER_AND_MULTICALL = '0xf9e4bab4';
+
+type Tx = BackendQuote['transactions'][number];
+
+export async function checkRelay(request: QuoteRequest, quote: BackendQuote, deps: CheckDeps): Promise<CheckResult> {
+  const fail = (code: CheckCode) => ({ ok: false as const, code });
+
+  const order = checkRelayOrder(request, quote, deps.now());
+  if (!order.ok) return order;
+
+  const txs = quote.transactions;
+  if (txs.some((tx) => tx.chainId !== request.originChainId)) return fail('tx_chain');
+  const native = isAddressEqual(request.originToken, zeroAddress);
+  if (txs.length === 0 || txs.length > (native ? 1 : 2)) return fail('tx_count');
+
+  const depository = getAddress(ALLOWLIST[request.originChainId].relay!.depository);
+  const deposit = txs[txs.length - 1];
+  const code =
+    depositCode(request, deposit, order.orderId, depository, native) ??
+    (txs.length === 2 ? approveCode(request, txs[0], depository) : undefined);
+  if (code) return fail(code);
+
+  if (await deps.isOrderTaken(order.orderId)) return fail('order_reused');
+
+  const depositCall: SwapCall = {
+    kind: 'deposit',
+    chainId: request.originChainId,
+    to: depository,
+    data: deposit.data.toLowerCase() as Hex,
+    value: deposit.value,
+  };
+  const approveCall: SwapCall = {
+    kind: 'approve',
+    chainId: request.originChainId,
+    to: getAddress(request.originToken),
+    data: encodeFunctionData({ abi: erc20Abi, functionName: 'approve', args: [depository, BigInt(request.amount)] }),
+    value: '0',
+  };
+  const feesUsd = quote.fees.totalUsd;
+  return {
+    ok: true,
+    quoteId: quote.quoteId.toLowerCase(),
+    calls: native ? [depositCall] : [approveCall, depositCall],
+    quote: {
+      provider: 'relay',
+      inputAmount: quote.inputAmount,
+      expectedOutputAmount: quote.expectedOutputAmount,
+      minOutputAmount: quote.minOutputAmount,
+      expectedFillTimeSec: quote.expectedFillTimeSec,
+      ...(feesUsd !== undefined ? { feesUsd } : {}),
+      orderId: order.orderId,
+      deadline: order.deadline,
+    },
+  };
+}
+
+function depositCode(
+  request: QuoteRequest,
+  tx: Tx,
+  orderId: Hex,
+  depository: Address,
+  native: boolean
+): CheckCode | undefined {
+  const selector = tx.data.slice(0, 10).toLowerCase();
+  if (selector === TRANSFER_AND_MULTICALL) return 'route_unsupported';
+  if (selector !== (native ? DEPOSIT_NATIVE : DEPOSIT_ERC20)) return 'tx_selector';
+  if (!same(tx.to, depository)) return 'tx_to';
+  if (tx.value !== (native ? request.amount : '0')) return 'tx_value';
+
+  const fields = depositFields(tx.data as Hex);
+  if (!fields) return 'tx_data';
+  if (!same(fields.depositor, request.account)) return 'depositor';
+  if (fields.token !== undefined && !same(fields.token, request.originToken)) return 'input_amount';
+  if (fields.amount !== undefined && fields.amount !== BigInt(request.amount)) return 'input_amount';
+  if (!same(fields.id, orderId)) return 'order_id';
+  return undefined;
+}
+
+function depositFields(data: Hex) {
+  try {
+    const call = decodeFunctionData({ abi: DEPOSITORY_ABI, data });
+    if (encodeFunctionData({ abi: DEPOSITORY_ABI, ...call }) !== data.toLowerCase()) return undefined;
+    if (call.functionName === 'depositNative') {
+      const [depositor, id] = call.args;
+      return { depositor, id, token: undefined, amount: undefined };
+    }
+    const [depositor, token, amount, id] = call.args;
+    return { depositor, id, token, amount };
+  } catch {
+    return undefined;
+  }
+}
+
+function approveCode(request: QuoteRequest, tx: Tx, depository: Address): CheckCode | undefined {
+  if (!same(tx.to, request.originToken)) return 'approve_spender';
+  try {
+    const call = decodeFunctionData({ abi: erc20Abi, data: tx.data as Hex });
+    if (call.functionName !== 'approve' || !same(call.args[0], depository)) return 'approve_spender';
+  } catch {
+    return 'approve_spender';
+  }
   return undefined;
 }

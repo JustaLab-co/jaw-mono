@@ -318,6 +318,7 @@ function nativeToWeth(): Case {
 
 const depsOf = (c: Case, ownerWindowSec = OWNER_WINDOW_SEC) => ({
   isDepositAddressTaken: async () => false,
+  isOrderTaken: async () => false,
   now: () => c.now,
   ownerWindowSec,
 });

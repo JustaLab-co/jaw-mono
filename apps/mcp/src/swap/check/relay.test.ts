@@ -1,6 +1,7 @@
-import { describe, expect, it } from 'vitest';
-import { getAddress, zeroAddress } from 'viem';
-import type { BackendQuote, QuoteRequest } from '../check';
+import { describe, expect, it, vi } from 'vitest';
+import { encodeFunctionData, getAddress, pad, parseAbi, zeroAddress, type Address, type Hex } from 'viem';
+import { callsOf } from '../calls';
+import { checkQuote, type BackendQuote, type CheckDeps, type QuoteRequest } from '../check';
 import prodAnswer from '../fixtures/prod-relay-quote.json';
 import nativeAnswer from '../fixtures/relay-native.json';
 import usdcFeeAnswer from '../fixtures/relay-usdc-fee.json';
@@ -442,6 +443,276 @@ describe('checkRelayOrder', () => {
       ['a refund', (o: Order) => (o.inputs[0].refunds[1].extraData = ATTACKER_DATA)],
     ])('when %s carries extraData of another router, then it fails with router_mismatch', (_, change) => {
       expect(codeOf(testnetQuote('412737624236110', change), testnetRequest)).toBe('router_mismatch');
+    });
+  });
+});
+
+describe('checkQuote with a Relay answer as the backend sends it', () => {
+  const DEPOSITORY = '0x4cd00e387622c35bddb9b4c962c136462338bc31';
+  const APPROVAL_PROXY = '0xccc88a9d1b4ed6b0eaba998850414b24f1c315be';
+  const USDC_ORDER = '0x0de6aaacb71ffd230278e6aa855c6159b4e9e4be35ed782c48d74b1b42193c54';
+  const NATIVE_ORDER = '0x61fb170c281e35e82af8773e6b9c0cbc065e9f74abe896149ad6a480eaf9536e';
+  const OTHER_ORDER = `0x${'ab'.repeat(32)}` as const;
+  const EXACT_APPROVE =
+    '0x095ea7b30000000000000000000000004cd00e387622c35bddb9b4c962c136462338bc310000000000000000000000000000000000000000000000000000000000989680';
+  const USDC_DEPOSIT =
+    '0xe80179520000000000000000000000006ca44a56b06869530c953dfa7868973be1456769000000000000000000000000833589fcd6edb6e08f4c7c32d4f71b54bda0291300000000000000000000000000000000000000000000000000000000009896800de6aaacb71ffd230278e6aa855c6159b4e9e4be35ed782c48d74b1b42193c54';
+  const NATIVE_DEPOSIT =
+    '0x49290c1c0000000000000000000000006ca44a56b06869530c953dfa7868973be145676961fb170c281e35e82af8773e6b9c0cbc065e9f74abe896149ad6a480eaf9536e';
+
+  const depositoryAbi = parseAbi([
+    'function depositNative(address depositor, bytes32 id)',
+    'function depositErc20(address depositor, address token, uint256 amount, bytes32 id)',
+  ]);
+  const threeArgAbi = parseAbi(['function depositErc20(address token, uint256 amount, bytes32 id)']);
+  const erc20Deposit = (depositor: Address, token: Address, amount: bigint, id: Hex) =>
+    encodeFunctionData({ abi: depositoryAbi, functionName: 'depositErc20', args: [depositor, token, amount, id] });
+  const nativeDeposit = (depositor: Address, id: Hex) =>
+    encodeFunctionData({ abi: depositoryAbi, functionName: 'depositNative', args: [depositor, id] });
+
+  type Tx = { chainId: number; to: string; data: string; value: string };
+  const bodyOf = (answer: { result: { data: unknown } }) =>
+    structuredClone(answer.result.data) as RelayQuote & { transactions: Tx[] };
+  const usdcBody = (change: (txs: Tx[]) => void = () => {}) => {
+    const body = bodyOf(usdcAnswer);
+    change(body.transactions);
+    return body;
+  };
+  const nativeBody = (change: (txs: Tx[]) => void = () => {}) => {
+    const body = bodyOf(nativeAnswer);
+    change(body.transactions);
+    return body;
+  };
+
+  const deps = (over: Partial<CheckDeps> = {}): CheckDeps => ({
+    isDepositAddressTaken: async () => false,
+    isOrderTaken: async () => false,
+    now: () => QUOTED_AT,
+    ownerWindowSec: 240,
+    ...over,
+  });
+
+  async function accepted(request: QuoteRequest, body: unknown, d = deps()) {
+    const result = await checkQuote(request, body, d);
+    if (!result.ok) throw new Error(`expected the quote to pass, got ${result.code}`);
+    expect(callsOf({ call: result.calls })).toEqual(result.calls);
+    return result;
+  }
+  const codeFor = async (body: unknown, request = usdcRequest, d = deps()) => {
+    const result = await checkQuote(request, body, d);
+    return result.ok ? 'passed' : result.code;
+  };
+
+  describe('given the live USDC quote from Base to Arbitrum with its approve and deposit', () => {
+    it('when checked, then it passes with the approve rebuilt for the Depository and the deposit bytes kept', async () => {
+      const result = await accepted(usdcRequest, bodyOf(usdcAnswer));
+
+      expect(result).toEqual({
+        ok: true,
+        quoteId: 'relay:0x179267678091194c54ad536dcde64b1b8ee801cc22789f7588d81f101cd20226',
+        calls: [
+          { kind: 'approve', chainId: 8453, to: BASE_USDC, data: EXACT_APPROVE, value: '0' },
+          { kind: 'deposit', chainId: 8453, to: getAddress(DEPOSITORY), data: USDC_DEPOSIT, value: '0' },
+        ],
+        quote: {
+          provider: 'relay',
+          inputAmount: '10000000',
+          expectedOutputAmount: '9975996',
+          minOutputAmount: '9776477',
+          expectedFillTimeSec: 1,
+          orderId: USDC_ORDER,
+          deadline: 1793281580,
+        },
+      });
+    });
+
+    it('when the quote approves an unlimited amount, then the stored approve is still exactly the amount', async () => {
+      const unlimited = `0x095ea7b3${pad(DEPOSITORY).slice(2)}${'f'.repeat(64)}`;
+
+      const result = await accepted(
+        usdcRequest,
+        usdcBody((txs) => (txs[0].data = unlimited))
+      );
+
+      expect(result.calls[0].data).toBe(EXACT_APPROVE);
+    });
+
+    it('when the quote leaves the approve out, then it passes and the MCP still builds the approve first', async () => {
+      const result = await accepted(
+        usdcRequest,
+        usdcBody((txs) => txs.shift())
+      );
+
+      expect(result.calls.map(({ kind, data }) => [kind, data])).toEqual([
+        ['approve', EXACT_APPROVE],
+        ['deposit', USDC_DEPOSIT],
+      ]);
+    });
+
+    it('when the quote id arrives in upper case, then the stored id is lower case', async () => {
+      const body = usdcBody();
+      body.quoteId = body.quoteId.toUpperCase().replace('RELAY:0X', 'relay:0x');
+
+      expect((await accepted(usdcRequest, body)).quoteId).toBe(
+        'relay:0x179267678091194c54ad536dcde64b1b8ee801cc22789f7588d81f101cd20226'
+      );
+    });
+
+    it('when re_usdc_fee is checked, then it passes with its own order id', async () => {
+      expect((await accepted(usdcRequest, bodyOf(usdcFeeAnswer))).quote.orderId).toBe(
+        '0x4aefef577bdf321635a10542aace42bcfaf4cc33be7220c61ca9b24f197c607f'
+      );
+    });
+
+    it('when no swap holds the order, then the lookup is asked with the order id', async () => {
+      const isOrderTaken = vi.fn(async () => false);
+
+      await accepted(usdcRequest, bodyOf(usdcAnswer), deps({ isOrderTaken }));
+
+      expect(isOrderTaken).toHaveBeenCalledWith(USDC_ORDER);
+    });
+  });
+
+  describe('given the live native ETH quote from Base to mainnet', () => {
+    it('when checked, then it passes with the one depositNative call and the amount as value', async () => {
+      const result = await accepted(nativeRequest, bodyOf(nativeAnswer));
+
+      expect(result.calls).toEqual([
+        {
+          kind: 'deposit',
+          chainId: 8453,
+          to: getAddress(DEPOSITORY),
+          data: NATIVE_DEPOSIT,
+          value: '10000000000000000',
+        },
+      ]);
+      expect(result.quote).toMatchObject({ provider: 'relay', orderId: NATIVE_ORDER, deadline: 1793281580 });
+    });
+  });
+
+  describe('given the clock the caller passes, in unix seconds', () => {
+    it('when now is one second before the order deadline, then it passes, and at the deadline it fails with deadline', async () => {
+      expect(await codeFor(bodyOf(usdcAnswer), usdcRequest, deps({ now: () => 1793281579 }))).toBe('passed');
+      expect(await codeFor(bodyOf(usdcAnswer), usdcRequest, deps({ now: () => 1793281580 }))).toBe('deadline');
+    });
+  });
+
+  describe('given the prod Relay answer without protocol data', () => {
+    it('when checked, then it fails with order_missing', async () => {
+      expect(await codeFor(bodyOf(prodAnswer), nativeRequest)).toBe('order_missing');
+    });
+  });
+
+  describe('given one transaction of a passing quote changed', () => {
+    const transferAndMulticall = `0xf9e4bab4${'00'.repeat(64)}`;
+    const dirtyDepositor = `${USDC_DEPOSIT.slice(0, 10)}ff${USDC_DEPOSIT.slice(12)}`;
+
+    it.each([
+      ['the deposit on another chain', 'tx_chain', (txs: Tx[]) => (txs[1].chainId = 42161)],
+      ['the approve on another chain', 'tx_chain', (txs: Tx[]) => (txs[0].chainId = 42161)],
+      ['no transaction', 'tx_count', (txs: Tx[]) => txs.splice(0)],
+      ['a third transaction', 'tx_count', (txs: Tx[]) => txs.push({ ...txs[1] })],
+      [
+        'the deposit through the ApprovalProxy',
+        'route_unsupported',
+        (txs: Tx[]) => Object.assign(txs[1], { to: APPROVAL_PROXY, data: transferAndMulticall }),
+      ],
+      [
+        'the 3-argument depositErc20',
+        'tx_selector',
+        (txs: Tx[]) =>
+          (txs[1].data = encodeFunctionData({
+            abi: threeArgAbi,
+            functionName: 'depositErc20',
+            args: [BASE_USDC, 10000000n, USDC_ORDER],
+          })),
+      ],
+      [
+        'depositNative on a USDC origin',
+        'tx_selector',
+        (txs: Tx[]) => (txs[1].data = nativeDeposit(ACCOUNT, USDC_ORDER)),
+      ],
+      ['an unknown selector', 'tx_selector', (txs: Tx[]) => (txs[1].data = `0x12345678${USDC_DEPOSIT.slice(10)}`)],
+      ['the deposit to another contract', 'tx_to', (txs: Tx[]) => (txs[1].to = ATTACKER)],
+      ['the deposit to the ApprovalProxy', 'tx_to', (txs: Tx[]) => (txs[1].to = APPROVAL_PROXY)],
+      ['the deposit carrying value', 'tx_value', (txs: Tx[]) => (txs[1].value = '1')],
+      ['a byte after the deposit', 'tx_data', (txs: Tx[]) => (txs[1].data += '00')],
+      ['dirty padding on the depositor word', 'tx_data', (txs: Tx[]) => (txs[1].data = dirtyDepositor)],
+      ['the deposit cut short', 'tx_data', (txs: Tx[]) => (txs[1].data = USDC_DEPOSIT.slice(0, -2))],
+      [
+        'another depositor',
+        'depositor',
+        (txs: Tx[]) => (txs[1].data = erc20Deposit(ATTACKER, BASE_USDC, 10000000n, USDC_ORDER)),
+      ],
+      [
+        'another token',
+        'input_amount',
+        (txs: Tx[]) => (txs[1].data = erc20Deposit(ACCOUNT, ARB_USDC, 10000000n, USDC_ORDER)),
+      ],
+      [
+        'an amount 1 lower',
+        'input_amount',
+        (txs: Tx[]) => (txs[1].data = erc20Deposit(ACCOUNT, BASE_USDC, 9999999n, USDC_ORDER)),
+      ],
+      [
+        'another order id',
+        'order_id',
+        (txs: Tx[]) => (txs[1].data = erc20Deposit(ACCOUNT, BASE_USDC, 10000000n, OTHER_ORDER)),
+      ],
+      [
+        'an approve to another spender',
+        'approve_spender',
+        (txs: Tx[]) => (txs[0].data = `0x095ea7b3${pad(ATTACKER).slice(2)}${pad('0x989680').slice(2)}`),
+      ],
+      ['an approve on another token', 'approve_spender', (txs: Tx[]) => (txs[0].to = ARB_USDC)],
+      [
+        'a transfer in place of the approve',
+        'approve_spender',
+        (txs: Tx[]) => (txs[0].data = `0xa9059cbb${EXACT_APPROVE.slice(10)}`),
+      ],
+    ])('when it has %s, then it fails with %s', async (_, code, change) => {
+      expect(await codeFor(usdcBody(change))).toBe(code);
+    });
+
+    it.each([
+      ['an approve before the deposit', 'tx_count', (txs: Tx[]) => txs.unshift({ ...usdcBody().transactions[0] })],
+      [
+        'the deposit through the ApprovalProxy',
+        'route_unsupported',
+        (txs: Tx[]) => Object.assign(txs[0], { to: APPROVAL_PROXY, data: transferAndMulticall }),
+      ],
+      [
+        'depositErc20 on a native origin',
+        'tx_selector',
+        (txs: Tx[]) => (txs[0].data = erc20Deposit(ACCOUNT, zeroAddress, 10000000000000000n, NATIVE_ORDER)),
+      ],
+      ['the deposit to another contract', 'tx_to', (txs: Tx[]) => (txs[0].to = ATTACKER)],
+      ['a value 1 below the amount', 'tx_value', (txs: Tx[]) => (txs[0].value = '9999999999999999')],
+      ['a byte after the deposit', 'tx_data', (txs: Tx[]) => (txs[0].data += '00')],
+      ['another depositor', 'depositor', (txs: Tx[]) => (txs[0].data = nativeDeposit(ATTACKER, NATIVE_ORDER))],
+      ['another order id', 'order_id', (txs: Tx[]) => (txs[0].data = nativeDeposit(ACCOUNT, OTHER_ORDER))],
+    ])('when the native quote has %s, then it fails with %s', async (_, code, change) => {
+      expect(await codeFor(nativeBody(change), nativeRequest)).toBe(code);
+    });
+  });
+
+  describe('given a swap row that already holds the order id', () => {
+    it('when the quote is checked, then it fails with order_reused', async () => {
+      const isOrderTaken = async (orderId: Hex) => orderId === USDC_ORDER;
+
+      expect(await codeFor(bodyOf(usdcAnswer), usdcRequest, deps({ isOrderTaken }))).toBe('order_reused');
+    });
+
+    it('when the quote already failed a transaction check, then the lookup is not asked', async () => {
+      const isOrderTaken = vi.fn(async () => true);
+
+      await codeFor(
+        usdcBody((txs) => (txs[1].to = ATTACKER)),
+        usdcRequest,
+        deps({ isOrderTaken })
+      );
+
+      expect(isOrderTaken).not.toHaveBeenCalled();
     });
   });
 });

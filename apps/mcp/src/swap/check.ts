@@ -3,6 +3,7 @@ import type { Address, Hex } from 'viem';
 import { z } from 'zod';
 import { checkAcross } from './check/across';
 import { checkAurora } from './check/aurora';
+import { checkRelay } from './check/relay';
 
 export type Provider = 'aurora' | 'across' | 'relay';
 
@@ -54,7 +55,8 @@ export type CheckCode =
   | 'router_mismatch'
   | 'solver_unknown'
   | 'deposit_address'
-  | 'deposit_address_reused';
+  | 'deposit_address_reused'
+  | 'order_reused';
 
 export type CheckedQuote = {
   ok: true;
@@ -70,6 +72,8 @@ export type CheckedQuote = {
     feesUsd?: string;
     deadline?: number;
     appFee?: string;
+    /** Relay: protocol.v2.orderId, the id the Depository deposit commits to. */
+    orderId?: Hex;
   };
 };
 
@@ -98,6 +102,8 @@ export function isSupportedOriginChain(chainId: number): boolean {
 
 export type CheckDeps = {
   isDepositAddressTaken: (depositAddress: Address) => Promise<boolean>;
+  isOrderTaken: (orderId: Hex) => Promise<boolean>;
+  /** Unix seconds. */
   now: () => number;
   ownerWindowSec: number;
 };
@@ -110,6 +116,8 @@ export async function checkQuote(request: QuoteRequest, body: unknown, deps: Che
       return checkAurora(request, parsed.data, deps.isDepositAddressTaken);
     case 'across':
       return checkAcross(request, parsed.data, deps.now(), deps.ownerWindowSec);
+    case 'relay':
+      return checkRelay(request, parsed.data, deps);
     default:
       return { ok: false, code: 'quote_id' };
   }

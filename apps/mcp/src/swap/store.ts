@@ -321,3 +321,12 @@ export async function isDepositAddressTaken(address: string): Promise<boolean> {
     .limit(1);
   return row !== undefined;
 }
+
+export async function isOrderTaken(orderId: string): Promise<boolean> {
+  const [row] = await getDb()
+    .select({ id: swaps.id })
+    .from(swaps)
+    .where(sql`lower(${swaps.quote}->>'orderId') = ${orderId.toLowerCase()}`)
+    .limit(1);
+  return row !== undefined;
+}
