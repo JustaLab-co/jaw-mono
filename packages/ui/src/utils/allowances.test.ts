@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { maxUint160, maxUint256 } from 'viem';
-import { allowanceChanges, decodeAllowanceChange } from './allowances';
+import { allowanceChanges, decodeAllowanceChange, unlimitedAllowanceChanges } from './allowances';
 
 const PERMIT2 = '0x000000000022D473030F116dDEE9F6B43aC78BA3';
 const OWNER = '0x2222222222222222222222222222222222222222';
@@ -218,5 +218,24 @@ describe('allowanceChanges', () => {
       { to: TOKEN, data: setAll(1n) },
     ]);
     expect(changes.map((c) => c.allTokens)).toEqual([false, true]);
+  });
+});
+
+describe('unlimitedAllowanceChanges', () => {
+  it('keeps unlimited approvals and setApprovalForAll, drops finite ones and revokes', () => {
+    const changes = unlimitedAllowanceChanges([
+      { to: TOKEN, data: approve(5_000_000n) },
+      { to: TOKEN, data: approve(maxUint256) },
+      { to: TOKEN, data: approve(0n) },
+      { to: TOKEN, data: setAll(1n) },
+      { to: PERMIT2, data: permit2(maxUint160) },
+      { to: PERMIT2, data: permit2(5_000_000n) },
+    ]);
+    expect(changes.map((c) => ({ token: c.token, allTokens: c.allTokens }))).toEqual([
+      { token: TOKEN, allTokens: false },
+      { token: TOKEN, allTokens: true },
+      { token: TOKEN, allTokens: false },
+    ]);
+    expect(changes.every((c) => c.unlimited)).toBe(true);
   });
 });

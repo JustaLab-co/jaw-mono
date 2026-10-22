@@ -21,7 +21,7 @@ import { TokenIcon } from '../TokenIcon';
 import { SubText } from '../SubText';
 import { AssetPreview } from './AssetPreview';
 import { AllowancePreview } from './AllowancePreview';
-import { allowanceChanges } from '../../utils/allowances';
+import { unlimitedAllowanceChanges } from '../../utils/allowances';
 import { callTitle } from './DecodedCalldata';
 import { resolveBlockReason } from '../../utils/transactionFailure';
 import { isBlockingPermissionProblem, PERMISSION_PROBLEM_TEXT } from '../../utils/permissionExecution';
@@ -321,7 +321,7 @@ export const TransactionDialog = ({
 
             {/* Allowances move no balance, so the simulation above can't show them. */}
             <AllowancePreview
-              changes={allowanceChanges(transactions)}
+              changes={unlimitedAllowanceChanges(transactions)}
               knownTokens={[...(assetsOut ?? []), ...(assetsIn ?? [])]}
               chainId={currentTransaction?.chainId}
               apiKey={apiKey}

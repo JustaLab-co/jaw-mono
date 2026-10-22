@@ -6,8 +6,6 @@ vi.mock('../../hooks', () => ({ useChainIconURI: () => undefined, useFeeTokenPri
 vi.mock('../../hooks/useDecodedCalldata', () => ({
   useDecodedCalldata: () => ({ clearSigned: null, decoded: null, isLoading: false }),
 }));
-// The raw display is what a token that cannot be read gets; the read itself is covered in AllowancePreview.token.test.
-vi.mock('../../hooks/useApprovalTokenKind', () => ({ useApprovalTokenKind: () => ({ status: 'unknown' }) }));
 vi.mock('../ShellDialog', () => ({ ShellDialog: ({ children }: { children: ReactNode }) => <div>{children}</div> }));
 
 import { TransactionDialog } from './index';
@@ -17,6 +15,7 @@ const TOKEN = '0x036CbD53842c5426634e7929541eC2318f3dCF7e';
 const SPENDER = '0x1111111111111111111111111111111111111111';
 const EOA = '0xd8dA6BF26964aF9D7eEd9e03E53415D37aA96045';
 const approve5 = `0x095ea7b3${SPENDER.slice(2).padStart(64, '0')}${(5_000_000).toString(16).padStart(64, '0')}`;
+const approveMax = `0x095ea7b3${SPENDER.slice(2).padStart(64, '0')}${'f'.repeat(64)}`;
 
 const usdc = (direction: 'in' | 'out'): AssetDelta => ({
   address: TOKEN.toLowerCase(),
@@ -58,22 +57,8 @@ const render = (extra: Extra, transactions = [{ to: TOKEN, data: approve5, chain
   );
 
 describe('TransactionDialog wiring', () => {
-  it('a token seen in the simulation as sent lends the approval its decimals', () => {
-    const out = render({ assetsOut: [usdc('out')] });
-    expect(out).not.toContain('(raw)');
-  });
-
-  it('a token seen in the simulation as received lends the approval its decimals', () => {
-    const out = render({ assetsIn: [usdc('in')] });
-    expect(out).not.toContain('(raw)');
-  });
-
-  it('a token absent from the simulation shows the raw amount', () => {
-    expect(render({})).toContain('5000000 (raw)');
-  });
-
   it('the approval icon is looked up on the chain of the first call', () => {
-    expect(render({})).toContain('/tokens/84532/');
+    expect(render({}, [{ to: TOKEN, data: approveMax, chainId: 84532 }])).toContain('/tokens/84532/');
   });
 
   it('under a permission the balance columns say Sends and Receives', () => {
