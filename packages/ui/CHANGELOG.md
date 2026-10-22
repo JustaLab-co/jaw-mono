@@ -1,3 +1,13 @@
+## 1.8.2 (2026-10-22)
+
+### 🩹 Fixes
+
+- **ui:** show the token approvals card only for unlimited approvals ([#541](https://github.com/JustaLab-co/jaw-mono/pull/541))
+
+### ❤️ Thank You
+
+- Ghadi @Ghadi8
+
 ## 1.8.1 (2026-10-21)
 
 ### 🧱 Updated Dependencies
