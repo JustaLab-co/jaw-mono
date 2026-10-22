@@ -132,8 +132,13 @@ function requestOf(token: string, amount: string, destinationChainId: number, ou
 
 const depositAbi = parseAbi([
   'function deposit(bytes32 depositor, bytes32 recipient, bytes32 inputToken, bytes32 outputToken, uint256 inputAmount, uint256 outputAmount, uint256 destinationChainId, bytes32 exclusiveRelayer, uint32 quoteTimestamp, uint32 fillDeadline, uint32 exclusivityParameter, bytes message)',
+  'function depositNative(address spokePool, address depositor, bytes32 recipient, address inputToken, uint256 inputAmount, bytes32 outputToken, uint256 outputAmount, uint256 destinationChainId, bytes32 exclusiveRelayer, uint32 quoteTimestamp, uint32 fillDeadline, uint32 exclusivityParameter, bytes message)',
 ]);
-const handlerAbi = parseAbi(['function drainLeftoverTokens(address token, address destination)']);
+const handlerAbi = parseAbi([
+  'function drainLeftoverTokens(address token, address destination)',
+  'function makeCallWithBalance(address target, bytes callData, uint256 value, (address token, uint256 offset)[] replacement)',
+]);
+const wethAbi = parseAbi(['function withdraw(uint256 wad)']);
 const emitterAbi = parseAbi(['function emitData(bytes data)']);
 const metadataAbi = parseAbiParameters(
   'uint8, uint8, uint8, address, uint256, uint256, uint256, uint256, string, uint256, bool, address, address'
@@ -143,6 +148,7 @@ const instructionsAbi = parseAbiParameters(
 );
 
 type DepositArgs = {
+  spokePool?: Address;
   depositor: Hex;
   recipient: Hex;
   inputToken: Hex;
@@ -162,24 +168,12 @@ const word = (address: string) => pad(address.toLowerCase() as Hex, { size: 32 }
 
 function withDeposit(c: Case, edit: (args: DepositArgs) => void, suffix = '73c0de'): Case {
   const tx = c.body.transactions[c.body.transactions.length - 1];
-  const [depositor, recipient, inputToken, outputToken, inputAmount, outputAmount, ...rest] = decodeFunctionData({
-    abi: depositAbi,
-    data: tx.data as Hex,
-  }).args;
-  const [destinationChainId, exclusiveRelayer, quoteTimestamp, fillDeadline, exclusivityParameter, message] = rest;
-  const a: DepositArgs = {
-    ...{ depositor, recipient, inputToken, outputToken, inputAmount, outputAmount, destinationChainId },
-    ...{ exclusiveRelayer, quoteTimestamp, fillDeadline, exclusivityParameter, message },
-  };
+  const { functionName, args } = decodeFunctionData({ abi: depositAbi, data: tx.data as Hex });
+  const { inputs } = depositAbi.find((item) => item.name === functionName)!;
+  const a = Object.fromEntries(inputs.map((input, i) => [input.name, args[i]])) as DepositArgs;
   edit(a);
-  const args = [a.depositor, a.recipient, a.inputToken, a.outputToken, a.inputAmount, a.outputAmount] as const;
-  const tail = [a.exclusiveRelayer, a.quoteTimestamp, a.fillDeadline, a.exclusivityParameter, a.message] as const;
-  const data = encodeFunctionData({
-    abi: depositAbi,
-    functionName: 'deposit',
-    args: [...args, a.destinationChainId, ...tail],
-  });
-  tx.data = `${data}${suffix}`;
+  const edited = inputs.map((input) => a[input.name as keyof DepositArgs]);
+  tx.data = `${encodeFunctionData({ abi: depositAbi, functionName, args: edited as never })}${suffix}`;
   return c;
 }
 
@@ -258,14 +252,52 @@ function dirtyPadding(): Case {
   return c;
 }
 
-// WETH on Base to native ETH on Arbitrum, the deposit naming the zero address as its output token.
+const native = () => live('native_fee');
+const NATIVE_FEE = 24_977_918_149_588n;
+
+const unwrapCall = (weth: Address = ARB_WETH, offset = 4n): Call => ({
+  target: HANDLER,
+  callData: encodeFunctionData({
+    abi: handlerAbi,
+    functionName: 'makeCallWithBalance',
+    args: [
+      weth,
+      encodeFunctionData({ abi: wethAbi, functionName: 'withdraw', args: [0n] }),
+      0n,
+      [{ token: weth, offset }],
+    ],
+  }),
+  value: 0n,
+});
+const valueCall = (value: bigint, target: Address = FEE_RECIPIENT, callData: Hex = '0x'): Call => ({
+  target,
+  callData,
+  value,
+});
+
 function wethToNative(): Case {
-  const c = nofee();
-  c.request = { ...c.request, originToken: BASE_WETH, destinationToken: zeroAddress };
+  let program = { message: '0x' as Hex, outputAmount: 0n };
+  withDeposit(live('native_eth'), (a) => (program = a));
+  const c = minOutput(nofee(), program.outputAmount.toString());
+  c.request = { ...c.request, originToken: BASE_WETH, amount: '10000000000000000', destinationToken: zeroAddress };
+  c.body.inputAmount = c.request.amount;
   c.body.transactions[0].to = BASE_WETH;
   return withDeposit(c, (a) => {
+    a.recipient = word(HANDLER);
     a.inputToken = word(BASE_WETH);
-    a.outputToken = word(zeroAddress);
+    a.inputAmount = 10n ** 16n;
+    a.outputToken = word(ARB_WETH);
+    a.outputAmount = program.outputAmount;
+    a.message = program.message;
+  });
+}
+
+function nativeToWeth(): Case {
+  const c = live('native_eth');
+  c.request.destinationToken = ARB_WETH.toLowerCase();
+  return withDeposit(c, (a) => {
+    a.recipient = word(ACCOUNT);
+    a.message = '0x';
   });
 }
 
@@ -299,9 +331,9 @@ describe('given each live Across answer with the request it was made for', () =>
     ['degen_to_usdc', 'route_unsupported'],
     ['eth_to_usdc', 'route_unsupported'],
     ['usdc_to_arb', 'route_unsupported'],
-    ['native_eth', 'tx_selector'],
-    ['native_fee', 'tx_selector'],
-    ['eth_to_eth_mainnet', 'tx_selector'],
+    ['native_eth', 'pass'],
+    ['native_fee', 'pass'],
+    ['eth_to_eth_mainnet', 'pass'],
   ])('when %s is checked, then the answer is %s', async (name, expected) => {
     expect(await outcome(live(name))).toBe(expected);
   });
@@ -494,15 +526,6 @@ const refusals: Array<[string, () => Case, CheckCode]> = [
     () => edited(fee(), (c) => (c.body.transactions[1].data = `0xdeadbeef${c.body.transactions[1].data.slice(10)}`)),
     'tx_selector',
   ],
-  [
-    'a native origin',
-    () =>
-      edited(fee(), (c) => {
-        c.request.originToken = zeroAddress;
-        c.request.destinationToken = ARB_WETH.toLowerCase();
-      }),
-    'tx_selector',
-  ],
   ['a deposit to the periphery', () => edited(fee(), (c) => (c.body.transactions[1].to = PERIPHERY)), 'tx_to'],
   ['a deposit carrying value', () => edited(fee(), (c) => (c.body.transactions[1].value = '1')), 'tx_value'],
   [
@@ -526,7 +549,6 @@ const refusals: Array<[string, () => Case, CheckCode]> = [
     'depositor',
   ],
   ['another output token', () => withDeposit(fee(), (a) => (a.outputToken = word(OTHER))), 'output_token'],
-  ['a native destination with a zero output token', wethToNative, 'output_token'],
   [
     'an empty message to another recipient',
     () => withDeposit(nofee(), (a) => (a.recipient = word(ATTACKER))),
@@ -647,5 +669,199 @@ describe('given the fee message program [fee, drain, drain, emitData]', () => {
 
     expect(await outcome(trailing)).toBe('message_program');
     expect(await outcome(garbage)).toBe('message_program');
+  });
+});
+
+describe('given an Across native quote that passes', () => {
+  it('when native_fee is accepted, then the one call is the deposit to the periphery for exactly the amount', async () => {
+    const c = native();
+    const deposit = c.body.transactions[0].data;
+
+    const result = await accepted(c);
+
+    expect(result.calls).toEqual([
+      { kind: 'deposit', chainId: 8453, to: PERIPHERY, data: deposit, value: '10000000000000000' },
+    ]);
+    expect(result.quote).toMatchObject({
+      appFee: NATIVE_FEE.toString(),
+      deadline: 1792683935,
+      minOutputAmount: '9966189341685642',
+    });
+  });
+
+  it('when native_eth has no fee call, then the app fee is 0', async () => {
+    const result = await accepted(live('native_eth'));
+
+    expect(result.quote.appFee).toBe('0');
+  });
+
+  it('when WETH on Base goes to native ETH through SpokePool.deposit, then the approve on WETH is rebuilt and the unwrap program passes', async () => {
+    const result = await accepted(wethToNative());
+
+    expect(result.calls[0]).toEqual({
+      kind: 'approve',
+      chainId: 8453,
+      to: BASE_WETH,
+      data: approveData(BASE_POOL, 10n ** 16n),
+      value: '0',
+    });
+  });
+
+  it.each<[string, () => Case]>([
+    ['native ETH to Arbitrum WETH with an empty message', nativeToWeth],
+    ['the unwrap program without emitData', () => withCalls(native(), (c) => c.slice(0, 4))],
+    ['the unwrap program with two emitData calls', () => withCalls(native(), (c) => [...c, c[4]])],
+  ])('when it is %s, then it passes', async (_, make) => {
+    expect(await outcome(make())).toBe('pass');
+  });
+});
+
+const nativeRefusals: Array<[string, () => Case, CheckCode]> = [
+  [
+    'an approve before the native deposit',
+    () =>
+      edited(native(), (c) => {
+        const approve = { chainId: 8453, to: BASE_WETH, data: approveData(PERIPHERY, 10n ** 16n), value: '0' };
+        c.body.transactions.unshift(approve);
+      }),
+    'tx_count',
+  ],
+  [
+    'SpokePool.deposit on a native origin',
+    () => edited(native(), (c) => (c.body.transactions = [fee().body.transactions[1]])),
+    'tx_selector',
+  ],
+  [
+    'depositNative on an ERC-20 origin',
+    () => edited(fee(), (c) => (c.body.transactions[1] = native().body.transactions[0])),
+    'tx_selector',
+  ],
+  [
+    'an origin swap on a native request',
+    () => minOutput({ ...live('eth_to_usdc'), request: native().request }, '9966189341685642'),
+    'route_unsupported',
+  ],
+  [
+    'the native deposit sent to the SpokePool',
+    () => edited(native(), (c) => (c.body.transactions[0].to = BASE_POOL)),
+    'tx_to',
+  ],
+  [
+    'a spokePool argument other than the SpokePool',
+    () => withDeposit(native(), (a) => (a.spokePool = ATTACKER)),
+    'tx_to',
+  ],
+  [
+    'a native deposit carrying no value',
+    () => edited(native(), (c) => (c.body.transactions[0].value = '0')),
+    'tx_value',
+  ],
+  [
+    'a native deposit carrying 1 wei more than the amount',
+    () => edited(native(), (c) => (c.body.transactions[0].value = '10000000000000001')),
+    'tx_value',
+  ],
+  [
+    'bytes after the tag on a native deposit',
+    () => edited(native(), (c) => (c.body.transactions[0].data = `${c.body.transactions[0].data}00`)),
+    'tx_data',
+  ],
+  ['another depositor on a native deposit', () => withDeposit(native(), (a) => (a.depositor = ATTACKER)), 'depositor'],
+  [
+    'the zero address as the native input token',
+    () => withDeposit(native(), (a) => (a.inputToken = zeroAddress)),
+    'input_amount',
+  ],
+  [
+    'Base USDC as the native input token',
+    () => withDeposit(native(), (a) => (a.inputToken = BASE_USDC)),
+    'input_amount',
+  ],
+  ['a native deposit of another amount', () => withDeposit(native(), (a) => (a.inputAmount = 1n)), 'input_amount'],
+  [
+    'a native deposit to another chain',
+    () => withDeposit(native(), (a) => (a.destinationChainId = 10n)),
+    'destination_chain',
+  ],
+  [
+    'the zero address as the output for native ETH',
+    () => withDeposit(native(), (a) => (a.outputToken = word(zeroAddress))),
+    'output_token',
+  ],
+  [
+    'Arbitrum USDC as the output for native ETH',
+    () => withDeposit(native(), (a) => (a.outputToken = word(ARB_USDC))),
+    'output_token',
+  ],
+  [
+    'the user as recipient of the unwrap program',
+    () => withDeposit(native(), (a) => (a.recipient = word(ACCOUNT))),
+    'recipient',
+  ],
+  [
+    'an empty message for native ETH out',
+    () =>
+      withDeposit(native(), (a) => {
+        a.recipient = word(ACCOUNT);
+        a.message = '0x';
+      }),
+    'message_program',
+  ],
+  [
+    'the unwrap program for a WETH destination',
+    () => edited(native(), (c) => (c.request.destinationToken = ARB_WETH.toLowerCase())),
+    'message_program',
+  ],
+  [
+    'a value fee 1 wei over 25 bps',
+    () =>
+      minOutput(
+        withCalls(native(), (c) => [c[0], valueCall(NATIVE_FEE + 1n), ...c.slice(2)]),
+        '9966189341685641'
+      ),
+    'app_fee',
+  ],
+  ['a value fee that leaves less than the minimum', () => minOutput(native(), '9966189341685643'), 'output_amount'],
+];
+
+describe('given an Across native quote that breaks one rule', () => {
+  it.each(nativeRefusals.map(([what, make, code]) => [what, code, make] as const))(
+    'when it has %s, then it is refused with %s',
+    async (_, code, make) => {
+      expect(await outcome(make())).toBe(code);
+    }
+  );
+});
+
+describe('given the native out program [unwrap, fee, drain ETH, drain WETH, emitData]', () => {
+  it.each<[string, (calls: Call[]) => Call[]]>([
+    ['the unwrap through another contract', (c) => [{ ...c[0], target: OTHER }, ...c.slice(1)]],
+    ['the unwrap of another token', (c) => [unwrapCall(OTHER), ...c.slice(1)]],
+    ['the unwrap with another offset', (c) => [unwrapCall(ARB_WETH, 5n), ...c.slice(1)]],
+    ['the unwrap carrying value', (c) => [{ ...c[0], value: 1n }, ...c.slice(1)]],
+    ['no unwrap', (c) => c.slice(1)],
+    ['the fee sent to another address', (c) => [c[0], valueCall(NATIVE_FEE, ATTACKER), ...c.slice(2)]],
+    ['the fee call with calldata', (c) => [c[0], valueCall(NATIVE_FEE, FEE_RECIPIENT, '0x00'), ...c.slice(2)]],
+    [
+      'a WETH transfer in place of the value fee',
+      (c) => [c[0], feeCall(NATIVE_FEE, FEE_RECIPIENT, ARB_WETH), ...c.slice(2)],
+    ],
+    ['the fee before the unwrap', (c) => [c[1], c[0], ...c.slice(2)]],
+    ['two fee calls', (c) => [c[0], c[1], ...c.slice(1)]],
+    ['the ETH drain to another address', (c) => [c[0], c[1], drainCall(zeroAddress, ATTACKER), c[3], c[4]]],
+    ['the WETH drain to another address', (c) => [c[0], c[1], c[2], drainCall(ARB_WETH, ATTACKER), c[4]]],
+    ['the drains swapped', (c) => [c[0], c[1], c[3], c[2], c[4]]],
+    ['no ETH drain', (c) => [c[0], c[1], c[3], c[4]]],
+    ['no WETH drain', (c) => [c[0], c[1], c[2], c[4]]],
+    ['a drain carrying value', (c) => [c[0], c[1], { ...c[2], value: 1n }, c[3], c[4]]],
+    ['a drain through another contract', (c) => [c[0], c[1], drainCall(zeroAddress, ACCOUNT, OTHER), c[3], c[4]]],
+    ['three emitData calls', (c) => [...c, c[4], c[4]]],
+    ['an extra value call at the end', (c) => [...c, valueCall(1n, ACCOUNT)]],
+  ])('when the message has %s, then it is refused with message_program', async (_, edit) => {
+    expect(await outcome(withCalls(native(), edit))).toBe('message_program');
+  });
+
+  it('when the fallbackRecipient is not zero, then it is refused with message_program', async () => {
+    expect(await outcome(withCalls(native(), (c) => c, ACCOUNT))).toBe('message_program');
   });
 });

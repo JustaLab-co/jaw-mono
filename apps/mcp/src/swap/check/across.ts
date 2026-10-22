@@ -19,10 +19,19 @@ import { ALLOWLIST, APP_FEE, type AcrossContracts } from '../allowlist';
 import type { BackendQuote, CheckCode, CheckResult, QuoteRequest, SwapCall } from '../check';
 import { clearsFloor, sameAsset } from './assets';
 
-const spokePoolAbi = parseAbi([
+const depositAbi = parseAbi([
   'function deposit(bytes32 depositor, bytes32 recipient, bytes32 inputToken, bytes32 outputToken, uint256 inputAmount, uint256 outputAmount, uint256 destinationChainId, bytes32 exclusiveRelayer, uint32 quoteTimestamp, uint32 fillDeadline, uint32 exclusivityParameter, bytes message)',
+  'function depositNative(address spokePool, address depositor, bytes32 recipient, address inputToken, uint256 inputAmount, bytes32 outputToken, uint256 outputAmount, uint256 destinationChainId, bytes32 exclusiveRelayer, uint32 quoteTimestamp, uint32 fillDeadline, uint32 exclusivityParameter, bytes message)',
 ]);
-const handlerAbi = parseAbi(['function drainLeftoverTokens(address token, address destination)']);
+const handlerAbi = parseAbi([
+  'function drainLeftoverTokens(address token, address destination)',
+  'function makeCallWithBalance(address target, bytes callData, uint256 value, (address token, uint256 offset)[] replacement)',
+]);
+const withdrawAll = encodeFunctionData({
+  abi: parseAbi(['function withdraw(uint256 wad)']),
+  functionName: 'withdraw',
+  args: [0n],
+});
 const emitterAbi = parseAbi(['function emitData(bytes data)']);
 const instructionsAbi = parseAbiParameters(
   '((address target, bytes callData, uint256 value)[] calls, address fallbackRecipient)'
@@ -35,6 +44,7 @@ type Call = { target: Address; callData: Hex; value: bigint };
 type Instructions = { calls: readonly Call[]; fallbackRecipient: Address };
 
 const DEPOSIT = '0xad5425c6';
+const DEPOSIT_NATIVE = '0x609ea081';
 const SWAP_AND_BRIDGE = '0x110560ad';
 const MAX_FILL_SECONDS = 21_600;
 const FILL_MARGIN_SECONDS = 600;
@@ -77,27 +87,34 @@ export function checkAcross(
   if (!pair) return fail('route_unsupported');
   if (!clearsFloor(request, min, pair)) return fail('output_floor');
 
+  const nativeIn = isAddressEqual(request.originToken, zeroAddress);
+  const nativeOut = isAddressEqual(request.destinationToken as Address, zeroAddress);
   const txs = quote.transactions;
   if (txs.some((tx) => tx.chainId !== request.originChainId)) return fail('tx_chain');
-  if (txs.length < 1 || txs.length > 2) return fail('tx_count');
+  if (txs.length < 1 || txs.length > (nativeIn ? 1 : 2)) return fail('tx_count');
   const deposit = txs[txs.length - 1];
   const selector = deposit.data.slice(0, 10).toLowerCase();
   if (selector === SWAP_AND_BRIDGE) return fail('route_unsupported');
-  if (selector !== DEPOSIT || isAddressEqual(request.originToken, zeroAddress)) return fail('tx_selector');
+  if (selector !== (nativeIn ? DEPOSIT_NATIVE : DEPOSIT)) return fail('tx_selector');
   const pool = origin.across.spokePool;
+  const target = nativeIn ? origin.across.periphery : pool;
+  const value = nativeIn ? request.amount : '0';
   if (txs.length === 2 && !approves(txs[0], request.originToken, pool)) return fail('approve_spender');
-  if (!sameHex(deposit.to, pool)) return fail('tx_to');
-  if (deposit.value !== '0') return fail('tx_value');
-  const args = depositArgs(deposit.data);
-  if (!args) return fail('tx_data');
+  if (!sameHex(deposit.to, target)) return fail('tx_to');
+  if (deposit.value !== value) return fail('tx_value');
+  const decoded = depositArgs(deposit.data);
+  if (!decoded) return fail('tx_data');
+  if (decoded.spokePool !== undefined && !isAddressEqual(decoded.spokePool, pool)) return fail('tx_to');
 
+  const { args } = decoded;
   const [depositor, recipient, inputToken, outputToken, inputAmount, outputAmount, destinationChainId] = args;
   const { 7: exclusiveRelayer, 8: quoteTimestamp, 9: fillDeadline, 10: exclusivity, 11: message } = args;
+  const tokenIn = nativeIn ? origin.across.wrappedNative : request.originToken;
+  const tokenOut = nativeOut ? destination.across.wrappedNative : getAddress(request.destinationToken);
   if (depositor !== word(request.account)) return fail('depositor');
-  if (inputToken !== word(request.originToken) || inputAmount !== BigInt(request.amount)) return fail('input_amount');
+  if (!tokenIn || inputToken !== word(tokenIn) || inputAmount !== BigInt(request.amount)) return fail('input_amount');
   if (destinationChainId !== BigInt(request.destinationChainId)) return fail('destination_chain');
-  if (isAddressEqual(request.destinationToken as Address, zeroAddress)) return fail('output_token');
-  if (outputToken !== word(request.destinationToken)) return fail('output_token');
+  if (!tokenOut || outputToken !== word(tokenOut)) return fail('output_token');
   const approveBy = now + ownerWindowSec;
   if (fillDeadline < approveBy + FILL_MARGIN_SECONDS || fillDeadline > now + MAX_FILL_SECONDS) return fail('deadline');
   if (quoteTimestamp > now) return fail('deadline');
@@ -107,6 +124,7 @@ export function checkAcross(
 
   let fee = 0n;
   if (message === '0x') {
+    if (nativeOut) return fail('message_program');
     if (recipient !== word(request.recipient)) return fail('recipient');
   } else {
     const handler = destination.across.multicallHandler;
@@ -114,13 +132,23 @@ export function checkAcross(
     const program = instructions(message);
     if (!program) return fail('message_program');
     if (isDestinationSwap(program.calls, request, handler)) return fail('route_unsupported');
-    const programFee = feeOf(program, request, destination.across);
+    if (!isAddressEqual(program.fallbackRecipient, zeroAddress)) return fail('message_program');
+    const programFee = nativeOut
+      ? unwrapFeeOf(program.calls, tokenOut, request.recipient, destination.across)
+      : feeOf(program.calls, tokenOut, request.recipient, destination.across);
     if (programFee === undefined) return fail('message_program');
     fee = programFee;
   }
   if (outputAmount - fee !== min) return fail('output_amount');
   if (fee * 10_000n > outputAmount * APP_FEE.maxBps) return fail('app_fee');
 
+  const depositCall: SwapCall = {
+    kind: 'deposit',
+    chainId: request.originChainId,
+    to: target,
+    data: deposit.data as Hex,
+    value,
+  };
   const approve: SwapCall = {
     kind: 'approve',
     chainId: request.originChainId,
@@ -132,10 +160,7 @@ export function checkAcross(
   return {
     ok: true,
     quoteId: quote.quoteId,
-    calls: [
-      approve,
-      { kind: 'deposit', chainId: request.originChainId, to: pool, data: deposit.data as Hex, value: '0' },
-    ],
+    calls: nativeIn ? [depositCall] : [approve, depositCall],
     quote: {
       provider: 'across',
       inputAmount: quote.inputAmount,
@@ -161,10 +186,16 @@ function approves(tx: { to: string; data: string }, token: Address, spender: Add
 
 function depositArgs(data: string) {
   try {
-    const { args } = decodeFunctionData({ abi: spokePoolAbi, data: data as Hex });
-    const payload = encodeFunctionData({ abi: spokePoolAbi, functionName: 'deposit', args });
+    const decoded = decodeFunctionData({ abi: depositAbi, data: data as Hex });
     const lower = data.toLowerCase();
-    return lower.startsWith(payload) && tagSuffix.test(lower.slice(payload.length)) ? args : undefined;
+    const payload = encodeFunctionData({ abi: depositAbi, ...decoded });
+    if (!lower.startsWith(payload) || !tagSuffix.test(lower.slice(payload.length))) return undefined;
+    if (decoded.functionName === 'deposit') return { spokePool: undefined, args: decoded.args };
+    const [spokePool, depositor, recipient, inputToken, inputAmount, outputToken, ...rest] = decoded.args;
+    return {
+      spokePool,
+      args: [word(depositor), recipient, word(inputToken), outputToken, inputAmount, ...rest] as const,
+    };
   } catch {
     return undefined;
   }
@@ -179,20 +210,17 @@ function instructions(message: Hex): Instructions | undefined {
   }
 }
 
-function feeOf(program: Instructions, request: QuoteRequest, across: AcrossContracts): bigint | undefined {
-  if (!isAddressEqual(program.fallbackRecipient, zeroAddress)) return undefined;
-  const [transfer, ...rest] = program.calls;
-  if (!transfer || transfer.value !== 0n || !sameHex(transfer.target, request.destinationToken)) return undefined;
+const drainOf = (token: Address, recipient: string) =>
+  encodeFunctionData({ abi: handlerAbi, functionName: 'drainLeftoverTokens', args: [token, getAddress(recipient)] });
 
-  const token = getAddress(request.destinationToken);
-  const recipient = getAddress(request.recipient);
-  const drain = {
-    target: across.multicallHandler,
-    callData: encodeFunctionData({ abi: handlerAbi, functionName: 'drainLeftoverTokens', args: [token, recipient] }),
-  };
+function feeOf(calls: readonly Call[], token: Address, recipient: string, across: AcrossContracts) {
+  const [transfer, ...rest] = calls;
+  if (!transfer || transfer.value !== 0n || !isAddressEqual(transfer.target, token)) return undefined;
+
+  const drain = { target: across.multicallHandler, callData: drainOf(token, recipient) };
   const expected = [drain, drain];
   if (across.eventEmitter) {
-    const metadata = [1, 0, 1, token, 0n, 0n, 0n, 0n, 'none', 0n, true, recipient, APP_FEE.recipient] as const;
+    const metadata = [1, 0, 1, token, 0n, 0n, 0n, 0n, 'none', 0n, true, getAddress(recipient), APP_FEE.recipient] as const;
     const data = encodeAbiParameters(metadataAbi, metadata);
     const callData = encodeFunctionData({ abi: emitterAbi, functionName: 'emitData', args: [data] });
     expected.push({ target: across.eventEmitter, callData });
@@ -207,6 +235,34 @@ function feeOf(program: Instructions, request: QuoteRequest, across: AcrossContr
   return exact ? feeTransfer(transfer.callData) : undefined;
 }
 
+function unwrapFeeOf(calls: readonly Call[], weth: Address, recipient: string, across: AcrossContracts) {
+  const unwrap = encodeFunctionData({
+    abi: handlerAbi,
+    functionName: 'makeCallWithBalance',
+    args: [weth, withdrawAll, 0n, [{ token: weth, offset: 4n }]],
+  });
+  const drainEth = drainOf(zeroAddress, recipient);
+  const drainWeth = drainOf(weth, recipient);
+  let fee = 0n;
+  const kinds = calls.map((call) => {
+    if (isAddressEqual(call.target, APP_FEE.recipient) && call.callData === '0x') {
+      fee = call.value;
+      return 'V';
+    }
+    if (call.value !== 0n) return 'X';
+    if (isAddressEqual(call.target, across.multicallHandler)) {
+      if (sameHex(call.callData, unwrap)) return 'U';
+      if (sameHex(call.callData, drainEth)) return 'N';
+      if (sameHex(call.callData, drainWeth)) return 'W';
+    }
+    return emits(call, across) ? 'E' : 'X';
+  });
+  return /^UV?NWE{0,2}$/.test(kinds.join('')) ? fee : undefined;
+}
+
+const emits = (call: Call, across: AcrossContracts) =>
+  across.eventEmitter !== undefined && isAddressEqual(call.target, across.eventEmitter) && isEmit(call.callData);
+
 function feeTransfer(data: Hex): bigint | undefined {
   try {
     const decoded = decodeFunctionData({ abi: erc20Abi, data });
@@ -214,6 +270,15 @@ function feeTransfer(data: Hex): bigint | undefined {
     return sameHex(encodeFunctionData({ abi: erc20Abi, ...decoded }), data) ? decoded.args[1] : undefined;
   } catch {
     return undefined;
+  }
+}
+
+function isEmit(data: Hex): boolean {
+  try {
+    const { args } = decodeFunctionData({ abi: emitterAbi, data });
+    return sameHex(encodeFunctionData({ abi: emitterAbi, functionName: 'emitData', args }), data);
+  } catch {
+    return false;
   }
 }
 
