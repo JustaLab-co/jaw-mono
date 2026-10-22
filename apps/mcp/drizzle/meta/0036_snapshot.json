@@ -1,6 +1,6 @@
 {
-  "id": "e644266d-ca68-484e-8bb3-b73b0580216b",
-  "prevId": "046641d6-614f-499e-a23b-cca7133ddc6b",
+  "id": "7d59b78b-9c0a-4796-b8f1-94514062206f",
+  "prevId": "32c5f7c6-140a-448c-b715-599028c02272",
   "version": "7",
   "dialect": "postgresql",
   "tables": {
@@ -1339,6 +1339,22 @@
           "method": "btree",
           "with": {}
         },
+        "permission_requests_open_add_funds_index": {
+          "name": "permission_requests_open_add_funds_index",
+          "columns": [
+            {
+              "expression": "connection_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": true,
+          "where": "\"permission_requests\".\"method\" = 'add_funds' and \"permission_requests\".\"state\" = 'awaiting_owner'",
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        },
         "permission_requests_names_lost_index": {
           "name": "permission_requests_names_lost_index",
           "columns": [
@@ -1366,6 +1382,22 @@
           ],
           "isUnique": false,
           "where": "\"permission_requests\".\"method\" = 'sign' and \"permission_requests\".\"state\" <> 'awaiting_owner'",
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        },
+        "permission_requests_ended_add_funds_index": {
+          "name": "permission_requests_ended_add_funds_index",
+          "columns": [
+            {
+              "expression": "updated_at",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "where": "\"permission_requests\".\"method\" = 'add_funds' and \"permission_requests\".\"state\" <> 'awaiting_owner'",
           "concurrently": false,
           "method": "btree",
           "with": {}
@@ -1426,7 +1458,7 @@
       "checkConstraints": {
         "permission_request_shape": {
           "name": "permission_request_shape",
-          "value": "(\"permission_requests\".\"method\" = 'revoke' and \"permission_requests\".\"permission_id\" is not null)\n        or (\"permission_requests\".\"method\" = 'grant' and (\"permission_requests\".\"state\" <> 'approved' or \"permission_requests\".\"permission_id\" is not null))\n        or (\"permission_requests\".\"method\" = 'sign' and \"permission_requests\".\"idempotency_key\" is not null and \"permission_requests\".\"request_hash\" is not null\n          and \"permission_requests\".\"sign_kind\" is not null and (\"permission_requests\".\"state\" <> 'approved' or \"permission_requests\".\"signature\" is not null))"
+          "value": "(\"permission_requests\".\"method\" = 'revoke' and \"permission_requests\".\"permission_id\" is not null)\n        or (\"permission_requests\".\"method\" = 'grant' and (\"permission_requests\".\"state\" <> 'approved' or \"permission_requests\".\"permission_id\" is not null))\n        or (\"permission_requests\".\"method\" = 'sign' and \"permission_requests\".\"idempotency_key\" is not null and \"permission_requests\".\"request_hash\" is not null\n          and \"permission_requests\".\"sign_kind\" is not null and (\"permission_requests\".\"state\" <> 'approved' or \"permission_requests\".\"signature\" is not null))\n        or \"permission_requests\".\"method\" = 'add_funds'"
         }
       },
       "isRLSEnabled": false
