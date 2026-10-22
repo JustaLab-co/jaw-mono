@@ -57,6 +57,21 @@ const baseUnits = /^[1-9][0-9]*$/;
 // Across appends an optional integrator tag and its own tag after the ABI payload.
 const tagSuffix = /^(1dc0de[0-9a-f]{4})?73c0de$/;
 
+// One letter per message call; each program regex is the accepted letter sequence.
+const kind = {
+  feeTransfer: 'F',
+  drain: 'D',
+  emitData: 'E',
+  unwrap: 'U',
+  valueFee: 'V',
+  drainEth: 'N',
+  drainWeth: 'W',
+  other: 'X',
+} as const;
+const unwrapProgram = new RegExp(
+  `^${kind.unwrap}${kind.valueFee}?${kind.drainEth}${kind.drainWeth}${kind.emitData}{0,2}$`
+);
+
 const sameHex = (a: string, b: string) => a.toLowerCase() === b.toLowerCase();
 const word = (address: string) => pad(address.toLowerCase() as Hex, { size: 32 });
 
@@ -243,21 +258,23 @@ function unwrapFeeOf(calls: readonly Call[], weth: Address, recipient: string, a
   });
   const drainEth = drainOf(zeroAddress, recipient);
   const drainWeth = drainOf(weth, recipient);
+  const kindOf = (call: Call) => {
+    if (isAddressEqual(call.target, APP_FEE.recipient) && call.callData === '0x') return kind.valueFee;
+    if (isAddressEqual(call.target, across.multicallHandler)) {
+      if (sameHex(call.callData, unwrap)) return kind.unwrap;
+      if (sameHex(call.callData, drainEth)) return kind.drainEth;
+      if (sameHex(call.callData, drainWeth)) return kind.drainWeth;
+    }
+    return emits(call, across) ? kind.emitData : kind.other;
+  };
   let fee = 0n;
   const kinds = calls.map((call) => {
-    if (isAddressEqual(call.target, APP_FEE.recipient) && call.callData === '0x') {
-      fee = call.value;
-      return 'V';
-    }
-    if (call.value !== 0n) return 'X';
-    if (isAddressEqual(call.target, across.multicallHandler)) {
-      if (sameHex(call.callData, unwrap)) return 'U';
-      if (sameHex(call.callData, drainEth)) return 'N';
-      if (sameHex(call.callData, drainWeth)) return 'W';
-    }
-    return emits(call, across) ? 'E' : 'X';
+    const k = kindOf(call);
+    if (k === kind.valueFee) fee = call.value;
+    else if (call.value !== 0n) return kind.other;
+    return k;
   });
-  return /^UV?NWE{0,2}$/.test(kinds.join('')) ? fee : undefined;
+  return unwrapProgram.test(kinds.join('')) ? fee : undefined;
 }
 
 const emits = (call: Call, across: AcrossContracts) =>
@@ -285,10 +302,17 @@ function isEmit(data: Hex): boolean {
 function isDestinationSwap(calls: readonly Call[], request: QuoteRequest, handler: Address): boolean {
   const [first, second] = calls;
   if (!first || !second || !isAddressEqual(first.target, handler)) return false;
+  const drain = drainArgs(first.callData);
+  if (!drain) return false;
+  const [token, to] = drain;
+  return sameHex(token, request.destinationToken) && isAddressEqual(second.target, to);
+}
+
+function drainArgs(data: Hex) {
   try {
-    const [token, to] = decodeFunctionData({ abi: handlerAbi, data: first.callData }).args;
-    return sameHex(token, request.destinationToken) && isAddressEqual(second.target, to);
+    const decoded = decodeFunctionData({ abi: handlerAbi, data });
+    return decoded.functionName === 'drainLeftoverTokens' ? decoded.args : undefined;
   } catch {
-    return false;
+    return undefined;
   }
 }

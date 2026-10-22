@@ -277,8 +277,8 @@ const valueCall = (value: bigint, target: Address = FEE_RECIPIENT, callData: Hex
 
 function wethToNative(): Case {
   let program = { message: '0x' as Hex, outputAmount: 0n };
-  withDeposit(live('native_eth'), (a) => (program = a));
-  const c = minOutput(nofee(), program.outputAmount.toString());
+  withDeposit(native(), (a) => (program = a));
+  const c = minOutput(nofee(), (program.outputAmount - NATIVE_FEE).toString());
   c.request = { ...c.request, originToken: BASE_WETH, amount: '10000000000000000', destinationToken: zeroAddress };
   c.body.inputAmount = c.request.amount;
   c.body.transactions[0].to = BASE_WETH;
@@ -290,6 +290,14 @@ function wethToNative(): Case {
     a.outputAmount = program.outputAmount;
     a.message = program.message;
   });
+}
+
+function dirtyWord(slot: number): Case {
+  const c = native();
+  const tx = c.body.transactions[0];
+  const at = 10 + 64 * slot;
+  tx.data = `${tx.data.slice(0, at)}ff${tx.data.slice(at + 2)}`;
+  return c;
 }
 
 function nativeToWeth(): Case {
@@ -550,6 +558,11 @@ const refusals: Array<[string, () => Case, CheckCode]> = [
   ],
   ['another output token', () => withDeposit(fee(), (a) => (a.outputToken = word(OTHER))), 'output_token'],
   [
+    'a native destination with a zero output token',
+    () => withDeposit(wethToNative(), (a) => (a.outputToken = word(zeroAddress))),
+    'output_token',
+  ],
+  [
     'an empty message to another recipient',
     () => withDeposit(nofee(), (a) => (a.recipient = word(ATTACKER))),
     'recipient',
@@ -695,15 +708,20 @@ describe('given an Across native quote that passes', () => {
     expect(result.quote.appFee).toBe('0');
   });
 
-  it('when WETH on Base goes to native ETH through SpokePool.deposit, then the approve on WETH is rebuilt and the unwrap program passes', async () => {
-    const result = await accepted(wethToNative());
+  it('when WETH on Base goes to native ETH through SpokePool.deposit, then the approve on WETH is rebuilt, the deposit kept as given and the value fee is the app fee', async () => {
+    const c = wethToNative();
+    const deposit = c.body.transactions[1].data;
 
-    expect(result.calls[0]).toEqual({
-      kind: 'approve',
-      chainId: 8453,
-      to: BASE_WETH,
-      data: approveData(BASE_POOL, 10n ** 16n),
-      value: '0',
+    const result = await accepted(c);
+
+    expect(result.calls).toEqual([
+      { kind: 'approve', chainId: 8453, to: BASE_WETH, data: approveData(BASE_POOL, 10n ** 16n), value: '0' },
+      { kind: 'deposit', chainId: 8453, to: BASE_POOL, data: deposit, value: '0' },
+    ]);
+    expect(result.quote).toMatchObject({
+      appFee: NATIVE_FEE.toString(),
+      deadline: 1792683695,
+      minOutputAmount: '9966189341685642',
     });
   });
 
@@ -766,6 +784,9 @@ const nativeRefusals: Array<[string, () => Case, CheckCode]> = [
     () => edited(native(), (c) => (c.body.transactions[0].data = `${c.body.transactions[0].data}00`)),
     'tx_data',
   ],
+  ['dirty upper bits in the spokePool word', () => dirtyWord(0), 'tx_data'],
+  ['dirty upper bits in the depositor word', () => dirtyWord(1), 'tx_data'],
+  ['dirty upper bits in the inputToken word', () => dirtyWord(3), 'tx_data'],
   ['another depositor on a native deposit', () => withDeposit(native(), (a) => (a.depositor = ATTACKER)), 'depositor'],
   [
     'the zero address as the native input token',
@@ -840,6 +861,7 @@ describe('given the native out program [unwrap, fee, drain ETH, drain WETH, emit
     ['the unwrap with another offset', (c) => [unwrapCall(ARB_WETH, 5n), ...c.slice(1)]],
     ['the unwrap carrying value', (c) => [{ ...c[0], value: 1n }, ...c.slice(1)]],
     ['no unwrap', (c) => c.slice(1)],
+    ['the ETH drain in place of the unwrap', (c) => [c[2], ...c.slice(1)]],
     ['the fee sent to another address', (c) => [c[0], valueCall(NATIVE_FEE, ATTACKER), ...c.slice(2)]],
     ['the fee call with calldata', (c) => [c[0], valueCall(NATIVE_FEE, FEE_RECIPIENT, '0x00'), ...c.slice(2)]],
     [
@@ -863,5 +885,19 @@ describe('given the native out program [unwrap, fee, drain ETH, drain WETH, emit
 
   it('when the fallbackRecipient is not zero, then it is refused with message_program', async () => {
     expect(await outcome(withCalls(native(), (c) => c, ACCOUNT))).toBe('message_program');
+  });
+
+  it('when value sits on the fee call, then it passes, and on any other call, then it is refused with message_program', async () => {
+    const withValueAt = (i: number) =>
+      withCalls(native(), (c) => c.map((call, j) => (j === i ? { ...call, value: 1n } : call)));
+
+    expect(await outcome(native())).toBe('pass');
+    for (const i of [0, 2, 3, 4]) expect(await outcome(withValueAt(i))).toBe('message_program');
+  });
+
+  it('when the first call drains ETH to an address the second call targets, then it is refused with route_unsupported', async () => {
+    const c = withCalls(native(), () => [drainCall(zeroAddress, ATTACKER), valueCall(0n, ATTACKER)]);
+
+    expect(await outcome(c)).toBe('route_unsupported');
   });
 });
