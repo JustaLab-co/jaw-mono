@@ -22,9 +22,11 @@ export type DepositStatus = { txHash?: Hex; untrustedRawState?: string } & (
   | { state: 'unknown'; untrustedState: string }
 );
 
+export type KnownStatus = Extract<DepositStatus, { backendState: BackendState }>;
+
 export type BackendAnswer =
   | { ok: true; status: DepositStatus }
-  | { ok: false; code: 'unreachable' | 'invalid_response' }
+  | { ok: false; code: 'unreachable' | 'invalid_response' | 'swap_unavailable' }
   | { ok: false; code: 'http_error'; httpStatus: number; untrustedError?: string };
 
 export type TrackKey =
@@ -32,16 +34,22 @@ export type TrackKey =
   | { provider: 'relay'; requestId: Hex }
   | { provider: 'across'; originChainId: number; depositId: string };
 
-export type BackendDeps = { fetch: typeof fetch; baseUrl: string; timeoutMs: number; apiKey: string };
+export type BackendDeps = { fetch: typeof fetch; baseUrl: string; timeoutMs: number; apiKey: string | undefined };
 
 const liveDeps = (): BackendDeps => ({
   fetch: safeFetch(config().insecureFetchHosts),
   baseUrl: config().swapUrl,
   timeoutMs: 10_000,
-  apiKey: config().swapApiKey ?? '',
+  apiKey: config().swapApiKey,
 });
 
 const isBackendState = (state: string): state is BackendState => Object.hasOwn(swapState, state);
+
+const echoedInteger = z
+  .union([z.int(), z.string().regex(/^\d{1,78}$/)])
+  .transform(BigInt)
+  .optional()
+  .catch(undefined);
 
 const statusBody = z.object({
   result: z.object({
@@ -49,8 +57,8 @@ const statusBody = z.object({
       provider: z.string(),
       depositAddress: z.string().optional(),
       requestId: z.string().optional(),
-      originChainId: z.number().optional(),
-      depositId: z.string().optional(),
+      originChainId: echoedInteger,
+      depositId: echoedInteger,
       state: z.string().max(256),
       txHash: z
         .custom<Hex>((v) => typeof v === 'string' && /^0x[0-9a-fA-F]{64}$/.test(v))
@@ -73,7 +81,7 @@ function echoes(key: TrackKey, data: StatusData): boolean {
     case 'relay':
       return data.requestId?.toLowerCase() === key.requestId.toLowerCase();
     case 'across':
-      return data.originChainId === key.originChainId && data.depositId === key.depositId;
+      return data.originChainId === BigInt(key.originChainId) && data.depositId === BigInt(key.depositId);
   }
 }
 
@@ -92,6 +100,7 @@ export function depositStatus(key: TrackKey, deps = liveDeps()) {
 }
 
 async function call(key: TrackKey, deps: BackendDeps, url: string, init: RequestInit): Promise<BackendAnswer> {
+  if (!deps.apiKey) return { ok: false, code: 'swap_unavailable' };
   let res: Response;
   let text: string;
   try {

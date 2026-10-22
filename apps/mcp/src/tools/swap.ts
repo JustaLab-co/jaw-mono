@@ -21,6 +21,7 @@ import { quote, SOLANA, swapRequest, type QuoteDeps } from '@/swap/quote';
 import {
   approveByOf,
   claimSwap,
+  DEPOSIT_AMBIGUOUS,
   DEPOSIT_FAILED,
   DEPOSIT_REVERTED,
   failIfStale,
@@ -37,7 +38,7 @@ import {
   type SwapRequest,
 } from '@/swap/store';
 import { followSwap, resumeSwap } from '@/swap/resume';
-import { track, type TrackAnswer } from '@/swap/track';
+import { providerOf, track, type TrackAnswer } from '@/swap/track';
 
 const SWAP_RATE_LIMIT = 10;
 const STATUS_RATE_LIMIT = 30;
@@ -246,9 +247,13 @@ function summaryOf(row: SwapRow): string {
         );
       }
       const token = row.originToken === zeroAddress ? 'the native coin' : row.originToken;
+      const provider = providerOf(row);
+      const deposit =
+        provider === 'aurora'
+          ? `approve one transfer of ${row.amount} base units of ${token} on chain ${row.originChainId} to the deposit address ${row.depositAddress}`
+          : `approve, in one batch on chain ${row.originChainId}, a deposit of ${row.amount} base units of ${token} to the ${CONTRACT[provider]}`;
       return (
-        `Ask the account owner to open ${row.walletUrl} before ${row.approveBy?.toISOString()} and approve one transfer ` +
-        `of ${row.amount} base units of ${token} on chain ${row.originChainId} to the deposit address ${row.depositAddress}. ` +
+        `Ask the account owner to open ${row.walletUrl} before ${row.approveBy?.toISOString()} and ${deposit}. ` +
         "The owner pays that transaction's gas in the wallet, in USDC where the wallet offers it or in the chain's native coin. " +
         `Expected: ${quote?.expectedOutputAmount} base units of ${row.destinationToken} on chain ${row.destinationChainId} ` +
         `to ${row.recipient}, at least ${quote?.minOutputAmount}. Follow it with jaw_swap_status and ${row.quoteId}.`
@@ -274,6 +279,7 @@ function summaryOf(row: SwapRow): string {
       );
     case 'deposit_sent': {
       if (row.code === DEPOSIT_FAILED || row.code === DEPOSIT_REVERTED) return didNotLeave(row);
+      if (row.code === DEPOSIT_AMBIGUOUS) return `The owner approved the deposit and it was mined in ${row.txHash}.`;
       if (unseenPastGrace(row)) return notSeen(row);
       const unread =
         row.code === 'wallet_answer_unreadable' ? ", but the wallet's status answer could not be read" : '';
@@ -313,10 +319,19 @@ function maybeSent(row: SwapRow): string {
   );
 }
 
-const notSeen = (row: SwapRow) =>
-  `The swap backend has not seen a deposit to ${row.depositAddress} by ${graceEnd(row).toISOString()}. ` +
-  `Check the owner's account on chain ${row.originChainId} before swapping these funds again. ` +
-  'A deposit that lands later still shows in jaw_swap_status.';
+const CONTRACT = { across: 'Across contract', relay: 'Relay Depository' };
+const NAME = { across: 'Across', relay: 'Relay' };
+
+function notSeen(row: SwapRow): string {
+  const provider = providerOf(row);
+  const deposit =
+    provider === 'aurora' ? `a deposit to ${row.depositAddress}` : `the ${NAME[provider]} deposit for this swap`;
+  return (
+    `The swap backend has not seen ${deposit} by ${graceEnd(row).toISOString()}. ` +
+    `Check the owner's account on chain ${row.originChainId} before swapping these funds again. ` +
+    'A deposit that lands later still shows in jaw_swap_status.'
+  );
+}
 
 function untrustedBackendText(read: TrackAnswer): string | undefined {
   if (!read.ok) return read.code === 'http_error' ? read.untrustedError : undefined;
@@ -328,10 +343,18 @@ function untrustedBackendText(read: TrackAnswer): string | undefined {
   return lines.length ? lines.join('\n') : undefined;
 }
 
-const UNREAD_DEPOSIT = new Set(['hash_unknown', 'receipt_missing', 'deposit_not_found', 'deposit_ambiguous']);
+const UNREAD_DEPOSIT = new Set(['hash_unknown', 'receipt_missing', 'deposit_not_found']);
 
 function readNote(row: SwapRow, read: TrackAnswer | undefined): string {
   if (!read) return '';
+  if (!read.ok && read.code === DEPOSIT_AMBIGUOUS) {
+    return (
+      `Transaction ${row.txHash} holds more than one Across deposit from this account and they cannot be told apart, ` +
+      `so this swap is not followed. Check the account's history on chain ${row.originChainId} for the deposit and its fill or refund. `
+    );
+  }
+  if (!read.ok && read.code === 'swap_unavailable')
+    return 'Swaps are not set up on this server, so the swap backend was not read; this is the swap as last stored. ';
   if (!read.ok && UNREAD_DEPOSIT.has(read.code))
     return `The deposit cannot be followed yet (${read.code}); check the owner's account on chain ${row.originChainId}. `;
   if (!read.ok) return `The swap backend could not be read (${read.code}); this is the swap as last stored. `;

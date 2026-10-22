@@ -17,6 +17,7 @@ import { setTestEnv } from '@/connections/testkit';
 import { getDb } from '@/db/client';
 import { connections, swaps } from '@/db/schema';
 import { useTestDb } from '@/db/test-db';
+import type { BackendDeps } from './backend';
 import { CALL_INVALID } from './calls';
 import type { SwapRow } from './store';
 
@@ -239,6 +240,47 @@ describe('the owner session for a swap', () => {
       expect(after).toMatchObject({ state: 'owner_declined', code: CALL_INVALID, callsId: null });
     }
   );
+
+  it('given the approve and the deposit mined in separate receipts, when the wallet reports them, then the hash kept and submitted is the receipt holding the deposit log', async () => {
+    const spokePool: Address = '0x09aea4b2242abC8bb4BB78D537A67a245A7bEC64';
+    const approveTx = `0x${'aa'.repeat(32)}`;
+    const depositTx = `0x${'dd'.repeat(32)}`;
+    const log = (address: string) => ({ address, topics: [], data: '0x' });
+    const approveBy = new Date(Date.now() + 30_000);
+    const row = await awaitingOwner(
+      [approval, { kind: 'deposit', chainId: 8453, to: spokePool, data: '0x', value: '0' }] as SwapRow['call'],
+      approveBy
+    );
+    const wallet = await ownerRelay(84532, approveBy);
+    const opened = await page(wallet.url, (method) => {
+      if (method === 'eth_requestAccounts') return [ACCOUNT];
+      if (method === 'wallet_sendCalls') return { id: '0xcalls', chainId: '0x2105' };
+      return {
+        status: 200,
+        receipts: [
+          { transactionHash: approveTx, logs: [log(USDC)] },
+          { transactionHash: depositTx, logs: [log(USDC), log(spokePool.toLowerCase())] },
+        ],
+      };
+    });
+    const submitted: string[] = [];
+    const backend: BackendDeps = {
+      fetch: async (_, init) => {
+        submitted.push(JSON.parse(String(init?.body)).txHash);
+        return Response.json({ statusCode: 503, result: { error: 'down' } }, { status: 503 });
+      },
+      baseUrl: 'https://backend.test/proxy/v2',
+      timeoutMs: 1_000,
+      apiKey: 'swap-key',
+    };
+
+    await wallet.run((ask) => approve(ask, row, ACCOUNT, 0, backend));
+    await opened.shutdown;
+
+    const [after] = await getDb().select().from(swaps).where(eq(swaps.id, row.id));
+    expect(after).toMatchObject({ state: 'deposit_sent', txHash: depositTx });
+    expect(submitted).toEqual([depositTx]);
+  });
 
   it('given a row that expired before the owner opened it and whose call does not read, when the owner opens the link, then the wallet is asked nothing and the row stays expired with code call_invalid', async () => {
     const { requests, after } = await ownerOpens([{ kind: 'deposit', ...transfer }, approval], 'expired');

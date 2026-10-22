@@ -1343,6 +1343,97 @@ describe('jaw_swap_status', () => {
     expect(deposits.hits).toEqual([]);
   });
 
+  async function providerRow(provider: 'across' | 'relay', set: PgUpdateSetSource<typeof swaps> = {}) {
+    const { t } = await connected();
+    const quoteId = await started(t);
+    const row = await rowOf(t);
+    await rewrite(row.id, { quote: { ...(row.quote as object), provider }, depositAddress: null, ...set });
+    return { t, quoteId, row };
+  }
+  const pastGrace = sql`statement_timestamp() + interval '1 hour'`;
+
+  it.each([
+    [
+      'across',
+      /approve, in one batch on chain 84532, a deposit of 1000000 base units of \S+ to the Across contract\. /,
+    ],
+    [
+      'relay',
+      /approve, in one batch on chain 84532, a deposit of 1000000 base units of \S+ to the Relay Depository\. /,
+    ],
+  ] as const)(
+    'given a %s row awaiting the owner, when jaw_swap_status answers, then the summary names the provider contract and no deposit address',
+    async (provider, text) => {
+      const { t, quoteId } = await providerRow(provider);
+
+      const summary = (await status(t, quoteId)).structuredContent?.summary;
+
+      expect(summary).toMatch(text);
+      expect(summary).not.toMatch(/deposit address|null/);
+      expect(deposits.hits).toEqual([]);
+    }
+  );
+
+  it('given an aurora row awaiting the owner, when jaw_swap_status answers, then the summary still names the deposit address', async () => {
+    const { t } = await connected();
+    const quoteId = await started(t);
+    const row = await rowOf(t);
+
+    const summary = (await status(t, quoteId)).structuredContent?.summary;
+
+    expect(summary).toMatch(/approve one transfer of 1000000 base units of \S+ on chain 84532 to the deposit address /);
+    expect(summary).toContain(`to the deposit address ${row.depositAddress}. `);
+  });
+
+  it.each([
+    ['across', { state: 'deposit_sent', callsId: '0xcalls' }, 'Across'],
+    ['relay', { state: 'expired', code: 'send_started' }, 'Relay'],
+  ] as const)(
+    'given a %s row past the grace window with no deposit seen, when jaw_swap_status answers, then the summary says the backend has not seen the deposit for this swap',
+    async (provider, set, name) => {
+      const { t, quoteId } = await providerRow(provider, { ...set, checkedAt: pastGrace });
+
+      const summary = (await status(t, quoteId)).structuredContent?.summary;
+
+      expect(summary).toMatch(
+        new RegExp(`The swap backend has not seen the ${name} deposit for this swap by \\S+\\. `)
+      );
+      expect(summary).not.toMatch(/deposit to|null/);
+      expect(deposits.hits).toEqual([]);
+    }
+  );
+
+  it('given no swap api key, when jaw_swap_status reads a swap, then swap_unavailable and the backend is not called', async () => {
+    const { t } = await connected();
+    const quoteId = await started(t);
+
+    const result = await swapStatus(t, { quoteId }, { backend: { ...backendDeps, apiKey: undefined } });
+
+    expect(result.structuredContent?.summary).toMatch(
+      /^Swaps are not set up on this server, so the swap backend was not read; this is the swap as last stored\. /
+    );
+    expect(deposits.hits).toEqual([]);
+  });
+
+  it('given an across row whose receipt held two deposits of the account, when jaw_swap_status answers, then it says the deposit cannot be told apart and is not followed, with no read', async () => {
+    const { t, quoteId } = await providerRow('across', {
+      state: 'deposit_sent',
+      callsId: '0xcalls',
+      txHash: HASH,
+      code: 'deposit_ambiguous',
+    });
+
+    const result = await status(t, quoteId);
+
+    expect(result.structuredContent).toMatchObject({ state: 'deposit_sent', refusal: { code: 'deposit_ambiguous' } });
+    expect(result.structuredContent?.summary).toBe(
+      `Transaction ${HASH} holds more than one Across deposit from this account and they cannot be told apart, ` +
+        "so this swap is not followed. Check the account's history on chain 84532 for the deposit and its fill or refund. " +
+        `The owner approved the deposit and it was mined in ${HASH}.`
+    );
+    expect(deposits.hits).toEqual([]);
+  });
+
   it('given a row holding an approve then the deposit, when jaw_swap_status answers, then its deposit is the deposit call, not the approve', async () => {
     const { t } = await connected();
     const quoteId = await started(t);

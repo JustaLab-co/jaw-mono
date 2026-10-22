@@ -229,6 +229,45 @@ describe('given a sent Relay swap', () => {
     expect(await reread(row)).toEqual(row);
   });
 
+  it.each([
+    ['PROCESSING no_tx with the row hash', { state: 'PROCESSING', rawState: 'no_tx', txHash: TX }],
+    ['PROCESSING failure with the row hash', { state: 'PROCESSING', rawState: 'failure', txHash: TX }],
+    ['KNOWN_DEPOSIT_TX with no hash', { state: 'KNOWN_DEPOSIT_TX' }],
+    ['SUCCESS with no hash', { state: 'SUCCESS' }],
+  ])('when submit answers %s, then the attempt is counted and the row stays deposit_sent', async (_, answer) => {
+    stub.submit = answer;
+    const row = await swapRow('relay', 'deposit_sent');
+
+    await submit(row, deps, clients);
+
+    expect(await reread(row)).toMatchObject({ state: 'deposit_sent', backendState: null, submitAttempts: 1 });
+  });
+
+  it.each(['SUCCESS', 'REFUNDED'])(
+    'when status reads %s with no hash, then the row stays submitted and keeps its hash',
+    async (state) => {
+      stub.status = { state };
+      const row = await swapRow('relay', 'submitted');
+
+      await track(row, deps, clients);
+
+      expect(await reread(row)).toMatchObject({ state: 'submitted', txHash: TX });
+    }
+  );
+
+  it.each(['SUCCESS', 'REFUNDED'])(
+    'when status reads %s with a hash while the row has none, then the row goes no further than submitted and stores no hash',
+    async (state) => {
+      stub.status = { state, txHash: TX };
+      const row = await swapRow('relay', 'deposit_sent', { txHash: null });
+
+      await track(row, deps, clients);
+
+      expect(await reread(row)).toMatchObject({ state: 'submitted', txHash: null });
+      expect(stub.hits.map((h) => h.route)).toEqual(['status']);
+    }
+  );
+
   it('when submit answers SUCCESS for another deposit hash, then the row stays deposit_sent', async () => {
     stub.submit = { state: 'SUCCESS', txHash: OTHER_TX };
     const row = await swapRow('relay', 'deposit_sent');
@@ -263,18 +302,33 @@ describe('given a sent Relay swap', () => {
 });
 
 describe('given a sent Across swap', () => {
-  it("when tracked, then the depositId is the account's log in the receipt and status and submit use it", async () => {
+  it("when tracked, then the depositId is the account's log in the receipt and status reads it", async () => {
     const row = await swapRow('across', 'deposit_sent');
 
     await track(row, deps, clients);
 
-    expect(stub.hits.map(({ route, query, body }) => ({ route, query, body }))).toEqual([
-      { route: 'status', query: { provider: 'across', originChainId: '8453', depositId: '7' }, body: undefined },
-      {
-        route: 'submit',
-        query: {},
-        body: { provider: 'across', originChainId: 8453, depositId: '7', txHash: TX },
-      },
+    expect(stub.hits.map(({ route, query }) => ({ route, query }))).toEqual([
+      { route: 'status', query: { provider: 'across', originChainId: '8453', depositId: '7' } },
+    ]);
+  });
+
+  it('when a PENDING_DEPOSIT row is polled twice, then each poll makes one status call and no submit', async () => {
+    const row = await swapRow('across', 'deposit_sent');
+
+    await track(row, deps, clients);
+    await track(await reread(row), deps, clients);
+
+    expect(stub.hits.map((h) => h.route)).toEqual(['status', 'status']);
+    expect(await reread(row)).toMatchObject({ state: 'deposit_sent', submitAttempts: 0 });
+  });
+
+  it('when submitted after the hash is recorded, then the body names the depositId and the hash', async () => {
+    const row = await swapRow('across', 'deposit_sent');
+
+    await submit(row, deps, clients);
+
+    expect(stub.hits.map(({ route, body }) => ({ route, body }))).toEqual([
+      { route: 'submit', body: { provider: 'across', originChainId: 8453, depositId: '7', txHash: TX } },
     ]);
   });
 
@@ -304,12 +358,23 @@ describe('given a sent Across swap', () => {
     expect(stub.hits).toEqual([]);
   });
 
+  it('when the receipt holds two deposits of the account, then the row keeps deposit_ambiguous and later polls read nothing', async () => {
+    chain.logs = [depositLog(ACCOUNT, 7n), depositLog(ACCOUNT, 8n)];
+    const row = await swapRow('across', 'deposit_sent');
+
+    const first = await track(row, deps, clients);
+    const again = await track(await reread(row), deps, clients);
+
+    expect([first, again]).toEqual([
+      { ok: false, code: 'deposit_ambiguous' },
+      { ok: false, code: 'deposit_ambiguous' },
+    ]);
+    expect(chain.reads).toBe(1);
+    expect(stub.hits).toEqual([]);
+    expect(await reread(row)).toMatchObject({ state: 'deposit_sent', code: 'deposit_ambiguous', txHash: TX });
+  });
+
   it.each([
-    [
-      'two deposits of the account',
-      'deposit_ambiguous',
-      () => (chain.logs = [depositLog(ACCOUNT, 7n), depositLog(ACCOUNT, 8n)]),
-    ],
     ['no deposit of the account', 'deposit_not_found', () => (chain.logs = [])],
     ['nothing readable', 'receipt_missing', () => (chain.fails = true)],
   ])('when the receipt holds %s, then %s, no backend call and the row is unchanged', async (_, code, setup) => {

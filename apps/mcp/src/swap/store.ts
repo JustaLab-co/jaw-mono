@@ -8,13 +8,11 @@ import { leasedRows } from '@/db/leased';
 import { SWAP_DEPOSIT_ADDRESS_INDEX, SWAP_ORDER_ID_INDEX, swaps } from '@/db/schema';
 import { randomToken } from '@/lib/token';
 import { LEASE_MS } from '@/payments/store';
-import type { BackendState, DepositStatus } from './backend';
+import type { BackendState, KnownStatus } from './backend';
 
 export type SwapRow = typeof swaps.$inferSelect;
 export type SwapState = SwapRow['state'];
 type SwapSet = PgUpdateSetSource<typeof swaps>;
-type KnownStatus = Extract<DepositStatus, { backendState: BackendState }>;
-
 export interface SwapRequest {
   originChainId: number;
   originToken: string;
@@ -254,6 +252,7 @@ export const recordCode = (row: SwapRow, code: string, { unlessRejoinable = fals
 
 export const DEPOSIT_FAILED = 'deposit_failed';
 export const DEPOSIT_REVERTED = 'deposit_reverted';
+export const DEPOSIT_AMBIGUOUS = 'deposit_ambiguous';
 
 export const recordSentCode = (connectionId: string, id: string, code: string, txHash?: string) =>
   write(ofSwap(connectionId, id, ['deposit_sent']), {

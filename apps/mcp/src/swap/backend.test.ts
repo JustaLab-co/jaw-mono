@@ -343,6 +343,7 @@ describe('live dependencies', () => {
   afterEach(() => {
     delete process.env.JAW_MCP_INSECURE_FETCH_HOSTS;
     delete process.env.JAW_MCP_SWAP_URL;
+    delete process.env.JAW_MCP_SWAP_API_KEY;
     vi.resetModules();
   });
 
@@ -362,6 +363,7 @@ describe('live dependencies', () => {
     setTestEnv();
     process.env.JAW_MCP_INSECURE_FETCH_HOSTS = host;
     process.env.JAW_MCP_SWAP_URL = `http://${host}/proxy/v2`;
+    process.env.JAW_MCP_SWAP_API_KEY = API_KEY;
     vi.resetModules();
     const live = await import('./backend');
 
@@ -426,12 +428,41 @@ describe('per provider', () => {
     ['a relay status with no request id', RELAY, envelope({ provider: 'relay', state: 'SUCCESS' })],
     ['an across status for another deposit id', ACROSS, acrossStatus('SUCCESS', { depositId: '6362228' })],
     ['an across status for another origin chain', ACROSS, acrossStatus('SUCCESS', { originChainId: 42161 })],
-    ['an across status with the chain as a string', ACROSS, acrossStatus('SUCCESS', { originChainId: '8453' })],
+    ['an across chain in hex', ACROSS, acrossStatus('SUCCESS', { originChainId: '0x2105' })],
+    ['an across chain with a decimal point', ACROSS, acrossStatus('SUCCESS', { originChainId: '8453.0' })],
+    ['an across deposit id with letters', ACROSS, acrossStatus('SUCCESS', { depositId: '6362227a' })],
+    ['an across deposit id that is negative', ACROSS, acrossStatus('SUCCESS', { depositId: '-6362227' })],
+    ['an across deposit id with a fraction', ACROSS, acrossStatus('SUCCESS', { depositId: 6362227.5 })],
+    ['an across deposit id past 2^53 as a number', ACROSS, acrossStatus('SUCCESS', { depositId: 2 ** 53 + 2 })],
     ['an aurora status for a relay key', RELAY, status('SUCCESS', { requestId: REQUEST_ID })],
   ])('given %s, when read, then it answers invalid_response', async (_, key, answer) => {
     const { deps } = backend(() => answer);
 
     expect(await depositStatus(key, deps)).toEqual({ ok: false, code: 'invalid_response' });
+  });
+
+  it.each([
+    ['the chain as a decimal string', { originChainId: '8453' }],
+    ['the deposit id as a number', { depositId: 6362227 }],
+    ['the deposit id with a leading zero', { depositId: '06362227' }],
+    ['both as the other type', { originChainId: '8453', depositId: 6362227 }],
+  ])('given an across status echoing %s, when read, then it is the same deposit', async (_, echo) => {
+    const { deps } = backend(() => acrossStatus('SUCCESS', echo));
+
+    expect(await depositStatus(ACROSS, deps)).toEqual({
+      ok: true,
+      status: { state: 'completed', backendState: 'SUCCESS' },
+    });
+  });
+
+  it.each([
+    ['status', (deps: BackendDeps) => depositStatus(RELAY, deps)],
+    ['submit', (deps: BackendDeps) => submitDeposit(RELAY, TX, 8453, deps)],
+  ])('given no swap api key, when %s runs, then swap_unavailable and the backend is not called', async (_, run) => {
+    const { deps, seen } = backend(() => relayStatus('SUCCESS'));
+
+    expect(await run({ ...deps, apiKey: undefined })).toEqual({ ok: false, code: 'swap_unavailable' });
+    expect(seen).toEqual([]);
   });
 
   it.each([

@@ -1,5 +1,5 @@
 import { setTimeout as sleep } from 'node:timers/promises';
-import { toHex, type Address } from 'viem';
+import { isAddressEqual, toHex, type Address } from 'viem';
 import { z } from 'zod';
 import type { Ask } from '@/connections/relay';
 import { refusedBeforeSubmit, USER_REJECTED } from '@/connections/wallet-codes';
@@ -27,10 +27,19 @@ const REVERTED = 500;
 const SESSION_END_MARGIN_MS = 5_000;
 
 const sent = z.object({ id: z.string().min(1).max(256) });
-const callsStatus = z.object({
-  status: z.number(),
-  receipts: z.array(z.object({ transactionHash: z.string().regex(/^0x[0-9a-fA-F]{64}$/) })).optional(),
+const receipt = z.object({
+  transactionHash: z.string().regex(/^0x[0-9a-fA-F]{64}$/),
+  logs: z
+    .array(z.object({ address: z.custom<Address>((v) => typeof v === 'string' && /^0x[0-9a-fA-F]{40}$/.test(v)) }))
+    .optional()
+    .catch(undefined),
 });
+const callsStatus = z.object({ status: z.number(), receipts: z.array(receipt).optional() });
+
+function depositHash(receipts: z.infer<typeof receipt>[], target: Address): string | undefined {
+  if (receipts.length === 1) return receipts[0].transactionHash;
+  return receipts.find((r) => r.logs?.some((l) => isAddressEqual(l.address, target)))?.transactionHash;
+}
 
 export async function approve(
   ask: Ask,
@@ -87,15 +96,15 @@ export async function approve(
       await sleep(pollMs);
       continue;
     }
-    const hash = receipts?.[0]?.transactionHash;
     if (code === MINED) {
+      const hash = depositHash(receipts ?? [], calls.at(-1)!.to);
       if (!hash) return;
       const deposited = await recordTxHash(row.connectionId, row.id, hash);
       if (deposited) await submit(deposited, backend);
     } else if (code === FAILED_OFF_CHAIN) {
       await recordSentCode(row.connectionId, row.id, DEPOSIT_FAILED);
     } else if (code === REVERTED) {
-      await recordSentCode(row.connectionId, row.id, DEPOSIT_REVERTED, hash);
+      await recordSentCode(row.connectionId, row.id, DEPOSIT_REVERTED, receipts?.[0]?.transactionHash);
     } else {
       await recordSentCode(row.connectionId, row.id, 'wallet_answer_unreadable');
     }
