@@ -197,6 +197,9 @@ const KNOWN_STATES = new Set([
   'FAILED',
 ]);
 const AFTER_SUBMIT = ['PROCESSING', 'SUCCESS'];
+// What the backend's deposit error filter answers per status: an upstream 4xx, an upstream 429, and an
+// upstream 5xx, timeout or network error.
+const DEPOSIT_FAILURES = { 422: 'upstream HTTP 400', 429: 'upstream HTTP 429', 502: 'upstream failed' };
 const NO_PROVIDER = {
   422: 'NoProviderAvailable: aurora=amount is too low for bridge',
   502: 'NoProviderAvailable: aurora=HTTP 503',
@@ -465,6 +468,9 @@ const freshSwap = () => ({
   mode: '',
   network: SEPOLIA,
   submitFails: 0,
+  statusFails: 0,
+  failWith: '502',
+  acrossLag: 1,
   pinned: '',
   rawState: '',
   deposit: '',
@@ -486,7 +492,7 @@ const answer = (res, status, data, error, headers = {}, statusCode = status) =>
 
 function track(id) {
   const key = id.toLowerCase();
-  if (!deposits.has(key)) deposits.set(key, { reads: 0, pinned: '', txHash: null, expired: false });
+  if (!deposits.has(key)) deposits.set(key, { reads: 0, lag: 0, pinned: '', txHash: null, expired: false });
   return deposits.get(key);
 }
 
@@ -681,11 +687,23 @@ function depositStatus(provider, echo, t, raw) {
   return data;
 }
 
+// Across indexes a deposit 1 to 15 s after it lands; until then the backend answers not_found.
+function lagging(t) {
+  if (t.lag === 0) return false;
+  t.lag--;
+  return true;
+}
+
 function readState(t) {
   if (swap.deposit === 'unknown') return '';
   if (t.pinned || swap.pinned) return t.pinned || swap.pinned;
-  if (!t.txHash) return '';
+  if (!t.txHash || lagging(t)) return '';
   return AFTER_SUBMIT[Math.min(t.reads++, AFTER_SUBMIT.length - 1)];
+}
+
+function fail(res, path, provider, echo, status) {
+  log({ path, event: path === SUBMIT ? 'submit' : 'status', provider, ...echo, status });
+  answer(res, status, null, `ProviderQuoteInvalid[${provider}]: ${DEPOSIT_FAILURES[status]}`);
 }
 
 async function deposit(req, res, url, path) {
@@ -717,23 +735,24 @@ async function deposit(req, res, url, path) {
   const { key, echo } = keyOf(input, provider);
   const t = track(key);
   if (path === STATUS) {
+    if (swap.statusFails > 0) {
+      swap.statusFails--;
+      return fail(res, path, provider, echo, Number(swap.failWith));
+    }
     const data = depositStatus(provider, echo, t, readState(t));
     log({ path, event: 'status', provider, ...echo, state: data.state });
     return answer(res, 200, data, null);
   }
-  if (t.expired || swap.submitFails > 0) {
-    if (!t.expired) swap.submitFails--;
-    log({ path, event: 'submit', provider, ...echo, status: provider === 'aurora' ? 500 : 502, expired: t.expired });
-    if (provider !== 'aurora') return answer(res, 502, null, `ProviderQuoteInvalid[${provider}]: upstream failed`);
-    // Aurora refusing a submit reaches the caller as Nest's default 500: the
-    // backend has no filter for that error.
-    return res
-      .writeHead(500, { 'content-type': 'application/json' })
-      .end(JSON.stringify({ statusCode: 500, message: 'Internal server error' }));
+  // Across has no submit: the backend reads its status, and Across finds the deposit whether or not that read fails.
+  if (provider === 'across' && !t.txHash) Object.assign(t, { txHash: input.txHash, lag: swap.acrossLag });
+  if (t.expired) return fail(res, path, provider, echo, 422);
+  if (swap.submitFails > 0) {
+    swap.submitFails--;
+    return fail(res, path, provider, echo, Number(swap.failWith));
   }
-  t.txHash = input.txHash;
-  t.reads = 0;
-  const first = provider === 'across' ? 'PROCESSING' : 'KNOWN_DEPOSIT_TX';
+  if (provider !== 'across') Object.assign(t, { txHash: input.txHash, reads: 0 });
+  let first = 'KNOWN_DEPOSIT_TX';
+  if (provider === 'across') first = lagging(t) ? '' : 'PROCESSING';
   const data = depositStatus(provider, echo, t, swap.deposit === 'unknown' ? '' : t.pinned || swap.pinned || first);
   log({ path, event: 'submit', provider, ...echo, txHash: t.txHash, state: data.state, status: 200 });
   answer(res, 201, data, null, {}, 200);
@@ -744,14 +763,16 @@ function control(url) {
   const address = p.get('depositAddress') ?? p.get('expire');
   if (p.has('mode') && !MODES.has(p.get('mode'))) return false;
   if (p.get('network') && !/^eip155:[1-9][0-9]*$/.test(p.get('network'))) return false;
-  if (p.has('submitFails') && !/^\d+$/.test(p.get('submitFails'))) return false;
+  for (const k of ['submitFails', 'statusFails', 'acrossLag']) if (p.has(k) && !/^\d+$/.test(p.get(k))) return false;
+  if (p.has('failWith') && !['', ...Object.keys(DEPOSIT_FAILURES)].includes(p.get('failWith'))) return false;
   if (p.has('rawState') && !/^[A-Za-z0-9_-]{0,64}$/.test(p.get('rawState'))) return false;
   if (p.has('deposit') && !['', 'echo', 'foreign-hash', 'unknown'].includes(p.get('deposit'))) return false;
   if (p.has('filter') && !['', 'off'].includes(p.get('filter'))) return false;
   if (address !== null && !HEX_ADDRESS.test(address)) return false;
   if (p.has('mode')) swap.mode = p.get('mode');
   if (p.has('network')) swap.network = p.get('network') || SEPOLIA;
-  if (p.has('submitFails')) swap.submitFails = Number(p.get('submitFails'));
+  for (const k of ['submitFails', 'statusFails', 'acrossLag']) if (p.has(k)) swap[k] = Number(p.get(k));
+  if (p.has('failWith')) swap.failWith = p.get('failWith') || '502';
   for (const k of ['rawState', 'deposit', 'filter']) if (p.has(k)) swap[k] = p.get(k);
   if (p.has('state') && p.has('depositAddress')) track(address).pinned = p.get('state');
   else if (p.has('state')) swap.pinned = p.get('state');

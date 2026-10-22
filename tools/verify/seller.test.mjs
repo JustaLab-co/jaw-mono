@@ -381,6 +381,7 @@ const DEFAULTS = {
   deposit: 'PENDING_DEPOSIT',
   submit: 201,
   relay: 'echoed PENDING_DEPOSIT',
+  across: 'PENDING_DEPOSIT not_found',
 };
 async function defaults(at = base) {
   const challenge = await fetch(`${at}/proxy/v2/swap/quote?${new URLSearchParams(ERC20_QUERY)}`);
@@ -404,12 +405,19 @@ async function defaults(at = base) {
     `${at}/proxy/v2/move-asset/deposit/status?${new URLSearchParams({ provider: 'relay', requestId: id })}`
   );
   const relay = (await relayRead.json()).result.data;
+  const acrossSent = await fetch(`${at}/proxy/v2/move-asset/deposit/submit`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ provider: 'across', originChainId: 84532, depositId: '7', txHash: '0x' + 'cd'.repeat(32) }),
+  });
+  const across = (await acrossSent.json()).result.data;
   return {
     network,
     quote,
     deposit: (await status.json()).result.data.state,
     submit: sent.status,
     relay: `${relay.requestId === id ? 'echoed' : 'other'} ${relay.state}${relay.rawState ? ` ${relay.rawState}` : ''}`,
+    across: `${across.state} ${across.rawState}`,
   };
 }
 const TX_HASH = '0x' + 'cd'.repeat(32);
@@ -455,21 +463,26 @@ test('given an unknown pinned state, status maps it like the Aurora mapper', asy
   assert.equal(data.rawState, 'WAITING_FOR_GODOT');
 });
 
-test('given submitFails=1, the first submit fails and the second goes through', async () => {
+test('given submitFails=1, the first submit fails with 502 in the backend envelope and the second goes through', async () => {
   const deposit = await freshDeposit();
   await control({ submitFails: '1' });
   const first = await submit({ provider: 'aurora', depositAddress: deposit, txHash: TX_HASH });
-  assert.equal(first.res.status, 500);
+  assert.equal(first.res.status, 502);
+  assert.deepEqual(first.body, {
+    statusCode: 502,
+    result: { data: null, error: 'ProviderQuoteInvalid[aurora]: upstream failed' },
+  });
   assert.equal((await statusOf(deposit)).body.result.data.state, 'PENDING_DEPOSIT');
   const second = await submit({ provider: 'aurora', depositAddress: deposit, txHash: TX_HASH });
   assert.equal(second.res.status, 201);
 });
 
-test('given an expired quote, submit fails and status stays PENDING_DEPOSIT', async () => {
+test('given an expired quote, submit answers 422 and status stays PENDING_DEPOSIT', async () => {
   const deposit = await freshDeposit();
   await control({ expire: deposit });
   const sent = await submit({ provider: 'aurora', depositAddress: deposit, txHash: TX_HASH });
-  assert.equal(sent.res.status, 500);
+  assert.equal(sent.res.status, 422);
+  assert.equal(sent.body.result.error, 'ProviderQuoteInvalid[aurora]: upstream HTTP 400');
   assert.equal((await statusOf(deposit)).body.result.data.state, 'PENDING_DEPOSIT');
 });
 
@@ -560,6 +573,8 @@ function mcpCheck(cases) {
     }))
   );
   const run = spawnSync('bun', [file], { input, encoding: 'utf8' });
+  if (run.error?.code === 'ENOENT')
+    assert.fail('bun is not on PATH: this test runs the apps/mcp quote checks with bun');
   assert.equal(run.status, 0, run.stderr);
   return JSON.parse(run.stdout);
 }
@@ -659,7 +674,7 @@ test('given a Relay deposit, status is PENDING_DEPOSIT by requestId until submit
   assert.equal((await relayStatus('0x1234')).res.status, 400);
 });
 
-test('given an Across deposit, status is PENDING_DEPOSIT not_found by origin chain and depositId until submit, then walks to SUCCESS', async () => {
+test('given an Across deposit, status is PENDING_DEPOSIT not_found by origin chain and depositId until submit and one read after it, then walks to SUCCESS', async () => {
   const id = freshId();
   const before = await acrossStatus(id);
   assert.deepEqual(before.body.result.data, {
@@ -671,7 +686,8 @@ test('given an Across deposit, status is PENDING_DEPOSIT not_found by origin cha
   });
   const sent = await submit({ provider: 'across', originChainId: 84532, depositId: id, txHash: TX_HASH });
   assert.equal(sent.res.status, 201);
-  assert.deepEqual(sent.body.result.data, {
+  assert.deepEqual(sent.body.result.data, before.body.result.data, 'the indexer has not seen it yet');
+  assert.deepEqual((await acrossStatus(id)).body.result.data, {
     provider: 'across',
     originChainId: 84532,
     depositId: id,
@@ -679,8 +695,8 @@ test('given an Across deposit, status is PENDING_DEPOSIT not_found by origin cha
     txHash: TX_HASH,
   });
   const states = [];
-  for (let i = 0; i < 3; i++) states.push((await acrossStatus(id)).body.result.data.state);
-  assert.deepEqual(states, ['PROCESSING', 'SUCCESS', 'SUCCESS']);
+  for (let i = 0; i < 2; i++) states.push((await acrossStatus(id)).body.result.data.state);
+  assert.deepEqual(states, ['SUCCESS', 'SUCCESS']);
   assert.equal(
     (await acrossStatus(id, '8453')).body.result.data.state,
     'PENDING_DEPOSIT',
@@ -750,6 +766,79 @@ test('given deposit=echo, foreign-hash or unknown, status and submit break only 
   assert.equal((await relayStatus(id)).body.result.data.txHash, TX_HASH);
 });
 
+test('given acrossLag, Across answers not_found for that many reads, submit included; 0 answers PROCESSING at submit', async () => {
+  const walk = async (lag) => {
+    await control({ acrossLag: String(lag) });
+    const id = freshId();
+    const sent = await submit({ provider: 'across', originChainId: 84532, depositId: id, txHash: TX_HASH });
+    const reads = [`${sent.body.result.data.state} ${sent.body.result.data.rawState ?? sent.body.result.data.txHash}`];
+    for (let i = 0; i < 3; i++) {
+      const { data } = (await acrossStatus(id)).body.result;
+      reads.push(`${data.state} ${data.rawState ?? data.txHash}`);
+    }
+    return reads;
+  };
+  const pending = 'PENDING_DEPOSIT not_found';
+  assert.deepEqual(await walk(0), [
+    `PROCESSING ${TX_HASH}`,
+    `PROCESSING ${TX_HASH}`,
+    `SUCCESS ${TX_HASH}`,
+    `SUCCESS ${TX_HASH}`,
+  ]);
+  assert.deepEqual(await walk(2), [pending, pending, `PROCESSING ${TX_HASH}`, `SUCCESS ${TX_HASH}`]);
+  await control({ acrossLag: '1' });
+});
+
+test('given a failed Across submit, the deposit is still indexed and status finds it after the lag', async () => {
+  await control({ submitFails: '1' });
+  const id = freshId();
+  const sent = await submit({ provider: 'across', originChainId: 84532, depositId: id, txHash: TX_HASH });
+  assert.equal(sent.res.status, 502);
+  const states = [];
+  for (let i = 0; i < 2; i++) states.push((await acrossStatus(id)).body.result.data.state);
+  assert.deepEqual(states, ['PENDING_DEPOSIT', 'PROCESSING']);
+});
+
+test('given failWith 422, 429 or 502, submitFails and statusFails answer it in the backend envelope for every provider', async () => {
+  const detail = { 422: 'upstream HTTP 400', 429: 'upstream HTTP 429', 502: 'upstream failed' };
+  const keys = {
+    aurora: async () => ({ depositAddress: await freshDeposit() }),
+    across: async () => ({ originChainId: 84532, depositId: freshId() }),
+    relay: async () => ({ requestId: '0x' + randomHex(), originChainId: 84532 }),
+  };
+  const read = (provider, key) =>
+    fetch(`${base}/proxy/v2/move-asset/deposit/status?${new URLSearchParams({ provider, ...key })}`).then(
+      async (res) => ({
+        res,
+        body: await res.json(),
+      })
+    );
+  for (const status of [422, 429, 502]) {
+    for (const [provider, keyOf] of Object.entries(keys)) {
+      const key = await keyOf();
+      await control({ submitFails: '1', statusFails: '1', failWith: String(status) });
+      const failed = {
+        statusCode: status,
+        result: { data: null, error: `ProviderQuoteInvalid[${provider}]: ${detail[status]}` },
+      };
+      const sent = await submit({ provider, ...key, txHash: TX_HASH });
+      assert.equal(sent.res.status, status, `${provider} submit ${status}`);
+      assert.deepEqual(sent.body, failed);
+      const first = await read(provider, key);
+      assert.equal(first.res.status, status, `${provider} status ${status}`);
+      assert.deepEqual(first.body, failed);
+      assert.equal((await read(provider, key)).res.status, 200, `${provider} status after the failures`);
+      assert.equal((await submit({ provider, ...key, txHash: TX_HASH })).res.status, 201);
+    }
+  }
+  await control({ failWith: '' });
+});
+
+test('given an invalid failure or lag switch, control answers 400', async () => {
+  for (const params of [{ failWith: '500' }, { statusFails: 'x' }, { acrossLag: '-1' }])
+    assert.equal((await control(params)).status, 400, JSON.stringify(params));
+});
+
 test('given submitFails on Relay, submit answers 502 as the backend does for a failed index call', async () => {
   await control({ submitFails: '1' });
   const id = '0x' + randomHex();
@@ -764,6 +853,9 @@ test('given reset, the control state goes back to its defaults', async () => {
     mode: 'two-tx',
     network: 'eip155:8453',
     submitFails: '3',
+    statusFails: '3',
+    failWith: '429',
+    acrossLag: '0',
     state: 'REFUNDED',
     rawState: 'failure',
     deposit: 'echo',
