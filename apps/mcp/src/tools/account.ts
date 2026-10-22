@@ -15,6 +15,7 @@ import { config } from '@/connections/config';
 import { getDb } from '@/db/client';
 import { ownerCalls, sends } from '@/db/schema';
 import { reply } from '@/lib/fence';
+import { scrub } from '@/lib/scrub';
 import { refusal } from './reply';
 
 const CONCURRENCY = 10;
@@ -32,13 +33,6 @@ const chainIds = z
   .max(60)
   .optional()
   .describe('Mainnet chain ids to read; every supported mainnet when left out');
-
-// The key rides in the proxy URL, so an error that quotes the URL must not carry it out.
-function scrub(text: string) {
-  const key = config().paymasterApiKey;
-  const bare = key ? text.split(key).join('[key]').split(encodeURIComponent(key)).join('[key]') : text;
-  return bare.replace(/api-key=[^&\s"']*/gi, 'api-key=[key]');
-}
 
 function reasonOf(err: unknown) {
   if (err instanceof z.ZodError) return 'The proxy answered with an unexpected shape.';
