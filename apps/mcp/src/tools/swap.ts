@@ -362,7 +362,7 @@ async function answer(row: SwapRow, read?: BackendAnswer): Promise<SwapResult> {
       minOutputAmount: quote?.minOutputAmount,
     },
     expectedFillTimeSec: quote?.expectedFillTimeSec,
-    provider: row.quoteId?.split(':')[0],
+    provider: row.quoteId ? (quote?.provider ?? 'aurora') : undefined,
     calls: calls?.map(({ kind, to, value }) => ({ kind, to, value })),
     deposit: deposit && {
       address: row.depositAddress ?? undefined,

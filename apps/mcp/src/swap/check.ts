@@ -36,7 +36,6 @@ export type CheckCode =
 
 export type CheckedQuote = {
   ok: true;
-  provider: Provider;
   quoteId: string;
   depositAddress?: Address;
   calls: SwapCall[];

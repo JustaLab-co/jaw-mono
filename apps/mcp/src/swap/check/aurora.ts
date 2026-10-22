@@ -51,7 +51,6 @@ export async function checkAurora(
   const feesUsd = quote.fees.totalUsd;
   return {
     ok: true,
-    provider: 'aurora',
     quoteId: `aurora:${depositAddress}`,
     depositAddress,
     calls: [call],

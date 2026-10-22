@@ -44,6 +44,20 @@ describe('sameAsset', () => {
   ])('given %s, when looked up, then it is not the same asset', (_, over) => {
     expect(sameAsset(request(over))).toBeUndefined();
   });
+
+  it.each([
+    ['BSC', 56],
+    ['Polygon', 137],
+  ])('given native on %s to native ETH on Base, when looked up, then it is not the same asset', (_, chainId) => {
+    const native = request({
+      originChainId: chainId,
+      originToken: zeroAddress,
+      destinationChainId: 8453,
+      destinationToken: zeroAddress,
+    });
+
+    expect(sameAsset(native)).toBeUndefined();
+  });
 });
 
 describe('clearsFloor', () => {
@@ -58,7 +72,13 @@ describe('clearsFloor', () => {
   });
 
   it('given 10 USDC from BSC to Base, when the minimum is 9.7 USDC in 6 decimals, then it clears, and 1 unit less does not', () => {
-    const back = request({ amount: '10000000000000000000' });
+    const back = request({
+      originChainId: 56,
+      originToken: BSC_USDC,
+      amount: '10000000000000000000',
+      destinationChainId: 8453,
+      destinationToken: BASE_USDC,
+    });
     const pair = { decimalsIn: 18, decimalsOut: 6 };
 
     expect(clearsFloor(back, 9_700_000n, pair)).toBe(true);
@@ -70,5 +90,32 @@ describe('clearsFloor', () => {
 
     expect(clearsFloor(arb, 1n, { decimalsIn: 6, decimalsOut: 6 })).toBe(false);
     expect(clearsFloor(arb, 9_700_000n, { decimalsIn: 6, decimalsOut: 6 })).toBe(true);
+  });
+
+  it.each(['10 USDC', '-10000000', '1e7', '', '0'])(
+    'given an amount of %j, when the floor is checked, then it does not clear and does not throw',
+    (amount) => {
+      expect(clearsFloor(request({ amount }), 9_700_000_000_000_000_000n, usdcToBsc)).toBe(false);
+    }
+  );
+
+  it('given a minimum of 0, when the floor is checked, then it does not clear', () => {
+    expect(clearsFloor(request({}), 0n, usdcToBsc)).toBe(false);
+  });
+
+  it.each([
+    [6, 6],
+    [18, 18],
+  ])(
+    'given a pair of %i and %i decimals for Base USDC to BSC USDC, when the floor is checked, then it does not clear',
+    (decimalsIn, decimalsOut) => {
+      expect(clearsFloor(request({}), 9_700_000n, { decimalsIn, decimalsOut })).toBe(false);
+    }
+  );
+
+  it('given a request that is not the same asset, when the floor is checked with a pair, then it does not clear', () => {
+    const usdcToWeth = request({ destinationChainId: 42161, destinationToken: ARB_WETH });
+
+    expect(clearsFloor(usdcToWeth, 9_700_000_000_000_000_000n, usdcToBsc)).toBe(false);
   });
 });

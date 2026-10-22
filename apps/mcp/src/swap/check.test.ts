@@ -89,7 +89,6 @@ describe('checkQuote', () => {
 
     expect(result).toEqual({
       ok: true,
-      provider: 'aurora',
       quoteId: `aurora:${depositAddress}`,
       depositAddress,
       calls: [{ kind: 'deposit', chainId: 8453, to: usdc, data: transfer(depositAddress, '1000000'), value: '0' }],
@@ -108,7 +107,7 @@ describe('checkQuote', () => {
     const result = await accepted(nativeRequest, backendQuoteJson(nativeRequest));
 
     expect(result).toMatchObject({
-      provider: 'aurora',
+      quote: { provider: 'aurora' },
       depositAddress,
       calls: [{ kind: 'deposit', chainId: 8453, to: depositAddress, data: '0x', value: '1000000' }],
     });

@@ -15,6 +15,9 @@ export function sameAsset(request: QuoteRequest): AssetPair | undefined {
 }
 
 export function clearsFloor(request: QuoteRequest, minOutputAmount: bigint, pair: AssetPair): boolean {
+  if (!/^[1-9][0-9]*$/.test(request.amount)) return false;
+  const listed = sameAsset(request);
+  if (!listed || listed.decimalsIn !== pair.decimalsIn || listed.decimalsOut !== pair.decimalsOut) return false;
   const out = minOutputAmount * 10n ** BigInt(pair.decimalsIn) * 10_000n;
   const floor = BigInt(request.amount) * 10n ** BigInt(pair.decimalsOut) * (10_000n - MAX_ROUTE_COST_BPS);
   return out >= floor;

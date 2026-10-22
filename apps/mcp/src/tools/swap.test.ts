@@ -1310,6 +1310,17 @@ describe('jaw_swap_status', () => {
     expect(after.structuredContent).toMatchObject(answer);
   });
 
+  it('given a row whose stored quote names across, when jaw_swap_status answers, then its provider is across', async () => {
+    const { t } = await connected();
+    const quoteId = await started(t);
+    const row = await rowOf(t);
+
+    await rewrite(row.id, { quote: { ...(row.quote as object), provider: 'across' } });
+    const result = await status(t, quoteId);
+
+    expect(result.structuredContent).toMatchObject({ quoteId, provider: 'across' });
+  });
+
   it('given a row holding an approve then the deposit, when jaw_swap_status answers, then its deposit is the deposit call, not the approve', async () => {
     const { t } = await connected();
     const quoteId = await started(t);
@@ -2169,6 +2180,7 @@ describe('a quote another provider answered', () => {
       });
       expect(result.structuredContent?.summary).toContain(`from ${provider}`);
       expect(result.structuredContent?.summary).toContain('Nothing was sent');
+      expect(result.structuredContent?.provider).toBeUndefined();
       expect(opened).toEqual([]);
       expect(row).toMatchObject({ call: null, depositAddress: null, walletUrl: null });
       const text = JSON.stringify(result).toLowerCase();
