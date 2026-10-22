@@ -4,9 +4,7 @@ import {
   planRecoveryChanges,
   type AdminBatchStatus,
   type RecoveryChainConfig,
-  type RecoveryChange,
   type RecoveryConfig,
-  type RecoveryMethod,
   type RecoveryMethodInput,
 } from '@jaw.id/core';
 import { size, type Hex } from 'viem';
@@ -126,52 +124,52 @@ export const RECOVERY_RELAY_STATE_TEXT: Record<RecoveryRelayState, string> = {
   failed: 'Didn’t go through',
 };
 
-/** One change as the confirm screen lists it: "+ Carol", "− Bob", "Alice: 48h → 72h", "Threshold 2 → 1". */
-export type RecoveryChangeSummary =
-  | { kind: 'add'; method: Required<RecoveryMethodInput> }
-  | { kind: 'remove'; method: RecoveryMethod }
-  | { kind: 'delay'; method: Required<RecoveryMethodInput>; from: number }
-  | { kind: 'threshold'; from: number; to: number };
+/**
+ * One guardian on the review screen: `added`, `removed`, a new wait (`delay`, with the old one),
+ * or `null` for one that stays as it is.
+ */
+export type RecoveryGuardianRow = {
+  method: Required<RecoveryMethodInput>;
+  change: 'added' | 'removed' | 'delay' | null;
+  fromDelay?: number;
+};
+
+function sameMethod(a: { provider: string; commitment: string }, b: { provider: string; commitment: string }) {
+  return (
+    a.provider.toLowerCase() === b.provider.toLowerCase() && a.commitment.toLowerCase() === b.commitment.toLowerCase()
+  );
+}
 
 /**
- * The planner's change list (core `planRecoveryChanges`, what gets signed) read back as the user
- * thinks of it: a remove and an add of the same guardian is a new wait, and the threshold of one
- * the planner sets for that swap is an intermediate step, so only the final threshold is listed.
+ * The guardians as one list: the end state the app asked for, each marked against the current
+ * config, then the guardians it removes. A first setup (`current` null) marks nothing: every
+ * guardian on it is new.
  */
-export function summarizeRecoveryChanges(
-  current: RecoveryChainConfig,
-  changes: RecoveryChange[]
-): RecoveryChangeSummary[] {
-  const removed = new Set(changes.flatMap((change) => (change.kind === 'remove' ? [change.recoveryId] : [])));
-  const swapped = new Set<string>();
-  const summary: RecoveryChangeSummary[] = [];
+export function recoveryGuardianRows(
+  current: RecoveryChainConfig | null,
+  desired: RecoveryMethodInput[]
+): RecoveryGuardianRow[] {
+  const wanted = desired.map((method) => ({
+    ...method,
+    provider: method.provider ?? SIGNATURE_RECOVERY_PROVIDER_ADDRESS,
+  }));
+  if (!current) return wanted.map((method) => ({ method, change: null }));
 
-  for (const change of changes) {
-    if (change.kind !== 'add') continue;
-    const existing = current.recoveries.find(
-      (method) =>
-        removed.has(method.recoveryId) &&
-        method.provider.toLowerCase() === change.method.provider.toLowerCase() &&
-        method.commitment.toLowerCase() === change.method.commitment.toLowerCase()
-    );
-    if (existing) {
-      swapped.add(existing.recoveryId);
-      summary.push({ kind: 'delay', method: change.method, from: existing.delay });
-    } else {
-      summary.push({ kind: 'add', method: change.method });
+  const rows: RecoveryGuardianRow[] = wanted.map((method) => {
+    const existing = current.recoveries.find((registered) => sameMethod(registered, method));
+    if (!existing) return { method, change: 'added' };
+    if (existing.delay !== method.delay) return { method, change: 'delay', fromDelay: existing.delay };
+    return { method, change: null };
+  });
+
+  for (const registered of current.recoveries) {
+    if (!wanted.some((method) => sameMethod(registered, method))) {
+      const { commitment, provider, delay } = registered;
+      rows.push({ method: { commitment, provider, delay }, change: 'removed' });
     }
   }
 
-  for (const method of current.recoveries) {
-    if (removed.has(method.recoveryId) && !swapped.has(method.recoveryId)) summary.push({ kind: 'remove', method });
-  }
-
-  const finalThreshold = changes.findLast((change) => change.kind === 'threshold');
-  if (finalThreshold?.kind === 'threshold' && finalThreshold.threshold !== current.threshold) {
-    summary.push({ kind: 'threshold', from: current.threshold, to: finalThreshold.threshold });
-  }
-
-  return summary;
+  return rows;
 }
 
 /** The networks an edit reaches: where the account is deployed and the manager is an owner. */

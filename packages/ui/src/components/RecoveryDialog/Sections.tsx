@@ -2,7 +2,7 @@
 
 import type { ReactNode } from 'react';
 import { ExternalLink, TriangleAlert } from 'lucide-react';
-import { SUPPORTED_CHAINS, type AdminBatchChain, type RecoveryMethodInput } from '@jaw.id/core';
+import { SUPPORTED_CHAINS, type AdminBatchChain } from '@jaw.id/core';
 import type { Hex } from 'viem';
 import { Spinner } from '../ui/spinner';
 import { AccountAvatar } from '../AccountAvatar';
@@ -17,9 +17,8 @@ import {
   formatRecoveryDelay,
   recoveryDelayWarning,
   recoveryMethodAddress,
-  recoveryMethodLabel,
   recoveryRelayState,
-  type RecoveryChangeSummary,
+  type RecoveryGuardianRow,
 } from '../../utils/recoverySetup';
 
 /** The network's name, for a chain id the configs read or the relayer reports. */
@@ -75,10 +74,13 @@ function GuardianIdentity({
   commitment,
   chainId,
   mainnetRpcUrl,
+  struck,
 }: {
   commitment: Hex;
   chainId?: number;
   mainnetRpcUrl: string;
+  /** A guardian the change removes: dimmed and struck through. */
+  struck?: boolean;
 }) {
   const address = recoveryMethodAddress(commitment);
   const identity = useReverseIdentity(address ?? undefined, chainId, mainnetRpcUrl);
@@ -86,108 +88,142 @@ function GuardianIdentity({
 
   return (
     <>
-      <AccountAvatar
-        seed={address ?? commitment}
-        avatarUrl={identity.avatar}
-        size={24}
-        className="rounded-chip size-token flex-none"
-      />
-      <span className="flex min-w-0 flex-1 flex-col items-start">
+      <span className={cn('flex-none', struck && 'opacity-40 grayscale')}>
+        <AccountAvatar
+          seed={address ?? commitment}
+          avatarUrl={identity.avatar}
+          size={24}
+          className="rounded-chip size-token flex-none"
+        />
+      </span>
+      <span className={cn('flex min-w-0 flex-1 flex-col items-start', struck && 'text-muted-foreground line-through')}>
         {identity.name ? (
           <>
-            <span className="text-foreground text-body-sm max-w-full truncate font-medium">{identity.name}</span>
+            <span className={cn('text-body-sm max-w-full truncate font-medium', !struck && 'text-foreground')}>
+              {identity.name}
+            </span>
             <span className="text-muted-foreground text-code mt-1 font-mono">{truncated}</span>
           </>
         ) : (
-          <span className="text-foreground text-body-xs truncate font-mono font-medium">{truncated}</span>
+          <span className={cn('text-body-xs truncate font-mono font-medium', !struck && 'text-foreground')}>
+            {truncated}
+          </span>
         )}
       </span>
     </>
   );
 }
 
-/** A guardian's wait, in the chip every row and change line uses. */
-function WaitChip({ children }: { children: ReactNode }) {
+/** A small status pill: green for what is added, red for what goes, amber for what changes. */
+function Badge({ tone, children }: { tone: 'success' | 'destructive' | 'warning'; children: ReactNode }) {
   return (
-    <span className="border-border text-foreground text-code rounded-pill flex-none border px-2 py-0.5 font-mono font-semibold">
+    <span
+      className={cn(
+        'text-code rounded-pill flex-none px-2 py-0.5 font-mono font-semibold',
+        tone === 'success' && 'bg-success/10 text-success',
+        tone === 'destructive' && 'bg-destructive/10 text-destructive',
+        tone === 'warning' && 'bg-warning/10 text-warning'
+      )}
+    >
       {children}
     </span>
   );
 }
 
-/** A label/value line inside a card. */
-export function SummaryRow({ label, children }: { label: string; children: ReactNode }) {
-  return (
-    <div className="border-border/40 flex min-h-11 items-center justify-between gap-3 border-t px-3 py-2 first:border-t-0">
-      <Eyebrow>{label}</Eyebrow>
-      <span className="text-foreground text-body-sm min-w-0 truncate text-right font-medium">{children}</span>
-    </div>
-  );
-}
+type Approvals = { threshold: number; count: number };
 
 /**
- * The guardians of a config and the approvals it needs, read-only: the app decides them, the user
- * approves or declines, as on the permission screen.
+ * The guardians as one read-only list, as the permission screen shows a grant: the end state the
+ * app asked for with what is new marked, then what the change removes, struck through. The
+ * approvals sit at the bottom as before and after, the new value highlighted.
  */
 export function GuardianList({
-  label,
-  methods,
-  threshold,
+  rows,
+  approvals,
   chainId,
   mainnetRpcUrl,
 }: {
-  label: string;
-  methods: Required<RecoveryMethodInput>[];
-  threshold: number;
+  rows: RecoveryGuardianRow[];
+  /** `from` only when the approvals change. */
+  approvals: { from?: Approvals; to: Approvals };
   chainId?: number;
   mainnetRpcUrl: string;
 }) {
+  const ratio = ({ threshold, count }: Approvals) => `${threshold}/${count}`;
+  const changed = !!approvals.from && ratio(approvals.from) !== ratio(approvals.to);
+
   return (
     <div className="flex flex-col gap-2">
-      <SectionHeading label={label} />
+      <SectionHeading label="Guardians" />
       <div className="border-border rounded-box overflow-hidden border">
-        {methods.map((method) => (
+        {rows.map(({ method, change, fromDelay }) => (
           <div
             key={`${method.provider}:${method.commitment}`}
             className="border-border/40 flex items-center gap-2 border-t px-3 py-2 first:border-t-0"
           >
-            <GuardianIdentity commitment={method.commitment} chainId={chainId} mainnetRpcUrl={mainnetRpcUrl} />
-            <span className="border-border bg-secondary text-muted-foreground text-code rounded-pill flex-none border px-2 py-0.5 font-mono font-semibold">
-              {recoveryMethodLabel(method.provider, method.commitment)}
-            </span>
-            <WaitChip>{formatRecoveryDelay(method.delay)}</WaitChip>
+            <GuardianIdentity
+              commitment={method.commitment}
+              chainId={chainId}
+              mainnetRpcUrl={mainnetRpcUrl}
+              struck={change === 'removed'}
+            />
+            {change === 'added' && <Badge tone="success">Added</Badge>}
+            {change === 'removed' && <Badge tone="destructive">Removed</Badge>}
+            {change === 'delay' && fromDelay !== undefined && (
+              <Badge tone="warning">{`${formatRecoveryDelay(fromDelay)} → ${formatRecoveryDelay(method.delay)}`}</Badge>
+            )}
           </div>
         ))}
-        <SummaryRow label="Approvals needed">{`${threshold} of ${methods.length}`}</SummaryRow>
+        <div className="border-border/40 flex min-h-11 items-center justify-between gap-3 border-t px-3 py-2">
+          <span className="text-muted-foreground text-body-sm">Approvals needed</span>
+          <span className="text-body-sm flex items-center gap-1.5 font-mono font-semibold">
+            {changed && approvals.from ? (
+              <>
+                <span className="text-muted-foreground font-normal">{ratio(approvals.from)}</span>
+                <span className="text-muted-foreground">→</span>
+                <Badge tone="warning">{ratio(approvals.to)}</Badge>
+              </>
+            ) : (
+              <span className="text-foreground">{ratio(approvals.to)}</span>
+            )}
+          </span>
+        </div>
       </div>
     </div>
   );
 }
 
 /**
- * How long the owner has to veto, and where the change lands, with the advice the time to cancel
- * calls for (O8). Advice only: the app picked the waits.
+ * One line under the list: how long the owner has to cancel a recovery (the threshold-th
+ * smallest wait, core `minimumRecoveryDelay`), where the change lands, and who pays for an edit.
+ * The time to cancel only advises (O8): amber under 24h, red at 0.
  */
-export function RecoverySummary({
+export function RecoveryTerms({
   minimumDelay,
-  networkLabel,
   networks,
+  feesPaidByJaw,
 }: {
-  /** The threshold-th smallest wait (core `minimumRecoveryDelay`). */
   minimumDelay: number | null;
-  networkLabel: string;
   networks: string;
+  /** An edit is relayed, and JAW pays its network fees. */
+  feesPaidByJaw?: boolean;
 }) {
   const warning = recoveryDelayWarning(minimumDelay);
 
   return (
     <div className="flex flex-col gap-3">
-      <div className="border-border rounded-box overflow-hidden border">
-        <SummaryRow label="Time to cancel">
-          {minimumDelay === null ? 'None' : `at least ${formatRecoveryDelay(minimumDelay)}`}
-        </SummaryRow>
-        <SummaryRow label={networkLabel}>{networks}</SummaryRow>
-      </div>
+      <p className="text-muted-foreground text-body-sm">
+        {minimumDelay === 0 ? (
+          'A recovery takes effect instantly, with no time to cancel it. '
+        ) : minimumDelay !== null ? (
+          <>
+            A recovery takes effect after at least{' '}
+            <span className="text-foreground font-semibold">{formatRecoveryDelay(minimumDelay)}</span>, you can cancel
+            it before then.{' '}
+          </>
+        ) : null}
+        {feesPaidByJaw ? `${networks}, fees paid by JAW.` : `${networks}.`}
+      </p>
       {warning && (
         <RecoveryNotice
           tone={warning === 'short' ? 'warning' : 'destructive'}
@@ -196,58 +232,6 @@ export function RecoverySummary({
           {RECOVERY_DELAY_WARNING_TEXT[warning].detail}
         </RecoveryNotice>
       )}
-    </div>
-  );
-}
-
-/** What an edit changes, as the user thinks of it, one line per change. */
-export function ChangeList({
-  changes,
-  chainId,
-  mainnetRpcUrl,
-}: {
-  changes: RecoveryChangeSummary[];
-  chainId?: number;
-  mainnetRpcUrl: string;
-}) {
-  return (
-    <div className="flex flex-col gap-2">
-      <SectionHeading label="Changes" />
-      <div className="border-border rounded-box overflow-hidden border">
-        {changes.map((change, i) => (
-          <div key={i} className="border-border/40 flex items-center gap-2 border-t px-3 py-2 first:border-t-0">
-            {change.kind === 'threshold' ? (
-              <span className="text-foreground text-body-sm flex-1 font-medium">
-                Approvals needed {change.from} → {change.to}
-              </span>
-            ) : (
-              <>
-                <span
-                  className={cn(
-                    'text-body-sm w-4 flex-none text-center font-mono font-bold',
-                    change.kind === 'add' && 'text-success',
-                    change.kind === 'remove' && 'text-destructive',
-                    change.kind === 'delay' && 'text-muted-foreground'
-                  )}
-                  aria-label={change.kind === 'add' ? 'Added' : change.kind === 'remove' ? 'Removed' : 'Changed'}
-                >
-                  {change.kind === 'add' ? '+' : change.kind === 'remove' ? '−' : '~'}
-                </span>
-                <GuardianIdentity
-                  commitment={change.method.commitment}
-                  chainId={chainId}
-                  mainnetRpcUrl={mainnetRpcUrl}
-                />
-                <WaitChip>
-                  {change.kind === 'delay'
-                    ? `${formatRecoveryDelay(change.from)} → ${formatRecoveryDelay(change.method.delay)}`
-                    : formatRecoveryDelay(change.method.delay)}
-                </WaitChip>
-              </>
-            )}
-          </div>
-        ))}
-      </div>
     </div>
   );
 }

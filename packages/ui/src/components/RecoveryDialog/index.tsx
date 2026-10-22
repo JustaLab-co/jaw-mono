@@ -1,9 +1,7 @@
 'use client';
 
 import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
-import { Fingerprint } from 'lucide-react';
 import {
-  SIGNATURE_RECOVERY_PROVIDER_ADDRESS,
   isFirstRecoverySetup,
   minimumRecoveryDelay,
   planRecoveryChanges,
@@ -20,17 +18,18 @@ import { AppAvatar } from '../AppAvatar';
 import { useChainIconURI, useFeeTokenPrice } from '../../hooks';
 import { useRecoveryRelayStatus } from '../../hooks/useRecoveryRelayStatus';
 import { resolveBlockReason } from '../../utils/transactionFailure';
-import { RECOVERY_SETUP_PROBLEM_TEXT, summarizeRecoveryChanges } from '../../utils/recoverySetup';
+import { RECOVERY_SETUP_PROBLEM_TEXT, recoveryGuardianRows } from '../../utils/recoverySetup';
 import type { RecoveryDialogProps } from './types';
-import { ChangeList, GuardianList, NetworkStatusList, RecoveryNotice, RecoverySummary, chainName } from './Sections';
+import { GuardianList, NetworkStatusList, RecoveryNotice, RecoveryTerms, chainName } from './Sections';
 
 /**
  * The recovery screen works like the permission screen: the app passes the end state, the screen
  * shows it and the user approves or declines. Nothing on it is editable (R16).
  *
- * A first setup shows the guardians and the fee of the one transaction that enables recovery on
- * the connected network. An edit shows the account's current guardians, then the changes, and is
- * relayed to every network where recovery is on, so it has no fee.
+ * The guardians are one list (the team's option 1): the end state with what is new marked, then
+ * what the change removes, struck through, and the approvals before and after. A first setup
+ * carries the fee of the one transaction that enables recovery on the connected network; an edit
+ * is relayed to every network where recovery is on, and JAW pays.
  */
 export const RecoveryDialog = ({
   open,
@@ -91,29 +90,28 @@ export const RecoveryDialog = ({
   }, [isProcessing, result, isLoadingConfig]);
 
   const isFirstSetup = !current || isFirstRecoverySetup(current);
-  const methods = useMemo(
-    () =>
-      config.recoveries.map((method) => ({
-        ...method,
-        provider: method.provider ?? SIGNATURE_RECOVERY_PROVIDER_ADDRESS,
-      })),
-    [config.recoveries]
-  );
   const minimumDelay = minimumRecoveryDelay(config.recoveries, config.threshold);
 
-  // An edit lists exactly what the planner signs, read back as the user thinks of it.
-  const changes = useMemo(
-    () => (current && !isFirstSetup ? summarizeRecoveryChanges(current, planRecoveryChanges(current, config)) : []),
-    [current, isFirstSetup, config]
+  const rows = useMemo(
+    () => recoveryGuardianRows(isFirstSetup ? null : current, config.recoveries),
+    [isFirstSetup, current, config.recoveries]
   );
+  const approvals = {
+    from: isFirstSetup || !current ? undefined : { threshold: current.threshold, count: current.recoveries.length },
+    to: { threshold: config.threshold, count: config.recoveries.length },
+  };
 
   const editNetworks = chains
     .filter((chain) => chain.deployed && chain.enrolled)
     .map((chain) => chainName(chain.chainId));
 
-  // The account already holds exactly this: nothing to sign. The answer is Account's own for an
-  // edit that changes nothing.
-  const alreadyInPlace = !isLoadingConfig && !problem && !isFirstSetup && changes.length === 0;
+  // The account already holds exactly this: nothing to sign (the planner, which is what gets
+  // signed, has no change). The answer is Account's own for an edit that changes nothing.
+  const alreadyInPlace = useMemo(
+    () =>
+      !isLoadingConfig && !problem && !isFirstSetup && !!current && planRecoveryChanges(current, config).length === 0,
+    [isLoadingConfig, problem, isFirstSetup, current, config]
+  );
 
   // Same fee rules as the permission screen, on the first setup only: an edit is relayed.
   const hasSelectablePaymentOption =
@@ -170,20 +168,6 @@ export const RecoveryDialog = ({
           <div className="flex min-h-[200px] items-center justify-center">
             <Spinner className="size-5" />
           </div>
-        ) : isFirstSetup ? (
-          <>
-            <GuardianList
-              label="Guardians"
-              methods={methods}
-              threshold={config.threshold}
-              chainId={chainId}
-              mainnetRpcUrl={mainnetRpcUrl}
-            />
-            <RecoverySummary minimumDelay={minimumDelay} networkLabel="Network" networks={networkName} />
-            <p className="text-muted-foreground text-body-sm">
-              Adds the recovery contract to your account so these guardians can restore access.
-            </p>
-          </>
         ) : (
           <>
             {alreadyInPlace && (
@@ -191,27 +175,18 @@ export const RecoveryDialog = ({
                 Already set up. Recovery on this account matches what this app asks for.
               </div>
             )}
-            {current && (
-              <GuardianList
-                label={alreadyInPlace ? 'Guardians' : 'Current guardians'}
-                methods={current.recoveries}
-                threshold={current.threshold}
-                chainId={chainId}
-                mainnetRpcUrl={mainnetRpcUrl}
+            <GuardianList rows={rows} approvals={approvals} chainId={chainId} mainnetRpcUrl={mainnetRpcUrl} />
+            {!alreadyInPlace && (
+              <RecoveryTerms
+                minimumDelay={minimumDelay}
+                networks={isFirstSetup ? networkName : editNetworks.join(', ')}
+                feesPaidByJaw={!isFirstSetup}
               />
             )}
-            {!alreadyInPlace && (
-              <>
-                <ChangeList changes={changes} chainId={chainId} mainnetRpcUrl={mainnetRpcUrl} />
-                <RecoverySummary
-                  minimumDelay={minimumDelay}
-                  networkLabel="Networks"
-                  networks={editNetworks.join(', ')}
-                />
-                <p className="text-muted-foreground text-body-sm">
-                  One signature updates recovery on every network where it is on. JAW pays the network fees.
-                </p>
-              </>
+            {isFirstSetup && (
+              <p className="text-muted-foreground text-body-sm">
+                Adds the recovery contract to your account so these guardians can restore access.
+              </p>
             )}
           </>
         )}
@@ -280,16 +255,9 @@ export const RecoveryDialog = ({
             <Button
               onClick={onConfirm}
               disabled={!canConfirm}
-              className="rounded-box text-button h-10 flex-[56] gap-1.5 font-semibold focus-visible:ring-1"
+              className="rounded-box text-button h-10 flex-[56] font-semibold focus-visible:ring-1"
             >
-              {blockReason === 'funds' ? (
-                'Insufficient Funds'
-              ) : (
-                <>
-                  <Fingerprint className="!h-4 !w-4" />
-                  {isFirstSetup ? 'Enable recovery' : 'Confirm changes'}
-                </>
-              )}
+              {blockReason === 'funds' ? 'Insufficient Funds' : isFirstSetup ? 'Enable recovery' : 'Confirm changes'}
             </Button>
           )}
         </div>
