@@ -32,6 +32,7 @@ const ACCOUNT = getAddress('0x6ca44a56b06869530c953dfa7868973be1456769');
 const ATTACKER = '0x3333333333333333333333333333333333333333';
 const BASE_USDC = getAddress('0x833589fcd6edb6e08f4c7c32d4f71b54bda02913');
 const ARB_USDC = getAddress('0xaf88d065e77c8cc2239327c5edb3a432268e5831');
+const BASE_WETH = getAddress('0x4200000000000000000000000000000000000006');
 const BASE_SEPOLIA_USDC = '0x036cbd53842c5426634e7929541ec2318f3dcf7e';
 const BASE_SEPOLIA_ROUTER = '0x000000000000000000000000f5042e6ffac5a625d4e7848e0b01373d8eb9e222';
 const ATTACKER_DATA = '0x0000000000000000000000003333333333333333333333333333333333333333';
@@ -373,6 +374,17 @@ describe('checkRelayOrder', () => {
         o.inputs[0].refunds = [o.inputs[0].refunds[0]];
       });
       const request = { ...usdcRequest, destinationChainId: 8453, destinationToken: BASE_USDC };
+
+      expect(codeOf(quote, request)).toBe('destination_chain');
+    });
+
+    it('when Base USDC goes to Base WETH under an order signed for it, then the same chain fails with destination_chain before the cross-token pair', () => {
+      const quote = variant((_, o) => {
+        o.output.chainId = 'base';
+        o.output.payments[0].currency = BASE_WETH;
+        o.inputs[0].refunds = [o.inputs[0].refunds[0]];
+      });
+      const request = { ...usdcRequest, destinationChainId: 8453, destinationToken: BASE_WETH };
 
       expect(codeOf(quote, request)).toBe('destination_chain');
     });

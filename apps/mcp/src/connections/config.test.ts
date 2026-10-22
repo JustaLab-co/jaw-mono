@@ -9,6 +9,7 @@ afterEach(() => {
   delete process.env.JAW_MCP_INSECURE_FETCH_HOSTS;
   delete process.env.JAW_MCP_SWAP_URL;
   delete process.env.JAW_MCP_SWAP_QUOTE_TTL_SEC;
+  delete process.env.JAW_MCP_SWAP_PROVIDERS;
   vi.resetModules();
 });
 
@@ -120,6 +121,32 @@ describe('JAW_MCP_SWAP_QUOTE_TTL_SEC', () => {
       process.env.JAW_MCP_SWAP_QUOTE_TTL_SEC = value;
       const { config } = await import('./config');
       expect(() => config()).toThrow(/JAW_MCP_SWAP_QUOTE_TTL_SEC/);
+    }
+  );
+});
+
+describe('JAW_MCP_SWAP_PROVIDERS', () => {
+  it('given it unset, then jaw_swap signs Aurora quotes only', async () => {
+    const { config } = await import('./config');
+    expect(config().swapProviders).toEqual(new Set(['aurora']));
+  });
+
+  it.each([
+    ['aurora,across,relay', ['aurora', 'across', 'relay']],
+    ['relay,across', ['across', 'relay']],
+    ['across', ['across']],
+  ])('given %j, then those providers are signed', async (value, providers) => {
+    process.env.JAW_MCP_SWAP_PROVIDERS = value;
+    const { config } = await import('./config');
+    expect(config().swapProviders).toEqual(new Set(providers));
+  });
+
+  it.each(['uniswap', 'aurora,', 'Across', 'aurora, across', ','])(
+    'given %j, then it refuses to start naming the variable',
+    async (value) => {
+      process.env.JAW_MCP_SWAP_PROVIDERS = value;
+      const { config } = await import('./config');
+      expect(() => config()).toThrow(/JAW_MCP_SWAP_PROVIDERS must be a comma list of aurora, across and relay/);
     }
   );
 });

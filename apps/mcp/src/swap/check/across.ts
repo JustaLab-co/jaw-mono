@@ -229,7 +229,7 @@ function unwrapFeeOf(calls: readonly Call[], weth: Address, recipient: string, a
     value: 0n,
   };
   const second = calls[1];
-  const valueFee = second && isAddressEqual(second.target, APP_FEE.recipient) ? second : undefined;
+  const valueFee = second && isAddressEqual(second.target, APP_FEE.recipient) && second.value > 0n ? second : undefined;
   const drainEth = { target: handler, callData: drainOf(zeroAddress, recipient), value: 0n };
   const drainWeth = { target: handler, callData: drainOf(weth, recipient), value: 0n };
   const expected = [

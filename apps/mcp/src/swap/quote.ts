@@ -5,11 +5,13 @@ import { errorLabel, log } from '@/lib/edge';
 import { fenceText } from '@/lib/fence';
 import { refusal, safeFetch } from '@/lib/safe-fetch';
 import { checkQuote, type CheckCode, type QuoteRequest } from './check';
+import { sameAsset } from './check/assets';
 import {
   depositAddressReused,
   isDepositAddressTaken,
   isOrderTaken,
   orderReused,
+  quoteIdReused,
   release,
   writeHeld,
   type SwapLease,
@@ -54,7 +56,13 @@ export function swapRequest(t: Tenant, input: SwapInput): SwapRequest {
   };
 }
 
-function quoteUrl(row: SwapRow): string {
+function providersFor(request: QuoteRequest): string {
+  const enabled = config().swapProviders;
+  if (sameAsset(request)) return [...enabled].join(',');
+  return enabled.has('aurora') ? 'aurora' : '';
+}
+
+function quoteUrl(row: SwapRow, providers: string): string {
   const query = new URLSearchParams({
     originChainId: String(row.originChainId),
     destinationChainId: String(row.destinationChainId),
@@ -66,6 +74,7 @@ function quoteUrl(row: SwapRow): string {
     tradeType: 'EXACT_INPUT',
   });
   const route = row.destinationChainId === SOLANA ? 'swap/quote' : 'move-asset/quote';
+  if (route === 'move-asset/quote') query.set('providers', providers);
   return `${config().swapUrl}/${route}?${query}`;
 }
 
@@ -91,7 +100,11 @@ export async function quote(t: Tenant, held: { row: SwapRow; token: string }, de
   const lease = { connectionId: t.connectionId, id: held.row.id, token: held.token };
   const request = quoteRequestOf(held.row);
   if (!request) return stepOf(await writeHeld(lease, { state: 'quote_failed', code: 'invalid_request' }));
-  const url = quoteUrl(held.row);
+  const providers = providersFor(request);
+  if (!providers) {
+    return stepOf(await writeHeld(lease, { state: 'quote_rejected', code: 'quote_unsupported_provider' }));
+  }
+  const url = quoteUrl(held.row, providers);
   if (refusal(new URL(url), config().insecureFetchHosts)) {
     return stepOf(await writeHeld(lease, { state: 'quote_failed', code: 'insecure_url' }));
   }
@@ -153,7 +166,7 @@ async function keepQuote(
   fenced: string | null
 ): Promise<SwapRow | undefined> {
   const data = dataOf(body);
-  const provider = nonAuroraProvider(data);
+  const provider = disabledProvider(data);
   if (provider) {
     return writeHeld(lease, { state: 'quote_rejected', code: 'quote_unsupported_provider', quote: { provider } });
   }
@@ -187,6 +200,9 @@ async function keepQuote(
       quoteFenced: fenced,
     });
   } catch (err) {
+    if (checked.quote.provider !== 'aurora' && quoteIdReused(err)) {
+      return writeHeld(lease, { state: 'quote_rejected', code: 'quote_reused', quoteFenced: fenced });
+    }
     if (depositAddressReused(err)) {
       return writeHeld(lease, { state: 'quote_rejected', code: 'deposit_address_reused', quoteFenced: fenced });
     }
@@ -197,12 +213,13 @@ async function keepQuote(
   }
 }
 
-function nonAuroraProvider(data: unknown): string | undefined {
+function disabledProvider(data: unknown): string | undefined {
   const { provider, quoteId } = (data ?? {}) as { provider?: unknown; quoteId?: unknown };
   if (typeof provider !== 'string') return undefined;
   const prefix = typeof quoteId === 'string' && quoteId.includes(':') ? quoteId.split(':')[0] : '';
-  if (provider === 'aurora' && prefix === 'aurora') return undefined;
-  return [prefix, provider].find((name) => name !== 'aurora' && PROVIDER_NAME.test(name)) ?? 'unknown';
+  const enabled = (name: string) => (config().swapProviders as ReadonlySet<string>).has(name);
+  if (enabled(provider) && enabled(prefix)) return undefined;
+  return [prefix, provider].find((name) => !enabled(name) && PROVIDER_NAME.test(name)) ?? 'unknown';
 }
 
 function dataOf(raw: string): unknown {

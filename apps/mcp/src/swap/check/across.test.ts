@@ -44,6 +44,8 @@ const FEE_RECIPIENT = getAddress('0xc529edd6d47c60923902514c7c0b3993ae42c2ec');
 const BASE_SEPOLIA_USDC = getAddress('0x036cbd53842c5426634e7929541ec2318f3dcf7e');
 const BASE_SEPOLIA_POOL = getAddress('0x82b564983ae7274c86695917bbf8c99ecb6f0f8f');
 const SEPOLIA_USDC = getAddress('0x1c7d4b196cb0c7b01d743fbc6116a902379c7238');
+const SEPOLIA_WETH = getAddress('0xfff9976782d46cc05630d1f6ebab18b2324d6b14');
+const TESTNET_PERIPHERY = getAddress('0x10d8b8daa26d307489803e10477de69c0492b610');
 const OWNER_WINDOW_SEC = ownerWindowMs(300) / 1000;
 
 type Tx = { chainId: number; to: string; data: string; value: string };
@@ -281,6 +283,26 @@ const valueCall = (value: bigint, target: Address = FEE_RECIPIENT, callData: Hex
   callData,
   value,
 });
+
+function nativeTestnet(withEmit: boolean): Case {
+  const c = native();
+  c.request = { ...c.request, originChainId: 84532, destinationChainId: 11155111 };
+  const [tx] = c.body.transactions;
+  tx.chainId = 84532;
+  tx.to = TESTNET_PERIPHERY;
+  withDeposit(c, (a) => {
+    a.spokePool = BASE_SEPOLIA_POOL;
+    a.outputToken = word(SEPOLIA_WETH);
+    a.destinationChainId = 11155111n;
+  });
+  return withCalls(c, (calls) => [
+    unwrapCall(SEPOLIA_WETH),
+    calls[1],
+    drainCall(zeroAddress),
+    drainCall(SEPOLIA_WETH),
+    ...(withEmit ? [calls[4]] : []),
+  ]);
+}
 
 function wethToNative(): Case {
   let program = { message: '0x' as Hex, outputAmount: 0n };
@@ -733,6 +755,22 @@ describe('given an Across native quote that passes', () => {
     });
   });
 
+  it('when native ETH goes from Base Sepolia to Sepolia with no emitData, then the one call is the deposit to the testnet periphery', async () => {
+    const c = nativeTestnet(false);
+    const deposit = c.body.transactions[0].data;
+
+    const result = await accepted(c);
+
+    expect(result.calls).toEqual([
+      { kind: 'deposit', chainId: 84532, to: TESTNET_PERIPHERY, data: deposit, value: '10000000000000000' },
+    ]);
+    expect(result.quote.appFee).toBe(NATIVE_FEE.toString());
+  });
+
+  it('when the same testnet native quote carries an emitData, then it is refused with message_program', async () => {
+    expect(await outcome(nativeTestnet(true))).toBe('message_program');
+  });
+
   it.each<[string, () => Case]>([
     ['native ETH to Arbitrum WETH with an empty message', nativeToWeth],
     [
@@ -929,6 +967,12 @@ describe('given the native out program [unwrap, fee, drain ETH, drain WETH, emit
 
     expect(await outcome(withEmit(zeroAddress))).toBe('pass');
     expect(await outcome(withEmit(FEE_RECIPIENT))).toBe('message_program');
+  });
+
+  it('when native_eth carries a fee call of 0 wei and an emitData naming the fee recipient, then it is refused with message_program', async () => {
+    const c = withCalls(live('native_eth'), (c) => [c[0], valueCall(0n), c[1], c[2], wethEmit(ACCOUNT)]);
+
+    expect(await outcome(c)).toBe('message_program');
   });
 
   it('when the fallbackRecipient is not zero, then it is refused with message_program', async () => {

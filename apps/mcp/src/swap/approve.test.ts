@@ -11,8 +11,9 @@ import {
 } from '@jaw.id/agent';
 import { eq } from 'drizzle-orm';
 import { encodeFunctionData, erc20Abi, type Address } from 'viem';
-import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { afterAll, afterEach, beforeAll, describe, expect, it } from 'vitest';
 import WebSocket, { WebSocketServer } from 'ws';
+import { config } from '@/connections/config';
 import { setTestEnv } from '@/connections/testkit';
 import { getDb } from '@/db/client';
 import { connections, swaps } from '@/db/schema';
@@ -41,6 +42,9 @@ const { ownerRelay } = await import('@/connections/relay');
 const { approve } = await import('./approve');
 beforeAll(useTestDb);
 afterAll(() => relay.close());
+afterEach(() => {
+  config().swapProviders = new Set(['aurora']);
+});
 
 type Inner = Record<string, unknown>;
 
@@ -76,7 +80,7 @@ const ACCOUNT: Address = '0x1111111111111111111111111111111111111111';
 const USDC: Address = '0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913';
 const DEPOSIT: Address = '0x3333333333333333333333333333333333333333';
 
-async function awaitingOwner(call: SwapRow['call'], approveBy: Date): Promise<SwapRow> {
+async function awaitingOwner(call: SwapRow['call'], approveBy: Date, quote: object = {}): Promise<SwapRow> {
   const connectionId = `con_${randomUUID()}`;
   await getDb()
     .insert(connections)
@@ -115,7 +119,7 @@ async function awaitingOwner(call: SwapRow['call'], approveBy: Date): Promise<Sw
       state: 'awaiting_owner',
       quoteId: `aurora:${depositAddress}`,
       depositAddress,
-      quote: {},
+      quote,
       quoteFenced: '',
       call,
       quotedAt: new Date(),
@@ -176,9 +180,9 @@ describe('the owner session for a swap', () => {
     value: '0',
   };
 
-  async function ownerOpens(call: unknown, state: SwapRow['state'] = 'awaiting_owner') {
+  async function ownerOpens(call: unknown, state: SwapRow['state'] = 'awaiting_owner', quote: object = {}) {
     const approveBy = new Date(Date.now() + 30_000);
-    const row = await awaitingOwner(call as SwapRow['call'], approveBy);
+    const row = await awaitingOwner(call as SwapRow['call'], approveBy, quote);
     await getDb().update(swaps).set({ state }).where(eq(swaps.id, row.id));
     const wallet = await ownerRelay(84532, approveBy);
     const opened = await page(wallet.url, (method) => {
@@ -287,5 +291,42 @@ describe('the owner session for a swap', () => {
 
     expect(requests).toEqual([]);
     expect(after).toMatchObject({ state: 'expired', code: CALL_INVALID, callsId: null });
+  });
+
+  describe('given a provider switched off after the quote', () => {
+    const batch = () => [approval, { kind: 'deposit', ...transfer }];
+
+    it('when the owner opens the link of an Across row, then the wallet is asked nothing and the row is declined with provider_disabled', async () => {
+      const { requests, after } = await ownerOpens(batch(), 'awaiting_owner', { provider: 'across' });
+
+      expect(requests).toEqual([]);
+      expect(after).toMatchObject({ state: 'owner_declined', code: 'provider_disabled', callsId: null });
+    });
+
+    it('when across is enabled again and the owner opens the link of an Across row, then both calls are asked', async () => {
+      config().swapProviders = new Set(['aurora', 'across']);
+
+      const { requests } = await ownerOpens(batch(), 'awaiting_owner', { provider: 'across' });
+
+      expect(sendCallsOf(requests)).toMatchObject([{ calls: [{ data: approval.data }, { data: transfer.data }] }]);
+    });
+
+    it('when the owner opens the link of a Relay row that already expired, then the wallet is asked nothing and the row stays expired with provider_disabled', async () => {
+      config().swapProviders = new Set(['aurora', 'across']);
+
+      const { requests, after } = await ownerOpens(batch(), 'expired', { provider: 'relay' });
+
+      expect(requests).toEqual([]);
+      expect(after).toMatchObject({ state: 'expired', code: 'provider_disabled', callsId: null });
+    });
+
+    it('when aurora is switched off and the owner opens the link of a legacy row, then it is declined with provider_disabled', async () => {
+      config().swapProviders = new Set(['across', 'relay']);
+
+      const { requests, after } = await ownerOpens(transfer);
+
+      expect(requests).toEqual([]);
+      expect(after).toMatchObject({ state: 'owner_declined', code: 'provider_disabled' });
+    });
   });
 });

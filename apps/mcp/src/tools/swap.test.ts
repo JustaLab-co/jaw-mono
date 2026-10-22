@@ -231,6 +231,7 @@ beforeEach(() => {
 afterEach(async () => {
   await getDb().delete(settings).where(eq(settings.key, 'payments_paused'));
   config().swapApiKey = SWAP_KEY;
+  config().swapProviders = new Set(['aurora']);
 });
 
 async function connected(
@@ -1320,7 +1321,9 @@ describe('jaw_swap_status', () => {
     const quoteId = await started(t);
     const row = await rowOf(t);
 
-    await rewrite(row.id, { quote: { ...(row.quote as object), provider: 'across' } });
+    await rewrite(row.id, {
+      quote: { ...(row.quote as object), provider: 'across', deadline: 1_792_710_000, appFee: '0' },
+    });
     const result = await status(t, quoteId);
 
     expect(result.structuredContent).toMatchObject({ quoteId, provider: 'across' });
@@ -1330,7 +1333,9 @@ describe('jaw_swap_status', () => {
     const { t } = await connected();
     const quoteId = await started(t);
     const row = await rowOf(t);
-    await rewrite(row.id, { quote: { ...(row.quote as object), provider: 'across' } });
+    await rewrite(row.id, {
+      quote: { ...(row.quote as object), provider: 'across', deadline: 1_792_710_000, appFee: '0' },
+    });
 
     const unsent = await status(t, quoteId);
     await rewrite(row.id, { state: 'deposit_sent', callsId: '0xcalls' });
@@ -1352,27 +1357,131 @@ describe('jaw_swap_status', () => {
   }
   const pastGrace = sql`statement_timestamp() + interval '1 hour'`;
 
+  const POOL: Address = '0x82B564983aE7274c86695917BBf8C99ECb6F0F8F';
+  const PERIPHERY: Address = '0x10D8b8DaA26d307489803e10477De69C0492B610';
+  const DEPOSITORY: Address = '0x5feab8db4534f9f7e2669bb260c57a01ad1c12e3';
+  const ORDER: Hex = `0x${'0d'.repeat(32)}`;
+  const DEADLINE = 1_792_710_000;
+  const callTo = (to: Address, value = '0') => ({
+    kind: 'deposit' as const,
+    chainId: 84532,
+    to,
+    data: '0x01' as Hex,
+    value,
+  });
+  const approvalOf = (spender: Address) => ({
+    kind: 'approve' as const,
+    chainId: 84532,
+    to: USDC,
+    data: encodeFunctionData({ abi: erc20Abi, functionName: 'approve', args: [spender, 1_000_000n] }),
+    value: '0',
+  });
+  const termsOf = (row: SwapRow, terms: object) => ({
+    quote: { ...(row.quote as object), ...terms, expectedFillTimeSec: 20 },
+  });
+
+  it('given an Across ERC-20 row awaiting the owner, when jaw_swap_status answers, then the summary names the exact approval to the SpokePool, the minimum, the app fee and the refund', async () => {
+    const { t, quoteId, row } = await providerRow('across');
+    await rewrite(row.id, {
+      ...termsOf(row, { provider: 'across', deadline: DEADLINE, appFee: '2500' }),
+      call: [approvalOf(POOL), callTo(POOL)],
+    });
+    const min = (row.quote as { minOutputAmount: string }).minOutputAmount;
+
+    const summary = (await status(t, quoteId)).structuredContent?.summary;
+
+    expect(summary).toBe(
+      `Ask the account owner to open ${row.walletUrl} before ${row.approveBy!.toISOString()} and approve, ` +
+        `in one batch on chain 84532, an approval of exactly 1000000 base units of ${row.originToken} ` +
+        `to the Across SpokePool ${POOL} and the deposit into it. ` +
+        "The owner pays that transaction's gas in the wallet, in USDC where the wallet offers it or in the chain's native coin. " +
+        `Across delivers at least ${min} base units of ${ARB_USDC} on chain 42161 to ${row.recipient}, ` +
+        'after an app fee of 2500 base units, expected in about 20 s; ' +
+        `if no relayer fills it by ${new Date(DEADLINE * 1000).toISOString()}, Across refunds the deposit to the account on chain 84532. ` +
+        `Follow it with jaw_swap_status and ${quoteId}.`
+    );
+    expect(deposits.hits).toEqual([]);
+  });
+
+  it('given an Across native row awaiting the owner, when jaw_swap_status answers, then the summary names one deposit to the periphery and a refund in WETH', async () => {
+    const { t, quoteId, row } = await providerRow('across', {
+      originToken: '0x0000000000000000000000000000000000000000',
+    });
+    await rewrite(row.id, {
+      ...termsOf(row, { provider: 'across', deadline: DEADLINE, appFee: '0' }),
+      call: [callTo(PERIPHERY, '1000000')],
+    });
+
+    const summary = (await status(t, quoteId)).structuredContent?.summary;
+
+    expect(summary).toContain(
+      `and approve, on chain 84532, one deposit of 1000000 base units of the native coin to the Across SpokePoolPeriphery ${PERIPHERY}. `
+    );
+    expect(summary).toContain('Across refunds the deposit as WETH to the account on chain 84532. ');
+  });
+
+  it('given a Relay ERC-20 row awaiting the owner, when jaw_swap_status answers, then the summary names the approval to the Depository, the order and that settlement is Relay protocol trust', async () => {
+    const { t, quoteId, row } = await providerRow('relay');
+    await rewrite(row.id, {
+      ...termsOf(row, { provider: 'relay', deadline: DEADLINE, orderId: ORDER }),
+      call: [approvalOf(DEPOSITORY), callTo(DEPOSITORY)],
+    });
+    const min = (row.quote as { minOutputAmount: string }).minOutputAmount;
+
+    const summary = (await status(t, quoteId)).structuredContent?.summary;
+
+    expect(summary).toBe(
+      `Ask the account owner to open ${row.walletUrl} before ${row.approveBy!.toISOString()} and approve, ` +
+        `in one batch on chain 84532, an approval of exactly 1000000 base units of ${row.originToken} ` +
+        `to the Relay Depository ${DEPOSITORY} and the deposit into it for order ${ORDER}. ` +
+        "The owner pays that transaction's gas in the wallet, in USDC where the wallet offers it or in the chain's native coin. " +
+        `Relay's solver pays at least ${min} base units of ${ARB_USDC} on chain 42161 to ${row.recipient}, expected in about 20 s. ` +
+        "The order is bound to the deposit, but its settlement is enforced by Relay's protocol, not by a contract on chain 42161; " +
+        'unfilled orders refund to the account on chain 84532 or 42161. ' +
+        `Follow it with jaw_swap_status and ${quoteId}.`
+    );
+    expect(deposits.hits).toEqual([]);
+  });
+
   it.each([
     [
-      'across',
-      /approve, in one batch on chain 84532, a deposit of 1000000 base units of \S+ to the Across contract\. /,
+      'an Across ERC-20 row Across let expire',
+      { state: 'submitted', backendState: 'PROCESSING', backendRawState: 'expired' },
+      'Across did not fill the deposit in time and refunds it to the account on chain 84532, which can take hours. ',
     ],
     [
-      'relay',
-      /approve, in one batch on chain 84532, a deposit of 1000000 base units of \S+ to the Relay Depository\. /,
+      'an Across native row Across let expire',
+      {
+        state: 'submitted',
+        backendState: 'PROCESSING',
+        backendRawState: 'expired',
+        originToken: '0x0000000000000000000000000000000000000000',
+      },
+      'Across did not fill the deposit in time and refunds it as WETH to the account on chain 84532, which can take hours. ',
     ],
-  ] as const)(
-    'given a %s row awaiting the owner, when jaw_swap_status answers, then the summary names the provider contract and no deposit address',
-    async (provider, text) => {
-      const { t, quoteId } = await providerRow(provider);
+    [
+      'an Across native row refunded',
+      { state: 'refunded', originToken: '0x0000000000000000000000000000000000000000' },
+      'The swap backend refunded the deposit as WETH to ',
+    ],
+    [
+      'an Across row declined because Across was switched off',
+      { state: 'owner_declined', code: 'provider_disabled' },
+      'This server stopped signing Across quotes after this one was given, so the wallet was asked nothing. Nothing was sent. ',
+    ],
+    [
+      'a Relay row that expired after Relay was switched off',
+      { state: 'expired', code: 'provider_disabled' },
+      'This server stopped signing Relay quotes after this one was given, so the wallet was asked nothing. Nothing was sent. ',
+    ],
+  ] as const)('given %s, when the same key comes again, then the summary says so', async (_, set, text) => {
+    const provider = text.includes('Relay') ? 'relay' : 'across';
+    const { t } = await providerRow(provider, set);
 
-      const summary = (await status(t, quoteId)).structuredContent?.summary;
+    const summary = (await run(t)).structuredContent?.summary;
 
-      expect(summary).toMatch(text);
-      expect(summary).not.toMatch(/deposit address|null/);
-      expect(deposits.hits).toEqual([]);
-    }
-  );
+    expect(summary).toContain(text);
+  });
 
   it('given an aurora row awaiting the owner, when jaw_swap_status answers, then the summary still names the deposit address', async () => {
     const { t } = await connected();
@@ -2320,7 +2429,7 @@ describe('a quote another provider answered', () => {
     }
   );
 
-  it('given a quote from relay, when jaw_swap runs and the same key comes again, then the summary says only Aurora quotes are signed and why is not known, and the replay asks the backend nothing', async () => {
+  it('given a quote from relay, when jaw_swap runs and the same key comes again, then the summary says this server does not sign relay quotes now, and the replay asks the backend nothing', async () => {
     const { t } = await connected();
     backend.answer = relayAnswer;
 
@@ -2329,10 +2438,10 @@ describe('a quote another provider answered', () => {
     const again = await run(t);
 
     const summary = first.structuredContent?.summary;
-    expect(summary).toContain('from relay');
-    expect(summary).toContain('only Aurora quotes');
-    expect(summary).toContain('not known from here');
-    expect(summary).toContain('new idempotencyKey');
+    expect(summary).toBe(
+      'No swap: the quote came from relay, and this server does not sign relay quotes now. Nothing was sent. ' +
+        'Try once more later with a new idempotencyKey; if it repeats, no provider this server signs can quote this swap now.'
+    );
     expect(again.structuredContent).toMatchObject({ refusal: { code: 'quote_unsupported_provider' }, summary });
     expect(backend.hits).toHaveLength(hits);
   });
@@ -2364,7 +2473,28 @@ describe('a quote another provider answered', () => {
 
     const result = await run(t);
 
-    expect(result.structuredContent?.summary).toContain('from another provider');
+    expect(result.structuredContent?.summary).toBe(
+      'No swap: no provider this server signs now quotes this pair, so nothing was asked. Nothing was sent.'
+    );
+  });
+
+  it('given every provider enabled and Across answering a USDC to WETH swap, when jaw_swap runs, then the summary says the route cannot be verified and same-asset bridges work', async () => {
+    const { t } = await connected();
+    config().swapProviders = new Set(['aurora', 'across', 'relay']);
+    backend.answer = acrossAnswer;
+
+    const result = await run(t, {
+      originChainId: 8453,
+      originToken: '0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913',
+      amount: '10000000',
+      destinationToken: '0x82af49447d8a07e3bd95bd0d56f35241523fbab1',
+    });
+
+    expect(result.structuredContent).toMatchObject({ state: 'quote_rejected', refusal: { code: 'route_unsupported' } });
+    expect(result.structuredContent?.summary).toBe(
+      'No swap: the quote is a route this tool cannot verify from calldata (a swap on the origin or destination chain). ' +
+        'Nothing was sent. Same-asset bridges are supported; try the same token on both chains.'
+    );
   });
 });
 

@@ -13,9 +13,14 @@ import { quote, quoteRequestOf, swapRequest, type QuoteDeps, type SwapInput } fr
 import { claimSwap, writeHeld, type SwapRow } from './store';
 import acrossAnswer from './fixtures/prod-across-quote.json';
 import relayAnswer from './fixtures/prod-relay-quote.json';
+import relayUsdc from './fixtures/relay-usdc.json';
+import { relayOrderId } from './check/relay';
 
 const USDC_SEPOLIA: Address = '0x036CbD53842c5426634e7929541eC2318f3dCF7e';
 const ARB_USDC = '0xaf88d065e77c8cc2239327c5edb3a432268e5831';
+const ARB_WETH = '0x82af49447d8a07e3bd95bd0d56f35241523fbab1';
+const BASE_USDC: Address = '0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913';
+const ALL_PROVIDERS = new Set(['aurora', 'across', 'relay'] as const);
 const KEY = 'swap-test-key';
 const SOLANA = 792703809;
 
@@ -42,6 +47,7 @@ const checks = vi.hoisted(() => ({
   code: undefined as string | undefined,
   deps: undefined as CheckDeps | undefined,
   relay: undefined as (() => CheckedQuote) | undefined,
+  pass: undefined as (() => CheckedQuote) | undefined,
 }));
 
 vi.mock('./check', async (original) => {
@@ -51,6 +57,7 @@ vi.mock('./check', async (original) => {
     checkQuote: async (...args: Parameters<typeof real.checkQuote>) => {
       checks.deps = args[2];
       if (checks.code) return { ok: false, code: checks.code };
+      if (checks.pass) return checks.pass();
       if (!checks.relay) return real.checkQuote(...args);
       const passed = checks.relay();
       if (await args[2].isOrderTaken(passed.quote.orderId!)) return { ok: false, code: 'order_reused' };
@@ -162,6 +169,8 @@ beforeEach(() => {
   checks.code = undefined;
   checks.deps = undefined;
   checks.relay = undefined;
+  checks.pass = undefined;
+  config().swapProviders = new Set(['aurora']);
 });
 afterEach(() => vi.restoreAllMocks());
 
@@ -230,6 +239,7 @@ describe('the quote request', () => {
       depositor: t.account.toLowerCase(),
       recipient: t.account.toLowerCase(),
       tradeType: 'EXACT_INPUT',
+      providers: 'aurora',
     });
     expect(hit.apiKey).toBe(KEY);
     expect(hit.url.href).not.toContain(KEY);
@@ -257,7 +267,61 @@ describe('the quote request', () => {
       recipient,
       tradeType: 'EXACT_INPUT',
     });
+    expect(hit.url.searchParams.has('providers')).toBe(false);
     expect(hit.apiKey).toBe(KEY);
+  });
+});
+
+describe('the providers the quote asks for', () => {
+  const toWeth = { ...input, destinationToken: ARB_WETH };
+  const asked = () => backend.hits.map((hit) => hit.url.searchParams.get('providers'));
+
+  it('given aurora, across and relay enabled and USDC to USDC, when the quote is asked, then it asks all three', async () => {
+    config().swapProviders = ALL_PROVIDERS;
+
+    await quoted(await connected());
+
+    expect(asked()).toEqual(['aurora,across,relay']);
+  });
+
+  it('given aurora, across and relay enabled and USDC to WETH, when the quote is asked, then it asks aurora alone', async () => {
+    config().swapProviders = ALL_PROVIDERS;
+    const t = await connected();
+
+    await quote(t, await claimed(t, 'agent-key', toWeth), deps());
+
+    expect(asked()).toEqual(['aurora']);
+  });
+
+  it('given across and relay enabled without aurora and USDC to WETH, when the quote is asked, then nothing is asked and the swap is quote_rejected with quote_unsupported_provider', async () => {
+    config().swapProviders = new Set(['across', 'relay']);
+    const t = await connected();
+
+    const step = await quote(t, await claimed(t, 'agent-key', toWeth), deps());
+
+    expect(backend.hits).toEqual([]);
+    expect(step).toMatchObject({
+      kind: 'done',
+      row: { state: 'quote_rejected', code: 'quote_unsupported_provider', quote: null, call: null },
+    });
+  });
+
+  it('given every provider enabled and a backend that ignores the filter, when Across answers a USDC to WETH swap, then quote_rejected with route_unsupported', async () => {
+    config().swapProviders = ALL_PROVIDERS;
+    backend.answer = acrossAnswer;
+    const t = await connected();
+    const swap = {
+      ...input,
+      originChainId: 8453,
+      originToken: BASE_USDC,
+      amount: '10000000',
+      destinationToken: ARB_WETH,
+    };
+
+    const step = await quote(t, await claimed(t, 'agent-key', swap), deps());
+
+    expect(asked()).toEqual(['aurora']);
+    expect(step).toMatchObject({ row: { state: 'quote_rejected', code: 'route_unsupported', call: null } });
   });
 });
 
@@ -657,6 +721,45 @@ describe('deposit addresses raced', () => {
   });
 });
 
+describe('quote ids raced', () => {
+  const passing = (provider: 'aurora' | 'across', quoteId: string, depositAddress?: Address): CheckedQuote => ({
+    ok: true,
+    quoteId,
+    depositAddress,
+    calls: [],
+    quote: {
+      provider,
+      inputAmount: '1000000',
+      expectedOutputAmount: '990000',
+      minOutputAmount: '980000',
+      expectedFillTimeSec: 20,
+    },
+  });
+  const randomAddress = () => getAddress(`0x${keccak256(toHex(String(Math.random()))).slice(-40)}`);
+
+  it('given an Across quote id another swap already holds, when the quote is kept, then quote_rejected with quote_reused', async () => {
+    const quoteId = `across:${keccak256(toHex(String(Math.random()))).slice(2, 34)}`;
+    checks.pass = () => passing('across', quoteId);
+
+    const first = await quoted(await connected());
+    const second = await quoted(await connected());
+
+    expect(first.row).toMatchObject({ state: 'quoting', quoteId });
+    expect(second.row).toMatchObject({ state: 'quote_rejected', code: 'quote_reused', quoteId: null, quote: null });
+  });
+
+  it('given an Aurora quote id another swap already holds, when the quote is kept, then it stays deposit_address_reused', async () => {
+    const quoteId = `aurora:${randomAddress()}`;
+    const deposits = [randomAddress(), randomAddress()];
+    checks.pass = () => passing('aurora', quoteId, deposits.pop());
+
+    await quoted(await connected());
+    const second = await quoted(await connected());
+
+    expect(second.row).toMatchObject({ state: 'quote_rejected', code: 'deposit_address_reused', quoteId: null });
+  });
+});
+
 describe('Relay orders raced', () => {
   const relayQuote = (orderId: Hex): CheckedQuote => ({
     ok: true,
@@ -749,6 +852,41 @@ describe('the checks the quote runs', () => {
       ]);
     }
   );
+
+  function driftedRelay(account: Address) {
+    const ours = JSON.stringify(relayUsdc).replaceAll(/6ca44a56b06869530c953dfa7868973be1456769/gi, account.slice(2));
+    const answer = JSON.parse(ours) as typeof relayUsdc;
+    const order = answer.result.data.relayOrder.orderData;
+    const deadline = Math.floor(Date.now() / 1000) + 3600;
+    order.solver = '0x3333333333333333333333333333333333333333';
+    order.output.deadline = deadline;
+    for (const refund of order.inputs[0].refunds) refund.deadline = deadline;
+    answer.result.data.relayOrder.orderId = relayOrderId(order)!;
+    return answer;
+  }
+
+  it('given relay enabled and a Relay quote from a solver missing from the allowlist, when the quote is asked, then the real checks refuse it with solver_unknown and a warning names relay and the chains', async () => {
+    const logged = vi.spyOn(console, 'log').mockImplementation(() => undefined);
+    config().swapProviders = ALL_PROVIDERS;
+    const t = await connected();
+    backend.answer = driftedRelay(t.account);
+    const swap = { ...input, originChainId: 8453, originToken: BASE_USDC, amount: '10000000' };
+
+    const step = await quote(t, await claimed(t, 'agent-key', swap), deps());
+
+    expect(step).toMatchObject({ row: { state: 'quote_rejected', code: 'solver_unknown', call: null } });
+    expect(warnings(logged)).toEqual([
+      {
+        level: 'warn',
+        time: expect.any(String),
+        msg: 'swap quote refused on allowlist drift',
+        provider: 'relay',
+        originChainId: 8453,
+        destinationChainId: 42161,
+        code: 'solver_unknown',
+      },
+    ]);
+  });
 
   it('given the checks refuse the quote with tx_to, when the quote is asked, then no warning is logged', async () => {
     const logged = vi.spyOn(console, 'log').mockImplementation(() => undefined);

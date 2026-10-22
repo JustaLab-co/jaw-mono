@@ -1,5 +1,6 @@
 import { base, baseSepolia, type Chain } from 'viem/chains';
 import { refusal } from '@/lib/safe-fetch';
+import type { Provider } from '@/swap/check';
 import { parseKeyRing, type KeyRing } from './seal';
 
 export const SUPPORTED_CHAINS: Readonly<Record<number, Chain>> = { [base.id]: base, [baseSepolia.id]: baseSepolia };
@@ -22,6 +23,7 @@ export interface Config {
   /** Sent as x-api-key on swap quotes; the backend lists it in X402_ALLOWED_API_KEYS so a quote costs nothing. */
   swapApiKey: string | undefined;
   swapQuoteTtlSec: number;
+  swapProviders: ReadonlySet<Provider>;
   ring: KeyRing;
 }
 
@@ -54,6 +56,7 @@ export function config(): Config {
     swapUrl: swapUrl(process.env.JAW_MCP_SWAP_URL || 'https://api.justaname.id/proxy/v2', insecureFetchHosts),
     swapApiKey: process.env.JAW_MCP_SWAP_API_KEY || undefined,
     swapQuoteTtlSec: quoteTtl(process.env.JAW_MCP_SWAP_QUOTE_TTL_SEC || '300'),
+    swapProviders: swapProviders(process.env.JAW_MCP_SWAP_PROVIDERS || 'aurora'),
     ring: parseKeyRing(process.env.JAW_MCP_SEALING_KEYS),
   };
   return cached;
@@ -105,4 +108,14 @@ function swapUrl(value: string, insecureFetchHosts: ReadonlySet<string>): string
     throw new Error(`JAW_MCP_SWAP_URL is refused, its host is local: ${allowed}`);
   }
   return value.replace(/\/+$/, '');
+}
+
+const PROVIDERS: readonly Provider[] = ['aurora', 'across', 'relay'];
+
+function swapProviders(value: string): ReadonlySet<Provider> {
+  const names = value.split(',');
+  if (!names.every((name) => (PROVIDERS as readonly string[]).includes(name))) {
+    throw new Error('JAW_MCP_SWAP_PROVIDERS must be a comma list of aurora, across and relay, such as aurora');
+  }
+  return new Set(PROVIDERS.filter((provider) => names.includes(provider)));
 }

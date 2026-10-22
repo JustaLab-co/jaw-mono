@@ -1,6 +1,7 @@
 import { setTimeout as sleep } from 'node:timers/promises';
 import { isAddressEqual, toHex, type Address } from 'viem';
 import { z } from 'zod';
+import { config } from '@/connections/config';
 import type { Ask } from '@/connections/relay';
 import { refusedBeforeSubmit, USER_REJECTED } from '@/connections/wallet-codes';
 import { errorLabel, log } from '@/lib/edge';
@@ -17,7 +18,9 @@ import {
   recordTxHash,
   type SwapRow,
 } from './store';
-import { submit } from './track';
+import { providerOf, submit } from './track';
+
+export const PROVIDER_DISABLED = 'provider_disabled';
 
 const POLL_MS = 2_000;
 const PENDING = 100;
@@ -51,6 +54,10 @@ export async function approve(
   const calls = callsOf(row);
   if (!calls) {
     await decline(row, CALL_INVALID);
+    return;
+  }
+  if (!config().swapProviders.has(providerOf(row))) {
+    await decline(row, PROVIDER_DISABLED);
     return;
   }
   let accounts: unknown;

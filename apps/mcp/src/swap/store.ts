@@ -316,6 +316,10 @@ export function depositAddressReused(err: unknown): boolean {
   return DEPOSIT_ADDRESS_KEYS.has(uniqueKeyOf(err) ?? '');
 }
 
+export function quoteIdReused(err: unknown): boolean {
+  return uniqueKeyOf(err) === 'swaps_quote_id_unique';
+}
+
 export function orderReused(err: unknown): boolean {
   return uniqueKeyOf(err) === SWAP_ORDER_ID_INDEX;
 }
