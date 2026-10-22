@@ -16,6 +16,14 @@ const {
   erc20Abi,
   getAddress,
   keccak256,
+  encodeAbiParameters,
+  parseAbi,
+  parseAbiParameters,
+  pad,
+  hashStruct,
+  maxUint256,
+  zeroAddress,
+  zeroHash,
 } = req_('viem');
 const { baseSepolia } = req_('viem/chains');
 // Smart-account signatures (ERC-1271, ERC-6492) need the chain; plain ECDSA does not.
@@ -161,12 +169,24 @@ const HEX_ADDRESS = /^0x[0-9a-fA-F]{40}$/;
 const POSITIVE = /^[1-9][0-9]*$/;
 const BASE58 = /^[1-9A-HJ-NP-Za-km-z]{32,44}$/;
 const SOLANA = '792703809';
-const PROD_QUOTES = Object.fromEntries(
-  ['across', 'relay'].map((p) => [
-    p,
-    fs.readFileSync(`${repo}/apps/mcp/src/swap/fixtures/prod-${p}-quote.json`, 'utf8'),
-  ])
-);
+const fixture = (name) => fs.readFileSync(`${repo}/apps/mcp/src/swap/fixtures/${name}.json`, 'utf8');
+const PROD_QUOTES = { 'across-prod': fixture('prod-across-quote'), 'relay-prod': fixture('prod-relay-quote') };
+const TEMPLATES = {
+  across: { erc20: JSON.parse(fixture('across-usdc-fee')), native: JSON.parse(fixture('across-native-fee')) },
+  relay: {
+    erc20: JSON.parse(fixture('relay-usdc-fee')).result.data,
+    native: JSON.parse(fixture('relay-native')).result.data,
+  },
+};
+const ts = req_('typescript');
+const allowlist = ts.transpileModule(fs.readFileSync(`${repo}/apps/mcp/src/swap/allowlist.ts`, 'utf8'), {
+  compilerOptions: { module: ts.ModuleKind.ESNext, target: ts.ScriptTarget.ES2022 },
+}).outputText;
+const { ALLOWLIST, APP_FEE } = await import(`data:text/javascript;base64,${Buffer.from(allowlist).toString('base64')}`);
+const PROVIDERS = ['aurora', 'across', 'relay'];
+const REQUEST_ID = /^0x[0-9a-fA-F]{64}$/;
+const DEPOSIT_ID = /^(0|[1-9][0-9]{0,77})$/;
+const FOREIGN_TX = '0x' + 'ef'.repeat(32);
 const KNOWN_STATES = new Set([
   'PENDING_DEPOSIT',
   'KNOWN_DEPOSIT_TX',
@@ -205,6 +225,225 @@ const QUOTE_TAMPERS = {
   'output-amount': (q) => (q.minOutputAmount = String(BigInt(q.expectedOutputAmount) + 1n)),
   'zero-min': (q) => (q.minOutputAmount = '0'),
 };
+
+const ACROSS_ABI = parseAbi([
+  'function deposit(bytes32 depositor, bytes32 recipient, bytes32 inputToken, bytes32 outputToken, uint256 inputAmount, uint256 outputAmount, uint256 destinationChainId, bytes32 exclusiveRelayer, uint32 quoteTimestamp, uint32 fillDeadline, uint32 exclusivityParameter, bytes message)',
+  'function depositNative(address spokePool, address depositor, bytes32 recipient, address inputToken, uint256 inputAmount, bytes32 outputToken, uint256 outputAmount, uint256 destinationChainId, bytes32 exclusiveRelayer, uint32 quoteTimestamp, uint32 fillDeadline, uint32 exclusivityParameter, bytes message)',
+  'function drainLeftoverTokens(address token, address destination)',
+  'function makeCallWithBalance(address target, bytes callData, uint256 value, (address token, uint256 offset)[] replacement)',
+  'function withdraw(uint256 wad)',
+  'function emitData(bytes data)',
+]);
+const INSTRUCTIONS = parseAbiParameters(
+  '((address target, bytes callData, uint256 value)[] calls, address fallbackRecipient)'
+);
+const METADATA = parseAbiParameters(
+  'uint8, uint8, uint8, address, uint256, uint256, uint256, uint256, string, uint256, bool, address, address'
+);
+const DEPOSITORY_ABI = parseAbi([
+  'function depositNative(address depositor, bytes32 id)',
+  'function depositErc20(address depositor, address token, uint256 amount, bytes32 id)',
+]);
+const fields = (list) =>
+  list.split(', ').map((f) => {
+    const [type, name] = f.split(' ');
+    return { name, type };
+  });
+const ORDER_TYPES = {
+  Order: fields(
+    'string version, string solverChainId, address solver, uint256 salt, Input[] inputs, Output output, Fee[] fees'
+  ),
+  Input: fields('InputPayment payment, InputRefund[] refunds'),
+  InputPayment: fields('string chainId, bytes currency, uint256 amount, uint256 weight'),
+  InputRefund: fields(
+    'string chainId, bytes recipient, bytes currency, uint256 minimumAmount, uint32 deadline, bytes extraData'
+  ),
+  Output: fields('string chainId, OutputPayment[] payments, uint32 deadline, bytes[] calls, bytes extraData'),
+  OutputPayment: fields('bytes recipient, bytes currency, uint256 minimumAmount, uint256 expectedAmount'),
+  Fee: fields('string recipientChainId, bytes recipient, string currencyChainId, bytes currency, uint256 amount'),
+};
+const UINT_FIELDS = new Set(['salt', 'amount', 'weight', 'minimumAmount', 'expectedAmount']);
+const orderId = (order) =>
+  hashStruct({
+    types: ORDER_TYPES,
+    primaryType: 'Order',
+    data: JSON.parse(JSON.stringify(order), (k, v) => (UINT_FIELDS.has(k) ? BigInt(v) : v)),
+  });
+
+const word = (address) => pad(address.toLowerCase(), { size: 32 });
+const across = (functionName, args) => encodeFunctionData({ abi: ACROSS_ABI, functionName, args });
+const erc20 = (functionName, args) => encodeFunctionData({ abi: erc20Abi, functionName, args });
+const nowSec = () => Math.floor(Date.now() / 1000);
+const scaled = (amount, template, field) => (amount * BigInt(template[field])) / BigInt(template.inputAmount);
+
+function acrossQuote(query) {
+  const origin = ALLOWLIST[query.originChainId]?.across;
+  const dest = ALLOWLIST[query.destinationChainId]?.across;
+  if (!origin || !dest) return null;
+  const chainId = Number(query.originChainId);
+  const amount = BigInt(query.amount);
+  const nativeIn = BigInt(query.originToken) === 0n;
+  const template = TEMPLATES.across[nativeIn ? 'native' : 'erc20'];
+  const min = scaled(amount, template, 'minOutputAmount');
+  const fee = (min * APP_FEE.maxBps) / (10_000n - APP_FEE.maxBps);
+  const recipient = getAddress(query.recipient);
+  const nativeOut = BigInt(query.destinationToken) === 0n;
+  const tokenOut = nativeOut ? dest.wrappedNative : getAddress(query.destinationToken);
+  const handler = dest.multicallHandler;
+  const drain = (token) => ({
+    target: handler,
+    callData: across('drainLeftoverTokens', [token, recipient]),
+    value: 0n,
+  });
+  const unwrap = across('makeCallWithBalance', [
+    tokenOut,
+    across('withdraw', [0n]),
+    0n,
+    [{ token: tokenOut, offset: 4n }],
+  ]);
+  const calls = nativeOut
+    ? [
+        { target: handler, callData: unwrap, value: 0n },
+        { target: APP_FEE.recipient, callData: '0x', value: fee },
+        drain(zeroAddress),
+        drain(tokenOut),
+      ]
+    : [
+        { target: tokenOut, callData: erc20('transfer', [APP_FEE.recipient, fee]), value: 0n },
+        drain(tokenOut),
+        drain(tokenOut),
+      ];
+  if (dest.eventEmitter) {
+    const metadata = [1, 0, 1, tokenOut, 0n, 0n, 0n, 0n, 'none', 0n, true, recipient, APP_FEE.recipient];
+    const data = across('emitData', [encodeAbiParameters(METADATA, metadata)]);
+    calls.push({ target: dest.eventEmitter, callData: data, value: 0n });
+  }
+  const message = encodeAbiParameters(INSTRUCTIONS, [{ calls, fallbackRecipient: zeroAddress }]);
+  const destination = BigInt(query.destinationChainId);
+  const timing = [zeroHash, nowSec() - 30, nowSec() + 7200, 0, message];
+  const deposit = nativeIn
+    ? across('depositNative', [
+        origin.spokePool,
+        getAddress(query.depositor),
+        word(handler),
+        origin.wrappedNative,
+        amount,
+        word(tokenOut),
+        min + fee,
+        destination,
+        ...timing,
+      ])
+    : across('deposit', [
+        word(query.depositor),
+        word(handler),
+        word(query.originToken),
+        word(tokenOut),
+        amount,
+        min + fee,
+        destination,
+        ...timing,
+      ]);
+  const approve = {
+    chainId,
+    to: getAddress(query.originToken),
+    data: erc20('approve', [origin.spokePool, maxUint256]),
+  };
+  return {
+    quoteId: `across:stub-${Date.now()}-${randomBytes(6).toString('hex')}`,
+    provider: 'across',
+    inputAmount: query.amount,
+    expectedOutputAmount: String(min),
+    minOutputAmount: String(min),
+    expectedFillTimeSec: template.expectedFillTime,
+    fees: { totalUsd: template.fees.total.amountUsd },
+    transactions: [
+      ...(nativeIn ? [] : [{ ...approve, value: '0' }]),
+      {
+        chainId,
+        to: nativeIn ? origin.periphery : origin.spokePool,
+        data: `${deposit}73c0de`,
+        value: nativeIn ? query.amount : '0',
+      },
+    ],
+  };
+}
+
+function relayQuote(query, mode) {
+  const from = ALLOWLIST[query.originChainId]?.relay;
+  const to = ALLOWLIST[query.destinationChainId]?.relay;
+  if (!from || !to) return null;
+  const chainId = Number(query.originChainId);
+  const amount = BigInt(query.amount);
+  const native = BigInt(query.originToken) === 0n;
+  const template = TEMPLATES.relay[native ? 'native' : 'erc20'];
+  const account = query.depositor.toLowerCase();
+  const deadline = nowSec() + 7 * 86_400;
+  const router = (relay) => pad(relay.erc20Router.toLowerCase());
+  const refund = (relay, currency) => ({
+    chainId: relay.protocolChain,
+    recipient: account,
+    currency: currency.toLowerCase(),
+    minimumAmount: '0',
+    deadline,
+    extraData: router(relay),
+  });
+  const orderData = {
+    version: 'v1',
+    solverChainId: from.protocolChain,
+    solver: mode === 'relay-solver' ? OTHER : from.solvers[0].toLowerCase(),
+    salt: `0x${randomBytes(32).toString('hex')}`,
+    inputs: [
+      {
+        payment: {
+          chainId: from.protocolChain,
+          currency: query.originToken.toLowerCase(),
+          amount: query.amount,
+          weight: '1',
+        },
+        refunds: [refund(from, query.originToken), refund(to, query.destinationToken)],
+      },
+    ],
+    output: {
+      chainId: to.protocolChain,
+      payments: [
+        {
+          recipient: query.recipient.toLowerCase(),
+          currency: query.destinationToken.toLowerCase(),
+          minimumAmount: String(scaled(amount, template, 'minOutputAmount')),
+          expectedAmount: String(scaled(amount, template, 'expectedOutputAmount')),
+        },
+      ],
+      calls: [],
+      deadline,
+      extraData: mode === 'relay-router' ? pad(OTHER) : router(to),
+    },
+    fees: [],
+  };
+  const id = orderId(orderData);
+  const depositor = getAddress(query.depositor);
+  const data = native
+    ? encodeFunctionData({ abi: DEPOSITORY_ABI, functionName: 'depositNative', args: [depositor, id] })
+    : encodeFunctionData({
+        abi: DEPOSITORY_ABI,
+        functionName: 'depositErc20',
+        args: [depositor, getAddress(query.originToken), amount, id],
+      });
+  const approve = { chainId, to: getAddress(query.originToken), data: erc20('approve', [from.depository, amount]) };
+  return {
+    quoteId: `relay:0x${randomBytes(32).toString('hex')}`,
+    provider: 'relay',
+    inputAmount: query.amount,
+    expectedOutputAmount: orderData.output.payments[0].expectedAmount,
+    minOutputAmount: orderData.output.payments[0].minimumAmount,
+    expectedFillTimeSec: template.expectedFillTimeSec,
+    fees: template.fees,
+    transactions: [
+      ...(native ? [] : [{ ...approve, value: '0' }]),
+      { chainId, to: from.depository.toLowerCase(), data, value: native ? query.amount : '0' },
+    ],
+    relayOrder: { orderId: id, orderData },
+  };
+}
 const MODES = new Set([
   '',
   '422',
@@ -214,11 +453,24 @@ const MODES = new Set([
   'input-amount',
   'deposit-self',
   'reused',
+  'across',
+  'relay',
+  'relay-solver',
+  'relay-router',
   ...Object.keys(PROD_QUOTES),
   ...Object.keys(QUOTE_TAMPERS),
 ]);
 
-const freshSwap = () => ({ mode: '', network: SEPOLIA, submitFails: 0, pinned: '', lastDeposit: null });
+const freshSwap = () => ({
+  mode: '',
+  network: SEPOLIA,
+  submitFails: 0,
+  pinned: '',
+  rawState: '',
+  deposit: '',
+  filter: '',
+  lastDeposit: null,
+});
 const swap = freshSwap();
 const quoteRoute = { scheme: 'exact', amount: '5000', spent: new Set() };
 // The backend's X402_ALLOWED_API_KEYS: a request with this x-api-key gets the quote with no payment.
@@ -232,8 +484,8 @@ const answer = (res, status, data, error, headers = {}, statusCode = status) =>
     .writeHead(status, { 'content-type': 'application/json', ...headers })
     .end(JSON.stringify({ statusCode, result: { data, error } }));
 
-function track(address) {
-  const key = address.toLowerCase();
+function track(id) {
+  const key = id.toLowerCase();
   if (!deposits.has(key)) deposits.set(key, { reads: 0, pinned: '', txHash: null, expired: false });
   return deposits.get(key);
 }
@@ -254,14 +506,35 @@ function quoteErrors(q, { solana = false } = {}) {
   return errors;
 }
 
-function depositErrors(d, withHash) {
+function depositErrors(d, provider, withHash) {
   const errors = [];
-  if (typeof d.provider !== 'string' || !/^[a-z0-9-]{1,32}$/i.test(d.provider))
-    errors.push('provider must be a short alphanumeric identifier');
-  if (!HEX_ADDRESS.test(d.depositAddress ?? ''))
+  if (!/^[a-z0-9-]{1,32}$/.test(provider)) errors.push('provider must be a short alphanumeric identifier');
+  if (provider === 'aurora' && !HEX_ADDRESS.test(d.depositAddress ?? ''))
     errors.push('depositAddress must be an EVM or a base58 Solana address');
+  if (provider === 'relay' && !REQUEST_ID.test(d.requestId ?? ''))
+    errors.push('requestId must be a 32-byte hex string');
+  const needsChain = provider === 'across' || (provider === 'relay' && withHash);
+  if (needsChain && !POSITIVE.test(String(d.originChainId ?? '')))
+    errors.push('originChainId must be a positive integer');
+  if (provider === 'across' && !DEPOSIT_ID.test(String(d.depositId ?? '')))
+    errors.push('depositId must be a decimal integer of at most 78 digits');
   if (withHash && !/^0x[0-9a-fA-F]{64}$/.test(d.txHash ?? '')) errors.push('txHash must be a 32-byte hex string');
   return errors;
+}
+
+function keyOf(d, provider) {
+  if (provider === 'relay') return { key: d.requestId, echo: { requestId: d.requestId.toLowerCase() } };
+  if (provider === 'across') {
+    const echo = { originChainId: Number(d.originChainId), depositId: String(d.depositId) };
+    return { key: `${echo.originChainId}:${echo.depositId}`, echo };
+  }
+  return { key: d.depositAddress, echo: { depositAddress: getAddress(d.depositAddress) } };
+}
+
+function mismatched(echo) {
+  if (echo.requestId) return { requestId: `${echo.requestId.slice(0, -1)}${echo.requestId.endsWith('0') ? '1' : '0'}` };
+  if (echo.depositId) return { ...echo, depositId: String(BigInt(echo.depositId) + 1n) };
+  return { depositAddress: getAddress(OTHER) };
 }
 
 // What aurora-move-asset.mapper.ts builds for an EVM origin.
@@ -339,9 +612,18 @@ async function quote(req, res, url) {
   answer(res, out.status, out.data, out.error, out.headers);
 }
 
+function providersOf(raw) {
+  if (raw === null) return null;
+  const list = raw.toLowerCase().split(',');
+  if (list.some((p) => !PROVIDERS.includes(p)) || new Set(list).size !== list.length) return undefined;
+  return list;
+}
+
 function moveQuote(res, url) {
   const query = Object.fromEntries(url.searchParams);
   const errors = quoteErrors(query);
+  const providers = providersOf(url.searchParams.get('providers'));
+  if (providers === undefined) errors.push('providers must be a comma-separated list of aurora, across, relay');
   if (errors.length) {
     log({ path: MOVE_QUOTE, event: 'refused', status: 400 });
     return answer(res, 400, null, errors);
@@ -350,28 +632,57 @@ function moveQuote(res, url) {
     log({ path: MOVE_QUOTE, event: 'refused', status: Number(swap.mode) });
     return answer(res, Number(swap.mode), null, NO_PROVIDER[swap.mode]);
   }
-  const other = PROD_QUOTES[swap.mode];
-  if (other) {
-    log({ path: MOVE_QUOTE, event: 'quote', mode: swap.mode });
-    return res.writeHead(200, { 'content-type': 'application/json' }).end(other);
+  const { mode } = swap;
+  const own = PROVIDERS.find((p) => p !== 'aurora' && mode.startsWith(p)) ?? 'aurora';
+  const listed = (p) => providers === null || swap.filter === 'off' || providers.includes(p);
+  const provider = [own, 'aurora'].find(listed);
+  const row = { path: MOVE_QUOTE, event: 'quote', mode, provider, providers: url.searchParams.get('providers') };
+  if (!provider) {
+    log({ ...row, event: 'refused', status: 422 });
+    return answer(res, 422, null, `NoProviderAvailable: ${providers.map((p) => `${p}=not enabled`).join(', ')}`);
   }
-  const out = paidQuote(query, `0x${randomBytes(32).toString('hex')}`);
-  log({ path: MOVE_QUOTE, event: 'quote', mode: swap.mode, quoteId: out.data?.quoteId ?? null });
-  answer(res, out.status, out.data, out.error);
+  if (provider === 'aurora') {
+    const out = paidQuote(query, `0x${randomBytes(32).toString('hex')}`);
+    log({ ...row, quoteId: out.data?.quoteId ?? null });
+    return answer(res, out.status, out.data, out.error);
+  }
+  if (PROD_QUOTES[mode]) {
+    log(row);
+    return res.writeHead(200, { 'content-type': 'application/json' }).end(PROD_QUOTES[mode]);
+  }
+  const data = provider === 'across' ? acrossQuote(query) : relayQuote(query, mode);
+  if (!data) {
+    log({ ...row, event: 'refused', status: 422 });
+    return answer(res, 422, null, `NoProviderAvailable: ${provider}=chain not supported`);
+  }
+  log({ ...row, quoteId: data.quoteId });
+  answer(res, 200, data, null);
 }
 
-function depositStatus(address, t, raw) {
+function depositStatus(provider, echo, t, raw) {
   const upper = raw.toUpperCase();
   let state = 'PROCESSING';
+  let rawState = swap.rawState;
   if (KNOWN_STATES.has(upper)) state = upper;
   else if (raw.trim() === '') state = 'PENDING_DEPOSIT';
-  const data = { provider: 'aurora', depositAddress: getAddress(address), state };
-  if (t.txHash) data.txHash = t.txHash;
-  if (state === 'PROCESSING' && !KNOWN_STATES.has(upper)) data.rawState = raw;
+  else rawState = raw;
+  if (state === 'PENDING_DEPOSIT' && provider === 'across') rawState = 'not_found';
+  if (state === 'PENDING_DEPOSIT' && provider === 'relay' && swap.deposit === 'unknown') rawState = 'unknown';
+  let txHash = t.txHash;
+  if (swap.deposit === 'foreign-hash' && state !== 'PENDING_DEPOSIT') txHash = FOREIGN_TX;
+  if (rawState === 'no_tx' || (provider !== 'aurora' && state === 'PENDING_DEPOSIT')) txHash = null;
+  if (provider !== 'aurora' && state !== 'PENDING_DEPOSIT' && !txHash) {
+    state = 'PROCESSING';
+    rawState = 'no_tx';
+  }
+  const data = { provider, ...(swap.deposit === 'echo' ? mismatched(echo) : echo), state };
+  if (txHash) data.txHash = txHash;
+  if (rawState) data.rawState = rawState;
   return data;
 }
 
 function readState(t) {
+  if (swap.deposit === 'unknown') return '';
   if (t.pinned || swap.pinned) return t.pinned || swap.pinned;
   if (!t.txHash) return '';
   return AFTER_SUBMIT[Math.min(t.reads++, AFTER_SUBMIT.length - 1)];
@@ -388,12 +699,13 @@ async function deposit(req, res, url, path) {
       input = {};
     }
   }
-  const errors = depositErrors(input, path === SUBMIT);
+  const provider = typeof input.provider === 'string' ? input.provider.trim().toLowerCase() : '';
+  const errors = depositErrors(input, provider, path === SUBMIT);
   if (errors.length) {
     log({ path, event: 'refused', status: 400 });
     return answer(res, 400, null, errors);
   }
-  if (input.provider.trim().toLowerCase() !== 'aurora') {
+  if (!PROVIDERS.includes(provider)) {
     log({ path, event: 'refused', status: 501 });
     return answer(
       res,
@@ -402,25 +714,28 @@ async function deposit(req, res, url, path) {
       `ProviderNotTrackable: ${input.provider}: provider does not support deposit tracking`
     );
   }
-  const t = track(input.depositAddress);
+  const { key, echo } = keyOf(input, provider);
+  const t = track(key);
   if (path === STATUS) {
-    const data = depositStatus(input.depositAddress, t, readState(t));
-    log({ path, event: 'status', depositAddress: data.depositAddress, state: data.state });
+    const data = depositStatus(provider, echo, t, readState(t));
+    log({ path, event: 'status', provider, ...echo, state: data.state });
     return answer(res, 200, data, null);
   }
-  // Aurora refusing a submit reaches the caller as Nest's default 500: the
-  // backend has no filter for that error.
   if (t.expired || swap.submitFails > 0) {
     if (!t.expired) swap.submitFails--;
-    log({ path, event: 'submit', depositAddress: input.depositAddress, status: 500, expired: t.expired });
+    log({ path, event: 'submit', provider, ...echo, status: provider === 'aurora' ? 500 : 502, expired: t.expired });
+    if (provider !== 'aurora') return answer(res, 502, null, `ProviderQuoteInvalid[${provider}]: upstream failed`);
+    // Aurora refusing a submit reaches the caller as Nest's default 500: the
+    // backend has no filter for that error.
     return res
       .writeHead(500, { 'content-type': 'application/json' })
       .end(JSON.stringify({ statusCode: 500, message: 'Internal server error' }));
   }
   t.txHash = input.txHash;
   t.reads = 0;
-  const data = depositStatus(input.depositAddress, t, t.pinned || swap.pinned || 'KNOWN_DEPOSIT_TX');
-  log({ path, event: 'submit', depositAddress: data.depositAddress, txHash: t.txHash, status: 200 });
+  const first = provider === 'across' ? 'PROCESSING' : 'KNOWN_DEPOSIT_TX';
+  const data = depositStatus(provider, echo, t, swap.deposit === 'unknown' ? '' : t.pinned || swap.pinned || first);
+  log({ path, event: 'submit', provider, ...echo, txHash: t.txHash, state: data.state, status: 200 });
   answer(res, 201, data, null, {}, 200);
 }
 
@@ -430,10 +745,14 @@ function control(url) {
   if (p.has('mode') && !MODES.has(p.get('mode'))) return false;
   if (p.get('network') && !/^eip155:[1-9][0-9]*$/.test(p.get('network'))) return false;
   if (p.has('submitFails') && !/^\d+$/.test(p.get('submitFails'))) return false;
+  if (p.has('rawState') && !/^[A-Za-z0-9_-]{0,64}$/.test(p.get('rawState'))) return false;
+  if (p.has('deposit') && !['', 'echo', 'foreign-hash', 'unknown'].includes(p.get('deposit'))) return false;
+  if (p.has('filter') && !['', 'off'].includes(p.get('filter'))) return false;
   if (address !== null && !HEX_ADDRESS.test(address)) return false;
   if (p.has('mode')) swap.mode = p.get('mode');
   if (p.has('network')) swap.network = p.get('network') || SEPOLIA;
   if (p.has('submitFails')) swap.submitFails = Number(p.get('submitFails'));
+  for (const k of ['rawState', 'deposit', 'filter']) if (p.has(k)) swap[k] = p.get(k);
   if (p.has('state') && p.has('depositAddress')) track(address).pinned = p.get('state');
   else if (p.has('state')) swap.pinned = p.get('state');
   if (p.has('expire')) track(address).expired = true;

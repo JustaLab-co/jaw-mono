@@ -1,6 +1,6 @@
 import { test, before, after } from 'node:test';
 import assert from 'node:assert/strict';
-import { spawn } from 'node:child_process';
+import { spawn, spawnSync } from 'node:child_process';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -109,6 +109,7 @@ async function proof(nonce = toHex(crypto.getRandomValues(new Uint8Array(32)))) 
   return { header: b64({ x402Version: 2, payload: { authorization, signature } }), nonce };
 }
 
+const randomHex = () => toHex(crypto.getRandomValues(new Uint8Array(32))).slice(2);
 const depositFor = (nonce) => getAddress('0x' + keccak256(nonce).slice(-40));
 
 async function paidQuote(query, headers = {}) {
@@ -263,9 +264,9 @@ test('given an EVM query with no key and no payment, move-asset/quote answers an
   assert.match(data.quoteId, /^aurora:0x[0-9a-fA-F]{40}$/);
 });
 
-test('given mode across or relay, move-asset/quote answers the quote captured from prod as it came', async () => {
+test('given mode across-prod or relay-prod, move-asset/quote answers the quote captured from prod as it came', async () => {
   for (const provider of ['across', 'relay']) {
-    await control({ mode: provider });
+    await control({ mode: `${provider}-prod` });
     const res = await fetch(moveQuoteUrl(ERC20_QUERY));
     assert.equal(res.status, 200);
     assert.deepEqual(await res.json(), fixture(provider));
@@ -374,7 +375,13 @@ const submit = async (body) => {
   });
   return { res, body: await res.json() };
 };
-const DEFAULTS = { network: 'eip155:84532', quote: 'ok', deposit: 'PENDING_DEPOSIT', submit: 201 };
+const DEFAULTS = {
+  network: 'eip155:84532',
+  quote: 'ok',
+  deposit: 'PENDING_DEPOSIT',
+  submit: 201,
+  relay: 'echoed PENDING_DEPOSIT',
+};
 async function defaults(at = base) {
   const challenge = await fetch(`${at}/proxy/v2/swap/quote?${new URLSearchParams(ERC20_QUERY)}`);
   const network = unb64(challenge.headers.get('payment-required')).accepts[0].network;
@@ -392,7 +399,18 @@ async function defaults(at = base) {
     headers: { 'content-type': 'application/json' },
     body: JSON.stringify({ provider: 'aurora', depositAddress: address, txHash: '0x' + 'cd'.repeat(32) }),
   });
-  return { network, quote, deposit: (await status.json()).result.data.state, submit: sent.status };
+  const id = '0x' + 'ef'.repeat(32);
+  const relayRead = await fetch(
+    `${at}/proxy/v2/move-asset/deposit/status?${new URLSearchParams({ provider: 'relay', requestId: id })}`
+  );
+  const relay = (await relayRead.json()).result.data;
+  return {
+    network,
+    quote,
+    deposit: (await status.json()).result.data.state,
+    submit: sent.status,
+    relay: `${relay.requestId === id ? 'echoed' : 'other'} ${relay.state}${relay.rawState ? ` ${relay.rawState}` : ''}`,
+  };
 }
 const TX_HASH = '0x' + 'cd'.repeat(32);
 
@@ -462,14 +480,295 @@ test('given an invalid submit body, submit answers 400 in the backend envelope',
   assert.deepEqual(body, { statusCode: 400, result: { data: null, error: ['txHash must be a 32-byte hex string'] } });
 });
 
-test('given a provider other than aurora, submit and status answer 501', async () => {
+test('given an unknown provider, submit and status answer 501', async () => {
   const deposit = await freshDeposit();
-  assert.equal((await submit({ provider: 'relay', depositAddress: deposit, txHash: TX_HASH })).res.status, 501);
-  assert.equal((await statusOf(deposit, 'relay')).res.status, 501);
+  assert.equal((await submit({ provider: 'uniswap', depositAddress: deposit, txHash: TX_HASH })).res.status, 501);
+  assert.equal((await statusOf(deposit, 'uniswap')).res.status, 501);
+});
+
+const ZERO = '0x0000000000000000000000000000000000000000';
+const SEPOLIA_USDC = '0x1c7d4b196cb0c7b01d743fbc6116a902379c7238';
+const ROUTES_BY_NAME = {
+  'testnet usdc': {
+    originChainId: '84532',
+    originToken: USDC.toLowerCase(),
+    destinationChainId: '11155111',
+    destinationToken: SEPOLIA_USDC,
+    amount: '1000000',
+  },
+  'testnet eth': {
+    originChainId: '84532',
+    originToken: ZERO,
+    destinationChainId: '11155111',
+    destinationToken: ZERO,
+    amount: '1000000000000000',
+  },
+  'mainnet usdc': {
+    originChainId: '8453',
+    originToken: '0x833589fcd6edb6e08f4c7c32d4f71b54bda02913',
+    destinationChainId: '42161',
+    destinationToken: '0xaf88d065e77c8cc2239327c5edb3a432268e5831',
+    amount: '10000000',
+  },
+  'mainnet eth': {
+    originChainId: '8453',
+    originToken: ZERO,
+    destinationChainId: '42161',
+    destinationToken: ZERO,
+    amount: '10000000000000000',
+  },
+};
+const routeQuery = (name, extra = {}) => ({
+  ...ROUTES_BY_NAME[name],
+  depositor: ACCOUNT,
+  recipient: ACCOUNT,
+  tradeType: 'EXACT_INPUT',
+  ...extra,
+});
+const moveQuote = async (query) => {
+  const res = await fetch(moveQuoteUrl(query));
+  return { res, body: await res.json() };
+};
+
+const CHECK = `
+const { checkAcross } = await import(${JSON.stringify(`${repo}/apps/mcp/src/swap/check/across.ts`)});
+const { checkRelay } = await import(${JSON.stringify(`${repo}/apps/mcp/src/swap/check/relay.ts`)});
+const out = [];
+for (const { request, quote } of JSON.parse(await Bun.stdin.text())) {
+  const now = Math.floor(Date.now() / 1000);
+  const deps = { now: () => now, isOrderTaken: async () => false, isDepositAddressTaken: async () => false, ownerWindowSec: 240 };
+  const r = quote.provider === 'across' ? checkAcross(request, quote, now, 240) : await checkRelay(request, quote, deps);
+  out.push(r.ok ? { code: 'pass', calls: r.calls.map((c) => ({ kind: c.kind, to: c.to, value: c.value })) } : { code: r.code });
+}
+console.log(JSON.stringify(out));
+`;
+function mcpCheck(cases) {
+  const file = path.join(dir, 'check.ts');
+  fs.writeFileSync(file, CHECK);
+  const input = JSON.stringify(
+    cases.map(({ query, quote }) => ({
+      request: {
+        originChainId: Number(query.originChainId),
+        originToken: getAddress(query.originToken),
+        amount: query.amount,
+        account: getAddress(query.depositor),
+        destinationChainId: Number(query.destinationChainId),
+        destinationToken: query.destinationToken.toLowerCase(),
+        recipient: query.recipient.toLowerCase(),
+      },
+      quote,
+    }))
+  );
+  const run = spawnSync('bun', [file], { input, encoding: 'utf8' });
+  assert.equal(run.status, 0, run.stderr);
+  return JSON.parse(run.stdout);
+}
+
+test('given mode across or relay, move-asset/quote answers a quote for the request that the server checks accept', async () => {
+  const cases = [];
+  for (const mode of ['across', 'relay'])
+    for (const name of Object.keys(ROUTES_BY_NAME)) {
+      await control({ mode });
+      const query = routeQuery(name);
+      const { res, body } = await moveQuote(query);
+      assert.equal(res.status, 200, `${mode} ${name}`);
+      assert.equal(body.result.data.provider, mode);
+      cases.push({ mode, name, query, quote: body.result.data });
+    }
+  await control({ mode: '' });
+  const results = mcpCheck(cases);
+  cases.forEach(({ mode, name }, i) => assert.equal(results[i].code, 'pass', `${mode} ${name}`));
+  const kinds = (i) => results[i].calls.map((c) => c.kind).join(',');
+  assert.equal(kinds(0), 'approve,deposit');
+  assert.equal(kinds(1), 'deposit');
+  assert.equal(results[0].calls[1].to, getAddress('0x82B564983aE7274c86695917BBf8C99ECb6F0F8F'));
+  assert.equal(results[1].calls[0].to, getAddress('0x10D8b8DaA26d307489803e10477De69C0492B610'));
+  assert.equal(results[1].calls[0].value, ROUTES_BY_NAME['testnet eth'].amount);
+  assert.equal(kinds(4), 'approve,deposit');
+  assert.equal(kinds(5), 'deposit');
+  assert.equal(results[4].calls[1].to, getAddress('0x5Feab8dB4534F9F7E2669Bb260c57a01aD1c12e3'));
+  const relayIds = cases.filter((c) => c.mode === 'relay').map((c) => c.quote.quoteId);
+  assert.equal(new Set(relayIds).size, relayIds.length, 'every Relay quote has its own requestId');
+  for (const id of relayIds) assert.match(id, /^relay:0x[0-9a-f]{64}$/);
+  for (const c of cases.filter((c) => c.mode === 'across'))
+    assert.match(c.quote.quoteId, /^across:[A-Za-z0-9-]{1,64}$/);
+});
+
+test('given mode relay-solver or relay-router, the Relay quote fails the server check as allowlist drift', async () => {
+  const cases = [];
+  for (const mode of ['relay-solver', 'relay-router']) {
+    await control({ mode });
+    const query = routeQuery('testnet usdc');
+    cases.push({ query, quote: (await moveQuote(query)).body.result.data });
+  }
+  await control({ mode: '' });
+  assert.deepEqual(
+    mcpCheck(cases).map((r) => r.code),
+    ['solver_unknown', 'router_mismatch']
+  );
+});
+
+test('given a providers filter, move-asset/quote answers only a listed provider and logs what was asked', async () => {
+  await control({ mode: 'across' });
+  const asked = async (providers) => await moveQuote(routeQuery('testnet usdc', { providers }));
+  assert.equal((await asked('aurora,across,relay')).body.result.data.provider, 'across');
+  assert.equal((await asked('ACROSS')).body.result.data.provider, 'across');
+  assert.equal((await asked('aurora')).body.result.data.provider, 'aurora');
+  assert.equal(logRows().findLast((r) => r.event === 'quote').providers, 'aurora');
+  const none = await asked('relay');
+  assert.equal(none.res.status, 422);
+  assert.equal(none.body.result.error, 'NoProviderAvailable: relay=not enabled');
+  for (const bad of ['uniswap', '', 'aurora,,across', 'aurora,aurora', 'aurora,'])
+    assert.equal((await asked(bad)).res.status, 400, bad);
+  await control({ filter: 'off' });
+  assert.equal((await asked('aurora')).body.result.data.provider, 'across');
+  await control({ mode: '', filter: '' });
+  assert.equal((await moveQuote(routeQuery('testnet usdc'))).body.result.data.provider, 'aurora');
+  assert.equal(logRows().findLast((r) => r.event === 'quote').providers, null);
+});
+
+const relayStatus = async (requestId) => {
+  const res = await fetch(
+    `${base}/proxy/v2/move-asset/deposit/status?${new URLSearchParams({ provider: 'relay', requestId })}`
+  );
+  return { res, body: await res.json() };
+};
+const acrossStatus = async (depositId, originChainId = '84532') => {
+  const query = new URLSearchParams({ provider: 'across', originChainId, depositId });
+  const res = await fetch(`${base}/proxy/v2/move-asset/deposit/status?${query}`);
+  return { res, body: await res.json() };
+};
+const freshId = () => String(Math.floor(Math.random() * 1e12));
+
+test('given a Relay deposit, status is PENDING_DEPOSIT by requestId until submit, then walks to SUCCESS', async () => {
+  const id = '0x' + randomHex();
+  const before = await relayStatus(id.toUpperCase().replace('0X', '0x'));
+  assert.deepEqual(before.body.result.data, { provider: 'relay', requestId: id, state: 'PENDING_DEPOSIT' });
+  const sent = await submit({ provider: 'relay', requestId: id, txHash: TX_HASH, originChainId: 84532 });
+  assert.equal(sent.res.status, 201);
+  assert.deepEqual(sent.body.result.data, {
+    provider: 'relay',
+    requestId: id,
+    state: 'KNOWN_DEPOSIT_TX',
+    txHash: TX_HASH,
+  });
+  const states = [];
+  for (let i = 0; i < 3; i++) states.push((await relayStatus(id)).body.result.data.state);
+  assert.deepEqual(states, ['PROCESSING', 'SUCCESS', 'SUCCESS']);
+  assert.equal((await submit({ provider: 'relay', requestId: id, txHash: TX_HASH })).res.status, 400);
+  assert.equal((await relayStatus('0x1234')).res.status, 400);
+});
+
+test('given an Across deposit, status is PENDING_DEPOSIT not_found by origin chain and depositId until submit, then walks to SUCCESS', async () => {
+  const id = freshId();
+  const before = await acrossStatus(id);
+  assert.deepEqual(before.body.result.data, {
+    provider: 'across',
+    originChainId: 84532,
+    depositId: id,
+    state: 'PENDING_DEPOSIT',
+    rawState: 'not_found',
+  });
+  const sent = await submit({ provider: 'across', originChainId: 84532, depositId: id, txHash: TX_HASH });
+  assert.equal(sent.res.status, 201);
+  assert.deepEqual(sent.body.result.data, {
+    provider: 'across',
+    originChainId: 84532,
+    depositId: id,
+    state: 'PROCESSING',
+    txHash: TX_HASH,
+  });
+  const states = [];
+  for (let i = 0; i < 3; i++) states.push((await acrossStatus(id)).body.result.data.state);
+  assert.deepEqual(states, ['PROCESSING', 'SUCCESS', 'SUCCESS']);
+  assert.equal(
+    (await acrossStatus(id, '8453')).body.result.data.state,
+    'PENDING_DEPOSIT',
+    'another chain is another deposit'
+  );
+  assert.equal((await acrossStatus('0x07')).res.status, 400);
+  assert.equal((await acrossStatus('01')).res.status, 400);
+});
+
+test('given a pinned state with rawState, Across and Relay answer it as the backend maps it', async () => {
+  const id = '0x' + randomHex();
+  await submit({ provider: 'relay', requestId: id, txHash: TX_HASH, originChainId: 84532 });
+  const pinned = async (params) => {
+    await control(params);
+    return (await relayStatus(id)).body.result.data;
+  };
+  assert.deepEqual(await pinned({ state: 'PROCESSING', rawState: 'failure' }), {
+    provider: 'relay',
+    requestId: id,
+    state: 'PROCESSING',
+    txHash: TX_HASH,
+    rawState: 'failure',
+  });
+  assert.deepEqual(await pinned({ state: 'PROCESSING', rawState: 'no_tx' }), {
+    provider: 'relay',
+    requestId: id,
+    state: 'PROCESSING',
+    rawState: 'no_tx',
+  });
+  assert.equal((await pinned({ state: 'SUCCESS', rawState: 'actions_failed' })).rawState, 'actions_failed');
+  assert.deepEqual(await pinned({ state: 'REFUNDED', rawState: '' }), {
+    provider: 'relay',
+    requestId: id,
+    state: 'REFUNDED',
+    txHash: TX_HASH,
+  });
+  await control({ state: 'SUCCESS' });
+  const unsent = (await relayStatus('0x' + randomHex())).body.result.data;
+  assert.equal(unsent.state, 'PROCESSING', 'a state past PENDING_DEPOSIT with no hash is no_tx');
+  assert.equal(unsent.rawState, 'no_tx');
+  await control({ state: '' });
+});
+
+test('given deposit=echo, foreign-hash or unknown, status and submit break only that part of the answer', async () => {
+  const id = '0x' + randomHex();
+  const depositId = freshId();
+  const across = { provider: 'across', originChainId: 84532, depositId, txHash: TX_HASH };
+  const relay = { provider: 'relay', requestId: id, txHash: TX_HASH, originChainId: 84532 };
+  await control({ deposit: 'unknown' });
+  const pending = await submit(relay);
+  assert.equal(pending.res.status, 201);
+  assert.equal(pending.body.result.data.state, 'PENDING_DEPOSIT');
+  assert.equal(pending.body.result.data.rawState, 'unknown');
+  assert.equal((await submit(across)).body.result.data.rawState, 'not_found');
+  assert.equal((await acrossStatus(depositId)).body.result.data.state, 'PENDING_DEPOSIT');
+  await control({ deposit: '' });
+  await submit(relay);
+  await control({ deposit: 'echo' });
+  assert.notEqual((await relayStatus(id)).body.result.data.requestId, id);
+  assert.notEqual((await acrossStatus(depositId)).body.result.data.depositId, depositId);
+  await control({ deposit: 'foreign-hash' });
+  const foreign = (await relayStatus(id)).body.result.data;
+  assert.equal(foreign.requestId, id);
+  assert.match(foreign.txHash, /^0x[0-9a-f]{64}$/);
+  assert.notEqual(foreign.txHash, TX_HASH);
+  await control({ deposit: '' });
+  assert.equal((await relayStatus(id)).body.result.data.txHash, TX_HASH);
+});
+
+test('given submitFails on Relay, submit answers 502 as the backend does for a failed index call', async () => {
+  await control({ submitFails: '1' });
+  const id = '0x' + randomHex();
+  const first = await submit({ provider: 'relay', requestId: id, txHash: TX_HASH, originChainId: 84532 });
+  assert.equal(first.res.status, 502);
+  assert.equal(first.body.result.error, 'ProviderQuoteInvalid[relay]: upstream failed');
+  assert.equal((await relayStatus(id)).body.result.data.state, 'PENDING_DEPOSIT');
 });
 
 test('given reset, the control state goes back to its defaults', async () => {
-  await control({ mode: 'two-tx', network: 'eip155:8453', submitFails: '3', state: 'REFUNDED' });
+  await control({
+    mode: 'two-tx',
+    network: 'eip155:8453',
+    submitFails: '3',
+    state: 'REFUNDED',
+    rawState: 'failure',
+    deposit: 'echo',
+    filter: 'off',
+  });
   const res = await fetch(`${base}/_swap`, {
     method: 'POST',
     headers: { 'content-type': 'application/json' },
