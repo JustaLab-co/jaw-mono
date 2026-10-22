@@ -462,13 +462,13 @@ describe('an add funds request whose server restarted', () => {
     const { signer, t } = await connected();
     const owned = deciding(async (method) => (method === 'eth_requestAccounts' ? [signer.address] : null));
     const deps = { openWallet: stallsAfter(2).openWallet };
-    const first = await addFunds(t, deps);
+    const first = await addFunds(t, {}, deps);
     const [row] = await rowsOf(t);
     const page = await replayingPage(row.walletUrl, owned.answer);
     await vi.waitFor(() => expect(page.ids).toHaveLength(2));
     await lapse(row.id);
 
-    const again = await addFunds(t, deps);
+    const again = await addFunds(t, {}, deps);
     expect('structuredContent' in again && again.structuredContent?.url).toBe(
       'structuredContent' in first && first.structuredContent?.url
     );
@@ -482,7 +482,7 @@ describe('an add funds request whose server restarted', () => {
   it('given a stored request, when a tick resumes it, then it rebuilds from its payload alone', async () => {
     const { signer, t } = await connected();
     const owned = deciding(async (method) => (method === 'eth_requestAccounts' ? [signer.address] : null));
-    await addFunds(t, { openWallet: stallsAfter(2).openWallet });
+    await addFunds(t, {}, { openWallet: stallsAfter(2).openWallet });
     const [row] = await rowsOf(t);
     expect(JSON.parse(row.payload!)).toEqual({ chainId: t.chainId });
     const page = await replayingPage(row.walletUrl, owned.answer);

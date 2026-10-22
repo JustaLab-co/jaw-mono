@@ -3,15 +3,15 @@ import { beforeAll, describe, expect, it } from 'vitest';
 import { verifyBearer, type Tenant } from '@/connections/auth';
 import type { Ask, OpenWallet } from '@/connections/relay';
 import { callTool, connect, fakeWallet, owner, setTestEnv, walletAnswers, walletsSettled } from '@/connections/testkit';
+import { USER_REJECTED } from '@/connections/wallet-codes';
 import { getDb } from '@/db/client';
 import { permissionRequests } from '@/db/schema';
 import { TEST_PG_URL, useTestDb, useTestPostgres } from '@/db/test-db';
+import { sendCalls } from './owner-calls';
 import { addFunds, type AddFundsDeps } from './add-funds';
 
 setTestEnv();
 beforeAll(TEST_PG_URL ? useTestPostgres : useTestDb);
-
-const USDC = '0x036CbD53842c5426634e7929541eC2318f3dCF7e';
 
 async function connected(signer = owner()) {
   const c = await connect(signer, { scope: 'wallet:read' });
@@ -28,7 +28,7 @@ function held() {
 /** A wallet that closes the Add Funds screen with null, as the SDK does whether or not funds were sent. */
 function setup(signer: ReturnType<typeof owner>) {
   const asked: { method: string; params: unknown[] }[] = [];
-  let opened = 0;
+  const chains: number[] = [];
   const deps = (o: { held?: Promise<void>; answer?: Ask } = {}): AddFundsDeps => {
     const answers = walletAnswers(signer);
     const wallet = fakeWallet(async (method, params) => {
@@ -36,10 +36,10 @@ function setup(signer: ReturnType<typeof owner>) {
       if (o.answer) return o.answer(method, params);
       return method === 'wallet_addFunds' ? null : answers(method, params);
     }, asked);
-    const openWallet: OpenWallet = async (...args) => (opened++, wallet(...args));
+    const openWallet: OpenWallet = async (...args) => (chains.push(args[0]), wallet(...args));
     return { openWallet };
   };
-  return { asked, deps, opened: () => opened };
+  return { asked, deps, opened: () => chains.length, chains };
 }
 
 const rowsOf = (t: Tenant) =>
@@ -48,12 +48,15 @@ const rowsOf = (t: Tenant) =>
 const urlOf = (r: Awaited<ReturnType<typeof addFunds>>) =>
   'structuredContent' in r ? r.structuredContent?.url : undefined;
 
-describe('jaw_add_funds', () => {
-  it("given the owner opens the link, then the wallet shows Add Funds on the connection's chain and the reply carries the link and where to send USDC", async () => {
-    const { t, signer } = await connected();
-    const { deps, asked } = setup(signer);
+const textOf = (r: Awaited<ReturnType<typeof addFunds>>) => r.content[0].text;
+const refused = (r: Awaited<ReturnType<typeof addFunds>>) => 'isError' in r && r.isError;
 
-    const result = await addFunds(t, deps());
+describe('jaw_add_funds', () => {
+  it("given no chainId and the owner opens the link, then the wallet shows Add Funds on the connection's chain and the reply carries the link and where to deposit", async () => {
+    const { t, signer } = await connected();
+    const { deps, asked, chains } = setup(signer);
+
+    const result = await addFunds(t, {}, deps());
     await walletsSettled();
 
     expect('structuredContent' in result && result.structuredContent).toEqual({
@@ -61,13 +64,14 @@ describe('jaw_add_funds', () => {
       approveBy: expect.any(String),
       address: t.account,
       chains: ['eip155:84532'],
-      asset: `eip155:84532/erc20:${USDC}`,
-      paymentUri: `ethereum:${USDC}@84532/transfer?address=${t.account}`,
       summary: expect.stringContaining('call jaw_get_assets yourself'),
     });
+    expect(textOf(result)).toContain(`anyone can send funds on eip155:84532 to ${t.account}`);
+    expect(textOf(result)).not.toMatch(/USDC/);
+    expect(chains).toEqual([t.chainId]);
     expect(asked.map((a) => a.method)).toEqual(['eth_requestAccounts', 'wallet_addFunds']);
     expect(asked[1].params).toEqual([{ chainId: t.chainId }]);
-    expect(await rowsOf(t)).toMatchObject([{ method: 'add_funds', state: 'approved', code: null }]);
+    expect(await rowsOf(t)).toMatchObject([{ method: 'add_funds', chainId: t.chainId, state: 'approved', code: null }]);
   });
 
   it('given the tool is called over MCP, then it answers with an owner link', async () => {
@@ -79,24 +83,94 @@ describe('jaw_add_funds', () => {
     expect(r.structuredContent.url).toEqual(expect.any(String));
   });
 
-  it('given a chain with no USDC, then the link still opens and no USDC payment link is offered', async () => {
+  it('given a chainId the wallet supports, then the link opens on that chain, the wallet shows Add Funds there and the reply names it', async () => {
     const { t, signer } = await connected();
-    const { deps } = setup(signer);
+    const { deps, asked, chains } = setup(signer);
 
-    const result = await addFunds({ ...t, chainId: 324 }, deps());
+    const result = await addFunds(t, { chainId: 8453 }, deps());
     await walletsSettled();
 
-    const out = 'structuredContent' in result ? result.structuredContent : undefined;
-    expect(out).toMatchObject({ url: expect.stringMatching(/cli-bridge/), chains: ['eip155:324'] });
-    expect(out?.asset).toBeUndefined();
-    expect(out?.paymentUri).toBeUndefined();
+    expect('structuredContent' in result && result.structuredContent).toMatchObject({
+      address: t.account,
+      chains: ['eip155:8453'],
+      summary: expect.stringContaining(`deposit to ${t.account} on eip155:8453`),
+    });
+    expect(chains).toEqual([8453]);
+    expect(asked[1]).toEqual({ method: 'wallet_addFunds', params: [{ chainId: 8453 }] });
+    expect(await rowsOf(t)).toMatchObject([{ chainId: 8453, state: 'approved' }]);
+    expect(JSON.parse((await rowsOf(t))[0].payload!)).toEqual({ chainId: 8453 });
+  });
+
+  it('given a chainId the wallet does not support, then it is refused and no wallet opens', async () => {
+    const { t, signer } = await connected();
+    const { deps, opened } = setup(signer);
+
+    const result = await addFunds(t, { chainId: 324 }, deps());
+
+    expect(refused(result)).toBe(true);
+    expect(textOf(result)).toMatch(/^unsupported_chain: Chain 324 /);
+    expect(opened()).toBe(0);
+    expect(await rowsOf(t)).toEqual([]);
+  });
+
+  it('given a link waiting on one chain, when the agent asks for another, then the waiting link is named, not returned, and the address still comes back', async () => {
+    const { t, signer } = await connected();
+    const { deps, opened } = setup(signer);
+    const wait = held();
+    const holding = deps({ held: wait.promise });
+
+    const first = await addFunds(t, {}, holding);
+    const other = await addFunds(t, { chainId: 8453 }, holding);
+    const same = await addFunds(t, {}, holding);
+    wait.release();
+    await walletsSettled();
+
+    expect(refused(other)).toBe(true);
+    expect(textOf(other)).toMatch(/^add_funds_in_progress: /);
+    expect(textOf(other)).toContain(`on eip155:${t.chainId} at ${urlOf(first)}`);
+    expect(textOf(other)).toContain(`anyone can send funds on eip155:8453 to ${t.account}`);
+    expect('structuredContent' in other).toBe(false);
+    expect(urlOf(same)).toBe(urlOf(first));
+    expect(opened()).toBe(1);
+    expect(await rowsOf(t)).toMatchObject([{ chainId: t.chainId }]);
+  });
+
+  it("given the account's open links are all taken, then the refusal is account_busy and still names the address on the asked chain", async () => {
+    const signer = owner();
+    const others = [await connected(signer), await connected(signer), await connected(signer)];
+    const { t } = await connected(signer);
+    const { deps, opened } = setup(signer);
+    // The owner opens none of these links until the end, so each keeps its slot.
+    const wait = held();
+    const declining = fakeWallet(async () => {
+      await wait.promise;
+      throw Object.assign(new Error('declined'), { code: USER_REJECTED });
+    }, []);
+    const openDeclining: OpenWallet = async (...args) => declining(...args);
+    for (const o of others) {
+      const r = await sendCalls(
+        o.t,
+        { calls: [{ to: '0x000000000000000000000000000000000000dEaD' }] },
+        { openWallet: openDeclining, receipt: async () => null, clients: {} as never }
+      );
+      expect(r.isError ?? false).toBe(false);
+    }
+
+    const result = await addFunds(t, { chainId: 8453 }, deps());
+    wait.release();
+    await walletsSettled();
+
+    expect(refused(result)).toBe(true);
+    expect(textOf(result)).toMatch(/^account_busy: /);
+    expect(textOf(result)).toContain(`anyone can send funds on eip155:8453 to ${t.account}`);
+    expect(opened()).toBe(0);
   });
 
   it('given the wallet is signed in to another account, then the screen is never shown and the request reads wrong_account', async () => {
     const { t } = await connected();
     const { deps, asked } = setup(owner());
 
-    await addFunds(t, deps());
+    await addFunds(t, {}, deps());
     await walletsSettled();
 
     expect(asked.map((a) => a.method)).toEqual(['eth_requestAccounts']);
@@ -108,7 +182,7 @@ describe('jaw_add_funds', () => {
     const { deps } = setup(signer);
     const rejecting = walletAnswers(signer, ['wallet_addFunds']);
 
-    await addFunds(t, deps({ answer: rejecting }));
+    await addFunds(t, {}, deps({ answer: rejecting }));
     await walletsSettled();
 
     expect(await rowsOf(t)).toMatchObject([{ state: 'owner_declined' }]);
@@ -122,7 +196,7 @@ describe('jaw_add_funds', () => {
     const holding = deps({ held: wait.promise });
 
     const answers = [];
-    for (let i = 0; i < 15; i++) answers.push(await addFunds(t, holding));
+    for (let i = 0; i < 15; i++) answers.push(await addFunds(t, {}, holding));
     wait.release();
     await walletsSettled();
 
@@ -139,8 +213,8 @@ describe('jaw_add_funds', () => {
     const wait = held();
     const holding = deps({ held: wait.promise });
 
-    const theirs = await addFunds(other.t, holding);
-    const ours = await addFunds(mine.t, holding);
+    const theirs = await addFunds(other.t, {}, holding);
+    const ours = await addFunds(mine.t, {}, holding);
     wait.release();
     await walletsSettled();
 
@@ -154,10 +228,10 @@ describe('jaw_add_funds', () => {
     const { deps, opened } = setup(signer);
 
     for (let i = 0; i < 10; i++) {
-      await addFunds(t, deps());
+      await addFunds(t, {}, deps());
       await walletsSettled();
     }
-    const over = await addFunds(t, deps());
+    const over = await addFunds(t, {}, deps());
 
     expect(over.content[0].text).toMatch(/^rate_limited: /);
     expect(opened()).toBe(10);
