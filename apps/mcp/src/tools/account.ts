@@ -14,6 +14,7 @@ import { tenant } from '@/connections/auth';
 import { config } from '@/connections/config';
 import { getDb } from '@/db/client';
 import { ownerCalls, sends } from '@/db/schema';
+import { caip2 } from '@/lib/chain';
 import { reply } from '@/lib/fence';
 import { scrub } from '@/lib/scrub';
 import { refusal } from './reply';
@@ -22,7 +23,6 @@ const CONCURRENCY = 10;
 const CHAIN_DEADLINE_MS = 4000;
 const CALL_BUDGET_MS = 4500;
 const ASSET_TYPES = ['native', 'erc20'];
-const caip2 = (chainId: number) => `eip155:${chainId}`;
 const readOnly = { readOnlyHint: true, openWorldHint: true };
 
 const mainnetIds = () => getSupportedChains(false).map((c) => c.id);

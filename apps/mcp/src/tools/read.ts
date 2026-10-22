@@ -30,11 +30,10 @@ import { dayLeft, daySpendOf, isoOf, pullRoom } from '@/payments/day-spend';
 import { stillHeld } from '@/payments/refill';
 import { chainView, heldSpends, LOGGED_READ_MS, readAt, recordedSends, type OpenSpend } from '@/payments/sends';
 import { entriesFor, holdingRows, pulledUnderOtherGrants } from '@/payments/store';
-import { publicClientFor } from '@/lib/chain';
+import { caip2, publicClientFor } from '@/lib/chain';
 import { fenceText, reply } from '@/lib/fence';
 import { safeFetch, watchCuts } from '@/lib/safe-fetch';
 
-const caip2 = (chainId: number) => `eip155:${chainId}`;
 const caip19 = (network: string, token: string) => `${network}/erc20:${token}`;
 
 const money = z.object({
