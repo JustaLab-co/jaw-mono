@@ -12,7 +12,12 @@ const fields = {
   data: pattern<Hex>(/^0x([0-9a-fA-F]{2})*$/),
   value: pattern<string>(/^(0|[1-9][0-9]*)$/),
 };
-const approveCall = z.strictObject({ kind: z.literal('approve'), ...fields });
+const approveCall = z.strictObject({
+  kind: z.literal('approve'),
+  ...fields,
+  data: pattern<Hex>(/^0x095ea7b3[0-9a-fA-F]{128}$/),
+  value: z.literal('0'),
+});
 const depositCall = z.strictObject({ kind: z.literal('deposit'), ...fields });
 const legacyCall = z.strictObject(fields).transform((call) => [{ kind: 'deposit' as const, ...call }]);
 const stored = z.union([legacyCall, z.tuple([depositCall]), z.tuple([approveCall, depositCall])]);
@@ -23,6 +28,7 @@ const stored = z.union([legacyCall, z.tuple([depositCall]), z.tuple([approveCall
  */
 export function callsOf(row: Pick<SwapRow, 'call'>): SwapCall[] | undefined {
   const calls = stored.safeParse(row.call).data;
-  if (!calls?.every((c) => c.chainId === calls[0].chainId)) return undefined;
+  if (!calls) return undefined;
+  if (!calls.every((c) => c.chainId === calls[0].chainId)) return undefined;
   return calls;
 }

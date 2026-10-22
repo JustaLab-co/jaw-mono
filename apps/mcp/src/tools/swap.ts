@@ -223,6 +223,12 @@ function summaryOf(row: SwapRow): string {
     }
     case 'expired':
       if (row.code === SEND_STARTED) return maybeSent(row);
+      if (row.code === CALL_INVALID) {
+        return (
+          'The swap expired, and its stored deposit could not be read, so the wallet was asked nothing. ' +
+          'Nothing was sent. A new jaw_swap with a new idempotencyKey gets a new quote.'
+        );
+      }
       if (row.code?.startsWith('wallet_error:')) {
         return (
           `The swap expired after the wallet answered ${row.code} when asked for the account, before any deposit was asked. ` +
