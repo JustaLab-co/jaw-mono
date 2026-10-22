@@ -30,11 +30,10 @@ import { dayLeft, daySpendOf, isoOf, pullRoom } from '@/payments/day-spend';
 import { stillHeld } from '@/payments/refill';
 import { chainView, heldSpends, LOGGED_READ_MS, readAt, recordedSends, type OpenSpend } from '@/payments/sends';
 import { entriesFor, holdingRows, pulledUnderOtherGrants } from '@/payments/store';
-import { publicClientFor } from '@/lib/chain';
+import { caip2, publicClientFor } from '@/lib/chain';
 import { fenceText, reply } from '@/lib/fence';
 import { safeFetch, watchCuts } from '@/lib/safe-fetch';
 
-const caip2 = (chainId: number) => `eip155:${chainId}`;
 const caip19 = (network: string, token: string) => `${network}/erc20:${token}`;
 
 const money = z.object({
@@ -462,29 +461,6 @@ async function quote(t: Tenant, url: string) {
   };
 }
 
-const addFundsOutput = z.object({
-  address: z.string(),
-  chains: z.array(z.string()).describe('CAIP-2 chains this address accepts deposits on'),
-  asset: z.string().describe('CAIP-19 asset to send'),
-  paymentUri: z.string().describe('EIP-681 URI'),
-  summary: z.string(),
-});
-
-function addFunds(t: Tenant) {
-  const network = caip2(t.chainId);
-  const usdc = usdcForNetwork(network);
-  if (!usdc) return undefined;
-  return addFundsOutput.parse({
-    address: t.account,
-    chains: [network],
-    asset: caip19(network, usdc.address),
-    // EIP-681 ERC-20 transfer: a wallet that opens it sends USDC, not ETH, to the account.
-    paymentUri: `ethereum:${usdc.address}@${t.chainId}/transfer?address=${t.account}`,
-    summary: `Send USDC on ${network} to ${t.account}.`,
-  });
-}
-
-const refusal = (text: string) => ({ content: [{ type: 'text' as const, text }], isError: true });
 const readOnly = { readOnlyHint: true, openWorldHint: true };
 
 export function registerReadTools(server: McpServer) {
@@ -513,20 +489,6 @@ export function registerReadTools(server: McpServer) {
     async ({ url }, ctx) => {
       const { out, extra = [] } = await quote(tenant(ctx), url);
       return reply(out, ...extra);
-    }
-  );
-
-  server.registerTool(
-    'jaw_add_funds',
-    {
-      description: 'Where to send USDC to fund the connected account. No fiat on-ramp.',
-      inputSchema: z.strictObject({}),
-      outputSchema: addFundsOutput,
-      annotations: { readOnlyHint: true },
-    },
-    async (_args, ctx) => {
-      const out = addFunds(tenant(ctx));
-      return out ? reply(out) : refusal("USDC is not supported on this connection's chain.");
     }
   );
 }

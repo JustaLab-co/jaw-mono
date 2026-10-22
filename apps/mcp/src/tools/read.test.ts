@@ -184,17 +184,6 @@ describe('read tools', () => {
     expect(blocked.structuredContent.refusal).toEqual(missing.structuredContent.refusal);
   });
 
-  it('jaw_add_funds points at the account', async () => {
-    const r = await callTool(token, 'jaw_add_funds', {});
-    expect(r.structuredContent).toEqual({
-      address: account,
-      chains: ['eip155:84532'],
-      asset: `eip155:84532/erc20:${USDC}`,
-      paymentUri: `ethereum:${USDC}@84532/transfer?address=${account}`,
-      summary: expect.any(String),
-    });
-  });
-
   it('refuses an account argument: tenancy comes from the token only', async () => {
     const r = await callTool(token, 'jaw_session_status', { account: '0x0000000000000000000000000000000000000001' });
     expect(r.isError).toBe(true);

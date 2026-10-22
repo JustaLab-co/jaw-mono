@@ -14,7 +14,16 @@ import { permissionRequests } from '@/db/schema';
 import { canonical } from '@/lib/canonical';
 import { errorLabel, log } from '@/lib/edge';
 import { randomToken } from '@/lib/token';
-import { countOpenLinks, FULL, linkLive, MAX_OPEN_PER_ACCOUNT, withLinkSlot } from '@/owner-calls/cap';
+import {
+  countAddFundsLinks,
+  countOpenLinks,
+  FULL,
+  linkLive,
+  MAX_ADD_FUNDS_PER_ACCOUNT,
+  MAX_OPEN_PER_ACCOUNT,
+  withLinkSlot,
+  type LinkBound,
+} from '@/owner-calls/cap';
 
 export type PermissionRequestRow = typeof permissionRequests.$inferSelect;
 
@@ -199,7 +208,7 @@ async function settle(row: PermissionRequestRow, { state, code, permissionId, si
 
 type Held = { waiting: PermissionRequestRow };
 
-export type Opened = { opened: PermissionRequestRow } | Held | 'account_busy' | 'wallet_busy';
+export type Opened = { opened: PermissionRequestRow } | Held | 'account_busy' | 'add_funds_busy' | 'wallet_busy';
 
 /** Marks the row asked once, while its lease still holds. False when another link may have taken over. */
 export type Claim = () => Promise<boolean>;
@@ -212,6 +221,7 @@ export type Rebuilds = Partial<Record<PermissionRequestRow['method'], Rebuild>>;
 
 type LinkKind =
   | { method: 'grant' }
+  | { method: 'add_funds' }
   | { method: 'revoke'; permissionId: string }
   | { method: 'sign'; idempotencyKey: string; requestHash: string; signKind: 'message' | 'typedData' };
 
@@ -229,6 +239,20 @@ export const revokeHeld = async (t: Tenant, permissionId: string) =>
   (await findHeld(t, { method: 'revoke', permissionId }))?.waiting.permissionId?.toLowerCase() ===
   permissionId.toLowerCase();
 
+/** The chain of the Add Funds link this connection already waits on, if any, so asking again opens nothing. */
+export const addFundsHeldOn = async (t: Tenant) => (await findHeld(t, { method: 'add_funds' }))?.waiting.chainId;
+
+/** Add Funds links stay out of the account's open-link cap, so they are never account_busy, and have a bound of their own. */
+export function openLink(
+  t: Tenant,
+  req: LinkRequest & { method: 'add_funds' },
+  openWallet: OpenWallet
+): Promise<Exclude<Opened, 'account_busy'>>;
+export function openLink(
+  t: Tenant,
+  req: LinkRequest & { method: Exclude<LinkKind['method'], 'add_funds'> },
+  openWallet: OpenWallet
+): Promise<Exclude<Opened, 'add_funds_busy'>>;
 export async function openLink(t: Tenant, req: LinkRequest, openWallet: OpenWallet): Promise<Opened> {
   const work = req.rebuild(t, req.payload);
   if (!work) throw new Error(`the ${req.method} request does not match what a resume rebuilds`);
@@ -239,8 +263,13 @@ export async function openLink(t: Tenant, req: LinkRequest, openWallet: OpenWall
   const held = await existing();
   if (held) return held;
   // A request racing this one may have stored its link since the check above: answer it rather than refuse.
-  const refuse = async (code: 'account_busy' | 'wallet_busy') => (await existing()) ?? code;
-  if ((await countOpenLinks(t.account)) >= MAX_OPEN_PER_ACCOUNT) return refuse('account_busy');
+  const refuse = async (code: 'account_busy' | 'add_funds_busy' | 'wallet_busy') => (await existing()) ?? code;
+  const addFunds = req.method === 'add_funds';
+  const bound: LinkBound = addFunds
+    ? { max: MAX_ADD_FUNDS_PER_ACCOUNT, count: countAddFundsLinks }
+    : { max: MAX_OPEN_PER_ACCOUNT, count: countOpenLinks };
+  const full = addFunds ? 'add_funds_busy' : 'account_busy';
+  if ((await bound.count(t.account)) >= bound.max) return refuse(full);
   const { approveBy } = req;
   let wallet: Wallet;
   try {
@@ -251,7 +280,7 @@ export async function openLink(t: Tenant, req: LinkRequest, openWallet: OpenWall
   }
   let row: PermissionRequestRow | undefined | typeof FULL;
   try {
-    row = await withLinkSlot(t.account, undefined, async (tx) => {
+    const write = async (tx: Tx) => {
       const theirs = req.method === 'revoke' ? othersRevoke(t, req.permissionId) : undefined;
       await closeDead(
         or(ofConnection(t, req), theirs && and(theirs, or(pastWindow, isNull(permissionRequests.code)))),
@@ -282,11 +311,12 @@ export async function openLink(t: Tenant, req: LinkRequest, openWallet: OpenWall
         .onConflictDoNothing()
         .returning();
       return inserted;
-    });
+    };
+    row = await withLinkSlot(t.account, undefined, write, bound);
   } finally {
     if (!row || row === FULL) wallet.close();
   }
-  if (row === FULL || !row) return refuse(row === FULL ? 'account_busy' : 'wallet_busy');
+  if (row === FULL || !row) return refuse(row === FULL ? full : 'wallet_busy');
   follow(row, wallet, work, false, req.settled);
   return { opened: row };
 }

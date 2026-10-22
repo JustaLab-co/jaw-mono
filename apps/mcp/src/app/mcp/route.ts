@@ -4,6 +4,7 @@ import { clientOf, connectionKey, withConnection } from '@/connections/auth';
 import { guardTools, withEdge } from '@/lib/edge';
 import { countUnauthorized } from '@/lib/metrics';
 import { registerReadTools } from '@/tools/read';
+import { registerAddFundsTool } from '@/tools/add-funds';
 import { registerAccountTools } from '@/tools/account';
 import { registerReadContractsTool } from '@/tools/read-contracts';
 import { registerSimulateCallsTool } from '@/tools/simulate-calls';
@@ -43,6 +44,7 @@ const mcp = createMcpHandler(
     registerHistoryTool(server);
     registerConnectionTools(server);
     registerRevokeTool(server);
+    registerAddFundsTool(server);
     registerDisconnectTool(server);
   },
   {
