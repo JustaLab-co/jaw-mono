@@ -57,21 +57,6 @@ const baseUnits = /^[1-9][0-9]*$/;
 // Across appends an optional integrator tag and its own tag after the ABI payload.
 const tagSuffix = /^(1dc0de[0-9a-f]{4})?73c0de$/;
 
-// One letter per message call; each program regex is the accepted letter sequence.
-const kind = {
-  feeTransfer: 'F',
-  drain: 'D',
-  emitData: 'E',
-  unwrap: 'U',
-  valueFee: 'V',
-  drainEth: 'N',
-  drainWeth: 'W',
-  other: 'X',
-} as const;
-const unwrapProgram = new RegExp(
-  `^${kind.unwrap}${kind.valueFee}?${kind.drainEth}${kind.drainWeth}${kind.emitData}{0,2}$`
-);
-
 const sameHex = (a: string, b: string) => a.toLowerCase() === b.toLowerCase();
 const word = (address: string) => pad(address.toLowerCase() as Hex, { size: 32 });
 
@@ -229,56 +214,56 @@ const drainOf = (token: Address, recipient: string) =>
   encodeFunctionData({ abi: handlerAbi, functionName: 'drainLeftoverTokens', args: [token, getAddress(recipient)] });
 
 function feeOf(calls: readonly Call[], token: Address, recipient: string, across: AcrossContracts) {
-  const [transfer, ...rest] = calls;
-  if (!transfer || transfer.value !== 0n || !isAddressEqual(transfer.target, token)) return undefined;
+  const [transfer] = calls;
+  if (!transfer || !isAddressEqual(transfer.target, token)) return undefined;
+  const drain = { target: across.multicallHandler, callData: drainOf(token, recipient), value: 0n };
+  const expected = [{ ...transfer, value: 0n }, drain, drain, ...emitData(across, token, recipient, APP_FEE.recipient)];
+  return sameCalls(calls, expected) ? feeTransfer(transfer.callData) : undefined;
+}
 
-  const drain = { target: across.multicallHandler, callData: drainOf(token, recipient) };
-  const expected = [drain, drain];
-  if (across.eventEmitter) {
-    const metadata = [1, 0, 1, token, 0n, 0n, 0n, 0n, 'none', 0n, true, getAddress(recipient), APP_FEE.recipient] as const;
-    const data = encodeAbiParameters(metadataAbi, metadata);
-    const callData = encodeFunctionData({ abi: emitterAbi, functionName: 'emitData', args: [data] });
-    expected.push({ target: across.eventEmitter, callData });
-  }
-  if (rest.length !== expected.length) return undefined;
-  const exact = rest.every(
+// Live program (c): unwrap the WETH, pay the fee in ETH when there is one, drain ETH and WETH, emit.
+function unwrapFeeOf(calls: readonly Call[], weth: Address, recipient: string, across: AcrossContracts) {
+  const handler = across.multicallHandler;
+  const unwrap = {
+    target: handler,
+    callData: encodeFunctionData({
+      abi: handlerAbi,
+      functionName: 'makeCallWithBalance',
+      args: [weth, withdrawAll, 0n, [{ token: weth, offset: 4n }]],
+    }),
+    value: 0n,
+  };
+  const second = calls[1];
+  const valueFee = second && isAddressEqual(second.target, APP_FEE.recipient) ? second : undefined;
+  const drainEth = { target: handler, callData: drainOf(zeroAddress, recipient), value: 0n };
+  const drainWeth = { target: handler, callData: drainOf(weth, recipient), value: 0n };
+  const expected = [
+    unwrap,
+    ...(valueFee ? [{ target: APP_FEE.recipient, callData: '0x' as Hex, value: valueFee.value }] : []),
+    drainEth,
+    drainWeth,
+    ...emitData(across, weth, recipient, valueFee ? APP_FEE.recipient : zeroAddress),
+  ];
+  return sameCalls(calls, expected) ? (valueFee?.value ?? 0n) : undefined;
+}
+
+// Across' swap metadata, matched by position; testnets have no emitter and no emitData call.
+function emitData(across: AcrossContracts, token: Address, recipient: string, feeRecipient: Address): Call[] {
+  if (!across.eventEmitter) return [];
+  const metadata = [1, 0, 1, token, 0n, 0n, 0n, 0n, 'none', 0n, true, getAddress(recipient), feeRecipient] as const;
+  const data = encodeAbiParameters(metadataAbi, metadata);
+  const callData = encodeFunctionData({ abi: emitterAbi, functionName: 'emitData', args: [data] });
+  return [{ target: across.eventEmitter, callData, value: 0n }];
+}
+
+const sameCalls = (calls: readonly Call[], expected: readonly Call[]) =>
+  calls.length === expected.length &&
+  calls.every(
     (call, i) =>
-      call.value === 0n &&
+      call.value === expected[i].value &&
       isAddressEqual(call.target, expected[i].target) &&
       sameHex(call.callData, expected[i].callData)
   );
-  return exact ? feeTransfer(transfer.callData) : undefined;
-}
-
-function unwrapFeeOf(calls: readonly Call[], weth: Address, recipient: string, across: AcrossContracts) {
-  const unwrap = encodeFunctionData({
-    abi: handlerAbi,
-    functionName: 'makeCallWithBalance',
-    args: [weth, withdrawAll, 0n, [{ token: weth, offset: 4n }]],
-  });
-  const drainEth = drainOf(zeroAddress, recipient);
-  const drainWeth = drainOf(weth, recipient);
-  const kindOf = (call: Call) => {
-    if (isAddressEqual(call.target, APP_FEE.recipient) && call.callData === '0x') return kind.valueFee;
-    if (isAddressEqual(call.target, across.multicallHandler)) {
-      if (sameHex(call.callData, unwrap)) return kind.unwrap;
-      if (sameHex(call.callData, drainEth)) return kind.drainEth;
-      if (sameHex(call.callData, drainWeth)) return kind.drainWeth;
-    }
-    return emits(call, across) ? kind.emitData : kind.other;
-  };
-  let fee = 0n;
-  const kinds = calls.map((call) => {
-    const k = kindOf(call);
-    if (k === kind.valueFee) fee = call.value;
-    else if (call.value !== 0n) return kind.other;
-    return k;
-  });
-  return unwrapProgram.test(kinds.join('')) ? fee : undefined;
-}
-
-const emits = (call: Call, across: AcrossContracts) =>
-  across.eventEmitter !== undefined && isAddressEqual(call.target, across.eventEmitter) && isEmit(call.callData);
 
 function feeTransfer(data: Hex): bigint | undefined {
   try {
@@ -287,15 +272,6 @@ function feeTransfer(data: Hex): bigint | undefined {
     return sameHex(encodeFunctionData({ abi: erc20Abi, ...decoded }), data) ? decoded.args[1] : undefined;
   } catch {
     return undefined;
-  }
-}
-
-function isEmit(data: Hex): boolean {
-  try {
-    const { args } = decodeFunctionData({ abi: emitterAbi, data });
-    return sameHex(encodeFunctionData({ abi: emitterAbi, functionName: 'emitData', args }), data);
-  } catch {
-    return false;
   }
 }
 

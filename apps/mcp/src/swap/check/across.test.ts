@@ -194,8 +194,13 @@ const drainCall = (token: Address = ARB_USDC, to: Address = ACCOUNT, target: Add
   callData: encodeFunctionData({ abi: handlerAbi, functionName: 'drainLeftoverTokens', args: [token, to] }),
   value: 0n,
 });
-const emitCall = (recipient: Address = ACCOUNT, provider = 'none'): Call => {
-  const metadata = [1, 0, 1, ARB_USDC, 0n, 0n, 0n, 0n, provider, 0n, true, recipient, FEE_RECIPIENT] as const;
+const emitCall = (
+  recipient: Address = ACCOUNT,
+  provider = 'none',
+  token: Address = ARB_USDC,
+  feeRecipient: Address = FEE_RECIPIENT
+): Call => {
+  const metadata = [1, 0, 1, token, 0n, 0n, 0n, 0n, provider, 0n, true, recipient, feeRecipient] as const;
   const data = encodeAbiParameters(metadataAbi, metadata);
   return {
     target: EMITTER,
@@ -269,6 +274,8 @@ const unwrapCall = (weth: Address = ARB_WETH, offset = 4n): Call => ({
   }),
   value: 0n,
 });
+const wethEmit = (recipient: Address, feeRecipient: Address = FEE_RECIPIENT) =>
+  emitCall(recipient, 'none', ARB_WETH, feeRecipient);
 const valueCall = (value: bigint, target: Address = FEE_RECIPIENT, callData: Hex = '0x'): Call => ({
   target,
   callData,
@@ -727,8 +734,10 @@ describe('given an Across native quote that passes', () => {
 
   it.each<[string, () => Case]>([
     ['native ETH to Arbitrum WETH with an empty message', nativeToWeth],
-    ['the unwrap program without emitData', () => withCalls(native(), (c) => c.slice(0, 4))],
-    ['the unwrap program with two emitData calls', () => withCalls(native(), (c) => [...c, c[4]])],
+    [
+      'a fillDeadline exactly at the owner window plus 10 minutes',
+      () => withDeposit(native(), (a) => (a.fillDeadline = native().now + OWNER_WINDOW_SEC + 600)),
+    ],
   ])('when it is %s, then it passes', async (_, make) => {
     expect(await outcome(make())).toBe('pass');
   });
@@ -843,6 +852,30 @@ const nativeRefusals: Array<[string, () => Case, CheckCode]> = [
     'app_fee',
   ],
   ['a value fee that leaves less than the minimum', () => minOutput(native(), '9966189341685643'), 'output_amount'],
+  [
+    'a fillDeadline 1 second short of the owner window plus 10 minutes',
+    () => withDeposit(native(), (a) => (a.fillDeadline = native().now + OWNER_WINDOW_SEC + 599)),
+    'deadline',
+  ],
+  [
+    'a quoteTimestamp 1 second ahead of now',
+    () => withDeposit(native(), (a) => (a.quoteTimestamp = native().now + 1)),
+    'deadline',
+  ],
+  [
+    'a quoteTimestamp 1 second too old for the SpokePool 5 minutes after the owner window ends',
+    () => withDeposit(native(), (a) => (a.quoteTimestamp = native().now + OWNER_WINDOW_SEC + 299 - 3600)),
+    'deadline',
+  ],
+  [
+    'an exclusive relayer with no exclusivity window',
+    () =>
+      withDeposit(native(), (a) => {
+        a.exclusivityParameter = 0;
+        a.exclusiveRelayer = word(ATTACKER);
+      }),
+    'exclusivity',
+  ],
 ];
 
 describe('given an Across native quote that breaks one rule', () => {
@@ -878,9 +911,23 @@ describe('given the native out program [unwrap, fee, drain ETH, drain WETH, emit
     ['a drain carrying value', (c) => [c[0], c[1], { ...c[2], value: 1n }, c[3], c[4]]],
     ['a drain through another contract', (c) => [c[0], c[1], drainCall(zeroAddress, ACCOUNT, OTHER), c[3], c[4]]],
     ['three emitData calls', (c) => [...c, c[4], c[4]]],
+    ['no emitData', (c) => c.slice(0, 4)],
+    ['two emitData calls', (c) => [...c, c[4]]],
+    ['emitData naming another recipient', (c) => [...c.slice(0, 4), wethEmit(ATTACKER)]],
+    ['emitData naming no fee recipient', (c) => [...c.slice(0, 4), wethEmit(ACCOUNT, zeroAddress)]],
+    ['emitData naming USDC as the token', (c) => [...c.slice(0, 4), emitCall(ACCOUNT)]],
+    ['emitData on another contract', (c) => [...c.slice(0, 4), { ...c[4], target: OTHER }]],
     ['an extra value call at the end', (c) => [...c, valueCall(1n, ACCOUNT)]],
   ])('when the message has %s, then it is refused with message_program', async (_, edit) => {
     expect(await outcome(withCalls(native(), edit))).toBe('message_program');
+  });
+
+  it('when native_eth has no fee call, then its emitData must name no fee recipient', async () => {
+    const withEmit = (feeRecipient: Address) =>
+      withCalls(live('native_eth'), (c) => [...c.slice(0, 3), wethEmit(ACCOUNT, feeRecipient)]);
+
+    expect(await outcome(withEmit(zeroAddress))).toBe('pass');
+    expect(await outcome(withEmit(FEE_RECIPIENT))).toBe('message_program');
   });
 
   it('when the fallbackRecipient is not zero, then it is refused with message_program', async () => {
