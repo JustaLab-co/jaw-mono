@@ -283,15 +283,18 @@ export async function purge(deps = SESSION_DEPS): Promise<void> {
   await db.delete(oauthPayloads).where(lt(oauthPayloads.expiresAt, dayAgo));
   await db.delete(rateLimits).where(lt(rateLimits.windowStart, sql`now() - interval '1 hour'`));
   await db.delete(auditEvents).where(lt(auditEvents.createdAt, sql`now() - interval '90 days'`));
-  await db
-    .delete(permissionRequests)
-    .where(
-      and(
-        eq(permissionRequests.method, 'sign'),
-        ne(permissionRequests.state, 'awaiting_owner'),
-        lt(permissionRequests.updatedAt, sql`now() - ${SIGN_KEPT_DAYS} * interval '1 day'`)
-      )
-    );
+  // One statement per method, so the sign purge keeps its partial index.
+  for (const method of ['sign', 'add_funds'] as const) {
+    await db
+      .delete(permissionRequests)
+      .where(
+        and(
+          eq(permissionRequests.method, method),
+          ne(permissionRequests.state, 'awaiting_owner'),
+          lt(permissionRequests.updatedAt, sql`now() - ${SIGN_KEPT_DAYS} * interval '1 day'`)
+        )
+      );
+  }
   await retireAbandoned(deps);
   await retireUnexchanged(deps);
   await db

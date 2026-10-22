@@ -464,6 +464,21 @@ describe('reconciler: owner link requests', () => {
     expect(n).toBe(2);
   });
 
+  it('given add funds requests that ended over a week ago, when the purge runs, then those are deleted and the rest stay', async () => {
+    const weekAgo = new Date(Date.now() - 8 * 86_400_000);
+    const old = await row({ method: 'add_funds', state: 'approved', updatedAt: weekAgo });
+    const oldExpired = await row({ method: 'add_funds', state: 'expired', updatedAt: weekAgo });
+    const recent = await row({ method: 'add_funds', state: 'approved' });
+    const waiting = await row({ method: 'add_funds', updatedAt: weekAgo });
+
+    await purge();
+
+    expect(await rowOf(old)).toBeUndefined();
+    expect(await rowOf(oldExpired)).toBeUndefined();
+    expect(await rowOf(recent)).toBeDefined();
+    expect(await rowOf(waiting)).toBeDefined();
+  });
+
   it('given a sign request purged a week after it ended, when its key is sent again, then a new link opens for the owner', async () => {
     const old = { method: 'sign' as const, idempotencyKey: 'week-old', requestHash: 'h', signKind: 'message' as const };
     await row({ ...old, state: 'approved', signature: '0x01', updatedAt: new Date(Date.now() - 8 * 86_400_000) });
