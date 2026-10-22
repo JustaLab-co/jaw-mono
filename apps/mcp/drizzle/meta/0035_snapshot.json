@@ -1,5 +1,5 @@
 {
-  "id": "3636d8ce-a10b-4117-9eb8-9fece87523b7",
+  "id": "32c5f7c6-140a-448c-b715-599028c02272",
   "prevId": "046641d6-614f-499e-a23b-cca7133ddc6b",
   "version": "7",
   "dialect": "postgresql",
@@ -1382,6 +1382,22 @@
           ],
           "isUnique": false,
           "where": "\"permission_requests\".\"method\" = 'sign' and \"permission_requests\".\"state\" <> 'awaiting_owner'",
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        },
+        "permission_requests_ended_add_funds_index": {
+          "name": "permission_requests_ended_add_funds_index",
+          "columns": [
+            {
+              "expression": "updated_at",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "where": "\"permission_requests\".\"method\" = 'add_funds' and \"permission_requests\".\"state\" <> 'awaiting_owner'",
           "concurrently": false,
           "method": "btree",
           "with": {}

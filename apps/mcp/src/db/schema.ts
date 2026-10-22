@@ -423,6 +423,9 @@ export const permissionRequests = pgTable(
     index('permission_requests_ended_sign_index')
       .on(t.updatedAt)
       .where(sql`${t.method} = 'sign' and ${t.state} <> 'awaiting_owner'`),
+    index('permission_requests_ended_add_funds_index')
+      .on(t.updatedAt)
+      .where(sql`${t.method} = 'add_funds' and ${t.state} <> 'awaiting_owner'`),
     index('permission_requests_unconfirmed_index')
       .on(t.updatedAt)
       .where(sql`${t.method} = 'revoke' and ${t.state} = 'approved' and ${t.code} = 'unconfirmed'`),

@@ -283,7 +283,7 @@ export async function purge(deps = SESSION_DEPS): Promise<void> {
   await db.delete(oauthPayloads).where(lt(oauthPayloads.expiresAt, dayAgo));
   await db.delete(rateLimits).where(lt(rateLimits.windowStart, sql`now() - interval '1 hour'`));
   await db.delete(auditEvents).where(lt(auditEvents.createdAt, sql`now() - interval '90 days'`));
-  // One statement per method, so the sign purge keeps its partial index.
+  // One statement per method, so each purge uses that method's own partial index.
   for (const method of ['sign', 'add_funds'] as const) {
     await db
       .delete(permissionRequests)
