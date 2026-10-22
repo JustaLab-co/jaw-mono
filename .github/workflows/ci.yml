@@ -45,6 +45,10 @@ jobs:
 
       - run: tools/verify/tracked-ignored.sh
 
+      # The verify seller stub; its quote cases run apps/mcp's checks with bun. No network.
+      - name: Seller stub tests
+        run: node --test tools/verify/seller.test.mjs
+
       - name: Check code formatting
         run: bunx prettier --check .
 
