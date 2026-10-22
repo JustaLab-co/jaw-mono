@@ -1,6 +1,7 @@
 import { isProxyChain } from '@/lib/chain';
 import type { Address, Hex } from 'viem';
 import { z } from 'zod';
+import { checkAcross } from './check/across';
 import { checkAurora } from './check/aurora';
 
 export type Provider = 'aurora' | 'across' | 'relay';
@@ -24,13 +25,26 @@ export type LegacyCall = { chainId: number; to: string; data: string; value: str
 export type CheckCode =
   | 'quote_invalid'
   | 'quote_id'
+  | 'unsupported_chain'
   | 'tx_count'
   | 'tx_chain'
   | 'tx_to'
   | 'tx_value'
   | 'tx_data'
+  | 'tx_selector'
+  | 'approve_spender'
   | 'input_amount'
   | 'output_amount'
+  | 'output_floor'
+  | 'output_token'
+  | 'recipient'
+  | 'depositor'
+  | 'destination_chain'
+  | 'message_program'
+  | 'app_fee'
+  | 'deadline'
+  | 'exclusivity'
+  | 'route_unsupported'
   | 'deposit_address'
   | 'deposit_address_reused';
 
@@ -46,6 +60,8 @@ export type CheckedQuote = {
     minOutputAmount: string;
     expectedFillTimeSec: number;
     feesUsd?: string;
+    deadline?: number;
+    appFee?: string;
   };
 };
 
@@ -71,16 +87,19 @@ export function isSupportedOriginChain(chainId: number): boolean {
   return isProxyChain(chainId);
 }
 
-export async function checkQuote(
-  request: QuoteRequest,
-  body: unknown,
-  isDepositAddressTaken: (depositAddress: Address) => Promise<boolean>
-): Promise<CheckResult> {
+export type CheckDeps = {
+  isDepositAddressTaken: (depositAddress: Address) => Promise<boolean>;
+  now: () => number;
+};
+
+export async function checkQuote(request: QuoteRequest, body: unknown, deps: CheckDeps): Promise<CheckResult> {
   const parsed = quoteShape.safeParse(body);
   if (!parsed.success) return { ok: false, code: 'quote_invalid' };
   switch (parsed.data.provider) {
     case 'aurora':
-      return checkAurora(request, parsed.data, isDepositAddressTaken);
+      return checkAurora(request, parsed.data, deps.isDepositAddressTaken);
+    case 'across':
+      return checkAcross(request, parsed.data, deps.now());
     default:
       return { ok: false, code: 'quote_id' };
   }

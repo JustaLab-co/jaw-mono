@@ -69,16 +69,17 @@ function backendQuoteJson(request: QuoteRequest, deposit: Address = depositAddre
 }
 
 const unused = async () => false;
+const deps = { isDepositAddressTaken: unused, now: () => 0 };
 
 async function accepted(request: QuoteRequest, body: unknown) {
-  const result = await checkQuote(request, body, unused);
+  const result = await checkQuote(request, body, deps);
   if (!result.ok) throw new Error(`expected the quote to pass, got ${result.code}`);
   expect(callsOf({ call: result.calls })).toEqual(result.calls);
   return result;
 }
 
 async function rejected(request: QuoteRequest, body: unknown) {
-  const result = await checkQuote(request, body, unused);
+  const result = await checkQuote(request, body, deps);
   if (result.ok) throw new Error('expected the quote to be rejected');
   return result.code;
 }
@@ -321,7 +322,10 @@ describe('checkQuote', () => {
   it('B8.14 Given a deposit address already used by a swap row, When checked, Then it fails with deposit_address_reused', async () => {
     const isTaken = vi.fn(async (address: Address) => address === depositAddress);
 
-    const result = await checkQuote(erc20Request, backendQuoteJson(erc20Request), isTaken);
+    const result = await checkQuote(erc20Request, backendQuoteJson(erc20Request), {
+      ...deps,
+      isDepositAddressTaken: isTaken,
+    });
 
     expect(result).toEqual({ ok: false, code: 'deposit_address_reused' });
     expect(isTaken).toHaveBeenCalledWith(depositAddress);
@@ -332,7 +336,7 @@ describe('checkQuote', () => {
     const body = backendQuoteJson(erc20Request);
     body.transactions = [];
 
-    await checkQuote(erc20Request, body, isTaken);
+    await checkQuote(erc20Request, body, { ...deps, isDepositAddressTaken: isTaken });
 
     expect(isTaken).not.toHaveBeenCalled();
   });

@@ -153,7 +153,10 @@ async function keepQuote(
   if (provider) {
     return writeHeld(lease, { state: 'quote_rejected', code: 'quote_unsupported_provider', quote: { provider } });
   }
-  const checked = await checkQuote(request, data, isDepositAddressTaken);
+  const checked = await checkQuote(request, data, {
+    isDepositAddressTaken,
+    now: () => Math.floor(Date.now() / 1000),
+  });
   if (!checked.ok) {
     const state = checked.code === 'quote_invalid' ? 'quote_failed' : 'quote_rejected';
     return writeHeld(lease, { state, code: checked.code, quoteFenced: fenced });
