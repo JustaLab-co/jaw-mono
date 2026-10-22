@@ -175,9 +175,10 @@ describe('the owner session for a swap', () => {
     value: '0',
   };
 
-  async function ownerOpens(call: unknown) {
+  async function ownerOpens(call: unknown, state: SwapRow['state'] = 'awaiting_owner') {
     const approveBy = new Date(Date.now() + 30_000);
     const row = await awaitingOwner(call as SwapRow['call'], approveBy);
+    await getDb().update(swaps).set({ state }).where(eq(swaps.id, row.id));
     const wallet = await ownerRelay(84532, approveBy);
     const opened = await page(wallet.url, (method) => {
       if (method === 'eth_requestAccounts') return [ACCOUNT];
@@ -238,4 +239,11 @@ describe('the owner session for a swap', () => {
       expect(after).toMatchObject({ state: 'owner_declined', code: CALL_INVALID, callsId: null });
     }
   );
+
+  it('given a row that expired before the owner opened it and whose call does not read, when the owner opens the link, then the wallet is asked nothing and the row stays expired with code call_invalid', async () => {
+    const { requests, after } = await ownerOpens([{ kind: 'deposit', ...transfer }, approval], 'expired');
+
+    expect(requests).toEqual([]);
+    expect(after).toMatchObject({ state: 'expired', code: CALL_INVALID, callsId: null });
+  });
 });

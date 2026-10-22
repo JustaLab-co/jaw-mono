@@ -55,6 +55,10 @@ describe('callsOf', () => {
     ['an approve alone', [approval]],
     ['three calls', [approval, approval, native]],
     ['calls on two chains', [approval, { ...native, chainId: 42161 }]],
+    ['an approve that sends value', [{ ...approval, value: '1' }, native]],
+    ['an approve whose data is a transfer', [{ ...approval, data: transfer.data }, native]],
+    ['an approve one byte short', [{ ...approval, data: approval.data.slice(0, -2) }, native]],
+    ['an approve one byte long', [{ ...approval, data: `${approval.data}00` }, native]],
   ])('given %s, then nothing reads, so nothing can be sent', (_, call) => {
     expect(callsOf({ call: call as never })).toBeUndefined();
   });

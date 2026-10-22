@@ -1310,8 +1310,8 @@ describe('jaw_swap_status', () => {
       kind: 'approve' as const,
       chainId: legacy.chainId,
       to: PAY_TO,
-      data: '0x095ea7b3' as const,
-      value: '7',
+      data: encodeFunctionData({ abi: erc20Abi, functionName: 'approve', args: [PAY_TO, 7n] }),
+      value: '0',
     };
 
     await rewrite(row.id, { call: [approval, { kind: 'deposit', ...legacy }] });
@@ -1347,6 +1347,22 @@ describe('jaw_swap_status', () => {
     expect(summary).toMatch(/wallet was asked nothing/i);
     expect(summary).toMatch(/new idempotencyKey/i);
     expect(summary).not.toMatch(/owner declined/i);
+  });
+
+  it('given a swap that expired after its call did not read, when jaw_swap_status answers, then the summary says the wallet was asked nothing and not that the owner did not approve', async () => {
+    const { t } = await connected();
+    const quoteId = await started(t);
+    const row = await rowOf(t);
+
+    await rewrite(row.id, { state: 'expired', code: CALL_INVALID });
+    const result = await status(t, quoteId);
+
+    expect(result.structuredContent).toMatchObject({ state: 'expired' });
+    const summary = result.structuredContent?.summary ?? '';
+    expect(summary).toMatch(/wallet was asked nothing/i);
+    expect(summary).toMatch(/nothing was sent/i);
+    expect(summary).toMatch(/new idempotencyKey/i);
+    expect(summary).not.toMatch(/did not approve/i);
   });
 
   it('given a swap awaiting the owner inside its window, when the backend has no deposit yet, then it stays awaiting_owner with its link and the backend state', async () => {
