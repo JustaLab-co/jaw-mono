@@ -7,6 +7,7 @@ import { USER_REJECTED } from '@/connections/wallet-codes';
 import { getDb } from '@/db/client';
 import { permissionRequests } from '@/db/schema';
 import { TEST_PG_URL, useTestDb, useTestPostgres } from '@/db/test-db';
+import { MAX_ADD_FUNDS_PER_ACCOUNT } from '@/owner-calls/cap';
 import { sendCalls } from './owner-calls';
 import { addFunds, type AddFundsDeps } from './add-funds';
 
@@ -165,9 +166,10 @@ describe('jaw_add_funds', () => {
     expect(opened()).toBe(1);
   });
 
-  it('given Add Funds links waiting on three connections, then jaw_send_calls on the account still opens', async () => {
+  it('given Add Funds links waiting on as many connections as the account may hold, then jaw_send_calls on the account still opens', async () => {
     const signer = owner();
-    const waiting = [await connected(signer), await connected(signer), await connected(signer)];
+    const waiting = [];
+    for (let i = 0; i < MAX_ADD_FUNDS_PER_ACCOUNT; i++) waiting.push(await connected(signer));
     const { t } = await connected(signer);
     const { deps } = setup(signer);
     const wait = held();
@@ -184,6 +186,49 @@ describe('jaw_add_funds', () => {
 
     expect(send.isError ?? false).toBe(false);
     expect(send.content[0].text).not.toMatch(/^account_busy: /);
+  });
+
+  it('given Add Funds links waiting on as many connections as the account may hold, when another connection asks, then it is add_funds_busy, names the address and no other link, and no wallet opens', async () => {
+    const signer = owner();
+    const waiting = [];
+    for (let i = 0; i < MAX_ADD_FUNDS_PER_ACCOUNT; i++) waiting.push(await connected(signer));
+    const { t } = await connected(signer);
+    const { deps, opened } = setup(signer);
+    const wait = held();
+    const holding = deps({ held: wait.promise });
+    const links = [];
+    for (const w of waiting) links.push(urlOf(await addFunds(w.t, {}, holding)));
+
+    const result = await addFunds(t, { chainId: 8453 }, holding);
+    wait.release();
+    await walletsSettled();
+
+    expect(refused(result)).toBe(true);
+    expect(textOf(result)).toMatch(
+      new RegExp(`^add_funds_busy: This account already has ${MAX_ADD_FUNDS_PER_ACCOUNT} Add Funds links waiting`)
+    );
+    expect(textOf(result)).toContain(`anyone can send funds on eip155:8453 to ${t.account}`);
+    for (const url of links) expect(textOf(result)).not.toContain(url);
+    expect('structuredContent' in result).toBe(false);
+    expect(opened()).toBe(MAX_ADD_FUNDS_PER_ACCOUNT);
+    expect(await rowsOf(t)).toEqual([]);
+  });
+
+  it('given Add Funds links racing from more connections than the account may hold, then only that many open', async () => {
+    const signer = owner();
+    const racing = [];
+    for (let i = 0; i < MAX_ADD_FUNDS_PER_ACCOUNT + 2; i++) racing.push(await connected(signer));
+    const { deps, opened } = setup(signer);
+    const wait = held();
+    const holding = deps({ held: wait.promise });
+
+    const results = await Promise.all(racing.map((r) => addFunds(r.t, {}, holding)));
+    wait.release();
+    await walletsSettled();
+
+    expect(results.filter((r) => !refused(r))).toHaveLength(MAX_ADD_FUNDS_PER_ACCOUNT);
+    expect(results.filter((r) => textOf(r).startsWith('add_funds_busy: '))).toHaveLength(2);
+    expect(opened()).toBeGreaterThanOrEqual(MAX_ADD_FUNDS_PER_ACCOUNT);
   });
 
   it('given the wallet pool is full, then the refusal is wallet_busy and still names the address on the asked chain', async () => {

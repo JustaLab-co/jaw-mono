@@ -9,7 +9,7 @@ import { addFundsWork, type AddFundsPayload } from '@/grants/resume';
 import { caip2, isProxyChain } from '@/lib/chain';
 import { RATE_WINDOW_MS } from '@/lib/edge';
 import { reply } from '@/lib/fence';
-import { LINK_RATE_LIMIT } from '@/owner-calls/cap';
+import { LINK_RATE_LIMIT, MAX_ADD_FUNDS_PER_ACCOUNT } from '@/owner-calls/cap';
 import { refusal } from './reply';
 
 const input = z.strictObject({
@@ -87,6 +87,14 @@ export async function addFunds(t: Tenant, args: { chainId?: number } = {}, deps 
     },
     deps.openWallet
   );
+  // Names no other connection's link, since that link is for another app.
+  if (opened === 'add_funds_busy') {
+    return refusedWithAddress(
+      t,
+      chainId,
+      `add_funds_busy: This account already has ${MAX_ADD_FUNDS_PER_ACCOUNT} Add Funds links waiting across its connections. Wait until one ends, then try again.`
+    );
+  }
   if (opened === 'wallet_busy') {
     return refusedWithAddress(t, chainId, 'Too many owners are approving right now. Try again in a minute.');
   }
