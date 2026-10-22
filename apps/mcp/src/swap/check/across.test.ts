@@ -316,7 +316,6 @@ describe('given an Across ERC-20 quote that passes', () => {
 
     expect(result).toEqual({
       ok: true,
-      provider: 'across',
       quoteId: 'across:84z7t-1792622110214-a21c2a19ac82',
       calls: [
         { kind: 'approve', chainId: 8453, to: BASE_USDC, data: approveData(BASE_POOL, 10_000_000n), value: '0' },

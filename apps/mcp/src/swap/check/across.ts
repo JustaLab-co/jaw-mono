@@ -131,7 +131,6 @@ export function checkAcross(
   const feesUsd = quote.fees.totalUsd;
   return {
     ok: true,
-    provider: 'across',
     quoteId: quote.quoteId,
     calls: [
       approve,
