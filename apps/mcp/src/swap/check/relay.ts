@@ -304,7 +304,7 @@ function depositCode(
   const fields = depositFields(tx.data as Hex);
   if (!fields) return 'tx_data';
   if (!same(fields.depositor, request.account)) return 'depositor';
-  if (fields.token !== undefined && !same(fields.token, request.originToken)) return 'input_amount';
+  if (fields.token !== undefined && !same(fields.token, request.originToken)) return 'input_token';
   if (fields.amount !== undefined && fields.amount !== BigInt(request.amount)) return 'input_amount';
   if (!same(fields.id, orderId)) return 'order_id';
   return undefined;

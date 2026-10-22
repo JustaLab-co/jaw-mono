@@ -35,6 +35,7 @@ export type CheckCode =
   | 'tx_selector'
   | 'approve_spender'
   | 'input_amount'
+  | 'input_token'
   | 'output_amount'
   | 'output_floor'
   | 'output_token'

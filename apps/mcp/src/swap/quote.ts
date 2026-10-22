@@ -9,6 +9,7 @@ import {
   depositAddressReused,
   isDepositAddressTaken,
   isOrderTaken,
+  orderReused,
   release,
   writeHeld,
   type SwapLease,
@@ -186,8 +187,13 @@ async function keepQuote(
       quoteFenced: fenced,
     });
   } catch (err) {
-    if (!depositAddressReused(err)) throw err;
-    return writeHeld(lease, { state: 'quote_rejected', code: 'deposit_address_reused', quoteFenced: fenced });
+    if (depositAddressReused(err)) {
+      return writeHeld(lease, { state: 'quote_rejected', code: 'deposit_address_reused', quoteFenced: fenced });
+    }
+    if (orderReused(err)) {
+      return writeHeld(lease, { state: 'quote_rejected', code: 'order_reused', quoteFenced: fenced });
+    }
+    throw err;
   }
 }
 

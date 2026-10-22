@@ -246,6 +246,7 @@ export const sends = pgTable(
 );
 
 export const SWAP_DEPOSIT_ADDRESS_INDEX = 'swaps_deposit_address_index';
+export const SWAP_ORDER_ID_INDEX = 'swaps_order_id_index';
 
 export const swaps = pgTable(
   'swaps',
@@ -313,6 +314,9 @@ export const swaps = pgTable(
   (t) => [
     uniqueIndex().on(t.connectionId, t.idempotencyKey),
     uniqueIndex(SWAP_DEPOSIT_ADDRESS_INDEX).on(sql`lower(${t.depositAddress})`),
+    uniqueIndex(SWAP_ORDER_ID_INDEX)
+      .on(sql`lower(${t.quote}->>'orderId')`)
+      .where(sql`${t.quote}->>'orderId' is not null`),
     index().on(t.connectionId, t.createdAt, t.id),
     uniqueIndex('swaps_open_index')
       .on(t.connectionId)

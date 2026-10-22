@@ -14,6 +14,7 @@ import {
   isOrderTaken,
   move,
   markSendStarted,
+  orderReused,
   recordCallsId,
   release,
   renewSession,
@@ -562,6 +563,44 @@ describe('relay order ids', () => {
     expect(await isOrderTaken(held)).toBe(true);
     expect(await isOrderTaken(held.toUpperCase().replace('0X', '0x'))).toBe(true);
     expect(await isOrderTaken(orderId())).toBe(false);
+  });
+
+  const withOrder = (id?: string) => {
+    const quoted = quoteOf();
+    return { ...quoted, quote: { ...quoted.quote, ...(id ? { orderId: id } : {}) } };
+  };
+
+  it('given a swap holding a Relay order id, when another swap writes the same id in another case, then the order index refuses it as a reused order, not a reused address', async () => {
+    const held = orderId();
+    const first = await quoting(await newConnection());
+    await writeHeld(leaseOf(first.row, first.token), withOrder(held));
+    const second = await quoting(await newConnection());
+
+    const refused = await writeHeld(
+      leaseOf(second.row, second.token),
+      withOrder(held.toUpperCase().replace('0X', '0x'))
+    ).catch((e: unknown) => e);
+    const duplicate = await getDb()
+      .insert(swaps)
+      .values(first.row)
+      .catch((e: unknown) => e);
+
+    expect(orderReused(refused)).toBe(true);
+    expect(depositAddressReused(refused)).toBe(false);
+    expect(orderReused(duplicate)).toBe(false);
+    expect(await rowOf(second.row.id)).toMatchObject({ state: 'quoting', quote: null });
+  });
+
+  it('given swaps whose quotes hold no order id, when they are written, then the order index refuses none', async () => {
+    const rows = [];
+    for (let i = 0; i < 3; i++) {
+      const { row, token } = await quoting(await newConnection());
+      rows.push(await writeHeld(leaseOf(row, token), withOrder()));
+    }
+    const { row, token } = await quoting(await newConnection());
+    rows.push(await writeHeld(leaseOf(row, token), { state: 'quote_rejected', code: 'tx_to' }));
+
+    expect(rows.map((r) => r?.state)).toEqual(['quoting', 'quoting', 'quoting', 'quote_rejected']);
   });
 });
 

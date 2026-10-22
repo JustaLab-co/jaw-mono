@@ -646,7 +646,7 @@ describe('checkQuote with a Relay answer as the backend sends it', () => {
       ],
       [
         'another token',
-        'input_amount',
+        'input_token',
         (txs: Tx[]) => (txs[1].data = erc20Deposit(ACCOUNT, ARB_USDC, 10000000n, USDC_ORDER)),
       ],
       [

@@ -1,5 +1,5 @@
 import { eq, sql } from 'drizzle-orm';
-import { encodeFunctionData, erc20Abi, getAddress, keccak256, toHex, type Address } from 'viem';
+import { encodeFunctionData, erc20Abi, getAddress, keccak256, toHex, type Address, type Hex } from 'viem';
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { verifyBearer, type Tenant } from '@/connections/auth';
 import { config } from '@/connections/config';
@@ -8,7 +8,7 @@ import { getDb } from '@/db/client';
 import { payments, swaps } from '@/db/schema';
 import { TEST_PG_URL, useTestDb, useTestPostgres } from '@/db/test-db';
 import { callsOf } from './calls';
-import type { CheckDeps } from './check';
+import type { CheckDeps, CheckedQuote } from './check';
 import { quote, quoteRequestOf, swapRequest, type QuoteDeps, type SwapInput } from './quote';
 import { claimSwap, writeHeld, type SwapRow } from './store';
 import acrossAnswer from './fixtures/prod-across-quote.json';
@@ -23,21 +23,26 @@ const lookups = vi.hoisted(() => ({ meet: 0, waiting: [] as (() => void)[] }));
 
 vi.mock('./store', async (original) => {
   const real = await original<typeof import('./store')>();
+  const met = async (taken: boolean) => {
+    if (lookups.meet === 0) return taken;
+    await new Promise<void>((resume) => {
+      lookups.waiting.push(resume);
+      if (lookups.waiting.length === lookups.meet) lookups.waiting.forEach((r) => r());
+    });
+    return taken;
+  };
   return {
     ...real,
-    isDepositAddressTaken: async (address: string) => {
-      const taken = await real.isDepositAddressTaken(address);
-      if (lookups.meet === 0) return taken;
-      await new Promise<void>((resume) => {
-        lookups.waiting.push(resume);
-        if (lookups.waiting.length === lookups.meet) lookups.waiting.forEach((r) => r());
-      });
-      return taken;
-    },
+    isDepositAddressTaken: async (address: string) => met(await real.isDepositAddressTaken(address)),
+    isOrderTaken: async (orderId: string) => met(await real.isOrderTaken(orderId)),
   };
 });
 
-const checks = vi.hoisted(() => ({ code: undefined as string | undefined, deps: undefined as CheckDeps | undefined }));
+const checks = vi.hoisted(() => ({
+  code: undefined as string | undefined,
+  deps: undefined as CheckDeps | undefined,
+  relay: undefined as (() => CheckedQuote) | undefined,
+}));
 
 vi.mock('./check', async (original) => {
   const real = await original<typeof import('./check')>();
@@ -45,7 +50,11 @@ vi.mock('./check', async (original) => {
     ...real,
     checkQuote: async (...args: Parameters<typeof real.checkQuote>) => {
       checks.deps = args[2];
-      return checks.code ? { ok: false, code: checks.code } : real.checkQuote(...args);
+      if (checks.code) return { ok: false, code: checks.code };
+      if (!checks.relay) return real.checkQuote(...args);
+      const passed = checks.relay();
+      if (await args[2].isOrderTaken(passed.quote.orderId!)) return { ok: false, code: 'order_reused' };
+      return passed;
     },
   };
 });
@@ -152,6 +161,7 @@ beforeEach(() => {
   lookups.waiting.length = 0;
   checks.code = undefined;
   checks.deps = undefined;
+  checks.relay = undefined;
 });
 afterEach(() => vi.restoreAllMocks());
 
@@ -642,6 +652,41 @@ describe('deposit addresses raced', () => {
       expect.arrayContaining([
         expect.objectContaining({ state: 'quoting', depositAddress: backend.deposit }),
         expect.objectContaining({ state: 'quote_rejected', code: 'deposit_address_reused', quoteId: null }),
+      ])
+    );
+  });
+});
+
+describe('Relay orders raced', () => {
+  const relayQuote = (orderId: Hex): CheckedQuote => ({
+    ok: true,
+    quoteId: `relay:${keccak256(toHex(String(Math.random())))}`,
+    calls: [],
+    quote: {
+      provider: 'relay',
+      inputAmount: '1000000',
+      expectedOutputAmount: '990000',
+      minOutputAmount: '980000',
+      expectedFillTimeSec: 20,
+      orderId,
+      deadline: 2_000_000_000,
+    },
+  });
+
+  it('given two swaps whose quotes hold the same order id, when both pass the lookup at once, then one holds it and the other is quote_rejected with order_reused', async () => {
+    const orderId = keccak256(toHex(String(Math.random())));
+    const [one, two] = [await connected(), await connected()];
+    const ids = [orderId, orderId.toUpperCase().replace('0X', '0x') as Hex];
+    checks.relay = () => relayQuote(ids.pop()!);
+    lookups.meet = 2;
+
+    const steps = await Promise.all([quoted(one), quoted(two)]);
+
+    expect(lookups.waiting).toHaveLength(2);
+    expect(steps.map((s) => s.row)).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ state: 'quoting', quote: expect.objectContaining({ provider: 'relay' }) }),
+        expect.objectContaining({ state: 'quote_rejected', code: 'order_reused', quoteId: null, quote: null }),
       ])
     );
   });

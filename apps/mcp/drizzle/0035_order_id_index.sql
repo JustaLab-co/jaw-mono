@@ -1,0 +1,1 @@
+CREATE UNIQUE INDEX "swaps_order_id_index" ON "swaps" USING btree (lower("quote"->>'orderId')) WHERE "swaps"."quote"->>'orderId' is not null;

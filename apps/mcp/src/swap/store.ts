@@ -5,7 +5,7 @@ import { config, ownerWindowMs } from '@/connections/config';
 import { sessionLeaseEnd } from '@/connections/session-lease';
 import { getDb, type Tx } from '@/db/client';
 import { leasedRows } from '@/db/leased';
-import { SWAP_DEPOSIT_ADDRESS_INDEX, swaps } from '@/db/schema';
+import { SWAP_DEPOSIT_ADDRESS_INDEX, SWAP_ORDER_ID_INDEX, swaps } from '@/db/schema';
 import { randomToken } from '@/lib/token';
 import { LEASE_MS } from '@/payments/store';
 import type { BackendState, DepositStatus } from './backend';
@@ -308,9 +308,17 @@ export async function recordBackend(connectionId: string, id: string, status: Kn
 
 const DEPOSIT_ADDRESS_KEYS = new Set([SWAP_DEPOSIT_ADDRESS_INDEX, 'swaps_quote_id_unique']);
 
-export function depositAddressReused(err: unknown): boolean {
+function uniqueKeyOf(err: unknown): string | undefined {
   const e = (err as { cause?: { code?: unknown; constraint_name?: unknown; constraint?: unknown } }).cause;
-  return e?.code === '23505' && DEPOSIT_ADDRESS_KEYS.has(String(e.constraint_name ?? e.constraint));
+  return e?.code === '23505' ? String(e.constraint_name ?? e.constraint) : undefined;
+}
+
+export function depositAddressReused(err: unknown): boolean {
+  return DEPOSIT_ADDRESS_KEYS.has(uniqueKeyOf(err) ?? '');
+}
+
+export function orderReused(err: unknown): boolean {
+  return uniqueKeyOf(err) === SWAP_ORDER_ID_INDEX;
 }
 
 export async function isDepositAddressTaken(address: string): Promise<boolean> {
