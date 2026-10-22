@@ -1,6 +1,6 @@
 import { hashStruct, pad, type Address, type Hex } from 'viem';
 import { z } from 'zod';
-import { ALLOWLIST, type RelayContracts } from '../allowlist';
+import { ALLOWLIST, MAX_ROUTE_COST_BPS, TESTNET_MAX_ROUTE_COST_BPS, type RelayContracts } from '../allowlist';
 import type { BackendQuote, CheckCode, QuoteRequest } from '../check';
 import { clearsFloor, sameAsset } from './assets';
 
@@ -62,7 +62,8 @@ const bytes = z
 const uint = z
   .string()
   .regex(/^(0|[1-9][0-9]{0,77}|0x[0-9a-fA-F]{1,64})$/)
-  .transform(BigInt);
+  .transform(BigInt)
+  .refine((n) => n < 2n ** 256n);
 const uint32 = z.number().int().min(0).max(0xffffffff);
 const chain = z.string();
 
@@ -129,7 +130,6 @@ const baseUnits = /^[1-9][0-9]*$/;
 const MAX_ORDER_LIFETIME_SEC = 7 * 86_400 + 3_600;
 
 const same = (a: string, b: string) => a.toLowerCase() === b.toLowerCase();
-const routerData = (relay: RelayContracts) => pad(relay.erc20Router);
 
 export function checkRelayOrder(request: QuoteRequest, quote: BackendQuote, now: number): RelayOrderResult {
   const fail = (code: CheckCode) => ({ ok: false as const, code });
@@ -144,10 +144,12 @@ export function checkRelayOrder(request: QuoteRequest, quote: BackendQuote, now:
   const destination = ALLOWLIST[request.destinationChainId];
   if (!origin?.relay) return fail('unsupported_chain');
   if (!destination?.relay || origin.testnet !== destination.testnet) return fail('destination_chain');
+  if (request.originChainId === request.destinationChainId) return fail('destination_chain');
 
   const pair = sameAsset(request);
   if (!pair) return fail('route_unsupported');
-  if (!clearsFloor(request, BigInt(minOutputAmount), pair)) return fail('output_floor');
+  const maxCostBps = origin.testnet ? TESTNET_MAX_ROUTE_COST_BPS : MAX_ROUTE_COST_BPS;
+  if (!clearsFloor(request, BigInt(minOutputAmount), pair, maxCostBps)) return fail('output_floor');
 
   if (quote.relayOrder === undefined) return fail('order_missing');
   const parsed = relayOrder.safeParse(quote.relayOrder);
@@ -156,7 +158,11 @@ export function checkRelayOrder(request: QuoteRequest, quote: BackendQuote, now:
   const orderId = idOf(order);
   if (orderId !== parsed.data.orderId.toLowerCase()) return fail('order_id');
 
-  const code = termsCode(request, quote, order, { from: origin.relay, to: destination.relay });
+  const code = termsCode(request, quote, order, {
+    from: origin.relay,
+    to: destination.relay,
+    testnet: origin.testnet === true,
+  });
   if (code) return fail(code);
   const deadlines = [order.output.deadline, ...order.inputs[0].refunds.map((refund) => refund.deadline)];
   if (!deadlines.every((deadline) => now < deadline && deadline <= now + MAX_ORDER_LIFETIME_SEC)) {
@@ -169,8 +175,11 @@ function termsCode(
   request: QuoteRequest,
   quote: BackendQuote,
   order: OrderData,
-  { from, to }: { from: RelayContracts; to: RelayContracts }
+  { from, to, testnet }: { from: RelayContracts; to: RelayContracts; testnet: boolean }
 ): CheckCode | undefined {
+  const toRouter = (data: Hex, relay: RelayContracts) =>
+    same(data, pad(relay.erc20Router)) || (testnet && data === '0x');
+
   if (order.version !== 'v1' || order.inputs.length !== 1 || order.fees.length !== 0) return 'order_terms';
   if (order.output.payments.length !== 1) return 'order_terms';
 
@@ -186,23 +195,23 @@ function termsCode(
   ];
   for (const refund of refunds) {
     const side = sides.find(({ relay }) => relay.protocolChain === refund.chainId);
-    if (!side || !same(refund.currency, side.token) || !same(refund.extraData, routerData(side.relay))) {
-      return 'refund_terms';
-    }
+    if (!side || !same(refund.currency, side.token)) return 'refund_terms';
+    if (!toRouter(refund.extraData, side.relay)) return 'router_mismatch';
   }
   if (new Set(refunds.map((refund) => refund.chainId)).size !== refunds.length) return 'refund_terms';
 
   const { output } = order;
   const [paid] = output.payments;
   if (output.chainId !== to.protocolChain) return 'destination_chain';
-  if (!same(output.extraData, routerData(to))) return 'order_terms';
+  if (!toRouter(output.extraData, to)) return 'router_mismatch';
   if (!same(paid.recipient, request.recipient)) return 'recipient';
   if (!same(paid.currency, request.destinationToken)) return 'output_token';
   if (paid.minimumAmount !== BigInt(quote.minOutputAmount)) return 'output_amount';
   if (paid.expectedAmount !== BigInt(quote.expectedOutputAmount)) return 'output_amount';
 
-  const solverChain = Object.values(ALLOWLIST).find(({ relay }) => relay?.protocolChain === order.solverChainId);
-  if (!solverChain?.relay?.solvers.some((solver) => same(solver, order.solver))) return 'order_terms';
+  const solverSide = sides.find(({ relay }) => relay.protocolChain === order.solverChainId);
+  if (!solverSide) return 'order_terms';
+  if (!solverSide.relay.solvers.some((solver) => same(solver, order.solver))) return 'solver_unknown';
 
   if (output.calls.length !== 0) return 'order_calls';
   return undefined;

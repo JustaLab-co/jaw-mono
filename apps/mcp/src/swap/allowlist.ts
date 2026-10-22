@@ -508,6 +508,8 @@ export const ASSETS: Readonly<Record<number, Readonly<Record<Address, Asset>>>> 
 /** Largest accepted gap between amount and minOutputAmount, decimals adjusted, fees and slippage included. */
 export const MAX_ROUTE_COST_BPS = 300n;
 
+export const TESTNET_MAX_ROUTE_COST_BPS = 9000n;
+
 // The backend owns the fee: MOVE_ASSET_FEE_RECIPIENT and MOVE_ASSET_FEE_BPS in jan-back-mono apps/proxy.
 export const APP_FEE = { recipient: '0xC529EDD6D47C60923902514C7C0B3993ae42C2ec', maxBps: 25n } as const;
 

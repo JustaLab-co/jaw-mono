@@ -34,6 +34,8 @@ const ARB_USDC = getAddress('0xaf88d065e77c8cc2239327c5edb3a432268e5831');
 const BASE_SEPOLIA_USDC = '0x036cbd53842c5426634e7929541ec2318f3dcf7e';
 const BASE_SEPOLIA_ROUTER = '0x000000000000000000000000f5042e6ffac5a625d4e7848e0b01373d8eb9e222';
 const ATTACKER_DATA = '0x0000000000000000000000003333333333333333333333333333333333333333';
+const TESTNET_SOLVER = '0x3e34b27a9bf37d8424e1a58ac7fc4d06914b76b9';
+const NINES_78 = '9'.repeat(78);
 const QUOTED_AT = 1_792_676_780;
 const LAST_DEADLINE = QUOTED_AT + 7 * 86_400 + 3_600;
 
@@ -208,14 +210,14 @@ describe('checkRelayOrder', () => {
       ],
       [
         'a refund extraData of another router',
-        'refund_terms',
+        'router_mismatch',
         (o: Order) => (o.inputs[0].refunds[0].extraData = ATTACKER_DATA),
       ],
-      ['an empty refund extraData', 'refund_terms', (o: Order) => (o.inputs[0].refunds[1].extraData = '0x')],
+      ['an empty refund extraData', 'router_mismatch', (o: Order) => (o.inputs[0].refunds[1].extraData = '0x')],
       ['a refund to another address', 'refund_recipient', (o: Order) => (o.inputs[0].refunds[1].recipient = ATTACKER)],
       ['the output on optimism', 'destination_chain', (o: Order) => (o.output.chainId = 'optimism')],
-      ['an output extraData of another router', 'order_terms', (o: Order) => (o.output.extraData = ATTACKER_DATA)],
-      ['an empty output extraData', 'order_terms', (o: Order) => (o.output.extraData = '0x')],
+      ['an output extraData of another router', 'router_mismatch', (o: Order) => (o.output.extraData = ATTACKER_DATA)],
+      ['an empty output extraData', 'router_mismatch', (o: Order) => (o.output.extraData = '0x')],
       ['the payment to another recipient', 'recipient', (o: Order) => (o.output.payments[0].recipient = ATTACKER)],
       ['the payment in native ETH', 'output_token', (o: Order) => (o.output.payments[0].currency = zeroAddress)],
       [
@@ -228,7 +230,13 @@ describe('checkRelayOrder', () => {
         'output_amount',
         (o: Order) => (o.output.payments[0].expectedAmount = '9975995'),
       ],
-      ['a solver outside the Base list', 'order_terms', (o: Order) => (o.solver = ATTACKER)],
+      ['a solver outside the Base list', 'solver_unknown', (o: Order) => (o.solver = ATTACKER)],
+      [
+        'the Base Sepolia solver on the mainnet order',
+        'order_terms',
+        (o: Order) => Object.assign(o, { solverChainId: 'base-sepolia', solver: TESTNET_SOLVER }),
+      ],
+      ['an Optimism solver, a chain outside the route', 'order_terms', (o: Order) => (o.solverChainId = 'optimism')],
       ['a solver chain with no allowlist entry', 'order_terms', (o: Order) => (o.solverChainId = 'solana')],
       ['a destination call', 'order_calls', (o: Order) => o.output.calls.push('0x12345678')],
       ['an output deadline equal to now', 'deadline', (o: Order) => (o.output.deadline = QUOTED_AT)],
@@ -252,6 +260,10 @@ describe('checkRelayOrder', () => {
       expect(checkRelayOrder(usdcRequest, quote, QUOTED_AT)).toMatchObject({ ok: true, deadline: LAST_DEADLINE });
     });
 
+    it('when the solver is listed on the destination chain, then it passes', () => {
+      expect(codeOf(variant((_, o) => (o.solverChainId = 'arbitrum')))).toBe('passed');
+    });
+
     it('when the request names the account and token in lower case, then it still passes', () => {
       const request = {
         ...usdcRequest,
@@ -260,6 +272,31 @@ describe('checkRelayOrder', () => {
       };
 
       expect(codeOf(quoteOf(usdcAnswer), request)).toBe('passed');
+    });
+  });
+
+  describe('given a uint256 field of the order at 2^256 or above', () => {
+    it.each([
+      ['the salt', (o: Order) => (o.salt = NINES_78)],
+      ['the input amount', (o: Order) => (o.inputs[0].payment.amount = NINES_78)],
+      ['the input weight', (o: Order) => (o.inputs[0].payment.weight = NINES_78)],
+      ['a refund minimum', (o: Order) => (o.inputs[0].refunds[0].minimumAmount = NINES_78)],
+      ['the output minimum', (o: Order) => (o.output.payments[0].minimumAmount = NINES_78)],
+      ['the salt at exactly 2^256', (o: Order) => (o.salt = (2n ** 256n).toString())],
+    ])(
+      'when %s is out of range, then relayOrderId answers undefined and the check fails with order_terms',
+      (_, change) => {
+        const quote = variant((__, o) => change(o), { resign: false });
+
+        expect(relayOrderId(quote.relayOrder.orderData)).toBeUndefined();
+        expect(codeOf(quote)).toBe('order_terms');
+      }
+    );
+
+    it('when the salt is 2^256 - 1, then the order still hashes', () => {
+      const quote = variant((_, o) => (o.salt = (2n ** 256n - 1n).toString()), { resign: false });
+
+      expect(relayOrderId(quote.relayOrder.orderData)).toMatch(/^0x[0-9a-f]{64}$/);
     });
   });
 
@@ -328,6 +365,17 @@ describe('checkRelayOrder', () => {
       expect(codeOf(quoteOf(usdcAnswer), { ...usdcRequest, destinationChainId: 999 })).toBe('destination_chain');
     });
 
+    it('when origin and destination are the same chain under an order signed for it, then it fails with destination_chain', () => {
+      const quote = variant((_, o) => {
+        o.output.chainId = 'base';
+        o.output.payments[0].currency = BASE_USDC;
+        o.inputs[0].refunds = [o.inputs[0].refunds[0]];
+      });
+      const request = { ...usdcRequest, destinationChainId: 8453, destinationToken: BASE_USDC };
+
+      expect(codeOf(quote, request)).toBe('destination_chain');
+    });
+
     it('when Base mainnet USDC goes to Base Sepolia USDC under an order signed for it, then it fails with destination_chain', () => {
       const quote = variant((_, o) => {
         o.output.chainId = 'base-sepolia';
@@ -342,6 +390,58 @@ describe('checkRelayOrder', () => {
       const request = { ...usdcRequest, destinationChainId: 84532, destinationToken: BASE_SEPOLIA_USDC };
 
       expect(codeOf(quote, request)).toBe('destination_chain');
+    });
+  });
+
+  describe('given 0.001 ETH from Base Sepolia to Sepolia, both flagged testnet', () => {
+    const testnetRequest: QuoteRequest = {
+      ...usdcRequest,
+      originChainId: 84532,
+      originToken: zeroAddress,
+      amount: '1000000000000000',
+      destinationChainId: 11155111,
+      destinationToken: zeroAddress,
+    };
+
+    const testnetQuote = (min: string, change: (o: Order) => void = () => {}) =>
+      variant((q, o) => {
+        Object.assign(q, { inputAmount: testnetRequest.amount, minOutputAmount: min, expectedOutputAmount: min });
+        Object.assign(o, { solverChainId: 'base-sepolia', solver: TESTNET_SOLVER });
+        Object.assign(o.inputs[0].payment, {
+          chainId: 'base-sepolia',
+          currency: zeroAddress,
+          amount: testnetRequest.amount,
+        });
+        const [first, second] = o.inputs[0].refunds;
+        o.inputs[0].refunds = [
+          { ...first, chainId: 'base-sepolia', currency: zeroAddress, extraData: BASE_SEPOLIA_ROUTER },
+          { ...second, chainId: 'sepolia', currency: zeroAddress, extraData: '0x' },
+        ];
+        Object.assign(o.output, { chainId: 'sepolia', extraData: '0x' });
+        Object.assign(o.output.payments[0], { currency: zeroAddress, minimumAmount: min, expectedAmount: min });
+        change(o);
+      });
+
+    it('when the live 22 Oct quote costs 5873 bps and Sepolia carries extraData 0x, then it passes', () => {
+      expect(codeOf(testnetQuote('412737624236110'), testnetRequest)).toBe('passed');
+    });
+
+    it('when the route costs exactly 9000 bps, then it passes, and 1 unit less fails with output_floor', () => {
+      expect(codeOf(testnetQuote('100000000000000'), testnetRequest)).toBe('passed');
+      expect(codeOf(testnetQuote('99999999999999'), testnetRequest)).toBe('output_floor');
+    });
+
+    it('when the Base Sepolia refund carries extraData 0x, then it passes', () => {
+      const quote = testnetQuote('412737624236110', (o) => (o.inputs[0].refunds[0].extraData = '0x'));
+
+      expect(codeOf(quote, testnetRequest)).toBe('passed');
+    });
+
+    it.each([
+      ['the output', (o: Order) => (o.output.extraData = ATTACKER_DATA)],
+      ['a refund', (o: Order) => (o.inputs[0].refunds[1].extraData = ATTACKER_DATA)],
+    ])('when %s carries extraData of another router, then it fails with router_mismatch', (_, change) => {
+      expect(codeOf(testnetQuote('412737624236110', change), testnetRequest)).toBe('router_mismatch');
     });
   });
 });

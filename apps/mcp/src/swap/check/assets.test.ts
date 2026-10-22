@@ -118,4 +118,12 @@ describe('clearsFloor', () => {
 
     expect(clearsFloor(usdcToWeth, 9_700_000_000_000_000_000n, usdcToBsc)).toBe(false);
   });
+
+  it('given 10 USDC from Base to Arbitrum and a 9000 bps cap, when the minimum is 1 USDC, then it clears, and 1 unit less does not', () => {
+    const arb = request({ destinationChainId: 42161, destinationToken: ARB_USDC });
+    const pair = { decimalsIn: 6, decimalsOut: 6 };
+
+    expect(clearsFloor(arb, 1_000_000n, pair, 9_000n)).toBe(true);
+    expect(clearsFloor(arb, 999_999n, pair, 9_000n)).toBe(false);
+  });
 });

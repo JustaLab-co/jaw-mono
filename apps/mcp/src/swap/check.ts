@@ -51,6 +51,8 @@ export type CheckCode =
   | 'order_calls'
   | 'refund_recipient'
   | 'refund_terms'
+  | 'router_mismatch'
+  | 'solver_unknown'
   | 'deposit_address'
   | 'deposit_address_reused';
 
