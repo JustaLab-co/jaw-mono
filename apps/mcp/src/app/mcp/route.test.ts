@@ -20,7 +20,7 @@ const SIGNERS = {
   jaw_revoke_permission: 'owner',
   jaw_session_status: 'session',
   jaw_sign: 'owner',
-  jaw_add_funds: 'none',
+  jaw_add_funds: 'owner',
   jaw_connections: 'none',
   jaw_swap_status: 'none',
   jaw_get_calls_status: 'none',

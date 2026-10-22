@@ -88,6 +88,25 @@ async function approveSign(ask: Ask, claim: Claim, t: Tenant, { chainId, request
   return signature ? { state: 'approved', signature } : { state: 'failed', code: 'wallet_answer_unreadable' };
 }
 
+export type AddFundsPayload = { chainId: number };
+
+const addFundsPayload = z.object({ chainId: z.number().int().positive() });
+
+export const addFundsWork: Rebuild = (t, payload) => {
+  const sent = addFundsPayload.safeParse(payload).data;
+  return sent && ((ask, claim) => showAddFunds(ask, claim, t, sent));
+};
+
+/** The wallet answers null whether the owner funded or closed the screen, so approved means only that it closed. */
+async function showAddFunds(ask: Ask, claim: Claim, t: Tenant, { chainId }: AddFundsPayload): Promise<Outcome> {
+  if (!hasAccount(await ask('eth_requestAccounts', []), t.account)) {
+    return { state: 'owner_declined', code: 'wrong_account' };
+  }
+  if (!(await claim())) return { state: 'expired', code: 'session_lost' };
+  await ask('wallet_addFunds', [{ chainId }]);
+  return { state: 'approved' };
+}
+
 export type GrantPayload = { kind: GrantKind; grant: GrantRequest };
 
 export const grantWork =
@@ -158,6 +177,11 @@ async function askRevoke(t: Tenant, target: RevokeTarget, ask: Ask, claim: Claim
   return { state: 'approved', code: UNCONFIRMED };
 }
 
-const REBUILDS = { sign: signWork, grant: grantWork(readOnChain), revoke: revokeWork(REVOKE_READS) };
+const REBUILDS = {
+  sign: signWork,
+  grant: grantWork(readOnChain),
+  revoke: revokeWork(REVOKE_READS),
+  add_funds: addFundsWork,
+};
 
 export const requestsWaiting = waitingRequests(REBUILDS);

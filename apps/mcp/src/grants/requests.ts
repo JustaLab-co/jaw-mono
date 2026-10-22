@@ -212,6 +212,7 @@ export type Rebuilds = Partial<Record<PermissionRequestRow['method'], Rebuild>>;
 
 type LinkKind =
   | { method: 'grant' }
+  | { method: 'add_funds' }
   | { method: 'revoke'; permissionId: string }
   | { method: 'sign'; idempotencyKey: string; requestHash: string; signKind: 'message' | 'typedData' };
 
@@ -228,6 +229,9 @@ export type LinkRequest = {
 export const revokeHeld = async (t: Tenant, permissionId: string) =>
   (await findHeld(t, { method: 'revoke', permissionId }))?.waiting.permissionId?.toLowerCase() ===
   permissionId.toLowerCase();
+
+/** Whether this connection already waits on an Add Funds link, so asking again opens nothing. */
+export const addFundsHeld = async (t: Tenant) => (await findHeld(t, { method: 'add_funds' })) !== undefined;
 
 export async function openLink(t: Tenant, req: LinkRequest, openWallet: OpenWallet): Promise<Opened> {
   const work = req.rebuild(t, req.payload);
