@@ -1,0 +1,80 @@
+{
+  "statusCode": 200,
+  "result": {
+    "data": {
+      "quoteId": "relay:0x179267677975cb6b6c5301a352198c12f5fe0a73147cf5437e608410dcbb6214",
+      "provider": "relay",
+      "inputAmount": "10000000000000000",
+      "expectedOutputAmount": "9939909163054804",
+      "minOutputAmount": "9741110979793708",
+      "expectedFillTimeSec": 4,
+      "fees": {
+        "originGasUsd": "0.000529",
+        "relayerUsd": "0.144501",
+        "appFeeUsd": "0"
+      },
+      "transactions": [
+        {
+          "chainId": 8453,
+          "to": "0x4cd00e387622c35bddb9b4c962c136462338bc31",
+          "data": "0x49290c1c0000000000000000000000006ca44a56b06869530c953dfa7868973be145676961fb170c281e35e82af8773e6b9c0cbc065e9f74abe896149ad6a480eaf9536e",
+          "value": "10000000000000000",
+          "description": "Confirm transaction in your wallet"
+        }
+      ],
+      "relayOrder": {
+        "orderId": "0x61fb170c281e35e82af8773e6b9c0cbc065e9f74abe896149ad6a480eaf9536e",
+        "orderData": {
+          "version": "v1",
+          "solverChainId": "base",
+          "solver": "0xf70da97812cb96acdf810712aa562db8dfa3dbef",
+          "salt": "0xdc9bf93af94b92a7fb7581cc713715979040136907d24603b8b0f774233b3676",
+          "inputs": [
+            {
+              "payment": {
+                "chainId": "base",
+                "currency": "0x0000000000000000000000000000000000000000",
+                "amount": "10000000000000000",
+                "weight": "1"
+              },
+              "refunds": [
+                {
+                  "chainId": "base",
+                  "recipient": "0x6ca44a56b06869530c953dfa7868973be1456769",
+                  "currency": "0x0000000000000000000000000000000000000000",
+                  "minimumAmount": "0",
+                  "deadline": 1793281580,
+                  "extraData": "0x000000000000000000000000b92fe925dc43a0ecde6c8b1a2709c170ec4fff4f"
+                },
+                {
+                  "chainId": "ethereum",
+                  "recipient": "0x6ca44a56b06869530c953dfa7868973be1456769",
+                  "currency": "0x0000000000000000000000000000000000000000",
+                  "minimumAmount": "0",
+                  "deadline": 1793281580,
+                  "extraData": "0x000000000000000000000000b92fe925dc43a0ecde6c8b1a2709c170ec4fff4f"
+                }
+              ]
+            }
+          ],
+          "output": {
+            "chainId": "ethereum",
+            "payments": [
+              {
+                "recipient": "0x6ca44a56b06869530c953dfa7868973be1456769",
+                "currency": "0x0000000000000000000000000000000000000000",
+                "minimumAmount": "9741110979793708",
+                "expectedAmount": "9939909163054804"
+              }
+            ],
+            "calls": [],
+            "deadline": 1793281580,
+            "extraData": "0x000000000000000000000000b92fe925dc43a0ecde6c8b1a2709c170ec4fff4f"
+          },
+          "fees": []
+        }
+      }
+    },
+    "error": null
+  }
+}

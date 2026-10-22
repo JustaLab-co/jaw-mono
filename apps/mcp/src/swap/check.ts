@@ -45,6 +45,12 @@ export type CheckCode =
   | 'deadline'
   | 'exclusivity'
   | 'route_unsupported'
+  | 'order_missing'
+  | 'order_id'
+  | 'order_terms'
+  | 'order_calls'
+  | 'refund_recipient'
+  | 'refund_terms'
   | 'deposit_address'
   | 'deposit_address_reused';
 
@@ -79,6 +85,7 @@ const quoteShape = z.object({
   fees: z.object({ totalUsd: z.string().regex(usd).optional().catch(undefined) }),
   transactions: z.array(z.object({ chainId: z.number(), to: z.string(), data: z.string(), value: z.string() })),
   deposit: z.unknown().optional(),
+  relayOrder: z.unknown().optional(),
 });
 
 export type BackendQuote = z.infer<typeof quoteShape>;

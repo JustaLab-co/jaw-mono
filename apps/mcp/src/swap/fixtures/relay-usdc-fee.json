@@ -1,0 +1,87 @@
+{
+  "statusCode": 200,
+  "result": {
+    "data": {
+      "quoteId": "relay:0x1792676781f72c485b2cf981df3beac93c2075759a78387aee922b5c32f4e0ff",
+      "provider": "relay",
+      "inputAmount": "10000000",
+      "expectedOutputAmount": "9950988",
+      "minOutputAmount": "9751969",
+      "expectedFillTimeSec": 1,
+      "fees": {
+        "originGasUsd": "0.001225",
+        "relayerUsd": "0.024008",
+        "appFeeUsd": "0.024995"
+      },
+      "transactions": [
+        {
+          "chainId": 8453,
+          "to": "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913",
+          "data": "0x095ea7b30000000000000000000000004cd00e387622c35bddb9b4c962c136462338bc310000000000000000000000000000000000000000000000000000000000989680",
+          "value": "0",
+          "description": "Confirm transaction in your wallet"
+        },
+        {
+          "chainId": 8453,
+          "to": "0x4cd00e387622c35bddb9b4c962c136462338bc31",
+          "data": "0xe80179520000000000000000000000006ca44a56b06869530c953dfa7868973be1456769000000000000000000000000833589fcd6edb6e08f4c7c32d4f71b54bda0291300000000000000000000000000000000000000000000000000000000009896804aefef577bdf321635a10542aace42bcfaf4cc33be7220c61ca9b24f197c607f",
+          "value": "0",
+          "description": "Confirm transaction in your wallet"
+        }
+      ],
+      "relayOrder": {
+        "orderId": "0x4aefef577bdf321635a10542aace42bcfaf4cc33be7220c61ca9b24f197c607f",
+        "orderData": {
+          "version": "v1",
+          "solverChainId": "base",
+          "solver": "0xf70da97812cb96acdf810712aa562db8dfa3dbef",
+          "salt": "0x60b63813bfe564a7af7e33c8109b496e8188487c013841dfffc315d07f9c0c1c",
+          "inputs": [
+            {
+              "payment": {
+                "chainId": "base",
+                "currency": "0x833589fcd6edb6e08f4c7c32d4f71b54bda02913",
+                "amount": "10000000",
+                "weight": "1"
+              },
+              "refunds": [
+                {
+                  "chainId": "base",
+                  "recipient": "0x6ca44a56b06869530c953dfa7868973be1456769",
+                  "currency": "0x833589fcd6edb6e08f4c7c32d4f71b54bda02913",
+                  "minimumAmount": "0",
+                  "deadline": 1793281581,
+                  "extraData": "0x000000000000000000000000b92fe925dc43a0ecde6c8b1a2709c170ec4fff4f"
+                },
+                {
+                  "chainId": "arbitrum",
+                  "recipient": "0x6ca44a56b06869530c953dfa7868973be1456769",
+                  "currency": "0xaf88d065e77c8cc2239327c5edb3a432268e5831",
+                  "minimumAmount": "0",
+                  "deadline": 1793281581,
+                  "extraData": "0x000000000000000000000000b92fe925dc43a0ecde6c8b1a2709c170ec4fff4f"
+                }
+              ]
+            }
+          ],
+          "output": {
+            "chainId": "arbitrum",
+            "payments": [
+              {
+                "recipient": "0x6ca44a56b06869530c953dfa7868973be1456769",
+                "currency": "0xaf88d065e77c8cc2239327c5edb3a432268e5831",
+                "minimumAmount": "9751969",
+                "expectedAmount": "9950988"
+              }
+            ],
+            "calls": [],
+            "deadline": 1793281581,
+            "extraData": "0x000000000000000000000000b92fe925dc43a0ecde6c8b1a2709c170ec4fff4f"
+          },
+          "fees": []
+        }
+      }
+    },
+    "error": null
+  }
+}
