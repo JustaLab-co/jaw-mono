@@ -1,4 +1,5 @@
-import { eq, sql, type SQL } from 'drizzle-orm';
+import { eq, sql } from 'drizzle-orm';
+import type { PgUpdateSetSource } from 'drizzle-orm/pg-core';
 import {
   encodeFunctionData,
   erc20Abi,
@@ -40,6 +41,8 @@ import { guardTools, RATE_WINDOW_MS } from '@/lib/edge';
 import { gateCode } from '@/payments/render';
 import type { BackendDeps } from '@/swap/backend';
 import { swapRequest, type QuoteDeps } from '@/swap/quote';
+import { CALL_INVALID } from '@/swap/calls';
+import type { DepositCall, LegacyCall } from '@/swap/check';
 import { approveByOf, claimSwap, type SwapRow } from '@/swap/store';
 import { purge } from '@/reconciler/run';
 import { fakeChain } from '@/owner-calls/chain-testkit';
@@ -274,7 +277,7 @@ const paymentsOf = (connectionId: string) =>
   getDb().select().from(payments).where(eq(payments.connectionId, connectionId));
 const quotesGiven = () => backend.hits.filter((h) => h.quoted);
 const swapsThisMinute = (t: Tenant, count: number) => hitsThisWindow(`swap:${t.connectionId}`, count, RATE_WINDOW_MS);
-const rewrite = async (id: string, set: { quotedAt?: SQL; leaseUntil?: SQL; approveBy?: SQL }) => {
+const rewrite = async (id: string, set: PgUpdateSetSource<typeof swaps>) => {
   await getDb().execute(sql`alter table swaps disable trigger swaps_guard`);
   await getDb().update(swaps).set(set).where(eq(swaps.id, id));
   await getDb().execute(sql`alter table swaps enable trigger swaps_guard`);
@@ -520,7 +523,7 @@ describe('the owner link', () => {
     const result = await run(t, { originChainId: 8453, originToken: '0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913' });
 
     const [row] = await swapsOf(t.connectionId);
-    expect(row.call?.chainId).toBe(8453);
+    expect((row.call as LegacyCall).chainId).toBe(8453);
     expect(opened).toEqual([{ chainId: 84532, until: row.approveBy, client: t.clientId }]);
     expect(result.structuredContent?.summary).toMatch(/pays that transaction's gas in the wallet/);
   });
@@ -738,7 +741,7 @@ describe('the owner approves the deposit', () => {
       originToken: '0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913',
     });
 
-    const call = row.call!;
+    const call = row.call as LegacyCall;
     expect(opened).toEqual([{ chainId: 84532, until: row.approveBy, client: t.clientId }]);
     expect(methods()).toEqual([
       'eth_requestAccounts',
@@ -1282,6 +1285,68 @@ describe('jaw_swap_status', () => {
 
     expect(result.structuredContent).toMatchObject({ quoteId, state: 'owner_declined' });
     expect(deposits.hits).toEqual([]);
+  });
+
+  it('given a row whose call was written as a one-element array, when jaw_swap_status answers, then its deposit is the one the one-object row gave', async () => {
+    const { t } = await connected();
+    const quoteId = await started(t);
+    const row = await rowOf(t);
+    const before = await status(t, quoteId);
+
+    await rewrite(row.id, { call: [{ kind: 'deposit', ...(row.call as DepositCall) }] });
+    const after = await status(t, quoteId);
+
+    const deposit = { address: row.depositAddress, to: getAddress(USDC), value: '0' };
+    expect(before.structuredContent?.deposit).toEqual(deposit);
+    expect(after.structuredContent?.deposit).toEqual(deposit);
+  });
+
+  it('given a row holding an approve then the deposit, when jaw_swap_status answers, then its deposit is the deposit call, not the approve', async () => {
+    const { t } = await connected();
+    const quoteId = await started(t);
+    const row = await rowOf(t);
+    const legacy = row.call as DepositCall;
+    const approval = {
+      kind: 'approve' as const,
+      chainId: legacy.chainId,
+      to: PAY_TO,
+      data: '0x095ea7b3' as const,
+      value: '7',
+    };
+
+    await rewrite(row.id, { call: [approval, { kind: 'deposit', ...legacy }] });
+    const result = await status(t, quoteId);
+
+    expect(result.structuredContent?.deposit).toEqual({
+      address: row.depositAddress,
+      to: getAddress(USDC),
+      value: '0',
+    });
+  });
+
+  it('given a row whose call does not read, when jaw_swap_status answers, then it names no deposit to send', async () => {
+    const { t } = await connected();
+    const quoteId = await started(t);
+    const row = await rowOf(t);
+
+    await rewrite(row.id, { call: [{ chainId: 84532, to: USDC, value: '0' }] as never });
+    const result = await status(t, quoteId);
+
+    expect(result.structuredContent).toMatchObject({ quoteId, state: 'awaiting_owner' });
+    expect(result.structuredContent?.deposit).toBeUndefined();
+  });
+
+  it('given a swap declined because its call did not read, when jaw_swap_status answers, then the summary says the wallet was asked nothing and not that the owner declined', async () => {
+    const { t } = await connected();
+    const quoteId = await started(t);
+    const row = await rowOf(t);
+
+    await rewrite(row.id, { state: 'owner_declined', code: CALL_INVALID });
+    const summary = (await status(t, quoteId)).structuredContent?.summary;
+
+    expect(summary).toMatch(/wallet was asked nothing/i);
+    expect(summary).toMatch(/new idempotencyKey/i);
+    expect(summary).not.toMatch(/owner declined/i);
   });
 
   it('given a swap awaiting the owner inside its window, when the backend has no deposit yet, then it stays awaiting_owner with its link and the backend state', async () => {

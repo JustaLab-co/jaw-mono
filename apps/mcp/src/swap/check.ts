@@ -6,6 +6,10 @@ export type QuoteRequest = { originChainId: number; originToken: Address; amount
 
 export type DepositCall = { chainId: number; to: Address; data: Hex; value: string };
 
+export type SwapCall = { kind: 'approve' | 'deposit' } & DepositCall;
+
+export type LegacyCall = { chainId: number; to: string; data: string; value: string };
+
 export type CheckCode =
   | 'quote_invalid'
   | 'quote_id'
