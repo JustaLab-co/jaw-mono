@@ -239,8 +239,8 @@ export const revokeHeld = async (t: Tenant, permissionId: string) =>
   (await findHeld(t, { method: 'revoke', permissionId }))?.waiting.permissionId?.toLowerCase() ===
   permissionId.toLowerCase();
 
-/** Whether this connection already waits on an Add Funds link, so asking again opens nothing. */
-export const addFundsHeld = async (t: Tenant) => (await findHeld(t, { method: 'add_funds' })) !== undefined;
+/** The chain of the Add Funds link this connection already waits on, if any, so asking again opens nothing. */
+export const addFundsHeldOn = async (t: Tenant) => (await findHeld(t, { method: 'add_funds' }))?.waiting.chainId;
 
 /** Add Funds links stay out of the account's open-link cap, so they are never account_busy, and have a bound of their own. */
 export function openLink(

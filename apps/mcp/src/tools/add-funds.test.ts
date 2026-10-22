@@ -211,6 +211,24 @@ describe('jaw_add_funds', () => {
     expect(await rowsOf(t)).toEqual([]);
   });
 
+  it('given a link waiting on a chainId, when the agent asks for it again and the capabilities lookup would fail, then the waiting link comes back without the lookup', async () => {
+    const { t, signer } = await connected();
+    const { deps, opened } = setup(signer);
+    const wait = held();
+    const holding = deps({ held: wait.promise });
+    const lookup = capabilities({ fail: new Error('proxy down') });
+
+    const first = await addFunds(t, { chainId: 8453 }, holding);
+    const again = await addFunds(t, { chainId: 8453 }, { ...holding, capabilityChains: lookup.capabilityChains });
+    wait.release();
+    await walletsSettled();
+
+    expect(refused(again)).toBe(false);
+    expect(urlOf(again)).toBe(urlOf(first));
+    expect(lookup.asked).toEqual([]);
+    expect(opened()).toBe(1);
+  });
+
   it('given a link waiting on one chain, when the agent asks for another, then the waiting link is named, not returned, and the address still comes back', async () => {
     const { t, signer } = await connected();
     const { deps, opened } = setup(signer);

@@ -5,7 +5,7 @@ import { tenant, type Tenant } from '@/connections/auth';
 import { APPROVE_WITHIN_MS, config } from '@/connections/config';
 import { ownerRelay, type OpenWallet } from '@/connections/relay';
 import { countHit } from '@/db/settings';
-import { addFundsHeld, openLink, type PermissionRequestRow } from '@/grants/requests';
+import { addFundsHeldOn, openLink, type PermissionRequestRow } from '@/grants/requests';
 import { addFundsWork, type AddFundsPayload } from '@/grants/resume';
 import { caip2, isProxyChain } from '@/lib/chain';
 import { RATE_WINDOW_MS } from '@/lib/edge';
@@ -78,7 +78,9 @@ function answer(t: Tenant, chainId: number, row: PermissionRequestRow) {
 export async function addFunds(t: Tenant, args: { chainId?: number } = {}, given: Partial<AddFundsDeps> = {}) {
   const deps = { ...DEFAULTS, ...given };
   const chainId = args.chainId ?? t.chainId;
-  if (chainId !== t.chainId) {
+  // A link waiting on the asked chain was checked when it opened, so asking again needs no lookup.
+  const heldOn = await addFundsHeldOn(t);
+  if (chainId !== t.chainId && chainId !== heldOn) {
     const unsupported = `unsupported_chain: Chain ${chainId} is not one the JAW wallet supports here.`;
     if (!isProxyChain(chainId)) return refusal(unsupported);
     // A mainnet server takes mainnets only, as jaw_get_assets reads balances on those and the connection's chain.
@@ -97,10 +99,7 @@ export async function addFunds(t: Tenant, args: { chainId?: number } = {}, given
       return refusal(`${unsupported} Supported: ${others.join(', ')}, and this connection's chain ${t.chainId}.`);
     }
   }
-  if (
-    !(await addFundsHeld(t)) &&
-    (await countHit(`owner-add-funds:${t.connectionId}`, RATE_WINDOW_MS)) > LINK_RATE_LIMIT
-  ) {
+  if (heldOn === undefined && (await countHit(`owner-add-funds:${t.connectionId}`, RATE_WINDOW_MS)) > LINK_RATE_LIMIT) {
     return refusedWithAddress(
       t,
       chainId,
