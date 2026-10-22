@@ -15,6 +15,7 @@ import { gateCode } from '@/payments/render';
 import { findPayment, stateOf } from '@/payments/store';
 import { randomToken } from '@/lib/token';
 import type { BackendAnswer, BackendDeps } from '@/swap/backend';
+import { CALL_INVALID, callsOf } from '@/swap/calls';
 import type { CheckedQuote } from '@/swap/check';
 import { countOpenLinks, FULL, MAX_OPEN_PER_ACCOUNT, withLinkSlot } from '@/owner-calls/cap';
 import { quote, swapRequest, type QuoteDeps } from '@/swap/quote';
@@ -187,6 +188,12 @@ function summaryOf(row: SwapRow): string {
     case 'quote_rejected':
       return `No swap: ${row.state} (${row.code}). Nothing was deposited.`;
     case 'owner_declined':
+      if (row.code === CALL_INVALID) {
+        return (
+          'The stored deposit could not be read, so the wallet was asked nothing. Nothing was sent. ' +
+          'A new jaw_swap with a new idempotencyKey gets a new quote.'
+        );
+      }
       if (row.code === 'wrong_account') {
         return 'The owner signed in with another account than this connection. Nothing was sent.';
       }
@@ -298,6 +305,7 @@ async function answer(row: SwapRow, read?: BackendAnswer): Promise<SwapResult> {
   );
   const quote = row.quote as CheckedQuote['quote'] | null;
   const payment = row.paymentId ? await findPayment(row.paymentId) : undefined;
+  const deposit = callsOf(row)?.at(-1);
   const out = swapOutput.parse({
     swapId: row.id,
     idempotencyKey: row.idempotencyKey,
@@ -314,9 +322,12 @@ async function answer(row: SwapRow, read?: BackendAnswer): Promise<SwapResult> {
       minOutputAmount: quote?.minOutputAmount,
     },
     expectedFillTimeSec: quote?.expectedFillTimeSec,
-    deposit: row.call
-      ? { address: row.depositAddress, to: row.call.to, value: row.call.value, txHash: row.txHash ?? undefined }
-      : undefined,
+    deposit: deposit && {
+      address: row.depositAddress,
+      to: deposit.to,
+      value: deposit.value,
+      txHash: row.txHash ?? undefined,
+    },
     quotePayment: payment && { paymentId: payment.id, state: stateOf(payment) },
     backend:
       row.backendState && row.checkedAt

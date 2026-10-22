@@ -5,7 +5,7 @@ import type { Ask } from '@/connections/relay';
 import { refusedBeforeSubmit, USER_REJECTED } from '@/connections/wallet-codes';
 import { errorLabel, log } from '@/lib/edge';
 import type { BackendDeps } from './backend';
-import type { DepositCall } from './check';
+import { CALL_INVALID, callsOf } from './calls';
 import {
   DEPOSIT_FAILED,
   DEPOSIT_REVERTED,
@@ -39,7 +39,11 @@ export async function approve(
   pollMs = POLL_MS,
   backend?: BackendDeps
 ): Promise<void> {
-  const call = row.call as DepositCall;
+  const calls = callsOf(row);
+  if (!calls) {
+    await decline(row, CALL_INVALID);
+    return;
+  }
   let accounts: unknown;
   try {
     accounts = await ask('eth_requestAccounts', []);
@@ -57,10 +61,10 @@ export async function approve(
     answer = await ask('wallet_sendCalls', [
       {
         version: '2.0.0',
-        chainId: toHex(call.chainId),
+        chainId: toHex(calls[0].chainId),
         from: account,
         atomicRequired: true,
-        calls: [{ to: call.to, data: call.data, value: call.value }],
+        calls: calls.map(({ to, data, value }) => ({ to, data, value })),
       },
     ]);
   } catch (err) {
