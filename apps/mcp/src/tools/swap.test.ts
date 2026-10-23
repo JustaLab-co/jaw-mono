@@ -38,6 +38,7 @@ import { hitsThisWindow, TEST_PG_URL, useTestDb, useTestPostgres } from '@/db/te
 import { x402Budget } from '@/grants/store';
 import { guardTools, RATE_WINDOW_MS } from '@/lib/edge';
 import { gateCode } from '@/payments/render';
+import { approve as approveSwap } from '@/swap/approve';
 import type { BackendDeps } from '@/swap/backend';
 import { swapRequest, type QuoteDeps } from '@/swap/quote';
 import { approveByOf, claimSwap, type SwapRow } from '@/swap/store';
@@ -877,6 +878,20 @@ describe('the owner approves the deposit', () => {
     }
   );
 
+  it('given the row expired while the deposit was asked, when the owner declines it, then the send marker gives way to owner_declined', async () => {
+    const { t } = await connected();
+
+    const { row } = await approve(
+      t,
+      sendingAs(t.account, async () => {
+        await getDb().update(swaps).set({ state: 'expired' }).where(eq(swaps.connectionId, t.connectionId));
+        throw rejected(4001);
+      })
+    );
+
+    expect(row).toMatchObject({ state: 'expired', code: 'owner_declined', callsId: null });
+  });
+
   it.each([4100, 4200, 4900, 4901, 5700, 5710, -32602])(
     'given the deposit was asked, when the wallet refuses it with %i before submitting, then owner_declined with that code and the replay says nothing was sent',
     async (code) => {
@@ -1379,6 +1394,37 @@ describe('jaw_swap_status', () => {
       expect(result.structuredContent?.refusal).toBeUndefined();
       expect(await rowOf(t)).toMatchObject({ state, code: null, callsId: null });
       expect(submits()).toEqual([]);
+    }
+  );
+
+  it.each([
+    [4902, 'awaiting_owner'],
+    [undefined, 'awaiting_owner'],
+    [4001, 'awaiting_owner'],
+    [4902, 'expired'],
+    [4001, 'expired'],
+  ])(
+    'given the send marker, when a resumed session asks for the account and the wallet answers error %s on an %s row, then the row keeps the marker, status still reads the backend, and the summary says the deposit may be sent',
+    async (code, state) => {
+      const { t } = await connected();
+      const quoteId = await started(t, noCallsId(t.account));
+      if (state === 'expired') {
+        await backdateApproveBy(t);
+        await status(t, quoteId);
+        deposits.hits = [];
+      }
+      const refusing: Ask = async () => {
+        throw Object.assign(new Error('the wallet refused'), { code });
+      };
+
+      await approveSwap(refusing, await rowOf(t), t.account, 0).catch(() => undefined);
+      const result = await status(t, quoteId);
+
+      expect(await rowOf(t)).toMatchObject({ state, code: 'send_started' });
+      expect(statusReads()).toHaveLength(1);
+      const summary = result.structuredContent?.summary ?? '';
+      expect(summary).toMatch(/may have sent the deposit/i);
+      expect(summary).not.toMatch(/nothing was sent|declined/i);
     }
   );
 

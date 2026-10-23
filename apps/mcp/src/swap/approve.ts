@@ -10,6 +10,7 @@ import {
   DEPOSIT_FAILED,
   DEPOSIT_REVERTED,
   decline as declineHeld,
+  declineUnsent,
   markSendStarted,
   recordCallsId,
   recordCode,
@@ -121,15 +122,15 @@ async function keepCallsId(row: SwapRow, callsId: string): Promise<SwapRow | und
 async function recordRefusal(row: SwapRow, err: unknown): Promise<void> {
   const code = codeOf(err);
   if (code === USER_REJECTED) {
-    await decline(row, 'owner_declined');
+    await declineUnsent(row, 'owner_declined');
     return;
   }
   if (typeof code === 'number') {
-    await recordCode(row, `wallet_error:${code}`);
+    await recordCode(row, `wallet_error:${code}`, { unlessSent: true });
     return;
   }
   if (Date.now() < (row.approveBy as Date).getTime() - SESSION_END_MARGIN_MS) {
-    await recordCode(row, 'wallet_error:unknown', { unlessRejoinable: true });
+    await recordCode(row, 'wallet_error:unknown', { unlessRejoinable: true, unlessSent: true });
   }
   throw err;
 }
