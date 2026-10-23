@@ -192,7 +192,7 @@ async function keepQuote(
     return writeHeld(lease, {
       state,
       code: checked.code,
-      quote: shown ? { provider, offered, floor } : undefined,
+      quote: shown ? { refused: { provider, offered, floor } } : undefined,
       quoteFenced: fenced,
     });
   }

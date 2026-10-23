@@ -2594,7 +2594,7 @@ describe('a quote another provider answered', () => {
 
     expect(result.structuredContent).toMatchObject({ state: 'quote_rejected', refusal: { code: 'output_floor' } });
     expect(result.structuredContent?.summary).toBe(
-      'No swap: Across offered at least 1 base units of USDC, under the 9700000 base units of USDC this tool requires. ' +
+      'No swap: Across offered at least 1 base unit of USDC, under the 9700000 base units of USDC this tool requires. ' +
         'Nothing was sent. Try a larger amount or another route.'
     );
   });
@@ -2625,7 +2625,7 @@ describe('a quote another provider answered', () => {
     });
 
     expect(result.structuredContent?.summary).toBe(
-      'No swap: Across offered at least 1 base units, under the 9700000 base units this tool requires. ' +
+      'No swap: Across offered at least 1 base unit, under the 9700000 base units this tool requires. ' +
         'Nothing was sent. Try a larger amount or another route.'
     );
   });
@@ -2650,6 +2650,122 @@ describe('a quote another provider answered', () => {
     const result = await run(t, swapInput);
 
     expect(result.structuredContent?.summary).toBe('No swap: quote_rejected (output_floor). Nothing was deposited.');
+  });
+});
+
+describe('a refused swap row read back', () => {
+  const swapInput = {
+    originChainId: 8453,
+    originToken: '0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913',
+    amount: '10000000',
+  };
+  const refusedBy = async (t: Tenant, code: 'route_unsupported' | 'output_floor', input = swapInput) => {
+    config().swapProviders = new Set(['aurora', 'across', 'relay']);
+    const answer = structuredClone(acrossAnswer);
+    answer.result.data.minOutputAmount = '1';
+    backend.answer = answer;
+    const to = code === 'route_unsupported' ? { destinationToken: '0x82af49447d8a07e3bd95bd0d56f35241523fbab1' } : {};
+    await run(t, { ...input, ...to });
+    return { ...input, ...to };
+  };
+  const store = async (t: Tenant, values: Partial<typeof swaps.$inferInsert>) => {
+    const [row] = await swapsOf(t.connectionId);
+    await getDb().execute(sql`alter table swaps disable trigger swaps_guard`);
+    await getDb().update(swaps).set(values).where(eq(swaps.id, row.id));
+    await getDb().execute(sql`alter table swaps enable trigger swaps_guard`);
+  };
+
+  it.each([
+    ['route_unsupported', /^No swap: the quote from Across is a route this tool cannot verify/],
+    ['output_floor', /^No swap: Across offered at least 1 base unit of USDC, under the 9700000 base units of USDC/],
+  ] as const)(
+    'given a refused %s row, when the same key comes again, then it gets the refusal text, no held quote and no quote fields',
+    async (code, text) => {
+      const { t } = await connected();
+      const input = await refusedBy(t, code);
+
+      const again = await run(t, input);
+
+      expect(again.structuredContent?.summary).toMatch(text);
+      expect(again.structuredContent?.provider).toBeUndefined();
+      expect(again.structuredContent?.destination?.minOutputAmount).toBeUndefined();
+      expect(again.structuredContent?.destination?.expectedOutputAmount).toBeUndefined();
+      const [row] = await swapsOf(t.connectionId);
+      expect(row.quoteId).toBeNull();
+    }
+  );
+
+  it('given a refused row with a held-quote look alike under quote, when the same key comes, then no held quote is read from it', async () => {
+    const { t } = await connected();
+    const input = await refusedBy(t, 'output_floor');
+    await store(t, {
+      quote: {
+        refused: { provider: 'across', offered: '1', floor: '9700000' },
+        provider: 'relay',
+        minOutputAmount: '5',
+      },
+    });
+
+    const again = await run(t, input);
+
+    expect(again.structuredContent?.destination?.minOutputAmount).toBeUndefined();
+    expect(again.structuredContent?.summary).toMatch(/^No swap: Across offered at least 1 base unit/);
+  });
+
+  it('given a refusal to a destination whose token has 18 decimals, when the same key comes, then offered and floor read in base units of that token', async () => {
+    const { t } = await connected();
+    const input = await refusedBy(t, 'output_floor');
+    await store(t, {
+      destinationChainId: 56,
+      destinationToken: '0x8AC76a51cc950d9822D68b83fE1Ad97B32Cd580d',
+      quote: { refused: { provider: 'across', offered: '1', floor: '9700000000000000000' } },
+    });
+
+    const again = await run(t, input);
+
+    expect(again.structuredContent?.summary).toBe(
+      'No swap: Across offered at least 1 base unit of USDC, under the 9700000000000000000 base units of USDC this tool requires. ' +
+        'Nothing was sent. Try a larger amount or another route.'
+    );
+  });
+
+  it('given a stored output_floor refusal offering 2 base units, when the same key comes, then the offered amount is plural', async () => {
+    const { t } = await connected();
+    const input = await refusedBy(t, 'output_floor');
+    await store(t, { quote: { refused: { provider: 'across', offered: '2', floor: '9700000' } } });
+
+    const again = await run(t, input);
+
+    expect(again.structuredContent?.summary).toMatch(
+      /offered at least 2 base units of USDC, under the 9700000 base units/
+    );
+  });
+
+  it.each([
+    ['provider only', { provider: 'across' }],
+    ['amounts without a provider', { offered: '1', floor: '9700000' }],
+    ['an empty object', {}],
+  ])(
+    'given an output_floor row stored with %s, when the same key comes, then the summary falls back to the code',
+    async (_, refused) => {
+      const { t } = await connected();
+      const input = await refusedBy(t, 'output_floor');
+      await store(t, { quote: { refused } });
+
+      const again = await run(t, input);
+
+      expect(again.structuredContent?.summary).toBe('No swap: quote_rejected (output_floor). Nothing was deposited.');
+    }
+  );
+
+  it('given a route_unsupported row stored with an empty object, when the same key comes, then the summary names no provider', async () => {
+    const { t } = await connected();
+    const input = await refusedBy(t, 'route_unsupported');
+    await store(t, { quote: { refused: {} } });
+
+    const again = await run(t, input);
+
+    expect(again.structuredContent?.summary).toMatch(/^No swap: the quote is a route this tool cannot verify/);
   });
 });
 

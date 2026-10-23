@@ -16,7 +16,7 @@ import { randomToken } from '@/lib/token';
 import { PROVIDER_DISABLED } from '@/swap/approve';
 import type { BackendDeps } from '@/swap/backend';
 import { CALL_INVALID, callsOf } from '@/swap/calls';
-import { isSupportedOriginChain, type CheckedQuote, type Provider } from '@/swap/check';
+import { isSupportedOriginChain, type CheckedQuote } from '@/swap/check';
 import { assetOf } from '@/swap/check/assets';
 import { countOpenLinks, FULL, MAX_OPEN_PER_ACCOUNT, withLinkSlot } from '@/owner-calls/cap';
 import { quote, SOLANA, swapRequest, type QuoteDeps } from '@/swap/quote';
@@ -40,7 +40,7 @@ import {
   type SwapRequest,
 } from '@/swap/store';
 import { followSwap, resumeSwap } from '@/swap/resume';
-import { providerOf, track, type TrackAnswer } from '@/swap/track';
+import { heldQuoteOf, providerOf, refusalOf, track, type TrackAnswer } from '@/swap/track';
 
 const SWAP_RATE_LIMIT = 10;
 const STATUS_RATE_LIMIT = 30;
@@ -206,7 +206,7 @@ async function refusedBeforeQuoting(
 }
 
 function summaryOf(row: SwapRow): string {
-  const quote = row.quote as CheckedQuote['quote'] | null;
+  const quote = heldQuoteOf(row);
   switch (row.state) {
     case 'quoting':
       return `No quote yet (${row.code}). Nothing was deposited. Send the same idempotencyKey again to retry.`;
@@ -359,7 +359,7 @@ function bridgeTerms(row: SwapRow, provider: 'across' | 'relay', quote: CheckedQ
 }
 
 function routeUnsupported(row: SwapRow): string {
-  const provider = (row.quote as { provider?: Provider } | null)?.provider;
+  const provider = refusalOf(row)?.provider;
   const from = provider ? ` from ${NAME[provider]}` : '';
   return (
     `No swap: the quote${from} is a route this tool cannot verify from calldata (a swap on the origin or destination chain). ` +
@@ -368,10 +368,10 @@ function routeUnsupported(row: SwapRow): string {
 }
 
 function outputFloor(row: SwapRow): string {
-  const { provider, offered, floor } = (row.quote ?? {}) as { provider?: Provider; offered?: string; floor?: string };
+  const { provider, offered, floor } = refusalOf(row) ?? {};
   if (!provider || !offered || !floor) return `No swap: ${row.state} (${row.code}). Nothing was deposited.`;
   const symbol = assetOf(row.destinationChainId, row.destinationToken)?.asset;
-  const units = (amount: string) => `${amount} base units${symbol ? ` of ${symbol}` : ''}`;
+  const units = (amount: string) => `${amount} base unit${amount === '1' ? '' : 's'}${symbol ? ` of ${symbol}` : ''}`;
   return (
     `No swap: ${NAME[provider]} offered at least ${units(offered)}, under the ${units(floor)} this tool requires. ` +
     'Nothing was sent. Try a larger amount or another route.'
@@ -441,7 +441,7 @@ async function answer(row: SwapRow, read?: TrackAnswer): Promise<SwapResult> {
   const response = [row.quoteFenced, backendText && fenceText('the swap backend', backendText, 400)].filter(
     (text): text is string => !!text
   );
-  const quote = row.quote as CheckedQuote['quote'] | null;
+  const quote = heldQuoteOf(row);
   const payment = row.paymentId ? await findPayment(row.paymentId) : undefined;
   const calls = callsOf(row);
   const deposit = calls?.at(-1);

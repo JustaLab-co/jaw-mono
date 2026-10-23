@@ -14,7 +14,7 @@ import {
   type KnownStatus,
   type TrackKey,
 } from './backend';
-import type { Provider } from './check';
+import type { CheckedQuote, Provider } from './check';
 import {
   DEPOSIT_AMBIGUOUS,
   DEPOSIT_REVERTED,
@@ -37,8 +37,13 @@ const UNPROVEN_RAW = new Set(['no_tx', 'failure']);
 
 const FINAL = new Set<DepositState>(['completed', 'refunded', 'failed']);
 
-export const providerOf = (row: SwapRow): Provider =>
-  (row.quote as { provider?: Provider } | null)?.provider ?? 'aurora';
+export type Refusal = { provider?: Provider; offered?: string; floor?: string };
+
+export const refusalOf = (row: SwapRow): Refusal | undefined => (row.quote as { refused?: Refusal } | null)?.refused;
+
+export const heldQuoteOf = (row: SwapRow) => (refusalOf(row) ? null : (row.quote as CheckedQuote['quote'] | null));
+
+export const providerOf = (row: SwapRow): Provider => heldQuoteOf(row)?.provider ?? 'aurora';
 
 async function keyOf(
   row: SwapRow,

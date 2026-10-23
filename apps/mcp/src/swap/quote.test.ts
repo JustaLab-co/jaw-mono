@@ -322,7 +322,12 @@ describe('the providers the quote asks for', () => {
 
     expect(asked()).toEqual(['aurora']);
     expect(step).toMatchObject({
-      row: { state: 'quote_rejected', code: 'route_unsupported', call: null, quote: { provider: 'across' } },
+      row: {
+        state: 'quote_rejected',
+        code: 'route_unsupported',
+        call: null,
+        quote: { refused: { provider: 'across' } },
+      },
     });
   });
 
@@ -341,7 +346,7 @@ describe('the providers the quote asks for', () => {
         state: 'quote_rejected',
         code: 'output_floor',
         call: null,
-        quote: { provider: 'across', offered: '1', floor: '9700000' },
+        quote: { refused: { provider: 'across', offered: '1', floor: '9700000' } },
       },
     });
   });
