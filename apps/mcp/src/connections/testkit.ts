@@ -3,6 +3,8 @@ import { currentPeriodWindow } from '@jaw.id/agent';
 import { sql } from 'drizzle-orm';
 import { toFunctionSelector, verifyMessage, verifyTypedData, type Address, type Hex, type PublicClient } from 'viem';
 import { privateKeyToAccount, generatePrivateKey } from 'viem/accounts';
+import { createSiweMessage } from 'viem/siwe';
+import type { SignInWithEthereumCapabilityRequest } from '@jaw.id/core';
 import { getDb } from '@/db/client';
 import { grants } from '@/db/schema';
 import { followUps } from '@/grants/requests';
@@ -44,6 +46,23 @@ export async function managerAnswer(functionName: 'getHash' | 'getCurrentPeriod'
   return { ...day, spend: 0n };
 }
 
+/** The sign-in message the wallet builds from a signInWithEthereum request, as keys.jaw.id's connect dialog does. */
+export const siweMessageOf = (siwe: SignInWithEthereumCapabilityRequest, address: Address, issuedAt = new Date()) =>
+  createSiweMessage({
+    address,
+    chainId: Number(siwe.chainId),
+    domain: siwe.domain!,
+    nonce: siwe.nonce,
+    uri: siwe.uri!,
+    version: '1',
+    statement: siwe.statement,
+    issuedAt,
+    expirationTime: siwe.expirationTime ? new Date(siwe.expirationTime) : undefined,
+    notBefore: siwe.notBefore ? new Date(siwe.notBefore) : undefined,
+    requestId: siwe.requestId,
+    resources: siwe.resources,
+  });
+
 /** What the owner's wallet answers, signing with `signer`. `refuse` lists methods the owner turns down. */
 export function walletAnswers(signer: ReturnType<typeof owner>, refuse: string[] = []): Ask {
   return async (method, params) => {
@@ -51,6 +70,16 @@ export function walletAnswers(signer: ReturnType<typeof owner>, refuse: string[]
     switch (method) {
       case 'eth_requestAccounts':
         return [signer.address];
+      case 'wallet_connect': {
+        const siwe = (params[0] as { capabilities?: { signInWithEthereum?: SignInWithEthereumCapabilityRequest } })
+          ?.capabilities?.signInWithEthereum;
+        if (!siwe) return { accounts: [{ address: signer.address }] };
+        const message = siweMessageOf(siwe, signer.address);
+        const signature = await signer.signMessage({ message });
+        return {
+          accounts: [{ address: signer.address, capabilities: { signInWithEthereum: { message, signature } } }],
+        };
+      }
       case 'personal_sign':
         return signer.signMessage({ message: { raw: params[0] as Hex } });
       case 'wallet_grantPermissions': {
