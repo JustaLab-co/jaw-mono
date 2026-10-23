@@ -58,7 +58,13 @@ export default defineConfig({
       ignoreHTTPSErrors: HTTPS,
       reuseExistingServer: !CI,
       timeout: 300_000,
-      env: { NEXT_PUBLIC_KEYS_URL: KEYS_URL },
+      // App-specific mode refuses to start without a key; every API call is mocked, so any value works.
+      // The default chain is pinned to Sepolia, the chain the mocked RPC answers for.
+      env: {
+        NEXT_PUBLIC_KEYS_URL: KEYS_URL,
+        NEXT_PUBLIC_API_KEY: process.env.NEXT_PUBLIC_API_KEY ?? 'e2e',
+        NEXT_PUBLIC_DEFAULT_CHAIN_ID: '11155111',
+      },
     },
   ],
 });

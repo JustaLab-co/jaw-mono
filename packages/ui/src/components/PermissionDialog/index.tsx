@@ -45,6 +45,7 @@ export const PermissionDialog = ({
   apiKey,
   onConfirm,
   onCancel,
+  onAddFunds,
   isProcessing,
   status,
   isLoadingTokenInfo = false,
@@ -128,17 +129,27 @@ export const PermissionDialog = ({
   const erc20CannotPay =
     isPayingWithErc20 && (!selectedFeeToken?.gasCostMaxFormatted || !selectedFeeToken?.isSelectable);
 
+  const amountsLoading =
+    isLoadingTokenInfo ||
+    // A grant that sends funds is not confirmable before the screen has shown how much.
+    (isGrant && prefundLoading) ||
+    gasFeeLoading;
+
   const canConfirm =
     !isProcessing &&
-    !isLoadingTokenInfo &&
+    !amountsLoading &&
     !isResolvingAddresses &&
-    // A grant that sends funds is not confirmable before the screen has shown how much.
-    !(isGrant && prefundLoading) &&
-    !gasFeeLoading &&
     !blockReason &&
     !missingCalls &&
     !revocationBlocks &&
     !erc20CannotPay;
+
+  const fundsBlocked = feeBlockReason === 'funds';
+  // A funds block read off a fee or fee token list still loading may be stale, and Add funds ends
+  // the request.
+  const offerAddFunds = fundsBlocked && !amountsLoading && !feeTokensLoading && !!onAddFunds;
+  let confirmLabel = isGrant ? 'Grant' : 'Revoke';
+  if (fundsBlocked) confirmLabel = offerAddFunds ? 'Add funds' : 'Insufficient Funds';
 
   const displayAddress = (address: string) => getDisplayAddress(identityOf(address)?.ensName, address);
   const avatarOf = (address: string | undefined) => identityOf(address)?.ensAvatar ?? undefined;
@@ -336,12 +347,12 @@ export const PermissionDialog = ({
                 {isGrant ? 'Cancel' : 'Keep it'}
               </Button>
               <Button
-                onClick={onConfirm}
-                disabled={!canConfirm}
-                variant={isGrant ? 'default' : 'destructive'}
+                onClick={offerAddFunds ? onAddFunds : onConfirm}
+                disabled={offerAddFunds ? isProcessing : !canConfirm}
+                variant={isGrant || offerAddFunds ? 'default' : 'destructive'}
                 className="rounded-box text-button h-10 flex-[56] font-semibold focus-visible:ring-1"
               >
-                {feeBlockReason === 'funds' && !revocationBlocks ? 'Insufficient Funds' : isGrant ? 'Grant' : 'Revoke'}
+                {confirmLabel}
               </Button>
             </div>
           </div>
