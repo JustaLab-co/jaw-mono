@@ -333,25 +333,20 @@ describe('jaw_swap gates', () => {
   });
 
   it.each([
-    ['a Solana origin', { originChainId: 792703809 }],
-    [
-      'a Solana destination with no recipient',
-      { destinationChainId: 792703809, destinationToken: 'So11111111111111111111111111111111111111112' },
-    ],
-    [
-      'a Solana destination with a hex token',
-      { destinationChainId: 792703809, recipient: 'So11111111111111111111111111111111111111112' },
-    ],
-    ['an EVM destination with a base58 token', { destinationToken: 'So11111111111111111111111111111111111111112' }],
-    ['an EVM destination with a base58 recipient', { recipient: 'So11111111111111111111111111111111111111112' }],
-  ])('given %s, when jaw_swap runs, then invalid_input with no row', async (_, args) => {
-    const { t } = await connected();
+    ['Solana', 792703809],
+    ['zkSync, which JAW does not serve', 324],
+  ])(
+    'given a destination on %s, when jaw_swap runs, then unsupported_destination_chain, no row, no request to the backend',
+    async (_, destinationChainId) => {
+      const { t } = await connected();
 
-    const result = await run(t, args);
+      const result = await run(t, { destinationChainId });
 
-    expect(result[gateCode]).toBe('invalid_input');
-    expect(await swapsOf(t.connectionId)).toEqual([]);
-  });
+      expect(result[gateCode]).toBe('unsupported_destination_chain');
+      expect(await swapsOf(t.connectionId)).toEqual([]);
+      expect(backend.hits).toEqual([]);
+    }
+  );
 });
 
 const swapRoute = withConnection(
@@ -384,6 +379,18 @@ describe('jaw_swap over MCP', () => {
       const result = await callSwap(token, { ...input, ...extra });
       expect(result.isError).toBe(true);
     }
+    expect(await swapsOf(t.connectionId)).toEqual([]);
+  });
+
+  it.each([
+    ['a base58 destination token', { destinationToken: 'So11111111111111111111111111111111111111112' }],
+    ['a base58 recipient', { recipient: 'So11111111111111111111111111111111111111112' }],
+  ])('given %s, when jaw_swap is called, then the input is refused and no row exists', async (_, extra) => {
+    const { t, token } = await connected();
+
+    const result = await callSwap(token, { ...input, ...extra });
+
+    expect(result.isError).toBe(true);
     expect(await swapsOf(t.connectionId)).toEqual([]);
   });
 

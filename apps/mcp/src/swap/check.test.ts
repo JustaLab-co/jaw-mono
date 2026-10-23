@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 import { encodeFunctionData, erc20Abi, getAddress, zeroAddress, type Address } from 'viem';
-import { checkQuote, isSupportedOriginChain, type QuoteRequest } from './check';
+import { checkQuote, type QuoteRequest } from './check';
 
 const account = getAddress('0x1111111111111111111111111111111111111111');
 const usdc = getAddress('0x833589fcd6edb6e08f4c7c32d4f71b54bda02913');
@@ -138,7 +138,7 @@ describe('checkQuote', () => {
     expect(await rejected(erc20Request, body)).toBe('tx_chain');
   });
 
-  it('B8.3 Given a quoteId that is not aurora:<address>, another provider, or a deposit field, When checked, Then it fails with quote_id', async () => {
+  it('B8.3 Given a quoteId that is not aurora:<address> or a deposit field, When checked, Then it fails with quote_id', async () => {
     const notAddress = backendQuoteJson(erc20Request);
     notAddress.quoteId = 'aurora:0x1234';
     const otherPrefix = backendQuoteJson(erc20Request);
@@ -147,14 +147,19 @@ describe('checkQuote', () => {
     wrapped.quoteId = `x-aurora:${depositAddress}`;
     const longer = backendQuoteJson(erc20Request);
     longer.quoteId = `aurora:${depositAddress}ff`;
-    const otherProvider = backendQuoteJson(erc20Request);
-    otherProvider.provider = 'across';
     const withDeposit = backendQuoteJson(erc20Request);
     withDeposit.deposit = { chainId: 8453, address: depositAddress, token: usdc, amount: '1000000' };
 
-    for (const body of [notAddress, otherPrefix, wrapped, longer, otherProvider, withDeposit]) {
+    for (const body of [notAddress, otherPrefix, wrapped, longer, withDeposit]) {
       expect(await rejected(erc20Request, body)).toBe('quote_id');
     }
+  });
+
+  it('Given a quote from another provider, When checked, Then it fails with quote_unsupported_provider', async () => {
+    const otherProvider = backendQuoteJson(erc20Request);
+    otherProvider.provider = 'across';
+
+    expect(await rejected(erc20Request, otherProvider)).toBe('quote_unsupported_provider');
   });
 
   it('B8.4 Given an ERC-20 origin and a transaction to another contract, When checked, Then it fails with tx_to', async () => {
@@ -295,15 +300,5 @@ describe('checkQuote', () => {
     await checkQuote(erc20Request, body, isTaken);
 
     expect(isTaken).not.toHaveBeenCalled();
-  });
-});
-
-describe('isSupportedOriginChain', () => {
-  it('B31 Given an origin chain the JAW signer lists, testnets included, When checked, Then it is supported', () => {
-    for (const id of [8453, 42161, 1, 84532, 11155111]) expect(isSupportedOriginChain(id)).toBe(true);
-  });
-
-  it('B31 Given an origin chain outside the JAW signer list, When checked, Then it is refused', () => {
-    for (const id of [324, 792703809, 0]) expect(isSupportedOriginChain(id)).toBe(false);
   });
 });
