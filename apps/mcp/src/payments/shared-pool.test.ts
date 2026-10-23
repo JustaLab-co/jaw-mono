@@ -386,7 +386,7 @@ describe('given 1 USDC a day, an empty float, and an upto price whose Permit2 ap
     prices.set('/upto-edge', '890000');
     const quoted = await quote(token, '/upto-edge');
     expect(quoted.structuredContent.readiness).toEqual({ status: 'ready' });
-    expect(quoted.structuredContent.summary).toContain('Permit2');
+    expect(quoted.structuredContent.summary).toContain('one-time approval fee');
     const paid = await pay(t, { url: url('/upto-edge') }, withApproval);
     expect(paid.structuredContent?.refusal).toBeUndefined();
     expect(approvals).toEqual([USDC]);

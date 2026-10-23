@@ -128,7 +128,7 @@ describe('given a budget of 0.5 USDC a day', () => {
       readiness: { status: 'not_ready', reason: 'over_allowance' },
       budget: { permissionId, remainingToday: { amount: '490000', asset: `eip155:84532/erc20:${USDC}` } },
     });
-    expect(r.structuredContent.summary).toContain(permissionId);
+    expect(r.structuredContent.summary).not.toContain(permissionId);
     expect(r.structuredContent.summary).toContain('490000');
   });
 

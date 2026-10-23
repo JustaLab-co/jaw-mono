@@ -17,7 +17,7 @@ import { ownerCalls, sends } from '@/db/schema';
 import { caip2 } from '@/lib/chain';
 import { reply } from '@/lib/fence';
 import { scrub } from '@/lib/scrub';
-import { refusal } from './reply';
+import { refusal, withNext } from './reply';
 
 const CONCURRENCY = 10;
 const CHAIN_DEADLINE_MS = 4000;
@@ -35,7 +35,7 @@ const chainIds = z
   .describe('Mainnet chain ids to read; every supported mainnet when left out');
 
 export function reasonOf(err: unknown) {
-  if (err instanceof z.ZodError) return 'The proxy answered with an unexpected shape.';
+  if (err instanceof z.ZodError) return 'The wallet service answered in an unexpected form.';
   const message = typeof err === 'object' && err !== null && 'message' in err ? String(err.message) : 'request failed';
   return sanitizeLine(scrub(message), 200);
 }
@@ -236,7 +236,7 @@ export function registerAccountTools(server: McpServer) {
             `${count} asset(s) on ${chains.length} chain(s).` +
             (missing.length ? ` Could not read ${missing.join(', ')}: their balance is unknown, not zero.` : '') +
             (unreported.length
-              ? ` Not reported: ${unreported.join(', ')}. The proxy left them out of its answer, so their balances are not known to be zero.`
+              ? ` Not reported: ${unreported.join(', ')}. The wallet service left them out of its answer, so their balances are not known to be zero.`
               : ''),
         })
       );
@@ -280,11 +280,12 @@ export function registerAccountTools(server: McpServer) {
         return reply(
           historyOutput.parse({
             calls: marked,
-            summary:
-              `${calls.length} call bundle(s).` +
-              (settledHere
-                ? ` The proxy still lists ${settledHere} as pending (100) that this connection saw mined: ${settledHere === 1 ? 'it is' : 'they are'} marked thisConnection.`
-                : ''),
+            summary: settledHere
+              ? withNext(
+                  `${calls.length} call bundle(s). ${settledHere} listed as pending already went through on chain.`,
+                  `${settledHere === 1 ? 'It is' : 'They are'} marked thisConnection, with the mined state and hash.`
+                )
+              : `${calls.length} call bundle(s).`,
           })
         );
       } catch (err) {

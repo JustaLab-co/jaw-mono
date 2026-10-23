@@ -210,7 +210,7 @@ describe('jaw_get_calls_history', () => {
       expect(session.thisConnection).toEqual({ state: 'landed', transactionHash: hash(0xb1) });
       expect(owner.thisConnection).toEqual({ state: 'landed', transactionHash: hash(0xb2) });
       expect(unknown.thisConnection).toBeUndefined();
-      expect(r.structuredContent.summary).toContain('still lists 2 as pending');
+      expect(r.structuredContent.summary).toContain('2 listed as pending already went through on chain');
     });
 
     it("then a row in another state or on another connection's record is not marked", async () => {

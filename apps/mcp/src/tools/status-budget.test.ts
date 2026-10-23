@@ -95,7 +95,8 @@ describe('given a budget a newer one replaced, and the newer one revoked in the 
     revokedInWallet.add(newer);
     const status = await callTool(c.access_token, 'jaw_session_status', {});
     expect(status.structuredContent.readiness).toMatchObject({ status: 'not_ready', reason: 'grant_revoked' });
-    expect(status.structuredContent.summary).toContain('ask for a new one with jaw_grant_permissions');
+    expect(status.structuredContent.summary).toContain('The spending budget was revoked.');
+    expect(status.structuredContent.summary).toContain('For the agent: Ask for one with jaw_grant_permissions');
     expect(status.structuredContent.budget?.permissionId).not.toBe(older);
   });
 

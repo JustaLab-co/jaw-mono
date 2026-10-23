@@ -20,7 +20,7 @@ import { erc20Abi, type Address } from 'viem';
 import { z } from 'zod';
 import { chainClients, sessionOf } from '@/adapters/session-host';
 import { tenant, type Tenant } from '@/connections/auth';
-import { config } from '@/connections/config';
+import { config, SUPPORTED_CHAINS } from '@/connections/config';
 import { findActive } from '@/connections/rows';
 import { getDb } from '@/db/client';
 import { readOnChain } from '@/grants/permission';
@@ -33,6 +33,7 @@ import { entriesFor, holdingRows, pulledUnderOtherGrants } from '@/payments/stor
 import { caip2, publicClientFor } from '@/lib/chain';
 import { fenceText, reply } from '@/lib/fence';
 import { safeFetch, watchCuts } from '@/lib/safe-fetch';
+import { withNext } from './reply';
 
 const caip19 = (network: string, token: string) => `${network}/erc20:${token}`;
 
@@ -178,11 +179,19 @@ const statusOutput = z.object({
   summary: z.string(),
 });
 
-const NOT_READY: Record<NonNullable<Readiness['reason']>, string> = {
-  no_scope: 'Paying needs the x402:pay scope: reconnect and ask for it.',
-  no_grant: 'No budget yet: ask for one with jaw_grant_permissions and x402Budget.',
-  grant_revoked: 'The budget was revoked: ask for a new one with jaw_grant_permissions and x402Budget.',
-  chain_unavailable: 'The budget could not be read from the chain right now.',
+const ASK_BUDGET = 'Ask for one with jaw_grant_permissions and x402Budget.';
+
+const NOT_READY: Record<NonNullable<Readiness['reason']>, { say: string; next?: string }> = {
+  no_scope: {
+    say: 'This connection was not allowed to pay for services. Reconnecting with payments allowed fixes that.',
+    next: 'Reconnect and ask for the x402:pay scope.',
+  },
+  no_grant: { say: 'No spending budget yet. The owner approves one in their wallet.', next: ASK_BUDGET },
+  grant_revoked: {
+    say: 'The spending budget was revoked. The owner approves a new one in their wallet.',
+    next: ASK_BUDGET,
+  },
+  chain_unavailable: { say: 'The budget could not be read from the chain right now.' },
 };
 
 function leftToday(budget: z.infer<typeof budgetOutput> | undefined) {
@@ -252,13 +261,15 @@ async function status(t: Tenant) {
   const ready = readinessOf(t, read?.liveness);
   const expiresAt = conn?.expiresAt ?? new Date();
   const nearExpiry = expiresAt.getTime() - Date.now() < EXPIRY_WARN_MS;
-  const base =
-    ready.status === 'ready'
-      ? `Connected as ${t.account} on ${network}. Ready to pay${leftToday(read?.budget)}.`
-      : `Connected as ${t.account} on ${network}. ${NOT_READY[ready.reason ?? 'no_grant']}`;
+  const connected = `Connected as ${t.account} on ${SUPPORTED_CHAINS[t.chainId]?.name ?? network}.`;
+  const notReady = ready.status === 'ready' ? undefined : NOT_READY[ready.reason ?? 'no_grant'];
+  const say = notReady ? `${connected} ${notReady.say}` : `${connected} Ready to pay${leftToday(read?.budget)}.`;
   const summary = nearExpiry
-    ? `${base} Connection expires ${expiresAt.toISOString()}; call jaw_session_disconnect soon.`
-    : base;
+    ? withNext(
+        `${say} This connection expires ${expiresAt.toISOString()}; ending it before then returns its unspent USDC to the account.`,
+        [notReady?.next, 'Call jaw_session_disconnect before it expires.'].filter(Boolean).join(' ')
+      )
+    : withNext(say, notReady?.next);
   return statusOutput.parse({
     account: t.account,
     chainId: network,
@@ -347,22 +358,22 @@ async function fitOf(t: Tenant, grant: Grant, room: Room | undefined, p: Price):
 }
 
 function fitSummary(read: BudgetRead, grant: Grant, terms: Terms, { readiness, approvalOwed }: Fit) {
-  const { permissionId, remainingToday } = read.budget;
+  const { remainingToday } = read.budget;
   const left = remainingToday ? `${remainingToday.amount} base units` : 'an unknown amount';
-  const approval = approvalOwed ? ' A first upto payment also pays the gas to approve Permit2 from it.' : '';
+  const approval = approvalOwed ? ' The first payment of this kind also pays a one-time approval fee from it.' : '';
   switch (readiness.reason) {
     case undefined:
-      return ` Within budget ${permissionId}, which has ${left} left today.${approval}`;
+      return ` Within the budget, which has ${left} left today.${approval}`;
     case 'over_allowance':
-      return ` Budget ${permissionId} has ${left} left today, not enough to pay it.${approval}`;
+      return ` The budget has ${left} left today, not enough to pay it.${approval}`;
     case 'over_cap':
       return ` One payment may spend at most ${terms.policy.maxAmountPerPayment} base units, whatever the budget.`;
     case 'balance_low':
-      return ` The account ${grant.account} holds too little USDC to refill the session for it: send USDC there (jaw_add_funds).`;
+      return ` The account ${grant.account} holds too little USDC to cover it. Adding USDC to the account fixes that.`;
     case 'funding_unavailable':
-      return ' This server cannot refill the session or approve Permit2, so it pays only from the float already there.';
+      return ' This server cannot add funds or approvals for this connection right now, so it cannot pay this.';
     default:
-      return ` ${NOT_READY[readiness.reason]}`;
+      return ` ${NOT_READY[readiness.reason].say}`;
   }
 }
 

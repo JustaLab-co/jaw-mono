@@ -2,9 +2,10 @@ import { discoverServices, type DiscoverParams, type DiscoverResult } from '@jaw
 import type { McpServer } from '@modelcontextprotocol/server';
 import { z } from 'zod';
 import { tenant } from '@/connections/auth';
+import { SUPPORTED_CHAINS } from '@/connections/config';
 import { errorLabel, log } from '@/lib/edge';
 import { fenceText, reply } from '@/lib/fence';
-import { refusal } from './reply';
+import { refusal, withNext } from './reply';
 
 const LISTING_MAX = 2_000;
 
@@ -49,7 +50,9 @@ export async function discover(
     found = await find({ ...input, network });
   } catch (err) {
     log('warn', { msg: 'catalog unreachable', error: errorLabel(err) });
-    return refusal('The x402 catalog could not be reached. Try again, or pay a url you already know.');
+    return refusal(
+      'The directory of paid services could not be reached. Try again, or use a service address you already know.'
+    );
   }
   // Only the services this connection can pay: a price on another chain is not one it can meet,
   // and a url that does not parse is not one it can call.
@@ -70,9 +73,13 @@ export async function discover(
       LISTING_MAX
     ),
   }));
+  const chain = SUPPORTED_CHAINS[chainId]?.name ?? network;
   const summary = services.length
-    ? `${services.length} service(s) payable on ${network}. Nothing was paid: check one with jaw_session_x402_quote, then jaw_session_x402_pay its url.`
-    : `No service in the catalog can be paid on ${network}${input.query ? ` for "${input.query}"` : ''}.`;
+    ? withNext(
+        `${services.length} service(s) payable on ${chain}. Nothing was paid.`,
+        'Check one with jaw_session_x402_quote, then pay its url with jaw_session_x402_pay.'
+      )
+    : `No service in the directory can be paid on ${chain}${input.query ? ` for "${input.query}"` : ''}.`;
   return reply(
     output.parse({ network, count: services.length, partialResults: found.partialResults, services, summary })
   );

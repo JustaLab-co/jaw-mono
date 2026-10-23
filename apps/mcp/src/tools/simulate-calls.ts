@@ -115,8 +115,8 @@ function failureOf(error: unknown) {
 function refuseFailure(error: unknown) {
   const rpc = failureOf(error);
   if (rpc?.code === -32602)
-    return refusal(`The proxy rejected the request as invalid.\n${untrusted(rpc.details ?? 'no reason given')}`);
-  if (rpc?.code === -32601) return refusal(`This JAW proxy does not simulate yet, so nothing was decided.`);
+    return refusal(`The simulation was refused as invalid.\n${untrusted(rpc.details ?? 'no reason given')}`);
+  if (rpc?.code === -32601) return refusal('Simulation is not available yet, so nothing was decided.');
   return refusal(`${NOT_DECIDED} Try again shortly.`);
 }
 
@@ -178,7 +178,7 @@ export async function simulateCalls(args: Input, account: Address, clientFor: Cl
     return refuseFailure(error);
   }
   const found = proxyResult.safeParse(raw);
-  if (!found.success) return refusal('The proxy answered with an unexpected shape, so nothing was decided.');
+  if (!found.success) return refusal('The simulation answered in an unexpected form, so nothing was decided.');
   return reply(output.parse(present(found.data, { chainId, sender }, calls.length)));
 }
 
