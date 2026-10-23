@@ -26,14 +26,15 @@ export type DepositStatus = { txHash?: Hex; untrustedRawState?: string } & (
 
 export type BackendAnswer =
   | { ok: true; status: DepositStatus }
-  | { ok: false; code: 'unreachable' | 'invalid_response' }
+  | { ok: false; code: 'unreachable' | 'invalid_response' | 'swap_unavailable' }
   | { ok: false; code: 'http_error'; httpStatus: number; untrustedError?: string };
 
-export type BackendDeps = { fetch: typeof fetch; baseUrl: string; timeoutMs: number };
+export type BackendDeps = { fetch: typeof fetch; baseUrl: string; apiKey: string | undefined; timeoutMs: number };
 
 const liveDeps = (): BackendDeps => ({
   fetch: safeFetch(config().insecureFetchHosts),
   baseUrl: config().swapUrl,
+  apiKey: config().swapApiKey,
   timeoutMs: 10_000,
 });
 
@@ -75,10 +76,15 @@ async function call(
   url: string,
   init: RequestInit
 ): Promise<BackendAnswer> {
+  if (!deps.apiKey) return { ok: false, code: 'swap_unavailable' };
   let res: Response;
   let text: string;
   try {
-    res = await deps.fetch(url, { ...init, signal: AbortSignal.timeout(deps.timeoutMs) });
+    res = await deps.fetch(url, {
+      ...init,
+      headers: { ...init.headers, 'x-api-key': deps.apiKey },
+      signal: AbortSignal.timeout(deps.timeoutMs),
+    });
     text = await res.text();
   } catch (err) {
     log('warn', { msg: 'swap backend unreachable', error: errorLabel(err) });

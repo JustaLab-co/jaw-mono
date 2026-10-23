@@ -8,6 +8,7 @@ import { depositStatus, submitDeposit, type BackendDeps } from './backend';
 const BASE = 'https://backend.test/proxy/v2';
 const CHECKSUMMED_DEPOSIT: Address = '0x742149f6aB17d7d2FD3A29ae2782b26EDa9c6F82';
 const LOWERCASE_DEPOSIT: Address = '0x742149f6ab17d7d2fd3a29ae2782b26eda9c6f82';
+const API_KEY = 'swap-key';
 const TX: Hex = `0x${'ab'.repeat(32)}`;
 
 type Seen = { url: string; method: string; headers: Headers; body?: string; signal?: AbortSignal };
@@ -25,7 +26,7 @@ function backend(answer: (seen: Seen) => Response | Promise<Response>) {
     seen.push(call);
     return answer(call);
   };
-  const deps: BackendDeps = { fetch, baseUrl: BASE, timeoutMs: 10_000 };
+  const deps: BackendDeps = { fetch, baseUrl: BASE, apiKey: API_KEY, timeoutMs: 10_000 };
   return { deps, seen };
 }
 
@@ -106,6 +107,35 @@ describe('submitDeposit', () => {
 
     expect(seen[0].signal?.aborted).toBe(true);
     expect(answer).toEqual({ ok: false, code: 'unreachable' });
+  });
+});
+
+describe('api key', () => {
+  it('given a submit, when sent, then it carries the swap api key', async () => {
+    const { deps, seen } = backend(() => created('KNOWN_DEPOSIT_TX'));
+
+    await submitDeposit({ depositAddress: CHECKSUMMED_DEPOSIT, txHash: TX }, deps);
+
+    expect(seen[0].headers.get('x-api-key')).toBe(API_KEY);
+    expect(seen[0].headers.get('content-type')).toBe('application/json');
+  });
+
+  it('given a status read, when sent, then it carries the swap api key', async () => {
+    const { deps, seen } = backend(() => status('PENDING_DEPOSIT'));
+
+    await depositStatus(CHECKSUMMED_DEPOSIT, deps);
+
+    expect(seen[0].headers.get('x-api-key')).toBe(API_KEY);
+  });
+
+  it.each([
+    ['submit', (deps: BackendDeps) => submitDeposit({ depositAddress: CHECKSUMMED_DEPOSIT, txHash: TX }, deps)],
+    ['status', (deps: BackendDeps) => depositStatus(CHECKSUMMED_DEPOSIT, deps)],
+  ])('given no swap api key, when %s runs, then swap_unavailable and the backend is not called', async (_, run) => {
+    const { deps, seen } = backend(() => status('PENDING_DEPOSIT'));
+
+    expect(await run({ ...deps, apiKey: undefined })).toEqual({ ok: false, code: 'swap_unavailable' });
+    expect(seen).toEqual([]);
   });
 });
 
@@ -341,6 +371,7 @@ describe('live dependencies', () => {
   afterEach(() => {
     delete process.env.JAW_MCP_INSECURE_FETCH_HOSTS;
     delete process.env.JAW_MCP_SWAP_URL;
+    delete process.env.JAW_MCP_SWAP_API_KEY;
     vi.resetModules();
   });
 
@@ -359,6 +390,7 @@ describe('live dependencies', () => {
     const host = `127.0.0.1:${(server.address() as AddressInfo).port}`;
     setTestEnv();
     process.env.JAW_MCP_INSECURE_FETCH_HOSTS = host;
+    process.env.JAW_MCP_SWAP_API_KEY = API_KEY;
     process.env.JAW_MCP_SWAP_URL = `http://${host}/proxy/v2`;
     vi.resetModules();
     const live = await import('./backend');

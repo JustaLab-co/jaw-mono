@@ -22,7 +22,7 @@ export interface Config {
   /** Base units a refill brings the payer up to, so refills are rare; the grant's cap still bounds it. */
   floatTarget: bigint;
   swapUrl: string;
-  /** Sent as x-api-key on swap quotes; the backend lists it in X402_ALLOWED_API_KEYS so a quote costs nothing. */
+  /** Sent as x-api-key on swap quotes and deposit tracking calls; the backend lists it in X402_ALLOWED_API_KEYS so a quote costs nothing. */
   swapApiKey: string | undefined;
   swapQuoteTtlSec: number;
   ring: KeyRing;

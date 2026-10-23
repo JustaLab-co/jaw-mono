@@ -176,7 +176,12 @@ const depositBackend: typeof fetch = async (input, init) => {
   };
   return Response.json({ statusCode: 200, result: { data, error: null } }, { status: route === 'submit' ? 201 : 200 });
 };
-const backendDeps: BackendDeps = { fetch: depositBackend, baseUrl: 'https://backend.test/proxy/v2', timeoutMs: 1_000 };
+const backendDeps: BackendDeps = {
+  fetch: depositBackend,
+  baseUrl: 'https://backend.test/proxy/v2',
+  apiKey: SWAP_KEY,
+  timeoutMs: 1_000,
+};
 
 const quoteDeps: QuoteDeps = { fetch: auroraErc20Backend, apiKey: SWAP_KEY, timeoutMs: 1_000 };
 
