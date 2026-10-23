@@ -2,7 +2,7 @@ import { setTimeout as sleep } from 'node:timers/promises';
 import { toHex, type Address } from 'viem';
 import { z } from 'zod';
 import type { Ask } from '@/connections/relay';
-import { refusedBeforeSubmit, USER_REJECTED } from '@/connections/wallet-codes';
+import { USER_REJECTED } from '@/connections/wallet-codes';
 import { errorLabel, log } from '@/lib/edge';
 import type { BackendDeps } from './backend';
 import type { DepositCall } from './check';
@@ -49,7 +49,7 @@ export async function approve(
     return;
   }
   if (!includes(accounts, account)) {
-    await decline(row, 'wrong_account');
+    await declineUnsent(row, 'wrong_account');
     return;
   }
   if (!(await markSendStarted(row))) return;
@@ -68,7 +68,6 @@ export async function approve(
     const code = codeOf(err);
     if (typeof code !== 'number') throw err;
     if (code === USER_REJECTED) await decline(row, 'owner_declined');
-    else if (refusedBeforeSubmit(code)) await decline(row, `wallet_error:${code}`);
     return;
   }
   const callsId = sent.safeParse(answer).data?.id;

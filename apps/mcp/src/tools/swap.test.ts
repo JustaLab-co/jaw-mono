@@ -893,7 +893,7 @@ describe('the owner approves the deposit', () => {
   });
 
   it.each([4100, 4200, 4900, 4901, 5700, 5710, -32602])(
-    'given the deposit was asked, when the wallet refuses it with %i before submitting, then owner_declined with that code and the replay says nothing was sent',
+    'given the deposit was asked, when the wallet refuses it with %i before submitting, then the row keeps the send marker and the replay says the deposit may be sent',
     async (code) => {
       const { t } = await connected();
 
@@ -904,13 +904,8 @@ describe('the owner approves the deposit', () => {
         })
       );
 
-      expect(row).toMatchObject({ state: 'owner_declined', code: `wallet_error:${code}`, callsId: null });
-      const replay = (await run(t)).structuredContent;
-      expect(replay?.state).toBe('owner_declined');
-      expect(replay?.url).toBeUndefined();
-      expect(replay?.summary).toContain(`refused the deposit with ${code} before sending it`);
-      expect(replay?.summary).toMatch(/nothing was sent/i);
-      expect(opened).toHaveLength(1);
+      expect(row).toMatchObject({ state: 'awaiting_owner', code: 'send_started', callsId: null });
+      await expectMaybeSent(t);
     }
   );
 
@@ -1425,6 +1420,29 @@ describe('jaw_swap_status', () => {
       const summary = result.structuredContent?.summary ?? '';
       expect(summary).toMatch(/may have sent the deposit/i);
       expect(summary).not.toMatch(/nothing was sent|declined/i);
+    }
+  );
+
+  it.each(['awaiting_owner', 'expired'])(
+    'given the send marker on an %s row, when a resumed session signs in with another account, then the row keeps the marker and the summary says the deposit may be sent',
+    async (state) => {
+      const { t } = await connected();
+      const quoteId = await started(t, noCallsId(t.account));
+      if (state === 'expired') {
+        await backdateApproveBy(t);
+        await status(t, quoteId);
+        deposits.hits = [];
+      }
+      const otherAccount: Ask = async () => [`0x${'99'.repeat(20)}`];
+
+      await approveSwap(otherAccount, await rowOf(t), t.account, 0);
+      const result = await status(t, quoteId);
+
+      expect(await rowOf(t)).toMatchObject({ state, code: 'send_started' });
+      expect(statusReads()).toHaveLength(1);
+      const summary = result.structuredContent?.summary ?? '';
+      expect(summary).toMatch(/may have sent the deposit/i);
+      expect(summary).not.toMatch(/nothing was sent|another account/i);
     }
   );
 
