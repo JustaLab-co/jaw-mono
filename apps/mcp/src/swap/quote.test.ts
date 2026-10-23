@@ -1,5 +1,5 @@
 import { eq, sql } from 'drizzle-orm';
-import { encodeFunctionData, erc20Abi, getAddress, keccak256, toHex, zeroAddress, type Address } from 'viem';
+import { encodeFunctionData, erc20Abi, getAddress, keccak256, toHex, zeroAddress, type Address, type Hex } from 'viem';
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { verifyBearer, type Tenant } from '@/connections/auth';
 import { config } from '@/connections/config';
@@ -25,7 +25,7 @@ type Hit = { url: URL; apiKey: string | null };
 const backend = {
   mode: '' as '' | '400' | '422' | '503' | 'down' | 'invalid' | '203' | '401' | '402' | '403',
   answer: undefined as unknown,
-  deposit: undefined as Address | undefined,
+  requestId: undefined as Hex | undefined,
   onAsked: undefined as (() => Promise<void>) | undefined,
   answered: 0,
   hits: [] as Hit[],
@@ -40,12 +40,14 @@ const envelope = (status: number, data: unknown, error: unknown) =>
     headers: { 'content-type': 'application/json' },
   });
 
-function auroraQuote(query: URLSearchParams, deposit: Address) {
+const RELAY_DEPOSITORY: Address = '0x4cD00E387622C35bDDB9b4c962C136462338BC31';
+
+function relayQuote(query: URLSearchParams, requestId: Hex) {
   const amount = BigInt(query.get('amount')!);
   const out = amount - amount / 200n;
   const quote = {
-    quoteId: `aurora:${deposit}`,
-    provider: 'aurora',
+    quoteId: `relay:${requestId}`,
+    provider: 'relay',
     inputAmount: String(amount),
     expectedOutputAmount: String(out),
     minOutputAmount: String(out - out / 200n),
@@ -55,7 +57,7 @@ function auroraQuote(query: URLSearchParams, deposit: Address) {
       {
         chainId: Number(query.get('originChainId')),
         to: getAddress(query.get('originToken')!),
-        data: transfer(deposit, amount),
+        data: transfer(RELAY_DEPOSITORY, amount),
         value: '0',
         description: 'deposit',
       },
@@ -81,19 +83,18 @@ const quoteBackend: typeof fetch = async (input, init) => {
   if (backend.answer) return Response.json(backend.answer);
   await backend.onAsked?.();
   backend.answered += 1;
-  const deposit =
-    backend.deposit ?? getAddress(`0x${keccak256(toHex(`${backend.answered}:${Math.random()}`)).slice(-40)}`);
+  const requestId = backend.requestId ?? keccak256(toHex(`${backend.answered}:${Math.random()}`));
   if (backend.mode === 'invalid') return envelope(200, null, null);
   if (backend.mode === '203')
-    return new Response(JSON.stringify({ result: { data: auroraQuote(url.searchParams, deposit) } }), { status: 203 });
-  return envelope(200, auroraQuote(url.searchParams, deposit), null);
+    return new Response(JSON.stringify({ result: { data: relayQuote(url.searchParams, requestId) } }), { status: 203 });
+  return envelope(200, relayQuote(url.searchParams, requestId), null);
 };
 
 const deps = (apiKey = KEY): QuoteDeps => ({ fetch: quoteBackend, apiKey, timeoutMs: 1000 });
 
 beforeAll(TEST_PG_URL ? useTestPostgres : useTestDb);
 beforeEach(() => {
-  Object.assign(backend, { mode: '', answer: undefined, deposit: undefined, onAsked: undefined, answered: 0 });
+  Object.assign(backend, { mode: '', answer: undefined, requestId: undefined, onAsked: undefined, answered: 0 });
   backend.hits.length = 0;
 });
 afterEach(() => vi.restoreAllMocks());
@@ -233,28 +234,28 @@ describe('a quote', () => {
     const step = await quote(t, claim, deps());
 
     const row = await swapOf(claim.row.id);
-    const deposit = row.depositAddress as Address;
     expect(step).toMatchObject({ kind: 'done' });
+    expect(row.quoteId).toMatch(/^relay:0x[0-9a-f]{64}$/);
     expect(row).toMatchObject({
       state: 'quoting',
       code: null,
-      quoteId: `aurora:${deposit}`,
+      depositAddress: null,
       call: [
         {
           kind: 'deposit',
           chainId: 84532,
           to: getAddress(USDC_SEPOLIA),
-          data: transfer(deposit, 1_000_000n),
+          data: transfer(RELAY_DEPOSITORY, 1_000_000n),
           value: '0',
         },
       ],
-      quote: { provider: 'aurora', inputAmount: '1000000', expectedOutputAmount: '995000', minOutputAmount: '990025' },
+      quote: { provider: 'relay', inputAmount: '1000000', expectedOutputAmount: '995000', minOutputAmount: '990025' },
       paymentId: null,
       leaseToken: claim.token,
     });
     expect(row.quotedAt!.getTime()).toBeGreaterThanOrEqual(before);
     expect(row.quotedAt!.getTime()).toBeLessThanOrEqual(Date.now());
-    expect(row.quoteFenced).toMatch(/^\[untrusted text from [^\]]+\][\s\S]*aurora:0x/);
+    expect(row.quoteFenced).toMatch(/^\[untrusted text from [^\]]+\][\s\S]*relay:0x/);
     expect(await paymentsOf(t.connectionId)).toHaveLength(0);
   });
 
@@ -271,9 +272,9 @@ describe('a quote', () => {
     expect(await swapOf(claim.row.id)).toEqual(first.row);
   });
 
-  it('given a deposit address another swap row already holds, when the quote is asked, then the swaps store refuses it as quote_reused', async () => {
+  it('given a quote id another swap row already holds, when the quote is asked, then the swaps store refuses it as quote_reused', async () => {
     const held = await quoted(await connected());
-    backend.deposit = held.row.depositAddress as Address;
+    backend.requestId = held.row.quoteId!.slice('relay:'.length) as Hex;
 
     const { row } = await quoted(await connected());
 
@@ -359,7 +360,7 @@ describe('answers that leave the swap quoting', () => {
       const { row } = await quoted(t);
 
       expect(row).toMatchObject({ id: down.row.id, state: 'quoting', code: null });
-      expect(row.quoteId).toMatch(/^aurora:0x/);
+      expect(row.quoteId).toMatch(/^relay:0x/);
       expect(backend.hits).toHaveLength(2);
     }
   );
@@ -412,7 +413,7 @@ describe('answers that leave the swap quoting', () => {
     const { row } = await quoted(t);
 
     expect(row).toMatchObject({ id: first.row.id, state: 'quoting' });
-    expect(row.quoteId).toMatch(/^aurora:0x/);
+    expect(row.quoteId).toMatch(/^relay:0x/);
     expect(backend.hits).toHaveLength(2);
   });
 });
@@ -438,20 +439,20 @@ describe('leases', () => {
 
     const step = await quote(t, second!, deps());
 
-    expect(step).toMatchObject({ kind: 'done', row: { quoteId: expect.stringMatching(/^aurora:0x/) } });
+    expect(step).toMatchObject({ kind: 'done', row: { quoteId: expect.stringMatching(/^relay:0x/) } });
   });
 });
 
-describe('deposit addresses raced', () => {
-  it('given two swaps whose quotes name the same deposit address, when both are asked at once, then one holds it and the other is quote_rejected with quote_reused', async () => {
+describe('quote ids raced', () => {
+  it('given two swaps whose quotes carry the same quote id, when both are asked at once, then one holds it and the other is quote_rejected with quote_reused', async () => {
     const [one, two] = [await connected(), await connected()];
-    backend.deposit = '0x5555555555555555555555555555555555555555';
+    backend.requestId = `0x${'55'.repeat(32)}`;
 
     const steps = await Promise.all([quoted(one), quoted(two)]);
 
     expect(steps.map((s) => s.row)).toEqual(
       expect.arrayContaining([
-        expect.objectContaining({ state: 'quoting', depositAddress: backend.deposit }),
+        expect.objectContaining({ state: 'quoting', quoteId: `relay:${backend.requestId}` }),
         expect.objectContaining({ state: 'quote_rejected', code: 'quote_reused', quoteId: null }),
       ])
     );

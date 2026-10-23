@@ -23,7 +23,6 @@ export type QuoteRequest = { originChainId: number; originToken: string; amount:
 export type CheckedQuote = {
   ok: true;
   quoteId: string;
-  depositAddress?: Address;
   calls: SwapCall[];
   quote: {
     provider: Provider;
@@ -39,7 +38,8 @@ export type CheckResult = CheckedQuote | { ok: false; code: CheckCode };
 
 export const QUOTE_ID = /^(aurora:0x[0-9a-fA-F]{40}|across:[A-Za-z0-9-]{1,64}|relay:0x[0-9a-fA-F]{64})$/;
 
-const PROVIDERS: ReadonlySet<string> = new Set<Provider>(['aurora', 'across', 'relay']);
+// Aurora rows from before stay readable through Provider and QUOTE_ID; new quotes are Across or Relay.
+const PROVIDERS: ReadonlySet<string> = new Set<Provider>(['across', 'relay']);
 
 const usd = /^[0-9]+(\.[0-9]+)?$/;
 
@@ -88,7 +88,6 @@ export function checkQuote(request: QuoteRequest, body: unknown): CheckResult {
   return {
     ok: true,
     quoteId: quote.quoteId,
-    ...(provider === 'aurora' && { depositAddress: quote.quoteId.slice('aurora:'.length) as Address }),
     calls,
     quote: {
       provider,

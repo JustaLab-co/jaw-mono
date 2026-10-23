@@ -63,7 +63,6 @@ describe('checkQuote with the quote as the backend sends it', () => {
         { kind: 'approve', ...approve },
         { kind: 'deposit', ...deposit },
       ]);
-      expect(result.depositAddress).toBeUndefined();
     }
   );
 
@@ -73,20 +72,6 @@ describe('checkQuote with the quote as the backend sends it', () => {
     const result = checkQuote({ originChainId: BASE, originToken: zeroAddress, amount: quote.inputAmount }, quote);
 
     expect(result).toMatchObject({ ok: true, calls: [{ kind: 'deposit', ...callsOf(quote)[0] }] });
-  });
-
-  it('given an Aurora quote, when checked, then its transfer is the deposit and the deposit address comes from the quote id', () => {
-    const quote = auroraQuote();
-
-    const result = checkQuote({ ...tenUsdc, amount: '1000000' }, quote);
-
-    expect(result).toMatchObject({
-      ok: true,
-      quoteId: `aurora:${depositAddress}`,
-      depositAddress,
-      calls: [{ kind: 'deposit', ...callsOf(quote)[0] }],
-      quote: { provider: 'aurora', feesUsd: '0.001310' },
-    });
   });
 });
 
@@ -103,14 +88,15 @@ describe('checkQuote refusals', () => {
     expect(checkQuote(tenUsdc, quote)).toEqual({ ok: false, code: 'quote_unsupported_provider' });
   });
 
+  it('given an Aurora quote, when checked, then quote_unsupported_provider, as new swaps go through Across or Relay', () => {
+    expect(checkQuote(tenUsdc, auroraQuote())).toEqual({ ok: false, code: 'quote_unsupported_provider' });
+  });
+
   it.each([
     ['another provider', 'relay:abc'],
     ['no prefix', 'abc'],
-    ['an Aurora id that is not an address', 'aurora:0x1234'],
   ])('given a quote id with %s, when checked, then quote_id', (_, quoteId) => {
-    const quote = quoteId.startsWith('aurora') ? auroraQuote() : bodyOf(acrossSameToken);
-
-    expect(checkQuote(tenUsdc, { ...quote, quoteId })).toEqual({ ok: false, code: 'quote_id' });
+    expect(checkQuote(tenUsdc, { ...bodyOf(acrossSameToken), quoteId })).toEqual({ ok: false, code: 'quote_id' });
   });
 
   it('given an Across quote whose id has the across prefix but a character the id pattern refuses, when checked, then quote_id', () => {
