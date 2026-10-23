@@ -1,6 +1,6 @@
 # Hosted swap
 
-`jaw_swap` and `jaw_swap_status` in `apps/mcp` swap or bridge the account's funds across chains. The server gets a quote from `/move-asset/quote` with its own swap api key, asking Across and Relay, and checks it. Both chains must be ones JAW serves. The connection needs `wallet:read` only and no budget. The account owner then approves the one deposit transaction in the wallet and pays its gas. The session key never signs the deposit.
+`jaw_swap` and `jaw_swap_status` in `apps/mcp` swap or bridge the account's funds across chains. The server gets a quote from `/move-asset/quote` with its own swap api key, asking Across and Relay. Both chains must be ones JAW serves, and the quote must run on the origin chain, spend the amount asked and, when it has an approve, approve the origin token to the deposit contract; the server checks nothing else in it. The connection needs `wallet:read` only and no budget. The account owner then approves those transactions, a token approval and the deposit, in one batch in the wallet and pays its gas. The session key never signs the deposit.
 
 ## Sub-features
 
@@ -8,7 +8,7 @@
 - `swap-origin`: an origin chain outside JAW's list gives `unsupported_origin_chain` before any request to the backend.
 - `swap-destination`: a destination chain outside JAW's list, Solana included, gives `unsupported_destination_chain` before any request to the backend.
 - `swap-paused`: with payments paused, `jaw_swap` still quotes and `jaw_swap_status` keeps working.
-- `swap-check-<mode>`: each way a quote can break the checks ends in `quote_rejected` with its code and no wallet link.
+- `swap-check-<mode>`: a quote the server cannot turn into calls ends in `quote_rejected` with its code and no wallet link.
 - `swap-happy`: quote, owner approval, deposit, then `jaw_swap_status` until `completed`.
 - `swap-decline`: the owner rejects the deposit and the state is `owner_declined`.
 - `swap-retry`: the same key twice answers from the row with one quote request.
@@ -20,7 +20,7 @@
 ## How to get to it (user POV)
 
 - An MCP client on the hosted server with scope `wallet:read`. `jaw_swap` takes `originChainId`, `originToken` (zero address for the native coin), `destinationChainId`, `destinationToken`, `amount` in base units, and optionally `recipient` and `idempotencyKey`.
-- The result of both tools holds `swapId`, `idempotencyKey`, `state`, `quoteId` (`aurora:<deposit address>`), `approveBy`, the `deposit` call and its `txHash` once known, the `backend` state, a `refusal` code and a `summary`; the quote body and backend text come back fenced in `response`. `url` is present only while `awaiting_owner` with no code on the row. `jaw_swap_status` takes the `quoteId`, needs `wallet:read` only, and reads the backend by deposit address, with no transaction hash needed. States: `quoting`, `quote_failed`, `quote_rejected`, `abandoned`, `awaiting_owner`, `owner_declined`, `expired`, `deposit_sent`, `submitted`, `completed`, `refunded`, `failed`.
+- The result of both tools holds `swapId`, `idempotencyKey`, `state`, `quoteId` (`across:<id>`, `relay:<request id>`, or `aurora:<deposit address>` on older rows), `approveBy`, the `provider`, the `calls` the owner approves (`kind`, `to`, `value`, in order), the `deposit` call and its `txHash` once known, the `backend` state, a `refusal` code and a `summary`; the quote body and backend text come back fenced in `response`. `url` is present only while `awaiting_owner` with no code on the row. `jaw_swap_status` takes the `quoteId`, needs `wallet:read` only, and reads the backend by deposit address, with no transaction hash needed. States: `quoting`, `quote_failed`, `quote_rejected`, `abandoned`, `awaiting_owner`, `owner_declined`, `expired`, `deposit_sent`, `submitted`, `completed`, `refunded`, `failed`.
 - The person sees the summary: the account owner opens the `url`, the wallet asks for the account and then for one transfer of the amount to the deposit address, and the owner pays its gas in USDC or the chain's native coin.
 - By hand: `node tools/verify/hosted-client.mjs "$MCP_PUBLIC_URL"`, then `swap <originChain> <originToken> <destChain> <destToken> <amount> [recipient|-] [key]` and `swap-status <quoteId>`.
 
@@ -43,7 +43,7 @@ Control the stub with `curl -s -X POST "$SELLER/_swap?<switch>"` (switches in ..
 - swap-origin: `swap` with an origin chain outside JAW's list. Pass: `unsupported_origin_chain`, no request in `seller.log`.
 - swap-destination: `swap 84532 <USDC> 792703809 <hex token> <amount>`. Pass: `unsupported_destination_chain`, no request in `seller.log`.
 - swap-paused: set `payments_paused` with psql, then `swap`: `awaiting_owner`, as the quote is not paid.
-- swap-check-<mode>: one drive per mode (`two-tx`, `no-tx`, `wrong-chain`, `quote-id`, `provider`, `deposit-field`, `tx-value`, `tx-data`, `output-amount`, `reused`). Pass: `quote_rejected` with the mode's code, one `quote` row, no `url`. `provider` names another provider, so its code is `quote_unsupported_provider`.
+- swap-check-<mode>: one drive per mode: `no-tx` and `two-tx` give `tx_calls`, `wrong-chain` gives `tx_chain`, `quote-id` and `provider` give `quote_id`, and `reused` gives `quote_reused`. Pass: `quote_rejected` with that code, one `quote` row, no `url`. The stub's other modes change what the quote says, which the server takes as given.
 - swap-happy: `swap`, open the `url` as the owner and approve, then `swap-status <quoteId>` repeatedly. The stub walks `PENDING_DEPOSIT`, `PROCESSING`, `SUCCESS`. Pass: `completed`, a `submit` row in `seller.log`, a `swaps` row in `completed`, and the Sepolia receipt of the transfer to the deposit address.
 - swap-decline: reject in the wallet. Pass: `owner_declined`, no `txHash`.
 - swap-retry: `swap` twice with the same key while the link is live. Pass: same `swapId`, `quoteId` and `url`, one `quote` row.
@@ -59,7 +59,7 @@ Not driven here: a swap api key the backend refuses (`/move-asset/quote` on the 
 ## Risks
 
 - The deposit moves the owner's funds outside any budget. A session key must never sign it, and a link must not open again once the wallet was asked to send: a row with the `send_started` marker never reopens, and an unmarked one reopens only when no session for it is live in the process, with no new quote.
-- The quote body is untrusted input to a signing screen. The call shown to the owner must equal the `transfer` of the amount to the deposit address, byte for byte.
+- Past those bindings, the server trusts the backend's quote. The calls sent to the wallet must equal the quote's transactions, byte for byte and in order.
 - A restart or a retry must never ask a second quote for a swap that holds one, and a marked swap must never be abandoned as unsent. Check the marker survives and that status, not a new swap, settles it.
 - Nothing pays for a quote. Check `seller.log` has no `payment` row and the `payments` table has no row for the connection.
 - The swap api key goes in the `x-api-key` header only, never in the URL or a log line.

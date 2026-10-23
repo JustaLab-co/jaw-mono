@@ -22,13 +22,11 @@ const depositCall = z.strictObject({ kind: z.literal('deposit'), ...fields });
 const legacyCall = z.strictObject(fields).transform((call) => [{ kind: 'deposit' as const, ...call }]);
 const stored = z.union([legacyCall, z.tuple([depositCall]), z.tuple([approveCall, depositCall])]);
 
-/**
- * One deposit, or an approve then a deposit, all on one chain. Older rows hold
- * one call object, read as that deposit. Anything else is undefined, never sent.
- */
-export function callsOf(row: Pick<SwapRow, 'call'>): SwapCall[] | undefined {
-  const calls = stored.safeParse(row.call).data;
+export function parseCalls(value: unknown): SwapCall[] | undefined {
+  const calls = stored.safeParse(value).data;
   if (!calls) return undefined;
   if (!calls.every((c) => c.chainId === calls[0].chainId)) return undefined;
   return calls;
 }
+
+export const callsOf = (row: Pick<SwapRow, 'call'>) => parseCalls(row.call);
