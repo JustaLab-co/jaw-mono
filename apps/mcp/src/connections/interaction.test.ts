@@ -1,7 +1,8 @@
 import { randomBytes } from 'node:crypto';
 import { runInNewContext } from 'node:vm';
 import { eq } from 'drizzle-orm';
-import { hexToString, type Hex } from 'viem';
+import type { SignInWithEthereumCapabilityRequest } from '@jaw.id/core';
+import { toHex } from 'viem';
 import { generatePrivateKey, privateKeyToAddress } from 'viem/accounts';
 import { beforeAll, describe, expect, it, vi } from 'vitest';
 import { getDb } from '@/db/client';
@@ -19,12 +20,17 @@ import {
   setTestEnv,
   startAuthorization,
   setWallet,
+  siweMessageOf,
   walletAnswers,
   walletsSettled,
 } from './testkit';
 
 setTestEnv();
 beforeAll(useTestDb);
+
+const siweAsked = (params: unknown[]) =>
+  (params[0] as { capabilities: { signInWithEthereum: SignInWithEthereumCapabilityRequest } }).capabilities
+    .signInWithEthereum;
 
 const rowOf = async (uid: string) =>
   (await getDb().select().from(connections).where(eq(connections.interactionUid, uid)))[0];
@@ -134,7 +140,7 @@ describe('connecting through the owner wallet', () => {
     const browser = new Browser();
     const start = await startAuthorization(browser, { scope: 'wallet:read' });
     await walletsSettled();
-    expect(asked.map((a) => a.method)).toEqual(['eth_requestAccounts', 'personal_sign']);
+    expect(asked.map((a) => a.method)).toEqual(['wallet_connect']);
     expect(await stateOf(browser, start.uid!)).toEqual({ state: 'approved' });
     expect((await rowOf(start.uid!)).account).toBe(signer.address);
   });
@@ -163,7 +169,7 @@ describe('connecting through the owner wallet', () => {
     const browser = new Browser();
     const start = await startAuthorization(browser, { scope: 'wallet:read x402:pay' });
     await walletsSettled();
-    expect(asked.map((a) => a.method)).toEqual(['eth_requestAccounts', 'personal_sign']);
+    expect(asked.map((a) => a.method)).toEqual(['wallet_connect']);
     expect(await stateOf(browser, start.uid!)).toEqual({ state: 'approved' });
     const row = await rowOf(start.uid!);
     expect(keptKey(row)).toBe(row.sessionAddress);
@@ -172,11 +178,14 @@ describe('connecting through the owner wallet', () => {
 
   it('given a sign-in signed by another key, then nothing is stored and the page says it failed', async () => {
     const [claimed, signing] = [owner(), owner()];
-    const honest = walletAnswers(signing);
     setWallet({
-      openWallet: fakeWallet(async (method, params) =>
-        method === 'eth_requestAccounts' ? [claimed.address] : honest(method, params)
-      ),
+      openWallet: fakeWallet(async (_, params) => {
+        const message = siweMessageOf(siweAsked(params), claimed.address);
+        const signature = await signing.signMessage({ message });
+        return {
+          accounts: [{ address: claimed.address, capabilities: { signInWithEthereum: { message, signature } } }],
+        };
+      }),
     });
     const browser = new Browser();
     const start = await startAuthorization(browser, { scope: 'wallet:read' });
@@ -185,23 +194,84 @@ describe('connecting through the owner wallet', () => {
     expect(await stateOf(browser, start.uid!)).toEqual({ state: 'failed', reason: 'bad_signature' });
   });
 
-  it('signs a text that names the app and what it asks for, with the code the page shows', async () => {
+  it.each([
+    ['another nonce', { nonce: 'deadbeefdeadbeef' }],
+    ['another domain', { domain: 'evil.test' }],
+    ['another server', { uri: 'http://evil.test' }],
+    ['another statement', { statement: 'Connect Something Else.' }],
+    ['another code', { requestId: 'ZZZZZZ' }],
+    ['another chain', { chainId: '0x1' }],
+    ['a later expiry', { expirationTime: '2099-01-01T00:00:00.000Z' }],
+    ['added resources', { resources: ['https://evil.test/all'] }],
+  ])(
+    'given the owner validly signs a sign-in with %s, then nothing is stored and the page says it failed',
+    async (_, changed) => {
+      const signer = owner();
+      setWallet({
+        openWallet: fakeWallet(async (_m, params) => {
+          const message = siweMessageOf({ ...siweAsked(params), ...changed }, signer.address);
+          const signature = await signer.signMessage({ message });
+          return {
+            accounts: [{ address: signer.address, capabilities: { signInWithEthereum: { message, signature } } }],
+          };
+        }),
+      });
+      const browser = new Browser();
+      const start = await startAuthorization(browser, { scope: 'wallet:read' });
+      await walletsSettled();
+      expect(await rowOf(start.uid!)).toBeUndefined();
+      expect(await stateOf(browser, start.uid!)).toEqual({ state: 'failed', reason: 'wrong_sign_in' });
+    }
+  );
+
+  it('given the wallet connects without signing in, then nothing is stored', async () => {
+    const signer = owner();
+    setWallet({ openWallet: fakeWallet(async () => ({ accounts: [{ address: signer.address }] })) });
+    const browser = new Browser();
+    const start = await startAuthorization(browser, { scope: 'wallet:read' });
+    await walletsSettled();
+    expect(await rowOf(start.uid!)).toBeUndefined();
+    expect(await stateOf(browser, start.uid!)).toEqual({ state: 'failed', reason: 'the wallet did not approve' });
+  });
+
+  it('given the wallet answers the sign-in with a refusal, then the page says the owner turned it down', async () => {
+    const signer = owner();
+    const refusal = { code: 4001, message: 'User rejected the request' };
+    setWallet({
+      openWallet: fakeWallet(async () => ({
+        accounts: [{ address: signer.address, capabilities: { signInWithEthereum: refusal } }],
+      })),
+    });
+    const browser = new Browser();
+    const start = await startAuthorization(browser, { scope: 'wallet:read' });
+    await walletsSettled();
+    expect(await rowOf(start.uid!)).toBeUndefined();
+    expect(await stateOf(browser, start.uid!)).toEqual({ state: 'failed', reason: 'turned down in the wallet' });
+  });
+
+  it('asks for a sign-in that names the app, what it asks for and the code the page shows, on the wallet page', async () => {
     const asked: { method: string; params: unknown[] }[] = [];
     const signer = owner();
     setWallet({ openWallet: fakeWallet(walletAnswers(signer), asked) });
     const start = await startAuthorization(new Browser(), { scope: 'wallet:read x402:pay' });
     await walletsSettled();
-    const signed = hexToString(asked[1].params[0] as Hex);
+    const siwe = siweAsked(asked[0].params);
     const code = start.html!.match(/<p class="code">([A-Z0-9]{6})<\/p>/)?.[1];
     expect(code).toBeDefined();
-    expect(signed).toContain(`Code: ${code}`);
-    expect(signed).toContain('Connect JAW CLI to mcp.test');
-    expect(signed).toContain('Pay x402 services');
-    expect(signed).toContain(`Account: ${signer.address}`);
+    expect(siwe.requestId).toBe(code);
+    expect(siwe.statement).toContain(`Code: ${code}.`);
+    expect(siwe.statement).toContain('Connect JAW CLI to mcp.test.');
+    expect(siwe.statement).toContain('Pay x402 services');
+    expect(siwe.statement).not.toContain('\n');
+    // The wallet warns of phishing when the domain is not the page it runs on.
+    expect(siwe.domain).toBe('keys.test');
+    expect(siwe.uri).toBe(ISSUER);
+    expect(siwe.chainId).toBe(toHex(config().chain.id));
+    expect((await rowOf(start.uid!)).account).toBe(signer.address);
   });
 
   it('says the owner turned it down when the wallet answers 4001', async () => {
-    setWallet({ openWallet: fakeWallet(walletAnswers(owner(), ['personal_sign'])) });
+    setWallet({ openWallet: fakeWallet(walletAnswers(owner(), ['wallet_connect'])) });
     const browser = new Browser();
     const start = await startAuthorization(browser);
     await walletsSettled();
