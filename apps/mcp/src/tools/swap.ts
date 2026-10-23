@@ -218,15 +218,14 @@ function summaryOf(row: SwapRow): string {
           `Call jaw_swap with the same idempotencyKey before ${row.approveBy?.toISOString()} to get a new link for this quote.`
         );
       }
-      const token = row.originToken === zeroAddress ? 'the native coin' : row.originToken;
+      const open = `Ask the account owner to open ${row.walletUrl} before ${row.approveBy?.toISOString()} and approve`;
       const provider = providerOf(row);
-      const deposit =
-        provider === 'aurora'
-          ? `one transfer of ${row.amount} base units of ${token} on chain ${row.originChainId} to the deposit address ${row.depositAddress}`
-          : `in one batch on chain ${row.originChainId}, a deposit of ${row.amount} base units of ${token} to ${CONTRACT[provider]}`;
+      if (provider !== 'aurora' && quote) {
+        return `${open} ${bridgeTerms(row, provider, quote)}Follow it with jaw_swap_status and ${row.quoteId}.`;
+      }
       return (
-        `Ask the account owner to open ${row.walletUrl} before ${row.approveBy?.toISOString()} and approve ${deposit}. ` +
-        "The owner pays that transaction's gas in the wallet, in USDC where the wallet offers it or in the chain's native coin. " +
+        `${open} one transfer of ${row.amount} base units of ${tokenName(row.originToken)} on chain ${row.originChainId} ` +
+        `to the deposit address ${row.depositAddress}. ${GAS}` +
         `Expected: ${quote?.expectedOutputAmount} base units of ${row.destinationToken} on chain ${row.destinationChainId} ` +
         `to ${row.recipient}, at least ${quote?.minOutputAmount}. Follow it with jaw_swap_status and ${row.quoteId}.`
       );
@@ -247,7 +246,9 @@ function summaryOf(row: SwapRow): string {
       }
       return (
         `The swap expired: the owner did not approve before ${row.approveBy?.toISOString()}. ` +
-        'A deposit signed in time that lands later still shows in jaw_swap_status.'
+        (providerOf(row) === 'aurora'
+          ? 'A deposit signed in time that lands later still shows in jaw_swap_status.'
+          : 'Nothing was sent. A new jaw_swap with a new idempotencyKey gets a new quote.')
       );
     case 'deposit_sent': {
       if (row.code === DEPOSIT_FAILED || row.code === DEPOSIT_REVERTED) return didNotLeave(row);
@@ -260,11 +261,17 @@ function summaryOf(row: SwapRow): string {
       return `The owner approved the deposit${unread}. The swap backend has not seen it yet; call jaw_swap_status again.`;
     }
     case 'submitted':
+      if (providerOf(row) === 'across' && row.backendRawState === 'expired') {
+        return (
+          `Across did not fill the deposit in time and refunds it${asWeth(row)} to the account on chain ${row.originChainId}, ` +
+          'which can take hours. Call jaw_swap_status again until it is refunded.'
+        );
+      }
       return `The swap backend has the deposit (${row.backendState ?? 'state not read yet'}). Call jaw_swap_status again until it is completed, refunded or failed.`;
     case 'completed':
       return `Swap completed: ${row.recipient} received the output on chain ${row.destinationChainId}.`;
     case 'refunded':
-      return `The swap backend refunded the deposit to ${row.depositor} on chain ${row.originChainId}.`;
+      return `The swap backend refunded the deposit${asWeth(row)} to ${row.depositor} on chain ${row.originChainId}.`;
     case 'failed':
       return 'The swap backend reports the swap failed.';
     default:
@@ -272,14 +279,14 @@ function summaryOf(row: SwapRow): string {
   }
 }
 
-const CONTRACT = { across: 'the Across contract', relay: 'the Relay Depository' };
-
 const didNotLeave = (row: SwapRow) =>
   (row.code === DEPOSIT_REVERTED
     ? `The deposit transaction reverted on chain${row.txHash ? ` (${row.txHash})` : ''}.`
     : 'The deposit failed before it was mined.') +
   ` The funds did not leave the account on chain ${row.originChainId}. ` +
-  'If the swap backend later sees a deposit, jaw_swap_status shows it. Otherwise start a new swap.';
+  (providerOf(row) === 'across'
+    ? 'Start a new swap.'
+    : 'If the swap backend later sees a deposit, jaw_swap_status shows it. Otherwise start a new swap.');
 
 const DEPOSIT_GRACE_MS = 10 * 60_000;
 
@@ -311,6 +318,38 @@ const checkHistory = (row: SwapRow) =>
   `Check the owner's account history on chain ${row.originChainId} for the deposit and its fill or refund before swapping these funds again.`;
 
 const NAME = { across: 'Across', relay: 'Relay' };
+
+const GAS =
+  "The owner pays that transaction's gas in the wallet, in USDC where the wallet offers it or in the chain's native coin. ";
+
+const tokenName = (token: string) => (token === zeroAddress ? 'the native coin' : token);
+
+// Across wraps a native deposit, so its refund comes back as WETH.
+const asWeth = (row: SwapRow) => (providerOf(row) === 'across' && row.originToken === zeroAddress ? ' as WETH' : '');
+
+function bridgeTerms(row: SwapRow, provider: 'across' | 'relay', quote: CheckedQuote['quote']): string {
+  const calls = callsOf(row)!;
+  const contract = `the ${NAME[provider]} contract ${calls.at(-1)!.to}`;
+  const deposit = `a deposit of ${row.amount} base units of ${tokenName(row.originToken)} to ${contract}`;
+  const signed =
+    calls.length === 2
+      ? `in one batch on chain ${row.originChainId}, a token approval and ${deposit}. `
+      : `on chain ${row.originChainId}, ${deposit}. `;
+  const out =
+    `at least ${quote.minOutputAmount} base units of ${tokenName(row.destinationToken)} on chain ${row.destinationChainId} ` +
+    `to ${row.recipient}, expected in about ${quote.expectedFillTimeSec} s`;
+  if (provider === 'across') {
+    return (
+      `${signed}${GAS}Across delivers ${out}; if no relayer fills it in time, ` +
+      `Across refunds the deposit to the account on chain ${row.originChainId} in the token it bridged, ` +
+      `which can differ from ${tokenName(row.originToken)} when the route swaps or wraps it first. `
+    );
+  }
+  return (
+    `${signed}${GAS}Relay's solver pays ${out}. Settlement is enforced by Relay's protocol, not by a contract on chain ${row.destinationChainId}; ` +
+    `an order left unfilled refunds to the account on chain ${row.originChainId} or ${row.destinationChainId}. `
+  );
+}
 
 function notSeen(row: SwapRow): string {
   const provider = providerOf(row);
