@@ -13,7 +13,7 @@ import {
   PERMISSIONS_MANAGER_ADDRESS,
 } from '@jaw.id/core';
 import { and, eq, ne } from 'drizzle-orm';
-import { encodeFunctionData, erc20Abi, formatUnits, isAddressEqual, maxUint256, type Address, type Hex } from 'viem';
+import { encodeFunctionData, erc20Abi, isAddressEqual, maxUint256, type Address, type Hex } from 'viem';
 import { privateKeyToAccount } from 'viem/accounts';
 import { z } from 'zod';
 import { chainClients } from '@/adapters/session-host';
@@ -25,10 +25,11 @@ import { liveGrants, recordRevoked, replacedBudgets, type LiveGrant } from '@/gr
 import { publicClientFor, rpcUrl } from '@/lib/chain';
 import { errorLabel, log } from '@/lib/edge';
 import { reply } from '@/lib/fence';
+import { formatAmount, receiptLine } from '@/lib/owner-text';
 import { FloatBusy, LOCK_WAIT_MS, withFloat, type FloatHold } from '@/payments/float-lock';
 import { stillHeld } from '@/payments/refill';
 import { holdingRows, LEASE_MS, sendInFlight } from '@/payments/store';
-import { refusal } from '@/tools/reply';
+import { refusal, withNext } from '@/tools/reply';
 import type { Tenant } from './auth';
 import { config, SUPPORTED_CHAINS } from './config';
 import { endConnection, SendInFlight } from './rows';
@@ -56,16 +57,16 @@ export interface DisconnectDeps {
 }
 
 export const disconnectOutput = z.object({
-  revoked: z.array(z.string()).describe('Budgets revoked on chain as spender by this call'),
+  revoked: z.array(z.string()).describe('Permissions revoked on chain as spender by this call'),
   stillApproved: z
     .array(z.string())
     .describe(
-      'Budgets left approved on chain because the payer could not pay the fee; jaw_revoke_permission revokes them'
+      'Permissions left approved on chain because the payer could not pay the fee; jaw_revoke_permission revokes them'
     ),
   unread: z
     .array(z.string())
     .describe(
-      'Grants left approved on chain because the chain could not be read for them; jaw_revoke_permission revokes them'
+      'Permissions left approved on chain because the chain could not be read for them; jaw_revoke_permission revokes them'
     ),
   swept: z.string().describe('USDC base units returned to the account'),
   txHash: z.string().nullable(),
@@ -80,12 +81,16 @@ const REFUSALS = {
   paused: 'Payments are paused, so nothing was revoked. Try again later.',
   chain: 'Nothing was revoked: the chain could not be read. Try again.',
   busy: 'A payment on this connection is in progress, so nothing was revoked. Try again in a moment.',
-  landing:
-    'A payment or an execute is still in flight, so the connection stays open. Call jaw_session_disconnect again in a moment; it returns what landed.',
+  landing: withNext(
+    'A payment or a run under a permission is still going through, so nothing was revoked and this app stays connected.',
+    'Call jaw_session_disconnect again in a moment; it returns what landed.'
+  ),
   notSent: 'Nothing was revoked: the transaction could not be sent. Try again.',
-  reverted: 'Nothing was revoked: the transaction reverted. Try again.',
-  unconfirmed:
-    'The transaction was sent but is not confirmed yet. Call jaw_session_disconnect again in a minute to finish; it does not repeat what already landed.',
+  reverted: 'Nothing was revoked: the transaction failed. Try again.',
+  unconfirmed: withNext(
+    'The transaction was sent but is not confirmed yet. This app stays connected until it is.',
+    'Call jaw_session_disconnect again in a minute to finish; it does not repeat what already landed.'
+  ),
 };
 
 const FEE_MARGIN_BPS = 12_500n;
@@ -274,27 +279,49 @@ export async function sweepOnReuse(connectionId: string, key: Hex, deps = DEFAUL
 }
 
 function summarize(t: Tenant, r: Returned): string {
-  const usdc = (amount: bigint) => `${formatUnits(amount, 6)} USDC`;
-  const said = ['Disconnected. Tokens for this connection no longer work.'];
-  if (r.revoked.length) said.push(`Revoked ${r.revoked.length} budget(s) on chain.`);
-  if (r.swept > 0n) said.push(`Returned ${usdc(r.swept)} to ${t.account} in ${r.txHash}.`);
+  const usdc = (amount: bigint) => formatAmount(amount, 6, 'USDC');
+  const permissions = (n: number) => `${n} permission${n === 1 ? '' : 's'}`;
+  const stays = (n: number) => (n === 1 ? 'stays approved until it expires' : 'stay approved until they expire');
+  const done = [
+    r.revoked.length > 0 && `revoked ${permissions(r.revoked.length)}`,
+    r.swept > 0n && `returned ${usdc(r.swept)} to the wallet`,
+  ].filter((d): d is string => Boolean(d));
+  // "Nothing was left" only when nothing was revoked or returned and nothing stays behind either.
+  const nothingLeft = !done.length && !r.stillApproved.length && !r.unread.length && !r.left;
+  const said = [
+    done.length
+      ? `Disconnected. ${done.join(' and ').replace(/^./, (c) => c.toUpperCase())}.`
+      : nothingLeft
+        ? 'Disconnected. Nothing was left to revoke or return.'
+        : 'Disconnected.',
+  ];
+  if (r.txHash) said.push(receiptLine(t.chainId, r.txHash));
+  const notes: string[] = [];
   if (r.stillApproved.length) {
-    said.push(
-      `${r.stillApproved.length} budget(s) are still approved on chain until they expire, because the payer cannot pay the fee to revoke them. ` +
-        'Nothing can spend from them: the session key went with this connection.'
+    const n = r.stillApproved.length;
+    notes.push(
+      `${permissions(n)} ${stays(n)}, because the fee to revoke ${n === 1 ? 'it' : 'them'} could not be paid.`
     );
   }
   if (r.unread.length) {
-    said.push(
-      `${r.unread.length} grant(s) could not be read on chain, so they were not revoked and stay approved until they expire or the owner revokes them through jaw_revoke_permission. ` +
-        'Nothing can spend from them: the session key went with this connection.'
+    const n = r.unread.length;
+    notes.push(
+      `${permissions(n)} could not be read on chain, so ${n === 1 ? 'it was' : 'they were'} not revoked and ${stays(n)} or the owner revokes ${n === 1 ? 'it' : 'them'}.`
     );
   }
+  const remaining = r.stillApproved.length + r.unread.length;
+  if (remaining) notes.push(`Nothing can use ${remaining === 1 ? 'it' : 'them'} now that this app is disconnected.`);
   if (r.left) {
-    const why = r.revoked.length && r.swept === 0n ? ': too little to sweep after the fee' : '';
-    said.push(`${usdc(r.left)} stays in the payer ${t.sessionAddress}${why}.`);
+    const why = r.revoked.length && r.swept === 0n ? ', too little to return after the fee' : '';
+    notes.push(`${usdc(r.left)} could not be returned and stays at ${t.sessionAddress}${why}.`);
   }
-  return said.join(' ');
+  if (notes.length) said.push(notes.join(' '));
+  return withNext(
+    said.join('\n'),
+    remaining
+      ? 'The owner can revoke the remaining ones in the wallet, or with jaw_revoke_permission after reconnecting; their ids are in stillApproved and unread.'
+      : undefined
+  );
 }
 
 /**

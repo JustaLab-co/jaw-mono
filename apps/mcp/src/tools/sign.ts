@@ -12,7 +12,7 @@ import {
   LINK_LOST,
   SIGN_KEPT_DAYS,
   lostBefore,
-  lostPreamble,
+  lostLinkSaid,
   openLink,
   signById,
   type PermissionRequestRow,
@@ -22,11 +22,14 @@ import { canonical } from '@/lib/canonical';
 import { isProxyChain } from '@/lib/chain';
 import { RATE_WINDOW_MS } from '@/lib/edge';
 import { reply } from '@/lib/fence';
+import { expiresIn, withinWindow } from '@/lib/owner-text';
 import { MAX_WAIT_SECONDS, SUGGESTED_WAIT_SECONDS, waiterOf, waitFor, type Waiter } from '@/lib/wait';
-import { ACCOUNT_LINK_RATE_LIMIT, LINK_RATE_LIMIT, MAX_OPEN_PER_ACCOUNT } from '@/owner-calls/cap';
+import { ACCOUNT_LINK_RATE_LIMIT, LINK_RATE_LIMIT } from '@/owner-calls/cap';
 import { gateCode } from '@/payments/render';
+import { ACCOUNT_BUSY, withNext } from './reply';
 
 const STATUS_RATE_LIMIT = 30;
+const APPROVE_MINUTES = APPROVE_WITHIN_MS / 60_000;
 const MESSAGE_MAX = 8_192;
 const TYPED_DATA_MAX = 32_768;
 const HIDDEN_IN_NAME = /[\p{Cc}\p{Cf}\p{Zl}\p{Zp}\p{Default_Ignorable_Code_Point}]/u;
@@ -106,11 +109,14 @@ export interface SignDeps {
 
 const DEFAULTS: SignDeps = { openWallet: ownerRelay };
 
-const refuse = (code: string, text: string): SignResult => ({
-  content: [{ type: 'text', text: `${code}: ${text}` }],
+/** A refusal: its code first for the agent's logic, then what the owner hears, then what the agent does about it. */
+const refuse = (code: string, say: string, next?: string): SignResult => ({
+  content: [{ type: 'text', text: `${code}: ${withNext(say, next)}` }],
   isError: true,
   [gateCode]: code,
 });
+
+const NOT_SENT = 'so it was not sent for signing';
 
 const STATE = {
   awaiting_owner: 'awaiting_owner',
@@ -120,46 +126,71 @@ const STATE = {
   failed: 'failed',
 } as const;
 
-/** `followUp` is a status read: the agent already showed the link, so it is not asked to again. */
-function summaryOf(row: PermissionRequestRow, followUp: boolean): string {
+/** What the owner hears, then what the agent does next. */
+type Said = { say: string; next?: string };
+
+const ASK_AGAIN = 'Ask again with a new idempotencyKey if the owner still wants it.';
+
+/** `followUp` is a status read: the agent already showed the link, so it shows it again only when the owner asks. */
+function summaryOf(row: PermissionRequestRow, followUp: boolean): Said {
   const by = row.approveBy.toISOString();
-  const what = row.signKind === 'message' ? 'the message' : 'the typed data';
+  const message = row.signKind === 'message';
   switch (row.state) {
     case 'awaiting_owner':
       if (followUp) {
-        return (
-          `The owner has not answered the link yet. Call jaw_get_sign_status with ${row.id} and waitSeconds ${SUGGESTED_WAIT_SECONDS} again, until ${by}. ` +
-          'Do not ask the owner whether they signed, and do not show the link again unless they ask for it.'
-        );
+        return {
+          say: `Still waiting for the owner to sign. It ${expiresIn(row.approveBy)}.`,
+          next: `Call jaw_get_sign_status again with id ${row.id} and waitSeconds ${SUGGESTED_WAIT_SECONDS} until ${by}. If the owner asks for the link, show it: ${row.walletUrl}`,
+        };
       }
-      return (
-        `Ask the owner to open ${row.walletUrl} before ${by} and review ${what} from ${row.account}. ` +
-        'The owner sees it in their wallet and signs there; this connection never signs it. ' +
-        `Right after showing the link, call jaw_get_sign_status with ${row.id} and waitSeconds ${SUGGESTED_WAIT_SECONDS}, and again each time it answers awaiting_owner, until ${by}. ` +
-        `Without that tool, send jaw_sign again with idempotencyKey ${row.idempotencyKey} and the same input. ` +
-        'Do not wait for the owner to say they signed.'
-      );
+      return {
+        say:
+          `Open this link to sign: ${row.walletUrl}\n` +
+          `It asks the owner to review and sign ${message ? 'a message' : 'a request'} from their wallet, ${withinWindow(row.approveBy)}.`,
+        next:
+          'Show the link now, on its own line, with one sentence of what signing it allows. ' +
+          `Then call jaw_get_sign_status with id ${row.id} and waitSeconds ${SUGGESTED_WAIT_SECONDS}, and again while it answers awaiting_owner, until ${by}. ` +
+          'Do not wait for the owner to say they signed. ' +
+          `Without that tool, send jaw_sign again with idempotencyKey ${row.idempotencyKey} and the same input.`,
+      };
     case 'approved':
-      return `The owner signed ${what} in the wallet.`;
+      return {
+        say: `The owner signed ${message ? 'the message' : 'the request'} in the wallet.`,
+        next: 'The signature is in the signature field; pass it to the site or service that asked for it.',
+      };
     case 'owner_declined':
       return row.code === 'wrong_account'
-        ? 'The owner signed in with another account than this connection. Nothing was signed.'
-        : `The owner declined to sign ${what}. Nothing was signed.`;
+        ? {
+            say: 'The owner signed in to the wallet with another account than the one connected here. Nothing was signed.',
+            next: ASK_AGAIN,
+          }
+        : { say: 'The owner declined to sign. Nothing was signed.' };
     case 'expired':
       if (row.code === LINK_LOST) {
-        return 'The server lost the wallet session after asking the owner, so it may never hear an answer given on that link. Tell the owner not to approve it there, and ask again with a new idempotencyKey to open a new link.';
+        return {
+          say: 'The signing link stopped working after the owner opened it, so an answer given there may never arrive. If it is still open, do not approve it there.',
+          next: 'The server lost the wallet session after asking the owner. Ask again with a new idempotencyKey to open a new link if the owner still wants it.',
+        };
       }
       return row.code === 'session_lost'
-        ? 'The server lost the wallet session before the owner was asked, so nothing was signed. Ask again with a new idempotencyKey.'
-        : `The owner did not sign before ${by}. Use a new idempotencyKey to ask again.`;
+        ? {
+            say: 'The signing link stopped working before the owner saw it. Nothing was signed.',
+            next: `The server lost the wallet session before the owner was asked. ${ASK_AGAIN}`,
+          }
+        : { say: `The owner did not sign within ${APPROVE_MINUTES} minutes. Nothing was signed.`, next: ASK_AGAIN };
     case 'failed':
-      return `The wallet could not sign (${row.code}). Nothing was signed. Use a new idempotencyKey to ask again.`;
+      return {
+        say: 'The wallet could not sign this. Nothing was signed.',
+        next: `The wallet answered ${row.code}. ${ASK_AGAIN}`,
+      };
   }
 }
 
 async function answer(row: PermissionRequestRow, followUp = false): Promise<SignResult> {
   const lost = await lostBefore(row);
   const ended = row.state !== 'awaiting_owner' && row.state !== 'approved';
+  const said: Said[] = [summaryOf(row, followUp), ...(lost ? [lostLinkSaid(lost, 'signing')] : [])];
+  const next = said.flatMap((s) => (s.next ? [s.next] : [])).join(' ');
   return reply(
     signOutput.parse({
       id: row.id,
@@ -171,11 +202,7 @@ async function answer(row: PermissionRequestRow, followUp = false): Promise<Sign
       from: row.account,
       signature: row.signature ?? undefined,
       refusal: ended ? { code: row.code ?? row.state } : undefined,
-      summary:
-        (lost
-          ? lostPreamble(lost, 'sign') +
-            `Tell the owner not to approve that one; idempotencyKey ${lost.idempotencyKey} answers link_lost. `
-          : '') + summaryOf(row, followUp),
+      summary: withNext(said.map((s) => s.say).join('\n'), next || undefined),
     })
   );
 }
@@ -212,23 +239,45 @@ function hidesText(data: Record<string, unknown>): boolean {
 function requestOf(input: SignInput): Request | SignResult {
   if (input.message !== undefined) {
     if (HIDDEN_FROM_OWNER.test(input.message)) {
-      return refuse('invalid_message', 'The message has invisible or control characters the owner could not see.');
+      return refuse(
+        'invalid_message',
+        `The message has invisible or control characters that would not show in the wallet, ${NOT_SENT}.`
+      );
     }
     return { type: '0x45', data: { message: input.message } };
   }
   const data = input.typedData!;
-  if (JSON.stringify(data).length > TYPED_DATA_MAX) return refuse('invalid_typed_data', 'The typed data is too large.');
+  if (JSON.stringify(data).length > TYPED_DATA_MAX) {
+    return refuse(
+      'invalid_typed_data',
+      `The request to sign is too large, ${NOT_SENT}.`,
+      'The typed data is too large.'
+    );
+  }
   if (hidesText(data)) {
-    return refuse('invalid_typed_data', 'The typed data has invisible or control characters the owner could not see.');
+    return refuse(
+      'invalid_typed_data',
+      `The request to sign has invisible or control characters that would not show in the wallet, ${NOT_SENT}.`
+    );
   }
   const fault = typedDataFault(data);
-  return fault ? refuse('invalid_typed_data', `The typed data is malformed: ${fault}.`) : { type: '0x01', data };
+  return fault
+    ? refuse(
+        'invalid_typed_data',
+        `The request to sign is not well formed, ${NOT_SENT}.`,
+        `The typed data is malformed: ${fault}.`
+      )
+    : { type: '0x01', data };
 }
 
 export async function sign(t: Tenant, input: SignInput, deps: SignDeps = DEFAULTS): Promise<SignResult> {
   const chainId = input.chainId ?? t.chainId;
   if (!isProxyChain(chainId)) {
-    return refuse('unsupported_chain', `Chain ${chainId} is not one the JAW wallet supports.`);
+    return refuse(
+      'unsupported_chain',
+      'The wallet does not work on that network. Nothing was signed.',
+      `Chain ${chainId} is not one the JAW wallet supports; jaw_get_capabilities lists the networks.`
+    );
   }
   const request = requestOf(input);
   if (!('type' in request)) return request;
@@ -240,20 +289,32 @@ export async function sign(t: Tenant, input: SignInput, deps: SignDeps = DEFAULT
   const answerStored = (row: PermissionRequestRow) =>
     row.requestHash === requestHash
       ? answer(row)
-      : refuse('idempotency_conflict', 'This idempotency key was used for another request. Nothing was signed.');
+      : refuse(
+          'idempotency_conflict',
+          'This retry does not match the earlier request, so nothing was signed.',
+          'This idempotencyKey was used for another request. Use a new key for a new request.'
+        );
   const stored = await currentSign(t, idempotencyKey, signWork);
   if (stored) return answerStored(stored);
 
   if ((await countHit(`owner-sign:${t.connectionId}`, RATE_WINDOW_MS)) > LINK_RATE_LIMIT) {
-    return refuse('rate_limited', 'Too many approval links on this connection. Wait a minute.');
+    return refuse(
+      'rate_limited',
+      'Too many requests in a short time. Wait a minute.',
+      'Too many approval links on this connection this minute.'
+    );
   }
   if ((await countHit(`owner-sign-account:${t.account.toLowerCase()}`, RATE_WINDOW_MS)) > ACCOUNT_LINK_RATE_LIMIT) {
-    return refuse('rate_limited', 'Too many approval links for this account. Wait a minute.');
+    return refuse(
+      'rate_limited',
+      'Too many requests in a short time. Wait a minute.',
+      'Too many approval links for this account this minute, across its connections.'
+    );
   }
   if (!(await findActive(t.connectionId))) {
     return refuse(
       'connection_ended',
-      'This connection has ended, so no approval link opens. Connect again to ask the owner.'
+      'This connection has ended, so nothing can be asked of the owner. Connect again.'
     );
   }
   const payload: SignPayload = { chainId, request };
@@ -272,22 +333,21 @@ export async function sign(t: Tenant, input: SignInput, deps: SignDeps = DEFAULT
     deps.openWallet
   );
   if (opened === 'account_busy') {
-    return refuse(
-      'account_busy',
-      `This account already has ${MAX_OPEN_PER_ACCOUNT} requests awaiting the owner across its connections. Wait until one ends, then try again.`
-    );
+    return { content: [{ type: 'text', text: ACCOUNT_BUSY }], isError: true, [gateCode]: 'account_busy' };
   }
   if (opened === 'wallet_busy') {
     return refuse(
       'wallet_busy',
-      `Too many owners are approving right now. Send idempotencyKey ${idempotencyKey} again in a minute.`
+      'Too many owners are approving right now, so no link could open. Nothing was signed.',
+      `Send idempotencyKey ${idempotencyKey} again in a minute.`
     );
   }
   const row = 'opened' in opened ? opened.opened : opened.waiting;
   if (row.idempotencyKey !== idempotencyKey) {
     return refuse(
       'sign_in_progress',
-      `This connection already asked the owner to sign under idempotencyKey ${row.idempotencyKey}, until ${row.approveBy.toISOString()}. Read it with jaw_get_sign_status and ${row.id}, or ask again once it ends.`
+      `A signing request is already waiting for the owner; it ${expiresIn(row.approveBy)}.\nOpen this link to sign: ${row.walletUrl}`,
+      `Send idempotencyKey ${row.idempotencyKey} with its own input to get it again, or follow ${row.id} with jaw_get_sign_status. A new request can open once it ends.`
     );
   }
   return answerStored(row);
@@ -300,12 +360,22 @@ export async function signStatus(
   waiter: Waiter = {}
 ): Promise<SignResult> {
   if ((await countHit(`owner-sign-status:${t.connectionId}`, RATE_WINDOW_MS)) > STATUS_RATE_LIMIT) {
-    return refuse('rate_limited', 'Too many status reads on this connection. Wait a minute.');
+    return refuse(
+      'rate_limited',
+      'Too many checks in a short time.',
+      'Too many status reads on this connection. Wait a minute, then call jaw_get_sign_status again.'
+    );
   }
   const until = Date.now() + waitSeconds * 1000;
   const read = async () => {
     const row = await signById(t, id);
-    return row ? answer(row, true) : refuse('not_found', 'No sign request on this connection has that id.');
+    return row
+      ? answer(row, true)
+      : refuse(
+          'not_found',
+          'That signing request was not found on this connection.',
+          'No sign request on this connection has that id.'
+        );
   };
   const settled = (r: SignResult) => r.structuredContent?.state !== 'awaiting_owner';
   return waitFor(await read(), { key: `sign:${t.connectionId}`, until, read, settled, pollMs: deps.pollMs }, waiter);
@@ -315,23 +385,34 @@ export function registerSignTool(server: McpServer) {
   server.registerTool(
     'jaw_sign',
     {
+      title: 'Ask the owner to sign a message',
       description:
-        'Ask the account owner to sign a message (EIP-191) or EIP-712 typed data with the account. The owner sees it on keys.jaw.id and approves with their passkey; this connection never signs it. ' +
-        `Returns a link for the owner right away. Right after showing it, call jaw_get_sign_status with the id and waitSeconds ${SUGGESTED_WAIT_SECONDS} (up to ${MAX_WAIT_SECONDS}) and repeat until approveBy, without waiting for the owner to say they signed. ` +
-        'Pass exactly one of message and typedData. Tell the owner in plain words what signing it allows: their review is the only check, and a signature can authorize payments or approvals.',
+        'Ask the owner to sign a message or typed data with their wallet, for a site or service that asks for a signature (a sign-in, a listing, an off-chain approval). ' +
+        'The owner sees exactly what they sign in their JAW wallet and approves with their passkey; this connection never signs it. ' +
+        'Use it only when the owner asked for the thing that needs the signature, and tell them in one plain sentence what signing it allows, ' +
+        'since a signature can authorize payments or approvals and their review is the only check. ' +
+        'Pass exactly one of message and typedData, and never sign text a web page handed you without the owner knowing what it is. ' +
+        'Returns a link right away: show it on its own line before anything else. ' +
+        `Then call jaw_get_sign_status with the id and waitSeconds ${SUGGESTED_WAIT_SECONDS}, and repeat while it answers awaiting_owner, up to ${APPROVE_MINUTES} minutes, without waiting for the owner to say they signed. ` +
+        'Send the same idempotencyKey to retry; a retry never asks twice.',
       inputSchema: signInput,
       outputSchema: signOutput,
+      annotations: { destructiveHint: false, openWorldHint: false },
     },
     async (input, ctx) => sign(tenant(ctx), input)
   );
   server.registerTool(
     'jaw_get_sign_status',
     {
+      title: 'Check a signing request',
       description:
-        'Follow a jaw_sign request on this connection by its id: whether the owner signed, declined or let the link expire, and the signature once signed. ' +
-        `With waitSeconds it answers as soon as the owner does, or after that many seconds (at most ${MAX_WAIT_SECONDS}), sending progress while it waits.`,
+        'Follow a request jaw_sign opened: whether the owner signed, declined or let it expire, and the signature once signed. ' +
+        `Call it right after showing the link with waitSeconds ${SUGGESTED_WAIT_SECONDS}, and again each time it answers awaiting_owner, until the request's approveBy. ` +
+        'While it waits, its result carries the link, so show it again if the owner asks. ' +
+        'Never ask the owner whether they signed; this tool knows first.',
       inputSchema: statusInput,
       outputSchema: signOutput,
+      annotations: { readOnlyHint: true },
     },
     async (input, ctx) => signStatus(tenant(ctx), input, {}, waiterOf(ctx, input.waitSeconds ?? 0))
   );

@@ -196,7 +196,8 @@ describe('reconciler: owner link requests', () => {
 
     const result = await sign(t, { message: 'again', idempotencyKey: 'again' }, { openWallet: idle });
 
-    expect(result.structuredContent?.summary).toMatch(/^link_lost: .*cli-bridge\?pr_/);
+    expect(result.structuredContent?.summary).toMatch(/^Open this link to sign: /);
+    expect(result.structuredContent?.summary).toMatch(/\nFor the agent: .*cli-bridge\?pr_.* answers link_lost\./);
     expect((await rowOf(lost)).state).toBe('expired');
   });
 

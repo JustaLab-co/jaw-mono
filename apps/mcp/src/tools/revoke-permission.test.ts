@@ -11,6 +11,7 @@ import {
   callTool,
   connect,
   fakeWallet,
+  mcp,
   owner,
   setTestEnv,
   walletAnswers,
@@ -23,6 +24,7 @@ import { grants, permissionRequests } from '@/db/schema';
 import { TEST_PG_URL, useTestDb, useTestPostgres } from '@/db/test-db';
 import type { ReadPermission } from '@/grants/permission';
 import { x402Budget } from '@/grants/store';
+import { leaks, spoken, toAgent } from '@/test-utils/spoken';
 import { grantPermissions } from './grant-permissions';
 import { sendCalls } from './owner-calls';
 import type { LookUp } from '@/grants/revokes';
@@ -148,13 +150,74 @@ describe('jaw_revoke_permission', () => {
 
     expect('structuredContent' in result && result.structuredContent?.connection).toBe(other.t.connectionId);
     expect('structuredContent' in result && result.structuredContent?.summary).toContain(
-      'call jaw_connections yourself'
+      'check jaw_connections on later turns to see it revoked'
     );
+    expect(spoken(result)).toContain(
+      'a permission that lets another app act from their wallet, moving up to 1 USDC a day'
+    );
+    expect(leaks(spoken(result))).toEqual([]);
     const listed = await callTool(me.c.access_token, 'jaw_connections', {});
     const theirs = (listed.structuredContent.connections as { id: string; grants: object[] }[]).find(
       (c) => c.id === other.t.connectionId
     );
     expect(theirs?.grants).toMatchObject([{ permissionId: other.budget, kind: 'x402-budget', status: 'revoked' }]);
+  });
+
+  it("given this connection's own spend limit, then the owner hears the link first, then what it lets act and moves, in plain words", async () => {
+    const { t, signer, budget } = await connected();
+    const { deps } = setup(signer);
+    const wait = held();
+
+    const result = await revokePermission(t, { permissionId: budget }, deps({ held: wait.promise }));
+    wait.release();
+    await walletsSettled();
+
+    const [link, said] = spoken(result).split('\n');
+    expect(link).toBe(`Open this link to revoke: ${urlOf(result)}`);
+    expect(said).toBe(
+      'It asks the owner to revoke a permission that lets this connection act from their wallet, moving up to 1 USDC a day, within the next 30 minutes. ' +
+        'Revoking takes effect at once; the owner pays the network fee.'
+    );
+    expect(leaks(spoken(result))).toEqual([]);
+    expect(toAgent(result)).toEqual([
+      `For the agent: Show the link now. Then check jaw_connections on later turns to see it revoked; do not wait for the owner to say they did. It lets ${t.sessionAddress} act for the account.`,
+    ]);
+  });
+
+  it('when a client lists the tools, then it is titled for people and keeps its flags', async () => {
+    const { c } = await connected();
+
+    const { json } = await mcp(c.access_token, { method: 'tools/list' });
+
+    const tool = json.result.tools.find((t: { name: string }) => t.name === 'jaw_revoke_permission');
+    expect(tool.title).toBe('Revoke a permission');
+    expect(tool.annotations).toEqual({ destructiveHint: true, idempotentHint: true });
+  });
+
+  it('given a network this server does not read, then it is refused by name in plain words and no wallet opens', async () => {
+    const { t, signer, budget } = await connected();
+    const { deps, opened } = setup(signer);
+
+    const result = await revokePermission(t, { permissionId: budget, chainId: 1 }, deps());
+
+    expect(result.content[0].text).toMatch(/^unsupported_chain: /);
+    expect(spoken(result)).toBe('Permissions on Ethereum cannot be revoked from here. Nothing was asked.');
+    expect(leaks(spoken(result))).toEqual([]);
+    expect(opened()).toBe(0);
+  });
+
+  it('given a network no one knows by name, then the refusal says its id in words, never the raw chain id', async () => {
+    const { t, signer, budget } = await connected();
+    const { deps, opened } = setup(signer);
+
+    const result = await revokePermission(t, { permissionId: budget, chainId: 987654321 }, deps());
+
+    expect(result.content[0].text).toMatch(/^unsupported_chain: /);
+    expect(spoken(result)).toBe(
+      'Permissions on the network with id 987654321 cannot be revoked from here. Nothing was asked.'
+    );
+    expect(leaks(spoken(result))).toEqual([]);
+    expect(opened()).toBe(0);
   });
 
   it('given a permission granted on chain that this server never recorded, then it is found in the permission store and revoked', async () => {
@@ -211,6 +274,7 @@ describe('jaw_revoke_permission', () => {
     const result = await revokePermission(t, { permissionId: randomId() }, deps());
 
     expect(result.content[0].text).toMatch(/^unknown_permission: /);
+    expect(leaks(spoken(result))).toEqual([]);
     expect(opened()).toBe(0);
   });
 
@@ -352,6 +416,7 @@ describe('jaw_revoke_permission', () => {
     const result = await revokePermission(t, { permissionId: budget, chainId: BASE }, deps());
 
     expect(result.content[0].text).toMatch(/^wrong_chain: /);
+    expect(spoken(result)).toBe('This permission was granted on Base Sepolia, not Base. Nothing was asked.');
     expect(opened()).toBe(0);
   });
 
@@ -513,8 +578,15 @@ describe('jaw_revoke_permission', () => {
 
     expect(opened()).toBe(1);
     expect(urlOf(again)).not.toBe(urlOf(first));
-    expect(again.content[0].text).toMatch(/link_lost: /);
-    expect(again.content[0].text).toContain(urlOf(first));
+    expect(again.content[0].text.split('\n')[0]).toBe(`Open this link to revoke: ${urlOf(again)}`);
+    expect(again.content[0].text).not.toMatch(/link_lost: /);
+    // The owner is told to leave the lost link alone; the lost link itself is for the agent.
+    expect(spoken(again)).toContain(
+      'An earlier revoke link stopped working, so an answer given there may never arrive. If it is still open, do not approve it there.'
+    );
+    expect(spoken(again)).not.toContain(urlOf(first));
+    expect(toAgent(again).join('\n')).toContain(`The earlier link ${urlOf(first)} answers link_lost.`);
+    expect(leaks(spoken(again))).toEqual([]);
     const firstRow = (await requestsOf(budget)).find((r) => r.walletUrl === urlOf(first));
     expect(firstRow).toMatchObject({ state: 'approved' });
     expect((await grantRow(budget)).revokedAt).not.toBeNull();

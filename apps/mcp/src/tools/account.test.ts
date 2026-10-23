@@ -1,10 +1,13 @@
 import { clearCapabilitiesCache, getSupportedChains, JAW_RPC_URL } from '@jaw.id/core';
+import { usdcForNetwork } from '@jaw.id/agent';
 import { afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
 import { verifyBearer, type Tenant } from '@/connections/auth';
 import { callTool, connect, setTestEnv } from '@/connections/testkit';
 import { getDb } from '@/db/client';
 import { ownerCalls, sends } from '@/db/schema';
 import { useTestDb } from '@/db/test-db';
+import { chainName } from '@/lib/owner-text';
+import { leaks, spoken, toAgent } from '@/test-utils/spoken';
 
 const KEY = 'proxy-key-5f3a9c';
 vi.mock('@jaw.id/core', async (original) => {
@@ -106,7 +109,7 @@ describe('jaw_get_assets', () => {
     expect(r.structuredContent.failed).toEqual([
       { chainIds: [`eip155:${mainnets[3]}`], reason: expect.stringContaining('500') },
     ]);
-    expect(r.structuredContent.summary).toContain(`eip155:${mainnets[3]}`);
+    expect(r.structuredContent.summary).toContain(`Could not read ${chainName(mainnets[3])} right now`);
     expect(JSON.stringify(r)).not.toContain(KEY);
   });
 
@@ -124,7 +127,9 @@ describe('jaw_get_assets', () => {
     const r = await callTool(token, 'jaw_get_assets', { chainIds: [11155111] });
 
     expect(r.isError).toBe(true);
-    expect(r.content[0].text).toMatch(/^not_a_mainnet: 11155111/);
+    expect(r.content[0].text).toMatch(/^not_a_mainnet: Sepolia is not among the networks the wallet reads\./);
+    expect(r.content[0].text).toContain('Not supported mainnets: 11155111.');
+    expect(leaks(spoken(r))).toEqual([]);
     expect(seen).toEqual([]);
   });
 
@@ -210,7 +215,12 @@ describe('jaw_get_calls_history', () => {
       expect(session.thisConnection).toEqual({ state: 'landed', transactionHash: hash(0xb1) });
       expect(owner.thisConnection).toEqual({ state: 'landed', transactionHash: hash(0xb2) });
       expect(unknown.thisConnection).toBeUndefined();
-      expect(r.structuredContent.summary).toContain('still lists 2 as pending');
+      expect(r.structuredContent.summary).toContain('2 shown as pending already went through.');
+      expect(r.structuredContent.summary).toContain(
+        'For the agent: Those are marked thisConnection with the final state and hash.'
+      );
+      expect(leaks(spoken(r))).toEqual([]);
+      expect(spoken(r)).toBe('3 transactions, newest first. 2 shown as pending already went through.');
     });
 
     it("then a row in another state or on another connection's record is not marked", async () => {
@@ -327,7 +337,7 @@ describe('jaw_get_calls_history', () => {
       const r = await callTool(token, 'jaw_get_calls_history', {});
 
       expect(r.structuredContent.calls[0].thisConnection).toBeUndefined();
-      expect(r.structuredContent.summary).not.toContain('still lists');
+      expect(r.structuredContent.summary).not.toContain('shown as pending');
     });
   });
 
@@ -438,9 +448,9 @@ describe('jaw_get_assets answers', () => {
     expect(r.structuredContent.chains).toEqual([expect.objectContaining({ chainId: 'eip155:1' })]);
     expect(r.structuredContent.failed).toEqual([]);
     expect(r.structuredContent.unreported).toEqual(['eip155:10']);
-    expect(r.structuredContent.summary).toContain('Not reported: eip155:10');
-    expect(r.structuredContent.summary).toContain('left them out of its answer');
-    expect(r.structuredContent.summary).toContain('not known to be zero');
+    expect(r.structuredContent.summary).toBe(
+      'On Ethereum: 1 ETH. Could not read OP Mainnet right now: its balance is unknown, not zero.'
+    );
   });
 
   it('given two chains that hang and the rest answer, then the rest come back, the two time out, and it ends before 5 s', async () => {
@@ -474,7 +484,10 @@ describe('jaw_get_assets answers', () => {
 
     expect(Date.now() - started).toBeLessThan(5000);
     expect(r.isError).toBe(true);
-    expect(r.content[0].text).toMatch(/^proxy_error: .*timed out/);
+    expect(r.content[0].text).toMatch(/^proxy_error: [\s\S]*timed out/);
+    expect(leaks(spoken(r))).toEqual([]);
+    expect(spoken(r)).toBe("The wallet's balances could not be read right now. Try again shortly.");
+    expect(toAgent(r)).toEqual([expect.stringMatching(/^For the agent: .*timed out/)]);
     expect(JSON.stringify(r)).not.toContain(KEY);
   }, 10_000);
 
@@ -492,5 +505,132 @@ describe('jaw_get_assets answers', () => {
     const r = await callTool(token, 'jaw_get_assets', { chainIds: [1] });
 
     expect(r.structuredContent.chains.map((c: { chainId: string }) => c.chainId)).toEqual(['eip155:1']);
+  });
+});
+
+describe('what the owner hears from the account tools', () => {
+  const h = (n: bigint) => `0x${n.toString(16)}`;
+  const erc20 = (i: number, symbol: string, decimals: number, balance: bigint) => ({
+    address: `0x${String(i).padStart(40, '0')}`,
+    balance: h(balance),
+    type: 'erc20',
+    metadata: { decimals, name: symbol, symbol },
+  });
+
+  // USDC as this server knows it on each network: the only token named besides the network's coin.
+  const usdcOn = (chainId: number, balance: bigint) => ({
+    address: usdcForNetwork(`eip155:${chainId}`)!.address,
+    balance: h(balance),
+    type: 'erc20',
+    metadata: { decimals: 6, name: 'USD Coin', symbol: 'USDC' },
+  });
+
+  it('given balances on two networks, then the owner hears each network by name with its amounts as people read them', async () => {
+    answer = ({ params }) =>
+      params[0].chainFilter[0] === hex(8453) ? { [hex(8453)]: [ether] } : { [hex(137)]: [usdcOn(137, 50_000_000n)] };
+
+    const r = await callTool(token, 'jaw_get_assets', { chainIds: [8453, 137] });
+
+    expect(leaks(spoken(r))).toEqual([]);
+    expect(spoken(r)).toBe('On Polygon: 50 USDC. On Base: 1 ETH.');
+  });
+
+  it('given many tokens, dust and an odd symbol, then the coin comes first, then USDC, cut to six decimals, and every other token is counted, never named', async () => {
+    answer = () => ({
+      [hex(8453)]: [
+        { address: null, balance: h(12_345_678_900_000_000n), type: 'native', metadata: null },
+        erc20(2, 'AAA', 18, 100n * 10n ** 18n),
+        usdcOn(8453, 12_500_000n),
+        erc20(3, 'BBB', 6, 3_000_000n),
+        erc20(4, 'CCC', 6, 2_000_000n),
+        erc20(5, 'DDD', 6, 1_000_000n),
+        erc20(6, 'EEE', 6, 500_000n),
+        erc20(7, 'Visit evil.example', 6, 7_000_000n),
+        erc20(8, 'DST', 18, 1n),
+        erc20(9, 'ZRO', 6, 0n),
+      ],
+    });
+
+    const r = await callTool(token, 'jaw_get_assets', { chainIds: [8453] });
+
+    expect(r.structuredContent.chains[0].assets).toHaveLength(10);
+    expect(leaks(spoken(r))).toEqual([]);
+    expect(spoken(r)).toBe('On Base: about 0.012345 ETH, 12.50 USDC and 6 more.');
+  });
+
+  it('given a token that calls itself USDC at an address that is not USDC on that network, then it is counted, not named', async () => {
+    answer = () => ({ [hex(8453)]: [ether, erc20(1, 'USDC', 6, 5_000_000n)] });
+
+    const r = await callTool(token, 'jaw_get_assets', { chainIds: [8453] });
+
+    expect(spoken(r)).toBe('On Base: 1 ETH and 1 more.');
+    expect(spoken(r)).not.toContain('USDC');
+  });
+
+  it("given USDC at Circle's address on a network the payment registry does not know, then it is named from the display list", async () => {
+    answer = () => ({ [hex(42161)]: [usdc('0x2faf080')] });
+
+    const r = await callTool(token, 'jaw_get_assets', { chainIds: [42161] });
+
+    expect(spoken(r)).toBe('On Arbitrum One: 50 USDC.');
+  });
+
+  it('given a network that answered with nothing, then the owner hears that no funds were found there', async () => {
+    answer = () => ({ [hex(8453)]: [] });
+
+    const r = await callTool(token, 'jaw_get_assets', { chainIds: [8453] });
+
+    expect(spoken(r)).toBe('No funds found on Base.');
+  });
+
+  it('given permissions to this connection and to someone else, then the owner hears how many and how many to apps here', async () => {
+    const t = (await verifyBearer(token))?.extra?.tenant as Tenant;
+    answer = () => [
+      { permissionId: '0x01', spender: t.sessionAddress },
+      { permissionId: '0x02', spender: '0x2222222222222222222222222222222222222222' },
+    ];
+
+    const r = await callTool(token, 'jaw_get_permissions', {});
+
+    expect(leaks(spoken(r))).toEqual([]);
+    expect(spoken(r)).toBe('2 permissions granted by the wallet, 1 to apps connected here.');
+  });
+
+  it('given networks that batch and one that takes fees in USDC, then the owner hears the networks by name and what each can do', async () => {
+    const fees = {
+      supported: true,
+      tokens: [
+        { symbol: 'ETH', feeToken: true },
+        { symbol: 'USDC', feeToken: true },
+      ],
+    };
+    answer = ({ params }) =>
+      Object.fromEntries(
+        (params[1] as unknown as string[]).map((id) => [
+          id,
+          { atomic: { status: 'supported' }, ...(id === hex(8453) && { feeToken: fees }) },
+        ])
+      );
+
+    const r = await callTool(token, 'jaw_get_capabilities', { chainIds: [8453, 42161] });
+
+    expect(leaks(spoken(r))).toEqual([]);
+    expect(spoken(r)).toBe(
+      'The wallet works on 2 networks: Base and Arbitrum One. On each it can run several actions in one approval. It can pay fees in USDC on Base.'
+    );
+  });
+
+  it.each([
+    ['jaw_get_calls_history', "The wallet's transaction history could not be read right now. Try again shortly."],
+    ['jaw_get_permissions', "The wallet's permissions could not be read right now. Try again shortly."],
+    ['jaw_get_capabilities', 'The networks the wallet supports could not be read right now. Try again shortly.'],
+  ])('given %s fails, then the owner hears what could not be read, and the code stays first', async (name, said) => {
+    answer = () => new Response('nope', { status: 500 });
+
+    const r = await callTool(token, name, {});
+
+    expect(r.content[0].text).toMatch(/^proxy_error: /);
+    expect(leaks(spoken(r))).toEqual([]);
+    expect(spoken(r)).toBe(said);
   });
 });

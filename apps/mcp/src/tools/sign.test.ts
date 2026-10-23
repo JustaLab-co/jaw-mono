@@ -4,12 +4,25 @@ import { verifyMessage, verifyTypedData, type Hex } from 'viem';
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { verifyBearer, type Tenant } from '@/connections/auth';
 import { WalletBusy, type Ask, type OpenWallet, type Wallet } from '@/connections/relay';
-import { callTool, connect, fakeWallet, owner as newSigner, setTestEnv, walletsSettled } from '@/connections/testkit';
+import {
+  callTool,
+  connect,
+  fakeWallet,
+  mcp,
+  owner as newSigner,
+  setTestEnv,
+  walletsSettled,
+} from '@/connections/testkit';
+import { endConnection } from '@/connections/rows';
 import { getDb } from '@/db/client';
 import { auditEvents, permissionRequests } from '@/db/schema';
+import { countHit } from '@/db/settings';
 import { TEST_PG_URL, useTestDb, useTestPostgres } from '@/db/test-db';
+import { RATE_WINDOW_MS } from '@/lib/edge';
 import { gateCode } from '@/payments/render';
+import { leaks, spoken, toAgent } from '@/test-utils/spoken';
 import { sendCalls } from './owner-calls';
+import { ACCOUNT_BUSY, FOR_AGENT } from './reply';
 import { sign, type SignInput } from './sign';
 
 // Holds the next request between reading its own link and counting the account's links.
@@ -377,7 +390,8 @@ describe('jaw_sign', () => {
       const again = await ask(t, {}, idleWallet);
 
       expect(again.structuredContent).toMatchObject({ state: 'expired', refusal: { code: 'session_lost' } });
-      expect(again.structuredContent!.summary).toMatch(/lost the wallet session/);
+      expect(spoken(again)).toBe('The signing link stopped working before the owner saw it. Nothing was signed.');
+      expect(toAgent(again).join('\n')).toMatch(/lost the wallet session/);
       expect(opened).toHaveLength(1);
     });
 
@@ -404,7 +418,10 @@ describe('jaw_sign', () => {
 
       expect(again.structuredContent).toMatchObject({ state: 'expired', refusal: { code: 'link_lost' } });
       expect(again.structuredContent!.url).toBeUndefined();
-      expect(again.structuredContent!.summary).toMatch(/not to approve/);
+      expect(spoken(again)).toBe(
+        'The signing link stopped working after the owner opened it, so an answer given there may never arrive. If it is still open, do not approve it there.'
+      );
+      expect(toAgent(again).join('\n')).toContain('Ask again with a new idempotencyKey to open a new link');
       expect(fresh.structuredContent!.state).toBe('awaiting_owner');
       expect(fresh.structuredContent!.url).not.toBe(first.structuredContent!.url);
       expect(opened).toHaveLength(2);
@@ -424,9 +441,18 @@ describe('jaw_sign', () => {
       await walletsSettled();
 
       expect(fresh.structuredContent!.state).toBe('awaiting_owner');
-      expect(fresh.structuredContent!.summary).toMatch(/^link_lost: /);
-      expect(fresh.structuredContent!.summary).toContain(first.structuredContent!.url);
-      expect(fresh.structuredContent!.summary).toMatch(/not to approve/);
+      // The new link first, then the owner is told to leave the lost one alone; the lost link itself is for the agent.
+      expect(
+        fresh.structuredContent!.summary.startsWith(`Open this link to sign: ${fresh.structuredContent!.url}\n`)
+      ).toBe(true);
+      expect(spoken(fresh)).toContain(
+        'An earlier signing link stopped working, so an answer given there may never arrive. If it is still open, do not approve it there.'
+      );
+      expect(spoken(fresh)).not.toContain(first.structuredContent!.url);
+      expect(toAgent(fresh).join('\n')).toContain(
+        `The earlier link ${first.structuredContent!.url} under idempotencyKey k1 answers link_lost.`
+      );
+      expect(leaks(spoken(fresh))).toEqual([]);
     });
 
     it('given a lost link named once, then the next new link does not name it again', async () => {
@@ -484,7 +510,7 @@ describe('jaw_sign', () => {
       const later = await ask(t, {}, idleWallet);
 
       expect(later.structuredContent).toMatchObject({ state: 'expired', refusal: { code: 'link_lost' } });
-      expect(later.structuredContent!.summary).toMatch(/not to approve/);
+      expect(spoken(later)).toMatch(/If it is still open, do not approve it there\.$/);
     });
 
     it('given the first session then ends with no answer, then the key still answers link_lost', async () => {
@@ -512,7 +538,10 @@ describe('jaw_sign', () => {
     const second = await ask(t, { idempotencyKey: 'second', message: 'other' }, idleWallet);
 
     expect(second[gateCode]).toBe('sign_in_progress');
-    expect(second.content[0].text).toMatch(/idempotencyKey first/);
+    expect(toAgent(second).join('\n')).toMatch(/idempotencyKey first/);
+    expect(spoken(second)).toMatch(
+      /^A signing request is already waiting for the owner; it expires in (29|30) minutes\.\nOpen this link to sign: http:\/\/keys\.test\/\S+$/
+    );
     expect(opened).toHaveLength(1);
   });
 
@@ -626,6 +655,7 @@ describe('jaw_sign', () => {
       const result = await ask(d, { idempotencyKey: 'k9', message: 'm9' }, idleWallet);
 
       expect(result[gateCode]).toBe('account_busy');
+      expect(result.content[0].text).toBe(ACCOUNT_BUSY);
       expect(opened).toHaveLength(3);
     });
 
@@ -664,4 +694,225 @@ describe('jaw_sign', () => {
     const rows = await getDb().select().from(auditEvents).where(eq(auditEvents.tool, 'jaw_sign'));
     expect(rows.map((r) => r.connectionId)).toContain(t.connectionId);
   });
+});
+
+describe('what the owner hears from jaw_sign', () => {
+  type Read = () => Promise<Awaited<ReturnType<typeof sign>>>;
+
+  it('given a message to sign, then the link comes first on its own line, then what it asks and until when, then the agent line', async () => {
+    const { t } = await connected();
+
+    const result = await ask(t, {}, idleWallet);
+
+    const out = result.structuredContent!;
+    expect(out.summary.split('\n')).toEqual([
+      `Open this link to sign: ${out.url}`,
+      'It asks the owner to review and sign a message from their wallet, within the next 30 minutes.',
+      `${FOR_AGENT} Show the link now, on its own line, with one sentence of what signing it allows. ` +
+        `Then call jaw_get_sign_status with id ${out.id} and waitSeconds 30, and again while it answers awaiting_owner, until ${out.approveBy}. ` +
+        'Do not wait for the owner to say they signed. ' +
+        'Without that tool, send jaw_sign again with idempotencyKey k1 and the same input.',
+    ]);
+    expect(result.content[0].text).toBe(out.summary);
+    expect(leaks(spoken(result))).toEqual([]);
+  });
+
+  it('given typed data to sign, then the owner hears it as a request, not as typed data', async () => {
+    const { t } = await connected();
+
+    const result = await ask(t, typed, idleWallet);
+
+    expect(spoken(result)).toContain('It asks the owner to review and sign a request from their wallet');
+    expect(spoken(result)).not.toMatch(/typed data/i);
+  });
+
+  it('given the tools list, then jaw_sign is titled, asks for the link first and is marked neither destructive nor open-world', async () => {
+    const { token } = await connected();
+
+    const { json } = await mcp(token, { method: 'tools/list' });
+
+    const tool = json.result.tools.find((x: { name: string }) => x.name === 'jaw_sign');
+    expect(tool.title).toBe('Ask the owner to sign a message');
+    expect(tool.annotations).toMatchObject({ destructiveHint: false, openWorldHint: false });
+    expect(tool.description).toContain('Returns a link right away: show it on its own line before anything else.');
+  });
+
+  const ENDED: [string, string, Read][] = [
+    [
+      'a signed request',
+      'The owner signed the message in the wallet.',
+      async () => {
+        const { t, signer } = await connected();
+        await ask(t, {}, approves(signer));
+        await walletsSettled();
+        return ask(t, {}, idleWallet);
+      },
+    ],
+    [
+      'a declined request',
+      'The owner declined to sign. Nothing was signed.',
+      async () => {
+        const { t, signer } = await connected();
+        await ask(t, {}, approves(signer, { wallet_sign: rejected }));
+        await walletsSettled();
+        return ask(t, {}, idleWallet);
+      },
+    ],
+    [
+      'a request signed in with another account',
+      'The owner signed in to the wallet with another account than the one connected here. Nothing was signed.',
+      async () => {
+        const { t } = await connected();
+        await ask(t, {}, approves(newSigner()));
+        await walletsSettled();
+        return ask(t, {}, idleWallet);
+      },
+    ],
+    [
+      'a request that expired',
+      'The owner did not sign within 30 minutes. Nothing was signed.',
+      async () => {
+        const { t } = await connected();
+        const first = await ask(t, {}, idleWallet);
+        await getDb()
+          .update(permissionRequests)
+          .set({ approveBy: sql`now() - interval '1 second'` })
+          .where(eq(permissionRequests.walletUrl, first.structuredContent!.url!));
+        return ask(t, {}, idleWallet);
+      },
+    ],
+    [
+      'a wallet that could not sign',
+      'The wallet could not sign this. Nothing was signed.',
+      async () => {
+        const { t, signer } = await connected();
+        await ask(t, {}, approves(signer, { wallet_sign: () => ({ nope: true }) }));
+        await walletsSettled();
+        return ask(t, {}, idleWallet);
+      },
+    ],
+  ];
+
+  it.each(ENDED)('given %s, then the owner hears it in plain words', async (_name, said, read) => {
+    const result = await read();
+
+    expect(spoken(result)).toBe(said);
+    expect(leaks(spoken(result))).toEqual([]);
+  });
+
+  it('given a signed request, then the agent is told where the signature is and what to do with it', async () => {
+    const { t, signer } = await connected();
+    await ask(t, {}, approves(signer));
+    await walletsSettled();
+
+    const result = await ask(t, {}, idleWallet);
+
+    expect(result.structuredContent!.signature).toMatch(/^0x[0-9a-f]+$/i);
+    expect(toAgent(result)).toEqual([
+      `${FOR_AGENT} The signature is in the signature field; pass it to the site or service that asked for it.`,
+    ]);
+  });
+
+  it('given a wallet that could not sign, then the agent gets the code the wallet answered', async () => {
+    const { t, signer } = await connected();
+    await ask(t, {}, approves(signer, { wallet_sign: () => ({ nope: true }) }));
+    await walletsSettled();
+
+    const result = await ask(t, {}, idleWallet);
+
+    expect(toAgent(result)).toEqual([
+      `${FOR_AGENT} The wallet answered wallet_answer_unreadable. Ask again with a new idempotencyKey if the owner still wants it.`,
+    ]);
+  });
+
+  const REFUSALS: [string, string, Read][] = [
+    ['an unsupported chain', 'unsupported_chain', async () => ask((await connected()).t, { chainId: 324 }, idleWallet)],
+    [
+      'a message with an invisible character',
+      'invalid_message',
+      async () => ask((await connected()).t, { message: 'pay‮alice' }, idleWallet),
+    ],
+    [
+      'typed data that does not hash',
+      'invalid_typed_data',
+      async () =>
+        ask(
+          (await connected()).t,
+          { message: undefined, typedData: { ...WIRE, message: { ...WIRE.message, spender: 'not an address' } } },
+          idleWallet
+        ),
+    ],
+    [
+      'typed data that is too large',
+      'invalid_typed_data',
+      async () =>
+        ask(
+          (await connected()).t,
+          { message: undefined, typedData: { ...WIRE, message: { ...WIRE.message, pad: 'x'.repeat(40_000) } } },
+          idleWallet
+        ),
+    ],
+    [
+      'the same key with another message',
+      'idempotency_conflict',
+      async () => {
+        const { t } = await connected();
+        await ask(t, { message: 'one' }, idleWallet);
+        return ask(t, { message: 'two' }, idleWallet);
+      },
+    ],
+    [
+      'another sign request waiting',
+      'sign_in_progress',
+      async () => {
+        const { t } = await connected();
+        await ask(t, { idempotencyKey: 'first' }, idleWallet);
+        return ask(t, { idempotencyKey: 'second', message: 'other' }, idleWallet);
+      },
+    ],
+    [
+      'every link slot of the account taken',
+      'account_busy',
+      async () => {
+        const signer = newSigner();
+        const ts = [];
+        for (let i = 0; i < 4; i++) ts.push((await connected(signer)).t);
+        for (const [i, t] of ts.slice(0, 3).entries())
+          await ask(t, { idempotencyKey: `k${i}`, message: `m${i}` }, idleWallet);
+        return ask(ts[3], { idempotencyKey: 'k9', message: 'm9' }, idleWallet);
+      },
+    ],
+    ['a full owner pool', 'wallet_busy', async () => ask((await connected()).t, {}, busy)],
+    [
+      'an ended connection',
+      'connection_ended',
+      async () => {
+        const { t } = await connected();
+        await endConnection(t.connectionId, t.account);
+        return ask(t, {}, idleWallet);
+      },
+    ],
+    [
+      'too many links this minute',
+      'rate_limited',
+      async () => {
+        const { t } = await connected();
+        for (let i = 0; i < 10; i++) await countHit(`owner-sign:${t.connectionId}`, RATE_WINDOW_MS);
+        return ask(t, {}, idleWallet);
+      },
+    ],
+  ];
+
+  it.each(REFUSALS)(
+    'given %s, then the code comes first and the owner hears no tool and no internal word',
+    async (_name, code, read) => {
+      const result = await read();
+
+      expect(result[gateCode]).toBe(code);
+      expect(result.content[0].text.startsWith(`${code}: `)).toBe(true);
+      expect(spoken(result).trim()).not.toBe('');
+      expect(leaks(spoken(result))).toEqual([]);
+      for (const line of toAgent(result)) expect(line.startsWith(FOR_AGENT)).toBe(true);
+    }
+  );
 });

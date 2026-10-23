@@ -8,6 +8,7 @@ import { ownedBy } from '@/connections/rows';
 import { getDb } from '@/db/client';
 import { connections, grants, permissionRequests, SPEND_UNITS } from '@/db/schema';
 import { reply } from '@/lib/fence';
+import { withNext } from './reply';
 
 const grantView = z.object({
   permissionId: z.string(),
@@ -15,7 +16,7 @@ const grantView = z.object({
   status: z
     .enum(['live', 'replaced', 'expired', 'revoked'])
     .describe(
-      'replaced: a newer x402 budget took its place, so no new payment draws from it, but the server has not revoked it and it stays approved on chain; jaw_revoke_permission revokes it'
+      'replaced: a newer spend limit for paid services took its place, so no new payment draws from it, but the server has not revoked it and it stays approved on chain; jaw_revoke_permission revokes it'
     ),
   spends: z.array(
     z.object({
@@ -38,7 +39,10 @@ const connectionView = z.object({
   createdAt: z.string(),
   expiresAt: z.string(),
   revokedAt: z.string().nullable(),
-  payer: z.string().nullable().describe("The connection's session address, which holds its float"),
+  payer: z
+    .string()
+    .nullable()
+    .describe("The connection's session address, which holds the USDC it pays fees and paid services with"),
   grants: z.array(grantView).describe('Newest first. jaw_revoke_permission takes a permissionId from here'),
   unrecorded: z
     .array(z.string())
@@ -69,6 +73,9 @@ function grantOf(g: GrantRow, now: Date): z.infer<typeof grantView> {
 }
 
 const revokes = alias(permissionRequests, 'revokes');
+
+/** "1 app", "2 apps". */
+const counted = (n: number, noun: string) => `${n} ${noun}${n === 1 ? '' : 's'}`;
 
 async function viewsOf(t: Tenant, rows: (typeof connections.$inferSelect)[]): Promise<View[]> {
   const ids = rows.map((r) => r.id);
@@ -117,9 +124,11 @@ export function registerConnectionTools(server: McpServer) {
   server.registerTool(
     'jaw_connections',
     {
+      title: 'Apps connected to the wallet',
       description:
-        'Every app connected to this account through this server, this one included, with the grants each one holds by permissionId: kind, spend limits, expiry and whether it is live, replaced, expired or revoked. ' +
-        'jaw_revoke_permission revokes one; jaw_session_status shows what is left of the x402 budget today.',
+        'Every app connected to this wallet through this service, this one included, with the permissions each holds: kind, spend limits, expiry, and whether each is live, replaced, expired or revoked. ' +
+        'Use it when the owner asks what has access to their wallet, before revoking (it gives the permissionId), and to find the custom permission a run should use. ' +
+        'For what is left of the spend limit for paid services today, use jaw_session_status.',
       inputSchema: z.strictObject({}),
       outputSchema: z.object({ connections: z.array(connectionView), summary: z.string() }),
       annotations: { readOnlyHint: true },
@@ -133,15 +142,24 @@ export function registerConnectionTools(server: McpServer) {
         .orderBy(desc(connections.createdAt));
       const views = await viewsOf(t, rows);
       const active = views.filter((v) => v.status === 'active').length;
+      const ended = views.length - active;
       const held = views.flatMap((v) => v.grants);
       const live = held.filter((g) => g.status === 'live').length;
       const replaced = held.filter((g) => g.status === 'replaced').map((g) => g.permissionId);
-      const unrevoked = replaced.length
-        ? ` ${replaced.length} replaced budget(s) are still approved on chain: ${replaced.join(', ')}. jaw_revoke_permission revokes them.`
-        : '';
+      const said = [
+        `${counted(active, 'app')} connected, ${counted(live, 'permission')} in force.`,
+        ended > 0 && `${counted(ended, 'earlier connection')} ${ended === 1 ? 'has' : 'have'} ended.`,
+        replaced.length > 0 &&
+          (replaced.length === 1
+            ? '1 replaced spend limit is still approved on chain until it expires.'
+            : `${replaced.length} replaced spend limits are still approved on chain until they expire.`),
+      ];
       return reply({
         connections: views,
-        summary: `${views.length} connection(s), ${active} active, holding ${live} live grant(s).${unrevoked}`,
+        summary: withNext(
+          said.filter(Boolean).join(' '),
+          `jaw_revoke_permission takes a permissionId from here${replaced.length ? `; the replaced ones are ${replaced.join(', ')}` : ''}.`
+        ),
       });
     }
   );

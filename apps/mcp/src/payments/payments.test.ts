@@ -41,6 +41,8 @@ import { connections, grants, payments, settings } from '@/db/schema';
 import { recordRevoked, x402Budget } from '@/grants/store';
 import { reconcile } from '@/reconciler/run';
 import { grantPermissions } from '@/tools/grant-permissions';
+import { NO_PAY_SCOPE } from '@/tools/reply';
+import { leaks, spoken, toAgent } from '@/test-utils/spoken';
 import { lockWaiters, TEST_PG_URL, useTestDb, useTestPostgres, withRoleStatementTimeout } from '@/db/test-db';
 import { safeFetch } from '@/lib/safe-fetch';
 import { pay, type PayDeps } from './pay';
@@ -695,7 +697,7 @@ describe('jaw_session_x402_pay', () => {
     const again = await pay(t, { url: url('/refuse'), idempotencyKey: 'recon-race-refused' }, deps());
 
     expect(again.structuredContent).toMatchObject({ state: 'unknown', paymentId: id });
-    expect(again.content[0].text).toContain('A payment may have reached the seller');
+    expect(again.content[0].text).toContain('The payment may have reached the service');
     expect(await rowOf(id)).toMatchObject({ state: 'signed' });
     expect(seen.map((s) => s.nonce)).toEqual([seen[0].nonce, seen[0].nonce]);
     await getDb().update(payments).set({ reconcilingUntil: null }).where(eq(payments.id, id));
@@ -1211,7 +1213,8 @@ describe('jaw_session_x402_pay', () => {
       deps()
     );
     expect(result).toMatchObject({ isError: true });
-    expect(result.content[0].text).toMatch(/^insufficient_scope: This token was not granted x402:pay\./);
+    expect(result.content[0].text).toBe(`insufficient_scope: ${NO_PAY_SCOPE}`);
+    expect(result.content[0].text).toContain('ask for the x402:pay scope');
     expect(seen).toEqual([]);
     expect(refills).toEqual([]);
     expect(await getDb().select().from(payments).where(eq(payments.idempotencyKey, 'no-pay-scope'))).toEqual([]);
@@ -1495,6 +1498,104 @@ describe('jaw_session_x402_pay', () => {
     expect(next.structuredContent.payments.map((p: { idempotencyKey: string }) => p.idempotencyKey)).toEqual(['h1']);
     const stranger = await connected();
     expect((await callTool(stranger.c.access_token, 'jaw_session_history', {})).structuredContent.payments).toEqual([]);
+  });
+});
+
+describe('what the owner hears from jaw_session_x402_pay and jaw_session_history', () => {
+  // The server's own words. Fenced blocks beside them are the seller's text, or a policy reason pay fences with it.
+  const server = (r: { structuredContent?: { summary?: string } }) => ({ structuredContent: r.structuredContent });
+
+  it('given a payment the seller settles, then the owner hears the amount in USDC and the host, and nothing internal', async () => {
+    const { c, t } = await connected('1');
+    balances.set(t.sessionAddress.toLowerCase(), 1_000_000n);
+    const r = await pay(t, { url: url('/exact'), idempotencyKey: 'heard-paid' }, deps());
+    expect(r.structuredContent).toMatchObject({ kind: 'paid', state: 'settled' });
+    expect(r.structuredContent?.summary).toBe(`Paid 0.005 USDC to ${SELLER}. The service answered.`);
+    expect(leaks(spoken(r))).toEqual([]);
+
+    const history = await callTool(c.access_token, 'jaw_session_history', {});
+    expect(history.structuredContent.summary).toBe('1 payment and 0 runs, newest first.');
+    expect(leaks(spoken(history))).toEqual([]);
+  });
+
+  it('given a free resource, then the owner hears that no payment was needed', async () => {
+    const { t } = await connected('1');
+    const r = await pay(t, { url: url('/free') }, deps());
+    expect(r.structuredContent?.summary).toBe('Free: no payment was needed.');
+    expect(leaks(spoken(r))).toEqual([]);
+  });
+
+  it('given the day spent, then the owner hears why in plain words and the agent how to raise the spend limit', async () => {
+    const { t } = await connected('0.006');
+    balances.set(t.sessionAddress.toLowerCase(), 1_000_000n);
+    await pay(t, { url: url('/exact'), idempotencyKey: 'heard-day-1' }, deps());
+    const r = await pay(t, { url: url('/exact'), idempotencyKey: 'heard-day-2' }, deps());
+    expect(r.structuredContent?.refusal).toMatchObject({ code: 'budget_exhausted' });
+    expect(leaks(spoken(server(r)))).toEqual([]);
+    expect(spoken(server(r))).toBe(
+      'Not paid: the spend limit for paid services has too little left today. Nothing was sent.'
+    );
+    expect(toAgent(r)).toEqual([
+      'For the agent: If the owner wants it, ask for a higher spend limit with jaw_grant_permissions and x402Budget.',
+    ]);
+  });
+
+  it('given a price over the most one payment may be, then the owner hears it and the agent hears a higher limit does not help', async () => {
+    const { t } = await connected('5');
+    const r = await pay(t, { url: url('/pricey'), idempotencyKey: 'heard-cap' }, deps());
+    expect(leaks(spoken(server(r)))).toEqual([]);
+    expect(spoken(server(r))).toBe('Not paid: the price is over the most one payment may be. Nothing was sent.');
+    expect(toAgent(r)).toEqual([expect.stringContaining('a higher spend limit does not raise it')]);
+  });
+
+  it('given a refusal the same key may retry, then the agent is told to retry with it', async () => {
+    const { t } = await connected('1');
+    periodDown = true;
+    const r = await pay(t, { url: url('/exact'), idempotencyKey: 'heard-retry' }, deps());
+    expect(r.structuredContent?.refusal).toMatchObject({ code: 'chain_unavailable' });
+    expect(leaks(spoken(r))).toEqual([]);
+    expect(spoken(server(r))).toBe('Not paid: the network could not be read right now. Nothing was sent.');
+    expect(toAgent(r)).toEqual(['For the agent: Send the same idempotencyKey to retry.']);
+  });
+
+  it('given no spend limit, then the code stays first, the owner hears nothing was paid, and the agent asks the owner for one', async () => {
+    const { t } = await connected();
+    const r = await pay(t, { url: url('/exact'), idempotencyKey: 'heard-none' }, deps());
+    expect(r.content[0].text).toBe(
+      'no_grant: No spend limit for paid services yet, so nothing was paid.\nFor the agent: Ask the owner for one with jaw_grant_permissions and x402Budget, saying what it is for.'
+    );
+    expect(leaks(spoken(r))).toEqual([]);
+  });
+
+  it('given a connection not allowed to pay, then the owner hears how to fix it with nothing internal', async () => {
+    const { t } = await connected('1');
+    const r = await pay(
+      { ...t, scopes: ['wallet:read'] },
+      { url: url('/exact'), idempotencyKey: 'heard-scope' },
+      deps()
+    );
+    expect(leaks(spoken(r))).toEqual([]);
+  });
+
+  it('given payments are paused, then the owner hears that nothing was paid', async () => {
+    const { t } = await connected('1');
+    await getDb().insert(settings).values({ key: 'payments_paused', value: true });
+    try {
+      const r = await pay(t, { url: url('/exact'), idempotencyKey: 'heard-paused' }, deps());
+      expect(r.content[0].text).toBe(
+        'payments_paused: Payments are paused on this service right now. Nothing was paid.'
+      );
+      expect(leaks(spoken(r))).toEqual([]);
+    } finally {
+      await getDb().delete(settings).where(eq(settings.key, 'payments_paused'));
+    }
+  });
+
+  it('given a connection that has paid nothing and run nothing, then the history says so', async () => {
+    const { c } = await connected();
+    const r = await callTool(c.access_token, 'jaw_session_history', {});
+    expect(r.structuredContent.summary).toBe('No payments or runs yet.');
+    expect(leaks(spoken(r))).toEqual([]);
   });
 });
 
