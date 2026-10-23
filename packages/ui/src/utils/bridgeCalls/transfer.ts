@@ -12,6 +12,8 @@ export type BridgeTransfer = {
   title: string;
   send: TokenAmount;
   receive?: Received;
+  /** Set when what arrives goes to an address other than this account. */
+  otherRecipient?: Address;
   details: Detail[];
 };
 
@@ -55,6 +57,7 @@ function acrossTransfer(deposit: AcrossDeposit, account: Address): TransferRead 
       title: `Bridge to ${destination}`,
       send: deposit.send,
       receive: deposit.receive,
+      otherRecipient: isAddressEqual(deposit.recipient, account) ? undefined : deposit.recipient,
       details,
     },
     notices,
