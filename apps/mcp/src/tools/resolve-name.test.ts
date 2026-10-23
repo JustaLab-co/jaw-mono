@@ -1,5 +1,6 @@
 import { createServer } from 'node:http';
 import type { AddressInfo } from 'node:net';
+import { getAddress } from 'viem';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import { useTestDb } from '@/db/test-db';
 import { safeFetch } from '@/lib/safe-fetch';
@@ -8,7 +9,7 @@ import { lookup, type ResolveDeps } from './resolve-name';
 
 const KEY = 'resolve-secret-key';
 const VITALIK = '0xd8dA6BF26964aF9D7eEd9e03E53415D37aA96045';
-const BASE_ADDR = '0x00000000000000000000000000000000000000b5';
+const BASE_ADDR = getAddress('0x00000000000000000000000000000000000000b5');
 
 type Backend = { status: number; body: unknown; stall: boolean };
 let backend: Backend;
@@ -49,14 +50,12 @@ describe('lookup of a name', () => {
     backend.body = records([
       { id: 60, name: 'eth', value: VITALIK },
       { id: 0x80000000 + 8453, name: 'base', value: BASE_ADDR },
-      { id: 0, name: 'btc', value: 'bc1qexample' },
     ]);
     const r = await lookup({ name: 'vitalik.eth' }, deps());
     expect(r).toMatchObject({ name: 'vitalik.eth', address: VITALIK, chainId: 'eip155:1' });
     expect(r.addresses).toEqual([
       { coinType: 60, chainId: 'eip155:1', address: VITALIK },
       { coinType: 0x80000000 + 8453, chainId: 'eip155:8453', address: BASE_ADDR },
-      { coinType: 0, address: 'bc1qexample' },
     ]);
     expect(r.reason).toBeUndefined();
   });
@@ -91,6 +90,35 @@ describe('lookup of a name', () => {
   it('given a name that does not parse, answers invalid_name without asking the backend', async () => {
     expect(await lookup({ name: 'a\u0000.eth' }, deps())).toMatchObject({ reason: 'invalid_name', address: null });
     expect(seen).toHaveLength(0);
+  });
+});
+
+describe('lookup of a name with unusual records', () => {
+  it('given bitcoin and solana records as raw bytes, drops them', async () => {
+    backend.body = records([
+      { id: 60, name: 'eth', value: VITALIK },
+      { id: 0, name: 'btc', value: '0x00149b97c1d2a3b4c5d6e7f8091a2b3c4d5e6f708192' },
+      { id: 501, name: 'sol', value: '0xf0218283a1b2c3d4e5f60718293a4b5c6d7e8f90a1b2' },
+    ]);
+    const r = await lookup({ name: 'luc.eth' }, deps());
+    expect(r.addresses).toEqual([{ coinType: 60, chainId: 'eip155:1', address: VITALIK }]);
+    expect(r.summary).not.toContain('501');
+  });
+
+  it('given the ENSIP-19 default EVM record, marks it as default and checksums it', async () => {
+    backend.body = records([
+      { id: 60, name: 'eth', value: VITALIK },
+      { id: 0x80000000, name: 'default', value: BASE_ADDR.toLowerCase() },
+    ]);
+    const r = await lookup({ name: 'brantly.eth' }, deps());
+    expect(r.addresses[1]).toEqual({ coinType: 0x80000000, default: true, address: BASE_ADDR });
+    expect(r.summary).toContain('any other EVM chain');
+  });
+
+  it('given a chain address in lowercase, returns it checksummed', async () => {
+    backend.body = records([{ id: 0x80000000 + 10, name: 'op', value: VITALIK.toLowerCase() }]);
+    const r = await lookup({ name: 'vitalik.eth' }, deps());
+    expect(r.addresses).toEqual([{ coinType: 0x80000000 + 10, chainId: 'eip155:10', address: VITALIK }]);
   });
 });
 

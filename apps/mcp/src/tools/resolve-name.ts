@@ -19,7 +19,14 @@ const resolveOutput = z.object({
   name: z.string().nullable(),
   address: z.string().nullable(),
   chainId: z.string(),
-  addresses: z.array(z.object({ coinType: z.number(), chainId: z.string().optional(), address: z.string() })),
+  addresses: z.array(
+    z.object({
+      coinType: z.number(),
+      chainId: z.string().optional(),
+      default: z.boolean().optional(),
+      address: z.string(),
+    })
+  ),
   reason: reason.optional(),
   summary: z.string(),
 });
@@ -47,11 +54,16 @@ const unresolved = (why: Reason, summary: string, name: string | null = null, ad
 
 const failed = () => unresolved('lookup_failed', 'The lookup could not finish right now. Try again.');
 
-// ENSIP-11: an EVM chain's coin type is 0x80000000 | chainId, and mainnet keeps the legacy 60.
-function entryOf(coinType: number, address: string): Resolved['addresses'][number] {
+// ENSIP-11: an EVM chain's coin type is 0x80000000 | chainId, mainnet keeps the legacy 60, and
+// 0x80000000 alone is the default for every EVM chain without its own record (ENSIP-19).
+// Other coin types hold raw ENSIP-9 bytes, not an address to send to, so they are dropped.
+function entryOf(coinType: number, value: string): Resolved['addresses'][number] | undefined {
+  if (coinType !== MAINNET_COIN && coinType < EVM_FLAG) return undefined;
+  if (!isAddress(value, { strict: false })) return undefined;
+  const address = getAddress(value);
   if (coinType === MAINNET_COIN) return { coinType, chainId: MAINNET, address };
-  const evmChain = coinType > EVM_FLAG ? coinType - EVM_FLAG : 0;
-  return evmChain ? { coinType, chainId: `eip155:${evmChain}`, address } : { coinType, address };
+  if (coinType === EVM_FLAG) return { coinType, default: true, address };
+  return { coinType, chainId: `eip155:${coinType - EVM_FLAG}`, address };
 }
 
 // A key the backend does not take is this server's setting, not the caller's input.
@@ -85,10 +97,12 @@ async function addressOf(name: string, deps: ResolveDeps): Promise<Resolved> {
   if (answer.status !== 200) return refused('resolve', answer.status);
   const body = forwardBody.safeParse(answer.body);
   if (!body.success) return failed();
-  const addresses = body.data.result.data.records.addresses.map((a) => entryOf(a.id, a.value));
+  const addresses = body.data.result.data.records.addresses
+    .map((a) => entryOf(a.id, a.value))
+    .filter((a) => a !== undefined);
   if (addresses.length === 0) return unresolved('no_address', `${name} has no address.`, name);
   const mainnet = addresses.find((a) => a.coinType === MAINNET_COIN)?.address ?? null;
-  const where = addresses.map((a) => a.chainId ?? `coin type ${a.coinType}`).join(', ');
+  const where = addresses.map((a) => a.chainId ?? 'any other EVM chain').join(', ');
   const summary = mainnet
     ? `${name} resolves to ${mainnet} on Ethereum mainnet. It has addresses for ${where}.`
     : `${name} has no Ethereum mainnet address. It has addresses for ${where}.`;
@@ -105,7 +119,7 @@ async function nameOf(address: string, deps: ResolveDeps): Promise<Resolved> {
   // The backend answers a name only when it resolves back to the address.
   const { name } = body.data.result.data;
   if (!name) return unresolved('no_primary_name', `${owner} has no primary name.`, null, owner);
-  const addresses = [entryOf(MAINNET_COIN, owner)];
+  const addresses = [{ coinType: MAINNET_COIN, chainId: MAINNET, address: owner }];
   return resolveOutput.parse({ name, address: owner, chainId: MAINNET, addresses, summary: `${owner} is ${name}.` });
 }
 
@@ -132,7 +146,7 @@ export function registerResolveNameTool(server: McpServer) {
     'jaw_resolve_name',
     {
       description:
-        'Resolve an ENS name to its addresses on every chain it has one for, or an Ethereum mainnet address to its primary ENS name. A name answers `address` (its mainnet one) and `addresses`, each with its coin type and, on EVM chains, its chainId. Pass exactly one of `name` or `address`. A reason says why nothing came back.',
+        'Resolve an ENS name to its addresses on every chain it has one for, or an Ethereum mainnet address to its primary ENS name. A name answers `address` (its mainnet one) and `addresses`, each with its coin type and its chainId. An entry with `default: true` and no chainId is the address for every other EVM chain. Only EVM addresses are returned. Pass exactly one of `name` or `address`. A reason says why nothing came back.',
       inputSchema: z.strictObject({
         name: z.string().max(255).optional().describe('An ENS name such as alice.eth'),
         address: z.string().optional().describe('An address to look up the primary name of'),
