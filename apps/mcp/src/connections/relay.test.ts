@@ -877,3 +877,41 @@ describe('a session the server can rejoin', () => {
     await expect(fresh.resumeWallet(resume, wallet.url, soon())).rejects.toBeInstanceOf(fresh.WalletBusy);
   });
 });
+
+describe('the ENS name new accounts get a subname under', () => {
+  afterEach(() => {
+    delete process.env.JAW_MCP_ENS;
+  });
+
+  it('given JAW_MCP_ENS is unset, then the init carries no ens', async () => {
+    const wallet = await openRelay(84532);
+    const opened = await page(wallet.url, () => ({ success: true, data: [] }));
+    await wallet.run((ask) => ask('eth_requestAccounts', []));
+    await opened.shutdown;
+    expect(opened.inits[0]).not.toHaveProperty('ens');
+  });
+
+  it('given JAW_MCP_ENS, then the init sends it, and a rejoined session sends it again without saving it', async () => {
+    process.env.JAW_MCP_ENS = 'agents.jaw.eth';
+    const fresh = await freshRelay();
+    const wallet = await fresh.ownerRelay(84532, new Date(Date.now() + 60_000));
+    let approve!: (sig: string) => void;
+    const opened = await replayingPage(wallet.url, () => new Promise((r) => (approve = r)));
+    let resume: RelayResume | undefined;
+    const first = wallet.run(sign, (r) => {
+      resume = r;
+    });
+    await vi.waitFor(() => expect(opened.ids).toHaveLength(1));
+    expect(opened.lastInit()).toEqual({ type: 'init', chainId: 84532, appName: 'JAW MCP', ens: 'agents.jaw.eth' });
+    expect(resume).not.toHaveProperty('ens');
+    wallet.close();
+    await first.catch(() => undefined);
+
+    const resumed = await fresh.resumeWallet(resume!, wallet.url, soon());
+    const answer = resumed!.run(sign);
+    await vi.waitFor(() => expect(opened.inits()).toBe(2));
+    approve('0xsig');
+    expect(await answer).toBe('0xsig');
+    expect(opened.lastInit()).toEqual({ type: 'init', chainId: 84532, appName: 'JAW MCP', ens: 'agents.jaw.eth' });
+  });
+});
