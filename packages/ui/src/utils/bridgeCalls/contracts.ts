@@ -1,0 +1,293 @@
+import type { Address } from 'viem';
+
+export type AcrossContracts = {
+  spokePool: Address;
+  periphery: Address;
+  multicallHandler: Address;
+  eventEmitter?: Address;
+  /** SpokePool.wrappedNativeToken(); Arc has none, its gas token is USDC. */
+  wrappedNative?: Address;
+};
+
+export type BridgeToken = { symbol: string; decimals: number };
+
+export type BridgeChain = {
+  name: string;
+  /** Native amounts always have 18 decimals. */
+  nativeSymbol: string;
+  across?: AcrossContracts;
+  /** protocolChain is Relay's name for the chain in an order, such as `base`. */
+  relay?: { depository: Address; protocolChain: string };
+  tokens: Readonly<Record<Address, BridgeToken>>;
+};
+
+const ACROSS_PERIPHERY = '0x97CCDBea4632140639aD5eA9b944aa034eb15fD4';
+const ACROSS_TESTNET_PERIPHERY = '0x10D8b8DaA26d307489803e10477De69C0492B610';
+const ACROSS_HANDLER = '0x0F7Ae28dE1C8532170AD4ee566B5801485c13a0E';
+const ACROSS_EMITTER = '0xBF75133b48b0a42AB9374027902E83C5E2949034';
+const OP_WETH = '0x4200000000000000000000000000000000000006';
+const RELAY_DEPOSITORY = '0x4cD00E387622C35bDDB9b4c962C136462338BC31';
+const RELAY_TESTNET_DEPOSITORY = '0x5Feab8dB4534F9F7E2669Bb260c57a01aD1c12e3';
+
+const usdc = { symbol: 'USDC', decimals: 6 };
+const weth = { symbol: 'WETH', decimals: 18 };
+
+/**
+ * Across addresses come from across-protocol/contracts (broadcast/deployed-addresses.json and
+ * deployments/<network>/AcrossEventEmitter.json), Relay's from api.relay.link/chains and
+ * api.testnets.relay.link/chains, and USDC from Circle's USDC contract address list.
+ */
+export const BRIDGE_CHAINS: Readonly<Record<number, BridgeChain>> = {
+  1: {
+    name: 'Ethereum',
+    nativeSymbol: 'ETH',
+    across: {
+      spokePool: '0x5c7BCd6E7De5423a257D81B442095A1a6ced35C5',
+      periphery: ACROSS_PERIPHERY,
+      multicallHandler: ACROSS_HANDLER,
+      eventEmitter: ACROSS_EMITTER,
+      wrappedNative: '0xC02aaA39b223FE8D0A0e5C4F27eAD9083C756Cc2',
+    },
+    relay: { depository: RELAY_DEPOSITORY, protocolChain: 'ethereum' },
+    tokens: {
+      '0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48': usdc,
+      '0xC02aaA39b223FE8D0A0e5C4F27eAD9083C756Cc2': weth,
+    },
+  },
+  8453: {
+    name: 'Base',
+    nativeSymbol: 'ETH',
+    across: {
+      spokePool: '0x09aea4b2242abC8bb4BB78D537A67a245A7bEC64',
+      periphery: ACROSS_PERIPHERY,
+      multicallHandler: ACROSS_HANDLER,
+      eventEmitter: ACROSS_EMITTER,
+      wrappedNative: OP_WETH,
+    },
+    relay: { depository: RELAY_DEPOSITORY, protocolChain: 'base' },
+    tokens: { '0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913': usdc, [OP_WETH]: weth },
+  },
+  10: {
+    name: 'Optimism',
+    nativeSymbol: 'ETH',
+    across: {
+      spokePool: '0x6f26Bf09B1C792e3228e5467807a900A503c0281',
+      periphery: ACROSS_PERIPHERY,
+      multicallHandler: ACROSS_HANDLER,
+      eventEmitter: ACROSS_EMITTER,
+      wrappedNative: OP_WETH,
+    },
+    relay: { depository: RELAY_DEPOSITORY, protocolChain: 'optimism' },
+    tokens: { '0x0b2C639c533813f4Aa9D7837CAf62653d097Ff85': usdc, [OP_WETH]: weth },
+  },
+  42161: {
+    name: 'Arbitrum',
+    nativeSymbol: 'ETH',
+    across: {
+      spokePool: '0xe35e9842fceaCA96570B734083f4a58e8F7C5f2A',
+      periphery: ACROSS_PERIPHERY,
+      multicallHandler: ACROSS_HANDLER,
+      eventEmitter: ACROSS_EMITTER,
+      wrappedNative: '0x82aF49447D8a07e3bd95BD0d56f35241523fBab1',
+    },
+    relay: { depository: RELAY_DEPOSITORY, protocolChain: 'arbitrum' },
+    tokens: {
+      '0xaf88d065e77c8cC2239327C5EDb3A432268e5831': usdc,
+      '0x82aF49447D8a07e3bd95BD0d56f35241523fBab1': weth,
+    },
+  },
+  59144: {
+    name: 'Linea',
+    nativeSymbol: 'ETH',
+    across: {
+      spokePool: '0x7E63A5f1a8F0B4d0934B2f2327DAED3F6bb2ee75',
+      periphery: ACROSS_PERIPHERY,
+      multicallHandler: '0xdF1C940487574EEfa79989a79a4936A0F979cDa2',
+      eventEmitter: ACROSS_EMITTER,
+      wrappedNative: '0xe5D7C2a44FfDDf6b295A15c148167daaAf5Cf34f',
+    },
+    relay: { depository: '0x59916DA825D2D2eC1BF878D71c88826F6633ecca', protocolChain: 'linea' },
+    tokens: {
+      '0x176211869cA2b568f2A7D4EE941E073a821EE1ff': usdc,
+      '0xe5D7C2a44FfDDf6b295A15c148167daaAf5Cf34f': weth,
+    },
+  },
+  43114: {
+    name: 'Avalanche',
+    nativeSymbol: 'AVAX',
+    across: {
+      spokePool: '0xFE9D541c92E4e90437C7152A00244886dE37a658',
+      periphery: ACROSS_PERIPHERY,
+      multicallHandler: '0x9610954AcDCA5FF7905f051A040ce33fe613c60e',
+      eventEmitter: '0x25b15Fc38d6A2C13FEDdD9cb51f184F7Cf0D4C11',
+      wrappedNative: '0xB31f66AA3C1e785363F0875A1B74E27b85FD66c7',
+    },
+    relay: { depository: RELAY_DEPOSITORY, protocolChain: 'avalanche' },
+    tokens: { '0xB97EF9Ef8734C71904D8002F8b6Bc66Dd9c48a6E': usdc },
+  },
+  56: {
+    name: 'BNB Chain',
+    nativeSymbol: 'BNB',
+    across: {
+      spokePool: '0x4e8E101924eDE233C13e2D8622DC8aED2872d505',
+      periphery: ACROSS_PERIPHERY,
+      multicallHandler: ACROSS_HANDLER,
+      eventEmitter: ACROSS_EMITTER,
+      wrappedNative: '0xbb4CdB9CBd36B01bD1cBaEBF2De08d9173bc095c',
+    },
+    relay: { depository: RELAY_DEPOSITORY, protocolChain: 'bnb' },
+    // Binance-Peg USDC, not Circle's: 18 decimals.
+    tokens: { '0x8AC76a51cc950d9822D68b83fE1Ad97B32Cd580d': { symbol: 'USDC', decimals: 18 } },
+  },
+  42220: {
+    name: 'Celo',
+    nativeSymbol: 'CELO',
+    relay: { depository: RELAY_DEPOSITORY, protocolChain: 'celo' },
+    tokens: { '0xcebA9300f2b948710d2653dD7B07f33A8B32118C': usdc },
+  },
+  137: {
+    name: 'Polygon',
+    nativeSymbol: 'POL',
+    across: {
+      spokePool: '0x9295ee1d8C5b022Be115A2AD3c30C72E34e7F096',
+      periphery: ACROSS_PERIPHERY,
+      multicallHandler: ACROSS_HANDLER,
+      eventEmitter: ACROSS_EMITTER,
+      wrappedNative: '0x0d500B1d8E8eF31E21C99d1Db9A6444d3ADf1270',
+    },
+    relay: { depository: RELAY_DEPOSITORY, protocolChain: 'polygon' },
+    tokens: { '0x3c499c542cEF5E3811e1192ce70d8cC03d5c3359': usdc },
+  },
+  57073: {
+    name: 'Ink',
+    nativeSymbol: 'ETH',
+    across: {
+      spokePool: '0xeF684C38F94F48775959ECf2012D7E864ffb9dd4',
+      periphery: ACROSS_PERIPHERY,
+      multicallHandler: ACROSS_HANDLER,
+      eventEmitter: ACROSS_EMITTER,
+      wrappedNative: OP_WETH,
+    },
+    relay: { depository: RELAY_DEPOSITORY, protocolChain: 'ink' },
+    tokens: { '0x2D270e6886d130D724215A266106e6832161EAEd': usdc, [OP_WETH]: weth },
+  },
+  100: {
+    name: 'Gnosis',
+    nativeSymbol: 'xDAI',
+    relay: { depository: RELAY_DEPOSITORY, protocolChain: 'gnosis' },
+    tokens: {},
+  },
+  4663: {
+    name: 'Robinhood Chain',
+    nativeSymbol: 'ETH',
+    relay: { depository: RELAY_DEPOSITORY, protocolChain: 'robinhood' },
+    // wrappedNativeToken() of Across's SpokePool here, which this table does not pin.
+    tokens: { '0x0Bd7D308f8E1639FAb988df18A8011f41EAcAD73': weth },
+  },
+  1868: {
+    name: 'Soneium',
+    nativeSymbol: 'ETH',
+    across: {
+      spokePool: '0x3baD7AD0728f9917d1Bf08af5782dCbD516cDd96',
+      periphery: ACROSS_PERIPHERY,
+      multicallHandler: ACROSS_HANDLER,
+      eventEmitter: ACROSS_EMITTER,
+      wrappedNative: OP_WETH,
+    },
+    relay: { depository: RELAY_DEPOSITORY, protocolChain: 'soneium' },
+    tokens: { [OP_WETH]: weth },
+  },
+  5042: {
+    name: 'Arc',
+    nativeSymbol: 'USDC',
+    across: {
+      spokePool: '0x9b4A302A548c7e313c2b74C461db7b84d3074A84',
+      periphery: '0xE791A2669bef779Ff7A4A9CF789F8Ee2CA20a32c',
+      multicallHandler: '0xA07480456C4EbaD7626e4FdF4a180709E238547b',
+      eventEmitter: '0x446Fe2Be6a8D90fA89F30f3d0A686aAFfe621237',
+    },
+    relay: { depository: RELAY_DEPOSITORY, protocolChain: 'arc' },
+    tokens: { '0x3600000000000000000000000000000000000000': usdc },
+  },
+  130: {
+    name: 'Unichain',
+    nativeSymbol: 'ETH',
+    across: {
+      spokePool: '0x09aea4b2242abC8bb4BB78D537A67a245A7bEC64',
+      periphery: ACROSS_PERIPHERY,
+      multicallHandler: ACROSS_HANDLER,
+      eventEmitter: ACROSS_EMITTER,
+      wrappedNative: OP_WETH,
+    },
+    relay: { depository: RELAY_DEPOSITORY, protocolChain: 'unichain' },
+    tokens: { '0x078D782b760474a361dDA0AF3839290b0EF57AD6': usdc, [OP_WETH]: weth },
+  },
+  143: {
+    name: 'Monad',
+    nativeSymbol: 'MON',
+    across: {
+      spokePool: '0xd2ecb3afe598b746F8123CaE365a598DA831A449',
+      periphery: ACROSS_PERIPHERY,
+      multicallHandler: '0xeC41F75c686e376Ab2a4F18bde263ab5822c4511',
+      eventEmitter: ACROSS_EMITTER,
+      wrappedNative: '0x3bd359C1119dA7Da1D913D1C4D2B7c461115433A',
+    },
+    relay: { depository: RELAY_DEPOSITORY, protocolChain: 'monad' },
+    tokens: { '0x754704Bc059F8C67012fEd69BC8A327a5aafb603': usdc },
+  },
+  11155111: {
+    name: 'Sepolia',
+    nativeSymbol: 'ETH',
+    across: {
+      spokePool: '0x5ef6C01E11889d86803e0B23e3cB3F9E9d97B662',
+      periphery: ACROSS_TESTNET_PERIPHERY,
+      multicallHandler: ACROSS_HANDLER,
+      wrappedNative: '0xfFf9976782d46CC05630D1f6eBAb18b2324d6B14',
+    },
+    relay: { depository: RELAY_TESTNET_DEPOSITORY, protocolChain: 'sepolia' },
+    tokens: {
+      '0x1c7D4B196Cb0C7B01d743Fbc6116a902379C7238': usdc,
+      '0xfFf9976782d46CC05630D1f6eBAb18b2324d6B14': weth,
+    },
+  },
+  84532: {
+    name: 'Base Sepolia',
+    nativeSymbol: 'ETH',
+    across: {
+      spokePool: '0x82B564983aE7274c86695917BBf8C99ECb6F0F8F',
+      periphery: ACROSS_TESTNET_PERIPHERY,
+      multicallHandler: ACROSS_HANDLER,
+      wrappedNative: OP_WETH,
+    },
+    relay: { depository: RELAY_TESTNET_DEPOSITORY, protocolChain: 'base-sepolia' },
+    tokens: { '0x036CbD53842c5426634e7929541eC2318f3dCF7e': usdc, [OP_WETH]: weth },
+  },
+  11155420: {
+    name: 'OP Sepolia',
+    nativeSymbol: 'ETH',
+    across: {
+      spokePool: '0x4e8E101924eDE233C13e2D8622DC8aED2872d505',
+      periphery: ACROSS_TESTNET_PERIPHERY,
+      multicallHandler: ACROSS_HANDLER,
+      wrappedNative: OP_WETH,
+    },
+    tokens: { '0x5fd84259d66Cd46123540766Be93DFE6D43130D7': usdc, [OP_WETH]: weth },
+  },
+  421614: {
+    name: 'Arbitrum Sepolia',
+    nativeSymbol: 'ETH',
+    across: {
+      spokePool: '0x7E63A5f1a8F0B4d0934B2f2327DAED3F6bb2ee75',
+      periphery: ACROSS_TESTNET_PERIPHERY,
+      multicallHandler: ACROSS_HANDLER,
+      wrappedNative: '0x980B62Da83eFf3D4576C647993b0c1D7faf17c73',
+    },
+    tokens: {
+      '0x75faf114eafb1BDbe2F0316DF893fd58CE46AA4d': usdc,
+      '0x980B62Da83eFf3D4576C647993b0c1D7faf17c73': weth,
+    },
+  },
+};
+
+/** The backend's MOVE_ASSET_FEE_RECIPIENT, as sent in production Across and Relay quotes. */
+export const JAW_FEE_RECIPIENT: Address = '0xC529EDD6D47C60923902514C7C0B3993ae42C2ec';
