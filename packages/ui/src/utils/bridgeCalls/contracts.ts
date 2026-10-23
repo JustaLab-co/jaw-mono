@@ -181,7 +181,7 @@ export const BRIDGE_CHAINS: Readonly<Record<number, BridgeChain>> = {
     name: 'Robinhood Chain',
     nativeSymbol: 'ETH',
     relay: { depository: RELAY_DEPOSITORY, protocolChain: 'robinhood' },
-    // wrappedNativeToken() of Across's SpokePool here, which this table does not pin.
+    // Same WETH as the MCP allowlist; checked on chain by symbol and decimals, with no Across SpokePool to read it from.
     tokens: { '0x0Bd7D308f8E1639FAb988df18A8011f41EAcAD73': weth },
   },
   1868: {
@@ -289,5 +289,5 @@ export const BRIDGE_CHAINS: Readonly<Record<number, BridgeChain>> = {
   },
 };
 
-/** The backend's MOVE_ASSET_FEE_RECIPIENT, as sent in production Across and Relay quotes. */
+/** Copied from production Across quotes; the backend sets it through MOVE_ASSET_FEE_RECIPIENT, which the source link only declares. */
 export const JAW_FEE_RECIPIENT: Address = '0xC529EDD6D47C60923902514C7C0B3993ae42C2ec';
