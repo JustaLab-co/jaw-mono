@@ -318,7 +318,6 @@ function converse(ws: WebSocket, inbox: Inbox, session: string, { key, init, reo
         const { publicKey } = m;
         if (publicKey === peer) continue;
         if (saved !== undefined) throw new PageGone();
-        // Ignored, as every later page was before owner links could be reopened.
         if (!reopens) continue;
         // This frame is plaintext from the relay: a key that cannot be used is dropped and the page kept.
         if (typeof publicKey === 'string') {
