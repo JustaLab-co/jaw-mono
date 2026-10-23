@@ -1,3 +1,4 @@
+import { randomBytes } from 'node:crypto';
 import { eq, sql } from 'drizzle-orm';
 import { encodeFunctionData, erc20Abi, getAddress, keccak256, toHex, zeroAddress, type Address, type Hex } from 'viem';
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -202,6 +203,31 @@ describe('Across and Relay quotes', () => {
       );
     }
   );
+
+  it('given a Relay quote, when the quote is asked, then the row keeps its order for the wallet', async () => {
+    const quoteId = `relay:0x${randomBytes(32).toString('hex')}`;
+    backend.answer = { result: { data: { ...relayUsdc.result.data, quoteId } } };
+    const t = await connected();
+
+    const step = await quote(t, await claimed(t, 'agent-key', fromBase), deps());
+
+    expect(step).toMatchObject({
+      row: { quoteId, quote: { provider: 'relay', orderData: relayUsdc.result.data.relayOrder.orderData } },
+    });
+  });
+
+  it('given a Relay order over 32 KB, when the quote is asked, then quote_rejected with order_too_large and no call kept', async () => {
+    const data = structuredClone(relayUsdc.result.data);
+    Object.assign(data.relayOrder.orderData, { filler: 'x'.repeat(33_000) });
+    backend.answer = { result: { data } };
+    const t = await connected();
+
+    const step = await quote(t, await claimed(t, 'agent-key', fromBase), deps());
+
+    expect(step).toMatchObject({
+      row: { state: 'quote_rejected', code: 'order_too_large', quoteId: null, call: null },
+    });
+  });
 
   it('given a quote whose transactions are on another chain than the origin, when the quote is asked, then quote_rejected with tx_chain and no call kept', async () => {
     backend.answer = acrossAnswer;

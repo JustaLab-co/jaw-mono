@@ -6,6 +6,7 @@ import { refusedBeforeSubmit, USER_REJECTED } from '@/connections/wallet-codes';
 import { errorLabel, log } from '@/lib/edge';
 import type { BackendDeps } from './backend';
 import { CALL_INVALID, callsOf } from './calls';
+import type { CheckedQuote } from './check';
 import {
   DEPOSIT_FAILED,
   DEPOSIT_REVERTED,
@@ -56,6 +57,7 @@ export async function approve(
     return;
   }
   if (!(await markSendStarted(row))) return;
+  const orderData = (row.quote as CheckedQuote['quote'] | null)?.orderData;
   let answer: unknown;
   try {
     answer = await ask('wallet_sendCalls', [
@@ -65,6 +67,7 @@ export async function approve(
         from: account,
         atomicRequired: true,
         calls: calls.map(({ to, data, value }) => ({ to, data, value })),
+        ...(orderData && { capabilities: { jawRelayOrder: { optional: true, orderData } } }),
       },
     ]);
   } catch (err) {

@@ -18,6 +18,7 @@ import { getDb } from '@/db/client';
 import { connections, swaps } from '@/db/schema';
 import { useTestDb } from '@/db/test-db';
 import { CALL_INVALID } from './calls';
+import relayUsdc from './fixtures/relay-usdc.json';
 import type { SwapRow } from './store';
 
 // A relay that pairs the two roles of a session and forwards what each sends.
@@ -75,7 +76,7 @@ const ACCOUNT: Address = '0x1111111111111111111111111111111111111111';
 const USDC: Address = '0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913';
 const DEPOSIT: Address = '0x3333333333333333333333333333333333333333';
 
-async function awaitingOwner(call: SwapRow['call'], approveBy: Date): Promise<SwapRow> {
+async function awaitingOwner(call: SwapRow['call'], approveBy: Date, quote: object = {}): Promise<SwapRow> {
   const connectionId = `con_${randomUUID()}`;
   await getDb()
     .insert(connections)
@@ -114,7 +115,7 @@ async function awaitingOwner(call: SwapRow['call'], approveBy: Date): Promise<Sw
       state: 'awaiting_owner',
       quoteId: `aurora:${depositAddress}`,
       depositAddress,
-      quote: {},
+      quote,
       quoteFenced: '',
       call,
       quotedAt: new Date(),
@@ -175,9 +176,9 @@ describe('the owner session for a swap', () => {
     value: '0',
   };
 
-  async function ownerOpens(call: unknown, state: SwapRow['state'] = 'awaiting_owner') {
+  async function ownerOpens(call: unknown, state: SwapRow['state'] = 'awaiting_owner', quote: object = {}) {
     const approveBy = new Date(Date.now() + 30_000);
-    const row = await awaitingOwner(call as SwapRow['call'], approveBy);
+    const row = await awaitingOwner(call as SwapRow['call'], approveBy, quote);
     await getDb().update(swaps).set({ state }).where(eq(swaps.id, row.id));
     const wallet = await ownerRelay(84532, approveBy);
     const opened = await page(wallet.url, (method) => {
@@ -245,5 +246,38 @@ describe('the owner session for a swap', () => {
 
     expect(requests).toEqual([]);
     expect(after).toMatchObject({ state: 'expired', code: CALL_INVALID, callsId: null });
+  });
+
+  describe('given the Relay order kept with the quote', () => {
+    const { orderData } = relayUsdc.result.data.relayOrder;
+    const batch = [approval, { kind: 'deposit', ...transfer }];
+    const envelope = {
+      version: '2.0.0',
+      chainId: '0x2105',
+      from: ACCOUNT,
+      atomicRequired: true,
+      calls: [
+        { to: USDC, data: approval.data, value: '0' },
+        { to: USDC, data: transfer.data, value: '0' },
+      ],
+    };
+
+    it('when the owner opens the link of a Relay row, then wallet_sendCalls carries the order as an optional jawRelayOrder capability', async () => {
+      const { requests } = await ownerOpens(batch, 'awaiting_owner', { provider: 'relay', orderData });
+
+      expect(sendCallsOf(requests)).toEqual([
+        { ...envelope, capabilities: { jawRelayOrder: { optional: true, orderData } } },
+      ]);
+    });
+
+    it.each([
+      ['a Relay row whose quote came with no order', { provider: 'relay' }],
+      ['an Across row', { provider: 'across' }],
+      ['an Aurora row', {}],
+    ])('when the owner opens the link of %s, then wallet_sendCalls has no capabilities', async (_, quote) => {
+      const { requests } = await ownerOpens(batch, 'awaiting_owner', quote);
+
+      expect(JSON.stringify(sendCallsOf(requests))).toBe(JSON.stringify([envelope]));
+    });
   });
 });
