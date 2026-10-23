@@ -8,15 +8,7 @@ import { createRequire } from 'node:module';
 
 const [repo, port, logFile] = process.argv.slice(2);
 const req_ = createRequire(`${repo}/package.json`);
-const {
-  verifyTypedData,
-  createPublicClient,
-  http: rpc,
-  encodeFunctionData,
-  erc20Abi,
-  getAddress,
-  keccak256,
-} = req_('viem');
+const { verifyTypedData, createPublicClient, http: rpc, encodeFunctionData, erc20Abi, getAddress } = req_('viem');
 const { baseSepolia } = req_('viem/chains');
 // Smart-account signatures (ERC-1271, ERC-6492) need the chain; plain ECDSA does not.
 const chain = createPublicClient({ chain: baseSepolia, transport: rpc('https://sepolia.base.org') });
@@ -150,14 +142,20 @@ async function acceptOrRefuse(req, res, path, route) {
   return { payer: auth.from, nonce: auth.nonce, receipt: b64(receipt) };
 }
 
-// Swap backend stub: the routes of jan-back-mono apps/proxy/src/api/v2/swap and
-// move-asset, answering in its { statusCode, result: { data, error } } envelope.
-const QUOTE = '/proxy/v2/swap/quote';
+// Swap backend stub: the routes of jan-back-mono apps/proxy/src/api/v2/move-asset,
+// answering in its { statusCode, result: { data, error } } envelope.
+const MOVE_QUOTE = '/proxy/v2/move-asset/quote';
 const SUBMIT = '/proxy/v2/move-asset/deposit/submit';
 const STATUS = '/proxy/v2/move-asset/deposit/status';
 const OTHER = '0x3333333333333333333333333333333333333333';
 const HEX_ADDRESS = /^0x[0-9a-fA-F]{40}$/;
 const POSITIVE = /^[1-9][0-9]*$/;
+const PROD_QUOTES = Object.fromEntries(
+  ['across', 'relay'].map((p) => [
+    p,
+    fs.readFileSync(`${repo}/apps/mcp/src/swap/fixtures/prod-${p}-quote.json`, 'utf8'),
+  ])
+);
 const KNOWN_STATES = new Set([
   'PENDING_DEPOSIT',
   'KNOWN_DEPOSIT_TX',
@@ -188,33 +186,23 @@ const QUOTE_TAMPERS = {
       token: OTHER,
       amount: q.inputAmount,
     }),
-  'tx-to': (q) => (q.transactions[0].to = OTHER),
   'tx-value': (q) => (q.transactions[0].value = String(BigInt(q.transactions[0].value) + 1n)),
   'tx-data': (q) =>
     (q.transactions[0].data = q.transactions[0].data === '0x' ? '0x00' : transfer(OTHER, BigInt(q.inputAmount))),
-  'trailing-bytes': (q) => (q.transactions[0].data += '00'),
   'output-amount': (q) => (q.minOutputAmount = String(BigInt(q.expectedOutputAmount) + 1n)),
-  'zero-min': (q) => (q.minOutputAmount = '0'),
 };
 const MODES = new Set([
   '',
   '422',
   '502',
   'invalid',
-  'paid-502',
-  'input-amount',
-  'deposit-self',
   'reused',
+  ...Object.keys(PROD_QUOTES),
   ...Object.keys(QUOTE_TAMPERS),
 ]);
 
-const freshSwap = () => ({ mode: '', network: SEPOLIA, submitFails: 0, pinned: '', lastDeposit: null });
+const freshSwap = () => ({ mode: '', submitFails: 0, pinned: '', lastDeposit: null });
 const swap = freshSwap();
-const quoteRoute = { scheme: 'exact', amount: '5000', spent: new Set() };
-// The backend's X402_ALLOWED_API_KEYS: a request with this x-api-key gets the quote with no payment.
-// compose.yaml gives the hosted server the same key as JAW_MCP_SWAP_API_KEY.
-const SWAP_API_KEY = 'verify-swap-key';
-const replays = new Map();
 const deposits = new Map();
 
 const answer = (res, status, data, error, headers = {}, statusCode = status) =>
@@ -277,53 +265,36 @@ function auroraQuote(query, deposit, amountIn) {
   };
 }
 
-const depositFromNonce = (nonce) => getAddress('0x' + keccak256(nonce).slice(-40));
-
-function paidQuote(query, nonce) {
+function stubQuote(query) {
   const { mode } = swap;
   if (mode === 'invalid') return { status: 200, data: null, error: null };
-  if (mode === 'paid-502') return { status: 502, data: null, error: NO_PROVIDER[502] };
-  let deposit = depositFromNonce(nonce);
-  if (mode === 'deposit-self') deposit = getAddress(query.depositor);
+  let deposit = getAddress(`0x${randomBytes(20).toString('hex')}`);
   if (mode === 'reused' && swap.lastDeposit) deposit = swap.lastDeposit;
   swap.lastDeposit = deposit;
-  const amountIn = BigInt(query.amount) + (mode === 'input-amount' ? 1n : 0n);
-  const data = auroraQuote(query, deposit, amountIn);
+  const data = auroraQuote(query, deposit, BigInt(query.amount));
   QUOTE_TAMPERS[mode]?.(data);
   return { status: 200, data, error: null };
 }
 
-async function quote(req, res, url) {
+function moveQuote(res, url) {
   const query = Object.fromEntries(url.searchParams);
   const errors = quoteErrors(query);
-  const keyed = req.headers['x-api-key'] === SWAP_API_KEY;
-  if (errors.length && (keyed || req.headers['payment-signature'])) {
-    log({ path: QUOTE, event: 'refused', status: 400 });
+  if (errors.length) {
+    log({ path: MOVE_QUOTE, event: 'refused', status: 400 });
     return answer(res, 400, null, errors);
   }
   if (swap.mode === '422' || swap.mode === '502') {
-    log({ path: QUOTE, event: 'refused', status: Number(swap.mode) });
+    log({ path: MOVE_QUOTE, event: 'refused', status: Number(swap.mode) });
     return answer(res, Number(swap.mode), null, NO_PROVIDER[swap.mode]);
   }
-  const key = req.headers['idempotency-key'];
-  if (key && replays.has(key)) {
-    log({ path: QUOTE, event: 'replay', key });
-    const { status, data, error, headers } = replays.get(key);
-    return answer(res, status, data, error, headers);
+  const captured = PROD_QUOTES[swap.mode];
+  if (captured) {
+    log({ path: MOVE_QUOTE, event: 'quote', mode: swap.mode });
+    return res.writeHead(200, { 'content-type': 'application/json' }).end(captured);
   }
-  if (keyed) {
-    const out = paidQuote(query, `0x${randomBytes(32).toString('hex')}`);
-    log({ path: QUOTE, event: 'quote', by: 'api-key', mode: swap.mode, quoteId: out.data?.quoteId ?? null });
-    return answer(res, out.status, out.data, out.error);
-  }
-  const chainId = Number(swap.network.split(':')[1]);
-  const route = { ...quoteRoute, network: swap.network, asset: USDC_BY_CHAIN[chainId] ?? USDC };
-  const paid = await acceptOrRefuse(req, res, QUOTE, route);
-  if (!paid) return;
-  const out = { ...paidQuote(query, paid.nonce), headers: { 'PAYMENT-RESPONSE': paid.receipt } };
-  if (key) replays.set(key, out);
-  log({ path: QUOTE, event: 'quote', mode: swap.mode, quoteId: out.data?.quoteId ?? null });
-  answer(res, out.status, out.data, out.error, out.headers);
+  const out = stubQuote(query);
+  log({ path: MOVE_QUOTE, event: 'quote', mode: swap.mode, quoteId: out.data?.quoteId ?? null });
+  answer(res, out.status, out.data, out.error);
 }
 
 function depositStatus(address, t, raw) {
@@ -394,11 +365,9 @@ function control(url) {
   const p = url.searchParams;
   const address = p.get('depositAddress') ?? p.get('expire');
   if (p.has('mode') && !MODES.has(p.get('mode'))) return false;
-  if (p.get('network') && !/^eip155:[1-9][0-9]*$/.test(p.get('network'))) return false;
   if (p.has('submitFails') && !/^\d+$/.test(p.get('submitFails'))) return false;
   if (address !== null && !HEX_ADDRESS.test(address)) return false;
   if (p.has('mode')) swap.mode = p.get('mode');
-  if (p.has('network')) swap.network = p.get('network') || SEPOLIA;
   if (p.has('submitFails')) swap.submitFails = Number(p.get('submitFails'));
   if (p.has('state') && p.has('depositAddress')) track(address).pinned = p.get('state');
   else if (p.has('state')) swap.pinned = p.get('state');
@@ -434,7 +403,7 @@ http
       log({ path, event: 'control', ...Object.fromEntries(url.searchParams) });
       return res.writeHead(204).end();
     }
-    if (path === QUOTE && req.method === 'GET') return quote(req, res, url);
+    if (path === MOVE_QUOTE && req.method === 'GET') return moveQuote(res, url);
     if ((path === SUBMIT && req.method === 'POST') || (path === STATUS && req.method === 'GET'))
       return deposit(req, res, url, path);
     const route = ROUTES[path];

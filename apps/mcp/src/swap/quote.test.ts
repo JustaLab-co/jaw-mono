@@ -9,6 +9,8 @@ import { payments, swaps } from '@/db/schema';
 import { TEST_PG_URL, useTestDb, useTestPostgres } from '@/db/test-db';
 import { quote, swapRequest, type QuoteDeps, type SwapInput } from './quote';
 import { claimSwap, type SwapRow } from './store';
+import acrossAnswer from './fixtures/prod-across-quote.json';
+import relayAnswer from './fixtures/prod-relay-quote.json';
 
 const USDC_SEPOLIA: Address = '0x036CbD53842c5426634e7929541eC2318f3dCF7e';
 const ARB_USDC = '0xaf88d065e77c8cc2239327c5edb3a432268e5831';
@@ -38,6 +40,7 @@ type Hit = { url: URL; apiKey: string | null };
 
 const backend = {
   mode: '' as '' | '400' | '422' | '503' | 'down' | 'invalid' | '203' | 'trailing-bytes' | '401' | '402' | '403',
+  answer: undefined as unknown,
   deposit: undefined as Address | undefined,
   onAsked: undefined as (() => Promise<void>) | undefined,
   answered: 0,
@@ -92,6 +95,7 @@ const quoteBackend: typeof fetch = async (input, init) => {
     if (backend.mode === String(status)) return new Response('{}', { status });
   }
   if (apiKey !== KEY) return new Response('{}', { status: 402, headers: { 'payment-required': 'e30=' } });
+  if (backend.answer) return Response.json(backend.answer);
   await backend.onAsked?.();
   backend.answered += 1;
   const deposit =
@@ -106,7 +110,7 @@ const deps = (apiKey = KEY): QuoteDeps => ({ fetch: quoteBackend, apiKey, timeou
 
 beforeAll(TEST_PG_URL ? useTestPostgres : useTestDb);
 beforeEach(() => {
-  Object.assign(backend, { mode: '', deposit: undefined, onAsked: undefined, answered: 0 });
+  Object.assign(backend, { mode: '', answer: undefined, deposit: undefined, onAsked: undefined, answered: 0 });
   backend.hits.length = 0;
   lookups.meet = 0;
   lookups.waiting.length = 0;
@@ -162,13 +166,13 @@ describe('the quote request', () => {
     expect(swapRequest(t, { ...input, recipient })).toMatchObject({ depositor: t.account.toLowerCase(), recipient });
   });
 
-  it('given a valid pair, when the quote is asked, then the backend from config gets the stored input once, with the swap api key in a header and not in the url', async () => {
+  it('given a valid pair, when the quote is asked, then move-asset/quote on the backend from config gets the stored input once for Across and Relay, with the swap api key in a header and not in the url', async () => {
     const t = await connected();
     await quoted(t);
 
     expect(backend.hits).toHaveLength(1);
     const [hit] = backend.hits;
-    expect(`${hit.url.origin}${hit.url.pathname}`).toBe(`${config().swapUrl}/swap/quote`);
+    expect(`${hit.url.origin}${hit.url.pathname}`).toBe(`${config().swapUrl}/move-asset/quote`);
     expect(Object.fromEntries(hit.url.searchParams)).toEqual({
       originChainId: '84532',
       destinationChainId: '42161',
@@ -178,10 +182,32 @@ describe('the quote request', () => {
       depositor: t.account.toLowerCase(),
       recipient: t.account.toLowerCase(),
       tradeType: 'EXACT_INPUT',
+      providers: 'across,relay',
     });
     expect(hit.apiKey).toBe(KEY);
     expect(hit.url.href).not.toContain(KEY);
   });
+});
+
+describe('a quote this server cannot sign yet', () => {
+  it.each([
+    ['across', acrossAnswer],
+    ['relay', relayAnswer],
+  ])(
+    'given move-asset/quote answers the captured prod quote from %s, when the quote is asked, then quote_rejected with quote_unsupported_provider and no call kept',
+    async (_, answer) => {
+      backend.answer = answer;
+
+      const { row } = await quoted(await connected());
+
+      expect(row).toMatchObject({
+        state: 'quote_rejected',
+        code: 'quote_unsupported_provider',
+        quoteId: null,
+        call: null,
+      });
+    }
+  );
 });
 
 describe('a quote', () => {

@@ -9,12 +9,13 @@ import { leaseHeld, sessionLeaseEnd } from '@/connections/session-lease';
 import { ownerRelay, WalletBusy, type OpenWallet, type Wallet } from '@/connections/relay';
 import { countHit } from '@/db/settings';
 import { RATE_WINDOW_MS } from '@/lib/edge';
+import { isProxyChain } from '@/lib/chain';
 import { fenceText, reply } from '@/lib/fence';
 import { gateCode } from '@/payments/render';
 import { findPayment, stateOf } from '@/payments/store';
 import { randomToken } from '@/lib/token';
 import type { BackendAnswer, BackendDeps } from '@/swap/backend';
-import { isSupportedOriginChain, type CheckedQuote } from '@/swap/check';
+import type { CheckedQuote } from '@/swap/check';
 import { countOpenLinks, FULL, MAX_OPEN_PER_ACCOUNT, withLinkSlot } from '@/owner-calls/cap';
 import { quote, swapRequest, type QuoteDeps } from '@/swap/quote';
 import {
@@ -38,28 +39,22 @@ import {
 import { followSwap, resumeSwap } from '@/swap/resume';
 import { track } from '@/swap/track';
 
-const SOLANA = 792703809;
 const SWAP_RATE_LIMIT = 10;
 const STATUS_RATE_LIMIT = 30;
 const HEX_ADDRESS = /^0x[0-9a-fA-F]{40}$/;
-const BASE58 = /^[1-9A-HJ-NP-Za-km-z]{32,44}$/;
 const UINT256_LIMIT = 2n ** 256n;
 
 const swapInput = z.strictObject({
   originChainId: z.number().int().positive().describe('An EVM chain JAW supports'),
   originToken: z.string().regex(HEX_ADDRESS).describe('Zero address for the native coin'),
-  destinationChainId: z.number().int().positive(),
-  destinationToken: z.string().max(64).describe('Hex, or the base58 mint on Solana'),
+  destinationChainId: z.number().int().positive().describe('An EVM chain JAW supports'),
+  destinationToken: z.string().regex(HEX_ADDRESS).describe('Zero address for the native coin'),
   amount: z
     .string()
     .regex(/^[1-9][0-9]{0,77}$/)
     .refine((amount) => BigInt(amount) < UINT256_LIMIT, 'amount does not fit in uint256')
     .describe('Base units of originToken to deposit'),
-  recipient: z
-    .string()
-    .max(64)
-    .optional()
-    .describe('Defaults to the account on EVM; required when the destination is Solana'),
+  recipient: z.string().regex(HEX_ADDRESS).optional().describe('Defaults to the account'),
   idempotencyKey: z
     .string()
     .regex(/^[A-Za-z0-9_.:-]{1,100}$/)
@@ -164,31 +159,17 @@ const connectionEnded = () =>
 const takenOver = (key: string) =>
   refuse('in_progress', `Another call took this swap over. Send idempotencyKey ${key} again with the same input.`);
 
-function invalidInput(input: SwapToolInput): string | undefined {
-  if (input.originChainId === SOLANA) return 'A Solana origin is not supported: the account exists on EVM chains only.';
-  if (input.destinationChainId === SOLANA) {
-    const { recipient, destinationToken } = input;
-    if (recipient && BASE58.test(recipient) && BASE58.test(destinationToken)) return undefined;
-    return 'A Solana destination needs a base58 recipient and the base58 mint as destinationToken.';
-  }
-  if (HEX_ADDRESS.test(input.destinationToken) && (!input.recipient || HEX_ADDRESS.test(input.recipient))) {
-    return undefined;
-  }
-  return 'An EVM destination needs a hex destinationToken and, when given, a hex recipient.';
-}
-
-async function refusedBeforeQuoting(
-  t: Tenant,
-  originChainId: number,
-  key: string,
-  request: SwapRequest
-): Promise<SwapResult | undefined> {
+async function refusedBeforeQuoting(t: Tenant, key: string, request: SwapRequest): Promise<SwapResult | undefined> {
   if (!config().swapApiKey) return refuse('swap_unavailable', 'Swaps are not set up on this server.');
   if ((await countHit(`swap:${t.connectionId}`, RATE_WINDOW_MS)) > SWAP_RATE_LIMIT) {
     return refuse('rate_limited', 'Too many swaps on this connection. Wait a minute.');
   }
-  if (!isSupportedOriginChain(originChainId)) {
+  const { originChainId, destinationChainId } = request;
+  if (!isProxyChain(originChainId)) {
     return refuse('unsupported_origin_chain', `Chain ${originChainId} is not one the JAW wallet can send from.`);
+  }
+  if (!isProxyChain(destinationChainId)) {
+    return refuse('unsupported_destination_chain', `Chain ${destinationChainId} is not one JAW serves.`);
   }
   if ((await countOpenLinks(t.account)) >= MAX_OPEN_PER_ACCOUNT) {
     // A request racing this one may have stored this key since the caller's check; replaying it opens no new link.
@@ -428,12 +409,10 @@ async function replay(t: Tenant, row: SwapRow, key: string, deps: SwapDeps): Pro
 }
 
 export async function swap(t: Tenant, input: SwapToolInput, deps: SwapDeps = DEFAULTS): Promise<SwapResult> {
-  const invalid = invalidInput(input);
-  if (invalid) return refuse('invalid_input', invalid);
   const key = input.idempotencyKey ?? `auto_${randomBytes(12).toString('base64url')}`;
   const request = swapRequest(t, { ...input, originToken: input.originToken as Address });
   if (await nextStepQuotes(t.connectionId, key, request)) {
-    const refused = await refusedBeforeQuoting(t, input.originChainId, key, request);
+    const refused = await refusedBeforeQuoting(t, key, request);
     if (refused) return refused;
   }
   const claim = await claimSwap(t.connectionId, key, request);
