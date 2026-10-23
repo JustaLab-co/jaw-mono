@@ -8,13 +8,13 @@ const chains = Object.entries(BRIDGE_CHAINS).map(([id, chain]) => ({ id: Number(
 function addressesOf(chain: (typeof chains)[number]): string[] {
   return [
     ...Object.values(chain.across ?? {}),
-    ...(chain.relay ? [chain.relay.depository] : []),
+    ...(chain.relay ? [chain.relay.depository, chain.relay.erc20Router, ...chain.relay.solvers] : []),
     ...Object.keys(chain.tokens),
   ];
 }
 
 describe('given the pinned bridge table of the signing screen', () => {
-  it('then it lists every chain the MCP swap allowlist lists, testnets included', () => {
+  it('then it lists every chain a swap can start or end on, testnets included', () => {
     expect(chains.map((c) => c.id).sort((a, b) => a - b)).toEqual([
       1, 10, 56, 100, 130, 137, 143, 1868, 4663, 5042, 8453, 42161, 42220, 43114, 57073, 59144, 84532, 421614, 11155111,
       11155420,
@@ -32,7 +32,12 @@ describe('given the pinned bridge table of the signing screen', () => {
         eventEmitter: '0xBF75133b48b0a42AB9374027902E83C5E2949034',
         wrappedNative: '0x4200000000000000000000000000000000000006',
       },
-      relay: { depository: '0x4cD00E387622C35bDDB9b4c962C136462338BC31', protocolChain: 'base' },
+      relay: {
+        depository: '0x4cD00E387622C35bDDB9b4c962C136462338BC31',
+        protocolChain: 'base',
+        erc20Router: '0xb92fe925DC43a0ECdE6c8b1a2709c170Ec4fFf4f',
+        solvers: expect.arrayContaining(['0xf70da97812CB96acDF810712Aa562db8dfA3dbEF']),
+      },
       tokens: {
         '0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913': { symbol: 'USDC', decimals: 6 },
         '0x4200000000000000000000000000000000000006': { symbol: 'WETH', decimals: 18 },
@@ -76,6 +81,23 @@ describe('given the pinned bridge table of the signing screen', () => {
       84532: 'base-sepolia',
       11155111: 'sepolia',
     });
+  });
+
+  it('then every Relay chain fills through its router by solvers listed once, Linea and testnets on their own router', () => {
+    for (const chain of chains) {
+      const relay = chain.relay;
+      if (!relay) continue;
+      const solvers = relay.solvers.map((s) => s.toLowerCase());
+      expect(solvers.length, `chain ${chain.id}`).toBeGreaterThan(0);
+      expect(new Set(solvers).size, `chain ${chain.id}`).toBe(solvers.length);
+    }
+    expect(BRIDGE_CHAINS[59144]?.relay?.erc20Router).toBe('0x9EF6d3c2F60d7b9008D74CAb1FC0F899c957C819');
+    expect(BRIDGE_CHAINS[11155111]?.relay).toMatchObject({
+      erc20Router: '0xA1BEa5fe917450041748Dbbbe7E9AC57A4bBEBaB',
+      solvers: ['0x3e34b27a9bf37D8424e1a58aC7fc4D06914B76B9'],
+      testnet: true,
+    });
+    expect(BRIDGE_CHAINS[8453]?.relay?.testnet).toBeUndefined();
   });
 
   it('then BSC USDC has 18 decimals and Arc pays gas in USDC with no wrapped native', () => {
@@ -139,6 +161,6 @@ describe('given the pinned bridge table of the signing screen', () => {
 
   it('then the table matches the reviewed digest, so any changed literal updates this test', () => {
     const digest = createHash('sha256').update(JSON.stringify({ BRIDGE_CHAINS, JAW_FEE_RECIPIENT })).digest('hex');
-    expect(digest).toBe('49b804729ab1aec740d0f2c8831837decf199917d02d59052d0b0b76560d5316');
+    expect(digest).toBe('c8ee9a873351bccac8c5b6ce1f255125bf6b4966e9e0a2878cf2e9c2102ce500');
   });
 });
