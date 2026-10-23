@@ -61,7 +61,7 @@ jobs:
           if [ -n "$number" ]; then
             gh issue edit "$number" --body-file body.md
           else
-            gh issue create --title "$TITLE" --body-file body.md
+            gh issue create --title "$TITLE" --body-file body.md --assignee Ghadi8
           fi
 
       - name: Fail on a difference
