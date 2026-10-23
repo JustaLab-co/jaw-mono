@@ -15,7 +15,6 @@ export interface Config {
   ens: string | undefined;
   chain: Chain;
   rpcUrl: string | undefined;
-  mainnetRpcUrl: string | undefined;
   /** Local verification only: hosts jaw_session_x402_quote may reach without the SSRF checks. */
   insecureFetchHosts: ReadonlySet<string>;
   paymasterApiKey: string | undefined;
@@ -25,6 +24,9 @@ export interface Config {
   /** Sent as x-api-key on swap quotes; the backend lists it in X402_ALLOWED_API_KEYS so a quote costs nothing. */
   swapApiKey: string | undefined;
   swapQuoteTtlSec: number;
+  resolveUrl: string;
+  /** Sent as x-api-key on name lookups; the backend lists it in X402_ALLOWED_API_KEYS so a lookup costs nothing. */
+  resolveApiKey: string | undefined;
   ring: KeyRing;
 }
 
@@ -51,13 +53,22 @@ export function config(): Config {
     ens: ensName(process.env.JAW_MCP_ENS || undefined),
     chain,
     rpcUrl: process.env.JAW_MCP_RPC_URL || undefined,
-    mainnetRpcUrl: process.env.JAW_MCP_MAINNET_RPC_URL || undefined,
     insecureFetchHosts,
     paymasterApiKey: process.env.JAW_MCP_API_KEY || undefined,
     floatTarget: baseUnits('JAW_MCP_FLOAT_TARGET', process.env.JAW_MCP_FLOAT_TARGET || '250000'),
-    swapUrl: swapUrl(process.env.JAW_MCP_SWAP_URL || 'https://api.justaname.id/proxy/v2', insecureFetchHosts),
+    swapUrl: backendUrl(
+      'JAW_MCP_SWAP_URL',
+      process.env.JAW_MCP_SWAP_URL || 'https://api.justaname.id/proxy/v2',
+      insecureFetchHosts
+    ),
     swapApiKey: process.env.JAW_MCP_SWAP_API_KEY || undefined,
     swapQuoteTtlSec: quoteTtl(process.env.JAW_MCP_SWAP_QUOTE_TTL_SEC || '300'),
+    resolveUrl: backendUrl(
+      'JAW_MCP_RESOLVE_URL',
+      process.env.JAW_MCP_RESOLVE_URL || 'https://api.justaname.id/ens/v2',
+      insecureFetchHosts
+    ),
+    resolveApiKey: process.env.JAW_MCP_RESOLVE_API_KEY || undefined,
     ring: parseKeyRing(process.env.JAW_MCP_SEALING_KEYS),
   };
   return cached;
@@ -108,16 +119,16 @@ function quoteTtl(value: string): number {
   return Number(value);
 }
 
-function swapUrl(value: string, insecureFetchHosts: ReadonlySet<string>): string {
+function backendUrl(name: string, value: string, insecureFetchHosts: ReadonlySet<string>): string {
   if (!URL.canParse(value) || /[?#]/.test(value)) {
-    throw new Error('JAW_MCP_SWAP_URL must be a URL with no query or hash, such as https://api.justaname.id/proxy/v2');
+    throw new Error(`${name} must be a URL with no query or hash, such as https://api.justaname.id/proxy/v2`);
   }
   const url = new URL(value);
   const allowed = 'list its host:port in JAW_MCP_INSECURE_FETCH_HOSTS to allow it';
   const refused = refusal(url, insecureFetchHosts);
-  if (refused) throw new Error(`JAW_MCP_SWAP_URL is refused, ${refused}: ${allowed}`);
+  if (refused) throw new Error(`${name} is refused, ${refused}: ${allowed}`);
   if (isLocal(url.hostname) && !insecureFetchHosts.has(url.host)) {
-    throw new Error(`JAW_MCP_SWAP_URL is refused, its host is local: ${allowed}`);
+    throw new Error(`${name} is refused, its host is local: ${allowed}`);
   }
   return value.replace(/\/+$/, '');
 }
