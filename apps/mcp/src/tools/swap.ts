@@ -14,7 +14,7 @@ import { fenceText, reply } from '@/lib/fence';
 import { gateCode } from '@/payments/render';
 import { findPayment, stateOf } from '@/payments/store';
 import { randomToken } from '@/lib/token';
-import type { BackendAnswer, BackendDeps } from '@/swap/backend';
+import type { BackendDeps } from '@/swap/backend';
 import { CALL_INVALID, callsOf } from '@/swap/calls';
 import { QUOTE_ID, type CheckedQuote } from '@/swap/check';
 import { countOpenLinks, FULL, MAX_OPEN_PER_ACCOUNT, withLinkSlot } from '@/owner-calls/cap';
@@ -22,8 +22,11 @@ import { quote, swapRequest, type QuoteDeps } from '@/swap/quote';
 import {
   approveByOf,
   claimSwap,
+  DEPOSIT_AMBIGUOUS,
+  DEPOSIT_NOT_FOUND,
   DEPOSIT_FAILED,
   DEPOSIT_REVERTED,
+  expireLapsed,
   failIfStale,
   findById,
   findByQuoteId,
@@ -39,7 +42,7 @@ import {
   type SwapRequest,
 } from '@/swap/store';
 import { followSwap, resumeSwap } from '@/swap/resume';
-import { track } from '@/swap/track';
+import { track, type TrackAnswer } from '@/swap/track';
 
 const SWAP_RATE_LIMIT = 10;
 const STATUS_RATE_LIMIT = 30;
@@ -248,6 +251,9 @@ function summaryOf(row: SwapRow): string {
       );
     case 'deposit_sent': {
       if (row.code === DEPOSIT_FAILED || row.code === DEPOSIT_REVERTED) return didNotLeave(row);
+      if (row.code === DEPOSIT_AMBIGUOUS) return `The owner approved the deposit and it was mined in ${row.txHash}.`;
+      if (row.code === DEPOSIT_NOT_FOUND) return noAcrossDeposit(row);
+      if (hashLost(row)) return acrossLost(row);
       if (unseenPastGrace(row)) return notSeen(row);
       const unread =
         row.code === 'wallet_answer_unreadable' ? ", but the wallet's status answer could not be read" : '';
@@ -281,7 +287,11 @@ const graceEnd = (row: SwapRow) => new Date((row.approveBy as Date).getTime() + 
 
 const unseenPastGrace = (row: SwapRow) => row.checkedAt !== null && row.checkedAt >= graceEnd(row);
 
+// Across is read by the deposit's hash, so past the grace window with none, no read can find it.
+const hashLost = (row: SwapRow) => providerOf(row) === 'across' && !row.txHash && Date.now() >= graceEnd(row).getTime();
+
 function maybeSent(row: SwapRow): string {
+  if (hashLost(row)) return acrossLost(row);
   if (unseenPastGrace(row)) return notSeen(row);
   return (
     'The wallet may have sent the deposit, and no link opens again for this quote. ' +
@@ -289,12 +299,31 @@ function maybeSent(row: SwapRow): string {
   );
 }
 
-const notSeen = (row: SwapRow) =>
-  `The swap backend has not seen a deposit to ${row.depositAddress} by ${graceEnd(row).toISOString()}. ` +
-  `Check the owner's account on chain ${row.originChainId} before swapping these funds again. ` +
-  'A deposit that lands later still shows in jaw_swap_status.';
+const acrossLost = (row: SwapRow) =>
+  `The wallet may have sent the Across deposit, but no transaction hash came back by ${graceEnd(row).toISOString()}, ` +
+  `so this swap cannot be followed. ${checkHistory(row)}`;
 
-function untrustedBackendText(read: BackendAnswer): string | undefined {
+const noAcrossDeposit = (row: SwapRow) =>
+  `Transaction ${row.txHash} holds no Across deposit from this account to chain ${row.destinationChainId}, ` +
+  `so this swap cannot be followed. ${checkHistory(row)}`;
+
+const checkHistory = (row: SwapRow) =>
+  `Check the owner's account history on chain ${row.originChainId} for the deposit and its fill or refund before swapping these funds again.`;
+
+const NAME = { across: 'Across', relay: 'Relay' };
+
+function notSeen(row: SwapRow): string {
+  const provider = providerOf(row);
+  const deposit =
+    provider === 'aurora' ? `a deposit to ${row.depositAddress}` : `the ${NAME[provider]} deposit for this swap`;
+  return (
+    `The swap backend has not seen ${deposit} by ${graceEnd(row).toISOString()}. ` +
+    `Check the owner's account on chain ${row.originChainId} before swapping these funds again. ` +
+    'A deposit that lands later still shows in jaw_swap_status.'
+  );
+}
+
+function untrustedBackendText(read: TrackAnswer): string | undefined {
   if (!read.ok) return read.code === 'http_error' ? read.untrustedError : undefined;
   const { status } = read;
   const lines = [
@@ -304,15 +333,27 @@ function untrustedBackendText(read: BackendAnswer): string | undefined {
   return lines.length ? lines.join('\n') : undefined;
 }
 
-function readNote(read: BackendAnswer | undefined): string {
+const UNREAD_DEPOSIT = new Set(['hash_unknown', 'receipt_missing']);
+
+function readNote(row: SwapRow, read: TrackAnswer | undefined): string {
   if (!read) return '';
+  // The summary already says these rows can never be followed.
+  if (row.code === DEPOSIT_NOT_FOUND || hashLost(row)) return '';
+  if (!read.ok && read.code === DEPOSIT_AMBIGUOUS) {
+    return (
+      `Transaction ${row.txHash} holds more than one Across deposit from this account and they cannot be told apart, ` +
+      `so this swap is not followed. Check the account's history on chain ${row.originChainId} for the deposit and its fill or refund. `
+    );
+  }
+  if (!read.ok && UNREAD_DEPOSIT.has(read.code))
+    return `The deposit cannot be followed yet (${read.code}); check the owner's account on chain ${row.originChainId}. `;
   if (!read.ok) return `The swap backend could not be read (${read.code}); this is the swap as last stored. `;
   if (read.status.state === 'unknown')
     return 'The swap backend answered a state this server does not know, shown fenced in response. ';
   return '';
 }
 
-async function answer(row: SwapRow, read?: BackendAnswer): Promise<SwapResult> {
+async function answer(row: SwapRow, read?: TrackAnswer): Promise<SwapResult> {
   if (row.relay) void resumeSwap(row);
   const backendText = read && untrustedBackendText(read);
   const response = [row.quoteFenced, backendText && fenceText('the swap backend', backendText, 400)].filter(
@@ -353,7 +394,7 @@ async function answer(row: SwapRow, read?: BackendAnswer): Promise<SwapResult> {
         : undefined,
     refusal: row.code ? { code: row.code } : undefined,
     response: response.length ? response : undefined,
-    summary: readNote(read) + summaryOf(row),
+    summary: readNote(row, read) + summaryOf(row),
   });
   return reply(out);
 }
@@ -475,8 +516,9 @@ export async function swapStatus(
   if ((await countHit(`swap-status:${t.connectionId}`, RATE_WINDOW_MS)) > STATUS_RATE_LIMIT) {
     return refuse('rate_limited', 'Too many status reads on this connection. Wait a minute.');
   }
-  const row = await findByQuoteId(t.connectionId, quoteId);
-  if (!row) return refuse('not_found', 'No swap on this connection has that quoteId.');
+  const found = await findByQuoteId(t.connectionId, quoteId);
+  if (!found) return refuse('not_found', 'No swap on this connection has that quoteId.');
+  const row = await expireLapsed(found);
   if (!FOLLOWED.includes(row.state)) return answer(row);
   const read = await track(row, deps.backend);
   return answer((await findByQuoteId(t.connectionId, quoteId)) ?? row, read);

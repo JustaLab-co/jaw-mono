@@ -4,8 +4,6 @@ import { config } from '@/connections/config';
 import { errorLabel, log } from '@/lib/edge';
 import { safeFetch } from '@/lib/safe-fetch';
 
-const PROVIDER = 'aurora';
-
 const swapState = {
   PENDING_DEPOSIT: 'pending_deposit',
   KNOWN_DEPOSIT_TX: 'submitted',
@@ -24,10 +22,17 @@ export type DepositStatus = { txHash?: Hex; untrustedRawState?: string } & (
   | { state: 'unknown'; untrustedState: string }
 );
 
+export type KnownStatus = Extract<DepositStatus, { backendState: BackendState }>;
+
 export type BackendAnswer =
   | { ok: true; status: DepositStatus }
   | { ok: false; code: 'unreachable' | 'invalid_response' }
   | { ok: false; code: 'http_error'; httpStatus: number; untrustedError?: string };
+
+export type TrackKey =
+  | { provider: 'aurora'; depositAddress: Address }
+  | { provider: 'relay'; requestId: Hex }
+  | { provider: 'across'; originChainId: number; depositId: string };
 
 export type BackendDeps = { fetch: typeof fetch; baseUrl: string; timeoutMs: number };
 
@@ -39,11 +44,20 @@ const liveDeps = (): BackendDeps => ({
 
 const isBackendState = (state: string): state is BackendState => Object.hasOwn(swapState, state);
 
+const echoedInteger = z
+  .union([z.int(), z.string().regex(/^\d{1,78}$/)])
+  .transform(BigInt)
+  .optional()
+  .catch(undefined);
+
 const statusBody = z.object({
   result: z.object({
     data: z.object({
-      provider: z.literal(PROVIDER),
-      depositAddress: z.string(),
+      provider: z.string(),
+      depositAddress: z.string().optional(),
+      requestId: z.string().optional(),
+      originChainId: echoedInteger,
+      depositId: echoedInteger,
       state: z.string().max(256),
       txHash: z
         .custom<Hex>((v) => typeof v === 'string' && /^0x[0-9a-fA-F]{64}$/.test(v))
@@ -56,25 +70,35 @@ const statusBody = z.object({
 
 const errorBody = z.object({ result: z.object({ error: z.string().max(256) }) });
 
-export function submitDeposit(deposit: { depositAddress: Address; txHash: Hex }, deps = liveDeps()) {
-  return call(deposit.depositAddress, deps, `${deps.baseUrl}/move-asset/deposit/submit`, {
+type StatusData = z.infer<typeof statusBody>['result']['data'];
+
+function echoes(key: TrackKey, data: StatusData): boolean {
+  if (data.provider !== key.provider) return false;
+  switch (key.provider) {
+    case 'aurora':
+      return data.depositAddress?.toLowerCase() === key.depositAddress.toLowerCase();
+    case 'relay':
+      return data.requestId?.toLowerCase() === key.requestId.toLowerCase();
+    case 'across':
+      return data.originChainId === BigInt(key.originChainId) && data.depositId === BigInt(key.depositId);
+  }
+}
+
+export function submitDeposit(key: TrackKey, txHash: Hex, originChainId: number, deps = liveDeps()) {
+  const body = { ...key, txHash, ...(key.provider === 'relay' && { originChainId }) };
+  return call(key, deps, `${deps.baseUrl}/move-asset/deposit/submit`, {
     method: 'POST',
     headers: { 'content-type': 'application/json' },
-    body: JSON.stringify({ provider: PROVIDER, depositAddress: deposit.depositAddress, txHash: deposit.txHash }),
+    body: JSON.stringify(body),
   });
 }
 
-export function depositStatus(depositAddress: Address, deps = liveDeps()) {
-  const query = new URLSearchParams({ provider: PROVIDER, depositAddress });
-  return call(depositAddress, deps, `${deps.baseUrl}/move-asset/deposit/status?${query}`, { method: 'GET' });
+export function depositStatus(key: TrackKey, deps = liveDeps()) {
+  const query = new URLSearchParams(Object.entries(key).map(([name, value]) => [name, String(value)]));
+  return call(key, deps, `${deps.baseUrl}/move-asset/deposit/status?${query}`, { method: 'GET' });
 }
 
-async function call(
-  depositAddress: Address,
-  deps: BackendDeps,
-  url: string,
-  init: RequestInit
-): Promise<BackendAnswer> {
+async function call(key: TrackKey, deps: BackendDeps, url: string, init: RequestInit): Promise<BackendAnswer> {
   let res: Response;
   let text: string;
   try {
@@ -91,7 +115,7 @@ async function call(
     return { ok: false, code: 'http_error', httpStatus: res.status, ...(untrustedError && { untrustedError }) };
   }
   const data = statusBody.safeParse(body).data?.result.data;
-  if (!data || data.depositAddress.toLowerCase() !== depositAddress.toLowerCase()) {
+  if (!data || !echoes(key, data)) {
     log('warn', { msg: 'swap backend invalid response' });
     return { ok: false, code: 'invalid_response' };
   }

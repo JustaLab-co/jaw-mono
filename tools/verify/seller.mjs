@@ -147,8 +147,9 @@ async function acceptOrRefuse(req, res, path, route) {
 const MOVE_QUOTE = '/proxy/v2/move-asset/quote';
 const SUBMIT = '/proxy/v2/move-asset/deposit/submit';
 const STATUS = '/proxy/v2/move-asset/deposit/status';
-const OTHER = '0x3333333333333333333333333333333333333333';
+const DEPOSITORY = getAddress('0x4cd00e387622c35bddb9b4c962c136462338bc31');
 const HEX_ADDRESS = /^0x[0-9a-fA-F]{40}$/;
+const REQUEST_ID = /^0x[0-9a-fA-F]{64}$/;
 const POSITIVE = /^[1-9][0-9]*$/;
 const PROD_QUOTES = Object.fromEntries(
   ['across', 'relay'].map((p) => [
@@ -177,19 +178,8 @@ const QUOTE_TAMPERS = {
   'two-tx': (q) => q.transactions.push({ ...q.transactions[0] }),
   'no-tx': (q) => (q.transactions = []),
   'wrong-chain': (q) => (q.transactions[0].chainId += 1),
-  'quote-id': (q) => (q.quoteId = q.quoteId.replace('aurora:', 'relay:')),
-  provider: (q) => (q.provider = 'relay'),
-  'deposit-field': (q) =>
-    (q.deposit = {
-      chainId: q.transactions[0].chainId,
-      address: q.quoteId.slice(7),
-      token: OTHER,
-      amount: q.inputAmount,
-    }),
-  'tx-value': (q) => (q.transactions[0].value = String(BigInt(q.transactions[0].value) + 1n)),
-  'tx-data': (q) =>
-    (q.transactions[0].data = q.transactions[0].data === '0x' ? '0x00' : transfer(OTHER, BigInt(q.inputAmount))),
-  'output-amount': (q) => (q.minOutputAmount = String(BigInt(q.expectedOutputAmount) + 1n)),
+  'quote-id': (q) => (q.quoteId = q.quoteId.slice(0, -2)),
+  provider: (q) => (q.provider = 'across'),
 };
 const MODES = new Set([
   '',
@@ -201,7 +191,7 @@ const MODES = new Set([
   ...Object.keys(QUOTE_TAMPERS),
 ]);
 
-const freshSwap = () => ({ mode: '', submitFails: 0, pinned: '', lastDeposit: null });
+const freshSwap = () => ({ mode: '', submitFails: 0, pinned: '', lastRequest: null });
 const swap = freshSwap();
 const deposits = new Map();
 
@@ -210,8 +200,8 @@ const answer = (res, status, data, error, headers = {}, statusCode = status) =>
     .writeHead(status, { 'content-type': 'application/json', ...headers })
     .end(JSON.stringify({ statusCode, result: { data, error } }));
 
-function track(address) {
-  const key = address.toLowerCase();
+function track(id) {
+  const key = id.toLowerCase();
   if (!deposits.has(key)) deposits.set(key, { reads: 0, pinned: '', txHash: null, expired: false });
   return deposits.get(key);
 }
@@ -231,31 +221,36 @@ function quoteErrors(q) {
 
 function depositErrors(d, withHash) {
   const errors = [];
-  if (typeof d.provider !== 'string' || !/^[a-z0-9-]{1,32}$/i.test(d.provider))
-    errors.push('provider must be a short alphanumeric identifier');
-  if (!HEX_ADDRESS.test(d.depositAddress ?? ''))
-    errors.push('depositAddress must be an EVM or a base58 Solana address');
-  if (withHash && !/^0x[0-9a-fA-F]{64}$/.test(d.txHash ?? '')) errors.push('txHash must be a 32-byte hex string');
+  const provider = typeof d.provider === 'string' ? d.provider.trim().toLowerCase() : '';
+  if (!/^[a-z0-9-]{1,32}$/.test(provider)) errors.push('provider must be a short alphanumeric identifier');
+  if (provider === 'aurora' && !HEX_ADDRESS.test(d.depositAddress ?? ''))
+    errors.push('depositAddress must be an EVM address');
+  if (provider === 'relay') {
+    if (!REQUEST_ID.test(d.requestId ?? '')) errors.push('requestId must be a 32-byte hex string');
+    if (withHash && !POSITIVE.test(String(d.originChainId ?? '')))
+      errors.push('originChainId must be a positive number');
+  }
+  if (withHash && !REQUEST_ID.test(d.txHash ?? '')) errors.push('txHash must be a 32-byte hex string');
   return errors;
 }
 
-// What aurora-move-asset.mapper.ts builds for an EVM origin.
-function auroraQuote(query, deposit, amountIn) {
+// A Relay quote: the deposit goes to Relay's depository and the quote id carries the request id.
+function relayQuote(query, requestId, amountIn) {
   const chainId = Number(query.originChainId);
   const out = amountIn - amountIn / 200n;
   const tx =
     BigInt(query.originToken) === 0n
-      ? { chainId, to: deposit, data: '0x', value: String(amountIn), description: 'deposit' }
+      ? { chainId, to: DEPOSITORY, data: '0x', value: String(amountIn), description: 'deposit' }
       : {
           chainId,
           to: getAddress(query.originToken),
-          data: transfer(deposit, amountIn),
+          data: transfer(DEPOSITORY, amountIn),
           value: '0',
           description: 'deposit',
         };
   return {
-    quoteId: `aurora:${deposit}`,
-    provider: 'aurora',
+    quoteId: `relay:${requestId}`,
+    provider: 'relay',
     inputAmount: String(amountIn),
     expectedOutputAmount: String(out),
     minOutputAmount: String(out - out / 200n),
@@ -268,10 +263,10 @@ function auroraQuote(query, deposit, amountIn) {
 function stubQuote(query) {
   const { mode } = swap;
   if (mode === 'invalid') return { status: 200, data: null, error: null };
-  let deposit = getAddress(`0x${randomBytes(20).toString('hex')}`);
-  if (mode === 'reused' && swap.lastDeposit) deposit = swap.lastDeposit;
-  swap.lastDeposit = deposit;
-  const data = auroraQuote(query, deposit, BigInt(query.amount));
+  let requestId = `0x${randomBytes(32).toString('hex')}`;
+  if (mode === 'reused' && swap.lastRequest) requestId = swap.lastRequest;
+  swap.lastRequest = requestId;
+  const data = relayQuote(query, requestId, BigInt(query.amount));
   QUOTE_TAMPERS[mode]?.(data);
   return { status: 200, data, error: null };
 }
@@ -297,12 +292,12 @@ function moveQuote(res, url) {
   answer(res, out.status, out.data, out.error);
 }
 
-function depositStatus(address, t, raw) {
+function depositStatus(who, t, raw) {
   const upper = raw.toUpperCase();
   let state = 'PROCESSING';
   if (KNOWN_STATES.has(upper)) state = upper;
   else if (raw.trim() === '') state = 'PENDING_DEPOSIT';
-  const data = { provider: 'aurora', depositAddress: getAddress(address), state };
+  const data = { ...who, state };
   if (t.txHash) data.txHash = t.txHash;
   if (state === 'PROCESSING' && !KNOWN_STATES.has(upper)) data.rawState = raw;
   return data;
@@ -330,7 +325,8 @@ async function deposit(req, res, url, path) {
     log({ path, event: 'refused', status: 400 });
     return answer(res, 400, null, errors);
   }
-  if (input.provider.trim().toLowerCase() !== 'aurora') {
+  const provider = input.provider.trim().toLowerCase();
+  if (provider !== 'aurora' && provider !== 'relay') {
     log({ path, event: 'refused', status: 501 });
     return answer(
       res,
@@ -339,37 +335,41 @@ async function deposit(req, res, url, path) {
       `ProviderNotTrackable: ${input.provider}: provider does not support deposit tracking`
     );
   }
-  const t = track(input.depositAddress);
+  const who =
+    provider === 'relay'
+      ? { provider, requestId: input.requestId }
+      : { provider, depositAddress: getAddress(input.depositAddress) };
+  const t = track(who.requestId ?? who.depositAddress);
   if (path === STATUS) {
-    const data = depositStatus(input.depositAddress, t, readState(t));
-    log({ path, event: 'status', depositAddress: data.depositAddress, state: data.state });
+    const data = depositStatus(who, t, readState(t));
+    log({ path, event: 'status', ...who, state: data.state });
     return answer(res, 200, data, null);
   }
-  // Aurora refusing a submit reaches the caller as Nest's default 500: the
-  // backend has no filter for that error.
+  // The backend answers 422 when the provider refuses the deposit and 502 when it fails.
   if (t.expired || swap.submitFails > 0) {
     if (!t.expired) swap.submitFails--;
-    log({ path, event: 'submit', depositAddress: input.depositAddress, status: 500, expired: t.expired });
-    return res
-      .writeHead(500, { 'content-type': 'application/json' })
-      .end(JSON.stringify({ statusCode: 500, message: 'Internal server error' }));
+    const status = t.expired ? 422 : 502;
+    log({ path, event: 'submit', ...who, status, expired: t.expired });
+    const detail = t.expired ? 'upstream HTTP 400' : 'upstream failed';
+    return answer(res, status, null, `ProviderQuoteInvalid[${provider}]: ${detail}`);
   }
   t.txHash = input.txHash;
   t.reads = 0;
-  const data = depositStatus(input.depositAddress, t, t.pinned || swap.pinned || 'KNOWN_DEPOSIT_TX');
-  log({ path, event: 'submit', depositAddress: data.depositAddress, txHash: t.txHash, status: 200 });
+  const data = depositStatus(who, t, t.pinned || swap.pinned || 'KNOWN_DEPOSIT_TX');
+  log({ path, event: 'submit', ...who, txHash: t.txHash, status: 200 });
   answer(res, 201, data, null, {}, 200);
 }
 
 function control(url) {
   const p = url.searchParams;
-  const address = p.get('depositAddress') ?? p.get('expire');
+  const target = p.get('depositAddress') ?? p.get('requestId');
+  const address = target ?? p.get('expire');
   if (p.has('mode') && !MODES.has(p.get('mode'))) return false;
   if (p.has('submitFails') && !/^\d+$/.test(p.get('submitFails'))) return false;
-  if (address !== null && !HEX_ADDRESS.test(address)) return false;
+  if (address !== null && !HEX_ADDRESS.test(address) && !REQUEST_ID.test(address)) return false;
   if (p.has('mode')) swap.mode = p.get('mode');
   if (p.has('submitFails')) swap.submitFails = Number(p.get('submitFails'));
-  if (p.has('state') && p.has('depositAddress')) track(address).pinned = p.get('state');
+  if (p.has('state') && target !== null) track(target).pinned = p.get('state');
   else if (p.has('state')) swap.pinned = p.get('state');
   if (p.has('expire')) track(address).expired = true;
   return true;

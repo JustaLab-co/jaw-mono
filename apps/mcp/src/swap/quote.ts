@@ -122,7 +122,6 @@ async function keepQuote(
       code: null,
       quotedAt: askedAt,
       quoteId: checked.quoteId,
-      depositAddress: checked.depositAddress,
       quote: checked.quote,
       call: checked.calls,
       quoteFenced: fenced,
