@@ -34,6 +34,8 @@ services:
       JAW_MCP_PUBLIC_URL: ${JAW_MCP_PUBLIC_URL:-}
       JAW_KEYS_URL: ${JAW_KEYS_URL:-}
       JAW_MCP_API_KEY: ${JAW_MCP_API_KEY:-}
+      # Set as in production so boot runs its check; JAW_MCP_ENS= (empty) leaves it unset.
+      JAW_MCP_ENS: ${JAW_MCP_ENS-justan.id}
       JAW_MCP_INSECURE_FETCH_HOSTS: ${JAW_MCP_INSECURE_FETCH_HOSTS:-},localhost:${PORT}
       JAW_MCP_SWAP_URL: ${JAW_MCP_SWAP_URL:-http://localhost:${PORT}/proxy/v2}
       # The key the seller's swap stub lets through without payment.
