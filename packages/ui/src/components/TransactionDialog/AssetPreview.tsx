@@ -1,7 +1,13 @@
-import { useEffect, useState } from 'react';
-import { ethAddress } from 'viem';
-import { ArrowDownLeft, ArrowUpRight, ChevronDown, TriangleAlert } from 'lucide-react';
+import { useEffect, useState, type ReactNode } from 'react';
+import { ethAddress, formatUnits, zeroAddress } from 'viem';
+import { ArrowDownLeft, ArrowUpRight, ChevronDown } from 'lucide-react';
 import { AssetDelta, formatAssetAmount } from '../../utils/assetPreview';
+import { BRIDGE_CHAINS } from '../../utils/bridgeCalls/contracts';
+import { PROVIDER_NAME, type BridgeTransfer } from '../../utils/bridgeCalls/transfer';
+import type { Received, TokenAmount } from '../../utils/bridgeCalls/view';
+import { useChainIcons } from '../../hooks/useChainIcons';
+import { ChainIcon } from '../AddFundsDialog/ChainIcon';
+import { WarningNotice } from '../primitives';
 import { fetchTokenPrice } from '../../utils/tokenPrice';
 import { formatAddress } from '../../utils/formatAddress';
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '../ui/tooltip';
@@ -21,7 +27,12 @@ interface AssetPreviewProps {
    * the calls run as the granter. The columns must not say "you".
    */
   onBehalf?: boolean;
+  /** Source of "You get": the simulation cannot see the other chain. */
+  bridge?: BridgeTransfer;
+  apiKey?: string;
 }
+
+type ChainBadge = { name: string; icon?: string };
 
 /** Rows shown before the "+N" overflow toggle kicks in. */
 const COLLAPSED_ROWS = 2;
@@ -35,16 +46,42 @@ function formatUsd(value: number): string {
   return `$${value.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
 }
 
+function TokenWithChain({
+  chainId,
+  address,
+  symbol,
+  chain,
+}: {
+  chainId?: number;
+  address: string;
+  symbol: string;
+  chain?: ChainBadge;
+}) {
+  return (
+    <span className="size-token relative flex-none">
+      <TokenIcon chainId={chainId} address={address} symbol={symbol} className="size-token" />
+      {chain && (
+        <span className="bg-popover absolute -bottom-0.5 -right-0.5 rounded-full p-px" title={`On ${chain.name}`}>
+          <ChainIcon icon={chain.icon} size={10} />
+          <span className="sr-only">on {chain.name}</span>
+        </span>
+      )}
+    </span>
+  );
+}
+
 function AssetRow({
   delta,
   nativeSymbol,
   chainId,
   price,
+  chain,
 }: {
   delta: AssetDelta;
   nativeSymbol: string;
   chainId?: number;
   price?: number;
+  chain?: ChainBadge;
 }) {
   const out = delta.direction === 'out';
   const sign = out ? '−' : '+';
@@ -65,11 +102,11 @@ function AssetRow({
     // A fixed row height keeps the two columns' rows on the same baseline: an ERC-20 row carries
     // an address sub-line and a native row doesn't, so without it they drift apart when expanded.
     <div className="flex min-h-[34px] flex-row items-center gap-1.5">
-      <TokenIcon
+      <TokenWithChain
         chainId={chainId}
         address={delta.isNative ? ethAddress : delta.address}
         symbol={symbol}
-        className="size-token flex-none"
+        chain={chain}
       />
       <div className="flex min-w-0 flex-1 flex-col">
         <span className="text-foreground text-symbol truncate">{symbol}</span>
@@ -112,6 +149,9 @@ function DeltaColumn({
   chainId,
   prices,
   onBehalf,
+  chain,
+  heading,
+  children,
 }: {
   direction: 'out' | 'in';
   deltas: AssetDelta[];
@@ -120,6 +160,10 @@ function DeltaColumn({
   prices: Record<string, number>;
   /** The balances belong to another account (a permissioned execution), so not "you". */
   onBehalf?: boolean;
+  chain?: ChainBadge;
+  /** Replaces the default heading, for funds that go to someone else. */
+  heading?: string;
+  children?: ReactNode;
 }) {
   const [expanded, setExpanded] = useState(false);
   const out = direction === 'out';
@@ -134,7 +178,7 @@ function DeltaColumn({
         <span className="text-foreground text-heading">
           {/* Under a permission the funds move from the granter, not the signer reading this —
               the subject is dropped and the "On behalf of" row above says whose they are. */}
-          {onBehalf ? (out ? 'Sends' : 'Receives') : out ? 'You send' : 'You get'}
+          {heading ?? (onBehalf ? (out ? 'Sends' : 'Receives') : out ? 'You send' : 'You get')}
         </span>
         {overflow > 0 && (
           <button
@@ -148,6 +192,7 @@ function DeltaColumn({
         )}
       </div>
       <div className="flex flex-col gap-3 p-2">
+        {children}
         {shown.map((d) => (
           <AssetRow
             key={`${direction}-${d.address}`}
@@ -155,6 +200,7 @@ function DeltaColumn({
             nativeSymbol={nativeSymbol}
             chainId={chainId}
             price={prices[symbolFor(d, nativeSymbol)]}
+            chain={chain}
           />
         ))}
       </div>
@@ -162,7 +208,136 @@ function DeltaColumn({
   );
 }
 
-export const AssetPreview = ({ assetsOut, assetsIn, error, nativeSymbol, chainId, onBehalf }: AssetPreviewProps) => {
+const SIMULATION_FAILED =
+  'Could not simulate this transaction. Balance changes are unknown; review each call before you approve.';
+
+// An unknown token has no decimals to scale by, so it gets no delta and SentRow shows base units.
+const sentDeltas = ({ amount, token }: TokenAmount): AssetDelta[] =>
+  token.known
+    ? [
+        {
+          address: token.address,
+          symbol: token.symbol,
+          decimals: token.decimals,
+          diff: amount,
+          direction: 'out',
+          amountFormatted: formatUnits(amount, token.decimals),
+          isNative: token.address === zeroAddress,
+        },
+      ]
+    : [];
+
+// Cut, not rounded: a minimum must never read higher than it is. Four decimals, or four
+// significant digits when the amount is smaller than that.
+function floorAmount(exact: string): string {
+  const [whole, fraction = ''] = exact.split('.');
+  const leading = fraction.search(/[1-9]/);
+  const digits = whole === '0' && leading >= 4 ? leading + 4 : 4;
+  const cut = fraction.slice(0, digits).replace(/0+$/, '');
+  return cut ? `${whole}.${cut}` : whole;
+}
+
+function SentRow({ send: { chainId, amount, token }, chain }: { send: TokenAmount; chain?: ChainBadge }) {
+  const short = formatAddress(token.address);
+  return (
+    <div className="flex flex-row items-start gap-1.5">
+      <TokenWithChain chainId={chainId} address={token.address} symbol={short} chain={chain} />
+      <div className="flex min-w-0 flex-1 flex-col">
+        <span className="text-foreground text-symbol truncate">{short}</span>
+        <span className="text-value text-negative break-all font-mono">−{amount.toString()} base units</span>
+      </div>
+    </div>
+  );
+}
+
+const receivedChainId = (receive: Received) => (receive.kind === 'minimum' ? receive.amount.chainId : receive.chainId);
+
+function ReceivedRow({ receive, via, chain }: { receive: Received; via: string; chain?: ChainBadge }) {
+  const chainId = receivedChainId(receive);
+  const token = receive.kind === 'minimum' ? receive.amount.token : receive.token;
+  const symbol = token.known ? token.symbol : formatAddress(token.address);
+  const address = token.address === zeroAddress ? ethAddress : token.address;
+
+  return (
+    <div className="flex flex-row items-start gap-1.5">
+      <TokenWithChain chainId={chainId} address={address} symbol={symbol} chain={chain} />
+      <div className="flex min-w-0 flex-1 flex-col">
+        <span className="text-foreground text-symbol truncate">{symbol}</span>
+        {receive.kind === 'minimum' ? (
+          <span className="text-value text-positive break-all font-mono">
+            ≥ <SubText>{minimumText(receive.amount)}</SubText>
+          </span>
+        ) : (
+          <span className="text-warning text-body-xs">Amount set by a swap on {BRIDGE_CHAINS[chainId].name}</span>
+        )}
+        <span className="text-muted-foreground text-body-xs">{via}</span>
+      </div>
+    </div>
+  );
+}
+
+function minimumText({ amount, token }: TokenAmount): string {
+  return token.known ? floorAmount(formatUnits(amount, token.decimals)) : `${amount} base units`;
+}
+
+function BridgeColumns({
+  bridge,
+  assetsOut,
+  assetsIn,
+  apiKey,
+  ...columnProps
+}: {
+  bridge: BridgeTransfer;
+  assetsOut: AssetDelta[];
+  assetsIn: AssetDelta[];
+  apiKey?: string;
+  nativeSymbol: string;
+  chainId?: number;
+  prices: Record<string, number>;
+  onBehalf?: boolean;
+}) {
+  const icons = useChainIcons(apiKey);
+  const { send, receive, provider, otherRecipient } = bridge;
+  const simulated = assetsOut.length > 0;
+  const crossChain = !!receive && receivedChainId(receive) !== send.chainId;
+  const badge = (chainId: number) =>
+    crossChain ? { name: BRIDGE_CHAINS[chainId].name, icon: icons[chainId] } : undefined;
+  const origin = badge(send.chainId);
+
+  return (
+    <div className="flex items-stretch gap-3">
+      <DeltaColumn direction="out" deltas={simulated ? assetsOut : sentDeltas(send)} chain={origin} {...columnProps}>
+        {!simulated && !send.token.known && <SentRow send={send} chain={origin} />}
+      </DeltaColumn>
+      {receive && (
+        <DeltaColumn
+          direction="in"
+          deltas={assetsIn}
+          chain={origin}
+          heading={otherRecipient && `${formatAddress(otherRecipient)} gets`}
+          {...columnProps}
+        >
+          <ReceivedRow
+            receive={receive}
+            via={`via ${PROVIDER_NAME[provider]}`}
+            chain={badge(receivedChainId(receive))}
+          />
+        </DeltaColumn>
+      )}
+    </div>
+  );
+}
+
+export const AssetPreview = ({
+  assetsOut,
+  assetsIn,
+  error,
+  nativeSymbol,
+  chainId,
+  onBehalf,
+  bridge,
+  apiKey,
+}: AssetPreviewProps) => {
   const [prices, setPrices] = useState<Record<string, number>>({});
 
   useEffect(() => {
@@ -177,19 +352,23 @@ export const AssetPreview = ({ assetsOut, assetsIn, error, nativeSymbol, chainId
     };
   }, [assetsOut, assetsIn, nativeSymbol]);
 
-  if (error) {
+  const columnProps = { nativeSymbol, chainId, prices, onBehalf };
+  if (bridge) {
     return (
-      <div role="alert" className="border-warning/40 bg-warning/10 rounded-box flex items-start gap-2 border p-3">
-        <TriangleAlert className="text-warning mt-px size-3.5 flex-none" strokeWidth={2} />
-        <p className="text-foreground text-body-sm">
-          Could not simulate this transaction. Balance changes are unknown; review each call before you approve.
-        </p>
-      </div>
+      <>
+        {error && <WarningNotice messages={[SIMULATION_FAILED]} />}
+        <BridgeColumns
+          bridge={bridge}
+          assetsOut={error ? [] : assetsOut}
+          assetsIn={error ? [] : assetsIn}
+          apiKey={apiKey}
+          {...columnProps}
+        />
+      </>
     );
   }
+  if (error) return <WarningNotice messages={[SIMULATION_FAILED]} />;
   if (assetsOut.length === 0 && assetsIn.length === 0) return null;
-
-  const columnProps = { nativeSymbol, chainId, prices, onBehalf };
 
   // Both directions sit side by side (the swap/supply shape); a one-sided change takes
   // the full width rather than leaving a gap.
