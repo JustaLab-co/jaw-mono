@@ -4,7 +4,7 @@ import type { McpServer } from '@modelcontextprotocol/server';
 import { and, eq } from 'drizzle-orm';
 import { getAddress, isAddress, numberToHex, type Address, type Hex } from 'viem';
 import { z } from 'zod';
-import { chainClients, sessionBridge } from '@/adapters/session-host';
+import { chainClients, feeTokenOf, sessionBridge } from '@/adapters/session-host';
 import { tenant, type Tenant } from '@/connections/auth';
 import { isLive } from '@/connections/rows';
 import { spends } from '@/connections/scopes';
@@ -212,7 +212,7 @@ async function grantFor(t: Tenant, run: Run): Promise<ToolResult | { grant: Live
       `no-grant: ${run.permissionId} is this connection's x402 budget, which pays x402 services only. Execute under a custom grant from jaw_grant_permissions.${NOTHING_SENT}`
     );
   }
-  const bridge = sessionBridge(t, grant);
+  const bridge = sessionBridge(t, grant, await feeTokenOf(grant));
   if (!bridge) return refusal('This server has no paymaster key, so it cannot pay the fee to send.');
   return { grant, bridge };
 }

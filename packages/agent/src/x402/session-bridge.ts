@@ -50,7 +50,8 @@ function resolvePaymaster(
   // A chain the registry does not cover has no token to name, so fall back to
   // sending with no paymaster rather than engaging one that must fail.
   const asset = usdcForNetwork(`eip155:${options.chainId}`);
-  if (!asset) {
+  const context = options.paymasterContext ?? (asset && { token: asset.address });
+  if (!context) {
     // Say so rather than falling through quietly: the userOp goes out with no
     // paymaster, and the failure the user eventually sees is about native funds
     // and mentions none of this.
@@ -65,7 +66,7 @@ function resolvePaymaster(
   const url = new URL(JAW_ERC20_PAYMASTER_URL);
   url.searchParams.set('chainId', String(options.chainId));
   url.searchParams.set('api-key', options.apiKey);
-  return { paymasterUrl: url.toString(), paymasterContext: { token: asset.address } };
+  return { paymasterUrl: url.toString(), paymasterContext: context };
 }
 
 /**
@@ -76,6 +77,7 @@ function resolvePaymaster(
  */
 async function warnOnFeeTokenDrift(options: SessionBridgeOptions): Promise<void> {
   if (options.paymasterUrl && !options.paymasterUrl.startsWith(JAW_ERC20_PAYMASTER_URL)) return;
+  if (options.paymasterContext) return;
   const asset = usdcForNetwork(`eip155:${options.chainId}`);
   if (!asset || !options.apiKey) return;
   const warning = await whyFeeTokenDisagrees(asset, options.apiKey);

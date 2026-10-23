@@ -83,32 +83,38 @@ async function sendCalls(calls: Wire[], onSigned: (hash: Hex) => Promise<void>) 
   return { id: bridge.answeredHash ?? id, chainId: 84532 };
 }
 
+const fee = vi.hoisted(() => ({ token: undefined as string | undefined, seen: undefined as string | undefined }));
+
 vi.mock('@/adapters/session-host', async (original) => ({
   ...(await original<object>()),
-  sessionBridge: () => ({
-    request: async (method: string, params: unknown, onSigned: (hash: Hex) => Promise<void>) => {
-      if (method === 'wallet_sendCalls') return sendCalls((params as [{ calls: Wire[] }])[0].calls, onSigned);
-      if (bridge.receiptGate) await bridge.receiptGate;
-      const id = params as Hex;
-      const calls = bridge.signed[Number(BigInt(id)) - 1];
-      if (bridge.outcome === 'pending') {
-        vi.setSystemTime(Date.now() + RECEIPT_MS + 1_000);
-        return undefined;
-      }
-      if (bridge.outcome !== 'landed') {
-        return {
-          status: 500,
-          receipts: [{ transactionHash: TX, logs: bridge.outcome.logs }],
-        };
-      }
-      if (!chain.userOps.some((op) => op.userOpHash === id)) {
-        for (const c of calls)
-          chain.spent += decodeFunctionData({ abi: erc20Abi, data: c.data as Hex }).args[1] as bigint;
-        chain.userOps.push({ userOpHash: id, sender: BOB, success: true, blockNumber: chain.head });
-      }
-      return { status: 200, receipts: [{ transactionHash: TX, logs: [] }] };
-    },
-  }),
+  feeTokenOf: async () => fee.token,
+  sessionBridge: (_t: unknown, _grant: unknown, feeToken?: string) => {
+    fee.seen = feeToken;
+    return {
+      request: async (method: string, params: unknown, onSigned: (hash: Hex) => Promise<void>) => {
+        if (method === 'wallet_sendCalls') return sendCalls((params as [{ calls: Wire[] }])[0].calls, onSigned);
+        if (bridge.receiptGate) await bridge.receiptGate;
+        const id = params as Hex;
+        const calls = bridge.signed[Number(BigInt(id)) - 1];
+        if (bridge.outcome === 'pending') {
+          vi.setSystemTime(Date.now() + RECEIPT_MS + 1_000);
+          return undefined;
+        }
+        if (bridge.outcome !== 'landed') {
+          return {
+            status: 500,
+            receipts: [{ transactionHash: TX, logs: bridge.outcome.logs }],
+          };
+        }
+        if (!chain.userOps.some((op) => op.userOpHash === id)) {
+          for (const c of calls)
+            chain.spent += decodeFunctionData({ abi: erc20Abi, data: c.data as Hex }).args[1] as bigint;
+          chain.userOps.push({ userOpHash: id, sender: BOB, success: true, blockNumber: chain.head });
+        }
+        return { status: 200, receipts: [{ transactionHash: TX, logs: [] }] };
+      },
+    };
+  },
 }));
 
 const node = vi.hoisted(() => ({
@@ -265,6 +271,21 @@ describe('jaw_session_execute', () => {
         txHash: TX,
       }),
     ]);
+  });
+
+  it('builds the bridge with the fee token the grant resolves to', async () => {
+    const { c, permissionId } = await withCustomGrant();
+    fee.token = USDC;
+
+    try {
+      await execute(c.access_token, permissionId, [transfer(BOB, 1n)]);
+      expect(fee.seen).toBe(USDC);
+      fee.token = undefined;
+      await execute(c.access_token, permissionId, [transfer(BOB, 1n)]);
+      expect(fee.seen).toBeUndefined();
+    } finally {
+      fee.token = undefined;
+    }
   });
 
   it('refuses a call to another address as call-not-allowed and sends no userOp', async () => {

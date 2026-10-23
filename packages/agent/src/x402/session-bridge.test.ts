@@ -137,6 +137,41 @@ describe('SessionBridge and the host', () => {
     );
   });
 
+  it('pays the fee in the registry USDC when no token is named', async () => {
+    await send(bridge());
+
+    expect(Account.fromLocalAccount).toHaveBeenCalledWith(
+      expect.objectContaining({
+        paymasterUrl: expect.stringContaining('erc20-paymaster'),
+        paymasterContext: { token: USDC_BASE_SEPOLIA },
+      }),
+      expect.anything(),
+      { eip7702: true }
+    );
+  });
+
+  it('pays the fee in the token it is given, through the same paymaster', async () => {
+    const token = '0x4200000000000000000000000000000000000006';
+    await send(
+      new SessionBridge({
+        apiKey: 'key',
+        chainId: 84532,
+        host: host(),
+        logger: { warn: vi.fn() },
+        paymasterContext: { token },
+      })
+    );
+
+    expect(Account.fromLocalAccount).toHaveBeenCalledWith(
+      expect.objectContaining({
+        paymasterUrl: expect.stringContaining('erc20-paymaster'),
+        paymasterContext: { token },
+      }),
+      expect.anything(),
+      { eip7702: true }
+    );
+  });
+
   it('retries once under the key the host offers for the one that was refused', async () => {
     const refused = new Error('refused');
     sendCalls.mockRejectedValueOnce(refused);

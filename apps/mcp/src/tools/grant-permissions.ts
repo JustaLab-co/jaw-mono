@@ -148,6 +148,8 @@ function asked(t: Tenant, input: GrantInput, expiry: number): Asked | string {
     expiry,
     chainId: numberToHex(t.chainId),
     permissions: { calls, spends: spent },
+    // The session pays its own first op's fee from what the wallet sends along.
+    capabilities: { prefundSpender: true },
   };
   return { kind: 'custom', grant, what: `${calls.length} call(s) and ${spent.length} spend limit(s)` };
 }
