@@ -292,7 +292,7 @@ export const swaps = pgTable(
     depositAddress: text('deposit_address'),
     quote: jsonb('quote'),
     quoteFenced: text('quote_fenced'),
-    call: jsonb('call').$type<{ chainId: number; to: string; data: string; value: string }>(),
+    call: jsonb('call'),
     walletUrl: text('wallet_url'),
     approveBy: timestamp('approve_by', { withTimezone: true }),
     sessionUntil: timestamp('session_until', { withTimezone: true }),
