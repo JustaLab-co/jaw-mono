@@ -1,4 +1,5 @@
 import { base, baseSepolia, type Chain } from 'viem/chains';
+import { normalize } from 'viem/ens';
 import { refusal } from '@/lib/safe-fetch';
 import { parseKeyRing, type KeyRing } from './seal';
 
@@ -10,6 +11,8 @@ export interface Config {
   /** Where the owner's wallet opens: keys.jaw.id, whose cli-bridge page answers over the relay. */
   keysOrigin: string;
   relayUrl: string;
+  /** The ENS name the wallet page issues new accounts' subnames under, through the page's own api key. */
+  ens: string | undefined;
   chain: Chain;
   rpcUrl: string | undefined;
   mainnetRpcUrl: string | undefined;
@@ -45,6 +48,7 @@ export function config(): Config {
     resource: `${issuer}/mcp`,
     keysOrigin: new URL(required('JAW_KEYS_URL')).origin,
     relayUrl: process.env.JAW_RELAY_URL || 'wss://relay.jaw.id',
+    ens: ensName(process.env.JAW_MCP_ENS || undefined),
     chain,
     rpcUrl: process.env.JAW_MCP_RPC_URL || undefined,
     mainnetRpcUrl: process.env.JAW_MCP_MAINNET_RPC_URL || undefined,
@@ -79,6 +83,18 @@ function required(name: string): string {
 function baseUnits(name: string, value: string): bigint {
   if (!/^\d+$/.test(value)) throw new Error(`${name} must be whole base units, such as 250000 for 0.25 USDC`);
   return BigInt(value);
+}
+
+function ensName(value: string | undefined): string | undefined {
+  if (value === undefined) return undefined;
+  let name: string;
+  try {
+    name = normalize(value.trim());
+  } catch {
+    name = '';
+  }
+  if (!name.includes('.')) throw new Error('JAW_MCP_ENS must be an ENS name, such as agents.jaw.eth');
+  return name;
 }
 
 export const QUOTE_MARGIN_SEC = 60;
