@@ -100,6 +100,8 @@ Every request lands in `seller.log`: `challenge`, `payment`, `spent`, `replay`, 
 
 The allowlist the built quotes use is checked against the live sources by `bun tools/verify/swap-allowlist.mts`: it diffs `apps/mcp/src/swap/allowlist.ts` against Across `deployed-addresses.json`, the AcrossEventEmitter files and Relay `/chains` (mainnet and testnet), and exits 1 on any difference. It needs the network and is not part of the test suite; run it before a lane that builds Across or Relay quotes, and save its output with the lane's evidence.
 
+The `Swap allowlist` workflow (`.github/workflows/swap-allowlist.yml`) runs it every Monday and on manual dispatch, and on a difference or a failed fetch opens one issue titled `Swap allowlist differs from Across or Relay`, or rewrites the body of the open one.
+
 MCP stdio, tool calls run in order and each waits for its response:
 
 ```bash
