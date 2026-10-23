@@ -14,8 +14,8 @@ import {
 } from 'viem';
 import { z } from 'zod';
 import { ALLOWLIST, MAX_ROUTE_COST_BPS, TESTNET_MAX_ROUTE_COST_BPS, type RelayContracts } from '../allowlist';
-import type { BackendQuote, CheckCode, CheckDeps, CheckResult, QuoteRequest, SwapCall } from '../check';
-import { amountsCode, floorCode, routeOf } from './shared';
+import type { BackendQuote, CheckCode, CheckDeps, CheckResult, QuoteRequest, Refused, SwapCall } from '../check';
+import { amountsCode, floorRefusal, routeOf } from './shared';
 
 // EIP-712 types of a Relay order, from relay-settlement packages/sdk/src/order/index.ts.
 const ORDER_TYPES = {
@@ -136,7 +136,7 @@ export function relayOrderId(data: unknown): Hex | undefined {
   return parsed.success ? idOf(parsed.data) : undefined;
 }
 
-export type RelayOrderResult = { ok: true; orderId: Hex; deadline: number } | { ok: false; code: CheckCode };
+export type RelayOrderResult = { ok: true; orderId: Hex; deadline: number } | Refused;
 
 const relayQuoteId = /^relay:0x[0-9a-fA-F]{64}$/;
 const MAX_ORDER_LIFETIME_SEC = 7 * 86_400 + 3_600;
@@ -156,8 +156,8 @@ export function checkRelayOrder(request: QuoteRequest, quote: BackendQuote, now:
   if (request.originChainId === request.destinationChainId) return fail('destination_chain');
 
   const maxCostBps = origin.testnet ? TESTNET_MAX_ROUTE_COST_BPS : MAX_ROUTE_COST_BPS;
-  const floor = floorCode(request, BigInt(quote.minOutputAmount), maxCostBps);
-  if (floor) return fail(floor);
+  const floor = floorRefusal(request, BigInt(quote.minOutputAmount), maxCostBps);
+  if (floor) return floor;
 
   if (quote.relayOrder === undefined) return fail('order_missing');
   const parsed = relayOrder.safeParse(quote.relayOrder);

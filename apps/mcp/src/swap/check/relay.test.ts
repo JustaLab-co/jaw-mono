@@ -317,6 +317,15 @@ describe('checkRelayOrder', () => {
       expect(codeOf(minimum(min))).toBe('output_floor');
     });
 
+    it('when the minimum is 9699999, then the refusal carries the minimum offered and the floor', () => {
+      expect(checkRelayOrder(usdcRequest, minimum('9699999'), QUOTED_AT)).toEqual({
+        ok: false,
+        code: 'output_floor',
+        offered: '9699999',
+        floor: '9700000',
+      });
+    });
+
     it('when re_usdc_fee is re-signed for a minimum 1 below the floor, then it fails with output_floor', () => {
       const quote = quoteOf(usdcFeeAnswer);
       quote.minOutputAmount = '9699999';
@@ -514,6 +523,16 @@ describe('checkQuote with a Relay answer as the backend sends it', () => {
     const result = await checkQuote(request, body, d);
     return result.ok ? 'passed' : result.code;
   };
+
+  it('given the USDC quote and a request for native ETH, when checked, then the refusal names relay', async () => {
+    const request = { ...usdcRequest, destinationToken: zeroAddress };
+
+    expect(await checkQuote(request, bodyOf(usdcAnswer), deps())).toEqual({
+      ok: false,
+      code: 'route_unsupported',
+      provider: 'relay',
+    });
+  });
 
   describe('given the live USDC quote from Base to Arbitrum with its approve and deposit', () => {
     it('when checked, then it passes with the approve rebuilt for the Depository and the deposit bytes kept', async () => {

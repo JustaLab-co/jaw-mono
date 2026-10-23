@@ -321,7 +321,29 @@ describe('the providers the quote asks for', () => {
     const step = await quote(t, await claimed(t, 'agent-key', swap), deps());
 
     expect(asked()).toEqual(['aurora']);
-    expect(step).toMatchObject({ row: { state: 'quote_rejected', code: 'route_unsupported', call: null } });
+    expect(step).toMatchObject({
+      row: { state: 'quote_rejected', code: 'route_unsupported', call: null, quote: { provider: 'across' } },
+    });
+  });
+
+  it('given across answers a minimum of 1 base unit for 10 USDC, when the quote is asked, then the refused row keeps the provider, the minimum offered and the floor', async () => {
+    config().swapProviders = ALL_PROVIDERS;
+    const answer = structuredClone(acrossAnswer);
+    answer.result.data.minOutputAmount = '1';
+    backend.answer = answer;
+    const t = await connected();
+    const swap = { ...input, originChainId: 8453, originToken: BASE_USDC, amount: '10000000' };
+
+    const step = await quote(t, await claimed(t, 'agent-key', swap), deps());
+
+    expect(step).toMatchObject({
+      row: {
+        state: 'quote_rejected',
+        code: 'output_floor',
+        call: null,
+        quote: { provider: 'across', offered: '1', floor: '9700000' },
+      },
+    });
   });
 });
 

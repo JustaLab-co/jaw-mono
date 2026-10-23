@@ -16,7 +16,8 @@ import { randomToken } from '@/lib/token';
 import { PROVIDER_DISABLED } from '@/swap/approve';
 import type { BackendDeps } from '@/swap/backend';
 import { CALL_INVALID, callsOf } from '@/swap/calls';
-import { isSupportedOriginChain, type CheckedQuote } from '@/swap/check';
+import { isSupportedOriginChain, type CheckedQuote, type Provider } from '@/swap/check';
+import { assetOf } from '@/swap/check/assets';
 import { countOpenLinks, FULL, MAX_OPEN_PER_ACCOUNT, withLinkSlot } from '@/owner-calls/cap';
 import { quote, SOLANA, swapRequest, type QuoteDeps } from '@/swap/quote';
 import {
@@ -212,12 +213,8 @@ function summaryOf(row: SwapRow): string {
     case 'quote_failed':
     case 'quote_rejected':
       if (row.code === 'quote_unsupported_provider') return unsupportedProvider(row);
-      if (row.code === 'route_unsupported') {
-        return (
-          'No swap: the quote is a route this tool cannot verify from calldata (a swap on the origin or destination chain). ' +
-          'Nothing was sent. Same-asset bridges are supported; try the same token on both chains.'
-        );
-      }
+      if (row.code === 'route_unsupported') return routeUnsupported(row);
+      if (row.code === 'output_floor') return outputFloor(row);
       return `No swap: ${row.state} (${row.code}). Nothing was deposited.`;
     case 'owner_declined':
       if (row.code === PROVIDER_DISABLED) return switchedOff(row);
@@ -358,6 +355,26 @@ function bridgeTerms(row: SwapRow, provider: 'across' | 'relay', quote: CheckedQ
     `${signed}${GAS}Relay's solver pays ${out}, ${fill}. ` +
     `The order is bound to the deposit, but its settlement is enforced by Relay's protocol, not by a contract on chain ${row.destinationChainId}; ` +
     `unfilled orders refund to the account on chain ${row.originChainId} or ${row.destinationChainId}. `
+  );
+}
+
+function routeUnsupported(row: SwapRow): string {
+  const provider = (row.quote as { provider?: Provider } | null)?.provider;
+  const from = provider ? ` from ${NAME[provider]}` : '';
+  return (
+    `No swap: the quote${from} is a route this tool cannot verify from calldata (a swap on the origin or destination chain). ` +
+    'Nothing was sent. Same-asset bridges are supported; try the same token on both chains.'
+  );
+}
+
+function outputFloor(row: SwapRow): string {
+  const { provider, offered, floor } = (row.quote ?? {}) as { provider?: Provider; offered?: string; floor?: string };
+  if (!provider || !offered || !floor) return `No swap: ${row.state} (${row.code}). Nothing was deposited.`;
+  const symbol = assetOf(row.destinationChainId, row.destinationToken)?.asset;
+  const units = (amount: string) => `${amount} base units${symbol ? ` of ${symbol}` : ''}`;
+  return (
+    `No swap: ${NAME[provider]} offered at least ${units(offered)}, under the ${units(floor)} this tool requires. ` +
+    'Nothing was sent. Try a larger amount or another route.'
   );
 }
 

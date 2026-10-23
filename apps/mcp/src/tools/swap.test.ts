@@ -2553,9 +2553,103 @@ describe('a quote another provider answered', () => {
 
     expect(result.structuredContent).toMatchObject({ state: 'quote_rejected', refusal: { code: 'route_unsupported' } });
     expect(result.structuredContent?.summary).toBe(
-      'No swap: the quote is a route this tool cannot verify from calldata (a swap on the origin or destination chain). ' +
+      'No swap: the quote from Across is a route this tool cannot verify from calldata (a swap on the origin or destination chain). ' +
         'Nothing was sent. Same-asset bridges are supported; try the same token on both chains.'
     );
+  });
+
+  it('given a stored route_unsupported refusal with no provider kept, when the same key comes, then the summary does not name one', async () => {
+    const { t } = await connected();
+    config().swapProviders = new Set(['aurora', 'across', 'relay']);
+    backend.answer = acrossAnswer;
+    const swapInput = {
+      originChainId: 8453,
+      originToken: '0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913',
+      amount: '10000000',
+      destinationToken: '0x82af49447d8a07e3bd95bd0d56f35241523fbab1',
+    };
+    await run(t, swapInput);
+    const [row] = await swapsOf(t.connectionId);
+    await getDb().execute(sql`alter table swaps disable trigger swaps_guard`);
+    await getDb().update(swaps).set({ quote: null }).where(eq(swaps.id, row.id));
+    await getDb().execute(sql`alter table swaps enable trigger swaps_guard`);
+
+    const result = await run(t, swapInput);
+
+    expect(result.structuredContent?.summary).toMatch(/^No swap: the quote is a route this tool cannot verify/);
+  });
+
+  it('given Across answering a minimum of 1 base unit for 10 USDC to Arbitrum USDC, when jaw_swap runs, then the summary states the minimum offered and the floor with the symbol', async () => {
+    const { t } = await connected();
+    config().swapProviders = new Set(['aurora', 'across', 'relay']);
+    const answer = structuredClone(acrossAnswer);
+    answer.result.data.minOutputAmount = '1';
+    backend.answer = answer;
+
+    const result = await run(t, {
+      originChainId: 8453,
+      originToken: '0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913',
+      amount: '10000000',
+    });
+
+    expect(result.structuredContent).toMatchObject({ state: 'quote_rejected', refusal: { code: 'output_floor' } });
+    expect(result.structuredContent?.summary).toBe(
+      'No swap: Across offered at least 1 base units of USDC, under the 9700000 base units of USDC this tool requires. ' +
+        'Nothing was sent. Try a larger amount or another route.'
+    );
+  });
+
+  it('given an output_floor refusal whose destination token has no symbol, when jaw_swap runs, then the amounts carry no symbol', async () => {
+    const { t } = await connected();
+    config().swapProviders = new Set(['aurora', 'across', 'relay']);
+    const answer = structuredClone(acrossAnswer);
+    answer.result.data.minOutputAmount = '1';
+    backend.answer = answer;
+    await run(t, {
+      originChainId: 8453,
+      originToken: '0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913',
+      amount: '10000000',
+    });
+    const [row] = await swapsOf(t.connectionId);
+    await getDb().execute(sql`alter table swaps disable trigger swaps_guard`);
+    await getDb()
+      .update(swaps)
+      .set({ destinationToken: '0x1111111111111111111111111111111111111111' })
+      .where(eq(swaps.id, row.id));
+    await getDb().execute(sql`alter table swaps enable trigger swaps_guard`);
+
+    const result = await run(t, {
+      originChainId: 8453,
+      originToken: '0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913',
+      amount: '10000000',
+    });
+
+    expect(result.structuredContent?.summary).toBe(
+      'No swap: Across offered at least 1 base units, under the 9700000 base units this tool requires. ' +
+        'Nothing was sent. Try a larger amount or another route.'
+    );
+  });
+
+  it('given an output_floor refusal stored with no amounts, when jaw_swap runs, then the summary falls back to the code', async () => {
+    const { t } = await connected();
+    config().swapProviders = new Set(['aurora', 'across', 'relay']);
+    const answer = structuredClone(acrossAnswer);
+    answer.result.data.minOutputAmount = '1';
+    backend.answer = answer;
+    const swapInput = {
+      originChainId: 8453,
+      originToken: '0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913',
+      amount: '10000000',
+    };
+    await run(t, swapInput);
+    const [row] = await swapsOf(t.connectionId);
+    await getDb().execute(sql`alter table swaps disable trigger swaps_guard`);
+    await getDb().update(swaps).set({ quote: null }).where(eq(swaps.id, row.id));
+    await getDb().execute(sql`alter table swaps enable trigger swaps_guard`);
+
+    const result = await run(t, swapInput);
+
+    expect(result.structuredContent?.summary).toBe('No swap: quote_rejected (output_floor). Nothing was deposited.');
   });
 });
 

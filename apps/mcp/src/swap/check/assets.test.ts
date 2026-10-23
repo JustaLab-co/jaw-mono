@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { zeroAddress } from 'viem';
 import type { QuoteRequest } from '../check';
-import { clearsFloor, sameAsset } from './assets';
+import { clearsFloor, floorOf, sameAsset } from './assets';
 
 const BASE_USDC = '0x833589fcd6edb6e08f4c7c32d4f71b54bda02913';
 const BSC_USDC = '0x8ac76a51cc950d9822d68b83fe1ad97b32cd580d';
@@ -125,5 +125,28 @@ describe('clearsFloor', () => {
 
     expect(clearsFloor(arb, 1_000_000n, pair, 9_000n)).toBe(true);
     expect(clearsFloor(arb, 999_999n, pair, 9_000n)).toBe(false);
+  });
+});
+
+describe('floorOf', () => {
+  it('given 10 USDC from Base to BSC, when the cap is 300 bps, then the floor is 9.7 USDC in 18 decimals', () => {
+    expect(floorOf('10000000', { decimalsIn: 6, decimalsOut: 18 }, 300n)).toBe(9_700_000_000_000_000_000n);
+  });
+
+  it('given 10 USDC from BSC to Base, when the cap is 300 bps, then the floor is 9.7 USDC in 6 decimals', () => {
+    expect(floorOf('10000000000000000000', { decimalsIn: 18, decimalsOut: 6 }, 300n)).toBe(9_700_000n);
+  });
+
+  it('given a floor that is not a whole unit, when it is taken, then it rounds up to the first minimum that clears', () => {
+    const pair = { decimalsIn: 6, decimalsOut: 6 };
+
+    expect(floorOf('1', pair, 300n)).toBe(1n);
+    expect(clearsFloor(request({ amount: '1', destinationChainId: 42161, destinationToken: ARB_USDC }), 1n, pair)).toBe(
+      true
+    );
+  });
+
+  it('given a cap of 9000 bps, when the floor is taken, then it is a tenth of the input', () => {
+    expect(floorOf('1000000', { decimalsIn: 6, decimalsOut: 6 }, 9000n)).toBe(100_000n);
   });
 });

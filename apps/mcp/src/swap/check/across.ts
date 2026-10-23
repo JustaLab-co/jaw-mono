@@ -17,7 +17,7 @@ import {
 } from 'viem';
 import { APP_FEE, MAX_ROUTE_COST_BPS, type AcrossContracts } from '../allowlist';
 import type { BackendQuote, CheckCode, CheckResult, QuoteRequest, SwapCall } from '../check';
-import { amountsCode, floorCode, routeOf } from './shared';
+import { amountsCode, floorRefusal, routeOf } from './shared';
 
 const depositAbi = parseAbi([
   'function deposit(bytes32 depositor, bytes32 recipient, bytes32 inputToken, bytes32 outputToken, uint256 inputAmount, uint256 outputAmount, uint256 destinationChainId, bytes32 exclusiveRelayer, uint32 quoteTimestamp, uint32 fillDeadline, uint32 exclusivityParameter, bytes message)',
@@ -79,8 +79,8 @@ export function checkAcross(
   const route = routeOf(request, 'across');
   if (!route.ok) return route;
   const { origin, destination } = route;
-  const floor = floorCode(request, min, MAX_ROUTE_COST_BPS);
-  if (floor) return fail(floor);
+  const floor = floorRefusal(request, min, MAX_ROUTE_COST_BPS);
+  if (floor) return floor;
 
   const nativeIn = isAddressEqual(request.originToken, zeroAddress);
   const nativeOut = isAddressEqual(request.destinationToken as Address, zeroAddress);

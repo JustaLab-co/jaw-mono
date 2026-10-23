@@ -78,7 +78,10 @@ export type CheckedQuote = {
   };
 };
 
-export type CheckResult = CheckedQuote | { ok: false; code: CheckCode };
+/** `offered` and `floor` are base units of the destination token, set on output_floor. */
+export type Refused = { ok: false; code: CheckCode; provider?: Provider; offered?: string; floor?: string };
+
+export type CheckResult = CheckedQuote | Refused;
 
 const usd = /^[0-9]+(\.[0-9]+)?$/;
 
@@ -112,14 +115,17 @@ export type CheckDeps = {
 export async function checkQuote(request: QuoteRequest, body: unknown, deps: CheckDeps): Promise<CheckResult> {
   const parsed = quoteShape.safeParse(body);
   if (!parsed.success) return { ok: false, code: 'quote_invalid' };
-  switch (parsed.data.provider) {
+  const { provider } = parsed.data;
+  switch (provider) {
     case 'aurora':
       return checkAurora(request, parsed.data, deps.isDepositAddressTaken);
     case 'across':
-      return checkAcross(request, parsed.data, deps.now(), deps.ownerWindowSec);
+      return named(provider, checkAcross(request, parsed.data, deps.now(), deps.ownerWindowSec));
     case 'relay':
-      return checkRelay(request, parsed.data, deps);
+      return named(provider, await checkRelay(request, parsed.data, deps));
     default:
       return { ok: false, code: 'quote_id' };
   }
 }
+
+const named = (provider: Provider, result: CheckResult): CheckResult => (result.ok ? result : { ...result, provider });

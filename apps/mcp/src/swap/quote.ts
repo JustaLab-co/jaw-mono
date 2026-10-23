@@ -187,7 +187,14 @@ async function keepQuote(
       });
     }
     const state = checked.code === 'quote_invalid' ? 'quote_failed' : 'quote_rejected';
-    return writeHeld(lease, { state, code: checked.code, quoteFenced: fenced });
+    const { provider, offered, floor } = checked;
+    const shown = checked.code === 'route_unsupported' || checked.code === 'output_floor';
+    return writeHeld(lease, {
+      state,
+      code: checked.code,
+      quote: shown ? { provider, offered, floor } : undefined,
+      quoteFenced: fenced,
+    });
   }
   try {
     return await writeHeld(lease, {

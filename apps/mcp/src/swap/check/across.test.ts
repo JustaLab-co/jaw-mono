@@ -993,3 +993,29 @@ describe('given the native out program [unwrap, fee, drain ETH, drain WETH, emit
     expect(await outcome(c)).toBe('route_unsupported');
   });
 });
+
+describe('given an Across quote refused for its route or its floor', () => {
+  const refused = async (c: Case) => {
+    const result = await checkQuote(c.request, c.body, depsOf(c));
+    if (result.ok) throw new Error('expected a refusal');
+    return result;
+  };
+
+  it('when the minimum is 1 base unit, then the refusal names across, the minimum offered and the floor', async () => {
+    expect(await refused(edited(fee(), (c) => (c.body.minOutputAmount = '1')))).toEqual({
+      ok: false,
+      code: 'output_floor',
+      provider: 'across',
+      offered: '1',
+      floor: '9700000',
+    });
+  });
+
+  it('when the quote is an origin swap on a same-asset request, then the refusal names across and no amounts', async () => {
+    expect(await refused({ ...live('usdc_to_weth'), request: fee().request })).toEqual({
+      ok: false,
+      code: 'route_unsupported',
+      provider: 'across',
+    });
+  });
+});

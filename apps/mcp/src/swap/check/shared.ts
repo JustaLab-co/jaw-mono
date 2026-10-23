@@ -1,6 +1,6 @@
 import { ALLOWLIST, type ChainContracts } from '../allowlist';
-import type { BackendQuote, CheckCode, QuoteRequest } from '../check';
-import { clearsFloor, sameAsset } from './assets';
+import type { BackendQuote, CheckCode, QuoteRequest, Refused } from '../check';
+import { clearsFloor, floorOf, sameAsset } from './assets';
 
 const baseUnits = /^[1-9][0-9]*$/;
 
@@ -28,9 +28,10 @@ export function routeOf<P extends 'across' | 'relay'>(request: QuoteRequest, pro
   return { ok: true, origin, destination };
 }
 
-export function floorCode(request: QuoteRequest, minOutputAmount: bigint, maxCostBps: bigint): CheckCode | undefined {
+export function floorRefusal(request: QuoteRequest, minOutputAmount: bigint, maxCostBps: bigint): Refused | undefined {
   const pair = sameAsset(request);
-  if (!pair) return 'route_unsupported';
-  if (!clearsFloor(request, minOutputAmount, pair, maxCostBps)) return 'output_floor';
-  return undefined;
+  if (!pair) return { ok: false, code: 'route_unsupported' };
+  if (clearsFloor(request, minOutputAmount, pair, maxCostBps)) return undefined;
+  const floor = floorOf(request.amount, pair, maxCostBps).toString();
+  return { ok: false, code: 'output_floor', offered: minOutputAmount.toString(), floor };
 }
