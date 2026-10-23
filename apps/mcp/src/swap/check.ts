@@ -78,7 +78,6 @@ export type CheckedQuote = {
   };
 };
 
-/** `offered` and `floor` are base units of the destination token, set on output_floor. */
 export type Refused = { ok: false; code: CheckCode; provider?: Provider; offered?: string; floor?: string };
 
 export type CheckResult = CheckedQuote | Refused;

@@ -26,7 +26,6 @@ export function clearsFloor(
   return minOutputAmount >= floorOf(request.amount, pair, maxCostBps);
 }
 
-/** The smallest output, in destination base units, that costs no more than maxCostBps. */
 export function floorOf(amount: string, pair: AssetPair, maxCostBps: bigint): bigint {
   const scaled = BigInt(amount) * 10n ** BigInt(pair.decimalsOut) * (10_000n - maxCostBps);
   const divisor = 10n ** BigInt(pair.decimalsIn) * 10_000n;
