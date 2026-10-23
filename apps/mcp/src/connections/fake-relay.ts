@@ -79,8 +79,13 @@ export async function replayingPage(
   );
   const publicKey = await exportKeyToHex('public', keys.publicKey);
   const ws = new WebSocket(`${url.searchParams.get('relay')}?session=${url.searchParams.get('session')}&role=browser`);
-  const send = async (payload: Record<string, unknown>) =>
-    ws.send(JSON.stringify({ type: 'encrypted', ...(await encryptMessage(secret, payload)) }));
+  // The frames of its answers as the relay carries them, so a test can tell when one went past.
+  const answered: string[] = [];
+  const send = async (payload: Record<string, unknown>) => {
+    const frame = JSON.stringify({ type: 'encrypted', ...(await encryptMessage(secret, payload)) });
+    if (payload.type === 'rpc_response') answered.push(frame);
+    ws.send(frame);
+  };
   const answers = new Map<string, { request: string; reply: Promise<object> }>();
   const ids: string[] = [];
   const sent: Record<string, unknown>[] = [];
@@ -111,13 +116,17 @@ export async function replayingPage(
     await send({ type: 'rpc_response', id, ...reply });
   });
   await new Promise((r) => ws.once('open', r));
-  ws.send(JSON.stringify({ type: 'key_exchange', publicKey }));
+  const greet = () => ws.send(JSON.stringify({ type: 'key_exchange', publicKey }));
+  greet();
   return {
     publicKey,
     ids,
+    answered,
     asked: () => answers.size,
     inits: () => sent.length,
     lastInit: () => sent.at(-1),
+    /** Sends the same key again on the same socket. */
+    greet,
     mute: () => (mute = true),
     close: () => ws.close(),
   };

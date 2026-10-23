@@ -108,9 +108,11 @@ const connectPool = pools.connect;
 const ownerPool = pools.owner;
 
 export const connectRelay: OpenWallet = (chainId, until, client) =>
-  withSlot(connectPool, client, (release) => startSession(release, chainId, until, client, connectPool.joinWithin));
+  withSlot(connectPool, client, (release) =>
+    startSession(release, chainId, until, client, { reopens: false, joinWithin: connectPool.joinWithin })
+  );
 export const ownerRelay: OpenWallet = (chainId, until, client) =>
-  withSlot(ownerPool, client, (release) => startSession(release, chainId, until, client));
+  withSlot(ownerPool, client, (release) => startSession(release, chainId, until, client, { reopens: true }));
 
 async function withSlot<T>(pool: Pool, client: RelayClient | undefined, start: (release: () => void) => Promise<T>) {
   const account = pool.perAccount ? client?.account?.toLowerCase() : undefined;
@@ -153,8 +155,8 @@ async function startSession(
   release: () => void,
   chainId: number,
   until: Date,
-  client?: RelayClient,
-  joinWithin?: number
+  client: RelayClient | undefined,
+  { reopens, joinWithin }: { reopens: boolean; joinWithin?: number }
 ): Promise<Wallet> {
   const keys = await generateKeyPair();
   const session = randomUUID();
@@ -165,21 +167,23 @@ async function startSession(
     run: async (work, joined) => {
       try {
         const hello = await inbox.next((m) => m.type === 'key_exchange' && typeof m.publicKey === 'string');
-        const peer = String(hello.publicKey);
-        const secret = await deriveSharedSecret(keys.privateKey, await importKeyFromHex('public', peer));
-        const page = converse(ws, inbox, secret, session);
         const init = { chainId, appName: appNameOf(client) };
-        await page.send({ type: 'init', ...init, ...ensOf() });
-        const ready = await page.read((m) => m.type === 'ready');
-        if (ready.replays === true) {
-          // A session that cannot be resumed is how every session ran before replays, so the owner is still asked.
-          try {
-            const saved = joined?.({ session, key: await exportKeyToHex('private', keys.privateKey), peer, ...init });
-            await within(JOINED_WITHIN_MS, Promise.resolve(saved));
-          } catch (err) {
-            log('warn', { msg: 'relay session not saved', error: errorLabel(err) });
-          }
-        }
+        const page = converse(ws, inbox, session, {
+          key: keys.privateKey,
+          init,
+          reopens,
+          // Runs again for each page the owner opens the link in, so a rejoin after a restart finds the one open.
+          joined: async (peer) => {
+            // A session that cannot be resumed is how every session ran before replays, so the owner is still asked.
+            try {
+              const saved = joined?.({ session, key: await exportKeyToHex('private', keys.privateKey), peer, ...init });
+              await within(JOINED_WITHIN_MS, Promise.resolve(saved));
+            } catch (err) {
+              log('warn', { msg: 'relay session not saved', error: errorLabel(err) });
+            }
+          },
+        });
+        await page.meet(String(hello.publicKey));
         const result = await work(page.ask);
         // Closes the wallet tab.
         await page.send({ type: 'shutdown' }).catch(() => undefined);
@@ -250,43 +254,111 @@ function linkOf(session: string, publicKey: string): string {
   return url.toString();
 }
 
-function converse(
-  ws: WebSocket,
-  inbox: Inbox,
-  secret: Awaited<ReturnType<typeof deriveSharedSecret>>,
-  session: string,
-  peer?: string
-) {
+type Key = Awaited<ReturnType<typeof importKeyFromHex>>;
+
+interface Talk {
+  /** This server's private key, the same for every page that opens the session. */
+  key: Key;
+  /** What each page is started with. */
+  init: { chainId: number; appName: string };
+  /**
+   * Whether a page that opens the link again takes the session over. An owner's request link does: the owner
+   * closes the tab and clicks the link in the chat again. The connect link does not: it lives in the owner's own
+   * browser, its page opens a new session per click, and a later page there would be someone else signing in.
+   */
+  reopens: boolean;
+  /** The page a rejoin was saved with. Absent on a first join. */
+  saved?: string;
+  /** Called with the key of each page that says it can replay answers. */
+  joined?: (peer: string) => Promise<void>;
+}
+
+/**
+ * The exchange with the page behind a link, encrypted under a key agreed with
+ * that page.
+ *
+ * The page makes a new key each time it loads. On a first join, a new key means
+ * the owner opened the link again, most likely after closing the tab: the new
+ * page is started like the first one, and each request still waiting for an
+ * answer is sent to it again under the same id. From then on only that page is
+ * heard, so a late answer from the page the owner left is dropped.
+ *
+ * A rejoin holds to the page it saved instead. A new key there means that page
+ * is gone, and what happened on it while this server was away cannot be told.
+ */
+function converse(ws: WebSocket, inbox: Inbox, session: string, { key, init, reopens, saved, joined }: Talk) {
+  let peer: string | undefined;
+  let secret: Key | undefined;
+  // Between sending a page init and hearing it is ready.
+  let starting = false;
+  const waiting = new Map<string, Message>();
+
   const send = async (payload: Message) =>
-    ws.send(JSON.stringify({ type: 'encrypted', ...(await encryptMessage(secret, payload)) }));
+    ws.send(JSON.stringify({ type: 'encrypted', ...(await encryptMessage(secret!, payload)) }));
+  const agree = async (publicKey: string) => deriveSharedSecret(key, await importKeyFromHex('public', publicKey));
+  const greet = async (publicKey: string, agreed: Key) => {
+    peer = publicKey;
+    secret = agreed;
+    starting = true;
+    await send({ type: 'init', ...init, ...ensOf() });
+  };
+  const started = async (ready: Message) => {
+    starting = false;
+    // Saved before the requests go out again, so a restart in between still finds this page.
+    if (ready.replays === true) await joined?.(peer!);
+    for (const request of waiting.values()) await send(request);
+  };
+
   const read = async (want: (inner: Message) => boolean, by?: Date) => {
-    const wanted = (m: Message) => m.type === 'encrypted' || (peer !== undefined && m.type === 'key_exchange');
+    const wanted = (m: Message) => m.type === 'encrypted' || m.type === 'key_exchange';
     for (;;) {
       const m = by ? await inbox.within(wanted, by) : await inbox.next(wanted);
       if (!m) throw new PageGone();
       if (m.type === 'key_exchange') {
-        if (m.publicKey !== peer) throw new PageGone();
+        const { publicKey } = m;
+        if (publicKey === peer) continue;
+        if (saved !== undefined) throw new PageGone();
+        if (!reopens) continue;
+        // This frame is plaintext from the relay: a key that cannot be used is dropped and the page kept.
+        if (typeof publicKey === 'string') {
+          await agree(publicKey).then(
+            (agreed) => greet(publicKey, agreed),
+            () => undefined
+          );
+        }
         continue;
       }
-      const inner = await decryptMessage(secret, m as unknown as EncryptedEnvelope).catch(() => undefined);
+      const inner = await decryptMessage(secret!, m as unknown as EncryptedEnvelope).catch(() => undefined);
       if (inner?.type === 'error') {
         throw ending('WalletPageRefused', `the wallet page refused: ${String(inner.reason)}`);
       }
+      if (inner?.type === 'ready' && starting) await started(inner);
       if (inner && want(inner)) return inner;
     }
   };
+
+  /** Starts the page that sent `publicKey` and waits until it is ready. */
+  const meet = async (publicKey: string, by?: Date) => {
+    await greet(publicKey, await agree(publicKey));
+    await read((m) => m.type === 'ready', by);
+  };
+
   let asked = 0;
   const ask: Ask = async (method, params) => {
     const id = `${session}:${asked++}`;
-    await send({ type: 'rpc_request', id, method, params });
-    const answer = await read((m) => m.type === 'rpc_response' && m.id === id);
+    const request = { type: 'rpc_request', id, method, params };
+    // Kept until answered, so a page the owner opens meanwhile is asked it too.
+    waiting.set(id, request);
+    const answer = await send(request)
+      .then(() => read((m) => m.type === 'rpc_response' && m.id === id))
+      .finally(() => waiting.delete(id));
     if (answer.success) return answer.data;
     const error = answer.error as { code?: number; message?: string } | undefined;
     // A rejoined page refuses an id it answered for another request: what happened there cannot be told.
-    if (peer !== undefined && error?.code === NOT_THE_REQUEST) throw new PageGone();
+    if (saved !== undefined && error?.code === NOT_THE_REQUEST) throw new PageGone();
     throw new WalletRefused(error?.message ?? 'the wallet refused', error?.code);
   };
-  return { send, read, ask };
+  return { send, meet, ask };
 }
 
 const REJOIN_WITHIN_MS = 15_000;
@@ -335,13 +407,13 @@ async function rejoin(release: () => void, resume: RelayResume, url: string, unt
     url,
     run: async (work) => {
       try {
-        const secret = await deriveSharedSecret(
-          await importKeyFromHex('private', key),
-          await importKeyFromHex('public', peer)
-        );
-        const page = converse(ws, inbox, secret, session, peer);
-        await page.send({ type: 'init', chainId, appName, ...ensOf() });
-        await page.read((m) => m.type === 'ready', soon());
+        const page = converse(ws, inbox, session, {
+          key: await importKeyFromHex('private', key),
+          init: { chainId, appName },
+          reopens: false,
+          saved: peer,
+        });
+        await page.meet(peer, soon());
         const result = await work(page.ask);
         await page.send({ type: 'shutdown' }).catch(() => undefined);
         return result;
