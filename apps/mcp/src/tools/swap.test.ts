@@ -41,14 +41,15 @@ import { guardTools, RATE_WINDOW_MS } from '@/lib/edge';
 import { gateCode } from '@/payments/render';
 import type { BackendDeps } from '@/swap/backend';
 import { swapRequest, type QuoteDeps } from '@/swap/quote';
-import { CALL_INVALID } from '@/swap/calls';
-import type { DepositCall } from '@/swap/check';
+import { CALL_INVALID, callsOf } from '@/swap/calls';
 import { approveByOf, claimSwap, type SwapRow } from '@/swap/store';
 import { purge } from '@/reconciler/run';
 import { fakeChain } from '@/owner-calls/chain-testkit';
 import { sendCalls } from './owner-calls';
 import { grantPermissions } from '@/tools/grant-permissions';
 import { registerSwapTools, swap, swapStatus, type SwapToolInput } from './swap';
+import acrossCrossToken from '@/swap/fixtures/across-usdc-to-weth.json';
+import relayUsdc from '@/swap/fixtures/relay-usdc.json';
 
 const USDC: Address = '0x036CbD53842c5426634e7929541eC2318f3dCF7e';
 const PAY_TO: Address = '0x2222222222222222222222222222222222222222';
@@ -101,6 +102,7 @@ const backend = {
   hits: [] as { url: URL; apiKey: string | null; quoted: boolean }[],
   lose: 0,
   onAsked: undefined as (() => Promise<void>) | undefined,
+  answer: undefined as unknown,
 };
 const transfer = (to: Address, amount: bigint) =>
   encodeFunctionData({ abi: erc20Abi, functionName: 'transfer', args: [to, amount] });
@@ -112,6 +114,7 @@ const auroraErc20Backend: typeof fetch = async (input, init) => {
   const hit = { url, apiKey, quoted: false };
   backend.hits.push(hit);
   if (apiKey !== SWAP_KEY) return new Response('{}', { status: 402, headers: { 'payment-required': 'e30=' } });
+  if (backend.answer) return Response.json(backend.answer);
   await backend.onAsked?.();
   if (backend.lose > 0) {
     backend.lose--;
@@ -215,6 +218,7 @@ beforeEach(() => {
   backend.hits.length = 0;
   backend.lose = 0;
   backend.onAsked = undefined;
+  backend.answer = undefined;
   opened = [];
   asked = [];
   closed = [];
@@ -456,6 +460,8 @@ describe('a swap waiting for the owner', () => {
         expectedOutputAmount: '995000',
         minOutputAmount: '990025',
       },
+      provider: 'aurora',
+      calls: [{ kind: 'deposit', to: getAddress(USDC), value: '0' }],
       deposit: { address: deposit, to: getAddress(USDC), value: '0' },
     });
     expect(result.structuredContent?.summary).toContain(row.walletUrl);
@@ -484,7 +490,7 @@ describe('a swap waiting for the owner', () => {
     expect(JSON.parse(result.content.at(-1)!.text)).toEqual(rest);
   });
 
-  it('given a deposit address another swap already holds, when jaw_swap runs, then the swaps store refuses it as deposit_address_reused and no link opens', async () => {
+  it('given a deposit address another swap already holds, when jaw_swap runs, then the swaps store refuses it as quote_reused and no link opens', async () => {
     const first = await connected();
     await run(first.t, { idempotencyKey: 'first' });
     const [held] = await swapsOf(first.t.connectionId);
@@ -496,7 +502,7 @@ describe('a swap waiting for the owner', () => {
 
     expect(result.structuredContent).toMatchObject({
       state: 'quote_rejected',
-      refusal: { code: 'deposit_address_reused' },
+      refusal: { code: 'quote_reused' },
     });
     expect(result.structuredContent?.url).toBeUndefined();
     expect(opened).toEqual([]);
@@ -525,7 +531,7 @@ describe('the owner link', () => {
     const result = await run(t, { originChainId: 8453, originToken: '0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913' });
 
     const [row] = await swapsOf(t.connectionId);
-    expect((row.call as DepositCall).chainId).toBe(8453);
+    expect(callsOf(row)?.[0].chainId).toBe(8453);
     expect(opened).toEqual([{ chainId: 84532, until: row.approveBy, client: t.clientId }]);
     expect(result.structuredContent?.summary).toMatch(/pays that transaction's gas in the wallet/);
   });
@@ -743,7 +749,7 @@ describe('the owner approves the deposit', () => {
       originToken: '0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913',
     });
 
-    const call = row.call as DepositCall;
+    const [call] = callsOf(row)!;
     expect(opened).toEqual([{ chainId: 84532, until: row.approveBy, client: t.clientId }]);
     expect(methods()).toEqual([
       'eth_requestAccounts',
@@ -775,6 +781,40 @@ describe('the owner approves the deposit', () => {
       backendState: 'KNOWN_DEPOSIT_TX',
     });
   });
+
+  it.each([
+    ['Across', acrossCrossToken],
+    ['Relay', relayUsdc],
+  ])(
+    'given a %s quote from USDC on Base to WETH on Arbitrum, when the owner approves, then the wallet gets its approve and deposit byte for byte in one atomic batch on Base',
+    async (_, answer) => {
+      const { t } = await connected();
+      backend.answer = answer;
+      const failedOffChain: Ask = async () => ({ status: 400 });
+
+      const { result, row } = await approve(t, sendingAs(t.account, approved, failedOffChain), {
+        originChainId: 8453,
+        originToken: '0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913',
+        destinationToken: '0x82aF49447D8a07e3bd95BD0d56f35241523fBab1',
+        amount: answer.result.data.inputAmount,
+      });
+
+      const transactions = answer.result.data.transactions.map(({ to, data, value }) => ({ to, data, value }));
+      expect(result.structuredContent).toMatchObject({
+        quoteId: answer.result.data.quoteId,
+        provider: answer.result.data.provider,
+        calls: [
+          { kind: 'approve', to: transactions[0].to, value: '0' },
+          { kind: 'deposit', to: transactions[1].to, value: '0' },
+        ],
+      });
+      expect(asked[1].params).toEqual([
+        { version: '2.0.0', chainId: '0x2105', from: t.account, atomicRequired: true, calls: transactions },
+      ]);
+      expect(result.structuredContent?.summary).toContain('in one batch on chain 8453');
+      expect(row).toMatchObject({ state: 'deposit_sent', callsId: '0xcalls' });
+    }
+  );
 
   it.each([['down' as const], [500], [400]])(
     'B21: given the owner approved, when the submit fails with %s, then the row stays deposit_sent with one submit attempt',
@@ -1275,36 +1315,48 @@ describe('jaw_swap_status', () => {
     expect(deposits.hits).toEqual([]);
   });
 
-  it('given a row whose call was written as a one-element array, when jaw_swap_status answers, then its deposit is the one the one-object row gave', async () => {
+  it('given a legacy row whose call is one object, when jaw_swap_status answers, then its provider, calls and deposit are the ones the array row gave', async () => {
     const { t } = await connected();
     const quoteId = await started(t);
     const row = await rowOf(t);
     const before = await status(t, quoteId);
 
-    await rewrite(row.id, { call: [{ kind: 'deposit', ...(row.call as DepositCall) }] });
+    const { chainId, to, data, value } = callsOf(row)![0];
+    await rewrite(row.id, {
+      call: { chainId, to, data, value },
+      quote: { ...(row.quote as object), provider: undefined },
+    });
     const after = await status(t, quoteId);
 
-    const deposit = { address: row.depositAddress, to: getAddress(USDC), value: '0' };
-    expect(before.structuredContent?.deposit).toEqual(deposit);
-    expect(after.structuredContent?.deposit).toEqual(deposit);
+    const answer = {
+      provider: 'aurora',
+      calls: [{ kind: 'deposit', to: getAddress(USDC), value: '0' }],
+      deposit: { address: row.depositAddress, to: getAddress(USDC), value: '0' },
+    };
+    expect(before.structuredContent).toMatchObject(answer);
+    expect(after.structuredContent).toMatchObject(answer);
   });
 
   it('given a row holding an approve then the deposit, when jaw_swap_status answers, then its deposit is the deposit call, not the approve', async () => {
     const { t } = await connected();
     const quoteId = await started(t);
     const row = await rowOf(t);
-    const legacy = row.call as DepositCall;
+    const [deposit] = callsOf(row)!;
     const approval = {
       kind: 'approve' as const,
-      chainId: legacy.chainId,
+      chainId: deposit.chainId,
       to: PAY_TO,
       data: encodeFunctionData({ abi: erc20Abi, functionName: 'approve', args: [PAY_TO, 7n] }),
       value: '0',
     };
 
-    await rewrite(row.id, { call: [approval, { kind: 'deposit', ...legacy }] });
+    await rewrite(row.id, { call: [approval, deposit] });
     const result = await status(t, quoteId);
 
+    expect(result.structuredContent?.calls).toEqual([
+      { kind: 'approve', to: PAY_TO, value: '0' },
+      { kind: 'deposit', to: getAddress(USDC), value: '0' },
+    ]);
     expect(result.structuredContent?.deposit).toEqual({
       address: row.depositAddress,
       to: getAddress(USDC),

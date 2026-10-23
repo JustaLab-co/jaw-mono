@@ -9,11 +9,15 @@ import { SWAP_DEPOSIT_ADDRESS_INDEX, swaps } from '@/db/schema';
 import { randomToken } from '@/lib/token';
 import { LEASE_MS } from '@/payments/store';
 import type { BackendState, DepositStatus } from './backend';
+import type { Provider } from './check';
 
 export type SwapRow = typeof swaps.$inferSelect;
 export type SwapState = SwapRow['state'];
 type SwapSet = PgUpdateSetSource<typeof swaps>;
 type KnownStatus = Extract<DepositStatus, { backendState: BackendState }>;
+
+export const providerOf = (row: SwapRow): Provider =>
+  (row.quote as { provider?: Provider } | null)?.provider ?? 'aurora';
 
 export interface SwapRequest {
   originChainId: number;
@@ -308,18 +312,9 @@ export async function recordBackend(connectionId: string, id: string, status: Kn
   if (status.state !== 'submitted') await write(ofSwap(connectionId, id, ['submitted']), { state: status.state });
 }
 
-const DEPOSIT_ADDRESS_KEYS = new Set([SWAP_DEPOSIT_ADDRESS_INDEX, 'swaps_quote_id_unique']);
+const QUOTE_KEYS = new Set([SWAP_DEPOSIT_ADDRESS_INDEX, 'swaps_quote_id_unique']);
 
-export function depositAddressReused(err: unknown): boolean {
+export function quoteReused(err: unknown): boolean {
   const e = (err as { cause?: { code?: unknown; constraint_name?: unknown; constraint?: unknown } }).cause;
-  return e?.code === '23505' && DEPOSIT_ADDRESS_KEYS.has(String(e.constraint_name ?? e.constraint));
-}
-
-export async function isDepositAddressTaken(address: string): Promise<boolean> {
-  const [row] = await getDb()
-    .select({ id: swaps.id })
-    .from(swaps)
-    .where(sql`lower(${swaps.depositAddress}) = ${address.toLowerCase()}`)
-    .limit(1);
-  return row !== undefined;
+  return e?.code === '23505' && QUOTE_KEYS.has(String(e.constraint_name ?? e.constraint));
 }
