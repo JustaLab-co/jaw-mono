@@ -23,7 +23,9 @@ import { fakeChain } from '@/owner-calls/chain-testkit';
 import type { ReadReceipt } from '@/owner-calls/receipt';
 import { RATE_WINDOW_MS } from '@/lib/edge';
 import { SEND_STARTED } from '@/owner-calls/store';
+import { leaks, spoken, toAgent } from '@/test-utils/spoken';
 import { sendCalls, sendCallsStatus } from './owner-calls';
+import { FOR_AGENT } from './reply';
 import { sign, signStatus } from './sign';
 
 setTestEnv();
@@ -205,10 +207,17 @@ describe('jaw_get_calls_status with waitSeconds', () => {
     );
     const id = first.structuredContent!.id;
 
-    const summary = (await callsStatus(t, id, 0)).structuredContent!.summary;
+    const result = await callsStatus(t, id, 0);
 
-    expect(summary).toContain(`Call jaw_get_calls_status with ${id} and waitSeconds 30 again`);
-    expect(summary).not.toContain('Ask the owner to open');
+    // The link stays on the agent line, for when the owner asks for it again.
+    expect(spoken(result)).toMatch(/^Still waiting for the owner to approve\. It expires in (29|30) minutes\.$/);
+    expect(spoken(result)).not.toContain(first.structuredContent!.url!);
+    expect(toAgent(result)).toEqual([
+      `${FOR_AGENT} Call jaw_get_calls_status again with id ${id} and waitSeconds 30 until ${first.structuredContent!.approveBy}. If the owner asks for the link, show it: ${first.structuredContent!.url}`,
+    ]);
+    expect(result.structuredContent!.summary).not.toContain('Open this link');
+    expect(result.structuredContent!.summary).not.toContain('Show the link now');
+    expect(leaks(spoken(result))).toEqual([]);
   });
 
   it('given the client drops the HTTP request, then its wait ends and gives its polling slot back', async () => {
@@ -311,9 +320,11 @@ describe('jaw_get_calls_status with waitSeconds', () => {
     const { id, first } = await sendGated(t);
 
     const summary = first.structuredContent!.summary;
-    expect(summary).toContain(`call jaw_get_calls_status with ${id} and waitSeconds 30`);
-    expect(summary).toContain(`until ${first.structuredContent!.approveBy}`);
-    expect(summary).toContain('Do not wait for the owner to say they approved');
+    expect(summary.startsWith(`Open this link to approve: ${first.structuredContent!.url}\n`)).toBe(true);
+    const [agent] = toAgent(first);
+    expect(agent).toContain(`call jaw_get_calls_status with id ${id} and waitSeconds 30`);
+    expect(agent).toContain(`until ${first.structuredContent!.approveBy}`);
+    expect(agent).toContain('Do not wait for the owner to say they approved');
   });
 
   it('given waitSeconds over 45, then the server refuses the input, and takes 0', async () => {
@@ -420,12 +431,29 @@ describe('jaw_get_sign_status', () => {
 
   it('given a status read while the owner has not signed, then the summary asks for another wait, not for the link to be shown again', async () => {
     const { t, signer } = await connected();
-    const { id } = await askGated(t, signer);
+    const { id, first } = await askGated(t, signer);
 
-    const summary = (await status(t, id)).structuredContent!.summary;
+    const result = await status(t, id);
 
-    expect(summary).toContain(`Call jaw_get_sign_status with ${id} and waitSeconds 30 again`);
-    expect(summary).not.toContain('Ask the owner to open');
+    // The link stays on the agent line, for when the owner asks for it again.
+    expect(spoken(result)).toMatch(/^Still waiting for the owner to sign\. It expires in (29|30) minutes\.$/);
+    expect(spoken(result)).not.toContain(first.structuredContent!.url!);
+    expect(toAgent(result)).toEqual([
+      `${FOR_AGENT} Call jaw_get_sign_status again with id ${id} and waitSeconds 30 until ${first.structuredContent!.approveBy}. If the owner asks for the link, show it: ${first.structuredContent!.url}`,
+    ]);
+    expect(result.structuredContent!.summary).not.toContain('Open this link');
+    expect(result.structuredContent!.summary).not.toContain('Show the link now');
+    expect(leaks(spoken(result))).toEqual([]);
+  });
+
+  it('given an id no sign request has, then not_found, in plain words for the owner', async () => {
+    const { t } = await connected();
+
+    const result = await status(t, `pr_${'A'.repeat(22)}`);
+
+    expect(result.content[0].text).toMatch(/^not_found: /);
+    expect(spoken(result)).toBe('That signing request was not found on this connection.');
+    expect(leaks(spoken(result))).toEqual([]);
   });
 
   it('given 30 sign status reads in the last minute on the connection, then the next is rate_limited', async () => {
@@ -489,10 +517,25 @@ describe('jaw_get_sign_status', () => {
     const { id, first } = await askGated(t, signer);
 
     const summary = first.structuredContent!.summary;
-    expect(summary).toContain(`call jaw_get_sign_status with ${id} and waitSeconds 30`);
-    expect(summary).toContain(`until ${first.structuredContent!.approveBy}`);
-    expect(summary).toContain('Do not wait for the owner to say they signed');
-    expect(summary).toContain(`send jaw_sign again with idempotencyKey ${first.structuredContent!.idempotencyKey}`);
+    expect(summary.startsWith(`Open this link to sign: ${first.structuredContent!.url}\n`)).toBe(true);
+    const [agent] = toAgent(first);
+    expect(agent).toContain(`call jaw_get_sign_status with id ${id} and waitSeconds 30`);
+    expect(agent).toContain(`until ${first.structuredContent!.approveBy}`);
+    expect(agent).toContain('Do not wait for the owner to say they signed');
+    expect(agent).toContain(`send jaw_sign again with idempotencyKey ${first.structuredContent!.idempotencyKey}`);
+  });
+
+  it('given the tools list, then jaw_get_sign_status is titled and marked read-only', async () => {
+    const { token } = await connected();
+
+    const { json } = await mcp(token, { method: 'tools/list' });
+
+    const tool = json.result.tools.find((x: { name: string }) => x.name === 'jaw_get_sign_status');
+    expect(tool.title).toBe('Check a signing request');
+    expect(tool.annotations).toMatchObject({ readOnlyHint: true });
+    expect(tool.description).toContain(
+      'While it waits, its result carries the link, so show it again if the owner asks.'
+    );
   });
 
   it('given the tools list, then jaw_get_sign_status takes an id and a bounded wait', async () => {

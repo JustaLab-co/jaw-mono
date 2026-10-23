@@ -77,13 +77,27 @@ const shown = (r: PaymentRow): z.infer<typeof row> => ({
   createdAt: r.createdAt.toISOString(),
 });
 
+const plural = (n: number, word: string) => `${n} ${word}${n === 1 ? '' : 's'}`;
+
+/** How many payments and runs, newest first, and how many have no final outcome yet. A run that moved two tokens is two rows. */
+function summaryOf(payments: z.infer<typeof row>[], executes: SendRow[]) {
+  const runs = new Set(executes.map((r) => r.idempotencyKey ?? r.id)).size;
+  const open = new Set(executes.filter((r) => r.state === 'open').map((r) => r.idempotencyKey ?? r.id)).size;
+  const pending = payments.filter((p) => ['pending', 'signed', 'unknown'].includes(p.state)).length + open;
+  if (!payments.length && !runs) return 'No payments or runs yet.';
+  return `${plural(payments.length, 'payment')} and ${plural(runs, 'run')}, newest first.${pending ? ` ${pending} still pending.` : ''}`;
+}
+
 export function registerHistoryTool(server: McpServer) {
   server.registerTool(
     'jaw_session_history',
     {
+      title: "This connection's payments and runs",
       description:
-        'The payments and session executes this connection made, newest first, with their state and transaction hash. ' +
-        'Each list pages on its own cursor: `before` takes `next` for payments, `executesBefore` takes `executesNext` for executes.',
+        'What this connection paid for and ran on its own, newest first, with the state of each. Use it when the owner ' +
+        'asks what the agent spent or did without them, and to follow a payment or run whose outcome was still pending. ' +
+        'Two lists, each with its own cursor: `before` takes `next` for payments, `executesBefore` takes `executesNext` ' +
+        "for runs. The wallet's own transactions are in jaw_get_calls_history.",
       inputSchema: z.strictObject({
         limit: z.number().int().min(1).max(50).optional(),
         before: z.string().optional().describe('The `next` value of the previous page'),
@@ -97,15 +111,14 @@ export function registerHistoryTool(server: McpServer) {
       // Each list pages on its own cursor: a page asked for by one cursor alone leaves the other list out.
       const rows = executesBefore && !before ? [] : await history(connectionId, limit, before);
       const executes = before && !executesBefore ? [] : await sendHistory(connectionId, limit, executesBefore);
-      const settled = rows.filter((r) => r.state === 'settled' && r.kind === 'paid').length;
-      const landed = executes.filter((r) => r.state === 'landed').length;
+      const payments = rows.map(shown);
       return reply(
         historyOutput.parse({
-          payments: rows.map(shown),
+          payments,
           ...(rows.length === limit && { next: rows[rows.length - 1].id }),
           executes: executes.map(executeShown),
           ...(executes.length === limit && { executesNext: executes[executes.length - 1].id }),
-          summary: `${rows.length} payments, ${settled} settled. ${executes.length} execute rows, ${landed} landed.`,
+          summary: summaryOf(payments, executes),
         })
       );
     }

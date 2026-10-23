@@ -18,7 +18,7 @@ import { config } from '@/connections/config';
 import { errorLabel, log } from '@/lib/edge';
 import { reply } from '@/lib/fence';
 import { safeFetch } from '@/lib/safe-fetch';
-import { refusal } from './reply';
+import { refusal, withNext } from './reply';
 
 const LOOKUP_MS = 8_000;
 const chainId = `eip155:${mainnet.id}`;
@@ -154,8 +154,13 @@ export function registerResolveNameTool(server: McpServer) {
   server.registerTool(
     'jaw_resolve_name',
     {
+      title: 'Look up a name or address',
       description:
-        'Resolve an ENS name to its address, or an address to its primary ENS name, on Ethereum mainnet. Pass exactly one of `name` or `address`. A reason says why nothing came back.',
+        'Turn a name such as alice.eth into its address, or an address into its primary name. Use it whenever the ' +
+        'owner gives a name as a recipient: resolve it before building the transfer, and show the owner both the name ' +
+        'and the address they are about to send to. Never guess an address from a name. Use the reverse lookup to show ' +
+        'a friendly name for an address in a history or a permission. Pass exactly one of name or address. A reason ' +
+        'says why nothing came back; a name with no address is not a destination.',
       inputSchema: z.strictObject({
         name: z.string().max(255).optional().describe('An ENS name such as alice.eth'),
         address: z.string().optional().describe('An address to look up the primary name of'),
@@ -167,7 +172,7 @@ export function registerResolveNameTool(server: McpServer) {
       tenant(ctx);
       if (name !== undefined && address === undefined) return answer(await lookup({ name }));
       if (address !== undefined && name === undefined) return answer(await lookup({ address }));
-      return refusal('Pass exactly one of `name` or `address`.');
+      return refusal(withNext('Nothing was looked up.', 'Pass exactly one of `name` or `address`.'));
     }
   );
 }

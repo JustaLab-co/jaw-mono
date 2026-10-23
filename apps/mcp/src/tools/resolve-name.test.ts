@@ -3,6 +3,7 @@ import type { AddressInfo } from 'node:net';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { useTestDb } from '@/db/test-db';
 import { callTool, connect, setTestEnv } from '@/connections/testkit';
+import { leaks, spoken } from '@/test-utils/spoken';
 import { custom, encodeErrorResult, offchainLookupAbiItem } from 'viem';
 import { ccipRequest, ccipRequestVia, ensClient, lookup, type EnsClient } from './resolve-name';
 
@@ -193,5 +194,26 @@ describe('jaw_resolve_name', () => {
     const r = await callTool(token, 'jaw_resolve_name', { name: 'vitalik.eth' });
     expect(r.isError).toBe(true);
     expect(r.structuredContent).toMatchObject({ reason: 'lookup_failed' });
+    expect(leaks(spoken(r))).toEqual([]);
+    expect(spoken(r)).toBe('The lookup could not finish right now. Try again.');
+  });
+
+  it('given both a name and an address, then the owner hears that nothing was looked up, and the agent how to ask', async () => {
+    const r = await callTool(token, 'jaw_resolve_name', { name: 'vitalik.eth', address: VITALIK });
+    expect(leaks(spoken(r))).toEqual([]);
+    expect(spoken(r)).toBe('Nothing was looked up.');
+  });
+});
+
+describe('what the owner hears from a lookup', () => {
+  it.each([
+    [{ name: 'vitalik.eth' }, `vitalik.eth resolves to ${VITALIK}.`],
+    [{ address: VITALIK }, `${VITALIK} is vitalik.eth.`],
+    [{ name: 'nobody.eth' }, 'nobody.eth has no address.'],
+  ])('given %o, then the owner hears %s, and nothing internal', async (input, said) => {
+    const out = await lookup(input, () => client);
+    const r = { structuredContent: out };
+    expect(leaks(spoken(r))).toEqual([]);
+    expect(spoken(r)).toBe(said);
   });
 });

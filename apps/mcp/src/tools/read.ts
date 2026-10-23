@@ -32,7 +32,10 @@ import { chainView, heldSpends, LOGGED_READ_MS, readAt, recordedSends, type Open
 import { entriesFor, holdingRows, pulledUnderOtherGrants } from '@/payments/store';
 import { caip2, publicClientFor } from '@/lib/chain';
 import { fenceText, reply } from '@/lib/fence';
+import { chainName, formatAmount, onDate } from '@/lib/owner-text';
 import { safeFetch, watchCuts } from '@/lib/safe-fetch';
+import { plainReason } from '@/payments/render';
+import { withNext } from './reply';
 
 const caip19 = (network: string, token: string) => `${network}/erc20:${token}`;
 
@@ -178,19 +181,66 @@ const statusOutput = z.object({
   summary: z.string(),
 });
 
-const NOT_READY: Record<NonNullable<Readiness['reason']>, string> = {
-  no_scope: 'Paying needs the x402:pay scope: reconnect and ask for it.',
-  no_grant: 'No budget yet: ask for one with jaw_grant_permissions and x402Budget.',
-  grant_revoked: 'The budget was revoked: ask for a new one with jaw_grant_permissions and x402Budget.',
-  chain_unavailable: 'The budget could not be read from the chain right now.',
+/** What the owner hears, and what the agent does about it. */
+type Said = { say: string; next?: string };
+
+const NOT_READY: Record<NonNullable<Readiness['reason']>, Said> = {
+  no_scope: {
+    say: 'This connection was not allowed to pay for services when it was set up. Reconnecting with payments allowed fixes that.',
+    next: 'Reconnect and ask for the x402:pay scope.',
+  },
+  no_grant: {
+    say: 'No spend limit for paid services yet.',
+    next: 'When the owner needs a paid service or a run without approval, ask for one with jaw_grant_permissions and x402Budget.',
+  },
+  grant_revoked: {
+    say: 'The spend limit for paid services was revoked.',
+    next: 'Ask for a new one with jaw_grant_permissions and x402Budget if the owner needs it.',
+  },
+  chain_unavailable: { say: 'The spend limit could not be read from the network right now. Try again shortly.' },
 };
 
-function leftToday(budget: z.infer<typeof budgetOutput> | undefined) {
-  const pay = budget?.remainingToday;
-  return pay ? `, ${pay.amount} base units left today` : '';
+/** A USDC amount as people read it, such as 0.49 USDC; a token the registry does not know keeps its address. */
+function usdc(amount: string, network: string, asset?: string) {
+  const known = usdcForNetwork(network);
+  if (known && (asset === undefined || known.address.toLowerCase() === asset.toLowerCase())) {
+    return formatAmount(amount, known.decimals, 'USDC');
+  }
+  return `${amount} of the smallest unit of the token ${asset ?? 'it pays in'}`;
 }
 
-const EXPIRY_WARN_MS = 48 * 60 * 60 * 1000;
+/** The spend limit for paid services, as the owner reads it: what is left today of how much a day. */
+function limitSay(budget: z.infer<typeof budgetOutput>, network: string) {
+  const perDay = `${usdc(budget.perDay.amount, network)} a day`;
+  const left = budget.remainingToday;
+  return left
+    ? `Spend limit for paid services: ${usdc(left.amount, network)} left today of ${perDay}.`
+    : `Spend limit for paid services: ${perDay}; what is left today could not be read.`;
+}
+
+const plural = (n: number, word: string) => `${n} ${word}${n === 1 ? '' : 's'}`;
+
+const HOUR_MS = 60 * 60 * 1000;
+const EXPIRY_WARN_MS = 48 * HOUR_MS;
+
+/** When the connection ends: a date, or in how many hours once that is close. */
+function endSay(expiresAt: Date): Said {
+  const left = expiresAt.getTime() - Date.now();
+  if (left >= EXPIRY_WARN_MS) return { say: `This connection ends on ${onDate(expiresAt)}.` };
+  const hours = Math.floor(left / HOUR_MS);
+  const when = hours >= 1 ? `in ${plural(hours, 'hour')}` : 'in under an hour';
+  return {
+    say: `This connection ends ${when}. Disconnecting before then returns the USDC it holds to the wallet.`,
+    next: 'Offer the owner to disconnect before then; call jaw_session_disconnect only if they agree.',
+  };
+}
+
+/** One line for the owner, then one line for the agent with every next step in order. */
+const said = (parts: (Said | string | undefined)[]) => {
+  const all = parts.filter((p) => p !== undefined).map((p) => (typeof p === 'string' ? { say: p } : p));
+  const next = all.flatMap((p) => (p.next ? [p.next] : [])).join(' ');
+  return withNext(all.map((p) => p.say).join(' '), next || undefined);
+};
 
 function leftOf(period: OnChainPeriod, allowance: bigint, open: OpenSpend[], token: string) {
   if (period.status === 'unavailable') return null;
@@ -251,14 +301,13 @@ async function status(t: Tenant) {
   );
   const ready = readinessOf(t, read?.liveness);
   const expiresAt = conn?.expiresAt ?? new Date();
-  const nearExpiry = expiresAt.getTime() - Date.now() < EXPIRY_WARN_MS;
-  const base =
-    ready.status === 'ready'
-      ? `Connected as ${t.account} on ${network}. Ready to pay${leftToday(read?.budget)}.`
-      : `Connected as ${t.account} on ${network}. ${NOT_READY[ready.reason ?? 'no_grant']}`;
-  const summary = nearExpiry
-    ? `${base} Connection expires ${expiresAt.toISOString()}; call jaw_session_disconnect soon.`
-    : base;
+  const others = grants.filter((g) => g.permissionId !== grant?.permissionId && g.active !== false).length;
+  const summary = said([
+    `Connected to the owner's wallet on ${chainName(t.chainId)}.`,
+    ready.status === 'ready' && read ? limitSay(read.budget, network) : NOT_READY[ready.reason ?? 'no_grant'],
+    others ? `${plural(others, 'other permission')} in force.` : undefined,
+    endSay(expiresAt),
+  ]);
   return statusOutput.parse({
     account: t.account,
     chainId: network,
@@ -295,7 +344,8 @@ const quoteOutput = z.object({
 type BudgetRead = Awaited<ReturnType<typeof budgetOf>>;
 
 type Price = { amount: string; asset: string; network: string; scheme: string; payTo: string };
-type Fit = { readiness: QuoteReadiness; approvalOwed: boolean };
+/** `missing` is what the wallet lacks, on a short balance. */
+type Fit = { readiness: QuoteReadiness; approvalOwed: boolean; missing?: bigint };
 type Terms = Awaited<ReturnType<typeof termsOf>>;
 
 const UNREADABLE: QuoteReadiness = { status: 'not_ready', reason: 'chain_unavailable' };
@@ -343,27 +393,50 @@ async function fitOf(t: Tenant, grant: Grant, room: Room | undefined, p: Price):
   if (pull > room.cap) return fit(over, owed);
   const funds = await balanceOf(caip2(grant.chainId), grant.account);
   if (!funds) return fit(UNREADABLE, owed);
-  return fit(BigInt(funds.amount) < pull ? { status: 'not_ready', reason: 'balance_low' } : { status: 'ready' }, owed);
+  const held = BigInt(funds.amount);
+  if (held >= pull) return fit({ status: 'ready' }, owed);
+  return { readiness: { status: 'not_ready', reason: 'balance_low' }, approvalOwed: owed, missing: pull - held };
 }
 
-function fitSummary(read: BudgetRead, grant: Grant, terms: Terms, { readiness, approvalOwed }: Fit) {
-  const { permissionId, remainingToday } = read.budget;
-  const left = remainingToday ? `${remainingToday.amount} base units` : 'an unknown amount';
-  const approval = approvalOwed ? ' A first upto payment also pays the gas to approve Permit2 from it.' : '';
+// What the quote says beside the price: whether the spend limit covers it, and what stands in the way when not.
+function fitSummary(read: BudgetRead, grant: Grant, terms: Terms, { readiness, approvalOwed, missing }: Fit): Said {
+  const network = caip2(grant.chainId);
+  const { remainingToday } = read.budget;
+  const left = remainingToday ? usdc(remainingToday.amount, network) : 'an amount that could not be read';
+  const approval = approvalOwed
+    ? ' The first payment to a service of this kind also pays a one-time approval fee.'
+    : '';
+  const cap = terms.policy.maxAmountPerPayment;
   switch (readiness.reason) {
     case undefined:
-      return ` Within budget ${permissionId}, which has ${left} left today.${approval}`;
+      return { say: `Within the spend limit, which has ${left} left today.${approval}` };
     case 'over_allowance':
-      return ` Budget ${permissionId} has ${left} left today, not enough to pay it.${approval}`;
+      return {
+        say: `The spend limit has ${left} left today, not enough for it.${approval}`,
+        next: 'Offer to wait for the daily reset or to ask the owner for a higher spend limit.',
+      };
     case 'over_cap':
-      return ` One payment may spend at most ${terms.policy.maxAmountPerPayment} base units, whatever the budget.`;
+      return {
+        say: cap
+          ? `One payment may be at most ${usdc(cap, network)}, whatever the spend limit, and this service asks for more.`
+          : 'One payment may not be this large, whatever the spend limit.',
+      };
     case 'balance_low':
-      return ` The account ${grant.account} holds too little USDC to refill the session for it: send USDC there (jaw_add_funds).`;
+      return {
+        say: 'The wallet holds too little USDC to cover it.',
+        next: `Offer add funds with the missing ${missing === undefined ? 'amount' : usdc(missing.toString(), network)} on ${chainName(grant.chainId)}.`,
+      };
     case 'funding_unavailable':
-      return ' This server cannot refill the session or approve Permit2, so it pays only from the float already there.';
+      return { say: "The connection's balance cannot be topped up right now, so this cannot be paid." };
     default:
-      return ` ${NOT_READY[readiness.reason]}`;
+      return NOT_READY[readiness.reason];
   }
+}
+
+/** What the service asks per call, in USDC as people read it. `upto` asks a ceiling, not a price. */
+function priceSay(host: string, p: Price) {
+  const amount = usdc(p.amount, p.network, p.asset);
+  return p.scheme === 'upto' ? `${host} charges up to ${amount} per call.` : `${host} charges ${amount} per call.`;
 }
 
 type Priced = { price: Price; capped?: QuoteReadiness };
@@ -405,23 +478,24 @@ async function quote(t: Tenant, url: string) {
   const [outcome, read] = await Promise.all([probe, grant && budgetOf(grant, t, float && BigInt(float.amount))]);
   const ready = readinessOf(t, read?.liveness);
   const base = { url, readiness: ready };
+  const host = new URL(url).host;
+  const noPrice = (code: string) => `No price could be read from ${host}: ${plainReason(code)}.`;
   if (outcome.kind === 'unreachable') {
     return {
       out: quoteOutput.parse({
         ...base,
         kind: 'refused',
         refusal: { code: outcome.code, reason: outcome.reason },
-        summary: `No quote: ${outcome.code}.`,
+        summary: noPrice(outcome.code),
       }),
     };
   }
   const priced = pricedOf(outcome, grant, network);
   if (priced) {
     const p = priced.price;
-    const asset = usdcForNetwork(p.network);
-    const shown = asset && asset.address.toLowerCase() === p.asset.toLowerCase() ? asset.usdcName : p.asset;
     const usable = grant && terms && read && ready.status === 'ready' ? { grant, terms, read } : undefined;
     const fit = usable && (await fitFor(t, usable.grant, usable.read, priced));
+    const fitSaid = usable && fit ? fitSummary(usable.read, usable.grant, usable.terms, fit) : undefined;
     return {
       out: quoteOutput.parse({
         ...base,
@@ -434,7 +508,10 @@ async function quote(t: Tenant, url: string) {
         ...(usable && {
           budget: { permissionId: usable.read.budget.permissionId, remainingToday: usable.read.budget.remainingToday },
         }),
-        summary: `Costs ${p.amount} base units of ${shown} on ${p.network}. Not paid.${usable && fit ? fitSummary(usable.read, usable.grant, usable.terms, fit) : ''}`,
+        summary: said([
+          priceSay(host, p),
+          fitSaid ?? (ready.status === 'ready' ? undefined : NOT_READY[ready.reason ?? 'no_grant']),
+        ]),
       }),
     };
   }
@@ -443,10 +520,10 @@ async function quote(t: Tenant, url: string) {
       out: quoteOutput.parse({
         ...base,
         kind: 'refused',
-        refusal: { code: outcome.refusal.code, reason: fenceText(new URL(url).host, outcome.refusal.reason, 400) },
-        summary: `No quote: ${outcome.refusal.code}.`,
+        refusal: { code: outcome.refusal.code, reason: fenceText(host, outcome.refusal.reason, 400) },
+        summary: noPrice(outcome.refusal.code),
       }),
-      extra: [fenced(new URL(url).host, outcome.refusal.reason)],
+      extra: [fenced(host, outcome.refusal.reason)],
     };
   }
   const cut = cuts.lastCut();
@@ -455,9 +532,9 @@ async function quote(t: Tenant, url: string) {
       ...base,
       kind: 'free',
       ...(cut && { bodyTruncated: true }),
-      summary: `Free: answered ${outcome.status} without a payment.${cut ? ' The body was cut at 1 MB.' : ''}`,
+      summary: `Free: no payment is needed.${cut ? ' The response was cut at 1 MB.' : ''}`,
     }),
-    extra: [fenced(new URL(url).host, typeof outcome.body === 'string' ? outcome.body : JSON.stringify(outcome.body))],
+    extra: [fenced(host, typeof outcome.body === 'string' ? outcome.body : JSON.stringify(outcome.body))],
   };
 }
 
@@ -467,8 +544,13 @@ export function registerReadTools(server: McpServer) {
   server.registerTool(
     'jaw_session_status',
     {
+      title: "This connection's status",
       description:
-        'This connection: its expiry, every live grant with what each limit has left, the USDC float at its session address, and whether it can pay yet (with a link when not). Balances are in jaw_get_assets.',
+        'This connection: which network it is on, the spend limit for paid services and what is left of it today, every ' +
+        'other permission in force with what each limit has left, the USDC the connection holds for fees and paid ' +
+        'services, and when the connection ends. Use it first in a conversation, before paying a web service or running ' +
+        "under a permission, and after asking for a permission to see it in force. The owner's balances are in " +
+        'jaw_get_assets, not here.',
       inputSchema: z.strictObject({}),
       outputSchema: statusOutput,
       annotations: readOnly,
@@ -479,9 +561,13 @@ export function registerReadTools(server: McpServer) {
   server.registerTool(
     'jaw_session_x402_quote',
     {
+      title: 'Price of a paid web service',
       description:
-        'The price of an x402 resource, without paying. Sends one request and reads the 402 challenge. ' +
-        'readiness says whether jaw_session_x402_pay would pay it from this budget right now, and why not; it reserves nothing.',
+        'The price of a paid web service, without paying: one request, and the price it asks for. readiness says ' +
+        'whether jaw_session_x402_pay could pay it right now from the spend limit for paid services, and if not, why: ' +
+        'no spend limit, over what is left today, over the per-payment cap, or the wallet holds too little USDC. Use it ' +
+        'before the first payment to a service and whenever the owner asks what something costs. When the reason is a ' +
+        'short wallet balance, offer add funds with the missing amount and network. It reserves nothing.',
       inputSchema: z.strictObject({ url: z.string().url().describe('The paid resource') }),
       outputSchema: quoteOutput,
       annotations: readOnly,

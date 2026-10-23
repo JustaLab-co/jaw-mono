@@ -12,7 +12,7 @@ import { grants } from '@/db/schema';
 import type { ReadPermission } from '@/grants/permission';
 import {
   lostBefore,
-  lostPreamble,
+  lostLinkSaid,
   openLink,
   RECONNECTING,
   reconnecting,
@@ -23,8 +23,10 @@ import { REVOKE_READS, revokeWork, sameId, type RevokeTarget } from '@/grants/re
 import { fromStore, markRevoked, readState, type LookUp } from '@/grants/revokes';
 import { RATE_WINDOW_MS } from '@/lib/edge';
 import { reply } from '@/lib/fence';
+import { chainName, expiresIn, onDate, withinWindow } from '@/lib/owner-text';
 import { LINK_RATE_LIMIT } from '@/owner-calls/cap';
-import { ACCOUNT_BUSY, refusal } from './reply';
+import { listed, spendLimits } from './grant-permissions';
+import { ACCOUNT_BUSY, refusal, withNext } from './reply';
 
 const revokeInput = z.strictObject({
   permissionId: z
@@ -61,33 +63,74 @@ const DEFAULTS: RevokeDeps = { openWallet: ownerRelay, lookUp: fromStore, ...REV
 type Target = RevokeTarget;
 
 const unknown = (id: string) =>
-  `unknown_permission: no permission ${id} was granted from this account. jaw_connections lists the ones this server holds.`;
+  withNext(
+    'unknown_permission: No permission with that id was granted from this wallet. Nothing was asked.',
+    `No permission ${id} was granted from this account. jaw_connections lists the ones this server holds.`
+  );
+
+/** The network's name, or its id in words for a chain nobody knows, so the owner never reads a raw chain id. */
+const networkOf = (chainId: number) => {
+  const name = chainName(chainId);
+  return name.startsWith('eip155:') ? `the network with id ${chainId}` : name;
+};
 
 async function findPermission(t: Tenant, id: Hex, chainId: number, lookUp: LookUp): Promise<Target | string> {
   const [row] = await getDb()
     .select()
     .from(grants)
     .where(and(sameId(id), sql`lower(${grants.account}) = ${t.account.toLowerCase()}`));
-  if (row?.revokedAt) return `already_revoked: permission ${id} was revoked at ${row.revokedAt.toISOString()}.`;
+  if (row?.revokedAt) {
+    return withNext(
+      `already_revoked: This permission was already revoked, on ${onDate(row.revokedAt)}. Nothing was asked.`,
+      `Permission ${id} was revoked at ${row.revokedAt.toISOString()}.`
+    );
+  }
   const stored = await lookUp(id);
   if (stored === 'unavailable') {
-    return 'lookup_unavailable: the permission store could not be read right now. Try again in a minute.';
+    return 'lookup_unavailable: The permission could not be looked up right now. Nothing was asked. Try again in a minute.';
   }
   if (stored === 'not_found' && row) {
-    return `not_in_store: the wallet revokes from JAW's permission store, which does not hold ${id}. It stays approved until it expires, or until jaw_session_disconnect from its connection revokes it.`;
+    return withNext(
+      'not_in_store: The wallet cannot revoke this permission from its screen. It stays approved until it expires, or until the app that holds it disconnects.',
+      `The wallet revokes from JAW's permission store, which does not hold ${id}. jaw_session_disconnect from its connection revokes it.`
+    );
   }
   const found = row ? { permission: row.permission as GrantedPermission, chainId: row.chainId } : stored;
   if (found === 'not_found' || !isAddressEqual(found.permission.account as Address, t.account)) return unknown(id);
   if (found.chainId !== chainId) {
-    return `wrong_chain: permission ${id} was granted on chain ${found.chainId}, not ${chainId}. Pass chainId ${found.chainId}.`;
+    return withNext(
+      `wrong_chain: This permission was granted on ${networkOf(found.chainId)}, not ${networkOf(chainId)}. Nothing was asked.`,
+      `Permission ${id} was granted on chainId ${found.chainId}, not ${chainId}. Pass chainId ${found.chainId}.`
+    );
   }
   return { permissionId: id, chainId, permission: found.permission, connectionId: row?.connectionId ?? null };
 }
 
-async function answer(target: Target, row: PermissionRequestRow) {
+/** Who the permission lets act, as the owner reads it. */
+const holder = (t: Tenant, target: Target) =>
+  target.connectionId === t.connectionId
+    ? 'this connection'
+    : target.connectionId
+      ? 'another app'
+      : 'an app this service has no record of';
+
+async function answer(t: Tenant, target: Target, row: PermissionRequestRow) {
   const lost = await lostBefore(row);
   const { spender, spends } = target.permission;
-  const tokens = spends.length ? ` and its limits on ${spends.map((s) => s.token).join(', ')}` : '';
+  const limits = spendLimits(target.chainId, spends);
+  const moving = limits.length ? `, moving up to ${listed(limits)}` : '';
+  const lostSaid = lost && lostLinkSaid(lost, 'revoke');
+  const say = [
+    `It asks the owner to revoke a permission that lets ${holder(t, target)} act from their wallet${moving}, ${withinWindow(row.approveBy)}. ` +
+      'Revoking takes effect at once; the owner pays the network fee.',
+    ...(lostSaid ? [lostSaid.say] : []),
+  ].join('\n');
+  const next =
+    'Show the link now. Then check jaw_connections on later turns to see it revoked; do not wait for the owner to say they did. ' +
+    `It lets ${spender} act for the account.` +
+    (lost && lostSaid
+      ? ` ${lostSaid.next} It asked to revoke ${lost.permissionId}. A revoke the owner already approved there still shows on chain, and asking for it again reads it as already_revoked.`
+      : '');
   return reply({
     url: row.walletUrl,
     permissionId: target.permissionId,
@@ -95,45 +138,49 @@ async function answer(target: Target, row: PermissionRequestRow) {
     spender,
     connection: target.connectionId,
     approveBy: row.approveBy.toISOString(),
-    summary:
-      (lost
-        ? lostPreamble(lost, 'revoke') +
-          `It asked to revoke ${lost.permissionId}. A revoke the owner already approved there still shows on chain, and asking for it again reads it as already_revoked. `
-        : '') +
-      `Ask the account owner to open ${row.walletUrl} before ${row.approveBy.toISOString()} and revoke permission ${target.permissionId}, ` +
-      `which lets ${spender} act for the account${tokens}. The owner pays the gas in the wallet. ` +
-      'Once the chain shows it revoked, jaw_connections lists it revoked and nothing can spend under it. ' +
-      'Right after showing the link, call jaw_connections yourself to see it revoked, and again on each later turn until that time; do not wait for the owner to say they revoked it.',
+    summary: `Open this link to revoke: ${row.walletUrl}\n${withNext(say, next)}`,
   });
 }
 
 export async function revokePermission(t: Tenant, input: RevokeInput, deps = DEFAULTS) {
   const chainId = input.chainId ?? t.chainId;
-  if (!SUPPORTED_CHAINS[chainId]) return refusal(`unsupported_chain: chain ${chainId} is not one this server reads.`);
+  if (!SUPPORTED_CHAINS[chainId]) {
+    return refusal(
+      withNext(
+        `unsupported_chain: Permissions on ${networkOf(chainId)} cannot be revoked from here. Nothing was asked.`,
+        `chainId ${chainId} is not one this server reads. It reads ${Object.keys(SUPPORTED_CHAINS).join(', ')}.`
+      )
+    );
+  }
   if (
     !(await revokeHeld(t, input.permissionId)) &&
     (await countHit(`owner-revoke:${t.connectionId}`, RATE_WINDOW_MS)) > LINK_RATE_LIMIT
   ) {
-    return refusal('rate_limited: too many revoke requests on this connection. Wait a minute.');
+    return refusal('rate_limited: Too many revoke requests in a short time. Nothing was asked. Wait a minute.');
   }
   const target = await findPermission(t, input.permissionId as Hex, chainId, deps.lookUp);
   if (typeof target === 'string') return refusal(target);
   if (target.permission.end * 1000 <= Date.now()) {
-    return refusal(`expired: permission ${target.permissionId} already ended, so there is nothing to revoke.`);
+    return refusal('expired: This permission already ended, so there is nothing to revoke.');
   }
   const state = await readState(target, deps.readPermission);
   if (state.status === 'unavailable') {
-    return refusal('chain_unreadable: the chain could not be read for this permission. Try again in a minute.');
+    return refusal(
+      'chain_unreadable: The network could not be read for this permission. Nothing was asked. Try again in a minute.'
+    );
   }
   if (state.status === 'mismatch') {
     return refusal(
-      `permission_mismatch: the stored permission ${target.permissionId} does not hash to its id on chain, so it cannot be revoked from here.`
+      withNext(
+        'permission_mismatch: This permission cannot be revoked from here: its record does not match what is on chain. Nothing was asked.',
+        `The stored permission ${target.permissionId} does not hash to its id on chain.`
+      )
     );
   }
   if (!state.approved) return refusal(unknown(target.permissionId));
   if (state.revoked) {
     await markRevoked(target.permissionId);
-    return refusal(`already_revoked: permission ${target.permissionId} is already revoked on chain.`);
+    return refusal('already_revoked: This permission is already revoked. Nothing was asked.');
   }
   const opened = await openLink(
     t,
@@ -149,30 +196,42 @@ export async function revokePermission(t: Tenant, input: RevokeInput, deps = DEF
   );
   if (opened === 'wallet_busy') return refusal('Too many owners are approving right now. Try again in a minute.');
   if (opened === 'account_busy') return refusal(ACCOUNT_BUSY);
-  if ('opened' in opened) return answer(target, opened.opened);
+  if ('opened' in opened) return answer(t, target, opened.opened);
   const held = opened.waiting;
   const until = held.approveBy.toISOString();
+  const rejoining = reconnecting(held) ? RECONNECTING : '';
   if (held.connectionId !== t.connectionId) {
     return refusal(
-      `revoke_in_progress: another app on this account asked the owner to revoke ${held.permissionId}; that link waits until ${until}.${reconnecting(held) ? RECONNECTING : ''}`
+      withNext(
+        `revoke_in_progress: Another app already asked the owner to revoke this permission, and that request ${expiresIn(held.approveBy)}.`,
+        `Another app on this account asked the owner to revoke ${held.permissionId}; that link waits until ${until}.${rejoining} Check jaw_connections on later turns to see it revoked.`
+      )
     );
   }
   if (held.permissionId?.toLowerCase() !== target.permissionId.toLowerCase()) {
     return refusal(
-      `revoke_in_progress: this connection already asked the owner to revoke ${held.permissionId}. Ask again once they answer or the link ends at ${until}.${reconnecting(held) ? RECONNECTING : ''}`
+      withNext(
+        `revoke_in_progress: A request to revoke another permission is already waiting for the owner, and it ${expiresIn(held.approveBy)}.`,
+        `This connection already asked the owner to revoke ${held.permissionId}. Ask again once they answer or the link ends at ${until}.${rejoining}`
+      )
     );
   }
-  return answer(target, held);
+  return answer(t, target, held);
 }
 
 export function registerRevokeTool(server: McpServer) {
   server.registerTool(
     'jaw_revoke_permission',
     {
+      title: 'Revoke a permission',
       description:
-        'Ask the account owner to revoke a permission on chain, confirmed in their JAW wallet: a grant of this connection, of another app connected to this account, or any other permission the account granted. ' +
-        'Once revoked, nothing can spend or call under it. The owner pays the gas. Returns a link for the owner; asking again while it waits returns the same link. ' +
-        "jaw_connections lists this server's grants by permissionId. To end this connection and revoke all of its grants at once, use jaw_session_disconnect.",
+        'Ask the owner to revoke a permission in their JAW wallet: one this connection holds, one another app holds, or any other permission granted from this wallet. ' +
+        'Once revoked, nothing can act under it; the owner pays the network fee. ' +
+        "Use it when the owner wants to take back an app's or agent's access, or to clear a replaced spend limit that jaw_connections lists as still approved. " +
+        'jaw_connections gives the permissionId. ' +
+        'To end this connection and revoke all of its permissions at once, use jaw_session_disconnect instead. ' +
+        'Returns a link: show it on its own line before anything else; asking again while it waits returns the same link. ' +
+        'Then check jaw_connections on later turns to see it revoked; do not wait for the owner to say they did.',
       inputSchema: revokeInput,
       outputSchema: output,
       annotations: { destructiveHint: true, idempotentHint: true },

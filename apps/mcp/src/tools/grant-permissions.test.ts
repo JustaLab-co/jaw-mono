@@ -23,6 +23,8 @@ import { grants, permissionRequests } from '@/db/schema';
 import { TEST_PG_URL, useTestDb, useTestPostgres } from '@/db/test-db';
 import type { GrantRequest } from '@/grants/permission';
 import { LIVE_GRANTS_PER_CONNECTION, x402Budget } from '@/grants/store';
+import { leaks, spoken, toAgent } from '@/test-utils/spoken';
+import { onDate } from '@/lib/owner-text';
 import { grantPermissions, type GrantInput } from './grant-permissions';
 
 setTestEnv();
@@ -108,7 +110,9 @@ describe('jaw_grant_permissions', () => {
       },
       capabilities: { prefundSpender: true },
     });
-    expect('structuredContent' in result && result.structuredContent.summary).toContain('2.5 USDC a day');
+    expect('structuredContent' in result && result.structuredContent.summary).toContain(
+      'a spend limit of 2.50 USDC a day for paid services'
+    );
     expect(await newestRow(t)).toMatchObject({
       kind: 'x402-budget',
       token: USDC,
@@ -124,20 +128,64 @@ describe('jaw_grant_permissions', () => {
     const { result } = await grant(t, signer, { x402Budget: { perDay: '2' } });
 
     const summary = 'structuredContent' in result ? result.structuredContent.summary : '';
-    expect(summary).toContain('replaces the current one, which this server then tries to revoke on chain');
+    expect(spoken(result)).toContain('It replaces the current spend limit.');
+    expect(summary).toContain('this server tries to revoke the current spend limit on chain');
     expect(summary).toContain('stays approved on chain until it expires or jaw_revoke_permission revokes it');
     expect(summary).not.toContain('then revokes');
   });
 
-  it('when a client lists the tools, then the description says the revoke of a replaced budget is only tried', async () => {
+  it('when a client lists the tools, then no description says a replaced spend limit is surely revoked, and revoking one still approved is offered', async () => {
     const { c } = await connected();
 
     const { json } = await mcp(c.access_token, { method: 'tools/list' });
 
-    const { description } = json.result.tools.find((t: { name: string }) => t.name === 'jaw_grant_permissions');
-    expect(description).toContain('replaces the current one, which the server then tries to revoke on chain');
-    expect(description).toContain('stays approved on chain until it expires or jaw_revoke_permission revokes it');
-    expect(description).not.toContain('then revokes');
+    const described = (name: string) => json.result.tools.find((t: { name: string }) => t.name === name).description;
+    expect(described('jaw_grant_permissions')).toContain('a new one replaces the current one');
+    expect(described('jaw_grant_permissions')).not.toContain('then revokes');
+    expect(described('jaw_revoke_permission')).toContain(
+      'to clear a replaced spend limit that jaw_connections lists as still approved'
+    );
+  });
+
+  it('when a client lists the tools, then it is titled for people and marked as asking, not destroying', async () => {
+    const { c } = await connected();
+
+    const { json } = await mcp(c.access_token, { method: 'tools/list' });
+
+    const tool = json.result.tools.find((t: { name: string }) => t.name === 'jaw_grant_permissions');
+    expect(tool.title).toBe('Ask the owner for a permission');
+    expect(tool.annotations).toEqual({ destructiveHint: false, openWorldHint: false });
+  });
+
+  it('given the x402 preset, then the owner hears the link first, then what it allows and until when, in plain words', async () => {
+    const { t, signer } = await connected(false);
+
+    const { result } = await grant(t, signer, { x402Budget: { perDay: '1' } });
+
+    if (!('structuredContent' in result)) throw new Error('refused');
+    const { url } = result.structuredContent;
+    const [link, said] = spoken(result).split('\n');
+    expect(link).toBe(`Open this link to approve: ${url}`);
+    expect(said).toBe(
+      `It asks the owner to approve a permission for this connection: a spend limit of 1 USDC a day for paid services, until ${onDate(t.expiresAt)}, within the next 30 minutes. ` +
+        'Limits are enforced on chain, and the owner can revoke it anytime with one tap.'
+    );
+    expect(leaks(spoken(result))).toEqual([]);
+    expect(toAgent(result)).toEqual([
+      'For the agent: Show the link now with one sentence of what it allows. Then check jaw_session_status on later turns to see it in force; do not wait for the owner to say they approved.',
+    ]);
+  });
+
+  it('given a custom permission, then the owner hears how many actions, on which contracts, and each limit with its token and period', async () => {
+    const { t, signer } = await connected(false);
+
+    const { result } = await grant(t, signer, twoByTwo);
+
+    expect(spoken(result)).toContain(
+      `a permission for this connection: 2 allowed actions on 2 contracts (${WETH} and ${ROUTER}) with a limit of ` +
+        `500000000000000000 smallest units of the token at ${WETH} a week and 2 USDC every 2 months, until `
+    );
+    expect(leaks(spoken(result))).toEqual([]);
   });
 
   it('given two calls and two spends, then the wallet is asked for exactly those, and a custom row keeps them all', async () => {
@@ -209,6 +257,7 @@ describe('jaw_grant_permissions', () => {
 
     expect('isError' in result && result.isError).toBe(true);
     expect(result.content[0].text).toMatch(/^expiry_in_past: /);
+    expect(leaks(spoken(result))).toEqual([]);
     expect(opened).toBe(0);
   });
 
@@ -314,7 +363,10 @@ describe('jaw_grant_permissions', () => {
 
     const { result, opened } = await grant(t, signer, twoByTwo);
 
-    expect(result.content[0].text).toContain(`${LIVE_GRANTS_PER_CONNECTION} live grants`);
+    expect(result.content[0].text).toContain(
+      `already holds ${LIVE_GRANTS_PER_CONNECTION} permissions, the most it can`
+    );
+    expect(leaks(spoken(result))).toEqual([]);
     expect(opened).toBe(0);
   });
 
@@ -433,7 +485,11 @@ describe('jaw_grant_permissions', () => {
 
     expect(opened).toBe(1);
     const url = 'structuredContent' in first && first.structuredContent.url;
-    expect(again.content[0].text).toContain(`still waiting for the owner at ${url}`);
+    expect(spoken(again)).toMatch(
+      /^A permission request is already waiting for the owner; it expires in (29|30) minutes\.\n/
+    );
+    expect(again.content[0].text).toContain(`\nOpen this link to approve: ${url}\n`);
+    expect(leaks(spoken(again))).toEqual([]);
   });
 
   it('given the waiting grant has a saved relay session and its lease lapsed inside the stall grace, when asked again, then the refusal says the server is reconnecting', async () => {
@@ -458,7 +514,7 @@ describe('jaw_grant_permissions', () => {
     await walletsSettled();
 
     expect(again.content[0].text).toContain('reconnecting to the owner');
-    expect(again.content[0].text).not.toContain('still waiting for the owner');
+    expect(again.content[0].text).not.toContain('already waiting for the owner');
   });
 
   it('given a grant opening its link while another ask finds the wallet pool full, then the other is told that link is waiting', async () => {
@@ -487,7 +543,8 @@ describe('jaw_grant_permissions', () => {
     await walletsSettled();
 
     const url = 'structuredContent' in first && first.structuredContent.url;
-    expect(again.content[0].text).toContain(`still waiting for the owner at ${url}`);
+    expect(again.content[0].text).toContain('already waiting for the owner; it expires in');
+    expect(again.content[0].text).toContain(`\nOpen this link to approve: ${url}\n`);
   });
 
   it('given the lease of an asked grant link lapses, then the next ask opens a new link that warns not to approve the old one', async () => {
@@ -519,10 +576,20 @@ describe('jaw_grant_permissions', () => {
     await walletsSettled();
 
     const summary = 'structuredContent' in again ? again.structuredContent.summary : again.content[0].text;
-    expect(summary).toMatch(/^link_lost: /);
-    expect(summary).toContain(String(url));
-    expect(summary).toMatch(/not to approve/);
-    expect('structuredContent' in again && again.structuredContent.url).not.toBe(url);
+    const newUrl = 'structuredContent' in again && again.structuredContent.url;
+    expect(summary.split('\n')[0]).toBe(`Open this link to approve: ${newUrl}`);
+    expect(summary).not.toMatch(/link_lost: /);
+    // The owner is told to leave the lost link alone; the lost link itself is for the agent.
+    expect(spoken(again)).toContain(
+      'An earlier permission link stopped working, so an answer given there may never arrive. If it is still open, do not approve it there.'
+    );
+    expect(spoken(again)).not.toContain(String(url));
+    expect(toAgent(again).join('\n')).toContain(`The earlier link ${url} answers link_lost.`);
+    expect(toAgent(again).join('\n')).toContain(
+      'A permission approved on the earlier link can go live on chain without this server recording it'
+    );
+    expect(leaks(spoken(again))).toEqual([]);
+    expect(newUrl).not.toBe(url);
     expect(opened).toBe(2);
   });
 });

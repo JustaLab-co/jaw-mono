@@ -26,6 +26,7 @@ import { budgetSignedUnder, recordRevoked, x402Budgets, type Grant } from '@/gra
 import { errorLabel, log, RATE_WINDOW_MS } from '@/lib/edge';
 import { fenceText } from '@/lib/fence';
 import { safeFetch, watchCuts } from '@/lib/safe-fetch';
+import { NO_PAY_SCOPE, withNext } from '@/tools/reply';
 import { confirmByReceipt, type Settled } from './confirm';
 import { refillHook } from './refill';
 import { gate, render, resent, type PayResult } from './render';
@@ -355,16 +356,17 @@ export async function pay(
   deps: PayDeps = liveDeps(),
   { keepBody = false } = {}
 ): Promise<PayResult> {
-  if (!t.scopes.includes('x402:pay')) {
-    return gate(
-      'insufficient_scope',
-      'This token was not granted x402:pay. Reconnect and ask for it to pay from a budget; a budget approved on this connection does not carry over to the new one.'
-    );
-  }
+  if (!t.scopes.includes('x402:pay')) return gate('insufficient_scope', NO_PAY_SCOPE);
   if (await isPaymentsPaused())
-    return gate('payments_paused', 'Payments are paused on this server. Nothing was signed.');
+    return gate('payments_paused', 'Payments are paused on this service right now. Nothing was paid.');
   if ((await countHit(`pay:${t.connectionId}`, RATE_WINDOW_MS)) > PAY_RATE_LIMIT) {
-    return gate('rate_limited', 'Too many payments on this connection. Wait a minute.');
+    return gate(
+      'rate_limited',
+      withNext(
+        'Too many payments on this connection in the last minute. Nothing was paid.',
+        'Wait a minute, then try again.'
+      )
+    );
   }
   const request: PaymentRequest = {
     url: input.url,
@@ -382,13 +384,28 @@ export async function pay(
   );
   switch (claimed.kind) {
     case 'conflict':
-      return gate('idempotency_conflict', 'This idempotency key was used for another request. Nothing was sent.');
+      return gate(
+        'idempotency_conflict',
+        withNext(
+          'Nothing was paid: this request clashed with an earlier one.',
+          'This idempotencyKey was used for another request. Send a new key for a new request.'
+        )
+      );
     case 'busy':
-      return gate('in_progress', 'A call with this idempotency key is still running. Try again shortly.');
+      return gate(
+        'in_progress',
+        withNext(
+          'This payment is still being made.',
+          'A call with this idempotencyKey is still running. Try again shortly.'
+        )
+      );
     case 'no_grant':
       return gate(
         'no_grant',
-        'This connection has no budget yet. Ask for one with jaw_grant_permissions and x402Budget.'
+        withNext(
+          'No spend limit for paid services yet, so nothing was paid.',
+          'Ask the owner for one with jaw_grant_permissions and x402Budget, saying what it is for.'
+        )
       );
     case 'stored':
       return render(claimed.row, claimed.row.fenced ?? []);

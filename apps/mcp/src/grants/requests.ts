@@ -145,8 +145,14 @@ export async function lostBefore(row: PermissionRequestRow): Promise<PermissionR
   return lost;
 }
 
-export const lostPreamble = (lost: PermissionRequestRow, what: string) =>
-  `link_lost: this server lost the session of the earlier ${what} link ${lost.walletUrl} after asking the owner, so it may never hear an answer given there. `;
+/**
+ * A link this connection lost after the owner was asked, named on the next new link so the owner leaves it alone.
+ * The owner hears no link: a dead one is nothing they can use. The agent gets it, and the key when the link had one.
+ */
+export const lostLinkSaid = (lost: PermissionRequestRow, what: 'signing' | 'permission' | 'revoke') => ({
+  say: `An earlier ${what} link stopped working, so an answer given there may never arrive. If it is still open, do not approve it there.`,
+  next: `The earlier link ${lost.walletUrl}${lost.idempotencyKey ? ` under idempotencyKey ${lost.idempotencyKey}` : ''} answers link_lost.`,
+});
 
 const heldBy = (row: PermissionRequestRow) =>
   and(eq(permissionRequests.id, row.id), eq(permissionRequests.leaseHolder, row.leaseHolder!));
