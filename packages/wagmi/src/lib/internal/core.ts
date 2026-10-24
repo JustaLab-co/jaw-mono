@@ -13,6 +13,10 @@ import {
   type PersonalSignRequestData,
   type TypedDataRequestData,
   type WalletGetCallsHistoryResponse,
+  type RecoveryMethodInput,
+  type RecoverySetupResult,
+  type RecoveryState,
+  type RequestCapabilities,
 } from '@jaw.id/core';
 import type { AccountWithCapabilities } from '../Connector.js';
 
@@ -267,6 +271,159 @@ export async function revokePermissions<config extends Config>(
   });
 
   return result as revokePermissions.ReturnType;
+}
+
+// ============================================================================
+// setupRecovery
+// ============================================================================
+
+export namespace setupRecovery {
+  export type Parameters<config extends Config = Config> = {
+    address?: Address;
+    connector?: Connector;
+    /** Methods to propose in the wallet's recovery editor; the user may edit them */
+    recoveries?: RecoveryMethodInput[];
+    /** Approvals a recovery needs, to propose; the user may edit it */
+    threshold?: number;
+    /** Optional capabilities, such as a paymaster service for the account-door userOp */
+    capabilities?: RequestCapabilities;
+  };
+
+  export type ReturnType = RecoverySetupResult;
+  export type ErrorType = Error;
+}
+
+/**
+ * Sets up or edits recovery for the connected account.
+ * This calls wallet_setupRecovery on the connected wallet, which opens its
+ * recovery editor: on the current config when nothing is proposed, or
+ * prefilled with the proposal. The user edits and confirms.
+ *
+ * Recovery is account-level: the config is the same on every enrolled chain,
+ * and a first setup lands on the connected chain. There is no chainId here;
+ * switch chains first to set up on another one.
+ *
+ * @example
+ * ```ts
+ * // Open the editor on the current config
+ * await Actions.setupRecovery(config);
+ *
+ * // Propose this app as a guardian
+ * await Actions.setupRecovery(config, {
+ *   recoveries: [{ commitment: '0x...', delay: 48 * 3600 }],
+ *   threshold: 1,
+ * });
+ * ```
+ */
+export async function setupRecovery<config extends Config>(
+  config: config,
+  parameters: setupRecovery.Parameters<config> = {}
+): Promise<setupRecovery.ReturnType> {
+  const { address, connector, recoveries, threshold, capabilities } = parameters;
+
+  // Account-level: the wallet acts on the connected chain, so the connector is
+  // never switched.
+  const client = await getConnectorClient(config, {
+    account: address,
+    connector,
+    assertChainId: false,
+  });
+
+  const result = await client.request({
+    method: 'wallet_setupRecovery' as never,
+    params: [{ recoveries, threshold, capabilities }] as never,
+  });
+
+  return result as setupRecovery.ReturnType;
+}
+
+// ============================================================================
+// cancelRecovery
+// ============================================================================
+
+export namespace cancelRecovery {
+  export type Parameters<config extends Config = Config> = {
+    address?: Address;
+    connector?: Connector;
+    /** The ceremony's request id, the same on every chain */
+    requestId: Hex;
+    /** Optional capabilities, such as a paymaster service for the account-door userOp */
+    capabilities?: RequestCapabilities;
+  };
+
+  export type ReturnType = RecoverySetupResult;
+  export type ErrorType = Error;
+}
+
+/**
+ * Vetoes a pending recovery request on every chain it reached.
+ * This calls wallet_cancelRecovery on the connected wallet.
+ *
+ * @example
+ * ```ts
+ * await Actions.cancelRecovery(config, { requestId: '0x...' });
+ * ```
+ */
+export async function cancelRecovery<config extends Config>(
+  config: config,
+  parameters: cancelRecovery.Parameters<config>
+): Promise<cancelRecovery.ReturnType> {
+  const { address, connector, requestId, capabilities } = parameters;
+
+  // The veto is one signature relayed to every chain the request is pending
+  // on, so the connector is never switched.
+  const client = await getConnectorClient(config, {
+    account: address,
+    connector,
+    assertChainId: false,
+  });
+
+  const result = await client.request({
+    method: 'wallet_cancelRecovery' as never,
+    params: [{ requestId, capabilities }] as never,
+  });
+
+  return result as cancelRecovery.ReturnType;
+}
+
+// ============================================================================
+// getRecovery
+// ============================================================================
+
+export namespace getRecovery {
+  export type Parameters<config extends Config = Config> = {
+    address?: Address;
+    connector?: Connector;
+  };
+
+  export type ReturnType = RecoveryState;
+  export type ErrorType = Error;
+}
+
+/**
+ * Gets the recovery state of an account: the config on every supported chain
+ * and the ceremonies not executed anywhere.
+ * This calls wallet_getRecovery on the connected wallet.
+ */
+export async function getRecovery<config extends Config>(
+  config: config,
+  parameters: getRecovery.Parameters<config> = {}
+): Promise<getRecovery.ReturnType> {
+  const { address, connector } = parameters;
+
+  // Account-level backend read, so there is no chain to be on.
+  const client = await getConnectorClient(config, {
+    account: address,
+    connector,
+    assertChainId: false,
+  });
+
+  const result = await client.request({
+    method: 'wallet_getRecovery' as never,
+    params: [{ address }] as never,
+  });
+
+  return result as getRecovery.ReturnType;
 }
 
 // ============================================================================

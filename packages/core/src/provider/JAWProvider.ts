@@ -26,6 +26,7 @@ import { handleGetCallsStatusRequest } from '../rpc/wallet_getCallStatus.js';
 import { handleGetAssetsRequest } from '../rpc/wallet_getAssets.js';
 import {
     handleGetPermissionsRequest,
+    handleGetRecoveryRequest,
     handleGetCapabilitiesRequest,
     handleGetCallsHistoryRequest,
 } from '../rpc/index.js';
@@ -206,11 +207,15 @@ export class JAWProvider extends ProviderEventEmitter implements ProviderInterfa
                     // addFunds joins this group because the receive screen has
                     // nothing to show without an account, so it resolves one the
                     // same way the signing methods do rather than rendering an
-                    // empty state.
+                    // empty state. The recovery methods join it like the
+                    // permission methods: the throwaway signer resolves the
+                    // account the editor is for.
                     case 'wallet_sendCalls':
                     case 'wallet_sign':
                     case 'wallet_grantPermissions':
                     case 'wallet_revokePermissions':
+                    case 'wallet_setupRecovery':
+                    case 'wallet_cancelRecovery':
                     case 'wallet_addFunds': {
                         const ephemeralSigner = this.initSigner(signerType);
                         // AppSpecific authenticates silently so the signing UI is the
@@ -255,6 +260,12 @@ export class JAWProvider extends ProviderEventEmitter implements ProviderInterfa
                     case 'wallet_getPermissions': {
                         // wallet_getPermissions requires an explicit address when not authenticated
                         const result = await handleGetPermissionsRequest(args, this.apiKey);
+
+                        return result as T;
+                    }
+                    case 'wallet_getRecovery': {
+                        // Like wallet_getPermissions: an explicit address is required when not authenticated
+                        const result = await handleGetRecoveryRequest(args, this.apiKey);
 
                         return result as T;
                     }

@@ -293,3 +293,92 @@ all. The fourth vector pins index 300, which the old declaration threw on.
 Do not regenerate one because a test went red. A red vector means the bytes we
 send no longer match the bytes the contract decodes, which is either a bug in
 the encoder or a change in the contract. Say which, in the PR description.
+
+## `recovery-calls.json`
+
+The recovery structs live in a separate repository, `jaw-recovery`
+(`src/interfaces/IRecoveryManager.sol` @ `062a5c4`), not in a submodule here.
+Copied verbatim:
+
+```solidity
+struct AdminOp {
+    uint8 opType;   // ADD_RECOVERY 0, REMOVE_RECOVERY 1, SET_THRESHOLD 2, CANCEL_REQUEST 3
+    bytes data;     // ADD_RECOVERY    => abi.encode(address provider, bytes commitment, uint32 delay)
+                    // REMOVE_RECOVERY => abi.encode(bytes32 recoveryId)
+                    // SET_THRESHOLD   => abi.encode(uint256 threshold)
+                    // CANCEL_REQUEST  => abi.encode(bytes32 requestId)
+}
+
+function addRecovery(address account, address provider, bytes commitment, uint32 delay) returns (bytes32);
+function removeRecovery(address account, bytes32 recoveryId);
+function setRecoveryThreshold(address account, uint256 threshold);
+function cancelRecoveryRequest(bytes32 requestId);
+function recoveryAdminDigest(address account, AdminOp[] ops, bytes32 salt, uint256 expiry) view returns (bytes32);
+function computeRecoveryId(address account, address provider, bytes commitment) pure returns (bytes32);
+```
+
+and from `src/providers/SignatureRecoveryProvider.sol`:
+
+```solidity
+function recoverDigest(address account, bytes subject, bytes32 salt, uint256 expiry) view returns (bytes32);
+```
+
+The enrol call is `addOwnerAddress(address)` on the account itself,
+`contracts/justanaccount/src/MultiOwnable.sol`.
+
+The op payloads are `cast abi-encode` and the calls `cast calldata`, as above.
+Name the shared values once:
+
+```bash
+MANAGER=0x9D1df5AeBE2CdBe6051687C0ab2c788890907E45
+PROVIDER=0xf67C870EF05A5038a4225456Cb08e238fF3B59b8
+ACCOUNT=0x1111111111111111111111111111111111111111
+C32=0x0000000000000000000000003333333333333333333333333333333333333333
+C64=0x$(printf '44%.0s' {1..64})
+SALT=0x$(printf 'ab%.0s' {1..32})
+REQ=0x$(printf 'cd%.0s' {1..32})
+RID=0x$(printf 'ef%.0s' {1..32})
+
+cast abi-encode 'f(address,bytes,uint32)' $PROVIDER $C32 172800        # addRecoveryOp
+cast abi-encode 'f(bytes32)' $RID                                      # removeRecoveryOp
+cast abi-encode 'f(uint256)' 2                                         # setThresholdOp
+cast abi-encode 'f(bytes32)' $REQ                                      # cancelRequestOp
+cast calldata 'addOwnerAddress(address)' $MANAGER                      # buildEnrollRecoveryCall
+cast calldata 'addRecovery(address,address,bytes,uint32)' $ACCOUNT $PROVIDER $C32 172800
+cast calldata 'removeRecovery(address,bytes32)' $ACCOUNT $RID
+cast calldata 'setRecoveryThreshold(address,uint256)' $ACCOUNT 2
+cast calldata 'cancelRecoveryRequest(bytes32)' $REQ
+```
+
+The digests and ids are not encodings but hashes under the contracts' own
+EIP-712 domains, which omit `chainId` and bind `verifyingContract`. Rather than
+re-derive the type hashes by hand, they come from the deployed contracts' view
+functions, `cast call` against the Base Sepolia deployment the SDK's constants
+point at:
+
+```bash
+RPC=https://sepolia.base.org
+ADD=$(cast abi-encode 'f(address,bytes,uint32)' $PROVIDER $C32 172800)
+THR=$(cast abi-encode 'f(uint256)' 2)
+
+cast call $MANAGER 'recoveryAdminDigest(address,(uint8,bytes)[],bytes32,uint256)(bytes32)' \
+  $ACCOUNT "[(0,$ADD),(2,$THR)]" $SALT 2000000000 --rpc-url $RPC
+cast call $MANAGER 'recoveryAdminDigest(address,(uint8,bytes)[],bytes32,uint256)(bytes32)' \
+  $ACCOUNT '[]' $SALT 2000000000 --rpc-url $RPC
+cast call $PROVIDER 'recoverDigest(address,bytes,bytes32,uint256)(bytes32)' $ACCOUNT $C32 $SALT 2000000000 --rpc-url $RPC
+cast call $MANAGER 'computeRecoveryId(address,address,bytes)(bytes32)' $ACCOUNT $PROVIDER $C32 --rpc-url $RPC
+```
+
+`computeRequestId` has no view function; the interface states it as
+`keccak256(abi.encode(account, subject, salt))`:
+
+```bash
+cast keccak $(cast abi-encode 'f(address,bytes,bytes32)' $ACCOUNT $C64 $SALT)
+```
+
+Two things follow from where the digests come from. The entries pin
+`RECOVERY_MANAGER_ADDRESS` and `SIGNATURE_RECOVERY_PROVIDER_ADDRESS`, because
+each domain carries its `verifyingContract`: a deployment at another address
+changes every digest, and regenerating them against it is the expected move,
+said so in the PR. And a digest that moves while the addresses do not is either
+a change in the contracts' domain or struct, or an encoder bug; say which.

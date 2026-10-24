@@ -1,5 +1,6 @@
 import { Address } from '../provider/interface.js';
 import { RequestCapabilities } from '../rpc/permissions.js';
+import type { RecoveryMethodInput } from '../rpc/recovery.js';
 import type { SendCallsVersion } from '../rpc/sendCallsParams.js';
 import type { JawTheme } from './theme.js';
 
@@ -15,6 +16,8 @@ export type UIRequestType =
     | 'eth_sendTransaction'
     | 'wallet_grantPermissions'
     | 'wallet_revokePermissions'
+    | 'wallet_setupRecovery'
+    | 'wallet_cancelRecovery'
     | 'personal_sign'
     | 'eth_signTypedData_v4'
     | 'wallet_sign'
@@ -167,6 +170,46 @@ export interface RevokePermissionUIRequest extends BaseUIRequest {
 }
 
 /**
+ * Recovery setup request (wallet_setupRecovery)
+ *
+ * The wallet shows its recovery editor: on the account's current config when
+ * the dApp proposed nothing, or prefilled with what it proposed. The user edits
+ * and confirms, and the screen signs the config it rendered. Recovery is
+ * account-level, so `chainId` is the connected chain, resolved from the
+ * session and never from the params: it is where the account door lands when
+ * this is the first setup on it.
+ */
+export interface SetupRecoveryUIRequest extends BaseUIRequest {
+    type: 'wallet_setupRecovery';
+    data: {
+        address: Address;
+        chainId: number;
+        /** Methods the dApp proposed; absent opens the editor on the current config */
+        recoveries?: RecoveryMethodInput[];
+        /** Threshold the dApp proposed */
+        threshold?: number;
+        /** Optional capabilities including paymaster service for the account-door userOp */
+        capabilities?: RequestCapabilities;
+    };
+}
+
+/**
+ * Recovery veto request (wallet_cancelRecovery)
+ */
+export interface CancelRecoveryUIRequest extends BaseUIRequest {
+    type: 'wallet_cancelRecovery';
+    data: {
+        address: Address;
+        /** The connected chain, where an account that can only use the account door cancels */
+        chainId: number;
+        /** The ceremony's request id, the same on every chain */
+        requestId: `0x${string}`;
+        /** Optional capabilities including paymaster service for the account-door userOp */
+        capabilities?: RequestCapabilities;
+    };
+}
+
+/**
  * ERC-7871 PersonalSign request data
  */
 export interface PersonalSignRequestData {
@@ -239,6 +282,8 @@ export type UIRequest =
     | SendTransactionUIRequest
     | PermissionUIRequest
     | RevokePermissionUIRequest
+    | SetupRecoveryUIRequest
+    | CancelRecoveryUIRequest
     | WalletSignUIRequest
     | AddFundsUIRequest;
 

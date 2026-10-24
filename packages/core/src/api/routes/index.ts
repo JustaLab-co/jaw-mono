@@ -2,11 +2,12 @@ import { PasskeyRoutes, PASSKEY_ROUTE, ACCOUNT_ROUTE } from './passkey.js';
 import { PermissionsRoutes, PERMISSIONS_ROUTE } from './permissions.js';
 import { AnalyticsRoutes, ANALYTICS_ROUTE } from './analytics.js';
 import { CallsHistoryRoutes, CALLS_HISTORY_ROUTE } from './callsHistory.js';
+import { RecoveryRoutes, RECOVERY_ROUTE } from './recovery.js';
 
 /**
  * All API routes combined
  */
-export type ROUTES = PasskeyRoutes & PermissionsRoutes & AnalyticsRoutes & CallsHistoryRoutes;
+export type ROUTES = PasskeyRoutes & PermissionsRoutes & AnalyticsRoutes & CallsHistoryRoutes & RecoveryRoutes;
 
 /**
  * Route paths mapped to their keys
@@ -23,6 +24,13 @@ export const Routes: Record<keyof ROUTES, string> = {
     LOG_SIGNATURE: `${ANALYTICS_ROUTE}/signature`,
     UPDATE_CALL_STATUS: `${CALLS_HISTORY_ROUTE}/:id`,
     GET_CALLS_HISTORY: CALLS_HISTORY_ROUTE,
+    GET_RECOVERY_CONFIG: `${RECOVERY_ROUTE}/configs/:account`,
+    SUBMIT_ADMIN_BATCH: `${RECOVERY_ROUTE}/admin-batches`,
+    GET_ADMIN_BATCH: `${RECOVERY_ROUTE}/admin-batches/:id`,
+    CREATE_CEREMONY: `${RECOVERY_ROUTE}/ceremonies`,
+    APPROVE_CEREMONY: `${RECOVERY_ROUTE}/ceremonies/:requestId/approvals`,
+    GET_CEREMONY: `${RECOVERY_ROUTE}/ceremonies/:requestId`,
+    LIST_CEREMONIES: `${RECOVERY_ROUTE}/ceremonies`,
 };
 
 export { PASSKEY_ROUTE } from './passkey.js';
@@ -38,3 +46,5 @@ export type {
     GetCallsHistoryRequest,
     CallsHistoryItem,
 } from './callsHistory.js';
+export { RECOVERY_ROUTE } from './recovery.js';
+export type { RecoveryRoutes, ListCeremoniesRequest } from './recovery.js';

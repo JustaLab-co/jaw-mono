@@ -1,6 +1,6 @@
 import type { Address, Hash, Hex, TypedDataDefinition, TypedData, LocalAccount } from 'viem';
-import { isHex, encodeFunctionData, erc20Abi, createPublicClient, numberToHex } from 'viem';
-import { toWebAuthnAccount, type SmartAccount } from 'viem/account-abstraction';
+import { isHex, encodeFunctionData, erc20Abi, createPublicClient, numberToHex, hashTypedData } from 'viem';
+import { toWebAuthnAccount, type SmartAccount, type WebAuthnAccount } from 'viem/account-abstraction';
 import {
     createSmartAccount,
     createSmartAccountForAddress,
@@ -22,7 +22,7 @@ import {
     transformReceiptsToEIP5792,
     type CallStatusResponse,
 } from '../rpc/wallet_sendCalls.js';
-import type { JustanAccountImplementation } from './toJustanAccount.js';
+import { type JustanAccountImplementation, sign as signWithOwner } from './toJustanAccount.js';
 import { type AccountRecord, deriveAccountRecordV1, resolveAccountRecord } from './accountRecord.js';
 import { jawHttp } from '../utils/jawHttp.js';
 import { withoutApiKey } from '../utils/redact.js';
@@ -55,7 +55,26 @@ import {
     type CallPermissionDetail,
     type SpendPermissionDetail,
 } from '../rpc/permissions.js';
+import {
+    type AdminOp,
+    type RecoveryConfig,
+    type RecoverySetupResult,
+    type RecoveryState,
+    DEFAULT_RECOVERY_ADMIN_EXPIRY_SECONDS,
+    buildCancelRecoveryRequestCall,
+    buildRecoverySetupCalls,
+    cancelRequestOp,
+    diffRecoveryConfig,
+    getCeremony,
+    getRecoveryConfig,
+    listCeremonies,
+    randomSalt,
+    recoveryAdminTypedData,
+    submitAdminBatch,
+    toOwnerBytes,
+} from '../rpc/recovery.js';
 import { JAW_RPC_URL, JAW_PAYMASTER_URL, jawPaymasterUrl, ERC20_PAYMASTER_ADDRESS } from '../constants.js';
+import { standardErrors } from '../errors/errors.js';
 import { type Chain, chains as chainStore, dropChainClients } from '../store/index.js';
 import { logAccountIssuance } from '../analytics/index.js';
 
@@ -170,6 +189,12 @@ export class Account {
     private readonly _passkeyAccount: PasskeyAccount | null;
     private readonly _apiKey?: string;
     private readonly _localAccount: LocalAccount | null;
+    /**
+     * The key that signs for this account: the passkey, or the local key. Kept
+     * for the signatures the smart account's own wrapper must not touch, such as
+     * the recovery manager's owner proof.
+     */
+    private readonly _owner: WebAuthnAccount | LocalAccount;
 
     /**
      * Private constructor - use static factory methods to create instances
@@ -178,6 +203,7 @@ export class Account {
         smartAccount: SmartAccount,
         chain: Chain,
         apiKey: string | undefined,
+        owner: WebAuthnAccount | LocalAccount,
         passkeyAccount?: PasskeyAccount,
         localAccount?: LocalAccount
     ) {
@@ -186,6 +212,7 @@ export class Account {
         this._passkeyAccount = passkeyAccount ?? null;
         this._apiKey = apiKey;
         this._localAccount = localAccount ?? null;
+        this._owner = owner;
     }
 
     // ============================================
@@ -337,7 +364,7 @@ export class Account {
             // Store auth state
             passkeyManager.storeAuthState(address, credentialId);
 
-            return new Account(smartAccount, chain, apiKey, passkeyAccount);
+            return new Account(smartAccount, chain, apiKey, webAuthnAccount, passkeyAccount);
         }
 
         // No credentialId provided - restore from existing auth state if available
@@ -364,7 +391,7 @@ export class Account {
                 );
                 Account.persistRecordIfMissing(passkeyManager, currentAccount, record);
 
-                return new Account(smartAccount, chain, apiKey, currentAccount);
+                return new Account(smartAccount, chain, apiKey, webAuthnAccount, currentAccount);
             }
         }
 
@@ -448,7 +475,7 @@ export class Account {
             isImported: false,
         };
 
-        return new Account(smartAccount, chain, apiKey, accountMetadata);
+        return new Account(smartAccount, chain, apiKey, webAuthnAccount, accountMetadata);
     }
 
     /**
@@ -507,7 +534,7 @@ export class Account {
         // Log account issuance for analytics (fire-and-forget)
         logAccountIssuance({ address, type: 'create', apiKey });
 
-        return new Account(smartAccount, chain, apiKey, passkeyAccount);
+        return new Account(smartAccount, chain, apiKey, webAuthnAccount, passkeyAccount);
     }
 
     /**
@@ -573,7 +600,7 @@ export class Account {
         // Log account issuance for analytics (fire-and-forget)
         logAccountIssuance({ address, type: 'import', apiKey });
 
-        return new Account(smartAccount, chain, apiKey, passkeyAccount);
+        return new Account(smartAccount, chain, apiKey, webAuthnAccount, passkeyAccount);
     }
 
     /**
@@ -628,7 +655,7 @@ export class Account {
         // Log account issuance for analytics (fire-and-forget)
         logAccountIssuance({ address, type: 'fromLocalAccount', apiKey });
 
-        return new Account(smartAccount, chain, apiKey, undefined, isEip7702 ? localAccount : undefined);
+        return new Account(smartAccount, chain, apiKey, localAccount, undefined, isEip7702 ? localAccount : undefined);
     }
 
     // ============================================
@@ -1415,6 +1442,158 @@ export class Account {
             permissionId: relayResponse.permissionId as Hex,
             chainId: relayResponse.chainId as Hex,
         };
+    }
+
+    // ============================================
+    // Recovery
+    // ============================================
+
+    /**
+     * Set up or edit recovery. The caller passes the desired end state, not the
+     * edits: the methods that may get the account back and how many of them must
+     * agree.
+     *
+     * On a chain where the account is not enrolled or has no config yet, and for
+     * an EIP-7702 account, this is one userOp through the account door on the
+     * connected chain: enrol the recovery manager, register the methods, set the
+     * threshold, paid like any userOp. Otherwise it is one owner signature over a
+     * chain-free digest, relayed by JAW to every chain the account is deployed
+     * and enrolled on; the result then carries a batch id to poll with
+     * `getAdminBatch` until no chain is in flight.
+     *
+     * @param config - The desired methods and threshold
+     * @param paymasterUrlOverride - Optional paymaster URL for the account-door userOp
+     * @param paymasterContextOverride - Optional paymaster context for the account-door userOp
+     * @returns The door taken and the status per chain; an edit that changes nothing sends nothing
+     *
+     * @example
+     * ```typescript
+     * const result = await account.setupRecovery({
+     *   recoveries: [
+     *     { commitment: toOwnerBytes('0xguardian…'), delay: 48 * 3600 },
+     *     { commitment: toOwnerBytes('0xbackup…'), delay: 48 * 3600 },
+     *   ],
+     *   threshold: 2,
+     * });
+     * ```
+     */
+    async setupRecovery(
+        config: RecoveryConfig,
+        paymasterUrlOverride?: string,
+        paymasterContextOverride?: Record<string, unknown>
+    ): Promise<RecoverySetupResult> {
+        const { chains } = await getRecoveryConfig(this.address, this._apiKey);
+        const current = chains.find((chain) => chain.chainId === this._chain.id);
+        if (!current) {
+            throw standardErrors.rpc.invalidParams({
+                message: `Recovery is not supported on chain ${this._chain.id}`,
+            });
+        }
+
+        // An EIP-7702 key is not among the account's registered owners, which is
+        // what the admin door checks; the account door is its only door.
+        if (!current.enrolled || current.recoveries.length === 0 || this._localAccount) {
+            const calls = buildRecoverySetupCalls(this.address, current, config);
+            return await this.sendRecoveryCalls(calls, paymasterUrlOverride, paymasterContextOverride);
+        }
+
+        const ops = diffRecoveryConfig(current, config);
+        if (ops.length === 0) return { door: 'relay', chains: [] };
+
+        const chainIds = chains.filter((chain) => chain.deployed && chain.enrolled).map((chain) => chain.chainId);
+        return await this.relayRecoveryOps(ops, chainIds);
+    }
+
+    /**
+     * Veto a pending recovery request on every chain it reached. One owner
+     * signature, relayed; an EIP-7702 account cancels on the connected chain
+     * through the account door instead.
+     *
+     * @param requestId - The ceremony's request id
+     * @returns The door taken and the status per chain
+     */
+    async cancelRecovery(
+        requestId: Hex,
+        paymasterUrlOverride?: string,
+        paymasterContextOverride?: Record<string, unknown>
+    ): Promise<RecoverySetupResult> {
+        const ceremony = await getCeremony(requestId, this._apiKey);
+        const pending = ceremony.chains
+            .filter((chain) => chain.status === 'PENDING' || chain.status === 'REQUESTED')
+            .map((chain) => chain.chainId);
+        if (pending.length === 0) {
+            throw standardErrors.rpc.invalidParams({
+                message: `Recovery request ${requestId} is not pending on any chain`,
+            });
+        }
+
+        if (this._localAccount) {
+            if (!pending.includes(this._chain.id)) {
+                throw standardErrors.rpc.invalidParams({
+                    message: `Recovery request ${requestId} is not pending on chain ${this._chain.id}`,
+                });
+            }
+            return await this.sendRecoveryCalls(
+                [buildCancelRecoveryRequestCall(requestId)],
+                paymasterUrlOverride,
+                paymasterContextOverride
+            );
+        }
+
+        return await this.relayRecoveryOps([cancelRequestOp(requestId)], pending);
+    }
+
+    /**
+     * The account's recovery config on every supported chain, and its
+     * ceremonies not executed anywhere: what a veto banner needs.
+     */
+    async getRecovery(): Promise<RecoveryState> {
+        const [{ chains }, pending] = await Promise.all([
+            getRecoveryConfig(this.address, this._apiKey),
+            listCeremonies(this.address, { executed: false }, this._apiKey),
+        ]);
+        return { chains, pending };
+    }
+
+    /**
+     * The admin door: sign the ops once, chain-free, and hand them to the relayer.
+     * @internal
+     */
+    private async relayRecoveryOps(ops: AdminOp[], chainIds: number[]): Promise<RecoverySetupResult> {
+        const account = this.address;
+        const salt = randomSalt();
+        const expiry = Math.floor(Date.now() / 1000) + DEFAULT_RECOVERY_ADMIN_EXPIRY_SECONDS;
+        const { ownerBytes, proof } = await this.signRecoveryDigest(
+            hashTypedData(recoveryAdminTypedData({ account, ops, salt, expiry }))
+        );
+        const batch = await submitAdminBatch({ account, ops, salt, expiry, ownerBytes, proof, chainIds }, this._apiKey);
+        return { door: 'relay', batchId: batch.id, chains: batch.chains };
+    }
+
+    /**
+     * The account door: one userOp on the connected chain, landed before this returns.
+     * @internal
+     */
+    private async sendRecoveryCalls(
+        calls: TransactionCall[],
+        paymasterUrlOverride?: string,
+        paymasterContextOverride?: Record<string, unknown>
+    ): Promise<RecoverySetupResult> {
+        const txHash = await this.sendTransaction(calls, paymasterUrlOverride, paymasterContextOverride);
+        return { door: 'account', chains: [{ chainId: this._chain.id, status: 'COMPLETED', txHash }] };
+    }
+
+    /**
+     * The owner proof the recovery manager verifies: the account's own key over a
+     * raw digest, in the bytes the account itself accepts for that key, without
+     * the owner-index wrapper. A passkey yields the WebAuthn assertion with the
+     * digest as challenge; a local key yields a 65-byte ECDSA signature.
+     * @internal
+     */
+    private async signRecoveryDigest(hash: Hash): Promise<{ ownerBytes: Hex; proof: Hex }> {
+        const proof = await signWithOwner({ hash, owner: this._owner });
+        const ownerBytes = this._owner.type === 'webAuthn' ? this._owner.publicKey : toOwnerBytes(this._owner.address);
+        return { ownerBytes, proof };
     }
 
     // ============================================

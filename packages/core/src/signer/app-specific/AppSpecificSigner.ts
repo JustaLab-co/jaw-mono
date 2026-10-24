@@ -11,6 +11,8 @@ import {
     SendTransactionUIRequest,
     PermissionUIRequest,
     RevokePermissionUIRequest,
+    SetupRecoveryUIRequest,
+    CancelRecoveryUIRequest,
     WalletSignUIRequest,
     AddFundsUIRequest,
     PersonalSignRequestData,
@@ -26,6 +28,8 @@ import {
     getPermissionFromRelay,
     normalizeSendCallsParams,
     normalizeSendTransactionParams,
+    normalizeSetupRecoveryParams,
+    normalizeCancelRecoveryParams,
 } from '../../rpc/index.js';
 import { store, SDKChain } from '../../store/index.js';
 import { ensureIntNumber } from '../../utils/index.js';
@@ -416,6 +420,69 @@ export class AppSpecificSigner extends JAWSigner {
                         address: revokeData.address ?? this.accounts[0],
                         chainId: permissionChainId,
                         capabilities: revokeData.capabilities,
+                    },
+                };
+
+                const response = await this.uiHandler.request(uiRequest);
+
+                if (!response.approved) {
+                    throw response.error || UIError.userRejected();
+                }
+
+                return response.data;
+            }
+
+            case 'wallet_setupRecovery': {
+                const setup =
+                    normalized?.method === 'wallet_setupRecovery'
+                        ? normalized.params
+                        : normalizeSetupRecoveryParams(request.params);
+
+                // Account-level, so the params carry no chain: the connected chain
+                // is where the account door lands on a first setup.
+                const resolvedChain = this.resolveChain();
+
+                const uiRequest: SetupRecoveryUIRequest = {
+                    id: crypto.randomUUID(),
+                    type: 'wallet_setupRecovery',
+                    timestamp: Date.now(),
+                    correlationId,
+                    data: {
+                        address: this.accounts[0],
+                        chainId: resolvedChain.id,
+                        recoveries: setup.recoveries,
+                        threshold: setup.threshold,
+                        capabilities: setup.capabilities,
+                    },
+                };
+
+                const response = await this.uiHandler.request(uiRequest);
+
+                if (!response.approved) {
+                    throw response.error || UIError.userRejected();
+                }
+
+                return response.data;
+            }
+
+            case 'wallet_cancelRecovery': {
+                const cancel =
+                    normalized?.method === 'wallet_cancelRecovery'
+                        ? normalized.params
+                        : normalizeCancelRecoveryParams(request.params);
+
+                const resolvedChain = this.resolveChain();
+
+                const uiRequest: CancelRecoveryUIRequest = {
+                    id: crypto.randomUUID(),
+                    type: 'wallet_cancelRecovery',
+                    timestamp: Date.now(),
+                    correlationId,
+                    data: {
+                        address: this.accounts[0],
+                        chainId: resolvedChain.id,
+                        requestId: cancel.requestId,
+                        capabilities: cancel.capabilities,
                     },
                 };
 

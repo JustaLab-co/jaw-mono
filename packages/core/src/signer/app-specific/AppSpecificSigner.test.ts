@@ -606,6 +606,103 @@ describe('AppSpecificSigner', () => {
             );
         });
 
+        it('should handle wallet_setupRecovery request', async () => {
+            // Arrange - a proposal, as a dApp naming itself as a guardian sends it
+            const guardian = '0xabcdefabcdefabcdefabcdefabcdefabcdefabcd' as const;
+            const capabilities = { paymasterService: { url: 'https://paymaster.test.com' } };
+            const request: RequestArguments = {
+                method: 'wallet_setupRecovery',
+                params: [{ recoveries: [{ commitment: guardian, delay: 172_800 }], threshold: 1, capabilities }],
+            };
+
+            const outcome = { door: 'account', chains: [{ chainId: 1, status: 'COMPLETED', txHash: '0xtx' }] };
+            (mockUIHandler.request as Mock).mockResolvedValue({
+                id: 'test-response-id',
+                approved: true,
+                data: outcome,
+            });
+
+            // Act
+            const result = await signer.request(request);
+
+            // Assert - the editor gets the validated proposal, the address
+            // commitment in the 32-byte form the provider compares, on the
+            // connected chain, where the account door lands on a first setup
+            expect(result).toEqual(outcome);
+            expect(mockUIHandler.request).toHaveBeenCalledWith(
+                expect.objectContaining({
+                    type: 'wallet_setupRecovery',
+                    data: {
+                        address: '0x1234567890123456789012345678901234567890',
+                        chainId: 1,
+                        recoveries: [{ commitment: `0x${'00'.repeat(12)}${guardian.slice(2)}`, delay: 172_800 }],
+                        threshold: 1,
+                        capabilities,
+                    },
+                })
+            );
+        });
+
+        it('should open the recovery editor on the current config when wallet_setupRecovery has no params', async () => {
+            (mockUIHandler.request as Mock).mockResolvedValue({
+                id: 'test-response-id',
+                approved: true,
+                data: { door: 'relay', chains: [] },
+            });
+
+            await signer.request({ method: 'wallet_setupRecovery' });
+
+            expect(mockUIHandler.request).toHaveBeenCalledWith(
+                expect.objectContaining({
+                    type: 'wallet_setupRecovery',
+                    data: {
+                        address: '0x1234567890123456789012345678901234567890',
+                        chainId: 1,
+                        recoveries: undefined,
+                        threshold: undefined,
+                        capabilities: undefined,
+                    },
+                })
+            );
+        });
+
+        it('should handle wallet_cancelRecovery request', async () => {
+            // Arrange - the veto names the ceremony, nothing else
+            const requestId = '0xcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcd' as const;
+            const request: RequestArguments = {
+                method: 'wallet_cancelRecovery',
+                params: [{ requestId }],
+            };
+
+            const outcome = {
+                door: 'relay',
+                batchId: '0xabababababababababababababababababababababababababababababababab',
+                chains: [{ chainId: 84532, status: 'PENDING', txHash: null }],
+            };
+            (mockUIHandler.request as Mock).mockResolvedValue({
+                id: 'test-response-id',
+                approved: true,
+                data: outcome,
+            });
+
+            // Act
+            const result = await signer.request(request);
+
+            // Assert
+            expect(result).toEqual(outcome);
+            expect(mockUIHandler.request).toHaveBeenCalledWith(
+                expect.objectContaining({
+                    type: 'wallet_cancelRecovery',
+                    data: {
+                        address: '0x1234567890123456789012345678901234567890',
+                        chainId: 1,
+                        requestId,
+                        capabilities: undefined,
+                    },
+                })
+            );
+        });
+
         describe('wallet_addFunds', () => {
             const ACCOUNT = '0x1234567890123456789012345678901234567890';
 
@@ -1330,6 +1427,42 @@ describe('AppSpecificSigner', () => {
             expect(mockUIHandler.request).not.toHaveBeenCalled();
             // And the relay is never consulted for an id that can't be one.
             expect(getPermissionFromRelay).not.toHaveBeenCalled();
+        });
+
+        // The veto is about one ceremony, so a request that names no usable
+        // request id cannot succeed. Refused at the same boundary as a revoke id.
+        it.each([
+            ['missing', undefined],
+            ['an empty string', ''],
+            ['a bare 0x', '0x'],
+            ['too short', '0xdeadbeef'],
+            ['not hex', `0x${'zz'.repeat(32)}`],
+        ])('rejects a recovery request id that is %s with -32602 and opens no dialog', async (_label, requestId) => {
+            await expect(
+                signer.request({ method: 'wallet_cancelRecovery', params: [{ requestId }] } as never)
+            ).rejects.toMatchObject({ code: -32602 });
+
+            // The load-bearing assertion: no dialog for a request that cannot succeed.
+            expect(mockUIHandler.request).not.toHaveBeenCalled();
+        });
+
+        // A proposal the editor could never show as valid is refused the same way.
+        it.each([
+            ['an empty method list', { recoveries: [] }],
+            [
+                'a commitment that is neither a key nor an address',
+                { recoveries: [{ commitment: '0xdeadbeef', delay: 60 }] },
+            ],
+            [
+                'a threshold above the methods proposed',
+                { recoveries: [{ commitment: '0x1234567890123456789012345678901234567890', delay: 60 }], threshold: 2 },
+            ],
+        ])('rejects a recovery proposal with %s with -32602 and opens no dialog', async (_label, proposal) => {
+            await expect(signer.request({ method: 'wallet_setupRecovery', params: [proposal] })).rejects.toMatchObject({
+                code: -32602,
+            });
+
+            expect(mockUIHandler.request).not.toHaveBeenCalled();
         });
 
         // ERC-7871 wallet_sign 0x01 reaches the same EIP-712 dialog, so it must be

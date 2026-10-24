@@ -13,6 +13,8 @@ export type {
   PermissionsDetail,
   CallPermissionDetail,
   SpendPermissionDetail,
+  RecoveryMethodInput,
+  RequestCapabilities,
 } from '@jaw.id/core';
 
 // Actions namespace
@@ -31,6 +33,9 @@ export {
   useGrantPermissions,
   useRevokePermissions,
   usePermissions,
+  useSetupRecovery,
+  useCancelRecovery,
+  useRecovery,
   useGetAssets,
   useCapabilities,
   useSign,
@@ -45,6 +50,9 @@ export {
   grantPermissions,
   getPermissions,
   revokePermissions,
+  setupRecovery,
+  cancelRecovery,
+  getRecovery,
   getAssets,
   getCapabilities,
   sign,
@@ -55,6 +63,7 @@ export {
 // Also export query keys for convenience
 export {
   getPermissionsQueryKey,
+  getRecoveryQueryKey,
   getAssetsQueryKey,
   getCapabilitiesQueryKey,
   getCallsHistoryQueryKey,
