@@ -48,6 +48,7 @@ export const TransactionDialog = ({
   permissionProblem,
   onConfirm,
   onCancel,
+  onAddFunds,
   isProcessing,
   networkName,
   apiKey,
@@ -131,6 +132,11 @@ export const TransactionDialog = ({
   const erc20CannotPay =
     isPayingWithErc20 && (!selectedFeeToken?.gasCostMaxFormatted || !selectedFeeToken?.isSelectable);
   const canConfirm = !isProcessing && !gasFeeLoading && !blockReason && !erc20CannotPay && !permissionBlocks;
+
+  // A funds block read off a fee or fee token list still loading may be stale, and Add funds ends
+  // the request.
+  const offerAddFunds =
+    blockReason === 'funds' && !permissionBlocks && !gasFeeLoading && !feeTokensLoading && !!onAddFunds;
 
   // Reverts, but gas estimated fine, so it stays submittable: warn rather than block.
   const softRevertWarning = !blockReason && !permissionBlocks && !!assetPreviewWillRevert;
@@ -412,17 +418,19 @@ export const TransactionDialog = ({
                 Cancel
               </Button>
               <Button
-                onClick={onConfirm}
-                disabled={!canConfirm}
+                onClick={offerAddFunds ? onAddFunds : onConfirm}
+                disabled={offerAddFunds ? isProcessing : !canConfirm}
                 className="rounded-box text-button h-10 flex-[56] font-semibold focus-visible:ring-1"
               >
-                {blockReason === 'funds' && !permissionBlocks
-                  ? 'Insufficient Funds'
-                  : isProcessing
-                    ? 'Processing...'
-                    : isPermissioned
-                      ? 'Execute'
-                      : 'Confirm'}
+                {offerAddFunds
+                  ? 'Add funds'
+                  : blockReason === 'funds' && !permissionBlocks
+                    ? 'Insufficient Funds'
+                    : isProcessing
+                      ? 'Processing...'
+                      : isPermissioned
+                        ? 'Execute'
+                        : 'Confirm'}
               </Button>
             </div>
           </div>

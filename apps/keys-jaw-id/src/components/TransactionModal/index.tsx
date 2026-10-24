@@ -25,6 +25,7 @@ import {
   JAW_RPC_URL,
 } from '@jaw.id/core';
 import { apiKeyFromChain } from '../../lib/api-key';
+import { useAddFundsView } from '../RequestModals/useAddFundsView';
 
 // Transaction execution result
 export interface TransactionResult {
@@ -482,6 +483,20 @@ export const TransactionModal = ({
     ? `${JAW_RPC_URL}?chainId=1&api-key=${effectiveApiKey}`
     : `${JAW_RPC_URL}?chainId=1`;
 
+  const { addFundsView, onAddFunds } = useAddFundsView({
+    walletAddress,
+    short: permissionId ? undefined : signerAddress,
+    chainId: chain?.id,
+    submittingRef,
+    apiKey: effectiveApiKey,
+    mainnetRpcUrl,
+    origin,
+    appName,
+    appLogoUrl,
+    onError,
+  });
+  if (addFundsView) return addFundsView;
+
   return (
     <TransactionDialog
       // Mounting is controlled by the page (keyed per request), so the dialog is
@@ -508,6 +523,7 @@ export const TransactionModal = ({
       appLogoUrl={appLogoUrl}
       onConfirm={handleConfirm}
       onCancel={handleCancel}
+      onAddFunds={onAddFunds}
       isProcessing={isProcessing}
       networkName={networkName ?? 'Ethereum'}
       apiKey={effectiveApiKey}
