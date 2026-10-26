@@ -8,12 +8,15 @@ import { leasedRows } from '@/db/leased';
 import { SWAP_DEPOSIT_ADDRESS_INDEX, swaps } from '@/db/schema';
 import { randomToken } from '@/lib/token';
 import { LEASE_MS } from '@/payments/store';
-import type { BackendState, DepositStatus } from './backend';
+import type { BackendState, KnownStatus } from './backend';
+import type { Provider } from './check';
 
 export type SwapRow = typeof swaps.$inferSelect;
 export type SwapState = SwapRow['state'];
 type SwapSet = PgUpdateSetSource<typeof swaps>;
-type KnownStatus = Extract<DepositStatus, { backendState: BackendState }>;
+
+export const providerOf = (row: SwapRow): Provider =>
+  (row.quote as { provider?: Provider } | null)?.provider ?? 'aurora';
 
 export interface SwapRequest {
   originChainId: number;
@@ -121,6 +124,10 @@ async function insert(connectionId: string, key: string, hash: string, request: 
 const expirePast = (where: SQL) =>
   write(and(where, eq(swaps.state, 'awaiting_owner'), lt(swaps.approveBy, dbNow)), { state: 'expired', relay: null });
 
+/** An Across or Relay row is not read before a send, so status expires it here rather than on a backend read. */
+export const expireLapsed = async (row: SwapRow) =>
+  (await expirePast(and(eq(swaps.id, row.id), eq(swaps.connectionId, row.connectionId))!)) ?? row;
+
 async function freeStale(connectionId: string): Promise<void> {
   const ofConnection = eq(swaps.connectionId, connectionId);
   await expirePast(ofConnection);
@@ -211,6 +218,8 @@ export const move = (connectionId: string, id: string, from: SwapState[], to: Sw
 
 export const SEND_STARTED = 'send_started';
 
+const unsent = sql`${swaps.code} is distinct from ${SEND_STARTED}`;
+
 const heldBy = (row: SwapRow, states: SwapState[]) =>
   and(ofSwap(row.connectionId, row.id, states), leasedSwaps.heldBy(row));
 
@@ -233,7 +242,7 @@ export const reopenLink = (row: SwapRow, walletUrl: string, db: Tx = getDb()) =>
     and(
       ofSwap(row.connectionId, row.id, ['awaiting_owner']),
       eq(swaps.walletUrl, row.walletUrl!),
-      sql`${swaps.code} is distinct from ${SEND_STARTED}`,
+      unsent,
       gt(swaps.approveBy, dbNow),
       unclaimed
     ),
@@ -246,16 +255,29 @@ export const { renew: renewSession, end: endSession } = leasedSwaps;
 export const decline = (row: SwapRow, code: string) =>
   write(heldBy(row, ['awaiting_owner']), { state: 'owner_declined', code, relay: null });
 
+export const declineUnsent = async (row: SwapRow, code: string) =>
+  (await write(and(heldBy(row, ['awaiting_owner']), unsent), { state: 'owner_declined', code, relay: null })) ??
+  write(and(heldBy(row, ['expired']), unsent), { code });
+
 /** Written by whichever run hears the calls id, holder or not: the trigger keeps it write-once. */
 export const recordCallsId = (row: SwapRow, callsId: string) =>
   move(row.connectionId, row.id, ['awaiting_owner', 'expired'], 'deposit_sent', { callsId, code: null, relay: null });
 
 /** `unlessRejoinable` leaves a row that keeps a relay session to its next resume. */
-export const recordCode = (row: SwapRow, code: string, { unlessRejoinable = false } = {}) =>
-  write(and(heldBy(row, ['awaiting_owner', 'expired']), unlessRejoinable ? isNull(swaps.relay) : undefined), { code });
+export const recordCode = (row: SwapRow, code: string, { unlessRejoinable = false, unlessSent = false } = {}) =>
+  write(
+    and(
+      heldBy(row, ['awaiting_owner', 'expired']),
+      unlessRejoinable ? isNull(swaps.relay) : undefined,
+      unlessSent ? unsent : undefined
+    ),
+    { code }
+  );
 
 export const DEPOSIT_FAILED = 'deposit_failed';
 export const DEPOSIT_REVERTED = 'deposit_reverted';
+export const DEPOSIT_AMBIGUOUS = 'deposit_ambiguous';
+export const DEPOSIT_NOT_FOUND = 'deposit_not_found';
 
 export const recordSentCode = (connectionId: string, id: string, code: string, txHash?: string) =>
   write(ofSwap(connectionId, id, ['deposit_sent']), {
@@ -308,18 +330,9 @@ export async function recordBackend(connectionId: string, id: string, status: Kn
   if (status.state !== 'submitted') await write(ofSwap(connectionId, id, ['submitted']), { state: status.state });
 }
 
-const DEPOSIT_ADDRESS_KEYS = new Set([SWAP_DEPOSIT_ADDRESS_INDEX, 'swaps_quote_id_unique']);
+const QUOTE_KEYS = new Set([SWAP_DEPOSIT_ADDRESS_INDEX, 'swaps_quote_id_unique']);
 
-export function depositAddressReused(err: unknown): boolean {
+export function quoteReused(err: unknown): boolean {
   const e = (err as { cause?: { code?: unknown; constraint_name?: unknown; constraint?: unknown } }).cause;
-  return e?.code === '23505' && DEPOSIT_ADDRESS_KEYS.has(String(e.constraint_name ?? e.constraint));
-}
-
-export async function isDepositAddressTaken(address: string): Promise<boolean> {
-  const [row] = await getDb()
-    .select({ id: swaps.id })
-    .from(swaps)
-    .where(sql`lower(${swaps.depositAddress}) = ${address.toLowerCase()}`)
-    .limit(1);
-  return row !== undefined;
+  return e?.code === '23505' && QUOTE_KEYS.has(String(e.constraint_name ?? e.constraint));
 }

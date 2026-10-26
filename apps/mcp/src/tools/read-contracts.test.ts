@@ -16,6 +16,7 @@ import { base } from 'viem/chains';
 import { describe, expect, it } from 'vitest';
 import { setTestEnv } from '@/connections/testkit';
 import { proxyChains } from '@/lib/chain';
+import { leaks, spoken, type ToolResult } from '@/test-utils/spoken';
 import { readContracts, type Read } from './read-contracts';
 
 setTestEnv();
@@ -124,7 +125,7 @@ describe('jaw_read_contracts', () => {
     const out = await readContracts({ chainId: 1337, reads: [read('decimals')] });
     const text = (out as { content: { text: string }[] }).content[0].text;
     expect(text).toBe(
-      `Chain 1337 is not one JAW supports. Supported: ${proxyChains()
+      `Localhost is not a network the wallet supports, so nothing was read.\nFor the agent: Chain 1337 is not one JAW supports. Supported chain ids: ${proxyChains()
         .map((c) => c.id)
         .join(', ')}.`
     );
@@ -274,5 +275,32 @@ describe('jaw_read_contracts', () => {
       );
       expect(out).toMatchObject({ isError: true, content: [{ text: expect.stringContaining('RPC') }] });
     }
+  });
+});
+
+describe('what the owner hears from jaw_read_contracts', () => {
+  it('given reads that return, then the owner hears how many, and nothing internal', async () => {
+    const out = (await readContracts({ chainId: 8453, reads: [read('decimals'), read('symbol')] }, usdc)) as ToolResult;
+    expect(leaks(spoken(out))).toEqual([]);
+    expect(spoken(out)).toBe('2 of 2 reads returned.');
+  });
+
+  it('given a network the wallet does not support, then the owner hears its name and never its id', async () => {
+    const out = (await readContracts({ chainId: 1337, reads: [read('decimals')] })) as ToolResult;
+    expect(leaks(spoken(out))).toEqual([]);
+    expect(spoken(out)).toBe('Localhost is not a network the wallet supports, so nothing was read.');
+  });
+
+  it('given a node that cannot be reached, then the owner hears the network by name and that nothing was read', async () => {
+    const request = async () => {
+      throw new HttpRequestError({ url: 'https://rpc.example', status: 503 });
+    };
+    const down = createPublicClient({ chain: base, transport: custom({ request }, { retryCount: 0 }) });
+    const out = (await readContracts(
+      { chainId: 8453, reads: [read('decimals')] },
+      () => down as unknown as PublicClient
+    )) as ToolResult;
+    expect(leaks(spoken(out))).toEqual([]);
+    expect(spoken(out)).toBe('Base could not be reached right now, so nothing was read. Try again shortly.');
   });
 });

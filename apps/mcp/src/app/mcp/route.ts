@@ -1,12 +1,15 @@
 import { createMcpHandler } from 'mcp-handler';
 import { auditTools } from '@/audit/record';
 import { clientOf, connectionKey, withConnection } from '@/connections/auth';
+import { INSTRUCTIONS } from '@/instructions';
 import { guardTools, withEdge } from '@/lib/edge';
 import { countUnauthorized } from '@/lib/metrics';
 import { registerReadTools } from '@/tools/read';
+import { registerAddFundsTool } from '@/tools/add-funds';
 import { registerAccountTools } from '@/tools/account';
 import { registerDefiTool } from '@/tools/defi';
 import { registerReadContractsTool } from '@/tools/read-contracts';
+import { registerSimulateCallsTool } from '@/tools/simulate-calls';
 import { registerResolveNameTool } from '@/tools/resolve-name';
 import { registerDiscoverTool } from '@/tools/discover';
 import { registerDisconnectTool } from '@/tools/disconnect';
@@ -32,6 +35,7 @@ const mcp = createMcpHandler(
     registerAccountTools(server);
     registerDefiTool(server);
     registerReadContractsTool(server);
+    registerSimulateCallsTool(server);
     registerResolveNameTool(server);
     registerDiscoverTool(server);
     registerGrantTool(server);
@@ -43,11 +47,13 @@ const mcp = createMcpHandler(
     registerHistoryTool(server);
     registerConnectionTools(server);
     registerRevokeTool(server);
+    registerAddFundsTool(server);
     registerDisconnectTool(server);
   },
   {
     serverInfo: { name: 'jaw', version: '0.0.1' },
     capabilities: { tools: {} },
+    instructions: INSTRUCTIONS,
   }
 );
 

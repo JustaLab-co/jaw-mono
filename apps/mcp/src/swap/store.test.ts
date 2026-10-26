@@ -9,8 +9,7 @@ import { TEST_PG_URL, useTestDb, useTestPostgres } from '@/db/test-db';
 import { purge } from '@/reconciler/run';
 import {
   claimSwap,
-  depositAddressReused,
-  isDepositAddressTaken,
+  quoteReused,
   move,
   markSendStarted,
   recordCallsId,
@@ -535,17 +534,8 @@ describe('deposit addresses', () => {
       .values(first.row)
       .catch((e: unknown) => e);
 
-    expect(depositAddressReused(reused)).toBe(true);
-    expect(depositAddressReused(duplicate)).toBe(false);
-  });
-
-  it('given a swap holding a deposit address, when it is looked up in any case, then it is taken', async () => {
-    const address = freshAddress();
-    const { row, token } = await quoting(await newConnection());
-    await writeHeld(leaseOf(row, token), quoteOf(address));
-    expect(await isDepositAddressTaken(address.toLowerCase())).toBe(true);
-    expect(await isDepositAddressTaken(address.toUpperCase().replace('0X', '0x'))).toBe(true);
-    expect(await isDepositAddressTaken(freshAddress())).toBe(false);
+    expect(quoteReused(reused)).toBe(true);
+    expect(quoteReused(duplicate)).toBe(false);
   });
 });
 

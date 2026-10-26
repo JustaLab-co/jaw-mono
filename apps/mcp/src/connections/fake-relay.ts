@@ -29,6 +29,10 @@ export async function startRelay() {
     if (refused.has(id)) return ws.close();
     // As jaw-relay does, a second cli replaces the first.
     if (role === 'cli') pair.cli?.close(4003, 'replaced');
+    // And a second browser cuts the first off, so the page the owner left hears nothing more and cannot answer.
+    if (role === 'browser' && pair.browser?.readyState === WebSocket.OPEN) {
+      pair.browser.close(4003, 'Replaced by new browser connection');
+    }
     pair[role] = ws;
     sessions.set(id, pair);
     if (role === 'cli') cliWaiters.get(id)?.();
@@ -79,15 +83,26 @@ export async function replayingPage(
   );
   const publicKey = await exportKeyToHex('public', keys.publicKey);
   const ws = new WebSocket(`${url.searchParams.get('relay')}?session=${url.searchParams.get('session')}&role=browser`);
-  const send = async (payload: Record<string, unknown>) =>
-    ws.send(JSON.stringify({ type: 'encrypted', ...(await encryptMessage(secret, payload)) }));
+  // The frames of its answers as the relay carries them, so a test can tell when one went past.
+  const answered: string[] = [];
+  const send = async (payload: Record<string, unknown>) => {
+    const frame = JSON.stringify({ type: 'encrypted', ...(await encryptMessage(secret, payload)) });
+    if (payload.type === 'rpc_response') answered.push(frame);
+    ws.send(frame);
+  };
   const answers = new Map<string, { request: string; reply: Promise<object> }>();
   const ids: string[] = [];
-  let inits = 0;
+  const sent: Record<string, unknown>[] = [];
   let mute = false;
+  let closedWith: number | undefined;
+  ws.on('close', (code) => (closedWith = code));
+  let shut!: () => void;
+  // Settles when this server's last frame reached the page, so every frame before it went through the relay too.
+  const shutdown = new Promise<void>((resolve) => (shut = resolve));
   ws.on('message', async (data) => {
     const inner = await decryptMessage(secret, JSON.parse(String(data)) as EncryptedEnvelope).catch(() => undefined);
-    if (inner?.type === 'init') inits++;
+    if (inner?.type === 'shutdown') shut();
+    if (inner?.type === 'init') sent.push(inner);
     if (inner?.type === 'init' && !mute) await send({ type: 'ready', replays });
     if (inner?.type !== 'rpc_request') return;
     const id = String(inner.id);
@@ -111,12 +126,22 @@ export async function replayingPage(
     await send({ type: 'rpc_response', id, ...reply });
   });
   await new Promise((r) => ws.once('open', r));
-  ws.send(JSON.stringify({ type: 'key_exchange', publicKey }));
+  const greet = () => ws.send(JSON.stringify({ type: 'key_exchange', publicKey }));
+  greet();
   return {
     publicKey,
     ids,
+    answered,
     asked: () => answers.size,
-    inits: () => inits,
+    inits: () => sent.length,
+    lastInit: () => sent.at(-1),
+    /** Sends the same key again on the same socket. */
+    greet,
+    /** Sends `frame` as it is on the same socket, the way a page that misbehaves would. */
+    raw: (frame: Record<string, unknown>) => ws.send(JSON.stringify(frame)),
+    /** The code the socket was closed with, once it is closed. */
+    closedWith: () => closedWith,
+    shutdown,
     mute: () => (mute = true),
     close: () => ws.close(),
   };

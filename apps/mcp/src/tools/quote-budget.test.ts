@@ -19,6 +19,7 @@ import { payments } from '@/db/schema';
 import { useTestDb } from '@/db/test-db';
 import { x402Budget } from '@/grants/store';
 import { grantPermissions } from '@/tools/grant-permissions';
+import { leaks, spoken } from '@/test-utils/spoken';
 
 const USDC = '0x036CbD53842c5426634e7929541eC2318f3dCF7e';
 const asked: { id: string }[] = [];
@@ -128,8 +129,11 @@ describe('given a budget of 0.5 USDC a day', () => {
       readiness: { status: 'not_ready', reason: 'over_allowance' },
       budget: { permissionId, remainingToday: { amount: '490000', asset: `eip155:84532/erc20:${USDC}` } },
     });
-    expect(r.structuredContent.summary).toContain(permissionId);
-    expect(r.structuredContent.summary).toContain('490000');
+    expect(r.structuredContent.summary).not.toContain(permissionId);
+    expect(r.structuredContent.summary).toBe(
+      `${SELLER} charges 1 USDC per call. The spend limit has 0.49 USDC left today, not enough for it.\nFor the agent: Offer to wait for the daily reset or to ask the owner for a higher spend limit.`
+    );
+    expect(leaks(spoken(r))).toEqual([]);
   });
 
   it('when the quote is exactly what is left, 0.01 under the day for the refill fee, then it is ready', async () => {
@@ -169,6 +173,7 @@ describe('given a budget of 0.5 USDC a day', () => {
     expect(r.structuredContent.readiness).toEqual({ status: 'not_ready', reason: 'grant_revoked' });
     expect(r.structuredContent.budget).toBeUndefined();
     expect(r.structuredContent.summary).not.toContain('budget');
+    expect(r.structuredContent.summary).not.toContain('Within');
   });
 
   it('when whether the chain still approves it cannot be read, then a paid quote is not ready, carries no budget and does not say it fits', async () => {
@@ -178,6 +183,7 @@ describe('given a budget of 0.5 USDC a day', () => {
     expect(r.structuredContent.readiness).toEqual({ status: 'not_ready', reason: 'chain_unavailable' });
     expect(r.structuredContent.budget).toBeUndefined();
     expect(r.structuredContent.summary).not.toContain('budget');
+    expect(r.structuredContent.summary).not.toContain('Within');
   });
 
   it('when the account behind the budget cannot be read and the float needs a refill, then the quote is not ready for chain_unavailable', async () => {
@@ -229,6 +235,10 @@ describe('given a budget of 1 USDC a day', () => {
       readiness: { status: 'ready' },
       budget: { permissionId, remainingToday: { amount: '990000' } },
     });
+    expect(r.structuredContent.summary).toBe(
+      `${SELLER} charges 0.005 USDC per call. Within the spend limit, which has 0.99 USDC left today.`
+    );
+    expect(leaks(spoken(r))).toEqual([]);
   });
 });
 

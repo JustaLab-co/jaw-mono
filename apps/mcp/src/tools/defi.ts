@@ -4,9 +4,12 @@ import { z } from 'zod';
 import { tenant } from '@/connections/auth';
 import { config } from '@/connections/config';
 import { fenceText, reply } from '@/lib/fence';
+import { capital, listed, networkName } from '@/lib/owner-text';
 import { refusal as unsafeHost, safeFetch, watchCuts } from '@/lib/safe-fetch';
-import { caip2, chainIds, mainnetIds, readOnly, reasonOf, scrub } from './account';
-import { refusal } from './reply';
+import { caip2 } from '@/lib/chain';
+import { scrub } from '@/lib/scrub';
+import { chainIds, mainnetIds, readOnly } from './account';
+import { reasonOf, refusal, withNext } from './reply';
 
 const MAX_POSITIONS = 50;
 const MAX_BYTES = 32 * 1024;
@@ -135,6 +138,8 @@ const line = (text: string | null, max: number) => (text === null ? null : sanit
 // A refusal the agent can act on, as opposed to a proxy failure it can only report.
 class Refused extends Error {}
 
+const UNAVAILABLE = 'DeFi positions cannot be read on this server right now.';
+
 // The proxy lists every failed chain in one 409: "...: chain 1: <error>; chain 10: <error>".
 function allFailed(detail: string) {
   const found = [...detail.matchAll(/chain (\d+): (.*?)(?=; chain \d+: |$)/g)];
@@ -144,7 +149,10 @@ function allFailed(detail: string) {
   for (const f of failed) byReason.set(f.reason, [...(byReason.get(f.reason) ?? []), ...f.chainIds]);
   const groups = [...byReason].map(([reason, ids]) => `${ids.join(', ')}: ${reason}`);
   const retry = failed.some((f) => /time(d)? ?out/i.test(f.reason)) ? ' Retry with fewer chainIds.' : '';
-  return `all_chains_failed: ${groups.join('; ')}. Their positions are unknown, not empty.${retry}`;
+  return `all_chains_failed: ${withNext(
+    'Your DeFi positions could not be read on any of those networks. They are unknown, not empty.',
+    `${groups.join('; ')}.${retry}`
+  )}`;
 }
 
 async function ask(chains: number[], account: string, deps: DefiDeps) {
@@ -156,7 +164,10 @@ async function ask(chains: number[], account: string, deps: DefiDeps) {
     signal: AbortSignal.timeout(deps.timeoutMs),
   });
   const text = await res.text();
-  if (cuts.lastCut()) throw new Refused('too_large: The answer was too large to read. Ask for fewer chainIds.');
+  if (cuts.lastCut())
+    throw new Refused(
+      `too_large: ${withNext('Your DeFi positions were too many to read at once.', 'The answer was too large to read. Ask for fewer chainIds.')}`
+    );
   const body: unknown = (() => {
     try {
       return JSON.parse(text);
@@ -178,11 +189,19 @@ export async function defiPositions(who: { account: string }, asked: number[] | 
   const wanted = [...new Set(asked ?? COVERED.filter((id) => mainnets.includes(id)))];
   const testnets = wanted.filter((id) => !mainnets.includes(id));
   if (testnets.length) {
+    const names = listed(testnets.map(networkName));
     return refusal(
-      `not_a_mainnet: ${testnets.join(', ')} is not a supported mainnet. Supported: ${mainnets.join(', ')}.`
+      `not_a_mainnet: ${withNext(
+        `${capital(names)} ${testnets.length === 1 ? 'is' : 'are'} not among the networks the wallet reads.`,
+        `${testnets.join(', ')} is not a supported mainnet. Supported: ${mainnets.join(', ')}.`
+      )}`
     );
   }
-  if (!deps.apiKey) return refusal('no_api_key: this server has no proxy api key, so DeFi positions cannot be read.');
+  if (!deps.apiKey) {
+    return refusal(
+      `no_api_key: ${withNext(UNAVAILABLE, 'This server has no proxy api key, so DeFi positions cannot be read.')}`
+    );
+  }
   const chains = wanted.filter((id) => COVERED.includes(id));
   const unsupported = wanted.filter((id) => !COVERED.includes(id)).map(caip2);
 
@@ -191,7 +210,10 @@ export async function defiPositions(who: { account: string }, asked: number[] | 
     try {
       data = await ask(chains, who.account, deps);
     } catch (err) {
-      return refusal(err instanceof Refused ? err.message : `proxy_error: ${reasonOf(err)}`);
+      if (err instanceof Refused) return refusal(err.message);
+      return refusal(
+        `proxy_error: ${withNext('Your DeFi positions could not be read right now. Try again shortly.', reasonOf(err))}`
+      );
     }
   }
 
@@ -310,7 +332,7 @@ export function registerDefiTool(server: McpServer) {
     },
     async ({ chainIds: asked }, ctx) => {
       const deps = liveDeps();
-      if ('error' in deps) return refusal(`server_misconfigured: ${deps.error}`);
+      if ('error' in deps) return refusal(`server_misconfigured: ${withNext(UNAVAILABLE, deps.error)}`);
       return defiPositions(tenant(ctx), asked, deps);
     }
   );

@@ -196,7 +196,8 @@ describe('reconciler: owner link requests', () => {
 
     const result = await sign(t, { message: 'again', idempotencyKey: 'again' }, { openWallet: idle });
 
-    expect(result.structuredContent?.summary).toMatch(/^link_lost: .*cli-bridge\?pr_/);
+    expect(result.structuredContent?.summary).toMatch(/^Open this link to sign: /);
+    expect(result.structuredContent?.summary).toMatch(/\nFor the agent: .*cli-bridge\?pr_.* answers link_lost\./);
     expect((await rowOf(lost)).state).toBe('expired');
   });
 
@@ -462,6 +463,21 @@ describe('reconciler: owner link requests', () => {
       .from(permissionRequests)
       .where(eq(permissionRequests.method, 'sign'));
     expect(n).toBe(2);
+  });
+
+  it('given add funds requests that ended over a week ago, when the purge runs, then those are deleted and the rest stay', async () => {
+    const weekAgo = new Date(Date.now() - 8 * 86_400_000);
+    const old = await row({ method: 'add_funds', state: 'approved', updatedAt: weekAgo });
+    const oldExpired = await row({ method: 'add_funds', state: 'expired', updatedAt: weekAgo });
+    const recent = await row({ method: 'add_funds', state: 'approved' });
+    const waiting = await row({ method: 'add_funds', updatedAt: weekAgo });
+
+    await purge();
+
+    expect(await rowOf(old)).toBeUndefined();
+    expect(await rowOf(oldExpired)).toBeUndefined();
+    expect(await rowOf(recent)).toBeDefined();
+    expect(await rowOf(waiting)).toBeDefined();
   });
 
   it('given a sign request purged a week after it ended, when its key is sent again, then a new link opens for the owner', async () => {

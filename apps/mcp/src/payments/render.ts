@@ -1,5 +1,8 @@
+import { usdcForNetwork } from '@jaw.id/agent';
 import { z } from 'zod';
 import { reply } from '@/lib/fence';
+import { chainName, formatAmount } from '@/lib/owner-text';
+import { withNext } from '@/tools/reply';
 import { stateOf, type PaymentRow } from './store';
 
 const money = z.object({ amount: z.string(), asset: z.string().describe('CAIP-19 asset id') });
@@ -60,15 +63,71 @@ export type PayResult = {
 /** Refusals a larger budget would fix. */
 export const RAISE = new Set(['budget_exhausted', 'no_grant', 'grant_revoked']);
 
-export const RAISE_HINT = ' Ask for a larger budget with jaw_grant_permissions and x402Budget.';
+/** For the agent, on a refusal a new or higher spend limit would fix. */
+const RAISE_HINT: Record<string, string> = {
+  budget_exhausted: 'If the owner wants it, ask for a higher spend limit with jaw_grant_permissions and x402Budget.',
+  no_grant: 'Ask the owner for a spend limit with jaw_grant_permissions and x402Budget, saying what it is for.',
+  grant_revoked: 'If the owner wants it, ask for a new spend limit with jaw_grant_permissions and x402Budget.',
+};
 
-/** What the agent can do about a refusal, as one sentence after the summary. */
-function hintOf(refusal: PayOutput['refusal']): string {
-  if (refusal?.next) return RAISE_HINT;
+/** Refusals the wallet's own funds caused, which adding funds fixes. */
+const SHORT_OF_FUNDS = new Set(['balance_low', 'funding_failed']);
+
+/** The row's network by name, or this connection's when the row has none yet: refused before signing, it often does not. */
+function networkOf(row: PaymentRow): string {
+  const id = row.network?.match(/^eip155:(\d+)$/)?.[1];
+  return id ? chainName(Number(id)) : "this connection's network";
+}
+
+/** What the agent can do about a refusal, as one sentence on its line. */
+function hintOf(refusal: PayOutput['refusal'], row: PaymentRow): string | undefined {
+  if (refusal?.next) return RAISE_HINT[refusal.code];
   if (refusal?.code === 'over_cap') {
-    return " The price is over the most one payment may spend, the server's cap or a maxAmount sent with this call; a larger budget does not raise it.";
+    return "The price is over the most one payment may spend, the server's cap or a maxAmount sent with this call; a higher spend limit does not raise it.";
   }
-  return '';
+  if (refusal && SHORT_OF_FUNDS.has(refusal.code))
+    return `Offer add funds with the missing amount on ${networkOf(row)}.`;
+  return undefined;
+}
+
+/** Why a payment did not happen, in words the owner can read after "Not paid: ". The code stays in the result. */
+const PLAIN: Record<string, string> = {
+  insecure_url: 'the address is not a secure one',
+  blocked_url: 'that address cannot be reached from here',
+  unreachable: 'the service could not be reached',
+  malformed_challenge: 'the service asked for payment in a form that could not be read',
+  no_option: 'the service offers no way to pay that this connection can use',
+  unsupported_option: 'the service asks for a kind of payment this connection cannot make',
+  network_mismatch: 'the service asks for payment on another network',
+  asset_mismatch: 'the service asks for payment in another token',
+  not_allowed: 'the service asks for a payment outside what this connection may pay',
+  over_cap: 'the price is over the most one payment may be',
+  budget_exhausted: 'the spend limit for paid services has too little left today',
+  invalid_config: 'the payment settings are not valid',
+  funding_failed: "the connection's balance could not be topped up from the wallet",
+  balance_low: 'the wallet holds too little USDC',
+  chain_unavailable: 'the network could not be read right now',
+  signing_failed: 'the payment could not be signed',
+  store_failed: 'the payment could not be recorded',
+  authorization_expired: 'the payment expired before it was sent',
+  timed_out: 'it took too long',
+  no_grant: 'there is no spend limit for paid services yet',
+  grant_revoked: 'the spend limit for paid services was revoked',
+  no_response: 'the service did not answer',
+  redirected: 'the service sent the request somewhere else',
+  settlement_rejected: 'the service refused the payment',
+};
+
+export const plainReason = (code: string | null | undefined): string =>
+  (code && Object.hasOwn(PLAIN, code) && PLAIN[code]) || 'the payment could not be made';
+
+/** The amount as people read it: USDC at its decimals, or the raw figure of a token the registry does not know. */
+function amountOf(payment: NonNullable<PayOutput['payment']>): string {
+  const [network, token] = payment.asset.split('/erc20:');
+  const usdc = usdcForNetwork(network);
+  return usdc && usdc.address.toLowerCase() === token?.toLowerCase()
+    ? formatAmount(payment.amount, usdc.decimals, 'USDC')
+    : `${payment.amount} of the smallest unit of the token ${token}`;
 }
 
 export const gate = (code: string, text: string): PayResult => ({
@@ -77,27 +136,56 @@ export const gate = (code: string, text: string): PayResult => ({
   [gateCode]: code,
 });
 
-function summaryOf(row: PaymentRow, out: Omit<PayOutput, 'summary'>): string {
-  const moved = out.payerRefilled ? ' Funds moved into the payer first.' : '';
-  const paid = `${out.payment?.amount} base units to ${out.payment?.payTo}`;
-  if (out.kind === 'free') return `Free: answered ${out.httpStatus} without a payment.`;
-  const raise = hintOf(out.refusal);
-  if (row.kind === null) return 'Paying now. Ask again in a few seconds.';
+/** What came back from the service: a status with a body fenced beside the summary, a status alone, or nothing. */
+type Answer = 'body' | 'empty' | 'none';
+
+const ANSWERED: Record<Answer, string> = {
+  body: 'The service answered.',
+  empty: 'The service answered with no content.',
+  none: "The payment went through, but the service's answer was not received.",
+};
+
+function summaryOf(row: PaymentRow, out: Omit<PayOutput, 'summary'>, answer: Answer): string {
+  const moved = out.payerRefilled ? " The connection's balance was topped up from the wallet first." : '';
+  const host = new URL(row.url).host;
+  const paid = `Paid ${out.payment ? `${amountOf(out.payment)} to ` : ''}${host}. ${ANSWERED[answer]}`;
+  if (out.kind === 'free') return 'Free: no payment was needed.';
+  const raise = hintOf(out.refusal, row);
+  const notPaid = `Not paid: ${plainReason(out.refusal?.code)}. Nothing was sent.`;
+  if (row.kind === null) {
+    return withNext('The payment is still being made.', 'Send the same idempotencyKey again in a few seconds.');
+  }
   switch (row.state) {
     case 'pending':
-      return `Not paid: ${out.refusal?.code}. Nothing was sent. Send the same idempotencyKey again to retry.${raise}`;
+      return withNext(notPaid, ['Send the same idempotencyKey to retry.', raise].filter(Boolean).join(' '));
     case 'settled':
-      return `Paid ${paid}. Settled${out.payment?.txHash ? ` in ${out.payment.txHash}` : ' on chain'}.${moved}`;
+      return `${paid}${moved}`;
     case 'signed':
       return out.kind === 'paid'
-        ? `Paid ${paid}. Settlement is being confirmed; jaw_session_history shows it.${moved}`
-        : `A payment was sent and no answer came back. Send the same idempotencyKey again to resend it; it will not pay twice.${moved}`;
+        ? withNext(
+            `${paid} The payment is still being confirmed.${moved}`,
+            'jaw_session_history shows when it settles.'
+          )
+        : withNext(
+            `The payment went out and the service did not answer.${moved}`,
+            'Send the same idempotencyKey again; it never pays twice.'
+          );
     case 'unknown':
-      return `A payment may have reached the seller (${out.refusal?.code}). Whether it settled is being checked; jaw_session_history shows it.${moved}`;
+      return withNext(
+        `The payment may have reached the service; whether it settled is being checked.${moved}`,
+        'jaw_session_history shows it.'
+      );
     default:
-      if (out.payment) return `The signed payment expired unused. Nothing moved to the seller.${moved}`;
-      return `Not paid: ${out.refusal?.code}. Nothing was sent.${raise}${moved}`;
+      if (out.payment) return `The payment expired before it was used, so nothing was paid.${moved}`;
+      return withNext(`${notPaid}${moved}`, raise);
   }
+}
+
+/** The owner's line says the response was cut; the agent's line, if any, stays last. */
+function withCut(summary: string, truncated: boolean) {
+  if (!truncated) return summary;
+  const [say, ...rest] = summary.split('\n');
+  return [`${say} The response was cut at 1 MB.`, ...rest].join('\n');
 }
 
 /** The answer for a row, from its columns, so a replay shows what the reconciler learned since. */
@@ -136,7 +224,11 @@ export function render(row: PaymentRow, fenced: string[], truncated = false): Pa
     ...out,
     ...(fenced.length && { response: fenced }),
     ...(truncated && { responseTruncated: true }),
-    summary: summaryOf(row, out) + (truncated ? ' The response body was cut at 1 MB.' : ''),
+    // An empty body is not fenced, so a status with nothing fenced is an answer with no content.
+    summary: withCut(
+      summaryOf(row, out, row.httpStatus === null ? 'none' : fenced.length ? 'body' : 'empty'),
+      truncated
+    ),
   });
   return {
     ...reply(structured),

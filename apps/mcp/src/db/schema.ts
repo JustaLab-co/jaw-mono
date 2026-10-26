@@ -292,7 +292,7 @@ export const swaps = pgTable(
     depositAddress: text('deposit_address'),
     quote: jsonb('quote'),
     quoteFenced: text('quote_fenced'),
-    call: jsonb('call').$type<{ chainId: number; to: string; data: string; value: string }>(),
+    call: jsonb('call'),
     walletUrl: text('wallet_url'),
     approveBy: timestamp('approve_by', { withTimezone: true }),
     sessionUntil: timestamp('session_until', { withTimezone: true }),
@@ -376,7 +376,7 @@ export const permissionRequests = pgTable(
     connectionId: text('connection_id')
       .notNull()
       .references(() => connections.id),
-    method: text('method', { enum: ['grant', 'revoke', 'sign'] }).notNull(),
+    method: text('method', { enum: ['grant', 'revoke', 'sign', 'add_funds'] }).notNull(),
     chainId: integer('chain_id').notNull(),
     account: text('account').notNull(),
     permissionId: text('permission_id'),
@@ -416,10 +416,16 @@ export const permissionRequests = pgTable(
     uniqueIndex('permission_requests_open_sign_index')
       .on(t.connectionId)
       .where(sql`${t.method} = 'sign' and ${t.state} = 'awaiting_owner'`),
+    uniqueIndex('permission_requests_open_add_funds_index')
+      .on(t.connectionId)
+      .where(sql`${t.method} = 'add_funds' and ${t.state} = 'awaiting_owner'`),
     uniqueIndex('permission_requests_names_lost_index').on(t.namesLost),
     index('permission_requests_ended_sign_index')
       .on(t.updatedAt)
       .where(sql`${t.method} = 'sign' and ${t.state} <> 'awaiting_owner'`),
+    index('permission_requests_ended_add_funds_index')
+      .on(t.updatedAt)
+      .where(sql`${t.method} = 'add_funds' and ${t.state} <> 'awaiting_owner'`),
     index('permission_requests_unconfirmed_index')
       .on(t.updatedAt)
       .where(sql`${t.method} = 'revoke' and ${t.state} = 'approved' and ${t.code} = 'unconfirmed'`),
@@ -431,7 +437,8 @@ export const permissionRequests = pgTable(
       sql`(${t.method} = 'revoke' and ${t.permissionId} is not null)
         or (${t.method} = 'grant' and (${t.state} <> 'approved' or ${t.permissionId} is not null))
         or (${t.method} = 'sign' and ${t.idempotencyKey} is not null and ${t.requestHash} is not null
-          and ${t.signKind} is not null and (${t.state} <> 'approved' or ${t.signature} is not null))`
+          and ${t.signKind} is not null and (${t.state} <> 'approved' or ${t.signature} is not null))
+        or ${t.method} = 'add_funds'`
     ),
   ]
 );

@@ -130,3 +130,11 @@ function decodePermit2(data: string): AllowanceChange {
 export function allowanceChanges(calls: Call[]): AllowanceChange[] {
   return calls.flatMap((call) => decodeAllowanceChange(call) ?? []);
 }
+
+/**
+ * The allowances worth a card of their own: unlimited ones and `setApprovalForAll`. A finite
+ * approval is usually spent by the call after it, and that spend already shows as a balance change.
+ */
+export function unlimitedAllowanceChanges(calls: Call[]): AllowanceChange[] {
+  return allowanceChanges(calls).filter((change) => change.unlimited);
+}

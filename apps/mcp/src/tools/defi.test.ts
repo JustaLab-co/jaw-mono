@@ -157,7 +157,8 @@ describe('jaw_get_defi_positions', () => {
     const r = (await run(deps)) as { isError: boolean; content: { text: string }[] };
 
     expect(r.isError).toBe(true);
-    expect(r.content[0].text).toContain('proxy_error: connect ECONNREFUSED [key]');
+    expect(r.content[0].text).toMatch(/^proxy_error: /);
+    expect(r.content[0].text).toContain('connect ECONNREFUSED [key]');
     expect(sent).toHaveLength(1);
   });
 
@@ -185,7 +186,8 @@ describe('jaw_get_defi_positions', () => {
     const r = (await run(deps, [1, 11155111])) as { isError: boolean; content: { text: string }[] };
 
     expect(r.isError).toBe(true);
-    expect(r.content[0].text).toMatch(/^not_a_mainnet: 11155111/);
+    expect(r.content[0].text).toMatch(/^not_a_mainnet: /);
+    expect(r.content[0].text).toContain('11155111 is not a supported mainnet');
     expect(sent).toHaveLength(0);
   });
 
@@ -195,7 +197,8 @@ describe('jaw_get_defi_positions', () => {
     const r = (await run(deps, [BASE_SEPOLIA])) as { isError: boolean; content: { text: string }[] };
 
     expect(r.isError).toBe(true);
-    expect(r.content[0].text).toMatch(/^not_a_mainnet: 84532/);
+    expect(r.content[0].text).toMatch(/^not_a_mainnet: /);
+    expect(r.content[0].text).toContain('84532 is not a supported mainnet');
     expect(sent).toHaveLength(0);
   });
 
@@ -256,7 +259,8 @@ describe('jaw_get_defi_positions', () => {
     const r = (await run({ ...deps, apiKey: undefined })) as { isError: boolean; content: { text: string }[] };
 
     expect(r.isError).toBe(true);
-    expect(r.content[0].text).toContain('this server has no proxy api key');
+    expect(r.content[0].text).toMatch(/^no_api_key: /);
+    expect(r.content[0].text).toContain('This server has no proxy api key');
     expect(sent).toHaveLength(0);
   });
 
@@ -288,7 +292,8 @@ describe('jaw_get_defi_positions', () => {
     const r = (await run(deps)) as { isError: boolean; content: { text: string }[] };
 
     expect(r.isError).toBe(true);
-    expect(r.content[0].text).toBe('proxy_error: The proxy answered with an unexpected shape.');
+    expect(r.content[0].text).toMatch(/^proxy_error: /);
+    expect(r.content[0].text).toContain('The proxy answered with an unexpected shape.');
   });
 
   it('given a body that is not JSON, then it is a proxy_error about an unexpected shape', async () => {
@@ -627,9 +632,8 @@ describe('portfolioUrl', () => {
 
     process.env.JAW_MCP_PORTFOLIO_URL = was;
     expect(r.isError).toBe(true);
-    expect(r.content[0].text).toMatch(
-      /^server_misconfigured: JAW_MCP_PORTFOLIO_URL must be a URL with no query or hash/
-    );
+    expect(r.content[0].text).toMatch(/^server_misconfigured: /);
+    expect(r.content[0].text).toContain('JAW_MCP_PORTFOLIO_URL must be a URL with no query or hash');
     expect(hits).toHaveLength(before);
   });
 });

@@ -25,7 +25,6 @@ vi.stubGlobal('fetch', (input: Parameters<typeof fetch>[0], init?: RequestInit) 
 
 setTestEnv();
 process.env.JAW_MCP_RPC_URL = 'http://127.0.0.1:9';
-process.env.JAW_MCP_MAINNET_RPC_URL = 'http://127.0.0.1:9';
 beforeAll(useTestDb);
 afterEach(async () => {
   await walletsSettled();
@@ -53,6 +52,11 @@ const TOOLS: Record<string, { needs: ConnectionScope[]; args: object }> = {
         { address: '0x0000000000000000000000000000000000000001', abi: [{ type: 'function' }], functionName: 'x' },
       ],
     },
+  },
+  // An unknown chain, so it refuses before reaching the proxy.
+  jaw_simulate_calls: {
+    needs: ['wallet:read'],
+    args: { chainId: 1337, calls: [{ to: RECIPIENT }] },
   },
   jaw_session_history: { needs: ['wallet:read'], args: {} },
   jaw_connections: { needs: ['wallet:read'], args: {} },
@@ -92,8 +96,13 @@ const TOOLS: Record<string, { needs: ConnectionScope[]; args: object }> = {
 
 const PROFILES = ['wallet:read', 'wallet:read x402:pay'];
 
-const refusedFor = (result: { content: { text: string }[] }) =>
-  result.content[0].text.match(/not granted (\S+)\./)?.[1];
+// The missing scope, as a refusal names it: in its line for the agent, or as pay still words it.
+// A status that is not ready names the scope too, so only an error counts.
+const refusedFor = (result: { isError?: boolean; content: { text: string }[] }) => {
+  if (!result.isError) return undefined;
+  const m = result.content[0].text.match(/ask for the (\S+) scope\.|not granted (\S+)\./);
+  return m?.[1] ?? m?.[2];
+};
 const tenantOf = async (accessToken: string) => (await verifyBearer(accessToken))?.extra?.tenant as Tenant;
 const refresh = (refreshToken: string, scope: string) =>
   token({ grant_type: 'refresh_token', refresh_token: refreshToken, client_id: 'jaw-cli', scope });

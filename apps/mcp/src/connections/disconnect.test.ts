@@ -9,6 +9,7 @@ import { grants, payments, settings } from '@/db/schema';
 import { TEST_PG_URL, useTestDb, useTestPostgres } from '@/db/test-db';
 import { withFloat } from '@/payments/float-lock';
 import { LEASE_MS, PAY_LIMIT_MS } from '@/payments/store';
+import { leaks, spoken, toAgent } from '@/test-utils/spoken';
 import { disconnect, sweepOnReuse, type DisconnectDeps, type Sent } from './disconnect';
 import { budgetConnection, callTool, connect, mcp, setTestEnv } from './testkit';
 import { verifyBearer, type Tenant } from './auth';
@@ -108,6 +109,36 @@ describe('jaw_session_disconnect', () => {
     expect(await listed(c.access_token)).toBe(401);
   });
 
+  it('given a revoke and a return that land, then the owner hears both and the receipt in plain words', async () => {
+    const { tenant } = await budgetConnection(async () => approved);
+    const { deps } = fakes();
+
+    const result = await disconnect(tenant, deps);
+
+    const [said, receipt] = spoken(result).split('\n');
+    expect(said).toBe('Disconnected. Revoked 1 permission and returned 0.4975 USDC to the wallet.');
+    expect(receipt).toBe(`Receipt: https://sepolia.basescan.org/tx/${TX}`);
+    expect(leaks(spoken(result))).toEqual([]);
+    expect(toAgent(result)).toEqual([]);
+  });
+
+  it('given a spend limit the fee cannot revoke, then the owner hears it stays approved and the agent how to revoke it', async () => {
+    const { tenant } = await budgetConnection(async () => approved);
+    const { deps } = fakes({ float: 2_500n, expected: 2_000n, max: 10_000n, sent: { status: 'reverted' } });
+
+    const result = await disconnect(tenant, deps);
+
+    expect(spoken(result)).toContain(
+      '1 permission stays approved until it expires, because the fee to revoke it could not be paid. Nothing can use it now that this app is disconnected.'
+    );
+    expect(spoken(result).split('\n')[0]).toBe('Disconnected.');
+    expect(spoken(result)).not.toContain('Nothing was left to revoke or return.');
+    expect(leaks(spoken(result))).toEqual([]);
+    expect(toAgent(result)).toEqual([
+      'For the agent: The owner can revoke the remaining ones in the wallet, or with jaw_revoke_permission after reconnecting; their ids are in stillApproved and unread.',
+    ]);
+  });
+
   it('given two live budgets, revokes both in the one batch that returns the float', async () => {
     const { c, tenant, permissionId, permission } = await budgetConnection(async () => approved);
     const [first] = await getDb().select().from(grants).where(eq(grants.permissionId, permissionId));
@@ -135,7 +166,7 @@ describe('jaw_session_disconnect', () => {
 
   it.each([
     ['is not sent', undefined, 'Nothing was revoked: the transaction could not be sent. Try again.'],
-    ['reverts', { status: 'reverted' }, 'Nothing was revoked: the transaction reverted. Try again.'],
+    ['reverts', { status: 'reverted' }, 'Nothing was revoked: the transaction failed. Try again.'],
     ['is not confirmed in time', { status: 'unconfirmed' }, 'The transaction was sent but is not confirmed yet.'],
   ] as const)('ends nothing when the batch %s, so a retry completes it', async (_name, outcome, text) => {
     const { c, tenant, permissionId } = await budgetConnection(async () => approved);
@@ -183,7 +214,7 @@ describe('jaw_session_disconnect', () => {
       txHash: TX,
       left: '2500',
     });
-    expect(result.content[0].text).toContain('too little to sweep after the fee');
+    expect(result.content[0].text).toContain('too little to return after the fee');
     expect(await revokedAt(permissionId)).not.toBeNull();
     expect(await listed(c.access_token)).toBe(401);
   });
@@ -194,7 +225,9 @@ describe('jaw_session_disconnect', () => {
     const result = await disconnect(tenant, deps);
     expect(sent).toHaveLength(1);
     expect(result.structuredContent).toMatchObject({ revoked: [], stillApproved: [permissionId], left: '2500' });
-    expect(result.content[0].text).toContain('still approved on chain until they expire');
+    expect(result.content[0].text).toContain(
+      'stays approved until it expires, because the fee to revoke it could not be paid'
+    );
     expect(await revokedAt(permissionId)).toBeNull();
     expect(await listed(c.access_token)).toBe(401);
   });
@@ -210,6 +243,7 @@ describe('jaw_session_disconnect', () => {
 
     expect(sent).toEqual([]);
     expect(result.structuredContent).toMatchObject({ revoked: [], swept: '0', txHash: null, left: '0' });
+    expect(spoken(result)).toBe('Disconnected. Nothing was left to revoke or return.');
     expect(await revokedAt(permissionId)).not.toBeNull();
     expect(await listed(c.access_token)).toBe(401);
   });
@@ -266,6 +300,16 @@ describe('jaw_session_disconnect', () => {
     }
   });
 
+  it('when a client lists the tools, then it is titled for people and keeps its flags', async () => {
+    const reader = await connect(undefined, { scope: 'wallet:read' });
+
+    const { json } = await mcp(reader.access_token, { method: 'tools/list' });
+
+    const tool = json.result.tools.find((t: { name: string }) => t.name === 'jaw_session_disconnect');
+    expect(tool.title).toBe('Disconnect this app from the wallet');
+    expect(tool.annotations).toEqual({ destructiveHint: true, idempotentHint: true });
+  });
+
   it('is a tool, and keeps the tokens with a fixed refusal when the chain cannot be read', async () => {
     const reader = await connect(undefined, { scope: 'wallet:read' });
     const result = await callTool(reader.access_token, 'jaw_session_disconnect', {});
@@ -273,6 +317,7 @@ describe('jaw_session_disconnect', () => {
       isError: true,
       content: [{ type: 'text', text: 'Nothing was revoked: the chain could not be read. Try again.' }],
     });
+    expect(leaks(spoken(result))).toEqual([]);
     expect(await listed(reader.access_token)).toBe(200);
   });
 });
@@ -380,7 +425,7 @@ describe('given the fee rises above the reserve before the batch lands', () => {
     const refused = await disconnect(tenant, deps);
 
     expect(sent).toHaveLength(2);
-    expect(refused.content[0].text).toBe('Nothing was revoked: the transaction reverted. Try again.');
+    expect(refused.content[0].text).toBe('Nothing was revoked: the transaction failed. Try again.');
     expect(await revokedAt(permissionId)).toBeNull();
     expect(await listed(c.access_token)).toBe(200);
   });
@@ -411,6 +456,8 @@ describe('given the batch landed but its reply was lost', () => {
 
     expect(sent).toEqual([]);
     expect(result.structuredContent).toMatchObject({ revoked: [], stillApproved: [], swept: '0', left: '1800' });
+    expect(spoken(result).split('\n')[0]).toBe('Disconnected.');
+    expect(spoken(result)).not.toContain('Nothing was left to revoke or return.');
     expect(await revokedAt(permissionId)).not.toBeNull();
     expect(await listed(c.access_token)).toBe(401);
   });
@@ -495,7 +542,7 @@ describe('given a never-delegated payer holding the prefund', () => {
       swept: '0',
       txHash: TX,
     });
-    expect(result.content[0].text).toContain('too little to sweep after the fee');
+    expect(result.content[0].text).toContain('too little to return after the fee');
     expect(await listed(c.access_token)).toBe(401);
   });
 
@@ -507,7 +554,9 @@ describe('given a never-delegated payer holding the prefund', () => {
 
     expect(sent).toHaveLength(1);
     expect(result.structuredContent).toMatchObject({ revoked: [], stillApproved: [permissionId], left: '500' });
-    expect(result.content[0].text).toContain('still approved on chain until they expire');
+    expect(result.content[0].text).toContain(
+      'stays approved until it expires, because the fee to revoke it could not be paid'
+    );
     expect(await listed(c.access_token)).toBe(401);
   });
 });

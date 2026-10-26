@@ -42,6 +42,9 @@ export function publicClientFor(chainId: number): PublicClient {
   return client;
 }
 
+/** The CAIP-2 id of an EVM chain. */
+export const caip2 = (chainId: number) => `eip155:${chainId}`;
+
 /** Every chain JAW serves, testnets included. */
 export const proxyChains = () => getSupportedChains(true);
 
