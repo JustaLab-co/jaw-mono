@@ -30,6 +30,7 @@ import { RATE_WINDOW_MS } from '@/lib/edge';
 import { gateCode } from '@/payments/render';
 import { SEND_STARTED } from '@/owner-calls/store';
 import * as store from '@/owner-calls/store';
+import { approve } from '@/owner-calls/approve';
 import { fakeChain, type FakeEvent } from '@/owner-calls/chain-testkit';
 import type { ReadReceipt } from '@/owner-calls/receipt';
 import { leaks, spoken, toAgent } from '@/test-utils/spoken';
@@ -370,36 +371,8 @@ describe('jaw_send_calls approval', () => {
     expect(opened).toHaveLength(1);
   });
 
-  it.each([4100, 4200, 4900, 4901, 5700, 5710, -32602])(
-    'given a wallet that refuses wallet_sendCalls with %i, which it only returns before submitting, then the row is owner_declined and the key says nothing was sent',
-    async (code) => {
-      const { t } = await connected();
-      const refuse = () => {
-        throw Object.assign(new Error('the wallet refused'), { code });
-      };
-
-      await send(t, {}, wallet(owner(t.account, { wallet_sendCalls: refuse })));
-      await settle();
-      const again = await send(t);
-
-      expect((await rowsOf(t.connectionId))[0]).toMatchObject({
-        state: 'owner_declined',
-        code: `wallet_error:${code}`,
-      });
-      expect(again.structuredContent).toMatchObject({
-        state: 'owner_declined',
-        refusal: { code: `wallet_error:${code}` },
-      });
-      expect(again.structuredContent!.url).toBeUndefined();
-      expect(spoken(again)).toBe('The wallet turned this request down before sending it. Nothing was sent.');
-      expect(toAgent(again).join('\n')).toContain(`refused the calls with ${code} before sending them`);
-      expect(toAgent(again).join('\n')).toContain('new idempotencyKey');
-      expect(opened).toHaveLength(1);
-    }
-  );
-
-  it.each([-32000, -32603, -32003, 4002, undefined])(
-    'given a wallet that fails wallet_sendCalls with %s, which can follow a submission, then the row keeps the send marker and the key says the wallet may have sent',
+  it.each([4100, 4200, 4900, 4901, 5700, 5710, -32602, -32000, -32603, -32003, 4002, undefined])(
+    'given a wallet that fails wallet_sendCalls with %s after the send marker, then the row keeps the send marker and the key says the wallet may have sent',
     async (code) => {
       const { t } = await connected();
       const fail = () => {
@@ -415,6 +388,23 @@ describe('jaw_send_calls approval', () => {
       expect(again.structuredContent!.url).toBeUndefined();
     }
   );
+
+  it.each([
+    ['signs in with another account', () => owner(OTHER)],
+    ['rejects the account request', (account: string) => owner(account, { eth_requestAccounts: rejected })],
+  ])('given a marked row, when a resumed session %s, then the row keeps the send marker', async (_, answer) => {
+    const { t } = await connected();
+    const fail = () => {
+      throw Object.assign(new Error('the wallet failed'), { code: -32603 });
+    };
+    await send(t, {}, wallet(owner(t.account, { wallet_sendCalls: fail })));
+    await settle();
+    const [marked] = await rowsOf(t.connectionId);
+
+    await approve(answer(t.account), marked, quietChain);
+
+    expect((await rowsOf(t.connectionId))[0]).toMatchObject({ state: 'awaiting_owner', code: SEND_STARTED });
+  });
 
   it('given an owner who rejects the account request, then the row is owner_declined', async () => {
     const { t } = await connected();

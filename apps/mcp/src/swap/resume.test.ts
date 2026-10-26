@@ -116,7 +116,7 @@ describe('a swap deposit whose server restarted after the send started', () => {
     await vi.waitFor(async () => expect(await rowOf(id)).toMatchObject({ state: 'deposit_sent', callsId: '0xcalls' }));
   });
 
-  it('given the owner declined the deposit, then nothing is stored to resume', async () => {
+  it('given the owner declined the deposit, then the resumed send is the same request, the wallet ran it once, and nothing is stored to resume', async () => {
     const { id, page, decide } = await depositAskedThenRestarted({ declines: true });
     await resumeSwaps();
     await vi.waitFor(() => expect(page.ids).toHaveLength(4));
@@ -126,6 +126,8 @@ describe('a swap deposit whose server restarted after the send started', () => {
     await quiet();
 
     expect((await rowOf(id)).relay).toBeNull();
+    expect(page.ids.slice(2)).toEqual(page.ids.slice(0, 2));
+    expect(page.asked()).toBe(2);
   });
 
   it('given a swap whose window passed while it waited for a resume, when the same key comes, then it is expired with nothing stored to resume', async () => {
