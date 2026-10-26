@@ -15,7 +15,7 @@ import {
 import { z } from 'zod';
 import { isProxyChain, proxyChains, proxyClientFor } from '@/lib/chain';
 import { fenceText, reply } from '@/lib/fence';
-import { chainName } from '@/lib/owner-text';
+import { networkNameAtStart } from '@/lib/owner-text';
 import { refusal, withNext } from './reply';
 
 const MAX_READS = 100;
@@ -160,12 +160,6 @@ function failure(error: Error, read: Read, source: string) {
   return text(source, messageOf(error));
 }
 
-/** The network's name, or its id for one no list names, to start a sentence with. */
-const networkOf = (chainId: number) => {
-  const name = chainName(chainId);
-  return name.startsWith('eip155:') ? `The network with id ${chainId}` : name;
-};
-
 /** Runs the reads in one multicall. A read that fails carries its own error and does not stop the others. */
 export async function readContracts(args: { chainId: number; reads: Read[] }, clientFor: ClientFor = proxyClientFor) {
   const { chainId, reads } = args;
@@ -173,7 +167,7 @@ export async function readContracts(args: { chainId: number; reads: Read[] }, cl
     const supported = proxyChains().map((c) => c.id);
     return refusal(
       withNext(
-        `${networkOf(chainId)} is not a network the wallet supports, so nothing was read.`,
+        `${networkNameAtStart(chainId)} is not a network the wallet supports, so nothing was read.`,
         `Chain ${chainId} is not one JAW supports. Supported chain ids: ${supported.join(', ')}.`
       )
     );
@@ -194,7 +188,7 @@ export async function readContracts(args: { chainId: number; reads: Read[] }, cl
   if (!client.chain?.contracts?.multicall3)
     return refusal(
       withNext(
-        `${networkOf(chainId)} cannot batch reads, so nothing was read.`,
+        `${networkNameAtStart(chainId)} cannot batch reads, so nothing was read.`,
         `Chain ${chainId} has no multicall contract to batch reads.`
       )
     );
@@ -210,7 +204,7 @@ export async function readContracts(args: { chainId: number; reads: Read[] }, cl
   if (settled.some((s) => s.status === 'failure' && unreachable(s.error)))
     return refusal(
       withNext(
-        `${networkOf(chainId)} could not be reached right now, so nothing was read. Try again shortly.`,
+        `${networkNameAtStart(chainId)} could not be reached right now, so nothing was read. Try again shortly.`,
         `The RPC for chain ${chainId} is unavailable.`
       )
     );

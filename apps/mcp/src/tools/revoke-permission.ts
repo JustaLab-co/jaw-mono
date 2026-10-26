@@ -23,9 +23,8 @@ import { REVOKE_READS, revokeWork, sameId, type RevokeTarget } from '@/grants/re
 import { fromStore, markRevoked, readState, type LookUp } from '@/grants/revokes';
 import { RATE_WINDOW_MS } from '@/lib/edge';
 import { reply } from '@/lib/fence';
-import { chainName, expiresIn, onDate, withinWindow } from '@/lib/owner-text';
+import { expiresIn, listed, networkName, onDate, spendLimits, withinWindow } from '@/lib/owner-text';
 import { LINK_RATE_LIMIT } from '@/owner-calls/cap';
-import { listed, spendLimits } from './grant-permissions';
 import { ACCOUNT_BUSY, refusal, withNext } from './reply';
 
 const revokeInput = z.strictObject({
@@ -68,12 +67,6 @@ const unknown = (id: string) =>
     `No permission ${id} was granted from this account. jaw_connections lists the ones this server holds.`
   );
 
-/** The network's name, or its id in words for a chain nobody knows, so the owner never reads a raw chain id. */
-const networkOf = (chainId: number) => {
-  const name = chainName(chainId);
-  return name.startsWith('eip155:') ? `the network with id ${chainId}` : name;
-};
-
 async function findPermission(t: Tenant, id: Hex, chainId: number, lookUp: LookUp): Promise<Target | string> {
   const [row] = await getDb()
     .select()
@@ -99,7 +92,7 @@ async function findPermission(t: Tenant, id: Hex, chainId: number, lookUp: LookU
   if (found === 'not_found' || !isAddressEqual(found.permission.account as Address, t.account)) return unknown(id);
   if (found.chainId !== chainId) {
     return withNext(
-      `wrong_chain: This permission was granted on ${networkOf(found.chainId)}, not ${networkOf(chainId)}. Nothing was asked.`,
+      `wrong_chain: This permission was granted on ${networkName(found.chainId)}, not ${networkName(chainId)}. Nothing was asked.`,
       `Permission ${id} was granted on chainId ${found.chainId}, not ${chainId}. Pass chainId ${found.chainId}.`
     );
   }
@@ -147,7 +140,7 @@ export async function revokePermission(t: Tenant, input: RevokeInput, deps = DEF
   if (!SUPPORTED_CHAINS[chainId]) {
     return refusal(
       withNext(
-        `unsupported_chain: Permissions on ${networkOf(chainId)} cannot be revoked from here. Nothing was asked.`,
+        `unsupported_chain: Permissions on ${networkName(chainId)} cannot be revoked from here. Nothing was asked.`,
         `chainId ${chainId} is not one this server reads. It reads ${Object.keys(SUPPORTED_CHAINS).join(', ')}.`
       )
     );

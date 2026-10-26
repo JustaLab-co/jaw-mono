@@ -31,7 +31,7 @@ import {
 } from '@/grants/store';
 import { errorLabel, log } from '@/lib/edge';
 import { reply } from '@/lib/fence';
-import { expiresIn, formatAmount, nativeSymbol, onDate, withinWindow } from '@/lib/owner-text';
+import { counted, expiresIn, formatAmount, listed, onDate, spendLimits, withinWindow } from '@/lib/owner-text';
 import { forbiddenTargets } from './owner-calls';
 import { ACCOUNT_BUSY, NO_PAY_SCOPE, refusal, withNext } from './reply';
 
@@ -117,55 +117,6 @@ interface Asked {
   what: string;
 }
 
-// ERC-7528, how the permission manager names the chain's own coin.
-const NATIVE_TOKEN = '0xeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee';
-
-/**
- * An amount of a token as the owner reads it: with its decimals and symbol for the chain's own coin and USDC, which
- * this server knows. Any other token stays exact, in its smallest unit, named by its address.
- */
-export function tokenAmount(chainId: number, token: string, amount: bigint | string): string {
-  if (token.toLowerCase() === NATIVE_TOKEN) return formatAmount(amount, 18, nativeSymbol(chainId));
-  const usdc = usdcForNetwork(`eip155:${chainId}`);
-  if (usdc && token.toLowerCase() === usdc.address.toLowerCase()) return formatAmount(amount, usdc.decimals, 'USDC');
-  return `${BigInt(amount)} smallest units of the token at ${token}`;
-}
-
-const ONE_UNIT: Record<string, string> = {
-  minute: 'a minute',
-  hour: 'an hour',
-  day: 'a day',
-  week: 'a week',
-  month: 'a month',
-  year: 'a year',
-};
-
-/** A limit's period as the owner reads it: "a day", "every 2 months", "in total". */
-const perPeriod = (unit: string, multiplier: number) =>
-  unit === 'forever'
-    ? 'in total'
-    : multiplier === 1
-      ? (ONE_UNIT[unit] ?? `per ${unit}`)
-      : `every ${multiplier} ${unit}s`;
-
-/** "a", "a and b", "a, b and c". */
-export const listed = (items: string[]) =>
-  items.length < 2 ? items.join('') : `${items.slice(0, -1).join(', ')} and ${items.at(-1)}`;
-
-type SpendLimit = { token: string; allowance: string | bigint; unit: string; multiplier?: number };
-
-/** What spend limits let move, summed per token and period: "1 USDC a day", "0.50 ETH a week". */
-export function spendLimits(chainId: number, limits: readonly SpendLimit[]): string[] {
-  const sums = new Map<string, { token: string; per: string; amount: bigint }>();
-  for (const { token, unit, multiplier = 1, allowance } of limits) {
-    const per = perPeriod(unit, multiplier);
-    const key = `${token.toLowerCase()}:${per}`;
-    const sum = sums.get(key) ?? { token, per, amount: 0n };
-    sums.set(key, { ...sum, amount: sum.amount + BigInt(allowance) });
-  }
-  return [...sums.values()].map(({ token, per, amount }) => `${tokenAmount(chainId, token, amount)} ${per}`);
-}
-
 const NOTHING_ASKED = 'Nothing was asked.';
 
 function asked(t: Tenant, input: GrantInput, expiry: number): Asked | string {
@@ -215,7 +166,7 @@ function asked(t: Tenant, input: GrantInput, expiry: number): Asked | string {
   };
   const targets = [...new Map(calls.map((c) => [c.target.toLowerCase(), c.target])).values()];
   const on = targets.length === 1 ? targets[0] : `${targets.length} contracts (${listed(targets)})`;
-  const actions = `${calls.length} allowed action${calls.length === 1 ? '' : 's'} on ${on}`;
+  const actions = `${counted(calls.length, 'allowed action')} on ${on}`;
   const limits = spendLimits(t.chainId, spent);
   return { kind: 'custom', grant, what: limits.length ? `${actions} with a limit of ${listed(limits)}` : actions };
 }

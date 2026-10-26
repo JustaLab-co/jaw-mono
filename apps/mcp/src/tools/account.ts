@@ -18,9 +18,8 @@ import { getDb } from '@/db/client';
 import { connections, ownerCalls, sends } from '@/db/schema';
 import { caip2 } from '@/lib/chain';
 import { reply } from '@/lib/fence';
-import { chainName, formatAmount, nativeSymbol } from '@/lib/owner-text';
-import { scrub } from '@/lib/scrub';
-import { refusal, withNext } from './reply';
+import { capital, counted, formatAmount, listed, nativeSymbol, networkName } from '@/lib/owner-text';
+import { reasonOf, refusal, withNext } from './reply';
 
 const CONCURRENCY = 10;
 const CHAIN_DEADLINE_MS = 4000;
@@ -36,12 +35,6 @@ const chainIds = z
   .max(60)
   .optional()
   .describe('Mainnet chain ids to read; every supported mainnet when left out');
-
-export function reasonOf(err: unknown) {
-  if (err instanceof z.ZodError) return 'The proxy answered with an unexpected shape.';
-  const message = typeof err === 'object' && err !== null && 'message' in err ? String(err.message) : 'request failed';
-  return sanitizeLine(scrub(message), 200);
-}
 
 const PENDING = 100;
 
@@ -90,26 +83,12 @@ const failure = (what: string, err: unknown) => unread(what, reasonOf(err));
 const unread = (what: string, reason: string) =>
   refusal(`proxy_error: ${withNext(`${what} could not be read right now. Try again shortly.`, reason)}`);
 
-const plural = (n: number, word: string) => `${n} ${word}${n === 1 ? '' : 's'}`;
-
-/** The network's name, or its id for one no list names. */
-const networkOf = (chainId: number) => {
-  const name = chainName(chainId);
-  return name.startsWith('eip155:') ? `the network with id ${chainId}` : name;
-};
-
-/** "Base", "Base and Celo", "Base, Celo and Ink". */
-const listed = (names: string[]) =>
-  names.length < 2 ? (names[0] ?? '') : `${names.slice(0, -1).join(', ')} and ${names[names.length - 1]}`;
-
-const capital = (text: string) => text.charAt(0).toUpperCase() + text.slice(1);
-
 // The connection's own chain may be named too, so a testnet deployment can see the funds it was sent.
 function checkMainnets(ids: number[] | undefined, own: number) {
   const known = mainnetIds();
   const unknown = [...new Set(ids ?? [])].filter((id) => id !== own && !known.includes(id));
   if (!unknown.length) return undefined;
-  const names = listed(unknown.map(networkOf));
+  const names = listed(unknown.map(networkName));
   return refusal(
     `not_a_mainnet: ${withNext(
       `${capital(names)} ${unknown.length === 1 ? 'is' : 'are'} not among the networks the wallet reads.`,
@@ -268,8 +247,8 @@ function networkLine(chainId: number, assets: Asset[]): string | undefined {
   if (!named.length && !more) return undefined;
   const list = named.length
     ? `${named.join(', ')}${more ? ` and ${more} more` : ''}`
-    : `${plural(more, 'token')} not shown here`;
-  return `On ${networkOf(chainId)}: ${list}.`;
+    : `${counted(more, 'token')} not shown here`;
+  return `On ${networkName(chainId)}: ${list}.`;
 }
 
 /** The main balances per network, then the networks whose balance is unknown. */
@@ -277,13 +256,13 @@ function assetsSummary(chains: { id: number; assets: Asset[] }[], unknown: numbe
   const lines = chains.flatMap(({ id, assets }) => networkLine(id, assets) ?? []);
   if (chains.length && !lines.length) {
     const where =
-      chains.length <= 3 ? listed(chains.map((c) => networkOf(c.id))) : `the ${chains.length} networks read`;
+      chains.length <= 3 ? listed(chains.map((c) => networkName(c.id))) : `the ${chains.length} networks read`;
     lines.push(`No funds found on ${where}.`);
   }
   if (unknown.length) {
     const one = unknown.length === 1;
     lines.push(
-      `Could not read ${listed(unknown.map(networkOf))} right now: ${one ? 'its balance is' : 'their balances are'} unknown, not zero.`
+      `Could not read ${listed(unknown.map(networkName))} right now: ${one ? 'its balance is' : 'their balances are'} unknown, not zero.`
     );
   }
   return lines.join(' ');
@@ -328,8 +307,8 @@ const paysFeesInUsdc = (caps: unknown) => {
 function capabilitiesSummary(chains: { id: number; caps: unknown }[]) {
   if (!chains.length) return 'No network came back, so where the wallet works could not be read.';
   const sorted = [...chains].sort((a, b) => a.id - b.id);
-  const names = (list: typeof sorted) => listed(list.map((c) => networkOf(c.id)));
-  const lines = [`The wallet works on ${plural(sorted.length, 'network')}: ${names(sorted)}.`];
+  const names = (list: typeof sorted) => listed(list.map((c) => networkName(c.id)));
+  const lines = [`The wallet works on ${counted(sorted.length, 'network')}: ${names(sorted)}.`];
   const can = [
     { what: 'run several actions in one approval', on: sorted.filter((c) => batches(c.caps)) },
     { what: 'pay fees in USDC', on: sorted.filter((c) => paysFeesInUsdc(c.caps)) },
@@ -441,7 +420,7 @@ export function registerAccountTools(server: McpServer) {
         const reverted = seen.length - landed;
         const say = [
           calls.length
-            ? `${plural(calls.length, 'transaction')}, ${args.sort === 'asc' ? 'oldest' : 'newest'} first.`
+            ? `${counted(calls.length, 'transaction')}, ${args.sort === 'asc' ? 'oldest' : 'newest'} first.`
             : 'No transactions found.',
           landed ? `${landed} shown as pending already went through.` : '',
           reverted ? `${reverted} shown as pending already failed.` : '',
@@ -486,7 +465,7 @@ export function registerAccountTools(server: McpServer) {
         const apps = await connectedHere(account);
         const here = apps ? permissions.filter((p) => apps.has(String(p.spender).toLowerCase())).length : 0;
         const summary =
-          `${permissions.length ? plural(permissions.length, 'permission') : 'No permissions'} granted by the wallet` +
+          `${permissions.length ? counted(permissions.length, 'permission') : 'No permissions'} granted by the wallet` +
           `${here ? `, ${here} to apps connected here` : ''}.`;
         return reply(permissionsOutput.parse({ permissions, summary }));
       } catch (err) {

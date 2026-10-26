@@ -6,7 +6,7 @@ import { tenant } from '@/connections/auth';
 import { config } from '@/connections/config';
 import { errorLabel, log } from '@/lib/edge';
 import { reply } from '@/lib/fence';
-import { chainName } from '@/lib/owner-text';
+import { chainName, listed, networkName } from '@/lib/owner-text';
 import { safeFetch } from '@/lib/safe-fetch';
 import { refusal, withNext } from './reply';
 
@@ -112,19 +112,9 @@ async function addressOf(name: string, deps: ResolveDeps): Promise<Resolved> {
   return resolveOutput.parse({ name, address: mainnet, chainId: MAINNET, addresses, summary });
 }
 
-/** The network's name, or its number for one no list names: never a raw chain id. */
-const networkOf = (chainId: number) => {
-  const name = chainName(chainId);
-  return name.startsWith('eip155:') ? `the network with id ${chainId}` : name;
-};
-
-/** "Base", "Base and Celo", "Base, Celo and Ink". */
-const listed = (names: string[]) =>
-  names.length < 2 ? (names[0] ?? '') : `${names.slice(0, -1).join(', ')} and ${names[names.length - 1]}`;
-
 /** Where a name has an address, for the owner: each network by name, the default entry last as every other one. */
 function whereOf(entries: Resolved['addresses']): string {
-  const named = entries.flatMap((a) => (a.chainId ? [networkOf(Number(a.chainId.split(':')[1]))] : []));
+  const named = entries.flatMap((a) => (a.chainId ? [networkName(Number(a.chainId.split(':')[1]))] : []));
   return listed(entries.some((a) => a.default) ? [...named, 'every other network'] : named);
 }
 

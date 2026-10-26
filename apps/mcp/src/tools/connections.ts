@@ -8,6 +8,7 @@ import { ownedBy } from '@/connections/rows';
 import { getDb } from '@/db/client';
 import { connections, grants, permissionRequests, SPEND_UNITS } from '@/db/schema';
 import { reply } from '@/lib/fence';
+import { counted } from '@/lib/owner-text';
 import { withNext } from './reply';
 
 const grantView = z.object({
@@ -73,9 +74,6 @@ function grantOf(g: GrantRow, now: Date): z.infer<typeof grantView> {
 }
 
 const revokes = alias(permissionRequests, 'revokes');
-
-/** "1 app", "2 apps". */
-const counted = (n: number, noun: string) => `${n} ${noun}${n === 1 ? '' : 's'}`;
 
 async function viewsOf(t: Tenant, rows: (typeof connections.$inferSelect)[]): Promise<View[]> {
   const ids = rows.map((r) => r.id);

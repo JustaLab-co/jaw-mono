@@ -11,10 +11,9 @@ import { addFundsWork, type AddFundsPayload } from '@/grants/resume';
 import { caip2, isProxyChain } from '@/lib/chain';
 import { RATE_WINDOW_MS } from '@/lib/edge';
 import { reply } from '@/lib/fence';
-import { chainName, expiresIn, withinWindow } from '@/lib/owner-text';
+import { chainName, expiresIn, listed, withinWindow } from '@/lib/owner-text';
 import { LINK_RATE_LIMIT, MAX_ADD_FUNDS_PER_ACCOUNT } from '@/owner-calls/cap';
-import { reasonOf } from './account';
-import { refusal, withNext } from './reply';
+import { reasonOf, refusal, withNext } from './reply';
 
 /** How long the reply waits on the supported networks before it names the ones it already knows. */
 const NETWORKS_WAIT_MS = 3_000;
@@ -65,8 +64,8 @@ const showTestnets = () => config().chain.testnet === true;
  * Every network the account's address takes deposits on, `first` leading: the address is the same on all of them.
  * The chains already known when the capabilities cannot be read.
  */
-async function networksOf(t: Tenant, first: number, deps: AddFundsDeps, listed?: number[]): Promise<number[]> {
-  let found = listed;
+async function networksOf(t: Tenant, first: number, deps: AddFundsDeps, chains?: number[]): Promise<number[]> {
+  let found = chains;
   if (!found) {
     try {
       found = await withTimeout(() => deps.capabilityChains(t.account, showTestnets()), {
@@ -78,12 +77,6 @@ async function networksOf(t: Tenant, first: number, deps: AddFundsDeps, listed?:
     }
   }
   return [...new Set([first, t.chainId, ...found])];
-}
-
-/** "Base", "Base and Arbitrum One", "Base, Arbitrum One and OP Mainnet". */
-function namesOf(chainIds: number[]): string {
-  const names = chainIds.map(chainName);
-  return names.length < 2 ? names.join('') : `${names.slice(0, -1).join(', ')} and ${names.at(-1)}`;
 }
 
 /** Where the owner can send funds without the screen: the address once, then the networks it works on. */
@@ -131,7 +124,7 @@ function answer(t: Tenant, networks: number[], row: PermissionRequestRow) {
 const unsupported = (chainId: number, networks: number[]) =>
   refusal(
     withNext(
-      `unsupported_chain: The wallet cannot receive on that network here. It can on ${namesOf(networks)}.`,
+      `unsupported_chain: The wallet cannot receive on that network here. It can on ${listed(networks.map(chainName))}.`,
       `Chain ${chainId} is not one the wallet supports here; jaw_get_capabilities lists the networks.`
     )
   );
@@ -140,14 +133,14 @@ export async function addFunds(t: Tenant, args: { chainId?: number } = {}, given
   const deps = { ...DEFAULTS, ...given };
   const chainId = args.chainId ?? t.chainId;
   // The chains the proxy lists, once read to check the asked one.
-  let listed: number[] | undefined;
+  let chains: number[] | undefined;
   // A link waiting on the asked chain was checked when it opened, so asking again needs no lookup.
   const heldOn = await addFundsHeldOn(t);
   if (chainId !== t.chainId && chainId !== heldOn) {
     if (!isProxyChain(chainId)) return unsupported(chainId, await networksOf(t, t.chainId, deps));
     // A mainnet server takes mainnets only, as jaw_get_assets reads balances on those and the connection's chain.
     try {
-      listed = await deps.capabilityChains(t.account, showTestnets());
+      chains = await deps.capabilityChains(t.account, showTestnets());
     } catch (err) {
       return refusedWithAddress(
         t,
@@ -156,7 +149,7 @@ export async function addFunds(t: Tenant, args: { chainId?: number } = {}, given
         `Chain ${chainId} could not be checked: ${reasonOf(err).replace(/\.?$/, '.')} Ask again, or leave chainId out for this connection's chain.`
       );
     }
-    if (!listed.includes(chainId)) return unsupported(chainId, await networksOf(t, t.chainId, deps, listed));
+    if (!chains.includes(chainId)) return unsupported(chainId, await networksOf(t, t.chainId, deps, chains));
   }
   if (heldOn === undefined && (await countHit(`owner-add-funds:${t.connectionId}`, RATE_WINDOW_MS)) > LINK_RATE_LIMIT) {
     // No lookup for a request refused this fast: the networks already known are enough to deposit on.
@@ -168,7 +161,7 @@ export async function addFunds(t: Tenant, args: { chainId?: number } = {}, given
     );
   }
   // Read beside the link, for the networks every answer from here names.
-  const networks = networksOf(t, chainId, deps, listed);
+  const networks = networksOf(t, chainId, deps, chains);
   const payload: AddFundsPayload = { chainId };
   const opened = await openLink(
     t,

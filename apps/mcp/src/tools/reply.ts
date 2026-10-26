@@ -1,6 +1,16 @@
+import { sanitizeLine } from '@jaw.id/agent';
+import { z } from 'zod';
+import { scrub } from '@/lib/scrub';
 import { MAX_OPEN_PER_ACCOUNT } from '@/owner-calls/cap';
 
 export const refusal = (text: string) => ({ content: [{ type: 'text' as const, text }], isError: true });
+
+/** Why a read of the proxy failed, for the agent: one line, with no api key in it. */
+export function reasonOf(err: unknown) {
+  if (err instanceof z.ZodError) return 'The proxy answered with an unexpected shape.';
+  const message = typeof err === 'object' && err !== null && 'message' in err ? String(err.message) : 'request failed';
+  return sanitizeLine(scrub(message), 200);
+}
 
 /** Starts a line meant for the agent alone: what to do next, which it never repeats to the owner. */
 export const FOR_AGENT = 'For the agent:';

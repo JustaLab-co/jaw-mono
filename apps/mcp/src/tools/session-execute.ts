@@ -16,7 +16,7 @@ import { mayHaveBeenSent, refusalOfFailure, refusalOfLogs } from '@/grants/rever
 import { unrevokedGrant, type LiveGrant } from '@/grants/store';
 import { errorLabel, log } from '@/lib/edge';
 import { reply } from '@/lib/fence';
-import { chainName, receiptLine } from '@/lib/owner-text';
+import { chainName, receiptLine, tokenAmount } from '@/lib/owner-text';
 import { FloatBusy, FloatLost, inTurn, LOCK_WAIT_MS, withFloat } from '@/payments/float-lock';
 import { EXECUTE_SUBMIT_MS } from '@/payments/store';
 import {
@@ -31,7 +31,6 @@ import {
   settleSends,
   type SendRow,
 } from '@/payments/sends';
-import { tokenAmount } from './grant-permissions';
 import { NO_PAY_SCOPE, refusal, withNext } from './reply';
 
 const MAX_CALLS = 10;

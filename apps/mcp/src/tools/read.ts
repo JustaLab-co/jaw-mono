@@ -32,7 +32,7 @@ import { chainView, heldSpends, LOGGED_READ_MS, readAt, recordedSends, type Open
 import { entriesFor, holdingRows, pulledUnderOtherGrants } from '@/payments/store';
 import { caip2, publicClientFor } from '@/lib/chain';
 import { fenceText, reply } from '@/lib/fence';
-import { chainName, formatAmount, onDate } from '@/lib/owner-text';
+import { chainName, counted, formatAmount, onDate } from '@/lib/owner-text';
 import { safeFetch, watchCuts } from '@/lib/safe-fetch';
 import { plainReason } from '@/payments/render';
 import { withNext } from './reply';
@@ -104,8 +104,8 @@ async function budgetOf(grant: Grant, t: Tenant, balance: bigint | null) {
     holdingRows(getDb(), t.sessionAddress, '').then((rows) => stillHeld(rows, chainClients, undefined)),
   ]);
   const asset = caip19(caip2(grant.chainId), grant.token);
-  const counted = periods[0]?.period;
-  const day = daySpendOf(counted, entries, sent, { permissionId: grant.permissionId, payer: t.sessionAddress });
+  const countedPeriod = periods[0]?.period;
+  const day = daySpendOf(countedPeriod, entries, sent, { permissionId: grant.permissionId, payer: t.sessionAddress });
   const allowance = BigInt(grant.allowance);
   const figure = (amount: bigint) => ({ amount: amount.toString(), asset });
   let spent = null;
@@ -125,7 +125,7 @@ async function budgetOf(grant: Grant, t: Tenant, balance: bigint | null) {
       perDay: { amount: grant.allowance, asset },
       spentToday: spent,
       remainingToday: payable,
-      resetsAt: (counted?.status === 'ok' && isoOf(counted.end + 1)) || null,
+      resetsAt: (countedPeriod?.status === 'ok' && isoOf(countedPeriod.end + 1)) || null,
       expiresAt: grant.expiresAt.toISOString(),
     }),
   };
@@ -218,8 +218,6 @@ function limitSay(budget: z.infer<typeof budgetOutput>, network: string) {
     : `Spend limit for paid services: ${perDay}; what is left today could not be read.`;
 }
 
-const plural = (n: number, word: string) => `${n} ${word}${n === 1 ? '' : 's'}`;
-
 const HOUR_MS = 60 * 60 * 1000;
 const EXPIRY_WARN_MS = 48 * HOUR_MS;
 
@@ -228,7 +226,7 @@ function endSay(expiresAt: Date): Said {
   const left = expiresAt.getTime() - Date.now();
   if (left >= EXPIRY_WARN_MS) return { say: `This connection ends on ${onDate(expiresAt)}.` };
   const hours = Math.floor(left / HOUR_MS);
-  const when = hours >= 1 ? `in ${plural(hours, 'hour')}` : 'in under an hour';
+  const when = hours >= 1 ? `in ${counted(hours, 'hour')}` : 'in under an hour';
   return {
     say: `This connection ends ${when}. Disconnecting before then returns the USDC it holds to the wallet.`,
     next: 'Offer the owner to disconnect before then; call jaw_session_disconnect only if they agree.',
@@ -305,7 +303,7 @@ async function status(t: Tenant) {
   const summary = said([
     `Connected to the owner's wallet on ${chainName(t.chainId)}.`,
     ready.status === 'ready' && read ? limitSay(read.budget, network) : NOT_READY[ready.reason ?? 'no_grant'],
-    others ? `${plural(others, 'other permission')} in force.` : undefined,
+    others ? `${counted(others, 'other permission')} in force.` : undefined,
     endSay(expiresAt),
   ]);
   return statusOutput.parse({

@@ -2,6 +2,7 @@ import type { McpServer } from '@modelcontextprotocol/server';
 import { z } from 'zod';
 import { tenant } from '@/connections/auth';
 import { reply } from '@/lib/fence';
+import { counted } from '@/lib/owner-text';
 import { sendHistory, type SendRow } from '@/payments/sends';
 import { history, stateOf, type PaymentRow } from '@/payments/store';
 
@@ -77,15 +78,13 @@ const shown = (r: PaymentRow): z.infer<typeof row> => ({
   createdAt: r.createdAt.toISOString(),
 });
 
-const plural = (n: number, word: string) => `${n} ${word}${n === 1 ? '' : 's'}`;
-
 /** How many payments and runs, newest first, and how many have no final outcome yet. A run that moved two tokens is two rows. */
 function summaryOf(payments: z.infer<typeof row>[], executes: SendRow[]) {
   const runs = new Set(executes.map((r) => r.idempotencyKey ?? r.id)).size;
   const open = new Set(executes.filter((r) => r.state === 'open').map((r) => r.idempotencyKey ?? r.id)).size;
   const pending = payments.filter((p) => ['pending', 'signed', 'unknown'].includes(p.state)).length + open;
   if (!payments.length && !runs) return 'No payments or runs yet.';
-  return `${plural(payments.length, 'payment')} and ${plural(runs, 'run')}, newest first.${pending ? ` ${pending} still pending.` : ''}`;
+  return `${counted(payments.length, 'payment')} and ${counted(runs, 'run')}, newest first.${pending ? ` ${pending} still pending.` : ''}`;
 }
 
 export function registerHistoryTool(server: McpServer) {

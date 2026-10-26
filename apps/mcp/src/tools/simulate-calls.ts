@@ -6,7 +6,7 @@ import { JAW_RPC_URL } from '@jaw.id/core';
 import { config } from '@/connections/config';
 import { isProxyChain, proxyChains } from '@/lib/chain';
 import { fenceText, reply } from '@/lib/fence';
-import { chainName } from '@/lib/owner-text';
+import { chainName, counted } from '@/lib/owner-text';
 import { scrub } from '@/lib/scrub';
 import { refusal, withNext } from './reply';
 
@@ -126,15 +126,13 @@ function refuseFailure(error: unknown) {
   return refusal(`${NOT_DECIDED} Try again shortly.`);
 }
 
-const actions = (n: number) => `${n} action${n === 1 ? '' : 's'}`;
-
 function present(found: z.infer<typeof proxyResult>, base: { chainId: number; sender: string }, count: number) {
   const network = chainName(base.chainId);
   if (found.status === 'success')
     return {
       ...base,
       status: found.status,
-      summary: `The check passed: ${actions(count)} would go through on ${network}. ${NOTHING_SENT}`,
+      summary: `The check passed: ${counted(count, 'action')} would go through on ${network}. ${NOTHING_SENT}`,
     };
   if (found.status === 'error')
     return {

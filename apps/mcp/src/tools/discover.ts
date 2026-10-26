@@ -4,7 +4,7 @@ import { z } from 'zod';
 import { tenant } from '@/connections/auth';
 import { errorLabel, log } from '@/lib/edge';
 import { fenceText, reply } from '@/lib/fence';
-import { chainName } from '@/lib/owner-text';
+import { chainName, counted } from '@/lib/owner-text';
 import { refusal, withNext } from './reply';
 
 const LISTING_MAX = 2_000;
@@ -78,7 +78,7 @@ export async function discover(
   const on = chainName(chainId);
   const summary = services.length
     ? withNext(
-        `${services.length} paid ${services.length === 1 ? 'service' : 'services'} found on ${on}. Nothing was paid.`,
+        `${counted(services.length, 'paid service')} found on ${on}. Nothing was paid.`,
         'Check one with jaw_session_x402_quote, then pay its url with jaw_session_x402_pay.'
       )
     : input.query

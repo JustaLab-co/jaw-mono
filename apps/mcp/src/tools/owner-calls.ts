@@ -20,7 +20,7 @@ import { countHit, isPaymentsPaused } from '@/db/settings';
 import { isProxyChain } from '@/lib/chain';
 import { errorLabel, log, RATE_WINDOW_MS } from '@/lib/edge';
 import { reply } from '@/lib/fence';
-import { chainName, expiresIn, formatAmount, nativeSymbol, receiptLine, withinWindow } from '@/lib/owner-text';
+import { chainName, counted, expiresIn, formatAmount, nativeSymbol, receiptLine, withinWindow } from '@/lib/owner-text';
 import { MAX_WAIT_SECONDS, SUGGESTED_WAIT_SECONDS, waiterOf, waitFor, type Waiter } from '@/lib/wait';
 import { readReceipt, receiptOf, type ReadReceipt, type Receipt } from '@/owner-calls/receipt';
 import { followCalls, resumeCall } from '@/owner-calls/resume';
@@ -193,8 +193,6 @@ const moving = (row: OwnerCallRow) => {
   return total > 0n ? `moving ${formatAmount(total, NATIVE_DECIMALS, nativeSymbol(row.chainId))} in total, ` : '';
 };
 
-const actions = (n: number) => (n === 1 ? '1 action' : `${n} actions`);
-
 /** What the owner hears, then what the agent does next. */
 type Said = { say: string; next?: string };
 
@@ -234,7 +232,7 @@ function summaryOf(row: OwnerCallRow, followUp: boolean): Said {
       return {
         say:
           `Open this link to approve: ${row.walletUrl}\n` +
-          `It asks the owner to approve ${actions(row.calls.length)} from their wallet on ${network}, ` +
+          `It asks the owner to approve ${counted(row.calls.length, 'action')} from their wallet on ${network}, ` +
           `${moving(row)}${withinWindow(row.approveBy)}.\n` +
           'The owner pays the network fee in the wallet.',
         next:

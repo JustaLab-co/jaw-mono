@@ -1,12 +1,19 @@
 import { describe, expect, it } from 'vitest';
 import {
+  capital,
   chainName,
+  counted,
   expiresIn,
   explorerTxUrl,
   formatAmount,
+  listed,
   nativeSymbol,
+  networkName,
+  networkNameAtStart,
   onDate,
   receiptLine,
+  spendLimits,
+  tokenAmount,
   withinWindow,
 } from './owner-text';
 
@@ -182,5 +189,112 @@ describe('onDate', () => {
 
   it('given September, then the month is Sep, as on every other runtime', () => {
     expect(onDate(new Date('2026-09-01T00:00:00.000Z'))).toBe('1 Sep 2026');
+  });
+});
+
+// ERC-7528's address for a chain's own coin, and Circle's USDC on Base.
+const NATIVE = '0xEeeeeEeeeEeEeeEeEeEeeEEEeeeeEeeeeeeeEEeE';
+const BASE_USDC = '0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913';
+const OTHER_TOKEN = `0x${'12'.repeat(20)}`;
+
+describe('capital', () => {
+  it('given text, then its first letter is a capital and the rest is as it was', () => {
+    expect(capital('the network with id 7')).toBe('The network with id 7');
+    expect(capital('opBNB and Base')).toBe('OpBNB and Base');
+  });
+
+  it('given no text, then there is none', () => {
+    expect(capital('')).toBe('');
+  });
+});
+
+describe('networkName', () => {
+  it('given a chain with a name, then it is that name', () => {
+    expect(networkName(8453)).toBe('Base');
+  });
+
+  it('given a chain nobody knows, then it is its id in words, never a raw chain id', () => {
+    expect(networkName(UNKNOWN)).toBe(`the network with id ${UNKNOWN}`);
+  });
+});
+
+describe('networkNameAtStart', () => {
+  it('given a chain nobody knows, then its id in words starts with a capital', () => {
+    expect(networkNameAtStart(UNKNOWN)).toBe(`The network with id ${UNKNOWN}`);
+  });
+
+  it('given a chain with a name, then it is the name as the network spells it', () => {
+    expect(networkNameAtStart(8453)).toBe('Base');
+    expect(networkNameAtStart(204)).toBe('opBNB');
+  });
+});
+
+describe('counted', () => {
+  it.each([
+    [0, '0 apps'],
+    [1, '1 app'],
+    [2, '2 apps'],
+  ])('given %i, then it reads %s', (n, shown) => {
+    expect(counted(n, 'app')).toBe(shown);
+  });
+});
+
+describe('listed', () => {
+  it.each<[string[], string]>([
+    [[], ''],
+    [['Base'], 'Base'],
+    [['Base', 'Celo'], 'Base and Celo'],
+    [['Base', 'Celo', 'Ink'], 'Base, Celo and Ink'],
+  ])('given %j, then it reads "%s"', (items, shown) => {
+    expect(listed(items)).toBe(shown);
+  });
+});
+
+describe('tokenAmount', () => {
+  it("given the chain's own coin, then it is in that coin with its decimals", () => {
+    expect(tokenAmount(8453, NATIVE, 10_000_000_000_000_000n)).toBe('0.01 ETH');
+  });
+
+  it('given USDC on its chain, then it is in USDC with its decimals', () => {
+    expect(tokenAmount(8453, BASE_USDC, 1_500_000n)).toBe('1.50 USDC');
+    expect(tokenAmount(8453, BASE_USDC.toLowerCase(), '1500000')).toBe('1.50 USDC');
+  });
+
+  it('given a token this server does not know, then it is exact, in its smallest unit, named by its address', () => {
+    expect(tokenAmount(8453, OTHER_TOKEN, 42n)).toBe(`42 smallest units of the token at ${OTHER_TOKEN}`);
+  });
+});
+
+describe('spendLimits', () => {
+  it('given two limits of one token and period, then they are summed into one', () => {
+    const limits = [
+      { token: BASE_USDC, allowance: '1000000', unit: 'day' },
+      { token: BASE_USDC.toLowerCase(), allowance: 500_000n, unit: 'day', multiplier: 1 },
+    ];
+    expect(spendLimits(8453, limits)).toEqual(['1.50 USDC a day']);
+  });
+
+  it('given a limit with no period, then it is in total', () => {
+    expect(spendLimits(8453, [{ token: BASE_USDC, allowance: '1000000', unit: 'forever' }])).toEqual([
+      '1 USDC in total',
+    ]);
+  });
+
+  it('given a period of more than one unit, then it is every so many of them', () => {
+    expect(spendLimits(8453, [{ token: BASE_USDC, allowance: '1000000', unit: 'month', multiplier: 2 }])).toEqual([
+      '1 USDC every 2 months',
+    ]);
+  });
+
+  it('given limits on different periods, then each period is its own line', () => {
+    const limits = [
+      { token: BASE_USDC, allowance: '1000000', unit: 'day' },
+      { token: NATIVE, allowance: '500000000000000000', unit: 'week' },
+    ];
+    expect(spendLimits(8453, limits)).toEqual(['1 USDC a day', '0.50 ETH a week']);
+  });
+
+  it('given no limits, then there are none', () => {
+    expect(spendLimits(8453, [])).toEqual([]);
   });
 });
