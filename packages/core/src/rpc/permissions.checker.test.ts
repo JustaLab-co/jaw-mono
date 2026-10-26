@@ -114,6 +114,20 @@ describe('a call checker on wallet_grantPermissions', () => {
     });
 });
 
+describe('a mixed-case call checker', () => {
+    // Accepted like any address a dapp sends, so its checksum must not be what decides the grant.
+    it('is encoded even with a bad checksum, as the address it names', () => {
+        const badChecksum = '0x398B9D939E7E616E03EA99601C835C920621b2cA' as Address;
+        const { data } = buildGrantPermissionCall(ACCOUNT, SPENDER, 2000000000, {
+            calls: [{ target: TARGET, functionSignature: 'transfer(address,uint256)', checker: badChecksum }],
+        });
+
+        const decoded = decodeFunctionData({ abi: SPEND_PERMISSIONS_MANAGER_ABI, data });
+        if (decoded.functionName !== 'approve') throw new Error(`expected approve, got ${decoded.functionName}`);
+        expect(decoded.args[0].calls[0].checker.toLowerCase()).toBe(badChecksum.toLowerCase());
+    });
+});
+
 describe('a malformed call checker', () => {
     // A garbage checker would still hash, to a permission the dapp can never
     // rebuild or revoke, so it is refused before the screen estimates or signs.

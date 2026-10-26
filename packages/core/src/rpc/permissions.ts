@@ -3,6 +3,7 @@ import {
     type Address,
     type Hex,
     decodeEventLog,
+    getAddress,
     toFunctionSelector,
     zeroAddress as ZERO_ADDRESS,
 } from 'viem';
@@ -314,6 +315,25 @@ export interface NormalizedRevokePermissionsParams {
     capabilities?: RequestCapabilities;
 }
 
+const GRANT_METHOD = 'wallet_grantPermissions';
+
+/**
+ * Refuses a grant whose call checker is not a 20-byte address, before any popup or dialog opens.
+ * A checker is part of the permission the user signs, and a malformed one used to reach the grant
+ * screen, which drew it, estimated a fee without it and failed only on Confirm.
+ */
+export function checkGrantPermissionsParams(params: unknown): void {
+    const calls = (params as Array<{ permissions?: { calls?: unknown } }> | undefined)?.[0]?.permissions?.calls;
+    if (!Array.isArray(calls)) return;
+    calls.forEach((call, index) => {
+        optionalHexAddress(
+            (call as { checker?: unknown } | null)?.checker,
+            GRANT_METHOD,
+            `permissions.calls[${index}].checker`
+        );
+    });
+}
+
 /**
  * Validates wallet_revokePermissions params.
  *
@@ -589,16 +609,14 @@ function apiPermissionsToPermission(
 
         // The checker is part of the permission hash, so a malformed one would
         // grant a permission no caller can rebuild.
-        const checker = optionalHexAddress(
-            call.checker,
-            'wallet_grantPermissions',
-            `permissions.calls[${index}].checker`
-        );
+        const checker = optionalHexAddress(call.checker, GRANT_METHOD, `permissions.calls[${index}].checker`);
 
         return {
             target: call.target,
             selector,
-            checker: checker ?? ZERO_ADDRESS,
+            // Checksummed here, so a mixed-case checker with a bad checksum, which the guard above
+            // accepts like any other address a dapp sends, cannot fail inside the encoder.
+            checker: checker ? getAddress(checker) : ZERO_ADDRESS,
         };
     });
 
