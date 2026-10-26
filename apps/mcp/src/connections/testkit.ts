@@ -91,9 +91,12 @@ export function walletAnswers(signer: ReturnType<typeof owner>, refuse: string[]
           start: 1_780_000_000,
           end: grant.expiry,
           salt: `0x${randomBytes(8).toString('hex')}`,
+          // A checker comes back only when one was asked, like a wallet on an SDK from before
+          // checkers, so the tests that ask for none keep covering that wallet.
           calls: grant.permissions.calls.map((c) => ({
             target: c.target,
             selector: toFunctionSelector(c.functionSignature),
+            ...(c.checker ? { checker: c.checker } : {}),
           })),
           spends: grant.permissions.spends,
         };

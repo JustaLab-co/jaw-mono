@@ -5,7 +5,7 @@ import {
   type PermissionState,
 } from '@jaw.id/agent';
 import { and, eq, isNull, ne, sql } from 'drizzle-orm';
-import { isAddressEqual, isHex, numberToHex, toFunctionSelector, type Address, type Hex } from 'viem';
+import { isAddressEqual, isHex, numberToHex, toFunctionSelector, zeroAddress, type Address, type Hex } from 'viem';
 import type { Tx } from '@/db/client';
 import { connections, grants, SPEND_UNITS } from '@/db/schema';
 import { publicClientFor } from '@/lib/chain';
@@ -18,6 +18,8 @@ export type SpendUnit = (typeof SPEND_UNITS)[number];
 export interface PermissionCall {
   target: Address;
   functionSignature: string;
+  /** Contract the permission manager asks to approve each call. Absent means none. */
+  checker?: Address;
 }
 
 export interface PermissionSpend {
@@ -58,7 +60,10 @@ export function budgetGrant(b: {
 
 type Granted = NonNullable<ReturnType<typeof parseGrantedPermission>>;
 
-const callKey = (target: string, selector: string) => `${target.toLowerCase()}:${selector.toLowerCase()}`;
+// The checker is part of the permission hash. Absent and zero are the same: a wallet from before
+// checkers names none, and one after names zero on every call that asked for none.
+const callKey = (target: string, selector: string, checker: string = zeroAddress) =>
+  `${target.toLowerCase()}:${selector.toLowerCase()}:${checker.toLowerCase()}`;
 const spendKey = (s: Granted['spends'][number]) =>
   `${s.token.toLowerCase()}:${BigInt(s.allowance)}:${s.unit}:${s.multiplier}`;
 const sameKeys = (asked: string[], got: string[]) => asked.sort().join() === got.sort().join();
@@ -70,8 +75,8 @@ function grantMatches(grant: GrantRequest, permission: Granted): boolean {
     isAddressEqual(permission.spender as Address, grant.spender) &&
     permission.end === grant.expiry &&
     sameKeys(
-      calls.map((c) => callKey(c.target, toFunctionSelector(c.functionSignature))),
-      permission.calls.map((c) => callKey(c.target, c.selector))
+      calls.map((c) => callKey(c.target, toFunctionSelector(c.functionSignature), c.checker)),
+      permission.calls.map((c) => callKey(c.target, c.selector, c.checker))
     ) &&
     sameKeys(spends.map(spendKey), permission.spends.map(spendKey))
   );
