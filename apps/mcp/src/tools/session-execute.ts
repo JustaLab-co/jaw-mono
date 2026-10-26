@@ -16,6 +16,7 @@ import { mayHaveBeenSent, refusalOfFailure, refusalOfLogs } from '@/grants/rever
 import { unrevokedGrant, type LiveGrant } from '@/grants/store';
 import { errorLabel, log } from '@/lib/edge';
 import { reply } from '@/lib/fence';
+import { chainName, receiptLine, tokenAmount } from '@/lib/owner-text';
 import { FloatBusy, FloatLost, inTurn, LOCK_WAIT_MS, withFloat } from '@/payments/float-lock';
 import { EXECUTE_SUBMIT_MS } from '@/payments/store';
 import {
@@ -30,7 +31,7 @@ import {
   settleSends,
   type SendRow,
 } from '@/payments/sends';
-import { NO_PAY_SCOPE, refusal } from './reply';
+import { NO_PAY_SCOPE, refusal, withNext } from './reply';
 
 const MAX_CALLS = 10;
 export const RECEIPT_MS = 60_000;
@@ -39,13 +40,13 @@ const executeInput = z.strictObject({
   permissionId: z
     .string()
     .regex(/^0x[0-9a-fA-F]{64}$/)
-    .describe('The custom grant to act under, one jaw_grant_permissions recorded on this connection'),
+    .describe('The custom permission to act under, one jaw_grant_permissions recorded on this connection'),
   chainId: z
     .number()
     .int()
     .positive()
     .optional()
-    .describe("The chain the grant is on; defaults to this connection's chain"),
+    .describe("The chain the permission is on; defaults to this connection's chain"),
   calls: z
     .array(
       z.strictObject({
@@ -83,64 +84,102 @@ const output = z.object({
 type Outcome = z.infer<typeof output>;
 type ToolResult = ReturnType<typeof refusal>;
 
-function described(r: Refusal, permissionId: string): string {
+/** A refused run: what the owner hears, after its code, and how the agent routes it back to the owner. */
+interface Said {
+  say: string;
+  next: string;
+}
+
+const ONE_OFF = 'offer to do it once for their approval with jaw_send_calls';
+
+function described(r: Refusal, permissionId: string, chainId: number): Said {
   switch (r.reason) {
     case 'call-not-allowed':
-      return `call-not-allowed: grant ${permissionId} does not allow calling ${r.selector} on ${r.target}.`;
+      return {
+        say: `call-not-allowed: The permission does not allow this action on ${r.target}.`,
+        next: `Tell the owner it is outside what they approved, and ${ONE_OFF}. Permission ${permissionId} does not allow calling ${r.selector} on ${r.target}.`,
+      };
     case 'over-limit':
-      return 'onChain' in r
-        ? `over-limit: the permission manager refused the batch for spending past, or without, a spend limit of grant ${permissionId}.`
-        : `over-limit: the batch moves ${r.spend} base units of ${r.token}, and grant ${permissionId} has ${r.left} left this period.`;
+      return {
+        say:
+          'onChain' in r
+            ? 'over-limit: The permission refused this: it would move more than a spend limit allows, or a token the permission sets no limit on.'
+            : `over-limit: This would move ${tokenAmount(chainId, r.token, r.spend)}, and the permission has ${tokenAmount(chainId, r.token, r.left)} left this period.`,
+        next: 'Offer to do it once with jaw_send_calls, or wait for the period to reset. Never ask for a wider permission to make it pass.',
+      };
     case 'expired':
-      return `expired: grant ${permissionId} is outside its time window. Ask the owner for a new one with jaw_grant_permissions.`;
+      return {
+        say: 'expired: The permission has ended.',
+        next: 'If the owner still wants this to run on its own, offer a new permission; otherwise do it once with jaw_send_calls.',
+      };
     case 'no-grant':
-      return `no-grant: this connection holds no live custom grant ${permissionId}. jaw_connections lists the ones it holds.`;
+      return {
+        say: 'no-grant: No live permission with that id on this connection.',
+        next: `jaw_connections lists the ones it holds. Permission ${permissionId} is not one of them.`,
+      };
   }
 }
 
-const NOTHING_SENT = ' Nothing was sent.';
-const UNREADABLE = 'Nothing was sent: the grant could not be read from the chain right now. Try again in a moment.';
+const NOTHING_SENT = 'Nothing was sent.';
+const refusedRun = ({ say, next }: Said) => refusal(withNext(`${say} ${NOTHING_SENT}`, next));
+const UNREADABLE =
+  'Nothing was sent: the permission could not be read from the chain right now. Try again in a moment.';
 const maybeSent = (key: string, userOpHash?: Hex) =>
-  (userOpHash
-    ? `This execute failed and may have been sent anyway as userOp ${userOpHash}. Send idempotencyKey ${key} again with the same calls to follow it: it never sends twice. `
-    : `This execute failed and may have been sent anyway. Send idempotencyKey ${key} again with the same calls: it returns this answer and never sends twice. `) +
-  'Check jaw_session_history before sending it under a new key, or it may land twice.';
-const NOTHING_WENT_OUT = "This key's run sent nothing. Send it again under a new idempotencyKey.";
+  withNext(
+    'This run failed and may have been sent anyway, so it is not known yet whether anything moved.',
+    (userOpHash
+      ? `It was signed as userOp ${userOpHash}. Send idempotencyKey ${key} again with the same calls to follow it: it never sends twice. `
+      : `Send idempotencyKey ${key} again with the same calls: it returns this answer and never sends twice. `) +
+      'Check jaw_session_history before sending it under a new key, or it may land twice.'
+  );
+const NOTHING_WENT_OUT = withNext('This run sent nothing.', 'Send it again under a new idempotencyKey.');
 const notSeen = (userOpHash: string) =>
-  `userOp ${userOpHash} was not seen on chain in time, so its spend is no longer held; it may still land. ` +
-  "Check the account's balances before sending it under a new idempotencyKey.";
+  withNext(
+    "This run was not seen on chain in time, so it may still land. Check the wallet's balances before running it again.",
+    `userOp ${userOpHash} is no longer held against the spend limit. Check the account's balances before sending it under a new idempotencyKey, or it may land twice.`
+  );
 
 type CallStatus = {
   status: number;
   receipts?: { transactionHash: Hex; logs?: { address: Address; data: Hex; topics: Hex[] }[] }[];
 };
 
-const landed = (idempotencyKey: string, userOpHash: string, txHash: string): Outcome => ({
+const landed = (chainId: number, idempotencyKey: string, userOpHash: string, txHash: string): Outcome => ({
   status: 'landed',
   idempotencyKey,
   userOpHash,
   txHash,
-  summary: `Landed in ${txHash}.`,
+  summary: `Done. It went through on ${chainName(chainId)}. ${receiptLine(chainId, txHash)}`,
 });
-const reverted = (idempotencyKey: string, userOpHash: string, txHash: string | null): Outcome => ({
+/** What the owner hears of a run that reverted on chain, with its receipt when there is one. */
+const failedOn = (chainId: number, txHash: string | null) =>
+  `It failed on ${chainName(chainId)}: nothing moved.${txHash ? ` ${receiptLine(chainId, txHash)}` : ''}`;
+const reverted = (chainId: number, idempotencyKey: string, userOpHash: string, txHash: string | null): Outcome => ({
   status: 'reverted',
   idempotencyKey,
   userOpHash,
   txHash,
-  summary: `userOp ${userOpHash} did not succeed on chain; its calls moved nothing.`,
+  summary: withNext(
+    failedOn(chainId, txHash),
+    'Say what likely went wrong if you know. Simulate before running again.'
+  ),
 });
-const unconfirmed = (idempotencyKey: string, userOpHash: string): Outcome => ({
+const unconfirmed = (chainId: number, idempotencyKey: string, userOpHash: string): Outcome => ({
   status: 'unconfirmed',
   idempotencyKey,
   userOpHash,
   txHash: null,
-  summary: `userOp ${userOpHash} is signed and not confirmed on chain yet. jaw_session_history shows when it lands; the same idempotencyKey returns this run and never sends twice.`,
+  summary: withNext(
+    `Sent on ${chainName(chainId)}, not confirmed yet.`,
+    'jaw_session_history shows when it lands; the same idempotencyKey returns this run and never sends twice.'
+  ),
 });
 
 const answered = (out: Outcome) => ({ ...reply(out), isError: out.status === 'reverted' });
 
 async function receiptOf(
   bridge: SessionBridge,
+  chainId: number,
   key: string,
   userOpHash: Hex
 ): Promise<{ out: Outcome; refused?: Refusal }> {
@@ -149,27 +188,32 @@ async function receiptOf(
       | CallStatus
       | undefined;
     const txHash = status?.receipts?.[0]?.transactionHash ?? null;
-    if (status?.status === 200 && txHash) return { out: landed(key, userOpHash, txHash) };
+    if (status?.status === 200 && txHash) return { out: landed(chainId, key, userOpHash, txHash) };
     // 400 is a failure off chain with no receipt, which says nothing about inclusion.
     if (status && status.status >= 500) {
       const logs = (status.receipts ?? []).flatMap((r) => r.logs ?? []);
-      return { out: reverted(key, userOpHash, txHash), refused: refusalOfLogs(logs, userOpHash) };
+      return { out: reverted(chainId, key, userOpHash, txHash), refused: refusalOfLogs(logs, userOpHash) };
     }
     await new Promise((resolve) => setTimeout(resolve, 2_000));
   }
-  return { out: unconfirmed(key, userOpHash) };
+  return { out: unconfirmed(chainId, key, userOpHash) };
 }
 
 function replayed(rows: SendRow[], key: string, hash: string): ToolResult | ReturnType<typeof answered> {
   if (rows[0].requestHash !== hash) {
-    return refusal(`idempotency_conflict: idempotencyKey ${key} was used for another execute.${NOTHING_SENT}`);
+    return refusal(
+      withNext(
+        `idempotency_conflict: This retry does not match the run it repeats. ${NOTHING_SENT}`,
+        `idempotencyKey ${key} was used for another execute. Use a new key for different calls.`
+      )
+    );
   }
   const done = rows.find((r) => r.state === 'landed');
-  if (done) return answered(landed(key, done.callsId as string, done.txHash as string));
-  const { state, callsId, txHash } = rows.find((r) => r.state === 'open') ?? rows[0];
+  if (done) return answered(landed(done.chainId, key, done.callsId as string, done.txHash as string));
+  const { state, callsId, txHash, chainId } = rows.find((r) => r.state === 'open') ?? rows[0];
   if (!callsId) return refusal(NOTHING_WENT_OUT);
-  if (state === 'open') return answered(unconfirmed(key, callsId));
-  return txHash ? answered(reverted(key, callsId, txHash)) : refusal(notSeen(callsId));
+  if (state === 'open') return answered(unconfirmed(chainId, key, callsId));
+  return txHash ? answered(reverted(chainId, key, callsId, txHash)) : refusal(notSeen(callsId));
 }
 
 const logFailure = (msg: string) => (err: unknown) => log('error', { msg, error: errorLabel(err) });
@@ -205,15 +249,23 @@ interface Run {
 async function grantFor(t: Tenant, run: Run): Promise<ToolResult | { grant: LiveGrant; bridge: SessionBridge }> {
   const grant = await unrevokedGrant(t.connectionId, run.permissionId);
   if (!grant || grant.chainId !== run.chainId) {
-    return refusal(described({ reason: 'no-grant' }, run.permissionId) + NOTHING_SENT);
+    return refusedRun(described({ reason: 'no-grant' }, run.permissionId, run.chainId));
   }
   if (grant.kind === 'x402-budget') {
-    return refusal(
-      `no-grant: ${run.permissionId} is this connection's x402 budget, which pays x402 services only. Execute under a custom grant from jaw_grant_permissions.${NOTHING_SENT}`
-    );
+    return refusedRun({
+      say: 'no-grant: That is the spend limit for paid services, which pays for services and fees and runs no actions.',
+      next: `${run.permissionId} is this connection's x402 budget. Pass the permissionId of a custom permission (jaw_connections lists them), or ${ONE_OFF}.`,
+    });
   }
   const bridge = sessionBridge(t, grant, await feeTokenOf(grant));
-  if (!bridge) return refusal('This server has no paymaster key, so it cannot pay the fee to send.');
+  if (!bridge) {
+    return refusal(
+      withNext(
+        'This service cannot pay network fees right now, so nothing was sent.',
+        'This server has no paymaster key, so it cannot pay the fee to send.'
+      )
+    );
+  }
   return { grant, bridge };
 }
 
@@ -269,7 +321,7 @@ async function submitUnder(t: Tenant, run: Run): Promise<ToolResult | Reserved> 
       pending,
       nowSeconds,
     });
-    if (refused) return refusal(described(refused, grant.permissionId) + NOTHING_SENT);
+    if (refused) return refusedRun(described(refused, grant.permissionId, grant.chainId));
     const head = await chainClients
       .publicClient(grant.chainId)
       .getBlockNumber()
@@ -336,15 +388,26 @@ async function submitUnder(t: Tenant, run: Run): Promise<ToolResult | Reserved> 
   });
 }
 
-function unsentReply(err: unknown, permissionId: string, trustsReverts: boolean): ToolResult {
+function unsentReply(err: unknown, run: Pick<Run, 'permissionId' | 'chainId'>, trustsReverts: boolean): ToolResult {
   const refused = trustsReverts ? refusalOfFailure(err) : undefined;
-  if (refused) return refusal(described(refused, permissionId) + NOTHING_SENT);
-  if (err instanceof FloatLost || err instanceof FloatBusy)
-    return refusal('Nothing was sent: this execute lost its turn on the float. Try again.');
+  if (refused) return refusedRun(described(refused, run.permissionId, run.chainId));
+  if (err instanceof FloatLost || err instanceof FloatBusy) {
+    return refusal(
+      withNext(
+        'Nothing was sent: another payment on this connection took its turn. Try again.',
+        'This execute lost its turn on the float.'
+      )
+    );
+  }
   log('warn', { msg: 'execute not submitted', error: errorLabel(err) });
   return refusal(
-    `Nothing was sent: the batch failed in simulation or before it reached the bundler (${errorLabel(err)}). ` +
-      'Usually a call reverts, or the session key holds no USDC for its fee, which an x402 budget from jaw_grant_permissions funds.'
+    withNext(
+      'Nothing was sent: the run did not pass its final check. Usually one of its actions fails, or the connection has no USDC to pay the network fee.',
+      `It failed in simulation or before it reached the bundler (${errorLabel(err)}). ` +
+        'Simulate it with jaw_simulate_calls, passing the permissionId, to see which. ' +
+        'If it is the fee, a spend limit for paid services funds it; ask for one with jaw_grant_permissions. ' +
+        `If an action fails, ${ONE_OFF}, and never ask for a wider permission to make it pass.`
+    )
   );
 }
 
@@ -352,20 +415,23 @@ async function executeUnder(t: Tenant, run: Run) {
   const reserved = await inTurn(t.connectionId, () => submitUnder(t, run));
   if (!('submitted' in reserved)) return reserved;
   const { ids, submitted, bridge, trustsReverts } = reserved;
-  if ('unsent' in submitted) return unsentReply(submitted.unsent, run.permissionId, trustsReverts);
+  if ('unsent' in submitted) return unsentReply(submitted.unsent, run, trustsReverts);
   if ('maybe' in submitted) {
     log('warn', { msg: 'execute may have been submitted', error: errorLabel(submitted.maybe) });
     return refusal(maybeSent(run.key, submitted.userOpHash));
   }
-  const { out, refused } = await receiptOf(bridge, run.key, submitted.sent);
+  const { out, refused } = await receiptOf(bridge, run.chainId, run.key, submitted.sent);
   await concluded(ids, out).catch(logFailure('execute conclusion write failed'));
-  if (refused && trustsReverts) return refusal(`${described(refused, run.permissionId)} ${out.summary}`);
+  if (refused && trustsReverts) {
+    const { say, next } = described(refused, run.permissionId, run.chainId);
+    return refusal(withNext(`${say} ${failedOn(run.chainId, out.txHash)}`, next));
+  }
   return answered(out);
 }
 
 export async function sessionExecute(t: Tenant, input: ExecuteInput) {
   if (!spends(t.scopes)) return refusal(NO_PAY_SCOPE);
-  if (await isPaymentsPaused()) return refusal('Payments are paused on this server, so nothing was sent.');
+  if (await isPaymentsPaused()) return refusal('Payments are paused on this service, so nothing was sent.');
   const chainId = input.chainId ?? t.chainId;
   const calls: Call[] = input.calls.map((c) => ({
     to: getAddress(c.to),
@@ -386,8 +452,10 @@ export async function sessionExecute(t: Tenant, input: ExecuteInput) {
     return await executeUnder(t, { key, hash, permissionId: input.permissionId, chainId, calls });
   } catch (err) {
     if (err instanceof ChainUnreadable) return refusal(UNREADABLE);
-    if (err instanceof FloatBusy) return refusal('A payment on this connection is in progress. Try again in a moment.');
-    return unsentReply(err, input.permissionId, false);
+    if (err instanceof FloatBusy) {
+      return refusal('A payment on this connection is in progress, so nothing was sent. Try again in a moment.');
+    }
+    return unsentReply(err, { permissionId: input.permissionId, chainId }, false);
   }
 }
 
@@ -395,13 +463,18 @@ export function registerSessionExecuteTool(server: McpServer) {
   server.registerTool(
     'jaw_session_execute',
     {
+      title: 'Run an action under a permission',
       description:
-        'Send up to 10 contract calls as the session key, under a custom grant the owner approved with jaw_grant_permissions. No prompt to the owner: the grant is the limit. ' +
-        'Before any userOp it checks every call against the grant and what each spend limit has left, and refuses by name: call-not-allowed, over-limit, expired or no-grant. ' +
-        "The x402 budget pays x402 services only and is refused here. The fee comes from the session key's own USDC, which the x402 budget funds. " +
+        'Run up to 10 contract calls from this connection under a custom permission the owner approved with jaw_grant_permissions, with no approval needed: the permission is the limit. ' +
+        'Use it for the repeated or unattended runs the permission was approved for, and only within what the owner asked. ' +
+        "Before sending, it checks each call against the permission's allowed actions and what each spend limit has left, and refuses by name: call-not-allowed, over-limit, expired or no-grant. " +
+        'A refused run never falls back to asking the owner: tell them what was refused and offer to do it once with jaw_send_calls, and never ask for a wider permission to make it pass. ' +
+        "The spend limit for paid services runs no actions and is refused here; it pays this run's network fee in USDC from the connection's balance, so with none the run cannot be sent. " +
+        'Simulate first with jaw_simulate_calls, passing the permissionId. ' +
         'Send the same idempotencyKey and calls to retry: a retry returns the first run and never sends twice.',
       inputSchema: executeInput,
       outputSchema: output,
+      annotations: { destructiveHint: true, openWorldHint: false },
     },
     async (input, ctx) => sessionExecute(tenant(ctx), input)
   );

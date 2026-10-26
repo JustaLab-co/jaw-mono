@@ -2,9 +2,9 @@ import type { ChainClients } from '@jaw.id/agent';
 import { toHex, withTimeout } from 'viem';
 import { z } from 'zod';
 import type { Ask } from '@/connections/relay';
-import { refusedBeforeSubmit, USER_REJECTED } from '@/connections/wallet-codes';
+import { USER_REJECTED } from '@/connections/wallet-codes';
 import { errorLabel, log } from '@/lib/edge';
-import { decline, markSendStarted, markSent, setCode, type OwnerCallRow } from './store';
+import { decline, declineUnsent, markSendStarted, markSent, setCode, type OwnerCallRow } from './store';
 
 const SESSION_END_MARGIN_MS = 5_000;
 const HEAD_TIMEOUT_MS = 3_000;
@@ -21,7 +21,7 @@ export async function approve(ask: Ask, row: OwnerCallRow, clients: ChainClients
     return;
   }
   if (!includes(accounts, row.account)) {
-    await decline(row, 'wrong_account');
+    await declineUnsent(row, 'wrong_account');
     return;
   }
   if (!(await markSendStarted(row))) return;
@@ -40,7 +40,6 @@ export async function approve(ask: Ask, row: OwnerCallRow, clients: ChainClients
     const code = codeOf(err);
     if (typeof code !== 'number') throw err;
     if (code === USER_REJECTED) await decline(row, 'owner_declined');
-    else if (refusedBeforeSubmit(code)) await decline(row, `wallet_error:${code}`);
     return;
   }
   const callsId = sent.safeParse(answer).data?.id;
@@ -79,7 +78,7 @@ async function keepCallsId(row: OwnerCallRow, callsId: string, head: bigint | nu
 async function recordRefusal(row: OwnerCallRow, err: unknown): Promise<void> {
   const code = codeOf(err);
   if (code === USER_REJECTED) {
-    await decline(row, 'owner_declined');
+    await declineUnsent(row, 'owner_declined');
     return;
   }
   if (typeof code === 'number') {

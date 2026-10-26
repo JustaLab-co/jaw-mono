@@ -95,8 +95,10 @@ function CLIBridgeContent() {
    */
   const answersRef = useRef(new Map<string, { request: string; reply: Promise<RpcResponse> }>());
 
-  const sessionId = searchParams.get('session');
-  const relayUrl = searchParams.get('relay');
+  // A tab another tab replaced connects to nothing, even if its address still names a session.
+  const replaced = searchParams.get('replaced') === '1';
+  const sessionId = replaced ? null : searchParams.get('session');
+  const relayUrl = replaced ? null : searchParams.get('relay');
 
   // Read CLI public key from URL fragment (use ref to survive React Strict Mode double-invoke)
   const cliPublicKeyRef = useRef<string | null>(null);
@@ -319,9 +321,22 @@ function CLIBridgeContent() {
           }
         };
 
-        ws.onclose = () => {
+        ws.onclose = (event) => {
           clearTimeout(unanswered);
-          if (!cancelled) setState('disconnected');
+          if (cancelled) return;
+          if (event.code === REPLACED_BY_ANOTHER_TAB) {
+            // The other tab is asked the same requests, so a dialog left open
+            // here could approve one twice. Direct close is intentional:
+            // /cli-bridge is never embedded (its route keeps
+            // frame-ancestors 'none' / X-Frame-Options DENY).
+            // eslint-disable-next-line no-restricted-properties
+            window.close();
+            // A browser may refuse to close a tab it did not open, so leave
+            // the page too: the SDK and its dialog go with it.
+            window.location.replace(REPLACED_URL);
+            return;
+          }
+          setState('disconnected');
         };
 
         ws.onerror = () => {
@@ -360,6 +375,21 @@ function CLIBridgeContent() {
       }
     };
   }, [sessionId, relayUrl, cliPublicKeyHex, handleRpcRequest]);
+
+  if (replaced) {
+    return (
+      <div className="flex min-h-screen items-center justify-center font-sans">
+        <div className="max-w-md p-12 text-center">
+          {/* eslint-disable-next-line @next/next/no-img-element */}
+          <img src="/jaw-logo.png" alt="JAW" className="mx-auto mb-4 block h-12 w-12 opacity-80" />
+          <h1 className="text-foreground mb-4 text-xl font-semibold">Continued in another tab</h1>
+          <p className="text-muted-foreground mt-2 text-sm leading-relaxed">
+            This link is open in another tab. You can close this one.
+          </p>
+        </div>
+      </div>
+    );
+  }
 
   // Validation
   if (!sessionId || !relayUrl) {
@@ -423,6 +453,13 @@ function CLIBridgeContent() {
 }
 
 const LINK_GONE = 'This link is no longer active. Ask the agent for a new one.';
+
+// The relay keeps one browser per session and closes the older socket with
+// this code when the link is opened in another tab.
+const REPLACED_BY_ANOTHER_TAB = 4003;
+
+// Where a replaced tab goes: no session, relay or key, so it connects to nothing.
+const REPLACED_URL = '/cli-bridge?replaced=1';
 
 // A live server sends init as soon as the key exchange reaches it.
 const SERVER_WAIT_MS = 20_000;

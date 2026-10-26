@@ -364,7 +364,10 @@ describe('a grant request whose server restarted', () => {
     await lapse(row.id);
 
     const again = await grantPermissions(t, CUSTOM, deps);
-    expect(again.content[0].text).toContain(`open at ${row.walletUrl}`);
+    expect(again.content[0].text).toContain(
+      'An earlier permission request is still open for the owner, so this one was not opened. It expires in'
+    );
+    expect(again.content[0].text).toContain(`\nTo approve or decline the earlier request: ${row.walletUrl}\n`);
     expect(again.content[0].text).toContain("reconnecting to the owner's open link");
     await vi.waitFor(() => expect(page.ids).toHaveLength(2));
     owned.decide();
@@ -461,7 +464,7 @@ describe('an add funds request whose server restarted', () => {
   it('given the page is still open, when the agent asks again, then it waits on the same link, resumes it, and the closed screen ends the row approved', async () => {
     const { signer, t } = await connected();
     const owned = deciding(async (method) => (method === 'eth_requestAccounts' ? [signer.address] : null));
-    const deps = { openWallet: stallsAfter(2).openWallet };
+    const deps = { openWallet: stallsAfter(2).openWallet, capabilityChains: async () => [] };
     const first = await addFunds(t, {}, deps);
     const [row] = await rowsOf(t);
     const page = await replayingPage(row.walletUrl, owned.answer);
@@ -482,7 +485,7 @@ describe('an add funds request whose server restarted', () => {
   it('given a stored request, when a tick resumes it, then it rebuilds from its payload alone', async () => {
     const { signer, t } = await connected();
     const owned = deciding(async (method) => (method === 'eth_requestAccounts' ? [signer.address] : null));
-    await addFunds(t, {}, { openWallet: stallsAfter(2).openWallet });
+    await addFunds(t, {}, { openWallet: stallsAfter(2).openWallet, capabilityChains: async () => [] });
     const [row] = await rowsOf(t);
     expect(JSON.parse(row.payload!)).toEqual({ chainId: t.chainId });
     const page = await replayingPage(row.walletUrl, owned.answer);

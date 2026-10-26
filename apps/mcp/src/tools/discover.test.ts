@@ -1,6 +1,7 @@
 import type { DiscoveredService, DiscoverParams } from '@jaw.id/agent';
 import { describe, expect, it } from 'vitest';
 import { setTestEnv } from '@/connections/testkit';
+import { leaks, spoken, toAgent, type ToolResult } from '@/test-utils/spoken';
 import { discover } from './discover';
 
 setTestEnv();
@@ -85,5 +86,36 @@ describe('jaw_session_x402_discover', () => {
     });
     expect(result).toMatchObject({ isError: true });
     expect(JSON.stringify(result)).not.toContain('secret');
+  });
+});
+
+describe('what the owner hears from jaw_session_x402_discover', () => {
+  it('given services found, then the owner hears how many on which network and that nothing was paid', async () => {
+    const r = (await discover(
+      84532,
+      { query: 'ens' },
+      catalog([listed('https://a.example/ens', 'eip155:84532')])
+    )) as ToolResult;
+    expect(leaks(spoken(r))).toEqual([]);
+    expect(spoken(r)).toBe('1 paid service found on Base Sepolia. Nothing was paid.');
+    expect(toAgent(r)).toEqual([
+      'For the agent: Check one with jaw_session_x402_quote, then pay its url with jaw_session_x402_pay.',
+    ]);
+  });
+
+  it('given none on the network, then the owner hears that none is available there', async () => {
+    const r = (await discover(84532, { query: 'ens' }, catalog([]))) as ToolResult;
+    expect(leaks(spoken(r))).toEqual([]);
+    expect(spoken(r)).toBe('No paid service for "ens" is available on Base Sepolia.');
+  });
+
+  it('given the directory cannot be reached, then the owner hears it in plain words', async () => {
+    const r = (await discover(84532, { query: 'ens' }, async () => {
+      throw new Error('down');
+    })) as ToolResult;
+    expect(leaks(spoken(r))).toEqual([]);
+    expect(spoken(r)).toBe(
+      'The directory of paid services could not be reached. Try again, or use a service address you already know.'
+    );
   });
 });

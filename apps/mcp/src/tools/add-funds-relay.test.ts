@@ -5,7 +5,8 @@ import { ownerRelay, SESSION_LIMITS } from '@/connections/relay';
 import { connect, owner, setTestEnv, walletsSettled } from '@/connections/testkit';
 import { TEST_PG_URL, useTestDb, useTestPostgres } from '@/db/test-db';
 import { MAX_ADD_FUNDS_PER_ACCOUNT, MAX_OPEN_PER_ACCOUNT } from '@/owner-calls/cap';
-import { addFunds } from './add-funds';
+import { leaks, spoken } from '@/test-utils/spoken';
+import { addFunds, type AddFundsDeps } from './add-funds';
 import { sign } from './sign';
 
 const relay = await startRelay();
@@ -27,6 +28,9 @@ async function connections(n: number) {
 }
 
 const textOf = (r: { content: { text: string }[] }) => r.content[0].text;
+// The networks the wallet supports, as the capabilities would list them, so no test here reaches the proxy.
+const capabilityChains: AddFundsDeps['capabilityChains'] = async () => [8453, 84532];
+const relayed = { openWallet: ownerRelay, capabilityChains };
 const urlOf = (r: object) => ('structuredContent' in r ? (r.structuredContent as { url?: string })?.url : undefined);
 
 describe('Add Funds links in the owner relay pool', () => {
@@ -39,7 +43,7 @@ describe('Add Funds links in the owner relay pool', () => {
     const tenants = await connections(SESSION_LIMITS.ownerPerAccount + 1);
     const asked = [];
     for (const t of tenants.slice(0, SESSION_LIMITS.ownerPerAccount)) {
-      asked.push(await addFunds(t, {}, { openWallet: ownerRelay }));
+      asked.push(await addFunds(t, {}, relayed));
     }
 
     const s = await sign(tenants[SESSION_LIMITS.ownerPerAccount], { message: 'hello', idempotencyKey: 'k1' } as never, {
@@ -61,21 +65,22 @@ describe('Add Funds links in the owner relay pool', () => {
     const [oneMoreFunds, oneMoreSign] = tenants.slice(-2);
 
     const funded = [];
-    for (const t of funding) funded.push(await addFunds(t, {}, { openWallet: ownerRelay }));
+    for (const t of funding) funded.push(await addFunds(t, {}, relayed));
     const signed = [];
     for (const [i, t] of signing.entries()) {
       signed.push(await sign(t, { message: 'hello', idempotencyKey: `k${i}` } as never, { openWallet: ownerRelay }));
     }
-    const extraFunds = await addFunds(oneMoreFunds, {}, { openWallet: ownerRelay });
+    const extraFunds = await addFunds(oneMoreFunds, {}, relayed);
     const extraSign = await sign(oneMoreSign, { message: 'hello', idempotencyKey: 'extra' } as never, {
       openWallet: ownerRelay,
     });
 
     for (const r of [...funded, ...signed]) expect(urlOf(r)).toMatch(/cli-bridge/);
     expect(textOf(extraFunds)).toMatch(/^add_funds_busy: /);
-    expect(textOf(extraFunds)).toContain(
-      `anyone can send funds on eip155:${oneMoreFunds.chainId} to ${oneMoreFunds.account}`
+    expect(spoken(extraFunds)).toContain(
+      `Funds can still be sent directly to ${oneMoreFunds.account} on any network the wallet supports: Base Sepolia, Base.`
     );
+    expect(leaks(spoken(extraFunds))).toEqual([]);
     expect(JSON.stringify(extraSign)).toContain('account_busy');
     expect(JSON.stringify([extraFunds, extraSign])).not.toContain('wallet_busy');
   });

@@ -30,6 +30,7 @@ import { endConnection } from '@/connections/rows';
 import { WalletBusy, type OpenWallet, type Wallet } from '@/connections/relay';
 import { grantPermissions, retryReplacedRevokes } from '@/tools/grant-permissions';
 import { NO_PAY_SCOPE } from '@/tools/reply';
+import { toAgent } from '@/test-utils/spoken';
 import {
   budgetGrant,
   checkGranted,
@@ -440,9 +441,9 @@ describe('the link reply', () => {
 
     const summary = 'structuredContent' in result ? result.structuredContent.summary : '';
     expect(summary).toContain(
-      'The 2 grant(s) approved on chain for this connection already let the session key move up to 7 base units of 0x4200000000000000000000000000000000000006 per week, 1 USDC per day.'
+      'The 2 earlier permissions on this connection stay in force until they expire or are revoked; together they let this connection move up to 7 smallest units of the token at 0x4200000000000000000000000000000000000006 a week and 1 USDC a day.'
     );
-    expect(summary).toContain('replaces the current one');
+    expect(summary).toContain('It replaces the current spend limit.');
   });
 
   it('given a limit for all time, then the reply says in total', async () => {
@@ -452,7 +453,7 @@ describe('the link reply', () => {
     const { result } = await ask(t, signer, { input: CUSTOM });
 
     const summary = 'structuredContent' in result ? result.structuredContent.summary : '';
-    expect(summary).toContain('7 base units of 0x4200000000000000000000000000000000000006 in total');
+    expect(summary).toContain('7 smallest units of the token at 0x4200000000000000000000000000000000000006 in total');
   });
 
   it('given only custom grants, when a custom grant is asked, then it does not speak of replacing a budget', async () => {
@@ -462,7 +463,10 @@ describe('the link reply', () => {
     const { result } = await ask(t, signer, { input: CUSTOM });
 
     const summary = 'structuredContent' in result ? result.structuredContent.summary : '';
-    expect(summary).toContain('No grant approved on chain for this connection lets the session key move tokens yet.');
+    // No permission is held yet, so the agent hears of no earlier one and nothing it already lets move.
+    expect(toAgent(result)).toEqual([
+      'For the agent: Show the link now with one sentence of what it allows. Then check jaw_session_status on later turns to see it in force; do not wait for the owner to say they approved.',
+    ]);
     expect(summary).not.toContain('replaces');
   });
 });
@@ -525,7 +529,7 @@ describe('jaw_grant_permissions', () => {
     expect('structuredContent' in first && first.structuredContent.url).toBe(url);
     expect('isError' in second && second.isError).toBe(true);
     expect(second.content[0].text).toContain(url);
-    expect(second.content[0].text).toContain('still waiting');
+    expect(second.content[0].text).toContain('An earlier permission request is still waiting');
     expect(second.content[0].text).toContain(until!.toISOString());
 
     release.resolve();
@@ -598,8 +602,11 @@ describe('jaw_grant_permissions', () => {
     await walletsSettled();
     if (!('structuredContent' in result)) throw new Error('refused');
     expect(result.structuredContent.url).toBe(walletUrl);
-    expect(result.structuredContent.summary).toContain(`open ${walletUrl} and approve 1.5 USDC a day until`);
-    expect(result.structuredContent.summary).toContain('call jaw_session_status yourself');
+    expect(result.structuredContent.summary.split('\n')[0]).toBe(`Open this link to approve: ${walletUrl}`);
+    expect(result.structuredContent.summary).toContain('a spend limit of 1.50 USDC a day for paid services, until ');
+    expect(result.structuredContent.summary).toContain(
+      'Then check jaw_session_status on later turns to see it in force'
+    );
     expect(result.structuredContent.summary).toContain('do not wait for the owner to say they approved');
   });
 
@@ -765,7 +772,9 @@ describe('the permission of a budget', () => {
     });
 
     expect('isError' in result && result.isError).toBe(true);
-    expect(result.content[0].text).toContain(`${LIVE_GRANTS_PER_CONNECTION} live grants`);
+    expect(result.content[0].text).toContain(
+      `already holds ${LIVE_GRANTS_PER_CONNECTION} permissions, the most it can`
+    );
     expect(opened).toBe(0);
   });
 
