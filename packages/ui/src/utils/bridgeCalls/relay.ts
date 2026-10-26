@@ -8,7 +8,7 @@ import {
   type Address,
   type Hex,
 } from 'viem';
-import { BRIDGE_CHAINS } from './contracts';
+import type { BridgeContracts } from './table';
 import { callValue, tokenAmount, type BridgeCall, type TokenAmount, type Unreadable } from './view';
 
 const DEPOSITORY_ABI = parseAbi([
@@ -18,13 +18,13 @@ const DEPOSITORY_ABI = parseAbi([
 
 export type RelayDeposit = { kind: 'deposit'; provider: 'relay'; send: TokenAmount; depositor: Address; orderId: Hex };
 
-export function readRelayCall(call: BridgeCall): RelayDeposit | Unreadable | undefined {
-  const depository = BRIDGE_CHAINS[call.chainId]?.relay?.depository;
+export function readRelayCall(contracts: BridgeContracts, call: BridgeCall): RelayDeposit | Unreadable | undefined {
+  const depository = contracts.chain(call.chainId)?.relay?.depository;
   if (!depository || !isAddress(call.to, { strict: false }) || !isAddressEqual(call.to, depository)) return undefined;
-  return depositOf(call) ?? { kind: 'unreadable', provider: 'relay' };
+  return depositOf(contracts, call) ?? { kind: 'unreadable', provider: 'relay' };
 }
 
-function depositOf(call: BridgeCall): RelayDeposit | undefined {
+function depositOf(contracts: BridgeContracts, call: BridgeCall): RelayDeposit | undefined {
   const deposit = decodeExact(call.data);
   const value = callValue(call.value);
   if (!deposit || value === undefined) return undefined;
@@ -35,7 +35,7 @@ function depositOf(call: BridgeCall): RelayDeposit | undefined {
     return {
       kind: 'deposit',
       provider: 'relay',
-      send: tokenAmount(call.chainId, zeroAddress, value),
+      send: tokenAmount(contracts, call.chainId, zeroAddress, value),
       depositor,
       orderId,
     };
@@ -43,7 +43,13 @@ function depositOf(call: BridgeCall): RelayDeposit | undefined {
 
   const [depositor, token, amount, orderId] = deposit.args;
   if (value !== 0n || token === zeroAddress) return undefined;
-  return { kind: 'deposit', provider: 'relay', send: tokenAmount(call.chainId, token, amount), depositor, orderId };
+  return {
+    kind: 'deposit',
+    provider: 'relay',
+    send: tokenAmount(contracts, call.chainId, token, amount),
+    depositor,
+    orderId,
+  };
 }
 
 function decodeExact(data: string | undefined) {

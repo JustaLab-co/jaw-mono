@@ -1,18 +1,24 @@
 import { formatUnits, getAddress, isAddressEqual, type Address } from 'viem';
 import { groupNumber } from '../displayFormat';
 import type { AcrossDeposit } from './across';
-import { BRIDGE_CHAINS } from './contracts';
+import type { BridgeChain } from './contracts';
 import type { RelayDeposit } from './relay';
 import type { OrderUnshown, RelayOrder } from './relayOrder';
+import type { BridgeContracts } from './table';
 import type { BridgeProvider, Received, TokenAmount } from './view';
 
 export type Detail = { label: string; value: string; copy?: string };
+
+export type ChainLabel = Pick<BridgeChain, 'name' | 'nativeSymbol'>;
 
 export type BridgeTransfer = {
   provider: BridgeProvider;
   title: string;
   send: TokenAmount;
+  origin: ChainLabel;
   receive?: Received;
+  /** Set with `receive`. */
+  destination?: ChainLabel;
   /** Set when what arrives goes to an address other than this account. */
   otherRecipient?: Address;
   details: Detail[];
@@ -30,13 +36,16 @@ const RELAY_HIDDEN =
   'Relay keeps the destination chain and the recipient in an order outside this transaction. This screen cannot show them. Confirm only if you started this transfer yourself.';
 
 export const transferOf = (
+  contracts: BridgeContracts,
   deposit: AcrossDeposit | RelayDeposit,
   account: Address,
   order?: RelayOrder | OrderUnshown
 ): TransferRead =>
-  deposit.provider === 'across' ? acrossTransfer(deposit, account) : relayTransfer(deposit, account, order);
+  deposit.provider === 'across'
+    ? acrossTransfer(contracts, deposit, account)
+    : relayTransfer(contracts, deposit, account, order);
 
-function acrossTransfer(deposit: AcrossDeposit, account: Address): TransferRead {
+function acrossTransfer(contracts: BridgeContracts, deposit: AcrossDeposit, account: Address): TransferRead {
   const { fee } = deposit;
   const notices: string[] = [];
   if (!isAddressEqual(deposit.recipient, account)) notices.push(notThisAccount('The recipient', deposit.recipient));
@@ -55,13 +64,16 @@ function acrossTransfer(deposit: AcrossDeposit, account: Address): TransferRead 
     value: new Date(deposit.fillDeadline * 1000).toUTCString(),
   });
 
-  const destination = BRIDGE_CHAINS[deposit.destinationChainId].name;
+  const origin = labelOf(contracts, deposit.send.chainId);
+  const destination = labelOf(contracts, deposit.destinationChainId);
   return {
     transfer: {
       provider: 'across',
-      title: `Bridge to ${destination}`,
+      title: `Bridge to ${destination.name}`,
       send: deposit.send,
+      origin,
       receive: deposit.receive,
+      destination,
       otherRecipient: isAddressEqual(deposit.recipient, account) ? undefined : deposit.recipient,
       details,
     },
@@ -69,7 +81,12 @@ function acrossTransfer(deposit: AcrossDeposit, account: Address): TransferRead 
   };
 }
 
-function relayTransfer(deposit: RelayDeposit, account: Address, order?: RelayOrder | OrderUnshown): TransferRead {
+function relayTransfer(
+  contracts: BridgeContracts,
+  deposit: RelayDeposit,
+  account: Address,
+  order?: RelayOrder | OrderUnshown
+): TransferRead {
   const id = deposit.orderId;
   const notices: string[] = [];
   if (!deposit.send.token.known) notices.push(unknownToken(deposit.send.token.address));
@@ -85,6 +102,7 @@ function relayTransfer(deposit: RelayDeposit, account: Address, order?: RelayOrd
         provider: 'relay',
         title: 'Deposit to Relay',
         send: deposit.send,
+        origin: labelOf(contracts, deposit.send.chainId),
         details: [credited, orderDetail],
       },
       notices,
@@ -93,13 +111,15 @@ function relayTransfer(deposit: RelayDeposit, account: Address, order?: RelayOrd
 
   if (!isAddressEqual(order.recipient, account)) notices.push(notThisAccount('The recipient', order.recipient));
   if (!isAddressEqual(order.refundTo, account)) notices.push(notThisAccount('The refund address', order.refundTo));
-  const destination = BRIDGE_CHAINS[order.destinationChainId].name;
+  const destination = labelOf(contracts, order.destinationChainId);
   return {
     transfer: {
       provider: 'relay',
-      title: `Bridge to ${destination}`,
+      title: `Bridge to ${destination.name}`,
       send: deposit.send,
+      origin: labelOf(contracts, deposit.send.chainId),
       receive: { kind: 'minimum', amount: order.minimumReceived },
+      destination,
       otherRecipient: isAddressEqual(order.recipient, account) ? undefined : getAddress(order.recipient),
       details: [
         accountDetail('Recipient', order.recipient, account),
@@ -110,6 +130,11 @@ function relayTransfer(deposit: RelayDeposit, account: Address, order?: RelayOrd
     },
     notices,
   };
+}
+
+function labelOf(contracts: BridgeContracts, chainId: number): ChainLabel {
+  const { name, nativeSymbol } = contracts.chain(chainId)!;
+  return { name, nativeSymbol };
 }
 
 function amountText({ amount, token }: Pick<TokenAmount, 'amount' | 'token'>): string {

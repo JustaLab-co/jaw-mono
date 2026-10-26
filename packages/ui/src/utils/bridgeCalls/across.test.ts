@@ -15,6 +15,9 @@ import {
 import { readAcrossCall } from './across';
 import { ACROSS_CALLS } from './fixtures';
 import { pinnedToken, type BridgeCall } from './view';
+import { snapshotContracts } from './table';
+
+const contracts = snapshotContracts();
 
 const ACCOUNT = getAddress('0x6ca44a56b06869530c953dfa7868973be1456769');
 const OTHER = getAddress('0x1111111111111111111111111111111111111111');
@@ -96,7 +99,7 @@ const unreadable = { kind: 'unreadable', provider: 'across' };
 
 describe('given the deposit call of a live Across quote', () => {
   it('then prod Base USDC to Arbitrum reads 10 USDC sent, 9.9609 USDC minimum and a 0.024964 USDC JAW fee', () => {
-    expect(readAcrossCall(ACROSS_CALLS.prod)).toEqual({
+    expect(readAcrossCall(contracts, ACROSS_CALLS.prod)).toEqual({
       kind: 'deposit',
       provider: 'across',
       send: usdc(8453, BASE_USDC, 10_000_000n),
@@ -110,7 +113,7 @@ describe('given the deposit call of a live Across quote', () => {
   });
 
   it('then the live fee quote reads 9.961199 USDC minimum after a 0.024965 USDC fee', () => {
-    const read = readAcrossCall(ACROSS_CALLS.usdcFee);
+    const read = readAcrossCall(contracts, ACROSS_CALLS.usdcFee);
     expect(read).toMatchObject({
       receive: { kind: 'minimum', amount: usdc(42161, ARB_USDC, 9_961_199n) },
       fee: { amount: usdc(42161, ARB_USDC, 24_965n), recipient: FEE_RECIPIENT, jaw: true },
@@ -119,7 +122,7 @@ describe('given the deposit call of a live Across quote', () => {
   });
 
   it('then an empty message reads the recipient argument, no fee and the whole output as minimum', () => {
-    expect(readAcrossCall(ACROSS_CALLS.usdcNofee)).toEqual({
+    expect(readAcrossCall(contracts, ACROSS_CALLS.usdcNofee)).toEqual({
       kind: 'deposit',
       provider: 'across',
       send: usdc(8453, BASE_USDC, 10_000_000n),
@@ -133,7 +136,7 @@ describe('given the deposit call of a live Across quote', () => {
   });
 
   it('then a quote to another recipient names that recipient in full', () => {
-    expect(readAcrossCall(ACROSS_CALLS.usdcOtherRecipient)).toMatchObject({
+    expect(readAcrossCall(contracts, ACROSS_CALLS.usdcOtherRecipient)).toMatchObject({
       recipient: OTHER,
       refundTo: ACCOUNT,
       receive: { kind: 'minimum', amount: usdc(42161, ARB_USDC, 9_990_223n) },
@@ -142,7 +145,7 @@ describe('given the deposit call of a live Across quote', () => {
   });
 
   it('then a periphery depositNative reads 0.01 ETH sent and native ETH received on Arbitrum', () => {
-    expect(readAcrossCall(ACROSS_CALLS.nativeEth)).toEqual({
+    expect(readAcrossCall(contracts, ACROSS_CALLS.nativeEth)).toEqual({
       kind: 'deposit',
       provider: 'across',
       send: eth(8453, 10_000_000_000_000_000n),
@@ -156,7 +159,7 @@ describe('given the deposit call of a live Across quote', () => {
   });
 
   it('then a native deposit with a fee reads the value call to JAW and the output less that fee', () => {
-    expect(readAcrossCall(ACROSS_CALLS.nativeFee)).toMatchObject({
+    expect(readAcrossCall(contracts, ACROSS_CALLS.nativeFee)).toMatchObject({
       receive: { kind: 'minimum', amount: eth(42161, 9_966_189_341_685_642n) },
       fee: { amount: eth(42161, 24_977_918_149_588n), recipient: FEE_RECIPIENT, jaw: true },
       fillDeadline: 1792683935,
@@ -164,7 +167,7 @@ describe('given the deposit call of a live Across quote', () => {
   });
 
   it('then ETH to mainnet reads Ethereum as the destination and native ETH there', () => {
-    expect(readAcrossCall(ACROSS_CALLS.ethToEthMainnet)).toMatchObject({
+    expect(readAcrossCall(contracts, ACROSS_CALLS.ethToEthMainnet)).toMatchObject({
       destinationChainId: 1,
       receive: { kind: 'minimum', amount: eth(1, 9_920_000_555_340_732n) },
       fee: undefined,
@@ -172,7 +175,7 @@ describe('given the deposit call of a live Across quote', () => {
   });
 
   it('then a swap on Base from USDC into WETH reads 10 USDC sent and WETH received on Arbitrum', () => {
-    expect(readAcrossCall(ACROSS_CALLS.usdcToWeth)).toEqual({
+    expect(readAcrossCall(contracts, ACROSS_CALLS.usdcToWeth)).toEqual({
       kind: 'deposit',
       provider: 'across',
       send: usdc(8453, BASE_USDC, 10_000_000n),
@@ -186,7 +189,7 @@ describe('given the deposit call of a live Across quote', () => {
   });
 
   it('then a swap on Base from ETH into USDC reads 0.01 ETH sent and USDC received on Arbitrum', () => {
-    expect(readAcrossCall(ACROSS_CALLS.ethToUsdc)).toMatchObject({
+    expect(readAcrossCall(contracts, ACROSS_CALLS.ethToUsdc)).toMatchObject({
       send: eth(8453, 10_000_000_000_000_000n),
       recipient: ACCOUNT,
       receive: { kind: 'minimum', amount: usdc(42161, ARB_USDC, 23_888_407n) },
@@ -195,7 +198,7 @@ describe('given the deposit call of a live Across quote', () => {
   });
 
   it('then a swap on Arbitrum into ARB reads the token and recipient but no amount', () => {
-    expect(readAcrossCall(ACROSS_CALLS.usdcToArb)).toEqual({
+    expect(readAcrossCall(contracts, ACROSS_CALLS.usdcToArb)).toEqual({
       kind: 'deposit',
       provider: 'across',
       send: usdc(8453, BASE_USDC, 10_000_000n),
@@ -211,31 +214,34 @@ describe('given the deposit call of a live Across quote', () => {
 
 describe('given a call that is not to a pinned Across contract', () => {
   it('then the prod calldata to an unpinned address is not recognized', () => {
-    expect(readAcrossCall({ ...ACROSS_CALLS.prod, to: ATTACKER })).toBeUndefined();
+    expect(readAcrossCall(contracts, { ...ACROSS_CALLS.prod, to: ATTACKER })).toBeUndefined();
   });
 
   it('then the Base SpokePool address on Optimism is not recognized', () => {
-    expect(readAcrossCall({ ...ACROSS_CALLS.prod, chainId: 10 })).toBeUndefined();
+    expect(readAcrossCall(contracts, { ...ACROSS_CALLS.prod, chainId: 10 })).toBeUndefined();
   });
 
   it('then a target that is not an address is not recognized', () => {
-    expect(readAcrossCall({ ...ACROSS_CALLS.prod, to: 'across' })).toBeUndefined();
+    expect(readAcrossCall(contracts, { ...ACROSS_CALLS.prod, to: 'across' })).toBeUndefined();
   });
 
   it('then a chain the table lacks is not recognized', () => {
-    expect(readAcrossCall({ ...ACROSS_CALLS.prod, chainId: 999 })).toBeUndefined();
+    expect(readAcrossCall(contracts, { ...ACROSS_CALLS.prod, chainId: 999 })).toBeUndefined();
   });
 });
 
 describe('given a deposit whose tokens or chains need the pinned table', () => {
   it('then a lowercase target and a lowercase token resolve like checksummed ones', () => {
     const lower = { ...ACROSS_CALLS.prod, to: ACROSS_CALLS.prod.to.toLowerCase() };
-    expect(readAcrossCall(lower)).toEqual(readAcrossCall(ACROSS_CALLS.prod));
-    expect(pinnedToken(8453, BASE_USDC.toLowerCase())).toEqual({ symbol: 'USDC', decimals: 6 });
+    expect(readAcrossCall(contracts, lower)).toEqual(readAcrossCall(contracts, ACROSS_CALLS.prod));
+    expect(pinnedToken(contracts, 8453, BASE_USDC.toLowerCase())).toEqual({ symbol: 'USDC', decimals: 6 });
   });
 
   it('then USDbC on Base reads as an unknown token, never USDC', () => {
-    const read = readAcrossCall(withArgs(ACROSS_CALLS.prod, (a) => (a[2] = word(USDBC))));
+    const read = readAcrossCall(
+      contracts,
+      withArgs(ACROSS_CALLS.prod, (a) => (a[2] = word(USDBC)))
+    );
     expect(read).toMatchObject({
       send: { chainId: 8453, amount: 10_000_000n, token: { address: USDBC, known: false } },
     });
@@ -243,7 +249,10 @@ describe('given a deposit whose tokens or chains need the pinned table', () => {
   });
 
   it('then an output token the table lacks reads as its address and raw amount, marked unknown', () => {
-    const read = readAcrossCall(withArgs(ACROSS_CALLS.usdcNofee, (a) => (a[3] = word(OTHER))));
+    const read = readAcrossCall(
+      contracts,
+      withArgs(ACROSS_CALLS.usdcNofee, (a) => (a[3] = word(OTHER)))
+    );
     expect(read).toMatchObject({
       receive: {
         kind: 'minimum',
@@ -257,7 +266,10 @@ describe('given a deposit whose tokens or chains need the pinned table', () => {
       p.calls[0].target = OTHER;
       p.calls[1] = p.calls[2] = drain(OTHER, ACCOUNT);
     });
-    const read = readAcrossCall(withArgs(program, (a) => (a[3] = word(OTHER))));
+    const read = readAcrossCall(
+      contracts,
+      withArgs(program, (a) => (a[3] = word(OTHER)))
+    );
     expect(read && read.kind === 'deposit' && read.fee).toEqual({
       amount: { chainId: 42161, amount: 24_964n, token: { address: OTHER, known: false } },
       recipient: FEE_RECIPIENT,
@@ -266,7 +278,10 @@ describe('given a deposit whose tokens or chains need the pinned table', () => {
   });
 
   it('then a wrapped native output token with an empty message reads WETH, not ETH', () => {
-    const read = readAcrossCall(withArgs(ACROSS_CALLS.usdcNofee, (a) => (a[3] = word(ARB_WETH))));
+    const read = readAcrossCall(
+      contracts,
+      withArgs(ACROSS_CALLS.usdcNofee, (a) => (a[3] = word(ARB_WETH)))
+    );
     expect(read).toMatchObject({ recipient: ACCOUNT, receive: { kind: 'minimum', amount: weth(42161, 9_990_214n) } });
   });
 
@@ -275,7 +290,7 @@ describe('given a deposit whose tokens or chains need the pinned table', () => {
       a[2] = word(BSC_USDC);
       a[4] = 10n ** 19n;
     });
-    expect(readAcrossCall(call)).toMatchObject({
+    expect(readAcrossCall(contracts, call)).toMatchObject({
       send: {
         chainId: 56,
         amount: 10n ** 19n,
@@ -289,7 +304,7 @@ describe('given a deposit whose tokens or chains need the pinned table', () => {
       a[3] = word(BSC_USDC);
       a[6] = 56n;
     });
-    expect(readAcrossCall(call)).toMatchObject({
+    expect(readAcrossCall(contracts, call)).toMatchObject({
       destinationChainId: 56,
       receive: {
         kind: 'minimum',
@@ -303,8 +318,18 @@ describe('given a deposit whose tokens or chains need the pinned table', () => {
   });
 
   it('then a destination the table lacks, or one with no Across contracts, is unreadable', () => {
-    expect(readAcrossCall(withArgs(ACROSS_CALLS.usdcNofee, (a) => (a[6] = 999n)))).toEqual(unreadable);
-    expect(readAcrossCall(withArgs(ACROSS_CALLS.usdcNofee, (a) => (a[6] = 4663n)))).toEqual(unreadable);
+    expect(
+      readAcrossCall(
+        contracts,
+        withArgs(ACROSS_CALLS.usdcNofee, (a) => (a[6] = 999n))
+      )
+    ).toEqual(unreadable);
+    expect(
+      readAcrossCall(
+        contracts,
+        withArgs(ACROSS_CALLS.usdcNofee, (a) => (a[6] = 4663n))
+      )
+    ).toEqual(unreadable);
   });
 
   it('then native ETH out to Arc, which has no pinned wrapped native, is unreadable', () => {
@@ -315,84 +340,103 @@ describe('given a deposit whose tokens or chains need the pinned table', () => {
       a[2] = word(ARC_HANDLER);
       a[7] = 5042n;
     });
-    expect(readAcrossCall(call)).toEqual(unreadable);
+    expect(readAcrossCall(contracts, call)).toEqual(unreadable);
   });
 });
 
 describe('given an Across deposit with bytes it does not explain', () => {
   it('then one byte after the tag is unreadable', () => {
-    expect(readAcrossCall({ ...ACROSS_CALLS.prod, data: ACROSS_CALLS.prod.data + '00' })).toEqual(unreadable);
-  });
-
-  it('then an address argument with dirty high bytes is unreadable', () => {
-    const { data } = ACROSS_CALLS.nativeEth;
-    expect(readAcrossCall({ ...ACROSS_CALLS.nativeEth, data: `${data.slice(0, 10)}01${data.slice(12)}` })).toEqual(
+    expect(readAcrossCall(contracts, { ...ACROSS_CALLS.prod, data: ACROSS_CALLS.prod.data + '00' })).toEqual(
       unreadable
     );
   });
 
+  it('then an address argument with dirty high bytes is unreadable', () => {
+    const { data } = ACROSS_CALLS.nativeEth;
+    expect(
+      readAcrossCall(contracts, { ...ACROSS_CALLS.nativeEth, data: `${data.slice(0, 10)}01${data.slice(12)}` })
+    ).toEqual(unreadable);
+  });
+
   it('then a tag other than the Across one is unreadable', () => {
     const data = ACROSS_CALLS.prod.data.replace(/73c0de$/, '73c0df');
-    expect(readAcrossCall({ ...ACROSS_CALLS.prod, data })).toEqual(unreadable);
+    expect(readAcrossCall(contracts, { ...ACROSS_CALLS.prod, data })).toEqual(unreadable);
   });
 
   it('then a deposit without the Across tag is unreadable', () => {
     expect(
-      readAcrossCall({ ...ACROSS_CALLS.prod, data: ACROSS_CALLS.prod.data.replace(/1dc0de016173c0de$/, '') })
+      readAcrossCall(contracts, { ...ACROSS_CALLS.prod, data: ACROSS_CALLS.prod.data.replace(/1dc0de016173c0de$/, '') })
     ).toEqual(unreadable);
     expect(
-      readAcrossCall({ ...ACROSS_CALLS.usdcNofee, data: ACROSS_CALLS.usdcNofee.data.replace(/73c0de$/, '') })
+      readAcrossCall(contracts, { ...ACROSS_CALLS.usdcNofee, data: ACROSS_CALLS.usdcNofee.data.replace(/73c0de$/, '') })
     ).toEqual(unreadable);
   });
 
   it('then a message to a recipient that is not the handler is unreadable', () => {
-    expect(readAcrossCall(withArgs(ACROSS_CALLS.usdcFee, (a) => (a[1] = word(OTHER))))).toEqual(unreadable);
+    expect(
+      readAcrossCall(
+        contracts,
+        withArgs(ACROSS_CALLS.usdcFee, (a) => (a[1] = word(OTHER)))
+      )
+    ).toEqual(unreadable);
   });
 
   it('then calldata cut short is unreadable', () => {
-    expect(readAcrossCall({ ...ACROSS_CALLS.prod, data: ACROSS_CALLS.prod.data.slice(0, 300) })).toEqual(unreadable);
+    expect(readAcrossCall(contracts, { ...ACROSS_CALLS.prod, data: ACROSS_CALLS.prod.data.slice(0, 300) })).toEqual(
+      unreadable
+    );
   });
 
   it('then a zero output token, which leaves the token to the relayer, is unreadable', () => {
-    expect(readAcrossCall(withArgs(ACROSS_CALLS.usdcNofee, (a) => (a[3] = word(zeroAddress))))).toEqual(unreadable);
+    expect(
+      readAcrossCall(
+        contracts,
+        withArgs(ACROSS_CALLS.usdcNofee, (a) => (a[3] = word(zeroAddress)))
+      )
+    ).toEqual(unreadable);
   });
 
   it('then a non EVM recipient word is unreadable', () => {
     const call = withArgs(ACROSS_CALLS.usdcNofee, (a) => (a[1] = `0x01${(a[1] as string).slice(4)}`));
-    expect(readAcrossCall(call)).toEqual(unreadable);
+    expect(readAcrossCall(contracts, call)).toEqual(unreadable);
   });
 });
 
 describe('given a message program that moves funds elsewhere', () => {
   it('then a second drain to another address is unreadable', () => {
     const call = withProgram(ACROSS_CALLS.prod, (p) => (p.calls[2] = drain(ARB_USDC, ATTACKER)));
-    expect(readAcrossCall(call)).toEqual(unreadable);
+    expect(readAcrossCall(contracts, call)).toEqual(unreadable);
   });
 
   it('then an extra transfer is unreadable', () => {
     const call = withProgram(ACROSS_CALLS.prod, (p) => p.calls.splice(1, 0, transfer(ARB_USDC, ATTACKER, 1n)));
-    expect(readAcrossCall(call)).toEqual(unreadable);
+    expect(readAcrossCall(contracts, call)).toEqual(unreadable);
   });
 
   it('then an extra value call is unreadable', () => {
     const call = withProgram(ACROSS_CALLS.nativeFee, (p) =>
       p.calls.splice(2, 0, { target: ATTACKER, callData: '0x', value: 1n })
     );
-    expect(readAcrossCall(call)).toEqual(unreadable);
+    expect(readAcrossCall(contracts, call)).toEqual(unreadable);
   });
 
   it('then a nonzero fallback recipient is unreadable', () => {
-    expect(readAcrossCall(withProgram(ACROSS_CALLS.prod, (p) => (p.fallbackRecipient = ATTACKER)))).toEqual(unreadable);
+    expect(
+      readAcrossCall(
+        contracts,
+        withProgram(ACROSS_CALLS.prod, (p) => (p.fallbackRecipient = ATTACKER))
+      )
+    ).toEqual(unreadable);
   });
 
   it('then an empty message to the MulticallHandler is unreadable', () => {
     const call = withArgs(ACROSS_CALLS.usdcNofee, (a) => (a[1] = word(HANDLER)));
-    expect(readAcrossCall(call)).toEqual(unreadable);
+    expect(readAcrossCall(contracts, call)).toEqual(unreadable);
   });
 
   it('then a program with only a drain to the user reads with no fee', () => {
     const call = withProgram(ACROSS_CALLS.prod, (p) => (p.calls = [drain(ARB_USDC, ACCOUNT)]));
-    expect(readAcrossCall(call)).toMatchObject({
+    expect(readAcrossCall(contracts, call)).toMatchObject({
       recipient: ACCOUNT,
       fee: undefined,
       receive: { amount: { amount: 9_985_864n } },
@@ -401,61 +445,66 @@ describe('given a message program that moves funds elsewhere', () => {
 
   it('then a fee to an address JAW does not know reads that address, without the JAW label', () => {
     const call = withProgram(ACROSS_CALLS.prod, (p) => (p.calls[0] = transfer(ARB_USDC, ATTACKER, 24_964n)));
-    expect(readAcrossCall(call)).toMatchObject({ fee: { recipient: ATTACKER, jaw: false } });
+    expect(readAcrossCall(contracts, call)).toMatchObject({ fee: { recipient: ATTACKER, jaw: false } });
   });
 
   it('then a native fee to an address JAW does not know reads that address, without the JAW label', () => {
     const call = withProgram(ACROSS_CALLS.nativeFee, (p) => (p.calls[1].target = ATTACKER));
-    expect(readAcrossCall(call)).toMatchObject({ fee: { recipient: ATTACKER, jaw: false } });
+    expect(readAcrossCall(contracts, call)).toMatchObject({ fee: { recipient: ATTACKER, jaw: false } });
   });
 
   it('then a fee larger than the output is unreadable', () => {
     const call = withProgram(ACROSS_CALLS.prod, (p) => (p.calls[0] = transfer(ARB_USDC, FEE_RECIPIENT, 10n ** 12n)));
-    expect(readAcrossCall(call)).toEqual(unreadable);
+    expect(readAcrossCall(contracts, call)).toEqual(unreadable);
   });
 
   it('then an approve in place of the fee transfer is unreadable', () => {
     const callData = encodeFunctionData({ abi: erc20Abi, functionName: 'approve', args: [FEE_RECIPIENT, 24_964n] });
     const call = withProgram(ACROSS_CALLS.prod, (p) => (p.calls[0].callData = callData));
-    expect(readAcrossCall(call)).toEqual(unreadable);
+    expect(readAcrossCall(contracts, call)).toEqual(unreadable);
   });
 
   it.each([0, 1, 3])('then a byte after the arguments of program call %i is unreadable', (i) => {
     const call = withProgram(ACROSS_CALLS.prod, (p) => (p.calls[i].callData = `${p.calls[i].callData}00`));
-    expect(readAcrossCall(call)).toEqual(unreadable);
+    expect(readAcrossCall(contracts, call)).toEqual(unreadable);
   });
 
   it('then a third emitData is unreadable', () => {
     const call = withProgram(ACROSS_CALLS.prod, (p) => p.calls.push(p.calls[3], p.calls[3]));
-    expect(readAcrossCall(call)).toEqual(unreadable);
+    expect(readAcrossCall(contracts, call)).toEqual(unreadable);
   });
 
   it('then a message with bytes after the program is unreadable', () => {
     const call = withArgs(ACROSS_CALLS.prod, (a) => (a[11] = `${a[11] as string}${'00'.repeat(32)}`));
-    expect(readAcrossCall(call)).toEqual(unreadable);
+    expect(readAcrossCall(contracts, call)).toEqual(unreadable);
   });
 });
 
 describe('given a periphery depositNative or deposit value that does not fit', () => {
   it('then a spokePool argument off the table is unreadable', () => {
-    expect(readAcrossCall(withArgs(ACROSS_CALLS.nativeEth, (a) => (a[0] = ATTACKER)))).toEqual(unreadable);
+    expect(
+      readAcrossCall(
+        contracts,
+        withArgs(ACROSS_CALLS.nativeEth, (a) => (a[0] = ATTACKER))
+      )
+    ).toEqual(unreadable);
   });
 
   it('then a value other than the input amount is unreadable', () => {
-    expect(readAcrossCall({ ...ACROSS_CALLS.nativeEth, value: '1' })).toEqual(unreadable);
+    expect(readAcrossCall(contracts, { ...ACROSS_CALLS.nativeEth, value: '1' })).toEqual(unreadable);
   });
 
   it('then a value on an ERC-20 deposit is unreadable', () => {
-    expect(readAcrossCall({ ...ACROSS_CALLS.prod, value: '1' })).toEqual(unreadable);
+    expect(readAcrossCall(contracts, { ...ACROSS_CALLS.prod, value: '1' })).toEqual(unreadable);
   });
 
   it('then a hex value equal to the decimal one reads the same', () => {
     const hex = { ...ACROSS_CALLS.nativeEth, value: '0x2386f26fc10000' };
-    expect(readAcrossCall(hex)).toEqual(readAcrossCall(ACROSS_CALLS.nativeEth));
+    expect(readAcrossCall(contracts, hex)).toEqual(readAcrossCall(contracts, ACROSS_CALLS.nativeEth));
   });
 
   it('then a depositNative sent to the SpokePool is unreadable', () => {
-    expect(readAcrossCall({ ...ACROSS_CALLS.nativeEth, to: ACROSS_CALLS.prod.to })).toEqual(unreadable);
+    expect(readAcrossCall(contracts, { ...ACROSS_CALLS.nativeEth, to: ACROSS_CALLS.prod.to })).toEqual(unreadable);
   });
 
   it('then a native deposit from BNB Chain reads BNB, not ETH', () => {
@@ -463,14 +512,14 @@ describe('given a periphery depositNative or deposit value that does not fit', (
       a[0] = BSC_POOL;
       a[3] = getAddress('0xbb4cdb9cbd36b01bd1cbaebf2de08d9173bc095c');
     });
-    expect(readAcrossCall(call)).toMatchObject({
+    expect(readAcrossCall(contracts, call)).toMatchObject({
       send: { chainId: 56, token: { address: zeroAddress, known: true, symbol: 'BNB', decimals: 18 } },
     });
   });
 
   it('then a deposit selector sent to the periphery is unreadable', () => {
     const to = ACROSS_CALLS.nativeEth.to;
-    expect(readAcrossCall({ ...ACROSS_CALLS.prod, to })).toEqual(unreadable);
+    expect(readAcrossCall(contracts, { ...ACROSS_CALLS.prod, to })).toEqual(unreadable);
   });
 });
 
@@ -478,8 +527,8 @@ describe('given one field of a recognized deposit changed', () => {
   // These fields cannot move funds, so they stay in the raw details.
   const NOT_SHOWN = new Set(['exclusiveRelayer', 'quoteTimestamp', 'exclusivityParameter', 'emitData payload']);
   const changes = (base: BridgeCall, changed: BridgeCall) => {
-    const before = readAcrossCall(base);
-    const after = readAcrossCall(changed);
+    const before = readAcrossCall(contracts, base);
+    const after = readAcrossCall(contracts, changed);
     expect(before).toMatchObject({ kind: 'deposit' });
     return (
       after === undefined || after.kind === 'unreadable' || JSON.stringify(after, big) !== JSON.stringify(before, big)
@@ -623,7 +672,7 @@ describe('given a periphery swapAndBridge, which swaps on the origin before it d
   }
 
   const changes = (base: BridgeCall, changed: BridgeCall) =>
-    JSON.stringify(readAcrossCall(changed), big) !== JSON.stringify(readAcrossCall(base), big);
+    JSON.stringify(readAcrossCall(contracts, changed), big) !== JSON.stringify(readAcrossCall(contracts, base), big);
   const big = (_: string, v: unknown) => (typeof v === 'bigint' ? v.toString() : v);
   const set = (key: string, value: unknown) => (d: SwapData) => void (d[key] = value);
   const setDeposit = (key: string, value: unknown) => (d: SwapData) => void (d.depositData[key] = value);
@@ -662,8 +711,8 @@ describe('given a periphery swapAndBridge, which swaps on the origin before it d
   };
 
   it('then an exchange free to return 1 wei of the bridged token is unreadable', () => {
-    expect(readAcrossCall(withSwap(ACROSS_CALLS.usdcToWeth, poc))).toEqual(unreadable);
-    expect(readAcrossCall(withSwap(ACROSS_CALLS.ethToUsdc, poc))).toEqual(unreadable);
+    expect(readAcrossCall(contracts, withSwap(ACROSS_CALLS.usdcToWeth, poc))).toEqual(unreadable);
+    expect(readAcrossCall(contracts, withSwap(ACROSS_CALLS.ethToUsdc, poc))).toEqual(unreadable);
   });
 
   it('then any exchange, transfer type and router calldata read the same while the floor covers the output', () => {
@@ -673,15 +722,15 @@ describe('given a periphery swapAndBridge, which swaps on the origin before it d
       d.routerCalldata = '0x';
     };
     for (const call of [ACROSS_CALLS.usdcToWeth, ACROSS_CALLS.ethToUsdc]) {
-      expect(readAcrossCall(call)).toMatchObject({ kind: 'deposit' });
+      expect(readAcrossCall(contracts, call)).toMatchObject({ kind: 'deposit' });
       expect(changes(call, withSwap(call, edit))).toBe(false);
     }
   });
 
   it('then a floor equal to the output reads, and one unit below is unreadable', () => {
     const floor = (amount: bigint) => withSwap(ACROSS_CALLS.ethToUsdc, set('minExpectedInputTokenAmount', amount));
-    expect(readAcrossCall(floor(23_888_407n))).toMatchObject({ kind: 'deposit' });
-    expect(readAcrossCall(floor(23_888_406n))).toEqual(unreadable);
+    expect(readAcrossCall(contracts, floor(23_888_407n))).toMatchObject({ kind: 'deposit' });
+    expect(readAcrossCall(contracts, floor(23_888_406n))).toEqual(unreadable);
   });
 
   it('then the floor and the output compare across decimals, USDC with 6 on Base and 18 on BSC', () => {
@@ -695,10 +744,10 @@ describe('given a periphery swapAndBridge, which swaps on the origin before it d
           message: '0x',
         });
       });
-    expect(readAcrossCall(toBsc(23_904_714n * 10n ** 12n))).toMatchObject({
+    expect(readAcrossCall(contracts, toBsc(23_904_714n * 10n ** 12n))).toMatchObject({
       receive: { kind: 'minimum', amount: { amount: 23_904_714n * 10n ** 12n } },
     });
-    expect(readAcrossCall(toBsc(23_904_714n * 10n ** 12n + 1n))).toEqual(unreadable);
+    expect(readAcrossCall(contracts, toBsc(23_904_714n * 10n ** 12n + 1n))).toEqual(unreadable);
   });
 
   it('then an output token that is not the bridged asset is unreadable, since the floor cannot be compared', () => {
@@ -711,37 +760,45 @@ describe('given a periphery swapAndBridge, which swaps on the origin before it d
           message: '0x',
         });
       });
-    expect(readAcrossCall(withOutput(ARB_USDC))).toMatchObject({ kind: 'deposit' });
-    expect(readAcrossCall(withOutput(ARB_WETH))).toEqual(unreadable);
+    expect(readAcrossCall(contracts, withOutput(ARB_USDC))).toMatchObject({ kind: 'deposit' });
+    expect(readAcrossCall(contracts, withOutput(ARB_WETH))).toEqual(unreadable);
   });
 
   it('then the swap amount is what the account approves and sends, not the bridged amount', () => {
-    expect(readAcrossCall(withSwap(ACROSS_CALLS.usdcToWeth, set('swapTokenAmount', 5_000_000n)))).toMatchObject({
+    expect(
+      readAcrossCall(contracts, withSwap(ACROSS_CALLS.usdcToWeth, set('swapTokenAmount', 5_000_000n)))
+    ).toMatchObject({
       send: usdc(8453, BASE_USDC, 5_000_000n),
     });
   });
 
   it('then a value that is not the swap amount, or a value on an ERC-20 swap, is unreadable', () => {
-    expect(readAcrossCall({ ...ACROSS_CALLS.ethToUsdc, value: '1' })).toEqual(unreadable);
-    expect(readAcrossCall({ ...ACROSS_CALLS.usdcToWeth, value: '10000000' })).toEqual(unreadable);
+    expect(readAcrossCall(contracts, { ...ACROSS_CALLS.ethToUsdc, value: '1' })).toEqual(unreadable);
+    expect(readAcrossCall(contracts, { ...ACROSS_CALLS.usdcToWeth, value: '10000000' })).toEqual(unreadable);
   });
 
   it('then a bridged token not pinned on the origin is unreadable, since the exchange could fake the swap', () => {
-    expect(readAcrossCall(withSwap(ACROSS_CALLS.usdcToWeth, setDeposit('inputToken', OTHER)))).toEqual(unreadable);
-    expect(readAcrossCall(withSwap(ACROSS_CALLS.ethToUsdc, setDeposit('inputToken', USDBC)))).toEqual(unreadable);
+    expect(readAcrossCall(contracts, withSwap(ACROSS_CALLS.usdcToWeth, setDeposit('inputToken', OTHER)))).toEqual(
+      unreadable
+    );
+    expect(readAcrossCall(contracts, withSwap(ACROSS_CALLS.ethToUsdc, setDeposit('inputToken', USDBC)))).toEqual(
+      unreadable
+    );
   });
 
   it('then a value with a swap token other than WETH is unreadable', () => {
-    expect(readAcrossCall(withSwap(ACROSS_CALLS.ethToUsdc, set('swapToken', BASE_USDC)))).toEqual(unreadable);
+    expect(readAcrossCall(contracts, withSwap(ACROSS_CALLS.ethToUsdc, set('swapToken', BASE_USDC)))).toEqual(
+      unreadable
+    );
   });
 
   it('then swapAndBridge sent to the SpokePool is unreadable', () => {
-    expect(readAcrossCall({ ...ACROSS_CALLS.usdcToWeth, to: ACROSS_CALLS.prod.to })).toEqual(unreadable);
+    expect(readAcrossCall(contracts, { ...ACROSS_CALLS.usdcToWeth, to: ACROSS_CALLS.prod.to })).toEqual(unreadable);
   });
 
   it('then one byte after the tag is unreadable', () => {
     const call = { ...ACROSS_CALLS.usdcToWeth, data: ACROSS_CALLS.usdcToWeth.data + '00' };
-    expect(readAcrossCall(call)).toEqual(unreadable);
+    expect(readAcrossCall(contracts, call)).toEqual(unreadable);
   });
 });
 
@@ -750,12 +807,12 @@ describe('given a destination swap through a router in the handler program', () 
 
   it('then the bridged token left over may go back to the recipient or stay, and still reads', () => {
     const call = withProgram(ACROSS_CALLS.usdcToArb, (p) => p.calls.splice(3, 1));
-    expect(readAcrossCall(call)).toMatchObject({ recipient: ACCOUNT, receive: swapRead });
+    expect(readAcrossCall(contracts, call)).toMatchObject({ recipient: ACCOUNT, receive: swapRead });
   });
 
   it('then a zero fallback recipient reads the same', () => {
     const call = withProgram(ACROSS_CALLS.usdcToArb, (p) => (p.fallbackRecipient = zeroAddress));
-    expect(readAcrossCall(call)).toMatchObject({ receive: swapRead });
+    expect(readAcrossCall(contracts, call)).toMatchObject({ receive: swapRead });
   });
 
   it('then the bought token sent to another address names that address as the recipient', () => {
@@ -764,7 +821,7 @@ describe('given a destination swap through a router in the handler program', () 
       p.calls[3] = drain(ARB_USDC, OTHER);
       p.fallbackRecipient = OTHER;
     });
-    expect(readAcrossCall(call)).toMatchObject({ recipient: OTHER, receive: swapRead });
+    expect(readAcrossCall(contracts, call)).toMatchObject({ recipient: OTHER, receive: swapRead });
   });
 
   const mutants: [string, (p: Program) => void][] = [
@@ -785,6 +842,6 @@ describe('given a destination swap through a router in the handler program', () 
     ],
   ];
   it.each(mutants)('then %s is unreadable', (_, edit) => {
-    expect(readAcrossCall(withProgram(ACROSS_CALLS.usdcToArb, edit))).toEqual(unreadable);
+    expect(readAcrossCall(contracts, withProgram(ACROSS_CALLS.usdcToArb, edit))).toEqual(unreadable);
   });
 });
