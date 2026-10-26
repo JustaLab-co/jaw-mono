@@ -19,6 +19,13 @@ export interface PermissionsConfig {
   }>;
 }
 
+/**
+ * JustaPermissionManager, the same on every chain. Written out rather than imported because a
+ * static `@jaw.id/core` import pulls the whole SDK into CLI startup, and this parser is synchronous.
+ * A test holds it equal to the SDK's.
+ */
+export const PERMISSIONS_MANAGER = '0xf1b40E3D5701C04d86F7828f0EB367B9C90901D8';
+
 const ADDRESS_RE = /^0x[0-9a-fA-F]{40}$/;
 const SELECTOR_RE = /^0x[0-9a-fA-F]{8}$/;
 // The SDK hands `allowance` straight to BigInt(), which takes decimal and hex
@@ -58,6 +65,14 @@ export function parsePermissionsConfig(raw: unknown): PermissionsConfig {
         }
         if (c.selector !== undefined && (typeof c.selector !== 'string' || !SELECTOR_RE.test(c.selector))) {
           errors.push(`calls.${i}.selector: Must be a 4-byte hex selector (e.g. 0xa9059cbb)`);
+        }
+        if (c.checker !== undefined) {
+          if (typeof c.checker !== 'string' || !ADDRESS_RE.test(c.checker)) {
+            errors.push(`calls.${i}.checker: Must be a valid 0x address (40 hex chars)`);
+          } else if (c.checker.toLowerCase() === PERMISSIONS_MANAGER.toLowerCase()) {
+            // The manager refuses itself as a checker when the permission is approved.
+            errors.push(`calls.${i}.checker: Cannot be the permission manager`);
+          }
         }
       }
     }
