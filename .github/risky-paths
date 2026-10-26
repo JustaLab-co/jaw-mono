@@ -24,6 +24,7 @@ apps/mcp/src/tools/swap.ts
 apps/mcp/src/swap/**
 apps/mcp/src/owner-calls/**
 apps/mcp/src/tools/owner-calls.ts
+apps/mcp/src/tools/prepare-calls.ts
 apps/mcp/src/tools/sign.ts
 apps/mcp/src/tools/add-funds.ts
 apps/mcp/src/adapters/session-host.ts

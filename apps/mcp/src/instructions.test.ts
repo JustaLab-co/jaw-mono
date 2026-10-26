@@ -243,6 +243,10 @@ const CASES: Record<string, Case> = {
   jaw_resolve_name: { tool: 'jaw_resolve_name', args: { name: 'alice.eth' } },
   jaw_session_x402_discover: { tool: 'jaw_session_x402_discover', args: { query: 'weather' } },
   jaw_grant_permissions: { tool: 'jaw_grant_permissions', args: { x402Budget: { perDay: '1' } } },
+  jaw_prepare_calls: {
+    tool: 'jaw_prepare_calls',
+    args: { actions: [{ to: USDC_BASE, function: 'transfer(address to, uint256 amount)', args: [RECIPIENT, '1000'] }] },
+  },
   jaw_send_calls: { tool: 'jaw_send_calls', args: SEND },
   // Still waiting on the request jaw_send_calls just opened.
   jaw_get_calls_status: { tool: 'jaw_get_calls_status', args: (token) => opened(token, 'jaw_send_calls', SEND) },
@@ -333,6 +337,7 @@ describe('what each tool says for the owner', () => {
   it('jaw_resolve_name', namesNoInternals('jaw_resolve_name'));
   it('jaw_session_x402_discover', namesNoInternals('jaw_session_x402_discover'));
   it('jaw_grant_permissions', namesNoInternals('jaw_grant_permissions'));
+  it('jaw_prepare_calls', namesNoInternals('jaw_prepare_calls'));
   it('jaw_send_calls', namesNoInternals('jaw_send_calls'));
   it('jaw_get_calls_status', namesNoInternals('jaw_get_calls_status'));
   it('jaw_sign', namesNoInternals('jaw_sign'));

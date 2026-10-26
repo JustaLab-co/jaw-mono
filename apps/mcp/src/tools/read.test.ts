@@ -211,6 +211,7 @@ describe('read tools', () => {
       'jaw_get_permissions',
       'jaw_get_sign_status',
       'jaw_grant_permissions',
+      'jaw_prepare_calls',
       'jaw_read_contracts',
       'jaw_resolve_name',
       'jaw_revoke_permission',
