@@ -40,11 +40,7 @@ const APPROVE_UNKNOWN = 'This batch approves a token this screen does not know. 
 const CANNOT_READ_RELAY = 'This screen cannot read this Relay call. Check the raw details before you confirm.';
 const CANNOT_READ_ACROSS = 'This screen cannot read this Across call. Check the raw details before you confirm.';
 const CANNOT_READ = { alert: CANNOT_READ_RELAY };
-const DEPOSIT_STEP = { label: 'Relay deposit' };
-const ACROSS_STEP = { label: 'Across deposit' };
-
-const APPROVE_STEP = { label: 'Approve USDC for Relay' };
-const ACROSS_APPROVE_STEP = { label: 'Approve USDC for Across' };
+const PLAIN_STEP = null;
 
 const word = (hex: string) => hex.replace(/^0x/, '').toLowerCase().padStart(64, '0');
 const approve = (spender: string, amount: string): BridgeCall => ({
@@ -57,10 +53,10 @@ const transfer: BridgeCall = {
 };
 
 describe('given the relay-usdc batch the MCP builds, approve then deposit', () => {
-  it('when it is read, then the transfer shows the deposit, both steps get plain labels, and only the Relay warning shows', () => {
+  it('when it is read, then the transfer shows the deposit, both steps carry no alert, and only the Relay warning shows', () => {
     const batch = readBridgeBatch([RELAY_USDC_APPROVE, RELAY_USDC_DEPOSIT], SIGNER);
     expect(batch?.transfer).toMatchObject({ title: 'Deposit to Relay' });
-    expect(batch?.steps).toEqual([APPROVE_STEP, DEPOSIT_STEP]);
+    expect(batch?.steps).toEqual([PLAIN_STEP, PLAIN_STEP]);
     expect(batch?.notices).toEqual([RELAY_HIDDEN]);
   });
 
@@ -88,7 +84,7 @@ describe('given the relay-usdc batch the MCP builds, approve then deposit', () =
   it('when the deposit comes before the approve, then the transfer stays and both does-more and unpaired warnings show', () => {
     const batch = readBridgeBatch([RELAY_USDC_DEPOSIT, RELAY_USDC_APPROVE], SIGNER);
     expect(batch?.transfer).toMatchObject({ title: 'Deposit to Relay' });
-    expect(batch?.steps).toEqual([DEPOSIT_STEP, APPROVE_STEP]);
+    expect(batch?.steps).toEqual([PLAIN_STEP, PLAIN_STEP]);
     expect(batch?.notices).toEqual([RELAY_HIDDEN, DOES_MORE, UNPAIRED]);
   });
 
@@ -100,7 +96,7 @@ describe('given the relay-usdc batch the MCP builds, approve then deposit', () =
   it('when a third call transfers tokens, then the transfer stays and the does-more warning shows', () => {
     const batch = readBridgeBatch([RELAY_USDC_APPROVE, RELAY_USDC_DEPOSIT, transfer], SIGNER);
     expect(batch?.transfer).toBeDefined();
-    expect(batch?.steps).toEqual([APPROVE_STEP, DEPOSIT_STEP, null]);
+    expect(batch?.steps).toEqual([PLAIN_STEP, PLAIN_STEP, null]);
     expect(batch?.notices).toEqual([RELAY_HIDDEN, DOES_MORE]);
   });
 
@@ -133,17 +129,17 @@ describe('given an allowance change in place of the plain approve', () => {
   it.each(cases)('when it is %s, then it counts as another call with the cannot-read warning', (_, call) => {
     const batch = readBridgeBatch([call, RELAY_USDC_DEPOSIT], SIGNER);
     expect(batch?.transfer).toBeDefined();
-    expect(batch?.steps).toEqual([CANNOT_READ, DEPOSIT_STEP]);
+    expect(batch?.steps).toEqual([CANNOT_READ, PLAIN_STEP]);
     expect(batch?.alerts).toEqual([CANNOT_READ_RELAY]);
     expect(batch?.notices).toEqual([RELAY_HIDDEN, DOES_MORE]);
   });
 });
 
 describe('given batches that are not one bridge deposit', () => {
-  it('when two deposits are in one batch, then no transfer shows, each step keeps its label, and the batch does more', () => {
+  it('when two deposits are in one batch, then no transfer shows, no step is labelled, and the batch does more', () => {
     const batch = readBridgeBatch([RELAY_USDC_APPROVE, RELAY_USDC_DEPOSIT, RELAY_USDC_FEE_DEPOSIT], SIGNER);
     expect(batch?.transfer).toBeUndefined();
-    expect(batch?.steps).toEqual([APPROVE_STEP, DEPOSIT_STEP, DEPOSIT_STEP]);
+    expect(batch?.steps).toEqual([PLAIN_STEP, PLAIN_STEP, PLAIN_STEP]);
     expect(batch?.notices).toEqual([RELAY_HIDDEN, DOES_MORE]);
   });
 
@@ -156,7 +152,7 @@ describe('given batches that are not one bridge deposit', () => {
   it('when the native deposit is alone, then the transfer shows with only the Relay warning', () => {
     const batch = readBridgeBatch([PROD_RELAY_DEPOSIT], SIGNER);
     expect(batch?.transfer).toMatchObject({ title: 'Deposit to Relay' });
-    expect(batch?.steps).toEqual([DEPOSIT_STEP]);
+    expect(batch?.steps).toEqual([PLAIN_STEP]);
     expect(batch?.notices).toEqual([RELAY_HIDDEN]);
   });
 
@@ -164,7 +160,7 @@ describe('given batches that are not one bridge deposit', () => {
     const unreadable = { ...RELAY_USDC_DEPOSIT, data: RELAY_USDC_DEPOSIT.data + '00' };
     expect(readBridgeBatch([RELAY_USDC_APPROVE, unreadable], SIGNER)).toEqual({
       transfer: undefined,
-      steps: [APPROVE_STEP, CANNOT_READ],
+      steps: [PLAIN_STEP, CANNOT_READ],
       alerts: [CANNOT_READ_RELAY],
       notices: [],
     });
@@ -173,7 +169,7 @@ describe('given batches that are not one bridge deposit', () => {
   it('when there is no deposit and a call outside the bridge, then the batch does more', () => {
     const batch = readBridgeBatch([RELAY_USDC_APPROVE, transfer], SIGNER);
     expect(batch?.transfer).toBeUndefined();
-    expect(batch?.steps).toEqual([APPROVE_STEP, null]);
+    expect(batch?.steps).toEqual([PLAIN_STEP, null]);
     expect(batch?.notices).toEqual([DOES_MORE]);
   });
 
@@ -187,7 +183,7 @@ describe('given batches that are not one bridge deposit', () => {
   it('when the approve is alone, then its step is labelled and nothing else shows', () => {
     expect(readBridgeBatch([RELAY_USDC_APPROVE], SIGNER)).toEqual({
       transfer: undefined,
-      steps: [APPROVE_STEP],
+      steps: [PLAIN_STEP],
       alerts: [],
       notices: [],
     });
@@ -217,7 +213,7 @@ describe('given the prod Across batch, approve to the SpokePool then deposit', (
           { label: 'Fill by', value: 'Thu, 22 Oct 2026 00:30:35 GMT' },
         ],
       },
-      steps: [ACROSS_APPROVE_STEP, ACROSS_STEP],
+      steps: [PLAIN_STEP, PLAIN_STEP],
       alerts: [],
       notices: [],
     });
@@ -241,7 +237,7 @@ describe('given the prod Across batch, approve to the SpokePool then deposit', (
   it('when two prod deposits are in one batch, then no transfer shows and the batch does more', () => {
     const batch = readBridgeBatch([acrossApprove, ACROSS_CALLS.prod, ACROSS_CALLS.prod], SIGNER);
     expect(batch?.transfer).toBeUndefined();
-    expect(batch?.steps).toEqual([ACROSS_APPROVE_STEP, ACROSS_STEP, ACROSS_STEP]);
+    expect(batch?.steps).toEqual([PLAIN_STEP, PLAIN_STEP, PLAIN_STEP]);
     expect(batch?.notices).toEqual([DOES_MORE]);
   });
 });
@@ -258,7 +254,7 @@ describe('given the periphery depositNative of across-native-eth', () => {
         { label: 'Fill by', value: 'Thu, 22 Oct 2026 15:41:35 GMT' },
       ],
     });
-    expect(batch?.steps).toEqual([ACROSS_STEP]);
+    expect(batch?.steps).toEqual([PLAIN_STEP]);
     expect(batch?.notices).toEqual([]);
   });
 
@@ -273,7 +269,7 @@ describe('given an Across deposit that swaps on one side', () => {
   it('when it swaps on the destination, then the transfer names the bought token with no amount', () => {
     const batch = readBridgeBatch([approve(BASE_SPOKE_POOL, '989680'), ACROSS_CALLS.usdcToArb], SIGNER);
     expect(batch?.transfer?.receive).toEqual({ kind: 'swap', chainId: 42161, token: { address: ARB, known: false } });
-    expect(batch?.steps).toEqual([ACROSS_APPROVE_STEP, ACROSS_STEP]);
+    expect(batch?.steps).toEqual([PLAIN_STEP, PLAIN_STEP]);
     expect(batch?.alerts).toEqual([]);
     expect(batch?.notices).toEqual([`This screen does not know the token ${ARB}. Check it before you confirm.`]);
   });
@@ -282,7 +278,7 @@ describe('given an Across deposit that swaps on one side', () => {
     const call = { ...ACROSS_CALLS.usdcToArb, data: ACROSS_CALLS.usdcToArb.data + '00' };
     const batch = readBridgeBatch([approve(BASE_SPOKE_POOL, '989680'), call], SIGNER);
     expect(batch?.transfer).toBeUndefined();
-    expect(batch?.steps).toEqual([ACROSS_APPROVE_STEP, { alert: CANNOT_READ_ACROSS }]);
+    expect(batch?.steps).toEqual([PLAIN_STEP, { alert: CANNOT_READ_ACROSS }]);
     expect(batch?.alerts).toEqual([CANNOT_READ_ACROSS]);
   });
 
@@ -362,14 +358,10 @@ describe('given an approve the owner must check', () => {
   it.each([
     ['Across', BASE_SPOKE_POOL, ACROSS_CALLS.prod],
     ['Relay', DEPOSITORY, RELAY_USDC_DEPOSIT],
-  ])(
-    'when an %s approve is for a token not in the table, then its step says so and a notice shows',
-    (provider, spender, deposit) => {
-      const batch = readBridgeBatch([{ ...approve(spender, '989680'), to: USDBC }, deposit], SIGNER);
-      expect(batch?.steps[0]).toEqual({ label: `Approve unknown token for ${provider}` });
-      expect(batch?.notices).toContain(APPROVE_UNKNOWN);
-    }
-  );
+  ])('when an %s approve is for a token not in the table, then a notice shows', (_provider, spender, deposit) => {
+    const batch = readBridgeBatch([{ ...approve(spender, '989680'), to: USDBC }, deposit], SIGNER);
+    expect(batch?.notices).toContain(APPROVE_UNKNOWN);
+  });
 
   it('when the approve is unlimited, then the batch leaves it to the token approvals card', () => {
     const batch = readBridgeBatch([approve(BASE_SPOKE_POOL, UNLIMITED), ACROSS_CALLS.prod], SIGNER);
