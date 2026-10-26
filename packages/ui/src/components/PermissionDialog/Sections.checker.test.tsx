@@ -1,11 +1,13 @@
 import { describe, it, expect } from 'vitest';
 import { renderToStaticMarkup } from 'react-dom/server';
 
-import { AllowedCalls, CallRow } from './Sections';
+import { AllowedCalls, CallChecks } from './Sections';
 import type { CallPermission } from './types';
+import type { AddressIdentity } from '../../hooks/useAddressIdentities';
 
 const TARGET = '0x3333333333333333333333333333333333333333';
 const CHECKER = '0x8888888888888888888888888888888888888888';
+const OTHER_CHECKER = '0x9999999999999999999999999999999999999999';
 const ZERO = '0x0000000000000000000000000000000000000000';
 
 const truncate = (address: string) => `${address.slice(0, 6)}…${address.slice(-4)}`;
@@ -15,66 +17,61 @@ const transfer = (checker?: string): CallPermission => ({
   functionSignature: 'transfer(address,uint256)',
   checker,
 });
+const approve = (checker?: string): CallPermission => ({
+  ...transfer(checker),
+  selector: '0x095ea7b3',
+  functionSignature: 'approve(address,uint256)',
+});
+
+const unnamed = () => undefined;
+const checks = (calls: CallPermission[], identityOf: (address: string) => AddressIdentity | undefined = unnamed) =>
+  renderToStaticMarkup(<CallChecks calls={calls} identityOf={identityOf} truncateAddress={truncate} />);
 
 /**
  * A checker is part of the permission the user signs: the manager asks it to approve every
- * matching call. The SDK knows nothing about what a given checker enforces, so the screen names
- * the contract that enforces the rule, rather than leaving it out.
+ * matching call. It gets its own section, so it reads on its own: which contract checks, and
+ * which calls it checks.
  */
-describe('a call checker on the grant screen', () => {
-  const row = (call: CallPermission) =>
-    renderToStaticMarkup(
-      <ul>
-        <CallRow call={call} truncateAddress={truncate} />
-      </ul>
-    );
+describe('the call checks section of the grant screen', () => {
+  it('names the checker contract and the function it checks', () => {
+    const html = checks([transfer(CHECKER)]);
 
-  it('names the contract that enforces the extra rule', () => {
-    const html = row(transfer(CHECKER));
-
+    expect(html).toContain('Call checks');
+    expect(html).toContain('0x8888…8888');
     expect(html).toContain('transfer(address,uint256)');
-    expect(html).toContain('Extra rule enforced by');
-    expect(html).toContain('0x8888…8888');
-    expect(html).not.toContain('Unverified');
   });
 
-  it('still shows the rule on an any-function call, where it guards every call to the contract', () => {
-    const html = row({ ...transfer(CHECKER), selector: '0x32323232', functionSignature: '' });
-
-    expect(html).toContain('Any function');
-    expect(html).toContain('Extra rule enforced by');
-  });
-
-  it.each([undefined, ZERO])('shows no rule when the checker is %s', (checker) => {
-    expect(row(transfer(checker))).not.toContain('Extra rule');
-  });
-
-  it('names the checker contract on the collapsed card, so it shows before anything is opened', () => {
-    const html = renderToStaticMarkup(
-      <AllowedCalls calls={[transfer(CHECKER), transfer()]} identityOf={() => undefined} truncateAddress={truncate} />
+  it('shows a name the checker is known by above its address', () => {
+    const html = checks([transfer(CHECKER)], (address) =>
+      address === CHECKER ? ({ clearSigningName: 'Recipient Guard' } as AddressIdentity) : undefined
     );
 
-    expect(html).toContain('Extra rule enforced by');
+    expect(html).toContain('Recipient Guard');
     expect(html).toContain('0x8888…8888');
   });
 
-  it('names a checker once on the collapsed card, however many calls it guards', () => {
-    const html = renderToStaticMarkup(
-      <AllowedCalls
-        calls={[transfer(CHECKER), { ...transfer(CHECKER), selector: '0x095ea7b3' }]}
-        identityOf={() => undefined}
-        truncateAddress={truncate}
-      />
-    );
+  it('gives each checker one row, listing every function it checks', () => {
+    const html = checks([transfer(CHECKER), approve(CHECKER), transfer(OTHER_CHECKER)]);
 
-    expect(html.split('Extra rule enforced by').length - 1).toBe(1);
+    expect(html.split('0x8888…8888').length - 1).toBe(1);
+    expect(html).toContain('0x9999…9999');
+    expect(html).toContain('approve(address,uint256)');
   });
 
-  it('says nothing about rules on a collapsed card without any', () => {
+  it('reads as a safeguard, not a warning', () => {
+    expect(checks([transfer(CHECKER)])).not.toContain('text-warning');
+  });
+
+  it.each([[[transfer()]], [[transfer(ZERO)]]])('renders nothing for calls without a checker', (calls) => {
+    expect(checks(calls)).toBe('');
+  });
+
+  it('leaves the checker out of the allowed calls card, so it is said once', () => {
     const html = renderToStaticMarkup(
-      <AllowedCalls calls={[transfer(), transfer(ZERO)]} identityOf={() => undefined} truncateAddress={truncate} />
+      <AllowedCalls calls={[transfer(CHECKER)]} identityOf={unnamed} truncateAddress={truncate} />
     );
 
+    expect(html).not.toContain('0x8888…8888');
     expect(html).not.toContain('Extra rule');
   });
 });

@@ -13,13 +13,21 @@ import { CopyButton } from '../CopyButton';
 import { useChainIconURI, useFeeTokenPrice } from '../../hooks';
 import { useAddressIdentities } from '../../hooks/useAddressIdentities';
 import { identityKey } from '../../utils/reverseResolve';
-import { ENS_ONLY } from '../../utils/addressIdentity';
+import { CONTRACT_NAMES, ENS_ONLY } from '../../utils/addressIdentity';
 import { getDisplayAddress } from '../../utils';
 import { resolveBlockReason } from '../../utils/transactionFailure';
 import { isBlockingRevocationProblem, REVOCATION_PROBLEM_TEXT } from '../../utils/permissionExecution';
 import { PermissionDialogProps } from './types';
 import { InlineWarning, PartyRow } from '../primitives';
-import { AllowedCalls, MetaCard, SpendLimits, SpenderPrefundNotice, isWildcard } from './Sections';
+import {
+  AllowedCalls,
+  CallChecks,
+  MetaCard,
+  SpendLimits,
+  SpenderPrefundNotice,
+  hasChecker,
+  isWildcard,
+} from './Sections';
 
 export const PermissionDialog = ({
   open,
@@ -79,8 +87,15 @@ export const PermissionDialog = ({
   const identities = useAddressIdentities(identityInputs, { mainnetRpcUrl, include: ENS_ONLY });
   const identityOf = (address: string | undefined) =>
     address && chainId ? identities[identityKey(address, chainId)] : undefined;
+  // A checker is usually a contract with no ENS name, so it is also looked up by its clear-signing name.
+  const checkerInputs = chainId ? calls.filter(hasChecker).map((call) => ({ address: call.checker, chainId })) : [];
+  const checkerIdentities = useAddressIdentities(checkerInputs, { mainnetRpcUrl, apiKey, include: CONTRACT_NAMES });
+  const checkerIdentityOf = (address: string) =>
+    chainId ? checkerIdentities[identityKey(address, chainId)] : undefined;
   // The confirm button waits until every name is known, so the user approves what they read.
-  const isResolvingAddresses = Object.values(identities).some((identity) => identity.loading.ens);
+  const isResolvingAddresses =
+    Object.values(identities).some((identity) => identity.loading.ens) ||
+    Object.values(checkerIdentities).some((identity) => identity.loading.ens || identity.loading.clearSigning);
 
   // Inside a Radix modal a nested container's wheel events get eaten — drive scrollTop manually.
   const scrollRef = useRef<HTMLDivElement>(null);
@@ -291,6 +306,8 @@ export const PermissionDialog = ({
                 chainId={chainId}
               />
             )}
+
+            <CallChecks calls={calls} identityOf={checkerIdentityOf} truncateAddress={truncateAddress} />
 
             <p className="text-muted-foreground text-body-sm">
               {isGrant

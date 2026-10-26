@@ -1,8 +1,9 @@
 'use client';
 
-import { TriangleAlert } from 'lucide-react';
+import { Info, ShieldCheck, TriangleAlert } from 'lucide-react';
 import { zeroAddress } from 'viem';
 import { Accordion, AccordionContent, AccordionItem, AccordionTrigger } from '../ui/accordion';
+import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '../ui/tooltip';
 import { AccountAvatar } from '../AccountAvatar';
 import { TokenIcon } from '../TokenIcon';
 import { Skeleton } from '../ui/skeleton';
@@ -40,11 +41,23 @@ function WarnBadge() {
 }
 
 /** A section label with its count, sitting above the card it describes. */
-function SectionHeading({ label, count }: { label: string; count: number }) {
+function SectionHeading({ label, count, info }: { label: string; count: number; info?: string }) {
   return (
     <div className="flex items-baseline gap-1.5 pl-3">
       <Eyebrow>{label}</Eyebrow>
       <span className="text-muted-foreground text-code font-mono font-medium">{count}</span>
+      {info && (
+        <TooltipProvider delayDuration={0}>
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <Info className="text-muted-foreground size-3 cursor-help self-center" aria-label={info} />
+            </TooltipTrigger>
+            <TooltipContent side="top">
+              <p>{info}</p>
+            </TooltipContent>
+          </Tooltip>
+        </TooltipProvider>
+      )}
     </div>
   );
 }
@@ -212,60 +225,117 @@ export function hasChecker(call: CallPermission): call is CallPermission & { che
   return !!call.checker && call.checker.toLowerCase() !== zeroAddress;
 }
 
+interface CheckerGroup {
+  checker: string;
+  calls: CallPermission[];
+}
+
+/** Each distinct checker with the calls it checks, in first-seen order. */
+function groupCallsByChecker(calls: CallPermission[]): CheckerGroup[] {
+  const groups = new Map<string, CheckerGroup>();
+  for (const call of calls.filter(hasChecker)) {
+    const key = call.checker.toLowerCase();
+    const existing = groups.get(key);
+    if (existing) existing.calls.push(call);
+    else groups.set(key, { checker: call.checker, calls: [call] });
+  }
+  return [...groups.values()];
+}
+
+const functionLabel = (call: CallPermission) =>
+  isWildcard(call.selector) ? 'any function' : call.functionSignature || call.selector || 'Unknown Function';
+
 /**
- * The checker contract named as an extra rule. The SDK can't say what a given checker enforces,
- * so it names the contract.
+ * One checker: a name it is known by when there is one, its address, and the functions it checks.
+ * The SDK can't say what a given checker enforces, so it never shows a description the checker
+ * gives of itself.
  */
-function CheckerNotice({
-  checker,
+function CheckerRow({
+  group,
+  name,
   truncateAddress,
 }: {
-  checker: string;
+  group: CheckerGroup;
+  name?: string | null;
   truncateAddress: (address: string) => string;
 }) {
+  const functions = [...new Set(group.calls.map(functionLabel))];
   return (
-    <span className="text-warning text-body-xs flex items-center gap-1.5">
-      <TriangleAlert className="size-3 flex-none" strokeWidth={2.4} />
-      <span className="min-w-0">
-        Extra rule enforced by <span className="font-mono">{truncateAddress(checker)}</span>
-      </span>
-      <CopyButton value={checker} size={11} label="Copy rule contract address" />
-    </span>
+    <div className="border-border/40 flex items-start gap-2 border-t p-3 first:border-t-0">
+      <ShieldCheck className="text-muted-foreground mt-0.5 size-4 flex-none" strokeWidth={2} />
+      <div className="flex min-w-0 flex-1 flex-col gap-0.5">
+        {name && <span className="text-foreground text-body-sm truncate font-medium">{name}</span>}
+        <span className="flex items-center gap-1.5">
+          <span
+            className={
+              name ? 'text-muted-foreground text-code font-mono' : 'text-foreground text-body-xs font-mono font-medium'
+            }
+          >
+            {truncateAddress(group.checker)}
+          </span>
+          <CopyButton value={group.checker} size={11} label="Copy checker address" />
+        </span>
+        <span className="text-muted-foreground text-body-xs min-w-0 break-all">
+          Checks <span className="font-mono">{functions.join(', ')}</span>
+        </span>
+      </div>
+    </div>
   );
 }
 
 /**
- * One allowed function, plus the checker contract that has to approve each call to it. The SDK
- * can't say what a given checker enforces, so it names the contract; it never shows a
- * description the checker gives of itself.
+ * The contracts the permission manager asks to approve calls before they run. Their own section,
+ * so the user sees each one without opening the allowed calls card.
  */
-export function CallRow({
-  call,
+export function CallChecks({
+  calls,
+  identityOf,
   truncateAddress,
 }: {
-  call: CallPermission;
+  calls: CallPermission[];
+  identityOf: (address: string) => AddressIdentity | undefined;
   truncateAddress: (address: string) => string;
 }) {
+  const groups = groupCallsByChecker(calls);
+  if (groups.length === 0) return null;
+
   return (
-    <li className="flex flex-col gap-1">
-      {isWildcard(call.selector) ? (
-        <span className="text-body-sm text-warning flex items-center gap-1.5 font-semibold">
-          <TriangleAlert className="size-3 flex-none" strokeWidth={2.4} />
-          Any function
-        </span>
-      ) : (
-        <span className="text-foreground text-body-sm flex gap-1.5 font-mono">
-          <span aria-hidden className="text-muted-foreground flex-none">
-            •
-          </span>
-          <span className="min-w-0 break-all">{call.functionSignature || call.selector}</span>
-        </span>
-      )}
-      {hasChecker(call) && (
-        <span className="pl-3">
-          <CheckerNotice checker={call.checker} truncateAddress={truncateAddress} />
-        </span>
-      )}
+    <div className="flex flex-col gap-2">
+      <SectionHeading
+        label="Call checks"
+        count={groups.length}
+        info="Before each call this permission allows, these contracts check it and can block it. They can't allow anything extra."
+      />
+      <div className="border-border rounded-box overflow-hidden border">
+        {groups.map((group) => {
+          const identity = identityOf(group.checker);
+          return (
+            <CheckerRow
+              key={group.checker}
+              group={group}
+              name={identity?.clearSigningName ?? identity?.ensName}
+              truncateAddress={truncateAddress}
+            />
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
+/** One allowed function. */
+export function CallRow({ call }: { call: CallPermission }) {
+  return isWildcard(call.selector) ? (
+    <li className="text-body-sm text-warning flex items-center gap-1.5 font-semibold">
+      <TriangleAlert className="size-3 flex-none" strokeWidth={2.4} />
+      Any function
+    </li>
+  ) : (
+    <li className="text-foreground text-body-sm flex gap-1.5 font-mono">
+      <span aria-hidden className="text-muted-foreground flex-none">
+        •
+      </span>
+      <span className="min-w-0 break-all">{call.functionSignature || call.selector}</span>
     </li>
   );
 }
@@ -368,7 +438,7 @@ function ContractGroup({
           )}
           <ul className="bg-secondary rounded-chip flex flex-col gap-1 p-2">
             {group.calls.map((call, i) => (
-              <CallRow key={i} call={call} truncateAddress={truncateAddress} />
+              <CallRow key={i} call={call} />
             ))}
           </ul>
         </div>
@@ -395,9 +465,6 @@ export function AllowedCalls({
   chainId?: number;
 }) {
   const groups = groupCallsByTarget(calls);
-  // Each distinct checker once, in first-seen order. Outside the disclosure, because the user signs
-  // these rules and should see them without opening anything.
-  const checkers = [...new Map(calls.filter(hasChecker).map((c) => [c.checker.toLowerCase(), c.checker])).values()];
 
   return (
     <Accordion type="single" collapsible>
@@ -408,15 +475,6 @@ export function AllowedCalls({
             <span className="text-muted-foreground text-code font-mono font-medium">{calls.length}</span>
           </span>
         </AccordionTrigger>
-        {checkers.length > 0 && (
-          <ul className="border-border/40 flex flex-col gap-1 border-t px-3 py-2">
-            {checkers.map((checker) => (
-              <li key={checker}>
-                <CheckerNotice checker={checker} truncateAddress={truncateAddress} />
-              </li>
-            ))}
-          </ul>
-        )}
         <AccordionContent className="border-border/40 border-t p-0">
           <Accordion type="multiple">
             {groups.map((group) => (
