@@ -2,6 +2,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { setTestEnv } from '@/connections/testkit';
 
 const caps = vi.hoisted(() => ({ answer: undefined as unknown, fail: false }));
+const chain = vi.hoisted(() => ({ balance: 1n as bigint | Error }));
 const bridgeOptions = vi.hoisted(() => ({ last: undefined as { paymasterContext?: unknown } | undefined }));
 
 vi.mock('@jaw.id/core', async (original) => ({
@@ -10,6 +11,15 @@ vi.mock('@jaw.id/core', async (original) => ({
     if (caps.fail) throw new Error('proxy down');
     return caps.answer;
   },
+}));
+vi.mock('@/lib/chain', async (original) => ({
+  ...(await original<object>()),
+  publicClientFor: () => ({
+    readContract: async () => {
+      if (chain.balance instanceof Error) throw chain.balance;
+      return chain.balance;
+    },
+  }),
 }));
 vi.mock('@jaw.id/agent', async (original) => ({
   ...(await original<object>()),
@@ -59,6 +69,7 @@ const accepting = (...tokens: string[]) => ({
 describe('feeTokenOf', () => {
   beforeEach(() => {
     caps.fail = false;
+    chain.balance = 1n;
     caps.answer = accepting(WETH, USDC);
   });
 
@@ -80,8 +91,24 @@ describe('feeTokenOf', () => {
     expect(await feeTokenOf(grantSpending(WETH))).toBeUndefined();
   });
 
-  it('given the capabilities cannot be read, then there is no fee token', async () => {
+  it('given the capabilities cannot be read, then there is no fee token and the failure is logged', async () => {
     caps.fail = true;
+    const out = vi.spyOn(console, 'log').mockImplementation(() => {});
+    try {
+      expect(await feeTokenOf(grantSpending(WETH))).toBeUndefined();
+      expect(out.mock.calls.map(String).join()).toMatch(/warn.*fee token/);
+    } finally {
+      out.mockRestore();
+    }
+  });
+
+  it('given the session address holds none of the spend token, then the fee stays in USDC', async () => {
+    chain.balance = 0n;
+    expect(await feeTokenOf(grantSpending(WETH, USDC))).toBeUndefined();
+  });
+
+  it('given the balance cannot be read, then the fee stays in USDC', async () => {
+    chain.balance = new Error('rpc down');
     expect(await feeTokenOf(grantSpending(WETH))).toBeUndefined();
   });
 });
