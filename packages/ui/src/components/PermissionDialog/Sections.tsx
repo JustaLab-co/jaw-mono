@@ -41,23 +41,11 @@ function WarnBadge() {
 }
 
 /** A section label with its count, sitting above the card it describes. */
-function SectionHeading({ label, count, info }: { label: string; count: number; info?: string }) {
+function SectionHeading({ label, count }: { label: string; count: number }) {
   return (
     <div className="flex items-baseline gap-1.5 pl-3">
       <Eyebrow>{label}</Eyebrow>
       <span className="text-muted-foreground text-code font-mono font-medium">{count}</span>
-      {info && (
-        <TooltipProvider delayDuration={0}>
-          <Tooltip>
-            <TooltipTrigger asChild>
-              <Info className="text-muted-foreground size-3 cursor-help self-center" aria-label={info} />
-            </TooltipTrigger>
-            <TooltipContent side="top">
-              <p>{info}</p>
-            </TooltipContent>
-          </Tooltip>
-        </TooltipProvider>
-      )}
     </div>
   );
 }
@@ -225,117 +213,73 @@ export function hasChecker(call: CallPermission): call is CallPermission & { che
   return !!call.checker && call.checker.toLowerCase() !== zeroAddress;
 }
 
-interface CheckerGroup {
-  checker: string;
-  calls: CallPermission[];
-}
-
-/** Each distinct checker with the calls it checks, in first-seen order. */
-function groupCallsByChecker(calls: CallPermission[]): CheckerGroup[] {
-  const groups = new Map<string, CheckerGroup>();
-  for (const call of calls.filter(hasChecker)) {
-    const key = call.checker.toLowerCase();
-    const existing = groups.get(key);
-    if (existing) existing.calls.push(call);
-    else groups.set(key, { checker: call.checker, calls: [call] });
-  }
-  return [...groups.values()];
-}
-
-const functionLabel = (call: CallPermission) =>
-  isWildcard(call.selector) ? 'any function' : call.functionSignature || call.selector || 'Unknown Function';
+const CHECKER_INFO =
+  "Before each call to this function, this contract checks it and can block it. It can't allow anything extra.";
 
 /**
- * One checker: a name it is known by when there is one, its address, and the functions it checks.
- * The SDK can't say what a given checker enforces, so it never shows a description the checker
- * gives of itself.
+ * The checker that has to approve each call to a function: a name it is known by when there is one,
+ * and its address. The SDK can't say what a given checker enforces, so it never shows a description
+ * the checker gives of itself.
  */
-function CheckerRow({
-  group,
+function CheckerLine({
+  checker,
   name,
   truncateAddress,
 }: {
-  group: CheckerGroup;
-  name?: string | null;
+  checker: string;
+  name?: string;
   truncateAddress: (address: string) => string;
 }) {
-  const functions = [...new Set(group.calls.map(functionLabel))];
   return (
-    <div className="border-border/40 flex items-start gap-2 border-t p-3 first:border-t-0">
-      <ShieldCheck className="text-muted-foreground mt-0.5 size-4 flex-none" strokeWidth={2} />
-      <div className="flex min-w-0 flex-1 flex-col gap-0.5">
-        {name && <span className="text-foreground text-body-sm truncate font-medium">{name}</span>}
-        <span className="flex items-center gap-1.5">
-          <span
-            className={
-              name ? 'text-muted-foreground text-code font-mono' : 'text-foreground text-body-xs font-mono font-medium'
-            }
-          >
-            {truncateAddress(group.checker)}
-          </span>
-          <CopyButton value={group.checker} size={11} label="Copy checker address" />
-        </span>
-        <span className="text-muted-foreground text-body-xs min-w-0 break-all">
-          Checks <span className="font-mono">{functions.join(', ')}</span>
-        </span>
-      </div>
-    </div>
-  );
-}
-
-/**
- * The contracts the permission manager asks to approve calls before they run. Their own section,
- * so the user sees each one without opening the allowed calls card.
- */
-export function CallChecks({
-  calls,
-  identityOf,
-  truncateAddress,
-}: {
-  calls: CallPermission[];
-  identityOf: (address: string) => AddressIdentity | undefined;
-  truncateAddress: (address: string) => string;
-}) {
-  const groups = groupCallsByChecker(calls);
-  if (groups.length === 0) return null;
-
-  return (
-    <div className="flex flex-col gap-2">
-      <SectionHeading
-        label="Call checks"
-        count={groups.length}
-        info="Before each call this permission allows, these contracts check it and can block it. They can't allow anything extra."
-      />
-      <div className="border-border rounded-box overflow-hidden border">
-        {groups.map((group) => {
-          const identity = identityOf(group.checker);
-          return (
-            <CheckerRow
-              key={group.checker}
-              group={group}
-              name={identity?.clearSigningName ?? identity?.ensName}
-              truncateAddress={truncateAddress}
-            />
-          );
-        })}
-      </div>
-    </div>
-  );
-}
-
-/** One allowed function. */
-export function CallRow({ call }: { call: CallPermission }) {
-  return isWildcard(call.selector) ? (
-    <li className="text-body-sm text-warning flex items-center gap-1.5 font-semibold">
-      <TriangleAlert className="size-3 flex-none" strokeWidth={2.4} />
-      Any function
-    </li>
-  ) : (
-    <li className="text-foreground text-body-sm flex gap-1.5 font-mono">
-      <span aria-hidden className="text-muted-foreground flex-none">
-        •
+    <span className="text-muted-foreground text-body-xs flex items-center gap-1.5 pl-3">
+      <ShieldCheck className="size-3 flex-none" strokeWidth={2.4} />
+      <span className="min-w-0">
+        Checked by {name && <span className="text-foreground font-medium">{name} </span>}
+        <span className="font-mono">{truncateAddress(checker)}</span>
       </span>
-      <span className="min-w-0 break-all">{call.functionSignature || call.selector}</span>
+      <TooltipProvider delayDuration={0}>
+        <Tooltip>
+          <TooltipTrigger asChild>
+            <Info className="size-3 flex-none cursor-help" aria-label={CHECKER_INFO} />
+          </TooltipTrigger>
+          <TooltipContent side="top">
+            <p>{CHECKER_INFO}</p>
+          </TooltipContent>
+        </Tooltip>
+      </TooltipProvider>
+      <CopyButton value={checker} size={11} label="Copy checker address" />
+    </span>
+  );
+}
+
+/** One allowed function, and the checker that guards it when there is one. */
+export function CallRow({
+  call,
+  truncateAddress,
+  checkerNameOf,
+}: {
+  call: CallPermission;
+  truncateAddress: (address: string) => string;
+  checkerNameOf?: (address: string) => string | undefined;
+}) {
+  return (
+    <li className="flex flex-col gap-1">
+      {isWildcard(call.selector) ? (
+        <span className="text-body-sm text-warning flex items-center gap-1.5 font-semibold">
+          <TriangleAlert className="size-3 flex-none" strokeWidth={2.4} />
+          Any function
+        </span>
+      ) : (
+        <span className="text-foreground text-body-sm flex gap-1.5 font-mono">
+          <span aria-hidden className="text-muted-foreground flex-none">
+            •
+          </span>
+          <span className="min-w-0 break-all">{call.functionSignature || call.selector}</span>
+        </span>
+      )}
+      {hasChecker(call) && (
+        <CheckerLine checker={call.checker} name={checkerNameOf?.(call.checker)} truncateAddress={truncateAddress} />
+      )}
     </li>
   );
 }
@@ -362,6 +306,7 @@ function ContractGroup({
   resolvedName,
   avatarUrl,
   truncateAddress,
+  checkerNameOf,
   tokenSymbol,
   chainId,
 }: {
@@ -369,6 +314,7 @@ function ContractGroup({
   resolvedName?: string;
   avatarUrl?: string;
   truncateAddress: (address: string) => string;
+  checkerNameOf?: (address: string) => string | undefined;
   /** Set when the target is a known token — it then reads like the spend rows. */
   tokenSymbol?: string;
   chainId?: number;
@@ -438,7 +384,7 @@ function ContractGroup({
           )}
           <ul className="bg-secondary rounded-chip flex flex-col gap-1 p-2">
             {group.calls.map((call, i) => (
-              <CallRow key={i} call={call} />
+              <CallRow key={i} call={call} truncateAddress={truncateAddress} checkerNameOf={checkerNameOf} />
             ))}
           </ul>
         </div>
@@ -450,24 +396,29 @@ function ContractGroup({
 /**
  * "Allowed calls" as a card that is itself a disclosure, with one nested disclosure per contract —
  * so a grant touching several contracts collapses to a single line until the user asks for more.
+ * The exception is a checker: it is part of what the user signs, so the card and every contract
+ * with a checked function open on their own.
  */
 export function AllowedCalls({
   calls,
   identityOf,
   truncateAddress,
+  checkerNameOf,
   tokenMeta,
   chainId,
 }: {
   calls: CallPermission[];
   identityOf: (address: string) => AddressIdentity | undefined;
   truncateAddress: (address: string) => string;
+  checkerNameOf?: (address: string) => string | undefined;
   tokenMeta?: Record<string, { symbol: string }>;
   chainId?: number;
 }) {
   const groups = groupCallsByTarget(calls);
+  const checkedTargets = groups.filter((group) => group.calls.some(hasChecker)).map((group) => group.target);
 
   return (
-    <Accordion type="single" collapsible>
+    <Accordion type="single" collapsible defaultValue={checkedTargets.length > 0 ? 'calls' : undefined}>
       <AccordionItem value="calls" className="border-border rounded-box overflow-hidden border">
         <AccordionTrigger className="items-center px-3 py-2 hover:no-underline">
           <span className="flex flex-1 items-baseline gap-1.5">
@@ -476,7 +427,7 @@ export function AllowedCalls({
           </span>
         </AccordionTrigger>
         <AccordionContent className="border-border/40 border-t p-0">
-          <Accordion type="multiple">
+          <Accordion type="multiple" defaultValue={checkedTargets}>
             {groups.map((group) => (
               <ContractGroup
                 key={group.target}
@@ -484,6 +435,7 @@ export function AllowedCalls({
                 resolvedName={identityOf(group.target)?.ensName ?? undefined}
                 avatarUrl={identityOf(group.target)?.ensAvatar ?? undefined}
                 truncateAddress={truncateAddress}
+                checkerNameOf={checkerNameOf}
                 tokenSymbol={tokenMeta?.[group.target]?.symbol}
                 chainId={chainId}
               />

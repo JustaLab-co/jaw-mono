@@ -19,15 +19,7 @@ import { resolveBlockReason } from '../../utils/transactionFailure';
 import { isBlockingRevocationProblem, REVOCATION_PROBLEM_TEXT } from '../../utils/permissionExecution';
 import { PermissionDialogProps } from './types';
 import { InlineWarning, PartyRow } from '../primitives';
-import {
-  AllowedCalls,
-  CallChecks,
-  MetaCard,
-  SpendLimits,
-  SpenderPrefundNotice,
-  hasChecker,
-  isWildcard,
-} from './Sections';
+import { AllowedCalls, MetaCard, SpendLimits, SpenderPrefundNotice, hasChecker, isWildcard } from './Sections';
 
 export const PermissionDialog = ({
   open,
@@ -90,8 +82,10 @@ export const PermissionDialog = ({
   // A checker is usually a contract with no ENS name, so it is also looked up by its clear-signing name.
   const checkerInputs = chainId ? calls.filter(hasChecker).map((call) => ({ address: call.checker, chainId })) : [];
   const checkerIdentities = useAddressIdentities(checkerInputs, { mainnetRpcUrl, apiKey, include: CONTRACT_NAMES });
-  const checkerIdentityOf = (address: string) =>
-    chainId ? checkerIdentities[identityKey(address, chainId)] : undefined;
+  const checkerNameOf = (address: string) => {
+    const identity = chainId ? checkerIdentities[identityKey(address, chainId)] : undefined;
+    return identity?.clearSigningName ?? identity?.ensName ?? undefined;
+  };
   // The confirm button waits until every name is known, so the user approves what they read.
   const isResolvingAddresses =
     Object.values(identities).some((identity) => identity.loading.ens) ||
@@ -302,12 +296,11 @@ export const PermissionDialog = ({
                 calls={calls}
                 identityOf={identityOf}
                 truncateAddress={truncateAddress}
+                checkerNameOf={checkerNameOf}
                 tokenMeta={tokenMeta}
                 chainId={chainId}
               />
             )}
-
-            <CallChecks calls={calls} identityOf={checkerIdentityOf} truncateAddress={truncateAddress} />
 
             <p className="text-muted-foreground text-body-sm">
               {isGrant
