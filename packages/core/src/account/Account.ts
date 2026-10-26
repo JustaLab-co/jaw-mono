@@ -1,5 +1,5 @@
 import type { Address, Hash, Hex, TypedDataDefinition, TypedData, LocalAccount } from 'viem';
-import { isHex, encodeFunctionData, erc20Abi, createPublicClient, numberToHex } from 'viem';
+import { isHex, encodeFunctionData, erc20Abi, createPublicClient, numberToHex, zeroAddress } from 'viem';
 import { toWebAuthnAccount, type SmartAccount } from 'viem/account-abstraction';
 import {
     createSmartAccount,
@@ -1384,9 +1384,11 @@ export class Account {
         const relayResponse = await getPermissionFromRelay(permissionId, this._apiKey);
 
         // Transform relay response to WalletGrantPermissionsResponse format
+        // Every call carries its checker, as on the grant response, so the hash can be rebuilt.
         const calls: CallPermissionDetail[] = relayResponse.calls.map((call) => ({
             target: call.target as Address,
             selector: call.selector as Hex,
+            checker: (call.checker as Address) || zeroAddress,
         }));
 
         const spends: SpendPermissionDetail[] = relayResponse.spends.map((spend) => ({
