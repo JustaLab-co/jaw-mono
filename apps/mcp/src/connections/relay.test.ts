@@ -20,9 +20,17 @@ const { seen, fromServer, sessions, silent, cliJoined, dropped } = relay;
 setTestEnv();
 process.env.JAW_RELAY_URL = relay.url;
 process.env.JAW_MCP_API_KEY = 'server-secret-key';
-const { appNameOf, connectRelay, ownerRelay, PageGone, resumeWallet, SESSION_LIMITS, WalletBusy } = await import(
-  './relay'
-);
+const {
+  appNameOf,
+  connectRelay,
+  ownerRelay,
+  PageAccountChanged,
+  PageGone,
+  relaySessionTag,
+  resumeWallet,
+  SESSION_LIMITS,
+  WalletBusy,
+} = await import('./relay');
 const openRelay = (chainId: number, ms = 30_000, client?: { clientId: string; clientName: string }) =>
   ownerRelay(chainId, new Date(Date.now() + ms), client);
 afterAll(() => relay.close());
@@ -678,6 +686,36 @@ const sign = (ask: (method: string, params: unknown[]) => Promise<unknown>) => a
 const never = () => new Promise<never>(() => {});
 const soon = () => new Date(Date.now() + 60_000);
 
+/** What this server logged for `session`, by message, in order. */
+function watchLogs() {
+  const spy = vi.spyOn(console, 'log').mockImplementation(() => undefined);
+  return {
+    /** Every line logged, as written: the relay session id itself must never be among them. */
+    raw: () => spy.mock.calls.map(([line]) => String(line)),
+    of: (session: string) =>
+      spy.mock.calls.flatMap(([line]) => {
+        try {
+          const entry = JSON.parse(String(line)) as { relaySession?: unknown; msg?: unknown };
+          return entry.relaySession === relaySessionTag(session) && typeof entry.msg === 'string' ? [entry.msg] : [];
+        } catch {
+          return [];
+        }
+      }),
+  };
+}
+
+/** A socket that joins the session with a key of its own but never saw the link's key, so it cannot read init or answer. */
+async function stranger(link: string) {
+  const url = new URL(link);
+  const publicKey = await exportKeyToHex('public', (await generateKeyPair()).publicKey);
+  const ws = new WebSocket(`${url.searchParams.get('relay')}?session=${url.searchParams.get('session')}&role=browser`);
+  const frames: string[] = [];
+  ws.on('message', (data) => frames.push(String(data)));
+  await new Promise((r) => ws.once('open', r));
+  ws.send(JSON.stringify({ type: 'key_exchange', publicKey }));
+  return { publicKey, frames };
+}
+
 async function restarted(owner: () => Promise<unknown>) {
   const wallet = await openRelay(84532, 60_000);
   const opened = await replayingPage(wallet.url, owner);
@@ -878,6 +916,290 @@ describe('a session the server can rejoin', () => {
   });
 });
 
+describe('a link the owner opens again', () => {
+  afterEach(() => vi.restoreAllMocks());
+  // Shorter than the test timeout, so a run that never hears the new page fails on its own deadline.
+  const openLink = () => openRelay(84532, 10_000);
+  const decides = () => {
+    let decide!: (sig: string) => void;
+    const decided = new Promise<string>((r) => (decide = r));
+    return { owner: () => decided, decide };
+  };
+
+  it("given the owner closes the page while an ask waits, when they open the same link again, then the new page gets init and the same request again, and its answer is the run's answer", async () => {
+    const wallet = await openLink();
+    const session = new URL(wallet.url).searchParams.get('session');
+    const opened = await replayingPage(wallet.url, never);
+    const run = wallet.run(sign);
+    await vi.waitFor(() => expect(opened.ids).toHaveLength(1));
+    opened.close();
+
+    const reopened = await replayingPage(wallet.url, async () => '0xsig');
+
+    expect(await run).toBe('0xsig');
+    expect(reopened.inits()).toBe(1);
+    expect(reopened.ids).toEqual([`${session}:0`]);
+    expect(opened.ids).toEqual([`${session}:0`]);
+    expect(opened.asked()).toBe(1);
+  });
+
+  it('given the page reopened, then joined fires again with the new page key, before the request is sent to it', async () => {
+    const wallet = await openLink();
+    const session = new URL(wallet.url).searchParams.get('session')!;
+    const opened = await replayingPage(wallet.url, never);
+    // How many messages this server had sent when each joined fired.
+    const sentBefore: number[] = [];
+    const joined = vi.fn<(resume: RelayResume) => void>(() => {
+      sentBefore.push(fromServer.get(session) ?? 0);
+    });
+    const run = wallet.run(sign, joined);
+    await vi.waitFor(() => expect(opened.ids).toHaveLength(1));
+    opened.close();
+
+    const reopened = await replayingPage(wallet.url, async () => '0xsig');
+
+    expect(await run).toBe('0xsig');
+    expect(joined).toHaveBeenCalledTimes(2);
+    const [[first], [again]] = joined.mock.calls;
+    expect(first.peer).toBe(opened.publicKey);
+    expect(again).toEqual({ ...first, peer: reopened.publicKey });
+    // The first init; then that init, the request and the new init, and not yet the request again.
+    expect(sentBefore).toEqual([1, 3]);
+  });
+
+  it('given the page reopened and the server restarted, when it rejoins, then it reaches the page the owner has open and the owner is asked once there', async () => {
+    const wallet = await openLink();
+    const opened = await replayingPage(wallet.url, never);
+    const saved: RelayResume[] = [];
+    const first = wallet.run(sign, (resume) => {
+      saved.push(resume);
+    });
+    await vi.waitFor(() => expect(opened.ids).toHaveLength(1));
+    opened.close();
+    const { owner, decide } = decides();
+    const reopened = await replayingPage(wallet.url, owner);
+    await vi.waitFor(() => expect(reopened.ids).toHaveLength(1));
+    wallet.close();
+    await first.catch(() => undefined);
+
+    const resumed = await resumeWallet(saved.at(-1)!, wallet.url, soon());
+    const answer = resumed!.run(sign);
+    await vi.waitFor(() => expect(reopened.ids).toHaveLength(2));
+    decide('0xsig');
+
+    expect(await answer).toBe('0xsig');
+    expect(reopened.asked()).toBe(1);
+  });
+
+  it('given the same page sends its key again, then nothing is sent again', async () => {
+    const wallet = await openLink();
+    const session = new URL(wallet.url).searchParams.get('session')!;
+    const { owner, decide } = decides();
+    const opened = await replayingPage(wallet.url, owner);
+    const joined = vi.fn();
+    const run = wallet.run(sign, joined);
+    await vi.waitFor(() => expect(opened.ids).toHaveLength(1));
+
+    opened.greet();
+    decide('0xsig');
+
+    expect(await run).toBe('0xsig');
+    // The relay counts this server's frames in the order they were sent, so once the page has the shutdown each one before it is counted.
+    await opened.shutdown;
+    expect(fromServer.get(session)).toBe(3);
+    expect(opened.inits()).toBe(1);
+    expect(opened.ids).toHaveLength(1);
+    expect(joined).toHaveBeenCalledTimes(1);
+  });
+
+  it('given another page takes the link while an ask waits, then the relay cuts off the page the owner left, which is never asked again, and the run takes the new page answer', async () => {
+    const wallet = await openLink();
+    const session = new URL(wallet.url).searchParams.get('session')!;
+    const left = decides();
+    const opened = await replayingPage(wallet.url, left.owner);
+    const run = wallet.run(sign);
+    await vi.waitFor(() => expect(opened.ids).toHaveLength(1));
+    const took = decides();
+    const reopened = await replayingPage(wallet.url, took.owner);
+    await vi.waitFor(() => expect(opened.closedWith()).toBe(4003));
+    await vi.waitFor(() => expect(reopened.ids).toHaveLength(1));
+
+    left.decide('0xleft');
+    await vi.waitFor(() => expect(opened.answered).toHaveLength(1));
+    took.decide('0xtook');
+
+    expect(await run).toBe('0xtook');
+    expect(seen).not.toContain(opened.answered[0]);
+    expect(opened.ids).toEqual([`${session}:0`]);
+    expect(opened.asked()).toBe(1);
+  });
+
+  it('given an ask answered before the page reopened, then the new page is sent only the ask still waiting', async () => {
+    const wallet = await openLink();
+    const session = new URL(wallet.url).searchParams.get('session')!;
+    const opened = await replayingPage(wallet.url, async (method) =>
+      method === 'wallet_getCapabilities' ? { '0x14a34': {} } : never()
+    );
+    const run = wallet.run(async (ask) => {
+      await ask('wallet_getCapabilities', []);
+      return sign(ask);
+    });
+    await vi.waitFor(() => expect(opened.ids).toHaveLength(2));
+
+    const reopened = await replayingPage(wallet.url, async () => '0xsig');
+
+    expect(await run).toBe('0xsig');
+    expect(reopened.ids).toEqual([`${session}:1`]);
+  });
+
+  /** A real public key with one byte written so it is not hex yet still decodes the same: 06 as 6z, since the decoder stops at the z. */
+  const lookalike = async () => {
+    const spki = await exportKeyToHex('public', (await generateKeyPair()).publicKey);
+    expect(spki.slice(8, 10)).toBe('06');
+    return `${spki.slice(0, 8)}6z${spki.slice(10)}`;
+  };
+
+  it.each([
+    ['is not hex', async () => 'zz'],
+    ['is hex but no key', async () => 'abcd'],
+    ['would decode to a key but is not hex', lookalike],
+  ])(
+    'given the page in use sends a key that %s while an ask waits, then the key is dropped and that page still answers',
+    async (_, bad) => {
+      const logs = watchLogs();
+      const wallet = await openLink();
+      const session = new URL(wallet.url).searchParams.get('session')!;
+      const { owner, decide } = decides();
+      const opened = await replayingPage(wallet.url, owner);
+      const joined = vi.fn();
+      const run = wallet.run(sign, joined);
+      await vi.waitFor(() => expect(opened.ids).toHaveLength(1));
+
+      opened.raw({ type: 'key_exchange', publicKey: await bad() });
+      decide('0xsig');
+
+      expect(await run).toBe('0xsig');
+      await opened.shutdown;
+      expect(opened.inits()).toBe(1);
+      expect(joined).toHaveBeenCalledTimes(1);
+      expect(logs.of(session)).toEqual(['relay key dropped']);
+      expect(JSON.stringify(logs.raw())).not.toContain(session);
+    }
+  );
+
+  it('given a key nobody can answer arrives while the page in use is still there, then that page keeps the session and its answer is the run answer', async () => {
+    const wallet = await openLink();
+    const { owner, decide } = decides();
+    const opened = await replayingPage(wallet.url, owner);
+    const joined = vi.fn();
+    const run = wallet.run(sign, joined);
+    await vi.waitFor(() => expect(opened.ids).toHaveLength(1));
+    const unusable = await exportKeyToHex('public', (await generateKeyPair()).publicKey);
+
+    opened.raw({ type: 'key_exchange', publicKey: unusable });
+    decide('0xsig');
+
+    expect(await run).toBe('0xsig');
+    expect(opened.ids).toHaveLength(1);
+    expect(joined).toHaveBeenCalledTimes(1);
+  });
+
+  it('given a socket keys in that never says it is ready, when the owner opens the link again, then the owner page takes over and joined never hears the unready key', async () => {
+    const logs = watchLogs();
+    const wallet = await openLink();
+    const session = new URL(wallet.url).searchParams.get('session')!;
+    const opened = await replayingPage(wallet.url, never);
+    const joined = vi.fn<(resume: RelayResume) => void>();
+    const run = wallet.run(sign, joined);
+    await vi.waitFor(() => expect(opened.ids).toHaveLength(1));
+    const unready = await stranger(wallet.url);
+    // The init it cannot read.
+    await vi.waitFor(() => expect(unready.frames).toHaveLength(1));
+
+    const reopened = await replayingPage(wallet.url, async () => '0xsig');
+
+    expect(await run).toBe('0xsig');
+    expect(joined.mock.calls.map(([resume]) => resume.peer)).toEqual([opened.publicKey, reopened.publicKey]);
+    expect(reopened.ids).toEqual([`${session}:0`]);
+    expect(logs.of(session)).toEqual(['relay page reopened', 'relay page reopened', 'relay page took over']);
+  });
+
+  describe('given the owner was asked for the account before the page reopened', () => {
+    const ACCOUNT = '0x00000000000000000000000000000000000000Aa';
+    const ANOTHER = '0x00000000000000000000000000000000000000bb';
+    /** A first page that answers the account request and then leaves the signature waiting. */
+    const signedIn = async (identity: string, answer: unknown) => {
+      const wallet = await openLink();
+      const session = new URL(wallet.url).searchParams.get('session')!;
+      const opened = await replayingPage(wallet.url, async (method) => (method === identity ? answer : never()));
+      const run = wallet.run(async (ask) => {
+        await ask(identity, []);
+        return sign(ask);
+      });
+      await vi.waitFor(() => expect(opened.ids).toHaveLength(2));
+      return { wallet, session, run };
+    };
+
+    it('when the new page shows the same account, then it is asked for the account again, then for the waiting request, under their ids, and its answer is the run answer', async () => {
+      const { wallet, session, run } = await signedIn('eth_requestAccounts', [ACCOUNT]);
+
+      const reopened = await replayingPage(wallet.url, async (method) =>
+        method === 'eth_requestAccounts' ? [ACCOUNT.toLowerCase()] : '0xsig'
+      );
+
+      expect(await run).toBe('0xsig');
+      expect(reopened.ids).toEqual([`${session}:0`, `${session}:1`]);
+    });
+
+    it('when the new page answers wallet_connect with the same account in another shape, then it takes over', async () => {
+      const { wallet, session, run } = await signedIn('wallet_connect', {
+        accounts: [{ address: ACCOUNT, capabilities: {} }],
+      });
+
+      const reopened = await replayingPage(wallet.url, async (method) =>
+        method === 'wallet_connect' ? { accounts: [ACCOUNT.toLowerCase()] } : '0xsig'
+      );
+
+      expect(await run).toBe('0xsig');
+      expect(reopened.ids).toEqual([`${session}:0`, `${session}:1`]);
+    });
+
+    it.each([
+      ['eth_requestAccounts', [ACCOUNT], [ANOTHER]],
+      ['wallet_connect', { accounts: [{ address: ACCOUNT }] }, { accounts: [{ address: ANOTHER }] }],
+    ])(
+      'when the new page answers %s with another account, then the run ends as PageAccountChanged and the waiting request is never sent to it',
+      async (identity, first, other) => {
+        const logs = watchLogs();
+        const { wallet, session, run } = await signedIn(identity, first);
+
+        const reopened = await replayingPage(wallet.url, async (method) => (method === identity ? other : '0xsig'));
+
+        const err = await run.catch((e: unknown) => e);
+        expect(err).toBeInstanceOf(PageAccountChanged);
+        expect(err).toBeInstanceOf(PageGone);
+        expect(err).toMatchObject({ name: 'PageAccountChanged' });
+        expect(reopened.ids).toEqual([`${session}:0`]);
+        expect(logs.of(session)).toContain('relay page signed in with another account');
+      }
+    );
+
+    it('when the new page refuses the account request, then the run ends with that refusal and the waiting request is never sent to it', async () => {
+      const { wallet, session, run } = await signedIn('eth_requestAccounts', [ACCOUNT]);
+
+      const reopened = await replayingPage(wallet.url, async (method) => {
+        if (method === 'eth_requestAccounts') {
+          throw Object.assign(new Error('User rejected the request'), { code: 4001 });
+        }
+        return '0xsig';
+      });
+
+      await expect(run).rejects.toMatchObject({ name: 'WalletRefused', code: 4001 });
+      expect(reopened.ids).toEqual([`${session}:0`]);
+    });
+  });
+});
+
 describe('the ENS name new accounts get a subname under', () => {
   afterEach(() => {
     delete process.env.JAW_MCP_ENS;
@@ -913,5 +1235,30 @@ describe('the ENS name new accounts get a subname under', () => {
     approve('0xsig');
     expect(await answer).toBe('0xsig');
     expect(opened.lastInit()).toEqual({ type: 'init', chainId: 84532, appName: 'JAW MCP', ens: 'agents.jaw.eth' });
+  });
+});
+
+describe('a connect session', () => {
+  afterEach(() => vi.restoreAllMocks());
+
+  it('given another page opens the connect link while the owner is deciding, then that page is never started or asked, its answer is never the run answer, and the run ends at its deadline', async () => {
+    const logs = watchLogs();
+    const wallet = await connectRelay(84532, new Date(Date.now() + 2_000));
+    const session = new URL(wallet.url).searchParams.get('session')!;
+    let decide!: (signature: string) => void;
+    const owner = await replayingPage(wallet.url, () => new Promise<string>((r) => (decide = r)));
+    const run = wallet.run(sign).catch((err: unknown) => err);
+    await vi.waitFor(() => expect(owner.ids).toHaveLength(1));
+
+    const other = await replayingPage(wallet.url, async () => '0xother');
+    // The relay cuts off the owner's page, so nothing on this link can answer any more.
+    await vi.waitFor(() => expect(owner.closedWith()).toBe(4003));
+    other.greet();
+    decide('0xsig');
+
+    expect(await run).toMatchObject({ name: 'WalletTimedOut' });
+    expect(other.inits()).toBe(0);
+    expect(other.ids).toEqual([]);
+    expect(logs.of(session)).toEqual(['relay later page ignored']);
   });
 });
