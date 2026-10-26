@@ -8,6 +8,9 @@ import {
   RELAY_USDC_APPROVE,
   RELAY_USDC_DEPOSIT,
   RELAY_USDC_ORDER,
+  RELAY_USDC_V32_APPROVE,
+  RELAY_USDC_V32_DEPOSIT,
+  RELAY_USDC_V32_ORDER,
   SIGNER,
 } from './fixtures';
 import { ORDER_TYPES } from './relayOrder';
@@ -25,6 +28,7 @@ const OTHER = '0x1111111111111111111111111111111111111111';
 const OTHER_CHECKSUM = '0x1111111111111111111111111111111111111111';
 const BASE_USDC = '0x833589fcd6edb6e08f4c7c32d4f71b54bda02913';
 const BASE_WETH = '0x4200000000000000000000000000000000000006';
+const USDC_V32_ORDER_ID = '0xd9dcfa1b6777423024cd61fed0c44fca59864cd8b5e0619ca3be985fa34ed70e';
 const USDC_ORDER_ID = '0x0de6aaacb71ffd230278e6aa855c6159b4e9e4be35ed782c48d74b1b42193c54';
 const POLYGON_SOLVER = '0xC1A6E71C0f69aD498AA4029BDF9F8CDBa79f9678';
 const NOT_ROUTER = pad(OTHER);
@@ -88,6 +92,23 @@ describe('given the relay-usdc batch and the order the MCP sends with it', () =>
   it('when the order hashes to the deposit id, then the transfer shows destination, recipient, minimum and refund, and no Relay notice', () => {
     const batch = usdcBatch(RELAY_USDC_ORDER);
     expect(batch?.transfer).toEqual(USDC_ORDER_TRANSFER);
+    expect(batch?.notices).toEqual([]);
+  });
+
+  it('when a live quote names the v3.2 router, then the transfer shows destination, recipient, minimum and refund, and no Relay notice', () => {
+    const batch = readBridgeBatch(
+      [RELAY_USDC_V32_APPROVE, RELAY_USDC_V32_DEPOSIT],
+      SIGNER,
+      capability(RELAY_USDC_V32_ORDER)
+    );
+    expect(batch?.transfer).toEqual({
+      ...USDC_ORDER_TRANSFER,
+      receive: {
+        kind: 'minimum',
+        amount: { ...USDC_ORDER_TRANSFER.receive.amount, amount: 9_776_602n },
+      },
+      details: [...USDC_ORDER_TRANSFER.details.slice(0, 3), orderDetail(USDC_V32_ORDER_ID)],
+    });
     expect(batch?.notices).toEqual([]);
   });
 

@@ -158,7 +158,7 @@ function knownRoute(order: Order, origin: string): boolean {
   const viaRouter = (chain: string, extraData: Hex) => {
     const route = routeOf(chain);
     if (!route) return false;
-    return sameBytes(extraData, pad(route.erc20Router)) || (testnet && extraData === '0x');
+    return route.erc20Routers.some((router) => sameBytes(extraData, pad(router))) || (testnet && extraData === '0x');
   };
   const solvers = routeOf(order.solverChainId)?.solvers ?? [];
   return (
