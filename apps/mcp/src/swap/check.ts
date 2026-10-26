@@ -16,7 +16,8 @@ export type CheckCode =
   | 'tx_chain'
   | 'input_amount'
   | 'approve_token'
-  | 'approve_spender';
+  | 'approve_spender'
+  | 'order_too_large';
 
 export type QuoteRequest = { originChainId: number; originToken: string; amount: string };
 
@@ -31,6 +32,7 @@ export type CheckedQuote = {
     minOutputAmount: string;
     expectedFillTimeSec: number;
     feesUsd?: string;
+    orderData?: Record<string, unknown>;
   };
 };
 
@@ -42,6 +44,7 @@ export const QUOTE_ID = /^(aurora:0x[0-9a-fA-F]{40}|across:[A-Za-z0-9-]{1,64}|re
 const PROVIDERS: ReadonlySet<string> = new Set<Provider>(['across', 'relay']);
 
 const usd = /^[0-9]+(\.[0-9]+)?$/;
+const MAX_ORDER_CHARS = 32_768;
 
 const quoteShape = z.object({
   quoteId: z.string(),
@@ -52,6 +55,10 @@ const quoteShape = z.object({
   expectedFillTimeSec: z.number().nonnegative(),
   fees: z.object({ totalUsd: z.string().regex(usd).optional().catch(undefined) }),
   transactions: z.array(z.object({ chainId: z.number(), to: z.string(), data: z.string(), value: z.string() })),
+  relayOrder: z
+    .object({ orderData: z.record(z.string(), z.unknown()) })
+    .optional()
+    .catch(undefined),
 });
 
 export function checkQuote(request: QuoteRequest, body: unknown): CheckResult {
@@ -83,6 +90,8 @@ export function checkQuote(request: QuoteRequest, body: unknown): CheckResult {
     if (approve.to.toLowerCase() !== request.originToken.toLowerCase()) return fail('approve_token');
     if (spender.toLowerCase() !== deposit.to.toLowerCase()) return fail('approve_spender');
   }
+  const orderData = provider === 'relay' ? quote.relayOrder?.orderData : undefined;
+  if (orderData && JSON.stringify(orderData).length > MAX_ORDER_CHARS) return fail('order_too_large');
 
   const feesUsd = quote.fees.totalUsd;
   return {
@@ -96,6 +105,7 @@ export function checkQuote(request: QuoteRequest, body: unknown): CheckResult {
       minOutputAmount: quote.minOutputAmount,
       expectedFillTimeSec: quote.expectedFillTimeSec,
       ...(feesUsd !== undefined ? { feesUsd } : {}),
+      ...(orderData && { orderData }),
     },
   };
 }

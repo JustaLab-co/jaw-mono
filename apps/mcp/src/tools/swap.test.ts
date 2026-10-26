@@ -1,3 +1,4 @@
+import { randomBytes } from 'node:crypto';
 import { eq, sql } from 'drizzle-orm';
 import type { PgUpdateSetSource } from 'drizzle-orm/pg-core';
 import {
@@ -818,11 +819,44 @@ describe('the owner approves the deposit', () => {
           { kind: 'deposit', to: transactions[1].to, value: '0' },
         ],
       });
+      const order = 'relayOrder' in answer.result.data ? answer.result.data.relayOrder.orderData : undefined;
       expect(asked[1].params).toEqual([
-        { version: '2.0.0', chainId: '0x2105', from: t.account, atomicRequired: true, calls: transactions },
+        {
+          version: '2.0.0',
+          chainId: '0x2105',
+          from: t.account,
+          atomicRequired: true,
+          calls: transactions,
+          ...(order && { capabilities: { jawRelayOrder: { optional: true, orderData: order } } }),
+        },
       ]);
       expect(result.structuredContent?.summary).toContain('in one batch on chain 8453');
       expect(row).toMatchObject({ state: 'deposit_sent', callsId: '0xcalls' });
+    }
+  );
+
+  it.each([
+    ['a relayOrder that is not an object', 'order'],
+    ['orderData that is not an object', { orderData: 'order' }],
+    ['orderData that is a list', { orderData: [1] }],
+  ])(
+    'given a Relay quote with %s, when the owner approves, then the row keeps no order and the wallet gets no capability',
+    async (_, relayOrder) => {
+      const { t } = await connected();
+      const quoteId = `relay:0x${randomBytes(32).toString('hex')}`;
+      backend.answer = { result: { data: { ...relayUsdc.result.data, quoteId, relayOrder } } };
+      const failedOffChain: Ask = async () => ({ status: 400 });
+
+      const { row } = await approve(t, sendingAs(t.account, approved, failedOffChain), {
+        originChainId: 8453,
+        originToken: '0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913',
+        destinationToken: '0x82aF49447D8a07e3bd95BD0d56f35241523fBab1',
+        amount: relayUsdc.result.data.inputAmount,
+      });
+
+      expect(row).toMatchObject({ quoteId, state: 'deposit_sent', callsId: '0xcalls' });
+      expect(row.quote).not.toHaveProperty('orderData');
+      expect(asked[1].params[0]).not.toHaveProperty('capabilities');
     }
   );
 
