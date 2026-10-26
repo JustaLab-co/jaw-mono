@@ -364,8 +364,10 @@ describe('a grant request whose server restarted', () => {
     await lapse(row.id);
 
     const again = await grantPermissions(t, CUSTOM, deps);
-    expect(again.content[0].text).toContain('already open for the owner; it expires in');
-    expect(again.content[0].text).toContain(`\nOpen this link to approve: ${row.walletUrl}\n`);
+    expect(again.content[0].text).toContain(
+      'An earlier permission request is still open for the owner, so this one was not opened. It expires in'
+    );
+    expect(again.content[0].text).toContain(`\nTo approve or decline the earlier request: ${row.walletUrl}\n`);
     expect(again.content[0].text).toContain("reconnecting to the owner's open link");
     await vi.waitFor(() => expect(page.ids).toHaveLength(2));
     owned.decide();

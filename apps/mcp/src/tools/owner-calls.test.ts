@@ -791,13 +791,33 @@ describe('jaw_send_calls refusals', () => {
     expect(result.content[0].text).toMatch(/^calls_in_progress: /);
     expect(spoken(result)).toMatch(
       new RegExp(
-        `^A request is already waiting for the owner's approval; it expires in (29|30) minutes\\.\\nOpen this link to approve: ${first.structuredContent!.url!.replace(/[.?]/g, '\\$&')}$`
+        `^An earlier request is still waiting for the owner's approval, so this one was not opened\\. It expires in (29|30) minutes\\.\\nTo approve or decline the earlier request: ${first.structuredContent!.url!.replace(/[.?]/g, '\\$&')}$`
       )
     );
     expect(toAgent(result).join('\n')).toContain(first.structuredContent!.id);
     expect(toAgent(result).join('\n')).toContain('idempotencyKey agent-key');
     expect(opened).toHaveLength(1);
     expect(await rowsOf(t.connectionId)).toHaveLength(1);
+  });
+
+  it('given a request awaiting the owner, when another key asks, then the link it shows reads as the earlier request, never the new one', async () => {
+    const { t } = await connected();
+    const first = await send(t);
+
+    const result = await send(t, { idempotencyKey: 'second' });
+
+    expect(spoken(result)).toContain('earlier request');
+    expect(spoken(result).split('\n').at(-1)).toBe(
+      `To approve or decline the earlier request: ${first.structuredContent!.url}`
+    );
+    expect(toAgent(result)).toHaveLength(1);
+    expect(toAgent(result)[0]).toContain(
+      'This link is for the earlier request, not the one just asked for: never present it as the new one.'
+    );
+    expect(toAgent(result)[0]).toContain(
+      'Once the earlier request is approved, declined or expired, send the new one again.'
+    );
+    expect(leaks(spoken(result))).toEqual([]);
   });
 
   it('given a request that expired, when another key asks, then it gets its own link', async () => {

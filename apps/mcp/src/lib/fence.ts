@@ -1,9 +1,12 @@
 import { randomBytes } from 'node:crypto';
 import { sanitizeBlock } from '@jaw.id/agent';
 
-// A line of outside text that reads as the server's own note to the agent. Leading spaces, tabs and the mark left
-// where sanitizeBlock stripped an invisible character do not hide it.
-const AGENT_NOTE = /^(?=(?:[^\S\n]|\uFFFD)*for[^\S\n]+the[^\S\n]+agent[^\S\n]*:)/gim;
+// A line of outside text that reads as the server's own note to the agent. Leading spaces, tabs, quotes and the
+// markdown marks of a quote, a list or emphasis do not hide it, nor does the mark left where sanitizeBlock stripped
+// an invisible character, before or between the words, nor a fullwidth colon.
+// Emphasis may close before the colon, and a numbered list item leads with its number.
+const AGENT_NOTE =
+  /^(?=(?:[^\S\n]|\uFFFD|[>*_`"'-]|\d+[.)])*for(?:[^\S\n]|\uFFFD)+the(?:[^\S\n]|\uFFFD)+agent(?:[^\S\n]|[*_])*[:\uFF1A])/gim;
 
 export function fenceText(source: string, text: string, max: number): string {
   const nonce = randomBytes(8).toString('hex');

@@ -155,6 +155,8 @@ describe('jaw_grant_permissions', () => {
     const tool = json.result.tools.find((t: { name: string }) => t.name === 'jaw_grant_permissions');
     expect(tool.title).toBe('Ask the owner for a permission');
     expect(tool.annotations).toEqual({ destructiveHint: false, openWorldHint: false });
+    expect(tool.description).toContain('and that they can revoke it anytime from their wallet');
+    expect(tool.description).not.toContain('one tap');
   });
 
   it('given the x402 preset, then the owner hears the link first, then what it allows and until when, in plain words', async () => {
@@ -168,7 +170,7 @@ describe('jaw_grant_permissions', () => {
     expect(link).toBe(`Open this link to approve: ${url}`);
     expect(said).toBe(
       `It asks the owner to approve a permission for this connection: a spend limit of 1 USDC a day for paid services, until ${onDate(t.expiresAt)}, within the next 30 minutes. ` +
-        'Limits are enforced on chain, and the owner can revoke it anytime with one tap.'
+        'Limits are enforced on chain, and the owner can revoke it anytime from their wallet.'
     );
     expect(leaks(spoken(result))).toEqual([]);
     expect(toAgent(result)).toEqual([
@@ -485,10 +487,20 @@ describe('jaw_grant_permissions', () => {
 
     expect(opened).toBe(1);
     const url = 'structuredContent' in first && first.structuredContent.url;
-    expect(spoken(again)).toMatch(
-      /^A permission request is already waiting for the owner; it expires in (29|30) minutes\.\n/
+    expect(spoken(again).split('\n')).toEqual([
+      expect.stringMatching(
+        /^An earlier permission request is still waiting for the owner, so this one was not opened\. It expires in (29|30) minutes\.$/
+      ),
+      `To approve or decline the earlier request: ${url}`,
+    ]);
+    expect(again.content[0].text).toContain(`\nTo approve or decline the earlier request: ${url}\n`);
+    expect(toAgent(again)).toHaveLength(1);
+    expect(toAgent(again)[0]).toContain(
+      'This link is for the earlier request, not the one just asked for: never present it as the new one.'
     );
-    expect(again.content[0].text).toContain(`\nOpen this link to approve: ${url}\n`);
+    expect(toAgent(again)[0]).toContain(
+      'Once the earlier request is approved, declined or expired, ask for the new one again'
+    );
     expect(leaks(spoken(again))).toEqual([]);
   });
 
@@ -514,7 +526,10 @@ describe('jaw_grant_permissions', () => {
     await walletsSettled();
 
     expect(again.content[0].text).toContain('reconnecting to the owner');
-    expect(again.content[0].text).not.toContain('already waiting for the owner');
+    expect(again.content[0].text).toContain(
+      'An earlier permission request is still open for the owner, so this one was not opened.'
+    );
+    expect(again.content[0].text).not.toContain('still waiting for the owner');
   });
 
   it('given a grant opening its link while another ask finds the wallet pool full, then the other is told that link is waiting', async () => {
@@ -543,8 +558,10 @@ describe('jaw_grant_permissions', () => {
     await walletsSettled();
 
     const url = 'structuredContent' in first && first.structuredContent.url;
-    expect(again.content[0].text).toContain('already waiting for the owner; it expires in');
-    expect(again.content[0].text).toContain(`\nOpen this link to approve: ${url}\n`);
+    expect(again.content[0].text).toContain(
+      'An earlier permission request is still waiting for the owner, so this one was not opened. It expires in'
+    );
+    expect(again.content[0].text).toContain(`\nTo approve or decline the earlier request: ${url}\n`);
   });
 
   it('given the lease of an asked grant link lapses, then the next ask opens a new link that warns not to approve the old one', async () => {

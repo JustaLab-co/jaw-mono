@@ -529,7 +529,7 @@ describe('jaw_grant_permissions', () => {
     expect('structuredContent' in first && first.structuredContent.url).toBe(url);
     expect('isError' in second && second.isError).toBe(true);
     expect(second.content[0].text).toContain(url);
-    expect(second.content[0].text).toContain('already waiting');
+    expect(second.content[0].text).toContain('An earlier permission request is still waiting');
     expect(second.content[0].text).toContain(until!.toISOString());
 
     release.resolve();

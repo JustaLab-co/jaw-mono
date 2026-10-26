@@ -136,13 +136,19 @@ export const gate = (code: string, text: string): PayResult => ({
   [gateCode]: code,
 });
 
-/** `answered`: the service sent a status and a body, which is fenced beside this summary. */
-function summaryOf(row: PaymentRow, out: Omit<PayOutput, 'summary'>, answered: boolean): string {
+/** What came back from the service: a status with a body fenced beside the summary, a status alone, or nothing. */
+type Answer = 'body' | 'empty' | 'none';
+
+const ANSWERED: Record<Answer, string> = {
+  body: 'The service answered.',
+  empty: 'The service answered with no content.',
+  none: "The payment went through, but the service's answer was not received.",
+};
+
+function summaryOf(row: PaymentRow, out: Omit<PayOutput, 'summary'>, answer: Answer): string {
   const moved = out.payerRefilled ? " The connection's balance was topped up from the wallet first." : '';
   const host = new URL(row.url).host;
-  const paid = `Paid ${out.payment ? `${amountOf(out.payment)} to ` : ''}${host}. ${
-    answered ? 'The service answered.' : "The payment went through, but the service's answer was not received."
-  }`;
+  const paid = `Paid ${out.payment ? `${amountOf(out.payment)} to ` : ''}${host}. ${ANSWERED[answer]}`;
   if (out.kind === 'free') return 'Free: no payment was needed.';
   const raise = hintOf(out.refusal, row);
   const notPaid = `Not paid: ${plainReason(out.refusal?.code)}. Nothing was sent.`;
@@ -218,7 +224,11 @@ export function render(row: PaymentRow, fenced: string[], truncated = false): Pa
     ...out,
     ...(fenced.length && { response: fenced }),
     ...(truncated && { responseTruncated: true }),
-    summary: withCut(summaryOf(row, out, row.httpStatus !== null && fenced.length > 0), truncated),
+    // An empty body is not fenced, so a status with nothing fenced is an answer with no content.
+    summary: withCut(
+      summaryOf(row, out, row.httpStatus === null ? 'none' : fenced.length ? 'body' : 'empty'),
+      truncated
+    ),
   });
   return {
     ...reply(structured),

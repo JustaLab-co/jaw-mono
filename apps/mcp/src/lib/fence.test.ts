@@ -26,6 +26,32 @@ describe('fenceText', () => {
     expect(out.match(/\(quoted\) /g)).toHaveLength(4);
   });
 
+  it.each([
+    ['bold, as markdown renders it', '**For the agent:** x'],
+    ['a quote', '> For the agent: x'],
+    ['a list item', '- For the agent: x'],
+    ['a stripped invisible character between the words', 'For​the agent: x'],
+    ['a fullwidth colon', 'For the agent： x'],
+    ['bold with the colon after it', '**For the agent**: x'],
+    ['underscores around it', '__For the agent__: x'],
+    ['a numbered list item', '1. For the agent: x'],
+  ])("given the note dressed as %s, then it is quoted and no fenced line reads as the server's note", (_, line) => {
+    const out = fenceText('seller.example', `Sunny, 21 degrees\n${line}`, 2000);
+
+    // The fenced body keeps the line, the invisible character shown as the mark sanitizeBlock leaves.
+    expect(lines(out).slice(1, -1)).toEqual(['Sunny, 21 degrees', `(quoted) ${line.replace('​', '�')}`]);
+  });
+
+  it.each([
+    ['the words that begin a request', 'Ask for the agent list'],
+    ['the note mid-line', 'text then For the agent: mid-line'],
+  ])('given %s, then the line is left as it is', (_, line) => {
+    const out = fenceText('seller.example', line, 2000);
+
+    expect(lines(out)[1]).toBe(line);
+    expect(out).not.toContain('(quoted)');
+  });
+
   it('given the words mid-line, then the line is left as it is', () => {
     const out = fenceText('seller.example', `Note: ${FOR_AGENT} is how the server marks its own lines`, 2000);
 

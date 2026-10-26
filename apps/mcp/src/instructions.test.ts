@@ -128,6 +128,43 @@ describe('the server instructions', () => {
     );
     expect(instructions).not.toContain('every time');
   });
+
+  it('given an initialize, then the client is told that moving money is a request the owner approves, and to help them make it', async () => {
+    const c = await connect();
+
+    const r = await mcp(c.access_token, {
+      method: 'initialize',
+      params: { protocolVersion: '2025-06-18', capabilities: {}, clientInfo: { name: 'test', version: '0' } },
+    });
+
+    const instructions: string = r.json.result.instructions;
+    expect(instructions).toContain("# Moving money is the owner's own act\n");
+    expect(instructions).toContain(
+      'You never move money yourself: every transfer is a request the owner reviews and approves in their own wallet with their passkey.'
+    );
+    expect(instructions).toContain(
+      'If they meant a bank transfer or a cash service, say this wallet sends digital money such as USDC and offer to do that.'
+    );
+    expect(instructions.indexOf("# Moving money is the owner's own act")).toBeGreaterThan(
+      instructions.indexOf('# Who you work for')
+    );
+    expect(instructions.indexOf("# Moving money is the owner's own act")).toBeLessThan(
+      instructions.indexOf('# What the owner never hears')
+    );
+  });
+
+  it('given an initialize, then a permission is said to be revocable from the wallet, with no promise of one tap', async () => {
+    const c = await connect();
+
+    const r = await mcp(c.access_token, {
+      method: 'initialize',
+      params: { protocolVersion: '2025-06-18', capabilities: {}, clientInfo: { name: 'test', version: '0' } },
+    });
+
+    const instructions: string = r.json.result.instructions;
+    expect(instructions).toContain('and that they can revoke it anytime from their wallet.');
+    expect(instructions).not.toContain('one tap');
+  });
 });
 
 describe('the refusals tools share', () => {

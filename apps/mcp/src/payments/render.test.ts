@@ -71,8 +71,30 @@ describe('render, what the owner hears of a paid service', () => {
     expect(r.structuredContent?.summary).toBe('Paid 0.005 USDC to weather.example. The service answered.');
   });
 
-  it('given a payment the service answered with no body, then the owner is not told it answered', () => {
+  it('given a payment the service answered with a status and no body, then the owner hears it answered with no content', () => {
     const r = render(settledPaid(), []);
+    expect(r.structuredContent?.summary).toBe(
+      'Paid 0.005 USDC to weather.example. The service answered with no content.'
+    );
+    expect(spoken(r)).not.toContain('not received');
+    expect(leaks(spoken(r))).toEqual([]);
+  });
+
+  it('given a 204 with no body, then the owner hears the service answered with no content', () => {
+    const r = render(settledPaid({ httpStatus: 204 }), []);
+    expect(spoken(r)).toBe('Paid 0.005 USDC to weather.example. The service answered with no content.');
+    expect(r.structuredContent?.response).toBeUndefined();
+  });
+
+  it('given a payment still being confirmed that the service answered with no body, then the owner hears it answered with no content', () => {
+    const r = render(settledPaid({ state: 'signed', finishedAt: null, httpStatus: 200 }), []);
+    expect(spoken(r)).toBe(
+      'Paid 0.005 USDC to weather.example. The service answered with no content. The payment is still being confirmed.'
+    );
+  });
+
+  it('given a payment with no answer status and no body, then the owner hears the answer was not received', () => {
+    const r = render(settledPaid({ httpStatus: null }), []);
     expect(r.structuredContent?.summary).toBe(
       "Paid 0.005 USDC to weather.example. The payment went through, but the service's answer was not received."
     );

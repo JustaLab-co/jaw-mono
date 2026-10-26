@@ -113,7 +113,7 @@ describe('lookup of a name with unusual records', () => {
     ]);
     const r = await lookup({ name: 'brantly.eth' }, deps());
     expect(r.addresses[1]).toEqual({ coinType: 0x80000000, default: true, address: BASE_ADDR });
-    expect(r.summary).toContain('any other EVM chain');
+    expect(r.summary).toContain('every other network');
   });
 
   it('given a chain address in lowercase, returns it checksummed', async () => {
@@ -141,6 +141,57 @@ describe('lookup of an address', () => {
   it('given a string that is no address, answers invalid_address without asking the backend', async () => {
     expect(await lookup({ address: '0x1234' }, deps())).toMatchObject({ reason: 'invalid_address' });
     expect(seen).toHaveLength(0);
+  });
+});
+
+describe('what the owner hears from a lookup', () => {
+  const said = (out: Awaited<ReturnType<typeof lookup>>) => spoken({ structuredContent: out });
+
+  it('given a name with an Ethereum address, one on Base and a default, then the owner hears the networks by name', async () => {
+    backend.body = records([
+      { id: 60, name: 'eth', value: VITALIK },
+      { id: 0x80000000, name: 'default', value: BASE_ADDR },
+      { id: 0x80000000 + 8453, name: 'base', value: BASE_ADDR },
+    ]);
+    const out = await lookup({ name: 'vitalik.eth' }, deps());
+    expect(out.summary).toBe(
+      `vitalik.eth resolves to ${VITALIK} on Ethereum. It also has an address on Base and every other network.`
+    );
+    expect(leaks(said(out))).toEqual([]);
+  });
+
+  it('given a name with only an Ethereum address, then the owner hears that one alone', async () => {
+    backend.body = records([{ id: 60, name: 'eth', value: VITALIK }]);
+    const out = await lookup({ name: 'vitalik.eth' }, deps());
+    expect(out.summary).toBe(`vitalik.eth resolves to ${VITALIK} on Ethereum.`);
+    expect(leaks(said(out))).toEqual([]);
+  });
+
+  it('given a name with only a Base address, then the owner hears it has no Ethereum address and where it has one', async () => {
+    backend.body = records([{ id: 0x80000000 + 8453, name: 'base', value: BASE_ADDR }]);
+    const out = await lookup({ name: 'vitalik.eth' }, deps());
+    expect(out.summary).toBe('vitalik.eth has no Ethereum address. It has an address on Base.');
+    expect(leaks(said(out))).toEqual([]);
+  });
+
+  it('given a name with an address on a network nobody names, then the owner hears its number, never a raw chain id', async () => {
+    backend.body = records([{ id: 0x80000000 + 999_999, name: 'unknown', value: BASE_ADDR }]);
+    const out = await lookup({ name: 'vitalik.eth' }, deps());
+    expect(out.summary).toBe('vitalik.eth has no Ethereum address. It has an address on the network with id 999999.');
+    expect(leaks(said(out))).toEqual([]);
+  });
+
+  it('given an address with a primary name, then the owner hears the name', async () => {
+    backend.body = envelope({ address: VITALIK.toLowerCase(), name: 'vitalik.eth', coinType: 60 });
+    const out = await lookup({ address: VITALIK.toLowerCase() }, deps());
+    expect(out.summary).toBe(`${VITALIK} is vitalik.eth.`);
+    expect(leaks(said(out))).toEqual([]);
+  });
+
+  it('given a name with no address, then the owner hears it has none', async () => {
+    const out = await lookup({ name: 'nobody.eth' }, deps());
+    expect(out.summary).toBe('nobody.eth has no address.');
+    expect(leaks(said(out))).toEqual([]);
   });
 });
 

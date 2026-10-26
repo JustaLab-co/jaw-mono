@@ -321,19 +321,21 @@ export async function grantPermissions(t: Tenant, input: GrantInput, deps = DEFA
   const row = 'waiting' in opened ? opened.waiting : opened.opened;
   const found = await lostBefore(row);
   const lost = found && lostLink(found);
+  // The link approves the earlier request, never the one just asked for, so both texts say whose it is.
   if ('waiting' in opened) {
     const open = reconnecting(row);
     return refusal(
       withNext(
         lines(
-          `A permission request is already ${open ? 'open' : 'waiting'} for the owner; it ${expiresIn(row.approveBy)}.`,
-          `Open this link to approve: ${row.walletUrl}`,
+          `An earlier permission request is still ${open ? 'open' : 'waiting'} for the owner, so this one was not opened. It ${expiresIn(row.approveBy)}.`,
+          `To approve or decline the earlier request: ${row.walletUrl}`,
           lost && lost.say
         ),
         sentences(
+          'This link is for the earlier request, not the one just asked for: never present it as the new one.',
           open && RECONNECTING.trim(),
           lost && lost.next,
-          `Check jaw_session_status to see it in force, or ask again once it expires at ${row.approveBy.toISOString()}.`
+          `Once the earlier request is approved, declined or expired, ask for the new one again if jaw_session_status does not already show it in force. The earlier request expires at ${row.approveBy.toISOString()}.`
         )
       )
     );
@@ -350,7 +352,7 @@ export async function grantPermissions(t: Tenant, input: GrantInput, deps = DEFA
           sentences(
             `It asks the owner to approve a permission for this connection: ${ask.what}, until ${onDate(ends)}, ${withinWindow(row.approveBy)}.`,
             replacing && 'It replaces the current spend limit.',
-            'Limits are enforced on chain, and the owner can revoke it anytime with one tap.'
+            'Limits are enforced on chain, and the owner can revoke it anytime from their wallet.'
           ),
           lost && lost.say
         ),
@@ -404,7 +406,7 @@ export function registerGrantTool(server: McpServer) {
         'A spend limit for paid services: pass x402Budget with the USDC per day; it pays web services and the network fees of runs under permissions, and a new one replaces the current one. ' +
         'A custom permission: pass calls (contract and function signature) and spends (a per-period limit on each token those actions move); runs under it go through jaw_session_execute. ' +
         'Offer a permission only when the owner wants an action repeated or run without them, or when you are about to ask approval for the same action a second time; never for something asked once, which is jaw_send_calls. ' +
-        'Before asking, say in one sentence what it allows, on which contract, up to how much per period, until when, and that they can revoke it in one tap, and ask for the narrowest permission that does the job. ' +
+        'Before asking, say in one sentence what it allows, on which contract, up to how much per period, until when, and that they can revoke it anytime from their wallet, and ask for the narrowest permission that does the job. ' +
         'If the owner has no spend limit for paid services yet, runs under a custom permission cannot pay their network fee: say setup takes two approvals and ask for both. ' +
         'Returns a link: show it on its own line before anything else. ' +
         'Then check jaw_session_status on later turns to see it in force; do not wait for the owner to say they approved. ' +

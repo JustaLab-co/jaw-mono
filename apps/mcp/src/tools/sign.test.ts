@@ -538,10 +538,20 @@ describe('jaw_sign', () => {
     const second = await ask(t, { idempotencyKey: 'second', message: 'other' }, idleWallet);
 
     expect(second[gateCode]).toBe('sign_in_progress');
+    expect(second.content[0].text).toMatch(/^sign_in_progress: /);
     expect(toAgent(second).join('\n')).toMatch(/idempotencyKey first/);
     expect(spoken(second)).toMatch(
-      /^A signing request is already waiting for the owner; it expires in (29|30) minutes\.\nOpen this link to sign: http:\/\/keys\.test\/\S+$/
+      /^An earlier signing request is still waiting for the owner, so this one was not opened\. It expires in (29|30) minutes\.\nTo sign or decline the earlier request: http:\/\/keys\.test\/\S+$/
     );
+    expect(spoken(second)).toContain('earlier request');
+    expect(toAgent(second)).toHaveLength(1);
+    expect(toAgent(second)[0]).toContain(
+      'This link is for the earlier request, not the one just asked for: never present it as the new one.'
+    );
+    expect(toAgent(second)[0]).toContain(
+      'Once the earlier request is signed, declined or expired, send the new one again.'
+    );
+    expect(leaks(spoken(second))).toEqual([]);
     expect(opened).toHaveLength(1);
   });
 

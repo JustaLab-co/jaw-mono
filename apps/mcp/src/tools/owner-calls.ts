@@ -160,17 +160,19 @@ const inProgress = (open?: OwnerCallRow) => {
   }
   const follow = `follow ${open.id} with jaw_get_calls_status. A new request can open once it ends.`;
   // A link the wallet answered with an error, or that may have sent, is not one to show the owner.
-  return open.code
-    ? refuse(
-        'calls_in_progress',
-        'Another request from this connection is still open in the wallet.',
-        `Its idempotencyKey is ${open.idempotencyKey}; ${follow}`
-      )
-    : refuse(
-        'calls_in_progress',
-        `A request is already waiting for the owner's approval; it ${expiresIn(open.approveBy)}.\nOpen this link to approve: ${open.walletUrl}`,
-        `Send idempotencyKey ${open.idempotencyKey} with the same input to get it again, or ${follow}`
-      );
+  if (open.code) {
+    return refuse(
+      'calls_in_progress',
+      'Another request from this connection is still open in the wallet.',
+      `Its idempotencyKey is ${open.idempotencyKey}; ${follow}`
+    );
+  }
+  // The link approves the earlier request, never the one just asked for, so both texts say whose it is.
+  return refuse(
+    'calls_in_progress',
+    `An earlier request is still waiting for the owner's approval, so this one was not opened. It ${expiresIn(open.approveBy)}.\nTo approve or decline the earlier request: ${open.walletUrl}`,
+    `This link is for the earlier request, not the one just asked for: never present it as the new one. Send idempotencyKey ${open.idempotencyKey} with that request's own input to get it again, or follow ${open.id} with jaw_get_calls_status. Once the earlier request is approved, declined or expired, send the new one again.`
+  );
 };
 
 const accountBusy = (): SendResult => ({

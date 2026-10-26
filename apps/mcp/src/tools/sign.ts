@@ -343,11 +343,12 @@ export async function sign(t: Tenant, input: SignInput, deps: SignDeps = DEFAULT
     );
   }
   const row = 'opened' in opened ? opened.opened : opened.waiting;
+  // The link signs the earlier request, never the one just asked for, so both texts say whose it is.
   if (row.idempotencyKey !== idempotencyKey) {
     return refuse(
       'sign_in_progress',
-      `A signing request is already waiting for the owner; it ${expiresIn(row.approveBy)}.\nOpen this link to sign: ${row.walletUrl}`,
-      `Send idempotencyKey ${row.idempotencyKey} with its own input to get it again, or follow ${row.id} with jaw_get_sign_status. A new request can open once it ends.`
+      `An earlier signing request is still waiting for the owner, so this one was not opened. It ${expiresIn(row.approveBy)}.\nTo sign or decline the earlier request: ${row.walletUrl}`,
+      `This link is for the earlier request, not the one just asked for: never present it as the new one. Send idempotencyKey ${row.idempotencyKey} with its own input to get it again, or follow ${row.id} with jaw_get_sign_status. Once the earlier request is signed, declined or expired, send the new one again.`
     );
   }
   return answerStored(row);
