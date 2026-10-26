@@ -141,6 +141,11 @@ interface LogFields {
   permissionId?: string;
   callsId?: string;
   code?: string;
+  /**
+   * A fingerprint of a relay session id (`relaySessionTag`): enough to match the log lines of one wallet link, not
+   * the id itself, which lets anyone holding it join the session on the relay and cut the owner's page off.
+   */
+  relaySession?: string;
   /** USDC base units, as strings because JSON has no bigint. */
   fee?: { expected: string; reserve: string; max: string };
 }
