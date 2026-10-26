@@ -233,7 +233,7 @@ describe('TransactionDialog with a bridge deposit', () => {
   it('heads what arrives with the recipient when it is not this account, not "You get"', () => {
     const root = render([approve(SPOKE_POOL), ACROSS_CALLS.usdcOtherRecipient]);
     expect(root.textContent).not.toContain('You get');
-    expect(column(root, 'Recipient gets via Across')).toContain('≥ 9.9902');
+    expect(column(root, 'They get via Across')).toContain('≥ 9.9902');
   });
 
   it('shows a minimum below 0.0001 with its first significant digits, never as 0', () => {
