@@ -322,7 +322,7 @@ describe('authorization server', () => {
     expect(c.status).toBe(200);
   });
 
-  it.fails.each(['wallet:read x402:pay', 'openid offline_access wallet:read x402:pay'])(
+  it.each(['wallet:read x402:pay', 'openid offline_access wallet:read x402:pay'])(
     'accepts a CIMD client whose document declares the scope %s',
     async (scope) => {
       const c = await connect(undefined, { clientId: scoped(scope), redirectUri: 'http://127.0.0.1:9100/cb' });
