@@ -278,10 +278,11 @@ function unwrapPayout({ calls, fallbackRecipient }: Program, weth: Address, acro
   return emitsOnly(calls.slice(i + 2), across) ? { recipient, received: zeroAddress, fee } : undefined;
 }
 
-// Drain to a router, its `execute`, drain the bought token [and the bridged one left], emits. The router sets the amount.
+// Drain to the pinned router, its `execute`, drain the bought token [and the bridged one left], emits.
+// The router sets the amount, so any other router could keep the whole bridged amount.
 function swapPayout({ calls, fallbackRecipient }: Program, bridged: Address, across: AcrossContracts) {
-  const router = drainedTo(calls[0], bridged, across);
-  if (!router || !routerExecute(calls[1], router)) return undefined;
+  const router = across.swapRouter;
+  if (!router || drainedTo(calls[0], bridged, across) !== router || !routerExecute(calls[1], router)) return undefined;
   const bought = drainOf(calls[2], across);
   if (!bought || isAddressEqual(bought.token, bridged)) return undefined;
   const { token, destination: recipient } = bought;

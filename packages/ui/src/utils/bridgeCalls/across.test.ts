@@ -776,16 +776,15 @@ describe('given a destination swap through a router in the handler program', () 
     ['the bridged token drained as the bought one', (p) => void (p.calls[2] = drain(ARB_USDC, ACCOUNT))],
     ['an extra call', (p) => p.calls.splice(4, 0, transfer(ARB, ATTACKER, 1n))],
     ['no router call', (p) => p.calls.splice(1, 1)],
+    [
+      'a router other than the pinned UniversalRouter, even with the bridged token drained to it',
+      (p) => {
+        p.calls[0] = drain(ARB_USDC, ATTACKER);
+        p.calls[1].target = ATTACKER;
+      },
+    ],
   ];
   it.each(mutants)('then %s is unreadable', (_, edit) => {
     expect(readAcrossCall(withProgram(ACROSS_CALLS.usdcToArb, edit))).toEqual(unreadable);
-  });
-
-  it('then any router reads, as long as the bridged token is drained to it', () => {
-    const call = withProgram(ACROSS_CALLS.usdcToArb, (p) => {
-      p.calls[0] = drain(ARB_USDC, OTHER);
-      p.calls[1].target = OTHER;
-    });
-    expect(readAcrossCall(call)).toMatchObject({ receive: swapRead });
   });
 });
