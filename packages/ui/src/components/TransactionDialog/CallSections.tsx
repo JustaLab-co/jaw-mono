@@ -30,7 +30,6 @@ interface DecodeContext {
 }
 
 interface StepOverride {
-  label?: string;
   alert?: string;
 }
 
@@ -48,7 +47,6 @@ export function SingleCallData({
   to,
   data,
   decode,
-  label,
   alert,
   ...ctx
 }: DecodeContext & StepOverride & { to: string; data: string; decode: DecodeResult }) {
@@ -62,9 +60,7 @@ export function SingleCallData({
           </span>
           <span className="flex min-w-0 flex-col items-start">
             <Eyebrow>Calldata</Eyebrow>
-            <span className="text-foreground text-value mt-1 truncate">
-              {label ?? callLabel(decode, 'Contract call')}
-            </span>
+            <span className="text-foreground text-value mt-1 truncate">{callLabel(decode, 'Contract call')}</span>
           </span>
         </span>
       </AccordionTrigger>
@@ -86,7 +82,6 @@ export function BatchStep({
   index,
   nativeSymbol,
   nativeTokenPrice,
-  label,
   alert,
   ...ctx
 }: Omit<DecodeContext, 'chainId'> &
@@ -114,7 +109,7 @@ export function BatchStep({
             {index + 1}
           </span>
           <span className="text-foreground text-value truncate">
-            {label ?? callLabel(decode, transaction.action ?? stepFallbackLabel(index, hasData, value))}
+            {callLabel(decode, transaction.action ?? stepFallbackLabel(index, hasData, value))}
           </span>
           {/* Native value in the header, so a collapsed step still shows what it moves.
               Token amounts live in the calldata, so they only appear once expanded. */}
