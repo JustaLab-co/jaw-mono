@@ -44,9 +44,16 @@ describe('a call checker in the allowed calls card', () => {
   });
 
   it('names the checker under each function it sits on, and only those', () => {
-    const html = card([transfer(CHECKER), transfer(undefined, OTHER_TARGET)]);
+    const approve = { ...transfer(), selector: '0x095ea7b3', functionSignature: 'approve(address,uint256)' };
+    const html = card([transfer(CHECKER), approve]);
 
     expect(html.split('Checked by').length - 1).toBe(1);
+  });
+
+  // The signer refuses a grant like this before the screen opens; the screen must not crash on one.
+  it('draws nothing for a checker that is not a string', () => {
+    expect(() => card([{ ...transfer(), checker: 42 as unknown as string }])).not.toThrow();
+    expect(card([{ ...transfer(), checker: 42 as unknown as string }])).not.toContain('Checked by');
   });
 
   it('reads as a safeguard, not a warning', () => {

@@ -210,7 +210,8 @@ export interface CallGroup {
 
 /** A call the permission manager also runs past a checker contract before executing it. */
 export function hasChecker(call: CallPermission): call is CallPermission & { checker: string } {
-  return !!call.checker && call.checker.toLowerCase() !== zeroAddress;
+  // Typed as a string, but it arrives in a dapp's JSON, so it is checked before it is read as one.
+  return typeof call.checker === 'string' && call.checker.toLowerCase() !== zeroAddress;
 }
 
 const CHECKER_INFO =
