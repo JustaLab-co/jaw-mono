@@ -290,3 +290,27 @@ describe('SessionBridge and the userOp hash', () => {
     ).rejects.toThrow('could not record the hash');
   });
 });
+
+describe('SessionBridge fee failure advice', () => {
+  const WETH = '0x4200000000000000000000000000000000000006';
+  const unsized = new Error('Could not size the ERC-20 paymaster approval for token x on chain 84532: boom');
+  const withContext = (paymasterContext?: Record<string, unknown>) =>
+    new SessionBridge({ apiKey: 'key', chainId: 84532, host: host(), logger: { warn: vi.fn() }, paymasterContext });
+
+  it('given the fee is paid in USDC, then it says to send USDC', async () => {
+    sendCalls.mockRejectedValue(unsized);
+    await expect(send(withContext())).rejects.toThrow(/holds no USDC.*Send it 0\.1 USDC/s);
+  });
+
+  it('given the fee is paid in another token, then it names that token and not USDC', async () => {
+    sendCalls.mockRejectedValue(unsized);
+    const err = await send(withContext({ token: WETH })).catch((e: Error) => e);
+    expect(err.message).toContain(`holds none of the fee token ${WETH}`);
+    expect(err.message).not.toContain('0.1 USDC');
+  });
+
+  it('given the context names the registry USDC, then it still says USDC', async () => {
+    sendCalls.mockRejectedValue(unsized);
+    await expect(send(withContext({ token: USDC_BASE_SEPOLIA }))).rejects.toThrow(/Send it 0\.1 USDC/);
+  });
+});
