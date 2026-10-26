@@ -57,7 +57,6 @@ const SELLER = `127.0.0.1:${(seller.address() as AddressInfo).port}`;
 setTestEnv();
 process.env.JAW_MCP_INSECURE_FETCH_HOSTS = SELLER;
 process.env.JAW_MCP_RPC_URL = 'http://127.0.0.1:9';
-process.env.JAW_MCP_MAINNET_RPC_URL = 'http://127.0.0.1:9';
 
 let token: string;
 let account: string;
