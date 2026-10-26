@@ -6,10 +6,12 @@ import { tenant } from '@/connections/auth';
 import { config } from '@/connections/config';
 import { errorLabel, log } from '@/lib/edge';
 import { reply } from '@/lib/fence';
+import { chainName, listed, networkName } from '@/lib/owner-text';
 import { safeFetch } from '@/lib/safe-fetch';
-import { refusal } from './reply';
+import { refusal, withNext } from './reply';
 
-const MAINNET = 'eip155:1';
+const MAINNET_ID = 1;
+const MAINNET = `eip155:${MAINNET_ID}`;
 const MAINNET_COIN = 60;
 const EVM_FLAG = 0x80000000;
 
@@ -102,11 +104,18 @@ async function addressOf(name: string, deps: ResolveDeps): Promise<Resolved> {
     .filter((a) => a !== undefined);
   if (addresses.length === 0) return unresolved('no_address', `${name} has no address.`, name);
   const mainnet = addresses.find((a) => a.coinType === MAINNET_COIN)?.address ?? null;
-  const where = addresses.map((a) => a.chainId ?? 'any other EVM chain').join(', ');
+  const ethereum = chainName(MAINNET_ID);
+  const others = whereOf(addresses.filter((a) => a.coinType !== MAINNET_COIN));
   const summary = mainnet
-    ? `${name} resolves to ${mainnet} on Ethereum mainnet. It has addresses for ${where}.`
-    : `${name} has no Ethereum mainnet address. It has addresses for ${where}.`;
+    ? `${name} resolves to ${mainnet} on ${ethereum}.${others ? ` It also has an address on ${others}.` : ''}`
+    : `${name} has no ${ethereum} address. It has an address on ${others}.`;
   return resolveOutput.parse({ name, address: mainnet, chainId: MAINNET, addresses, summary });
+}
+
+/** Where a name has an address, for the owner: each network by name, the default entry last as every other one. */
+function whereOf(entries: Resolved['addresses']): string {
+  const named = entries.flatMap((a) => (a.chainId ? [networkName(Number(a.chainId.split(':')[1]))] : []));
+  return listed(entries.some((a) => a.default) ? [...named, 'every other network'] : named);
 }
 
 async function nameOf(address: string, deps: ResolveDeps): Promise<Resolved> {
@@ -145,8 +154,15 @@ export function registerResolveNameTool(server: McpServer) {
   server.registerTool(
     'jaw_resolve_name',
     {
+      title: 'Look up a name or address',
       description:
-        'Resolve an ENS name to its addresses on every chain it has one for, or an Ethereum mainnet address to its primary ENS name. A name answers `address` (its mainnet one) and `addresses`, each with its coin type and its chainId. An entry with `default: true` and no chainId is the address for every other EVM chain. Only EVM addresses are returned. Pass exactly one of `name` or `address`. A reason says why nothing came back.',
+        'Turn a name such as alice.eth into its address, or an address into its primary name. Use it whenever the ' +
+        'owner gives a name as a recipient, before building the transfer. A name answers `address` (its Ethereum one) ' +
+        'and `addresses`, one per network it has an address on: use the one for the network you are sending on, or ' +
+        'the entry with `default: true` when that network has none, and if neither exists tell the owner the name has ' +
+        'no address there. Show the owner the name and the address before sending, and never guess an address from a ' +
+        'name. Use the reverse lookup to show a friendly name for an address in a history or a permission. Only EVM ' +
+        'addresses are returned. Pass exactly one of name or address. A reason says why nothing came back.',
       inputSchema: z.strictObject({
         name: z.string().max(255).optional().describe('An ENS name such as alice.eth'),
         address: z.string().optional().describe('An address to look up the primary name of'),
@@ -158,7 +174,7 @@ export function registerResolveNameTool(server: McpServer) {
       tenant(ctx);
       if (name !== undefined && address === undefined) return answer(await lookup({ name }));
       if (address !== undefined && name === undefined) return answer(await lookup({ address }));
-      return refusal('Pass exactly one of `name` or `address`.');
+      return refusal(withNext('Nothing was looked up.', 'Pass exactly one of `name` or `address`.'));
     }
   );
 }

@@ -1,15 +1,7 @@
 import { ANY_FN_SEL, ANY_TARGET, EMPTY_CALLDATA_FN_SEL } from '@jaw.id/core';
 import { usdcForNetwork } from '@jaw.id/agent';
 import type { McpServer } from '@modelcontextprotocol/server';
-import {
-  formatUnits,
-  isAddress,
-  isAddressEqual,
-  numberToHex,
-  parseUnits,
-  toFunctionSelector,
-  type Address,
-} from 'viem';
+import { isAddress, numberToHex, parseUnits, toFunctionSelector, type Address } from 'viem';
 import { z } from 'zod';
 import { chainClients } from '@/adapters/session-host';
 import { tenant, type Tenant } from '@/connections/auth';
@@ -19,7 +11,15 @@ import { ownerRelay, type OpenWallet } from '@/connections/relay';
 import { spends } from '@/connections/scopes';
 import { SPEND_UNITS } from '@/db/schema';
 import { budgetGrant, readOnChain, type GrantRequest, type ReadPermission } from '@/grants/permission';
-import { followUps, lostBefore, lostPreamble, openLink, RECONNECTING, reconnecting } from '@/grants/requests';
+import {
+  followUps,
+  lostBefore,
+  lostLinkSaid,
+  openLink,
+  RECONNECTING,
+  reconnecting,
+  type PermissionRequestRow,
+} from '@/grants/requests';
 import { grantWork, type GrantPayload } from '@/grants/resume';
 import {
   grantsBeside,
@@ -31,8 +31,9 @@ import {
 } from '@/grants/store';
 import { errorLabel, log } from '@/lib/edge';
 import { reply } from '@/lib/fence';
+import { counted, expiresIn, formatAmount, listed, onDate, spendLimits, withinWindow } from '@/lib/owner-text';
 import { forbiddenTargets } from './owner-calls';
-import { ACCOUNT_BUSY, NO_PAY_SCOPE, refusal } from './reply';
+import { ACCOUNT_BUSY, NO_PAY_SCOPE, refusal, withNext } from './reply';
 
 const MAX_ENTRIES = 10;
 
@@ -60,13 +61,13 @@ const grantInput = z.strictObject({
         .describe('USDC per day, as a decimal such as "1" or "0.5"'),
     })
     .optional()
-    .describe('The x402 budget preset: a daily USDC allowance that payments, refills and swap quotes draw from'),
+    .describe('The spend limit for paid services: a daily USDC limit that payments, refills and swap quotes draw from'),
   calls: z
     .array(z.strictObject({ target: address, functionSignature: signature }))
     .min(1)
     .max(MAX_ENTRIES)
     .optional()
-    .describe('The contract functions the session key may call, each a target and a function signature'),
+    .describe('The contract functions this connection may call, each a target and a function signature'),
   spends: z
     .array(
       z
@@ -87,11 +88,11 @@ const grantInput = z.strictObject({
     )
     .max(MAX_ENTRIES)
     .optional()
-    .describe('How much of each token the session key may move per period'),
+    .describe('How much of each token this connection may move per period'),
   expiresAt: z.iso
     .datetime({ offset: true })
     .optional()
-    .describe("When the grant ends; the connection's own end when absent or later"),
+    .describe("When the permission ends; the connection's own end when absent or later"),
 });
 export type GrantInput = z.input<typeof grantInput>;
 
@@ -116,12 +117,14 @@ interface Asked {
   what: string;
 }
 
+const NOTHING_ASKED = 'Nothing was asked.';
+
 function asked(t: Tenant, input: GrantInput, expiry: number): Asked | string {
   if (input.x402Budget) {
     const usdc = usdcForNetwork(`eip155:${t.chainId}`);
     if (!usdc) return "USDC is not supported on this connection's chain.";
     const allowance = parseUnits(input.x402Budget.perDay, usdc.decimals);
-    if (allowance === 0n) return 'A budget of zero would refuse every payment.';
+    if (allowance === 0n) return `A spend limit of zero would refuse every payment. ${NOTHING_ASKED}`;
     const grant = budgetGrant({
       chainId: t.chainId,
       spender: t.sessionAddress,
@@ -129,17 +132,29 @@ function asked(t: Tenant, input: GrantInput, expiry: number): Asked | string {
       allowance,
       expiry,
     });
-    return { kind: 'x402-budget', grant, what: `${input.x402Budget.perDay} USDC a day` };
+    const perDay = formatAmount(allowance, usdc.decimals, 'USDC');
+    return { kind: 'x402-budget', grant, what: `a spend limit of ${perDay} a day for paid services` };
   }
-  if (!input.calls) return 'Pass x402Budget for the payment budget, or calls (and any spends) for a custom grant.';
+  if (!input.calls) {
+    return withNext(
+      `The request names no permission to ask for. ${NOTHING_ASKED}`,
+      'Pass x402Budget for a spend limit for paid services, or calls (and any spends) for a custom permission.'
+    );
+  }
   const forbidden = forbiddenTargets(t).add(ANY_TARGET.toLowerCase());
   const refused = input.calls.find((c) => forbidden.has(c.target.toLowerCase()));
   if (refused) {
-    return `call_target_refused: a grant to call ${refused.target} is refused: the account itself, the permission manager, the EntryPoint contracts and the any-contract wildcard cannot be granted.`;
+    return withNext(
+      `call_target_refused: A permission can never cover ${refused.target}: the wallet itself and the contracts that guard it are always off limits. ${NOTHING_ASKED}`,
+      'The account itself, the permission manager, the EntryPoint contracts and the any-contract wildcard cannot be granted.'
+    );
   }
   const wildcard = input.calls.find((c) => WILDCARD_SELECTORS.has(toFunctionSelector(c.functionSignature)));
   if (wildcard) {
-    return `call_selector_refused: ${wildcard.functionSignature} hashes to a selector the permission manager reads as any function (or an empty call), so it cannot be granted.`;
+    return withNext(
+      `call_selector_refused: One of the actions asked for would read as any action on that contract, so it cannot be allowed. ${NOTHING_ASKED}`,
+      `${wildcard.functionSignature} hashes to a selector the permission manager reads as any function (or an empty call), so it cannot be granted.`
+    );
   }
   const calls = input.calls.map((c) => ({ target: c.target as Address, functionSignature: c.functionSignature }));
   const spent = (input.spends ?? []).map((s) => ({ ...s, token: s.token as Address, multiplier: s.multiplier ?? 1 }));
@@ -149,7 +164,11 @@ function asked(t: Tenant, input: GrantInput, expiry: number): Asked | string {
     chainId: numberToHex(t.chainId),
     permissions: { calls, spends: spent },
   };
-  return { kind: 'custom', grant, what: `${calls.length} call(s) and ${spent.length} spend limit(s)` };
+  const targets = [...new Map(calls.map((c) => [c.target.toLowerCase(), c.target])).values()];
+  const on = targets.length === 1 ? targets[0] : `${targets.length} contracts (${listed(targets)})`;
+  const actions = `${counted(calls.length, 'allowed action')} on ${on}`;
+  const limits = spendLimits(t.chainId, spent);
+  return { kind: 'custom', grant, what: limits.length ? `${actions} with a limit of ${listed(limits)}` : actions };
 }
 
 /** Revokes the budgets a newer one replaced. One left approved stays replaced, so nothing pays from it. */
@@ -161,38 +180,63 @@ async function revokeOlder(t: Tenant, deps: GrantDeps) {
   }
 }
 
-/** What the connection's live grants let the session key move, summed per token and period. */
-function liveTotals(t: Tenant, held: LiveGrant[]): string {
-  const usdc = usdcForNetwork(`eip155:${t.chainId}`);
-  const sums = new Map<string, { token: string; per: string; amount: bigint }>();
-  for (const { token, unit, multiplier, allowance } of held.flatMap((g) => g.permission.spends)) {
-    const per = unit === 'forever' ? 'in total' : multiplier === 1 ? `per ${unit}` : `per ${multiplier} ${unit}s`;
-    const key = `${token.toLowerCase()}:${per}`;
-    const sum = sums.get(key) ?? { token, per, amount: 0n };
-    sums.set(key, { ...sum, amount: sum.amount + BigInt(allowance) });
-  }
-  if (!sums.size) return 'No grant approved on chain for this connection lets the session key move tokens yet. ';
-  const lines = [...sums.values()].map(({ token, per, amount }) =>
-    usdc && isAddressEqual(token as Address, usdc.address)
-      ? `${formatUnits(amount, usdc.decimals)} USDC ${per}`
-      : `${amount} base units of ${token} ${per}`
+/** For the agent: what the connection's earlier permissions let it move, summed per token and period. */
+function earlier(t: Tenant, held: LiveGrant[]): string {
+  if (!held.length) return '';
+  const limits = spendLimits(
+    t.chainId,
+    held.flatMap((g) => g.permission.spends)
   );
-  return `The ${held.length} grant(s) approved on chain for this connection already let the session key move up to ${lines.join(', ')}. `;
+  if (held.length === 1) {
+    const moves = limits.length
+      ? `it lets this connection move up to ${listed(limits)}`
+      : 'it lets this connection move no tokens';
+    return `The earlier permission on this connection stays in force until it expires or is revoked; ${moves}.`;
+  }
+  const moves = limits.length
+    ? `together they let this connection move up to ${listed(limits)}`
+    : 'none of them lets this connection move tokens';
+  return `The ${held.length} earlier permissions on this connection stay in force until they expire or are revoked; ${moves}.`;
 }
+
+/** The owner's line about a link this server lost after asking, and what the agent should know about it. */
+const lostLink = (lost: PermissionRequestRow) => {
+  const said = lostLinkSaid(lost, 'permission');
+  return {
+    say: said.say,
+    next: `${said.next} A permission approved on the earlier link can go live on chain without this server recording it, and then only jaw_revoke_permission with its id from the wallet ends it.`,
+  };
+};
+
+const lines = (...parts: (string | false | undefined)[]) => parts.filter(Boolean).join('\n');
+const sentences = (...parts: (string | false | undefined)[]) => parts.filter(Boolean).join(' ');
 
 export async function grantPermissions(t: Tenant, input: GrantInput, deps = DEFAULTS) {
   if (input.x402Budget && (input.calls || input.spends || input.expiresAt)) {
-    return refusal('x402Budget is a preset: pass it alone, or pass calls and spends without it.');
+    return refusal(
+      withNext(
+        `A spend limit for paid services is asked for on its own. ${NOTHING_ASKED}`,
+        'x402Budget is a preset: pass it alone, or pass calls and spends without it.'
+      )
+    );
   }
   const requested = input.expiresAt ? new Date(input.expiresAt) : t.expiresAt;
   if (requested.getTime() <= Date.now()) {
-    return refusal(`expiry_in_past: the expiry ${requested.toISOString()} has already passed. Ask for a later one.`);
+    return refusal(
+      withNext(
+        `expiry_in_past: The end date asked for has already passed. ${NOTHING_ASKED}`,
+        `The expiry ${requested.toISOString()} has already passed. Ask for a later one.`
+      )
+    );
   }
   const until = new Date(Date.now() + APPROVE_WITHIN_MS);
   const expiresAt = requested < t.expiresAt ? requested : t.expiresAt;
   if (expiresAt <= until) {
     return refusal(
-      `expiry_too_soon: the grant would end at ${expiresAt.toISOString()}, before the owner's ${APPROVE_WITHIN_MS / 60_000} minutes to approve it are up. Ask for a later expiry.`
+      withNext(
+        `expiry_too_soon: The permission would end before the owner's ${APPROVE_WITHIN_MS / 60_000} minutes to approve it are up. ${NOTHING_ASKED}`,
+        `It would end at ${expiresAt.toISOString()}. Ask for a later expiresAt.`
+      )
     );
   }
   const ask = asked(t, input, Math.floor(expiresAt.getTime() / 1000));
@@ -200,8 +244,10 @@ export async function grantPermissions(t: Tenant, input: GrantInput, deps = DEFA
   if ((await grantsBeside(t.connectionId, ask.kind)) >= LIVE_GRANTS_PER_CONNECTION) await revokeOlder(t, deps);
   if ((await grantsBeside(t.connectionId, ask.kind)) >= LIVE_GRANTS_PER_CONNECTION) {
     return refusal(
-      `This connection already holds ${LIVE_GRANTS_PER_CONNECTION} live grants, the most one connection may hold. ` +
-        'Wait for one to expire, revoke one listed by jaw_connections with jaw_revoke_permission, or call jaw_session_disconnect, which revokes them all, and connect again.'
+      withNext(
+        `This connection already holds ${LIVE_GRANTS_PER_CONNECTION} permissions, the most it can. ${NOTHING_ASKED}`,
+        'Revoke one the owner no longer needs (jaw_connections lists them, jaw_revoke_permission revokes one), or wait for one to expire.'
+      )
     );
   }
   const held = await liveGrants(t.connectionId);
@@ -224,35 +270,52 @@ export async function grantPermissions(t: Tenant, input: GrantInput, deps = DEFA
   if (opened === 'wallet_busy') return refusal('Too many owners are approving right now. Try again in a minute.');
   if (opened === 'account_busy') return refusal(ACCOUNT_BUSY);
   const row = 'waiting' in opened ? opened.waiting : opened.opened;
-  const lost = await lostBefore(row);
-  const warning = lost
-    ? lostPreamble(lost, 'grant') +
-      'Tell the owner not to approve that one: a grant approved there can go live on chain without this server recording it, and then only jaw_revoke_permission with its id from the wallet ends it. '
-    : '';
+  const found = await lostBefore(row);
+  const lost = found && lostLink(found);
+  // The link approves the earlier request, never the one just asked for, so both texts say whose it is.
   if ('waiting' in opened) {
-    const state = reconnecting(row)
-      ? `open at ${row.walletUrl}.${RECONNECTING}`
-      : `still waiting for the owner at ${row.walletUrl}.`;
+    const open = reconnecting(row);
     return refusal(
-      `${warning}A grant request is ${state} Check jaw_session_status on your own to see it in force, or ask again once it expires at ${row.approveBy.toISOString()}.`
+      withNext(
+        lines(
+          `An earlier permission request is still ${open ? 'open' : 'waiting'} for the owner, so this one was not opened. It ${expiresIn(row.approveBy)}.`,
+          `To approve or decline the earlier request: ${row.walletUrl}`,
+          lost && lost.say
+        ),
+        sentences(
+          'This link is for the earlier request, not the one just asked for: never present it as the new one.',
+          open && RECONNECTING.trim(),
+          lost && lost.next,
+          `Once the earlier request is approved, declined or expired, ask for the new one again if jaw_session_status does not already show it in force. The earlier request expires at ${row.approveBy.toISOString()}.`
+        )
+      )
     );
   }
   const url = row.walletUrl;
-  const ends = new Date(ask.grant.expiry * 1000).toISOString();
+  const ends = new Date(ask.grant.expiry * 1000);
   return reply({
     url,
-    expiresAt: ends,
-    summary:
-      warning +
-      `Ask the account owner to open ${url} and approve ${ask.what} until ${ends} in their wallet, before ${row.approveBy.toISOString()}. ` +
-      'Once they do, the session key acts within it with no further prompts. ' +
-      liveTotals(t, held) +
-      (replacing
-        ? 'Approving this budget replaces the current one, which this server then tries to revoke on chain. ' +
-          'Nothing pays from a replaced budget, but if the revoke fee cannot be paid it stays approved on chain until it expires or jaw_revoke_permission revokes it. '
-        : '') +
-      'Right after showing the link, call jaw_session_status yourself to see the grant in force, and again on each later turn until that time; do not wait for the owner to say they approved. ' +
-      'Other grants approved earlier on this connection stay approved on chain until they expire or jaw_session_disconnect revokes them.',
+    expiresAt: ends.toISOString(),
+    summary: lines(
+      `Open this link to approve: ${url}`,
+      withNext(
+        lines(
+          sentences(
+            `It asks the owner to approve a permission for this connection: ${ask.what}, until ${onDate(ends)}, ${withinWindow(row.approveBy)}.`,
+            replacing && 'It replaces the current spend limit.',
+            'Limits are enforced on chain, and the owner can revoke it anytime from their wallet.'
+          ),
+          lost && lost.say
+        ),
+        sentences(
+          'Show the link now with one sentence of what it allows. Then check jaw_session_status on later turns to see it in force; do not wait for the owner to say they approved.',
+          replacing &&
+            'Once it is approved, this server tries to revoke the current spend limit on chain. Nothing pays from a replaced one, but if the revoke fee cannot be paid it stays approved on chain until it expires or jaw_revoke_permission revokes it.',
+          earlier(t, held),
+          lost && lost.next
+        )
+      )
+    ),
   });
 }
 
@@ -287,14 +350,21 @@ export function registerGrantTool(server: McpServer) {
   server.registerTool(
     'jaw_grant_permissions',
     {
+      title: 'Ask the owner for a permission',
       description:
-        'Ask the account owner to grant this session key a permission, approved once in their JAW wallet. ' +
-        'Pass x402Budget for the payment budget: a daily USDC allowance that payments, refills and swap quotes draw from with no further prompts; payments use the newest one only. ' +
-        'Or pass calls, the contract functions the session key may call, and spends, how much of each token it may move per period, for a custom grant. ' +
-        'A new x402Budget replaces the current one, which the server then tries to revoke on chain; nothing pays from a replaced budget, but if the revoke fee cannot be paid it stays approved on chain until it expires or jaw_revoke_permission revokes it. ' +
-        'The grant ends at expiresAt, or with the connection when that comes first. A connection holds at most 5 live grants. Returns a link for the owner. For a one-off contract call use jaw_send_calls, which asks the owner each time.',
+        'Ask the owner to approve a permission in their JAW wallet, once, that lets this connection act within it with no further approvals. ' +
+        'Two kinds, requested separately. ' +
+        'A spend limit for paid services: pass x402Budget with the USDC per day; it pays web services and the network fees of runs under permissions, and a new one replaces the current one. ' +
+        'A custom permission: pass calls (contract and function signature) and spends (a per-period limit on each token those actions move); runs under it go through jaw_session_execute. ' +
+        'Offer a permission only when the owner wants an action repeated or run without them, or when you are about to ask approval for the same action a second time; never for something asked once, which is jaw_send_calls. ' +
+        'Before asking, say in one sentence what it allows, on which contract, up to how much per period, until when, and that they can revoke it anytime from their wallet, and ask for the narrowest permission that does the job. ' +
+        'If the owner has no spend limit for paid services yet, runs under a custom permission cannot pay their network fee: say setup takes two approvals and ask for both. ' +
+        'Returns a link: show it on its own line before anything else. ' +
+        'Then check jaw_session_status on later turns to see it in force; do not wait for the owner to say they approved. ' +
+        'A connection holds at most 5 live permissions, and a permission ends at expiresAt or when the connection ends, whichever comes first.',
       inputSchema: grantInput,
       outputSchema: output,
+      annotations: { destructiveHint: false, openWorldHint: false },
     },
     async (input, ctx) => {
       const t = tenant(ctx);

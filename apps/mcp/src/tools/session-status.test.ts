@@ -7,6 +7,7 @@ import { budgetConnection, callTool, setTestEnv } from '@/connections/testkit';
 import { getDb } from '@/db/client';
 import { useTestDb } from '@/db/test-db';
 import { recordGrant } from '@/grants/permission';
+import { leaks, spoken } from '@/test-utils/spoken';
 
 const USDC: Address = '0x036CbD53842c5426634e7929541eC2318f3dCF7e';
 const NOW = () => Math.floor(Date.now() / 1000);
@@ -86,6 +87,8 @@ describe('jaw_session_status with two grants', () => {
     ]);
     expect(r.structuredContent.float).toMatchObject({ amount: '40000' });
     expect(r.structuredContent).not.toHaveProperty('balances');
+    expect(r.structuredContent.summary).toContain('1 other permission in force.');
+    expect(leaks(spoken(r))).toEqual([]);
   });
 
   it('given a limit spent past its allowance, then left is zero', async () => {

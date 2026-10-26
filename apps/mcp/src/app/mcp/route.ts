@@ -1,6 +1,7 @@
 import { createMcpHandler } from 'mcp-handler';
 import { auditTools } from '@/audit/record';
 import { clientOf, connectionKey, withConnection } from '@/connections/auth';
+import { INSTRUCTIONS } from '@/instructions';
 import { guardTools, withEdge } from '@/lib/edge';
 import { countUnauthorized } from '@/lib/metrics';
 import { registerReadTools } from '@/tools/read';
@@ -50,6 +51,7 @@ const mcp = createMcpHandler(
   {
     serverInfo: { name: 'jaw', version: '0.0.1' },
     capabilities: { tools: {} },
+    instructions: INSTRUCTIONS,
   }
 );
 

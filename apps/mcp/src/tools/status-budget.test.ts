@@ -16,6 +16,7 @@ import { grantPermissions } from '@/tools/grant-permissions';
 import { getDb } from '@/db/client';
 import { payments } from '@/db/schema';
 import { useTestDb } from '@/db/test-db';
+import { leaks, spoken } from '@/test-utils/spoken';
 
 const asked: { id: string; salt: bigint }[] = [];
 const revokedInWallet = new Set<string>();
@@ -95,7 +96,9 @@ describe('given a budget a newer one replaced, and the newer one revoked in the 
     revokedInWallet.add(newer);
     const status = await callTool(c.access_token, 'jaw_session_status', {});
     expect(status.structuredContent.readiness).toMatchObject({ status: 'not_ready', reason: 'grant_revoked' });
-    expect(status.structuredContent.summary).toContain('ask for a new one with jaw_grant_permissions');
+    expect(status.structuredContent.summary).toContain('The spend limit for paid services was revoked.');
+    expect(leaks(spoken(status))).toEqual([]);
+    expect(status.structuredContent.summary).toContain('For the agent: Ask for a new one with jaw_grant_permissions');
     expect(status.structuredContent.budget?.permissionId).not.toBe(older);
   });
 
@@ -252,7 +255,9 @@ describe('given the session already holds float from an earlier pull', () => {
       spentToday: { amount: '0' },
       remainingToday: { amount: '50000' },
     });
-    expect(status.structuredContent.summary).toContain('Ready to pay, 50000 base units left today.');
+    expect(status.structuredContent.summary).toContain(
+      'Spend limit for paid services: 0.05 USDC left today of 0.05 USDC a day.'
+    );
     expect(status.structuredContent.summary).not.toContain('held by the session');
   });
 });
@@ -271,7 +276,7 @@ describe('given 1 USDC a day, float from an earlier window and 0.9 paid today', 
       spentToday: { amount: '900000' },
       remainingToday: { amount: '100000' },
     });
-    expect(status.structuredContent.summary).toContain('100000 base units left today.');
+    expect(status.structuredContent.summary).toContain('0.10 USDC left today of 1 USDC a day.');
   });
 });
 
@@ -325,7 +330,7 @@ describe('given 1 USDC a day and the reads jaw_session_status combines', () => {
       spentToday: { amount: '100000' },
       remainingToday: { amount: '890000' },
     });
-    expect(out.summary).toContain('Ready to pay, 890000 base units left today.');
+    expect(out.summary).toContain('Spend limit for paid services: 0.89 USDC left today of 1 USDC a day.');
   });
 
   it('when only 0.01 left the account, with float held from an earlier day, then it is spent', async () => {
@@ -336,7 +341,7 @@ describe('given 1 USDC a day and the reads jaw_session_status combines', () => {
       spentToday: { amount: '10000' },
       remainingToday: { amount: '990000' },
     });
-    expect(out.summary).toContain('Ready to pay, 990000 base units left today.');
+    expect(out.summary).toContain('Spend limit for paid services: 0.99 USDC left today of 1 USDC a day.');
   });
 
   it('when a payment and a 0.01 spend outside it ran, then both are spent', async () => {
@@ -361,7 +366,7 @@ describe('given 1 USDC a day and the reads jaw_session_status combines', () => {
       spentToday: { amount: '160000' },
       remainingToday: { amount: '830000' },
     });
-    expect(out.summary).toContain('Ready to pay, 830000 base units left today.');
+    expect(out.summary).toContain('Spend limit for paid services: 0.83 USDC left today of 1 USDC a day.');
   });
 
   it('when 0.99 left the account outside payments and the float holds more than is left, then 0.01 is left', async () => {
@@ -385,5 +390,17 @@ describe('given 1 USDC a day and the reads jaw_session_status combines', () => {
       spentToday: { amount: '900000' },
       remainingToday: { amount: '100000' },
     });
+  });
+});
+
+describe('given 1 USDC a day and nothing spent', () => {
+  it('when jaw_session_status runs, then the owner hears the network and the spend limit in USDC, and nothing internal', async () => {
+    const c = await connect();
+    await approve(c, '1');
+    const status = await callTool(c.access_token, 'jaw_session_status', {});
+    expect(leaks(spoken(status))).toEqual([]);
+    expect(status.structuredContent.summary).toMatch(
+      /^Connected to the owner's wallet on Base Sepolia\. Spend limit for paid services: 0\.99 USDC left today of 1 USDC a day\. This connection ends on \d{1,2} [A-Z][a-z]{2} \d{4}\.$/
+    );
   });
 });

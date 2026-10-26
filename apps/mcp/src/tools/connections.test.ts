@@ -1,10 +1,11 @@
 import { eq } from 'drizzle-orm';
 import { beforeAll, describe, expect, it } from 'vitest';
 import { verifyBearer, type Tenant } from '@/connections/auth';
-import { grantBudget, callTool, connect, owner, setTestEnv } from '@/connections/testkit';
+import { grantBudget, callTool, connect, mcp, owner, setTestEnv } from '@/connections/testkit';
 import { getDb } from '@/db/client';
 import { grants, permissionRequests } from '@/db/schema';
 import { useTestDb } from '@/db/test-db';
+import { leaks, spoken, toAgent } from '@/test-utils/spoken';
 
 setTestEnv();
 beforeAll(useTestDb);
@@ -58,7 +59,48 @@ describe('jaw_connections', () => {
     const result = await callTool(c.access_token, 'jaw_connections', {});
 
     expect((result.structuredContent.connections as Listed[])[0].grants).toMatchObject([{ status: 'revoked' }]);
-    expect(result.structuredContent.summary).toContain('0 live grant(s)');
+    expect(result.structuredContent.summary).toContain('0 permissions in force');
+  });
+
+  it('given one app with its spend limit live, then the owner hears how many apps and permissions there are, in plain words', async () => {
+    const signer = owner();
+    const c = await connect(signer);
+    await grantBudget(await tenantOf(c.access_token), signer);
+
+    const result = await callTool(c.access_token, 'jaw_connections', {});
+
+    expect(spoken(result)).toBe('1 app connected, 1 permission in force.');
+    expect(leaks(spoken(result))).toEqual([]);
+    expect(toAgent(result)).toEqual(['For the agent: jaw_revoke_permission takes a permissionId from here.']);
+  });
+
+  it('given a replaced spend limit still approved on chain, then the owner hears it in plain words and the agent gets its id', async () => {
+    const signer = owner();
+    const c = await connect(signer);
+    const t = await tenantOf(c.access_token);
+    const first = (await grantBudget(t, signer))!;
+    await grantBudget(t, signer);
+    await getDb().update(grants).set({ replacedAt: new Date() }).where(eq(grants.permissionId, first.permissionId));
+
+    const result = await callTool(c.access_token, 'jaw_connections', {});
+
+    expect(spoken(result)).toBe(
+      '1 app connected, 1 permission in force. 1 replaced spend limit is still approved on chain until it expires.'
+    );
+    expect(leaks(spoken(result))).toEqual([]);
+    expect(toAgent(result)).toEqual([
+      `For the agent: jaw_revoke_permission takes a permissionId from here; the replaced ones are ${first.permissionId}.`,
+    ]);
+  });
+
+  it('when a client lists the tools, then it is titled for people and stays read-only', async () => {
+    const c = await connect();
+
+    const { json } = await mcp(c.access_token, { method: 'tools/list' });
+
+    const tool = json.result.tools.find((t: { name: string }) => t.name === 'jaw_connections');
+    expect(tool.title).toBe('Apps connected to the wallet');
+    expect(tool.annotations).toEqual({ readOnlyHint: true });
   });
 
   it('given a grant the wallet answered but this server did not record, then its id is listed as unrecorded', async () => {

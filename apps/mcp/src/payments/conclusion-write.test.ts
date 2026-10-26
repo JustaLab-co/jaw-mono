@@ -35,6 +35,8 @@ import { pay, type PayDeps } from './pay';
 const USDC: Address = '0x036CbD53842c5426634e7929541eC2318f3dCF7e';
 const PAY_TO: Address = '0x2222222222222222222222222222222222222222';
 const PRICE = '5000';
+/** PRICE as the owner reads it. */
+const PRICE_SHOWN = '0.005 USDC';
 const TX = (n: number) => `0x${n.toString(16).padStart(64, '0')}` as Hex;
 const AUTHORIZATION_USED = parseAbi(['event AuthorizationUsed(address indexed authorizer, bytes32 indexed nonce)']);
 
@@ -248,7 +250,7 @@ describe.skipIf(!TEST_PG_URL)('given a paid call whose final write fails', () =>
       kind: 'paid',
       payment: { nonce: seen[0].nonce.toLowerCase(), payTo: PAY_TO, amount: PRICE },
     });
-    expect(result?.structuredContent?.summary).toContain(`Paid ${PRICE} base units to ${PAY_TO}`);
+    expect(result?.structuredContent?.summary).toContain(`Paid ${PRICE_SHOWN} to ${SELLER}. The service answered.`);
     expect(result?.structuredContent?.response?.join()).toContain('the weather is fine');
   });
 
@@ -257,7 +259,7 @@ describe.skipIf(!TEST_PG_URL)('given a paid call whose final write fails', () =>
     balances.set(t.sessionAddress.toLowerCase(), 1_000_000n);
     const { result } = await payWithFailedWrite(t, 'final-late', "new.kind = 'paid'");
     expect(result?.structuredContent).toMatchObject({ kind: 'paid', state: 'signed' });
-    expect(result?.structuredContent?.summary).toContain('Settlement is being confirmed');
+    expect(result?.structuredContent?.summary).toContain('The payment is still being confirmed.');
     expect(lateTasks).toHaveLength(1);
 
     await lateTasks[0]();
@@ -305,7 +307,7 @@ describe.skipIf(!TEST_PG_URL)('given a paid call whose final write fails', () =>
       refusal: { code: 'settlement_rejected' },
       payment: { nonce: seen[0].nonce.toLowerCase() },
     });
-    expect(again.structuredContent?.summary).toContain('A payment may have reached the seller');
+    expect(again.structuredContent?.summary).toContain('The payment may have reached the service');
     expect(again.structuredContent?.summary).not.toContain('Nothing was sent');
   });
 

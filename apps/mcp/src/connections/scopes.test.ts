@@ -95,8 +95,13 @@ const TOOLS: Record<string, { needs: ConnectionScope[]; args: object }> = {
 
 const PROFILES = ['wallet:read', 'wallet:read x402:pay'];
 
-const refusedFor = (result: { content: { text: string }[] }) =>
-  result.content[0].text.match(/not granted (\S+)\./)?.[1];
+// The missing scope, as a refusal names it: in its line for the agent, or as pay still words it.
+// A status that is not ready names the scope too, so only an error counts.
+const refusedFor = (result: { isError?: boolean; content: { text: string }[] }) => {
+  if (!result.isError) return undefined;
+  const m = result.content[0].text.match(/ask for the (\S+) scope\.|not granted (\S+)\./);
+  return m?.[1] ?? m?.[2];
+};
 const tenantOf = async (accessToken: string) => (await verifyBearer(accessToken))?.extra?.tenant as Tenant;
 const refresh = (refreshToken: string, scope: string) =>
   token({ grant_type: 'refresh_token', refresh_token: refreshToken, client_id: 'jaw-cli', scope });

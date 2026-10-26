@@ -353,7 +353,10 @@ describe('given 1 USDC a day and an empty float, for a price of 0.005 that a ref
     prices.set('/small', '5000');
     const quoted = await quote(token, '/small');
     expect(quoted.structuredContent.readiness).toEqual({ status: 'not_ready', reason: 'balance_low' });
-    expect(quoted.structuredContent.summary).toContain(t.account);
+    expect(quoted.structuredContent.summary).toContain('The wallet holds too little USDC to cover it.');
+    expect(quoted.structuredContent.summary).toContain(
+      'For the agent: Offer add funds with the missing 0.000001 USDC on Base Sepolia.'
+    );
     const paid = await pay(t, { url: url('/small') }, withRefill);
     expect(paid.structuredContent).toMatchObject({ refusal: { code: 'balance_low' } });
     expect(seen).toHaveLength(0);
@@ -386,7 +389,7 @@ describe('given 1 USDC a day, an empty float, and an upto price whose Permit2 ap
     prices.set('/upto-edge', '890000');
     const quoted = await quote(token, '/upto-edge');
     expect(quoted.structuredContent.readiness).toEqual({ status: 'ready' });
-    expect(quoted.structuredContent.summary).toContain('Permit2');
+    expect(quoted.structuredContent.summary).toContain('one-time approval fee');
     const paid = await pay(t, { url: url('/upto-edge') }, withApproval);
     expect(paid.structuredContent?.refusal).toBeUndefined();
     expect(approvals).toEqual([USDC]);
@@ -477,7 +480,7 @@ describe('quote and pay at the edge of what a budget can pay', () => {
         price: { amount: '1000001' },
         readiness: { status: 'not_ready', reason: 'over_cap' },
       });
-      expect(quoted.structuredContent.summary).toContain('1000000');
+      expect(quoted.structuredContent.summary).toContain('One payment may be at most 1 USDC');
       const paid = await pay(t, { url: url('/more') }, withRefill);
       expect(paid.structuredContent).toMatchObject({ refusal: { code: 'over_cap' } });
       expect(paid.structuredContent?.refusal).not.toHaveProperty('next');

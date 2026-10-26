@@ -7,11 +7,12 @@ export function registerDisconnectTool(server: McpServer) {
   server.registerTool(
     'jaw_session_disconnect',
     {
+      title: 'Disconnect this app from the wallet',
       description:
-        'End this connection. Revokes its budgets on chain, returns the USDC float to the account owner, ' +
-        'and invalidates its tokens, so every later call fails until the owner connects again. ' +
-        'If it fails before the transaction is sent, nothing was revoked. If the transaction is sent but unconfirmed, ' +
-        'it may still land. Either way calling it again is safe, since it does not repeat what already landed.',
+        "End this connection: revokes its permissions on chain, returns the USDC it was holding for fees and paid services to the owner's wallet, and ends its access, so nothing works until the owner connects again. " +
+        "Use it only when the owner asks to disconnect or remove this app's access. " +
+        'If it fails before anything is sent, nothing was revoked. If the transaction is sent but unconfirmed, it may still land. ' +
+        'Calling it again is safe; it never repeats what already landed.',
       inputSchema: z.strictObject({}),
       outputSchema: disconnectOutput,
       annotations: { destructiveHint: true, idempotentHint: true },

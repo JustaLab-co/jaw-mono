@@ -3,14 +3,26 @@ import { base } from 'viem/chains';
 import { afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
 import { verifyBearer, type Tenant } from '@/connections/auth';
 import { WalletBusy, type Ask, type OpenWallet } from '@/connections/relay';
-import { callTool, connect, fakeWallet, owner, setTestEnv, walletAnswers, walletsSettled } from '@/connections/testkit';
+import {
+  callTool,
+  connect,
+  fakeWallet,
+  mcp,
+  owner,
+  setTestEnv,
+  walletAnswers,
+  walletsSettled,
+} from '@/connections/testkit';
 import { USER_REJECTED } from '@/connections/wallet-codes';
 import { getDb } from '@/db/client';
 import { permissionRequests } from '@/db/schema';
-import { TEST_PG_URL, useTestDb, useTestPostgres } from '@/db/test-db';
+import { hitsThisWindow, TEST_PG_URL, useTestDb, useTestPostgres } from '@/db/test-db';
+import { RATE_WINDOW_MS } from '@/lib/edge';
 import { MAX_ADD_FUNDS_PER_ACCOUNT } from '@/owner-calls/cap';
+import { leaks, spoken, toAgent } from '@/test-utils/spoken';
 import { sendCalls } from './owner-calls';
 import { addFunds, type AddFundsDeps } from './add-funds';
+import { FOR_AGENT } from './reply';
 
 // The server's own chain, swapped for a mainnet in the tests that need one.
 const deployment = vi.hoisted(() => ({ chain: undefined as undefined | import('viem').Chain }));
@@ -74,6 +86,14 @@ const urlOf = (r: Awaited<ReturnType<typeof addFunds>>) =>
 
 const textOf = (r: Awaited<ReturnType<typeof addFunds>>) => r.content[0].text;
 const refused = (r: Awaited<ReturnType<typeof addFunds>>) => 'isError' in r && r.isError;
+const chainsOf = (r: Awaited<ReturnType<typeof addFunds>>) =>
+  'structuredContent' in r ? r.structuredContent?.chains : undefined;
+
+// Every network the capabilities above list on a testnet server, by name, the one asked for first.
+const ALL_FROM_BASE_SEPOLIA = 'Base Sepolia, Base, Ethereum, OP Mainnet, Sepolia';
+const ALL_FROM_BASE = 'Base, Base Sepolia, Ethereum, OP Mainnet, Sepolia';
+const anyNetwork = (account: string, can: 'also' | 'still', names: string) =>
+  `Funds can ${can} be sent directly to ${account} on any network the wallet supports: ${names}.`;
 
 describe('jaw_add_funds', () => {
   it("given no chainId and the owner opens the link, then the wallet shows Add Funds on the connection's chain and the reply carries the link and where to deposit", async () => {
@@ -87,10 +107,10 @@ describe('jaw_add_funds', () => {
       url: expect.stringMatching(/cli-bridge/),
       approveBy: expect.any(String),
       address: t.account,
-      chains: ['eip155:84532'],
-      summary: expect.stringContaining('call jaw_get_assets yourself'),
+      chains: ['eip155:84532', 'eip155:8453', 'eip155:1', 'eip155:10', 'eip155:11155111'],
+      summary: expect.stringContaining(`${FOR_AGENT} Do not read the balance now.`),
     });
-    expect(textOf(result)).toContain(`anyone can send funds on eip155:84532 to ${t.account}`);
+    expect(textOf(result)).toContain(anyNetwork(t.account, 'also', ALL_FROM_BASE_SEPOLIA));
     expect(textOf(result)).not.toMatch(/USDC/);
     expect(chains).toEqual([t.chainId]);
     expect(asked.map((a) => a.method)).toEqual(['eth_requestAccounts', 'wallet_addFunds']);
@@ -116,8 +136,8 @@ describe('jaw_add_funds', () => {
 
     expect('structuredContent' in result && result.structuredContent).toMatchObject({
       address: t.account,
-      chains: ['eip155:8453'],
-      summary: expect.stringContaining(`deposit to ${t.account} on eip155:8453`),
+      chains: ['eip155:8453', 'eip155:84532', 'eip155:1', 'eip155:10', 'eip155:11155111'],
+      summary: expect.stringContaining(anyNetwork(t.account, 'also', ALL_FROM_BASE)),
     });
     expect(chains).toEqual([8453]);
     expect(asked[1]).toEqual({ method: 'wallet_addFunds', params: [{ chainId: 8453 }] });
@@ -132,23 +152,47 @@ describe('jaw_add_funds', () => {
     const result = await addFunds(t, { chainId: 324 }, deps());
 
     expect(refused(result)).toBe(true);
-    expect(textOf(result)).toMatch(/^unsupported_chain: Chain 324 /);
+    expect(textOf(result)).toMatch(/^unsupported_chain: /);
+    expect(spoken(result)).toBe(
+      'The wallet cannot receive on that network here. It can on Base Sepolia, Base, Ethereum, OP Mainnet and Sepolia.'
+    );
+    expect(toAgent(result).join('\n')).toContain('Chain 324 is not one the wallet supports here');
     expect(opened()).toBe(0);
     expect(await rowsOf(t)).toEqual([]);
   });
 
-  it("given no chainId, then the connection's chain needs no capabilities lookup", async () => {
+  it("given no chainId or the connection's own chain, then the screen opens after one capabilities lookup, for the networks named, with no check of the chain, and a failed lookup names that network alone", async () => {
     const { t, signer } = await connected();
     const { deps } = setup(signer);
-    const lookup = capabilities({ fail: new Error('must not be asked') });
+    const failing = () => capabilities({ fail: new Error('the capabilities cannot be read') });
+    const unnamed = failing();
+    const own = failing();
 
-    const result = await addFunds(t, {}, { ...deps(), capabilityChains: lookup.capabilityChains });
-    const named = await addFunds(t, { chainId: t.chainId }, { ...deps(), capabilityChains: lookup.capabilityChains });
+    const result = await addFunds(t, {}, { ...deps(), capabilityChains: unnamed.capabilityChains });
+    const named = await addFunds(t, { chainId: t.chainId }, { ...deps(), capabilityChains: own.capabilityChains });
     await walletsSettled();
 
     expect(refused(result)).toBe(false);
     expect(refused(named)).toBe(false);
-    expect(lookup.asked).toEqual([]);
+    for (const r of [result, named]) {
+      expect(chainsOf(r)).toEqual([`eip155:${t.chainId}`]);
+      expect(spoken(r)).toContain(`Funds can also be sent directly to ${t.account} on Base Sepolia.`);
+    }
+    expect(unnamed.asked).toEqual([{ account: t.account, showTestnets: true }]);
+    expect(own.asked).toEqual([{ account: t.account, showTestnets: true }]);
+  });
+
+  it('given a chainId the wallet supports, then the screen opens after exactly one capabilities lookup, which both checks the chain and names the networks', async () => {
+    const { t, signer } = await connected();
+    const { deps } = setup(signer);
+    const lookup = capabilities();
+
+    const result = await addFunds(t, { chainId: 8453 }, { ...deps(), capabilityChains: lookup.capabilityChains });
+    await walletsSettled();
+
+    expect(refused(result)).toBe(false);
+    expect(spoken(result)).toContain(anyNetwork(t.account, 'also', ALL_FROM_BASE));
+    expect(lookup.asked).toEqual([{ account: t.account, showTestnets: true }]);
   });
 
   it('given a mainnet server and a testnet chainId, then it is refused unsupported_chain, the proxy is asked for mainnets only and no wallet opens', async () => {
@@ -160,10 +204,12 @@ describe('jaw_add_funds', () => {
     const result = await addFunds(t, { chainId: 11155111 }, { ...deps(), capabilityChains: lookup.capabilityChains });
 
     expect(refused(result)).toBe(true);
-    expect(textOf(result)).toMatch(/^unsupported_chain: Chain 11155111 /);
-    expect(textOf(result)).toContain(
-      `Supported: ${MAINNETS.filter((id) => id !== t.chainId).join(', ')}, and this connection's chain ${t.chainId}.`
+    expect(textOf(result)).toMatch(/^unsupported_chain: /);
+    expect(t.chainId).toBe(8453);
+    expect(spoken(result)).toBe(
+      'The wallet cannot receive on that network here. It can on Base, Ethereum and OP Mainnet.'
     );
+    expect(toAgent(result).join('\n')).toContain('Chain 11155111 is not one the wallet supports here');
     expect(lookup.asked).toEqual([{ account: t.account, showTestnets: false }]);
     expect(opened()).toBe(0);
     expect(await rowsOf(t)).toEqual([]);
@@ -179,7 +225,8 @@ describe('jaw_add_funds', () => {
     await walletsSettled();
 
     expect(refused(result)).toBe(false);
-    expect('structuredContent' in result && result.structuredContent?.chains).toEqual(['eip155:10']);
+    expect(chainsOf(result)).toEqual(['eip155:10', 'eip155:8453', 'eip155:1']);
+    expect(spoken(result)).toContain(anyNetwork(t.account, 'also', 'OP Mainnet, Base, Ethereum'));
     expect(lookup.asked).toEqual([{ account: t.account, showTestnets: false }]);
     expect(chains).toEqual([10]);
   });
@@ -205,13 +252,18 @@ describe('jaw_add_funds', () => {
     const result = await addFunds(t, { chainId: 8453 }, { ...deps(), capabilityChains: lookup.capabilityChains });
 
     expect(refused(result)).toBe(true);
-    expect(textOf(result)).toMatch(/^proxy_error: Chain 8453 could not be checked: proxy down\. /);
-    expect(textOf(result)).toContain(`anyone can send funds on eip155:${t.chainId} to ${t.account}`);
+    expect(textOf(result)).toMatch(/^proxy_error: /);
+    expect(spoken(result)).toBe(
+      `The networks the wallet supports could not be checked right now, so the screen did not open. Funds can still be sent directly to ${t.account} on Base Sepolia.`
+    );
+    expect(toAgent(result)).toEqual([
+      `${FOR_AGENT} Chain 8453 could not be checked: proxy down. Ask again, or leave chainId out for this connection's chain.`,
+    ]);
     expect(opened()).toBe(0);
     expect(await rowsOf(t)).toEqual([]);
   });
 
-  it('given a link waiting on a chainId, when the agent asks for it again and the capabilities lookup would fail, then the waiting link comes back without the lookup', async () => {
+  it('given a link waiting on a chainId, when the agent asks for it again and the capabilities lookup would fail, then the waiting link comes back without checking the chain again, naming the networks already known', async () => {
     const { t, signer } = await connected();
     const { deps, opened } = setup(signer);
     const wait = held();
@@ -225,7 +277,8 @@ describe('jaw_add_funds', () => {
 
     expect(refused(again)).toBe(false);
     expect(urlOf(again)).toBe(urlOf(first));
-    expect(lookup.asked).toEqual([]);
+    expect(chainsOf(again)).toEqual(['eip155:8453', `eip155:${t.chainId}`]);
+    expect(spoken(again)).toContain(anyNetwork(t.account, 'also', 'Base, Base Sepolia'));
     expect(opened()).toBe(1);
   });
 
@@ -243,8 +296,15 @@ describe('jaw_add_funds', () => {
 
     expect(refused(other)).toBe(true);
     expect(textOf(other)).toMatch(/^add_funds_in_progress: /);
-    expect(textOf(other)).toContain(`on eip155:${t.chainId} at ${urlOf(first)}`);
-    expect(textOf(other)).toContain(`anyone can send funds on eip155:8453 to ${t.account}`);
+    const esc = (s: string) => s.replace(/[.?]/g, '\\$&');
+    expect(spoken(other)).toMatch(
+      new RegExp(
+        `^An Add Funds link for Base Sepolia is already open; it expires in (29|30) minutes\\. ${esc(anyNetwork(t.account, 'still', ALL_FROM_BASE))}\\nOpen this link to add funds: ${esc(urlOf(first)!)}$`
+      )
+    );
+    expect(toAgent(other)).toEqual([
+      `${FOR_AGENT} Ask again with chainId ${t.chainId} to get that link, or with 8453 once it ends.`,
+    ]);
     expect('structuredContent' in other).toBe(false);
     expect(urlOf(same)).toBe(urlOf(first));
     expect(opened()).toBe(1);
@@ -320,9 +380,9 @@ describe('jaw_add_funds', () => {
 
     expect(refused(result)).toBe(true);
     expect(textOf(result)).toMatch(
-      new RegExp(`^add_funds_busy: This account already has ${MAX_ADD_FUNDS_PER_ACCOUNT} Add Funds links waiting`)
+      new RegExp(`^add_funds_busy: The wallet already has ${MAX_ADD_FUNDS_PER_ACCOUNT} Add Funds screens waiting\\. `)
     );
-    expect(textOf(result)).toContain(`anyone can send funds on eip155:8453 to ${t.account}`);
+    expect(spoken(result)).toContain(anyNetwork(t.account, 'still', ALL_FROM_BASE));
     for (const url of links) expect(textOf(result)).not.toContain(url);
     expect('structuredContent' in result).toBe(false);
     expect(opened()).toBe(MAX_ADD_FUNDS_PER_ACCOUNT);
@@ -359,8 +419,9 @@ describe('jaw_add_funds', () => {
     );
 
     expect(refused(result)).toBe(true);
-    expect(textOf(result)).toMatch(/^Too many owners are approving right now\. /);
-    expect(textOf(result)).toContain(`anyone can send funds on eip155:8453 to ${t.account}`);
+    expect(textOf(result)).toMatch(/^Too many owners are approving right now, so the screen did not open\. /);
+    expect(spoken(result)).toContain(anyNetwork(t.account, 'still', ALL_FROM_BASE));
+    expect(toAgent(result)).toEqual([`${FOR_AGENT} Try again in a minute.`]);
     expect(await rowsOf(t)).toEqual([]);
   });
 
@@ -434,9 +495,184 @@ describe('jaw_add_funds', () => {
     expect(over.content[0].text).toMatch(/^rate_limited: /);
     expect(opened()).toBe(10);
   });
+
+  it("given too many links this minute, when no chainId is asked, then the refusal reads no capabilities and names the connection's network alone", async () => {
+    const { t, signer } = await connected();
+    await hitsThisWindow(`owner-add-funds:${t.connectionId}`, 10, RATE_WINDOW_MS);
+    const lookup = capabilities();
+
+    const over = await addFunds(t, {}, { ...setup(signer).deps(), capabilityChains: lookup.capabilityChains });
+
+    expect(textOf(over)).toMatch(/^rate_limited: /);
+    expect(spoken(over)).toBe(
+      `Too many Add Funds requests in a short time, so the screen did not open. Funds can still be sent directly to ${t.account} on Base Sepolia.`
+    );
+    expect(lookup.asked).toEqual([]);
+  });
+
+  it("given too many links this minute, when another chain is asked, then the refusal names that chain and the connection's after the one check of the chain", async () => {
+    const { t, signer } = await connected();
+    await hitsThisWindow(`owner-add-funds:${t.connectionId}`, 10, RATE_WINDOW_MS);
+    const lookup = capabilities();
+
+    const over = await addFunds(
+      t,
+      { chainId: 8453 },
+      { ...setup(signer).deps(), capabilityChains: lookup.capabilityChains }
+    );
+
+    expect(textOf(over)).toMatch(/^rate_limited: /);
+    expect(spoken(over)).toContain(anyNetwork(t.account, 'still', 'Base, Base Sepolia'));
+    expect(lookup.asked).toEqual([{ account: t.account, showTestnets: true }]);
+  });
 });
 
 async function clearOfMinuteEdge() {
   const intoMinute = Date.now() % 60_000;
   if (intoMinute > 50_000) await new Promise((resolve) => setTimeout(resolve, 60_500 - intoMinute));
 }
+
+describe('what the owner hears from jaw_add_funds', () => {
+  type Read = () => Promise<Awaited<ReturnType<typeof addFunds>>>;
+
+  it('given the link opens, then it comes first on its own line, then the address once and every network it works on, and the agent is told not to read the balance yet', async () => {
+    const { t, signer } = await connected();
+    const { deps } = setup(signer);
+    const wait = held();
+
+    const result = await addFunds(t, {}, deps({ held: wait.promise }));
+    wait.release();
+    await walletsSettled();
+
+    const url = urlOf(result)!;
+    expect(textOf(result).split('\n')).toEqual([
+      `Open this link to add funds: ${url}`,
+      `It shows the wallet address and a QR code, and works for the next 30 minutes. ${anyNetwork(t.account, 'also', ALL_FROM_BASE_SEPOLIA)}`,
+      `${FOR_AGENT} Do not read the balance now. On the owner's next messages, read it with jaw_get_assets before answering, and continue the original request once it covers it. The screen closing does not mean funds arrived.`,
+    ]);
+    expect(textOf(result)).not.toMatch(/right after showing the link/i);
+    expect(textOf(result).split(t.account)).toHaveLength(2);
+    expect(leaks(spoken(result))).toEqual([]);
+  });
+
+  it('given the supported networks never answer, then the link still comes back, naming the network it opens on', async () => {
+    const { t, signer } = await connected();
+    const { deps } = setup(signer);
+    const wait = held();
+    const silent: AddFundsDeps['capabilityChains'] = () => new Promise(() => {});
+
+    const result = await addFunds(t, {}, { ...deps({ held: wait.promise }), capabilityChains: silent });
+    wait.release();
+    await walletsSettled();
+
+    expect(refused(result)).toBe(false);
+    expect(urlOf(result)).toMatch(/cli-bridge/);
+    expect(chainsOf(result)).toEqual([`eip155:${t.chainId}`]);
+    expect(spoken(result)).toContain(`Funds can also be sent directly to ${t.account} on Base Sepolia.`);
+  });
+
+  it('given the tools list, then jaw_add_funds is titled and its description holds the balance read back', async () => {
+    const { c } = await connected();
+
+    const { json } = await mcp(c.access_token, { method: 'tools/list' });
+
+    const tool = json.result.tools.find((x: { name: string }) => x.name === 'jaw_add_funds');
+    expect(tool.title).toBe('Add funds to the wallet');
+    expect(tool.annotations).toMatchObject({ destructiveHint: false, idempotentHint: true });
+    expect(tool.description).toContain('Do not check the balance right away; funds take time to arrive.');
+    expect(tool.description).toContain('The wallet has one address on every network it supports');
+  });
+
+  const REFUSALS: [string, RegExp, Read][] = [
+    [
+      'a chain the wallet does not support',
+      /^unsupported_chain: /,
+      async () => {
+        const { t, signer } = await connected();
+        return addFunds(t, { chainId: 324 }, setup(signer).deps());
+      },
+    ],
+    [
+      'a testnet on a mainnet server',
+      /^unsupported_chain: /,
+      async () => {
+        deployment.chain = base;
+        const { t, signer } = await connected();
+        return addFunds(t, { chainId: 11155111 }, setup(signer).deps());
+      },
+    ],
+    [
+      'a capabilities lookup that fails',
+      /^proxy_error: /,
+      async () => {
+        const { t, signer } = await connected();
+        const lookup = capabilities({ fail: new Error('proxy down') });
+        return addFunds(t, { chainId: 8453 }, { ...setup(signer).deps(), capabilityChains: lookup.capabilityChains });
+      },
+    ],
+    [
+      'a link waiting on another chain',
+      /^add_funds_in_progress: /,
+      async () => {
+        const { t, signer } = await connected();
+        const wait = held();
+        const holding = setup(signer).deps({ held: wait.promise });
+        await addFunds(t, {}, holding);
+        const other = await addFunds(t, { chainId: 8453 }, holding);
+        wait.release();
+        await walletsSettled();
+        return other;
+      },
+    ],
+    [
+      'every Add Funds slot of the account taken',
+      /^add_funds_busy: /,
+      async () => {
+        const signer = owner();
+        const waiting = [];
+        for (let i = 0; i < MAX_ADD_FUNDS_PER_ACCOUNT; i++) waiting.push(await connected(signer));
+        const { t } = await connected(signer);
+        const wait = held();
+        const holding = setup(signer).deps({ held: wait.promise });
+        for (const w of waiting) await addFunds(w.t, {}, holding);
+        const result = await addFunds(t, {}, holding);
+        wait.release();
+        await walletsSettled();
+        return result;
+      },
+    ],
+    [
+      'a full owner pool',
+      /^Too many owners are approving right now/,
+      async () => {
+        const { t } = await connected();
+        const busy: OpenWallet = async () => {
+          throw new WalletBusy();
+        };
+        return addFunds(t, {}, { openWallet: busy, capabilityChains: capabilities().capabilityChains });
+      },
+    ],
+    [
+      'too many links this minute',
+      /^rate_limited: /,
+      async () => {
+        const { t, signer } = await connected();
+        await hitsThisWindow(`owner-add-funds:${t.connectionId}`, 10, RATE_WINDOW_MS);
+        return addFunds(t, {}, setup(signer).deps());
+      },
+    ],
+  ];
+
+  it.each(REFUSALS)(
+    'given %s, then it is refused with its code first and the owner hears no tool and no internal word',
+    async (_name, code, read) => {
+      const result = await read();
+
+      expect(refused(result)).toBe(true);
+      expect(textOf(result)).toMatch(code);
+      expect(spoken(result).trim()).not.toBe('');
+      expect(leaks(spoken(result))).toEqual([]);
+      for (const line of toAgent(result)) expect(line.startsWith(FOR_AGENT)).toBe(true);
+    }
+  );
+});
