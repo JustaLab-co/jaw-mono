@@ -18,7 +18,11 @@ import { Accordion } from '../ui/accordion';
 vi.mock('../../hooks', () => ({ useChainIconURI: () => undefined, useFeeTokenPrice: () => undefined }));
 vi.mock('../../hooks/useChainIcons', () => ({ useChainIcons: () => ({}) }));
 vi.mock('../../hooks/useDecodedCalldata', () => ({
-  useDecodedCalldata: () => ({ clearSigned: null, decoded: null, isLoading: false }),
+  useDecodedCalldata: (_to: string, data?: string) => ({
+    clearSigned: null,
+    decoded: { functionName: data?.startsWith('0x095ea7b3') ? 'approve' : 'deposit', signature: '', params: [] },
+    isLoading: false,
+  }),
 }));
 vi.mock('../ShellDialog', () => ({ ShellDialog: ({ children }: { children: ReactNode }) => <div>{children}</div> }));
 vi.mock('../../hooks/useAddressIdentities', () => {
@@ -118,8 +122,8 @@ describe('TransactionDialog with a bridge deposit', () => {
     expect(root.textContent).not.toContain('to JAW');
     expect(red(root)).toEqual([]);
     expect(yellow(root)).toEqual([]);
-    expect(root.textContent).toContain('Approve USDC for Across');
-    expect(root.textContent).toContain('Across deposit');
+    const stepTitles = [...root.querySelectorAll('button .text-value')].map((e) => e.textContent);
+    expect(stepTitles).toEqual(['approve()', 'deposit()']);
   });
 
   it('prefers the simulated send over the decoded one when the simulation has it', () => {

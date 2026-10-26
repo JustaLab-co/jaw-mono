@@ -11,7 +11,7 @@ const OTHER_TOKEN = 'This approval is for a different token than the deposit.';
 const UNPAIRED = 'This batch has an approval that the deposit does not use. Check its token, amount and spender.';
 const APPROVE_UNKNOWN = 'This batch approves a token this screen does not know. Check its address before you confirm.';
 
-export type BridgeStep = { label: string } | { alert: string } | null;
+export type BridgeStep = { alert: string } | null;
 
 /** `alerts` are red: a bridge call this screen cannot read. `notices` are yellow: worth a look, maybe intended. */
 export type BridgeBatch = { transfer?: BridgeTransfer; steps: BridgeStep[]; alerts: string[]; notices: string[] };
@@ -59,13 +59,7 @@ function approveNotices(calls: BridgeCall[], reads: Read[], deposit: Deposit): s
   return notices;
 }
 
-function stepOf(read: Read): BridgeStep {
-  if (!read) return null;
-  if (read.kind === 'unreadable') return { alert: cannotRead(read.provider) };
-  const provider = PROVIDER_NAME[read.provider];
-  if (read.kind === 'deposit') return { label: `${provider} deposit` };
-  return { label: `Approve ${read.token.known ? read.token.symbol : 'unknown token'} for ${provider}` };
-}
+const stepOf = (read: Read): BridgeStep => (read?.kind === 'unreadable' ? { alert: cannotRead(read.provider) } : null);
 
 function pullOf({ send }: Deposit, call: BridgeCall): Pull | undefined {
   if (send.token.address === zeroAddress) return undefined;
