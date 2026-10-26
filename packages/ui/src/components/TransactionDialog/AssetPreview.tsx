@@ -335,7 +335,7 @@ function BridgeColumns({
           direction="in"
           deltas={received}
           chain={badge(destination)}
-          heading={otherRecipient && `${formatAddress(otherRecipient)} gets`}
+          heading={otherRecipient && 'Recipient gets'}
           via={PROVIDER_NAME[provider]}
           prefix="≥ "
           {...columnProps}
