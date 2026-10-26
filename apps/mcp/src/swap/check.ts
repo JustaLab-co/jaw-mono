@@ -1,4 +1,3 @@
-import { isProxyChain } from '@/lib/chain';
 import { encodeFunctionData, erc20Abi, getAddress, isAddressEqual, zeroAddress, type Address, type Hex } from 'viem';
 import { z } from 'zod';
 
@@ -6,8 +5,11 @@ export type QuoteRequest = { originChainId: number; originToken: Address; amount
 
 export type DepositCall = { chainId: number; to: Address; data: Hex; value: string };
 
+export type SwapCall = { kind: 'approve' | 'deposit' } & DepositCall;
+
 export type CheckCode =
   | 'quote_invalid'
+  | 'quote_unsupported_provider'
   | 'quote_id'
   | 'tx_count'
   | 'tx_chain'
@@ -49,10 +51,6 @@ const quoteShape = z.object({
   deposit: z.unknown().optional(),
 });
 
-export function isSupportedOriginChain(chainId: number): boolean {
-  return isProxyChain(chainId);
-}
-
 export async function checkQuote(
   request: QuoteRequest,
   body: unknown,
@@ -63,8 +61,9 @@ export async function checkQuote(
   if (!parsed.success) return fail('quote_invalid');
   const quote = parsed.data;
 
+  if (quote.provider !== 'aurora') return fail('quote_unsupported_provider');
   const id = auroraQuoteId.exec(quote.quoteId);
-  if (!id || quote.provider !== 'aurora' || quote.deposit !== undefined) return fail('quote_id');
+  if (!id || quote.deposit !== undefined) return fail('quote_id');
   const depositAddress = getAddress(id[1]);
 
   if (quote.transactions.length !== 1) return fail('tx_count');

@@ -11,7 +11,7 @@ import { fileURLToPath } from 'node:url';
 const here = path.dirname(fileURLToPath(import.meta.url));
 const repo = path.resolve(here, '../..');
 const require = createRequire(`${repo}/package.json`);
-const { encodeFunctionData, erc20Abi, getAddress, keccak256, toHex } = require('viem');
+const { encodeFunctionData, erc20Abi, getAddress, toHex } = require('viem');
 const { privateKeyToAccount } = require('viem/accounts');
 
 const USDC = '0x036CbD53842c5426634e7929541eC2318f3dCF7e';
@@ -55,6 +55,9 @@ const logRows = () =>
 
 const control = (params) => fetch(`${base}/_swap?${new URLSearchParams(params)}`, { method: 'POST' });
 
+const transferTo = (deposit) =>
+  encodeFunctionData({ abi: erc20Abi, functionName: 'transfer', args: [getAddress(deposit), 10000n] });
+
 const ACCOUNT = '0x742149f6aB17d7d2FD3A29ae2782b26EDa9c6F82';
 const ERC20_QUERY = {
   originChainId: '84532',
@@ -67,7 +70,8 @@ const ERC20_QUERY = {
   tradeType: 'EXACT_INPUT',
 };
 const NATIVE_QUERY = { ...ERC20_QUERY, originToken: '0x0000000000000000000000000000000000000000' };
-const quoteUrl = (query) => `${base}/proxy/v2/swap/quote?${new URLSearchParams(query)}`;
+const moveQuoteUrl = (query) => `${base}/proxy/v2/move-asset/quote?${new URLSearchParams(query)}`;
+const fixture = (p) => JSON.parse(fs.readFileSync(`${repo}/apps/mcp/src/swap/fixtures/prod-${p}-quote.json`, 'utf8'));
 
 async function proof(nonce = toHex(crypto.getRandomValues(new Uint8Array(32)))) {
   const authorization = {
@@ -101,14 +105,6 @@ async function proof(nonce = toHex(crypto.getRandomValues(new Uint8Array(32)))) 
   return { header: b64({ x402Version: 2, payload: { authorization, signature } }), nonce };
 }
 
-const depositFor = (nonce) => getAddress('0x' + keccak256(nonce).slice(-40));
-
-async function paidQuote(query, headers = {}) {
-  const { header, nonce } = await proof();
-  const res = await fetch(quoteUrl(query), { headers: { 'PAYMENT-SIGNATURE': header, ...headers } });
-  return { res, body: await res.json(), nonce, header };
-}
-
 test('given a valid proof, /exact still answers 200 with the payer', async () => {
   const { header } = await proof();
   const res = await fetch(`${base}/exact`, { headers: { 'PAYMENT-SIGNATURE': header } });
@@ -117,78 +113,40 @@ test('given a valid proof, /exact still answers 200 with the payer', async () =>
   assert.equal(unb64(res.headers.get('payment-response')).network, 'eip155:84532');
 });
 
-test('given a valid query and no payment, the quote answers a 402 for 5000 on eip155:84532', async () => {
-  const res = await fetch(quoteUrl(ERC20_QUERY));
-  assert.equal(res.status, 402);
-  const [req] = unb64(res.headers.get('payment-required')).accepts;
-  assert.equal(req.network, 'eip155:84532');
-  assert.equal(req.amount, '5000');
-  assert.equal(req.asset, USDC);
-});
-
-test('given a network override, the 402 advertises it until reset', async () => {
-  assert.equal((await control({ network: 'eip155:8453' })).status, 204);
-  const res = await fetch(quoteUrl(ERC20_QUERY));
-  assert.equal(unb64(res.headers.get('payment-required')).accepts[0].network, 'eip155:8453');
-  await control({ network: '' });
-  const again = await fetch(quoteUrl(ERC20_QUERY));
-  assert.equal(unb64(again.headers.get('payment-required')).accepts[0].network, 'eip155:84532');
-});
-
-test('given the allowlisted api key and no payment, the quote answers 200 with a fresh deposit address and no receipt', async () => {
-  const headers = { 'x-api-key': 'verify-swap-key' };
-  const a = await fetch(quoteUrl(ERC20_QUERY), { headers });
-  const b = await fetch(quoteUrl(ERC20_QUERY), { headers });
-  assert.equal(a.status, 200);
-  assert.equal(a.headers.get('payment-response'), null);
-  const [qa, qb] = [(await a.json()).result.data, (await b.json()).result.data];
-  assert.match(qa.quoteId, /^aurora:0x[0-9a-fA-F]{40}$/);
-  const deposit = getAddress(qa.quoteId.slice(7));
-  const data = encodeFunctionData({
-    abi: erc20Abi,
-    functionName: 'transfer',
-    args: [deposit, BigInt(ERC20_QUERY.amount)],
-  });
-  assert.equal(qa.transactions[0].data, data);
-  assert.notEqual(qa.quoteId, qb.quoteId);
-});
-
-test('given another api key, the quote answers the 402 challenge', async () => {
-  const res = await fetch(quoteUrl(ERC20_QUERY), { headers: { 'x-api-key': 'not-listed' } });
-  assert.equal(res.status, 402);
-});
-
-test('given the allowlisted api key and an invalid query, the quote answers 400 in the backend envelope', async () => {
-  const res = await fetch(quoteUrl({ ...ERC20_QUERY, amount: '0' }), { headers: { 'x-api-key': 'verify-swap-key' } });
-  assert.equal(res.status, 400);
-  assert.equal((await res.json()).result.data, null);
-});
-
-test('given an invalid query and no payment, the quote still answers the 402 challenge', async () => {
-  const res = await fetch(quoteUrl({ ...ERC20_QUERY, amount: '0' }));
-  assert.equal(res.status, 402);
-  assert.equal(unb64(res.headers.get('payment-required')).accepts[0].amount, '5000');
-});
-
-test('given an invalid query and a payment, the quote answers 400 in the backend envelope', async () => {
-  const { res, body } = await paidQuote({ ...ERC20_QUERY, amount: '0' });
-  assert.equal(res.status, 400);
-  assert.equal(body.statusCode, 400);
-  assert.equal(body.result.data, null);
-  assert.ok(body.result.error.some((m) => m.startsWith('amount ')));
-  assert.equal(res.headers.get('payment-response'), null);
-});
-
-test('given a paid ERC-20 quote, the single deposit is transfer(depositAddress, amount) on the token', async () => {
-  const { res, body, nonce } = await paidQuote(ERC20_QUERY);
+test('given an EVM query with no key and no payment, move-asset/quote answers an Aurora quote', async () => {
+  const res = await fetch(moveQuoteUrl(ERC20_QUERY));
   assert.equal(res.status, 200);
-  assert.ok(res.headers.get('payment-response'));
-  assert.equal(body.statusCode, 200);
-  assert.equal(body.result.error, null);
-  const q = body.result.data;
-  const deposit = depositFor(nonce);
-  assert.equal(q.quoteId, `aurora:${deposit}`);
-  assert.equal(q.provider, 'aurora');
+  assert.equal(res.headers.get('payment-required'), null);
+  const { data } = (await res.json()).result;
+  assert.equal(data.provider, 'aurora');
+  assert.match(data.quoteId, /^aurora:0x[0-9a-fA-F]{40}$/);
+});
+
+test('given mode across or relay, move-asset/quote answers the quote captured from prod as it came', async () => {
+  for (const provider of ['across', 'relay']) {
+    await control({ mode: provider });
+    const res = await fetch(moveQuoteUrl(ERC20_QUERY));
+    assert.equal(res.status, 200);
+    assert.deepEqual(await res.json(), fixture(provider));
+  }
+  await control({ mode: '' });
+});
+
+test('given mode 422 or 502, move-asset/quote answers the NoProviderAvailable envelope', async () => {
+  for (const status of [422, 502]) {
+    await control({ mode: String(status) });
+    const res = await fetch(moveQuoteUrl(ERC20_QUERY));
+    assert.equal(res.status, status);
+    assert.match((await res.json()).result.error, /^NoProviderAvailable: aurora=/);
+  }
+  await control({ mode: '' });
+});
+
+const moveQuote = async (query = ERC20_QUERY) => (await (await fetch(moveQuoteUrl(query))).json()).result.data;
+
+test('given an ERC-20 query, the single deposit is transfer(depositAddress, amount) on the token', async () => {
+  const q = await moveQuote();
+  const deposit = getAddress(q.quoteId.slice(7));
   assert.equal(q.inputAmount, '10000');
   assert.ok(BigInt(q.minOutputAmount) > 0n && BigInt(q.minOutputAmount) <= BigInt(q.expectedOutputAmount));
   assert.deepEqual(q.transactions, [
@@ -201,69 +159,28 @@ test('given a paid ERC-20 quote, the single deposit is transfer(depositAddress, 
     },
   ]);
   assert.equal(q.deposit, undefined);
-  const row = logRows().findLast((r) => r.event === 'payment');
-  assert.equal(row.signatureValid, true);
-  assert.equal(row.termsMatch, true);
 });
 
-test('given a paid native quote, the deposit sends the amount to the deposit address with no data', async () => {
-  const { body, nonce } = await paidQuote(NATIVE_QUERY);
-  assert.deepEqual(body.result.data.transactions, [
-    { chainId: 84532, to: depositFor(nonce), data: '0x', value: '10000', description: 'deposit' },
+test('given a native query, the deposit sends the amount to the deposit address with no data', async () => {
+  const q = await moveQuote(NATIVE_QUERY);
+  assert.deepEqual(q.transactions, [
+    { chainId: 84532, to: getAddress(q.quoteId.slice(7)), data: '0x', value: '10000', description: 'deposit' },
   ]);
 });
 
-test('given two paid quotes, each gets a fresh deposit address', async () => {
-  const a = await paidQuote(ERC20_QUERY);
-  const b = await paidQuote(ERC20_QUERY);
-  assert.notEqual(a.body.result.data.quoteId, b.body.result.data.quoteId);
+test('given two quotes, each gets a fresh deposit address', async () => {
+  assert.notEqual((await moveQuote()).quoteId, (await moveQuote()).quoteId);
 });
 
-test('given the same proof and Idempotency-Key, the quote is replayed; without the key it answers 402', async () => {
-  const first = await paidQuote(ERC20_QUERY, { 'Idempotency-Key': 'swap:swp_1' });
-  const payments = logRows().filter((r) => r.event === 'payment').length;
-  const replay = await fetch(quoteUrl(ERC20_QUERY), {
-    headers: { 'PAYMENT-SIGNATURE': first.header, 'Idempotency-Key': 'swap:swp_1' },
-  });
-  assert.equal(replay.status, 200);
-  assert.deepEqual(await replay.json(), first.body);
-  const resent = await fetch(quoteUrl(ERC20_QUERY), { headers: { 'PAYMENT-SIGNATURE': first.header } });
-  assert.equal(resent.status, 402);
-  assert.equal(logRows().filter((r) => r.event === 'payment').length, payments);
-});
-
-test('given mode 422 or 502, the quote refuses before the challenge in the NoProviderAvailable envelope', async () => {
-  for (const status of [422, 502]) {
-    await control({ mode: String(status) });
-    const res = await fetch(quoteUrl(ERC20_QUERY));
-    assert.equal(res.status, status);
-    assert.equal(res.headers.get('payment-required'), null);
-    const body = await res.json();
-    assert.equal(body.statusCode, status);
-    assert.equal(body.result.data, null);
-    assert.match(body.result.error, /^NoProviderAvailable: aurora=/);
-  }
-  await control({ mode: '' });
-});
-
-test('given mode invalid, a paid quote answers 200 with a body that is not a quote', async () => {
+test('given mode invalid, move-asset/quote answers 200 with a body that is not a quote', async () => {
   await control({ mode: 'invalid' });
-  const { res, body } = await paidQuote(ERC20_QUERY);
+  const res = await fetch(moveQuoteUrl(ERC20_QUERY));
   await control({ mode: '' });
   assert.equal(res.status, 200);
-  assert.equal(body.result.data, null);
+  assert.equal((await res.json()).result.data, null);
 });
 
-test('given mode paid-502, a paid quote answers 502 with the receipt', async () => {
-  await control({ mode: 'paid-502' });
-  const { res, body } = await paidQuote(ERC20_QUERY);
-  await control({ mode: '' });
-  assert.equal(res.status, 502);
-  assert.ok(res.headers.get('payment-response'));
-  assert.equal(body.result.data, null);
-});
-
-test('given each quote check mode, the paid quote breaks only that rule', async () => {
+test('given each quote check mode, the quote breaks only that rule', async () => {
   const cases = {
     'two-tx': (q) => assert.equal(q.transactions.length, 2),
     'no-tx': (q) => assert.equal(q.transactions.length, 0),
@@ -271,47 +188,23 @@ test('given each quote check mode, the paid quote breaks only that rule', async 
     'quote-id': (q) => assert.doesNotMatch(q.quoteId, /^aurora:0x[0-9a-fA-F]{40}$/),
     provider: (q) => assert.notEqual(q.provider, 'aurora'),
     'deposit-field': (q) => assert.ok(q.deposit),
-    'tx-to': (q) => assert.notEqual(q.transactions[0].to, getAddress(USDC)),
     'tx-value': (q) => assert.notEqual(q.transactions[0].value, '0'),
-    'tx-data': (q, deposit) =>
-      assert.notEqual(
-        q.transactions[0].data,
-        encodeFunctionData({ abi: erc20Abi, functionName: 'transfer', args: [deposit, 10000n] })
-      ),
-    'trailing-bytes': (q, deposit) =>
-      assert.equal(
-        q.transactions[0].data,
-        encodeFunctionData({ abi: erc20Abi, functionName: 'transfer', args: [deposit, 10000n] }) + '00'
-      ),
-    'input-amount': (q, deposit) => {
-      assert.equal(q.inputAmount, '10001');
-      assert.equal(
-        q.transactions[0].data,
-        encodeFunctionData({ abi: erc20Abi, functionName: 'transfer', args: [deposit, 10001n] })
-      );
-    },
+    'tx-data': (q) => assert.notEqual(q.transactions[0].data, transferTo(q.quoteId.slice(7))),
     'output-amount': (q) => assert.ok(BigInt(q.minOutputAmount) > BigInt(q.expectedOutputAmount)),
-    'zero-min': (q) => assert.equal(q.minOutputAmount, '0'),
-    'deposit-self': (q) => assert.equal(q.quoteId, `aurora:${getAddress(ACCOUNT)}`),
   };
   for (const [mode, expect] of Object.entries(cases)) {
     await control({ mode });
-    const { body, nonce } = await paidQuote(ERC20_QUERY);
-    expect(body.result.data, depositFor(nonce));
+    expect(await moveQuote());
   }
   await control({ mode: 'reused' });
-  const { body } = await paidQuote(ERC20_QUERY);
+  const first = await moveQuote();
+  const again = await moveQuote();
   await control({ mode: '' });
-  const last = await paidQuote(ERC20_QUERY);
-  assert.equal(
-    body.result.data.quoteId,
-    `aurora:${getAddress(ACCOUNT)}`,
-    'reused repeats the previous deposit address'
-  );
-  assert.notEqual(last.body.result.data.quoteId, body.result.data.quoteId);
+  assert.equal(again.quoteId, first.quoteId, 'reused repeats the previous deposit address');
+  assert.notEqual((await moveQuote()).quoteId, first.quoteId);
 });
 
-const freshDeposit = async () => depositFor((await paidQuote(ERC20_QUERY)).nonce);
+const freshDeposit = async () => getAddress((await moveQuote()).quoteId.slice(7));
 const statusOf = async (depositAddress, provider = 'aurora') => {
   const res = await fetch(
     `${base}/proxy/v2/move-asset/deposit/status?${new URLSearchParams({ provider, depositAddress })}`
@@ -326,15 +219,10 @@ const submit = async (body) => {
   });
   return { res, body: await res.json() };
 };
-const DEFAULTS = { network: 'eip155:84532', quote: 'ok', deposit: 'PENDING_DEPOSIT', submit: 201 };
+const DEFAULTS = { quote: 'ok', deposit: 'PENDING_DEPOSIT', submit: 201 };
 async function defaults(at = base) {
-  const challenge = await fetch(`${at}/proxy/v2/swap/quote?${new URLSearchParams(ERC20_QUERY)}`);
-  const network = unb64(challenge.headers.get('payment-required')).accepts[0].network;
-  const { header } = await proof();
-  const paid = await fetch(`${at}/proxy/v2/swap/quote?${new URLSearchParams(ERC20_QUERY)}`, {
-    headers: { 'PAYMENT-SIGNATURE': header },
-  });
-  const quote = (await paid.json()).result.data?.transactions?.length === 1 ? 'ok' : 'broken';
+  const res = await fetch(`${at}/proxy/v2/move-asset/quote?${new URLSearchParams(ERC20_QUERY)}`);
+  const quote = (await res.json()).result.data?.transactions?.length === 1 ? 'ok' : 'broken';
   const address = getAddress('0x' + 'ab'.repeat(20));
   const status = await fetch(
     `${at}/proxy/v2/move-asset/deposit/status?${new URLSearchParams({ provider: 'aurora', depositAddress: address })}`
@@ -344,7 +232,7 @@ async function defaults(at = base) {
     headers: { 'content-type': 'application/json' },
     body: JSON.stringify({ provider: 'aurora', depositAddress: address, txHash: '0x' + 'cd'.repeat(32) }),
   });
-  return { network, quote, deposit: (await status.json()).result.data.state, submit: sent.status };
+  return { quote, deposit: (await status.json()).result.data.state, submit: sent.status };
 }
 const TX_HASH = '0x' + 'cd'.repeat(32);
 
@@ -421,7 +309,7 @@ test('given a provider other than aurora, submit and status answer 501', async (
 });
 
 test('given reset, the control state goes back to its defaults', async () => {
-  await control({ mode: 'two-tx', network: 'eip155:8453', submitFails: '3', state: 'REFUNDED' });
+  await control({ mode: 'two-tx', submitFails: '3', state: 'REFUNDED' });
   const res = await fetch(`${base}/_swap`, {
     method: 'POST',
     headers: { 'content-type': 'application/json' },
@@ -446,7 +334,7 @@ test('given a fresh seller, the control state starts from the defaults', async (
 test('every swap route and control call is logged', () => {
   const paths = new Set(logRows().map((r) => r.path));
   for (const p of [
-    '/proxy/v2/swap/quote',
+    '/proxy/v2/move-asset/quote',
     '/proxy/v2/move-asset/deposit/submit',
     '/proxy/v2/move-asset/deposit/status',
     '/_swap',

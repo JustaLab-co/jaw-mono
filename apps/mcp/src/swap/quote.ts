@@ -60,8 +60,9 @@ function quoteUrl(row: SwapRow): string {
     depositor: row.depositor,
     recipient: row.recipient,
     tradeType: 'EXACT_INPUT',
+    providers: 'across,relay',
   });
-  return `${config().swapUrl}/swap/quote?${query}`;
+  return `${config().swapUrl}/move-asset/quote?${query}`;
 }
 
 type Answer = { kind: 'answered'; status: number; body: string } | { kind: 'unreachable' };
