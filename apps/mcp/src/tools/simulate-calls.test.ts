@@ -275,9 +275,17 @@ describe('jaw_simulate_calls', () => {
 
     it('given calldata over 24 KB, then it is sent to the proxy rather than refused here', async () => {
       const p = await proxy(result({ status: 'success' }));
-      const data = `0x${'ab'.repeat(40_000)}`;
+      // Over the send tool's 24 KB per call, under the 40,000 bytes a batch may carry.
+      const data = `0x${'ab'.repeat(30_000)}`;
       done(await simulateCalls(input({ calls: [{ to: OTHER, data }] }), ACCOUNT, p.clientFor));
       expect((p.requests[0].params[0].calls as { data: string }[])[0].data).toBe(data);
+    });
+
+    it('given a value over uint256, then it is sent to the proxy rather than failing here', async () => {
+      const p = await proxy(result({ status: 'success' }));
+      const value = (2n ** 256n).toString();
+      done(await simulateCalls(input({ calls: [{ to: OTHER, value }] }), ACCOUNT, p.clientFor));
+      expect(p.requests).toHaveLength(1);
     });
 
     it('given no sender, then the connected account is the sender and the method is wallet_simulateCalls', async () => {
@@ -330,6 +338,23 @@ describe('jaw_simulate_calls', () => {
   });
 
   describe('refusals before any request', () => {
+    it('given calls over 40,000 bytes of calldata, then nothing is asked of the proxy and the agent is told to split', async () => {
+      const p = await proxy(result({ status: 'success' }));
+      // 24,576 and 15,040 bytes of calldata: a batch of 40,004 bytes.
+      const calls = [
+        { to: OTHER, data: `0xa9059cbb${'ab'.repeat(24_572)}` },
+        { to: OTHER, data: `0xa9059cbb${'ab'.repeat(15_036)}` },
+      ];
+
+      const out = await simulateCalls(input({ calls }), ACCOUNT, p.clientFor);
+
+      refused(out);
+      expect(leaks(spoken(out))).toEqual([]);
+      expect(toAgent(out).join('\n')).toMatch(/40004 bytes.*40000/);
+      expect(toAgent(out).join('\n')).toMatch(/smaller/);
+      expect(p.requests).toHaveLength(0);
+    });
+
     it('given a chain JAW does not serve, then it refuses naming the supported chains and opens no client', async () => {
       const p = await proxy(result({ status: 'success' }));
       const text = refused(await simulateCalls(input({ chainId: 1337 }), ACCOUNT, p.clientFor));
@@ -475,6 +500,17 @@ describe('jaw_simulate_calls', () => {
       expect(seen[0].config.annotations?.readOnlyHint).toBe(true);
       expect(seen[0].config.description).toContain('not a failure');
       expect(seen[0].config.description).toContain('permissionId');
+    });
+
+    it('given 100 calls, then the input is accepted, and 101 are refused', () => {
+      let schema: { safeParse: (v: unknown) => { success: boolean } } | undefined;
+      registerSimulateCallsTool({
+        registerTool: (_: string, config: { inputSchema: typeof schema }) => (schema = config.inputSchema),
+      } as never);
+      const many = (n: number) => ({ chainId: CHAIN, calls: Array.from({ length: n }, () => ({ to: OTHER })) });
+
+      expect(schema!.safeParse(many(100)).success).toBe(true);
+      expect(schema!.safeParse(many(101)).success).toBe(false);
     });
 
     it('given the handler runs for a connection, then the connected account is the sender', async () => {

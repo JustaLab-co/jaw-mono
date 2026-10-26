@@ -170,16 +170,16 @@ describe('insert and find', () => {
     expect((await findById(row.connectionId, row.id))?.id).toBe(row.id);
   });
 
-  it('given exactly ten calls, then the row is stored', async () => {
-    const row = await open(await newConnection(), { calls: Array(10).fill(CALL) });
-    expect(row.calls).toHaveLength(10);
+  it('given exactly 100 calls, then the row is stored', async () => {
+    const row = await open(await newConnection(), { calls: Array(100).fill(CALL) });
+    expect(row.calls).toHaveLength(100);
   });
 
-  it('given zero or eleven calls, then the database refuses', async () => {
+  it('given zero or 101 calls, then the database refuses', async () => {
     const connectionId = await newConnection();
     const insert = (calls: unknown[]) => refusalOf(open(connectionId, { calls }));
     expect(await insert([])).toMatch(/owner_call_shape/);
-    expect(await insert(Array(11).fill(CALL))).toMatch(/owner_call_shape/);
+    expect(await insert(Array(101).fill(CALL))).toMatch(/owner_call_shape/);
   });
 });
 

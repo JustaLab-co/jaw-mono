@@ -1,8 +1,8 @@
-import { randomBytes } from 'node:crypto';
+import { createHash, randomBytes } from 'node:crypto';
 import { getSupportedChains, PERMISSIONS_MANAGER_ADDRESS } from '@jaw.id/core';
 import { eq, sql } from 'drizzle-orm';
 import type { ChainClients } from '@jaw.id/agent';
-import { toHex, type Address, type Hex } from 'viem';
+import { toHex, type Address, type Hex, type PublicClient } from 'viem';
 import {
   entryPoint06Address,
   entryPoint07Address,
@@ -31,7 +31,7 @@ import { gateCode } from '@/payments/render';
 import { SEND_STARTED } from '@/owner-calls/store';
 import * as store from '@/owner-calls/store';
 import { approve } from '@/owner-calls/approve';
-import { fakeChain, type FakeEvent } from '@/owner-calls/chain-testkit';
+import { fakeChain, gasNode, type FakeEvent } from '@/owner-calls/chain-testkit';
 import type { ReadReceipt } from '@/owner-calls/receipt';
 import { leaks, spoken, toAgent } from '@/test-utils/spoken';
 import { sendCalls, sendCallsStatus, type SendCallsInput } from './owner-calls';
@@ -60,6 +60,15 @@ vi.mock('@/owner-calls/cap', async (original) => {
       return cap.countOpenLinks(...args);
     },
   };
+});
+
+// The gas check of the tool as the server registers it reads a node that is down, unless a test puts one there.
+const gasProxy = vi.hoisted(() => ({ clientFor: undefined as undefined | ((chainId: number) => PublicClient) }));
+vi.mock('@/lib/batch-limits', async (original) => {
+  const limits = await original<typeof import('@/lib/batch-limits')>();
+  const { gasNode: node } = await import('@/owner-calls/chain-testkit');
+  const down = node({ down: true }).clientFor;
+  return { ...limits, gasClientFor: (chainId: number) => (gasProxy.clientFor ?? down)(chainId) };
 });
 
 setTestEnv();
@@ -136,6 +145,19 @@ const input = (over: Partial<SendCallsInput> = {}): SendCallsInput => ({
 });
 const send = (t: Tenant, args: Partial<SendCallsInput> = {}, openWallet = wallet()) =>
   sendCalls(t, input(args), { openWallet, receipt: async () => null, clients: quietChain });
+// With the gas of the batch read off `node`.
+const checked = (t: Tenant, args: Partial<SendCallsInput>, node: ReturnType<typeof gasNode>) =>
+  sendCalls(t, input(args), {
+    openWallet: wallet(),
+    receipt: async () => null,
+    clients: quietChain,
+    gasClient: node.clientFor,
+  });
+// Two calls of 24,576 and `second` bytes of calldata: a batch of 24,964 bytes plus `second`, padded to 32.
+const sized = (second: number) => [
+  { to: TARGET, data: `0xa9059cbb${'ab'.repeat(24_572)}` },
+  { to: OTHER, data: `0xa9059cbb${'ab'.repeat(second - 4)}` },
+];
 const rowsOf = (connectionId: string) =>
   getDb().select().from(ownerCalls).where(eq(ownerCalls.connectionId, connectionId));
 const settle = async () => {
@@ -242,20 +264,20 @@ describe('jaw_send_calls link', () => {
     expect(second.structuredContent!.idempotencyKey).not.toBe(first.structuredContent!.idempotencyKey);
   });
 
-  it('given eleven calls or none, when they are sent through the server, then the input is refused before any wallet opens, and ten are served', async () => {
+  it('given 101 calls or none, when they are sent through the server, then the input is refused before any wallet opens, and 100 are served', async () => {
     const { t, token } = await connected();
     const many = (n: number) => Array.from({ length: n }, () => ({ to: TARGET }));
 
-    const eleven = await callTool(token, 'jaw_send_calls', { calls: many(11) });
+    const over = await callTool(token, 'jaw_send_calls', { calls: many(101) });
     const none = await callTool(token, 'jaw_send_calls', { calls: [] });
-    const ten = await callTool(token, 'jaw_send_calls', { calls: many(10) });
+    const hundred = await callTool(token, 'jaw_send_calls', { calls: many(100) });
 
-    for (const refused of [eleven, none]) {
+    for (const refused of [over, none]) {
       expect(refused.isError).toBe(true);
       expect(refused.content[0].text).toContain('Input validation error');
       expect(refused.content[0].text).toContain('calls');
     }
-    expect(ten.isError).toBeFalsy();
+    expect(hundred.isError).toBeFalsy();
     expect(served.clients).toHaveLength(1);
     expect(await rowsOf(t.connectionId)).toHaveLength(1);
   });
@@ -2048,6 +2070,12 @@ describe('what the owner hears from jaw_send_calls and jaw_get_calls_status', ()
       'call_target_refused',
       async () => send((await connected()).t, { calls: [{ to: entryPoint08Address }] }),
     ],
+    ['calls over 40,000 bytes', 'batch_too_large', async () => send((await connected()).t, { calls: sized(15_040) })],
+    [
+      'calls needing more gas than one transaction takes',
+      'batch_too_heavy',
+      async () => checked((await connected()).t, {}, gasNode({ gas: 9_000_000n })),
+    ],
     [
       'the same key with other calls',
       'idempotency_conflict',
@@ -2129,4 +2157,125 @@ describe('what the owner hears from jaw_send_calls and jaw_get_calls_status', ()
       for (const line of toAgent(result)) expect(line.startsWith(FOR_AGENT)).toBe(true);
     }
   );
+});
+
+describe('jaw_send_calls batch size and gas', () => {
+  afterEach(() => {
+    gasProxy.clientFor = undefined;
+  });
+
+  it('given calls over 40,000 bytes of calldata, then no link opens, nothing is stored and the agent is told to split', async () => {
+    const { t } = await connected();
+    const node = gasNode();
+
+    const result = await checked(t, { calls: sized(15_040) }, node);
+
+    expect(result.isError).toBe(true);
+    expect(result[gateCode]).toBe('batch_too_large');
+    expect(toAgent(result).join('\n')).toMatch(/40004 bytes.*40000/);
+    expect(toAgent(result).join('\n')).toMatch(/split/i);
+    expect(opened).toEqual([]);
+    expect(node.asked).toEqual([]);
+    expect(await rowsOf(t.connectionId)).toEqual([]);
+  });
+
+  it('given the largest batch under 40,000 bytes, then its link opens', async () => {
+    const { t } = await connected();
+
+    const result = await checked(t, { calls: sized(15_008) }, gasNode());
+
+    expect(result.isError).toBeFalsy();
+    expect(result.structuredContent!.state).toBe('awaiting_owner');
+  });
+
+  it("given calls needing more gas than the chain's budget, then no link opens, nothing is stored and the agent is told to split", async () => {
+    const { t } = await connected();
+    const node = gasNode({ gasLimit: 60_000_000n, gas: 5_000_001n });
+
+    const result = await checked(t, { chainId: 1 }, node);
+
+    expect(result.isError).toBe(true);
+    expect(result[gateCode]).toBe('batch_too_heavy');
+    expect(spoken(result)).toContain('Ethereum');
+    expect(toAgent(result).join('\n')).toMatch(/5000001 gas.*5000000/);
+    expect(toAgent(result).join('\n')).toMatch(/split/i);
+    expect(node.chains).toEqual([1]);
+    expect(opened).toEqual([]);
+    expect(await rowsOf(t.connectionId)).toEqual([]);
+  });
+
+  it("given calls within the chain's budget, then the owner's account was estimated and the link opens", async () => {
+    const { t } = await connected();
+    const node = gasNode({ gasLimit: 60_000_000n, gas: 5_000_000n });
+
+    const result = await checked(t, {}, node);
+
+    expect(result.structuredContent!.state).toBe('awaiting_owner');
+    expect(node.asked.find((a) => a.method === 'eth_estimateGas')?.params[0]).toMatchObject({ to: t.account });
+    expect(node.chains).toEqual([t.chainId]);
+  });
+
+  it.each([
+    ['a node that is down', () => gasNode({ down: true })],
+    ['an estimate that reverts', () => gasNode({ gas: new Error('execution reverted') })],
+  ])('given %s, then the link opens and the wallet decides as before', async (_name, make) => {
+    const { t } = await connected();
+
+    const result = await checked(t, {}, make());
+
+    expect(result.isError).toBeFalsy();
+    expect(result.structuredContent!.state).toBe('awaiting_owner');
+  });
+
+  it('given a request over 40,000 bytes stored before this limit, when it is retried with its key, then the stored answer comes back', async () => {
+    const { t } = await connected();
+    const calls = sized(15_040).map((c) => ({ ...c, value: '0' }));
+    // The hash sendCalls keeps for a request, so the row reads as one an earlier version stored.
+    const requestHash = createHash('sha256')
+      .update(JSON.stringify([t.chainId, calls.map((c) => [c.to.toLowerCase(), c.data, c.value])]))
+      .digest('hex');
+    const stored = await store.insertOwnerCall({
+      connectionId: t.connectionId,
+      key: 'before-the-limit',
+      requestHash,
+      chainId: t.chainId,
+      account: t.account,
+      calls,
+      walletUrl: 'http://keys.test/cli-bridge?session=before',
+      approveBy: new Date(Date.now() + 60_000),
+    });
+    await getDb()
+      .update(ownerCalls)
+      .set({ state: 'owner_declined', code: 'owner_declined' })
+      .where(eq(ownerCalls.id, stored!.id));
+
+    const result = await send(t, { calls: sized(15_040), idempotencyKey: 'before-the-limit' });
+
+    expect(result[gateCode]).toBeUndefined();
+    expect(result.structuredContent).toMatchObject({ id: stored!.id, state: 'owner_declined' });
+  });
+
+  it('given a retry of a stored request, then its gas is not read again', async () => {
+    const { t } = await connected();
+    const node = gasNode();
+    await checked(t, {}, node);
+    const reads = node.asked.length;
+
+    const again = await checked(t, {}, node);
+
+    expect(again.structuredContent!.state).toBe('awaiting_owner');
+    expect(node.asked).toHaveLength(reads);
+  });
+
+  it('given calls over the gas budget through the server, then they are refused before any wallet opens', async () => {
+    const { t, token } = await connected();
+    gasProxy.clientFor = gasNode({ gas: 9_000_000n }).clientFor;
+
+    const result = await callTool(token, 'jaw_send_calls', { calls: [{ to: TARGET }] });
+
+    expect(result.isError).toBe(true);
+    expect(result.content[0].text).toMatch(/^batch_too_heavy: /);
+    expect(served.clients).toEqual([]);
+    expect(await rowsOf(t.connectionId)).toEqual([]);
+  });
 });

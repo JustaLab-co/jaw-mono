@@ -362,7 +362,7 @@ export const ownerCalls = pgTable(
       .where(sql`${t.state} = 'awaiting_owner'`),
     check(
       'owner_call_shape',
-      sql`jsonb_array_length(${t.calls}) between 1 and 10
+      sql`jsonb_array_length(${t.calls}) between 1 and 100
         and (${t.state} <> 'sent' or ${t.callsId} is not null)
         and (${t.state} not in ('landed', 'reverted') or (${t.callsId} is not null and ${t.txHash} is not null))`
     ),
