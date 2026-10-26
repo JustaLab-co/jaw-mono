@@ -152,7 +152,7 @@ const HELP = `Commands:
   swap <originChain> <originToken> <destChain> <destToken> <amount> [recipient|-] [key]
                                  jaw_swap, amount in base units of originToken, 0x000...0 for the native coin,
                                  e.g. swap 8453 0x8335...2913 42161 0xaf88...5831 1000000
-  swap-status <quoteId>          jaw_swap_status, quoteId is aurora:<deposit address>
+  swap-status <quoteId>          jaw_swap_status, quoteId is relay:<request id>
   calls '<json array>' [chainId] [key]
                                  jaw_send_calls, the owner approves in the wallet, e.g.
                                  calls '[{"to":"0x...","data":"0x..."}]' 8453 my-key
