@@ -24,8 +24,8 @@ export type IdentitySource = 'ens' | 'token' | 'clearSigning';
 /** For a screen that shows who an address is and nothing else. */
 export const ENS_ONLY: readonly IdentitySource[] = ['ens'];
 
-/** For a contract that is rarely an ENS name but may be a clear-signing one, such as a call checker. */
-export const CONTRACT_NAMES: readonly IdentitySource[] = ['ens', 'clearSigning'];
+/** For a contract named only from the clear-signing registry, never by a name it chose itself. */
+export const CLEAR_SIGNING_ONLY: readonly IdentitySource[] = ['clearSigning'];
 
 export interface EnsIdentity {
   /** Primary name, suffixed `@chainlabel` off-mainnet. For showing. */

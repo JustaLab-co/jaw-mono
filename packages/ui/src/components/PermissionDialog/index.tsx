@@ -13,7 +13,7 @@ import { CopyButton } from '../CopyButton';
 import { useChainIconURI, useFeeTokenPrice } from '../../hooks';
 import { useAddressIdentities } from '../../hooks/useAddressIdentities';
 import { identityKey } from '../../utils/reverseResolve';
-import { CONTRACT_NAMES, ENS_ONLY } from '../../utils/addressIdentity';
+import { CLEAR_SIGNING_ONLY, ENS_ONLY } from '../../utils/addressIdentity';
 import { getDisplayAddress } from '../../utils';
 import { resolveBlockReason } from '../../utils/transactionFailure';
 import { isBlockingRevocationProblem, REVOCATION_PROBLEM_TEXT } from '../../utils/permissionExecution';
@@ -81,15 +81,15 @@ export const PermissionDialog = ({
     address && chainId ? identities[identityKey(address, chainId)] : undefined;
   // A checker is usually a contract with no ENS name, so it is also looked up by its clear-signing name.
   const checkerInputs = chainId ? calls.filter(hasChecker).map((call) => ({ address: call.checker, chainId })) : [];
-  const checkerIdentities = useAddressIdentities(checkerInputs, { mainnetRpcUrl, apiKey, include: CONTRACT_NAMES });
-  const checkerNameOf = (address: string) => {
-    const identity = chainId ? checkerIdentities[identityKey(address, chainId)] : undefined;
-    return identity?.clearSigningName ?? identity?.ensName ?? undefined;
-  };
-  // The confirm button waits until every name is known, so the user approves what they read.
-  const isResolvingAddresses =
-    Object.values(identities).some((identity) => identity.loading.ens) ||
-    Object.values(checkerIdentities).some((identity) => identity.loading.ens || identity.loading.clearSigning);
+  // Named only from the clear-signing registry: an ENS name is chosen by whoever deploys the
+  // checker, so a checker that allows everything could call itself `recipient-must-be-you.eth`.
+  const checkerIdentities = useAddressIdentities(checkerInputs, { mainnetRpcUrl, apiKey, include: CLEAR_SIGNING_ONLY });
+  const checkerNameOf = (address: string) =>
+    (chainId ? checkerIdentities[identityKey(address, chainId)]?.clearSigningName : undefined) ?? undefined;
+  // The confirm button waits until every name is known, so the user approves what they read. Not
+  // for a checker's name: its address is what gets signed and is always shown, and a stalled lookup
+  // must not hold Confirm.
+  const isResolvingAddresses = Object.values(identities).some((identity) => identity.loading.ens);
 
   // Inside a Radix modal a nested container's wheel events get eaten — drive scrollTop manually.
   const scrollRef = useRef<HTMLDivElement>(null);
