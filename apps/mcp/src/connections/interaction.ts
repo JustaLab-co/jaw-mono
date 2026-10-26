@@ -2,8 +2,10 @@ import { createHash, createHmac, randomBytes } from 'node:crypto';
 import type { ServerResponse } from 'node:http';
 import { sanitizeLine } from '@jaw.id/agent';
 import { eq } from 'drizzle-orm';
-import { isAddress, isHex, stringToHex, type Address } from 'viem';
+import type { SignInWithEthereumCapabilityRequest, WalletConnectResponse } from '@jaw.id/core';
+import { hexToNumber, isAddress, isHex, toHex, type Address, type Hex } from 'viem';
 import { generatePrivateKey, privateKeyToAddress } from 'viem/accounts';
+import { parseSiweMessage, validateSiweMessage } from 'viem/siwe';
 import { getDb } from '@/db/client';
 import { connections } from '@/db/schema';
 import { verifyOnChain, type VerifySignature } from '@/lib/chain';
@@ -85,36 +87,67 @@ export const codeOf = (uid: string) =>
   [...derived('code', uid).subarray(0, 6)].map((b) => 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789'[b % 32]).join('');
 
 /**
- * What the owner signs before anything else. It names the app and what it asks
- * for, and the code its page shows: the wallet link can be forwarded, and only
- * the person looking at that page can tell it is the request they made.
+ * The Sign-In with Ethereum request the owner signs before anything else. Its
+ * statement names the app and what it asks for, and the code its page shows: the
+ * wallet link can be forwarded, and only the person looking at that page can tell
+ * it is the request they made. The domain is the wallet page's own, which the
+ * wallet checks against where it runs; the URI is this server.
  */
-export const connectMessage = (a: Asked, account: Address) =>
-  [
-    `Connect ${a.clientName} to ${new URL(config().issuer).host}`,
-    ...(a.clientHost ? [`App domain: ${a.clientHost}`] : []),
-    `Allows: ${a.scopes.map((s) => CONNECTION_SCOPES[s]).join('; ')}`,
-    `Code: ${codeOf(a.uid)}`,
-    '',
-    'Approve only if the page that sent you here shows this code.',
-    '',
-    `Account: ${account}`,
-    `Chain: ${a.chainId}`,
-    `Expires: ${a.expiresAt.toISOString()}`,
-  ].join('\n');
+export const connectRequest = (a: Asked): SignInWithEthereumCapabilityRequest => ({
+  domain: new URL(config().keysOrigin).host,
+  uri: config().issuer,
+  version: '1',
+  nonce: derived('nonce', a.uid).toString('hex'),
+  chainId: toHex(a.chainId),
+  statement: [
+    `Connect ${a.clientName} to ${new URL(config().issuer).host}${a.clientHost ? ` from ${a.clientHost}` : ''}.`,
+    `Allows: ${a.scopes.map((s) => CONNECTION_SCOPES[s]).join('; ')}.`,
+    `Code: ${codeOf(a.uid)}. Approve only if the page that sent you here shows this code.`,
+  ].join(' '),
+  requestId: codeOf(a.uid),
+  expirationTime: a.expiresAt.toISOString(),
+});
 
-/** The account that signed in on the message that names this request. */
+/** Whether `message` is the sign-in `asked` for, by `account`, and still in its window. */
+function isAskedSignIn(
+  message: ReturnType<typeof parseSiweMessage>,
+  asked: SignInWithEthereumCapabilityRequest,
+  account: Address
+) {
+  return (
+    validateSiweMessage({ message, address: account, domain: asked.domain, nonce: asked.nonce }) &&
+    message.uri === asked.uri &&
+    message.version === asked.version &&
+    message.chainId === hexToNumber(asked.chainId as Hex) &&
+    message.statement === asked.statement &&
+    message.requestId === asked.requestId &&
+    message.expirationTime?.getTime() === new Date(asked.expirationTime!).getTime() &&
+    message.notBefore === undefined &&
+    message.resources === undefined
+  );
+}
+
+/** The account that signed in on the sign-in that names this request. */
 async function signIn(a: Asked, ask: Ask, deps: InteractionDeps): Promise<Address> {
-  const [account] = (await ask('eth_requestAccounts', [])) as unknown[];
+  const asked = connectRequest(a);
+  const answer = (await ask('wallet_connect', [{ capabilities: { signInWithEthereum: asked } }])) as
+    | WalletConnectResponse
+    | undefined;
+  const [first] = answer?.accounts ?? [];
+  const account = first?.address;
   if (typeof account !== 'string' || !isAddress(account)) throw new Error('the wallet returned no account');
-  const message = connectMessage(a, account);
-  const signature = await ask('personal_sign', [stringToHex(message), account]);
-  if (!isHex(signature)) throw new Error('the wallet returned no signature');
+  const siwe = first.capabilities?.signInWithEthereum;
+  // The wallet answers a sign-in the owner turned down in the capability, not as the request's error.
+  if (siwe && 'code' in siwe) throw Object.assign(new Error('the wallet did not sign in'), { code: siwe.code });
+  if (!siwe || typeof siwe.message !== 'string' || !isHex(siwe.signature)) {
+    throw new Error('the wallet returned no sign-in');
+  }
+  if (!isAskedSignIn(parseSiweMessage(siwe.message), asked, account)) throw new Error('wrong_sign_in');
   const valid = await deps.verify({
     chainId: a.chainId,
     address: account,
-    payload: { type: 'message', message },
-    signature,
+    payload: { type: 'message', message: siwe.message },
+    signature: siwe.signature,
   });
   if (!valid) throw new Error('bad_signature');
   return account;
@@ -124,6 +157,7 @@ async function signIn(a: Asked, ask: Ask, deps: InteractionDeps): Promise<Addres
 // another error's message, which can quote a query and its parameters.
 const SHOWN = new Set([
   'bad_signature',
+  'wrong_sign_in',
   'already_connected',
   'another_account_signed_in_first',
   'too many active connections; disconnect one from its app, or wait for one to expire',

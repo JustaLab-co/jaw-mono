@@ -169,7 +169,7 @@ async function startSession(
         const secret = await deriveSharedSecret(keys.privateKey, await importKeyFromHex('public', peer));
         const page = converse(ws, inbox, secret, session);
         const init = { chainId, appName: appNameOf(client) };
-        await page.send({ type: 'init', ...init });
+        await page.send({ type: 'init', ...init, ...ensOf() });
         const ready = await page.read((m) => m.type === 'ready');
         if (ready.replays === true) {
           // A session that cannot be resumed is how every session ran before replays, so the owner is still asked.
@@ -230,6 +230,15 @@ function connect(session: string, until: Date, release: () => void, joinWithin?:
     if (typeOf(e.data) === 'browser_connected') clearTimeout(unjoined);
   });
   return { ws, inbox, end };
+}
+
+/**
+ * The name new accounts get a subname under, read at each init rather than kept
+ * in the saved session, so a rejoin sends what the server is configured with now.
+ */
+function ensOf(): { ens?: string } {
+  const { ens } = config();
+  return ens ? { ens } : {};
 }
 
 function linkOf(session: string, publicKey: string): string {
@@ -331,7 +340,7 @@ async function rejoin(release: () => void, resume: RelayResume, url: string, unt
           await importKeyFromHex('public', peer)
         );
         const page = converse(ws, inbox, secret, session, peer);
-        await page.send({ type: 'init', chainId, appName });
+        await page.send({ type: 'init', chainId, appName, ...ensOf() });
         await page.read((m) => m.type === 'ready', soon());
         const result = await work(page.ask);
         await page.send({ type: 'shutdown' }).catch(() => undefined);

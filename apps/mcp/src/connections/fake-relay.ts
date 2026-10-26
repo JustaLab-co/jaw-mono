@@ -83,11 +83,11 @@ export async function replayingPage(
     ws.send(JSON.stringify({ type: 'encrypted', ...(await encryptMessage(secret, payload)) }));
   const answers = new Map<string, { request: string; reply: Promise<object> }>();
   const ids: string[] = [];
-  let inits = 0;
+  const sent: Record<string, unknown>[] = [];
   let mute = false;
   ws.on('message', async (data) => {
     const inner = await decryptMessage(secret, JSON.parse(String(data)) as EncryptedEnvelope).catch(() => undefined);
-    if (inner?.type === 'init') inits++;
+    if (inner?.type === 'init') sent.push(inner);
     if (inner?.type === 'init' && !mute) await send({ type: 'ready', replays });
     if (inner?.type !== 'rpc_request') return;
     const id = String(inner.id);
@@ -116,7 +116,8 @@ export async function replayingPage(
     publicKey,
     ids,
     asked: () => answers.size,
-    inits: () => inits,
+    inits: () => sent.length,
+    lastInit: () => sent.at(-1),
     mute: () => (mute = true),
     close: () => ws.close(),
   };
