@@ -17,7 +17,6 @@ export type BridgeTransfer = {
   send: TokenAmount;
   origin: ChainLabel;
   receive?: Received;
-  /** Set with `receive`. */
   destination?: ChainLabel;
   /** Set when what arrives goes to an address other than this account. */
   otherRecipient?: Address;

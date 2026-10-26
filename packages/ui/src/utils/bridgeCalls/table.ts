@@ -4,7 +4,6 @@ export type BridgeTable = { version: number; chains: Readonly<Record<number, Bri
 
 export type RelayChain = { chainId: number; relay: RelayContracts };
 
-/** The contracts and tokens the bridge screens trust, with the lookups the readers need. */
 export class BridgeContracts {
   readonly version: number;
   readonly #chains: Readonly<Record<number, BridgeChain>>;
@@ -24,7 +23,6 @@ export class BridgeContracts {
     return this.#chains[id];
   }
 
-  /** Relay names chains in an order by protocolChain, such as `base`. */
   relayByProtocolChain(name: string): RelayChain | undefined {
     return this.#relay.get(name);
   }
@@ -32,6 +30,5 @@ export class BridgeContracts {
 
 let snapshot: BridgeContracts | undefined;
 
-/** The table compiled into this build. */
 export const snapshotContracts = (): BridgeContracts =>
   (snapshot ??= new BridgeContracts({ version: 1, chains: BRIDGE_CHAINS }));
