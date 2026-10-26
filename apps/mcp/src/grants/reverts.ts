@@ -29,8 +29,14 @@ function refusalOf(data: Hex): Refusal | undefined {
   }
   switch (decoded.errorName) {
     case 'JustaPermissionManager_UnauthorizedCall':
-    case 'JustaPermissionManager_CheckerRejectedCall':
       return { reason: 'call-not-allowed', target: decoded.args[0], selector: decoded.args[1] };
+    case 'JustaPermissionManager_CheckerRejectedCall':
+      return {
+        reason: 'checker-rejected',
+        target: decoded.args[0],
+        selector: decoded.args[1],
+        checker: decoded.args[2],
+      };
     case 'JustaPermissionManager_ExceededSpendLimit':
     case 'JustaPermissionManager_NoSpendPermissions':
     case 'JustaPermissionManager_SpendValueOverflow':

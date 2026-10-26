@@ -11,6 +11,8 @@ export interface Call {
 
 export type Refusal =
   | { reason: 'call-not-allowed'; target: Address; selector: Hex }
+  // The rule allows the call; the checker on it refused the call's arguments.
+  | { reason: 'checker-rejected'; target: Address; selector: Hex; checker: Address }
   | { reason: 'over-limit'; token: Address; spend: bigint; left: bigint }
   | { reason: 'over-limit'; onChain: true }
   | { reason: 'expired' }

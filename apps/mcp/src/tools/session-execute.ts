@@ -99,6 +99,11 @@ function described(r: Refusal, permissionId: string, chainId: number): Said {
         say: `call-not-allowed: The permission does not allow this action on ${r.target}.`,
         next: `Tell the owner it is outside what they approved, and ${ONE_OFF}. Permission ${permissionId} does not allow calling ${r.selector} on ${r.target}.`,
       };
+    case 'checker-rejected':
+      return {
+        say: `checker-rejected: The permission allows this action on ${r.target}, but the contract that checks it refused it as asked.`,
+        next: `Change the call's arguments, never the permission: permission ${permissionId} allows calling ${r.selector} on ${r.target}, but its checker ${r.checker} refused this call's arguments.`,
+      };
     case 'over-limit':
       return {
         say:
@@ -468,6 +473,7 @@ export function registerSessionExecuteTool(server: McpServer) {
         'Run up to 10 contract calls from this connection under a custom permission the owner approved with jaw_grant_permissions, with no approval needed: the permission is the limit. ' +
         'Use it for the repeated or unattended runs the permission was approved for, and only within what the owner asked. ' +
         "Before sending, it checks each call against the permission's allowed actions and what each spend limit has left, and refuses by name: call-not-allowed, over-limit, expired or no-grant. " +
+        'A call the permission allows but a checker on it refuses comes back as checker-rejected, naming the checker: change the arguments, not the permission. ' +
         'A refused run never falls back to asking the owner: tell them what was refused and offer to do it once with jaw_send_calls, and never ask for a wider permission to make it pass. ' +
         'The spend limit for paid services runs no actions and is refused here. ' +
         "The run's network fee is paid in the permission's first spend token when the connection holds some of it and the fee service takes it, otherwise in USDC from the connection's balance, so with neither the run cannot be sent. " +

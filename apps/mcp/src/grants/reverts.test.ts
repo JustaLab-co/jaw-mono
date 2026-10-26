@@ -18,6 +18,7 @@ const TRANSFER = toFunctionSelector('transfer(address,uint256)');
 
 const MANAGER_ERRORS = parseAbi([
   'error JustaPermissionManager_UnauthorizedCall(address target, bytes4 selector)',
+  'error JustaPermissionManager_CheckerRejectedCall(address target, bytes4 selector, address checker)',
   'error JustaPermissionManager_ExceededSpendLimit(uint256 value, uint256 allowance)',
   'error JustaPermissionManager_AfterPermissionEnd(uint48 currentTimestamp, uint48 end)',
 ]);
@@ -63,6 +64,23 @@ describe('refusalOfFailure', () => {
       reason: 'call-not-allowed',
       target: CAROL,
       selector: TRANSFER,
+    });
+  });
+
+  // The call is allowed by its rule; the checker on that rule refused its arguments. The agent can
+  // fix the call, not the grant, so the two are told apart.
+  it('names a CheckerRejectedCall as checker-rejected, naming the checker', () => {
+    const checker: Address = '0x398b9d939E7E616E03eA99601c835C920621B2ca';
+    const data = encodeErrorResult({
+      abi: MANAGER_ERRORS,
+      errorName: 'JustaPermissionManager_CheckerRejectedCall',
+      args: [CAROL, TRANSFER, checker],
+    });
+    expect(refusalOfFailure({ data: { revertData: data } })).toEqual({
+      reason: 'checker-rejected',
+      target: CAROL,
+      selector: TRANSFER,
+      checker,
     });
   });
 
