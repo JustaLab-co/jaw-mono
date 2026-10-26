@@ -211,6 +211,8 @@ export const move = (connectionId: string, id: string, from: SwapState[], to: Sw
 
 export const SEND_STARTED = 'send_started';
 
+const unsent = sql`${swaps.code} is distinct from ${SEND_STARTED}`;
+
 const heldBy = (row: SwapRow, states: SwapState[]) =>
   and(ofSwap(row.connectionId, row.id, states), leasedSwaps.heldBy(row));
 
@@ -233,7 +235,7 @@ export const reopenLink = (row: SwapRow, walletUrl: string, db: Tx = getDb()) =>
     and(
       ofSwap(row.connectionId, row.id, ['awaiting_owner']),
       eq(swaps.walletUrl, row.walletUrl!),
-      sql`${swaps.code} is distinct from ${SEND_STARTED}`,
+      unsent,
       gt(swaps.approveBy, dbNow),
       unclaimed
     ),
@@ -246,13 +248,24 @@ export const { renew: renewSession, end: endSession } = leasedSwaps;
 export const decline = (row: SwapRow, code: string) =>
   write(heldBy(row, ['awaiting_owner']), { state: 'owner_declined', code, relay: null });
 
+export const declineUnsent = async (row: SwapRow, code: string) =>
+  (await write(and(heldBy(row, ['awaiting_owner']), unsent), { state: 'owner_declined', code, relay: null })) ??
+  write(and(heldBy(row, ['expired']), unsent), { code });
+
 /** Written by whichever run hears the calls id, holder or not: the trigger keeps it write-once. */
 export const recordCallsId = (row: SwapRow, callsId: string) =>
   move(row.connectionId, row.id, ['awaiting_owner', 'expired'], 'deposit_sent', { callsId, code: null, relay: null });
 
 /** `unlessRejoinable` leaves a row that keeps a relay session to its next resume. */
-export const recordCode = (row: SwapRow, code: string, { unlessRejoinable = false } = {}) =>
-  write(and(heldBy(row, ['awaiting_owner', 'expired']), unlessRejoinable ? isNull(swaps.relay) : undefined), { code });
+export const recordCode = (row: SwapRow, code: string, { unlessRejoinable = false, unlessSent = false } = {}) =>
+  write(
+    and(
+      heldBy(row, ['awaiting_owner', 'expired']),
+      unlessRejoinable ? isNull(swaps.relay) : undefined,
+      unlessSent ? unsent : undefined
+    ),
+    { code }
+  );
 
 export const DEPOSIT_FAILED = 'deposit_failed';
 export const DEPOSIT_REVERTED = 'deposit_reverted';
