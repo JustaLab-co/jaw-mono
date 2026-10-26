@@ -1,3 +1,4 @@
+import { randomBytes } from 'node:crypto';
 import { eq, sql } from 'drizzle-orm';
 import type { PgUpdateSetSource } from 'drizzle-orm/pg-core';
 import {
@@ -6,6 +7,7 @@ import {
   getAddress,
   keccak256,
   toHex,
+  zeroAddress,
   type Address,
   type Hex,
   type PublicClient,
@@ -817,11 +819,44 @@ describe('the owner approves the deposit', () => {
           { kind: 'deposit', to: transactions[1].to, value: '0' },
         ],
       });
+      const order = 'relayOrder' in answer.result.data ? answer.result.data.relayOrder.orderData : undefined;
       expect(asked[1].params).toEqual([
-        { version: '2.0.0', chainId: '0x2105', from: t.account, atomicRequired: true, calls: transactions },
+        {
+          version: '2.0.0',
+          chainId: '0x2105',
+          from: t.account,
+          atomicRequired: true,
+          calls: transactions,
+          ...(order && { capabilities: { jawRelayOrder: { optional: true, orderData: order } } }),
+        },
       ]);
       expect(result.structuredContent?.summary).toContain('in one batch on chain 8453');
       expect(row).toMatchObject({ state: 'deposit_sent', callsId: '0xcalls' });
+    }
+  );
+
+  it.each([
+    ['a relayOrder that is not an object', 'order'],
+    ['orderData that is not an object', { orderData: 'order' }],
+    ['orderData that is a list', { orderData: [1] }],
+  ])(
+    'given a Relay quote with %s, when the owner approves, then the row keeps no order and the wallet gets no capability',
+    async (_, relayOrder) => {
+      const { t } = await connected();
+      const quoteId = `relay:0x${randomBytes(32).toString('hex')}`;
+      backend.answer = { result: { data: { ...relayUsdc.result.data, quoteId, relayOrder } } };
+      const failedOffChain: Ask = async () => ({ status: 400 });
+
+      const { row } = await approve(t, sendingAs(t.account, approved, failedOffChain), {
+        originChainId: 8453,
+        originToken: '0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913',
+        destinationToken: '0x82aF49447D8a07e3bd95BD0d56f35241523fBab1',
+        amount: relayUsdc.result.data.inputAmount,
+      });
+
+      expect(row).toMatchObject({ quoteId, state: 'deposit_sent', callsId: '0xcalls' });
+      expect(row.quote).not.toHaveProperty('orderData');
+      expect(asked[1].params[0]).not.toHaveProperty('capabilities');
     }
   );
 
@@ -1390,21 +1425,64 @@ describe('jaw_swap_status', () => {
   }
   const pastApproveBy = sql`statement_timestamp() - interval '11 minutes'`;
 
-  it.each([
-    ['across', /approve in one batch on chain 84532, a deposit of 1000000 base units of \S+ to the Across contract\. /],
-    ['relay', /approve in one batch on chain 84532, a deposit of 1000000 base units of \S+ to the Relay Depository\. /],
-  ] as const)(
-    'given a %s row awaiting the owner, when jaw_swap_status answers, then the summary names the provider contract and no deposit address',
-    async (provider, text) => {
-      const { t, quoteId } = await providerRow(provider);
+  it('given an Across row awaiting the owner, when jaw_swap_status answers, then the summary names the deposit to the Across contract, the minimum and the refund on the origin chain', async () => {
+    const { t, quoteId, row } = await providerRow('across');
+    const [deposit] = callsOf(row)!;
 
-      const summary = (await status(t, quoteId)).structuredContent?.summary;
+    const summary = (await status(t, quoteId)).structuredContent?.summary;
 
-      expect(summary).toMatch(text);
-      expect(summary).not.toMatch(/deposit address|null/);
-      expect(deposits.hits).toEqual([]);
-    }
-  );
+    expect(summary).toContain(
+      `and approve on chain 84532, a deposit of 1000000 base units of ${row.originToken} to the Across contract ${deposit.to}. `
+    );
+    expect(summary).toContain(
+      `Across delivers at least 990025 base units of ${row.destinationToken} on chain 42161 to ${row.recipient}, expected in about 20 s; ` +
+        'if no relayer fills it in time, Across refunds the deposit to the account on chain 84532 in the token it bridged, ' +
+        `which can differ from ${row.originToken} when the route swaps or wraps it first. `
+    );
+    expect(summary).not.toMatch(/deposit address|null/);
+    expect(deposits.hits).toEqual([]);
+  });
+
+  it('given a Relay row with an approve and a deposit awaiting the owner, when jaw_swap_status answers, then the summary names the batch, the solver and that Relay settles it', async () => {
+    const { t, quoteId, row } = await providerRow('relay');
+    const [deposit] = callsOf(row)!;
+    const approval = {
+      ...deposit,
+      kind: 'approve' as const,
+      data: encodeFunctionData({ abi: erc20Abi, functionName: 'approve', args: [PAY_TO, 7n] }),
+    };
+    await rewrite(row.id, { call: [approval, deposit] });
+
+    const summary = (await status(t, quoteId)).structuredContent?.summary;
+
+    expect(summary).toContain(
+      `and approve in one batch on chain 84532, a token approval and a deposit of 1000000 base units of ${row.originToken} to the Relay contract ${deposit.to}. `
+    );
+    expect(summary).toContain("Relay's solver pays at least 990025 base units");
+    expect(summary).toContain("Settlement is enforced by Relay's protocol, not by a contract on chain 42161");
+    expect(deposits.hits).toEqual([]);
+  });
+
+  it('given an Across row from the native coin, when it waits for the owner and later is refunded, then the terms say the refund is the bridged token and the refund says WETH', async () => {
+    const { t, quoteId, row } = await providerRow('across', { originToken: zeroAddress });
+
+    const waiting = (await status(t, quoteId)).structuredContent?.summary;
+    await rewrite(row.id, { state: 'refunded', callsId: '0xcalls', txHash: HASH });
+    const refunded = (await status(t, quoteId)).structuredContent?.summary;
+
+    expect(waiting).toContain(
+      'Across refunds the deposit to the account on chain 84532 in the token it bridged, which can differ from the native coin'
+    );
+    expect(refunded).toBe(`The swap backend refunded the deposit as WETH to ${row.depositor} on chain 84532.`);
+  });
+
+  it('given an Across row the backend reads as expired, when jaw_swap_status answers, then the summary says Across refunds it and to keep reading', async () => {
+    const { t, quoteId } = await providerRow('across', { state: 'submitted', backendRawState: 'expired' });
+
+    const summary = (await status(t, quoteId)).structuredContent?.summary;
+
+    expect(summary).toContain('Across did not fill the deposit in time and refunds it to the account on chain 84532');
+  });
 
   it('given a Relay row the wallet may have sent, past the grace window, when the backend has no deposit, then the summary says the backend has not seen the Relay deposit for this swap', async () => {
     const { t, quoteId } = await providerRow('relay', {
@@ -1526,6 +1604,31 @@ describe('jaw_swap_status', () => {
     expect(deposits.hits).toEqual([]);
   });
 
+  it('given a Relay row that expired with no send asked, when jaw_swap_status answers, then it says nothing was sent and points to a new quote, with no read', async () => {
+    const { t, quoteId } = await providerRow('relay', { state: 'expired', approveBy: pastApproveBy });
+
+    const summary = (await status(t, quoteId)).structuredContent?.summary;
+
+    expect(summary).toMatch(/did not approve before \S+\. Nothing was sent\. A new jaw_swap with a new idempotencyKey/);
+    expect(summary).not.toMatch(/lands later/);
+    expect(deposits.hits).toEqual([]);
+  });
+
+  it('given an Across deposit that failed before it was mined, when jaw_swap_status answers, then it says to start a new swap and not that a later deposit shows', async () => {
+    const { t, quoteId } = await providerRow('across', {
+      state: 'deposit_sent',
+      callsId: '0xcalls',
+      code: 'deposit_failed',
+    });
+
+    const summary = (await status(t, quoteId)).structuredContent?.summary;
+
+    expect(summary).toMatch(
+      /The deposit failed before it was mined\. The funds did not leave the account on chain 84532\. Start a new swap\.$/
+    );
+    expect(summary).not.toMatch(/later sees a deposit/);
+  });
+
   it('given an across row whose receipt held two deposits of the account, when jaw_swap_status answers, then it says the deposit cannot be told apart and is not followed, with no read', async () => {
     const { t, quoteId } = await providerRow('across', {
       state: 'deposit_sent',
@@ -1571,9 +1674,10 @@ describe('jaw_swap_status', () => {
     });
   });
 
-  it('given a row whose call does not read, when jaw_swap_status answers, then it names no deposit to send', async () => {
+  it('given an Aurora row whose call does not read, when jaw_swap_status answers, then it names no deposit to send', async () => {
     const { t } = await connected();
-    const quoteId = await started(t);
+    await started(t);
+    const quoteId = await asAurora(t);
     const row = await rowOf(t);
 
     await rewrite(row.id, { call: [{ chainId: 84532, to: USDC, value: '0' }] as never });

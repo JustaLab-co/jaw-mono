@@ -75,6 +75,41 @@ describe('checkQuote with the quote as the backend sends it', () => {
   });
 });
 
+describe('the Relay order in the quote', () => {
+  const CAP = 32_768;
+  const withOrderOf = (length: number) => {
+    const quote = bodyOf(relayUsdc);
+    const order = (quote.relayOrder as { orderData: Record<string, unknown> }).orderData;
+    order.filler = '';
+    order.filler = 'x'.repeat(length - JSON.stringify(order).length);
+    return quote;
+  };
+
+  it('given a Relay quote with its order, when checked, then the order data is kept as the backend sent it', () => {
+    const result = checkQuote(tenUsdc, bodyOf(relayUsdc));
+
+    expect(result).toMatchObject({ ok: true, quote: { orderData: relayUsdc.result.data.relayOrder.orderData } });
+  });
+
+  it('given an order exactly at 32 KB, when checked, then it is kept', () => {
+    const result = checkQuote(tenUsdc, withOrderOf(CAP));
+
+    expect(result.ok && JSON.stringify(result.quote.orderData)).toHaveLength(CAP);
+  });
+
+  it('given an order one character over 32 KB, when checked, then order_too_large', () => {
+    expect(checkQuote(tenUsdc, withOrderOf(CAP + 1))).toEqual({ ok: false, code: 'order_too_large' });
+  });
+
+  it('given an Across quote that carries a Relay order, when checked, then no order data is kept', () => {
+    const quote = { ...bodyOf(acrossSameToken), relayOrder: bodyOf(relayUsdc).relayOrder };
+
+    const result = checkQuote(tenUsdc, quote);
+
+    expect(result.ok && 'orderData' in result.quote).toBe(false);
+  });
+});
+
 describe('checkQuote refusals', () => {
   it('given a body that is not a quote, when checked, then quote_invalid', () => {
     for (const body of [undefined, null, {}, { ...bodyOf(acrossSameToken), transactions: 'none' }]) {
