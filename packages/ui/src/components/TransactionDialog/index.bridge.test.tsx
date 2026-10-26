@@ -1,6 +1,8 @@
 // @vitest-environment jsdom
 import { describe, expect, it, vi } from 'vitest';
 import { renderToStaticMarkup } from 'react-dom/server';
+import { act } from 'react';
+import { createRoot } from 'react-dom/client';
 import type { ReactNode } from 'react';
 import { decodeFunctionData, encodeFunctionData, parseAbi, type Hex } from 'viem';
 import { identityKey } from '../../utils';
@@ -17,9 +19,14 @@ import type { AssetDelta } from '../../utils/assetPreview';
 import { Accordion } from '../ui/accordion';
 
 vi.mock('../../hooks', () => ({ useChainIconURI: () => undefined, useFeeTokenPrice: () => undefined }));
+vi.mock('../../utils/tokenPrice', () => ({ fetchTokenPrice: async (s: string) => ({ USDC: 1, WETH: 3000 })[s] ?? 0 }));
 vi.mock('../../hooks/useChainIcons', () => ({ useChainIcons: () => ({}) }));
 vi.mock('../../hooks/useDecodedCalldata', () => ({
-  useDecodedCalldata: () => ({ clearSigned: null, decoded: null, isLoading: false }),
+  useDecodedCalldata: (_to: string, data?: string) => ({
+    clearSigned: null,
+    decoded: { functionName: data?.startsWith('0x095ea7b3') ? 'approve' : 'deposit', signature: '', params: [] },
+    isLoading: false,
+  }),
 }));
 vi.mock('../ShellDialog', () => ({ ShellDialog: ({ children }: { children: ReactNode }) => <div>{children}</div> }));
 vi.mock('../../hooks/useAddressIdentities', () => {
@@ -98,6 +105,33 @@ const render = (transactions: BridgeCall[], extra: Extra = {}) => {
   return root;
 };
 
+// Prices arrive in an effect, which static markup never runs.
+const renderLive = async (transactions: BridgeCall[], extra: Extra = {}) => {
+  (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
+  const root = document.createElement('div');
+  await act(async () => {
+    createRoot(root).render(
+      <TransactionDialog
+        open
+        onOpenChange={() => undefined}
+        transactions={transactions}
+        walletAddress={SIGNER}
+        gasFee="0"
+        gasFeeLoading={false}
+        gasEstimationError=""
+        sponsored
+        onConfirm={async () => undefined}
+        onCancel={() => undefined}
+        isProcessing={false}
+        networkName="Base"
+        mainnetRpcUrl=""
+        {...extra}
+      />
+    );
+  });
+  return root;
+};
+
 const title = (root: HTMLElement) => root.querySelector('h2')?.textContent;
 const red = (root: HTMLElement) => [...root.querySelectorAll('.text-destructive')].map((e) => e.textContent);
 const yellow = (root: HTMLElement) =>
@@ -112,15 +146,45 @@ describe('TransactionDialog with a bridge deposit', () => {
     expect(title(root)).toBe('Bridge to Arbitrum');
     expect(column(root, 'You send')).toContain('USDC');
     expect(column(root, 'You send')).toContain('on Base');
-    expect(column(root, 'You get')).toContain('≥ 9.9609');
-    expect(column(root, 'You get')).toContain('via Across');
-    expect(column(root, 'You get')).toContain('on Arbitrum');
+    expect(column(root, 'You get via Across')).toContain('≥ 9.9609');
+    expect(column(root, 'You get via Across')).toContain('on Arbitrum');
     expect(root.textContent).toContain('Details');
     expect(root.textContent).not.toContain('to JAW');
     expect(red(root)).toEqual([]);
     expect(yellow(root)).toEqual([]);
-    expect(root.textContent).toContain('Approve USDC for Across');
-    expect(root.textContent).toContain('Across deposit');
+    const stepTitles = [...root.querySelectorAll('button .text-value')].map((e) => e.textContent);
+    expect(stepTitles).toEqual(['approve()', 'deposit()']);
+  });
+
+  it('lays You get out like You send: token address, amount, chain and a USD value', async () => {
+    const root = await renderLive([approve(SPOKE_POOL), ACROSS_CALLS.prod]);
+    const get = column(root, 'You get via Across');
+    expect(get).toContain('0xaf88...5831');
+    expect(get).toContain('≥ 9.9609');
+    expect(get).toContain('$9.96');
+    expect(column(root, 'You send')).toContain('$10.00');
+  });
+
+  it('prices the token bought on the other chain by its own symbol', async () => {
+    const root = await renderLive([approve(PERIPHERY), ACROSS_CALLS.usdcToWeth]);
+    expect(column(root, 'You get via Across')).toMatch(/≥ 0\.0041.*\$1\d\.\d\d/);
+  });
+
+  it('keeps simulated incoming tokens out of the receive column', () => {
+    const usdt: AssetDelta = {
+      address: '0xfd086bc7cd5c481dcc9c85ebe478a1c0b69fcbb9',
+      symbol: 'USDT',
+      decimals: 6,
+      diff: 5_000_000n,
+      direction: 'in',
+      amountFormatted: '5',
+      isNative: false,
+    };
+    const own = render([approve(SPOKE_POOL), ACROSS_CALLS.prod], { assetsIn: [usdt] });
+    expect(column(own, 'You get via Across')).not.toContain('USDT');
+    expect(column(own, 'You get via Across')).toContain('≥ 9.9609');
+    const other = render([approve(SPOKE_POOL), ACROSS_CALLS.usdcOtherRecipient], { assetsIn: [usdt] });
+    expect(other.textContent).not.toContain('USDT');
   });
 
   it('prefers the simulated send over the decoded one when the simulation has it', () => {
@@ -140,14 +204,14 @@ describe('TransactionDialog with a bridge deposit', () => {
   it('reads a swap on the origin as the token sent and the token bought on the other chain', () => {
     const root = render([approve(PERIPHERY), ACROSS_CALLS.usdcToWeth]);
     expect(column(root, 'You send')).toContain('USDC');
-    expect(column(root, 'You get')).toContain('WETH');
-    expect(column(root, 'You get')).toContain('≥ 0.0041');
+    expect(column(root, 'You get via Across')).toContain('WETH');
+    expect(column(root, 'You get via Across')).toContain('≥ 0.0041');
   });
 
   it('cuts the minimum rather than rounding it up, so it never reads more than the deposit promises', () => {
     const root = render([ACROSS_CALLS.nativeEth]);
-    expect(column(root, 'You get')).toContain('≥ 0.0099');
-    expect(column(root, 'You get')).not.toContain('0.01');
+    expect(column(root, 'You get via Across')).toContain('≥ 0.0099');
+    expect(column(root, 'You get via Across')).not.toContain('0.01');
   });
 
   it('names the token of a swap on the destination and says the swap sets its amount, in yellow', () => {
@@ -156,7 +220,8 @@ describe('TransactionDialog with a bridge deposit', () => {
       e.textContent?.includes('Amount set by a swap on Arbitrum')
     );
     expect(swapNote).toBeDefined();
-    expect(column(root, 'You get')).not.toContain('≥');
+    expect(column(root, 'You get via Across')).toContain('0x912C...6548');
+    expect(column(root, 'You get via Across')).not.toContain('≥');
     expect(red(root)).toEqual([]);
   });
 
@@ -169,14 +234,16 @@ describe('TransactionDialog with a bridge deposit', () => {
   it('heads what arrives with the recipient when it is not this account, not "You get"', () => {
     const root = render([approve(SPOKE_POOL), ACROSS_CALLS.usdcOtherRecipient]);
     expect(root.textContent).not.toContain('You get');
-    expect(column(root, '0x1111...1111 gets')).toContain('≥ 9.9902');
+    expect(column(root, 'They get via Across')).toContain('≥ 9.9902');
   });
 
   it('shows a minimum below 0.0001 with its first significant digits, never as 0', () => {
     const root = render([approve(SPOKE_POOL), nofeeWith((a) => (a[5] = 98_765n))]);
-    expect(column(root, 'You get')).toContain('≥ 0.0987');
+    expect(column(root, 'You get via Across')).toContain('≥ 0.0987');
     const dust = render([approve(SPOKE_POOL), nofeeWith((a) => (a[5] = 9n))]);
-    expect(column(dust, 'You get')).toContain('≥ 0.000009');
+    // The row writes 0.000009 as 0.0₅9, the subscript counting the zeros, as every other screen does.
+    expect(column(dust, 'You get via Across')).toContain('≥ 0.059');
+    expect(column(dust, 'You get via Across')).not.toContain('≥ 0 ');
   });
 
   it('shows an unknown token sent in base units, since its decimals are unknown', () => {
@@ -219,9 +286,8 @@ describe('TransactionDialog with a bridge deposit', () => {
     const capabilities = { jawRelayOrder: { optional: true, orderData: RELAY_USDC_ORDER } };
     const root = render([RELAY_USDC_APPROVE, RELAY_USDC_DEPOSIT], { capabilities });
     expect(title(root)).toBe('Bridge to Arbitrum');
-    expect(column(root, 'You get')).toContain('≥ 9.7764');
-    expect(column(root, 'You get')).toContain('via Relay');
-    expect(column(root, 'You get')).toContain('on Arbitrum');
+    expect(column(root, 'You get via Relay')).toContain('≥ 9.7764');
+    expect(column(root, 'You get via Relay')).toContain('on Arbitrum');
     expect(yellow(root)).toEqual([]);
     expect(red(root)).toEqual([]);
   });
@@ -247,7 +313,7 @@ describe('TransactionDialog with a bridge deposit', () => {
   it('keeps the bridge view when the simulation fails, under the simulation notice', () => {
     const root = render([approve(SPOKE_POOL), ACROSS_CALLS.prod], { assetPreviewError: true });
     expect(yellow(root)[0]).toContain('Could not simulate this transaction');
-    expect(column(root, 'You get')).toContain('≥ 9.9609');
+    expect(column(root, 'You get via Across')).toContain('≥ 9.9609');
   });
 });
 
