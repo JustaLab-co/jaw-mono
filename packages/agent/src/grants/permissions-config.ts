@@ -4,7 +4,13 @@ export interface PermissionsConfig {
    * prefers, computing the selector from it when no explicit `selector` is
    * given. Both were already accepted on the wire; only the type omitted it.
    */
-  calls?: Array<{ target: string; selector?: string; functionSignature?: string }>;
+  calls?: Array<{
+    target: string;
+    selector?: string;
+    functionSignature?: string;
+    /** Contract the permission manager asks to approve each matching call. Absent means none. */
+    checker?: string;
+  }>;
   spends?: Array<{
     token: string;
     allowance: string;

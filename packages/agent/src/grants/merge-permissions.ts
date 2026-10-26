@@ -1,4 +1,4 @@
-import { toFunctionSelector } from 'viem';
+import { toFunctionSelector, zeroAddress } from 'viem';
 import { describeSpendPeriod } from '../x402/period.js';
 import type { GrantedPermission } from '../session/session-config.js';
 import type { PermissionsConfig } from './permissions-config.js';
@@ -29,9 +29,17 @@ import type { PermissionsConfig } from './permissions-config.js';
  * two browser approvals, and left another copy of the same call on the
  * permission.
  */
-function callKey(call: { target: string; selector?: string; functionSignature?: string }): string | null {
+function callKey(call: {
+  target: string;
+  selector?: string;
+  functionSignature?: string;
+  checker?: string;
+}): string | null {
   const selector = call.selector ?? (call.functionSignature ? safeSelector(call.functionSignature) : undefined);
-  return selector ? `${call.target.toLowerCase()}:${selector.toLowerCase()}` : null;
+  // The checker is part of the rule: two rules on one function with different checkers are two
+  // rules, and the manager runs both. No checker and the zero one are the same rule.
+  const checker = (call.checker ?? zeroAddress).toLowerCase();
+  return selector ? `${call.target.toLowerCase()}:${selector.toLowerCase()}:${checker}` : null;
 }
 
 function safeSelector(signature: string): string | undefined {
@@ -72,9 +80,11 @@ function tokenKey(spend: { token: string }): string {
 export function mergePermissions(existing: GrantedPermission, addition: PermissionsConfig): PermissionsConfig {
   // Typed as the wider config shape: an addition may name a call by signature
   // instead of selector, which is what the x402 preset does.
+  // A held call keeps its checker: dropping it on a re-grant would widen the permission.
   const calls: NonNullable<PermissionsConfig['calls']> = existing.calls.map((call) => ({
     target: call.target,
     selector: call.selector,
+    ...(call.checker ? { checker: call.checker } : {}),
   }));
   const seenCalls = new Set(existing.calls.map(callKey));
   for (const call of addition.calls ?? []) {
@@ -120,7 +130,8 @@ export function describeMerge(existing: GrantedPermission, merged: PermissionsCo
   for (const call of merged.calls ?? []) {
     const key = callKey(call);
     if (key && hadCalls.has(key)) continue;
-    lines.push(`  + call    ${call.target} ${call.selector ?? call.functionSignature ?? ''}`.trimEnd());
+    const checked = call.checker && call.checker.toLowerCase() !== zeroAddress ? ` checked by ${call.checker}` : '';
+    lines.push(`  + call    ${call.target} ${call.selector ?? call.functionSignature ?? ''}${checked}`.trimEnd());
   }
 
   const had = new Map(existing.spends.map((spend) => [spendKey(spend), BigInt(spend.allowance)]));
