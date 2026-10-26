@@ -402,7 +402,7 @@ function unsentReply(err: unknown, run: Pick<Run, 'permissionId' | 'chainId'>, t
   log('warn', { msg: 'execute not submitted', error: errorLabel(err) });
   return refusal(
     withNext(
-      'Nothing was sent: the run did not pass its final check. Usually one of its actions fails, or the connection has no USDC to pay the network fee.',
+      'Nothing was sent: the run did not pass its final check. Usually one of its actions fails, or the connection holds nothing to pay the network fee with: the first token the permission can spend, or USDC.',
       `It failed in simulation or before it reached the bundler (${errorLabel(err)}). ` +
         'Simulate it with jaw_simulate_calls, passing the permissionId, to see which. ' +
         'If it is the fee, a spend limit for paid services funds it; ask for one with jaw_grant_permissions. ' +
@@ -469,7 +469,8 @@ export function registerSessionExecuteTool(server: McpServer) {
         'Use it for the repeated or unattended runs the permission was approved for, and only within what the owner asked. ' +
         "Before sending, it checks each call against the permission's allowed actions and what each spend limit has left, and refuses by name: call-not-allowed, over-limit, expired or no-grant. " +
         'A refused run never falls back to asking the owner: tell them what was refused and offer to do it once with jaw_send_calls, and never ask for a wider permission to make it pass. ' +
-        "The spend limit for paid services runs no actions and is refused here; it pays this run's network fee in USDC from the connection's balance, so with none the run cannot be sent. " +
+        'The spend limit for paid services runs no actions and is refused here. ' +
+        "The run's network fee is paid in the permission's first spend token when the connection holds some of it and the fee service takes it, otherwise in USDC from the connection's balance, so with neither the run cannot be sent. " +
         'Simulate first with jaw_simulate_calls, passing the permissionId. ' +
         'Send the same idempotencyKey and calls to retry: a retry returns the first run and never sends twice.',
       inputSchema: executeInput,
