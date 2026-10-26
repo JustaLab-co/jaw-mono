@@ -31,8 +31,9 @@ describe('a call checker in a permissions config', () => {
     );
   });
 
-  it('names the same permission manager as the SDK', async () => {
-    // Lazy, as every core import in this package has to be.
+  // Lazy, as every core import in this package has to be. Loading the whole SDK can pass five
+  // seconds when the suite runs beside the rest of the workspace, so this one gets longer.
+  it('names the same permission manager as the SDK', { timeout: 30_000 }, async () => {
     const { PERMISSIONS_MANAGER_ADDRESS } = await import('@jaw.id/core');
     expect(PERMISSIONS_MANAGER.toLowerCase()).toBe(PERMISSIONS_MANAGER_ADDRESS.toLowerCase());
   });
