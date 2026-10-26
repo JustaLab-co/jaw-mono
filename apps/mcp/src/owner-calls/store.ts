@@ -82,6 +82,8 @@ export async function expirePast(connectionId: string): Promise<void> {
   );
 }
 
+const unsent = sql`${ownerCalls.code} is distinct from ${SEND_STARTED}`;
+
 const lapsed = or(isNull(ownerCalls.sessionUntil), lte(ownerCalls.sessionUntil, dbNow));
 
 const unclaimed = and(lapsed, isNull(ownerCalls.relay));
@@ -91,7 +93,7 @@ export const reopenLink = (row: OwnerCallRow, walletUrl: string, db: Tx = getDb(
     and(
       ofCall(row.connectionId, row.id, ['awaiting_owner']),
       eq(ownerCalls.walletUrl, row.walletUrl),
-      sql`${ownerCalls.code} is distinct from ${SEND_STARTED}`,
+      unsent,
       gt(ownerCalls.approveBy, dbNow),
       unclaimed
     ),
@@ -106,17 +108,15 @@ export const { renew: renewSession, end: endSession } = leasedCalls;
 
 /** `unlessRejoinable` leaves a row that keeps a relay session to its next resume. */
 export const setCode = (row: OwnerCallRow, code: string, { unlessRejoinable = false } = {}) =>
-  write(
-    and(
-      heldBy(row, ['awaiting_owner']),
-      sql`${ownerCalls.code} is distinct from ${SEND_STARTED}`,
-      unlessRejoinable ? isNull(ownerCalls.relay) : undefined
-    ),
-    { code }
-  );
+  write(and(heldBy(row, ['awaiting_owner']), unsent, unlessRejoinable ? isNull(ownerCalls.relay) : undefined), {
+    code,
+  });
 
 export const decline = (row: OwnerCallRow, code: string) =>
   write(heldBy(row, ['awaiting_owner']), { state: 'owner_declined', code, relay: null });
+
+export const declineUnsent = (row: OwnerCallRow, code: string) =>
+  write(and(heldBy(row, ['awaiting_owner']), unsent), { state: 'owner_declined', code, relay: null });
 
 export async function markSendStarted(row: OwnerCallRow): Promise<boolean> {
   const written = await write(

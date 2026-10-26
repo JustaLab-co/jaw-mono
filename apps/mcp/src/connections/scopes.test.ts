@@ -25,7 +25,6 @@ vi.stubGlobal('fetch', (input: Parameters<typeof fetch>[0], init?: RequestInit) 
 
 setTestEnv();
 process.env.JAW_MCP_RPC_URL = 'http://127.0.0.1:9';
-process.env.JAW_MCP_MAINNET_RPC_URL = 'http://127.0.0.1:9';
 beforeAll(useTestDb);
 afterEach(async () => {
   await walletsSettled();
