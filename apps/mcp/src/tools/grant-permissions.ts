@@ -1,7 +1,16 @@
-import { ANY_FN_SEL, ANY_TARGET, EMPTY_CALLDATA_FN_SEL } from '@jaw.id/core';
+import { ANY_FN_SEL, ANY_TARGET, EMPTY_CALLDATA_FN_SEL, PERMISSIONS_MANAGER_ADDRESS } from '@jaw.id/core';
 import { usdcForNetwork } from '@jaw.id/agent';
 import type { McpServer } from '@modelcontextprotocol/server';
-import { isAddress, numberToHex, parseUnits, toFunctionSelector, type Address } from 'viem';
+import {
+  isAddress,
+  isAddressEqual,
+  numberToHex,
+  parseUnits,
+  toFunctionSelector,
+  zeroAddress,
+  type Address,
+  type Hex,
+} from 'viem';
 import { z } from 'zod';
 import { chainClients } from '@/adapters/session-host';
 import { tenant, type Tenant } from '@/connections/auth';
@@ -35,6 +44,7 @@ import {
   type GrantKind,
   type LiveGrant,
 } from '@/grants/store';
+import { publicClientFor } from '@/lib/chain';
 import { errorLabel, log, RATE_WINDOW_MS } from '@/lib/edge';
 import { reply } from '@/lib/fence';
 import { counted, expiresIn, formatAmount, listed, onDate, spendLimits, withinWindow } from '@/lib/owner-text';
@@ -73,7 +83,17 @@ const grantInput = z.strictObject({
     .optional()
     .describe('The spend limit for paid services: a daily USDC limit that payments, refills and swap quotes draw from'),
   calls: z
-    .array(z.strictObject({ target: address, functionSignature: signature }))
+    .array(
+      z.strictObject({
+        target: address,
+        functionSignature: signature,
+        checker: address
+          .optional()
+          .describe(
+            'A contract the permission manager asks to approve each call to this function before it runs; the owner sees it when approving'
+          ),
+      })
+    )
     .min(1)
     .max(MAX_ENTRIES)
     .optional()
@@ -109,6 +129,11 @@ export type GrantInput = z.input<typeof grantInput>;
 interface GrantDeps {
   openWallet: OpenWallet;
   readPermission: ReadPermission;
+  /**
+   * The bytecode at an address, to refuse a checker with nothing deployed before a link is made.
+   * Read from the chain when absent; a grant without checkers never reads it.
+   */
+  codeAt?: (chainId: number, address: Address) => Promise<Hex | undefined>;
   /** What revokes replaced budgets as spender. */
   session: Pick<DisconnectDeps, 'clients' | 'sender' | 'lockWaitMs'>;
 }
@@ -209,8 +234,27 @@ function asked(t: Tenant, input: GrantInput, expiry: number): Asked | string {
       `${wildcard.functionSignature} hashes to a selector the permission manager reads as any function (or an empty call), so it cannot be granted.`
     );
   }
-  const calls = input.calls.map((c) => ({ target: c.target as Address, functionSignature: c.functionSignature }));
+  // The zero checker is no checker. The manager refuses itself or the account as one.
+  const refusedChecker = input.calls.find(
+    (c) =>
+      c.checker &&
+      [PERMISSIONS_MANAGER_ADDRESS, t.account].some((a) => isAddressEqual(c.checker as Address, a as Address))
+  );
+  if (refusedChecker) {
+    return withNext(
+      `checker_refused: ${refusedChecker.checker} cannot check the actions of a permission: the wallet itself and the contract that enforces permissions never can. ${NOTHING_ASKED}`,
+      'The permission manager and the account itself are refused as checkers.'
+    );
+  }
+  const calls = input.calls.map((c) => ({
+    target: c.target as Address,
+    functionSignature: c.functionSignature,
+    ...(c.checker && !isAddressEqual(c.checker as Address, zeroAddress) ? { checker: c.checker as Address } : {}),
+  }));
   const spent = (input.spends ?? []).map((s) => ({ ...s, token: s.token as Address, multiplier: s.multiplier ?? 1 }));
+  const checked = calls.flatMap((c) =>
+    c.checker ? [`${c.functionSignature} on ${c.target} checked by ${c.checker}`] : []
+  );
   const grant: GrantRequest = {
     spender: t.sessionAddress,
     expiry,
@@ -223,7 +267,20 @@ function asked(t: Tenant, input: GrantInput, expiry: number): Asked | string {
   const on = targets.length === 1 ? targets[0] : `${targets.length} contracts (${listed(targets)})`;
   const actions = `${counted(calls.length, 'allowed action')} on ${on}`;
   const limits = spendLimits(t.chainId, spent);
-  return { kind: 'custom', grant, what: limits.length ? `${actions} with a limit of ${listed(limits)}` : actions };
+  const what = limits.length ? `${actions} with a limit of ${listed(limits)}` : actions;
+  return { kind: 'custom', grant, what: checked.length ? `${what}, with ${listed(checked)}` : what };
+}
+
+const codeOnChain = (chainId: number, address: Address) => publicClientFor(chainId).getCode({ address });
+
+/** The first checker the grant names with no bytecode on its chain, which the manager would refuse. */
+async function checkerWithoutCode(t: Tenant, grant: GrantRequest, deps: GrantDeps): Promise<Address | undefined> {
+  const checkers = [...new Set(grant.permissions.calls.flatMap((c) => (c.checker ? [c.checker] : [])))];
+  for (const checker of checkers) {
+    const code = await (deps.codeAt ?? codeOnChain)(t.chainId, checker);
+    if (!code || code === '0x') return checker;
+  }
+  return undefined;
 }
 
 /** Revokes the budgets a newer one replaced. One left approved stays replaced, so nothing pays from it. */
@@ -296,6 +353,15 @@ export async function grantPermissions(t: Tenant, input: GrantInput, deps = DEFA
   }
   const ask = asked(t, input, Math.floor(expiresAt.getTime() / 1000));
   if (typeof ask === 'string') return refusal(ask);
+  const codeless = await checkerWithoutCode(t, ask.grant, deps);
+  if (codeless) {
+    return refusal(
+      withNext(
+        `checker_has_no_code: Nothing is deployed at ${codeless} on this network, so it cannot check actions. ${NOTHING_ASKED}`,
+        'The permission manager would refuse it as a checker. Check the address and chain.'
+      )
+    );
+  }
   if ((await grantsBeside(t.connectionId, ask.kind)) >= LIVE_GRANTS_PER_CONNECTION) await revokeOlder(t, deps);
   if ((await grantsBeside(t.connectionId, ask.kind)) >= LIVE_GRANTS_PER_CONNECTION) {
     return refusal(
@@ -578,6 +644,7 @@ export function registerGrantTool(server: McpServer) {
         'Two kinds, requested separately. ' +
         'A spend limit for paid services: pass x402Budget with the USDC per day; it pays web services and the network fees of runs under permissions, and a new one replaces the current one. ' +
         'A custom permission: pass calls (contract and function signature) and spends (a per-period limit on each token those actions move); runs under it go through jaw_session_execute. ' +
+        'A call may name a checker, a contract the permission manager asks to approve each call to that function, which can refuse calls by their arguments. ' +
         'Offer a permission only when the owner wants an action repeated or run without them, or when you are about to ask approval for the same action a second time; never for something asked once, which is jaw_send_calls. ' +
         'Before asking, say in one sentence what it allows, on which contract, up to how much per period, until when, and that they can revoke it anytime from their wallet, and ask for the narrowest permission that does the job. ' +
         'If the owner has no spend limit for paid services yet, runs under a custom permission cannot pay their network fee: say setup takes two approvals and ask for both. ' +

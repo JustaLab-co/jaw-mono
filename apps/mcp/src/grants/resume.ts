@@ -56,7 +56,9 @@ const grantPayload = z.object({
     expiry: z.number().int(),
     chainId: hex,
     permissions: z.object({
-      calls: z.array(z.object({ target: address, functionSignature: z.string() })),
+      // `checker` is part of what the owner approves; leaving it out of this schema would strip it
+      // and ask the wallet for a wider grant than the one requested.
+      calls: z.array(z.object({ target: address, functionSignature: z.string(), checker: address.optional() })),
       spends: z.array(z.object({ token: address, allowance: z.string(), unit: z.string(), multiplier: z.number() })),
     }),
     capabilities: z.object({ prefundSpender: z.literal(true) }).optional(),

@@ -2,7 +2,7 @@ import { PERMISSIONS_MANAGER_ADDRESS } from '@jaw.id/core';
 import { and, desc, eq, sql } from 'drizzle-orm';
 import { randomBytes } from 'node:crypto';
 import { beforeAll, describe, expect, it, vi } from 'vitest';
-import { toFunctionSelector } from 'viem';
+import { toFunctionSelector, type Address, type Hex } from 'viem';
 import { verifyBearer, type Tenant } from '@/connections/auth';
 import { WalletBusy, type OpenWallet, type Wallet } from '@/connections/relay';
 import {
@@ -47,11 +47,15 @@ async function connected(withBudget = true) {
   return { c, t, signer, connectedWith: budget?.permissionId };
 }
 
+/** Every checker in these tests is deployed unless a test says otherwise. */
+const deployed = async () => '0x6080' as Hex;
+
 async function grant(
   t: Tenant,
   signer: ReturnType<typeof owner>,
   input: GrantInput,
-  tamper?: (granted: Record<string, unknown>) => object
+  tamper?: (granted: Record<string, unknown>) => object,
+  codeAt: (chainId: number, address: Address) => Promise<Hex | undefined> = deployed
 ) {
   const asked: { method: string; params: unknown[] }[] = [];
   const honest = walletAnswers(signer);
@@ -64,6 +68,7 @@ async function grant(
     openWallet: async (...args) => (opened++, wallet(...args)),
     session: offlineSession,
     readPermission: approvedOnChain,
+    codeAt,
   });
   await walletsSettled();
   return { result, opened, request: asked[0]?.params[0] as GrantRequest | undefined };
@@ -345,6 +350,58 @@ describe('jaw_grant_permissions', () => {
       expect(opened).toBe(0);
     }
   );
+
+  /**
+   * A checker is part of the permission the owner approves: the manager asks it to approve every
+   * call the rule allows. One that can never be granted is refused before a link is made, since the
+   * owner's screen could not even estimate the grant.
+   */
+  describe('a call checker', () => {
+    const CHECKER = '0x398b9d939E7E616E03eA99601c835C920621B2ca' as const;
+    const checked = (checker: string): GrantInput => ({
+      calls: [{ target: WETH, functionSignature: 'transfer(address,uint256)', checker }],
+    });
+
+    it('is asked of the wallet with the call, and the summary names it', async () => {
+      const { t, signer } = await connected();
+
+      const { result, request } = await grant(t, signer, checked(CHECKER));
+
+      expect(request?.permissions.calls[0].checker).toBe(CHECKER);
+      expect('structuredContent' in result && result.structuredContent!.summary).toContain(`checked by ${CHECKER}`);
+      expect(leaks(spoken(result))).toEqual([]);
+    });
+
+    it('is no checker when it is the zero address', async () => {
+      const { t, signer } = await connected();
+
+      const { result, request } = await grant(t, signer, checked('0x0000000000000000000000000000000000000000'));
+
+      expect(request?.permissions.calls[0].checker).toBeUndefined();
+      expect('structuredContent' in result && result.structuredContent!.summary).not.toContain('checked by');
+    });
+
+    it.each([
+      ['the permission manager', () => PERMISSIONS_MANAGER_ADDRESS],
+      ['the account itself', (t: Tenant) => t.account],
+    ])('is refused by name when it is %s, and no wallet opens', async (_name, checker) => {
+      const { t, signer } = await connected();
+
+      const { result, opened } = await grant(t, signer, checked(checker(t)));
+
+      expect(result.content[0].text).toMatch(/^checker_refused: /);
+      expect(opened).toBe(0);
+    });
+
+    it('is refused by name when nothing is deployed there, and no wallet opens', async () => {
+      const { t, signer } = await connected();
+
+      const { result, opened } = await grant(t, signer, checked(CHECKER), undefined, async () => undefined);
+
+      expect(result.content[0].text).toMatch(/^checker_has_no_code: /);
+      expect(opened).toBe(0);
+    });
+  });
 
   it.each<[string, GrantInput]>([
     ['the preset with calls', { x402Budget: { perDay: '1' }, calls: twoByTwo.calls }],
