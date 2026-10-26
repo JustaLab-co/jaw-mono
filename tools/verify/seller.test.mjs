@@ -5,6 +5,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import net from 'node:net';
+import { randomBytes } from 'node:crypto';
 import { createRequire } from 'node:module';
 import { fileURLToPath } from 'node:url';
 
@@ -55,8 +56,8 @@ const logRows = () =>
 
 const control = (params) => fetch(`${base}/_swap?${new URLSearchParams(params)}`, { method: 'POST' });
 
-const transferTo = (deposit) =>
-  encodeFunctionData({ abi: erc20Abi, functionName: 'transfer', args: [getAddress(deposit), 10000n] });
+const DEPOSITORY = getAddress('0x4cd00e387622c35bddb9b4c962c136462338bc31');
+const requestOf = (q) => q.quoteId.slice('relay:'.length);
 
 const ACCOUNT = '0x742149f6aB17d7d2FD3A29ae2782b26EDa9c6F82';
 const ERC20_QUERY = {
@@ -113,13 +114,13 @@ test('given a valid proof, /exact still answers 200 with the payer', async () =>
   assert.equal(unb64(res.headers.get('payment-response')).network, 'eip155:84532');
 });
 
-test('given an EVM query with no key and no payment, move-asset/quote answers an Aurora quote', async () => {
+test('given an EVM query with no key and no payment, move-asset/quote answers a Relay quote', async () => {
   const res = await fetch(moveQuoteUrl(ERC20_QUERY));
   assert.equal(res.status, 200);
   assert.equal(res.headers.get('payment-required'), null);
   const { data } = (await res.json()).result;
-  assert.equal(data.provider, 'aurora');
-  assert.match(data.quoteId, /^aurora:0x[0-9a-fA-F]{40}$/);
+  assert.equal(data.provider, 'relay');
+  assert.match(data.quoteId, /^relay:0x[0-9a-f]{64}$/);
 });
 
 test('given mode across or relay, move-asset/quote answers the quote captured from prod as it came', async () => {
@@ -144,16 +145,15 @@ test('given mode 422 or 502, move-asset/quote answers the NoProviderAvailable en
 
 const moveQuote = async (query = ERC20_QUERY) => (await (await fetch(moveQuoteUrl(query))).json()).result.data;
 
-test('given an ERC-20 query, the single deposit is transfer(depositAddress, amount) on the token', async () => {
+test('given an ERC-20 query, the single deposit is transfer(depository, amount) on the token', async () => {
   const q = await moveQuote();
-  const deposit = getAddress(q.quoteId.slice(7));
   assert.equal(q.inputAmount, '10000');
   assert.ok(BigInt(q.minOutputAmount) > 0n && BigInt(q.minOutputAmount) <= BigInt(q.expectedOutputAmount));
   assert.deepEqual(q.transactions, [
     {
       chainId: 84532,
       to: getAddress(USDC),
-      data: encodeFunctionData({ abi: erc20Abi, functionName: 'transfer', args: [deposit, 10000n] }),
+      data: encodeFunctionData({ abi: erc20Abi, functionName: 'transfer', args: [DEPOSITORY, 10000n] }),
       value: '0',
       description: 'deposit',
     },
@@ -161,14 +161,14 @@ test('given an ERC-20 query, the single deposit is transfer(depositAddress, amou
   assert.equal(q.deposit, undefined);
 });
 
-test('given a native query, the deposit sends the amount to the deposit address with no data', async () => {
+test('given a native query, the deposit sends the amount to the depository with no data', async () => {
   const q = await moveQuote(NATIVE_QUERY);
   assert.deepEqual(q.transactions, [
-    { chainId: 84532, to: getAddress(q.quoteId.slice(7)), data: '0x', value: '10000', description: 'deposit' },
+    { chainId: 84532, to: DEPOSITORY, data: '0x', value: '10000', description: 'deposit' },
   ]);
 });
 
-test('given two quotes, each gets a fresh deposit address', async () => {
+test('given two quotes, each gets a fresh request id', async () => {
   assert.notEqual((await moveQuote()).quoteId, (await moveQuote()).quoteId);
 });
 
@@ -185,12 +185,8 @@ test('given each quote check mode, the quote breaks only that rule', async () =>
     'two-tx': (q) => assert.equal(q.transactions.length, 2),
     'no-tx': (q) => assert.equal(q.transactions.length, 0),
     'wrong-chain': (q) => assert.equal(q.transactions[0].chainId, 84533),
-    'quote-id': (q) => assert.doesNotMatch(q.quoteId, /^aurora:0x[0-9a-fA-F]{40}$/),
-    provider: (q) => assert.notEqual(q.provider, 'aurora'),
-    'deposit-field': (q) => assert.ok(q.deposit),
-    'tx-value': (q) => assert.notEqual(q.transactions[0].value, '0'),
-    'tx-data': (q) => assert.notEqual(q.transactions[0].data, transferTo(q.quoteId.slice(7))),
-    'output-amount': (q) => assert.ok(BigInt(q.minOutputAmount) > BigInt(q.expectedOutputAmount)),
+    'quote-id': (q) => assert.doesNotMatch(q.quoteId, /^relay:0x[0-9a-f]{64}$/),
+    provider: (q) => assert.notEqual(q.provider, 'relay'),
   };
   for (const [mode, expect] of Object.entries(cases)) {
     await control({ mode });
@@ -200,15 +196,15 @@ test('given each quote check mode, the quote breaks only that rule', async () =>
   const first = await moveQuote();
   const again = await moveQuote();
   await control({ mode: '' });
-  assert.equal(again.quoteId, first.quoteId, 'reused repeats the previous deposit address');
+  assert.equal(again.quoteId, first.quoteId, 'reused repeats the previous request id');
   assert.notEqual((await moveQuote()).quoteId, first.quoteId);
 });
 
-const freshDeposit = async () => getAddress((await moveQuote()).quoteId.slice(7));
-const statusOf = async (depositAddress, provider = 'aurora') => {
-  const res = await fetch(
-    `${base}/proxy/v2/move-asset/deposit/status?${new URLSearchParams({ provider, depositAddress })}`
-  );
+const freshRequest = async () => requestOf(await moveQuote());
+const auroraKey = () => getAddress(`0x${randomBytes(20).toString('hex')}`);
+const trackBy = (provider, id) => ({ provider, [provider === 'relay' ? 'requestId' : 'depositAddress']: id });
+const statusOf = async (id, provider = 'relay') => {
+  const res = await fetch(`${base}/proxy/v2/move-asset/deposit/status?${new URLSearchParams(trackBy(provider, id))}`);
   return { res, body: await res.json() };
 };
 const submit = async (body) => {
@@ -219,93 +215,125 @@ const submit = async (body) => {
   });
   return { res, body: await res.json() };
 };
+const submitRelay = (requestId, txHash = TX_HASH) =>
+  submit({ provider: 'relay', requestId, txHash, originChainId: 84532 });
+const TX_HASH = '0x' + 'cd'.repeat(32);
 const DEFAULTS = { quote: 'ok', deposit: 'PENDING_DEPOSIT', submit: 201 };
 async function defaults(at = base) {
   const res = await fetch(`${at}/proxy/v2/move-asset/quote?${new URLSearchParams(ERC20_QUERY)}`);
   const quote = (await res.json()).result.data?.transactions?.length === 1 ? 'ok' : 'broken';
-  const address = getAddress('0x' + 'ab'.repeat(20));
+  const requestId = '0x' + 'ab'.repeat(32);
   const status = await fetch(
-    `${at}/proxy/v2/move-asset/deposit/status?${new URLSearchParams({ provider: 'aurora', depositAddress: address })}`
+    `${at}/proxy/v2/move-asset/deposit/status?${new URLSearchParams({ provider: 'relay', requestId })}`
   );
   const sent = await fetch(`${at}/proxy/v2/move-asset/deposit/submit`, {
     method: 'POST',
     headers: { 'content-type': 'application/json' },
-    body: JSON.stringify({ provider: 'aurora', depositAddress: address, txHash: '0x' + 'cd'.repeat(32) }),
+    body: JSON.stringify({ provider: 'relay', requestId, txHash: TX_HASH, originChainId: 84532 }),
   });
   return { quote, deposit: (await status.json()).result.data.state, submit: sent.status };
 }
-const TX_HASH = '0x' + 'cd'.repeat(32);
 
-test('given a quoted deposit, status is PENDING_DEPOSIT until submit, then walks to SUCCESS', async () => {
-  const deposit = await freshDeposit();
-  const before = await statusOf(deposit.toLowerCase());
+test('given a quoted request, status is PENDING_DEPOSIT until submit, then walks to SUCCESS', async () => {
+  const requestId = await freshRequest();
+  const before = await statusOf(requestId.toUpperCase().replace('0X', '0x'));
   assert.equal(before.res.status, 200);
   assert.deepEqual(before.body, {
     statusCode: 200,
-    result: { data: { provider: 'aurora', depositAddress: deposit, state: 'PENDING_DEPOSIT' }, error: null },
+    result: {
+      data: { provider: 'relay', requestId: requestId.toUpperCase().replace('0X', '0x'), state: 'PENDING_DEPOSIT' },
+      error: null,
+    },
   });
-  const sent = await submit({ provider: 'aurora', depositAddress: deposit, txHash: TX_HASH });
+  const sent = await submitRelay(requestId);
   assert.equal(sent.res.status, 201);
   assert.equal(sent.body.statusCode, 200);
   assert.deepEqual(sent.body.result.data, {
-    provider: 'aurora',
-    depositAddress: deposit,
+    provider: 'relay',
+    requestId,
     state: 'KNOWN_DEPOSIT_TX',
     txHash: TX_HASH,
   });
   const states = [];
-  for (let i = 0; i < 4; i++) states.push((await statusOf(deposit)).body.result.data.state);
+  for (let i = 0; i < 4; i++) states.push((await statusOf(requestId)).body.result.data.state);
   assert.deepEqual(states, ['PROCESSING', 'SUCCESS', 'SUCCESS', 'SUCCESS']);
-  assert.equal((await statusOf(deposit)).body.result.data.txHash, TX_HASH);
+  assert.equal((await statusOf(requestId)).body.result.data.txHash, TX_HASH);
+});
+
+test('given an Aurora deposit address, status and submit walk the same way and echo the address', async () => {
+  const address = auroraKey();
+  const before = await statusOf(address.toLowerCase(), 'aurora');
+  assert.deepEqual(before.body.result.data, { provider: 'aurora', depositAddress: address, state: 'PENDING_DEPOSIT' });
+  const sent = await submit({ provider: 'aurora', depositAddress: address, txHash: TX_HASH });
+  assert.equal(sent.res.status, 201);
+  assert.deepEqual(sent.body.result.data, {
+    provider: 'aurora',
+    depositAddress: address,
+    state: 'KNOWN_DEPOSIT_TX',
+    txHash: TX_HASH,
+  });
+  assert.equal((await statusOf(address, 'aurora')).body.result.data.state, 'PROCESSING');
 });
 
 test('given a pinned state and no submit, status answers it without a txHash', async () => {
-  const deposit = await freshDeposit();
-  await control({ state: 'PROCESSING', depositAddress: deposit });
-  const { body } = await statusOf(deposit);
+  const requestId = await freshRequest();
+  await control({ state: 'PROCESSING', requestId });
+  const { body } = await statusOf(requestId);
   assert.equal(body.result.data.state, 'PROCESSING');
   assert.equal('txHash' in body.result.data, false);
-  await control({ state: 'REFUNDED', depositAddress: deposit });
-  assert.equal((await statusOf(deposit)).body.result.data.state, 'REFUNDED');
+  await control({ state: 'REFUNDED', requestId });
+  assert.equal((await statusOf(requestId)).body.result.data.state, 'REFUNDED');
 });
 
-test('given an unknown pinned state, status maps it like the Aurora mapper', async () => {
-  const deposit = await freshDeposit();
-  await control({ state: 'WAITING_FOR_GODOT', depositAddress: deposit });
-  const { data } = (await statusOf(deposit)).body.result;
+test('given a state pinned to an Aurora deposit address, status answers it', async () => {
+  const address = auroraKey();
+  await control({ state: 'REFUNDED', depositAddress: address });
+  assert.equal((await statusOf(address, 'aurora')).body.result.data.state, 'REFUNDED');
+});
+
+test('given an unknown pinned state, status maps it like the backend mapper', async () => {
+  const requestId = await freshRequest();
+  await control({ state: 'WAITING_FOR_GODOT', requestId });
+  const { data } = (await statusOf(requestId)).body.result;
   assert.equal(data.state, 'PROCESSING');
   assert.equal(data.rawState, 'WAITING_FOR_GODOT');
 });
 
-test('given submitFails=1, the first submit fails and the second goes through', async () => {
-  const deposit = await freshDeposit();
+test('given submitFails=1, the first submit answers 502 as a failed provider does and the second goes through', async () => {
+  const requestId = await freshRequest();
   await control({ submitFails: '1' });
-  const first = await submit({ provider: 'aurora', depositAddress: deposit, txHash: TX_HASH });
-  assert.equal(first.res.status, 500);
-  assert.equal((await statusOf(deposit)).body.result.data.state, 'PENDING_DEPOSIT');
-  const second = await submit({ provider: 'aurora', depositAddress: deposit, txHash: TX_HASH });
+  const first = await submitRelay(requestId);
+  assert.equal(first.res.status, 502);
+  assert.deepEqual(first.body, {
+    statusCode: 502,
+    result: { data: null, error: 'ProviderQuoteInvalid[relay]: upstream failed' },
+  });
+  assert.equal((await statusOf(requestId)).body.result.data.state, 'PENDING_DEPOSIT');
+  const second = await submitRelay(requestId);
   assert.equal(second.res.status, 201);
 });
 
-test('given an expired quote, submit fails and status stays PENDING_DEPOSIT', async () => {
-  const deposit = await freshDeposit();
-  await control({ expire: deposit });
-  const sent = await submit({ provider: 'aurora', depositAddress: deposit, txHash: TX_HASH });
-  assert.equal(sent.res.status, 500);
-  assert.equal((await statusOf(deposit)).body.result.data.state, 'PENDING_DEPOSIT');
+test('given an expired quote, submit answers 422 as a refusing provider does and status stays PENDING_DEPOSIT', async () => {
+  const requestId = await freshRequest();
+  await control({ expire: requestId });
+  const sent = await submitRelay(requestId);
+  assert.equal(sent.res.status, 422);
+  assert.equal((await statusOf(requestId)).body.result.data.state, 'PENDING_DEPOSIT');
 });
 
 test('given an invalid submit body, submit answers 400 in the backend envelope', async () => {
-  const deposit = await freshDeposit();
-  const { res, body } = await submit({ provider: 'aurora', depositAddress: deposit, txHash: '0x1234' });
+  const requestId = await freshRequest();
+  const { res, body } = await submitRelay(requestId, '0x1234');
   assert.equal(res.status, 400);
   assert.deepEqual(body, { statusCode: 400, result: { data: null, error: ['txHash must be a 32-byte hex string'] } });
+  const missing = await submit({ provider: 'relay', requestId, txHash: TX_HASH });
+  assert.equal(missing.res.status, 400);
 });
 
-test('given a provider other than aurora, submit and status answer 501', async () => {
-  const deposit = await freshDeposit();
-  assert.equal((await submit({ provider: 'relay', depositAddress: deposit, txHash: TX_HASH })).res.status, 501);
-  assert.equal((await statusOf(deposit, 'relay')).res.status, 501);
+test('given a provider other than aurora or relay, submit and status answer 501', async () => {
+  const requestId = await freshRequest();
+  assert.equal((await submit({ provider: 'across', requestId, txHash: TX_HASH })).res.status, 501);
+  assert.equal((await statusOf(requestId, 'across')).res.status, 501);
 });
 
 test('given reset, the control state goes back to its defaults', async () => {
