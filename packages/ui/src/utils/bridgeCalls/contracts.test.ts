@@ -31,6 +31,7 @@ describe('given the pinned bridge table of the signing screen', () => {
         multicallHandler: '0x0F7Ae28dE1C8532170AD4ee566B5801485c13a0E',
         eventEmitter: '0xBF75133b48b0a42AB9374027902E83C5E2949034',
         wrappedNative: '0x4200000000000000000000000000000000000006',
+        swapRouter: '0xd6145b2D3F379919E8CdEda7B97e37c4b2Ca9c40',
       },
       relay: {
         depository: '0x4cD00E387622C35bDDB9b4c962C136462338BC31',
@@ -161,6 +162,6 @@ describe('given the pinned bridge table of the signing screen', () => {
 
   it('then the table matches the reviewed digest, so any changed literal updates this test', () => {
     const digest = createHash('sha256').update(JSON.stringify({ BRIDGE_CHAINS, JAW_FEE_RECIPIENT })).digest('hex');
-    expect(digest).toBe('c8ee9a873351bccac8c5b6ce1f255125bf6b4966e9e0a2878cf2e9c2102ce500');
+    expect(digest).toBe('6b2f6dbf47024c243eda1de5c5718f03da556a836b12aa68bf66fdf5e5b16d58');
   });
 });
