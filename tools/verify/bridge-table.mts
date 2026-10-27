@@ -69,8 +69,12 @@ for (const [id, entry] of Object.entries(BRIDGE_CHAINS)) {
     const live = across[id]?.contracts ?? {};
     compare(chainId, 'across.spokePool', entry.across.spokePool, live.SpokePool?.address);
     compare(chainId, 'across.periphery', entry.across.periphery, live.SpokePoolPeriphery?.address);
-    compare(chainId, 'across.multicallHandler', entry.across.multicallHandler, live.MulticallHandler?.address);
-    if (entry.across.eventEmitter) {
+    // Robinhood's handler and emitter are not in Across's files. The handler is the target of Across's
+    // own quotes with the Avalanche handler's bytecode, and the emitter's bytecode equals Base's.
+    const listed = chainId !== 4663;
+    if (listed)
+      compare(chainId, 'across.multicallHandler', entry.across.multicallHandler, live.MulticallHandler?.address);
+    if (entry.across.eventEmitter && listed) {
       const url = EMITTER_URLS[chainId];
       let emitter = live.AcrossEventEmitter?.address;
       if (url && url !== ACROSS_ADDRESSES) emitter = (await get(url)).address;

@@ -33,4 +33,4 @@ export class BridgeContracts {
 let snapshot: BridgeContracts | undefined;
 
 export const snapshotContracts = (): BridgeContracts =>
-  (snapshot ??= new BridgeContracts({ version: 1, chains: BRIDGE_CHAINS }, 'snapshot'));
+  (snapshot ??= new BridgeContracts({ version: 2, chains: BRIDGE_CHAINS }, 'snapshot'));

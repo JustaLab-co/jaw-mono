@@ -8,9 +8,9 @@ const relayChains = Object.entries(BRIDGE_CHAINS).flatMap(([id, chain]) =>
 );
 
 describe('given the table compiled into the build', () => {
-  it('when it is snapshotted twice, then the same table comes back at version 1', () => {
+  it('when it is snapshotted twice, then the same table comes back at version 2', () => {
     expect(snapshotContracts()).toBe(contracts);
-    expect(contracts.version).toBe(1);
+    expect(contracts.version).toBe(2);
   });
 
   it('when a pinned chain id is asked for, then its entry comes back', () => {

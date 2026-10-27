@@ -344,7 +344,7 @@ describe('given a deposit whose tokens or chains need the pinned table', () => {
     expect(
       readAcrossCall(
         contracts,
-        withArgs(ACROSS_CALLS.usdcNofee, (a) => (a[6] = 4663n))
+        withArgs(ACROSS_CALLS.usdcNofee, (a) => (a[6] = 100n))
       )
     ).toEqual(outsideTable);
   });
@@ -973,5 +973,103 @@ describe('given the router steps of a destination swap', () => {
   ];
   it.each(mutants)('then %s is unreadable', (_, edit) => {
     expect(readAcrossCall(contracts, withSteps(edit))).toEqual(unreadable);
+  });
+});
+
+describe('given the Uniswap v4 swap of a destination program', () => {
+  const USDG = getAddress('0x5fc5360d0400a0fd4f2af552add042d716f1d168');
+  const swapRead = { kind: 'swap', chainId: 4663, token: { address: NVDA, known: false } };
+  const routerAbi = parseAbi(['function execute(bytes commands, bytes[] inputs)']);
+  const actionsAbi = parseAbiParameters('bytes actions, bytes[] params');
+  const exactInAbi = parseAbiParameters(
+    '(address currencyIn, (address intermediateCurrency, uint24 fee, int24 tickSpacing, address hooks, bytes hookData)[] path, uint256[] maxHopSlippage, uint128 amountIn, uint128 amountOutMinimum)'
+  );
+  const settleAbi = parseAbiParameters('address currency, uint256 amount, bool payerIsUser');
+  const takeAbi = parseAbiParameters('address currency, address recipient, uint256 amount');
+  type Hop = { intermediateCurrency: Hex; fee: number; tickSpacing: number; hooks: Hex; hookData: Hex };
+  type V4 = {
+    actions: Hex;
+    swap: { currencyIn: Hex; path: Hop[]; maxHopSlippage: bigint[]; amountIn: bigint; amountOutMinimum: bigint };
+    settle: [Hex, bigint, boolean];
+    take: [Hex, Hex, bigint];
+    extra: Hex[];
+  };
+
+  // Decodes the quote's V4_SWAP input, lets the test change it, and puts it back before Uniswap's tag.
+  function withV4(edit: (v4: V4) => void): BridgeCall {
+    return withProgram(ACROSS_CALLS.usdcToNvda, (p) => {
+      const data = p.calls[1].callData;
+      const decoded = decodeFunctionData({ abi: routerAbi, data });
+      const tail = data.slice(encodeFunctionData({ abi: routerAbi, ...decoded }).length);
+      const [actions, [swap, settle, take]] = decodeAbiParameters(actionsAbi, decoded.args[1][0]);
+      const v4: V4 = {
+        actions,
+        swap: structuredClone(decodeAbiParameters(exactInAbi, swap)[0]) as V4['swap'],
+        settle: [...decodeAbiParameters(settleAbi, settle)] as V4['settle'],
+        take: [...decodeAbiParameters(takeAbi, take)] as V4['take'],
+        extra: [],
+      };
+      edit(v4);
+      const params = [
+        encodeAbiParameters(exactInAbi, [v4.swap]),
+        encodeAbiParameters(settleAbi, v4.settle),
+        encodeAbiParameters(takeAbi, v4.take),
+        ...v4.extra,
+      ];
+      const input = encodeAbiParameters(actionsAbi, [v4.actions, params]);
+      p.calls[1].callData = (encodeFunctionData({
+        abi: routerAbi,
+        functionName: 'execute',
+        args: [decoded.args[0], [input]],
+      }) + tail) as Hex;
+    });
+  }
+  const hop = (token: string, hooks: string = zeroAddress, hookData: Hex = '0x'): Hop => ({
+    intermediateCurrency: getAddress(token),
+    fee: 375,
+    tickSpacing: 4,
+    hooks: getAddress(hooks),
+    hookData,
+  });
+
+  it('then the quote taken apart and put back as it was reads the same', () => {
+    expect(
+      readAcrossCall(
+        contracts,
+        withV4(() => undefined)
+      )
+    ).toMatchObject({ recipient: OTHER, receive: swapRead });
+  });
+
+  it('then a path of two pools without hooks reads the token it ends in', () => {
+    const call = withV4((v) => void v.swap.path.unshift(hop(ARB_WETH)));
+    expect(readAcrossCall(contracts, call)).toMatchObject({ recipient: OTHER, receive: swapRead });
+  });
+
+  const mutants: [string, (v4: V4) => void][] = [
+    ['a hook on the pool', (v) => void (v.swap.path[0].hooks = ATTACKER)],
+    ['a hook on the first of two pools', (v) => void v.swap.path.unshift(hop(ARB_WETH, ATTACKER))],
+    ['hook data', (v) => void (v.swap.path[0].hookData = '0x01')],
+    ['no pool', (v) => void (v.swap.path = [])],
+    ['the bought token paid to another address', (v) => void (v.take[1] = ATTACKER)],
+    ['another token taken than the one swapped into', (v) => void (v.take[0] = ARB_WETH)],
+    ['a take of a fixed amount', (v) => void (v.take[2] = 1n)],
+    ['a settle paid by the user', (v) => void (v.settle[2] = true)],
+    ['a settle of a fixed amount', (v) => void (v.settle[1] = 1n)],
+    ['a settle of another token than the one swapped from', (v) => void (v.settle[0] = ARB_WETH)],
+    ['a swap from another token than the bridged one', (v) => void (v.swap.currencyIn = v.settle[0] = ARB_WETH)],
+    [
+      'an extra action that takes the other token to another address',
+      (v) => {
+        v.actions = `${v.actions}0e`;
+        v.extra.push(encodeAbiParameters(takeAbi, [USDG, ATTACKER, 0n]));
+      },
+    ],
+    ['actions in another order', (v) => void (v.actions = '0x070e0b')],
+    ['a swap of less than the bridged amount', (v) => void (v.swap.amountIn -= 1n)],
+    ['a swap of more than the bridged amount', (v) => void (v.swap.amountIn += 1n)],
+  ];
+  it.each(mutants)('then %s is unreadable', (_, edit) => {
+    expect(readAcrossCall(contracts, withV4(edit))).toEqual(unreadable);
   });
 });

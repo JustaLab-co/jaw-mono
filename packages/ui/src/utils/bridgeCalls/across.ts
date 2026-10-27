@@ -45,13 +45,21 @@ const ROUTER_ABI = parseAbi([
   'function execute(bytes commands, bytes[] inputs)',
   'function execute(bytes commands, bytes[] inputs, uint256 deadline)',
 ]);
-// UniversalRouter inputs for V3_SWAP_EXACT_IN (0x00) and V2_SWAP_EXACT_IN (0x08).
+// UniversalRouter inputs for V3_SWAP_EXACT_IN (0x00), V2_SWAP_EXACT_IN (0x08) and V4_SWAP (0x10).
 const V3_SWAP = parseAbiParameters(
   'address recipient, uint256 amountIn, uint256 amountOutMin, bytes path, bool payerIsUser'
 );
 const V2_SWAP = parseAbiParameters(
   'address recipient, uint256 amountIn, uint256 amountOutMin, address[] path, bool payerIsUser'
 );
+const V4_SWAP = parseAbiParameters('bytes actions, bytes[] params');
+// Uniswap v4 actions SWAP_EXACT_IN (0x07), SETTLE (0x0b) and TAKE (0x0e), in the only order read.
+const V4_ACTIONS = '0x070b0e';
+const V4_EXACT_IN = parseAbiParameters(
+  '(address currencyIn, (address intermediateCurrency, uint24 fee, int24 tickSpacing, address hooks, bytes hookData)[] path, uint256[] maxHopSlippage, uint128 amountIn, uint128 amountOutMinimum)'
+);
+const V4_SETTLE = parseAbiParameters('address currency, uint256 amount, bool payerIsUser');
+const V4_TAKE = parseAbiParameters('address currency, address recipient, uint256 amount');
 const INSTRUCTIONS = parseAbiParameters(
   '((address target, bytes callData, uint256 value)[] calls, address fallbackRecipient)'
 );
@@ -390,7 +398,24 @@ function swapStep(command: number, input: Hex) {
     if (payerIsUser || path.length < 2) return undefined;
     return { recipient, amountIn, from: path[0], to: path[path.length - 1] };
   }
+  if (command === 0x10) return v4Step(input);
   return undefined;
+}
+
+// A pool hook can move value, so a hop with one is not read. Settling and taking amount 0 pays
+// the debt the swap opened from the router's balance and sends the whole credit out; a partial
+// fill leaves the unspent input in the router, as a v3 swap that stops at its price limit would.
+function v4Step(input: Hex) {
+  const [actions, params] = decodeAbiParameters(V4_SWAP, input);
+  if (actions !== V4_ACTIONS || params.length !== 3) return undefined;
+  const [{ currencyIn, path, amountIn }] = decodeAbiParameters(V4_EXACT_IN, params[0]);
+  const [settled, settleAmount, payerIsUser] = decodeAbiParameters(V4_SETTLE, params[1]);
+  const [taken, recipient, takeAmount] = decodeAbiParameters(V4_TAKE, params[2]);
+  const last = path.at(-1);
+  if (!last || path.some((hop) => !isAddressEqual(hop.hooks, zeroAddress) || hop.hookData !== '0x')) return undefined;
+  if (!isAddressEqual(settled, currencyIn) || settleAmount !== 0n || payerIsUser) return undefined;
+  if (!isAddressEqual(taken, last.intermediateCurrency) || takeAmount !== 0n) return undefined;
+  return { recipient, amountIn, from: currencyIn, to: last.intermediateCurrency };
 }
 
 // emitData only logs swap metadata.

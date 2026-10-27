@@ -112,12 +112,12 @@ describe('given the pinned bridge table of the signing screen', () => {
     expect(JAW_FEE_RECIPIENT).toBe(getAddress(JAW_FEE_RECIPIENT));
   });
 
-  it('then USDC has 6 decimals except on BSC, and every wrapped native token has 18', () => {
+  it('then USDC and USDG have 6 decimals except USDC on BSC, and every wrapped native token has 18', () => {
     for (const chain of chains) {
       for (const [address, token] of Object.entries(chain.tokens)) {
-        const expected = token.symbol === 'USDC' ? (chain.id === 56 ? 18 : 6) : 18;
+        const expected = token.symbol === 'WETH' || (token.symbol === 'USDC' && chain.id === 56) ? 18 : 6;
         expect(token.decimals, `${chain.id} ${address}`).toBe(expected);
-        expect(['USDC', 'WETH'], `${chain.id} ${address}`).toContain(token.symbol);
+        expect(['USDC', 'USDG', 'WETH'], `${chain.id} ${address}`).toContain(token.symbol);
       }
     }
   });
@@ -144,6 +144,6 @@ describe('given the pinned bridge table of the signing screen', () => {
 
   it('then the table matches the reviewed digest, so any changed literal updates this test', () => {
     const digest = createHash('sha256').update(JSON.stringify({ BRIDGE_CHAINS, JAW_FEE_RECIPIENT })).digest('hex');
-    expect(digest).toBe('ff29a34fd70acf25d6ffd9e66d47eacaba4cc140cac03bfd3bed1cef320c9d27');
+    expect(digest).toBe('abd50b1fcbaa45016d3cbd2f093fb0eb89b1b45028c1e0e2b5c10b0e418c4b5f');
   });
 });
