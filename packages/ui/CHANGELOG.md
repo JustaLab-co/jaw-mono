@@ -1,3 +1,13 @@
+## 1.9.1 (2026-10-27)
+
+### 🩹 Fixes
+
+- **ui:** flag unlimited approvals inline and drop the token approvals card ([#584](https://github.com/JustaLab-co/jaw-mono/pull/584))
+
+### ❤️ Thank You
+
+- Leo Franklin @LeoFranklin015
+
 ## 1.9.0 (2026-10-27)
 
 ### 🚀 Features
