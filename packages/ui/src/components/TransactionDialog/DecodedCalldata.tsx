@@ -1,7 +1,7 @@
 import { useMemo } from 'react';
 import type { Hex } from 'viem';
-import type { DecodeResult } from '../../hooks/useDecodedCalldata';
-import type { AllowanceFlag } from '../../hooks/useAllowanceFlags';
+import type { DecodedParam, DecodeResult } from '../../hooks/useDecodedCalldata';
+import type { AllowanceFlag } from '../../utils/allowances';
 import { Spinner } from '../ui/spinner';
 import { TriangleAlert } from 'lucide-react';
 import { useAddressIdentities } from '../../hooks/useAddressIdentities';
@@ -47,6 +47,18 @@ const NotedAllowanceFlag = ({ flag }: { flag: AllowanceFlag }) => (
     <TooltipContent>{FLAG_NOTES[flag.label]}</TooltipContent>
   </Tooltip>
 );
+
+/**
+ * Where the flag sits on the decoded argument it stands for, or null to put it on top. It goes on
+ * the argument only when the lookup shows the value the local decode read there: `true` for an
+ * approved/allowed flag, or the approved amount. It takes the place of `true` or a max amount; any
+ * other amount (an increase of 2^200, say) stays visible beside the flag, so the user sees the number.
+ */
+function flagPlacement(param: DecodedParam | undefined, flag: AllowanceFlag): 'replace' | 'beside' | null {
+  if (param?.type === 'bool') return param.value === 'true' ? 'replace' : null;
+  if (!param || !/^uint\d*$/.test(param.type) || param.value !== flag.amount?.toString()) return null;
+  return isUnlimitedAmount(flag.amount) ? 'replace' : 'beside';
+}
 
 /**
  * ERC-8213 Calldata Digest, collapsed behind a disclosure like the raw calldata
@@ -200,11 +212,8 @@ export const DecodedCalldataView = ({
     );
   }
 
-  // The flag takes the place of an amount or an approved/allowed flag only. If the lookup read the
-  // call with another ABI and that argument is something else, the value stays and the flag goes on top.
-  const flagArg = allowanceFlag ? decoded.params[allowanceFlag.argIndex] : undefined;
-  const flagInPlace = !!flagArg && /^(uint\d*|bool)$/.test(flagArg.type);
-  const flagOnTop = allowanceFlag && !flagInPlace ? allowanceFlag : null;
+  const placement = allowanceFlag ? flagPlacement(decoded.params[allowanceFlag.argIndex], allowanceFlag) : null;
+  const flagOnTop = allowanceFlag && !placement ? allowanceFlag : null;
 
   return (
     <div className="flex flex-col gap-2">
@@ -223,7 +232,8 @@ export const DecodedCalldataView = ({
           const identity = param.rawValue ? identities[identityKey(param.rawValue, chainId)] : undefined;
           const resolvedName = identity?.ensName;
           const resolvedAvatar = identity?.ensAvatar;
-          const argFlag = flagInPlace && allowanceFlag?.argIndex === i ? allowanceFlag : null;
+          const argFlag = placement && allowanceFlag?.argIndex === i ? allowanceFlag : null;
+          const valueHidden = !!argFlag && placement === 'replace';
           return (
             <div key={i} className="flex flex-col gap-1">
               <div className="flex items-baseline gap-1.5">
@@ -232,13 +242,12 @@ export const DecodedCalldataView = ({
               </div>
               <div className="flex flex-row items-center gap-1">
                 {resolvedAvatar && <IdentityAvatar src={resolvedAvatar} fallback={null} />}
-                {argFlag ? (
-                  <NotedAllowanceFlag flag={argFlag} />
-                ) : (
+                {!valueHidden && (
                   <p className="text-foreground break-all font-mono text-xs leading-normal">
                     {resolvedName ? `${resolvedName} (${formatAddress(param.rawValue!)})` : param.value}
                   </p>
                 )}
+                {argFlag && <NotedAllowanceFlag flag={argFlag} />}
                 {param.rawValue && param.rawValue.toLowerCase() !== ZERO_ADDRESS && !resolvedAvatar && (
                   // Address params with no ENS avatar: known token contracts get their logo after the address.
                   // The zero address is excluded — tokenIconUrl maps it to the native icon, wrong for calldata params.

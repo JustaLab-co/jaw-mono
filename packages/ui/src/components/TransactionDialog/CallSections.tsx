@@ -7,7 +7,7 @@ import { Eyebrow, PartyRow, Row, ValueAmount } from '../primitives';
 import { useAddressIdentity, type IdentitySource } from '../../hooks/useAddressIdentities';
 import { useDecodedCalldata, type DecodeResult } from '../../hooks/useDecodedCalldata';
 import { formatNativeValue } from '../../utils/displayFormat';
-import type { AllowanceFlag } from '../../hooks/useAllowanceFlags';
+import type { AllowanceFlag } from '../../utils/allowances';
 import { AllowanceFlagText, DecodedCalldataView, callLabel, readableFlag } from './DecodedCalldata';
 import type { TransactionData } from './types';
 

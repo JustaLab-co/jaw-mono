@@ -7,6 +7,7 @@ import {
   parseAbi,
   toFunctionSelector,
 } from 'viem';
+import { isUnlimitedAmount } from './displayFormat';
 
 export const PERMIT2_ADDRESS = '0x000000000022D473030F116dDEE9F6B43aC78BA3';
 
@@ -40,7 +41,10 @@ export interface AllowanceChange {
   unlimited: boolean;
   /** Sets the allowance to zero. */
   revoke: boolean;
-  /** `approve` shares its selector with ERC-721, so the target may not be an ERC-20 at all. */
+  /**
+   * `approve` shares its selector with ERC-721, so the target may not be an ERC-20 at all and the
+   * amount may be a token id. It is unlimited only at exactly max uint256 or max uint160.
+   */
   ambiguous: boolean;
   /** The signer of an on-chain EIP-2612 or DAI permit. */
   owner?: string;
@@ -53,6 +57,28 @@ export interface AllowanceChange {
 export interface Call {
   to?: string;
   data?: string;
+}
+
+/** The amber warning for one call: an unlimited allowance, or access to a whole collection. */
+export interface AllowanceFlag {
+  label: 'Unlimited' | 'All tokens';
+  /** The call argument the flag stands for in the decoded calldata. */
+  argIndex: number;
+  /** The approved amount; absent for a whole collection. */
+  amount?: bigint;
+}
+
+/**
+ * The flag for one call, or null. Allowances move no balance, so the simulation shows nothing for
+ * them, yet they let the spender take funds later. The screen shows it only once the calldata
+ * lookup has read the call (`readableFlag`).
+ */
+export function allowanceFlag(call: Call): AllowanceFlag | null {
+  const change = decodeAllowanceChange(call);
+  if (!change?.unlimited || change.argIndex === undefined) return null;
+  return change.allTokens
+    ? { label: 'All tokens', argIndex: change.argIndex }
+    : { label: 'Unlimited', argIndex: change.argIndex, amount: change.amount };
 }
 
 /**
@@ -111,9 +137,12 @@ function decodeToken(token: string, data: string): AllowanceChange | null {
   }
   const [spender, amount] = decoded.args;
   const added = decoded.functionName === 'increaseAllowance' || decoded.functionName === 'increaseApproval';
+  const ambiguous = decoded.functionName === 'approve';
+  const change = amountChange(token, spender, amount, added);
   return {
-    ...amountChange(token, spender, amount, added),
-    ambiguous: decoded.functionName === 'approve',
+    ...change,
+    unlimited: ambiguous ? isUnlimitedAmount(amount) : change.unlimited,
+    ambiguous,
     argIndex: 1,
   };
 }

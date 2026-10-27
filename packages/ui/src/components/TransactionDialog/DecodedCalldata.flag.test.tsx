@@ -9,7 +9,7 @@ import { maxUint160, maxUint256 } from 'viem';
 
 import { clearAddressIdentityCache } from '../../utils/addressIdentity';
 import type { DecodeResult } from '../../hooks/useDecodedCalldata';
-import type { AllowanceFlag } from '../../hooks/useAllowanceFlags';
+import type { AllowanceFlag } from '../../utils/allowances';
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
@@ -23,15 +23,16 @@ const SPENDER = '0x1111111111111111111111111111111111111111';
 const MAX = maxUint256.toString();
 
 const spenderParam = { name: 'spender', type: 'address', value: SPENDER, rawValue: SPENDER };
-const approveDecode: DecodeResult = {
+const approveOf = (amount: bigint): DecodeResult => ({
   clearSigned: null,
   isLoading: false,
   decoded: {
     functionName: 'approve',
     signature: 'approve(address, uint256)',
-    params: [spenderParam, { name: 'amount', type: 'uint256', value: MAX }],
+    params: [spenderParam, { name: 'amount', type: 'uint256', value: amount.toString() }],
   },
-};
+});
+const approveDecode = approveOf(maxUint256);
 
 let container: HTMLDivElement;
 let root: Root;
@@ -72,7 +73,7 @@ const count = (needle: string) => text().split(needle).length - 1;
 
 describe('DecodedCalldataView allowance flag', () => {
   it('shows Unlimited in place of the flagged amount, and keeps the spender', () => {
-    show(approveDecode, { label: 'Unlimited', argIndex: 1 });
+    show(approveDecode, { label: 'Unlimited', argIndex: 1, amount: maxUint256 });
     expect(count('Unlimited')).toBe(1);
     expect(text()).not.toContain(MAX);
     expect(text()).toContain(SPENDER);
@@ -125,7 +126,7 @@ describe('DecodedCalldataView allowance flag', () => {
         ],
       },
     };
-    show(permit, { label: 'Unlimited', argIndex: 2 });
+    show(permit, { label: 'Unlimited', argIndex: 2, amount: maxUint256 });
     expect(count('Unlimited')).toBe(1);
     expect(text()).not.toContain(MAX);
     expect(text()).toContain('1900000000');
@@ -146,6 +147,53 @@ describe('DecodedCalldataView allowance flag', () => {
     show(setAll, { label: 'All tokens', argIndex: 1 });
     expect(text()).toContain('All tokens');
     expect(text()).not.toContain('Unlimited');
+  });
+
+  it.each([
+    ['max uint256', maxUint256],
+    ['max uint160', maxUint160],
+  ])('shows Unlimited in place of an amount of exactly %s', (_, amount) => {
+    show(approveOf(amount), { label: 'Unlimited', argIndex: 1, amount });
+    expect(count('Unlimited')).toBe(1);
+    expect(text()).not.toContain(amount.toString());
+  });
+
+  it('keeps any other flagged amount visible, with the flag beside it', () => {
+    // Not a max amount, so the user still sees the number it stands for.
+    const amount = 1n << 200n;
+    show(approveOf(amount), { label: 'Unlimited', argIndex: 1, amount });
+    expect(count('Unlimited')).toBe(1);
+    expect(text()).toContain(amount.toString());
+  });
+
+  it('keeps an amount the lookup read as another number, and puts the flag on top instead', () => {
+    show(approveOf(1_234_567n), { label: 'Unlimited', argIndex: 1, amount: maxUint256 });
+    expect(count('Unlimited')).toBe(1);
+    expect(text()).toContain('1234567');
+  });
+
+  it('shows Unlimited in place of an allowed flag that is true, and keeps one that is not', () => {
+    const daiPermit = (allowed: string): DecodeResult => ({
+      ...approveDecode,
+      decoded: {
+        functionName: 'permit',
+        signature: 'permit(address, address, uint256, uint256, bool, uint8, bytes32, bytes32)',
+        params: [
+          { name: 'holder', type: 'address', value: SPENDER, rawValue: SPENDER },
+          { name: 'spender', type: 'address', value: SPENDER, rawValue: SPENDER },
+          { name: 'nonce', type: 'uint256', value: '3' },
+          { name: 'expiry', type: 'uint256', value: '1900000000' },
+          { name: 'allowed', type: 'bool', value: allowed },
+        ],
+      },
+    });
+    const flag: AllowanceFlag = { label: 'Unlimited', argIndex: 4, amount: maxUint256 };
+    show(daiPermit('true'), flag);
+    expect(count('Unlimited')).toBe(1);
+    expect(text()).not.toContain('true');
+    show(daiPermit('false'), flag);
+    expect(count('Unlimited')).toBe(1);
+    expect(text()).toContain('false');
   });
 
   it('shows the flag on top when the decoded params have no argument at its index', () => {

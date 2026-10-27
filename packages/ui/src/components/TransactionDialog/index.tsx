@@ -12,7 +12,6 @@ import { useChainIconURI, useFeeTokenPrice } from '../../hooks';
 import { useAddressIdentity } from '../../hooks/useAddressIdentities';
 import { useReverseIdentity } from '../../hooks/useReverseIdentity';
 import { useDecodedCalldata } from '../../hooks/useDecodedCalldata';
-import { useAllowanceFlags } from '../../hooks/useAllowanceFlags';
 import { getDisplayAddress } from '../../utils';
 import { formatNativeValue, subscriptDecimal } from '../../utils/displayFormat';
 import { IdentityAvatar } from '../IdentityAvatar';
@@ -23,6 +22,7 @@ import { SubText } from '../SubText';
 import { AssetPreview } from './AssetPreview';
 import { callTitle } from './DecodedCalldata';
 import { resolveBlockReason } from '../../utils/transactionFailure';
+import { allowanceFlag } from '../../utils/allowances';
 import { isBlockingPermissionProblem, PERMISSION_PROBLEM_TEXT } from '../../utils/permissionExecution';
 import { BatchStep, NAME_SOURCES, SingleCallData } from './CallSections';
 import { InlineWarning, PartyRow, Row, ValueAmount } from '../primitives';
@@ -153,12 +153,7 @@ export const TransactionDialog = ({
   const title = isNativeSend ? "You're Sending" : (callTitle(singleCallDecode) ?? 'Review Transaction');
 
   // Allowances move no balance, so the asset preview can't show them: each call carries its own flag.
-  const allowanceFlags = useAllowanceFlags(
-    transactions,
-    [...(assetsOut ?? []), ...(assetsIn ?? [])],
-    currentTransaction?.chainId,
-    apiKey
-  );
+  const allowanceFlags = transactions.map(allowanceFlag);
 
   // A single call's calldata unfolds only when there's no You-send/You-get summary to stand in
   // for it; otherwise that review screen would open with nothing on it. Batch steps always

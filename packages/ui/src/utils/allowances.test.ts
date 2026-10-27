@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
-import { maxUint160, maxUint256 } from 'viem';
-import { decodeAllowanceChange } from './allowances';
+import { labelhash, maxUint160, maxUint256, namehash } from 'viem';
+import { allowanceFlag, decodeAllowanceChange, type AllowanceFlag } from './allowances';
 
 const PERMIT2 = '0x000000000022D473030F116dDEE9F6B43aC78BA3';
 const OWNER = '0x2222222222222222222222222222222222222222';
@@ -41,13 +41,20 @@ describe('decodeAllowanceChange', () => {
     });
   });
 
-  it('flags anything from max uint160 up as unlimited, the same rule as Permit2', () => {
+  it('flags an increase from max uint160 up as unlimited, the same rule as Permit2', () => {
     for (const amount of [maxUint256, 1n << 255n, 1n << 200n, maxUint160 + 1n, maxUint160]) {
-      expect(decodeAllowanceChange({ to: TOKEN, data: approve(amount) })?.unlimited).toBe(true);
       expect(decodeAllowanceChange({ to: TOKEN, data: increase(amount) })?.unlimited).toBe(true);
     }
-    expect(decodeAllowanceChange({ to: TOKEN, data: approve(maxUint160 - 1n) })?.unlimited).toBe(false);
     expect(decodeAllowanceChange({ to: TOKEN, data: increase(maxUint160 - 1n) })?.unlimited).toBe(false);
+  });
+
+  it('flags an approve as unlimited only at exactly max uint256 or max uint160', () => {
+    // Any other number may be an NFT token id: approve has the same selector on an ERC-721.
+    expect(decodeAllowanceChange({ to: TOKEN, data: approve(maxUint256) })?.unlimited).toBe(true);
+    expect(decodeAllowanceChange({ to: TOKEN, data: approve(maxUint160) })?.unlimited).toBe(true);
+    for (const amount of [maxUint256 - 1n, 1n << 255n, 1n << 200n, maxUint160 + 1n, maxUint160 - 1n]) {
+      expect(decodeAllowanceChange({ to: TOKEN, data: approve(amount) })?.unlimited).toBe(false);
+    }
   });
 
   it('reads an approve to zero as a revoke', () => {
@@ -237,5 +244,55 @@ describe('decodeAllowanceChange hardening', () => {
       unlimited: false,
       revoke: true,
     });
+  });
+});
+
+describe('allowanceFlag', () => {
+  const unlimited = (argIndex: number, amount: bigint): AllowanceFlag => ({ label: 'Unlimited', argIndex, amount });
+
+  it('flags each unlimited allowance kind on the argument that carries the amount', () => {
+    const cases: [{ to: string; data: string }, AllowanceFlag][] = [
+      [{ to: TOKEN, data: approve(maxUint256) }, unlimited(1, maxUint256)],
+      [{ to: TOKEN, data: approve(maxUint160) }, unlimited(1, maxUint160)],
+      [{ to: TOKEN, data: increase(maxUint256) }, unlimited(1, maxUint256)],
+      [{ to: TOKEN, data: increaseApproval(1n << 200n) }, unlimited(1, 1n << 200n)],
+      [{ to: TOKEN, data: approveAndCall(maxUint256) }, unlimited(1, maxUint256)],
+      [{ to: TOKEN, data: approveAndCallData(maxUint256) }, unlimited(1, maxUint256)],
+      [
+        { to: TOKEN, data: setAll(1n) },
+        { label: 'All tokens', argIndex: 1 },
+      ],
+      [{ to: TOKEN, data: permit(maxUint256) }, unlimited(2, maxUint256)],
+      [{ to: TOKEN, data: daiPermit(1n) }, unlimited(4, maxUint256)],
+      [{ to: PERMIT2, data: permit2(maxUint160) }, unlimited(2, maxUint160)],
+    ];
+    expect(cases.map(([call]) => allowanceFlag(call))).toEqual(cases.map(([, flag]) => flag));
+  });
+
+  it('flags nothing for finite amounts, revokes and calls that grant no allowance', () => {
+    const calls = [
+      { to: TOKEN, data: approve(5_000_000n) },
+      { to: TOKEN, data: approve(0n) },
+      { to: TOKEN, data: increase(maxUint160 - 1n) },
+      { to: TOKEN, data: setAll(0n) },
+      { to: TOKEN, data: permit(1_000n) },
+      { to: TOKEN, data: daiPermit(0n) },
+      { to: PERMIT2, data: permit2(maxUint160 - 1n) },
+      { to: TOKEN, data: '0x' },
+      { to: SPENDER, data: '0xdeadbeef' },
+    ];
+    expect(calls.map(allowanceFlag)).toEqual(calls.map(() => null));
+  });
+
+  it('never flags an ENS name approval, on the registrar or the NameWrapper', () => {
+    // The registrar's token id is the labelhash; the NameWrapper's, an ERC-1155, is the namehash.
+    const registrar = '0x57f1887a8BF19b14fC0dF6Fd9B2acc9Af147eA85';
+    const nameWrapper = '0xD4416b13d2b3a9aBae7AcD5D6C2BbDBE25686401';
+    expect(allowanceFlag({ to: registrar, data: approve(BigInt(labelhash('vitalik'))) })).toBeNull();
+    expect(allowanceFlag({ to: nameWrapper, data: approve(BigInt(namehash('nick.eth'))) })).toBeNull();
+  });
+
+  it('flags nothing for an allowance selector whose arguments do not decode', () => {
+    expect(allowanceFlag({ to: TOKEN, data: '0x095ea7b3' })).toBeNull();
   });
 });

@@ -29,7 +29,7 @@ vi.mock('../../hooks/useAddressIdentities', () => ({ useAddressIdentity: () => n
 
 import { Accordion } from '../ui/accordion';
 import { BatchStep, SingleCallData } from './CallSections';
-import type { AllowanceFlag } from '../../hooks/useAllowanceFlags';
+import type { AllowanceFlag } from '../../utils/allowances';
 
 const TOKEN = '0x036CbD53842c5426634e7929541eC2318f3dCF7e';
 const DATA = '0x095ea7b3';
