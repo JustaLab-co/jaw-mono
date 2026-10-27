@@ -9,9 +9,10 @@ import {
   SIGNER,
 } from './fixtures';
 import type { BridgeCall } from './view';
-import { snapshotContracts } from './table';
+import { BridgeContracts } from './table';
+import { BRIDGE_CHAINS } from './contracts';
 
-const contracts = snapshotContracts();
+const contracts = new BridgeContracts({ version: 1, chains: BRIDGE_CHAINS });
 
 const DEPOSITORY = '0x4cD00E387622C35bDDB9b4c962C136462338BC31';
 const BASE_SPOKE_POOL = '0x09aea4b2242abC8bb4BB78D537A67a245A7bEC64';
@@ -372,5 +373,13 @@ describe('given an approve the owner must check', () => {
   it('when the approve is unlimited, then the batch leaves it to the token approvals card', () => {
     const batch = readBridgeBatch(contracts, [approve(BASE_SPOKE_POOL, UNLIMITED), ACROSS_CALLS.prod], SIGNER);
     expect(batch?.notices).toEqual([]);
+  });
+
+  it('when the table in use is the snapshot, then an unknown token adds the refresh line, and a live table does not', () => {
+    const calls = [{ ...approve(BASE_SPOKE_POOL, '989680'), to: USDBC }, ACROSS_CALLS.prod];
+    const snapshot = new BridgeContracts({ version: 1, chains: BRIDGE_CHAINS }, 'snapshot');
+    const stale = 'This screen could not refresh its list of bridge contracts.';
+    expect(readBridgeBatch(snapshot, calls, SIGNER)?.notices).toContain(stale);
+    expect(readBridgeBatch(contracts, calls, SIGNER)?.notices).not.toContain(stale);
   });
 });

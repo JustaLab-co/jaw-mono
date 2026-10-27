@@ -123,7 +123,7 @@ export type OrderUnshown = { kind: 'unshown'; reason: string };
 const unshown = (reason: string): OrderUnshown => ({ kind: 'unshown', reason });
 const includes = (what: string) => unshown(`This Relay order includes ${what}, so its terms are not shown.`);
 const MISMATCH = unshown('The Relay order details do not match this deposit, so this screen does not show them.');
-const UNKNOWN_ROUTE = unshown(
+export const UNKNOWN_ROUTE = unshown(
   'This Relay order uses a solver or route this screen does not recognize, so its terms are not shown.'
 );
 const isAddress = (hex: Hex): hex is Address => hex.length === 42;

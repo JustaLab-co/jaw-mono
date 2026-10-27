@@ -15,9 +15,10 @@ import {
 } from './fixtures';
 import { ORDER_TYPES } from './relayOrder';
 import type { BridgeCall } from './view';
-import { snapshotContracts } from './table';
+import { BridgeContracts } from './table';
+import { BRIDGE_CHAINS } from './contracts';
 
-const contracts = snapshotContracts();
+const contracts = new BridgeContracts({ version: 1, chains: BRIDGE_CHAINS });
 
 const RELAY_HIDDEN =
   'Relay keeps the destination chain and the recipient in an order outside this transaction. This screen cannot show them. Confirm only if you started this transfer yourself.';
@@ -51,10 +52,11 @@ const withId = (deposit: BridgeCall, id: string): BridgeCall => ({
 });
 const capability = (orderData: unknown) => ({ optional: true, orderData });
 
-const usdcBatch = (order: unknown, { rehash = false } = {}) => {
+const usdcBatchOn = (table: BridgeContracts, order: unknown, { rehash = false } = {}) => {
   const deposit = rehash ? withId(RELAY_USDC_DEPOSIT, idOf(order as Order)) : RELAY_USDC_DEPOSIT;
-  return readBridgeBatch(contracts, [RELAY_USDC_APPROVE, deposit], SIGNER, capability(order));
+  return readBridgeBatch(table, [RELAY_USDC_APPROVE, deposit], SIGNER, capability(order));
 };
+const usdcBatch = (order: unknown, opts?: { rehash?: boolean }) => usdcBatchOn(contracts, order, opts);
 
 const CREDITED = { label: 'Credited to', value: 'This account', copy: SIGNER_CHECKSUM };
 const orderDetail = (id: string) => ({ label: 'Order', value: `${id.slice(0, 6)}…${id.slice(-4)}`, copy: id });
@@ -423,5 +425,39 @@ describe('given no usable capability', () => {
   it('when the capability rides on a batch with no bridge call, then there is still no bridge view', () => {
     const transfer = { chainId: 8453, to: OTHER, value: '1' };
     expect(readBridgeBatch(contracts, [transfer], SIGNER, capability(RELAY_USDC_ORDER))).toBeNull();
+  });
+});
+
+describe('given a Relay order through a router the compiled table does not list', () => {
+  const STALE = 'This screen could not refresh its list of bridge contracts.';
+  const viaNewRouter = edit((o) => {
+    o.output.extraData = NOT_ROUTER;
+    for (const refund of o.inputs[0].refunds) refund.extraData = NOT_ROUTER;
+  });
+  const withNewRouter = (source: 'live' | 'snapshot') => {
+    const chains = structuredClone(BRIDGE_CHAINS);
+    for (const chain of Object.values(chains)) {
+      if (chain.relay) chain.relay.erc20Routers = [...chain.relay.erc20Routers, OTHER_CHECKSUM];
+    }
+    return new BridgeContracts({ version: 2, chains }, source);
+  };
+  const read = (table: BridgeContracts) => usdcBatchOn(table, viaNewRouter, { rehash: true });
+
+  it('when a live table lists the router, then the order reads as a known route', () => {
+    expect(read(withNewRouter('live'))?.notices).toEqual([]);
+  });
+
+  it('when the live table lacks the router, then the route is unknown and the refresh line stays out', () => {
+    expect(read(contracts)?.notices).toEqual([UNKNOWN_ROUTE, RELAY_HIDDEN]);
+  });
+
+  it('when the table in use is the snapshot and the route is unknown, then the notice adds the refresh line', () => {
+    const snapshot = new BridgeContracts({ version: 1, chains: BRIDGE_CHAINS }, 'snapshot');
+    expect(read(snapshot)?.notices).toEqual([UNKNOWN_ROUTE, RELAY_HIDDEN, STALE]);
+  });
+
+  it('when the table in use is the snapshot and the route is known, then no refresh line shows', () => {
+    const snapshot = new BridgeContracts({ version: 1, chains: BRIDGE_CHAINS }, 'snapshot');
+    expect(usdcBatchOn(snapshot, RELAY_USDC_ORDER)?.notices).toEqual([]);
   });
 });

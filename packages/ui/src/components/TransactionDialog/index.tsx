@@ -13,6 +13,7 @@ import { useAddressIdentity } from '../../hooks/useAddressIdentities';
 import { useReverseIdentity } from '../../hooks/useReverseIdentity';
 import { useDecodedCalldata } from '../../hooks/useDecodedCalldata';
 import { useBridgeBatch } from '../../hooks/useBridgeBatch';
+import { useBridgeContracts } from '../../hooks/useBridgeContracts';
 import { getDisplayAddress } from '../../utils';
 import { formatNativeValue, subscriptDecimal } from '../../utils/displayFormat';
 import { IdentityAvatar } from '../IdentityAvatar';
@@ -154,7 +155,13 @@ export const TransactionDialog = ({
     apiKey
   );
   // Under a permission the granter's funds move; until it is known, the batch is not read.
-  const bridge = useBridgeBatch(transactions, isPermissioned ? onBehalfOf : walletAddress, capabilities?.jawRelayOrder);
+  const bridgeContracts = useBridgeContracts(apiKey);
+  const bridge = useBridgeBatch(
+    bridgeContracts,
+    transactions,
+    isPermissioned ? onBehalfOf : walletAddress,
+    capabilities?.jawRelayOrder
+  );
   const transfer = bridge?.transfer;
   const title =
     transfer?.title ?? (isNativeSend ? "You're Sending" : (callTitle(singleCallDecode) ?? 'Review Transaction'));

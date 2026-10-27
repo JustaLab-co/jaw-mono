@@ -2,7 +2,7 @@ import { getAddress, isAddressEqual, zeroAddress, type Address } from 'viem';
 import { readAcrossCall, type AcrossDeposit } from './across';
 import { readBridgeApprove, type BridgeApprove } from './approve';
 import { readRelayCall, type RelayDeposit } from './relay';
-import { readRelayOrder } from './relayOrder';
+import { readRelayOrder, UNKNOWN_ROUTE } from './relayOrder';
 import type { BridgeContracts } from './table';
 import { PROVIDER_NAME, transferOf, type BridgeTransfer } from './transfer';
 import type { BridgeCall, BridgeProvider, Unreadable } from './view';
@@ -12,6 +12,8 @@ const OTHER_CONTRACT = 'This approval is for a different contract than the depos
 const OTHER_TOKEN = 'This approval is for a different token than the deposit.';
 const UNPAIRED = 'This batch has an approval that the deposit does not use. Check its token, amount and spender.';
 const APPROVE_UNKNOWN = 'This batch approves a token this screen does not know. Check its address before you confirm.';
+
+const STALE_TABLE = 'This screen could not refresh its list of bridge contracts.';
 
 export type BridgeStep = { alert: string } | null;
 
@@ -49,6 +51,9 @@ export function readBridgeBatch(
   );
   const notices = transfers.flatMap((read) => read.notices);
   if (reads.some((read) => read?.kind === 'approve' && !read.token.known)) notices.push(APPROVE_UNKNOWN);
+  const outsideTable =
+    notices.includes(APPROVE_UNKNOWN) || notices.includes(UNKNOWN_ROUTE.reason) || deposits.some(hasUnknownToken);
+  if (outsideTable && contracts.source === 'snapshot') notices.push(STALE_TABLE);
 
   if (deposits.length === 1) {
     notices.push(...approveNotices(calls, reads, deposits[0]));
@@ -62,6 +67,13 @@ export function readBridgeBatch(
     notices: [...new Set(notices)],
   };
 }
+
+const hasUnknownToken = (deposit: Deposit) => tokensOf(deposit).some((token) => !token.known);
+
+const tokensOf = (deposit: Deposit) =>
+  deposit.provider === 'relay'
+    ? [deposit.send.token]
+    : [deposit.send.token, deposit.receive.kind === 'minimum' ? deposit.receive.amount.token : deposit.receive.token];
 
 function approveNotices(calls: BridgeCall[], reads: Read[], deposit: Deposit): string[] {
   const at = reads.indexOf(deposit);
