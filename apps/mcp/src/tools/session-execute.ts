@@ -1,5 +1,12 @@
 import { createHash, randomBytes } from 'node:crypto';
-import { mayHaveBeenSent, refusalOfFailure, refusalOfLogs, within, type SessionBridge } from '@jaw.id/agent';
+import {
+  checkerRejectedDetail,
+  mayHaveBeenSent,
+  refusalOfFailure,
+  refusalOfLogs,
+  within,
+  type SessionBridge,
+} from '@jaw.id/agent';
 import type { McpServer } from '@modelcontextprotocol/server';
 import { and, eq } from 'drizzle-orm';
 import { getAddress, isAddress, numberToHex, type Address, type Hex } from 'viem';
@@ -101,7 +108,7 @@ function described(r: Refusal, permissionId: string, chainId: number): Said {
     case 'checker-rejected':
       return {
         say: `checker-rejected: The permission allows this action on ${r.target}, but the contract that checks it refused it as asked.`,
-        next: `Change the call's arguments, never the permission: permission ${permissionId} allows calling ${r.selector} on ${r.target}, but its checker ${r.checker} refused this call's arguments.`,
+        next: checkerRejectedDetail(r, permissionId),
       };
     case 'over-limit':
       return {

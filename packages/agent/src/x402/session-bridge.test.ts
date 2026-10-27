@@ -348,7 +348,7 @@ describe('SessionBridge and a call checker', () => {
     const failure = await send(bridge()).catch((err: Error) => err);
 
     expect((failure as Error).message).toBe(
-      `checker-rejected: permission 0xperm allows calling ${TRANSFER} on ${USDC_BASE_SEPOLIA}, but its checker ${CHECKER} refused this call's arguments. Change the arguments, not the permission.`
+      `checker-rejected: Change the call's arguments, never the permission: permission 0xperm allows calling ${TRANSFER} on ${USDC_BASE_SEPOLIA}, but its checker ${CHECKER} refused this call's arguments.`
     );
   });
 });

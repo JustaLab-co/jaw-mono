@@ -1,5 +1,5 @@
 import { ANY_FN_SEL, ANY_TARGET, EMPTY_CALLDATA_FN_SEL, PERMISSIONS_MANAGER_ADDRESS } from '@jaw.id/core';
-import { readCurrentPeriods, readLiveness, type ReadDeps } from '@jaw.id/agent';
+import { readCurrentPeriods, readLiveness, type ManagerRefusal, type ReadDeps } from '@jaw.id/agent';
 import { getAddress, isAddressEqual, size, slice, toFunctionSelector, type Address, type Hex } from 'viem';
 import type { LiveGrant } from './store';
 
@@ -9,14 +9,9 @@ export interface Call {
   data: Hex;
 }
 
-export type Refusal =
-  | { reason: 'call-not-allowed'; target: Address; selector: Hex }
-  // The rule allows the call; the checker on it refused the call's arguments.
-  | { reason: 'checker-rejected'; target: Address; selector: Hex; checker: Address }
-  | { reason: 'over-limit'; token: Address; spend: bigint; left: bigint }
-  | { reason: 'over-limit'; onChain: true }
-  | { reason: 'expired' }
-  | { reason: 'no-grant' };
+// What the manager refuses, plus the one refusal only this check can name before a send: how much
+// of a spend limit the batch would take.
+export type Refusal = ManagerRefusal | { reason: 'over-limit'; token: Address; spend: bigint; left: bigint };
 
 export class ChainUnreadable extends Error {
   constructor() {

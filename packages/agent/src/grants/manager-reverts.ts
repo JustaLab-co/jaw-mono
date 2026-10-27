@@ -4,10 +4,24 @@ import { entryPoint08Abi, entryPoint08Address } from 'viem/account-abstraction';
 /** What the permission manager refused a session key's userOp for, read from its revert. */
 export type ManagerRefusal =
   | { reason: 'call-not-allowed'; target: Address; selector: Hex }
-  | { reason: 'checker-rejected'; target: Address; selector: Hex; checker: Address }
+  // The rule allows the call; the checker on it refused the call's arguments.
+  | CheckerRejected
   | { reason: 'over-limit'; onChain: true }
   | { reason: 'expired' }
   | { reason: 'no-grant' };
+
+type CheckerRejected = { reason: 'checker-rejected'; target: Address; selector: Hex; checker: Address };
+
+/**
+ * What to do about a checker's refusal, said the same way by every host that sends as a session
+ * key. The call is allowed, so the fix is in its arguments and a wider permission would not help.
+ */
+export function checkerRejectedDetail(refused: CheckerRejected, permissionId: string): string {
+  return (
+    `Change the call's arguments, never the permission: permission ${permissionId} allows calling ` +
+    `${refused.selector} on ${refused.target}, but its checker ${refused.checker} refused this call's arguments.`
+  );
+}
 
 const SIGNATURES = [
   'error JustaPermissionManager_UnauthorizedCall(address target, bytes4 selector)',

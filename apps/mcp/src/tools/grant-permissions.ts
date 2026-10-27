@@ -3,7 +3,6 @@ import { hasChecker, isRefusedChecker, usdcForNetwork } from '@jaw.id/agent';
 import type { McpServer } from '@modelcontextprotocol/server';
 import {
   isAddress,
-  isAddressEqual,
   numberToHex,
   parseUnits,
   toFunctionSelector,

@@ -4,7 +4,7 @@ import { usdcForNetwork } from './asset-registry.js';
 import { PERMIT2_ADDRESS } from './permit2.js';
 import { whyFeeTokenDisagrees } from './fee-token.js';
 import type { Logger, SessionHost } from '../ports.js';
-import { refusalOfFailure } from '../grants/manager-reverts.js';
+import { checkerRejectedDetail, refusalOfFailure } from '../grants/manager-reverts.js';
 
 // JAW's ERC-20 paymaster, mirrored from core's `jawPaymasterUrl`. Kept as a
 // local literal rather than an import because `@jaw.id/core` is lazy-loaded in
@@ -116,11 +116,7 @@ function explainUnchargeableSender(err: unknown, sessionAddress: string, feeToke
 function explainCheckerRefusal(err: unknown, permissionId: string): Error | undefined {
   const refused = refusalOfFailure(err);
   if (refused?.reason !== 'checker-rejected') return undefined;
-  return new Error(
-    `checker-rejected: permission ${permissionId} allows calling ${refused.selector} on ${refused.target}, ` +
-      `but its checker ${refused.checker} refused this call's arguments. Change the arguments, not the permission.`,
-    { cause: err }
-  );
+  return new Error(`checker-rejected: ${checkerRejectedDetail(refused, permissionId)}`, { cause: err });
 }
 
 export interface SessionBridgeOptions {
