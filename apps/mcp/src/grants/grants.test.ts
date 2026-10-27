@@ -99,7 +99,9 @@ describe('budget grants', () => {
   it('gives the owner a wallet link that asks for a daily USDC allowance whose only spender is the session key', async () => {
     const { t, signer } = await connected();
     const { result, grant } = await ask(t, signer, { perDay: '1.5' });
-    expect('structuredContent' in result && result.structuredContent.url).toMatch(/^http:\/\/keys\.test\/cli-bridge\?/);
+    expect('structuredContent' in result && result.structuredContent!.url).toMatch(
+      /^http:\/\/keys\.test\/cli-bridge\?/
+    );
     expect(grant).toMatchObject({
       spender: t.sessionAddress,
       chainId: '0x14a34',
@@ -439,7 +441,7 @@ describe('the link reply', () => {
 
     const { result } = await ask(t, signer, { perDay: '5' });
 
-    const summary = 'structuredContent' in result ? result.structuredContent.summary : '';
+    const summary = 'structuredContent' in result ? result.structuredContent!.summary : '';
     expect(summary).toContain(
       'The 2 earlier permissions on this connection stay in force until they expire or are revoked; together they let this connection move up to 7 smallest units of the token at 0x4200000000000000000000000000000000000006 a week and 1 USDC a day.'
     );
@@ -452,7 +454,7 @@ describe('the link reply', () => {
 
     const { result } = await ask(t, signer, { input: CUSTOM });
 
-    const summary = 'structuredContent' in result ? result.structuredContent.summary : '';
+    const summary = 'structuredContent' in result ? result.structuredContent!.summary : '';
     expect(summary).toContain('7 smallest units of the token at 0x4200000000000000000000000000000000000006 in total');
   });
 
@@ -462,10 +464,11 @@ describe('the link reply', () => {
 
     const { result } = await ask(t, signer, { input: CUSTOM });
 
-    const summary = 'structuredContent' in result ? result.structuredContent.summary : '';
+    if (!('structuredContent' in result)) throw new Error('refused');
+    const summary = result.structuredContent!.summary;
     // No permission is held yet, so the agent hears of no earlier one and nothing it already lets move.
     expect(toAgent(result)).toEqual([
-      'For the agent: Show the link now with one sentence of what it allows. Then check jaw_session_status on later turns to see it in force; do not wait for the owner to say they approved.',
+      `For the agent: Show the link now with one sentence of what it allows. Then call jaw_get_grant_status with id ${result.structuredContent!.id} and waitSeconds 30, and again while it answers awaiting_owner, until ${result.structuredContent!.approveBy}. Do not wait for the owner to say they approved.`,
     ]);
     expect(summary).not.toContain('replaces');
   });
@@ -526,7 +529,7 @@ describe('jaw_grant_permissions', () => {
     const first = await grantPermissions(t, { x402Budget: { perDay: '1' } }, deps);
     const second = await grantPermissions(t, { x402Budget: { perDay: '1' } }, deps);
 
-    expect('structuredContent' in first && first.structuredContent.url).toBe(url);
+    expect('structuredContent' in first && first.structuredContent!.url).toBe(url);
     expect('isError' in second && second.isError).toBe(true);
     expect(second.content[0].text).toContain(url);
     expect(second.content[0].text).toContain('An earlier permission request is still waiting');
@@ -601,13 +604,13 @@ describe('jaw_grant_permissions', () => {
     );
     await walletsSettled();
     if (!('structuredContent' in result)) throw new Error('refused');
-    expect(result.structuredContent.url).toBe(walletUrl);
-    expect(result.structuredContent.summary.split('\n')[0]).toBe(`Open this link to approve: ${walletUrl}`);
-    expect(result.structuredContent.summary).toContain('a spend limit of 1.50 USDC a day for paid services, until ');
-    expect(result.structuredContent.summary).toContain(
-      'Then check jaw_session_status on later turns to see it in force'
+    expect(result.structuredContent!.url).toBe(walletUrl);
+    expect(result.structuredContent!.summary.split('\n')[0]).toBe(`Open this link to approve: ${walletUrl}`);
+    expect(result.structuredContent!.summary).toContain('a spend limit of 1.50 USDC a day for paid services, until ');
+    expect(result.structuredContent!.summary).toContain(
+      `Then call jaw_get_grant_status with id ${result.structuredContent!.id} and waitSeconds 30`
     );
-    expect(result.structuredContent.summary).toContain('do not wait for the owner to say they approved');
+    expect(result.structuredContent!.summary).toContain('Do not wait for the owner to say they approved');
   });
 
   it('a ten digit budget is refused by the schema', async () => {

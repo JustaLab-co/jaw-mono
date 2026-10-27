@@ -9,7 +9,7 @@ import { getDb } from '@/db/client';
 import { connections, grants } from '@/db/schema';
 import { errorLabel, log } from '@/lib/edge';
 import { checkGranted, readOnChain, recordGrant, type GrantRequest, type ReadPermission } from './permission';
-import { waitingRequests, type Claim, type Outcome, type Rebuild } from './requests';
+import { waitingRequests, type Claim, type Outcome, type PermissionRequestRow, type Rebuild } from './requests';
 import { markRevoked, readState, UNCONFIRMED } from './revokes';
 import type { GrantKind } from './store';
 
@@ -108,6 +108,10 @@ async function showAddFunds(ask: Ask, claim: Claim, t: Tenant, { chainId }: AddF
 }
 
 export type GrantPayload = { kind: GrantKind; grant: GrantRequest };
+
+/** The grant a request row asked for. Throws on a row this server did not write. */
+export const grantAsked = (row: PermissionRequestRow): GrantPayload =>
+  grantPayload.parse(JSON.parse(row.payload ?? 'null')) as GrantPayload;
 
 export const grantWork =
   (read: ReadPermission): Rebuild =>

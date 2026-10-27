@@ -25,6 +25,7 @@ const SIGNERS = {
   jaw_swap_status: 'none',
   jaw_get_calls_status: 'none',
   jaw_get_sign_status: 'none',
+  jaw_get_grant_status: 'none',
   jaw_get_assets: 'none',
   jaw_get_calls_history: 'none',
   jaw_get_permissions: 'none',
