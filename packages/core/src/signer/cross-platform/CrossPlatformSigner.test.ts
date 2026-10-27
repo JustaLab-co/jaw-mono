@@ -1664,6 +1664,44 @@ describe('CrossPlatformSigner', () => {
             expect(mockCommunicator.postRequestAndWaitForResponse).not.toHaveBeenCalled();
         });
 
+        it('should reject a grant whose second call checker is malformed, naming that call, before opening a popup', async () => {
+            const unauthenticatedSigner = new CrossPlatformSigner({
+                metadata: mockMetadata,
+                communicator: mockCommunicator,
+                callback: mockCallback,
+            });
+
+            const request: RequestArguments = {
+                method: 'wallet_grantPermissions',
+                params: [
+                    {
+                        expiry: 2_000_000_000,
+                        spender: '0x2222222222222222222222222222222222222222',
+                        permissions: {
+                            calls: [
+                                {
+                                    target: '0x036CbD53842c5426634e7929541eC2318f3dCF7e',
+                                    functionSignature: 'transfer(address,uint256)',
+                                    checker: '0x398b9d939E7E616E03eA99601c835C920621B2ca',
+                                },
+                                {
+                                    target: '0x036CbD53842c5426634e7929541eC2318f3dCF7e',
+                                    functionSignature: 'approve(address,uint256)',
+                                    checker: '0x1234',
+                                },
+                            ],
+                        },
+                    },
+                ],
+            };
+
+            await expect(unauthenticatedSigner.request(request)).rejects.toMatchObject({
+                code: -32602,
+                message: expect.stringContaining('permissions.calls[1].checker'),
+            });
+            expect(mockCommunicator.postRequestAndWaitForResponse).not.toHaveBeenCalled();
+        });
+
         it('should reject an unconfigured chain with EIP-5792 5710, not 4200', async () => {
             // Arrange - 4200 renders in viem as "the provider does not support
             // the requested method", which reads as a missing method rather
