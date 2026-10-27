@@ -504,14 +504,23 @@ export async function getPermissionFromRelay(
 }
 
 /**
+ * One call as the relay stored it. A call stored without a checker has none, which the contract
+ * reads as zero, and a checker comes back checksummed, as on the grant response, so reading a
+ * permission back and rebuilding its hash agree with what was granted.
+ */
+export function relayCallToCallPermission(call: StorePermissionApiResponse['calls'][number]): CallPermission {
+    return {
+        target: call.target as Address,
+        selector: call.selector as Hex,
+        checker: call.checker ? getAddress(call.checker) : ZERO_ADDRESS,
+    };
+}
+
+/**
  * Convert relay permission data to Permission struct
  */
 export function relayPermissionToPermission(relayPermission: StorePermissionApiResponse): Permission {
-    const calls: CallPermission[] = relayPermission.calls.map((call) => ({
-        target: call.target as Address,
-        selector: call.selector as Hex,
-        checker: (call.checker as Address) || ZERO_ADDRESS,
-    }));
+    const calls: CallPermission[] = relayPermission.calls.map(relayCallToCallPermission);
 
     const spends: SpendLimit[] = relayPermission.spends.map((spend) => ({
         token: spend.token as Address,
