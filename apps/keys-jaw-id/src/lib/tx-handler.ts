@@ -101,6 +101,7 @@ export function extractTransactionData(
       callsId: sendCallsParams.id,
       permissionId,
       from: sendCallsParams.from,
+      capabilities: capabilities as Record<string, unknown> | undefined,
     };
   }
 
