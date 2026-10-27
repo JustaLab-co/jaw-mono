@@ -1,3 +1,13 @@
+## 1.10.0 (2026-10-27)
+
+### 🚀 Features
+
+- **ui:** pin bridge contracts for the signing screen ([#556](https://github.com/JustaLab-co/jaw-mono/pull/556))
+
+### ❤️ Thank You
+
+- Mariano Aguero @mariano-aguero
+
 ## 1.9.1 (2026-10-27)
 
 ### 🩹 Fixes
