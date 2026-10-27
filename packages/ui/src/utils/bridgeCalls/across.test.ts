@@ -30,6 +30,7 @@ const BASE_USDC = getAddress('0x833589fcd6edb6e08f4c7c32d4f71b54bda02913');
 const USDBC = getAddress('0xd9aaec86b65d86f6a7b5b1b0c42ffa531710b6ca');
 const ARB_USDC = getAddress('0xaf88d065e77c8cc2239327c5edb3a432268e5831');
 const ARB = getAddress('0x912ce59144191c1204e64559fe8253a0e49e6548');
+const NVDA = getAddress('0xd0601ce157db5bdc3162bbac2a2c8af5320d9eec');
 const ARB_WETH = getAddress('0x82af49447d8a07e3bd95bd0d56f35241523fbab1');
 const BSC_USDC = getAddress('0x8ac76a51cc950d9822d68b83fe1ad97b32cd580d');
 const BSC_POOL = getAddress('0x4e8e101924ede233c13e2d8622dc8aed2872d505');
@@ -213,6 +214,17 @@ describe('given the deposit call of a live Across quote', () => {
       fee: undefined,
       refundTo: ACCOUNT,
       fillDeadline: 1792683695,
+    });
+  });
+
+  it('then 3 USDC on Base into NVDA on Robinhood Chain reads the token and recipient but no amount', () => {
+    expect(readAcrossCall(contracts, ACROSS_CALLS.usdcToNvda)).toMatchObject({
+      kind: 'deposit',
+      provider: 'across',
+      send: usdc(8453, BASE_USDC, 3_000_000n),
+      destinationChainId: 4663,
+      recipient: OTHER,
+      receive: { kind: 'swap', chainId: 4663, token: { address: NVDA, known: false } },
     });
   });
 });
