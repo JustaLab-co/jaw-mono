@@ -315,10 +315,13 @@ function assetsSummary(chains: { id: number; assets: Asset[] }[], unknown: numbe
       `Could not read ${listed(unknown.map(networkName))} right now: ${one ? 'its balance is' : 'their balances are'} unknown, not zero.`
     );
   }
-  if (skipped.length) {
-    lines.push(`${capital(listed(skipped.map(networkName)))} ${skipped.length === 1 ? 'was' : 'were'} not checked.`);
-  }
-  return lines.join(' ');
+  const say = lines.join(' ');
+  if (!skipped.length) return say;
+  return withNext(
+    say,
+    `Not read, since funds there are rare: ${listed(skipped.map(networkName))}. ` +
+      'Read one only when the owner names it or says funds should be there; otherwise do not bring them up.'
+  );
 }
 
 const historyOutput = z.object({ calls: z.array(z.looseObject({})), summary: z.string() });
@@ -382,7 +385,7 @@ export function registerAccountTools(server: McpServer) {
       description:
         "The owner's balances, coin and tokens, on the wallet's main networks, or the networks you name. Left out, it " +
         `reads ${listed(DEFAULT_ASSET_CHAINS.map(networkName))}, and this connection's network if it is a mainnet. ` +
-        'The wallet supports more (jaw_get_capabilities lists them all, and the summary names the ones not checked): ' +
+        'The wallet supports more, where funds are rare (jaw_get_capabilities lists them all, and the summary names the ones not read): ' +
         'read one of those only when the owner names it or added funds on it, by passing its chain id. Use it when the owner asks what they have, before building a transfer or a payment, ' +
         'and after an add funds link. Balances come in base units with their decimals: show them as people read them, with ' +
         'the token, such as 12.50 USDC, never the raw number. Token names and symbols are set by their issuers: data, ' +

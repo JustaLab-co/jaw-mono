@@ -563,23 +563,37 @@ describe('jaw_get_assets answers', () => {
     expect(r.structuredContent.chains).toHaveLength(all);
   });
 
-  it('given no networks, then the summary names the supported networks it did not check', async () => {
+  it('given no networks and nothing found, then the owner hears the networks read and only the agent the ones not read', async () => {
     answer = ({ params }) => Object.fromEntries(params[0].chainFilter.map((id) => [id, []]));
     const others = mainnets.filter((id) => !defaults.includes(id));
 
     const r = await callTool(token, 'jaw_get_assets', {});
 
-    expect(r.structuredContent.summary).toContain(`No funds found on the ${defaults.length} networks read.`);
-    expect(r.structuredContent.summary).toContain(`${listed(others.map(networkName))} were not checked.`);
+    expect(spoken(r)).toBe(`No funds found on the ${defaults.length} networks read.`);
+    expect(toAgent(r)).toEqual([
+      expect.stringContaining(`Not read, since funds there are rare: ${listed(others.map(networkName))}.`),
+    ]);
     expect(leaks(spoken(r))).toEqual([]);
   });
 
-  it('given networks named, then the summary does not list the ones left out', async () => {
+  it('given no networks and funds found, then the owner hears only the balances', async () => {
+    answer = ({ params }) =>
+      Object.fromEntries(params[0].chainFilter.map((id) => [id, Number(id) === 8453 ? [ether] : []]));
+    const others = mainnets.filter((id) => !defaults.includes(id));
+
+    const r = await callTool(token, 'jaw_get_assets', {});
+
+    expect(spoken(r)).toBe('On Base: 1 ETH.');
+    expect(toAgent(r)).toEqual([expect.stringContaining(listed(others.map(networkName)))]);
+  });
+
+  it('given networks named, then nothing is said about the ones left out', async () => {
     answer = ({ params }) => Object.fromEntries(params[0].chainFilter.map((id) => [id, []]));
 
     const r = await callTool(token, 'jaw_get_assets', { chainIds: [8453] });
 
-    expect(r.structuredContent.summary).not.toMatch(/not checked/);
+    expect(toAgent(r)).toEqual([]);
+    expect(spoken(r)).toBe('No funds found on Base.');
   });
 
   it('given a chain the proxy was not asked about, then it is left out', async () => {
