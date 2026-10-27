@@ -153,6 +153,8 @@ const checked = (t: Tenant, args: Partial<SendCallsInput>, node: ReturnType<type
     clients: quietChain,
     gasClient: node.clientFor,
   });
+// Code at the owner's account: one the wallet has deployed, whose batches get the chain's whole budget.
+const DEPLOYED: Hex = '0x6080604052';
 // Two calls of 24,576 and `second` bytes of calldata: a batch of 24,964 bytes plus `second`, padded to 32.
 const sized = (second: number) => [
   { to: TARGET, data: `0xa9059cbb${'ab'.repeat(24_572)}` },
@@ -2190,7 +2192,7 @@ describe('jaw_send_calls batch size and gas', () => {
 
   it("given calls needing more gas than the chain's budget, then no link opens, nothing is stored and the agent is told to split", async () => {
     const { t } = await connected();
-    const node = gasNode({ gasLimit: 60_000_000n, gas: 5_000_001n });
+    const node = gasNode({ code: DEPLOYED, gasLimit: 60_000_000n, gas: 5_000_001n });
 
     const result = await checked(t, { chainId: 1 }, node);
 
@@ -2206,7 +2208,7 @@ describe('jaw_send_calls batch size and gas', () => {
 
   it("given calls within the chain's budget, then the owner's account was estimated and the link opens", async () => {
     const { t } = await connected();
-    const node = gasNode({ gasLimit: 60_000_000n, gas: 5_000_000n });
+    const node = gasNode({ code: DEPLOYED, gasLimit: 60_000_000n, gas: 5_000_000n });
 
     const result = await checked(t, {}, node);
 

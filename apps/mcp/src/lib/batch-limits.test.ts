@@ -72,8 +72,8 @@ describe('overBudget', () => {
     expect(estimate.params[2]).toBeUndefined();
   });
 
-  it('given a batch needing more gas than the budget, then the gas and the budget come back', async () => {
-    const node = gasNode({ gasLimit: 60_000_000n, gas: 5_000_001n });
+  it('given a deployed account and a batch needing more gas than the budget, then the gas and the budget come back', async () => {
+    const node = gasNode({ code: JAW_ACCOUNT_CODE, gasLimit: 60_000_000n, gas: 5_000_001n });
 
     expect(await overBudget(node.clientFor(8453), ACCOUNT, approves(2))).toEqual({
       gas: 5_000_001n,
@@ -81,12 +81,28 @@ describe('overBudget', () => {
     });
   });
 
-  it('given a batch needing exactly the budget, then it fits', async () => {
-    const node = gasNode({ gasLimit: 60_000_000n, gas: 5_000_000n });
+  it('given a deployed account and a batch needing exactly the budget, then it fits', async () => {
+    const node = gasNode({ code: JAW_ACCOUNT_CODE, gasLimit: 60_000_000n, gas: 5_000_000n });
 
     expect(await overBudget(node.clientFor(8453), ACCOUNT, approves(2))).toBeUndefined();
   });
 
+  it('given an account not deployed yet, then its first transaction gets 3.3M', async () => {
+    const node = gasNode({ code: '0x', gasLimit: 60_000_000n, gas: 3_300_001n });
+
+    expect(await overBudget(node.clientFor(8453), ACCOUNT, approves(2))).toEqual({
+      gas: 3_300_001n,
+      budget: 3_300_000n,
+    });
+  });
+
+  it('given an account not deployed yet and a batch needing exactly 3.3M, then it fits', async () => {
+    const node = gasNode({ code: '0x', gasLimit: 60_000_000n, gas: 3_300_000n });
+
+    expect(await overBudget(node.clientFor(8453), ACCOUNT, approves(2))).toBeUndefined();
+  });
+
+  // A new account: 3.3M is above what Citrea's blocks leave, so Citrea's own budget stands.
   it("given Citrea's smaller blocks, then a batch that fits elsewhere is over there", async () => {
     const node = gasNode({ gasLimit: 10_000_000n, gas: 2_000_000n });
 

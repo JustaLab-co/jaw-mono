@@ -22,6 +22,9 @@ const MAX_BATCH_GAS = 5_000_000n;
 // Around the calls, in transaction gas: the bundle's base 25k; this userOp's deploy, passkey check and paymaster,
 // padded, ~2.03M; three ordinary userOps beside it, ~1.64M each.
 const AROUND_CALLS = 6_975_000n;
+// A first transaction also deploys the account, and the bundler has put that userOp's verification at up to 1.54M
+// (Sepolia, 2026-10-27): ~5.7M padded instead of ~2.03M, which leaves ~3.34M of call gas on a 2^24 chain.
+const MAX_FIRST_BATCH_GAS = 3_300_000n;
 const CHECK_MS = 5_000;
 
 // Every JAW account is an EIP-1167 clone of one implementation, the factory's immutable, at this address on every chain.
@@ -80,6 +83,8 @@ export async function overBudget(
     data: batchData(calls),
     stateOverride: code ? undefined : [{ address: account, code: ACCOUNT_CODE }],
   });
-  const budget = gasBudget(block.gasLimit);
+  const chainBudget = gasBudget(block.gasLimit);
+  // A first transaction gets the lower of the two, so a chain with smaller blocks, such as Citrea, keeps its own.
+  const budget = !code && chainBudget > MAX_FIRST_BATCH_GAS ? MAX_FIRST_BATCH_GAS : chainBudget;
   return gas > budget ? { gas, budget } : undefined;
 }
