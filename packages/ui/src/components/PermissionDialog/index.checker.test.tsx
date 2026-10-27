@@ -9,17 +9,20 @@ const CHECKER = '0x398b9d939E7E616E03eA99601c835C920621B2ca';
 
 vi.mock('../../hooks', () => ({ useChainIconURI: () => undefined, useFeeTokenPrice: () => undefined }));
 vi.mock('../ShellDialog', () => ({ ShellDialog: ({ children }: { children: ReactNode }) => <div>{children}</div> }));
-// Every address resolves at once, except the checker: it is named on ENS by whoever deployed it,
-// and its clear-signing lookup has not answered yet.
+// Every address resolves at once. The checker carries an ENS name its deployer chose, and a
+// clear-signing name that only a clear-signing lookup with an api key gets back, and that lookup
+// is still marked as loading.
+const CLEAR_SIGNING_NAME = 'USDC Recipient Guard';
 vi.mock('../../hooks/useAddressIdentities', () => ({
-  useAddressIdentities: (inputs: readonly ReverseInput[]) =>
+  useAddressIdentities: (inputs: readonly ReverseInput[], options: { apiKey?: string; include?: readonly string[] }) =>
     Object.fromEntries(
       inputs.map((input) => {
         const isChecker = input.address.toLowerCase() === CHECKER.toLowerCase();
+        const asksClearSigning = !!options.apiKey && !!options.include?.includes('clearSigning');
         const identity = {
           address: input.address,
           ensName: isChecker ? 'recipient-must-be-you.eth' : null,
-          clearSigningName: null,
+          clearSigningName: isChecker && asksClearSigning ? CLEAR_SIGNING_NAME : null,
           loading: { ens: false, token: false, clearSigning: isChecker },
         } as unknown as AddressIdentity;
         return [identityKey(input.address, input.chainId), identity];
@@ -54,6 +57,7 @@ const render = () =>
       gasFee="0.0001"
       sponsored
       mainnetRpcUrl="https://mainnet.example"
+      apiKey="test-api-key"
     />
   );
 
@@ -65,6 +69,10 @@ describe('the grant screen and a call checker', () => {
 
     expect(html).toContain('Checked by');
     expect(html).not.toContain('recipient-must-be-you.eth');
+  });
+
+  it('names the checker by its clear-signing name', () => {
+    expect(render()).toContain(CLEAR_SIGNING_NAME);
   });
 
   // The address is what gets signed and it is always shown; a name lookup that hangs must not
