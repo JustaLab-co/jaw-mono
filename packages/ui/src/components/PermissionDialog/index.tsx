@@ -79,7 +79,6 @@ export const PermissionDialog = ({
   const identities = useAddressIdentities(identityInputs, { mainnetRpcUrl, include: ENS_ONLY });
   const identityOf = (address: string | undefined) =>
     address && chainId ? identities[identityKey(address, chainId)] : undefined;
-  // A checker is usually a contract with no ENS name, so it is also looked up by its clear-signing name.
   const checkerInputs = chainId ? calls.filter(hasChecker).map((call) => ({ address: call.checker, chainId })) : [];
   // Named only from the clear-signing registry: an ENS name is chosen by whoever deploys the
   // checker, so a checker that allows everything could call itself `recipient-must-be-you.eth`.

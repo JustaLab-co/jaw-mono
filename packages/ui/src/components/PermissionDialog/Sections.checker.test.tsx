@@ -5,7 +5,6 @@ import { AllowedCalls } from './Sections';
 import type { CallPermission } from './types';
 
 const TARGET = '0x3333333333333333333333333333333333333333';
-const OTHER_TARGET = '0x4444444444444444444444444444444444444444';
 const CHECKER = '0x8888888888888888888888888888888888888888';
 const ZERO = '0x0000000000000000000000000000000000000000';
 
@@ -54,6 +53,14 @@ describe('a call checker in the allowed calls card', () => {
   it('draws nothing for a checker that is not a string', () => {
     expect(() => card([{ ...transfer(), checker: 42 as unknown as string }])).not.toThrow();
     expect(card([{ ...transfer(), checker: 42 as unknown as string }])).not.toContain('Checked by');
+  });
+
+  // The explanation of what a checker can do is behind the info icon, so a keyboard or screen
+  // reader has to be able to reach it: a bare svg takes no focus.
+  it('puts the checker explanation on a button a keyboard can reach', () => {
+    const html = card([transfer(CHECKER)]);
+
+    expect(html).toMatch(/<button[^>]*type="button"[^>]*aria-label="Before each call to this function/);
   });
 
   it('reads as a safeguard, not a warning', () => {

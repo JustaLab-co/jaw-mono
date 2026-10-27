@@ -241,7 +241,9 @@ function CheckerLine({
       <TooltipProvider delayDuration={0}>
         <Tooltip>
           <TooltipTrigger asChild>
-            <Info className="size-3 flex-none cursor-help" aria-label={CHECKER_INFO} />
+            <button type="button" aria-label={CHECKER_INFO} className="flex-none cursor-help">
+              <Info className="size-3" aria-hidden />
+            </button>
           </TooltipTrigger>
           <TooltipContent side="top">
             <p>{CHECKER_INFO}</p>
