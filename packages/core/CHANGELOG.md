@@ -1,3 +1,13 @@
+## 1.8.0 (2026-10-27)
+
+### 🚀 Features
+
+- **core:** prefund the spender in the native coin ([#579](https://github.com/JustaLab-co/jaw-mono/pull/579))
+
+### ❤️ Thank You
+
+- Mariano Aguero
+
 ## 1.7.1 (2026-10-21)
 
 ### 🩹 Fixes
