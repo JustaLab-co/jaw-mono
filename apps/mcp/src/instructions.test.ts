@@ -245,6 +245,11 @@ const CASES: Record<string, Case> = {
   jaw_resolve_name: { tool: 'jaw_resolve_name', args: { name: 'alice.eth' } },
   jaw_session_x402_discover: { tool: 'jaw_session_x402_discover', args: { query: 'weather' } },
   jaw_grant_permissions: { tool: 'jaw_grant_permissions', args: { x402Budget: { perDay: '1' } } },
+  // Still waiting on the request jaw_grant_permissions just opened.
+  jaw_get_grant_status: {
+    tool: 'jaw_get_grant_status',
+    args: (token) => opened(token, 'jaw_grant_permissions', { x402Budget: { perDay: '1' } }),
+  },
   jaw_send_calls: { tool: 'jaw_send_calls', args: SEND },
   // Still waiting on the request jaw_send_calls just opened.
   jaw_get_calls_status: { tool: 'jaw_get_calls_status', args: (token) => opened(token, 'jaw_send_calls', SEND) },
@@ -340,6 +345,7 @@ describe('what each tool says for the owner', () => {
   it('jaw_get_calls_status', namesNoInternals('jaw_get_calls_status'));
   it('jaw_sign', namesNoInternals('jaw_sign'));
   it('jaw_get_sign_status', namesNoInternals('jaw_get_sign_status'));
+  it('jaw_get_grant_status', namesNoInternals('jaw_get_grant_status'));
   it('jaw_session_x402_pay', namesNoInternals('jaw_session_x402_pay'));
   it('jaw_session_execute', namesNoInternals('jaw_session_execute'));
   it('jaw_swap', namesNoInternals('jaw_swap'));

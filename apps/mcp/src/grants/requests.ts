@@ -176,19 +176,19 @@ function rejoinIfWaiting<R extends PermissionRequestRow | undefined>(row: R, reb
   return row;
 }
 
-async function readSign(same: SQL | undefined): Promise<PermissionRequestRow | undefined> {
+async function readClosed(same: SQL | undefined): Promise<PermissionRequestRow | undefined> {
   await closeDead(same);
   const [row] = await getDb().select().from(permissionRequests).where(same);
   return row;
 }
 
 export const currentSign = async (t: Tenant, idempotencyKey: string, rebuild: Rebuild) =>
-  rejoinIfWaiting(await readSign(sameSign(t, idempotencyKey)), rebuild);
+  rejoinIfWaiting(await readClosed(sameSign(t, idempotencyKey)), rebuild);
 
-export const signById = (t: Tenant, id: string) =>
-  readSign(
+export const requestById = (t: Tenant, method: 'sign' | 'grant', id: string) =>
+  readClosed(
     and(
-      eq(permissionRequests.method, 'sign'),
+      eq(permissionRequests.method, method),
       eq(permissionRequests.connectionId, t.connectionId),
       eq(permissionRequests.id, id)
     )

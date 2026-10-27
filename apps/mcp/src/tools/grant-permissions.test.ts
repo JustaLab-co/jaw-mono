@@ -4,7 +4,7 @@ import { randomBytes } from 'node:crypto';
 import { beforeAll, describe, expect, it, vi } from 'vitest';
 import { toFunctionSelector } from 'viem';
 import { verifyBearer, type Tenant } from '@/connections/auth';
-import { WalletBusy, type OpenWallet } from '@/connections/relay';
+import { WalletBusy, type OpenWallet, type Wallet } from '@/connections/relay';
 import {
   approvedOnChain,
   callTool,
@@ -20,12 +20,16 @@ import {
 } from '@/connections/testkit';
 import { getDb } from '@/db/client';
 import { grants, permissionRequests } from '@/db/schema';
+import { countHit } from '@/db/settings';
 import { TEST_PG_URL, useTestDb, useTestPostgres } from '@/db/test-db';
 import type { GrantRequest } from '@/grants/permission';
 import { LIVE_GRANTS_PER_CONNECTION, x402Budget } from '@/grants/store';
 import { leaks, spoken, toAgent } from '@/test-utils/spoken';
+import { RATE_WINDOW_MS } from '@/lib/edge';
 import { onDate } from '@/lib/owner-text';
-import { grantPermissions, type GrantInput } from './grant-permissions';
+import { grantPermissions, grantStatus, type GrantInput } from './grant-permissions';
+import { FOR_AGENT } from './reply';
+import { sign } from './sign';
 
 setTestEnv();
 beforeAll(TEST_PG_URL ? useTestPostgres : useTestDb);
@@ -110,7 +114,7 @@ describe('jaw_grant_permissions', () => {
       },
       capabilities: { prefundSpender: true },
     });
-    expect('structuredContent' in result && result.structuredContent.summary).toContain(
+    expect('structuredContent' in result && result.structuredContent!.summary).toContain(
       'a spend limit of 2.50 USDC a day for paid services'
     );
     expect(await newestRow(t)).toMatchObject({
@@ -127,7 +131,7 @@ describe('jaw_grant_permissions', () => {
 
     const { result } = await grant(t, signer, { x402Budget: { perDay: '2' } });
 
-    const summary = 'structuredContent' in result ? result.structuredContent.summary : '';
+    const summary = 'structuredContent' in result ? result.structuredContent!.summary : '';
     expect(spoken(result)).toContain('It replaces the current spend limit.');
     expect(summary).toContain('this server tries to revoke the current spend limit on chain');
     expect(summary).toContain('stays approved on chain until it expires or jaw_revoke_permission revokes it');
@@ -165,7 +169,7 @@ describe('jaw_grant_permissions', () => {
     const { result } = await grant(t, signer, { x402Budget: { perDay: '1' } });
 
     if (!('structuredContent' in result)) throw new Error('refused');
-    const { url } = result.structuredContent;
+    const { url } = result.structuredContent!;
     const [link, said] = spoken(result).split('\n');
     expect(link).toBe(`Open this link to approve: ${url}`);
     expect(said).toBe(
@@ -174,7 +178,7 @@ describe('jaw_grant_permissions', () => {
     );
     expect(leaks(spoken(result))).toEqual([]);
     expect(toAgent(result)).toEqual([
-      'For the agent: Show the link now with one sentence of what it allows. Then check jaw_session_status on later turns to see it in force; do not wait for the owner to say they approved.',
+      `For the agent: Show the link now with one sentence of what it allows. Then call jaw_get_grant_status with id ${result.structuredContent!.id} and waitSeconds 30, and again while it answers awaiting_owner, until ${result.structuredContent!.approveBy}. Do not wait for the owner to say they approved.`,
     ]);
   });
 
@@ -235,7 +239,7 @@ describe('jaw_grant_permissions', () => {
     });
 
     expect(request?.expiry).toBe(secondsOf(t.expiresAt));
-    expect('structuredContent' in result && result.structuredContent.expiresAt).toBe(
+    expect('structuredContent' in result && result.structuredContent!.expiresAt).toBe(
       new Date(secondsOf(t.expiresAt) * 1000).toISOString()
     );
   });
@@ -486,7 +490,10 @@ describe('jaw_grant_permissions', () => {
     await walletsSettled();
 
     expect(opened).toBe(1);
-    const url = 'structuredContent' in first && first.structuredContent.url;
+    const url = 'structuredContent' in first && first.structuredContent!.url;
+    const id = 'structuredContent' in first && first.structuredContent!.id;
+    expect(again.content[0].text).toMatch(/^grant_in_progress: /);
+    expect(toAgent(again)[0]).toContain(`Follow ${id} with jaw_get_grant_status.`);
     expect(spoken(again).split('\n')).toEqual([
       expect.stringMatching(
         /^An earlier permission request is still waiting for the owner, so this one was not opened\. It expires in (29|30) minutes\.$/
@@ -557,7 +564,7 @@ describe('jaw_grant_permissions', () => {
     release();
     await walletsSettled();
 
-    const url = 'structuredContent' in first && first.structuredContent.url;
+    const url = 'structuredContent' in first && first.structuredContent!.url;
     expect(again.content[0].text).toContain(
       'An earlier permission request is still waiting for the owner, so this one was not opened. It expires in'
     );
@@ -581,7 +588,7 @@ describe('jaw_grant_permissions', () => {
       readPermission: approvedOnChain,
     };
     const first = await grantPermissions(t, twoByTwo, deps);
-    const url = 'structuredContent' in first && first.structuredContent.url;
+    const url = 'structuredContent' in first && first.structuredContent!.url;
     await vi.waitFor(() => expect(asked.map((a) => a.method)).toContain('wallet_grantPermissions'));
 
     await getDb()
@@ -592,8 +599,8 @@ describe('jaw_grant_permissions', () => {
     release();
     await walletsSettled();
 
-    const summary = 'structuredContent' in again ? again.structuredContent.summary : again.content[0].text;
-    const newUrl = 'structuredContent' in again && again.structuredContent.url;
+    const summary = 'structuredContent' in again ? again.structuredContent!.summary : again.content[0].text;
+    const newUrl = 'structuredContent' in again && again.structuredContent!.url;
     expect(summary.split('\n')[0]).toBe(`Open this link to approve: ${newUrl}`);
     expect(summary).not.toMatch(/link_lost: /);
     // The owner is told to leave the lost link alone; the lost link itself is for the agent.
@@ -608,5 +615,348 @@ describe('jaw_grant_permissions', () => {
     expect(leaks(spoken(again))).toEqual([]);
     expect(newUrl).not.toBe(url);
     expect(opened).toBe(2);
+  });
+});
+
+describe('jaw_get_grant_status', () => {
+  const POLL_MS = 20;
+  const status = (t: Tenant, id: string, waitSeconds = 0) => grantStatus(t, { id, waitSeconds }, { pollMs: POLL_MS });
+
+  const idleWallet: OpenWallet = async (): Promise<Wallet> => ({
+    url: `http://keys.test/cli-bridge?session=idle-${randomBytes(4).toString('hex')}`,
+    run: () => new Promise(() => {}),
+    close: () => {},
+  });
+
+  /** Opens a grant link whose wallet answers only once released. */
+  async function gated(
+    t: Tenant,
+    signer: ReturnType<typeof owner>,
+    input: GrantInput = twoByTwo,
+    refuse: string[] = []
+  ) {
+    let release = () => {};
+    const held = new Promise<void>((resolve) => (release = resolve));
+    const honest = walletAnswers(signer, refuse);
+    const first = await grantPermissions(t, input, {
+      openWallet: fakeWallet(async (method, params) => {
+        if (method === 'wallet_grantPermissions') await held;
+        return honest(method, params);
+      }),
+      session: offlineSession,
+      readPermission: approvedOnChain,
+    });
+    if (!('structuredContent' in first)) throw new Error('refused');
+    return { first: first.structuredContent!, release };
+  }
+
+  async function idle(t: Tenant) {
+    const first = await grantPermissions(t, twoByTwo, {
+      openWallet: idleWallet,
+      session: offlineSession,
+      readPermission: approvedOnChain,
+    });
+    if (!('structuredContent' in first)) throw new Error('refused');
+    return first.structuredContent!;
+  }
+
+  const setRow = (id: string, set: Parameters<ReturnType<ReturnType<typeof getDb>['update']>['set']>[0]) =>
+    getDb().update(permissionRequests).set(set).where(eq(permissionRequests.id, id));
+
+  it('given a new grant, then its reply carries an id the status tool follows, waiting for the owner, with the link', async () => {
+    const { t, signer } = await connected();
+    const { first, release } = await gated(t, signer);
+
+    expect(first).toMatchObject({
+      id: expect.stringMatching(/^pr_[A-Za-z0-9_-]{22}$/),
+      state: 'awaiting_owner',
+      kind: 'custom',
+    });
+    expect(first.url).toMatch(/^http:\/\/keys\.test\//);
+    expect(first.summary).not.toContain('jaw_session_status');
+    expect((await status(t, first.id)).structuredContent).toMatchObject({
+      id: first.id,
+      state: 'awaiting_owner',
+      url: first.url,
+      approveBy: first.approveBy,
+    });
+    release();
+    await walletsSettled();
+  });
+
+  it('given a grant awaiting the owner, when the owner approves mid-wait, then it answers approved with the permission now in force', async () => {
+    const { t, signer } = await connected();
+    const { first, release } = await gated(t, signer);
+    setTimeout(release, 150);
+
+    const started = Date.now();
+    const result = await status(t, first.id, 10);
+    await walletsSettled();
+
+    expect(Date.now() - started).toBeLessThan(5_000);
+    const granted = await newestRow(t);
+    expect(result.structuredContent).toMatchObject({ state: 'approved', permissionId: granted.permissionId });
+    expect(result.structuredContent!.url).toBeUndefined();
+    expect(result.structuredContent!.refusal).toBeUndefined();
+    expect(spoken(result)).toBe(`The owner approved the permission. It is in force until ${onDate(t.expiresAt)}.`);
+    expect(toAgent(result)).toEqual([
+      `${FOR_AGENT} Its permission id is ${granted.permissionId}. Run the actions it allows with jaw_session_execute.`,
+    ]);
+    expect(leaks(spoken(result))).toEqual([]);
+  });
+
+  it('given a status read while the owner has not answered, then it asks for another wait and keeps the link for the agent only', async () => {
+    const { t, signer } = await connected();
+    const { first, release } = await gated(t, signer);
+
+    const result = await status(t, first.id);
+
+    expect(spoken(result)).toMatch(
+      /^Still waiting for the owner to approve the permission\. It expires in (29|30) minutes\.$/
+    );
+    expect(toAgent(result)).toEqual([
+      `${FOR_AGENT} Call jaw_get_grant_status again with id ${first.id} and waitSeconds 30 until ${first.approveBy}. If the owner asks for the link, show it: ${first.url}`,
+    ]);
+    expect(result.structuredContent!.summary).not.toContain('Open this link');
+    release();
+    await walletsSettled();
+  });
+
+  it('given the owner declines, then owner_declined with no link and no permission', async () => {
+    const { t, signer } = await connected();
+    const { first, release } = await gated(t, signer, twoByTwo, ['wallet_grantPermissions']);
+    release();
+    await walletsSettled();
+
+    const result = await status(t, first.id);
+
+    expect(result.structuredContent).toMatchObject({ state: 'owner_declined', refusal: { code: 'owner_declined' } });
+    expect(result.structuredContent!.url).toBeUndefined();
+    expect(result.structuredContent!.permissionId).toBeUndefined();
+    expect(spoken(result)).toBe('The owner declined the permission. Nothing changed.');
+  });
+
+  it('given a link nobody answered past its window, then expired, without claiming nothing was granted', async () => {
+    const { t } = await connected();
+    const first = await idle(t);
+    await setRow(first.id, { approveBy: sql`now() - interval '1 second'` });
+
+    const result = await status(t, first.id);
+
+    expect(result.structuredContent).toMatchObject({ state: 'expired', refusal: { code: 'expired' } });
+    // An approval in the last moments can land on chain after the window, so the owner is not told nothing changed.
+    expect(spoken(result)).toBe('The owner did not approve within 30 minutes.');
+    expect(toAgent(result)[0]).toContain('jaw_get_permissions lists the account');
+  });
+
+  it('given a link whose process stopped renewing it before the owner was asked, then expired with session_lost', async () => {
+    const { t } = await connected();
+    const first = await idle(t);
+    await setRow(first.id, { sessionUntil: sql`statement_timestamp() - interval '5 minutes'` });
+
+    const result = await status(t, first.id);
+
+    expect(result.structuredContent).toMatchObject({ state: 'expired', refusal: { code: 'session_lost' } });
+    expect(spoken(result)).toBe('The permission link stopped working before the owner saw it. Nothing changed.');
+  });
+
+  it('given a link lost after the owner was asked, then expired with link_lost, and the agent learns how a permission approved there ends', async () => {
+    const { t } = await connected();
+    const first = await idle(t);
+    await setRow(first.id, { code: 'asked', sessionUntil: sql`statement_timestamp() - interval '5 minutes'` });
+
+    const result = await status(t, first.id);
+
+    expect(result.structuredContent).toMatchObject({ state: 'expired', refusal: { code: 'link_lost' } });
+    expect(spoken(result)).toBe(
+      'The permission link stopped working after the owner opened it, so an answer given there may never arrive. If it is still open, do not approve it there.'
+    );
+    expect(toAgent(result)[0]).toContain('only jaw_revoke_permission with its id from the wallet ends it');
+  });
+
+  it('given a wallet answer that is not what was asked, then failed with the permission it answered, named for revoking', async () => {
+    const { t, signer } = await connected();
+    let answered: string | undefined;
+    const { result: first } = await grant(t, signer, twoByTwo, (granted) => {
+      answered = granted.permissionId as string;
+      return { ...granted, spends: [] };
+    });
+    if (!('structuredContent' in first)) throw new Error('refused');
+
+    const result = await status(t, first.structuredContent!.id);
+
+    expect(result.structuredContent).toMatchObject({
+      state: 'failed',
+      permissionId: answered,
+      refusal: { code: 'grant_mismatch' },
+    });
+    expect(spoken(result)).toBe(
+      'The wallet approved a permission this server could not record, so it may be in force on chain without this connection using it.'
+    );
+    expect(toAgent(result)).toEqual([
+      `${FOR_AGENT} The request ended with grant_mismatch. Revoke ${answered} with jaw_revoke_permission, then ask again if the owner still wants it.`,
+    ]);
+  });
+
+  it('given a new spend limit approved while the one it replaced is still approved on chain, then the agent hears so until its revoke lands', async () => {
+    const { t, signer, connectedWith } = await connected();
+    const { result: first } = await grant(t, signer, { x402Budget: { perDay: '2' } });
+    if (!('structuredContent' in first)) throw new Error('refused');
+    const id = first.structuredContent!.id;
+
+    const before = await status(t, id);
+
+    expect(before.structuredContent).toMatchObject({ state: 'approved', kind: 'x402-budget' });
+    expect(spoken(before)).toBe(
+      `The owner approved the spend limit for paid services. It is in force until ${onDate(t.expiresAt)}.`
+    );
+    expect(toAgent(before)[0]).toContain('The spend limit it replaced is still approved on chain');
+    await getDb().update(grants).set({ revokedAt: new Date() }).where(eq(grants.permissionId, connectedWith!));
+
+    const after = await status(t, id);
+
+    expect(toAgent(after)[0]).not.toContain('The spend limit it replaced');
+    expect(toAgent(after)[0]).toContain('payments draw from it now');
+  });
+
+  it('given a spend limit a newer one replaced, then its status says so and not that payments draw from it', async () => {
+    const { t, signer } = await connected();
+    const { result: older } = await grant(t, signer, { x402Budget: { perDay: '2' } });
+    await grant(t, signer, { x402Budget: { perDay: '3' } });
+    if (!('structuredContent' in older)) throw new Error('refused');
+
+    const result = await status(t, older.structuredContent!.id);
+
+    expect(result.structuredContent!.state).toBe('approved');
+    expect(spoken(result)).toBe(
+      'The owner approved the spend limit for paid services, and a newer one has since replaced it.'
+    );
+    expect(toAgent(result)[0]).not.toContain('payments draw from it');
+    expect(toAgent(result)[0]).not.toContain('The spend limit it replaced');
+  });
+
+  it('given an approved permission revoked since, then its status says it was revoked, not that it is in force', async () => {
+    const { t, signer } = await connected();
+    const { result: first } = await grant(t, signer, twoByTwo);
+    if (!('structuredContent' in first)) throw new Error('refused');
+    const granted = await newestRow(t);
+    await getDb().update(grants).set({ revokedAt: new Date() }).where(eq(grants.permissionId, granted.permissionId));
+
+    const result = await status(t, first.structuredContent!.id);
+
+    expect(spoken(result)).toBe('The owner approved the permission, and it has since been revoked.');
+    expect(toAgent(result)[0]).not.toContain('jaw_session_execute');
+  });
+
+  it('given an approved permission past its end, then its status says it expired', async () => {
+    const { t, signer } = await connected();
+    const { result: first } = await grant(t, signer, twoByTwo);
+    if (!('structuredContent' in first)) throw new Error('refused');
+    const granted = await newestRow(t);
+    await getDb()
+      .update(grants)
+      .set({ expiresAt: sql`now() - interval '1 second'` })
+      .where(eq(grants.permissionId, granted.permissionId));
+
+    expect(spoken(await status(t, first.structuredContent!.id))).toBe(
+      'The owner approved the permission, and it has since expired.'
+    );
+  });
+
+  it('given an approval from another account than the connected one, then failed without pointing at a revoke that would refuse it', async () => {
+    const { t } = await connected();
+    const first = await idle(t);
+    const other = `0x${'ab'.repeat(32)}`;
+    await setRow(first.id, { state: 'failed', code: 'wrong_account', permissionId: other, relay: null });
+
+    const result = await status(t, first.id);
+
+    expect(result.structuredContent).toMatchObject({ state: 'failed', refusal: { code: 'wrong_account' } });
+    expect(spoken(result)).toBe(
+      'The owner approved with another account than the one connected here, so nothing was recorded for this connection.'
+    );
+    expect(toAgent(result)[0]).toContain(`That account can revoke ${other} from its own wallet.`);
+    expect(toAgent(result)[0]).not.toContain('jaw_revoke_permission');
+  });
+
+  it('given a wallet that could not grant, then failed with the code it answered and nothing said to be in force', async () => {
+    const { t } = await connected();
+    const first = await idle(t);
+    await setRow(first.id, { state: 'failed', code: 'wallet_error:4100' });
+
+    const result = await status(t, first.id);
+
+    expect(result.structuredContent).toMatchObject({ state: 'failed', refusal: { code: 'wallet_error:4100' } });
+    expect(result.structuredContent!.permissionId).toBeUndefined();
+    expect(spoken(result)).toBe('The wallet could not approve this permission. Nothing changed.');
+    expect(toAgent(result)[0]).toContain('The request ended with wallet_error:4100.');
+  });
+
+  it('given a waiting link that replaced one lost after the owner was asked, then its status warns not to approve the lost one', async () => {
+    const { t } = await connected();
+    const lost = await idle(t);
+    await setRow(lost.id, { code: 'asked', sessionUntil: sql`statement_timestamp() - interval '5 minutes'` });
+    const first = await idle(t);
+
+    const result = await status(t, first.id);
+
+    expect(result.structuredContent!.state).toBe('awaiting_owner');
+    expect(spoken(result)).toContain(
+      'An earlier permission link stopped working, so an answer given there may never arrive. If it is still open, do not approve it there.'
+    );
+    expect(toAgent(result).join('\n')).toContain(`The earlier link ${lost.url} answers link_lost.`);
+  });
+
+  it('given a waiting link whose server is rejoining it, then its status says the server is reconnecting', async () => {
+    const { t } = await connected();
+    const first = await idle(t);
+    // Inside the stall grace no rejoin starts, so the read sees the row exactly as written.
+    await setRow(first.id, { relay: 'saved', sessionUntil: sql`now() - interval '30 seconds'` });
+
+    const result = await status(t, first.id);
+
+    expect(result.structuredContent!.state).toBe('awaiting_owner');
+    expect(toAgent(result)[0]).toContain('reconnecting to the owner');
+  });
+
+  it("given another connection's grant id, then not_found, in plain words for the owner", async () => {
+    const other = await connected();
+    const { t } = await connected();
+    const first = await idle(t);
+
+    const result = await status(other.t, first.id);
+
+    expect(result.content[0].text).toMatch(/^not_found: /);
+    expect(spoken(result)).toBe('That permission request was not found on this connection.');
+  });
+
+  it('given the id of a sign request on the same connection, then not_found', async () => {
+    const { t } = await connected();
+    const signed = await sign(t, { message: 'hello', idempotencyKey: 'grant-status' }, { openWallet: idleWallet });
+
+    expect((await status(t, signed.structuredContent!.id)).content[0].text).toMatch(/^not_found: /);
+  });
+
+  it('given 30 grant status reads in the last minute on the connection, then the next is rate_limited', async () => {
+    const { t } = await connected();
+    const first = await idle(t);
+    for (let i = 0; i < 30; i++) await countHit(`owner-grant-status:${t.connectionId}`, RATE_WINDOW_MS);
+
+    expect((await status(t, first.id)).content[0].text).toMatch(/^rate_limited: /);
+  });
+
+  it('given the tools list, then jaw_get_grant_status is titled, read-only, and takes an id and a bounded wait', async () => {
+    const { c } = await connected();
+
+    const { json } = await mcp(c.access_token, { method: 'tools/list' });
+
+    const tool = json.result.tools.find((x: { name: string }) => x.name === 'jaw_get_grant_status');
+    expect(tool.title).toBe('Check a permission request');
+    expect(tool.annotations).toMatchObject({ readOnlyHint: true });
+    expect(tool.inputSchema.properties.waitSeconds).toMatchObject({ maximum: 45 });
+    expect(tool.inputSchema.required).toEqual(['id']);
+    const grantTool = json.result.tools.find((x: { name: string }) => x.name === 'jaw_grant_permissions');
+    expect(grantTool.description).toContain('Then call jaw_get_grant_status with the id and waitSeconds 30');
+    expect(grantTool.description).not.toContain('jaw_session_status');
   });
 });
