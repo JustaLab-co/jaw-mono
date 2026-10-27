@@ -48,16 +48,16 @@ const FEE_TOKENS_MS = 3_000;
 
 /**
  * The token a custom grant's session pays its fee in: the one the wallet prefunded it with, which
- * is the grant's first ERC-20 spend. Undefined, so USDC, when there is none, the paymaster does not
- * take it, or the session address holds none of it: the wallet skips the prefund in some cases and
- * approval sizing fails on an empty balance.
+ * is the grant's first ERC-20 spend, or the native coin when it spends nothing else. Undefined, so
+ * USDC, when there is none, the paymaster does not take the ERC-20, or the session address holds
+ * none of it: the wallet skips the prefund in some cases and the fee fails on an empty balance.
  */
 export async function feeTokenOf(grant: LiveGrant): Promise<Address | undefined> {
+  const { spends } = grant.permission;
+  const token = spends.find((s) => !isAddressEqual(s.token as Address, NATIVE_TOKEN))?.token as Address | undefined;
+  if (!token) return spends.length > 0 ? nativeFeeOf(grant) : undefined;
   const apiKey = config().paymasterApiKey;
-  const token = grant.permission.spends.find((s) => !isAddressEqual(s.token as Address, NATIVE_TOKEN))?.token as
-    | Address
-    | undefined;
-  if (!apiKey || !token) return undefined;
+  if (!apiKey) return undefined;
   const caps = await within(
     handleGetCapabilitiesRequest({ method: 'wallet_getCapabilities', params: [] }, apiKey, true),
     FEE_TOKENS_MS
@@ -78,6 +78,15 @@ export async function feeTokenOf(grant: LiveGrant): Promise<Address | undefined>
   return held !== undefined && held > 0n ? token : undefined;
 }
 
+/** Native gas needs no paymaster, so only the session's own balance decides. */
+async function nativeFeeOf(grant: LiveGrant): Promise<Address | undefined> {
+  const held = await within(
+    publicClientFor(grant.chainId).getBalance({ address: grant.spender as Address }),
+    FEE_TOKENS_MS
+  ).catch(unreadable('native balance'));
+  return held !== undefined && held > 0n ? NATIVE_TOKEN : undefined;
+}
+
 const unreadable = (what: string) => (err: unknown) => {
   log('warn', { msg: `${what} unreadable, the fee is paid in USDC`, error: errorLabel(err) });
   return undefined;
@@ -85,17 +94,19 @@ const unreadable = (what: string) => (err: unknown) => {
 
 /**
  * Sends calls as the session key through the grant. Undefined without a paymaster key to pay the fee with.
- * The fee is paid in USDC unless a fee token is given.
+ * The fee is paid in USDC unless a fee token is given, and with no paymaster when it is the native coin.
  */
 export function sessionBridge(t: Tenant, grant: LiveGrant, feeToken?: Address): SessionBridge | undefined {
   const apiKey = config().paymasterApiKey;
   if (!apiKey) return undefined;
   const session = sessionOf(grant);
+  const native = feeToken !== undefined && isAddressEqual(feeToken, NATIVE_TOKEN);
   return new SessionBridge({
     apiKey,
     chainId: grant.chainId,
     logger: agentLogger,
-    paymasterContext: feeToken && { token: feeToken },
+    nativeFee: native,
+    paymasterContext: feeToken && !native ? { token: feeToken } : undefined,
     host: {
       loadSession: () => session,
       loadSessionKey: (): Hex => t.sessionKey(),

@@ -31,6 +31,8 @@ const JAW_ERC20_PAYMASTER_URL = 'https://api.justaname.id/proxy/v1/rpc/erc20-pay
 function resolvePaymaster(
   options: SessionBridgeOptions
 ): Pick<SessionBridgeOptions, 'paymasterUrl' | 'paymasterContext'> {
+  // Explicit, so a context given alongside does not survive the spread over the options.
+  if (options.nativeFee) return { paymasterUrl: undefined, paymasterContext: undefined };
   if (options.paymasterUrl) {
     return { paymasterUrl: options.paymasterUrl, paymasterContext: options.paymasterContext };
   }
@@ -77,7 +79,7 @@ function resolvePaymaster(
  */
 async function warnOnFeeTokenDrift(options: SessionBridgeOptions): Promise<void> {
   if (options.paymasterUrl && !options.paymasterUrl.startsWith(JAW_ERC20_PAYMASTER_URL)) return;
-  if (options.paymasterContext) return;
+  if (options.paymasterContext || options.nativeFee) return;
   const asset = usdcForNetwork(`eip155:${options.chainId}`);
   if (!asset || !options.apiKey) return;
   const warning = await whyFeeTokenDisagrees(asset, options.apiKey);
@@ -115,6 +117,8 @@ export interface SessionBridgeOptions {
   logger: Logger;
   paymasterUrl?: string;
   paymasterContext?: Record<string, unknown>;
+  /** Pay gas from the session's own native balance, with no paymaster, whatever else is set. */
+  nativeFee?: boolean;
 }
 
 /** Awaited with the userOp hash after signing and before the send; a rejection stops the send. */

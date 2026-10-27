@@ -16,10 +16,11 @@ vi.mock('@jaw.id/core', () => ({
   },
 }));
 // A network read on every first session; nothing here is about the fee token.
-vi.mock('./fee-token.js', () => ({ whyFeeTokenDisagrees: async () => null }));
+vi.mock('./fee-token.js', () => ({ whyFeeTokenDisagrees: vi.fn(async () => null) }));
 
 const { SessionBridge } = await import('./session-bridge.js');
 const { Account } = await import('@jaw.id/core');
+const { whyFeeTokenDisagrees } = await import('./fee-token.js');
 
 const USDC_BASE_SEPOLIA = '0x036CbD53842c5426634e7929541eC2318f3dCF7e';
 const SESSION_ADDRESS = derivedAddress;
@@ -169,6 +170,49 @@ describe('SessionBridge and the host', () => {
       }),
       expect.anything(),
       { eip7702: true }
+    );
+  });
+
+  // A session prefunded in the native coin pays its gas from its own balance, as any account
+  // with no paymaster does.
+  it('given a native fee, then it sends with no paymaster, whatever else is set', async () => {
+    const h = host({ configuredPaymaster: () => ({ url: 'https://paymaster.example' }) });
+    await send(
+      new SessionBridge({
+        apiKey: 'key',
+        chainId: 84532,
+        host: h,
+        logger: { warn: vi.fn() },
+        paymasterContext: { token: USDC_BASE_SEPOLIA },
+        nativeFee: true,
+      })
+    );
+
+    expect(Account.fromLocalAccount).toHaveBeenCalledWith(
+      expect.objectContaining({ apiKey: 'key', paymasterUrl: undefined, paymasterContext: undefined }),
+      expect.anything(),
+      { eip7702: true }
+    );
+    expect(whyFeeTokenDisagrees).not.toHaveBeenCalled();
+  });
+
+  it('given a native fee, when the key is refused, then the retry still sends with no paymaster', async () => {
+    sendCalls.mockRejectedValueOnce(new Error('refused'));
+
+    await send(
+      new SessionBridge({
+        apiKey: 'old-key',
+        chainId: 84532,
+        host: host({ freshApiKey: async () => 'new-key' }),
+        logger: { warn: vi.fn() },
+        nativeFee: true,
+      })
+    );
+
+    expect(Account.fromLocalAccount).toHaveBeenLastCalledWith(
+      expect.objectContaining({ apiKey: 'new-key', paymasterUrl: undefined }),
+      expect.anything(),
+      expect.anything()
     );
   });
 
