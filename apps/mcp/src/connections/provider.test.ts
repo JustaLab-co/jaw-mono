@@ -23,7 +23,7 @@ import {
 vi.mock('node:dns', async (original) => {
   const dns = await original<typeof import('node:dns')>();
   const lookup = ((host: string, opts: object, cb: (...a: unknown[]) => void) =>
-    host.endsWith('.example.test') || host === 'chatgpt.com'
+    host.endsWith('.example.test') || host === 'chatgpt.com' || host === 'accountlinking.google.com'
       ? cb(null, [{ address: '93.184.216.34', family: 4 }])
       : dns.lookup(host, opts, cb)) as typeof dns.lookup;
   return { ...dns, default: { ...dns, lookup }, lookup };
@@ -94,18 +94,46 @@ const chatgptDocuments: Record<string, object> = {
   },
   [CHATGPT_NO_REFRESH]: { ...chatgpt, client_id: CHATGPT_NO_REFRESH, grant_types: ['authorization_code'] },
 };
-const chatgptAssertion = async (key = chatgptKey.privateKey) => ({
+const assertionFor = async (clientId: string, key: CryptoKey) => ({
   client_assertion_type: 'urn:ietf:params:oauth:client-assertion-type:jwt-bearer',
   client_assertion: await new SignJWT({})
     .setProtectedHeader({ alg: 'RS256', kid: 'cimd' })
-    .setIssuer(CHATGPT)
-    .setSubject(CHATGPT)
+    .setIssuer(clientId)
+    .setSubject(clientId)
     .setAudience(ISSUER)
     .setJti(randomBytes(16).toString('hex'))
     .setIssuedAt()
     .setExpirationTime('1m')
     .sign(key),
 });
+const chatgptAssertion = (key = chatgptKey.privateKey) => assertionFor(CHATGPT, key);
+// Gemini's document as Google serves it, which names Google's keys on another host.
+const GEMINI =
+  'https://accountlinking.google.com/clientidmetadata/user_bound_provider/user_bound_custom-mcp-1-mcp_jaw_id';
+const GEMINI_JWKS =
+  'https://www.gstatic.com/account-linking/.well-known/client-assertion-signature-verification-key.json';
+const GEMINI_REDIRECT = 'https://oauth-redirect.googleusercontent.com/r/user_bound_custom-mcp-1-mcp_jaw_id';
+const gemini = {
+  client_id: GEMINI,
+  client_name: 'Google',
+  redirect_uris: [GEMINI_REDIRECT],
+  token_endpoint_auth_method: 'private_key_jwt',
+  token_endpoint_auth_signing_alg: 'RS256',
+  jwks_uri: GEMINI_JWKS,
+  grant_types: ['authorization_code', 'refresh_token'],
+  response_types: ['code'],
+  scope: 'wallet:read x402:pay',
+};
+const GEMINI_OTHER_KEYS = 'https://accountlinking.google.com/clientidmetadata/other-keys';
+const GEMINI_KEYS_ELSEWHERE = 'https://evil.example.test/gemini-keys.json';
+const geminiKey = await generateKeyPair('RS256');
+const keyedDocuments: Record<string, object> = {
+  ...chatgptDocuments,
+  [GEMINI]: gemini,
+  [GEMINI_JWKS]: { keys: [{ ...(await exportJWK(geminiKey.publicKey)), kid: 'cimd', alg: 'RS256', use: 'sig' }] },
+  [GEMINI_OTHER_KEYS]: { ...gemini, client_id: GEMINI_OTHER_KEYS, jwks_uri: 'https://evil.example.test/jwks.json' },
+  [GEMINI_KEYS_ELSEWHERE]: { ...gemini, client_id: GEMINI_KEYS_ELSEWHERE },
+};
 const metadata = {
   client_id: CIMD,
   client_name: 'Example Agent',
@@ -166,8 +194,8 @@ beforeAll(async () => {
                             client_id: String(url),
                             client_name: decodeURIComponent(String(url).slice(NAMED.length, -'.json'.length)),
                           })
-                        : Object.hasOwn(chatgptDocuments, String(url))
-                          ? Response.json(chatgptDocuments[String(url)])
+                        : Object.hasOwn(keyedDocuments, String(url))
+                          ? Response.json(keyedDocuments[String(url)])
                           : String(url).startsWith(SCOPED)
                             ? Response.json({
                                 ...metadata,
@@ -479,6 +507,34 @@ describe('authorization server', () => {
     ["a chatgpt.com public document naming ChatGPT's keys", CHATGPT_PUBLIC_KEYED],
   ])('given %s, when it asks to authorize, then it is refused', async (_, clientId) => {
     const start = await startAuthorization(new Browser(), { clientId, redirectUri: CHATGPT_REDIRECT });
+    expect(start.uid).toBeUndefined();
+    expect(await start.stopped?.text()).toMatch(/client is not allowed/);
+  });
+
+  it.fails('given Gemini, when it connects and refreshes with private_key_jwt, then both succeed', async () => {
+    const c = await connect(undefined, {
+      clientId: GEMINI,
+      redirectUri: GEMINI_REDIRECT,
+      clientAuth: await assertionFor(GEMINI, geminiKey.privateKey),
+    });
+    expect(c.status).toBe(200);
+    const claims = await claimsOf(c.access_token);
+    expect(claims.client_id).toBe(GEMINI);
+    expect(claims.scope).toBe('wallet:read x402:pay');
+    const refreshed = await token({
+      grant_type: 'refresh_token',
+      refresh_token: c.refresh_token,
+      client_id: GEMINI,
+      ...(await assertionFor(GEMINI, geminiKey.privateKey)),
+    });
+    expect(refreshed.status).toBe(200);
+  });
+
+  it.each([
+    ['an accountlinking.google.com document naming other keys', GEMINI_OTHER_KEYS],
+    ["another origin's document naming Google's keys", GEMINI_KEYS_ELSEWHERE],
+  ])('given %s, when it asks to authorize, then it is refused', async (_, clientId) => {
+    const start = await startAuthorization(new Browser(), { clientId, redirectUri: GEMINI_REDIRECT });
     expect(start.uid).toBeUndefined();
     expect(await start.stopped?.text()).toMatch(/client is not allowed/);
   });
