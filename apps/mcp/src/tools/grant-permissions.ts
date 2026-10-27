@@ -163,6 +163,8 @@ function asked(t: Tenant, input: GrantInput, expiry: number): Asked | string {
     expiry,
     chainId: numberToHex(t.chainId),
     permissions: { calls, spends: spent },
+    // The session pays its own first op's fee from what the wallet sends along.
+    capabilities: { prefundSpender: true },
   };
   const targets = [...new Map(calls.map((c) => [c.target.toLowerCase(), c.target])).values()];
   const on = targets.length === 1 ? targets[0] : `${targets.length} contracts (${listed(targets)})`;
