@@ -35,6 +35,10 @@ const usdcSpend: PermissionsDetail = {
     spends: [{ token: USDC, allowance: '10000000', unit: 'day' as never }],
 };
 
+const nativeSpend: PermissionsDetail = {
+    spends: [{ token: NATIVE_TOKEN, allowance: (10n ** 18n).toString(), unit: 'day' as never }],
+};
+
 function reader(balances: Partial<Record<Address, bigint>>, overrides: Partial<PrefundReader> = {}): PrefundReader {
     return {
         balanceOf: async (_token, owner) => balances[owner] ?? 0n,
@@ -188,14 +192,58 @@ describe('quoteSpenderPrefund', () => {
     });
 
     // Picking one ourselves would move funds the permission never mentioned.
-    it('does nothing when the permission authorises no ERC-20 spend', async () => {
-        for (const permissions of [
-            {},
-            { spends: [] },
-            { spends: [{ token: NATIVE_TOKEN, allowance: '1', unit: 'day' as never }] },
-        ] satisfies PermissionsDetail[]) {
+    it('does nothing when the permission authorises no spend', async () => {
+        for (const permissions of [{}, { spends: [] }] satisfies PermissionsDetail[]) {
             expect(await quote(permissions, reader({ [ACCOUNT]: 5_000_000n }))).toBeNull();
         }
+    });
+
+    // Native gas needs no paymaster, so the rate is wei to wei and nobody is asked for it.
+    it('prefunds in the native coin when that is all the permission spends', async () => {
+        const result = await quote(
+            nativeSpend,
+            reader({ [ACCOUNT]: 10n ** 18n }, { exchangeRate: async () => expect.fail('native is not quoted') })
+        );
+
+        expect(result).toEqual({
+            kind: 'transfer',
+            token: NATIVE_TOKEN,
+            spender: SPENDER,
+            amount: 2_000_000n * GAS_PRICE,
+        });
+    });
+
+    // `buildGrantPermissionCall` encodes a spend with no token as a native one.
+    it('takes a spend with no token for a native one', async () => {
+        const blank: PermissionsDetail = {
+            spends: [{ token: '' as Address, allowance: (10n ** 18n).toString(), unit: 'day' as never }],
+        };
+
+        expect(await quote(blank, reader({ [ACCOUNT]: 10n ** 18n }))).toMatchObject({
+            kind: 'transfer',
+            token: NATIVE_TOKEN,
+        });
+    });
+
+    it('keeps the prefund in the ERC-20 when the permission also spends the native coin', async () => {
+        const both: PermissionsDetail = { spends: [...nativeSpend.spends!, ...usdcSpend.spends!] };
+
+        expect(await quote(both, reader({ [ACCOUNT]: 5_000_000n }))).toMatchObject({ kind: 'transfer', token: USDC });
+    });
+
+    it('holds a native prefund to the native allowance', async () => {
+        const tight: PermissionsDetail = {
+            spends: [
+                { token: NATIVE_TOKEN, allowance: (1_000_000n * GAS_PRICE - 1n).toString(), unit: 'day' as never },
+            ],
+        };
+
+        expect(await quote(tight, reader({ [ACCOUNT]: 10n ** 18n }))).toEqual({
+            kind: 'below-one-operation',
+            token: NATIVE_TOKEN,
+            allowance: 1_000_000n * GAS_PRICE - 1n,
+            operationCost: 1_000_000n * GAS_PRICE,
+        });
     });
 
     // Recreating a session with the same key grants to the same spender, which
@@ -236,6 +284,25 @@ describe('checkSpenderPrefund', () => {
         const decoded = decodeFunctionData({ abi: erc20Abi, data: call.data });
         expect(decoded.functionName).toBe('transfer');
         expect(decoded.args).toEqual([SPENDER, PREFUND]);
+    });
+
+    it('sends a native prefund as value to the spender', async () => {
+        const native: SpenderPrefund = { token: NATIVE_TOKEN, spender: SPENDER, amount: 2_000_000_000_000n };
+        const call = await check({
+            prefund: native,
+            permissions: nativeSpend,
+            read: reader({ [ACCOUNT]: 10n ** 18n }),
+        });
+
+        expect(call).toEqual({ to: SPENDER, value: native.amount, data: '0x' });
+    });
+
+    it('refuses a native prefund the account no longer holds', async () => {
+        const native: SpenderPrefund = { token: NATIVE_TOKEN, spender: SPENDER, amount: 2_000_000_000_000n };
+
+        await expect(
+            check({ prefund: native, permissions: nativeSpend, read: reader({ [ACCOUNT]: native.amount - 1n }) })
+        ).rejects.toThrow(/Nothing was sent/);
     });
 
     // The quote reaches the grant through the caller, so it is held to the

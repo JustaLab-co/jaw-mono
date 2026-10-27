@@ -17,6 +17,10 @@ import type { PermissionsDetail } from '../rpc/permissions.js';
  * one the permission itself authorises spending, neither of them anything a
  * caller supplies: the grant screen must not become a place a dapp can ask to
  * move funds.
+ *
+ * That token is the first ERC-20 the permission spends, or the native coin when
+ * it spends nothing else. Native gas needs no paymaster, so a native prefund is
+ * priced wei to wei and sent as value.
  */
 
 /**
@@ -90,7 +94,7 @@ const PREFUND_GAS = 2n * FIRST_OP_GAS;
 function ceilingFor(permissions: PermissionsDetail, token: Address): bigint | null {
     let tightest: bigint | null = null;
     for (const spend of permissions.spends ?? []) {
-        if (!isSameToken(spend.token, token)) continue;
+        if (!isSameToken(tokenOf(spend), token)) continue;
         try {
             const allowance = BigInt(spend.allowance);
             if (tightest === null || allowance < tightest) tightest = allowance;
@@ -112,7 +116,7 @@ function ceilingFor(permissions: PermissionsDetail, token: Address): bigint | nu
  * this amount as is and never prices it again.
  */
 export interface SpenderPrefund {
-    /** The permission's own spend token, and the one the transfer moves. */
+    /** The permission's own spend token, and the one the transfer moves. `NATIVE_TOKEN` for the native coin. */
     token: Address;
     /** The spender being approved, and the only possible destination. */
     spender: Address;
@@ -147,6 +151,7 @@ export interface GrantPermissionsOptions {
 
 /** Reads this needs, injected so the caller owns the client and the caching. */
 export interface PrefundReader {
+    /** The native balance when `token` is `NATIVE_TOKEN`. */
     balanceOf(token: Address, owner: Address): Promise<bigint>;
     /** Price per gas on this chain right now, in wei. */
     gasPrice(): Promise<bigint>;
@@ -154,7 +159,7 @@ export interface PrefundReader {
      * The paymaster's rate for this token, wei to its smallest unit, or null
      * when the paymaster does not take it. Null is also an answer: a token the
      * paymaster will not accept cannot pay the spender's fee, so sending it
-     * would not do what the prefund is for.
+     * would not do what the prefund is for. Never asked for the native coin.
      */
     exchangeRate(token: Address): Promise<bigint | null>;
 }
@@ -178,9 +183,9 @@ export interface PrefundQuoteArgs {
  * includes this.
  */
 export async function quoteSpenderPrefund(args: PrefundQuoteArgs): Promise<SpenderPrefundQuote | null> {
-    const token = firstErc20Spend(args.permissions);
-    // A permission that authorises no ERC-20 spend has no token to prefund in,
-    // and picking one ourselves would move funds the permission never mentioned.
+    const token = prefundToken(args.permissions);
+    // A permission that authorises no spend has no token to prefund in, and
+    // picking one ourselves would move funds the permission never mentioned.
     if (!token) return null;
 
     const ceiling = ceilingFor(args.permissions, token);
@@ -188,7 +193,7 @@ export async function quoteSpenderPrefund(args: PrefundQuoteArgs): Promise<Spend
 
     // `exchangeRate` is wei to the token's smallest unit, which is what turns
     // an amount of gas into an amount of this token on this chain right now.
-    const exchangeRate = await args.read.exchangeRate(token);
+    const exchangeRate = isNative(token) ? 10n ** 18n : await args.read.exchangeRate(token);
     if (exchangeRate === null) return null;
     const gasPrice = await args.read.gasPrice();
     // Multiplied before dividing, every time: the rate is wei to the token's
@@ -223,8 +228,9 @@ export async function quoteSpenderPrefund(args: PrefundQuoteArgs): Promise<Spend
     return { kind: 'transfer', token, spender: args.spender, amount };
 }
 
-/** The ERC-20 transfer a prefund sends, for the grant and for estimating it. */
+/** The transfer a prefund sends, for the grant and for estimating it. */
 export function spenderPrefundCall(prefund: SpenderPrefund): { to: Address; value: bigint; data: Hex } {
+    if (isNative(prefund.token)) return { to: prefund.spender, value: prefund.amount, data: '0x' };
     return {
         to: prefund.token,
         value: 0n,
@@ -261,7 +267,7 @@ export async function checkSpenderPrefund(args: PrefundCheckArgs): Promise<{ to:
     if (prefund.spender.toLowerCase() !== args.spender.toLowerCase()) {
         throw new Error(`The spender prefund is addressed to ${prefund.spender}, not to the spender being approved.`);
     }
-    const token = firstErc20Spend(args.permissions);
+    const token = prefundToken(args.permissions);
     if (!token || token.toLowerCase() !== prefund.token.toLowerCase()) {
         throw new Error(`The spender prefund is in ${prefund.token}, which is not the token this permission spends.`);
     }
@@ -325,17 +331,24 @@ function paymasterFeeIn(token: Address, context?: Record<string, unknown>): bigi
  * callers below would otherwise each carry their own copy of that rule and only
  * one of them would get fixed the day it turns out to be wrong.
  */
-function isSameToken(candidate: string | undefined, token: Address): boolean {
-    return candidate?.trim().toLowerCase() === token.toLowerCase();
+function isSameToken(candidate: string, token: Address): boolean {
+    return candidate.trim().toLowerCase() === token.toLowerCase();
 }
 
-/** The first token the permission authorises spending, native ones aside. */
-function firstErc20Spend(permissions: PermissionsDetail): Address | null {
+/** A spend with no token is a native one, as `buildGrantPermissionCall` encodes it. */
+function tokenOf(spend: NonNullable<PermissionsDetail['spends']>[number]): string {
+    return spend.token?.trim() || NATIVE_TOKEN;
+}
+
+const isNative = (token: Address) => isSameToken(token, NATIVE_TOKEN);
+
+/** The first ERC-20 the permission authorises spending, else the native coin when it authorises that. */
+function prefundToken(permissions: PermissionsDetail): Address | null {
+    let native = false;
     for (const spend of permissions.spends ?? []) {
-        const token = spend.token?.trim();
-        if (!token) continue;
-        if (isSameToken(token, NATIVE_TOKEN)) continue;
-        return token as Address;
+        const token = tokenOf(spend) as Address;
+        if (!isNative(token)) return token;
+        native = true;
     }
-    return null;
+    return native ? NATIVE_TOKEN : null;
 }
