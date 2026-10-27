@@ -32,3 +32,11 @@ export const tokenAmount = (chainId: number, address: Address, amount: bigint): 
   amount,
   token: tokenOf(chainId, address),
 });
+
+export function callValue(value: string | undefined): bigint | undefined {
+  try {
+    return BigInt(value || 0);
+  } catch {
+    return undefined;
+  }
+}

@@ -77,4 +77,15 @@ describe('extractTransactionData / wallet_sendCalls envelopes', () => {
     expect(result.paymasterContext).toEqual({ sponsorshipPolicyId: 'sp_1' });
     expect(result.permissionId).toBe('0xabc');
   });
+
+  it('carries the capabilities through for the screen, so a Relay order reaches it', () => {
+    const jawRelayOrder = { optional: true, orderData: { version: 'v1' } };
+    const result = extractTransactionData(
+      'wallet_sendCalls',
+      [{ version: '2.0.0', chainId: '0x66eee', calls: [{ to: TO, data: '0x' }], capabilities: { jawRelayOrder } }],
+      CHAIN
+    );
+
+    expect(result.capabilities).toEqual({ jawRelayOrder });
+  });
 });

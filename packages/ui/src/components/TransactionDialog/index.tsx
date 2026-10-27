@@ -12,6 +12,7 @@ import { useChainIconURI, useFeeTokenPrice } from '../../hooks';
 import { useAddressIdentity } from '../../hooks/useAddressIdentities';
 import { useReverseIdentity } from '../../hooks/useReverseIdentity';
 import { useDecodedCalldata } from '../../hooks/useDecodedCalldata';
+import { useBridgeBatch } from '../../hooks/useBridgeBatch';
 import { getDisplayAddress } from '../../utils';
 import { formatNativeValue, subscriptDecimal } from '../../utils/displayFormat';
 import { IdentityAvatar } from '../IdentityAvatar';
@@ -25,14 +26,15 @@ import { unlimitedAllowanceChanges } from '../../utils/allowances';
 import { callTitle } from './DecodedCalldata';
 import { resolveBlockReason } from '../../utils/transactionFailure';
 import { isBlockingPermissionProblem, PERMISSION_PROBLEM_TEXT } from '../../utils/permissionExecution';
-import { BatchStep, NAME_SOURCES, SingleCallData } from './CallSections';
-import { InlineWarning, PartyRow, Row, ValueAmount } from '../primitives';
+import { BatchStep, BridgeDetails, NAME_SOURCES, SingleCallData } from './CallSections';
+import { InlineWarning, PartyRow, Row, ValueAmount, WarningNotice } from '../primitives';
 import { NetworkFeeRow } from '../NetworkFeeRow';
 
 export const TransactionDialog = ({
   open,
   onOpenChange,
   transactions,
+  capabilities,
   walletAddress,
   gasFee,
   gasFeeLoading,
@@ -151,12 +153,17 @@ export const TransactionDialog = ({
     currentTransaction?.chainId ?? 1,
     apiKey
   );
-  const title = isNativeSend ? "You're Sending" : (callTitle(singleCallDecode) ?? 'Review Transaction');
+  // Under a permission the granter's funds move; until it is known, the batch is not read.
+  const bridge = useBridgeBatch(transactions, isPermissioned ? onBehalfOf : walletAddress, capabilities?.jawRelayOrder);
+  const transfer = bridge?.transfer;
+  const title =
+    transfer?.title ?? (isNativeSend ? "You're Sending" : (callTitle(singleCallDecode) ?? 'Review Transaction'));
 
   // A single call's calldata unfolds only when there's no You-send/You-get summary to stand in
   // for it; otherwise that review screen would open with nothing on it. Batch steps always
   // start collapsed — their headers name the action, so the user opens the one they care about.
-  const calldataOpen = !!assetPreviewError || ((assetsOut?.length ?? 0) === 0 && (assetsIn?.length ?? 0) === 0);
+  const calldataOpen =
+    !transfer && (!!assetPreviewError || ((assetsOut?.length ?? 0) === 0 && (assetsIn?.length ?? 0) === 0));
 
   return (
     <ShellDialog
@@ -304,6 +311,13 @@ export const TransactionDialog = ({
               </div>
             )}
 
+            {bridge?.alerts.map((alert) => (
+              <div key={alert} role="alert">
+                <InlineWarning text={alert} />
+              </div>
+            ))}
+            {bridge && <WarningNotice messages={bridge.notices} />}
+
             {/* Asset changes — a native send shows the same information in its hero. */}
             {!isNativeSend && (
               <AssetPreview
@@ -316,7 +330,15 @@ export const TransactionDialog = ({
                 error={assetPreviewError ?? false}
                 nativeSymbol={nativeSymbol}
                 chainId={currentTransaction?.chainId}
+                bridge={transfer}
+                apiKey={apiKey}
               />
+            )}
+
+            {transfer && (
+              <Accordion type="single" collapsible>
+                <BridgeDetails details={transfer.details} />
+              </Accordion>
             )}
 
             {/* Allowances move no balance, so the simulation above can't show them. */}
@@ -346,6 +368,7 @@ export const TransactionDialog = ({
                   to={currentTransaction.to}
                   data={currentTransaction.data}
                   decode={singleCallDecode}
+                  {...bridge?.steps[0]}
                   chainId={currentTransaction.chainId}
                   apiKey={apiKey}
                   mainnetRpcUrl={mainnetRpcUrl}
@@ -361,6 +384,7 @@ export const TransactionDialog = ({
                     key={index}
                     transaction={transaction}
                     index={index}
+                    {...bridge?.steps[index]}
                     nativeSymbol={nativeSymbol}
                     nativeTokenPrice={nativeTokenPrice}
                     apiKey={apiKey}

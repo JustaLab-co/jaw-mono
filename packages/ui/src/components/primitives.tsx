@@ -1,5 +1,5 @@
 import type { ReactNode } from 'react';
-import { Info } from 'lucide-react';
+import { Info, TriangleAlert } from 'lucide-react';
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from './ui/tooltip';
 import { AccountAvatar } from './AccountAvatar';
 import { CopyButton } from './CopyButton';
@@ -82,22 +82,39 @@ export function PartyRow({
   );
 }
 
-/** A one-line red message with the detail behind an info tooltip. */
-export function InlineWarning({ text, detail }: { text: string; detail: string }) {
+/** A one-line red message with the detail, if any, behind an info tooltip. */
+export function InlineWarning({ text, detail }: { text: string; detail?: string }) {
   return (
     <div className="flex items-center gap-1">
       {/* Sits where the fee figure would be, so it takes the body size rather than a label size. */}
       <p className="text-destructive text-body-sm font-mono font-medium">{text}</p>
-      <TooltipProvider delayDuration={0}>
-        <Tooltip>
-          <TooltipTrigger asChild>
-            <Info className="text-destructive size-3 flex-none cursor-help" />
-          </TooltipTrigger>
-          <TooltipContent side="top" className="max-w-[240px] text-xs">
-            <p>{detail}</p>
-          </TooltipContent>
-        </Tooltip>
-      </TooltipProvider>
+      {detail && (
+        <TooltipProvider delayDuration={0}>
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <Info className="text-destructive size-3 flex-none cursor-help" />
+            </TooltipTrigger>
+            <TooltipContent side="top" className="max-w-[240px] text-xs">
+              <p>{detail}</p>
+            </TooltipContent>
+          </Tooltip>
+        </TooltipProvider>
+      )}
+    </div>
+  );
+}
+
+/** A yellow box, one paragraph per message. */
+export function WarningNotice({ messages }: { messages: readonly string[] }) {
+  if (messages.length === 0) return null;
+  return (
+    <div role="alert" className="border-warning/40 bg-warning/10 rounded-box flex items-start gap-2 border p-3">
+      <TriangleAlert className="text-warning mt-px size-3.5 flex-none" strokeWidth={2} />
+      <div className="text-foreground text-body-sm flex min-w-0 flex-col gap-1 [overflow-wrap:anywhere]">
+        {messages.map((message) => (
+          <p key={message}>{message}</p>
+        ))}
+      </div>
     </div>
   );
 }

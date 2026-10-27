@@ -3,11 +3,12 @@
 import { Code } from 'lucide-react';
 import { AccordionContent, AccordionItem, AccordionTrigger } from '../ui/accordion';
 import { CopyButton } from '../CopyButton';
-import { Eyebrow, PartyRow, Row, ValueAmount } from '../primitives';
+import { Eyebrow, InlineWarning, PartyRow, Row, ValueAmount } from '../primitives';
 import { useAddressIdentity, type IdentitySource } from '../../hooks/useAddressIdentities';
 import { useDecodedCalldata, type DecodeResult } from '../../hooks/useDecodedCalldata';
 import { formatNativeValue } from '../../utils/displayFormat';
 import { DecodedCalldataView, callLabel } from './DecodedCalldata';
+import type { Detail } from '../../utils/bridgeCalls/transfer';
 import type { TransactionData } from './types';
 
 /**
@@ -28,15 +29,30 @@ interface DecodeContext {
   mainnetRpcUrl: string;
 }
 
+interface StepOverride {
+  alert?: string;
+}
+
+function StepAlert({ text }: { text?: string }) {
+  if (!text) return null;
+  return (
+    <div role="alert" className="px-3 pt-3">
+      <InlineWarning text={text} />
+    </div>
+  );
+}
+
 /** The single-transaction calldata card, folded behind the decoded call name. */
 export function SingleCallData({
   to,
   data,
   decode,
+  alert,
   ...ctx
-}: DecodeContext & { to: string; data: string; decode: DecodeResult }) {
+}: DecodeContext & StepOverride & { to: string; data: string; decode: DecodeResult }) {
   return (
     <AccordionItem value="calldata" className="border-border rounded-box overflow-hidden border">
+      <StepAlert text={alert} />
       <AccordionTrigger className="items-center p-3 hover:no-underline">
         <span className="flex min-w-0 items-center gap-3">
           <span className="border-border bg-secondary rounded-chip flex size-7 flex-none items-center justify-center border">
@@ -66,13 +82,15 @@ export function BatchStep({
   index,
   nativeSymbol,
   nativeTokenPrice,
+  alert,
   ...ctx
-}: Omit<DecodeContext, 'chainId'> & {
-  transaction: TransactionData;
-  index: number;
-  nativeSymbol: string;
-  nativeTokenPrice: number;
-}) {
+}: Omit<DecodeContext, 'chainId'> &
+  StepOverride & {
+    transaction: TransactionData;
+    index: number;
+    nativeSymbol: string;
+    nativeTokenPrice: number;
+  }) {
   const decode = useDecodedCalldata(transaction.to, transaction.data, transaction.chainId, ctx.apiKey);
   const target = useAddressIdentity(transaction.to, transaction.chainId, {
     mainnetRpcUrl: ctx.mainnetRpcUrl,
@@ -84,6 +102,7 @@ export function BatchStep({
 
   return (
     <AccordionItem value={`transaction-${index}`} className="border-border rounded-box overflow-hidden border">
+      <StepAlert text={alert} />
       <AccordionTrigger className="items-center p-3 hover:no-underline">
         <span className="flex min-w-0 items-center gap-2">
           <span className="bg-secondary text-foreground text-body-xs flex size-5 flex-none items-center justify-center rounded-full font-semibold">
@@ -139,6 +158,29 @@ export function BatchStep({
             </div>
           )}
         </div>
+      </AccordionContent>
+    </AccordionItem>
+  );
+}
+
+export function BridgeDetails({ details }: { details: readonly Detail[] }) {
+  return (
+    <AccordionItem value="details" className="border-border rounded-box overflow-hidden border">
+      <AccordionTrigger className="items-center p-3 hover:no-underline">
+        <span className="text-foreground text-heading">Details</span>
+      </AccordionTrigger>
+      <AccordionContent className="px-3 pb-3">
+        <dl className="divide-border/40 flex flex-col divide-y">
+          {details.map(({ label, value, copy }) => (
+            <div key={label} className="flex items-baseline justify-between gap-3 py-2 first:pt-0 last:pb-0">
+              <dt className="text-muted-foreground text-body-sm flex-none font-medium">{label}</dt>
+              <dd className="text-foreground text-body-sm flex min-w-0 items-start justify-end gap-1.5 text-right font-mono">
+                <span className="[overflow-wrap:anywhere]">{value}</span>
+                {copy && <CopyButton value={copy} size={12} label={`Copy ${label.toLowerCase()}`} />}
+              </dd>
+            </div>
+          ))}
+        </dl>
       </AccordionContent>
     </AccordionItem>
   );
