@@ -10,6 +10,9 @@ import {
 import { transferOf } from './transfer';
 import { readRelayCall } from './relay';
 import type { BridgeCall } from './view';
+import { snapshotContracts } from './table';
+
+const contracts = snapshotContracts();
 
 const RELAY_HIDDEN =
   'Relay keeps the destination chain and the recipient in an order outside this transaction. This screen cannot show them. Confirm only if you started this transfer yourself.';
@@ -28,8 +31,8 @@ function withArg(call: BridgeCall, index: number, hex: string): BridgeCall {
 }
 
 function relayTransfer(call: BridgeCall) {
-  const read = readRelayCall(call);
-  return read?.kind === 'deposit' ? transferOf(read, SIGNER) : read;
+  const read = readRelayCall(contracts, call);
+  return read?.kind === 'deposit' ? transferOf(contracts, read, SIGNER) : read;
 }
 
 const eth = (amount: bigint) => ({
@@ -50,6 +53,7 @@ describe('given a Relay depositNative on the pinned Base Depository', () => {
       transfer: {
         provider: 'relay',
         title: 'Deposit to Relay',
+        origin: { name: 'Base', nativeSymbol: 'ETH' },
         send: eth(10_000_000_000_000_000n),
         details: [
           { label: 'Credited to', value: 'This account', copy: SIGNER },
@@ -61,6 +65,7 @@ describe('given a Relay depositNative on the pinned Base Depository', () => {
         ],
       },
       notices: [RELAY_HIDDEN],
+      outsideTable: false,
     });
   });
 
@@ -115,6 +120,7 @@ describe('given a Relay depositErc20 on the pinned Base Depository', () => {
       transfer: {
         provider: 'relay',
         title: 'Deposit to Relay',
+        origin: { name: 'Base', nativeSymbol: 'ETH' },
         send: usdc(10_000_000n),
         details: [
           { label: 'Credited to', value: 'This account', copy: SIGNER },
@@ -126,6 +132,7 @@ describe('given a Relay depositErc20 on the pinned Base Depository', () => {
         ],
       },
       notices: [RELAY_HIDDEN],
+      outsideTable: false,
     });
   });
 
@@ -136,7 +143,10 @@ describe('given a Relay depositErc20 on the pinned Base Depository', () => {
   it('when the amount changes, then the amount sent and the pull follow it', () => {
     const read = relayTransfer(withArg(RELAY_USDC_DEPOSIT, 2, '1312d01'));
     expect(read).toHaveProperty('transfer.send', usdc(20_000_001n));
-    expect(readRelayCall(withArg(RELAY_USDC_DEPOSIT, 2, '1312d01'))).toHaveProperty('send.amount', 20_000_001n);
+    expect(readRelayCall(contracts, withArg(RELAY_USDC_DEPOSIT, 2, '1312d01'))).toHaveProperty(
+      'send.amount',
+      20_000_001n
+    );
   });
 
   it('when the token is USDbC, then it reads as an unknown token, never USDC', () => {
@@ -199,6 +209,6 @@ describe('given a call that is not to the pinned Depository of its chain', () =>
   });
 
   it('when the target is the checksummed Depository, then it is recognized', () => {
-    expect(readRelayCall({ ...RELAY_USDC_DEPOSIT, to: DEPOSITORY })).toHaveProperty('kind', 'deposit');
+    expect(readRelayCall(contracts, { ...RELAY_USDC_DEPOSIT, to: DEPOSITORY })).toHaveProperty('kind', 'deposit');
   });
 });

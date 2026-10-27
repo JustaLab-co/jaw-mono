@@ -2,8 +2,7 @@ import { useEffect, useState, type ReactNode } from 'react';
 import { ethAddress, formatUnits, zeroAddress } from 'viem';
 import { ArrowDownLeft, ArrowUpRight, ChevronDown } from 'lucide-react';
 import { AssetDelta, formatAssetAmount } from '../../utils/assetPreview';
-import { BRIDGE_CHAINS } from '../../utils/bridgeCalls/contracts';
-import { PROVIDER_NAME, type BridgeTransfer } from '../../utils/bridgeCalls/transfer';
+import { PROVIDER_NAME, type BridgeTransfer, type ChainLabel } from '../../utils/bridgeCalls/transfer';
 import type { Received, Token, TokenAmount } from '../../utils/bridgeCalls/view';
 import { useChainIcons } from '../../hooks/useChainIcons';
 import { ChainIcon } from '../AddFundsDialog/ChainIcon';
@@ -316,9 +315,9 @@ function BridgeColumns({
   const icons = useChainIcons(apiKey);
   const { send, receive, provider, otherRecipient } = bridge;
   const crossChain = !!receive && receivedChainId(receive) !== send.chainId;
-  const badge = (chainId: number) =>
-    crossChain ? { name: BRIDGE_CHAINS[chainId].name, icon: icons[chainId] } : undefined;
-  const origin = badge(send.chainId);
+  const badge = (label: ChainLabel | undefined, chainId: number) =>
+    crossChain && label ? { name: label.name, icon: icons[chainId] } : undefined;
+  const origin = badge(bridge.origin, send.chainId);
   const destination = receive && receivedChainId(receive);
 
   return (
@@ -330,27 +329,25 @@ function BridgeColumns({
           </PlainRow>
         )}
       </DeltaColumn>
-      {receive && destination !== undefined && (
+      {receive && destination !== undefined && bridge.destination && (
         <DeltaColumn
           direction="in"
           deltas={received}
-          chain={badge(destination)}
+          chain={badge(bridge.destination, destination)}
           heading={otherRecipient && 'They get'}
           via={PROVIDER_NAME[provider]}
           prefix="≥ "
           {...columnProps}
           chainId={destination}
-          nativeSymbol={BRIDGE_CHAINS[destination].nativeSymbol}
+          nativeSymbol={bridge.destination.nativeSymbol}
         >
           {receive.kind === 'swap' && (
-            <PlainRow chainId={destination} token={receive.token} chain={badge(destination)}>
-              <span className="text-warning text-body-xs">
-                Amount set by a swap on {BRIDGE_CHAINS[destination].name}
-              </span>
+            <PlainRow chainId={destination} token={receive.token} chain={badge(bridge.destination, destination)}>
+              <span className="text-warning text-body-xs">Amount set by a swap on {bridge.destination.name}</span>
             </PlainRow>
           )}
           {receive.kind === 'minimum' && !receive.amount.token.known && (
-            <PlainRow chainId={destination} token={receive.amount.token} chain={badge(destination)}>
+            <PlainRow chainId={destination} token={receive.amount.token} chain={badge(bridge.destination, destination)}>
               <span className="text-value text-positive break-all font-mono">
                 ≥ <SubText>{`${receive.amount.amount} base units`}</SubText>
               </span>

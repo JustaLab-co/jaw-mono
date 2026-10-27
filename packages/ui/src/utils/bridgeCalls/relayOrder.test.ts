@@ -15,6 +15,10 @@ import {
 } from './fixtures';
 import { ORDER_TYPES } from './relayOrder';
 import type { BridgeCall } from './view';
+import { BridgeContracts } from './table';
+import { BRIDGE_CHAINS } from './contracts';
+
+const contracts = new BridgeContracts({ version: 1, chains: BRIDGE_CHAINS });
 
 const RELAY_HIDDEN =
   'Relay keeps the destination chain and the recipient in an order outside this transaction. This screen cannot show them. Confirm only if you started this transfer yourself.';
@@ -48,17 +52,20 @@ const withId = (deposit: BridgeCall, id: string): BridgeCall => ({
 });
 const capability = (orderData: unknown) => ({ optional: true, orderData });
 
-const usdcBatch = (order: unknown, { rehash = false } = {}) => {
+const usdcBatchOn = (table: BridgeContracts, order: unknown, { rehash = false } = {}) => {
   const deposit = rehash ? withId(RELAY_USDC_DEPOSIT, idOf(order as Order)) : RELAY_USDC_DEPOSIT;
-  return readBridgeBatch([RELAY_USDC_APPROVE, deposit], SIGNER, capability(order));
+  return readBridgeBatch(table, [RELAY_USDC_APPROVE, deposit], SIGNER, capability(order));
 };
+const usdcBatch = (order: unknown, opts?: { rehash?: boolean }) => usdcBatchOn(contracts, order, opts);
 
 const CREDITED = { label: 'Credited to', value: 'This account', copy: SIGNER_CHECKSUM };
 const orderDetail = (id: string) => ({ label: 'Order', value: `${id.slice(0, 6)}…${id.slice(-4)}`, copy: id });
 /** The transfer as it reads with no usable order: what is sent, and nothing about where it goes. */
+const BASE = { name: 'Base', nativeSymbol: 'ETH' };
 const withoutOrder = (id: string) => ({
   provider: 'relay',
   title: 'Deposit to Relay',
+  origin: BASE,
   send: {
     chainId: 8453,
     amount: 10_000_000n,
@@ -71,6 +78,8 @@ const USDC_ORDER_TRANSFER = {
   provider: 'relay',
   title: 'Bridge to Arbitrum',
   send: withoutOrder(USDC_ORDER_ID).send,
+  origin: BASE,
+  destination: { name: 'Arbitrum', nativeSymbol: 'ETH' },
   receive: {
     kind: 'minimum',
     amount: {
@@ -97,6 +106,7 @@ describe('given the relay-usdc batch and the order the MCP sends with it', () =>
 
   it('when a live quote names the v3.2 router, then the transfer shows destination, recipient, minimum and refund, and no Relay notice', () => {
     const batch = readBridgeBatch(
+      contracts,
       [RELAY_USDC_V32_APPROVE, RELAY_USDC_V32_DEPOSIT],
       SIGNER,
       capability(RELAY_USDC_V32_ORDER)
@@ -138,7 +148,7 @@ describe('given the relay-usdc batch and the order the MCP sends with it', () =>
     const order = edit((o) => (o.solver = '0x56c262027e0de4aea31d2489529cb25d23e58a8b'));
     const deposit = withId(RELAY_USDC_DEPOSIT, idOf(order));
     const mixed = { ...order, solver: '0x56C262027E0de4aea31d2489529cb25d23e58a8b' };
-    const batch = readBridgeBatch([RELAY_USDC_APPROVE, deposit], SIGNER, capability(mixed));
+    const batch = readBridgeBatch(contracts, [RELAY_USDC_APPROVE, deposit], SIGNER, capability(mixed));
     expect(batch?.transfer).toMatchObject(toArbitrum);
     expect(batch?.notices).toEqual([]);
   });
@@ -287,10 +297,12 @@ describe('given the relay-usdc batch and the order the MCP sends with it', () =>
 
 describe('given the relay-native deposit and its order', () => {
   it('when the order hashes to the deposit id, then the transfer shows Ethereum, the recipient and the minimum in ETH', () => {
-    const batch = readBridgeBatch([RELAY_NATIVE_DEPOSIT], SIGNER, capability(RELAY_NATIVE_ORDER));
+    const batch = readBridgeBatch(contracts, [RELAY_NATIVE_DEPOSIT], SIGNER, capability(RELAY_NATIVE_ORDER));
     expect(batch?.transfer).toEqual({
       provider: 'relay',
       title: 'Bridge to Ethereum',
+      origin: BASE,
+      destination: { name: 'Ethereum', nativeSymbol: 'ETH' },
       send: {
         chainId: 8453,
         amount: 10n ** 16n,
@@ -315,7 +327,7 @@ describe('given the relay-native deposit and its order', () => {
   });
 
   it('when the ERC-20 order is attached instead, then the mismatch warning shows', () => {
-    const batch = readBridgeBatch([RELAY_NATIVE_DEPOSIT], SIGNER, capability(RELAY_USDC_ORDER));
+    const batch = readBridgeBatch(contracts, [RELAY_NATIVE_DEPOSIT], SIGNER, capability(RELAY_USDC_ORDER));
     expect(batch?.notices).toEqual([MISMATCH, RELAY_HIDDEN]);
   });
 });
@@ -337,6 +349,7 @@ describe('given a Relay deposit on Base Sepolia', () => {
     });
   const read = (order: Order) =>
     readBridgeBatch(
+      contracts,
       [
         {
           chainId: 84532,
@@ -370,7 +383,7 @@ describe('given a Relay deposit on Base Sepolia', () => {
 
 describe('given no usable capability', () => {
   it('when the request has no jawRelayOrder, then the transfer says the destination is not in this transaction', () => {
-    const batch = readBridgeBatch([RELAY_USDC_APPROVE, RELAY_USDC_DEPOSIT], SIGNER);
+    const batch = readBridgeBatch(contracts, [RELAY_USDC_APPROVE, RELAY_USDC_DEPOSIT], SIGNER);
     expect(batch?.transfer).toEqual(withoutOrder(USDC_ORDER_ID));
     expect(batch?.notices).toEqual([RELAY_HIDDEN]);
   });
@@ -404,13 +417,70 @@ describe('given no usable capability', () => {
   });
 
   it('when the capability rides on an Across batch, then the Across transfer and notices are unchanged', () => {
-    const plain = readBridgeBatch([ACROSS_CALLS.prod], SIGNER);
-    expect(readBridgeBatch([ACROSS_CALLS.prod], SIGNER, capability(RELAY_USDC_ORDER))).toEqual(plain);
-    expect(readBridgeBatch([ACROSS_CALLS.prod], SIGNER, capability('junk'))).toEqual(plain);
+    const plain = readBridgeBatch(contracts, [ACROSS_CALLS.prod], SIGNER);
+    expect(readBridgeBatch(contracts, [ACROSS_CALLS.prod], SIGNER, capability(RELAY_USDC_ORDER))).toEqual(plain);
+    expect(readBridgeBatch(contracts, [ACROSS_CALLS.prod], SIGNER, capability('junk'))).toEqual(plain);
   });
 
   it('when the capability rides on a batch with no bridge call, then there is still no bridge view', () => {
     const transfer = { chainId: 8453, to: OTHER, value: '1' };
-    expect(readBridgeBatch([transfer], SIGNER, capability(RELAY_USDC_ORDER))).toBeNull();
+    expect(readBridgeBatch(contracts, [transfer], SIGNER, capability(RELAY_USDC_ORDER))).toBeNull();
+  });
+});
+
+describe('given a Relay order through a router the compiled table does not list', () => {
+  const STALE = 'This screen could not refresh its list of bridge contracts.';
+  const viaNewRouter = edit((o) => {
+    o.output.extraData = NOT_ROUTER;
+    for (const refund of o.inputs[0].refunds) refund.extraData = NOT_ROUTER;
+  });
+  const withNewRouter = (source: 'live' | 'snapshot') => {
+    const chains = structuredClone(BRIDGE_CHAINS);
+    for (const chain of Object.values(chains)) {
+      if (chain.relay) chain.relay.erc20Routers = [...chain.relay.erc20Routers, OTHER_CHECKSUM];
+    }
+    return new BridgeContracts({ version: 2, chains }, source);
+  };
+  const read = (table: BridgeContracts) => usdcBatchOn(table, viaNewRouter, { rehash: true });
+
+  it('when a live table lists the router, then the order reads as a known route', () => {
+    expect(read(withNewRouter('live'))?.notices).toEqual([]);
+  });
+
+  it('when the live table lacks the router, then the route is unknown and the refresh line stays out', () => {
+    expect(read(contracts)?.notices).toEqual([UNKNOWN_ROUTE, RELAY_HIDDEN]);
+  });
+
+  it('when the table in use is the snapshot and the route is unknown, then the notice adds the refresh line', () => {
+    const snapshot = new BridgeContracts({ version: 1, chains: BRIDGE_CHAINS }, 'snapshot');
+    expect(read(snapshot)?.notices).toEqual([UNKNOWN_ROUTE, RELAY_HIDDEN, STALE]);
+  });
+
+  it('when the table in use is the snapshot and the route is known, then no refresh line shows', () => {
+    const snapshot = new BridgeContracts({ version: 1, chains: BRIDGE_CHAINS }, 'snapshot');
+    expect(usdcBatchOn(snapshot, RELAY_USDC_ORDER)?.notices).toEqual([]);
+  });
+});
+
+describe('given a Relay order the snapshot cannot place', () => {
+  const STALE = 'This screen could not refresh its list of bridge contracts.';
+  const snapshot = new BridgeContracts({ version: 1, chains: BRIDGE_CHAINS }, 'snapshot');
+  const live = new BridgeContracts({ version: 2, chains: BRIDGE_CHAINS }, 'live');
+
+  it.each([
+    ['a payout token outside the table', edit((o) => (o.output.payments[0].currency = OTHER))],
+    ['a destination outside the table', edit((o) => (o.output.chainId = 'solana'))],
+  ])('when the order has %s, then the snapshot adds the refresh line and a live table does not', (_, order) => {
+    expect(usdcBatchOn(snapshot, order, { rehash: true })?.notices).toContain(STALE);
+    expect(usdcBatchOn(live, order, { rehash: true })?.notices).not.toContain(STALE);
+  });
+
+  it('when the order is mismatched, then the snapshot adds no refresh line', () => {
+    expect(
+      usdcBatchOn(
+        snapshot,
+        edit((o) => (o.salt = '7'))
+      )?.notices
+    ).not.toContain(STALE);
   });
 });

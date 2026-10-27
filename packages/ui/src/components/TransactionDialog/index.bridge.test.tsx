@@ -18,6 +18,14 @@ import type { BridgeCall } from '../../utils/bridgeCalls/view';
 import type { AssetDelta } from '../../utils/assetPreview';
 import { Accordion } from '../ui/accordion';
 
+const table = vi.hoisted(() => ({ settled: true }));
+vi.mock('../../hooks/useBridgeContracts', async (original) => {
+  const real = await original<typeof import('../../hooks/useBridgeContracts')>();
+  return {
+    ...real,
+    useBridgeContracts: (apiKey?: string) => ({ ...real.useBridgeContracts(apiKey), settled: table.settled }),
+  };
+});
 vi.mock('../../hooks', () => ({ useChainIconURI: () => undefined, useFeeTokenPrice: () => undefined }));
 vi.mock('../../utils/tokenPrice', () => ({ fetchTokenPrice: async (s: string) => ({ USDC: 1, WETH: 3000 })[s] ?? 0 }));
 vi.mock('../../hooks/useChainIcons', () => ({ useChainIcons: () => ({}) }));
@@ -334,5 +342,20 @@ describe('BridgeDetails', () => {
     expect([...root.querySelectorAll('dt')].map((e) => e.textContent)).toEqual(['Recipient', 'Fee']);
     expect(root.querySelector('[aria-label="Copy recipient"]')).not.toBeNull();
     expect(root.querySelector('[aria-label="Copy fee"]')).toBeNull();
+  });
+});
+
+describe('TransactionDialog while the bridge table settles', () => {
+  const confirm = (root: HTMLElement) =>
+    [...root.querySelectorAll('button')].find((button) => button.textContent === 'Confirm');
+
+  it.each([
+    [false, true],
+    [true, false],
+  ])('when the table settled is %s, then Confirm disabled is %s', async (settled, disabled) => {
+    table.settled = settled;
+    const root = await renderLive([approve(SPOKE_POOL), ACROSS_CALLS.prod]);
+    table.settled = true;
+    expect(confirm(root)?.disabled).toBe(disabled);
   });
 });
