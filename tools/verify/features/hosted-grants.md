@@ -16,12 +16,13 @@
 - `grant-replace`: an approved `x402Budget` replaces the connection's current budget: the older row gets `replaced_at`, and the server revokes it on chain with `revokeAsSpender` from the payer, without sweeping the float, then sets `revoked_at`. A revoke it cannot send leaves the row replaced and unrevoked, listed by `jaw_connections` as `replaced`, and the connection's next tool call retries it in the background, at most every five minutes. A custom grant replaces nothing.
 - `grant-totals`: the link reply sums what the connection's live grants let the session key move per token and period, and says when the request replaces the current budget.
 - `grant-one-open`: a second request while one waits on the owner is refused with the waiting link. The waiting link counts toward the account's three open owner links (hosted-revoke.md, `link-cap`).
+- `grant-status`: the reply carries an `id`, and `jaw_get_grant_status` with it answers `awaiting_owner` until the owner answers, then `approved` with the `permissionId`, `owner_declined`, or `expired`.
 - `grant-old-name`: `jaw_request_budget` is an unknown tool.
 
 ## How to get to it (user POV)
 
 - An MCP client on the hosted server with scope `x402:pay`. `jaw_grant_permissions` takes either `x402Budget: { perDay }` alone, with `perDay` USDC as a decimal, or `calls` (1 to 10 `{ target, functionSignature }`), optional `spends` (up to 10 `{ token, allowance, unit, multiplier? }`, `allowance` in base units, `unit` one of `minute`, `hour`, `day`, `week`, `month`, `year`, `forever`) and optional `expiresAt` (ISO 8601).
-- The result holds `url`, the wallet link, `expiresAt`, when the grant would end, and a `summary` for the person.
+- The result holds `id`, `state`, `url`, the wallet link, `approveBy`, `expiresAt`, when the grant would end, and a `summary` for the person. `grant-status <id> [wait]` follows it.
 - The owner opens the `url` within 30 minutes, and keys.jaw.id shows the permission: each call, each spend limit with its period, and the expiry.
 - By hand: `node tools/verify/hosted-client.mjs "$MCP_PUBLIC_URL"`, then `budget <perDay>` for the preset or `grant '<json>'` for any input.
 
@@ -37,7 +38,8 @@ Preconditions: baseline preconditions of this map; Docker running; `JAW_KEYS_URL
 - grant-input: `grant '{"x402Budget":{"perDay":"1"},"calls":[...]}'`, then `grant '{"spends":[...]}'`. Pass: each is refused with no `url`.
 - grant-replace: connect with the default budget, then `budget 2` and approve. Pass: the older row reads `replaced_at` and `revoked_at` set, a session userOp from the payer calls `revokeAsSpender` on the permission manager and moves no USDC to the account, `jaw_session_status` shows the 2 USDC budget, and the reply named 1 USDC per day and the replacement.
 - grant-cap: approve grants until the connection holds 5 live ones, then ask again. Pass: refused naming 5 live grants, no `url`.
-- grant-one-open: ask, do not open the link, ask again. Pass: refused with the first `url`.
+- grant-one-open: ask, do not open the link, ask again. Pass: refused as `grant_in_progress:` with the first `url` and its `id`.
+- grant-status: `budget 1`, then `grant-status <id> 30` and approve in the wallet during the wait. Pass: it answers `approved` before the 30 seconds end, with the `permissionId` of the newest `grants` row. Ask again and reject in the wallet: `grant-status <id>` answers `owner_declined`.
 - grant-old-name: `call jaw_request_budget '{"perDay":"1"}'`. Pass: an unknown-tool error.
 - Decline: open a link and reject in the wallet. Pass: no new `grants` row.
 

@@ -159,6 +159,7 @@ const HELP = `Commands:
   calls-status <id> [wait]       jaw_get_calls_status, id is the oc_ id jaw_send_calls returned; wait is seconds, up to 45
   sign-message '<text>' [key]    jaw_sign, the owner signs the text in the wallet
   sign-status <id> [wait]        jaw_get_sign_status, id is the pr_ id jaw_sign returned; wait is seconds, up to 45
+  grant-status <id> [wait]       jaw_get_grant_status, id is the pr_ id jaw_grant_permissions returned; wait is seconds, up to 45
   sign-typed '<json>' [key]      jaw_sign with EIP-712 typed data { domain, types, primaryType, message }
   read <chainId> '<json reads>'  jaw_read_contracts, e.g.
                                  read 8453 '[{"address":"0x...","abi":[...],"functionName":"decimals"}]'
@@ -205,6 +206,7 @@ const commands = {
     }),
   'calls-status': (id, wait) => statusOf('jaw_get_calls_status', id, wait),
   'sign-status': (id, wait) => statusOf('jaw_get_sign_status', id, wait),
+  'grant-status': (id, wait) => statusOf('jaw_get_grant_status', id, wait),
   'sign-message': (message, idempotencyKey) => call('jaw_sign', { message, ...(idempotencyKey && { idempotencyKey }) }),
   'sign-typed': (json, idempotencyKey) =>
     call('jaw_sign', { typedData: JSON.parse(json), ...(idempotencyKey && { idempotencyKey }) }),

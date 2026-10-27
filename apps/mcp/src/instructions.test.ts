@@ -219,6 +219,8 @@ const CASES: Record<string, Case> = {
   'jaw_session_status, not allowed to pay': { tool: 'jaw_session_status', args: {}, scope: 'wallet:read' },
   jaw_session_x402_quote: { tool: 'jaw_session_x402_quote', args: { url: `http://${SELLER}/paid` } },
   jaw_get_assets: { tool: 'jaw_get_assets', args: {} },
+  // The portfolio route is a live service this test does not reach, so the read is refused.
+  jaw_get_defi_positions: { tool: 'jaw_get_defi_positions', args: { chainIds: [1] } },
   jaw_get_calls_history: { tool: 'jaw_get_calls_history', args: {} },
   jaw_get_permissions: { tool: 'jaw_get_permissions', args: {} },
   jaw_get_capabilities: { tool: 'jaw_get_capabilities', args: {} },
@@ -243,6 +245,11 @@ const CASES: Record<string, Case> = {
   jaw_resolve_name: { tool: 'jaw_resolve_name', args: { name: 'alice.eth' } },
   jaw_session_x402_discover: { tool: 'jaw_session_x402_discover', args: { query: 'weather' } },
   jaw_grant_permissions: { tool: 'jaw_grant_permissions', args: { x402Budget: { perDay: '1' } } },
+  // Still waiting on the request jaw_grant_permissions just opened.
+  jaw_get_grant_status: {
+    tool: 'jaw_get_grant_status',
+    args: (token) => opened(token, 'jaw_grant_permissions', { x402Budget: { perDay: '1' } }),
+  },
   jaw_prepare_calls: {
     tool: 'jaw_prepare_calls',
     args: { actions: [{ to: USDC_BASE, function: 'transfer(address to, uint256 amount)', args: [RECIPIENT, '1000'] }] },
@@ -329,6 +336,7 @@ describe('what each tool says for the owner', () => {
   it('jaw_session_status, not allowed to pay', namesNoInternals('jaw_session_status, not allowed to pay'));
   it('jaw_session_x402_quote', namesNoInternals('jaw_session_x402_quote'));
   it('jaw_get_assets', namesNoInternals('jaw_get_assets'));
+  it('jaw_get_defi_positions', namesNoInternals('jaw_get_defi_positions'));
   it('jaw_get_calls_history', namesNoInternals('jaw_get_calls_history'));
   it('jaw_get_permissions', namesNoInternals('jaw_get_permissions'));
   it('jaw_get_capabilities', namesNoInternals('jaw_get_capabilities'));
@@ -342,6 +350,7 @@ describe('what each tool says for the owner', () => {
   it('jaw_get_calls_status', namesNoInternals('jaw_get_calls_status'));
   it('jaw_sign', namesNoInternals('jaw_sign'));
   it('jaw_get_sign_status', namesNoInternals('jaw_get_sign_status'));
+  it('jaw_get_grant_status', namesNoInternals('jaw_get_grant_status'));
   it('jaw_session_x402_pay', namesNoInternals('jaw_session_x402_pay'));
   it('jaw_session_execute', namesNoInternals('jaw_session_execute'));
   it('jaw_swap', namesNoInternals('jaw_swap'));

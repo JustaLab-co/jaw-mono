@@ -7,6 +7,7 @@ import { countUnauthorized } from '@/lib/metrics';
 import { registerReadTools } from '@/tools/read';
 import { registerAddFundsTool } from '@/tools/add-funds';
 import { registerAccountTools } from '@/tools/account';
+import { registerDefiTool } from '@/tools/defi';
 import { registerReadContractsTool } from '@/tools/read-contracts';
 import { registerSimulateCallsTool } from '@/tools/simulate-calls';
 import { registerResolveNameTool } from '@/tools/resolve-name';
@@ -33,6 +34,7 @@ const mcp = createMcpHandler(
     guardTools(server);
     registerReadTools(server);
     registerAccountTools(server);
+    registerDefiTool(server);
     registerReadContractsTool(server);
     registerSimulateCallsTool(server);
     registerResolveNameTool(server);

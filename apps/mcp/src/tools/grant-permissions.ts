@@ -9,33 +9,43 @@ import { revokeReplaced, sessionSender, type DisconnectDeps } from '@/connection
 import { APPROVE_WITHIN_MS } from '@/connections/config';
 import { ownerRelay, type OpenWallet } from '@/connections/relay';
 import { spends } from '@/connections/scopes';
+import { countHit } from '@/db/settings';
 import { SPEND_UNITS } from '@/db/schema';
 import { budgetGrant, readOnChain, type GrantRequest, type ReadPermission } from '@/grants/permission';
 import {
   followUps,
+  LINK_LOST,
   lostBefore,
   lostLinkSaid,
   openLink,
   RECONNECTING,
   reconnecting,
+  requestById,
   type PermissionRequestRow,
 } from '@/grants/requests';
-import { grantWork, type GrantPayload } from '@/grants/resume';
+import { grantAsked, grantWork, type GrantPayload } from '@/grants/resume';
 import {
   grantsBeside,
   liveGrants,
   LIVE_GRANTS_PER_CONNECTION,
+  replacedBudgets,
+  standingOf,
   x402Budget,
+  type Standing,
   type GrantKind,
   type LiveGrant,
 } from '@/grants/store';
-import { errorLabel, log } from '@/lib/edge';
+import { errorLabel, log, RATE_WINDOW_MS } from '@/lib/edge';
 import { reply } from '@/lib/fence';
 import { counted, expiresIn, formatAmount, listed, onDate, spendLimits, withinWindow } from '@/lib/owner-text';
+import { MAX_WAIT_SECONDS, SUGGESTED_WAIT_SECONDS, waiterOf, waitFor, type Waiter } from '@/lib/wait';
+import { gateCode } from '@/payments/render';
 import { forbiddenTargets } from './owner-calls';
 import { ACCOUNT_BUSY, NO_PAY_SCOPE, refusal, withNext } from './reply';
 
 const MAX_ENTRIES = 10;
+const STATUS_RATE_LIMIT = 30;
+const APPROVE_MINUTES = APPROVE_WITHIN_MS / 60_000;
 
 const WILDCARD_SELECTORS = new Set<string>([ANY_FN_SEL, EMPTY_CALLDATA_FN_SEL]);
 
@@ -109,7 +119,50 @@ const DEFAULTS: GrantDeps = {
   session: { clients: chainClients, sender: sessionSender },
 };
 
-const output = z.object({ url: z.url(), expiresAt: z.string(), summary: z.string() });
+const statusInput = z.strictObject({
+  id: z
+    .string()
+    .regex(/^pr_[A-Za-z0-9_-]{22}$/)
+    .describe('The id jaw_grant_permissions returned'),
+  waitSeconds: z
+    .number()
+    .int()
+    .min(0)
+    .max(MAX_WAIT_SECONDS)
+    .optional()
+    .describe(`Wait up to this many seconds (at most ${MAX_WAIT_SECONDS}) for the owner to answer before answering`),
+});
+export type GrantStatusInput = z.infer<typeof statusInput>;
+
+/** What jaw_grant_permissions answers when it opens a link, and what jaw_get_grant_status answers after. */
+const output = z.object({
+  id: z.string(),
+  state: z.enum(['awaiting_owner', 'approved', 'owner_declined', 'expired', 'failed']),
+  kind: z.enum(['x402-budget', 'custom']),
+  url: z.url().optional().describe('Link for the owner, while awaiting_owner'),
+  approveBy: z.string(),
+  expiresAt: z.string().describe('When the permission ends once approved'),
+  permissionId: z
+    .string()
+    .optional()
+    .describe('Once approved; on failed, a permission the wallet answered that may be in force on chain'),
+  refusal: z.object({ code: z.string() }).optional(),
+  summary: z.string(),
+});
+
+type GrantResult = {
+  content: { type: 'text'; text: string }[];
+  structuredContent?: z.infer<typeof output>;
+  isError?: boolean;
+  [gateCode]?: string;
+};
+
+/** A refusal: its code first for the agent's logic, then what the owner hears, then what the agent does about it. */
+const refuse = (code: string, say: string, next?: string): GrantResult => ({
+  content: [{ type: 'text', text: `${code}: ${withNext(say, next)}` }],
+  isError: true,
+  [gateCode]: code,
+});
 
 interface Asked {
   kind: GrantKind;
@@ -163,6 +216,8 @@ function asked(t: Tenant, input: GrantInput, expiry: number): Asked | string {
     expiry,
     chainId: numberToHex(t.chainId),
     permissions: { calls, spends: spent },
+    // The session pays its own first op's fee from what the wallet sends along.
+    capabilities: { prefundSpender: true },
   };
   const targets = [...new Map(calls.map((c) => [c.target.toLowerCase(), c.target])).values()];
   const on = targets.length === 1 ? targets[0] : `${targets.length} contracts (${listed(targets)})`;
@@ -275,28 +330,27 @@ export async function grantPermissions(t: Tenant, input: GrantInput, deps = DEFA
   // The link approves the earlier request, never the one just asked for, so both texts say whose it is.
   if ('waiting' in opened) {
     const open = reconnecting(row);
-    return refusal(
-      withNext(
-        lines(
-          `An earlier permission request is still ${open ? 'open' : 'waiting'} for the owner, so this one was not opened. It ${expiresIn(row.approveBy)}.`,
-          `To approve or decline the earlier request: ${row.walletUrl}`,
-          lost && lost.say
-        ),
-        sentences(
-          'This link is for the earlier request, not the one just asked for: never present it as the new one.',
-          open && RECONNECTING.trim(),
-          lost && lost.next,
-          `Once the earlier request is approved, declined or expired, ask for the new one again if jaw_session_status does not already show it in force. The earlier request expires at ${row.approveBy.toISOString()}.`
-        )
+    return refuse(
+      'grant_in_progress',
+      lines(
+        `An earlier permission request is still ${open ? 'open' : 'waiting'} for the owner, so this one was not opened. It ${expiresIn(row.approveBy)}.`,
+        `To approve or decline the earlier request: ${row.walletUrl}`,
+        lost && lost.say
+      ),
+      sentences(
+        'This link is for the earlier request, not the one just asked for: never present it as the new one.',
+        open && RECONNECTING.trim(),
+        lost && lost.next,
+        `Follow ${row.id} with jaw_get_grant_status. Once the earlier request is approved, declined or expired, ask for the new one again if the earlier one does not already cover it. The earlier request expires at ${row.approveBy.toISOString()}.`
       )
     );
   }
   const url = row.walletUrl;
   const ends = new Date(ask.grant.expiry * 1000);
-  return reply({
-    url,
-    expiresAt: ends.toISOString(),
-    summary: lines(
+  return answer(
+    row,
+    payload,
+    lines(
       `Open this link to approve: ${url}`,
       withNext(
         lines(
@@ -308,15 +362,183 @@ export async function grantPermissions(t: Tenant, input: GrantInput, deps = DEFA
           lost && lost.say
         ),
         sentences(
-          'Show the link now with one sentence of what it allows. Then check jaw_session_status on later turns to see it in force; do not wait for the owner to say they approved.',
+          'Show the link now with one sentence of what it allows.',
+          `Then call jaw_get_grant_status with id ${row.id} and waitSeconds ${SUGGESTED_WAIT_SECONDS}, and again while it answers awaiting_owner, until ${row.approveBy.toISOString()}.`,
+          'Do not wait for the owner to say they approved.',
           replacing &&
             'Once it is approved, this server tries to revoke the current spend limit on chain. Nothing pays from a replaced one, but if the revoke fee cannot be paid it stays approved on chain until it expires or jaw_revoke_permission revokes it.',
           earlier(t, held),
           lost && lost.next
         )
       )
+    )
+  );
+}
+
+/** The reply for a grant request row, from the link it opened or a later status read. */
+function answer(row: PermissionRequestRow, ask: GrantPayload, summary: string): GrantResult {
+  const ended = row.state !== 'awaiting_owner' && row.state !== 'approved';
+  return reply(
+    output.parse({
+      id: row.id,
+      state: row.state,
+      kind: ask.kind,
+      url: row.state === 'awaiting_owner' ? row.walletUrl : undefined,
+      approveBy: row.approveBy.toISOString(),
+      expiresAt: new Date(ask.grant.expiry * 1000).toISOString(),
+      permissionId: row.permissionId ?? undefined,
+      refusal: ended ? { code: row.code ?? row.state } : undefined,
+      summary,
+    })
+  );
+}
+
+/** What the owner hears, then what the agent does next. */
+type Said = { say: string; next?: string };
+
+const ASK_AGAIN = 'Ask again with jaw_grant_permissions if the owner still wants it.';
+
+/** What happened to an approved permission since, and how many budgets it replaced are still approved on chain. */
+type Since = { standing: Standing; olderLeft: number };
+
+/** A status read: the agent already showed the link, so it shows it again only when the owner asks. */
+function statusSaid(row: PermissionRequestRow, ask: GrantPayload, since: Since): Said {
+  switch (row.state) {
+    case 'awaiting_owner':
+      return {
+        say: `Still waiting for the owner to approve the permission. It ${expiresIn(row.approveBy)}.`,
+        next: sentences(
+          reconnecting(row) && RECONNECTING.trim(),
+          `Call jaw_get_grant_status again with id ${row.id} and waitSeconds ${SUGGESTED_WAIT_SECONDS} until ${row.approveBy.toISOString()}. If the owner asks for the link, show it: ${row.walletUrl}`
+        ),
+      };
+    case 'approved':
+      return approvedSaid(row, ask, since);
+    case 'owner_declined':
+      return {
+        say: 'The owner declined the permission. Nothing changed.',
+        next: 'Do not ask for it again unless the owner asks.',
+      };
+    case 'expired':
+      if (row.code === LINK_LOST) {
+        return {
+          say: 'The permission link stopped working after the owner opened it, so an answer given there may never arrive. If it is still open, do not approve it there.',
+          next: `A permission approved on that link can go live on chain without this server recording it, and then only jaw_revoke_permission with its id from the wallet ends it. ${ASK_AGAIN}`,
+        };
+      }
+      if (row.code === 'session_lost') {
+        return {
+          say: 'The permission link stopped working before the owner saw it. Nothing changed.',
+          next: `The server lost the wallet session before the owner was asked. ${ASK_AGAIN}`,
+        };
+      }
+      // An approval given in the last moments may land on chain after the window closed, unrecorded here.
+      return {
+        say: `The owner did not approve within ${APPROVE_MINUTES} minutes.`,
+        next: `If they approved at the last moment, the permission may still be in force on chain: jaw_get_permissions lists the account's permissions. ${ASK_AGAIN}`,
+      };
+    case 'failed':
+      if (row.code === 'wrong_account') {
+        return {
+          say: 'The owner approved with another account than the one connected here, so nothing was recorded for this connection.',
+          next: sentences(
+            row.permissionId !== null && `That account can revoke ${row.permissionId} from its own wallet.`,
+            ASK_AGAIN
+          ),
+        };
+      }
+      if (row.permissionId) {
+        return {
+          say: 'The wallet approved a permission this server could not record, so it may be in force on chain without this connection using it.',
+          next: `The request ended with ${row.code}. Revoke ${row.permissionId} with jaw_revoke_permission, then ask again if the owner still wants it.`,
+        };
+      }
+      return {
+        say: 'The wallet could not approve this permission. Nothing changed.',
+        next: `The request ended with ${row.code}. ${ASK_AGAIN}`,
+      };
+  }
+}
+
+function approvedSaid(row: PermissionRequestRow, ask: GrantPayload, { standing, olderLeft }: Since): Said {
+  const what = ask.kind === 'x402-budget' ? 'spend limit for paid services' : 'permission';
+  switch (standing) {
+    case 'revoked':
+      return {
+        say: `The owner approved the ${what}, and it has since been revoked.`,
+        next: `Permission ${row.permissionId} no longer lets this connection act. ${ASK_AGAIN}`,
+      };
+    case 'expired':
+      return {
+        say: `The owner approved the ${what}, and it has since expired.`,
+        next: ASK_AGAIN,
+      };
+    case 'replaced':
+      return {
+        say: `The owner approved the ${what}, and a newer one has since replaced it.`,
+        next: `Nothing pays from ${row.permissionId}; jaw_session_status shows the current spend limit.`,
+      };
+    case 'in_force':
+      break;
+  }
+  const ends = onDate(new Date(ask.grant.expiry * 1000));
+  if (ask.kind === 'custom') {
+    return {
+      say: `The owner approved the permission. It is in force until ${ends}.`,
+      next: `Its permission id is ${row.permissionId}. Run the actions it allows with jaw_session_execute.`,
+    };
+  }
+  return {
+    say: `The owner approved the spend limit for paid services. It is in force until ${ends}.`,
+    next: sentences(
+      `Its permission id is ${row.permissionId}; payments draw from it now.`,
+      olderLeft > 0 &&
+        'The spend limit it replaced is still approved on chain: nothing pays from it, this server keeps trying to revoke it, and jaw_connections lists it until then.'
     ),
-  });
+  };
+}
+
+async function statusOf(t: Tenant, row: PermissionRequestRow): Promise<GrantResult> {
+  const ask = grantAsked(row);
+  const found = await lostBefore(row);
+  const since: Since = { standing: 'in_force', olderLeft: 0 };
+  if (row.state === 'approved' && row.permissionId) {
+    since.standing = await standingOf(t.connectionId, row.permissionId);
+    if (ask.kind === 'x402-budget' && since.standing === 'in_force') {
+      since.olderLeft = (await replacedBudgets(t.connectionId)).length;
+    }
+  }
+  const said = [statusSaid(row, ask, since), ...(found ? [lostLink(found)] : [])];
+  const next = said.flatMap((s) => (s.next ? [s.next] : [])).join(' ');
+  return answer(row, ask, withNext(said.map((s) => s.say).join('\n'), next || undefined));
+}
+
+export async function grantStatus(
+  t: Tenant,
+  { id, waitSeconds = 0 }: GrantStatusInput,
+  deps: { pollMs?: number } = {},
+  waiter: Waiter = {}
+): Promise<GrantResult> {
+  if ((await countHit(`owner-grant-status:${t.connectionId}`, RATE_WINDOW_MS)) > STATUS_RATE_LIMIT) {
+    return refuse(
+      'rate_limited',
+      'Too many checks in a short time.',
+      'Too many status reads on this connection. Wait a minute, then call jaw_get_grant_status again.'
+    );
+  }
+  const until = Date.now() + waitSeconds * 1000;
+  const read = async () => {
+    const row = await requestById(t, 'grant', id);
+    return row
+      ? statusOf(t, row)
+      : refuse(
+          'not_found',
+          'That permission request was not found on this connection.',
+          'No grant request on this connection has that id.'
+        );
+  };
+  const settled = (r: GrantResult) => r.structuredContent?.state !== 'awaiting_owner';
+  return waitFor(await read(), { key: `grant:${t.connectionId}`, until, read, settled, pollMs: deps.pollMs }, waiter);
 }
 
 const RETRY_EVERY_MS = 5 * 60_000;
@@ -359,8 +581,8 @@ export function registerGrantTool(server: McpServer) {
         'Offer a permission only when the owner wants an action repeated or run without them, or when you are about to ask approval for the same action a second time; never for something asked once, which is jaw_send_calls. ' +
         'Before asking, say in one sentence what it allows, on which contract, up to how much per period, until when, and that they can revoke it anytime from their wallet, and ask for the narrowest permission that does the job. ' +
         'If the owner has no spend limit for paid services yet, runs under a custom permission cannot pay their network fee: say setup takes two approvals and ask for both. ' +
-        'Returns a link: show it on its own line before anything else. ' +
-        'Then check jaw_session_status on later turns to see it in force; do not wait for the owner to say they approved. ' +
+        'Returns a link and an id right away: show the link on its own line before anything else. ' +
+        `Then call jaw_get_grant_status with the id and waitSeconds ${SUGGESTED_WAIT_SECONDS}, and repeat while it answers awaiting_owner, up to ${APPROVE_MINUTES} minutes, without waiting for the owner to say they approved. ` +
         'A connection holds at most 5 live permissions, and a permission ends at expiresAt or when the connection ends, whichever comes first.',
       inputSchema: grantInput,
       outputSchema: output,
@@ -371,5 +593,20 @@ export function registerGrantTool(server: McpServer) {
       if (!spends(t.scopes)) return refusal(NO_PAY_SCOPE);
       return grantPermissions(t, input);
     }
+  );
+  server.registerTool(
+    'jaw_get_grant_status',
+    {
+      title: 'Check a permission request',
+      description:
+        'Follow a request jaw_grant_permissions opened: whether the owner approved, declined or let it expire, and the permission id once approved. ' +
+        `Call it right after showing the link with waitSeconds ${SUGGESTED_WAIT_SECONDS}, and again each time it answers awaiting_owner, until the request's approveBy. ` +
+        'While it waits, its result carries the link, so show it again if the owner asks. ' +
+        'Never ask the owner whether they approved; this tool knows first.',
+      inputSchema: statusInput,
+      outputSchema: output,
+      annotations: { readOnlyHint: true },
+    },
+    async (input, ctx) => grantStatus(tenant(ctx), input, {}, waiterOf(ctx, input.waitSeconds ?? 0))
   );
 }

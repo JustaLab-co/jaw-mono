@@ -1,0 +1,294 @@
+{
+  "statusCode": 200,
+  "result": {
+    "error": null,
+    "data": {
+      "positions": [
+        {
+          "id": "0x88800092ff476844f74dc2fc427974bbee2794ae-ethereum-ambire wallet pool-staked",
+          "type": "defi",
+          "name": "Ambire WALLET Pool",
+          "protocol": {
+            "id": "Ambire WALLET Pool",
+            "name": "Ambire",
+            "url": null,
+            "iconUrl": "https://static.lambda.p2p.org/protocols/ambire.png"
+          },
+          "chain": {
+            "id": "ethereum",
+            "idNumeric": 1,
+            "name": "Ethereum",
+            "iconUrl": "https://static.lambda.p2p.org/chains/ethereum.png"
+          },
+          "valueUsd": 2029.3838051922746,
+          "valueUsdChange1d": 169.83075276052065,
+          "attributes": {
+            "poolAddress": "0xe575cc6ec0b5d176127ac61ad2d3d9d19d1aa4a0",
+            "rewardsValueUsd": 0,
+            "rewardsUsdChange1d": 0,
+            "deposits": [
+              {
+                "category": "staked",
+                "tokenId": "0x88800092ff476844f74dc2fc427974bbee2794ae",
+                "symbol": "WALLET",
+                "name": "Ambire Wallet",
+                "contractAddress": "0x88800092ff476844f74dc2fc427974bbee2794ae",
+                "decimals": 18,
+                "amount": "156126901579311129939033",
+                "priceUsd": 0.0129982968,
+                "valueUsd": 2029.3838051922746,
+                "valueUsdChange1d": 169.83075276052065,
+                "iconUrl": "https://static.lambda.p2p.org/tokens/eth/0x88800092ff476844f74dc2fc427974bbee2794ae.webp",
+                "pnlLinks": [],
+                "contractImplementations": [
+                  {
+                    "chainId": "base",
+                    "chainIdNumeric": 8453,
+                    "chainName": "Base",
+                    "address": "0x0bbbead62f7647ae8323d2cb243a0db74b7c2b80",
+                    "decimals": 18
+                  },
+                  {
+                    "chainId": "ethereum",
+                    "chainIdNumeric": 1,
+                    "chainName": "Ethereum",
+                    "address": "0x88800092ff476844f74dc2fc427974bbee2794ae",
+                    "decimals": 18
+                  }
+                ]
+              }
+            ],
+            "loans": [],
+            "rewards": [],
+            "metaTokens": [],
+            "pnlLinks": [],
+            "compositeSymbol": "WALLET/WALLET",
+            "assetType": null,
+            "extra": {
+              "pool_metadata": null,
+              "health_factor": null,
+              "value_incomplete": false,
+              "unpriced_tokens": [],
+              "spam_tokens": []
+            }
+          }
+        },
+        {
+          "id": "0xc02aaa39b223fe8d0a0e5c4f27ead9083c756cc2-ethereum-dgenv2/weth pool 0.05% #112161-deposit",
+          "type": "defi",
+          "name": "DGENV2/WETH Pool 0.05% #112161",
+          "protocol": {
+            "id": "DGENV2/WETH Pool 0.05% #112161",
+            "name": "Uniswap V3",
+            "url": "https://app.uniswap.org/pools",
+            "iconUrl": "https://static.lambda.p2p.org/protocols/uniswap-v3.png"
+          },
+          "chain": {
+            "id": "ethereum",
+            "idNumeric": 1,
+            "name": "Ethereum",
+            "iconUrl": "https://static.lambda.p2p.org/chains/ethereum.png"
+          },
+          "valueUsd": 187.58835160953748,
+          "valueUsdChange1d": 5.928018291688922,
+          "attributes": {
+            "poolAddress": "0x24a3ab2a20f5e903b5bb3efc3b4a60fcda17b496",
+            "rewardsValueUsd": 79.74051743692084,
+            "rewardsUsdChange1d": 2.519896581525122,
+            "deposits": [
+              {
+                "category": "deposit",
+                "tokenId": "0xc02aaa39b223fe8d0a0e5c4f27ead9083c756cc2",
+                "symbol": "WETH",
+                "name": "Wrapped Ether",
+                "contractAddress": "0xc02aaa39b223fe8d0a0e5c4f27ead9083c756cc2",
+                "decimals": 18,
+                "amount": "43257267354452392",
+                "priceUsd": 2493.172610486595,
+                "valueUsd": 107.84783417261666,
+                "valueUsdChange1d": 3.4081217101638,
+                "iconUrl": "https://static.lambda.p2p.org/tokens/eth/0xc02aaa39b223fe8d0a0e5c4f27ead9083c756cc2.webp",
+                "pnlLinks": [],
+                "contractImplementations": [
+                  {
+                    "chainId": "abstract",
+                    "chainIdNumeric": 2741,
+                    "chainName": "Abstract",
+                    "address": "0x3439153eb7af838ad19d56e1571fbd09333c2809",
+                    "decimals": 18
+                  },
+                  {
+                    "chainId": "arbitrum",
+                    "chainIdNumeric": 42161,
+                    "chainName": "Arbitrum",
+                    "address": "0x82af49447d8a07e3bd95bd0d56f35241523fbab1",
+                    "decimals": 18
+                  }
+                ]
+              },
+              {
+                "category": "deposit",
+                "tokenId": "0x6793655c396eaee311fb4d3596b88fd7d195c79e",
+                "symbol": "DGENV2",
+                "name": "degeneratorv2",
+                "contractAddress": "0x6793655c396eaee311fb4d3596b88fd7d195c79e",
+                "decimals": 8,
+                "amount": "434916464568",
+                "priceUsd": 0,
+                "valueUsd": 0,
+                "valueUsdChange1d": 0,
+                "iconUrl": null,
+                "pnlLinks": [],
+                "contractImplementations": [
+                  {
+                    "chainId": "ethereum",
+                    "chainIdNumeric": 1,
+                    "chainName": "Ethereum",
+                    "address": "0x6793655c396eaee311fb4d3596b88fd7d195c79e",
+                    "decimals": 8
+                  }
+                ]
+              }
+            ],
+            "loans": [],
+            "rewards": [
+              {
+                "category": "reward",
+                "tokenId": "0xc02aaa39b223fe8d0a0e5c4f27ead9083c756cc2",
+                "symbol": "WETH",
+                "name": "Wrapped Ether",
+                "contractAddress": "0xc02aaa39b223fe8d0a0e5c4f27ead9083c756cc2",
+                "decimals": 18,
+                "amount": "31983552643536342",
+                "priceUsd": 2493.172610486595,
+                "valueUsd": 79.74051743692084,
+                "valueUsdChange1d": 2.519896581525122,
+                "iconUrl": "https://static.lambda.p2p.org/tokens/eth/0xc02aaa39b223fe8d0a0e5c4f27ead9083c756cc2.webp",
+                "pnlLinks": [],
+                "contractImplementations": [
+                  {
+                    "chainId": "abstract",
+                    "chainIdNumeric": 2741,
+                    "chainName": "Abstract",
+                    "address": "0x3439153eb7af838ad19d56e1571fbd09333c2809",
+                    "decimals": 18
+                  },
+                  {
+                    "chainId": "arbitrum",
+                    "chainIdNumeric": 42161,
+                    "chainName": "Arbitrum",
+                    "address": "0x82af49447d8a07e3bd95bd0d56f35241523fbab1",
+                    "decimals": 18
+                  }
+                ]
+              },
+              {
+                "category": "reward",
+                "tokenId": "0x6793655c396eaee311fb4d3596b88fd7d195c79e",
+                "symbol": "DGENV2",
+                "name": "degeneratorv2",
+                "contractAddress": "0x6793655c396eaee311fb4d3596b88fd7d195c79e",
+                "decimals": 8,
+                "amount": "629055859",
+                "priceUsd": 0,
+                "valueUsd": 0,
+                "valueUsdChange1d": 0,
+                "iconUrl": null,
+                "pnlLinks": [],
+                "contractImplementations": [
+                  {
+                    "chainId": "ethereum",
+                    "chainIdNumeric": 1,
+                    "chainName": "Ethereum",
+                    "address": "0x6793655c396eaee311fb4d3596b88fd7d195c79e",
+                    "decimals": 8
+                  }
+                ]
+              }
+            ],
+            "metaTokens": [],
+            "pnlLinks": [],
+            "compositeSymbol": "WETH/DGENV2",
+            "assetType": null,
+            "extra": {
+              "pool_metadata": null,
+              "health_factor": null,
+              "value_incomplete": false,
+              "unpriced_tokens": [],
+              "spam_tokens": []
+            }
+          }
+        },
+        {
+          "id": "0x833589fcd6edb6e08f4c7c32d4f71b54bda02913-base-yearn v3 yield: usdc pool-deposit",
+          "type": "defi",
+          "name": "Yearn V3 Yield: USDC Pool",
+          "protocol": {
+            "id": "Yearn V3 Yield: USDC Pool",
+            "name": "Yearn V3",
+            "url": "https://yearn.fi/",
+            "iconUrl": "https://static.lambda.p2p.org/protocols/yearn-v3.png"
+          },
+          "chain": {
+            "id": "base",
+            "idNumeric": 8453,
+            "name": "Base",
+            "iconUrl": "https://static.lambda.p2p.org/chains/base.png"
+          },
+          "valueUsd": 920.4454327105627,
+          "valueUsdChange1d": -0.15534660546635282,
+          "attributes": {
+            "poolAddress": "0xb13cf163d916917d9cd6e836905ca5f12a1def4b",
+            "rewardsValueUsd": 0,
+            "rewardsUsdChange1d": 0,
+            "deposits": [
+              {
+                "category": "deposit",
+                "tokenId": "0xa0b86991c6218b36c1d19d4a2e9eb0ce3606eb48",
+                "symbol": "USDC",
+                "name": "USDC",
+                "contractAddress": "0x833589fcd6edb6e08f4c7c32d4f71b54bda02913",
+                "decimals": 6,
+                "amount": "920726914",
+                "priceUsd": 0.9996942836305128,
+                "valueUsd": 920.4454327105627,
+                "valueUsdChange1d": -0.15534660546635282,
+                "iconUrl": "https://static.lambda.p2p.org/tokens/base/0x833589fcd6edb6e08f4c7c32d4f71b54bda02913.webp",
+                "pnlLinks": [],
+                "contractImplementations": [
+                  {
+                    "chainId": "0g",
+                    "chainIdNumeric": 16661,
+                    "chainName": "0G",
+                    "address": "0x1f3aa82227281ca364bfb3d253b0f1af1da6473e",
+                    "decimals": 6
+                  },
+                  {
+                    "chainId": "abstract",
+                    "chainIdNumeric": 2741,
+                    "chainName": "Abstract",
+                    "address": "0x84a71ccd554cc1b02749b35d22f684cc8ec987e1",
+                    "decimals": 6
+                  }
+                ]
+              }
+            ],
+            "loans": [],
+            "rewards": [],
+            "metaTokens": [],
+            "pnlLinks": [],
+            "compositeSymbol": null,
+            "assetType": null,
+            "extra": {
+              "pool_metadata": null,
+              "health_factor": null,
+              "value_incomplete": false,
+              "unpriced_tokens": [],
+              "spam_tokens": []
+            }
+          }
+        }
+      ]
+    }
+  }
+}
