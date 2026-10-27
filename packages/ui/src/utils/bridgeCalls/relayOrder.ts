@@ -1,7 +1,8 @@
 import { hashStruct, isAddressEqual, pad, zeroAddress, type Address, type Hex } from 'viem';
 import { z } from 'zod';
-import { BRIDGE_CHAINS, type RelayContracts } from './contracts';
+import type { RelayContracts } from './contracts';
 import type { RelayDeposit } from './relay';
+import type { BridgeContracts } from './table';
 import { pinnedToken, tokenAmount, type TokenAmount } from './view';
 
 export const ORDER_TYPES = {
@@ -117,18 +118,24 @@ export type RelayOrder = {
   minimumReceived: TokenAmount;
   refundTo: Address;
 };
-export type OrderUnshown = { kind: 'unshown'; reason: string };
+export type OrderUnshown = { kind: 'unshown'; reason: string; outsideTable?: true };
 
-const unshown = (reason: string): OrderUnshown => ({ kind: 'unshown', reason });
-const includes = (what: string) => unshown(`This Relay order includes ${what}, so its terms are not shown.`);
+const unshown = (reason: string, outsideTable?: true): OrderUnshown => ({ kind: 'unshown', reason, outsideTable });
+const includes = (what: string, outsideTable?: true) =>
+  unshown(`This Relay order includes ${what}, so its terms are not shown.`, outsideTable);
 const MISMATCH = unshown('The Relay order details do not match this deposit, so this screen does not show them.');
 const UNKNOWN_ROUTE = unshown(
-  'This Relay order uses a solver or route this screen does not recognize, so its terms are not shown.'
+  'This Relay order uses a solver or route this screen does not recognize, so its terms are not shown.',
+  true
 );
 const isAddress = (hex: Hex): hex is Address => hex.length === 42;
 const sameBytes = (a: Hex, b: Hex) => a.toLowerCase() === b.toLowerCase();
 
-export function readRelayOrder(capability: unknown, deposit: RelayDeposit): RelayOrder | OrderUnshown | undefined {
+export function readRelayOrder(
+  contracts: BridgeContracts,
+  capability: unknown,
+  deposit: RelayDeposit
+): RelayOrder | OrderUnshown | undefined {
   if (capability === undefined) return undefined;
   const data = (capability as { orderData?: unknown } | null)?.orderData;
   if (tooLarge(data)) return MISMATCH;
@@ -141,17 +148,16 @@ export function readRelayOrder(capability: unknown, deposit: RelayDeposit): Rela
   }
   if (order.inputs.length !== 1) return undefined;
   const { payment } = order.inputs[0];
-  const origin = BRIDGE_CHAINS[deposit.send.chainId].relay?.protocolChain;
+  const origin = contracts.chain(deposit.send.chainId)?.relay?.protocolChain;
   if (payment.chainId !== origin || !sameBytes(payment.currency, deposit.send.token.address)) return MISMATCH;
   if (payment.amount !== deposit.send.amount) return MISMATCH;
-  if (!knownRoute(order, payment.chainId)) return UNKNOWN_ROUTE;
-  return termsOf(order);
+  if (!knownRoute(contracts, order, payment.chainId)) return UNKNOWN_ROUTE;
+  return termsOf(contracts, order);
 }
 
-const relayOf = (protocolChain: string): RelayContracts | undefined =>
-  Object.values(BRIDGE_CHAINS).find((chain) => chain.relay?.protocolChain === protocolChain)?.relay;
-
-function knownRoute(order: Order, origin: string): boolean {
+function knownRoute(contracts: BridgeContracts, order: Order, origin: string): boolean {
+  const relayOf = (protocolChain: string): RelayContracts | undefined =>
+    contracts.relayByProtocolChain(protocolChain)?.relay;
   const sides = [origin, order.output.chainId];
   const routeOf = (chain: string) => (sides.includes(chain) ? relayOf(chain) : undefined);
   const testnet = relayOf(origin)?.testnet === true;
@@ -168,7 +174,7 @@ function knownRoute(order: Order, origin: string): boolean {
   );
 }
 
-function termsOf(order: Order): RelayOrder | OrderUnshown | undefined {
+function termsOf(contracts: BridgeContracts, order: Order): RelayOrder | OrderUnshown | undefined {
   const { output, fees } = order;
   if (order.version !== 'v1') return undefined;
   if (output.calls.length !== 0) return includes('destination calls');
@@ -177,19 +183,17 @@ function termsOf(order: Order): RelayOrder | OrderUnshown | undefined {
   const [{ recipient, currency: paid, minimumAmount }] = output.payments;
   const currency = paid.toLowerCase() as Hex;
   const refundTo = order.inputs[0].refunds.map((refund) => refund.recipient.toLowerCase() as Hex);
-  const destination = Object.keys(BRIDGE_CHAINS)
-    .map(Number)
-    .find((chainId) => BRIDGE_CHAINS[chainId].relay?.protocolChain === output.chainId);
+  const destination = contracts.relayByProtocolChain(output.chainId)?.chainId;
   if (destination === undefined || !isAddress(recipient)) return undefined;
-  if (!isAddress(currency) || (currency !== zeroAddress && !pinnedToken(destination, currency))) {
-    return includes('an unrecognized token');
+  if (!isAddress(currency) || (currency !== zeroAddress && !pinnedToken(contracts, destination, currency))) {
+    return includes('an unrecognized token', true);
   }
   if (new Set(refundTo).size !== 1 || !isAddress(refundTo[0])) return undefined;
   return {
     kind: 'order',
     destinationChainId: destination,
     recipient,
-    minimumReceived: tokenAmount(destination, currency, minimumAmount),
+    minimumReceived: tokenAmount(contracts, destination, currency, minimumAmount),
     refundTo: refundTo[0],
   };
 }

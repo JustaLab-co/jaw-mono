@@ -3,6 +3,7 @@ import { readAcrossCall, type AcrossDeposit } from './across';
 import { readBridgeApprove, type BridgeApprove } from './approve';
 import { readRelayCall, type RelayDeposit } from './relay';
 import { readRelayOrder } from './relayOrder';
+import type { BridgeContracts } from './table';
 import { PROVIDER_NAME, transferOf, type BridgeTransfer } from './transfer';
 import type { BridgeCall, BridgeProvider, Unreadable } from './view';
 
@@ -11,6 +12,8 @@ const OTHER_CONTRACT = 'This approval is for a different contract than the depos
 const OTHER_TOKEN = 'This approval is for a different token than the deposit.';
 const UNPAIRED = 'This batch has an approval that the deposit does not use. Check its token, amount and spender.';
 const APPROVE_UNKNOWN = 'This batch approves a token this screen does not know. Check its address before you confirm.';
+
+const STALE_TABLE = 'This screen could not refresh its list of bridge contracts.';
 
 export type BridgeStep = { alert: string } | null;
 
@@ -24,18 +27,36 @@ type Pull = { token: Address; amount: bigint; spender: Address };
 export const cannotRead = (provider: BridgeProvider) =>
   `This screen cannot read this ${PROVIDER_NAME[provider]} call. Check the raw details before you confirm.`;
 
-export function readBridgeBatch(calls: BridgeCall[], account: Address, relayOrder?: unknown): BridgeBatch | null {
-  const reads: Read[] = calls.map((call) => readAcrossCall(call) ?? readRelayCall(call) ?? readBridgeApprove(call));
+export function readBridgeBatch(
+  contracts: BridgeContracts,
+  calls: BridgeCall[],
+  account: Address,
+  relayOrder?: unknown
+): BridgeBatch | null {
+  const reads: Read[] = calls.map(
+    (call) => readAcrossCall(contracts, call) ?? readRelayCall(contracts, call) ?? readBridgeApprove(contracts, call)
+  );
   if (reads.every((read) => read === undefined)) return null;
 
   const steps = reads.map(stepOf);
   const alerts = reads.flatMap((read) => (read?.kind === 'unreadable' ? [cannotRead(read.provider)] : []));
   const deposits = reads.filter((read): read is Deposit => read?.kind === 'deposit');
   const transfers = deposits.map((deposit) =>
-    transferOf(deposit, account, deposit.provider === 'relay' ? readRelayOrder(relayOrder, deposit) : undefined)
+    transferOf(
+      contracts,
+      deposit,
+      account,
+      deposit.provider === 'relay' ? readRelayOrder(contracts, relayOrder, deposit) : undefined
+    )
   );
   const notices = transfers.flatMap((read) => read.notices);
-  if (reads.some((read) => read?.kind === 'approve' && !read.token.known)) notices.push(APPROVE_UNKNOWN);
+  const unknownApprove = reads.some((read) => read?.kind === 'approve' && !read.token.known);
+  if (unknownApprove) notices.push(APPROVE_UNKNOWN);
+  const outsideTable =
+    unknownApprove ||
+    transfers.some((read) => read.outsideTable) ||
+    reads.some((read) => read?.kind === 'unreadable' && read.outsideTable);
+  if (outsideTable && contracts.source === 'snapshot') notices.push(STALE_TABLE);
 
   if (deposits.length === 1) {
     notices.push(...approveNotices(calls, reads, deposits[0]));

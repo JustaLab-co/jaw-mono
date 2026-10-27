@@ -9,6 +9,10 @@ import {
   SIGNER,
 } from './fixtures';
 import type { BridgeCall } from './view';
+import { BridgeContracts } from './table';
+import { BRIDGE_CHAINS } from './contracts';
+
+const contracts = new BridgeContracts({ version: 1, chains: BRIDGE_CHAINS });
 
 const DEPOSITORY = '0x4cD00E387622C35bDDB9b4c962C136462338BC31';
 const BASE_SPOKE_POOL = '0x09aea4b2242abC8bb4BB78D537A67a245A7bEC64';
@@ -54,60 +58,60 @@ const transfer: BridgeCall = {
 
 describe('given the relay-usdc batch the MCP builds, approve then deposit', () => {
   it('when it is read, then the transfer shows the deposit, both steps carry no alert, and only the Relay warning shows', () => {
-    const batch = readBridgeBatch([RELAY_USDC_APPROVE, RELAY_USDC_DEPOSIT], SIGNER);
+    const batch = readBridgeBatch(contracts, [RELAY_USDC_APPROVE, RELAY_USDC_DEPOSIT], SIGNER);
     expect(batch?.transfer).toMatchObject({ title: 'Deposit to Relay' });
     expect(batch?.steps).toEqual([PLAIN_STEP, PLAIN_STEP]);
     expect(batch?.notices).toEqual([RELAY_HIDDEN]);
   });
 
   it('when the approve is one unit larger than the deposit, then the batch leaves it to the token approvals card', () => {
-    const batch = readBridgeBatch([approve(DEPOSITORY, '989681'), RELAY_USDC_DEPOSIT], SIGNER);
+    const batch = readBridgeBatch(contracts, [approve(DEPOSITORY, '989681'), RELAY_USDC_DEPOSIT], SIGNER);
     expect(batch?.notices).toEqual([RELAY_HIDDEN]);
   });
 
   it('when the approve is one unit smaller than the deposit, then no pairing warning shows', () => {
-    const batch = readBridgeBatch([approve(DEPOSITORY, '98967f'), RELAY_USDC_DEPOSIT], SIGNER);
+    const batch = readBridgeBatch(contracts, [approve(DEPOSITORY, '98967f'), RELAY_USDC_DEPOSIT], SIGNER);
     expect(batch?.notices).toEqual([RELAY_HIDDEN]);
   });
 
   it('when the approve goes to the Across SpokePool instead of the Depository, then the other-contract warning shows', () => {
-    const batch = readBridgeBatch([approve(BASE_SPOKE_POOL, '989680'), RELAY_USDC_DEPOSIT], SIGNER);
+    const batch = readBridgeBatch(contracts, [approve(BASE_SPOKE_POOL, '989680'), RELAY_USDC_DEPOSIT], SIGNER);
     expect(batch?.transfer).toBeDefined();
     expect(batch?.notices).toEqual([RELAY_HIDDEN, OTHER_CONTRACT]);
   });
 
   it('when the approve is for WETH while the deposit is USDC, then the other-token warning shows', () => {
-    const batch = readBridgeBatch([{ ...RELAY_USDC_APPROVE, to: BASE_WETH }, RELAY_USDC_DEPOSIT], SIGNER);
+    const batch = readBridgeBatch(contracts, [{ ...RELAY_USDC_APPROVE, to: BASE_WETH }, RELAY_USDC_DEPOSIT], SIGNER);
     expect(batch?.notices).toEqual([RELAY_HIDDEN, OTHER_TOKEN]);
   });
 
   it('when the deposit comes before the approve, then the transfer stays and both does-more and unpaired warnings show', () => {
-    const batch = readBridgeBatch([RELAY_USDC_DEPOSIT, RELAY_USDC_APPROVE], SIGNER);
+    const batch = readBridgeBatch(contracts, [RELAY_USDC_DEPOSIT, RELAY_USDC_APPROVE], SIGNER);
     expect(batch?.transfer).toMatchObject({ title: 'Deposit to Relay' });
     expect(batch?.steps).toEqual([PLAIN_STEP, PLAIN_STEP]);
     expect(batch?.notices).toEqual([RELAY_HIDDEN, DOES_MORE, UNPAIRED]);
   });
 
   it('when the approve runs on another chain, then it does not pair and the batch does more', () => {
-    const batch = readBridgeBatch([{ ...RELAY_USDC_APPROVE, chainId: 10 }, RELAY_USDC_DEPOSIT], SIGNER);
+    const batch = readBridgeBatch(contracts, [{ ...RELAY_USDC_APPROVE, chainId: 10 }, RELAY_USDC_DEPOSIT], SIGNER);
     expect(batch?.notices).toEqual([RELAY_HIDDEN, APPROVE_UNKNOWN, DOES_MORE, UNPAIRED]);
   });
 
   it('when a third call transfers tokens, then the transfer stays and the does-more warning shows', () => {
-    const batch = readBridgeBatch([RELAY_USDC_APPROVE, RELAY_USDC_DEPOSIT, transfer], SIGNER);
+    const batch = readBridgeBatch(contracts, [RELAY_USDC_APPROVE, RELAY_USDC_DEPOSIT, transfer], SIGNER);
     expect(batch?.transfer).toBeDefined();
     expect(batch?.steps).toEqual([PLAIN_STEP, PLAIN_STEP, null]);
     expect(batch?.notices).toEqual([RELAY_HIDDEN, DOES_MORE]);
   });
 
   it('when a transfer sits between the approve and the deposit, then the approve gets the unpaired wording', () => {
-    const batch = readBridgeBatch([RELAY_USDC_APPROVE, transfer, RELAY_USDC_DEPOSIT], SIGNER);
+    const batch = readBridgeBatch(contracts, [RELAY_USDC_APPROVE, transfer, RELAY_USDC_DEPOSIT], SIGNER);
     expect(batch?.transfer).toBeDefined();
     expect(batch?.notices).toEqual([RELAY_HIDDEN, DOES_MORE, UNPAIRED]);
   });
 
   it('when the depositor is another account, then the not-this-account warning shows', () => {
-    const batch = readBridgeBatch([RELAY_USDC_APPROVE, RELAY_USDC_DEPOSIT], OTHER);
+    const batch = readBridgeBatch(contracts, [RELAY_USDC_APPROVE, RELAY_USDC_DEPOSIT], OTHER);
     expect(batch?.notices).toEqual([RELAY_HIDDEN, notThisAccount('The account credited', SIGNER_CHECKSUM)]);
   });
 });
@@ -127,7 +131,7 @@ describe('given an allowance change in place of the plain approve', () => {
   ];
 
   it.each(cases)('when it is %s, then it counts as another call with the cannot-read warning', (_, call) => {
-    const batch = readBridgeBatch([call, RELAY_USDC_DEPOSIT], SIGNER);
+    const batch = readBridgeBatch(contracts, [call, RELAY_USDC_DEPOSIT], SIGNER);
     expect(batch?.transfer).toBeDefined();
     expect(batch?.steps).toEqual([CANNOT_READ, PLAIN_STEP]);
     expect(batch?.alerts).toEqual([CANNOT_READ_RELAY]);
@@ -137,20 +141,20 @@ describe('given an allowance change in place of the plain approve', () => {
 
 describe('given batches that are not one bridge deposit', () => {
   it('when two deposits are in one batch, then no transfer shows, no step is labelled, and the batch does more', () => {
-    const batch = readBridgeBatch([RELAY_USDC_APPROVE, RELAY_USDC_DEPOSIT, RELAY_USDC_FEE_DEPOSIT], SIGNER);
+    const batch = readBridgeBatch(contracts, [RELAY_USDC_APPROVE, RELAY_USDC_DEPOSIT, RELAY_USDC_FEE_DEPOSIT], SIGNER);
     expect(batch?.transfer).toBeUndefined();
     expect(batch?.steps).toEqual([PLAIN_STEP, PLAIN_STEP, PLAIN_STEP]);
     expect(batch?.notices).toEqual([RELAY_HIDDEN, DOES_MORE]);
   });
 
   it('when a native deposit follows an approve, then the approve does not pair and the batch does more', () => {
-    const batch = readBridgeBatch([RELAY_USDC_APPROVE, PROD_RELAY_DEPOSIT], SIGNER);
+    const batch = readBridgeBatch(contracts, [RELAY_USDC_APPROVE, PROD_RELAY_DEPOSIT], SIGNER);
     expect(batch?.transfer).toMatchObject({ title: 'Deposit to Relay' });
     expect(batch?.notices).toEqual([RELAY_HIDDEN, DOES_MORE, UNPAIRED]);
   });
 
   it('when the native deposit is alone, then the transfer shows with only the Relay warning', () => {
-    const batch = readBridgeBatch([PROD_RELAY_DEPOSIT], SIGNER);
+    const batch = readBridgeBatch(contracts, [PROD_RELAY_DEPOSIT], SIGNER);
     expect(batch?.transfer).toMatchObject({ title: 'Deposit to Relay' });
     expect(batch?.steps).toEqual([PLAIN_STEP]);
     expect(batch?.notices).toEqual([RELAY_HIDDEN]);
@@ -158,7 +162,7 @@ describe('given batches that are not one bridge deposit', () => {
 
   it('when the only deposit is unreadable, then no transfer shows and its step carries the cannot-read warning', () => {
     const unreadable = { ...RELAY_USDC_DEPOSIT, data: RELAY_USDC_DEPOSIT.data + '00' };
-    expect(readBridgeBatch([RELAY_USDC_APPROVE, unreadable], SIGNER)).toEqual({
+    expect(readBridgeBatch(contracts, [RELAY_USDC_APPROVE, unreadable], SIGNER)).toEqual({
       transfer: undefined,
       steps: [PLAIN_STEP, CANNOT_READ],
       alerts: [CANNOT_READ_RELAY],
@@ -167,7 +171,7 @@ describe('given batches that are not one bridge deposit', () => {
   });
 
   it('when there is no deposit and a call outside the bridge, then the batch does more', () => {
-    const batch = readBridgeBatch([RELAY_USDC_APPROVE, transfer], SIGNER);
+    const batch = readBridgeBatch(contracts, [RELAY_USDC_APPROVE, transfer], SIGNER);
     expect(batch?.transfer).toBeUndefined();
     expect(batch?.steps).toEqual([PLAIN_STEP, null]);
     expect(batch?.notices).toEqual([DOES_MORE]);
@@ -175,13 +179,13 @@ describe('given batches that are not one bridge deposit', () => {
 
   it('when an unreadable deposit sits next to a call outside the bridge, then both warnings show', () => {
     const unreadable = { ...RELAY_USDC_DEPOSIT, data: RELAY_USDC_DEPOSIT.data + '00' };
-    const batch = readBridgeBatch([unreadable, transfer], SIGNER);
+    const batch = readBridgeBatch(contracts, [unreadable, transfer], SIGNER);
     expect(batch?.alerts).toEqual([CANNOT_READ_RELAY]);
     expect(batch?.notices).toEqual([DOES_MORE]);
   });
 
   it('when the approve is alone, then its step is labelled and nothing else shows', () => {
-    expect(readBridgeBatch([RELAY_USDC_APPROVE], SIGNER)).toEqual({
+    expect(readBridgeBatch(contracts, [RELAY_USDC_APPROVE], SIGNER)).toEqual({
       transfer: undefined,
       steps: [PLAIN_STEP],
       alerts: [],
@@ -190,8 +194,8 @@ describe('given batches that are not one bridge deposit', () => {
   });
 
   it('when no call touches a bridge contract, then there is nothing to show', () => {
-    expect(readBridgeBatch([transfer], SIGNER)).toBeNull();
-    expect(readBridgeBatch([{ ...RELAY_USDC_DEPOSIT, to: OTHER }], SIGNER)).toBeNull();
+    expect(readBridgeBatch(contracts, [transfer], SIGNER)).toBeNull();
+    expect(readBridgeBatch(contracts, [{ ...RELAY_USDC_DEPOSIT, to: OTHER }], SIGNER)).toBeNull();
   });
 });
 
@@ -199,13 +203,15 @@ describe('given the prod Across batch, approve to the SpokePool then deposit', (
   const acrossApprove = approve(BASE_SPOKE_POOL, '989680');
 
   it('when it is read, then the transfer has every term of the deposit and no warning shows', () => {
-    const batch = readBridgeBatch([acrossApprove, ACROSS_CALLS.prod], SIGNER);
+    const batch = readBridgeBatch(contracts, [acrossApprove, ACROSS_CALLS.prod], SIGNER);
     expect(batch).toEqual({
       transfer: {
         provider: 'across',
         title: 'Bridge to Arbitrum',
         send: usdc(8453, BASE_USDC, 10_000_000n),
+        origin: { name: 'Base', nativeSymbol: 'ETH' },
         receive: { kind: 'minimum', amount: usdc(42161, ARB_USDC, 9_960_900n) },
+        destination: { name: 'Arbitrum', nativeSymbol: 'ETH' },
         details: [
           { label: 'Recipient', value: 'This account', copy: SIGNER_CHECKSUM },
           { label: 'Fee', value: '0.024964 USDC to JAW' },
@@ -220,22 +226,22 @@ describe('given the prod Across batch, approve to the SpokePool then deposit', (
   });
 
   it('when the approve is one unit larger than the deposit, then the batch leaves it to the token approvals card', () => {
-    const batch = readBridgeBatch([approve(BASE_SPOKE_POOL, '989681'), ACROSS_CALLS.prod], SIGNER);
+    const batch = readBridgeBatch(contracts, [approve(BASE_SPOKE_POOL, '989681'), ACROSS_CALLS.prod], SIGNER);
     expect(batch?.notices).toEqual([]);
   });
 
   it('when the approve goes to the periphery instead of the SpokePool, then the other-contract warning shows', () => {
-    const batch = readBridgeBatch([approve(BASE_PERIPHERY, '989680'), ACROSS_CALLS.prod], SIGNER);
+    const batch = readBridgeBatch(contracts, [approve(BASE_PERIPHERY, '989680'), ACROSS_CALLS.prod], SIGNER);
     expect(batch?.notices).toEqual([OTHER_CONTRACT]);
   });
 
   it('when the approve is for WETH while the deposit is USDC, then the other-token warning shows', () => {
-    const batch = readBridgeBatch([{ ...acrossApprove, to: BASE_WETH }, ACROSS_CALLS.prod], SIGNER);
+    const batch = readBridgeBatch(contracts, [{ ...acrossApprove, to: BASE_WETH }, ACROSS_CALLS.prod], SIGNER);
     expect(batch?.notices).toEqual([OTHER_TOKEN]);
   });
 
   it('when two prod deposits are in one batch, then no transfer shows and the batch does more', () => {
-    const batch = readBridgeBatch([acrossApprove, ACROSS_CALLS.prod, ACROSS_CALLS.prod], SIGNER);
+    const batch = readBridgeBatch(contracts, [acrossApprove, ACROSS_CALLS.prod, ACROSS_CALLS.prod], SIGNER);
     expect(batch?.transfer).toBeUndefined();
     expect(batch?.steps).toEqual([PLAIN_STEP, PLAIN_STEP, PLAIN_STEP]);
     expect(batch?.notices).toEqual([DOES_MORE]);
@@ -244,7 +250,7 @@ describe('given the prod Across batch, approve to the SpokePool then deposit', (
 
 describe('given the periphery depositNative of across-native-eth', () => {
   it('when it is alone, then the transfer reads 0.01 ETH to Arbitrum with no fee and no warning', () => {
-    const batch = readBridgeBatch([ACROSS_CALLS.nativeEth], SIGNER);
+    const batch = readBridgeBatch(contracts, [ACROSS_CALLS.nativeEth], SIGNER);
     expect(batch?.transfer).toMatchObject({
       title: 'Bridge to Arbitrum',
       receive: { kind: 'minimum', amount: { chainId: 42161, amount: 9_991_147_824_020_099n } },
@@ -259,7 +265,7 @@ describe('given the periphery depositNative of across-native-eth', () => {
   });
 
   it('when an approve comes before it, then the approve does not pair since nothing is pulled, and the batch does more', () => {
-    const batch = readBridgeBatch([approve(BASE_PERIPHERY, '989680'), ACROSS_CALLS.nativeEth], SIGNER);
+    const batch = readBridgeBatch(contracts, [approve(BASE_PERIPHERY, '989680'), ACROSS_CALLS.nativeEth], SIGNER);
     expect(batch?.transfer).toMatchObject({ title: 'Bridge to Arbitrum' });
     expect(batch?.notices).toEqual([DOES_MORE, UNPAIRED]);
   });
@@ -267,7 +273,7 @@ describe('given the periphery depositNative of across-native-eth', () => {
 
 describe('given an Across deposit that swaps on one side', () => {
   it('when it swaps on the destination, then the transfer names the bought token with no amount', () => {
-    const batch = readBridgeBatch([approve(BASE_SPOKE_POOL, '989680'), ACROSS_CALLS.usdcToArb], SIGNER);
+    const batch = readBridgeBatch(contracts, [approve(BASE_SPOKE_POOL, '989680'), ACROSS_CALLS.usdcToArb], SIGNER);
     expect(batch?.transfer?.receive).toEqual({ kind: 'swap', chainId: 42161, token: { address: ARB, known: false } });
     expect(batch?.steps).toEqual([PLAIN_STEP, PLAIN_STEP]);
     expect(batch?.alerts).toEqual([]);
@@ -276,14 +282,14 @@ describe('given an Across deposit that swaps on one side', () => {
 
   it('when a byte trails the deposit, then its step and the batch carry the red Across alert', () => {
     const call = { ...ACROSS_CALLS.usdcToArb, data: ACROSS_CALLS.usdcToArb.data + '00' };
-    const batch = readBridgeBatch([approve(BASE_SPOKE_POOL, '989680'), call], SIGNER);
+    const batch = readBridgeBatch(contracts, [approve(BASE_SPOKE_POOL, '989680'), call], SIGNER);
     expect(batch?.transfer).toBeUndefined();
     expect(batch?.steps).toEqual([PLAIN_STEP, { alert: CANNOT_READ_ACROSS }]);
     expect(batch?.alerts).toEqual([CANNOT_READ_ACROSS]);
   });
 
   it('when it swaps on the origin, then the approve to the periphery pairs with the USDC it pulls', () => {
-    const batch = readBridgeBatch([approve(BASE_PERIPHERY, '989680'), ACROSS_CALLS.usdcToWeth], SIGNER);
+    const batch = readBridgeBatch(contracts, [approve(BASE_PERIPHERY, '989680'), ACROSS_CALLS.usdcToWeth], SIGNER);
     expect(batch?.transfer).toMatchObject({
       title: 'Bridge to Arbitrum',
       send: usdc(8453, BASE_USDC, 10_000_000n),
@@ -302,7 +308,7 @@ describe('given an Across deposit whose terms are not plain', () => {
   const ATTACKER = '0x2222222222222222222222222222222222222222';
 
   it('when the fee goes to an address other than the pinned JAW one, then the fee detail names it and a notice shows', () => {
-    const batch = readBridgeBatch([withFee(ATTACKER, '6184')], SIGNER);
+    const batch = readBridgeBatch(contracts, [withFee(ATTACKER, '6184')], SIGNER);
     expect(batch?.transfer?.details[1]).toEqual({
       label: 'Fee',
       value: `0.024964 USDC to ${ATTACKER}`,
@@ -312,13 +318,13 @@ describe('given an Across deposit whose terms are not plain', () => {
   });
 
   it('when the JAW fee is any share of the input, then nothing warns about its size', () => {
-    const batch = readBridgeBatch([withFee('0xc529edd6d47c60923902514c7c0b3993ae42c2ec', '61a9')], SIGNER);
+    const batch = readBridgeBatch(contracts, [withFee('0xc529edd6d47c60923902514c7c0b3993ae42c2ec', '61a9')], SIGNER);
     expect(batch?.transfer?.details[1]).toEqual({ label: 'Fee', value: '0.025001 USDC to JAW' });
     expect(batch?.notices).toEqual([]);
   });
 
   it('when the recipient is another address, then it shows in full and the not-this-account warning shows', () => {
-    const batch = readBridgeBatch([ACROSS_CALLS.usdcOtherRecipient], SIGNER);
+    const batch = readBridgeBatch(contracts, [ACROSS_CALLS.usdcOtherRecipient], SIGNER);
     expect(batch?.transfer?.details[0]).toEqual({ label: 'Recipient', value: OTHER, copy: OTHER });
     expect(batch?.notices).toEqual([NOT_SIGNER]);
   });
@@ -326,6 +332,7 @@ describe('given an Across deposit whose terms are not plain', () => {
   it('when the refund goes to another address, then it shows in full and the refund warning shows', () => {
     const depositor = '0xad5425c6' + word(SIGNER);
     const batch = readBridgeBatch(
+      contracts,
       [{ ...prod, data: prod.data.replace(depositor, '0xad5425c6' + word(OTHER)) }],
       SIGNER
     );
@@ -334,18 +341,18 @@ describe('given an Across deposit whose terms are not plain', () => {
   });
 
   it('when the signer comes lowercase, then the recipient and refund still read This account', () => {
-    expect(readBridgeBatch([prod], SIGNER.toLowerCase() as typeof SIGNER)?.notices).toEqual([]);
+    expect(readBridgeBatch(contracts, [prod], SIGNER.toLowerCase() as typeof SIGNER)?.notices).toEqual([]);
   });
 
   it('when the signer is another account, then both the recipient and the refund warnings show', () => {
-    expect(readBridgeBatch([prod], OTHER)?.notices).toEqual([
+    expect(readBridgeBatch(contracts, [prod], OTHER)?.notices).toEqual([
       notThisAccount('The recipient', SIGNER_CHECKSUM),
       notThisAccount('The refund address', SIGNER_CHECKSUM),
     ]);
   });
 
   it('when the deposit comes before its approve, then the transfer stays with both does-more and unpaired warnings', () => {
-    const batch = readBridgeBatch([prod, approve(BASE_SPOKE_POOL, '989680')], SIGNER);
+    const batch = readBridgeBatch(contracts, [prod, approve(BASE_SPOKE_POOL, '989680')], SIGNER);
     expect(batch?.transfer).toMatchObject({ title: 'Bridge to Arbitrum' });
     expect(batch?.notices).toEqual([DOES_MORE, UNPAIRED]);
   });
@@ -359,12 +366,32 @@ describe('given an approve the owner must check', () => {
     ['Across', BASE_SPOKE_POOL, ACROSS_CALLS.prod],
     ['Relay', DEPOSITORY, RELAY_USDC_DEPOSIT],
   ])('when an %s approve is for a token not in the table, then a notice shows', (_provider, spender, deposit) => {
-    const batch = readBridgeBatch([{ ...approve(spender, '989680'), to: USDBC }, deposit], SIGNER);
+    const batch = readBridgeBatch(contracts, [{ ...approve(spender, '989680'), to: USDBC }, deposit], SIGNER);
     expect(batch?.notices).toContain(APPROVE_UNKNOWN);
   });
 
   it('when the approve is unlimited, then the batch leaves it to the token approvals card', () => {
-    const batch = readBridgeBatch([approve(BASE_SPOKE_POOL, UNLIMITED), ACROSS_CALLS.prod], SIGNER);
+    const batch = readBridgeBatch(contracts, [approve(BASE_SPOKE_POOL, UNLIMITED), ACROSS_CALLS.prod], SIGNER);
     expect(batch?.notices).toEqual([]);
+  });
+
+  it('when the table in use is the snapshot, then an unknown token adds the refresh line, and a live table does not', () => {
+    const calls = [{ ...approve(BASE_SPOKE_POOL, '989680'), to: USDBC }, ACROSS_CALLS.prod];
+    const snapshot = new BridgeContracts({ version: 1, chains: BRIDGE_CHAINS }, 'snapshot');
+    const stale = 'This screen could not refresh its list of bridge contracts.';
+    expect(readBridgeBatch(snapshot, calls, SIGNER)?.notices).toContain(stale);
+    expect(readBridgeBatch(contracts, calls, SIGNER)?.notices).not.toContain(stale);
+  });
+
+  it('when the deposit goes to a chain the table lacks, then the snapshot adds the refresh line and a live table does not', () => {
+    const chains = structuredClone(BRIDGE_CHAINS);
+    delete chains[42161];
+    const stale = 'This screen could not refresh its list of bridge contracts.';
+    const snapshot = new BridgeContracts({ version: 1, chains }, 'snapshot');
+    const live = new BridgeContracts({ version: 2, chains }, 'live');
+    const batch = readBridgeBatch(snapshot, [ACROSS_CALLS.prod], SIGNER);
+    expect(batch?.alerts).toEqual([CANNOT_READ_ACROSS]);
+    expect(batch?.notices).toContain(stale);
+    expect(readBridgeBatch(live, [ACROSS_CALLS.prod], SIGNER)?.notices).not.toContain(stale);
   });
 });

@@ -36,3 +36,6 @@ packages/cli/src/mcp/handlers/pay.ts
 packages/cli/src/mcp/handlers/session.ts
 packages/cli/src/lib/api-key.ts
 packages/agent/src/relay/**
+packages/ui/src/utils/bridgeCalls/parse.ts
+packages/ui/src/utils/bridgeCalls/load.ts
+packages/ui/src/hooks/useBridgeContracts.ts
