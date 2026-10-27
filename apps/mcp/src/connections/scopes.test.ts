@@ -58,6 +58,11 @@ const TOOLS: Record<string, { needs: ConnectionScope[]; args: object }> = {
     needs: ['wallet:read'],
     args: { chainId: 1337, calls: [{ to: RECIPIENT }] },
   },
+  // Builds the call and reaches nothing.
+  jaw_prepare_calls: {
+    needs: ['wallet:read'],
+    args: { actions: [{ to: RECIPIENT, function: 'deposit()', args: [] }] },
+  },
   jaw_session_history: { needs: ['wallet:read'], args: {} },
   jaw_connections: { needs: ['wallet:read'], args: {} },
   jaw_revoke_permission: { needs: ['wallet:read'], args: { permissionId: `0x${'0'.repeat(64)}`, chainId: 1 } },
