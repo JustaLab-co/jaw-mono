@@ -265,6 +265,13 @@ const input: SwapToolInput = {
   idempotencyKey: 'agent-key',
 };
 
+// ETH and USDC on Base, as the wallet lists them for the fee.
+const FEE_TOKENS = [
+  { symbol: 'ETH', address: zeroAddress },
+  { symbol: 'USDC', address: '0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913' },
+];
+const ON_BASE = { originChainId: 8453, originToken: '0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913' };
+
 const run = (t: Tenant, args: Partial<SwapToolInput> = {}, openWallet = recordingWallet()) =>
   swap(t, { ...input, ...args }, { openWallet, quote: quoteDeps, pollMs: 0, backend: backendDeps });
 
@@ -545,14 +552,14 @@ describe('the owner link', () => {
   it('given an origin chain whose fee tokens the wallet lists, then they are read for the origin chain, not the connection chain, and named to the agent', async () => {
     const { t } = await connected();
     const asked: number[] = [];
-    const feeTokens = async (_account: string, chainId: number) => {
+    const feeTokens = async (chainId: number) => {
       asked.push(chainId);
-      return ['ETH', 'USDC'];
+      return FEE_TOKENS;
     };
 
     const result = await swap(
       t,
-      { ...input, originChainId: 8453, originToken: '0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913' },
+      { ...input, ...ON_BASE },
       { openWallet: recordingWallet(), quote: quoteDeps, pollMs: 0, backend: backendDeps, feeTokens }
     );
 
@@ -1011,6 +1018,35 @@ describe('the owner approves the deposit', () => {
       expect(quotesGiven()).toHaveLength(paid);
     }
   );
+
+  it('given a swap that reopens, then the fee tokens are read for its origin chain and named to the agent again', async () => {
+    const { t } = await connected();
+    await approve(
+      t,
+      async () => {
+        throw rejected(-32000);
+      },
+      ON_BASE
+    );
+    const asked: number[] = [];
+    const feeTokens = async (chainId: number) => {
+      asked.push(chainId);
+      return FEE_TOKENS;
+    };
+
+    const replay = await swap(
+      t,
+      { ...input, ...ON_BASE },
+      { openWallet: recordingWallet(), quote: quoteDeps, pollMs: 0, backend: backendDeps, feeTokens }
+    );
+
+    expect(opened).toHaveLength(2);
+    expect(asked).toEqual([8453]);
+    expect(replay.structuredContent?.url).toBeDefined();
+    expect(replay.structuredContent?.summary).toContain(
+      "On Base the wallet pays the network fee in ETH or USDC, from the owner's balance there."
+    );
+  });
 
   it('given the row expired while the deposit was asked, when the owner declines it, then the send marker gives way to owner_declined', async () => {
     const { t } = await connected();

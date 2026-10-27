@@ -5,7 +5,7 @@ import { tenant } from '@/connections/auth';
 import { JAW_RPC_URL } from '@jaw.id/core';
 import { config } from '@/connections/config';
 import { batchBytes, MAX_BATCH_BYTES, MAX_CALLS } from '@/lib/batch-limits';
-import { feeRetryNext, feeTokensOn, readFeeTokenList, type ReadFeeTokenList } from '@/lib/fee-tokens';
+import { feeRetryNext, feeTokensOn, readFeeTokens, type ReadFeeTokens } from '@/lib/fee-tokens';
 import { isProxyChain, proxyChains } from '@/lib/chain';
 import { fenceText, reply } from '@/lib/fence';
 import { chainName, counted } from '@/lib/owner-text';
@@ -187,7 +187,7 @@ export async function simulateCalls(
   args: Input,
   account: Address,
   clientFor: ClientFor = simulationClient,
-  feeTokens?: ReadFeeTokenList
+  feeTokens?: ReadFeeTokens
 ) {
   const { chainId, calls, permissionId, paymaster } = args;
   const sender = args.sender ?? account;
@@ -245,7 +245,7 @@ export async function simulateCalls(
   // A run under a permission is told its own fee token; only a check of the owner's wallet is offered the others.
   const feeNext =
     feeTokens && paidInCoin && outsideCalls && !permissionId
-      ? feeRetryNext(chainId, await feeTokensOn(feeTokens, sender, chainId))
+      ? feeRetryNext(chainId, await feeTokensOn(feeTokens, chainId))
       : undefined;
   return answer(output.parse(present(found.data, { chainId, sender }, calls.length, feeNext)));
 }
@@ -270,6 +270,6 @@ export function registerSimulateCallsTool(server: McpServer) {
       outputSchema: output,
       annotations: { readOnlyHint: true },
     },
-    async (args, ctx) => simulateCalls(args, tenant(ctx).account, simulationClient, readFeeTokenList)
+    async (args, ctx) => simulateCalls(args, tenant(ctx).account, simulationClient, readFeeTokens)
   );
 }

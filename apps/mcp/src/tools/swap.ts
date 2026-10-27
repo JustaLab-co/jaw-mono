@@ -10,7 +10,7 @@ import { ownerRelay, WalletBusy, type OpenWallet, type Wallet } from '@/connecti
 import { countHit } from '@/db/settings';
 import { RATE_WINDOW_MS } from '@/lib/edge';
 import { isProxyChain } from '@/lib/chain';
-import { feeTokensNext, feeTokensOn, readFeeTokens, type ReadFeeTokens } from '@/lib/fee-tokens';
+import { feeFor, feeTokensNext, readFeeTokens, type Fee, type ReadFeeTokens } from '@/lib/fee-tokens';
 import { fenceText, reply } from '@/lib/fence';
 import { gateCode } from '@/payments/render';
 import { findPayment, stateOf } from '@/payments/store';
@@ -322,15 +322,9 @@ const checkHistory = (row: SwapRow) =>
 
 const NAME = { across: 'Across', relay: 'Relay' };
 
-/**
- * Who pays the deposit's network fee. `symbols` is set when the link just opened: the tokens the wallet's capabilities
- * list for the origin chain, or undefined there when they could not be read. Left out on a status read.
- */
-type Fee = { symbols?: string[] };
-
 const gasOf = (row: SwapRow, fee?: Fee) =>
   "The owner pays that transaction's network fee in the wallet. " +
-  (fee ? `${feeTokensNext(row.originChainId, fee.symbols)} ` : '');
+  (fee ? `${feeTokensNext(row.originChainId, fee.tokens)} ` : '');
 
 const tokenName = (token: string) => (token === zeroAddress ? 'the native coin' : token);
 
@@ -448,12 +442,6 @@ async function answer(row: SwapRow, read?: TrackAnswer, fee?: Fee): Promise<Swap
   return reply(out);
 }
 
-/** The deposit's fee tokens, read while its link opens; undefined when they are not to be read. */
-async function feeFor(account: string, chainId: number, deps: SwapDeps): Promise<Fee | undefined> {
-  if (!deps.feeTokens) return undefined;
-  return { symbols: await feeTokensOn(deps.feeTokens, account, chainId) };
-}
-
 async function openLink(t: Tenant, lease: SwapLease, key: string, deps: SwapDeps): Promise<SwapResult> {
   const stale = await failIfStale(lease);
   if (stale) return answer(stale);
@@ -469,7 +457,7 @@ async function openLink(t: Tenant, lease: SwapLease, key: string, deps: SwapDeps
     return accountBusy(key);
   }
   const approveBy = approveByOf(held.quotedAt, config().swapQuoteTtlSec);
-  const fee = feeFor(t.account, held.originChainId, deps);
+  const fee = feeFor(deps.feeTokens, held.originChainId);
   let wallet: Wallet;
   try {
     wallet = await deps.openWallet(t.chainId, approveBy, t);
@@ -508,7 +496,7 @@ async function openLink(t: Tenant, lease: SwapLease, key: string, deps: SwapDeps
 
 async function reopen(t: Tenant, row: SwapRow, key: string, deps: SwapDeps): Promise<SwapResult> {
   if ((await countOpenLinks(t.account, row.id)) >= MAX_OPEN_PER_ACCOUNT) return accountBusy(key);
-  const fee = feeFor(t.account, row.originChainId, deps);
+  const fee = feeFor(deps.feeTokens, row.originChainId);
   let wallet: Wallet;
   try {
     wallet = await deps.openWallet(t.chainId, row.approveBy!, t);

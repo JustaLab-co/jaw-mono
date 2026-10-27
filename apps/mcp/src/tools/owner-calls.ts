@@ -20,7 +20,7 @@ import { countHit, isPaymentsPaused } from '@/db/settings';
 import { batchBytes, gasClientFor, MAX_BATCH_BYTES, MAX_CALLS, overBudget, type BatchCall } from '@/lib/batch-limits';
 import { isProxyChain } from '@/lib/chain';
 import { errorLabel, log, RATE_WINDOW_MS } from '@/lib/edge';
-import { feeTokensNext, feeTokensOn, readFeeTokens, tokenChoice, type ReadFeeTokens } from '@/lib/fee-tokens';
+import { feeFor, feeTokensNext, readFeeTokens, tokenChoice, type Fee, type ReadFeeTokens } from '@/lib/fee-tokens';
 import { reply } from '@/lib/fence';
 import { chainName, counted, expiresIn, formatAmount, nativeSymbol, receiptLine, withinWindow } from '@/lib/owner-text';
 import { MAX_WAIT_SECONDS, SUGGESTED_WAIT_SECONDS, waiterOf, waitFor, type Waiter } from '@/lib/wait';
@@ -251,12 +251,9 @@ type Said = { say: string; next?: string };
 
 const receiptOfRow = (row: OwnerCallRow) => (row.txHash ? ` ${receiptLine(row.chainId, row.txHash)}` : '');
 
-/** Who pays the network fee, in the tokens the wallet lists for the chain when they were read. */
-type Fee = { symbols?: string[] };
-
 /**
  * `followUp` is a status read: the agent already showed the link, so it shows it again only when the owner asks.
- * `fee` is there when a link opens: absent, its tokens were not asked for; with no symbols, they could not be read.
+ * `fee` is there when a link opens.
  */
 function summaryOf(row: OwnerCallRow, followUp: boolean, fee?: Fee): Said {
   const by = row.approveBy.toISOString();
@@ -293,12 +290,12 @@ function summaryOf(row: OwnerCallRow, followUp: boolean, fee?: Fee): Said {
           `Open this link to approve: ${row.walletUrl}\n` +
           `It asks the owner to approve ${counted(row.calls.length, 'action')} from their wallet on ${network}, ` +
           `${moving(row)}${withinWindow(row.approveBy)}.\n` +
-          `The owner pays the network fee in the wallet${fee?.symbols?.length ? `, in ${tokenChoice(fee.symbols)}` : ''}.`,
+          `The owner pays the network fee in the wallet${fee?.tokens?.length ? `, in ${tokenChoice(fee.tokens.map((f) => f.symbol))}` : ''}.`,
         next:
           'Show the link now, on its own line, with one sentence of what this does and moves. ' +
           `Then call jaw_get_calls_status with id ${row.id} and waitSeconds ${SUGGESTED_WAIT_SECONDS}, and again while it answers awaiting_owner, until ${by}. ` +
           'Do not wait for the owner to say they approved.' +
-          (fee ? ` ${feeTokensNext(row.chainId, fee.symbols)}` : ''),
+          (fee ? ` ${feeTokensNext(row.chainId, fee.tokens)}` : ''),
       };
     case 'owner_declined':
       if (row.code === 'wrong_account') {
@@ -380,12 +377,6 @@ async function refusedBeforeLink(t: Tenant): Promise<SendResult | undefined> {
   return undefined;
 }
 
-/** The fee tokens for a link about to open, read while it opens; undefined when they are not to be read. */
-async function feeFor(account: string, chainId: number, deps: OwnerCallDeps): Promise<Fee | undefined> {
-  if (!deps.feeTokens) return undefined;
-  return { symbols: await feeTokensOn(deps.feeTokens, account, chainId) };
-}
-
 /** Undefined when the owner pool is full. */
 async function openWalletFor(t: Tenant, approveBy: Date, deps: OwnerCallDeps): Promise<Wallet | undefined> {
   try {
@@ -398,7 +389,7 @@ async function openWalletFor(t: Tenant, approveBy: Date, deps: OwnerCallDeps): P
 
 async function reopen(t: Tenant, row: OwnerCallRow, deps: OwnerCallDeps): Promise<SendResult> {
   if ((await countOpenLinks(t.account, row.id)) >= MAX_OPEN_PER_ACCOUNT) return accountBusy();
-  const fee = feeFor(row.account, row.chainId, deps);
+  const fee = feeFor(deps.feeTokens, row.chainId);
   const wallet = await openWalletFor(t, row.approveBy, deps);
   if (!wallet) return walletBusy(row.idempotencyKey);
   let reopened: OwnerCallRow | undefined | typeof FULL;
@@ -483,7 +474,7 @@ export async function sendCalls(t: Tenant, input: SendCallsInput, deps: OwnerCal
   const heavy = await tooHeavy(chainId, t.account as Address, batch, deps);
   if (heavy) return refuseUnlessStored(heavy);
   const approveBy = new Date(Date.now() + APPROVE_WITHIN_MS);
-  const fee = feeFor(t.account, chainId, deps);
+  const fee = feeFor(deps.feeTokens, chainId);
   const wallet = await openWalletFor(t, approveBy, deps);
   if (!wallet) return refuseUnlessStored(walletBusy(key));
   let row: OwnerCallRow | null | typeof FULL = null;

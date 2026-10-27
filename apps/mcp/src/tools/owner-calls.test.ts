@@ -1,5 +1,5 @@
 import { createHash, randomBytes } from 'node:crypto';
-import { getSupportedChains, PERMISSIONS_MANAGER_ADDRESS } from '@jaw.id/core';
+import { clearCapabilitiesCache, getSupportedChains, JAW_RPC_URL, PERMISSIONS_MANAGER_ADDRESS } from '@jaw.id/core';
 import { eq, sql } from 'drizzle-orm';
 import type { ChainClients } from '@jaw.id/agent';
 import { toHex, type Address, type Hex, type PublicClient } from 'viem';
@@ -117,6 +117,14 @@ const owner =
   };
 
 const quietChain = fakeChain({ head: 1_000_000n }).clients;
+
+// The fee tokens the wallet listed for Arbitrum One on 2026-10-27, the coin at the zero address.
+const FEE_TOKENS = [
+  { symbol: 'ETH', address: '0x0000000000000000000000000000000000000000' },
+  { symbol: 'USDC', address: '0xaf88d065e77c8cC2239327C5EDb3A432268e5831' },
+  { symbol: 'USD₮0', address: '0xFd086bC7CD5C481DCC9C85ebE478A1C0b69FCbb9' },
+  { symbol: 'EURe', address: '0x0c06cCF38114ddfc35e07427B9424adcca9F44F8' },
+];
 
 beforeAll(TEST_PG_URL ? useTestPostgres : useTestDb);
 beforeEach(() => {
@@ -1911,10 +1919,10 @@ describe('what the owner hears from jaw_send_calls and jaw_get_calls_status', ()
 
   it('given the fee tokens the wallet lists for the network, then the owner hears them and the agent is told not to send the owner for the coin', async () => {
     const { t } = await connected();
-    const asked: [string, number][] = [];
-    const feeTokens = async (account: string, chainId: number) => {
-      asked.push([account, chainId]);
-      return ['ETH', 'USDC', 'USD₮0', 'EURe'];
+    const asked: number[] = [];
+    const feeTokens = async (chainId: number) => {
+      asked.push(chainId);
+      return FEE_TOKENS;
     };
 
     const result = await sendCalls(t, input(), {
@@ -1924,7 +1932,7 @@ describe('what the owner hears from jaw_send_calls and jaw_get_calls_status', ()
       feeTokens,
     });
 
-    expect(asked).toEqual([[t.account, 84532]]);
+    expect(asked).toEqual([84532]);
     expect(result.structuredContent!.summary.split('\n')[2]).toBe(
       'The owner pays the network fee in the wallet, in ETH, USDC, USD₮0 or EURe.'
     );
@@ -1959,7 +1967,7 @@ describe('what the owner hears from jaw_send_calls and jaw_get_calls_status', ()
     let reads = 0;
     const feeTokens = async () => {
       reads++;
-      return ['USDC'];
+      return FEE_TOKENS;
     };
     const first = await sendCalls(t, input(), {
       openWallet: wallet(),
@@ -1976,6 +1984,55 @@ describe('what the owner hears from jaw_send_calls and jaw_get_calls_status', ()
 
     expect(reads).toBe(1);
     expect(toAgent(result)[0]).not.toContain('network fee');
+  });
+
+  it('given a link that reopens after a restart, then the fee tokens are read for its chain and named again', async () => {
+    const { t } = await connected();
+    await send(t, {}, wallet(undefined, ended));
+    await settle();
+    await sessionEnded(t.connectionId);
+    const asked: number[] = [];
+    const feeTokens = async (chainId: number) => {
+      asked.push(chainId);
+      return FEE_TOKENS;
+    };
+
+    const result = await sendCalls(t, input(), {
+      openWallet: wallet(),
+      receipt: async () => null,
+      clients: quietChain,
+      feeTokens,
+    });
+
+    expect(opened).toHaveLength(2);
+    expect(asked).toEqual([84532]);
+    expect(result.structuredContent!.summary.split('\n')[2]).toBe(
+      'The owner pays the network fee in the wallet, in ETH, USDC, USD₮0 or EURe.'
+    );
+    expect(toAgent(result)[0]).toContain(
+      "On Base Sepolia the wallet pays the network fee in ETH, USDC, USD₮0 or EURe, from the owner's balance there."
+    );
+  });
+
+  it('given the server as registered and the wallet listing ETH and USDC for the fee, then the owner hears them', async () => {
+    const { token } = await connected();
+    const realFetch = globalThis.fetch;
+    const capabilities = { '0x14a34': { feeToken: { supported: true, tokens: FEE_TOKENS.slice(0, 2) } } };
+    const fetched = vi.spyOn(globalThis, 'fetch').mockImplementation(async (url, init) => {
+      if (!String(url).startsWith(JAW_RPC_URL)) return realFetch(url, init);
+      return Response.json({ jsonrpc: '2.0', id: 1, result: capabilities });
+    });
+    clearCapabilitiesCache();
+    try {
+      const result = await callTool(token, 'jaw_send_calls', { calls: [{ to: TARGET }] });
+
+      expect(result.structuredContent.summary.split('\n')[2]).toBe(
+        'The owner pays the network fee in the wallet, in ETH or USDC.'
+      );
+    } finally {
+      fetched.mockRestore();
+      clearCapabilitiesCache();
+    }
   });
 
   it('given a status read while the owner has not answered, then the owner hears when it expires, and the link goes to the agent for when the owner asks', async () => {

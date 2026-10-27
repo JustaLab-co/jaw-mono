@@ -5,7 +5,9 @@ import { feeTokenList, feeTokenSymbols, feeTokensNext, feeTokensOn, readFeeToken
 
 setTestEnv();
 
-const ACCOUNT = '0x1111111111111111111111111111111111111111';
+const COIN = '0x0000000000000000000000000000000000000000';
+const ETH = { symbol: 'ETH', address: COIN };
+const USDC = { symbol: 'USDC', address: '0xaf88d065e77c8cC2239327C5EDb3A432268e5831' };
 
 // The shape the proxy answered for Arbitrum One on 2026-10-27, logos left out.
 const arbitrum = {
@@ -116,32 +118,41 @@ describe('feeTokenList', () => {
 });
 
 describe('readFeeTokens', () => {
-  it('given the proxy lists fee tokens for a chain, then it asks for that chain and returns their symbols', async () => {
-    result = { '0xa4b1': arbitrum };
+  it('given the proxy lists fee tokens for a chain, then the tokens of that chain with their addresses', async () => {
+    result = { '0x2105': {}, '0xa4b1': arbitrum };
 
-    const symbols = await readFeeTokens(ACCOUNT, 42161);
+    const tokens = await readFeeTokens(42161);
 
-    expect(symbols).toEqual(['ETH', 'USDC', 'USD₮0', 'EURe']);
+    expect(tokens.map((t) => t.symbol)).toEqual(['ETH', 'USDC', 'USD₮0', 'EURe']);
+    expect(tokens[1]).toEqual(USDC);
+  });
+
+  it('given reads for different chains, then one request with no account in it serves them all', async () => {
+    result = { '0x2105': arbitrum, '0xa4b1': arbitrum };
+
+    await readFeeTokens(42161);
+    await readFeeTokens(8453);
+
     expect(seen).toHaveLength(1);
-    expect(JSON.stringify(seen[0])).toContain('0xa4b1');
+    expect(seen[0]).toMatchObject({ method: 'wallet_getCapabilities', params: [] });
   });
 
   it('given the proxy answers without the chain, then none', async () => {
     result = { '0x2105': arbitrum };
 
-    expect(await readFeeTokens(ACCOUNT, 42161)).toEqual([]);
+    expect(await readFeeTokens(42161)).toEqual([]);
   });
 });
 
 describe('feeTokensOn', () => {
   it('given a read that fails, then undefined rather than a guess', async () => {
-    expect(await feeTokensOn(async () => Promise.reject(new Error('down')), ACCOUNT, 42161)).toBeUndefined();
+    expect(await feeTokensOn(async () => Promise.reject(new Error('down')), 42161)).toBeUndefined();
   });
 
   it('given a read that never answers, then undefined once the wait is over', async () => {
     vi.useFakeTimers();
     try {
-      const read = feeTokensOn(() => new Promise<string[]>(() => undefined), ACCOUNT, 42161);
+      const read = feeTokensOn(() => new Promise(() => undefined), 42161);
       await vi.advanceTimersByTimeAsync(3_000);
 
       expect(await read).toBeUndefined();
@@ -158,12 +169,27 @@ describe('what the agent is told about the fee', () => {
     expect(tokenChoice(['ETH', 'USDC', 'USD₮0', 'EURe'])).toBe('ETH, USDC, USD₮0 or EURe');
   });
 
-  it('given the tokens on Arbitrum One, then the agent hears them and not to send the owner for the coin', () => {
-    expect(feeTokensNext(42161, ['ETH', 'USDC'])).toBe(
+  it('given the tokens on Arbitrum One, then the agent hears them, the least the wallet needs held, and not to send the owner for the coin', () => {
+    expect(feeTokensNext(42161, [ETH, USDC])).toBe(
       "On Arbitrum One the wallet pays the network fee in ETH or USDC, from the owner's balance there. " +
-        "Never tell the owner the fee needs the network's coin. If the request spends the whole balance of a token that " +
+        "Never tell the owner the fee needs the network's coin. The wallet offers a token other than the coin for the fee " +
+        'only when the owner holds at least 0.5 of it there. If the request spends the whole balance of a token that ' +
         'pays the fee and the wallet says the funds are short, the owner can keep a little of it back, or hold another of those tokens there.'
     );
+  });
+
+  it.each([
+    ['only the coin', [ETH]],
+    ['the coin at 0xeeee…eeee', [{ symbol: 'ETH', address: `0x${'ee'.repeat(20)}` }]],
+    ['no token, as when the chain offers none', []],
+  ])('given %s, then the agent hears the fee is paid in the coin, and no line against the coin', (_, tokens) => {
+    const next = feeTokensNext(42161, tokens);
+
+    expect(next).toBe(
+      "On Arbitrum One the wallet pays the network fee in the network's coin, ETH, from the owner's balance there, " +
+        'so the owner needs a little of it beyond what the request spends.'
+    );
+    expect(next).not.toContain('Never');
   });
 
   it('given tokens that could not be read, then the agent is sent to the capabilities, not to the coin', () => {
