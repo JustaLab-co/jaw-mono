@@ -9,6 +9,10 @@ import type { BridgeContracts } from '../utils/bridgeCalls/table';
 const answer = (version: number) =>
   new Response(JSON.stringify({ result: JSON.parse(JSON.stringify({ version, chains: BRIDGE_CHAINS })) }));
 
+const answerAfter = (ms: number, version: number) =>
+  vi.fn().mockImplementation(() => new Promise<Response>((resolve) => setTimeout(() => resolve(answer(version)), ms)));
+const wait = (ms: number) => act(async () => void (await vi.advanceTimersByTimeAsync(ms)));
+
 const core = await vi.importActual('@jaw.id/core');
 
 let root: Root;
@@ -29,6 +33,7 @@ const mount = async (tick: number) => {
 };
 
 beforeEach(async () => {
+  vi.useFakeTimers({ toFake: ['Date', 'setTimeout', 'clearTimeout'] });
   localStorage.clear();
   vi.resetModules();
   vi.doMock('@jaw.id/core', () => core);
@@ -43,15 +48,17 @@ beforeEach(async () => {
 
 afterEach(() => {
   act(() => root.unmount());
+  vi.useRealTimers();
   vi.restoreAllMocks();
   vi.unstubAllGlobals();
 });
 
 describe('given a dialog that reads the bridge table', () => {
   it('when it mounts with nothing loaded, then it gets the snapshot at once and keeps it after the refresh lands', async () => {
-    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(answer(2)));
+    vi.stubGlobal('fetch', answerAfter(2000, 2));
     await mount(0);
     await mount(1);
+    await wait(2000);
     expect(currentContracts()).toMatchObject({ version: 2, source: 'live' });
     expect(seen[0]).toMatchObject({ version: 1, source: 'snapshot' });
     expect(new Set(seen).size).toBe(1);
@@ -70,5 +77,57 @@ describe('given a dialog that reads the bridge table', () => {
     vi.stubGlobal('fetch', vi.fn().mockRejectedValue(new Error('offline')));
     await mount(0);
     expect(seen.at(-1)).toMatchObject({ version: 1, source: 'snapshot' });
+  });
+
+  it('when the answer lands within 1.5 s of mounting on the snapshot, then the open dialog switches once to the live table', async () => {
+    vi.stubGlobal('fetch', answerAfter(200, 2));
+    await mount(0);
+    expect(seen.at(-1)).toMatchObject({ version: 1, source: 'snapshot' });
+    await wait(200);
+    expect(seen.at(-1)).toMatchObject({ version: 2, source: 'live' });
+    expect(new Set(seen).size).toBe(2);
+  });
+
+  it('when the answer lands after 1.5 s, then the open dialog keeps the snapshot and the next one gets the live table', async () => {
+    vi.stubGlobal('fetch', answerAfter(2000, 2));
+    await mount(0);
+    await wait(2000);
+    expect(new Set(seen).size).toBe(1);
+    act(() => root.unmount());
+    root = createRoot(document.createElement('div'));
+    await mount(0);
+    expect(seen.at(-1)).toMatchObject({ version: 2, source: 'live' });
+  });
+
+  it('when the dialog mounted on a stored table, then a newer answer at 200 ms does not switch it', async () => {
+    localStorage.setItem('jaw.bridgeContracts', JSON.stringify({ version: 2, chains: BRIDGE_CHAINS }));
+    vi.stubGlobal('fetch', answerAfter(200, 3));
+    await mount(0);
+    await wait(200);
+    expect(currentContracts().version).toBe(3);
+    expect(new Set(seen).size).toBe(1);
+    expect(seen[0]).toMatchObject({ version: 2, source: 'live' });
+  });
+
+  it.each([
+    ['the request fails', () => vi.fn().mockRejectedValue(new Error('offline'))],
+    ['the proxy answers a table that fails its invariants', () => vi.fn().mockResolvedValue(answer(1.5))],
+  ])('when %s within the window, then the dialog keeps the snapshot', async (_name, fetchMock) => {
+    vi.stubGlobal('fetch', fetchMock());
+    await mount(0);
+    await wait(300);
+    expect(new Set(seen).size).toBe(1);
+    expect(seen[0]).toMatchObject({ version: 1, source: 'snapshot' });
+  });
+
+  it('when the dialog closes before the answer, then nothing renders or warns afterwards', async () => {
+    const error = vi.spyOn(console, 'error').mockReturnValue(undefined);
+    vi.stubGlobal('fetch', answerAfter(200, 2));
+    await mount(0);
+    act(() => root.unmount());
+    const renders = seen.length;
+    await wait(300);
+    expect(seen.length).toBe(renders);
+    expect(error).not.toHaveBeenCalled();
   });
 });
