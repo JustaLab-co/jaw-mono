@@ -219,6 +219,8 @@ const CASES: Record<string, Case> = {
   'jaw_session_status, not allowed to pay': { tool: 'jaw_session_status', args: {}, scope: 'wallet:read' },
   jaw_session_x402_quote: { tool: 'jaw_session_x402_quote', args: { url: `http://${SELLER}/paid` } },
   jaw_get_assets: { tool: 'jaw_get_assets', args: {} },
+  // The portfolio route is a live service this test does not reach, so the read is refused.
+  jaw_get_defi_positions: { tool: 'jaw_get_defi_positions', args: { chainIds: [1] } },
   jaw_get_calls_history: { tool: 'jaw_get_calls_history', args: {} },
   jaw_get_permissions: { tool: 'jaw_get_permissions', args: {} },
   jaw_get_capabilities: { tool: 'jaw_get_capabilities', args: {} },
@@ -330,6 +332,7 @@ describe('what each tool says for the owner', () => {
   it('jaw_session_status, not allowed to pay', namesNoInternals('jaw_session_status, not allowed to pay'));
   it('jaw_session_x402_quote', namesNoInternals('jaw_session_x402_quote'));
   it('jaw_get_assets', namesNoInternals('jaw_get_assets'));
+  it('jaw_get_defi_positions', namesNoInternals('jaw_get_defi_positions'));
   it('jaw_get_calls_history', namesNoInternals('jaw_get_calls_history'));
   it('jaw_get_permissions', namesNoInternals('jaw_get_permissions'));
   it('jaw_get_capabilities', namesNoInternals('jaw_get_capabilities'));

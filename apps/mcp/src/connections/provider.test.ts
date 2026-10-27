@@ -47,6 +47,8 @@ const NUL_NAMED = 'https://evil.example.test/nul.json';
 // A document with loopback redirects that name no port, and no application_type.
 const LOOPBACK = 'https://claude.example.test/oauth/client-metadata';
 const NO_REFRESH = 'https://norefresh.example.test/agent.json';
+const SCOPED = 'https://scoped.example.test/';
+const scoped = (scope: string) => `${SCOPED}${encodeURIComponent(scope)}.json`;
 const KEYED = 'https://evil.example.test/keyed.json';
 const PUBLIC_KEYED = 'https://evil.example.test/public-keyed.json';
 // ChatGPT's published document, which authenticates at the token endpoint with private_key_jwt.
@@ -166,7 +168,13 @@ beforeAll(async () => {
                           })
                         : Object.hasOwn(chatgptDocuments, String(url))
                           ? Response.json(chatgptDocuments[String(url)])
-                          : new Response('not found', { status: 404 }),
+                          : String(url).startsWith(SCOPED)
+                            ? Response.json({
+                                ...metadata,
+                                client_id: String(url),
+                                scope: decodeURIComponent(String(url).slice(SCOPED.length, -'.json'.length)),
+                              })
+                            : new Response('not found', { status: 404 }),
   });
 });
 
@@ -313,6 +321,15 @@ describe('authorization server', () => {
     const c = await connect(undefined, { clientId: CIMD, redirectUri: 'http://127.0.0.1:9100/cb' });
     expect(c.status).toBe(200);
   });
+
+  it.each(['wallet:read x402:pay', 'openid offline_access wallet:read x402:pay'])(
+    'accepts a CIMD client whose document declares the scope %s',
+    async (scope) => {
+      const c = await connect(undefined, { clientId: scoped(scope), redirectUri: 'http://127.0.0.1:9100/cb' });
+      expect(c.status).toBe(200);
+      expect(await claimsOf(c.access_token)).toMatchObject({ scope: 'wallet:read x402:pay' });
+    }
+  );
 
   it('shows the domain of a CIMD client named JAW CLI, which the official client has none of', async () => {
     const impostor = await startAuthorization(new Browser(), {

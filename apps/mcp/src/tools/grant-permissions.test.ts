@@ -206,7 +206,7 @@ describe('jaw_grant_permissions', () => {
         { token: USDC, allowance: '2000000', unit: 'month', multiplier: 2 },
       ],
     });
-    expect(request?.capabilities).toBeUndefined();
+    expect(request?.capabilities).toEqual({ prefundSpender: true });
     const row = await newestRow(t);
     expect(row).toMatchObject({ kind: 'custom', token: null, allowance: null, period: null });
     expect((row?.permission as { calls: unknown[]; spends: unknown[] }).spends).toHaveLength(2);

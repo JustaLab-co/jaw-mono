@@ -1,0 +1,104 @@
+{
+  "positions": [
+    {
+      "chainId": "eip155:1",
+      "protocol": { "name": "Ambire", "url": null },
+      "name": "Ambire WALLET Pool",
+      "compositeSymbol": "WALLET/WALLET",
+      "valueUsd": 2029.3838051922746,
+      "valueUsdChange1d": 169.83075276052065,
+      "rewardsValueUsd": 0,
+      "deposits": [
+        {
+          "category": "staked",
+          "symbol": "WALLET",
+          "name": "Ambire Wallet",
+          "address": "0x88800092ff476844f74dc2fc427974bbee2794ae",
+          "decimals": 18,
+          "amount": "156126901579311129939033",
+          "valueUsd": 2029.3838051922746
+        }
+      ],
+      "loans": [],
+      "rewards": []
+    },
+    {
+      "chainId": "eip155:1",
+      "protocol": { "name": "Uniswap V3", "url": "https://app.uniswap.org/pools" },
+      "name": "DGENV2/WETH Pool 0.05% #112161",
+      "compositeSymbol": "WETH/DGENV2",
+      "valueUsd": 187.58835160953748,
+      "valueUsdChange1d": 5.928018291688922,
+      "rewardsValueUsd": 79.74051743692084,
+      "deposits": [
+        {
+          "category": "deposit",
+          "symbol": "WETH",
+          "name": "Wrapped Ether",
+          "address": "0xc02aaa39b223fe8d0a0e5c4f27ead9083c756cc2",
+          "decimals": 18,
+          "amount": "43257267354452392",
+          "valueUsd": 107.84783417261666
+        },
+        {
+          "category": "deposit",
+          "symbol": "DGENV2",
+          "name": "degeneratorv2",
+          "address": "0x6793655c396eaee311fb4d3596b88fd7d195c79e",
+          "decimals": 8,
+          "amount": "434916464568",
+          "valueUsd": 0
+        }
+      ],
+      "loans": [],
+      "rewards": [
+        {
+          "category": "reward",
+          "symbol": "WETH",
+          "name": "Wrapped Ether",
+          "address": "0xc02aaa39b223fe8d0a0e5c4f27ead9083c756cc2",
+          "decimals": 18,
+          "amount": "31983552643536342",
+          "valueUsd": 79.74051743692084
+        },
+        {
+          "category": "reward",
+          "symbol": "DGENV2",
+          "name": "degeneratorv2",
+          "address": "0x6793655c396eaee311fb4d3596b88fd7d195c79e",
+          "decimals": 8,
+          "amount": "629055859",
+          "valueUsd": 0
+        }
+      ]
+    },
+    {
+      "chainId": "eip155:8453",
+      "protocol": { "name": "Yearn V3", "url": "https://yearn.fi/" },
+      "name": "Yearn V3 Yield: USDC Pool",
+      "compositeSymbol": null,
+      "valueUsd": 920.4454327105627,
+      "valueUsdChange1d": -0.15534660546635282,
+      "rewardsValueUsd": 0,
+      "deposits": [
+        {
+          "category": "deposit",
+          "symbol": "USDC",
+          "name": "USDC",
+          "address": "0x833589fcd6edb6e08f4c7c32d4f71b54bda02913",
+          "decimals": 6,
+          "amount": "920726914",
+          "valueUsd": 920.4454327105627
+        }
+      ],
+      "loans": [],
+      "rewards": []
+    }
+  ],
+  "failed": [],
+  "unsupported": [],
+  "totalValueUsd": 3137.42,
+  "unpriced": 0,
+  "omitted": { "positions": 0, "tokens": 0, "valueUsd": 0 },
+  "summary": "3 position(s), total 3137.42 USD."
+}

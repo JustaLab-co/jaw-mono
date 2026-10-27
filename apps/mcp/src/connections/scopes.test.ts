@@ -88,6 +88,7 @@ const TOOLS: Record<string, { needs: ConnectionScope[]; args: object }> = {
   jaw_get_sign_status: { needs: ['wallet:read'], args: { id: `pr_${'A'.repeat(22)}` } },
   jaw_get_grant_status: { needs: ['wallet:read'], args: { id: `pr_${'A'.repeat(22)}` } },
   jaw_get_assets: { needs: ['wallet:read'], args: { chainIds: [TESTNET] } },
+  jaw_get_defi_positions: { needs: ['wallet:read'], args: { chainIds: [TESTNET] } },
   jaw_get_capabilities: { needs: ['wallet:read'], args: { chainIds: [TESTNET] } },
   jaw_get_calls_history: { needs: ['wallet:read'], args: {} },
   jaw_get_permissions: { needs: ['wallet:read'], args: {} },

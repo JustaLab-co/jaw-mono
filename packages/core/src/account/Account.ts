@@ -49,6 +49,7 @@ import {
     relayPermissionToPermission,
     buildGrantPermissionCall,
     buildRevokePermissionCall,
+    NATIVE_TOKEN,
     type PermissionsDetail,
     type WalletGrantPermissionsResponse,
     type RevokePermissionApiResponse,
@@ -1277,7 +1278,14 @@ export class Account {
 
         return {
             balanceOf: (token: Address, owner: Address) =>
-                publicClient.readContract({ address: token, abi: erc20Abi, functionName: 'balanceOf', args: [owner] }),
+                token.toLowerCase() === NATIVE_TOKEN.toLowerCase()
+                    ? publicClient.getBalance({ address: owner })
+                    : publicClient.readContract({
+                          address: token,
+                          abi: erc20Abi,
+                          functionName: 'balanceOf',
+                          args: [owner],
+                      }),
             gasPrice: () => publicClient.getGasPrice(),
             exchangeRate: async (token: Address) => {
                 const url = jawPaymasterUrl(this._chain.id, this._apiKey);
