@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest';
-import { decodeFunctionData, erc20Abi, maxUint256 } from 'viem';
+import { decodeFunctionData, encodeErrorResult, erc20Abi, maxUint256, parseAbi } from 'viem';
 import type { SessionConfig } from '../session/session-config.js';
 import type { SessionHost } from '../ports.js';
 import { PERMIT2_ADDRESS } from './permit2.js';
@@ -312,5 +312,43 @@ describe('SessionBridge fee failure advice', () => {
   it('given the context names the registry USDC, then it still says USDC', async () => {
     sendCalls.mockRejectedValue(unsized);
     await expect(send(withContext({ token: USDC_BASE_SEPOLIA }))).rejects.toThrow(/Send it 0\.1 USDC/);
+  });
+});
+
+// A checker on the permission refuses the call during the paymaster's gas estimate, so core's
+// error is about sizing the paymaster approval. What to fix is the call's arguments, so the
+// refusal is named instead, the way the hosted MCP names it.
+describe('SessionBridge and a call checker', () => {
+  const CHECKER = '0x398b9d939E7E616E03eA99601c835C920621B2ca';
+  const TRANSFER = '0xa9059cbb';
+  const errors = parseAbi([
+    'error ExecuteError(uint256 index, bytes reason)',
+    'error JustaPermissionManager_CheckerRejectedCall(address target, bytes4 selector, address checker)',
+  ]);
+  const rejected = encodeErrorResult({
+    abi: errors,
+    errorName: 'ExecuteError',
+    args: [
+      1n,
+      encodeErrorResult({
+        abi: errors,
+        errorName: 'JustaPermissionManager_CheckerRejectedCall',
+        args: [USDC_BASE_SEPOLIA, TRANSFER, CHECKER],
+      }),
+    ],
+  });
+
+  it('names the checker that refused the call, not the paymaster sizing that failed on it', async () => {
+    sendCalls.mockRejectedValue(
+      new Error('Could not size the ERC-20 paymaster approval for token 0x036C on chain 84532: reverted.', {
+        cause: { data: { revertData: rejected } },
+      })
+    );
+
+    const failure = await send(bridge()).catch((err: Error) => err);
+
+    expect((failure as Error).message).toBe(
+      `checker-rejected: permission 0xperm allows calling ${TRANSFER} on ${USDC_BASE_SEPOLIA}, but its checker ${CHECKER} refused this call's arguments. Change the arguments, not the permission.`
+    );
   });
 });
