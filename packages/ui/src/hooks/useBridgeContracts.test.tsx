@@ -17,6 +17,7 @@ const core = await vi.importActual('@jaw.id/core');
 
 let root: Root;
 let seen: BridgeContracts[];
+let settled: boolean[];
 let act: typeof import('react').act;
 let createRoot: typeof import('react-dom/client').createRoot;
 let useBridgeContracts: typeof import('./useBridgeContracts').useBridgeContracts;
@@ -24,7 +25,9 @@ let currentContracts: typeof import('../utils/bridgeCalls/load').currentContract
 
 function Probe({ apiKey, tick }: { apiKey?: string; tick: number }) {
   void tick;
-  seen.push(useBridgeContracts(apiKey));
+  const table = useBridgeContracts(apiKey);
+  seen.push(table.contracts);
+  settled.push(table.settled);
   return null;
 }
 
@@ -42,6 +45,7 @@ beforeEach(async () => {
   ({ useBridgeContracts } = await import('./useBridgeContracts'));
   ({ currentContracts } = await import('../utils/bridgeCalls/load'));
   seen = [];
+  settled = [];
   root = createRoot(document.createElement('div'));
   vi.spyOn(console, 'warn').mockReturnValue(undefined);
 });
@@ -129,5 +133,36 @@ describe('given a dialog that reads the bridge table', () => {
     await wait(300);
     expect(seen.length).toBe(renders);
     expect(error).not.toHaveBeenCalled();
+  });
+
+  it('when it mounts on the snapshot with the request pending, then the table is not settled until the switch', async () => {
+    vi.stubGlobal('fetch', answerAfter(200, 2));
+    await mount(0);
+    expect(settled.at(-1)).toBe(false);
+    await wait(200);
+    expect(settled.at(-1)).toBe(true);
+  });
+
+  it('when no answer comes, then the table settles when the 1.5 s window closes', async () => {
+    vi.stubGlobal('fetch', answerAfter(5000, 2));
+    await mount(0);
+    await wait(1499);
+    expect(settled.at(-1)).toBe(false);
+    await wait(1);
+    expect(settled.at(-1)).toBe(true);
+  });
+
+  it('when it mounts on a stored table, then the table is settled at once', async () => {
+    localStorage.setItem('jaw.bridgeContracts', JSON.stringify({ version: 2, chains: BRIDGE_CHAINS }));
+    vi.stubGlobal('fetch', answerAfter(5000, 3));
+    await mount(0);
+    expect(settled).toEqual([true]);
+  });
+
+  it('when the request fails, then the table settles on the snapshot', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockRejectedValue(new Error('offline')));
+    await mount(0);
+    expect(settled.at(-1)).toBe(true);
+    expect(seen.at(-1)).toMatchObject({ source: 'snapshot' });
   });
 });

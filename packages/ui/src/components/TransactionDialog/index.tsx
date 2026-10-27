@@ -128,12 +128,15 @@ export const TransactionDialog = ({
   // the banner already explains precisely. Name the cause once, at the top.
   const feeBlockReason = permissionBlocks ? null : blockReason;
 
+  const { contracts: bridgeContracts, settled: bridgeSettled } = useBridgeContracts(apiKey);
+
   // An ERC-20 fee can't be confirmed until its worst-case ceiling has settled, nor when the
   // balance can't cover it (isSelectable false). NetworkFeeRow warns for every settled
   // unpayable state; the in-flight remainder of this gate renders there as "Estimating...".
   const erc20CannotPay =
     isPayingWithErc20 && (!selectedFeeToken?.gasCostMaxFormatted || !selectedFeeToken?.isSelectable);
-  const canConfirm = !isProcessing && !gasFeeLoading && !blockReason && !erc20CannotPay && !permissionBlocks;
+  const canConfirm =
+    !isProcessing && !gasFeeLoading && !blockReason && !erc20CannotPay && !permissionBlocks && bridgeSettled;
 
   // Reverts, but gas estimated fine, so it stays submittable: warn rather than block.
   const softRevertWarning = !blockReason && !permissionBlocks && !!assetPreviewWillRevert;
@@ -155,7 +158,6 @@ export const TransactionDialog = ({
     apiKey
   );
   // Under a permission the granter's funds move; until it is known, the batch is not read.
-  const bridgeContracts = useBridgeContracts(apiKey);
   const bridge = useBridgeBatch(
     bridgeContracts,
     transactions,

@@ -6,7 +6,8 @@ const TTL_MS = 60 * 60 * 1000;
 const TIMEOUT_MS = 15_000;
 const STORAGE_KEY = 'jaw.bridgeContracts';
 
-type Held = { contracts: BridgeContracts; fetchedAt: number };
+/** `fetchedAt` stays unset for a table read from storage, which this page has not confirmed with the proxy. */
+type Held = { contracts: BridgeContracts; fetchedAt?: number };
 
 let held: Held | undefined;
 let stored = false;
@@ -29,7 +30,7 @@ function writeStored(body: unknown) {
   }
 }
 
-function accept(body: unknown, fetchedAt: number): boolean {
+function accept(body: unknown, fetchedAt?: number): boolean {
   const result = parse(body);
   if (!result.ok) {
     console.warn(`Bridge contracts rejected: ${result.reason}`);
@@ -45,7 +46,7 @@ export function currentContracts(): BridgeContracts {
   if (!held && !stored) {
     stored = true;
     const body = readStored();
-    if (body !== undefined) accept(body, 0);
+    if (body !== undefined) accept(body);
   }
   return held?.contracts ?? snapshotContracts();
 }
@@ -84,7 +85,7 @@ async function refresh(apiKey: string | undefined) {
 /** Refreshes at most once per TTL; the result is picked up through currentContracts. */
 export function load(apiKey?: string): Promise<void> {
   currentContracts();
-  if (held && held.fetchedAt > 0 && Date.now() - held.fetchedAt < TTL_MS) return Promise.resolve();
+  if (held?.fetchedAt !== undefined && Date.now() - held.fetchedAt < TTL_MS) return Promise.resolve();
   return (inflight ??= refresh(apiKey).finally(() => {
     inflight = undefined;
   }));
