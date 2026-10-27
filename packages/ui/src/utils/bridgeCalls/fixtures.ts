@@ -113,3 +113,171 @@ export const RELAY_USDC_FEE_DEPOSIT: BridgeCall = {
   data: '0xe80179520000000000000000000000006ca44a56b06869530c953dfa7868973be1456769000000000000000000000000833589fcd6edb6e08f4c7c32d4f71b54bda0291300000000000000000000000000000000000000000000000000000000009896804aefef577bdf321635a10542aace42bcfaf4cc33be7220c61ca9b24f197c607f',
   value: '0',
 };
+
+// relay-usdc.json relayOrder.orderData
+export const RELAY_USDC_ORDER = {
+  version: 'v1',
+  solverChainId: 'base',
+  solver: '0xf70da97812cb96acdf810712aa562db8dfa3dbef',
+  salt: '0xe4895a6a2e0bce7a80103b265341afd9eae890d109edab216f5f7cfff05305bc',
+  inputs: [
+    {
+      payment: {
+        chainId: 'base',
+        currency: '0x833589fcd6edb6e08f4c7c32d4f71b54bda02913',
+        amount: '10000000',
+        weight: '1',
+      },
+      refunds: [
+        {
+          chainId: 'base',
+          recipient: '0x6ca44a56b06869530c953dfa7868973be1456769',
+          currency: '0x833589fcd6edb6e08f4c7c32d4f71b54bda02913',
+          minimumAmount: '0',
+          deadline: 1793281580,
+          extraData: '0x000000000000000000000000b92fe925dc43a0ecde6c8b1a2709c170ec4fff4f',
+        },
+        {
+          chainId: 'arbitrum',
+          recipient: '0x6ca44a56b06869530c953dfa7868973be1456769',
+          currency: '0xaf88d065e77c8cc2239327c5edb3a432268e5831',
+          minimumAmount: '0',
+          deadline: 1793281580,
+          extraData: '0x000000000000000000000000b92fe925dc43a0ecde6c8b1a2709c170ec4fff4f',
+        },
+      ],
+    },
+  ],
+  output: {
+    chainId: 'arbitrum',
+    payments: [
+      {
+        recipient: '0x6ca44a56b06869530c953dfa7868973be1456769',
+        currency: '0xaf88d065e77c8cc2239327c5edb3a432268e5831',
+        minimumAmount: '9776477',
+        expectedAmount: '9975996',
+      },
+    ],
+    calls: [],
+    deadline: 1793281580,
+    extraData: '0x000000000000000000000000b92fe925dc43a0ecde6c8b1a2709c170ec4fff4f',
+  },
+  fees: [],
+};
+
+// relay-usdc-v32.json, a live quote whose order names Relay's v3.2 router
+export const RELAY_USDC_V32_APPROVE: BridgeCall = {
+  chainId: 8453,
+  to: '0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913',
+  data: '0x095ea7b30000000000000000000000004cd00e387622c35bddb9b4c962c136462338bc310000000000000000000000000000000000000000000000000000000000989680',
+  value: '0',
+};
+
+export const RELAY_USDC_V32_DEPOSIT: BridgeCall = {
+  chainId: 8453,
+  to: '0x4cd00e387622c35bddb9b4c962c136462338bc31',
+  data: '0xe80179520000000000000000000000006ca44a56b06869530c953dfa7868973be1456769000000000000000000000000833589fcd6edb6e08f4c7c32d4f71b54bda029130000000000000000000000000000000000000000000000000000000000989680d9dcfa1b6777423024cd61fed0c44fca59864cd8b5e0619ca3be985fa34ed70e',
+  value: '0',
+};
+
+// relay-usdc-v32.json relayOrder.orderData
+export const RELAY_USDC_V32_ORDER = {
+  version: 'v1',
+  solverChainId: 'base',
+  solver: '0xf70da97812cb96acdf810712aa562db8dfa3dbef',
+  salt: '0xe35fb1b66657468357ef88b01217359e741c51051789f5bbf89eb83219a67d72',
+  inputs: [
+    {
+      payment: {
+        chainId: 'base',
+        currency: '0x833589fcd6edb6e08f4c7c32d4f71b54bda02913',
+        amount: '10000000',
+        weight: '1',
+      },
+      refunds: [
+        {
+          chainId: 'base',
+          recipient: '0x6ca44a56b06869530c953dfa7868973be1456769',
+          currency: '0x833589fcd6edb6e08f4c7c32d4f71b54bda02913',
+          minimumAmount: '0',
+          deadline: 1793637430,
+          extraData: '0x0000000000000000000000000729e2a4716d9f7dd17858d5d504426d228697f7',
+        },
+        {
+          chainId: 'arbitrum',
+          recipient: '0x6ca44a56b06869530c953dfa7868973be1456769',
+          currency: '0xaf88d065e77c8cc2239327c5edb3a432268e5831',
+          minimumAmount: '0',
+          deadline: 1793637430,
+          extraData: '0x0000000000000000000000000729e2a4716d9f7dd17858d5d504426d228697f7',
+        },
+      ],
+    },
+  ],
+  output: {
+    chainId: 'arbitrum',
+    payments: [
+      {
+        recipient: '0x6ca44a56b06869530c953dfa7868973be1456769',
+        currency: '0xaf88d065e77c8cc2239327c5edb3a432268e5831',
+        minimumAmount: '9776602',
+        expectedAmount: '9976124',
+      },
+    ],
+    calls: [],
+    deadline: 1793637430,
+    extraData: '0x0000000000000000000000000729e2a4716d9f7dd17858d5d504426d228697f7',
+  },
+  fees: [],
+};
+
+// relay-native.json relayOrder.orderData
+export const RELAY_NATIVE_ORDER = {
+  version: 'v1',
+  solverChainId: 'base',
+  solver: '0xf70da97812cb96acdf810712aa562db8dfa3dbef',
+  salt: '0xdc9bf93af94b92a7fb7581cc713715979040136907d24603b8b0f774233b3676',
+  inputs: [
+    {
+      payment: {
+        chainId: 'base',
+        currency: '0x0000000000000000000000000000000000000000',
+        amount: '10000000000000000',
+        weight: '1',
+      },
+      refunds: [
+        {
+          chainId: 'base',
+          recipient: '0x6ca44a56b06869530c953dfa7868973be1456769',
+          currency: '0x0000000000000000000000000000000000000000',
+          minimumAmount: '0',
+          deadline: 1793281580,
+          extraData: '0x000000000000000000000000b92fe925dc43a0ecde6c8b1a2709c170ec4fff4f',
+        },
+        {
+          chainId: 'ethereum',
+          recipient: '0x6ca44a56b06869530c953dfa7868973be1456769',
+          currency: '0x0000000000000000000000000000000000000000',
+          minimumAmount: '0',
+          deadline: 1793281580,
+          extraData: '0x000000000000000000000000b92fe925dc43a0ecde6c8b1a2709c170ec4fff4f',
+        },
+      ],
+    },
+  ],
+  output: {
+    chainId: 'ethereum',
+    payments: [
+      {
+        recipient: '0x6ca44a56b06869530c953dfa7868973be1456769',
+        currency: '0x0000000000000000000000000000000000000000',
+        minimumAmount: '9741110979793708',
+        expectedAmount: '9939909163054804',
+      },
+    ],
+    calls: [],
+    deadline: 1793281580,
+    extraData: '0x000000000000000000000000b92fe925dc43a0ecde6c8b1a2709c170ec4fff4f',
+  },
+  fees: [],
+};

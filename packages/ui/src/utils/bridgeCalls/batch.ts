@@ -2,6 +2,7 @@ import { getAddress, isAddressEqual, zeroAddress, type Address } from 'viem';
 import { readAcrossCall, type AcrossDeposit } from './across';
 import { readBridgeApprove, type BridgeApprove } from './approve';
 import { readRelayCall, type RelayDeposit } from './relay';
+import { readRelayOrder } from './relayOrder';
 import { PROVIDER_NAME, transferOf, type BridgeTransfer } from './transfer';
 import type { BridgeCall, BridgeProvider, Unreadable } from './view';
 
@@ -23,14 +24,16 @@ type Pull = { token: Address; amount: bigint; spender: Address };
 export const cannotRead = (provider: BridgeProvider) =>
   `This screen cannot read this ${PROVIDER_NAME[provider]} call. Check the raw details before you confirm.`;
 
-export function readBridgeBatch(calls: BridgeCall[], account: Address): BridgeBatch | null {
+export function readBridgeBatch(calls: BridgeCall[], account: Address, relayOrder?: unknown): BridgeBatch | null {
   const reads: Read[] = calls.map((call) => readAcrossCall(call) ?? readRelayCall(call) ?? readBridgeApprove(call));
   if (reads.every((read) => read === undefined)) return null;
 
   const steps = reads.map(stepOf);
   const alerts = reads.flatMap((read) => (read?.kind === 'unreadable' ? [cannotRead(read.provider)] : []));
   const deposits = reads.filter((read): read is Deposit => read?.kind === 'deposit');
-  const transfers = deposits.map((deposit) => transferOf(deposit, account));
+  const transfers = deposits.map((deposit) =>
+    transferOf(deposit, account, deposit.provider === 'relay' ? readRelayOrder(relayOrder, deposit) : undefined)
+  );
   const notices = transfers.flatMap((read) => read.notices);
   if (reads.some((read) => read?.kind === 'approve' && !read.token.known)) notices.push(APPROVE_UNKNOWN);
 

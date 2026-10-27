@@ -11,6 +11,7 @@ import {
   PROD_RELAY_DEPOSIT,
   RELAY_USDC_APPROVE,
   RELAY_USDC_DEPOSIT,
+  RELAY_USDC_ORDER,
   SIGNER,
 } from '../../utils/bridgeCalls/fixtures';
 import type { BridgeCall } from '../../utils/bridgeCalls/view';
@@ -279,6 +280,28 @@ describe('TransactionDialog with a bridge deposit', () => {
     expect(column(root, 'You send')).toContain('USDC');
     expect(root.textContent).not.toContain('You get');
     expect(yellow(root)).toEqual([RELAY_HIDDEN]);
+  });
+
+  it('shows a Relay deposit with its order like an Across one: the minimum via Relay on the other chain', () => {
+    const capabilities = { jawRelayOrder: { optional: true, orderData: RELAY_USDC_ORDER } };
+    const root = render([RELAY_USDC_APPROVE, RELAY_USDC_DEPOSIT], { capabilities });
+    expect(title(root)).toBe('Bridge to Arbitrum');
+    expect(column(root, 'You get via Relay')).toContain('≥ 9.7764');
+    expect(column(root, 'You get via Relay')).toContain('on Arbitrum');
+    expect(yellow(root)).toEqual([]);
+    expect(red(root)).toEqual([]);
+  });
+
+  it('says why a Relay order is not shown when it does not match the deposit, in yellow', () => {
+    const orderData = { ...RELAY_USDC_ORDER, salt: '0x1' };
+    const root = render([RELAY_USDC_APPROVE, RELAY_USDC_DEPOSIT], {
+      capabilities: { jawRelayOrder: { optional: true, orderData } },
+    });
+    expect(yellow(root)).toEqual([
+      'The Relay order details do not match this deposit, so this screen does not show them.',
+      RELAY_HIDDEN,
+    ]);
+    expect(root.textContent).not.toContain('You get');
   });
 
   it('leaves a native Relay deposit without chain badges, since only one chain is known', () => {

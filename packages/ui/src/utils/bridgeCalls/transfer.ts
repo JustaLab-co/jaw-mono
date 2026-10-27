@@ -3,6 +3,7 @@ import { groupNumber } from '../displayFormat';
 import type { AcrossDeposit } from './across';
 import { BRIDGE_CHAINS } from './contracts';
 import type { RelayDeposit } from './relay';
+import type { OrderUnshown, RelayOrder } from './relayOrder';
 import type { BridgeProvider, Received, TokenAmount } from './view';
 
 export type Detail = { label: string; value: string; copy?: string };
@@ -28,8 +29,12 @@ const FEE_NOT_JAW = 'The fee goes to an address JAW does not know.';
 const RELAY_HIDDEN =
   'Relay keeps the destination chain and the recipient in an order outside this transaction. This screen cannot show them. Confirm only if you started this transfer yourself.';
 
-export const transferOf = (deposit: AcrossDeposit | RelayDeposit, account: Address): TransferRead =>
-  deposit.provider === 'across' ? acrossTransfer(deposit, account) : relayTransfer(deposit, account);
+export const transferOf = (
+  deposit: AcrossDeposit | RelayDeposit,
+  account: Address,
+  order?: RelayOrder | OrderUnshown
+): TransferRead =>
+  deposit.provider === 'across' ? acrossTransfer(deposit, account) : relayTransfer(deposit, account, order);
 
 function acrossTransfer(deposit: AcrossDeposit, account: Address): TransferRead {
   const { fee } = deposit;
@@ -64,20 +69,43 @@ function acrossTransfer(deposit: AcrossDeposit, account: Address): TransferRead 
   };
 }
 
-function relayTransfer(deposit: RelayDeposit, account: Address): TransferRead {
+function relayTransfer(deposit: RelayDeposit, account: Address, order?: RelayOrder | OrderUnshown): TransferRead {
   const id = deposit.orderId;
-  const notices = [RELAY_HIDDEN];
+  const notices: string[] = [];
   if (!deposit.send.token.known) notices.push(unknownToken(deposit.send.token.address));
   if (!isAddressEqual(deposit.depositor, account))
     notices.push(notThisAccount('The account credited', deposit.depositor));
+  const credited = accountDetail('Credited to', deposit.depositor, account);
+  const orderDetail = { label: 'Order', value: `${id.slice(0, 6)}…${id.slice(-4)}`, copy: id };
+
+  if (order?.kind !== 'order') {
+    notices.unshift(...(order ? [order.reason, RELAY_HIDDEN] : [RELAY_HIDDEN]));
+    return {
+      transfer: {
+        provider: 'relay',
+        title: 'Deposit to Relay',
+        send: deposit.send,
+        details: [credited, orderDetail],
+      },
+      notices,
+    };
+  }
+
+  if (!isAddressEqual(order.recipient, account)) notices.push(notThisAccount('The recipient', order.recipient));
+  if (!isAddressEqual(order.refundTo, account)) notices.push(notThisAccount('The refund address', order.refundTo));
+  const destination = BRIDGE_CHAINS[order.destinationChainId].name;
   return {
     transfer: {
       provider: 'relay',
-      title: 'Deposit to Relay',
+      title: `Bridge to ${destination}`,
       send: deposit.send,
+      receive: { kind: 'minimum', amount: order.minimumReceived },
+      otherRecipient: isAddressEqual(order.recipient, account) ? undefined : getAddress(order.recipient),
       details: [
-        accountDetail('Credited to', deposit.depositor, account),
-        { label: 'Order', value: `${id.slice(0, 6)}…${id.slice(-4)}`, copy: id },
+        accountDetail('Recipient', order.recipient, account),
+        accountDetail('Refund to', order.refundTo, account),
+        credited,
+        orderDetail,
       ],
     },
     notices,

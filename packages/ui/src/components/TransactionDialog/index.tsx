@@ -34,6 +34,7 @@ export const TransactionDialog = ({
   open,
   onOpenChange,
   transactions,
+  capabilities,
   walletAddress,
   gasFee,
   gasFeeLoading,
@@ -153,7 +154,7 @@ export const TransactionDialog = ({
     apiKey
   );
   // Under a permission the granter's funds move; until it is known, the batch is not read.
-  const bridge = useBridgeBatch(transactions, isPermissioned ? onBehalfOf : walletAddress);
+  const bridge = useBridgeBatch(transactions, isPermissioned ? onBehalfOf : walletAddress, capabilities?.jawRelayOrder);
   const transfer = bridge?.transfer;
   const title =
     transfer?.title ?? (isNativeSend ? "You're Sending" : (callTitle(singleCallDecode) ?? 'Review Transaction'));
