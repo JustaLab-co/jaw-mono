@@ -63,19 +63,25 @@ function chainProblem({ across, relay }: BridgeChain): string | undefined {
   return undefined;
 }
 
+export function tableProblem(chains: Readonly<Record<string, BridgeChain>>): string | undefined {
+  const protocolChains: string[] = [];
+  for (const [id, entry] of Object.entries(chains)) {
+    const problem = chainProblem(entry);
+    if (problem) return `chain ${id}: ${problem}`;
+    if (entry.relay) protocolChains.push(entry.relay.protocolChain);
+  }
+  if (new Set(protocolChains).size !== protocolChains.length) return 'two chains share a protocolChain';
+  return undefined;
+}
+
 export function parse(raw: unknown): ParseResult {
   const parsed = body.safeParse(raw);
   if (!parsed.success)
     return failure(`bad shape: ${parsed.error.issues[0].message} at ${parsed.error.issues[0].path.join('.')}`);
 
   const { version, chains } = parsed.data;
-  const protocolChains: string[] = [];
-  for (const [id, entry] of Object.entries(chains)) {
-    const problem = chainProblem(entry);
-    if (problem) return failure(`chain ${id}: ${problem}`);
-    if (entry.relay) protocolChains.push(entry.relay.protocolChain);
-  }
-  if (new Set(protocolChains).size !== protocolChains.length) return failure('two chains share a protocolChain');
+  const problem = tableProblem(chains);
+  if (problem) return failure(problem);
 
   return { ok: true, contracts: new BridgeContracts({ version, chains }) };
 }
