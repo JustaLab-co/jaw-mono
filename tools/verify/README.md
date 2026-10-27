@@ -146,6 +146,10 @@ until [ -f "$LOG.done" ] || [ $SECONDS -gt 960 ]; do sleep 5; done; tail "$LOG"
 
 macOS ships no `timeout`, so the script does not use one: it starts the command in its own process group and a watchdog sends TERM to the group at the limit, then KILL two seconds later.
 
+## Bridge table
+
+`bun tools/verify/bridge-table.mts` diffs `BRIDGE_CHAINS` in `packages/ui/src/utils/bridgeCalls/contracts.ts` against Across's deployed addresses and Relay's `/chains`, prints an `ok` or `DIFF` line per field and exits 1 on any difference. It needs no install, and `.github/workflows/bridge-table.yml` runs it every Monday and keeps one open issue while the table differs.
+
 ## Harness self-test
 
 `$S/selftest.sh` checks the scripts themselves: the dirty-tree refusal, `run-bounded.sh` ending on its limit, `.husky/pre-push` choosing the PR base, the seller answering every route and switch (`seller.test.mjs`), and two runs with the same id getting separate compose projects (Postgres only; skipped without Docker). Run it after changing anything in this folder.

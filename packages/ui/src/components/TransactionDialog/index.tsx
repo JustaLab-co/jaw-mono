@@ -12,6 +12,8 @@ import { useChainIconURI, useFeeTokenPrice } from '../../hooks';
 import { useAddressIdentity } from '../../hooks/useAddressIdentities';
 import { useReverseIdentity } from '../../hooks/useReverseIdentity';
 import { useDecodedCalldata } from '../../hooks/useDecodedCalldata';
+import { useBridgeBatch } from '../../hooks/useBridgeBatch';
+import { useBridgeContracts } from '../../hooks/useBridgeContracts';
 import { getDisplayAddress } from '../../utils';
 import { formatNativeValue, subscriptDecimal } from '../../utils/displayFormat';
 import { IdentityAvatar } from '../IdentityAvatar';
@@ -24,14 +26,15 @@ import { callTitle } from './DecodedCalldata';
 import { resolveBlockReason } from '../../utils/transactionFailure';
 import { allowanceFlag } from '../../utils/allowances';
 import { isBlockingPermissionProblem, PERMISSION_PROBLEM_TEXT } from '../../utils/permissionExecution';
-import { BatchStep, NAME_SOURCES, SingleCallData } from './CallSections';
-import { InlineWarning, PartyRow, Row, ValueAmount } from '../primitives';
+import { BatchStep, BridgeDetails, NAME_SOURCES, SingleCallData } from './CallSections';
+import { InlineWarning, PartyRow, Row, ValueAmount, WarningNotice } from '../primitives';
 import { NetworkFeeRow } from '../NetworkFeeRow';
 
 export const TransactionDialog = ({
   open,
   onOpenChange,
   transactions,
+  capabilities,
   walletAddress,
   gasFee,
   gasFeeLoading,
@@ -124,12 +127,15 @@ export const TransactionDialog = ({
   // the banner already explains precisely. Name the cause once, at the top.
   const feeBlockReason = permissionBlocks ? null : blockReason;
 
+  const { contracts: bridgeContracts, settled: bridgeSettled } = useBridgeContracts(apiKey);
+
   // An ERC-20 fee can't be confirmed until its worst-case ceiling has settled, nor when the
   // balance can't cover it (isSelectable false). NetworkFeeRow warns for every settled
   // unpayable state; the in-flight remainder of this gate renders there as "Estimating...".
   const erc20CannotPay =
     isPayingWithErc20 && (!selectedFeeToken?.gasCostMaxFormatted || !selectedFeeToken?.isSelectable);
-  const canConfirm = !isProcessing && !gasFeeLoading && !blockReason && !erc20CannotPay && !permissionBlocks;
+  const canConfirm =
+    !isProcessing && !gasFeeLoading && !blockReason && !erc20CannotPay && !permissionBlocks && bridgeSettled;
 
   // Reverts, but gas estimated fine, so it stays submittable: warn rather than block.
   const softRevertWarning = !blockReason && !permissionBlocks && !!assetPreviewWillRevert;
@@ -150,7 +156,16 @@ export const TransactionDialog = ({
     currentTransaction?.chainId ?? 1,
     apiKey
   );
-  const title = isNativeSend ? "You're Sending" : (callTitle(singleCallDecode) ?? 'Review Transaction');
+  // Under a permission the granter's funds move; until it is known, the batch is not read.
+  const bridge = useBridgeBatch(
+    bridgeContracts,
+    transactions,
+    isPermissioned ? onBehalfOf : walletAddress,
+    capabilities?.jawRelayOrder
+  );
+  const transfer = bridge?.transfer;
+  const title =
+    transfer?.title ?? (isNativeSend ? "You're Sending" : (callTitle(singleCallDecode) ?? 'Review Transaction'));
 
   // Allowances move no balance, so the asset preview can't show them: each call carries its own flag.
   const allowanceFlags = transactions.map(allowanceFlag);
@@ -158,7 +173,8 @@ export const TransactionDialog = ({
   // A single call's calldata unfolds only when there's no You-send/You-get summary to stand in
   // for it; otherwise that review screen would open with nothing on it. Batch steps always
   // start collapsed — their headers name the action, so the user opens the one they care about.
-  const calldataOpen = !!assetPreviewError || ((assetsOut?.length ?? 0) === 0 && (assetsIn?.length ?? 0) === 0);
+  const calldataOpen =
+    !transfer && (!!assetPreviewError || ((assetsOut?.length ?? 0) === 0 && (assetsIn?.length ?? 0) === 0));
 
   return (
     <ShellDialog
@@ -306,6 +322,13 @@ export const TransactionDialog = ({
               </div>
             )}
 
+            {bridge?.alerts.map((alert) => (
+              <div key={alert} role="alert">
+                <InlineWarning text={alert} />
+              </div>
+            ))}
+            {bridge && <WarningNotice messages={bridge.notices} />}
+
             {/* Asset changes — a native send shows the same information in its hero. */}
             {!isNativeSend && (
               <AssetPreview
@@ -318,7 +341,15 @@ export const TransactionDialog = ({
                 error={assetPreviewError ?? false}
                 nativeSymbol={nativeSymbol}
                 chainId={currentTransaction?.chainId}
+                bridge={transfer}
+                apiKey={apiKey}
               />
+            )}
+
+            {transfer && (
+              <Accordion type="single" collapsible>
+                <BridgeDetails details={transfer.details} />
+              </Accordion>
             )}
 
             {/* Value (single, non-native) */}
@@ -340,6 +371,7 @@ export const TransactionDialog = ({
                   to={currentTransaction.to}
                   data={currentTransaction.data}
                   decode={singleCallDecode}
+                  {...bridge?.steps[0]}
                   allowanceFlag={allowanceFlags[0]}
                   chainId={currentTransaction.chainId}
                   apiKey={apiKey}
@@ -356,6 +388,7 @@ export const TransactionDialog = ({
                     key={index}
                     transaction={transaction}
                     index={index}
+                    {...bridge?.steps[index]}
                     nativeSymbol={nativeSymbol}
                     nativeTokenPrice={nativeTokenPrice}
                     allowanceFlag={allowanceFlags[index]}

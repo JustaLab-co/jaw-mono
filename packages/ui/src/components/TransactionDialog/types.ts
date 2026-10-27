@@ -20,6 +20,8 @@ export interface TransactionDialogProps {
 
   // Transaction data
   transactions: TransactionData[];
+  /** EIP-5792 capabilities of the request. */
+  capabilities?: Record<string, unknown>;
 
   // Wallet info
   walletAddress: string;

@@ -1779,6 +1779,7 @@ function TransactionDialogWrapper({
         else setOpen(newOpen);
       }}
       transactions={transactions}
+      capabilities={request.data.capabilities}
       walletAddress={request.data.from}
       gasFee={gasFee}
       gasFeeLoading={gasFeeLoading}

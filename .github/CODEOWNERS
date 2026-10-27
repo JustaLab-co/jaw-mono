@@ -69,6 +69,9 @@
 /apps/mcp/src/tools/add-funds.ts                     @Ghadi8 @mariano-aguero
 /apps/mcp/src/adapters/session-host.ts               @Ghadi8 @mariano-aguero
 /apps/mcp/src/lib/safe-fetch.ts                      @Ghadi8 @mariano-aguero
+/packages/ui/src/utils/bridgeCalls/parse.ts          @Ghadi8 @mariano-aguero
+/packages/ui/src/utils/bridgeCalls/load.ts           @Ghadi8 @mariano-aguero
+/packages/ui/src/hooks/useBridgeContracts.ts         @Ghadi8 @mariano-aguero
 /apps/mcp/src/tools/resolve-name.ts                  @Ghadi8 @mariano-aguero
 /apps/mcp/src/lib/cron.ts                            @Ghadi8 @mariano-aguero
 /apps/mcp/src/app/api/cron/                          @Ghadi8 @mariano-aguero

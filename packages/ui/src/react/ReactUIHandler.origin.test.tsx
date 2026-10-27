@@ -34,7 +34,7 @@ vi.mock('../hooks/usePermissionExecution', () => ({
   usePermissionExecution: () => ({ onBehalfOf: undefined, loading: false, problem: undefined }),
 }));
 
-type DialogProps = { origin?: string; originLabel?: string; appName?: string };
+type DialogProps = { origin?: string; originLabel?: string; appName?: string; capabilities?: unknown };
 let dialogProps: DialogProps = {};
 vi.mock('../components/TransactionDialog', () => ({
   TransactionDialog: (props: DialogProps) => {
@@ -117,5 +117,17 @@ describe('ReactUIHandler originLabel option', () => {
   it('leaves the label unset by default', async () => {
     await open(calls);
     expect(dialogProps.originLabel).toBeUndefined();
+  });
+});
+
+describe('ReactUIHandler passes the request capabilities to the transaction dialog', () => {
+  it('for wallet_sendCalls, so the Relay order reaches the screen', async () => {
+    const capabilities = { jawRelayOrder: { optional: true, orderData: { version: 'v1' } } };
+    await open({
+      id: 'req-calls',
+      type: 'wallet_sendCalls',
+      data: { from: FROM, chainId: 8453, calls: [{ to: TO, value: '0x1' }], capabilities },
+    });
+    expect(dialogProps.capabilities).toEqual(capabilities);
   });
 });
