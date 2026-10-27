@@ -1,9 +1,10 @@
 import { createHash, randomBytes } from 'node:crypto';
+import { createServer, type AddressInfo, type Socket } from 'node:net';
 import { compactDecrypt, decodeProtectedHeader, exportJWK, generateKeyPair, SignJWT } from 'jose';
 import type { PGlite } from '@electric-sql/pglite';
 import type { Hex } from 'viem';
 import { privateKeyToAddress } from 'viem/accounts';
-import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { useTestDb } from '@/db/test-db';
 import {
   Browser,
@@ -34,6 +35,7 @@ const { verifyBearer } = await import('./auth');
 const { config } = await import('./config');
 const { createProvider } = await import('./provider');
 const { PgAdapter } = await import('./adapter');
+const { safeFetch } = await import('@/lib/safe-fetch');
 const { findActive, revokeByGrant } = await import('./rows');
 const { nextRefreshId, open, parseKeyRing, unwrap } = await import('./seal');
 type KeyRing = ReturnType<typeof parseKeyRing>;
@@ -123,9 +125,16 @@ const gemini = {
   scope: 'wallet:read x402:pay',
 };
 const geminiKey = await generateKeyPair('RS256');
+// A signing client whose keys sit on a local port the server must never reach.
+const localSockets: Socket[] = [];
+const localKeys = createServer((socket) => void localSockets.push(socket));
+await new Promise<void>((resolve) => localKeys.listen(0, '127.0.0.1', resolve));
+const LOCAL_JWKS = `https://127.0.0.1:${(localKeys.address() as AddressInfo).port}/jwks.json`;
+const LOCAL_KEYED = 'https://evil.example.test/local-keys.json';
 const keyedDocuments: Record<string, object> = {
   ...chatgptDocuments,
   [GEMINI]: gemini,
+  [LOCAL_KEYED]: { ...gemini, client_id: LOCAL_KEYED, jwks_uri: LOCAL_JWKS },
   [GEMINI_JWKS]: { keys: [{ ...(await exportJWK(geminiKey.publicKey)), kid: 'cimd', alg: 'RS256', use: 'sig' }] },
 };
 const metadata = {
@@ -141,6 +150,10 @@ const metadata = {
 let db: PGlite;
 
 afterEach(() => vi.restoreAllMocks());
+afterAll(async () => {
+  localSockets.forEach((socket) => socket.destroy());
+  await new Promise((resolve) => localKeys.close(resolve));
+});
 
 beforeAll(async () => {
   db = await useTestDb();
@@ -196,7 +209,9 @@ beforeAll(async () => {
                                 client_id: String(url),
                                 scope: decodeURIComponent(String(url).slice(SCOPED.length, -'.json'.length)),
                               })
-                            : new Response('not found', { status: 404 }),
+                            : String(url) === LOCAL_JWKS
+                              ? safeFetch(new Set())(url)
+                              : new Response('not found', { status: 404 }),
   });
 });
 
@@ -425,7 +440,20 @@ describe('authorization server', () => {
 
   it('given a private_key_jwt CIMD client from any origin, when it asks to authorize, then it reaches consent', async () => {
     const start = await startAuthorization(new Browser(), { clientId: KEYED, redirectUri: 'http://127.0.0.1:9100/cb' });
-    expect(start.uid).toBeDefined();
+    expect(start.stopped).toBeUndefined();
+    expect(start.uid).toEqual(expect.any(String));
+  });
+
+  it('given a signing client whose jwks_uri is a local address, when it redeems its code, then invalid_client and no socket reaches it', async () => {
+    const before = localSockets.length;
+    const c = await connect(undefined, {
+      clientId: LOCAL_KEYED,
+      redirectUri: GEMINI_REDIRECT,
+      clientAuth: await assertionFor(LOCAL_KEYED, geminiKey.privateKey),
+    });
+    expect(c.status).toBe(401);
+    expect(c.error).toBe('invalid_client');
+    expect(localSockets.length).toBe(before);
   });
 
   it('given ChatGPT, when it connects and refreshes with private_key_jwt, then both succeed', async () => {
