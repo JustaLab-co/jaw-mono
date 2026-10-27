@@ -1,3 +1,17 @@
+## 1.9.0 (2026-10-27)
+
+### 🚀 Features
+
+- **core:** let a grant carry a call checker ([#572](https://github.com/JustaLab-co/jaw-mono/pull/572))
+
+### 🧱 Updated Dependencies
+
+- Updated @jaw.id/core to 1.9.0
+
+### ❤️ Thank You
+
+- Leo Franklin @LeoFranklin015
+
 ## 1.8.3 (2026-10-27)
 
 ### 🧱 Updated Dependencies

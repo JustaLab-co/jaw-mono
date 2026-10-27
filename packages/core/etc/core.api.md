@@ -213,6 +213,7 @@ export type CallPermissionDetail = {
     target: Address_2;
     selector?: Hex;
     functionSignature?: string;
+    checker?: Address_2;
 };
 
 // @public
@@ -1041,6 +1042,7 @@ export interface PermissionUIRequest extends BaseUIRequest {
                 target: Address;
                 selector?: `0x${string}`;
                 functionSignature?: string;
+                checker?: Address;
             }>;
         };
         capabilities?: RequestCapabilities;

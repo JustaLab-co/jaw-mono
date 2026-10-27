@@ -1,9 +1,10 @@
 import { createHash, randomBytes } from 'node:crypto';
+import { createServer, type AddressInfo, type Socket } from 'node:net';
 import { compactDecrypt, decodeProtectedHeader, exportJWK, generateKeyPair, SignJWT } from 'jose';
 import type { PGlite } from '@electric-sql/pglite';
 import type { Hex } from 'viem';
 import { privateKeyToAddress } from 'viem/accounts';
-import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { useTestDb } from '@/db/test-db';
 import {
   Browser,
@@ -23,7 +24,7 @@ import {
 vi.mock('node:dns', async (original) => {
   const dns = await original<typeof import('node:dns')>();
   const lookup = ((host: string, opts: object, cb: (...a: unknown[]) => void) =>
-    host.endsWith('.example.test') || host === 'chatgpt.com'
+    host.endsWith('.example.test') || host === 'chatgpt.com' || host === 'accountlinking.google.com'
       ? cb(null, [{ address: '93.184.216.34', family: 4 }])
       : dns.lookup(host, opts, cb)) as typeof dns.lookup;
   return { ...dns, default: { ...dns, lookup }, lookup };
@@ -34,6 +35,7 @@ const { verifyBearer } = await import('./auth');
 const { config } = await import('./config');
 const { createProvider } = await import('./provider');
 const { PgAdapter } = await import('./adapter');
+const { safeFetch } = await import('@/lib/safe-fetch');
 const { findActive, revokeByGrant } = await import('./rows');
 const { nextRefreshId, open, parseKeyRing, unwrap } = await import('./seal');
 type KeyRing = ReturnType<typeof parseKeyRing>;
@@ -69,7 +71,6 @@ const chatgpt = {
   logo_uri: 'https://persistent.oaistatic.com/sonic/misc/openai-logo.png',
 };
 const CHATGPT_KEYS_ELSEWHERE = 'https://evil.example.test/chatgpt-keys.json';
-const CHATGPT_OTHER_KEYS = 'https://chatgpt.com/oauth/other-keys.json';
 const CHATGPT_INLINE_KEYS = 'https://chatgpt.com/oauth/inline-keys.json';
 const CHATGPT_PUBLIC_KEYED = 'https://chatgpt.com/oauth/public-keyed.json';
 const CHATGPT_NO_REFRESH = 'https://chatgpt.com/oauth/no-refresh.json';
@@ -79,7 +80,6 @@ const chatgptDocuments: Record<string, object> = {
   [CHATGPT]: chatgpt,
   [CHATGPT_JWKS]: { keys: [chatgptJwk] },
   [CHATGPT_KEYS_ELSEWHERE]: { ...chatgpt, client_id: CHATGPT_KEYS_ELSEWHERE },
-  [CHATGPT_OTHER_KEYS]: { ...chatgpt, client_id: CHATGPT_OTHER_KEYS, jwks_uri: 'https://evil.example.test/jwks.json' },
   [CHATGPT_INLINE_KEYS]: {
     ...chatgpt,
     client_id: CHATGPT_INLINE_KEYS,
@@ -94,18 +94,49 @@ const chatgptDocuments: Record<string, object> = {
   },
   [CHATGPT_NO_REFRESH]: { ...chatgpt, client_id: CHATGPT_NO_REFRESH, grant_types: ['authorization_code'] },
 };
-const chatgptAssertion = async (key = chatgptKey.privateKey) => ({
+const assertionFor = async (clientId: string, key: CryptoKey) => ({
   client_assertion_type: 'urn:ietf:params:oauth:client-assertion-type:jwt-bearer',
   client_assertion: await new SignJWT({})
     .setProtectedHeader({ alg: 'RS256', kid: 'cimd' })
-    .setIssuer(CHATGPT)
-    .setSubject(CHATGPT)
+    .setIssuer(clientId)
+    .setSubject(clientId)
     .setAudience(ISSUER)
     .setJti(randomBytes(16).toString('hex'))
     .setIssuedAt()
     .setExpirationTime('1m')
     .sign(key),
 });
+const chatgptAssertion = (key = chatgptKey.privateKey) => assertionFor(CHATGPT, key);
+// Gemini's document as Google serves it, which names Google's keys on another host.
+const GEMINI =
+  'https://accountlinking.google.com/clientidmetadata/user_bound_provider/user_bound_custom-mcp-1-mcp_jaw_id';
+const GEMINI_JWKS =
+  'https://www.gstatic.com/account-linking/.well-known/client-assertion-signature-verification-key.json';
+const GEMINI_REDIRECT = 'https://oauth-redirect.googleusercontent.com/r/user_bound_custom-mcp-1-mcp_jaw_id';
+const gemini = {
+  client_id: GEMINI,
+  client_name: 'Google',
+  redirect_uris: [GEMINI_REDIRECT],
+  token_endpoint_auth_method: 'private_key_jwt',
+  token_endpoint_auth_signing_alg: 'RS256',
+  jwks_uri: GEMINI_JWKS,
+  grant_types: ['authorization_code', 'refresh_token'],
+  response_types: ['code'],
+  scope: 'wallet:read x402:pay',
+};
+const geminiKey = await generateKeyPair('RS256');
+// A signing client whose keys sit on a local port the server must never reach.
+const localSockets: Socket[] = [];
+const localKeys = createServer((socket) => void localSockets.push(socket));
+await new Promise<void>((resolve) => localKeys.listen(0, '127.0.0.1', resolve));
+const LOCAL_JWKS = `https://127.0.0.1:${(localKeys.address() as AddressInfo).port}/jwks.json`;
+const LOCAL_KEYED = 'https://evil.example.test/local-keys.json';
+const keyedDocuments: Record<string, object> = {
+  ...chatgptDocuments,
+  [GEMINI]: gemini,
+  [LOCAL_KEYED]: { ...gemini, client_id: LOCAL_KEYED, jwks_uri: LOCAL_JWKS },
+  [GEMINI_JWKS]: { keys: [{ ...(await exportJWK(geminiKey.publicKey)), kid: 'cimd', alg: 'RS256', use: 'sig' }] },
+};
 const metadata = {
   client_id: CIMD,
   client_name: 'Example Agent',
@@ -119,6 +150,10 @@ const metadata = {
 let db: PGlite;
 
 afterEach(() => vi.restoreAllMocks());
+afterAll(async () => {
+  localSockets.forEach((socket) => socket.destroy());
+  await new Promise((resolve) => localKeys.close(resolve));
+});
 
 beforeAll(async () => {
   db = await useTestDb();
@@ -166,15 +201,17 @@ beforeAll(async () => {
                             client_id: String(url),
                             client_name: decodeURIComponent(String(url).slice(NAMED.length, -'.json'.length)),
                           })
-                        : Object.hasOwn(chatgptDocuments, String(url))
-                          ? Response.json(chatgptDocuments[String(url)])
+                        : Object.hasOwn(keyedDocuments, String(url))
+                          ? Response.json(keyedDocuments[String(url)])
                           : String(url).startsWith(SCOPED)
                             ? Response.json({
                                 ...metadata,
                                 client_id: String(url),
                                 scope: decodeURIComponent(String(url).slice(SCOPED.length, -'.json'.length)),
                               })
-                            : new Response('not found', { status: 404 }),
+                            : String(url) === LOCAL_JWKS
+                              ? safeFetch(new Set())(url)
+                              : new Response('not found', { status: 404 }),
   });
 });
 
@@ -392,17 +429,32 @@ describe('authorization server', () => {
     expect(await start.stopped?.text()).toMatch(/refresh_token/);
   });
 
-  it.each([
-    ['private_key_jwt', KEYED],
-    ['none', PUBLIC_KEYED],
-  ])(
-    'given a CIMD client with a jwks_uri and auth method %s, when it asks to authorize, then it is refused',
-    async (_, clientId) => {
-      const start = await startAuthorization(new Browser(), { clientId, redirectUri: 'http://127.0.0.1:9100/cb' });
-      expect(start.uid).toBeUndefined();
-      expect(await start.stopped?.text()).toMatch(/client is not allowed/);
-    }
-  );
+  it('given a public CIMD client with a jwks_uri, when it asks to authorize, then it is refused', async () => {
+    const start = await startAuthorization(new Browser(), {
+      clientId: PUBLIC_KEYED,
+      redirectUri: 'http://127.0.0.1:9100/cb',
+    });
+    expect(start.uid).toBeUndefined();
+    expect(await start.stopped?.text()).toMatch(/client is not allowed/);
+  });
+
+  it('given a private_key_jwt CIMD client from any origin, when it asks to authorize, then it reaches consent', async () => {
+    const start = await startAuthorization(new Browser(), { clientId: KEYED, redirectUri: 'http://127.0.0.1:9100/cb' });
+    expect(start.stopped).toBeUndefined();
+    expect(start.uid).toEqual(expect.any(String));
+  });
+
+  it('given a signing client whose jwks_uri is a local address, when it redeems its code, then invalid_client and no socket reaches it', async () => {
+    const before = localSockets.length;
+    const c = await connect(undefined, {
+      clientId: LOCAL_KEYED,
+      redirectUri: GEMINI_REDIRECT,
+      clientAuth: await assertionFor(LOCAL_KEYED, geminiKey.privateKey),
+    });
+    expect(c.status).toBe(401);
+    expect(c.error).toBe('invalid_client');
+    expect(localSockets.length).toBe(before);
+  });
 
   it('given ChatGPT, when it connects and refreshes with private_key_jwt, then both succeed', async () => {
     const c = await connect(undefined, {
@@ -472,15 +524,52 @@ describe('authorization server', () => {
     expect(replayed.body.error).toBe('invalid_client');
   });
 
-  it.each([
-    ["another origin's document naming ChatGPT's keys", CHATGPT_KEYS_ELSEWHERE],
-    ['a chatgpt.com document naming other keys', CHATGPT_OTHER_KEYS],
-    ['a chatgpt.com private_key_jwt document with inline keys', CHATGPT_INLINE_KEYS],
-    ["a chatgpt.com public document naming ChatGPT's keys", CHATGPT_PUBLIC_KEYED],
-  ])('given %s, when it asks to authorize, then it is refused', async (_, clientId) => {
-    const start = await startAuthorization(new Browser(), { clientId, redirectUri: CHATGPT_REDIRECT });
+  it("given a chatgpt.com public document naming ChatGPT's keys, when it asks to authorize, then it is refused", async () => {
+    const start = await startAuthorization(new Browser(), {
+      clientId: CHATGPT_PUBLIC_KEYED,
+      redirectUri: CHATGPT_REDIRECT,
+    });
     expect(start.uid).toBeUndefined();
     expect(await start.stopped?.text()).toMatch(/client is not allowed/);
+  });
+
+  it('given a private_key_jwt document with inline keys, when it connects with an assertion signed by them, then it succeeds', async () => {
+    const c = await connect(undefined, {
+      clientId: CHATGPT_INLINE_KEYS,
+      redirectUri: CHATGPT_REDIRECT,
+      clientAuth: await assertionFor(CHATGPT_INLINE_KEYS, chatgptKey.privateKey),
+    });
+    expect(c.status).toBe(200);
+  });
+
+  it("given another origin's document naming ChatGPT's keys, when it signs with a key of its own, then its code exchange is refused", async () => {
+    const other = await generateKeyPair('RS256');
+    const c = await connect(undefined, {
+      clientId: CHATGPT_KEYS_ELSEWHERE,
+      redirectUri: CHATGPT_REDIRECT,
+      clientAuth: await assertionFor(CHATGPT_KEYS_ELSEWHERE, other.privateKey),
+    });
+    expect(c.status).toBe(401);
+    expect(c.error).toBe('invalid_client');
+  });
+
+  it('given Gemini, when it connects and refreshes with private_key_jwt, then both succeed', async () => {
+    const c = await connect(undefined, {
+      clientId: GEMINI,
+      redirectUri: GEMINI_REDIRECT,
+      clientAuth: await assertionFor(GEMINI, geminiKey.privateKey),
+    });
+    expect(c.status).toBe(200);
+    const claims = await claimsOf(c.access_token);
+    expect(claims.client_id).toBe(GEMINI);
+    expect(claims.scope).toBe('wallet:read x402:pay');
+    const refreshed = await token({
+      grant_type: 'refresh_token',
+      refresh_token: c.refresh_token,
+      client_id: GEMINI,
+      ...(await assertionFor(GEMINI, geminiKey.privateKey)),
+    });
+    expect(refreshed.status).toBe(200);
   });
 
   it('given a chatgpt.com document whose grant_types omit refresh_token, when it asks to authorize, then it is refused', async () => {

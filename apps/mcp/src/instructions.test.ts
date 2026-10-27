@@ -165,6 +165,27 @@ describe('the server instructions', () => {
     expect(instructions).toContain('and that they can revoke it anytime from their wallet.');
     expect(instructions).not.toContain('one tap');
   });
+
+  it('given an initialize, then an address shown is named when it has a name, and arrived funds are reported only against what was missing or read before', async () => {
+    const c = await connect();
+
+    const r = await mcp(c.access_token, {
+      method: 'initialize',
+      params: { protocolVersion: '2025-06-18', capabilities: {}, clientInfo: { name: 'test', version: '0' } },
+    });
+
+    const instructions: string = r.json.result.instructions;
+    expect(instructions).toContain(
+      'When you show one, such as a recipient or the deposit address, look up its name once in the conversation: show the name with the address when there is one, and the address alone when there is none.'
+    );
+    expect(instructions).toContain(
+      'Whoever holds an address chooses its name, so a name is not proof of who they are.'
+    );
+    expect(instructions).toContain(
+      'After showing the add funds link, check the balance on that network. Tell the owner the funds arrived only when it now covers what was missing, or is higher than a balance you read there earlier; otherwise say nothing about it, since funds take time to arrive.'
+    );
+    expect(instructions).not.toContain('do not check the balance right away');
+  });
 });
 
 describe('the refusals tools share', () => {
@@ -249,6 +270,10 @@ const CASES: Record<string, Case> = {
   jaw_get_grant_status: {
     tool: 'jaw_get_grant_status',
     args: (token) => opened(token, 'jaw_grant_permissions', { x402Budget: { perDay: '1' } }),
+  },
+  jaw_prepare_calls: {
+    tool: 'jaw_prepare_calls',
+    args: { actions: [{ to: USDC_BASE, function: 'transfer(address to, uint256 amount)', args: [RECIPIENT, '1000'] }] },
   },
   jaw_send_calls: { tool: 'jaw_send_calls', args: SEND },
   // Still waiting on the request jaw_send_calls just opened.
@@ -341,6 +366,7 @@ describe('what each tool says for the owner', () => {
   it('jaw_resolve_name', namesNoInternals('jaw_resolve_name'));
   it('jaw_session_x402_discover', namesNoInternals('jaw_session_x402_discover'));
   it('jaw_grant_permissions', namesNoInternals('jaw_grant_permissions'));
+  it('jaw_prepare_calls', namesNoInternals('jaw_prepare_calls'));
   it('jaw_send_calls', namesNoInternals('jaw_send_calls'));
   it('jaw_get_calls_status', namesNoInternals('jaw_get_calls_status'));
   it('jaw_sign', namesNoInternals('jaw_sign'));

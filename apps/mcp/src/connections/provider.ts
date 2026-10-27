@@ -22,9 +22,6 @@ const JAW_CLI = {
   response_types: ['code' as const],
 };
 
-// Metadata document origins whose clients sign token requests, and the one JWKS each may name.
-const KEYED_CLIENTS = new Map([['https://chatgpt.com', 'https://chatgpt.com/oauth/jwks.json']]);
-
 export function createProvider(cfg: Config, overrides: Partial<Configuration> = {}): Provider {
   const policy = interactionPolicy.base();
   // No session reuse: every authorization goes through consent and makes its own connection.
@@ -100,14 +97,11 @@ export function createProvider(cfg: Config, overrides: Partial<Configuration> = 
         ack: 'draft-02',
         // The provider cuts a private socket only after connecting; the delay would tell whether the host is live.
         allowFetch: (_ctx, clientId) => resolvesPublic(new URL(clientId).hostname),
-        // Public clients, or a known keyed one: a jwks_uri is fetched for every request it signs.
+        // Public clients, or ones that sign token requests with their own keys.
+        // A jwks_uri goes through the same public-only fetch as the document.
         allowClient: async (_ctx, client) => {
-          const keys = KEYED_CLIENTS.get(new URL(client.clientId).origin);
-          const allowed =
-            keys && client.jwksUri === keys
-              ? client.tokenEndpointAuthMethod === 'private_key_jwt'
-              : client.tokenEndpointAuthMethod === 'none' && !client.jwksUri;
-          if (!allowed) return false;
+          const method = client.tokenEndpointAuthMethod;
+          if (method !== 'private_key_jwt' && (method !== 'none' || client.jwksUri)) return false;
           if (hasUnstorableText(client.clientName ?? '')) return false;
           if (!client.grantTypeAllowed('refresh_token')) {
             throw new errors.InvalidClientMetadata('grant_types must include refresh_token');

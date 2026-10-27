@@ -145,6 +145,8 @@ export interface PermissionUIRequest extends BaseUIRequest {
                 selector?: `0x${string}`;
                 /** Human-readable function signature (e.g., "transfer(address,uint256)") */
                 functionSignature?: string;
+                /** Contract that must approve each matching call; part of what the user signs */
+                checker?: Address;
             }>;
         };
         /** Optional capabilities including paymaster service for sponsored transactions */

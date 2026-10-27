@@ -18,6 +18,7 @@ import { getDb } from '@/db/client';
 import { permissionRequests } from '@/db/schema';
 import { hitsThisWindow, TEST_PG_URL, useTestDb, useTestPostgres } from '@/db/test-db';
 import { RATE_WINDOW_MS } from '@/lib/edge';
+import { chainName } from '@/lib/owner-text';
 import { MAX_ADD_FUNDS_PER_ACCOUNT } from '@/owner-calls/cap';
 import { leaks, spoken, toAgent } from '@/test-utils/spoken';
 import { sendCalls } from './owner-calls';
@@ -108,7 +109,7 @@ describe('jaw_add_funds', () => {
       approveBy: expect.any(String),
       address: t.account,
       chains: ['eip155:84532', 'eip155:8453', 'eip155:1', 'eip155:10', 'eip155:11155111'],
-      summary: expect.stringContaining(`${FOR_AGENT} Do not read the balance now.`),
+      summary: expect.stringContaining(`${FOR_AGENT} Read the balance now with jaw_get_assets and chainIds [84532].`),
     });
     expect(textOf(result)).toContain(anyNetwork(t.account, 'also', ALL_FROM_BASE_SEPOLIA));
     expect(textOf(result)).not.toMatch(/USDC/);
@@ -139,6 +140,7 @@ describe('jaw_add_funds', () => {
       chains: ['eip155:8453', 'eip155:84532', 'eip155:1', 'eip155:10', 'eip155:11155111'],
       summary: expect.stringContaining(anyNetwork(t.account, 'also', ALL_FROM_BASE)),
     });
+    expect(toAgent(result).join('\n')).toContain('Read the balance now with jaw_get_assets and chainIds [8453].');
     expect(chains).toEqual([8453]);
     expect(asked[1]).toEqual({ method: 'wallet_addFunds', params: [{ chainId: 8453 }] });
     expect(await rowsOf(t)).toMatchObject([{ chainId: 8453, state: 'approved' }]);
@@ -242,6 +244,10 @@ describe('jaw_add_funds', () => {
     expect(refused(result)).toBe(false);
     expect(lookup.asked).toEqual([{ account: t.account, showTestnets: true }]);
     expect(chains).toEqual([11155111]);
+    // jaw_get_assets reads only mainnets and the connection's own chain, so the agent is not sent to read Sepolia.
+    const agent = toAgent(result).join('\n');
+    expect(agent).not.toContain('jaw_get_assets');
+    expect(agent).toContain(`The balance on ${chainName(11155111)} cannot be read here, so do not check it.`);
   });
 
   it("given the capabilities lookup fails, then it is refused proxy_error with the address on the connection's chain and no wallet opens", async () => {
@@ -535,7 +541,7 @@ async function clearOfMinuteEdge() {
 describe('what the owner hears from jaw_add_funds', () => {
   type Read = () => Promise<Awaited<ReturnType<typeof addFunds>>>;
 
-  it('given the link opens, then it comes first on its own line, then the address once and every network it works on, and the agent is told not to read the balance yet', async () => {
+  it('given the link opens, then it comes first on its own line, then the address once and every network it works on, and the agent is told to read the balance on that network and speak only if funds arrived', async () => {
     const { t, signer } = await connected();
     const { deps } = setup(signer);
     const wait = held();
@@ -548,9 +554,8 @@ describe('what the owner hears from jaw_add_funds', () => {
     expect(textOf(result).split('\n')).toEqual([
       `Open this link to add funds: ${url}`,
       `It shows the wallet address and a QR code, and works for the next 30 minutes. ${anyNetwork(t.account, 'also', ALL_FROM_BASE_SEPOLIA)}`,
-      `${FOR_AGENT} Do not read the balance now. On the owner's next messages, read it with jaw_get_assets before answering, and continue the original request once it covers it. The screen closing does not mean funds arrived.`,
+      `${FOR_AGENT} Read the balance now with jaw_get_assets and chainIds [${t.chainId}]. Tell the owner the funds arrived only if it now covers what was missing, or is higher than a balance you read on that network earlier; otherwise say nothing about it. On the owner's next messages, read it again on that chain before answering, and continue the original request once it covers it. The screen closing does not mean funds arrived.`,
     ]);
-    expect(textOf(result)).not.toMatch(/right after showing the link/i);
     expect(textOf(result).split(t.account)).toHaveLength(2);
     expect(leaks(spoken(result))).toEqual([]);
   });
@@ -579,7 +584,9 @@ describe('what the owner hears from jaw_add_funds', () => {
     const tool = json.result.tools.find((x: { name: string }) => x.name === 'jaw_add_funds');
     expect(tool.title).toBe('Add funds to the wallet');
     expect(tool.annotations).toMatchObject({ destructiveHint: false, idempotentHint: true });
-    expect(tool.description).toContain('Do not check the balance right away; funds take time to arrive.');
+    expect(tool.description).toContain(
+      'Then check the balance with jaw_get_assets on that network, and tell the owner the funds arrived only when it now covers what was missing or is higher than a balance you read there earlier; otherwise say nothing, since funds take time to arrive.'
+    );
     expect(tool.description).toContain('The wallet has one address on every network it supports');
   });
 

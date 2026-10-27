@@ -129,6 +129,8 @@ interface CallPermissionDetail {
   selector?: Hex;
   /** Human-readable function signature. Selector is computed from this if not provided. */
   functionSignature?: string;
+  /** Contract that must approve each matching call. Always present in the response. */
+  checker?: Address;
 }
 ```
 
@@ -137,6 +139,7 @@ interface CallPermissionDetail {
 | `target`            | `Address` | Yes      | Contract address the spender can call                          |
 | `selector`          | `Hex`     | No\*     | 4-byte function selector (e.g., `'0xa9059cbb'`)                |
 | `functionSignature` | `string`  | No\*     | Human-readable signature (e.g., `'transfer(address,uint256)'`) |
+| `checker`           | `Address` | No       | Contract that must approve each matching call (`canExecute`)   |
 
 \*Either `selector` or `functionSignature` must be provided.
 
