@@ -208,6 +208,7 @@ describe('read tools', () => {
       'jaw_get_calls_history',
       'jaw_get_calls_status',
       'jaw_get_capabilities',
+      'jaw_get_defi_positions',
       'jaw_get_permissions',
       'jaw_get_sign_status',
       'jaw_grant_permissions',
