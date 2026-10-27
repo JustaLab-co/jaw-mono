@@ -45,6 +45,20 @@ export function createProvider(cfg: Config, overrides: Partial<Configuration> = 
     clientDefaults: { id_token_signed_response_alg: 'EdDSA', application_type: 'native' },
     findAccount: async (_ctx, sub) =>
       (await findActive(sub)) ? { accountId: sub, claims: () => ({ sub }) } : undefined,
+    // A document's scope may name the wallet scopes, which are resource scopes the
+    // provider would reject as unknown. Only the provider's own scopes stay.
+    extraClientMetadata: {
+      properties: ['scope'],
+      validator: (_ctx, _key, value, metadata) => {
+        if (typeof value !== 'string') return;
+        const own = value
+          .split(' ')
+          .filter((s) => !Object.hasOwn(CONNECTION_SCOPES, s))
+          .join(' ');
+        if (own) metadata.scope = own;
+        else delete metadata.scope;
+      },
+    },
     pkce: { required: () => true },
     fetchResponseBodyLimits: {
       'client_id metadata document': 5 * 1024,
