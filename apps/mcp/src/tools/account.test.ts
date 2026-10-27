@@ -2,12 +2,13 @@ import { clearCapabilitiesCache, getSupportedChains, JAW_RPC_URL } from '@jaw.id
 import { usdcForNetwork } from '@jaw.id/agent';
 import { afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
 import { verifyBearer, type Tenant } from '@/connections/auth';
-import { callTool, connect, setTestEnv } from '@/connections/testkit';
+import { callTool, connect, mcp, setTestEnv } from '@/connections/testkit';
 import { getDb } from '@/db/client';
 import { ownerCalls, sends } from '@/db/schema';
 import { useTestDb } from '@/db/test-db';
 import { chainName } from '@/lib/owner-text';
 import { leaks, spoken, toAgent } from '@/test-utils/spoken';
+import { defaultAssetIds } from './account';
 
 const KEY = 'proxy-key-5f3a9c';
 vi.mock('@jaw.id/core', async (original) => {
@@ -40,6 +41,10 @@ vi.stubGlobal('fetch', async (input: Parameters<typeof fetch>[0], init?: Request
 });
 
 const mainnets = getSupportedChains(false).map((c) => c.id);
+// Ethereum, Optimism, Gnosis, BSC, Unichain, Polygon, Soneium, Base, Arbitrum, Celo, Avalanche, Linea, Ink,
+// Robinhood Chain, Arc, Monad: what the owner sees when no network is named.
+const defaults = [1, 10, 100, 56, 130, 137, 1868, 8453, 42161, 42220, 43114, 59144, 57073, 4663, 5042, 143];
+const FLARE = 14;
 const hex = (id: number) => `0x${id.toString(16)}`;
 const USDC_ARB = '0xaf88d065e77c8cC2239327C5EDb3A432268e5831';
 const ether = { address: null, balance: '0xde0b6b3a7640000', type: 'native', metadata: null };
@@ -65,17 +70,17 @@ afterEach(() => {
 });
 
 describe('jaw_get_assets', () => {
-  it('given many mainnets, then it asks for each chain in its own request and merges the answers', async () => {
+  it('given no networks, then it asks for each default network in its own request and merges the answers', async () => {
     answer = ({ params }) => Object.fromEntries(params[0].chainFilter.map((id) => [id, [ether]]));
 
     const r = await callTool(token, 'jaw_get_assets', {});
 
     const asked = seen.map((s) => s.rpc.params[0].chainFilter);
     expect(asked.every((c) => c.length === 1)).toBe(true);
-    expect(asked.flat().sort()).toEqual(mainnets.map(hex).sort());
+    expect(asked.flat().sort()).toEqual(defaults.map(hex).sort());
     expect(seen.every((s) => s.rpc.method === 'wallet_getAssets' && s.rpc.params[0].account === account)).toBe(true);
     expect(r.structuredContent.chains.map((c: { chainId: string }) => c.chainId).sort()).toEqual(
-      mainnets.map((id) => `eip155:${id}`).sort()
+      defaults.map((id) => `eip155:${id}`).sort()
     );
     expect(r.structuredContent.failed).toEqual([]);
     expect(r.structuredContent.unreported).toEqual([]);
@@ -96,20 +101,47 @@ describe('jaw_get_assets', () => {
     ]);
   });
 
+  it('given a supported network outside the defaults, then it is read only when named', async () => {
+    answer = ({ params }) => Object.fromEntries(params[0].chainFilter.map((id) => [id, [ether]]));
+    const others = mainnets.filter((id) => !defaults.includes(id));
+    expect(others).toContain(FLARE);
+
+    await callTool(token, 'jaw_get_assets', {});
+    const byDefault = seen.splice(0).flatMap((s) => s.rpc.params[0].chainFilter);
+    const named = await callTool(token, 'jaw_get_assets', { chainIds: [FLARE, others.at(-1)!] });
+
+    expect(byDefault).not.toEqual(expect.arrayContaining([hex(FLARE)]));
+    expect(others.some((id) => byDefault.includes(hex(id)))).toBe(false);
+    expect(named.isError).toBeFalsy();
+    expect(named.structuredContent.chains.map((c: { chainId: string }) => c.chainId)).toEqual(
+      [FLARE, others.at(-1)!].sort((a, b) => a - b).map((id) => `eip155:${id}`)
+    );
+  });
+
+  it('given the tools list, then jaw_get_assets names its default networks and that others are read on request', async () => {
+    const { json } = await mcp(token, { method: 'tools/list' });
+
+    const tool = json.result.tools.find((x: { name: string }) => x.name === 'jaw_get_assets');
+    expect(tool.description).toContain(
+      'Ethereum, Optimism, Gnosis, BNB Smart Chain, Unichain, Polygon, Soneium, Base, Arbitrum, Celo, Avalanche, Linea, Ink, Robinhood Chain, Arc, Monad'
+    );
+    expect(tool.description).toContain('read one of those only when the owner names it or added funds on it');
+  });
+
   it('given a chain the proxy refuses, then the others are returned and the lost chain is named without the key', async () => {
     answer = ({ params }, url) =>
-      params[0].chainFilter[0] === hex(mainnets[3])
+      params[0].chainFilter[0] === hex(defaults[3])
         ? new Response(`upstream said no to ${url}`, { status: 500 })
         : Object.fromEntries(params[0].chainFilter.map((id) => [id, [ether]]));
 
     const r = await callTool(token, 'jaw_get_assets', {});
 
     expect(r.isError).toBeFalsy();
-    expect(r.structuredContent.chains).toHaveLength(mainnets.length - 1);
+    expect(r.structuredContent.chains).toHaveLength(defaults.length - 1);
     expect(r.structuredContent.failed).toEqual([
-      { chainIds: [`eip155:${mainnets[3]}`], reason: expect.stringContaining('500') },
+      { chainIds: [`eip155:${defaults[3]}`], reason: expect.stringContaining('500') },
     ]);
-    expect(r.structuredContent.summary).toContain(`Could not read ${chainName(mainnets[3])} right now`);
+    expect(r.structuredContent.summary).toContain(`Could not read ${chainName(defaults[3])} right now`);
     expect(JSON.stringify(r)).not.toContain(KEY);
   });
 
@@ -454,7 +486,7 @@ describe('jaw_get_assets answers', () => {
   });
 
   it('given two chains that hang and the rest answer, then the rest come back, the two time out, and it ends before 5 s', async () => {
-    const hung = [mainnets[0], mainnets[1]].map(hex);
+    const hung = [defaults[0], defaults[1]].map(hex);
     answer = ({ params }) =>
       hung.includes(params[0].chainFilter[0])
         ? new Promise(() => {})
@@ -465,9 +497,9 @@ describe('jaw_get_assets answers', () => {
 
     expect(Date.now() - started).toBeLessThan(5000);
     expect(r.isError).toBeFalsy();
-    expect(r.structuredContent.chains).toHaveLength(mainnets.length - 2);
+    expect(r.structuredContent.chains).toHaveLength(defaults.length - 2);
     expect(r.structuredContent.failed).toEqual(
-      [mainnets[0], mainnets[1]].map((id) => ({
+      [defaults[0], defaults[1]].map((id) => ({
         chainIds: [`eip155:${id}`],
         reason: expect.stringContaining('timed out'),
       }))
@@ -497,6 +529,12 @@ describe('jaw_get_assets answers', () => {
     await callTool(token, 'jaw_get_assets', { chainIds: [1, 1, 8453] });
 
     expect(seen.map((s) => s.rpc.params[0].chainFilter)).toEqual([[hex(1)], [hex(8453)]]);
+  });
+
+  it("given the connection's chain is a mainnet outside the defaults, then the default adds it", () => {
+    expect(defaultAssetIds(FLARE).sort((a, b) => a - b)).toEqual([...defaults, FLARE].sort((a, b) => a - b));
+    expect(defaultAssetIds(8453).sort((a, b) => a - b)).toEqual([...defaults].sort((a, b) => a - b));
+    expect(defaultAssetIds(84532)).not.toContain(84532);
   });
 
   it('given a chain the proxy was not asked about, then it is left out', async () => {

@@ -108,7 +108,7 @@ describe('jaw_add_funds', () => {
       approveBy: expect.any(String),
       address: t.account,
       chains: ['eip155:84532', 'eip155:8453', 'eip155:1', 'eip155:10', 'eip155:11155111'],
-      summary: expect.stringContaining(`${FOR_AGENT} Do not read the balance now.`),
+      summary: expect.stringContaining(`${FOR_AGENT} Read the balance now with jaw_get_assets and chainIds [84532]:`),
     });
     expect(textOf(result)).toContain(anyNetwork(t.account, 'also', ALL_FROM_BASE_SEPOLIA));
     expect(textOf(result)).not.toMatch(/USDC/);
@@ -535,7 +535,7 @@ async function clearOfMinuteEdge() {
 describe('what the owner hears from jaw_add_funds', () => {
   type Read = () => Promise<Awaited<ReturnType<typeof addFunds>>>;
 
-  it('given the link opens, then it comes first on its own line, then the address once and every network it works on, and the agent is told not to read the balance yet', async () => {
+  it('given the link opens, then it comes first on its own line, then the address once and every network it works on, and the agent is told to read the balance on that network and speak only if funds arrived', async () => {
     const { t, signer } = await connected();
     const { deps } = setup(signer);
     const wait = held();
@@ -548,9 +548,8 @@ describe('what the owner hears from jaw_add_funds', () => {
     expect(textOf(result).split('\n')).toEqual([
       `Open this link to add funds: ${url}`,
       `It shows the wallet address and a QR code, and works for the next 30 minutes. ${anyNetwork(t.account, 'also', ALL_FROM_BASE_SEPOLIA)}`,
-      `${FOR_AGENT} Do not read the balance now. On the owner's next messages, read it with jaw_get_assets before answering, and continue the original request once it covers it. The screen closing does not mean funds arrived.`,
+      `${FOR_AGENT} Read the balance now with jaw_get_assets and chainIds [${t.chainId}]: if the funds are already there, tell the owner they arrived; if not, say nothing about it. On the owner's next messages, read it again on that chain before answering, and continue the original request once it covers it. The screen closing does not mean funds arrived.`,
     ]);
-    expect(textOf(result)).not.toMatch(/right after showing the link/i);
     expect(textOf(result).split(t.account)).toHaveLength(2);
     expect(leaks(spoken(result))).toEqual([]);
   });
@@ -579,7 +578,9 @@ describe('what the owner hears from jaw_add_funds', () => {
     const tool = json.result.tools.find((x: { name: string }) => x.name === 'jaw_add_funds');
     expect(tool.title).toBe('Add funds to the wallet');
     expect(tool.annotations).toMatchObject({ destructiveHint: false, idempotentHint: true });
-    expect(tool.description).toContain('Do not check the balance right away; funds take time to arrive.');
+    expect(tool.description).toContain(
+      'Then check the balance with jaw_get_assets on that network: if the funds already arrived, tell the owner; if not, say nothing, since funds take time to arrive.'
+    );
     expect(tool.description).toContain('The wallet has one address on every network it supports');
   });
 

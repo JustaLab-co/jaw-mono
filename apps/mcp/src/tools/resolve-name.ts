@@ -161,7 +161,8 @@ export function registerResolveNameTool(server: McpServer) {
         'and `addresses`, one per network it has an address on: use the one for the network you are sending on, or ' +
         'the entry with `default: true` when that network has none, and if neither exists tell the owner the name has ' +
         'no address there. Show the owner the name and the address before sending, and never guess an address from a ' +
-        'name. Use the reverse lookup to show a friendly name for an address in a history or a permission. Only EVM ' +
+        'name. Before showing the owner any address, theirs included, use the reverse lookup and show its name beside ' +
+        'it; with no name, show the address alone. Only EVM ' +
         'addresses are returned. Pass exactly one of name or address. A reason says why nothing came back.',
       inputSchema: z.strictObject({
         name: z.string().max(255).optional().describe('An ENS name such as alice.eth'),

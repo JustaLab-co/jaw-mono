@@ -165,6 +165,24 @@ describe('the server instructions', () => {
     expect(instructions).toContain('and that they can revoke it anytime from their wallet.');
     expect(instructions).not.toContain('one tap');
   });
+
+  it('given an initialize, then any address is shown with its name when it has one, and the balance is checked after add funds', async () => {
+    const c = await connect();
+
+    const r = await mcp(c.access_token, {
+      method: 'initialize',
+      params: { protocolVersion: '2025-06-18', capabilities: {}, clientInfo: { name: 'test', version: '0' } },
+    });
+
+    const instructions: string = r.json.result.instructions;
+    expect(instructions).toContain(
+      "Before you show any address, the wallet's own included, look up its name: show the name with the address when there is one, and the address alone when there is none."
+    );
+    expect(instructions).toContain(
+      'After showing the add funds link, check the balance on that network: if the funds already arrived, tell the owner; if not, say nothing about it, since funds take time to arrive.'
+    );
+    expect(instructions).not.toContain('do not check the balance right away');
+  });
 });
 
 describe('the refusals tools share', () => {

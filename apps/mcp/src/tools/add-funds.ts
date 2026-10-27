@@ -113,8 +113,8 @@ function answer(t: Tenant, networks: number[], row: PermissionRequestRow) {
       summary: withNext(
         `Open this link to add funds: ${row.walletUrl}\n` +
           `It shows the wallet address and a QR code, and works ${openFor(row.approveBy)}. ${depositLine(t, networks, 'also')}`,
-        'Do not read the balance now. ' +
-          "On the owner's next messages, read it with jaw_get_assets before answering, and continue the original request once it covers it. " +
+        `Read the balance now with jaw_get_assets and chainIds [${row.chainId}]: if the funds are already there, tell the owner they arrived; if not, say nothing about it. ` +
+          "On the owner's next messages, read it again on that chain before answering, and continue the original request once it covers it. " +
           'The screen closing does not mean funds arrived.'
       ),
     })
@@ -218,8 +218,8 @@ export function registerAddFundsTool(server: McpServer) {
         'Offer it, in one sentence with the missing amount and the network the request runs on, whenever a simulation, a quote or a balance shows the wallet cannot pay for what they asked. ' +
         'No card or bank purchase: the owner sends the token from an exchange or another wallet. ' +
         'Returns a link, the address and the supported networks: show the link on its own line, then the address and the networks it works on. ' +
-        'Do not check the balance right away; funds take time to arrive. ' +
-        "On the owner's later messages, read it with jaw_get_assets and continue what they asked once it covers it. " +
+        'Then check the balance with jaw_get_assets on that network: if the funds already arrived, tell the owner; if not, say nothing, since funds take time to arrive. ' +
+        "On the owner's later messages, read it again and continue what they asked once it covers it. " +
         'One Add Funds link waits per connection; asking again returns the same link.',
       inputSchema: input,
       outputSchema: output,
