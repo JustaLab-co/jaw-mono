@@ -1,16 +1,16 @@
 import type { McpServer } from '@modelcontextprotocol/server';
-import { BaseError, createPublicClient, http, isAddress, toHex, type Address, type PublicClient } from 'viem';
+import { BaseError, createPublicClient, http, isAddress, toHex, type Address, type Hex, type PublicClient } from 'viem';
 import { z } from 'zod';
 import { tenant } from '@/connections/auth';
 import { JAW_RPC_URL } from '@jaw.id/core';
 import { config } from '@/connections/config';
+import { batchBytes, MAX_BATCH_BYTES, MAX_CALLS } from '@/lib/batch-limits';
 import { isProxyChain, proxyChains } from '@/lib/chain';
 import { fenceText, reply } from '@/lib/fence';
 import { chainName, counted } from '@/lib/owner-text';
 import { scrub } from '@/lib/scrub';
 import { refusal, withNext } from './reply';
 
-const MAX_CALLS = 32;
 const TEXT_MAX = 2000;
 const REVERT_BYTES_MAX = 2048;
 // The proxy gives up on a simulation after 10 s, so its own "timed out" answer arrives before this does.
@@ -187,6 +187,15 @@ export async function simulateCalls(args: Input, account: Address, clientFor: Cl
       withNext(
         'The check did not run: an address in the request is not valid.',
         `${bad} is not a valid address. Use the 0x form, with a correct checksum when mixed case.`
+      )
+    );
+  }
+  const bytes = batchBytes(calls.map((c) => ({ data: (c.data ?? '0x') as Hex })));
+  if (bytes > MAX_BATCH_BYTES) {
+    return refusal(
+      withNext(
+        'The check did not run: this is too much for one transaction, so it needs to be split into smaller ones.',
+        `The calls come to ${bytes} bytes of calldata and one request takes at most ${MAX_BATCH_BYTES}. Check and send them in smaller batches.`
       )
     );
   }

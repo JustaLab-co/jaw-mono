@@ -2,9 +2,10 @@ import { sanitizeLine } from '@jaw.id/agent';
 import type { McpServer } from '@modelcontextprotocol/server';
 import { encodeFunctionData, isAddress, parseAbiItem, type AbiFunction, type AbiParameter, type Hex } from 'viem';
 import { z } from 'zod';
+import { MAX_CALLS } from '@/lib/batch-limits';
 import { reply } from '@/lib/fence';
 import { counted } from '@/lib/owner-text';
-import { callInput, MAX_CALL_DATA_BYTES, MAX_CALLS } from './owner-calls';
+import { callInput, MAX_CALL_DATA_BYTES } from './owner-calls';
 import { refusal, withNext } from './reply';
 
 const action = z.strictObject({

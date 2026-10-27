@@ -2,7 +2,7 @@ import { createHash, randomBytes } from 'node:crypto';
 import type { ChainClients } from '@jaw.id/agent';
 import { PERMISSIONS_MANAGER_ADDRESS } from '@jaw.id/core';
 import type { McpServer } from '@modelcontextprotocol/server';
-import { getAddress } from 'viem';
+import { getAddress, type Address, type Hex, type PublicClient } from 'viem';
 import {
   entryPoint06Address,
   entryPoint07Address,
@@ -17,6 +17,7 @@ import { ownerRelay, WalletBusy, type OpenWallet, type Wallet } from '@/connecti
 import { findActive } from '@/connections/rows';
 import { leaseHeld } from '@/connections/session-lease';
 import { countHit, isPaymentsPaused } from '@/db/settings';
+import { batchBytes, gasClientFor, MAX_BATCH_BYTES, MAX_CALLS, overBudget, type BatchCall } from '@/lib/batch-limits';
 import { isProxyChain } from '@/lib/chain';
 import { errorLabel, log, RATE_WINDOW_MS } from '@/lib/edge';
 import { reply } from '@/lib/fence';
@@ -46,7 +47,6 @@ import {
 import { gateCode } from '@/payments/render';
 import { ACCOUNT_BUSY, withNext } from './reply';
 
-export const MAX_CALLS = 10;
 export const MAX_CALL_DATA_BYTES = 24_576;
 const STATUS_RATE_LIMIT = 30;
 const SENT_GRACE_MS = 10 * 60_000;
@@ -130,9 +130,16 @@ export interface OwnerCallDeps {
   receipt: ReadReceipt;
   clients: ChainClients;
   pollMs?: number;
+  /** Reads a chain for the gas a batch needs; left out, the gas is not checked. */
+  gasClient?: (chainId: number) => PublicClient;
 }
 
-const DEFAULTS: OwnerCallDeps = { openWallet: ownerRelay, receipt: readReceipt, clients: chainClients };
+const DEFAULTS: OwnerCallDeps = {
+  openWallet: ownerRelay,
+  receipt: readReceipt,
+  clients: chainClients,
+  gasClient: gasClientFor,
+};
 
 /** A refusal: its code first for the agent's logic, then what the owner hears, then what the agent does about it. */
 const refuse = (code: string, say: string, next?: string): SendResult => ({
@@ -175,6 +182,47 @@ const inProgress = (open?: OwnerCallRow) => {
     `This link is for the earlier request, not the one just asked for: never present it as the new one. Send idempotencyKey ${open.idempotencyKey} with that request's own input to get it again, or follow ${open.id} with jaw_get_calls_status. Once the earlier request is approved, declined or expired, send the new one again.`
   );
 };
+
+const SPLIT =
+  'Split them into smaller requests, and send each one only once jaw_get_calls_status shows the one before landed. ' +
+  'Keep calls that depend on each other, such as an approve and the call that spends it, in the same request. ' +
+  'A single call too big on its own cannot be sent this way: tell the owner.';
+
+const tooLarge = (bytes: number) =>
+  refuse(
+    'batch_too_large',
+    'This is too much to send in one transaction, so it needs to be split into smaller ones. Nothing was sent.',
+    `The calls come to ${bytes} bytes of calldata and one request takes at most ${MAX_BATCH_BYTES}. ${SPLIT}`
+  );
+
+/**
+ * A refusal when the batch needs more gas than one transaction on its chain takes. Undefined when it fits, or when
+ * the chain cannot tell: the wallet's own estimate then decides, as it always has.
+ */
+async function tooHeavy(chainId: number, account: Address, batch: BatchCall[], deps: OwnerCallDeps) {
+  if (!deps.gasClient) return undefined;
+  let over: Awaited<ReturnType<typeof overBudget>>;
+  try {
+    over = await overBudget(deps.gasClient(chainId), account, batch);
+  } catch (err) {
+    log('warn', { msg: 'owner calls gas not checked', error: errorLabel(err) });
+    return undefined;
+  }
+  if (!over) return undefined;
+  if (over.later) {
+    return refuse(
+      'batch_too_heavy',
+      `This is too much for the account's first transaction on ${chainName(chainId)}, which also sets the account up, so the first one has to be smaller. Later transactions can be bigger. Nothing was sent.`,
+      `The calls need about ${over.gas} gas. The account's first transaction deploys it and takes at most ${over.budget} on chain ${chainId}; once it has landed, one request takes up to ${over.later}. ` +
+        'Send a smaller request first, or split these into smaller ones, and send this one again once jaw_get_calls_status shows the first landed.'
+    );
+  }
+  return refuse(
+    'batch_too_heavy',
+    `This is too much to send in one transaction on ${chainName(chainId)}, so it needs to be split into smaller ones. Nothing was sent.`,
+    `The calls need about ${over.gas} gas and one request takes at most ${over.budget} on chain ${chainId}. ${SPLIT}`
+  );
+}
 
 const accountBusy = (): SendResult => ({
   content: [{ type: 'text', text: ACCOUNT_BUSY }],
@@ -396,7 +444,11 @@ export async function sendCalls(t: Tenant, input: SendCallsInput, deps: OwnerCal
     .digest('hex');
   await expirePast(t.connectionId);
   const stored = await findByKey(t.connectionId, key);
+  // A stored request is answered as it was stored, one from before these limits included.
   if (stored) return replay(t, stored, hash, deps);
+  const batch = calls.map((c) => ({ to: c.to, value: BigInt(c.value), data: c.data as Hex }));
+  const bytes = batchBytes(batch);
+  if (bytes > MAX_BATCH_BYTES) return tooLarge(bytes);
 
   const gated = await refusedBeforeLink(t);
   if (gated) return gated;
@@ -409,6 +461,8 @@ export async function sendCalls(t: Tenant, input: SendCallsInput, deps: OwnerCal
   };
   if ((await countOpenLinks(t.account)) >= MAX_OPEN_PER_ACCOUNT) return refuseUnlessStored(accountBusy());
   if (!(await findActive(t.connectionId))) return connectionEnded();
+  const heavy = await tooHeavy(chainId, t.account as Address, batch, deps);
+  if (heavy) return refuseUnlessStored(heavy);
   const approveBy = new Date(Date.now() + APPROVE_WITHIN_MS);
   const wallet = await openWalletFor(t, approveBy, deps);
   if (!wallet) return refuseUnlessStored(walletBusy(key));
@@ -519,6 +573,7 @@ export function registerOwnerCallTools(server: McpServer) {
         'Returns a link right away: show it to the owner on its own line before anything else, with one plain sentence of what it does and moves; they cannot approve without it. ' +
         `Then call jaw_get_calls_status with waitSeconds ${SUGGESTED_WAIT_SECONDS} and repeat while it answers awaiting_owner, up to ${APPROVE_MINUTES} minutes, without waiting for the owner to say they approved. ` +
         'Calls to the wallet itself, the permission manager or an EntryPoint are refused. ' +
+        'A batch too big for one transaction is refused before any link opens, with how to split it. ' +
         'Send the same idempotencyKey to retry; a retry returns the same request and never asks the owner twice.',
       inputSchema: sendCallsInput,
       outputSchema: ownerCallsOutput,
