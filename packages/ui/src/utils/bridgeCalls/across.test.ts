@@ -5,10 +5,13 @@ import {
   encodeAbiParameters,
   encodeFunctionData,
   erc20Abi,
+  concat,
   getAddress,
+  hexToBytes,
   pad,
   parseAbi,
   parseAbiParameters,
+  toHex,
   zeroAddress,
   type Hex,
 } from 'viem';
@@ -786,5 +789,83 @@ describe('given a destination swap through a router in the handler program', () 
   ];
   it.each(mutants)('then %s is unreadable', (_, edit) => {
     expect(readAcrossCall(withProgram(ACROSS_CALLS.usdcToArb, edit))).toEqual(unreadable);
+  });
+});
+
+describe('given the router steps of a destination swap', () => {
+  const swapRead = { kind: 'swap', chainId: 42161, token: { address: ARB, known: false } };
+  const routerAbi = parseAbi([
+    'function execute(bytes commands, bytes[] inputs)',
+    'function execute(bytes commands, bytes[] inputs, uint256 deadline)',
+  ]);
+  const v3Swap = parseAbiParameters('address, uint256, uint256, bytes, bool');
+  const v2Swap = parseAbiParameters('address, uint256, uint256, address[], bool');
+  const BRIDGED = 9_973_142n;
+  type Step = { command: number; input: Hex };
+
+  // Rewrites the live quote's `execute`, keeping Uniswap's tag after the arguments.
+  function withSteps(edit: (steps: Step[]) => void): BridgeCall {
+    return withProgram(ACROSS_CALLS.usdcToArb, (p) => {
+      const data = p.calls[1].callData;
+      const decoded = decodeFunctionData({ abi: routerAbi, data });
+      const tail = data.slice(encodeFunctionData({ abi: routerAbi, ...decoded }).length);
+      const [commands, inputs, ...rest] = decoded.args;
+      const steps = [...hexToBytes(commands)].map((command, i) => ({ command, input: inputs[i] }));
+      edit(steps);
+      const args = [toHex(new Uint8Array(steps.map((s) => s.command))), steps.map((s) => s.input), ...rest];
+      p.calls[1].callData = (encodeFunctionData({ abi: routerAbi, functionName: 'execute', args } as never) +
+        tail) as Hex;
+    });
+  }
+  const v3 = (recipient: string, amountIn: bigint, path: Hex, payerIsUser = false): Step => ({
+    command: 0x00,
+    input: encodeAbiParameters(v3Swap, [getAddress(recipient), amountIn, 1n, path, payerIsUser]),
+  });
+  const pool = (from: string, to: string) => concat([from as Hex, '0x0001f4', to as Hex]);
+  const toArb = pool(ARB_USDC, ARB);
+
+  it('then the quote rebuilt as a five-argument swap of the whole bridged amount reads the same', () => {
+    const call = withSteps((steps) => void (steps[0] = v3(HANDLER, BRIDGED, toArb)));
+    expect(readAcrossCall(call)).toMatchObject({ recipient: ACCOUNT, receive: swapRead });
+  });
+
+  it('then a split into two swaps that spend the bridged amount reads, through WETH or a V2 pool', () => {
+    const half = BRIDGED / 2n;
+    const call = withSteps((steps) => {
+      steps.splice(0, 1, v3(HANDLER, half, concat([pool(ARB_USDC, ARB_WETH), '0x000bb8', ARB])), {
+        command: 0x08,
+        input: encodeAbiParameters(v2Swap, [HANDLER, BRIDGED - half, 1n, [ARB_USDC, ARB], false]),
+      });
+    });
+    expect(readAcrossCall(call)).toMatchObject({ recipient: ACCOUNT, receive: swapRead });
+  });
+
+  const mutants: [string, (steps: Step[]) => void][] = [
+    ['the swap paid to another address than the handler', (s) => void (s[0] = v3(ATTACKER, BRIDGED, toArb))],
+    [
+      'a sweep after the swap',
+      (s) =>
+        void s.push({
+          command: 0x04,
+          input: encodeAbiParameters(parseAbiParameters('address, address, uint256'), [ARB, ATTACKER, 0n]),
+        }),
+    ],
+    ['a swap allowed to revert', (s) => void (s[0].command = 0x80)],
+    ['a swap paid by the user through Permit2', (s) => void (s[0] = v3(HANDLER, BRIDGED, toArb, true))],
+    [
+      'a swap into another token than the drained one',
+      (s) => void (s[0] = v3(HANDLER, BRIDGED, pool(ARB_USDC, ARB_WETH))),
+    ],
+    ['a swap from another token than the bridged one', (s) => void (s[0] = v3(HANDLER, BRIDGED, pool(ARB_WETH, ARB)))],
+    [
+      'a swap that leaves part of the bridged amount in the router',
+      (s) => void (s[0] = v3(HANDLER, BRIDGED - 1n, toArb)),
+    ],
+    ['a path with bytes after its last token', (s) => void (s[0] = v3(HANDLER, BRIDGED, concat([toArb, '0x00'])))],
+    ['more commands than inputs', (s) => void s.push({ command: 0x00, input: '0x' })],
+    ['no steps', (s) => void s.splice(0)],
+  ];
+  it.each(mutants)('then %s is unreadable', (_, edit) => {
+    expect(readAcrossCall(withSteps(edit))).toEqual(unreadable);
   });
 });

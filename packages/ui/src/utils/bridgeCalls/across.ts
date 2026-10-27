@@ -5,10 +5,13 @@ import {
   encodeFunctionData,
   erc20Abi,
   getAddress,
+  hexToBytes,
   isAddress,
   isAddressEqual,
   parseAbi,
   parseAbiParameters,
+  size,
+  slice,
   zeroAddress,
   type Address,
   type Hex,
@@ -41,6 +44,13 @@ const ROUTER_ABI = parseAbi([
   'function execute(bytes commands, bytes[] inputs)',
   'function execute(bytes commands, bytes[] inputs, uint256 deadline)',
 ]);
+// UniversalRouter inputs for V3_SWAP_EXACT_IN (0x00) and V2_SWAP_EXACT_IN (0x08).
+const V3_SWAP = parseAbiParameters(
+  'address recipient, uint256 amountIn, uint256 amountOutMin, bytes path, bool payerIsUser'
+);
+const V2_SWAP = parseAbiParameters(
+  'address recipient, uint256 amountIn, uint256 amountOutMin, address[] path, bool payerIsUser'
+);
 const INSTRUCTIONS = parseAbiParameters(
   '((address target, bytes callData, uint256 value)[] calls, address fallbackRecipient)'
 );
@@ -206,7 +216,10 @@ function depositOf(chainId: number, fields: Fields): AcrossDeposit | undefined {
   };
 }
 
-function payoutOf({ recipient, outputToken, message }: Fields, across: AcrossContracts): Payout | undefined {
+function payoutOf(
+  { recipient, outputToken, outputAmount, message }: Fields,
+  across: AcrossContracts
+): Payout | undefined {
   const toHandler = isAddressEqual(recipient, across.multicallHandler);
   if (message === '0x') return toHandler ? undefined : { recipient, received: outputToken };
   if (!toHandler) return undefined;
@@ -215,7 +228,7 @@ function payoutOf({ recipient, outputToken, message }: Fields, across: AcrossCon
   return (
     unwrapPayout(program, outputToken, across) ??
     tokenPayout(program, outputToken, across) ??
-    swapPayout(program, outputToken, across)
+    swapPayout(program, outputToken, outputAmount, across)
   );
 }
 
@@ -280,11 +293,12 @@ function unwrapPayout({ calls, fallbackRecipient }: Program, weth: Address, acro
 
 // Drain to the pinned router, its `execute`, drain the bought token [and the bridged one left], emits.
 // The router sets the amount, so any other router could keep the whole bridged amount.
-function swapPayout({ calls, fallbackRecipient }: Program, bridged: Address, across: AcrossContracts) {
+function swapPayout({ calls, fallbackRecipient }: Program, bridged: Address, amount: bigint, across: AcrossContracts) {
   const router = across.swapRouter;
-  if (!router || drainedTo(calls[0], bridged, across) !== router || !routerExecute(calls[1], router)) return undefined;
+  if (!router || drainedTo(calls[0], bridged, across) !== router) return undefined;
   const bought = drainOf(calls[2], across);
   if (!bought || isAddressEqual(bought.token, bridged)) return undefined;
+  if (!routerSwaps(calls[1], router, { from: bridged, to: bought.token, amount }, across)) return undefined;
   const { token, destination: recipient } = bought;
   if (fallbackRecipient !== zeroAddress && !isAddressEqual(fallbackRecipient, recipient)) return undefined;
   const i = drainedTo(calls[3], bridged, across) === recipient ? 4 : 3;
@@ -314,11 +328,41 @@ function drainedTo(call: Call | undefined, token: Address, across: AcrossContrac
   return drain && isAddressEqual(drain.token, token) ? drain.destination : undefined;
 }
 
-// Uniswap appends a tag after the arguments, and the swap is not read, so trailing bytes are allowed.
-function routerExecute(call: Call | undefined, router: Address): boolean {
+type Swap = { from: Address; to: Address; amount: bigint };
+
+// The router pays each step to the recipient in its inputs and keeps what no step spends, where
+// anyone can sweep it. So every step must swap the bridged token into the bought one and pay the
+// handler, and the steps must spend the whole bridged amount. Any other command is unreadable.
+// Uniswap appends a tag after the arguments, so trailing bytes are allowed.
+function routerSwaps(call: Call | undefined, router: Address, swap: Swap, across: AcrossContracts): boolean {
   if (!call || call.value !== 0n || !isAddressEqual(call.target, router)) return false;
-  decodeFunctionData({ abi: ROUTER_ABI, data: call.callData });
-  return true;
+  const [commands, inputs] = decodeFunctionData({ abi: ROUTER_ABI, data: call.callData }).args;
+  const steps = [...hexToBytes(commands)];
+  if (steps.length === 0 || steps.length !== inputs.length) return false;
+  let spent = 0n;
+  for (const [i, command] of steps.entries()) {
+    const step = swapStep(command, inputs[i]);
+    if (!step || !isAddressEqual(step.recipient, across.multicallHandler)) return false;
+    if (!isAddressEqual(step.from, swap.from) || !isAddressEqual(step.to, swap.to)) return false;
+    spent += step.amountIn;
+  }
+  return spent === swap.amount;
+}
+
+// Inputs are read by offset, as the router reads them, so arguments after these five, which some
+// routers take, are allowed. A V3 path is a token and then a 3-byte fee and a token per pool.
+function swapStep(command: number, input: Hex) {
+  if (command === 0x00) {
+    const [recipient, amountIn, , path, payerIsUser] = decodeAbiParameters(V3_SWAP, input);
+    if (payerIsUser || size(path) < 43 || (size(path) - 20) % 23 !== 0) return undefined;
+    return { recipient, amountIn, from: getAddress(slice(path, 0, 20)), to: getAddress(slice(path, -20)) };
+  }
+  if (command === 0x08) {
+    const [recipient, amountIn, , path, payerIsUser] = decodeAbiParameters(V2_SWAP, input);
+    if (payerIsUser || path.length < 2) return undefined;
+    return { recipient, amountIn, from: path[0], to: path[path.length - 1] };
+  }
+  return undefined;
 }
 
 // emitData only logs swap metadata.
