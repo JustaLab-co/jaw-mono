@@ -11,7 +11,7 @@ import {
 } from 'viem';
 import { entryPoint08Abi, entryPoint08Address, getUserOperationError } from 'viem/account-abstraction';
 import { describe, expect, it } from 'vitest';
-import { mayHaveBeenSent, refusalOfFailure, refusalOfLogs } from './reverts';
+import { mayHaveBeenSent, refusalOfFailure, refusalOfLogs } from './manager-reverts.js';
 
 const CAROL: Address = '0x3333333333333333333333333333333333333333';
 const TRANSFER = toFunctionSelector('transfer(address,uint256)');

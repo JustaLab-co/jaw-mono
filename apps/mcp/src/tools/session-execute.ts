@@ -1,5 +1,5 @@
 import { createHash, randomBytes } from 'node:crypto';
-import { within, type SessionBridge } from '@jaw.id/agent';
+import { mayHaveBeenSent, refusalOfFailure, refusalOfLogs, within, type SessionBridge } from '@jaw.id/agent';
 import type { McpServer } from '@modelcontextprotocol/server';
 import { and, eq } from 'drizzle-orm';
 import { getAddress, isAddress, numberToHex, type Address, type Hex } from 'viem';
@@ -12,7 +12,6 @@ import type { Tx } from '@/db/client';
 import { connections } from '@/db/schema';
 import { isPaymentsPaused } from '@/db/settings';
 import { ChainUnreadable, fit, namesEveryTarget, spendOf, type Call, type Refusal } from '@/grants/fit';
-import { mayHaveBeenSent, refusalOfFailure, refusalOfLogs } from '@/grants/reverts';
 import { unrevokedGrant, type LiveGrant } from '@/grants/store';
 import { errorLabel, log } from '@/lib/edge';
 import { reply } from '@/lib/fence';

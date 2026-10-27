@@ -1,6 +1,13 @@
 import { decodeErrorResult, decodeEventLog, isHex, parseAbi, toFunctionSelector, type Address, type Hex } from 'viem';
 import { entryPoint08Abi, entryPoint08Address } from 'viem/account-abstraction';
-import type { Refusal } from './fit';
+
+/** What the permission manager refused a session key's userOp for, read from its revert. */
+export type ManagerRefusal =
+  | { reason: 'call-not-allowed'; target: Address; selector: Hex }
+  | { reason: 'checker-rejected'; target: Address; selector: Hex; checker: Address }
+  | { reason: 'over-limit'; onChain: true }
+  | { reason: 'expired' }
+  | { reason: 'no-grant' };
 
 const SIGNATURES = [
   'error JustaPermissionManager_UnauthorizedCall(address target, bytes4 selector)',
@@ -20,7 +27,7 @@ const SELECTORS = SIGNATURES.map((s) =>
 // Revert data past this is not a manager error the bundler or EntryPoint reported.
 const MAX_SCAN = 8_192;
 
-function refusalOf(data: Hex): Refusal | undefined {
+function refusalOf(data: Hex): ManagerRefusal | undefined {
   let decoded;
   try {
     decoded = decodeErrorResult({ abi: MANAGER_ERRORS, data });
@@ -50,7 +57,7 @@ function refusalOf(data: Hex): Refusal | undefined {
 }
 
 // The account wraps what its call reverted with, so the manager's error need not start the data.
-function refusalWithin(blob: string): Refusal | undefined {
+function refusalWithin(blob: string): ManagerRefusal | undefined {
   const hex = blob.slice(2, 2 + MAX_SCAN).toLowerCase();
   for (const selector of SELECTORS) {
     for (let at = hex.indexOf(selector); at !== -1; at = hex.indexOf(selector, at + 1)) {
@@ -92,7 +99,7 @@ export function refusedInSimulation(failure: unknown): boolean {
   return chainOf(failure).some((e) => (e as { code?: unknown }).code === -32521);
 }
 
-export function refusalOfFailure(failure: unknown): Refusal | undefined {
+export function refusalOfFailure(failure: unknown): ManagerRefusal | undefined {
   for (const e of chainOf(failure)) {
     const data = revertDataOf(e);
     const refused = data && refusalWithin(data);
@@ -105,7 +112,7 @@ export function refusalOfFailure(failure: unknown): Refusal | undefined {
 export function refusalOfLogs(
   logs: { address: Address; data: Hex; topics: Hex[] }[],
   userOpHash: Hex
-): Refusal | undefined {
+): ManagerRefusal | undefined {
   for (const log of logs) {
     if (log.address.toLowerCase() !== entryPoint08Address.toLowerCase()) continue;
     let args: { userOpHash: Hex; revertReason: Hex };
