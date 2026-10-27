@@ -1,3 +1,5 @@
+import { isCheckerAddress, isRefusedChecker } from './call-checker.js';
+
 export interface PermissionsConfig {
   /**
    * `functionSignature` is the readable form the docs use and what the SDK
@@ -18,13 +20,6 @@ export interface PermissionsConfig {
     multiplier?: number;
   }>;
 }
-
-/**
- * JustaPermissionManager, the same on every chain. Written out rather than imported because a
- * static `@jaw.id/core` import pulls the whole SDK into CLI startup, and this parser is synchronous.
- * A test holds it equal to the SDK's.
- */
-export const PERMISSIONS_MANAGER = '0xf1b40E3D5701C04d86F7828f0EB367B9C90901D8';
 
 const ADDRESS_RE = /^0x[0-9a-fA-F]{40}$/;
 const SELECTOR_RE = /^0x[0-9a-fA-F]{8}$/;
@@ -67,10 +62,10 @@ export function parsePermissionsConfig(raw: unknown): PermissionsConfig {
           errors.push(`calls.${i}.selector: Must be a 4-byte hex selector (e.g. 0xa9059cbb)`);
         }
         if (c.checker !== undefined) {
-          if (typeof c.checker !== 'string' || !ADDRESS_RE.test(c.checker)) {
+          if (!isCheckerAddress(c.checker)) {
             errors.push(`calls.${i}.checker: Must be a valid 0x address (40 hex chars)`);
-          } else if (c.checker.toLowerCase() === PERMISSIONS_MANAGER.toLowerCase()) {
-            // The manager refuses itself as a checker when the permission is approved.
+          } else if (isRefusedChecker(c.checker)) {
+            // No account is known before the grant, so only the manager is refused here.
             errors.push(`calls.${i}.checker: Cannot be the permission manager`);
           }
         }

@@ -1,4 +1,5 @@
-import { toFunctionSelector, zeroAddress } from 'viem';
+import { toFunctionSelector } from 'viem';
+import { callRuleKey, hasChecker } from './call-checker.js';
 import { describeSpendPeriod } from '../x402/period.js';
 import type { GrantedPermission } from '../session/session-config.js';
 import type { PermissionsConfig } from './permissions-config.js';
@@ -36,10 +37,7 @@ function callKey(call: {
   checker?: string;
 }): string | null {
   const selector = call.selector ?? (call.functionSignature ? safeSelector(call.functionSignature) : undefined);
-  // The checker is part of the rule: two rules on one function with different checkers are two
-  // rules, and the manager runs both. No checker and the zero one are the same rule.
-  const checker = (call.checker ?? zeroAddress).toLowerCase();
-  return selector ? `${call.target.toLowerCase()}:${selector.toLowerCase()}:${checker}` : null;
+  return selector ? callRuleKey({ target: call.target, selector, checker: call.checker }) : null;
 }
 
 function safeSelector(signature: string): string | undefined {
@@ -84,7 +82,7 @@ export function mergePermissions(existing: GrantedPermission, addition: Permissi
   const calls: NonNullable<PermissionsConfig['calls']> = existing.calls.map((call) => ({
     target: call.target,
     selector: call.selector,
-    ...(call.checker ? { checker: call.checker } : {}),
+    ...(hasChecker(call) ? { checker: call.checker } : {}),
   }));
   const seenCalls = new Set(existing.calls.map(callKey));
   for (const call of addition.calls ?? []) {
@@ -130,7 +128,7 @@ export function describeMerge(existing: GrantedPermission, merged: PermissionsCo
   for (const call of merged.calls ?? []) {
     const key = callKey(call);
     if (key && hadCalls.has(key)) continue;
-    const checked = call.checker && call.checker.toLowerCase() !== zeroAddress ? ` checked by ${call.checker}` : '';
+    const checked = hasChecker(call) ? ` checked by ${call.checker}` : '';
     lines.push(`  + call    ${call.target} ${call.selector ?? call.functionSignature ?? ''}${checked}`.trimEnd());
   }
 

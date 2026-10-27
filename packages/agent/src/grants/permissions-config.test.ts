@@ -1,5 +1,6 @@
 import { describe, it, expect } from 'vitest';
-import { parsePermissionsConfig, PERMISSIONS_MANAGER } from './permissions-config.js';
+import { PERMISSIONS_MANAGER } from './call-checker.js';
+import { parsePermissionsConfig } from './permissions-config.js';
 
 const USDC = '0x036CbD53842c5426634e7929541eC2318f3dCF7e';
 const CHECKER = '0x398b9d939E7E616E03eA99601c835C920621B2ca';

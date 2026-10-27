@@ -1,4 +1,5 @@
-import { parseAbi, zeroAddress, ContractFunctionRevertedError, BaseError } from 'viem';
+import { parseAbi, ContractFunctionRevertedError, BaseError } from 'viem';
+import { checkerOf } from '../grants/call-checker.js';
 import type { GrantedPermission } from '../session/session-config.js';
 import type { ChainClients } from '../ports.js';
 
@@ -116,7 +117,7 @@ export function toContractPermission(permission: GrantedPermission): ContractPer
     calls: permission.calls.map((call) => ({
       target: call.target as `0x${string}`,
       selector: call.selector as `0x${string}`,
-      checker: (call.checker ?? zeroAddress) as `0x${string}`,
+      checker: checkerOf(call),
     })),
     spends,
   };

@@ -1,3 +1,6 @@
+import { zeroAddress } from 'viem';
+import { isCheckerAddress, type CallRule } from '../grants/call-checker.js';
+
 /**
  * How the session account address is derived, as it appears on disk.
  *
@@ -44,12 +47,11 @@ export interface GrantedPermission {
    * `checker` is part of the permission hash. A record written before checkers carries none, and
    * every such permission was approved with the zero checker, so an absent one reads as zero.
    */
-  calls: Array<{ target: string; selector: string; checker?: string }>;
+  calls: CallRule[];
   spends: Array<{ token: string; allowance: string; unit: string; multiplier: number }>;
 }
 
 const ADDRESS_RE = /^0x[0-9a-fA-F]{40}$/;
-const ZERO_CHECKER = '0x0000000000000000000000000000000000000000';
 const SELECTOR_RE = /^0x[0-9a-fA-F]{8}$/;
 const HEX_RE = /^0x[0-9a-fA-F]+$/;
 /** Decimal or hex, matching what the SDK hands to `BigInt()`. */
@@ -89,13 +91,13 @@ export function parseGrantedPermission(raw: unknown): GrantedPermission | undefi
   const calls: GrantedPermission['calls'] = [];
   for (const entry of r.calls) {
     if (typeof entry !== 'object' || entry === null) return undefined;
-    const { target, selector, checker = ZERO_CHECKER } = entry as Record<string, unknown>;
+    const { target, selector, checker = zeroAddress } = entry as Record<string, unknown>;
     if (typeof target !== 'string' || !ADDRESS_RE.test(target)) return undefined;
     // The response builds the selector from the signature, so an entry without
     // one cannot be reconstructed: the signature it came from is not returned.
     if (typeof selector !== 'string' || !SELECTOR_RE.test(selector)) return undefined;
     // A response from before checkers names none, and its permission was approved with the zero one.
-    if (typeof checker !== 'string' || !ADDRESS_RE.test(checker)) return undefined;
+    if (!isCheckerAddress(checker)) return undefined;
     calls.push({ target, selector, checker });
   }
 
