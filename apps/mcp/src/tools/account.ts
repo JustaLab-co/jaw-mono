@@ -39,8 +39,7 @@ import { reply } from '@/lib/fence';
 import { capital, counted, formatAmount, listed, nativeSymbol, networkName } from '@/lib/owner-text';
 import { reasonOf, refusal, withNext } from './reply';
 
-// The default networks and the connection's own chain, all read in one round.
-const CONCURRENCY = 17;
+const MAX_CONCURRENCY = 20;
 const CHAIN_DEADLINE_MS = 4000;
 const CALL_BUDGET_MS = 4500;
 const ASSET_TYPES = ['native', 'erc20'];
@@ -74,6 +73,9 @@ const DEFAULT_ASSET_CHAINS: readonly number[] = [
   arc,
   monad,
 ].map((c) => c.id);
+
+// The default networks and the connection's own chain, all read in one round, up to MAX_CONCURRENCY at once.
+const CONCURRENCY = Math.min(DEFAULT_ASSET_CHAINS.length + 1, MAX_CONCURRENCY);
 
 /** The default networks the wallet supports, and the connection's own chain when it is a mainnet. */
 function defaultAssetIds(own: number) {
