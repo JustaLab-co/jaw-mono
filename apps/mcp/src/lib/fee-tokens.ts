@@ -1,13 +1,15 @@
 import { handleGetCapabilitiesRequest } from '@jaw.id/core';
 import { isAddress, withTimeout, zeroAddress } from 'viem';
 import { config } from '@/connections/config';
+import { errorLabel, log } from './edge';
 import { chainName, listed, nativeSymbol } from './owner-text';
 
 /** How long a link's reply waits on the fee tokens before it says they could not be read. */
 const FEE_TOKENS_WAIT_MS = 3_000;
 
 // A symbol is the issuer's text, written into the server's own sentence, so only a plain one is kept.
-const PLAIN_SYMBOL = /^[\p{L}\p{N}\p{Sc}.-]{1,16}$/u;
+// Latin letters only, so a symbol spelled with a lookalike letter from another script is not passed on as the real one.
+const PLAIN_SYMBOL = /^[A-Za-z0-9\p{Sc}.-]{1,16}$/u;
 
 /** A token the wallet pays the network fee in; the zero address is the network's coin. */
 export type FeeToken = { symbol: string; address: string };
@@ -59,7 +61,8 @@ export async function feeTokensOn(read: ReadFeeTokens, chainId: number): Promise
       timeout: FEE_TOKENS_WAIT_MS,
       errorInstance: new Error('the fee tokens were not read in time'),
     });
-  } catch {
+  } catch (err) {
+    log('warn', { msg: 'fee tokens unreadable', chainId, error: errorLabel(err) });
     return undefined;
   }
 }

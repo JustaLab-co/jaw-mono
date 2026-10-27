@@ -140,6 +140,7 @@ interface LogFields {
   permissionRequestId?: string;
   permissionId?: string;
   callsId?: string;
+  chainId?: number;
   code?: string;
   /**
    * A fingerprint of a relay session id (`relaySessionTag`): enough to match the log lines of one wallet link, not

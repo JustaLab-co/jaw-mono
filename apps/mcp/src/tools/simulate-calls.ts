@@ -133,6 +133,12 @@ function refuseFailure(error: unknown) {
   return refusal(`${NOT_DECIDED} Try again shortly.`);
 }
 
+/** The call a revert names, or undefined when it failed outside the calls: no index, or one outside the batch. */
+const failedCall = (found: z.infer<typeof proxyResult>, count: number) =>
+  found.status === 'reverted' && found.callIndex !== undefined && found.callIndex >= 0 && found.callIndex < count
+    ? found.callIndex
+    : undefined;
+
 /** `feeNext` goes to the agent when the failure is outside the calls: how else the fee could be paid. */
 function present(
   found: z.infer<typeof proxyResult>,
@@ -154,8 +160,7 @@ function present(
       reason: untrusted(found.reason),
       summary: `The check could not decide. This is not a failure of the actions: they neither passed nor failed. ${NOTHING_SENT}`,
     };
-  const at =
-    found.callIndex !== undefined && found.callIndex >= 0 && found.callIndex < count ? found.callIndex : undefined;
+  const at = failedCall(found, count);
   const reason = untrusted(found.reason);
   return {
     ...base,
@@ -181,8 +186,10 @@ function answer(out: z.infer<typeof output>) {
   return out.status === 'reverted' && out.reason ? reply(out, { type: 'text', text: out.reason }) : reply(out);
 }
 
-/** Dry-runs the batch on the JAW proxy. Nothing is signed or sent. */
-/** `feeTokens` reads the wallet's fee tokens for a check that failed paying in the coin; left out, they are not read. */
+/**
+ * Dry-runs the batch on the JAW proxy. Nothing is signed or sent.
+ * `feeTokens` reads the wallet's fee tokens for a check that failed paying in the coin; left out, they are not read.
+ */
 export async function simulateCalls(
   args: Input,
   account: Address,
@@ -240,8 +247,7 @@ export async function simulateCalls(
   if (!found.success)
     return refusal('The simulation service gave an answer that could not be read, so nothing was decided.');
   const paidInCoin = !paymaster || paymaster.mode === 'none';
-  const at = found.data.status === 'reverted' ? found.data.callIndex : undefined;
-  const outsideCalls = found.data.status === 'reverted' && !(at !== undefined && at >= 0 && at < calls.length);
+  const outsideCalls = found.data.status === 'reverted' && failedCall(found.data, calls.length) === undefined;
   // A run under a permission is told its own fee token; only a check of the owner's wallet is offered the others.
   const feeNext =
     feeTokens && paidInCoin && outsideCalls && !permissionId

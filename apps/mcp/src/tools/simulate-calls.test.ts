@@ -249,12 +249,16 @@ describe('jaw_simulate_calls', () => {
       });
     });
 
-    it('given a callIndex outside the batch, then it is dropped and treated as no callIndex', async () => {
+    it('given a callIndex outside the batch, then it is dropped and treated as no callIndex, fee tokens included', async () => {
       for (const callIndex of [2, 9, -1]) {
         const p = await proxy(result({ status: 'reverted', callIndex, reason: 'boom' }));
-        const out = done(await simulateCalls(input({ calls: [{ to: OTHER }, { to: USDC }] }), ACCOUNT, p.clientFor));
+        const feeTokens = async () => [{ symbol: 'USDC', address: USDC }];
+        const out = done(
+          await simulateCalls(input({ calls: [{ to: OTHER }, { to: USDC }] }), ACCOUNT, p.clientFor, feeTokens)
+        );
         expect(out.structuredContent).not.toHaveProperty('callIndex');
         expect(out.structuredContent.summary).toContain('before the actions ran');
+        expect(out.structuredContent.summary).toContain(`the wallet can also pay it in USDC (${USDC})`);
       }
     });
 
