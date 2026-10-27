@@ -693,7 +693,7 @@ describe('what the owner hears from the account tools', () => {
     expect(spoken(r)).toBe('2 permissions granted by the wallet, 1 to apps connected here.');
   });
 
-  it('given networks that batch and one that takes fees in USDC, then the owner hears the networks by name and what each can do', async () => {
+  it('given networks that batch and one that takes fees in its coin and USDC, then the owner hears the networks by name and what each can do', async () => {
     const fees = {
       supported: true,
       tokens: [
@@ -713,7 +713,30 @@ describe('what the owner hears from the account tools', () => {
 
     expect(leaks(spoken(r))).toEqual([]);
     expect(spoken(r)).toBe(
-      'The wallet works on 2 networks: Base and Arbitrum One. On each it can run several actions in one approval. It can pay fees in USDC on Base.'
+      'The wallet works on 2 networks: Base and Arbitrum One. On each it can run several actions in one approval. On Base it can pay the network fee in ETH or USDC.'
+    );
+  });
+
+  it('given networks with their own fee tokens, then each list is read from the capabilities, shared lists said once', async () => {
+    const fees = (...symbols: string[]) => ({
+      supported: true,
+      tokens: [...symbols.map((symbol) => ({ symbol, feeToken: true })), { symbol: 'DAI', feeToken: false }],
+    });
+    const byChain: Record<string, unknown> = {
+      [hex(10)]: { feeToken: fees('ETH', 'USDC') },
+      [hex(8453)]: { feeToken: fees('ETH', 'USDC') },
+      [hex(42161)]: { feeToken: fees('ETH', 'USDC', 'USD₮0', 'EURe') },
+    };
+    answer = ({ params }) =>
+      Object.fromEntries((params[1] as unknown as string[]).map((id) => [id, byChain[id] ?? {}]));
+
+    const r = await callTool(token, 'jaw_get_capabilities', { chainIds: [10, 8453, 42161] });
+
+    expect(leaks(spoken(r))).toEqual([]);
+    expect(spoken(r)).toBe(
+      'The wallet works on 3 networks: OP Mainnet, Base and Arbitrum One. ' +
+        'On OP Mainnet and Base it can pay the network fee in ETH or USDC. ' +
+        'On Arbitrum One it can pay the network fee in ETH, USDC, USD₮0 or EURe.'
     );
   });
 

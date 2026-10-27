@@ -20,6 +20,7 @@ import { countHit, isPaymentsPaused } from '@/db/settings';
 import { batchBytes, gasClientFor, MAX_BATCH_BYTES, MAX_CALLS, overBudget, type BatchCall } from '@/lib/batch-limits';
 import { isProxyChain } from '@/lib/chain';
 import { errorLabel, log, RATE_WINDOW_MS } from '@/lib/edge';
+import { feeFor, feeTokensNext, readFeeTokens, tokenChoice, type Fee, type ReadFeeTokens } from '@/lib/fee-tokens';
 import { reply } from '@/lib/fence';
 import { chainName, counted, expiresIn, formatAmount, nativeSymbol, receiptLine, withinWindow } from '@/lib/owner-text';
 import { MAX_WAIT_SECONDS, SUGGESTED_WAIT_SECONDS, waiterOf, waitFor, type Waiter } from '@/lib/wait';
@@ -132,6 +133,8 @@ export interface OwnerCallDeps {
   pollMs?: number;
   /** Reads a chain for the gas a batch needs; left out, the gas is not checked. */
   gasClient?: (chainId: number) => PublicClient;
+  /** Reads the tokens that pay the network fee on a chain; left out, the link names none. */
+  feeTokens?: ReadFeeTokens;
 }
 
 const DEFAULTS: OwnerCallDeps = {
@@ -139,6 +142,7 @@ const DEFAULTS: OwnerCallDeps = {
   receipt: readReceipt,
   clients: chainClients,
   gasClient: gasClientFor,
+  feeTokens: readFeeTokens,
 };
 
 /** A refusal: its code first for the agent's logic, then what the owner hears, then what the agent does about it. */
@@ -247,8 +251,11 @@ type Said = { say: string; next?: string };
 
 const receiptOfRow = (row: OwnerCallRow) => (row.txHash ? ` ${receiptLine(row.chainId, row.txHash)}` : '');
 
-/** `followUp` is a status read: the agent already showed the link, so it shows it again only when the owner asks. */
-function summaryOf(row: OwnerCallRow, followUp: boolean): Said {
+/**
+ * `followUp` is a status read: the agent already showed the link, so it shows it again only when the owner asks.
+ * `fee` is there when a link opens.
+ */
+function summaryOf(row: OwnerCallRow, followUp: boolean, fee?: Fee): Said {
   const by = row.approveBy.toISOString();
   const network = chainName(row.chainId);
   const askAgain = 'If the owner still wants it, ask again with a new idempotencyKey.';
@@ -283,11 +290,12 @@ function summaryOf(row: OwnerCallRow, followUp: boolean): Said {
           `Open this link to approve: ${row.walletUrl}\n` +
           `It asks the owner to approve ${counted(row.calls.length, 'action')} from their wallet on ${network}, ` +
           `${moving(row)}${withinWindow(row.approveBy)}.\n` +
-          'The owner pays the network fee in the wallet.',
+          `The owner pays the network fee in the wallet${fee?.tokens?.length ? `, in ${tokenChoice(fee.tokens.map((f) => f.symbol))}` : ''}.`,
         next:
           'Show the link now, on its own line, with one sentence of what this does and moves. ' +
           `Then call jaw_get_calls_status with id ${row.id} and waitSeconds ${SUGGESTED_WAIT_SECONDS}, and again while it answers awaiting_owner, until ${by}. ` +
-          'Do not wait for the owner to say they approved.',
+          'Do not wait for the owner to say they approved.' +
+          (fee ? ` ${feeTokensNext(row.chainId, fee.tokens)}` : ''),
       };
     case 'owner_declined':
       if (row.code === 'wrong_account') {
@@ -327,9 +335,9 @@ function summaryOf(row: OwnerCallRow, followUp: boolean): Said {
 }
 
 /** `note` is for the agent alone, ahead of its next step. */
-function answer(row: OwnerCallRow, note = '', followUp = false): SendResult {
+function answer(row: OwnerCallRow, note = '', followUp = false, fee?: Fee): SendResult {
   if (row.relay) void resumeCall(row);
-  const { say, next } = summaryOf(row, followUp);
+  const { say, next } = summaryOf(row, followUp, fee);
   const out = ownerCallsOutput.parse({
     id: row.id,
     idempotencyKey: row.idempotencyKey,
@@ -381,6 +389,7 @@ async function openWalletFor(t: Tenant, approveBy: Date, deps: OwnerCallDeps): P
 
 async function reopen(t: Tenant, row: OwnerCallRow, deps: OwnerCallDeps): Promise<SendResult> {
   if ((await countOpenLinks(t.account, row.id)) >= MAX_OPEN_PER_ACCOUNT) return accountBusy();
+  const fee = feeFor(deps.feeTokens, row.chainId);
   const wallet = await openWalletFor(t, row.approveBy, deps);
   if (!wallet) return walletBusy(row.idempotencyKey);
   let reopened: OwnerCallRow | undefined | typeof FULL;
@@ -390,8 +399,9 @@ async function reopen(t: Tenant, row: OwnerCallRow, deps: OwnerCallDeps): Promis
     if (!reopened || reopened === FULL) wallet.close();
   }
   if (reopened === FULL) return accountBusy();
-  if (reopened) followCalls(reopened, wallet, deps.clients);
-  return answer(reopened ?? (await findById(t.connectionId, row.id)) ?? row);
+  if (!reopened) return answer((await findById(t.connectionId, row.id)) ?? row);
+  followCalls(reopened, wallet, deps.clients);
+  return answer(reopened, '', false, await fee);
 }
 
 async function replay(t: Tenant, row: OwnerCallRow, hash: string, deps: OwnerCallDeps): Promise<SendResult> {
@@ -464,6 +474,7 @@ export async function sendCalls(t: Tenant, input: SendCallsInput, deps: OwnerCal
   const heavy = await tooHeavy(chainId, t.account as Address, batch, deps);
   if (heavy) return refuseUnlessStored(heavy);
   const approveBy = new Date(Date.now() + APPROVE_WITHIN_MS);
+  const fee = feeFor(deps.feeTokens, chainId);
   const wallet = await openWalletFor(t, approveBy, deps);
   if (!wallet) return refuseUnlessStored(walletBusy(key));
   let row: OwnerCallRow | null | typeof FULL = null;
@@ -489,7 +500,7 @@ export async function sendCalls(t: Tenant, input: SendCallsInput, deps: OwnerCal
   if (row === FULL) return refuseUnlessStored(accountBusy());
   if (row) {
     followCalls(row, wallet, deps.clients);
-    return answer(row);
+    return answer(row, '', false, await fee);
   }
   const raced = await findByKey(t.connectionId, key);
   return raced ? replay(t, raced, hash, deps) : inProgress(await findOpen(t.connectionId));

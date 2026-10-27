@@ -35,6 +35,7 @@ import { isLive, ownedBy } from '@/connections/rows';
 import { getDb } from '@/db/client';
 import { connections, ownerCalls, sends } from '@/db/schema';
 import { caip2 } from '@/lib/chain';
+import { feeTokenSymbols, tokenChoice } from '@/lib/fee-tokens';
 import { reply } from '@/lib/fence';
 import { capital, counted, formatAmount, listed, nativeSymbol, networkName } from '@/lib/owner-text';
 import { reasonOf, refusal, withNext } from './reply';
@@ -353,26 +354,29 @@ const batches = (caps: unknown) =>
   ['supported', 'ready'].includes(String(field(caps, 'atomic')?.status)) ||
   field(caps, 'atomicBatch')?.supported === true;
 
-const paysFeesInUsdc = (caps: unknown) => {
-  const fee = field(caps, 'feeToken');
-  const tokens = Array.isArray(fee?.tokens) ? (fee.tokens as Caps[]) : [];
-  return fee?.supported === true && tokens.some((t) => t?.symbol === 'USDC' && t?.feeToken !== false);
-};
-
-/** "The wallet works on 2 networks: Base and Celo. On each it can run several actions in one approval and pay fees in USDC." */
+/** "The wallet works on 2 networks: Base and Celo. On each it can run several actions in one approval. On Base it can pay the network fee in ETH or USDC." */
 function capabilitiesSummary(chains: { id: number; caps: unknown }[]) {
   if (!chains.length) return 'No network came back, so where the wallet works could not be read.';
   const sorted = [...chains].sort((a, b) => a.id - b.id);
   const names = (list: typeof sorted) => listed(list.map((c) => networkName(c.id)));
   const lines = [`The wallet works on ${counted(sorted.length, 'network')}: ${names(sorted)}.`];
-  const can = [
-    { what: 'run several actions in one approval', on: sorted.filter((c) => batches(c.caps)) },
-    { what: 'pay fees in USDC', on: sorted.filter((c) => paysFeesInUsdc(c.caps)) },
-  ];
-  const everywhere = can.filter((c) => c.on.length === sorted.length).map((c) => c.what);
-  if (everywhere.length) lines.push(`${sorted.length === 1 ? 'There' : 'On each'} it can ${everywhere.join(' and ')}.`);
-  for (const c of can) {
-    if (c.on.length && c.on.length < sorted.length) lines.push(`It can ${c.what} on ${names(c.on)}.`);
+  const batching = sorted.filter((c) => batches(c.caps));
+  if (batching.length === sorted.length) {
+    lines.push(`${sorted.length === 1 ? 'There' : 'On each'} it can run several actions in one approval.`);
+  } else if (batching.length) {
+    lines.push(`It can run several actions in one approval on ${names(batching)}.`);
+  }
+  // Networks that take the same fee tokens share a sentence.
+  const byTokens = new Map<string, { symbols: string[]; on: typeof sorted }>();
+  for (const c of sorted) {
+    const symbols = feeTokenSymbols(c.caps);
+    if (!symbols.length) continue;
+    const key = symbols.join('\n');
+    byTokens.set(key, { symbols, on: [...(byTokens.get(key)?.on ?? []), c] });
+  }
+  for (const { symbols, on } of byTokens.values()) {
+    const where = on.length === sorted.length && sorted.length > 1 ? 'On each' : `On ${names(on)}`;
+    lines.push(`${where} it can pay the network fee in ${tokenChoice(symbols)}.`);
   }
   return lines.join(' ');
 }
@@ -539,9 +543,10 @@ export function registerAccountTools(server: McpServer) {
     {
       title: 'Networks the wallet supports',
       description:
-        'The networks this wallet works on and what it can do on each: run several actions in one approval, pay the ' +
-        'network fee in USDC or another token instead of the coin. Use it to know where the wallet can act and receive ' +
-        'funds before telling the owner a network is fine, and to answer "which networks do you support". Mainnets only.',
+        'The networks this wallet works on and what it can do on each: run several actions in one approval, and the ' +
+        'tokens it pays the network fee in there. Use it to know where the wallet can act and receive ' +
+        'funds before telling the owner a network is fine, to answer "which networks do you support", and before telling ' +
+        'the owner which token pays a fee or that they lack one. Mainnets only.',
       inputSchema: z.strictObject({ chainIds }),
       outputSchema: capabilitiesOutput,
       annotations: readOnly,

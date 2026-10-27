@@ -265,6 +265,13 @@ const input: SwapToolInput = {
   idempotencyKey: 'agent-key',
 };
 
+// ETH and USDC on Base, as the wallet lists them for the fee.
+const FEE_TOKENS = [
+  { symbol: 'ETH', address: zeroAddress },
+  { symbol: 'USDC', address: '0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913' },
+];
+const ON_BASE = { originChainId: 8453, originToken: '0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913' };
+
 const run = (t: Tenant, args: Partial<SwapToolInput> = {}, openWallet = recordingWallet()) =>
   swap(t, { ...input, ...args }, { openWallet, quote: quoteDeps, pollMs: 0, backend: backendDeps });
 
@@ -471,7 +478,7 @@ describe('a swap waiting for the owner', () => {
     });
     expect(result.structuredContent?.deposit?.address).toBeUndefined();
     expect(result.structuredContent?.summary).toContain(row.walletUrl);
-    expect(result.structuredContent?.summary).toMatch(/gas/i);
+    expect(result.structuredContent?.summary).toMatch(/network fee/i);
   });
 
   it('B5: given a quote body with text in it, when jaw_swap answers, then that text reaches the agent only fenced', async () => {
@@ -539,7 +546,48 @@ describe('the owner link', () => {
     const [row] = await swapsOf(t.connectionId);
     expect(callsOf(row)?.[0].chainId).toBe(8453);
     expect(opened).toEqual([{ chainId: 84532, until: row.approveBy, client: t.clientId }]);
-    expect(result.structuredContent?.summary).toMatch(/pays that transaction's gas in the wallet/);
+    expect(result.structuredContent?.summary).toMatch(/pays that transaction's network fee in the wallet/);
+  });
+
+  it('given an origin chain whose fee tokens the wallet lists, then they are read for the origin chain, not the connection chain, and named to the agent', async () => {
+    const { t } = await connected();
+    const asked: number[] = [];
+    const feeTokens = async (chainId: number) => {
+      asked.push(chainId);
+      return FEE_TOKENS;
+    };
+
+    const result = await swap(
+      t,
+      { ...input, ...ON_BASE },
+      { openWallet: recordingWallet(), quote: quoteDeps, pollMs: 0, backend: backendDeps, feeTokens }
+    );
+
+    expect(asked).toEqual([8453]);
+    expect(result.structuredContent?.url).toBeDefined();
+    expect(result.structuredContent?.summary).toContain(
+      "The owner pays that transaction's network fee in the wallet. On Base the wallet pays the network fee in ETH or USDC, from the owner's balance there. " +
+        "Never tell the owner the fee needs the network's coin."
+    );
+    expect(result.structuredContent?.summary).not.toMatch(/native coin/);
+  });
+
+  it('given fee tokens that cannot be read, then the link still opens and the agent is sent to check the capabilities', async () => {
+    const { t } = await connected();
+    const feeTokens = async () => Promise.reject(new Error('proxy down'));
+
+    const result = await swap(t, input, {
+      openWallet: recordingWallet(),
+      quote: quoteDeps,
+      pollMs: 0,
+      backend: backendDeps,
+      feeTokens,
+    });
+
+    expect(result.structuredContent?.url).toBeDefined();
+    expect(result.structuredContent?.summary).toContain(
+      'The tokens that pay the network fee on Base Sepolia could not be read: check jaw_get_capabilities for Base Sepolia'
+    );
   });
 });
 
@@ -970,6 +1018,35 @@ describe('the owner approves the deposit', () => {
       expect(quotesGiven()).toHaveLength(paid);
     }
   );
+
+  it('given a swap that reopens, then the fee tokens are read for its origin chain and named to the agent again', async () => {
+    const { t } = await connected();
+    await approve(
+      t,
+      async () => {
+        throw rejected(-32000);
+      },
+      ON_BASE
+    );
+    const asked: number[] = [];
+    const feeTokens = async (chainId: number) => {
+      asked.push(chainId);
+      return FEE_TOKENS;
+    };
+
+    const replay = await swap(
+      t,
+      { ...input, ...ON_BASE },
+      { openWallet: recordingWallet(), quote: quoteDeps, pollMs: 0, backend: backendDeps, feeTokens }
+    );
+
+    expect(opened).toHaveLength(2);
+    expect(asked).toEqual([8453]);
+    expect(replay.structuredContent?.url).toBeDefined();
+    expect(replay.structuredContent?.summary).toContain(
+      "On Base the wallet pays the network fee in ETH or USDC, from the owner's balance there."
+    );
+  });
 
   it('given the row expired while the deposit was asked, when the owner declines it, then the send marker gives way to owner_declined', async () => {
     const { t } = await connected();
