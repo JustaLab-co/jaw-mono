@@ -9,12 +9,7 @@ const ACROSS_SYNCED = [
   'eventEmitter',
   'wrappedNative',
 ] as const satisfies readonly (keyof AcrossContracts)[];
-const RELAY_SYNCED = [
-  'depository',
-  'protocolChain',
-  'erc20Routers',
-  'solvers',
-] as const satisfies readonly (keyof RelayContracts)[];
+const RELAY_SYNCED = ['depository', 'erc20Routers', 'solvers'] as const satisfies readonly (keyof RelayContracts)[];
 
 function take<T>(base: T, live: T | undefined, keys: readonly (keyof T)[]): T {
   const merged = { ...base };
