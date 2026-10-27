@@ -227,6 +227,20 @@ describe('given the deposit call of a live Across quote', () => {
       receive: { kind: 'swap', chainId: 4663, token: { address: NVDA, known: false } },
     });
   });
+
+  it('then 50 USDC on Base into NVDA through LiFi reads the minimum of NVDA the floor promises', () => {
+    expect(readAcrossCall(contracts, ACROSS_CALLS.usdcToNvdaLifi)).toMatchObject({
+      kind: 'deposit',
+      provider: 'across',
+      send: usdc(8453, BASE_USDC, 50_000_000n),
+      destinationChainId: 4663,
+      recipient: OTHER,
+      receive: {
+        kind: 'minimum',
+        amount: { chainId: 4663, amount: 218887748524464186n, token: { address: NVDA, known: false } },
+      },
+    });
+  });
 });
 
 describe('given a call that is not to a pinned Across contract', () => {
