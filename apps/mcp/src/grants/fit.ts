@@ -35,7 +35,7 @@ export interface FitContext {
 }
 
 // ERC-7528, how the permission manager names the chain's own coin.
-const NATIVE_TOKEN: Address = '0xEeeeeEeeeEeEeeEeEeEeeEEEeeeeEeeeeeeeEEeE';
+export const NATIVE_TOKEN: Address = '0xEeeeeEeeeEeEeeEeEeEeeEEEeeeeEeeeeeeeEEeE';
 const TRANSFER = toFunctionSelector('transfer(address,uint256)');
 const PERMIT2: Address = '0x000000000022D473030F116dDEE9F6B43aC78BA3';
 const LOW_160 = (1n << 160n) - 1n;

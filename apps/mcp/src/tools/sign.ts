@@ -14,7 +14,7 @@ import {
   lostBefore,
   lostLinkSaid,
   openLink,
-  signById,
+  requestById,
   type PermissionRequestRow,
 } from '@/grants/requests';
 import { signWork, type SignPayload, type SignRequest } from '@/grants/resume';
@@ -369,7 +369,7 @@ export async function signStatus(
   }
   const until = Date.now() + waitSeconds * 1000;
   const read = async () => {
-    const row = await signById(t, id);
+    const row = await requestById(t, 'sign', id);
     return row
       ? answer(row, true)
       : refuse(

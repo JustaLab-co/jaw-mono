@@ -25,11 +25,11 @@ const CONCURRENCY = 10;
 const CHAIN_DEADLINE_MS = 4000;
 const CALL_BUDGET_MS = 4500;
 const ASSET_TYPES = ['native', 'erc20'];
-const readOnly = { readOnlyHint: true, openWorldHint: true };
+export const readOnly = { readOnlyHint: true, openWorldHint: true };
 
-const mainnetIds = () => getSupportedChains(false).map((c) => c.id);
+export const mainnetIds = () => getSupportedChains(false).map((c) => c.id);
 
-const chainIds = z
+export const chainIds = z
   .array(z.number().int().positive())
   .min(1)
   .max(60)

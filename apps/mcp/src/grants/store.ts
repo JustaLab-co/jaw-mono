@@ -77,6 +77,26 @@ export async function budgetSignedUnder(
   return row && { ...toBudget(row), revokedAt: row.revokedAt, replaced: row.replacedAt !== null };
 }
 
+export type Standing = 'in_force' | 'replaced' | 'revoked' | 'expired';
+
+/** Where a permission the connection was granted stands now, as this server recorded it. */
+export async function standingOf(connectionId: string, permissionId: string): Promise<Standing> {
+  const [row] = await getDb()
+    .select({
+      revokedAt: grants.revokedAt,
+      replacedAt: grants.replacedAt,
+      ended: sql<boolean>`${grants.expiresAt} <= now()`,
+    })
+    .from(grants)
+    .where(
+      and(eq(grants.connectionId, connectionId), sql`lower(${grants.permissionId}) = ${permissionId.toLowerCase()}`)
+    );
+  if (row?.revokedAt) return 'revoked';
+  if (row?.ended) return 'expired';
+  if (row?.replacedAt) return 'replaced';
+  return 'in_force';
+}
+
 export const x402Budget = async (connectionId: string): Promise<Grant | undefined> =>
   (await x402Budgets(connectionId))[0];
 
