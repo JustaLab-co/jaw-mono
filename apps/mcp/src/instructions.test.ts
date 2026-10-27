@@ -186,6 +186,23 @@ describe('the server instructions', () => {
     );
     expect(instructions).not.toContain('do not check the balance right away');
   });
+
+  it('given a fee to pay, then the agent checks which tokens the wallet pays it in there rather than assume the coin', async () => {
+    const c = await connect();
+
+    const r = await mcp(c.access_token, {
+      method: 'initialize',
+      params: { protocolVersion: '2025-06-18', capabilities: {}, clientInfo: { name: 'test', version: '0' } },
+    });
+
+    const instructions: string = r.json.result.instructions;
+    expect(instructions).toContain(
+      "The network fee is paid in one of the tokens the wallet lists for that network, which may not be the network's coin: check what the wallet supports there before saying which token pays a fee or that one is missing."
+    );
+    expect(instructions).toContain(
+      'When a request spends all of a token that pays the fee, the owner can keep a little of it back for the fee.'
+    );
+  });
 });
 
 describe('the refusals tools share', () => {

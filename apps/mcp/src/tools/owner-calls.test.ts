@@ -1909,6 +1909,75 @@ describe('what the owner hears from jaw_send_calls and jaw_get_calls_status', ()
     expect(spoken(result)).not.toContain('in total');
   });
 
+  it('given the fee tokens the wallet lists for the network, then the owner hears them and the agent is told not to send the owner for the coin', async () => {
+    const { t } = await connected();
+    const asked: [string, number][] = [];
+    const feeTokens = async (account: string, chainId: number) => {
+      asked.push([account, chainId]);
+      return ['ETH', 'USDC', 'USD₮0', 'EURe'];
+    };
+
+    const result = await sendCalls(t, input(), {
+      openWallet: wallet(),
+      receipt: async () => null,
+      clients: quietChain,
+      feeTokens,
+    });
+
+    expect(asked).toEqual([[t.account, 84532]]);
+    expect(result.structuredContent!.summary.split('\n')[2]).toBe(
+      'The owner pays the network fee in the wallet, in ETH, USDC, USD₮0 or EURe.'
+    );
+    expect(toAgent(result)[0]).toContain(
+      "On Base Sepolia the wallet pays the network fee in ETH, USDC, USD₮0 or EURe, from the owner's balance there. " +
+        "Never tell the owner the fee needs the network's coin."
+    );
+    expect(leaks(spoken(result))).toEqual([]);
+  });
+
+  it('given fee tokens that cannot be read, then the owner hears no token and the agent is sent to check the capabilities', async () => {
+    const { t } = await connected();
+    const feeTokens = async () => Promise.reject(new Error('proxy down'));
+
+    const result = await sendCalls(t, input(), {
+      openWallet: wallet(),
+      receipt: async () => null,
+      clients: quietChain,
+      feeTokens,
+    });
+
+    expect(result.structuredContent!.url).toBeDefined();
+    expect(result.structuredContent!.summary.split('\n')[2]).toBe('The owner pays the network fee in the wallet.');
+    expect(toAgent(result)[0]).toContain(
+      'The tokens that pay the network fee on Base Sepolia could not be read: check jaw_get_capabilities for Base Sepolia ' +
+        "before telling the owner what pays it, and never assume it is the network's coin."
+    );
+  });
+
+  it('given a status read after the link opened, then the fee tokens are not read again', async () => {
+    const { t } = await connected();
+    let reads = 0;
+    const feeTokens = async () => {
+      reads++;
+      return ['USDC'];
+    };
+    const first = await sendCalls(t, input(), {
+      openWallet: wallet(),
+      receipt: async () => null,
+      clients: quietChain,
+      feeTokens,
+    });
+
+    const result = await sendCallsStatus(
+      t,
+      { id: first.structuredContent!.id },
+      { openWallet: wallet(), receipt: async () => null, clients: quietChain, feeTokens }
+    );
+
+    expect(reads).toBe(1);
+    expect(toAgent(result)[0]).not.toContain('network fee');
+  });
+
   it('given a status read while the owner has not answered, then the owner hears when it expires, and the link goes to the agent for when the owner asks', async () => {
     const { t } = await connected();
     const first = await send(t);

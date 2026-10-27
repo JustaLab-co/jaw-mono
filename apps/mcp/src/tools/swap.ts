@@ -10,6 +10,7 @@ import { ownerRelay, WalletBusy, type OpenWallet, type Wallet } from '@/connecti
 import { countHit } from '@/db/settings';
 import { RATE_WINDOW_MS } from '@/lib/edge';
 import { isProxyChain } from '@/lib/chain';
+import { feeTokensNext, feeTokensOn, readFeeTokens, type ReadFeeTokens } from '@/lib/fee-tokens';
 import { fenceText, reply } from '@/lib/fence';
 import { gateCode } from '@/payments/render';
 import { findPayment, stateOf } from '@/payments/store';
@@ -135,9 +136,11 @@ export interface SwapDeps {
   quote?: QuoteDeps;
   pollMs?: number;
   backend?: BackendDeps;
+  /** Reads the tokens that pay the network fee on a chain; left out, the link names none. */
+  feeTokens?: ReadFeeTokens;
 }
 
-const DEFAULTS: SwapDeps = { openWallet: ownerRelay };
+const DEFAULTS: SwapDeps = { openWallet: ownerRelay, feeTokens: readFeeTokens };
 
 const refuse = (code: string, text: string): SwapResult => ({
   content: [{ type: 'text', text: `${code}: ${text}` }],
@@ -185,7 +188,7 @@ async function refusedBeforeQuoting(t: Tenant, key: string, request: SwapRequest
   return undefined;
 }
 
-function summaryOf(row: SwapRow): string {
+function summaryOf(row: SwapRow, fee?: Fee): string {
   const quote = row.quote as CheckedQuote['quote'] | null;
   switch (row.state) {
     case 'quoting':
@@ -221,11 +224,11 @@ function summaryOf(row: SwapRow): string {
       const open = `Ask the account owner to open ${row.walletUrl} before ${row.approveBy?.toISOString()} and approve`;
       const provider = providerOf(row);
       if (provider !== 'aurora' && quote) {
-        return `${open} ${bridgeTerms(row, provider, quote)}Follow it with jaw_swap_status and ${row.quoteId}.`;
+        return `${open} ${bridgeTerms(row, provider, quote, fee)}Follow it with jaw_swap_status and ${row.quoteId}.`;
       }
       return (
         `${open} one transfer of ${row.amount} base units of ${tokenName(row.originToken)} on chain ${row.originChainId} ` +
-        `to the deposit address ${row.depositAddress}. ${GAS}` +
+        `to the deposit address ${row.depositAddress}. ${gasOf(row, fee)}` +
         `Expected: ${quote?.expectedOutputAmount} base units of ${row.destinationToken} on chain ${row.destinationChainId} ` +
         `to ${row.recipient}, at least ${quote?.minOutputAmount}. Follow it with jaw_swap_status and ${row.quoteId}.`
       );
@@ -319,15 +322,22 @@ const checkHistory = (row: SwapRow) =>
 
 const NAME = { across: 'Across', relay: 'Relay' };
 
-const GAS =
-  "The owner pays that transaction's gas in the wallet, in USDC where the wallet offers it or in the chain's native coin. ";
+/**
+ * Who pays the deposit's network fee. `symbols` is set when the link just opened: the tokens the wallet's capabilities
+ * list for the origin chain, or undefined there when they could not be read. Left out on a status read.
+ */
+type Fee = { symbols?: string[] };
+
+const gasOf = (row: SwapRow, fee?: Fee) =>
+  "The owner pays that transaction's network fee in the wallet. " +
+  (fee ? `${feeTokensNext(row.originChainId, fee.symbols)} ` : '');
 
 const tokenName = (token: string) => (token === zeroAddress ? 'the native coin' : token);
 
 // Across wraps a native deposit, so its refund comes back as WETH.
 const asWeth = (row: SwapRow) => (providerOf(row) === 'across' && row.originToken === zeroAddress ? ' as WETH' : '');
 
-function bridgeTerms(row: SwapRow, provider: 'across' | 'relay', quote: CheckedQuote['quote']): string {
+function bridgeTerms(row: SwapRow, provider: 'across' | 'relay', quote: CheckedQuote['quote'], fee?: Fee): string {
   const calls = callsOf(row)!;
   const contract = `the ${NAME[provider]} contract ${calls.at(-1)!.to}`;
   const deposit = `a deposit of ${row.amount} base units of ${tokenName(row.originToken)} to ${contract}`;
@@ -340,13 +350,13 @@ function bridgeTerms(row: SwapRow, provider: 'across' | 'relay', quote: CheckedQ
     `to ${row.recipient}, expected in about ${quote.expectedFillTimeSec} s`;
   if (provider === 'across') {
     return (
-      `${signed}${GAS}Across delivers ${out}; if no relayer fills it in time, ` +
+      `${signed}${gasOf(row, fee)}Across delivers ${out}; if no relayer fills it in time, ` +
       `Across refunds the deposit to the account on chain ${row.originChainId} in the token it bridged, ` +
       `which can differ from ${tokenName(row.originToken)} when the route swaps or wraps it first. `
     );
   }
   return (
-    `${signed}${GAS}Relay's solver pays ${out}. Settlement is enforced by Relay's protocol, not by a contract on chain ${row.destinationChainId}; ` +
+    `${signed}${gasOf(row, fee)}Relay's solver pays ${out}. Settlement is enforced by Relay's protocol, not by a contract on chain ${row.destinationChainId}; ` +
     `an order left unfilled refunds to the account on chain ${row.originChainId} or ${row.destinationChainId}. `
   );
 }
@@ -392,7 +402,7 @@ function readNote(row: SwapRow, read: TrackAnswer | undefined): string {
   return '';
 }
 
-async function answer(row: SwapRow, read?: TrackAnswer): Promise<SwapResult> {
+async function answer(row: SwapRow, read?: TrackAnswer, fee?: Fee): Promise<SwapResult> {
   if (row.relay) void resumeSwap(row);
   const backendText = read && untrustedBackendText(read);
   const response = [row.quoteFenced, backendText && fenceText('the swap backend', backendText, 400)].filter(
@@ -433,9 +443,15 @@ async function answer(row: SwapRow, read?: TrackAnswer): Promise<SwapResult> {
         : undefined,
     refusal: row.code ? { code: row.code } : undefined,
     response: response.length ? response : undefined,
-    summary: readNote(row, read) + summaryOf(row),
+    summary: readNote(row, read) + summaryOf(row, fee),
   });
   return reply(out);
+}
+
+/** The deposit's fee tokens, read while its link opens; undefined when they are not to be read. */
+async function feeFor(account: string, chainId: number, deps: SwapDeps): Promise<Fee | undefined> {
+  if (!deps.feeTokens) return undefined;
+  return { symbols: await feeTokensOn(deps.feeTokens, account, chainId) };
 }
 
 async function openLink(t: Tenant, lease: SwapLease, key: string, deps: SwapDeps): Promise<SwapResult> {
@@ -453,6 +469,7 @@ async function openLink(t: Tenant, lease: SwapLease, key: string, deps: SwapDeps
     return accountBusy(key);
   }
   const approveBy = approveByOf(held.quotedAt, config().swapQuoteTtlSec);
+  const fee = feeFor(t.account, held.originChainId, deps);
   let wallet: Wallet;
   try {
     wallet = await deps.openWallet(t.chainId, approveBy, t);
@@ -486,11 +503,12 @@ async function openLink(t: Tenant, lease: SwapLease, key: string, deps: SwapDeps
   }
   if (!waiting) return takenOver(key);
   followSwap(t.account, waiting, wallet, deps);
-  return answer(waiting);
+  return answer(waiting, undefined, await fee);
 }
 
 async function reopen(t: Tenant, row: SwapRow, key: string, deps: SwapDeps): Promise<SwapResult> {
   if ((await countOpenLinks(t.account, row.id)) >= MAX_OPEN_PER_ACCOUNT) return accountBusy(key);
+  const fee = feeFor(t.account, row.originChainId, deps);
   let wallet: Wallet;
   try {
     wallet = await deps.openWallet(t.chainId, row.approveBy!, t);
@@ -507,7 +525,7 @@ async function reopen(t: Tenant, row: SwapRow, key: string, deps: SwapDeps): Pro
   if (waiting === FULL) return accountBusy(key);
   if (!waiting) return answer((await findById(t.connectionId, row.id)) ?? row);
   followSwap(t.account, waiting, wallet, deps);
-  return answer(waiting);
+  return answer(waiting, undefined, await fee);
 }
 
 async function replay(t: Tenant, row: SwapRow, key: string, deps: SwapDeps): Promise<SwapResult> {
