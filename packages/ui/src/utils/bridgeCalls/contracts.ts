@@ -12,6 +12,8 @@ export type AcrossContracts = {
    * It must be a build whose v4 ExactInputParams carry maxHopSlippage, the layout the v4 reader decodes.
    */
   swapRouter?: Address;
+  /** The LiFi diamond Across quotes destination swaps through on this chain; without it that swap is unreadable. */
+  lifiDiamond?: Address;
 };
 
 /**
@@ -422,6 +424,7 @@ export const BRIDGE_CHAINS: Readonly<Record<number, BridgeChain>> = {
       eventEmitter: ACROSS_EMITTER,
       wrappedNative: '0x0Bd7D308f8E1639FAb988df18A8011f41EAcAD73',
       swapRouter: '0x204FAca1764B154221e35c0d20aBb3c525710498',
+      lifiDiamond: '0xB477751B76CF82d00a686A1232f5fCD772414Af3',
     },
     relay: {
       depository: RELAY_DEPOSITORY,

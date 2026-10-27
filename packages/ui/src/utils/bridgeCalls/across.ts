@@ -40,6 +40,10 @@ const HANDLER_ABI = parseAbi([
   'function drainLeftoverTokens(address token, address destination)',
   'function makeCallWithBalance(address target, bytes callData, uint256 value, (address token, uint256 offset)[] replacement)',
 ]);
+const LIFI_ABI = parseAbi([
+  'struct SwapData { address callTo; address approveTo; address sendingAssetId; address receivingAssetId; uint256 fromAmount; bytes callData; bool requiresDeposit; }',
+  'function swapTokensSingleV3ERC20ToERC20(bytes32 transactionId, string integrator, string referrer, address receiver, uint256 minAmountOut, SwapData swapData)',
+]);
 const EMITTER_ABI = parseAbi(['function emitData(bytes data)']);
 const ROUTER_ABI = parseAbi([
   'function execute(bytes commands, bytes[] inputs)',
@@ -89,7 +93,7 @@ export type AcrossDeposit = {
 type Call = { target: Address; callData: Hex; value: bigint };
 type Program = { calls: readonly Call[]; fallbackRecipient: Address };
 type Fee = { recipient: Address; amount: bigint };
-type Payout = { recipient: Address; received: Address; fee?: Fee; swapped?: true };
+type Payout = { recipient: Address; received: Address; fee?: Fee; swapped?: true; minimum?: bigint };
 type Fields = {
   depositor: Address;
   recipient: Address;
@@ -231,7 +235,12 @@ function depositOf(
     ? { kind: 'swap', chainId: destinationChainId, token: tokenOf(contracts, destinationChainId, received) }
     : {
         kind: 'minimum',
-        amount: tokenAmount(contracts, destinationChainId, received, outputAmount - (fee?.amount ?? 0n)),
+        amount: tokenAmount(
+          contracts,
+          destinationChainId,
+          received,
+          payout.minimum ?? outputAmount - (fee?.amount ?? 0n)
+        ),
       };
   return {
     kind: 'deposit',
@@ -262,7 +271,8 @@ function payoutOf(
   return (
     unwrapPayout(program, outputToken, across) ??
     tokenPayout(program, outputToken, across) ??
-    swapPayout(program, outputToken, outputAmount, across)
+    swapPayout(program, outputToken, outputAmount, across) ??
+    lifiPayout(program, outputToken, outputAmount, across)
   );
 }
 
@@ -339,6 +349,43 @@ function swapPayout({ calls, fallbackRecipient }: Program, bridged: Address, amo
   if (fallbackRecipient !== zeroAddress && !isAddressEqual(fallbackRecipient, recipient)) return undefined;
   const i = drainedTo(calls[3], bridged, across) === recipient ? 4 : 3;
   return emitsOnly(calls.slice(i), across) ? { recipient, received: token, swapped: true as const } : undefined;
+}
+
+// Approve the pinned LiFi diamond, its swap of the whole bridged amount paid to the handler, drain the
+// bought token and the bridged one the diamond hands back, emits. LiFi's allow list governs the exchange call and the
+// diamond reverts below minAmountOut, so only that floor is promised and callTo, approveTo and the
+// exchange calldata are not read.
+function lifiPayout({ calls, fallbackRecipient }: Program, bridged: Address, amount: bigint, across: AcrossContracts) {
+  const spender = approvedTo(calls[0], bridged);
+  if (!spender || !calls[1] || !isAddressEqual(calls[1].target, spender)) return undefined;
+  if (!isAddressEqual(spender, required(across.lifiDiamond))) return undefined;
+  const swap = lifiSwap(calls[1]);
+  const bought = drainOf(calls[2], across);
+  if (!swap || !bought || bought.token === zeroAddress || isAddressEqual(bought.token, bridged)) return undefined;
+  if (!isAddressEqual(swap.receiver, across.multicallHandler) || swap.minAmountOut === 0n) return undefined;
+  const { sendingAssetId, receivingAssetId, fromAmount } = swap.data;
+  if (!isAddressEqual(sendingAssetId, bridged) || !isAddressEqual(receivingAssetId, bought.token)) return undefined;
+  if (fromAmount !== amount) return undefined;
+  const { token, destination: recipient } = bought;
+  if (fallbackRecipient !== zeroAddress && !isAddressEqual(fallbackRecipient, recipient)) return undefined;
+  if (drainedTo(calls[3], bridged, across) !== recipient) return undefined;
+  return emitsOnly(calls.slice(4), across) ? { recipient, received: token, minimum: swap.minAmountOut } : undefined;
+}
+
+function approvedTo(call: Call | undefined, token: Address): Address | undefined {
+  if (!call || call.value !== 0n || !isAddressEqual(call.target, token)) return undefined;
+  const decoded = decodeFunctionData({ abi: erc20Abi, data: call.callData });
+  if (decoded.functionName !== 'approve') return undefined;
+  if (encodeFunctionData({ abi: erc20Abi, ...decoded }) !== call.callData) return undefined;
+  return getAddress(decoded.args[0]);
+}
+
+function lifiSwap(call: Call) {
+  if (call.value !== 0n) return undefined;
+  const decoded = decodeFunctionData({ abi: LIFI_ABI, data: call.callData });
+  if (encodeFunctionData({ abi: LIFI_ABI, ...decoded }) !== call.callData) return undefined;
+  const [, , , receiver, minAmountOut, data] = decoded.args;
+  return { receiver, minAmountOut, data };
 }
 
 function feeTransfer(call: Call): Fee | undefined {

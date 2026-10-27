@@ -20,6 +20,7 @@ const across = z.object({
   eventEmitter: address.optional(),
   wrappedNative: address.optional(),
   swapRouter: address.optional(),
+  lifiDiamond: address.optional(),
 });
 
 const relay = z.object({
