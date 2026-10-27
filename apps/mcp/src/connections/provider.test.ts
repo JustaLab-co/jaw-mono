@@ -69,7 +69,6 @@ const chatgpt = {
   logo_uri: 'https://persistent.oaistatic.com/sonic/misc/openai-logo.png',
 };
 const CHATGPT_KEYS_ELSEWHERE = 'https://evil.example.test/chatgpt-keys.json';
-const CHATGPT_OTHER_KEYS = 'https://chatgpt.com/oauth/other-keys.json';
 const CHATGPT_INLINE_KEYS = 'https://chatgpt.com/oauth/inline-keys.json';
 const CHATGPT_PUBLIC_KEYED = 'https://chatgpt.com/oauth/public-keyed.json';
 const CHATGPT_NO_REFRESH = 'https://chatgpt.com/oauth/no-refresh.json';
@@ -79,7 +78,6 @@ const chatgptDocuments: Record<string, object> = {
   [CHATGPT]: chatgpt,
   [CHATGPT_JWKS]: { keys: [chatgptJwk] },
   [CHATGPT_KEYS_ELSEWHERE]: { ...chatgpt, client_id: CHATGPT_KEYS_ELSEWHERE },
-  [CHATGPT_OTHER_KEYS]: { ...chatgpt, client_id: CHATGPT_OTHER_KEYS, jwks_uri: 'https://evil.example.test/jwks.json' },
   [CHATGPT_INLINE_KEYS]: {
     ...chatgpt,
     client_id: CHATGPT_INLINE_KEYS,
@@ -124,15 +122,11 @@ const gemini = {
   response_types: ['code'],
   scope: 'wallet:read x402:pay',
 };
-const GEMINI_OTHER_KEYS = 'https://accountlinking.google.com/clientidmetadata/other-keys';
-const GEMINI_KEYS_ELSEWHERE = 'https://evil.example.test/gemini-keys.json';
 const geminiKey = await generateKeyPair('RS256');
 const keyedDocuments: Record<string, object> = {
   ...chatgptDocuments,
   [GEMINI]: gemini,
   [GEMINI_JWKS]: { keys: [{ ...(await exportJWK(geminiKey.publicKey)), kid: 'cimd', alg: 'RS256', use: 'sig' }] },
-  [GEMINI_OTHER_KEYS]: { ...gemini, client_id: GEMINI_OTHER_KEYS, jwks_uri: 'https://evil.example.test/jwks.json' },
-  [GEMINI_KEYS_ELSEWHERE]: { ...gemini, client_id: GEMINI_KEYS_ELSEWHERE },
 };
 const metadata = {
   client_id: CIMD,
@@ -420,17 +414,19 @@ describe('authorization server', () => {
     expect(await start.stopped?.text()).toMatch(/refresh_token/);
   });
 
-  it.each([
-    ['private_key_jwt', KEYED],
-    ['none', PUBLIC_KEYED],
-  ])(
-    'given a CIMD client with a jwks_uri and auth method %s, when it asks to authorize, then it is refused',
-    async (_, clientId) => {
-      const start = await startAuthorization(new Browser(), { clientId, redirectUri: 'http://127.0.0.1:9100/cb' });
-      expect(start.uid).toBeUndefined();
-      expect(await start.stopped?.text()).toMatch(/client is not allowed/);
-    }
-  );
+  it('given a public CIMD client with a jwks_uri, when it asks to authorize, then it is refused', async () => {
+    const start = await startAuthorization(new Browser(), {
+      clientId: PUBLIC_KEYED,
+      redirectUri: 'http://127.0.0.1:9100/cb',
+    });
+    expect(start.uid).toBeUndefined();
+    expect(await start.stopped?.text()).toMatch(/client is not allowed/);
+  });
+
+  it('given a private_key_jwt CIMD client from any origin, when it asks to authorize, then it reaches consent', async () => {
+    const start = await startAuthorization(new Browser(), { clientId: KEYED, redirectUri: 'http://127.0.0.1:9100/cb' });
+    expect(start.uid).toBeDefined();
+  });
 
   it('given ChatGPT, when it connects and refreshes with private_key_jwt, then both succeed', async () => {
     const c = await connect(undefined, {
@@ -500,18 +496,36 @@ describe('authorization server', () => {
     expect(replayed.body.error).toBe('invalid_client');
   });
 
-  it.each([
-    ["another origin's document naming ChatGPT's keys", CHATGPT_KEYS_ELSEWHERE],
-    ['a chatgpt.com document naming other keys', CHATGPT_OTHER_KEYS],
-    ['a chatgpt.com private_key_jwt document with inline keys', CHATGPT_INLINE_KEYS],
-    ["a chatgpt.com public document naming ChatGPT's keys", CHATGPT_PUBLIC_KEYED],
-  ])('given %s, when it asks to authorize, then it is refused', async (_, clientId) => {
-    const start = await startAuthorization(new Browser(), { clientId, redirectUri: CHATGPT_REDIRECT });
+  it("given a chatgpt.com public document naming ChatGPT's keys, when it asks to authorize, then it is refused", async () => {
+    const start = await startAuthorization(new Browser(), {
+      clientId: CHATGPT_PUBLIC_KEYED,
+      redirectUri: CHATGPT_REDIRECT,
+    });
     expect(start.uid).toBeUndefined();
     expect(await start.stopped?.text()).toMatch(/client is not allowed/);
   });
 
-  it.fails('given Gemini, when it connects and refreshes with private_key_jwt, then both succeed', async () => {
+  it('given a private_key_jwt document with inline keys, when it connects with an assertion signed by them, then it succeeds', async () => {
+    const c = await connect(undefined, {
+      clientId: CHATGPT_INLINE_KEYS,
+      redirectUri: CHATGPT_REDIRECT,
+      clientAuth: await assertionFor(CHATGPT_INLINE_KEYS, chatgptKey.privateKey),
+    });
+    expect(c.status).toBe(200);
+  });
+
+  it("given another origin's document naming ChatGPT's keys, when it signs with a key of its own, then its code exchange is refused", async () => {
+    const other = await generateKeyPair('RS256');
+    const c = await connect(undefined, {
+      clientId: CHATGPT_KEYS_ELSEWHERE,
+      redirectUri: CHATGPT_REDIRECT,
+      clientAuth: await assertionFor(CHATGPT_KEYS_ELSEWHERE, other.privateKey),
+    });
+    expect(c.status).toBe(401);
+    expect(c.error).toBe('invalid_client');
+  });
+
+  it('given Gemini, when it connects and refreshes with private_key_jwt, then both succeed', async () => {
     const c = await connect(undefined, {
       clientId: GEMINI,
       redirectUri: GEMINI_REDIRECT,
@@ -528,15 +542,6 @@ describe('authorization server', () => {
       ...(await assertionFor(GEMINI, geminiKey.privateKey)),
     });
     expect(refreshed.status).toBe(200);
-  });
-
-  it.each([
-    ['an accountlinking.google.com document naming other keys', GEMINI_OTHER_KEYS],
-    ["another origin's document naming Google's keys", GEMINI_KEYS_ELSEWHERE],
-  ])('given %s, when it asks to authorize, then it is refused', async (_, clientId) => {
-    const start = await startAuthorization(new Browser(), { clientId, redirectUri: GEMINI_REDIRECT });
-    expect(start.uid).toBeUndefined();
-    expect(await start.stopped?.text()).toMatch(/client is not allowed/);
   });
 
   it('given a chatgpt.com document whose grant_types omit refresh_token, when it asks to authorize, then it is refused', async () => {

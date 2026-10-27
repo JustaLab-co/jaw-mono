@@ -8,7 +8,7 @@ The hosted JAW MCP server. Any MCP client connects over Streamable HTTP at `/mcp
 
 A CIMD client must include `refresh_token` in its `grant_types`, or the server refuses it with `invalid_client_metadata` before any consent screen. Without a refresh token the session key lives only in the short access token, and the float a budget grants would be stranded once it expires.
 
-A CIMD client must also be public: `token_endpoint_auth_method` `none` and no `jwks_uri`, since a `jwks_uri` is fetched on every token request the client signs. ChatGPT, whose document at `https://chatgpt.com/oauth/client.json` signs with `private_key_jwt`, is the one exception: a document served from the `https://chatgpt.com` origin may use `private_key_jwt`, and only with the `jwks_uri` `https://chatgpt.com/oauth/jwks.json`. Codex connects through the same client.
+A CIMD client either is public, with `token_endpoint_auth_method` `none` and no `jwks_uri`, or signs its token requests with `private_key_jwt` and its own keys, inline or at a `jwks_uri` on any public host. ChatGPT (and Codex through it) and Gemini sign this way. The server fetches a `jwks_uri` on every token request the client signs, through the same public-only fetch it uses for the document.
 
 The owner first signs a plain-text sign-in that names the app, the domain of its metadata document, what it asks for, and a six-character code the page also shows. The wallet link can be forwarded, so the text asks the owner to approve only if the page that sent them there shows that code. No budget is asked for here. The page completes the authorization once the server has the signature.
 
