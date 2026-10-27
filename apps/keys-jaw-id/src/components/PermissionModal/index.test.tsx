@@ -12,6 +12,7 @@ const grantPermissions = vi.fn();
 
 type DialogProps = { onConfirm?: () => void; calls?: Array<{ checker?: string }> };
 let dialogProps: DialogProps = {};
+let storedPermission: unknown = null;
 vi.mock('@jaw.id/ui', async (importActual) => {
   const actual = await importActual<typeof import('@jaw.id/ui')>();
   return {
@@ -20,7 +21,7 @@ vi.mock('@jaw.id/ui', async (importActual) => {
       dialogProps = props;
       return null;
     },
-    usePermissionRevocation: () => ({ permission: null, loading: false, problem: null }),
+    usePermissionRevocation: () => ({ permission: storedPermission, loading: false, problem: null }),
     useGasEstimation: () => ({
       gasFee: '',
       gasFeeLoading: false,
@@ -86,6 +87,7 @@ beforeEach(() => {
   grantPermissions.mockReset();
   grantPermissions.mockResolvedValue({ permissionId: `0x${'cd'.repeat(32)}` });
   dialogProps = {};
+  storedPermission = null;
   container = document.createElement('div');
   document.body.appendChild(container);
   root = createRoot(container);
@@ -112,6 +114,43 @@ describe('PermissionModal revoke', () => {
     const onSuccess = await confirmRevoke();
 
     expect(onSuccess).toHaveBeenCalledWith({ success: true });
+  });
+
+  // ReactUIHandler's revoke screen draws no checker, so this one leaves it out too, or the keys
+  // screen alone would open "Allowed calls" and show "Checked by".
+  it('leaves the checker off the calls it shows, as the other host does', async () => {
+    storedPermission = {
+      permissionId: REQUEST.params[0].id,
+      account: '0x1111111111111111111111111111111111111111',
+      spender: '0x2222222222222222222222222222222222222222',
+      start: 1_700_000_000,
+      end: 2_000_000_000,
+      salt: '0x2a',
+      calls: [
+        {
+          target: '0x036CbD53842c5426634e7929541eC2318f3dCF7e',
+          selector: '0xa9059cbb',
+          checker: '0x398b9d939E7E616E03eA99601c835C920621B2ca',
+        },
+      ],
+      spends: [],
+      chainId: '0x2105',
+    };
+
+    await act(async () => {
+      root.render(
+        <PermissionModal
+          permissionRequest={REQUEST as never}
+          chain={CHAIN}
+          apiKey="test-key"
+          onSuccess={() => undefined}
+          onError={() => undefined}
+        />
+      );
+    });
+
+    expect(dialogProps.calls).toHaveLength(1);
+    expect(dialogProps.calls?.[0].checker).toBeUndefined();
   });
 
   it('tells the dapp the revoke succeeded when the relay had no row left to remove', async () => {
