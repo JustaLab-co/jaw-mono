@@ -113,6 +113,9 @@ for (const [id, entry] of Object.entries(BRIDGE_CHAINS)) {
       compare(chainId, 'across.lifiDiamond swap facet', routed, deployed);
     }
   }
+  const spokePool = across[id]?.contracts?.SpokePool?.address;
+  if (!entry.across && spokePool)
+    report(false, `${chainId} across missing from the table, live SpokePool=${spokePool}`);
   if (entry.relay) {
     const live = relay.find((chain) => chain.id === chainId);
     compare(chainId, 'relay.depository', entry.relay.depository, live?.protocol?.v2?.depository);
