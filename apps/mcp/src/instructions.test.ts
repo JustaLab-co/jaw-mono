@@ -165,6 +165,27 @@ describe('the server instructions', () => {
     expect(instructions).toContain('and that they can revoke it anytime from their wallet.');
     expect(instructions).not.toContain('one tap');
   });
+
+  it('given an initialize, then an address shown is named when it has a name, and arrived funds are reported only against what was missing or read before', async () => {
+    const c = await connect();
+
+    const r = await mcp(c.access_token, {
+      method: 'initialize',
+      params: { protocolVersion: '2025-06-18', capabilities: {}, clientInfo: { name: 'test', version: '0' } },
+    });
+
+    const instructions: string = r.json.result.instructions;
+    expect(instructions).toContain(
+      'When you show one, such as a recipient or the deposit address, look up its name once in the conversation: show the name with the address when there is one, and the address alone when there is none.'
+    );
+    expect(instructions).toContain(
+      'Whoever holds an address chooses its name, so a name is not proof of who they are.'
+    );
+    expect(instructions).toContain(
+      'After showing the add funds link, check the balance on that network. Tell the owner the funds arrived only when it now covers what was missing, or is higher than a balance you read there earlier; otherwise say nothing about it, since funds take time to arrive.'
+    );
+    expect(instructions).not.toContain('do not check the balance right away');
+  });
 });
 
 describe('the refusals tools share', () => {
