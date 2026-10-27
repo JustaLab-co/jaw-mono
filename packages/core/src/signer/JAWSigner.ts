@@ -13,7 +13,11 @@ import { storeCallStatus, waitForReceiptInBackground } from '../rpc/wallet_sendC
 import { normalizeAddFundsParams, type NormalizedAddFundsParams } from '../rpc/addFundsParams.js';
 import { normalizeSendCallsParams, type NormalizedSendCallsParams } from '../rpc/sendCallsParams.js';
 import { normalizeSendTransactionParams, type NormalizedSendTransactionParams } from '../rpc/sendTransactionParams.js';
-import { normalizeRevokePermissionsParams, type NormalizedRevokePermissionsParams } from '../rpc/permissions.js';
+import {
+    checkGrantPermissionsParams,
+    normalizeRevokePermissionsParams,
+    type NormalizedRevokePermissionsParams,
+} from '../rpc/permissions.js';
 import { handleGetCallsStatusRequest } from '../rpc/wallet_getCallStatus.js';
 import { handleGetAssetsRequest } from '../rpc/wallet_getAssets.js';
 import { handleGetCallsHistoryRequest } from '../rpc/wallet_getCallsHistory.js';
@@ -182,6 +186,12 @@ export abstract class JAWSigner implements Signer {
 
             case 'eth_sendTransaction':
                 return { method: 'eth_sendTransaction', params: normalizeSendTransactionParams(request.params) };
+
+            // A call checker is part of the permission the user signs, so a malformed one is refused
+            // with -32602 here, in both modes, rather than drawn on the grant screen.
+            case 'wallet_grantPermissions':
+                checkGrantPermissionsParams(request.params);
+                return undefined;
 
             // Runs before handleSigningRequest, so a missing or malformed permission id is
             // refused with -32602 instead of opening a window over an empty permission.

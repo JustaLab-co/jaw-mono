@@ -1624,6 +1624,63 @@ describe('Account — ERC-20 paymaster approval', () => {
         expect(call[3]).toBe('https://sponsor.example/rpc');
         expect(call[4]).toBeUndefined();
     });
+
+    // getPermission answers in the grant response's shape, which carries the checker on every call,
+    // so the permission can be rebuilt and hashed from it.
+    it('reads back each call checker, zero for a call stored without one', async () => {
+        const { getPermissionFromRelay } = await import('../rpc/permissions.js');
+        const CHECKER = '0x398b9d939E7E616E03eA99601c835C920621B2ca';
+        vi.mocked(getPermissionFromRelay).mockResolvedValueOnce({
+            permissionId: PERMISSION_ID,
+            account: '0x1111111111111111111111111111111111111111',
+            spender: '0x2222222222222222222222222222222222222222',
+            start: 1_700_000_000,
+            end: 2_000_000_000,
+            salt: '0x2a',
+            calls: [
+                { target: '0x036CbD53842c5426634e7929541eC2318f3dCF7e', selector: '0xa9059cbb', checker: CHECKER },
+                { target: '0x036CbD53842c5426634e7929541eC2318f3dCF7e', selector: '0x095ea7b3' },
+            ],
+            spends: [],
+            chainId: '0x14a34',
+        });
+
+        const account = await makeAccount();
+        const permission = await account.getPermission(PERMISSION_ID);
+
+        expect(permission.calls.map((call) => call.checker)).toEqual([
+            CHECKER,
+            '0x0000000000000000000000000000000000000000',
+        ]);
+    });
+
+    // The grant response checksums the checker, so the same permission read back must too, or a
+    // caller comparing the two sees a mismatch.
+    it('checksums a checker the relay stored in lowercase', async () => {
+        const { getPermissionFromRelay } = await import('../rpc/permissions.js');
+        vi.mocked(getPermissionFromRelay).mockResolvedValueOnce({
+            permissionId: PERMISSION_ID,
+            account: '0x1111111111111111111111111111111111111111',
+            spender: '0x2222222222222222222222222222222222222222',
+            start: 1_700_000_000,
+            end: 2_000_000_000,
+            salt: '0x2a',
+            calls: [
+                {
+                    target: '0x036CbD53842c5426634e7929541eC2318f3dCF7e',
+                    selector: '0xa9059cbb',
+                    checker: '0x398b9d939e7e616e03ea99601c835c920621b2ca',
+                },
+            ],
+            spends: [],
+            chainId: '0x14a34',
+        });
+
+        const account = await makeAccount();
+        const permission = await account.getPermission(PERMISSION_ID);
+
+        expect(permission.calls[0].checker).toBe('0x398b9d939E7E616E03eA99601c835C920621B2ca');
+    });
 });
 
 // The spender of a permission sends every op it authorises and the ERC-20

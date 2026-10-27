@@ -1332,6 +1332,69 @@ describe('AppSpecificSigner', () => {
             expect(getPermissionFromRelay).not.toHaveBeenCalled();
         });
 
+        // A checker is part of the permission the user signs. A malformed one used to reach the
+        // grant screen, which drew it, estimated a fee without it and failed only on Confirm.
+        it.each([
+            ['too short', '0x1234'],
+            ['not a string', 42],
+            ['not hex', `0x${'zz'.repeat(20)}`],
+        ])('rejects a grant whose call checker is %s with -32602 and opens no dialog', async (_label, checker) => {
+            await expect(
+                signer.request({
+                    method: 'wallet_grantPermissions',
+                    params: [
+                        {
+                            expiry: 2_000_000_000,
+                            spender: '0x2222222222222222222222222222222222222222',
+                            permissions: {
+                                calls: [
+                                    {
+                                        target: '0x036CbD53842c5426634e7929541eC2318f3dCF7e',
+                                        functionSignature: 'transfer(address,uint256)',
+                                        checker,
+                                    },
+                                ],
+                            },
+                        },
+                    ],
+                } as never)
+            ).rejects.toMatchObject({ code: -32602, message: expect.stringContaining('permissions.calls[0].checker') });
+
+            expect(mockUIHandler.request).not.toHaveBeenCalled();
+        });
+
+        // Every call is checked, not only the first: a good first call must not carry a bad second
+        // checker past the guard.
+        it('rejects a grant whose second call checker is malformed, naming that call', async () => {
+            await expect(
+                signer.request({
+                    method: 'wallet_grantPermissions',
+                    params: [
+                        {
+                            expiry: 2_000_000_000,
+                            spender: '0x2222222222222222222222222222222222222222',
+                            permissions: {
+                                calls: [
+                                    {
+                                        target: '0x036CbD53842c5426634e7929541eC2318f3dCF7e',
+                                        functionSignature: 'transfer(address,uint256)',
+                                        checker: '0x398b9d939E7E616E03eA99601c835C920621B2ca',
+                                    },
+                                    {
+                                        target: '0x036CbD53842c5426634e7929541eC2318f3dCF7e',
+                                        functionSignature: 'approve(address,uint256)',
+                                        checker: '0x1234',
+                                    },
+                                ],
+                            },
+                        },
+                    ],
+                } as never)
+            ).rejects.toMatchObject({ code: -32602, message: expect.stringContaining('permissions.calls[1].checker') });
+
+            expect(mockUIHandler.request).not.toHaveBeenCalled();
+        });
+
         // ERC-7871 wallet_sign 0x01 reaches the same EIP-712 dialog, so it must be
         // refused at the same boundary rather than only eth_signTypedData_v4.
         it.each([

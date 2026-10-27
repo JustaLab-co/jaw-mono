@@ -13,13 +13,13 @@ import { CopyButton } from '../CopyButton';
 import { useChainIconURI, useFeeTokenPrice } from '../../hooks';
 import { useAddressIdentities } from '../../hooks/useAddressIdentities';
 import { identityKey } from '../../utils/reverseResolve';
-import { ENS_ONLY } from '../../utils/addressIdentity';
+import { CLEAR_SIGNING_ONLY, ENS_ONLY } from '../../utils/addressIdentity';
 import { getDisplayAddress } from '../../utils';
 import { resolveBlockReason } from '../../utils/transactionFailure';
 import { isBlockingRevocationProblem, REVOCATION_PROBLEM_TEXT } from '../../utils/permissionExecution';
 import { PermissionDialogProps } from './types';
 import { InlineWarning, PartyRow } from '../primitives';
-import { AllowedCalls, MetaCard, SpendLimits, SpenderPrefundNotice, isWildcard } from './Sections';
+import { AllowedCalls, MetaCard, SpendLimits, SpenderPrefundNotice, hasChecker, isWildcard } from './Sections';
 
 export const PermissionDialog = ({
   open,
@@ -79,7 +79,15 @@ export const PermissionDialog = ({
   const identities = useAddressIdentities(identityInputs, { mainnetRpcUrl, include: ENS_ONLY });
   const identityOf = (address: string | undefined) =>
     address && chainId ? identities[identityKey(address, chainId)] : undefined;
-  // The confirm button waits until every name is known, so the user approves what they read.
+  const checkerInputs = chainId ? calls.filter(hasChecker).map((call) => ({ address: call.checker, chainId })) : [];
+  // Named only from the clear-signing registry: an ENS name is chosen by whoever deploys the
+  // checker, so a checker that allows everything could call itself `recipient-must-be-you.eth`.
+  const checkerIdentities = useAddressIdentities(checkerInputs, { mainnetRpcUrl, apiKey, include: CLEAR_SIGNING_ONLY });
+  const checkerNameOf = (address: string) =>
+    (chainId ? checkerIdentities[identityKey(address, chainId)]?.clearSigningName : undefined) ?? undefined;
+  // The confirm button waits until every name is known, so the user approves what they read. Not
+  // for a checker's name: its address is what gets signed and is always shown, and a stalled lookup
+  // must not hold Confirm.
   const isResolvingAddresses = Object.values(identities).some((identity) => identity.loading.ens);
 
   // Inside a Radix modal a nested container's wheel events get eaten — drive scrollTop manually.
@@ -287,6 +295,7 @@ export const PermissionDialog = ({
                 calls={calls}
                 identityOf={identityOf}
                 truncateAddress={truncateAddress}
+                checkerNameOf={checkerNameOf}
                 tokenMeta={tokenMeta}
                 chainId={chainId}
               />
@@ -353,3 +362,4 @@ export const PermissionDialog = ({
 
 export * from './types';
 export { isWildcard } from './Sections';
+export { toDialogCalls, type RequestedCall } from './calls';
