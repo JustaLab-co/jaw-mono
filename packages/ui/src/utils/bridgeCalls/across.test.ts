@@ -15,7 +15,8 @@ import {
 import { readAcrossCall } from './across';
 import { ACROSS_CALLS } from './fixtures';
 import { pinnedToken, type BridgeCall } from './view';
-import { snapshotContracts } from './table';
+import { BridgeContracts, snapshotContracts } from './table';
+import { BRIDGE_CHAINS, type BridgeChain } from './contracts';
 
 const contracts = snapshotContracts();
 
@@ -96,6 +97,7 @@ const transfer = (token: string, to: string, amount: bigint) => ({
 });
 
 const unreadable = { kind: 'unreadable', provider: 'across' };
+const outsideTable = { ...unreadable, outsideTable: true };
 
 describe('given the deposit call of a live Across quote', () => {
   it('then prod Base USDC to Arbitrum reads 10 USDC sent, 9.9609 USDC minimum and a 0.024964 USDC JAW fee', () => {
@@ -323,13 +325,13 @@ describe('given a deposit whose tokens or chains need the pinned table', () => {
         contracts,
         withArgs(ACROSS_CALLS.usdcNofee, (a) => (a[6] = 999n))
       )
-    ).toEqual(unreadable);
+    ).toEqual(outsideTable);
     expect(
       readAcrossCall(
         contracts,
         withArgs(ACROSS_CALLS.usdcNofee, (a) => (a[6] = 4663n))
       )
-    ).toEqual(unreadable);
+    ).toEqual(outsideTable);
   });
 
   it('then native ETH out to Arc, which has no pinned wrapped native, is unreadable', () => {
@@ -779,11 +781,17 @@ describe('given a periphery swapAndBridge, which swaps on the origin before it d
 
   it('then a bridged token not pinned on the origin is unreadable, since the exchange could fake the swap', () => {
     expect(readAcrossCall(contracts, withSwap(ACROSS_CALLS.usdcToWeth, setDeposit('inputToken', OTHER)))).toEqual(
-      unreadable
+      outsideTable
     );
     expect(readAcrossCall(contracts, withSwap(ACROSS_CALLS.ethToUsdc, setDeposit('inputToken', USDBC)))).toEqual(
-      unreadable
+      outsideTable
     );
+  });
+
+  it('then a swap to a chain the table lacks is unreadable and says the table lacks it', () => {
+    expect(
+      readAcrossCall(contracts, withSwap(ACROSS_CALLS.usdcToWeth, setDeposit('destinationChainId', 999n)))
+    ).toEqual(outsideTable);
   });
 
   it('then a value with a swap token other than WETH is unreadable', () => {
@@ -843,5 +851,34 @@ describe('given a destination swap through a router in the handler program', () 
   ];
   it.each(mutants)('then %s is unreadable', (_, edit) => {
     expect(readAcrossCall(contracts, withProgram(ACROSS_CALLS.usdcToArb, edit))).toEqual(unreadable);
+  });
+});
+
+describe('given an Across call that needs a table entry the table in use lacks', () => {
+  const without = (change: (chains: Record<number, BridgeChain>) => void) => {
+    const chains = structuredClone(BRIDGE_CHAINS) as Record<number, BridgeChain>;
+    change(chains);
+    return new BridgeContracts({ version: 1, chains });
+  };
+  const dropToken = (chainId: number, token: string) => (chains: Record<number, BridgeChain>) => {
+    for (const key of Object.keys(chains[chainId].tokens)) {
+      if (key.toLowerCase() === token.toLowerCase()) delete chains[chainId].tokens[key as typeof BASE_USDC];
+    }
+  };
+
+  it('then a swapAndBridge whose output token is missing is unreadable and says the table lacks it', () => {
+    const table = without(dropToken(42161, ARB_WETH));
+    expect(readAcrossCall(table, ACROSS_CALLS.usdcToWeth)).toEqual(outsideTable);
+    expect(readAcrossCall(contracts, ACROSS_CALLS.usdcToWeth)).toMatchObject({ kind: 'deposit' });
+  });
+
+  it('then a destination swap on a chain with no swap router is unreadable and says the table lacks it', () => {
+    const table = without((chains) => delete chains[42161].across!.swapRouter);
+    expect(readAcrossCall(table, ACROSS_CALLS.usdcToArb)).toEqual(outsideTable);
+  });
+
+  it('then a native deposit on a chain with no wrapped native is unreadable and says the table lacks it', () => {
+    const table = without((chains) => delete chains[8453].across!.wrappedNative);
+    expect(readAcrossCall(table, ACROSS_CALLS.nativeEth)).toEqual(outsideTable);
   });
 });

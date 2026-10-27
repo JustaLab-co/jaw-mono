@@ -84,6 +84,20 @@ type Fields = {
   message: Hex;
 };
 
+class TableMiss extends Error {}
+
+/** A table entry the call needs. Without it the call is unreadable, and a newer table might have it. */
+function required<T>(entry: T | undefined): T {
+  if (entry === undefined) throw new TableMiss();
+  return entry;
+}
+
+const unreadable = (outsideTable = false): Unreadable => ({
+  kind: 'unreadable',
+  provider: 'across',
+  ...(outsideTable && { outsideTable: true as const }),
+});
+
 /** Undefined when the call is not to a pinned Across contract; unreadable when it is and breaks a rule. */
 export function readAcrossCall(contracts: BridgeContracts, call: BridgeCall): AcrossDeposit | Unreadable | undefined {
   const across = contracts.chain(call.chainId)?.across;
@@ -92,9 +106,12 @@ export function readAcrossCall(contracts: BridgeContracts, call: BridgeCall): Ac
   if (!toPool && !isAddressEqual(call.to, across.periphery)) return undefined;
   try {
     const fields = fieldsOf(contracts, call, across, toPool);
-    return (fields && depositOf(contracts, call.chainId, fields)) ?? { kind: 'unreadable', provider: 'across' };
-  } catch {
-    return { kind: 'unreadable', provider: 'across' };
+    if (!fields) return unreadable();
+    const destination = contracts.chain(fields.destinationChainId)?.across;
+    if (!destination) return unreadable(true);
+    return depositOf(contracts, call.chainId, fields, destination) ?? unreadable();
+  } catch (error) {
+    return unreadable(error instanceof TableMiss);
   }
 }
 
@@ -134,7 +151,7 @@ function fieldsOf(
       decoded.args;
     const { 10: fillDeadline, 12: message } = decoded.args;
     if (!isAddressEqual(spokePool, origin.spokePool) || value !== inputAmount) return undefined;
-    if (!origin.wrappedNative || !isAddressEqual(inputToken, origin.wrappedNative)) return undefined;
+    if (!isAddressEqual(inputToken, required(origin.wrappedNative))) return undefined;
     return {
       depositor: getAddress(depositor),
       recipient: addressOf(recipient),
@@ -155,10 +172,7 @@ function fieldsOf(
   // minExpectedInputTokenAmount, so that floor must cover the output the screen shows.
   if (!floorCoversOutput(contracts, call.chainId, depositData, minExpectedInputTokenAmount)) return undefined;
   const native = value !== 0n;
-  if (
-    native &&
-    (value !== swapTokenAmount || !origin.wrappedNative || !isAddressEqual(swapToken, origin.wrappedNative))
-  ) {
+  if (native && (value !== swapTokenAmount || !isAddressEqual(swapToken, required(origin.wrappedNative)))) {
     return undefined;
   }
   return {
@@ -178,16 +192,19 @@ type SwapDeposit = { inputToken: Address; outputToken: Hex; outputAmount: bigint
 
 // Both tokens must be pinned as the same asset; amounts compare across their decimals.
 function floorCoversOutput(contracts: BridgeContracts, chainId: number, deposit: SwapDeposit, floor: bigint): boolean {
-  const input = pinnedToken(contracts, chainId, deposit.inputToken);
-  const output = pinnedToken(contracts, Number(deposit.destinationChainId), tokenWord(deposit.outputToken));
-  if (!input || !output || input.symbol !== output.symbol) return false;
+  const input = required(pinnedToken(contracts, chainId, deposit.inputToken));
+  const output = required(pinnedToken(contracts, Number(deposit.destinationChainId), tokenWord(deposit.outputToken)));
+  if (input.symbol !== output.symbol) return false;
   return floor * 10n ** BigInt(output.decimals) >= deposit.outputAmount * 10n ** BigInt(input.decimals);
 }
 
-function depositOf(contracts: BridgeContracts, chainId: number, fields: Fields): AcrossDeposit | undefined {
+function depositOf(
+  contracts: BridgeContracts,
+  chainId: number,
+  fields: Fields,
+  destination: AcrossContracts
+): AcrossDeposit | undefined {
   const { destinationChainId, outputAmount } = fields;
-  const destination = contracts.chain(destinationChainId)?.across;
-  if (!destination) return undefined;
   const payout = payoutOf(fields, destination);
   if (!payout || (payout.fee && payout.fee.amount > outputAmount)) return undefined;
 
@@ -290,8 +307,10 @@ function unwrapPayout({ calls, fallbackRecipient }: Program, weth: Address, acro
 // Drain to the pinned router, its `execute`, drain the bought token [and the bridged one left], emits.
 // The router sets the amount, so any other router could keep the whole bridged amount.
 function swapPayout({ calls, fallbackRecipient }: Program, bridged: Address, across: AcrossContracts) {
-  const router = across.swapRouter;
-  if (!router || drainedTo(calls[0], bridged, across) !== router || !routerExecute(calls[1], router)) return undefined;
+  const drained = drainedTo(calls[0], bridged, across);
+  if (!drained || !calls[1] || !isAddressEqual(calls[1].target, drained)) return undefined;
+  const router = required(across.swapRouter);
+  if (drained !== router || !routerExecute(calls[1], router)) return undefined;
   const bought = drainOf(calls[2], across);
   if (!bought || isAddressEqual(bought.token, bridged)) return undefined;
   const { token, destination: recipient } = bought;

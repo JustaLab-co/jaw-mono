@@ -2,16 +2,9 @@ import { createHash } from 'node:crypto';
 import { describe, expect, it } from 'vitest';
 import { getAddress } from 'viem';
 import { BRIDGE_CHAINS, JAW_FEE_RECIPIENT } from './contracts';
+import { parse } from './parse';
 
 const chains = Object.entries(BRIDGE_CHAINS).map(([id, chain]) => ({ id: Number(id), ...chain }));
-
-function addressesOf(chain: (typeof chains)[number]): string[] {
-  return [
-    ...Object.values(chain.across ?? {}),
-    ...(chain.relay ? [chain.relay.depository, ...chain.relay.erc20Routers, ...chain.relay.solvers] : []),
-    ...Object.keys(chain.tokens),
-  ];
-}
 
 describe('given the pinned bridge table of the signing screen', () => {
   it('then it lists every chain a swap can start or end on, testnets included', () => {
@@ -84,14 +77,7 @@ describe('given the pinned bridge table of the signing screen', () => {
     });
   });
 
-  it('then every Relay chain fills through its router by solvers listed once, Linea and testnets on their own routers', () => {
-    for (const chain of chains) {
-      const relay = chain.relay;
-      if (!relay) continue;
-      const solvers = relay.solvers.map((s) => s.toLowerCase());
-      expect(solvers.length, `chain ${chain.id}`).toBeGreaterThan(0);
-      expect(new Set(solvers).size, `chain ${chain.id}`).toBe(solvers.length);
-    }
+  it('then Linea and the testnets fill through their own routers', () => {
     expect(BRIDGE_CHAINS[59144]?.relay?.erc20Routers).toEqual([
       '0x6328ea02d28131e58B28E55c6258258A30d90E05',
       '0x9EF6d3c2F60d7b9008D74CAb1FC0F899c957C819',
@@ -117,20 +103,13 @@ describe('given the pinned bridge table of the signing screen', () => {
     expect(JAW_FEE_RECIPIENT).toBe('0xC529EDD6D47C60923902514C7C0B3993ae42C2ec');
   });
 
-  it('then every address is checksummed', () => {
-    for (const address of [...chains.flatMap(addressesOf), JAW_FEE_RECIPIENT]) {
-      expect(address).toBe(getAddress(address));
-    }
+  it('then the table passes every invariant of the parser the live table passes', () => {
+    const result = parse({ version: 1, chains: BRIDGE_CHAINS });
+    expect(result.ok ? 'ok' : result.reason).toBe('ok');
   });
 
-  it('then no address holds two roles on the same chain', () => {
-    for (const chain of chains) {
-      const contracts = [...Object.values(chain.across ?? {}), ...(chain.relay ? [chain.relay.depository] : [])];
-      for (const list of [contracts, Object.keys(chain.tokens)]) {
-        const lower = list.map((a) => a.toLowerCase());
-        expect(new Set(lower).size, `chain ${chain.id}`).toBe(lower.length);
-      }
-    }
+  it('then the JAW fee recipient is checksummed', () => {
+    expect(JAW_FEE_RECIPIENT).toBe(getAddress(JAW_FEE_RECIPIENT));
   });
 
   it('then USDC has 6 decimals except on BSC, and every wrapped native token has 18', () => {

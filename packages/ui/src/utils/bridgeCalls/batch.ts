@@ -13,6 +13,8 @@ const OTHER_TOKEN = 'This approval is for a different token than the deposit.';
 const UNPAIRED = 'This batch has an approval that the deposit does not use. Check its token, amount and spender.';
 const APPROVE_UNKNOWN = 'This batch approves a token this screen does not know. Check its address before you confirm.';
 
+const STALE_TABLE = 'This screen could not refresh its list of bridge contracts.';
+
 export type BridgeStep = { alert: string } | null;
 
 /** `alerts` are red: a bridge call this screen cannot read. `notices` are yellow: worth a look, maybe intended. */
@@ -48,7 +50,13 @@ export function readBridgeBatch(
     )
   );
   const notices = transfers.flatMap((read) => read.notices);
-  if (reads.some((read) => read?.kind === 'approve' && !read.token.known)) notices.push(APPROVE_UNKNOWN);
+  const unknownApprove = reads.some((read) => read?.kind === 'approve' && !read.token.known);
+  if (unknownApprove) notices.push(APPROVE_UNKNOWN);
+  const outsideTable =
+    unknownApprove ||
+    transfers.some((read) => read.outsideTable) ||
+    reads.some((read) => read?.kind === 'unreadable' && read.outsideTable);
+  if (outsideTable && contracts.source === 'snapshot') notices.push(STALE_TABLE);
 
   if (deposits.length === 1) {
     notices.push(...approveNotices(calls, reads, deposits[0]));

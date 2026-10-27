@@ -1,15 +1,20 @@
 import { useMemo } from 'react';
 import { isAddress } from 'viem';
 import { readBridgeBatch } from '../utils/bridgeCalls/batch';
-import { snapshotContracts } from '../utils/bridgeCalls/table';
+import type { BridgeContracts } from '../utils/bridgeCalls/table';
 import type { TransactionData } from '../components/TransactionDialog/types';
 
-export function useBridgeBatch(transactions: TransactionData[], account: string | undefined, relayOrder?: unknown) {
+export function useBridgeBatch(
+  contracts: BridgeContracts,
+  transactions: TransactionData[],
+  account: string | undefined,
+  relayOrder?: unknown
+) {
   return useMemo(
     () =>
       account && isAddress(account, { strict: false })
-        ? readBridgeBatch(snapshotContracts(), transactions, account, relayOrder)
+        ? readBridgeBatch(contracts, transactions, account, relayOrder)
         : null,
-    [transactions, account, relayOrder]
+    [contracts, transactions, account, relayOrder]
   );
 }
