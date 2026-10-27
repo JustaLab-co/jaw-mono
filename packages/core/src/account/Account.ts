@@ -47,8 +47,10 @@ import {
     revokePermission as revokeSmartAccountPermission,
     getPermissionFromRelay,
     relayPermissionToPermission,
+    relayCallToCallPermission,
     buildGrantPermissionCall,
     buildRevokePermissionCall,
+    NATIVE_TOKEN,
     type PermissionsDetail,
     type WalletGrantPermissionsResponse,
     type RevokePermissionApiResponse,
@@ -1277,7 +1279,14 @@ export class Account {
 
         return {
             balanceOf: (token: Address, owner: Address) =>
-                publicClient.readContract({ address: token, abi: erc20Abi, functionName: 'balanceOf', args: [owner] }),
+                token.toLowerCase() === NATIVE_TOKEN.toLowerCase()
+                    ? publicClient.getBalance({ address: owner })
+                    : publicClient.readContract({
+                          address: token,
+                          abi: erc20Abi,
+                          functionName: 'balanceOf',
+                          args: [owner],
+                      }),
             gasPrice: () => publicClient.getGasPrice(),
             exchangeRate: async (token: Address) => {
                 const url = jawPaymasterUrl(this._chain.id, this._apiKey);
@@ -1392,10 +1401,8 @@ export class Account {
         const relayResponse = await getPermissionFromRelay(permissionId, this._apiKey);
 
         // Transform relay response to WalletGrantPermissionsResponse format
-        const calls: CallPermissionDetail[] = relayResponse.calls.map((call) => ({
-            target: call.target as Address,
-            selector: call.selector as Hex,
-        }));
+        // Every call carries its checker, as on the grant response, so the hash can be rebuilt.
+        const calls: CallPermissionDetail[] = relayResponse.calls.map(relayCallToCallPermission);
 
         const spends: SpendPermissionDetail[] = relayResponse.spends.map((spend) => ({
             token: spend.token as Address,

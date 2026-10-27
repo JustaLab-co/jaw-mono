@@ -30,6 +30,8 @@ export interface CallPermission {
   target: string;
   selector?: string;
   functionSignature: string;
+  /** Contract the manager asks to approve each matching call. Absent or zero means none. */
+  checker?: string;
 }
 
 export interface PermissionDialogProps {

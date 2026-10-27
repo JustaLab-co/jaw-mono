@@ -15,10 +15,12 @@ const created = vi.hoisted(() => ({
   appNames: [] as string[],
   handlerOptions: [] as unknown[],
   session: 's1',
+  /** The whole query when a test opens the page at another URL than a session link. */
+  query: null as string | null,
   request: (async () => null) as (args: { method: string; params: unknown[] }) => Promise<unknown>,
 }));
 vi.mock('next/navigation', () => ({
-  useSearchParams: () => new URLSearchParams(`session=${created.session}&relay=ws://relay.test`),
+  useSearchParams: () => new URLSearchParams(created.query ?? `session=${created.session}&relay=ws://relay.test`),
 }));
 vi.mock('@jaw.id/ui', () => ({
   ReactUIHandler: class {
@@ -46,7 +48,7 @@ class FakeSocket {
   sent: Record<string, unknown>[] = [];
   onopen?: () => void;
   onmessage?: (e: { data: string }) => void;
-  onclose?: () => void;
+  onclose?: (e: { code: number }) => void;
   onerror?: () => void;
   constructor(public url: string) {
     FakeSocket.all.push(this);
@@ -112,6 +114,7 @@ beforeEach(() => {
   created.appNames = [];
   created.handlerOptions = [];
   created.session = 's1';
+  created.query = null;
   created.request = async () => null;
   vi.stubGlobal('WebSocket', FakeSocket);
   host = document.createElement('div');
@@ -198,7 +201,7 @@ describe('cli-bridge page app name', () => {
     const ws = await start();
     await init(ws, { appName: 'Claude' });
 
-    await act(async () => ws.onclose!());
+    await act(async () => ws.onclose!({ code: 1006 }));
 
     expect(host.textContent).toContain('Claude disconnected. You can close this tab.');
   });
@@ -484,7 +487,7 @@ describe('cli-bridge page with nobody on the other side', () => {
   it('given the relay drops before the wait ends, the page blames the relay, not the link', async () => {
     vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
     const ws = await start();
-    await act(async () => ws.onclose!());
+    await act(async () => ws.onclose!({ code: 1006 }));
 
     await act(async () => vi.advanceTimersByTime(20_000));
 
@@ -543,5 +546,90 @@ describe('cli-bridge page with nobody on the other side', () => {
 
     expect(host.textContent).not.toContain('no longer active');
     expect(ws.close).not.toHaveBeenCalled();
+  });
+});
+
+describe('cli-bridge page when the link is opened in another tab', () => {
+  // The relay keeps one browser per session and closes the old one with 4003.
+  const REPLACED = 4003;
+
+  function leaving() {
+    const close = vi.fn();
+    const replace = vi.fn();
+    vi.stubGlobal('close', close);
+    vi.stubGlobal('location', { replace });
+    return { close, replace };
+  }
+
+  it('given another tab took the link, this tab closes and leaves for a page with no session', async () => {
+    const ws = await start();
+    await init(ws, { appName: 'Claude' });
+    const { close, replace } = leaving();
+
+    await act(async () => ws.onclose!({ code: REPLACED }));
+
+    expect(close).toHaveBeenCalledTimes(1);
+    expect(replace).toHaveBeenCalledTimes(1);
+    expect(replace).toHaveBeenCalledWith('/cli-bridge?replaced=1');
+    const target = new URL(replace.mock.calls[0][0], 'https://keys.jaw.id');
+    expect(target.searchParams.has('session')).toBe(false);
+    expect(target.searchParams.has('relay')).toBe(false);
+    expect(target.hash).toBe('');
+  });
+
+  it('given a request still in the wallet, another tab taking the link still makes this tab leave', async () => {
+    // The owner never answers: the dialog stays open.
+    const asked = vi.fn(() => new Promise<unknown>(() => undefined));
+    created.request = asked;
+    const ws = await start();
+    await init(ws, { appName: 'Claude' });
+    await deliver(ws, { type: 'rpc_request', id: 'r1', method: 'wallet_sendCalls', params: [{ calls: [] }] });
+    await vi.waitFor(() => expect(asked).toHaveBeenCalledTimes(1));
+    const { close, replace } = leaving();
+
+    await act(async () => ws.onclose!({ code: REPLACED }));
+
+    expect(close).toHaveBeenCalledTimes(1);
+    expect(replace).toHaveBeenCalledWith('/cli-bridge?replaced=1');
+  });
+
+  it.each([1000, 1006, 4004])(
+    'given the relay closes with %i, the tab stays and says the client disconnected',
+    async (code) => {
+      const ws = await start();
+      await init(ws, { appName: 'Claude' });
+      const { close, replace } = leaving();
+
+      await act(async () => ws.onclose!({ code }));
+
+      expect(close).not.toHaveBeenCalled();
+      expect(replace).not.toHaveBeenCalled();
+      expect(host.textContent).toContain('Claude disconnected. You can close this tab.');
+    }
+  );
+
+  it('given an address with the replaced marker and a session, it still connects to nothing', async () => {
+    created.query = 'replaced=1&session=s1&relay=ws://relay.test';
+    window.location.hash = `pk=${await exportKeyToHexString('public', (await generateKeyPair()).publicKey)}`;
+
+    await act(async () => root.render(<CLIBridgePage />));
+    // The page derives its key before it opens a socket, so give that time to happen.
+    await act(async () => new Promise((resolve) => setTimeout(resolve, 100)));
+
+    expect(host.textContent).toContain('This link is open in another tab. You can close this one.');
+    expect(FakeSocket.all).toHaveLength(0);
+  });
+
+  it('given the page opened at the replaced marker, it says the link is open in another tab and connects to nothing', async () => {
+    created.query = 'replaced=1';
+    window.location.hash = '';
+
+    await act(async () => root.render(<CLIBridgePage />));
+
+    expect(host.textContent).toContain('This link is open in another tab. You can close this one.');
+    expect(host.textContent).not.toContain('Missing required parameters');
+    expect(host.textContent).not.toContain('no longer active');
+    expect(host.querySelectorAll('button')).toHaveLength(0);
+    expect(FakeSocket.all).toHaveLength(0);
   });
 });

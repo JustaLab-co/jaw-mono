@@ -25,12 +25,15 @@ const SIGNERS = {
   jaw_swap_status: 'none',
   jaw_get_calls_status: 'none',
   jaw_get_sign_status: 'none',
+  jaw_get_grant_status: 'none',
   jaw_get_assets: 'none',
+  jaw_get_defi_positions: 'none',
   jaw_get_calls_history: 'none',
   jaw_get_permissions: 'none',
   jaw_get_capabilities: 'none',
   jaw_read_contracts: 'none',
   jaw_simulate_calls: 'none',
+  jaw_prepare_calls: 'none',
   jaw_resolve_name: 'none',
 } as const;
 

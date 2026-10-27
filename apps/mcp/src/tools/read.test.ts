@@ -7,6 +7,7 @@ import { getDb } from '@/db/client';
 import { connections, grants } from '@/db/schema';
 import { useTestDb } from '@/db/test-db';
 import { callTool, connect, mcp, setTestEnv } from '@/connections/testkit';
+import { leaks, spoken, toAgent } from '@/test-utils/spoken';
 
 const USDC = '0x036CbD53842c5426634e7929541eC2318f3dCF7e';
 const hits: string[] = [];
@@ -57,7 +58,6 @@ const SELLER = `127.0.0.1:${(seller.address() as AddressInfo).port}`;
 setTestEnv();
 process.env.JAW_MCP_INSECURE_FETCH_HOSTS = SELLER;
 process.env.JAW_MCP_RPC_URL = 'http://127.0.0.1:9';
-process.env.JAW_MCP_MAINNET_RPC_URL = 'http://127.0.0.1:9';
 
 let token: string;
 let account: string;
@@ -114,8 +114,11 @@ describe('read tools', () => {
       .set({ expiresAt: new Date(Date.now() + 12 * 60 * 60 * 1000) })
       .where(eq(connections.id, t.connectionId));
     const r = await callTool(c.access_token, 'jaw_session_status', {});
-    expect(r.content[0].text).toContain('jaw_session_disconnect');
-    expect(r.content[0].text).toContain('expires');
+    expect(r.content[0].text).toMatch(/This connection ends in 1[12] hours\./);
+    expect(r.content[0].text).toMatch(
+      /\nFor the agent: .*Offer the owner to disconnect before then; call jaw_session_disconnect only if they agree\.$/
+    );
+    expect(r.content[0].text).not.toContain('Call jaw_session_disconnect before it ends.');
   });
 
   it('jaw_session_x402_quote prices the exact route at 5000 Base Sepolia USDC without paying', async () => {
@@ -205,9 +208,12 @@ describe('read tools', () => {
       'jaw_get_calls_history',
       'jaw_get_calls_status',
       'jaw_get_capabilities',
+      'jaw_get_defi_positions',
+      'jaw_get_grant_status',
       'jaw_get_permissions',
       'jaw_get_sign_status',
       'jaw_grant_permissions',
+      'jaw_prepare_calls',
       'jaw_read_contracts',
       'jaw_resolve_name',
       'jaw_revoke_permission',
@@ -225,5 +231,65 @@ describe('read tools', () => {
       'jaw_swap_status',
     ]);
     expect(tools.every((t) => t.outputSchema)).toBe(true);
+  });
+});
+
+// A date such as 22 Nov 2026, never a clock time.
+const DAY = String.raw`\d{1,2} [A-Z][a-z]{2} \d{4}`;
+
+describe('what the owner hears from jaw_session_status and jaw_session_x402_quote', () => {
+  it('given a connection with no spend limit, then the owner hears the network, that there is none, and when it ends', async () => {
+    const r = await callTool(token, 'jaw_session_status', {});
+    expect(leaks(spoken(r))).toEqual([]);
+    expect(spoken(r)).toMatch(
+      new RegExp(
+        `^Connected to the owner's wallet on Base Sepolia\\. No spend limit for paid services yet\\. This connection ends on ${DAY}\\.$`
+      )
+    );
+    expect(toAgent(r)).toEqual([
+      'For the agent: When the owner needs a paid service or a run without approval, ask for one with jaw_grant_permissions and x402Budget.',
+    ]);
+  });
+
+  it('given a connection not allowed to pay, then the owner hears how to fix it and only the agent hears the scope', async () => {
+    const c = await connect(undefined, { scope: 'wallet:read' });
+    const r = await callTool(c.access_token, 'jaw_session_status', {});
+    expect(leaks(spoken(r))).toEqual([]);
+    expect(spoken(r)).toContain(
+      'This connection was not allowed to pay for services when it was set up. Reconnecting with payments allowed fixes that.'
+    );
+    expect(toAgent(r)).toEqual(['For the agent: Reconnect and ask for the x402:pay scope.']);
+  });
+
+  it('given a connection that ends within 48 hours, then the owner hears it in hours with no clock time', async () => {
+    const c = await connect();
+    const t = (await verifyBearer(c.access_token))?.extra?.tenant as Tenant;
+    await getDb()
+      .update(connections)
+      .set({ expiresAt: new Date(Date.now() + 3 * 60 * 60 * 1000) })
+      .where(eq(connections.id, t.connectionId));
+    const r = await callTool(c.access_token, 'jaw_session_status', {});
+    expect(leaks(spoken(r))).toEqual([]);
+    expect(spoken(r)).toMatch(
+      /This connection ends in 2 hours\. Disconnecting before then returns the USDC it holds to the wallet\.$/
+    );
+  });
+
+  it('given a price and no spend limit, then the owner hears the price in USDC and that there is no spend limit yet', async () => {
+    const r = await callTool(token, 'jaw_session_x402_quote', { url: `http://${SELLER}/exact` });
+    expect(leaks(spoken(r))).toEqual([]);
+    expect(spoken(r)).toBe(`${SELLER} charges 0.005 USDC per call. No spend limit for paid services yet.`);
+  });
+
+  it('given a free resource, then the owner hears that no payment is needed', async () => {
+    const r = await callTool(token, 'jaw_session_x402_quote', { url: `http://${SELLER}/free` });
+    expect(leaks(spoken(r))).toEqual([]);
+    expect(r.structuredContent.summary).toBe('Free: no payment is needed.');
+  });
+
+  it('given a service that cannot be reached, then the owner hears that no price could be read, in plain words', async () => {
+    const r = await callTool(token, 'jaw_session_x402_quote', { url: 'https://no-such-host.invalid/' });
+    expect(leaks(spoken(r))).toEqual([]);
+    expect(spoken(r)).toBe('No price could be read from no-such-host.invalid: the service could not be reached.');
   });
 });

@@ -8,17 +8,20 @@ import { act } from 'react';
 import type { Chain } from '@jaw.id/core';
 
 const revokePermission = vi.fn();
+const grantPermissions = vi.fn();
 
-let dialogProps: { onConfirm?: () => void } = {};
+type DialogProps = { onConfirm?: () => void; calls?: Array<{ checker?: string }> };
+let dialogProps: DialogProps = {};
+let storedPermission: unknown = null;
 vi.mock('@jaw.id/ui', async (importActual) => {
   const actual = await importActual<typeof import('@jaw.id/ui')>();
   return {
     ...actual,
-    PermissionDialog: (props: { onConfirm?: () => void }) => {
+    PermissionDialog: (props: DialogProps) => {
       dialogProps = props;
       return null;
     },
-    usePermissionRevocation: () => ({ permission: null, loading: false, problem: null }),
+    usePermissionRevocation: () => ({ permission: storedPermission, loading: false, problem: null }),
     useGasEstimation: () => ({
       gasFee: '',
       gasFeeLoading: false,
@@ -40,7 +43,7 @@ vi.mock('@jaw.id/core', async (importActual) => {
 
 vi.mock('../../hooks', () => ({
   useSessionAccount: () => ({
-    account: { revokePermission },
+    account: { revokePermission, grantPermissions },
     isLoading: false,
     walletAddress: '0x1111111111111111111111111111111111111111',
   }),
@@ -81,7 +84,10 @@ beforeEach(() => {
   (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
   vi.stubGlobal('fetch', () => Promise.reject(new Error('offline')));
   revokePermission.mockReset();
+  grantPermissions.mockReset();
+  grantPermissions.mockResolvedValue({ permissionId: `0x${'cd'.repeat(32)}` });
   dialogProps = {};
+  storedPermission = null;
   container = document.createElement('div');
   document.body.appendChild(container);
   root = createRoot(container);
@@ -110,11 +116,94 @@ describe('PermissionModal revoke', () => {
     expect(onSuccess).toHaveBeenCalledWith({ success: true });
   });
 
+  // ReactUIHandler's revoke screen draws no checker, so this one leaves it out too, or the keys
+  // screen alone would open "Allowed calls" and show "Checked by".
+  it('leaves the checker off the calls it shows, as the other host does', async () => {
+    storedPermission = {
+      permissionId: REQUEST.params[0].id,
+      account: '0x1111111111111111111111111111111111111111',
+      spender: '0x2222222222222222222222222222222222222222',
+      start: 1_700_000_000,
+      end: 2_000_000_000,
+      salt: '0x2a',
+      calls: [
+        {
+          target: '0x036CbD53842c5426634e7929541eC2318f3dCF7e',
+          selector: '0xa9059cbb',
+          checker: '0x398b9d939E7E616E03eA99601c835C920621B2ca',
+        },
+      ],
+      spends: [],
+      chainId: '0x2105',
+    };
+
+    await act(async () => {
+      root.render(
+        <PermissionModal
+          permissionRequest={REQUEST as never}
+          chain={CHAIN}
+          apiKey="test-key"
+          onSuccess={() => undefined}
+          onError={() => undefined}
+        />
+      );
+    });
+
+    expect(dialogProps.calls).toHaveLength(1);
+    expect(dialogProps.calls?.[0].checker).toBeUndefined();
+  });
+
   it('tells the dapp the revoke succeeded when the relay had no row left to remove', async () => {
     revokePermission.mockResolvedValue({ success: false });
 
     const onSuccess = await confirmRevoke();
 
     expect(onSuccess).toHaveBeenCalledWith({ success: true });
+  });
+});
+
+/**
+ * The checker is part of what the passkey signs, and keys passes `permissionDetails.calls` to
+ * `grantPermissions` unchanged, so the screen has to show the same checker or it hides part of
+ * the signed permission.
+ */
+describe('PermissionModal grant', () => {
+  const CHECKER = '0x398b9d939E7E616E03eA99601c835C920621B2ca';
+
+  it('shows the checker it signs', async () => {
+    const request = {
+      method: 'wallet_grantPermissions' as const,
+      params: [
+        {
+          expiry: Math.floor(Date.now() / 1000) + 86_400,
+          spender: '0x2222222222222222222222222222222222222222',
+          permissions: {
+            calls: [
+              {
+                target: '0x036CbD53842c5426634e7929541eC2318f3dCF7e',
+                functionSignature: 'transfer(address,uint256)',
+                checker: CHECKER,
+              },
+            ],
+          },
+        },
+      ],
+    };
+    await act(async () => {
+      root.render(
+        <PermissionModal
+          permissionRequest={request as never}
+          chain={CHAIN}
+          apiKey="test-key"
+          onSuccess={vi.fn()}
+          onError={vi.fn()}
+        />
+      );
+    });
+    await act(async () => dialogProps.onConfirm?.());
+
+    expect(dialogProps.calls?.[0].checker).toBe(CHECKER);
+    expect(grantPermissions).toHaveBeenCalledTimes(1);
+    expect(grantPermissions.mock.calls[0][2].calls[0].checker).toBe(CHECKER);
   });
 });

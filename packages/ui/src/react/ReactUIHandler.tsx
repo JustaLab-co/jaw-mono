@@ -48,6 +48,7 @@ import { Eip712Dialog } from '../components/Eip712Dialog';
 import { TransactionDialog } from '../components/TransactionDialog';
 import { PermissionDialog } from '../components/PermissionDialog';
 import { isWildcard } from '../components/PermissionDialog/Sections';
+import { toDialogCalls } from '../components/PermissionDialog/calls';
 import { ConnectDialog } from '../components/ConnectDialog';
 import { AddFundsDialog } from '../components/AddFundsDialog';
 import { ResponsiveDialogAnchor } from '../components/DialogPresentation';
@@ -2571,17 +2572,7 @@ function PermissionDialogWrapper({
   // Format call permissions. Signatures resolve asynchronously — a selector with no signature yet
   // renders as its raw hex and upgrades in place.
   const callSignatures = useFunctionSignatures(callsData.map((call) => call.selector));
-  const calls = useMemo(
-    () =>
-      callsData.map((call) => ({
-        target: call.target,
-        selector: call.selector,
-        functionSignature:
-          call.functionSignature ||
-          (call.selector ? (callSignatures[call.selector.toLowerCase()] ?? call.selector) : 'Unknown Function'),
-      })),
-    [callsData, callSignatures]
-  );
+  const calls = useMemo(() => toDialogCalls(callsData, callSignatures), [callsData, callSignatures]);
 
   // Format expiry date
   const expiryDate = useMemo(() => {

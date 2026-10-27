@@ -50,7 +50,8 @@ function resolvePaymaster(
   // A chain the registry does not cover has no token to name, so fall back to
   // sending with no paymaster rather than engaging one that must fail.
   const asset = usdcForNetwork(`eip155:${options.chainId}`);
-  if (!asset) {
+  const context = options.paymasterContext ?? (asset && { token: asset.address });
+  if (!context) {
     // Say so rather than falling through quietly: the userOp goes out with no
     // paymaster, and the failure the user eventually sees is about native funds
     // and mentions none of this.
@@ -65,7 +66,7 @@ function resolvePaymaster(
   const url = new URL(JAW_ERC20_PAYMASTER_URL);
   url.searchParams.set('chainId', String(options.chainId));
   url.searchParams.set('api-key', options.apiKey);
-  return { paymasterUrl: url.toString(), paymasterContext: { token: asset.address } };
+  return { paymasterUrl: url.toString(), paymasterContext: context };
 }
 
 /**
@@ -76,6 +77,7 @@ function resolvePaymaster(
  */
 async function warnOnFeeTokenDrift(options: SessionBridgeOptions): Promise<void> {
   if (options.paymasterUrl && !options.paymasterUrl.startsWith(JAW_ERC20_PAYMASTER_URL)) return;
+  if (options.paymasterContext) return;
   const asset = usdcForNetwork(`eip155:${options.chainId}`);
   if (!asset || !options.apiKey) return;
   const warning = await whyFeeTokenDisagrees(asset, options.apiKey);
@@ -94,12 +96,13 @@ async function warnOnFeeTokenDrift(options: SessionBridgeOptions): Promise<void>
  * carry it yet. Say the address and the amount rather than leaving the user to
  * work backwards from a paymaster error.
  */
-function explainUnchargeableSender(err: unknown, sessionAddress: string): unknown {
+function explainUnchargeableSender(err: unknown, sessionAddress: string, feeToken: string | undefined): unknown {
   const message = err instanceof Error ? err.message : String(err);
   if (!message.includes('Could not size the ERC-20 paymaster approval')) return err;
+  const [held, send] = feeToken ? [`none of the fee token ${feeToken}`, 'some of it'] : ['no USDC', '0.1 USDC'];
   return new Error(
-    `${message}\n\nIf ${sessionAddress} holds no USDC, that is why: it pays for its own gas and ` +
-      'cannot be charged with an empty balance. Send it 0.1 USDC, or run `jaw session setup` again.',
+    `${message}\n\nIf ${sessionAddress} holds ${held}, that is why: it pays for its own gas and ` +
+      `cannot be charged with an empty balance. Send it ${send}, or run \`jaw session setup\` again.`,
     { cause: err }
   );
 }
@@ -305,8 +308,16 @@ export class SessionBridge {
       if (!id) throw new Error('approval submitted but no call id was returned');
       return id;
     } catch (err) {
-      throw explainUnchargeableSender(err, config.sessionAddress);
+      throw explainUnchargeableSender(err, config.sessionAddress, this.feeToken());
     }
+  }
+
+  /** The token named in the paymaster context when it is not the registry USDC; undefined means USDC. */
+  private feeToken(): string | undefined {
+    const token = this.options.paymasterContext?.token;
+    if (typeof token !== 'string') return undefined;
+    const usdc = usdcForNetwork(`eip155:${this.options.chainId}`);
+    return usdc && token.toLowerCase() === usdc.address.toLowerCase() ? undefined : token;
   }
 
   /** `onSigned` gets the hash of a `wallet_sendCalls` userOp before it is sent. */
@@ -331,7 +342,7 @@ export class SessionBridge {
         try {
           return await account.sendCalls(calls, { permissionId: config.permissionId, onSigned });
         } catch (err) {
-          throw explainUnchargeableSender(err, config.sessionAddress);
+          throw explainUnchargeableSender(err, config.sessionAddress, this.feeToken());
         }
       }
 

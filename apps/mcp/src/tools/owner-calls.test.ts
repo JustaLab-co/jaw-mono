@@ -1,8 +1,8 @@
-import { randomBytes } from 'node:crypto';
+import { createHash, randomBytes } from 'node:crypto';
 import { getSupportedChains, PERMISSIONS_MANAGER_ADDRESS } from '@jaw.id/core';
 import { eq, sql } from 'drizzle-orm';
 import type { ChainClients } from '@jaw.id/agent';
-import { toHex, type Address, type Hex } from 'viem';
+import { toHex, type Address, type Hex, type PublicClient } from 'viem';
 import {
   entryPoint06Address,
   entryPoint07Address,
@@ -30,9 +30,12 @@ import { RATE_WINDOW_MS } from '@/lib/edge';
 import { gateCode } from '@/payments/render';
 import { SEND_STARTED } from '@/owner-calls/store';
 import * as store from '@/owner-calls/store';
-import { fakeChain, type FakeEvent } from '@/owner-calls/chain-testkit';
+import { approve } from '@/owner-calls/approve';
+import { fakeChain, gasNode, type FakeEvent } from '@/owner-calls/chain-testkit';
 import type { ReadReceipt } from '@/owner-calls/receipt';
+import { leaks, spoken, toAgent } from '@/test-utils/spoken';
 import { sendCalls, sendCallsStatus, type SendCallsInput } from './owner-calls';
+import { ACCOUNT_BUSY, FOR_AGENT } from './reply';
 
 // The tool as the server registers it opens its wallets through the owner relay, counted here.
 const served = vi.hoisted(() => ({ clients: [] as unknown[] }));
@@ -57,6 +60,15 @@ vi.mock('@/owner-calls/cap', async (original) => {
       return cap.countOpenLinks(...args);
     },
   };
+});
+
+// The gas check of the tool as the server registers it reads a node that is down, unless a test puts one there.
+const gasProxy = vi.hoisted(() => ({ clientFor: undefined as undefined | ((chainId: number) => PublicClient) }));
+vi.mock('@/lib/batch-limits', async (original) => {
+  const limits = await original<typeof import('@/lib/batch-limits')>();
+  const { gasNode: node } = await import('@/owner-calls/chain-testkit');
+  const down = node({ down: true }).clientFor;
+  return { ...limits, gasClientFor: (chainId: number) => (gasProxy.clientFor ?? down)(chainId) };
 });
 
 setTestEnv();
@@ -133,6 +145,21 @@ const input = (over: Partial<SendCallsInput> = {}): SendCallsInput => ({
 });
 const send = (t: Tenant, args: Partial<SendCallsInput> = {}, openWallet = wallet()) =>
   sendCalls(t, input(args), { openWallet, receipt: async () => null, clients: quietChain });
+// With the gas of the batch read off `node`.
+const checked = (t: Tenant, args: Partial<SendCallsInput>, node: ReturnType<typeof gasNode>) =>
+  sendCalls(t, input(args), {
+    openWallet: wallet(),
+    receipt: async () => null,
+    clients: quietChain,
+    gasClient: node.clientFor,
+  });
+// Code at the owner's account: one the wallet has deployed, whose batches get the chain's whole budget.
+const DEPLOYED: Hex = '0x6080604052';
+// Two calls of 24,576 and `second` bytes of calldata: a batch of 24,964 bytes plus `second`, padded to 32.
+const sized = (second: number) => [
+  { to: TARGET, data: `0xa9059cbb${'ab'.repeat(24_572)}` },
+  { to: OTHER, data: `0xa9059cbb${'ab'.repeat(second - 4)}` },
+];
 const rowsOf = (connectionId: string) =>
   getDb().select().from(ownerCalls).where(eq(ownerCalls.connectionId, connectionId));
 const settle = async () => {
@@ -239,20 +266,20 @@ describe('jaw_send_calls link', () => {
     expect(second.structuredContent!.idempotencyKey).not.toBe(first.structuredContent!.idempotencyKey);
   });
 
-  it('given eleven calls or none, when they are sent through the server, then the input is refused before any wallet opens, and ten are served', async () => {
+  it('given 101 calls or none, when they are sent through the server, then the input is refused before any wallet opens, and 100 are served', async () => {
     const { t, token } = await connected();
     const many = (n: number) => Array.from({ length: n }, () => ({ to: TARGET }));
 
-    const eleven = await callTool(token, 'jaw_send_calls', { calls: many(11) });
+    const over = await callTool(token, 'jaw_send_calls', { calls: many(101) });
     const none = await callTool(token, 'jaw_send_calls', { calls: [] });
-    const ten = await callTool(token, 'jaw_send_calls', { calls: many(10) });
+    const hundred = await callTool(token, 'jaw_send_calls', { calls: many(100) });
 
-    for (const refused of [eleven, none]) {
+    for (const refused of [over, none]) {
       expect(refused.isError).toBe(true);
       expect(refused.content[0].text).toContain('Input validation error');
       expect(refused.content[0].text).toContain('calls');
     }
-    expect(ten.isError).toBeFalsy();
+    expect(hundred.isError).toBeFalsy();
     expect(served.clients).toHaveLength(1);
     expect(await rowsOf(t.connectionId)).toHaveLength(1);
   });
@@ -362,42 +389,14 @@ describe('jaw_send_calls approval', () => {
     expect(again.structuredContent).toMatchObject({
       state: 'owner_declined',
       refusal: { code: 'owner_declined' },
-      summary: 'The owner declined the calls in the wallet. Nothing was sent.',
+      summary: 'The owner declined this in the wallet. Nothing was sent.',
     });
     expect(again.structuredContent!.url).toBeUndefined();
     expect(opened).toHaveLength(1);
   });
 
-  it.each([4100, 4200, 4900, 4901, 5700, 5710, -32602])(
-    'given a wallet that refuses wallet_sendCalls with %i, which it only returns before submitting, then the row is owner_declined and the key says nothing was sent',
-    async (code) => {
-      const { t } = await connected();
-      const refuse = () => {
-        throw Object.assign(new Error('the wallet refused'), { code });
-      };
-
-      await send(t, {}, wallet(owner(t.account, { wallet_sendCalls: refuse })));
-      await settle();
-      const again = await send(t);
-
-      expect((await rowsOf(t.connectionId))[0]).toMatchObject({
-        state: 'owner_declined',
-        code: `wallet_error:${code}`,
-      });
-      expect(again.structuredContent).toMatchObject({
-        state: 'owner_declined',
-        refusal: { code: `wallet_error:${code}` },
-      });
-      expect(again.structuredContent!.url).toBeUndefined();
-      expect(again.structuredContent!.summary).toContain(`refused the calls with ${code} before sending them`);
-      expect(again.structuredContent!.summary).toContain('Nothing was sent');
-      expect(again.structuredContent!.summary).toContain('new idempotencyKey');
-      expect(opened).toHaveLength(1);
-    }
-  );
-
-  it.each([-32000, -32603, -32003, 4002, undefined])(
-    'given a wallet that fails wallet_sendCalls with %s, which can follow a submission, then the row keeps the send marker and the key says the wallet may have sent',
+  it.each([4100, 4200, 4900, 4901, 5700, 5710, -32602, -32000, -32603, -32003, 4002, undefined])(
+    'given a wallet that fails wallet_sendCalls with %s after the send marker, then the row keeps the send marker and the key says the wallet may have sent',
     async (code) => {
       const { t } = await connected();
       const fail = () => {
@@ -413,6 +412,23 @@ describe('jaw_send_calls approval', () => {
       expect(again.structuredContent!.url).toBeUndefined();
     }
   );
+
+  it.each([
+    ['signs in with another account', () => owner(OTHER)],
+    ['rejects the account request', (account: string) => owner(account, { eth_requestAccounts: rejected })],
+  ])('given a marked row, when a resumed session %s, then the row keeps the send marker', async (_, answer) => {
+    const { t } = await connected();
+    const fail = () => {
+      throw Object.assign(new Error('the wallet failed'), { code: -32603 });
+    };
+    await send(t, {}, wallet(owner(t.account, { wallet_sendCalls: fail })));
+    await settle();
+    const [marked] = await rowsOf(t.connectionId);
+
+    await approve(answer(t.account), marked, quietChain);
+
+    expect((await rowsOf(t.connectionId))[0]).toMatchObject({ state: 'awaiting_owner', code: SEND_STARTED });
+  });
 
   it('given an owner who rejects the account request, then the row is owner_declined', async () => {
     const { t } = await connected();
@@ -457,6 +473,7 @@ describe('jaw_send_calls approval', () => {
     expect(again.structuredContent!.url).toBeUndefined();
     expect(again.structuredContent!.summary).toContain('answered 4200 when asked');
     expect(again.structuredContent!.summary).not.toContain('wallet_error:');
+    expect(spoken(again)).toBe('The wallet could not open this request. Nothing was sent.');
     expect(opened).toHaveLength(1);
   });
 
@@ -479,8 +496,8 @@ describe('jaw_send_calls approval', () => {
 
     expect(again.structuredContent).toMatchObject({ state: 'awaiting_owner', refusal: { code: 'send_started' } });
     expect(again.structuredContent!.url).toBeUndefined();
-    expect(again.structuredContent!.summary).toContain('may have sent');
-    expect(again.structuredContent!.summary).toContain(again.structuredContent!.id);
+    expect(spoken(again)).toContain('may have sent');
+    expect(toAgent(again).join('\n')).toContain(again.structuredContent!.id);
     expect(opened).toHaveLength(1);
   });
 
@@ -785,10 +802,36 @@ describe('jaw_send_calls refusals', () => {
     const result = await send(t, { idempotencyKey: 'second' });
 
     expect(result[gateCode]).toBe('calls_in_progress');
-    expect(result.content[0].text).toContain(first.structuredContent!.id);
-    expect(result.content[0].text).toContain('agent-key');
+    expect(result.content[0].text).toMatch(/^calls_in_progress: /);
+    expect(spoken(result)).toMatch(
+      new RegExp(
+        `^An earlier request is still waiting for the owner's approval, so this one was not opened\\. It expires in (29|30) minutes\\.\\nTo approve or decline the earlier request: ${first.structuredContent!.url!.replace(/[.?]/g, '\\$&')}$`
+      )
+    );
+    expect(toAgent(result).join('\n')).toContain(first.structuredContent!.id);
+    expect(toAgent(result).join('\n')).toContain('idempotencyKey agent-key');
     expect(opened).toHaveLength(1);
     expect(await rowsOf(t.connectionId)).toHaveLength(1);
+  });
+
+  it('given a request awaiting the owner, when another key asks, then the link it shows reads as the earlier request, never the new one', async () => {
+    const { t } = await connected();
+    const first = await send(t);
+
+    const result = await send(t, { idempotencyKey: 'second' });
+
+    expect(spoken(result)).toContain('earlier request');
+    expect(spoken(result).split('\n').at(-1)).toBe(
+      `To approve or decline the earlier request: ${first.structuredContent!.url}`
+    );
+    expect(toAgent(result)).toHaveLength(1);
+    expect(toAgent(result)[0]).toContain(
+      'This link is for the earlier request, not the one just asked for: never present it as the new one.'
+    );
+    expect(toAgent(result)[0]).toContain(
+      'Once the earlier request is approved, declined or expired, send the new one again.'
+    );
+    expect(leaks(spoken(result))).toEqual([]);
   });
 
   it('given a request that expired, when another key asks, then it gets its own link', async () => {
@@ -802,7 +845,8 @@ describe('jaw_send_calls refusals', () => {
     const old = await send(t);
     expect(old.structuredContent).toMatchObject({ state: 'expired' });
     expect(old.structuredContent!.url).toBeUndefined();
-    expect(old.structuredContent!.summary).toContain('Use a new idempotencyKey');
+    expect(spoken(old)).toBe('The owner did not approve within 30 minutes. Nothing was sent.');
+    expect(toAgent(old)).toEqual([`${FOR_AGENT} If the owner still wants it, ask again with a new idempotencyKey.`]);
   });
 
   it('given the server restarted while awaiting the owner, then the same key gets a new url on the same row and approveBy', async () => {
@@ -981,7 +1025,7 @@ describe('jaw_send_calls refusals', () => {
       const result = await send(d);
 
       expect(result[gateCode]).toBe('account_busy');
-      expect(result.content[0].text).toContain('account');
+      expect(result.content[0].text).toBe(ACCOUNT_BUSY);
       expect(opened).toHaveLength(3);
       expect(await rowsOf(d.connectionId)).toEqual([]);
     });
@@ -1339,7 +1383,9 @@ describe('jaw_get_calls_status', () => {
     expect(receipt).toHaveBeenCalledWith(t.chainId, CALLS_ID);
     expect(result.isError).toBeFalsy();
     expect(result.structuredContent).toMatchObject({ state: 'landed', txHash: TX, callsId: CALLS_ID });
-    expect(result.structuredContent!.summary).toBe(`Mined in ${TX}.`);
+    expect(result.structuredContent!.summary).toBe(
+      `Done. It went through on Base Sepolia. Receipt: https://sepolia.basescan.org/tx/${TX}`
+    );
     expect((await rowsOf(t.connectionId))[0]).toMatchObject({ state: 'landed', txHash: TX });
   });
 
@@ -1350,7 +1396,12 @@ describe('jaw_get_calls_status', () => {
 
     expect(result.isError).toBe(true);
     expect(result.structuredContent).toMatchObject({ state: 'reverted', txHash: TX });
-    expect(result.structuredContent!.summary).toContain('owner paid the gas');
+    expect(spoken(result)).toBe(
+      `It failed on Base Sepolia: nothing moved, and the owner paid the network fee. Receipt: https://sepolia.basescan.org/tx/${TX}`
+    );
+    expect(toAgent(result)).toEqual([
+      `${FOR_AGENT} Say what likely went wrong if you know. Simulate with jaw_simulate_calls before asking again.`,
+    ]);
   });
 
   it('given a landed row, then the chain is not read again', async () => {
@@ -1387,7 +1438,10 @@ describe('jaw_get_calls_status', () => {
     const result = await check(t, id);
 
     expect(result.structuredContent).toMatchObject({ state: 'sent', callsId: CALLS_ID });
-    expect(result.structuredContent!.summary).toContain('call jaw_get_calls_status again');
+    expect(spoken(result)).toBe('Approved. The transaction is on its way on Base Sepolia and not confirmed yet.');
+    expect(toAgent(result)).toEqual([
+      `${FOR_AGENT} Call jaw_get_calls_status again with id ${id} and waitSeconds 30 until it lands.`,
+    ]);
     expect((await rowsOf(t.connectionId))[0].state).toBe('sent');
   });
 
@@ -1399,7 +1453,7 @@ describe('jaw_get_calls_status', () => {
 
       const result = await check(t, id);
 
-      expect(result.structuredContent!.summary).toContain('Not mined yet');
+      expect(spoken(result)).toContain('not confirmed yet');
     }
   );
 
@@ -1410,8 +1464,11 @@ describe('jaw_get_calls_status', () => {
     const result = await check(t, id);
 
     expect(result.structuredContent!.state).toBe('sent');
-    expect(result.structuredContent!.summary).toContain('Not seen on chain by');
-    expect(result.structuredContent!.summary).toContain('check the account before sending these calls again');
+    expect(spoken(result)).toBe(
+      "The owner approved, but the transaction has not shown up on Base Sepolia. Do not send it again until the wallet's activity is checked."
+    );
+    expect(toAgent(result).join('\n')).toContain('Not seen on chain by');
+    expect(toAgent(result).join('\n')).toContain('check the account before sending these calls again');
   });
 
   it('given a send_started row 11 minutes past approveBy, then it says nothing was seen and to check the account', async () => {
@@ -1427,7 +1484,10 @@ describe('jaw_get_calls_status', () => {
 
     const result = await check(t, first.structuredContent!.id);
 
-    expect(result.structuredContent!.summary).toMatch(/^Nothing was seen by .*Check the account on chain/);
+    expect(result.structuredContent!.summary).toMatch(/^Nothing has shown up on Base Sepolia for this request/);
+    expect(toAgent(result).join('\n')).toMatch(
+      /Nothing was seen by .*check the account before sending these calls again/
+    );
   });
 
   it('given a send_started row 9 minutes past approveBy, then it still says the wallet may have sent', async () => {
@@ -1457,9 +1517,11 @@ describe('jaw_get_calls_status', () => {
 
       expect(result.isError).toBeFalsy();
       expect(result.structuredContent!.state).toBe('sent');
-      expect(result.structuredContent!.summary).toContain(
+      // A note for the agent, never read out to the owner.
+      expect(toAgent(result).join('\n')).toContain(
         'The chain could not be read right now; this is the request as last stored.'
       );
+      expect(spoken(result)).not.toContain('could not be read');
       expect((await rowsOf(t.connectionId))[0].state).toBe('sent');
       const lines = logged.mock.calls.map(([line]) => String(line));
       expect(lines.some((line) => line.includes('owner calls receipt not read') && line.includes(id))).toBe(true);
@@ -1480,7 +1542,7 @@ describe('jaw_get_calls_status', () => {
       expect(result.isError).toBeFalsy();
       expect(result.structuredContent!.state).toBe('sent');
       expect(result.structuredContent!.summary).not.toContain('could not be read');
-      expect(result.structuredContent!.summary).toContain('Not mined yet');
+      expect(spoken(result)).toContain('not confirmed yet');
       const lines = logged.mock.calls.map(([line]) => String(line));
       expect(lines.some((line) => line.includes('owner calls status write failed') && line.includes(id))).toBe(true);
       expect(lines.some((line) => line.includes('owner calls receipt not read'))).toBe(false);
@@ -1809,5 +1871,428 @@ describe('the block recorded when a call is sent', () => {
     } finally {
       logged.mockRestore();
     }
+  });
+});
+
+describe('what the owner hears from jaw_send_calls and jaw_get_calls_status', () => {
+  const linkLine = (url: string) => `Open this link to approve: ${url}`;
+  type Read = () => Promise<Awaited<ReturnType<typeof send>>>;
+
+  it('given calls sent for approval, then the link comes first on its own line, then the network and amount in plain words, then the agent line', async () => {
+    const { t } = await connected();
+
+    const result = await send(t);
+
+    const out = result.structuredContent!;
+    const [first, second, third, agent, ...rest] = out.summary.split('\n');
+    expect(first).toBe(linkLine(out.url!));
+    expect(second).toBe(
+      'It asks the owner to approve 2 actions from their wallet on Base Sepolia, moving 0.000000000000000012 ETH in total, within the next 30 minutes.'
+    );
+    expect(third).toBe('The owner pays the network fee in the wallet.');
+    expect(agent).toBe(
+      `${FOR_AGENT} Show the link now, on its own line, with one sentence of what this does and moves. ` +
+        `Then call jaw_get_calls_status with id ${out.id} and waitSeconds 30, and again while it answers awaiting_owner, until ${out.approveBy}. ` +
+        'Do not wait for the owner to say they approved.'
+    );
+    expect(rest).toEqual([]);
+    expect(result.content[0].text).toBe(out.summary);
+    expect(leaks(spoken(result))).toEqual([]);
+  });
+
+  it('given one call, then it is one action', async () => {
+    const { t } = await connected();
+
+    const result = await send(t, { calls: [{ to: TARGET }] });
+
+    expect(spoken(result)).toContain('approve 1 action from their wallet on Base Sepolia, within the next 30 minutes');
+    expect(spoken(result)).not.toContain('in total');
+  });
+
+  it('given a status read while the owner has not answered, then the owner hears when it expires, and the link goes to the agent for when the owner asks', async () => {
+    const { t } = await connected();
+    const first = await send(t);
+
+    const result = await check(t, first.structuredContent!.id);
+
+    expect(spoken(result)).toMatch(/^Still waiting for the owner to approve\. It expires in (29|30) minutes\.$/);
+    expect(spoken(result)).not.toContain(first.structuredContent!.url!);
+    expect(toAgent(result)).toEqual([
+      `${FOR_AGENT} Call jaw_get_calls_status again with id ${first.structuredContent!.id} and waitSeconds 30 until ${first.structuredContent!.approveBy}. If the owner asks for the link, show it: ${first.structuredContent!.url}`,
+    ]);
+    expect(leaks(spoken(result))).toEqual([]);
+  });
+
+  it('given the tools list, then each tool has its title and the send tells the agent to show the link first', async () => {
+    const { token } = await connected();
+
+    const { json } = await mcp(token, { method: 'tools/list' });
+
+    const tool = (name: string) => json.result.tools.find((x: { name: string }) => x.name === name);
+    expect(tool('jaw_send_calls').title).toBe('Send a transaction for the owner to approve');
+    expect(tool('jaw_send_calls').description).toContain(
+      'show it to the owner on its own line before anything else, with one plain sentence of what it does and moves; they cannot approve without it'
+    );
+    expect(tool('jaw_get_calls_status').title).toBe('Check an approval request');
+    expect(tool('jaw_get_calls_status').description).toContain(
+      'While it waits, its result carries the link, so show it again if the owner asks.'
+    );
+  });
+
+  // Every state a request can be read in, and every refusal: none names a tool or an internal word to the owner.
+  const STATES: [string, Read][] = [
+    ['a request awaiting the owner', async () => send((await connected()).t)],
+    [
+      'a status read while waiting',
+      async () => {
+        const { t } = await connected();
+        return check(t, (await send(t)).structuredContent!.id);
+      },
+    ],
+    [
+      'a request the owner declined',
+      async () => {
+        const { t } = await connected();
+        await send(t, {}, wallet(owner(t.account, { wallet_sendCalls: rejected })));
+        await settle();
+        return send(t);
+      },
+    ],
+    [
+      'a request the wallet refused before sending',
+      async () => {
+        const { t } = await connected();
+        const refuse = () => {
+          throw Object.assign(new Error('the wallet refused'), { code: 4100 });
+        };
+        await send(t, {}, wallet(owner(t.account, { wallet_sendCalls: refuse })));
+        await settle();
+        return send(t);
+      },
+    ],
+    [
+      'a request signed in with another account',
+      async () => {
+        const { t } = await connected();
+        await send(t, {}, wallet(owner(OTHER)));
+        await settle();
+        return send(t);
+      },
+    ],
+    [
+      'a request that expired',
+      async () => {
+        const { t } = await connected();
+        const first = await send(t);
+        await rewrite(first.structuredContent!.id, { approveBy: sql`statement_timestamp() - interval '1 second'` });
+        return send(t);
+      },
+    ],
+    [
+      'a request the wallet may have sent',
+      async () => {
+        const { t } = await connected();
+        const dropped = owner(t.account, {
+          wallet_sendCalls: () => {
+            throw new Error('socket closed');
+          },
+        });
+        await send(t, {}, wallet(dropped));
+        await settle();
+        return send(t);
+      },
+    ],
+    [
+      'a request the wallet may have sent, past its grace',
+      async () => {
+        const { t } = await connected();
+        const dropped = owner(t.account, {
+          wallet_sendCalls: () => {
+            throw new Error('socket closed');
+          },
+        });
+        const first = await send(t, {}, wallet(dropped));
+        await settle();
+        await rewrite(first.structuredContent!.id, pastApproveBy(11));
+        return check(t, first.structuredContent!.id);
+      },
+    ],
+    ['sent calls not mined yet', async () => (({ t, id }) => check(t, id))(await sentRow())],
+    [
+      'sent calls not seen past their grace',
+      async () => {
+        const { t, id } = await sentRow();
+        await rewrite(id, pastApproveBy(11));
+        return check(t, id);
+      },
+    ],
+    [
+      'sent calls on a chain that cannot be read',
+      async () => {
+        const { t, id } = await sentRow();
+        const logged = vi.spyOn(console, 'log').mockImplementation(() => undefined);
+        try {
+          return await check(t, id, async () => {
+            throw new Error('rpc down');
+          });
+        } finally {
+          logged.mockRestore();
+        }
+      },
+    ],
+    [
+      'calls that landed',
+      async () => (({ t, id }) => check(t, id, async () => ({ success: true, txHash: TX })))(await sentRow()),
+    ],
+    [
+      'calls that reverted',
+      async () => (({ t, id }) => check(t, id, async () => ({ success: false, txHash: TX })))(await sentRow()),
+    ],
+  ];
+
+  it.each(STATES)('given %s, then the owner hears no tool and no internal word', async (_name, read) => {
+    const result = await read();
+
+    expect(spoken(result).trim()).not.toBe('');
+    expect(leaks(spoken(result))).toEqual([]);
+  });
+
+  const REFUSALS: [string, string, Read][] = [
+    ['an unsupported chain', 'unsupported_chain', async () => send((await connected()).t, { chainId: 324 })],
+    [
+      'a call to the account itself',
+      'call_target_refused',
+      async () => {
+        const { t } = await connected();
+        return send(t, { calls: [{ to: t.account as Address }] });
+      },
+    ],
+    [
+      'a call to an EntryPoint',
+      'call_target_refused',
+      async () => send((await connected()).t, { calls: [{ to: entryPoint08Address }] }),
+    ],
+    ['calls over 40,000 bytes', 'batch_too_large', async () => send((await connected()).t, { calls: sized(15_040) })],
+    [
+      'calls needing more gas than one transaction takes',
+      'batch_too_heavy',
+      async () => checked((await connected()).t, {}, gasNode({ gas: 9_000_000n })),
+    ],
+    [
+      'the same key with other calls',
+      'idempotency_conflict',
+      async () => {
+        const { t } = await connected();
+        await send(t);
+        return send(t, { calls: [CALL] });
+      },
+    ],
+    [
+      'another request waiting',
+      'calls_in_progress',
+      async () => {
+        const { t } = await connected();
+        await send(t);
+        return send(t, { idempotencyKey: 'second' });
+      },
+    ],
+    [
+      'every link slot of the account taken',
+      'account_busy',
+      async () => {
+        const signer = newSigner();
+        const ts = [];
+        for (let i = 0; i < 4; i++) ts.push((await connected('wallet:read', signer)).t);
+        for (const t of ts.slice(0, 3)) await send(t);
+        return send(ts[3]);
+      },
+    ],
+    ['a full owner pool', 'wallet_busy', async () => send((await connected()).t, {}, busy)],
+    [
+      'an ended connection',
+      'connection_ended',
+      async () => {
+        const { t } = await connected();
+        await endConnection(t.connectionId, t.account);
+        return send(t);
+      },
+    ],
+    [
+      'payments paused',
+      'payments_paused',
+      async () => {
+        const { t } = await connected();
+        await getDb().insert(settings).values({ key: 'payments_paused', value: true });
+        return send(t);
+      },
+    ],
+    [
+      'too many links this minute',
+      'rate_limited',
+      async () => {
+        const { t } = await connected();
+        await hitsThisWindow(`owner-calls:${t.connectionId}`, 10, RATE_WINDOW_MS);
+        return send(t);
+      },
+    ],
+    [
+      'too many status reads this minute',
+      'rate_limited',
+      async () => {
+        const { t, id } = await sentRow();
+        await hitsThisWindow(`owner-calls-status:${t.connectionId}`, 30, RATE_WINDOW_MS);
+        return check(t, id);
+      },
+    ],
+    ['an unknown id', 'not_found', async () => check((await connected()).t, `oc_${'A'.repeat(22)}`)],
+  ];
+
+  it.each(REFUSALS)(
+    'given %s, then the code comes first, the owner hears no tool and no internal word, and the agent gets its own line',
+    async (_name, code, read) => {
+      const result = await read();
+
+      expect(result[gateCode]).toBe(code);
+      expect(result.content[0].text.startsWith(`${code}: `)).toBe(true);
+      expect(spoken(result).trim()).not.toBe('');
+      expect(leaks(spoken(result))).toEqual([]);
+      for (const line of toAgent(result)) expect(line.startsWith(FOR_AGENT)).toBe(true);
+    }
+  );
+});
+
+describe('jaw_send_calls batch size and gas', () => {
+  afterEach(() => {
+    gasProxy.clientFor = undefined;
+  });
+
+  it('given calls over 40,000 bytes of calldata, then no link opens, nothing is stored and the agent is told to split', async () => {
+    const { t } = await connected();
+    const node = gasNode();
+
+    const result = await checked(t, { calls: sized(15_040) }, node);
+
+    expect(result.isError).toBe(true);
+    expect(result[gateCode]).toBe('batch_too_large');
+    expect(toAgent(result).join('\n')).toMatch(/40004 bytes.*40000/);
+    expect(toAgent(result).join('\n')).toMatch(/split/i);
+    expect(opened).toEqual([]);
+    expect(node.asked).toEqual([]);
+    expect(await rowsOf(t.connectionId)).toEqual([]);
+  });
+
+  it('given the largest batch under 40,000 bytes, then its link opens', async () => {
+    const { t } = await connected();
+
+    const result = await checked(t, { calls: sized(15_008) }, gasNode());
+
+    expect(result.isError).toBeFalsy();
+    expect(result.structuredContent!.state).toBe('awaiting_owner');
+  });
+
+  it("given calls needing more gas than the chain's budget, then no link opens, nothing is stored and the agent is told to split", async () => {
+    const { t } = await connected();
+    const node = gasNode({ code: DEPLOYED, gasLimit: 60_000_000n, gas: 5_000_001n });
+
+    const result = await checked(t, { chainId: 1 }, node);
+
+    expect(result.isError).toBe(true);
+    expect(result[gateCode]).toBe('batch_too_heavy');
+    expect(spoken(result)).toContain('Ethereum');
+    expect(toAgent(result).join('\n')).toMatch(/5000001 gas.*5000000/);
+    expect(toAgent(result).join('\n')).toMatch(/split/i);
+    expect(node.chains).toEqual([1]);
+    expect(opened).toEqual([]);
+    expect(await rowsOf(t.connectionId)).toEqual([]);
+  });
+
+  it('given an account not deployed yet and calls over its first transaction budget, then the agent is told the first one has to be smaller', async () => {
+    const { t } = await connected();
+    const node = gasNode({ code: '0x', gasLimit: 60_000_000n, gas: 4_000_000n });
+
+    const result = await checked(t, {}, node);
+
+    expect(result.isError).toBe(true);
+    expect(result[gateCode]).toBe('batch_too_heavy');
+    expect(spoken(result)).toContain('first transaction');
+    expect(toAgent(result).join('\n')).toMatch(/4000000 gas.*3300000.*5000000/);
+    expect(toAgent(result).join('\n')).not.toMatch(/cannot be sent/);
+    expect(opened).toEqual([]);
+    expect(await rowsOf(t.connectionId)).toEqual([]);
+  });
+
+  it("given calls within the chain's budget, then the owner's account was estimated and the link opens", async () => {
+    const { t } = await connected();
+    const node = gasNode({ code: DEPLOYED, gasLimit: 60_000_000n, gas: 5_000_000n });
+
+    const result = await checked(t, {}, node);
+
+    expect(result.structuredContent!.state).toBe('awaiting_owner');
+    expect(node.asked.find((a) => a.method === 'eth_estimateGas')?.params[0]).toMatchObject({ to: t.account });
+    expect(node.chains).toEqual([t.chainId]);
+  });
+
+  it.each([
+    ['a node that is down', () => gasNode({ down: true })],
+    ['an estimate that reverts', () => gasNode({ gas: new Error('execution reverted') })],
+  ])('given %s, then the link opens and the wallet decides as before', async (_name, make) => {
+    const { t } = await connected();
+
+    const result = await checked(t, {}, make());
+
+    expect(result.isError).toBeFalsy();
+    expect(result.structuredContent!.state).toBe('awaiting_owner');
+  });
+
+  it('given a request over 40,000 bytes stored before this limit, when it is retried with its key, then the stored answer comes back', async () => {
+    const { t } = await connected();
+    const calls = sized(15_040).map((c) => ({ ...c, value: '0' }));
+    // The hash sendCalls keeps for a request, so the row reads as one an earlier version stored.
+    const requestHash = createHash('sha256')
+      .update(JSON.stringify([t.chainId, calls.map((c) => [c.to.toLowerCase(), c.data, c.value])]))
+      .digest('hex');
+    const stored = await store.insertOwnerCall({
+      connectionId: t.connectionId,
+      key: 'before-the-limit',
+      requestHash,
+      chainId: t.chainId,
+      account: t.account,
+      calls,
+      walletUrl: 'http://keys.test/cli-bridge?session=before',
+      approveBy: new Date(Date.now() + 60_000),
+    });
+    await getDb()
+      .update(ownerCalls)
+      .set({ state: 'owner_declined', code: 'owner_declined' })
+      .where(eq(ownerCalls.id, stored!.id));
+
+    const result = await send(t, { calls: sized(15_040), idempotencyKey: 'before-the-limit' });
+
+    expect(result[gateCode]).toBeUndefined();
+    expect(result.structuredContent).toMatchObject({ id: stored!.id, state: 'owner_declined' });
+  });
+
+  it('given a retry of a stored request, then its gas is not read again', async () => {
+    const { t } = await connected();
+    const node = gasNode();
+    await checked(t, {}, node);
+    const reads = node.asked.length;
+
+    const again = await checked(t, {}, node);
+
+    expect(again.structuredContent!.state).toBe('awaiting_owner');
+    expect(node.asked).toHaveLength(reads);
+  });
+
+  it('given calls over the gas budget through the server, then they are refused before any wallet opens', async () => {
+    const { t, token } = await connected();
+    gasProxy.clientFor = gasNode({ gas: 9_000_000n }).clientFor;
+
+    const result = await callTool(token, 'jaw_send_calls', { calls: [{ to: TARGET }] });
+
+    expect(result.isError).toBe(true);
+    expect(result.content[0].text).toMatch(/^batch_too_heavy: /);
+    expect(served.clients).toEqual([]);
+    expect(await rowsOf(t.connectionId)).toEqual([]);
   });
 });

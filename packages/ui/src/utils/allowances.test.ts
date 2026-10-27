@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
-import { maxUint160, maxUint256 } from 'viem';
-import { allowanceChanges, decodeAllowanceChange, unlimitedAllowanceChanges } from './allowances';
+import { labelhash, maxUint160, maxUint256, namehash } from 'viem';
+import { allowanceFlag, decodeAllowanceChange, type AllowanceFlag } from './allowances';
 
 const PERMIT2 = '0x000000000022D473030F116dDEE9F6B43aC78BA3';
 const OWNER = '0x2222222222222222222222222222222222222222';
@@ -21,6 +21,9 @@ const approveAndCallData = (amount: bigint) =>
   `0xcae9ca51${addr(SPENDER)}${uint(amount)}${uint(96n)}${uint(2n)}${'abcd'.padEnd(64, '0')}`;
 const permit = (value: bigint) =>
   `0xd505accf${addr(OWNER)}${addr(SPENDER)}${uint(value)}${uint(1_900_000_000n)}${uint(27n)}${uint(1n)}${uint(2n)}`;
+// DAI's pre-EIP-2612 permit(address,address,uint256,uint256,bool,uint8,bytes32,bytes32).
+const daiPermit = (allowed: bigint) =>
+  `0x8fcbaf0c${addr(OWNER)}${addr(SPENDER)}${uint(3n)}${uint(1_900_000_000n)}${uint(allowed)}${uint(27n)}${uint(1n)}${uint(2n)}`;
 const permit2 = (amount: bigint) => `0x87517c45${addr(TOKEN)}${addr(SPENDER)}${uint(amount)}${uint(1_900_000_000n)}`;
 
 describe('decodeAllowanceChange', () => {
@@ -34,13 +37,24 @@ describe('decodeAllowanceChange', () => {
       unlimited: false,
       revoke: false,
       ambiguous: true,
+      argIndex: 1,
     });
   });
 
-  it('flags max uint256 and anything from 2^255 as unlimited', () => {
+  it('flags an increase from max uint160 up as unlimited, the same rule as Permit2', () => {
+    for (const amount of [maxUint256, 1n << 255n, 1n << 200n, maxUint160 + 1n, maxUint160]) {
+      expect(decodeAllowanceChange({ to: TOKEN, data: increase(amount) })?.unlimited).toBe(true);
+    }
+    expect(decodeAllowanceChange({ to: TOKEN, data: increase(maxUint160 - 1n) })?.unlimited).toBe(false);
+  });
+
+  it('flags an approve as unlimited only at exactly max uint256 or max uint160', () => {
+    // Any other number may be an NFT token id: approve has the same selector on an ERC-721.
     expect(decodeAllowanceChange({ to: TOKEN, data: approve(maxUint256) })?.unlimited).toBe(true);
-    expect(decodeAllowanceChange({ to: TOKEN, data: approve(1n << 255n) })?.unlimited).toBe(true);
-    expect(decodeAllowanceChange({ to: TOKEN, data: approve((1n << 255n) - 1n) })?.unlimited).toBe(false);
+    expect(decodeAllowanceChange({ to: TOKEN, data: approve(maxUint160) })?.unlimited).toBe(true);
+    for (const amount of [maxUint256 - 1n, 1n << 255n, 1n << 200n, maxUint160 + 1n, maxUint160 - 1n]) {
+      expect(decodeAllowanceChange({ to: TOKEN, data: approve(amount) })?.unlimited).toBe(false);
+    }
   });
 
   it('reads an approve to zero as a revoke', () => {
@@ -204,38 +218,81 @@ describe('decodeAllowanceChange hardening', () => {
       unlimited: false,
       revoke: false,
       ambiguous: false,
+      argIndex: 2,
     });
     expect(decodeAllowanceChange({ to: TOKEN, data: permit(maxUint256) })?.unlimited).toBe(true);
     expect(decodeAllowanceChange({ to: TOKEN, data: permit(0n) })).toMatchObject({ revoke: true });
   });
-});
 
-describe('allowanceChanges', () => {
-  it('keeps the allowance calls of a batch in order and drops the rest', () => {
-    const changes = allowanceChanges([
-      { to: TOKEN, data: approve(maxUint256) },
-      { to: SPENDER, data: '0x' },
-      { to: TOKEN, data: setAll(1n) },
-    ]);
-    expect(changes.map((c) => c.allTokens)).toEqual([false, true]);
+  it('reads a DAI permit with allowed true as an unlimited allowance from its holder', () => {
+    expect(decodeAllowanceChange({ to: TOKEN, data: daiPermit(1n) })).toMatchObject({
+      token: TOKEN,
+      spender: SPENDER,
+      owner: OWNER,
+      added: false,
+      allTokens: false,
+      unlimited: true,
+      revoke: false,
+      ambiguous: false,
+    });
+  });
+
+  it('reads a DAI permit with allowed false as a revoke', () => {
+    expect(decodeAllowanceChange({ to: TOKEN, data: daiPermit(0n) })).toMatchObject({
+      spender: SPENDER,
+      owner: OWNER,
+      unlimited: false,
+      revoke: true,
+    });
   });
 });
 
-describe('unlimitedAllowanceChanges', () => {
-  it('keeps unlimited approvals and setApprovalForAll, drops finite ones and revokes', () => {
-    const changes = unlimitedAllowanceChanges([
+describe('allowanceFlag', () => {
+  const unlimited = (argIndex: number, amount: bigint): AllowanceFlag => ({ label: 'Unlimited', argIndex, amount });
+
+  it('flags each unlimited allowance kind on the argument that carries the amount', () => {
+    const cases: [{ to: string; data: string }, AllowanceFlag][] = [
+      [{ to: TOKEN, data: approve(maxUint256) }, unlimited(1, maxUint256)],
+      [{ to: TOKEN, data: approve(maxUint160) }, unlimited(1, maxUint160)],
+      [{ to: TOKEN, data: increase(maxUint256) }, unlimited(1, maxUint256)],
+      [{ to: TOKEN, data: increaseApproval(1n << 200n) }, unlimited(1, 1n << 200n)],
+      [{ to: TOKEN, data: approveAndCall(maxUint256) }, unlimited(1, maxUint256)],
+      [{ to: TOKEN, data: approveAndCallData(maxUint256) }, unlimited(1, maxUint256)],
+      [
+        { to: TOKEN, data: setAll(1n) },
+        { label: 'All tokens', argIndex: 1 },
+      ],
+      [{ to: TOKEN, data: permit(maxUint256) }, unlimited(2, maxUint256)],
+      [{ to: TOKEN, data: daiPermit(1n) }, unlimited(4, maxUint256)],
+      [{ to: PERMIT2, data: permit2(maxUint160) }, unlimited(2, maxUint160)],
+    ];
+    expect(cases.map(([call]) => allowanceFlag(call))).toEqual(cases.map(([, flag]) => flag));
+  });
+
+  it('flags nothing for finite amounts, revokes and calls that grant no allowance', () => {
+    const calls = [
       { to: TOKEN, data: approve(5_000_000n) },
-      { to: TOKEN, data: approve(maxUint256) },
       { to: TOKEN, data: approve(0n) },
-      { to: TOKEN, data: setAll(1n) },
-      { to: PERMIT2, data: permit2(maxUint160) },
-      { to: PERMIT2, data: permit2(5_000_000n) },
-    ]);
-    expect(changes.map((c) => ({ token: c.token, allTokens: c.allTokens }))).toEqual([
-      { token: TOKEN, allTokens: false },
-      { token: TOKEN, allTokens: true },
-      { token: TOKEN, allTokens: false },
-    ]);
-    expect(changes.every((c) => c.unlimited)).toBe(true);
+      { to: TOKEN, data: increase(maxUint160 - 1n) },
+      { to: TOKEN, data: setAll(0n) },
+      { to: TOKEN, data: permit(1_000n) },
+      { to: TOKEN, data: daiPermit(0n) },
+      { to: PERMIT2, data: permit2(maxUint160 - 1n) },
+      { to: TOKEN, data: '0x' },
+      { to: SPENDER, data: '0xdeadbeef' },
+    ];
+    expect(calls.map(allowanceFlag)).toEqual(calls.map(() => null));
+  });
+
+  it('never flags an ENS name approval, on the registrar or the NameWrapper', () => {
+    // The registrar's token id is the labelhash; the NameWrapper's, an ERC-1155, is the namehash.
+    const registrar = '0x57f1887a8BF19b14fC0dF6Fd9B2acc9Af147eA85';
+    const nameWrapper = '0xD4416b13d2b3a9aBae7AcD5D6C2BbDBE25686401';
+    expect(allowanceFlag({ to: registrar, data: approve(BigInt(labelhash('vitalik'))) })).toBeNull();
+    expect(allowanceFlag({ to: nameWrapper, data: approve(BigInt(namehash('nick.eth'))) })).toBeNull();
+  });
+
+  it('flags nothing for an allowance selector whose arguments do not decode', () => {
+    expect(allowanceFlag({ to: TOKEN, data: '0x095ea7b3' })).toBeNull();
   });
 });

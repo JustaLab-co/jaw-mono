@@ -1,3 +1,23 @@
+## 1.9.0 (2026-10-27)
+
+### 🚀 Features
+
+- **core:** let a grant carry a call checker ([#572](https://github.com/JustaLab-co/jaw-mono/pull/572))
+
+### ❤️ Thank You
+
+- Leo Franklin @LeoFranklin015
+
+## 1.8.0 (2026-10-27)
+
+### 🚀 Features
+
+- **core:** prefund the spender in the native coin ([#579](https://github.com/JustaLab-co/jaw-mono/pull/579))
+
+### ❤️ Thank You
+
+- Mariano Aguero
+
 ## 1.7.1 (2026-10-21)
 
 ### 🩹 Fixes

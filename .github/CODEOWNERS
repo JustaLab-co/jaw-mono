@@ -64,6 +64,7 @@
 /apps/mcp/src/swap/                                  @Ghadi8 @mariano-aguero
 /apps/mcp/src/owner-calls/                           @Ghadi8 @mariano-aguero
 /apps/mcp/src/tools/owner-calls.ts                   @Ghadi8 @mariano-aguero
+/apps/mcp/src/tools/prepare-calls.ts                 @Ghadi8 @mariano-aguero
 /apps/mcp/src/tools/sign.ts                          @Ghadi8 @mariano-aguero
 /apps/mcp/src/tools/add-funds.ts                     @Ghadi8 @mariano-aguero
 /apps/mcp/src/adapters/session-host.ts               @Ghadi8 @mariano-aguero

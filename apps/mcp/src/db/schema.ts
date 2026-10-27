@@ -292,7 +292,7 @@ export const swaps = pgTable(
     depositAddress: text('deposit_address'),
     quote: jsonb('quote'),
     quoteFenced: text('quote_fenced'),
-    call: jsonb('call').$type<{ chainId: number; to: string; data: string; value: string }>(),
+    call: jsonb('call'),
     walletUrl: text('wallet_url'),
     approveBy: timestamp('approve_by', { withTimezone: true }),
     sessionUntil: timestamp('session_until', { withTimezone: true }),
@@ -362,7 +362,7 @@ export const ownerCalls = pgTable(
       .where(sql`${t.state} = 'awaiting_owner'`),
     check(
       'owner_call_shape',
-      sql`jsonb_array_length(${t.calls}) between 1 and 10
+      sql`jsonb_array_length(${t.calls}) between 1 and 100
         and (${t.state} <> 'sent' or ${t.callsId} is not null)
         and (${t.state} not in ('landed', 'reverted') or (${t.callsId} is not null and ${t.txHash} is not null))`
     ),

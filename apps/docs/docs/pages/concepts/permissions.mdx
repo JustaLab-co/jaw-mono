@@ -46,6 +46,18 @@ permissions: {
 
 Even with valid signing capability, the signer can't interact with contracts outside its scope.
 
+A call can also name a `checker`: a contract the permission manager asks to approve every matching call before it runs. A checker sees the call's arguments, so it can enforce rules the function alone can't, like "the recipient must be this account". The grant screen shows the checker, and the call reverts if the checker refuses it.
+
+```typescript
+permissions: {
+  calls: [{
+    target: USDC_ADDRESS,
+    functionSignature: 'transfer(address,uint256)',
+    checker: CHECKER_ADDRESS,
+  }],
+}
+```
+
 ### Time-Bounded Sessions
 
 Permissions expire automatically. A session key granted for a gaming session doesn't persist after the user closes the app.

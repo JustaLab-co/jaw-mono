@@ -19,7 +19,7 @@ import { entryPoint08Abi, entryPoint08Address, getUserOperationError } from 'vie
 import { afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
 import { verifyBearer, type Tenant } from '@/connections/auth';
 import { revokeByGrant } from '@/connections/rows';
-import { owner, grantBudget, callTool, connect, setTestEnv } from '@/connections/testkit';
+import { owner, grantBudget, callTool, connect, mcp, setTestEnv } from '@/connections/testkit';
 import { getDb } from '@/db/client';
 import { connections, sends, settings } from '@/db/schema';
 import { lockWaiters, TEST_PG_URL, useTestDb, useTestPostgres } from '@/db/test-db';
@@ -30,6 +30,7 @@ import * as sendStore from '@/payments/sends';
 import { reconcile } from '@/reconciler/run';
 import { ANY_TARGET } from '@jaw.id/core';
 import { LOCK_WAIT_MS } from '@/payments/float-lock';
+import { leaks, spoken, toAgent } from '@/test-utils/spoken';
 import { RECEIPT_MS } from './session-execute';
 
 const USDC: Address = '0x036CbD53842c5426634e7929541eC2318f3dCF7e';
@@ -83,32 +84,38 @@ async function sendCalls(calls: Wire[], onSigned: (hash: Hex) => Promise<void>) 
   return { id: bridge.answeredHash ?? id, chainId: 84532 };
 }
 
+const fee = vi.hoisted(() => ({ token: undefined as string | undefined, seen: undefined as string | undefined }));
+
 vi.mock('@/adapters/session-host', async (original) => ({
   ...(await original<object>()),
-  sessionBridge: () => ({
-    request: async (method: string, params: unknown, onSigned: (hash: Hex) => Promise<void>) => {
-      if (method === 'wallet_sendCalls') return sendCalls((params as [{ calls: Wire[] }])[0].calls, onSigned);
-      if (bridge.receiptGate) await bridge.receiptGate;
-      const id = params as Hex;
-      const calls = bridge.signed[Number(BigInt(id)) - 1];
-      if (bridge.outcome === 'pending') {
-        vi.setSystemTime(Date.now() + RECEIPT_MS + 1_000);
-        return undefined;
-      }
-      if (bridge.outcome !== 'landed') {
-        return {
-          status: 500,
-          receipts: [{ transactionHash: TX, logs: bridge.outcome.logs }],
-        };
-      }
-      if (!chain.userOps.some((op) => op.userOpHash === id)) {
-        for (const c of calls)
-          chain.spent += decodeFunctionData({ abi: erc20Abi, data: c.data as Hex }).args[1] as bigint;
-        chain.userOps.push({ userOpHash: id, sender: BOB, success: true, blockNumber: chain.head });
-      }
-      return { status: 200, receipts: [{ transactionHash: TX, logs: [] }] };
-    },
-  }),
+  feeTokenOf: async () => fee.token,
+  sessionBridge: (_t: unknown, _grant: unknown, feeToken?: string) => {
+    fee.seen = feeToken;
+    return {
+      request: async (method: string, params: unknown, onSigned: (hash: Hex) => Promise<void>) => {
+        if (method === 'wallet_sendCalls') return sendCalls((params as [{ calls: Wire[] }])[0].calls, onSigned);
+        if (bridge.receiptGate) await bridge.receiptGate;
+        const id = params as Hex;
+        const calls = bridge.signed[Number(BigInt(id)) - 1];
+        if (bridge.outcome === 'pending') {
+          vi.setSystemTime(Date.now() + RECEIPT_MS + 1_000);
+          return undefined;
+        }
+        if (bridge.outcome !== 'landed') {
+          return {
+            status: 500,
+            receipts: [{ transactionHash: TX, logs: bridge.outcome.logs }],
+          };
+        }
+        if (!chain.userOps.some((op) => op.userOpHash === id)) {
+          for (const c of calls)
+            chain.spent += decodeFunctionData({ abi: erc20Abi, data: c.data as Hex }).args[1] as bigint;
+          chain.userOps.push({ userOpHash: id, sender: BOB, success: true, blockNumber: chain.head });
+        }
+        return { status: 200, receipts: [{ transactionHash: TX, logs: [] }] };
+      },
+    };
+  },
 }));
 
 const node = vi.hoisted(() => ({
@@ -252,6 +259,10 @@ describe('jaw_session_execute', () => {
 
     expect(result.isError).toBeFalsy();
     expect(result.structuredContent).toMatchObject({ status: 'landed', txHash: TX });
+    expect(spoken(result)).toBe(
+      `Done. It went through on Base Sepolia. Receipt: https://sepolia.basescan.org/tx/${TX}`
+    );
+    expect(leaks(spoken(result))).toEqual([]);
     expect(bridge.sent).toEqual([[{ ...transfer(BOB, 250_000n), value: '0x0' }]]);
     const [row] = await rowsOf(t.connectionId);
     expect(row).toMatchObject({ state: 'landed', token: USDC.toLowerCase(), amount: '250000', txHash: TX });
@@ -267,6 +278,31 @@ describe('jaw_session_execute', () => {
     ]);
   });
 
+  it('builds the bridge with the fee token the grant resolves to', async () => {
+    const { c, permissionId } = await withCustomGrant();
+    fee.token = USDC;
+
+    try {
+      await execute(c.access_token, permissionId, [transfer(BOB, 1n)]);
+      expect(fee.seen).toBe(USDC);
+      fee.token = undefined;
+      await execute(c.access_token, permissionId, [transfer(BOB, 1n)]);
+      expect(fee.seen).toBeUndefined();
+    } finally {
+      fee.token = undefined;
+    }
+  });
+
+  it('when a client lists the tools, then it is titled for people and marked as one that moves funds', async () => {
+    const c = await connect();
+
+    const { json } = await mcp(c.access_token, { method: 'tools/list' });
+
+    const tool = json.result.tools.find((t: { name: string }) => t.name === 'jaw_session_execute');
+    expect(tool.title).toBe('Run an action under a permission');
+    expect(tool.annotations).toEqual({ destructiveHint: true, openWorldHint: false });
+  });
+
   it('refuses a call to another address as call-not-allowed and sends no userOp', async () => {
     const { c, t, permissionId } = await withCustomGrant();
 
@@ -274,6 +310,9 @@ describe('jaw_session_execute', () => {
 
     expect(result.isError).toBe(true);
     expect(result.content[0].text).toMatch(/^call-not-allowed: /);
+    expect(spoken(result)).toBe(`The permission does not allow this action on ${CAROL}. Nothing was sent.`);
+    expect(leaks(spoken(result))).toEqual([]);
+    expect(toAgent(result).join('\n')).toContain('offer to do it once for their approval with jaw_send_calls');
     expect(bridge.sent).toEqual([]);
     expect(await rowsOf(t.connectionId)).toEqual([]);
   });
@@ -284,7 +323,13 @@ describe('jaw_session_execute', () => {
 
     const result = await execute(c.access_token, permissionId, [transfer(BOB, 200_000n)]);
 
-    expect(result.content[0].text).toMatch(/^over-limit: .* has 100000 left this period/);
+    expect(result.content[0].text).toMatch(/^over-limit: .* has 0\.10 USDC left this period/);
+    expect(spoken(result)).toBe(
+      'This would move 0.20 USDC, and the permission has 0.10 USDC left this period. Nothing was sent.'
+    );
+    expect(leaks(spoken(result))).toEqual([]);
+    expect(toAgent(result).join('\n')).toContain('Offer to do it once with jaw_send_calls');
+    expect(toAgent(result).join('\n')).toContain('Never ask for a wider permission');
     expect(bridge.sent).toEqual([]);
   });
 
@@ -292,6 +337,8 @@ describe('jaw_session_execute', () => {
     const { c, permissionId } = await withCustomGrant(1_000_000n, NOW() - 1);
     const result = await execute(c.access_token, permissionId, [transfer(BOB, 1n)]);
     expect(result.content[0].text).toMatch(/^expired: /);
+    expect(leaks(spoken(result))).toEqual([]);
+    expect(toAgent(result).join('\n')).toContain('otherwise do it once with jaw_send_calls');
     expect(bridge.sent).toEqual([]);
   });
 
@@ -299,6 +346,7 @@ describe('jaw_session_execute', () => {
     const { c } = await withCustomGrant();
     const result = await execute(c.access_token, `0x${'e'.repeat(64)}`, [transfer(BOB, 1n)]);
     expect(result.content[0].text).toMatch(/^no-grant: /);
+    expect(leaks(spoken(result))).toEqual([]);
     expect(bridge.sent).toEqual([]);
   });
 
@@ -317,7 +365,10 @@ describe('jaw_session_execute', () => {
     const result = await execute(c.access_token, budget, [transfer(BOB, 1n)]);
 
     expect(result.isError).toBe(true);
-    expect(result.content[0].text).toMatch(/^no-grant: .*x402 budget, which pays x402 services only/);
+    expect(result.content[0].text).toMatch(
+      /^no-grant: That is the spend limit for paid services, which .*runs no actions/
+    );
+    expect(leaks(spoken(result))).toEqual([]);
     expect(bridge.sent).toEqual([]);
   });
 
@@ -341,7 +392,7 @@ describe('jaw_session_execute', () => {
 
     const result = await execute(c.access_token, permissionId, [transfer(BOB, 1n)]);
 
-    expect(result.content[0].text).toMatch(/^over-limit: .*Nothing was sent\.$/);
+    expect(result.content[0].text).toMatch(/^over-limit: .*Nothing was sent\.$/m);
     expect((await rowsOf(t.connectionId)).map((r) => r.state)).toEqual(['released']);
   });
 
@@ -357,7 +408,8 @@ describe('jaw_session_execute', () => {
 
     const result = await execute(c.access_token, permissionId, [transfer(BOB, 1n)]);
 
-    expect(result.content[0].text).toMatch(/^Nothing was sent: the batch failed in simulation/);
+    expect(result.content[0].text).toMatch(/^Nothing was sent: the run did not pass its final check/);
+    expect(leaks(spoken(result))).toEqual([]);
   });
 
   it('given "already known" from the bundler, as a resend of an op it took answers, then the first reply says it may have been sent and the rows stay held', async () => {
@@ -366,12 +418,13 @@ describe('jaw_session_execute', () => {
 
     const result = await execute(c.access_token, permissionId, [transfer(BOB, 600_000n)]);
 
-    expect(result.content[0].text).toMatch(/may have been sent anyway.*jaw_session_history/);
+    expect(result.content[0].text).toMatch(/may have been sent anyway[\s\S]*jaw_session_history/);
     expect(result.content[0].text).not.toMatch(/Nothing was sent/);
+    expect(leaks(spoken(result))).toEqual([]);
     expect((await rowsOf(t.connectionId)).map((r) => r.state)).toEqual(['open']);
     bridge.fail = undefined;
     const next = await execute(c.access_token, permissionId, [transfer(CAROL, 600_000n)]);
-    expect(next.content[0].text).toMatch(/^over-limit: .* has 400000 left this period/);
+    expect(next.content[0].text).toMatch(/^over-limit: .* has 0\.40 USDC left this period/);
   });
 
   it('given an AA25 nonce error from the bundler, then the first reply says it may have been sent and the rows stay held', async () => {
@@ -393,7 +446,8 @@ describe('jaw_session_execute', () => {
     bridge.fail = undefined;
     const retry = await execute(c.access_token, permissionId, [transfer(BOB, 600_000n)], 'pay-bob');
 
-    expect(first.content[0].text).toMatch(`may have been sent anyway as userOp ${hashOf(1)}`);
+    expect(first.content[0].text).toMatch(/may have been sent anyway/);
+    expect(first.content[0].text).toContain(`as userOp ${hashOf(1)}`);
     expect(retry.structuredContent).toMatchObject({ status: 'unconfirmed', userOpHash: hashOf(1) });
     expect(bridge.attempts).toBe(1);
     expect((await rowsOf(t.connectionId)).map((r) => r.state)).toEqual(['open']);
@@ -417,7 +471,8 @@ describe('jaw_session_execute', () => {
     const result = await execute(c.access_token, permissionId, [transfer(BOB, 1n)]);
 
     expect(result.isError).toBe(true);
-    expect(result.content[0].text).toMatch(/^over-limit: .*did not succeed on chain/);
+    expect(result.content[0].text).toMatch(/^over-limit: .*It failed on Base Sepolia: nothing moved/);
+    expect(leaks(spoken(result))).toEqual([]);
     expect((await rowsOf(t.connectionId)).map((r) => r.state)).toEqual(['released']);
   });
 
@@ -482,7 +537,7 @@ describe('jaw_session_execute', () => {
     landing.resolve();
     const a = await first;
     expect(a).toMatchObject({ structuredContent: { status: 'landed' } });
-    expect(b.content[0].text).toMatch(/^over-limit: .* has 400000 left this period/);
+    expect(b.content[0].text).toMatch(/^over-limit: .* has 0\.40 USDC left this period/);
     expect(bridge.sent).toHaveLength(1);
   });
 
@@ -495,7 +550,7 @@ describe('jaw_session_execute', () => {
     expect(first.structuredContent).toMatchObject({ status: 'unconfirmed', txHash: null });
 
     const second = await execute(c.access_token, permissionId, [transfer(CAROL, 600_000n)]);
-    expect(second.content[0].text).toMatch(/^over-limit: .* has 400000 left this period/);
+    expect(second.content[0].text).toMatch(/^over-limit: .* has 0\.40 USDC left this period/);
     expect(bridge.sent).toHaveLength(1);
 
     const userOpHash = first.structuredContent.userOpHash as Hex;
@@ -560,7 +615,7 @@ describe('jaw_session_execute', () => {
 
     const second = await execute(c.access_token, permissionId, [transfer(CAROL, 300_000n)]);
 
-    expect(second.content[0].text).toMatch(/^over-limit: .* has 0 left this period/);
+    expect(second.content[0].text).toMatch(/^over-limit: .* has 0 USDC left this period/);
     expect(bridge.sent).toHaveLength(1);
     expect(await rowsOf(t.connectionId)).toEqual([expect.objectContaining({ state: 'open' })]);
   });
@@ -602,7 +657,7 @@ describe('jaw_session_execute', () => {
 
     const second = await execute(c.access_token, permissionId, [transfer(CAROL, 300_000n)]);
 
-    expect(second.content[0].text).toMatch(/^over-limit: .* has 0 left this period/);
+    expect(second.content[0].text).toMatch(/^over-limit: .* has 0 USDC left this period/);
     expect(await rowsOf(t.connectionId)).toEqual([expect.objectContaining({ state: 'open' })]);
   });
 
@@ -694,7 +749,7 @@ describe('jaw_session_execute', () => {
 
     const second = await execute(c.access_token, permissionId, [transfer(CAROL, 600_000n)]);
 
-    expect(second.content[0].text).toMatch(/^over-limit: .* has 400000 left this period/);
+    expect(second.content[0].text).toMatch(/^over-limit: .* has 0\.40 USDC left this period/);
     expect(bridge.sent).toHaveLength(1);
   });
 
@@ -773,7 +828,9 @@ describe('jaw_session_execute', () => {
       await vi.advanceTimersByTimeAsync(60_001);
       vi.useRealTimers();
       const userOpHash: Hex = `0x${'1'.padStart(64, '0')}`;
-      expect((await result).content[0].text).toMatch(new RegExp(`may have been sent anyway as userOp ${userOpHash}`));
+      const text = (await result).content[0].text;
+      expect(text).toMatch(/may have been sent anyway/);
+      expect(text).toContain(`as userOp ${userOpHash}`);
       expect(await rowsOf(t.connectionId)).toEqual([expect.objectContaining({ state: 'open', callsId: userOpHash })]);
 
       release.resolve();
@@ -987,7 +1044,7 @@ describe('jaw_session_execute', () => {
 
     const retry = await execute(c.access_token, permissionId, [transfer(BOB, 1n)], 'pay-bob');
 
-    expect(retry.content[0].text).toMatch(/^This key's run sent nothing/);
+    expect(retry.content[0].text).toMatch(/^This run sent nothing/);
     expect(bridge.attempts).toBe(1);
   });
 
@@ -1197,7 +1254,7 @@ describe('jaw_session_execute', () => {
 
     expect(first.content[0].text).toMatch(/^Nothing was sent: /);
     expect(await rowsOf(t.connectionId)).toEqual([expect.objectContaining({ state: 'released', callsId: null })]);
-    expect(retry.content[0].text).toMatch(/^This key's run sent nothing/);
+    expect(retry.content[0].text).toMatch(/^This run sent nothing/);
     expect(bridge.attempts).toBe(1);
   });
 
@@ -1273,7 +1330,7 @@ describe.skipIf(!TEST_PG_URL)('jaw_session_execute across replicas', () => {
     landing.resolve();
     const a = await first;
     expect(a).toMatchObject({ structuredContent: { status: 'landed' } });
-    expect(b.content[0].text).toMatch(/^over-limit: .* has 400000 left this period/);
+    expect(b.content[0].text).toMatch(/^over-limit: .* has 0\.40 USDC left this period/);
     expect(bridge.sent).toHaveLength(1);
   });
 

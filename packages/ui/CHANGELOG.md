@@ -1,3 +1,33 @@
+## 1.9.1 (2026-10-27)
+
+### 🩹 Fixes
+
+- **ui:** flag unlimited approvals inline and drop the token approvals card ([#584](https://github.com/JustaLab-co/jaw-mono/pull/584))
+
+### ❤️ Thank You
+
+- Leo Franklin @LeoFranklin015
+
+## 1.9.0 (2026-10-27)
+
+### 🚀 Features
+
+- **core:** let a grant carry a call checker ([#572](https://github.com/JustaLab-co/jaw-mono/pull/572))
+
+### 🧱 Updated Dependencies
+
+- Updated @jaw.id/core to 1.9.0
+
+### ❤️ Thank You
+
+- Leo Franklin @LeoFranklin015
+
+## 1.8.3 (2026-10-27)
+
+### 🧱 Updated Dependencies
+
+- Updated @jaw.id/core to 1.8.0
+
 ## 1.8.2 (2026-10-22)
 
 ### 🩹 Fixes
