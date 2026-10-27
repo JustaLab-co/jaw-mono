@@ -787,6 +787,12 @@ describe('given a periphery swapAndBridge, which swaps on the origin before it d
     );
   });
 
+  it('then a swap to a chain the table lacks is unreadable and says the table lacks it', () => {
+    expect(
+      readAcrossCall(contracts, withSwap(ACROSS_CALLS.usdcToWeth, setDeposit('destinationChainId', 999n)))
+    ).toEqual(outsideTable);
+  });
+
   it('then a value with a swap token other than WETH is unreadable', () => {
     expect(readAcrossCall(contracts, withSwap(ACROSS_CALLS.ethToUsdc, set('swapToken', BASE_USDC)))).toEqual(
       unreadable

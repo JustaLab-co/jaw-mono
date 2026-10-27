@@ -156,7 +156,10 @@ function fieldsOf(
   if (!isAddressEqual(spokePool, origin.spokePool) || submissionFees.amount !== 0n) return undefined;
   // The periphery deposits whatever the exchange returns and only checks it against
   // minExpectedInputTokenAmount, so that floor must cover the output the screen shows.
-  if (!floorCoversOutput(contracts, call.chainId, depositData, minExpectedInputTokenAmount)) return undefined;
+  const knownDestination = contracts.chain(Number(depositData.destinationChainId))?.across;
+  if (knownDestination && !floorCoversOutput(contracts, call.chainId, depositData, minExpectedInputTokenAmount)) {
+    return undefined;
+  }
   const native = value !== 0n;
   if (
     native &&
