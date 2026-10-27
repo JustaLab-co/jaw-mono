@@ -1,7 +1,6 @@
 // @vitest-environment jsdom
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { BRIDGE_CHAINS } from './contracts';
-import { currentContracts, load, resetForTests } from './load';
 
 const HOUR = 60 * 60 * 1000;
 const STORAGE_KEY = 'jaw.bridgeContracts';
@@ -11,14 +10,20 @@ const answer = (result: unknown, status = 200) =>
   new Response(JSON.stringify({ jsonrpc: '2.0', id: 1, result }), { status });
 const sentParams = (call: number) => JSON.parse(String(fetchMock.mock.calls[call][1]?.body)).params[0];
 
+const core = await vi.importActual('@jaw.id/core');
 const fetchMock = vi.fn<typeof fetch>();
 
-beforeEach(() => {
+let currentContracts: typeof import('./load').currentContracts;
+let load: typeof import('./load').load;
+
+beforeEach(async () => {
   vi.useFakeTimers({ toFake: ['Date'] });
   vi.spyOn(console, 'warn').mockReturnValue(undefined);
   vi.stubGlobal('fetch', fetchMock);
   localStorage.clear();
-  resetForTests();
+  vi.resetModules();
+  vi.doMock('@jaw.id/core', () => core);
+  ({ currentContracts, load } = await import('./load'));
 });
 
 afterEach(() => {
@@ -126,12 +131,21 @@ describe('given the bridge table loader', () => {
     expect(localStorage.getItem(STORAGE_KEY)).toBeNull();
   });
 
-  it('when the proxy serves an older version than the one held, then the held one stays', async () => {
+  it('when the proxy serves an older version than the one held but not older than the build, then it replaces it', async () => {
     fetchMock.mockResolvedValueOnce(answer(tableAt(3))).mockResolvedValueOnce(answer(tableAt(2)));
     await load('key');
     vi.setSystemTime(Date.now() + HOUR + 1000);
     await load('key');
-    expect(currentContracts().version).toBe(3);
+    expect(currentContracts().version).toBe(2);
+  });
+
+  it('when storage holds a newer version than the proxy serves, then the proxy table replaces it in use and in storage', async () => {
+    localStorage.setItem(STORAGE_KEY, JSON.stringify(tableAt(5)));
+    expect(currentContracts().version).toBe(5);
+    fetchMock.mockResolvedValue(answer(tableAt(2)));
+    await load('key');
+    expect(currentContracts().version).toBe(2);
+    expect(JSON.parse(localStorage.getItem(STORAGE_KEY)!)).toMatchObject({ version: 2 });
   });
 
   it('when a table is in storage, then it is in use at once and the next load asks with its version', async () => {

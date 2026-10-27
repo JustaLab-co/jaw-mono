@@ -1,19 +1,22 @@
 // @vitest-environment jsdom
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { act } from 'react';
-import { createRoot, type Root } from 'react-dom/client';
+import type { Root } from 'react-dom/client';
 import { BRIDGE_CHAINS } from '../utils/bridgeCalls/contracts';
-import { resetForTests } from '../utils/bridgeCalls/load';
 import type { BridgeContracts } from '../utils/bridgeCalls/table';
-import { useBridgeContracts } from './useBridgeContracts';
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
 const answer = (version: number) =>
   new Response(JSON.stringify({ result: JSON.parse(JSON.stringify({ version, chains: BRIDGE_CHAINS })) }));
 
+const core = await vi.importActual('@jaw.id/core');
+
 let root: Root;
 let seen: BridgeContracts[];
+let act: typeof import('react').act;
+let createRoot: typeof import('react-dom/client').createRoot;
+let useBridgeContracts: typeof import('./useBridgeContracts').useBridgeContracts;
+let currentContracts: typeof import('../utils/bridgeCalls/load').currentContracts;
 
 function Probe({ apiKey, tick }: { apiKey?: string; tick: number }) {
   void tick;
@@ -25,9 +28,14 @@ const mount = async (tick: number) => {
   await act(async () => root.render(<Probe apiKey="key" tick={tick} />));
 };
 
-beforeEach(() => {
+beforeEach(async () => {
   localStorage.clear();
-  resetForTests();
+  vi.resetModules();
+  vi.doMock('@jaw.id/core', () => core);
+  ({ act } = await import('react'));
+  ({ createRoot } = await import('react-dom/client'));
+  ({ useBridgeContracts } = await import('./useBridgeContracts'));
+  ({ currentContracts } = await import('../utils/bridgeCalls/load'));
   seen = [];
   root = createRoot(document.createElement('div'));
   vi.spyOn(console, 'warn').mockReturnValue(undefined);
@@ -44,6 +52,7 @@ describe('given a dialog that reads the bridge table', () => {
     vi.stubGlobal('fetch', vi.fn().mockResolvedValue(answer(2)));
     await mount(0);
     await mount(1);
+    expect(currentContracts()).toMatchObject({ version: 2, source: 'live' });
     expect(seen[0]).toMatchObject({ version: 1, source: 'snapshot' });
     expect(new Set(seen).size).toBe(1);
   });

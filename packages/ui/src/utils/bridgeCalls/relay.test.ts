@@ -65,6 +65,7 @@ describe('given a Relay depositNative on the pinned Base Depository', () => {
         ],
       },
       notices: [RELAY_HIDDEN],
+      outsideTable: false,
     });
   });
 
@@ -131,6 +132,7 @@ describe('given a Relay depositErc20 on the pinned Base Depository', () => {
         ],
       },
       notices: [RELAY_HIDDEN],
+      outsideTable: false,
     });
   });
 

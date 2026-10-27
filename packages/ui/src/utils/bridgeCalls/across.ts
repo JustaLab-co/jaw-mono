@@ -92,7 +92,10 @@ export function readAcrossCall(contracts: BridgeContracts, call: BridgeCall): Ac
   if (!toPool && !isAddressEqual(call.to, across.periphery)) return undefined;
   try {
     const fields = fieldsOf(contracts, call, across, toPool);
-    return (fields && depositOf(contracts, call.chainId, fields)) ?? { kind: 'unreadable', provider: 'across' };
+    const destination = fields && contracts.chain(fields.destinationChainId)?.across;
+    if (fields && !destination) return { kind: 'unreadable', provider: 'across', outsideTable: true };
+    const deposit = fields && destination && depositOf(contracts, call.chainId, fields, destination);
+    return deposit || { kind: 'unreadable', provider: 'across' };
   } catch {
     return { kind: 'unreadable', provider: 'across' };
   }
@@ -184,10 +187,13 @@ function floorCoversOutput(contracts: BridgeContracts, chainId: number, deposit:
   return floor * 10n ** BigInt(output.decimals) >= deposit.outputAmount * 10n ** BigInt(input.decimals);
 }
 
-function depositOf(contracts: BridgeContracts, chainId: number, fields: Fields): AcrossDeposit | undefined {
+function depositOf(
+  contracts: BridgeContracts,
+  chainId: number,
+  fields: Fields,
+  destination: AcrossContracts
+): AcrossDeposit | undefined {
   const { destinationChainId, outputAmount } = fields;
-  const destination = contracts.chain(destinationChainId)?.across;
-  if (!destination) return undefined;
   const payout = payoutOf(fields, destination);
   if (!payout || (payout.fee && payout.fee.amount > outputAmount)) return undefined;
 

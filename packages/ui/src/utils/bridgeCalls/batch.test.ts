@@ -382,4 +382,16 @@ describe('given an approve the owner must check', () => {
     expect(readBridgeBatch(snapshot, calls, SIGNER)?.notices).toContain(stale);
     expect(readBridgeBatch(contracts, calls, SIGNER)?.notices).not.toContain(stale);
   });
+
+  it('when the deposit goes to a chain the table lacks, then the snapshot adds the refresh line and a live table does not', () => {
+    const chains = structuredClone(BRIDGE_CHAINS);
+    delete chains[42161];
+    const stale = 'This screen could not refresh its list of bridge contracts.';
+    const snapshot = new BridgeContracts({ version: 1, chains }, 'snapshot');
+    const live = new BridgeContracts({ version: 2, chains }, 'live');
+    const batch = readBridgeBatch(snapshot, [ACROSS_CALLS.prod], SIGNER);
+    expect(batch?.alerts).toEqual([CANNOT_READ_ACROSS]);
+    expect(batch?.notices).toContain(stale);
+    expect(readBridgeBatch(live, [ACROSS_CALLS.prod], SIGNER)?.notices).not.toContain(stale);
+  });
 });

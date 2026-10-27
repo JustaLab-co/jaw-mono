@@ -96,6 +96,7 @@ const transfer = (token: string, to: string, amount: bigint) => ({
 });
 
 const unreadable = { kind: 'unreadable', provider: 'across' };
+const outsideTable = { ...unreadable, outsideTable: true };
 
 describe('given the deposit call of a live Across quote', () => {
   it('then prod Base USDC to Arbitrum reads 10 USDC sent, 9.9609 USDC minimum and a 0.024964 USDC JAW fee', () => {
@@ -323,13 +324,13 @@ describe('given a deposit whose tokens or chains need the pinned table', () => {
         contracts,
         withArgs(ACROSS_CALLS.usdcNofee, (a) => (a[6] = 999n))
       )
-    ).toEqual(unreadable);
+    ).toEqual(outsideTable);
     expect(
       readAcrossCall(
         contracts,
         withArgs(ACROSS_CALLS.usdcNofee, (a) => (a[6] = 4663n))
       )
-    ).toEqual(unreadable);
+    ).toEqual(outsideTable);
   });
 
   it('then native ETH out to Arc, which has no pinned wrapped native, is unreadable', () => {

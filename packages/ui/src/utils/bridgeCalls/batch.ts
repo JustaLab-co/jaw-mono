@@ -2,7 +2,7 @@ import { getAddress, isAddressEqual, zeroAddress, type Address } from 'viem';
 import { readAcrossCall, type AcrossDeposit } from './across';
 import { readBridgeApprove, type BridgeApprove } from './approve';
 import { readRelayCall, type RelayDeposit } from './relay';
-import { readRelayOrder, UNKNOWN_ROUTE } from './relayOrder';
+import { readRelayOrder } from './relayOrder';
 import type { BridgeContracts } from './table';
 import { PROVIDER_NAME, transferOf, type BridgeTransfer } from './transfer';
 import type { BridgeCall, BridgeProvider, Unreadable } from './view';
@@ -50,9 +50,12 @@ export function readBridgeBatch(
     )
   );
   const notices = transfers.flatMap((read) => read.notices);
-  if (reads.some((read) => read?.kind === 'approve' && !read.token.known)) notices.push(APPROVE_UNKNOWN);
+  const unknownApprove = reads.some((read) => read?.kind === 'approve' && !read.token.known);
+  if (unknownApprove) notices.push(APPROVE_UNKNOWN);
   const outsideTable =
-    notices.includes(APPROVE_UNKNOWN) || notices.includes(UNKNOWN_ROUTE.reason) || deposits.some(hasUnknownToken);
+    unknownApprove ||
+    transfers.some((read) => read.outsideTable) ||
+    reads.some((read) => read?.kind === 'unreadable' && read.outsideTable);
   if (outsideTable && contracts.source === 'snapshot') notices.push(STALE_TABLE);
 
   if (deposits.length === 1) {
@@ -67,13 +70,6 @@ export function readBridgeBatch(
     notices: [...new Set(notices)],
   };
 }
-
-const hasUnknownToken = (deposit: Deposit) => tokensOf(deposit).some((token) => !token.known);
-
-const tokensOf = (deposit: Deposit) =>
-  deposit.provider === 'relay'
-    ? [deposit.send.token]
-    : [deposit.send.token, deposit.receive.kind === 'minimum' ? deposit.receive.amount.token : deposit.receive.token];
 
 function approveNotices(calls: BridgeCall[], reads: Read[], deposit: Deposit): string[] {
   const at = reads.indexOf(deposit);

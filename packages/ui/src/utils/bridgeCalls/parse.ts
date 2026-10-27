@@ -6,6 +6,11 @@ import { BridgeContracts } from './table';
 const isChecksummed = (value: string): value is Address =>
   isAddress(value, { strict: false }) && getAddress(value) === value;
 
+const isChainKey = (key: string) => {
+  const id = Number(key);
+  return Number.isSafeInteger(id) && id > 0 && String(id) === key;
+};
+
 const address = z.string().refine(isChecksummed, 'not a checksummed address');
 
 const across = z.object({
@@ -35,7 +40,9 @@ const chain = z.object({
 
 const body = z.object({
   version: z.number().int().nonnegative(),
-  chains: z.record(z.string().regex(/^\d+$/), chain).refine((chains) => Object.keys(chains).length > 0, 'no chains'),
+  chains: z
+    .record(z.string().refine(isChainKey, 'not a chain id'), chain)
+    .refine((chains) => Object.keys(chains).length > 0, 'no chains'),
 });
 
 export type ParseResult = { ok: true; contracts: BridgeContracts } | { ok: false; reason: string };
@@ -45,11 +52,13 @@ const failure = (reason: string): ParseResult => ({ ok: false, reason });
 const hasDuplicate = (list: readonly string[]) => new Set(list.map((a) => a.toLowerCase())).size !== list.length;
 
 function chainProblem({ across, relay }: BridgeChain): string | undefined {
-  const roles = [...Object.values(across ?? {}), ...(relay ? [relay.depository] : [])];
+  if (relay && hasDuplicate(relay.solvers)) return 'a Relay solver is listed twice';
+  const roles = [
+    ...Object.values(across ?? {}),
+    ...(relay ? [relay.depository, ...relay.solvers, ...relay.erc20Routers] : []),
+  ];
   if (hasDuplicate(roles)) return 'an address holds two roles';
-  if (!relay) return undefined;
-  if (relay.erc20Routers.length === 0 && !relay.testnet) return 'a Relay chain has no routers';
-  if (hasDuplicate(relay.solvers)) return 'a Relay solver is listed twice';
+  if (relay && relay.erc20Routers.length === 0 && !relay.testnet) return 'a Relay chain has no routers';
   return undefined;
 }
 

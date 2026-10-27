@@ -118,13 +118,15 @@ export type RelayOrder = {
   minimumReceived: TokenAmount;
   refundTo: Address;
 };
-export type OrderUnshown = { kind: 'unshown'; reason: string };
+export type OrderUnshown = { kind: 'unshown'; reason: string; outsideTable?: true };
 
-const unshown = (reason: string): OrderUnshown => ({ kind: 'unshown', reason });
-const includes = (what: string) => unshown(`This Relay order includes ${what}, so its terms are not shown.`);
+const unshown = (reason: string, outsideTable?: true): OrderUnshown => ({ kind: 'unshown', reason, outsideTable });
+const includes = (what: string, outsideTable?: true) =>
+  unshown(`This Relay order includes ${what}, so its terms are not shown.`, outsideTable);
 const MISMATCH = unshown('The Relay order details do not match this deposit, so this screen does not show them.');
-export const UNKNOWN_ROUTE = unshown(
-  'This Relay order uses a solver or route this screen does not recognize, so its terms are not shown.'
+const UNKNOWN_ROUTE = unshown(
+  'This Relay order uses a solver or route this screen does not recognize, so its terms are not shown.',
+  true
 );
 const isAddress = (hex: Hex): hex is Address => hex.length === 42;
 const sameBytes = (a: Hex, b: Hex) => a.toLowerCase() === b.toLowerCase();
@@ -184,7 +186,7 @@ function termsOf(contracts: BridgeContracts, order: Order): RelayOrder | OrderUn
   const destination = contracts.relayByProtocolChain(output.chainId)?.chainId;
   if (destination === undefined || !isAddress(recipient)) return undefined;
   if (!isAddress(currency) || (currency !== zeroAddress && !pinnedToken(contracts, destination, currency))) {
-    return includes('an unrecognized token');
+    return includes('an unrecognized token', true);
   }
   if (new Set(refundTo).size !== 1 || !isAddress(refundTo[0])) return undefined;
   return {

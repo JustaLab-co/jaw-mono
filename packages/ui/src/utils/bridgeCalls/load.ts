@@ -29,15 +29,13 @@ function writeStored(body: unknown) {
   }
 }
 
-/** Takes the body only when it is no older than what is already held. */
 function accept(body: unknown, fetchedAt: number): boolean {
   const result = parse(body);
   if (!result.ok) {
     console.warn(`Bridge contracts rejected: ${result.reason}`);
     return false;
   }
-  const floor = held?.contracts.version ?? snapshotContracts().version;
-  if (result.contracts.version < floor) return false;
+  if (result.contracts.version < snapshotContracts().version) return false;
   held = { contracts: result.contracts, fetchedAt };
   return true;
 }
@@ -90,10 +88,4 @@ export function load(apiKey?: string): Promise<void> {
   return (inflight ??= refresh(apiKey).finally(() => {
     inflight = undefined;
   }));
-}
-
-export function resetForTests() {
-  held = undefined;
-  stored = false;
-  inflight = undefined;
 }

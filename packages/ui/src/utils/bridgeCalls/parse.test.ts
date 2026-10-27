@@ -48,6 +48,13 @@ describe('given the body the proxy serves for the bridge table', () => {
     expect(reason(body((b) => (b.chains['base'] = b.chains['8453'])))).toMatch(/^bad shape/);
   });
 
+  it.each(['042161', '99999999999999999999', '0', '+42161'])(
+    'when a chain id is written as %s, then it is rejected for its shape',
+    (key) => {
+      expect(reason(body((b) => (b.chains[key] = b.chains['42161'])))).toMatch(/^bad shape/);
+    }
+  );
+
   it('when a chain has no name, then it is rejected for its shape', () => {
     expect(reason(body((b) => delete (b.chains['8453'] as Partial<BridgeChain>).name))).toMatch(/^bad shape/);
   });
@@ -79,6 +86,15 @@ describe('given the body the proxy serves for the bridge table', () => {
       chain.relay!.depository = chain.across!.spokePool;
     });
     expect(reason(raw)).toBe('chain 8453: an address holds two roles');
+  });
+
+  it.each([
+    ['a Relay solver and the depository', (c: BridgeChain) => (c.relay!.solvers = [c.relay!.depository])],
+    ['a Relay router and the depository', (c: BridgeChain) => (c.relay!.erc20Routers = [c.relay!.depository])],
+    ['a Relay solver and the Across spoke pool', (c: BridgeChain) => (c.relay!.solvers = [c.across!.spokePool])],
+    ['a Relay router and a Relay solver', (c: BridgeChain) => (c.relay!.erc20Routers = [...c.relay!.solvers])],
+  ])('when one chain gives %s the same address, then it is rejected', (_name, change) => {
+    expect(reason(body((b) => change(b.chains['8453'])))).toBe('chain 8453: an address holds two roles');
   });
 
   it('when two chains share a protocolChain, then it is rejected', () => {

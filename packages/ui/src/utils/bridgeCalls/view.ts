@@ -6,7 +6,7 @@ export type BridgeProvider = 'across' | 'relay';
 
 export type BridgeCall = { chainId: number; to: string; data?: string; value?: string };
 
-export type Unreadable = { kind: 'unreadable'; provider: BridgeProvider };
+export type Unreadable = { kind: 'unreadable'; provider: BridgeProvider; outsideTable?: true };
 
 export type Token =
   | { address: Address; known: true; symbol: string; decimals: number }

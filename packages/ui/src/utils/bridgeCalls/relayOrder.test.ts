@@ -461,3 +461,26 @@ describe('given a Relay order through a router the compiled table does not list'
     expect(usdcBatchOn(snapshot, RELAY_USDC_ORDER)?.notices).toEqual([]);
   });
 });
+
+describe('given a Relay order the snapshot cannot place', () => {
+  const STALE = 'This screen could not refresh its list of bridge contracts.';
+  const snapshot = new BridgeContracts({ version: 1, chains: BRIDGE_CHAINS }, 'snapshot');
+  const live = new BridgeContracts({ version: 2, chains: BRIDGE_CHAINS }, 'live');
+
+  it.each([
+    ['a payout token outside the table', edit((o) => (o.output.payments[0].currency = OTHER))],
+    ['a destination outside the table', edit((o) => (o.output.chainId = 'solana'))],
+  ])('when the order has %s, then the snapshot adds the refresh line and a live table does not', (_, order) => {
+    expect(usdcBatchOn(snapshot, order, { rehash: true })?.notices).toContain(STALE);
+    expect(usdcBatchOn(live, order, { rehash: true })?.notices).not.toContain(STALE);
+  });
+
+  it('when the order is mismatched, then the snapshot adds no refresh line', () => {
+    expect(
+      usdcBatchOn(
+        snapshot,
+        edit((o) => (o.salt = '7'))
+      )?.notices
+    ).not.toContain(STALE);
+  });
+});

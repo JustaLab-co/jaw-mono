@@ -23,7 +23,7 @@ export type BridgeTransfer = {
   details: Detail[];
 };
 
-export type TransferRead = { transfer: BridgeTransfer; notices: string[] };
+export type TransferRead = { transfer: BridgeTransfer; notices: string[]; outsideTable: boolean };
 
 export const PROVIDER_NAME: Record<BridgeProvider, string> = { across: 'Across', relay: 'Relay' };
 
@@ -51,7 +51,8 @@ function acrossTransfer(contracts: BridgeContracts, deposit: AcrossDeposit, acco
   if (!isAddressEqual(deposit.refundTo, account)) notices.push(notThisAccount('The refund address', deposit.refundTo));
   if (fee && !fee.jaw) notices.push(FEE_NOT_JAW);
   const received = deposit.receive.kind === 'minimum' ? deposit.receive.amount.token : deposit.receive.token;
-  for (const token of [deposit.send.token, received]) if (!token.known) notices.push(unknownToken(token.address));
+  const unknown = [deposit.send.token, received].filter((token) => !token.known);
+  for (const token of unknown) notices.push(unknownToken(token.address));
 
   const details: Detail[] = [accountDetail('Recipient', deposit.recipient, account)];
   if (fee) {
@@ -77,6 +78,7 @@ function acrossTransfer(contracts: BridgeContracts, deposit: AcrossDeposit, acco
       details,
     },
     notices,
+    outsideTable: unknown.length > 0,
   };
 }
 
@@ -88,6 +90,7 @@ function relayTransfer(
 ): TransferRead {
   const id = deposit.orderId;
   const notices: string[] = [];
+  const outsideTable = !deposit.send.token.known || (order?.kind === 'unshown' && order.outsideTable === true);
   if (!deposit.send.token.known) notices.push(unknownToken(deposit.send.token.address));
   if (!isAddressEqual(deposit.depositor, account))
     notices.push(notThisAccount('The account credited', deposit.depositor));
@@ -105,6 +108,7 @@ function relayTransfer(
         details: [credited, orderDetail],
       },
       notices,
+      outsideTable,
     };
   }
 
@@ -128,6 +132,7 @@ function relayTransfer(
       ],
     },
     notices,
+    outsideTable,
   };
 }
 
