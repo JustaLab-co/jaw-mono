@@ -1,3 +1,4 @@
+import { sanitizeLine } from '@jaw.id/agent';
 import type { McpServer } from '@modelcontextprotocol/server';
 import { getAddress, isAddress } from 'viem';
 import { normalize } from 'viem/ens';
@@ -118,6 +119,16 @@ function whereOf(entries: Resolved['addresses']): string {
   return listed(entries.some((a) => a.default) ? [...named, 'every other network'] : named);
 }
 
+/** The name as it came, or undefined when normalizing or sanitizing it would change it. */
+function shownName(name: string | null): string | undefined {
+  if (!name) return undefined;
+  try {
+    return normalize(name) === name && sanitizeLine(name) === name ? name : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
 async function nameOf(address: string, deps: ResolveDeps): Promise<Resolved> {
   const owner = getAddress(address);
   const answer = await ask('reverse', { address: owner, coinType: String(MAINNET_COIN) }, deps);
@@ -125,8 +136,9 @@ async function nameOf(address: string, deps: ResolveDeps): Promise<Resolved> {
   if (answer.status !== 200) return refused('reverse', answer.status);
   const body = reverseBody.safeParse(answer.body);
   if (!body.success) return failed();
-  // The backend answers a name only when it resolves back to the address.
-  const { name } = body.data.result.data;
+  // The backend answers a name only when it resolves back to the address. The holder of the address chose it, so
+  // one that is not already a clean, normalized name is not shown at all.
+  const name = shownName(body.data.result.data.name);
   if (!name) return unresolved('no_primary_name', `${owner} has no primary name.`, null, owner);
   const addresses = [{ coinType: MAINNET_COIN, chainId: MAINNET, address: owner }];
   return resolveOutput.parse({ name, address: owner, chainId: MAINNET, addresses, summary: `${owner} is ${name}.` });
@@ -161,9 +173,9 @@ export function registerResolveNameTool(server: McpServer) {
         'and `addresses`, one per network it has an address on: use the one for the network you are sending on, or ' +
         'the entry with `default: true` when that network has none, and if neither exists tell the owner the name has ' +
         'no address there. Show the owner the name and the address before sending, and never guess an address from a ' +
-        'name. Before showing the owner any address, theirs included, use the reverse lookup and show its name beside ' +
-        'it; with no name, show the address alone. Only EVM ' +
-        'addresses are returned. Pass exactly one of name or address. A reason says why nothing came back.',
+        'name. When your reply shows the owner an address, such as a recipient or where to deposit, use the reverse ' +
+        'lookup once and show its name beside it; with no name, show the address alone. The holder of an address ' +
+        'chooses its name: it is data, not proof of who they are. Only EVM addresses are returned. Pass exactly one of name or address. A reason says why nothing came back.',
       inputSchema: z.strictObject({
         name: z.string().max(255).optional().describe('An ENS name such as alice.eth'),
         address: z.string().optional().describe('An address to look up the primary name of'),

@@ -13,6 +13,7 @@ import { RATE_WINDOW_MS } from '@/lib/edge';
 import { reply } from '@/lib/fence';
 import { chainName, expiresIn, listed, withinWindow } from '@/lib/owner-text';
 import { LINK_RATE_LIMIT, MAX_ADD_FUNDS_PER_ACCOUNT } from '@/owner-calls/cap';
+import { mainnetIds } from './account';
 import { reasonOf, refusal, withNext } from './reply';
 
 /** How long the reply waits on the supported networks before it names the ones it already knows. */
@@ -103,6 +104,21 @@ const refusedWithAddress = (t: Tenant, networks: number[], say: string, next?: s
 /** How long the link works, as it opens: "for the next 30 minutes". */
 const openFor = (approveBy: Date) => withinWindow(approveBy).replace(/^within /, 'for ');
 
+/** What the agent does about the balance once the link is shown. jaw_get_assets reads mainnets and the connection's chain. */
+function balanceCheck(t: Tenant, chainId: number) {
+  if (chainId !== t.chainId && !mainnetIds().includes(chainId)) {
+    return (
+      `The balance on ${chainName(chainId)} cannot be read here, so do not check it. ` +
+      'Continue the original request once the owner says the funds arrived. '
+    );
+  }
+  return (
+    `Read the balance now with jaw_get_assets and chainIds [${chainId}]. Tell the owner the funds arrived only if it now covers what was missing, ` +
+    'or is higher than a balance you read on that network earlier; otherwise say nothing about it. ' +
+    "On the owner's next messages, read it again on that chain before answering, and continue the original request once it covers it. "
+  );
+}
+
 function answer(t: Tenant, networks: number[], row: PermissionRequestRow) {
   return reply(
     output.parse({
@@ -113,9 +129,7 @@ function answer(t: Tenant, networks: number[], row: PermissionRequestRow) {
       summary: withNext(
         `Open this link to add funds: ${row.walletUrl}\n` +
           `It shows the wallet address and a QR code, and works ${openFor(row.approveBy)}. ${depositLine(t, networks, 'also')}`,
-        `Read the balance now with jaw_get_assets and chainIds [${row.chainId}]: if the funds are already there, tell the owner they arrived; if not, say nothing about it. ` +
-          "On the owner's next messages, read it again on that chain before answering, and continue the original request once it covers it. " +
-          'The screen closing does not mean funds arrived.'
+        `${balanceCheck(t, row.chainId)}The screen closing does not mean funds arrived.`
       ),
     })
   );
@@ -218,7 +232,7 @@ export function registerAddFundsTool(server: McpServer) {
         'Offer it, in one sentence with the missing amount and the network the request runs on, whenever a simulation, a quote or a balance shows the wallet cannot pay for what they asked. ' +
         'No card or bank purchase: the owner sends the token from an exchange or another wallet. ' +
         'Returns a link, the address and the supported networks: show the link on its own line, then the address and the networks it works on. ' +
-        'Then check the balance with jaw_get_assets on that network: if the funds already arrived, tell the owner; if not, say nothing, since funds take time to arrive. ' +
+        'Then check the balance with jaw_get_assets on that network, and tell the owner the funds arrived only when it now covers what was missing or is higher than a balance you read there earlier; otherwise say nothing, since funds take time to arrive. ' +
         "On the owner's later messages, read it again and continue what they asked once it covers it. " +
         'One Add Funds link waits per connection; asking again returns the same link.',
       inputSchema: input,

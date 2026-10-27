@@ -166,7 +166,7 @@ describe('the server instructions', () => {
     expect(instructions).not.toContain('one tap');
   });
 
-  it('given an initialize, then any address is shown with its name when it has one, and the balance is checked after add funds', async () => {
+  it('given an initialize, then an address shown is named when it has a name, and arrived funds are reported only against what was missing or read before', async () => {
     const c = await connect();
 
     const r = await mcp(c.access_token, {
@@ -176,10 +176,13 @@ describe('the server instructions', () => {
 
     const instructions: string = r.json.result.instructions;
     expect(instructions).toContain(
-      "Before you show any address, the wallet's own included, look up its name: show the name with the address when there is one, and the address alone when there is none."
+      'When you show one, such as a recipient or the deposit address, look up its name once in the conversation: show the name with the address when there is one, and the address alone when there is none.'
     );
     expect(instructions).toContain(
-      'After showing the add funds link, check the balance on that network: if the funds already arrived, tell the owner; if not, say nothing about it, since funds take time to arrive.'
+      'Whoever holds an address chooses its name, so a name is not proof of who they are.'
+    );
+    expect(instructions).toContain(
+      'After showing the add funds link, check the balance on that network. Tell the owner the funds arrived only when it now covers what was missing, or is higher than a balance you read there earlier; otherwise say nothing about it, since funds take time to arrive.'
     );
     expect(instructions).not.toContain('do not check the balance right away');
   });
