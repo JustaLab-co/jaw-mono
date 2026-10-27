@@ -20,10 +20,9 @@ import { DialogAppHeader } from '../DialogAppHeader';
 import { TokenIcon } from '../TokenIcon';
 import { SubText } from '../SubText';
 import { AssetPreview } from './AssetPreview';
-import { AllowancePreview } from './AllowancePreview';
-import { unlimitedAllowanceChanges } from '../../utils/allowances';
 import { callTitle } from './DecodedCalldata';
 import { resolveBlockReason } from '../../utils/transactionFailure';
+import { allowanceFlag } from '../../utils/allowances';
 import { isBlockingPermissionProblem, PERMISSION_PROBLEM_TEXT } from '../../utils/permissionExecution';
 import { BatchStep, NAME_SOURCES, SingleCallData } from './CallSections';
 import { InlineWarning, PartyRow, Row, ValueAmount } from '../primitives';
@@ -152,6 +151,9 @@ export const TransactionDialog = ({
     apiKey
   );
   const title = isNativeSend ? "You're Sending" : (callTitle(singleCallDecode) ?? 'Review Transaction');
+
+  // Allowances move no balance, so the asset preview can't show them: each call carries its own flag.
+  const allowanceFlags = transactions.map(allowanceFlag);
 
   // A single call's calldata unfolds only when there's no You-send/You-get summary to stand in
   // for it; otherwise that review screen would open with nothing on it. Batch steps always
@@ -319,14 +321,6 @@ export const TransactionDialog = ({
               />
             )}
 
-            {/* Allowances move no balance, so the simulation above can't show them. */}
-            <AllowancePreview
-              changes={unlimitedAllowanceChanges(transactions)}
-              knownTokens={[...(assetsOut ?? []), ...(assetsIn ?? [])]}
-              chainId={currentTransaction?.chainId}
-              apiKey={apiKey}
-            />
-
             {/* Value (single, non-native) */}
             {isSingleTransaction && !isNativeSend && singleValue && (
               <Row label="Value">
@@ -346,6 +340,7 @@ export const TransactionDialog = ({
                   to={currentTransaction.to}
                   data={currentTransaction.data}
                   decode={singleCallDecode}
+                  allowanceFlag={allowanceFlags[0]}
                   chainId={currentTransaction.chainId}
                   apiKey={apiKey}
                   mainnetRpcUrl={mainnetRpcUrl}
@@ -363,6 +358,7 @@ export const TransactionDialog = ({
                     index={index}
                     nativeSymbol={nativeSymbol}
                     nativeTokenPrice={nativeTokenPrice}
+                    allowanceFlag={allowanceFlags[index]}
                     apiKey={apiKey}
                     mainnetRpcUrl={mainnetRpcUrl}
                   />
