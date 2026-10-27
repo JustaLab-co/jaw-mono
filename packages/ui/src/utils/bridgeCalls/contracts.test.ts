@@ -8,7 +8,7 @@ const chains = Object.entries(BRIDGE_CHAINS).map(([id, chain]) => ({ id: Number(
 function addressesOf(chain: (typeof chains)[number]): string[] {
   return [
     ...Object.values(chain.across ?? {}),
-    ...(chain.relay ? [chain.relay.depository, chain.relay.erc20Router, ...chain.relay.solvers] : []),
+    ...(chain.relay ? [chain.relay.depository, ...chain.relay.erc20Routers, ...chain.relay.solvers] : []),
     ...Object.keys(chain.tokens),
   ];
 }
@@ -31,11 +31,12 @@ describe('given the pinned bridge table of the signing screen', () => {
         multicallHandler: '0x0F7Ae28dE1C8532170AD4ee566B5801485c13a0E',
         eventEmitter: '0xBF75133b48b0a42AB9374027902E83C5E2949034',
         wrappedNative: '0x4200000000000000000000000000000000000006',
+        swapRouter: '0xd6145b2D3F379919E8CdEda7B97e37c4b2Ca9c40',
       },
       relay: {
         depository: '0x4cD00E387622C35bDDB9b4c962C136462338BC31',
         protocolChain: 'base',
-        erc20Router: '0xb92fe925DC43a0ECdE6c8b1a2709c170Ec4fFf4f',
+        erc20Routers: ['0x0729E2a4716d9f7dD17858d5d504426D228697f7', '0xb92fe925DC43a0ECdE6c8b1a2709c170Ec4fFf4f'],
         solvers: expect.arrayContaining(['0xf70da97812CB96acDF810712Aa562db8dfA3dbEF']),
       },
       tokens: {
@@ -83,7 +84,7 @@ describe('given the pinned bridge table of the signing screen', () => {
     });
   });
 
-  it('then every Relay chain fills through its router by solvers listed once, Linea and testnets on their own router', () => {
+  it('then every Relay chain fills through its router by solvers listed once, Linea and testnets on their own routers', () => {
     for (const chain of chains) {
       const relay = chain.relay;
       if (!relay) continue;
@@ -91,9 +92,12 @@ describe('given the pinned bridge table of the signing screen', () => {
       expect(solvers.length, `chain ${chain.id}`).toBeGreaterThan(0);
       expect(new Set(solvers).size, `chain ${chain.id}`).toBe(solvers.length);
     }
-    expect(BRIDGE_CHAINS[59144]?.relay?.erc20Router).toBe('0x9EF6d3c2F60d7b9008D74CAb1FC0F899c957C819');
+    expect(BRIDGE_CHAINS[59144]?.relay?.erc20Routers).toEqual([
+      '0x6328ea02d28131e58B28E55c6258258A30d90E05',
+      '0x9EF6d3c2F60d7b9008D74CAb1FC0F899c957C819',
+    ]);
     expect(BRIDGE_CHAINS[11155111]?.relay).toMatchObject({
-      erc20Router: '0xA1BEa5fe917450041748Dbbbe7E9AC57A4bBEBaB',
+      erc20Routers: ['0xA1BEa5fe917450041748Dbbbe7E9AC57A4bBEBaB'],
       solvers: ['0x3e34b27a9bf37D8424e1a58aC7fc4D06914B76B9'],
       testnet: true,
     });
@@ -161,6 +165,6 @@ describe('given the pinned bridge table of the signing screen', () => {
 
   it('then the table matches the reviewed digest, so any changed literal updates this test', () => {
     const digest = createHash('sha256').update(JSON.stringify({ BRIDGE_CHAINS, JAW_FEE_RECIPIENT })).digest('hex');
-    expect(digest).toBe('c8ee9a873351bccac8c5b6ce1f255125bf6b4966e9e0a2878cf2e9c2102ce500');
+    expect(digest).toBe('ff29a34fd70acf25d6ffd9e66d47eacaba4cc140cac03bfd3bed1cef320c9d27');
   });
 });
