@@ -1,5 +1,5 @@
-import { ANY_FN_SEL, ANY_TARGET, EMPTY_CALLDATA_FN_SEL, PERMISSIONS_MANAGER_ADDRESS } from '@jaw.id/core';
-import { usdcForNetwork } from '@jaw.id/agent';
+import { ANY_FN_SEL, ANY_TARGET, EMPTY_CALLDATA_FN_SEL } from '@jaw.id/core';
+import { hasChecker, isRefusedChecker, usdcForNetwork } from '@jaw.id/agent';
 import type { McpServer } from '@modelcontextprotocol/server';
 import {
   isAddress,
@@ -7,7 +7,6 @@ import {
   numberToHex,
   parseUnits,
   toFunctionSelector,
-  zeroAddress,
   type Address,
   type Hex,
 } from 'viem';
@@ -235,11 +234,7 @@ function asked(t: Tenant, input: GrantInput, expiry: number): Asked | string {
     );
   }
   // The zero checker is no checker. The manager refuses itself or the account as one.
-  const refusedChecker = input.calls.find(
-    (c) =>
-      c.checker &&
-      [PERMISSIONS_MANAGER_ADDRESS, t.account].some((a) => isAddressEqual(c.checker as Address, a as Address))
-  );
+  const refusedChecker = input.calls.find((c) => c.checker && isRefusedChecker(c.checker, t.account));
   if (refusedChecker) {
     return withNext(
       `checker_refused: ${refusedChecker.checker} cannot check the actions of a permission: the wallet itself and the contract that enforces permissions never can. ${NOTHING_ASKED}`,
@@ -249,7 +244,7 @@ function asked(t: Tenant, input: GrantInput, expiry: number): Asked | string {
   const calls = input.calls.map((c) => ({
     target: c.target as Address,
     functionSignature: c.functionSignature,
-    ...(c.checker && !isAddressEqual(c.checker as Address, zeroAddress) ? { checker: c.checker as Address } : {}),
+    ...(hasChecker(c) ? { checker: c.checker as Address } : {}),
   }));
   const spent = (input.spends ?? []).map((s) => ({ ...s, token: s.token as Address, multiplier: s.multiplier ?? 1 }));
   const checked = calls.flatMap((c) =>
