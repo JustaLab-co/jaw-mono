@@ -2206,6 +2206,21 @@ describe('jaw_send_calls batch size and gas', () => {
     expect(await rowsOf(t.connectionId)).toEqual([]);
   });
 
+  it('given an account not deployed yet and calls over its first transaction budget, then the agent is told the first one has to be smaller', async () => {
+    const { t } = await connected();
+    const node = gasNode({ code: '0x', gasLimit: 60_000_000n, gas: 4_000_000n });
+
+    const result = await checked(t, {}, node);
+
+    expect(result.isError).toBe(true);
+    expect(result[gateCode]).toBe('batch_too_heavy');
+    expect(spoken(result)).toContain('first transaction');
+    expect(toAgent(result).join('\n')).toMatch(/4000000 gas.*3300000.*5000000/);
+    expect(toAgent(result).join('\n')).not.toMatch(/cannot be sent/);
+    expect(opened).toEqual([]);
+    expect(await rowsOf(t.connectionId)).toEqual([]);
+  });
+
   it("given calls within the chain's budget, then the owner's account was estimated and the link opens", async () => {
     const { t } = await connected();
     const node = gasNode({ code: DEPLOYED, gasLimit: 60_000_000n, gas: 5_000_000n });

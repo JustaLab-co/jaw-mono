@@ -65,14 +65,15 @@ export const gasClientFor = (chainId: number): PublicClient =>
   createPublicClient({ transport: http(rpcUrl(chainId), { retryCount: 0, timeout: CHECK_MS }) });
 
 /**
- * The gas the batch needs and the chain's budget, when it needs more; undefined when it fits. Throws when the chain
- * cannot tell, a batch that reverts included.
+ * The gas the batch needs and the chain's budget, when it needs more; undefined when it fits. `later` is the chain's
+ * budget when only the first transaction's was missed: the same calls fit once the account is deployed. Throws when
+ * the chain cannot tell, a batch that reverts included.
  */
 export async function overBudget(
   client: PublicClient,
   account: Address,
   calls: BatchCall[]
-): Promise<{ gas: bigint; budget: bigint } | undefined> {
+): Promise<{ gas: bigint; budget: bigint; later?: bigint } | undefined> {
   const [code, block] = await Promise.all([client.getCode({ address: account }), client.getBlock()]);
   // Without it the budget would be 0 and every batch refused.
   if (typeof block.gasLimit !== 'bigint') throw new Error('the block has no gas limit');
@@ -85,6 +86,8 @@ export async function overBudget(
   });
   const chainBudget = gasBudget(block.gasLimit);
   // A first transaction gets the lower of the two, so a chain with smaller blocks, such as Citrea, keeps its own.
-  const budget = !code && chainBudget > MAX_FIRST_BATCH_GAS ? MAX_FIRST_BATCH_GAS : chainBudget;
-  return gas > budget ? { gas, budget } : undefined;
+  const first = !code && chainBudget > MAX_FIRST_BATCH_GAS;
+  const budget = first ? MAX_FIRST_BATCH_GAS : chainBudget;
+  if (gas <= budget) return undefined;
+  return first && gas <= chainBudget ? { gas, budget, later: chainBudget } : { gas, budget };
 }

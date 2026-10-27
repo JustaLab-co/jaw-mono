@@ -87,11 +87,21 @@ describe('overBudget', () => {
     expect(await overBudget(node.clientFor(8453), ACCOUNT, approves(2))).toBeUndefined();
   });
 
-  it('given an account not deployed yet, then its first transaction gets 3.3M', async () => {
+  it('given an account not deployed yet, then its first transaction gets 3.3M and the chain budget comes back for later', async () => {
     const node = gasNode({ code: '0x', gasLimit: 60_000_000n, gas: 3_300_001n });
 
     expect(await overBudget(node.clientFor(8453), ACCOUNT, approves(2))).toEqual({
       gas: 3_300_001n,
+      budget: 3_300_000n,
+      later: 5_000_000n,
+    });
+  });
+
+  it('given an account not deployed yet and a batch over the chain budget too, then nothing is promised for later', async () => {
+    const node = gasNode({ code: '0x', gasLimit: 60_000_000n, gas: 5_000_001n });
+
+    expect(await overBudget(node.clientFor(8453), ACCOUNT, approves(2))).toEqual({
+      gas: 5_000_001n,
       budget: 3_300_000n,
     });
   });

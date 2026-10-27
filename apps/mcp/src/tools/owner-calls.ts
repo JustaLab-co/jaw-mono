@@ -209,6 +209,14 @@ async function tooHeavy(chainId: number, account: Address, batch: BatchCall[], d
     return undefined;
   }
   if (!over) return undefined;
+  if (over.later) {
+    return refuse(
+      'batch_too_heavy',
+      `This is too much for the account's first transaction on ${chainName(chainId)}, which also sets the account up, so the first one has to be smaller. Later transactions can be bigger. Nothing was sent.`,
+      `The calls need about ${over.gas} gas. The account's first transaction deploys it and takes at most ${over.budget} on chain ${chainId}; once it has landed, one request takes up to ${over.later}. ` +
+        'Send a smaller request first, or split these into smaller ones, and send this one again once jaw_get_calls_status shows the first landed.'
+    );
+  }
   return refuse(
     'batch_too_heavy',
     `This is too much to send in one transaction on ${chainName(chainId)}, so it needs to be split into smaller ones. Nothing was sent.`,
