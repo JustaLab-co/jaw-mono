@@ -7,7 +7,8 @@ import { Eyebrow, PartyRow, Row, ValueAmount } from '../primitives';
 import { useAddressIdentity, type IdentitySource } from '../../hooks/useAddressIdentities';
 import { useDecodedCalldata, type DecodeResult } from '../../hooks/useDecodedCalldata';
 import { formatNativeValue } from '../../utils/displayFormat';
-import { DecodedCalldataView, callLabel } from './DecodedCalldata';
+import type { AllowanceFlag } from '../../hooks/useAllowanceFlags';
+import { AllowanceFlagText, DecodedCalldataView, callLabel, readableFlag } from './DecodedCalldata';
 import type { TransactionData } from './types';
 
 /**
@@ -28,16 +29,26 @@ interface DecodeContext {
   mainnetRpcUrl: string;
 }
 
+/** An unlimited allowance stays in sight on a folded call: the header carries its flag until it opens. */
+const HeaderFlag = ({ flag }: { flag: AllowanceFlag | null }) =>
+  flag ? (
+    <span className="ml-auto group-data-[state=open]:hidden">
+      <AllowanceFlagText flag={flag} />
+    </span>
+  ) : null;
+
 /** The single-transaction calldata card, folded behind the decoded call name. */
 export function SingleCallData({
   to,
   data,
   decode,
+  allowanceFlag,
   ...ctx
-}: DecodeContext & { to: string; data: string; decode: DecodeResult }) {
+}: DecodeContext & { to: string; data: string; decode: DecodeResult; allowanceFlag: AllowanceFlag | null }) {
+  const flag = readableFlag(decode, allowanceFlag);
   return (
     <AccordionItem value="calldata" className="border-border rounded-box overflow-hidden border">
-      <AccordionTrigger className="items-center p-3 hover:no-underline">
+      <AccordionTrigger className="group items-center p-3 hover:no-underline">
         <span className="flex min-w-0 items-center gap-3">
           <span className="border-border bg-secondary rounded-chip flex size-7 flex-none items-center justify-center border">
             <Code className="text-muted-foreground size-3.5" strokeWidth={1.5} />
@@ -47,13 +58,14 @@ export function SingleCallData({
             <span className="text-foreground text-value mt-1 truncate">{callLabel(decode, 'Contract call')}</span>
           </span>
         </span>
+        <HeaderFlag flag={flag} />
       </AccordionTrigger>
       <AccordionContent className="px-3 pb-3">
         <div className="flex flex-col gap-2">
           <div className="flex items-center justify-end">
             <CopyButton value={data} label="Copy calldata" />
           </div>
-          <DecodedCalldataView to={to} data={data} decode={decode} {...ctx} />
+          <DecodedCalldataView to={to} data={data} decode={decode} allowanceFlag={flag} {...ctx} />
         </div>
       </AccordionContent>
     </AccordionItem>
@@ -66,14 +78,17 @@ export function BatchStep({
   index,
   nativeSymbol,
   nativeTokenPrice,
+  allowanceFlag,
   ...ctx
 }: Omit<DecodeContext, 'chainId'> & {
   transaction: TransactionData;
   index: number;
   nativeSymbol: string;
   nativeTokenPrice: number;
+  allowanceFlag: AllowanceFlag | null;
 }) {
   const decode = useDecodedCalldata(transaction.to, transaction.data, transaction.chainId, ctx.apiKey);
+  const flag = readableFlag(decode, allowanceFlag);
   const target = useAddressIdentity(transaction.to, transaction.chainId, {
     mainnetRpcUrl: ctx.mainnetRpcUrl,
     apiKey: ctx.apiKey,
@@ -84,7 +99,7 @@ export function BatchStep({
 
   return (
     <AccordionItem value={`transaction-${index}`} className="border-border rounded-box overflow-hidden border">
-      <AccordionTrigger className="items-center p-3 hover:no-underline">
+      <AccordionTrigger className="group items-center p-3 hover:no-underline">
         <span className="flex min-w-0 items-center gap-2">
           <span className="bg-secondary text-foreground text-body-xs flex size-5 flex-none items-center justify-center rounded-full font-semibold">
             {index + 1}
@@ -100,6 +115,7 @@ export function BatchStep({
             </span>
           )}
         </span>
+        <HeaderFlag flag={flag} />
       </AccordionTrigger>
       <AccordionContent className="px-3 pb-3">
         <div className="flex flex-col gap-3">
@@ -134,6 +150,7 @@ export function BatchStep({
                 data={transaction.data as string}
                 chainId={transaction.chainId}
                 decode={decode}
+                allowanceFlag={flag}
                 {...ctx}
               />
             </div>

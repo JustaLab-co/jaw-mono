@@ -1,8 +1,14 @@
-import { decodeFunctionData, isAddress, isAddressEqual, maxUint160, parseAbi, toFunctionSelector } from 'viem';
+import {
+  decodeFunctionData,
+  isAddress,
+  isAddressEqual,
+  maxUint160,
+  maxUint256,
+  parseAbi,
+  toFunctionSelector,
+} from 'viem';
 
 export const PERMIT2_ADDRESS = '0x000000000022D473030F116dDEE9F6B43aC78BA3';
-
-const UNLIMITED_FLOOR = 1n << 255n;
 
 const TOKEN_ABI = parseAbi([
   'function approve(address spender, uint256 amount)',
@@ -12,6 +18,8 @@ const TOKEN_ABI = parseAbi([
   'function approveAndCall(address spender, uint256 amount, bytes data)',
   'function setApprovalForAll(address operator, bool approved)',
   'function permit(address owner, address spender, uint256 value, uint256 deadline, uint8 v, bytes32 r, bytes32 s)',
+  // DAI's permit predates EIP-2612: `allowed` sets the allowance to max uint256 or to zero.
+  'function permit(address holder, address spender, uint256 nonce, uint256 expiry, bool allowed, uint8 v, bytes32 r, bytes32 s)',
 ]);
 const PERMIT2_ABI = parseAbi(['function approve(address token, address spender, uint160 amount, uint48 expiration)']);
 
@@ -34,13 +42,15 @@ export interface AllowanceChange {
   revoke: boolean;
   /** `approve` shares its selector with ERC-721, so the target may not be an ERC-20 at all. */
   ambiguous: boolean;
-  /** The signer of an on-chain EIP-2612 permit. */
+  /** The signer of an on-chain EIP-2612 or DAI permit. */
   owner?: string;
   /** The selector is an allowance one but the arguments did not decode, so the spender is unknown (empty). */
   undecoded?: boolean;
+  /** Index of the call argument that sets the allowance: the amount, or the `approved`/`allowed` flag. */
+  argIndex?: number;
 }
 
-interface Call {
+export interface Call {
   to?: string;
   data?: string;
 }
@@ -88,15 +98,24 @@ function decodeToken(token: string, data: string): AllowanceChange | null {
       unlimited: true,
       revoke: false,
       ambiguous: false,
+      argIndex: 1,
     };
   }
   if (decoded.functionName === 'permit') {
+    if (decoded.args.length === 8) {
+      const [holder, spender, , , allowed] = decoded.args;
+      return { ...amountChange(token, spender, allowed ? maxUint256 : 0n, false), owner: holder, argIndex: 4 };
+    }
     const [owner, spender, value] = decoded.args;
-    return { ...amountChange(token, spender, value, false), owner };
+    return { ...amountChange(token, spender, value, false), owner, argIndex: 2 };
   }
   const [spender, amount] = decoded.args;
   const added = decoded.functionName === 'increaseAllowance' || decoded.functionName === 'increaseApproval';
-  return { ...amountChange(token, spender, amount, added), ambiguous: decoded.functionName === 'approve' };
+  return {
+    ...amountChange(token, spender, amount, added),
+    ambiguous: decoded.functionName === 'approve',
+    argIndex: 1,
+  };
 }
 
 function amountChange(token: string, spender: string, amount: bigint, added: boolean): AllowanceChange {
@@ -106,7 +125,8 @@ function amountChange(token: string, spender: string, amount: bigint, added: boo
     amount,
     added,
     allTokens: false,
-    unlimited: amount >= UNLIMITED_FLOOR,
+    // From max uint160 up an allowance is unlimited in practice; Permit2's amount tops out there.
+    unlimited: amount >= maxUint160,
     revoke: amount === 0n && !added,
     ambiguous: false,
   };
@@ -124,17 +144,6 @@ function decodePermit2(data: string): AllowanceChange {
     unlimited: amount >= maxUint160,
     revoke: amount === 0n,
     ambiguous: false,
+    argIndex: 2,
   };
-}
-
-export function allowanceChanges(calls: Call[]): AllowanceChange[] {
-  return calls.flatMap((call) => decodeAllowanceChange(call) ?? []);
-}
-
-/**
- * The allowances worth a card of their own: unlimited ones and `setApprovalForAll`. A finite
- * approval is usually spent by the call after it, and that spend already shows as a balance change.
- */
-export function unlimitedAllowanceChanges(calls: Call[]): AllowanceChange[] {
-  return allowanceChanges(calls).filter((change) => change.unlimited);
 }

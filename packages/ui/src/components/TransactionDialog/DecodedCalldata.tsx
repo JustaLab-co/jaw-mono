@@ -1,6 +1,7 @@
 import { useMemo } from 'react';
 import type { Hex } from 'viem';
 import type { DecodeResult } from '../../hooks/useDecodedCalldata';
+import type { AllowanceFlag } from '../../hooks/useAllowanceFlags';
 import { Spinner } from '../ui/spinner';
 import { TriangleAlert } from 'lucide-react';
 import { useAddressIdentities } from '../../hooks/useAddressIdentities';
@@ -11,22 +12,41 @@ import { computeCalldataDigest } from '../../utils/erc8213';
 import { IdentityAvatar } from '../IdentityAvatar';
 import { TokenIcon } from '../TokenIcon';
 import { DigestRow } from '../VerificationDigest';
+import { Tooltip, TooltipContent, TooltipTrigger } from '../ui/tooltip';
 import { ClearSignedView } from './ClearSignedView';
 
 const ZERO_ADDRESS = '0x0000000000000000000000000000000000000000';
 
+/** The amber allowance warning: "Unlimited", or "All tokens" for a whole collection. */
+export const AllowanceFlagText = ({ flag }: { flag: AllowanceFlag }) => (
+  <span className="text-warning flex flex-none items-center gap-1.5 font-mono text-xs font-semibold leading-normal">
+    <TriangleAlert className="size-3.5 flex-none" strokeWidth={2} />
+    {flag.label}
+  </span>
+);
+
+const FLAG_NOTES: Record<AllowanceFlag['label'], string> = {
+  Unlimited: 'Lets the spender take any amount of this token, now or later.',
+  'All tokens': 'Lets the operator move every token in this collection, now or later.',
+};
+
 /**
- * True only for the exact ERC-20 `approve(address,uint256)` shape. "Unlimited" is a claim about
- * an allowance, so it must never leak onto another function taking a large uint256.
+ * The warning with what it allows, on hover or keyboard focus. The visible word stays its name and
+ * the note is its description. Never inside a header: that is a button already.
  */
-export function isErc20Approve(decoded: DecodeResult['decoded']): boolean {
-  return (
-    decoded?.functionName === 'approve' &&
-    decoded.params.length === 2 &&
-    decoded.params[0]?.type === 'address' &&
-    decoded.params[1]?.type === 'uint256'
-  );
-}
+const NotedAllowanceFlag = ({ flag }: { flag: AllowanceFlag }) => (
+  <Tooltip>
+    <TooltipTrigger asChild>
+      <span
+        tabIndex={0}
+        className="focus-visible:ring-ring/50 flex-none cursor-help rounded-sm outline-none focus-visible:ring-[3px]"
+      >
+        <AllowanceFlagText flag={flag} />
+      </span>
+    </TooltipTrigger>
+    <TooltipContent>{FLAG_NOTES[flag.label]}</TooltipContent>
+  </Tooltip>
+);
 
 /**
  * ERC-8213 Calldata Digest, collapsed behind a disclosure like the raw calldata
@@ -53,6 +73,15 @@ const CalldataDigest = ({ data }: { data: string }) => {
     </details>
   );
 };
+
+/**
+ * The flag, only for a call the lookup could read. While it loads, or when it cannot read the
+ * call (the contract may not even have that function), the screen does not claim an allowance.
+ */
+export function readableFlag(decode: DecodeResult, flag: AllowanceFlag | null): AllowanceFlag | null {
+  const readable = !!decode.decoded || (decode.clearSigned?.rows.length ?? 0) > 0;
+  return readable ? flag : null;
+}
 
 /** ERC-7730 intent, else the decoded function name, else the caller's fallback. */
 export function callLabel(decode: DecodeResult, fallback: string): string {
@@ -82,7 +111,12 @@ export const DecodedCalldataView = ({
   chainId,
   mainnetRpcUrl,
   decode,
-}: DecodedCalldataProps & { decode: DecodeResult }) => {
+  allowanceFlag,
+}: DecodedCalldataProps & {
+  decode: DecodeResult;
+  /** From the local allowance decode; shown only once the lookup has read the call. */
+  allowanceFlag: AllowanceFlag | null;
+}) => {
   const { clearSigned, decoded, isLoading } = decode;
 
   // Address params, named on this call's chain. The zero address is a sentinel, not a party.
@@ -93,8 +127,18 @@ export const DecodedCalldataView = ({
 
   // Clear-signing hit: render the formatted view, with raw whatsabi details collapsed underneath.
   if (clearSigned && clearSigned.rows.length > 0) {
+    // The clear-signed view already says "Unlimited" on a max-uint amount; the flag goes on top
+    // unless that amount is the one it stands for.
+    const flaggedAmount = allowanceFlag?.amount?.toString();
+    const flaggedInView =
+      flaggedAmount !== undefined &&
+      isUnlimitedAmount(flaggedAmount) &&
+      clearSigned.rows.some(
+        (row) => (row.kind === 'tokenAmount' || row.kind === 'amount') && row.rawValue === flaggedAmount
+      );
     return (
       <div className="flex flex-col gap-2">
+        {allowanceFlag && !flaggedInView && <NotedAllowanceFlag flag={allowanceFlag} />}
         <ClearSignedView display={clearSigned} chainId={chainId} mainnetRpcUrl={mainnetRpcUrl} />
         <details className="text-xs">
           <summary className="text-muted-foreground hover:text-foreground cursor-pointer">Show raw details</summary>
@@ -156,10 +200,15 @@ export const DecodedCalldataView = ({
     );
   }
 
-  const approveShape = isErc20Approve(decoded);
+  // The flag takes the place of an amount or an approved/allowed flag only. If the lookup read the
+  // call with another ABI and that argument is something else, the value stays and the flag goes on top.
+  const flagArg = allowanceFlag ? decoded.params[allowanceFlag.argIndex] : undefined;
+  const flagInPlace = !!flagArg && /^(uint\d*|bool)$/.test(flagArg.type);
+  const flagOnTop = allowanceFlag && !flagInPlace ? allowanceFlag : null;
 
   return (
     <div className="flex flex-col gap-2">
+      {flagOnTop && <NotedAllowanceFlag flag={flagOnTop} />}
       <div className="flex items-center gap-2">
         <span className="text-foreground bg-primary/10 rounded-xs px-2 py-0.5 text-xs font-semibold">
           {decoded.functionName}
@@ -174,7 +223,7 @@ export const DecodedCalldataView = ({
           const identity = param.rawValue ? identities[identityKey(param.rawValue, chainId)] : undefined;
           const resolvedName = identity?.ensName;
           const resolvedAvatar = identity?.ensAvatar;
-          const unlimitedApproval = approveShape && i === 1 && isUnlimitedAmount(param.value);
+          const argFlag = flagInPlace && allowanceFlag?.argIndex === i ? allowanceFlag : null;
           return (
             <div key={i} className="flex flex-col gap-1">
               <div className="flex items-baseline gap-1.5">
@@ -183,11 +232,8 @@ export const DecodedCalldataView = ({
               </div>
               <div className="flex flex-row items-center gap-1">
                 {resolvedAvatar && <IdentityAvatar src={resolvedAvatar} fallback={null} />}
-                {unlimitedApproval ? (
-                  <p className="text-warning flex items-center gap-1.5 font-mono text-xs font-semibold leading-normal">
-                    <TriangleAlert className="size-3.5 flex-none" strokeWidth={2} />
-                    Unlimited
-                  </p>
+                {argFlag ? (
+                  <NotedAllowanceFlag flag={argFlag} />
                 ) : (
                   <p className="text-foreground break-all font-mono text-xs leading-normal">
                     {resolvedName ? `${resolvedName} (${formatAddress(param.rawValue!)})` : param.value}
