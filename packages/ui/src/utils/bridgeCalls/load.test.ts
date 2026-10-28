@@ -178,3 +178,125 @@ describe('given the bridge table loader', () => {
     expect(currentContracts().version).toBe(4);
   });
 });
+
+describe('given a live table that differs from the one compiled into the build', () => {
+  const OTHER = '0x1111111111111111111111111111111111111111';
+  const SOLVER_GONE = BRIDGE_CHAINS[4663].relay!.solvers[1];
+
+  const loaded = async (change: (table: ReturnType<typeof tableAt>) => void) => {
+    const table = tableAt(4);
+    change(table);
+    fetchMock.mockResolvedValue(answer(table));
+    await load('key');
+    return currentContracts();
+  };
+
+  it('when it lacks Across on a chain the build pins, then that chain still reads Across from the build', async () => {
+    const contracts = await loaded((t) => delete t.chains['4663'].across);
+    expect(contracts).toMatchObject({ version: 4, source: 'live' });
+    expect(contracts.chain(4663)?.across).toEqual(BRIDGE_CHAINS[4663].across);
+  });
+
+  it('when it lacks the LiFi diamond, then the diamond of the build stays', async () => {
+    const contracts = await loaded((t) => delete t.chains['4663'].across.lifiDiamond);
+    expect(contracts.chain(4663)?.across?.lifiDiamond).toBe(BRIDGE_CHAINS[4663].across!.lifiDiamond);
+  });
+
+  it('when it carries another SpokePool for a chain, then that one is in use', async () => {
+    const contracts = await loaded((t) => (t.chains['8453'].across.spokePool = OTHER));
+    expect(contracts.chain(8453)?.across?.spokePool).toBe(OTHER);
+    expect(contracts.chain(8453)?.across?.swapRouter).toBe(BRIDGE_CHAINS[8453].across!.swapRouter);
+  });
+
+  it('when it carries another swap router, then the one of the build stays', async () => {
+    const contracts = await loaded((t) => (t.chains['8453'].across.swapRouter = OTHER));
+    expect(contracts.chain(8453)?.across?.swapRouter).toBe(BRIDGE_CHAINS[8453].across!.swapRouter);
+  });
+
+  it('when its solver list lacks one the build lists, then that solver is gone', async () => {
+    const contracts = await loaded((t) => {
+      t.chains['4663'].relay.solvers = t.chains['4663'].relay.solvers.filter((s: string) => s !== SOLVER_GONE);
+    });
+    const solvers = contracts.chain(4663)?.relay?.solvers;
+    expect(solvers).not.toContain(SOLVER_GONE);
+    expect(solvers).toHaveLength(BRIDGE_CHAINS[4663].relay!.solvers.length - 1);
+  });
+
+  it('when it adds Across or Relay to a chain the build pins without one, then that chain still has none', async () => {
+    const contracts = await loaded((t) => {
+      t.chains['100'].across = t.chains['8453'].across;
+      t.chains['421614'].relay = { ...t.chains['84532'].relay, protocolChain: 'arbitrum-sepolia' };
+    });
+    expect(contracts).toMatchObject({ version: 4, source: 'live' });
+    expect(contracts.chain(100)?.across).toBeUndefined();
+    expect(contracts.chain(421614)?.relay).toBeUndefined();
+  });
+
+  it('when it carries another LiFi diamond, then the one of the build stays', async () => {
+    const contracts = await loaded((t) => (t.chains['4663'].across.lifiDiamond = OTHER));
+    expect(contracts.chain(4663)?.across?.lifiDiamond).toBe(BRIDGE_CHAINS[4663].across!.lifiDiamond);
+  });
+
+  it('when it marks a mainnet Relay entry as testnet, then the entry stays mainnet', async () => {
+    const contracts = await loaded((t) => (t.chains['8453'].relay.testnet = true));
+    expect(contracts.chain(8453)?.relay?.testnet).toBeUndefined();
+  });
+
+  it('when it swaps the Relay names of two chains, then each keeps the name of the build', async () => {
+    const contracts = await loaded((t) => {
+      t.chains['8453'].relay.protocolChain = 'arbitrum';
+      t.chains['42161'].relay.protocolChain = 'base';
+    });
+    expect(contracts).toMatchObject({ version: 4, source: 'live' });
+    expect(contracts.relayByProtocolChain('base')?.chainId).toBe(8453);
+    expect(contracts.relayByProtocolChain('arbitrum')?.chainId).toBe(42161);
+  });
+
+  it('when it carries other names, native symbols or tokens, then those of the build stay', async () => {
+    const contracts = await loaded((t) => {
+      t.chains['8453'].name = 'Elsewhere';
+      t.chains['8453'].nativeSymbol = 'XYZ';
+      t.chains['8453'].tokens = { [OTHER]: { symbol: 'USDC', decimals: 6 } };
+    });
+    const { name, nativeSymbol, tokens } = BRIDGE_CHAINS[8453];
+    expect(contracts.chain(8453)).toMatchObject({ name, nativeSymbol, tokens });
+    expect(contracts.chain(8453)?.tokens).not.toHaveProperty(OTHER);
+  });
+
+  it('when it is in use, then storage keeps the body the proxy sent', async () => {
+    const table = tableAt(4);
+    delete table.chains['4663'].across;
+    fetchMock.mockResolvedValue(answer(table));
+    await load('key');
+    expect(JSON.parse(localStorage.getItem(STORAGE_KEY)!)).toEqual(table);
+  });
+
+  it('when it carries a chain the build lacks, then that chain is unknown', async () => {
+    const contracts = await loaded((t) => {
+      const { relay, ...rest } = t.chains['100'];
+      t.chains['999'] = { ...rest, name: 'Elsewhere', relay: { ...relay, protocolChain: 'elsewhere' } };
+    });
+    expect(contracts.chain(999)).toBeUndefined();
+  });
+
+  it('when its override makes an address hold two roles, then the build stays and the console says why', async () => {
+    const contracts = await loaded((t) => {
+      delete t.chains['8453'].across.swapRouter;
+      t.chains['8453'].across.spokePool = BRIDGE_CHAINS[8453].across!.swapRouter;
+    });
+    expect(contracts).toMatchObject({ version: 3, source: 'snapshot' });
+    expect(console.warn).toHaveBeenCalledWith(expect.stringContaining('an address holds two roles'));
+    expect(localStorage.getItem(STORAGE_KEY)).toBeNull();
+  });
+
+  it('when it sits in storage, then it is merged with the build on read', () => {
+    const table = tableAt(4);
+    delete table.chains['4663'].across.lifiDiamond;
+    table.chains['8453'].across.spokePool = OTHER;
+    localStorage.setItem(STORAGE_KEY, JSON.stringify(table));
+    const contracts = currentContracts();
+    expect(contracts).toMatchObject({ version: 4, source: 'live' });
+    expect(contracts.chain(4663)?.across?.lifiDiamond).toBe(BRIDGE_CHAINS[4663].across!.lifiDiamond);
+    expect(contracts.chain(8453)?.across?.spokePool).toBe(OTHER);
+  });
+});

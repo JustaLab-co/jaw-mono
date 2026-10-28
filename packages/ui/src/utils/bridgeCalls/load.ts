@@ -1,6 +1,7 @@
 import { buildHandleJawRpcUrl, JAW_RPC_URL } from '@jaw.id/core';
-import { parse } from './parse';
-import { snapshotContracts, type BridgeContracts } from './table';
+import { overlay } from './overlay';
+import { parse, tableProblem } from './parse';
+import { BridgeContracts, snapshotContracts } from './table';
 
 const TTL_MS = 60 * 60 * 1000;
 const TIMEOUT_MS = 15_000;
@@ -36,8 +37,16 @@ function accept(body: unknown, fetchedAt?: number): boolean {
     console.warn(`Bridge contracts rejected: ${result.reason}`);
     return false;
   }
-  if (result.contracts.version < snapshotContracts().version) return false;
-  held = { contracts: result.contracts, fetchedAt };
+  const { version, chains } = result.contracts;
+  const snapshot = snapshotContracts();
+  if (version < snapshot.version) return false;
+  const merged = overlay(snapshot.chains, chains);
+  const problem = tableProblem(merged);
+  if (problem) {
+    console.warn(`Bridge contracts rejected: ${problem}`);
+    return false;
+  }
+  held = { contracts: new BridgeContracts({ version, chains: merged }), fetchedAt };
   return true;
 }
 
