@@ -1243,6 +1243,9 @@ describe('given the LiFi swap of a destination program', () => {
 describe('given a destination swap that pays the JAW app fee in the bought token', () => {
   const USDG = getAddress('0x5fc5360d0400a0fd4f2af552add042d716f1d168');
   const LIFI_MINIMUM = 432_126_270_703_165_309n;
+  // amountOutMinimum of the quote's v4 swap.
+  const ROUTER_FLOOR = 12_833_914_145_227_777n;
+  const OTHER_FEE_RECIPIENT = getAddress('0x2222222222222222222222222222222222222222');
   const swapFee = { chainId: 4663, amount: 32_084_785_363_069n, token: { address: NVDA, known: false } };
   const lifiFee = { chainId: 4663, amount: 1_080_315_676_757_913n, token: { address: NVDA, known: false } };
   const feeRead = (amount: typeof swapFee) => ({ amount, recipient: FEE_RECIPIENT, jaw: true });
@@ -1259,16 +1262,13 @@ describe('given a destination swap that pays the JAW app fee in the bought token
       });
     });
 
-    it('then a fee larger than the bridged amount still reads, since it is in the bought token', () => {
-      const big = withProgram(call, (p) => (p.calls[2] = transfer(NVDA, FEE_RECIPIENT, 2n ** 100n)));
-      expect(readAcrossCall(contracts, big)).toMatchObject({ kind: 'deposit', fee: { jaw: true } });
-    });
-
     const mutants: [string, (p: Program) => void][] = [
       ['two fee transfers', (p) => p.calls.splice(3, 0, { ...p.calls[2] })],
       ['a fee transfer of the bridged token', (p) => void (p.calls[2] = transfer(USDG, FEE_RECIPIENT, 1n))],
       ['a fee transfer after the drain of the bought token', (p) => p.calls.splice(3, 0, p.calls.splice(2, 1)[0])],
       ['a fee transfer with value', (p) => void (p.calls[2].value = 1n)],
+      ['a fee to an address other than JAW', (p) => void (p.calls[2] = transfer(NVDA, OTHER_FEE_RECIPIENT, 1n))],
+      ['a fee of the whole router floor', (p) => void (p.calls[2] = transfer(NVDA, FEE_RECIPIENT, ROUTER_FLOOR))],
       ['a fee transfer that is not canonical', (p) => void (p.calls[2].callData = `${p.calls[2].callData}00`)],
     ];
     it.each(mutants)('then %s is unreadable', (_, edit) => {
