@@ -17,6 +17,8 @@ const h = vi.hoisted(() => ({
   ownerBlocked: null as string | null,
   unfunded: null as string | null,
   grantError: null as Error | null,
+  grantedChecker: undefined as string | undefined,
+  revokeError: null as Error | null,
 }));
 
 vi.mock('./config.js', () => ({ loadConfig: () => h.config }));
@@ -49,12 +51,15 @@ vi.mock('./bridge-singleton.js', () => ({
             start: 1_756_000_000,
             end: 1_756_604_800,
             salt: '0xabc',
-            calls: [{ target: USDC, selector: '0xa9059cbb' }],
+            calls: [
+              { target: USDC, selector: '0xa9059cbb', ...(h.grantedChecker ? { checker: h.grantedChecker } : {}) },
+            ],
             spends: [{ token: USDC, allowance: '0x989680', unit: 'day', multiplier: 1 }],
             permissionId: '0xnew',
             chainId: '0x14a34',
           };
         }
+        if (method === 'wallet_revokePermissions' && h.revokeError) throw h.revokeError;
         return {};
       },
       close: () => {
@@ -112,6 +117,8 @@ beforeEach(() => {
   h.ownerBlocked = null;
   h.unfunded = null;
   h.grantError = null;
+  h.grantedChecker = undefined;
+  h.revokeError = null;
   stdout = vi.spyOn(process.stdout, 'write');
 });
 
@@ -279,5 +286,47 @@ describe('grantSession', () => {
     await expect(grantSession(input({ apiKey: undefined }))).rejects.toThrow();
 
     expect(stdout).not.toHaveBeenCalled();
+  });
+});
+
+// A wallet from before checkers grants a checked call with the zero checker: a wider rule than the
+// one asked for, which must not become the session.
+describe('grantSession and a dropped checker', () => {
+  const CHECKER = '0x398b9d939E7E616E03eA99601c835C920621B2ca';
+  const checked = parsePermissionsConfig({
+    calls: [{ target: USDC, functionSignature: 'transfer(address,uint256)', checker: CHECKER }],
+  });
+  const revokes = () => h.requests.filter((r) => r.method === 'wallet_revokePermissions');
+
+  it('saves the session when the checker came back', async () => {
+    h.grantedChecker = CHECKER;
+
+    await grantSession(input({ permissions: checked }));
+
+    expect(revokes()).toEqual([]);
+    expect(h.saved?.permissionId).toBe('0xnew');
+  });
+
+  it('revokes the new permission and saves nothing when the checker did not come back', async () => {
+    const failure = await grantSession(input({ permissions: checked })).catch((err: Error) => err);
+
+    expect(failure).toBeInstanceOf(SessionGrantRefusal);
+    expect((failure as Error).message).toContain(CHECKER);
+    expect((failure as Error).message).toMatch(/revoked/);
+    expect(revokes()).toEqual([{ method: 'wallet_revokePermissions', params: [{ id: '0xnew' }] }]);
+    expect(h.saved).toBeNull();
+    expect(h.savedKey).toBeNull();
+    expect(h.closes).toBe(1);
+  });
+
+  it('saves it for `jaw session revoke` to reach, and still fails, when that revoke fails', async () => {
+    h.revokeError = new Error('user rejected');
+
+    const failure = await grantSession(input({ permissions: checked })).catch((err: Error) => err);
+
+    expect(failure).toBeInstanceOf(SessionGrantRefusal);
+    expect((failure as Error).message).toContain('jaw session revoke');
+    expect((failure as Error).message).toContain('user rejected');
+    expect(h.saved?.permissionId).toBe('0xnew');
   });
 });

@@ -1,6 +1,27 @@
 import { decodeErrorResult, decodeEventLog, isHex, parseAbi, toFunctionSelector, type Address, type Hex } from 'viem';
 import { entryPoint08Abi, entryPoint08Address } from 'viem/account-abstraction';
-import type { Refusal } from './fit';
+
+/** What the permission manager refused a session key's userOp for, read from its revert. */
+export type ManagerRefusal =
+  | { reason: 'call-not-allowed'; target: Address; selector: Hex }
+  // The rule allows the call; the checker on it refused the call's arguments.
+  | CheckerRejected
+  | { reason: 'over-limit'; onChain: true }
+  | { reason: 'expired' }
+  | { reason: 'no-grant' };
+
+type CheckerRejected = { reason: 'checker-rejected'; target: Address; selector: Hex; checker: Address };
+
+/**
+ * What to do about a checker's refusal, said the same way by every host that sends as a session
+ * key. The call is allowed, so the fix is in its arguments and a wider permission would not help.
+ */
+export function checkerRejectedDetail(refused: CheckerRejected, permissionId: string): string {
+  return (
+    `Change the call's arguments, never the permission: permission ${permissionId} allows calling ` +
+    `${refused.selector} on ${refused.target}, but its checker ${refused.checker} refused this call's arguments.`
+  );
+}
 
 const SIGNATURES = [
   'error JustaPermissionManager_UnauthorizedCall(address target, bytes4 selector)',
@@ -20,7 +41,7 @@ const SELECTORS = SIGNATURES.map((s) =>
 // Revert data past this is not a manager error the bundler or EntryPoint reported.
 const MAX_SCAN = 8_192;
 
-function refusalOf(data: Hex): Refusal | undefined {
+function refusalOf(data: Hex): ManagerRefusal | undefined {
   let decoded;
   try {
     decoded = decodeErrorResult({ abi: MANAGER_ERRORS, data });
@@ -29,8 +50,14 @@ function refusalOf(data: Hex): Refusal | undefined {
   }
   switch (decoded.errorName) {
     case 'JustaPermissionManager_UnauthorizedCall':
-    case 'JustaPermissionManager_CheckerRejectedCall':
       return { reason: 'call-not-allowed', target: decoded.args[0], selector: decoded.args[1] };
+    case 'JustaPermissionManager_CheckerRejectedCall':
+      return {
+        reason: 'checker-rejected',
+        target: decoded.args[0],
+        selector: decoded.args[1],
+        checker: decoded.args[2],
+      };
     case 'JustaPermissionManager_ExceededSpendLimit':
     case 'JustaPermissionManager_NoSpendPermissions':
     case 'JustaPermissionManager_SpendValueOverflow':
@@ -44,7 +71,7 @@ function refusalOf(data: Hex): Refusal | undefined {
 }
 
 // The account wraps what its call reverted with, so the manager's error need not start the data.
-function refusalWithin(blob: string): Refusal | undefined {
+function refusalWithin(blob: string): ManagerRefusal | undefined {
   const hex = blob.slice(2, 2 + MAX_SCAN).toLowerCase();
   for (const selector of SELECTORS) {
     for (let at = hex.indexOf(selector); at !== -1; at = hex.indexOf(selector, at + 1)) {
@@ -86,7 +113,7 @@ export function refusedInSimulation(failure: unknown): boolean {
   return chainOf(failure).some((e) => (e as { code?: unknown }).code === -32521);
 }
 
-export function refusalOfFailure(failure: unknown): Refusal | undefined {
+export function refusalOfFailure(failure: unknown): ManagerRefusal | undefined {
   for (const e of chainOf(failure)) {
     const data = revertDataOf(e);
     const refused = data && refusalWithin(data);
@@ -99,7 +126,7 @@ export function refusalOfFailure(failure: unknown): Refusal | undefined {
 export function refusalOfLogs(
   logs: { address: Address; data: Hex; topics: Hex[] }[],
   userOpHash: Hex
-): Refusal | undefined {
+): ManagerRefusal | undefined {
   for (const log of logs) {
     if (log.address.toLowerCase() !== entryPoint08Address.toLowerCase()) continue;
     let args: { userOpHash: Hex; revertReason: Hex };

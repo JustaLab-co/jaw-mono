@@ -139,6 +139,37 @@ describe('jaw_session_disconnect', () => {
     ]);
   });
 
+  /**
+   * A revoke names the permission by its whole struct, checker included, so it has to rebuild the
+   * checker the grant was approved with: the stored one, or zero for a row stored before checkers.
+   */
+  it.each([
+    ['a row stored before checkers', undefined, '0x0000000000000000000000000000000000000000'],
+    [
+      'a row stored with a checker',
+      '0x398b9d939E7E616E03eA99601c835C920621B2ca',
+      '0x398b9d939E7E616E03eA99601c835C920621B2ca',
+    ],
+  ])('revokes %s with the checker it was approved with', async (_name, stored, revokedWith) => {
+    const { tenant, permissionId, permission } = await budgetConnection(async () => approved);
+    const calls = permission.calls.map(({ target, selector }) => ({
+      target,
+      selector,
+      ...(stored ? { checker: stored } : {}),
+    }));
+    await getDb()
+      .update(grants)
+      .set({ permission: { ...permission, calls } })
+      .where(eq(grants.permissionId, permissionId));
+    const { deps, sent } = fakes();
+
+    await disconnect(tenant, deps);
+
+    const call = decodeFunctionData({ abi: PERMISSION_MANAGER_ABI, data: sent[0][0].data });
+    expect(call.functionName).toBe('revokeAsSpender');
+    expect(call.functionName === 'revokeAsSpender' && call.args[0].calls[0].checker).toBe(revokedWith);
+  });
+
   it('given two live budgets, revokes both in the one batch that returns the float', async () => {
     const { c, tenant, permissionId, permission } = await budgetConnection(async () => approved);
     const [first] = await getDb().select().from(grants).where(eq(grants.permissionId, permissionId));

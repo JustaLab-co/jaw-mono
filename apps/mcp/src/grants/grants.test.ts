@@ -20,6 +20,7 @@ import {
   walletAnswers,
   walletsSettled,
   offlineSession,
+  noCodeRead,
 } from '@/connections/testkit';
 import type { DisconnectDeps } from '@/connections/disconnect';
 import { spends } from '@/connections/scopes';
@@ -89,6 +90,7 @@ async function ask(
   const result = await grantPermissions(t, opts.input ?? { x402Budget: { perDay: opts.perDay ?? '1' } }, {
     openWallet: fakeWallet(answer, asked),
     readPermission: opts.read ?? approvedOnChain,
+    codeAt: noCodeRead,
     session: opts.session ?? offlineSession,
   });
   await walletsSettled();
@@ -128,6 +130,7 @@ describe('budget grants', () => {
         },
         session: offlineSession,
         readPermission: approvedOnChain,
+        codeAt: noCodeRead,
       }
     );
     await walletsSettled();
@@ -332,7 +335,7 @@ describe('given a connection that approves a second budget', () => {
     await grantPermissions(
       t,
       { x402Budget: { perDay: '0.5' } },
-      { openWallet, readPermission: approvedOnChain, session: { ...deps, sender } }
+      { openWallet, readPermission: approvedOnChain, codeAt: noCodeRead, session: { ...deps, sender } }
     );
     await walletsSettled();
 
@@ -399,6 +402,7 @@ describe('given a replaced budget left approved on chain', () => {
     retryReplacedRevokes(server, {
       openWallet: fakeWallet(walletAnswers(owner())),
       readPermission: approvedOnChain,
+      codeAt: noCodeRead,
       session,
     });
     (server.registerTool as (...args: unknown[]) => unknown)('jaw_any', { description: 'any' }, async () => 'answered');
@@ -502,6 +506,7 @@ describe('jaw_grant_permissions', () => {
         },
         session: offlineSession,
         readPermission: approvedOnChain,
+        codeAt: noCodeRead,
       }
     );
     await walletsSettled();
@@ -524,7 +529,7 @@ describe('jaw_grant_permissions', () => {
     };
     let until: Date | undefined;
     const openWallet: OpenWallet = async (_chainId, at) => ((until = at), waiting);
-    const deps = { openWallet, session: offlineSession, readPermission: approvedOnChain };
+    const deps = { openWallet, session: offlineSession, readPermission: approvedOnChain, codeAt: noCodeRead };
 
     const first = await grantPermissions(t, { x402Budget: { perDay: '1' } }, deps);
     const second = await grantPermissions(t, { x402Budget: { perDay: '1' } }, deps);
@@ -561,6 +566,7 @@ describe('jaw_grant_permissions', () => {
         },
         session: offlineSession,
         readPermission: approvedOnChain,
+        codeAt: noCodeRead,
       }
     );
     expect('isError' in result && result.isError).toBe(true);
@@ -579,6 +585,7 @@ describe('jaw_grant_permissions', () => {
         },
         session: offlineSession,
         readPermission: approvedOnChain,
+        codeAt: noCodeRead,
       }
     );
     expect('isError' in result && result.isError).toBe(true);
@@ -600,6 +607,7 @@ describe('jaw_grant_permissions', () => {
         },
         session: offlineSession,
         readPermission: approvedOnChain,
+        codeAt: noCodeRead,
       }
     );
     await walletsSettled();
@@ -635,6 +643,7 @@ describe('jaw_grant_permissions', () => {
         }),
         session: offlineSession,
         readPermission: approvedOnChain,
+        codeAt: noCodeRead,
       }
     );
     await endConnection(t.connectionId, t.account);
@@ -706,6 +715,64 @@ describe('the permission of a budget', () => {
     expect(await checkGranted(t.chainId, grant, 'x402-budget', answer, onChain(state))).toBe(code);
   });
 
+  /**
+   * A checker is part of the permission hash, so an answer that drops the one asked for, or names
+   * another, is a different permission from the one requested.
+   */
+  describe('a grant that asks for a call checker', () => {
+    const CHECKER = '0x398b9d939E7E616E03eA99601c835C920621B2ca';
+    type Answer = { calls: Array<Record<string, unknown>> };
+    const askChecked = async () => {
+      const { t, signer } = await connected();
+      const { grant } = await ask(t, signer);
+      const checked = {
+        ...grant,
+        permissions: {
+          ...grant.permissions,
+          calls: grant.permissions.calls.map((call) => ({ ...call, checker: CHECKER as `0x${string}` })),
+        },
+      };
+      const answer = (await walletAnswers(signer)('wallet_grantPermissions', [checked])) as Answer;
+      return { t, grant, checked, answer };
+    };
+    const withChecker = (answer: Answer, checker: string | undefined) => ({
+      ...answer,
+      calls: answer.calls.map((call) => {
+        const rest = { ...call };
+        delete rest.checker;
+        return checker ? { ...rest, checker } : rest;
+      }),
+    });
+
+    it('accepts the answer that carries it', async () => {
+      const { t, checked, answer } = await askChecked();
+      // The recorded permission is what disconnect and revoke rebuild the hash from.
+      expect(await checkGranted(t.chainId, checked, 'x402-budget', answer, approvedOnChain)).toMatchObject({
+        allowance: checked.permissions.spends[0].allowance,
+        permission: { calls: [expect.objectContaining({ checker: expect.stringMatching(new RegExp(CHECKER, 'i')) })] },
+      });
+    });
+
+    it.each([
+      ['drops it', undefined],
+      ['names another', '0x1a5EAd5979Ff0d651b2968481a091713510EcF66'],
+    ])('refuses an answer that %s', async (_name, other) => {
+      const { t, checked, answer } = await askChecked();
+      expect(await checkGranted(t.chainId, checked, 'x402-budget', withChecker(answer, other), approvedOnChain)).toBe(
+        'grant_mismatch'
+      );
+    });
+
+    // A wallet with checker support names the zero checker on every call that asked for none.
+    it('reads the zero checker on an answer to a grant that asked for none as no checker', async () => {
+      const { t, grant, answer } = await askChecked();
+      const zero = withChecker(answer, '0x0000000000000000000000000000000000000000');
+      expect(await checkGranted(t.chainId, grant, 'x402-budget', zero, approvedOnChain)).toMatchObject({
+        allowance: grant.permissions.spends[0].allowance,
+      });
+    });
+  });
+
   it('recording the same budget twice is not an error', async () => {
     const { t } = await connected();
     const g = await newGrantFrom(t.connectionId);
@@ -772,6 +839,7 @@ describe('the permission of a budget', () => {
       },
       session: offlineSession,
       readPermission: approvedOnChain,
+      codeAt: noCodeRead,
     });
 
     expect('isError' in result && result.isError).toBe(true);
@@ -874,6 +942,7 @@ describe.skipIf(!TEST_PG_URL)('on Postgres, given a budget landing while its con
         openWallet: fakeWallet(walletAnswers(signer)),
         session: offlineSession,
         readPermission: approvedOnChain,
+        codeAt: noCodeRead,
       }
     );
     await new Promise((r) => setTimeout(r, 250));

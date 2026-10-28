@@ -1,11 +1,12 @@
 # Hosted session execute
 
-`jaw_session_execute` in `apps/mcp` sends up to 10 calls as the connection's session key under a custom grant the owner approved with `jaw_grant_permissions`. Nothing is asked of the owner. Before any userOp, `fit` in `src/grants/fit.ts` checks each call against the grant and reads the chain for liveness and what each spend limit has left. A refusal starts with its name: `call-not-allowed`, `over-limit`, `expired` or `no-grant`.
+`jaw_session_execute` in `apps/mcp` sends up to 10 calls as the connection's session key under a custom grant the owner approved with `jaw_grant_permissions`. Nothing is asked of the owner. Before any userOp, `fit` in `src/grants/fit.ts` checks each call against the grant and reads the chain for liveness and what each spend limit has left. A refusal starts with its name: `call-not-allowed`, `checker-rejected`, `over-limit`, `expired` or `no-grant`.
 
 ## Sub-features
 
 - `execute-happy`: a USDC transfer inside a custom grant lands, and the account's USDC balance drops by the amount. No wallet link opens.
 - `not-allowed`: a call to a target or function the grant does not name returns `call-not-allowed:` and no userOp hash.
+- `checker-rejected`: a call the grant allows, on a rule whose checker refuses its arguments, returns `checker-rejected:` naming the checker, and nothing is sent. `fit` cannot see a checker, so the refusal comes from the bundler's estimate as `CheckerRejectedCall`.
 - `over-limit`: a batch past what the period has left returns `over-limit:` before sending, naming the token and what is left.
 - `expired`: a grant past its end returns `expired:`.
 - `no-grant`: an unknown `permissionId`, one revoked, or one on another chain returns `no-grant:`.
@@ -17,7 +18,7 @@
 - `idempotent`: the same `idempotencyKey` and calls again returns the first run's `userOpHash` and sends no second userOp; the same key with other calls returns `idempotency_conflict:`.
 - `pay-unaffected`: an x402 payment after an execute still pays from the x402 budget, and the custom grant's counter does not move.
 - `lost-answer`: the bundler takes the userOp and its answer never comes back. The reply says it may have been sent and names the userOp hash, the `sends` row stays `open` with that hash in `calls_id` before the send, and the reconciler settles it `landed` from that hash alone, never from another operation of the sender. The same key then replays the landed run.
-- `revert-mapped`: a permission manager revert after `fit` passed (`UnauthorizedCall`, `ExceededSpendLimit`, `AfterPermissionEnd`) comes back under the same names. Unit tests cover it (`session-execute.test.ts`), since a live drive cannot make the chain disagree with `fit`.
+- `revert-mapped`: a permission manager revert after `fit` passed (`UnauthorizedCall`, `CheckerRejectedCall`, `ExceededSpendLimit`, `AfterPermissionEnd`) comes back under the same names, `CheckerRejectedCall` as `checker-rejected`. Unit tests cover it (`session-execute.test.ts`), since a live drive cannot make the chain disagree with `fit`.
 
 ## How to get to it (user POV)
 
@@ -33,6 +34,7 @@ Preconditions: baseline preconditions of this map; Docker running; `JAW_KEYS_URL
 Set up (Owner lane): `grant '{"calls":[{"target":"0x036CbD53842c5426634e7929541eC2318f3dCF7e","functionSignature":"transfer(address,uint256)"}],"spends":[{"token":"0x036CbD53842c5426634e7929541eC2318f3dCF7e","allowance":"20000","unit":"day"}]}'`, then the owner approves the link. `connections` shows the new `permissionId` as `custom`. The transfer calldata for 0.01 USDC to `<to>` is `cast calldata 'transfer(address,uint256)' <to> 10000`.
 
 - execute-happy: `cast call` USDC `balanceOf(<account>)`, then `execute <id> '[{"to":"0x036C...CF7e","data":"<0.01 USDC to 0x...dEaD>"}]'`, then read the balance again. Pass: `status` `landed` with a `txHash` that Base Sepolia shows, a balance 10000 lower, and no wallet link.
+- checker-rejected: on Base Sepolia, `CallCheckerMock` at `0x398b9d939E7E616E03eA99601c835C920621B2ca` approves every call and the one at `0x1a5EAd5979Ff0d651b2968481a091713510EcF66` refuses every call. Grant the set-up call with `"checker":"0x1a5E...cF66"`, approve it, then run execute-happy's call under it. Pass: `checker-rejected:` naming `0x1a5E...cF66`, no `userOpHash`, the balance unchanged. The same under the approving mock lands as in execute-happy. A wallet on an SDK without checker support answers without the checker, which the server refuses as `grant_mismatch`, so the owner's wallet has to carry it (`JAW_KEYS_URL` at a keys build with checkers).
 - not-allowed: the same call with `to` set to WETH `0x4200000000000000000000000000000000000006`. Pass: `call-not-allowed:`, no `userOpHash`, no `sends` row.
 - over-limit: an amount past what is left today, 20001 on a fresh grant. Pass: `over-limit:` within 1500 ms, no `sends` row.
 - expired: grant with `"expiresAt"` 31 minutes out, approve it, wait for its end, execute. Pass: `expired:`.

@@ -10,7 +10,8 @@
 - `grant-clamp`: an `expiresAt` later than the connection's end asks the wallet for the connection's end, and the result's `expiresAt` says so.
 - `grant-past`: an `expiresAt` already past is refused as `expiry_in_past`, and one that ends inside the 30 minutes the owner has to approve as `expiry_too_soon`, before any link opens.
 - `grant-target`: a call to the account itself, the permission manager, an EntryPoint or the any-contract wildcard `0x3232...3232` is refused as `call_target_refused` before any link opens.
-- `grant-mismatch`: a wallet answer that differs from the request in any call or spend records no row.
+- `grant-checker`: a custom call may name a `checker`, a contract the permission manager asks to approve each call to that function. The wallet is asked for it, the link reply's `summary` names it as `checked by <checker>`, and the row's `permission` keeps it. A checker that is the account or the permission manager is refused as `checker_refused`, and one with no code on the chain as `checker_has_no_code`, before any link opens. The zero address is no checker.
+- `grant-mismatch`: a wallet answer that differs from the request in any call or spend, a checker included, records no row.
 - `grant-input`: the preset together with calls, spends or an expiry, spends without calls, a malformed function signature, a period the wallet does not take, an allowance of 2^160 or more and a yearly multiplier above 5461 are refused with no link.
 - `grant-cap`: a connection holding 5 live grants of either kind is refused before a link opens. A new budget does not count the current budget it replaces. A replaced budget still approved on chain counts, so the server retries its revoke before refusing.
 - `grant-replace`: an approved `x402Budget` replaces the connection's current budget: the older row gets `replaced_at`, and the server revokes it on chain with `revokeAsSpender` from the payer, without sweeping the float, then sets `revoked_at`. A revoke it cannot send leaves the row replaced and unrevoked, listed by `jaw_connections` as `replaced`, and the connection's next tool call retries it in the background, at most every five minutes. A custom grant replaces nothing.
@@ -21,7 +22,7 @@
 
 ## How to get to it (user POV)
 
-- An MCP client on the hosted server with scope `x402:pay`. `jaw_grant_permissions` takes either `x402Budget: { perDay }` alone, with `perDay` USDC as a decimal, or `calls` (1 to 10 `{ target, functionSignature }`), optional `spends` (up to 10 `{ token, allowance, unit, multiplier? }`, `allowance` in base units, `unit` one of `minute`, `hour`, `day`, `week`, `month`, `year`, `forever`) and optional `expiresAt` (ISO 8601).
+- An MCP client on the hosted server with scope `x402:pay`. `jaw_grant_permissions` takes either `x402Budget: { perDay }` alone, with `perDay` USDC as a decimal, or `calls` (1 to 10 `{ target, functionSignature, checker? }`), optional `spends` (up to 10 `{ token, allowance, unit, multiplier? }`, `allowance` in base units, `unit` one of `minute`, `hour`, `day`, `week`, `month`, `year`, `forever`) and optional `expiresAt` (ISO 8601).
 - The result holds `id`, `state`, `url`, the wallet link, `approveBy`, `expiresAt`, when the grant would end, and a `summary` for the person. `grant-status <id> [wait]` follows it.
 - The owner opens the `url` within 30 minutes, and keys.jaw.id shows the permission: each call, each spend limit with its period, and the expiry.
 - By hand: `node tools/verify/hosted-client.mjs "$MCP_PUBLIC_URL"`, then `budget <perDay>` for the preset or `grant '<json>'` for any input.

@@ -1,3 +1,6 @@
+import { zeroAddress } from 'viem';
+import { isHexAddress, type CallRule } from '../grants/call-checker.js';
+
 /**
  * How the session account address is derived, as it appears on disk.
  *
@@ -40,11 +43,14 @@ export interface GrantedPermission {
   end: number;
   /** Hex, as the grant returned it. Widened to a bigint at encode time. */
   salt: string;
-  calls: Array<{ target: string; selector: string }>;
+  /**
+   * `checker` is part of the permission hash. A record written before checkers carries none, and
+   * every such permission was approved with the zero checker, so an absent one reads as zero.
+   */
+  calls: CallRule[];
   spends: Array<{ token: string; allowance: string; unit: string; multiplier: number }>;
 }
 
-const ADDRESS_RE = /^0x[0-9a-fA-F]{40}$/;
 const SELECTOR_RE = /^0x[0-9a-fA-F]{8}$/;
 const HEX_RE = /^0x[0-9a-fA-F]+$/;
 /** Decimal or hex, matching what the SDK hands to `BigInt()`. */
@@ -75,8 +81,8 @@ export function parseGrantedPermission(raw: unknown): GrantedPermission | undefi
   const r = raw as Record<string, unknown>;
 
   const { account, spender, salt } = r;
-  if (typeof account !== 'string' || !ADDRESS_RE.test(account)) return undefined;
-  if (typeof spender !== 'string' || !ADDRESS_RE.test(spender)) return undefined;
+  if (!isHexAddress(account)) return undefined;
+  if (!isHexAddress(spender)) return undefined;
   if (typeof salt !== 'string' || !HEX_RE.test(salt)) return undefined;
   if (!isPositiveInt(r.start) || !isPositiveInt(r.end)) return undefined;
 
@@ -84,12 +90,14 @@ export function parseGrantedPermission(raw: unknown): GrantedPermission | undefi
   const calls: GrantedPermission['calls'] = [];
   for (const entry of r.calls) {
     if (typeof entry !== 'object' || entry === null) return undefined;
-    const { target, selector } = entry as Record<string, unknown>;
-    if (typeof target !== 'string' || !ADDRESS_RE.test(target)) return undefined;
+    const { target, selector, checker = zeroAddress } = entry as Record<string, unknown>;
+    if (!isHexAddress(target)) return undefined;
     // The response builds the selector from the signature, so an entry without
     // one cannot be reconstructed: the signature it came from is not returned.
     if (typeof selector !== 'string' || !SELECTOR_RE.test(selector)) return undefined;
-    calls.push({ target, selector });
+    // A response from before checkers names none, and its permission was approved with the zero one.
+    if (!isHexAddress(checker)) return undefined;
+    calls.push({ target, selector, checker });
   }
 
   if (!Array.isArray(r.spends)) return undefined;
@@ -97,7 +105,7 @@ export function parseGrantedPermission(raw: unknown): GrantedPermission | undefi
   for (const entry of r.spends) {
     if (typeof entry !== 'object' || entry === null) return undefined;
     const { token, allowance, unit, multiplier } = entry as Record<string, unknown>;
-    if (typeof token !== 'string' || !ADDRESS_RE.test(token)) return undefined;
+    if (!isHexAddress(token)) return undefined;
     if (typeof allowance !== 'string' || !ALLOWANCE_RE.test(allowance)) return undefined;
     if (typeof unit !== 'string' || !SPEND_UNITS.has(unit)) return undefined;
     // `multiplier` is a uint16 on chain and defaults to 1 in the grant, but the

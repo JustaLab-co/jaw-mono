@@ -17,6 +17,7 @@ import {
   setTestEnv,
   walletAnswers,
   walletsSettled,
+  noCodeRead,
 } from '@/connections/testkit';
 import { getDb } from '@/db/client';
 import { connections, grants, permissionRequests } from '@/db/schema';
@@ -356,7 +357,12 @@ describe('a grant request whose server restarted', () => {
   it('given the page is still open, when the agent asks again, then it waits on the same link, resumes it, and the grant the owner approves is recorded', async () => {
     const { signer, t } = await connected();
     const owned = deciding(walletAnswers(signer));
-    const deps = { openWallet: stallsAfter(1).openWallet, readPermission: approvedOnChain, session: offlineSession };
+    const deps = {
+      openWallet: stallsAfter(1).openWallet,
+      readPermission: approvedOnChain,
+      codeAt: noCodeRead,
+      session: offlineSession,
+    };
     await grantPermissions(t, CUSTOM, deps);
     const [row] = await rowsOf(t);
     const page = await replayingPage(row.walletUrl, owned.answer);
@@ -378,6 +384,43 @@ describe('a grant request whose server restarted', () => {
     expect(page.asked()).toBe(1);
   });
 
+  // The stored request is all a resumed link has: a checker it lost would ask the wallet for a wider
+  // grant, and the answer would be checked against that same wider request and accepted.
+  it('given the request names a call checker, when the server rejoins, then the wallet is asked for it again and the recorded grant keeps it', async () => {
+    const CHECKER = '0x398b9d939E7E616E03eA99601c835C920621B2ca';
+    const { signer, t } = await connected();
+    const asked: unknown[] = [];
+    const owned = deciding(async (method, params) => {
+      if (method === 'wallet_grantPermissions') asked.push(params[0]);
+      return walletAnswers(signer)(method, params);
+    });
+    const deps = {
+      openWallet: stallsAfter(1).openWallet,
+      readPermission: approvedOnChain,
+      codeAt: async () => '0x6080' as Hex,
+      session: offlineSession,
+    };
+    const checked = { calls: [{ ...CUSTOM.calls[0], checker: CHECKER }] };
+    await grantPermissions(t, checked, deps);
+    const [row] = await rowsOf(t);
+    const page = await replayingPage(row.walletUrl, owned.answer);
+    await vi.waitFor(() => expect(page.ids).toHaveLength(1));
+    await lapse(row.id);
+
+    await grantPermissions(t, checked, deps);
+    await vi.waitFor(() => expect(page.ids).toHaveLength(2));
+    owned.decide();
+
+    const done = await settled(row.id);
+    expect(done.state).toBe('approved');
+    expect(asked.length).toBeGreaterThan(0);
+    for (const request of asked) {
+      expect((request as GrantRequest).permissions.calls[0].checker).toBe(CHECKER);
+    }
+    const [recorded] = await getDb().select().from(grants).where(eq(grants.permissionId, done.permissionId!));
+    expect((recorded.permission as GrantedPermission).calls[0].checker?.toLowerCase()).toBe(CHECKER.toLowerCase());
+  });
+
   it('given the grant the owner approved is already recorded and fills the connection, when the server rejoins, then the row ends approved', async () => {
     const { signer, t } = await connected();
     let answered: Record<string, unknown> | undefined;
@@ -385,6 +428,7 @@ describe('a grant request whose server restarted', () => {
     await grantPermissions(t, CUSTOM, {
       openWallet: stallsAfter(1).openWallet,
       readPermission: approvedOnChain,
+      codeAt: noCodeRead,
       session: offlineSession,
     });
     const [row] = await rowsOf(t);

@@ -10,6 +10,7 @@ import {
   walletAnswers,
   walletsSettled,
   offlineSession,
+  noCodeRead,
 } from '@/connections/testkit';
 import { x402Budget } from '@/grants/store';
 import { grantPermissions } from '@/tools/grant-permissions';
@@ -50,7 +51,7 @@ async function approve(c: Awaited<ReturnType<typeof connect>>, perDay: string) {
   await grantPermissions(
     t,
     { x402Budget: { perDay } },
-    { openWallet: wallet, session: offlineSession, readPermission: approvedOnChain }
+    { codeAt: noCodeRead, openWallet: wallet, session: offlineSession, readPermission: approvedOnChain }
   );
   await walletsSettled();
   const grant = (await x402Budget(t.connectionId))!;

@@ -1,4 +1,5 @@
-import { parseAbi, zeroAddress, ContractFunctionRevertedError, BaseError } from 'viem';
+import { parseAbi, ContractFunctionRevertedError, BaseError } from 'viem';
+import { checkerOf } from '../grants/call-checker.js';
 import type { GrantedPermission } from '../session/session-config.js';
 import type { ChainClients } from '../ports.js';
 
@@ -89,12 +90,10 @@ function toContractSpendLimit(spend: GrantedPermission['spends'][number]): Contr
  * The stored permission in the shape the contract hashes, or null when it
  * cannot be rebuilt.
  *
- * `checker` is filled with the zero address because the grant response does not
- * carry one and `apiPermissionsToPermission` in the SDK always sets it that
- * way. The day a call checker is actually used that stops being true, and the
- * struct built here hashes to a permission that does not exist. Nothing here
- * can detect that on its own, which is why every caller goes through
- * `readPermissionState` and its hash check first.
+ * A call stored without a `checker` predates checkers, and its permission was
+ * approved with the zero one, so that is what it rebuilds with. Callers still go
+ * through `readPermissionState` and its hash check, which catches any struct
+ * that does not hash to the granted permission.
  */
 export function toContractPermission(permission: GrantedPermission): ContractPermission | null {
   const spends: ContractSpendLimit[] = [];
@@ -118,7 +117,7 @@ export function toContractPermission(permission: GrantedPermission): ContractPer
     calls: permission.calls.map((call) => ({
       target: call.target as `0x${string}`,
       selector: call.selector as `0x${string}`,
-      checker: zeroAddress,
+      checker: checkerOf(call),
     })),
     spends,
   };

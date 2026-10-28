@@ -12,6 +12,8 @@ export * from './x402/policy.js';
 export * from './grants/permissions-config.js';
 export * from './grants/grant-preset.js';
 export * from './grants/merge-permissions.js';
+export * from './grants/manager-reverts.js';
+export * from './grants/call-checker.js';
 export * from './util/terminal.js';
 export * from './x402/discover.js';
 export * from './mcp/tools.js';

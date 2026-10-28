@@ -8,7 +8,14 @@ import { isLive } from '@/connections/rows';
 import { getDb } from '@/db/client';
 import { connections, grants } from '@/db/schema';
 import { errorLabel, log } from '@/lib/edge';
-import { checkGranted, readOnChain, recordGrant, type GrantRequest, type ReadPermission } from './permission';
+import {
+  checkGranted,
+  readOnChain,
+  recordGrant,
+  storedGrantRequest,
+  type GrantRequest,
+  type ReadPermission,
+} from './permission';
 import { waitingRequests, type Claim, type Outcome, type PermissionRequestRow, type Rebuild } from './requests';
 import { markRevoked, readState, UNCONFIRMED } from './revokes';
 import type { GrantKind } from './store';
@@ -38,9 +45,6 @@ const hasAccount = (accounts: unknown, account: string) =>
 
 export type SignPayload = { chainId: number; request: SignRequest };
 
-const hex = z.string().regex(/^0x[0-9a-fA-F]*$/);
-const address = z.string().regex(/^0x[0-9a-fA-F]{40}$/);
-
 const signPayload = z.object({
   chainId: z.number().int().positive(),
   request: z.union([
@@ -51,16 +55,7 @@ const signPayload = z.object({
 
 const grantPayload = z.object({
   kind: z.enum(['x402-budget', 'custom']),
-  grant: z.object({
-    spender: address,
-    expiry: z.number().int(),
-    chainId: hex,
-    permissions: z.object({
-      calls: z.array(z.object({ target: address, functionSignature: z.string() })),
-      spends: z.array(z.object({ token: address, allowance: z.string(), unit: z.string(), multiplier: z.number() })),
-    }),
-    capabilities: z.object({ prefundSpender: z.literal(true) }).optional(),
-  }),
+  grant: storedGrantRequest,
 });
 
 const revokePayload = z.object({

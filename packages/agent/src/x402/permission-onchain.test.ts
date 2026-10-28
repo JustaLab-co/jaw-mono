@@ -74,12 +74,19 @@ describe('the permission struct as the contract hashes it', () => {
     );
   });
 
-  it('fills the checker with the zero address, the way the grant encoded it', () => {
+  // A record written before checkers names none; every such grant was approved with the zero one.
+  it('reads a call stored without a checker as the zero checker, the way that grant was approved', () => {
     expect(toContractPermission(GRANTED)?.calls[0]).toEqual({
       target: USDC,
       selector: '0xa9059cbb',
       checker: zeroAddress,
     });
+  });
+
+  it('carries the stored checker into the struct, since the hash covers it', () => {
+    const checker = '0x398b9d939E7E616E03eA99601c835C920621B2ca';
+    const checked = { ...GRANTED, calls: [{ ...GRANTED.calls[0], checker }] };
+    expect(toContractPermission(checked)?.calls[0].checker).toBe(checker);
   });
 
   it('widens the hex salt and allowance the response carries', () => {

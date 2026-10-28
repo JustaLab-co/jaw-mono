@@ -1,4 +1,5 @@
 import {
+  callRuleKey,
   parseGrantedPermission,
   readPermissionState,
   type PermissionReadTarget,
@@ -6,6 +7,7 @@ import {
 } from '@jaw.id/agent';
 import { and, eq, isNull, ne, sql } from 'drizzle-orm';
 import { isAddressEqual, isHex, numberToHex, toFunctionSelector, type Address, type Hex } from 'viem';
+import { z } from 'zod';
 import type { Tx } from '@/db/client';
 import { connections, grants, SPEND_UNITS } from '@/db/schema';
 import { publicClientFor } from '@/lib/chain';
@@ -18,6 +20,8 @@ export type SpendUnit = (typeof SPEND_UNITS)[number];
 export interface PermissionCall {
   target: Address;
   functionSignature: string;
+  /** Contract the permission manager asks to approve each call. Absent means none. */
+  checker?: Address;
 }
 
 export interface PermissionSpend {
@@ -27,6 +31,25 @@ export interface PermissionSpend {
   unit: SpendUnit;
   multiplier: number;
 }
+
+const hex = z.string().regex(/^0x[0-9a-fA-F]*$/);
+const address = z.string().regex(/^0x[0-9a-fA-F]{40}$/);
+
+/**
+ * A `GrantRequest` as a link that may be resumed stores it. Kept beside the type because a field
+ * missing here is stripped on resume, and the wallet is then asked for a wider grant than the one
+ * requested: a dropped `checker` did exactly that. A test round-trips a request with every field set.
+ */
+export const storedGrantRequest = z.object({
+  spender: address,
+  expiry: z.number().int(),
+  chainId: hex,
+  permissions: z.object({
+    calls: z.array(z.object({ target: address, functionSignature: z.string(), checker: address.optional() })),
+    spends: z.array(z.object({ token: address, allowance: z.string(), unit: z.string(), multiplier: z.number() })),
+  }),
+  capabilities: z.object({ prefundSpender: z.literal(true) }).optional(),
+});
 
 export interface GrantRequest {
   spender: Address;
@@ -58,7 +81,6 @@ export function budgetGrant(b: {
 
 type Granted = NonNullable<ReturnType<typeof parseGrantedPermission>>;
 
-const callKey = (target: string, selector: string) => `${target.toLowerCase()}:${selector.toLowerCase()}`;
 const spendKey = (s: Granted['spends'][number]) =>
   `${s.token.toLowerCase()}:${BigInt(s.allowance)}:${s.unit}:${s.multiplier}`;
 const sameKeys = (asked: string[], got: string[]) => asked.sort().join() === got.sort().join();
@@ -70,8 +92,10 @@ function grantMatches(grant: GrantRequest, permission: Granted): boolean {
     isAddressEqual(permission.spender as Address, grant.spender) &&
     permission.end === grant.expiry &&
     sameKeys(
-      calls.map((c) => callKey(c.target, toFunctionSelector(c.functionSignature))),
-      permission.calls.map((c) => callKey(c.target, c.selector))
+      // The checker is part of the permission hash. A wallet from before checkers names none, and
+      // one after names zero on every call that asked for none; `callRuleKey` reads both as zero.
+      calls.map((c) => callRuleKey({ ...c, selector: toFunctionSelector(c.functionSignature) })),
+      permission.calls.map(callRuleKey)
     ) &&
     sameKeys(spends.map(spendKey), permission.spends.map(spendKey))
   );

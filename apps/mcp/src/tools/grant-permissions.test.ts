@@ -2,7 +2,7 @@ import { PERMISSIONS_MANAGER_ADDRESS } from '@jaw.id/core';
 import { and, desc, eq, sql } from 'drizzle-orm';
 import { randomBytes } from 'node:crypto';
 import { beforeAll, describe, expect, it, vi } from 'vitest';
-import { toFunctionSelector } from 'viem';
+import { toFunctionSelector, type Address, type Hex } from 'viem';
 import { verifyBearer, type Tenant } from '@/connections/auth';
 import { WalletBusy, type OpenWallet, type Wallet } from '@/connections/relay';
 import {
@@ -17,6 +17,7 @@ import {
   walletAnswers,
   walletsSettled,
   offlineSession,
+  noCodeRead,
 } from '@/connections/testkit';
 import { getDb } from '@/db/client';
 import { grants, permissionRequests } from '@/db/schema';
@@ -47,11 +48,15 @@ async function connected(withBudget = true) {
   return { c, t, signer, connectedWith: budget?.permissionId };
 }
 
+/** Every checker in these tests is deployed unless a test says otherwise. */
+const deployed = async () => '0x6080' as Hex;
+
 async function grant(
   t: Tenant,
   signer: ReturnType<typeof owner>,
   input: GrantInput,
-  tamper?: (granted: Record<string, unknown>) => object
+  tamper?: (granted: Record<string, unknown>) => object,
+  codeAt: (chainId: number, address: Address) => Promise<Hex | undefined> = deployed
 ) {
   const asked: { method: string; params: unknown[] }[] = [];
   const honest = walletAnswers(signer);
@@ -64,6 +69,7 @@ async function grant(
     openWallet: async (...args) => (opened++, wallet(...args)),
     session: offlineSession,
     readPermission: approvedOnChain,
+    codeAt,
   });
   await walletsSettled();
   return { result, opened, request: asked[0]?.params[0] as GrantRequest | undefined };
@@ -346,6 +352,100 @@ describe('jaw_grant_permissions', () => {
     }
   );
 
+  /**
+   * A checker is part of the permission the owner approves: the manager asks it to approve every
+   * call the rule allows. One that can never be granted is refused before a link is made, since the
+   * owner's screen could not even estimate the grant.
+   */
+  describe('a call checker', () => {
+    const CHECKER = '0x398b9d939E7E616E03eA99601c835C920621B2ca' as const;
+    const OTHER = '0x1a5EAd5979Ff0d651b2968481a091713510EcF66' as const;
+    const checked = (checker: string): GrantInput => ({
+      calls: [{ target: WETH, functionSignature: 'transfer(address,uint256)', checker }],
+    });
+    // Code only at these addresses on this chain, so reading the target or another chain finds none.
+    const deployedAt =
+      (chainId: number, ...at: string[]) =>
+      async (onChain: number, address: Address) =>
+        onChain === chainId && at.some((a) => a.toLowerCase() === address.toLowerCase())
+          ? ('0x6080' as Hex)
+          : undefined;
+
+    it('is asked of the wallet with the call, and the summary names it', async () => {
+      const { t, signer } = await connected();
+
+      const { result, request } = await grant(t, signer, checked(CHECKER), undefined, deployedAt(t.chainId, CHECKER));
+
+      expect(request?.permissions.calls[0].checker).toBe(CHECKER);
+      expect('structuredContent' in result && result.structuredContent!.summary).toContain(`checked by ${CHECKER}`);
+      expect(leaks(spoken(result))).toEqual([]);
+    });
+
+    it('is no checker when it is the zero address', async () => {
+      const { t, signer } = await connected();
+
+      const { result, request } = await grant(t, signer, checked('0x0000000000000000000000000000000000000000'));
+
+      expect(request?.permissions.calls[0].checker).toBeUndefined();
+      expect('structuredContent' in result && result.structuredContent!.summary).not.toContain('checked by');
+    });
+
+    it.each([
+      ['the permission manager', () => PERMISSIONS_MANAGER_ADDRESS],
+      ['the account itself', (t: Tenant) => t.account],
+    ])('is refused by name when it is %s, and no wallet opens', async (_name, checker) => {
+      const { t, signer } = await connected();
+
+      const { result, opened } = await grant(t, signer, checked(checker(t)));
+
+      expect(result.content[0].text).toMatch(/^checker_refused: /);
+      expect(leaks(spoken(result))).toEqual([]);
+      expect(toAgent(result).join('\n')).toContain('refused as checkers');
+      expect(opened).toBe(0);
+    });
+
+    it('is refused by name when nothing is deployed there, and no wallet opens', async () => {
+      const { t, signer } = await connected();
+
+      const { result, opened } = await grant(t, signer, checked(CHECKER), undefined, async () => undefined);
+
+      expect(result.content[0].text).toMatch(/^checker_has_no_code: /);
+      expect(leaks(spoken(result))).toEqual([]);
+      expect(toAgent(result).join('\n')).toContain('Check the address and chain.');
+      expect(opened).toBe(0);
+    });
+
+    it('reads the code of each checker on the connection chain, and names the one with none', async () => {
+      const { t, signer } = await connected();
+      const both: GrantInput = {
+        calls: [
+          { target: WETH, functionSignature: 'transfer(address,uint256)', checker: CHECKER },
+          { target: USDC, functionSignature: 'transfer(address,uint256)', checker: OTHER },
+        ],
+      };
+
+      const second = await grant(t, signer, both, undefined, deployedAt(t.chainId, CHECKER));
+      const elsewhere = await grant(t, signer, checked(CHECKER), undefined, deployedAt(t.chainId + 1, CHECKER));
+
+      expect(second.result.content[0].text).toMatch(new RegExp(`^checker_has_no_code: .*${OTHER}`));
+      expect(elsewhere.result.content[0].text).toMatch(/^checker_has_no_code: /);
+      expect(second.opened + elsewhere.opened).toBe(0);
+    });
+
+    it('says the network could not be read when the code read fails, and no wallet opens', async () => {
+      const { t, signer } = await connected();
+
+      const { result, opened } = await grant(t, signer, checked(CHECKER), undefined, async () => {
+        throw new Error('fetch failed');
+      });
+
+      expect(result.content[0].text).toMatch(/^chain_unreadable: /);
+      expect(spoken(result)).toContain('Nothing was asked.');
+      expect(leaks(spoken(result))).toEqual([]);
+      expect(opened).toBe(0);
+    });
+  });
+
   it.each<[string, GrantInput]>([
     ['the preset with calls', { x402Budget: { perDay: '1' }, calls: twoByTwo.calls }],
     [
@@ -482,6 +582,7 @@ describe('jaw_grant_permissions', () => {
       )) as OpenWallet,
       session: offlineSession,
       readPermission: approvedOnChain,
+      codeAt: noCodeRead,
     };
 
     const first = await grantPermissions(t, twoByTwo, deps);
@@ -519,6 +620,7 @@ describe('jaw_grant_permissions', () => {
     const deps = {
       openWallet: fakeWallet(async (method, params) => (await held, honest(method, params))) as OpenWallet,
       readPermission: approvedOnChain,
+      codeAt: noCodeRead,
       session: offlineSession,
     };
     await grantPermissions(t, twoByTwo, deps);
@@ -547,6 +649,7 @@ describe('jaw_grant_permissions', () => {
     const holding = {
       openWallet: fakeWallet(async (method, params) => (await held, honest(method, params))),
       readPermission: approvedOnChain,
+      codeAt: noCodeRead,
       session: offlineSession,
     };
     let opener!: ReturnType<typeof grantPermissions>;
@@ -556,6 +659,7 @@ describe('jaw_grant_permissions', () => {
         throw new WalletBusy();
       }) as OpenWallet,
       readPermission: approvedOnChain,
+      codeAt: noCodeRead,
       session: offlineSession,
     };
 
@@ -586,6 +690,7 @@ describe('jaw_grant_permissions', () => {
       openWallet: (async (...args) => (opened++, wallet(...args))) as OpenWallet,
       session: offlineSession,
       readPermission: approvedOnChain,
+      codeAt: noCodeRead,
     };
     const first = await grantPermissions(t, twoByTwo, deps);
     const url = 'structuredContent' in first && first.structuredContent!.url;
@@ -639,6 +744,7 @@ describe('jaw_get_grant_status', () => {
     const held = new Promise<void>((resolve) => (release = resolve));
     const honest = walletAnswers(signer, refuse);
     const first = await grantPermissions(t, input, {
+      codeAt: noCodeRead,
       openWallet: fakeWallet(async (method, params) => {
         if (method === 'wallet_grantPermissions') await held;
         return honest(method, params);
@@ -652,6 +758,7 @@ describe('jaw_get_grant_status', () => {
 
   async function idle(t: Tenant) {
     const first = await grantPermissions(t, twoByTwo, {
+      codeAt: noCodeRead,
       openWallet: idleWallet,
       session: offlineSession,
       readPermission: approvedOnChain,

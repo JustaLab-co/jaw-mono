@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest';
-import { decodeFunctionData, erc20Abi, maxUint256 } from 'viem';
+import { decodeFunctionData, encodeErrorResult, erc20Abi, maxUint256, parseAbi } from 'viem';
 import type { SessionConfig } from '../session/session-config.js';
 import type { SessionHost } from '../ports.js';
 import { PERMIT2_ADDRESS } from './permit2.js';
@@ -312,5 +312,83 @@ describe('SessionBridge fee failure advice', () => {
   it('given the context names the registry USDC, then it still says USDC', async () => {
     sendCalls.mockRejectedValue(unsized);
     await expect(send(withContext({ token: USDC_BASE_SEPOLIA }))).rejects.toThrow(/Send it 0\.1 USDC/);
+  });
+});
+
+// A checker on the permission refuses the call during the paymaster's gas estimate, so core's
+// error is about sizing the paymaster approval. What to fix is the call's arguments, so the
+// refusal is named instead, the way the hosted MCP names it.
+describe('SessionBridge and a call checker', () => {
+  const CHECKER = '0x398b9d939E7E616E03eA99601c835C920621B2ca';
+  const TRANSFER = '0xa9059cbb';
+  const errors = parseAbi([
+    'error ExecuteError(uint256 index, bytes reason)',
+    'error JustaPermissionManager_CheckerRejectedCall(address target, bytes4 selector, address checker)',
+  ]);
+  const rejected = encodeErrorResult({
+    abi: errors,
+    errorName: 'ExecuteError',
+    args: [
+      1n,
+      encodeErrorResult({
+        abi: errors,
+        errorName: 'JustaPermissionManager_CheckerRejectedCall',
+        args: [USDC_BASE_SEPOLIA, TRANSFER, CHECKER],
+      }),
+    ],
+  });
+
+  const SIZING = 'Could not size the ERC-20 paymaster approval for token 0x036C on chain 84532: reverted.';
+  const holding = (calls: { target: string; selector: string; checker: string }[]) =>
+    host(
+      {},
+      session({
+        permission: {
+          account: '0x1111111111111111111111111111111111111111',
+          spender: SESSION_ADDRESS,
+          start: 1,
+          end: 2_000_000_000,
+          salt: '0x01',
+          calls,
+          spends: [],
+        },
+      })
+    );
+  const failing = (h: SessionHost) => {
+    sendCalls.mockRejectedValue(new Error(SIZING, { cause: { data: { revertData: rejected } } }));
+    return send(bridge(h)).catch((err: Error) => err);
+  };
+
+  it('names the checker that refused the call, not the paymaster sizing that failed on it', async () => {
+    const failure = await failing(
+      holding([{ target: USDC_BASE_SEPOLIA.toLowerCase(), selector: TRANSFER, checker: CHECKER }])
+    );
+
+    expect((failure as Error).message).toBe(
+      `checker-rejected: Change the call's arguments, never the permission: permission 0xperm allows calling ${TRANSFER} on ${USDC_BASE_SEPOLIA}, but its checker ${CHECKER} refused this call's arguments.`
+    );
+  });
+
+  // Any contract a call reaches can revert with these bytes. Only a rule the permission holds makes
+  // them the manager's refusal; otherwise they name a checker the target picked.
+  it.each([
+    [
+      'holds no such rule',
+      holding([
+        { target: USDC_BASE_SEPOLIA, selector: TRANSFER, checker: '0x1a5EAd5979Ff0d651b2968481a091713510EcF66' },
+      ]),
+    ],
+    [
+      'holds the call with no checker',
+      holding([
+        { target: USDC_BASE_SEPOLIA, selector: TRANSFER, checker: '0x0000000000000000000000000000000000000000' },
+      ]),
+    ],
+    ['has no permission on record', host()],
+  ])('keeps the original error when the session %s', async (_name, h) => {
+    const failure = await failing(h);
+
+    expect((failure as Error).message).not.toMatch(/checker-rejected/);
+    expect((failure as Error).message).toContain('Could not size the ERC-20 paymaster approval');
   });
 });

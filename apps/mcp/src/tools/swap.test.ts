@@ -34,6 +34,7 @@ import {
   walletAnswers,
   walletsSettled,
   offlineSession,
+  noCodeRead,
 } from '@/connections/testkit';
 import { getDb } from '@/db/client';
 import { connections, grants, payments, settings, swaps } from '@/db/schema';
@@ -247,7 +248,7 @@ async function connected(
     await grantPermissions(
       t,
       { x402Budget: { perDay: day } },
-      { openWallet: wallet, session: offlineSession, readPermission: approvedOnChain }
+      { codeAt: noCodeRead, openWallet: wallet, session: offlineSession, readPermission: approvedOnChain }
     );
     await walletsSettled();
     if (!(await x402Budget(t.connectionId))) throw new Error('no budget');

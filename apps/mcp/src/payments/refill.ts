@@ -3,6 +3,7 @@ import {
   currentLimitUsageOnChain,
   usdcForNetwork,
   ensurePayerFunds,
+  refusedInSimulation,
   sumSpentSince,
   topUpCeiling,
   type ChainClients,
@@ -20,7 +21,6 @@ import type { Tx } from '@/db/client';
 import { connections, grants } from '@/db/schema';
 import type { Grant } from '@/grants/store';
 import { errorLabel, log } from '@/lib/edge';
-import { refusedInSimulation } from '@/grants/reverts';
 import { nonceUsed } from './confirm';
 import { dayLeft, pullRoom, readDaySpend } from './day-spend';
 import { FloatBusy, FloatLost, inTurn, withFloat, type FloatHold } from './float-lock';

@@ -225,7 +225,10 @@ const execute = (token: string, permissionId: string, calls: object[], idempoten
   callTool(token, 'jaw_session_execute', { permissionId, calls, ...(idempotencyKey && { idempotencyKey }) });
 const rowsOf = (connectionId: string) => getDb().select().from(sends).where(eq(sends.connectionId, connectionId));
 
-const MANAGER_ERRORS = parseAbi(['error JustaPermissionManager_ExceededSpendLimit(uint256 value, uint256 allowance)']);
+const MANAGER_ERRORS = parseAbi([
+  'error JustaPermissionManager_ExceededSpendLimit(uint256 value, uint256 allowance)',
+  'error JustaPermissionManager_CheckerRejectedCall(address target, bytes4 selector, address checker)',
+]);
 const overLimitRevert = encodeErrorResult({
   abi: MANAGER_ERRORS,
   errorName: 'JustaPermissionManager_ExceededSpendLimit',
@@ -378,6 +381,35 @@ describe('jaw_session_execute', () => {
     const result = await execute(c.access_token, permissionId, [transfer(BOB, 1n)]);
     expect(result.isError).toBe(true);
     expect(bridge.sent).toEqual([]);
+  });
+
+  it('names the checker the bundler reports refusing a call as checker-rejected, and releases the rows', async () => {
+    const { c, t, permissionId } = await withCustomGrant();
+    const checker = '0x398b9d939E7E616E03eA99601c835C920621B2ca';
+    bridge.failBeforeSigning = new Error('Could not size the ERC-20 paymaster approval', {
+      cause: new RpcRequestError({
+        body: {},
+        error: {
+          code: -32521,
+          message: 'execution reverted',
+          data: encodeErrorResult({
+            abi: MANAGER_ERRORS,
+            errorName: 'JustaPermissionManager_CheckerRejectedCall',
+            args: [BOB, '0xa9059cbb', checker],
+          }),
+        },
+        url: 'http://bundler.test',
+      }),
+    });
+
+    const result = await execute(c.access_token, permissionId, [transfer(BOB, 1n)]);
+
+    expect(result.content[0].text).toMatch(/^checker-rejected: /);
+    expect(spoken(result)).toContain('Nothing was sent.');
+    expect(leaks(spoken(result))).toEqual([]);
+    // The owner hears it in plain words; the agent gets the checker, to change the call and not the permission.
+    expect(toAgent(result).join('\n')).toContain(checker);
+    expect((await rowsOf(t.connectionId)).map((r) => r.state)).toEqual(['released']);
   });
 
   it('names an ExceededSpendLimit the bundler reports after fit passed as over-limit, and releases the rows', async () => {

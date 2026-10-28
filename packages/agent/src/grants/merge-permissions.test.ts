@@ -7,6 +7,8 @@ const USDC = '0x036CbD53842c5426634e7929541eC2318f3dCF7e';
 const NFT = '0x4444444444444444444444444444444444444444';
 const TRANSFER = '0xa9059cbb';
 const MINT = '0x1249c58b';
+const CHECKER = '0x398b9d939E7E616E03eA99601c835C920621B2ca';
+const ZERO = '0x0000000000000000000000000000000000000000';
 
 /**
  * The scope an agent is already working under. Only knowable because the
@@ -46,6 +48,34 @@ describe('mergePermissions', () => {
 
   it('matches a call case-insensitively, the way an address compares', () => {
     const merged = mergePermissions(EXISTING, { calls: [{ target: NFT.toUpperCase(), selector: MINT }] });
+    expect(merged.calls).toHaveLength(1);
+  });
+
+  /**
+   * A checker is part of the rule. Dropping it on a re-grant would hand the session the same call
+   * with nothing checking its arguments: a wider permission than the one it held.
+   */
+  it('keeps the checker on a call the session already holds', () => {
+    const checked = { ...EXISTING, calls: [{ target: NFT, selector: MINT, checker: CHECKER }] };
+    const merged = mergePermissions(checked, buildX402Permissions(84532, '10/day'));
+    expect(merged.calls?.[0]).toEqual({ target: NFT, selector: MINT, checker: CHECKER });
+  });
+
+  it('keeps a rule on the same function with another checker as a rule of its own', () => {
+    const merged = mergePermissions(EXISTING, { calls: [{ target: NFT, selector: MINT, checker: CHECKER }] });
+    expect(merged.calls).toHaveLength(2);
+  });
+
+  it('lists a rule once when the addition names the same checker', () => {
+    const checked = { ...EXISTING, calls: [{ target: NFT, selector: MINT, checker: CHECKER }] };
+    const merged = mergePermissions(checked, {
+      calls: [{ target: NFT, selector: MINT, checker: CHECKER.toLowerCase() }],
+    });
+    expect(merged.calls).toHaveLength(1);
+  });
+
+  it('reads a call with no checker and one with the zero checker as the same rule', () => {
+    const merged = mergePermissions(EXISTING, { calls: [{ target: NFT, selector: MINT, checker: ZERO }] });
     expect(merged.calls).toHaveLength(1);
   });
 
@@ -110,6 +140,11 @@ describe('describeMerge', () => {
     expect(lines).toMatch(/\+ call\s+0x036CbD/);
     expect(lines).toMatch(/\+ spend\s+10000000 of 0x036CbD/);
     expect(lines).not.toMatch(new RegExp(MINT));
+  });
+
+  it('names the checker on a call it adds, so the summary shows what will check it', () => {
+    const merged = mergePermissions(EXISTING, { calls: [{ target: USDC, selector: TRANSFER, checker: CHECKER }] });
+    expect(describeMerge(EXISTING, merged).join('\n')).toContain(`checked by ${CHECKER}`);
   });
 
   it('shows a raised allowance as a change rather than an addition', () => {

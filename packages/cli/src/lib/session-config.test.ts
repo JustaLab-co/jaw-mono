@@ -1,5 +1,6 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { parseGrantedPermission, liveOrphans, sessionLives, sessionUsable } from '@jaw.id/agent';
+import { zeroAddress } from 'viem';
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 import * as os from 'node:os';
@@ -158,9 +159,17 @@ describe('parseGrantedPermission', () => {
       start: GRANT_RESPONSE.start,
       end: GRANT_RESPONSE.end,
       salt: GRANT_RESPONSE.salt,
-      calls: GRANT_RESPONSE.calls,
+      // A response from before checkers names none, and every such grant was approved with the zero
+      // checker, so that is what the struct carries.
+      calls: [{ ...GRANT_RESPONSE.calls[0], checker: zeroAddress }],
       spends: GRANT_RESPONSE.spends,
     });
+  });
+
+  it('keeps the checker a call was granted with, since it is part of the permission hash', () => {
+    const checker = '0x398b9d939E7E616E03eA99601c835C920621B2ca';
+    const granted = { ...GRANT_RESPONSE, calls: [{ ...GRANT_RESPONSE.calls[0], checker }] };
+    expect(parseGrantedPermission(granted)?.calls[0].checker).toBe(checker);
   });
 
   it('accepts a decimal allowance, which is the other form the SDK takes', () => {
@@ -188,6 +197,7 @@ describe('parseGrantedPermission', () => {
     ['no calls at all', { ...GRANT_RESPONSE, calls: [] }],
     ['a call without a selector', { ...GRANT_RESPONSE, calls: [{ target: GRANT_RESPONSE.account }] }],
     ['a truncated selector', { ...GRANT_RESPONSE, calls: [{ target: GRANT_RESPONSE.account, selector: '0xa905' }] }],
+    ['a malformed checker', { ...GRANT_RESPONSE, calls: [{ ...GRANT_RESPONSE.calls[0], checker: '0x8888' }] }],
     ['an unknown spend unit', { ...GRANT_RESPONSE, spends: [{ ...GRANT_RESPONSE.spends[0], unit: 'fortnight' }] }],
     [
       'a spend without a multiplier',
