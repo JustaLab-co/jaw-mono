@@ -2,7 +2,8 @@ import * as fs from 'node:fs';
 import { BaseCommand } from '../../base-command.js';
 import { saveConfig } from '../../lib/config.js';
 import type { JawConfig } from '../../lib/types.js';
-import { isValidKeysUrl, isValidRelayUrl, parsePermissionsConfig } from '../../lib/validation.js';
+import { isValidKeysUrl, isValidRelayUrl } from '../../lib/validation.js';
+import { parsePermissionsConfig } from '@jaw.id/agent';
 
 export default class ConfigWrite extends BaseCommand {
   static override description = 'Write full config from inline JSON or a file path to ~/.jaw/config.json.';

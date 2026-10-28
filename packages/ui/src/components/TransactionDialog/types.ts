@@ -20,6 +20,8 @@ export interface TransactionDialogProps {
 
   // Transaction data
   transactions: TransactionData[];
+  /** EIP-5792 capabilities of the request. */
+  capabilities?: Record<string, unknown>;
 
   // Wallet info
   walletAddress: string;
@@ -57,9 +59,12 @@ export interface TransactionDialogProps {
   networkName: string;
   apiKey?: string;
 
-  /** Requesting dApp, shown as the flow target on the processing screen. */
+  /** Requesting dApp: the header names it when `origin` is set too, and the processing screen shows its logo. */
   appName?: string;
   appLogoUrl?: string | null;
+  origin?: string;
+  /** Replaces the host under the app name. */
+  originLabel?: string;
 
   // Fee token selection (for ERC-20 paymaster)
   feeTokens?: FeeTokenOption[];

@@ -1,0 +1,79 @@
+# Hosted stack for verification. Each run is its own compose project, so runs
+# can sit side by side. The mcp service is enabled by hosted-up.sh through
+# the "mcp" profile.
+#
+# The payer refuses to sign over http unless the host is localhost, so the
+# seller has to be localhost inside the mcp container too. seller-forward
+# shares that container's network and forwards localhost:$PORT to the host.
+services:
+  postgres:
+    image: postgres:17-alpine
+    environment:
+      POSTGRES_USER: jaw
+      POSTGRES_PASSWORD: jaw
+      POSTGRES_DB: jaw_mcp
+    ports: ['${PG_PORT:-0}:5432']
+    tmpfs: [/var/lib/postgresql/data]
+    healthcheck:
+      test: ['CMD', 'pg_isready', '-U', 'jaw']
+      interval: 1s
+      retries: 30
+  mcp:
+    profiles: [mcp]
+    image: ${MCP_IMAGE:-jaw-verify-mcp:local}
+    build:
+      context: ${REPO}
+      dockerfile: apps/mcp/Dockerfile
+      # doctor.sh compares it with the run's commit.
+      labels:
+        org.opencontainers.image.revision: ${HEAD_SHA:-}
+    environment:
+      DATABASE_URL: postgres://jaw:jaw@postgres:5432/jaw_mcp
+      JAW_MCP_SEALING_KEYS: ${JAW_MCP_SEALING_KEYS:-}
+      JAW_MCP_CRON_SECRET: ${JAW_MCP_CRON_SECRET:-}
+      JAW_MCP_PUBLIC_URL: ${JAW_MCP_PUBLIC_URL:-}
+      JAW_KEYS_URL: ${JAW_KEYS_URL:-}
+      JAW_MCP_API_KEY: ${JAW_MCP_API_KEY:-}
+      # Set as in production so boot runs its check; JAW_MCP_ENS= (empty) leaves it unset.
+      JAW_MCP_ENS: ${JAW_MCP_ENS-justan.id}
+      JAW_MCP_INSECURE_FETCH_HOSTS: ${JAW_MCP_INSECURE_FETCH_HOSTS:-},localhost:${PORT}
+      JAW_MCP_SWAP_URL: ${JAW_MCP_SWAP_URL:-http://localhost:${PORT}/proxy/v2}
+      # The key the seller's swap stub lets through without payment.
+      JAW_MCP_SWAP_API_KEY: ${JAW_MCP_SWAP_API_KEY:-verify-swap-key}
+      JAW_MCP_SWAP_QUOTE_TTL_SEC: ${JAW_MCP_SWAP_QUOTE_TTL_SEC:-}
+      # Settles signed payments whose receipt came after the call answered.
+      JAW_MCP_RECONCILE_EVERY: ${JAW_MCP_RECONCILE_EVERY:-30}
+      JAW_RELAY_URL: ${JAW_RELAY_URL:-}
+    ports: ['${MCP_PORT:-0}:3000']
+    extra_hosts: ['host.docker.internal:host-gateway']
+    depends_on:
+      postgres: { condition: service_healthy }
+  seller-forward:
+    profiles: [mcp]
+    image: ${MCP_IMAGE:-jaw-verify-mcp:local}
+    # The mcp service builds this tag in the same up.
+    pull_policy: never
+    network_mode: service:mcp
+    init: true
+    healthcheck: { disable: true }
+    environment:
+      SELLER_PORT: ${PORT}
+    command:
+      - node
+      - -e
+      - |
+        const net = require('net');
+        const port = Number(process.env.SELLER_PORT);
+        const forward = (client) => {
+          const seller = net.connect(port, 'host.docker.internal');
+          client.pipe(seller).pipe(client);
+          client.on('error', () => seller.destroy());
+          seller.on('error', () => client.destroy());
+        };
+        // localhost resolves to either address depending on the client.
+        for (const host of ['127.0.0.1', '::1']) {
+          net
+            .createServer(forward)
+            .on('error', (err) => console.error(host, err.message))
+            .listen(port, host);
+        }

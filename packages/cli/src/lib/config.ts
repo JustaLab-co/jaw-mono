@@ -2,7 +2,7 @@ import * as fs from 'node:fs';
 import * as path from 'node:path';
 import { PATHS } from './paths.js';
 import type { JawConfig, SettableConfigKey } from './types.js';
-import type { X402Policy, X402PolicyKey } from '../x402/policy.js';
+import type { X402Policy, X402PolicyKey } from '@jaw.id/agent';
 import { isSafeApiKey, isValidKeysUrl, isValidRelayUrl } from './validation.js';
 
 export function ensureDir(dir: string): void {

@@ -33,8 +33,9 @@ import { fileURLToPath } from 'node:url';
 import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
-import { readPermissionState } from '../packages/cli/src/x402/permission-onchain.js';
-import type { GrantedPermission } from '../packages/cli/src/lib/session-config.js';
+import { readPermissionState } from '../packages/agent/src/x402/permission-onchain.js';
+import { chainClients } from '../packages/agent/src/x402/balance.js';
+import type { GrantedPermission } from '../packages/agent/src/session/session-config.js';
 
 const CHAIN = Number(process.env['JAW_E2E_CHAIN'] ?? 84532);
 const STEPS = new Set((process.env['JAW_E2E_STEPS'] ?? 'setup,add,status,revoke').split(',').map((s) => s.trim()));
@@ -133,11 +134,14 @@ function session(): Record<string, unknown> | null {
 }
 
 async function onChain(config: Record<string, unknown>) {
-  return readPermissionState({
-    chainId: config.chainId as number,
-    permissionId: config.permissionId as string,
-    permission: config.permission as GrantedPermission | undefined,
-  });
+  return readPermissionState(
+    {
+      chainId: config.chainId as number,
+      permissionId: config.permissionId as string,
+      permission: config.permission as GrantedPermission | undefined,
+    },
+    { clients: chainClients(key) }
+  );
 }
 
 console.log(`\nscratch home  ${HOME}\nchain         ${CHAIN}\nsteps         ${[...STEPS].join(', ')}`);

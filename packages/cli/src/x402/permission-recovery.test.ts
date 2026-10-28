@@ -1,4 +1,5 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest';
+import { recoverPermission as recover } from '@jaw.id/agent';
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 import * as os from 'node:os';
@@ -20,7 +21,9 @@ vi.mock('../lib/paths.js', () => {
   return { PATHS: { root, sessionConfig: p.join(root, 'session-config.json') } };
 });
 
-const { recoverPermission } = await import('./permission-recovery.js');
+const { sessionFileStore } = await import('../lib/session-config.js');
+const recoverPermission = (...[session, apiKey, deps]: Parameters<typeof recover>) =>
+  recover(session, apiKey, { ...deps, store: sessionFileStore });
 const { PATHS } = await import('../lib/paths.js');
 
 /**
@@ -84,6 +87,24 @@ describe('recoverPermission', () => {
     // The timestamp the session spend total is counted from survives.
     expect(written.createdAt).toBe(SESSION.createdAt);
   });
+
+  it.each([
+    ['another owner', { account: '0x3333333333333333333333333333333333333333' }],
+    ['another spender', { spender: '0x4444444444444444444444444444444444444444' }],
+    ['another expiry', { end: RELAYED.end + 86_400 }],
+  ])(
+    'given a relayed struct for %s, when it is recovered, then it is refused and nothing is written',
+    async (_, wrong) => {
+      onDisk(SESSION);
+      const recovered = await recoverPermission(SESSION, 'key', {
+        fetchPermission: async () => ({ ...RELAYED, ...wrong }),
+      });
+
+      expect(recovered).toBeUndefined();
+      const written = JSON.parse(fs.readFileSync(PATHS.sessionConfig, 'utf-8'));
+      expect(written.permission).toBeUndefined();
+    }
+  );
 
   it('only pays for the round trip once', async () => {
     onDisk(SESSION);

@@ -298,6 +298,7 @@ export type CallPermissionDetail = {
     target: Address_2;
     selector?: Hex;
     functionSignature?: string;
+    checker?: Address_2;
 };
 
 // @public
@@ -1259,6 +1260,7 @@ export interface PermissionUIRequest extends BaseUIRequest {
                 target: Address;
                 selector?: `0x${string}`;
                 functionSignature?: string;
+                checker?: Address;
             }>;
         };
         capabilities?: RequestCapabilities;
@@ -1777,6 +1779,7 @@ export function resolveDestination(accounts: readonly Address[]): Address;
 // @public
 export type RevokePermissionApiResponse = {
     success: boolean;
+    pending?: boolean;
 };
 
 // @public
@@ -1854,6 +1857,7 @@ export const SDK_VERSION: string;
 // @public
 export interface SendCallsOptions {
     from?: Address_2;
+    onSigned?: (userOpHash: Hash) => void | Promise<void>;
     permissionId?: Hex;
 }
 

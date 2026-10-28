@@ -7,6 +7,9 @@
       "path": "../core"
     },
     {
+      "path": "../agent"
+    },
+    {
       "path": "./tsconfig.lib.json"
     },
     {

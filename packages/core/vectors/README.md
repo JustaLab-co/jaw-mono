@@ -166,13 +166,28 @@ cast calldata "executeBatch($PERM,(address,uint256,bytes)[])" \
   '[]'
 ```
 
-The two grant entries are the ones that need care. `apiPermissionsToPermission`
+Sixth entry, the third entry's revoke with a non-zero checker. Every other entry
+has a zero checker, which encodes as the same 32 zero bytes as a field that was
+dropped or misplaced, so only this one proves the checker lands in its slot:
+
+```bash
+cast calldata "revoke($PERM)" '(0x1111111111111111111111111111111111111111,0x2222222222222222222222222222222222222222,1700000000,2000000000,42,[(0x3333333333333333333333333333333333333333,0xa9059cbb,0x8888888888888888888888888888888888888888)],[(0x4444444444444444444444444444444444444444,1000000,2,7)])'
+```
+
+The three grant entries are the ones that need care. `apiPermissionsToPermission`
 stamps `start` from `Date.now()` and draws the salt from `Math.random()`, so the
 test freezes the clock at the `start` recorded in the vector and pins
 `Math.random` to 0, which makes the salt 0. Generate them with those two values,
 not with the 42 the other entries use. The period is the other thing to watch:
 `unit: 'year'` has no enum member, so the second entry encodes as `Month` with
 the multiplier times twelve.
+
+Seventh entry, the first grant with a non-zero checker in the request. It is the
+sixth entry's tuple under the `approve` selector, with the grant's salt of 0:
+
+```bash
+cast calldata "approve($PERM)" '(0x1111111111111111111111111111111111111111,0x2222222222222222222222222222222222222222,1700000000,2000000000,0,[(0x3333333333333333333333333333333333333333,0xa9059cbb,0x8888888888888888888888888888888888888888)],[(0x4444444444444444444444444444444444444444,1000000,2,7)])'
+```
 
 To read a vector back:
 

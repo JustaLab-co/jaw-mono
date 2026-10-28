@@ -1,3 +1,9 @@
-# Run affected build, test, and lint tasks, excluding docs app
-# This compares against the remote branch you're pushing to
-nx affected -t build,test,lint --base=origin/main --head=HEAD --exclude=docs
+# Run affected build, test, and lint tasks, excluding docs app.
+# Compares against the PR base, as CI does, so a stacked branch checks only its
+# own commits. Falls back to main when gh fails or the branch has no PR.
+base=$(gh pr view --json baseRefName -q .baseRefName 2>/dev/null) || base=
+[ -n "$base" ] || base=main
+git fetch -q origin "$base" 2>/dev/null
+git rev-parse -q --verify "origin/$base" >/dev/null || base=main
+echo "pre-push: nx affected against origin/$base"
+nx affected -t build,test,lint --base="origin/$base" --head=HEAD --exclude=docs

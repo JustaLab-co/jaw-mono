@@ -1,0 +1,47 @@
+#!/usr/bin/env bash
+# Starts Postgres and the apps/mcp container for this run.
+# Appends COMPOSE_PROJECT, DATABASE_URL, MCP_URL and JAW_VERIFY_CRON_SECRET_FILE to run.env.
+# Usage: [JAW_KEYS_URL=http://localhost:<keys port>] [JAW_VERIFY_MCP_IMAGE=<tag>] [JAW_VERIFY_LOSE_SEND=1] hosted-up.sh <run-dir>
+set -euo pipefail
+RUN=${1:?run dir}; . "$RUN/run.env"
+DIR=$(cd "$(dirname "$0")" && pwd)
+docker info >/dev/null 2>&1 || { echo "docker is not running" >&2; exit 1; }
+# Hash of the absolute run path: two worktrees can start runs with the same id.
+PROJECT=jaw-verify-$(printf %s "$RUN" | shasum | cut -c1-8)
+# The image builds from up.sh's clean worktree of HEAD when there is one.
+CTX=$REPO; [ -d "${SRC:-}" ] && CTX=$SRC
+if [ "$CTX" = "$REPO" ] && [ -n "$(git -C "$REPO" status --porcelain 2>/dev/null)" ]; then
+  echo "refusing to build the mcp image from a dirty tree; commit first" >&2; exit 1
+fi
+PROFILE=; [ -f "$CTX/apps/mcp/Dockerfile" ] && PROFILE="--profile mcp"
+# The OAuth issuer must equal the URL clients reach, so the host port is fixed
+# before start. The sealing key and the cron secret are per run and stay out of
+# run.env, which is copied into evidence.
+MCP_PORT=$(node -e 'const s=require("net").createServer().listen(0,()=>{console.log(s.address().port);s.close()})')
+KEYFILE=$RUN/work/sealing.key
+[ -f "$KEYFILE" ] || (umask 077; openssl rand -base64 32 | tr '+/' '-_' | tr -d '=' >"$KEYFILE")
+CRONFILE=$RUN/work/cron.secret
+[ -f "$CRONFILE" ] || (umask 077; openssl rand -base64 32 | tr '+/' '-_' | tr -d '=' >"$CRONFILE")
+export HEAD_SHA PORT MCP_PORT JAW_MCP_PUBLIC_URL=http://localhost:$MCP_PORT JAW_KEYS_URL=${JAW_KEYS_URL:-http://localhost:3100}
+export JAW_MCP_SEALING_KEYS=$(cat "$KEYFILE") JAW_MCP_CRON_SECRET=$(cat "$CRONFILE")
+# JAW_KEYS_URL is required by the server (it builds the wallet link of the
+# interaction page from it) but nothing here contacts it, so a placeholder is enough.
+# JAW_VERIFY_MCP_IMAGE reuses an image built once per round; otherwise this run
+# builds its own tag.
+BUILD=--build
+if [ -n "${JAW_VERIFY_MCP_IMAGE:-}" ]; then export MCP_IMAGE=$JAW_VERIFY_MCP_IMAGE; BUILD=--no-build
+else export MCP_IMAGE=jaw-verify-mcp:$PROJECT; fi
+printf 'head: %s\ntree: clean\n' "$HEAD_SHA" >"$RUN/evidence/compose-up.log"
+# JAW_VERIFY_LOSE_SEND=1 drops one bundler answer on demand, see compose.lose-send.yaml.
+EXTRA=; [ "${JAW_VERIFY_LOSE_SEND:-}" = 1 ] && EXTRA="-f $DIR/compose.lose-send.yaml"
+REPO=$CTX docker compose -p "$PROJECT" -f "$DIR/compose.yaml" $EXTRA $PROFILE up -d $BUILD --wait >>"$RUN/evidence/compose-up.log" 2>&1 \
+  || { tail -20 "$RUN/evidence/compose-up.log" >&2; exit 1; }
+PG=$(docker compose -p "$PROJECT" -f "$DIR/compose.yaml" port postgres 5432 | sed 's/.*://')
+{ echo "COMPOSE_PROJECT=$PROJECT"; echo "DATABASE_URL=postgres://jaw:jaw@localhost:$PG/jaw_mcp"; } >>"$RUN/run.env"
+if [ -n "$PROFILE" ]; then
+  { echo "MCP_URL=http://localhost:$MCP_PORT/mcp"; echo "MCP_PUBLIC_URL=$JAW_MCP_PUBLIC_URL"; echo "KEYS_URL=$JAW_KEYS_URL"; echo "JAW_VERIFY_CRON_SECRET_FILE=$CRONFILE"; } >>"$RUN/run.env"
+else
+  echo "apps/mcp/Dockerfile not found: Postgres only" >&2
+fi
+{ printf 'head: %s\ntree: clean\n' "$HEAD_SHA"; cat "$RUN/run.env"; } >"$RUN/evidence/run.env"
+grep -E 'DATABASE_URL|MCP_URL' "$RUN/run.env"

@@ -57,6 +57,7 @@ vite.config.*.timestamp*
 vitest.config.*.timestamp*
 
 test/
+!apps/mcp/test/
 
 .claude
 .cursor
@@ -74,6 +75,9 @@ expo-env.d.ts
 # Stryker
 .stryker-tmp
 **/reports/mutation
+
+# Verification runs (tools/verify)
+.verify-cache/
 
 # Playwright e2e output
 e2e/test-results/

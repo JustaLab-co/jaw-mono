@@ -1,0 +1,133 @@
+import { generateKeyPairSync, randomBytes } from 'node:crypto';
+import { generatePrivateKey } from 'viem/accounts';
+import { describe, expect, it } from 'vitest';
+import { type Sealed, nextRefreshId, open, openResume, parseKeyRing, seal, sealResume, unwrap, wrap } from './seal';
+
+const key = () => randomBytes(32).toString('base64url');
+
+describe('sealing key ring', () => {
+  const [a, b] = [key(), key()];
+  const pk = generatePrivateKey();
+
+  it('round trips and never shows the key in the sealed form', () => {
+    const ring = parseKeyRing(a);
+    const sealed = seal(ring, pk, 'conn_1');
+    expect(sealed).not.toContain(pk.slice(2));
+    expect(sealed).not.toContain(Buffer.from(pk.slice(2), 'hex').toString('base64url'));
+    expect(open(ring, sealed, 'conn_1')).toBe(pk);
+  });
+
+  it('opens with an older key after rotation and seals with the new one', () => {
+    const before = seal(parseKeyRing(a), pk, 'conn_1');
+    const rotated = parseKeyRing(`${b},${a}`);
+    expect(open(rotated, before, 'conn_1')).toBe(pk);
+    const after = seal(rotated, pk, 'conn_1');
+    expect(() => open(parseKeyRing(a), after, 'conn_1')).toThrow('cannot be opened');
+  });
+
+  it('refuses once the sealing key leaves the ring', () => {
+    const sealed = seal(parseKeyRing(a), pk, 'conn_1');
+    expect(() => open(parseKeyRing(b), sealed, 'conn_1')).toThrow('cannot be opened');
+  });
+
+  it('refuses another connection id and a tampered blob', () => {
+    const ring = parseKeyRing(a);
+    const sealed = seal(ring, pk, 'conn_1');
+    expect(() => open(ring, sealed, 'conn_2')).toThrow();
+    const last = sealed.at(-1) === 'A' ? 'B' : 'A';
+    expect(() => open(ring, (sealed.slice(0, -1) + last) as typeof sealed, 'conn_1')).toThrow();
+  });
+
+  it('wraps under a refresh token and opens only with that token and the ring', () => {
+    const ring = parseKeyRing(a);
+    const wrapped = wrap(ring, pk, 'conn_1', 'rt_1');
+    expect(wrapped).not.toContain(pk.slice(2));
+    expect(unwrap(ring, wrapped, 'conn_1', 'rt_1')).toBe(pk);
+    expect(() => unwrap(ring, wrapped, 'conn_1', 'rt_2')).toThrow();
+    expect(() => unwrap(ring, wrapped, 'conn_2', 'rt_1')).toThrow();
+    expect(() => unwrap(parseKeyRing(b), wrapped, 'conn_1', 'rt_1')).toThrow('cannot be opened');
+    expect(() => open(ring, wrapped as never, 'conn_1')).toThrow('cannot be opened');
+  });
+
+  it('given the same key, token and wrap, then the same successor id, and a different one when any of them differs', () => {
+    const ring = parseKeyRing(a);
+    const wrapped = wrap(ring, pk, 'conn_1', 'rt_1');
+    const next = nextRefreshId(pk, 'rt_1', wrapped);
+    expect(next).toMatch(/^[\w-]{43}$/);
+    expect(nextRefreshId(pk, 'rt_1', wrapped)).toBe(next);
+    expect(nextRefreshId(pk, 'rt_1', wrap(ring, pk, 'conn_1', 'rt_1'))).not.toBe(next);
+    expect(nextRefreshId(generatePrivateKey(), 'rt_1', wrapped)).not.toBe(next);
+    expect(nextRefreshId(pk, 'rt_2', wrapped)).not.toBe(next);
+  });
+
+  it('rejects a missing or short key list', () => {
+    expect(() => parseKeyRing(undefined)).toThrow('not set');
+    expect(() => parseKeyRing(randomBytes(16).toString('base64url'))).toThrow('32 bytes');
+  });
+
+  it('given a ring with one good key and one short key, when it is parsed, then it is refused', () => {
+    const ring = [randomBytes(32), randomBytes(16)].map((k) => k.toString('base64url')).join(',');
+    expect(() => parseKeyRing(ring)).toThrow('32 bytes');
+  });
+
+  it('derives distinct keys per purpose and a stable signing key', () => {
+    const ring = parseKeyRing(a);
+    const [k] = ring.keys;
+    expect(k.jwe.equals(k.seal)).toBe(false);
+    expect(parseKeyRing(a).jwk).toEqual(ring.jwk);
+    expect(ring.jwk).toMatchObject({ kty: 'OKP', crv: 'Ed25519' });
+  });
+});
+
+describe('a sealed relay session', () => {
+  const [a, b] = [key(), key()];
+  const pair = generateKeyPairSync('ec', { namedCurve: 'P-256' });
+  const resume = {
+    session: 'b3c1a2d4-0000-4000-8000-000000000001',
+    key: pair.privateKey.export({ format: 'der', type: 'pkcs8' }).toString('hex'),
+    peer: pair.publicKey.export({ format: 'der', type: 'spki' }).toString('hex'),
+    chainId: 84532,
+    appName: 'Agent (via JAW MCP)',
+  };
+
+  it('given it is sealed for a row, then that row opens it and the private key never shows', () => {
+    const ring = parseKeyRing(a);
+    const blob = sealResume(ring, resume, 'req_1');
+
+    expect(blob).not.toContain(resume.key);
+    expect(openResume(ring, blob, 'req_1')).toEqual(resume);
+  });
+
+  it('given it is moved to another row, tampered with, or its key left the ring, then it does not open', () => {
+    const ring = parseKeyRing(a);
+    const blob = sealResume(ring, resume, 'req_1');
+    const last = blob.at(-1) === 'A' ? 'B' : 'A';
+
+    expect(openResume(ring, blob, 'req_2')).toBeUndefined();
+    expect(openResume(ring, blob.slice(0, -1) + last, 'req_1')).toBeUndefined();
+    expect(openResume(parseKeyRing(b), blob, 'req_1')).toBeUndefined();
+  });
+
+  it.each([
+    ['a private key that does not load', { key: randomBytes(138).toString('hex') }],
+    ['a page key that does not load', { peer: randomBytes(91).toString('hex') }],
+    ['no chain', { chainId: undefined }],
+  ])('given it opens but holds %s, then it does not open', (_, over) => {
+    const ring = parseKeyRing(a);
+    expect(
+      openResume(ring, sealResume(ring, { ...resume, ...over } as typeof resume, 'req_1'), 'req_1')
+    ).toBeUndefined();
+  });
+
+  it('given a sealed session relabelled as a sealed connection key, then the connection key ring purpose does not open it', () => {
+    const ring = parseKeyRing(a);
+    const relabelled = sealResume(ring, resume, 'req_1').replace(/^r1\./, 'v1.') as Sealed;
+
+    expect(() => open(ring, relabelled, 'req_1')).toThrow();
+  });
+
+  it('given a connection key sealed for the same id, then it does not open as a relay session', () => {
+    const ring = parseKeyRing(a);
+    expect(openResume(ring, seal(ring, generatePrivateKey(), 'req_1'), 'req_1')).toBeUndefined();
+  });
+});

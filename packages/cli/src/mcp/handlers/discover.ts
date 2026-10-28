@@ -1,7 +1,5 @@
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
-import { discoverSchema } from '../tools.js';
-import { mcpError, mcpDiscoverResult } from '../helpers.js';
-import { discoverServices, type DiscoverParams } from '../../x402/discover.js';
+import { discoverSchema, mcpError, mcpDiscoverResult, discoverServices, type DiscoverParams } from '@jaw.id/agent';
 
 export function registerDiscoverTool(server: McpServer): void {
   // Same deep-inference trip as `jaw_config_set`: the SDK's registerTool generic

@@ -77,7 +77,15 @@ vi.mock('../x402/balance.js', async (importOriginal) => ({
   // the permission holds enough to fund one.
   usdcBalance: async (_network: string, owner: string) =>
     owner.toLowerCase() === '0x' + '22'.repeat(20) ? { raw: '1000000', formatted: '1' } : { raw: '0', formatted: '0' },
-  publicClientFor: () => ({ getCode: async () => undefined }),
+  cliChainClients: {
+    publicClient: () => ({
+      getCode: async () => undefined,
+      readContract: async ({ functionName, args }: { functionName: string; args: [string] }) => {
+        if (functionName !== 'balanceOf') throw new Error(`unexpected read: ${functionName}`);
+        return args[0].toLowerCase() === '0x' + '22'.repeat(20) ? 1000000n : 0n;
+      },
+    }),
+  },
 }));
 
 const { createMcpServer } = await import('./server.js');
@@ -149,6 +157,7 @@ const TOOLS = [
   'jaw_status',
   'jaw_disconnect',
   'jaw_session_status',
+  'jaw_grant_permissions',
   'jaw_pay_and_fetch',
   'jaw_x402_log',
   'jaw_x402_balance',
@@ -199,6 +208,7 @@ const KEYS = [
   'curatedOnly',
   'maxUsdPrice',
   'x402',
+  'x402Budget',
   'constructor',
 ];
 const args = fc.oneof(
@@ -236,6 +246,13 @@ const shapedCall = fc.oneof(
       { url: fc.oneof(hostileText, fc.webUrl(), fc.string()), maxAmount: fc.oneof(hostileText, fc.string()) },
       { requiredKeys: ['url'] }
     ),
+  }),
+  fc.record({
+    name: fc.constant('jaw_grant_permissions'),
+    arguments: fc.record({
+      x402Budget: fc.record({ perDay: fc.oneof(hostileText, fc.constantFrom('1', '0.5', '999999999'), fc.string()) }),
+      chainId: fc.oneof(fc.constantFrom(84532, 8453, 1), fc.integer()),
+    }),
   })
 );
 // A plain paid fetch, so the generated 402 challenges reach the policy, the

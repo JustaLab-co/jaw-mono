@@ -5,6 +5,7 @@ import { useEffect, useState, Suspense, useRef, useCallback } from 'react';
 import { JAW, Mode } from '@jaw.id/core';
 import { ReactUIHandler } from '@jaw.id/ui';
 import { resolveBridgeApiKey } from '../../lib/cli-api-key';
+import { DEFAULT_BRIDGE_APP_NAME, resolveBridgeAppName } from '../../lib/bridge-app-name';
 import {
   generateKeyPair,
   deriveSharedSecret,
@@ -28,6 +29,7 @@ import {
  * 5. CLI sends encrypted init (apiKey, chainId, etc.)
  * 6. Page initializes JAW SDK, sends encrypted ready
  * 7. CLI sends encrypted RPC requests, page executes and sends encrypted responses
+ * 8. A request repeated under the same id gets the answer already given
  */
 
 type BridgeState = 'connecting' | 'connected' | 'disconnected' | 'error';
@@ -79,14 +81,24 @@ function CLIBridgeContent() {
   const [state, setState] = useState<BridgeState>('connecting');
   const [error, setError] = useState('');
   const [lastMethod, setLastMethod] = useState<string | null>(null);
+  const [appName, setAppName] = useState(DEFAULT_BRIDGE_APP_NAME);
   const sdkRef = useRef<ReturnType<typeof JAW.create> | null>(null);
   /** What `sdkRef` was built from, so a second init can tell whether it still fits. */
   const sdkSignatureRef = useRef<string | null>(null);
+  /** The first name a client gave. A dialog may be open under it, so a later init cannot rename the page. */
+  const appNameRef = useRef<string | null>(null);
   const wsRef = useRef<WebSocket | null>(null);
   const sharedSecretRef = useRef<CryptoKey | null>(null);
+  /**
+   * Every answer given in this relay session, by request id. An id is final,
+   * refusals and errors included: a client that wants to try again sends a new id.
+   */
+  const answersRef = useRef(new Map<string, { request: string; reply: Promise<RpcResponse> }>());
 
-  const sessionId = searchParams.get('session');
-  const relayUrl = searchParams.get('relay');
+  // A tab another tab replaced connects to nothing, even if its address still names a session.
+  const replaced = searchParams.get('replaced') === '1';
+  const sessionId = replaced ? null : searchParams.get('session');
+  const relayUrl = replaced ? null : searchParams.get('relay');
 
   // Read CLI public key from URL fragment (use ref to survive React Strict Mode double-invoke)
   const cliPublicKeyRef = useRef<string | null>(null);
@@ -105,48 +117,32 @@ function CLIBridgeContent() {
       cliPublicKeyRef.current = pk;
       setCliPublicKeyHex(pk);
       window.history.replaceState(null, '', window.location.pathname + window.location.search);
+    } else {
+      // The key is stripped once read, so a reload or a second open has none.
+      setState('error');
+      setError(LINK_GONE);
     }
   }, []);
 
-  const handleRpcRequest = useCallback(async (id: string, method: string, params: unknown) => {
-    if (!sdkRef.current || !sharedSecretRef.current || !wsRef.current) return;
+  // A client that lost its connection asks again under the same id, so it
+  // gets the answer already given instead of a second dialog.
+  const handleRpcRequest = useCallback(async (id: string, method: string, rawParams: unknown) => {
+    const sdk = sdkRef.current;
+    const secret = sharedSecretRef.current;
+    const ws = wsRef.current;
+    if (!sdk || !secret || !ws) return;
 
-    setLastMethod(method);
-
-    try {
-      const normalizedParams = Array.isArray(params) ? params : params !== undefined ? [params] : [];
-
-      const result = await sdkRef.current.provider.request({
-        method,
-        params: normalizedParams,
-      });
-
-      const address = extractAddress(method, result);
-
-      const envelope = await encryptAndSerialize(sharedSecretRef.current, {
-        type: 'rpc_response',
-        id,
-        success: true,
-        data: result,
-        ...(address ? { address } : {}),
-      });
-
-      wsRef.current.send(JSON.stringify(envelope));
-    } catch (err) {
-      const errObj = err as { code?: number; message?: string };
-      const errCode = errObj?.code ?? -32000;
-      const errMsg = errObj?.message ?? (err instanceof Error ? err.message : String(err));
-
-      if (sharedSecretRef.current && wsRef.current) {
-        const envelope = await encryptAndSerialize(sharedSecretRef.current, {
-          type: 'rpc_response',
-          id,
-          success: false,
-          error: { code: errCode, message: errMsg },
-        });
-        wsRef.current.send(JSON.stringify(envelope));
-      }
+    const params = Array.isArray(rawParams) ? rawParams : rawParams !== undefined ? [rawParams] : [];
+    const request = canonical({ method, params });
+    let given = answersRef.current.get(id);
+    if (!given) {
+      given = { request, reply: ask(sdk, id, method, params) };
+      answersRef.current.set(id, given);
+      if (answersRef.current.size > ANSWERS_KEPT) answersRef.current.delete(answersRef.current.keys().next().value!);
+      setLastMethod(method);
     }
+    const reply = given.request === request ? await given.reply : idReused(id);
+    ws.send(JSON.stringify(await encryptAndSerialize(secret, reply)));
   }, []);
 
   useEffect(() => {
@@ -155,6 +151,8 @@ function CLIBridgeContent() {
     let ws: WebSocket | null = null;
     let beforeUnloadHandler: (() => void) | null = null;
     let cancelled = false;
+    let unanswered: ReturnType<typeof setTimeout> | undefined;
+    answersRef.current = new Map();
 
     (async () => {
       try {
@@ -185,6 +183,12 @@ function CLIBridgeContent() {
               publicKey: browserPublicKeyHex,
             })
           );
+          // The relay keeps no queue: when the server that made this link is
+          // gone, the key exchange reaches nobody and nothing ever comes back.
+          unanswered = setTimeout(() => {
+            setState('error');
+            setError(LINK_GONE);
+          }, SERVER_WAIT_MS);
         };
 
         ws.onmessage = async (event) => {
@@ -205,8 +209,12 @@ function CLIBridgeContent() {
 
               switch (inner.type) {
                 case 'init': {
+                  clearTimeout(unanswered);
+                  setState('connected');
                   const chainId = (inner.chainId as number) ?? 1;
                   const ens = inner.ens as string | undefined;
+                  const name = (appNameRef.current ??= resolveBridgeAppName(inner.appName));
+                  setAppName(name);
                   const paymasterUrl = inner.paymasterUrl as string | undefined;
                   // Only meaningful alongside the url it was written for; the CLI
                   // sends the two together or not at all.
@@ -220,7 +228,7 @@ function CLIBridgeContent() {
                   const sentApiKey = typeof inner.apiKey === 'string' ? inner.apiKey : '';
                   const apiKey = await resolveBridgeApiKey(sentApiKey);
                   if (!apiKey) {
-                    const reason = 'No API key: the CLI sent none and this deployment has none configured for it.';
+                    const reason = `No API key: ${name} sent none and this deployment has none configured for it.`;
                     setState('error');
                     setError(reason);
                     // Said across the channel as well, because this page is not
@@ -241,15 +249,15 @@ function CLIBridgeContent() {
                   // first SDK meant the browser kept signing under the key, the
                   // chain and the paymaster of the previous run while the CLI
                   // recorded the new ones, and neither side could see the gap.
-                  const signature = JSON.stringify({ chainId, ens, paymasterUrl, paymasterContext, apiKey });
+                  const signature = JSON.stringify({ chainId, ens, paymasterUrl, paymasterContext, apiKey, name });
                   if (!sdkRef.current || sdkSignatureRef.current !== signature) {
                     sdkSignatureRef.current = signature;
                     sdkRef.current = JAW.create({
-                      appName: 'JAW CLI',
+                      appName: name,
                       defaultChainId: chainId,
                       preference: {
                         mode: Mode.AppSpecific,
-                        uiHandler: new ReactUIHandler(),
+                        uiHandler: new ReactUIHandler({ originLabel: 'via JAW bridge' }),
                         showTestnets: true,
                       },
                       apiKey,
@@ -274,6 +282,7 @@ function CLIBridgeContent() {
                   const readyEnvelope = await encryptAndSerialize(sharedSecretRef.current!, {
                     type: 'ready',
                     chainId,
+                    replays: true,
                     ...(sentApiKey ? {} : { apiKey }),
                   });
                   ws!.send(JSON.stringify(readyEnvelope));
@@ -281,7 +290,13 @@ function CLIBridgeContent() {
                 }
 
                 case 'rpc_request':
-                  handleRpcRequest(inner.id as string, inner.method as string, inner.params);
+                  if (typeof inner.id !== 'string' || !inner.id) {
+                    console.error('[cli-bridge] Dropped a request with no string id');
+                    break;
+                  }
+                  handleRpcRequest(inner.id, inner.method as string, inner.params).catch((err) =>
+                    console.error('[cli-bridge] Failed to answer request:', err)
+                  );
                   break;
 
                 case 'shutdown':
@@ -302,15 +317,30 @@ function CLIBridgeContent() {
 
           if (msg.type === 'error' && msg.code === 'session_expired') {
             setState('error');
-            setError('Session expired. Run a new CLI command to reconnect.');
+            setError('Session expired. Start a new session to reconnect.');
           }
         };
 
-        ws.onclose = () => {
-          if (!cancelled) setState('disconnected');
+        ws.onclose = (event) => {
+          clearTimeout(unanswered);
+          if (cancelled) return;
+          if (event.code === REPLACED_BY_ANOTHER_TAB) {
+            // The other tab is asked the same requests, so a dialog left open
+            // here could approve one twice. Direct close is intentional:
+            // /cli-bridge is never embedded (its route keeps
+            // frame-ancestors 'none' / X-Frame-Options DENY).
+            // eslint-disable-next-line no-restricted-properties
+            window.close();
+            // A browser may refuse to close a tab it did not open, so leave
+            // the page too: the SDK and its dialog go with it.
+            window.location.replace(REPLACED_URL);
+            return;
+          }
+          setState('disconnected');
         };
 
         ws.onerror = () => {
+          clearTimeout(unanswered);
           if (!cancelled) {
             setState('error');
             setError('Relay connection failed');
@@ -334,6 +364,9 @@ function CLIBridgeContent() {
 
     return () => {
       cancelled = true;
+      clearTimeout(unanswered);
+      appNameRef.current = null;
+      setAppName(DEFAULT_BRIDGE_APP_NAME);
       if (beforeUnloadHandler) {
         window.removeEventListener('beforeunload', beforeUnloadHandler);
       }
@@ -343,6 +376,21 @@ function CLIBridgeContent() {
     };
   }, [sessionId, relayUrl, cliPublicKeyHex, handleRpcRequest]);
 
+  if (replaced) {
+    return (
+      <div className="flex min-h-screen items-center justify-center font-sans">
+        <div className="max-w-md p-12 text-center">
+          {/* eslint-disable-next-line @next/next/no-img-element */}
+          <img src="/jaw-logo.png" alt="JAW" className="mx-auto mb-4 block h-12 w-12 opacity-80" />
+          <h1 className="text-foreground mb-4 text-xl font-semibold">Continued in another tab</h1>
+          <p className="text-muted-foreground mt-2 text-sm leading-relaxed">
+            This link is open in another tab. You can close this one.
+          </p>
+        </div>
+      </div>
+    );
+  }
+
   // Validation
   if (!sessionId || !relayUrl) {
     return (
@@ -350,7 +398,7 @@ function CLIBridgeContent() {
         <div className="max-w-md p-12 text-center">
           {/* eslint-disable-next-line @next/next/no-img-element */}
           <img src="/jaw-logo.png" alt="JAW" className="mx-auto mb-4 block h-12 w-12 opacity-80" />
-          <h1 className="text-foreground mb-4 text-xl font-semibold">JAW CLI</h1>
+          <h1 className="text-foreground mb-4 text-xl font-semibold">{DEFAULT_BRIDGE_APP_NAME}</h1>
           <p className="text-destructive text-base font-semibold">Error</p>
           <p className="text-muted-foreground mt-2 text-sm leading-relaxed">
             Missing required parameters: session, relay
@@ -365,7 +413,7 @@ function CLIBridgeContent() {
       <div className="max-w-md p-12 text-center">
         {/* eslint-disable-next-line @next/next/no-img-element */}
         <img src="/jaw-logo.png" alt="JAW" className="mx-auto mb-4 block h-12 w-12 opacity-80" />
-        <h1 className="text-foreground mb-4 text-xl font-semibold">JAW CLI</h1>
+        <h1 className="text-foreground mb-4 text-xl font-semibold">{appName}</h1>
 
         {state === 'connecting' && (
           <p className="text-muted-foreground mb-4 text-sm leading-relaxed">Connecting to relay...</p>
@@ -375,9 +423,9 @@ function CLIBridgeContent() {
           <>
             <p className="text-success text-base font-semibold">Connected</p>
             <p className="text-muted-foreground mt-2 text-sm leading-relaxed">
-              This tab is your CLI&apos;s signing backend.
+              This tab is the signing backend for {appName}.
               <br />
-              Keep it open while using the CLI.
+              Keep it open while it is in use.
             </p>
             {lastMethod && (
               <p className="text-muted-foreground bg-muted mt-4 rounded p-2 font-mono text-xs">
@@ -389,7 +437,7 @@ function CLIBridgeContent() {
 
         {state === 'disconnected' && (
           <p className="text-muted-foreground mt-2 text-sm leading-relaxed">
-            CLI disconnected. You can close this tab.
+            {appName} disconnected. You can close this tab.
           </p>
         )}
 
@@ -403,6 +451,61 @@ function CLIBridgeContent() {
     </div>
   );
 }
+
+const LINK_GONE = 'This link is no longer active. Ask the agent for a new one.';
+
+// The relay keeps one browser per session and closes the older socket with
+// this code when the link is opened in another tab.
+const REPLACED_BY_ANOTHER_TAB = 4003;
+
+// Where a replaced tab goes: no session, relay or key, so it connects to nothing.
+const REPLACED_URL = '/cli-bridge?replaced=1';
+
+// A live server sends init as soon as the key exchange reaches it.
+const SERVER_WAIT_MS = 20_000;
+
+// A server re-asks within the 30 minute approval window, so the oldest answers
+// can go once a long session of reads would otherwise keep them all.
+const ANSWERS_KEPT = 500;
+
+/** JSON with object keys sorted, so a request rebuilt from storage in another key order is still the same request. */
+function canonical(value: unknown): string {
+  if (Array.isArray(value)) return `[${value.map(canonical).join(',')}]`;
+  if (value && typeof value === 'object') {
+    const entries = Object.entries(value).filter(([, v]) => v !== undefined);
+    entries.sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0));
+    return `{${entries.map(([k, v]) => `${JSON.stringify(k)}:${canonical(v)}`).join(',')}}`;
+  }
+  return JSON.stringify(value) ?? 'null';
+}
+
+type RpcResponse = Record<string, unknown> & { type: 'rpc_response'; id: string };
+
+async function ask(
+  sdk: ReturnType<typeof JAW.create>,
+  id: string,
+  method: string,
+  params: unknown[]
+): Promise<RpcResponse> {
+  try {
+    const result = await sdk.provider.request({ method, params });
+    const address = extractAddress(method, result);
+    return { type: 'rpc_response', id, success: true, data: result, ...(address ? { address } : {}) };
+  } catch (err) {
+    const errObj = err as { code?: number; message?: string };
+    const code = errObj?.code ?? -32000;
+    const message = errObj?.message ?? (err instanceof Error ? err.message : String(err));
+    return { type: 'rpc_response', id, success: false, error: { code, message } };
+  }
+}
+
+/** An id already answered for another request is refused, so an answer never covers a request it was not given for. */
+const idReused = (id: string): RpcResponse => ({
+  type: 'rpc_response',
+  id,
+  success: false,
+  error: { code: -32600, message: 'this request id was already used for a different request' },
+});
 
 function extractAddress(method: string, result: unknown): string | undefined {
   if (method !== 'wallet_connect' && method !== 'eth_requestAccounts') return;

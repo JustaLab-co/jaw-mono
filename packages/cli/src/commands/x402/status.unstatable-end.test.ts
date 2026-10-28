@@ -46,19 +46,37 @@ vi.mock('../../lib/paths.js', () => {
 vi.mock('../../lib/keystore.js', () => ({ keystoreExists: () => true }));
 vi.mock('../../lib/config.js', () => ({ loadConfig: () => ({}), ensureDir: () => undefined }));
 vi.mock('../../lib/session-config.js', () => ({
-  sessionUsable: (expiry: unknown, now: number = Date.now() / 1000) =>
-    typeof expiry === 'number' && Number.isFinite(expiry) && expiry > now,
-  expiryInstant: (expiry: unknown) =>
-    typeof expiry === 'number' && Number.isFinite(expiry) ? new Date(expiry * 1000) : null,
   tryLoadSessionConfig: () => h.session,
-  isLegacySession: () => false,
-  liveOrphans: () => [],
+  sessionFileStore: { saveRecovered: () => true },
 }));
-vi.mock('../../x402/payer.js', () => ({ sessionPayerAddress: () => h.payer }));
-vi.mock('../../x402/balance.js', () => ({ usdcBalance: async () => ({ formatted: '20' }) }));
-vi.mock('../../x402/ledger.js', () => ({ readX402Log: () => [], sumSpentSince: () => 0n, sumToppedUpSince: () => 0n }));
+vi.mock('../../x402/session-payer.js', () => ({ sessionPayerAddress: () => h.payer }));
+// No chain behind the reads: liveness comes back as not knowing.
+vi.mock('../../x402/balance.js', () => ({
+  usdcBalance: async () => ({ formatted: '20' }),
+  cliChainClients: {
+    publicClient: () => {
+      throw new Error('offline');
+    },
+  },
+}));
+vi.mock('../../x402/ledger.js', () => ({
+  readX402Log: () => [],
+  // Nothing here reconciles a row, so any write is a wiring mistake.
+  jsonlPaymentLog: {
+    append: () => {
+      throw new Error('unexpected ledger write');
+    },
+    correct: () => {
+      throw new Error('unexpected ledger write');
+    },
+    compact: () => {
+      throw new Error('unexpected ledger write');
+    },
+  },
+}));
 // Metered by the chain, counted from a start we have, ending nowhere we can name.
-vi.mock('../../x402/spend-window.js', () => ({
+vi.mock('@jaw.id/agent', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@jaw.id/agent')>()),
   currentLimitUsageOnChain: async () => [
     {
       allowance: '5000000',

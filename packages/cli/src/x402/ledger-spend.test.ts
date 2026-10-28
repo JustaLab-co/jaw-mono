@@ -1,8 +1,9 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
-import type { SpendScope } from './ledger.js';
+import { sumSpentSince, sumToppedUpSince } from '@jaw.id/agent';
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 import * as os from 'node:os';
+import type { SpendScope } from '@jaw.id/agent';
 
 const TEST_ROOT = path.join(os.tmpdir(), 'jaw-ledger-spend-test');
 
@@ -13,7 +14,7 @@ vi.mock('../lib/paths.js', () => {
   return { PATHS: { root, x402Log: p.join(root, 'x402-log.jsonl') } };
 });
 
-const { appendX402Log, readX402Log, sumSpentSince, sumToppedUpSince } = await import('./ledger.js');
+const { appendX402Log, readX402Log } = await import('./ledger.js');
 
 // The sums take the rows now, so each assertion reads back the file it wrote.
 const spentBy = (scope: SpendScope, since?: string) => sumSpentSince(readX402Log(), scope, since);

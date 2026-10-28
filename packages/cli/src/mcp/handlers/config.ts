@@ -1,6 +1,5 @@
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
-import { configSetSchema } from '../tools.js';
-import { mcpError, mcpResult } from '../helpers.js';
+import { configSetSchema, mcpError, mcpResult } from '@jaw.id/agent';
 import { loadConfig, setConfigValue, redactConfig } from '../../lib/config.js';
 import type { z } from 'zod';
 

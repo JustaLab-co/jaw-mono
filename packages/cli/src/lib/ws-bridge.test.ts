@@ -3,7 +3,7 @@ import { WebSocketServer } from 'ws';
 import type { AddressInfo } from 'node:net';
 
 import { buildInitPayload, readBridgeFailure, readInjectedApiKey, WSBridge } from './ws-bridge.js';
-import { exportKeyToHex, generateKeyPair } from './crypto.js';
+import { exportKeyToHex, generateKeyPair } from '@jaw.id/agent';
 
 // The init envelope is the only thing the CLI tells the browser about the
 // paymaster, so it has to carry the context and not the url alone. Dropping a

@@ -157,15 +157,24 @@ describe('withPaymentLock heartbeat', () => {
   // payment path: `upto` puts two 90s waits on it, and a second payer arriving
   // mid-payment breaks a live lock and ends up in the critical section beside
   // the first, both having read the same ledger total.
+  // Fake timers: holder and waiter share one event loop, so on a loaded runner a
+  // stall longer than the gap between beats let the waiter break a live lock.
   it('does not let a beating holder be broken as stale', async () => {
-    const holder = withPaymentLock(async () => new Promise((r) => setTimeout(r, 400)), { heartbeatMs: 25 });
-    await new Promise((r) => setTimeout(r, 40));
+    vi.useFakeTimers();
+    try {
+      const holder = withPaymentLock(async () => new Promise((r) => setTimeout(r, 400)), { heartbeatMs: 25 });
+      await vi.advanceTimersByTimeAsync(40);
 
-    // Would have broken the lock at 200ms without a beat, since `at` never moved.
-    await expect(withPaymentLock(async () => 'got in', { staleAfterMs: 200, timeoutMs: 300 })).rejects.toThrow(
-      /Another payment/
-    );
-    await holder;
+      // Would have broken the lock at 200ms without a beat, since `at` never moved.
+      const waiter = expect(
+        withPaymentLock(async () => 'got in', { staleAfterMs: 200, timeoutMs: 300 })
+      ).rejects.toThrow(/Another payment/);
+      await vi.advanceTimersByTimeAsync(400);
+      await waiter;
+      await holder;
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it('advances `at` while the work runs', async () => {

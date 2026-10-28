@@ -1,29 +1,63 @@
-import { useState, useEffect, useRef, useMemo } from 'react';
+import { useMemo } from 'react';
 import type { Hex } from 'viem';
-import type { DecodeResult } from '../../hooks/useDecodedCalldata';
+import type { DecodedParam, DecodeResult } from '../../hooks/useDecodedCalldata';
+import type { AllowanceFlag } from '../../utils/allowances';
 import { Spinner } from '../ui/spinner';
 import { TriangleAlert } from 'lucide-react';
-import { reverseResolveWithAvatars, formatAddress, getChainLabel, identityKey } from '../../utils';
+import { useAddressIdentities } from '../../hooks/useAddressIdentities';
+import { formatAddress, identityKey } from '../../utils';
+import { ENS_ONLY } from '../../utils/addressIdentity';
 import { isUnlimitedAmount } from '../../utils/displayFormat';
 import { computeCalldataDigest } from '../../utils/erc8213';
 import { IdentityAvatar } from '../IdentityAvatar';
 import { TokenIcon } from '../TokenIcon';
 import { DigestRow } from '../VerificationDigest';
+import { Tooltip, TooltipContent, TooltipTrigger } from '../ui/tooltip';
 import { ClearSignedView } from './ClearSignedView';
 
 const ZERO_ADDRESS = '0x0000000000000000000000000000000000000000';
 
+/** The amber allowance warning: "Unlimited", or "All tokens" for a whole collection. */
+export const AllowanceFlagText = ({ flag }: { flag: AllowanceFlag }) => (
+  <span className="text-warning flex flex-none items-center gap-1.5 font-mono text-xs font-semibold leading-normal">
+    <TriangleAlert className="size-3.5 flex-none" strokeWidth={2} />
+    {flag.label}
+  </span>
+);
+
+const FLAG_NOTES: Record<AllowanceFlag['label'], string> = {
+  Unlimited: 'Lets the spender take any amount of this token, now or later.',
+  'All tokens': 'Lets the operator move every token in this collection, now or later.',
+};
+
 /**
- * True only for the exact ERC-20 `approve(address,uint256)` shape. "Unlimited" is a claim about
- * an allowance, so it must never leak onto another function taking a large uint256.
+ * The warning with what it allows, on hover or keyboard focus. The visible word stays its name and
+ * the note is its description. Never inside a header: that is a button already.
  */
-export function isErc20Approve(decoded: DecodeResult['decoded']): boolean {
-  return (
-    decoded?.functionName === 'approve' &&
-    decoded.params.length === 2 &&
-    decoded.params[0]?.type === 'address' &&
-    decoded.params[1]?.type === 'uint256'
-  );
+const NotedAllowanceFlag = ({ flag }: { flag: AllowanceFlag }) => (
+  <Tooltip>
+    <TooltipTrigger asChild>
+      <span
+        tabIndex={0}
+        className="focus-visible:ring-ring/50 flex-none cursor-help rounded-sm outline-none focus-visible:ring-[3px]"
+      >
+        <AllowanceFlagText flag={flag} />
+      </span>
+    </TooltipTrigger>
+    <TooltipContent>{FLAG_NOTES[flag.label]}</TooltipContent>
+  </Tooltip>
+);
+
+/**
+ * Where the flag sits on the decoded argument it stands for, or null to put it on top. It goes on
+ * the argument only when the lookup shows the value the local decode read there: `true` for an
+ * approved/allowed flag, or the approved amount. It takes the place of `true` or a max amount; any
+ * other amount (an increase of 2^200, say) stays visible beside the flag, so the user sees the number.
+ */
+function flagPlacement(param: DecodedParam | undefined, flag: AllowanceFlag): 'replace' | 'beside' | null {
+  if (param?.type === 'bool') return param.value === 'true' ? 'replace' : null;
+  if (!param || !/^uint\d*$/.test(param.type) || param.value !== flag.amount?.toString()) return null;
+  return isUnlimitedAmount(flag.amount) ? 'replace' : 'beside';
 }
 
 /**
@@ -52,6 +86,15 @@ const CalldataDigest = ({ data }: { data: string }) => {
   );
 };
 
+/**
+ * The flag, only for a call the lookup could read. While it loads, or when it cannot read the
+ * call (the contract may not even have that function), the screen does not claim an allowance.
+ */
+export function readableFlag(decode: DecodeResult, flag: AllowanceFlag | null): AllowanceFlag | null {
+  const readable = !!decode.decoded || (decode.clearSigned?.rows.length ?? 0) > 0;
+  return readable ? flag : null;
+}
+
 /** ERC-7730 intent, else the decoded function name, else the caller's fallback. */
 export function callLabel(decode: DecodeResult, fallback: string): string {
   if (decode.clearSigned?.intent) return decode.clearSigned.intent;
@@ -72,114 +115,42 @@ export interface DecodedCalldataProps {
   data: string;
   chainId: number;
   apiKey?: string;
-  resolvedAddresses?: Record<string, string>;
-  resolvedAvatars?: Record<string, string>;
-  mainnetRpcUrl?: string;
+  mainnetRpcUrl: string;
 }
 
 export const DecodedCalldataView = ({
   data,
   chainId,
-  resolvedAddresses,
-  resolvedAvatars,
   mainnetRpcUrl,
   decode,
-}: DecodedCalldataProps & { decode: DecodeResult }) => {
+  allowanceFlag,
+}: DecodedCalldataProps & {
+  decode: DecodeResult;
+  /** From the local allowance decode; shown only once the lookup has read the call. */
+  allowanceFlag: AllowanceFlag | null;
+}) => {
   const { clearSigned, decoded, isLoading } = decode;
-  const [localResolved, setLocalResolved] = useState<Record<string, string>>({});
-  const [localAvatars, setLocalAvatars] = useState<Record<string, string>>({});
-  const attemptedRef = useRef<Set<string>>(new Set());
 
-  // Reset local state when decoded data changes identity (new transaction)
-  const decodedIdRef = useRef(decoded);
-  useEffect(() => {
-    if (decodedIdRef.current !== decoded) {
-      decodedIdRef.current = decoded;
-      setLocalResolved({});
-      setLocalAvatars({});
-      attemptedRef.current = new Set();
-    }
-  }, [decoded]);
-
-  // Both sides are filed by {@link identityKey}, which lowercases the address, so a plain
-  // merge is enough and the local answer wins over the one the dialog passed down.
-  const allResolved = useMemo(() => ({ ...resolvedAddresses, ...localResolved }), [resolvedAddresses, localResolved]);
-  const allAvatars = useMemo(() => ({ ...resolvedAvatars, ...localAvatars }), [resolvedAvatars, localAvatars]);
-
-  // Keep a ref to allResolved so the effect can read it without re-triggering
-  const allResolvedRef = useRef(allResolved);
-  allResolvedRef.current = allResolved;
-
-  // Resolve address params that aren't already resolved
-  useEffect(() => {
-    if (!decoded || !mainnetRpcUrl) return;
-
-    const currentResolved = allResolvedRef.current;
-    const addressParams = decoded.params
-      .filter((p) => p.type === 'address' && p.rawValue)
-      .map((p) => p.rawValue!)
-      .filter((addr) => {
-        const lower = addr.toLowerCase();
-        return (
-          lower !== ZERO_ADDRESS && !currentResolved[identityKey(lower, chainId)] && !attemptedRef.current.has(lower)
-        );
-      });
-
-    // Deduplicate
-    const unique = [...new Set(addressParams)];
-    if (unique.length === 0) return;
-
-    // Mark as attempted immediately to prevent re-fetching. An attempt only "counts"
-    // once it lands — see the cleanup, which un-marks anything still in flight.
-    unique.forEach((addr) => attemptedRef.current.add(addr.toLowerCase()));
-    const unmark = () => unique.forEach((addr) => attemptedRef.current.delete(addr.toLowerCase()));
-
-    let cancelled = false;
-    // Set once this run's result has landed. After that the attempt "counts" — including
-    // for addresses that resolved to no name — so the cleanup must leave the marks alone
-    // or every unresolvable address gets re-queried on the next run.
-    let wrote = false;
-    reverseResolveWithAvatars(
-      unique.map((address) => ({ address, chainId })),
-      mainnetRpcUrl
-    )
-      .then(async (resolved) => {
-        if (cancelled) return;
-        const label = await getChainLabel(chainId, mainnetRpcUrl);
-        if (cancelled) return;
-        wrote = true;
-        const next: Record<string, string> = {};
-        const avatarByAddress: Record<string, string> = {};
-        for (const address of unique) {
-          const identity = resolved[identityKey(address, chainId)];
-          if (!identity) continue;
-          const key = identityKey(address, chainId);
-          next[key] = label ? `${identity.name}@${label}` : identity.name;
-          if (identity.avatar) avatarByAddress[key] = identity.avatar;
-        }
-        if (Object.keys(next).length > 0) {
-          setLocalResolved((prev) => ({ ...prev, ...next }));
-        }
-        if (Object.keys(avatarByAddress).length > 0) {
-          setLocalAvatars((prev) => ({ ...prev, ...avatarByAddress }));
-        }
-      })
-      .catch(unmark);
-    return () => {
-      cancelled = true;
-      // If this run never wrote its result, its "attempted" marks must not outlive it:
-      // the next run, which a StrictMode re-invoke or an rpcUrl change causes without a
-      // remount, would filter every address out as already-tried and block resolution for
-      // good. A chainId change is not one of those runs, since it rebuilds `decoded` and
-      // the reset above drops the marks with it.
-      if (!wrote) unmark();
-    };
-  }, [decoded, mainnetRpcUrl, chainId]);
+  // Address params, named on this call's chain. The zero address is a sentinel, not a party.
+  const paramAddresses = (decoded?.params ?? [])
+    .filter((p) => p.type === 'address' && p.rawValue && p.rawValue.toLowerCase() !== ZERO_ADDRESS)
+    .map((p) => ({ address: p.rawValue as string, chainId }));
+  const identities = useAddressIdentities(paramAddresses, { mainnetRpcUrl, include: ENS_ONLY });
 
   // Clear-signing hit: render the formatted view, with raw whatsabi details collapsed underneath.
   if (clearSigned && clearSigned.rows.length > 0) {
+    // The clear-signed view already says "Unlimited" on a max-uint amount; the flag goes on top
+    // unless that amount is the one it stands for.
+    const flaggedAmount = allowanceFlag?.amount?.toString();
+    const flaggedInView =
+      flaggedAmount !== undefined &&
+      isUnlimitedAmount(flaggedAmount) &&
+      clearSigned.rows.some(
+        (row) => (row.kind === 'tokenAmount' || row.kind === 'amount') && row.rawValue === flaggedAmount
+      );
     return (
       <div className="flex flex-col gap-2">
+        {allowanceFlag && !flaggedInView && <NotedAllowanceFlag flag={allowanceFlag} />}
         <ClearSignedView display={clearSigned} chainId={chainId} mainnetRpcUrl={mainnetRpcUrl} />
         <details className="text-xs">
           <summary className="text-muted-foreground hover:text-foreground cursor-pointer">Show raw details</summary>
@@ -241,10 +212,12 @@ export const DecodedCalldataView = ({
     );
   }
 
-  const approveShape = isErc20Approve(decoded);
+  const placement = allowanceFlag ? flagPlacement(decoded.params[allowanceFlag.argIndex], allowanceFlag) : null;
+  const flagOnTop = allowanceFlag && !placement ? allowanceFlag : null;
 
   return (
     <div className="flex flex-col gap-2">
+      {flagOnTop && <NotedAllowanceFlag flag={flagOnTop} />}
       <div className="flex items-center gap-2">
         <span className="text-foreground bg-primary/10 rounded-xs px-2 py-0.5 text-xs font-semibold">
           {decoded.functionName}
@@ -256,10 +229,11 @@ export const DecodedCalldataView = ({
       <div className="bg-secondary rounded-chip flex flex-col gap-1 p-2">
         {decoded.params.length === 0 && <p className="text-muted-foreground text-xs">No parameters</p>}
         {decoded.params.map((param, i) => {
-          const paramKey = param.rawValue ? identityKey(param.rawValue, chainId) : undefined;
-          const resolvedName = paramKey ? allResolved[paramKey] : undefined;
-          const resolvedAvatar = paramKey ? allAvatars[paramKey] : undefined;
-          const unlimitedApproval = approveShape && i === 1 && isUnlimitedAmount(param.value);
+          const identity = param.rawValue ? identities[identityKey(param.rawValue, chainId)] : undefined;
+          const resolvedName = identity?.ensName;
+          const resolvedAvatar = identity?.ensAvatar;
+          const argFlag = placement && allowanceFlag?.argIndex === i ? allowanceFlag : null;
+          const valueHidden = !!argFlag && placement === 'replace';
           return (
             <div key={i} className="flex flex-col gap-1">
               <div className="flex items-baseline gap-1.5">
@@ -268,16 +242,12 @@ export const DecodedCalldataView = ({
               </div>
               <div className="flex flex-row items-center gap-1">
                 {resolvedAvatar && <IdentityAvatar src={resolvedAvatar} fallback={null} />}
-                {unlimitedApproval ? (
-                  <p className="text-warning flex items-center gap-1.5 font-mono text-xs font-semibold leading-normal">
-                    <TriangleAlert className="size-3.5 flex-none" strokeWidth={2} />
-                    Unlimited
-                  </p>
-                ) : (
+                {!valueHidden && (
                   <p className="text-foreground break-all font-mono text-xs leading-normal">
                     {resolvedName ? `${resolvedName} (${formatAddress(param.rawValue!)})` : param.value}
                   </p>
                 )}
+                {argFlag && <NotedAllowanceFlag flag={argFlag} />}
                 {param.rawValue && param.rawValue.toLowerCase() !== ZERO_ADDRESS && !resolvedAvatar && (
                   // Address params with no ENS avatar: known token contracts get their logo after the address.
                   // The zero address is excluded — tokenIconUrl maps it to the native icon, wrong for calldata params.

@@ -23,7 +23,7 @@ vi.mock('../../lib/paths.js', () => {
 
 const readContract = vi.fn();
 vi.mock('../../x402/balance.js', () => ({
-  publicClientFor: () => ({ readContract, getTransactionReceipt: vi.fn() }),
+  cliChainClients: { publicClient: () => ({ readContract, getTransactionReceipt: vi.fn() }) },
 }));
 
 const { appendX402Log } = await import('../../x402/ledger.js');

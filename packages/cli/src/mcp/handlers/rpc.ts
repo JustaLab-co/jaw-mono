@@ -1,6 +1,5 @@
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
-import { rpcMethodSchema } from '../tools.js';
-import { mcpError, mcpResult } from '../helpers.js';
+import { rpcMethodSchema, mcpError, mcpResult } from '@jaw.id/agent';
 import { getBridge } from '../../lib/bridge-singleton.js';
 import { SessionBridge } from '../../lib/session-bridge.js';
 import { supportsSessionMode } from '../../lib/rpc-classifier.js';
@@ -9,7 +8,7 @@ import { apiKeyFor } from '../../lib/api-key.js';
 import { tryLoadSessionConfig } from '../../lib/session-config.js';
 import type { JawConfig } from '../../lib/types.js';
 
-function resolveChainId(paramChainId: number | undefined, config: JawConfig): number {
+export function resolveChainId(paramChainId: number | undefined, config: JawConfig): number {
   if (paramChainId) return paramChainId;
   const envChainId = parseInt(process.env['JAW_CHAIN_ID'] ?? '', 10);
   if (Number.isInteger(envChainId) && envChainId > 0) return envChainId;
@@ -61,7 +60,7 @@ export function registerRpcTool(server: McpServer): void {
         'Supports transactions, signing, permissions, and queries. ' +
         'By default, any method that uses the account opens the browser for passkey authentication. ' +
         'Pass session: true to send transactions autonomously with the local session key instead ' +
-        '(requires a session created via `jaw session setup` — check jaw_session_status). ' +
+        '(requires a session: check jaw_session_status, and create one with jaw_grant_permissions). ' +
         'Session mode sends, it does not sign: personal_sign and eth_signTypedData_v4 always open ' +
         'the browser, and asking for either with session: true is refused rather than routed. ' +
         'IMPORTANT: Read the jaw://api-reference resource for the full list of methods, ' +
@@ -103,7 +102,8 @@ export function registerRpcTool(server: McpServer): void {
           if (!apiKey) {
             throw new Error(
               'Session mode needs an API key, and there is no browser in this path to get one. ' +
-                'Run `jaw session setup` to have one issued, set JAW_API_KEY, or call again with session: false.'
+                'Call jaw_grant_permissions (or have the user run `jaw session setup`) to have one issued, ' +
+                'set JAW_API_KEY, or call again with session: false.'
             );
           }
           if (RATE_LIMITED_SESSION_METHODS.includes(params.method)) {

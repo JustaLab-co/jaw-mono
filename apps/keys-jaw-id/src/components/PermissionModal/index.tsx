@@ -13,6 +13,7 @@ import {
   usePermissionRevocation,
   useSpenderPrefund,
   describeSpenderPrefund,
+  toDialogCalls,
 } from '@jaw.id/ui';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { formatUnits, erc20Abi, type Address } from 'viem';
@@ -23,6 +24,7 @@ import {
   type WalletGrantPermissionsRequest,
   type WalletRevokePermissionsRequest,
   type WalletGrantPermissionsResponse,
+  type RevokePermissionApiResponse,
   type SpendPeriod,
   buildGrantPermissionCall,
   buildRevokePermissionCall,
@@ -50,7 +52,7 @@ export interface PermissionModalProps {
   origin?: string;
   appName?: string;
   appLogoUrl?: string;
-  onSuccess?: (result: WalletGrantPermissionsResponse | { success: boolean }) => void;
+  onSuccess?: (result: WalletGrantPermissionsResponse | RevokePermissionApiResponse) => void;
   onError?: (error: Error, errorCode?: number) => void;
 }
 
@@ -444,14 +446,11 @@ export const PermissionModal = ({
   // Signatures resolve asynchronously — an unresolved selector renders as raw hex, then upgrades.
   const callSignatures = useFunctionSignatures(callsData.map((call: any) => call.selector));
   const formattedCalls = useMemo(() => {
-    return callsData.map((call: any) => ({
-      target: call.target,
-      selector: call.selector,
-      functionSignature:
-        call.functionSignature ||
-        (call.selector ? (callSignatures[call.selector.toLowerCase()] ?? call.selector) : 'Unknown Function'),
-    }));
-  }, [callsData, callSignatures]);
+    const calls = toDialogCalls(callsData, callSignatures);
+    // A grant shows the checker it is about to sign. The revoke screens don't show checkers in
+    // either host yet, so this one leaves it out to match ReactUIHandler's.
+    return mode === 'grant' ? calls : calls.map(({ checker: _checker, ...call }) => call);
+  }, [callsData, callSignatures, mode]);
 
   // Grant date (revoke only) — the stored permission's `start`, mirroring how expiry uses `end`.
   const grantedDate = useMemo(() => {
@@ -747,7 +746,7 @@ export const PermissionModal = ({
         }
 
         // Account.revokePermission with paymaster URL and context for ERC-20 payment
-        await account.revokePermission(
+        const result = await account.revokePermission(
           permissionDetails.permissionId,
           computedPaymasterUrl,
           computedPaymasterContext,
@@ -756,7 +755,8 @@ export const PermissionModal = ({
 
         console.log('Permission revoked');
         setStatus('Permission revoked successfully!');
-        onSuccess?.({ success: true });
+        // The revoke has mined, so it succeeded even if the relay had no row left to remove.
+        onSuccess?.(result.pending ? { success: true, pending: true } : { success: true });
       }
     } catch (error) {
       console.error('Error in permission operation:', error);

@@ -93,7 +93,8 @@ vi.mock('../../lib/bridge-singleton.js', () => ({
   },
 }));
 
-vi.mock('../../x402/funded-owner.js', () => ({
+vi.mock('@jaw.id/agent', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@jaw.id/agent')>()),
   whyOwnerCannotFundSession: async () => null,
   whySpenderCannotPay: async () => null,
 }));

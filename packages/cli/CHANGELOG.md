@@ -1,3 +1,63 @@
+## 0.6.2 (2026-10-27)
+
+### 🧱 Updated Dependencies
+
+- Updated @jaw.id/core to 1.9.0
+
+## 0.6.1 (2026-10-27)
+
+### 🧱 Updated Dependencies
+
+- Updated @jaw.id/core to 1.8.0
+
+## 0.6.0 (2026-10-21)
+
+### 🚀 Features
+
+- **cli:** let the agent ask for an x402 budget ([#535](https://github.com/JustaLab-co/jaw-mono/pull/535))
+
+### ❤️ Thank You
+
+- Mariano Aguero
+
+## 0.5.3 (2026-10-21)
+
+### 🩹 Fixes
+
+- **agent:** never resend a signed userop under a fresh key ([#525](https://github.com/JustaLab-co/jaw-mono/pull/525))
+
+### ❤️ Thank You
+
+- Mariano Aguero @mariano-aguero
+
+## 0.5.2 (2026-10-21)
+
+### 🧱 Updated Dependencies
+
+- Updated @jaw.id/core to 1.7.1
+
+## 0.5.1 (2026-10-19)
+
+### 🧱 Updated Dependencies
+
+- Updated @jaw.id/core to 1.7.0
+
+## 0.5.0 (2026-10-16)
+
+### 🚀 Features
+
+- **mcp:** add the hosted MCP server with x402 budgets ([#367](https://github.com/JustaLab-co/jaw-mono/pull/367))
+
+### ❤️ Thank You
+
+- Mariano Aguero @mariano-aguero
+
+## 0.4.4 (2026-10-14)
+
+### 🧱 Updated Dependencies
+
+- Updated @jaw.id/core to 1.6.4
+
 ## 0.4.3 (2026-10-13)
 
 ### 🧱 Updated Dependencies

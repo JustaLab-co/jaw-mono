@@ -25,6 +25,7 @@ import {
 import { type JustanAccountImplementation, sign as signWithOwner } from './toJustanAccount.js';
 import { type AccountRecord, deriveAccountRecordV1, resolveAccountRecord } from './accountRecord.js';
 import { jawHttp } from '../utils/jawHttp.js';
+import { withoutApiKey } from '../utils/redact.js';
 import {
     PasskeyManager,
     type PasskeyAccount,
@@ -46,8 +47,10 @@ import {
     revokePermission as revokeSmartAccountPermission,
     getPermissionFromRelay,
     relayPermissionToPermission,
+    relayCallToCallPermission,
     buildGrantPermissionCall,
     buildRevokePermissionCall,
+    NATIVE_TOKEN,
     type PermissionsDetail,
     type WalletGrantPermissionsResponse,
     type RevokePermissionApiResponse,
@@ -135,6 +138,12 @@ export interface SendCallsOptions {
     permissionId?: Hex;
     /** Override account address — execute on behalf of a different account this passkey owns */
     from?: Address;
+    /**
+     * Called with the userOp hash once the userOp is signed, before it goes to
+     * the bundler. A rejection stops the send, so nothing goes out with a hash
+     * the caller failed to keep.
+     */
+    onSigned?: (userOpHash: Hash) => void | Promise<void>;
 }
 
 /**
@@ -1029,7 +1038,8 @@ export class Account {
                 paymaster.context,
                 localAccount,
                 approvalCall ?? undefined,
-                permissionCall
+                permissionCall,
+                options.onSigned
             );
         } else {
             // Standard execution (EIP-7702 handled inside sendSmartAccountCalls)
@@ -1047,7 +1057,8 @@ export class Account {
                 this._chain,
                 paymaster.url,
                 paymaster.context,
-                localAccount
+                localAccount,
+                options?.onSigned
             );
         }
 
@@ -1296,7 +1307,14 @@ export class Account {
 
         return {
             balanceOf: (token: Address, owner: Address) =>
-                publicClient.readContract({ address: token, abi: erc20Abi, functionName: 'balanceOf', args: [owner] }),
+                token.toLowerCase() === NATIVE_TOKEN.toLowerCase()
+                    ? publicClient.getBalance({ address: owner })
+                    : publicClient.readContract({
+                          address: token,
+                          abi: erc20Abi,
+                          functionName: 'balanceOf',
+                          args: [owner],
+                      }),
             gasPrice: () => publicClient.getGasPrice(),
             exchangeRate: async (token: Address) => {
                 const url = jawPaymasterUrl(this._chain.id, this._apiKey);
@@ -1319,7 +1337,7 @@ export class Account {
                     // The grant is what the user came to do; a paymaster that
                     // will not quote is not a reason to fail it. It is a reason
                     // to say so, for the same reason as above.
-                    console.warn('Could not price the spender prefund, granting without it:', error);
+                    console.warn('Could not price the spender prefund, granting without it:', withoutApiKey(error));
                     return null;
                 }
             },
@@ -1370,7 +1388,7 @@ export class Account {
                     { cause: error }
                 );
             }
-            console.warn('Could not fetch permission for gas estimation:', error);
+            console.warn('Could not fetch permission for gas estimation:', withoutApiKey(error));
         }
 
         // Check if we need an ERC-20 approval for the paymaster
@@ -1411,10 +1429,8 @@ export class Account {
         const relayResponse = await getPermissionFromRelay(permissionId, this._apiKey);
 
         // Transform relay response to WalletGrantPermissionsResponse format
-        const calls: CallPermissionDetail[] = relayResponse.calls.map((call) => ({
-            target: call.target as Address,
-            selector: call.selector as Hex,
-        }));
+        // Every call carries its checker, as on the grant response, so the hash can be rebuilt.
+        const calls: CallPermissionDetail[] = relayResponse.calls.map(relayCallToCallPermission);
 
         const spends: SpendPermissionDetail[] = relayResponse.spends.map((spend) => ({
             token: spend.token as Address,

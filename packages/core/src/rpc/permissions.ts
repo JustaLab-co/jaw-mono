@@ -3,6 +3,7 @@ import {
     type Address,
     type Hex,
     decodeEventLog,
+    getAddress,
     toFunctionSelector,
     zeroAddress as ZERO_ADDRESS,
 } from 'viem';
@@ -59,7 +60,7 @@ export type CallPermission = {
     target: Address;
     /** Function selector (4 bytes) */
     selector: Hex;
-    /** External validation contract address (internal only - defaults to zero address) */
+    /** Contract that must approve each matching call (`canExecute`), or the zero address for none */
     checker: Address;
 };
 
@@ -121,6 +122,12 @@ export type CallPermissionDetail = {
     selector?: Hex;
     /** Human-readable function signature (e.g., "transfer(address,uint256)") */
     functionSignature?: string;
+    /**
+     * Contract the permission manager asks to approve each matching call, via
+     * `canExecute`. Part of the permission hash. Defaults to the zero address,
+     * which means no checker. Always present on a grant response.
+     */
+    checker?: Address;
 };
 
 /**
@@ -276,6 +283,8 @@ export type WalletGrantPermissionsResponse = {
 export type RevokePermissionApiResponse = {
     /** Indicates if the permission was revoked successfully */
     success: boolean;
+    /** True when the relay does not see the on-chain revoke yet; it removes the permission once it does */
+    pending?: boolean;
 };
 
 /**
@@ -304,6 +313,25 @@ export interface NormalizedRevokePermissionsParams {
     /** Account to revoke on; the signer's own when the dapp leaves it out. */
     address?: Address;
     capabilities?: RequestCapabilities;
+}
+
+const GRANT_METHOD = 'wallet_grantPermissions';
+
+/**
+ * Refuses a grant whose call checker is not a 20-byte address, before any popup or dialog opens.
+ * A checker is part of the permission the user signs, and a malformed one used to reach the grant
+ * screen, which drew it, estimated a fee without it and failed only on Confirm.
+ */
+export function checkGrantPermissionsParams(params: unknown): void {
+    const calls = (params as Array<{ permissions?: { calls?: unknown } }> | undefined)?.[0]?.permissions?.calls;
+    if (!Array.isArray(calls)) return;
+    calls.forEach((call, index) => {
+        optionalHexAddress(
+            (call as { checker?: unknown } | null)?.checker,
+            GRANT_METHOD,
+            `permissions.calls[${index}].checker`
+        );
+    });
 }
 
 /**
@@ -388,6 +416,7 @@ export async function grantPermissions(
     const responseCalls: CallPermissionDetail[] = permission.calls.map((call) => ({
         target: call.target,
         selector: call.selector,
+        checker: call.checker,
     }));
 
     const responseSpends: SpendPermissionDetail[] = permission.spends.map((spend) => ({
@@ -475,14 +504,23 @@ export async function getPermissionFromRelay(
 }
 
 /**
+ * One call as the relay stored it. A call stored without a checker has none, which the contract
+ * reads as zero, and a checker comes back checksummed, as on the grant response, so reading a
+ * permission back and rebuilding its hash agree with what was granted.
+ */
+export function relayCallToCallPermission(call: StorePermissionApiResponse['calls'][number]): CallPermission {
+    return {
+        target: call.target as Address,
+        selector: call.selector as Hex,
+        checker: call.checker ? getAddress(call.checker) : ZERO_ADDRESS,
+    };
+}
+
+/**
  * Convert relay permission data to Permission struct
  */
 export function relayPermissionToPermission(relayPermission: StorePermissionApiResponse): Permission {
-    const calls: CallPermission[] = relayPermission.calls.map((call) => ({
-        target: call.target as Address,
-        selector: call.selector as Hex,
-        checker: (call.checker as Address) || ZERO_ADDRESS,
-    }));
+    const calls: CallPermission[] = relayPermission.calls.map(relayCallToCallPermission);
 
     const spends: SpendLimit[] = relayPermission.spends.map((spend) => ({
         token: spend.token as Address,
@@ -563,7 +601,7 @@ function apiPermissionsToPermission(
     const salt = BigInt('0x' + Array.from({ length: 64 }, () => Math.floor(Math.random() * 16).toString(16)).join(''));
 
     // Convert call permissions - compute selector from signature if not provided
-    const calls: CallPermission[] = (permissions.calls || []).map((call) => {
+    const calls: CallPermission[] = (permissions.calls || []).map((call, index) => {
         let selector: Hex;
 
         if (call.selector) {
@@ -578,10 +616,16 @@ function apiPermissionsToPermission(
             });
         }
 
+        // The checker is part of the permission hash, so a malformed one would
+        // grant a permission no caller can rebuild.
+        const checker = optionalHexAddress(call.checker, GRANT_METHOD, `permissions.calls[${index}].checker`);
+
         return {
             target: call.target,
             selector,
-            checker: ZERO_ADDRESS,
+            // Checksummed here, so a mixed-case checker with a bad checksum, which the guard above
+            // accepts like any other address a dapp sends, cannot fail inside the encoder.
+            checker: checker ? getAddress(checker) : ZERO_ADDRESS,
         };
     });
 

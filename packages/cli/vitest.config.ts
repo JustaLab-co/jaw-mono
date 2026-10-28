@@ -5,6 +5,7 @@ export default defineConfig({
   resolve: {
     alias: {
       '@jaw.id/core': resolve(__dirname, '../core/src/index.ts'),
+      '@jaw.id/agent': resolve(__dirname, '../agent/src/index.ts'),
     },
   },
   test: {

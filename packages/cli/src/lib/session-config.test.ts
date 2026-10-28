@@ -1,4 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
+import { parseGrantedPermission, liveOrphans, sessionLives, sessionUsable } from '@jaw.id/agent';
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 import * as os from 'node:os';
@@ -24,12 +25,8 @@ const {
   loadSessionConfig,
   tryLoadSessionConfig,
   deleteSessionConfig,
-  parseGrantedPermission,
-  liveOrphans,
   replaceSessionConfig,
   saveRevokeProgress,
-  sessionLives,
-  sessionUsable,
 } = await import('./session-config.js');
 const { PATHS } = await import('./paths.js');
 

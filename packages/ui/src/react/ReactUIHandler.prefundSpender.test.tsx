@@ -46,6 +46,7 @@ vi.mock('../hooks/useGasEstimation', () => ({
 
 type DialogProps = {
   onConfirm?: () => void;
+  calls?: Array<{ checker?: string }>;
   prefund?: { kind: string } | null;
   prefundLoading?: boolean;
 };
@@ -82,14 +83,17 @@ const REQUEST = {
 };
 
 /** Open the grant dialog and settle the wrapper's mount effects. */
-async function openGrant(capabilities?: Record<string, unknown>) {
+async function openGrant(capabilities?: Record<string, unknown>, permissions?: Record<string, unknown>) {
   const handler = new ReactUIHandler();
   (handler as unknown as { config: Record<string, unknown> }).config = {
     apiKey: 'test-key',
     defaultChainId: 8453,
     paymasters: {},
   };
-  const request = { ...REQUEST, data: { ...REQUEST.data, capabilities } };
+  const request = {
+    ...REQUEST,
+    data: { ...REQUEST.data, capabilities, ...(permissions ? { permissions } : {}) },
+  };
   await act(async () => {
     void handler.request(request as Parameters<ReactUIHandler['request']>[0]).catch(() => undefined);
   });
@@ -218,5 +222,31 @@ describe('ReactUIHandler shows the prefund it was asked for, then sends exactly 
     expect(spender).toBe(REQUEST.data.spender);
     expect(permissions).toMatchObject({ spends: REQUEST.data.permissions.spends });
     expect(address).toBe(REQUEST.data.address);
+  });
+});
+
+/**
+ * The checker is part of what gets signed, and the wrapper hands the request's calls to
+ * `grantPermissions` unchanged, so the screen has to show the same checker.
+ */
+describe('ReactUIHandler shows the call checker it signs', () => {
+  const CHECKER = '0x398b9d939E7E616E03eA99601c835C920621B2ca';
+
+  it('hands the dialog and grantPermissions the same checker', async () => {
+    await openGrant(undefined, {
+      ...REQUEST.data.permissions,
+      calls: [
+        {
+          target: '0x036CbD53842c5426634e7929541eC2318f3dCF7e',
+          functionSignature: 'transfer(address,uint256)',
+          checker: CHECKER,
+        },
+      ],
+    });
+    await act(async () => dialogProps.onConfirm?.());
+
+    expect(dialogProps.calls?.[0].checker).toBe(CHECKER);
+    expect(grantPermissions).toHaveBeenCalledTimes(1);
+    expect(grantPermissions.mock.calls[0][2].calls[0].checker).toBe(CHECKER);
   });
 });

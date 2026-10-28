@@ -52,6 +52,11 @@ interface CallPermissionDetail {
   selector?: Hex;
   /** Human-readable function signature (e.g., "transfer(address,uint256)") */
   functionSignature?: string;
+  /**
+   * Contract that must approve each matching call (`canExecute`). Defaults to the
+   * zero address, meaning no checker. Always present in the response.
+   */
+  checker?: Address;
 }
 
 interface SpendPermissionDetail {

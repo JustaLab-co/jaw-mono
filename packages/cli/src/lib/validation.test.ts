@@ -1,5 +1,6 @@
 import { describe, it, expect } from 'vitest';
-import { isValidKeysUrl, isValidRelayUrl, parsePermissionsConfig, isSafeApiKey } from './validation.js';
+import { isValidKeysUrl, isValidRelayUrl, isSafeApiKey } from './validation.js';
+import { parsePermissionsConfig } from '@jaw.id/agent';
 
 describe('validation', () => {
   describe('isValidKeysUrl', () => {

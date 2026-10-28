@@ -20,7 +20,7 @@ import {
   generateKeyPair,
   importKeyFromHex,
   type EncryptedEnvelope,
-} from './crypto.js';
+} from '@jaw.id/agent';
 import { WSBridge } from './ws-bridge.js';
 
 type Inner = Record<string, unknown>;

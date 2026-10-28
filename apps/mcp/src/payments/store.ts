@@ -1,0 +1,562 @@
+import { createHash, randomBytes } from 'node:crypto';
+import type { SignedAuthorization, TopUpOutcome, X402LogEntry } from '@jaw.id/agent';
+import { and, desc, eq, getTableColumns, gt, inArray, isNotNull, isNull, lt, ne, not, or, sql } from 'drizzle-orm';
+import type { Address } from 'viem';
+import { getDb, type Tx } from '@/db/client';
+import { errorLabel, log } from '@/lib/edge';
+import { EXPIRY_MARGIN_MS } from './confirm';
+import { connections, PAYER_TX_HASH_INDEX, payments, sends } from '@/db/schema';
+
+export type PaymentRow = typeof payments.$inferSelect;
+export type PaymentState = PaymentRow['state'];
+
+/** The time budget of one call, refill included. */
+export const PAY_LIMIT_MS = 90_000;
+// Longer than any call can run, so a live owner never loses its row.
+export const LEASE_MS = PAY_LIMIT_MS + 30_000;
+
+// Leases and deadlines are written and judged on the database clock, so a
+// replica's skew never shortens them: another replica takes a row over only
+// when the database says so. The statement's time, not the transaction's, as a
+// read under the refill lock may run long after its transaction began.
+const dbNow = sql`statement_timestamp()`;
+const leaseFromNow = sql`${dbNow} + ${LEASE_MS} * interval '1 millisecond'`;
+const leaseLive = sql<boolean>`${payments.leaseUntil} > ${dbNow}`;
+const leaseLapsed = not(leaseLive);
+// A signed row nobody concluded: its proof may never have arrived.
+const unanswered = and(eq(payments.state, 'signed'), or(isNull(payments.kind), eq(payments.code, 'no_response')));
+const sendable = or(eq(payments.state, 'pending'), unanswered);
+/** A row with the database's answer to whether its lease still runs and whether it may be sent. */
+const withLease = { ...getTableColumns(payments), leaseLive, sendable: sql<boolean>`(${sendable})` };
+export type LeasedRow = PaymentRow & { leaseLive: boolean; sendable: boolean };
+
+export interface PaymentRequest {
+  url: string;
+  method: 'GET' | 'POST';
+  headers: Record<string, string>;
+  body?: string;
+  maxAmount?: string;
+}
+
+/** What "the same request" means for an idempotency key. */
+export function requestHash(r: PaymentRequest): string {
+  const headers = Object.entries(r.headers)
+    .map(([k, v]) => [k.toLowerCase(), v])
+    .sort(([a], [b]) => (a < b ? -1 : 1));
+  const canonical = [new URL(r.url).href, r.method, headers, r.body ?? null, r.maxAmount ?? null];
+  return createHash('sha256').update(JSON.stringify(canonical)).digest('hex');
+}
+
+export type Claim =
+  | { kind: 'run'; row: PaymentRow; token: string }
+  | { kind: 'resume'; row: PaymentRow; token: string }
+  | { kind: 'stored'; row: PaymentRow }
+  | { kind: 'busy' }
+  | { kind: 'conflict' }
+  | { kind: 'no_grant' };
+
+interface Owner {
+  connectionId: string;
+  payer: Address;
+  /** The grant a new attempt is charged to; undefined when the connection has none. */
+  permissionId: string | undefined;
+}
+
+/** What a row reads as outside: a refused row is kept pending only so its key can run again. */
+export const stateOf = (row: Pick<PaymentRow, 'state' | 'kind'>): PaymentState =>
+  row.state === 'pending' && row.kind !== null ? 'failed' : row.state;
+
+export async function findPayment(id: string): Promise<PaymentRow | undefined> {
+  const [row] = await getDb().select().from(payments).where(eq(payments.id, id));
+  return row;
+}
+
+async function find(connectionId: string, key: string): Promise<LeasedRow | undefined> {
+  const [row] = await getDb()
+    .select(withLease)
+    .from(payments)
+    .where(and(eq(payments.connectionId, connectionId), eq(payments.idempotencyKey, key)));
+  return row;
+}
+
+/** The only way a call gets to send a row: once its lease lapsed, and for a signed row while its proof is live. */
+export async function take(
+  row: PaymentRow,
+  permissionId?: string
+): Promise<{ row: PaymentRow; token: string } | undefined> {
+  const token = randomBytes(16).toString('base64url');
+  const fresh = row.state === 'pending' ? { kind: null, code: null, httpStatus: null, reserved: null } : {};
+  const [taken] = await getDb()
+    .update(payments)
+    .set({ ...fresh, ...(permissionId && { permissionId }), leaseToken: token, leaseUntil: leaseFromNow })
+    .where(
+      and(
+        eq(payments.id, row.id),
+        eq(payments.state, row.state),
+        sendable,
+        leaseLapsed,
+        or(eq(payments.state, 'pending'), gt(payments.deadline, dbNow))
+      )
+    )
+    .returning();
+  return taken && { row: taken, token };
+}
+
+export async function release(id: string, token: string): Promise<void> {
+  await getDb()
+    .update(payments)
+    .set({ leaseUntil: dbNow })
+    .where(and(eq(payments.id, id), eq(payments.leaseToken, token)));
+}
+
+/**
+ * Opens the row for this key, or says what the existing one allows. A stored
+ * row answers before the grant check, so a replay survives a grant that ended.
+ */
+export async function claim(owner: Owner, key: string, request: PaymentRequest): Promise<Claim> {
+  const hash = requestHash(request);
+  let row = await find(owner.connectionId, key);
+  if (!row) {
+    if (!owner.permissionId) return { kind: 'no_grant' };
+    const token = randomBytes(16).toString('base64url');
+    const [inserted] = await getDb()
+      .insert(payments)
+      .values({
+        id: `pay_${randomBytes(16).toString('base64url')}`,
+        connectionId: owner.connectionId,
+        idempotencyKey: key,
+        requestHash: hash,
+        permissionId: owner.permissionId,
+        payer: owner.payer.toLowerCase(),
+        url: request.url,
+        leaseToken: token,
+        leaseUntil: leaseFromNow,
+      })
+      .onConflictDoNothing()
+      .returning();
+    if (inserted) return { kind: 'run', row: inserted, token };
+    row = (await find(owner.connectionId, key)) as LeasedRow;
+  }
+  if (row.requestHash !== hash) return { kind: 'conflict' };
+  if (!row.sendable) return { kind: 'stored', row };
+  if (row.state === 'signed') {
+    const taken = await take(row);
+    return taken ? { kind: 'resume', ...taken } : { kind: 'busy' };
+  }
+  if (!owner.permissionId) return { kind: 'no_grant' };
+  const taken = await take(row, owner.permissionId);
+  return taken ? { kind: 'run', ...taken } : { kind: 'busy' };
+}
+
+const owned = (id: string, token: string) =>
+  and(eq(payments.id, id), eq(payments.state, 'pending'), eq(payments.leaseToken, token), leaseLive);
+
+/** The `onSigned` hook. Throws when the row is no longer this call's, so nothing is sent. */
+export async function markSigned(id: string, token: string, a: SignedAuthorization): Promise<void> {
+  const { details } = a;
+  const rows = await getDb()
+    .update(payments)
+    .set({
+      state: 'signed',
+      authorization: a,
+      nonce: details.nonce.toLowerCase(),
+      authorized: details.authorized,
+      deadline: new Date(Number(details.deadline) * 1000),
+      scheme: details.scheme,
+      asset: details.asset,
+      network: details.network,
+      payTo: details.payTo,
+      signedAt: new Date(),
+    })
+    .where(owned(id, token))
+    .returning({ id: payments.id });
+  if (rows.length !== 1) throw new Error('the payment row is no longer held by this call');
+}
+
+export async function chargeTo(id: string, token: string, permissionId: string): Promise<void> {
+  const rows = await getDb()
+    .update(payments)
+    .set({ permissionId })
+    .where(owned(id, token))
+    .returning({ id: payments.id });
+  if (rows.length !== 1) throw new Error('the payment row is no longer held by this call');
+}
+
+function hashIndexViolated(err: unknown): boolean {
+  const e = (err as { cause?: { code?: unknown; constraint_name?: unknown } }).cause;
+  return e?.code === '23505' && e.constraint_name === PAYER_TX_HASH_INDEX;
+}
+
+export async function txHashTaken(payer: string, txHash: string, exceptId: string): Promise<boolean> {
+  const [row] = await getDb()
+    .select({ id: payments.id })
+    .from(payments)
+    .where(
+      and(
+        eq(payments.payer, payer.toLowerCase()),
+        sql`lower(${payments.txHash}) = ${txHash.toLowerCase()}`,
+        ne(payments.id, exceptId)
+      )
+    )
+    .limit(1);
+  return row !== undefined;
+}
+
+/** Under the refill lock: throws when the row is no longer this call's. */
+export async function assertOwned(tx: Tx, id: string, token: string): Promise<void> {
+  const rows = await tx.select({ id: payments.id }).from(payments).where(owned(id, token));
+  if (rows.length !== 1) throw new Error('the payment row is no longer held by this call');
+}
+
+/**
+ * Under the refill lock, at the end of the turn: the price this row now holds
+ * against the float. A row lost meanwhile is left alone; `markSigned` refuses it.
+ */
+export async function reserve(tx: Tx, id: string, token: string, price: string): Promise<void> {
+  await tx.update(payments).set({ reserved: price }).where(owned(id, token));
+}
+
+const traceOf = (t: { topUp?: { amount?: string; batchId?: string }; approvalBatchId?: string }) => ({
+  topUpAmount: sql`coalesce(${payments.topUpAmount}, ${t.topUp?.amount ?? null})`,
+  topUpBatchId: sql`coalesce(${payments.topUpBatchId}, ${t.topUp?.batchId ?? null})`,
+  approvalBatchId: sql`coalesce(${payments.approvalBatchId}, ${t.approvalBatchId ?? null})`,
+});
+
+/** Under the refill lock: what moved, before the lock drops. A trace already on the row is kept. */
+export async function recordTopUp(tx: Tx, id: string, funded: TopUpOutcome): Promise<void> {
+  if (!funded.amount && !funded.batchId && !funded.approvalBatchId) return;
+  await tx
+    .update(payments)
+    .set(
+      traceOf({ topUp: { amount: funded.amount, batchId: funded.batchId }, approvalBatchId: funded.approvalBatchId })
+    )
+    .where(eq(payments.id, id));
+}
+
+/** Takes a batch id off the row when that userOp never went out. */
+export async function forgetBatch(
+  tx: Tx,
+  id: string,
+  field: 'topUpBatchId' | 'approvalBatchId',
+  batchId: string
+): Promise<void> {
+  await tx
+    .update(payments)
+    .set({ [field]: null })
+    .where(and(eq(payments.id, id), eq(payments[field], batchId)));
+}
+
+export async function addTopUp(tx: Tx, id: string, delta: bigint): Promise<void> {
+  await tx
+    .update(payments)
+    .set({ topUpAmount: sql`nullif(coalesce(${payments.topUpAmount}, 0) + ${delta.toString()}, 0)` })
+    .where(eq(payments.id, id));
+}
+
+/**
+ * The top-up amount, written before its send and only while the connection is
+ * active. The share lock on the connection orders this write against an end
+ * that locks the row: either the end sees the amount, or this sees the end.
+ */
+export async function writeTopUpAhead(tx: Tx, id: string, amount: bigint): Promise<void> {
+  const [active] = await tx
+    .select({ id: connections.id })
+    .from(connections)
+    .innerJoin(payments, eq(payments.connectionId, connections.id))
+    .where(and(eq(payments.id, id), eq(connections.status, 'active')))
+    .for('share', { of: connections });
+  if (!active) throw new Error('the connection ended before the top-up was sent');
+  await addTopUp(tx, id, amount);
+}
+
+// An execute submits within this of recording its rows, the bound a top-up's lease
+// gives a refill. Past it the run is the reconciler's, whose claims hold no end.
+export const EXECUTE_SUBMIT_MS = 2 * 60_000;
+
+/**
+ * Locks the connection row, then says whether a turn still running may still move
+ * money: a top-up written ahead of its send, until the turn reserves or its call
+ * ends, or an execute recorded and not yet submitted.
+ */
+export async function sendInFlight(tx: Tx, connectionId: string): Promise<boolean> {
+  await tx.select({ id: connections.id }).from(connections).where(eq(connections.id, connectionId)).for('update');
+  const [row] = await tx
+    .select({ id: payments.id })
+    .from(payments)
+    .where(
+      and(
+        eq(payments.connectionId, connectionId),
+        eq(payments.state, 'pending'),
+        isNotNull(payments.topUpAmount),
+        isNull(payments.reserved),
+        leaseLive
+      )
+    )
+    .limit(1);
+  if (row) return true;
+  const [execute] = await tx
+    .select({ id: sends.id })
+    .from(sends)
+    .where(
+      and(
+        eq(sends.connectionId, connectionId),
+        eq(sends.state, 'open'),
+        isNotNull(sends.idempotencyKey),
+        isNull(sends.callsId),
+        sql`${sends.createdAt} > ${dbNow} - ${EXECUTE_SUBMIT_MS} * interval '1 millisecond'`
+      )
+    )
+    .limit(1);
+  return execute !== undefined;
+}
+
+const holding = sql`((${payments.state} = 'pending' and ${leaseLive} and ${payments.reserved} is not null)
+  or (${payments.state} in ('signed', 'unknown')
+    and ${payments.deadline} > ${dbNow} - ${EXPIRY_MARGIN_MS} * interval '1 millisecond'))`;
+
+/**
+ * Under the refill lock: every other row of this payer that may still take money
+ * out of the float, a reservation or an authorization still inside its deadline.
+ */
+export async function holdingRows(tx: Tx, payer: Address, exceptId: string): Promise<PaymentRow[]> {
+  return tx
+    .select()
+    .from(payments)
+    .where(and(eq(payments.payer, payer.toLowerCase()), ne(payments.id, exceptId), holding));
+}
+
+export interface Conclusion {
+  state: PaymentState;
+  kind: NonNullable<PaymentRow['kind']>;
+  code?: string;
+  httpStatus?: number;
+  amount?: string;
+  txHash?: string;
+  blockTime?: Date;
+  topUp?: { amount?: string; batchId?: string };
+  approvalBatchId?: string;
+  body?: string;
+}
+
+/**
+ * Writes what the call came to and ends its lease. A pending conclusion is a
+ * refusal the next call may retry. Nothing when another call took the row.
+ */
+export async function finish(
+  id: string,
+  token: string,
+  c: Conclusion,
+  fenced: string[]
+): Promise<PaymentRow | undefined> {
+  try {
+    return await finishHashed(id, token, c, fenced);
+  } catch (err) {
+    if (c.body === undefined || !bodyRefused(err)) throw err;
+    log('warn', { msg: `payment ${id} concluded without its body`, error: errorLabel(err) });
+    return finishHashed(id, token, { ...c, body: undefined }, fenced);
+  }
+}
+
+const INVALID_TEXT = '22021';
+const CHECK_VIOLATION = '23514';
+
+function bodyRefused(err: unknown): boolean {
+  const e = (err as { cause?: { code?: unknown; constraint_name?: unknown; constraint?: unknown } }).cause;
+  if (e?.code === INVALID_TEXT) return true;
+  return e?.code === CHECK_VIOLATION && (e.constraint_name ?? e.constraint) === 'payment_body';
+}
+
+async function finishHashed(id: string, token: string, c: Conclusion, fenced: string[]) {
+  try {
+    return await finishWith(id, token, c, fenced);
+  } catch (err) {
+    if (!c.txHash || !hashIndexViolated(err)) throw err;
+    // Another payment of the payer wrote this hash since the call checked it. A receipt that
+    // proves this row takes the hash from a row no receipt proved; otherwise this row goes without it.
+    if (c.state === 'settled' && (await dropUnprovenHash(id, c.txHash))) return finishWith(id, token, c, fenced);
+    return finishWith(id, token, { ...c, txHash: undefined }, fenced);
+  }
+}
+
+async function dropUnprovenHash(id: string, txHash: string): Promise<boolean> {
+  const rows = await getDb()
+    .update(payments)
+    .set({ txHash: null })
+    .where(
+      and(
+        sql`${payments.payer} = (select payer from payments where id = ${id})`,
+        sql`lower(${payments.txHash}) = ${txHash.toLowerCase()}`,
+        ne(payments.id, id),
+        ne(payments.state, 'settled')
+      )
+    )
+    .returning({ id: payments.id });
+  return rows.length > 0;
+}
+
+async function finishWith(id: string, token: string, c: Conclusion, fenced: string[]) {
+  const noAnswer = c.state === 'pending' || (c.state === 'signed' && c.kind !== 'paid');
+  const [row] = await getDb()
+    .update(payments)
+    .set({
+      state: c.state,
+      kind: c.kind,
+      code: c.code ?? null,
+      httpStatus: c.httpStatus ?? null,
+      amount: c.amount ?? null,
+      txHash: c.txHash ?? null,
+      blockTime: c.blockTime ?? null,
+      ...traceOf(c),
+      fenced: noAnswer ? null : fenced,
+      body: noAnswer ? null : (c.body ?? null),
+      finishedAt: c.state === 'signed' || c.state === 'pending' ? null : new Date(),
+      ...(c.state === 'pending' && { reserved: null }),
+      leaseUntil: dbNow,
+    })
+    .where(and(eq(payments.id, id), eq(payments.leaseToken, token), sendable))
+    .returning();
+  return row;
+}
+
+/** The agent's ledger view of a row, so caps are counted by `spendFigureOf`, the one rule. */
+function entryOf(row: LeasedRow): X402LogEntry {
+  const reserved = row.leaseLive ? row.reserved : null;
+  // A payment counts in the day it was signed, and a live reservation in the day it runs:
+  // a key claimed before the day ends may be retried or signed after it.
+  const at = row.signedAt ?? (reserved !== null ? new Date() : row.createdAt);
+  const base = {
+    at: at.toISOString(),
+    url: row.url,
+    payer: row.payer,
+    permissionId: row.permissionId ?? undefined,
+    topUpAmount: row.topUpAmount ?? undefined,
+    // The call that opens a row pulls its top-up. A pull on a later retry counts a
+    // day early here, which the chain's own counter, read beside this, still has.
+    topUpAt: row.topUpAmount ? row.createdAt.toISOString() : undefined,
+    topUpBatchId: row.topUpBatchId ?? undefined,
+    approvalBatchId: row.approvalBatchId ?? undefined,
+  };
+  switch (row.state) {
+    case 'pending':
+      // A reservation costs its price while its lease lives, like a signature nobody has answered.
+      return reserved !== null
+        ? { ...base, status: 'failed', authorized: reserved, settlement: 'unverified' }
+        : { ...base, status: 'refused' };
+    case 'signed':
+    case 'unknown':
+      return {
+        ...base,
+        status: 'failed',
+        authorized: row.authorized ?? undefined,
+        amount: row.amount ?? undefined,
+        settlement: 'unverified',
+      };
+    case 'settled':
+      return { ...base, status: 'paid', amount: row.amount ?? undefined, settlement: 'verified' };
+    case 'failed':
+      return { ...base, status: 'refused' };
+  }
+}
+
+/** The rows of this permission that cost a cap something, as the agent's cap math reads them. */
+export async function entriesFor(permissionId: string, tx: Tx = getDb()): Promise<X402LogEntry[]> {
+  const rows = await tx
+    .select(withLease)
+    .from(payments)
+    .where(
+      and(
+        eq(payments.permissionId, permissionId),
+        or(isNull(payments.kind), ne(payments.kind, 'free')),
+        or(ne(payments.state, 'failed'), sql`${payments.topUpAmount} is not null`)
+      )
+    );
+  return rows.map(entryOf);
+}
+
+/**
+ * Under the refill lock: what this connection's other budgets pulled in the last
+ * day. Each permission has its own counter on chain, so a newer budget would
+ * otherwise start the day as if nothing had been pulled.
+ */
+export async function pulledUnderOtherGrants(tx: Tx, connectionId: string, permissionId: string): Promise<bigint> {
+  const [row] = await tx
+    .select({ pulled: sql<string>`coalesce(sum(${payments.topUpAmount}), 0)::text` })
+    .from(payments)
+    .where(
+      and(
+        eq(payments.connectionId, connectionId),
+        ne(payments.permissionId, permissionId),
+        sql`${payments.createdAt} > now() - interval '1 day'`
+      )
+    );
+  return BigInt(row.pulled);
+}
+
+/** Newest first. The cursor is a payment id; the order is read from its row, at full precision. */
+export async function history(connectionId: string, limit: number, before?: string) {
+  const anchor = before
+    ? sql`(${payments.createdAt}, ${payments.id}) < (select created_at, id from payments where id = ${before} and connection_id = ${connectionId})`
+    : undefined;
+  return getDb()
+    .select()
+    .from(payments)
+    .where(and(eq(payments.connectionId, connectionId), anchor))
+    .orderBy(desc(payments.createdAt), desc(payments.id))
+    .limit(limit);
+}
+
+/**
+ * Claims up to `limit` rows for one reconciler run: signed or unknown, signed
+ * before `signedBefore`, not owned by a live call, and not claimed by a run in
+ * the last `claimMs`. The claim only spaces runs out: a call may still take the
+ * row while the chain is read, so each write checks the row again.
+ */
+export async function claimUnresolved(signedBefore: Date, claimMs: number, limit: number): Promise<PaymentRow[]> {
+  const due = getDb()
+    .select({ id: payments.id })
+    .from(payments)
+    .where(
+      and(
+        inArray(payments.state, ['signed', 'unknown']),
+        lt(payments.signedAt, signedBefore),
+        leaseLapsed,
+        or(isNull(payments.reconcilingUntil), lt(payments.reconcilingUntil, dbNow))
+      )
+    )
+    .orderBy(payments.signedAt)
+    .limit(limit)
+    .for('update', { skipLocked: true });
+  return getDb()
+    .update(payments)
+    .set({ reconcilingUntil: sql`${dbNow} + ${claimMs} * interval '1 millisecond'` })
+    .where(inArray(payments.id, due))
+    .returning();
+}
+
+// A call that took the row meanwhile writes its own conclusion.
+const unresolved = (id: string) =>
+  and(eq(payments.id, id), inArray(payments.state, ['signed', 'unknown']), leaseLapsed);
+
+export async function settle(id: string, s: { txHash?: string; blockTime?: Date; amount: bigint }) {
+  await getDb()
+    .update(payments)
+    .set({
+      state: 'settled',
+      kind: 'paid',
+      code: null,
+      txHash: sql`coalesce(${s.txHash ?? null}, ${payments.txHash})`,
+      blockTime: s.blockTime ?? null,
+      amount: s.amount.toString(),
+      finishedAt: new Date(),
+    })
+    .where(unresolved(id));
+}
+
+/** The trigger also refuses this before the deadline, whatever the caller read. */
+export async function expire(id: string) {
+  await getDb().update(payments).set({ state: 'failed', kind: 'failed', finishedAt: new Date() }).where(unresolved(id));
+}
+
+export async function markAlerted(id: string) {
+  await getDb().update(payments).set({ alertedAt: new Date() }).where(unresolved(id));
+}

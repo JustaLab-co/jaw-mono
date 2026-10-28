@@ -1,3 +1,54 @@
+## 1.9.0 (2026-10-27)
+
+### 🚀 Features
+
+- **core:** let a grant carry a call checker ([#572](https://github.com/JustaLab-co/jaw-mono/pull/572))
+
+### ❤️ Thank You
+
+- Leo Franklin @LeoFranklin015
+
+## 1.8.0 (2026-10-27)
+
+### 🚀 Features
+
+- **core:** prefund the spender in the native coin ([#579](https://github.com/JustaLab-co/jaw-mono/pull/579))
+
+### ❤️ Thank You
+
+- Mariano Aguero
+
+## 1.7.1 (2026-10-21)
+
+### 🩹 Fixes
+
+- **core:** hand sendCalls callers the userop hash before sending ([#524](https://github.com/JustaLab-co/jaw-mono/pull/524))
+
+### ❤️ Thank You
+
+- Mariano Aguero
+
+## 1.7.0 (2026-10-19)
+
+### 🚀 Features
+
+- **core:** add pending to the revoke permission response ([#429](https://github.com/JustaLab-co/jaw-mono/pull/429))
+
+### ❤️ Thank You
+
+- Mariano Aguero
+
+## 1.6.4 (2026-10-14)
+
+### 🩹 Fixes
+
+- **core:** mask apikey and api_key params in any case ([e1d2e2b8](https://github.com/JustaLab-co/jaw-mono/commit/e1d2e2b8))
+- **core:** mask the api key in rpc error logs ([535c8a71](https://github.com/JustaLab-co/jaw-mono/commit/535c8a71))
+
+### ❤️ Thank You
+
+- Mariano Aguero @mariano-aguero
+
 ## 1.6.3 (2026-10-13)
 
 ### 🩹 Fixes

@@ -55,6 +55,8 @@ export interface TransactionRequestData {
   permissionId?: `0x${string}`;
   // Account address to execute from
   from?: `0x${string}`;
+  // wallet_sendCalls capabilities
+  capabilities?: Record<string, unknown>;
 }
 
 export interface TransactionModalProps {
@@ -491,6 +493,7 @@ export const TransactionModal = ({
         if (!o) handleCancel();
       }}
       transactions={normalizedTransactions}
+      capabilities={transactionRequest?.capabilities}
       walletAddress={signerAddress ?? ''}
       gasFee={gasFee}
       gasFeeLoading={gasFeeLoading || isAccountLoading}

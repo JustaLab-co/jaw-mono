@@ -54,6 +54,7 @@ import { Eip712Dialog } from '../components/Eip712Dialog';
 import { TransactionDialog } from '../components/TransactionDialog';
 import { PermissionDialog } from '../components/PermissionDialog';
 import { isWildcard } from '../components/PermissionDialog/Sections';
+import { toDialogCalls } from '../components/PermissionDialog/calls';
 import { RecoveryDialog } from '../components/RecoveryDialog';
 import { ConnectDialog } from '../components/ConnectDialog';
 import { AddFundsDialog } from '../components/AddFundsDialog';
@@ -186,6 +187,8 @@ export class DialogErrorBoundary extends React.Component<
 export interface ReactUIHandlerOptions {
   /** Theme configuration. Takes precedence over theme provided via JAW.create(). */
   readonly theme?: JawTheme;
+  /** Shown under the app name of the transaction screen instead of the page host. */
+  readonly originLabel?: string;
 }
 
 /**
@@ -224,11 +227,13 @@ export interface ReactUIHandlerOptions {
 export class ReactUIHandler implements UIHandler {
   private config: UIHandlerConfig = {} as UIHandlerConfig;
   private localTheme?: JawTheme;
+  private originLabel?: string;
   /** Teardown of the request that resolved but is still holding its success tick. */
   private pendingTeardown: (() => void) | null = null;
 
   constructor(options?: ReactUIHandlerOptions) {
     this.localTheme = options?.theme;
+    this.originLabel = options?.originLabel;
   }
 
   /**
@@ -646,6 +651,7 @@ export class ReactUIHandler implements UIHandler {
             paymasters={this.config.paymasters}
             appName={this.config.appName}
             appLogoUrl={this.config.appLogoUrl}
+            originLabel={this.originLabel}
           />
         );
 
@@ -662,6 +668,7 @@ export class ReactUIHandler implements UIHandler {
             paymasters={this.config.paymasters}
             appName={this.config.appName}
             appLogoUrl={this.config.appLogoUrl}
+            originLabel={this.originLabel}
           />
         );
 
@@ -1468,6 +1475,7 @@ function TransactionDialogWrapper({
   paymasters,
   appName,
   appLogoUrl,
+  originLabel,
 }: {
   request: TransactionUIRequest;
   onApprove: (data: any) => void;
@@ -1479,6 +1487,7 @@ function TransactionDialogWrapper({
   paymasters?: Record<number, PaymasterConfig>;
   appName?: string;
   appLogoUrl?: string | null;
+  originLabel?: string;
 }) {
   const [open, setOpen] = useState(true);
   const [isProcessing, setIsProcessing] = useState(false);
@@ -1800,6 +1809,7 @@ function TransactionDialogWrapper({
         else setOpen(newOpen);
       }}
       transactions={transactions}
+      capabilities={request.data.capabilities}
       walletAddress={request.data.from}
       gasFee={gasFee}
       gasFeeLoading={gasFeeLoading}
@@ -1829,6 +1839,8 @@ function TransactionDialogWrapper({
       nativeCurrencySymbol={viemChain?.nativeCurrency?.symbol}
       appName={appName}
       appLogoUrl={appLogoUrl}
+      origin={typeof window !== 'undefined' ? window.location.origin : 'unknown'}
+      originLabel={originLabel}
     />
   );
 }
@@ -1844,6 +1856,7 @@ function SendTransactionDialogWrapper({
   paymasters,
   appName,
   appLogoUrl,
+  originLabel,
 }: {
   request: SendTransactionUIRequest;
   onApprove: (data: any) => void;
@@ -1855,6 +1868,7 @@ function SendTransactionDialogWrapper({
   paymasters?: Record<number, PaymasterConfig>;
   appName?: string;
   appLogoUrl?: string | null;
+  originLabel?: string;
 }) {
   const [open, setOpen] = useState(true);
   const [isProcessing, setIsProcessing] = useState(false);
@@ -2181,6 +2195,8 @@ function SendTransactionDialogWrapper({
       nativeCurrencySymbol={viemChain?.nativeCurrency?.symbol}
       appName={appName}
       appLogoUrl={appLogoUrl}
+      origin={typeof window !== 'undefined' ? window.location.origin : 'unknown'}
+      originLabel={originLabel}
     />
   );
 }
@@ -2586,17 +2602,7 @@ function PermissionDialogWrapper({
   // Format call permissions. Signatures resolve asynchronously — a selector with no signature yet
   // renders as its raw hex and upgrades in place.
   const callSignatures = useFunctionSignatures(callsData.map((call) => call.selector));
-  const calls = useMemo(
-    () =>
-      callsData.map((call) => ({
-        target: call.target,
-        selector: call.selector,
-        functionSignature:
-          call.functionSignature ||
-          (call.selector ? (callSignatures[call.selector.toLowerCase()] ?? call.selector) : 'Unknown Function'),
-      })),
-    [callsData, callSignatures]
-  );
+  const calls = useMemo(() => toDialogCalls(callsData, callSignatures), [callsData, callSignatures]);
 
   // Format expiry date
   const expiryDate = useMemo(() => {
@@ -3294,15 +3300,16 @@ function RevokePermissionDialogWrapper({
     setStatus('Revoking permission...');
     try {
       // Revoke permission using Account class with paymaster context
-      await account.revokePermission(
+      const result = await account.revokePermission(
         request.data.permissionId as `0x${string}`,
         computedPaymasterUrl,
         computedPaymasterContext,
         request.data.address
       );
 
+      // The revoke has mined, so it succeeded even if the relay had no row left to remove.
       setStatus('Permission revoked successfully!');
-      onApprove({ success: true });
+      onApprove(result.pending ? { success: true, pending: true } : { success: true });
     } catch (error) {
       console.error('Permission revoke failed:', error);
       const errorObj = error instanceof Error ? error : new Error(String(error));

@@ -5,6 +5,7 @@ export * from './useChainIconURI';
 // tests, and a consumer that called it would empty the icons of the whole app.
 export { useChainIcons, type ChainIconMap } from './useChainIcons';
 export * from './useReverseIdentity';
+export * from './useAddressIdentities';
 export * from './useFeeTokenPrice';
 export * from './useGasEstimation';
 export * from './useSpenderPrefund';

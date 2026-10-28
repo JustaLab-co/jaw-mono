@@ -1,0 +1,85 @@
+import { createMcpHandler } from 'mcp-handler';
+import { auditTools } from '@/audit/record';
+import { clientOf, connectionKey, withConnection } from '@/connections/auth';
+import { INSTRUCTIONS } from '@/instructions';
+import { guardTools, withEdge } from '@/lib/edge';
+import { countUnauthorized } from '@/lib/metrics';
+import { registerReadTools } from '@/tools/read';
+import { registerAddFundsTool } from '@/tools/add-funds';
+import { registerAccountTools } from '@/tools/account';
+import { registerDefiTool } from '@/tools/defi';
+import { registerReadContractsTool } from '@/tools/read-contracts';
+import { registerSimulateCallsTool } from '@/tools/simulate-calls';
+import { registerResolveNameTool } from '@/tools/resolve-name';
+import { registerDiscoverTool } from '@/tools/discover';
+import { registerDisconnectTool } from '@/tools/disconnect';
+import { registerHistoryTool } from '@/tools/history';
+import { registerPayTool } from '@/tools/pay-and-fetch';
+import { registerGrantTool, retryReplacedRevokes } from '@/tools/grant-permissions';
+import { registerOwnerCallTools } from '@/tools/owner-calls';
+import { registerPrepareCallsTool } from '@/tools/prepare-calls';
+import { registerSignTool } from '@/tools/sign';
+import { registerSwapTools } from '@/tools/swap';
+import { registerConnectionTools } from '@/tools/connections';
+import { registerRevokeTool } from '@/tools/revoke-permission';
+import { registerSessionExecuteTool } from '@/tools/session-execute';
+
+export const runtime = 'nodejs';
+export const dynamic = 'force-dynamic';
+
+const mcp = createMcpHandler(
+  (server) => {
+    auditTools(server);
+    retryReplacedRevokes(server);
+    guardTools(server);
+    registerReadTools(server);
+    registerAccountTools(server);
+    registerDefiTool(server);
+    registerReadContractsTool(server);
+    registerSimulateCallsTool(server);
+    registerResolveNameTool(server);
+    registerDiscoverTool(server);
+    registerGrantTool(server);
+    registerOwnerCallTools(server);
+    registerPrepareCallsTool(server);
+    registerSignTool(server);
+    registerPayTool(server);
+    registerSessionExecuteTool(server);
+    registerSwapTools(server);
+    registerHistoryTool(server);
+    registerConnectionTools(server);
+    registerRevokeTool(server);
+    registerAddFundsTool(server);
+    registerDisconnectTool(server);
+  },
+  {
+    serverInfo: { name: 'jaw', version: '0.0.1' },
+    capabilities: { tools: {} },
+    instructions: INSTRUCTIONS,
+  }
+);
+
+// Bearer tokens, no cookies: any origin may call, so browser-based MCP clients work.
+const CORS = {
+  'access-control-allow-origin': '*',
+  'access-control-allow-headers': 'authorization, content-type, mcp-protocol-version, mcp-session-id, last-event-id',
+  'access-control-expose-headers': 'www-authenticate, mcp-session-id, x-request-id',
+};
+
+const edge = withEdge(withConnection(mcp), { guarded: true, rateKey: connectionKey });
+
+const handler: typeof edge = async (req, ctx) => {
+  const res = await edge(req, ctx);
+  if (res.status === 401) countUnauthorized(await clientOf(req));
+  for (const [name, value] of Object.entries(CORS)) res.headers.set(name, value);
+  return res;
+};
+
+export { handler as GET, handler as POST, handler as DELETE };
+
+export function OPTIONS() {
+  return new Response(null, {
+    status: 204,
+    headers: { ...CORS, 'access-control-allow-methods': 'GET, POST, DELETE, OPTIONS' },
+  });
+}

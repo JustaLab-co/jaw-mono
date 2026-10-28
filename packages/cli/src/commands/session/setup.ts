@@ -3,27 +3,22 @@ import * as fs from 'node:fs';
 import { BaseCommand } from '../../base-command.js';
 import { loadConfig } from '../../lib/config.js';
 import { getBridge } from '../../lib/bridge-singleton.js';
+import { keystoreExists, loadSessionKey, tryLoadKeystoreAddress } from '../../lib/keystore.js';
+import { tryLoadSessionConfig } from '../../lib/session-config.js';
+import { grantSession, orphanOf, SessionGrantRefusal } from '../../lib/session-grant.js';
+import type { OutputFormat } from '../../lib/types.js';
 import {
-  generateSessionKey,
-  saveKeystore,
-  keystoreExists,
-  loadSessionKey,
-  tryLoadKeystoreAddress,
-} from '../../lib/keystore.js';
-import {
+  type PermissionsConfig,
+  parsePermissionsConfig,
+  buildX402Permissions,
+  describeX402Grant,
+  DEFAULT_X402_LIMIT,
+  whyGrantExceedsCeiling,
   liveOrphans,
-  parseGrantedPermission,
   expiryInstant,
-  saveSessionConfig,
   sessionLives,
-  tryLoadSessionConfig,
   type OrphanedPermission,
-} from '../../lib/session-config.js';
-import type { OutputFormat, PermissionsConfig } from '../../lib/types.js';
-import { parsePermissionsConfig } from '../../lib/validation.js';
-import { buildX402Permissions, describeX402Grant, DEFAULT_X402_LIMIT } from '../../x402/grant-preset.js';
-import { whyOwnerCannotFundSession, whySpenderCannotPay } from '../../x402/funded-owner.js';
-import { whyGrantExceedsCeiling } from '../../x402/grant-ceiling.js';
+} from '@jaw.id/agent';
 
 export default class SessionSetup extends BaseCommand {
   static override description =
@@ -234,153 +229,40 @@ export default class SessionSetup extends BaseCommand {
     // on-chain state, surface a recovery hint before re-throwing so the user
     // knows their local session-config now references a revoked permission.
     try {
-      // 2. Resolved above, before anything that mutates on-chain state.
-      const permissions = resolvedPermissions;
-
-      // 3. Resolve expiry
       const expiryDays = flags.expiry ?? config.sessionExpiry ?? 7;
-      const expiryTimestamp = Math.floor(Date.now() / 1000) + expiryDays * 86400;
 
-      // 4. Generate or reuse session key
-      const privateKeyHex = (reuseKey ?? generateSessionKey()) as `0x${string}`;
-
-      // 5. Create LocalAccount and derive smart account address
-      const { privateKeyToAccount } = await import('viem/accounts');
-      const localAccount = privateKeyToAccount(privateKeyHex);
-
-      // 6. Open browser bridge to grant permissions
-      if (!flags.quiet) {
-        if (flags.x402) {
-          // Which account gets connected in the browser decides everything
-          // below, and it is the last moment the user can pick a different one.
-          this.log(
-            `Connect with an account that holds USDC on chain ${chainId}.\n` +
-              'Payments pull from it through the permission, and the grant carries 0.1 USDC\n' +
-              'to the session so it can pay for its own first transaction.\n'
-          );
-        }
-        this.log('Opening browser to approve permissions...');
-      }
-
-      // EIP-7702 keeps the session address equal to the session key EOA, with
-      // the delegation riding the first userOp. That is what lets the account
-      // holding the USDC be the same one the ERC-20 paymaster charges for the
-      // ops it sends; the factory's counterfactual address was a second one
-      // that never held anything.
-      const mode = 'eip7702' as const;
-
-      const bridge = await getBridge({
-        keysUrl: config.keysUrl,
+      const result = await grantSession({
+        chainId,
+        // Resolved above, before anything that mutates on-chain state.
+        permissions: resolvedPermissions,
+        expiryDays,
+        x402: flags.x402,
+        reuseKey: reuseKey as `0x${string}` | null,
+        orphaned,
         apiKey,
-        chainId,
-        ens: config.ens,
+        apiKeyFlag: flags['api-key'],
+        onBrowser: () => {
+          if (flags.quiet) return;
+          if (flags.x402) {
+            // Which account gets connected in the browser decides everything
+            // below, and it is the last moment the user can pick a different one.
+            this.log(
+              `Connect with an account that holds USDC on chain ${chainId}.\n` +
+                'Payments pull from it through the permission, and the grant carries 0.1 USDC\n' +
+                'to the session so it can pay for its own first transaction.\n'
+            );
+          }
+          this.log('Opening browser to approve permissions...');
+        },
       });
+      const { sessionAddress, expiry: expiryTimestamp, mode } = result;
 
-      // Everything from here to the grant is inside the block that closes the
-      // bridge. It used to start further down, and the two steps above it can
-      // both throw: the refusal when no key came back, and building the account.
-      // Either one left the socket open and the browser still showing a paired
-      // page, with nothing to tell it otherwise.
-      let sessionAddress: `0x${string}`;
-      // Kept whole rather than narrowed on the way in. The response carries the
-      // permission as the contract stores it, and every view on the permission
-      // manager takes that struct: narrowing to the id here was what left the
-      // CLI unable to ask the chain anything about its own permission.
-      let granted: unknown;
-      try {
-        // Read off disk after the bridge rather than reused from the snapshot
-        // taken before it. The bridge is what fills in a key on a machine that
-        // had none, and what replaces one the deployment has rotated since;
-        // reusing the snapshot would leave the account building its rpcUrl and
-        // paymaster url from a key that is no longer the right one, and logging
-        // its issuance against it.
-        const resolvedApiKey = this.resolveApiKey(flags);
-        if (!resolvedApiKey) {
-          this.error(
-            'Connected, but no API key came back and none is configured. ' +
-              'Set one with `jaw config set apiKey <key>` and run this again.'
-          );
-        }
+      if (result.unfunded) this.logToStderr(`\nWarning: ${result.unfunded}`);
 
-        const { Account } = await import('@jaw.id/core');
-        const pm = config.paymasters?.[chainId];
-        const account = await Account.fromLocalAccount(
-          {
-            chainId,
-            apiKey: resolvedApiKey,
-            paymasterUrl: pm?.url,
-            paymasterContext: pm?.context,
-          },
-          localAccount,
-          { eip7702: true }
-        );
-        sessionAddress = account.address;
-
-        if (flags.x402) {
-          const blocked = await whyOwnerCannotFundSession({ chainId, request: (m, p) => bridge.request(m, p) });
-          if (blocked) this.error(blocked);
-        }
-
-        granted = await bridge.request('wallet_grantPermissions', [
-          {
-            spender: sessionAddress,
-            expiry: expiryTimestamp,
-            permissions,
-            chainId,
-            // The session account sends every op the permission authorises, and
-            // the ERC-20 paymaster charges the sender, so its first one has
-            // nothing to be charged. The wallet rides a small transfer along in
-            // this same transaction; it decides the amount.
-            capabilities: { prefundSpender: true },
-          },
-        ]);
-      } finally {
-        bridge.close();
-      }
-
-      const grantResponse = granted as { permissionId: string; account: string };
-      // Undefined from a wallet whose response does not carry the struct. The
-      // session is then saved without it, and its policy falls back to the
-      // config defaults instead of the grant's own caps.
-      const permission = parseGrantedPermission(granted);
-
-      // 7. Save keystore
-      saveKeystore(privateKeyHex, sessionAddress);
-
-      // 8. Save session config
-      saveSessionConfig({
-        ownerAddress: grantResponse.account,
-        sessionAddress,
-        permissionId: grantResponse.permissionId,
-        chainId,
-        expiry: expiryTimestamp,
-        mode,
-        ...(permission ? { permission } : {}),
-        ...(orphaned.length > 0 ? { orphanedPermissions: orphaned } : {}),
-      });
-
-      // 8.5 The grant asked the wallet to seed the spender. Check that it did.
-      //
-      //      An unsupported capability is ignored rather than refused, so a
-      //      wallet that does not implement `prefundSpender` leaves the session
-      //      unable to pay for anything, and says nothing about it. The failure
-      //      then surfaces at the first operation, in an error about sizing a
-      //      paymaster approval, long after the user has left this screen.
-      //      Only under --x402: the wallet seeds in whatever token the
-      //      permission names, and that preset is the one grant that always
-      //      names USDC. A calls-only permission is correctly seeded with
-      //      nothing, and warning there would send someone to move real funds
-      //      for no reason.
-      if (flags.x402) {
-        const unfunded = await whySpenderCannotPay({ chainId, spender: sessionAddress });
-        if (unfunded) this.logToStderr(`\nWarning: ${unfunded}`);
-      }
-
-      // 9. Output
       const summary = {
-        ownerAddress: grantResponse.account,
+        ownerAddress: result.ownerAddress,
         sessionAddress,
-        permissionId: grantResponse.permissionId,
+        permissionId: result.permissionId,
         expiry: expiryTimestamp,
         mode,
       };
@@ -391,7 +273,7 @@ export default class SessionSetup extends BaseCommand {
         this.log('\nSession created successfully.\n');
         this.log(`  Session address:  ${sessionAddress}`);
         this.log('                    (the session key EOA, and the x402 payer)');
-        this.log(`  Owner address:    ${grantResponse.account}`);
+        this.log(`  Owner address:    ${result.ownerAddress}`);
         if (flags.x402) {
           // Where the money stays. Sending it to the session address instead is
           // the easiest thing to get wrong, and getting it wrong looks like it
@@ -399,7 +281,7 @@ export default class SessionSetup extends BaseCommand {
           // permission, so the cap the user granted applies to nothing.
           this.log(`                    (payments pull from here, capped at ${describeX402Grant(flags.limit)})`);
         }
-        this.log(`  Permission ID:    ${grantResponse.permissionId}`);
+        this.log(`  Permission ID:    ${result.permissionId}`);
         this.log(`  Chain:            ${chainId}`);
         this.log(`  Expires:          ${new Date(expiryTimestamp * 1000).toISOString()} (${expiryDays} days)`);
         this.log('\nUse --session flag to execute RPC calls in auto mode.');
@@ -412,6 +294,7 @@ export default class SessionSetup extends BaseCommand {
             'run `jaw session setup` again to create a new session.'
         );
       }
+      if (error instanceof SessionGrantRefusal) this.error(error.message);
       throw error;
     }
   }
@@ -458,9 +341,4 @@ export default class SessionSetup extends BaseCommand {
 
     return parsePermissionsConfig(raw);
   }
-}
-
-/** The part of a replaced session worth keeping: enough to revoke it later. */
-function orphanOf(session: { permissionId: string; chainId: number; expiry: number | null }): OrphanedPermission {
-  return { id: session.permissionId, chainId: session.chainId, expiry: session.expiry };
 }

@@ -49,17 +49,35 @@ vi.mock('../lib/session-bridge.js', () => ({
 }));
 
 const usdcBalanceMock = vi.fn();
+const usdcBaseUnitsMock = vi.fn();
 vi.mock('../x402/balance.js', async (importOriginal) => {
   const actual = await importOriginal<typeof import('../x402/balance.js')>();
   return {
     ...actual,
     usdcBalance: (...args: unknown[]) => usdcBalanceMock(...args),
+    // The funding checks around a grant: whether the owner can seed the
+    // session, and whether the session came out able to pay.
+    usdcBaseUnits: (...args: unknown[]) => usdcBaseUnitsMock(...args),
     // The payer probes the session EOA for an EIP-7702 delegation designator
     // before signing; a real client here would hit the stubbed global fetch
     // and eat the mocked 402/200 response sequence. No delegation in E2E.
-    publicClientFor: () => ({ getCode: async () => undefined }),
+    // Balance reads answer from the same stub `usdcBalance` does.
+    cliChainClients: {
+      publicClient: (chainId: number) => ({
+        getCode: async () => undefined,
+        readContract: async ({ functionName, args }: { functionName: string; args: [string] }) => {
+          if (functionName !== 'balanceOf') throw new Error(`unexpected read: ${functionName}`);
+          return BigInt((await usdcBalanceMock(`eip155:${chainId}`, args[0])).raw);
+        },
+      }),
+    },
   };
 });
+
+const { GRANTED_SESSION } = vi.hoisted(() => ({ GRANTED_SESSION: '0x2222222222222222222222222222222222222222' }));
+vi.mock('@jaw.id/core', () => ({
+  Account: { fromLocalAccount: async () => ({ address: GRANTED_SESSION }) },
+}));
 
 const { createMcpServer } = await import('./server.js');
 const { saveConfig } = await import('../lib/config.js');
@@ -109,6 +127,8 @@ beforeEach(() => {
     close: vi.fn(),
   });
   sessionRequestMock.mockResolvedValue('0xsession-result');
+  usdcBaseUnitsMock.mockReset();
+  usdcBaseUnitsMock.mockResolvedValue(10_000_000n);
   process.env['JAW_API_KEY'] = 'test-api-key';
   delete process.env['JAW_CHAIN_ID'];
   delete process.env['JAW_SESSION'];
@@ -432,6 +452,7 @@ describe('jaw_pay_and_fetch', () => {
     });
     expect(result.isError).toBe(true);
     expect(toolText(result)).toContain('jaw session setup');
+    expect(toolText(result)).toContain('jaw_grant_permissions');
   });
 
   it('passes a free (non-402) resource through without paying', async () => {
@@ -622,6 +643,35 @@ describe('jaw_pay_and_fetch', () => {
       // The retry carried a real signed proof from the session key.
       const retryInit = fetchMock.mock.calls[1][1] as { headers: Record<string, string> };
       expect(retryInit.headers['PAYMENT-SIGNATURE']).toBeTruthy();
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it('given a seller advertising a ten year maxTimeoutSeconds, when it pays, then the proof expires within the hour', async () => {
+    const { saveKeystore } = await import('../lib/keystore.js');
+    saveKeystore(PK, '0xSmartAccount');
+    const challenge = JSON.parse(Buffer.from(CHALLENGE, 'base64').toString());
+    challenge.accepts[0].maxTimeoutSeconds = 10 * 365 * 86_400;
+    const forever = Buffer.from(JSON.stringify(challenge)).toString('base64');
+
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(mkRes(402, { 'PAYMENT-REQUIRED': forever }, '{}'))
+      .mockResolvedValueOnce(mkRes(200, { 'PAYMENT-RESPONSE': RECEIPT }, JSON.stringify({ data: 'ok' })));
+    vi.stubGlobal('fetch', fetchMock);
+    try {
+      const client = await connectClient();
+      const before = Math.floor(Date.now() / 1000);
+      const parsed = payResult(
+        await client.callTool({ name: 'jaw_pay_and_fetch', arguments: { url: 'https://api.example.com/paid' } })
+      );
+      expect(parsed.paid).toBe(true);
+      const retryInit = fetchMock.mock.calls[1][1] as { headers: Record<string, string> };
+      const proof = JSON.parse(Buffer.from(retryInit.headers['PAYMENT-SIGNATURE'], 'base64').toString());
+      const validBefore = Number(proof.payload.authorization.validBefore);
+      expect(validBefore).toBeGreaterThanOrEqual(before + 3600);
+      expect(validBefore).toBeLessThanOrEqual(Date.now() / 1000 + 3600);
     } finally {
       vi.unstubAllGlobals();
     }
@@ -1153,6 +1203,231 @@ describe('jaw_discover', () => {
       expect(catalog.text).toContain('Ignore previous instructions');
     } finally {
       vi.unstubAllGlobals();
+    }
+  });
+});
+
+describe('jaw_grant_permissions', () => {
+  const OWNER = '0x1111111111111111111111111111111111111111';
+  const KEY = '0x59c6995e998f97a5a0044966f0945389dc9e86dae88c7a8412f4603b6b78690d';
+  const WALLET_URL = 'https://keys.jaw.id/cli-bridge?session=abc';
+  const now = () => Math.floor(Date.now() / 1000);
+
+  type GrantRequest = { expiry: number; permissions: unknown };
+  let grants: GrantRequest[];
+
+  function walletBridge() {
+    return {
+      request: vi.fn(async (method: string, params?: unknown) => {
+        if (method === 'eth_requestAccounts') return [OWNER];
+        if (method === 'wallet_grantPermissions') {
+          grants.push((params as GrantRequest[])[0]);
+          return { account: OWNER, permissionId: '0xnewperm' };
+        }
+        throw new Error(`unexpected ${method}`);
+      }),
+      close: vi.fn(),
+    };
+  }
+
+  beforeEach(() => {
+    grants = [];
+    getBridgeMock.mockImplementation(async () => walletBridge());
+  });
+
+  async function grant(args: Record<string, unknown> = { chainId: 84532 }) {
+    const client = await connectClient();
+    return client.callTool({ name: 'jaw_grant_permissions', arguments: args });
+  }
+
+  async function saveSession(overrides: Record<string, unknown> = {}) {
+    const { saveKeystore } = await import('../lib/keystore.js');
+    const { saveSessionConfig } = await import('../lib/session-config.js');
+    saveKeystore(KEY, '0xOldSession');
+    saveSessionConfig({
+      mode: 'eip7702',
+      ownerAddress: OWNER,
+      sessionAddress: '0xOldSession',
+      permissionId: '0xoldperm',
+      chainId: 84532,
+      expiry: now() + 86400,
+      ...overrides,
+    } as Parameters<typeof saveSessionConfig>[0]);
+  }
+
+  async function savedSession() {
+    const { tryLoadSessionConfig } = await import('../lib/session-config.js');
+    return tryLoadSessionConfig();
+  }
+
+  it('with no session, grants the daily budget through the browser and saves the session', async () => {
+    const result = await grant({ chainId: 84532, x402Budget: { perDay: '2.5' } });
+
+    expect(result.isError).toBeFalsy();
+    expect(getBridgeMock).toHaveBeenCalledWith(expect.objectContaining({ chainId: 84532 }));
+    expect(sessionBridgeCtorMock).not.toHaveBeenCalled();
+    expect(grants).toHaveLength(1);
+    expect(grants[0].permissions).toMatchObject({
+      spends: [{ token: '0x036CbD53842c5426634e7929541eC2318f3dCF7e', allowance: '2500000', unit: 'day' }],
+    });
+
+    const structured = result.structuredContent as Record<string, unknown>;
+    expect(structured).toMatchObject({
+      sessionAddress: GRANTED_SESSION,
+      ownerAddress: OWNER,
+      permissionId: '0xnewperm',
+      chainId: 84532,
+      expiry: grants[0].expiry,
+    });
+    expect(structured.summary).toEqual(expect.stringContaining('2.5 USDC'));
+    expect(structured).not.toHaveProperty('unfunded');
+    expect(await savedSession()).toMatchObject({
+      sessionAddress: GRANTED_SESSION,
+      permissionId: '0xnewperm',
+      chainId: 84532,
+    });
+  });
+
+  it('grants 10 USDC a day when no budget is given', async () => {
+    await grant({ chainId: 84532 });
+    expect(grants[0].permissions).toMatchObject({ spends: [{ allowance: '10000000', unit: 'day' }] });
+  });
+
+  it('warns when the new session came out unable to pay', async () => {
+    usdcBaseUnitsMock.mockImplementation(async (_network: string, who: string) =>
+      who === GRANTED_SESSION ? 0n : 10_000_000n
+    );
+    const result = await grant();
+
+    expect(result.isError).toBeFalsy();
+    expect((result.structuredContent as Record<string, unknown>).unfunded).toEqual(
+      expect.stringContaining(GRANTED_SESSION)
+    );
+  });
+
+  it('refuses a budget over the grant ceiling before creating a key or opening the browser', async () => {
+    saveConfig({ grantCeiling: '5/day' });
+    const result = await grant({ chainId: 84532, x402Budget: { perDay: '10' } });
+
+    expect(result.isError).toBe(true);
+    expect(toolText(result)).toContain('5/day');
+    expect(getBridgeMock).not.toHaveBeenCalled();
+    expect(fs.existsSync(PATHS.keystore)).toBe(false);
+  });
+
+  it('refuses while a session is active, without opening the browser or replacing it', async () => {
+    await saveSession();
+    const result = await grant();
+
+    expect(result.isError).toBe(true);
+    expect(toolText(result)).toContain('jaw_pay_and_fetch');
+    expect(toolText(result)).toContain('jaw session setup');
+    expect(getBridgeMock).not.toHaveBeenCalled();
+    expect((await savedSession())?.permissionId).toBe('0xoldperm');
+  });
+
+  it('refuses while a session is active on another chain', async () => {
+    await saveSession({ chainId: 8453 });
+    const result = await grant({ chainId: 84532 });
+
+    expect(result.isError).toBe(true);
+    expect(toolText(result)).toContain('chain 8453');
+    expect(getBridgeMock).not.toHaveBeenCalled();
+  });
+
+  it('replaces an expired session with a fresh key and carries its live orphans', async () => {
+    const liveOrphan = { id: '0xlive', chainId: 84532, expiry: now() + 3600 };
+    await saveSession({
+      expiry: now() - 60,
+      orphanedPermissions: [liveOrphan, { id: '0xdead', chainId: 84532, expiry: now() - 3600 }],
+    });
+    const result = await grant();
+
+    expect(result.isError).toBeFalsy();
+    const { loadSessionKey } = await import('../lib/keystore.js');
+    expect(loadSessionKey()).not.toBe(KEY);
+    expect((await savedSession())?.orphanedPermissions).toEqual([liveOrphan]);
+  });
+
+  it('reuses a key that has no session config alongside it', async () => {
+    const { saveKeystore, loadSessionKey } = await import('../lib/keystore.js');
+    saveKeystore(KEY, '0xOrphanKey');
+    const result = await grant();
+
+    expect(result.isError).toBeFalsy();
+    expect(loadSessionKey()).toBe(KEY);
+  });
+
+  it('holds the expiry to 30 days whatever sessionExpiry says', async () => {
+    saveConfig({ sessionExpiry: 365 });
+    const before = now();
+    await grant();
+    const after = now();
+
+    expect(grants[0].expiry).toBeGreaterThanOrEqual(before + 30 * 86400);
+    expect(grants[0].expiry).toBeLessThanOrEqual(after + 30 * 86400);
+  });
+
+  it('refuses a second grant while the first waits for the owner', async () => {
+    let answer: () => void = () => undefined;
+    const answered = new Promise<void>((resolve) => (answer = resolve));
+    getBridgeMock.mockImplementation(async () => {
+      await answered;
+      return walletBridge();
+    });
+    const client = await connectClient();
+
+    const first = client.callTool({ name: 'jaw_grant_permissions', arguments: { chainId: 84532 } });
+    await vi.waitFor(() => expect(getBridgeMock).toHaveBeenCalledTimes(1));
+    const second = await client.callTool({ name: 'jaw_grant_permissions', arguments: { chainId: 84532 } });
+    answer();
+
+    expect(second.isError).toBe(true);
+    expect(toolText(second)).toContain('already waiting for the owner');
+    expect((await first).isError).toBeFalsy();
+    expect(getBridgeMock).toHaveBeenCalledTimes(1);
+  });
+
+  it('sends the wallet URL as a progress notification when the request carries a token', async () => {
+    getBridgeMock.mockImplementation(async (options: { onUrl?: (url: string) => void }) => {
+      options.onUrl?.(WALLET_URL);
+      return walletBridge();
+    });
+    const client = await connectClient();
+    const messages: string[] = [];
+    await client.callTool({ name: 'jaw_grant_permissions', arguments: { chainId: 84532 } }, undefined, {
+      onprogress: (progress) => messages.push(progress.message ?? ''),
+    });
+
+    expect(messages.join('\n')).toContain(WALLET_URL);
+  });
+
+  it('sends the wallet URL as a log message when the request carries no token', async () => {
+    getBridgeMock.mockImplementation(async (options: { onUrl?: (url: string) => void }) => {
+      options.onUrl?.(WALLET_URL);
+      return walletBridge();
+    });
+    const { LoggingMessageNotificationSchema } = await import('@modelcontextprotocol/sdk/types.js');
+    const client = await connectClient();
+    const logged: unknown[] = [];
+    client.setNotificationHandler(LoggingMessageNotificationSchema, (notification) => {
+      logged.push(notification.params.data);
+    });
+    await client.callTool({ name: 'jaw_grant_permissions', arguments: { chainId: 84532 } });
+
+    await vi.waitFor(() => expect(String(logged[0])).toContain(WALLET_URL));
+  });
+
+  it('writes nothing to stdout, which is the MCP transport', async () => {
+    const stdout = vi.spyOn(process.stdout, 'write');
+    try {
+      const granted = await grant();
+      const refused = await grant();
+      expect(granted.isError).toBeFalsy();
+      expect(refused.isError).toBe(true);
+      expect(stdout).not.toHaveBeenCalled();
+    } finally {
+      stdout.mockRestore();
     }
   });
 });

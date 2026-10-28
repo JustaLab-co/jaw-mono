@@ -16,7 +16,7 @@ import { decodeFunctionData, erc20Abi, maxUint256 } from 'viem';
 import { privateKeyToAccount } from 'viem/accounts';
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 
-import { PERMIT2_ADDRESS } from '../x402/permit2.js';
+import { PERMIT2_ADDRESS } from '@jaw.id/agent';
 
 fc.configureGlobal({ seed: 0x5e55, numRuns: 100 });
 
@@ -118,7 +118,7 @@ describe('autonomous sends', () => {
         expect(sent.length).toBeLessThanOrEqual(1);
         if (sent.length === 0) return;
         const [calls, options, ...rest] = sent[0];
-        expect(options).toEqual({ permissionId: PERMISSION_ID });
+        expect(options).toEqual({ permissionId: PERMISSION_ID, onSigned: expect.any(Function) });
         // No paymaster override from the payload: the bridge's own resolution is the only one.
         expect(rest).toEqual([]);
         const given = Array.isArray(params) ? params[0] : params;
@@ -245,7 +245,7 @@ describe('the Permit2 approval, the one send outside the permission', () => {
 
         expect(sent).toHaveLength(1);
         const [calls, options] = sent[0] as [Array<{ to: string; data: `0x${string}` }>, unknown];
-        expect(options).toBeUndefined();
+        expect(options).toEqual({ onSigned: expect.any(Function) });
         expect(calls).toHaveLength(1);
         expect(calls[0].to.toLowerCase()).toBe(USDC_BASE_SEPOLIA.toLowerCase());
         const decoded = decodeFunctionData({ abi: erc20Abi, data: calls[0].data });

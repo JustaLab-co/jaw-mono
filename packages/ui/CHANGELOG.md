@@ -1,3 +1,109 @@
+## 1.10.1 (2026-10-28)
+
+### 🩹 Fixes
+
+- **ui:** read across deposits that swap through uniswap v4 ([#590](https://github.com/JustaLab-co/jaw-mono/pull/590))
+
+### ❤️ Thank You
+
+- Mariano Aguero @mariano-aguero
+
+## 1.10.0 (2026-10-27)
+
+### 🚀 Features
+
+- **ui:** pin bridge contracts for the signing screen ([#556](https://github.com/JustaLab-co/jaw-mono/pull/556))
+
+### ❤️ Thank You
+
+- Mariano Aguero @mariano-aguero
+
+## 1.9.1 (2026-10-27)
+
+### 🩹 Fixes
+
+- **ui:** flag unlimited approvals inline and drop the token approvals card ([#584](https://github.com/JustaLab-co/jaw-mono/pull/584))
+
+### ❤️ Thank You
+
+- Leo Franklin @LeoFranklin015
+
+## 1.9.0 (2026-10-27)
+
+### 🚀 Features
+
+- **core:** let a grant carry a call checker ([#572](https://github.com/JustaLab-co/jaw-mono/pull/572))
+
+### 🧱 Updated Dependencies
+
+- Updated @jaw.id/core to 1.9.0
+
+### ❤️ Thank You
+
+- Leo Franklin @LeoFranklin015
+
+## 1.8.3 (2026-10-27)
+
+### 🧱 Updated Dependencies
+
+- Updated @jaw.id/core to 1.8.0
+
+## 1.8.2 (2026-10-22)
+
+### 🩹 Fixes
+
+- **ui:** show the token approvals card only for unlimited approvals ([#541](https://github.com/JustaLab-co/jaw-mono/pull/541))
+
+### ❤️ Thank You
+
+- Ghadi @Ghadi8
+
+## 1.8.1 (2026-10-21)
+
+### 🧱 Updated Dependencies
+
+- Updated @jaw.id/core to 1.7.1
+
+## 1.8.0 (2026-10-19)
+
+### 🚀 Features
+
+- **core:** add pending to the revoke permission response ([#429](https://github.com/JustaLab-co/jaw-mono/pull/429))
+
+### 🧱 Updated Dependencies
+
+- Updated @jaw.id/core to 1.7.0
+
+### ❤️ Thank You
+
+- Mariano Aguero
+
+## 1.7.1 (2026-10-19)
+
+### 🩹 Fixes
+
+- **ui:** resolve ens, token and clear-signing names with one shared hook ([#486](https://github.com/JustaLab-co/jaw-mono/pull/486))
+
+### ❤️ Thank You
+
+- Leo Franklin @LeoFranklin015
+
+## 1.7.0 (2026-10-16)
+
+### 🚀 Features
+
+- **mcp:** add the hosted MCP server with x402 budgets ([#367](https://github.com/JustaLab-co/jaw-mono/pull/367))
+
+### ❤️ Thank You
+
+- Mariano Aguero @mariano-aguero
+
+## 1.6.4 (2026-10-14)
+
+### 🧱 Updated Dependencies
+
+- Updated @jaw.id/core to 1.6.4
+
 ## 1.6.3 (2026-10-13)
 
 ### 🩹 Fixes
