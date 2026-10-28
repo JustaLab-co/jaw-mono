@@ -16,3 +16,5 @@ export { fetchRPCRequest, checkErrorForInvalidRequestArgs, buildHandleJawRpcUrl 
 export { hexStringFromNumber, ensureIntNumber } from './type.js';
 
 export { isSafari, isMobile } from './user-agent.js';
+
+export { BRIDGE_APP_NAME_MAX_LENGTH, sanitizeBridgeAppName } from './bridgeAppName.js';
