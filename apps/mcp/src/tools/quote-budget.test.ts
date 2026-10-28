@@ -13,6 +13,7 @@ import {
   walletAnswers,
   walletsSettled,
   offlineSession,
+  noCodeRead,
 } from '@/connections/testkit';
 import { getDb } from '@/db/client';
 import { payments } from '@/db/schema';
@@ -107,7 +108,7 @@ async function withBudget(perDay: string) {
   await grantPermissions(
     t,
     { x402Budget: { perDay } },
-    { openWallet: wallet, readPermission: approvedOnChain, session: offlineSession }
+    { codeAt: noCodeRead, openWallet: wallet, readPermission: approvedOnChain, session: offlineSession }
   );
   await walletsSettled();
   const permissionId = (await x402Budget(t.connectionId))!.permissionId;

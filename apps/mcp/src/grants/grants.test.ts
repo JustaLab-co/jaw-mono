@@ -20,6 +20,7 @@ import {
   walletAnswers,
   walletsSettled,
   offlineSession,
+  noCodeRead,
 } from '@/connections/testkit';
 import type { DisconnectDeps } from '@/connections/disconnect';
 import { spends } from '@/connections/scopes';
@@ -89,6 +90,7 @@ async function ask(
   const result = await grantPermissions(t, opts.input ?? { x402Budget: { perDay: opts.perDay ?? '1' } }, {
     openWallet: fakeWallet(answer, asked),
     readPermission: opts.read ?? approvedOnChain,
+    codeAt: noCodeRead,
     session: opts.session ?? offlineSession,
   });
   await walletsSettled();
@@ -128,6 +130,7 @@ describe('budget grants', () => {
         },
         session: offlineSession,
         readPermission: approvedOnChain,
+        codeAt: noCodeRead,
       }
     );
     await walletsSettled();
@@ -332,7 +335,7 @@ describe('given a connection that approves a second budget', () => {
     await grantPermissions(
       t,
       { x402Budget: { perDay: '0.5' } },
-      { openWallet, readPermission: approvedOnChain, session: { ...deps, sender } }
+      { openWallet, readPermission: approvedOnChain, codeAt: noCodeRead, session: { ...deps, sender } }
     );
     await walletsSettled();
 
@@ -399,6 +402,7 @@ describe('given a replaced budget left approved on chain', () => {
     retryReplacedRevokes(server, {
       openWallet: fakeWallet(walletAnswers(owner())),
       readPermission: approvedOnChain,
+      codeAt: noCodeRead,
       session,
     });
     (server.registerTool as (...args: unknown[]) => unknown)('jaw_any', { description: 'any' }, async () => 'answered');
@@ -502,6 +506,7 @@ describe('jaw_grant_permissions', () => {
         },
         session: offlineSession,
         readPermission: approvedOnChain,
+        codeAt: noCodeRead,
       }
     );
     await walletsSettled();
@@ -524,7 +529,7 @@ describe('jaw_grant_permissions', () => {
     };
     let until: Date | undefined;
     const openWallet: OpenWallet = async (_chainId, at) => ((until = at), waiting);
-    const deps = { openWallet, session: offlineSession, readPermission: approvedOnChain };
+    const deps = { openWallet, session: offlineSession, readPermission: approvedOnChain, codeAt: noCodeRead };
 
     const first = await grantPermissions(t, { x402Budget: { perDay: '1' } }, deps);
     const second = await grantPermissions(t, { x402Budget: { perDay: '1' } }, deps);
@@ -561,6 +566,7 @@ describe('jaw_grant_permissions', () => {
         },
         session: offlineSession,
         readPermission: approvedOnChain,
+        codeAt: noCodeRead,
       }
     );
     expect('isError' in result && result.isError).toBe(true);
@@ -579,6 +585,7 @@ describe('jaw_grant_permissions', () => {
         },
         session: offlineSession,
         readPermission: approvedOnChain,
+        codeAt: noCodeRead,
       }
     );
     expect('isError' in result && result.isError).toBe(true);
@@ -600,6 +607,7 @@ describe('jaw_grant_permissions', () => {
         },
         session: offlineSession,
         readPermission: approvedOnChain,
+        codeAt: noCodeRead,
       }
     );
     await walletsSettled();
@@ -635,6 +643,7 @@ describe('jaw_grant_permissions', () => {
         }),
         session: offlineSession,
         readPermission: approvedOnChain,
+        codeAt: noCodeRead,
       }
     );
     await endConnection(t.connectionId, t.account);
@@ -737,8 +746,10 @@ describe('the permission of a budget', () => {
 
     it('accepts the answer that carries it', async () => {
       const { t, checked, answer } = await askChecked();
+      // The recorded permission is what disconnect and revoke rebuild the hash from.
       expect(await checkGranted(t.chainId, checked, 'x402-budget', answer, approvedOnChain)).toMatchObject({
         allowance: checked.permissions.spends[0].allowance,
+        permission: { calls: [expect.objectContaining({ checker: expect.stringMatching(new RegExp(CHECKER, 'i')) })] },
       });
     });
 
@@ -828,6 +839,7 @@ describe('the permission of a budget', () => {
       },
       session: offlineSession,
       readPermission: approvedOnChain,
+      codeAt: noCodeRead,
     });
 
     expect('isError' in result && result.isError).toBe(true);
@@ -930,6 +942,7 @@ describe.skipIf(!TEST_PG_URL)('on Postgres, given a budget landing while its con
         openWallet: fakeWallet(walletAnswers(signer)),
         session: offlineSession,
         readPermission: approvedOnChain,
+        codeAt: noCodeRead,
       }
     );
     await new Promise((r) => setTimeout(r, 250));

@@ -23,6 +23,7 @@ import {
   walletAnswers,
   walletsSettled,
   offlineSession,
+  noCodeRead,
 } from '@/connections/testkit';
 import { getDb } from '@/db/client';
 import { grants, payments } from '@/db/schema';
@@ -182,7 +183,7 @@ async function connected(perDay: string): Promise<Tenant> {
   await grantPermissions(
     t,
     { x402Budget: { perDay } },
-    { openWallet: wallet, session: offlineSession, readPermission: approvedOnChain }
+    { openWallet: wallet, session: offlineSession, readPermission: approvedOnChain, codeAt: noCodeRead }
   );
   await walletsSettled();
   if (!(await x402Budget(t.connectionId))) throw new Error('no budget');

@@ -30,6 +30,11 @@ export function setTestEnv(keys = randomBytes(32).toString('base64url')) {
 
 export const owner = () => privateKeyToAccount(generatePrivateKey());
 
+/** For grants that name no checker: a code read means the grant reached the chain it should not. */
+export const noCodeRead = async (): Promise<never> => {
+  throw new Error('this test reads no code');
+};
+
 export const approvedOnChain: ReadPermission = async () => ({ status: 'ok', approved: true, revoked: false });
 
 export async function managerAnswer(functionName: 'getHash' | 'getCurrentPeriod', args: readonly unknown[]) {
@@ -376,7 +381,7 @@ export async function grantBudget(
   await grantPermissions(
     t,
     { x402Budget: { perDay } },
-    { openWallet: fakeWallet(walletAnswers(signer)), readPermission: read, session: offlineSession }
+    { openWallet: fakeWallet(walletAnswers(signer)), readPermission: read, codeAt: noCodeRead, session: offlineSession }
   );
   await walletsSettled();
   return x402Budget(t.connectionId);

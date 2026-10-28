@@ -1,7 +1,7 @@
 import { ANY_FN_SEL, ANY_TARGET, EMPTY_CALLDATA_FN_SEL } from '@jaw.id/core';
 import { hasChecker, isRefusedChecker, usdcForNetwork } from '@jaw.id/agent';
 import type { McpServer } from '@modelcontextprotocol/server';
-import { isAddress, numberToHex, parseUnits, toFunctionSelector, type Address, type Hex } from 'viem';
+import { isAddress, numberToHex, parseUnits, toFunctionSelector, withTimeout, type Address, type Hex } from 'viem';
 import { z } from 'zod';
 import { chainClients } from '@/adapters/session-host';
 import { tenant, type Tenant } from '@/connections/auth';
@@ -120,18 +120,25 @@ export type GrantInput = z.input<typeof grantInput>;
 interface GrantDeps {
   openWallet: OpenWallet;
   readPermission: ReadPermission;
-  /**
-   * The bytecode at an address, to refuse a checker with nothing deployed before a link is made.
-   * Read from the chain when absent; a grant without checkers never reads it.
-   */
-  codeAt?: (chainId: number, address: Address) => Promise<Hex | undefined>;
+  /** The bytecode at an address, to refuse a checker with nothing deployed before a link is made. */
+  codeAt: (chainId: number, address: Address) => Promise<Hex | undefined>;
   /** What revokes replaced budgets as spender. */
   session: Pick<DisconnectDeps, 'clients' | 'sender' | 'lockWaitMs'>;
 }
 
+// Short, like the probe in `lib/chain.ts`: the owner is waiting, and viem's own retries take far longer.
+const CODE_READ_MS = 3_000;
+
+const codeOnChain = (chainId: number, address: Address) =>
+  withTimeout(() => publicClientFor(chainId).getCode({ address }), {
+    timeout: CODE_READ_MS,
+    errorInstance: new Error('the node did not answer the code read in time'),
+  });
+
 const DEFAULTS: GrantDeps = {
   openWallet: ownerRelay,
   readPermission: readOnChain,
+  codeAt: codeOnChain,
   session: { clients: chainClients, sender: sessionSender },
 };
 
@@ -258,13 +265,14 @@ function asked(t: Tenant, input: GrantInput, expiry: number): Asked | string {
   return { kind: 'custom', grant, what: checked.length ? `${what}, with ${listed(checked)}` : what };
 }
 
-const codeOnChain = (chainId: number, address: Address) => publicClientFor(chainId).getCode({ address });
-
-/** The first checker the grant names with no bytecode on its chain, which the manager would refuse. */
+/**
+ * The first checker the grant names with no bytecode on its chain, which the manager would refuse.
+ * Throws when the chain cannot be read.
+ */
 async function checkerWithoutCode(t: Tenant, grant: GrantRequest, deps: GrantDeps): Promise<Address | undefined> {
   const checkers = [...new Set(grant.permissions.calls.flatMap((c) => (c.checker ? [c.checker] : [])))];
   for (const checker of checkers) {
-    const code = await (deps.codeAt ?? codeOnChain)(t.chainId, checker);
+    const code = await deps.codeAt(t.chainId, checker);
     if (!code || code === '0x') return checker;
   }
   return undefined;
@@ -340,7 +348,15 @@ export async function grantPermissions(t: Tenant, input: GrantInput, deps = DEFA
   }
   const ask = asked(t, input, Math.floor(expiresAt.getTime() / 1000));
   if (typeof ask === 'string') return refusal(ask);
-  const codeless = await checkerWithoutCode(t, ask.grant, deps);
+  let codeless: Address | undefined;
+  try {
+    codeless = await checkerWithoutCode(t, ask.grant, deps);
+  } catch (err) {
+    log('warn', { msg: 'checker code unreadable', error: errorLabel(err) });
+    return refusal(
+      `chain_unreadable: The network could not be read to check the contract that would check these actions. ${NOTHING_ASKED} Try again in a minute.`
+    );
+  }
   if (codeless) {
     return refusal(
       withNext(
