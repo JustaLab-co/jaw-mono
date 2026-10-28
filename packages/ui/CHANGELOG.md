@@ -1,3 +1,13 @@
+## 1.10.1 (2026-10-28)
+
+### 🩹 Fixes
+
+- **ui:** read across deposits that swap through uniswap v4 ([#590](https://github.com/JustaLab-co/jaw-mono/pull/590))
+
+### ❤️ Thank You
+
+- Mariano Aguero @mariano-aguero
+
 ## 1.10.0 (2026-10-27)
 
 ### 🚀 Features
