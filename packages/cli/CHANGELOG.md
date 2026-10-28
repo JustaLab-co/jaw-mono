@@ -1,3 +1,13 @@
+## 0.7.0 (2026-10-28)
+
+### 🚀 Features
+
+- **agent:** keep the call checker in stored grants for the cli and the mcp ([#589](https://github.com/JustaLab-co/jaw-mono/pull/589))
+
+### ❤️ Thank You
+
+- Leo Franklin @LeoFranklin015
+
 ## 0.6.2 (2026-10-27)
 
 ### 🧱 Updated Dependencies
