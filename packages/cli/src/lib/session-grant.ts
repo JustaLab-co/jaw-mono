@@ -4,6 +4,8 @@ import {
   whyOwnerCannotFundSession,
   whySpenderCannotPay,
   parseGrantedPermission,
+  droppedCheckers,
+  whyCheckersDropped,
 } from '@jaw.id/agent';
 import { apiKeyFor } from './api-key.js';
 import { loadConfig } from './config.js';
@@ -87,6 +89,8 @@ export async function grantSession(input: SessionGrantInput): Promise<SessionGra
   // manager takes that struct: narrowing to the id here was what left the
   // CLI unable to ask the chain anything about its own permission.
   let granted: unknown;
+  let dropped: ReturnType<typeof droppedCheckers> = [];
+  let unrevoked: string | undefined;
   try {
     // Read off disk after the bridge rather than reused from the snapshot
     // taken before it. The bridge is what fills in a key on a machine that
@@ -138,6 +142,20 @@ export async function grantSession(input: SessionGrantInput): Promise<SessionGra
         capabilities: { prefundSpender: true },
       },
     ]);
+
+    // A wallet from before checkers grants a checked call with none, a wider rule than the one
+    // asked for. Revoked on the bridge that is still open, rather than saved as the session.
+    dropped = droppedCheckers(permissions, parseGrantedPermission(granted));
+    if (dropped.length > 0) {
+      try {
+        await bridge.request('wallet_revokePermissions', [{ id: (granted as { permissionId: string }).permissionId }]);
+      } catch (err) {
+        unrevoked = err instanceof Error ? err.message : String(err);
+      }
+      if (unrevoked === undefined) {
+        throw new SessionGrantRefusal(`${whyCheckersDropped(dropped)} It was revoked, and no session was saved.`);
+      }
+    }
   } finally {
     bridge.close();
   }
@@ -159,6 +177,14 @@ export async function grantSession(input: SessionGrantInput): Promise<SessionGra
     ...(permission ? { permission } : {}),
     ...(orphaned.length > 0 ? { orphanedPermissions: orphaned } : {}),
   });
+
+  // Saved only so `jaw session revoke` can reach it: the id lives nowhere else.
+  if (dropped.length > 0) {
+    throw new SessionGrantRefusal(
+      `${whyCheckersDropped(dropped)} Revoking it failed (${unrevoked}), so it is saved as the session ` +
+        'until you run `jaw session revoke`. Run it now: until then the session key can make those calls unchecked.'
+    );
+  }
 
   // The grant asked the wallet to seed the spender. Check that it did.
   //

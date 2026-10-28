@@ -28,6 +28,8 @@ import {
   liveOrphans,
   parseGrantedPermission,
   sessionUsable,
+  droppedCheckers,
+  whyCheckersDropped,
 } from '@jaw.id/agent';
 import { cliChainClients, usdcBaseUnits } from '../../x402/balance.js';
 
@@ -237,6 +239,26 @@ export default class SessionAdd extends BaseCommand {
     const response = granted as { permissionId: string; account: string };
     const permission = parseGrantedPermission(granted);
     const orphans = liveOrphans(session.orphanedPermissions);
+
+    // A wallet from before checkers grants a checked call with none, a wider rule than the session
+    // holds. The session keeps the old one, and the new one is recorded so revoke can reach it.
+    const dropped = droppedCheckers(permissions, permission);
+    if (dropped.length > 0) {
+      replaceSessionConfig({
+        ...session,
+        mode: 'eip7702',
+        expiry: session.expiry,
+        createdAt: session.createdAt,
+        orphanedPermissions: [
+          { id: response.permissionId, chainId: session.chainId, expiry: session.expiry },
+          ...orphans,
+        ],
+      });
+      this.error(
+        `${whyCheckersDropped(dropped)} The session keeps its old permission. The new one stays live ` +
+          'until it expires, and is recorded so `jaw session revoke` revokes it with the session.'
+      );
+    }
 
     // Written before the revoke is attempted, not after. The union is on chain
     // by now, and anything that throws between here and the write would leave a

@@ -28,6 +28,7 @@ const h = vi.hoisted(() => ({
   onSave: undefined as (() => void) | undefined,
   onRevoke: undefined as (() => void) | undefined,
   recovered: undefined as unknown,
+  grantedChecker: undefined as string | undefined,
 }));
 
 vi.mock('../../lib/config.js', () => ({ loadConfig: () => h.config }));
@@ -77,7 +78,7 @@ vi.mock('../../lib/bridge-singleton.js', () => ({
           end: 1_756_604_800,
           salt: '0xdef',
           calls: [
-            { target: NFT, selector: MINT },
+            { target: NFT, selector: MINT, ...(h.grantedChecker ? { checker: h.grantedChecker } : {}) },
             { target: USDC, selector: '0xa9059cbb' },
           ],
           spends: [{ token: USDC, allowance: '0x989680', unit: 'day', multiplier: 1 }],
@@ -116,6 +117,7 @@ beforeEach(() => {
   h.onSave = undefined;
   h.onRevoke = undefined;
   h.recovered = undefined;
+  h.grantedChecker = undefined;
   h.session = {
     ownerAddress: '0x1111111111111111111111111111111111111111',
     sessionAddress: '0x2222222222222222222222222222222222222222',
@@ -310,5 +312,41 @@ describe('jaw session add', () => {
     const params = (granted()?.params as Array<Record<string, unknown>>)[0];
     expect((params.permissions as { spends?: unknown }).spends).toBeUndefined();
     expect(h.saved?.permissionId).toBe('0xnew');
+  });
+});
+
+// The merge keeps a checker the session holds. A wallet from before checkers grants the union with
+// none, a wider rule than the session had: it must not replace the checked one.
+describe('jaw session add and a dropped checker', () => {
+  const CHECKER = '0x398b9d939E7E616E03eA99601c835C920621B2ca';
+  const checkedSession = () => {
+    const permission = h.session.permission as { calls: Record<string, string>[] };
+    h.session = {
+      ...h.session,
+      permission: { ...permission, calls: [{ target: NFT, selector: MINT, checker: CHECKER }] },
+    };
+  };
+
+  it('replaces the session when the checker came back', async () => {
+    checkedSession();
+    h.grantedChecker = CHECKER;
+
+    await runAdd(['--x402']);
+
+    expect(h.saved?.permissionId).toBe('0xnew');
+  });
+
+  it('keeps the old session, records the new permission for revoke, and fails', async () => {
+    checkedSession();
+    const old = h.session;
+
+    await expect(runAdd(['--x402'])).rejects.toThrow(CHECKER);
+
+    expect(h.requests.map((r) => r.method)).not.toContain('wallet_revokePermissions');
+    expect(h.saved).toMatchObject({
+      permissionId: '0xold',
+      permission: old.permission,
+      orphanedPermissions: [{ id: '0xnew', chainId: 84532, expiry: old.expiry }],
+    });
   });
 });
