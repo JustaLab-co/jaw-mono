@@ -20,8 +20,8 @@ export interface CallRule {
 
 const ADDRESS_RE = /^0x[0-9a-fA-F]{40}$/;
 
-/** Whether a value can be a checker at all: a 20-byte address, in any case. */
-export function isCheckerAddress(value: unknown): value is string {
+/** Whether a value is a 20-byte address in hex, in any case: a target, a token, a checker. */
+export function isHexAddress(value: unknown): value is string {
   return typeof value === 'string' && ADDRESS_RE.test(value);
 }
 

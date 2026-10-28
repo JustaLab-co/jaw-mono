@@ -1,4 +1,4 @@
-import { isCheckerAddress, isRefusedChecker } from './call-checker.js';
+import { isHexAddress, isRefusedChecker } from './call-checker.js';
 
 export interface PermissionsConfig {
   /**
@@ -21,7 +21,6 @@ export interface PermissionsConfig {
   }>;
 }
 
-const ADDRESS_RE = /^0x[0-9a-fA-F]{40}$/;
 const SELECTOR_RE = /^0x[0-9a-fA-F]{8}$/;
 // The SDK hands `allowance` straight to BigInt(), which takes decimal and hex
 // alike, and the permissions doc shows the decimal form
@@ -55,14 +54,14 @@ export function parsePermissionsConfig(raw: unknown): PermissionsConfig {
           errors.push(`calls.${i}: Must be an object`);
           continue;
         }
-        if (typeof c.target !== 'string' || !ADDRESS_RE.test(c.target)) {
+        if (!isHexAddress(c.target)) {
           errors.push(`calls.${i}.target: Must be a valid 0x address (40 hex chars)`);
         }
         if (c.selector !== undefined && (typeof c.selector !== 'string' || !SELECTOR_RE.test(c.selector))) {
           errors.push(`calls.${i}.selector: Must be a 4-byte hex selector (e.g. 0xa9059cbb)`);
         }
         if (c.checker !== undefined) {
-          if (!isCheckerAddress(c.checker)) {
+          if (!isHexAddress(c.checker)) {
             errors.push(`calls.${i}.checker: Must be a valid 0x address (40 hex chars)`);
           } else if (isRefusedChecker(c.checker)) {
             // No account is known before the grant, so only the manager is refused here.
@@ -83,7 +82,7 @@ export function parsePermissionsConfig(raw: unknown): PermissionsConfig {
           errors.push(`spends.${i}: Must be an object`);
           continue;
         }
-        if (typeof s.token !== 'string' || !ADDRESS_RE.test(s.token)) {
+        if (!isHexAddress(s.token)) {
           errors.push(`spends.${i}.token: Must be a valid 0x address (40 hex chars)`);
         }
         if (typeof s.allowance !== 'string' || !ALLOWANCE_RE.test(s.allowance)) {

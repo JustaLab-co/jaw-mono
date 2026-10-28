@@ -5,7 +5,7 @@ import {
   droppedCheckers,
   whyCheckersDropped,
   hasChecker,
-  isCheckerAddress,
+  isHexAddress,
   isRefusedChecker,
   PERMISSIONS_MANAGER,
 } from './call-checker.js';
@@ -43,9 +43,9 @@ describe('a checker the manager refuses', () => {
   });
 
   it('takes only a 20-byte address as a checker', () => {
-    expect(isCheckerAddress(CHECKER)).toBe(true);
-    expect(isCheckerAddress('0x1234')).toBe(false);
-    expect(isCheckerAddress(42)).toBe(false);
+    expect(isHexAddress(CHECKER)).toBe(true);
+    expect(isHexAddress('0x1234')).toBe(false);
+    expect(isHexAddress(42)).toBe(false);
   });
 });
 
