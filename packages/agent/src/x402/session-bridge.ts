@@ -5,6 +5,7 @@ import { PERMIT2_ADDRESS } from './permit2.js';
 import { whyFeeTokenDisagrees } from './fee-token.js';
 import type { Logger, SessionHost } from '../ports.js';
 import { checkerRejectedDetail, refusalOfFailure } from '../grants/manager-reverts.js';
+import { callRuleKey, hasChecker } from '../grants/call-checker.js';
 
 // JAW's ERC-20 paymaster, mirrored from core's `jawPaymasterUrl`. Kept as a
 // local literal rather than an import because `@jaw.id/core` is lazy-loaded in
@@ -113,10 +114,14 @@ function explainUnchargeableSender(err: unknown, sessionAddress: string, feeToke
  * sizes its approval, so core's error is about the paymaster and reads as a funding problem. The
  * call itself is allowed, so the fix is in its arguments: say so, naming the checker.
  */
-function explainCheckerRefusal(err: unknown, permissionId: string): Error | undefined {
+function explainCheckerRefusal(err: unknown, config: SessionConfig): Error | undefined {
   const refused = refusalOfFailure(err);
   if (refused?.reason !== 'checker-rejected') return undefined;
-  return new Error(`checker-rejected: ${checkerRejectedDetail(refused, permissionId)}`, { cause: err });
+  // Any contract a call reaches can revert with these bytes. Only a rule this permission holds makes
+  // them the manager's refusal; otherwise they would name a checker the target picked.
+  const held = new Set(config.permission?.calls.map(callRuleKey));
+  if (!hasChecker(refused) || !held.has(callRuleKey(refused))) return undefined;
+  return new Error(`checker-rejected: ${checkerRejectedDetail(refused, config.permissionId)}`, { cause: err });
 }
 
 export interface SessionBridgeOptions {
@@ -355,8 +360,7 @@ export class SessionBridge {
           return await account.sendCalls(calls, { permissionId: config.permissionId, onSigned });
         } catch (err) {
           throw (
-            explainCheckerRefusal(err, config.permissionId) ??
-            explainUnchargeableSender(err, config.sessionAddress, this.feeToken())
+            explainCheckerRefusal(err, config) ?? explainUnchargeableSender(err, config.sessionAddress, this.feeToken())
           );
         }
       }
