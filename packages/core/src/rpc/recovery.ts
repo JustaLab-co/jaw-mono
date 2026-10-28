@@ -257,21 +257,20 @@ export type RecoveryState = {
 /**
  * Request parameters for wallet_setupRecovery
  *
- * Every field is a prefill for the wallet's recovery editor: the dApp proposes,
- * the user edits and confirms, and the wallet signs the config the user saw.
- * No params opens the editor on the account's current config; a dApp proposing
- * itself as a guardian sends `recoveries`. The config is account-level, so
- * there is no chainId: a first setup lands on the connected chain and an edit
- * reaches every enrolled chain.
+ * The desired end state, as for wallet_grantPermissions: the dApp passes every
+ * method and the threshold, the wallet shows the account's current config and
+ * the changes, and the user approves or declines. The config is account-level,
+ * so there is no chainId: a first setup lands on the connected chain and an
+ * edit reaches every enrolled chain.
  */
 export type WalletSetupRecoveryRequest = {
     method: 'wallet_setupRecovery';
-    params?: [
+    params: [
         {
-            /** Methods to propose; the user may edit them */
-            recoveries?: RecoveryMethodInput[];
-            /** Approvals a recovery needs; the user may edit it */
-            threshold?: number;
+            /** Every method the config should hold; a method left out is removed */
+            recoveries: RecoveryMethodInput[];
+            /** Approvals a recovery needs, between 1 and the number of methods */
+            threshold: number;
             /** Optional capabilities including paymaster service for the account-door userOp */
             capabilities?: RequestCapabilities;
         },
@@ -306,12 +305,12 @@ export type WalletGetRecoveryRequest = {
     ];
 };
 
-/** A wallet_setupRecovery request after validation. */
+/** A wallet_setupRecovery request after validation: the end state is guaranteed present. */
 export interface NormalizedSetupRecoveryParams {
-    /** The proposed methods, commitments in their canonical form (see toOwnerBytes); absent when none were proposed */
-    recoveries?: RecoveryMethodInput[];
-    /** The proposed threshold; absent when none was proposed */
-    threshold?: number;
+    /** The methods, commitments in their canonical form (see toOwnerBytes) */
+    recoveries: RecoveryMethodInput[];
+    /** Approvals a recovery needs, between 1 and the number of methods */
+    threshold: number;
     capabilities?: RequestCapabilities;
 }
 
@@ -485,7 +484,11 @@ function assertThreshold(config: RecoveryConfig): void {
     }
 }
 
-type RecoveryChange =
+/**
+ * One step from the on-chain config to the desired one, as a confirm screen
+ * lists it: each becomes one admin op or one account-door call.
+ */
+export type RecoveryChange =
     | { kind: 'add'; method: Required<RecoveryMethodInput> }
     | { kind: 'remove'; recoveryId: Hex }
     | { kind: 'threshold'; threshold: number };
@@ -499,7 +502,7 @@ type RecoveryChange =
  * set before the removals for the same reason. Both doors apply the list
  * atomically, so no intermediate state ever exists on chain.
  */
-function planRecoveryChanges(current: RecoveryChainConfig, desired: RecoveryConfig): RecoveryChange[] {
+export function planRecoveryChanges(current: RecoveryChainConfig, desired: RecoveryConfig): RecoveryChange[] {
     assertThreshold(desired);
 
     const registered = new Map(
@@ -565,6 +568,26 @@ function changeToCall(account: Address, change: RecoveryChange): { to: Address; 
  */
 export function diffRecoveryConfig(current: RecoveryChainConfig, desired: RecoveryConfig): AdminOp[] {
     return planRecoveryChanges(current, desired).map(changeToOp);
+}
+
+/**
+ * Whether a setup on this chain is the first one: the manager is not an owner
+ * yet, or holds no method for the account. A first setup goes through the
+ * account door; anything else is an edit the admin door relays.
+ */
+export function isFirstRecoverySetup(current: RecoveryChainConfig): boolean {
+    return !current.enrolled || current.recoveries.length === 0;
+}
+
+/**
+ * The shortest wait any group of methods able to meet the threshold could get:
+ * the threshold-th smallest delay. A request waits for the longest delay among
+ * the methods that approved it, so this is the owner's guaranteed time to
+ * cancel. Null while the list cannot meet the threshold.
+ */
+export function minimumRecoveryDelay(recoveries: RecoveryMethodInput[], threshold: number): number | null {
+    if (threshold < 1 || threshold > recoveries.length) return null;
+    return recoveries.map((method) => method.delay).sort((a, b) => a - b)[threshold - 1];
 }
 
 /**
@@ -754,8 +777,10 @@ function requireDelay(value: unknown, method: string, field: string): number {
     return value;
 }
 
-function optionalThreshold(value: unknown, method: string): number | undefined {
-    if (value === undefined || value === null) return undefined;
+function requireThreshold(value: unknown, method: string): number {
+    if (value === undefined || value === null) {
+        throw standardErrors.rpc.invalidParams(`${method}: threshold is required`);
+    }
     if (typeof value !== 'number' || !Number.isSafeInteger(value) || value < 1) {
         throw standardErrors.rpc.invalidParams(`${method}: threshold must be a positive integer`);
     }
@@ -763,12 +788,14 @@ function optionalThreshold(value: unknown, method: string): number | undefined {
 }
 
 /**
- * The proposed methods. An empty list is refused: a config with no methods can
- * never be valid, since the threshold must be at least one. A method repeated
- * within the list is refused too, because the manager rejects the second add.
+ * The methods. An empty list is refused: a config with no methods can never be
+ * valid, since the threshold must be at least one. A method repeated within the
+ * list is refused too, because the manager rejects the second add.
  */
-function optionalRecoveries(value: unknown, method: string): RecoveryMethodInput[] | undefined {
-    if (value === undefined || value === null) return undefined;
+function requireRecoveries(value: unknown, method: string): RecoveryMethodInput[] {
+    if (value === undefined || value === null) {
+        throw standardErrors.rpc.invalidParams(`${method}: recoveries is required`);
+    }
     if (!Array.isArray(value)) {
         throw standardErrors.rpc.invalidParams(`${method}: recoveries must be an array`);
     }
@@ -798,31 +825,19 @@ function optionalRecoveries(value: unknown, method: string): RecoveryMethodInput
 
 /**
  * Validates wallet_setupRecovery params. Runs in `validateSigningRequest`, so a
- * malformed proposal is refused with -32602 before any dialog opens, in both
- * modes.
+ * malformed or missing config is refused with -32602 before any dialog opens,
+ * in both modes.
  *
- * Absent params are legal, as for `wallet_addFunds`: `wallet_setupRecovery`
- * with no arguments means "open the recovery editor on the current config",
- * which is the common case. Keys unrelated to the proposal, such as an
- * `address` or a `chainId`, are not read.
+ * The screen displays and approves, as for wallet_grantPermissions, so the
+ * whole end state is required. Keys unrelated to it, such as an `address` or a
+ * `chainId`, are not read.
  */
 export function normalizeSetupRecoveryParams(params: unknown): NormalizedSetupRecoveryParams {
-    if (params === undefined || params === null) return {};
-    if (!Array.isArray(params)) {
-        throw standardErrors.rpc.invalidParams(`${SETUP_METHOD}: expected a single object parameter`);
-    }
-    if (params.length === 0 || params[0] === undefined || params[0] === null) return {};
-    if (!isRecord(params[0])) {
-        throw standardErrors.rpc.invalidParams(`${SETUP_METHOD}: expected a single object parameter`);
-    }
+    const envelope = requireParamsObject(params, SETUP_METHOD);
+    const recoveries = requireRecoveries(envelope.recoveries, SETUP_METHOD);
+    const threshold = requireThreshold(envelope.threshold, SETUP_METHOD);
 
-    const envelope = params[0];
-    const recoveries = optionalRecoveries(envelope.recoveries, SETUP_METHOD);
-    const threshold = optionalThreshold(envelope.threshold, SETUP_METHOD);
-
-    // Checked only when both halves were proposed. A threshold alone is a
-    // prefill over methods the user has yet to pick.
-    if (recoveries && threshold !== undefined && threshold > recoveries.length) {
+    if (threshold > recoveries.length) {
         throw standardErrors.rpc.invalidParams(
             `${SETUP_METHOD}: threshold ${threshold} exceeds the ${recoveries.length} recovery methods proposed`
         );

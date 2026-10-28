@@ -643,27 +643,12 @@ describe('AppSpecificSigner', () => {
             );
         });
 
-        it('should open the recovery editor on the current config when wallet_setupRecovery has no params', async () => {
-            (mockUIHandler.request as Mock).mockResolvedValue({
-                id: 'test-response-id',
-                approved: true,
-                data: { door: 'relay', chains: [] },
-            });
-
-            await signer.request({ method: 'wallet_setupRecovery' });
-
-            expect(mockUIHandler.request).toHaveBeenCalledWith(
-                expect.objectContaining({
-                    type: 'wallet_setupRecovery',
-                    data: {
-                        address: '0x1234567890123456789012345678901234567890',
-                        chainId: 1,
-                        recoveries: undefined,
-                        threshold: undefined,
-                        capabilities: undefined,
-                    },
-                })
-            );
+        // Changed on purpose (R16): no params used to open an editor on the
+        // current config. The screen only displays and approves now, so a
+        // request without the end state has nothing to show.
+        it('should refuse wallet_setupRecovery without a config, before any screen opens', async () => {
+            await expect(signer.request({ method: 'wallet_setupRecovery' })).rejects.toMatchObject({ code: -32602 });
+            expect(mockUIHandler.request).not.toHaveBeenCalled();
         });
 
         it('should handle wallet_cancelRecovery request', async () => {

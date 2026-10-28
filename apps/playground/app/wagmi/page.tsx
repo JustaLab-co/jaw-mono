@@ -34,8 +34,10 @@ import {
   useDisconnect,
   useGrantPermissions,
   useRevokePermissions,
+  useSetupRecovery,
   useAddFunds,
   usePermissions,
+  useRecovery,
   useGetAssets,
   useCapabilities,
   useSign,
@@ -64,6 +66,7 @@ const NEEDS_PASSKEY_APPROVAL: ReadonlySet<WagmiMethod['hookType']> = new Set([
   'useSendCalls',
   'useGrantPermissions',
   'useRevokePermissions',
+  'useSetupRecovery',
 ]);
 
 interface WagmiPageContentProps {
@@ -100,17 +103,22 @@ function WagmiPageContent({
   // handleExecute, which runMethod already brackets with runningMethodId.
   const { mutateAsync: grantPermissions } = useGrantPermissions();
   const { mutateAsync: revokePermissions } = useRevokePermissions();
+  const { mutateAsync: setupRecovery } = useSetupRecovery();
   const { mutateAsync: addFunds } = useAddFunds();
   const { mutateAsync: sign } = useSign();
 
   // State for query addresses (allows querying for arbitrary addresses)
   const [permissionsAddress, setPermissionsAddress] = useState<string | undefined>();
+  const [recoveryAddress, setRecoveryAddress] = useState<string | undefined>();
   const [assetsAddress, setAssetsAddress] = useState<string | undefined>();
   const [capabilitiesAddress, setCapabilitiesAddress] = useState<string | undefined>();
   const [callsHistoryAddress, setCallsHistoryAddress] = useState<string | undefined>();
 
   const { data: permissions, refetch: refetchPermissions } = usePermissions({
     address: (permissionsAddress || address) as Address | undefined,
+  });
+  const { refetch: refetchRecovery } = useRecovery({
+    address: (recoveryAddress || address) as Address | undefined,
   });
   const { data: assets, refetch: refetchAssets } = useGetAssets({
     address: (assetsAddress || address) as Address | undefined,
@@ -302,6 +310,10 @@ function WagmiPageContent({
             });
             break;
 
+          case 'useSetupRecovery':
+            result = await setupRecovery(params as Parameters<typeof setupRecovery>[0]);
+            break;
+
           case 'useAddFunds':
             // Resolves null: the screen closing is the whole outcome.
             result = await addFunds({
@@ -316,6 +328,16 @@ function WagmiPageContent({
               flushSync(() => setPermissionsAddress(targetAddress));
             }
             const { data } = await refetchPermissions();
+            result = data;
+            break;
+          }
+
+          case 'useRecovery': {
+            const targetAddress = (params.address as string) || address;
+            if (targetAddress) {
+              flushSync(() => setRecoveryAddress(targetAddress));
+            }
+            const { data } = await refetchRecovery();
             result = data;
             break;
           }
@@ -434,9 +456,12 @@ function WagmiPageContent({
       capabilities,
       grantPermissions,
       revokePermissions,
+      setupRecovery,
       setPermissionsAddress,
       refetchPermissions,
       permissions,
+      setRecoveryAddress,
+      refetchRecovery,
       setAssetsAddress,
       refetchAssets,
       assets,

@@ -154,7 +154,7 @@ test('getRecovery forwards the address and never a chainId in wallet_getRecovery
   expect((requests[0].params as [Record<string, unknown>])[0]).toEqual({ address: ACCOUNT });
 });
 
-test('setupRecovery forwards the proposal and never an address or a chainId', async () => {
+test('setupRecovery forwards the config and never an address or a chainId', async () => {
   const { connector, requests } = fakeConnection();
   const recoveries = [{ commitment: ACCOUNT, delay: 172_800 }];
   const capabilities = { paymasterService: { url: 'https://pm.example' } };
@@ -172,19 +172,10 @@ test('setupRecovery forwards the proposal and never an address or a chainId', as
   // `address` selects which connected account to act as, exactly as in the
   // other actions; the wallet acts as that account on the connected chain, so
   // neither travels in the params.
-  expect((requests[0].params as [Record<string, unknown>])[0]).toEqual({ recoveries, threshold: 1, capabilities });
-});
-
-test('setupRecovery takes no arguments at all', async () => {
-  // Opens the wallet's recovery editor on the current config.
-  const { connector, requests } = fakeConnection();
-
-  await setupRecovery(config, { connector: connector as never });
-
-  expect((requests[0].params as [Record<string, unknown>])[0]).toEqual({
-    recoveries: undefined,
-    threshold: undefined,
-    capabilities: undefined,
+  expect((requests[0].params as [Record<string, unknown>])[0]).toStrictEqual({
+    recoveries,
+    threshold: 1,
+    capabilities,
   });
 });
 

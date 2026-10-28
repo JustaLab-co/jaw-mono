@@ -12,9 +12,12 @@ import {
     getCeremony,
     getRecoveryConfig,
     handleGetRecoveryRequest,
+    isFirstRecoverySetup,
     listCeremonies,
+    minimumRecoveryDelay,
     normalizeCancelRecoveryParams,
     normalizeSetupRecoveryParams,
+    planRecoveryChanges,
     recoverTypedData,
     recoveryAdminTypedData,
     submitAdminBatch,
@@ -271,6 +274,88 @@ describe('diffRecoveryConfig', () => {
     });
 });
 
+describe('planRecoveryChanges', () => {
+    // The readable twin of diffRecoveryConfig: what the confirm screen lists is
+    // what both doors apply, one entry per op, in the same order.
+    it('names each change in the order the ops are signed', () => {
+        const D = toOwnerBytes('0xdddddddddddddddddddddddddddddddddddddddd');
+        const desired = {
+            recoveries: [
+                { commitment: A, delay: 3_600 },
+                { commitment: B, delay: 60 },
+                { commitment: D, delay: 60 },
+            ],
+            threshold: 1,
+        };
+
+        expect(planRecoveryChanges(ON_CHAIN, desired)).toEqual([
+            { kind: 'add', method: { commitment: D, delay: 60, provider: PROVIDER } },
+            { kind: 'threshold', threshold: 1 },
+            { kind: 'remove', recoveryId: registered(A).recoveryId },
+            { kind: 'add', method: { commitment: A, delay: 3_600, provider: PROVIDER } },
+            { kind: 'threshold', threshold: 1 },
+            { kind: 'remove', recoveryId: registered(C).recoveryId },
+        ]);
+    });
+
+    it('lists one change per op diffRecoveryConfig signs', () => {
+        const fewer = { recoveries: [{ commitment: A, delay: 60 }], threshold: 1 };
+
+        expect(planRecoveryChanges(ON_CHAIN, fewer)).toHaveLength(diffRecoveryConfig(ON_CHAIN, fewer).length);
+    });
+
+    it('lists nothing for the config already on chain', () => {
+        const same = { recoveries: [A, B, C].map((commitment) => ({ commitment, delay: 60 })), threshold: 2 };
+
+        expect(planRecoveryChanges(ON_CHAIN, same)).toEqual([]);
+    });
+});
+
+describe('isFirstRecoverySetup', () => {
+    it('is a first setup where the manager is not an owner yet', () => {
+        expect(isFirstRecoverySetup({ ...ON_CHAIN, enrolled: false, threshold: 0, recoveries: [] })).toBe(true);
+    });
+
+    it('is a first setup where the manager is an owner but holds no method', () => {
+        expect(isFirstRecoverySetup({ ...ON_CHAIN, threshold: 0, recoveries: [] })).toBe(true);
+    });
+
+    it('is an edit where the account holds methods', () => {
+        expect(isFirstRecoverySetup(ON_CHAIN)).toBe(false);
+    });
+});
+
+describe('minimumRecoveryDelay', () => {
+    const waits = (...delays: number[]) => delays.map((delay, i) => ({ commitment: [A, B, C][i], delay }));
+    const HOUR = 3_600;
+
+    it.each<[name: string, recoveries: ReturnType<typeof waits>, threshold: number, expected: number]>([
+        ['one guardian alone', waits(48 * HOUR), 1, 48 * HOUR],
+        ['the fastest of two when one approval is enough', waits(72 * HOUR, 24 * HOUR), 1, 24 * HOUR],
+        ['the slower of two when both must approve', waits(24 * HOUR, 72 * HOUR), 2, 72 * HOUR],
+        ['the threshold-th smallest wait of three', waits(7 * 24 * HOUR, 0, 48 * HOUR), 2, 48 * HOUR],
+        ['zero when a guardian with no wait can recover alone', waits(0, 48 * HOUR), 1, 0],
+    ])('is %s', (_name, recoveries, threshold, expected) => {
+        expect(minimumRecoveryDelay(recoveries, threshold)).toBe(expected);
+    });
+
+    it('is null while the list cannot meet the threshold', () => {
+        expect(minimumRecoveryDelay(waits(48 * HOUR), 2)).toBeNull();
+        expect(minimumRecoveryDelay([], 1)).toBeNull();
+    });
+
+    it('is null for a threshold below one', () => {
+        expect(minimumRecoveryDelay(waits(48 * HOUR), 0)).toBeNull();
+    });
+
+    it('does not reorder the list it is given', () => {
+        const recoveries = waits(72 * HOUR, 24 * HOUR);
+        minimumRecoveryDelay(recoveries, 1);
+
+        expect(recoveries.map((method) => method.delay)).toEqual([72 * HOUR, 24 * HOUR]);
+    });
+});
+
 describe('buildRecoverySetupCalls', () => {
     const wanted = { recoveries: [A, B].map((commitment) => ({ commitment, delay: 60 })), threshold: 2 };
 
@@ -455,22 +540,21 @@ function method(overrides: Record<string, unknown> = {}) {
 }
 
 describe('normalizeSetupRecoveryParams', () => {
+    // The screen only displays and approves, as for permissions: the dApp passes the whole end
+    // state, so a request without it has nothing to show and is refused before any screen opens.
     it.each([
         ['no params', undefined],
         ['null params', null],
         ['an empty list', []],
         ['a null entry', [null]],
-        ['an undefined entry', [undefined]],
-    ])('reads %s as "open the editor on the current config"', (_name, params) => {
-        expect(normalizeSetupRecoveryParams(params)).toEqual({});
-    });
-
-    it('reads an empty proposal as nothing proposed', () => {
-        expect(normalizeSetupRecoveryParams([{}])).toEqual({
-            recoveries: undefined,
-            threshold: undefined,
-            capabilities: undefined,
-        });
+        ['an empty object', [{}]],
+    ])('refuses %s with -32602: there is nothing to show', (_name, params) => {
+        expect(() => normalizeSetupRecoveryParams(params)).toThrow();
+        try {
+            normalizeSetupRecoveryParams(params);
+        } catch (err) {
+            expect((err as { code?: number }).code).toBe(-32602);
+        }
     });
 
     it('passes a proposal through, padding an address commitment to the 32 bytes the provider compares', () => {
@@ -499,24 +583,19 @@ describe('normalizeSetupRecoveryParams', () => {
         });
     });
 
-    it('accepts a threshold alone, as a prefill over methods the user has yet to pick', () => {
-        expect(normalizeSetupRecoveryParams([{ threshold: 3 }])).toEqual({
-            recoveries: undefined,
-            threshold: 3,
-            capabilities: undefined,
-        });
-    });
-
     it('accepts a threshold equal to the number of methods proposed', () => {
         const params = [{ recoveries: [method(), method({ commitment: SUBJECT })], threshold: 2 }];
         expect(normalizeSetupRecoveryParams(params).threshold).toBe(2);
     });
 
     it('does not read keys that are not part of the proposal', () => {
-        const normalized = normalizeSetupRecoveryParams([{ address: ACCOUNT, chainId: '0x1' }]);
+        const normalized = normalizeSetupRecoveryParams([
+            { recoveries: [method()], threshold: 1, address: ACCOUNT, chainId: '0x1', editable: false },
+        ]);
 
         expect(normalized).not.toHaveProperty('address');
         expect(normalized).not.toHaveProperty('chainId');
+        expect(normalized).not.toHaveProperty('editable');
     });
 
     it.each<[name: string, params: unknown, reason: RegExp]>([
@@ -579,10 +658,20 @@ describe('normalizeSetupRecoveryParams', () => {
             [{ recoveries: [method(), method({ provider: PROVIDER })] }],
             /repeats an earlier method/,
         ],
-        ['a threshold of zero', [{ threshold: 0 }], /threshold must be a positive integer/],
-        ['a negative threshold', [{ threshold: -1 }], /threshold must be a positive integer/],
-        ['a fractional threshold', [{ threshold: 1.5 }], /threshold must be a positive integer/],
-        ['a threshold that is a string', [{ threshold: '1' }], /threshold must be a positive integer/],
+        ['missing recoveries', [{ threshold: 1 }], /recoveries is required/],
+        ['a missing threshold', [{ recoveries: [method()] }], /threshold is required/],
+        ['a threshold of zero', [{ recoveries: [method()], threshold: 0 }], /threshold must be a positive integer/],
+        ['a negative threshold', [{ recoveries: [method()], threshold: -1 }], /threshold must be a positive integer/],
+        [
+            'a fractional threshold',
+            [{ recoveries: [method()], threshold: 1.5 }],
+            /threshold must be a positive integer/,
+        ],
+        [
+            'a threshold that is a string',
+            [{ recoveries: [method()], threshold: '1' }],
+            /threshold must be a positive integer/,
+        ],
         [
             'a threshold above the methods proposed',
             [{ recoveries: [method()], threshold: 2 }],
@@ -598,7 +687,7 @@ describe('normalizeSetupRecoveryParams', () => {
     });
 
     it('accepts a method whose provider differs from an otherwise identical one', () => {
-        const params = [{ recoveries: [method(), method({ provider: OTHER_PROVIDER })] }];
+        const params = [{ recoveries: [method(), method({ provider: OTHER_PROVIDER })], threshold: 1 }];
         expect(normalizeSetupRecoveryParams(params).recoveries).toHaveLength(2);
     });
 });

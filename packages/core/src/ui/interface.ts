@@ -172,10 +172,9 @@ export interface RevokePermissionUIRequest extends BaseUIRequest {
 /**
  * Recovery setup request (wallet_setupRecovery)
  *
- * The wallet shows its recovery editor: on the account's current config when
- * the dApp proposed nothing, or prefilled with what it proposed. The user edits
- * and confirms, and the screen signs the config it rendered. Recovery is
- * account-level, so `chainId` is the connected chain, resolved from the
+ * The wallet shows the account's current config and the changes the dApp asked
+ * for, and the user approves or declines, as for a permission grant. Recovery
+ * is account-level, so `chainId` is the connected chain, resolved from the
  * session and never from the params: it is where the account door lands when
  * this is the first setup on it.
  */
@@ -184,10 +183,10 @@ export interface SetupRecoveryUIRequest extends BaseUIRequest {
     data: {
         address: Address;
         chainId: number;
-        /** Methods the dApp proposed; absent opens the editor on the current config */
-        recoveries?: RecoveryMethodInput[];
-        /** Threshold the dApp proposed */
-        threshold?: number;
+        /** Every method the config should hold */
+        recoveries: RecoveryMethodInput[];
+        /** Approvals a recovery needs */
+        threshold: number;
         /** Optional capabilities including paymaster service for the account-door userOp */
         capabilities?: RequestCapabilities;
     };
