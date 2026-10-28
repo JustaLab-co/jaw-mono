@@ -18,15 +18,7 @@ import {
 } from 'viem';
 import { JAW_FEE_RECIPIENT, type AcrossContracts } from './contracts';
 import type { BridgeContracts } from './table';
-import {
-  pinnedToken,
-  tokenAmount,
-  tokenOf,
-  type BridgeCall,
-  type Received,
-  type TokenAmount,
-  type Unreadable,
-} from './view';
+import { pinnedToken, tokenAmount, type BridgeCall, type Received, type TokenAmount, type Unreadable } from './view';
 
 const DEPOSIT_ABI = parseAbi([
   'function deposit(bytes32 depositor, bytes32 recipient, bytes32 inputToken, bytes32 outputToken, uint256 inputAmount, uint256 outputAmount, uint256 destinationChainId, bytes32 exclusiveRelayer, uint32 quoteTimestamp, uint32 fillDeadline, uint32 exclusivityParameter, bytes message)',
@@ -93,7 +85,7 @@ export type AcrossDeposit = {
 type Call = { target: Address; callData: Hex; value: bigint };
 type Program = { calls: readonly Call[]; fallbackRecipient: Address };
 type Fee = { recipient: Address; amount: bigint };
-type Payout = { recipient: Address; received: Address; fee?: Fee; swapped?: true; minimum?: bigint };
+type Payout = { recipient: Address; received: Address; fee?: Fee; minimum?: bigint };
 type Fields = {
   depositor: Address;
   recipient: Address;
@@ -229,22 +221,12 @@ function depositOf(
   const { destinationChainId, outputAmount } = fields;
   const payout = payoutOf(fields, destination);
   if (!payout) return undefined;
-  // A swap payout takes the fee in the bought token, which outputAmount does not measure.
-  const sameToken = !payout.swapped && payout.minimum === undefined;
-  if (sameToken && payout.fee && payout.fee.amount > outputAmount) return undefined;
+  // A swap payout's minimum is in the bought token and already net of its fee.
+  if (payout.minimum === undefined && payout.fee && payout.fee.amount > outputAmount) return undefined;
 
   const { fee, received } = payout;
-  const receive: Received = payout.swapped
-    ? { kind: 'swap', chainId: destinationChainId, token: tokenOf(contracts, destinationChainId, received) }
-    : {
-        kind: 'minimum',
-        amount: tokenAmount(
-          contracts,
-          destinationChainId,
-          received,
-          payout.minimum ?? outputAmount - (fee?.amount ?? 0n)
-        ),
-      };
+  const minimum = payout.minimum ?? outputAmount - (fee?.amount ?? 0n);
+  const receive: Received = { kind: 'minimum', amount: tokenAmount(contracts, destinationChainId, received, minimum) };
   return {
     kind: 'deposit',
     provider: 'across',
@@ -351,12 +333,12 @@ function swapPayout({ calls, fallbackRecipient }: Program, bridged: Address, amo
   const { bought, fee, next } = after;
   const floor = routerSwaps(calls[1], router, { from: bridged, to: bought.token, amount }, across);
   if (floor === undefined) return undefined;
-  // The screen shows no amount for a swap, so a fee is read only when it goes to JAW and below the router's floor.
-  if (fee && (!isAddressEqual(fee.recipient, JAW_FEE_RECIPIENT) || fee.amount >= floor)) return undefined;
+  const minimum = netOfFee(floor, fee);
+  if (minimum === undefined) return undefined;
   const { token, destination: recipient } = bought;
   if (fallbackRecipient !== zeroAddress && !isAddressEqual(fallbackRecipient, recipient)) return undefined;
   const i = next + (drainedTo(calls[next], bridged, across) === recipient ? 1 : 0);
-  return emitsOnly(calls.slice(i), across) ? { recipient, received: token, fee, swapped: true as const } : undefined;
+  return emitsOnly(calls.slice(i), across) ? { recipient, received: token, fee, minimum } : undefined;
 }
 
 // Approve the pinned LiFi diamond, its swap of the whole bridged amount paid to the handler, [fee transfer
@@ -372,17 +354,27 @@ function lifiPayout({ calls, fallbackRecipient }: Program, bridged: Address, amo
   if (!swap || !after) return undefined;
   const { bought, fee, next } = after;
   if (bought.token === zeroAddress || isAddressEqual(bought.token, bridged)) return undefined;
-  if (!isAddressEqual(swap.receiver, across.multicallHandler) || swap.minAmountOut === 0n) return undefined;
+  if (!isAddressEqual(swap.receiver, across.multicallHandler)) return undefined;
   const { sendingAssetId, receivingAssetId, fromAmount } = swap.data;
   if (!isAddressEqual(sendingAssetId, bridged) || !isAddressEqual(receivingAssetId, bought.token)) return undefined;
   if (fromAmount !== amount) return undefined;
   const { token, destination: recipient } = bought;
   if (fallbackRecipient !== zeroAddress && !isAddressEqual(fallbackRecipient, recipient)) return undefined;
   if (drainedTo(calls[next], bridged, across) !== recipient) return undefined;
-  // The fee comes out of what the diamond returns, so the floor to the recipient is what is left of it.
-  if (fee && fee.amount >= swap.minAmountOut) return undefined;
-  const minimum = swap.minAmountOut - (fee?.amount ?? 0n);
+  const minimum = netOfFee(swap.minAmountOut, fee);
+  if (minimum === undefined) return undefined;
   return emitsOnly(calls.slice(next + 1), across) ? { recipient, received: token, fee, minimum } : undefined;
+}
+
+// The fee comes out of what the swap returns, so the recipient gets at least the floor less the fee.
+// A zero floor leaves the swap without slippage protection. Nothing upstream bounds JAW's fee, so one
+// above 1% of the floor is unreadable.
+function netOfFee(floor: bigint, fee: Fee | undefined): bigint | undefined {
+  if (floor === 0n) return undefined;
+  if (!fee) return floor;
+  if (fee.amount >= floor) return undefined;
+  if (isAddressEqual(fee.recipient, JAW_FEE_RECIPIENT) && fee.amount * 100n > floor) return undefined;
+  return floor - fee.amount;
 }
 
 // The bought token's drain, after an optional transfer of that token to the fee recipient.

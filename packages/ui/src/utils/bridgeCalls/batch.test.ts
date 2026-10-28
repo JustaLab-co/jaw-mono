@@ -272,9 +272,12 @@ describe('given the periphery depositNative of across-native-eth', () => {
 });
 
 describe('given an Across deposit that swaps on one side', () => {
-  it('when it swaps on the destination, then the transfer names the bought token with no amount', () => {
+  it('when it swaps on the destination, then the transfer names the bought token and the router floor', () => {
     const batch = readBridgeBatch(contracts, [approve(BASE_SPOKE_POOL, '989680'), ACROSS_CALLS.usdcToArb], SIGNER);
-    expect(batch?.transfer?.receive).toEqual({ kind: 'swap', chainId: 42161, token: { address: ARB, known: false } });
+    expect(batch?.transfer?.receive).toEqual({
+      kind: 'minimum',
+      amount: { chainId: 42161, amount: 52_534_325_335_448_453_260n, token: { address: ARB, known: false } },
+    });
     expect(batch?.steps).toEqual([PLAIN_STEP, PLAIN_STEP]);
     expect(batch?.alerts).toEqual([]);
     expect(batch?.notices).toEqual([`This screen does not know the token ${ARB}. Check it before you confirm.`]);

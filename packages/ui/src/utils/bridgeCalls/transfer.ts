@@ -50,7 +50,7 @@ function acrossTransfer(contracts: BridgeContracts, deposit: AcrossDeposit, acco
   if (!isAddressEqual(deposit.recipient, account)) notices.push(notThisAccount('The recipient', deposit.recipient));
   if (!isAddressEqual(deposit.refundTo, account)) notices.push(notThisAccount('The refund address', deposit.refundTo));
   if (fee && !fee.jaw) notices.push(FEE_NOT_JAW);
-  const received = deposit.receive.kind === 'minimum' ? deposit.receive.amount.token : deposit.receive.token;
+  const received = deposit.receive.amount.token;
   const unknown = [deposit.send.token, received].filter((token) => !token.known);
   for (const token of unknown) notices.push(unknownToken(token.address));
 
