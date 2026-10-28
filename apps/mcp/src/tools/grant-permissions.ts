@@ -1,14 +1,7 @@
 import { ANY_FN_SEL, ANY_TARGET, EMPTY_CALLDATA_FN_SEL } from '@jaw.id/core';
 import { hasChecker, isRefusedChecker, usdcForNetwork } from '@jaw.id/agent';
 import type { McpServer } from '@modelcontextprotocol/server';
-import {
-  isAddress,
-  numberToHex,
-  parseUnits,
-  toFunctionSelector,
-  type Address,
-  type Hex,
-} from 'viem';
+import { isAddress, numberToHex, parseUnits, toFunctionSelector, type Address, type Hex } from 'viem';
 import { z } from 'zod';
 import { chainClients } from '@/adapters/session-host';
 import { tenant, type Tenant } from '@/connections/auth';
