@@ -23,7 +23,7 @@ vi.mock('@jaw.id/core', async (original) => {
 setTestEnv();
 process.env.JAW_MCP_API_KEY = KEY;
 
-type Param = { chainFilter: string[]; account: string };
+type Param = { chainFilter: string[]; account: string; assetTypeFilter: string[] };
 type Rpc = { method: string; params: Param[] };
 type Answer = (rpc: Rpc, url: string) => Response | unknown | Promise<unknown>;
 
@@ -83,7 +83,7 @@ describe('jaw_get_assets', () => {
       defaults.map((id) => `eip155:${id}`).sort()
     );
     expect(r.structuredContent.failed).toEqual([]);
-    expect(r.structuredContent.unreported).toEqual([]);
+    expect(r.structuredContent).not.toHaveProperty('unreported');
     expect(r.structuredContent.summary).not.toContain('Not reported');
   });
 
@@ -470,17 +470,66 @@ describe('jaw_get_assets answers', () => {
     expect(all.structuredContent.chains.map((c: { chainId: string }) => c.chainId)).not.toContain('eip155:84532');
   });
 
-  it('given a chain the proxy leaves out of a good answer, then it is unknown and never an empty balance', async () => {
-    answer = () => ({ [hex(1)]: [ether] });
+  it('given a chain the proxy leaves out of a good answer, then it holds nothing there, not an unknown balance', async () => {
+    answer = ({ params }) => (params[0].chainFilter[0] === hex(1) ? { [hex(1)]: [ether] } : {});
 
     const r = await callTool(token, 'jaw_get_assets', { chainIds: [1, 10] });
 
-    expect(r.structuredContent.chains).toEqual([expect.objectContaining({ chainId: 'eip155:1' })]);
+    expect(r.structuredContent.chains).toEqual([
+      expect.objectContaining({ chainId: 'eip155:1' }),
+      { chainId: 'eip155:10', assets: [] },
+    ]);
     expect(r.structuredContent.failed).toEqual([]);
-    expect(r.structuredContent.unreported).toEqual(['eip155:10']);
-    expect(r.structuredContent.summary).toBe(
-      'On Ethereum: 1 ETH. Could not read OP Mainnet right now: its balance is unknown, not zero.'
-    );
+    expect(r.structuredContent).not.toHaveProperty('unreported');
+    expect(r.structuredContent.summary).toBe('On Ethereum: 1 ETH.');
+  });
+
+  it('given only chains the proxy leaves out of good answers, then it says no funds were found there', async () => {
+    answer = () => ({});
+
+    const r = await callTool(token, 'jaw_get_assets', { chainIds: [100, 56] });
+
+    expect(r.isError).toBeFalsy();
+    expect(r.structuredContent.chains).toEqual([
+      { chainId: 'eip155:56', assets: [] },
+      { chainId: 'eip155:100', assets: [] },
+    ]);
+    expect(r.structuredContent.summary).toBe('No funds found on BNB Smart Chain and Gnosis.');
+  });
+
+  describe('given the read narrowed to one asset type', () => {
+    // The proxy applies the type filter and leaves out a chain with nothing of those types.
+    const filtered: Answer = ({ params }) => {
+      const [{ chainFilter, assetTypeFilter }] = params;
+      const held = [ether].filter((a) => assetTypeFilter.includes(a.type));
+      return chainFilter[0] === hex(8453) && held.length ? { [hex(8453)]: held } : {};
+    };
+
+    it('given an owner with only the coin and a read for tokens, then it says no tokens, never no funds', async () => {
+      answer = filtered;
+
+      const r = await callTool(token, 'jaw_get_assets', { chainIds: [8453], assetTypes: ['erc20'] });
+
+      expect(seen.at(-1)?.rpc.params[0].assetTypeFilter).toEqual(['erc20']);
+      expect(r.structuredContent.chains).toEqual([{ chainId: 'eip155:8453', assets: [] }]);
+      expect(r.structuredContent.summary).toBe('No tokens found on Base. Only tokens were read, not the coin.');
+    });
+
+    it('given a read for the coin that finds it, then it says only the coin was read', async () => {
+      answer = filtered;
+
+      const r = await callTool(token, 'jaw_get_assets', { chainIds: [8453], assetTypes: ['native'] });
+
+      expect(r.structuredContent.summary).toBe('On Base: 1 ETH. Only the coin was read, not tokens.');
+    });
+
+    it('given both types named, then it reads as an unfiltered answer', async () => {
+      answer = () => ({});
+
+      const r = await callTool(token, 'jaw_get_assets', { chainIds: [8453], assetTypes: ['erc20', 'native'] });
+
+      expect(r.structuredContent.summary).toBe('No funds found on Base.');
+    });
   });
 
   it('given two chains that hang and the rest answer, then the rest come back, the two time out, and it ends before 5 s', async () => {
@@ -502,7 +551,7 @@ describe('jaw_get_assets answers', () => {
         reason: expect.stringContaining('timed out'),
       }))
     );
-    expect(r.structuredContent.unreported).toEqual([]);
+    expect(r.structuredContent).not.toHaveProperty('unreported');
     expect(JSON.stringify(r)).not.toContain(KEY);
   }, 10_000);
 
