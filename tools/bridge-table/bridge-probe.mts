@@ -2,7 +2,7 @@
 // against the pinned table. A quote that comes back and does not read fails the run; a quote the API
 // refuses is skipped. Catches shapes the pinned table cannot list: a new destination chain, a new swap router.
 //
-//   bun tools/verify/bridge-probe.mts      Exits 1 if any quote reads as unreadable.
+//   bun tools/bridge-table/bridge-probe.mts      Exits 1 if any quote reads as unreadable.
 import { zeroAddress, type Address } from 'viem';
 import { readAcrossCall } from '../../packages/ui/src/utils/bridgeCalls/across.ts';
 import { readBridgeApprove } from '../../packages/ui/src/utils/bridgeCalls/approve.ts';

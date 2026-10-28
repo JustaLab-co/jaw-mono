@@ -3,7 +3,7 @@
 // the GenericSwapFacetV3 the diamond routes the swap selector to on chain. Fields with no upstream
 // list (swapRouter, wrappedNative, tokens) are not checked.
 //
-//   bun tools/verify/bridge-table.mts      Exits 1 on any difference.
+//   bun tools/bridge-table/bridge-table.mts      Exits 1 on any difference.
 import { BRIDGE_CHAINS } from '../../packages/ui/src/utils/bridgeCalls/contracts.ts';
 
 type RelayRouters = { erc20Router?: string };

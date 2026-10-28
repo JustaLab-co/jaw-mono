@@ -3,7 +3,7 @@
 # makes lint-staged's `git add` fail on a commit that stages it, so the
 # pre-commit hook blocks the commit. The global excludes file is switched off so
 # only rules that travel with the repo count.
-# Usage: tools/verify/tracked-ignored.sh [repo-dir]
+# Usage: tools/ci/tracked-ignored.sh [repo-dir]
 set -euo pipefail
 dir=${1:-$(git rev-parse --show-toplevel)}
 hits=$(git -C "$dir" -c core.excludesFile=/dev/null ls-files -ci --exclude-standard)
