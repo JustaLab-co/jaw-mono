@@ -37,7 +37,7 @@ jobs:
         id: verify
         run: |
           set +e
-          bun tools/verify/bridge-table.mts > verify.log 2>&1
+          bun tools/bridge-table/bridge-table.mts > verify.log 2>&1
           code=$?
           cat verify.log
           echo "code=$code" >> "$GITHUB_OUTPUT"
@@ -46,7 +46,7 @@ jobs:
         id: probe
         run: |
           set +e
-          bun tools/verify/bridge-probe.mts > probe.log 2>&1
+          bun tools/bridge-table/bridge-probe.mts > probe.log 2>&1
           code=$?
           cat probe.log
           echo "code=$code" >> "$GITHUB_OUTPUT"
@@ -59,7 +59,7 @@ jobs:
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
         run: |
           {
-            echo "\`bun tools/verify/bridge-table.mts\` exited ${{ steps.verify.outputs.code }} and \`bun tools/verify/bridge-probe.mts\` exited ${{ steps.probe.outputs.code }} on $(date -u +%F) at ${GITHUB_SHA::8}. Run: $RUN_URL"
+            echo "\`bun tools/bridge-table/bridge-table.mts\` exited ${{ steps.verify.outputs.code }} and \`bun tools/bridge-table/bridge-probe.mts\` exited ${{ steps.probe.outputs.code }} on $(date -u +%F) at ${GITHUB_SHA::8}. Run: $RUN_URL"
             echo
             echo "Update \`packages/ui/src/utils/bridgeCalls/contracts.ts\` and its pinned digest in \`contracts.test.ts\`, or check the source if it failed to load. For a quote that reads as unreadable, fix the reader in \`packages/ui/src/utils/bridgeCalls\`. Lines that matched are left out."
             echo
