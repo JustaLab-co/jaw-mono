@@ -1702,6 +1702,40 @@ describe('CrossPlatformSigner', () => {
             expect(mockCommunicator.postRequestAndWaitForResponse).not.toHaveBeenCalled();
         });
 
+        it('should reject a grant whose selector and functionSignature disagree with -32602 before opening a popup', async () => {
+            const unauthenticatedSigner = new CrossPlatformSigner({
+                metadata: mockMetadata,
+                communicator: mockCommunicator,
+                callback: mockCallback,
+            });
+
+            // The popup would show balanceOf(address) and grant setApprovalForAll(address,bool).
+            const request: RequestArguments = {
+                method: 'wallet_grantPermissions',
+                params: [
+                    {
+                        expiry: 2_000_000_000,
+                        spender: '0x2222222222222222222222222222222222222222',
+                        permissions: {
+                            calls: [
+                                {
+                                    target: '0x036CbD53842c5426634e7929541eC2318f3dCF7e',
+                                    selector: '0xa22cb465',
+                                    functionSignature: 'balanceOf(address)',
+                                },
+                            ],
+                        },
+                    },
+                ],
+            };
+
+            await expect(unauthenticatedSigner.request(request)).rejects.toMatchObject({
+                code: -32602,
+                message: expect.stringContaining('permissions.calls[0]'),
+            });
+            expect(mockCommunicator.postRequestAndWaitForResponse).not.toHaveBeenCalled();
+        });
+
         it('should reject an unconfigured chain with EIP-5792 5710, not 4200', async () => {
             // Arrange - 4200 renders in viem as "the provider does not support
             // the requested method", which reads as a missing method rather

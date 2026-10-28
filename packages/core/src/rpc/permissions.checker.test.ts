@@ -150,3 +150,56 @@ describe('a malformed call checker', () => {
         }
     );
 });
+
+describe('a call whose selector and functionSignature disagree', () => {
+    // The grant screen names the call by its functionSignature and the permission grants its
+    // selector. keys.jaw.id builds every grant through here, so a request from an SDK without
+    // the signer's check is still refused before the screen estimates or signs.
+    const MISMATCHED = { target: TARGET, selector: '0xa22cb465', functionSignature: 'balanceOf(address)' } as const;
+
+    it('is refused as invalid params when the screen builds its estimate', () => {
+        const build = () => buildGrantPermissionCall(ACCOUNT, SPENDER, 2000000000, { calls: [MISMATCHED] });
+
+        expect(build).toThrow(
+            expect.objectContaining({ code: -32602, message: expect.stringContaining('permissions.calls[0]') })
+        );
+    });
+
+    it('is refused on Grant with nothing sent to the bundler', async () => {
+        await expect(grant([MISMATCHED])).rejects.toMatchObject({
+            code: -32602,
+            message: expect.stringContaining('permissions.calls[0]'),
+        });
+        expect(sendTransaction).not.toHaveBeenCalled();
+    });
+
+    it('is refused when its functionSignature does not parse', () => {
+        const build = () =>
+            buildGrantPermissionCall(ACCOUNT, SPENDER, 2000000000, {
+                calls: [{ target: TARGET, selector: '0xa9059cbb', functionSignature: 'not a signature' }],
+            });
+
+        expect(build).toThrow(expect.objectContaining({ code: -32602 }));
+    });
+});
+
+describe('a call that names its function consistently', () => {
+    it.each([
+        ['a matching pair', { selector: '0xa9059cbb', functionSignature: 'transfer(address,uint256)' }],
+        ['an uppercase selector', { selector: '0xA9059CBB', functionSignature: 'transfer(address,uint256)' }],
+        [
+            'a signature with parameter names',
+            { selector: '0xa9059cbb', functionSignature: 'transfer(address to, uint256 amount)' },
+        ],
+        ['a selector alone', { selector: '0xa9059cbb' }],
+        ['a signature alone', { functionSignature: 'transfer(address,uint256)' }],
+    ] as const)('grants transfer for %s', (_label, call) => {
+        const { data } = buildGrantPermissionCall(ACCOUNT, SPENDER, 2000000000, {
+            calls: [{ target: TARGET, ...call }],
+        });
+
+        const decoded = decodeFunctionData({ abi: SPEND_PERMISSIONS_MANAGER_ABI, data });
+        if (decoded.functionName !== 'approve') throw new Error(`expected approve, got ${decoded.functionName}`);
+        expect(decoded.args[0].calls[0].selector.toLowerCase()).toBe('0xa9059cbb');
+    });
+});

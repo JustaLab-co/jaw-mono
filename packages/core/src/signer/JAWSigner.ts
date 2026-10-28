@@ -187,8 +187,10 @@ export abstract class JAWSigner implements Signer {
             case 'eth_sendTransaction':
                 return { method: 'eth_sendTransaction', params: normalizeSendTransactionParams(request.params) };
 
-            // A call checker is part of the permission the user signs, so a malformed one is refused
-            // with -32602 here, in both modes, rather than drawn on the grant screen.
+            // A call checker is part of the permission the user signs, and the screen names a call by
+            // its functionSignature while the selector is what gets signed. So a malformed checker, or
+            // a selector and signature that disagree, is refused with -32602 here, in both modes,
+            // rather than drawn on the grant screen.
             case 'wallet_grantPermissions':
                 checkGrantPermissionsParams(request.params);
                 return undefined;

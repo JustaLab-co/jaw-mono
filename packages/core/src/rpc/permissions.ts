@@ -16,7 +16,7 @@ import { standardErrors } from '../errors/errors.js';
 import { restCall } from '../api/index.js';
 import { buildHandleJawRpcUrl, fetchRPCRequest } from '../utils/index.js';
 import type { RequestArguments } from '../provider/index.js';
-import { optionalHexAddress, requireHexBytes32, requireParamsObject } from './paramUtils.js';
+import { describeValue, optionalHexAddress, requireHexBytes32, requireParamsObject } from './paramUtils.js';
 
 /**
  * ERC-7528 native token address convention
@@ -318,9 +318,34 @@ export interface NormalizedRevokePermissionsParams {
 const GRANT_METHOD = 'wallet_grantPermissions';
 
 /**
- * Refuses a grant whose call checker is not a 20-byte address, before any popup or dialog opens.
- * A checker is part of the permission the user signs, and a malformed one used to reach the grant
- * screen, which drew it, estimated a fee without it and failed only on Confirm.
+ * Refuses a call that names its function twice, as a selector and a functionSignature, when the
+ * two disagree. The grant screen shows the signature and the permission grants the selector, so a
+ * pair that disagrees would show the user one function and grant another. A signature that does
+ * not parse cannot be checked, so it is refused the same way.
+ */
+function checkSelectorMatchesSignature(call: unknown, index: number): void {
+    const { selector, functionSignature } = (call ?? {}) as { selector?: unknown; functionSignature?: unknown };
+    if (!selector || !functionSignature || typeof selector !== 'string' || typeof functionSignature !== 'string') {
+        return;
+    }
+    let computed: Hex | undefined;
+    try {
+        computed = computeFunctionSelector(functionSignature);
+    } catch {
+        // Left undefined: a signature that does not parse matches no selector.
+    }
+    if (computed !== selector.toLowerCase()) {
+        throw standardErrors.rpc.invalidParams(
+            `${GRANT_METHOD}: permissions.calls[${index}].selector must be the selector of functionSignature ${describeValue(functionSignature)}, got ${describeValue(selector)}`
+        );
+    }
+}
+
+/**
+ * Refuses a grant whose call checker is not a 20-byte address, or whose selector and
+ * functionSignature disagree, before any popup or dialog opens. A checker is part of the
+ * permission the user signs, and a malformed one used to reach the grant screen, which drew it,
+ * estimated a fee without it and failed only on Confirm.
  */
 export function checkGrantPermissionsParams(params: unknown): void {
     const calls = (params as Array<{ permissions?: { calls?: unknown } }> | undefined)?.[0]?.permissions?.calls;
@@ -331,6 +356,7 @@ export function checkGrantPermissionsParams(params: unknown): void {
             GRANT_METHOD,
             `permissions.calls[${index}].checker`
         );
+        checkSelectorMatchesSignature(call, index);
     });
 }
 
@@ -602,6 +628,9 @@ function apiPermissionsToPermission(
 
     // Convert call permissions - compute selector from signature if not provided
     const calls: CallPermission[] = (permissions.calls || []).map((call, index) => {
+        // Checked again here, so keys.jaw.id refuses a request from an SDK without the signer's check.
+        checkSelectorMatchesSignature(call, index);
+
         let selector: Hex;
 
         if (call.selector) {
