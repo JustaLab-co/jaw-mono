@@ -327,18 +327,14 @@ describe('TransactionDialog with a bridge deposit', () => {
 
 describe('TransactionDialog with a destination swap that pays the JAW fee', () => {
   it.each([
-    ['Uniswap', ACROSS_CALLS.usdcToNvdaFee],
-    ['LiFi', ACROSS_CALLS.usdcToNvdaLifiFee],
-  ])('shows the fee to JAW and no alert through %s', (_, call) => {
+    ['Uniswap', ACROSS_CALLS.usdcToNvdaFee, 'Amount set by a swap on Robinhood Chain'],
+    ['LiFi', ACROSS_CALLS.usdcToNvdaLifiFee, '≥ 431045955026407396 base units'],
+  ])('reads as a bridge to Robinhood Chain through %s', (_, call, receive) => {
     const root = render([approve(SPOKE_POOL), call]);
     expect(title(root)).toBe('Bridge to Robinhood Chain');
-    expect(root.textContent).toContain('to JAW');
+    expect(column(root, 'They get via Across')).toContain(receive);
+    expect(root.textContent).not.toContain(UNREADABLE);
     expect(red(root)).toEqual([]);
-    expect(yellow(root)).toEqual([]);
-    console.log(
-      _,
-      [...root.querySelectorAll('dd')].map((e) => e.textContent)
-    );
   });
 });
 

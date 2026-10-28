@@ -228,7 +228,10 @@ function depositOf(
 ): AcrossDeposit | undefined {
   const { destinationChainId, outputAmount } = fields;
   const payout = payoutOf(fields, destination);
-  if (!payout || (payout.fee && payout.fee.amount > outputAmount)) return undefined;
+  if (!payout) return undefined;
+  // A swap payout takes the fee in the bought token, which outputAmount does not measure.
+  const sameToken = !payout.swapped && payout.minimum === undefined;
+  if (sameToken && payout.fee && payout.fee.amount > outputAmount) return undefined;
 
   const { fee, received } = payout;
   const receive: Received = payout.swapped
@@ -335,41 +338,58 @@ function unwrapPayout({ calls, fallbackRecipient }: Program, weth: Address, acro
   return emitsOnly(calls.slice(i + 2), across) ? { recipient, received: zeroAddress, fee } : undefined;
 }
 
-// Drain to the pinned router, its `execute`, drain the bought token [and the bridged one left], emits.
-// The router sets the amount, so any other router could keep the whole bridged amount.
+// Drain to the pinned router, its `execute`, [fee transfer of the bought token], drain the bought token
+// [and the bridged one left], emits. The router sets the amount, so any other router could keep the
+// whole bridged amount.
 function swapPayout({ calls, fallbackRecipient }: Program, bridged: Address, amount: bigint, across: AcrossContracts) {
   const drained = drainedTo(calls[0], bridged, across);
   if (!drained || !calls[1] || !isAddressEqual(calls[1].target, drained)) return undefined;
   const router = required(across.swapRouter);
   if (drained !== router) return undefined;
-  const bought = drainOf(calls[2], across);
-  if (!bought || isAddressEqual(bought.token, bridged)) return undefined;
+  const after = boughtAfterSwap(calls, 2, across);
+  if (!after || isAddressEqual(after.bought.token, bridged)) return undefined;
+  const { bought, fee, next } = after;
   if (!routerSwaps(calls[1], router, { from: bridged, to: bought.token, amount }, across)) return undefined;
   const { token, destination: recipient } = bought;
   if (fallbackRecipient !== zeroAddress && !isAddressEqual(fallbackRecipient, recipient)) return undefined;
-  const i = drainedTo(calls[3], bridged, across) === recipient ? 4 : 3;
-  return emitsOnly(calls.slice(i), across) ? { recipient, received: token, swapped: true as const } : undefined;
+  const i = next + (drainedTo(calls[next], bridged, across) === recipient ? 1 : 0);
+  return emitsOnly(calls.slice(i), across) ? { recipient, received: token, fee, swapped: true as const } : undefined;
 }
 
-// Approve the pinned LiFi diamond, its swap of the whole bridged amount paid to the handler, drain the
-// bought token and the bridged one the diamond hands back, emits. LiFi's allow list governs the exchange call and the
-// diamond reverts below minAmountOut, so only that floor is promised and callTo, approveTo and the
-// exchange calldata are not read.
+// Approve the pinned LiFi diamond, its swap of the whole bridged amount paid to the handler, [fee transfer
+// of the bought token], drain the bought token and the bridged one the diamond hands back, emits. LiFi's
+// allow list governs the exchange call and the diamond reverts below minAmountOut, so only that floor is
+// promised and callTo, approveTo and the exchange calldata are not read.
 function lifiPayout({ calls, fallbackRecipient }: Program, bridged: Address, amount: bigint, across: AcrossContracts) {
   const spender = approvedTo(calls[0], bridged);
   if (!spender || !calls[1] || !isAddressEqual(calls[1].target, spender)) return undefined;
   if (!isAddressEqual(spender, required(across.lifiDiamond))) return undefined;
   const swap = lifiSwap(calls[1]);
-  const bought = drainOf(calls[2], across);
-  if (!swap || !bought || bought.token === zeroAddress || isAddressEqual(bought.token, bridged)) return undefined;
+  const after = boughtAfterSwap(calls, 2, across);
+  if (!swap || !after) return undefined;
+  const { bought, fee, next } = after;
+  if (bought.token === zeroAddress || isAddressEqual(bought.token, bridged)) return undefined;
   if (!isAddressEqual(swap.receiver, across.multicallHandler) || swap.minAmountOut === 0n) return undefined;
   const { sendingAssetId, receivingAssetId, fromAmount } = swap.data;
   if (!isAddressEqual(sendingAssetId, bridged) || !isAddressEqual(receivingAssetId, bought.token)) return undefined;
   if (fromAmount !== amount) return undefined;
   const { token, destination: recipient } = bought;
   if (fallbackRecipient !== zeroAddress && !isAddressEqual(fallbackRecipient, recipient)) return undefined;
-  if (drainedTo(calls[3], bridged, across) !== recipient) return undefined;
-  return emitsOnly(calls.slice(4), across) ? { recipient, received: token, minimum: swap.minAmountOut } : undefined;
+  if (drainedTo(calls[next], bridged, across) !== recipient) return undefined;
+  // The fee comes out of what the diamond returns, so the floor to the recipient is what is left of it.
+  if (fee && fee.amount >= swap.minAmountOut) return undefined;
+  const minimum = swap.minAmountOut - (fee?.amount ?? 0n);
+  return emitsOnly(calls.slice(next + 1), across) ? { recipient, received: token, fee, minimum } : undefined;
+}
+
+// The bought token's drain, after an optional transfer of that token to the fee recipient.
+function boughtAfterSwap(calls: readonly Call[], at: number, across: AcrossContracts) {
+  const drain = drainOf(calls[at], across);
+  if (drain) return { bought: drain, next: at + 1 };
+  const fee = calls[at] && feeTransfer(calls[at]);
+  const bought = fee && drainOf(calls[at + 1], across);
+  if (!fee || !bought || !isAddressEqual(calls[at].target, bought.token)) return undefined;
+  return { bought, fee, next: at + 2 };
 }
 
 function approvedTo(call: Call | undefined, token: Address): Address | undefined {

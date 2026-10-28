@@ -375,6 +375,18 @@ describe('given an approve the owner must check', () => {
     expect(batch?.notices).toEqual([]);
   });
 
+  it.each([
+    ['Uniswap', ACROSS_CALLS.usdcToNvdaFee, '32,084,785,363,069'],
+    ['LiFi', ACROSS_CALLS.usdcToNvdaLifiFee, '1,080,315,676,757,913'],
+  ])(
+    'when a swap through %s pays the JAW fee, then the details name it and nothing says the call is unreadable',
+    (_, call, raw) => {
+      const batch = readBridgeBatch(contracts, [call], SIGNER);
+      expect(batch?.alerts).toEqual([]);
+      expect(batch?.transfer?.details.find((d) => d.label === 'Fee')?.value).toBe(`${raw} base units to JAW`);
+    }
+  );
+
   it('when the table in use is the snapshot, then an unknown token adds the refresh line, and a live table does not', () => {
     const calls = [{ ...approve(BASE_SPOKE_POOL, '989680'), to: USDBC }, ACROSS_CALLS.prod];
     const snapshot = new BridgeContracts({ version: 1, chains: BRIDGE_CHAINS }, 'snapshot');

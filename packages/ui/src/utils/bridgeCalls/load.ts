@@ -38,9 +38,7 @@ function accept(body: unknown, fetchedAt?: number): boolean {
     return false;
   }
   const { version, chains } = result.contracts;
-  const snapshot = snapshotContracts();
-  if (version < snapshot.version) return false;
-  const merged = overlay(snapshot.chains, chains);
+  const merged = overlay(snapshotContracts().chains, chains);
   const problem = tableProblem(merged);
   if (problem) {
     console.warn(`Bridge contracts rejected: ${problem}`);

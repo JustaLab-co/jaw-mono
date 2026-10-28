@@ -136,14 +136,14 @@ describe('given the bridge table loader', () => {
     delete table.chains['4663'].across.lifiDiamond;
     delete table.chains['100'];
     table.chains['8453'].name = 'Elsewhere';
-    table.chains['8453'].across.spokePool = OTHER;
+    table.chains['8453'].across.spokePool = '0x1111111111111111111111111111111111111111';
     fetchMock.mockResolvedValue(answer(table));
     await load('key');
     const contracts = currentContracts();
     expect(contracts.chain(100)).toEqual(BRIDGE_CHAINS[100]);
     expect(contracts.chain(4663)?.across?.lifiDiamond).toBe(BRIDGE_CHAINS[4663].across!.lifiDiamond);
     expect(contracts.chain(8453)?.name).toBe(BRIDGE_CHAINS[8453].name);
-    expect(contracts.chain(8453)?.across?.spokePool).toBe(OTHER);
+    expect(contracts.chain(8453)?.across?.spokePool).toBe('0x1111111111111111111111111111111111111111');
   });
 
   it('when the proxy serves an older version than the one held but not older than the build, then it replaces it', async () => {
@@ -173,7 +173,6 @@ describe('given the bridge table loader', () => {
 
   it.each([
     ['unparseable', 'not json'],
-    ['older than the build', JSON.stringify(tableAt(2))],
     ['failing an invariant', JSON.stringify({ version: 7, chains: {} })],
   ])('when the stored table is %s, then the snapshot is in use', (_name, text) => {
     localStorage.setItem(STORAGE_KEY, text);
@@ -284,6 +283,11 @@ describe('given a live table that differs from the one compiled into the build',
     fetchMock.mockResolvedValue(answer(table));
     await load('key');
     expect(JSON.parse(localStorage.getItem(STORAGE_KEY)!)).toEqual(table);
+  });
+
+  it('when the stored table is older than the build, then it is in use', () => {
+    localStorage.setItem(STORAGE_KEY, JSON.stringify(tableAt(2)));
+    expect(currentContracts()).toMatchObject({ version: 2, source: 'live' });
   });
 
   it('when it carries a chain the build lacks, then that chain is unknown', async () => {

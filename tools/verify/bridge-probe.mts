@@ -6,7 +6,7 @@
 import { zeroAddress, type Address } from 'viem';
 import { readAcrossCall } from '../../packages/ui/src/utils/bridgeCalls/across.ts';
 import { readBridgeApprove } from '../../packages/ui/src/utils/bridgeCalls/approve.ts';
-import { BRIDGE_CHAINS } from '../../packages/ui/src/utils/bridgeCalls/contracts.ts';
+import { BRIDGE_CHAINS, JAW_FEE_RECIPIENT } from '../../packages/ui/src/utils/bridgeCalls/contracts.ts';
 import { readRelayCall } from '../../packages/ui/src/utils/bridgeCalls/relay.ts';
 import { readRelayOrder } from '../../packages/ui/src/utils/bridgeCalls/relayOrder.ts';
 import { snapshotContracts } from '../../packages/ui/src/utils/bridgeCalls/table.ts';
@@ -115,6 +115,9 @@ async function acrossCalls(pair: Pair): Promise<BridgeCall[]> {
       destinationChainId: String(pair.to),
       depositor: ACCOUNT,
       recipient: ACCOUNT,
+      // Mirrors the fee the backend adds, which puts a transfer of the bought token in a destination swap.
+      appFee: '0.0025',
+      appFeeRecipient: JAW_FEE_RECIPIENT,
     })}`
   );
   if (!quote.swapTx) throw new Skipped('quote has no swapTx');
