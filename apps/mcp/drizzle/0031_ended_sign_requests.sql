@@ -1,1 +1,0 @@
-CREATE INDEX "permission_requests_ended_sign_index" ON "permission_requests" USING btree ("updated_at") WHERE "permission_requests"."method" = 'sign' and "permission_requests"."state" <> 'awaiting_owner';

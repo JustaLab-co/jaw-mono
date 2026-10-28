@@ -1,11 +1,11 @@
 # E2E
 
-Two scripts, neither part of `nx test`: both need something the test suite
-deliberately does not have, a running dev server or a live chain.
+Neither suite is part of `nx test`: both need something the test suite
+deliberately does not have, a running dev server or a local registry.
 
 ## published (installed packages, runs in CI)
 
-Packs core, wagmi, ui and cli, publishes them to a Verdaccio registry on
+Packs core, wagmi and ui, publishes them to a Verdaccio registry on
 `localhost:4873` under a prerelease version made for the run
 (`<version>-e2e.<timestamp>`), installs them into projects outside the workspace
 and checks what an integrator gets. Inside the workspace every import resolves
@@ -17,76 +17,23 @@ report it, so a copy of the same release from npm cannot pass for the local
 build. The released tarballs have the same bytes, so comparing files would not
 tell them apart.
 
-Core and cli are each installed alone first, so a runtime dependency that only
-resolves because a sibling package installs it fails there. Then all four go
+Core is installed alone first, so a runtime dependency that only
+resolves because a sibling package installs it fails there. Then all three go
 into one project, which checks that each package imports under Node, that
 core's CJS build exports the same names as its ESM one, that wagmi and ui refuse
 `require` with their ESM-only message, that every relative path in the
-published declarations exists, that the types resolve for a bundler-style
-consumer, and that the `jaw` binary runs, ships its oclif manifest and lists
-its commands.
+published declarations exists, and that the types resolve for a bundler-style
+consumer.
 
 ```bash
-bunx nx run published-e2e:e2e   # builds the four packages first
+bunx nx run published-e2e:e2e   # builds the three packages first
 ```
 
-CI runs it through `nx affected`, whenever one of the four packages or
+CI runs it through `nx affected`, whenever one of the three packages or
 `.verdaccio/config.yml` changes. Each run gets its own registry storage, and
 `@jaw.id/*` is never proxied to npm. Nothing leaves the machine: publish and
 installs run with their own home directory and npm userconfig, so `~/.npmrc`
 and any registry override in it are never read.
-
-## permission-onchain (real chain)
-
-Asks the deployed `JustaPermissionManager` on the session's chain whether the
-struct the CLI rebuilds hashes to the permission that was granted, and whether
-the period window it computes locally is the one the contract is in. Read-only:
-`eth_call` plus one relay GET, no signing and no spending.
-
-It exists because the unit tests verify that the code does what its author
-believed the contract does, and that belief was wrong twice while this was being
-written. A test written from the same belief agrees with it; the chain does not.
-
-```bash
-bun e2e/permission-onchain.e2e.ts
-```
-
-Needs a live session in `~/.jaw` on a chain in the USDC registry and an apiKey
-in `~/.jaw/config.json`. A session from before the CLI stored the struct works:
-the script recovers it from the relay, the same way the CLI now does.
-
-## session-flow (real chain, real approval)
-
-Runs `session setup`, `session add`, `x402 status` and `session revoke` against
-Base Sepolia and checks the on-chain effect of each one. Semi-automated: it
-drives the CLI and the assertions, prints the approval URL, and waits for you to
-approve with your own passkey.
-
-Driving the approval would need a passkey the test owns, which means an account
-it created, which the API key cannot register (it manages no ENS domains) and
-which would hold no USDC to fund a grant with. A person with a funded account is
-the cheaper answer.
-
-```bash
-bunx nx build @jaw.id/cli
-bun e2e/session-flow.e2e.ts
-JAW_E2E_STEPS=setup,status bun e2e/session-flow.e2e.ts   # a subset
-JAW_E2E_NO_BROWSER=1 bun e2e/session-flow.e2e.ts         # print the URL instead
-```
-
-The CLI opens the browser itself, which is what you want when you are sitting in
-front of it. `JAW_E2E_NO_BROWSER=1` prints the URL instead, for a machine with no
-browser to open. Both waits on a person are raised to fifteen minutes;
-`JAW_E2E_APPROVAL_MS` changes that.
-
-Each run gets a fresh scratch home. Pass `JAW_E2E_HOME=<dir>` to reuse one, which
-is how a run picks up where an earlier one stopped: the steps each need a person,
-and the session one creates is the input to the next.
-
-Every command runs with `HOME` pointed at a throwaway directory, so it reads and
-writes a scratch `~/.jaw` and your own session is untouched. It does spend: each
-grant carries a small USDC prefund to the session, and the grant and revoke cost
-gas, paid by the account you approve with.
 
 ## Playwright suites (real browser, SDK and keys together)
 

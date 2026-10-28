@@ -1,1 +1,0 @@
-CREATE INDEX "permission_requests_unconfirmed_index" ON "permission_requests" USING btree ("updated_at") WHERE "permission_requests"."method" = 'revoke' and "permission_requests"."state" = 'approved' and "permission_requests"."code" = 'unconfirmed';

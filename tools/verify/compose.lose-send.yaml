@@ -1,8 +1,0 @@
-# Added by hosted-up.sh when JAW_VERIFY_LOSE_SEND=1: preloads lose-send.mjs into
-# the mcp server. `exec mcp touch /tmp/lose-send` drops the next send's answer.
-services:
-  mcp:
-    environment:
-      NODE_OPTIONS: --import /verify/lose-send.mjs
-    volumes:
-      - ./lose-send.mjs:/verify/lose-send.mjs:ro

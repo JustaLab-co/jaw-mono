@@ -23,10 +23,6 @@ bunx nx build @jaw.id/ui
 # Run tests for a package
 bunx nx test @jaw.id/core
 
-# Tests for the agent package and the hosted server
-bunx nx test @jaw.id/agent
-bunx nx test @jaw-mono/mcp
-
 # Run a single test file
 cd packages/core && bunx vitest run src/path/to/file.test.ts
 
@@ -58,35 +54,9 @@ bunx nx graph
 bunx nx release
 ```
 
-## Verify
-
-Needs `bun`, `pnpm` and `node` 20+, plus Docker for the hosted step. `cast` (Foundry) is only for the live paths. Unit tests do not cover the payment path. For a change under `packages/agent`, `packages/cli` or `apps/mcp`, build, pack and drive the real thing with the scripts in `tools/verify/`:
-
-```bash
-bun install
-S=tools/verify
-RUN=$($S/up.sh | tail -1)        # clean tree only: builds HEAD in a worktree, starts the seller
-$S/doctor.sh "$RUN"              # must print no FAIL and no WARN
-$S/drive.sh "$RUN" head status x402 status -o json
-$S/hosted-up.sh "$RUN"           # Docker: Postgres and apps/mcp
-$S/down.sh "$RUN"
-```
-
-`up.sh` refuses a dirty tree and stamps `head: <sha>` and `tree: clean` at the top of its evidence; put that `head:` line in the PR's "How to test". Kill only what a run started, by the PID files in `$RUN/pids/`, never by process name.
-
-Wait on any long command with a file and a deadline, not a background notification. `tools/verify/run-bounded.sh <max-seconds> <log> <cmd...>` always ends and writes the exit code to `<log>.done`:
-
-```bash
-until [ -f <log>.done ] || [ $SECONDS -gt N ]; do sleep 5; done; tail <log>
-```
-
-`tools/verify/selftest.sh` checks the harness itself. `.husky/pre-push` runs `nx affected` against the PR base (`gh pr view`), falling back to `main`, so a stacked branch checks only its own commits.
-
-`tools/verify/README.md` has the full recipes, the seller routes and what counts as evidence. Build before driving any artifact: the packed CLI runs the last build, not the source. Say which revision you built when you report a manual check, and force the edge (a price over the cap, an empty balance) when the change only acts there.
-
 ## Risky paths
 
-`.github/risky-paths` lists, one glob per line, the code that moves money, holds keys, renders consent screens, seals tokens or migrates the database. A change touching it needs a person to read it, so keep it in its own small PR and run the matching `tools/verify` drive. Its entries are mirrored in `.github/CODEOWNERS`. A change to the swap tools runs the drives in `tools/verify/features/hosted-swap.md` against the seller's swap stub.
+`.github/risky-paths` lists, one glob per line, the code that builds the calls an owner signs. A change touching it needs a person to read it, so keep it in its own small PR. Its entries are mirrored in `.github/CODEOWNERS`.
 
 ## Testing invariants
 
@@ -97,27 +67,25 @@ These hold for every change, however small. A diff that needs to break one is a 
 - **Tests assert behavior, not the implementation.** In `packages/core/src/account` and `src/signer` tests, do not stub what produces bytes: ESLint rejects a `vi.mock` of `viem` or `ox` that replaces an encoder or hash function, any factory mock of `ox/*` or `viem/experimental/erc7739`, and a bare `vi.mock('viem')`. Mocking the client or the network around them is allowed. Write a test from what the issue or PR says should happen, not from what the code currently does, and never loosen an assertion or an expected value so a failing test passes.
 - **A known-bug test flips with its fix.** If a test is marked `it.fails` to record a bug, it becomes `it` in the same change that fixes the bug. It is never deleted to make the suite pass.
 - **What the user sees is what gets signed.** In `apps/keys-jaw-id`, a screen signs the same request object it renders. Do not add a step that rebuilds, normalizes or fills in the signed payload after it has been shown.
-- **Session key scope is never widened to make something work.** `SESSION_SUPPORTED_METHODS` in `packages/cli/src/lib/rpc-classifier.ts` is everything a session key may do with no human present, and signing is deliberately absent (the comment there says why). `checkPolicy` in `packages/agent/src/x402/policy.ts` is not relaxed to let a payment through.
-- **Paths in `.github/CODEOWNERS` get their own small PR.** They are the vectors, the API report, the EIP-1193 provider, the keys signing screens and the CLI session code. Keep changes there separate from unrelated work so the review stays readable.
-- **Packaging changes run the published test.** After touching `exports`, `files`, `bin` or a build config of a package in `packages/`, run `bunx nx run published-e2e:e2e`, which installs the four packages from a local registry the way an integrator would.
+- **Paths in `.github/CODEOWNERS` get their own small PR.** They are the vectors, the API report, the EIP-1193 provider and the keys signing screens. Keep changes there separate from unrelated work so the review stays readable.
+- **Packaging changes run the published test.** After touching `exports`, `files`, `bin` or a build config of a package in `packages/`, run `bunx nx run published-e2e:e2e`, which installs the three packages from a local registry the way an integrator would.
 
 CI runs `bunx nx affected -t lint test typecheck build api-check e2e`, so a change to core also runs the tests of everything that depends on it. `test` depends on `^build` in `nx.json`, so `nx test` builds the packages it imports first instead of reading a stale local `dist`.
 
 ## Architecture
+
+The CLI, the agent package and the hosted MCP server live in the private repo JustaLab-co/jaw-agent and consume `@jaw.id/core` from npm.
 
 ### Publishable Packages (`packages/`)
 
 - **@jaw.id/core** - Core SDK providing `JAWProvider` (EIP-1193 provider), `Account` class for smart account operations, passkey management, and RPC handling. Entry point is `JAW.create()` factory function.
 - **@jaw.id/wagmi** - Wagmi connector wrapping core SDK. Exports `jaw()` connector factory, React hooks (`useConnect`, `useGrantPermissions`, etc.), and TanStack Query utilities.
 - **@jaw.id/ui** - React UI components (Radix-based) for wallet dialogs: onboarding, transaction signing, permission management. Exports `ReactUIHandler` for app-specific mode integration.
-- **@jaw.id/cli** - CLI tool (`jaw` binary) and MCP server for terminal/AI agent interaction with smart accounts. Uses oclif framework. Connects to browser via WebSocket relay for passkey signing. All traffic E2E encrypted (ECDH P-256 + AES-256-GCM).
-- **@jaw.id/agent** - Not published: the CLI bundles it. The x402 payment path, grants and session rules, with no filesystem or terminal access of its own; chain reads, the payment log and the session store come in through the interfaces in `src/ports.ts`.
 
 ### Applications (`apps/`)
 
 - **playground** - Next.js demo app exercising the SDK via @jaw.id/wagmi (the `jaw()` connector wired through wagmi)
-- **keys-jaw-id** - Next.js keys management application (keys.jaw.id). Its `/cli-bridge` page answers a request repeated under the same id with the answer it already gave, so a server that lost its relay socket can ask again without a second dialog, and says a link is no longer active when no server answers it (`tools/verify/features/cli-bridge-replay.md`)
-- **mcp** - Hosted MCP server (Next.js, Postgres, Drizzle): OAuth whose only owner step is approving a budget in the wallet through `/cli-bridge`, as the CLI does; the budget is USDC only, and x402 payments run within it with no further prompts. `jaw_swap` and `jaw_swap_status` (`src/tools/swap.ts`, `src/swap/`) get a quote from `/move-asset/quote` with the server's own swap api key, asking Across and Relay, between two chains JAW serves, so they need no budget, and the deposit is never signed by the session key: the server trusts the quote and the owner approves its transactions, a token approval and the deposit, in one batch in the wallet, so the swap files are risky paths. `jaw_send_calls` and `jaw_get_calls_status` (`src/tools/owner-calls.ts`, `src/owner-calls/`) take USDC transfers and any other contract call to the owner, who reviews and signs it in the wallet and pays the gas; the session key never signs them and nothing comes out of the budget, and those files are risky paths too. `jaw_prepare_calls` (`src/tools/prepare-calls.ts`) builds those calls from a function signature and its arguments and sends nothing; it is a risky path, since its bytes are what the owner signs. `jaw_sign` and `jaw_get_sign_status` (`src/tools/sign.ts`) do the same for a message or typed data the owner signs. `jaw_add_funds` (`src/tools/add-funds.ts`) opens the wallet's Add Funds screen for the owner through the same kind of link, on the connection's chain or one it names, and returns the deposit address and its chain beside it. `jaw_get_grant_status` (`src/tools/grant-permissions.ts`) follows a request `jaw_grant_permissions` opened, by the id it returns, and names a permission the wallet may have granted without the server recording it. The status tools take a `waitSeconds` of up to 45 and answer as soon as the owner or the chain moves the request. `jaw_get_defi_positions` (`src/tools/defi.ts`) reads the account's DeFi positions from the proxy's portfolio route at `JAW_MCP_PORTFOLIO_URL`, on the 12 chains the provider covers, and moves nothing. `jaw_simulate_calls` (`src/tools/simulate-calls.ts`) dry-runs a batch through the proxy's `wallet_simulateCalls` in one request with no retries, and signs and sends nothing. `jaw_session_execute` (`src/tools/session-execute.ts`, `src/grants/fit.ts`) is the session key spending on its own outside x402: it sends only calls a custom grant the owner signed allows, within the grant's spend limits, and is a risky path. After a restart, the server rejoins the relay session of an owner link whose page replays answers and collects the answer there (`src/connections/resume.ts`, `src/db/leased.ts`), also risky paths
+- **keys-jaw-id** - Next.js keys management application (keys.jaw.id). Its `/cli-bridge` page answers a request repeated under the same id with the answer it already gave, so a server that lost its relay socket can ask again without a second dialog, and says a link is no longer active when no server answers it
 - **docs** - Documentation site built with Vocs
 
 ### Smart Contracts (`contracts/`)
