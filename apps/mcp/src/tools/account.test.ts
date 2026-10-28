@@ -23,7 +23,7 @@ vi.mock('@jaw.id/core', async (original) => {
 setTestEnv();
 process.env.JAW_MCP_API_KEY = KEY;
 
-type Param = { chainFilter: string[]; account: string };
+type Param = { chainFilter: string[]; account: string; assetTypeFilter: string[] };
 type Rpc = { method: string; params: Param[] };
 type Answer = (rpc: Rpc, url: string) => Response | unknown | Promise<unknown>;
 
@@ -494,7 +494,42 @@ describe('jaw_get_assets answers', () => {
       { chainId: 'eip155:56', assets: [] },
       { chainId: 'eip155:100', assets: [] },
     ]);
-    expect(r.structuredContent.summary).not.toContain('unknown');
+    expect(r.structuredContent.summary).toBe('No funds found on BNB Smart Chain and Gnosis.');
+  });
+
+  describe('given the read narrowed to one asset type', () => {
+    // The proxy applies the type filter and leaves out a chain with nothing of those types.
+    const filtered: Answer = ({ params }) => {
+      const [{ chainFilter, assetTypeFilter }] = params;
+      const held = [ether].filter((a) => assetTypeFilter.includes(a.type));
+      return chainFilter[0] === hex(8453) && held.length ? { [hex(8453)]: held } : {};
+    };
+
+    it('given an owner with only the coin and a read for tokens, then it says no tokens, never no funds', async () => {
+      answer = filtered;
+
+      const r = await callTool(token, 'jaw_get_assets', { chainIds: [8453], assetTypes: ['erc20'] });
+
+      expect(seen.at(-1)?.rpc.params[0].assetTypeFilter).toEqual(['erc20']);
+      expect(r.structuredContent.chains).toEqual([{ chainId: 'eip155:8453', assets: [] }]);
+      expect(r.structuredContent.summary).toBe('No tokens found on Base. Only tokens were read, not the coin.');
+    });
+
+    it('given a read for the coin that finds it, then it says only the coin was read', async () => {
+      answer = filtered;
+
+      const r = await callTool(token, 'jaw_get_assets', { chainIds: [8453], assetTypes: ['native'] });
+
+      expect(r.structuredContent.summary).toBe('On Base: 1 ETH. Only the coin was read, not tokens.');
+    });
+
+    it('given both types named, then it reads as an unfiltered answer', async () => {
+      answer = () => ({});
+
+      const r = await callTool(token, 'jaw_get_assets', { chainIds: [8453], assetTypes: ['erc20', 'native'] });
+
+      expect(r.structuredContent.summary).toBe('No funds found on Base.');
+    });
   });
 
   it('given two chains that hang and the rest answer, then the rest come back, the two time out, and it ends before 5 s', async () => {
