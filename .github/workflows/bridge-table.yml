@@ -1,14 +1,15 @@
 name: Bridge table
 
 # packages/ui/src/utils/bridgeCalls/contracts.ts pins Across and Relay contracts and the Relay
-# solver lists, which change upstream. This diffs them against the live
-# sources once a week and keeps one open issue with the latest differences.
+# solver lists, which change upstream. This diffs them against the live sources and reads real
+# quotes from both APIs through the signing screen's readers, once a day, and keeps one open
+# issue with the latest differences.
 # The issue is found by its exact title, so a run updates it instead of
 # opening another; once it is closed, the next drift opens a new one.
 
 on:
   schedule:
-    - cron: '0 7 * * 1'
+    - cron: '0 7 * * *'
   workflow_dispatch:
 
 concurrency:
@@ -26,10 +27,11 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      # The verifier imports only a type from viem, so it runs without an install.
       - uses: oven-sh/setup-bun@v2
         with:
-          bun-version: latest
+          bun-version: 1.4.3
+
+      - run: bun install --frozen-lockfile
 
       - name: Diff the bridge table against Across and Relay
         id: verify
@@ -40,20 +42,35 @@ jobs:
           cat verify.log
           echo "code=$code" >> "$GITHUB_OUTPUT"
 
+      - name: Read real quotes through the signing screen
+        id: probe
+        run: |
+          set +e
+          bun tools/verify/bridge-probe.mts > probe.log 2>&1
+          code=$?
+          cat probe.log
+          echo "code=$code" >> "$GITHUB_OUTPUT"
+
       - name: Open or update the drift issue
-        if: steps.verify.outputs.code != '0'
+        if: steps.verify.outputs.code != '0' || steps.probe.outputs.code != '0'
         env:
           GH_TOKEN: ${{ github.token }}
           TITLE: 'Bridge table differs from Across or Relay'
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
         run: |
           {
-            echo "\`bun tools/verify/bridge-table.mts\` exited ${{ steps.verify.outputs.code }} on $(date -u +%F) at ${GITHUB_SHA::8}. Run: $RUN_URL"
+            echo "\`bun tools/verify/bridge-table.mts\` exited ${{ steps.verify.outputs.code }} and \`bun tools/verify/bridge-probe.mts\` exited ${{ steps.probe.outputs.code }} on $(date -u +%F) at ${GITHUB_SHA::8}. Run: $RUN_URL"
             echo
-            echo "Update \`packages/ui/src/utils/bridgeCalls/contracts.ts\` and its pinned digest in \`contracts.test.ts\`, or check the source if it failed to load. Lines that matched are left out."
+            echo "Update \`packages/ui/src/utils/bridgeCalls/contracts.ts\` and its pinned digest in \`contracts.test.ts\`, or check the source if it failed to load. For a quote that reads as unreadable, fix the reader in \`packages/ui/src/utils/bridgeCalls\`. Lines that matched are left out."
             echo
+            echo 'Table differences:'
             echo '```'
-            grep -v '^ok  ' verify.log | head -c 60000
+            grep -v '^ok  ' verify.log | head -c 30000
+            echo '```'
+            echo
+            echo 'Quotes:'
+            echo '```'
+            grep -v '^ok  ' probe.log | head -c 30000
             echo '```'
           } > body.md
           number=$(gh issue list --state open --search "\"$TITLE\" in:title" --json number,title \
@@ -65,5 +82,5 @@ jobs:
           fi
 
       - name: Fail on a difference
-        if: steps.verify.outputs.code != '0'
+        if: steps.verify.outputs.code != '0' || steps.probe.outputs.code != '0'
         run: exit 1

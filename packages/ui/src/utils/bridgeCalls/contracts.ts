@@ -7,8 +7,13 @@ export type AcrossContracts = {
   eventEmitter?: Address;
   /** SpokePool.wrappedNativeToken(); Arc has none, its gas token is USDC. */
   wrappedNative?: Address;
-  /** The UniversalRouter Across quotes swap through on this chain as the destination; without it that swap is unreadable. */
+  /**
+   * The UniversalRouter Across quotes swap through on this chain as the destination; without it that swap is unreadable.
+   * It must be a build whose v4 ExactInputParams carry maxHopSlippage, the layout the v4 reader decodes.
+   */
   swapRouter?: Address;
+  /** The LiFi diamond Across quotes destination swaps through on this chain; without it that swap is unreadable. */
+  lifiDiamond?: Address;
 };
 
 /**
@@ -197,6 +202,7 @@ const ARC_SOLVERS = [
 
 const usdc = { symbol: 'USDC', decimals: 6 };
 const weth = { symbol: 'WETH', decimals: 18 };
+const usdg = { symbol: 'USDG', decimals: 6 };
 
 /**
  * Across addresses come from across-protocol/contracts (broadcast/deployed-addresses.json and
@@ -409,14 +415,28 @@ export const BRIDGE_CHAINS: Readonly<Record<number, BridgeChain>> = {
   4663: {
     name: 'Robinhood Chain',
     nativeSymbol: 'ETH',
+    // The handler is not in Across's files: it is the target of Across's own quotes, and its bytecode
+    // matches the Avalanche handler's apart from the metadata hash.
+    across: {
+      spokePool: '0xD29C85F15DF544bA632C9E25829fd29d767d7978',
+      periphery: ACROSS_PERIPHERY,
+      multicallHandler: '0xa8aD2e87E2043711d8BeC77e8BC3E2683C0ab6BD',
+      eventEmitter: ACROSS_EMITTER,
+      wrappedNative: '0x0Bd7D308f8E1639FAb988df18A8011f41EAcAD73',
+      swapRouter: '0x204FAca1764B154221e35c0d20aBb3c525710498',
+      lifiDiamond: '0xB477751B76CF82d00a686A1232f5fCD772414Af3',
+    },
     relay: {
       depository: RELAY_DEPOSITORY,
       protocolChain: 'robinhood',
       erc20Routers: RELAY_ROUTERS,
       solvers: ROBINHOOD_SOLVERS,
     },
-    // No Across SpokePool here to read it from; checked on chain by symbol and decimals.
-    tokens: { '0x0Bd7D308f8E1639FAb988df18A8011f41EAcAD73': weth },
+    // Checked on chain by symbol and decimals. The stock tokens are not pinned, so they read by address.
+    tokens: {
+      '0x0Bd7D308f8E1639FAb988df18A8011f41EAcAD73': weth,
+      '0x5fc5360D0400a0Fd4f2af552ADD042D716F1d168': usdg,
+    },
   },
   1868: {
     name: 'Soneium',

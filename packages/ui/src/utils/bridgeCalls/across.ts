@@ -40,18 +40,30 @@ const HANDLER_ABI = parseAbi([
   'function drainLeftoverTokens(address token, address destination)',
   'function makeCallWithBalance(address target, bytes callData, uint256 value, (address token, uint256 offset)[] replacement)',
 ]);
+const LIFI_ABI = parseAbi([
+  'struct SwapData { address callTo; address approveTo; address sendingAssetId; address receivingAssetId; uint256 fromAmount; bytes callData; bool requiresDeposit; }',
+  'function swapTokensSingleV3ERC20ToERC20(bytes32 transactionId, string integrator, string referrer, address receiver, uint256 minAmountOut, SwapData swapData)',
+]);
 const EMITTER_ABI = parseAbi(['function emitData(bytes data)']);
 const ROUTER_ABI = parseAbi([
   'function execute(bytes commands, bytes[] inputs)',
   'function execute(bytes commands, bytes[] inputs, uint256 deadline)',
 ]);
-// UniversalRouter inputs for V3_SWAP_EXACT_IN (0x00) and V2_SWAP_EXACT_IN (0x08).
+// UniversalRouter inputs for V3_SWAP_EXACT_IN (0x00), V2_SWAP_EXACT_IN (0x08) and V4_SWAP (0x10).
 const V3_SWAP = parseAbiParameters(
   'address recipient, uint256 amountIn, uint256 amountOutMin, bytes path, bool payerIsUser'
 );
 const V2_SWAP = parseAbiParameters(
   'address recipient, uint256 amountIn, uint256 amountOutMin, address[] path, bool payerIsUser'
 );
+const V4_SWAP = parseAbiParameters('bytes actions, bytes[] params');
+// Uniswap v4 actions SWAP_EXACT_IN (0x07), SETTLE (0x0b) and TAKE (0x0e), in the only order read.
+const V4_ACTIONS = '0x070b0e';
+const V4_EXACT_IN = parseAbiParameters(
+  '(address currencyIn, (address intermediateCurrency, uint24 fee, int24 tickSpacing, address hooks, bytes hookData)[] path, uint256[] maxHopSlippage, uint128 amountIn, uint128 amountOutMinimum)'
+);
+const V4_SETTLE = parseAbiParameters('address currency, uint256 amount, bool payerIsUser');
+const V4_TAKE = parseAbiParameters('address currency, address recipient, uint256 amount');
 const INSTRUCTIONS = parseAbiParameters(
   '((address target, bytes callData, uint256 value)[] calls, address fallbackRecipient)'
 );
@@ -81,7 +93,7 @@ export type AcrossDeposit = {
 type Call = { target: Address; callData: Hex; value: bigint };
 type Program = { calls: readonly Call[]; fallbackRecipient: Address };
 type Fee = { recipient: Address; amount: bigint };
-type Payout = { recipient: Address; received: Address; fee?: Fee; swapped?: true };
+type Payout = { recipient: Address; received: Address; fee?: Fee; swapped?: true; minimum?: bigint };
 type Fields = {
   depositor: Address;
   recipient: Address;
@@ -223,7 +235,12 @@ function depositOf(
     ? { kind: 'swap', chainId: destinationChainId, token: tokenOf(contracts, destinationChainId, received) }
     : {
         kind: 'minimum',
-        amount: tokenAmount(contracts, destinationChainId, received, outputAmount - (fee?.amount ?? 0n)),
+        amount: tokenAmount(
+          contracts,
+          destinationChainId,
+          received,
+          payout.minimum ?? outputAmount - (fee?.amount ?? 0n)
+        ),
       };
   return {
     kind: 'deposit',
@@ -254,7 +271,8 @@ function payoutOf(
   return (
     unwrapPayout(program, outputToken, across) ??
     tokenPayout(program, outputToken, across) ??
-    swapPayout(program, outputToken, outputAmount, across)
+    swapPayout(program, outputToken, outputAmount, across) ??
+    lifiPayout(program, outputToken, outputAmount, across)
   );
 }
 
@@ -333,6 +351,43 @@ function swapPayout({ calls, fallbackRecipient }: Program, bridged: Address, amo
   return emitsOnly(calls.slice(i), across) ? { recipient, received: token, swapped: true as const } : undefined;
 }
 
+// Approve the pinned LiFi diamond, its swap of the whole bridged amount paid to the handler, drain the
+// bought token and the bridged one the diamond hands back, emits. LiFi's allow list governs the exchange call and the
+// diamond reverts below minAmountOut, so only that floor is promised and callTo, approveTo and the
+// exchange calldata are not read.
+function lifiPayout({ calls, fallbackRecipient }: Program, bridged: Address, amount: bigint, across: AcrossContracts) {
+  const spender = approvedTo(calls[0], bridged);
+  if (!spender || !calls[1] || !isAddressEqual(calls[1].target, spender)) return undefined;
+  if (!isAddressEqual(spender, required(across.lifiDiamond))) return undefined;
+  const swap = lifiSwap(calls[1]);
+  const bought = drainOf(calls[2], across);
+  if (!swap || !bought || bought.token === zeroAddress || isAddressEqual(bought.token, bridged)) return undefined;
+  if (!isAddressEqual(swap.receiver, across.multicallHandler) || swap.minAmountOut === 0n) return undefined;
+  const { sendingAssetId, receivingAssetId, fromAmount } = swap.data;
+  if (!isAddressEqual(sendingAssetId, bridged) || !isAddressEqual(receivingAssetId, bought.token)) return undefined;
+  if (fromAmount !== amount) return undefined;
+  const { token, destination: recipient } = bought;
+  if (fallbackRecipient !== zeroAddress && !isAddressEqual(fallbackRecipient, recipient)) return undefined;
+  if (drainedTo(calls[3], bridged, across) !== recipient) return undefined;
+  return emitsOnly(calls.slice(4), across) ? { recipient, received: token, minimum: swap.minAmountOut } : undefined;
+}
+
+function approvedTo(call: Call | undefined, token: Address): Address | undefined {
+  if (!call || call.value !== 0n || !isAddressEqual(call.target, token)) return undefined;
+  const decoded = decodeFunctionData({ abi: erc20Abi, data: call.callData });
+  if (decoded.functionName !== 'approve') return undefined;
+  if (encodeFunctionData({ abi: erc20Abi, ...decoded }) !== call.callData) return undefined;
+  return getAddress(decoded.args[0]);
+}
+
+function lifiSwap(call: Call) {
+  if (call.value !== 0n) return undefined;
+  const decoded = decodeFunctionData({ abi: LIFI_ABI, data: call.callData });
+  if (encodeFunctionData({ abi: LIFI_ABI, ...decoded }) !== call.callData) return undefined;
+  const [, , , receiver, minAmountOut, data] = decoded.args;
+  return { receiver, minAmountOut, data };
+}
+
 function feeTransfer(call: Call): Fee | undefined {
   if (call.value !== 0n) return undefined;
   const decoded = decodeFunctionData({ abi: erc20Abi, data: call.callData });
@@ -390,7 +445,24 @@ function swapStep(command: number, input: Hex) {
     if (payerIsUser || path.length < 2) return undefined;
     return { recipient, amountIn, from: path[0], to: path[path.length - 1] };
   }
+  if (command === 0x10) return v4Step(input);
   return undefined;
+}
+
+// A pool hook can move value, so a hop with one is not read. Settling and taking amount 0 pays
+// the debt the swap opened from the router's balance and sends the whole credit out; a partial
+// fill leaves the unspent input in the router, as a v3 swap that stops at its price limit would.
+function v4Step(input: Hex) {
+  const [actions, params] = decodeAbiParameters(V4_SWAP, input);
+  if (actions !== V4_ACTIONS || params.length !== 3) return undefined;
+  const [{ currencyIn, path, amountIn }] = decodeAbiParameters(V4_EXACT_IN, params[0]);
+  const [settled, settleAmount, payerIsUser] = decodeAbiParameters(V4_SETTLE, params[1]);
+  const [taken, recipient, takeAmount] = decodeAbiParameters(V4_TAKE, params[2]);
+  const last = path.at(-1);
+  if (!last || path.some((hop) => !isAddressEqual(hop.hooks, zeroAddress) || hop.hookData !== '0x')) return undefined;
+  if (!isAddressEqual(settled, currencyIn) || settleAmount !== 0n || payerIsUser) return undefined;
+  if (!isAddressEqual(taken, last.intermediateCurrency) || takeAmount !== 0n) return undefined;
+  return { recipient, amountIn, from: currencyIn, to: last.intermediateCurrency };
 }
 
 // emitData only logs swap metadata.

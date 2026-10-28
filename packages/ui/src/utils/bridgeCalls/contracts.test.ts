@@ -99,6 +99,11 @@ describe('given the pinned bridge table of the signing screen', () => {
     expect(BRIDGE_CHAINS[5042]?.across?.wrappedNative).toBeUndefined();
   });
 
+  it('then only Robinhood Chain pins a LiFi diamond', () => {
+    const pinned = chains.filter((c) => c.across?.lifiDiamond).map((c) => [c.id, c.across?.lifiDiamond]);
+    expect(pinned).toEqual([[4663, '0xB477751B76CF82d00a686A1232f5fCD772414Af3']]);
+  });
+
   it('then the JAW fee recipient is the address the backend sends fees to', () => {
     expect(JAW_FEE_RECIPIENT).toBe('0xC529EDD6D47C60923902514C7C0B3993ae42C2ec');
   });
@@ -112,12 +117,12 @@ describe('given the pinned bridge table of the signing screen', () => {
     expect(JAW_FEE_RECIPIENT).toBe(getAddress(JAW_FEE_RECIPIENT));
   });
 
-  it('then USDC has 6 decimals except on BSC, and every wrapped native token has 18', () => {
+  it('then USDC and USDG have 6 decimals except USDC on BSC, and every wrapped native token has 18', () => {
     for (const chain of chains) {
       for (const [address, token] of Object.entries(chain.tokens)) {
-        const expected = token.symbol === 'USDC' ? (chain.id === 56 ? 18 : 6) : 18;
+        const expected = token.symbol === 'WETH' || (token.symbol === 'USDC' && chain.id === 56) ? 18 : 6;
         expect(token.decimals, `${chain.id} ${address}`).toBe(expected);
-        expect(['USDC', 'WETH'], `${chain.id} ${address}`).toContain(token.symbol);
+        expect(['USDC', 'USDG', 'WETH'], `${chain.id} ${address}`).toContain(token.symbol);
       }
     }
   });
@@ -144,6 +149,6 @@ describe('given the pinned bridge table of the signing screen', () => {
 
   it('then the table matches the reviewed digest, so any changed literal updates this test', () => {
     const digest = createHash('sha256').update(JSON.stringify({ BRIDGE_CHAINS, JAW_FEE_RECIPIENT })).digest('hex');
-    expect(digest).toBe('ff29a34fd70acf25d6ffd9e66d47eacaba4cc140cac03bfd3bed1cef320c9d27');
+    expect(digest).toBe('9126c692f780234873ad7a42dbf927d9828dea980d09a557f6ba7dfa88e34f43');
   });
 });
