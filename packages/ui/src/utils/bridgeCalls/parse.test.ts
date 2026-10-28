@@ -23,6 +23,24 @@ describe('given the body the proxy serves for the bridge table', () => {
     if (result.ok) expect(result.contracts.chain(8453)).toEqual(BRIDGE_CHAINS[8453]);
   });
 
+  it('when a chain pins a LiFi diamond, then the live table keeps it', () => {
+    const result = parse(body());
+    expect(result.ok && result.contracts.chain(4663)).toEqual(BRIDGE_CHAINS[4663]);
+  });
+
+  it('when the LiFi diamond is lowercase, then it is rejected as not checksummed', () => {
+    const raw = body((b) => {
+      const across = b.chains['4663'].across!;
+      across.lifiDiamond = across.lifiDiamond!.toLowerCase() as typeof across.lifiDiamond;
+    });
+    expect(reason(raw)).toContain('not a checksummed address');
+  });
+
+  it('when the LiFi diamond is also the swap router, then it is rejected', () => {
+    const raw = body((b) => (b.chains['4663'].across!.lifiDiamond = b.chains['4663'].across!.swapRouter));
+    expect(reason(raw)).toBe('chain 4663: an address holds two roles');
+  });
+
   it('when keys arrive in another order, then the table is the same', () => {
     const raw = body() as Body;
     raw.chains = Object.fromEntries(Object.entries(raw.chains).reverse());

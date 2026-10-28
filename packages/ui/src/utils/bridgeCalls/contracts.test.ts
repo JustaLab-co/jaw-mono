@@ -99,6 +99,11 @@ describe('given the pinned bridge table of the signing screen', () => {
     expect(BRIDGE_CHAINS[5042]?.across?.wrappedNative).toBeUndefined();
   });
 
+  it('then only Robinhood Chain pins a LiFi diamond', () => {
+    const pinned = chains.filter((c) => c.across?.lifiDiamond).map((c) => [c.id, c.across?.lifiDiamond]);
+    expect(pinned).toEqual([[4663, '0xB477751B76CF82d00a686A1232f5fCD772414Af3']]);
+  });
+
   it('then the JAW fee recipient is the address the backend sends fees to', () => {
     expect(JAW_FEE_RECIPIENT).toBe('0xC529EDD6D47C60923902514C7C0B3993ae42C2ec');
   });
@@ -144,6 +149,6 @@ describe('given the pinned bridge table of the signing screen', () => {
 
   it('then the table matches the reviewed digest, so any changed literal updates this test', () => {
     const digest = createHash('sha256').update(JSON.stringify({ BRIDGE_CHAINS, JAW_FEE_RECIPIENT })).digest('hex');
-    expect(digest).toBe('abd50b1fcbaa45016d3cbd2f093fb0eb89b1b45028c1e0e2b5c10b0e418c4b5f');
+    expect(digest).toBe('9126c692f780234873ad7a42dbf927d9828dea980d09a557f6ba7dfa88e34f43');
   });
 });

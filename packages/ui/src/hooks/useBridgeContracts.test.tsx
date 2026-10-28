@@ -59,74 +59,74 @@ afterEach(() => {
 
 describe('given a dialog that reads the bridge table', () => {
   it('when it mounts with nothing loaded, then it gets the snapshot at once and keeps it after the refresh lands', async () => {
-    vi.stubGlobal('fetch', answerAfter(2000, 3));
+    vi.stubGlobal('fetch', answerAfter(2000, 4));
     await mount(0);
     await mount(1);
     await wait(2000);
-    expect(currentContracts()).toMatchObject({ version: 3, source: 'live' });
-    expect(seen[0]).toMatchObject({ version: 2, source: 'snapshot' });
+    expect(currentContracts()).toMatchObject({ version: 4, source: 'live' });
+    expect(seen[0]).toMatchObject({ version: 3, source: 'snapshot' });
     expect(new Set(seen).size).toBe(1);
   });
 
   it('when a refresh has landed before the next dialog mounts, then that dialog gets the new table', async () => {
-    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(answer(3)));
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(answer(4)));
     await mount(0);
     act(() => root.unmount());
     root = createRoot(document.createElement('div'));
     await mount(0);
-    expect(seen.at(-1)).toMatchObject({ version: 3, source: 'live' });
+    expect(seen.at(-1)).toMatchObject({ version: 4, source: 'live' });
   });
 
   it('when the request fails, then the dialog keeps the snapshot', async () => {
     vi.stubGlobal('fetch', vi.fn().mockRejectedValue(new Error('offline')));
     await mount(0);
-    expect(seen.at(-1)).toMatchObject({ version: 2, source: 'snapshot' });
+    expect(seen.at(-1)).toMatchObject({ version: 3, source: 'snapshot' });
   });
 
   it('when the answer lands within 1.5 s of mounting on the snapshot, then the open dialog switches once to the live table', async () => {
-    vi.stubGlobal('fetch', answerAfter(200, 3));
+    vi.stubGlobal('fetch', answerAfter(200, 4));
     await mount(0);
-    expect(seen.at(-1)).toMatchObject({ version: 2, source: 'snapshot' });
+    expect(seen.at(-1)).toMatchObject({ version: 3, source: 'snapshot' });
     await wait(200);
-    expect(seen.at(-1)).toMatchObject({ version: 3, source: 'live' });
+    expect(seen.at(-1)).toMatchObject({ version: 4, source: 'live' });
     expect(new Set(seen).size).toBe(2);
   });
 
   it('when the answer lands after 1.5 s, then the open dialog keeps the snapshot and the next one gets the live table', async () => {
-    vi.stubGlobal('fetch', answerAfter(2000, 3));
+    vi.stubGlobal('fetch', answerAfter(2000, 4));
     await mount(0);
     await wait(2000);
     expect(new Set(seen).size).toBe(1);
     act(() => root.unmount());
     root = createRoot(document.createElement('div'));
     await mount(0);
-    expect(seen.at(-1)).toMatchObject({ version: 3, source: 'live' });
+    expect(seen.at(-1)).toMatchObject({ version: 4, source: 'live' });
   });
 
   it('when the dialog mounted on a stored table, then a newer answer at 200 ms does not switch it', async () => {
-    localStorage.setItem('jaw.bridgeContracts', JSON.stringify({ version: 3, chains: BRIDGE_CHAINS }));
-    vi.stubGlobal('fetch', answerAfter(200, 4));
+    localStorage.setItem('jaw.bridgeContracts', JSON.stringify({ version: 4, chains: BRIDGE_CHAINS }));
+    vi.stubGlobal('fetch', answerAfter(200, 5));
     await mount(0);
     await wait(200);
-    expect(currentContracts().version).toBe(4);
+    expect(currentContracts().version).toBe(5);
     expect(new Set(seen).size).toBe(1);
-    expect(seen[0]).toMatchObject({ version: 3, source: 'live' });
+    expect(seen[0]).toMatchObject({ version: 4, source: 'live' });
   });
 
   it.each([
     ['the request fails', () => vi.fn().mockRejectedValue(new Error('offline'))],
-    ['the proxy answers a table that fails its invariants', () => vi.fn().mockResolvedValue(answer(2.5))],
+    ['the proxy answers a table that fails its invariants', () => vi.fn().mockResolvedValue(answer(3.5))],
   ])('when %s within the window, then the dialog keeps the snapshot', async (_name, fetchMock) => {
     vi.stubGlobal('fetch', fetchMock());
     await mount(0);
     await wait(300);
     expect(new Set(seen).size).toBe(1);
-    expect(seen[0]).toMatchObject({ version: 2, source: 'snapshot' });
+    expect(seen[0]).toMatchObject({ version: 3, source: 'snapshot' });
   });
 
   it('when the dialog closes before the answer, then nothing renders or warns afterwards', async () => {
     const error = vi.spyOn(console, 'error').mockReturnValue(undefined);
-    vi.stubGlobal('fetch', answerAfter(200, 3));
+    vi.stubGlobal('fetch', answerAfter(200, 4));
     await mount(0);
     act(() => root.unmount());
     const renders = seen.length;
@@ -136,7 +136,7 @@ describe('given a dialog that reads the bridge table', () => {
   });
 
   it('when it mounts on the snapshot with the request pending, then the table is not settled until the switch', async () => {
-    vi.stubGlobal('fetch', answerAfter(200, 3));
+    vi.stubGlobal('fetch', answerAfter(200, 4));
     await mount(0);
     expect(settled.at(-1)).toBe(false);
     await wait(200);
@@ -144,7 +144,7 @@ describe('given a dialog that reads the bridge table', () => {
   });
 
   it('when no answer comes, then the table settles when the 1.5 s window closes', async () => {
-    vi.stubGlobal('fetch', answerAfter(5000, 3));
+    vi.stubGlobal('fetch', answerAfter(5000, 4));
     await mount(0);
     await wait(1499);
     expect(settled.at(-1)).toBe(false);
@@ -153,8 +153,8 @@ describe('given a dialog that reads the bridge table', () => {
   });
 
   it('when it mounts on a stored table, then the table is settled at once', async () => {
-    localStorage.setItem('jaw.bridgeContracts', JSON.stringify({ version: 3, chains: BRIDGE_CHAINS }));
-    vi.stubGlobal('fetch', answerAfter(5000, 4));
+    localStorage.setItem('jaw.bridgeContracts', JSON.stringify({ version: 4, chains: BRIDGE_CHAINS }));
+    vi.stubGlobal('fetch', answerAfter(5000, 5));
     await mount(0);
     expect(settled).toEqual([true]);
   });

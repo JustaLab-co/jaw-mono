@@ -227,6 +227,20 @@ describe('given the deposit call of a live Across quote', () => {
       receive: { kind: 'swap', chainId: 4663, token: { address: NVDA, known: false } },
     });
   });
+
+  it('then 50 USDC on Base into NVDA through LiFi reads the minimum of NVDA the floor promises', () => {
+    expect(readAcrossCall(contracts, ACROSS_CALLS.usdcToNvdaLifi)).toMatchObject({
+      kind: 'deposit',
+      provider: 'across',
+      send: usdc(8453, BASE_USDC, 50_000_000n),
+      destinationChainId: 4663,
+      recipient: OTHER,
+      receive: {
+        kind: 'minimum',
+        amount: { chainId: 4663, amount: 218887748524464186n, token: { address: NVDA, known: false } },
+      },
+    });
+  });
 });
 
 describe('given a call that is not to a pinned Across contract', () => {
@@ -892,6 +906,11 @@ describe('given an Across call that needs a table entry the table in use lacks',
     expect(readAcrossCall(table, ACROSS_CALLS.usdcToArb)).toEqual(outsideTable);
   });
 
+  it('then a LiFi swap on a chain with no pinned diamond is unreadable and says the table lacks it', () => {
+    const table = without((chains) => delete chains[4663].across!.lifiDiamond);
+    expect(readAcrossCall(table, ACROSS_CALLS.usdcToNvdaLifi)).toEqual(outsideTable);
+  });
+
   it('then a native deposit on a chain with no wrapped native is unreadable and says the table lacks it', () => {
     const table = without((chains) => delete chains[8453].across!.wrappedNative);
     expect(readAcrossCall(table, ACROSS_CALLS.nativeEth)).toEqual(outsideTable);
@@ -1071,5 +1090,152 @@ describe('given the Uniswap v4 swap of a destination program', () => {
   ];
   it.each(mutants)('then %s is unreadable', (_, edit) => {
     expect(readAcrossCall(contracts, withV4(edit))).toEqual(unreadable);
+  });
+});
+
+describe('given the LiFi swap of a destination program', () => {
+  const USDG = getAddress('0x5fc5360d0400a0fd4f2af552add042d716f1d168');
+  const DIAMOND = getAddress('0xb477751b76cf82d00a686a1232f5fcd772414af3');
+  const RH_HANDLER = getAddress('0xa8ad2e87e2043711d8bec77e8bc3e2683c0ab6bd');
+  const BRIDGED = 49_875_030n;
+  const minimum = {
+    kind: 'minimum',
+    amount: { chainId: 4663, amount: 218887748524464186n, token: { address: NVDA, known: false } },
+  };
+  const lifiAbi = parseAbi([
+    'struct SwapData { address callTo; address approveTo; address sendingAssetId; address receivingAssetId; uint256 fromAmount; bytes callData; bool requiresDeposit; }',
+    'function swapTokensSingleV3ERC20ToERC20(bytes32 transactionId, string integrator, string referrer, address receiver, uint256 minAmountOut, SwapData swapData)',
+  ]);
+  type Swap = {
+    callTo: Hex;
+    approveTo: Hex;
+    sendingAssetId: Hex;
+    receivingAssetId: Hex;
+    fromAmount: bigint;
+    callData: Hex;
+    requiresDeposit: boolean;
+  };
+  type Args = [Hex, string, string, Hex, bigint, Swap];
+
+  // Decodes the quote's swap on the diamond, lets the test change it, and puts it back.
+  function withLifi(edit: (args: Args) => void, change?: (p: Program) => void): BridgeCall {
+    return withProgram(ACROSS_CALLS.usdcToNvdaLifi, (p) => {
+      const decoded = decodeFunctionData({ abi: lifiAbi, data: p.calls[1].callData });
+      const args = structuredClone(decoded.args) as unknown as Args;
+      edit(args);
+      p.calls[1].callData = encodeFunctionData({ abi: lifiAbi, functionName: decoded.functionName, args } as never);
+      change?.(p);
+    });
+  }
+  const withCalls = (edit: (p: Program) => void) => withProgram(ACROSS_CALLS.usdcToNvdaLifi, edit);
+  const rhDrain = (token: string, to: string) => ({ ...drain(token, to), target: RH_HANDLER });
+  const approve = (token: string, spender: string, amount = 2n ** 256n - 1n) => ({
+    target: getAddress(token),
+    callData: encodeFunctionData({ abi: erc20Abi, functionName: 'approve', args: [getAddress(spender), amount] }),
+    value: 0n,
+  });
+
+  it('then the quote taken apart and put back as it was reads the same', () => {
+    expect(
+      readAcrossCall(
+        contracts,
+        withLifi(() => undefined)
+      )
+    ).toMatchObject({
+      recipient: OTHER,
+      receive: minimum,
+    });
+  });
+
+  it('then the exchange call and its calldata read the same whatever they are', () => {
+    const call = withLifi((a) => {
+      a[5].callTo = a[5].approveTo = ATTACKER;
+      a[5].callData = '0x1234';
+      a[5].requiresDeposit = false;
+    });
+    expect(readAcrossCall(contracts, call)).toMatchObject({ recipient: OTHER, receive: minimum });
+  });
+
+  it('then an approval of another amount and a zero fallback recipient still read', () => {
+    const call = withCalls((p) => {
+      p.calls[0] = approve(USDG, DIAMOND, 1n);
+      p.fallbackRecipient = zeroAddress;
+    });
+    expect(readAcrossCall(contracts, call)).toMatchObject({ recipient: OTHER, receive: minimum });
+  });
+
+  it('then the bought token sent to another address names that address as the recipient', () => {
+    const call = withCalls((p) => {
+      p.calls[2] = rhDrain(NVDA, ATTACKER);
+      p.calls[3] = rhDrain(USDG, ATTACKER);
+      p.fallbackRecipient = ATTACKER;
+    });
+    expect(readAcrossCall(contracts, call)).toMatchObject({ recipient: ATTACKER, receive: minimum });
+  });
+
+  const swapMutants: [string, (a: Args) => void][] = [
+    ['a receiver other than the handler', (a) => void (a[3] = ATTACKER.toLowerCase() as Hex)],
+    ['the handler of another chain as receiver', (a) => void (a[3] = HANDLER.toLowerCase() as Hex)],
+    ['a sending asset other than the bridged token', (a) => void (a[5].sendingAssetId = ARB_WETH.toLowerCase() as Hex)],
+    [
+      'a receiving asset other than the drained one',
+      (a) => void (a[5].receivingAssetId = ARB_WETH.toLowerCase() as Hex),
+    ],
+    ['a swap of less than the bridged amount', (a) => void (a[5].fromAmount = BRIDGED - 1n)],
+    ['a swap of more than the bridged amount', (a) => void (a[5].fromAmount = BRIDGED + 1n)],
+    ['a floor of zero', (a) => void (a[4] = 0n)],
+  ];
+  it.each(swapMutants)('then %s is unreadable', (_, edit) => {
+    expect(readAcrossCall(contracts, withLifi(edit))).toEqual(unreadable);
+  });
+
+  it('then a swap into the native token is unreadable, since the diamond reads its balance as an ERC-20', () => {
+    const call = withLifi(
+      (a) => void (a[5].receivingAssetId = zeroAddress),
+      (p) => void (p.calls[2] = rhDrain(zeroAddress, OTHER))
+    );
+    expect(readAcrossCall(contracts, call)).toEqual(unreadable);
+  });
+
+  it('then a swap of the bridged token into itself is unreadable', () => {
+    const call = withLifi(
+      (a) => void (a[5].receivingAssetId = USDG.toLowerCase() as Hex),
+      (p) => void (p.calls[2] = rhDrain(USDG, OTHER))
+    );
+    expect(readAcrossCall(contracts, call)).toEqual(unreadable);
+  });
+
+  const mutants: [string, (p: Program) => void][] = [
+    ['an approval of another spender than the diamond', (p) => void (p.calls[0] = approve(USDG, ATTACKER))],
+    ['an approval of another token than the bridged one', (p) => void (p.calls[0] = approve(NVDA, DIAMOND))],
+    ['an approval with value', (p) => void (p.calls[0].value = 1n)],
+    ['an approval that is not canonical', (p) => void (p.calls[0].callData = `${p.calls[0].callData}00`)],
+    ['a transfer in place of the approval', (p) => void (p.calls[0] = transfer(USDG, ATTACKER, 1n))],
+    ['no approval', (p) => void p.calls.splice(0, 1)],
+    [
+      'a diamond other than the pinned one, approved and called',
+      (p) => {
+        p.calls[0] = approve(USDG, ATTACKER);
+        p.calls[1].target = ATTACKER;
+      },
+    ],
+    ['a swap call to another address than the approved diamond', (p) => void (p.calls[1].target = ATTACKER)],
+    ['a swap call with value', (p) => void (p.calls[1].value = 1n)],
+    ['a swap call that is not canonical', (p) => void (p.calls[1].callData = `${p.calls[1].callData}00`)],
+    ['another function of the diamond', (p) => void (p.calls[1].callData = transfer(USDG, ATTACKER, 1n).callData)],
+    ['the bridged token drained as the bought one', (p) => void (p.calls[2] = rhDrain(USDG, OTHER))],
+    ['a fallback recipient other than the recipient', (p) => void (p.fallbackRecipient = ATTACKER)],
+    [
+      'the bought token drained to another address than the fallback recipient',
+      (p) => void (p.calls[2] = rhDrain(NVDA, ATTACKER)),
+    ],
+    ['the left over bridged token sent elsewhere', (p) => void (p.calls[3] = rhDrain(USDG, ATTACKER))],
+    ['an extra call', (p) => p.calls.splice(4, 0, transfer(NVDA, ATTACKER, 1n))],
+    ['an extra call after the emits', (p) => p.calls.push(transfer(NVDA, ATTACKER, 1n))],
+    ['no drain of the bought token', (p) => void p.calls.splice(2, 2)],
+    ['no drain of the bridged token the diamond hands back', (p) => void p.calls.splice(3, 1)],
+  ];
+  it.each(mutants)('then %s is unreadable', (_, edit) => {
+    expect(readAcrossCall(contracts, withCalls(edit))).toEqual(unreadable);
   });
 });
