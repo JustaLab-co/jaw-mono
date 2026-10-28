@@ -2,6 +2,8 @@ import { describe, it, expect } from 'vitest';
 import {
   callRuleKey,
   checkerOf,
+  droppedCheckers,
+  whyCheckersDropped,
   hasChecker,
   isCheckerAddress,
   isRefusedChecker,
@@ -44,5 +46,50 @@ describe('a checker the manager refuses', () => {
     expect(isCheckerAddress(CHECKER)).toBe(true);
     expect(isCheckerAddress('0x1234')).toBe(false);
     expect(isCheckerAddress(42)).toBe(false);
+  });
+});
+
+// A wallet from before checkers grants every call with the zero one, and that permission is wider
+// than the one asked for. The asked side names a function by signature or by selector.
+describe('the checkers a grant dropped', () => {
+  const TRANSFER = '0xa9059cbb';
+  const granted = (checker: string) => ({ calls: [{ target: USDC.toLowerCase(), selector: TRANSFER, checker }] });
+
+  it('is none when every checked call came back with its checker, by signature or selector', () => {
+    expect(
+      droppedCheckers(
+        { calls: [{ target: USDC, functionSignature: 'transfer(address,uint256)', checker: CHECKER }] },
+        granted(CHECKER.toLowerCase())
+      )
+    ).toEqual([]);
+    expect(
+      droppedCheckers({ calls: [{ target: USDC, selector: TRANSFER, checker: CHECKER }] }, granted(CHECKER))
+    ).toEqual([]);
+  });
+
+  it('names a checked call that came back with the zero checker or another one', () => {
+    const asked = { calls: [{ target: USDC, selector: TRANSFER, checker: CHECKER }] };
+
+    expect(droppedCheckers(asked, granted(ZERO))).toEqual([{ target: USDC, selector: TRANSFER, checker: CHECKER }]);
+    expect(droppedCheckers(asked, granted(ACCOUNT))).toHaveLength(1);
+  });
+
+  it('names every checked call when the answer carries no permission to check', () => {
+    expect(
+      droppedCheckers({ calls: [{ target: USDC, selector: TRANSFER, checker: CHECKER }] }, undefined)
+    ).toHaveLength(1);
+  });
+
+  it('says which call lost which checker', () => {
+    expect(whyCheckersDropped([{ target: USDC, selector: TRANSFER, checker: CHECKER }])).toContain(
+      `${TRANSFER} on ${USDC} checked by ${CHECKER}`
+    );
+  });
+
+  it('asks nothing of calls with no checker, so a grant without checkers is never refused', () => {
+    expect(droppedCheckers({ calls: [{ target: USDC, selector: TRANSFER }], spends: [] }, undefined)).toEqual([]);
+    expect(droppedCheckers({ calls: [{ target: USDC, selector: TRANSFER, checker: ZERO }] }, granted(ZERO))).toEqual(
+      []
+    );
   });
 });

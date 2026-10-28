@@ -1,5 +1,4 @@
-import { toFunctionSelector } from 'viem';
-import { callRuleKey, hasChecker } from './call-checker.js';
+import { callRuleKey, hasChecker, selectorOf } from './call-checker.js';
 import { describeSpendPeriod } from '../x402/period.js';
 import type { GrantedPermission } from '../session/session-config.js';
 import type { PermissionsConfig } from './permissions-config.js';
@@ -36,18 +35,8 @@ function callKey(call: {
   functionSignature?: string;
   checker?: string;
 }): string | null {
-  const selector = call.selector ?? (call.functionSignature ? safeSelector(call.functionSignature) : undefined);
+  const selector = selectorOf(call);
   return selector ? callRuleKey({ target: call.target, selector, checker: call.checker }) : null;
-}
-
-function safeSelector(signature: string): string | undefined {
-  try {
-    return toFunctionSelector(signature);
-  } catch {
-    // A signature the SDK will reject later. Left unkeyed rather than thrown on:
-    // this is a merge, and the grant is where a bad signature belongs refused.
-    return undefined;
-  }
 }
 
 /**

@@ -1,4 +1,5 @@
-import { zeroAddress, type Address } from 'viem';
+import { toFunctionSelector, zeroAddress, type Address } from 'viem';
+import type { PermissionsConfig } from './permissions-config.js';
 
 /**
  * JustaPermissionManager, the same on every chain. Written out rather than imported because a
@@ -52,4 +53,44 @@ export function callRuleKey(call: CallRule): string {
  */
 export function isRefusedChecker(checker: string, account?: string): boolean {
   return [PERMISSIONS_MANAGER, account].some((a) => a !== undefined && a.toLowerCase() === checker.toLowerCase());
+}
+
+type AskedCall = NonNullable<PermissionsConfig['calls']>[number];
+
+/**
+ * The selector an asked call names, from its selector or else its signature. Undefined for a
+ * signature that does not parse, which the grant itself refuses.
+ */
+export function selectorOf(call: AskedCall): string | undefined {
+  if (call.selector) return call.selector;
+  if (!call.functionSignature) return undefined;
+  try {
+    return toFunctionSelector(call.functionSignature);
+  } catch {
+    return undefined;
+  }
+}
+
+/**
+ * The checked calls asked for that the granted permission does not hold with their checker. A
+ * wallet from before checkers grants each with the zero one, a wider rule than the one asked for,
+ * and an answer with no permission to read cannot show it kept them.
+ */
+export function droppedCheckers(asked: PermissionsConfig, granted: { calls: CallRule[] } | undefined): CallRule[] {
+  const held = new Set(granted?.calls.map(callRuleKey));
+  return (asked.calls ?? []).flatMap((call) => {
+    const selector = selectorOf(call);
+    if (!hasChecker(call) || !selector) return [];
+    const rule = { target: call.target, selector, checker: call.checker };
+    return held.has(callRuleKey(rule)) ? [] : [rule];
+  });
+}
+
+/** Why a grant that dropped checkers is wider than asked, naming each call and its checker. */
+export function whyCheckersDropped(dropped: CallRule[]): string {
+  const calls = dropped.map((c) => `${c.selector} on ${c.target} checked by ${c.checker}`).join(', ');
+  return (
+    `The wallet granted ${calls} without the checker asked for, which allows more than was asked. ` +
+    'The keys app that approved it may be older than checker support.'
+  );
 }
