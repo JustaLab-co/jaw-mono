@@ -40,6 +40,8 @@ vi.mock('@jaw.id/core', async (original) => ({
 }));
 
 import { createHmac } from 'node:crypto';
+import { readdirSync, readFileSync } from 'node:fs';
+import { join } from 'node:path';
 import CLIBridgePage from './page';
 
 class FakeSocket {
@@ -931,5 +933,115 @@ describe('cli-bridge page reports its client', () => {
     await vi.waitFor(async () =>
       expect(await answers(ws, 'r1')).toEqual([{ type: 'rpc_response', id: 'r1', success: true, data: '0x1' }])
     );
+  });
+});
+
+type Fixture = { name: string; sentBy: string[]; frame?: Record<string, unknown>; fragment?: string };
+
+// Every file in fixtures/ is replayed, so a new one needs no change here.
+const fixturesDir = join(__dirname, 'fixtures');
+const fixtures: Fixture[] = readdirSync(fixturesDir)
+  .filter((file) => file.endsWith('.json'))
+  .map((file) => ({ name: file, ...JSON.parse(readFileSync(join(fixturesDir, file), 'utf8')) }));
+const framesOf = (type: string) => fixtures.filter((f) => f.frame?.type === type);
+
+async function lastReply(ws: FakeSocket) {
+  const reply = ws.sent.at(-1)!;
+  return JSON.parse(
+    await decrypt(secret, {
+      iv: unb64(reply.iv as string),
+      cipherText: unb64(reply.ciphertext as string).buffer as ArrayBuffer,
+    })
+  );
+}
+
+describe('cli-bridge page handles what clients send', () => {
+  const WORKSPACE_KEY = 'workspace-key';
+  let fetchMock: ReturnType<typeof vi.fn>;
+
+  beforeEach(() => {
+    fetchMock = vi.fn(async (url: string) => ({
+      ok: true,
+      status: 200,
+      json: async () => (url === '/api/cli-key' ? { apiKey: WORKSPACE_KEY } : {}),
+    }));
+    vi.stubGlobal('fetch', fetchMock);
+  });
+
+  it('has fixtures to replay', () => {
+    expect(fixtures.length).toBeGreaterThan(0);
+  });
+
+  it.each(framesOf('init'))('answers ready to the init in $name', async ({ frame }) => {
+    const ws = await start();
+    const before = ws.sent.length;
+
+    await deliver(ws, frame!);
+    await vi.waitFor(() => expect(ws.sent.length).toBeGreaterThan(before));
+
+    const ready = await lastReply(ws);
+    expect(ready).toMatchObject({ type: 'ready', chainId: frame!.chainId });
+    expect(ready.apiKey).toBe(frame!.apiKey ? undefined : WORKSPACE_KEY);
+    expect(created.appNames).toEqual([frame!.appName ?? 'JAW CLI']);
+    const posted = fetchMock.mock.calls.filter(([url]) => url === '/api/bridge-client');
+    expect(posted.map(([, options]) => options.body)).toEqual(
+      frame!.client ? [JSON.stringify({ client: frame!.client })] : []
+    );
+  });
+
+  it.each(framesOf('rpc_request'))('answers the request in $name', async ({ frame }) => {
+    const asked = vi.fn(async () => '0xok');
+    created.request = asked;
+    const ws = await start();
+    await init(ws, {});
+
+    await deliver(ws, frame!);
+
+    const id = frame!.id as string;
+    await vi.waitFor(async () => expect(await answers(ws, id)).toHaveLength(1));
+    expect(await answers(ws, id)).toEqual([{ type: 'rpc_response', id, success: true, data: '0xok' }]);
+    const { params } = frame!;
+    expect(asked).toHaveBeenCalledWith({
+      method: frame!.method,
+      params: Array.isArray(params) ? params : params === undefined ? [] : [params],
+    });
+  });
+
+  it.each(framesOf('shutdown'))('closes the tab on the frame in $name', async ({ frame }) => {
+    const close = vi.spyOn(window, 'close').mockImplementation(() => undefined);
+    const ws = await start();
+
+    await deliver(ws, frame!);
+
+    expect(close).toHaveBeenCalledTimes(1);
+  });
+
+  it.each(fixtures.filter((f) => f.fragment))(
+    'answers the link in $name with the proof its secret allows',
+    async (f) => {
+      const link = new URLSearchParams(f.fragment);
+      window.location.hash = f.fragment!;
+      await act(async () => root.render(<CLIBridgePage />));
+      await vi.waitFor(() => expect(FakeSocket.all).toHaveLength(1));
+      const ws = FakeSocket.all[0];
+
+      await act(async () => ws.onopen!());
+
+      const exchange = ws.sent[0];
+      expect(exchange.type).toBe('key_exchange');
+      const s = link.get('s');
+      if (!s) return expect(exchange).not.toHaveProperty('proof');
+      const expected = createHmac('sha256', Buffer.from(s, 'base64url'))
+        .update(`jaw-bridge-key/1\n${created.session}\n${link.get('pk')}\n${exchange.publicKey}`)
+        .digest('hex');
+      expect(exchange.proof).toBe(expected);
+    }
+  );
+
+  it('covers every frame type and both link shapes', () => {
+    const types = new Set(fixtures.map((f) => f.frame?.type));
+    expect([...types].filter(Boolean).sort()).toEqual(['init', 'rpc_request', 'shutdown']);
+    expect(fixtures.some((f) => f.fragment && !f.fragment.includes('&s='))).toBe(true);
+    expect(fixtures.some((f) => f.fragment?.includes('&s='))).toBe(true);
   });
 });

@@ -1,0 +1,8 @@
+{
+  "sentBy": ["@jaw.id/cli current (jaw-agent)"],
+  "frame": {
+    "type": "init",
+    "client": "jaw-cli/0.7.2",
+    "chainId": 84532
+  }
+}

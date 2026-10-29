@@ -1,0 +1,9 @@
+{
+  "sentBy": ["@jaw.id/cli 0.4.0 to 0.7.2", "@jaw.id/cli current (jaw-agent)", "@jaw-mono/mcp (jaw-agent apps/mcp)"],
+  "frame": {
+    "type": "rpc_request",
+    "id": "0b5d1f0e-6c1a-4a0e-9d52-2f6d8c1a7e11",
+    "method": "personal_sign",
+    "params": ["0x68656c6c6f", "0x1111111111111111111111111111111111111111"]
+  }
+}
