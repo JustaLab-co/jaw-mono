@@ -141,7 +141,7 @@
     },
     "packages/core": {
       "name": "@jaw.id/core",
-      "version": "1.10.0",
+      "version": "1.9.0",
       "dependencies": {
         "axios": "1.20.0",
         "eventemitter3": "5.0.1",
@@ -160,10 +160,10 @@
     },
     "packages/ui": {
       "name": "@jaw.id/ui",
-      "version": "1.10.3",
+      "version": "1.10.1",
       "dependencies": {
         "@hookform/resolvers": "^5.2.2",
-        "@jaw.id/core": "1.10.0",
+        "@jaw.id/core": "1.6.2",
         "@justaname.id/sdk": "^0.3.0",
         "@radix-ui/react-accordion": "^1.2.12",
         "@radix-ui/react-avatar": "^1.1.10",
@@ -203,7 +203,7 @@
     },
     "packages/wagmi": {
       "name": "@jaw.id/wagmi",
-      "version": "1.1.19",
+      "version": "1.1.18",
       "dependencies": {
         "@jaw.id/core": "1.9.0",
         "@wagmi/core": "^3.0.0",
