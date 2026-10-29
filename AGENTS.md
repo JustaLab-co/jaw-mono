@@ -85,7 +85,7 @@ The CLI, the agent package and the hosted MCP server live in the private repo Ju
 ### Applications (`apps/`)
 
 - **playground** - Next.js demo app exercising the SDK via @jaw.id/wagmi (the `jaw()` connector wired through wagmi)
-- **keys-jaw-id** - Next.js keys management application (keys.jaw.id). Its `/cli-bridge` page answers a request repeated under the same id with the answer it already gave, so a server that lost its relay socket can ask again without a second dialog, and says a link is no longer active when no server answers it. A bridge init may carry `client` (`name/version`), which is self-reported: it is never trusted or used for access, and the page posts it to `/api/bridge-client`, which records it only as a count in the `bridge client` log line
+- **keys-jaw-id** - Next.js keys management application (keys.jaw.id). Its `/cli-bridge` page answers a request repeated under the same id with the answer it already gave, so a server that lost its relay socket can ask again without a second dialog, and says a link is no longer active when no server answers it. A bridge init may carry `client` (`name/version`), which is self-reported: it can be spoofed and is never trusted or used for access. The page posts it once per page load to `/api/bridge-client`, which logs it in the `bridge client` line; read the counts with a Vercel logs search for `"msg":"bridge client"` on the keys project, grouped by `client`
 - **docs** - Documentation site built with Vocs
 
 ### Smart Contracts (`contracts/`)

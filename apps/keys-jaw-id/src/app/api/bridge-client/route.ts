@@ -2,16 +2,24 @@ import { BRIDGE_CLIENT_PATTERN } from '../../../lib/bridge-frames';
 
 export const dynamic = 'force-dynamic';
 
-/**
- * Counts which client opens the bridge. The value is self-reported, so it is
- * only ever logged, never used to decide anything, and nothing that identifies
- * the session or the person goes in the line.
- */
-export async function POST(request: Request) {
-  const origin = request.headers.get('origin');
-  if (origin !== null && origin !== new URL(request.url).origin) return new Response(null, { status: 400 });
+const MAX_BYTES = 256;
 
-  const body = await request.json().catch(() => null);
+function parseJson(text: string) {
+  try {
+    return JSON.parse(text);
+  } catch {
+    return null;
+  }
+}
+
+export async function POST(request: Request) {
+  if (request.headers.get('origin') !== new URL(request.url).origin) return new Response(null, { status: 403 });
+
+  if (Number(request.headers.get('content-length')) > MAX_BYTES) return new Response(null, { status: 413 });
+  const text = await request.text();
+  if (new TextEncoder().encode(text).length > MAX_BYTES) return new Response(null, { status: 413 });
+
+  const body = parseJson(text);
   const client = body?.client;
   if (typeof client !== 'string' || !BRIDGE_CLIENT_PATTERN.test(client)) return new Response(null, { status: 400 });
 

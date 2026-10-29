@@ -7,7 +7,6 @@ export type BridgeInit = {
   appName?: string;
   apiKey?: string;
   paymaster?: { url: string; context?: Record<string, unknown> };
-  /** Self-reported `name/version`. Counted, never trusted. */
   client?: string;
 };
 

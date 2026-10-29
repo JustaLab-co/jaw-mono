@@ -866,17 +866,32 @@ describe('cli-bridge page reports its client', () => {
   const posts = (fetchMock: ReturnType<typeof vi.fn>) =>
     fetchMock.mock.calls.filter(([url]) => url === '/api/bridge-client');
 
-  it('posts the client once and not again for the same value', async () => {
+  it('posts the client once and not again for the same or a different value', async () => {
     const fetchMock = vi.fn(async () => ({ ok: true, status: 204 }));
     vi.stubGlobal('fetch', fetchMock);
     const ws = await start();
 
     await init(ws, { client: 'jaw-cli/0.7.2' });
     await init(ws, { client: 'jaw-cli/0.7.2' });
+    await init(ws, { client: 'jaw-mcp/abc1234' });
 
     const sent = posts(fetchMock);
     expect(sent).toHaveLength(1);
     expect(sent[0][1]).toMatchObject({ method: 'POST', body: JSON.stringify({ client: 'jaw-cli/0.7.2' }) });
+  });
+
+  it('still answers ready and requests when fetch throws', async () => {
+    vi.stubGlobal('fetch', () => {
+      throw new Error('blocked');
+    });
+    created.request = async () => '0x14a34';
+    const ws = await start();
+
+    const ready = await init(ws, { client: 'jaw-cli/0.7.2' });
+    await deliver(ws, { type: 'rpc_request', id: 'r9', method: 'eth_chainId', params: [] });
+
+    expect(ready.type).toBe('ready');
+    await vi.waitFor(async () => expect(await answers(ws, 'r9')).toHaveLength(1));
   });
 
   it('posts nothing when init carries no client', async () => {
