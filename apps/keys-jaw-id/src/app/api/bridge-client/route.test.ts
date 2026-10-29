@@ -21,8 +21,9 @@ describe('POST /api/bridge-client', () => {
     expect(info).toHaveBeenCalledWith(JSON.stringify({ msg: 'bridge client', client: 'jaw-cli/0.7.2' }));
   });
 
-  it('accepts a request that carries no origin', async () => {
-    expect((await post(JSON.stringify({ client: 'jaw-mcp/abc1234' }), {})).status).toBe(204);
+  it('answers 403 and logs nothing when the origin is missing', async () => {
+    expect((await post(JSON.stringify({ client: 'jaw-mcp/abc1234' }), {})).status).toBe(403);
+    expect(info).not.toHaveBeenCalled();
   });
 
   it.each([
@@ -36,10 +37,34 @@ describe('POST /api/bridge-client', () => {
     expect(info).not.toHaveBeenCalled();
   });
 
-  it('answers 400 and logs nothing for another origin', async () => {
+  it('answers 403 and logs nothing for another origin', async () => {
     const response = await post(JSON.stringify({ client: 'jaw-cli/0.7.2' }), { origin: 'https://evil.example' });
 
-    expect(response.status).toBe(400);
+    expect(response.status).toBe(403);
+    expect(info).not.toHaveBeenCalled();
+  });
+
+  it('answers 413 and logs nothing for a body over 256 bytes', async () => {
+    const body = JSON.stringify({ client: 'jaw-cli/0.7.2', pad: 'x'.repeat(300) });
+
+    expect((await post(body)).status).toBe(413);
+    expect(info).not.toHaveBeenCalled();
+  });
+
+  it('answers 413 when content-length lies about a large body', async () => {
+    const body = JSON.stringify({ client: 'jaw-cli/0.7.2', pad: 'x'.repeat(300) });
+
+    expect((await post(body, { origin: 'https://keys.jaw.id', 'content-length': '10' })).status).toBe(413);
+    expect(info).not.toHaveBeenCalled();
+  });
+
+  it('answers 413 when content-length announces a large body', async () => {
+    const response = await post(JSON.stringify({ client: 'jaw-cli/0.7.2' }), {
+      origin: 'https://keys.jaw.id',
+      'content-length': '5000',
+    });
+
+    expect(response.status).toBe(413);
     expect(info).not.toHaveBeenCalled();
   });
 });
