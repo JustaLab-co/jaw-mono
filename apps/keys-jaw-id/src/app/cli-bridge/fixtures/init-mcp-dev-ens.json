@@ -1,0 +1,10 @@
+{
+  "sentBy": ["@jaw-mono/mcp (jaw-agent apps/mcp)"],
+  "frame": {
+    "type": "init",
+    "chainId": 84532,
+    "appName": "Cursor (via JAW MCP)",
+    "client": "jaw-mcp/dev",
+    "ens": "alice.jaw.eth"
+  }
+}

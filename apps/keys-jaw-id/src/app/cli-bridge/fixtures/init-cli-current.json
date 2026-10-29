@@ -1,0 +1,10 @@
+{
+  "sentBy": ["@jaw.id/cli current (jaw-agent)"],
+  "frame": {
+    "type": "init",
+    "client": "jaw-cli/0.7.2",
+    "apiKey": "fake-api-key",
+    "chainId": 84532,
+    "ens": "alice.jaw.eth"
+  }
+}

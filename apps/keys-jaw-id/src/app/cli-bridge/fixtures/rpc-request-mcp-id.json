@@ -1,0 +1,9 @@
+{
+  "sentBy": ["@jaw-mono/mcp (jaw-agent apps/mcp)"],
+  "frame": {
+    "type": "rpc_request",
+    "id": "b9f3c1d2e4a5:0",
+    "method": "eth_requestAccounts",
+    "params": []
+  }
+}

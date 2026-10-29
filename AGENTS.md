@@ -58,6 +58,12 @@ bunx nx release
 
 `.github/risky-paths` lists, one glob per line, the code that builds the calls an owner signs. A change touching it needs a person to read it, so keep it in its own small PR. Its entries are mirrored in `.github/CODEOWNERS`.
 
+## Bridge wire contract
+
+The `/cli-bridge` page in `apps/keys-jaw-id` talks to CLIs and servers already installed, and those update on their own schedule. Keys never drops the handling of a frame or a field an installed client still sends, and a change to what it accepts is additive. A client sends something new only after keys handles it and that version is deployed.
+
+`apps/keys-jaw-id/src/app/cli-bridge/fixtures/` holds each shape a client really sends, one file per shape, and `page.test.tsx` replays every file through the real page. A fixture is never edited to match the code, and removing one is a decision recorded in the PR that removes it. `fixtures/README.md` says how to add one.
+
 ## Testing invariants
 
 These hold for every change, however small. A diff that needs to break one is a decision for a person to make in the PR description, not something to route around.

@@ -1,0 +1,9 @@
+{
+  "sentBy": ["@jaw-mono/mcp (jaw-agent apps/mcp)"],
+  "frame": {
+    "type": "init",
+    "chainId": 84532,
+    "appName": "Claude (via JAW MCP)",
+    "client": "jaw-mcp/a1b2c3d"
+  }
+}
