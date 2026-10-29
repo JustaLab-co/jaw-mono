@@ -1,7 +1,11 @@
 {
-  "sentBy": [
-    "@jaw-mono/mcp images built before jaw-agent #17 and #18",
-    "@jaw-mono/mcp images built after jaw-agent #17 and #18"
+  "sentBy": ["@jaw-mono/mcp images built before jaw-agent #17 and #18"],
+  "clients": [
+    {
+      "family": "mcp",
+      "versions": "images built before jaw-agent #17 and #18",
+      "current": false
+    }
   ],
   "frame": {
     "type": "init",

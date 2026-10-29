@@ -13,9 +13,11 @@ import { join } from 'node:path';
 import CLIBridgePage from './page';
 import { FakeSocket, answers, created, deliver, root, secret, setUp, start, tearDown, unb64 } from './test-harness';
 
+type Client = { family: string; versions: string; current: boolean };
 type Fixture = {
   name: string;
   sentBy: string[];
+  clients: Client[];
   frame?: Record<string, unknown>;
   fragment?: string;
   query?: string;
@@ -30,6 +32,8 @@ const fixtures: Fixture[] = fixtureFiles
   .map((file) => ({ name: file, ...JSON.parse(readFileSync(join(fixturesDir, file), 'utf8')) }));
 const framesOf = (type: string) => fixtures.filter((f) => f.frame?.type === type);
 const HANDLED_FRAME_TYPES = ['init', 'rpc_request', 'shutdown'];
+const FAMILIES = ['cli', 'mcp'];
+const kindOf = (f: Fixture) => (f.frame ? String(f.frame.type) : 'link');
 
 beforeEach(setUp);
 afterEach(tearDown);
@@ -51,6 +55,19 @@ describe('the fixture folder', () => {
       expect(f.sentBy.length, f.name).toBeGreaterThan(0);
       expect(Number('frame' in f) + Number('fragment' in f), f.name).toBe(1);
       if (f.frame) expect(HANDLED_FRAME_TYPES, f.name).toContain(f.frame.type);
+      expect(f.clients.length, f.name).toBeGreaterThan(0);
+      for (const c of f.clients) {
+        expect(FAMILIES, f.name).toContain(c.family);
+        expect(typeof c.versions, f.name).toBe('string');
+        expect(typeof c.current, f.name).toBe('boolean');
+      }
+    }
+  });
+
+  it('has a current fixture for every kind of message each client sends today', () => {
+    for (const family of FAMILIES) {
+      const current = fixtures.filter((f) => f.clients.some((c) => c.family === family && c.current));
+      expect(new Set(current.map(kindOf)), family).toEqual(new Set([...HANDLED_FRAME_TYPES, 'link']));
     }
   });
 

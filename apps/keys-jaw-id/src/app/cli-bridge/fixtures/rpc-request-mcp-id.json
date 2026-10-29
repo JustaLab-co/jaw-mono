@@ -3,6 +3,18 @@
     "@jaw-mono/mcp images built before jaw-agent #17 and #18",
     "@jaw-mono/mcp images built after jaw-agent #17 and #18"
   ],
+  "clients": [
+    {
+      "family": "mcp",
+      "versions": "images built before jaw-agent #17 and #18",
+      "current": false
+    },
+    {
+      "family": "mcp",
+      "versions": "images built after jaw-agent #17 and #18",
+      "current": true
+    }
+  ],
   "frame": {
     "type": "rpc_request",
     "id": "0b5d1f0e-6c1a-4a0e-9d52-2f6d8c1a7e11:0",

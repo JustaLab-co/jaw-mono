@@ -1,5 +1,17 @@
 {
   "sentBy": ["@jaw.id/cli 0.4.0 to 0.7.2", "@jaw.id/cli >= the release after 0.7.2"],
+  "clients": [
+    {
+      "family": "cli",
+      "versions": "0.4.0 to 0.7.2",
+      "current": false
+    },
+    {
+      "family": "cli",
+      "versions": "after 0.7.2",
+      "current": true
+    }
+  ],
   "frame": {
     "type": "rpc_request",
     "id": "5d9b2c71-4e03-4f6a-a1c8-0b3e7d5f2a64",

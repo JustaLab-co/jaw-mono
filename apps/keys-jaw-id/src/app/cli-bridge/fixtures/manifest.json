@@ -1,5 +1,8 @@
 [
+  "init-cli-current-ens-no-key.json",
   "init-cli-current-no-key.json",
+  "init-cli-current-paymaster-url-only.json",
+  "init-cli-current-paymaster.json",
   "init-cli-current.json",
   "init-cli-published-ens-no-key.json",
   "init-cli-published-no-key.json",
